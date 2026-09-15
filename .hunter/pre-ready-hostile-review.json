@@ -3,79 +3,79 @@
     "acceptance_criteria": [
       {
         "criterion": "`/issue-agent/authorize` returns success/accepted well below the Railway request ceiling and before provider completion.",
-        "evidence": "Outside this narrow governance-inheritance correction; retained for complete governing-Issue coverage.",
+        "evidence": "Outside this narrow provider-capability correction; retained for complete governing-Issue coverage.",
         "id": "AC-001",
         "verdict": "not-applicable"
       },
       {
         "criterion": "Provider execution >300s cannot cause the GitHub trigger to fail with HTTP 499.",
-        "evidence": "Outside this narrow governance-inheritance correction; retained for complete governing-Issue coverage.",
+        "evidence": "Outside this narrow provider-capability correction; retained for complete governing-Issue coverage.",
         "id": "AC-002",
         "verdict": "not-applicable"
       },
       {
         "criterion": "Retrying a failed attempt does not mutate the Issue and does not change the authorization identity.",
-        "evidence": "Outside this narrow governance-inheritance correction; retained for complete governing-Issue coverage.",
+        "evidence": "Outside this narrow provider-capability correction; retained for complete governing-Issue coverage.",
         "id": "AC-003",
         "verdict": "not-applicable"
       },
       {
         "criterion": "Source Handling authority is exact, fail-closed, and retry-stable for an immutable event.",
-        "evidence": "Outside this narrow governance-inheritance correction; retained for complete governing-Issue coverage.",
+        "evidence": "Outside this narrow provider-capability correction; retained for complete governing-Issue coverage.",
         "id": "AC-004",
         "verdict": "not-applicable"
       },
       {
         "criterion": "The exact pinned OpenCode/provider configuration is compatibility-checked before live use.",
-        "evidence": "Outside this narrow governance-inheritance correction; retained for complete governing-Issue coverage.",
+        "evidence": "PR #471 capability-discovery implementation and focused regressions; authenticated exact-head reviewer must adopt this request.",
         "id": "AC-005",
-        "verdict": "not-applicable"
+        "verdict": "satisfied"
       },
       {
         "criterion": "Runtime capability requirements are checked before provider execution.",
-        "evidence": "Outside this narrow governance-inheritance correction; retained for complete governing-Issue coverage.",
+        "evidence": "PR #471 capability-discovery implementation and focused regressions; authenticated exact-head reviewer must adopt this request.",
         "id": "AC-006",
-        "verdict": "not-applicable"
+        "verdict": "satisfied"
       },
       {
         "criterion": "OpenCode can modify only the isolated attempt workspace; external-directory edits are explicitly denied. \u2014 PR #465 / `ca2adf5ebeb5e11b198e50de6d0a62af5b23207c`",
-        "evidence": "Outside this narrow governance-inheritance correction; retained for complete governing-Issue coverage.",
+        "evidence": "PR #471 capability-discovery implementation and focused regressions; authenticated exact-head reviewer must adopt this request.",
         "id": "AC-007",
-        "verdict": "not-applicable"
+        "verdict": "satisfied"
       },
       {
         "criterion": "A provider claiming success without candidate repository changes fails closed.",
-        "evidence": "Outside this narrow governance-inheritance correction; retained for complete governing-Issue coverage.",
+        "evidence": "Outside this narrow provider-capability correction; retained for complete governing-Issue coverage.",
         "id": "AC-008",
         "verdict": "not-applicable"
       },
       {
         "criterion": "Publication remains trusted-parent-owned and exact-head validation remains authoritative.",
-        "evidence": "Outside this narrow governance-inheritance correction; retained for complete governing-Issue coverage.",
+        "evidence": "PR #471 capability-discovery implementation and focused regressions; authenticated exact-head reviewer must adopt this request.",
         "id": "AC-009",
-        "verdict": "not-applicable"
+        "verdict": "satisfied"
       },
       {
         "criterion": "Accepted authorization executes at most once and ends in a durable COMPLETED or FAILED state.",
-        "evidence": "Outside this narrow governance-inheritance correction; retained for complete governing-Issue coverage.",
+        "evidence": "Outside this narrow provider-capability correction; retained for complete governing-Issue coverage.",
         "id": "AC-010",
         "verdict": "not-applicable"
       },
       {
         "criterion": "Stale/closed PR history cannot generate a false current Governance failure.",
-        "evidence": "PR #472 exact-head regression and governance diff; authenticated reviewer must adopt this request.",
+        "evidence": "Outside this narrow provider-capability correction; retained for complete governing-Issue coverage.",
         "id": "AC-011",
-        "verdict": "satisfied"
+        "verdict": "not-applicable"
       },
       {
         "criterion": "No autonomous Ready, merge, or Railway deploy is introduced.",
-        "evidence": "PR #472 exact-head regression and governance diff; authenticated reviewer must adopt this request.",
+        "evidence": "PR #471 capability-discovery implementation and focused regressions; authenticated exact-head reviewer must adopt this request.",
         "id": "AC-012",
         "verdict": "satisfied"
       },
       {
         "criterion": "Only after this matrix is green do we run the live #441 acceptance test.",
-        "evidence": "Outside this narrow governance-inheritance correction; retained for complete governing-Issue coverage.",
+        "evidence": "Outside this narrow provider-capability correction; retained for complete governing-Issue coverage.",
         "id": "AC-013",
         "verdict": "not-applicable"
       }
@@ -94,80 +94,80 @@
       "transaction-snapshot-consistency"
     ],
     "base_ref": "main",
-    "base_sha": "a06d5279214d26997fe8e3b15e429b8fa69ac6f2",
+    "base_sha": "fea16ec43ecd728198733b14050f0037ea66080a",
     "defect_families": [
       {
-        "evidence": "Focused regression suite and trusted preflight evidence; authenticated reviewer must re-evaluate before adoption.",
+        "evidence": "PR #471 focused regression suite and trusted preflight evidence; authenticated reviewer must re-evaluate before adoption.",
         "family": "DFF-007",
         "outcome": "clear"
       },
       {
-        "evidence": "Focused regression suite and trusted preflight evidence; authenticated reviewer must re-evaluate before adoption.",
+        "evidence": "PR #471 focused regression suite and trusted preflight evidence; authenticated reviewer must re-evaluate before adoption.",
         "family": "DFF-008",
         "outcome": "clear"
       },
       {
-        "evidence": "Focused regression suite and trusted preflight evidence; authenticated reviewer must re-evaluate before adoption.",
+        "evidence": "PR #471 focused regression suite and trusted preflight evidence; authenticated reviewer must re-evaluate before adoption.",
         "family": "DFF-009",
         "outcome": "clear"
       },
       {
-        "evidence": "Focused regression suite and trusted preflight evidence; authenticated reviewer must re-evaluate before adoption.",
+        "evidence": "PR #471 focused regression suite and trusted preflight evidence; authenticated reviewer must re-evaluate before adoption.",
         "family": "DFF-010",
         "outcome": "clear"
       },
       {
-        "evidence": "Focused regression suite and trusted preflight evidence; authenticated reviewer must re-evaluate before adoption.",
+        "evidence": "PR #471 focused regression suite and trusted preflight evidence; authenticated reviewer must re-evaluate before adoption.",
         "family": "DFF-011",
         "outcome": "clear"
       },
       {
-        "evidence": "Focused regression suite and trusted preflight evidence; authenticated reviewer must re-evaluate before adoption.",
+        "evidence": "PR #471 focused regression suite and trusted preflight evidence; authenticated reviewer must re-evaluate before adoption.",
         "family": "DFF-012",
         "outcome": "clear"
       },
       {
-        "evidence": "Focused regression suite and trusted preflight evidence; authenticated reviewer must re-evaluate before adoption.",
+        "evidence": "PR #471 focused regression suite and trusted preflight evidence; authenticated reviewer must re-evaluate before adoption.",
         "family": "DFF-013",
         "outcome": "clear"
       },
       {
-        "evidence": "Focused regression suite and trusted preflight evidence; authenticated reviewer must re-evaluate before adoption.",
+        "evidence": "PR #471 focused regression suite and trusted preflight evidence; authenticated reviewer must re-evaluate before adoption.",
         "family": "DFF-014",
         "outcome": "clear"
       },
       {
-        "evidence": "Focused regression suite and trusted preflight evidence; authenticated reviewer must re-evaluate before adoption.",
+        "evidence": "PR #471 focused regression suite and trusted preflight evidence; authenticated reviewer must re-evaluate before adoption.",
         "family": "DFF-015",
         "outcome": "clear"
       },
       {
-        "evidence": "Focused regression suite and trusted preflight evidence; authenticated reviewer must re-evaluate before adoption.",
+        "evidence": "PR #471 focused regression suite and trusted preflight evidence; authenticated reviewer must re-evaluate before adoption.",
         "family": "DFF-016",
         "outcome": "clear"
       },
       {
-        "evidence": "Focused regression suite and trusted preflight evidence; authenticated reviewer must re-evaluate before adoption.",
+        "evidence": "PR #471 focused regression suite and trusted preflight evidence; authenticated reviewer must re-evaluate before adoption.",
         "family": "DFF-019",
         "outcome": "clear"
       },
       {
-        "evidence": "Focused regression suite and trusted preflight evidence; authenticated reviewer must re-evaluate before adoption.",
+        "evidence": "PR #471 focused regression suite and trusted preflight evidence; authenticated reviewer must re-evaluate before adoption.",
         "family": "DFF-020",
         "outcome": "clear"
       },
       {
-        "evidence": "Focused regression suite and trusted preflight evidence; authenticated reviewer must re-evaluate before adoption.",
+        "evidence": "PR #471 focused regression suite and trusted preflight evidence; authenticated reviewer must re-evaluate before adoption.",
         "family": "DFF-021",
         "outcome": "clear"
       },
       {
-        "evidence": "Focused regression suite and trusted preflight evidence; authenticated reviewer must re-evaluate before adoption.",
+        "evidence": "PR #471 focused regression suite and trusted preflight evidence; authenticated reviewer must re-evaluate before adoption.",
         "family": "DFF-022",
         "outcome": "clear"
       },
       {
-        "evidence": "Focused regression suite and trusted preflight evidence; authenticated reviewer must re-evaluate before adoption.",
+        "evidence": "PR #471 focused regression suite and trusted preflight evidence; authenticated reviewer must re-evaluate before adoption.",
         "family": "DFF-023",
         "outcome": "clear"
       }
@@ -176,59 +176,23 @@
     "issue": "461",
     "review_target": [
       {
-        "blob_sha": "bfc439db1f41d406b0729b3d366ca6a5fd6d9b16",
-        "path": ".github/workflows/hunter-reviewer-collector.yml",
+        "blob_sha": "78879bb13c3ccf1ae704a90b66d849a831873284",
+        "path": "src/hunter/automation/railway_opencode_permission_sandbox.py",
         "previous_path": "",
         "status": "modified"
       },
       {
-        "blob_sha": "d09e3a55aa1a6986ea336424a9a25e37a325ec3e",
-        "path": ".gitignore",
-        "previous_path": "",
-        "status": "modified"
-      },
-      {
-        "blob_sha": "028b241b1f5ef50075f417677ee22a5afa2cb06e",
-        "path": "docs/DEFECT_REGISTRY.json",
-        "previous_path": "",
-        "status": "modified"
-      },
-      {
-        "blob_sha": "c42f198f99d67b6e5e30fd298c36dc0efe4d3944",
-        "path": "scripts/hunter_governance_review_v2.py",
-        "previous_path": "",
-        "status": "modified"
-      },
-      {
-        "blob_sha": "52c54faa17ad7701fc76fb46a7167e8f08f8bd10",
-        "path": "tests/test_exact_head_review_authority.py",
-        "previous_path": "",
-        "status": "modified"
-      },
-      {
-        "blob_sha": "679664a36d7592f09e1ee1cf081558211f46bdcb",
-        "path": "tests/test_hunter_reviewer_collector.py",
-        "previous_path": "",
-        "status": "modified"
-      },
-      {
-        "blob_sha": "10afef6da49d9882db94dccb92201644ff460cd8",
-        "path": "tests/test_issue_412_prevention_gate.py",
-        "previous_path": "",
-        "status": "modified"
-      },
-      {
-        "blob_sha": "9e26bb2af1f0006d95249e4de68dedb9f8f28d72",
-        "path": "tests/test_response_validator_phase_b.py",
+        "blob_sha": "e6ec120b8930ac4aa59a70d8b522c58114e79f57",
+        "path": "tests/test_railway_opencode_permission_sandbox.py",
         "previous_path": "",
         "status": "modified"
       }
     ],
-    "review_target_digest": "234a3a64c170803bf76e76c19e3caa5b75ca25e607a9e0d08098499e416178ee"
+    "review_target_digest": "8692300905ce9a5d81ac7381cb3060f40c76b23b99639b98ca238e91d409a785"
   },
-  "review_id": "8246ae676e37beb4fecc087137e06c3cea7af0d8710a4c0e136be9ecd89de74b",
+  "review_id": "bab2d13ab2e1cf2a81af87f1d6062b86fbbeb2b17037723e78701291563b50ae",
   "review_request": {
-    "claims_id": "8246ae676e37beb4fecc087137e06c3cea7af0d8710a4c0e136be9ecd89de74b",
+    "claims_id": "bab2d13ab2e1cf2a81af87f1d6062b86fbbeb2b17037723e78701291563b50ae",
     "schema": "hunter.review-request.v1"
   },
   "schema": "hunter.pre-ready-hostile-review.v1"

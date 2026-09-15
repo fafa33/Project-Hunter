@@ -123,3 +123,65 @@ def test_inline_permissions_allow_only_project_editing_capabilities(
         "question",
     ):
         assert permission.get(denied, "deny") == "deny"
+
+
+def test_provider_capability_contract_is_checked_before_execution(tmp_path: Path, monkeypatch) -> None:
+    credential_home = tmp_path / "credential-home"
+    credential_home.mkdir()
+    broken = {
+        "permission": {
+            **shim._PERMISSION_CONFIG["permission"],
+            "edit": "deny",
+        }
+    }
+    monkeypatch.setattr(shim, "_PERMISSION_CONFIG", broken)
+
+    with pytest.raises(shim.SandboxShimError, match="provider capability mismatch: missing edit"):
+        shim._restricted_environment(credential_home)
+
+
+def test_provider_runtime_instructions_make_shell_validation_parent_owned(tmp_path: Path) -> None:
+    credential_home = tmp_path / "credential-home"
+    credential_home.mkdir()
+
+    env = shim._restricted_environment(credential_home)
+    config = json.loads(env["OPENCODE_CONFIG_CONTENT"])
+    instruction_paths = config["instructions"]
+
+    assert len(instruction_paths) == 1
+    instruction_path = Path(instruction_paths[0])
+    assert instruction_path.is_relative_to(credential_home.resolve())
+    instructions = instruction_path.read_text(encoding="utf-8")
+    assert "Do not attempt shell or test commands" in instructions
+    assert "trusted parent owns exact-head targeted validation after publication" in instructions
+
+
+def test_provider_capability_contract_keeps_shell_and_external_directory_denied(tmp_path: Path) -> None:
+    credential_home = tmp_path / "credential-home"
+    credential_home.mkdir()
+
+    env = shim._restricted_environment(credential_home)
+    permission = json.loads(env["OPENCODE_CONFIG_CONTENT"])["permission"]
+
+    assert permission["external_directory"] == "deny"
+    assert permission.get("bash", "deny") == "deny"
+    assert set(shim._REQUIRED_PROVIDER_CAPABILITIES) <= {
+        name for name, decision in permission.items() if decision == "allow"
+    }
+
+
+def test_main_fails_closed_before_provider_run_when_runtime_capability_is_missing(tmp_path: Path, monkeypatch) -> None:
+    argv, _, _ = _argv(tmp_path)
+    calls: list[list[str]] = []
+
+    def fake_run(command, **kwargs):
+        calls.append(list(command))
+        if command[1:4] == ["debug", "agent", "build"]:
+            tools = {"read": True, "edit": False, "glob": True, "grep": True}
+            return shim.subprocess.CompletedProcess(command, 0, stdout=json.dumps({"tools": tools}), stderr="")
+        pytest.fail("provider execution must not start when runtime capability discovery is incomplete")
+
+    monkeypatch.setattr(shim.subprocess, "run", fake_run)
+
+    assert shim.main(argv) == 1
+    assert calls == [["/app/bin/opencode", "debug", "agent", "build", "--pure"]]
