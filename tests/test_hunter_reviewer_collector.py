@@ -447,3 +447,31 @@ def test_triage_only_response_does_not_prevent_hosted_fallback():
 
     assert [item["agent_id"] for item in results] == ["local-ollama", "codex"]
     assert [item["outcome"] for item in results] == ["responded", "responded"]
+
+
+def test_review_execution_budget_starts_after_acknowledgement():
+    class LateAckBackend(Backend):
+        def __init__(self):
+            super().__init__()
+            self.clock = 0.0
+
+        def now(self):
+            return self.clock
+
+        def sleep(self, seconds):
+            self.clock += seconds
+
+        def acknowledged(self, agent, trigger):
+            return self.clock >= 25.0
+
+        def completed(self, agent, trigger):
+            return self.clock >= 325.0
+
+    agent = {**POOL["agents"][0], "retryable": False, "ack_timeout_seconds": 30, "review_timeout_seconds": 300}
+    pool = {"last_resort": "opencode", "timeout_policy": {"retries_per_agent": 0}, "agents": (agent,)}
+
+    result = collector.collect_attempts(pool, HEAD, LateAckBackend())
+
+    assert result[0]["outcome"] == "responded"
+    assert result[0]["ack_elapsed_seconds"] >= 25.0
+    assert result[0]["elapsed_seconds"] >= 325.0

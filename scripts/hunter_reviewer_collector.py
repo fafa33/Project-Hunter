@@ -134,7 +134,8 @@ def collect_attempts(pool: dict[str, Any], head: str, backend: Backend) -> list[
                     }
                 )
                 continue
-            review_deadline = start + agent["review_timeout_seconds"]
+            review_started_at = backend.now()
+            review_deadline = review_started_at + agent["review_timeout_seconds"]
             completed = complete_fn(agent, trigger)
             while not completed and backend.now() < review_deadline:
                 if backend.head() != head:
