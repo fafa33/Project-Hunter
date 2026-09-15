@@ -27,11 +27,11 @@
     "unadmitted_head_state": "draft",
     "ready_requires": "successful exact-head Pre-PR Preflight, positive substantive exact-head review authority, complete structured evidence, no unresolved blockers or threads, and green required code/security/governance checks",
     "auto_ready": false,
-    "requires_current_head_codex_review": true,
+    "requires_current_head_codex_review": false,
     "review_authority": {
       "primary": "codex",
       "fallback": "opencode",
-      "fallback_only_when_unavailable": "Codex unavailable, rate-limited, timed out, or otherwise not usable -- never skipped while Codex is available",
+      "fallback_only_when_unavailable": "The local reviewer is attempted first when its trusted Mac runner is healthy; Codex is attempted immediately when local is offline, unresponsive, or times out. OpenCode remains last resort only after the enabled pool is exhausted.",
       "fallback_requires_recorded_reason": true,
       "fallback_requires_snapshot_gates": [
         "governance=success",
@@ -46,30 +46,61 @@
         "exhaustion_semantics": "Every enabled higher-priority reviewer must have authenticated exact-head invocation results. The trusted default-branch Hunter Reviewer Collector records actual trigger IDs, the configured timeout and all retries, and immutable artifact provenance. A response proves availability and forbids failover, even if its format is invalid. Candidate prose, skipped reviewers, failed GitHub reads, changed HEAD, wrong configuration, insufficient elapsed time, candidate-ref collector runs, or missing retries fail closed.",
         "timeout_policy": {
           "bounded": true,
-          "default_seconds": 900,
-          "max_seconds": 1800,
+          "default_seconds": 300,
+          "max_seconds": 300,
           "retries_per_agent": 1,
           "retry_scope": "transient infrastructure failures only (rate limit, transport, runner shutdown signal); a repeated or permanent failure records a single exhausted attempt against the bounded timeout"
         },
         "agents": [
+          {
+            "id": "local-ollama",
+            "priority": 2,
+            "enabled": true,
+            "trigger_method": "github-workflow:hunter-local-reviewer.yml",
+            "exact_head_support": true,
+            "ack_timeout_seconds": 30,
+            "review_timeout_seconds": 300,
+            "retryable": true,
+            "evidence_parser": "hunter.local-review.v1",
+            "fallback_eligibility": false,
+            "authority_eligible": false,
+            "note": "Trusted free first-pass reviewer on the dedicated Mac self-hosted runner. Candidate code is never executed; only GitHub diff/content is reviewed. Authority eligibility is benchmark-gated.",
+            "quality_gate": {
+              "required": true,
+              "benchmark_id": "hunter-local-reviewer-v1",
+              "minimum_recall": 0.75,
+              "maximum_false_positive_rate": 0.25,
+              "authority_until_pass": "triage-only",
+              "last_benchmark": {
+                "model": "qwen2.5-coder:7b",
+                "recall": 1.0,
+                "false_positive_rate": 1.0,
+                "latency_seconds": 152.276,
+                "passed": false
+              }
+            }
+          },
           {
             "id": "codex",
             "priority": 1,
             "enabled": true,
             "trigger_method": "github-pr-comment:@codex review",
             "exact_head_support": true,
-            "timeout_seconds": 900,
-            "retryable": true,
+            "retryable": false,
             "evidence_parser": "github-review-ack.v1",
             "fallback_eligibility": false,
-            "note": "Tier 1 primary reviewer. chatgpt-codex-connector[bot] is the only agent-reviewer integration observed on this repository (COMMENTED reviews on PRs #458, #460, #466); every other PR has zero reviews, so the Tier 2 pool is empty until an approved agent reviewer is actually installed on the repository.",
+            "note": "Hosted fallback reviewer. Triggered immediately when the trusted local reviewer is offline/unresponsive or after its bounded review budget; exact-head authority remains supported.",
             "evidence": "Discovered by inspecting check-suites and PR reviews on main (commit dca20dd): installed apps are claude, freebuff-web, github-actions, railway-app, tembo, vercel; no Copilot code review, CodeRabbit, Jules, or CODEOWNERS exists on this repository.",
-            "github_login": "chatgpt-codex-connector[bot]"
+            "github_login": "chatgpt-codex-connector[bot]",
+            "ack_timeout_seconds": 30,
+            "review_timeout_seconds": 300
           }
         ]
-      }
+      },
+      "fast_fallback": "local-ollama"
     },
-    "finding_resolution": "a fixed review finding resolves only with structured evidence: the exact-head correction commit and a regression test committed in the change set, verified fail-closed before Merge Readiness"
+    "finding_resolution": "a fixed review finding resolves only with structured evidence: the exact-head correction commit and a regression test committed in the change set, verified fail-closed before Merge Readiness",
+    "requires_current_head_review_authority": true
   },
   "ingress_provenance": {
     "proof": "verified-commit-signature",
@@ -205,9 +236,10 @@
       "build_backend/",
       "docs/CODE_WRITE_POLICY.json",
       "scripts/hunter_writer_provenance.py",
-      "scripts/hunter_pre_ready_review.py"
-      ,
-      "scripts/hunter_reviewer_collector.py"
+      "scripts/hunter_pre_ready_review.py",
+      "scripts/hunter_reviewer_collector.py",
+      "scripts/hunter_review_orchestrator.py",
+      "scripts/hunter_local_reviewer.py"
     ],
     "root_of_trust_semantics": "The files that decide whether a candidate may be written and admitted at all: the push boundary, the hosted workflows, the canonical gate chain, the connector authorizer, the governance/admission controllers, the merge-readiness controller, the validation-proof identity and reuse authority that decides when an existing proof may stand in for a run, the shared scope and transport primitives they depend on, the packaging/tooling pins that define the gates, and this policy. No capability on this ingress may write them and no scope may unblock them, so a candidate can never rewrite the authority under which it is itself evaluated. Mutating them stays a clone-capable, pre-push-bound, independently reviewed, owner-merged change; the trusted controller always evaluates a candidate against the default-branch version of this policy, so such a change takes effect only after merge and never for its own pull request.",
     "self_escalation_boundary": "A candidate may not widen the grant it is authorized under and then rely on the widened grant inside the same pull request. The authorization receipt pins grant_fingerprint, a SHA-256 over the authorization-relevant grant, and the trusted controller re-derives that fingerprint from the default branch: a receipt minted under any other version of the grant is stale and fails admission. The controller additionally compares the candidate head's policy against the trusted one and refuses any connector candidate whose head widens the grant -- a new capability, writer, allowed path, unblocked scope path, authorized Issue, removed prohibition, or removed root-of-trust entry.",

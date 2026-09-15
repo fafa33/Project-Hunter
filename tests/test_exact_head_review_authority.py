@@ -43,7 +43,8 @@ def _attempt(
         "agent_id": agent_id,
         "status": status,
         "reason": reason,
-        "timeout_seconds": timeout_seconds,
+        "ack_timeout_seconds": 90,
+        "review_timeout_seconds": timeout_seconds,
         "failure_class": failure_class,
         "attempt_count": attempt_count,
         "invocation_reference": invocation_reference,
@@ -58,7 +59,8 @@ def _agent(
         "priority": priority,
         "enabled": enabled,
         "exact_head_support": True,
-        "timeout_seconds": timeout_seconds,
+        "ack_timeout_seconds": 90,
+        "review_timeout_seconds": timeout_seconds,
         "retryable": True,
     }
 
@@ -273,7 +275,7 @@ def test_a_fake_timeout_attempt_is_unproven_exhaustion(monkeypatch) -> None:
     verdict = _verify(document)
 
     assert verdict.state == "incomplete"
-    assert "timeout_seconds" in verdict.reason
+    assert "ack/review timeout" in verdict.reason
     assert "900" in verdict.reason
 
 
@@ -491,8 +493,48 @@ def test_review_authority_state_surfaces_the_state_name_and_blocks(monkeypatch) 
 
     state, message = readiness.review_authority_state(HEAD, PR_NUMBER)
 
-    assert state == "failure"
+    assert state == "pending"
     assert "MISSING_REVIEW_AUTHORITY" in message
+
+
+def _install_missing_review_authority(monkeypatch) -> None:
+    _use_pool(monkeypatch, _pool())
+    monkeypatch.setattr(core, "read_head_pre_ready_review", lambda *_args: ("absent", None, None))
+    monkeypatch.setattr(core, "read_pr_pool_review_comments", lambda *_args: ((), None))
+    monkeypatch.setattr(readiness, "unresolved_review_threads", lambda _number: ())
+    monkeypatch.setattr(readiness, "changes_requested_reviewers", lambda _number: ())
+    monkeypatch.setattr(core, "check_reviewer_dispositions", lambda: (True, ""))
+    _install_governance(monkeypatch, document=None, state="absent")
+
+
+def test_missing_review_authority_with_available_orchestration_is_pending(monkeypatch) -> None:
+    _install_missing_review_authority(monkeypatch)
+    monkeypatch.setattr(
+        core,
+        "review_orchestration_state",
+        lambda *_args: ("WAITING_FOR_REVIEWER", "local selection"),
+        raising=False,
+    )
+
+    state, message = readiness.review_authority_state(HEAD, PR_NUMBER)
+
+    assert state == "pending"
+    assert "WAITING_FOR_REVIEWER" in message
+
+
+def test_pool_exhaustion_is_blocked_pending_not_red(monkeypatch) -> None:
+    _install_missing_review_authority(monkeypatch)
+    monkeypatch.setattr(
+        core,
+        "review_orchestration_state",
+        lambda *_args: ("POOL_EXHAUSTED", "no reviewer capacity"),
+        raising=False,
+    )
+
+    state, message = readiness.review_authority_state(HEAD, PR_NUMBER)
+
+    assert state == "pending"
+    assert "POOL_EXHAUSTED" in message
 
 
 def test_a_stale_authority_state_is_surfaced_by_merge_readiness(monkeypatch) -> None:
@@ -512,8 +554,24 @@ def test_a_stale_authority_state_is_surfaced_by_merge_readiness(monkeypatch) -> 
 
     state, message = readiness.review_authority_state(HEAD, PR_NUMBER)
 
-    assert state == "failure"
+    assert state == "pending"
     assert "MISSING_REVIEW_AUTHORITY" in message
+
+
+def test_review_authority_transport_unavailable_is_pending_not_red(monkeypatch) -> None:
+    monkeypatch.setattr(readiness, "unresolved_review_threads", lambda _number: ())
+    monkeypatch.setattr(readiness, "changes_requested_reviewers", lambda _number: ())
+    monkeypatch.setattr(core, "check_reviewer_dispositions", lambda: (True, ""))
+    monkeypatch.setattr(
+        core,
+        "verify_pre_ready_hostile_review",
+        lambda *_args: (_ for _ in ()).throw(RuntimeError("GitHub unavailable")),
+    )
+
+    state, message = readiness.review_authority_state(HEAD, PR_NUMBER)
+
+    assert state == "pending"
+    assert "unavailable" in message.lower()
 
 
 def test_merge_ready_success_describes_the_positive_exact_head_authority() -> None:
@@ -938,7 +996,8 @@ def _trusted_exhaustion(monkeypatch, *, outcome="timed_out", **overrides):
         head_sha=HEAD,
         agent_id="codex",
         priority=1,
-        timeout_seconds=900,
+        ack_timeout_seconds=90,
+        review_timeout_seconds=900,
         trigger_method="configured trigger",
         retryable=True,
         evidence_parser="configured parser",
@@ -961,7 +1020,7 @@ def test_actual_trusted_configured_exhaustion_allows_guard_eligibility(monkeypat
 
 
 def test_trusted_result_cannot_substitute_a_different_timeout(monkeypatch):
-    assert _trusted_exhaustion(monkeypatch, timeout_seconds=1)[0] == "failure"
+    assert _trusted_exhaustion(monkeypatch, review_timeout_seconds=1)[0] == "failure"
 
 
 def test_trusted_result_cannot_substitute_a_different_trigger(monkeypatch):
@@ -1094,15 +1153,15 @@ def test_every_hosted_review_consumer_can_read_collector_and_guard_evidence():
 
     workflows = prevention.ROOT / ".github/workflows"
     expected = {
-        "hunter-candidate-admission.yml": ("actions", "checks"),
-        "hunter-governance-review.yml": ("actions", "checks"),
-        "hunter-governance-reconcile.yml": ("actions", "checks"),
-        "hunter-merge-readiness.yml": ("actions", "checks"),
+        "hunter-candidate-admission.yml": {"actions": "read", "checks": "read"},
+        "hunter-governance-review.yml": {"actions": "write", "checks": "read"},
+        "hunter-governance-reconcile.yml": {"actions": "write", "checks": "read"},
+        "hunter-merge-readiness.yml": {"actions": "read", "checks": "read"},
     }
     for filename, permissions in expected.items():
         workflow = yaml.safe_load((workflows / filename).read_text())
-        for permission in permissions:
-            assert workflow["permissions"].get(permission) == "read"
+        for permission, access in permissions.items():
+            assert workflow["permissions"].get(permission) == access
 
 
 def _request_and_ack():
@@ -1362,3 +1421,55 @@ def test_current_exact_review_with_inherited_artifact_waits_for_structured_autho
 
     assert state == "failure"
     assert "MISSING_REVIEW_AUTHORITY" in description
+
+
+def test_authenticated_codex_standard_clear_review_adopts_current_exact_head_request(monkeypatch):
+    document, _ack = _request_and_ack()
+    body = "Codex Review: Didn't find any major issues. Bravo.\n\n" f"**Reviewed commit:** `{HEAD[:10]}`"
+    snapshot = {
+        **_trusted_review(body=body),
+        "source_kind": "review",
+        "submitted_at": "2026-09-15T11:20:00Z",
+    }
+    _install_governance(monkeypatch, document=document, comments=(snapshot,))
+    monkeypatch.setattr(core, "read_unresolved_review_threads", lambda *a: ((), None))
+    monkeypatch.setattr(core, "check_reviewer_dispositions", lambda: (True, ""))
+
+    state, reason = core.verify_pre_ready_hostile_review("repo", "token", HEAD, PR_NUMBER)
+
+    assert state == "success", reason
+
+
+def test_verified_pool_exhaustion_uses_deterministic_guard_instead_of_missing_authority(monkeypatch):
+    document, _ = _request_and_ack()
+    _install_governance(monkeypatch, document=document, comments=())
+    monkeypatch.setattr(core, "read_unresolved_review_threads", lambda *a: ((), None))
+    monkeypatch.setattr(core, "check_reviewer_dispositions", lambda: (True, ""))
+    import hunter_review_orchestrator as orchestrator
+
+    monkeypatch.setattr(orchestrator, "read_collector_completion", lambda *_a: ("present", 777, None))
+    evidence = {
+        "reviewer_attempts": [
+            {**_attempt(timeout_seconds=300, failure_class="permanent", attempt_count=1), "ack_timeout_seconds": 30}
+        ],
+        "collector_run_id": 777,
+        "fallback_reason": "trusted collector exhausted every configured higher-priority reviewer",
+        "unresolved_thread_count": 0,
+        "governance_state": "success",
+        "trusted_preflight_state": "success",
+        "structured_evidence_status": "complete",
+    }
+    monkeypatch.setattr("hunter_reviewer_collector.load_exhaustion", lambda *_a: evidence)
+    state, reason = core.verify_pre_ready_hostile_review("repo", "token", HEAD, PR_NUMBER)
+    assert state == "success", reason
+
+
+def test_deterministic_guard_fails_closed_when_collector_evidence_is_unavailable(monkeypatch):
+    document, _ = _request_and_ack()
+    _install_governance(monkeypatch, document=document, comments=())
+    import hunter_review_orchestrator as orchestrator
+
+    monkeypatch.setattr(orchestrator, "read_collector_completion", lambda *_a: ("absent", None, None))
+    state, reason = core.verify_pre_ready_hostile_review("repo", "token", HEAD, PR_NUMBER)
+    assert state == "failure"
+    assert "MISSING_REVIEW_AUTHORITY" in reason

@@ -1035,7 +1035,12 @@
           "docs/CODE_WRITE_POLICY.json",
           "docs/DEFECT_REGISTRY.json",
           ".github/workflows/hunter-reviewer-collector.yml",
-          "scripts/hunter_reviewer_collector.py"
+          "scripts/hunter_reviewer_collector.py",
+          "scripts/hunter_review_orchestrator.py",
+          ".github/workflows/hunter-local-reviewer.yml",
+          "scripts/hunter_local_reviewer.py",
+          "scripts/bootstrap_hunter_review_runner.sh",
+          "scripts/hunter_reviewer_benchmark.py"
         ],
         "rationale": "The final merge gate and the single shared review-verification implementation are where the workflow-ordering defect lives: Merge Readiness could go green through governance or check status alone, or a resolved thread could satisfy readiness without machine-verified structured evidence. A recurrence here means the fail-closed prerequisite was weakened at the boundary that is supposed to own it. The fallback authority rule lives here too because a single primary review authority that can be rate-limited or unavailable is itself a workflow freeze waiting to happen: readiness must stay fail-closed without turning Codex availability into a single point of failure. The trusted reviewer collector workflow and implementation are part of the same boundary because they prove ordered reviewer invocation and exhaustion; losing their trigger permission or sequencing can silently disable failover and recreate a single-reviewer freeze."
       },
@@ -1075,7 +1080,7 @@
         "tests/test_issue_412_prevention_gate.py::test_an_untried_higher_priority_reviewer_blocks_an_alternate_review",
         "tests/test_issue_412_prevention_gate.py::test_codex_primary_remains_valid_when_alternates_are_configured",
         "tests/test_issue_412_prevention_gate.py::test_exhaustion_evidence_from_an_unknown_agent_fails_closed",
-        "tests/test_issue_412_prevention_gate.py::test_exhaustion_evidence_must_record_a_timeout_within_the_bounded_policy",
+        "tests/test_issue_412_prevention_gate.py::test_exhaustion_evidence_must_match_the_bounded_review_timeout_policy",
         "tests/test_issue_412_prevention_gate.py::test_failover_restarts_after_a_new_commit_invalidates_a_review",
         "tests/test_issue_412_prevention_gate.py::test_fallback_review_claims_that_differ_from_the_canonical_claim_set_are_blocked",
         "tests/test_issue_412_prevention_gate.py::test_unverified_fallback_review_emitting_canonical_claims_is_rejected",
@@ -1092,14 +1097,30 @@
         "tests/test_exact_head_review_authority.py::test_inherited_base_review_artifact_is_not_candidate_review",
         "tests/test_exact_head_review_authority.py::test_inherited_same_issue_review_artifact_is_still_historical",
         "tests/test_exact_head_review_authority.py::test_current_exact_review_with_inherited_artifact_waits_for_structured_authority",
-        "tests/test_hunter_reviewer_collector.py::test_collector_workflow_can_write_pr_conversation_triggers"
+        "tests/test_hunter_reviewer_collector.py::test_collector_workflow_can_write_pr_conversation_triggers",
+        "tests/test_exact_head_review_authority.py::test_missing_review_authority_with_available_orchestration_is_pending",
+        "tests/test_exact_head_review_authority.py::test_pool_exhaustion_is_blocked_pending_not_red",
+        "tests/test_hunter_review_orchestrator.py::test_cycle_for_old_head_is_superseded",
+        "tests/test_hunter_review_orchestrator.py::test_ready_review_request_dispatches_collector_once",
+        "tests/test_hunter_reviewer_collector.py::test_no_ack_fails_over_after_short_budget",
+        "tests/test_hunter_reviewer_collector.py::test_acknowledged_review_uses_execution_budget_not_ack_budget",
+        "tests/test_hunter_review_orchestrator.py::test_offline_mac_skips_local_without_red",
+        "tests/test_hunter_local_reviewer_bootstrap.py::test_bootstrap_requires_ollama_model_and_dedicated_runner_label",
+        "tests/test_hunter_reviewer_benchmark.py::test_failed_quality_threshold_keeps_local_reviewer_triage_only",
+        "tests/test_hunter_review_orchestrator.py::test_trusted_governance_workflows_auto_ensure_review_cycle",
+        "tests/test_hunter_reviewer_collector.py::test_offline_local_fallback_is_skipped_without_waiting",
+        "tests/test_hunter_reviewer_collector.py::test_online_local_that_never_acknowledges_fails_over_after_one_short_budget",
+        "tests/test_hunter_local_reviewer.py::test_local_reviewer_uses_github_diff_not_candidate_checkout",
+        "tests/test_hunter_reviewer_benchmark.py::test_local_reviewer_cannot_gain_authority_without_benchmark_evidence"
       ],
       "lifecycle": "regression-tested",
       "sources": [
         "Issue #467 workflow-ordering defect (PR #468)",
         "Issue #467 fallback review-authority hardening (PR #468)",
         "Issue #467 reviewer-pool failover hardening (follow-on)",
-        "Issue #461 / PR #472 inherited-review authority and reviewer failover stabilization (2026-09-15)"
+        "Issue #461 / PR #472 inherited-review authority and reviewer failover stabilization (2026-09-15)",
+        "Issue #461 resilient reviewer orchestration and local reviewer qualification (2026-09-15)",
+        "Issue #461 reviewer orchestration zero-stall stabilization (2026-09-15)"
       ]
     },
     {

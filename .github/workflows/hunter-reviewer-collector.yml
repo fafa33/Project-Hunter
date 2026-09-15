@@ -14,8 +14,9 @@ on:
 
 permissions:
   contents: read
-  actions: read
+  actions: write
   pull-requests: write
+  statuses: write
 
 concurrency:
   group: hunter-reviewer-collector-${{ inputs.pr_number }}
@@ -46,3 +47,12 @@ jobs:
           path: reviewer-results.json
           if-no-files-found: error
           retention-days: 30
+      - name: Publish trusted collector completion
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+        run: >-
+          python scripts/hunter_review_orchestrator.py collector-complete
+          --repository "${{ github.repository }}"
+          --pr "${{ inputs.pr_number }}"
+          --head "${{ inputs.head_sha }}"
+          --run-id "${{ github.run_id }}"

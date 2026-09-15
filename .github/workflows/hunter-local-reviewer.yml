@@ -1,0 +1,52 @@
+name: Hunter Local Reviewer
+
+on:
+  workflow_dispatch:
+    inputs:
+      pr_number:
+        required: true
+        type: string
+      head_sha:
+        required: true
+        type: string
+      claims_id:
+        required: true
+        type: string
+
+permissions:
+  contents: read
+  pull-requests: read
+  actions: read
+
+concurrency:
+  group: hunter-local-review-${{ inputs.pr_number }}
+  cancel-in-progress: true
+
+jobs:
+  review:
+    runs-on: [self-hosted, macOS, hunter-reviewer]
+    timeout-minutes: 20
+    steps:
+      - name: Checkout trusted default branch
+        uses: actions/checkout@v7
+        with:
+          ref: main
+          persist-credentials: false
+      - name: Run local exact-head review
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          python3 scripts/hunter_local_reviewer.py \
+            --repository "${{ github.repository }}" \
+            --pr "${{ inputs.pr_number }}" \
+            --head-sha "${{ inputs.head_sha }}" \
+            --claims-id "${{ inputs.claims_id }}" \
+            --output reviewer-result.json
+
+      - name: Upload structured local review
+        uses: actions/upload-artifact@v4
+        with:
+          name: hunter-local-review-${{ inputs.pr_number }}-${{ inputs.head_sha }}
+          path: reviewer-result.json
+          if-no-files-found: error
+          retention-days: 14

@@ -27,7 +27,8 @@ def test_code_write_policy_requires_draft_until_exact_head_admission() -> None:
     assert "exact-head" in progression["ready_requires"]
     assert "Pre-PR Preflight" in progression["ready_requires"]
     assert progression["auto_ready"] is False
-    assert progression["requires_current_head_codex_review"] is True
+    assert progression["requires_current_head_review_authority"] is True
+    assert progression["requires_current_head_codex_review"] is False
     assert "structured evidence" in progression["finding_resolution"]
     assert "regression test" in progression["finding_resolution"]
 
@@ -41,11 +42,11 @@ def _write_policy(monkeypatch, tmp_path, mutator) -> None:
     assert prevention.validate_code_write_policy() != []
 
 
-def test_code_write_policy_guard_rejects_a_dropped_codex_review_requirement(monkeypatch, tmp_path) -> None:
+def test_code_write_policy_guard_rejects_a_dropped_current_head_review_requirement(monkeypatch, tmp_path) -> None:
     _write_policy(
         monkeypatch,
         tmp_path,
-        lambda policy: policy["review_progression"].pop("requires_current_head_codex_review"),
+        lambda policy: policy["review_progression"].pop("requires_current_head_review_authority"),
     )
 
 
@@ -64,6 +65,7 @@ def test_code_write_policy_declares_codex_primary_with_a_recorded_reason_fallbac
     authority = policy["review_progression"]["review_authority"]
 
     assert authority["primary"] == "codex"
+    assert authority["fast_fallback"] == "local-ollama"
     assert authority["fallback"] == "opencode"
     assert authority["fallback_requires_recorded_reason"] is True
     expected = {
@@ -76,7 +78,7 @@ def test_code_write_policy_declares_codex_primary_with_a_recorded_reason_fallbac
 
 
 def test_code_write_policy_declares_an_ordered_reviewer_pool_with_a_last_resort_guard() -> None:
-    """The ordered reviewer pool: Codex Tier 1, approved alternates Tier 2, guard last resort."""
+    """The ordered reviewer pool: Codex first, local fast fallback, guard last resort."""
     policy = json.loads((ROOT / "docs" / "CODE_WRITE_POLICY.json").read_text(encoding="utf-8"))
     pool = policy["review_progression"]["review_authority"]["reviewer_pool"]
 
@@ -87,7 +89,16 @@ def test_code_write_policy_declares_an_ordered_reviewer_pool_with_a_last_resort_
     by_id = {agent["id"]: agent for agent in pool["agents"]}
     assert by_id["codex"]["enabled"] is True
     assert by_id["codex"]["priority"] == 1
+    assert by_id["local-ollama"]["priority"] == 2
     assert by_id["codex"]["exact_head_support"] is True
+
+
+def test_reviewer_requires_distinct_ack_and_review_budgets() -> None:
+    policy = json.loads((ROOT / "docs" / "CODE_WRITE_POLICY.json").read_text(encoding="utf-8"))
+    pool = policy["review_progression"]["review_authority"]["reviewer_pool"]
+    for agent in (a for a in pool["agents"] if a.get("enabled")):
+        assert 1 <= agent["ack_timeout_seconds"] <= 90
+        assert agent["review_timeout_seconds"] > agent["ack_timeout_seconds"]
 
 
 def test_code_write_policy_guard_rejects_a_pool_without_a_strict_last_resort(monkeypatch, tmp_path) -> None:
@@ -274,3 +285,26 @@ def test_guard_rejects_an_enabled_grant_with_no_bound_writer_identity() -> None:
         entry["login"] = ""
 
     assert any("binds no writer identity" in error for error in prevention.validate_connector_write_ingress(policy))
+
+
+def test_local_ollama_is_declared_as_fast_priority_one_provider() -> None:
+    policy = json.loads((ROOT / "docs" / "CODE_WRITE_POLICY.json").read_text(encoding="utf-8"))
+    pool = policy["review_progression"]["review_authority"]["reviewer_pool"]
+    by_id = {agent["id"]: agent for agent in pool["agents"]}
+    local = by_id["local-ollama"]
+    assert local["enabled"] is True
+    assert local["priority"] == 2
+    assert local["trigger_method"] == "github-workflow:hunter-local-reviewer.yml"
+    assert local["ack_timeout_seconds"] == 30
+    assert by_id["codex"]["priority"] < local["priority"]
+
+
+def test_codex_hard_review_budget_is_capped_at_five_minutes() -> None:
+    policy = json.loads((ROOT / "docs" / "CODE_WRITE_POLICY.json").read_text(encoding="utf-8"))
+    pool = policy["review_progression"]["review_authority"]["reviewer_pool"]
+    codex = next(agent for agent in pool["agents"] if agent["id"] == "codex")
+
+    assert codex["review_timeout_seconds"] == 300
+    assert codex["ack_timeout_seconds"] <= 30
+    assert codex["retryable"] is False
+    assert pool["timeout_policy"]["max_seconds"] == 300

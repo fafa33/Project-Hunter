@@ -525,7 +525,9 @@ def _attempt(
     *,
     status: str = "exhausted",
     reason: str = "unavailable (rate-limited)",
-    timeout_seconds: int = 900,
+    timeout_seconds: int = 300,
+    ack_timeout_seconds: int = 30,
+    review_timeout_seconds: int = 300,
     failure_class: str = "transient",
     attempt_count: int = 2,
     invocation_reference: str = "actions/runs/12345",
@@ -536,6 +538,8 @@ def _attempt(
         "status": status,
         "reason": reason,
         "timeout_seconds": timeout_seconds,
+        "ack_timeout_seconds": ack_timeout_seconds,
+        "review_timeout_seconds": review_timeout_seconds,
         "failure_class": failure_class,
         "attempt_count": attempt_count,
         "invocation_reference": invocation_reference,
@@ -547,7 +551,8 @@ ALTERNATE_AGENT = {
     "priority": 2,
     "enabled": True,
     "exact_head_support": True,
-    "timeout_seconds": 900,
+    "ack_timeout_seconds": 90,
+    "review_timeout_seconds": 900,
     "github_login": "alternate-reviewer[bot]",
 }
 
@@ -559,11 +564,13 @@ def _pool(*, agents: tuple = (), last_resort: str = "opencode", max_seconds: int
         "priority": 1,
         "enabled": True,
         "exact_head_support": True,
-        "timeout_seconds": 900,
+        "timeout_seconds": 300,
+        "ack_timeout_seconds": 30,
+        "review_timeout_seconds": 300,
     }
     return {
         "last_resort": last_resort,
-        "timeout_policy": {"bounded": True, "default_seconds": 900, "max_seconds": max_seconds, "retries_per_agent": 1},
+        "timeout_policy": {"bounded": True, "default_seconds": 300, "max_seconds": max_seconds, "retries_per_agent": 1},
         "agents": (base_agent,) + tuple(agents),
     }
 
@@ -1193,15 +1200,15 @@ def test_a_skipped_higher_priority_reviewer_is_not_exhaustion_evidence(monkeypat
     assert "skipped" in verdict.reason
 
 
-def test_exhaustion_evidence_must_record_a_timeout_within_the_bounded_policy(monkeypatch) -> None:
+def test_exhaustion_evidence_must_match_the_bounded_review_timeout_policy(monkeypatch) -> None:
     _use_pool(monkeypatch, _pool(agents=(), max_seconds=1800))
-    too_long = _authority(authority_type="opencode", attempts=[_attempt("codex", timeout_seconds=3600)])
-    unbounded = _authority(authority_type="opencode", attempts=[_attempt("codex", timeout_seconds="never")])
+    too_long = _authority(authority_type="opencode", attempts=[_attempt("codex", review_timeout_seconds=3600)])
+    unbounded = _authority(authority_type="opencode", attempts=[_attempt("codex", review_timeout_seconds="never")])
 
     for document in (_review_document(authority=too_long), _review_document(authority=unbounded)):
         verdict = _verify(document)
         assert verdict.state == "incomplete"
-        assert "timeout_seconds" in verdict.reason
+        assert "ack/review timeout budgets" in verdict.reason
 
 
 def test_exhaustion_evidence_from_an_unknown_agent_fails_closed(monkeypatch) -> None:
