@@ -30,6 +30,7 @@ from __future__ import annotations
 
 import argparse
 import os
+import re
 import sys
 from pathlib import Path
 from typing import Any
@@ -66,11 +67,16 @@ TRUSTED_CONTROLLER_PATH = "scripts/hunter_review_orchestrator.py"
 def _trusted_controller_on_default_branch(repository: str, token: str) -> bool:
     """Read controller existence from immutable GitHub default-branch evidence."""
     try:
-        governance.request_json(repository, token, "GET", f"contents/{TRUSTED_CONTROLLER_PATH}?ref=main")
+        payload = governance.request_json(repository, token, "GET", f"contents/{TRUSTED_CONTROLLER_PATH}?ref=main")
     except RuntimeError as exc:
         if "404" in str(exc):
             return False
         raise
+    if not isinstance(payload, dict) or payload.get("type") != "file":
+        raise RuntimeError("trusted controller evidence is malformed: expected file payload")
+    path = str(payload.get("path") or TRUSTED_CONTROLLER_PATH).strip()
+    if path != TRUSTED_CONTROLLER_PATH:
+        raise RuntimeError("trusted controller evidence is malformed: path mismatch")
     return True
 
 
@@ -120,6 +126,20 @@ def _paged_reviews(repository: str, token: str, pr_number: int) -> tuple[dict[st
     raise RuntimeError("pull-request review evidence exceeds supported pagination boundary")
 
 
+def _native_codex_clear_review(body: str, head_sha: str) -> bool:
+    """Accept only Codex's authenticated native exact-head clear-review shape."""
+    raw = body.strip()
+    raw = re.sub(r"^#{1,6}\s*(?:💡\s*)?", "", raw, count=1).strip()
+    match = re.match(
+        r"Codex Review(?:\s*:\s*|\s+)(?:\n+)?Didn't find any major issues\.(?:\s*Bravo\.)?\s+"
+        r"\*\*Reviewed commit:\*\*\s*`([0-9a-f]{7,40})`",
+        raw,
+    )
+    if match is None or not head_sha.strip().lower().startswith(match.group(1).lower()):
+        return False
+    return not raw[match.end() :].strip()
+
+
 def _exact_head_codex_review(
     repository: str,
     token: str,
@@ -139,7 +159,7 @@ def _exact_head_codex_review(
             continue
         if state not in {"COMMENTED", "APPROVED"}:
             continue
-        if not body:
+        if not _native_codex_clear_review(body, head_sha):
             continue
         matches.append(review)
     if not matches:
@@ -281,8 +301,9 @@ def governance_mode(repository: str, token: str, pr_number: int) -> int:
             head_sha = str((pr.get("head") or {}).get("sha") or "").strip()
             if head_sha:
                 try:
-                    if _install_bootstrap_patch(repository, token, pr_number, head_sha):
-                        return governance.review(repository, token, pr_number)
+                    if not _trusted_controller_on_default_branch(repository, token):
+                        if _install_bootstrap_patch(repository, token, pr_number, head_sha):
+                            return governance.review(repository, token, pr_number)
                 except RuntimeError as exc:
                     print(f"Bootstrap authority unavailable; remaining fail-closed: {exc}")
     if bootstrap_pending_mode(repository, pr_number, token):

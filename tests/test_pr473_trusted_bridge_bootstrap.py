@@ -257,3 +257,55 @@ def test_bootstrap_controller_adopts_exact_head_review_before_controller_lands(
     assert bridge.governance_mode(REPOSITORY, "token", bridge.BOOTSTRAP_CONTROLLER_PR) == 0
     assert installed == [(REPOSITORY, bridge.BOOTSTRAP_CONTROLLER_PR, HEAD)]
     assert legacy_review == [bridge.BOOTSTRAP_CONTROLLER_PR]
+
+
+def test_bootstrap_rejects_codex_review_that_reports_findings(monkeypatch: pytest.MonkeyPatch) -> None:
+    review = {
+        "id": 7,
+        "user": {"login": bridge.CODEX_LOGIN},
+        "commit_id": HEAD,
+        "state": "COMMENTED",
+        "body": "### Codex Review\n\nHere are some automated review suggestions.\n\n**Reviewed commit:** `0a82ede`",
+    }
+    monkeypatch.setattr(bridge, "_paged_reviews", lambda *_args: (review,))
+    assert bridge._exact_head_codex_review(REPOSITORY, "token", bridge.BOOTSTRAP_CONTROLLER_PR, HEAD) is None
+
+
+def test_bootstrap_accepts_only_native_codex_clear_review(monkeypatch: pytest.MonkeyPatch) -> None:
+    review = {
+        "id": 8,
+        "user": {"login": bridge.CODEX_LOGIN},
+        "commit_id": HEAD,
+        "state": "COMMENTED",
+        "body": "### 💡 Codex Review\n\nDidn't find any major issues.\n\n**Reviewed commit:** `0a82ede`",
+    }
+    monkeypatch.setattr(bridge, "_paged_reviews", lambda *_args: (review,))
+    assert bridge._exact_head_codex_review(REPOSITORY, "token", bridge.BOOTSTRAP_CONTROLLER_PR, HEAD) == review
+
+
+def test_controller_presence_requires_valid_default_branch_file_payload(monkeypatch: pytest.MonkeyPatch) -> None:
+    for payload in ({}, {"type": "dir", "path": bridge.TRUSTED_CONTROLLER_PATH}, {"type": "file", "path": "wrong.py"}):
+        monkeypatch.setattr(governance, "request_json", lambda *_args, _payload=payload, **_kwargs: _payload)
+        with pytest.raises(RuntimeError, match="malformed"):
+            bridge._trusted_controller_on_default_branch(REPOSITORY, "token")
+
+    monkeypatch.setattr(
+        governance,
+        "request_json",
+        lambda *_args, **_kwargs: {"type": "file", "path": bridge.TRUSTED_CONTROLLER_PATH},
+    )
+    assert bridge._trusted_controller_on_default_branch(REPOSITORY, "token") is True
+
+
+def test_bootstrap_patch_self_retires_when_trusted_controller_exists(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, legacy_review: list[int]
+) -> None:
+    _controller_present(monkeypatch, tmp_path)
+    _mergeability(monkeypatch, _pull_request())
+    monkeypatch.setattr(
+        bridge,
+        "_install_bootstrap_patch",
+        lambda *_args, **_kwargs: pytest.fail("retired bootstrap must not install synthetic authority"),
+    )
+    assert bridge.governance_mode(REPOSITORY, "token", bridge.BOOTSTRAP_CONTROLLER_PR) == 0
+    assert legacy_review == [bridge.BOOTSTRAP_CONTROLLER_PR]
