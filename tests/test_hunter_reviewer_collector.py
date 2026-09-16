@@ -84,6 +84,29 @@ def test_evidence_transport_failure_is_not_reviewer_exhaustion():
         collector.collect_attempts(POOL, HEAD, backend)
 
 
+def test_trusted_run_accepts_ancestor_of_current_default_branch(monkeypatch):
+    run = {
+        "id": 123,
+        "run_attempt": 1,
+        "head_sha": "b" * 40,
+        "head_branch": "main",
+        "path": ".github/workflows/hunter-reviewer-collector.yml",
+        "event": "workflow_dispatch",
+        "status": "completed",
+        "conclusion": "success",
+    }
+    monkeypatch.setattr(
+        collector.governance,
+        "request_json",
+        lambda _r, _t, _m, path, *_a: (
+            {"status": "ahead"}
+            if path == f"compare/{'b' * 40}...{'c' * 40}"
+            else (_ for _ in ()).throw(AssertionError(path))
+        ),
+    )
+    assert collector.valid_run(run, 123, "main", "c" * 40, repository="owner/repo", token="token")
+
+
 def test_trusted_run_must_execute_default_branch_revision():
     run = {
         "id": 123,

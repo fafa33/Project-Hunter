@@ -174,13 +174,26 @@ def collect_attempts(pool: dict[str, Any], head: str, backend: Backend) -> list[
     return records
 
 
-def valid_run(run: dict[str, Any], run_id: int, branch: str, revision: str) -> bool:
+def valid_run(
+    run: dict[str, Any],
+    run_id: int,
+    branch: str,
+    revision: str,
+    *,
+    repository: str = "",
+    token: str = "",
+) -> bool:
+    run_revision = str(run.get("head_sha") or "")
+    revision_trusted = run_revision == revision
+    if run_revision and revision and not revision_trusted and repository:
+        comparison = governance.request_json(repository, token, "GET", f"compare/{run_revision}...{revision}")
+        revision_trusted = isinstance(comparison, dict) and comparison.get("status") in {"ahead", "identical"}
     return (
         run.get("id") == run_id
         and type(run.get("run_attempt")) is int
         and run["run_attempt"] >= 1
         and run.get("head_branch") == branch
-        and run.get("head_sha") == revision
+        and revision_trusted
         and run.get("path") == WORKFLOW
         and run.get("event") == "workflow_dispatch"
         and run.get("status") == "completed"
@@ -441,7 +454,7 @@ def load_exhaustion(
     branch = repo["default_branch"]
     revision = governance.request_json(repository, token, "GET", f"commits/{branch}")["sha"]
     run = governance.request_json(repository, token, "GET", f"actions/runs/{run_id}")
-    if not isinstance(run, dict) or not valid_run(run, run_id, branch, revision):
+    if not isinstance(run, dict) or not valid_run(run, run_id, branch, revision, repository=repository, token=token):
         raise ValueError("collector did not execute the trusted default-branch revision")
     name = f'hunter-reviewer-results-{head}-{run["run_attempt"]}'
     artifacts = [
