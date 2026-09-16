@@ -50,6 +50,23 @@ REVIEW_AUTHORITY_STATES = (
     "EXHAUSTION_UNPROVEN",
 )
 
+NON_RED_REVIEW_STATES = frozenset(
+    {
+        "WAITING_FOR_REVIEWER",
+        "REVIEW_IN_PROGRESS",
+        "FAILOVER_IN_PROGRESS",
+        "POOL_EXHAUSTED",
+    }
+)
+
+
+def review_wait_state(orchestration_state: str, detail: str) -> tuple[str, str] | None:
+    """Project reviewer availability states as blocked/pending, never red."""
+    if orchestration_state in NON_RED_REVIEW_STATES:
+        suffix = f": {detail}" if detail else ""
+        return "pending", f"{orchestration_state}{suffix}"
+    return None
+
 
 @dataclass(frozen=True)
 class ReviewAuthorityVerdict:
@@ -243,10 +260,25 @@ def review_authority_state(head_sha: str, pr_number: int) -> tuple[str, str]:
         if not ok:
             return "failure", f"BLOCKING_FINDINGS: {problem}"
         verdict = resolve_review_authority(governance.verify_pre_ready_hostile_review(REPO, TOKEN, head_sha, pr_number))
-        status = "success" if verdict.state in {"VALID_AGENT_REVIEW", "VALID_LAST_RESORT_GUARD"} else "failure"
-        return status, f"{verdict.state}: {verdict.detail}"
+        if verdict.state in {"VALID_AGENT_REVIEW", "VALID_LAST_RESORT_GUARD"}:
+            return "success", f"{verdict.state}: {verdict.detail}"
+        if verdict.state in {"BLOCKING_FINDINGS", "MALFORMED_REVIEW"}:
+            return "failure", f"{verdict.state}: {verdict.detail}"
+        try:
+            orchestration_state, orchestration_detail = governance.review_orchestration_state(
+                REPO, TOKEN, pr_number, head_sha
+            )
+        except Exception as exc:
+            return (
+                "pending",
+                f"{verdict.state}: {verdict.detail}; review orchestration unavailable: {type(exc).__name__}: {exc}",
+            )
+        waiting = review_wait_state(orchestration_state, orchestration_detail)
+        if waiting is not None:
+            return waiting
+        return "pending", f"{verdict.state}: {verdict.detail}"
     except Exception as exc:
-        return "failure", f"Review authority evidence unavailable: {type(exc).__name__}: {exc}"
+        return "pending", f"Review authority evidence unavailable: {type(exc).__name__}: {exc}"
 
 
 class ReadinessObservation(Protocol):

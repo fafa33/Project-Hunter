@@ -32,6 +32,12 @@ def configuration_digest(pool: dict[str, Any]) -> str:
     return hashlib.sha256(json.dumps(pool, sort_keys=True, separators=(",", ":")).encode()).hexdigest()
 
 
+def authority_attempt_records(pool: dict[str, Any], records: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Return only receipt rows emitted by authority-eligible reviewers."""
+    authority_ids = {str(agent["id"]) for agent in review.authority_pool_reviewers(pool)}
+    return [record for record in records if isinstance(record, dict) and str(record.get("agent_id")) in authority_ids]
+
+
 class Backend(Protocol):
     def head(self) -> str: ...
     def now(self) -> float: ...
@@ -44,41 +50,122 @@ def collect_attempts(pool: dict[str, Any], head: str, backend: Backend) -> list[
     records = []
     agents = sorted(review.enabled_pool_reviewers(pool), key=lambda a: a["priority"])
     for agent in agents:
-        count = 1 + (pool["timeout_policy"]["retries_per_agent"] if agent["retryable"] else 0)
-        for number in range(1, count + 1):
-            if backend.head() != head:
-                raise ValueError("HEAD changed before reviewer invocation")
-            trigger = backend.trigger(agent, number)
-            start = backend.now()
-            deadline = start + agent["timeout_seconds"]
-            responded = False
-            while True:
-                if backend.head() != head:
-                    raise ValueError("HEAD changed during reviewer invocation")
-                # Even a nonconforming response/reaction proves availability; it
-                # cannot be turned into permission to bypass this reviewer.
-                if backend.responded(agent, trigger):
-                    responded = True
-                    break
-                if backend.now() >= deadline:
-                    break
-                backend.sleep(min(15, deadline - backend.now()))
+        availability_fn = getattr(backend, "availability", None)
+        availability_state = availability_fn(agent) if availability_fn is not None else "online"
+        if availability_state in {"offline", "missing"}:
             records.append(
                 {
                     "agent_id": agent["id"],
                     "priority": agent["priority"],
-                    "timeout_seconds": agent["timeout_seconds"],
+                    "ack_timeout_seconds": agent["ack_timeout_seconds"],
+                    "review_timeout_seconds": agent["review_timeout_seconds"],
+                    "trigger_method": agent["trigger_method"],
+                    "evidence_parser": agent["evidence_parser"],
+                    "retryable": agent["retryable"],
+                    "attempt_number": 1,
+                    "trigger_id": 0,
+                    "trigger_created_at": "",
+                    "ack_elapsed_seconds": 0,
+                    "elapsed_seconds": 0,
+                    "outcome": "unavailable",
+                    "failure_class": "transient",
+                    "availability_state": availability_state,
+                }
+            )
+            continue
+        count = (
+            1
+            if agent.get("id") == "local-ollama"
+            else 1 + (pool["timeout_policy"]["retries_per_agent"] if agent["retryable"] else 0)
+        )
+        for number in range(1, count + 1):
+            if backend.head() != head:
+                raise ValueError("HEAD changed before reviewer invocation")
+            try:
+                trigger = backend.trigger(agent, number)
+            except governance.transport.GitHubRequestError as exc:
+                if exc.category == "permanent" and exc.status_code == 403:
+                    records.append(
+                        {
+                            "agent_id": agent["id"],
+                            "priority": agent["priority"],
+                            "ack_timeout_seconds": agent["ack_timeout_seconds"],
+                            "review_timeout_seconds": agent["review_timeout_seconds"],
+                            "trigger_method": agent["trigger_method"],
+                            "evidence_parser": agent["evidence_parser"],
+                            "retryable": agent["retryable"],
+                            "attempt_number": number,
+                            "trigger_id": 0,
+                            "trigger_created_at": "",
+                            "ack_elapsed_seconds": 0,
+                            "elapsed_seconds": 0,
+                            "outcome": "unavailable",
+                            "failure_class": "permanent",
+                            "failure_status": 403,
+                            "availability_state": "trigger-denied",
+                        }
+                    )
+                    break
+                raise
+            start = backend.now()
+            ack_deadline = start + agent["ack_timeout_seconds"]
+            ack_fn = getattr(backend, "acknowledged", backend.responded)
+            complete_fn = getattr(backend, "completed", backend.responded)
+            acknowledged = False
+            while backend.now() < ack_deadline:
+                if backend.head() != head:
+                    raise ValueError("HEAD changed during reviewer acknowledgement")
+                if ack_fn(agent, trigger):
+                    acknowledged = True
+                    break
+                backend.sleep(min(5, ack_deadline - backend.now()))
+            ack_elapsed = backend.now() - start
+            if not acknowledged:
+                records.append(
+                    {
+                        "agent_id": agent["id"],
+                        "priority": agent["priority"],
+                        "ack_timeout_seconds": agent["ack_timeout_seconds"],
+                        "review_timeout_seconds": agent["review_timeout_seconds"],
+                        "trigger_method": agent["trigger_method"],
+                        "evidence_parser": agent["evidence_parser"],
+                        "retryable": agent["retryable"],
+                        "attempt_number": number,
+                        "trigger_id": trigger["id"],
+                        "trigger_created_at": trigger["created_at"],
+                        "ack_elapsed_seconds": ack_elapsed,
+                        "elapsed_seconds": ack_elapsed,
+                        "outcome": "unavailable",
+                        "failure_class": "transient",
+                    }
+                )
+                continue
+            review_started_at = backend.now()
+            review_deadline = review_started_at + agent["review_timeout_seconds"]
+            completed = complete_fn(agent, trigger)
+            while not completed and backend.now() < review_deadline:
+                if backend.head() != head:
+                    raise ValueError("HEAD changed during reviewer execution")
+                backend.sleep(min(5, review_deadline - backend.now()))
+                completed = complete_fn(agent, trigger)
+            records.append(
+                {
+                    "agent_id": agent["id"],
+                    "priority": agent["priority"],
+                    "ack_timeout_seconds": agent["ack_timeout_seconds"],
+                    "review_timeout_seconds": agent["review_timeout_seconds"],
                     "trigger_method": agent["trigger_method"],
                     "evidence_parser": agent["evidence_parser"],
                     "retryable": agent["retryable"],
                     "attempt_number": number,
                     "trigger_id": trigger["id"],
                     "trigger_created_at": trigger["created_at"],
+                    "ack_elapsed_seconds": ack_elapsed,
                     "elapsed_seconds": backend.now() - start,
-                    "outcome": "responded" if responded else "timed_out",
+                    "outcome": "responded" if completed else "timed_out",
                 }
             )
-            if responded:
+            if completed and agent.get("authority_eligible", True):
                 return records
     return records
 
@@ -145,6 +232,13 @@ class GitHubBackend:
             raise ValueError("pull request is unavailable or closed")
         return str(pr["head"]["sha"])
 
+    def availability(self, agent: dict[str, Any]) -> str:
+        if agent.get("id") != "local-ollama":
+            return "online"
+        import hunter_review_orchestrator as orchestrator
+
+        return orchestrator.runner_state(self.repository, self.token)
+
     def now(self) -> float:
         return time.monotonic()
 
@@ -152,6 +246,25 @@ class GitHubBackend:
         time.sleep(seconds)
 
     def trigger(self, agent: dict[str, Any], number: int) -> dict[str, Any]:
+        method = str(agent.get("trigger_method") or "")
+        if method.startswith("github-workflow:"):
+            workflow = method.split(":", 1)[1]
+            created_at = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
+            governance.request_json(
+                self.repository,
+                self.token,
+                "POST",
+                f"actions/workflows/{workflow}/dispatches",
+                {
+                    "ref": "main",
+                    "inputs": {
+                        "pr_number": str(self.pr),
+                        "head_sha": self.expected_head,
+                        "claims_id": self.claims_id,
+                    },
+                },
+            )
+            return {"id": 0, "created_at": created_at, "kind": "local-workflow", "workflow": workflow, "number": number}
         body = trigger_body(self.expected_head, self.claims_id, agent, self.run_id, self.run_attempt, number)
         result = governance.request_json(
             self.repository, self.token, "POST", f"issues/{self.pr}/comments", {"body": body}
@@ -159,6 +272,71 @@ class GitHubBackend:
         if not isinstance(result, dict) or type(result.get("id")) is not int or not result.get("created_at"):
             raise ValueError("GitHub did not confirm actual reviewer invocation")
         return result
+
+    def _local_run(self, trigger: dict[str, Any]) -> dict[str, Any] | None:
+        workflow = str(trigger.get("workflow") or "hunter-local-reviewer.yml")
+        payload = governance.request_json(
+            self.repository,
+            self.token,
+            "GET",
+            f"actions/workflows/{workflow}/runs?event=workflow_dispatch&branch=main&per_page=20",
+        )
+        runs = payload.get("workflow_runs", []) if isinstance(payload, dict) else []
+        candidates = [
+            run
+            for run in runs
+            if isinstance(run, dict)
+            and str(run.get("created_at") or "") >= str(trigger.get("created_at") or "")
+            and str(run.get("event") or "") == "workflow_dispatch"
+            and str(run.get("head_branch") or "") == "main"
+        ]
+        return max(candidates, key=lambda run: int(run.get("id") or 0), default=None)
+
+    def acknowledged(self, agent: dict[str, Any], trigger: dict[str, Any]) -> bool:
+        if trigger.get("kind") == "local-workflow":
+            run = self._local_run(trigger)
+            if not run:
+                return False
+            trigger["id"] = int(run.get("id") or 0)
+            jobs = governance.request_json(
+                self.repository, self.token, "GET", f"actions/runs/{trigger['id']}/jobs?per_page=100"
+            )
+            rows = jobs.get("jobs", []) if isinstance(jobs, dict) else []
+            return any(
+                str(job.get("status") or "") in {"in_progress", "completed"} for job in rows if isinstance(job, dict)
+            )
+        return self.responded(agent, trigger)
+
+    def completed(self, agent: dict[str, Any], trigger: dict[str, Any]) -> bool:
+        if trigger.get("kind") == "local-workflow":
+            run = self._local_run(trigger)
+            if not run:
+                return False
+            trigger["id"] = int(run.get("id") or 0)
+            return str(run.get("status") or "") == "completed" and str(run.get("conclusion") or "") == "success"
+        login = governance.reviewer_login(agent)
+        for item in _pages(self.repository, self.token, f"pulls/{self.pr}/reviews"):
+            if (
+                (item.get("user") or {}).get("login", "").lower() == login
+                and item.get("commit_id") == self.expected_head
+                and item.get("state") in {"APPROVED", "COMMENTED", "CHANGES_REQUESTED"}
+                and str(item.get("submitted_at") or item.get("created_at") or "") >= trigger["created_at"]
+            ):
+                return True
+        for item in _pages(self.repository, self.token, f"issues/{self.pr}/comments"):
+            if (item.get("user") or {}).get("login", "").lower() != login:
+                continue
+            if str(item.get("created_at") or "") < trigger["created_at"]:
+                continue
+            ack = governance.review_acknowledgement(str(item.get("body") or ""))
+            if (
+                ack
+                and ack.get("head_sha") == self.expected_head
+                and ack.get("claims_id") == self.claims_id
+                and ack.get("collector_run_id") == self.run_id
+            ):
+                return True
+        return False
 
     def responded(self, agent: dict[str, Any], trigger: dict[str, Any]) -> bool:
         login = governance.reviewer_login(agent)
@@ -252,12 +430,13 @@ def load_exhaustion(
         raise ValueError("collector numeric identity fields must be integers")
     if not re.fullmatch("[0-9a-f]{64}", str(receipt.get("claims_id") or "")):
         raise ValueError("collector claims digest is malformed")
-    agents = review.enabled_pool_reviewers(pool)
+    agents = review.authority_pool_reviewers(pool)
     own = next((a["priority"] for a in agents if a["id"] == authority_type), float("inf"))
     required = sorted((a for a in agents if a["priority"] < own), key=lambda a: a["priority"])
     records = receipt.get("attempts")
     if not isinstance(records, list):
         raise ValueError("collector attempts are missing")
+    records = authority_attempt_records(pool, records)
     result = []
     offset = 0
     seen = set()
@@ -269,24 +448,54 @@ def load_exhaustion(
             record = records[offset]
             offset += 1
             expected_attempt = {
-                k: agent[k] for k in ("priority", "timeout_seconds", "trigger_method", "evidence_parser", "retryable")
+                k: agent[k]
+                for k in (
+                    "priority",
+                    "ack_timeout_seconds",
+                    "review_timeout_seconds",
+                    "trigger_method",
+                    "evidence_parser",
+                    "retryable",
+                )
             }
-            expected_attempt.update(agent_id=agent["id"], attempt_number=number, outcome="timed_out")
+            expected_attempt.update(agent_id=agent["id"], attempt_number=number)
+            outcome = record.get("outcome")
             elapsed = record.get("elapsed_seconds")
+            ack_elapsed = record.get("ack_elapsed_seconds")
+            if outcome not in {"unavailable", "timed_out"}:
+                raise ValueError("trusted timeout/configuration/retry result mismatch")
+            trigger_denied = (
+                outcome == "unavailable"
+                and record.get("failure_class") == "permanent"
+                and record.get("failure_status") == 403
+                and record.get("availability_state") == "trigger-denied"
+                and record.get("trigger_id") == 0
+                and record.get("trigger_created_at") == ""
+                and elapsed == 0
+                and ack_elapsed == 0
+            )
+            minimum = agent["ack_timeout_seconds"] if outcome == "unavailable" else agent["review_timeout_seconds"]
             if (
                 any(record.get(k) != v for k, v in expected_attempt.items())
                 or type(record.get("priority")) is not int
-                or type(record.get("timeout_seconds")) is not int
+                or type(record.get("ack_timeout_seconds")) is not int
+                or type(record.get("review_timeout_seconds")) is not int
                 or type(record.get("retryable")) is not bool
                 or type(record.get("attempt_number")) is not int
                 or type(elapsed) not in (int, float)
-                or not agent["timeout_seconds"] <= elapsed < 7200
+                or type(ack_elapsed) not in (int, float)
+                or (not trigger_denied and not minimum <= elapsed < 7200)
+                or not 0 <= ack_elapsed <= elapsed
             ):
                 raise ValueError("trusted timeout/configuration/retry result mismatch")
             trigger_id = record.get("trigger_id")
             if type(trigger_id) is not int or trigger_id in seen:
                 raise ValueError("duplicate or invalid invocation identity")
             seen.add(trigger_id)
+            if trigger_denied:
+                continue
+            if trigger_id <= 0:
+                raise ValueError("missing trusted reviewer trigger identity")
             trigger = governance.request_json(repository, token, "GET", f"issues/comments/{trigger_id}")
             expected_body = trigger_body(head, receipt["claims_id"], agent, run_id, run["run_attempt"], number)
             if (
@@ -300,13 +509,20 @@ def load_exhaustion(
                 agent, trigger
             ):
                 raise ValueError("higher-priority reviewer is available; exhaustion cannot be reused")
+        agent_records = [
+            record for record in records if isinstance(record, dict) and record.get("agent_id") == agent["id"]
+        ]
+        failure_class = (
+            "permanent" if any(record.get("failure_class") == "permanent" for record in agent_records) else "transient"
+        )
         result.append(
             {
                 "agent_id": agent["id"],
                 "status": "exhausted",
-                "reason": "trusted collector timed out every configured invocation",
-                "timeout_seconds": agent["timeout_seconds"],
-                "failure_class": "transient",
+                "reason": "trusted collector exhausted every configured acknowledgement/review budget",
+                "ack_timeout_seconds": agent["ack_timeout_seconds"],
+                "review_timeout_seconds": agent["review_timeout_seconds"],
+                "failure_class": failure_class,
                 "attempt_count": count,
                 "invocation_reference": f"actions/runs/{run_id}",
             }

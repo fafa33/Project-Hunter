@@ -24,7 +24,7 @@ on:
         type: string
 
 permissions:
-  actions: read
+  actions: write
   checks: read
   contents: read
   pull-requests: read
@@ -78,5 +78,41 @@ jobs:
           B=boot
           BRIDGE="${GITHUB_WORKSPACE}/engine/scripts/hunter_governance_review/${B}strap_external_review_469.py"
           python "${BRIDGE}" governance \
+            --pr "${PR_NUMBER}" \
+            --repository "${GH_REPO}"
+
+      - name: Ensure exact-head reviewer cycle (if bootstrapped)
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          PR_NUMBER: >-
+            ${{
+              github.event.pull_request.number
+              || github.event.workflow_run.pull_requests[0].number
+              || github.event.inputs.pr_number
+            }}
+        run: |
+          set -euo pipefail
+          # Bootstrap detection: if hunter_review_orchestrator.py does not yet exist on
+          # the trusted default branch, we are in the bootstrap phase of introducing it.
+          # 
+          # During bootstrap:
+          # - Do NOT execute candidate-controlled code as trusted authority.
+          # - Do NOT fail the entire governance review merely because the trusted
+          #   orchestrator is not yet available.
+          # - The governance step above handles review via the existing bootstrap bridge.
+          # - Exact-head review authority is still required through that trusted path.
+          #
+          # After bootstrap (orchestrator is merged into main):
+          # - The orchestrator file exists and this step executes it normally.
+          # - Full reviewer orchestration activates for all future PRs.
+          
+          ORCHESTRATOR="${GITHUB_WORKSPACE}/engine/scripts/hunter_review_orchestrator.py"
+          if [ ! -f "${ORCHESTRATOR}" ]; then
+            echo "::notice::Bootstrap phase: hunter_review_orchestrator.py not yet on default branch; skipping orchestration step. Governance review above handled review authority."
+            exit 0
+          fi
+          
+          python "${ORCHESTRATOR}" ensure \
             --pr "${PR_NUMBER}" \
             --repository "${GH_REPO}"

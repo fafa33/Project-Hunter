@@ -14,7 +14,8 @@ POOL = {
             "id": "codex",
             "priority": 1,
             "enabled": True,
-            "timeout_seconds": 900,
+            "ack_timeout_seconds": 90,
+            "review_timeout_seconds": 900,
             "retryable": True,
             "trigger_method": "github-pr-comment:@codex review",
             "github_login": "chatgpt-codex-connector[bot]",
@@ -52,8 +53,8 @@ def test_real_timeout_and_all_configured_retries_are_required():
     backend = Backend()
     results = collector.collect_attempts(POOL, HEAD, backend)
     assert backend.triggers == [("codex", 1), ("codex", 2)]
-    assert [r["elapsed_seconds"] for r in results] == [900, 900]
-    assert all(r["outcome"] == "timed_out" for r in results)
+    assert [r["ack_elapsed_seconds"] for r in results] == [90, 90]
+    assert all(r["outcome"] == "unavailable" for r in results)
 
 
 def test_response_prevents_exhaustion_and_lower_reviewer_invocation():
@@ -189,7 +190,7 @@ def test_immutable_collector_receipt_proves_configured_exhaustion(monkeypatch):
         lambda r: r.update(head_sha="b" * 40),
         lambda r: r.update(run_attempt=2),
         lambda r: r["attempts"].pop(),
-        lambda r: r["attempts"][0].update(timeout_seconds=1),
+        lambda r: r["attempts"][0].update(ack_timeout_seconds=1),
         lambda r: r["attempts"][0].update(elapsed_seconds=1),
         lambda r: r["attempts"][1].update(trigger_id=1),
         lambda r: r["attempts"][0].update(outcome="responded"),
@@ -239,3 +240,279 @@ def test_collector_workflow_can_write_pr_conversation_triggers():
     permissions = workflow["permissions"]
 
     assert permissions.get("pull-requests") == "write"
+
+
+def test_no_ack_fails_over_after_short_budget():
+    backend = Backend()
+    pool = copy.deepcopy(POOL)
+    agent = pool["agents"][0]
+    agent["ack_timeout_seconds"] = 30
+    agent["review_timeout_seconds"] = 300
+    results = collector.collect_attempts(pool, HEAD, backend)
+    assert results[0]["ack_elapsed_seconds"] == 30
+    assert results[0]["outcome"] == "unavailable"
+
+
+def test_acknowledged_review_uses_execution_budget_not_ack_budget():
+    class AckBackend(Backend):
+        def acknowledged(self, agent, trigger):
+            return self.clock >= 5
+
+        def completed(self, agent, trigger):
+            return self.clock >= 35
+
+    backend = AckBackend()
+    pool = copy.deepcopy(POOL)
+    agent = pool["agents"][0]
+    agent["ack_timeout_seconds"] = 30
+    agent["review_timeout_seconds"] = 60
+    results = collector.collect_attempts(pool, HEAD, backend)
+    assert results[0]["ack_elapsed_seconds"] == 5
+    assert results[0]["elapsed_seconds"] == 35
+    assert results[0]["outcome"] == "responded"
+
+
+def test_offline_local_fallback_is_skipped_without_waiting():
+    backend = Backend()
+
+    def availability(agent):
+        return "offline" if agent["id"] == "local-ollama" else "online"
+
+    backend.availability = availability
+    pool = copy.deepcopy(POOL)
+    pool["agents"] += (
+        {
+            "id": "local-ollama",
+            "priority": 2,
+            "enabled": True,
+            "ack_timeout_seconds": 30,
+            "review_timeout_seconds": 600,
+            "retryable": True,
+            "trigger_method": "github-workflow:hunter-local-reviewer.yml",
+            "evidence_parser": "hunter.local-review.v1",
+        },
+    )
+    results = collector.collect_attempts(pool, HEAD, backend)
+    local = [item for item in results if item["agent_id"] == "local-ollama"]
+    assert len(local) == 1
+    assert local[0]["outcome"] == "unavailable"
+    assert local[0]["availability_state"] == "offline"
+    assert local[0]["elapsed_seconds"] == 0
+
+
+def test_collector_workflow_can_dispatch_local_reviewer():
+    import yaml
+
+    workflow = yaml.safe_load((collector.review.ROOT / collector.WORKFLOW).read_text())
+    assert workflow["permissions"].get("actions") == "write"
+
+
+def test_online_local_that_never_acknowledges_fails_over_after_one_short_budget():
+    backend = Backend()
+    backend.availability = lambda agent: "online"
+    pool = {
+        "last_resort": "opencode",
+        "timeout_policy": {"retries_per_agent": 1},
+        "agents": (
+            {
+                "id": "local-ollama",
+                "priority": 1,
+                "enabled": True,
+                "ack_timeout_seconds": 30,
+                "review_timeout_seconds": 600,
+                "retryable": True,
+                "trigger_method": "github-workflow:hunter-local-reviewer.yml",
+                "evidence_parser": "hunter.local-review.v1",
+            },
+        ),
+    }
+    results = collector.collect_attempts(pool, HEAD, backend)
+    assert len(results) == 1
+    assert results[0]["outcome"] == "unavailable"
+    assert results[0]["ack_elapsed_seconds"] == 30
+
+
+def test_local_trigger_dispatches_trusted_workflow_instead_of_pr_comment(monkeypatch):
+    calls = []
+    backend = collector.GitHubBackend("owner/repo", "token", 472, HEAD, "d" * 64, 123, 1)
+    monkeypatch.setattr(
+        collector.governance,
+        "request_json",
+        lambda repo, token, method, path, payload=None: calls.append((method, path, payload)) or {},
+    )
+    agent = {
+        "id": "local-ollama",
+        "trigger_method": "github-workflow:hunter-local-reviewer.yml",
+        "github_login": "",
+    }
+    trigger = backend.trigger(agent, 1)
+    assert calls == [
+        (
+            "POST",
+            "actions/workflows/hunter-local-reviewer.yml/dispatches",
+            {"ref": "main", "inputs": {"pr_number": "472", "head_sha": HEAD, "claims_id": "d" * 64}},
+        )
+    ]
+    assert trigger["kind"] == "local-workflow"
+
+
+def test_local_ack_requires_job_to_have_started(monkeypatch):
+    backend = collector.GitHubBackend("owner/repo", "token", 472, HEAD, "d" * 64, 123, 1)
+    trigger = {"kind": "local-workflow", "id": 55, "created_at": "2026-09-15T00:00:00Z"}
+    monkeypatch.setattr(backend, "_local_run", lambda _trigger: {"id": 55, "status": "in_progress"})
+    monkeypatch.setattr(
+        collector.governance,
+        "request_json",
+        lambda *_args: {"jobs": [{"id": 8, "status": "in_progress", "conclusion": None}]},
+    )
+    assert backend.acknowledged({"id": "local-ollama"}, trigger) is True
+
+
+def test_triage_only_local_reviewer_is_not_authority_exhaustion_requirement():
+    pool = copy.deepcopy(POOL)
+    pool["agents"] += (
+        {
+            "id": "local-ollama",
+            "priority": 2,
+            "enabled": True,
+            "authority_eligible": False,
+            "ack_timeout_seconds": 30,
+            "review_timeout_seconds": 600,
+            "retryable": True,
+            "trigger_method": "github-workflow:hunter-local-reviewer.yml",
+            "evidence_parser": "hunter.local-review.v1",
+        },
+    )
+    assert [a["id"] for a in collector.review.authority_pool_reviewers(pool)] == ["codex"]
+
+
+def test_codex_trigger_permission_failure_fails_over_instead_of_crashing():
+    class PermissionFailoverBackend(Backend):
+        def trigger(self, agent, number):
+            if agent["id"] == "codex":
+                raise collector.governance.transport.GitHubRequestError(
+                    "GitHub HTTP 403: Resource not accessible by integration",
+                    category="permanent",
+                    status_code=403,
+                )
+            return super().trigger(agent, number)
+
+        def acknowledged(self, agent, trigger):
+            return agent["id"] == "alternate"
+
+        def completed(self, agent, trigger):
+            return agent["id"] == "alternate"
+
+    codex = {**POOL["agents"][0], "retryable": False, "ack_timeout_seconds": 30, "review_timeout_seconds": 300}
+    alternate = {
+        **codex,
+        "id": "alternate",
+        "priority": 2,
+        "trigger_method": "github-workflow:hunter-local-reviewer.yml",
+        "evidence_parser": "hunter.local-review.v1",
+    }
+    pool = {"last_resort": "opencode", "timeout_policy": {"retries_per_agent": 1}, "agents": (codex, alternate)}
+
+    results = collector.collect_attempts(pool, HEAD, PermissionFailoverBackend())
+
+    assert [item["agent_id"] for item in results] == ["codex", "alternate"]
+    assert results[0]["outcome"] == "unavailable"
+    assert results[0]["failure_class"] == "permanent"
+    assert results[0]["failure_status"] == 403
+    assert results[1]["outcome"] == "responded"
+
+
+def test_triage_only_response_does_not_prevent_hosted_fallback():
+    class TriageThenHostedBackend(Backend):
+        def acknowledged(self, agent, trigger):
+            return True
+
+        def completed(self, agent, trigger):
+            return True
+
+    backend = TriageThenHostedBackend()
+    local = {
+        **POOL["agents"][0],
+        "id": "local-ollama",
+        "priority": 1,
+        "authority_eligible": False,
+        "retryable": False,
+        "trigger_method": "github-workflow:hunter-local-reviewer.yml",
+        "evidence_parser": "hunter.local-review.v1",
+    }
+    codex = {**POOL["agents"][0], "id": "codex", "priority": 2, "retryable": False}
+    pool = {"last_resort": "opencode", "timeout_policy": {"retries_per_agent": 0}, "agents": (local, codex)}
+
+    results = collector.collect_attempts(pool, HEAD, backend)
+
+    assert [item["agent_id"] for item in results] == ["local-ollama", "codex"]
+    assert [item["outcome"] for item in results] == ["responded", "responded"]
+
+
+def test_review_execution_budget_starts_after_acknowledgement():
+    class LateAckBackend(Backend):
+        def __init__(self):
+            super().__init__()
+            self.clock = 0.0
+
+        def now(self):
+            return self.clock
+
+        def sleep(self, seconds):
+            self.clock += seconds
+
+        def acknowledged(self, agent, trigger):
+            return self.clock >= 25.0
+
+        def completed(self, agent, trigger):
+            return self.clock >= 325.0
+
+    agent = {**POOL["agents"][0], "retryable": False, "ack_timeout_seconds": 30, "review_timeout_seconds": 300}
+    pool = {"last_resort": "opencode", "timeout_policy": {"retries_per_agent": 0}, "agents": (agent,)}
+
+    result = collector.collect_attempts(pool, HEAD, LateAckBackend())
+
+    assert result[0]["outcome"] == "responded"
+    assert result[0]["ack_elapsed_seconds"] >= 25.0
+    assert result[0]["elapsed_seconds"] >= 325.0
+
+
+def test_authority_receipt_filter_skips_triage_only_records():
+    local = {
+        "agent_id": "local-ollama",
+        "priority": 1,
+        "outcome": "responded",
+    }
+    codex = {
+        "agent_id": "codex",
+        "priority": 2,
+        "outcome": "timed_out",
+    }
+    pool = {
+        "agents": (
+            {"id": "local-ollama", "enabled": True, "authority_eligible": False, "priority": 1},
+            {"id": "codex", "enabled": True, "priority": 2},
+        )
+    }
+
+    assert collector.authority_attempt_records(pool, [local, codex]) == [codex]
+
+
+def test_native_exact_head_codex_review_counts_as_completed(monkeypatch):
+    backend = collector.GitHubBackend("owner/repo", "token", 473, HEAD, "d" * 64, 123, 1)
+    trigger = {"id": 55, "created_at": "2026-09-15T00:00:00Z"}
+    agent = {**POOL["agents"][0], "id": "codex"}
+    review = {
+        "id": 99,
+        "user": {"login": "chatgpt-codex-connector[bot]"},
+        "commit_id": HEAD,
+        "state": "COMMENTED",
+        "body": "Codex Review: Didn't find any major issues. Bravo.\n\n**Reviewed commit:** `aaaaaaaaaa`",
+        "submitted_at": "2026-09-15T00:01:00Z",
+    }
+
+    monkeypatch.setattr(
+        collector, "_pages", lambda _r, _t, path, _key=None: [review] if path.endswith("/reviews") else []
+    )
+
+    assert backend.completed(agent, trigger) is True

@@ -793,18 +793,26 @@ def validate_code_write_policy() -> list[str]:
     ready_requires = str(progression.get("ready_requires") or "")
     if "exact-head" not in ready_requires or "Pre-PR Preflight" not in ready_requires:
         errors.append("Ready progression must require successful exact-head Pre-PR Preflight")
-    if progression.get("requires_current_head_codex_review") is not True:
-        errors.append("Ready progression must require a current-head Codex review")
+    if progression.get("requires_current_head_review_authority") is not True:
+        errors.append("Ready progression must require current exact-head review authority")
+    if progression.get("requires_current_head_codex_review") is True:
+        errors.append("Ready progression must not hard-code Codex when governed failover is enabled")
     authority = progression.get("review_authority")
     if not isinstance(authority, dict):
         errors.append("Ready progression must declare its review-authority model")
     else:
         if authority.get("primary") != "codex":
-            errors.append("the review-authority model must declare Codex as the primary reviewer")
-        if authority.get("fallback") != "opencode":
-            errors.append("the review-authority fallback must be the canonical OpenCode hostile review")
+            errors.append("the review-authority model must declare Codex as the first reviewer")
+        if authority.get("fast_fallback") != "local-ollama":
+            errors.append("the review-authority model must declare local-ollama as the fast fallback reviewer")
+        reviewer_pool = authority.get("reviewer_pool")
+        last_resort = reviewer_pool.get("last_resort") if isinstance(reviewer_pool, dict) else None
+        if authority.get("fallback") != last_resort:
+            errors.append("the review-authority fallback must match reviewer_pool.last_resort")
         if authority.get("fallback_requires_recorded_reason") is not True:
-            errors.append("fallback review authority must require a recorded reason and never skip Codex silently")
+            errors.append(
+                "fallback review authority must require a recorded reason and never skip the ordered reviewer pool silently"
+            )
         gates = authority.get("fallback_requires_snapshot_gates")
         if not isinstance(gates, list) or not {
             "governance=success",
@@ -813,8 +821,8 @@ def validate_code_write_policy() -> list[str]:
             "structured_evidence=complete",
         }.issubset({str(gate) for gate in gates}):
             errors.append("fallback review authority must require recorded green snapshot gates")
-        # The ordered reviewer pool is the binding reviewer-ordering model: Codex
-        # tier 1, approved agent reviewers tier 2, the canonical guard last
+        # The ordered reviewer pool is the binding reviewer-ordering model: the
+        # Codex first with a short acknowledgement budget, trusted local reviewer as fast fallback, canonical guard last
         # resort, with a bounded, documented, machine-checkable timeout policy.
         # It is parsed by the same implementation the review verifier consumes,
         # so the guard and the verifier cannot drift into two readings of the

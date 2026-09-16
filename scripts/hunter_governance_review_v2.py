@@ -66,6 +66,22 @@ TRUSTED_RUN_ACTIVE_STATES = frozenset({"queued", "in_progress", "waiting", "requ
 #: Issue #417. The dependency is named explicitly so an operator can tell
 #: "the proof has not finished yet" from "the proof failed" without reading logs.
 TRUSTED_PROOF_WAITING_DESCRIPTION = "Waiting for trusted exact-head preflight proof"
+
+
+def review_orchestration_state(repository: str, token: str, pr_number: int, head_sha: str) -> tuple[str, str]:
+    """Return authenticated exact-head review lifecycle state, if present."""
+    import hunter_review_orchestrator as orchestrator
+
+    status, cycle, error = orchestrator.read_cycle(repository, token, pr_number, head_sha)
+    if status == "present" and cycle is not None:
+        state = orchestrator.classify_cycle(cycle, head_sha)
+        detail = cycle.provider_id or "provider selection"
+        return state, detail
+    if status == "superseded":
+        return "WAITING_FOR_REVIEWER", error or "exact HEAD changed; new review cycle required"
+    return "", error or ""
+
+
 ROOT = Path(__file__).resolve().parents[1] if "__file__" in globals() else Path(".")
 REVIEWER_DISPOSITIONS_PATH = ROOT / "docs" / "REVIEWER_FINDING_DISPOSITIONS.json"
 PREFLIGHT_OWNED_PATHS = frozenset(
@@ -383,6 +399,46 @@ def review_acknowledgement(body: str) -> dict[str, Any] | None:
     return value
 
 
+def review_adoption_acknowledgement(
+    observation: dict[str, Any], head_sha: str, claims_id: str
+) -> dict[str, Any] | None:
+    """Canonicalize authenticated exact-head reviewer results into Hunter adoption.
+
+    Structured Hunter acknowledgements remain preferred. Codex also emits a
+    stable native GitHub review when it finds no major issues; because GitHub
+    binds that authenticated review to the exact commit, the current committed
+    review request is transitively bound to the same HEAD. Only that narrow
+    clear-result shape is accepted, and any arbitrary trailing prose is rejected.
+    """
+
+    ack = review_acknowledgement(str(observation.get("body") or ""))
+    if ack is not None:
+        return ack
+    if (
+        observation.get("agent_id") != pre_ready.CODEX_REVIEW_AUTHORITY
+        or observation.get("source_kind") != "review"
+        or observation.get("state") not in {"COMMENTED", "APPROVED"}
+        or observation.get("commit_id") != head_sha
+    ):
+        return None
+    body = str(observation.get("body") or "").strip()
+    primary = body.split("<details>", 1)[0].strip()
+    match = re.fullmatch(
+        r"Codex Review:\s*Didn't find any major issues\.(?:\s*Bravo\.)?\s+"
+        r"\*\*Reviewed commit:\*\*\s*`([0-9a-f]{7,40})`",
+        primary,
+    )
+    if match is None or not head_sha.startswith(match.group(1)):
+        return None
+    return {
+        "schema": "hunter.review-ack.v1",
+        "head_sha": head_sha,
+        "claims_id": claims_id,
+        "verdict": "clear",
+        "summary": "Authenticated Codex exact-head review found no major issues for the current committed review request.",
+    }
+
+
 def reviewer_login(agent: dict[str, Any]) -> str:
     # Integration identity is configuration, never a field supplied by a candidate.
     if agent.get("id") == "codex":
@@ -544,7 +600,7 @@ def verify_trusted_exhaustion(
     problem = pre_ready._exhaustion_error(pool, authority, str(authority.get("type")))
     if problem:
         return "failure", problem
-    agents = pre_ready.enabled_pool_reviewers(pool)
+    agents = pre_ready.authority_pool_reviewers(pool)
     own = next((a["priority"] for a in agents if a["id"] == authority.get("type")), float("inf"))
     required = [a for a in agents if a["priority"] < own]
     attempts = {a["agent_id"]: a for a in authority.get("reviewer_attempts", [])}
@@ -568,7 +624,8 @@ def verify_trusted_exhaustion(
                 "head_sha": head_sha,
                 "agent_id": agent["id"],
                 "priority": agent["priority"],
-                "timeout_seconds": agent["timeout_seconds"],
+                "ack_timeout_seconds": agent["ack_timeout_seconds"],
+                "review_timeout_seconds": agent["review_timeout_seconds"],
                 "trigger_method": agent.get("trigger_method"),
                 "retryable": agent["retryable"],
                 "evidence_parser": agent.get("evidence_parser"),
@@ -1699,32 +1756,65 @@ def verify_pre_ready_hostile_review(
             return "failure", "MALFORMED_REVIEW: request digest mismatch"
         adopted = []
         for observation in exact_reviews:
-            ack = review_acknowledgement(observation["body"])
+            ack = review_adoption_acknowledgement(observation, head_sha, claims_id)
             if ack and ack["head_sha"] == head_sha and ack["claims_id"] == claims_id:
                 adopted.append((observation, ack))
-        if not adopted:
-            return "failure", "MISSING_REVIEW_AUTHORITY: no authenticated exact-head adoption of the review request"
-        priorities = {str(a["id"]): int(a["priority"]) for a in pre_ready.enabled_pool_reviewers(pool)}
-        observation, ack = min(adopted, key=lambda item: priorities.get(item[0]["agent_id"], 10**9))
-        authority = {
-            "type": observation["agent_id"],
-            "tool": "authenticated-github-review",
-            "head_sha": observation["commit_id"],
-            "reviewed_at": observation.get("submitted_at") or "GitHub review observation",
-            "artifact": observation.get("html_url") or f"GitHub review {observation['id']}",
-        }
-        if priorities.get(authority["type"], 10**9) > min(priorities.values()):
+        priorities = {str(a["id"]): int(a["priority"]) for a in pre_ready.authority_pool_reviewers(pool)}
+        if adopted:
+            observation, ack = min(adopted, key=lambda item: priorities.get(item[0]["agent_id"], 10**9))
+            authority = {
+                "type": observation["agent_id"],
+                "tool": "authenticated-github-review",
+                "head_sha": observation["commit_id"],
+                "reviewed_at": observation.get("submitted_at") or "GitHub review observation",
+                "artifact": observation.get("html_url") or f"GitHub review {observation['id']}",
+            }
+            if priorities.get(authority["type"], 10**9) > min(priorities.values()):
+                from hunter_reviewer_collector import load_exhaustion
+
+                try:
+                    authority.update(
+                        load_exhaustion(
+                            repository, token, pr_number, head_sha, pool, ack.get("collector_run_id"), authority["type"]
+                        )
+                    )
+                except Exception as exc:
+                    return "failure", f"EXHAUSTION_UNPROVEN: {exc}"
+        else:
+            # An authenticated exact-head reviewer response that fails to adopt
+            # this request is substantive invalid evidence, not ordinary waiting.
+            if exact_reviews:
+                return "failure", (
+                    "MISSING_REVIEW_AUTHORITY: authenticated exact-head reviewer response did not validly adopt "
+                    "the current review request"
+                )
+            import hunter_review_orchestrator as orchestrator
+
+            collector_state, collector_run_id, collector_error = orchestrator.read_collector_completion(
+                repository, token, pr_number, head_sha
+            )
+            if collector_state != "present" or collector_run_id is None:
+                detail = f" ({collector_error})" if collector_error else ""
+                return "pending", (
+                    "MISSING_REVIEW_AUTHORITY: waiting for authenticated exact-head reviewer authority" + detail
+                )
             from hunter_reviewer_collector import load_exhaustion
 
             try:
-                authority.update(
-                    load_exhaustion(
-                        repository, token, pr_number, head_sha, pool, ack.get("collector_run_id"), authority["type"]
-                    )
+                exhaustion = load_exhaustion(
+                    repository, token, pr_number, head_sha, pool, collector_run_id, str(pool["last_resort"])
                 )
             except Exception as exc:
                 return "failure", f"EXHAUSTION_UNPROVEN: {exc}"
-        # This is NEW authority from the current reviewer; the historical record is unchanged.
+            authority = {
+                "type": str(pool["last_resort"]),
+                "tool": "hunter-deterministic-review-guard",
+                "head_sha": head_sha,
+                "reviewed_at": "trusted collector completion",
+                "artifact": f"actions/runs/{collector_run_id}",
+                **exhaustion,
+            }
+        # This is NEW authority for the current exact HEAD; historical evidence is unchanged.
         document = pre_ready.document_for(claims, authority=authority)
 
     # The Issue the review claims must be the Issue the branch binds, when the
@@ -1800,7 +1890,13 @@ def verify_pre_ready_hostile_review(
             if exhaustion_kind:
                 kind = exhaustion_kind
         return "failure", f"{kind}: Candidate admission blocked: {verdict.reason}."
-    if not exact_reviews:
+    authority = (document or {}).get("authority") if isinstance(document, dict) else None
+    deterministic_guard = (
+        isinstance(authority, dict)
+        and authority.get("type") == str(pool["last_resort"])
+        and authority.get("tool") == "hunter-deterministic-review-guard"
+    )
+    if not exact_reviews and not deterministic_guard:
         return (
             "failure",
             "Candidate admission blocked: MISSING_REVIEW_AUTHORITY: no substantive exact-head hostile review.",
@@ -1812,7 +1908,7 @@ def verify_pre_ready_hostile_review(
     if not dispositions_ok:
         return "failure", f"BLOCKING_FINDINGS: {disposition_error}"
     authority = document["authority"]
-    if not any(r.get("agent_id") == authority.get("type") for r in exact_reviews):
+    if not deterministic_guard and not any(r.get("agent_id") == authority.get("type") for r in exact_reviews):
         return "failure", "Candidate admission blocked: review author does not match structured authority."
     exhaustion_state, exhaustion_detail = verify_trusted_exhaustion(
         repository, token, pr_number, head_sha, pool, authority
