@@ -964,6 +964,7 @@ def verify_claims(
     issue_criteria: tuple[str, ...] | None = None,
     resolution_corrections: frozenset[str] | None = None,
     head_sha: str | None = None,
+    require_authority: bool = True,
 ) -> ReviewVerdict:
     """Compare repository-owned review state against the exact candidate content.
 
@@ -1021,9 +1022,10 @@ def verify_claims(
     # the canonical claims. It must exist and satisfy the authority contract
     # (Codex primary, recorded-reason OpenCode fallback) before anything that
     # binds the candidate is trusted.
-    authority_problem = _authority_error(document)
-    if authority_problem is not None:
-        return ReviewVerdict("incomplete", authority_problem)
+    if require_authority:
+        authority_problem = _authority_error(document)
+        if authority_problem is not None:
+            return ReviewVerdict("incomplete", authority_problem)
 
     problem = _structural_error(claims)
     if problem is not None:
@@ -1119,6 +1121,48 @@ def verify_claims(
         f"{len(required)} applicable recurring-defect famil{'y' if len(required) == 1 else 'ies'} "
         f"and {len(claims['acceptance_criteria'])} acceptance criteria"
         + (f", including all {len(issue_criteria)} the Issue defines" if issue_criteria else ""),
+    )
+
+
+def verify_review_request(
+    document: Any,
+    *,
+    base_sha: str,
+    changes: tuple[ingress.ConnectorFileChange, ...],
+    families: tuple[dict[str, Any], ...],
+    issue_criteria: tuple[str, ...] | None = None,
+    head_sha: str | None = None,
+) -> ReviewVerdict:
+    """Validate the content a reviewer would be asked to authorize.
+
+    A request is not authority, but it must already describe the current
+    base-to-head candidate before trusted orchestration consumes reviewer
+    capacity.  Authority-specific checks intentionally wait for the response.
+    """
+
+    if not isinstance(document, dict) or document.get("schema") != REVIEW_SCHEMA:
+        return ReviewVerdict("missing", f"pre-ready review request must use schema {REVIEW_SCHEMA}")
+    request = document.get("review_request")
+    claims = document.get("claims")
+    if (
+        not isinstance(request, dict)
+        or request.get("schema") != "hunter.review-request.v1"
+        or not isinstance(claims, dict)
+        or request.get("claims_id") != review_id(claims)
+        or document.get("review_id") != review_id(claims)
+    ):
+        return ReviewVerdict("incomplete", "review request identity does not bind its claims")
+    candidate = dict(document)
+    candidate.pop("review_request", None)
+    candidate.pop("authority", None)
+    return verify_claims(
+        candidate,
+        base_sha=base_sha,
+        changes=changes,
+        families=families,
+        issue_criteria=issue_criteria,
+        head_sha=head_sha,
+        require_authority=False,
     )
 
 

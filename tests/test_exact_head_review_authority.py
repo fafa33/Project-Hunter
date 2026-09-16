@@ -1221,6 +1221,19 @@ def test_an_adopted_request_is_still_rebound_to_this_candidates_trusted_base(mon
     assert "base" in reason
 
 
+def test_stale_request_cannot_start_collector_for_current_candidate(monkeypatch):
+    """The request is verified before dispatch, not only after a review arrives."""
+
+    document = _review_document(base="7" * 40, authority=_authority(head_sha="c" * 40))
+    document["review_request"] = {"schema": "hunter.review-request.v1", "claims_id": document["review_id"]}
+    _install_governance(monkeypatch, document=document)
+
+    valid, reason = core.valid_current_review_request("repo", "token", PR_NUMBER, HEAD, document)
+
+    assert valid is False
+    assert "not this candidate's base" in reason
+
+
 def test_a_request_without_explicit_reviewer_adoption_is_not_authority(monkeypatch):
     document, ack = _request_and_ack()
     _install_governance(monkeypatch, document=document, comments=(_trusted_review(),))

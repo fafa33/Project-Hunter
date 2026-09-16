@@ -1636,6 +1636,58 @@ def read_issue_acceptance_criteria(repository: str, token: str, issue_number: st
     return "present", pre_ready.parse_issue_acceptance_criteria(body), ""
 
 
+def valid_current_review_request(
+    repository: str,
+    token: str,
+    pr_number: int,
+    head_sha: str,
+    document: Any,
+) -> tuple[bool, str]:
+    """Verify request claims before the trusted collector spends reviewer capacity."""
+
+    ok_refs, _head_ref, base_ref, refs_error = read_pr_refs(repository, token, pr_number)
+    if not ok_refs:
+        return False, f"pull-request ref evidence is unavailable ({refs_error})"
+    ok_base, merge_base, base_error = read_merge_base(repository, token, base_ref, head_sha)
+    if not ok_base:
+        return False, f"base provenance evidence is unavailable ({base_error})"
+    ok_files, changed_files, files_error = read_pr_changed_files(repository, token, pr_number)
+    if not ok_files:
+        return False, f"changed-file evidence is unavailable ({files_error})"
+    canonical: list[ingress.ConnectorFileChange] = []
+    for item in changed_files:
+        status = pre_ready.canonical_status(item.status)
+        if status is None:
+            return False, f"changed file {item.path!r} carries unrecognised status {item.status!r}"
+        canonical.append(
+            ingress.ConnectorFileChange(
+                status, item.path, item.previous_path if status == "renamed" else "", item.blob_sha
+            )
+        )
+    changes = ingress.normalize_changes(tuple(canonical))
+    if changes is None:
+        return False, "changed-file operation/content evidence is malformed or ambiguous"
+    families, families_error = pre_ready.load_families()
+    if families_error:
+        return False, families_error
+    claims = document.get("claims") if isinstance(document, dict) else None
+    issue = str((claims or {}).get("issue") or "").strip().lstrip("#")
+    issue_criteria: tuple[str, ...] | None = None
+    if issue.isdigit():
+        criteria_state, issue_criteria, criteria_error = read_issue_acceptance_criteria(repository, token, issue)
+        if criteria_state != "present":
+            return False, f"governing Issue #{issue} acceptance-criteria evidence is unavailable ({criteria_error})"
+    verdict = pre_ready.verify_review_request(
+        document,
+        base_sha=merge_base,
+        changes=changes,
+        families=families,
+        issue_criteria=issue_criteria,
+        head_sha=head_sha,
+    )
+    return verdict.ok, verdict.reason
+
+
 def verify_pre_ready_hostile_review(
     repository: str,
     token: str,

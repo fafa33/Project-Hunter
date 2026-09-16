@@ -474,12 +474,15 @@ def review_prerequisites_ready(repository: str, token: str, pr_number: int, head
     if request_state != "present" or not isinstance(document, dict):
         return False
     request = document.get("review_request")
-    return (
+    if not (
         isinstance(request, dict)
         and request.get("schema") == "hunter.review-request.v1"
         and isinstance(request.get("claims_id"), str)
         and len(request["claims_id"]) == 64
-    )
+    ):
+        return False
+    valid, _reason = governance.valid_current_review_request(repository, token, pr_number, head_sha, document)
+    return valid
 
 
 def ensure_current(repository: str, token: str, pr_number: int) -> ReviewCycle | None:

@@ -176,7 +176,7 @@ def test_workflow_uses_only_trusted_v2_controller_with_safe_bootstrap():
     # Privileged orchestration moved to the reconcile workflow, which has no
     # `pull_request` trigger: a `pull_request` run executes the candidate's own
     # copy of this file, so `actions: write` here would be candidate-reachable.
-    assert "hunter_review_orchestrator.py" not in workflow
+    assert "python scripts/hunter_review_orchestrator.py" not in workflow
     assert "actions: write" not in workflow
     assert "actions: read" in workflow
     assert "hunter_governance_review_v2.py" in workflow

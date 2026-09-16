@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import pathlib
+import re
 
 import hunter_github_transport as transport
 import hunter_review_orchestrator as orchestrator
@@ -290,7 +291,8 @@ def test_trusted_orchestration_runs_only_from_workflows_without_pull_request_tri
     dispatching = [
         (path.name, _triggers(document))
         for path, document in _workflow_documents()
-        if isinstance(document, dict) and "hunter_review_orchestrator.py" in path.read_text(encoding="utf-8")
+        if isinstance(document, dict)
+        and re.search(r"python scripts/hunter_review_orchestrator\.py (?:ensure|collector-complete)", path.read_text())
     ]
     assert dispatching, "no workflow runs the trusted review orchestrator"
     for name, triggers in dispatching:
@@ -314,7 +316,7 @@ def test_governance_review_workflow_keeps_only_read_access_to_actions():
     assert "pull_request" in _triggers(document)
     blocks = _permission_blocks(document)
     assert blocks and all(str(block.get("actions", "read")).strip() == "read" for block in blocks)
-    assert "hunter_review_orchestrator.py" not in path.read_text(encoding="utf-8")
+    assert "python scripts/hunter_review_orchestrator.py" not in path.read_text(encoding="utf-8")
 
 
 def test_orchestration_bootstraps_only_from_the_trusted_default_branch_checkout():
@@ -323,6 +325,23 @@ def test_orchestration_bootstraps_only_from_the_trusted_default_branch_checkout(
     )
     assert "if [ ! -f scripts/hunter_review_orchestrator.py ]; then" in text
     assert "Bootstrap phase" in text
+
+
+def test_default_branch_without_orchestrator_publishes_bootstrap_pending_without_dispatching_authority():
+    """A bootstrap PR cannot invoke a controller that trusted main does not contain."""
+
+    workflow = pathlib.Path(REPOSITORY_ROOT, ".github/workflows/hunter-governance-review.yml").read_text(
+        encoding="utf-8"
+    )
+
+    assert "BOOTSTRAP_PENDING_TRUSTED_CONTROLLER" in workflow
+    assert 'CONTROLLER="${GITHUB_WORKSPACE}/engine/scripts/hunter_review_orchestrator.py"' in workflow
+    bootstrap, trusted_controller = workflow.split('python "${BRIDGE}" governance', 1)
+    assert 'if [ ! -f "${CONTROLLER}" ]; then' in bootstrap
+    assert "actions/workflows/" not in bootstrap
+    assert "issues/${PR_NUMBER}/comments" not in bootstrap
+    assert "python scripts/hunter_review_orchestrator.py" not in bootstrap
+    assert trusted_controller
 
 
 def test_review_prerequisites_accept_canonical_review_request_object(monkeypatch):
@@ -339,8 +358,31 @@ def test_review_prerequisites_accept_canonical_review_request_object(monkeypatch
         "claims": {},
     }
     monkeypatch.setattr(governance, "read_head_pre_ready_review", lambda *_args: ("present", document, None))
+    monkeypatch.setattr(governance, "valid_current_review_request", lambda *_args: (True, "current"))
 
     assert orchestrator.review_prerequisites_ready("owner/repo", "token", 472, HEAD) is True
+
+
+def test_review_prerequisites_reject_stale_request_before_hosted_review_dispatch(monkeypatch):
+    """An inherited request must not spend reviewer capacity on another candidate's claims."""
+
+    monkeypatch.setattr(orchestrator, "request_json", lambda *_args, **_kwargs: {})
+    import hunter_governance_review_v2 as governance
+
+    monkeypatch.setattr(governance, "read_trusted_upgrade_status", lambda *_args: ("success", ""))
+    monkeypatch.setattr(
+        governance,
+        "valid_current_review_request",
+        lambda *_args: (False, "STALE_REVIEW: review request describes an older base"),
+        raising=False,
+    )
+    document = {
+        "review_request": {"schema": "hunter.review-request.v1", "claims_id": "d" * 64},
+        "claims": {},
+    }
+    monkeypatch.setattr(governance, "read_head_pre_ready_review", lambda *_args: ("present", document, None))
+
+    assert orchestrator.review_prerequisites_ready("owner/repo", "token", 472, HEAD) is False
 
 
 def test_current_pr_waits_for_trusted_review_prerequisites(monkeypatch):
