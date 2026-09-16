@@ -805,8 +805,10 @@ def validate_code_write_policy() -> list[str]:
             errors.append("the review-authority model must declare Codex as the first reviewer")
         if authority.get("fast_fallback") != "local-ollama":
             errors.append("the review-authority model must declare local-ollama as the fast fallback reviewer")
-        if authority.get("fallback") != "opencode":
-            errors.append("the review-authority fallback must be the canonical OpenCode hostile review")
+        reviewer_pool = authority.get("reviewer_pool")
+        last_resort = reviewer_pool.get("last_resort") if isinstance(reviewer_pool, dict) else None
+        if authority.get("fallback") != last_resort:
+            errors.append("the review-authority fallback must match reviewer_pool.last_resort")
         if authority.get("fallback_requires_recorded_reason") is not True:
             errors.append(
                 "fallback review authority must require a recorded reason and never skip the ordered reviewer pool silently"

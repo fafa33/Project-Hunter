@@ -30,8 +30,8 @@
     "requires_current_head_codex_review": false,
     "review_authority": {
       "primary": "codex",
-      "fallback": "opencode",
-      "fallback_only_when_unavailable": "The local reviewer is attempted first when its trusted Mac runner is healthy; Codex is attempted immediately when local is offline, unresponsive, or times out. OpenCode remains last resort only after the enabled pool is exhausted.",
+      "fallback": "hunter-guard",
+      "fallback_only_when_unavailable": "The local reviewer is attempted first when its trusted Mac runner is healthy; Codex is attempted immediately when local is offline, unresponsive, or times out. hunter-guard remains last resort only after the enabled pool is exhausted.",
       "fallback_requires_recorded_reason": true,
       "fallback_requires_snapshot_gates": [
         "governance=success",

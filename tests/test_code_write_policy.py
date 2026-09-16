@@ -66,7 +66,7 @@ def test_code_write_policy_declares_codex_primary_with_a_recorded_reason_fallbac
 
     assert authority["primary"] == "codex"
     assert authority["fast_fallback"] == "local-ollama"
-    assert authority["fallback"] == "opencode"
+    assert authority["fallback"] == "hunter-guard"
     assert authority["fallback_requires_recorded_reason"] is True
     expected = {
         "governance=success",
@@ -106,6 +106,16 @@ def test_code_write_policy_guard_rejects_a_pool_without_a_strict_last_resort(mon
         monkeypatch,
         tmp_path,
         lambda policy: policy["review_progression"]["review_authority"]["reviewer_pool"].pop("last_resort"),
+    )
+
+
+def test_code_write_policy_guard_rejects_fallback_last_resort_drift(monkeypatch, tmp_path) -> None:
+    _write_policy(
+        monkeypatch,
+        tmp_path,
+        lambda policy: policy["review_progression"]["review_authority"]["reviewer_pool"].update(
+            last_resort="different-last-resort"
+        ),
     )
 
 
