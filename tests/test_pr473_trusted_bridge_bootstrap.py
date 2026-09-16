@@ -285,6 +285,22 @@ def test_bootstrap_accepts_only_native_codex_clear_review(monkeypatch: pytest.Mo
     assert bridge._exact_head_codex_review(REPOSITORY, "token", bridge.BOOTSTRAP_CONTROLLER_PR, HEAD) == review
 
 
+def test_controller_lookup_is_bound_to_checked_out_trusted_commit(monkeypatch: pytest.MonkeyPatch) -> None:
+    """A concurrent main advance cannot change controller evidence for an in-flight trusted checkout."""
+    checked_out = "a" * 40
+    seen: list[str] = []
+    monkeypatch.setattr(bridge, "_checked_out_commit_sha", lambda: checked_out)
+
+    def _request(_repo: str, _token: str, _method: str, endpoint: str) -> Any:
+        seen.append(endpoint)
+        raise RuntimeError("GitHub API 404")
+
+    monkeypatch.setattr(governance, "request_json", _request)
+    assert bridge._trusted_controller_on_default_branch(REPOSITORY, "token") is False
+    assert seen == [f"contents/{bridge.TRUSTED_CONTROLLER_PATH}?ref={checked_out}"]
+    assert "ref=main" not in seen[0]
+
+
 def test_controller_presence_requires_valid_default_branch_file_payload(monkeypatch: pytest.MonkeyPatch) -> None:
     for payload in ({}, {"type": "dir", "path": bridge.TRUSTED_CONTROLLER_PATH}, {"type": "file", "path": "wrong.py"}):
         monkeypatch.setattr(governance, "request_json", lambda *_args, _payload=payload, **_kwargs: _payload)

@@ -31,6 +31,7 @@ from __future__ import annotations
 import argparse
 import os
 import re
+import subprocess
 import sys
 from pathlib import Path
 from typing import Any
@@ -64,10 +65,28 @@ BOOTSTRAP_PENDING_DESCRIPTION = f"{BOOTSTRAP_PENDING_STATE}: default branch cann
 TRUSTED_CONTROLLER_PATH = "scripts/hunter_review_orchestrator.py"
 
 
+def _checked_out_commit_sha() -> str:
+    """Return the immutable commit this trusted workflow actually checked out."""
+    result = subprocess.run(
+        ["git", "rev-parse", "HEAD"],
+        cwd=SCRIPTS_DIR.parent,
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+    sha = result.stdout.strip().lower()
+    if re.fullmatch(r"[0-9a-f]{40}", sha) is None:
+        raise RuntimeError("trusted checkout commit SHA is unavailable or malformed")
+    return sha
+
+
 def _trusted_controller_on_default_branch(repository: str, token: str) -> bool:
-    """Read controller existence from immutable GitHub default-branch evidence."""
+    """Read controller existence from the immutable trusted commit being executed."""
+    trusted_sha = _checked_out_commit_sha()
     try:
-        payload = governance.request_json(repository, token, "GET", f"contents/{TRUSTED_CONTROLLER_PATH}?ref=main")
+        payload = governance.request_json(
+            repository, token, "GET", f"contents/{TRUSTED_CONTROLLER_PATH}?ref={trusted_sha}"
+        )
     except RuntimeError as exc:
         if "404" in str(exc):
             return False
