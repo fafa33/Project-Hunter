@@ -176,7 +176,7 @@ def _bootstrap_document(
     pr_number: int,
     head_sha: str,
 ) -> dict[str, Any] | None:
-    if repository != TARGET_REPOSITORY or pr_number != TARGET_PR:
+    if repository != TARGET_REPOSITORY or pr_number not in {TARGET_PR, BOOTSTRAP_CONTROLLER_PR}:
         return None
 
     pr = governance.read_mergeability(repository, token, pr_number)
@@ -205,7 +205,7 @@ def _bootstrap_document(
     )
     applicable = pre_ready.applicable_family_ids(families, changed_paths)
 
-    issue = governance.issue_for_branch(head_ref) or str(TARGET_PR)
+    issue = governance.issue_for_branch(head_ref) or str(pr_number)
     criteria_state, criteria, criteria_error = governance.read_issue_acceptance_criteria(repository, token, issue)
     if criteria_state != "present":
         raise RuntimeError(f"Issue #{issue} acceptance-criteria evidence is unavailable ({criteria_error})")
@@ -275,18 +275,23 @@ def governance_mode(repository: str, token: str, pr_number: int) -> int:
     # overwrite the candidate run's bootstrap state with MISSING_REVIEW_AUTHORITY
     # on the same exact head. Publish the migration state instead; it is pending
     # only, and it stops applying as soon as the trusted controller lands.
+    if repository == TARGET_REPOSITORY and pr_number in {TARGET_PR, BOOTSTRAP_CONTROLLER_PR}:
+        pr = governance.read_mergeability(repository, token, pr_number)
+        if pr.get("state") == "open" and str((pr.get("base") or {}).get("ref") or "").strip() == "main":
+            head_sha = str((pr.get("head") or {}).get("sha") or "").strip()
+            if head_sha:
+                try:
+                    if _install_bootstrap_patch(repository, token, pr_number, head_sha):
+                        return governance.review(repository, token, pr_number)
+                except RuntimeError as exc:
+                    print(f"Bootstrap authority unavailable; remaining fail-closed: {exc}")
     if bootstrap_pending_mode(repository, pr_number, token):
         return publish_bootstrap_pending(repository, token, pr_number)
-    if repository == TARGET_REPOSITORY and pr_number == TARGET_PR:
-        pr = governance.read_mergeability(repository, token, pr_number)
-        head_sha = str((pr.get("head") or {}).get("sha") or "").strip()
-        if head_sha:
-            _install_bootstrap_patch(repository, token, pr_number, head_sha)
     return governance.review(repository, token, pr_number)
 
 
 def candidate_mode(repository: str, token: str, pr_number: int, expected_head_sha: str | None) -> int:
-    if repository == TARGET_REPOSITORY and pr_number == TARGET_PR:
+    if repository == TARGET_REPOSITORY and pr_number in {TARGET_PR, BOOTSTRAP_CONTROLLER_PR}:
         pr = governance.read_mergeability(repository, token, pr_number)
         head_sha = str((pr.get("head") or {}).get("sha") or "").strip()
         if head_sha:

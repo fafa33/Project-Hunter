@@ -235,3 +235,25 @@ def test_candidate_workspace_file_cannot_end_bootstrap_pending_mode(
     monkeypatch.setattr(governance, "request_json", _request)
 
     assert bridge.bootstrap_pending_mode(REPOSITORY, bridge.BOOTSTRAP_CONTROLLER_PR, "token") is True
+
+
+def test_bootstrap_controller_adopts_exact_head_review_before_controller_lands(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    legacy_review: list[int],
+) -> None:
+    """#473 must have a real trusted pre-merge admission path, not pending-only."""
+    _controller_missing(monkeypatch, tmp_path)
+    _mergeability(monkeypatch, _pull_request())
+    installed: list[tuple[str, int, str]] = []
+
+    def _install(repo: str, token: str, pr_number: int, head_sha: str) -> bool:
+        del token
+        installed.append((repo, pr_number, head_sha))
+        return True
+
+    monkeypatch.setattr(bridge, "_install_bootstrap_patch", _install)
+
+    assert bridge.governance_mode(REPOSITORY, "token", bridge.BOOTSTRAP_CONTROLLER_PR) == 0
+    assert installed == [(REPOSITORY, bridge.BOOTSTRAP_CONTROLLER_PR, HEAD)]
+    assert legacy_review == [bridge.BOOTSTRAP_CONTROLLER_PR]
