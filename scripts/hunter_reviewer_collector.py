@@ -115,15 +115,41 @@ def collect_attempts(pool: dict[str, Any], head: str, backend: Backend) -> list[
             ack_deadline = start + agent["ack_timeout_seconds"]
             ack_fn = getattr(backend, "acknowledged", backend.responded)
             complete_fn = getattr(backend, "completed", backend.responded)
+            unavailable_fn = getattr(backend, "unavailability", None)
             acknowledged = False
+            unavailable_reason = None
             while backend.now() < ack_deadline:
                 if backend.head() != head:
                     raise ValueError("HEAD changed during reviewer acknowledgement")
+                unavailable_reason = unavailable_fn(agent, trigger) if unavailable_fn is not None else None
+                if unavailable_reason:
+                    break
                 if ack_fn(agent, trigger):
                     acknowledged = True
                     break
                 backend.sleep(min(5, ack_deadline - backend.now()))
             ack_elapsed = backend.now() - start
+            if unavailable_reason:
+                records.append(
+                    {
+                        "agent_id": agent["id"],
+                        "priority": agent["priority"],
+                        "ack_timeout_seconds": agent["ack_timeout_seconds"],
+                        "review_timeout_seconds": agent["review_timeout_seconds"],
+                        "trigger_method": agent["trigger_method"],
+                        "evidence_parser": agent["evidence_parser"],
+                        "retryable": agent["retryable"],
+                        "attempt_number": number,
+                        "trigger_id": trigger["id"],
+                        "trigger_created_at": trigger["created_at"],
+                        "ack_elapsed_seconds": ack_elapsed,
+                        "elapsed_seconds": ack_elapsed,
+                        "outcome": "unavailable",
+                        "failure_class": "permanent",
+                        "availability_state": str(unavailable_reason),
+                    }
+                )
+                break
             if not acknowledged:
                 records.append(
                     {
@@ -398,6 +424,31 @@ class GitHubBackend:
             ):
                 return True
         return False
+
+    def unavailability(self, agent: dict[str, Any], trigger: dict[str, Any]) -> str | None:
+        """Return an authenticated explicit reviewer-capacity denial, if any.
+
+        A generic or malformed response still proves reviewer availability and
+        therefore cannot authorize failover. Only a post-trigger response from
+        the configured reviewer identity that explicitly says the service is
+        rate/usage limited is classified as unavailable.
+        """
+        login = governance.reviewer_login(agent)
+        if not login:
+            return None
+        limit_pattern = re.compile(
+            r"(?:usage\s+limit|rate[ -]?limit|rate\s+limit|quota\s+(?:exceeded|reached)|"
+            r"hit\s+(?:your|the)\s+.*limit|too\s+many\s+requests)",
+            re.IGNORECASE,
+        )
+        for item in _pages(self.repository, self.token, f"issues/{self.pr}/comments"):
+            if (item.get("user") or {}).get("login", "").lower() != login:
+                continue
+            if str(item.get("created_at") or "") < trigger["created_at"]:
+                continue
+            if limit_pattern.search(str(item.get("body") or "")):
+                return "usage-limit"
+        return None
 
     def responded(self, agent: dict[str, Any], trigger: dict[str, Any]) -> bool:
         login = governance.reviewer_login(agent)

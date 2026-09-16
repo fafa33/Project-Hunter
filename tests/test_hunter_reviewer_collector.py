@@ -624,3 +624,81 @@ def test_native_exact_head_codex_review_counts_as_completed(monkeypatch):
     )
 
     assert backend.completed(agent, trigger) is True
+
+
+def test_authenticated_usage_limit_denial_fails_over_immediately_without_retry():
+    class LimitedThenAlternateBackend(Backend):
+        def unavailability(self, agent, trigger):
+            return "usage-limit" if agent["id"] == "codex" else None
+
+        def acknowledged(self, agent, trigger):
+            return agent["id"] == "alternate"
+
+        def completed(self, agent, trigger):
+            return agent["id"] == "alternate"
+
+    codex = {
+        **POOL["agents"][0],
+        "id": "codex",
+        "priority": 1,
+        "retryable": False,
+        "ack_timeout_seconds": 30,
+        "review_timeout_seconds": 300,
+    }
+    alternate = {
+        **codex,
+        "id": "alternate",
+        "priority": 2,
+        "trigger_method": "github-workflow:hunter-local-reviewer.yml",
+        "evidence_parser": "hunter.local-review.v1",
+    }
+    pool = {"last_resort": "hunter-guard", "timeout_policy": {"retries_per_agent": 0}, "agents": (codex, alternate)}
+
+    results = collector.collect_attempts(pool, HEAD, LimitedThenAlternateBackend())
+
+    assert [item["agent_id"] for item in results] == ["codex", "alternate"]
+    assert results[0]["outcome"] == "unavailable"
+    assert results[0]["failure_class"] == "permanent"
+    assert results[0]["availability_state"] == "usage-limit"
+    assert results[0]["elapsed_seconds"] == 0
+    assert results[1]["outcome"] == "responded"
+
+
+def test_canonical_codex_budget_is_one_attempt_and_at_most_300_seconds():
+    import json
+
+    policy = json.loads((collector.review.ROOT / "docs/CODE_WRITE_POLICY.json").read_text(encoding="utf-8"))
+    pool = policy["review_progression"]["review_authority"]["reviewer_pool"]
+    codex = next(agent for agent in pool["agents"] if agent["id"] == "codex")
+
+    assert codex["retryable"] is False
+    assert codex["review_timeout_seconds"] == 300
+    assert pool["timeout_policy"]["retries_per_agent"] == 0
+
+
+def test_usage_limit_detection_requires_authenticated_reviewer_identity(monkeypatch):
+    backend = collector.GitHubBackend("owner/repo", "token", 473, HEAD, "d" * 64, 123, 1)
+    agent = {
+        **POOL["agents"][0],
+        "id": "codex",
+        "github_login": "chatgpt-codex-connector[bot]",
+    }
+    trigger = {"id": 55, "created_at": "2026-09-16T22:00:00Z"}
+    comments = [
+        {
+            "user": {"login": "fafa33"},
+            "created_at": "2026-09-16T22:00:01Z",
+            "body": "You've hit your usage limit.",
+        },
+        {
+            "user": {"login": "chatgpt-codex-connector[bot]"},
+            "created_at": "2026-09-16T22:00:02Z",
+            "body": "You've hit your usage limit. Try again later.",
+        },
+    ]
+    monkeypatch.setattr(collector, "_pages", lambda *_args, **_kwargs: comments)
+
+    assert backend.unavailability(agent, trigger) == "usage-limit"
+
+    monkeypatch.setattr(collector, "_pages", lambda *_args, **_kwargs: comments[:1])
+    assert backend.unavailability(agent, trigger) is None

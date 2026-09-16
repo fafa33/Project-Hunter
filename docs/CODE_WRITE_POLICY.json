@@ -43,12 +43,12 @@
         "model": "ordered-priority-with-failover",
         "ordering": "free-first strict priority: local-ollama triage runs first; because it is not authority-eligible it cannot terminate the authority search, so Codex is the hosted authority fallback; after trusted authority-reviewer exhaustion, hunter-guard is a deterministic non-reviewer last resort gated by trusted preflight, governance preflight, complete structured evidence, and zero unresolved threads",
         "last_resort": "hunter-guard",
-        "exhaustion_semantics": "Every enabled higher-priority reviewer must have authenticated exact-head invocation results. The trusted default-branch Hunter Reviewer Collector records actual trigger IDs, the configured timeout and all retries, and immutable artifact provenance. A response proves availability and forbids failover, even if its format is invalid. Candidate prose, skipped reviewers, failed GitHub reads, changed HEAD, wrong configuration, insufficient elapsed time, candidate-ref collector runs, or missing retries fail closed.",
+        "exhaustion_semantics": "Every enabled higher-priority reviewer must have authenticated exact-head invocation results. The trusted default-branch Hunter Reviewer Collector records actual trigger IDs, the configured timeout and all retries, and immutable artifact provenance. A substantive response proves availability and forbids failover, even if its format is invalid; an authenticated explicit usage-limit, rate-limit, or quota denial is unavailability evidence and permits immediate failover. Candidate prose, skipped reviewers, failed GitHub reads, changed HEAD, wrong configuration, insufficient elapsed time, candidate-ref collector runs, or missing retries fail closed.",
         "timeout_policy": {
           "bounded": true,
           "default_seconds": 300,
           "max_seconds": 300,
-          "retries_per_agent": 1,
+          "retries_per_agent": 0,
           "retry_scope": "transient infrastructure failures only (rate limit, transport, runner shutdown signal); a repeated or permanent failure records a single exhausted attempt against the bounded timeout"
         },
         "agents": [
