@@ -11,6 +11,18 @@ from trusted GitHub evidence when an authenticated ``chatgpt-codex-connector``
 review exists on the exact current head. No owner/user comment is authority.
 All other PRs delegate unchanged to the existing trusted controllers.
 
+The same bootstrap shape recurs for PR #473, which installs the trusted reviewer
+orchestration controller itself. Every trusted governance path -- the
+``workflow_run`` execution of Hunter Governance Review and the Hunter Governance
+Review Reconcile refresh -- runs this bridge out of the default branch. While
+that branch has no ``hunter_review_orchestrator.py``, the legacy review can only
+conclude ``MISSING_REVIEW_AUTHORITY`` and would overwrite the candidate run's
+honest bootstrap state on the same exact head. For that one migration PR this
+bridge therefore publishes an explicit pending state instead. Pending is never
+admission: candidate admission and merge readiness are untouched and still fail
+closed, and exact-head authority becomes mandatory again the moment the trusted
+controller exists.
+
 Remove this bridge after PR #469 is merged and the new controller is on main.
 """
 
@@ -37,6 +49,47 @@ import hunter_pre_ready_review as pre_ready  # noqa: E402
 TARGET_REPOSITORY = "fafa33/Project-Hunter"
 TARGET_PR = 469
 CODEX_LOGIN = "chatgpt-codex-connector"
+
+#: PR #473 is the contribution that installs the trusted reviewer orchestration
+#: controller, so it is the one candidate whose review cannot be orchestrated by
+#: the default branch it is migrating.
+BOOTSTRAP_CONTROLLER_PR = 473
+BOOTSTRAP_PENDING_STATE = "BOOTSTRAP_PENDING_TRUSTED_CONTROLLER"
+BOOTSTRAP_PENDING_DESCRIPTION = f"{BOOTSTRAP_PENDING_STATE}: default branch cannot yet orchestrate exact-head review"
+#: Resolved against the tree this module is executing out of. Every caller of
+#: this bridge runs it from a trusted default-branch checkout, so the answer is
+#: a property of the trusted tree itself, never of a caller-supplied flag or of
+#: any candidate-controlled workflow input.
+TRUSTED_CONTROLLER_PATH = SCRIPTS_DIR / "hunter_review_orchestrator.py"
+
+
+def bootstrap_pending_mode(repository: str, pr_number: int) -> bool:
+    """Report whether #473 is still installing the trusted reviewer controller."""
+    if repository != TARGET_REPOSITORY or pr_number != BOOTSTRAP_CONTROLLER_PR:
+        return False
+    return not TRUSTED_CONTROLLER_PATH.is_file()
+
+
+def publish_bootstrap_pending(repository: str, token: str, pr_number: int) -> int:
+    """Publish the explicit migration state for #473 against its exact head.
+
+    The head comes from trusted GitHub evidence rather than a workflow event
+    payload, so the state is identical whichever trusted path observes it, and
+    unavailable evidence raises instead of publishing anything.
+    """
+    pr = governance.read_mergeability(repository, token, pr_number)
+    if pr.get("state") != "open":
+        print(f"PR #{pr_number} is not open; no bootstrap status published.")
+        return 0
+    base_ref = str((pr.get("base") or {}).get("ref") or "").strip()
+    if base_ref != "main":
+        print(f"PR #{pr_number} targets {base_ref or 'an unavailable base'}; no bootstrap status published.")
+        return 0
+    head_sha = str((pr.get("head") or {}).get("sha") or "").strip()
+    if not head_sha:
+        raise RuntimeError(f"PR #{pr_number} head SHA is unavailable")
+    governance.publish(repository, token, head_sha, "pending", BOOTSTRAP_PENDING_DESCRIPTION)
+    return 0
 
 
 def _paged_reviews(repository: str, token: str, pr_number: int) -> tuple[dict[str, Any], ...]:
@@ -205,6 +258,14 @@ def _install_bootstrap_patch(repository: str, token: str, pr_number: int, head_s
 
 
 def governance_mode(repository: str, token: str, pr_number: int) -> int:
+    # Trusted `workflow_run` and reconcile executions reach this bridge from the
+    # default branch. While that branch cannot orchestrate exact-head review for
+    # the controller migration itself, running the legacy review here would
+    # overwrite the candidate run's bootstrap state with MISSING_REVIEW_AUTHORITY
+    # on the same exact head. Publish the migration state instead; it is pending
+    # only, and it stops applying as soon as the trusted controller lands.
+    if bootstrap_pending_mode(repository, pr_number):
+        return publish_bootstrap_pending(repository, token, pr_number)
     if repository == TARGET_REPOSITORY and pr_number == TARGET_PR:
         pr = governance.read_mergeability(repository, token, pr_number)
         head_sha = str((pr.get("head") or {}).get("sha") or "").strip()
