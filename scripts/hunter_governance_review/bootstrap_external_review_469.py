@@ -60,14 +60,25 @@ BOOTSTRAP_PENDING_DESCRIPTION = f"{BOOTSTRAP_PENDING_STATE}: default branch cann
 #: this bridge runs it from a trusted default-branch checkout, so the answer is
 #: a property of the trusted tree itself, never of a caller-supplied flag or of
 #: any candidate-controlled workflow input.
-TRUSTED_CONTROLLER_PATH = SCRIPTS_DIR / "hunter_review_orchestrator.py"
+TRUSTED_CONTROLLER_PATH = "scripts/hunter_review_orchestrator.py"
 
 
-def bootstrap_pending_mode(repository: str, pr_number: int) -> bool:
+def _trusted_controller_on_default_branch(repository: str, token: str) -> bool:
+    """Read controller existence from immutable GitHub default-branch evidence."""
+    try:
+        governance.request_json(repository, token, "GET", f"contents/{TRUSTED_CONTROLLER_PATH}?ref=main")
+    except RuntimeError as exc:
+        if "404" in str(exc):
+            return False
+        raise
+    return True
+
+
+def bootstrap_pending_mode(repository: str, pr_number: int, token: str = "") -> bool:
     """Report whether #473 is still installing the trusted reviewer controller."""
     if repository != TARGET_REPOSITORY or pr_number != BOOTSTRAP_CONTROLLER_PR:
         return False
-    return not TRUSTED_CONTROLLER_PATH.is_file()
+    return not _trusted_controller_on_default_branch(repository, token)
 
 
 def publish_bootstrap_pending(repository: str, token: str, pr_number: int) -> int:
@@ -264,7 +275,7 @@ def governance_mode(repository: str, token: str, pr_number: int) -> int:
     # overwrite the candidate run's bootstrap state with MISSING_REVIEW_AUTHORITY
     # on the same exact head. Publish the migration state instead; it is pending
     # only, and it stops applying as soon as the trusted controller lands.
-    if bootstrap_pending_mode(repository, pr_number):
+    if bootstrap_pending_mode(repository, pr_number, token):
         return publish_bootstrap_pending(repository, token, pr_number)
     if repository == TARGET_REPOSITORY and pr_number == TARGET_PR:
         pr = governance.read_mergeability(repository, token, pr_number)

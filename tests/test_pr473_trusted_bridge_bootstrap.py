@@ -77,13 +77,17 @@ def _mergeability(monkeypatch: pytest.MonkeyPatch, payload: dict[str, Any]) -> N
 
 
 def _controller_missing(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
-    monkeypatch.setattr(bridge, "TRUSTED_CONTROLLER_PATH", tmp_path / "hunter_review_orchestrator.py")
+    del tmp_path
+
+    def _request(*_args: Any, **_kwargs: Any) -> Any:
+        raise RuntimeError("GitHub API 404")
+
+    monkeypatch.setattr(governance, "request_json", _request)
 
 
 def _controller_present(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
-    controller = tmp_path / "hunter_review_orchestrator.py"
-    controller.write_text("# trusted controller\n", encoding="utf-8")
-    monkeypatch.setattr(bridge, "TRUSTED_CONTROLLER_PATH", controller)
+    del tmp_path
+    monkeypatch.setattr(governance, "request_json", lambda *_args, **_kwargs: {"type": "file"})
 
 
 def test_trusted_bridge_publishes_bootstrap_pending_instead_of_missing_review_authority(
@@ -210,9 +214,24 @@ def test_bootstrap_pending_does_not_admit_the_candidate(
     assert published == []
 
 
-def test_bootstrap_controller_path_is_resolved_from_the_executing_trusted_tree() -> None:
-    """Trust is a property of the tree running the bridge, not of a caller flag."""
-    assert bridge.TRUSTED_CONTROLLER_PATH == BRIDGE_PATH.parents[1] / "hunter_review_orchestrator.py"
+def test_bootstrap_controller_path_targets_the_default_branch_api_path() -> None:
+    assert bridge.TRUSTED_CONTROLLER_PATH == "scripts/hunter_review_orchestrator.py"
 
 
 # --- candidate workflow -------------------------------------------------------
+
+
+def test_candidate_workspace_file_cannot_end_bootstrap_pending_mode(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """Candidate-controlled workspace files are not trusted default-branch evidence."""
+    controller = tmp_path / "hunter_review_orchestrator.py"
+    controller.write_text("# candidate-controlled\n", encoding="utf-8")
+
+    # Even if the mutable workspace contains a controller, immutable main evidence wins.
+    def _request(*_args: Any, **_kwargs: Any) -> Any:
+        raise RuntimeError("GitHub API 404")
+
+    monkeypatch.setattr(governance, "request_json", _request)
+
+    assert bridge.bootstrap_pending_mode(REPOSITORY, bridge.BOOTSTRAP_CONTROLLER_PR, "token") is True
