@@ -3,79 +3,79 @@
     "acceptance_criteria": [
       {
         "criterion": "`/issue-agent/authorize` returns success/accepted well below the Railway request ceiling and before provider completion.",
-        "evidence": "Outside this narrow governance-inheritance correction; retained for complete governing-Issue coverage.",
+        "evidence": "Outside the PR #476 trusted bootstrap scope; retained for complete Issue #461 stabilization coverage.",
         "id": "AC-001",
         "verdict": "not-applicable"
       },
       {
         "criterion": "Provider execution >300s cannot cause the GitHub trigger to fail with HTTP 499.",
-        "evidence": "Outside this narrow governance-inheritance correction; retained for complete governing-Issue coverage.",
+        "evidence": "Outside the PR #476 trusted bootstrap scope; retained for complete Issue #461 stabilization coverage.",
         "id": "AC-002",
         "verdict": "not-applicable"
       },
       {
         "criterion": "Retrying a failed attempt does not mutate the Issue and does not change the authorization identity.",
-        "evidence": "Outside this narrow governance-inheritance correction; retained for complete governing-Issue coverage.",
+        "evidence": "Outside the PR #476 trusted bootstrap scope; retained for complete Issue #461 stabilization coverage.",
         "id": "AC-003",
         "verdict": "not-applicable"
       },
       {
         "criterion": "Source Handling authority is exact, fail-closed, and retry-stable for an immutable event.",
-        "evidence": "Outside this narrow governance-inheritance correction; retained for complete governing-Issue coverage.",
+        "evidence": "Outside the PR #476 trusted bootstrap scope; retained for complete Issue #461 stabilization coverage.",
         "id": "AC-004",
         "verdict": "not-applicable"
       },
       {
         "criterion": "The exact pinned OpenCode/provider configuration is compatibility-checked before live use.",
-        "evidence": "Outside this narrow governance-inheritance correction; retained for complete governing-Issue coverage.",
+        "evidence": "Outside the PR #476 trusted bootstrap scope; retained for complete Issue #461 stabilization coverage.",
         "id": "AC-005",
         "verdict": "not-applicable"
       },
       {
         "criterion": "Runtime capability requirements are checked before provider execution.",
-        "evidence": "Outside this narrow governance-inheritance correction; retained for complete governing-Issue coverage.",
+        "evidence": "Outside the PR #476 trusted bootstrap scope; retained for complete Issue #461 stabilization coverage.",
         "id": "AC-006",
         "verdict": "not-applicable"
       },
       {
         "criterion": "OpenCode can modify only the isolated attempt workspace; external-directory edits are explicitly denied. \u2014 PR #465 / `ca2adf5ebeb5e11b198e50de6d0a62af5b23207c`",
-        "evidence": "Outside this narrow governance-inheritance correction; retained for complete governing-Issue coverage.",
+        "evidence": "Outside the PR #476 trusted bootstrap scope; retained for complete Issue #461 stabilization coverage.",
         "id": "AC-007",
         "verdict": "not-applicable"
       },
       {
         "criterion": "A provider claiming success without candidate repository changes fails closed.",
-        "evidence": "Outside this narrow governance-inheritance correction; retained for complete governing-Issue coverage.",
+        "evidence": "Outside the PR #476 trusted bootstrap scope; retained for complete Issue #461 stabilization coverage.",
         "id": "AC-008",
         "verdict": "not-applicable"
       },
       {
         "criterion": "Publication remains trusted-parent-owned and exact-head validation remains authoritative.",
-        "evidence": "Outside this narrow governance-inheritance correction; retained for complete governing-Issue coverage.",
+        "evidence": "Outside the PR #476 trusted bootstrap scope; retained for complete Issue #461 stabilization coverage.",
         "id": "AC-009",
         "verdict": "not-applicable"
       },
       {
         "criterion": "Accepted authorization executes at most once and ends in a durable COMPLETED or FAILED state.",
-        "evidence": "Outside this narrow governance-inheritance correction; retained for complete governing-Issue coverage.",
+        "evidence": "Outside the PR #476 trusted bootstrap scope; retained for complete Issue #461 stabilization coverage.",
         "id": "AC-010",
         "verdict": "not-applicable"
       },
       {
         "criterion": "Stale/closed PR history cannot generate a false current Governance failure.",
-        "evidence": "PR #472 exact-head regression and governance diff; authenticated reviewer must adopt this request.",
+        "evidence": "Open/main/current-head bootstrap scoping and trusted-controller retirement covered by tests/test_pr473_trusted_bridge_bootstrap.py; authenticated reviewer must independently verify.",
         "id": "AC-011",
         "verdict": "satisfied"
       },
       {
         "criterion": "No autonomous Ready, merge, or Railway deploy is introduced.",
-        "evidence": "PR #472 exact-head regression and governance diff; authenticated reviewer must adopt this request.",
+        "evidence": "Full diff changes only bootstrap verification, focused tests, defect registry and this review request; no Ready, merge or deploy action added.",
         "id": "AC-012",
         "verdict": "satisfied"
       },
       {
         "criterion": "Only after this matrix is green do we run the live #441 acceptance test.",
-        "evidence": "Outside this narrow governance-inheritance correction; retained for complete governing-Issue coverage.",
+        "evidence": "Outside the PR #476 trusted bootstrap scope; retained for complete Issue #461 stabilization coverage.",
         "id": "AC-013",
         "verdict": "not-applicable"
       }
@@ -94,141 +94,152 @@
       "transaction-snapshot-consistency"
     ],
     "base_ref": "main",
-    "base_sha": "a06d5279214d26997fe8e3b15e429b8fa69ac6f2",
+    "base_sha": "fea16ec43ecd728198733b14050f0037ea66080a",
     "defect_families": [
       {
-        "evidence": "Focused regression suite and trusted preflight evidence; authenticated reviewer must re-evaluate before adoption.",
+        "evidence": "Candidate scope: docs/DEFECT_REGISTRY.json, scripts/hunter_governance_review/bootstrap_external_review_469.py, tests/test_pr473_trusted_bridge_bootstrap.py. 204 focused governance/admission/readiness/collector tests passed. Bootstrap tests cover exact identity, later-review revocation, controller retirement and malformed path evidence. No runtime, persistence, execution or workflow changes; reviewer must independently assess applicability and claims.",
         "family": "DFF-007",
         "outcome": "clear"
       },
       {
-        "evidence": "Focused regression suite and trusted preflight evidence; authenticated reviewer must re-evaluate before adoption.",
+        "evidence": "Candidate scope: docs/DEFECT_REGISTRY.json, scripts/hunter_governance_review/bootstrap_external_review_469.py, tests/test_pr473_trusted_bridge_bootstrap.py. 204 focused governance/admission/readiness/collector tests passed. Bootstrap tests cover exact identity, later-review revocation, controller retirement and malformed path evidence. No runtime, persistence, execution or workflow changes; reviewer must independently assess applicability and claims.",
         "family": "DFF-008",
         "outcome": "clear"
       },
       {
-        "evidence": "Focused regression suite and trusted preflight evidence; authenticated reviewer must re-evaluate before adoption.",
+        "evidence": "Candidate scope: docs/DEFECT_REGISTRY.json, scripts/hunter_governance_review/bootstrap_external_review_469.py, tests/test_pr473_trusted_bridge_bootstrap.py. 204 focused governance/admission/readiness/collector tests passed. Bootstrap tests cover exact identity, later-review revocation, controller retirement and malformed path evidence. No runtime, persistence, execution or workflow changes; reviewer must independently assess applicability and claims.",
         "family": "DFF-009",
         "outcome": "clear"
       },
       {
-        "evidence": "Focused regression suite and trusted preflight evidence; authenticated reviewer must re-evaluate before adoption.",
+        "evidence": "Candidate scope: docs/DEFECT_REGISTRY.json, scripts/hunter_governance_review/bootstrap_external_review_469.py, tests/test_pr473_trusted_bridge_bootstrap.py. 204 focused governance/admission/readiness/collector tests passed. Bootstrap tests cover exact identity, later-review revocation, controller retirement and malformed path evidence. No runtime, persistence, execution or workflow changes; reviewer must independently assess applicability and claims.",
         "family": "DFF-010",
         "outcome": "clear"
       },
       {
-        "evidence": "Focused regression suite and trusted preflight evidence; authenticated reviewer must re-evaluate before adoption.",
+        "evidence": "Candidate scope: docs/DEFECT_REGISTRY.json, scripts/hunter_governance_review/bootstrap_external_review_469.py, tests/test_pr473_trusted_bridge_bootstrap.py. 204 focused governance/admission/readiness/collector tests passed. Bootstrap tests cover exact identity, later-review revocation, controller retirement and malformed path evidence. No runtime, persistence, execution or workflow changes; reviewer must independently assess applicability and claims.",
         "family": "DFF-011",
         "outcome": "clear"
       },
       {
-        "evidence": "Focused regression suite and trusted preflight evidence; authenticated reviewer must re-evaluate before adoption.",
+        "evidence": "Candidate scope: docs/DEFECT_REGISTRY.json, scripts/hunter_governance_review/bootstrap_external_review_469.py, tests/test_pr473_trusted_bridge_bootstrap.py. 204 focused governance/admission/readiness/collector tests passed. Bootstrap tests cover exact identity, later-review revocation, controller retirement and malformed path evidence. No runtime, persistence, execution or workflow changes; reviewer must independently assess applicability and claims.",
         "family": "DFF-012",
         "outcome": "clear"
       },
       {
-        "evidence": "Focused regression suite and trusted preflight evidence; authenticated reviewer must re-evaluate before adoption.",
+        "evidence": "Candidate scope: docs/DEFECT_REGISTRY.json, scripts/hunter_governance_review/bootstrap_external_review_469.py, tests/test_pr473_trusted_bridge_bootstrap.py. 204 focused governance/admission/readiness/collector tests passed. Bootstrap tests cover exact identity, later-review revocation, controller retirement and malformed path evidence. No runtime, persistence, execution or workflow changes; reviewer must independently assess applicability and claims.",
         "family": "DFF-013",
         "outcome": "clear"
       },
       {
-        "evidence": "Focused regression suite and trusted preflight evidence; authenticated reviewer must re-evaluate before adoption.",
+        "evidence": "Candidate scope: docs/DEFECT_REGISTRY.json, scripts/hunter_governance_review/bootstrap_external_review_469.py, tests/test_pr473_trusted_bridge_bootstrap.py. 204 focused governance/admission/readiness/collector tests passed. Bootstrap tests cover exact identity, later-review revocation, controller retirement and malformed path evidence. No runtime, persistence, execution or workflow changes; reviewer must independently assess applicability and claims.",
         "family": "DFF-014",
         "outcome": "clear"
       },
       {
-        "evidence": "Focused regression suite and trusted preflight evidence; authenticated reviewer must re-evaluate before adoption.",
+        "evidence": "Candidate scope: docs/DEFECT_REGISTRY.json, scripts/hunter_governance_review/bootstrap_external_review_469.py, tests/test_pr473_trusted_bridge_bootstrap.py. 204 focused governance/admission/readiness/collector tests passed. Bootstrap tests cover exact identity, later-review revocation, controller retirement and malformed path evidence. No runtime, persistence, execution or workflow changes; reviewer must independently assess applicability and claims.",
         "family": "DFF-015",
         "outcome": "clear"
       },
       {
-        "evidence": "Focused regression suite and trusted preflight evidence; authenticated reviewer must re-evaluate before adoption.",
+        "evidence": "Candidate scope: docs/DEFECT_REGISTRY.json, scripts/hunter_governance_review/bootstrap_external_review_469.py, tests/test_pr473_trusted_bridge_bootstrap.py. 204 focused governance/admission/readiness/collector tests passed. Bootstrap tests cover exact identity, later-review revocation, controller retirement and malformed path evidence. No runtime, persistence, execution or workflow changes; reviewer must independently assess applicability and claims.",
         "family": "DFF-016",
         "outcome": "clear"
       },
       {
-        "evidence": "Focused regression suite and trusted preflight evidence; authenticated reviewer must re-evaluate before adoption.",
+        "evidence": "Candidate scope: docs/DEFECT_REGISTRY.json, scripts/hunter_governance_review/bootstrap_external_review_469.py, tests/test_pr473_trusted_bridge_bootstrap.py. 204 focused governance/admission/readiness/collector tests passed. Bootstrap tests cover exact identity, later-review revocation, controller retirement and malformed path evidence. No runtime, persistence, execution or workflow changes; reviewer must independently assess applicability and claims.",
         "family": "DFF-019",
         "outcome": "clear"
       },
       {
-        "evidence": "Focused regression suite and trusted preflight evidence; authenticated reviewer must re-evaluate before adoption.",
+        "evidence": "Candidate scope: docs/DEFECT_REGISTRY.json, scripts/hunter_governance_review/bootstrap_external_review_469.py, tests/test_pr473_trusted_bridge_bootstrap.py. 204 focused governance/admission/readiness/collector tests passed. Bootstrap tests cover exact identity, later-review revocation, controller retirement and malformed path evidence. No runtime, persistence, execution or workflow changes; reviewer must independently assess applicability and claims.",
         "family": "DFF-020",
         "outcome": "clear"
       },
       {
-        "evidence": "Focused regression suite and trusted preflight evidence; authenticated reviewer must re-evaluate before adoption.",
+        "evidence": "Candidate scope: docs/DEFECT_REGISTRY.json, scripts/hunter_governance_review/bootstrap_external_review_469.py, tests/test_pr473_trusted_bridge_bootstrap.py. 204 focused governance/admission/readiness/collector tests passed. Bootstrap tests cover exact identity, later-review revocation, controller retirement and malformed path evidence. No runtime, persistence, execution or workflow changes; reviewer must independently assess applicability and claims.",
         "family": "DFF-021",
         "outcome": "clear"
       },
       {
-        "evidence": "Focused regression suite and trusted preflight evidence; authenticated reviewer must re-evaluate before adoption.",
+        "evidence": "Candidate scope: docs/DEFECT_REGISTRY.json, scripts/hunter_governance_review/bootstrap_external_review_469.py, tests/test_pr473_trusted_bridge_bootstrap.py. 204 focused governance/admission/readiness/collector tests passed. Bootstrap tests cover exact identity, later-review revocation, controller retirement and malformed path evidence. No runtime, persistence, execution or workflow changes; reviewer must independently assess applicability and claims.",
         "family": "DFF-022",
-        "outcome": "clear"
+        "outcome": "repaired"
       },
       {
-        "evidence": "Focused regression suite and trusted preflight evidence; authenticated reviewer must re-evaluate before adoption.",
+        "evidence": "Candidate scope: docs/DEFECT_REGISTRY.json, scripts/hunter_governance_review/bootstrap_external_review_469.py, tests/test_pr473_trusted_bridge_bootstrap.py. 204 focused governance/admission/readiness/collector tests passed. Bootstrap tests cover exact identity, later-review revocation, controller retirement and malformed path evidence. No runtime, persistence, execution or workflow changes; reviewer must independently assess applicability and claims.",
         "family": "DFF-023",
         "outcome": "clear"
       }
     ],
-    "findings": [],
+    "findings": [
+      {
+        "evidence": "Codex review 5228384919; regression tests/test_pr473_trusted_bridge_bootstrap.py::test_bootstrap_requires_actual_authenticated_bot_login failed before correction and passed afterwards.",
+        "id": "bot-identity",
+        "resolution": "resolved",
+        "resolution_evidence": {
+          "correction": "bc9f53c9d2068dc7a5fbfcc216a353f9a3c0429d",
+          "regression_test": "tests/test_pr473_trusted_bridge_bootstrap.py"
+        },
+        "severity": "blocking"
+      },
+      {
+        "evidence": "Codex review 5228384919; regression tests/test_pr473_trusted_bridge_bootstrap.py::test_candidate_bootstrap_retires_with_trusted_controller failed before correction and passed afterwards.",
+        "id": "candidate-retirement",
+        "resolution": "resolved",
+        "resolution_evidence": {
+          "correction": "bc9f53c9d2068dc7a5fbfcc216a353f9a3c0429d",
+          "regression_test": "tests/test_pr473_trusted_bridge_bootstrap.py"
+        },
+        "severity": "blocking"
+      },
+      {
+        "evidence": "Codex review 5228384919; regression tests/test_pr473_trusted_bridge_bootstrap.py::test_latest_review_revokes_prior_clear_bootstrap_authority failed before correction and passed afterwards.",
+        "id": "latest-review-revocation",
+        "resolution": "resolved",
+        "resolution_evidence": {
+          "correction": "860aa7d35e76159f4d82d0c4af75fb95836dccfe",
+          "regression_test": "tests/test_pr473_trusted_bridge_bootstrap.py"
+        },
+        "severity": "blocking"
+      },
+      {
+        "evidence": "Codex review 5228384919; regression tests/test_pr473_trusted_bridge_bootstrap.py::test_controller_requires_explicit_path_evidence failed before correction and passed afterwards.",
+        "id": "explicit-controller-path",
+        "resolution": "resolved",
+        "resolution_evidence": {
+          "correction": "860aa7d35e76159f4d82d0c4af75fb95836dccfe",
+          "regression_test": "tests/test_pr473_trusted_bridge_bootstrap.py"
+        },
+        "severity": "blocking"
+      }
+    ],
     "issue": "461",
     "review_target": [
       {
-        "blob_sha": "bfc439db1f41d406b0729b3d366ca6a5fd6d9b16",
-        "path": ".github/workflows/hunter-reviewer-collector.yml",
+        "blob_sha": "74c53c30af5159010e8f5295eeaa2a56a6572463",
+        "path": "tests/test_pr473_trusted_bridge_bootstrap.py",
         "previous_path": "",
-        "status": "modified"
+        "status": "added"
       },
       {
-        "blob_sha": "d09e3a55aa1a6986ea336424a9a25e37a325ec3e",
-        "path": ".gitignore",
-        "previous_path": "",
-        "status": "modified"
-      },
-      {
-        "blob_sha": "028b241b1f5ef50075f417677ee22a5afa2cb06e",
+        "blob_sha": "94da9344899ab9870effe66286b473acfd3144a5",
         "path": "docs/DEFECT_REGISTRY.json",
         "previous_path": "",
         "status": "modified"
       },
       {
-        "blob_sha": "c42f198f99d67b6e5e30fd298c36dc0efe4d3944",
-        "path": "scripts/hunter_governance_review_v2.py",
-        "previous_path": "",
-        "status": "modified"
-      },
-      {
-        "blob_sha": "52c54faa17ad7701fc76fb46a7167e8f08f8bd10",
-        "path": "tests/test_exact_head_review_authority.py",
-        "previous_path": "",
-        "status": "modified"
-      },
-      {
-        "blob_sha": "679664a36d7592f09e1ee1cf081558211f46bdcb",
-        "path": "tests/test_hunter_reviewer_collector.py",
-        "previous_path": "",
-        "status": "modified"
-      },
-      {
-        "blob_sha": "10afef6da49d9882db94dccb92201644ff460cd8",
-        "path": "tests/test_issue_412_prevention_gate.py",
-        "previous_path": "",
-        "status": "modified"
-      },
-      {
-        "blob_sha": "9e26bb2af1f0006d95249e4de68dedb9f8f28d72",
-        "path": "tests/test_response_validator_phase_b.py",
+        "blob_sha": "8af2c87025cc45b3628a519b2fcb7d9fa879c559",
+        "path": "scripts/hunter_governance_review/bootstrap_external_review_469.py",
         "previous_path": "",
         "status": "modified"
       }
     ],
-    "review_target_digest": "234a3a64c170803bf76e76c19e3caa5b75ca25e607a9e0d08098499e416178ee"
+    "review_target_digest": "dc7cf071fa431817d5dd753d411cd46a518f18dbd5a4e1c63fa9d6519369bf38"
   },
-  "review_id": "8246ae676e37beb4fecc087137e06c3cea7af0d8710a4c0e136be9ecd89de74b",
+  "review_id": "6252ac470ae46657c4df32587309c058b292095e01a860dd3682ebbbdea2a0c9",
   "review_request": {
-    "claims_id": "8246ae676e37beb4fecc087137e06c3cea7af0d8710a4c0e136be9ecd89de74b",
+    "claims_id": "6252ac470ae46657c4df32587309c058b292095e01a860dd3682ebbbdea2a0c9",
     "schema": "hunter.review-request.v1"
   },
   "schema": "hunter.pre-ready-hostile-review.v1"
