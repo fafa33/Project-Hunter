@@ -49,7 +49,7 @@ import hunter_pre_ready_review as pre_ready  # noqa: E402
 
 TARGET_REPOSITORY = "fafa33/Project-Hunter"
 TARGET_PR = 469
-CODEX_LOGIN = "chatgpt-codex-connector"
+CODEX_LOGIN = "chatgpt-codex-connector[bot]"
 
 #: PR #473 is the contribution that installs the trusted reviewer orchestration
 #: controller, so it is the one candidate whose review cannot be orchestrated by
@@ -315,7 +315,7 @@ def candidate_mode(repository: str, token: str, pr_number: int, expected_head_sh
     if repository == TARGET_REPOSITORY and pr_number in {TARGET_PR, BOOTSTRAP_CONTROLLER_PR}:
         pr = governance.read_mergeability(repository, token, pr_number)
         head_sha = str((pr.get("head") or {}).get("sha") or "").strip()
-        if head_sha:
+        if head_sha and not _trusted_controller_on_default_branch(repository, token):
             _install_bootstrap_patch(repository, token, pr_number, head_sha)
     return candidate.enforce_candidate_admission(repository, token, pr_number, expected_head_sha)
 

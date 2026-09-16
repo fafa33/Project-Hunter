@@ -309,3 +309,41 @@ def test_bootstrap_patch_self_retires_when_trusted_controller_exists(
     )
     assert bridge.governance_mode(REPOSITORY, "token", bridge.BOOTSTRAP_CONTROLLER_PR) == 0
     assert legacy_review == [bridge.BOOTSTRAP_CONTROLLER_PR]
+
+
+@pytest.mark.parametrize("controller_present", [True, False])
+def test_candidate_bootstrap_retires_with_trusted_controller(monkeypatch, controller_present):
+    _mergeability(monkeypatch, _pull_request())
+    monkeypatch.setattr(bridge, "_trusted_controller_on_default_branch", lambda *_args: controller_present)
+    installed = []
+    monkeypatch.setattr(bridge, "_install_bootstrap_patch", lambda *args: installed.append(args))
+    monkeypatch.setattr(candidate, "enforce_candidate_admission", lambda *_args: 1)
+    assert bridge.candidate_mode(REPOSITORY, "token", 473, HEAD) == 1
+    assert len(installed) == (0 if controller_present else 1)
+
+
+@pytest.mark.parametrize(
+    "login,accepted", [("chatgpt-codex-connector[bot]", True), ("chatgpt-codex-connector", False), ("fafa33", False)]
+)
+def test_bootstrap_requires_actual_authenticated_bot_login(monkeypatch, login, accepted):
+    review = {
+        "id": 8,
+        "user": {"login": login},
+        "commit_id": HEAD,
+        "state": "COMMENTED",
+        "body": "### 💡 Codex Review\n\nDidn't find any major issues.\n\n**Reviewed commit:** `0a82ede`",
+    }
+    monkeypatch.setattr(bridge, "_paged_reviews", lambda *_args: (review,))
+    assert (bridge._exact_head_codex_review(REPOSITORY, "token", 473, HEAD) is not None) is accepted
+
+
+def test_candidate_bootstrap_rejects_unavailable_controller_evidence(monkeypatch):
+    _mergeability(monkeypatch, _pull_request())
+
+    def unavailable(*_args):
+        raise RuntimeError("GitHub API 503")
+
+    monkeypatch.setattr(bridge, "_trusted_controller_on_default_branch", unavailable)
+    monkeypatch.setattr(bridge, "_install_bootstrap_patch", lambda *_args: pytest.fail("must not install authority"))
+    with pytest.raises(RuntimeError, match="503"):
+        bridge.candidate_mode(REPOSITORY, "token", 473, HEAD)

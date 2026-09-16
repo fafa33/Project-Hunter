@@ -1035,7 +1035,8 @@
           "docs/CODE_WRITE_POLICY.json",
           "docs/DEFECT_REGISTRY.json",
           ".github/workflows/hunter-reviewer-collector.yml",
-          "scripts/hunter_reviewer_collector.py"
+          "scripts/hunter_reviewer_collector.py",
+          "scripts/hunter_governance_review/bootstrap_external_review_469.py"
         ],
         "rationale": "The final merge gate and the single shared review-verification implementation are where the workflow-ordering defect lives: Merge Readiness could go green through governance or check status alone, or a resolved thread could satisfy readiness without machine-verified structured evidence. A recurrence here means the fail-closed prerequisite was weakened at the boundary that is supposed to own it. The fallback authority rule lives here too because a single primary review authority that can be rate-limited or unavailable is itself a workflow freeze waiting to happen: readiness must stay fail-closed without turning Codex availability into a single point of failure. The trusted reviewer collector workflow and implementation are part of the same boundary because they prove ordered reviewer invocation and exhaustion; losing their trigger permission or sequencing can silently disable failover and recreate a single-reviewer freeze."
       },
@@ -1092,14 +1093,18 @@
         "tests/test_exact_head_review_authority.py::test_inherited_base_review_artifact_is_not_candidate_review",
         "tests/test_exact_head_review_authority.py::test_inherited_same_issue_review_artifact_is_still_historical",
         "tests/test_exact_head_review_authority.py::test_current_exact_review_with_inherited_artifact_waits_for_structured_authority",
-        "tests/test_hunter_reviewer_collector.py::test_collector_workflow_can_write_pr_conversation_triggers"
+        "tests/test_hunter_reviewer_collector.py::test_collector_workflow_can_write_pr_conversation_triggers",
+        "tests/test_pr473_trusted_bridge_bootstrap.py::test_candidate_bootstrap_retires_with_trusted_controller",
+        "tests/test_pr473_trusted_bridge_bootstrap.py::test_bootstrap_requires_actual_authenticated_bot_login",
+        "tests/test_pr473_trusted_bridge_bootstrap.py::test_candidate_bootstrap_rejects_unavailable_controller_evidence"
       ],
       "lifecycle": "regression-tested",
       "sources": [
         "Issue #467 workflow-ordering defect (PR #468)",
         "Issue #467 fallback review-authority hardening (PR #468)",
         "Issue #467 reviewer-pool failover hardening (follow-on)",
-        "Issue #461 / PR #472 inherited-review authority and reviewer failover stabilization (2026-09-15)"
+        "Issue #461 / PR #472 inherited-review authority and reviewer failover stabilization (2026-09-15)",
+        "PR #476: candidate bootstrap retirement and authenticated connector identity regression coverage"
       ]
     },
     {
