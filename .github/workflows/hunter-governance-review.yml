@@ -91,8 +91,20 @@ jobs:
           # synchronization. This is pending only; it never admits the PR.
           CONTROLLER="${GITHUB_WORKSPACE}/engine/scripts/hunter_review_orchestrator.py"
           if [ ! -f "${CONTROLLER}" ]; then
+            # workflow_run and workflow_dispatch carry no pull_request payload,
+            # so the head must come from the pull request itself. Reading it from
+            # the event alone would post a status against an empty SHA and turn
+            # the trusted path red instead of pending.
+            HEAD_SHA="${PR_HEAD_SHA:-}"
+            if [ -z "${HEAD_SHA}" ]; then
+              HEAD_SHA="$(gh api "repos/${GH_REPO}/pulls/${PR_NUMBER}" --jq .head.sha)"
+            fi
+            if [ -z "${HEAD_SHA}" ] || [ "${HEAD_SHA}" = "null" ]; then
+              echo "::error::Bootstrap pending state needs the exact head of PR #${PR_NUMBER}; none is available."
+              exit 1
+            fi
             gh api --method POST \
-              "repos/${GH_REPO}/statuses/${PR_HEAD_SHA}" \
+              "repos/${GH_REPO}/statuses/${HEAD_SHA}" \
               -f state=pending \
               -f context="Hunter Governance Review" \
               -f description="BOOTSTRAP_PENDING_TRUSTED_CONTROLLER: default branch cannot yet orchestrate exact-head review" \
