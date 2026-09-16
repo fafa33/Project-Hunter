@@ -1,9 +1,11 @@
 from __future__ import annotations
 
 import copy
+import pathlib
 
 import hunter_reviewer_collector as collector
 import pytest
+import yaml
 
 HEAD = "a" * 40
 POOL = {
@@ -346,14 +348,97 @@ def test_local_trigger_dispatches_trusted_workflow_instead_of_pr_comment(monkeyp
         "github_login": "",
     }
     trigger = backend.trigger(agent, 1)
+    correlation = backend.correlation_id(agent, 1)
     assert calls == [
         (
             "POST",
             "actions/workflows/hunter-local-reviewer.yml/dispatches",
-            {"ref": "main", "inputs": {"pr_number": "472", "head_sha": HEAD, "claims_id": "d" * 64}},
+            {
+                "ref": "main",
+                "inputs": {
+                    "pr_number": "472",
+                    "head_sha": HEAD,
+                    "claims_id": "d" * 64,
+                    "correlation_id": correlation,
+                },
+            },
         )
     ]
     assert trigger["kind"] == "local-workflow"
+    assert trigger["correlation_id"] == correlation
+
+
+def test_every_local_dispatch_carries_a_distinct_correlation_identity():
+    agent = {"id": "local-ollama", "trigger_method": "github-workflow:hunter-local-reviewer.yml"}
+    first = collector.GitHubBackend("owner/repo", "token", 472, HEAD, "d" * 64, 123, 1)
+    identities = {
+        first.correlation_id(agent, 1),
+        first.correlation_id(agent, 2),
+        collector.GitHubBackend("owner/repo", "token", 472, HEAD, "d" * 64, 123, 2).correlation_id(agent, 1),
+        collector.GitHubBackend("owner/repo", "token", 472, HEAD, "d" * 64, 124, 1).correlation_id(agent, 1),
+        collector.GitHubBackend("owner/repo", "token", 471, HEAD, "d" * 64, 123, 1).correlation_id(agent, 1),
+        collector.GitHubBackend("owner/repo", "token", 472, "b" * 40, "d" * 64, 123, 1).correlation_id(agent, 1),
+    }
+    assert len(identities) == 6
+
+
+def test_local_run_selection_requires_this_dispatch_not_a_concurrent_one(monkeypatch):
+    """A run for another dispatch must never be read as this attempt's result.
+
+    Timestamp, event and branch are shared by every dispatch of this workflow, so
+    they cannot distinguish this attempt's run from a run started for another
+    candidate, another attempt, or a manual dispatch.
+    """
+
+    backend = collector.GitHubBackend("owner/repo", "token", 472, HEAD, "d" * 64, 123, 1)
+    agent = {"id": "local-ollama", "trigger_method": "github-workflow:hunter-local-reviewer.yml"}
+    mine = backend.correlation_id(agent, 1)
+    theirs = collector.GitHubBackend("owner/repo", "token", 471, HEAD, "d" * 64, 555, 1).correlation_id(agent, 1)
+    runs = {
+        "workflow_runs": [
+            {
+                "id": 900,
+                "display_title": collector.LOCAL_REVIEW_RUN_NAME_PREFIX + theirs,
+                "event": "workflow_dispatch",
+                "head_branch": "main",
+                "created_at": "2099-01-01T00:00:00Z",
+                "status": "completed",
+                "conclusion": "success",
+            },
+            {
+                "id": 800,
+                "display_title": collector.LOCAL_REVIEW_RUN_NAME_PREFIX + mine,
+                "event": "workflow_dispatch",
+                "head_branch": "main",
+                "created_at": "2026-09-15T00:00:00Z",
+                "status": "in_progress",
+                "conclusion": None,
+            },
+        ]
+    }
+    monkeypatch.setattr(collector.governance, "request_json", lambda *_args, **_kwargs: runs)
+    trigger = {"kind": "local-workflow", "created_at": "2026-09-15T00:00:00Z", "correlation_id": mine}
+
+    assert backend._local_run(trigger)["id"] == 800
+    # The unrelated newer successful run must not complete this attempt.
+    assert backend.completed(agent, trigger) is False
+
+
+def test_a_dispatch_without_a_correlation_identity_matches_no_run(monkeypatch):
+    backend = collector.GitHubBackend("owner/repo", "token", 472, HEAD, "d" * 64, 123, 1)
+    monkeypatch.setattr(
+        collector.governance,
+        "request_json",
+        lambda *_args, **_kwargs: pytest.fail("uncorrelated dispatch must not select any run"),
+    )
+    assert backend._local_run({"kind": "local-workflow", "created_at": "2026-09-15T00:00:00Z"}) is None
+
+
+def test_local_reviewer_workflow_renders_the_correlated_run_name():
+    text = pathlib.Path(collector.__file__).resolve().parents[1].joinpath(".github/workflows/hunter-local-reviewer.yml")
+    document = yaml.safe_load(text.read_text(encoding="utf-8"))
+    assert document["run-name"] == collector.LOCAL_REVIEW_RUN_NAME_PREFIX + "${{ inputs.correlation_id }}"
+    assert document[True]["workflow_dispatch"]["inputs"]["correlation_id"]["required"] is True
 
 
 def test_local_ack_requires_job_to_have_started(monkeypatch):

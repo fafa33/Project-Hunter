@@ -84,18 +84,37 @@ def build_result(
     model: str,
     findings: list[dict[str, Any]],
     summary: str,
+    verdict: str | None = None,
     started_at: str | None = None,
     completed_at: str | None = None,
 ) -> dict[str, Any]:
+    """Publish the model's own verdict, never a verdict inferred around it.
+
+    A model that reports ``verdict: findings`` while emitting an empty findings
+    list has produced an internally inconsistent review: one half says the
+    candidate is blocked and the other half carries no blocker to act on.
+    Deriving the published verdict from the findings list alone would silently
+    resolve that contradiction in the permissive direction and publish a clear
+    result for a review that declared itself blocking, so the inconsistency
+    fails closed instead.
+    """
+
     if len(head_sha) != 40 or len(claims_id) != 64:
         raise ValueError("exact-head or claims identity is malformed")
+    derived = "findings" if findings else "clear"
+    if verdict is None:
+        verdict = derived
+    if verdict not in {"clear", "findings"}:
+        raise ValueError("local review verdict is invalid")
+    if verdict != derived:
+        raise ValueError(f"local review verdict {verdict!r} contradicts its own {len(findings)} findings")
     return {
         "schema": SCHEMA,
         "head_sha": head_sha,
         "claims_id": claims_id,
         "model": model,
         "model_digest": hashlib.sha256(model.encode()).hexdigest(),
-        "verdict": "findings" if findings else "clear",
+        "verdict": verdict,
         "summary": summary,
         "findings": findings,
         "started_at": started_at or utc_now(),
@@ -127,6 +146,7 @@ def review_pr(
         model=model,
         findings=findings,
         summary=str(review.get("summary") or "").strip(),
+        verdict=review["verdict"] if "verdict" in review else None,
         started_at=started,
     )
 

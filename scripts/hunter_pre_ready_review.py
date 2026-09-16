@@ -355,6 +355,81 @@ def document_for(claims: dict[str, Any], authority: dict[str, Any] | None = None
 # --- Ordered reviewer pool --------------------------------------------------
 
 
+def _number(value: Any) -> float | None:
+    """A real numeric measurement; booleans are claims, not measurements."""
+
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        return None
+    return float(value)
+
+
+def _quality_gate_problems(entry: Mapping[str, Any], agent_id: Any) -> list[str]:
+    """Bind authority eligibility to the reviewer's own recorded benchmark result.
+
+    A reviewer that declares a required quality gate is authority-eligible only
+    while its recorded benchmark actually meets the thresholds that gate
+    declares. Without this the eligibility flag is an independent assertion:
+    flipping ``authority_eligible`` to true -- or simply deleting it, since an
+    absent flag defaults to eligible -- would promote a triage-only or
+    benchmark-failing reviewer to full review authority with nothing in trusted
+    parsing to contradict it. The invariant is enforced here, in the shared
+    parser every consumer reads the pool through, rather than only in the
+    configuration file that the flag lives in or in tests that read it.
+    """
+
+    problems: list[str] = []
+    authority_eligible = entry.get("authority_eligible")
+    if authority_eligible is not None and not isinstance(authority_eligible, bool):
+        problems.append(f"{REVIEWER_POOL_FIELD} agent {agent_id!r} authority_eligible must be a boolean when declared")
+        authority_eligible = None
+    gate = entry.get("quality_gate")
+    if gate is None:
+        return problems
+    if not isinstance(gate, Mapping):
+        return problems + [f"{REVIEWER_POOL_FIELD} agent {agent_id!r} quality_gate must be an object"]
+    if gate.get("required") is not True:
+        return problems
+
+    minimum_recall = _number(gate.get("minimum_recall"))
+    maximum_false_positive_rate = _number(gate.get("maximum_false_positive_rate"))
+    if not isinstance(gate.get("benchmark_id"), str) or not str(gate["benchmark_id"]).strip():
+        problems.append(f"{REVIEWER_POOL_FIELD} agent {agent_id!r} quality_gate must name its benchmark_id")
+    if minimum_recall is None or maximum_false_positive_rate is None:
+        problems.append(
+            f"{REVIEWER_POOL_FIELD} agent {agent_id!r} quality_gate must declare numeric minimum_recall "
+            "and maximum_false_positive_rate thresholds"
+        )
+    benchmark = gate.get("last_benchmark")
+    recall = _number(benchmark.get("recall")) if isinstance(benchmark, Mapping) else None
+    false_positive_rate = _number(benchmark.get("false_positive_rate")) if isinstance(benchmark, Mapping) else None
+    passed = benchmark.get("passed") if isinstance(benchmark, Mapping) else None
+    if (
+        not isinstance(benchmark, Mapping)
+        or recall is None
+        or false_positive_rate is None
+        or not isinstance(passed, bool)
+    ):
+        problems.append(
+            f"{REVIEWER_POOL_FIELD} agent {agent_id!r} quality_gate must record a last_benchmark with a numeric "
+            "recall, a numeric false_positive_rate, and a boolean passed result"
+        )
+        benchmark_passes = False
+    else:
+        benchmark_passes = (
+            passed
+            and minimum_recall is not None
+            and maximum_false_positive_rate is not None
+            and recall >= minimum_recall
+            and false_positive_rate <= maximum_false_positive_rate
+        )
+    if not benchmark_passes and authority_eligible is not False:
+        problems.append(
+            f"{REVIEWER_POOL_FIELD} agent {agent_id!r} has not passed its required quality gate, so it must "
+            "declare authority_eligible false and remain triage-only"
+        )
+    return problems
+
+
 def _pool_problems(policy: Mapping[str, Any]) -> list[str]:
     """Structural validation of the reviewer-pool declaration; empty means valid.
 
@@ -493,6 +568,7 @@ def _pool_problems(policy: Mapping[str, Any]) -> list[str]:
                 f"{REVIEWER_POOL_FIELD} agent {agent_id!r} review_timeout_seconds cannot exceed the "
                 f"pool max_seconds ({max_seconds})"
             )
+        problems.extend(_quality_gate_problems(entry, agent_id))
         if enabled is True and priority == 1:
             enabled_priority_one = True
         if agent_id == CODEX_REVIEW_AUTHORITY and enabled is True:

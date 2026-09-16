@@ -1,5 +1,11 @@
 name: Hunter Local Reviewer
 
+# The run name carries the exact collector invocation identity. GitHub does not
+# report workflow-dispatch inputs on a run, so the trusted collector correlates a
+# run to its own dispatch through this name; timestamp, event and branch alone
+# would also match a run dispatched for another attempt or another candidate.
+run-name: Hunter Local Reviewer ${{ inputs.correlation_id }}
+
 on:
   workflow_dispatch:
     inputs:
@@ -10,6 +16,10 @@ on:
         required: true
         type: string
       claims_id:
+        required: true
+        type: string
+      correlation_id:
+        description: Unique trusted collector invocation identity for this dispatch
         required: true
         type: string
 

@@ -1154,7 +1154,10 @@ def test_every_hosted_review_consumer_can_read_collector_and_guard_evidence():
     workflows = prevention.ROOT / ".github/workflows"
     expected = {
         "hunter-candidate-admission.yml": {"actions": "read", "checks": "read"},
-        "hunter-governance-review.yml": {"actions": "write", "checks": "read"},
+        # Read-only: this workflow is reachable from `pull_request`, where GitHub
+        # runs the candidate's own copy of the file, so it may read run evidence
+        # but never dispatch, re-run or cancel a workflow.
+        "hunter-governance-review.yml": {"actions": "read", "checks": "read"},
         "hunter-governance-reconcile.yml": {"actions": "write", "checks": "read"},
         "hunter-merge-readiness.yml": {"actions": "read", "checks": "read"},
     }
@@ -1185,6 +1188,37 @@ def test_a_current_authenticated_acknowledgement_establishes_new_exact_head_auth
     monkeypatch.setattr(core, "check_reviewer_dispositions", lambda: (True, ""))
     assert core.verify_pre_ready_hostile_review("repo", "token", HEAD, PR_NUMBER)[0] == "success"
     assert document["authority"]["head_sha"] == "c" * 40  # Historical evidence is not rebound.
+
+
+def test_an_adopted_request_is_still_rebound_to_this_candidates_trusted_base(monkeypatch):
+    """Adoption grants authority to *these* claims, and the claims are re-derived.
+
+    The request the reviewer adopts carries its own base->HEAD claims, so the
+    controller never takes them at face value: after adoption it re-runs the full
+    claim verification against the trusted merge base and changed-file evidence it
+    read from GitHub. A request that inherited an earlier candidate's base is
+    therefore stale, not authority, even with a perfectly valid acknowledgement.
+    """
+
+    document = _review_document(base="7" * 40, authority=_authority(head_sha="c" * 40))
+    document["review_request"] = {"schema": "hunter.review-request.v1", "claims_id": document["review_id"]}
+    ack = {
+        "schema": "hunter.review-ack.v1",
+        "head_sha": HEAD,
+        "claims_id": document["review_id"],
+        "verdict": "clear",
+        "summary": "Completed the adversarial review of every requested criterion; no blocking findings remain.",
+    }
+    snapshot = {**_trusted_review(body=json.dumps(ack)), "submitted_at": "2026-09-13T23:00:00Z"}
+    _install_governance(monkeypatch, document=document, comments=(snapshot,))
+    monkeypatch.setattr(core, "read_unresolved_review_threads", lambda *a: ((), None))
+    monkeypatch.setattr(core, "check_reviewer_dispositions", lambda: (True, ""))
+
+    state, reason = core.verify_pre_ready_hostile_review("repo", "token", HEAD, PR_NUMBER)
+
+    assert state == "failure"
+    assert "STALE_REVIEW" in reason
+    assert "base" in reason
 
 
 def test_a_request_without_explicit_reviewer_adoption_is_not_authority(monkeypatch):
@@ -1440,6 +1474,71 @@ def test_authenticated_codex_standard_clear_review_adopts_current_exact_head_req
     state, reason = core.verify_pre_ready_hostile_review("repo", "token", HEAD, PR_NUMBER)
 
     assert state == "success", reason
+
+
+def _codex_clear_body(trailer: str = "") -> str:
+    return "Codex Review: Didn't find any major issues. Bravo.\n\n" f"**Reviewed commit:** `{HEAD[:10]}`{trailer}"
+
+
+def _codex_review_observation(body: str) -> dict[str, Any]:
+    return {**_trusted_review(body=body), "source_kind": "review", "submitted_at": "2026-09-15T11:20:00Z"}
+
+
+def test_codex_clear_review_with_an_informational_collapsed_footer_still_adopts():
+    body = _codex_clear_body(
+        "\n\n<details>\n<summary>About Codex in GitHub</summary>\nCodex reviewed this pull request "
+        "automatically. Replies in this thread reach the Codex connector.\n</details>"
+    )
+    ack = core.review_adoption_acknowledgement(_codex_review_observation(body), HEAD, "b" * 64)
+    assert ack is not None and ack["verdict"] == "clear"
+
+
+@pytest.mark.parametrize(
+    "trailer",
+    [
+        # A blocking finding rendered inside a collapsed section: truncating the
+        # body at `<details>` accepted the clear prefix and never read this.
+        "\n\n<details>\n<summary>Findings</summary>\n\n- P1 scripts/hunter_pre_push.py:42 the "
+        "exact-head binding is dropped, so a stale review is admitted.\n</details>",
+        # The same finding without a severity badge, as an ordinary list item.
+        "\n\n<details>\n<summary>Notes</summary>\n\n* The new guard never runs, so unsigned "
+        "commits are admitted without any proof at all.\n</details>",
+        # A heading-structured finding.
+        "\n\n<details>\n<summary>More</summary>\n\n### Blocking\nThe collector can be bypassed "
+        "entirely by an unauthenticated caller.\n</details>",
+        # A linked code location.
+        "\n\n<details>\n<summary>Details</summary>\nSee "
+        "[here](https://github.com/o/r/blob/aaaaaaa/scripts/x.py) for the unguarded path.\n</details>",
+        # Unvalidated trailing prose that is not a collapsed section at all.
+        "\n\nOn reflection this change removes the only authority check in the admission path.",
+        # A nested collapsed section, which the flat scan would otherwise mis-bound.
+        "\n\n<details>\n<summary>Outer</summary>\n<details>\n<summary>Inner</summary>\n- P2 "
+        "unbounded retry loop.\n</details>\n</details>",
+        # An unbalanced section: everything after it is unvalidated content.
+        "\n\n<details>\n<summary>Truncated</summary>\n- P1 the review request is never bound.",
+    ],
+)
+def test_codex_clear_prefix_cannot_carry_unvalidated_trailing_content(trailer):
+    body = _codex_clear_body(trailer)
+    assert core.review_adoption_acknowledgement(_codex_review_observation(body), HEAD, "b" * 64) is None
+
+
+def test_hidden_blocking_findings_do_not_admit_the_candidate(monkeypatch):
+    """End-to-end: a clear prefix hiding findings is not exact-head review authority."""
+
+    document, _ack = _request_and_ack()
+    body = _codex_clear_body(
+        "\n\n<details>\n<summary>Findings</summary>\n\n- P1 scripts/hunter_review_orchestrator.py:1 "
+        "the trusted dispatch can be driven by a candidate-authored workflow.\n</details>"
+    )
+    _install_governance(monkeypatch, document=document, comments=(_codex_review_observation(body),))
+    monkeypatch.setattr(core, "read_unresolved_review_threads", lambda *a: ((), None))
+    monkeypatch.setattr(core, "check_reviewer_dispositions", lambda: (True, ""))
+
+    state, reason = core.verify_pre_ready_hostile_review("repo", "token", HEAD, PR_NUMBER)
+
+    assert state == "failure"
+    assert "MISSING_REVIEW_AUTHORITY" in reason
 
 
 def test_verified_pool_exhaustion_uses_deterministic_hunter_guard(monkeypatch):

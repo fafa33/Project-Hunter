@@ -62,10 +62,14 @@ def test_governance_review_bootstrap_stays_on_trusted_default_branch() -> None:
     assert "283" not in text
     assert "ref: ${{ github.event.repository.default_branch }}" in text
     assert "persist-credentials: false" in text
-    assert "${GITHUB_WORKSPACE}/engine/scripts/hunter_review_orchestrator.py" in text
-    assert "${GITHUB_WORKSPACE}/scripts/hunter_review_orchestrator.py" not in text
-    assert 'if [ ! -f "${ORCHESTRATOR}" ]; then' in text
     assert "${GITHUB_WORKSPACE}/engine/scripts/hunter_governance_review/" in text
+    # Privileged reviewer orchestration is not reachable from this
+    # `pull_request`-triggered workflow; it runs from the reconcile workflow,
+    # whose file GitHub always takes from the trusted default branch.
+    assert "hunter_review_orchestrator.py" not in text
+    reconcile = (ROOT / ".github/workflows/hunter-governance-reconcile.yml").read_text(encoding="utf-8")
+    assert "if [ ! -f scripts/hunter_review_orchestrator.py ]; then" in reconcile
+    assert "python scripts/hunter_review_orchestrator.py ensure" in reconcile
 
 
 def test_merge_readiness_docs_name_only_current_risk_inputs() -> None:

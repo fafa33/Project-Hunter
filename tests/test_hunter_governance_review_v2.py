@@ -173,11 +173,20 @@ def test_workflow_uses_only_trusted_v2_controller_with_safe_bootstrap():
     assert "persist-credentials: false" in workflow
     assert 'PR_NUMBER} = "283"' not in workflow
     assert "python -m hunter_governance_review" not in workflow
-    assert "${GITHUB_WORKSPACE}/engine/scripts/hunter_review_orchestrator.py" in workflow
-    assert "${GITHUB_WORKSPACE}/scripts/hunter_review_orchestrator.py" not in workflow
-    assert 'if [ ! -f "${ORCHESTRATOR}" ]; then' in workflow
-    assert "Governance review above handled review authority" in workflow
+    # Privileged orchestration moved to the reconcile workflow, which has no
+    # `pull_request` trigger: a `pull_request` run executes the candidate's own
+    # copy of this file, so `actions: write` here would be candidate-reachable.
+    assert "hunter_review_orchestrator.py" not in workflow
+    assert "actions: write" not in workflow
+    assert "actions: read" in workflow
     assert "hunter_governance_review_v2.py" in workflow
+
+    reconcile = (
+        Path(__file__).resolve().parents[1] / ".github" / "workflows" / "hunter-governance-reconcile.yml"
+    ).read_text(encoding="utf-8")
+    assert "actions: write" in reconcile
+    assert "python scripts/hunter_review_orchestrator.py ensure" in reconcile
+    assert "if [ ! -f scripts/hunter_review_orchestrator.py ]; then" in reconcile
 
 
 def test_reconcile_continues_after_one_pr_failure_and_drops_checkout_credentials():

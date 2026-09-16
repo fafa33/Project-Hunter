@@ -26,6 +26,10 @@ import hunter_pre_ready_review as review
 WORKFLOW = ".github/workflows/hunter-reviewer-collector.yml"
 SCHEMA = "hunter.reviewer-collection.v1"
 LIMIT = 2_000_000
+#: The run-name prefix the local reviewer workflow renders before the dispatch's
+#: correlation identity. The workflow and this selector must agree, so the
+#: correlation is asserted by test rather than only by convention.
+LOCAL_REVIEW_RUN_NAME_PREFIX = "Hunter Local Reviewer "
 
 
 def configuration_digest(pool: dict[str, Any]) -> str:
@@ -245,11 +249,34 @@ class GitHubBackend:
     def sleep(self, seconds: float) -> None:
         time.sleep(seconds)
 
+    def correlation_id(self, agent: dict[str, Any], number: int) -> str:
+        """A unique identity for this exact dispatch of this exact attempt.
+
+        Bound to the collector run and attempt, the candidate head, the reviewer
+        and the attempt number, so no two invocations -- across retries, collector
+        re-runs, or candidates -- can share one.
+        """
+
+        material = "/".join(
+            (
+                SCHEMA,
+                self.repository,
+                str(self.pr),
+                self.expected_head,
+                str(self.run_id),
+                str(self.run_attempt),
+                str(agent.get("id") or ""),
+                str(number),
+            )
+        )
+        return hashlib.sha256(material.encode()).hexdigest()
+
     def trigger(self, agent: dict[str, Any], number: int) -> dict[str, Any]:
         method = str(agent.get("trigger_method") or "")
         if method.startswith("github-workflow:"):
             workflow = method.split(":", 1)[1]
             created_at = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
+            correlation = self.correlation_id(agent, number)
             governance.request_json(
                 self.repository,
                 self.token,
@@ -261,10 +288,18 @@ class GitHubBackend:
                         "pr_number": str(self.pr),
                         "head_sha": self.expected_head,
                         "claims_id": self.claims_id,
+                        "correlation_id": correlation,
                     },
                 },
             )
-            return {"id": 0, "created_at": created_at, "kind": "local-workflow", "workflow": workflow, "number": number}
+            return {
+                "id": 0,
+                "created_at": created_at,
+                "kind": "local-workflow",
+                "workflow": workflow,
+                "number": number,
+                "correlation_id": correlation,
+            }
         body = trigger_body(self.expected_head, self.claims_id, agent, self.run_id, self.run_attempt, number)
         result = governance.request_json(
             self.repository, self.token, "POST", f"issues/{self.pr}/comments", {"body": body}
@@ -274,19 +309,32 @@ class GitHubBackend:
         return result
 
     def _local_run(self, trigger: dict[str, Any]) -> dict[str, Any] | None:
+        """The workflow run this exact dispatch produced, or nothing.
+
+        Selection is by the dispatch's own correlation identity, which the
+        workflow renders as its run name. Timestamp, event and branch are shared
+        by every dispatch of this workflow, so a concurrent candidate's run, an
+        earlier attempt's run, or a manual dispatch could otherwise be read as
+        this attempt's acknowledgement and completion.
+        """
+
         workflow = str(trigger.get("workflow") or "hunter-local-reviewer.yml")
+        correlation = str(trigger.get("correlation_id") or "")
+        if not correlation:
+            return None
         payload = governance.request_json(
             self.repository,
             self.token,
             "GET",
-            f"actions/workflows/{workflow}/runs?event=workflow_dispatch&branch=main&per_page=20",
+            f"actions/workflows/{workflow}/runs?event=workflow_dispatch&branch=main&per_page=50",
         )
         runs = payload.get("workflow_runs", []) if isinstance(payload, dict) else []
+        expected = LOCAL_REVIEW_RUN_NAME_PREFIX + correlation
         candidates = [
             run
             for run in runs
             if isinstance(run, dict)
-            and str(run.get("created_at") or "") >= str(trigger.get("created_at") or "")
+            and str(run.get("display_title") or run.get("name") or "") == expected
             and str(run.get("event") or "") == "workflow_dispatch"
             and str(run.get("head_branch") or "") == "main"
         ]

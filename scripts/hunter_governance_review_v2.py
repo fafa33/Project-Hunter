@@ -399,6 +399,36 @@ def review_acknowledgement(body: str) -> dict[str, Any] | None:
     return value
 
 
+_COLLAPSIBLE_TRAILER = re.compile(r"(?s)\A\s*(?:<details>(?:(?!<details>).)*?</details>\s*)*\Z")
+_FINDING_STRUCTURE = re.compile(
+    r"(?im)^\s*(?:[-*+]\s|\d+[.)]\s|#{1,6}\s)"  # a rendered finding list item or heading
+    r"|\bP[0-4]\b"  # a Codex severity badge
+    r"|/blob/[0-9a-f]{7,40}/"  # a linked code location
+    r"|[\w./-]+\.[A-Za-z0-9]+:\d+"  # a path:line citation
+)
+
+
+def _adoptable_clear_trailer(remainder: str) -> bool:
+    """Whether content following a Codex clear declaration can be ignored safely.
+
+    Truncating the body at the first ``<details>`` accepted a conforming clear
+    prefix while never reading what followed it, so blocking findings rendered
+    inside a collapsed section were adopted as a clear verdict. Everything after
+    the declaration is therefore validated rather than discarded: only complete,
+    non-nested collapsible sections may follow, and none of them may carry the
+    structure Codex renders an actual finding with (list items, headings,
+    severity badges, linked code locations, or path:line citations). Any other
+    trailing content is unvalidated review substance, so the body is not
+    adoptable and governance keeps waiting for admissible authority.
+    """
+
+    if not remainder.strip():
+        return True
+    if _COLLAPSIBLE_TRAILER.fullmatch(remainder) is None:
+        return False
+    return _FINDING_STRUCTURE.search(remainder) is None
+
+
 def review_adoption_acknowledgement(
     observation: dict[str, Any], head_sha: str, claims_id: str
 ) -> dict[str, Any] | None:
@@ -422,13 +452,14 @@ def review_adoption_acknowledgement(
     ):
         return None
     body = str(observation.get("body") or "").strip()
-    primary = body.split("<details>", 1)[0].strip()
-    match = re.fullmatch(
+    match = re.match(
         r"Codex Review:\s*Didn't find any major issues\.(?:\s*Bravo\.)?\s+"
         r"\*\*Reviewed commit:\*\*\s*`([0-9a-f]{7,40})`",
-        primary,
+        body,
     )
     if match is None or not head_sha.startswith(match.group(1)):
+        return None
+    if not _adoptable_clear_trailer(body[match.end() :]):
         return None
     return {
         "schema": "hunter.review-ack.v1",

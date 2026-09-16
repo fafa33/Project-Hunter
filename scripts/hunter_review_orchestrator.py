@@ -8,11 +8,13 @@ import json
 import os
 import sys
 from dataclasses import dataclass, replace
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 from urllib.parse import urlparse
 
 import hunter_github_transport as transport
+import hunter_pre_ready_review as pre_ready
 
 CONTEXT_PREFIX = "Hunter Review Orchestration / PR #"
 COLLECTOR_CONTEXT_PREFIX = "Hunter Reviewer Collector / PR #"
@@ -27,6 +29,17 @@ TRUSTED_WORKFLOWS = frozenset(
         ".github/workflows/hunter-governance-reconcile.yml",
     }
 )
+#: Run states GitHub reports for a dispatched run that has been accepted and has
+#: not finished. A collector in one of these is alive, so re-dispatching it would
+#: only duplicate work.
+ACTIVE_RUN_STATES = frozenset({"queued", "in_progress", "waiting", "requested", "pending"})
+#: A dead collector is re-dispatched, but never without bound: a cycle that keeps
+#: failing must settle into a blocked pending state rather than dispatch forever.
+MAX_COLLECTOR_DISPATCHES = 3
+#: A dispatch GitHub has accepted is not listed instantly. Liveness is judged
+#: only once the cycle is older than this, so an ordinary listing lag cannot be
+#: mistaken for a dead collector and duplicate the dispatch.
+COLLECTOR_LIVENESS_GRACE_SECONDS = 180
 PENDING_STATES = frozenset({"WAITING_FOR_REVIEWER", "REVIEW_IN_PROGRESS", "FAILOVER_IN_PROGRESS", "POOL_EXHAUSTED"})
 
 
@@ -49,7 +62,24 @@ class ProviderDecision:
 
 
 def runner_state(repository: str, token: str, label: str = "hunter-reviewer") -> str:
-    payload = request_json(repository, token, "GET", "actions/runners?per_page=100")
+    """Self-hosted runner availability, or ``unknown`` when it cannot be read.
+
+    The repository runner endpoint needs Administration:read, which the Actions
+    ``GITHUB_TOKEN`` is never granted, so a trusted caller can legitimately get
+    403/404 here. Crashing on that answer would fail the whole collector run for
+    a probe that is only an optimisation, and treating it as ``offline`` would
+    let an unreadable probe skip a reviewer that is actually available. Neither
+    is governance evidence: ``unknown`` proceeds to the real authenticated
+    invocation, whose acknowledgement budget still fails closed if the runner is
+    genuinely absent.
+    """
+
+    try:
+        payload = request_json(repository, token, "GET", "actions/runners?per_page=100")
+    except transport.GitHubRequestError as exc:
+        if exc.status_code in {401, 403, 404}:
+            return "unknown"
+        raise
     runners = payload.get("runners", []) if isinstance(payload, dict) else []
     matches = []
     for runner in runners if isinstance(runners, list) else []:
@@ -66,20 +96,51 @@ def runner_state(repository: str, token: str, label: str = "hunter-reviewer") ->
     return "busy" if all(bool(runner.get("busy")) for runner in online) else "online"
 
 
+def first_pool_provider() -> str:
+    """The first enabled reviewer the trusted pool orders, authority or triage."""
+
+    pool, error = pre_ready.load_reviewer_pool()
+    if pool is None or error:
+        raise RuntimeError(f"reviewer pool unavailable: {error}")
+    reviewers = pre_ready.enabled_pool_reviewers(pool)
+    return str(reviewers[0]["id"]) if reviewers else str(pool["last_resort"])
+
+
+def next_authority_provider(after: str | None = None) -> str:
+    """The next hop the trusted pool actually declares, never a retired name.
+
+    Failover order is pool configuration, so it is read from the pool instead of
+    being spelled out here: a hard-coded provider silently survives the provider
+    leaving the pool and sends the cycle to a reviewer that no longer exists,
+    skipping the hosted authority that replaced it. Only authority-eligible
+    reviewers can terminate the authority search, so triage-only reviewers are
+    never a failover destination; when none remain, the declared last-resort
+    guard closes the pool.
+    """
+
+    pool, error = pre_ready.load_reviewer_pool()
+    if pool is None or error:
+        raise RuntimeError(f"reviewer pool unavailable: {error}")
+    candidates = [str(agent["id"]) for agent in pre_ready.authority_pool_reviewers(pool)]
+    if after is not None and after in candidates:
+        candidates = candidates[candidates.index(after) + 1 :]
+    return candidates[0] if candidates else str(pool["last_resort"])
+
+
 def select_provider(repository: str, token: str) -> ProviderDecision:
     state = runner_state(repository, token)
     if state in {"offline", "missing"}:
-        return ProviderDecision("FAILOVER_IN_PROGRESS", "opencode", state)
-    return ProviderDecision("REVIEW_IN_PROGRESS", "local-ollama", state)
+        return ProviderDecision("FAILOVER_IN_PROGRESS", next_authority_provider(), state)
+    return ProviderDecision("REVIEW_IN_PROGRESS", first_pool_provider(), state)
 
 
 def wait_for_local_ack(backend: Any, *, timeout: int = 30) -> ProviderDecision:
     deadline = backend.now() + timeout
     while backend.now() < deadline:
         if backend.started():
-            return ProviderDecision("REVIEW_IN_PROGRESS", "local-ollama", "started")
+            return ProviderDecision("REVIEW_IN_PROGRESS", first_pool_provider(), "started")
         backend.sleep(min(2, deadline - backend.now()))
-    return ProviderDecision("FAILOVER_IN_PROGRESS", "opencode", "unresponsive")
+    return ProviderDecision("FAILOVER_IN_PROGRESS", next_authority_provider(), "unresponsive")
 
 
 def classify_cycle(cycle: ReviewCycle, current_head: str) -> str:
@@ -263,6 +324,92 @@ def dispatch_collector(repository: str, token: str, pr_number: int, head_sha: st
     )
 
 
+def collector_run_name(pr_number: int, head_sha: str) -> str:
+    """The run name the collector workflow renders for this exact dispatch.
+
+    The collector workflow derives its ``run-name`` from the same two inputs, so
+    a run carrying this name is a run dispatched for this pull request at this
+    exact head. GitHub does not report workflow-dispatch inputs on the run, and
+    timestamps or event kind alone would also match an unrelated dispatch.
+    """
+
+    return f"Hunter Reviewer Collector PR {pr_number} HEAD {head_sha}"
+
+
+def collector_runs(repository: str, token: str, pr_number: int, head_sha: str) -> list[dict[str, Any]]:
+    payload = request_json(
+        repository, token, "GET", f"actions/workflows/{COLLECTOR_WORKFLOW}/runs?event=workflow_dispatch&per_page=50"
+    )
+    runs = payload.get("workflow_runs", []) if isinstance(payload, dict) else []
+    expected = collector_run_name(pr_number, head_sha)
+    return [
+        run
+        for run in runs
+        if isinstance(run, dict)
+        and str(run.get("display_title") or run.get("name") or "") == expected
+        and str(run.get("path") or "") == COLLECTOR_WORKFLOW_PATH
+    ]
+
+
+def collector_liveness(repository: str, token: str, pr_number: int, head_sha: str) -> tuple[str, int]:
+    """Whether a collector for this exact cycle is running or already succeeded."""
+
+    runs = collector_runs(repository, token, pr_number, head_sha)
+    for run in runs:
+        status = str(run.get("status") or "")
+        if status in ACTIVE_RUN_STATES:
+            return "active", len(runs)
+        if status == "completed" and str(run.get("conclusion") or "") == "success":
+            return "completed", len(runs)
+    return ("dead" if runs else "missing"), len(runs)
+
+
+def _older_than(started_at: str, seconds: int) -> bool:
+    try:
+        started = datetime.fromisoformat(started_at.replace("Z", "+00:00"))
+    except ValueError:
+        return False
+    if started.tzinfo is None:
+        started = started.replace(tzinfo=UTC)
+    return (datetime.now(UTC) - started).total_seconds() >= seconds
+
+
+def collector_needs_dispatch(repository: str, token: str, cycle: ReviewCycle) -> bool:
+    """Whether a pending cycle has no live collector and may be re-dispatched.
+
+    A recorded trigger id is only proof that this orchestrator asked for a
+    collector; it is not proof that the collector exists, is running, or
+    finished. A dispatch that failed, was cancelled, or never produced a run
+    would otherwise park the cycle in a pending state forever, because the
+    trigger id alone suppressed every later dispatch. Liveness is therefore read
+    from the collector runs correlated to this exact pull request and head.
+
+    Re-dispatch stays bounded on both sides: nothing is re-dispatched inside the
+    listing grace period, so an accepted-but-unlisted run is not duplicated, and
+    a cycle that has already consumed its dispatch budget stays pending rather
+    than dispatching without end.
+    """
+
+    if not _older_than(cycle.started_at, COLLECTOR_LIVENESS_GRACE_SECONDS):
+        return False
+    try:
+        liveness, count = collector_liveness(repository, token, cycle.pr_number, cycle.head_sha)
+    except transport.GitHubRequestError as exc:
+        # Unreadable liveness evidence is not evidence of a dead collector.
+        print(f"Collector liveness evidence unavailable; not re-dispatching: {exc}", file=sys.stderr)
+        return False
+    if liveness in {"active", "completed"}:
+        return False
+    if count >= MAX_COLLECTOR_DISPATCHES:
+        print(
+            f"Collector dispatch budget exhausted for PR #{cycle.pr_number} at {cycle.head_sha[:10]} "
+            f"after {count} runs; review remains pending.",
+            file=sys.stderr,
+        )
+        return False
+    return True
+
+
 def publish_cycle(
     repository: str,
     token: str,
@@ -293,7 +440,9 @@ def ensure_collector(repository: str, token: str, pr_number: int, head_sha: str)
     digest = reviewer_pool_config_digest()
     state, existing, _error = read_cycle(repository, token, pr_number, head_sha)
     if state == "present" and existing is not None and existing.config_digest == digest:
-        if existing.trigger_id is not None or existing.state in {"REVIEW_CLEAR", "FINDINGS_OPEN", "POOL_EXHAUSTED"}:
+        if existing.state in {"REVIEW_CLEAR", "FINDINGS_OPEN", "POOL_EXHAUSTED"}:
+            return existing
+        if existing.trigger_id is not None and not collector_needs_dispatch(repository, token, existing):
             return existing
 
     cycle = ReviewCycle(

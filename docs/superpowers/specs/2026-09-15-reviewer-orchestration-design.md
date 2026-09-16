@@ -2,7 +2,12 @@
 
 **Date:** 2026-09-15
 **Authority:** Issue #461 stabilization work
-**Status:** Owner-approved; implementation planning authorized
+**Status:** Owner-approved; implementation planning authorized. The goal,
+constraints, state machine, and timing model below remain current. Individual
+provider names in "Reviewer pool" are **superseded** by the shipped pool: the
+canonical, machine-checked pool is
+`docs/CODE_WRITE_POLICY.json` → `review_progression.review_authority.reviewer_pool`,
+and that declaration governs wherever this document and the policy differ.
 
 ## Goal
 
@@ -24,12 +29,20 @@ The reviewer path must cost the owner nothing beyond already-available services 
 
 ## Reviewer pool
 
-The pool is ordered by availability and cost, not by brand prestige:
+The pool is ordered by availability and cost, not by brand prestige.
 
-1. **Local/self-hosted reviewer on the Mac** — preferred when its heartbeat is fresh and it can acknowledge work immediately. It must expose authenticated health and exact-head review results to Hunter. Its implementation/model may change without changing orchestration semantics.
-2. **Jules** — free hosted fallback while its daily quota is available. It must be invoked only after the local reviewer is unavailable/unresponsive or policy requires hosted corroboration.
-3. **Codex** — selective deep reviewer for root-of-trust/governance changes, ambiguous findings, disagreement, or when earlier reviewers are unavailable. It is not consumed for every routine PR by default.
-4. **OpenCode hostile-review guard** — last resort only after all enabled higher-priority reviewers have authenticated exhaustion evidence and existing snapshot gates hold.
+**Shipped pool (authoritative, as declared in `docs/CODE_WRITE_POLICY.json`):**
+
+1. **`local-ollama`** — free first-pass reviewer on the Mac self-hosted runner, priority 1, enabled. It is **triage-only**: its required quality gate (`hunter-local-reviewer-v1`) has not passed, so it declares `authority_eligible: false` and cannot terminate the authority search. Its implementation/model may change without changing orchestration semantics.
+2. **`codex`** — hosted authority reviewer, priority 2, enabled. It is the authority fallback reached whenever the triage reviewer is offline, unresponsive, or has spent its budget; it is never skipped on the way to the last resort.
+3. **`hunter-guard`** — deterministic non-reviewer last resort, admissible only after every authority-eligible reviewer has authenticated exhaustion evidence and the existing snapshot gates hold.
+
+**Superseded design intent (historical, not shipped):** an earlier draft of this
+section listed **Jules** as a free hosted fallback stage and named the
+**OpenCode hostile-review guard** as the last resort. Neither is an active stage:
+Jules was never admitted to the pool, and the last resort is the deterministic
+`hunter-guard`. They are recorded here only so the history of this design is
+readable, and they carry no authority.
 
 CodeRabbit, Copilot Free, and retired consumer Gemini PR review are not part of the dependable pool because their usable automatic-review capacity is not reliably available without additional cost.
 
@@ -57,7 +70,7 @@ Provider timing has two distinct budgets:
 - **Availability/acknowledgement budget:** short. It answers only "did the provider receive and begin this review?" Local reviewer target: 20–30 seconds after a fresh heartbeat. Hosted reviewer target: 60–90 seconds. One bounded retry is permitted only for authenticated transient infrastructure failure.
 - **Review execution budget:** separate. Once a provider has acknowledged the exact-head job, the system waits for the substantive review without treating ordinary execution time as unavailability. Progress remains `pending`. A provider-specific hard ceiling still exists to prevent indefinite hangs, but this ceiling is not reused as the acknowledgement timeout.
 
-The current 900-second Codex timeout must not remain the first signal for provider availability. A reviewer that has not acknowledged in the short availability window yields to the next eligible provider instead of parking the PR for 15–30 minutes.
+A single long review timeout must not remain the first signal for provider availability. The shipped pool implements this split: each enabled reviewer declares `ack_timeout_seconds` (30) separately from `review_timeout_seconds` (300). A reviewer that has not acknowledged in the short availability window yields to the next eligible provider instead of parking the PR for 15–30 minutes.
 
 When a new commit changes HEAD, all prior pending/clear review authority becomes stale. The trusted orchestrator cancels or supersedes the previous cycle, creates one new exact-head cycle, and triggers review without manual intervention.
 
@@ -113,7 +126,7 @@ The implementation must add deterministic tests before production changes for at
 - changed HEAD supersedes the previous cycle and cannot reuse stale authority or exhaustion;
 - blocking findings remain blocking until corrected on a new HEAD with regression evidence;
 - complete pool exhaustion fails closed;
-- last-resort OpenCode remains unavailable unless its existing snapshot gates are satisfied.
+- the last-resort deterministic guard (`hunter-guard`) remains unavailable unless its existing snapshot gates are satisfied.
 
 The relevant recurrence-prevention evidence is registered under the existing Issue #461 / DFF-022 authority unless implementation uncovers a genuinely distinct defect family. Do not create one issue per symptom.
 

@@ -1,5 +1,11 @@
 name: Hunter Reviewer Collector
 
+# The run name carries the exact dispatch identity. GitHub does not report
+# workflow-dispatch inputs on a run, so the trusted orchestrator correlates a
+# run to this pull request and head through this name rather than through
+# timestamps, which would also match an unrelated dispatch.
+run-name: Hunter Reviewer Collector PR ${{ inputs.pr_number }} HEAD ${{ inputs.head_sha }}
+
 on:
   workflow_dispatch:
     inputs:
