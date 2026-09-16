@@ -87,7 +87,9 @@ def _controller_missing(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None
 
 def _controller_present(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     del tmp_path
-    monkeypatch.setattr(governance, "request_json", lambda *_args, **_kwargs: {"type": "file"})
+    monkeypatch.setattr(
+        governance, "request_json", lambda *_args, **_kwargs: {"type": "file", "path": bridge.TRUSTED_CONTROLLER_PATH}
+    )
 
 
 def test_trusted_bridge_publishes_bootstrap_pending_instead_of_missing_review_authority(
@@ -347,3 +349,46 @@ def test_candidate_bootstrap_rejects_unavailable_controller_evidence(monkeypatch
     monkeypatch.setattr(bridge, "_install_bootstrap_patch", lambda *_args: pytest.fail("must not install authority"))
     with pytest.raises(RuntimeError, match="503"):
         bridge.candidate_mode(REPOSITORY, "token", 473, HEAD)
+
+
+@pytest.mark.parametrize(
+    "state,body", [("COMMENTED", "Blocking finding remains"), ("CHANGES_REQUESTED", "Fix authority"), ("DISMISSED", "")]
+)
+def test_latest_review_revokes_prior_clear_bootstrap_authority(monkeypatch, state, body):
+    clear = {
+        "id": 1,
+        "user": {"login": "chatgpt-codex-connector[bot]"},
+        "commit_id": HEAD,
+        "state": "COMMENTED",
+        "body": "### Codex Review\nDidn't find any major issues.\n**Reviewed commit:** `0a82ede`",
+    }
+    newer = {**clear, "id": 2, "state": state, "body": body}
+    monkeypatch.setattr(bridge, "_paged_reviews", lambda *_args: (newer, clear))
+    assert bridge._exact_head_codex_review(REPOSITORY, "token", 473, HEAD) is None
+
+
+def test_later_clear_review_can_restore_bootstrap_authority(monkeypatch):
+    finding = {
+        "id": 1,
+        "user": {"login": "chatgpt-codex-connector[bot]"},
+        "commit_id": HEAD,
+        "state": "COMMENTED",
+        "body": "Blocking finding",
+    }
+    clear = {
+        **finding,
+        "id": 2,
+        "body": "### Codex Review\nDidn't find any major issues.\n**Reviewed commit:** `0a82ede`",
+    }
+    monkeypatch.setattr(bridge, "_paged_reviews", lambda *_args: (clear, finding))
+    assert bridge._exact_head_codex_review(REPOSITORY, "token", 473, HEAD) == clear
+
+
+@pytest.mark.parametrize("path", [None, "", 123])
+def test_controller_requires_explicit_path_evidence(monkeypatch, path):
+    payload = {"type": "file"}
+    if path is not None:
+        payload["path"] = path
+    monkeypatch.setattr(governance, "request_json", lambda *_args: payload)
+    with pytest.raises(RuntimeError, match="malformed"):
+        bridge._trusted_controller_on_default_branch(REPOSITORY, "token")

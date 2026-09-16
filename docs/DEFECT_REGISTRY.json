@@ -1096,7 +1096,10 @@
         "tests/test_hunter_reviewer_collector.py::test_collector_workflow_can_write_pr_conversation_triggers",
         "tests/test_pr473_trusted_bridge_bootstrap.py::test_candidate_bootstrap_retires_with_trusted_controller",
         "tests/test_pr473_trusted_bridge_bootstrap.py::test_bootstrap_requires_actual_authenticated_bot_login",
-        "tests/test_pr473_trusted_bridge_bootstrap.py::test_candidate_bootstrap_rejects_unavailable_controller_evidence"
+        "tests/test_pr473_trusted_bridge_bootstrap.py::test_candidate_bootstrap_rejects_unavailable_controller_evidence",
+        "tests/test_pr473_trusted_bridge_bootstrap.py::test_latest_review_revokes_prior_clear_bootstrap_authority",
+        "tests/test_pr473_trusted_bridge_bootstrap.py::test_later_clear_review_can_restore_bootstrap_authority",
+        "tests/test_pr473_trusted_bridge_bootstrap.py::test_controller_requires_explicit_path_evidence"
       ],
       "lifecycle": "regression-tested",
       "sources": [

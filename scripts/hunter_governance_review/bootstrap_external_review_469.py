@@ -74,8 +74,8 @@ def _trusted_controller_on_default_branch(repository: str, token: str) -> bool:
         raise
     if not isinstance(payload, dict) or payload.get("type") != "file":
         raise RuntimeError("trusted controller evidence is malformed: expected file payload")
-    path = str(payload.get("path") or TRUSTED_CONTROLLER_PATH).strip()
-    if path != TRUSTED_CONTROLLER_PATH:
+    path = payload.get("path")
+    if not isinstance(path, str) or path != TRUSTED_CONTROLLER_PATH:
         raise RuntimeError("trusted controller evidence is malformed: path mismatch")
     return True
 
@@ -151,20 +151,19 @@ def _exact_head_codex_review(
         user = review.get("user") if isinstance(review.get("user"), dict) else {}
         login = str((user or {}).get("login") or "").strip().lower()
         commit_id = str(review.get("commit_id") or "").strip().lower()
-        state = str(review.get("state") or "").strip().upper()
-        body = str(review.get("body") or "").strip()
         if login != CODEX_LOGIN:
             continue
         if commit_id != head_sha.strip().lower():
             continue
-        if state not in {"COMMENTED", "APPROVED"}:
-            continue
-        if not _native_codex_clear_review(body, head_sha):
-            continue
         matches.append(review)
     if not matches:
         return None
-    return max(matches, key=lambda item: int(item.get("id") or 0))
+    latest = max(matches, key=lambda item: int(item.get("id") or 0))
+    if str(latest.get("state") or "").strip().upper() not in {"COMMENTED", "APPROVED"}:
+        return None
+    if not _native_codex_clear_review(str(latest.get("body") or ""), head_sha):
+        return None
+    return latest
 
 
 def _canonical_changes(
