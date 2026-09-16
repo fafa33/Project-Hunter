@@ -340,14 +340,19 @@ def candidate_mode(repository: str, token: str, pr_number: int, expected_head_sh
 
 def readiness_mode(repository: str, token: str) -> int:
     if repository == TARGET_REPOSITORY:
-        try:
-            pr = governance.read_mergeability(repository, token, TARGET_PR)
-            if pr.get("state") == "open":
-                head_sha = str((pr.get("head") or {}).get("sha") or "").strip()
-                if head_sha:
-                    _install_bootstrap_patch(repository, token, TARGET_PR, head_sha)
-        except Exception as exc:
-            print(f"Bootstrap evidence unavailable; continuing fail-closed: {type(exc).__name__}: {exc}")
+        for pr_number in (TARGET_PR, BOOTSTRAP_CONTROLLER_PR):
+            try:
+                pr = governance.read_mergeability(repository, token, pr_number)
+                if pr.get("state") == "open":
+                    head_sha = str((pr.get("head") or {}).get("sha") or "").strip()
+                    if head_sha:
+                        if pr_number == BOOTSTRAP_CONTROLLER_PR and _trusted_controller_on_default_branch(
+                            repository, token
+                        ):
+                            continue
+                        _install_bootstrap_patch(repository, token, pr_number, head_sha)
+            except Exception as exc:
+                print(f"Bootstrap evidence unavailable; continuing fail-closed: {type(exc).__name__}: {exc}")
 
     import hunter_merge_readiness_v2 as readiness
 

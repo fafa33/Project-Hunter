@@ -408,3 +408,20 @@ def test_controller_requires_explicit_path_evidence(monkeypatch, path):
     monkeypatch.setattr(governance, "request_json", lambda *_args: payload)
     with pytest.raises(RuntimeError, match="malformed"):
         bridge._trusted_controller_on_default_branch(REPOSITORY, "token")
+
+
+@pytest.mark.parametrize("controller_present", [True, False])
+def test_readiness_bootstrap_covers_controller_migration_and_self_retires(monkeypatch, controller_present):
+    """Readiness must admit #473 through the same guarded bootstrap and retire once the controller lands."""
+    monkeypatch.setattr(bridge, "_trusted_controller_on_default_branch", lambda *_args: controller_present)
+    monkeypatch.setattr(governance, "read_mergeability", lambda *_args: _pull_request())
+    installed = []
+    monkeypatch.setattr(bridge, "_install_bootstrap_patch", lambda *args: installed.append(args) or True)
+
+    import hunter_merge_readiness_v2 as readiness
+
+    monkeypatch.setattr(readiness, "main", lambda: 0)
+    assert bridge.readiness_mode(REPOSITORY, "token") == 0
+    controller_installs = [call for call in installed if call[2] == bridge.BOOTSTRAP_CONTROLLER_PR]
+    expected = [] if controller_present else [(REPOSITORY, "token", bridge.BOOTSTRAP_CONTROLLER_PR, HEAD)]
+    assert controller_installs == expected
