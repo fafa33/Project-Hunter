@@ -217,10 +217,34 @@
     "issue": "473",
     "review_target": [
       {
+        "blob_sha": "e97ea51fa3ce375fca52ced7423cf6e489137109",
+        "path": "docs/superpowers/plans/2026-09-17-review-orchestration-fast-failover.md",
+        "previous_path": "",
+        "status": "added"
+      },
+      {
+        "blob_sha": "932f1ad65cc1b4ee32c312825a1720d7334e27ca",
+        "path": "docs/superpowers/specs/2026-09-17-review-orchestration-fast-failover-design.md",
+        "previous_path": "",
+        "status": "added"
+      },
+      {
         "blob_sha": "889a6a42b3255c3211fecc0e17ec6d291380db01",
         "path": "tests/test_pr473_trusted_bridge_bootstrap.py",
         "previous_path": "",
         "status": "added"
+      },
+      {
+        "blob_sha": "68851f30f748fc8f5b2a5b9c3ac4cc5ecd6fa320",
+        "path": ".github/workflows/hunter-reviewer-collector.yml",
+        "previous_path": "",
+        "status": "modified"
+      },
+      {
+        "blob_sha": "f629ac11c280be6230b05af79e9e1f395bd65ce2",
+        "path": "docs/CODE_WRITE_POLICY.json",
+        "previous_path": "",
+        "status": "modified"
       },
       {
         "blob_sha": "94da9344899ab9870effe66286b473acfd3144a5",
@@ -235,23 +259,35 @@
         "status": "modified"
       },
       {
-        "blob_sha": "71d9abc2d99aa27a47f4dc3656e337fe076ab9fa",
+        "blob_sha": "2bae347de5cffc3f32b34698be64f592e39293fd",
         "path": "scripts/hunter_governance_review_v2.py",
         "previous_path": "",
         "status": "modified"
       },
       {
-        "blob_sha": "c5cc83d54072c462d232ae37314319d21e9c34ec",
+        "blob_sha": "dfa6130b1c664588d1eed34a1589e29b16fda8a1",
+        "path": "scripts/hunter_reviewer_collector.py",
+        "previous_path": "",
+        "status": "modified"
+      },
+      {
+        "blob_sha": "d31b306ad7530b2b93c33bd3f9f4eba22f0d71bd",
         "path": "tests/test_exact_head_review_authority.py",
+        "previous_path": "",
+        "status": "modified"
+      },
+      {
+        "blob_sha": "12df583a1da62d79fea1f53801417afc51b1081e",
+        "path": "tests/test_hunter_reviewer_collector.py",
         "previous_path": "",
         "status": "modified"
       }
     ],
-    "review_target_digest": "eb3fc8612d56d020730bf90cbc6c32680820034ec05af3847627229a237f8967"
+    "review_target_digest": "6d0108fa490eb837ed12f35341886bddb91841fdb4a60e69b4c75d4d50f356c2"
   },
-  "review_id": "c7b9c7664fec6165613f6f3742f355a46f976364f944754f1d07d820b662dcae",
+  "review_id": "22baa964140b809253c12762b1c46c4040012487592c54a8182192c95beed3a8",
   "review_request": {
-    "claims_id": "c7b9c7664fec6165613f6f3742f355a46f976364f944754f1d07d820b662dcae",
+    "claims_id": "22baa964140b809253c12762b1c46c4040012487592c54a8182192c95beed3a8",
     "schema": "hunter.review-request.v1"
   },
   "schema": "hunter.pre-ready-hostile-review.v1"
