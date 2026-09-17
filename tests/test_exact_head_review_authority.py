@@ -34,9 +34,9 @@ def _attempt(
     *,
     status: str = "exhausted",
     reason: str = "rate-limited at the configured timeout",
-    timeout_seconds: int = 900,
+    timeout_seconds: int = 300,
     failure_class: str = "transient",
-    attempt_count: int = 2,
+    attempt_count: int = 1,
     invocation_reference: str = "actions/runs/6372342596",
 ) -> dict[str, Any]:
     return {
@@ -51,7 +51,7 @@ def _attempt(
 
 
 def _agent(
-    agent_id: str = "codex", *, priority: int = 1, enabled: bool = True, timeout_seconds: int = 900
+    agent_id: str = "codex", *, priority: int = 1, enabled: bool = True, timeout_seconds: int = 300
 ) -> dict[str, Any]:
     return {
         "id": agent_id,
@@ -67,13 +67,13 @@ CODEX_AGENT = _agent()
 ALTERNATE = _agent("alternate-agent-1", priority=2)
 
 
-def _pool(*, agents: tuple = (), last_resort: str = "opencode", retries_per_agent: int = 1) -> dict[str, Any]:
+def _pool(*, agents: tuple = (), last_resort: str = "opencode", retries_per_agent: int = 0) -> dict[str, Any]:
     return {
         "last_resort": last_resort,
         "timeout_policy": {
             "bounded": True,
-            "default_seconds": 900,
-            "max_seconds": 1800,
+            "default_seconds": 300,
+            "max_seconds": 300,
             "retries_per_agent": retries_per_agent,
         },
         "agents": (CODEX_AGENT,) + tuple(agents),
@@ -268,17 +268,17 @@ def test_an_agent_comment_on_an_older_commit_is_not_exact_head_authority(monkeyp
 
 def test_a_fake_timeout_attempt_is_unproven_exhaustion(monkeypatch) -> None:
     _use_pool(monkeypatch, _pool())
-    document = _review_document(authority=_authority("opencode", attempts=[_attempt(timeout_seconds=300)]))
+    document = _review_document(authority=_authority("opencode", attempts=[_attempt(timeout_seconds=299)]))
 
     verdict = _verify(document)
 
     assert verdict.state == "incomplete"
     assert "timeout_seconds" in verdict.reason
-    assert "900" in verdict.reason
+    assert "300" in verdict.reason
 
 
 def test_a_retryable_transient_single_attempt_is_not_exhausted(monkeypatch) -> None:
-    _use_pool(monkeypatch, _pool())
+    _use_pool(monkeypatch, _pool(retries_per_agent=1))
     document = _review_document(
         authority=_authority("opencode", attempts=[_attempt(failure_class="transient", attempt_count=1)])
     )
@@ -345,7 +345,7 @@ def test_exhaustion_failure_kind_distinguishes_unproven_from_unattempted(monkeyp
     pool = _pool()
     _use_pool(monkeypatch, pool)
 
-    fake_timeout = _authority("opencode", attempts=[_attempt(timeout_seconds=300)])
+    fake_timeout = _authority("opencode", attempts=[_attempt(timeout_seconds=299)])
     assert review.exhaustion_failure_kind(pool, fake_timeout, "opencode") == "EXHAUSTION_UNPROVEN"
 
     skipped_pool = _pool(agents=(ALTERNATE,))
@@ -448,7 +448,7 @@ def test_authority_state_pool_not_exhausted_for_a_guard_that_skips_an_alternate(
 
 
 def test_authority_state_exhaustion_unproven_for_fake_timeout_evidence() -> None:
-    doc = _review_document(authority=_authority("opencode", attempts=[_attempt(timeout_seconds=300)]))
+    doc = _review_document(authority=_authority("opencode", attempts=[_attempt(timeout_seconds=299)]))
     guard = ("present", doc, None)
     verdict = _state(
         pool=_pool(),
@@ -938,13 +938,13 @@ def _trusted_exhaustion(monkeypatch, *, outcome="timed_out", **overrides):
         head_sha=HEAD,
         agent_id="codex",
         priority=1,
-        timeout_seconds=900,
+        timeout_seconds=300,
         trigger_method="configured trigger",
         retryable=True,
         evidence_parser="configured parser",
-        retries_per_agent=1,
+        retries_per_agent=0,
         status="exhausted",
-        attempt_count=2,
+        attempt_count=1,
         failure_class="transient",
         outcome=outcome,
     )
@@ -1416,3 +1416,12 @@ def test_current_exact_review_with_inherited_artifact_waits_for_structured_autho
 
     assert state == "failure"
     assert "MISSING_REVIEW_AUTHORITY" in description
+
+
+def test_native_codex_clear_parser_rejects_trailing_blocker():
+    body = (
+        "Codex Review: Didn't find any major issues.\n\n"
+        "**Reviewed commit:** `aaaaaaaaaa`\n"
+        "Blocking finding: exact-head authority can be bypassed"
+    )
+    assert not core.native_codex_clear_review(body, "a" * 40)

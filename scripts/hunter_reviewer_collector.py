@@ -38,6 +38,7 @@ class Backend(Protocol):
     def sleep(self, seconds: float) -> None: ...
     def trigger(self, agent: dict[str, Any], number: int) -> dict[str, Any]: ...
     def responded(self, agent: dict[str, Any], trigger: dict[str, Any]) -> bool: ...
+    def response_state(self, agent: dict[str, Any], trigger: dict[str, Any]) -> str: ...
 
 
 def collect_attempts(pool: dict[str, Any], head: str, backend: Backend) -> list[dict[str, Any]]:
@@ -51,16 +52,17 @@ def collect_attempts(pool: dict[str, Any], head: str, backend: Backend) -> list[
             trigger = backend.trigger(agent, number)
             start = backend.now()
             deadline = start + agent["timeout_seconds"]
-            responded = False
+            state = "waiting"
             while True:
                 if backend.head() != head:
                     raise ValueError("HEAD changed during reviewer invocation")
-                # Even a nonconforming response/reaction proves availability; it
-                # cannot be turned into permission to bypass this reviewer.
-                if backend.responded(agent, trigger):
-                    responded = True
+                state = backend.response_state(agent, trigger)
+                if state in {"clear", "blocking", "unavailable"}:
                     break
+                if state != "waiting":
+                    raise ValueError(f"unsupported reviewer response state: {state}")
                 if backend.now() >= deadline:
+                    state = "timed_out"
                     break
                 backend.sleep(min(15, deadline - backend.now()))
             records.append(
@@ -75,11 +77,13 @@ def collect_attempts(pool: dict[str, Any], head: str, backend: Backend) -> list[
                     "trigger_id": trigger["id"],
                     "trigger_created_at": trigger["created_at"],
                     "elapsed_seconds": backend.now() - start,
-                    "outcome": "responded" if responded else "timed_out",
+                    "outcome": state,
                 }
             )
-            if responded:
+            if state in {"clear", "blocking"}:
                 return records
+            if state == "unavailable":
+                break
     return records
 
 
@@ -160,22 +164,69 @@ class GitHubBackend:
             raise ValueError("GitHub did not confirm actual reviewer invocation")
         return result
 
-    def responded(self, agent: dict[str, Any], trigger: dict[str, Any]) -> bool:
+    @staticmethod
+    def _native_clear(body: str, head: str) -> bool:
+        raw = body.strip()
+        match = re.match(
+            r"Codex Review(?:\s*:\s*|\s+)(?:\n+)?Didn't find any major issues\.[^\n]*\n+"
+            r"\*\*Reviewed commit:\*\*\s*`([0-9a-f]{7,40})`(?:\s*<details>[\s\S]*?</details>)?\s*$",
+            raw,
+        )
+        return bool(match and head.lower().startswith(match.group(1).lower()))
+
+    @staticmethod
+    def _unavailable(body: str) -> bool:
+        text = body.lower()
+        markers = (
+            "usage limit reached",
+            "rate limit",
+            "rate-limited",
+            "temporarily unavailable",
+            "create a codex account and connect to github",
+            "not available",
+        )
+        return any(marker in text for marker in markers)
+
+    def response_state(self, agent: dict[str, Any], trigger: dict[str, Any]) -> str:
         login = governance.reviewer_login(agent)
+        created = str(trigger["created_at"])
         for item in _pages(self.repository, self.token, f"pulls/{self.pr}/reviews"):
-            if (item.get("user") or {}).get("login", "").lower() == login and item.get(
-                "commit_id"
-            ) == self.expected_head:
-                return True
+            if (item.get("user") or {}).get("login", "").lower() != login:
+                continue
+            if str(item.get("submitted_at") or "") < created or item.get("commit_id") != self.expected_head:
+                continue
+            state = str(item.get("state") or "").upper()
+            body = str(item.get("body") or "")
+            if state == "CHANGES_REQUESTED":
+                return "blocking"
+            if state == "APPROVED":
+                return "clear"
+            if state == "COMMENTED" and governance._substantive_review_body(body):
+                if agent.get("id") == "codex" and self._native_clear(body, self.expected_head):
+                    return "clear"
+                return "blocking"
         for item in _pages(self.repository, self.token, f"issues/{self.pr}/comments"):
-            if (item.get("user") or {}).get("login", "").lower() == login and str(
-                item.get("created_at") or ""
-            ) >= trigger["created_at"]:
-                return True
-        for item in _pages(self.repository, self.token, f'issues/comments/{trigger["id"]}/reactions'):
-            if (item.get("user") or {}).get("login", "").lower() == login:
-                return True
-        return False
+            if (item.get("user") or {}).get("login", "").lower() != login:
+                continue
+            if str(item.get("created_at") or "") < created:
+                continue
+            body = str(item.get("body") or "")
+            ack = governance.review_acknowledgement(body)
+            if (
+                ack is not None
+                and ack["head_sha"] == self.expected_head
+                and ack["claims_id"] == self.claims_id
+                and ack.get("collector_run_id") == self.run_id
+            ):
+                return "clear"
+            if agent.get("id") == "codex" and self._native_clear(body, self.expected_head):
+                return "clear"
+            if self._unavailable(body):
+                return "unavailable"
+        return "waiting"
+
+    def responded(self, agent: dict[str, Any], trigger: dict[str, Any]) -> bool:
+        return self.response_state(agent, trigger) in {"clear", "blocking"}
 
 
 class _NoRedirect(urllib.request.HTTPRedirectHandler):
@@ -271,23 +322,32 @@ def load_exhaustion(
             expected_attempt = {
                 k: agent[k] for k in ("priority", "timeout_seconds", "trigger_method", "evidence_parser", "retryable")
             }
-            expected_attempt.update(agent_id=agent["id"], attempt_number=number, outcome="timed_out")
+            expected_attempt.update(agent_id=agent["id"], attempt_number=number)
             elapsed = record.get("elapsed_seconds")
+            outcome = record.get("outcome")
+            elapsed_valid = (
+                type(elapsed) in (int, float)
+                and 0 <= elapsed < 7200
+                and (outcome == "unavailable" or elapsed >= agent["timeout_seconds"])
+            )
             if (
                 any(record.get(k) != v for k, v in expected_attempt.items())
+                or outcome not in {"timed_out", "unavailable"}
                 or type(record.get("priority")) is not int
                 or type(record.get("timeout_seconds")) is not int
                 or type(record.get("retryable")) is not bool
                 or type(record.get("attempt_number")) is not int
-                or type(elapsed) not in (int, float)
-                or not agent["timeout_seconds"] <= elapsed < 7200
+                or not elapsed_valid
             ):
                 raise ValueError("trusted timeout/configuration/retry result mismatch")
             trigger_id = record.get("trigger_id")
             if type(trigger_id) is not int or trigger_id in seen:
                 raise ValueError("duplicate or invalid invocation identity")
             seen.add(trigger_id)
-            trigger = governance.request_json(repository, token, "GET", f"issues/comments/{trigger_id}")
+            try:
+                trigger = governance.request_json(repository, token, "GET", f"issues/comments/{trigger_id}")
+            except Exception as exc:
+                raise ValueError("trusted reviewer trigger evidence is unavailable") from exc
             expected_body = trigger_body(head, receipt["claims_id"], agent, run_id, run["run_attempt"], number)
             if (
                 trigger.get("body") != expected_body
@@ -296,17 +356,27 @@ def load_exhaustion(
                 or trigger.get("issue_url") != f"https://api.github.com/repos/{repository}/issues/{pr}"
             ):
                 raise ValueError("actual trusted reviewer trigger mismatch")
-            if GitHubBackend(repository, token, pr, head, receipt["claims_id"], run_id, run["run_attempt"]).responded(
-                agent, trigger
-            ):
+            live_state = GitHubBackend(
+                repository, token, pr, head, receipt["claims_id"], run_id, run["run_attempt"]
+            ).response_state(agent, trigger)
+            if live_state in {"clear", "blocking"}:
                 raise ValueError("higher-priority reviewer is available; exhaustion cannot be reused")
+            if outcome == "unavailable" and live_state != "unavailable":
+                raise ValueError("recorded reviewer unavailability is no longer verifiable")
+            if outcome == "timed_out" and live_state == "unavailable":
+                raise ValueError("collector timeout receipt disagrees with explicit reviewer unavailability")
+        terminal = records[offset - 1].get("outcome") if count else "timed_out"
         result.append(
             {
                 "agent_id": agent["id"],
                 "status": "exhausted",
-                "reason": "trusted collector timed out every configured invocation",
+                "reason": (
+                    "trusted reviewer reported explicit unavailability"
+                    if terminal == "unavailable"
+                    else "trusted collector timed out every configured invocation"
+                ),
                 "timeout_seconds": agent["timeout_seconds"],
-                "failure_class": "transient",
+                "failure_class": "permanent" if terminal == "unavailable" else "transient",
                 "attempt_count": count,
                 "invocation_reference": f"actions/runs/{run_id}",
             }

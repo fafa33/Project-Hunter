@@ -43,13 +43,13 @@
         "model": "ordered-priority-with-failover",
         "ordering": "strict-priority-first: every enabled reviewer is attempted, in priority order, before any lower-priority reviewer; approved agent reviewers (Tier 2) are handled by the same exact-head-bound evidence pipeline as the primary, and the Hostile-Review guard is the last resort, admissible only when the whole enabled pool is exhausted",
         "last_resort": "opencode",
-        "exhaustion_semantics": "Every enabled higher-priority reviewer must have authenticated exact-head invocation results. The trusted default-branch Hunter Reviewer Collector records actual trigger IDs, the configured timeout and all retries, and immutable artifact provenance. A response proves availability and forbids failover, even if its format is invalid. Candidate prose, skipped reviewers, failed GitHub reads, changed HEAD, wrong configuration, insufficient elapsed time, candidate-ref collector runs, or missing retries fail closed.",
+        "exhaustion_semantics": "Every enabled higher-priority reviewer is invoked exactly once per exact HEAD. Authenticated explicit unavailability fails over immediately; silence is bounded by the configured timeout. Clear or blocking substantive responses stop failover. Trusted collector receipts bind trigger identity, head, timing and terminal outcome; malformed or unavailable evidence fails closed.",
         "timeout_policy": {
           "bounded": true,
-          "default_seconds": 900,
-          "max_seconds": 1800,
-          "retries_per_agent": 1,
-          "retry_scope": "transient infrastructure failures only (rate limit, transport, runner shutdown signal); a repeated or permanent failure records a single exhausted attempt against the bounded timeout"
+          "default_seconds": 300,
+          "max_seconds": 300,
+          "retries_per_agent": 0,
+          "retry_scope": "No automatic retries. Explicit unavailability fails over immediately; silence is bounded to one reviewer timeout."
         },
         "agents": [
           {
@@ -58,8 +58,8 @@
             "enabled": true,
             "trigger_method": "github-pr-comment:@codex review",
             "exact_head_support": true,
-            "timeout_seconds": 900,
-            "retryable": true,
+            "timeout_seconds": 300,
+            "retryable": false,
             "evidence_parser": "github-review-ack.v1",
             "fallback_eligibility": false,
             "note": "Tier 1 primary reviewer. chatgpt-codex-connector[bot] is the only agent-reviewer integration observed on this repository (COMMENTED reviews on PRs #458, #460, #466); every other PR has zero reviews, so the Tier 2 pool is empty until an approved agent reviewer is actually installed on the repository.",
@@ -205,8 +205,7 @@
       "build_backend/",
       "docs/CODE_WRITE_POLICY.json",
       "scripts/hunter_writer_provenance.py",
-      "scripts/hunter_pre_ready_review.py"
-      ,
+      "scripts/hunter_pre_ready_review.py",
       "scripts/hunter_reviewer_collector.py"
     ],
     "root_of_trust_semantics": "The files that decide whether a candidate may be written and admitted at all: the push boundary, the hosted workflows, the canonical gate chain, the connector authorizer, the governance/admission controllers, the merge-readiness controller, the validation-proof identity and reuse authority that decides when an existing proof may stand in for a run, the shared scope and transport primitives they depend on, the packaging/tooling pins that define the gates, and this policy. No capability on this ingress may write them and no scope may unblock them, so a candidate can never rewrite the authority under which it is itself evaluated. Mutating them stays a clone-capable, pre-push-bound, independently reviewed, owner-merged change; the trusted controller always evaluates a candidate against the default-branch version of this policy, so such a change takes effect only after merge and never for its own pull request.",

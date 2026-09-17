@@ -1,6 +1,13 @@
 name: Hunter Reviewer Collector
 
 on:
+  pull_request_target:
+    branches:
+      - main
+    types:
+      - opened
+      - reopened
+      - synchronize
   workflow_dispatch:
     inputs:
       pr_number:
@@ -18,7 +25,7 @@ permissions:
   pull-requests: write
 
 concurrency:
-  group: hunter-reviewer-collector-${{ inputs.pr_number }}
+  group: hunter-reviewer-collector-${{ github.event.pull_request.number || inputs.pr_number }}
   cancel-in-progress: false
 
 jobs:
@@ -34,8 +41,8 @@ jobs:
       - name: Collect actual configured reviewer invocations
         env:
           GITHUB_TOKEN: ${{ github.token }}
-          PR_NUMBER: ${{ inputs.pr_number }}
-          CANDIDATE_HEAD: ${{ inputs.head_sha }}
+          PR_NUMBER: ${{ github.event.pull_request.number || inputs.pr_number }}
+          CANDIDATE_HEAD: ${{ github.event.pull_request.head.sha || inputs.head_sha }}
         run: >-
           python scripts/hunter_reviewer_collector.py
           --pr "$PR_NUMBER" --head "$CANDIDATE_HEAD"
