@@ -1,12 +1,15 @@
 name: Hunter Reviewer Collector
 
-# The run name carries the exact dispatch identity. GitHub does not report
-# workflow-dispatch inputs on a run, so the trusted orchestrator correlates a
-# run to this pull request and head through this name rather than through
-# timestamps, which would also match an unrelated dispatch.
 run-name: Hunter Reviewer Collector PR ${{ inputs.pr_number }} HEAD ${{ inputs.head_sha }}
 
 on:
+  pull_request_target:
+    branches:
+      - main
+    types:
+      - opened
+      - reopened
+      - synchronize
   workflow_dispatch:
     inputs:
       pr_number:
@@ -20,12 +23,11 @@ on:
 
 permissions:
   contents: read
-  actions: write
+  actions: read
   pull-requests: write
-  statuses: write
 
 concurrency:
-  group: hunter-reviewer-collector-${{ inputs.pr_number }}
+  group: hunter-reviewer-collector-${{ github.event.pull_request.number || inputs.pr_number }}
   cancel-in-progress: false
 
 jobs:
@@ -43,24 +45,15 @@ jobs:
           GITHUB_TOKEN: ${{ github.token }}
           GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
           GROQ_API_KEY: ${{ secrets.GROQ_API_KEY }}
-          PR_NUMBER: ${{ inputs.pr_number }}
-          CANDIDATE_HEAD: ${{ inputs.head_sha }}
+          PR_NUMBER: ${{ github.event.pull_request.number || inputs.pr_number }}
+          CANDIDATE_HEAD: ${{ github.event.pull_request.head.sha || inputs.head_sha }}
         run: >-
           python scripts/hunter_reviewer_collector.py
           --pr "$PR_NUMBER" --head "$CANDIDATE_HEAD"
           --output reviewer-results.json
       - uses: actions/upload-artifact@v4
         with:
-          name: hunter-reviewer-results-${{ inputs.head_sha }}-${{ github.run_attempt }}
+          name: hunter-reviewer-results-${{ github.event.pull_request.head.sha || inputs.head_sha }}-${{ github.run_attempt }}
           path: reviewer-results.json
           if-no-files-found: error
           retention-days: 30
-      - name: Publish trusted collector completion
-        env:
-          GITHUB_TOKEN: ${{ github.token }}
-        run: >-
-          python scripts/hunter_review_orchestrator.py collector-complete
-          --repository "${{ github.repository }}"
-          --pr "${{ inputs.pr_number }}"
-          --head "${{ inputs.head_sha }}"
-          --run-id "${{ github.run_id }}"

@@ -27,10 +27,6 @@ WORKFLOW = ".github/workflows/hunter-reviewer-collector.yml"
 SCHEMA = "hunter.reviewer-collection.v1"
 LIMIT = 2_000_000
 EXTERNAL_PROMPT_LIMIT = 350_000
-#: The run-name prefix the local reviewer workflow renders before the dispatch's
-#: correlation identity. The workflow and this selector must agree, so the
-#: correlation is asserted by test rather than only by convention.
-LOCAL_REVIEW_RUN_NAME_PREFIX = "Hunter Local Reviewer "
 
 
 def external_verdict(payload: dict[str, Any]) -> str:
@@ -62,195 +58,89 @@ def configuration_digest(pool: dict[str, Any]) -> str:
     return hashlib.sha256(json.dumps(pool, sort_keys=True, separators=(",", ":")).encode()).hexdigest()
 
 
-def authority_attempt_records(pool: dict[str, Any], records: list[dict[str, Any]]) -> list[dict[str, Any]]:
-    """Return only receipt rows emitted by authority-eligible reviewers."""
-    authority_ids = {str(agent["id"]) for agent in review.authority_pool_reviewers(pool)}
-    return [record for record in records if isinstance(record, dict) and str(record.get("agent_id")) in authority_ids]
-
-
 class Backend(Protocol):
     def head(self) -> str: ...
     def now(self) -> float: ...
     def sleep(self, seconds: float) -> None: ...
     def trigger(self, agent: dict[str, Any], number: int) -> dict[str, Any]: ...
     def responded(self, agent: dict[str, Any], trigger: dict[str, Any]) -> bool: ...
+    def response_state(self, agent: dict[str, Any], trigger: dict[str, Any]) -> str: ...
 
 
 def collect_attempts(pool: dict[str, Any], head: str, backend: Backend) -> list[dict[str, Any]]:
-    records = []
+    records: list[dict[str, Any]] = []
     agents = sorted(review.enabled_pool_reviewers(pool), key=lambda a: a["priority"])
     for agent in agents:
-        availability_fn = getattr(backend, "availability", None)
-        availability_state = availability_fn(agent) if availability_fn is not None else "online"
-        if availability_state in {"offline", "missing"}:
-            records.append(
-                {
-                    "agent_id": agent["id"],
-                    "priority": agent["priority"],
-                    "ack_timeout_seconds": agent["ack_timeout_seconds"],
-                    "review_timeout_seconds": agent["review_timeout_seconds"],
-                    "trigger_method": agent["trigger_method"],
-                    "evidence_parser": agent["evidence_parser"],
-                    "retryable": agent["retryable"],
-                    "attempt_number": 1,
-                    "trigger_id": 0,
-                    "trigger_created_at": "",
-                    "ack_elapsed_seconds": 0,
-                    "elapsed_seconds": 0,
-                    "outcome": "unavailable",
-                    "failure_class": "transient",
-                    "availability_state": availability_state,
-                }
-            )
-            continue
-        count = (
-            1
-            if agent.get("id") == "local-ollama"
-            else 1 + (pool["timeout_policy"]["retries_per_agent"] if agent["retryable"] else 0)
-        )
+        count = 1 + (pool["timeout_policy"]["retries_per_agent"] if agent["retryable"] else 0)
         for number in range(1, count + 1):
             if backend.head() != head:
                 raise ValueError("HEAD changed before reviewer invocation")
-            try:
-                trigger = backend.trigger(agent, number)
-            except governance.transport.GitHubRequestError as exc:
-                if exc.category == "permanent" and exc.status_code == 403:
-                    records.append(
-                        {
-                            "agent_id": agent["id"],
-                            "priority": agent["priority"],
-                            "ack_timeout_seconds": agent["ack_timeout_seconds"],
-                            "review_timeout_seconds": agent["review_timeout_seconds"],
-                            "trigger_method": agent["trigger_method"],
-                            "evidence_parser": agent["evidence_parser"],
-                            "retryable": agent["retryable"],
-                            "attempt_number": number,
-                            "trigger_id": 0,
-                            "trigger_created_at": "",
-                            "ack_elapsed_seconds": 0,
-                            "elapsed_seconds": 0,
-                            "outcome": "unavailable",
-                            "failure_class": "permanent",
-                            "failure_status": 403,
-                            "availability_state": "trigger-denied",
-                        }
-                    )
-                    break
-                raise
+            trigger = backend.trigger(agent, number)
             start = backend.now()
-            ack_deadline = start + agent["ack_timeout_seconds"]
-            ack_fn = getattr(backend, "acknowledged", backend.responded)
-            complete_fn = getattr(backend, "completed", backend.responded)
-            unavailable_fn = getattr(backend, "unavailability", None)
-            acknowledged = False
-            unavailable_reason = None
-            while backend.now() < ack_deadline:
+            deadline = start + agent["timeout_seconds"]
+            state = "waiting"
+            while True:
                 if backend.head() != head:
-                    raise ValueError("HEAD changed during reviewer acknowledgement")
-                unavailable_reason = unavailable_fn(agent, trigger) if unavailable_fn is not None else None
-                if unavailable_reason:
+                    raise ValueError("HEAD changed during reviewer invocation")
+                state = backend.response_state(agent, trigger)
+                if state in {"clear", "blocking", "unavailable"}:
                     break
-                if ack_fn(agent, trigger):
-                    acknowledged = True
+                if state != "waiting":
+                    raise ValueError(f"unsupported reviewer response state: {state}")
+                if backend.now() >= deadline:
+                    state = "timed_out"
                     break
-                backend.sleep(min(5, ack_deadline - backend.now()))
-            ack_elapsed = backend.now() - start
-            if unavailable_reason:
-                records.append(
-                    {
-                        "agent_id": agent["id"],
-                        "priority": agent["priority"],
-                        "ack_timeout_seconds": agent["ack_timeout_seconds"],
-                        "review_timeout_seconds": agent["review_timeout_seconds"],
-                        "trigger_method": agent["trigger_method"],
-                        "evidence_parser": agent["evidence_parser"],
-                        "retryable": agent["retryable"],
-                        "attempt_number": number,
-                        "trigger_id": trigger["id"],
-                        "trigger_created_at": trigger["created_at"],
-                        "ack_elapsed_seconds": ack_elapsed,
-                        "elapsed_seconds": ack_elapsed,
-                        "outcome": "unavailable",
-                        "failure_class": "permanent",
-                        "availability_state": str(unavailable_reason),
-                    }
-                )
-                break
-            if not acknowledged:
-                records.append(
-                    {
-                        "agent_id": agent["id"],
-                        "priority": agent["priority"],
-                        "ack_timeout_seconds": agent["ack_timeout_seconds"],
-                        "review_timeout_seconds": agent["review_timeout_seconds"],
-                        "trigger_method": agent["trigger_method"],
-                        "evidence_parser": agent["evidence_parser"],
-                        "retryable": agent["retryable"],
-                        "attempt_number": number,
-                        "trigger_id": trigger["id"],
-                        "trigger_created_at": trigger["created_at"],
-                        "ack_elapsed_seconds": ack_elapsed,
-                        "elapsed_seconds": ack_elapsed,
-                        "outcome": "unavailable",
-                        "failure_class": "transient",
-                    }
-                )
-                continue
-            review_started_at = backend.now()
-            review_deadline = review_started_at + agent["review_timeout_seconds"]
-            completed = complete_fn(agent, trigger)
-            while not completed and backend.now() < review_deadline:
-                if backend.head() != head:
-                    raise ValueError("HEAD changed during reviewer execution")
-                backend.sleep(min(5, review_deadline - backend.now()))
-                completed = complete_fn(agent, trigger)
+                backend.sleep(min(15, deadline - backend.now()))
             records.append(
                 {
                     "agent_id": agent["id"],
                     "priority": agent["priority"],
-                    "ack_timeout_seconds": agent["ack_timeout_seconds"],
-                    "review_timeout_seconds": agent["review_timeout_seconds"],
+                    "timeout_seconds": agent["timeout_seconds"],
                     "trigger_method": agent["trigger_method"],
                     "evidence_parser": agent["evidence_parser"],
                     "retryable": agent["retryable"],
                     "attempt_number": number,
                     "trigger_id": trigger["id"],
                     "trigger_created_at": trigger["created_at"],
-                    "ack_elapsed_seconds": ack_elapsed,
+                    "collector_run_id": int(trigger.get("collector_run_id") or getattr(backend, "run_id", 0)),
+                    "collector_run_attempt": int(
+                        trigger.get("collector_run_attempt") or getattr(backend, "run_attempt", 0)
+                    ),
                     "elapsed_seconds": backend.now() - start,
-                    "outcome": "responded" if completed else "timed_out",
+                    "outcome": state,
+                    **({k: trigger[k] for k in ("provider", "response_digest", "head_sha") if k in trigger}),
                 }
             )
-            if completed and agent.get("authority_eligible", True):
+            if state in {"clear", "blocking"}:
                 return records
+            if state == "unavailable":
+                break
     return records
 
 
-def valid_run(
-    run: dict[str, Any],
-    run_id: int,
-    branch: str,
-    revision: str,
-    *,
-    repository: str = "",
-    token: str = "",
-) -> bool:
-    run_revision = str(run.get("head_sha") or "")
-    revision_trusted = run_revision == revision
-    if run_revision and revision and not revision_trusted and repository:
-        comparison = governance.request_json(repository, token, "GET", f"compare/{run_revision}...{revision}")
-        revision_trusted = isinstance(comparison, dict) and comparison.get("status") in {"ahead", "identical"}
+def valid_run(run: dict[str, Any], run_id: int, branch: str, revision: str) -> bool:
     return (
         run.get("id") == run_id
         and type(run.get("run_attempt")) is int
         and run["run_attempt"] >= 1
         and run.get("head_branch") == branch
-        and revision_trusted
+        and governance._is_commit_sha(str(run.get("head_sha") or ""))
+        and run.get("head_sha") == revision
         and run.get("path") == WORKFLOW
-        and run.get("event") == "workflow_dispatch"
+        and run.get("event") in {"workflow_dispatch", "pull_request_target"}
         and run.get("status") == "completed"
         and run.get("conclusion") == "success"
     )
+
+
+def _run_on_default_branch_history(repository: str, token: str, branch: str, revision: str) -> bool:
+    tip = governance.request_json(repository, token, "GET", f"commits/{branch}")
+    if not isinstance(tip, dict) or not governance._is_commit_sha(str(tip.get("sha") or "")):
+        raise ValueError("trusted default-branch tip is unavailable")
+    payload = governance.request_json(repository, token, "GET", f"compare/{revision}...{tip['sha']}")
+    if not isinstance(payload, dict):
+        raise ValueError("default-branch ancestry comparison payload is malformed")
+    return str(payload.get("status") or "") in {"ahead", "identical"}
 
 
 def _pages(repository: str, token: str, path: str, key: str | None = None) -> list[dict[str, Any]]:
@@ -265,6 +155,162 @@ def _pages(repository: str, token: str, path: str, key: str | None = None) -> li
         if len(batch) < 100:
             return results
         page += 1
+
+
+def invocation_key(head: str, claims_id: str, agent_id: str, number: int) -> str:
+    return hashlib.sha256(f"{head}:{claims_id}:{agent_id}:{number}".encode()).hexdigest()
+
+
+def api_trigger_payload(
+    head: str, claims_id: str, agent: dict[str, Any], run_id: int, run_attempt: int, number: int
+) -> dict[str, Any]:
+    if not str(agent["trigger_method"]).startswith("api:"):
+        raise ValueError("reviewer has no supported API trigger")
+    return {
+        "schema": "hunter.reviewer-trigger.v1",
+        "head_sha": head,
+        "claims_id": claims_id,
+        "reviewer_agent": str(agent["id"]),
+        "collector_run_id": run_id,
+        "collector_run_attempt": run_attempt,
+        "attempt_number": number,
+        "invocation_key": invocation_key(head, claims_id, str(agent["id"]), number),
+    }
+
+
+def api_trigger_body(
+    head: str, claims_id: str, agent: dict[str, Any], run_id: int, run_attempt: int, number: int
+) -> str:
+    payload = api_trigger_payload(head, claims_id, agent, run_id, run_attempt, number)
+    return (
+        json.dumps(payload, sort_keys=True)
+        + f'\nInvocation key: {payload["invocation_key"]}.'
+        + f'\nCollector invocation: {run_id}/{run_attempt}/{agent["id"]}/{number}.'
+    )
+
+
+def parse_api_trigger(body: str) -> dict[str, Any] | None:
+    raw = body.strip()
+    match = re.fullmatch(
+        r"(?s)(\{.*\})\nInvocation key: ([0-9a-f]{64})\.\nCollector invocation: (\d+)/(\d+)/([a-z0-9_-]+)/(\d+)\.",
+        raw,
+    )
+    if match is None:
+        return None
+    try:
+        value = json.loads(match.group(1))
+    except (TypeError, ValueError):
+        return None
+    if not isinstance(value, dict):
+        return None
+    allowed = {
+        "schema",
+        "head_sha",
+        "claims_id",
+        "reviewer_agent",
+        "collector_run_id",
+        "collector_run_attempt",
+        "attempt_number",
+        "invocation_key",
+    }
+    if set(value) != allowed:
+        return None
+    if value.get("schema") != "hunter.reviewer-trigger.v1":
+        return None
+    if not re.fullmatch(r"[0-9a-f]{40}", str(value.get("head_sha") or "")):
+        return None
+    if not re.fullmatch(r"[0-9a-f]{64}", str(value.get("claims_id") or "")):
+        return None
+    reviewer_agent = str(value.get("reviewer_agent") or "")
+    if reviewer_agent != match.group(5):
+        return None
+    if any(
+        type(value.get(field)) is not int or int(value[field]) <= 0
+        for field in ("collector_run_id", "collector_run_attempt")
+    ):
+        return None
+    if type(value.get("attempt_number")) is not int or value["attempt_number"] <= 0:
+        return None
+    if (
+        value["collector_run_id"] != int(match.group(3))
+        or value["collector_run_attempt"] != int(match.group(4))
+        or value["attempt_number"] != int(match.group(6))
+        or value.get("invocation_key") != match.group(2)
+    ):
+        return None
+    if value["invocation_key"] != invocation_key(
+        value["head_sha"], value["claims_id"], reviewer_agent, value["attempt_number"]
+    ):
+        return None
+    return value
+
+
+def api_result_body(
+    head: str,
+    claims_id: str,
+    agent: dict[str, Any],
+    run_id: int,
+    trigger_id: int,
+    verdict: str,
+    summary: str,
+    digest: str,
+) -> str:
+    return json.dumps(
+        {
+            "schema": "hunter.reviewer-result.v1",
+            "head_sha": head,
+            "claims_id": claims_id,
+            "reviewer_agent": str(agent["id"]),
+            "collector_run_id": run_id,
+            "trigger_id": trigger_id,
+            "verdict": verdict,
+            "summary": summary,
+            "response_digest": digest,
+        },
+        sort_keys=True,
+    )
+
+
+def parse_api_result(body: str) -> dict[str, Any] | None:
+    raw = body.strip()
+    try:
+        value = json.loads(raw)
+    except (TypeError, ValueError):
+        return None
+    if not isinstance(value, dict):
+        return None
+    allowed = {
+        "schema",
+        "head_sha",
+        "claims_id",
+        "reviewer_agent",
+        "collector_run_id",
+        "trigger_id",
+        "verdict",
+        "summary",
+        "response_digest",
+    }
+    if set(value) != allowed:
+        return None
+    if value.get("schema") != "hunter.reviewer-result.v1":
+        return None
+    if not re.fullmatch(r"[0-9a-f]{40}", str(value.get("head_sha") or "")):
+        return None
+    if not re.fullmatch(r"[0-9a-f]{64}", str(value.get("claims_id") or "")):
+        return None
+    if str(value.get("reviewer_agent") or "") not in {"gemini", "groq"}:
+        return None
+    if type(value.get("collector_run_id")) is not int or value["collector_run_id"] <= 0:
+        return None
+    if type(value.get("trigger_id")) is not int or value["trigger_id"] <= 0:
+        return None
+    if value.get("verdict") not in {"clear", "blocking", "unavailable"}:
+        return None
+    if not isinstance(value.get("summary"), str):
+        return None
+    if not re.fullmatch(r"[0-9a-f]{64}", str(value.get("response_digest") or "")):
+        return None
+    return value
 
 
 def trigger_body(head: str, claims_id: str, agent: dict[str, Any], run_id: int, run_attempt: int, number: int) -> str:
@@ -286,7 +332,33 @@ def trigger_body(head: str, claims_id: str, agent: dict[str, Any], run_id: int, 
         "reply with only this JSON result, filling in your own substantive summary: "
         + json.dumps(ack)
         + f'\nCollector invocation: {run_id}/{run_attempt}/{agent["id"]}/{number}.'
+        + f'\nInvocation key: {invocation_key(head, claims_id, str(agent["id"]), number)}.'
     )
+
+
+def parse_native_trigger(body: str) -> dict[str, Any] | None:
+    """Parse Hunter's canonical authenticated GitHub reviewer trigger."""
+    match = re.search(
+        r"Review exact HEAD ([0-9a-f]{40}).*?\"claims_id\": \"([0-9a-f]{64})\".*?"
+        r"Collector invocation: (\d+)/(\d+)/([a-z0-9_-]+)/(\d+)\.\n"
+        r"Invocation key: ([0-9a-f]{64})\.",
+        body,
+        re.S,
+    )
+    if match is None:
+        return None
+    head, claims_id, run_id, run_attempt, agent_id, attempt, key = match.groups()
+    number = int(attempt)
+    if key != invocation_key(head, claims_id, agent_id, number):
+        return None
+    return {
+        "head_sha": head,
+        "claims_id": claims_id,
+        "reviewer_agent": agent_id,
+        "collector_run_id": int(run_id),
+        "collector_run_attempt": int(run_attempt),
+        "attempt_number": number,
+    }
 
 
 class GitHubBackend:
@@ -301,95 +373,11 @@ class GitHubBackend:
             raise ValueError("pull request is unavailable or closed")
         return str(pr["head"]["sha"])
 
-    def availability(self, agent: dict[str, Any]) -> str:
-        if agent.get("id") != "local-ollama":
-            return "online"
-        import hunter_review_orchestrator as orchestrator
-
-        return orchestrator.runner_state(self.repository, self.token)
-
     def now(self) -> float:
         return time.monotonic()
 
     def sleep(self, seconds: float) -> None:
         time.sleep(seconds)
-
-    def correlation_id(self, agent: dict[str, Any], number: int) -> str:
-        """A unique identity for this exact dispatch of this exact attempt.
-
-        Bound to the collector run and attempt, the candidate head, the reviewer
-        and the attempt number, so no two invocations -- across retries, collector
-        re-runs, or candidates -- can share one.
-        """
-
-        material = "/".join(
-            (
-                SCHEMA,
-                self.repository,
-                str(self.pr),
-                self.expected_head,
-                str(self.run_id),
-                str(self.run_attempt),
-                str(agent.get("id") or ""),
-                str(number),
-            )
-        )
-        return hashlib.sha256(material.encode()).hexdigest()
-
-    def trigger(self, agent: dict[str, Any], number: int) -> dict[str, Any]:
-        method = str(agent.get("trigger_method") or "")
-        if method.startswith("github-workflow:"):
-            workflow = method.split(":", 1)[1]
-            created_at = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
-            correlation = self.correlation_id(agent, number)
-            governance.request_json(
-                self.repository,
-                self.token,
-                "POST",
-                f"actions/workflows/{workflow}/dispatches",
-                {
-                    "ref": "main",
-                    "inputs": {
-                        "pr_number": str(self.pr),
-                        "head_sha": self.expected_head,
-                        "claims_id": self.claims_id,
-                        "correlation_id": correlation,
-                    },
-                },
-            )
-            return {
-                "id": 0,
-                "created_at": created_at,
-                "kind": "local-workflow",
-                "workflow": workflow,
-                "number": number,
-                "correlation_id": correlation,
-            }
-        if method.startswith("api:"):
-            provider = method.split(":", 1)[1]
-            created_at = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
-            payload = self._invoke_external(agent, number)
-            state = "unavailable" if payload.get("verdict") == "unavailable" else external_verdict(payload)
-            return {
-                "id": int(hashlib.sha256(self.correlation_id(agent, number).encode()).hexdigest()[:12], 16),
-                "created_at": created_at,
-                "kind": "external-api",
-                "provider": provider,
-                "number": number,
-                "payload": payload,
-                "state": state,
-                "response_digest": hashlib.sha256(
-                    json.dumps(payload, sort_keys=True, separators=(",", ":")).encode()
-                ).hexdigest(),
-                "head_sha": self.expected_head,
-            }
-        body = trigger_body(self.expected_head, self.claims_id, agent, self.run_id, self.run_attempt, number)
-        result = governance.request_json(
-            self.repository, self.token, "POST", f"issues/{self.pr}/comments", {"body": body}
-        )
-        if not isinstance(result, dict) or type(result.get("id")) is not int or not result.get("created_at"):
-            raise ValueError("GitHub did not confirm actual reviewer invocation")
-        return result
 
     def _candidate_diff(self) -> str:
         url = f"https://api.github.com/repos/{self.repository}/pulls/{self.pr}"
@@ -455,137 +443,191 @@ class GitHubBackend:
             raise ValueError("external reviewer returned malformed JSON")
         return result
 
-    def _local_run(self, trigger: dict[str, Any]) -> dict[str, Any] | None:
-        """The workflow run this exact dispatch produced, or nothing.
-
-        Selection is by the dispatch's own correlation identity, which the
-        workflow renders as its run name. Timestamp, event and branch are shared
-        by every dispatch of this workflow, so a concurrent candidate's run, an
-        earlier attempt's run, or a manual dispatch could otherwise be read as
-        this attempt's acknowledgement and completion.
-        """
-
-        workflow = str(trigger.get("workflow") or "hunter-local-reviewer.yml")
-        correlation = str(trigger.get("correlation_id") or "")
-        if not correlation:
-            return None
-        payload = governance.request_json(
-            self.repository,
-            self.token,
-            "GET",
-            f"actions/workflows/{workflow}/runs?event=workflow_dispatch&branch=main&per_page=50",
+    def _post_comment(self, body: str) -> dict[str, Any]:
+        result = governance.request_json(
+            self.repository, self.token, "POST", f"issues/{self.pr}/comments", {"body": body}
         )
-        runs = payload.get("workflow_runs", []) if isinstance(payload, dict) else []
-        expected = LOCAL_REVIEW_RUN_NAME_PREFIX + correlation
-        candidates = [
-            run
-            for run in runs
-            if isinstance(run, dict)
-            and str(run.get("display_title") or run.get("name") or "") == expected
-            and str(run.get("event") or "") == "workflow_dispatch"
-            and str(run.get("head_branch") or "") == "main"
+        if not isinstance(result, dict) or type(result.get("id")) is not int or not result.get("created_at"):
+            raise ValueError("GitHub did not confirm trusted collector evidence")
+        return result
+
+    def _api_result(self, agent: dict[str, Any], trigger: dict[str, Any]) -> dict[str, Any] | None:
+        trigger_record = parse_api_trigger(str(trigger.get("body") or ""))
+        if trigger_record is None:
+            raise ValueError("external reviewer trigger evidence is malformed")
+        if (
+            trigger_record["head_sha"] != self.expected_head
+            or trigger_record["claims_id"] != self.claims_id
+            or trigger_record["reviewer_agent"] != str(agent["id"])
+        ):
+            raise ValueError("external reviewer response is not exact-head bound")
+        matches = []
+        for item in _pages(self.repository, self.token, f"issues/{self.pr}/comments"):
+            if (item.get("user") or {}).get("login", "").lower() != "github-actions[bot]":
+                continue
+            result = parse_api_result(str(item.get("body") or ""))
+            if result is None:
+                continue
+            if (
+                result["head_sha"] == trigger_record["head_sha"]
+                and result["claims_id"] == trigger_record["claims_id"]
+                and result["reviewer_agent"] == trigger_record["reviewer_agent"]
+                and result["collector_run_id"] == trigger_record["collector_run_id"]
+                and result["trigger_id"] == int(trigger.get("id") or 0)
+            ):
+                matches.append({**result, "comment_id": int(item.get("id") or 0)})
+        if not matches:
+            return None
+        return min(matches, key=lambda item: int(item.get("comment_id") or 0))
+
+    def _existing_trigger(self, agent: dict[str, Any], number: int) -> dict[str, Any] | None:
+        marker = f"Invocation key: {invocation_key(self.expected_head, self.claims_id, str(agent['id']), number)}."
+        matches = [
+            item
+            for item in _pages(self.repository, self.token, f"issues/{self.pr}/comments")
+            if (item.get("user") or {}).get("login", "").lower() == "github-actions[bot]"
+            and marker in str(item.get("body") or "")
         ]
-        return max(candidates, key=lambda run: int(run.get("id") or 0), default=None)
+        return min(matches, key=lambda x: int(x.get("id") or 0), default=None)
 
-    def acknowledged(self, agent: dict[str, Any], trigger: dict[str, Any]) -> bool:
-        if trigger.get("kind") == "external-api":
-            return trigger.get("state") != "unavailable"
-        if trigger.get("kind") == "local-workflow":
-            run = self._local_run(trigger)
-            if not run:
-                return False
-            trigger["id"] = int(run.get("id") or 0)
-            jobs = governance.request_json(
-                self.repository, self.token, "GET", f"actions/runs/{trigger['id']}/jobs?per_page=100"
+    def trigger(self, agent: dict[str, Any], number: int) -> dict[str, Any]:
+        method = str(agent["trigger_method"])
+        existing = self._existing_trigger(agent, number)
+        if existing is not None:
+            m = re.search(r"Collector invocation: (\d+)/(\d+)/", str(existing.get("body") or ""))
+            existing["collector_run_id"] = int(m.group(1)) if m else self.run_id
+            existing["collector_run_attempt"] = int(m.group(2)) if m else self.run_attempt
+            if method.startswith("api:"):
+                result = self._api_result(agent, existing)
+                if result is None:
+                    raise ValueError("persisted API invocation has no verifiable result")
+                existing.update(
+                    provider=method.split(":", 1)[1],
+                    response_digest=result.get("response_digest"),
+                    head_sha=self.expected_head,
+                    state=result.get("verdict"),
+                    result_comment_id=result.get("comment_id"),
+                )
+            return existing
+        if method.startswith("api:"):
+            provider = method.split(":", 1)[1]
+            trigger = self._post_comment(
+                api_trigger_body(self.expected_head, self.claims_id, agent, self.run_id, self.run_attempt, number)
             )
-            rows = jobs.get("jobs", []) if isinstance(jobs, dict) else []
-            return any(
-                str(job.get("status") or "") in {"in_progress", "completed"} for job in rows if isinstance(job, dict)
+            payload = self._invoke_external(agent, number)
+            state = "unavailable" if payload.get("verdict") == "unavailable" else external_verdict(payload)
+            digest = hashlib.sha256(json.dumps(payload, sort_keys=True, separators=(",", ":")).encode()).hexdigest()
+            result_comment = self._post_comment(
+                api_result_body(
+                    self.expected_head,
+                    self.claims_id,
+                    agent,
+                    self.run_id,
+                    int(trigger["id"]),
+                    state,
+                    str(payload.get("summary") or ""),
+                    digest,
+                )
             )
-        return self.responded(agent, trigger)
+            if state == "clear":
+                self._post_comment(
+                    json.dumps(
+                        {
+                            "schema": "hunter.review-ack.v1",
+                            "head_sha": self.expected_head,
+                            "claims_id": self.claims_id,
+                            "verdict": "clear",
+                            "summary": str(
+                                payload.get("summary") or "Independent API review found no blocking defects."
+                            ),
+                            "collector_run_id": self.run_id,
+                            "trigger_id": int(trigger["id"]),
+                            "reviewer_agent": str(agent["id"]),
+                            "response_digest": digest,
+                        },
+                        sort_keys=True,
+                    )
+                )
+            return {
+                **trigger,
+                "provider": provider,
+                "response_digest": digest,
+                "head_sha": self.expected_head,
+                "state": state,
+                "result_comment_id": result_comment["id"],
+                "collector_run_id": self.run_id,
+            }
+        body = trigger_body(self.expected_head, self.claims_id, agent, self.run_id, self.run_attempt, number)
+        result = self._post_comment(body)
+        result["collector_run_id"] = self.run_id
+        return result
 
-    def completed(self, agent: dict[str, Any], trigger: dict[str, Any]) -> bool:
-        if trigger.get("kind") == "external-api":
-            return trigger.get("state") in {"clear", "blocking"}
-        if trigger.get("kind") == "local-workflow":
-            run = self._local_run(trigger)
-            if not run:
-                return False
-            trigger["id"] = int(run.get("id") or 0)
-            return str(run.get("status") or "") == "completed" and str(run.get("conclusion") or "") == "success"
-        login = governance.reviewer_login(agent)
-        for item in _pages(self.repository, self.token, f"pulls/{self.pr}/reviews"):
-            if (
-                (item.get("user") or {}).get("login", "").lower() == login
-                and item.get("commit_id") == self.expected_head
-                and item.get("state") in {"APPROVED", "COMMENTED", "CHANGES_REQUESTED"}
-                and str(item.get("submitted_at") or item.get("created_at") or "") >= trigger["created_at"]
-            ):
-                return True
-        for item in _pages(self.repository, self.token, f"issues/{self.pr}/comments"):
-            if (item.get("user") or {}).get("login", "").lower() != login:
-                continue
-            if str(item.get("created_at") or "") < trigger["created_at"]:
-                continue
-            ack = governance.review_acknowledgement(str(item.get("body") or ""))
-            if (
-                ack
-                and ack.get("head_sha") == self.expected_head
-                and ack.get("claims_id") == self.claims_id
-                and ack.get("collector_run_id") == self.run_id
-            ):
-                return True
-        return False
+    @staticmethod
+    def _native_clear(body: str, head: str) -> bool:
+        return governance.native_codex_clear_review(body, head)
 
-    def unavailability(self, agent: dict[str, Any], trigger: dict[str, Any]) -> str | None:
-        """Return an authenticated explicit reviewer-capacity denial, if any.
-
-        A generic or malformed response still proves reviewer availability and
-        therefore cannot authorize failover. Only a post-trigger response from
-        the configured reviewer identity that explicitly says the service is
-        rate/usage limited is classified as unavailable.
-        """
-        if trigger.get("kind") == "external-api":
-            return (
-                str(trigger.get("payload", {}).get("summary") or "provider-unavailable")
-                if trigger.get("state") == "unavailable"
-                else None
-            )
-        login = governance.reviewer_login(agent)
-        if not login:
-            return None
-        limit_pattern = re.compile(
-            r"(?:usage\s+limit|rate[ -]?limit|rate\s+limit|quota\s+(?:exceeded|reached)|"
-            r"hit\s+(?:your|the)\s+.*limit|too\s+many\s+requests)",
-            re.IGNORECASE,
+    @staticmethod
+    def _unavailable(body: str) -> bool:
+        text = body.lower()
+        normalized = " ".join(text.split())
+        return bool(
+            re.fullmatch(r"(?:codex )?usage limit reached\.?(?: try again later\.?)?", normalized)
+            or re.fullmatch(r"codex is temporarily unavailable\. please try again later\.?", normalized)
+            or re.fullmatch(r"to use codex(?: here)?, create a codex account and connect to github\.?", normalized)
         )
+
+    def response_state(self, agent: dict[str, Any], trigger: dict[str, Any]) -> str:
+        if str(agent["trigger_method"]).startswith("api:"):
+            result = self._api_result(agent, trigger)
+            if result is None:
+                return "waiting"
+            return str(result["verdict"])
+        login = governance.reviewer_login(agent)
+        created = str(trigger["created_at"])
+        matching_reviews = [
+            item
+            for item in _pages(self.repository, self.token, f"pulls/{self.pr}/reviews")
+            if (item.get("user") or {}).get("login", "").lower() == login
+            and str(item.get("submitted_at") or "") >= created
+            and item.get("commit_id") == self.expected_head
+        ]
+        if matching_reviews:
+            item = max(matching_reviews, key=lambda value: int(value.get("id") or 0))
+            state = str(item.get("state") or "").upper()
+            body = str(item.get("body") or "")
+            if state == "CHANGES_REQUESTED":
+                return "blocking"
+            if state == "APPROVED":
+                return "clear"
+            if state == "COMMENTED" and governance._substantive_review_body(body):
+                if agent.get("id") == "codex" and self._native_clear(body, self.expected_head):
+                    return "clear"
+                return "blocking"
         for item in _pages(self.repository, self.token, f"issues/{self.pr}/comments"):
             if (item.get("user") or {}).get("login", "").lower() != login:
                 continue
-            if str(item.get("created_at") or "") < trigger["created_at"]:
+            if str(item.get("created_at") or "") < created:
                 continue
-            if limit_pattern.search(str(item.get("body") or "")):
-                return "usage-limit"
-        return None
+            body = str(item.get("body") or "")
+            ack = governance.review_acknowledgement(body)
+            if (
+                ack is not None
+                and ack["head_sha"] == self.expected_head
+                and ack["claims_id"] == self.claims_id
+                and ack.get("collector_run_id") == int(trigger.get("collector_run_id") or self.run_id)
+                and ack.get("trigger_id") == int(trigger.get("id") or 0)
+            ):
+                return "clear"
+            if agent.get("id") == "codex" and self._native_clear(body, self.expected_head):
+                return "clear"
+            if self._unavailable(body):
+                return "unavailable"
+            if governance._substantive_review_body(body):
+                return "blocking"
+        return "waiting"
 
     def responded(self, agent: dict[str, Any], trigger: dict[str, Any]) -> bool:
-        if trigger.get("kind") == "external-api":
-            return trigger.get("state") in {"clear", "blocking"}
-        login = governance.reviewer_login(agent)
-        for item in _pages(self.repository, self.token, f"pulls/{self.pr}/reviews"):
-            if (item.get("user") or {}).get("login", "").lower() == login and item.get(
-                "commit_id"
-            ) == self.expected_head:
-                return True
-        for item in _pages(self.repository, self.token, f"issues/{self.pr}/comments"):
-            if (item.get("user") or {}).get("login", "").lower() == login and str(
-                item.get("created_at") or ""
-            ) >= trigger["created_at"]:
-                return True
-        for item in _pages(self.repository, self.token, f'issues/comments/{trigger["id"]}/reactions'):
-            if (item.get("user") or {}).get("login", "").lower() == login:
-                return True
-        return False
+        return self.response_state(agent, trigger) in {"clear", "blocking"}
 
 
 class _NoRedirect(urllib.request.HTTPRedirectHandler):
@@ -623,10 +665,12 @@ def load_exhaustion(
         raise ValueError("collector receipt does not match the current pull-request HEAD")
     repo = governance.request_json(repository, token, "GET", "")
     branch = repo["default_branch"]
-    revision = governance.request_json(repository, token, "GET", f"commits/{branch}")["sha"]
     run = governance.request_json(repository, token, "GET", f"actions/runs/{run_id}")
-    if not isinstance(run, dict) or not valid_run(run, run_id, branch, revision, repository=repository, token=token):
+    revision = str(run.get("head_sha") or "") if isinstance(run, dict) else ""
+    if not isinstance(run, dict) or not valid_run(run, run_id, branch, revision):
         raise ValueError("collector did not execute the trusted default-branch revision")
+    if not _run_on_default_branch_history(repository, token, branch, revision):
+        raise ValueError("collector run is no longer on trusted default-branch history")
     name = f'hunter-reviewer-results-{head}-{run["run_attempt"]}'
     artifacts = [
         a for a in _pages(repository, token, f"actions/runs/{run_id}/artifacts", "artifacts") if a.get("name") == name
@@ -662,13 +706,12 @@ def load_exhaustion(
         raise ValueError("collector numeric identity fields must be integers")
     if not re.fullmatch("[0-9a-f]{64}", str(receipt.get("claims_id") or "")):
         raise ValueError("collector claims digest is malformed")
-    agents = review.authority_pool_reviewers(pool)
+    agents = review.enabled_pool_reviewers(pool)
     own = next((a["priority"] for a in agents if a["id"] == authority_type), float("inf"))
     required = sorted((a for a in agents if a["priority"] < own), key=lambda a: a["priority"])
     records = receipt.get("attempts")
     if not isinstance(records, list):
         raise ValueError("collector attempts are missing")
-    records = authority_attempt_records(pool, records)
     result = []
     offset = 0
     seen = set()
@@ -680,81 +723,107 @@ def load_exhaustion(
             record = records[offset]
             offset += 1
             expected_attempt = {
-                k: agent[k]
-                for k in (
-                    "priority",
-                    "ack_timeout_seconds",
-                    "review_timeout_seconds",
-                    "trigger_method",
-                    "evidence_parser",
-                    "retryable",
-                )
+                k: agent[k] for k in ("priority", "timeout_seconds", "trigger_method", "evidence_parser", "retryable")
             }
             expected_attempt.update(agent_id=agent["id"], attempt_number=number)
-            outcome = record.get("outcome")
             elapsed = record.get("elapsed_seconds")
-            ack_elapsed = record.get("ack_elapsed_seconds")
-            if outcome not in {"unavailable", "timed_out"}:
-                raise ValueError("trusted timeout/configuration/retry result mismatch")
-            trigger_denied = (
-                outcome == "unavailable"
-                and record.get("failure_class") == "permanent"
-                and record.get("failure_status") == 403
-                and record.get("availability_state") == "trigger-denied"
-                and record.get("trigger_id") == 0
-                and record.get("trigger_created_at") == ""
-                and elapsed == 0
-                and ack_elapsed == 0
+            outcome = record.get("outcome")
+            elapsed_valid = (
+                type(elapsed) in (int, float)
+                and 0 <= elapsed < 7200
+                and (outcome == "unavailable" or elapsed >= agent["timeout_seconds"])
             )
-            minimum = agent["ack_timeout_seconds"] if outcome == "unavailable" else agent["review_timeout_seconds"]
             if (
                 any(record.get(k) != v for k, v in expected_attempt.items())
+                or outcome not in {"timed_out", "unavailable"}
                 or type(record.get("priority")) is not int
-                or type(record.get("ack_timeout_seconds")) is not int
-                or type(record.get("review_timeout_seconds")) is not int
+                or type(record.get("timeout_seconds")) is not int
                 or type(record.get("retryable")) is not bool
                 or type(record.get("attempt_number")) is not int
-                or type(elapsed) not in (int, float)
-                or type(ack_elapsed) not in (int, float)
-                or (not trigger_denied and not minimum <= elapsed < 7200)
-                or not 0 <= ack_elapsed <= elapsed
+                or not elapsed_valid
             ):
                 raise ValueError("trusted timeout/configuration/retry result mismatch")
             trigger_id = record.get("trigger_id")
             if type(trigger_id) is not int or trigger_id in seen:
                 raise ValueError("duplicate or invalid invocation identity")
             seen.add(trigger_id)
-            if trigger_denied:
-                continue
-            if trigger_id <= 0:
-                raise ValueError("missing trusted reviewer trigger identity")
-            trigger = governance.request_json(repository, token, "GET", f"issues/comments/{trigger_id}")
-            expected_body = trigger_body(head, receipt["claims_id"], agent, run_id, run["run_attempt"], number)
+            try:
+                trigger = governance.request_json(repository, token, "GET", f"issues/comments/{trigger_id}")
+            except Exception as exc:
+                raise ValueError("trusted reviewer trigger evidence is unavailable") from exc
+            if str(agent["trigger_method"]).startswith("api:"):
+                parsed_trigger = parse_api_trigger(str(trigger.get("body") or ""))
+                expected_trigger = api_trigger_payload(
+                    head,
+                    receipt["claims_id"],
+                    agent,
+                    int(record.get("collector_run_id") or run_id),
+                    int(record.get("collector_run_attempt") or run["run_attempt"]),
+                    number,
+                )
+                body_matches = parsed_trigger == expected_trigger
+            else:
+                expected_body = trigger_body(
+                    head,
+                    receipt["claims_id"],
+                    agent,
+                    int(record.get("collector_run_id") or run_id),
+                    int(record.get("collector_run_attempt") or run["run_attempt"]),
+                    number,
+                )
+                body_matches = trigger.get("body") == expected_body
             if (
-                trigger.get("body") != expected_body
+                not body_matches
                 or trigger.get("created_at") != record.get("trigger_created_at")
                 or (trigger.get("user") or {}).get("login") != "github-actions[bot]"
                 or trigger.get("issue_url") != f"https://api.github.com/repos/{repository}/issues/{pr}"
             ):
                 raise ValueError("actual trusted reviewer trigger mismatch")
-            if GitHubBackend(repository, token, pr, head, receipt["claims_id"], run_id, run["run_attempt"]).responded(
-                agent, trigger
-            ):
+            live_state = GitHubBackend(
+                repository,
+                token,
+                pr,
+                head,
+                receipt["claims_id"],
+                int(record.get("collector_run_id") or run_id),
+                int(record.get("collector_run_attempt") or run["run_attempt"]),
+            ).response_state(agent, trigger)
+            if live_state in {"clear", "blocking"}:
                 raise ValueError("higher-priority reviewer is available; exhaustion cannot be reused")
-        agent_records = [
-            record for record in records if isinstance(record, dict) and record.get("agent_id") == agent["id"]
-        ]
-        failure_class = (
-            "permanent" if any(record.get("failure_class") == "permanent" for record in agent_records) else "transient"
-        )
+            if outcome == "unavailable" and live_state != "unavailable":
+                raise ValueError("recorded reviewer unavailability is no longer verifiable")
+            if outcome == "timed_out" and live_state == "unavailable":
+                raise ValueError("collector timeout receipt disagrees with explicit reviewer unavailability")
+            if str(agent["trigger_method"]).startswith("api:"):
+                api_result = GitHubBackend(
+                    repository,
+                    token,
+                    pr,
+                    head,
+                    receipt["claims_id"],
+                    int(record.get("collector_run_id") or run_id),
+                    int(record.get("collector_run_attempt") or run["run_attempt"]),
+                )._api_result(agent, trigger)
+                if api_result is None:
+                    raise ValueError("trusted API reviewer result evidence is unavailable")
+                if api_result["response_digest"] != record.get("response_digest"):
+                    raise ValueError("trusted API reviewer result digest mismatch")
+                if record.get("provider") != str(agent["trigger_method"]).split(":", 1)[1]:
+                    raise ValueError("trusted API reviewer provider mismatch")
+                if record.get("head_sha") != head:
+                    raise ValueError("trusted API reviewer head binding mismatch")
+        terminal = records[offset - 1].get("outcome") if count else "timed_out"
         result.append(
             {
                 "agent_id": agent["id"],
                 "status": "exhausted",
-                "reason": "trusted collector exhausted every configured acknowledgement/review budget",
-                "ack_timeout_seconds": agent["ack_timeout_seconds"],
-                "review_timeout_seconds": agent["review_timeout_seconds"],
-                "failure_class": failure_class,
+                "reason": (
+                    "trusted reviewer reported explicit unavailability"
+                    if terminal == "unavailable"
+                    else "trusted collector timed out every configured invocation"
+                ),
+                "timeout_seconds": agent["timeout_seconds"],
+                "failure_class": "permanent" if terminal == "unavailable" else "transient",
                 "attempt_count": count,
                 "invocation_reference": f"actions/runs/{run_id}",
             }

@@ -34,7 +34,8 @@ def _attempt(
     *,
     status: str = "exhausted",
     reason: str = "rate-limited at the configured timeout",
-    timeout_seconds: int = 300,
+    ack_timeout_seconds: int = 30,
+    review_timeout_seconds: int = 300,
     failure_class: str = "transient",
     attempt_count: int = 1,
     invocation_reference: str = "actions/runs/6372342596",
@@ -43,7 +44,8 @@ def _attempt(
         "agent_id": agent_id,
         "status": status,
         "reason": reason,
-        "timeout_seconds": timeout_seconds,
+        "ack_timeout_seconds": ack_timeout_seconds,
+        "review_timeout_seconds": review_timeout_seconds,
         "failure_class": failure_class,
         "attempt_count": attempt_count,
         "invocation_reference": invocation_reference,
@@ -51,14 +53,20 @@ def _attempt(
 
 
 def _agent(
-    agent_id: str = "codex", *, priority: int = 1, enabled: bool = True, timeout_seconds: int = 300
+    agent_id: str = "codex",
+    *,
+    priority: int = 1,
+    enabled: bool = True,
+    ack_timeout_seconds: int = 30,
+    review_timeout_seconds: int = 300,
 ) -> dict[str, Any]:
     return {
         "id": agent_id,
         "priority": priority,
         "enabled": enabled,
         "exact_head_support": True,
-        "timeout_seconds": timeout_seconds,
+        "ack_timeout_seconds": ack_timeout_seconds,
+        "review_timeout_seconds": review_timeout_seconds,
         "retryable": True,
     }
 
@@ -271,13 +279,13 @@ def test_an_agent_comment_on_an_older_commit_is_not_exact_head_authority(monkeyp
 
 def test_a_fake_timeout_attempt_is_unproven_exhaustion(monkeypatch) -> None:
     _use_pool(monkeypatch, _pool())
-    document = _review_document(authority=_authority("opencode", attempts=[_attempt(timeout_seconds=299)]))
+    document = _review_document(authority=_authority("opencode", attempts=[_attempt(review_timeout_seconds=299)]))
 
     verdict = _verify(document)
 
     assert verdict.state == "incomplete"
-    assert "timeout_seconds" in verdict.reason
-    assert "300" in verdict.reason
+    assert "ack/review timeout budgets" in verdict.reason
+    assert "30/300" in verdict.reason
 
 
 def test_a_retryable_transient_single_attempt_is_not_exhausted(monkeypatch) -> None:
@@ -348,7 +356,7 @@ def test_exhaustion_failure_kind_distinguishes_unproven_from_unattempted(monkeyp
     pool = _pool()
     _use_pool(monkeypatch, pool)
 
-    fake_timeout = _authority("opencode", attempts=[_attempt(timeout_seconds=299)])
+    fake_timeout = _authority("opencode", attempts=[_attempt(review_timeout_seconds=299)])
     assert review.exhaustion_failure_kind(pool, fake_timeout, "opencode") == "EXHAUSTION_UNPROVEN"
 
     skipped_pool = _pool(agents=(ALTERNATE,))
@@ -451,7 +459,7 @@ def test_authority_state_pool_not_exhausted_for_a_guard_that_skips_an_alternate(
 
 
 def test_authority_state_exhaustion_unproven_for_fake_timeout_evidence() -> None:
-    doc = _review_document(authority=_authority("opencode", attempts=[_attempt(timeout_seconds=299)]))
+    doc = _review_document(authority=_authority("opencode", attempts=[_attempt(review_timeout_seconds=299)]))
     guard = ("present", doc, None)
     verdict = _state(
         pool=_pool(),
@@ -494,7 +502,7 @@ def test_review_authority_state_surfaces_the_state_name_and_blocks(monkeypatch) 
 
     state, message = readiness.review_authority_state(HEAD, PR_NUMBER)
 
-    assert state == "failure"
+    assert state == "pending"
     assert "MISSING_REVIEW_AUTHORITY" in message
 
 
@@ -515,7 +523,7 @@ def test_a_stale_authority_state_is_surfaced_by_merge_readiness(monkeypatch) -> 
 
     state, message = readiness.review_authority_state(HEAD, PR_NUMBER)
 
-    assert state == "failure"
+    assert state == "pending"
     assert "MISSING_REVIEW_AUTHORITY" in message
 
 
@@ -944,7 +952,8 @@ def _trusted_exhaustion(monkeypatch, *, outcome="timed_out", **overrides):
         head_sha=HEAD,
         agent_id="codex",
         priority=1,
-        timeout_seconds=300,
+        ack_timeout_seconds=30,
+        review_timeout_seconds=300,
         trigger_method="configured trigger",
         retryable=True,
         evidence_parser="configured parser",
@@ -967,7 +976,7 @@ def test_actual_trusted_configured_exhaustion_allows_guard_eligibility(monkeypat
 
 
 def test_trusted_result_cannot_substitute_a_different_timeout(monkeypatch):
-    assert _trusted_exhaustion(monkeypatch, timeout_seconds=1)[0] == "failure"
+    assert _trusted_exhaustion(monkeypatch, review_timeout_seconds=1)[0] == "failure"
 
 
 def test_trusted_result_cannot_substitute_a_different_trigger(monkeypatch):
@@ -1100,15 +1109,15 @@ def test_every_hosted_review_consumer_can_read_collector_and_guard_evidence():
 
     workflows = prevention.ROOT / ".github/workflows"
     expected = {
-        "hunter-candidate-admission.yml": ("actions", "checks"),
-        "hunter-governance-review.yml": ("actions", "checks"),
-        "hunter-governance-reconcile.yml": ("actions", "checks"),
-        "hunter-merge-readiness.yml": ("actions", "checks"),
+        "hunter-candidate-admission.yml": {"actions": "read", "checks": "read"},
+        "hunter-governance-review.yml": {"actions": "read", "checks": "read"},
+        "hunter-governance-reconcile.yml": {"actions": "write", "checks": "read"},
+        "hunter-merge-readiness.yml": {"actions": "read", "checks": "read"},
     }
     for filename, permissions in expected.items():
         workflow = yaml.safe_load((workflows / filename).read_text())
-        for permission in permissions:
-            assert workflow["permissions"].get(permission) == "read"
+        for permission, access in permissions.items():
+            assert workflow["permissions"].get(permission) == access
 
 
 def _request_and_ack():
