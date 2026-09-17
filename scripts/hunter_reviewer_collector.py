@@ -95,7 +95,7 @@ def valid_run(run: dict[str, Any], run_id: int, branch: str, revision: str) -> b
         and run.get("head_branch") == branch
         and run.get("head_sha") == revision
         and run.get("path") == WORKFLOW
-        and run.get("event") == "workflow_dispatch"
+        and run.get("event") in {"workflow_dispatch", "pull_request_target"}
         and run.get("status") == "completed"
         and run.get("conclusion") == "success"
     )
@@ -183,7 +183,6 @@ class GitHubBackend:
             "rate-limited",
             "temporarily unavailable",
             "create a codex account and connect to github",
-            "not available",
         )
         return any(marker in text for marker in markers)
 

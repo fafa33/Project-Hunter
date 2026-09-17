@@ -411,3 +411,31 @@ def test_explicit_unavailability_is_valid_exhaustion_without_waiting_full_timeou
     result = collector.load_exhaustion("owner/repo", "token", 469, HEAD, pool, 123, "alternate")
     assert result["reviewer_attempts"][0]["failure_class"] == "permanent"
     assert result["reviewer_attempts"][0]["attempt_count"] == 1
+
+
+def test_pull_request_target_collector_run_is_trusted_on_default_branch():
+    run = {
+        "id": 123,
+        "run_attempt": 1,
+        "head_branch": "main",
+        "head_sha": "b" * 40,
+        "path": collector.WORKFLOW,
+        "event": "pull_request_target",
+        "status": "completed",
+        "conclusion": "success",
+    }
+    assert collector.valid_run(run, 123, "main", "b" * 40)
+
+
+def test_automatic_artifact_name_uses_derived_candidate_head():
+    workflow = (collector.review.ROOT / collector.WORKFLOW).read_text()
+    assert (
+        "name: hunter-reviewer-results-${{ github.event.pull_request.head.sha || inputs.head_sha }}-${{ github.run_attempt }}"
+        in workflow
+    )
+
+
+def test_substantive_not_available_phrase_is_not_unavailability():
+    assert not collector.GitHubBackend._unavailable(
+        "This required migration is not available in this patch and is a blocking finding."
+    )
