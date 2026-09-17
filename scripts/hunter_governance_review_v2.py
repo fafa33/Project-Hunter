@@ -381,10 +381,23 @@ def review_acknowledgement(body: str) -> dict[str, Any] | None:
         return None
     if not isinstance(value, dict) or value.get("schema") != "hunter.review-ack.v1":
         return None
-    allowed = {"schema", "head_sha", "claims_id", "verdict", "summary", "collector_run_id"}
+    allowed = {
+        "schema",
+        "head_sha",
+        "claims_id",
+        "verdict",
+        "summary",
+        "collector_run_id",
+        "reviewer_agent",
+        "response_digest",
+    }
     if set(value) - allowed:
         return None
     if "collector_run_id" in value and (type(value["collector_run_id"]) is not int or value["collector_run_id"] <= 0):
+        return None
+    if "reviewer_agent" in value and value["reviewer_agent"] not in {"gemini", "groq"}:
+        return None
+    if "response_digest" in value and not re.fullmatch(r"[0-9a-f]{64}", str(value["response_digest"])):
         return None
     if value.get("verdict") != "clear" or not re.fullmatch(r"[0-9a-f]{40}", str(value.get("head_sha") or "")):
         return None
@@ -470,13 +483,23 @@ def read_pr_pool_review_comments(
                 body = str(comment.get("body") or "")
                 ack = review_acknowledgement(body)
                 native_codex = login == reviewer_login({"id": "codex"}) and native_codex_clear_review(body, exact_head)
-                if login not in enabled or (ack is None and not native_codex):
+                actions_agent = ""
+                if login == "github-actions[bot]" and ack is not None:
+                    candidate_agent = str(ack.get("reviewer_agent") or "")
+                    configured = {str(a["id"]): a for a in pre_ready.enabled_pool_reviewers(pool)}
+                    if candidate_agent in configured and str(
+                        configured[candidate_agent].get("trigger_method") or ""
+                    ).startswith("api:"):
+                        actions_agent = candidate_agent
+                if login not in enabled and not actions_agent:
+                    continue
+                if ack is None and not native_codex:
                     continue
                 reviews.append(
                     {
                         "id": comment.get("id"),
                         "login": login,
-                        "agent_id": enabled[login],
+                        "agent_id": actions_agent or enabled[login],
                         "commit_id": ack["head_sha"] if ack is not None else exact_head,
                         "body": comment["body"],
                         "state": "COMMENTED",
@@ -1670,7 +1693,13 @@ def verify_pre_ready_hostile_review(
         if r.get("commit_id") == head_sha
         and r.get("state") in {"APPROVED", "COMMENTED"}
         and r.get("agent_id") in enabled_ids
-        and enabled.get(str(r.get("login") or "")) == r.get("agent_id")
+        and (
+            enabled.get(str(r.get("login") or "")) == r.get("agent_id")
+            or (
+                str(r.get("login") or "") == "github-actions[bot]"
+                and review_acknowledgement(str(r.get("body") or "")) is not None
+            )
+        )
         and _substantive_review_body(str(r.get("body") or ""))
     ]
     # An out-of-band structured review avoids a self-referential artifact commit.

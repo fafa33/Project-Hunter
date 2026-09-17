@@ -317,7 +317,7 @@ def test_native_codex_wrong_head_is_not_a_response(monkeypatch):
         "body": ("Codex Review: Didn't find any major issues. Nice work!\n\n" "**Reviewed commit:** `bbbbbbbbbb`"),
     }
     monkeypatch.setattr(collector, "_pages", lambda *_a, **_k: [] if "reviews" in _a[2] else [native])
-    assert backend.response_state(POOL["agents"][0], trigger) == "waiting"
+    assert backend.response_state(POOL["agents"][0], trigger) == "blocking"
 
 
 def test_codex_policy_is_single_bounded_300_second_invocation():
@@ -377,7 +377,7 @@ def test_native_codex_clear_with_contradictory_text_is_not_clear(monkeypatch):
         ),
     }
     monkeypatch.setattr(collector, "_pages", lambda *_a, **_k: [] if "reviews" in _a[2] else [native])
-    assert backend.response_state(POOL["agents"][0], trigger) == "waiting"
+    assert backend.response_state(POOL["agents"][0], trigger) == "blocking"
 
 
 def test_unavailable_codex_does_not_grant_review_authority(monkeypatch):
@@ -489,8 +489,57 @@ def test_api_reviewer_trigger_is_exact_head_bound_and_synchronous(monkeypatch):
         "evidence_parser": "provider-json.v1",
     }
     backend = collector.GitHubBackend("owner/repo", "token", 476, HEAD, "d" * 64, 123, 1)
-    monkeypatch.setattr(backend, "_invoke_external", lambda a, n: {"verdict": "clear", "summary": "No blockers."})
+    monkeypatch.setattr(
+        backend,
+        "_invoke_external",
+        lambda a, n: {"verdict": "clear", "summary": "No blocking defects remain after exact-head review."},
+    )
+    monkeypatch.setattr(backend, "_existing_trigger", lambda a, n: None)
+    ids = iter(range(10, 20))
+    monkeypatch.setattr(
+        backend, "_post_comment", lambda body: {"id": next(ids), "created_at": "2026-09-17T00:00:00Z", "body": body}
+    )
     trigger = backend.trigger(agent, 1)
     assert trigger["head_sha"] == HEAD
     assert trigger["provider"] == "gemini"
     assert backend.response_state(agent, trigger) == "clear"
+
+
+def test_codex_trigger_is_reused_for_same_exact_head_claims(monkeypatch):
+    backend = collector.GitHubBackend("owner/repo", "token", 476, HEAD, "d" * 64, 999, 1)
+    agent = POOL["agents"][0]
+    key = collector.invocation_key(HEAD, "d" * 64, "codex", 1)
+    old = {
+        "id": 77,
+        "created_at": "2026-09-17T00:00:00Z",
+        "body": f"Invocation key: {key}.\nCollector invocation: 123/1/codex/1.",
+        "user": {"login": "github-actions[bot]"},
+    }
+    monkeypatch.setattr(collector, "_pages", lambda *_a, **_k: [old])
+    monkeypatch.setattr(backend, "_post_comment", lambda *_a: pytest.fail("must not invoke Codex twice"))
+    trigger = backend.trigger(agent, 1)
+    assert trigger["id"] == 77
+    assert trigger["collector_run_id"] == 123
+
+
+def test_api_trigger_and_result_are_persisted_before_authority(monkeypatch):
+    backend = collector.GitHubBackend("owner/repo", "token", 476, HEAD, "d" * 64, 123, 1)
+    agent = {**POOL["agents"][0], "id": "gemini", "priority": 2, "trigger_method": "api:gemini"}
+    monkeypatch.setattr(backend, "_existing_trigger", lambda *_a: None)
+    monkeypatch.setattr(
+        backend,
+        "_invoke_external",
+        lambda *_a: {"verdict": "clear", "summary": "No blocking defects remain after exact-head review."},
+    )
+    bodies = []
+    monkeypatch.setattr(
+        backend,
+        "_post_comment",
+        lambda body: bodies.append(body) or {"id": len(bodies), "created_at": "2026-09-17T00:00:00Z", "body": body},
+    )
+    trigger = backend.trigger(agent, 1)
+    assert len(bodies) == 3
+    assert "hunter.reviewer-trigger.v1" in bodies[0]
+    assert "hunter.reviewer-result.v1" in bodies[1]
+    assert "hunter.review-ack.v1" in bodies[2]
+    assert trigger["result_comment_id"] == 2

@@ -128,6 +128,10 @@ def _pages(repository: str, token: str, path: str, key: str | None = None) -> li
         page += 1
 
 
+def invocation_key(head: str, claims_id: str, agent_id: str, number: int) -> str:
+    return hashlib.sha256(f"{head}:{claims_id}:{agent_id}:{number}".encode()).hexdigest()
+
+
 def trigger_body(head: str, claims_id: str, agent: dict[str, Any], run_id: int, run_attempt: int, number: int) -> str:
     method = str(agent["trigger_method"])
     if not method.startswith("github-pr-comment:") or not governance.reviewer_login(agent):
@@ -147,6 +151,7 @@ def trigger_body(head: str, claims_id: str, agent: dict[str, Any], run_id: int, 
         "reply with only this JSON result, filling in your own substantive summary: "
         + json.dumps(ack)
         + f'\nCollector invocation: {run_id}/{run_attempt}/{agent["id"]}/{number}.'
+        + f'\nInvocation key: {invocation_key(head, claims_id, str(agent["id"]), number)}.'
     )
 
 
@@ -232,33 +237,99 @@ class GitHubBackend:
             raise ValueError("external reviewer returned malformed JSON")
         return result
 
-    def trigger(self, agent: dict[str, Any], number: int) -> dict[str, Any]:
-        method = str(agent["trigger_method"])
-        if method.startswith("api:"):
-            provider = method.split(":", 1)[1]
-            payload = self._invoke_external(agent, number)
-            state = "unavailable" if payload.get("verdict") == "unavailable" else external_verdict(payload)
-            digest = hashlib.sha256(json.dumps(payload, sort_keys=True).encode()).hexdigest()
-            identity = int(
-                hashlib.sha256(
-                    f"{self.run_id}:{self.run_attempt}:{provider}:{number}:{self.expected_head}".encode()
-                ).hexdigest()[:15],
-                16,
-            )
-            return {
-                "id": identity,
-                "created_at": str(time.time()),
-                "provider": provider,
-                "response_digest": digest,
-                "head_sha": self.expected_head,
-                "state": state,
-            }
-        body = trigger_body(self.expected_head, self.claims_id, agent, self.run_id, self.run_attempt, number)
+    def _post_comment(self, body: str) -> dict[str, Any]:
         result = governance.request_json(
             self.repository, self.token, "POST", f"issues/{self.pr}/comments", {"body": body}
         )
         if not isinstance(result, dict) or type(result.get("id")) is not int or not result.get("created_at"):
-            raise ValueError("GitHub did not confirm actual reviewer invocation")
+            raise ValueError("GitHub did not confirm trusted collector evidence")
+        return result
+
+    def _existing_trigger(self, agent: dict[str, Any], number: int) -> dict[str, Any] | None:
+        marker = f"Invocation key: {invocation_key(self.expected_head, self.claims_id, str(agent['id']), number)}."
+        matches = [
+            item
+            for item in _pages(self.repository, self.token, f"issues/{self.pr}/comments")
+            if (item.get("user") or {}).get("login", "").lower() == "github-actions[bot]"
+            and marker in str(item.get("body") or "")
+        ]
+        return min(matches, key=lambda x: int(x.get("id") or 0), default=None)
+
+    def trigger(self, agent: dict[str, Any], number: int) -> dict[str, Any]:
+        method = str(agent["trigger_method"])
+        existing = self._existing_trigger(agent, number)
+        if existing is not None:
+            m = re.search(r"Collector invocation: (\d+)/(\d+)/", str(existing.get("body") or ""))
+            existing["collector_run_id"] = int(m.group(1)) if m else self.run_id
+            return existing
+        if method.startswith("api:"):
+            provider = method.split(":", 1)[1]
+            key = invocation_key(self.expected_head, self.claims_id, str(agent["id"]), number)
+            trigger = self._post_comment(
+                json.dumps(
+                    {
+                        "schema": "hunter.reviewer-trigger.v1",
+                        "head_sha": self.expected_head,
+                        "claims_id": self.claims_id,
+                        "reviewer_agent": str(agent["id"]),
+                        "collector_run_id": self.run_id,
+                        "collector_run_attempt": self.run_attempt,
+                        "attempt_number": number,
+                        "invocation_key": key,
+                    },
+                    sort_keys=True,
+                )
+                + f"\nInvocation key: {key}.\nCollector invocation: {self.run_id}/{self.run_attempt}/{agent['id']}/{number}."
+            )
+            payload = self._invoke_external(agent, number)
+            state = "unavailable" if payload.get("verdict") == "unavailable" else external_verdict(payload)
+            digest = hashlib.sha256(json.dumps(payload, sort_keys=True, separators=(",", ":")).encode()).hexdigest()
+            result_comment = self._post_comment(
+                json.dumps(
+                    {
+                        "schema": "hunter.reviewer-result.v1",
+                        "head_sha": self.expected_head,
+                        "claims_id": self.claims_id,
+                        "reviewer_agent": str(agent["id"]),
+                        "collector_run_id": self.run_id,
+                        "trigger_id": trigger["id"],
+                        "verdict": state,
+                        "summary": str(payload.get("summary") or ""),
+                        "response_digest": digest,
+                    },
+                    sort_keys=True,
+                )
+            )
+            if state == "clear":
+                self._post_comment(
+                    json.dumps(
+                        {
+                            "schema": "hunter.review-ack.v1",
+                            "head_sha": self.expected_head,
+                            "claims_id": self.claims_id,
+                            "verdict": "clear",
+                            "summary": str(
+                                payload.get("summary") or "Independent API review found no blocking defects."
+                            ),
+                            "collector_run_id": self.run_id,
+                            "reviewer_agent": str(agent["id"]),
+                            "response_digest": digest,
+                        },
+                        sort_keys=True,
+                    )
+                )
+            return {
+                **trigger,
+                "provider": provider,
+                "response_digest": digest,
+                "head_sha": self.expected_head,
+                "state": state,
+                "result_comment_id": result_comment["id"],
+                "collector_run_id": self.run_id,
+            }
+        body = trigger_body(self.expected_head, self.claims_id, agent, self.run_id, self.run_attempt, number)
+        result = self._post_comment(body)
+        result["collector_run_id"] = self.run_id
         return result
 
     @staticmethod
@@ -314,13 +385,15 @@ class GitHubBackend:
                 ack is not None
                 and ack["head_sha"] == self.expected_head
                 and ack["claims_id"] == self.claims_id
-                and ack.get("collector_run_id") == self.run_id
+                and ack.get("collector_run_id") == int(trigger.get("collector_run_id") or self.run_id)
             ):
                 return "clear"
             if agent.get("id") == "codex" and self._native_clear(body, self.expected_head):
                 return "clear"
             if self._unavailable(body):
                 return "unavailable"
+            if governance._substantive_review_body(body):
+                return "blocking"
         return "waiting"
 
     def responded(self, agent: dict[str, Any], trigger: dict[str, Any]) -> bool:
