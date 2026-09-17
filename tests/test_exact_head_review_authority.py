@@ -1147,6 +1147,18 @@ def test_review_acknowledgement_rejects_contradictory_extra_fields():
     assert core.review_acknowledgement(json.dumps(ack)) is None
 
 
+def test_review_acknowledgement_accepts_authenticated_codex_view_task_footer():
+    _, ack = _request_and_ack()
+    body = json.dumps(ack) + "\n\n [View task →](https://chatgpt.com/s/cd_example)"
+    assert core.review_acknowledgement(body) == ack
+
+
+def test_review_acknowledgement_still_rejects_arbitrary_trailing_prose():
+    _, ack = _request_and_ack()
+    body = json.dumps(ack) + "\n\nLooks good to me."
+    assert core.review_acknowledgement(body) is None
+
+
 def test_a_review_request_cannot_be_verified_locally_as_a_completed_review():
     document, _ = _request_and_ack()
     document["authority"]["head_sha"] = HEAD
