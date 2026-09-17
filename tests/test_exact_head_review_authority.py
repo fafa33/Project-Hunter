@@ -1124,7 +1124,7 @@ def _request_and_ack():
     return document, ack
 
 
-def test_review_fetch_accepts_authenticated_native_codex_clear_issue_comment(monkeypatch):
+def test_review_fetch_rejects_authenticated_native_codex_clear_issue_comment(monkeypatch):
     body = (
         "Codex Review: Didn't find any major issues. Nice work!\n\n"
         f"**Reviewed commit:** `{HEAD[:10]}`\n\n"
@@ -1142,7 +1142,7 @@ def test_review_fetch_accepts_authenticated_native_codex_clear_issue_comment(mon
                     "body": body,
                     "created_at": "2026-09-13T23:00:00Z",
                     "html_url": "https://github.com/fafa33/Project-Hunter/pull/476#issuecomment-99",
-                }
+                },
             ]
         raise AssertionError(path)
 
@@ -1150,13 +1150,10 @@ def test_review_fetch_accepts_authenticated_native_codex_clear_issue_comment(mon
     observations, error = core.read_pr_pool_review_comments("repo", "token", PR_NUMBER, _pool(), HEAD)
 
     assert error is None
-    assert len(observations) == 1
-    assert observations[0]["agent_id"] == "codex"
-    assert observations[0]["commit_id"] == HEAD
-    assert observations[0]["source_kind"] == "issue_comment"
+    assert observations == []
 
 
-def test_authenticated_native_codex_clear_comment_adopts_exact_head_review_request(monkeypatch):
+def test_authenticated_native_codex_issue_comment_does_not_adopt_exact_head_review_request(monkeypatch):
     document, _ = _request_and_ack()
     native = {
         **_trusted_review(
@@ -1175,7 +1172,7 @@ def test_authenticated_native_codex_clear_comment_adopts_exact_head_review_reque
 
     state, reason = core.verify_pre_ready_hostile_review("repo", "token", HEAD, PR_NUMBER)
 
-    assert state == "success", reason
+    assert state == "failure", reason
 
 
 def test_a_current_authenticated_acknowledgement_establishes_new_exact_head_authority(monkeypatch):

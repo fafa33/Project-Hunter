@@ -108,7 +108,7 @@ def test_trusted_run_must_execute_default_branch_revision():
     }
     assert collector.valid_run(run, 123, "main", "c" * 40)
     assert not collector.valid_run({**run, "head_branch": "candidate"}, 123, "main", "c" * 40)
-    assert not collector.valid_run({**run, "head_sha": HEAD}, 123, "main", "c" * 40)
+    assert not collector.valid_run({**run, "head_sha": "not-a-sha"}, 123, "main", "not-a-sha")
     assert not collector.valid_run({**run, "path": ".github/workflows/untrusted.yml"}, 123, "main", "c" * 40)
 
 
@@ -153,6 +153,8 @@ def _install_receipt(monkeypatch, *, mutate=None, available=False, response_stat
                 "status": "completed",
                 "conclusion": "success",
             }
+        if path.startswith("compare/"):
+            return {"status": "ahead"}
         if path.startswith("actions/runs/123/artifacts?"):
             return {
                 "artifacts": [
@@ -202,6 +204,38 @@ def test_immutable_collector_receipt_proves_configured_exhaustion(monkeypatch):
     pool = _install_receipt(monkeypatch)
     result = collector.load_exhaustion("owner/repo", "token", 469, HEAD, pool, 123, "alternate")
     assert result["reviewer_attempts"][0]["attempt_count"] == 1
+
+
+def test_main_branch_advance_does_not_invalidate_trusted_collector_receipt(monkeypatch):
+    pool = _install_receipt(monkeypatch)
+
+    original = collector.governance.request_json
+
+    def request(repository, token, method, path):
+        if path == "commits/main":
+            return {"sha": "e" * 40}
+        if path.startswith("compare/"):
+            return {"status": "ahead"}
+        return original(repository, token, method, path)
+
+    monkeypatch.setattr(collector.governance, "request_json", request)
+    result = collector.load_exhaustion("owner/repo", "token", 469, HEAD, pool, 123, "alternate")
+    assert result["reviewer_attempts"][0]["attempt_count"] == 1
+
+
+def test_collector_run_off_current_default_branch_history_fails_closed(monkeypatch):
+    pool = _install_receipt(monkeypatch)
+
+    original = collector.governance.request_json
+
+    def request(repository, token, method, path):
+        if path.startswith("compare/"):
+            return {"status": "diverged"}
+        return original(repository, token, method, path)
+
+    monkeypatch.setattr(collector.governance, "request_json", request)
+    with pytest.raises(ValueError, match="default-branch history"):
+        collector.load_exhaustion("owner/repo", "token", 469, HEAD, pool, 123, "alternate")
 
 
 @pytest.mark.parametrize(
@@ -754,7 +788,7 @@ def test_groq_authority_verifies_prior_api_exhaustion_from_trusted_collector(mon
         if path == "":
             return {"default_branch": "main"}
         if path == "commits/main":
-            return {"sha": "c" * 40}
+            return {"sha": "e" * 40}
         if path == "actions/runs/123":
             return {
                 "id": 123,
@@ -766,6 +800,8 @@ def test_groq_authority_verifies_prior_api_exhaustion_from_trusted_collector(mon
                 "status": "completed",
                 "conclusion": "success",
             }
+        if path.startswith("compare/"):
+            return {"status": "ahead"}
         if path.startswith("actions/runs/123/artifacts?"):
             return {
                 "artifacts": [

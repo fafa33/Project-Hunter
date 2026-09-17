@@ -110,12 +110,23 @@ def valid_run(run: dict[str, Any], run_id: int, branch: str, revision: str) -> b
         and type(run.get("run_attempt")) is int
         and run["run_attempt"] >= 1
         and run.get("head_branch") == branch
+        and governance._is_commit_sha(str(run.get("head_sha") or ""))
         and run.get("head_sha") == revision
         and run.get("path") == WORKFLOW
         and run.get("event") in {"workflow_dispatch", "pull_request_target"}
         and run.get("status") == "completed"
         and run.get("conclusion") == "success"
     )
+
+
+def _run_on_default_branch_history(repository: str, token: str, branch: str, revision: str) -> bool:
+    tip = governance.request_json(repository, token, "GET", f"commits/{branch}")
+    if not isinstance(tip, dict) or not governance._is_commit_sha(str(tip.get("sha") or "")):
+        raise ValueError("trusted default-branch tip is unavailable")
+    payload = governance.request_json(repository, token, "GET", f"compare/{revision}...{tip['sha']}")
+    if not isinstance(payload, dict):
+        raise ValueError("default-branch ancestry comparison payload is malformed")
+    return str(payload.get("status") or "") in {"ahead", "identical"}
 
 
 def _pages(repository: str, token: str, path: str, key: str | None = None) -> list[dict[str, Any]]:
@@ -617,10 +628,12 @@ def load_exhaustion(
         raise ValueError("collector receipt does not match the current pull-request HEAD")
     repo = governance.request_json(repository, token, "GET", "")
     branch = repo["default_branch"]
-    revision = governance.request_json(repository, token, "GET", f"commits/{branch}")["sha"]
     run = governance.request_json(repository, token, "GET", f"actions/runs/{run_id}")
+    revision = str(run.get("head_sha") or "") if isinstance(run, dict) else ""
     if not isinstance(run, dict) or not valid_run(run, run_id, branch, revision):
         raise ValueError("collector did not execute the trusted default-branch revision")
+    if not _run_on_default_branch_history(repository, token, branch, revision):
+        raise ValueError("collector run is no longer on trusted default-branch history")
     name = f'hunter-reviewer-results-{head}-{run["run_attempt"]}'
     artifacts = [
         a for a in _pages(repository, token, f"actions/runs/{run_id}/artifacts", "artifacts") if a.get("name") == name

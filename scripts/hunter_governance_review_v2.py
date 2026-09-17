@@ -545,7 +545,6 @@ def read_pr_pool_review_comments(
             login = str(comment["user"].get("login") or "").lower()
             body = str(comment.get("body") or "")
             ack = review_acknowledgement(body)
-            native_codex = login == reviewer_login({"id": "codex"}) and native_codex_clear_review(body, exact_head)
             actions_agent = ""
             if login == "github-actions[bot]" and ack is not None:
                 candidate_agent = str(ack.get("reviewer_agent") or "")
@@ -567,7 +566,7 @@ def read_pr_pool_review_comments(
                     actions_agent = candidate_agent
             if login not in enabled and not actions_agent:
                 continue
-            if ack is None and not native_codex:
+            if ack is None:
                 continue
             reviews.append(
                 {
@@ -1817,8 +1816,21 @@ def verify_pre_ready_hostile_review(
             if ack and ack["head_sha"] == head_sha and ack["claims_id"] == claims_id:
                 adopted.append((observation, ack))
                 continue
-            if observation.get("agent_id") == "codex" and native_codex_clear_review(observation["body"], head_sha):
-                adopted.append((observation, {"head_sha": head_sha, "claims_id": claims_id, "verdict": "clear"}))
+            if (
+                observation.get("agent_id") == "codex"
+                and observation.get("source_kind") == "review"
+                and native_codex_clear_review(observation["body"], head_sha)
+            ):
+                adopted.append(
+                    (
+                        observation,
+                        {
+                            "head_sha": head_sha,
+                            "claims_id": claims_id,
+                            "verdict": "clear",
+                        },
+                    )
+                )
         if not adopted:
             return "failure", "MISSING_REVIEW_AUTHORITY: no authenticated exact-head adoption of the review request"
         priorities = {str(a["id"]): int(a["priority"]) for a in pre_ready.enabled_pool_reviewers(pool)}
