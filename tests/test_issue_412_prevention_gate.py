@@ -525,9 +525,9 @@ def _attempt(
     *,
     status: str = "exhausted",
     reason: str = "unavailable (rate-limited)",
-    timeout_seconds: int = 900,
+    timeout_seconds: int = 300,
     failure_class: str = "transient",
-    attempt_count: int = 2,
+    attempt_count: int = 1,
     invocation_reference: str = "actions/runs/12345",
 ) -> dict[str, Any]:
     """One machine-checkable reviewer-pool exhaustion attempt record."""
@@ -547,23 +547,23 @@ ALTERNATE_AGENT = {
     "priority": 2,
     "enabled": True,
     "exact_head_support": True,
-    "timeout_seconds": 900,
+    "timeout_seconds": 300,
     "github_login": "alternate-reviewer[bot]",
 }
 
 
-def _pool(*, agents: tuple = (), last_resort: str = "opencode", max_seconds: int = 1800) -> dict[str, Any]:
+def _pool(*, agents: tuple = (), last_resort: str = "opencode", max_seconds: int = 300) -> dict[str, Any]:
     """A normalized reviewer pool, the shape ``review.load_reviewer_pool`` returns."""
     base_agent = {
         "id": "codex",
         "priority": 1,
         "enabled": True,
         "exact_head_support": True,
-        "timeout_seconds": 900,
+        "timeout_seconds": 300,
     }
     return {
         "last_resort": last_resort,
-        "timeout_policy": {"bounded": True, "default_seconds": 900, "max_seconds": max_seconds, "retries_per_agent": 1},
+        "timeout_policy": {"bounded": True, "default_seconds": 300, "max_seconds": max_seconds, "retries_per_agent": 0},
         "agents": (base_agent,) + tuple(agents),
     }
 
@@ -612,7 +612,10 @@ def _authority(
             }
         )
     if authority_type != "codex":
-        authority["reviewer_attempts"] = list(attempts) if attempts is not None else [dict(_attempt())]
+        default_attempts = [dict(_attempt())]
+        if authority_type == "opencode":
+            default_attempts += [dict(_attempt("gemini")), dict(_attempt("groq"))]
+        authority["reviewer_attempts"] = list(attempts) if attempts is not None else default_attempts
     authority.update(overrides)
     return authority
 
@@ -811,13 +814,17 @@ def test_a_codex_review_of_the_exact_head_is_valid() -> None:
     assert verdict.ok is True
 
 
-def test_a_fallback_review_of_the_exact_head_is_valid_when_codex_is_unavailable() -> None:
-    """Fallback authority: the canonical OpenCode hostile review counts.
-
-    Machine-readability is preserved, so `verify_claims` cannot tell the two
-    authorities apart -- the difference is only the recorded authority record,
-    and the fallback record is the report of *why* Codex could not review.
-    """
+def test_a_fallback_review_of_the_exact_head_is_valid_when_codex_is_unavailable(monkeypatch) -> None:
+    """Fallback authority counts only after the configured reviewer pool is exhausted."""
+    _use_pool(
+        monkeypatch,
+        _pool(
+            agents=(
+                {**ALTERNATE_AGENT, "id": "gemini", "priority": 2, "retryable": False},
+                {**ALTERNATE_AGENT, "id": "groq", "priority": 3, "retryable": False},
+            )
+        ),
+    )
     document = _review_document(authority=_authority(authority_type="opencode"))
 
     verdict = _verify(document)
@@ -1230,7 +1237,7 @@ def test_a_disabled_pool_agent_is_neither_admissible_nor_required(monkeypatch) -
     disabled = {"id": "retired-agent", "priority": 2, "enabled": False, "exact_head_support": True}
     _use_pool(monkeypatch, _pool(agents=(disabled,)))
 
-    guard = _review_document(authority=_authority(authority_type="opencode"))
+    guard = _review_document(authority=_authority(authority_type="opencode", attempts=[dict(_attempt())]))
     assert _verify(guard).ok is True
 
     retired = _review_document(authority=_authority(authority_type="retired-agent"))

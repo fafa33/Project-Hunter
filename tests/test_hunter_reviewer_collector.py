@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import copy
+import json
+import urllib.error
 
 import hunter_reviewer_collector as collector
 import pytest
@@ -8,13 +10,13 @@ import pytest
 HEAD = "a" * 40
 POOL = {
     "last_resort": "opencode",
-    "timeout_policy": {"retries_per_agent": 1},
+    "timeout_policy": {"retries_per_agent": 0},
     "agents": (
         {
             "id": "codex",
             "priority": 1,
             "enabled": True,
-            "timeout_seconds": 900,
+            "timeout_seconds": 300,
             "retryable": True,
             "trigger_method": "github-pr-comment:@codex review",
             "github_login": "chatgpt-codex-connector[bot]",
@@ -27,6 +29,8 @@ POOL = {
 class Backend:
     def __init__(self, response=False, mutate=False):
         self.clock = 0.0
+        self.run_id = 123
+        self.run_attempt = 1
         self.triggers = []
         self.response = response
         self.mutate = mutate
@@ -47,27 +51,35 @@ class Backend:
     def responded(self, agent, trigger):
         return self.response
 
+    def response_state(self, agent, trigger):
+        return "clear" if self.response else "waiting"
 
-def test_real_timeout_and_all_configured_retries_are_required():
+
+def test_real_timeout_uses_one_invocation_per_reviewer():
     backend = Backend()
-    results = collector.collect_attempts(POOL, HEAD, backend)
-    assert backend.triggers == [("codex", 1), ("codex", 2)]
-    assert [r["elapsed_seconds"] for r in results] == [900, 900]
+    pool = copy.deepcopy(POOL)
+    pool["timeout_policy"]["retries_per_agent"] = 0
+    results = collector.collect_attempts(pool, HEAD, backend)
+    assert backend.triggers == [("codex", 1)]
+    assert [r["elapsed_seconds"] for r in results] == [300]
     assert all(r["outcome"] == "timed_out" for r in results)
 
 
 def test_response_prevents_exhaustion_and_lower_reviewer_invocation():
     backend = Backend(response=True)
     pool = copy.deepcopy(POOL)
+    pool["timeout_policy"]["retries_per_agent"] = 0
     pool["agents"] += ({**pool["agents"][0], "id": "alternate", "priority": 2},)
     results = collector.collect_attempts(pool, HEAD, backend)
     assert backend.triggers == [("codex", 1)]
-    assert results[0]["outcome"] == "responded"
+    assert results[0]["outcome"] == "clear"
 
 
 def test_head_change_aborts_without_fabricating_exhaustion():
+    pool = copy.deepcopy(POOL)
+    pool["timeout_policy"]["retries_per_agent"] = 0
     with pytest.raises(ValueError, match="HEAD changed"):
-        collector.collect_attempts(POOL, HEAD, Backend(mutate=True))
+        collector.collect_attempts(pool, HEAD, Backend(mutate=True))
 
 
 def test_evidence_transport_failure_is_not_reviewer_exhaustion():
@@ -77,8 +89,11 @@ def test_evidence_transport_failure_is_not_reviewer_exhaustion():
         raise RuntimeError("GitHub unavailable")
 
     backend.responded = unavailable
+    backend.response_state = unavailable
+    pool = copy.deepcopy(POOL)
+    pool["timeout_policy"]["retries_per_agent"] = 0
     with pytest.raises(RuntimeError, match="GitHub unavailable"):
-        collector.collect_attempts(POOL, HEAD, backend)
+        collector.collect_attempts(pool, HEAD, backend)
 
 
 def test_trusted_run_must_execute_default_branch_revision():
@@ -94,11 +109,11 @@ def test_trusted_run_must_execute_default_branch_revision():
     }
     assert collector.valid_run(run, 123, "main", "c" * 40)
     assert not collector.valid_run({**run, "head_branch": "candidate"}, 123, "main", "c" * 40)
-    assert not collector.valid_run({**run, "head_sha": HEAD}, 123, "main", "c" * 40)
+    assert not collector.valid_run({**run, "head_sha": "not-a-sha"}, 123, "main", "not-a-sha")
     assert not collector.valid_run({**run, "path": ".github/workflows/untrusted.yml"}, 123, "main", "c" * 40)
 
 
-def _install_receipt(monkeypatch, *, mutate=None, available=False):
+def _install_receipt(monkeypatch, *, mutate=None, available=False, response_state=None):
     import hashlib
     import io
     import json
@@ -139,6 +154,8 @@ def _install_receipt(monkeypatch, *, mutate=None, available=False):
                 "status": "completed",
                 "conclusion": "success",
             }
+        if path.startswith("compare/"):
+            return {"status": "ahead"}
         if path.startswith("actions/runs/123/artifacts?"):
             return {
                 "artifacts": [
@@ -153,6 +170,8 @@ def _install_receipt(monkeypatch, *, mutate=None, available=False):
             }
         if path.startswith("issues/comments/"):
             number = int(path.rsplit("/", 1)[-1])
+            if number != 1:
+                raise AssertionError(path)
             return {
                 "body": collector.trigger_body(HEAD, "d" * 64, POOL["agents"][0], 123, 1, number),
                 "created_at": "2026-09-13T00:00:00Z",
@@ -172,6 +191,11 @@ def _install_receipt(monkeypatch, *, mutate=None, available=False):
     monkeypatch.setattr(collector.governance, "request_json", request)
     monkeypatch.setattr(collector, "download_artifact", lambda *a: archive)
     monkeypatch.setattr(collector.GitHubBackend, "responded", lambda *a: available)
+    monkeypatch.setattr(
+        collector.GitHubBackend,
+        "response_state",
+        lambda *a: response_state or ("clear" if available else "waiting"),
+    )
     # This fixture validates exhaustion for an alternate, not Guard snapshot gates.
     pool = copy.deepcopy(POOL)
     return pool
@@ -180,7 +204,39 @@ def _install_receipt(monkeypatch, *, mutate=None, available=False):
 def test_immutable_collector_receipt_proves_configured_exhaustion(monkeypatch):
     pool = _install_receipt(monkeypatch)
     result = collector.load_exhaustion("owner/repo", "token", 469, HEAD, pool, 123, "alternate")
-    assert result["reviewer_attempts"][0]["attempt_count"] == 2
+    assert result["reviewer_attempts"][0]["attempt_count"] == 1
+
+
+def test_main_branch_advance_does_not_invalidate_trusted_collector_receipt(monkeypatch):
+    pool = _install_receipt(monkeypatch)
+
+    original = collector.governance.request_json
+
+    def request(repository, token, method, path):
+        if path == "commits/main":
+            return {"sha": "e" * 40}
+        if path.startswith("compare/"):
+            return {"status": "ahead"}
+        return original(repository, token, method, path)
+
+    monkeypatch.setattr(collector.governance, "request_json", request)
+    result = collector.load_exhaustion("owner/repo", "token", 469, HEAD, pool, 123, "alternate")
+    assert result["reviewer_attempts"][0]["attempt_count"] == 1
+
+
+def test_collector_run_off_current_default_branch_history_fails_closed(monkeypatch):
+    pool = _install_receipt(monkeypatch)
+
+    original = collector.governance.request_json
+
+    def request(repository, token, method, path):
+        if path.startswith("compare/"):
+            return {"status": "diverged"}
+        return original(repository, token, method, path)
+
+    monkeypatch.setattr(collector.governance, "request_json", request)
+    with pytest.raises(ValueError, match="default-branch history"):
+        collector.load_exhaustion("owner/repo", "token", 469, HEAD, pool, 123, "alternate")
 
 
 @pytest.mark.parametrize(
@@ -191,8 +247,8 @@ def test_immutable_collector_receipt_proves_configured_exhaustion(monkeypatch):
         lambda r: r["attempts"].pop(),
         lambda r: r["attempts"][0].update(timeout_seconds=1),
         lambda r: r["attempts"][0].update(elapsed_seconds=1),
-        lambda r: r["attempts"][1].update(trigger_id=1),
-        lambda r: r["attempts"][0].update(outcome="responded"),
+        lambda r: r["attempts"][0].update(trigger_id=999),
+        lambda r: r["attempts"][0].update(outcome="clear"),
     ],
 )
 def test_malformed_or_incomplete_trusted_receipt_fails_closed(monkeypatch, mutation):
@@ -239,3 +295,652 @@ def test_collector_workflow_can_write_pr_conversation_triggers():
     permissions = workflow["permissions"]
 
     assert permissions.get("pull-requests") == "write"
+
+
+def test_one_invocation_per_reviewer_then_fast_failover():
+    class ClassifiedBackend(Backend):
+        def response_state(self, agent, trigger):
+            return "unavailable" if agent["id"] == "codex" else "clear"
+
+    pool = copy.deepcopy(POOL)
+    pool["timeout_policy"]["retries_per_agent"] = 0
+    pool["agents"] += ({**pool["agents"][0], "id": "alternate", "priority": 2},)
+    backend = ClassifiedBackend()
+
+    results = collector.collect_attempts(pool, HEAD, backend)
+
+    assert backend.triggers == [("codex", 1), ("alternate", 1)]
+    assert [record["outcome"] for record in results] == ["unavailable", "clear"]
+    assert backend.clock == 0
+
+
+def test_native_codex_clear_is_correlated_to_trigger_and_exact_head(monkeypatch):
+    backend = collector.GitHubBackend("owner/repo", "token", 476, HEAD, "d" * 64, 123, 1)
+    trigger = {"id": 7, "created_at": "2026-09-17T00:00:00Z"}
+    native = {
+        "id": 8,
+        "created_at": "2026-09-17T00:00:01Z",
+        "user": {"login": "chatgpt-codex-connector[bot]"},
+        "body": ("Codex Review: Didn't find any major issues. Nice work!\n\n" "**Reviewed commit:** `aaaaaaaaaa`"),
+    }
+
+    monkeypatch.setattr(collector, "_pages", lambda *_a, **_k: [] if "reviews" in _a[2] else [native])
+
+    assert backend.response_state(POOL["agents"][0], trigger) == "clear"
+    native["created_at"] = "2026-09-16T23:59:59Z"
+    assert backend.response_state(POOL["agents"][0], trigger) == "waiting"
+
+
+def test_blocking_response_stops_without_lower_reviewer_invocation():
+    class ClassifiedBackend(Backend):
+        def response_state(self, agent, trigger):
+            return "blocking"
+
+    pool = copy.deepcopy(POOL)
+    pool["timeout_policy"]["retries_per_agent"] = 0
+    pool["agents"] += ({**pool["agents"][0], "id": "alternate", "priority": 2},)
+    backend = ClassifiedBackend()
+    results = collector.collect_attempts(pool, HEAD, backend)
+    assert backend.triggers == [("codex", 1)]
+    assert results[0]["outcome"] == "blocking"
+
+
+def test_native_codex_wrong_head_is_not_a_response(monkeypatch):
+    backend = collector.GitHubBackend("owner/repo", "token", 476, HEAD, "d" * 64, 123, 1)
+    trigger = {"id": 7, "created_at": "2026-09-17T00:00:00Z"}
+    native = {
+        "id": 8,
+        "created_at": "2026-09-17T00:00:01Z",
+        "user": {"login": "chatgpt-codex-connector[bot]"},
+        "body": ("Codex Review: Didn't find any major issues. Nice work!\n\n" "**Reviewed commit:** `bbbbbbbbbb`"),
+    }
+    monkeypatch.setattr(collector, "_pages", lambda *_a, **_k: [] if "reviews" in _a[2] else [native])
+    assert backend.response_state(POOL["agents"][0], trigger) == "blocking"
+
+
+def test_codex_policy_is_single_bounded_300_second_invocation():
+    pool, error = collector.review.load_reviewer_pool()
+    assert not error and pool is not None
+    codex = next(agent for agent in pool["agents"] if agent["id"] == "codex")
+    assert pool["timeout_policy"]["retries_per_agent"] == 0
+    assert codex["timeout_seconds"] == 300
+
+
+def test_native_codex_unavailable_response_fails_over_immediately(monkeypatch):
+    backend = collector.GitHubBackend("owner/repo", "token", 476, HEAD, "d" * 64, 123, 1)
+    trigger = {"id": 7, "created_at": "2026-09-17T00:00:00Z"}
+    unavailable = {
+        "id": 8,
+        "created_at": "2026-09-17T00:00:01Z",
+        "user": {"login": "chatgpt-codex-connector[bot]"},
+        "body": "To use Codex here, create a Codex account and connect to github.",
+    }
+    monkeypatch.setattr(collector, "_pages", lambda *_a, **_k: [] if "reviews" in _a[2] else [unavailable])
+    assert backend.response_state(POOL["agents"][0], trigger) == "unavailable"
+
+
+def test_structured_clear_ack_is_correlated_to_trigger_claims(monkeypatch):
+    import json
+
+    backend = collector.GitHubBackend("owner/repo", "token", 476, HEAD, "d" * 64, 123, 1)
+    trigger = {"id": 7, "created_at": "2026-09-17T00:00:00Z"}
+    ack = {
+        "schema": "hunter.review-ack.v1",
+        "head_sha": HEAD,
+        "claims_id": "d" * 64,
+        "verdict": "clear",
+        "summary": "Reviewed the complete exact-head diff and found no blocking governance defects.",
+        "collector_run_id": 123,
+        "trigger_id": 7,
+    }
+    comment = {
+        "id": 8,
+        "created_at": "2026-09-17T00:00:01Z",
+        "user": {"login": "chatgpt-codex-connector[bot]"},
+        "body": json.dumps(ack),
+    }
+    monkeypatch.setattr(collector, "_pages", lambda *_a, **_k: [] if "reviews" in _a[2] else [comment])
+    assert backend.response_state(POOL["agents"][0], trigger) == "clear"
+
+
+def test_structured_clear_ack_rejects_mismatched_trigger_id(monkeypatch):
+    import json
+
+    backend = collector.GitHubBackend("owner/repo", "token", 476, HEAD, "d" * 64, 123, 1)
+    trigger = {"id": 7, "created_at": "2026-09-17T00:00:00Z"}
+    ack = {
+        "schema": "hunter.review-ack.v1",
+        "head_sha": HEAD,
+        "claims_id": "d" * 64,
+        "verdict": "clear",
+        "summary": "Reviewed the complete exact-head diff and found no blocking governance defects.",
+        "collector_run_id": 123,
+        "trigger_id": 8,
+    }
+    comment = {
+        "id": 8,
+        "created_at": "2026-09-17T00:00:01Z",
+        "user": {"login": "chatgpt-codex-connector[bot]"},
+        "body": json.dumps(ack),
+    }
+    monkeypatch.setattr(collector, "_pages", lambda *_a, **_k: [] if "reviews" in _a[2] else [comment])
+    assert backend.response_state(POOL["agents"][0], trigger) == "blocking"
+
+
+def test_native_codex_clear_with_contradictory_text_is_not_clear(monkeypatch):
+    backend = collector.GitHubBackend("owner/repo", "token", 476, HEAD, "d" * 64, 123, 1)
+    trigger = {"id": 7, "created_at": "2026-09-17T00:00:00Z"}
+    native = {
+        "id": 8,
+        "created_at": "2026-09-17T00:00:01Z",
+        "user": {"login": "chatgpt-codex-connector[bot]"},
+        "body": (
+            "Codex Review: Didn't find any major issues.\n\n"
+            "**Reviewed commit:** `aaaaaaaaaa`\nBlocking finding: unsafe bypass"
+        ),
+    }
+    monkeypatch.setattr(collector, "_pages", lambda *_a, **_k: [] if "reviews" in _a[2] else [native])
+    assert backend.response_state(POOL["agents"][0], trigger) == "blocking"
+
+
+def test_unavailable_codex_does_not_grant_review_authority(monkeypatch):
+    backend = collector.GitHubBackend("owner/repo", "token", 476, HEAD, "d" * 64, 123, 1)
+    trigger = {"id": 7, "created_at": "2026-09-17T00:00:00Z"}
+    unavailable = {
+        "id": 8,
+        "created_at": "2026-09-17T00:00:01Z",
+        "user": {"login": "chatgpt-codex-connector[bot]"},
+        "body": "Codex usage limit reached. Try again later.",
+    }
+    monkeypatch.setattr(collector, "_pages", lambda *_a, **_k: [] if "reviews" in _a[2] else [unavailable])
+    assert backend.response_state(POOL["agents"][0], trigger) == "unavailable"
+    assert not collector.governance.native_codex_clear_review(unavailable["body"], HEAD)
+
+
+def test_collector_automatically_runs_for_each_pr_head_change():
+    workflow = (collector.review.ROOT / collector.WORKFLOW).read_text()
+    assert "pull_request_target:" in workflow
+    assert "- synchronize" in workflow
+    assert "github.event.pull_request.number" in workflow
+    assert "github.event.pull_request.head.sha" in workflow
+
+
+def test_explicit_unavailability_is_valid_exhaustion_without_waiting_full_timeout(monkeypatch):
+    pool = _install_receipt(
+        monkeypatch,
+        mutate=lambda r: r["attempts"][0].update(outcome="unavailable", elapsed_seconds=0),
+        response_state="unavailable",
+    )
+    result = collector.load_exhaustion("owner/repo", "token", 469, HEAD, pool, 123, "alternate")
+    assert result["reviewer_attempts"][0]["failure_class"] == "permanent"
+    assert result["reviewer_attempts"][0]["attempt_count"] == 1
+
+
+def test_pull_request_target_collector_run_is_trusted_on_default_branch():
+    run = {
+        "id": 123,
+        "run_attempt": 1,
+        "head_branch": "main",
+        "head_sha": "b" * 40,
+        "path": collector.WORKFLOW,
+        "event": "pull_request_target",
+        "status": "completed",
+        "conclusion": "success",
+    }
+    assert collector.valid_run(run, 123, "main", "b" * 40)
+
+
+def test_automatic_artifact_name_uses_derived_candidate_head():
+    workflow = (collector.review.ROOT / collector.WORKFLOW).read_text()
+    assert (
+        "name: hunter-reviewer-results-${{ github.event.pull_request.head.sha || inputs.head_sha }}-${{ github.run_attempt }}"
+        in workflow
+    )
+
+
+def test_substantive_not_available_phrase_is_not_unavailability():
+    assert not collector.GitHubBackend._unavailable(
+        "This required migration is not available in this patch and is a blocking finding."
+    )
+
+
+def test_substantive_rate_limit_phrase_is_not_unavailability():
+    assert not collector.GitHubBackend._unavailable(
+        "This patch lacks a rate limit on the public endpoint and that is a blocking finding."
+    )
+
+
+def test_policy_enables_server_side_gemini_and_groq_after_codex():
+    pool, error = collector.review.load_reviewer_pool()
+    assert not error and pool is not None
+    agents = sorted(collector.review.enabled_pool_reviewers(pool), key=lambda a: a["priority"])
+    assert [(a["id"], a["priority"]) for a in agents[:3]] == [("codex", 1), ("gemini", 2), ("groq", 3)]
+    assert agents[1]["trigger_method"] == "api:gemini"
+    assert agents[2]["trigger_method"] == "api:groq"
+    assert all(a["timeout_seconds"] == 300 for a in agents[:3])
+
+
+def test_collector_workflow_exposes_only_server_reviewer_secrets():
+    import yaml
+
+    workflow = yaml.safe_load((collector.review.ROOT / collector.WORKFLOW).read_text())
+    env = workflow["jobs"]["collect"]["steps"][1]["env"]
+    assert env["GEMINI_API_KEY"] == "${{ secrets.GEMINI_API_KEY }}"
+    assert env["GROQ_API_KEY"] == "${{ secrets.GROQ_API_KEY }}"
+
+
+@pytest.mark.parametrize(
+    ("payload", "expected"),
+    [
+        ({"verdict": "clear", "summary": "No blocking defects."}, "clear"),
+        ({"verdict": "blocking", "summary": "Unsafe authority bypass."}, "blocking"),
+        ({"verdict": "clear", "summary": "Blocking finding remains."}, "blocking"),
+    ],
+)
+def test_external_reviewer_verdict_is_fail_closed(payload, expected):
+    assert collector.external_verdict(payload) == expected
+
+
+def test_api_reviewer_trigger_is_exact_head_bound_and_synchronous(monkeypatch):
+    agent = {
+        "id": "gemini",
+        "priority": 2,
+        "enabled": True,
+        "timeout_seconds": 300,
+        "retryable": False,
+        "trigger_method": "api:gemini",
+        "evidence_parser": "provider-json.v1",
+    }
+    backend = collector.GitHubBackend("owner/repo", "token", 476, HEAD, "d" * 64, 123, 1)
+    monkeypatch.setattr(
+        backend,
+        "_invoke_external",
+        lambda a, n: {"verdict": "clear", "summary": "No blocking defects remain after exact-head review."},
+    )
+    monkeypatch.setattr(backend, "_existing_trigger", lambda a, n: None)
+    ids = iter(range(10, 20))
+    monkeypatch.setattr(
+        backend, "_post_comment", lambda body: {"id": next(ids), "created_at": "2026-09-17T00:00:00Z", "body": body}
+    )
+    trigger = backend.trigger(agent, 1)
+    monkeypatch.setattr(
+        collector,
+        "_pages",
+        lambda *_a, **_k: [
+            {
+                "id": 11,
+                "user": {"login": "github-actions[bot]"},
+                "body": trigger["body"],
+            },
+            {
+                "id": 12,
+                "user": {"login": "github-actions[bot]"},
+                "body": json.dumps(
+                    {
+                        "schema": "hunter.reviewer-result.v1",
+                        "head_sha": HEAD,
+                        "claims_id": "d" * 64,
+                        "reviewer_agent": "gemini",
+                        "collector_run_id": 123,
+                        "trigger_id": 10,
+                        "verdict": "clear",
+                        "summary": "No blocking defects remain after exact-head review.",
+                        "response_digest": trigger["response_digest"],
+                    },
+                    sort_keys=True,
+                ),
+            },
+        ],
+    )
+    assert trigger["head_sha"] == HEAD
+    assert trigger["provider"] == "gemini"
+    assert backend.response_state(agent, trigger) == "clear"
+
+
+def test_codex_trigger_is_reused_for_same_exact_head_claims(monkeypatch):
+    backend = collector.GitHubBackend("owner/repo", "token", 476, HEAD, "d" * 64, 999, 1)
+    agent = POOL["agents"][0]
+    key = collector.invocation_key(HEAD, "d" * 64, "codex", 1)
+    old = {
+        "id": 77,
+        "created_at": "2026-09-17T00:00:00Z",
+        "body": f"Invocation key: {key}.\nCollector invocation: 123/1/codex/1.",
+        "user": {"login": "github-actions[bot]"},
+    }
+    monkeypatch.setattr(collector, "_pages", lambda *_a, **_k: [old])
+    monkeypatch.setattr(backend, "_post_comment", lambda *_a: pytest.fail("must not invoke Codex twice"))
+    trigger = backend.trigger(agent, 1)
+    assert trigger["id"] == 77
+    assert trigger["collector_run_id"] == 123
+
+
+def test_api_trigger_and_result_are_persisted_before_authority(monkeypatch):
+    backend = collector.GitHubBackend("owner/repo", "token", 476, HEAD, "d" * 64, 123, 1)
+    agent = {**POOL["agents"][0], "id": "gemini", "priority": 2, "trigger_method": "api:gemini"}
+    monkeypatch.setattr(backend, "_existing_trigger", lambda *_a: None)
+    monkeypatch.setattr(
+        backend,
+        "_invoke_external",
+        lambda *_a: {"verdict": "clear", "summary": "No blocking defects remain after exact-head review."},
+    )
+    bodies = []
+    monkeypatch.setattr(
+        backend,
+        "_post_comment",
+        lambda body: bodies.append(body) or {"id": len(bodies), "created_at": "2026-09-17T00:00:00Z", "body": body},
+    )
+    trigger = backend.trigger(agent, 1)
+    assert len(bodies) == 3
+    assert "hunter.reviewer-trigger.v1" in bodies[0]
+    assert "hunter.reviewer-result.v1" in bodies[1]
+    assert "hunter.review-ack.v1" in bodies[2]
+    assert trigger["result_comment_id"] == 2
+
+
+def test_api_trigger_body_is_canonically_verifiable():
+    agent = {**POOL["agents"][0], "id": "gemini", "priority": 2, "trigger_method": "api:gemini"}
+    body = collector.api_trigger_body(HEAD, "d" * 64, agent, 123, 1, 1)
+    parsed = collector.parse_api_trigger(body)
+    assert parsed == {
+        "schema": "hunter.reviewer-trigger.v1",
+        "head_sha": HEAD,
+        "claims_id": "d" * 64,
+        "reviewer_agent": "gemini",
+        "collector_run_id": 123,
+        "collector_run_attempt": 1,
+        "attempt_number": 1,
+        "invocation_key": collector.invocation_key(HEAD, "d" * 64, "gemini", 1),
+    }
+
+
+def test_reused_invocation_preserves_original_run_and_attempt(monkeypatch):
+    backend = collector.GitHubBackend("owner/repo", "token", 476, HEAD, "d" * 64, 999, 7)
+    agent = POOL["agents"][0]
+    key = collector.invocation_key(HEAD, "d" * 64, "codex", 1)
+    old = {
+        "id": 77,
+        "created_at": "2026-09-17T00:00:00Z",
+        "body": collector.trigger_body(HEAD, "d" * 64, agent, 123, 2, 1),
+        "user": {"login": "github-actions[bot]"},
+    }
+    assert f"Invocation key: {key}." in old["body"]
+    monkeypatch.setattr(collector, "_pages", lambda *_a, **_k: [old])
+    trigger = backend.trigger(agent, 1)
+    assert trigger["collector_run_id"] == 123
+    assert trigger["collector_run_attempt"] == 2
+
+
+def test_reused_api_invocation_recovers_persisted_result(monkeypatch):
+    backend = collector.GitHubBackend("owner/repo", "token", 476, HEAD, "d" * 64, 999, 7)
+    agent = {**POOL["agents"][0], "id": "gemini", "priority": 2, "trigger_method": "api:gemini"}
+    trigger_body = collector.api_trigger_body(HEAD, "d" * 64, agent, 123, 2, 1)
+    trigger = {
+        "id": 77,
+        "created_at": "2026-09-17T00:00:00Z",
+        "body": trigger_body,
+        "user": {"login": "github-actions[bot]"},
+    }
+    result = {
+        "id": 78,
+        "created_at": "2026-09-17T00:00:01Z",
+        "body": collector.api_result_body(
+            HEAD, "d" * 64, agent, 123, 77, "unavailable", "provider unavailable", "e" * 64
+        ),
+        "user": {"login": "github-actions[bot]"},
+    }
+    monkeypatch.setattr(collector, "_pages", lambda *_a, **_k: [trigger, result])
+    monkeypatch.setattr(backend, "_invoke_external", lambda *_a: pytest.fail("must not invoke API twice"))
+    reused = backend.trigger(agent, 1)
+    assert reused["head_sha"] == HEAD
+    assert reused["state"] == "unavailable"
+    assert reused["collector_run_id"] == 123
+    assert reused["collector_run_attempt"] == 2
+    assert reused["result_comment_id"] == 78
+
+
+def test_substantive_temporarily_unavailable_phrase_is_blocking(monkeypatch):
+    backend = collector.GitHubBackend("owner/repo", "token", 476, HEAD, "d" * 64, 123, 1)
+    agent = POOL["agents"][0]
+    trigger = {"id": 1, "created_at": "2026-09-17T00:00:00Z", "collector_run_id": 123}
+    comment = {
+        "created_at": "2026-09-17T00:00:01Z",
+        "user": {"login": "chatgpt-codex-connector[bot]"},
+        "body": "The controller is temporarily unavailable after this transition, which is a blocking finding.",
+    }
+    monkeypatch.setattr(collector, "_pages", lambda _r, _t, path, *_a: [] if "/reviews" in path else [comment])
+    assert backend.response_state(agent, trigger) == "blocking"
+
+
+def test_groq_authority_verifies_prior_api_exhaustion_from_trusted_collector(monkeypatch):
+    import hashlib
+    import io
+    import zipfile
+
+    pool = copy.deepcopy(POOL)
+    pool["agents"] += (
+        {
+            "id": "gemini",
+            "priority": 2,
+            "enabled": True,
+            "timeout_seconds": 300,
+            "retryable": False,
+            "trigger_method": "api:gemini",
+            "evidence_parser": "provider-json.v1",
+        },
+        {
+            "id": "groq",
+            "priority": 3,
+            "enabled": True,
+            "timeout_seconds": 300,
+            "retryable": False,
+            "trigger_method": "api:groq",
+            "evidence_parser": "provider-json.v1",
+        },
+    )
+    codex_trigger = collector.trigger_body(HEAD, "d" * 64, pool["agents"][0], 123, 1, 1)
+    gemini_trigger = collector.api_trigger_body(HEAD, "d" * 64, pool["agents"][1], 123, 1, 1)
+    receipt = {
+        "schema": collector.SCHEMA,
+        "repository": "owner/repo",
+        "pr_number": 469,
+        "head_sha": HEAD,
+        "run_id": 123,
+        "run_attempt": 1,
+        "claims_id": "d" * 64,
+        "configuration_digest": collector.configuration_digest(pool),
+        "attempts": [
+            {
+                "agent_id": "codex",
+                "priority": 1,
+                "timeout_seconds": 300,
+                "trigger_method": "github-pr-comment:@codex review",
+                "evidence_parser": "github-review-ack.v1",
+                "retryable": True,
+                "attempt_number": 1,
+                "trigger_id": 1,
+                "trigger_created_at": "2026-09-13T00:00:00Z",
+                "elapsed_seconds": 300,
+                "outcome": "timed_out",
+            },
+            {
+                "agent_id": "gemini",
+                "priority": 2,
+                "timeout_seconds": 300,
+                "trigger_method": "api:gemini",
+                "evidence_parser": "provider-json.v1",
+                "retryable": False,
+                "attempt_number": 1,
+                "trigger_id": 2,
+                "trigger_created_at": "2026-09-13T00:01:00Z",
+                "elapsed_seconds": 0,
+                "outcome": "unavailable",
+                "provider": "gemini",
+                "response_digest": "e" * 64,
+                "head_sha": HEAD,
+            },
+        ],
+    }
+    stream = io.BytesIO()
+    with zipfile.ZipFile(stream, "w") as bundle:
+        bundle.writestr("reviewer-results.json", json.dumps(receipt))
+    archive = stream.getvalue()
+
+    def request(repository, token, method, path):
+        if path == "":
+            return {"default_branch": "main"}
+        if path == "commits/main":
+            return {"sha": "e" * 40}
+        if path == "actions/runs/123":
+            return {
+                "id": 123,
+                "run_attempt": 1,
+                "head_sha": "c" * 40,
+                "head_branch": "main",
+                "path": collector.WORKFLOW,
+                "event": "pull_request_target",
+                "status": "completed",
+                "conclusion": "success",
+            }
+        if path.startswith("compare/"):
+            return {"status": "ahead"}
+        if path.startswith("actions/runs/123/artifacts?"):
+            return {
+                "artifacts": [
+                    {
+                        "id": 5,
+                        "name": f"hunter-reviewer-results-{HEAD}-1",
+                        "expired": False,
+                        "workflow_run": {"id": 123},
+                        "digest": "sha256:" + hashlib.sha256(archive).hexdigest(),
+                    }
+                ]
+            }
+        if path == "issues/comments/1":
+            return {
+                "id": 1,
+                "body": codex_trigger,
+                "created_at": "2026-09-13T00:00:00Z",
+                "user": {"login": "github-actions[bot]"},
+                "issue_url": "https://api.github.com/repos/owner/repo/issues/469",
+            }
+        if path == "issues/comments/2":
+            return {
+                "id": 2,
+                "body": gemini_trigger,
+                "created_at": "2026-09-13T00:01:00Z",
+                "user": {"login": "github-actions[bot]"},
+                "issue_url": "https://api.github.com/repos/owner/repo/issues/469",
+            }
+        if path.startswith("issues/469/comments?"):
+            return [
+                {
+                    "id": 2,
+                    "body": gemini_trigger,
+                    "created_at": "2026-09-13T00:01:00Z",
+                    "user": {"login": "github-actions[bot]"},
+                },
+                {
+                    "id": 3,
+                    "body": json.dumps(
+                        {
+                            "schema": "hunter.reviewer-result.v1",
+                            "head_sha": HEAD,
+                            "claims_id": "d" * 64,
+                            "reviewer_agent": "gemini",
+                            "collector_run_id": 123,
+                            "trigger_id": 2,
+                            "verdict": "unavailable",
+                            "summary": "gemini HTTP 429",
+                            "response_digest": "e" * 64,
+                        },
+                        sort_keys=True,
+                    ),
+                    "created_at": "2026-09-13T00:01:01Z",
+                    "user": {"login": "github-actions[bot]"},
+                },
+            ]
+        if path == "pulls/469":
+            return {"state": "open", "head": {"sha": HEAD}}
+        if path.startswith("pulls/469/reviews?"):
+            return []
+        raise AssertionError(path)
+
+    monkeypatch.setattr(collector.governance, "request_json", request)
+    monkeypatch.setattr(collector, "download_artifact", lambda *a: archive)
+    evidence = collector.load_exhaustion("owner/repo", "token", 469, HEAD, pool, 123, "groq")
+    assert [attempt["agent_id"] for attempt in evidence["reviewer_attempts"]] == ["codex", "gemini"]
+
+
+# Copilot review 2026-09-17: fail-closed parser and ordering regressions.
+def test_external_verdict_rejects_non_string_contract_fields():
+    assert collector.external_verdict({"verdict": "clear", "summary": ["No blockers"]}) == "blocking"
+    assert collector.external_verdict({"verdict": ["clear"], "summary": "No blockers"}) == "blocking"
+
+
+def test_external_verdict_rejects_ambiguous_clear_summary():
+    assert (
+        collector.external_verdict({"verdict": "clear", "summary": "Critical security vulnerability remains"})
+        == "blocking"
+    )
+
+
+def test_native_codex_clear_rejects_same_line_blocker_and_accepts_heading():
+    good = f"### 💡 Codex Review\n\nDidn't find any major issues.\n\n**Reviewed commit:** `{HEAD[:10]}`"
+    bad = f"### 💡 Codex Review\n\nDidn't find any major issues. Blocking finding: unsafe bypass\n\n**Reviewed commit:** `{HEAD[:10]}`"
+    assert collector.GitHubBackend._native_clear(good, HEAD)
+    assert not collector.GitHubBackend._native_clear(bad, HEAD)
+    assert collector.governance.native_codex_clear_review(good, HEAD)
+    assert not collector.governance.native_codex_clear_review(bad, HEAD)
+
+
+def test_api_auth_failures_are_explicit_unavailability(monkeypatch):
+    backend = collector.GitHubBackend("owner/repo", "token", 469, HEAD, "claims", 1, 1)
+    monkeypatch.setenv("GEMINI_API_KEY", "bad")
+    monkeypatch.setattr(backend, "_candidate_diff", lambda: "diff --git a/x b/x")
+
+    def denied(*_a, **_k):
+        raise urllib.error.HTTPError("https://example", 401, "unauthorized", {}, None)
+
+    monkeypatch.setattr(collector.urllib.request, "urlopen", denied)
+    payload = backend._invoke_external({"id": "gemini", "timeout_seconds": 1, "trigger_method": "api:gemini"}, 1)
+    assert payload["verdict"] == "unavailable"
+
+
+def test_response_state_uses_latest_exact_head_review(monkeypatch):
+    backend = collector.GitHubBackend("owner/repo", "token", 476, HEAD, "d" * 64, 123, 1)
+    trigger = {"id": 7, "created_at": "2026-09-17T00:00:00Z"}
+    reviews = [
+        {
+            "id": 8,
+            "submitted_at": "2026-09-17T00:00:01Z",
+            "commit_id": HEAD,
+            "state": "APPROVED",
+            "body": "",
+            "user": {"login": "chatgpt-codex-connector[bot]"},
+        },
+        {
+            "id": 9,
+            "submitted_at": "2026-09-17T00:00:02Z",
+            "commit_id": HEAD,
+            "state": "CHANGES_REQUESTED",
+            "body": "Blocking regression",
+            "user": {"login": "chatgpt-codex-connector[bot]"},
+        },
+    ]
+    monkeypatch.setattr(collector, "_pages", lambda *_a, **_k: reviews if "reviews" in _a[2] else [])
+    assert backend.response_state(POOL["agents"][0], trigger) == "blocking"
+
+
+def test_parse_native_trigger_binds_head_claims_run_and_attempt():
+    agent = POOL["agents"][0]
+    body = collector.trigger_body(HEAD, "d" * 64, agent, 123, 2, 1)
+    parsed = collector.parse_native_trigger(body)
+    assert parsed == {
+        "head_sha": HEAD,
+        "claims_id": "d" * 64,
+        "reviewer_agent": "codex",
+        "collector_run_id": 123,
+        "collector_run_attempt": 2,
+        "attempt_number": 1,
+    }
+    assert collector.parse_native_trigger(body.replace(HEAD, "b" * 40, 1)) is None

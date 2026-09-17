@@ -355,6 +355,19 @@ def _substantive_review_body(body: str) -> bool:
     return sum(not c.isspace() for c in stripped) >= 40
 
 
+def native_codex_clear_review(body: str, head_sha: str) -> bool:
+    """Recognize authenticated Codex's native exact-head clear outcome."""
+    raw = body.strip()
+    raw = re.sub(r"^###\s+💡\s+", "", raw, count=1)
+    match = re.fullmatch(
+        r"Codex Review(?:\s*:\s*|\s+)(?:\n+)?Didn't find any major issues\.(?: Nice work!)?\s*\n+"
+        r"\*\*Reviewed commit:\*\*\s*`([0-9a-f]{7,40})`"
+        r"(?:\s*<details>[\s\S]*?</details>)?\s*",
+        raw,
+    )
+    return bool(match and head_sha.strip().lower().startswith(match.group(1).lower()))
+
+
 def review_acknowledgement(body: str) -> dict[str, Any] | None:
     """An entire, explicitly issued JSON result, never a quoted inline example."""
     raw = body.strip()
@@ -369,16 +382,71 @@ def review_acknowledgement(body: str) -> dict[str, Any] | None:
         return None
     if not isinstance(value, dict) or value.get("schema") != "hunter.review-ack.v1":
         return None
-    allowed = {"schema", "head_sha", "claims_id", "verdict", "summary", "collector_run_id"}
+    allowed = {
+        "schema",
+        "head_sha",
+        "claims_id",
+        "verdict",
+        "summary",
+        "collector_run_id",
+        "trigger_id",
+        "reviewer_agent",
+        "response_digest",
+    }
     if set(value) - allowed:
         return None
     if "collector_run_id" in value and (type(value["collector_run_id"]) is not int or value["collector_run_id"] <= 0):
+        return None
+    if "trigger_id" in value and (type(value["trigger_id"]) is not int or value["trigger_id"] <= 0):
+        return None
+    if "reviewer_agent" in value and value["reviewer_agent"] not in {"gemini", "groq"}:
+        return None
+    if "response_digest" in value and not re.fullmatch(r"[0-9a-f]{64}", str(value["response_digest"])):
         return None
     if value.get("verdict") != "clear" or not re.fullmatch(r"[0-9a-f]{40}", str(value.get("head_sha") or "")):
         return None
     if not re.fullmatch(r"[0-9a-f]{64}", str(value.get("claims_id") or "")):
         return None
     if not isinstance(value.get("summary"), str) or not _substantive_review_body(value["summary"]):
+        return None
+    return value
+
+
+def review_result_observation(body: str) -> dict[str, Any] | None:
+    try:
+        value = json.loads(body.strip())
+    except (ValueError, TypeError):
+        return None
+    if not isinstance(value, dict) or value.get("schema") != "hunter.reviewer-result.v1":
+        return None
+    allowed = {
+        "schema",
+        "head_sha",
+        "claims_id",
+        "reviewer_agent",
+        "collector_run_id",
+        "trigger_id",
+        "verdict",
+        "summary",
+        "response_digest",
+    }
+    if set(value) != allowed:
+        return None
+    if value.get("reviewer_agent") not in {"gemini", "groq"}:
+        return None
+    if value.get("verdict") not in {"clear", "blocking", "unavailable"}:
+        return None
+    if type(value.get("collector_run_id")) is not int or value["collector_run_id"] <= 0:
+        return None
+    if type(value.get("trigger_id")) is not int or value["trigger_id"] <= 0:
+        return None
+    if not re.fullmatch(r"[0-9a-f]{40}", str(value.get("head_sha") or "")):
+        return None
+    if not re.fullmatch(r"[0-9a-f]{64}", str(value.get("claims_id") or "")):
+        return None
+    if not re.fullmatch(r"[0-9a-f]{64}", str(value.get("response_digest") or "")):
+        return None
+    if not isinstance(value.get("summary"), str) or not value["summary"].strip():
         return None
     return value
 
@@ -398,6 +466,31 @@ def reviewer_identity_map(pool: dict[str, Any]) -> dict[str, str]:
     return identities
 
 
+def trusted_collector_run(repository: str, token: str, trigger: dict[str, Any]) -> bool:
+    """Require reviewer trigger identity to originate from Hunter's trusted collector workflow."""
+    from hunter_reviewer_collector import WORKFLOW, _run_on_default_branch_history, valid_run
+
+    run_id = trigger.get("collector_run_id")
+    attempt = trigger.get("collector_run_attempt")
+    if type(run_id) is not int or type(attempt) is not int:
+        return False
+    try:
+        repo = request_json(repository, token, "GET", "")
+        run = request_json(repository, token, "GET", f"actions/runs/{run_id}")
+        if not isinstance(repo, dict) or not isinstance(run, dict):
+            return False
+        branch = str(repo.get("default_branch") or "")
+        revision = str(run.get("head_sha") or "")
+        return (
+            run.get("path") == WORKFLOW
+            and run.get("run_attempt") == attempt
+            and valid_run(run, run_id, branch, revision)
+            and _run_on_default_branch_history(repository, token, branch, revision)
+        )
+    except Exception:
+        return False
+
+
 def read_pr_pool_review_comments(
     repository: str,
     token: str,
@@ -413,6 +506,7 @@ def read_pr_pool_review_comments(
     enabled = reviewer_identity_map(pool)
     reviews: list[dict[str, Any]] = []
     try:
+        configured = {str(a["id"]): a for a in pre_ready.enabled_pool_reviewers(pool)}
         page = 1
         while True:
             payload = request_json(repository, token, "GET", f"pulls/{pr_number}/reviews?per_page=100&page={page}")
@@ -446,6 +540,7 @@ def read_pr_pool_review_comments(
             if len(payload) < 100:
                 break
             page += 1
+        issue_comments: list[dict[str, Any]] = []
         page = 1
         while True:
             payload = request_json(repository, token, "GET", f"issues/{pr_number}/comments?per_page=100&page={page}")
@@ -454,26 +549,106 @@ def read_pr_pool_review_comments(
             for comment in payload:
                 if not isinstance(comment, dict) or not isinstance(comment.get("user"), dict):
                     return [], "malformed review acknowledgement observation"
-                login = str(comment["user"].get("login") or "").lower()
-                ack = review_acknowledgement(str(comment.get("body") or ""))
-                if login not in enabled or ack is None:
-                    continue
-                reviews.append(
-                    {
-                        "id": comment.get("id"),
-                        "login": login,
-                        "agent_id": enabled[login],
-                        "commit_id": ack["head_sha"],
-                        "body": comment["body"],
-                        "state": "COMMENTED",
-                        "source_kind": "issue_comment",
-                        "submitted_at": comment.get("created_at", ""),
-                        "html_url": comment.get("html_url", ""),
-                    }
-                )
+                issue_comments.append(comment)
             if len(payload) < 100:
                 break
             page += 1
+        from hunter_reviewer_collector import parse_api_trigger, parse_native_trigger
+
+        comments_by_id = {int(c.get("id") or 0): c for c in issue_comments}
+        trusted_results: dict[tuple[Any, ...], dict[str, Any]] = {}
+        for comment in issue_comments:
+            if str((comment.get("user") or {}).get("login") or "").lower() != "github-actions[bot]":
+                continue
+            result = review_result_observation(str(comment.get("body") or ""))
+            if result is None or result["verdict"] != "clear":
+                continue
+            trigger_comment = comments_by_id.get(int(result["trigger_id"]))
+            trigger = parse_api_trigger(str((trigger_comment or {}).get("body") or ""))
+            if (
+                trigger is None
+                or str(((trigger_comment or {}).get("user") or {}).get("login") or "").lower() != "github-actions[bot]"
+                or any(
+                    trigger.get(k) != result.get(k)
+                    for k in ("head_sha", "claims_id", "reviewer_agent", "collector_run_id")
+                )
+                or not trusted_collector_run(repository, token, trigger)
+            ):
+                continue
+            trusted_results[
+                (
+                    result["reviewer_agent"],
+                    result["head_sha"],
+                    result["claims_id"],
+                    result["collector_run_id"],
+                    result["trigger_id"],
+                    result["response_digest"],
+                )
+            ] = result
+
+        # Bind native Codex reviews to the latest canonical trusted trigger that
+        # precedes the review. A same-HEAD review from an older request is stale.
+        native_triggers = []
+        for comment in issue_comments:
+            if str((comment.get("user") or {}).get("login") or "").lower() != "github-actions[bot]":
+                continue
+            trigger = parse_native_trigger(str(comment.get("body") or ""))
+            if (
+                trigger is not None
+                and trigger.get("reviewer_agent") == "codex"
+                and trusted_collector_run(repository, token, trigger)
+            ):
+                native_triggers.append((str(comment.get("created_at") or ""), trigger))
+        for review_item in reviews:
+            if review_item.get("agent_id") != "codex" or review_item.get("source_kind") != "review":
+                continue
+            eligible = [
+                t
+                for created, t in native_triggers
+                if created <= str(review_item.get("submitted_at") or "") and t.get("head_sha") == exact_head
+            ]
+            if eligible:
+                review_item["trigger_claims_id"] = eligible[-1]["claims_id"]
+        for comment in issue_comments:
+            login = str(comment["user"].get("login") or "").lower()
+            body = str(comment.get("body") or "")
+            ack = review_acknowledgement(body)
+            actions_agent = ""
+            if login == "github-actions[bot]" and ack is not None:
+                candidate_agent = str(ack.get("reviewer_agent") or "")
+                if (
+                    candidate_agent in configured
+                    and str(configured[candidate_agent].get("trigger_method") or "").startswith("api:")
+                    and trusted_results.get(
+                        (
+                            candidate_agent,
+                            ack["head_sha"],
+                            ack["claims_id"],
+                            ack.get("collector_run_id"),
+                            ack.get("trigger_id"),
+                            ack.get("response_digest"),
+                        )
+                    )
+                    is not None
+                ):
+                    actions_agent = candidate_agent
+            if login not in enabled and not actions_agent:
+                continue
+            if ack is None:
+                continue
+            reviews.append(
+                {
+                    "id": comment.get("id"),
+                    "login": login,
+                    "agent_id": actions_agent or enabled[login],
+                    "commit_id": ack["head_sha"] if ack is not None else exact_head,
+                    "body": comment["body"],
+                    "state": "COMMENTED",
+                    "source_kind": "issue_comment",
+                    "submitted_at": comment.get("created_at", ""),
+                    "html_url": comment.get("html_url", ""),
+                }
+            )
     except Exception as exc:
         return [], f"review evidence unavailable: {type(exc).__name__}: {exc}"
     return reviews, None
@@ -1656,7 +1831,13 @@ def verify_pre_ready_hostile_review(
         if r.get("commit_id") == head_sha
         and r.get("state") in {"APPROVED", "COMMENTED"}
         and r.get("agent_id") in enabled_ids
-        and enabled.get(str(r.get("login") or "")) == r.get("agent_id")
+        and (
+            enabled.get(str(r.get("login") or "")) == r.get("agent_id")
+            or (
+                str(r.get("login") or "") == "github-actions[bot]"
+                and review_acknowledgement(str(r.get("body") or "")) is not None
+            )
+        )
         and _substantive_review_body(str(r.get("body") or ""))
     ]
     # An out-of-band structured review avoids a self-referential artifact commit.
@@ -1702,6 +1883,23 @@ def verify_pre_ready_hostile_review(
             ack = review_acknowledgement(observation["body"])
             if ack and ack["head_sha"] == head_sha and ack["claims_id"] == claims_id:
                 adopted.append((observation, ack))
+                continue
+            if (
+                observation.get("agent_id") == "codex"
+                and observation.get("source_kind") == "review"
+                and observation.get("trigger_claims_id") == claims_id
+                and native_codex_clear_review(observation["body"], head_sha)
+            ):
+                adopted.append(
+                    (
+                        observation,
+                        {
+                            "head_sha": head_sha,
+                            "claims_id": claims_id,
+                            "verdict": "clear",
+                        },
+                    )
+                )
         if not adopted:
             return "failure", "MISSING_REVIEW_AUTHORITY: no authenticated exact-head adoption of the review request"
         priorities = {str(a["id"]): int(a["priority"]) for a in pre_ready.enabled_pool_reviewers(pool)}
