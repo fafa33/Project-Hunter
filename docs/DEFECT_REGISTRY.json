@@ -1094,7 +1094,7 @@
         "tests/test_exact_head_review_authority.py::test_inherited_same_issue_review_artifact_is_still_historical",
         "tests/test_exact_head_review_authority.py::test_current_exact_review_with_inherited_artifact_waits_for_structured_authority",
         "tests/test_hunter_reviewer_collector.py::test_collector_workflow_can_write_pr_conversation_triggers",
-        "tests/test_hunter_reviewer_collector.py::test_api_trigger_reuse_rehydrates_persisted_exact_head_result",
+        "tests/test_hunter_reviewer_collector.py::test_reused_api_invocation_recovers_persisted_result",
         "tests/test_hunter_reviewer_collector.py::test_groq_authority_verifies_prior_api_exhaustion_from_trusted_collector",
         "tests/test_exact_head_review_authority.py::test_github_actions_ack_without_matching_result_cannot_create_api_review_authority",
         "tests/test_exact_head_review_authority.py::test_github_actions_ack_requires_matching_trusted_api_result",
