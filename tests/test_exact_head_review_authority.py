@@ -1118,6 +1118,60 @@ def _request_and_ack():
     return document, ack
 
 
+def test_review_fetch_accepts_authenticated_native_codex_clear_issue_comment(monkeypatch):
+    body = (
+        "Codex Review: Didn't find any major issues. Nice work!\n\n"
+        f"**Reviewed commit:** `{HEAD[:10]}`\n\n"
+        "<details><summary>ℹ️ About Codex in GitHub</summary>\nGitHub integration details\n</details>"
+    )
+
+    def request(_repository, _token, _method, path, *_args):
+        if path.startswith("pulls/"):
+            return []
+        if path.startswith("issues/"):
+            return [
+                {
+                    "id": 99,
+                    "user": {"login": COPILOT},
+                    "body": body,
+                    "created_at": "2026-09-13T23:00:00Z",
+                    "html_url": "https://github.com/fafa33/Project-Hunter/pull/476#issuecomment-99",
+                }
+            ]
+        raise AssertionError(path)
+
+    monkeypatch.setattr(core, "request_json", request)
+    observations, error = core.read_pr_pool_review_comments("repo", "token", PR_NUMBER, _pool(), HEAD)
+
+    assert error is None
+    assert len(observations) == 1
+    assert observations[0]["agent_id"] == "codex"
+    assert observations[0]["commit_id"] == HEAD
+    assert observations[0]["source_kind"] == "issue_comment"
+
+
+def test_authenticated_native_codex_clear_comment_adopts_exact_head_review_request(monkeypatch):
+    document, _ = _request_and_ack()
+    native = {
+        **_trusted_review(
+            body=(
+                "Codex Review: Didn't find any major issues. Nice work!\n\n"
+                f"**Reviewed commit:** `{HEAD[:10]}`\n\n"
+                "<details><summary>ℹ️ About Codex in GitHub</summary>\nGitHub integration details\n</details>"
+            )
+        ),
+        "source_kind": "issue_comment",
+        "submitted_at": "2026-09-13T23:00:00Z",
+    }
+    _install_governance(monkeypatch, document=document, comments=(native,))
+    monkeypatch.setattr(core, "read_unresolved_review_threads", lambda *a: ((), None))
+    monkeypatch.setattr(core, "check_reviewer_dispositions", lambda: (True, ""))
+
+    state, reason = core.verify_pre_ready_hostile_review("repo", "token", HEAD, PR_NUMBER)
+
+    assert state == "success", reason
+
+
 def test_a_current_authenticated_acknowledgement_establishes_new_exact_head_authority(monkeypatch):
     document, ack = _request_and_ack()
     snapshot = {**_trusted_review(body=json.dumps(ack)), "submitted_at": "2026-09-13T23:00:00Z"}

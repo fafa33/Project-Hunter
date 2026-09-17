@@ -355,6 +355,17 @@ def _substantive_review_body(body: str) -> bool:
     return sum(not c.isspace() for c in stripped) >= 40
 
 
+def native_codex_clear_review(body: str, head_sha: str) -> bool:
+    """Recognize authenticated Codex's native exact-head clear outcome."""
+    raw = body.strip()
+    match = re.search(
+        r"Codex Review(?:\s*:\s*|\s+)(?:\n+)?Didn't find any major issues\.[^\n]*\n+"
+        r"\*\*Reviewed commit:\*\*\s*`([0-9a-f]{7,40})`",
+        raw,
+    )
+    return bool(match and head_sha.strip().lower().startswith(match.group(1).lower()))
+
+
 def review_acknowledgement(body: str) -> dict[str, Any] | None:
     """An entire, explicitly issued JSON result, never a quoted inline example."""
     raw = body.strip()
@@ -455,15 +466,17 @@ def read_pr_pool_review_comments(
                 if not isinstance(comment, dict) or not isinstance(comment.get("user"), dict):
                     return [], "malformed review acknowledgement observation"
                 login = str(comment["user"].get("login") or "").lower()
-                ack = review_acknowledgement(str(comment.get("body") or ""))
-                if login not in enabled or ack is None:
+                body = str(comment.get("body") or "")
+                ack = review_acknowledgement(body)
+                native_codex = login == reviewer_login({"id": "codex"}) and native_codex_clear_review(body, exact_head)
+                if login not in enabled or (ack is None and not native_codex):
                     continue
                 reviews.append(
                     {
                         "id": comment.get("id"),
                         "login": login,
                         "agent_id": enabled[login],
-                        "commit_id": ack["head_sha"],
+                        "commit_id": ack["head_sha"] if ack is not None else exact_head,
                         "body": comment["body"],
                         "state": "COMMENTED",
                         "source_kind": "issue_comment",
@@ -1702,6 +1715,9 @@ def verify_pre_ready_hostile_review(
             ack = review_acknowledgement(observation["body"])
             if ack and ack["head_sha"] == head_sha and ack["claims_id"] == claims_id:
                 adopted.append((observation, ack))
+                continue
+            if observation.get("agent_id") == "codex" and native_codex_clear_review(observation["body"], head_sha):
+                adopted.append((observation, {"head_sha": head_sha, "claims_id": claims_id, "verdict": "clear"}))
         if not adopted:
             return "failure", "MISSING_REVIEW_AUTHORITY: no authenticated exact-head adoption of the review request"
         priorities = {str(a["id"]): int(a["priority"]) for a in pre_ready.enabled_pool_reviewers(pool)}
