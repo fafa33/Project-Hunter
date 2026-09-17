@@ -27,6 +27,8 @@ POOL = {
 class Backend:
     def __init__(self, response=False, mutate=False):
         self.clock = 0.0
+        self.run_id = 123
+        self.run_attempt = 1
         self.triggers = []
         self.response = response
         self.mutate = mutate
@@ -543,3 +545,77 @@ def test_api_trigger_and_result_are_persisted_before_authority(monkeypatch):
     assert "hunter.reviewer-result.v1" in bodies[1]
     assert "hunter.review-ack.v1" in bodies[2]
     assert trigger["result_comment_id"] == 2
+
+
+def test_api_trigger_body_is_canonically_verifiable():
+    agent = {**POOL["agents"][0], "id": "gemini", "priority": 2, "trigger_method": "api:gemini"}
+    body = collector.api_trigger_body(HEAD, "d" * 64, agent, 123, 1, 1)
+    parsed = collector.parse_api_trigger(body)
+    assert parsed == {
+        "schema": "hunter.reviewer-trigger.v1",
+        "head_sha": HEAD,
+        "claims_id": "d" * 64,
+        "reviewer_agent": "gemini",
+        "collector_run_id": 123,
+        "collector_run_attempt": 1,
+        "attempt_number": 1,
+        "invocation_key": collector.invocation_key(HEAD, "d" * 64, "gemini", 1),
+    }
+
+
+def test_reused_invocation_preserves_original_run_and_attempt(monkeypatch):
+    backend = collector.GitHubBackend("owner/repo", "token", 476, HEAD, "d" * 64, 999, 7)
+    agent = POOL["agents"][0]
+    key = collector.invocation_key(HEAD, "d" * 64, "codex", 1)
+    old = {
+        "id": 77,
+        "created_at": "2026-09-17T00:00:00Z",
+        "body": collector.trigger_body(HEAD, "d" * 64, agent, 123, 2, 1),
+        "user": {"login": "github-actions[bot]"},
+    }
+    assert f"Invocation key: {key}." in old["body"]
+    monkeypatch.setattr(collector, "_pages", lambda *_a, **_k: [old])
+    trigger = backend.trigger(agent, 1)
+    assert trigger["collector_run_id"] == 123
+    assert trigger["collector_run_attempt"] == 2
+
+
+def test_reused_api_invocation_recovers_persisted_result(monkeypatch):
+    backend = collector.GitHubBackend("owner/repo", "token", 476, HEAD, "d" * 64, 999, 7)
+    agent = {**POOL["agents"][0], "id": "gemini", "priority": 2, "trigger_method": "api:gemini"}
+    trigger_body = collector.api_trigger_body(HEAD, "d" * 64, agent, 123, 2, 1)
+    trigger = {
+        "id": 77,
+        "created_at": "2026-09-17T00:00:00Z",
+        "body": trigger_body,
+        "user": {"login": "github-actions[bot]"},
+    }
+    result = {
+        "id": 78,
+        "created_at": "2026-09-17T00:00:01Z",
+        "body": collector.api_result_body(
+            HEAD, "d" * 64, agent, 123, 77, "unavailable", "provider unavailable", "e" * 64
+        ),
+        "user": {"login": "github-actions[bot]"},
+    }
+    monkeypatch.setattr(collector, "_pages", lambda *_a, **_k: [trigger, result])
+    monkeypatch.setattr(backend, "_invoke_external", lambda *_a: pytest.fail("must not invoke API twice"))
+    reused = backend.trigger(agent, 1)
+    assert reused["head_sha"] == HEAD
+    assert reused["state"] == "unavailable"
+    assert reused["collector_run_id"] == 123
+    assert reused["collector_run_attempt"] == 2
+    assert reused["result_comment_id"] == 78
+
+
+def test_substantive_temporarily_unavailable_phrase_is_blocking(monkeypatch):
+    backend = collector.GitHubBackend("owner/repo", "token", 476, HEAD, "d" * 64, 123, 1)
+    agent = POOL["agents"][0]
+    trigger = {"id": 1, "created_at": "2026-09-17T00:00:00Z", "collector_run_id": 123}
+    comment = {
+        "created_at": "2026-09-17T00:00:01Z",
+        "user": {"login": "chatgpt-codex-connector[bot]"},
+        "body": "The controller is temporarily unavailable after this transition, which is a blocking finding.",
+    }
+    monkeypatch.setattr(collector, "_pages", lambda _r, _t, path, *_a: [] if "/reviews" in path else [comment])
+    assert backend.response_state(agent, trigger) == "blocking"

@@ -88,6 +88,10 @@ def collect_attempts(pool: dict[str, Any], head: str, backend: Backend) -> list[
                     "attempt_number": number,
                     "trigger_id": trigger["id"],
                     "trigger_created_at": trigger["created_at"],
+                    "collector_run_id": int(trigger.get("collector_run_id") or getattr(backend, "run_id", 0)),
+                    "collector_run_attempt": int(
+                        trigger.get("collector_run_attempt") or getattr(backend, "run_attempt", 0)
+                    ),
                     "elapsed_seconds": backend.now() - start,
                     "outcome": state,
                     **({k: trigger[k] for k in ("provider", "response_digest", "head_sha") if k in trigger}),
@@ -130,6 +134,90 @@ def _pages(repository: str, token: str, path: str, key: str | None = None) -> li
 
 def invocation_key(head: str, claims_id: str, agent_id: str, number: int) -> str:
     return hashlib.sha256(f"{head}:{claims_id}:{agent_id}:{number}".encode()).hexdigest()
+
+
+def api_trigger_payload(
+    head: str, claims_id: str, agent: dict[str, Any], run_id: int, run_attempt: int, number: int
+) -> dict[str, Any]:
+    if not str(agent["trigger_method"]).startswith("api:"):
+        raise ValueError("reviewer has no supported API trigger")
+    return {
+        "schema": "hunter.reviewer-trigger.v1",
+        "head_sha": head,
+        "claims_id": claims_id,
+        "reviewer_agent": str(agent["id"]),
+        "collector_run_id": run_id,
+        "collector_run_attempt": run_attempt,
+        "attempt_number": number,
+        "invocation_key": invocation_key(head, claims_id, str(agent["id"]), number),
+    }
+
+
+def api_trigger_body(
+    head: str, claims_id: str, agent: dict[str, Any], run_id: int, run_attempt: int, number: int
+) -> str:
+    payload = api_trigger_payload(head, claims_id, agent, run_id, run_attempt, number)
+    return (
+        json.dumps(payload, sort_keys=True)
+        + f'\nInvocation key: {payload["invocation_key"]}.'
+        + f'\nCollector invocation: {run_id}/{run_attempt}/{agent["id"]}/{number}.'
+    )
+
+
+def parse_api_trigger(body: str) -> dict[str, Any] | None:
+    first = body.splitlines()[0] if body else ""
+    try:
+        payload = json.loads(first)
+    except (json.JSONDecodeError, TypeError):
+        return None
+    if not isinstance(payload, dict) or payload.get("schema") != "hunter.reviewer-trigger.v1":
+        return None
+    required = {
+        "head_sha",
+        "claims_id",
+        "reviewer_agent",
+        "collector_run_id",
+        "collector_run_attempt",
+        "attempt_number",
+        "invocation_key",
+    }
+    return payload if required.issubset(payload) else None
+
+
+def api_result_body(
+    head: str,
+    claims_id: str,
+    agent: dict[str, Any],
+    run_id: int,
+    trigger_id: int,
+    verdict: str,
+    summary: str,
+    digest: str,
+) -> str:
+    return json.dumps(
+        {
+            "schema": "hunter.reviewer-result.v1",
+            "head_sha": head,
+            "claims_id": claims_id,
+            "reviewer_agent": str(agent["id"]),
+            "collector_run_id": run_id,
+            "trigger_id": trigger_id,
+            "verdict": verdict,
+            "summary": summary,
+            "response_digest": digest,
+        },
+        sort_keys=True,
+    )
+
+
+def parse_api_result(body: str) -> dict[str, Any] | None:
+    try:
+        payload = json.loads(body)
+    except (json.JSONDecodeError, TypeError):
+        return None
+    if not isinstance(payload, dict) or payload.get("schema") != "hunter.reviewer-result.v1":
+        return None
+    return payload
 
 
 def trigger_body(head: str, claims_id: str, agent: dict[str, Any], run_id: int, run_attempt: int, number: int) -> str:
@@ -261,43 +349,52 @@ class GitHubBackend:
         if existing is not None:
             m = re.search(r"Collector invocation: (\d+)/(\d+)/", str(existing.get("body") or ""))
             existing["collector_run_id"] = int(m.group(1)) if m else self.run_id
+            existing["collector_run_attempt"] = int(m.group(2)) if m else self.run_attempt
+            if method.startswith("api:"):
+                trigger_payload = parse_api_trigger(str(existing.get("body") or ""))
+                if trigger_payload is None:
+                    raise ValueError("persisted API trigger is malformed")
+                results = []
+                for item in _pages(self.repository, self.token, f"issues/{self.pr}/comments"):
+                    result = parse_api_result(str(item.get("body") or ""))
+                    if (item.get("user") or {}).get("login", "").lower() != "github-actions[bot]" or result is None:
+                        continue
+                    if (
+                        result.get("trigger_id") == existing.get("id")
+                        and result.get("head_sha") == self.expected_head
+                        and result.get("claims_id") == self.claims_id
+                        and result.get("reviewer_agent") == str(agent["id"])
+                    ):
+                        results.append((item, result))
+                if not results:
+                    raise ValueError("persisted API invocation has no verifiable result")
+                item, result = min(results, key=lambda pair: int(pair[0].get("id") or 0))
+                existing.update(
+                    provider=method.split(":", 1)[1],
+                    response_digest=result.get("response_digest"),
+                    head_sha=self.expected_head,
+                    state=result.get("verdict"),
+                    result_comment_id=item.get("id"),
+                )
             return existing
         if method.startswith("api:"):
             provider = method.split(":", 1)[1]
-            key = invocation_key(self.expected_head, self.claims_id, str(agent["id"]), number)
             trigger = self._post_comment(
-                json.dumps(
-                    {
-                        "schema": "hunter.reviewer-trigger.v1",
-                        "head_sha": self.expected_head,
-                        "claims_id": self.claims_id,
-                        "reviewer_agent": str(agent["id"]),
-                        "collector_run_id": self.run_id,
-                        "collector_run_attempt": self.run_attempt,
-                        "attempt_number": number,
-                        "invocation_key": key,
-                    },
-                    sort_keys=True,
-                )
-                + f"\nInvocation key: {key}.\nCollector invocation: {self.run_id}/{self.run_attempt}/{agent['id']}/{number}."
+                api_trigger_body(self.expected_head, self.claims_id, agent, self.run_id, self.run_attempt, number)
             )
             payload = self._invoke_external(agent, number)
             state = "unavailable" if payload.get("verdict") == "unavailable" else external_verdict(payload)
             digest = hashlib.sha256(json.dumps(payload, sort_keys=True, separators=(",", ":")).encode()).hexdigest()
             result_comment = self._post_comment(
-                json.dumps(
-                    {
-                        "schema": "hunter.reviewer-result.v1",
-                        "head_sha": self.expected_head,
-                        "claims_id": self.claims_id,
-                        "reviewer_agent": str(agent["id"]),
-                        "collector_run_id": self.run_id,
-                        "trigger_id": trigger["id"],
-                        "verdict": state,
-                        "summary": str(payload.get("summary") or ""),
-                        "response_digest": digest,
-                    },
-                    sort_keys=True,
+                api_result_body(
+                    self.expected_head,
+                    self.claims_id,
+                    agent,
+                    self.run_id,
+                    int(trigger["id"]),
+                    state,
+                    str(payload.get("summary") or ""),
+                    digest,
                 )
             )
             if state == "clear":
@@ -345,12 +442,12 @@ class GitHubBackend:
     @staticmethod
     def _unavailable(body: str) -> bool:
         text = body.lower()
-        markers = (
-            "usage limit reached",
-            "temporarily unavailable",
-            "create a codex account and connect to github",
+        normalized = " ".join(text.split())
+        return bool(
+            re.fullmatch(r"(?:codex )?usage limit reached\.?(?: try again later\.?)?", normalized)
+            or re.fullmatch(r"codex is temporarily unavailable\. please try again later\.?", normalized)
+            or re.fullmatch(r"to use codex(?: here)?, create a codex account and connect to github\.?", normalized)
         )
-        return any(marker in text for marker in markers)
 
     def response_state(self, agent: dict[str, Any], trigger: dict[str, Any]) -> str:
         if str(agent["trigger_method"]).startswith("api:"):
@@ -519,16 +616,42 @@ def load_exhaustion(
                 trigger = governance.request_json(repository, token, "GET", f"issues/comments/{trigger_id}")
             except Exception as exc:
                 raise ValueError("trusted reviewer trigger evidence is unavailable") from exc
-            expected_body = trigger_body(head, receipt["claims_id"], agent, run_id, run["run_attempt"], number)
+            if str(agent["trigger_method"]).startswith("api:"):
+                parsed_trigger = parse_api_trigger(str(trigger.get("body") or ""))
+                expected_trigger = api_trigger_payload(
+                    head,
+                    receipt["claims_id"],
+                    agent,
+                    int(record.get("collector_run_id") or run_id),
+                    int(record.get("collector_run_attempt") or run["run_attempt"]),
+                    number,
+                )
+                body_matches = parsed_trigger == expected_trigger
+            else:
+                expected_body = trigger_body(
+                    head,
+                    receipt["claims_id"],
+                    agent,
+                    int(record.get("collector_run_id") or run_id),
+                    int(record.get("collector_run_attempt") or run["run_attempt"]),
+                    number,
+                )
+                body_matches = trigger.get("body") == expected_body
             if (
-                trigger.get("body") != expected_body
+                not body_matches
                 or trigger.get("created_at") != record.get("trigger_created_at")
                 or (trigger.get("user") or {}).get("login") != "github-actions[bot]"
                 or trigger.get("issue_url") != f"https://api.github.com/repos/{repository}/issues/{pr}"
             ):
                 raise ValueError("actual trusted reviewer trigger mismatch")
             live_state = GitHubBackend(
-                repository, token, pr, head, receipt["claims_id"], run_id, run["run_attempt"]
+                repository,
+                token,
+                pr,
+                head,
+                receipt["claims_id"],
+                int(record.get("collector_run_id") or run_id),
+                int(record.get("collector_run_attempt") or run["run_attempt"]),
             ).response_state(agent, trigger)
             if live_state in {"clear", "blocking"}:
                 raise ValueError("higher-priority reviewer is available; exhaustion cannot be reused")
