@@ -285,6 +285,22 @@ def test_bootstrap_accepts_only_native_codex_clear_review(monkeypatch: pytest.Mo
     assert bridge._exact_head_codex_review(REPOSITORY, "token", bridge.BOOTSTRAP_CONTROLLER_PR, HEAD) == review
 
 
+def test_bootstrap_accepts_native_codex_clear_review_with_standard_footer(monkeypatch: pytest.MonkeyPatch) -> None:
+    review = {
+        "id": 9,
+        "user": {"login": bridge.CODEX_LOGIN},
+        "commit_id": HEAD,
+        "state": "COMMENTED",
+        "body": (
+            "### 💡 Codex Review\n\nDidn't find any major issues. Nice work!\n\n"
+            f"**Reviewed commit:** `{HEAD[:10]}`\n\n"
+            "<details><summary>ℹ️ About Codex in GitHub</summary>\nGitHub integration details\n</details>"
+        ),
+    }
+    monkeypatch.setattr(bridge, "_paged_reviews", lambda *_args: (review,))
+    assert bridge._exact_head_codex_review(REPOSITORY, "token", bridge.BOOTSTRAP_CONTROLLER_PR, HEAD) == review
+
+
 def test_controller_lookup_is_bound_to_checked_out_trusted_commit(monkeypatch: pytest.MonkeyPatch) -> None:
     """A concurrent main advance cannot change controller evidence for an in-flight trusted checkout."""
     checked_out = "a" * 40

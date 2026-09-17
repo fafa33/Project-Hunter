@@ -165,14 +165,21 @@ def api_trigger_body(
 
 
 def parse_api_trigger(body: str) -> dict[str, Any] | None:
-    first = body.splitlines()[0] if body else ""
+    raw = body.strip()
+    match = re.fullmatch(
+        r"(?s)(\{.*\})\nInvocation key: ([0-9a-f]{64})\.\nCollector invocation: (\d+)/(\d+)/([a-z0-9_-]+)/(\d+)\.",
+        raw,
+    )
+    if match is None:
+        return None
     try:
-        payload = json.loads(first)
-    except (json.JSONDecodeError, TypeError):
+        value = json.loads(match.group(1))
+    except (TypeError, ValueError):
         return None
-    if not isinstance(payload, dict) or payload.get("schema") != "hunter.reviewer-trigger.v1":
+    if not isinstance(value, dict):
         return None
-    required = {
+    allowed = {
+        "schema",
         "head_sha",
         "claims_id",
         "reviewer_agent",
@@ -181,7 +188,36 @@ def parse_api_trigger(body: str) -> dict[str, Any] | None:
         "attempt_number",
         "invocation_key",
     }
-    return payload if required.issubset(payload) else None
+    if set(value) != allowed:
+        return None
+    if value.get("schema") != "hunter.reviewer-trigger.v1":
+        return None
+    if not re.fullmatch(r"[0-9a-f]{40}", str(value.get("head_sha") or "")):
+        return None
+    if not re.fullmatch(r"[0-9a-f]{64}", str(value.get("claims_id") or "")):
+        return None
+    reviewer_agent = str(value.get("reviewer_agent") or "")
+    if reviewer_agent != match.group(5):
+        return None
+    if any(
+        type(value.get(field)) is not int or int(value[field]) <= 0
+        for field in ("collector_run_id", "collector_run_attempt")
+    ):
+        return None
+    if type(value.get("attempt_number")) is not int or value["attempt_number"] <= 0:
+        return None
+    if (
+        value["collector_run_id"] != int(match.group(3))
+        or value["collector_run_attempt"] != int(match.group(4))
+        or value["attempt_number"] != int(match.group(6))
+        or value.get("invocation_key") != match.group(2)
+    ):
+        return None
+    if value["invocation_key"] != invocation_key(
+        value["head_sha"], value["claims_id"], reviewer_agent, value["attempt_number"]
+    ):
+        return None
+    return value
 
 
 def api_result_body(
@@ -211,13 +247,45 @@ def api_result_body(
 
 
 def parse_api_result(body: str) -> dict[str, Any] | None:
+    raw = body.strip()
     try:
-        payload = json.loads(body)
-    except (json.JSONDecodeError, TypeError):
+        value = json.loads(raw)
+    except (TypeError, ValueError):
         return None
-    if not isinstance(payload, dict) or payload.get("schema") != "hunter.reviewer-result.v1":
+    if not isinstance(value, dict):
         return None
-    return payload
+    allowed = {
+        "schema",
+        "head_sha",
+        "claims_id",
+        "reviewer_agent",
+        "collector_run_id",
+        "trigger_id",
+        "verdict",
+        "summary",
+        "response_digest",
+    }
+    if set(value) != allowed:
+        return None
+    if value.get("schema") != "hunter.reviewer-result.v1":
+        return None
+    if not re.fullmatch(r"[0-9a-f]{40}", str(value.get("head_sha") or "")):
+        return None
+    if not re.fullmatch(r"[0-9a-f]{64}", str(value.get("claims_id") or "")):
+        return None
+    if str(value.get("reviewer_agent") or "") not in {"gemini", "groq"}:
+        return None
+    if type(value.get("collector_run_id")) is not int or value["collector_run_id"] <= 0:
+        return None
+    if type(value.get("trigger_id")) is not int or value["trigger_id"] <= 0:
+        return None
+    if value.get("verdict") not in {"clear", "blocking", "unavailable"}:
+        return None
+    if not isinstance(value.get("summary"), str):
+        return None
+    if not re.fullmatch(r"[0-9a-f]{64}", str(value.get("response_digest") or "")):
+        return None
+    return value
 
 
 def trigger_body(head: str, claims_id: str, agent: dict[str, Any], run_id: int, run_attempt: int, number: int) -> str:
@@ -333,6 +401,35 @@ class GitHubBackend:
             raise ValueError("GitHub did not confirm trusted collector evidence")
         return result
 
+    def _api_result(self, agent: dict[str, Any], trigger: dict[str, Any]) -> dict[str, Any] | None:
+        trigger_record = parse_api_trigger(str(trigger.get("body") or ""))
+        if trigger_record is None:
+            raise ValueError("external reviewer trigger evidence is malformed")
+        if (
+            trigger_record["head_sha"] != self.expected_head
+            or trigger_record["claims_id"] != self.claims_id
+            or trigger_record["reviewer_agent"] != str(agent["id"])
+        ):
+            raise ValueError("external reviewer response is not exact-head bound")
+        matches = []
+        for item in _pages(self.repository, self.token, f"issues/{self.pr}/comments"):
+            if (item.get("user") or {}).get("login", "").lower() != "github-actions[bot]":
+                continue
+            result = parse_api_result(str(item.get("body") or ""))
+            if result is None:
+                continue
+            if (
+                result["head_sha"] == trigger_record["head_sha"]
+                and result["claims_id"] == trigger_record["claims_id"]
+                and result["reviewer_agent"] == trigger_record["reviewer_agent"]
+                and result["collector_run_id"] == trigger_record["collector_run_id"]
+                and result["trigger_id"] == int(trigger.get("id") or 0)
+            ):
+                matches.append({**result, "comment_id": int(item.get("id") or 0)})
+        if not matches:
+            return None
+        return min(matches, key=lambda item: int(item.get("comment_id") or 0))
+
     def _existing_trigger(self, agent: dict[str, Any], number: int) -> dict[str, Any] | None:
         marker = f"Invocation key: {invocation_key(self.expected_head, self.claims_id, str(agent['id']), number)}."
         matches = [
@@ -351,30 +448,15 @@ class GitHubBackend:
             existing["collector_run_id"] = int(m.group(1)) if m else self.run_id
             existing["collector_run_attempt"] = int(m.group(2)) if m else self.run_attempt
             if method.startswith("api:"):
-                trigger_payload = parse_api_trigger(str(existing.get("body") or ""))
-                if trigger_payload is None:
-                    raise ValueError("persisted API trigger is malformed")
-                results = []
-                for item in _pages(self.repository, self.token, f"issues/{self.pr}/comments"):
-                    result = parse_api_result(str(item.get("body") or ""))
-                    if (item.get("user") or {}).get("login", "").lower() != "github-actions[bot]" or result is None:
-                        continue
-                    if (
-                        result.get("trigger_id") == existing.get("id")
-                        and result.get("head_sha") == self.expected_head
-                        and result.get("claims_id") == self.claims_id
-                        and result.get("reviewer_agent") == str(agent["id"])
-                    ):
-                        results.append((item, result))
-                if not results:
+                result = self._api_result(agent, existing)
+                if result is None:
                     raise ValueError("persisted API invocation has no verifiable result")
-                item, result = min(results, key=lambda pair: int(pair[0].get("id") or 0))
                 existing.update(
                     provider=method.split(":", 1)[1],
                     response_digest=result.get("response_digest"),
                     head_sha=self.expected_head,
                     state=result.get("verdict"),
-                    result_comment_id=item.get("id"),
+                    result_comment_id=result.get("comment_id"),
                 )
             return existing
         if method.startswith("api:"):
@@ -451,9 +533,10 @@ class GitHubBackend:
 
     def response_state(self, agent: dict[str, Any], trigger: dict[str, Any]) -> str:
         if str(agent["trigger_method"]).startswith("api:"):
-            if trigger.get("head_sha") != self.expected_head:
-                raise ValueError("external reviewer response is not exact-head bound")
-            return str(trigger.get("state") or "blocking")
+            result = self._api_result(agent, trigger)
+            if result is None:
+                return "waiting"
+            return str(result["verdict"])
         login = governance.reviewer_login(agent)
         created = str(trigger["created_at"])
         for item in _pages(self.repository, self.token, f"pulls/{self.pr}/reviews"):
@@ -659,6 +742,24 @@ def load_exhaustion(
                 raise ValueError("recorded reviewer unavailability is no longer verifiable")
             if outcome == "timed_out" and live_state == "unavailable":
                 raise ValueError("collector timeout receipt disagrees with explicit reviewer unavailability")
+            if str(agent["trigger_method"]).startswith("api:"):
+                api_result = GitHubBackend(
+                    repository,
+                    token,
+                    pr,
+                    head,
+                    receipt["claims_id"],
+                    int(record.get("collector_run_id") or run_id),
+                    int(record.get("collector_run_attempt") or run["run_attempt"]),
+                )._api_result(agent, trigger)
+                if api_result is None:
+                    raise ValueError("trusted API reviewer result evidence is unavailable")
+                if api_result["response_digest"] != record.get("response_digest"):
+                    raise ValueError("trusted API reviewer result digest mismatch")
+                if record.get("provider") != str(agent["trigger_method"]).split(":", 1)[1]:
+                    raise ValueError("trusted API reviewer provider mismatch")
+                if record.get("head_sha") != head:
+                    raise ValueError("trusted API reviewer head binding mismatch")
         terminal = records[offset - 1].get("outcome") if count else "timed_out"
         result.append(
             {

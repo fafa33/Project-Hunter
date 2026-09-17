@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import copy
+import json
 
 import hunter_reviewer_collector as collector
 import pytest
@@ -502,6 +503,35 @@ def test_api_reviewer_trigger_is_exact_head_bound_and_synchronous(monkeypatch):
         backend, "_post_comment", lambda body: {"id": next(ids), "created_at": "2026-09-17T00:00:00Z", "body": body}
     )
     trigger = backend.trigger(agent, 1)
+    monkeypatch.setattr(
+        collector,
+        "_pages",
+        lambda *_a, **_k: [
+            {
+                "id": 11,
+                "user": {"login": "github-actions[bot]"},
+                "body": trigger["body"],
+            },
+            {
+                "id": 12,
+                "user": {"login": "github-actions[bot]"},
+                "body": json.dumps(
+                    {
+                        "schema": "hunter.reviewer-result.v1",
+                        "head_sha": HEAD,
+                        "claims_id": "d" * 64,
+                        "reviewer_agent": "gemini",
+                        "collector_run_id": 123,
+                        "trigger_id": 10,
+                        "verdict": "clear",
+                        "summary": "No blocking defects remain after exact-head review.",
+                        "response_digest": trigger["response_digest"],
+                    },
+                    sort_keys=True,
+                ),
+            },
+        ],
+    )
     assert trigger["head_sha"] == HEAD
     assert trigger["provider"] == "gemini"
     assert backend.response_state(agent, trigger) == "clear"
@@ -619,3 +649,161 @@ def test_substantive_temporarily_unavailable_phrase_is_blocking(monkeypatch):
     }
     monkeypatch.setattr(collector, "_pages", lambda _r, _t, path, *_a: [] if "/reviews" in path else [comment])
     assert backend.response_state(agent, trigger) == "blocking"
+
+
+def test_groq_authority_verifies_prior_api_exhaustion_from_trusted_collector(monkeypatch):
+    import hashlib
+    import io
+    import zipfile
+
+    pool = copy.deepcopy(POOL)
+    pool["agents"] += (
+        {
+            "id": "gemini",
+            "priority": 2,
+            "enabled": True,
+            "timeout_seconds": 300,
+            "retryable": False,
+            "trigger_method": "api:gemini",
+            "evidence_parser": "provider-json.v1",
+        },
+        {
+            "id": "groq",
+            "priority": 3,
+            "enabled": True,
+            "timeout_seconds": 300,
+            "retryable": False,
+            "trigger_method": "api:groq",
+            "evidence_parser": "provider-json.v1",
+        },
+    )
+    codex_trigger = collector.trigger_body(HEAD, "d" * 64, pool["agents"][0], 123, 1, 1)
+    gemini_trigger = collector.api_trigger_body(HEAD, "d" * 64, pool["agents"][1], 123, 1, 1)
+    receipt = {
+        "schema": collector.SCHEMA,
+        "repository": "owner/repo",
+        "pr_number": 469,
+        "head_sha": HEAD,
+        "run_id": 123,
+        "run_attempt": 1,
+        "claims_id": "d" * 64,
+        "configuration_digest": collector.configuration_digest(pool),
+        "attempts": [
+            {
+                "agent_id": "codex",
+                "priority": 1,
+                "timeout_seconds": 300,
+                "trigger_method": "github-pr-comment:@codex review",
+                "evidence_parser": "github-review-ack.v1",
+                "retryable": True,
+                "attempt_number": 1,
+                "trigger_id": 1,
+                "trigger_created_at": "2026-09-13T00:00:00Z",
+                "elapsed_seconds": 300,
+                "outcome": "timed_out",
+            },
+            {
+                "agent_id": "gemini",
+                "priority": 2,
+                "timeout_seconds": 300,
+                "trigger_method": "api:gemini",
+                "evidence_parser": "provider-json.v1",
+                "retryable": False,
+                "attempt_number": 1,
+                "trigger_id": 2,
+                "trigger_created_at": "2026-09-13T00:01:00Z",
+                "elapsed_seconds": 0,
+                "outcome": "unavailable",
+                "provider": "gemini",
+                "response_digest": "e" * 64,
+                "head_sha": HEAD,
+            },
+        ],
+    }
+    stream = io.BytesIO()
+    with zipfile.ZipFile(stream, "w") as bundle:
+        bundle.writestr("reviewer-results.json", json.dumps(receipt))
+    archive = stream.getvalue()
+
+    def request(repository, token, method, path):
+        if path == "":
+            return {"default_branch": "main"}
+        if path == "commits/main":
+            return {"sha": "c" * 40}
+        if path == "actions/runs/123":
+            return {
+                "id": 123,
+                "run_attempt": 1,
+                "head_sha": "c" * 40,
+                "head_branch": "main",
+                "path": collector.WORKFLOW,
+                "event": "pull_request_target",
+                "status": "completed",
+                "conclusion": "success",
+            }
+        if path.startswith("actions/runs/123/artifacts?"):
+            return {
+                "artifacts": [
+                    {
+                        "id": 5,
+                        "name": f"hunter-reviewer-results-{HEAD}-1",
+                        "expired": False,
+                        "workflow_run": {"id": 123},
+                        "digest": "sha256:" + hashlib.sha256(archive).hexdigest(),
+                    }
+                ]
+            }
+        if path == "issues/comments/1":
+            return {
+                "id": 1,
+                "body": codex_trigger,
+                "created_at": "2026-09-13T00:00:00Z",
+                "user": {"login": "github-actions[bot]"},
+                "issue_url": "https://api.github.com/repos/owner/repo/issues/469",
+            }
+        if path == "issues/comments/2":
+            return {
+                "id": 2,
+                "body": gemini_trigger,
+                "created_at": "2026-09-13T00:01:00Z",
+                "user": {"login": "github-actions[bot]"},
+                "issue_url": "https://api.github.com/repos/owner/repo/issues/469",
+            }
+        if path.startswith("issues/469/comments?"):
+            return [
+                {
+                    "id": 2,
+                    "body": gemini_trigger,
+                    "created_at": "2026-09-13T00:01:00Z",
+                    "user": {"login": "github-actions[bot]"},
+                },
+                {
+                    "id": 3,
+                    "body": json.dumps(
+                        {
+                            "schema": "hunter.reviewer-result.v1",
+                            "head_sha": HEAD,
+                            "claims_id": "d" * 64,
+                            "reviewer_agent": "gemini",
+                            "collector_run_id": 123,
+                            "trigger_id": 2,
+                            "verdict": "unavailable",
+                            "summary": "gemini HTTP 429",
+                            "response_digest": "e" * 64,
+                        },
+                        sort_keys=True,
+                    ),
+                    "created_at": "2026-09-13T00:01:01Z",
+                    "user": {"login": "github-actions[bot]"},
+                },
+            ]
+        if path == "pulls/469":
+            return {"state": "open", "head": {"sha": HEAD}}
+        if path.startswith("pulls/469/reviews?"):
+            return []
+        raise AssertionError(path)
+
+    monkeypatch.setattr(collector.governance, "request_json", request)
+    monkeypatch.setattr(collector, "download_artifact", lambda *a: archive)
+    evidence = collector.load_exhaustion("owner/repo", "token", 469, HEAD, pool, 123, "groq")
+    assert [attempt["agent_id"] for attempt in evidence["reviewer_attempts"]] == ["codex", "gemini"]

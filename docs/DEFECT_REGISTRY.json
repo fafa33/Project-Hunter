@@ -1041,7 +1041,7 @@
         "rationale": "The final merge gate and the single shared review-verification implementation are where the workflow-ordering defect lives: Merge Readiness could go green through governance or check status alone, or a resolved thread could satisfy readiness without machine-verified structured evidence. A recurrence here means the fail-closed prerequisite was weakened at the boundary that is supposed to own it. The fallback authority rule lives here too because a single primary review authority that can be rate-limited or unavailable is itself a workflow freeze waiting to happen: readiness must stay fail-closed without turning Codex availability into a single point of failure. The trusted reviewer collector workflow and implementation are part of the same boundary because they prove ordered reviewer invocation and exhaustion; losing their trigger permission or sequencing can silently disable failover and recreate a single-reviewer freeze."
       },
       "prevention": {
-        "mechanism": "Review authority is bound to the exact current HEAD, never an ancestor, including artifact-only and empty descendants. Authenticated submitted reviewer evidence must match the structured authority. Lower-priority and Guard reviews require trusted PR-bound exhaustion results emitted by each configured higher-priority reviewer, with matching HEAD, priority, timeout, trigger, parser and retry policy. Candidate prose and invocation references alone are not authority. Unconfigured evidence channels fail closed. Governance admission and Merge Readiness share this verifier.",
+        "mechanism": "Review authority is bound to the exact current HEAD, never an ancestor, including artifact-only and empty descendants. Authenticated submitted reviewer evidence must match the structured authority. Lower-priority and Guard reviews require trusted PR-bound exhaustion results emitted by each configured higher-priority reviewer, with matching HEAD, priority, timeout, trigger, parser and retry policy, and API-backed reviewers must re-derive their persisted structured trigger/result evidence rather than trusting a reused invocation marker or a github-actions acknowledgement alone. Candidate prose and invocation references alone are not authority. Unconfigured evidence channels fail closed. Governance admission and Merge Readiness share this verifier.",
         "boundary": "hosted-gate",
         "guard_reference": "scripts/hunter_merge_readiness_v2.py::review_authority_state"
       },
@@ -1094,12 +1094,17 @@
         "tests/test_exact_head_review_authority.py::test_inherited_same_issue_review_artifact_is_still_historical",
         "tests/test_exact_head_review_authority.py::test_current_exact_review_with_inherited_artifact_waits_for_structured_authority",
         "tests/test_hunter_reviewer_collector.py::test_collector_workflow_can_write_pr_conversation_triggers",
+        "tests/test_hunter_reviewer_collector.py::test_api_trigger_reuse_rehydrates_persisted_exact_head_result",
+        "tests/test_hunter_reviewer_collector.py::test_groq_authority_verifies_prior_api_exhaustion_from_trusted_collector",
+        "tests/test_exact_head_review_authority.py::test_github_actions_ack_without_matching_result_cannot_create_api_review_authority",
+        "tests/test_exact_head_review_authority.py::test_github_actions_ack_requires_matching_trusted_api_result",
         "tests/test_pr473_trusted_bridge_bootstrap.py::test_candidate_bootstrap_retires_with_trusted_controller",
         "tests/test_pr473_trusted_bridge_bootstrap.py::test_bootstrap_requires_actual_authenticated_bot_login",
         "tests/test_pr473_trusted_bridge_bootstrap.py::test_candidate_bootstrap_rejects_unavailable_controller_evidence",
         "tests/test_pr473_trusted_bridge_bootstrap.py::test_latest_review_revokes_prior_clear_bootstrap_authority",
         "tests/test_pr473_trusted_bridge_bootstrap.py::test_later_clear_review_can_restore_bootstrap_authority",
-        "tests/test_pr473_trusted_bridge_bootstrap.py::test_controller_requires_explicit_path_evidence"
+        "tests/test_pr473_trusted_bridge_bootstrap.py::test_controller_requires_explicit_path_evidence",
+        "tests/test_pr473_trusted_bridge_bootstrap.py::test_bootstrap_accepts_native_codex_clear_review_with_standard_footer"
       ],
       "lifecycle": "regression-tested",
       "sources": [
@@ -1107,7 +1112,8 @@
         "Issue #467 fallback review-authority hardening (PR #468)",
         "Issue #467 reviewer-pool failover hardening (follow-on)",
         "Issue #461 / PR #472 inherited-review authority and reviewer failover stabilization (2026-09-15)",
-        "PR #476: candidate bootstrap retirement and authenticated connector identity regression coverage"
+        "PR #476: candidate bootstrap retirement and authenticated connector identity regression coverage",
+        "PR #476: reviewer collector trigger/result verification and authenticated API review hardening"
       ]
     },
     {

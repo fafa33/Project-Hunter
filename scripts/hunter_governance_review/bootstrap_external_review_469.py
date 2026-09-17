@@ -146,17 +146,9 @@ def _paged_reviews(repository: str, token: str, pr_number: int) -> tuple[dict[st
 
 
 def _native_codex_clear_review(body: str, head_sha: str) -> bool:
-    """Accept only Codex's authenticated native exact-head clear-review shape."""
-    raw = body.strip()
-    raw = re.sub(r"^#{1,6}\s*(?:💡\s*)?", "", raw, count=1).strip()
-    match = re.match(
-        r"Codex Review(?:\s*:\s*|\s+)(?:\n+)?Didn't find any major issues\.(?:\s*Bravo\.)?\s+"
-        r"\*\*Reviewed commit:\*\*\s*`([0-9a-f]{7,40})`",
-        raw,
-    )
-    if match is None or not head_sha.strip().lower().startswith(match.group(1).lower()):
-        return False
-    return not raw[match.end() :].strip()
+    """Accept only the same native Codex clear-review shape as the main verifier."""
+    raw = re.sub(r"^#{1,6}\s*(?:💡\s*)?", "", body.strip(), count=1).strip()
+    return governance.native_codex_clear_review(raw, head_sha)
 
 
 def _exact_head_codex_review(

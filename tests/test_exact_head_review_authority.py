@@ -1201,6 +1201,105 @@ def test_review_request_adoption_of_another_claims_digest_is_blocked(monkeypatch
     assert core.verify_pre_ready_hostile_review("repo", "token", HEAD, PR_NUMBER)[0] == "failure"
 
 
+def test_github_actions_ack_without_matching_result_cannot_create_api_review_authority(monkeypatch):
+    _document, ack = _request_and_ack()
+    ack.update({"reviewer_agent": "gemini", "collector_run_id": 123, "response_digest": "e" * 64})
+    pool = _pool(
+        agents=(
+            {
+                "id": "gemini",
+                "priority": 2,
+                "enabled": True,
+                "exact_head_support": True,
+                "timeout_seconds": 300,
+                "retryable": False,
+                "trigger_method": "api:gemini",
+                "evidence_parser": "provider-json.v1",
+            },
+        )
+    )
+
+    def request(_repository, _token, _method, path, *_args):
+        if path.startswith("pulls/"):
+            return []
+        if path.startswith("issues/"):
+            return [
+                {
+                    "id": 99,
+                    "user": {"login": "github-actions[bot]"},
+                    "body": json.dumps(ack),
+                    "created_at": "2026-09-13T23:00:00Z",
+                    "html_url": "https://github.com/fafa33/Project-Hunter/pull/476#issuecomment-99",
+                }
+            ]
+        raise AssertionError(path)
+
+    monkeypatch.setattr(core, "request_json", request)
+    observations, error = core.read_pr_pool_review_comments("repo", "token", PR_NUMBER, pool, HEAD)
+
+    assert error is None
+    assert observations == []
+
+
+def test_github_actions_ack_requires_matching_trusted_api_result(monkeypatch):
+    document, ack = _request_and_ack()
+    ack.update({"reviewer_agent": "gemini", "collector_run_id": 123, "response_digest": "e" * 64})
+    pool = _pool(
+        agents=(
+            {
+                "id": "gemini",
+                "priority": 2,
+                "enabled": True,
+                "exact_head_support": True,
+                "timeout_seconds": 300,
+                "retryable": False,
+                "trigger_method": "api:gemini",
+                "evidence_parser": "provider-json.v1",
+            },
+        )
+    )
+    result = {
+        "schema": "hunter.reviewer-result.v1",
+        "head_sha": HEAD,
+        "claims_id": document["review_id"],
+        "reviewer_agent": "gemini",
+        "collector_run_id": 123,
+        "trigger_id": 456,
+        "verdict": "clear",
+        "summary": "Completed the adversarial review of all requested criteria and changed surfaces; no blocking findings remain.",
+        "response_digest": "e" * 64,
+    }
+
+    def request(_repository, _token, _method, path, *_args):
+        if path.startswith("pulls/"):
+            return []
+        if path.startswith("issues/"):
+            return [
+                {
+                    "id": 98,
+                    "user": {"login": "github-actions[bot]"},
+                    "body": json.dumps(result),
+                    "created_at": "2026-09-13T22:59:59Z",
+                    "html_url": "https://github.com/fafa33/Project-Hunter/pull/476#issuecomment-98",
+                },
+                {
+                    "id": 99,
+                    "user": {"login": "github-actions[bot]"},
+                    "body": json.dumps(ack),
+                    "created_at": "2026-09-13T23:00:00Z",
+                    "html_url": "https://github.com/fafa33/Project-Hunter/pull/476#issuecomment-99",
+                },
+            ]
+        raise AssertionError(path)
+
+    monkeypatch.setattr(core, "request_json", request)
+    observations, error = core.read_pr_pool_review_comments("repo", "token", PR_NUMBER, pool, HEAD)
+
+    assert error is None
+    assert len(observations) == 1
+    assert observations[0]["agent_id"] == "gemini"
+
+
 def test_review_acknowledgement_rejects_contradictory_extra_fields():
     _, ack = _request_and_ack()
     ack["findings"] = [{"severity": "P1", "summary": "A blocking finding remains."}]

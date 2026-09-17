@@ -408,6 +408,45 @@ def review_acknowledgement(body: str) -> dict[str, Any] | None:
     return value
 
 
+def review_result_observation(body: str) -> dict[str, Any] | None:
+    try:
+        value = json.loads(body.strip())
+    except (ValueError, TypeError):
+        return None
+    if not isinstance(value, dict) or value.get("schema") != "hunter.reviewer-result.v1":
+        return None
+    allowed = {
+        "schema",
+        "head_sha",
+        "claims_id",
+        "reviewer_agent",
+        "collector_run_id",
+        "trigger_id",
+        "verdict",
+        "summary",
+        "response_digest",
+    }
+    if set(value) != allowed:
+        return None
+    if value.get("reviewer_agent") not in {"gemini", "groq"}:
+        return None
+    if value.get("verdict") not in {"clear", "blocking", "unavailable"}:
+        return None
+    if type(value.get("collector_run_id")) is not int or value["collector_run_id"] <= 0:
+        return None
+    if type(value.get("trigger_id")) is not int or value["trigger_id"] <= 0:
+        return None
+    if not re.fullmatch(r"[0-9a-f]{40}", str(value.get("head_sha") or "")):
+        return None
+    if not re.fullmatch(r"[0-9a-f]{64}", str(value.get("claims_id") or "")):
+        return None
+    if not re.fullmatch(r"[0-9a-f]{64}", str(value.get("response_digest") or "")):
+        return None
+    if not isinstance(value.get("summary"), str):
+        return None
+    return value
+
+
 def reviewer_login(agent: dict[str, Any]) -> str:
     # Integration identity is configuration, never a field supplied by a candidate.
     if agent.get("id") == "codex":
@@ -438,6 +477,7 @@ def read_pr_pool_review_comments(
     enabled = reviewer_identity_map(pool)
     reviews: list[dict[str, Any]] = []
     try:
+        configured = {str(a["id"]): a for a in pre_ready.enabled_pool_reviewers(pool)}
         page = 1
         while True:
             payload = request_json(repository, token, "GET", f"pulls/{pr_number}/reviews?per_page=100&page={page}")
@@ -471,6 +511,7 @@ def read_pr_pool_review_comments(
             if len(payload) < 100:
                 break
             page += 1
+        issue_comments: list[dict[str, Any]] = []
         page = 1
         while True:
             payload = request_json(repository, token, "GET", f"issues/{pr_number}/comments?per_page=100&page={page}")
@@ -479,38 +520,63 @@ def read_pr_pool_review_comments(
             for comment in payload:
                 if not isinstance(comment, dict) or not isinstance(comment.get("user"), dict):
                     return [], "malformed review acknowledgement observation"
-                login = str(comment["user"].get("login") or "").lower()
-                body = str(comment.get("body") or "")
-                ack = review_acknowledgement(body)
-                native_codex = login == reviewer_login({"id": "codex"}) and native_codex_clear_review(body, exact_head)
-                actions_agent = ""
-                if login == "github-actions[bot]" and ack is not None:
-                    candidate_agent = str(ack.get("reviewer_agent") or "")
-                    configured = {str(a["id"]): a for a in pre_ready.enabled_pool_reviewers(pool)}
-                    if candidate_agent in configured and str(
-                        configured[candidate_agent].get("trigger_method") or ""
-                    ).startswith("api:"):
-                        actions_agent = candidate_agent
-                if login not in enabled and not actions_agent:
-                    continue
-                if ack is None and not native_codex:
-                    continue
-                reviews.append(
-                    {
-                        "id": comment.get("id"),
-                        "login": login,
-                        "agent_id": actions_agent or enabled[login],
-                        "commit_id": ack["head_sha"] if ack is not None else exact_head,
-                        "body": comment["body"],
-                        "state": "COMMENTED",
-                        "source_kind": "issue_comment",
-                        "submitted_at": comment.get("created_at", ""),
-                        "html_url": comment.get("html_url", ""),
-                    }
-                )
+                issue_comments.append(comment)
             if len(payload) < 100:
                 break
             page += 1
+        trusted_results = {
+            (
+                result["reviewer_agent"],
+                result["head_sha"],
+                result["claims_id"],
+                result["collector_run_id"],
+                result["response_digest"],
+            ): result
+            for comment in issue_comments
+            if str((comment.get("user") or {}).get("login") or "").lower() == "github-actions[bot]"
+            for result in [review_result_observation(str(comment.get("body") or ""))]
+            if result is not None and result["verdict"] == "clear"
+        }
+        for comment in issue_comments:
+            login = str(comment["user"].get("login") or "").lower()
+            body = str(comment.get("body") or "")
+            ack = review_acknowledgement(body)
+            native_codex = login == reviewer_login({"id": "codex"}) and native_codex_clear_review(body, exact_head)
+            actions_agent = ""
+            if login == "github-actions[bot]" and ack is not None:
+                candidate_agent = str(ack.get("reviewer_agent") or "")
+                if (
+                    candidate_agent in configured
+                    and str(configured[candidate_agent].get("trigger_method") or "").startswith("api:")
+                    and trusted_results.get(
+                        (
+                            candidate_agent,
+                            ack["head_sha"],
+                            ack["claims_id"],
+                            ack.get("collector_run_id"),
+                            ack.get("response_digest"),
+                        )
+                    )
+                    is not None
+                ):
+                    actions_agent = candidate_agent
+            if login not in enabled and not actions_agent:
+                continue
+            if ack is None and not native_codex:
+                continue
+            reviews.append(
+                {
+                    "id": comment.get("id"),
+                    "login": login,
+                    "agent_id": actions_agent or enabled[login],
+                    "commit_id": ack["head_sha"] if ack is not None else exact_head,
+                    "body": comment["body"],
+                    "state": "COMMENTED",
+                    "source_kind": "issue_comment",
+                    "submitted_at": comment.get("created_at", ""),
+                    "html_url": comment.get("html_url", ""),
+                }
+            )
     except Exception as exc:
         return [], f"review evidence unavailable: {type(exc).__name__}: {exc}"
     return reviews, None
