@@ -388,12 +388,15 @@ def review_acknowledgement(body: str) -> dict[str, Any] | None:
         "verdict",
         "summary",
         "collector_run_id",
+        "trigger_id",
         "reviewer_agent",
         "response_digest",
     }
     if set(value) - allowed:
         return None
     if "collector_run_id" in value and (type(value["collector_run_id"]) is not int or value["collector_run_id"] <= 0):
+        return None
+    if "trigger_id" in value and (type(value["trigger_id"]) is not int or value["trigger_id"] <= 0):
         return None
     if "reviewer_agent" in value and value["reviewer_agent"] not in {"gemini", "groq"}:
         return None
@@ -530,6 +533,7 @@ def read_pr_pool_review_comments(
                 result["head_sha"],
                 result["claims_id"],
                 result["collector_run_id"],
+                result["trigger_id"],
                 result["response_digest"],
             ): result
             for comment in issue_comments
@@ -554,6 +558,7 @@ def read_pr_pool_review_comments(
                             ack["head_sha"],
                             ack["claims_id"],
                             ack.get("collector_run_id"),
+                            ack.get("trigger_id"),
                             ack.get("response_digest"),
                         )
                     )

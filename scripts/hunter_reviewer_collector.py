@@ -491,6 +491,7 @@ class GitHubBackend:
                                 payload.get("summary") or "Independent API review found no blocking defects."
                             ),
                             "collector_run_id": self.run_id,
+                            "trigger_id": int(trigger["id"]),
                             "reviewer_agent": str(agent["id"]),
                             "response_digest": digest,
                         },
@@ -566,6 +567,7 @@ class GitHubBackend:
                 and ack["head_sha"] == self.expected_head
                 and ack["claims_id"] == self.claims_id
                 and ack.get("collector_run_id") == int(trigger.get("collector_run_id") or self.run_id)
+                and ack.get("trigger_id") == int(trigger.get("id") or 0)
             ):
                 return "clear"
             if agent.get("id") == "codex" and self._native_clear(body, self.expected_head):

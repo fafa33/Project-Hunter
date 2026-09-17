@@ -356,6 +356,7 @@ def test_structured_clear_ack_is_correlated_to_trigger_claims(monkeypatch):
         "verdict": "clear",
         "summary": "Reviewed the complete exact-head diff and found no blocking governance defects.",
         "collector_run_id": 123,
+        "trigger_id": 7,
     }
     comment = {
         "id": 8,
@@ -365,6 +366,30 @@ def test_structured_clear_ack_is_correlated_to_trigger_claims(monkeypatch):
     }
     monkeypatch.setattr(collector, "_pages", lambda *_a, **_k: [] if "reviews" in _a[2] else [comment])
     assert backend.response_state(POOL["agents"][0], trigger) == "clear"
+
+
+def test_structured_clear_ack_rejects_mismatched_trigger_id(monkeypatch):
+    import json
+
+    backend = collector.GitHubBackend("owner/repo", "token", 476, HEAD, "d" * 64, 123, 1)
+    trigger = {"id": 7, "created_at": "2026-09-17T00:00:00Z"}
+    ack = {
+        "schema": "hunter.review-ack.v1",
+        "head_sha": HEAD,
+        "claims_id": "d" * 64,
+        "verdict": "clear",
+        "summary": "Reviewed the complete exact-head diff and found no blocking governance defects.",
+        "collector_run_id": 123,
+        "trigger_id": 8,
+    }
+    comment = {
+        "id": 8,
+        "created_at": "2026-09-17T00:00:01Z",
+        "user": {"login": "chatgpt-codex-connector[bot]"},
+        "body": json.dumps(ack),
+    }
+    monkeypatch.setattr(collector, "_pages", lambda *_a, **_k: [] if "reviews" in _a[2] else [comment])
+    assert backend.response_state(POOL["agents"][0], trigger) == "blocking"
 
 
 def test_native_codex_clear_with_contradictory_text_is_not_clear(monkeypatch):
