@@ -22,6 +22,7 @@ REVIEWER_DISPOSITIONS_PATH = ROOT / "docs" / "REVIEWER_FINDING_DISPOSITIONS.json
 
 CONTEXT = "Hunter Merge Readiness"
 GOVERNANCE_CONTEXT = "Hunter Governance Review"
+GOVERNANCE_RECONCILE_WORKFLOW = "Hunter Governance Review Reconcile"
 REQUIRED_CHECKS = ("Quality Gates", "dependency-review", "CodeQL")
 HARD_FAILURES = {"failure", "timed_out", "action_required", "startup_failure"}
 
@@ -34,6 +35,41 @@ RUN_URL = os.environ.get("RUN_URL") or ""
 class Decision:
     state: str
     description: str
+
+
+# Explicit authority states consumed by the merge-readiness resolver.
+# Only VALID_AGENT_REVIEW and VALID_LAST_RESORT_GUARD are merge-admissible.
+REVIEW_AUTHORITY_STATES = (
+    "MISSING_REVIEW_AUTHORITY",
+    "VALID_AGENT_REVIEW",
+    "VALID_LAST_RESORT_GUARD",
+    "STALE_REVIEW",
+    "MALFORMED_REVIEW",
+    "BLOCKING_FINDINGS",
+    "POOL_NOT_EXHAUSTED",
+    "EXHAUSTION_UNPROVEN",
+)
+
+
+@dataclass(frozen=True)
+class ReviewAuthorityVerdict:
+    state: str
+    detail: str
+
+
+def resolve_review_authority(verification: tuple[str, str]) -> ReviewAuthorityVerdict:
+    """Classify the shared verifier's result; raw comments cannot establish authority."""
+    status, detail = verification
+    valid_states = {"VALID_AGENT_REVIEW", "VALID_LAST_RESORT_GUARD"}
+    if status == "success":
+        for state in valid_states:
+            if detail.startswith(state + ":"):
+                return ReviewAuthorityVerdict(state, detail)
+        return ReviewAuthorityVerdict("MALFORMED_REVIEW", "Verifier did not establish positive review authority.")
+    for state in REVIEW_AUTHORITY_STATES:
+        if state not in valid_states and state + ":" in detail:
+            return ReviewAuthorityVerdict(state, detail)
+    return ReviewAuthorityVerdict("MALFORMED_REVIEW", detail)
 
 
 def request_json(method: str, path: str, payload: dict[str, Any] | None = None) -> Any:
@@ -169,6 +205,50 @@ def open_prs_for_head(sha: str) -> tuple[int, ...]:
     return tuple(sorted(set(numbers)))
 
 
+def review_authority_state(head_sha: str, pr_number: int) -> tuple[str, str]:
+    """Fail-closed exact-head review prerequisite for merge readiness.
+
+    Merge Readiness is the final current-state controller, so it must itself
+    establish that the candidate has been adversarially reviewed as it stands
+    right now -- it cannot take another controller's earlier word for it. The
+    canonical pre-ready hostile review is content-bound state, so it must exist
+    at the exact PR head and verify against trusted PR evidence. Verification
+    reuses the governance controller's single implementation, so readiness and
+    candidate admission cannot drift. A missing, stale, incomplete, or still
+    contested review is a hard merge blocker, never a warning.
+
+    Issue #467: the review authority is recorded at document level beside the
+    canonical claims (never as a claim, so the claims stay exactly the canonical
+    claim set the trusted controller verifies). The authority is an ordered
+    reviewer pool: Codex is preferred, approved agent reviewers are Tier 2, and
+    the canonical OpenCode hostile review is the last-resort guard -- admissible
+    only when it records machine-checkable evidence that every higher-priority
+    enabled reviewer was exhausted within the bounded timeout policy, and (for
+    the guard) that every snapshot gate it relied on was green. The state
+    reported here is the verified review state any way a reviewer reached it.
+
+    This function now uses the pure `resolve_review_authority` resolver so the
+    authority logic is shared and testable without network calls.
+    """
+
+    # Imported here rather than at module scope: hunter_workflow_state imports
+    # this module, and governance pulls in hunter_pre_ready_review which imports
+    # hunter_workflow_state, so a module-level import would be a three-way cycle.
+    import hunter_governance_review_v2 as governance
+
+    try:
+        if unresolved_review_threads(pr_number) or changes_requested_reviewers(pr_number):
+            return "failure", "BLOCKING_FINDINGS: unresolved review threads or changes requested"
+        ok, problem = governance.check_reviewer_dispositions()
+        if not ok:
+            return "failure", f"BLOCKING_FINDINGS: {problem}"
+        verdict = resolve_review_authority(governance.verify_pre_ready_hostile_review(REPO, TOKEN, head_sha, pr_number))
+        status = "success" if verdict.state in {"VALID_AGENT_REVIEW", "VALID_LAST_RESORT_GUARD"} else "failure"
+        return status, f"{verdict.state}: {verdict.detail}"
+    except Exception as exc:
+        return "failure", f"Review authority evidence unavailable: {type(exc).__name__}: {exc}"
+
+
 class ReadinessObservation(Protocol):
     """Current GitHub state for one open PR.
 
@@ -194,6 +274,9 @@ class ReadinessObservation(Protocol):
     def changes_requested(self) -> tuple[str, ...]: ...
 
     @property
+    def review_authority(self) -> tuple[str, str]: ...
+
+    @property
     def check_runs(self) -> tuple[dict[str, Any], ...]: ...
 
     @property
@@ -211,6 +294,7 @@ class StaticReadinessObservation:
     mergeable: bool | None = True
     unresolved_review_threads: tuple[str, ...] = ()
     changes_requested: tuple[str, ...] = ()
+    review_authority: tuple[str, str] = ("success", "")
     check_runs: tuple[dict[str, Any], ...] = ()
     governance_status: dict[str, Any] | None = None
     shared_open_prs: tuple[int, ...] = ()
@@ -239,6 +323,10 @@ class LiveReadinessObservation:
     @cached_property
     def changes_requested(self) -> tuple[str, ...]:
         return changes_requested_reviewers(self._pr_number)
+
+    @cached_property
+    def review_authority(self) -> tuple[str, str]:
+        return review_authority_state(self._head_sha, self._pr_number)
 
     @cached_property
     def check_runs(self) -> tuple[dict[str, Any], ...]:
@@ -293,6 +381,10 @@ def evaluate(observation: ReadinessObservation) -> Decision:
     if observation.changes_requested:
         return Decision("failure", "Changes requested by: " + ", ".join(observation.changes_requested))
 
+    authority_state, authority_detail = observation.review_authority
+    if authority_state != "success":
+        return Decision("failure", "Exact-head review prerequisite not met: " + authority_detail)
+
     runs = list(observation.check_runs)
     missing: list[str] = []
     pending: list[str] = []
@@ -343,7 +435,7 @@ def evaluate(observation: ReadinessObservation) -> Decision:
 
     return Decision(
         "success",
-        "Ready to merge: code/security checks pass and no active review blocker remains.",
+        "Ready to merge: code/security checks pass and positive exact-head review authority verified.",
     )
 
 
@@ -413,6 +505,8 @@ def candidate_prs() -> tuple[int, ...]:
 
     workflow_run = event.get("workflow_run") or {}
     if isinstance(workflow_run, dict):
+        if str(workflow_run.get("name") or "").strip() == GOVERNANCE_RECONCILE_WORKFLOW:
+            return open_pull_requests()
         numbers = [
             int(item["number"])
             for item in workflow_run.get("pull_requests") or []

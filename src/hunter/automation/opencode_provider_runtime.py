@@ -24,6 +24,8 @@ _EXECUTABLE_ENV = "HUNTER_OPENCODE_EXECUTABLE"
 _MODEL_ENV = "HUNTER_OPENCODE_MODEL"
 _PUSH_TOKEN_ENV = "HUNTER_AGENT_GITHUB_PUSH_TOKEN"
 _SANDBOX_EXECUTABLE_ENV = "HUNTER_OPENCODE_SANDBOX_EXECUTABLE"
+_RAILWAY_ENV = "RAILWAY_ENVIRONMENT"
+_RAILWAY_SANDBOX_MODULE = "hunter.automation.railway_opencode_permission_sandbox"
 _REPOSITORY_RE = re.compile(r"^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$")
 _PUBLICATION_CREDENTIAL_ENV = {
     _PUSH_TOKEN_ENV,
@@ -204,11 +206,16 @@ def _sandbox_command(executable: str, argv: list[str], sandbox: Path, credential
     sandbox_executable = shutil.which(sandbox_executable_name)
     if sandbox_executable is None:
         raise ProviderAdapterError("filesystem sandbox executable is unavailable")
+    return [sandbox_executable]
+
+
+def _sandbox_command(executable: str, argv: list[str], sandbox: Path, credential_home: Path) -> list[str]:
+    in_sandbox_executable, executable_mount = _sandbox_executable_path(executable, sandbox, credential_home)
 
     in_sandbox_executable, executable_mount = _sandbox_executable_path(executable, sandbox, credential_home)
 
     command = [
-        sandbox_executable,
+        *_sandbox_launcher(),
         "--die-with-parent",
         "--new-session",
         "--unshare-pid",

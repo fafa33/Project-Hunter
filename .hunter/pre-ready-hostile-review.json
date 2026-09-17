@@ -144,6 +144,26 @@
         "evidence": "install_opencode_runtime.py is invoked from the Railway [build] buildCommand (deploy build time), not from a preDeploy bootstrap, so it never mounts or accesses the /data volume; it writes only the pinned binary under /app/bin. The startup seam (railway_issuer_startup.py) now also exposes the runtime vendor dir on the import path before its lazy bootstrap import, then keeps the volume-aware check, signing-key scrub, and issuer exec sequencing unchanged.",
         "family": "DFF-019",
         "outcome": "clear"
+      },
+      {
+        "evidence": "Focused regression suite and trusted preflight evidence; authenticated reviewer must re-evaluate before adoption.",
+        "family": "DFF-020",
+        "outcome": "clear"
+      },
+      {
+        "evidence": "Focused regression suite and trusted preflight evidence; authenticated reviewer must re-evaluate before adoption.",
+        "family": "DFF-021",
+        "outcome": "clear"
+      },
+      {
+        "evidence": "Focused regression suite and trusted preflight evidence; authenticated reviewer must re-evaluate before adoption.",
+        "family": "DFF-022",
+        "outcome": "clear"
+      },
+      {
+        "evidence": "Focused regression suite and trusted preflight evidence; authenticated reviewer must re-evaluate before adoption.",
+        "family": "DFF-023",
+        "outcome": "clear"
       }
     ],
     "findings": [

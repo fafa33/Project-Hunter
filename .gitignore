@@ -11,3 +11,5 @@ __pycache__/
 *.log
 nohup.out
 reports/
+.aider*
+.freebuff/project-id

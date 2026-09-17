@@ -42,6 +42,42 @@ def convert_to_draft(token: str, pull_request_node_id: str) -> bool:
     return True
 
 
+def ready_checks(repository: str, token: str, head_sha: str, mergeable: bool | None) -> tuple[str, str]:
+    """Ready requires the same current code/security/governance checks as merge."""
+    import hunter_merge_readiness_v2 as readiness
+
+    def paged(path: str, key: str | None = None) -> list:
+        items = []
+        page = 1
+        while True:
+            payload = governance.request_json(repository, token, "GET", f"{path}?per_page=100&page={page}")
+            batch = payload.get(key) if key and isinstance(payload, dict) else payload
+            if not isinstance(batch, list) or not all(isinstance(item, dict) for item in batch):
+                raise ValueError("malformed check evidence")
+            items.extend(batch)
+            if len(batch) < 100:
+                return items
+            page += 1
+
+    try:
+        checks = paged(f"commits/{head_sha}/check-runs", "check_runs")
+        statuses = paged(f"commits/{head_sha}/statuses")
+        governance_statuses = [s for s in statuses if s.get("context") == readiness.GOVERNANCE_CONTEXT]
+        latest = max(governance_statuses, key=lambda s: int(s.get("id") or 0)) if governance_statuses else None
+        decision = readiness.evaluate(
+            readiness.StaticReadinessObservation(
+                draft=False,
+                mergeable=mergeable,
+                review_authority=("success", "admission review already verified"),
+                check_runs=tuple(checks),
+                governance_status=latest,
+            )
+        )
+        return decision.state, decision.description
+    except Exception as exc:
+        return "failure", f"Ready check evidence unavailable: {type(exc).__name__}: {exc}"
+
+
 def enforce_candidate_admission(
     repository: str,
     token: str,
@@ -75,11 +111,12 @@ def enforce_candidate_admission(
         pr_number,
     )
     if admission_state == "success":
+        admission_state, description = ready_checks(repository, token, head_sha, pr.get("mergeable"))
+    if admission_state == "success":
         print(f"PR #{pr_number} admitted for review: {description}")
         return 0
-    if admission_state == "pending":
-        print(f"PR #{pr_number} candidate admission is pending: {description}")
-        return 0
+    # Pending proof is not admission authority. Both pending and failed
+    # candidates must remain Draft until every prerequisite is established.
 
     latest = governance.read_mergeability(repository, token, pr_number)
     latest_head_sha = str((latest.get("head") or {}).get("sha") or "").strip()

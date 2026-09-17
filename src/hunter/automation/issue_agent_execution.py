@@ -56,12 +56,14 @@ from __future__ import annotations
 
 import hashlib
 import json
+import logging
 import os
+import secrets
 import sqlite3
 from collections.abc import Mapping
 from contextlib import closing
 from dataclasses import asdict, dataclass
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any, Protocol
 
@@ -160,12 +162,33 @@ CREATE TABLE IF NOT EXISTS {_LEDGER_TABLE} (
     handoff_document TEXT,
     claimed_at TEXT NOT NULL,
     dispatched_at TEXT,
-    completed_at TEXT
+    completed_at TEXT,
+    failed_at TEXT,
+    failure_type TEXT,
+    failure_message TEXT,
+    owner_instance_id TEXT,
+    leased_at TEXT,
+    lease_expires_at TEXT
 )
 """
 _STATE_CLAIMED = "CLAIMED"
 _STATE_DISPATCHED = "DISPATCHED"
 _STATE_COMPLETED = "COMPLETED"
+_STATE_FAILED = "FAILED"
+
+#: How long an active execution lease remains valid without a renewal. Each
+#: issuer instance extends the lease of every execution it is still running, so
+#: the window only measures the gap between renewals; a lease that lapses is the
+#: fail-closed signal that the owning instance is no longer running the
+#: provider, and the row may then be recovered as failed by a later instance.
+ISSUE_AGENT_LEDGER_LEASE_SECONDS = 6 * 60 * 60
+
+_LEDGER_INSTANCE_PREFIX = "hunter-issue-agent-issuer-instance"
+
+
+def _new_ledger_instance_id() -> str:
+    """A fresh, stable-for-process lifetime issuer instance identity."""
+    return f"{_LEDGER_INSTANCE_PREFIX}-{secrets.token_hex(6)}"
 
 
 class IssueAgentExecutionError(RuntimeError):
@@ -567,6 +590,12 @@ class IssueAgentLedgerEntry:
     build_record_id: str | None
     envelope_id: str | None
     handoff_document: str | None
+    failed_at: str | None
+    failure_type: str | None
+    failure_message: str | None
+    owner_instance_id: str | None
+    leased_at: str | None
+    lease_expires_at: str | None
 
 
 class IssueAgentExecutionLedger:
@@ -576,20 +605,52 @@ class IssueAgentExecutionLedger:
     on failure. A crash between the claim and the dispatch therefore leaves a row
     that refuses the next attempt, which is the fail-closed choice: a duplicate
     execution can push commits, while a refused retry cannot.
+
+    Every active row is owned by exactly one issuer instance and carries a
+    renewable lease. The owning instance extends the lease while its provider is
+    still genuinely running, so a lapsed lease is the deterministic fail-closed
+    signal that the owner is no longer running the provider. Startup recovery
+    therefore never touches a row whose foreign lease is still valid, which is
+    what a rolling deployment of multiple issuer instances relies on: the old
+    instance keeps its live executions instead of having them failed underneath
+    it by the instance that happens to boot next.
     """
 
-    __slots__ = ("_path",)
+    __slots__ = ("_path", "_instance_id")
 
-    def __init__(self, path: str | Path) -> None:
+    def __init__(self, path: str | Path, *, instance_id: str | None = None) -> None:
         self._path = Path(path)
+        self._instance_id = instance_id or _new_ledger_instance_id()
+        if instance_id is None:
+            logging.getLogger(__name__).warning(
+                "Issue Agent execution ledger created without an explicit instance id; "
+                "adopting %s for this process only",
+                self._instance_id,
+            )
         self._path.parent.mkdir(parents=True, exist_ok=True)
         with closing(self._connect()) as connection:
             connection.execute(_LEDGER_SCHEMA)
+            columns = {str(row["name"]) for row in connection.execute(f"PRAGMA table_info({_LEDGER_TABLE})").fetchall()}
+            for name in (
+                "failed_at",
+                "failure_type",
+                "failure_message",
+                "owner_instance_id",
+                "leased_at",
+                "lease_expires_at",
+            ):
+                if name not in columns:
+                    connection.execute(f"ALTER TABLE {_LEDGER_TABLE} ADD COLUMN {name} TEXT")
             connection.commit()
 
     @property
     def path(self) -> Path:
         return self._path
+
+    @property
+    def instance_id(self) -> str:
+        """The stable issuer instance identity that owns this ledger's rows."""
+        return self._instance_id
 
     def _connect(self) -> sqlite3.Connection:
         connection = sqlite3.connect(self._path, timeout=30.0, isolation_level=None)
@@ -612,11 +673,18 @@ class IssueAgentExecutionLedger:
             build_record_id=row["build_record_id"],
             envelope_id=row["envelope_id"],
             handoff_document=row["handoff_document"],
+            failed_at=row["failed_at"],
+            failure_type=row["failure_type"],
+            failure_message=row["failure_message"],
+            owner_instance_id=row["owner_instance_id"],
+            leased_at=row["leased_at"],
+            lease_expires_at=row["lease_expires_at"],
         )
 
     def claim(self, authorization: IssueAgentAuthorization, *, claimed_at: datetime) -> None:
         """Take durable ownership of one authorization or refuse the execution."""
-        moment = _aware_utc("ledger claim time", claimed_at).isoformat()
+        moment = _aware_utc("ledger claim time", claimed_at)
+        expires_at = moment + timedelta(seconds=ISSUE_AGENT_LEDGER_LEASE_SECONDS)
         with closing(self._connect()) as connection:
             try:
                 connection.execute("BEGIN IMMEDIATE")
@@ -630,8 +698,17 @@ class IssueAgentExecutionLedger:
                     )
                 connection.execute(
                     f"INSERT INTO {_LEDGER_TABLE} "
-                    "(authorization_id, authorization_digest, state, claimed_at) VALUES (?, ?, ?, ?)",
-                    (authorization.authorization_id, authorization.content_digest, _STATE_CLAIMED, moment),
+                    "(authorization_id, authorization_digest, state, claimed_at, "
+                    "owner_instance_id, leased_at, lease_expires_at) VALUES (?, ?, ?, ?, ?, ?, ?)",
+                    (
+                        authorization.authorization_id,
+                        authorization.content_digest,
+                        _STATE_CLAIMED,
+                        moment.isoformat(),
+                        self._instance_id,
+                        moment.isoformat(),
+                        expires_at.isoformat(),
+                    ),
                 )
                 connection.execute("COMMIT")
             except sqlite3.IntegrityError:
@@ -652,13 +729,16 @@ class IssueAgentExecutionLedger:
         dispatched_at: datetime,
     ) -> None:
         """Record the exact handoff durably *before* it is handed to the runtime."""
-        moment = _aware_utc("ledger dispatch time", dispatched_at).isoformat()
+        moment = _aware_utc("ledger dispatch time", dispatched_at)
+        expires_at = moment + timedelta(seconds=ISSUE_AGENT_LEDGER_LEASE_SECONDS)
         self._advance(
             authorization,
             sql=(
                 f"UPDATE {_LEDGER_TABLE} SET state = ?, document_id = ?, build_record_id = ?, "
-                "envelope_id = ?, handoff_document = ?, dispatched_at = ? "
-                "WHERE authorization_id = ? AND authorization_digest = ? AND state = ?"
+                "envelope_id = ?, handoff_document = ?, dispatched_at = ?, "
+                "leased_at = ?, lease_expires_at = ? "
+                "WHERE authorization_id = ? AND authorization_digest = ? AND state = ? "
+                "AND owner_instance_id = ? AND lease_expires_at > ?"
             ),
             parameters=(
                 _STATE_DISPATCHED,
@@ -666,12 +746,16 @@ class IssueAgentExecutionLedger:
                 build_record_id,
                 envelope_id,
                 handoff_document,
-                moment,
+                moment.isoformat(),
+                moment.isoformat(),
+                expires_at.isoformat(),
                 authorization.authorization_id,
                 authorization.content_digest,
                 _STATE_CLAIMED,
+                self._instance_id,
+                moment.isoformat(),
             ),
-            failure="ledger dispatch state is not the exact claimed authorization",
+            failure="ledger dispatch state is not the exact claimed authorization owned by this instance",
         )
 
     def complete(self, authorization: IssueAgentAuthorization, *, completed_at: datetime) -> None:
@@ -681,7 +765,8 @@ class IssueAgentExecutionLedger:
             authorization,
             sql=(
                 f"UPDATE {_LEDGER_TABLE} SET state = ?, completed_at = ? "
-                "WHERE authorization_id = ? AND authorization_digest = ? AND state = ?"
+                "WHERE authorization_id = ? AND authorization_digest = ? AND state = ? "
+                "AND owner_instance_id = ?"
             ),
             parameters=(
                 _STATE_COMPLETED,
@@ -689,9 +774,119 @@ class IssueAgentExecutionLedger:
                 authorization.authorization_id,
                 authorization.content_digest,
                 _STATE_DISPATCHED,
+                self._instance_id,
             ),
-            failure="ledger completion state is not the exact dispatched authorization",
+            failure="ledger completion requires the exact dispatched authorization owned by this instance",
         )
+
+    def fail(
+        self,
+        authorization: IssueAgentAuthorization,
+        *,
+        failed_at: datetime,
+        failure_type: str,
+        failure_message: str,
+    ) -> None:
+        """Persist a terminal failure without ever releasing replay ownership."""
+        moment = _aware_utc("ledger failure time", failed_at).isoformat()
+        kind = str(failure_type).strip() or "ExecutionError"
+        message = str(failure_message).strip() or kind
+        if len(message) > 2000:
+            message = message[:2000]
+
+        self._advance(
+            authorization,
+            sql=(
+                f"UPDATE {_LEDGER_TABLE} "
+                "SET state = ?, failed_at = ?, failure_type = ?, failure_message = ? "
+                "WHERE authorization_id = ? AND authorization_digest = ? "
+                "AND state IN (?, ?) AND owner_instance_id = ?"
+            ),
+            parameters=(
+                _STATE_FAILED,
+                moment,
+                kind,
+                message,
+                authorization.authorization_id,
+                authorization.content_digest,
+                _STATE_CLAIMED,
+                _STATE_DISPATCHED,
+                self._instance_id,
+            ),
+            failure="ledger failure requires an active exact authorization owned by this instance",
+        )
+
+    def renew_lease(
+        self,
+        authorization: IssueAgentAuthorization,
+        *,
+        health_at: datetime,
+    ) -> None:
+        """Extend the execution lease while this instance is still running it.
+
+        A live provider keeps its row non-terminal forever, so an instance that
+        boots while it runs must never fail it closed. Replay ownership is
+        untouched by renewal: it never resets a terminal row and never lets a
+        foreign instance reclaim the authorization.
+        """
+        moment = _aware_utc("ledger lease health time", health_at)
+        expires_at = moment + timedelta(seconds=ISSUE_AGENT_LEDGER_LEASE_SECONDS)
+        self._advance(
+            authorization,
+            sql=(
+                f"UPDATE {_LEDGER_TABLE} SET leased_at = ?, lease_expires_at = ? "
+                "WHERE authorization_id = ? AND authorization_digest = ? AND state = ? "
+                "AND owner_instance_id = ?"
+            ),
+            parameters=(
+                moment.isoformat(),
+                expires_at.isoformat(),
+                authorization.authorization_id,
+                authorization.content_digest,
+                _STATE_DISPATCHED,
+                self._instance_id,
+            ),
+            failure="ledger lease renewal requires the exact dispatched authorization owned by this instance",
+        )
+
+    def recover_expired_on_startup(self, *, failed_at: datetime) -> int:
+        """Fail closed only incomplete rows whose execution lease has lapsed.
+
+        A row whose foreign lease is still valid is proof that another live
+        issuer instance still runs that provider, so this instance must leave it
+        alone; that is exactly the overlap a rolling deployment or the
+        multiple-instance configuration produces. An incomplete row whose lease
+        has lapsed means the owning instance stopped renewing it before a
+        terminal outcome, so it may be failed closed. Rows with no recorded
+        lease (pre-upgrade or otherwise unclaimable) are never guessed at and
+        stay as they are. Replay ownership remains held forever: recovery never
+        retries an uncertain authorization and therefore cannot double-execute
+        it, and lease expiry never permits a reclaim.
+        """
+        moment = _aware_utc("ledger startup recovery time", failed_at).isoformat()
+        with closing(self._connect()) as connection:
+            try:
+                connection.execute("BEGIN IMMEDIATE")
+                cursor = connection.execute(
+                    f"UPDATE {_LEDGER_TABLE} "
+                    "SET state = ?, failed_at = ?, failure_type = ?, failure_message = ? "
+                    "WHERE state IN (?, ?) "
+                    "AND lease_expires_at IS NOT NULL AND lease_expires_at < ?",
+                    (
+                        _STATE_FAILED,
+                        moment,
+                        "ProcessRestart",
+                        "issuer lease expired before a durable terminal outcome",
+                        _STATE_CLAIMED,
+                        _STATE_DISPATCHED,
+                        moment,
+                    ),
+                )
+                connection.execute("COMMIT")
+                return int(cursor.rowcount)
+            except BaseException:
+                connection.execute("ROLLBACK")
+                raise
 
     def _advance(
         self,
@@ -1011,6 +1206,7 @@ __all__ = [
     "ISSUE_AGENT_AUTHORIZATION_LABEL",
     "ISSUE_AGENT_AUTHORIZATION_SCHEMA_VERSION",
     "ISSUE_AGENT_EXECUTION_RECEIPT_SCHEMA_VERSION",
+    "ISSUE_AGENT_LEDGER_LEASE_SECONDS",
     "ISSUE_AGENT_PROFILE_REGISTRY",
     "ISSUE_AGENT_ROUTE_REGISTRY",
     "ISSUE_AGENT_SIGNED_AUTHORIZATION_SCHEMA_VERSION",
