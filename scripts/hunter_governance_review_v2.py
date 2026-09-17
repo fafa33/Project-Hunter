@@ -466,6 +466,31 @@ def reviewer_identity_map(pool: dict[str, Any]) -> dict[str, str]:
     return identities
 
 
+def trusted_collector_run(repository: str, token: str, trigger: dict[str, Any]) -> bool:
+    """Require reviewer trigger identity to originate from Hunter's trusted collector workflow."""
+    from hunter_reviewer_collector import WORKFLOW, _run_on_default_branch_history, valid_run
+
+    run_id = trigger.get("collector_run_id")
+    attempt = trigger.get("collector_run_attempt")
+    if type(run_id) is not int or type(attempt) is not int:
+        return False
+    try:
+        repo = request_json(repository, token, "GET", "")
+        run = request_json(repository, token, "GET", f"actions/runs/{run_id}")
+        if not isinstance(repo, dict) or not isinstance(run, dict):
+            return False
+        branch = str(repo.get("default_branch") or "")
+        revision = str(run.get("head_sha") or "")
+        return (
+            run.get("path") == WORKFLOW
+            and run.get("run_attempt") == attempt
+            and valid_run(run, run_id, branch, revision)
+            and _run_on_default_branch_history(repository, token, branch, revision)
+        )
+    except Exception:
+        return False
+
+
 def read_pr_pool_review_comments(
     repository: str,
     token: str,
@@ -528,20 +553,62 @@ def read_pr_pool_review_comments(
             if len(payload) < 100:
                 break
             page += 1
-        trusted_results = {
-            (
-                result["reviewer_agent"],
-                result["head_sha"],
-                result["claims_id"],
-                result["collector_run_id"],
-                result["trigger_id"],
-                result["response_digest"],
-            ): result
-            for comment in issue_comments
-            if str((comment.get("user") or {}).get("login") or "").lower() == "github-actions[bot]"
-            for result in [review_result_observation(str(comment.get("body") or ""))]
-            if result is not None and result["verdict"] == "clear"
-        }
+        from hunter_reviewer_collector import parse_api_trigger, parse_native_trigger
+
+        comments_by_id = {int(c.get("id") or 0): c for c in issue_comments}
+        trusted_results: dict[tuple[Any, ...], dict[str, Any]] = {}
+        for comment in issue_comments:
+            if str((comment.get("user") or {}).get("login") or "").lower() != "github-actions[bot]":
+                continue
+            result = review_result_observation(str(comment.get("body") or ""))
+            if result is None or result["verdict"] != "clear":
+                continue
+            trigger_comment = comments_by_id.get(int(result["trigger_id"]))
+            trigger = parse_api_trigger(str((trigger_comment or {}).get("body") or ""))
+            if (
+                trigger is None
+                or str(((trigger_comment or {}).get("user") or {}).get("login") or "").lower() != "github-actions[bot]"
+                or any(
+                    trigger.get(k) != result.get(k)
+                    for k in ("head_sha", "claims_id", "reviewer_agent", "collector_run_id")
+                )
+                or not trusted_collector_run(repository, token, trigger)
+            ):
+                continue
+            trusted_results[
+                (
+                    result["reviewer_agent"],
+                    result["head_sha"],
+                    result["claims_id"],
+                    result["collector_run_id"],
+                    result["trigger_id"],
+                    result["response_digest"],
+                )
+            ] = result
+
+        # Bind native Codex reviews to the latest canonical trusted trigger that
+        # precedes the review. A same-HEAD review from an older request is stale.
+        native_triggers = []
+        for comment in issue_comments:
+            if str((comment.get("user") or {}).get("login") or "").lower() != "github-actions[bot]":
+                continue
+            trigger = parse_native_trigger(str(comment.get("body") or ""))
+            if (
+                trigger is not None
+                and trigger.get("reviewer_agent") == "codex"
+                and trusted_collector_run(repository, token, trigger)
+            ):
+                native_triggers.append((str(comment.get("created_at") or ""), trigger))
+        for review_item in reviews:
+            if review_item.get("agent_id") != "codex" or review_item.get("source_kind") != "review":
+                continue
+            eligible = [
+                t
+                for created, t in native_triggers
+                if created <= str(review_item.get("submitted_at") or "") and t.get("head_sha") == exact_head
+            ]
+            if eligible:
+                review_item["trigger_claims_id"] = eligible[-1]["claims_id"]
         for comment in issue_comments:
             login = str(comment["user"].get("login") or "").lower()
             body = str(comment.get("body") or "")
@@ -1820,6 +1887,7 @@ def verify_pre_ready_hostile_review(
             if (
                 observation.get("agent_id") == "codex"
                 and observation.get("source_kind") == "review"
+                and observation.get("trigger_claims_id") == claims_id
                 and native_codex_clear_review(observation["body"], head_sha)
             ):
                 adopted.append(

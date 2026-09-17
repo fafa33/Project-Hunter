@@ -929,3 +929,18 @@ def test_response_state_uses_latest_exact_head_review(monkeypatch):
     ]
     monkeypatch.setattr(collector, "_pages", lambda *_a, **_k: reviews if "reviews" in _a[2] else [])
     assert backend.response_state(POOL["agents"][0], trigger) == "blocking"
+
+
+def test_parse_native_trigger_binds_head_claims_run_and_attempt():
+    agent = POOL["agents"][0]
+    body = collector.trigger_body(HEAD, "d" * 64, agent, 123, 2, 1)
+    parsed = collector.parse_native_trigger(body)
+    assert parsed == {
+        "head_sha": HEAD,
+        "claims_id": "d" * 64,
+        "reviewer_agent": "codex",
+        "collector_run_id": 123,
+        "collector_run_attempt": 2,
+        "attempt_number": 1,
+    }
+    assert collector.parse_native_trigger(body.replace(HEAD, "b" * 40, 1)) is None

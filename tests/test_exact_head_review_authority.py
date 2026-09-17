@@ -1266,12 +1266,23 @@ def test_github_actions_ack_requires_matching_trusted_api_result(monkeypatch):
         "summary": "Completed the adversarial review of all requested criteria and changed surfaces; no blocking findings remain.",
         "response_digest": "e" * 64,
     }
+    trigger_body = __import__("hunter_reviewer_collector").api_trigger_body(
+        HEAD, document["review_id"], pool["agents"][1], 123, 1, 1
+    )
+    monkeypatch.setattr(core, "trusted_collector_run", lambda *_a, **_k: True)
 
     def request(_repository, _token, _method, path, *_args):
         if path.startswith("pulls/"):
             return []
         if path.startswith("issues/"):
             return [
+                {
+                    "id": 456,
+                    "user": {"login": "github-actions[bot]"},
+                    "body": trigger_body,
+                    "created_at": "2026-09-13T22:59:58Z",
+                    "html_url": "trigger",
+                },
                 {
                     "id": 98,
                     "user": {"login": "github-actions[bot]"},
@@ -1600,3 +1611,108 @@ def test_reviewer_result_observation_rejects_blank_summary():
         "response_digest": "e" * 64,
     }
     assert core.review_result_observation(json.dumps(payload)) is None
+
+
+def test_api_ack_with_matching_result_still_requires_verified_collector_evidence(monkeypatch):
+    """Bot comments alone are not authority; the trusted collector must bind the invocation."""
+    document, ack = _request_and_ack()
+    ack.update({"reviewer_agent": "gemini", "collector_run_id": 123, "trigger_id": 456, "response_digest": "e" * 64})
+    result = {
+        "schema": "hunter.reviewer-result.v1",
+        "head_sha": HEAD,
+        "claims_id": document["review_id"],
+        "reviewer_agent": "gemini",
+        "collector_run_id": 123,
+        "trigger_id": 456,
+        "verdict": "clear",
+        "summary": "Completed the adversarial review; no blocking findings remain.",
+        "response_digest": "e" * 64,
+    }
+    pool = _pool(
+        agents=(
+            {
+                "id": "gemini",
+                "priority": 2,
+                "enabled": True,
+                "exact_head_support": True,
+                "timeout_seconds": 300,
+                "retryable": False,
+                "trigger_method": "api:gemini",
+                "evidence_parser": "provider-json.v1",
+            },
+        )
+    )
+    monkeypatch.setattr(review, "load_reviewer_pool", lambda *_a, **_k: (pool, ""))
+    monkeypatch.setattr(core, "read_pr_refs", lambda *_a: (True, "issue-467-reviewer-pool-failover", "main", None))
+    monkeypatch.setattr(core, "read_merge_base", lambda *_a: (True, BASE, None))
+    monkeypatch.setattr(
+        core,
+        "read_pr_changed_files",
+        lambda *_a: (
+            True,
+            tuple(core.PullRequestFile(c.status, c.path, c.previous_path, c.blob_sha) for c in CANDIDATE_CHANGES)
+            + (core.PullRequestFile("modified", review.REVIEW_RELATIVE_PATH, "", "9" * 40),),
+            None,
+        ),
+    )
+    monkeypatch.setattr(core, "read_head_pre_ready_review", lambda *_a: ("present", document, None))
+    monkeypatch.setattr(core.pre_ready, "load_families", lambda *_a, **_k: (FAMILIES, ""))
+    monkeypatch.setattr(core, "read_issue_acceptance_criteria", lambda *_a: ("present", (), ""))
+    monkeypatch.setattr(core, "read_pr_commits", lambda *_a: (True, ({"sha": HEAD},), None))
+    monkeypatch.setattr(core, "read_unresolved_review_threads", lambda *_a: ((), None))
+    monkeypatch.setattr(core, "check_reviewer_dispositions", lambda: (True, ""))
+
+    def request(_repo, _token, _method, path, *_args):
+        if path.startswith("pulls/"):
+            return []
+        if path.startswith("issues/"):
+            return [
+                {
+                    "id": 98,
+                    "user": {"login": "github-actions[bot]"},
+                    "body": json.dumps(result),
+                    "created_at": "2026-09-17T20:00:00Z",
+                    "html_url": "result",
+                },
+                {
+                    "id": 99,
+                    "user": {"login": "github-actions[bot]"},
+                    "body": json.dumps(ack),
+                    "created_at": "2026-09-17T20:00:01Z",
+                    "html_url": "ack",
+                },
+            ]
+        raise AssertionError(path)
+
+    monkeypatch.setattr(core, "request_json", request)
+    monkeypatch.setattr(
+        "hunter_reviewer_collector.load_exhaustion",
+        lambda *_a, **_k: (_ for _ in ()).throw(ValueError("unverified collector")),
+    )
+
+    state, message = core.verify_pre_ready_hostile_review("repo", "token", HEAD, PR_NUMBER)
+    assert state == "failure"
+    assert "MISSING_REVIEW_AUTHORITY" in message
+
+
+def test_trusted_collector_trigger_rejects_unrelated_actions_bot_run(monkeypatch):
+    trigger = {"collector_run_id": 123, "collector_run_attempt": 1}
+    monkeypatch.setattr(
+        core,
+        "request_json",
+        lambda *_a, **_k: (
+            {"default_branch": "main"}
+            if _a[3] == ""
+            else {
+                "id": 123,
+                "run_attempt": 1,
+                "head_branch": "feature",
+                "head_sha": HEAD,
+                "path": "other.yml",
+                "event": "pull_request_target",
+                "status": "completed",
+                "conclusion": "success",
+            }
+        ),
+    )
+    assert not core.trusted_collector_run("repo", "token", trigger)

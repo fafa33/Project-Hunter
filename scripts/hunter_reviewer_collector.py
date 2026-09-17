@@ -336,6 +336,31 @@ def trigger_body(head: str, claims_id: str, agent: dict[str, Any], run_id: int, 
     )
 
 
+def parse_native_trigger(body: str) -> dict[str, Any] | None:
+    """Parse Hunter's canonical authenticated GitHub reviewer trigger."""
+    match = re.search(
+        r"Review exact HEAD ([0-9a-f]{40}).*?\"claims_id\": \"([0-9a-f]{64})\".*?"
+        r"Collector invocation: (\d+)/(\d+)/([a-z0-9_-]+)/(\d+)\.\n"
+        r"Invocation key: ([0-9a-f]{64})\.",
+        body,
+        re.S,
+    )
+    if match is None:
+        return None
+    head, claims_id, run_id, run_attempt, agent_id, attempt, key = match.groups()
+    number = int(attempt)
+    if key != invocation_key(head, claims_id, agent_id, number):
+        return None
+    return {
+        "head_sha": head,
+        "claims_id": claims_id,
+        "reviewer_agent": agent_id,
+        "collector_run_id": int(run_id),
+        "collector_run_attempt": int(run_attempt),
+        "attempt_number": number,
+    }
+
+
 class GitHubBackend:
     def __init__(self, repository: str, token: str, pr: int, head: str, claims_id: str, run_id: int, run_attempt: int):
         self.repository, self.token, self.pr = repository, token, pr
