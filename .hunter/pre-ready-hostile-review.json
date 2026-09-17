@@ -235,7 +235,7 @@
         "status": "added"
       },
       {
-        "blob_sha": "68851f30f748fc8f5b2a5b9c3ac4cc5ecd6fa320",
+        "blob_sha": "fd7b3cc59a8a4f170557abdee90fdd9a965c6256",
         "path": ".github/workflows/hunter-reviewer-collector.yml",
         "previous_path": "",
         "status": "modified"
@@ -265,7 +265,7 @@
         "status": "modified"
       },
       {
-        "blob_sha": "dfa6130b1c664588d1eed34a1589e29b16fda8a1",
+        "blob_sha": "f557c75d3eb6dfb165298e185aa354ed047142ea",
         "path": "scripts/hunter_reviewer_collector.py",
         "previous_path": "",
         "status": "modified"
@@ -277,17 +277,17 @@
         "status": "modified"
       },
       {
-        "blob_sha": "12df583a1da62d79fea1f53801417afc51b1081e",
+        "blob_sha": "bb88413d2ad485412799560fa3d12f535ef36d6c",
         "path": "tests/test_hunter_reviewer_collector.py",
         "previous_path": "",
         "status": "modified"
       }
     ],
-    "review_target_digest": "6d0108fa490eb837ed12f35341886bddb91841fdb4a60e69b4c75d4d50f356c2"
+    "review_target_digest": "69a607d10df89d909a5a0d831666f7c48b9d11f7ab0af243de66e20bdffe20af"
   },
-  "review_id": "22baa964140b809253c12762b1c46c4040012487592c54a8182192c95beed3a8",
+  "review_id": "823eb8da29790b3d9da3f590dbf809b81b0f34ccb4513193428e37c0965e36f7",
   "review_request": {
-    "claims_id": "22baa964140b809253c12762b1c46c4040012487592c54a8182192c95beed3a8",
+    "claims_id": "823eb8da29790b3d9da3f590dbf809b81b0f34ccb4513193428e37c0965e36f7",
     "schema": "hunter.review-request.v1"
   },
   "schema": "hunter.pre-ready-hostile-review.v1"
