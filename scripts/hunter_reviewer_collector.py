@@ -31,12 +31,23 @@ EXTERNAL_PROMPT_LIMIT = 350_000
 
 def external_verdict(payload: dict[str, Any]) -> str:
     """Map a provider JSON verdict to Hunter states; ambiguity blocks."""
-    verdict = str(payload.get("verdict") or "").strip().lower()
-    summary = str(payload.get("summary") or "").strip()
+    verdict_value = payload.get("verdict")
+    summary_value = payload.get("summary")
+    if not isinstance(verdict_value, str) or not isinstance(summary_value, str):
+        return "blocking"
+    verdict = verdict_value.strip().lower()
+    summary = summary_value.strip()
     if not summary or verdict not in {"clear", "blocking"}:
         return "blocking"
-    if re.search(r"(?<!no )\bblocking (?:finding|defect|issue)s?\b", summary.lower()):
-        return "blocking"
+    if verdict == "clear":
+        lower = summary.lower()
+        safe_clear = (
+            re.search(r"\bno (?:substantive |remaining )?(?:blocking )?(?:findings|defects|issues|blockers)\b", lower)
+            or re.search(r"\bfound no (?:substantive |remaining )?(?:blocking )?(?:findings|defects|issues|blockers)\b", lower)
+        )
+        dangerous = re.search(r"\b(?:critical|unsafe|vulnerabilit|blocking (?:finding|defect|issue)|must fix|exploit)\b", lower)
+        if not safe_clear or dangerous:
+            return "blocking"
     return verdict
 
 
@@ -387,7 +398,7 @@ class GitHubBackend:
             with urllib.request.urlopen(req, timeout=int(agent["timeout_seconds"])) as response:
                 raw = response.read(LIMIT + 1)
         except urllib.error.HTTPError as exc:
-            if exc.code in {408, 413, 429, 500, 502, 503, 504}:
+            if exc.code in {401, 403, 408, 413, 429, 500, 502, 503, 504}:
                 return {"verdict": "unavailable", "summary": f"{provider} HTTP {exc.code}"}
             raise
         except (TimeoutError, urllib.error.URLError):
@@ -525,13 +536,7 @@ class GitHubBackend:
 
     @staticmethod
     def _native_clear(body: str, head: str) -> bool:
-        raw = body.strip()
-        match = re.match(
-            r"Codex Review(?:\s*:\s*|\s+)(?:\n+)?Didn't find any major issues\.[^\n]*\n+"
-            r"\*\*Reviewed commit:\*\*\s*`([0-9a-f]{7,40})`(?:\s*<details>[\s\S]*?</details>)?\s*$",
-            raw,
-        )
-        return bool(match and head.lower().startswith(match.group(1).lower()))
+        return governance.native_codex_clear_review(body, head)
 
     @staticmethod
     def _unavailable(body: str) -> bool:
@@ -551,11 +556,15 @@ class GitHubBackend:
             return str(result["verdict"])
         login = governance.reviewer_login(agent)
         created = str(trigger["created_at"])
-        for item in _pages(self.repository, self.token, f"pulls/{self.pr}/reviews"):
-            if (item.get("user") or {}).get("login", "").lower() != login:
-                continue
-            if str(item.get("submitted_at") or "") < created or item.get("commit_id") != self.expected_head:
-                continue
+        matching_reviews = [
+            item
+            for item in _pages(self.repository, self.token, f"pulls/{self.pr}/reviews")
+            if (item.get("user") or {}).get("login", "").lower() == login
+            and str(item.get("submitted_at") or "") >= created
+            and item.get("commit_id") == self.expected_head
+        ]
+        if matching_reviews:
+            item = max(matching_reviews, key=lambda value: int(value.get("id") or 0))
             state = str(item.get("state") or "").upper()
             body = str(item.get("body") or "")
             if state == "CHANGES_REQUESTED":

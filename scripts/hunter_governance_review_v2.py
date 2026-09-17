@@ -358,8 +358,9 @@ def _substantive_review_body(body: str) -> bool:
 def native_codex_clear_review(body: str, head_sha: str) -> bool:
     """Recognize authenticated Codex's native exact-head clear outcome."""
     raw = body.strip()
+    raw = re.sub(r"^###\s+💡\s+", "", raw, count=1)
     match = re.fullmatch(
-        r"Codex Review(?:\s*:\s*|\s+)(?:\n+)?Didn't find any major issues\.[^\n]*\n+"
+        r"Codex Review(?:\s*:\s*|\s+)(?:\n+)?Didn't find any major issues\.(?: Nice work!)?\s*\n+"
         r"\*\*Reviewed commit:\*\*\s*`([0-9a-f]{7,40})`"
         r"(?:\s*<details>[\s\S]*?</details>)?\s*",
         raw,
@@ -445,7 +446,7 @@ def review_result_observation(body: str) -> dict[str, Any] | None:
         return None
     if not re.fullmatch(r"[0-9a-f]{64}", str(value.get("response_digest") or "")):
         return None
-    if not isinstance(value.get("summary"), str):
+    if not isinstance(value.get("summary"), str) or not value["summary"].strip():
         return None
     return value
 

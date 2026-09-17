@@ -1585,3 +1585,18 @@ def test_native_codex_clear_parser_rejects_trailing_blocker():
         "Blocking finding: exact-head authority can be bypassed"
     )
     assert not core.native_codex_clear_review(body, "a" * 40)
+
+
+def test_reviewer_result_observation_rejects_blank_summary():
+    payload = {
+        "schema": "hunter.reviewer-result.v1",
+        "head_sha": HEAD,
+        "claims_id": "d" * 64,
+        "reviewer_agent": "gemini",
+        "collector_run_id": 123,
+        "trigger_id": 77,
+        "verdict": "clear",
+        "summary": "   ",
+        "response_digest": "e" * 64,
+    }
+    assert core.review_result_observation(json.dumps(payload)) is None

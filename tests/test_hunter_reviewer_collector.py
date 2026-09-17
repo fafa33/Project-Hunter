@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import copy
 import json
+import urllib.error
 
 import hunter_reviewer_collector as collector
 import pytest
@@ -868,3 +869,43 @@ def test_groq_authority_verifies_prior_api_exhaustion_from_trusted_collector(mon
     monkeypatch.setattr(collector, "download_artifact", lambda *a: archive)
     evidence = collector.load_exhaustion("owner/repo", "token", 469, HEAD, pool, 123, "groq")
     assert [attempt["agent_id"] for attempt in evidence["reviewer_attempts"]] == ["codex", "gemini"]
+
+# Copilot review 2026-09-17: fail-closed parser and ordering regressions.
+def test_external_verdict_rejects_non_string_contract_fields():
+    assert collector.external_verdict({"verdict": "clear", "summary": ["No blockers"]}) == "blocking"
+    assert collector.external_verdict({"verdict": ["clear"], "summary": "No blockers"}) == "blocking"
+
+
+def test_external_verdict_rejects_ambiguous_clear_summary():
+    assert collector.external_verdict({"verdict": "clear", "summary": "Critical security vulnerability remains"}) == "blocking"
+
+
+def test_native_codex_clear_rejects_same_line_blocker_and_accepts_heading():
+    good = f"### 💡 Codex Review\n\nDidn't find any major issues.\n\n**Reviewed commit:** `{HEAD[:10]}`"
+    bad = f"### 💡 Codex Review\n\nDidn't find any major issues. Blocking finding: unsafe bypass\n\n**Reviewed commit:** `{HEAD[:10]}`"
+    assert collector.GitHubBackend._native_clear(good, HEAD)
+    assert not collector.GitHubBackend._native_clear(bad, HEAD)
+    assert collector.governance.native_codex_clear_review(good, HEAD)
+    assert not collector.governance.native_codex_clear_review(bad, HEAD)
+
+
+def test_api_auth_failures_are_explicit_unavailability(monkeypatch):
+    backend = collector.GitHubBackend("owner/repo", "token", 469, HEAD, "claims", 1, 1)
+    monkeypatch.setenv("GEMINI_API_KEY", "bad")
+    monkeypatch.setattr(backend, "_candidate_diff", lambda: "diff --git a/x b/x")
+    def denied(*_a, **_k):
+        raise urllib.error.HTTPError("https://example", 401, "unauthorized", {}, None)
+    monkeypatch.setattr(collector.urllib.request, "urlopen", denied)
+    payload = backend._invoke_external({"id": "gemini", "timeout_seconds": 1, "trigger_method": "api:gemini"}, 1)
+    assert payload["verdict"] == "unavailable"
+
+
+def test_response_state_uses_latest_exact_head_review(monkeypatch):
+    backend = collector.GitHubBackend("owner/repo", "token", 476, HEAD, "d" * 64, 123, 1)
+    trigger = {"id": 7, "created_at": "2026-09-17T00:00:00Z"}
+    reviews = [
+        {"id": 8, "submitted_at": "2026-09-17T00:00:01Z", "commit_id": HEAD, "state": "APPROVED", "body": "", "user": {"login": "chatgpt-codex-connector[bot]"}},
+        {"id": 9, "submitted_at": "2026-09-17T00:00:02Z", "commit_id": HEAD, "state": "CHANGES_REQUESTED", "body": "Blocking regression", "user": {"login": "chatgpt-codex-connector[bot]"}},
+    ]
+    monkeypatch.setattr(collector, "_pages", lambda *_a, **_k: reviews if "reviews" in _a[2] else [])
+    assert backend.response_state(POOL["agents"][0], trigger) == "blocking"
