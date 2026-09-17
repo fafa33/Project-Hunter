@@ -41,11 +41,14 @@ def external_verdict(payload: dict[str, Any]) -> str:
         return "blocking"
     if verdict == "clear":
         lower = summary.lower()
-        safe_clear = (
-            re.search(r"\bno (?:substantive |remaining )?(?:blocking )?(?:findings|defects|issues|blockers)\b", lower)
-            or re.search(r"\bfound no (?:substantive |remaining )?(?:blocking )?(?:findings|defects|issues|blockers)\b", lower)
+        safe_clear = re.search(
+            r"\bno (?:substantive |remaining )?(?:blocking )?(?:findings|defects|issues|blockers)\b", lower
+        ) or re.search(
+            r"\bfound no (?:substantive |remaining )?(?:blocking )?(?:findings|defects|issues|blockers)\b", lower
         )
-        dangerous = re.search(r"\b(?:critical|unsafe|vulnerabilit|blocking (?:finding|defect|issue)|must fix|exploit)\b", lower)
+        dangerous = re.search(
+            r"\b(?:critical|unsafe|vulnerabilit|blocking (?:finding|defect|issue)|must fix|exploit)\b", lower
+        )
         if not safe_clear or dangerous:
             return "blocking"
     return verdict
