@@ -26,6 +26,18 @@ import hunter_pre_ready_review as review
 WORKFLOW = ".github/workflows/hunter-reviewer-collector.yml"
 SCHEMA = "hunter.reviewer-collection.v1"
 LIMIT = 2_000_000
+EXTERNAL_PROMPT_LIMIT = 350_000
+
+
+def external_verdict(payload: dict[str, Any]) -> str:
+    """Map a provider JSON verdict to Hunter states; ambiguity blocks."""
+    verdict = str(payload.get("verdict") or "").strip().lower()
+    summary = str(payload.get("summary") or "").strip()
+    if not summary or verdict not in {"clear", "blocking"}:
+        return "blocking"
+    if re.search(r"(?<!no )\bblocking (?:finding|defect|issue)s?\b", summary.lower()):
+        return "blocking"
+    return verdict
 
 
 def configuration_digest(pool: dict[str, Any]) -> str:
@@ -78,6 +90,7 @@ def collect_attempts(pool: dict[str, Any], head: str, backend: Backend) -> list[
                     "trigger_created_at": trigger["created_at"],
                     "elapsed_seconds": backend.now() - start,
                     "outcome": state,
+                    **({k: trigger[k] for k in ("provider", "response_digest", "head_sha") if k in trigger}),
                 }
             )
             if state in {"clear", "blocking"}:
@@ -155,7 +168,91 @@ class GitHubBackend:
     def sleep(self, seconds: float) -> None:
         time.sleep(seconds)
 
+    def _candidate_diff(self) -> str:
+        url = f"https://api.github.com/repos/{self.repository}/pulls/{self.pr}"
+        req = urllib.request.Request(
+            url, headers={"Authorization": f"Bearer {self.token}", "Accept": "application/vnd.github.v3.diff"}
+        )
+        with urllib.request.urlopen(req, timeout=30) as response:
+            data = response.read(EXTERNAL_PROMPT_LIMIT + 1)
+        if len(data) > EXTERNAL_PROMPT_LIMIT:
+            raise ValueError("candidate diff exceeds external reviewer context budget")
+        return data.decode("utf-8", errors="strict")
+
+    def _invoke_external(self, agent: dict[str, Any], number: int) -> dict[str, Any]:
+        provider = str(agent["trigger_method"]).split(":", 1)[1]
+        secret_name = {"gemini": "GEMINI_API_KEY", "groq": "GROQ_API_KEY"}.get(provider)
+        key = os.environ.get(secret_name or "", "")
+        if not key:
+            return {"verdict": "unavailable", "summary": f"{provider} API key unavailable"}
+        prompt = (
+            "You are an independent hostile code reviewer. Review the COMPLETE exact-head diff below. "
+            f"Repository={self.repository} PR={self.pr} HEAD={self.expected_head} claims_id={self.claims_id}. "
+            'Return JSON only: {"verdict":"clear|blocking","summary":"..."}. '
+            "Use clear only when no substantive correctness, security, governance, exact-head, or fail-closed defect remains. "
+            "Any finding must use blocking.\n\nDIFF:\n" + self._candidate_diff()
+        )
+        if provider == "gemini":
+            url = "https://generativelanguage.googleapis.com/v1beta/models/gemini-3.8-flash:generateContent"
+            headers = {"x-goog-api-key": key, "Content-Type": "application/json"}
+            body: dict[str, Any] = {
+                "contents": [{"parts": [{"text": prompt}]}],
+                "generationConfig": {"responseMimeType": "application/json"},
+            }
+        elif provider == "groq":
+            url = "https://api.groq.com/openai/v1/chat/completions"
+            headers = {"Authorization": f"Bearer {key}", "Content-Type": "application/json"}
+            body = {
+                "model": "llama-3.3-70b-versatile",
+                "messages": [{"role": "user", "content": prompt}],
+                "response_format": {"type": "json_object"},
+                "temperature": 0,
+            }
+        else:
+            raise ValueError(f"unsupported external reviewer: {provider}")
+        req = urllib.request.Request(url, data=json.dumps(body).encode(), headers=headers, method="POST")
+        try:
+            with urllib.request.urlopen(req, timeout=int(agent["timeout_seconds"])) as response:
+                raw = response.read(LIMIT + 1)
+        except urllib.error.HTTPError as exc:
+            if exc.code in {408, 413, 429, 500, 502, 503, 504}:
+                return {"verdict": "unavailable", "summary": f"{provider} HTTP {exc.code}"}
+            raise
+        except (TimeoutError, urllib.error.URLError):
+            return {"verdict": "unavailable", "summary": f"{provider} transport unavailable"}
+        if len(raw) > LIMIT:
+            raise ValueError("external reviewer response too large")
+        envelope = json.loads(raw)
+        if provider == "gemini":
+            text = envelope["candidates"][0]["content"]["parts"][0]["text"]
+        else:
+            text = envelope["choices"][0]["message"]["content"]
+        result = json.loads(text) if isinstance(text, str) else text
+        if not isinstance(result, dict):
+            raise ValueError("external reviewer returned malformed JSON")
+        return result
+
     def trigger(self, agent: dict[str, Any], number: int) -> dict[str, Any]:
+        method = str(agent["trigger_method"])
+        if method.startswith("api:"):
+            provider = method.split(":", 1)[1]
+            payload = self._invoke_external(agent, number)
+            state = "unavailable" if payload.get("verdict") == "unavailable" else external_verdict(payload)
+            digest = hashlib.sha256(json.dumps(payload, sort_keys=True).encode()).hexdigest()
+            identity = int(
+                hashlib.sha256(
+                    f"{self.run_id}:{self.run_attempt}:{provider}:{number}:{self.expected_head}".encode()
+                ).hexdigest()[:15],
+                16,
+            )
+            return {
+                "id": identity,
+                "created_at": str(time.time()),
+                "provider": provider,
+                "response_digest": digest,
+                "head_sha": self.expected_head,
+                "state": state,
+            }
         body = trigger_body(self.expected_head, self.claims_id, agent, self.run_id, self.run_attempt, number)
         result = governance.request_json(
             self.repository, self.token, "POST", f"issues/{self.pr}/comments", {"body": body}
@@ -179,14 +276,16 @@ class GitHubBackend:
         text = body.lower()
         markers = (
             "usage limit reached",
-            "rate limit",
-            "rate-limited",
             "temporarily unavailable",
             "create a codex account and connect to github",
         )
         return any(marker in text for marker in markers)
 
     def response_state(self, agent: dict[str, Any], trigger: dict[str, Any]) -> str:
+        if str(agent["trigger_method"]).startswith("api:"):
+            if trigger.get("head_sha") != self.expected_head:
+                raise ValueError("external reviewer response is not exact-head bound")
+            return str(trigger.get("state") or "blocking")
         login = governance.reviewer_login(agent)
         created = str(trigger["created_at"])
         for item in _pages(self.repository, self.token, f"pulls/{self.pr}/reviews"):

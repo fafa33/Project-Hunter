@@ -41,7 +41,7 @@
       ],
       "reviewer_pool": {
         "model": "ordered-priority-with-failover",
-        "ordering": "strict-priority-first: every enabled reviewer is attempted, in priority order, before any lower-priority reviewer; approved agent reviewers (Tier 2) are handled by the same exact-head-bound evidence pipeline as the primary, and the Hostile-Review guard is the last resort, admissible only when the whole enabled pool is exhausted",
+        "ordering": "strict-priority-first: Codex, then server-side Gemini API, then server-side Groq API; each enabled reviewer is attempted exactly once per exact HEAD before the Hostile-Review last resort.",
         "last_resort": "opencode",
         "exhaustion_semantics": "Every enabled higher-priority reviewer is invoked exactly once per exact HEAD. Authenticated explicit unavailability fails over immediately; silence is bounded by the configured timeout. Clear or blocking substantive responses stop failover. Trusted collector receipts bind trigger identity, head, timing and terminal outcome; malformed or unavailable evidence fails closed.",
         "timeout_policy": {
@@ -65,6 +65,32 @@
             "note": "Tier 1 primary reviewer. chatgpt-codex-connector[bot] is the only agent-reviewer integration observed on this repository (COMMENTED reviews on PRs #458, #460, #466); every other PR has zero reviews, so the Tier 2 pool is empty until an approved agent reviewer is actually installed on the repository.",
             "evidence": "Discovered by inspecting check-suites and PR reviews on main (commit dca20dd): installed apps are claude, freebuff-web, github-actions, railway-app, tembo, vercel; no Copilot code review, CodeRabbit, Jules, or CODEOWNERS exists on this repository.",
             "github_login": "chatgpt-codex-connector[bot]"
+          },
+          {
+            "id": "gemini",
+            "priority": 2,
+            "enabled": true,
+            "trigger_method": "api:gemini",
+            "exact_head_support": true,
+            "timeout_seconds": 300,
+            "retryable": false,
+            "evidence_parser": "provider-json.v1",
+            "fallback_eligibility": false,
+            "note": "Trusted default-branch collector invokes Gemini API server-side using repository secret; candidate code never receives the secret.",
+            "evidence": "Provider response is exact-head bound and hashed into the immutable trusted collector artifact."
+          },
+          {
+            "id": "groq",
+            "priority": 3,
+            "enabled": true,
+            "trigger_method": "api:groq",
+            "exact_head_support": true,
+            "timeout_seconds": 300,
+            "retryable": false,
+            "evidence_parser": "provider-json.v1",
+            "fallback_eligibility": false,
+            "note": "Trusted default-branch collector invokes Groq API server-side using repository secret; candidate code never receives the secret.",
+            "evidence": "Provider response is exact-head bound and hashed into the immutable trusted collector artifact."
           }
         ]
       }

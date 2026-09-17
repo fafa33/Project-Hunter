@@ -41,6 +41,8 @@ jobs:
       - name: Collect actual configured reviewer invocations
         env:
           GITHUB_TOKEN: ${{ github.token }}
+          GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+          GROQ_API_KEY: ${{ secrets.GROQ_API_KEY }}
           PR_NUMBER: ${{ github.event.pull_request.number || inputs.pr_number }}
           CANDIDATE_HEAD: ${{ github.event.pull_request.head.sha || inputs.head_sha }}
         run: >-

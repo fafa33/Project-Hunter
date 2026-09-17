@@ -103,7 +103,10 @@ def _authority(authority_type: str = "codex", head_sha: str = HEAD, attempts=Non
             }
         )
     if authority_type != "codex":
-        authority["reviewer_attempts"] = list(attempts) if attempts is not None else [dict(_attempt())]
+        default_attempts = [dict(_attempt())]
+        if authority_type == "opencode":
+            default_attempts += [dict(_attempt("gemini")), dict(_attempt("groq"))]
+        authority["reviewer_attempts"] = list(attempts) if attempts is not None else default_attempts
     authority.update(overrides)
     return authority
 
@@ -323,7 +326,7 @@ def test_a_permanent_failure_single_attempt_is_trustworthy(monkeypatch) -> None:
 
 def test_two_retryable_transient_attempts_with_the_exact_timeout_are_trustworthy(monkeypatch) -> None:
     _use_pool(monkeypatch, _pool())
-    document = _review_document(authority=_authority("opencode"))
+    document = _review_document(authority=_authority("opencode", attempts=[_attempt()]))
 
     verdict = _verify(document)
 
@@ -353,7 +356,7 @@ def test_exhaustion_failure_kind_distinguishes_unproven_from_unattempted(monkeyp
     skipped = _authority("opencode", attempts=[_attempt()])
     assert review.exhaustion_failure_kind(skipped_pool, skipped, "opencode") == "POOL_NOT_EXHAUSTED"
 
-    trustworthy = _authority("opencode")
+    trustworthy = _authority("opencode", attempts=[_attempt()])
     assert review.exhaustion_failure_kind(pool, trustworthy, "opencode") is None
 
 
@@ -459,7 +462,7 @@ def test_authority_state_exhaustion_unproven_for_fake_timeout_evidence() -> None
 
 
 def test_authority_state_blocks_last_resort_without_verifiable_identity() -> None:
-    doc = _review_document(authority=_authority("opencode", head_sha=HEAD))
+    doc = _review_document(authority=_authority("opencode", head_sha=HEAD, attempts=[_attempt()]))
     guard = ("present", doc, None)
     verdict = _state(
         pool=_pool(),
@@ -470,7 +473,7 @@ def test_authority_state_blocks_last_resort_without_verifiable_identity() -> Non
 
 
 def test_unidentified_guard_cannot_reach_exhaustion_reverification() -> None:
-    doc = _review_document(authority=_authority("opencode", head_sha=HEAD))
+    doc = _review_document(authority=_authority("opencode", head_sha=HEAD, attempts=[_attempt()]))
     guard = ("present", doc, None)
     verdict = _state(
         pool=_pool(),
@@ -864,14 +867,17 @@ def test_zero_reviews_cannot_admit_when_no_defect_family_applies(monkeypatch):
 
 def test_guard_with_unresolved_threads_is_never_valid():
     assert (
-        _state(guard=("present", _review_document(authority=_authority("opencode")), None), threads=1).state
+        _state(
+            guard=("present", _review_document(authority=_authority("opencode", attempts=[_attempt()])), None),
+            threads=1,
+        ).state
         == "MISSING_REVIEW_AUTHORITY"
     )
 
 
 def test_correct_looking_exhaustion_without_trusted_result_is_blocked(monkeypatch):
     _use_pool(monkeypatch, _pool())
-    _install_governance(monkeypatch, document=_review_document(authority=_authority("opencode")))
+    _install_governance(monkeypatch, document=_review_document(authority=_authority("opencode", attempts=[_attempt()])))
     monkeypatch.setattr(core, "request_json", lambda *a, **kw: {})
     assert core.verify_pre_ready_hostile_review("repo", "token", HEAD, PR_NUMBER)[0] == "failure"
 

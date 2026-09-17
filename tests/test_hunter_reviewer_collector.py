@@ -439,3 +439,58 @@ def test_substantive_not_available_phrase_is_not_unavailability():
     assert not collector.GitHubBackend._unavailable(
         "This required migration is not available in this patch and is a blocking finding."
     )
+
+
+def test_substantive_rate_limit_phrase_is_not_unavailability():
+    assert not collector.GitHubBackend._unavailable(
+        "This patch lacks a rate limit on the public endpoint and that is a blocking finding."
+    )
+
+
+def test_policy_enables_server_side_gemini_and_groq_after_codex():
+    pool, error = collector.review.load_reviewer_pool()
+    assert not error and pool is not None
+    agents = sorted(collector.review.enabled_pool_reviewers(pool), key=lambda a: a["priority"])
+    assert [(a["id"], a["priority"]) for a in agents[:3]] == [("codex", 1), ("gemini", 2), ("groq", 3)]
+    assert agents[1]["trigger_method"] == "api:gemini"
+    assert agents[2]["trigger_method"] == "api:groq"
+    assert all(a["timeout_seconds"] == 300 for a in agents[:3])
+
+
+def test_collector_workflow_exposes_only_server_reviewer_secrets():
+    import yaml
+
+    workflow = yaml.safe_load((collector.review.ROOT / collector.WORKFLOW).read_text())
+    env = workflow["jobs"]["collect"]["steps"][1]["env"]
+    assert env["GEMINI_API_KEY"] == "${{ secrets.GEMINI_API_KEY }}"
+    assert env["GROQ_API_KEY"] == "${{ secrets.GROQ_API_KEY }}"
+
+
+@pytest.mark.parametrize(
+    ("payload", "expected"),
+    [
+        ({"verdict": "clear", "summary": "No blocking defects."}, "clear"),
+        ({"verdict": "blocking", "summary": "Unsafe authority bypass."}, "blocking"),
+        ({"verdict": "clear", "summary": "Blocking finding remains."}, "blocking"),
+    ],
+)
+def test_external_reviewer_verdict_is_fail_closed(payload, expected):
+    assert collector.external_verdict(payload) == expected
+
+
+def test_api_reviewer_trigger_is_exact_head_bound_and_synchronous(monkeypatch):
+    agent = {
+        "id": "gemini",
+        "priority": 2,
+        "enabled": True,
+        "timeout_seconds": 300,
+        "retryable": False,
+        "trigger_method": "api:gemini",
+        "evidence_parser": "provider-json.v1",
+    }
+    backend = collector.GitHubBackend("owner/repo", "token", 476, HEAD, "d" * 64, 123, 1)
+    monkeypatch.setattr(backend, "_invoke_external", lambda a, n: {"verdict": "clear", "summary": "No blockers."})
+    trigger = backend.trigger(agent, 1)
+    assert trigger["head_sha"] == HEAD
+    assert trigger["provider"] == "gemini"
+    assert backend.response_state(agent, trigger) == "clear"
