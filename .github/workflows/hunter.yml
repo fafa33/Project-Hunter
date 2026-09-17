@@ -1,4 +1,7 @@
 name: Project Hunter PR Remediation
+permissions:
+  contents: read
+
 
 on:
   pull_request:
