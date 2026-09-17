@@ -69,7 +69,7 @@
       },
       {
         "criterion": "No autonomous Ready, merge, or Railway deploy is introduced.",
-        "evidence": "Full diff changes only bootstrap verification, focused tests, defect registry and this review request; no Ready, merge or deploy action added.",
+        "evidence": "Complete base-to-head diff introduces reviewer orchestration/workflow execution but no autonomous Ready transition, merge action, or Railway deploy. Independent reviewer must verify the full diff.",
         "id": "AC-012",
         "verdict": "satisfied"
       },
@@ -97,77 +97,77 @@
     "base_sha": "fea16ec43ecd728198733b14050f0037ea66080a",
     "defect_families": [
       {
-        "evidence": "Candidate scope: docs/DEFECT_REGISTRY.json, scripts/hunter_governance_review/bootstrap_external_review_469.py, tests/test_pr473_trusted_bridge_bootstrap.py. 204 focused governance/admission/readiness/collector tests passed. Bootstrap tests cover exact identity, later-review revocation, controller retirement and malformed path evidence. No runtime, persistence, execution or workflow changes; reviewer must independently assess applicability and claims.",
+        "evidence": "Complete base-to-head scope: .github/workflows/hunter-reviewer-collector.yml, docs/CODE_WRITE_POLICY.json, docs/DEFECT_REGISTRY.json, docs/superpowers/plans/2026-09-17-review-orchestration-fast-failover.md, docs/superpowers/specs/2026-09-17-review-orchestration-fast-failover-design.md, scripts/hunter_governance_review/bootstrap_external_review_469.py, scripts/hunter_governance_review_v2.py, scripts/hunter_reviewer_collector.py, tests/test_exact_head_review_authority.py, tests/test_hunter_reviewer_collector.py, tests/test_issue_412_prevention_gate.py, tests/test_pr473_trusted_bridge_bootstrap.py. This candidate changes trusted GitHub workflow execution, reviewer API fallback execution, exact-head authority handling, bootstrap logic, policy/defect evidence, and regression tests. Runtime/workflow/execution changes ARE in scope and require independent hostile review. Focused reviewer/governance suites: 293 passed after the latest collector repairs.",
         "family": "DFF-007",
         "outcome": "clear"
       },
       {
-        "evidence": "Candidate scope: docs/DEFECT_REGISTRY.json, scripts/hunter_governance_review/bootstrap_external_review_469.py, tests/test_pr473_trusted_bridge_bootstrap.py. 204 focused governance/admission/readiness/collector tests passed. Bootstrap tests cover exact identity, later-review revocation, controller retirement and malformed path evidence. No runtime, persistence, execution or workflow changes; reviewer must independently assess applicability and claims.",
+        "evidence": "Complete base-to-head scope: .github/workflows/hunter-reviewer-collector.yml, docs/CODE_WRITE_POLICY.json, docs/DEFECT_REGISTRY.json, docs/superpowers/plans/2026-09-17-review-orchestration-fast-failover.md, docs/superpowers/specs/2026-09-17-review-orchestration-fast-failover-design.md, scripts/hunter_governance_review/bootstrap_external_review_469.py, scripts/hunter_governance_review_v2.py, scripts/hunter_reviewer_collector.py, tests/test_exact_head_review_authority.py, tests/test_hunter_reviewer_collector.py, tests/test_issue_412_prevention_gate.py, tests/test_pr473_trusted_bridge_bootstrap.py. This candidate changes trusted GitHub workflow execution, reviewer API fallback execution, exact-head authority handling, bootstrap logic, policy/defect evidence, and regression tests. Runtime/workflow/execution changes ARE in scope and require independent hostile review. Focused reviewer/governance suites: 293 passed after the latest collector repairs.",
         "family": "DFF-008",
         "outcome": "clear"
       },
       {
-        "evidence": "Candidate scope: docs/DEFECT_REGISTRY.json, scripts/hunter_governance_review/bootstrap_external_review_469.py, tests/test_pr473_trusted_bridge_bootstrap.py. 204 focused governance/admission/readiness/collector tests passed. Bootstrap tests cover exact identity, later-review revocation, controller retirement and malformed path evidence. No runtime, persistence, execution or workflow changes; reviewer must independently assess applicability and claims.",
+        "evidence": "Complete base-to-head scope: .github/workflows/hunter-reviewer-collector.yml, docs/CODE_WRITE_POLICY.json, docs/DEFECT_REGISTRY.json, docs/superpowers/plans/2026-09-17-review-orchestration-fast-failover.md, docs/superpowers/specs/2026-09-17-review-orchestration-fast-failover-design.md, scripts/hunter_governance_review/bootstrap_external_review_469.py, scripts/hunter_governance_review_v2.py, scripts/hunter_reviewer_collector.py, tests/test_exact_head_review_authority.py, tests/test_hunter_reviewer_collector.py, tests/test_issue_412_prevention_gate.py, tests/test_pr473_trusted_bridge_bootstrap.py. This candidate changes trusted GitHub workflow execution, reviewer API fallback execution, exact-head authority handling, bootstrap logic, policy/defect evidence, and regression tests. Runtime/workflow/execution changes ARE in scope and require independent hostile review. Focused reviewer/governance suites: 293 passed after the latest collector repairs.",
         "family": "DFF-009",
         "outcome": "clear"
       },
       {
-        "evidence": "Candidate scope: docs/DEFECT_REGISTRY.json, scripts/hunter_governance_review/bootstrap_external_review_469.py, tests/test_pr473_trusted_bridge_bootstrap.py. 204 focused governance/admission/readiness/collector tests passed. Bootstrap tests cover exact identity, later-review revocation, controller retirement and malformed path evidence. No runtime, persistence, execution or workflow changes; reviewer must independently assess applicability and claims.",
+        "evidence": "Complete base-to-head scope: .github/workflows/hunter-reviewer-collector.yml, docs/CODE_WRITE_POLICY.json, docs/DEFECT_REGISTRY.json, docs/superpowers/plans/2026-09-17-review-orchestration-fast-failover.md, docs/superpowers/specs/2026-09-17-review-orchestration-fast-failover-design.md, scripts/hunter_governance_review/bootstrap_external_review_469.py, scripts/hunter_governance_review_v2.py, scripts/hunter_reviewer_collector.py, tests/test_exact_head_review_authority.py, tests/test_hunter_reviewer_collector.py, tests/test_issue_412_prevention_gate.py, tests/test_pr473_trusted_bridge_bootstrap.py. This candidate changes trusted GitHub workflow execution, reviewer API fallback execution, exact-head authority handling, bootstrap logic, policy/defect evidence, and regression tests. Runtime/workflow/execution changes ARE in scope and require independent hostile review. Focused reviewer/governance suites: 293 passed after the latest collector repairs.",
         "family": "DFF-010",
         "outcome": "clear"
       },
       {
-        "evidence": "Candidate scope: docs/DEFECT_REGISTRY.json, scripts/hunter_governance_review/bootstrap_external_review_469.py, tests/test_pr473_trusted_bridge_bootstrap.py. 204 focused governance/admission/readiness/collector tests passed. Bootstrap tests cover exact identity, later-review revocation, controller retirement and malformed path evidence. No runtime, persistence, execution or workflow changes; reviewer must independently assess applicability and claims.",
+        "evidence": "Complete base-to-head scope: .github/workflows/hunter-reviewer-collector.yml, docs/CODE_WRITE_POLICY.json, docs/DEFECT_REGISTRY.json, docs/superpowers/plans/2026-09-17-review-orchestration-fast-failover.md, docs/superpowers/specs/2026-09-17-review-orchestration-fast-failover-design.md, scripts/hunter_governance_review/bootstrap_external_review_469.py, scripts/hunter_governance_review_v2.py, scripts/hunter_reviewer_collector.py, tests/test_exact_head_review_authority.py, tests/test_hunter_reviewer_collector.py, tests/test_issue_412_prevention_gate.py, tests/test_pr473_trusted_bridge_bootstrap.py. This candidate changes trusted GitHub workflow execution, reviewer API fallback execution, exact-head authority handling, bootstrap logic, policy/defect evidence, and regression tests. Runtime/workflow/execution changes ARE in scope and require independent hostile review. Focused reviewer/governance suites: 293 passed after the latest collector repairs.",
         "family": "DFF-011",
         "outcome": "clear"
       },
       {
-        "evidence": "Candidate scope: docs/DEFECT_REGISTRY.json, scripts/hunter_governance_review/bootstrap_external_review_469.py, tests/test_pr473_trusted_bridge_bootstrap.py. 204 focused governance/admission/readiness/collector tests passed. Bootstrap tests cover exact identity, later-review revocation, controller retirement and malformed path evidence. No runtime, persistence, execution or workflow changes; reviewer must independently assess applicability and claims.",
+        "evidence": "Complete base-to-head scope: .github/workflows/hunter-reviewer-collector.yml, docs/CODE_WRITE_POLICY.json, docs/DEFECT_REGISTRY.json, docs/superpowers/plans/2026-09-17-review-orchestration-fast-failover.md, docs/superpowers/specs/2026-09-17-review-orchestration-fast-failover-design.md, scripts/hunter_governance_review/bootstrap_external_review_469.py, scripts/hunter_governance_review_v2.py, scripts/hunter_reviewer_collector.py, tests/test_exact_head_review_authority.py, tests/test_hunter_reviewer_collector.py, tests/test_issue_412_prevention_gate.py, tests/test_pr473_trusted_bridge_bootstrap.py. This candidate changes trusted GitHub workflow execution, reviewer API fallback execution, exact-head authority handling, bootstrap logic, policy/defect evidence, and regression tests. Runtime/workflow/execution changes ARE in scope and require independent hostile review. Focused reviewer/governance suites: 293 passed after the latest collector repairs.",
         "family": "DFF-012",
         "outcome": "clear"
       },
       {
-        "evidence": "Candidate scope: docs/DEFECT_REGISTRY.json, scripts/hunter_governance_review/bootstrap_external_review_469.py, tests/test_pr473_trusted_bridge_bootstrap.py. 204 focused governance/admission/readiness/collector tests passed. Bootstrap tests cover exact identity, later-review revocation, controller retirement and malformed path evidence. No runtime, persistence, execution or workflow changes; reviewer must independently assess applicability and claims.",
+        "evidence": "Complete base-to-head scope: .github/workflows/hunter-reviewer-collector.yml, docs/CODE_WRITE_POLICY.json, docs/DEFECT_REGISTRY.json, docs/superpowers/plans/2026-09-17-review-orchestration-fast-failover.md, docs/superpowers/specs/2026-09-17-review-orchestration-fast-failover-design.md, scripts/hunter_governance_review/bootstrap_external_review_469.py, scripts/hunter_governance_review_v2.py, scripts/hunter_reviewer_collector.py, tests/test_exact_head_review_authority.py, tests/test_hunter_reviewer_collector.py, tests/test_issue_412_prevention_gate.py, tests/test_pr473_trusted_bridge_bootstrap.py. This candidate changes trusted GitHub workflow execution, reviewer API fallback execution, exact-head authority handling, bootstrap logic, policy/defect evidence, and regression tests. Runtime/workflow/execution changes ARE in scope and require independent hostile review. Focused reviewer/governance suites: 293 passed after the latest collector repairs.",
         "family": "DFF-013",
         "outcome": "clear"
       },
       {
-        "evidence": "Candidate scope: docs/DEFECT_REGISTRY.json, scripts/hunter_governance_review/bootstrap_external_review_469.py, tests/test_pr473_trusted_bridge_bootstrap.py. 204 focused governance/admission/readiness/collector tests passed. Bootstrap tests cover exact identity, later-review revocation, controller retirement and malformed path evidence. No runtime, persistence, execution or workflow changes; reviewer must independently assess applicability and claims.",
+        "evidence": "Complete base-to-head scope: .github/workflows/hunter-reviewer-collector.yml, docs/CODE_WRITE_POLICY.json, docs/DEFECT_REGISTRY.json, docs/superpowers/plans/2026-09-17-review-orchestration-fast-failover.md, docs/superpowers/specs/2026-09-17-review-orchestration-fast-failover-design.md, scripts/hunter_governance_review/bootstrap_external_review_469.py, scripts/hunter_governance_review_v2.py, scripts/hunter_reviewer_collector.py, tests/test_exact_head_review_authority.py, tests/test_hunter_reviewer_collector.py, tests/test_issue_412_prevention_gate.py, tests/test_pr473_trusted_bridge_bootstrap.py. This candidate changes trusted GitHub workflow execution, reviewer API fallback execution, exact-head authority handling, bootstrap logic, policy/defect evidence, and regression tests. Runtime/workflow/execution changes ARE in scope and require independent hostile review. Focused reviewer/governance suites: 293 passed after the latest collector repairs.",
         "family": "DFF-014",
         "outcome": "clear"
       },
       {
-        "evidence": "Candidate scope: docs/DEFECT_REGISTRY.json, scripts/hunter_governance_review/bootstrap_external_review_469.py, tests/test_pr473_trusted_bridge_bootstrap.py. 204 focused governance/admission/readiness/collector tests passed. Bootstrap tests cover exact identity, later-review revocation, controller retirement and malformed path evidence. No runtime, persistence, execution or workflow changes; reviewer must independently assess applicability and claims.",
+        "evidence": "Complete base-to-head scope: .github/workflows/hunter-reviewer-collector.yml, docs/CODE_WRITE_POLICY.json, docs/DEFECT_REGISTRY.json, docs/superpowers/plans/2026-09-17-review-orchestration-fast-failover.md, docs/superpowers/specs/2026-09-17-review-orchestration-fast-failover-design.md, scripts/hunter_governance_review/bootstrap_external_review_469.py, scripts/hunter_governance_review_v2.py, scripts/hunter_reviewer_collector.py, tests/test_exact_head_review_authority.py, tests/test_hunter_reviewer_collector.py, tests/test_issue_412_prevention_gate.py, tests/test_pr473_trusted_bridge_bootstrap.py. This candidate changes trusted GitHub workflow execution, reviewer API fallback execution, exact-head authority handling, bootstrap logic, policy/defect evidence, and regression tests. Runtime/workflow/execution changes ARE in scope and require independent hostile review. Focused reviewer/governance suites: 293 passed after the latest collector repairs.",
         "family": "DFF-015",
         "outcome": "clear"
       },
       {
-        "evidence": "Candidate scope: docs/DEFECT_REGISTRY.json, scripts/hunter_governance_review/bootstrap_external_review_469.py, tests/test_pr473_trusted_bridge_bootstrap.py. 204 focused governance/admission/readiness/collector tests passed. Bootstrap tests cover exact identity, later-review revocation, controller retirement and malformed path evidence. No runtime, persistence, execution or workflow changes; reviewer must independently assess applicability and claims.",
+        "evidence": "Complete base-to-head scope: .github/workflows/hunter-reviewer-collector.yml, docs/CODE_WRITE_POLICY.json, docs/DEFECT_REGISTRY.json, docs/superpowers/plans/2026-09-17-review-orchestration-fast-failover.md, docs/superpowers/specs/2026-09-17-review-orchestration-fast-failover-design.md, scripts/hunter_governance_review/bootstrap_external_review_469.py, scripts/hunter_governance_review_v2.py, scripts/hunter_reviewer_collector.py, tests/test_exact_head_review_authority.py, tests/test_hunter_reviewer_collector.py, tests/test_issue_412_prevention_gate.py, tests/test_pr473_trusted_bridge_bootstrap.py. This candidate changes trusted GitHub workflow execution, reviewer API fallback execution, exact-head authority handling, bootstrap logic, policy/defect evidence, and regression tests. Runtime/workflow/execution changes ARE in scope and require independent hostile review. Focused reviewer/governance suites: 293 passed after the latest collector repairs.",
         "family": "DFF-016",
         "outcome": "clear"
       },
       {
-        "evidence": "Candidate scope: docs/DEFECT_REGISTRY.json, scripts/hunter_governance_review/bootstrap_external_review_469.py, tests/test_pr473_trusted_bridge_bootstrap.py. 204 focused governance/admission/readiness/collector tests passed. Bootstrap tests cover exact identity, later-review revocation, controller retirement and malformed path evidence. No runtime, persistence, execution or workflow changes; reviewer must independently assess applicability and claims.",
+        "evidence": "Complete base-to-head scope: .github/workflows/hunter-reviewer-collector.yml, docs/CODE_WRITE_POLICY.json, docs/DEFECT_REGISTRY.json, docs/superpowers/plans/2026-09-17-review-orchestration-fast-failover.md, docs/superpowers/specs/2026-09-17-review-orchestration-fast-failover-design.md, scripts/hunter_governance_review/bootstrap_external_review_469.py, scripts/hunter_governance_review_v2.py, scripts/hunter_reviewer_collector.py, tests/test_exact_head_review_authority.py, tests/test_hunter_reviewer_collector.py, tests/test_issue_412_prevention_gate.py, tests/test_pr473_trusted_bridge_bootstrap.py. This candidate changes trusted GitHub workflow execution, reviewer API fallback execution, exact-head authority handling, bootstrap logic, policy/defect evidence, and regression tests. Runtime/workflow/execution changes ARE in scope and require independent hostile review. Focused reviewer/governance suites: 293 passed after the latest collector repairs.",
         "family": "DFF-019",
         "outcome": "clear"
       },
       {
-        "evidence": "Candidate scope: docs/DEFECT_REGISTRY.json, scripts/hunter_governance_review/bootstrap_external_review_469.py, tests/test_pr473_trusted_bridge_bootstrap.py. 204 focused governance/admission/readiness/collector tests passed. Bootstrap tests cover exact identity, later-review revocation, controller retirement and malformed path evidence. No runtime, persistence, execution or workflow changes; reviewer must independently assess applicability and claims.",
+        "evidence": "Complete base-to-head scope: .github/workflows/hunter-reviewer-collector.yml, docs/CODE_WRITE_POLICY.json, docs/DEFECT_REGISTRY.json, docs/superpowers/plans/2026-09-17-review-orchestration-fast-failover.md, docs/superpowers/specs/2026-09-17-review-orchestration-fast-failover-design.md, scripts/hunter_governance_review/bootstrap_external_review_469.py, scripts/hunter_governance_review_v2.py, scripts/hunter_reviewer_collector.py, tests/test_exact_head_review_authority.py, tests/test_hunter_reviewer_collector.py, tests/test_issue_412_prevention_gate.py, tests/test_pr473_trusted_bridge_bootstrap.py. This candidate changes trusted GitHub workflow execution, reviewer API fallback execution, exact-head authority handling, bootstrap logic, policy/defect evidence, and regression tests. Runtime/workflow/execution changes ARE in scope and require independent hostile review. Focused reviewer/governance suites: 293 passed after the latest collector repairs.",
         "family": "DFF-020",
         "outcome": "clear"
       },
       {
-        "evidence": "Candidate scope: docs/DEFECT_REGISTRY.json, scripts/hunter_governance_review/bootstrap_external_review_469.py, tests/test_pr473_trusted_bridge_bootstrap.py. 204 focused governance/admission/readiness/collector tests passed. Bootstrap tests cover exact identity, later-review revocation, controller retirement and malformed path evidence. No runtime, persistence, execution or workflow changes; reviewer must independently assess applicability and claims.",
+        "evidence": "Complete base-to-head scope: .github/workflows/hunter-reviewer-collector.yml, docs/CODE_WRITE_POLICY.json, docs/DEFECT_REGISTRY.json, docs/superpowers/plans/2026-09-17-review-orchestration-fast-failover.md, docs/superpowers/specs/2026-09-17-review-orchestration-fast-failover-design.md, scripts/hunter_governance_review/bootstrap_external_review_469.py, scripts/hunter_governance_review_v2.py, scripts/hunter_reviewer_collector.py, tests/test_exact_head_review_authority.py, tests/test_hunter_reviewer_collector.py, tests/test_issue_412_prevention_gate.py, tests/test_pr473_trusted_bridge_bootstrap.py. This candidate changes trusted GitHub workflow execution, reviewer API fallback execution, exact-head authority handling, bootstrap logic, policy/defect evidence, and regression tests. Runtime/workflow/execution changes ARE in scope and require independent hostile review. Focused reviewer/governance suites: 293 passed after the latest collector repairs.",
         "family": "DFF-021",
         "outcome": "clear"
       },
       {
-        "evidence": "Candidate scope: docs/DEFECT_REGISTRY.json, scripts/hunter_governance_review/bootstrap_external_review_469.py, tests/test_pr473_trusted_bridge_bootstrap.py. 204 focused governance/admission/readiness/collector tests passed. Bootstrap tests cover exact identity, later-review revocation, controller retirement and malformed path evidence. No runtime, persistence, execution or workflow changes; reviewer must independently assess applicability and claims.",
+        "evidence": "Complete base-to-head scope: .github/workflows/hunter-reviewer-collector.yml, docs/CODE_WRITE_POLICY.json, docs/DEFECT_REGISTRY.json, docs/superpowers/plans/2026-09-17-review-orchestration-fast-failover.md, docs/superpowers/specs/2026-09-17-review-orchestration-fast-failover-design.md, scripts/hunter_governance_review/bootstrap_external_review_469.py, scripts/hunter_governance_review_v2.py, scripts/hunter_reviewer_collector.py, tests/test_exact_head_review_authority.py, tests/test_hunter_reviewer_collector.py, tests/test_issue_412_prevention_gate.py, tests/test_pr473_trusted_bridge_bootstrap.py. This candidate changes trusted GitHub workflow execution, reviewer API fallback execution, exact-head authority handling, bootstrap logic, policy/defect evidence, and regression tests. Runtime/workflow/execution changes ARE in scope and require independent hostile review. Focused reviewer/governance suites: 293 passed after the latest collector repairs.",
         "family": "DFF-022",
         "outcome": "repaired"
       },
       {
-        "evidence": "Candidate scope: docs/DEFECT_REGISTRY.json, scripts/hunter_governance_review/bootstrap_external_review_469.py, tests/test_pr473_trusted_bridge_bootstrap.py. 204 focused governance/admission/readiness/collector tests passed. Bootstrap tests cover exact identity, later-review revocation, controller retirement and malformed path evidence. No runtime, persistence, execution or workflow changes; reviewer must independently assess applicability and claims.",
+        "evidence": "Complete base-to-head scope: .github/workflows/hunter-reviewer-collector.yml, docs/CODE_WRITE_POLICY.json, docs/DEFECT_REGISTRY.json, docs/superpowers/plans/2026-09-17-review-orchestration-fast-failover.md, docs/superpowers/specs/2026-09-17-review-orchestration-fast-failover-design.md, scripts/hunter_governance_review/bootstrap_external_review_469.py, scripts/hunter_governance_review_v2.py, scripts/hunter_reviewer_collector.py, tests/test_exact_head_review_authority.py, tests/test_hunter_reviewer_collector.py, tests/test_issue_412_prevention_gate.py, tests/test_pr473_trusted_bridge_bootstrap.py. This candidate changes trusted GitHub workflow execution, reviewer API fallback execution, exact-head authority handling, bootstrap logic, policy/defect evidence, and regression tests. Runtime/workflow/execution changes ARE in scope and require independent hostile review. Focused reviewer/governance suites: 293 passed after the latest collector repairs.",
         "family": "DFF-023",
         "outcome": "clear"
       }
@@ -210,6 +210,56 @@
         "resolution_evidence": {
           "correction": "860aa7d35e76159f4d82d0c4af75fb95836dccfe",
           "regression_test": "tests/test_pr473_trusted_bridge_bootstrap.py"
+        },
+        "severity": "blocking"
+      },
+      {
+        "evidence": "Codex thread PRRT_kwDOTRDHr86jeKNC / review on 55d9d7a: API fallback evidence needed canonical persisted trigger verification.",
+        "id": "api-trigger-schema",
+        "resolution": "resolved",
+        "resolution_evidence": {
+          "correction": "c314c6a",
+          "regression_test": "tests/test_hunter_reviewer_collector.py"
+        },
+        "severity": "blocking"
+      },
+      {
+        "evidence": "Codex thread PRRT_kwDOTRDHr86jeKNJ / review on 55d9d7a: API clear required authenticated consumable authority.",
+        "id": "api-clear-authority",
+        "resolution": "resolved",
+        "resolution_evidence": {
+          "correction": "c314c6a",
+          "regression_test": "tests/test_exact_head_review_authority.py"
+        },
+        "severity": "blocking"
+      },
+      {
+        "evidence": "Codex thread PRRT_kwDOTRDHr86jeKNO / review on 55d9d7a: substantive Codex response must block rather than time out into fallback.",
+        "id": "substantive-codex-blocker",
+        "resolution": "resolved",
+        "resolution_evidence": {
+          "correction": "c314c6a",
+          "regression_test": "tests/test_hunter_reviewer_collector.py"
+        },
+        "severity": "blocking"
+      },
+      {
+        "evidence": "Codex thread PRRT_kwDOTRDHr86jeKNT / review on 55d9d7a: exact-head Codex invocation must be reused rather than retriggered.",
+        "id": "single-invocation-exact-head",
+        "resolution": "resolved",
+        "resolution_evidence": {
+          "correction": "c314c6a",
+          "regression_test": "tests/test_hunter_reviewer_collector.py"
+        },
+        "severity": "blocking"
+      },
+      {
+        "evidence": "Codex thread PRRT_kwDOTRDHr86jeKNf / review on 55d9d7a: hostile-review artifact must be regenerated after implementation changes.",
+        "id": "stale-review-request-artifact",
+        "resolution": "resolved",
+        "resolution_evidence": {
+          "correction": "c2083d0",
+          "regression_test": "tests/test_issue_412_prevention_gate.py"
         },
         "severity": "blocking"
       }
@@ -265,7 +315,7 @@
         "status": "modified"
       },
       {
-        "blob_sha": "a6d23aa10f6a6d1ff5da07c376c68db5ed765827",
+        "blob_sha": "6755d6fbe2718989648ebf604900d0c31bc77701",
         "path": "scripts/hunter_reviewer_collector.py",
         "previous_path": "",
         "status": "modified"
@@ -277,7 +327,7 @@
         "status": "modified"
       },
       {
-        "blob_sha": "a1f0c62a2850bfc6ecb00fac41388d4369e54d34",
+        "blob_sha": "32b0a8da20cdd6850e06f3bed72804583f9ee151",
         "path": "tests/test_hunter_reviewer_collector.py",
         "previous_path": "",
         "status": "modified"
@@ -289,11 +339,11 @@
         "status": "modified"
       }
     ],
-    "review_target_digest": "b72e3dfbdefcb9cfa6f0961806c6ed73e7d34b4ec5b92dd72f2b427445ccf5f0"
+    "review_target_digest": "7d081b1d5c8e78da5d36ae83da1adb9e03bbde6d3c6ad23416d83605495350c8"
   },
-  "review_id": "a665f5189e09430ed9b23535b5bbdd5ba1c001d090277accfe9a0d9bb59cb69a",
+  "review_id": "8c88b9db2027c944e5a4dcc104ef7356c483a6de79fc671bd6cc3a54d14168b9",
   "review_request": {
-    "claims_id": "a665f5189e09430ed9b23535b5bbdd5ba1c001d090277accfe9a0d9bb59cb69a",
+    "claims_id": "8c88b9db2027c944e5a4dcc104ef7356c483a6de79fc671bd6cc3a54d14168b9",
     "schema": "hunter.review-request.v1"
   },
   "schema": "hunter.pre-ready-hostile-review.v1"
