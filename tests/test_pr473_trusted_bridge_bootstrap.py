@@ -80,7 +80,7 @@ def _controller_missing(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None
     del tmp_path
 
     def _request(*_args: Any, **_kwargs: Any) -> Any:
-        raise RuntimeError("GitHub API 404")
+        raise governance.transport.GitHubRequestError("Not Found", category="permanent", status_code=404)
 
     monkeypatch.setattr(governance, "request_json", _request)
 
@@ -232,7 +232,7 @@ def test_candidate_workspace_file_cannot_end_bootstrap_pending_mode(
 
     # Even if the mutable workspace contains a controller, immutable main evidence wins.
     def _request(*_args: Any, **_kwargs: Any) -> Any:
-        raise RuntimeError("GitHub API 404")
+        raise governance.transport.GitHubRequestError("Not Found", category="permanent", status_code=404)
 
     monkeypatch.setattr(governance, "request_json", _request)
 
@@ -293,7 +293,7 @@ def test_controller_lookup_is_bound_to_checked_out_trusted_commit(monkeypatch: p
 
     def _request(_repo: str, _token: str, _method: str, endpoint: str) -> Any:
         seen.append(endpoint)
-        raise RuntimeError("GitHub API 404")
+        raise governance.transport.GitHubRequestError("Not Found", category="permanent", status_code=404)
 
     monkeypatch.setattr(governance, "request_json", _request)
     assert bridge._trusted_controller_on_default_branch(REPOSITORY, "token") is False
@@ -425,3 +425,35 @@ def test_readiness_bootstrap_covers_controller_migration_and_self_retires(monkey
     controller_installs = [call for call in installed if call[2] == bridge.BOOTSTRAP_CONTROLLER_PR]
     expected = [] if controller_present else [(REPOSITORY, "token", bridge.BOOTSTRAP_CONTROLLER_PR, HEAD)]
     assert controller_installs == expected
+
+
+@pytest.mark.parametrize(
+    "exc,absent",
+    [
+        (governance.transport.GitHubRequestError("Not Found", category="permanent", status_code=404), True),
+        (
+            governance.transport.GitHubRequestError("node-resolution 404", category="node-resolution", status_code=404),
+            False,
+        ),
+        (
+            governance.transport.GitHubUnavailable(
+                "controller lookup",
+                attempts=3,
+                last=governance.transport.GitHubRequestError(
+                    "node-resolution 404", category="node-resolution", status_code=404
+                ),
+            ),
+            False,
+        ),
+    ],
+)
+def test_controller_absence_requires_typed_permanent_404(monkeypatch, exc, absent):
+    def fail(*_args):
+        raise exc
+
+    monkeypatch.setattr(governance, "request_json", fail)
+    if absent:
+        assert bridge._trusted_controller_on_default_branch(REPOSITORY, "token") is False
+    else:
+        with pytest.raises(type(exc)):
+            bridge._trusted_controller_on_default_branch(REPOSITORY, "token")

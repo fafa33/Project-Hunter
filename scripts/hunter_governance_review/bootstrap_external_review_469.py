@@ -87,8 +87,8 @@ def _trusted_controller_on_default_branch(repository: str, token: str) -> bool:
         payload = governance.request_json(
             repository, token, "GET", f"contents/{TRUSTED_CONTROLLER_PATH}?ref={trusted_sha}"
         )
-    except RuntimeError as exc:
-        if "404" in str(exc):
+    except governance.transport.GitHubRequestError as exc:
+        if exc.category == "permanent" and exc.status_code == 404:
             return False
         raise
     if not isinstance(payload, dict) or payload.get("type") != "file":
