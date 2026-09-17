@@ -31,7 +31,7 @@
     "review_authority": {
       "primary": "codex",
       "fallback": "hunter-guard",
-      "fallback_only_when_unavailable": "The local reviewer is attempted first when its trusted Mac runner is healthy; Codex is attempted immediately when local is offline, unresponsive, or times out. hunter-guard remains last resort only after the enabled pool is exhausted.",
+      "fallback_only_when_unavailable": "Local triage runs first when healthy; authority then fails over Codex -> Gemini -> Groq, one attempt each with a 300-second maximum. hunter-guard remains last resort only after authenticated exhaustion of the enabled authority pool.",
       "fallback_requires_recorded_reason": true,
       "fallback_requires_snapshot_gates": [
         "governance=success",
@@ -41,7 +41,7 @@
       ],
       "reviewer_pool": {
         "model": "ordered-priority-with-failover",
-        "ordering": "free-first strict priority: local-ollama triage runs first; because it is not authority-eligible it cannot terminate the authority search, so Codex is the hosted authority fallback; after trusted authority-reviewer exhaustion, hunter-guard is a deterministic non-reviewer last resort gated by trusted preflight, governance preflight, complete structured evidence, and zero unresolved threads",
+        "ordering": "free-first strict priority: local-ollama triage, then Codex, then server-side Gemini API, then server-side Groq API; each authority reviewer is attempted exactly once per exact HEAD before the deterministic hunter-guard last resort.",
         "last_resort": "hunter-guard",
         "exhaustion_semantics": "Every enabled higher-priority reviewer must have authenticated exact-head invocation results. The trusted default-branch Hunter Reviewer Collector records actual trigger IDs, the configured timeout and all retries, and immutable artifact provenance. A substantive response proves availability and forbids failover, even if its format is invalid; an authenticated explicit usage-limit, rate-limit, or quota denial is unavailability evidence and permits immediate failover. Candidate prose, skipped reviewers, failed GitHub reads, changed HEAD, wrong configuration, insufficient elapsed time, candidate-ref collector runs, or missing retries fail closed.",
         "timeout_policy": {
@@ -49,7 +49,7 @@
           "default_seconds": 300,
           "max_seconds": 300,
           "retries_per_agent": 0,
-          "retry_scope": "transient infrastructure failures only (rate limit, transport, runner shutdown signal); a repeated or permanent failure records a single exhausted attempt against the bounded timeout"
+          "retry_scope": "No automatic retries. Explicit authenticated unavailability fails over immediately; silence is bounded to one reviewer timeout."
         },
         "agents": [
           {
@@ -94,6 +94,36 @@
             "github_login": "chatgpt-codex-connector[bot]",
             "ack_timeout_seconds": 30,
             "review_timeout_seconds": 300
+          },
+          {
+            "id": "gemini",
+            "priority": 3,
+            "enabled": true,
+            "trigger_method": "api:gemini",
+            "exact_head_support": true,
+            "retryable": false,
+            "evidence_parser": "provider-json.v1",
+            "fallback_eligibility": false,
+            "note": "Trusted default-branch collector invokes Gemini API server-side using repository secret; candidate code never receives the secret.",
+            "evidence": "Provider response is exact-head bound and hashed into the immutable trusted collector artifact.",
+            "ack_timeout_seconds": 30,
+            "review_timeout_seconds": 300,
+            "authority_eligible": true
+          },
+          {
+            "id": "groq",
+            "priority": 4,
+            "enabled": true,
+            "trigger_method": "api:groq",
+            "exact_head_support": true,
+            "retryable": false,
+            "evidence_parser": "provider-json.v1",
+            "fallback_eligibility": false,
+            "note": "Trusted default-branch collector invokes Groq API server-side using repository secret; candidate code never receives the secret.",
+            "evidence": "Provider response is exact-head bound and hashed into the immutable trusted collector artifact.",
+            "ack_timeout_seconds": 30,
+            "review_timeout_seconds": 300,
+            "authority_eligible": true
           }
         ]
       },

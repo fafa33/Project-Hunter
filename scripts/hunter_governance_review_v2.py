@@ -66,22 +66,6 @@ TRUSTED_RUN_ACTIVE_STATES = frozenset({"queued", "in_progress", "waiting", "requ
 #: Issue #417. The dependency is named explicitly so an operator can tell
 #: "the proof has not finished yet" from "the proof failed" without reading logs.
 TRUSTED_PROOF_WAITING_DESCRIPTION = "Waiting for trusted exact-head preflight proof"
-
-
-def review_orchestration_state(repository: str, token: str, pr_number: int, head_sha: str) -> tuple[str, str]:
-    """Return authenticated exact-head review lifecycle state, if present."""
-    import hunter_review_orchestrator as orchestrator
-
-    status, cycle, error = orchestrator.read_cycle(repository, token, pr_number, head_sha)
-    if status == "present" and cycle is not None:
-        state = orchestrator.classify_cycle(cycle, head_sha)
-        detail = cycle.provider_id or "provider selection"
-        return state, detail
-    if status == "superseded":
-        return "WAITING_FOR_REVIEWER", error or "exact HEAD changed; new review cycle required"
-    return "", error or ""
-
-
 ROOT = Path(__file__).resolve().parents[1] if "__file__" in globals() else Path(".")
 REVIEWER_DISPOSITIONS_PATH = ROOT / "docs" / "REVIEWER_FINDING_DISPOSITIONS.json"
 PREFLIGHT_OWNED_PATHS = frozenset(
@@ -371,6 +355,19 @@ def _substantive_review_body(body: str) -> bool:
     return sum(not c.isspace() for c in stripped) >= 40
 
 
+def native_codex_clear_review(body: str, head_sha: str) -> bool:
+    """Recognize authenticated Codex's native exact-head clear outcome."""
+    raw = body.strip()
+    raw = re.sub(r"^###\s+💡\s+", "", raw, count=1)
+    match = re.fullmatch(
+        r"Codex Review(?:\s*:\s*|\s+)(?:\n+)?Didn't find any major issues\.(?: Nice work!)?\s*\n+"
+        r"\*\*Reviewed commit:\*\*\s*`([0-9a-f]{7,40})`"
+        r"(?:\s*<details>[\s\S]*?</details>)?\s*",
+        raw,
+    )
+    return bool(match and head_sha.strip().lower().startswith(match.group(1).lower()))
+
+
 def review_acknowledgement(body: str) -> dict[str, Any] | None:
     """An entire, explicitly issued JSON result, never a quoted inline example."""
     raw = body.strip()
@@ -385,10 +382,26 @@ def review_acknowledgement(body: str) -> dict[str, Any] | None:
         return None
     if not isinstance(value, dict) or value.get("schema") != "hunter.review-ack.v1":
         return None
-    allowed = {"schema", "head_sha", "claims_id", "verdict", "summary", "collector_run_id"}
+    allowed = {
+        "schema",
+        "head_sha",
+        "claims_id",
+        "verdict",
+        "summary",
+        "collector_run_id",
+        "trigger_id",
+        "reviewer_agent",
+        "response_digest",
+    }
     if set(value) - allowed:
         return None
     if "collector_run_id" in value and (type(value["collector_run_id"]) is not int or value["collector_run_id"] <= 0):
+        return None
+    if "trigger_id" in value and (type(value["trigger_id"]) is not int or value["trigger_id"] <= 0):
+        return None
+    if "reviewer_agent" in value and value["reviewer_agent"] not in {"gemini", "groq"}:
+        return None
+    if "response_digest" in value and not re.fullmatch(r"[0-9a-f]{64}", str(value["response_digest"])):
         return None
     if value.get("verdict") != "clear" or not re.fullmatch(r"[0-9a-f]{40}", str(value.get("head_sha") or "")):
         return None
@@ -399,75 +412,43 @@ def review_acknowledgement(body: str) -> dict[str, Any] | None:
     return value
 
 
-_COLLAPSIBLE_TRAILER = re.compile(r"(?s)\A\s*(?:<details>(?:(?!<details>).)*?</details>\s*)*\Z")
-_FINDING_STRUCTURE = re.compile(
-    r"(?im)^\s*(?:[-*+]\s|\d+[.)]\s|#{1,6}\s)"  # a rendered finding list item or heading
-    r"|\bP[0-4]\b"  # a Codex severity badge
-    r"|/blob/[0-9a-f]{7,40}/"  # a linked code location
-    r"|[\w./-]+\.[A-Za-z0-9]+:\d+"  # a path:line citation
-)
-
-
-def _adoptable_clear_trailer(remainder: str) -> bool:
-    """Whether content following a Codex clear declaration can be ignored safely.
-
-    Truncating the body at the first ``<details>`` accepted a conforming clear
-    prefix while never reading what followed it, so blocking findings rendered
-    inside a collapsed section were adopted as a clear verdict. Everything after
-    the declaration is therefore validated rather than discarded: only complete,
-    non-nested collapsible sections may follow, and none of them may carry the
-    structure Codex renders an actual finding with (list items, headings,
-    severity badges, linked code locations, or path:line citations). Any other
-    trailing content is unvalidated review substance, so the body is not
-    adoptable and governance keeps waiting for admissible authority.
-    """
-
-    if not remainder.strip():
-        return True
-    if _COLLAPSIBLE_TRAILER.fullmatch(remainder) is None:
-        return False
-    return _FINDING_STRUCTURE.search(remainder) is None
-
-
-def review_adoption_acknowledgement(
-    observation: dict[str, Any], head_sha: str, claims_id: str
-) -> dict[str, Any] | None:
-    """Canonicalize authenticated exact-head reviewer results into Hunter adoption.
-
-    Structured Hunter acknowledgements remain preferred. Codex also emits a
-    stable native GitHub review when it finds no major issues; because GitHub
-    binds that authenticated review to the exact commit, the current committed
-    review request is transitively bound to the same HEAD. Only that narrow
-    clear-result shape is accepted, and any arbitrary trailing prose is rejected.
-    """
-
-    ack = review_acknowledgement(str(observation.get("body") or ""))
-    if ack is not None:
-        return ack
-    if (
-        observation.get("agent_id") != pre_ready.CODEX_REVIEW_AUTHORITY
-        or observation.get("source_kind") != "review"
-        or observation.get("state") not in {"COMMENTED", "APPROVED"}
-        or observation.get("commit_id") != head_sha
-    ):
+def review_result_observation(body: str) -> dict[str, Any] | None:
+    try:
+        value = json.loads(body.strip())
+    except (ValueError, TypeError):
         return None
-    body = str(observation.get("body") or "").strip()
-    match = re.match(
-        r"Codex Review:\s*Didn't find any major issues\.(?:\s*Bravo\.)?\s+"
-        r"\*\*Reviewed commit:\*\*\s*`([0-9a-f]{7,40})`",
-        body,
-    )
-    if match is None or not head_sha.startswith(match.group(1)):
+    if not isinstance(value, dict) or value.get("schema") != "hunter.reviewer-result.v1":
         return None
-    if not _adoptable_clear_trailer(body[match.end() :]):
-        return None
-    return {
-        "schema": "hunter.review-ack.v1",
-        "head_sha": head_sha,
-        "claims_id": claims_id,
-        "verdict": "clear",
-        "summary": "Authenticated Codex exact-head review found no major issues for the current committed review request.",
+    allowed = {
+        "schema",
+        "head_sha",
+        "claims_id",
+        "reviewer_agent",
+        "collector_run_id",
+        "trigger_id",
+        "verdict",
+        "summary",
+        "response_digest",
     }
+    if set(value) != allowed:
+        return None
+    if value.get("reviewer_agent") not in {"gemini", "groq"}:
+        return None
+    if value.get("verdict") not in {"clear", "blocking", "unavailable"}:
+        return None
+    if type(value.get("collector_run_id")) is not int or value["collector_run_id"] <= 0:
+        return None
+    if type(value.get("trigger_id")) is not int or value["trigger_id"] <= 0:
+        return None
+    if not re.fullmatch(r"[0-9a-f]{40}", str(value.get("head_sha") or "")):
+        return None
+    if not re.fullmatch(r"[0-9a-f]{64}", str(value.get("claims_id") or "")):
+        return None
+    if not re.fullmatch(r"[0-9a-f]{64}", str(value.get("response_digest") or "")):
+        return None
+    if not isinstance(value.get("summary"), str) or not value["summary"].strip():
+        return None
+    return value
 
 
 def reviewer_login(agent: dict[str, Any]) -> str:
@@ -485,6 +466,31 @@ def reviewer_identity_map(pool: dict[str, Any]) -> dict[str, str]:
     return identities
 
 
+def trusted_collector_run(repository: str, token: str, trigger: dict[str, Any]) -> bool:
+    """Require reviewer trigger identity to originate from Hunter's trusted collector workflow."""
+    from hunter_reviewer_collector import WORKFLOW, _run_on_default_branch_history, valid_run
+
+    run_id = trigger.get("collector_run_id")
+    attempt = trigger.get("collector_run_attempt")
+    if type(run_id) is not int or type(attempt) is not int:
+        return False
+    try:
+        repo = request_json(repository, token, "GET", "")
+        run = request_json(repository, token, "GET", f"actions/runs/{run_id}")
+        if not isinstance(repo, dict) or not isinstance(run, dict):
+            return False
+        branch = str(repo.get("default_branch") or "")
+        revision = str(run.get("head_sha") or "")
+        return (
+            run.get("path") == WORKFLOW
+            and run.get("run_attempt") == attempt
+            and valid_run(run, run_id, branch, revision)
+            and _run_on_default_branch_history(repository, token, branch, revision)
+        )
+    except Exception:
+        return False
+
+
 def read_pr_pool_review_comments(
     repository: str,
     token: str,
@@ -500,6 +506,7 @@ def read_pr_pool_review_comments(
     enabled = reviewer_identity_map(pool)
     reviews: list[dict[str, Any]] = []
     try:
+        configured = {str(a["id"]): a for a in pre_ready.enabled_pool_reviewers(pool)}
         page = 1
         while True:
             payload = request_json(repository, token, "GET", f"pulls/{pr_number}/reviews?per_page=100&page={page}")
@@ -533,6 +540,7 @@ def read_pr_pool_review_comments(
             if len(payload) < 100:
                 break
             page += 1
+        issue_comments: list[dict[str, Any]] = []
         page = 1
         while True:
             payload = request_json(repository, token, "GET", f"issues/{pr_number}/comments?per_page=100&page={page}")
@@ -541,26 +549,106 @@ def read_pr_pool_review_comments(
             for comment in payload:
                 if not isinstance(comment, dict) or not isinstance(comment.get("user"), dict):
                     return [], "malformed review acknowledgement observation"
-                login = str(comment["user"].get("login") or "").lower()
-                ack = review_acknowledgement(str(comment.get("body") or ""))
-                if login not in enabled or ack is None:
-                    continue
-                reviews.append(
-                    {
-                        "id": comment.get("id"),
-                        "login": login,
-                        "agent_id": enabled[login],
-                        "commit_id": ack["head_sha"],
-                        "body": comment["body"],
-                        "state": "COMMENTED",
-                        "source_kind": "issue_comment",
-                        "submitted_at": comment.get("created_at", ""),
-                        "html_url": comment.get("html_url", ""),
-                    }
-                )
+                issue_comments.append(comment)
             if len(payload) < 100:
                 break
             page += 1
+        from hunter_reviewer_collector import parse_api_trigger, parse_native_trigger
+
+        comments_by_id = {int(c.get("id") or 0): c for c in issue_comments}
+        trusted_results: dict[tuple[Any, ...], dict[str, Any]] = {}
+        for comment in issue_comments:
+            if str((comment.get("user") or {}).get("login") or "").lower() != "github-actions[bot]":
+                continue
+            result = review_result_observation(str(comment.get("body") or ""))
+            if result is None or result["verdict"] != "clear":
+                continue
+            trigger_comment = comments_by_id.get(int(result["trigger_id"]))
+            trigger = parse_api_trigger(str((trigger_comment or {}).get("body") or ""))
+            if (
+                trigger is None
+                or str(((trigger_comment or {}).get("user") or {}).get("login") or "").lower() != "github-actions[bot]"
+                or any(
+                    trigger.get(k) != result.get(k)
+                    for k in ("head_sha", "claims_id", "reviewer_agent", "collector_run_id")
+                )
+                or not trusted_collector_run(repository, token, trigger)
+            ):
+                continue
+            trusted_results[
+                (
+                    result["reviewer_agent"],
+                    result["head_sha"],
+                    result["claims_id"],
+                    result["collector_run_id"],
+                    result["trigger_id"],
+                    result["response_digest"],
+                )
+            ] = result
+
+        # Bind native Codex reviews to the latest canonical trusted trigger that
+        # precedes the review. A same-HEAD review from an older request is stale.
+        native_triggers = []
+        for comment in issue_comments:
+            if str((comment.get("user") or {}).get("login") or "").lower() != "github-actions[bot]":
+                continue
+            trigger = parse_native_trigger(str(comment.get("body") or ""))
+            if (
+                trigger is not None
+                and trigger.get("reviewer_agent") == "codex"
+                and trusted_collector_run(repository, token, trigger)
+            ):
+                native_triggers.append((str(comment.get("created_at") or ""), trigger))
+        for review_item in reviews:
+            if review_item.get("agent_id") != "codex" or review_item.get("source_kind") != "review":
+                continue
+            eligible = [
+                t
+                for created, t in native_triggers
+                if created <= str(review_item.get("submitted_at") or "") and t.get("head_sha") == exact_head
+            ]
+            if eligible:
+                review_item["trigger_claims_id"] = eligible[-1]["claims_id"]
+        for comment in issue_comments:
+            login = str(comment["user"].get("login") or "").lower()
+            body = str(comment.get("body") or "")
+            ack = review_acknowledgement(body)
+            actions_agent = ""
+            if login == "github-actions[bot]" and ack is not None:
+                candidate_agent = str(ack.get("reviewer_agent") or "")
+                if (
+                    candidate_agent in configured
+                    and str(configured[candidate_agent].get("trigger_method") or "").startswith("api:")
+                    and trusted_results.get(
+                        (
+                            candidate_agent,
+                            ack["head_sha"],
+                            ack["claims_id"],
+                            ack.get("collector_run_id"),
+                            ack.get("trigger_id"),
+                            ack.get("response_digest"),
+                        )
+                    )
+                    is not None
+                ):
+                    actions_agent = candidate_agent
+            if login not in enabled and not actions_agent:
+                continue
+            if ack is None:
+                continue
+            reviews.append(
+                {
+                    "id": comment.get("id"),
+                    "login": login,
+                    "agent_id": actions_agent or enabled[login],
+                    "commit_id": ack["head_sha"] if ack is not None else exact_head,
+                    "body": comment["body"],
+                    "state": "COMMENTED",
+                    "source_kind": "issue_comment",
+                    "submitted_at": comment.get("created_at", ""),
+                    "html_url": comment.get("html_url", ""),
+                }
+            )
     except Exception as exc:
         return [], f"review evidence unavailable: {type(exc).__name__}: {exc}"
     return reviews, None
@@ -631,7 +719,7 @@ def verify_trusted_exhaustion(
     problem = pre_ready._exhaustion_error(pool, authority, str(authority.get("type")))
     if problem:
         return "failure", problem
-    agents = pre_ready.authority_pool_reviewers(pool)
+    agents = pre_ready.enabled_pool_reviewers(pool)
     own = next((a["priority"] for a in agents if a["id"] == authority.get("type")), float("inf"))
     required = [a for a in agents if a["priority"] < own]
     attempts = {a["agent_id"]: a for a in authority.get("reviewer_attempts", [])}
@@ -655,8 +743,7 @@ def verify_trusted_exhaustion(
                 "head_sha": head_sha,
                 "agent_id": agent["id"],
                 "priority": agent["priority"],
-                "ack_timeout_seconds": agent["ack_timeout_seconds"],
-                "review_timeout_seconds": agent["review_timeout_seconds"],
+                "timeout_seconds": agent["timeout_seconds"],
                 "trigger_method": agent.get("trigger_method"),
                 "retryable": agent["retryable"],
                 "evidence_parser": agent.get("evidence_parser"),
@@ -1796,7 +1883,13 @@ def verify_pre_ready_hostile_review(
         if r.get("commit_id") == head_sha
         and r.get("state") in {"APPROVED", "COMMENTED"}
         and r.get("agent_id") in enabled_ids
-        and enabled.get(str(r.get("login") or "")) == r.get("agent_id")
+        and (
+            enabled.get(str(r.get("login") or "")) == r.get("agent_id")
+            or (
+                str(r.get("login") or "") == "github-actions[bot]"
+                and review_acknowledgement(str(r.get("body") or "")) is not None
+            )
+        )
         and _substantive_review_body(str(r.get("body") or ""))
     ]
     # An out-of-band structured review avoids a self-referential artifact commit.
@@ -1839,65 +1932,49 @@ def verify_pre_ready_hostile_review(
             return "failure", "MALFORMED_REVIEW: request digest mismatch"
         adopted = []
         for observation in exact_reviews:
-            ack = review_adoption_acknowledgement(observation, head_sha, claims_id)
+            ack = review_acknowledgement(observation["body"])
             if ack and ack["head_sha"] == head_sha and ack["claims_id"] == claims_id:
                 adopted.append((observation, ack))
-        priorities = {str(a["id"]): int(a["priority"]) for a in pre_ready.authority_pool_reviewers(pool)}
-        if adopted:
-            observation, ack = min(adopted, key=lambda item: priorities.get(item[0]["agent_id"], 10**9))
-            authority = {
-                "type": observation["agent_id"],
-                "tool": "authenticated-github-review",
-                "head_sha": observation["commit_id"],
-                "reviewed_at": observation.get("submitted_at") or "GitHub review observation",
-                "artifact": observation.get("html_url") or f"GitHub review {observation['id']}",
-            }
-            if priorities.get(authority["type"], 10**9) > min(priorities.values()):
-                from hunter_reviewer_collector import load_exhaustion
-
-                try:
-                    authority.update(
-                        load_exhaustion(
-                            repository, token, pr_number, head_sha, pool, ack.get("collector_run_id"), authority["type"]
-                        )
+                continue
+            if (
+                observation.get("agent_id") == "codex"
+                and observation.get("source_kind") == "review"
+                and observation.get("trigger_claims_id") == claims_id
+                and native_codex_clear_review(observation["body"], head_sha)
+            ):
+                adopted.append(
+                    (
+                        observation,
+                        {
+                            "head_sha": head_sha,
+                            "claims_id": claims_id,
+                            "verdict": "clear",
+                        },
                     )
-                except Exception as exc:
-                    return "failure", f"EXHAUSTION_UNPROVEN: {exc}"
-        else:
-            # An authenticated exact-head reviewer response that fails to adopt
-            # this request is substantive invalid evidence, not ordinary waiting.
-            if exact_reviews:
-                return "failure", (
-                    "MISSING_REVIEW_AUTHORITY: authenticated exact-head reviewer response did not validly adopt "
-                    "the current review request"
                 )
-            import hunter_review_orchestrator as orchestrator
-
-            collector_state, collector_run_id, collector_error = orchestrator.read_collector_completion(
-                repository, token, pr_number, head_sha
-            )
-            if collector_state != "present" or collector_run_id is None:
-                detail = f" ({collector_error})" if collector_error else ""
-                return "pending", (
-                    "MISSING_REVIEW_AUTHORITY: waiting for authenticated exact-head reviewer authority" + detail
-                )
+        if not adopted:
+            return "failure", "MISSING_REVIEW_AUTHORITY: no authenticated exact-head adoption of the review request"
+        priorities = {str(a["id"]): int(a["priority"]) for a in pre_ready.enabled_pool_reviewers(pool)}
+        observation, ack = min(adopted, key=lambda item: priorities.get(item[0]["agent_id"], 10**9))
+        authority = {
+            "type": observation["agent_id"],
+            "tool": "authenticated-github-review",
+            "head_sha": observation["commit_id"],
+            "reviewed_at": observation.get("submitted_at") or "GitHub review observation",
+            "artifact": observation.get("html_url") or f"GitHub review {observation['id']}",
+        }
+        if priorities.get(authority["type"], 10**9) > min(priorities.values()):
             from hunter_reviewer_collector import load_exhaustion
 
             try:
-                exhaustion = load_exhaustion(
-                    repository, token, pr_number, head_sha, pool, collector_run_id, str(pool["last_resort"])
+                authority.update(
+                    load_exhaustion(
+                        repository, token, pr_number, head_sha, pool, ack.get("collector_run_id"), authority["type"]
+                    )
                 )
             except Exception as exc:
                 return "failure", f"EXHAUSTION_UNPROVEN: {exc}"
-            authority = {
-                "type": str(pool["last_resort"]),
-                "tool": "hunter-deterministic-review-guard",
-                "head_sha": head_sha,
-                "reviewed_at": "trusted collector completion",
-                "artifact": f"actions/runs/{collector_run_id}",
-                **exhaustion,
-            }
-        # This is NEW authority for the current exact HEAD; historical evidence is unchanged.
+        # This is NEW authority from the current reviewer; the historical record is unchanged.
         document = pre_ready.document_for(claims, authority=authority)
 
     # The Issue the review claims must be the Issue the branch binds, when the
@@ -1973,13 +2050,7 @@ def verify_pre_ready_hostile_review(
             if exhaustion_kind:
                 kind = exhaustion_kind
         return "failure", f"{kind}: Candidate admission blocked: {verdict.reason}."
-    authority = (document or {}).get("authority") if isinstance(document, dict) else None
-    deterministic_guard = (
-        isinstance(authority, dict)
-        and authority.get("type") == str(pool["last_resort"])
-        and authority.get("tool") == "hunter-deterministic-review-guard"
-    )
-    if not exact_reviews and not deterministic_guard:
+    if not exact_reviews:
         return (
             "failure",
             "Candidate admission blocked: MISSING_REVIEW_AUTHORITY: no substantive exact-head hostile review.",
@@ -1991,7 +2062,7 @@ def verify_pre_ready_hostile_review(
     if not dispositions_ok:
         return "failure", f"BLOCKING_FINDINGS: {disposition_error}"
     authority = document["authority"]
-    if not deterministic_guard and not any(r.get("agent_id") == authority.get("type") for r in exact_reviews):
+    if not any(r.get("agent_id") == authority.get("type") for r in exact_reviews):
         return "failure", "Candidate admission blocked: review author does not match structured authority."
     exhaustion_state, exhaustion_detail = verify_trusted_exhaustion(
         repository, token, pr_number, head_sha, pool, authority

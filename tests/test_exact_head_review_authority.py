@@ -34,17 +34,16 @@ def _attempt(
     *,
     status: str = "exhausted",
     reason: str = "rate-limited at the configured timeout",
-    timeout_seconds: int = 900,
+    timeout_seconds: int = 300,
     failure_class: str = "transient",
-    attempt_count: int = 2,
+    attempt_count: int = 1,
     invocation_reference: str = "actions/runs/6372342596",
 ) -> dict[str, Any]:
     return {
         "agent_id": agent_id,
         "status": status,
         "reason": reason,
-        "ack_timeout_seconds": 90,
-        "review_timeout_seconds": timeout_seconds,
+        "timeout_seconds": timeout_seconds,
         "failure_class": failure_class,
         "attempt_count": attempt_count,
         "invocation_reference": invocation_reference,
@@ -52,15 +51,14 @@ def _attempt(
 
 
 def _agent(
-    agent_id: str = "codex", *, priority: int = 1, enabled: bool = True, timeout_seconds: int = 900
+    agent_id: str = "codex", *, priority: int = 1, enabled: bool = True, timeout_seconds: int = 300
 ) -> dict[str, Any]:
     return {
         "id": agent_id,
         "priority": priority,
         "enabled": enabled,
         "exact_head_support": True,
-        "ack_timeout_seconds": 90,
-        "review_timeout_seconds": timeout_seconds,
+        "timeout_seconds": timeout_seconds,
         "retryable": True,
     }
 
@@ -69,13 +67,13 @@ CODEX_AGENT = _agent()
 ALTERNATE = _agent("alternate-agent-1", priority=2)
 
 
-def _pool(*, agents: tuple = (), last_resort: str = "opencode", retries_per_agent: int = 1) -> dict[str, Any]:
+def _pool(*, agents: tuple = (), last_resort: str = "opencode", retries_per_agent: int = 0) -> dict[str, Any]:
     return {
         "last_resort": last_resort,
         "timeout_policy": {
             "bounded": True,
-            "default_seconds": 900,
-            "max_seconds": 1800,
+            "default_seconds": 300,
+            "max_seconds": 300,
             "retries_per_agent": retries_per_agent,
         },
         "agents": (CODEX_AGENT,) + tuple(agents),
@@ -105,7 +103,10 @@ def _authority(authority_type: str = "codex", head_sha: str = HEAD, attempts=Non
             }
         )
     if authority_type != "codex":
-        authority["reviewer_attempts"] = list(attempts) if attempts is not None else [dict(_attempt())]
+        default_attempts = [dict(_attempt())]
+        if authority_type == "opencode":
+            default_attempts += [dict(_attempt("gemini")), dict(_attempt("groq"))]
+        authority["reviewer_attempts"] = list(attempts) if attempts is not None else default_attempts
     authority.update(overrides)
     return authority
 
@@ -270,17 +271,17 @@ def test_an_agent_comment_on_an_older_commit_is_not_exact_head_authority(monkeyp
 
 def test_a_fake_timeout_attempt_is_unproven_exhaustion(monkeypatch) -> None:
     _use_pool(monkeypatch, _pool())
-    document = _review_document(authority=_authority("opencode", attempts=[_attempt(timeout_seconds=300)]))
+    document = _review_document(authority=_authority("opencode", attempts=[_attempt(timeout_seconds=299)]))
 
     verdict = _verify(document)
 
     assert verdict.state == "incomplete"
-    assert "ack/review timeout" in verdict.reason
-    assert "900" in verdict.reason
+    assert "timeout_seconds" in verdict.reason
+    assert "300" in verdict.reason
 
 
 def test_a_retryable_transient_single_attempt_is_not_exhausted(monkeypatch) -> None:
-    _use_pool(monkeypatch, _pool())
+    _use_pool(monkeypatch, _pool(retries_per_agent=1))
     document = _review_document(
         authority=_authority("opencode", attempts=[_attempt(failure_class="transient", attempt_count=1)])
     )
@@ -325,7 +326,7 @@ def test_a_permanent_failure_single_attempt_is_trustworthy(monkeypatch) -> None:
 
 def test_two_retryable_transient_attempts_with_the_exact_timeout_are_trustworthy(monkeypatch) -> None:
     _use_pool(monkeypatch, _pool())
-    document = _review_document(authority=_authority("opencode"))
+    document = _review_document(authority=_authority("opencode", attempts=[_attempt()]))
 
     verdict = _verify(document)
 
@@ -347,7 +348,7 @@ def test_exhaustion_failure_kind_distinguishes_unproven_from_unattempted(monkeyp
     pool = _pool()
     _use_pool(monkeypatch, pool)
 
-    fake_timeout = _authority("opencode", attempts=[_attempt(timeout_seconds=300)])
+    fake_timeout = _authority("opencode", attempts=[_attempt(timeout_seconds=299)])
     assert review.exhaustion_failure_kind(pool, fake_timeout, "opencode") == "EXHAUSTION_UNPROVEN"
 
     skipped_pool = _pool(agents=(ALTERNATE,))
@@ -355,7 +356,7 @@ def test_exhaustion_failure_kind_distinguishes_unproven_from_unattempted(monkeyp
     skipped = _authority("opencode", attempts=[_attempt()])
     assert review.exhaustion_failure_kind(skipped_pool, skipped, "opencode") == "POOL_NOT_EXHAUSTED"
 
-    trustworthy = _authority("opencode")
+    trustworthy = _authority("opencode", attempts=[_attempt()])
     assert review.exhaustion_failure_kind(pool, trustworthy, "opencode") is None
 
 
@@ -450,7 +451,7 @@ def test_authority_state_pool_not_exhausted_for_a_guard_that_skips_an_alternate(
 
 
 def test_authority_state_exhaustion_unproven_for_fake_timeout_evidence() -> None:
-    doc = _review_document(authority=_authority("opencode", attempts=[_attempt(timeout_seconds=300)]))
+    doc = _review_document(authority=_authority("opencode", attempts=[_attempt(timeout_seconds=299)]))
     guard = ("present", doc, None)
     verdict = _state(
         pool=_pool(),
@@ -461,7 +462,7 @@ def test_authority_state_exhaustion_unproven_for_fake_timeout_evidence() -> None
 
 
 def test_authority_state_blocks_last_resort_without_verifiable_identity() -> None:
-    doc = _review_document(authority=_authority("opencode", head_sha=HEAD))
+    doc = _review_document(authority=_authority("opencode", head_sha=HEAD, attempts=[_attempt()]))
     guard = ("present", doc, None)
     verdict = _state(
         pool=_pool(),
@@ -472,7 +473,7 @@ def test_authority_state_blocks_last_resort_without_verifiable_identity() -> Non
 
 
 def test_unidentified_guard_cannot_reach_exhaustion_reverification() -> None:
-    doc = _review_document(authority=_authority("opencode", head_sha=HEAD))
+    doc = _review_document(authority=_authority("opencode", head_sha=HEAD, attempts=[_attempt()]))
     guard = ("present", doc, None)
     verdict = _state(
         pool=_pool(),
@@ -493,48 +494,8 @@ def test_review_authority_state_surfaces_the_state_name_and_blocks(monkeypatch) 
 
     state, message = readiness.review_authority_state(HEAD, PR_NUMBER)
 
-    assert state == "pending"
+    assert state == "failure"
     assert "MISSING_REVIEW_AUTHORITY" in message
-
-
-def _install_missing_review_authority(monkeypatch) -> None:
-    _use_pool(monkeypatch, _pool())
-    monkeypatch.setattr(core, "read_head_pre_ready_review", lambda *_args: ("absent", None, None))
-    monkeypatch.setattr(core, "read_pr_pool_review_comments", lambda *_args: ((), None))
-    monkeypatch.setattr(readiness, "unresolved_review_threads", lambda _number: ())
-    monkeypatch.setattr(readiness, "changes_requested_reviewers", lambda _number: ())
-    monkeypatch.setattr(core, "check_reviewer_dispositions", lambda: (True, ""))
-    _install_governance(monkeypatch, document=None, state="absent")
-
-
-def test_missing_review_authority_with_available_orchestration_is_pending(monkeypatch) -> None:
-    _install_missing_review_authority(monkeypatch)
-    monkeypatch.setattr(
-        core,
-        "review_orchestration_state",
-        lambda *_args: ("WAITING_FOR_REVIEWER", "local selection"),
-        raising=False,
-    )
-
-    state, message = readiness.review_authority_state(HEAD, PR_NUMBER)
-
-    assert state == "pending"
-    assert "WAITING_FOR_REVIEWER" in message
-
-
-def test_pool_exhaustion_is_blocked_pending_not_red(monkeypatch) -> None:
-    _install_missing_review_authority(monkeypatch)
-    monkeypatch.setattr(
-        core,
-        "review_orchestration_state",
-        lambda *_args: ("POOL_EXHAUSTED", "no reviewer capacity"),
-        raising=False,
-    )
-
-    state, message = readiness.review_authority_state(HEAD, PR_NUMBER)
-
-    assert state == "pending"
-    assert "POOL_EXHAUSTED" in message
 
 
 def test_a_stale_authority_state_is_surfaced_by_merge_readiness(monkeypatch) -> None:
@@ -554,24 +515,8 @@ def test_a_stale_authority_state_is_surfaced_by_merge_readiness(monkeypatch) -> 
 
     state, message = readiness.review_authority_state(HEAD, PR_NUMBER)
 
-    assert state == "pending"
+    assert state == "failure"
     assert "MISSING_REVIEW_AUTHORITY" in message
-
-
-def test_review_authority_transport_unavailable_is_pending_not_red(monkeypatch) -> None:
-    monkeypatch.setattr(readiness, "unresolved_review_threads", lambda _number: ())
-    monkeypatch.setattr(readiness, "changes_requested_reviewers", lambda _number: ())
-    monkeypatch.setattr(core, "check_reviewer_dispositions", lambda: (True, ""))
-    monkeypatch.setattr(
-        core,
-        "verify_pre_ready_hostile_review",
-        lambda *_args: (_ for _ in ()).throw(RuntimeError("GitHub unavailable")),
-    )
-
-    state, message = readiness.review_authority_state(HEAD, PR_NUMBER)
-
-    assert state == "pending"
-    assert "unavailable" in message.lower()
 
 
 def test_merge_ready_success_describes_the_positive_exact_head_authority() -> None:
@@ -922,14 +867,17 @@ def test_zero_reviews_cannot_admit_when_no_defect_family_applies(monkeypatch):
 
 def test_guard_with_unresolved_threads_is_never_valid():
     assert (
-        _state(guard=("present", _review_document(authority=_authority("opencode")), None), threads=1).state
+        _state(
+            guard=("present", _review_document(authority=_authority("opencode", attempts=[_attempt()])), None),
+            threads=1,
+        ).state
         == "MISSING_REVIEW_AUTHORITY"
     )
 
 
 def test_correct_looking_exhaustion_without_trusted_result_is_blocked(monkeypatch):
     _use_pool(monkeypatch, _pool())
-    _install_governance(monkeypatch, document=_review_document(authority=_authority("opencode")))
+    _install_governance(monkeypatch, document=_review_document(authority=_authority("opencode", attempts=[_attempt()])))
     monkeypatch.setattr(core, "request_json", lambda *a, **kw: {})
     assert core.verify_pre_ready_hostile_review("repo", "token", HEAD, PR_NUMBER)[0] == "failure"
 
@@ -996,14 +944,13 @@ def _trusted_exhaustion(monkeypatch, *, outcome="timed_out", **overrides):
         head_sha=HEAD,
         agent_id="codex",
         priority=1,
-        ack_timeout_seconds=90,
-        review_timeout_seconds=900,
+        timeout_seconds=300,
         trigger_method="configured trigger",
         retryable=True,
         evidence_parser="configured parser",
-        retries_per_agent=1,
+        retries_per_agent=0,
         status="exhausted",
-        attempt_count=2,
+        attempt_count=1,
         failure_class="transient",
         outcome=outcome,
     )
@@ -1020,7 +967,7 @@ def test_actual_trusted_configured_exhaustion_allows_guard_eligibility(monkeypat
 
 
 def test_trusted_result_cannot_substitute_a_different_timeout(monkeypatch):
-    assert _trusted_exhaustion(monkeypatch, review_timeout_seconds=1)[0] == "failure"
+    assert _trusted_exhaustion(monkeypatch, timeout_seconds=1)[0] == "failure"
 
 
 def test_trusted_result_cannot_substitute_a_different_trigger(monkeypatch):
@@ -1153,18 +1100,15 @@ def test_every_hosted_review_consumer_can_read_collector_and_guard_evidence():
 
     workflows = prevention.ROOT / ".github/workflows"
     expected = {
-        "hunter-candidate-admission.yml": {"actions": "read", "checks": "read"},
-        # Read-only: this workflow is reachable from `pull_request`, where GitHub
-        # runs the candidate's own copy of the file, so it may read run evidence
-        # but never dispatch, re-run or cancel a workflow.
-        "hunter-governance-review.yml": {"actions": "read", "checks": "read"},
-        "hunter-governance-reconcile.yml": {"actions": "write", "checks": "read"},
-        "hunter-merge-readiness.yml": {"actions": "read", "checks": "read"},
+        "hunter-candidate-admission.yml": ("actions", "checks"),
+        "hunter-governance-review.yml": ("actions", "checks"),
+        "hunter-governance-reconcile.yml": ("actions", "checks"),
+        "hunter-merge-readiness.yml": ("actions", "checks"),
     }
     for filename, permissions in expected.items():
         workflow = yaml.safe_load((workflows / filename).read_text())
-        for permission, access in permissions.items():
-            assert workflow["permissions"].get(permission) == access
+        for permission in permissions:
+            assert workflow["permissions"].get(permission) == "read"
 
 
 def _request_and_ack():
@@ -1180,6 +1124,57 @@ def _request_and_ack():
     return document, ack
 
 
+def test_review_fetch_rejects_authenticated_native_codex_clear_issue_comment(monkeypatch):
+    body = (
+        "Codex Review: Didn't find any major issues. Nice work!\n\n"
+        f"**Reviewed commit:** `{HEAD[:10]}`\n\n"
+        "<details><summary>ℹ️ About Codex in GitHub</summary>\nGitHub integration details\n</details>"
+    )
+
+    def request(_repository, _token, _method, path, *_args):
+        if path.startswith("pulls/"):
+            return []
+        if path.startswith("issues/"):
+            return [
+                {
+                    "id": 99,
+                    "user": {"login": COPILOT},
+                    "body": body,
+                    "created_at": "2026-09-13T23:00:00Z",
+                    "html_url": "https://github.com/fafa33/Project-Hunter/pull/476#issuecomment-99",
+                },
+            ]
+        raise AssertionError(path)
+
+    monkeypatch.setattr(core, "request_json", request)
+    observations, error = core.read_pr_pool_review_comments("repo", "token", PR_NUMBER, _pool(), HEAD)
+
+    assert error is None
+    assert observations == []
+
+
+def test_authenticated_native_codex_issue_comment_does_not_adopt_exact_head_review_request(monkeypatch):
+    document, _ = _request_and_ack()
+    native = {
+        **_trusted_review(
+            body=(
+                "Codex Review: Didn't find any major issues. Nice work!\n\n"
+                f"**Reviewed commit:** `{HEAD[:10]}`\n\n"
+                "<details><summary>ℹ️ About Codex in GitHub</summary>\nGitHub integration details\n</details>"
+            )
+        ),
+        "source_kind": "issue_comment",
+        "submitted_at": "2026-09-13T23:00:00Z",
+    }
+    _install_governance(monkeypatch, document=document, comments=(native,))
+    monkeypatch.setattr(core, "read_unresolved_review_threads", lambda *a: ((), None))
+    monkeypatch.setattr(core, "check_reviewer_dispositions", lambda: (True, ""))
+
+    state, reason = core.verify_pre_ready_hostile_review("repo", "token", HEAD, PR_NUMBER)
+
+    assert state == "failure", reason
+
+
 def test_a_current_authenticated_acknowledgement_establishes_new_exact_head_authority(monkeypatch):
     document, ack = _request_and_ack()
     snapshot = {**_trusted_review(body=json.dumps(ack)), "submitted_at": "2026-09-13T23:00:00Z"}
@@ -1188,50 +1183,6 @@ def test_a_current_authenticated_acknowledgement_establishes_new_exact_head_auth
     monkeypatch.setattr(core, "check_reviewer_dispositions", lambda: (True, ""))
     assert core.verify_pre_ready_hostile_review("repo", "token", HEAD, PR_NUMBER)[0] == "success"
     assert document["authority"]["head_sha"] == "c" * 40  # Historical evidence is not rebound.
-
-
-def test_an_adopted_request_is_still_rebound_to_this_candidates_trusted_base(monkeypatch):
-    """Adoption grants authority to *these* claims, and the claims are re-derived.
-
-    The request the reviewer adopts carries its own base->HEAD claims, so the
-    controller never takes them at face value: after adoption it re-runs the full
-    claim verification against the trusted merge base and changed-file evidence it
-    read from GitHub. A request that inherited an earlier candidate's base is
-    therefore stale, not authority, even with a perfectly valid acknowledgement.
-    """
-
-    document = _review_document(base="7" * 40, authority=_authority(head_sha="c" * 40))
-    document["review_request"] = {"schema": "hunter.review-request.v1", "claims_id": document["review_id"]}
-    ack = {
-        "schema": "hunter.review-ack.v1",
-        "head_sha": HEAD,
-        "claims_id": document["review_id"],
-        "verdict": "clear",
-        "summary": "Completed the adversarial review of every requested criterion; no blocking findings remain.",
-    }
-    snapshot = {**_trusted_review(body=json.dumps(ack)), "submitted_at": "2026-09-13T23:00:00Z"}
-    _install_governance(monkeypatch, document=document, comments=(snapshot,))
-    monkeypatch.setattr(core, "read_unresolved_review_threads", lambda *a: ((), None))
-    monkeypatch.setattr(core, "check_reviewer_dispositions", lambda: (True, ""))
-
-    state, reason = core.verify_pre_ready_hostile_review("repo", "token", HEAD, PR_NUMBER)
-
-    assert state == "failure"
-    assert "STALE_REVIEW" in reason
-    assert "base" in reason
-
-
-def test_stale_request_cannot_start_collector_for_current_candidate(monkeypatch):
-    """The request is verified before dispatch, not only after a review arrives."""
-
-    document = _review_document(base="7" * 40, authority=_authority(head_sha="c" * 40))
-    document["review_request"] = {"schema": "hunter.review-request.v1", "claims_id": document["review_id"]}
-    _install_governance(monkeypatch, document=document)
-
-    valid, reason = core.valid_current_review_request("repo", "token", PR_NUMBER, HEAD, document)
-
-    assert valid is False
-    assert "not this candidate's base" in reason
 
 
 def test_a_request_without_explicit_reviewer_adoption_is_not_authority(monkeypatch):
@@ -1245,6 +1196,174 @@ def test_review_request_adoption_of_another_claims_digest_is_blocked(monkeypatch
     ack["claims_id"] = "0" * 64
     _install_governance(monkeypatch, document=document, comments=(_trusted_review(body=json.dumps(ack)),))
     assert core.verify_pre_ready_hostile_review("repo", "token", HEAD, PR_NUMBER)[0] == "failure"
+
+
+def test_github_actions_ack_without_matching_result_cannot_create_api_review_authority(monkeypatch):
+    _document, ack = _request_and_ack()
+    ack.update({"reviewer_agent": "gemini", "collector_run_id": 123, "response_digest": "e" * 64})
+    pool = _pool(
+        agents=(
+            {
+                "id": "gemini",
+                "priority": 2,
+                "enabled": True,
+                "exact_head_support": True,
+                "timeout_seconds": 300,
+                "retryable": False,
+                "trigger_method": "api:gemini",
+                "evidence_parser": "provider-json.v1",
+            },
+        )
+    )
+
+    def request(_repository, _token, _method, path, *_args):
+        if path.startswith("pulls/"):
+            return []
+        if path.startswith("issues/"):
+            return [
+                {
+                    "id": 99,
+                    "user": {"login": "github-actions[bot]"},
+                    "body": json.dumps(ack),
+                    "created_at": "2026-09-13T23:00:00Z",
+                    "html_url": "https://github.com/fafa33/Project-Hunter/pull/476#issuecomment-99",
+                }
+            ]
+        raise AssertionError(path)
+
+    monkeypatch.setattr(core, "request_json", request)
+    observations, error = core.read_pr_pool_review_comments("repo", "token", PR_NUMBER, pool, HEAD)
+
+    assert error is None
+    assert observations == []
+
+
+def test_github_actions_ack_requires_matching_trusted_api_result(monkeypatch):
+    document, ack = _request_and_ack()
+    ack.update({"reviewer_agent": "gemini", "collector_run_id": 123, "trigger_id": 456, "response_digest": "e" * 64})
+    pool = _pool(
+        agents=(
+            {
+                "id": "gemini",
+                "priority": 2,
+                "enabled": True,
+                "exact_head_support": True,
+                "timeout_seconds": 300,
+                "retryable": False,
+                "trigger_method": "api:gemini",
+                "evidence_parser": "provider-json.v1",
+            },
+        )
+    )
+    result = {
+        "schema": "hunter.reviewer-result.v1",
+        "head_sha": HEAD,
+        "claims_id": document["review_id"],
+        "reviewer_agent": "gemini",
+        "collector_run_id": 123,
+        "trigger_id": 456,
+        "verdict": "clear",
+        "summary": "Completed the adversarial review of all requested criteria and changed surfaces; no blocking findings remain.",
+        "response_digest": "e" * 64,
+    }
+    trigger_body = __import__("hunter_reviewer_collector").api_trigger_body(
+        HEAD, document["review_id"], pool["agents"][1], 123, 1, 1
+    )
+    monkeypatch.setattr(core, "trusted_collector_run", lambda *_a, **_k: True)
+
+    def request(_repository, _token, _method, path, *_args):
+        if path.startswith("pulls/"):
+            return []
+        if path.startswith("issues/"):
+            return [
+                {
+                    "id": 456,
+                    "user": {"login": "github-actions[bot]"},
+                    "body": trigger_body,
+                    "created_at": "2026-09-13T22:59:58Z",
+                    "html_url": "trigger",
+                },
+                {
+                    "id": 98,
+                    "user": {"login": "github-actions[bot]"},
+                    "body": json.dumps(result),
+                    "created_at": "2026-09-13T22:59:59Z",
+                    "html_url": "https://github.com/fafa33/Project-Hunter/pull/476#issuecomment-98",
+                },
+                {
+                    "id": 99,
+                    "user": {"login": "github-actions[bot]"},
+                    "body": json.dumps(ack),
+                    "created_at": "2026-09-13T23:00:00Z",
+                    "html_url": "https://github.com/fafa33/Project-Hunter/pull/476#issuecomment-99",
+                },
+            ]
+        raise AssertionError(path)
+
+    monkeypatch.setattr(core, "request_json", request)
+    observations, error = core.read_pr_pool_review_comments("repo", "token", PR_NUMBER, pool, HEAD)
+
+    assert error is None
+    assert len(observations) == 1
+    assert observations[0]["agent_id"] == "gemini"
+
+
+def test_github_actions_ack_rejects_mismatched_trusted_api_trigger_id(monkeypatch):
+    document, ack = _request_and_ack()
+    ack.update({"reviewer_agent": "gemini", "collector_run_id": 123, "trigger_id": 999, "response_digest": "e" * 64})
+    pool = _pool(
+        agents=(
+            {
+                "id": "gemini",
+                "priority": 2,
+                "enabled": True,
+                "exact_head_support": True,
+                "timeout_seconds": 300,
+                "retryable": False,
+                "trigger_method": "api:gemini",
+                "evidence_parser": "provider-json.v1",
+            },
+        )
+    )
+    result = {
+        "schema": "hunter.reviewer-result.v1",
+        "head_sha": HEAD,
+        "claims_id": document["review_id"],
+        "reviewer_agent": "gemini",
+        "collector_run_id": 123,
+        "trigger_id": 456,
+        "verdict": "clear",
+        "summary": "Completed the adversarial review of all requested criteria and changed surfaces; no blocking findings remain.",
+        "response_digest": "e" * 64,
+    }
+
+    def request(_repository, _token, _method, path, *_args):
+        if path.startswith("pulls/"):
+            return []
+        if path.startswith("issues/"):
+            return [
+                {
+                    "id": 98,
+                    "user": {"login": "github-actions[bot]"},
+                    "body": json.dumps(result),
+                    "created_at": "2026-09-13T22:59:59Z",
+                    "html_url": "https://github.com/fafa33/Project-Hunter/pull/476#issuecomment-98",
+                },
+                {
+                    "id": 99,
+                    "user": {"login": "github-actions[bot]"},
+                    "body": json.dumps(ack),
+                    "created_at": "2026-09-13T23:00:00Z",
+                    "html_url": "https://github.com/fafa33/Project-Hunter/pull/476#issuecomment-99",
+                },
+            ]
+        raise AssertionError(path)
+
+    monkeypatch.setattr(core, "request_json", request)
+    observations, error = core.read_pr_pool_review_comments("repo", "token", PR_NUMBER, pool, HEAD)
+
+    assert error is None
+    assert observations == []
 
 
 def test_review_acknowledgement_rejects_contradictory_extra_fields():
@@ -1386,9 +1505,7 @@ def test_unverified_opencode_fallback_is_rejected_even_after_codex_exhaustion(mo
         },
     )
 
-    state, reason = core.verify_pre_ready_hostile_review("repo", "token", HEAD, PR_NUMBER)
-    assert state == "pending"
-    assert "MISSING_REVIEW_AUTHORITY" in reason
+    assert core.verify_pre_ready_hostile_review("repo", "token", HEAD, PR_NUMBER)[0] == "failure"
 
 
 def test_missing_fallback_identity_leaves_request_blocked_not_ready(monkeypatch):
@@ -1398,7 +1515,7 @@ def test_missing_fallback_identity_leaves_request_blocked_not_ready(monkeypatch)
 
     state, message = core.verify_pre_ready_hostile_review("repo", "token", HEAD, PR_NUMBER)
 
-    assert state == "pending"
+    assert state == "failure"
     assert "MISSING_REVIEW_AUTHORITY" in message
 
 
@@ -1472,119 +1589,130 @@ def test_current_exact_review_with_inherited_artifact_waits_for_structured_autho
     assert "MISSING_REVIEW_AUTHORITY" in description
 
 
-def test_authenticated_codex_standard_clear_review_adopts_current_exact_head_request(monkeypatch):
-    document, _ack = _request_and_ack()
-    body = "Codex Review: Didn't find any major issues. Bravo.\n\n" f"**Reviewed commit:** `{HEAD[:10]}`"
-    snapshot = {
-        **_trusted_review(body=body),
-        "source_kind": "review",
-        "submitted_at": "2026-09-15T11:20:00Z",
+def test_native_codex_clear_parser_rejects_trailing_blocker():
+    body = (
+        "Codex Review: Didn't find any major issues.\n\n"
+        "**Reviewed commit:** `aaaaaaaaaa`\n"
+        "Blocking finding: exact-head authority can be bypassed"
+    )
+    assert not core.native_codex_clear_review(body, "a" * 40)
+
+
+def test_reviewer_result_observation_rejects_blank_summary():
+    payload = {
+        "schema": "hunter.reviewer-result.v1",
+        "head_sha": HEAD,
+        "claims_id": "d" * 64,
+        "reviewer_agent": "gemini",
+        "collector_run_id": 123,
+        "trigger_id": 77,
+        "verdict": "clear",
+        "summary": "   ",
+        "response_digest": "e" * 64,
     }
-    _install_governance(monkeypatch, document=document, comments=(snapshot,))
-    monkeypatch.setattr(core, "read_unresolved_review_threads", lambda *a: ((), None))
+    assert core.review_result_observation(json.dumps(payload)) is None
+
+
+def test_api_ack_with_matching_result_still_requires_verified_collector_evidence(monkeypatch):
+    """Bot comments alone are not authority; the trusted collector must bind the invocation."""
+    document, ack = _request_and_ack()
+    ack.update({"reviewer_agent": "gemini", "collector_run_id": 123, "trigger_id": 456, "response_digest": "e" * 64})
+    result = {
+        "schema": "hunter.reviewer-result.v1",
+        "head_sha": HEAD,
+        "claims_id": document["review_id"],
+        "reviewer_agent": "gemini",
+        "collector_run_id": 123,
+        "trigger_id": 456,
+        "verdict": "clear",
+        "summary": "Completed the adversarial review; no blocking findings remain.",
+        "response_digest": "e" * 64,
+    }
+    pool = _pool(
+        agents=(
+            {
+                "id": "gemini",
+                "priority": 2,
+                "enabled": True,
+                "exact_head_support": True,
+                "timeout_seconds": 300,
+                "retryable": False,
+                "trigger_method": "api:gemini",
+                "evidence_parser": "provider-json.v1",
+            },
+        )
+    )
+    monkeypatch.setattr(review, "load_reviewer_pool", lambda *_a, **_k: (pool, ""))
+    monkeypatch.setattr(core, "read_pr_refs", lambda *_a: (True, "issue-467-reviewer-pool-failover", "main", None))
+    monkeypatch.setattr(core, "read_merge_base", lambda *_a: (True, BASE, None))
+    monkeypatch.setattr(
+        core,
+        "read_pr_changed_files",
+        lambda *_a: (
+            True,
+            tuple(core.PullRequestFile(c.status, c.path, c.previous_path, c.blob_sha) for c in CANDIDATE_CHANGES)
+            + (core.PullRequestFile("modified", review.REVIEW_RELATIVE_PATH, "", "9" * 40),),
+            None,
+        ),
+    )
+    monkeypatch.setattr(core, "read_head_pre_ready_review", lambda *_a: ("present", document, None))
+    monkeypatch.setattr(core.pre_ready, "load_families", lambda *_a, **_k: (FAMILIES, ""))
+    monkeypatch.setattr(core, "read_issue_acceptance_criteria", lambda *_a: ("present", (), ""))
+    monkeypatch.setattr(core, "read_pr_commits", lambda *_a: (True, ({"sha": HEAD},), None))
+    monkeypatch.setattr(core, "read_unresolved_review_threads", lambda *_a: ((), None))
     monkeypatch.setattr(core, "check_reviewer_dispositions", lambda: (True, ""))
 
-    state, reason = core.verify_pre_ready_hostile_review("repo", "token", HEAD, PR_NUMBER)
+    def request(_repo, _token, _method, path, *_args):
+        if path.startswith("pulls/"):
+            return []
+        if path.startswith("issues/"):
+            return [
+                {
+                    "id": 98,
+                    "user": {"login": "github-actions[bot]"},
+                    "body": json.dumps(result),
+                    "created_at": "2026-09-17T20:00:00Z",
+                    "html_url": "result",
+                },
+                {
+                    "id": 99,
+                    "user": {"login": "github-actions[bot]"},
+                    "body": json.dumps(ack),
+                    "created_at": "2026-09-17T20:00:01Z",
+                    "html_url": "ack",
+                },
+            ]
+        raise AssertionError(path)
 
-    assert state == "success", reason
-
-
-def _codex_clear_body(trailer: str = "") -> str:
-    return "Codex Review: Didn't find any major issues. Bravo.\n\n" f"**Reviewed commit:** `{HEAD[:10]}`{trailer}"
-
-
-def _codex_review_observation(body: str) -> dict[str, Any]:
-    return {**_trusted_review(body=body), "source_kind": "review", "submitted_at": "2026-09-15T11:20:00Z"}
-
-
-def test_codex_clear_review_with_an_informational_collapsed_footer_still_adopts():
-    body = _codex_clear_body(
-        "\n\n<details>\n<summary>About Codex in GitHub</summary>\nCodex reviewed this pull request "
-        "automatically. Replies in this thread reach the Codex connector.\n</details>"
+    monkeypatch.setattr(core, "request_json", request)
+    monkeypatch.setattr(
+        "hunter_reviewer_collector.load_exhaustion",
+        lambda *_a, **_k: (_ for _ in ()).throw(ValueError("unverified collector")),
     )
-    ack = core.review_adoption_acknowledgement(_codex_review_observation(body), HEAD, "b" * 64)
-    assert ack is not None and ack["verdict"] == "clear"
 
-
-@pytest.mark.parametrize(
-    "trailer",
-    [
-        # A blocking finding rendered inside a collapsed section: truncating the
-        # body at `<details>` accepted the clear prefix and never read this.
-        "\n\n<details>\n<summary>Findings</summary>\n\n- P1 scripts/hunter_pre_push.py:42 the "
-        "exact-head binding is dropped, so a stale review is admitted.\n</details>",
-        # The same finding without a severity badge, as an ordinary list item.
-        "\n\n<details>\n<summary>Notes</summary>\n\n* The new guard never runs, so unsigned "
-        "commits are admitted without any proof at all.\n</details>",
-        # A heading-structured finding.
-        "\n\n<details>\n<summary>More</summary>\n\n### Blocking\nThe collector can be bypassed "
-        "entirely by an unauthenticated caller.\n</details>",
-        # A linked code location.
-        "\n\n<details>\n<summary>Details</summary>\nSee "
-        "[here](https://github.com/o/r/blob/aaaaaaa/scripts/x.py) for the unguarded path.\n</details>",
-        # Unvalidated trailing prose that is not a collapsed section at all.
-        "\n\nOn reflection this change removes the only authority check in the admission path.",
-        # A nested collapsed section, which the flat scan would otherwise mis-bound.
-        "\n\n<details>\n<summary>Outer</summary>\n<details>\n<summary>Inner</summary>\n- P2 "
-        "unbounded retry loop.\n</details>\n</details>",
-        # An unbalanced section: everything after it is unvalidated content.
-        "\n\n<details>\n<summary>Truncated</summary>\n- P1 the review request is never bound.",
-    ],
-)
-def test_codex_clear_prefix_cannot_carry_unvalidated_trailing_content(trailer):
-    body = _codex_clear_body(trailer)
-    assert core.review_adoption_acknowledgement(_codex_review_observation(body), HEAD, "b" * 64) is None
-
-
-def test_hidden_blocking_findings_do_not_admit_the_candidate(monkeypatch):
-    """End-to-end: a clear prefix hiding findings is not exact-head review authority."""
-
-    document, _ack = _request_and_ack()
-    body = _codex_clear_body(
-        "\n\n<details>\n<summary>Findings</summary>\n\n- P1 scripts/hunter_review_orchestrator.py:1 "
-        "the trusted dispatch can be driven by a candidate-authored workflow.\n</details>"
-    )
-    _install_governance(monkeypatch, document=document, comments=(_codex_review_observation(body),))
-    monkeypatch.setattr(core, "read_unresolved_review_threads", lambda *a: ((), None))
-    monkeypatch.setattr(core, "check_reviewer_dispositions", lambda: (True, ""))
-
-    state, reason = core.verify_pre_ready_hostile_review("repo", "token", HEAD, PR_NUMBER)
-
+    state, message = core.verify_pre_ready_hostile_review("repo", "token", HEAD, PR_NUMBER)
     assert state == "failure"
-    assert "MISSING_REVIEW_AUTHORITY" in reason
+    assert "MISSING_REVIEW_AUTHORITY" in message
 
 
-def test_verified_pool_exhaustion_uses_deterministic_hunter_guard(monkeypatch):
-    document, _ = _request_and_ack()
-    _install_governance(monkeypatch, document=document, comments=())
-    monkeypatch.setattr(core, "read_unresolved_review_threads", lambda *a: ((), None))
-    monkeypatch.setattr(core, "check_reviewer_dispositions", lambda: (True, ""))
-    import hunter_review_orchestrator as orchestrator
-
-    monkeypatch.setattr(orchestrator, "read_collector_completion", lambda *_a: ("present", 777, None))
-    evidence = {
-        "reviewer_attempts": [
-            {**_attempt(timeout_seconds=300, failure_class="permanent", attempt_count=1), "ack_timeout_seconds": 30}
-        ],
-        "collector_run_id": 777,
-        "fallback_reason": "trusted collector exhausted every configured higher-priority reviewer",
-        "unresolved_thread_count": 0,
-        "governance_state": "success",
-        "trusted_preflight_state": "success",
-        "structured_evidence_status": "complete",
-    }
-    monkeypatch.setattr("hunter_reviewer_collector.load_exhaustion", lambda *_a: evidence)
-    state, reason = core.verify_pre_ready_hostile_review("repo", "token", HEAD, PR_NUMBER)
-    assert state == "success", reason
-    assert "VALID_LAST_RESORT_GUARD" in reason
-
-
-def test_deterministic_guard_fails_closed_when_collector_evidence_is_unavailable(monkeypatch):
-    document, _ = _request_and_ack()
-    _install_governance(monkeypatch, document=document, comments=())
-    import hunter_review_orchestrator as orchestrator
-
-    monkeypatch.setattr(orchestrator, "read_collector_completion", lambda *_a: ("absent", None, None))
-    state, reason = core.verify_pre_ready_hostile_review("repo", "token", HEAD, PR_NUMBER)
-    assert state == "pending"
-    assert "MISSING_REVIEW_AUTHORITY" in reason
+def test_trusted_collector_trigger_rejects_unrelated_actions_bot_run(monkeypatch):
+    trigger = {"collector_run_id": 123, "collector_run_attempt": 1}
+    monkeypatch.setattr(
+        core,
+        "request_json",
+        lambda *_a, **_k: (
+            {"default_branch": "main"}
+            if _a[3] == ""
+            else {
+                "id": 123,
+                "run_attempt": 1,
+                "head_branch": "feature",
+                "head_sha": HEAD,
+                "path": "other.yml",
+                "event": "pull_request_target",
+                "status": "completed",
+                "conclusion": "success",
+            }
+        ),
+    )
+    assert not core.trusted_collector_run("repo", "token", trigger)

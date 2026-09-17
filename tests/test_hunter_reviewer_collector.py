@@ -702,3 +702,23 @@ def test_usage_limit_detection_requires_authenticated_reviewer_identity(monkeypa
 
     monkeypatch.setattr(collector, "_pages", lambda *_args, **_kwargs: comments[:1])
     assert backend.unavailability(agent, trigger) is None
+
+
+def test_canonical_pool_preserves_server_side_fallback_chain():
+    import json
+
+    policy = json.loads((collector.review.ROOT / "docs/CODE_WRITE_POLICY.json").read_text(encoding="utf-8"))
+    pool = policy["review_progression"]["review_authority"]["reviewer_pool"]
+    agents = sorted(pool["agents"], key=lambda a: a["priority"])
+    assert [a["id"] for a in agents] == ["local-ollama", "codex", "gemini", "groq"]
+    assert [a["id"] for a in collector.review.authority_pool_reviewers(pool)] == ["codex", "gemini", "groq"]
+    assert agents[2]["trigger_method"] == "api:gemini"
+    assert agents[3]["trigger_method"] == "api:groq"
+    assert all(a["review_timeout_seconds"] == 300 and a["retryable"] is False for a in agents[1:])
+    assert pool["last_resort"] == "hunter-guard"
+
+
+def test_collector_workflow_exposes_server_side_provider_secrets():
+    workflow = (collector.review.ROOT / ".github/workflows/hunter-reviewer-collector.yml").read_text(encoding="utf-8")
+    assert "GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}" in workflow
+    assert "GROQ_API_KEY: ${{ secrets.GROQ_API_KEY }}" in workflow

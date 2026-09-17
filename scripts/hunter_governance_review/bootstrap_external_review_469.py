@@ -30,6 +30,8 @@ from __future__ import annotations
 
 import argparse
 import os
+import re
+import subprocess
 import sys
 from pathlib import Path
 from typing import Any
@@ -48,7 +50,7 @@ import hunter_pre_ready_review as pre_ready  # noqa: E402
 
 TARGET_REPOSITORY = "fafa33/Project-Hunter"
 TARGET_PR = 469
-CODEX_LOGIN = "chatgpt-codex-connector"
+CODEX_LOGIN = "chatgpt-codex-connector[bot]"
 
 #: PR #473 is the contribution that installs the trusted reviewer orchestration
 #: controller, so it is the one candidate whose review cannot be orchestrated by
@@ -60,14 +62,48 @@ BOOTSTRAP_PENDING_DESCRIPTION = f"{BOOTSTRAP_PENDING_STATE}: default branch cann
 #: this bridge runs it from a trusted default-branch checkout, so the answer is
 #: a property of the trusted tree itself, never of a caller-supplied flag or of
 #: any candidate-controlled workflow input.
-TRUSTED_CONTROLLER_PATH = SCRIPTS_DIR / "hunter_review_orchestrator.py"
+TRUSTED_CONTROLLER_PATH = "scripts/hunter_review_orchestrator.py"
 
 
-def bootstrap_pending_mode(repository: str, pr_number: int) -> bool:
+def _checked_out_commit_sha() -> str:
+    """Return the immutable commit this trusted workflow actually checked out."""
+    result = subprocess.run(
+        ["git", "rev-parse", "HEAD"],
+        cwd=SCRIPTS_DIR.parent,
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+    sha = result.stdout.strip().lower()
+    if re.fullmatch(r"[0-9a-f]{40}", sha) is None:
+        raise RuntimeError("trusted checkout commit SHA is unavailable or malformed")
+    return sha
+
+
+def _trusted_controller_on_default_branch(repository: str, token: str) -> bool:
+    """Read controller existence from the immutable trusted commit being executed."""
+    trusted_sha = _checked_out_commit_sha()
+    try:
+        payload = governance.request_json(
+            repository, token, "GET", f"contents/{TRUSTED_CONTROLLER_PATH}?ref={trusted_sha}"
+        )
+    except governance.transport.GitHubRequestError as exc:
+        if exc.category == "permanent" and exc.status_code == 404:
+            return False
+        raise
+    if not isinstance(payload, dict) or payload.get("type") != "file":
+        raise RuntimeError("trusted controller evidence is malformed: expected file payload")
+    path = payload.get("path")
+    if not isinstance(path, str) or path != TRUSTED_CONTROLLER_PATH:
+        raise RuntimeError("trusted controller evidence is malformed: path mismatch")
+    return True
+
+
+def bootstrap_pending_mode(repository: str, pr_number: int, token: str = "") -> bool:
     """Report whether #473 is still installing the trusted reviewer controller."""
     if repository != TARGET_REPOSITORY or pr_number != BOOTSTRAP_CONTROLLER_PR:
         return False
-    return not TRUSTED_CONTROLLER_PATH.is_file()
+    return not _trusted_controller_on_default_branch(repository, token)
 
 
 def publish_bootstrap_pending(repository: str, token: str, pr_number: int) -> int:
@@ -109,6 +145,12 @@ def _paged_reviews(repository: str, token: str, pr_number: int) -> tuple[dict[st
     raise RuntimeError("pull-request review evidence exceeds supported pagination boundary")
 
 
+def _native_codex_clear_review(body: str, head_sha: str) -> bool:
+    """Accept only the same native Codex clear-review shape as the main verifier."""
+    raw = re.sub(r"^#{1,6}\s*(?:💡\s*)?", "", body.strip(), count=1).strip()
+    return governance.native_codex_clear_review(raw, head_sha)
+
+
 def _exact_head_codex_review(
     repository: str,
     token: str,
@@ -120,20 +162,19 @@ def _exact_head_codex_review(
         user = review.get("user") if isinstance(review.get("user"), dict) else {}
         login = str((user or {}).get("login") or "").strip().lower()
         commit_id = str(review.get("commit_id") or "").strip().lower()
-        state = str(review.get("state") or "").strip().upper()
-        body = str(review.get("body") or "").strip()
         if login != CODEX_LOGIN:
             continue
         if commit_id != head_sha.strip().lower():
             continue
-        if state not in {"COMMENTED", "APPROVED"}:
-            continue
-        if not body:
-            continue
         matches.append(review)
     if not matches:
         return None
-    return max(matches, key=lambda item: int(item.get("id") or 0))
+    latest = max(matches, key=lambda item: int(item.get("id") or 0))
+    if str(latest.get("state") or "").strip().upper() not in {"COMMENTED", "APPROVED"}:
+        return None
+    if not _native_codex_clear_review(str(latest.get("body") or ""), head_sha):
+        return None
+    return latest
 
 
 def _canonical_changes(
@@ -165,7 +206,7 @@ def _bootstrap_document(
     pr_number: int,
     head_sha: str,
 ) -> dict[str, Any] | None:
-    if repository != TARGET_REPOSITORY or pr_number != TARGET_PR:
+    if repository != TARGET_REPOSITORY or pr_number not in {TARGET_PR, BOOTSTRAP_CONTROLLER_PR}:
         return None
 
     pr = governance.read_mergeability(repository, token, pr_number)
@@ -194,7 +235,7 @@ def _bootstrap_document(
     )
     applicable = pre_ready.applicable_family_ids(families, changed_paths)
 
-    issue = governance.issue_for_branch(head_ref) or str(TARGET_PR)
+    issue = governance.issue_for_branch(head_ref) or str(pr_number)
     criteria_state, criteria, criteria_error = governance.read_issue_acceptance_criteria(repository, token, issue)
     if criteria_state != "present":
         raise RuntimeError(f"Issue #{issue} acceptance-criteria evidence is unavailable ({criteria_error})")
@@ -264,35 +305,46 @@ def governance_mode(repository: str, token: str, pr_number: int) -> int:
     # overwrite the candidate run's bootstrap state with MISSING_REVIEW_AUTHORITY
     # on the same exact head. Publish the migration state instead; it is pending
     # only, and it stops applying as soon as the trusted controller lands.
-    if bootstrap_pending_mode(repository, pr_number):
-        return publish_bootstrap_pending(repository, token, pr_number)
-    if repository == TARGET_REPOSITORY and pr_number == TARGET_PR:
+    if repository == TARGET_REPOSITORY and pr_number in {TARGET_PR, BOOTSTRAP_CONTROLLER_PR}:
         pr = governance.read_mergeability(repository, token, pr_number)
-        head_sha = str((pr.get("head") or {}).get("sha") or "").strip()
-        if head_sha:
-            _install_bootstrap_patch(repository, token, pr_number, head_sha)
+        if pr.get("state") == "open" and str((pr.get("base") or {}).get("ref") or "").strip() == "main":
+            head_sha = str((pr.get("head") or {}).get("sha") or "").strip()
+            if head_sha:
+                try:
+                    if not _trusted_controller_on_default_branch(repository, token):
+                        if _install_bootstrap_patch(repository, token, pr_number, head_sha):
+                            return governance.review(repository, token, pr_number)
+                except RuntimeError as exc:
+                    print(f"Bootstrap authority unavailable; remaining fail-closed: {exc}")
+    if bootstrap_pending_mode(repository, pr_number, token):
+        return publish_bootstrap_pending(repository, token, pr_number)
     return governance.review(repository, token, pr_number)
 
 
 def candidate_mode(repository: str, token: str, pr_number: int, expected_head_sha: str | None) -> int:
-    if repository == TARGET_REPOSITORY and pr_number == TARGET_PR:
+    if repository == TARGET_REPOSITORY and pr_number in {TARGET_PR, BOOTSTRAP_CONTROLLER_PR}:
         pr = governance.read_mergeability(repository, token, pr_number)
         head_sha = str((pr.get("head") or {}).get("sha") or "").strip()
-        if head_sha:
+        if head_sha and not _trusted_controller_on_default_branch(repository, token):
             _install_bootstrap_patch(repository, token, pr_number, head_sha)
     return candidate.enforce_candidate_admission(repository, token, pr_number, expected_head_sha)
 
 
 def readiness_mode(repository: str, token: str) -> int:
     if repository == TARGET_REPOSITORY:
-        try:
-            pr = governance.read_mergeability(repository, token, TARGET_PR)
-            if pr.get("state") == "open":
-                head_sha = str((pr.get("head") or {}).get("sha") or "").strip()
-                if head_sha:
-                    _install_bootstrap_patch(repository, token, TARGET_PR, head_sha)
-        except Exception as exc:
-            print(f"Bootstrap evidence unavailable; continuing fail-closed: {type(exc).__name__}: {exc}")
+        for pr_number in (TARGET_PR, BOOTSTRAP_CONTROLLER_PR):
+            try:
+                pr = governance.read_mergeability(repository, token, pr_number)
+                if pr.get("state") == "open":
+                    head_sha = str((pr.get("head") or {}).get("sha") or "").strip()
+                    if head_sha:
+                        if pr_number == BOOTSTRAP_CONTROLLER_PR and _trusted_controller_on_default_branch(
+                            repository, token
+                        ):
+                            continue
+                        _install_bootstrap_patch(repository, token, pr_number, head_sha)
+            except Exception as exc:
+                print(f"Bootstrap evidence unavailable; continuing fail-closed: {type(exc).__name__}: {exc}")
 
     import hunter_merge_readiness_v2 as readiness
 

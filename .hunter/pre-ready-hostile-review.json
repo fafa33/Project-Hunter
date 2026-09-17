@@ -3,79 +3,79 @@
     "acceptance_criteria": [
       {
         "criterion": "`/issue-agent/authorize` returns success/accepted well below the Railway request ceiling and before provider completion.",
-        "evidence": "Outside this narrow governance-inheritance correction; retained for complete governing-Issue coverage.",
+        "evidence": "Outside the PR #476 trusted bootstrap scope; retained for complete Issue #461 stabilization coverage.",
         "id": "AC-001",
         "verdict": "not-applicable"
       },
       {
         "criterion": "Provider execution >300s cannot cause the GitHub trigger to fail with HTTP 499.",
-        "evidence": "Outside this narrow governance-inheritance correction; retained for complete governing-Issue coverage.",
+        "evidence": "Outside the PR #476 trusted bootstrap scope; retained for complete Issue #461 stabilization coverage.",
         "id": "AC-002",
         "verdict": "not-applicable"
       },
       {
         "criterion": "Retrying a failed attempt does not mutate the Issue and does not change the authorization identity.",
-        "evidence": "Outside this narrow governance-inheritance correction; retained for complete governing-Issue coverage.",
+        "evidence": "Outside the PR #476 trusted bootstrap scope; retained for complete Issue #461 stabilization coverage.",
         "id": "AC-003",
         "verdict": "not-applicable"
       },
       {
         "criterion": "Source Handling authority is exact, fail-closed, and retry-stable for an immutable event.",
-        "evidence": "Outside this narrow governance-inheritance correction; retained for complete governing-Issue coverage.",
+        "evidence": "Outside the PR #476 trusted bootstrap scope; retained for complete Issue #461 stabilization coverage.",
         "id": "AC-004",
         "verdict": "not-applicable"
       },
       {
         "criterion": "The exact pinned OpenCode/provider configuration is compatibility-checked before live use.",
-        "evidence": "Outside this narrow governance-inheritance correction; retained for complete governing-Issue coverage.",
+        "evidence": "Outside the PR #476 trusted bootstrap scope; retained for complete Issue #461 stabilization coverage.",
         "id": "AC-005",
         "verdict": "not-applicable"
       },
       {
         "criterion": "Runtime capability requirements are checked before provider execution.",
-        "evidence": "Outside this narrow governance-inheritance correction; retained for complete governing-Issue coverage.",
+        "evidence": "Outside the PR #476 trusted bootstrap scope; retained for complete Issue #461 stabilization coverage.",
         "id": "AC-006",
         "verdict": "not-applicable"
       },
       {
         "criterion": "OpenCode can modify only the isolated attempt workspace; external-directory edits are explicitly denied. \u2014 PR #465 / `ca2adf5ebeb5e11b198e50de6d0a62af5b23207c`",
-        "evidence": "Outside this narrow governance-inheritance correction; retained for complete governing-Issue coverage.",
+        "evidence": "Outside the PR #476 trusted bootstrap scope; retained for complete Issue #461 stabilization coverage.",
         "id": "AC-007",
         "verdict": "not-applicable"
       },
       {
         "criterion": "A provider claiming success without candidate repository changes fails closed.",
-        "evidence": "Outside this narrow governance-inheritance correction; retained for complete governing-Issue coverage.",
+        "evidence": "Outside the PR #476 trusted bootstrap scope; retained for complete Issue #461 stabilization coverage.",
         "id": "AC-008",
         "verdict": "not-applicable"
       },
       {
         "criterion": "Publication remains trusted-parent-owned and exact-head validation remains authoritative.",
-        "evidence": "Outside this narrow governance-inheritance correction; retained for complete governing-Issue coverage.",
+        "evidence": "Outside the PR #476 trusted bootstrap scope; retained for complete Issue #461 stabilization coverage.",
         "id": "AC-009",
         "verdict": "not-applicable"
       },
       {
         "criterion": "Accepted authorization executes at most once and ends in a durable COMPLETED or FAILED state.",
-        "evidence": "Outside this narrow governance-inheritance correction; retained for complete governing-Issue coverage.",
+        "evidence": "Outside the PR #476 trusted bootstrap scope; retained for complete Issue #461 stabilization coverage.",
         "id": "AC-010",
         "verdict": "not-applicable"
       },
       {
         "criterion": "Stale/closed PR history cannot generate a false current Governance failure.",
-        "evidence": "PR #472 exact-head regression and governance diff; authenticated reviewer must adopt this request.",
+        "evidence": "Open/main/current-head bootstrap scoping and trusted-controller retirement covered by tests/test_pr473_trusted_bridge_bootstrap.py; authenticated reviewer must independently verify.",
         "id": "AC-011",
         "verdict": "satisfied"
       },
       {
         "criterion": "No autonomous Ready, merge, or Railway deploy is introduced.",
-        "evidence": "PR #472 exact-head regression and governance diff; authenticated reviewer must adopt this request.",
+        "evidence": "Complete base-to-head diff introduces reviewer orchestration/workflow execution but no autonomous Ready transition, merge action, or Railway deploy. Independent reviewer must verify the full diff.",
         "id": "AC-012",
         "verdict": "satisfied"
       },
       {
         "criterion": "Only after this matrix is green do we run the live #441 acceptance test.",
-        "evidence": "Outside this narrow governance-inheritance correction; retained for complete governing-Issue coverage.",
+        "evidence": "Outside the PR #476 trusted bootstrap scope; retained for complete Issue #461 stabilization coverage.",
         "id": "AC-013",
         "verdict": "not-applicable"
       }
@@ -94,141 +94,256 @@
       "transaction-snapshot-consistency"
     ],
     "base_ref": "main",
-    "base_sha": "a06d5279214d26997fe8e3b15e429b8fa69ac6f2",
+    "base_sha": "fea16ec43ecd728198733b14050f0037ea66080a",
     "defect_families": [
       {
-        "evidence": "Focused regression suite and trusted preflight evidence; authenticated reviewer must re-evaluate before adoption.",
+        "evidence": "Complete base-to-head scope: .github/workflows/hunter-reviewer-collector.yml, docs/CODE_WRITE_POLICY.json, docs/DEFECT_REGISTRY.json, docs/superpowers/plans/2026-09-17-review-orchestration-fast-failover.md, docs/superpowers/specs/2026-09-17-review-orchestration-fast-failover-design.md, scripts/hunter_governance_review/bootstrap_external_review_469.py, scripts/hunter_governance_review_v2.py, scripts/hunter_reviewer_collector.py, tests/test_exact_head_review_authority.py, tests/test_hunter_reviewer_collector.py, tests/test_issue_412_prevention_gate.py, tests/test_pr473_trusted_bridge_bootstrap.py. This candidate changes trusted GitHub workflow execution, reviewer API fallback execution, exact-head authority handling, bootstrap logic, policy/defect evidence, and regression tests. Runtime/workflow/execution changes ARE in scope and require independent hostile review. Focused reviewer/governance suites: 293 passed after the latest collector repairs.",
         "family": "DFF-007",
         "outcome": "clear"
       },
       {
-        "evidence": "Focused regression suite and trusted preflight evidence; authenticated reviewer must re-evaluate before adoption.",
+        "evidence": "Complete base-to-head scope: .github/workflows/hunter-reviewer-collector.yml, docs/CODE_WRITE_POLICY.json, docs/DEFECT_REGISTRY.json, docs/superpowers/plans/2026-09-17-review-orchestration-fast-failover.md, docs/superpowers/specs/2026-09-17-review-orchestration-fast-failover-design.md, scripts/hunter_governance_review/bootstrap_external_review_469.py, scripts/hunter_governance_review_v2.py, scripts/hunter_reviewer_collector.py, tests/test_exact_head_review_authority.py, tests/test_hunter_reviewer_collector.py, tests/test_issue_412_prevention_gate.py, tests/test_pr473_trusted_bridge_bootstrap.py. This candidate changes trusted GitHub workflow execution, reviewer API fallback execution, exact-head authority handling, bootstrap logic, policy/defect evidence, and regression tests. Runtime/workflow/execution changes ARE in scope and require independent hostile review. Focused reviewer/governance suites: 293 passed after the latest collector repairs.",
         "family": "DFF-008",
         "outcome": "clear"
       },
       {
-        "evidence": "Focused regression suite and trusted preflight evidence; authenticated reviewer must re-evaluate before adoption.",
+        "evidence": "Complete base-to-head scope: .github/workflows/hunter-reviewer-collector.yml, docs/CODE_WRITE_POLICY.json, docs/DEFECT_REGISTRY.json, docs/superpowers/plans/2026-09-17-review-orchestration-fast-failover.md, docs/superpowers/specs/2026-09-17-review-orchestration-fast-failover-design.md, scripts/hunter_governance_review/bootstrap_external_review_469.py, scripts/hunter_governance_review_v2.py, scripts/hunter_reviewer_collector.py, tests/test_exact_head_review_authority.py, tests/test_hunter_reviewer_collector.py, tests/test_issue_412_prevention_gate.py, tests/test_pr473_trusted_bridge_bootstrap.py. This candidate changes trusted GitHub workflow execution, reviewer API fallback execution, exact-head authority handling, bootstrap logic, policy/defect evidence, and regression tests. Runtime/workflow/execution changes ARE in scope and require independent hostile review. Focused reviewer/governance suites: 293 passed after the latest collector repairs.",
         "family": "DFF-009",
         "outcome": "clear"
       },
       {
-        "evidence": "Focused regression suite and trusted preflight evidence; authenticated reviewer must re-evaluate before adoption.",
+        "evidence": "Complete base-to-head scope: .github/workflows/hunter-reviewer-collector.yml, docs/CODE_WRITE_POLICY.json, docs/DEFECT_REGISTRY.json, docs/superpowers/plans/2026-09-17-review-orchestration-fast-failover.md, docs/superpowers/specs/2026-09-17-review-orchestration-fast-failover-design.md, scripts/hunter_governance_review/bootstrap_external_review_469.py, scripts/hunter_governance_review_v2.py, scripts/hunter_reviewer_collector.py, tests/test_exact_head_review_authority.py, tests/test_hunter_reviewer_collector.py, tests/test_issue_412_prevention_gate.py, tests/test_pr473_trusted_bridge_bootstrap.py. This candidate changes trusted GitHub workflow execution, reviewer API fallback execution, exact-head authority handling, bootstrap logic, policy/defect evidence, and regression tests. Runtime/workflow/execution changes ARE in scope and require independent hostile review. Focused reviewer/governance suites: 293 passed after the latest collector repairs.",
         "family": "DFF-010",
         "outcome": "clear"
       },
       {
-        "evidence": "Focused regression suite and trusted preflight evidence; authenticated reviewer must re-evaluate before adoption.",
+        "evidence": "Complete base-to-head scope: .github/workflows/hunter-reviewer-collector.yml, docs/CODE_WRITE_POLICY.json, docs/DEFECT_REGISTRY.json, docs/superpowers/plans/2026-09-17-review-orchestration-fast-failover.md, docs/superpowers/specs/2026-09-17-review-orchestration-fast-failover-design.md, scripts/hunter_governance_review/bootstrap_external_review_469.py, scripts/hunter_governance_review_v2.py, scripts/hunter_reviewer_collector.py, tests/test_exact_head_review_authority.py, tests/test_hunter_reviewer_collector.py, tests/test_issue_412_prevention_gate.py, tests/test_pr473_trusted_bridge_bootstrap.py. This candidate changes trusted GitHub workflow execution, reviewer API fallback execution, exact-head authority handling, bootstrap logic, policy/defect evidence, and regression tests. Runtime/workflow/execution changes ARE in scope and require independent hostile review. Focused reviewer/governance suites: 293 passed after the latest collector repairs.",
         "family": "DFF-011",
         "outcome": "clear"
       },
       {
-        "evidence": "Focused regression suite and trusted preflight evidence; authenticated reviewer must re-evaluate before adoption.",
+        "evidence": "Complete base-to-head scope: .github/workflows/hunter-reviewer-collector.yml, docs/CODE_WRITE_POLICY.json, docs/DEFECT_REGISTRY.json, docs/superpowers/plans/2026-09-17-review-orchestration-fast-failover.md, docs/superpowers/specs/2026-09-17-review-orchestration-fast-failover-design.md, scripts/hunter_governance_review/bootstrap_external_review_469.py, scripts/hunter_governance_review_v2.py, scripts/hunter_reviewer_collector.py, tests/test_exact_head_review_authority.py, tests/test_hunter_reviewer_collector.py, tests/test_issue_412_prevention_gate.py, tests/test_pr473_trusted_bridge_bootstrap.py. This candidate changes trusted GitHub workflow execution, reviewer API fallback execution, exact-head authority handling, bootstrap logic, policy/defect evidence, and regression tests. Runtime/workflow/execution changes ARE in scope and require independent hostile review. Focused reviewer/governance suites: 293 passed after the latest collector repairs.",
         "family": "DFF-012",
         "outcome": "clear"
       },
       {
-        "evidence": "Focused regression suite and trusted preflight evidence; authenticated reviewer must re-evaluate before adoption.",
+        "evidence": "Complete base-to-head scope: .github/workflows/hunter-reviewer-collector.yml, docs/CODE_WRITE_POLICY.json, docs/DEFECT_REGISTRY.json, docs/superpowers/plans/2026-09-17-review-orchestration-fast-failover.md, docs/superpowers/specs/2026-09-17-review-orchestration-fast-failover-design.md, scripts/hunter_governance_review/bootstrap_external_review_469.py, scripts/hunter_governance_review_v2.py, scripts/hunter_reviewer_collector.py, tests/test_exact_head_review_authority.py, tests/test_hunter_reviewer_collector.py, tests/test_issue_412_prevention_gate.py, tests/test_pr473_trusted_bridge_bootstrap.py. This candidate changes trusted GitHub workflow execution, reviewer API fallback execution, exact-head authority handling, bootstrap logic, policy/defect evidence, and regression tests. Runtime/workflow/execution changes ARE in scope and require independent hostile review. Focused reviewer/governance suites: 293 passed after the latest collector repairs.",
         "family": "DFF-013",
         "outcome": "clear"
       },
       {
-        "evidence": "Focused regression suite and trusted preflight evidence; authenticated reviewer must re-evaluate before adoption.",
+        "evidence": "Complete base-to-head scope: .github/workflows/hunter-reviewer-collector.yml, docs/CODE_WRITE_POLICY.json, docs/DEFECT_REGISTRY.json, docs/superpowers/plans/2026-09-17-review-orchestration-fast-failover.md, docs/superpowers/specs/2026-09-17-review-orchestration-fast-failover-design.md, scripts/hunter_governance_review/bootstrap_external_review_469.py, scripts/hunter_governance_review_v2.py, scripts/hunter_reviewer_collector.py, tests/test_exact_head_review_authority.py, tests/test_hunter_reviewer_collector.py, tests/test_issue_412_prevention_gate.py, tests/test_pr473_trusted_bridge_bootstrap.py. This candidate changes trusted GitHub workflow execution, reviewer API fallback execution, exact-head authority handling, bootstrap logic, policy/defect evidence, and regression tests. Runtime/workflow/execution changes ARE in scope and require independent hostile review. Focused reviewer/governance suites: 293 passed after the latest collector repairs.",
         "family": "DFF-014",
         "outcome": "clear"
       },
       {
-        "evidence": "Focused regression suite and trusted preflight evidence; authenticated reviewer must re-evaluate before adoption.",
+        "evidence": "Complete base-to-head scope: .github/workflows/hunter-reviewer-collector.yml, docs/CODE_WRITE_POLICY.json, docs/DEFECT_REGISTRY.json, docs/superpowers/plans/2026-09-17-review-orchestration-fast-failover.md, docs/superpowers/specs/2026-09-17-review-orchestration-fast-failover-design.md, scripts/hunter_governance_review/bootstrap_external_review_469.py, scripts/hunter_governance_review_v2.py, scripts/hunter_reviewer_collector.py, tests/test_exact_head_review_authority.py, tests/test_hunter_reviewer_collector.py, tests/test_issue_412_prevention_gate.py, tests/test_pr473_trusted_bridge_bootstrap.py. This candidate changes trusted GitHub workflow execution, reviewer API fallback execution, exact-head authority handling, bootstrap logic, policy/defect evidence, and regression tests. Runtime/workflow/execution changes ARE in scope and require independent hostile review. Focused reviewer/governance suites: 293 passed after the latest collector repairs.",
         "family": "DFF-015",
         "outcome": "clear"
       },
       {
-        "evidence": "Focused regression suite and trusted preflight evidence; authenticated reviewer must re-evaluate before adoption.",
+        "evidence": "Complete base-to-head scope: .github/workflows/hunter-reviewer-collector.yml, docs/CODE_WRITE_POLICY.json, docs/DEFECT_REGISTRY.json, docs/superpowers/plans/2026-09-17-review-orchestration-fast-failover.md, docs/superpowers/specs/2026-09-17-review-orchestration-fast-failover-design.md, scripts/hunter_governance_review/bootstrap_external_review_469.py, scripts/hunter_governance_review_v2.py, scripts/hunter_reviewer_collector.py, tests/test_exact_head_review_authority.py, tests/test_hunter_reviewer_collector.py, tests/test_issue_412_prevention_gate.py, tests/test_pr473_trusted_bridge_bootstrap.py. This candidate changes trusted GitHub workflow execution, reviewer API fallback execution, exact-head authority handling, bootstrap logic, policy/defect evidence, and regression tests. Runtime/workflow/execution changes ARE in scope and require independent hostile review. Focused reviewer/governance suites: 293 passed after the latest collector repairs.",
         "family": "DFF-016",
         "outcome": "clear"
       },
       {
-        "evidence": "Focused regression suite and trusted preflight evidence; authenticated reviewer must re-evaluate before adoption.",
+        "evidence": "Complete base-to-head scope: .github/workflows/hunter-reviewer-collector.yml, docs/CODE_WRITE_POLICY.json, docs/DEFECT_REGISTRY.json, docs/superpowers/plans/2026-09-17-review-orchestration-fast-failover.md, docs/superpowers/specs/2026-09-17-review-orchestration-fast-failover-design.md, scripts/hunter_governance_review/bootstrap_external_review_469.py, scripts/hunter_governance_review_v2.py, scripts/hunter_reviewer_collector.py, tests/test_exact_head_review_authority.py, tests/test_hunter_reviewer_collector.py, tests/test_issue_412_prevention_gate.py, tests/test_pr473_trusted_bridge_bootstrap.py. This candidate changes trusted GitHub workflow execution, reviewer API fallback execution, exact-head authority handling, bootstrap logic, policy/defect evidence, and regression tests. Runtime/workflow/execution changes ARE in scope and require independent hostile review. Focused reviewer/governance suites: 293 passed after the latest collector repairs.",
         "family": "DFF-019",
         "outcome": "clear"
       },
       {
-        "evidence": "Focused regression suite and trusted preflight evidence; authenticated reviewer must re-evaluate before adoption.",
+        "evidence": "Complete base-to-head scope: .github/workflows/hunter-reviewer-collector.yml, docs/CODE_WRITE_POLICY.json, docs/DEFECT_REGISTRY.json, docs/superpowers/plans/2026-09-17-review-orchestration-fast-failover.md, docs/superpowers/specs/2026-09-17-review-orchestration-fast-failover-design.md, scripts/hunter_governance_review/bootstrap_external_review_469.py, scripts/hunter_governance_review_v2.py, scripts/hunter_reviewer_collector.py, tests/test_exact_head_review_authority.py, tests/test_hunter_reviewer_collector.py, tests/test_issue_412_prevention_gate.py, tests/test_pr473_trusted_bridge_bootstrap.py. This candidate changes trusted GitHub workflow execution, reviewer API fallback execution, exact-head authority handling, bootstrap logic, policy/defect evidence, and regression tests. Runtime/workflow/execution changes ARE in scope and require independent hostile review. Focused reviewer/governance suites: 293 passed after the latest collector repairs.",
         "family": "DFF-020",
         "outcome": "clear"
       },
       {
-        "evidence": "Focused regression suite and trusted preflight evidence; authenticated reviewer must re-evaluate before adoption.",
+        "evidence": "Complete base-to-head scope: .github/workflows/hunter-reviewer-collector.yml, docs/CODE_WRITE_POLICY.json, docs/DEFECT_REGISTRY.json, docs/superpowers/plans/2026-09-17-review-orchestration-fast-failover.md, docs/superpowers/specs/2026-09-17-review-orchestration-fast-failover-design.md, scripts/hunter_governance_review/bootstrap_external_review_469.py, scripts/hunter_governance_review_v2.py, scripts/hunter_reviewer_collector.py, tests/test_exact_head_review_authority.py, tests/test_hunter_reviewer_collector.py, tests/test_issue_412_prevention_gate.py, tests/test_pr473_trusted_bridge_bootstrap.py. This candidate changes trusted GitHub workflow execution, reviewer API fallback execution, exact-head authority handling, bootstrap logic, policy/defect evidence, and regression tests. Runtime/workflow/execution changes ARE in scope and require independent hostile review. Focused reviewer/governance suites: 293 passed after the latest collector repairs.",
         "family": "DFF-021",
         "outcome": "clear"
       },
       {
-        "evidence": "Focused regression suite and trusted preflight evidence; authenticated reviewer must re-evaluate before adoption.",
+        "evidence": "Complete base-to-head scope: .github/workflows/hunter-reviewer-collector.yml, docs/CODE_WRITE_POLICY.json, docs/DEFECT_REGISTRY.json, docs/superpowers/plans/2026-09-17-review-orchestration-fast-failover.md, docs/superpowers/specs/2026-09-17-review-orchestration-fast-failover-design.md, scripts/hunter_governance_review/bootstrap_external_review_469.py, scripts/hunter_governance_review_v2.py, scripts/hunter_reviewer_collector.py, tests/test_exact_head_review_authority.py, tests/test_hunter_reviewer_collector.py, tests/test_issue_412_prevention_gate.py, tests/test_pr473_trusted_bridge_bootstrap.py. This candidate changes trusted GitHub workflow execution, reviewer API fallback execution, exact-head authority handling, bootstrap logic, policy/defect evidence, and regression tests. Runtime/workflow/execution changes ARE in scope and require independent hostile review. Focused reviewer/governance suites: 293 passed after the latest collector repairs.",
         "family": "DFF-022",
-        "outcome": "clear"
+        "outcome": "repaired"
       },
       {
-        "evidence": "Focused regression suite and trusted preflight evidence; authenticated reviewer must re-evaluate before adoption.",
+        "evidence": "Complete base-to-head scope: .github/workflows/hunter-reviewer-collector.yml, docs/CODE_WRITE_POLICY.json, docs/DEFECT_REGISTRY.json, docs/superpowers/plans/2026-09-17-review-orchestration-fast-failover.md, docs/superpowers/specs/2026-09-17-review-orchestration-fast-failover-design.md, scripts/hunter_governance_review/bootstrap_external_review_469.py, scripts/hunter_governance_review_v2.py, scripts/hunter_reviewer_collector.py, tests/test_exact_head_review_authority.py, tests/test_hunter_reviewer_collector.py, tests/test_issue_412_prevention_gate.py, tests/test_pr473_trusted_bridge_bootstrap.py. This candidate changes trusted GitHub workflow execution, reviewer API fallback execution, exact-head authority handling, bootstrap logic, policy/defect evidence, and regression tests. Runtime/workflow/execution changes ARE in scope and require independent hostile review. Focused reviewer/governance suites: 293 passed after the latest collector repairs.",
         "family": "DFF-023",
         "outcome": "clear"
       }
     ],
-    "findings": [],
-    "issue": "461",
+    "findings": [
+      {
+        "evidence": "Codex review 5228384919; regression tests/test_pr473_trusted_bridge_bootstrap.py::test_bootstrap_requires_actual_authenticated_bot_login failed before correction and passed afterwards.",
+        "id": "bot-identity",
+        "resolution": "resolved",
+        "resolution_evidence": {
+          "correction": "bc9f53c9d2068dc7a5fbfcc216a353f9a3c0429d",
+          "regression_test": "tests/test_pr473_trusted_bridge_bootstrap.py"
+        },
+        "severity": "blocking"
+      },
+      {
+        "evidence": "Codex review 5228384919; regression tests/test_pr473_trusted_bridge_bootstrap.py::test_candidate_bootstrap_retires_with_trusted_controller failed before correction and passed afterwards.",
+        "id": "candidate-retirement",
+        "resolution": "resolved",
+        "resolution_evidence": {
+          "correction": "bc9f53c9d2068dc7a5fbfcc216a353f9a3c0429d",
+          "regression_test": "tests/test_pr473_trusted_bridge_bootstrap.py"
+        },
+        "severity": "blocking"
+      },
+      {
+        "evidence": "Codex review 5228384919; regression tests/test_pr473_trusted_bridge_bootstrap.py::test_latest_review_revokes_prior_clear_bootstrap_authority failed before correction and passed afterwards.",
+        "id": "latest-review-revocation",
+        "resolution": "resolved",
+        "resolution_evidence": {
+          "correction": "860aa7d35e76159f4d82d0c4af75fb95836dccfe",
+          "regression_test": "tests/test_pr473_trusted_bridge_bootstrap.py"
+        },
+        "severity": "blocking"
+      },
+      {
+        "evidence": "Codex review 5228384919; regression tests/test_pr473_trusted_bridge_bootstrap.py::test_controller_requires_explicit_path_evidence failed before correction and passed afterwards.",
+        "id": "explicit-controller-path",
+        "resolution": "resolved",
+        "resolution_evidence": {
+          "correction": "860aa7d35e76159f4d82d0c4af75fb95836dccfe",
+          "regression_test": "tests/test_pr473_trusted_bridge_bootstrap.py"
+        },
+        "severity": "blocking"
+      },
+      {
+        "evidence": "Codex thread PRRT_kwDOTRDHr86jeKNC / review on 55d9d7a: API fallback evidence needed canonical persisted trigger verification.",
+        "id": "api-trigger-schema",
+        "resolution": "resolved",
+        "resolution_evidence": {
+          "correction": "c314c6a",
+          "regression_test": "tests/test_hunter_reviewer_collector.py"
+        },
+        "severity": "blocking"
+      },
+      {
+        "evidence": "Codex thread PRRT_kwDOTRDHr86jeKNJ / review on 55d9d7a: API clear required authenticated consumable authority.",
+        "id": "api-clear-authority",
+        "resolution": "resolved",
+        "resolution_evidence": {
+          "correction": "c314c6a",
+          "regression_test": "tests/test_exact_head_review_authority.py"
+        },
+        "severity": "blocking"
+      },
+      {
+        "evidence": "Codex thread PRRT_kwDOTRDHr86jeKNO / review on 55d9d7a: substantive Codex response must block rather than time out into fallback.",
+        "id": "substantive-codex-blocker",
+        "resolution": "resolved",
+        "resolution_evidence": {
+          "correction": "c314c6a",
+          "regression_test": "tests/test_hunter_reviewer_collector.py"
+        },
+        "severity": "blocking"
+      },
+      {
+        "evidence": "Codex thread PRRT_kwDOTRDHr86jeKNT / review on 55d9d7a: exact-head Codex invocation must be reused rather than retriggered.",
+        "id": "single-invocation-exact-head",
+        "resolution": "resolved",
+        "resolution_evidence": {
+          "correction": "c314c6a",
+          "regression_test": "tests/test_hunter_reviewer_collector.py"
+        },
+        "severity": "blocking"
+      },
+      {
+        "evidence": "Codex thread PRRT_kwDOTRDHr86jeKNf / review on 55d9d7a: hostile-review artifact must be regenerated after implementation changes.",
+        "id": "stale-review-request-artifact",
+        "resolution": "resolved",
+        "resolution_evidence": {
+          "correction": "c2083d0",
+          "regression_test": "tests/test_issue_412_prevention_gate.py"
+        },
+        "severity": "blocking"
+      }
+    ],
+    "issue": "473",
     "review_target": [
       {
-        "blob_sha": "bfc439db1f41d406b0729b3d366ca6a5fd6d9b16",
+        "blob_sha": "e97ea51fa3ce375fca52ced7423cf6e489137109",
+        "path": "docs/superpowers/plans/2026-09-17-review-orchestration-fast-failover.md",
+        "previous_path": "",
+        "status": "added"
+      },
+      {
+        "blob_sha": "932f1ad65cc1b4ee32c312825a1720d7334e27ca",
+        "path": "docs/superpowers/specs/2026-09-17-review-orchestration-fast-failover-design.md",
+        "previous_path": "",
+        "status": "added"
+      },
+      {
+        "blob_sha": "889a6a42b3255c3211fecc0e17ec6d291380db01",
+        "path": "tests/test_pr473_trusted_bridge_bootstrap.py",
+        "previous_path": "",
+        "status": "added"
+      },
+      {
+        "blob_sha": "d5a37bc2f3bb2d1d009061979832821054121130",
         "path": ".github/workflows/hunter-reviewer-collector.yml",
         "previous_path": "",
         "status": "modified"
       },
       {
-        "blob_sha": "d09e3a55aa1a6986ea336424a9a25e37a325ec3e",
-        "path": ".gitignore",
+        "blob_sha": "8d6db89ad460c18426e8a2d523c9b3efabd472c3",
+        "path": "docs/CODE_WRITE_POLICY.json",
         "previous_path": "",
         "status": "modified"
       },
       {
-        "blob_sha": "028b241b1f5ef50075f417677ee22a5afa2cb06e",
+        "blob_sha": "94da9344899ab9870effe66286b473acfd3144a5",
         "path": "docs/DEFECT_REGISTRY.json",
         "previous_path": "",
         "status": "modified"
       },
       {
-        "blob_sha": "c42f198f99d67b6e5e30fd298c36dc0efe4d3944",
+        "blob_sha": "1e47e3ce7f9af5943b594a6077232d2fe3ba01d6",
+        "path": "scripts/hunter_governance_review/bootstrap_external_review_469.py",
+        "previous_path": "",
+        "status": "modified"
+      },
+      {
+        "blob_sha": "85341283bf403b038d6aed2df451ca81d27e1514",
         "path": "scripts/hunter_governance_review_v2.py",
         "previous_path": "",
         "status": "modified"
       },
       {
-        "blob_sha": "52c54faa17ad7701fc76fb46a7167e8f08f8bd10",
+        "blob_sha": "6755d6fbe2718989648ebf604900d0c31bc77701",
+        "path": "scripts/hunter_reviewer_collector.py",
+        "previous_path": "",
+        "status": "modified"
+      },
+      {
+        "blob_sha": "1a0426234e7b67284cf460cc7eb8e48ba2aa74f1",
         "path": "tests/test_exact_head_review_authority.py",
         "previous_path": "",
         "status": "modified"
       },
       {
-        "blob_sha": "679664a36d7592f09e1ee1cf081558211f46bdcb",
+        "blob_sha": "32b0a8da20cdd6850e06f3bed72804583f9ee151",
         "path": "tests/test_hunter_reviewer_collector.py",
         "previous_path": "",
         "status": "modified"
       },
       {
-        "blob_sha": "10afef6da49d9882db94dccb92201644ff460cd8",
+        "blob_sha": "e3ec8f03d2e64cc27359c381f47c8ee6d09faa9a",
         "path": "tests/test_issue_412_prevention_gate.py",
-        "previous_path": "",
-        "status": "modified"
-      },
-      {
-        "blob_sha": "9e26bb2af1f0006d95249e4de68dedb9f8f28d72",
-        "path": "tests/test_response_validator_phase_b.py",
         "previous_path": "",
         "status": "modified"
       }
     ],
-    "review_target_digest": "234a3a64c170803bf76e76c19e3caa5b75ca25e607a9e0d08098499e416178ee"
+    "review_target_digest": "7d081b1d5c8e78da5d36ae83da1adb9e03bbde6d3c6ad23416d83605495350c8"
   },
-  "review_id": "8246ae676e37beb4fecc087137e06c3cea7af0d8710a4c0e136be9ecd89de74b",
+  "review_id": "8c88b9db2027c944e5a4dcc104ef7356c483a6de79fc671bd6cc3a54d14168b9",
   "review_request": {
-    "claims_id": "8246ae676e37beb4fecc087137e06c3cea7af0d8710a4c0e136be9ecd89de74b",
+    "claims_id": "8c88b9db2027c944e5a4dcc104ef7356c483a6de79fc671bd6cc3a54d14168b9",
     "schema": "hunter.review-request.v1"
   },
   "schema": "hunter.pre-ready-hostile-review.v1"
