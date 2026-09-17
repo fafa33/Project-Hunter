@@ -217,7 +217,7 @@
     "issue": "461",
     "review_target": [
       {
-        "blob_sha": "e6b998c4aa172eabc3f94e8d8644182eb5573916",
+        "blob_sha": "889a6a42b3255c3211fecc0e17ec6d291380db01",
         "path": "tests/test_pr473_trusted_bridge_bootstrap.py",
         "previous_path": "",
         "status": "added"
@@ -229,17 +229,17 @@
         "status": "modified"
       },
       {
-        "blob_sha": "97d6f885713d8b1c66615d7b1fdd9fa563369e12",
+        "blob_sha": "1e47e3ce7f9af5943b594a6077232d2fe3ba01d6",
         "path": "scripts/hunter_governance_review/bootstrap_external_review_469.py",
         "previous_path": "",
         "status": "modified"
       }
     ],
-    "review_target_digest": "b3ef6b3ad59fd71563b7fda21529e4dd7a9cc4f4f147c114081563905dd4a24b"
+    "review_target_digest": "e69d48fca07f0664c9459dbfa00312b9a4b1e456da5180c953b80c355c57d383"
   },
-  "review_id": "3736de9398ee8f1215ffc8c8f3632417592d5b29860fdc727d9906b4b5fe19dd",
+  "review_id": "ac3ef611a0fa4550f6c9b8a2d858f11500478a28ae499a54ae14c6960896810a",
   "review_request": {
-    "claims_id": "3736de9398ee8f1215ffc8c8f3632417592d5b29860fdc727d9906b4b5fe19dd",
+    "claims_id": "ac3ef611a0fa4550f6c9b8a2d858f11500478a28ae499a54ae14c6960896810a",
     "schema": "hunter.review-request.v1"
   },
   "schema": "hunter.pre-ready-hostile-review.v1"
