@@ -11,6 +11,21 @@ import hunter_reviewer_collector as collector
 import pytest
 
 HEAD = "a" * 40
+
+
+@pytest.fixture(autouse=True)
+def _no_resolved_blocking_threads(monkeypatch):
+    """Default every case in this module to the base remediation generation.
+
+    These cases describe a candidate whose authenticated blocking findings have
+    never been resolved, which is exactly the base generation. Stubbing the
+    thread read keeps them off the network; the remediation-generation behaviour
+    itself is exercised by tests that patch this evidence explicitly.
+    """
+
+    monkeypatch.setattr(collector.orchestration, "blocking_reviewer_threads", lambda *_a, **_k: ())
+
+
 POOL = {
     "last_resort": "opencode",
     "timeout_policy": {"retries_per_agent": 0},
@@ -123,7 +138,15 @@ def test_trusted_run_must_execute_default_branch_revision():
     assert not collector.valid_run({**run, "path": ".github/workflows/untrusted.yml"}, 123, "main", "c" * 40)
 
 
-def _install_receipt(monkeypatch, *, mutate=None, available=False, response_state=None, retries=0):
+def _install_receipt(
+    monkeypatch,
+    *,
+    mutate=None,
+    available=False,
+    response_state=None,
+    retries=0,
+    generation_id=collector.BASE_GENERATION,
+):
     import hashlib
     import io
     import json
@@ -185,7 +208,7 @@ def _install_receipt(monkeypatch, *, mutate=None, available=False, response_stat
             if number != 1:
                 raise AssertionError(path)
             return {
-                "body": collector.trigger_body(HEAD, "d" * 64, POOL["agents"][0], 123, 1, number),
+                "body": collector.trigger_body(HEAD, "d" * 64, POOL["agents"][0], 123, 1, number, generation_id),
                 "created_at": "2026-09-13T00:00:00Z",
                 "user": {"login": "github-actions[bot]"},
                 "issue_url": "https://api.github.com/repos/owner/repo/issues/469",
@@ -210,6 +233,41 @@ def _install_receipt(monkeypatch, *, mutate=None, available=False, response_stat
     )
     # This fixture validates exhaustion for an alternate, not Guard snapshot gates.
     return pool
+
+
+def test_exhaustion_receipt_from_a_prior_remediation_generation_is_not_reusable(monkeypatch):
+    """Exhaustion is generation-scoped, never a permanent property of the head.
+
+    Once the blocking findings a cycle produced are resolved, every reviewer that
+    cycle recorded as exhausted is owed another invocation. Replaying the old
+    receipt would hand authority to a lower-priority reviewer over one that has
+    not actually been asked about the remediated state.
+    """
+
+    pool = _install_receipt(monkeypatch)
+    monkeypatch.setattr(
+        collector.orchestration,
+        "blocking_reviewer_threads",
+        lambda *_a, **_k: (collector.orchestration.BlockingThread("PRRT_1", 4042982311, "2026-09-18T01:35:24Z", True),),
+    )
+
+    with pytest.raises(ValueError, match="predates the current remediation generation"):
+        collector.load_exhaustion("owner/repo", "token", 469, HEAD, pool, 123, "alternate")
+
+
+def test_a_receipt_bound_to_the_current_remediation_generation_still_verifies(monkeypatch):
+    resolved = collector.orchestration.BlockingThread("PRRT_1", 4042982311, "2026-09-18T01:35:24Z", True)
+    generation = collector.orchestration.remediation_generation_id(HEAD, "d" * 64, (resolved,))
+    pool = _install_receipt(
+        monkeypatch,
+        mutate=lambda receipt: receipt.update(remediation_generation_id=generation),
+        generation_id=generation,
+    )
+    monkeypatch.setattr(collector.orchestration, "blocking_reviewer_threads", lambda *_a, **_k: (resolved,))
+
+    result = collector.load_exhaustion("owner/repo", "token", 469, HEAD, pool, 123, "alternate")
+
+    assert [attempt["agent_id"] for attempt in result["reviewer_attempts"]] == ["codex"]
 
 
 def test_immutable_collector_receipt_proves_configured_exhaustion(monkeypatch):
@@ -984,6 +1042,7 @@ def test_parse_native_trigger_binds_head_claims_run_and_attempt():
         "collector_run_id": 123,
         "collector_run_attempt": 2,
         "attempt_number": 1,
+        "remediation_generation_id": collector.BASE_GENERATION,
     }
     assert collector.parse_native_trigger(body.replace(HEAD, "b" * 40, 1)) is None
 

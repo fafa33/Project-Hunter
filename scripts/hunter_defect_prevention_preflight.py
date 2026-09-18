@@ -517,6 +517,11 @@ MACHINE_FAMILY_BINDINGS: dict[tuple[str, str, str], str] = {
         "local-pre-push",
         "scripts/hunter_defect_prevention_preflight.py::validate_recurring_defect_families",
     ): "scripts/hunter_defect_prevention_preflight.py::validate_defect_prevention_lifecycle",
+    (
+        "DFF-024",
+        "local-pre-push",
+        "scripts/hunter_defect_prevention_preflight.py::validate_review_after_remediation_boundary",
+    ): "scripts/hunter_defect_prevention_preflight.py::validate_defect_prevention_lifecycle",
 }
 
 
@@ -1478,6 +1483,145 @@ def validate_recurring_defect_families(registry: dict[str, Any], lifecycle: dict
     return errors
 
 
+REVIEWER_COLLECTOR_WORKFLOW = ".github/workflows/hunter-reviewer-collector.yml"
+
+
+def validate_review_after_remediation_boundary() -> list[str]:
+    """DFF-024: a remediated exact head must still be able to be reviewed again.
+
+    Issue #461 / PR #473: every reviewer invocation was keyed by head and claims
+    alone, and the collector run correlating those invocations was keyed the same
+    way. Once a cycle had spent them, resolving the blocking findings it produced
+    could not buy another review of that immutable head, so the candidate was
+    stuck reporting MISSING_REVIEW_AUTHORITY with nothing left that could clear
+    it. The repair is a remediation generation, and this guard checks the three
+    properties that make it both effective and safe -- as semantic invariants of
+    the live implementation rather than as wording:
+
+    1. the generation actually separates identities, so a new generation buys a
+       real new invocation and an unchanged one buys nothing;
+    2. the generation survives a round trip through the trigger a reviewer
+       receives, so the collector can tell its own invocations apart; and
+    3. it is derived from trusted state and bounded, so it can never become an
+       unbounded reviewer retry.
+    """
+
+    errors: list[str] = []
+    try:
+        import hunter_review_orchestrator as orchestration
+        import hunter_reviewer_collector as collector
+    except Exception as exc:  # pragma: no cover - import failure is itself the defect
+        return [f"review-after-remediation modules are unavailable: {type(exc).__name__}: {exc}"]
+
+    head, claims = "a" * 40, "d" * 64
+    first, second = "0" * 15 + "1", "0" * 15 + "2"
+    base = orchestration.BASE_GENERATION_ID
+
+    # (1) identity separation
+    if collector.invocation_key(head, claims, "codex", 1, base) != collector.invocation_key(head, claims, "codex", 1):
+        errors.append("the base remediation generation must reproduce the pre-remediation invocation identity")
+    keys = {collector.invocation_key(head, claims, "codex", 1, item) for item in (base, first, second)}
+    if len(keys) != 3:
+        errors.append("a reviewer invocation identity must separate remediation generations")
+    if collector.invocation_key(head, claims, "codex", 1, first) != collector.invocation_key(
+        head, claims, "codex", 1, first
+    ):
+        errors.append("a reviewer invocation identity must be stable within one remediation generation")
+    names = {orchestration.collector_run_name(1, head, item) for item in (base, first, second)}
+    if len(names) != 3 or orchestration.collector_run_name(1, head, base) != orchestration.collector_run_name(1, head):
+        errors.append("the collector run name must correlate one run per remediation generation")
+
+    # A separated identity function is not enough: the seam that actually adopts
+    # an already-posted reviewer trigger has to consume it, or a superseded
+    # generation's trigger is adopted forever and no reviewer is asked again.
+    def marker(generation: str) -> str:
+        backend = collector.GitHubBackend("owner/repo", "", 1, head, claims, 1, 1, generation)
+        return backend.invocation_marker({"id": "codex"}, 1)
+
+    if len({marker(item) for item in (base, first, second)}) != 3 or marker(first) != marker(first):
+        errors.append("reviewer trigger adoption must separate remediation generations")
+
+    # (2) trigger round trip
+    native_agent = {
+        "id": "codex",
+        "trigger_method": "github-pr-comment:@codex review",
+        "github_login": "chatgpt-codex-connector[bot]",
+    }
+    api_agent = {"id": "gemini", "trigger_method": "api:gemini"}
+    for parse, body in (
+        (collector.parse_native_trigger, collector.trigger_body(head, claims, native_agent, 1, 1, 1, first)),
+        (collector.parse_api_trigger, collector.api_trigger_body(head, claims, api_agent, 1, 1, 1, first)),
+    ):
+        parsed = parse(body)
+        if not isinstance(parsed, dict) or parsed.get("remediation_generation_id") != first:
+            errors.append("a reviewer trigger must carry the remediation generation it was minted for")
+        if parse(body.replace(first, second)) is not None:
+            errors.append("a reviewer trigger must not verify against a substituted remediation generation")
+
+    # (3) trusted derivation and bounds
+    resolved = orchestration.BlockingThread("PRRT_1", 1, "2026-09-18T01:35:24Z", True)
+    other = orchestration.BlockingThread("PRRT_2", 2, "2026-09-18T01:35:24Z", True)
+    identities = {
+        orchestration.remediation_generation_id(head, claims, ()),
+        orchestration.remediation_generation_id(head, claims, (resolved,)),
+        orchestration.remediation_generation_id(head, claims, (resolved, other)),
+        orchestration.remediation_generation_id("b" * 40, claims, (resolved,)),
+        orchestration.remediation_generation_id(head, "e" * 64, (resolved,)),
+    }
+    if len(identities) != 5:
+        errors.append("a remediation generation must bind the exact head, the claims digest and the resolved set")
+    if orchestration.remediation_generation_id(head, claims, ()) != orchestration.remediation_generation_id(
+        head, claims, []
+    ):
+        errors.append("a remediation generation must be a deterministic function of its evidence")
+    if not isinstance(orchestration.MAX_REMEDIATION_GENERATIONS, int) or (
+        orchestration.MAX_REMEDIATION_GENERATIONS < 1
+    ):
+        errors.append("remediation generations must be bounded by a positive budget")
+    cycle = orchestration.ReviewCycle(1, head, "WAITING_FOR_REVIEWER", "", 1, "", "d" * 64, first)
+    if orchestration.remediation_generation_admissible("owner/repo", "", cycle, first) is not False:
+        errors.append("an unchanged remediation generation must never authorise another reviewer invocation")
+
+    # The generation must be derived where the dispatch decision is made. A
+    # derivation nothing consumes would leave the orchestrator dispatching the
+    # base generation forever, with every identity above still perfectly correct.
+    try:
+        tree = ast.parse((ROOT / "scripts/hunter_review_orchestrator.py").read_text(encoding="utf-8"))
+    except (OSError, SyntaxError) as exc:
+        return [*errors, f"trusted review orchestrator source is unreadable: {type(exc).__name__}: {exc}"]
+    ensure_current = next(
+        (n for n in tree.body if isinstance(n, ast.FunctionDef) and n.name == "ensure_current"),
+        None,
+    )
+    if ensure_current is None or not any(
+        isinstance(node, ast.Call)
+        and isinstance(node.func, ast.Name)
+        and node.func.id == "current_remediation_generation"
+        for node in ast.walk(ensure_current)
+    ):
+        errors.append("the trusted orchestrator must derive the remediation generation where it decides to dispatch")
+
+    workflow = ROOT / REVIEWER_COLLECTOR_WORKFLOW
+    try:
+        definition = yaml.safe_load(workflow.read_text(encoding="utf-8"))
+    except (OSError, yaml.YAMLError) as exc:
+        return [*errors, f"reviewer collector workflow is unreadable: {type(exc).__name__}: {exc}"]
+    triggers = definition.get(True) if isinstance(definition, dict) else None
+    inputs = ((triggers or {}).get("workflow_dispatch") or {}).get("inputs") or {}
+    if "generation_id" not in inputs:
+        errors.append("the reviewer collector workflow must accept the remediation generation it is dispatched for")
+    steps = [
+        step
+        for job in (definition.get("jobs") or {}).values()
+        if isinstance(job, dict)
+        for step in (job.get("steps") or [])
+        if isinstance(step, dict)
+    ]
+    if not any("--generation" in str(step.get("run") or "") for step in steps):
+        errors.append("the reviewer collector workflow must forward the remediation generation to the collector")
+    return errors
+
+
 def validate_defect_prevention_lifecycle() -> list[str]:
     errors: list[str] = []
     registry = _load_object(REGISTRY_PATH)
@@ -1560,6 +1704,7 @@ def validate_defect_prevention_lifecycle() -> list[str]:
             errors.append(f"{defect_id}: prevented state requires recurrence escalation")
 
     errors.extend(validate_recurring_defect_families(registry, lifecycle))
+    errors.extend(validate_review_after_remediation_boundary())
     errors.extend(validate_code_write_policy())
     errors.extend(validate_reviewer_finding_dispositions())
     errors.extend(validate_historical_defect_backfill())

@@ -23,6 +23,9 @@ from typing import Any, Protocol
 
 import hunter_governance_review_v2 as governance
 import hunter_pre_ready_review as review
+import hunter_review_orchestrator as orchestration
+
+BASE_GENERATION = orchestration.BASE_GENERATION_ID
 
 WORKFLOW = ".github/workflows/hunter-reviewer-collector.yml"
 SCHEMA = "hunter.reviewer-collection.v1"
@@ -277,8 +280,23 @@ def _pages(repository: str, token: str, path: str, key: str | None = None) -> li
         page += 1
 
 
-def invocation_key(head: str, claims_id: str, agent_id: str, number: int) -> str:
-    return hashlib.sha256(f"{head}:{claims_id}:{agent_id}:{number}".encode()).hexdigest()
+def invocation_key(head: str, claims_id: str, agent_id: str, number: int, generation_id: str = BASE_GENERATION) -> str:
+    """The identity that makes one reviewer invocation reusable, not repeatable.
+
+    It deliberately excludes the collector run, so re-running the collector for
+    an unchanged cycle adopts the invocation it already made instead of asking
+    the reviewer twice. A remediation generation is the one thing that must make
+    it a *different* invocation: once the blocking findings of the previous
+    generation were resolved, the same reviewer has to be asked again about the
+    same head. The base generation reproduces the original material exactly, so
+    trigger comments and exhaustion receipts minted before remediation
+    generations existed stay verifiable byte-for-byte.
+    """
+
+    material = f"{head}:{claims_id}:{agent_id}:{number}"
+    if generation_id != BASE_GENERATION:
+        material = f"{material}:{generation_id}"
+    return hashlib.sha256(material.encode()).hexdigest()
 
 
 def workflow_correlation_id(
@@ -299,11 +317,17 @@ def workflow_correlation_id(
 
 
 def api_trigger_payload(
-    head: str, claims_id: str, agent: dict[str, Any], run_id: int, run_attempt: int, number: int
+    head: str,
+    claims_id: str,
+    agent: dict[str, Any],
+    run_id: int,
+    run_attempt: int,
+    number: int,
+    generation_id: str = BASE_GENERATION,
 ) -> dict[str, Any]:
     if not str(agent["trigger_method"]).startswith("api:"):
         raise ValueError("reviewer has no supported API trigger")
-    return {
+    payload = {
         "schema": "hunter.reviewer-trigger.v1",
         "head_sha": head,
         "claims_id": claims_id,
@@ -311,14 +335,26 @@ def api_trigger_payload(
         "collector_run_id": run_id,
         "collector_run_attempt": run_attempt,
         "attempt_number": number,
-        "invocation_key": invocation_key(head, claims_id, str(agent["id"]), number),
+        "invocation_key": invocation_key(head, claims_id, str(agent["id"]), number, generation_id),
     }
+    # The base generation is the absence of the field, never a field carrying a
+    # base value, so a pre-remediation trigger comment stays byte-identical and
+    # no two encodings of the same generation can exist.
+    if generation_id != BASE_GENERATION:
+        payload["remediation_generation_id"] = generation_id
+    return payload
 
 
 def api_trigger_body(
-    head: str, claims_id: str, agent: dict[str, Any], run_id: int, run_attempt: int, number: int
+    head: str,
+    claims_id: str,
+    agent: dict[str, Any],
+    run_id: int,
+    run_attempt: int,
+    number: int,
+    generation_id: str = BASE_GENERATION,
 ) -> str:
-    payload = api_trigger_payload(head, claims_id, agent, run_id, run_attempt, number)
+    payload = api_trigger_payload(head, claims_id, agent, run_id, run_attempt, number, generation_id)
     return (
         json.dumps(payload, sort_keys=True)
         + f'\nInvocation key: {payload["invocation_key"]}.'
@@ -350,8 +386,15 @@ def parse_api_trigger(body: str) -> dict[str, Any] | None:
         "attempt_number",
         "invocation_key",
     }
-    if set(value) != allowed:
+    if set(value) - {"remediation_generation_id"} != allowed:
         return None
+    generation_id = value.get("remediation_generation_id", BASE_GENERATION)
+    # A base generation must be encoded by omission, so the same generation can
+    # never be spelled two ways and adopt two distinct invocation identities.
+    if not isinstance(generation_id, str) or not orchestration.GENERATION_ID_PATTERN.fullmatch(generation_id):
+        if "remediation_generation_id" in value:
+            return None
+        generation_id = BASE_GENERATION
     if value.get("schema") != "hunter.reviewer-trigger.v1":
         return None
     if not re.fullmatch(r"[0-9a-f]{40}", str(value.get("head_sha") or "")):
@@ -376,7 +419,7 @@ def parse_api_trigger(body: str) -> dict[str, Any] | None:
     ):
         return None
     if value["invocation_key"] != invocation_key(
-        value["head_sha"], value["claims_id"], reviewer_agent, value["attempt_number"]
+        value["head_sha"], value["claims_id"], reviewer_agent, value["attempt_number"], generation_id
     ):
         return None
     return value
@@ -450,7 +493,15 @@ def parse_api_result(body: str) -> dict[str, Any] | None:
     return value
 
 
-def trigger_body(head: str, claims_id: str, agent: dict[str, Any], run_id: int, run_attempt: int, number: int) -> str:
+def trigger_body(
+    head: str,
+    claims_id: str,
+    agent: dict[str, Any],
+    run_id: int,
+    run_attempt: int,
+    number: int,
+    generation_id: str = BASE_GENERATION,
+) -> str:
     method = str(agent["trigger_method"])
     if not method.startswith("github-pr-comment:") or not governance.reviewer_login(agent):
         raise ValueError("reviewer has no supported authenticated GitHub trigger")
@@ -462,6 +513,8 @@ def trigger_body(head: str, claims_id: str, agent: dict[str, Any], run_id: int, 
         "summary": "<your substantive review summary>",
         "collector_run_id": run_id,
     }
+    # As in the API payload, the base generation is the absence of the line.
+    generation_line = "" if generation_id == BASE_GENERATION else f"\nRemediation generation: {generation_id}."
     return (
         method.split(":", 1)[1] + f"\nReview exact HEAD {head} and the complete review request in "
         f"{review.REVIEW_RELATIVE_PATH}. Report any blocking findings; do not issue a clear verdict if any remain. "
@@ -469,7 +522,8 @@ def trigger_body(head: str, claims_id: str, agent: dict[str, Any], run_id: int, 
         "reply with only this JSON result, filling in your own substantive summary: "
         + json.dumps(ack)
         + f'\nCollector invocation: {run_id}/{run_attempt}/{agent["id"]}/{number}.'
-        + f'\nInvocation key: {invocation_key(head, claims_id, str(agent["id"]), number)}.'
+        + generation_line
+        + f'\nInvocation key: {invocation_key(head, claims_id, str(agent["id"]), number, generation_id)}.'
     )
 
 
@@ -478,15 +532,17 @@ def parse_native_trigger(body: str) -> dict[str, Any] | None:
     match = re.search(
         r"Review exact HEAD ([0-9a-f]{40}).*?\"claims_id\": \"([0-9a-f]{64})\".*?"
         r"Collector invocation: (\d+)/(\d+)/([a-z0-9_-]+)/(\d+)\.\n"
+        r"(?:Remediation generation: ([0-9a-f]{16})\.\n)?"
         r"Invocation key: ([0-9a-f]{64})\.",
         body,
         re.S,
     )
     if match is None:
         return None
-    head, claims_id, run_id, run_attempt, agent_id, attempt, key = match.groups()
+    head, claims_id, run_id, run_attempt, agent_id, attempt, generation, key = match.groups()
     number = int(attempt)
-    if key != invocation_key(head, claims_id, agent_id, number):
+    generation_id = generation or BASE_GENERATION
+    if key != invocation_key(head, claims_id, agent_id, number, generation_id):
         return None
     return {
         "head_sha": head,
@@ -495,14 +551,26 @@ def parse_native_trigger(body: str) -> dict[str, Any] | None:
         "collector_run_id": int(run_id),
         "collector_run_attempt": int(run_attempt),
         "attempt_number": number,
+        "remediation_generation_id": generation_id,
     }
 
 
 class GitHubBackend:
-    def __init__(self, repository: str, token: str, pr: int, head: str, claims_id: str, run_id: int, run_attempt: int):
+    def __init__(
+        self,
+        repository: str,
+        token: str,
+        pr: int,
+        head: str,
+        claims_id: str,
+        run_id: int,
+        run_attempt: int,
+        generation_id: str = BASE_GENERATION,
+    ):
         self.repository, self.token, self.pr = repository, token, pr
         self.expected_head, self.claims_id = head, claims_id
         self.run_id, self.run_attempt = run_id, run_attempt
+        self.generation_id = generation_id
         self._default_branch: str | None = None
 
     def default_branch(self) -> str:
@@ -737,8 +805,20 @@ class GitHubBackend:
         result = local_review_result(self.repository, self.token, int(run["id"]), self.pr, self.expected_head)
         return local_review_state(result, self.expected_head, self.claims_id)
 
+    def invocation_marker(self, agent: dict[str, Any], number: int) -> str:
+        """The comment marker that identifies this collector's own invocation.
+
+        It is the single seam through which an already-posted reviewer trigger is
+        recognised and adopted, which is why it has to carry the remediation
+        generation: without it a superseded generation's trigger would be adopted
+        forever and the remediated head could never be reviewed again.
+        """
+
+        key = invocation_key(self.expected_head, self.claims_id, str(agent["id"]), number, self.generation_id)
+        return f"Invocation key: {key}."
+
     def _existing_trigger(self, agent: dict[str, Any], number: int) -> dict[str, Any] | None:
-        marker = f"Invocation key: {invocation_key(self.expected_head, self.claims_id, str(agent['id']), number)}."
+        marker = self.invocation_marker(agent, number)
         matches = [
             item
             for item in _pages(self.repository, self.token, f"issues/{self.pr}/comments")
@@ -774,7 +854,15 @@ class GitHubBackend:
         if method.startswith("api:"):
             provider = method.split(":", 1)[1]
             trigger = self._post_comment(
-                api_trigger_body(self.expected_head, self.claims_id, agent, self.run_id, self.run_attempt, number)
+                api_trigger_body(
+                    self.expected_head,
+                    self.claims_id,
+                    agent,
+                    self.run_id,
+                    self.run_attempt,
+                    number,
+                    self.generation_id,
+                )
             )
             payload = self._invoke_external(agent, number)
             state = "unavailable" if payload.get("verdict") == "unavailable" else external_verdict(payload)
@@ -819,7 +907,9 @@ class GitHubBackend:
                 "result_comment_id": result_comment["id"],
                 "collector_run_id": self.run_id,
             }
-        body = trigger_body(self.expected_head, self.claims_id, agent, self.run_id, self.run_attempt, number)
+        body = trigger_body(
+            self.expected_head, self.claims_id, agent, self.run_id, self.run_attempt, number, self.generation_id
+        )
         result = self._post_comment(body)
         result["collector_run_id"] = self.run_id
         return result
@@ -1095,6 +1185,20 @@ def load_exhaustion(
         raise ValueError("collector numeric identity fields must be integers")
     if not re.fullmatch("[0-9a-f]{64}", str(receipt.get("claims_id") or "")):
         raise ValueError("collector claims digest is malformed")
+    receipt_generation = receipt.get("remediation_generation_id", BASE_GENERATION)
+    if not isinstance(receipt_generation, str) or (
+        receipt_generation != BASE_GENERATION and not orchestration.GENERATION_ID_PATTERN.fullmatch(receipt_generation)
+    ):
+        raise ValueError("collector remediation generation is malformed")
+    # Exhaustion is generation-scoped evidence, not a permanent property of the
+    # head: once the blocking findings of that generation were resolved, every
+    # reviewer it recorded as exhausted is owed another invocation, so reusing
+    # the receipt would authorise a lower-priority reviewer over one that has not
+    # actually been asked about the remediated state.
+    if receipt_generation != orchestration.current_remediation_generation(
+        repository, token, pr, head, receipt["claims_id"]
+    ):
+        raise ValueError("collector receipt predates the current remediation generation")
     agents = review.enabled_pool_reviewers(pool)
     own = next((a["priority"] for a in agents if a["id"] == authority_type), float("inf"))
     # Ordering evidence covers every *enabled* reviewer above this authority, so
@@ -1199,6 +1303,7 @@ def load_exhaustion(
                     int(record.get("collector_run_id") or run_id),
                     int(record.get("collector_run_attempt") or run["run_attempt"]),
                     number,
+                    receipt_generation,
                 )
                 body_matches = parsed_trigger == expected_trigger
             else:
@@ -1209,6 +1314,7 @@ def load_exhaustion(
                     int(record.get("collector_run_id") or run_id),
                     int(record.get("collector_run_attempt") or run["run_attempt"]),
                     number,
+                    receipt_generation,
                 )
                 body_matches = trigger.get("body") == expected_body
             if (
@@ -1226,6 +1332,7 @@ def load_exhaustion(
                 receipt["claims_id"],
                 int(record.get("collector_run_id") or run_id),
                 int(record.get("collector_run_attempt") or run["run_attempt"]),
+                receipt_generation,
             ).response_state(agent, trigger)
             if live_state in {"clear", "blocking"}:
                 raise ValueError("higher-priority reviewer is available; exhaustion cannot be reused")
@@ -1242,6 +1349,7 @@ def load_exhaustion(
                     receipt["claims_id"],
                     int(record.get("collector_run_id") or run_id),
                     int(record.get("collector_run_attempt") or run["run_attempt"]),
+                    receipt_generation,
                 )._api_result(agent, trigger)
                 if api_result is None:
                     raise ValueError("trusted API reviewer result evidence is unavailable")
@@ -1303,10 +1411,20 @@ def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--pr", type=int, required=True)
     parser.add_argument("--head", required=True)
+    parser.add_argument(
+        "--generation",
+        default=BASE_GENERATION,
+        help="Remediation generation of this exact head, or empty for the candidate's first cycle.",
+    )
     parser.add_argument("--output", type=Path, required=True)
     args = parser.parse_args()
     if not re.fullmatch("[0-9a-f]{40}", args.head):
         raise ValueError("exact HEAD is required")
+    declared_generation = str(args.generation or BASE_GENERATION).strip()
+    if declared_generation != BASE_GENERATION and not orchestration.GENERATION_ID_PATTERN.fullmatch(
+        declared_generation
+    ):
+        raise ValueError("remediation generation identity is malformed")
     repository, token = os.environ["GITHUB_REPOSITORY"], os.environ["GITHUB_TOKEN"]
     run_id, run_attempt = int(os.environ["GITHUB_RUN_ID"]), int(os.environ["GITHUB_RUN_ATTEMPT"])
     pool, error = review.load_reviewer_pool()
@@ -1318,7 +1436,14 @@ def main() -> int:
     claims_id = review.review_id(document["claims"])
     if document.get("review_request") != {"schema": "hunter.review-request.v1", "claims_id": claims_id}:
         raise ValueError("an explicit current review request is required")
-    backend = GitHubBackend(repository, token, args.pr, args.head, claims_id, run_id, run_attempt)
+    # The dispatched generation correlates the run; it never authorises it. This
+    # trusted default-branch collector re-derives the generation from the same
+    # authenticated review-thread state and fails closed on any disagreement, so
+    # a dispatch input cannot buy a reviewer invocation the evidence does not.
+    actual_generation = orchestration.current_remediation_generation(repository, token, args.pr, args.head, claims_id)
+    if actual_generation != declared_generation:
+        raise ValueError("dispatched remediation generation is not the one trusted review-thread state derives")
+    backend = GitHubBackend(repository, token, args.pr, args.head, claims_id, run_id, run_attempt, declared_generation)
     attempts = collect_attempts(pool, args.head, backend)
     if backend.head() != args.head:
         raise ValueError("HEAD changed before receipt publication")
@@ -1330,6 +1455,7 @@ def main() -> int:
         "run_id": run_id,
         "run_attempt": run_attempt,
         "claims_id": claims_id,
+        "remediation_generation_id": declared_generation,
         "configuration_digest": configuration_digest(pool),
         "attempts": attempts,
     }

@@ -248,11 +248,27 @@ def test_collector_liveness_ignores_runs_for_another_candidate(monkeypatch):
     assert orchestrator.collector_liveness("owner/repo", "token", 472, HEAD) == ("missing", 0)
 
 
+def _render_run_name(template: str, generation_id: str) -> str:
+    """Render the workflow run-name template the way Actions would.
+
+    The generation expression is `a && b || c`, which yields `b` when the input
+    is a non-empty string and `c` when it is empty or absent.
+    """
+
+    suffix = f" GEN {generation_id}" if generation_id else ""
+    return (
+        template.replace("${{ inputs.pr_number }}", "472")
+        .replace("${{ inputs.head_sha }}", HEAD)
+        .replace("${{ inputs.generation_id && format(' GEN {0}', inputs.generation_id) || '' }}", suffix)
+    )
+
+
 def test_collector_workflow_renders_the_correlated_run_name():
     text = pathlib.Path(REPOSITORY_ROOT, ".github/workflows/hunter-reviewer-collector.yml").read_text(encoding="utf-8")
-    rendered = orchestrator.collector_run_name(472, HEAD)
     template = yaml.safe_load(text)["run-name"]
-    assert template.replace("${{ inputs.pr_number }}", "472").replace("${{ inputs.head_sha }}", HEAD) == rendered
+
+    for generation_id in (orchestrator.BASE_GENERATION_ID, "0123456789abcdef"):
+        assert _render_run_name(template, generation_id) == orchestrator.collector_run_name(472, HEAD, generation_id)
 
 
 def test_dispatch_collector_sends_only_exact_identity(monkeypatch):
@@ -269,7 +285,7 @@ def test_dispatch_collector_sends_only_exact_identity(monkeypatch):
         (
             "POST",
             "actions/workflows/hunter-reviewer-collector.yml/dispatches",
-            {"ref": "main", "inputs": {"pr_number": "472", "head_sha": HEAD}},
+            {"ref": "main", "inputs": {"pr_number": "472", "head_sha": HEAD, "generation_id": ""}},
         )
     ]
 
@@ -522,7 +538,7 @@ def test_current_pr_waits_for_trusted_review_prerequisites(monkeypatch):
         "request_json",
         lambda *_args: {"state": "open", "head": {"sha": HEAD}},
     )
-    monkeypatch.setattr(orchestrator, "review_prerequisites_ready", lambda *_args: False, raising=False)
+    monkeypatch.setattr(orchestrator, "review_request_state", lambda *_args: (False, ""), raising=False)
     calls = []
     monkeypatch.setattr(orchestrator, "ensure_collector", lambda *_args: calls.append(True), raising=False)
 

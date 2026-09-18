@@ -6,7 +6,9 @@ import argparse
 import hashlib
 import json
 import os
+import re
 import sys
+from collections.abc import Iterable
 from dataclasses import dataclass, replace
 from datetime import UTC, datetime
 from pathlib import Path
@@ -41,6 +43,49 @@ MAX_COLLECTOR_DISPATCHES = 3
 #: mistaken for a dead collector and duplicate the dispatch.
 COLLECTOR_LIVENESS_GRACE_SECONDS = 180
 PENDING_STATES = frozenset({"WAITING_FOR_REVIEWER", "REVIEW_IN_PROGRESS", "FAILOVER_IN_PROGRESS", "POOL_EXHAUSTED"})
+#: Issue #461 / PR #473: an exact-head cycle whose reviewers were all exhausted
+#: used to be the end of the line. Remediating the blocking findings it produced
+#: could never start another review of the same immutable head, so the candidate
+#: stayed permanently MISSING_REVIEW_AUTHORITY. A remediation generation is the
+#: bounded, evidence-derived permission to start exactly one more cycle for the
+#: same head and claims, and its identity is a digest of trusted GitHub state.
+REMEDIATION_GENERATION_SCHEMA = "hunter.remediation-generation.v1"
+GENERATION_ID_PATTERN = re.compile(r"[0-9a-f]{16}")
+#: The generation of a candidate whose authenticated blocking findings have never
+#: been resolved -- the first exact-head cycle. It is the empty string rather than
+#: a digest so that every identity derived from it (collector run name, reviewer
+#: invocation key, cycle status) stays byte-identical to the pre-remediation form,
+#: and an in-flight cycle is therefore never restarted by deploying this change.
+BASE_GENERATION_ID = ""
+#: How a non-base generation is rendered into the collector run name.
+GENERATION_RUN_NAME_SEPARATOR = " GEN "
+#: Remediation is bounded exactly like collector dispatch is: one exact head may
+#: spend at most this many generations in total (its first cycle plus its
+#: review-after-remediation cycles). Past that the candidate stays pending rather
+#: than looping reviewers, and a new HEAD -- a real new candidate -- starts over.
+MAX_REMEDIATION_GENERATIONS = 3
+#: Hunter's own automation identity. It authors the reviewer trigger comments, so
+#: a thread it opened is never independent review evidence and must never be able
+#: to mint the permission to dispatch another review of its own.
+HUNTER_AUTOMATION_LOGIN = "github-actions"
+
+_BLOCKING_THREADS_QUERY = """
+query($owner: String!, $name: String!, $number: Int!, $after: String) {
+  repository(owner: $owner, name: $name) {
+    pullRequest(number: $number) {
+      author { login }
+      reviewThreads(first: 100, after: $after) {
+        nodes {
+          id
+          isResolved
+          comments(first: 1) { nodes { databaseId createdAt author { login __typename } } }
+        }
+        pageInfo { hasNextPage endCursor }
+      }
+    }
+  }
+}
+"""
 
 
 @dataclass(frozen=True)
@@ -52,6 +97,20 @@ class ReviewCycle:
     trigger_id: int | None
     started_at: str
     config_digest: str
+    #: Which remediation generation of this exact head/claims the cycle belongs
+    #: to. Defaulted to the base generation so a status published before
+    #: remediation generations existed reads as the candidate's first cycle.
+    generation_id: str = BASE_GENERATION_ID
+
+
+@dataclass(frozen=True)
+class BlockingThread:
+    """An authenticated reviewer finding thread and whether it is resolved."""
+
+    thread_id: str
+    comment_id: int
+    created_at: str
+    resolved: bool
 
 
 @dataclass(frozen=True)
@@ -59,6 +118,108 @@ class ProviderDecision:
     state: str
     next_provider: str
     reason: str
+
+
+def blocking_reviewer_threads(repository: str, token: str, pr_number: int) -> tuple[BlockingThread, ...]:
+    """Every authenticated reviewer finding thread on this pull request.
+
+    A thread counts only when an authenticated reviewer *app* opened it, and that
+    app is neither Hunter's own automation nor the pull-request author. That is
+    what makes a remediation generation unforgeable: a candidate cannot author,
+    impersonate or fabricate one of these threads, so candidate prose -- or a
+    thread the candidate opened on its own pull request and then resolved --
+    can never mint the permission to start another reviewer cycle. Human review
+    threads are deliberately excluded for the same reason: a repository member is
+    not a machine-checkable reviewer identity here, and under-counting only ever
+    withholds an extra review, never grants one.
+
+    Unreadable or malformed thread evidence raises. Unknown thread state must
+    fail closed: silently reading it as "nothing was blocking" would collapse the
+    generation to the base one and hand the candidate a free dispatch.
+    """
+
+    owner, name = repository.split("/", 1)
+    cursor: str | None = None
+    seen: set[str] = set()
+    threads: list[BlockingThread] = []
+    while True:
+        data = transport.request_graphql_json(
+            url="https://api.github.com/graphql",
+            headers={},
+            token=token,
+            query=_BLOCKING_THREADS_QUERY,
+            variables={"owner": owner, "name": name, "number": pr_number, "after": cursor},
+            what="remediation generation review threads",
+        )
+        pull_request = data["repository"]["pullRequest"]
+        author = str((pull_request.get("author") or {}).get("login") or "").lower()
+        page = pull_request["reviewThreads"]["pageInfo"]
+        nodes = pull_request["reviewThreads"]["nodes"]
+        if not isinstance(nodes, list) or not isinstance(page.get("hasNextPage"), bool):
+            raise ValueError("malformed review thread pagination")
+        for node in nodes:
+            if not isinstance(node, dict) or not isinstance(node.get("isResolved"), bool) or not node.get("id"):
+                raise ValueError("malformed review thread")
+            comments = (node.get("comments") or {}).get("nodes") or []
+            if not isinstance(comments, list) or not comments or not isinstance(comments[0], dict):
+                raise ValueError("malformed review thread comment evidence")
+            opening = comments[0]
+            opener = opening.get("author") or {}
+            login = str(opener.get("login") or "").lower()
+            comment_id = opening.get("databaseId")
+            created_at = str(opening.get("createdAt") or "")
+            if type(comment_id) is not int or comment_id <= 0 or not created_at:
+                raise ValueError("malformed review thread comment identity")
+            if opener.get("__typename") != "Bot":
+                continue
+            if not login or login == HUNTER_AUTOMATION_LOGIN or login == author:
+                continue
+            threads.append(BlockingThread(str(node["id"]), comment_id, created_at, bool(node["isResolved"])))
+        if not page["hasNextPage"]:
+            return tuple(threads)
+        cursor = page.get("endCursor")
+        if not isinstance(cursor, str) or not cursor or cursor in seen:
+            raise ValueError("invalid review thread cursor")
+        seen.add(cursor)
+
+
+def remediation_generation_id(head_sha: str, claims_id: str, resolved: Iterable[BlockingThread]) -> str:
+    """The deterministic identity of a review-after-remediation generation.
+
+    The digest binds the exact head and the claims digest as well as the whole
+    resolved blocking-thread set, so a generation minted for one head or one set
+    of claims can never be replayed into another, and it advances only when the
+    trusted thread set itself actually changes.
+    """
+
+    material = json.dumps(
+        {
+            "schema": REMEDIATION_GENERATION_SCHEMA,
+            "head_sha": head_sha,
+            "claims_id": claims_id,
+            "resolved_blocking_threads": sorted(
+                [thread.thread_id, thread.comment_id, thread.created_at] for thread in resolved
+            ),
+        },
+        sort_keys=True,
+        separators=(",", ":"),
+    )
+    return hashlib.sha256(material.encode()).hexdigest()[:16]
+
+
+def current_remediation_generation(repository: str, token: str, pr_number: int, head_sha: str, claims_id: str) -> str:
+    """The generation this exact head and claims is currently entitled to review.
+
+    It stays the base generation until an authenticated blocking review thread
+    has actually been resolved, and from then on it is the digest above. So the
+    identity advances exactly once per real remediation of authenticated
+    findings, and never on its own, on a re-run, or on candidate assertion.
+    """
+
+    resolved = tuple(thread for thread in blocking_reviewer_threads(repository, token, pr_number) if thread.resolved)
+    if not resolved:
+        return BASE_GENERATION_ID
+    return remediation_generation_id(head_sha, claims_id, resolved)
 
 
 def runner_state(repository: str, token: str, label: str = "hunter-reviewer") -> str:
@@ -189,7 +350,13 @@ def _parse_cycle(status: dict[str, Any], pr_number: int, head_sha: str) -> Revie
     if str(status.get("context") or "") != f"{CONTEXT_PREFIX}{pr_number}":
         return None
     parts = str(status.get("description") or "").split("|")
-    if len(parts) != 4 or len(parts[3]) != 64:
+    # A four-field description predates remediation generations, so it describes
+    # the candidate's first cycle: the base generation, by definition.
+    if len(parts) == 4:
+        parts = [*parts, BASE_GENERATION_ID]
+    if len(parts) != 5 or len(parts[3]) != 64:
+        return None
+    if parts[4] != BASE_GENERATION_ID and not GENERATION_ID_PATTERN.fullmatch(parts[4]):
         return None
     try:
         trigger = int(parts[2]) or None
@@ -203,6 +370,7 @@ def _parse_cycle(status: dict[str, Any], pr_number: int, head_sha: str) -> Revie
         trigger_id=trigger,
         started_at=str(status.get("created_at") or ""),
         config_digest=parts[3],
+        generation_id=parts[4],
     )
 
 
@@ -314,47 +482,86 @@ def current_run_id() -> int | None:
     return int(raw) if raw.isdigit() and int(raw) > 0 else None
 
 
-def dispatch_collector(repository: str, token: str, pr_number: int, head_sha: str) -> None:
+def dispatch_collector(
+    repository: str, token: str, pr_number: int, head_sha: str, generation_id: str = BASE_GENERATION_ID
+) -> None:
     request_json(
         repository,
         token,
         "POST",
         f"actions/workflows/{COLLECTOR_WORKFLOW}/dispatches",
-        {"ref": "main", "inputs": {"pr_number": str(pr_number), "head_sha": head_sha}},
+        {
+            "ref": "main",
+            "inputs": {"pr_number": str(pr_number), "head_sha": head_sha, "generation_id": generation_id},
+        },
     )
 
 
-def collector_run_name(pr_number: int, head_sha: str) -> str:
+def collector_run_name(pr_number: int, head_sha: str, generation_id: str = BASE_GENERATION_ID) -> str:
     """The run name the collector workflow renders for this exact dispatch.
 
-    The collector workflow derives its ``run-name`` from the same two inputs, so
-    a run carrying this name is a run dispatched for this pull request at this
-    exact head. GitHub does not report workflow-dispatch inputs on the run, and
-    timestamps or event kind alone would also match an unrelated dispatch.
+    The collector workflow derives its ``run-name`` from the same inputs, so a
+    run carrying this name is a run dispatched for this pull request at this
+    exact head and remediation generation. GitHub does not report
+    workflow-dispatch inputs on the run, and timestamps or event kind alone would
+    also match an unrelated dispatch. The base generation renders no suffix, so a
+    cycle that started before remediation generations existed keeps correlating
+    to its own already-listed runs.
     """
 
-    return f"Hunter Reviewer Collector PR {pr_number} HEAD {head_sha}"
+    name = f"Hunter Reviewer Collector PR {pr_number} HEAD {head_sha}"
+    return name if generation_id == BASE_GENERATION_ID else f"{name}{GENERATION_RUN_NAME_SEPARATOR}{generation_id}"
 
 
-def collector_runs(repository: str, token: str, pr_number: int, head_sha: str) -> list[dict[str, Any]]:
+def _collector_workflow_runs(repository: str, token: str) -> list[dict[str, Any]]:
     payload = request_json(
         repository, token, "GET", f"actions/workflows/{COLLECTOR_WORKFLOW}/runs?event=workflow_dispatch&per_page=50"
     )
     runs = payload.get("workflow_runs", []) if isinstance(payload, dict) else []
-    expected = collector_run_name(pr_number, head_sha)
-    return [
-        run
-        for run in runs
-        if isinstance(run, dict)
-        and str(run.get("display_title") or run.get("name") or "") == expected
-        and str(run.get("path") or "") == COLLECTOR_WORKFLOW_PATH
-    ]
+    return [run for run in runs if isinstance(run, dict) and str(run.get("path") or "") == COLLECTOR_WORKFLOW_PATH]
 
 
-def collector_liveness(repository: str, token: str, pr_number: int, head_sha: str) -> tuple[str, int]:
+def _run_title(run: dict[str, Any]) -> str:
+    return str(run.get("display_title") or run.get("name") or "")
+
+
+def collector_runs(
+    repository: str, token: str, pr_number: int, head_sha: str, generation_id: str = BASE_GENERATION_ID
+) -> list[dict[str, Any]]:
+    expected = collector_run_name(pr_number, head_sha, generation_id)
+    return [run for run in _collector_workflow_runs(repository, token) if _run_title(run) == expected]
+
+
+def remediation_generations_used(repository: str, token: str, pr_number: int, head_sha: str) -> set[str]:
+    """Every generation this exact head has already spent a collector run on.
+
+    The budget is read from the trusted run listing rather than from the cycle
+    status, because the status only ever records the newest generation: counting
+    it would reset the budget every time a generation advanced, which is exactly
+    the unbounded reviewer loop this transition must not become.
+    """
+
+    base = collector_run_name(pr_number, head_sha)
+    used: set[str] = set()
+    for run in _collector_workflow_runs(repository, token):
+        title = _run_title(run)
+        if title == base:
+            used.add(BASE_GENERATION_ID)
+            continue
+        if not title.startswith(base + GENERATION_RUN_NAME_SEPARATOR):
+            continue
+        candidate = title[len(base) + len(GENERATION_RUN_NAME_SEPARATOR) :]
+        if GENERATION_ID_PATTERN.fullmatch(candidate):
+            used.add(candidate)
+    return used
+
+
+def collector_liveness(
+    repository: str, token: str, pr_number: int, head_sha: str, generation_id: str = BASE_GENERATION_ID
+) -> tuple[str, int]:
     """Whether a collector for this exact cycle is running or already succeeded."""
 
-    runs = collector_runs(repository, token, pr_number, head_sha)
+    runs = collector_runs(repository, token, pr_number, head_sha, generation_id)
     for run in runs:
         status = str(run.get("status") or "")
         if status in ACTIVE_RUN_STATES:
@@ -393,7 +600,7 @@ def collector_needs_dispatch(repository: str, token: str, cycle: ReviewCycle) ->
     if not _older_than(cycle.started_at, COLLECTOR_LIVENESS_GRACE_SECONDS):
         return False
     try:
-        liveness, count = collector_liveness(repository, token, cycle.pr_number, cycle.head_sha)
+        liveness, count = collector_liveness(repository, token, cycle.pr_number, cycle.head_sha, cycle.generation_id)
     except transport.GitHubRequestError as exc:
         # Unreadable liveness evidence is not evidence of a dead collector.
         print(f"Collector liveness evidence unavailable; not re-dispatching: {exc}", file=sys.stderr)
@@ -410,6 +617,45 @@ def collector_needs_dispatch(repository: str, token: str, cycle: ReviewCycle) ->
     return True
 
 
+def remediation_generation_admissible(repository: str, token: str, cycle: ReviewCycle, generation_id: str) -> bool:
+    """Whether a newly observed remediation generation may start one more cycle.
+
+    A material transition is necessary but never sufficient. The previous
+    generation's collector has to be finished, or two reviewers would be run
+    against the same immutable head at once; a collector must not already exist
+    for this generation, so a status that failed to advance cannot be read as a
+    second dispatch permit; and the exact head's generation budget must still
+    have room, so remediation can never turn into an unbounded reviewer retry.
+
+    Unreadable evidence is not evidence of a transition: it refuses, leaving the
+    candidate pending on the generation it already has.
+    """
+
+    if generation_id == cycle.generation_id:
+        return False
+    try:
+        prior_state, _prior_count = collector_liveness(
+            repository, token, cycle.pr_number, cycle.head_sha, cycle.generation_id
+        )
+        _state, started = collector_liveness(repository, token, cycle.pr_number, cycle.head_sha, generation_id)
+        used = remediation_generations_used(repository, token, cycle.pr_number, cycle.head_sha)
+    except (transport.GitHubRequestError, ValueError) as exc:
+        print(f"Remediation generation evidence unavailable; not dispatching: {exc}", file=sys.stderr)
+        return False
+    if prior_state == "active":
+        return False
+    if started:
+        return False
+    if len(used | {generation_id}) > MAX_REMEDIATION_GENERATIONS:
+        print(
+            f"Remediation generation budget exhausted for PR #{cycle.pr_number} at {cycle.head_sha[:10]} "
+            f"after {len(used)} generations; review remains pending.",
+            file=sys.stderr,
+        )
+        return False
+    return True
+
+
 def publish_cycle(
     repository: str,
     token: str,
@@ -418,7 +664,7 @@ def publish_cycle(
     cycle: ReviewCycle,
 ) -> None:
     trigger = cycle.trigger_id or 0
-    description = f"{cycle.state}|{cycle.provider_id}|{trigger}|{cycle.config_digest}"
+    description = f"{cycle.state}|{cycle.provider_id}|{trigger}|{cycle.config_digest}|{cycle.generation_id}"
     run_id = current_run_id()
     server = os.environ.get("GITHUB_SERVER_URL") or "https://github.com"
     target_url = f"{server}/{repository}/actions/runs/{run_id}" if run_id else ""
@@ -436,13 +682,21 @@ def publish_cycle(
     )
 
 
-def ensure_collector(repository: str, token: str, pr_number: int, head_sha: str) -> ReviewCycle:
+def ensure_collector(
+    repository: str, token: str, pr_number: int, head_sha: str, generation_id: str = BASE_GENERATION_ID
+) -> ReviewCycle:
     digest = reviewer_pool_config_digest()
     state, existing, _error = read_cycle(repository, token, pr_number, head_sha)
     if state == "present" and existing is not None and existing.config_digest == digest:
-        if existing.state in {"REVIEW_CLEAR", "FINDINGS_OPEN", "POOL_EXHAUSTED"}:
-            return existing
-        if existing.trigger_id is not None and not collector_needs_dispatch(repository, token, existing):
+        if existing.generation_id == generation_id:
+            # The same generation is idempotent: whatever happened to this head's
+            # reviewers already happened for these exact claims and this exact
+            # resolved-finding set, so nothing here may invoke them a second time.
+            if existing.state in {"REVIEW_CLEAR", "FINDINGS_OPEN", "POOL_EXHAUSTED"}:
+                return existing
+            if existing.trigger_id is not None and not collector_needs_dispatch(repository, token, existing):
+                return existing
+        elif not remediation_generation_admissible(repository, token, existing, generation_id):
             return existing
 
     cycle = ReviewCycle(
@@ -453,6 +707,7 @@ def ensure_collector(repository: str, token: str, pr_number: int, head_sha: str)
         trigger_id=None,
         started_at="",
         config_digest=digest,
+        generation_id=generation_id,
     )
     # The dispatch identity is resolved before the dispatch, never after it.
     # Failing afterwards would leave a live collector recorded with no trigger,
@@ -462,21 +717,28 @@ def ensure_collector(repository: str, token: str, pr_number: int, head_sha: str)
     if run_id is None:
         raise RuntimeError("trusted orchestration requires GITHUB_RUN_ID")
     publish_cycle(repository, token, head_sha, cycle=cycle)
-    dispatch_collector(repository, token, pr_number, head_sha)
+    dispatch_collector(repository, token, pr_number, head_sha, generation_id)
     cycle = replace(cycle, trigger_id=run_id)
     publish_cycle(repository, token, head_sha, cycle=cycle)
     return cycle
 
 
-def review_prerequisites_ready(repository: str, token: str, pr_number: int, head_sha: str) -> bool:
+def review_request_state(repository: str, token: str, pr_number: int, head_sha: str) -> tuple[bool, str]:
+    """Whether this head carries a current review request, and which claims it is.
+
+    The claims digest is returned with the readiness answer because the
+    remediation generation is bound to it: resolving the request twice would let
+    the generation be derived from claims the dispatch decision never saw.
+    """
+
     import hunter_governance_review_v2 as governance
 
     preflight_state, _ = governance.read_trusted_upgrade_status(repository, token, head_sha, pr_number)
     if preflight_state != "success":
-        return False
+        return False, ""
     request_state, document, _ = governance.read_head_pre_ready_review(repository, token, head_sha)
     if request_state != "present" or not isinstance(document, dict):
-        return False
+        return False, ""
     request = document.get("review_request")
     if not (
         isinstance(request, dict)
@@ -484,9 +746,13 @@ def review_prerequisites_ready(repository: str, token: str, pr_number: int, head
         and isinstance(request.get("claims_id"), str)
         and len(request["claims_id"]) == 64
     ):
-        return False
+        return False, ""
     valid, _reason = governance.valid_current_review_request(repository, token, pr_number, head_sha, document)
-    return valid
+    return bool(valid), str(request["claims_id"]) if valid else ""
+
+
+def review_prerequisites_ready(repository: str, token: str, pr_number: int, head_sha: str) -> bool:
+    return review_request_state(repository, token, pr_number, head_sha)[0]
 
 
 def ensure_current(repository: str, token: str, pr_number: int) -> ReviewCycle | None:
@@ -496,9 +762,14 @@ def ensure_current(repository: str, token: str, pr_number: int) -> ReviewCycle |
     head_sha = str((pr.get("head") or {}).get("sha") or "")
     if not head_sha:
         raise RuntimeError("current pull-request head is unavailable")
-    if not review_prerequisites_ready(repository, token, pr_number, head_sha):
+    ready, claims_id = review_request_state(repository, token, pr_number, head_sha)
+    if not ready:
         return None
-    return ensure_collector(repository, token, pr_number, head_sha)
+    # Derived here, never accepted from a dispatch input or from candidate prose:
+    # the generation is what authorises one more reviewer invocation, so only
+    # trusted GitHub review-thread state may decide it.
+    generation_id = current_remediation_generation(repository, token, pr_number, head_sha, claims_id)
+    return ensure_collector(repository, token, pr_number, head_sha, generation_id)
 
 
 def parser() -> argparse.ArgumentParser:

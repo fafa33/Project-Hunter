@@ -382,6 +382,16 @@
       "guard": "A deterministic identity derived from a document's own claims proves internal consistency, never provenance: every field hunter-issue-agent-authorization-v1 covers -- repository, Issue number, URL, title, body, owner login, governed label, updated_at -- is public on an owner-authored Issue, so any caller who can reach the credential-free issuer endpoint can recompute the digest and mint a self-consistent document. Comparing authorized_by to configured owner text compares attacker-chosen text to a constant and proves nothing either. The correcting change adds authentication as a separate outer schema rather than redefining the canonical payload named by accepted ADR 0036 s7: hunter-issue-agent-signed-authorization-v1 carries that exact payload verbatim plus a domain-separated Ed25519 issuer signature over the whole payload, including its authorization_id and schema_version. The workflow that actually observes the owner's issues:labeled event holds the private key as a repository secret; the composition root verifies with a public key captured once at trusted bootstrap, before the ledger claim, before durable intake and before any dispatch. The envelope is the only executable form, so a bare unsigned payload is refused on the outer field set and has no execution path. The split is asymmetric on purpose: the execution side holds only the public half, so it can verify an owner authorization and can never mint one, the keypair is distinct from the Smart Prompt automation keypair, and a later environment mutation cannot move the trust root. A downstream content-classification gate is not a substitute: Source Handling governs whether an exact document scope may be processed, so for any Issue whose exact content already carries published FACT/POLICY/FIELD_CATEGORY_REGISTRY authority it admits a forged payload as readily as a genuine one.",
       "test": "tests/test_issue_agent_execution.py::test_valid_public_claims_without_the_trusted_issuer_proof_cannot_dispatch",
       "status": "guarded"
+    },
+    {
+      "id": "RAR-001",
+      "class": "exhausted-exact-head-review-cycle-cannot-be-reviewed-after-remediation",
+      "source": "Issue #461 PR #473, 2026-09-18: two authenticated Codex P1 threads (r4042982311, r4042982318) were fixed and resolved, every review thread was resolved, and the candidate still reported MISSING_REVIEW_AUTHORITY with nothing left that could clear it",
+      "classification": "systemic",
+      "guard_boundary": "trusted exact-head review orchestration and reviewer invocation identity",
+      "guard": "Every reviewer invocation was keyed by exact head and claims digest alone, and the collector run that correlates those invocations was named the same way, so a cycle whose reviewers had all been exhausted or timed out was terminal for that immutable head: the collector read as already completed, the reviewer trigger comment read as already posted, and remediating the blocking findings the cycle itself produced could buy no further review. The repair is a remediation generation: a digest over the exact head, the claims digest and the full set of resolved blocking review threads, where a blocking thread counts only when an authenticated reviewer app that is neither Hunter's own automation nor the pull-request author opened it. It is derived from trusted GitHub review-thread state by the trusted default-branch orchestrator and re-derived independently by the trusted collector, which fails closed when the generation it was dispatched for is not the one the evidence supports, so neither candidate prose nor a dispatch input can mint one. The generation enters the collector run name, the reviewer invocation key, the reviewer trigger body and the collector receipt, so a new generation buys exactly one new invocation per reviewer while an unchanged generation stays idempotent; an exhaustion receipt from a superseded generation is refused rather than replayed. The transition is bounded on every side: the previous generation's collector must be finished, a collector must not already exist for this generation, and one exact head may spend at most MAX_REMEDIATION_GENERATIONS generations before the candidate stays pending. Exact-head and claims binding, authenticated reviewer identity, fail-closed pending semantics and human merge approval are unchanged.",
+      "test": "tests/test_review_after_remediation_generation.py::test_exhausted_cycle_redispatches_exactly_once_after_blockers_are_resolved",
+      "status": "guarded"
     }
   ],
   "families": [
@@ -1167,6 +1177,39 @@
       ],
       "sources": [
         "Issue #449 (2026-09-10): Codex P1 on PR #450 documented the deployed issuer entry point claiming the ledger before the Source Handling preflight; the corrective PR #453 fixed both entry points"
+      ]
+    },
+    {
+      "id": "DFF-024",
+      "title": "exhausted-exact-head-review-cycle-has-no-review-after-remediation-transition",
+      "invariant": "Remediating the authenticated blocking findings of an exact-head review cycle must be able to start exactly one new review generation for that same exact head and claims, and must never be able to start more than that. The permission to start it is a remediation generation: a deterministic identity derived from trusted GitHub state only -- the exact head, the claims digest, and the set of resolved blocking review threads, where a thread counts as a blocking finding only when an authenticated reviewer app that is neither Hunter's own automation nor the pull-request author opened it. Candidate prose, a candidate-authored thread the candidate then resolves, a dispatch input, a re-run, or a remembered result may never advance it: the trusted default-branch orchestrator derives the generation and the trusted collector re-derives it independently and fails closed on disagreement. The generation must be part of every identity that decides whether a reviewer is invoked again -- the collector run name, the reviewer invocation key, the reviewer trigger body, and the collector receipt -- so that an advanced generation buys exactly one invocation per reviewer and an unchanged generation buys none, and so that exhaustion recorded under a superseded generation is refused rather than replayed to justify a lower-priority authority. The transition is bounded on every side: it requires a material change of generation, it requires the previous generation's collector to be finished and no collector to already exist for this one, and one exact head may spend only a bounded number of generations before the candidate stays pending. Everything the previous boundary owned is unchanged by it: exact-head and claims binding, authenticated reviewer identity, fail-closed pending semantics, zero unresolved review threads, and human merge approval.",
+      "lifecycle": "locally-enforced",
+      "applicability": {
+        "changed_paths": [
+          "scripts/hunter_review_orchestrator.py",
+          "scripts/hunter_reviewer_collector.py",
+          "scripts/hunter_governance_review_v2.py",
+          ".github/workflows/hunter-reviewer-collector.yml",
+          ".github/workflows/hunter-governance-reconcile.yml",
+          "docs/CODE_WRITE_POLICY.json"
+        ],
+        "rationale": "The orchestrator decides whether a reviewer is invoked again for an immutable head, the collector owns the invocation identity that decision is spent against, and the reconcile workflow is the only trusted surface that runs the orchestrator. A regression in any of them restores the terminal state PR #473 exposed, where a fully remediated candidate can never obtain review authority again."
+      },
+      "prevention": {
+        "mechanism": "scripts/hunter_defect_prevention_preflight.py::validate_review_after_remediation_boundary runs inside the Defect Prevention Guard at the push boundary and in the hosted preflight. It checks the invariant semantically against the live implementation rather than by wording: that the remediation generation separates reviewer invocation identities and collector run names while the base generation reproduces the pre-remediation identity exactly; that the generation survives a round trip through both the native and API reviewer triggers and that a substituted generation does not verify; that the generation identity binds exact head, claims digest and resolved thread set and is a deterministic function of that evidence; that the budget is a positive bound and an unchanged generation is never admissible; and that the reviewer collector workflow both accepts the generation input and forwards it to the collector, which re-derives it from trusted review-thread state.",
+        "boundary": "local-pre-push",
+        "guard_reference": "scripts/hunter_defect_prevention_preflight.py::validate_review_after_remediation_boundary"
+      },
+      "regression_evidence": [
+        "tests/test_review_after_remediation_generation.py::test_exhausted_cycle_redispatches_exactly_once_after_blockers_are_resolved",
+        "tests/test_review_after_remediation_generation.py::test_reconciling_the_same_generation_again_never_redispatches",
+        "tests/test_review_after_remediation_generation.py::test_candidate_authored_evidence_cannot_mint_a_remediation_generation",
+        "tests/test_review_after_remediation_generation.py::test_remediation_stays_inside_a_bounded_generation_budget",
+        "tests/test_review_after_remediation_generation.py::test_a_dispatched_generation_trusted_state_does_not_derive_fails_closed",
+        "tests/test_hunter_reviewer_collector.py::test_exhaustion_receipt_from_a_prior_remediation_generation_is_not_reusable"
+      ],
+      "sources": [
+        "Issue #461 (2026-09-18): PR #473 remediated both authenticated Codex P1 findings (threads r4042982311 and r4042982318) and resolved every review thread, yet stayed permanently MISSING_REVIEW_AUTHORITY because the exact-head collector run 35348625886 had already completed with Codex timed out, Gemini 503 and Groq 403, and no identity existed that could ask any of them again"
       ]
     }
   ]
