@@ -1,3 +1,4 @@
+import re
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -13,5 +14,5 @@ def test_bootstrap_requires_ollama_model_and_dedicated_runner_label():
 def test_bootstrap_never_echoes_registration_token():
     text = (ROOT / "scripts/bootstrap_hunter_review_runner.sh").read_text()
     assert "set -x" not in text
-    assert "echo $TOKEN" not in text
-    assert "printf $TOKEN" not in text
+    token_output = re.compile(r"(?m)^\s*(?:echo|printf)\b[^\n]*\$\{?TOKEN\}?\b")
+    assert token_output.search(text) is None

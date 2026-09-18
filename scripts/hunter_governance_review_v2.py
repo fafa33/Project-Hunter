@@ -504,12 +504,14 @@ def review_adoption_acknowledgement(
     ):
         return None
     body = str(observation.get("body") or "").strip()
+    body = re.sub(r"^###\s+💡\s+", "", body, count=1)
     match = re.match(
-        r"Codex Review:\s*Didn't find any major issues\.(?:\s*Bravo\.)?\s+"
+        r"Codex Review(?:\s*:\s*|\s+)(?:\n+)?Didn't find any major issues\."
+        r"(?:\s*(?:Nice work!|Bravo\.))?\s*\n+"
         r"\*\*Reviewed commit:\*\*\s*`([0-9a-f]{7,40})`",
         body,
     )
-    if match is None or not head_sha.startswith(match.group(1)):
+    if match is None or not head_sha.lower().startswith(match.group(1).lower()):
         return None
     if not _adoptable_clear_trailer(body[match.end() :]):
         return None

@@ -613,12 +613,19 @@ class GitHubBackend:
         key = os.environ.get(secret_name or "", "")
         if not key:
             return {"verdict": "unavailable", "summary": f"{provider} API key unavailable"}
+        try:
+            candidate_diff = self._candidate_diff()
+        except ValueError as exc:
+            # Oversized exact-head evidence cannot be truncated and still be called
+            # a complete review. Treat this provider as unavailable so the bounded
+            # reviewer walk can continue, while never minting review authority.
+            return {"verdict": "unavailable", "summary": str(exc)}
         prompt = (
             "You are an independent hostile code reviewer. Review the COMPLETE exact-head diff below. "
             f"Repository={self.repository} PR={self.pr} HEAD={self.expected_head} claims_id={self.claims_id}. "
             'Return JSON only: {"verdict":"clear|blocking","summary":"..."}. '
             "Use clear only when no substantive correctness, security, governance, exact-head, or fail-closed defect remains. "
-            "Any finding must use blocking.\n\nDIFF:\n" + self._candidate_diff()
+            "Any finding must use blocking.\n\nDIFF:\n" + candidate_diff
         )
         if provider == "gemini":
             url = "https://generativelanguage.googleapis.com/v1beta/models/gemini-3.7-flash:generateContent"
@@ -1246,7 +1253,7 @@ def load_exhaustion(
             # A triage-only reviewer may legitimately have answered; only an
             # authority-eligible reviewer has to have been exhausted.
             allowed_outcomes = (
-                {"timed_out", "unavailable"}
+                {"timed_out", "unavailable", "unacknowledged"}
                 if authority_eligible
                 else {"timed_out", "unavailable", "unacknowledged", "clear", "blocking"}
             )

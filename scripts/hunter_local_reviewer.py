@@ -169,8 +169,11 @@ def github_diff(repository: str, token: str, pr_number: int, head_sha: str) -> s
     pr = github_json(repository, token, f"pulls/{pr_number}")
     if pr.get("state") != "open" or str((pr.get("head") or {}).get("sha") or "") != head_sha:
         raise ValueError("pull-request HEAD does not match requested exact head")
+    base_sha = str((pr.get("base") or {}).get("sha") or "").lower()
+    if not re.fullmatch(r"[0-9a-f]{40}", base_sha):
+        raise ValueError("pull-request base SHA is malformed")
     request = urllib.request.Request(
-        f"https://api.github.com/repos/{repository}/pulls/{pr_number}",
+        f"https://api.github.com/repos/{repository}/compare/{base_sha}...{head_sha}",
         headers={"Authorization": f"Bearer {token}", "Accept": "application/vnd.github.v3.diff"},
     )
     with urllib.request.urlopen(request, timeout=60) as response:

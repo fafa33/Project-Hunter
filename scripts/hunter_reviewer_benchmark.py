@@ -29,8 +29,18 @@ def benchmark(model: str, reviewer: Callable[..., dict[str, Any]] = local.ollama
     started = time.monotonic()
     for case in cases:
         review = reviewer(case["text"], model=model)
-        found = review.get("verdict") == "findings" or bool(review.get("findings"))
-        results[case["id"]] = {"found": found, "verdict": review.get("verdict"), "summary": review.get("summary", "")}
+        # Score only a result that production itself would accept. This keeps the
+        # benchmark from certifying contradictory verdict/findings payloads.
+        validated = local.build_result(
+            head_sha="0" * 40,
+            claims_id="0" * 64,
+            model=model,
+            findings=review.get("findings") if isinstance(review.get("findings"), list) else [],
+            summary=str(review.get("summary") or ""),
+            verdict=review.get("verdict"),
+        )
+        found = validated["verdict"] == "findings"
+        results[case["id"]] = {"found": found, "verdict": validated["verdict"], "summary": validated["summary"]}
     recall, fp = score(cases, results)
     return {
         "schema": "hunter.reviewer-benchmark.v1",
