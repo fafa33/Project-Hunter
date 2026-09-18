@@ -833,6 +833,23 @@ def validate_code_write_policy() -> list[str]:
         _pool, pool_error = pre_ready.load_reviewer_pool(policy)
         if pool_error:
             errors.append(pool_error)
+        elif _pool is not None:
+            # A reviewer may not be enabled in the ordered pool before the
+            # collector can actually perform its declared trigger. Collection is
+            # ordered and fail-closed: an unperformable trigger does not skip its
+            # own reviewer, it aborts the whole walk, so every lower-priority
+            # reviewer behind it is silently never attempted. The check imports
+            # the collector's own dispatch registry rather than restating it, so
+            # the guard and the implementation cannot drift apart.
+            from hunter_reviewer_collector import unsupported_pool_triggers
+
+            unsupported = unsupported_pool_triggers(_pool)
+            if unsupported:
+                errors.append(
+                    "enabled reviewer(s) "
+                    + ", ".join(unsupported)
+                    + " declare a trigger method the trusted reviewer collector cannot perform"
+                )
     finding_resolution = str(progression.get("finding_resolution") or "")
     if "structured evidence" not in finding_resolution or "regression test" not in finding_resolution:
         errors.append("finding resolution must require structured evidence and a committed regression test")

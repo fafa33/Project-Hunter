@@ -21,9 +21,13 @@ on:
         required: true
         type: string
 
+# `actions: write` is what lets this collector dispatch a reviewer that runs as
+# its own workflow. It is reachable only from `pull_request_target` and
+# `workflow_dispatch`, both of which execute the trusted default-branch copy of
+# this file, so no candidate-authored step ever holds it.
 permissions:
   contents: read
-  actions: read
+  actions: write
   pull-requests: write
 
 concurrency:
