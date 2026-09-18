@@ -355,6 +355,23 @@ def _substantive_review_body(body: str) -> bool:
     return sum(not c.isspace() for c in stripped) >= 40
 
 
+def native_copilot_verdict(body: str, inline_comment_count: int = 0) -> str:
+    """Parse authenticated Copilot review bodies fail-closed."""
+    if inline_comment_count:
+        return "blocking"
+    normalized = " ".join(body.lower().split())
+    if "### 🟡 changes recommended" in normalized or "### 🔴" in normalized:
+        return "blocking"
+    clear_markers = (
+        "### 🟢 approval recommended",
+        "no unresolved blocking issues were identified",
+        "no unresolved review comments remain",
+    )
+    if normalized and any(marker in normalized for marker in clear_markers):
+        return "clear"
+    return "unknown"
+
+
 def native_codex_clear_review(body: str, head_sha: str) -> bool:
     """Recognize authenticated Codex's native exact-head clear outcome."""
     raw = body.strip()
@@ -1849,7 +1866,14 @@ def verify_pre_ready_hostile_review(
                 and review_acknowledgement(str(r.get("body") or "")) is not None
             )
         )
-        and _substantive_review_body(str(r.get("body") or ""))
+        and (
+            _substantive_review_body(str(r.get("body") or ""))
+            or (
+                r.get("agent_id") == "copilot"
+                and native_copilot_verdict(str(r.get("body") or ""), int(r.get("inline_comment_count") or 0))
+                != "unknown"
+            )
+        )
     ]
     # An out-of-band structured review avoids a self-referential artifact commit.
     # Only a document emitted by the authenticated exact-head reviewer is eligible.
@@ -1916,8 +1940,10 @@ def verify_pre_ready_hostile_review(
                 and observation.get("source_kind") == "review"
                 and observation.get("trigger_claims_id") == claims_id
                 and observation.get("state") == "COMMENTED"
-                and int(observation.get("inline_comment_count") or 0) == 0
-                and "changes recommended" not in str(observation.get("body") or "").lower()
+                and native_copilot_verdict(
+                    str(observation.get("body") or ""), int(observation.get("inline_comment_count") or 0)
+                )
+                == "clear"
             ):
                 adopted.append(
                     (

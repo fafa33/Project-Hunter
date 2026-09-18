@@ -383,7 +383,15 @@ class GitHubBackend:
         time.sleep(seconds)
 
     def _candidate_diff(self) -> str | None:
-        url = f"https://api.github.com/repos/{self.repository}/pulls/{self.pr}"
+        pr = governance.request_json(self.repository, self.token, "GET", f"pulls/{self.pr}")
+        if not isinstance(pr, dict) or not isinstance(pr.get("base"), dict):
+            raise ValueError("pull request base ref is unavailable")
+        if str((pr.get("head") or {}).get("sha") or "") != self.expected_head:
+            raise ValueError("HEAD changed before immutable diff acquisition")
+        base_sha = str(pr["base"].get("sha") or "")
+        if not re.fullmatch(r"[0-9a-f]{40}", base_sha):
+            raise ValueError("pull request base SHA is invalid")
+        url = f"https://api.github.com/repos/{self.repository}/compare/{base_sha}...{self.expected_head}"
         req = urllib.request.Request(
             url, headers={"Authorization": f"Bearer {self.token}", "Accept": "application/vnd.github.v3.diff"}
         )
@@ -523,9 +531,19 @@ class GitHubBackend:
                 trigger_body(self.expected_head, self.claims_id, agent, self.run_id, self.run_attempt, number)
             )
             reviewer = method.split(":", 1)[1]
-            governance.request_json(
-                self.repository, self.token, "POST", f"pulls/{self.pr}/requested_reviewers", {"reviewers": [reviewer]}
-            )
+            try:
+                governance.request_json(
+                    self.repository,
+                    self.token,
+                    "POST",
+                    f"pulls/{self.pr}/requested_reviewers",
+                    {"reviewers": [reviewer]},
+                )
+            except Exception as exc:
+                trigger["collector_run_id"] = self.run_id
+                trigger["state"] = "unavailable"
+                trigger["request_error"] = type(exc).__name__
+                return trigger
             trigger["collector_run_id"] = self.run_id
             return trigger
         if method.startswith("api:"):
@@ -596,6 +614,8 @@ class GitHubBackend:
         )
 
     def response_state(self, agent: dict[str, Any], trigger: dict[str, Any]) -> str:
+        if trigger.get("state") == "unavailable":
+            return "unavailable"
         if str(agent["trigger_method"]).startswith("api:"):
             result = self._api_result(agent, trigger)
             if result is None:
@@ -623,9 +643,8 @@ class GitHubBackend:
                     return "clear" if self._native_clear(body, self.expected_head) else "blocking"
                 if agent.get("id") == "copilot":
                     comments = _pages(self.repository, self.token, f"pulls/{self.pr}/reviews/{item['id']}/comments")
-                    if "changes recommended" in body.lower() or comments:
-                        return "blocking"
-                    return "clear"
+                    verdict = governance.native_copilot_verdict(body, len(comments))
+                    return verdict if verdict != "unknown" else "blocking"
                 if governance._substantive_review_body(body):
                     return "blocking"
         for item in _pages(self.repository, self.token, f"issues/{self.pr}/comments"):

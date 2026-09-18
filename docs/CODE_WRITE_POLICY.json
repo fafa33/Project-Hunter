@@ -62,8 +62,8 @@
             "retryable": false,
             "evidence_parser": "github-review-ack.v1",
             "fallback_eligibility": false,
-            "note": "Tier 1 primary reviewer. chatgpt-codex-connector[bot] is the only agent-reviewer integration observed on this repository (COMMENTED reviews on PRs #458, #460, #466); every other PR has zero reviews, so the Tier 2 pool is empty until an approved agent reviewer is actually installed on the repository.",
-            "evidence": "Discovered by inspecting check-suites and PR reviews on main (commit dca20dd): installed apps are claude, freebuff-web, github-actions, railway-app, tembo, vercel; no Copilot code review, CodeRabbit, Jules, or CODEOWNERS exists on this repository.",
+            "note": "Tier 1 primary reviewer. The historical observation below predates the PR #480 Copilot bootstrap; Copilot is now separately configured as the authenticated Tier 2 fallback.",
+            "evidence": "Historical pre-bootstrap observation at main commit dca20dd; superseded for Copilot availability by authenticated exact-head reviews observed on PR #480. It remains provenance, not current reviewer-pool state.",
             "github_login": "chatgpt-codex-connector[bot]"
           },
           {

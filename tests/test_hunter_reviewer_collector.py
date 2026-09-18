@@ -518,7 +518,7 @@ def test_policy_orders_copilot_before_server_side_api_fallbacks():
     assert agents[1]["trigger_method"] == "github-review-request:copilot-pull-request-reviewer[bot]"
     assert agents[2]["trigger_method"] == "api:gemini"
     assert agents[3]["trigger_method"] == "api:groq"
-    assert all(a["timeout_seconds"] == 300 for a in agents[:3])
+    assert all(a["timeout_seconds"] == 300 for a in agents[:4])
 
 
 def test_collector_workflow_exposes_only_server_reviewer_secrets():
@@ -960,9 +960,14 @@ def test_external_reviewer_oversized_diff_is_bounded_unavailability(monkeypatch)
         def __exit__(self, *_args):
             return False
 
-        def read(self, _limit):
+        def read(self, _limit=None):
             return b"x" * (collector.EXTERNAL_PROMPT_LIMIT + 1)
 
+    monkeypatch.setattr(
+        collector.governance,
+        "request_json",
+        lambda *_args, **_kwargs: {"state": "open", "base": {"sha": "0" * 40}, "head": {"sha": HEAD}},
+    )
     monkeypatch.setattr(collector.urllib.request, "urlopen", lambda *_args, **_kwargs: OversizedResponse())
     payload = backend._invoke_external({"id": "gemini", "timeout_seconds": 300, "trigger_method": "api:gemini"}, 1)
     assert payload["verdict"] == "unavailable"
@@ -979,9 +984,14 @@ def test_candidate_diff_preserves_legitimate_empty_diff(monkeypatch):
         def __exit__(self, *_args):
             return False
 
-        def read(self, _limit):
+        def read(self, _limit=None):
             return b""
 
+    monkeypatch.setattr(
+        collector.governance,
+        "request_json",
+        lambda *_args, **_kwargs: {"state": "open", "base": {"sha": "0" * 40}, "head": {"sha": HEAD}},
+    )
     monkeypatch.setattr(collector.urllib.request, "urlopen", lambda *_args, **_kwargs: EmptyResponse())
     assert backend._candidate_diff() == ""
 
@@ -1038,7 +1048,7 @@ def test_copilot_clean_exact_head_review_is_clear(monkeypatch):
         "submitted_at": "2026-09-18T20:01:00Z",
         "commit_id": HEAD,
         "state": "COMMENTED",
-        "body": "No blocking findings.",
+        "body": "### 🟢 Approval recommended\n\nNo unresolved blocking issues were identified.",
     }
 
     def pages(_repo, _token, path):
