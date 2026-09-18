@@ -517,6 +517,11 @@ MACHINE_FAMILY_BINDINGS: dict[tuple[str, str, str], str] = {
         "local-pre-push",
         "scripts/hunter_defect_prevention_preflight.py::validate_recurring_defect_families",
     ): "scripts/hunter_defect_prevention_preflight.py::validate_defect_prevention_lifecycle",
+    (
+        "DFF-024",
+        "local-pre-push",
+        "scripts/hunter_defect_prevention_preflight.py::validate_review_after_remediation_boundary",
+    ): "scripts/hunter_defect_prevention_preflight.py::validate_defect_prevention_lifecycle",
 }
 
 
@@ -793,18 +798,26 @@ def validate_code_write_policy() -> list[str]:
     ready_requires = str(progression.get("ready_requires") or "")
     if "exact-head" not in ready_requires or "Pre-PR Preflight" not in ready_requires:
         errors.append("Ready progression must require successful exact-head Pre-PR Preflight")
-    if progression.get("requires_current_head_codex_review") is not True:
-        errors.append("Ready progression must require a current-head Codex review")
+    if progression.get("requires_current_head_review_authority") is not True:
+        errors.append("Ready progression must require current exact-head review authority")
+    if progression.get("requires_current_head_codex_review") is True:
+        errors.append("Ready progression must not hard-code Codex when governed failover is enabled")
     authority = progression.get("review_authority")
     if not isinstance(authority, dict):
         errors.append("Ready progression must declare its review-authority model")
     else:
         if authority.get("primary") != "codex":
-            errors.append("the review-authority model must declare Codex as the primary reviewer")
-        if authority.get("fallback") != "opencode":
-            errors.append("the review-authority fallback must be the canonical OpenCode hostile review")
+            errors.append("the review-authority model must declare Codex as the primary review authority")
+        if authority.get("fast_fallback") != "local-ollama":
+            errors.append("the review-authority model must declare local-ollama as the fast fallback reviewer")
+        reviewer_pool = authority.get("reviewer_pool")
+        last_resort = reviewer_pool.get("last_resort") if isinstance(reviewer_pool, dict) else None
+        if authority.get("fallback") != last_resort:
+            errors.append("the review-authority fallback must match reviewer_pool.last_resort")
         if authority.get("fallback_requires_recorded_reason") is not True:
-            errors.append("fallback review authority must require a recorded reason and never skip Codex silently")
+            errors.append(
+                "fallback review authority must require a recorded reason and never skip the ordered reviewer pool silently"
+            )
         gates = authority.get("fallback_requires_snapshot_gates")
         if not isinstance(gates, list) or not {
             "governance=success",
@@ -813,15 +826,35 @@ def validate_code_write_policy() -> list[str]:
             "structured_evidence=complete",
         }.issubset({str(gate) for gate in gates}):
             errors.append("fallback review authority must require recorded green snapshot gates")
-        # The ordered reviewer pool is the binding reviewer-ordering model: Codex
-        # tier 1, approved agent reviewers tier 2, the canonical guard last
-        # resort, with a bounded, documented, machine-checkable timeout policy.
+        # The ordered reviewer pool is the binding reviewer-ordering model: the
+        # trusted local reviewer triages first, Codex is the primary review
+        # authority, the remaining hosted reviewers follow it in priority order,
+        # and the declared guard closes the pool as the last resort -- each with
+        # a bounded, documented, machine-checkable acknowledgement and review
+        # budget.
         # It is parsed by the same implementation the review verifier consumes,
         # so the guard and the verifier cannot drift into two readings of the
         # same pool.
         _pool, pool_error = pre_ready.load_reviewer_pool(policy)
         if pool_error:
             errors.append(pool_error)
+        elif _pool is not None:
+            # A reviewer may not be enabled in the ordered pool before the
+            # collector can actually perform its declared trigger. Collection is
+            # ordered and fail-closed: an unperformable trigger does not skip its
+            # own reviewer, it aborts the whole walk, so every lower-priority
+            # reviewer behind it is silently never attempted. The check imports
+            # the collector's own dispatch registry rather than restating it, so
+            # the guard and the implementation cannot drift apart.
+            from hunter_reviewer_collector import unsupported_pool_triggers
+
+            unsupported = unsupported_pool_triggers(_pool)
+            if unsupported:
+                errors.append(
+                    "enabled reviewer(s) "
+                    + ", ".join(unsupported)
+                    + " declare a trigger method the trusted reviewer collector cannot perform"
+                )
     finding_resolution = str(progression.get("finding_resolution") or "")
     if "structured evidence" not in finding_resolution or "regression test" not in finding_resolution:
         errors.append("finding resolution must require structured evidence and a committed regression test")
@@ -1450,6 +1483,145 @@ def validate_recurring_defect_families(registry: dict[str, Any], lifecycle: dict
     return errors
 
 
+REVIEWER_COLLECTOR_WORKFLOW = ".github/workflows/hunter-reviewer-collector.yml"
+
+
+def validate_review_after_remediation_boundary() -> list[str]:
+    """DFF-024: a remediated exact head must still be able to be reviewed again.
+
+    Issue #461 / PR #473: every reviewer invocation was keyed by head and claims
+    alone, and the collector run correlating those invocations was keyed the same
+    way. Once a cycle had spent them, resolving the blocking findings it produced
+    could not buy another review of that immutable head, so the candidate was
+    stuck reporting MISSING_REVIEW_AUTHORITY with nothing left that could clear
+    it. The repair is a remediation generation, and this guard checks the three
+    properties that make it both effective and safe -- as semantic invariants of
+    the live implementation rather than as wording:
+
+    1. the generation actually separates identities, so a new generation buys a
+       real new invocation and an unchanged one buys nothing;
+    2. the generation survives a round trip through the trigger a reviewer
+       receives, so the collector can tell its own invocations apart; and
+    3. it is derived from trusted state and bounded, so it can never become an
+       unbounded reviewer retry.
+    """
+
+    errors: list[str] = []
+    try:
+        import hunter_review_orchestrator as orchestration
+        import hunter_reviewer_collector as collector
+    except Exception as exc:  # pragma: no cover - import failure is itself the defect
+        return [f"review-after-remediation modules are unavailable: {type(exc).__name__}: {exc}"]
+
+    head, claims = "a" * 40, "d" * 64
+    first, second = "0" * 15 + "1", "0" * 15 + "2"
+    base = orchestration.BASE_GENERATION_ID
+
+    # (1) identity separation
+    if collector.invocation_key(head, claims, "codex", 1, base) != collector.invocation_key(head, claims, "codex", 1):
+        errors.append("the base remediation generation must reproduce the pre-remediation invocation identity")
+    keys = {collector.invocation_key(head, claims, "codex", 1, item) for item in (base, first, second)}
+    if len(keys) != 3:
+        errors.append("a reviewer invocation identity must separate remediation generations")
+    if collector.invocation_key(head, claims, "codex", 1, first) != collector.invocation_key(
+        head, claims, "codex", 1, first
+    ):
+        errors.append("a reviewer invocation identity must be stable within one remediation generation")
+    names = {orchestration.collector_run_name(1, head, item) for item in (base, first, second)}
+    if len(names) != 3 or orchestration.collector_run_name(1, head, base) != orchestration.collector_run_name(1, head):
+        errors.append("the collector run name must correlate one run per remediation generation")
+
+    # A separated identity function is not enough: the seam that actually adopts
+    # an already-posted reviewer trigger has to consume it, or a superseded
+    # generation's trigger is adopted forever and no reviewer is asked again.
+    def marker(generation: str) -> str:
+        backend = collector.GitHubBackend("owner/repo", "", 1, head, claims, 1, 1, generation)
+        return backend.invocation_marker({"id": "codex"}, 1)
+
+    if len({marker(item) for item in (base, first, second)}) != 3 or marker(first) != marker(first):
+        errors.append("reviewer trigger adoption must separate remediation generations")
+
+    # (2) trigger round trip
+    native_agent = {
+        "id": "codex",
+        "trigger_method": "github-pr-comment:@codex review",
+        "github_login": "chatgpt-codex-connector[bot]",
+    }
+    api_agent = {"id": "gemini", "trigger_method": "api:gemini"}
+    for parse, body in (
+        (collector.parse_native_trigger, collector.trigger_body(head, claims, native_agent, 1, 1, 1, first)),
+        (collector.parse_api_trigger, collector.api_trigger_body(head, claims, api_agent, 1, 1, 1, first)),
+    ):
+        parsed = parse(body)
+        if not isinstance(parsed, dict) or parsed.get("remediation_generation_id") != first:
+            errors.append("a reviewer trigger must carry the remediation generation it was minted for")
+        if parse(body.replace(first, second)) is not None:
+            errors.append("a reviewer trigger must not verify against a substituted remediation generation")
+
+    # (3) trusted derivation and bounds
+    resolved = orchestration.BlockingThread("PRRT_1", 1, "2026-09-18T01:35:24Z", True)
+    other = orchestration.BlockingThread("PRRT_2", 2, "2026-09-18T01:35:24Z", True)
+    identities = {
+        orchestration.remediation_generation_id(head, claims, ()),
+        orchestration.remediation_generation_id(head, claims, (resolved,)),
+        orchestration.remediation_generation_id(head, claims, (resolved, other)),
+        orchestration.remediation_generation_id("b" * 40, claims, (resolved,)),
+        orchestration.remediation_generation_id(head, "e" * 64, (resolved,)),
+    }
+    if len(identities) != 5:
+        errors.append("a remediation generation must bind the exact head, the claims digest and the resolved set")
+    if orchestration.remediation_generation_id(head, claims, ()) != orchestration.remediation_generation_id(
+        head, claims, []
+    ):
+        errors.append("a remediation generation must be a deterministic function of its evidence")
+    if not isinstance(orchestration.MAX_REMEDIATION_GENERATIONS, int) or (
+        orchestration.MAX_REMEDIATION_GENERATIONS < 1
+    ):
+        errors.append("remediation generations must be bounded by a positive budget")
+    cycle = orchestration.ReviewCycle(1, head, "WAITING_FOR_REVIEWER", "", 1, "", "d" * 64, first)
+    if orchestration.remediation_generation_admissible("owner/repo", "", cycle, first) is not False:
+        errors.append("an unchanged remediation generation must never authorise another reviewer invocation")
+
+    # The generation must be derived where the dispatch decision is made. A
+    # derivation nothing consumes would leave the orchestrator dispatching the
+    # base generation forever, with every identity above still perfectly correct.
+    try:
+        tree = ast.parse((ROOT / "scripts/hunter_review_orchestrator.py").read_text(encoding="utf-8"))
+    except (OSError, SyntaxError) as exc:
+        return [*errors, f"trusted review orchestrator source is unreadable: {type(exc).__name__}: {exc}"]
+    ensure_current = next(
+        (n for n in tree.body if isinstance(n, ast.FunctionDef) and n.name == "ensure_current"),
+        None,
+    )
+    if ensure_current is None or not any(
+        isinstance(node, ast.Call)
+        and isinstance(node.func, ast.Name)
+        and node.func.id == "current_remediation_generation"
+        for node in ast.walk(ensure_current)
+    ):
+        errors.append("the trusted orchestrator must derive the remediation generation where it decides to dispatch")
+
+    workflow = ROOT / REVIEWER_COLLECTOR_WORKFLOW
+    try:
+        definition = yaml.safe_load(workflow.read_text(encoding="utf-8"))
+    except (OSError, yaml.YAMLError) as exc:
+        return [*errors, f"reviewer collector workflow is unreadable: {type(exc).__name__}: {exc}"]
+    triggers = definition.get(True) if isinstance(definition, dict) else None
+    inputs = ((triggers or {}).get("workflow_dispatch") or {}).get("inputs") or {}
+    if "generation_id" not in inputs:
+        errors.append("the reviewer collector workflow must accept the remediation generation it is dispatched for")
+    steps = [
+        step
+        for job in (definition.get("jobs") or {}).values()
+        if isinstance(job, dict)
+        for step in (job.get("steps") or [])
+        if isinstance(step, dict)
+    ]
+    if not any("--generation" in str(step.get("run") or "") for step in steps):
+        errors.append("the reviewer collector workflow must forward the remediation generation to the collector")
+    return errors
+
+
 def validate_defect_prevention_lifecycle() -> list[str]:
     errors: list[str] = []
     registry = _load_object(REGISTRY_PATH)
@@ -1532,6 +1704,7 @@ def validate_defect_prevention_lifecycle() -> list[str]:
             errors.append(f"{defect_id}: prevented state requires recurrence escalation")
 
     errors.extend(validate_recurring_defect_families(registry, lifecycle))
+    errors.extend(validate_review_after_remediation_boundary())
     errors.extend(validate_code_write_policy())
     errors.extend(validate_reviewer_finding_dispositions())
     errors.extend(validate_historical_defect_backfill())

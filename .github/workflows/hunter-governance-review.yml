@@ -2,6 +2,14 @@ name: Hunter Governance Review
 
 # Current-state governance status. Success is published only when mergeability
 # and exact-head candidate admission are both proven by the trusted controller.
+#
+# This workflow is reachable from `pull_request`, where GitHub runs the candidate's
+# own version of this file. Nothing here may therefore hold a permission that can
+# drive other workflows: a write-level actions permission would let a candidate-authored step
+# dispatch, re-run or cancel trusted workflows with the repository token.
+# Privileged reviewer orchestration lives in Hunter Governance Review Reconcile,
+# which has no `pull_request` trigger and always executes the trusted
+# default-branch version of its own file.
 
 on:
   pull_request:
@@ -24,6 +32,8 @@ on:
         type: string
 
 permissions:
+  # Read-only Actions access: the controller reads collector runs and artifacts
+  # as review evidence, but nothing here may dispatch, re-run or cancel a workflow.
   actions: read
   checks: read
   contents: read
@@ -73,6 +83,12 @@ jobs:
           GITHUB_SERVER_URL: ${{ github.server_url }}
         run: |
           set -euo pipefail
+          # The bridge below is always the trusted default-branch copy, and it
+          # owns the controller-migration state itself: while the default branch
+          # cannot yet orchestrate exact-head review it publishes an explicit
+          # pending state, and it adopts an authenticated exact-head review as
+          # soon as one exists. Short-circuiting that decision here would also
+          # suppress the only pre-merge path that can clear the migration.
           # Legacy invariant marker retained for migration-contract tests:
           # python "${GITHUB_WORKSPACE}/engine/scripts/hunter_governance_review_v2.py"
           B=boot

@@ -17,16 +17,40 @@ import time
 import urllib.error
 import urllib.request
 import zipfile
+from collections.abc import Mapping
 from pathlib import Path
 from typing import Any, Protocol
 
 import hunter_governance_review_v2 as governance
 import hunter_pre_ready_review as review
+import hunter_review_orchestrator as orchestration
+
+BASE_GENERATION = orchestration.BASE_GENERATION_ID
 
 WORKFLOW = ".github/workflows/hunter-reviewer-collector.yml"
 SCHEMA = "hunter.reviewer-collection.v1"
 LIMIT = 2_000_000
 EXTERNAL_PROMPT_LIMIT = 350_000
+#: Structured result schema a workflow-dispatched reviewer publishes as its
+#: run artifact. Nothing else in that artifact is admissible evidence.
+LOCAL_REVIEW_SCHEMA = "hunter.local-review.v1"
+#: The run name a dispatched reviewer workflow renders from its correlation
+#: input. GitHub does not report workflow_dispatch inputs on a run, so the run
+#: name is how this collector recognises the run its own dispatch produced.
+LOCAL_REVIEW_RUN_NAME_PREFIX = "Hunter Local Reviewer "
+#: A dispatched run has acknowledged the invocation only once a runner has
+#: actually picked it up: a queued run proves nothing about runner availability,
+#: which is exactly what the acknowledgement budget exists to decide.
+STARTED_RUN_STATES = frozenset({"in_progress", "completed"})
+#: Trigger schemes this collector can actually perform. A reviewer may not be
+#: enabled in the pool with a trigger method outside this set -- see
+#: ``unsupported_pool_triggers`` -- because an unperformable trigger aborts the
+#: whole ordered collection before any later reviewer is attempted.
+TRIGGER_SCHEMES = frozenset({"api", "github-pr-comment", "github-workflow"})
+#: A workflow trigger names a workflow file, never a path: the value is
+#: interpolated into an Actions API route, so a separator or traversal segment
+#: would address a different resource entirely.
+WORKFLOW_FILE_PATTERN = re.compile(r"[A-Za-z0-9._-]+\.ya?ml")
 
 
 def external_verdict(payload: dict[str, Any]) -> str:
@@ -58,6 +82,69 @@ def configuration_digest(pool: dict[str, Any]) -> str:
     return hashlib.sha256(json.dumps(pool, sort_keys=True, separators=(",", ":")).encode()).hexdigest()
 
 
+def trigger_scheme(agent: Mapping[str, Any]) -> str:
+    """The ``scheme`` half of a reviewer's ``scheme:target`` trigger method."""
+
+    scheme, separator, _ = str(agent.get("trigger_method") or "").partition(":")
+    return scheme if separator else ""
+
+
+def workflow_trigger_file(agent: Mapping[str, Any]) -> str:
+    """The workflow file a ``github-workflow:`` reviewer dispatches."""
+
+    if trigger_scheme(agent) != "github-workflow":
+        raise ValueError("reviewer has no supported workflow trigger")
+    workflow = str(agent["trigger_method"]).split(":", 1)[1].strip()
+    if WORKFLOW_FILE_PATTERN.fullmatch(workflow) is None:
+        raise ValueError("reviewer workflow trigger must name a bare workflow file")
+    return workflow
+
+
+def unsupported_pool_triggers(pool: Mapping[str, Any]) -> tuple[str, ...]:
+    """Enabled reviewers whose declared trigger this collector cannot perform.
+
+    Collection is ordered and fail-closed, so a reviewer enabled with a trigger
+    nothing implements does not merely skip itself: its invocation raises, and
+    every lower-priority reviewer behind it is never attempted. The pool guard
+    therefore refuses the configuration rather than discovering it at run time.
+    """
+
+    return tuple(
+        str(agent["id"])
+        for agent in review.enabled_pool_reviewers(pool)
+        if trigger_scheme(agent) not in TRIGGER_SCHEMES
+    )
+
+
+def local_review_state(result: Any, head: str, claims_id: str) -> str:
+    """Map a published ``hunter.local-review.v1`` artifact to a reviewer state.
+
+    Anything that is not an exact-head, claims-bound, internally consistent
+    review is unavailability rather than a verdict: a reviewer that produced no
+    usable evidence has not reviewed this candidate, and treating its silence as
+    a result would either clear a candidate nothing reviewed or block one on a
+    defect nobody found.
+    """
+
+    if not isinstance(result, dict) or result.get("schema") != LOCAL_REVIEW_SCHEMA:
+        return "unavailable"
+    if result.get("head_sha") != head or result.get("claims_id") != claims_id:
+        return "unavailable"
+    findings = result.get("findings")
+    summary = result.get("summary")
+    if not isinstance(findings, list) or not isinstance(summary, str) or not summary.strip():
+        return "unavailable"
+    verdict = result.get("verdict")
+    if verdict == "findings":
+        # A blocking verdict carrying no finding is self-contradictory; there is
+        # no defect to act on, so it is unusable evidence rather than a blocker.
+        return "blocking" if findings else "unavailable"
+    if verdict == "clear":
+        # A clear verdict that still lists findings fails closed to the findings.
+        return "blocking" if findings else "clear"
+    return "unavailable"
+
+
 class Backend(Protocol):
     def head(self) -> str: ...
     def now(self) -> float: ...
@@ -65,10 +152,27 @@ class Backend(Protocol):
     def trigger(self, agent: dict[str, Any], number: int) -> dict[str, Any]: ...
     def responded(self, agent: dict[str, Any], trigger: dict[str, Any]) -> bool: ...
     def response_state(self, agent: dict[str, Any], trigger: dict[str, Any]) -> str: ...
+    def acknowledged(self, agent: dict[str, Any], trigger: dict[str, Any]) -> bool: ...
 
 
 def collect_attempts(pool: dict[str, Any], head: str, backend: Backend) -> list[dict[str, Any]]:
-    records = []
+    """Invoke every enabled reviewer in priority order and record what happened.
+
+    Each invocation is budgeted twice, exactly as the pool declares it. The
+    acknowledgement budget answers only "did this reviewer actually receive and
+    start this exact-head job?", so a provider whose runner is absent yields to
+    the next reviewer in seconds instead of parking the candidate for the whole
+    review budget. The review budget is separate and only starts mattering once
+    the invocation was acknowledged, so ordinary review execution time is never
+    read as unavailability. Both budgets are recorded on every attempt, because
+    the trusted receipt verifier re-derives them from the pool.
+
+    A reviewer the pool marks triage-only (``authority_eligible`` false) has its
+    result recorded but cannot end the search: it is never review authority, so
+    stopping on its verdict would leave the candidate with no authority at all.
+    """
+
+    records: list[dict[str, Any]] = []
     agents = sorted(review.enabled_pool_reviewers(pool), key=lambda a: a["priority"])
     for agent in agents:
         count = 1 + (pool["timeout_policy"]["retries_per_agent"] if agent["retryable"] else 0)
@@ -77,7 +181,10 @@ def collect_attempts(pool: dict[str, Any], head: str, backend: Backend) -> list[
                 raise ValueError("HEAD changed before reviewer invocation")
             trigger = backend.trigger(agent, number)
             start = backend.now()
-            deadline = start + agent["timeout_seconds"]
+            ack_deadline = start + agent["ack_timeout_seconds"]
+            review_deadline = start + agent["review_timeout_seconds"]
+            acknowledged = False
+            ack_elapsed: float | None = None
             state = "waiting"
             while True:
                 if backend.head() != head:
@@ -87,15 +194,28 @@ def collect_attempts(pool: dict[str, Any], head: str, backend: Backend) -> list[
                     break
                 if state != "waiting":
                     raise ValueError(f"unsupported reviewer response state: {state}")
-                if backend.now() >= deadline:
+                if not acknowledged and backend.acknowledged(agent, trigger):
+                    acknowledged = True
+                    ack_elapsed = backend.now() - start
+                now = backend.now()
+                if not acknowledged and now >= ack_deadline:
+                    state = "unacknowledged"
+                    break
+                if now >= review_deadline:
                     state = "timed_out"
                     break
-                backend.sleep(min(15, deadline - backend.now()))
+                if acknowledged:
+                    backend.sleep(min(15, review_deadline - now))
+                else:
+                    backend.sleep(min(5, ack_deadline - now))
+            if ack_elapsed is None:
+                ack_elapsed = backend.now() - start
             records.append(
                 {
                     "agent_id": agent["id"],
                     "priority": agent["priority"],
-                    "timeout_seconds": agent["timeout_seconds"],
+                    "ack_timeout_seconds": agent["ack_timeout_seconds"],
+                    "review_timeout_seconds": agent["review_timeout_seconds"],
                     "trigger_method": agent["trigger_method"],
                     "evidence_parser": agent["evidence_parser"],
                     "retryable": agent["retryable"],
@@ -106,14 +226,17 @@ def collect_attempts(pool: dict[str, Any], head: str, backend: Backend) -> list[
                     "collector_run_attempt": int(
                         trigger.get("collector_run_attempt") or getattr(backend, "run_attempt", 0)
                     ),
+                    "ack_elapsed_seconds": ack_elapsed,
                     "elapsed_seconds": backend.now() - start,
                     "outcome": state,
                     **({k: trigger[k] for k in ("provider", "response_digest", "head_sha") if k in trigger}),
                 }
             )
             if state in {"clear", "blocking"}:
-                return records
-            if state == "unavailable":
+                if agent.get("authority_eligible") is not False:
+                    return records
+                break
+            if state in {"unavailable", "unacknowledged"}:
                 break
     return records
 
@@ -157,16 +280,54 @@ def _pages(repository: str, token: str, path: str, key: str | None = None) -> li
         page += 1
 
 
-def invocation_key(head: str, claims_id: str, agent_id: str, number: int) -> str:
-    return hashlib.sha256(f"{head}:{claims_id}:{agent_id}:{number}".encode()).hexdigest()
+def invocation_key(head: str, claims_id: str, agent_id: str, number: int, generation_id: str = BASE_GENERATION) -> str:
+    """The identity that makes one reviewer invocation reusable, not repeatable.
+
+    It deliberately excludes the collector run, so re-running the collector for
+    an unchanged cycle adopts the invocation it already made instead of asking
+    the reviewer twice. A remediation generation is the one thing that must make
+    it a *different* invocation: once the blocking findings of the previous
+    generation were resolved, the same reviewer has to be asked again about the
+    same head. The base generation reproduces the original material exactly, so
+    trigger comments and exhaustion receipts minted before remediation
+    generations existed stay verifiable byte-for-byte.
+    """
+
+    material = f"{head}:{claims_id}:{agent_id}:{number}"
+    if generation_id != BASE_GENERATION:
+        material = f"{material}:{generation_id}"
+    return hashlib.sha256(material.encode()).hexdigest()
+
+
+def workflow_correlation_id(
+    head: str, claims_id: str, agent_id: str, run_id: int, run_attempt: int, number: int
+) -> str:
+    """The identity a dispatched reviewer run renders as its run name.
+
+    It binds the collector run and attempt as well as the candidate head, claims
+    digest, reviewer and attempt number, so no two dispatches -- across retries,
+    collector re-runs, concurrent candidates, or a manual dispatch -- can share
+    one. Without that, an unrelated run of the same workflow on the same branch
+    would be indistinguishable from this attempt's own acknowledgement and
+    result.
+    """
+
+    material = f"{SCHEMA}:{head}:{claims_id}:{agent_id}:{run_id}:{run_attempt}:{number}"
+    return hashlib.sha256(material.encode()).hexdigest()
 
 
 def api_trigger_payload(
-    head: str, claims_id: str, agent: dict[str, Any], run_id: int, run_attempt: int, number: int
+    head: str,
+    claims_id: str,
+    agent: dict[str, Any],
+    run_id: int,
+    run_attempt: int,
+    number: int,
+    generation_id: str = BASE_GENERATION,
 ) -> dict[str, Any]:
     if not str(agent["trigger_method"]).startswith("api:"):
         raise ValueError("reviewer has no supported API trigger")
-    return {
+    payload = {
         "schema": "hunter.reviewer-trigger.v1",
         "head_sha": head,
         "claims_id": claims_id,
@@ -174,14 +335,26 @@ def api_trigger_payload(
         "collector_run_id": run_id,
         "collector_run_attempt": run_attempt,
         "attempt_number": number,
-        "invocation_key": invocation_key(head, claims_id, str(agent["id"]), number),
+        "invocation_key": invocation_key(head, claims_id, str(agent["id"]), number, generation_id),
     }
+    # The base generation is the absence of the field, never a field carrying a
+    # base value, so a pre-remediation trigger comment stays byte-identical and
+    # no two encodings of the same generation can exist.
+    if generation_id != BASE_GENERATION:
+        payload["remediation_generation_id"] = generation_id
+    return payload
 
 
 def api_trigger_body(
-    head: str, claims_id: str, agent: dict[str, Any], run_id: int, run_attempt: int, number: int
+    head: str,
+    claims_id: str,
+    agent: dict[str, Any],
+    run_id: int,
+    run_attempt: int,
+    number: int,
+    generation_id: str = BASE_GENERATION,
 ) -> str:
-    payload = api_trigger_payload(head, claims_id, agent, run_id, run_attempt, number)
+    payload = api_trigger_payload(head, claims_id, agent, run_id, run_attempt, number, generation_id)
     return (
         json.dumps(payload, sort_keys=True)
         + f'\nInvocation key: {payload["invocation_key"]}.'
@@ -213,8 +386,15 @@ def parse_api_trigger(body: str) -> dict[str, Any] | None:
         "attempt_number",
         "invocation_key",
     }
-    if set(value) != allowed:
+    if set(value) - {"remediation_generation_id"} != allowed:
         return None
+    generation_id = value.get("remediation_generation_id", BASE_GENERATION)
+    # A base generation must be encoded by omission, so the same generation can
+    # never be spelled two ways and adopt two distinct invocation identities.
+    if not isinstance(generation_id, str) or not orchestration.GENERATION_ID_PATTERN.fullmatch(generation_id):
+        if "remediation_generation_id" in value:
+            return None
+        generation_id = BASE_GENERATION
     if value.get("schema") != "hunter.reviewer-trigger.v1":
         return None
     if not re.fullmatch(r"[0-9a-f]{40}", str(value.get("head_sha") or "")):
@@ -239,7 +419,7 @@ def parse_api_trigger(body: str) -> dict[str, Any] | None:
     ):
         return None
     if value["invocation_key"] != invocation_key(
-        value["head_sha"], value["claims_id"], reviewer_agent, value["attempt_number"]
+        value["head_sha"], value["claims_id"], reviewer_agent, value["attempt_number"], generation_id
     ):
         return None
     return value
@@ -313,7 +493,15 @@ def parse_api_result(body: str) -> dict[str, Any] | None:
     return value
 
 
-def trigger_body(head: str, claims_id: str, agent: dict[str, Any], run_id: int, run_attempt: int, number: int) -> str:
+def trigger_body(
+    head: str,
+    claims_id: str,
+    agent: dict[str, Any],
+    run_id: int,
+    run_attempt: int,
+    number: int,
+    generation_id: str = BASE_GENERATION,
+) -> str:
     method = str(agent["trigger_method"])
     if not method.startswith("github-pr-comment:") or not governance.reviewer_login(agent):
         raise ValueError("reviewer has no supported authenticated GitHub trigger")
@@ -325,6 +513,8 @@ def trigger_body(head: str, claims_id: str, agent: dict[str, Any], run_id: int, 
         "summary": "<your substantive review summary>",
         "collector_run_id": run_id,
     }
+    # As in the API payload, the base generation is the absence of the line.
+    generation_line = "" if generation_id == BASE_GENERATION else f"\nRemediation generation: {generation_id}."
     return (
         method.split(":", 1)[1] + f"\nReview exact HEAD {head} and the complete review request in "
         f"{review.REVIEW_RELATIVE_PATH}. Report any blocking findings; do not issue a clear verdict if any remain. "
@@ -332,7 +522,8 @@ def trigger_body(head: str, claims_id: str, agent: dict[str, Any], run_id: int, 
         "reply with only this JSON result, filling in your own substantive summary: "
         + json.dumps(ack)
         + f'\nCollector invocation: {run_id}/{run_attempt}/{agent["id"]}/{number}.'
-        + f'\nInvocation key: {invocation_key(head, claims_id, str(agent["id"]), number)}.'
+        + generation_line
+        + f'\nInvocation key: {invocation_key(head, claims_id, str(agent["id"]), number, generation_id)}.'
     )
 
 
@@ -341,15 +532,17 @@ def parse_native_trigger(body: str) -> dict[str, Any] | None:
     match = re.search(
         r"Review exact HEAD ([0-9a-f]{40}).*?\"claims_id\": \"([0-9a-f]{64})\".*?"
         r"Collector invocation: (\d+)/(\d+)/([a-z0-9_-]+)/(\d+)\.\n"
+        r"(?:Remediation generation: ([0-9a-f]{16})\.\n)?"
         r"Invocation key: ([0-9a-f]{64})\.",
         body,
         re.S,
     )
     if match is None:
         return None
-    head, claims_id, run_id, run_attempt, agent_id, attempt, key = match.groups()
+    head, claims_id, run_id, run_attempt, agent_id, attempt, generation, key = match.groups()
     number = int(attempt)
-    if key != invocation_key(head, claims_id, agent_id, number):
+    generation_id = generation or BASE_GENERATION
+    if key != invocation_key(head, claims_id, agent_id, number, generation_id):
         return None
     return {
         "head_sha": head,
@@ -358,14 +551,38 @@ def parse_native_trigger(body: str) -> dict[str, Any] | None:
         "collector_run_id": int(run_id),
         "collector_run_attempt": int(run_attempt),
         "attempt_number": number,
+        "remediation_generation_id": generation_id,
     }
 
 
 class GitHubBackend:
-    def __init__(self, repository: str, token: str, pr: int, head: str, claims_id: str, run_id: int, run_attempt: int):
+    def __init__(
+        self,
+        repository: str,
+        token: str,
+        pr: int,
+        head: str,
+        claims_id: str,
+        run_id: int,
+        run_attempt: int,
+        generation_id: str = BASE_GENERATION,
+    ):
         self.repository, self.token, self.pr = repository, token, pr
         self.expected_head, self.claims_id = head, claims_id
         self.run_id, self.run_attempt = run_id, run_attempt
+        self.generation_id = generation_id
+        self._default_branch: str | None = None
+
+    def default_branch(self) -> str:
+        """The trusted default branch, which is the only ref a reviewer may run from."""
+
+        if self._default_branch is None:
+            repo = governance.request_json(self.repository, self.token, "GET", "")
+            branch = str(repo.get("default_branch") or "") if isinstance(repo, dict) else ""
+            if not branch:
+                raise ValueError("trusted default branch is unavailable")
+            self._default_branch = branch
+        return self._default_branch
 
     def head(self) -> str:
         pr = governance.request_json(self.repository, self.token, "GET", f"pulls/{self.pr}")
@@ -396,15 +613,22 @@ class GitHubBackend:
         key = os.environ.get(secret_name or "", "")
         if not key:
             return {"verdict": "unavailable", "summary": f"{provider} API key unavailable"}
+        try:
+            candidate_diff = self._candidate_diff()
+        except ValueError as exc:
+            # Oversized exact-head evidence cannot be truncated and still be called
+            # a complete review. Treat this provider as unavailable so the bounded
+            # reviewer walk can continue, while never minting review authority.
+            return {"verdict": "unavailable", "summary": str(exc)}
         prompt = (
             "You are an independent hostile code reviewer. Review the COMPLETE exact-head diff below. "
             f"Repository={self.repository} PR={self.pr} HEAD={self.expected_head} claims_id={self.claims_id}. "
             'Return JSON only: {"verdict":"clear|blocking","summary":"..."}. '
             "Use clear only when no substantive correctness, security, governance, exact-head, or fail-closed defect remains. "
-            "Any finding must use blocking.\n\nDIFF:\n" + self._candidate_diff()
+            "Any finding must use blocking.\n\nDIFF:\n" + candidate_diff
         )
         if provider == "gemini":
-            url = "https://generativelanguage.googleapis.com/v1beta/models/gemini-3.8-flash:generateContent"
+            url = "https://generativelanguage.googleapis.com/v1beta/models/gemini-3.7-flash:generateContent"
             headers = {"x-goog-api-key": key, "Content-Type": "application/json"}
             body: dict[str, Any] = {
                 "contents": [{"parts": [{"text": prompt}]}],
@@ -414,7 +638,7 @@ class GitHubBackend:
             url = "https://api.groq.com/openai/v1/chat/completions"
             headers = {"Authorization": f"Bearer {key}", "Content-Type": "application/json"}
             body = {
-                "model": "llama-3.3-70b-versatile",
+                "model": "openai/gpt-oss-120b",
                 "messages": [{"role": "user", "content": prompt}],
                 "response_format": {"type": "json_object"},
                 "temperature": 0,
@@ -423,7 +647,9 @@ class GitHubBackend:
             raise ValueError(f"unsupported external reviewer: {provider}")
         req = urllib.request.Request(url, data=json.dumps(body).encode(), headers=headers, method="POST")
         try:
-            with urllib.request.urlopen(req, timeout=int(agent["timeout_seconds"])) as response:
+            # The provider call is the review execution itself, so it is bounded
+            # by the reviewer's review budget, not by its acknowledgement budget.
+            with urllib.request.urlopen(req, timeout=int(agent["review_timeout_seconds"])) as response:
                 raw = response.read(LIMIT + 1)
         except urllib.error.HTTPError as exc:
             if exc.code in {401, 403, 408, 413, 429, 500, 502, 503, 504}:
@@ -480,8 +706,126 @@ class GitHubBackend:
             return None
         return min(matches, key=lambda item: int(item.get("comment_id") or 0))
 
+    def _workflow_run(self, trigger: dict[str, Any]) -> dict[str, Any] | None:
+        """The trusted default-branch run this exact dispatch produced, or nothing.
+
+        Selection is by the dispatch's own correlation identity, which the
+        reviewer workflow renders as its run name. Event, branch, workflow path
+        and timestamp are shared by every dispatch of this workflow, so without
+        the correlation a concurrent candidate's run, an earlier attempt's run,
+        or a manual dispatch could be read as this attempt's acknowledgement and
+        result.
+        """
+
+        correlation = str(trigger.get("correlation_id") or "")
+        workflow = str(trigger.get("workflow") or "")
+        if not correlation or not workflow:
+            return None
+        branch = self.default_branch()
+        payload = governance.request_json(
+            self.repository,
+            self.token,
+            "GET",
+            f"actions/workflows/{workflow}/runs?event=workflow_dispatch&branch={branch}&per_page=100",
+        )
+        runs = payload.get("workflow_runs") if isinstance(payload, dict) else None
+        expected_name = LOCAL_REVIEW_RUN_NAME_PREFIX + correlation
+        matches = [
+            run
+            for run in (runs if isinstance(runs, list) else [])
+            if isinstance(run, dict)
+            and str(run.get("event") or "") == "workflow_dispatch"
+            and str(run.get("head_branch") or "") == branch
+            and str(run.get("path") or "") == f".github/workflows/{workflow}"
+            and expected_name in {str(run.get("name") or ""), str(run.get("display_title") or "")}
+        ]
+        return min(matches, key=lambda run: int(run.get("id") or 0), default=None)
+
+    def _adopt_workflow_run(self, trigger: dict[str, Any]) -> dict[str, Any] | None:
+        """Bind the trigger record to the run its dispatch produced."""
+
+        run = self._workflow_run(trigger)
+        if run is None:
+            return None
+        trigger["id"] = int(run.get("id") or 0)
+        trigger["created_at"] = str(run.get("created_at") or trigger.get("created_at") or "")
+        return run
+
+    def _dispatch_workflow_reviewer(self, agent: dict[str, Any], number: int) -> dict[str, Any]:
+        """Dispatch a reviewer workflow from the trusted default branch.
+
+        The dispatch ref is the default branch, never the candidate head, so the
+        reviewer that runs is the trusted one; the candidate is passed to it as
+        data. A dispatch the trusted branch cannot accept -- the workflow is not
+        on it yet, or this token may not drive it -- is reviewer unavailability,
+        not a candidate defect, so the ordered pool continues to the next
+        reviewer instead of aborting the whole collection.
+        """
+
+        workflow = workflow_trigger_file(agent)
+        correlation = workflow_correlation_id(
+            self.expected_head, self.claims_id, str(agent["id"]), self.run_id, self.run_attempt, number
+        )
+        pending = {
+            "id": 0,
+            "created_at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+            "kind": "github-workflow",
+            "workflow": workflow,
+            "correlation_id": correlation,
+            "collector_run_id": self.run_id,
+            "collector_run_attempt": self.run_attempt,
+        }
+        if self._adopt_workflow_run(pending) is not None:
+            return pending
+        try:
+            governance.request_json(
+                self.repository,
+                self.token,
+                "POST",
+                f"actions/workflows/{workflow}/dispatches",
+                {
+                    "ref": self.default_branch(),
+                    "inputs": {
+                        "pr_number": str(self.pr),
+                        "head_sha": self.expected_head,
+                        "claims_id": self.claims_id,
+                        "correlation_id": correlation,
+                    },
+                },
+            )
+        except governance.transport.GitHubRequestError as exc:
+            if exc.status_code in {403, 404, 422}:
+                return {**pending, "state": "unavailable", "dispatch_status": exc.status_code}
+            raise
+        return pending
+
+    def _workflow_review_state(self, trigger: dict[str, Any]) -> str:
+        """The reviewer state a dispatched run has actually established."""
+
+        if str(trigger.get("state") or "") == "unavailable":
+            return "unavailable"
+        run = self._adopt_workflow_run(trigger)
+        if run is None or str(run.get("status") or "") != "completed":
+            return "waiting"
+        if str(run.get("conclusion") or "") != "success":
+            return "unavailable"
+        result = local_review_result(self.repository, self.token, int(run["id"]), self.pr, self.expected_head)
+        return local_review_state(result, self.expected_head, self.claims_id)
+
+    def invocation_marker(self, agent: dict[str, Any], number: int) -> str:
+        """The comment marker that identifies this collector's own invocation.
+
+        It is the single seam through which an already-posted reviewer trigger is
+        recognised and adopted, which is why it has to carry the remediation
+        generation: without it a superseded generation's trigger would be adopted
+        forever and the remediated head could never be reviewed again.
+        """
+
+        key = invocation_key(self.expected_head, self.claims_id, str(agent["id"]), number, self.generation_id)
+        return f"Invocation key: {key}."
+
     def _existing_trigger(self, agent: dict[str, Any], number: int) -> dict[str, Any] | None:
-        marker = f"Invocation key: {invocation_key(self.expected_head, self.claims_id, str(agent['id']), number)}."
+        marker = self.invocation_marker(agent, number)
         matches = [
             item
             for item in _pages(self.repository, self.token, f"issues/{self.pr}/comments")
@@ -492,6 +836,11 @@ class GitHubBackend:
 
     def trigger(self, agent: dict[str, Any], number: int) -> dict[str, Any]:
         method = str(agent["trigger_method"])
+        scheme = trigger_scheme(agent)
+        if scheme not in TRIGGER_SCHEMES:
+            raise ValueError("reviewer has no supported authenticated GitHub trigger")
+        if scheme == "github-workflow":
+            return self._dispatch_workflow_reviewer(agent, number)
         existing = self._existing_trigger(agent, number)
         if existing is not None:
             m = re.search(r"Collector invocation: (\d+)/(\d+)/", str(existing.get("body") or ""))
@@ -512,7 +861,15 @@ class GitHubBackend:
         if method.startswith("api:"):
             provider = method.split(":", 1)[1]
             trigger = self._post_comment(
-                api_trigger_body(self.expected_head, self.claims_id, agent, self.run_id, self.run_attempt, number)
+                api_trigger_body(
+                    self.expected_head,
+                    self.claims_id,
+                    agent,
+                    self.run_id,
+                    self.run_attempt,
+                    number,
+                    self.generation_id,
+                )
             )
             payload = self._invoke_external(agent, number)
             state = "unavailable" if payload.get("verdict") == "unavailable" else external_verdict(payload)
@@ -557,7 +914,9 @@ class GitHubBackend:
                 "result_comment_id": result_comment["id"],
                 "collector_run_id": self.run_id,
             }
-        body = trigger_body(self.expected_head, self.claims_id, agent, self.run_id, self.run_attempt, number)
+        body = trigger_body(
+            self.expected_head, self.claims_id, agent, self.run_id, self.run_attempt, number, self.generation_id
+        )
         result = self._post_comment(body)
         result["collector_run_id"] = self.run_id
         return result
@@ -577,6 +936,8 @@ class GitHubBackend:
         )
 
     def response_state(self, agent: dict[str, Any], trigger: dict[str, Any]) -> str:
+        if trigger_scheme(agent) == "github-workflow":
+            return self._workflow_review_state(trigger)
         if str(agent["trigger_method"]).startswith("api:"):
             result = self._api_result(agent, trigger)
             if result is None:
@@ -629,6 +990,27 @@ class GitHubBackend:
     def responded(self, agent: dict[str, Any], trigger: dict[str, Any]) -> bool:
         return self.response_state(agent, trigger) in {"clear", "blocking"}
 
+    def acknowledged(self, agent: dict[str, Any], trigger: dict[str, Any]) -> bool:
+        """Whether this reviewer has demonstrably received and started the job.
+
+        Acknowledgement is the strongest delivery signal each trigger scheme
+        actually exposes, and it is deliberately not the same question as
+        "has it answered?". A dispatched workflow is acknowledged only once a
+        runner picked the run up, because a queued run is exactly the offline-Mac
+        case the short budget exists to fail over from. For the comment and API
+        schemes the invocation is delivered synchronously -- GitHub confirms the
+        trigger comment it created, and the provider call returns -- so delivery
+        is settled the moment the trigger exists, and the reviewer then gets its
+        full review budget rather than being abandoned for being slow.
+        """
+
+        if trigger_scheme(agent) == "github-workflow":
+            if str(trigger.get("state") or "") == "unavailable":
+                return False
+            run = self._adopt_workflow_run(trigger)
+            return run is not None and str(run.get("status") or "") in STARTED_RUN_STATES
+        return type(trigger.get("id")) is int and int(trigger["id"]) > 0
+
 
 class _NoRedirect(urllib.request.HTTPRedirectHandler):
     def redirect_request(self, req, fp, code, msg, headers, newurl):
@@ -655,9 +1037,113 @@ def download_artifact(repository: str, token: str, artifact_id: int) -> bytes:
     return data
 
 
+def local_review_result(repository: str, token: str, run_id: int, pr: int, head: str) -> dict[str, Any] | None:
+    """The structured review a dispatched reviewer run published, or nothing.
+
+    The artifact is addressed by the run that produced it and by the exact head
+    it was dispatched for, and its immutable GitHub digest is re-derived from the
+    bytes that were actually downloaded, so a result cannot be substituted from
+    another run, another candidate, or a rewritten archive. Anything unreadable
+    is no result at all; the caller reads that as unavailability rather than as
+    a verdict.
+    """
+
+    name = f"hunter-local-review-{pr}-{head}"
+    artifacts = [
+        item
+        for item in _pages(repository, token, f"actions/runs/{run_id}/artifacts", "artifacts")
+        if item.get("name") == name
+    ]
+    if len(artifacts) != 1 or artifacts[0].get("expired") is not False:
+        return None
+    artifact = artifacts[0]
+    if (artifact.get("workflow_run") or {}).get("id") != run_id:
+        return None
+    archive = download_artifact(repository, token, int(artifact["id"]))
+    if artifact.get("digest") != "sha256:" + hashlib.sha256(archive).hexdigest():
+        return None
+    try:
+        with zipfile.ZipFile(io.BytesIO(archive)) as bundle:
+            if bundle.namelist() != ["reviewer-result.json"]:
+                return None
+            if bundle.getinfo("reviewer-result.json").file_size > LIMIT:
+                return None
+            payload = json.loads(bundle.read("reviewer-result.json"))
+    except (zipfile.BadZipFile, ValueError):
+        return None
+    return payload if isinstance(payload, dict) else None
+
+
+def _verify_workflow_trigger(
+    repository: str,
+    token: str,
+    agent: Mapping[str, Any],
+    record: Mapping[str, Any],
+    number: int,
+    *,
+    head: str,
+    claims_id: str,
+    branch: str,
+    run_id: int,
+    run_attempt: int,
+    seen: set[tuple[str, int]],
+) -> None:
+    """Re-derive a recorded workflow-dispatched invocation from GitHub itself.
+
+    The recorded identity is the reviewer run, so the run is fetched and every
+    property that makes it *this* invocation is recomputed rather than trusted:
+    the workflow the pool declares, the trusted default branch, the dispatch
+    event, and the correlation identity this exact collector run, attempt,
+    candidate head, claims digest and attempt number produce. A dispatch the
+    trusted branch never accepted has no run at all, which is admissible only as
+    recorded unavailability.
+    """
+
+    trigger_id = int(record["trigger_id"])
+    if trigger_id == 0:
+        # No run was ever observed for this dispatch: the trusted branch refused
+        # it, or no runner picked it up inside the acknowledgement budget. Those
+        # are the only two outcomes such an attempt may claim -- a verdict or a
+        # spent review budget would assert a run that demonstrably never ran.
+        if record.get("outcome") not in {"unavailable", "unacknowledged"}:
+            raise ValueError("a workflow reviewer with no trusted run must record unavailability")
+        return
+    seen.add(("github-workflow", trigger_id))
+    workflow = workflow_trigger_file(agent)
+    expected_name = LOCAL_REVIEW_RUN_NAME_PREFIX + workflow_correlation_id(
+        head,
+        claims_id,
+        str(agent["id"]),
+        int(record.get("collector_run_id") or run_id),
+        int(record.get("collector_run_attempt") or run_attempt),
+        number,
+    )
+    try:
+        payload = governance.request_json(repository, token, "GET", f"actions/runs/{trigger_id}")
+    except Exception as exc:
+        raise ValueError("trusted reviewer trigger evidence is unavailable") from exc
+    if (
+        not isinstance(payload, dict)
+        or str(payload.get("path") or "") != f".github/workflows/{workflow}"
+        or str(payload.get("event") or "") != "workflow_dispatch"
+        or str(payload.get("head_branch") or "") != branch
+        or expected_name not in {str(payload.get("name") or ""), str(payload.get("display_title") or "")}
+        or str(payload.get("created_at") or "") != str(record.get("trigger_created_at") or "")
+    ):
+        raise ValueError("actual trusted reviewer trigger mismatch")
+
+
 def load_exhaustion(
-    repository: str, token: str, pr: int, head: str, pool: dict[str, Any], run_id: Any, authority_type: str = "opencode"
+    repository: str, token: str, pr: int, head: str, pool: dict[str, Any], run_id: Any, authority_type: str
 ) -> dict[str, Any]:
+    """Verify a trusted collector receipt for `authority_type` at this exact head.
+
+    `authority_type` carries no default. The last-resort guard is the only
+    authority that has to clear the extra live snapshot gates below, and it is
+    recognised by comparing this argument against the pool's declared
+    `last_resort`; a default here would let a caller that forgot to pass it be
+    read as some other reviewer and skip those gates entirely.
+    """
     if type(run_id) is not int or run_id <= 0:
         raise ValueError("a trusted collector run id is required")
     backend = GitHubBackend(repository, token, pr, head, "", run_id, 1)
@@ -706,47 +1192,111 @@ def load_exhaustion(
         raise ValueError("collector numeric identity fields must be integers")
     if not re.fullmatch("[0-9a-f]{64}", str(receipt.get("claims_id") or "")):
         raise ValueError("collector claims digest is malformed")
+    receipt_generation = receipt.get("remediation_generation_id", BASE_GENERATION)
+    if not isinstance(receipt_generation, str) or (
+        receipt_generation != BASE_GENERATION and not orchestration.GENERATION_ID_PATTERN.fullmatch(receipt_generation)
+    ):
+        raise ValueError("collector remediation generation is malformed")
+    # Exhaustion is generation-scoped evidence, not a permanent property of the
+    # head: once the blocking findings of that generation were resolved, every
+    # reviewer it recorded as exhausted is owed another invocation, so reusing
+    # the receipt would authorise a lower-priority reviewer over one that has not
+    # actually been asked about the remediated state.
+    if receipt_generation != orchestration.current_remediation_generation(
+        repository, token, pr, head, receipt["claims_id"]
+    ):
+        raise ValueError("collector receipt predates the current remediation generation")
     agents = review.enabled_pool_reviewers(pool)
     own = next((a["priority"] for a in agents if a["id"] == authority_type), float("inf"))
+    # Ordering evidence covers every *enabled* reviewer above this authority, so
+    # a reviewer the collector skipped is still caught positionally. Exhaustion
+    # evidence is emitted only for the *authority-eligible* ones: a triage-only
+    # reviewer is never review authority, so there is nothing for it to exhaust,
+    # and naming it in reviewer_attempts would be rejected by the shared
+    # authority verifier as an unknown agent.
     required = sorted((a for a in agents if a["priority"] < own), key=lambda a: a["priority"])
     records = receipt.get("attempts")
     if not isinstance(records, list):
         raise ValueError("collector attempts are missing")
     result = []
     offset = 0
-    seen = set()
+    seen: set[tuple[str, int]] = set()
     for agent in required:
+        authority_eligible = agent.get("authority_eligible") is not False
+        scheme = trigger_scheme(agent)
         count = 1 + (pool["timeout_policy"]["retries_per_agent"] if agent["retryable"] else 0)
+        # How many invocations this reviewer actually cost. Only a silent
+        # timeout is retried, so a reviewer that answered or declared itself
+        # unavailable settles on its first attempt; claiming the full retry
+        # budget for it would assert invocations that never happened.
+        spent = 0
         for number in range(1, count + 1):
             if offset >= len(records) or not isinstance(records[offset], dict):
                 raise ValueError("enabled reviewer was skipped or not fully retried")
             record = records[offset]
             offset += 1
+            spent = number
             expected_attempt = {
-                k: agent[k] for k in ("priority", "timeout_seconds", "trigger_method", "evidence_parser", "retryable")
+                k: agent[k]
+                for k in (
+                    "priority",
+                    "ack_timeout_seconds",
+                    "review_timeout_seconds",
+                    "trigger_method",
+                    "evidence_parser",
+                    "retryable",
+                )
             }
             expected_attempt.update(agent_id=agent["id"], attempt_number=number)
             elapsed = record.get("elapsed_seconds")
             outcome = record.get("outcome")
+            # A triage-only reviewer may legitimately have answered; only an
+            # authority-eligible reviewer has to have been exhausted.
+            allowed_outcomes = (
+                {"timed_out", "unavailable", "unacknowledged"}
+                if authority_eligible
+                else {"timed_out", "unavailable", "unacknowledged", "clear", "blocking"}
+            )
             elapsed_valid = (
                 type(elapsed) in (int, float)
                 and 0 <= elapsed < 7200
-                and (outcome == "unavailable" or elapsed >= agent["timeout_seconds"])
+                and (outcome != "timed_out" or elapsed >= agent["review_timeout_seconds"])
+                and (outcome != "unacknowledged" or elapsed >= agent["ack_timeout_seconds"])
             )
             if (
                 any(record.get(k) != v for k, v in expected_attempt.items())
-                or outcome not in {"timed_out", "unavailable"}
+                or outcome not in allowed_outcomes
                 or type(record.get("priority")) is not int
-                or type(record.get("timeout_seconds")) is not int
+                or type(record.get("ack_timeout_seconds")) is not int
+                or type(record.get("review_timeout_seconds")) is not int
                 or type(record.get("retryable")) is not bool
                 or type(record.get("attempt_number")) is not int
                 or not elapsed_valid
             ):
                 raise ValueError("trusted timeout/configuration/retry result mismatch")
             trigger_id = record.get("trigger_id")
-            if type(trigger_id) is not int or trigger_id in seen:
+            if type(trigger_id) is not int or trigger_id < 0 or (scheme, trigger_id) in seen:
                 raise ValueError("duplicate or invalid invocation identity")
-            seen.add(trigger_id)
+            if scheme == "github-workflow":
+                _verify_workflow_trigger(
+                    repository,
+                    token,
+                    agent,
+                    record,
+                    number,
+                    head=head,
+                    claims_id=receipt["claims_id"],
+                    branch=branch,
+                    run_id=run_id,
+                    run_attempt=run["run_attempt"],
+                    seen=seen,
+                )
+                if outcome != "timed_out":
+                    break
+                continue
+            if trigger_id == 0:
+                raise ValueError("duplicate or invalid invocation identity")
+            seen.add((scheme, trigger_id))
             try:
                 trigger = governance.request_json(repository, token, "GET", f"issues/comments/{trigger_id}")
             except Exception as exc:
@@ -760,6 +1310,7 @@ def load_exhaustion(
                     int(record.get("collector_run_id") or run_id),
                     int(record.get("collector_run_attempt") or run["run_attempt"]),
                     number,
+                    receipt_generation,
                 )
                 body_matches = parsed_trigger == expected_trigger
             else:
@@ -770,6 +1321,7 @@ def load_exhaustion(
                     int(record.get("collector_run_id") or run_id),
                     int(record.get("collector_run_attempt") or run["run_attempt"]),
                     number,
+                    receipt_generation,
                 )
                 body_matches = trigger.get("body") == expected_body
             if (
@@ -787,6 +1339,7 @@ def load_exhaustion(
                 receipt["claims_id"],
                 int(record.get("collector_run_id") or run_id),
                 int(record.get("collector_run_attempt") or run["run_attempt"]),
+                receipt_generation,
             ).response_state(agent, trigger)
             if live_state in {"clear", "blocking"}:
                 raise ValueError("higher-priority reviewer is available; exhaustion cannot be reused")
@@ -803,6 +1356,7 @@ def load_exhaustion(
                     receipt["claims_id"],
                     int(record.get("collector_run_id") or run_id),
                     int(record.get("collector_run_attempt") or run["run_attempt"]),
+                    receipt_generation,
                 )._api_result(agent, trigger)
                 if api_result is None:
                     raise ValueError("trusted API reviewer result evidence is unavailable")
@@ -812,7 +1366,11 @@ def load_exhaustion(
                     raise ValueError("trusted API reviewer provider mismatch")
                 if record.get("head_sha") != head:
                     raise ValueError("trusted API reviewer head binding mismatch")
-        terminal = records[offset - 1].get("outcome") if count else "timed_out"
+            if outcome != "timed_out":
+                break
+        if not authority_eligible:
+            continue
+        terminal = records[offset - 1].get("outcome") if spent else "timed_out"
         result.append(
             {
                 "agent_id": agent["id"],
@@ -822,9 +1380,10 @@ def load_exhaustion(
                     if terminal == "unavailable"
                     else "trusted collector timed out every configured invocation"
                 ),
-                "timeout_seconds": agent["timeout_seconds"],
+                "ack_timeout_seconds": agent["ack_timeout_seconds"],
+                "review_timeout_seconds": agent["review_timeout_seconds"],
                 "failure_class": "permanent" if terminal == "unavailable" else "transient",
-                "attempt_count": count,
+                "attempt_count": spent,
                 "invocation_reference": f"actions/runs/{run_id}",
             }
         )
@@ -859,10 +1418,20 @@ def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--pr", type=int, required=True)
     parser.add_argument("--head", required=True)
+    parser.add_argument(
+        "--generation",
+        default=BASE_GENERATION,
+        help="Remediation generation this run was dispatched for; empty to use whatever the evidence derives.",
+    )
     parser.add_argument("--output", type=Path, required=True)
     args = parser.parse_args()
     if not re.fullmatch("[0-9a-f]{40}", args.head):
         raise ValueError("exact HEAD is required")
+    declared_generation = str(args.generation or BASE_GENERATION).strip()
+    if declared_generation != BASE_GENERATION and not orchestration.GENERATION_ID_PATTERN.fullmatch(
+        declared_generation
+    ):
+        raise ValueError("remediation generation identity is malformed")
     repository, token = os.environ["GITHUB_REPOSITORY"], os.environ["GITHUB_TOKEN"]
     run_id, run_attempt = int(os.environ["GITHUB_RUN_ID"]), int(os.environ["GITHUB_RUN_ATTEMPT"])
     pool, error = review.load_reviewer_pool()
@@ -874,7 +1443,18 @@ def main() -> int:
     claims_id = review.review_id(document["claims"])
     if document.get("review_request") != {"schema": "hunter.review-request.v1", "claims_id": claims_id}:
         raise ValueError("an explicit current review request is required")
-    backend = GitHubBackend(repository, token, args.pr, args.head, claims_id, run_id, run_attempt)
+    # The dispatched generation correlates the run; it never authorises it. This
+    # trusted default-branch collector derives the generation itself from the
+    # authenticated review-thread state, so the generation a reviewer invocation
+    # is spent against is always the evidence's and never the dispatcher's. An
+    # input is therefore only ever checked *against* that derivation: a
+    # generation the evidence does not support fails closed instead of being
+    # used. The pull-request-target entry point supplies none at all -- it has no
+    # run name to correlate -- and reviews the generation the evidence derives.
+    generation = orchestration.current_remediation_generation(repository, token, args.pr, args.head, claims_id)
+    if declared_generation and declared_generation != generation:
+        raise ValueError("dispatched remediation generation is not the one trusted review-thread state derives")
+    backend = GitHubBackend(repository, token, args.pr, args.head, claims_id, run_id, run_attempt, generation)
     attempts = collect_attempts(pool, args.head, backend)
     if backend.head() != args.head:
         raise ValueError("HEAD changed before receipt publication")
@@ -886,6 +1466,7 @@ def main() -> int:
         "run_id": run_id,
         "run_attempt": run_attempt,
         "claims_id": claims_id,
+        "remediation_generation_id": generation,
         "configuration_digest": configuration_digest(pool),
         "attempts": attempts,
     }

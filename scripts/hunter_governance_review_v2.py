@@ -451,6 +451,79 @@ def review_result_observation(body: str) -> dict[str, Any] | None:
     return value
 
 
+_COLLAPSIBLE_TRAILER = re.compile(r"(?s)\A\s*(?:<details>(?:(?!<details>).)*?</details>\s*)*\Z")
+_FINDING_STRUCTURE = re.compile(
+    r"(?im)^\s*(?:[-*+]\s|\d+[.)]\s|#{1,6}\s)"  # a rendered finding list item or heading
+    r"|\bP[0-4]\b"  # a Codex severity badge
+    r"|/blob/[0-9a-f]{7,40}/"  # a linked code location
+    r"|[\w./-]+\.[A-Za-z0-9]+:\d+"  # a path:line citation
+)
+
+
+def _adoptable_clear_trailer(remainder: str) -> bool:
+    """Whether content following a Codex clear declaration can be ignored safely.
+
+    Truncating the body at the first ``<details>`` accepted a conforming clear
+    prefix while never reading what followed it, so blocking findings rendered
+    inside a collapsed section were adopted as a clear verdict. Everything after
+    the declaration is therefore validated rather than discarded: only complete,
+    non-nested collapsible sections may follow, and none of them may carry the
+    structure Codex renders an actual finding with (list items, headings,
+    severity badges, linked code locations, or path:line citations). Any other
+    trailing content is unvalidated review substance, so the body is not
+    adoptable and governance keeps waiting for admissible authority.
+    """
+
+    if not remainder.strip():
+        return True
+    if _COLLAPSIBLE_TRAILER.fullmatch(remainder) is None:
+        return False
+    return _FINDING_STRUCTURE.search(remainder) is None
+
+
+def review_adoption_acknowledgement(
+    observation: dict[str, Any], head_sha: str, claims_id: str
+) -> dict[str, Any] | None:
+    """Canonicalize authenticated exact-head reviewer results into Hunter adoption.
+
+    Structured Hunter acknowledgements remain preferred. Codex also emits a
+    stable native GitHub review when it finds no major issues; because GitHub
+    binds that authenticated review to the exact commit, the current committed
+    review request is transitively bound to the same HEAD. Only that narrow
+    clear-result shape is accepted, and any arbitrary trailing prose is rejected.
+    """
+
+    ack = review_acknowledgement(str(observation.get("body") or ""))
+    if ack is not None:
+        return ack
+    if (
+        observation.get("agent_id") != pre_ready.CODEX_REVIEW_AUTHORITY
+        or observation.get("source_kind") != "review"
+        or observation.get("state") not in {"COMMENTED", "APPROVED"}
+        or observation.get("commit_id") != head_sha
+    ):
+        return None
+    body = str(observation.get("body") or "").strip()
+    body = re.sub(r"^###\s+💡\s+", "", body, count=1)
+    match = re.match(
+        r"Codex Review(?:\s*:\s*|\s+)(?:\n+)?Didn't find any major issues\."
+        r"(?:\s*(?:Nice work!|Bravo\.))?\s*\n+"
+        r"\*\*Reviewed commit:\*\*\s*`([0-9a-f]{7,40})`",
+        body,
+    )
+    if match is None or not head_sha.lower().startswith(match.group(1).lower()):
+        return None
+    if not _adoptable_clear_trailer(body[match.end() :]):
+        return None
+    return {
+        "schema": "hunter.review-ack.v1",
+        "head_sha": head_sha,
+        "claims_id": claims_id,
+        "verdict": "clear",
+        "summary": "Authenticated Codex exact-head review found no major issues for the current committed review request.",
+    }
+
+
 def reviewer_login(agent: dict[str, Any]) -> str:
     # Integration identity is configuration, never a field supplied by a candidate.
     if agent.get("id") == "codex":
@@ -719,7 +792,7 @@ def verify_trusted_exhaustion(
     problem = pre_ready._exhaustion_error(pool, authority, str(authority.get("type")))
     if problem:
         return "failure", problem
-    agents = pre_ready.enabled_pool_reviewers(pool)
+    agents = pre_ready.authority_pool_reviewers(pool)
     own = next((a["priority"] for a in agents if a["id"] == authority.get("type")), float("inf"))
     required = [a for a in agents if a["priority"] < own]
     attempts = {a["agent_id"]: a for a in authority.get("reviewer_attempts", [])}
@@ -743,7 +816,8 @@ def verify_trusted_exhaustion(
                 "head_sha": head_sha,
                 "agent_id": agent["id"],
                 "priority": agent["priority"],
-                "timeout_seconds": agent["timeout_seconds"],
+                "ack_timeout_seconds": agent.get("ack_timeout_seconds"),
+                "review_timeout_seconds": agent.get("review_timeout_seconds"),
                 "trigger_method": agent.get("trigger_method"),
                 "retryable": agent["retryable"],
                 "evidence_parser": agent.get("evidence_parser"),
@@ -1723,6 +1797,58 @@ def read_issue_acceptance_criteria(repository: str, token: str, issue_number: st
     return "present", pre_ready.parse_issue_acceptance_criteria(body), ""
 
 
+def valid_current_review_request(
+    repository: str,
+    token: str,
+    pr_number: int,
+    head_sha: str,
+    document: Any,
+) -> tuple[bool, str]:
+    """Verify request claims before the trusted collector spends reviewer capacity."""
+
+    ok_refs, _head_ref, base_ref, refs_error = read_pr_refs(repository, token, pr_number)
+    if not ok_refs:
+        return False, f"pull-request ref evidence is unavailable ({refs_error})"
+    ok_base, merge_base, base_error = read_merge_base(repository, token, base_ref, head_sha)
+    if not ok_base:
+        return False, f"base provenance evidence is unavailable ({base_error})"
+    ok_files, changed_files, files_error = read_pr_changed_files(repository, token, pr_number)
+    if not ok_files:
+        return False, f"changed-file evidence is unavailable ({files_error})"
+    canonical: list[ingress.ConnectorFileChange] = []
+    for item in changed_files:
+        status = pre_ready.canonical_status(item.status)
+        if status is None:
+            return False, f"changed file {item.path!r} carries unrecognised status {item.status!r}"
+        canonical.append(
+            ingress.ConnectorFileChange(
+                status, item.path, item.previous_path if status == "renamed" else "", item.blob_sha
+            )
+        )
+    changes = ingress.normalize_changes(tuple(canonical))
+    if changes is None:
+        return False, "changed-file operation/content evidence is malformed or ambiguous"
+    families, families_error = pre_ready.load_families()
+    if families_error:
+        return False, families_error
+    claims = document.get("claims") if isinstance(document, dict) else None
+    issue = str((claims or {}).get("issue") or "").strip().lstrip("#")
+    issue_criteria: tuple[str, ...] | None = None
+    if issue.isdigit():
+        criteria_state, issue_criteria, criteria_error = read_issue_acceptance_criteria(repository, token, issue)
+        if criteria_state != "present":
+            return False, f"governing Issue #{issue} acceptance-criteria evidence is unavailable ({criteria_error})"
+    verdict = pre_ready.verify_review_request(
+        document,
+        base_sha=merge_base,
+        changes=changes,
+        families=families,
+        issue_criteria=issue_criteria,
+        head_sha=head_sha,
+    )
+    return verdict.ok, verdict.reason
+
+
 def verify_pre_ready_hostile_review(
     repository: str,
     token: str,
@@ -1880,29 +2006,12 @@ def verify_pre_ready_hostile_review(
             return "failure", "MALFORMED_REVIEW: request digest mismatch"
         adopted = []
         for observation in exact_reviews:
-            ack = review_acknowledgement(observation["body"])
+            ack = review_adoption_acknowledgement(observation, head_sha, claims_id)
             if ack and ack["head_sha"] == head_sha and ack["claims_id"] == claims_id:
                 adopted.append((observation, ack))
-                continue
-            if (
-                observation.get("agent_id") == "codex"
-                and observation.get("source_kind") == "review"
-                and observation.get("trigger_claims_id") == claims_id
-                and native_codex_clear_review(observation["body"], head_sha)
-            ):
-                adopted.append(
-                    (
-                        observation,
-                        {
-                            "head_sha": head_sha,
-                            "claims_id": claims_id,
-                            "verdict": "clear",
-                        },
-                    )
-                )
         if not adopted:
             return "failure", "MISSING_REVIEW_AUTHORITY: no authenticated exact-head adoption of the review request"
-        priorities = {str(a["id"]): int(a["priority"]) for a in pre_ready.enabled_pool_reviewers(pool)}
+        priorities = {str(a["id"]): int(a["priority"]) for a in pre_ready.authority_pool_reviewers(pool)}
         observation, ack = min(adopted, key=lambda item: priorities.get(item[0]["agent_id"], 10**9))
         authority = {
             "type": observation["agent_id"],
