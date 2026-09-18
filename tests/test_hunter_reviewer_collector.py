@@ -902,6 +902,39 @@ def test_native_codex_clear_rejects_same_line_blocker_and_accepts_heading():
     assert not collector.governance.native_codex_clear_review(bad, HEAD)
 
 
+def test_external_reviewers_use_supported_provider_models(monkeypatch):
+    backend = collector.GitHubBackend("owner/repo", "token", 469, HEAD, "claims", 1, 1)
+    monkeypatch.setattr(backend, "_candidate_diff", lambda: "diff --git a/x b/x")
+    seen = []
+
+    class Response:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_args):
+            return False
+
+        def read(self, _limit):
+            if "generativelanguage.googleapis.com" in seen[-1][0]:
+                return b'{"candidates":[{"content":{"parts":[{"text":"{\\"verdict\\":\\"clear\\",\\"summary\\":\\"No blockers\\"}"}]}}]}'
+            return (
+                b'{"choices":[{"message":{"content":"{\\"verdict\\":\\"clear\\",\\"summary\\":\\"No blockers\\"}"}}]}'
+            )
+
+    def capture(req, **_kwargs):
+        body = json.loads(req.data.decode())
+        seen.append((req.full_url, body))
+        return Response()
+
+    monkeypatch.setattr(collector.urllib.request, "urlopen", capture)
+    monkeypatch.setenv("GEMINI_API_KEY", "test")
+    monkeypatch.setenv("GROQ_API_KEY", "test")
+    backend._invoke_external({"id": "gemini", "review_timeout_seconds": 1, "trigger_method": "api:gemini"}, 1)
+    backend._invoke_external({"id": "groq", "review_timeout_seconds": 1, "trigger_method": "api:groq"}, 1)
+    assert "models/gemini-3.7-flash:generateContent" in seen[0][0]
+    assert seen[1][1]["model"] == "openai/gpt-oss-120b"
+
+
 def test_api_auth_failures_are_explicit_unavailability(monkeypatch):
     backend = collector.GitHubBackend("owner/repo", "token", 469, HEAD, "claims", 1, 1)
     monkeypatch.setenv("GEMINI_API_KEY", "bad")

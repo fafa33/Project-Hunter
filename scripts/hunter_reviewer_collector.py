@@ -553,7 +553,7 @@ class GitHubBackend:
             "Any finding must use blocking.\n\nDIFF:\n" + self._candidate_diff()
         )
         if provider == "gemini":
-            url = "https://generativelanguage.googleapis.com/v1beta/models/gemini-3.8-flash:generateContent"
+            url = "https://generativelanguage.googleapis.com/v1beta/models/gemini-3.7-flash:generateContent"
             headers = {"x-goog-api-key": key, "Content-Type": "application/json"}
             body: dict[str, Any] = {
                 "contents": [{"parts": [{"text": prompt}]}],
@@ -563,7 +563,7 @@ class GitHubBackend:
             url = "https://api.groq.com/openai/v1/chat/completions"
             headers = {"Authorization": f"Bearer {key}", "Content-Type": "application/json"}
             body = {
-                "model": "llama-3.3-70b-versatile",
+                "model": "openai/gpt-oss-120b",
                 "messages": [{"role": "user", "content": prompt}],
                 "response_format": {"type": "json_object"},
                 "temperature": 0,
