@@ -956,3 +956,19 @@ def test_collector_workflow_exposes_server_side_provider_secrets():
     workflow = (collector.review.ROOT / ".github/workflows/hunter-reviewer-collector.yml").read_text(encoding="utf-8")
     assert "GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}" in workflow
     assert "GROQ_API_KEY: ${{ secrets.GROQ_API_KEY }}" in workflow
+
+
+def test_last_resort_recognition_has_no_default_authority_type():
+    """The guard's extra snapshot gates cannot be skipped by omitting an argument.
+
+    ``load_exhaustion`` decides whether the extra live prerequisites apply by
+    comparing its ``authority_type`` argument against the pool's declared
+    ``last_resort``. A default value for that argument would read a caller who
+    omitted it as some other reviewer and silently waive those gates, so the
+    argument is required and this pins that.
+    """
+    import inspect
+
+    signature = inspect.signature(collector.load_exhaustion)
+    parameter = signature.parameters["authority_type"]
+    assert parameter.default is inspect.Parameter.empty

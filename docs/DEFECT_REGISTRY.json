@@ -1025,7 +1025,7 @@
     {
       "id": "DFF-022",
       "title": "merge-readiness-without-current-head-review-authority",
-      "invariant": "The final Merge Readiness controller must itself fail closed unless a complete exact-head review exists at the current PR head and verifies against trusted PR evidence -- a missing, stale, incomplete, or still-contested review is a hard merge blocker, never a warning. The review authority is an ordered reviewer pool declared by the trusted default branch: Codex is the Tier 1 primary; approved agent reviewers are Tier 2 and are handled by the same exact-head-bound evidence pipeline; the canonical OpenCode hostile review is the last-resort guard. Any reviewer below the primary is admissible only when it records, in machine-checkable fields (reviewer_attempts), that every higher-priority enabled reviewer was actually attempted and exhausted with a recorded reason and a timeout_seconds within the bounded timeout policy; the guard is admissible only when the whole enabled pool is exhausted AND it records why the pool reviewers could not review and that Governance, trusted Preflight, a zero unresolved-thread count, and complete structured evidence were all green at review time. A review that silently skips an enabled reviewer while it is available, a guard review whose exhaustion cannot be proven (missing, skipped, duplicated, malformed, unknown-agent, or out-of-bounds attempts), a review whose recorded exact head differs from the candidate head, or a new commit after the review all invalidate the review and force reviewer selection to restart. A resolved review finding counts as satisfied only when its structured evidence names the exact-head correction commit and a regression test committed in the change set. No other controller's earlier word, and no resolved review thread without that evidence, can stand in for this prerequisite; failover is a deterministic machine decision, never a human-noticed skip.",
+      "invariant": "The final Merge Readiness controller must itself fail closed unless a complete exact-head review exists at the current PR head and verifies against trusted PR evidence -- a missing, stale, incomplete, or still-contested review is a hard merge blocker, never a warning. The review authority is an ordered reviewer pool declared by the trusted default branch, and that declaration is what names its members: authority-eligible reviewers are attempted in strict priority order, a reviewer the pool marks triage-only (authority_eligible false) is never review authority however substantive its output, and the deterministic hostile-review guard the pool declares as its last_resort is the last resort. Any reviewer below the primary is admissible only when it records, in machine-checkable fields (reviewer_attempts), that every higher-priority authority-eligible reviewer was actually attempted and exhausted with a recorded reason and recorded budgets within the bounded timeout policy -- acknowledgement and review are separately budgeted, so an attempt proves exhaustion only when both recorded budgets are within policy and the review budget was actually spent; the guard is admissible only when the whole enabled pool is exhausted AND it records why the pool reviewers could not review and that Governance, trusted Preflight, a zero unresolved-thread count, and complete structured evidence were all green at review time. A review that silently skips an enabled reviewer while it is available, a guard review whose exhaustion cannot be proven (missing, skipped, duplicated, malformed, unknown-agent, or out-of-bounds attempts), a review whose recorded exact head differs from the candidate head, or a new commit after the review all invalidate the review and force reviewer selection to restart. A resolved review finding counts as satisfied only when its structured evidence names the exact-head correction commit and a regression test committed in the change set. No other controller's earlier word, and no resolved review thread without that evidence, can stand in for this prerequisite; failover is a deterministic machine decision, never a human-noticed skip.",
       "applicability": {
         "changed_paths": [
           "scripts/hunter_merge_readiness_v2.py",
@@ -1036,7 +1036,9 @@
           "docs/DEFECT_REGISTRY.json",
           ".github/workflows/hunter-reviewer-collector.yml",
           "scripts/hunter_reviewer_collector.py",
-          "scripts/hunter_governance_review/bootstrap_external_review_469.py"
+          "scripts/hunter_governance_review/bootstrap_external_review_469.py",
+          ".github/workflows/hunter-local-reviewer.yml",
+          "scripts/hunter_local_reviewer.py"
         ],
         "rationale": "The final merge gate and the single shared review-verification implementation are where the workflow-ordering defect lives: Merge Readiness could go green through governance or check status alone, or a resolved thread could satisfy readiness without machine-verified structured evidence. A recurrence here means the fail-closed prerequisite was weakened at the boundary that is supposed to own it. The fallback authority rule lives here too because a single primary review authority that can be rate-limited or unavailable is itself a workflow freeze waiting to happen: readiness must stay fail-closed without turning Codex availability into a single point of failure. The trusted reviewer collector workflow and implementation are part of the same boundary because they prove ordered reviewer invocation and exhaustion; losing their trigger permission or sequencing can silently disable failover and recreate a single-reviewer freeze."
       },
@@ -1107,7 +1109,14 @@
         "tests/test_pr473_trusted_bridge_bootstrap.py::test_latest_review_revokes_prior_clear_bootstrap_authority",
         "tests/test_pr473_trusted_bridge_bootstrap.py::test_later_clear_review_can_restore_bootstrap_authority",
         "tests/test_pr473_trusted_bridge_bootstrap.py::test_controller_requires_explicit_path_evidence",
-        "tests/test_pr473_trusted_bridge_bootstrap.py::test_bootstrap_accepts_native_codex_clear_review_with_standard_footer"
+        "tests/test_pr473_trusted_bridge_bootstrap.py::test_bootstrap_accepts_native_codex_clear_review_with_standard_footer",
+        "tests/test_hunter_reviewer_collector.py::test_last_resort_recognition_has_no_default_authority_type",
+        "tests/test_hunter_review_orchestrator.py::test_no_pull_request_reachable_workflow_can_drive_other_workflows",
+        "tests/test_hunter_review_orchestrator.py::test_the_actions_level_is_read_from_every_permission_shape",
+        "tests/test_hunter_local_reviewer.py::test_a_result_path_outside_the_workspace_is_refused",
+        "tests/test_hunter_local_reviewer.py::test_the_head_sha_argument_must_be_a_full_commit_sha",
+        "tests/test_sources_have_no_unreachable_statements.py::test_no_source_file_carries_unreachable_statements",
+        "tests/test_sources_have_no_unreachable_statements.py::test_the_guard_reads_control_flow_rather_than_text"
       ],
       "lifecycle": "regression-tested",
       "sources": [
@@ -1116,7 +1125,9 @@
         "Issue #467 reviewer-pool failover hardening (follow-on)",
         "Issue #461 / PR #472 inherited-review authority and reviewer failover stabilization (2026-09-15)",
         "PR #476: candidate bootstrap retirement and authenticated connector identity regression coverage",
-        "PR #476: reviewer collector trigger/result verification and authenticated API review hardening"
+        "PR #476: reviewer collector trigger/result verification and authenticated API review hardening",
+        "PR #473: reviewer-pool reconciliation -- triage-only local review, hunter-guard last resort, split acknowledgement/review budgets, and the candidate-controlled workflow permission boundary",
+        "PR #473: unreachable validation tail in hunter_governance_review_v2.review_result_observation -- enforcement that reads like enforcement but never runs"
       ]
     },
     {

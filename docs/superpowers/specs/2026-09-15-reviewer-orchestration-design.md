@@ -34,8 +34,12 @@ The pool is ordered by availability and cost, not by brand prestige.
 **Shipped pool (authoritative, as declared in `docs/CODE_WRITE_POLICY.json`):**
 
 1. **`local-ollama`** — free first-pass reviewer on the Mac self-hosted runner, priority 1, enabled. It is **triage-only**: its required quality gate (`hunter-local-reviewer-v1`) has not passed, so it declares `authority_eligible: false` and cannot terminate the authority search. Its implementation/model may change without changing orchestration semantics.
-2. **`codex`** — hosted authority reviewer, priority 2, enabled. It is the authority fallback reached whenever the triage reviewer is offline, unresponsive, or has spent its budget; it is never skipped on the way to the last resort.
-3. **`hunter-guard`** — deterministic non-reviewer last resort, admissible only after every authority-eligible reviewer has authenticated exhaustion evidence and the existing snapshot gates hold.
+2. **`codex`** — hosted authority reviewer, priority 2, enabled, `authority_eligible: true`. It is the primary review authority, reached whenever the triage reviewer is offline, unresponsive, or has spent its budget; it is never skipped on the way to the last resort.
+3. **`gemini`** — server-side API reviewer, priority 3, enabled, `authority_eligible: true`. The trusted default-branch collector calls it with a repository secret; candidate code never receives that secret.
+4. **`groq`** — server-side API reviewer, priority 4, enabled, `authority_eligible: true`, invoked on the same trusted terms as `gemini`.
+5. **`hunter-guard`** — deterministic non-reviewer last resort, admissible only after every authority-eligible reviewer has authenticated exhaustion evidence and the existing snapshot gates hold.
+
+Authority therefore fails over `codex` → `gemini` → `groq`, one attempt each per exact HEAD with no retry, before `hunter-guard` can close the pool.
 
 **Superseded design intent (historical, not shipped):** an earlier draft of this
 section listed **Jules** as a free hosted fallback stage and named the

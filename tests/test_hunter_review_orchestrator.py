@@ -97,6 +97,35 @@ def test_ready_review_request_dispatches_collector_once(monkeypatch):
     assert stored["dispatches"] == 1
 
 
+def test_a_missing_run_id_refuses_before_any_collector_is_dispatched(monkeypatch):
+    """A dispatch this run cannot name would be re-dispatched on the next pass.
+
+    `trigger_id` is how a later pass recognises that a collector is already
+    running for this exact HEAD. Dispatching first and only then discovering the
+    run identity is unavailable would leave that collector recorded without one,
+    which the next pass reads as "never dispatched" -- a second invocation
+    against the same immutable head.
+    """
+
+    stored = {"cycle": None, "dispatches": 0}
+    monkeypatch.setattr(orchestrator, "read_cycle", lambda *_args: ("absent", None, None))
+    monkeypatch.setattr(orchestrator, "reviewer_pool_config_digest", lambda: "d" * 64, raising=False)
+    monkeypatch.setattr(orchestrator, "current_run_id", lambda: None, raising=False)
+    monkeypatch.setattr(orchestrator, "publish_cycle", lambda *_args, cycle: stored.update(cycle=cycle), raising=False)
+    monkeypatch.setattr(
+        orchestrator,
+        "dispatch_collector",
+        lambda *_args: stored.update(dispatches=stored["dispatches"] + 1),
+        raising=False,
+    )
+
+    with pytest.raises(RuntimeError, match="GITHUB_RUN_ID"):
+        orchestrator.ensure_collector("owner/repo", "token", 472, HEAD)
+
+    assert stored["dispatches"] == 0
+    assert stored["cycle"] is None
+
+
 def _ensure_harness(monkeypatch, cycle, runs):
     """Drive ensure_collector against a recorded cycle and a collector run listing."""
 
@@ -259,6 +288,29 @@ def _permission_blocks(document):
     return [block for block in blocks if isinstance(block, dict)]
 
 
+#: Permission levels that can drive another workflow run.
+WORKFLOW_DRIVING = frozenset({"write", "admin"})
+
+
+def _actions_levels(document):
+    """Yield the effective `actions` level of every permission block in `document`.
+
+    A workflow may declare permissions as a mapping or as one of the blanket
+    strings, and `write-all` grants `actions: write` just as surely as spelling
+    the scope out does. Reading only mappings would let the shorter spelling pass
+    a guard that the longer one fails.
+    """
+    blocks = [document.get("permissions")]
+    jobs = document.get("jobs")
+    if isinstance(jobs, dict):
+        blocks.extend(job.get("permissions") for job in jobs.values() if isinstance(job, dict))
+    for block in blocks:
+        if isinstance(block, str):
+            yield "write" if block.strip() == "write-all" else "read"
+        elif isinstance(block, dict) and block.get("actions") is not None:
+            yield str(block["actions"]).strip()
+
+
 def _triggers(document):
     # PyYAML resolves a bare `on:` key to True, so read both spellings.
     raw = document.get("on", document.get(True))
@@ -282,9 +334,65 @@ def test_no_pull_request_reachable_workflow_can_drive_other_workflows():
         for path, document in _workflow_documents()
         if isinstance(document, dict)
         and "pull_request" in _triggers(document)
-        and any(str(block.get("actions", "")).strip() == "write" for block in _permission_blocks(document))
+        and any(level in WORKFLOW_DRIVING for level in _actions_levels(document))
     ]
     assert privileged == []
+
+
+@pytest.mark.parametrize(
+    ("source", "candidate_controlled"),
+    [
+        ("on:\n  pull_request:\n    branches: [main]\n", True),
+        ("on: pull_request\n", True),
+        ("on: [push, pull_request]\n", True),
+        ('"on":\n  pull_request: null\n', True),
+        # `pull_request_target` runs the base-branch copy of the workflow file,
+        # so its permissions are not candidate-reachable and are not flagged.
+        ("on:\n  pull_request_target:\n    types: [opened]\n", False),
+        ("on:\n  workflow_run:\n    workflows: [Other]\n", False),
+        ("on:\n  push:\n    branches: [main]\n", False),
+        ("on: workflow_dispatch\n", False),
+    ],
+)
+def test_candidate_controlled_triggers_are_read_from_every_declaration_shape(source, candidate_controlled):
+    assert ("pull_request" in _triggers(yaml.safe_load(source))) is candidate_controlled
+
+
+@pytest.mark.parametrize(
+    ("permissions", "expected"),
+    [
+        ({"actions": "write"}, ["write"]),
+        ({"actions": "read"}, ["read"]),
+        ({"actions": " write "}, ["write"]),
+        ({"contents": "read"}, []),
+        ({}, []),
+        (None, []),
+        # Blanket declarations grant every scope, `actions` included.
+        ("write-all", ["write"]),
+        ("read-all", ["read"]),
+    ],
+)
+def test_the_actions_level_is_read_from_every_permission_shape(permissions, expected):
+    assert list(_actions_levels({"permissions": permissions})) == expected
+
+
+def test_a_job_cannot_re_grant_what_the_workflow_block_gave_up():
+    """A read-only workflow block does not excuse a job that takes the scope back."""
+    document = {
+        "permissions": {"actions": "read"},
+        "jobs": {"privileged": {"permissions": {"actions": "write"}}},
+    }
+    assert any(level in WORKFLOW_DRIVING for level in _actions_levels(document))
+
+
+def test_the_guard_still_describes_a_repository_that_grants_the_permission_somewhere():
+    """The guard above is only meaningful while `actions: write` exists at all."""
+    privileged = [
+        path.name
+        for path, document in _workflow_documents()
+        if isinstance(document, dict) and any(level in WORKFLOW_DRIVING for level in _actions_levels(document))
+    ]
+    assert privileged, "no workflow declares actions:write; this guard no longer describes the repository"
 
 
 def test_trusted_orchestration_runs_only_from_workflows_without_pull_request_triggers():
@@ -328,20 +436,43 @@ def test_orchestration_bootstraps_only_from_the_trusted_default_branch_checkout(
 
 
 def test_default_branch_without_orchestrator_publishes_bootstrap_pending_without_dispatching_authority():
-    """A bootstrap PR cannot invoke a controller that trusted main does not contain."""
+    """A bootstrap PR cannot invoke a controller that trusted main does not contain.
 
-    workflow = pathlib.Path(REPOSITORY_ROOT, ".github/workflows/hunter-governance-review.yml").read_text(
-        encoding="utf-8"
-    )
+    The migration state itself is decided by the trusted default-branch bridge --
+    see ``tests/test_pr473_trusted_bridge_bootstrap.py`` -- because only that tree
+    can tell whether the controller has landed, and only that tree can adopt an
+    exact-head review once one exists. What this lane owns is the guarantee that
+    it hands the decision to that bridge and does nothing else: it runs the
+    trusted copy out of ``engine/``, never a candidate copy of the orchestrator,
+    and reaches no dispatch or comment surface on the way.
+    """
 
-    assert "BOOTSTRAP_PENDING_TRUSTED_CONTROLLER" in workflow
-    assert 'CONTROLLER="${GITHUB_WORKSPACE}/engine/scripts/hunter_review_orchestrator.py"' in workflow
-    bootstrap, trusted_controller = workflow.split('python "${BRIDGE}" governance', 1)
-    assert 'if [ ! -f "${CONTROLLER}" ]; then' in bootstrap
-    assert "actions/workflows/" not in bootstrap
-    assert "issues/${PR_NUMBER}/comments" not in bootstrap
-    assert "python scripts/hunter_review_orchestrator.py" not in bootstrap
-    assert trusted_controller
+    path = pathlib.Path(REPOSITORY_ROOT, ".github/workflows/hunter-governance-review.yml")
+    workflow = path.read_text(encoding="utf-8")
+    document = yaml.safe_load(workflow)
+
+    runs = [
+        step["run"] for job in document["jobs"].values() for step in job["steps"] if isinstance(step.get("run"), str)
+    ]
+    assert any('python "${BRIDGE}" governance' in run for run in runs)
+
+    for run in runs:
+        assert "python scripts/hunter_review_orchestrator.py" not in run
+        assert "actions/workflows/" not in run
+        assert "issues/${PR_NUMBER}/comments" not in run
+        assert "${GITHUB_WORKSPACE}/engine/scripts/" in run or "BRIDGE" not in run
+
+    checkouts = [
+        step
+        for job in document["jobs"].values()
+        for step in job["steps"]
+        if str(step.get("uses", "")).startswith("actions/checkout")
+    ]
+    assert checkouts, "the lane must check out the trusted tree it executes"
+    for step in checkouts:
+        with_block = step.get("with") or {}
+        assert with_block.get("ref") == "${{ github.event.repository.default_branch }}"
+        assert with_block.get("path") == "engine"
 
 
 def test_review_prerequisites_accept_canonical_review_request_object(monkeypatch):

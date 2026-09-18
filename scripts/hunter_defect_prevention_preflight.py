@@ -802,7 +802,7 @@ def validate_code_write_policy() -> list[str]:
         errors.append("Ready progression must declare its review-authority model")
     else:
         if authority.get("primary") != "codex":
-            errors.append("the review-authority model must declare Codex as the first reviewer")
+            errors.append("the review-authority model must declare Codex as the primary review authority")
         if authority.get("fast_fallback") != "local-ollama":
             errors.append("the review-authority model must declare local-ollama as the fast fallback reviewer")
         reviewer_pool = authority.get("reviewer_pool")
@@ -822,8 +822,11 @@ def validate_code_write_policy() -> list[str]:
         }.issubset({str(gate) for gate in gates}):
             errors.append("fallback review authority must require recorded green snapshot gates")
         # The ordered reviewer pool is the binding reviewer-ordering model: the
-        # Codex first with a short acknowledgement budget, trusted local reviewer as fast fallback, canonical guard last
-        # resort, with a bounded, documented, machine-checkable timeout policy.
+        # trusted local reviewer triages first, Codex is the primary review
+        # authority, the remaining hosted reviewers follow it in priority order,
+        # and the declared guard closes the pool as the last resort -- each with
+        # a bounded, documented, machine-checkable acknowledgement and review
+        # budget.
         # It is parsed by the same implementation the review verifier consumes,
         # so the guard and the verifier cannot drift into two readings of the
         # same pool.

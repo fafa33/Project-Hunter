@@ -450,12 +450,6 @@ def review_result_observation(body: str) -> dict[str, Any] | None:
         return None
     return value
 
-    if not re.fullmatch(r"[0-9a-f]{64}", str(value.get("claims_id") or "")):
-        return None
-    if not isinstance(value.get("summary"), str) or not _substantive_review_body(value["summary"]):
-        return None
-    return value
-
 
 _COLLAPSIBLE_TRAILER = re.compile(r"(?s)\A\s*(?:<details>(?:(?!<details>).)*?</details>\s*)*\Z")
 _FINDING_STRUCTURE = re.compile(

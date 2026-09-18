@@ -10,9 +10,11 @@ import argparse
 import hashlib
 import json
 import os
+import re
 import urllib.request
 from collections.abc import Callable
 from datetime import UTC, datetime
+from pathlib import Path
 from typing import Any
 
 MODEL = "qwen2.5-coder:7b"
@@ -175,6 +177,40 @@ def github_diff(repository: str, token: str, pr_number: int, head_sha: str) -> s
         return response.read().decode("utf-8", errors="replace")
 
 
+#: `owner/repo`, in the character set GitHub actually allows for either part.
+REPOSITORY_PATTERN = re.compile(r"[A-Za-z0-9._-]+/[A-Za-z0-9._-]+\Z")
+#: A full commit SHA. Abbreviations are refused: exact-head binding is the point.
+HEAD_SHA_PATTERN = re.compile(r"[0-9a-f]{40}\Z")
+#: The claims digest carried by the review request this run is answering.
+CLAIMS_ID_PATTERN = re.compile(r"[0-9a-f]{64}\Z")
+
+
+def _matching(pattern: re.Pattern[str], value: str, what: str) -> str:
+    """Return `value` only when it is exactly what `what` is allowed to be."""
+    candidate = value.strip()
+    if pattern.fullmatch(candidate) is None:
+        raise ValueError(f"{what} is malformed")
+    return candidate
+
+
+def resolved_output_path(value: str, workspace: Path | None = None) -> Path:
+    """Resolve the result path, refusing anything outside the run's workspace.
+
+    This runs on a self-hosted runner, so the file this writes is the one piece
+    of the reviewer that can reach the host. The dispatch inputs are attacker
+    reachable by definition -- whoever can trigger the workflow chooses them --
+    so the destination is confined to the checkout that the run already owns,
+    and `..` or an absolute path is refused rather than normalised away.
+    """
+    root = (workspace or Path.cwd()).resolve()
+    resolved = (root / value).resolve()
+    if root not in resolved.parents:
+        raise ValueError("review output path escapes the workspace")
+    if resolved.is_dir():
+        raise ValueError("review output path is a directory")
+    return resolved
+
+
 def parser() -> argparse.ArgumentParser:
     result = argparse.ArgumentParser(description="Hunter local exact-head reviewer")
     result.add_argument("--repository", required=True)
@@ -187,19 +223,25 @@ def parser() -> argparse.ArgumentParser:
 
 def main() -> int:
     args = parser().parse_args()
+    repository = _matching(REPOSITORY_PATTERN, args.repository, "repository")
+    head_sha = _matching(HEAD_SHA_PATTERN, str(args.head_sha).lower(), "head SHA")
+    claims_id = _matching(CLAIMS_ID_PATTERN, str(args.claims_id).lower(), "claims id")
+    if args.pr <= 0:
+        raise ValueError("pull-request number is malformed")
+    output_path = resolved_output_path(args.output)
     token = os.environ.get("GITHUB_TOKEN") or os.environ.get("GH_TOKEN") or ""
     result = review_pr(
-        repository=args.repository,
+        repository=repository,
         pr_number=args.pr,
-        head_sha=args.head_sha,
-        claims_id=args.claims_id,
+        head_sha=head_sha,
+        claims_id=claims_id,
         fetch_diff=lambda repo, pr, head: github_diff(repo, token, pr, head),
     )
     # Re-check exact HEAD after model execution so a stale result is never published.
-    pr = github_json(args.repository, token, f"pulls/{args.pr}")
-    if str((pr.get("head") or {}).get("sha") or "") != args.head_sha:
+    pr = github_json(repository, token, f"pulls/{args.pr}")
+    if str((pr.get("head") or {}).get("sha") or "").lower() != head_sha:
         raise ValueError("pull-request HEAD changed during local review")
-    with open(args.output, "w", encoding="utf-8") as handle:
+    with open(output_path, "w", encoding="utf-8") as handle:
         json.dump(result, handle, indent=2, sort_keys=True)
         handle.write("\n")
     return 0

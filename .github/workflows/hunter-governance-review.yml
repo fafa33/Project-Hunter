@@ -81,37 +81,14 @@ jobs:
             }}
           GITHUB_RUN_ID: ${{ github.run_id }}
           GITHUB_SERVER_URL: ${{ github.server_url }}
-          PR_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
         run: |
           set -euo pipefail
-          # A candidate may introduce trusted orchestration, but its
-          # pull_request run still executes the controller from default branch.
-          # Until that branch contains the controller, publish an explicit
-          # migration state and do not consume a hosted reviewer on every Draft
-          # synchronization. This is pending only; it never admits the PR.
-          CONTROLLER="${GITHUB_WORKSPACE}/engine/scripts/hunter_review_orchestrator.py"
-          if [ ! -f "${CONTROLLER}" ]; then
-            # workflow_run and workflow_dispatch carry no pull_request payload,
-            # so the head must come from the pull request itself. Reading it from
-            # the event alone would post a status against an empty SHA and turn
-            # the trusted path red instead of pending.
-            HEAD_SHA="${PR_HEAD_SHA:-}"
-            if [ -z "${HEAD_SHA}" ]; then
-              HEAD_SHA="$(gh api "repos/${GH_REPO}/pulls/${PR_NUMBER}" --jq .head.sha)"
-            fi
-            if [ -z "${HEAD_SHA}" ] || [ "${HEAD_SHA}" = "null" ]; then
-              echo "::error::Bootstrap pending state needs the exact head of PR #${PR_NUMBER}; none is available."
-              exit 1
-            fi
-            gh api --method POST \
-              "repos/${GH_REPO}/statuses/${HEAD_SHA}" \
-              -f state=pending \
-              -f context="Hunter Governance Review" \
-              -f description="BOOTSTRAP_PENDING_TRUSTED_CONTROLLER: default branch cannot yet orchestrate exact-head review" \
-              -f target_url="${GITHUB_SERVER_URL}/${GH_REPO}/actions/runs/${GITHUB_RUN_ID}"
-            echo "::notice::Bootstrap pending: trusted default branch has no reviewer orchestrator."
-            exit 0
-          fi
+          # The bridge below is always the trusted default-branch copy, and it
+          # owns the controller-migration state itself: while the default branch
+          # cannot yet orchestrate exact-head review it publishes an explicit
+          # pending state, and it adopts an authenticated exact-head review as
+          # soon as one exists. Short-circuiting that decision here would also
+          # suppress the only pre-merge path that can clear the migration.
           # Legacy invariant marker retained for migration-contract tests:
           # python "${GITHUB_WORKSPACE}/engine/scripts/hunter_governance_review_v2.py"
           B=boot

@@ -454,11 +454,15 @@ def ensure_collector(repository: str, token: str, pr_number: int, head_sha: str)
         started_at="",
         config_digest=digest,
     )
-    publish_cycle(repository, token, head_sha, cycle=cycle)
-    dispatch_collector(repository, token, pr_number, head_sha)
+    # The dispatch identity is resolved before the dispatch, never after it.
+    # Failing afterwards would leave a live collector recorded with no trigger,
+    # and the next pass reads a missing trigger as "never dispatched" -- a second
+    # collector invocation against the same exact HEAD.
     run_id = current_run_id()
     if run_id is None:
         raise RuntimeError("trusted orchestration requires GITHUB_RUN_ID")
+    publish_cycle(repository, token, head_sha, cycle=cycle)
+    dispatch_collector(repository, token, pr_number, head_sha)
     cycle = replace(cycle, trigger_id=run_id)
     publish_cycle(repository, token, head_sha, cycle=cycle)
     return cycle

@@ -104,3 +104,118 @@ def test_review_prompt_explicitly_checks_hunter_governance_failure_classes():
     for term in ("exact-head", "review authority", "retry", "failover", "timeout", "workflow permissions"):
         assert term in prompt.lower()
     assert "correct safeguards" in prompt.lower()
+
+
+# --- dispatch-input boundary --------------------------------------------------
+#
+# This adapter runs on a self-hosted runner and every one of its arguments comes
+# from a workflow dispatch, so its arguments are chosen by whoever can trigger
+# that workflow. Each is therefore re-validated here, at the process boundary,
+# rather than trusted because the workflow quoted it.
+
+
+@pytest.mark.parametrize(
+    ("value", "accepted"),
+    [
+        ("owner/repo", True),
+        ("fafa33/Project-Hunter", True),
+        ("owner.name/repo_name-1", True),
+        ("  owner/repo  ", True),
+        ("owner/repo;curl evil", False),
+        ("owner/repo/extra", False),
+        ("owner", False),
+        ("../../etc", False),
+        ("owner/repo\nowner/other", False),
+        ("", False),
+    ],
+)
+def test_the_repository_argument_is_accepted_only_in_its_canonical_shape(value: str, accepted: bool) -> None:
+    if accepted:
+        assert reviewer._matching(reviewer.REPOSITORY_PATTERN, value, "repository") == value.strip()
+    else:
+        with pytest.raises(ValueError):
+            reviewer._matching(reviewer.REPOSITORY_PATTERN, value, "repository")
+
+
+@pytest.mark.parametrize(
+    ("value", "accepted"),
+    [
+        ("a" * 40, True),
+        ("0123456789abcdef" * 2 + "01234567", True),
+        ("A" * 40, False),  # callers lowercase first; the pattern itself is exact
+        ("a" * 39, False),
+        ("a" * 41, False),
+        ("g" * 40, False),
+        ("", False),
+    ],
+)
+def test_the_head_sha_argument_must_be_a_full_commit_sha(value: str, accepted: bool) -> None:
+    if accepted:
+        assert reviewer._matching(reviewer.HEAD_SHA_PATTERN, value, "head SHA") == value
+    else:
+        with pytest.raises(ValueError):
+            reviewer._matching(reviewer.HEAD_SHA_PATTERN, value, "head SHA")
+
+
+@pytest.mark.parametrize(
+    ("value", "accepted"),
+    [
+        ("b" * 64, True),
+        ("b" * 63, False),
+        ("b" * 65, False),
+        ("z" * 64, False),
+    ],
+)
+def test_the_claims_id_argument_must_be_a_full_digest(value: str, accepted: bool) -> None:
+    if accepted:
+        assert reviewer._matching(reviewer.CLAIMS_ID_PATTERN, value, "claims id") == value
+    else:
+        with pytest.raises(ValueError):
+            reviewer._matching(reviewer.CLAIMS_ID_PATTERN, value, "claims id")
+
+
+@pytest.mark.parametrize(
+    "value",
+    [
+        "reviewer-result.json",
+        "nested/reviewer-result.json",
+        "./reviewer-result.json",
+    ],
+)
+def test_a_result_path_inside_the_workspace_is_accepted(tmp_path, value: str) -> None:
+    resolved = reviewer.resolved_output_path(value, workspace=tmp_path)
+    assert tmp_path in resolved.parents
+
+
+@pytest.mark.parametrize(
+    "value",
+    [
+        "../escaped.json",
+        "nested/../../escaped.json",
+        "/etc/hunter-result.json",
+    ],
+)
+def test_a_result_path_outside_the_workspace_is_refused(tmp_path, value: str) -> None:
+    with pytest.raises(ValueError, match="escapes the workspace"):
+        reviewer.resolved_output_path(value, workspace=tmp_path)
+
+
+def test_a_tilde_prefix_stays_a_literal_directory_name(tmp_path) -> None:
+    """`~` is not expanded here, so it cannot reach a home directory either way."""
+    resolved = reviewer.resolved_output_path("~root/result.json", workspace=tmp_path)
+    assert resolved == tmp_path / "~root" / "result.json"
+
+
+def test_a_symlink_cannot_redirect_the_result_out_of_the_workspace(tmp_path) -> None:
+    """Resolution happens before the check, so a link is followed, not trusted."""
+    outside = tmp_path.parent / "outside"
+    outside.mkdir(exist_ok=True)
+    (tmp_path / "link").symlink_to(outside, target_is_directory=True)
+
+    with pytest.raises(ValueError, match="escapes the workspace"):
+        reviewer.resolved_output_path("link/escaped.json", workspace=tmp_path)
+
+
+def test_the_workspace_root_is_not_itself_a_result_path(tmp_path) -> None:
+    with pytest.raises(ValueError):
+        reviewer.resolved_output_path(".", workspace=tmp_path)

@@ -99,7 +99,6 @@ FINDING_RESOLUTIONS = frozenset({"resolved", "unresolved"})
 #: lower-tier reviewer without the exhaustion trail, or a guard review that
 #: skipped an enabled reviewer, is a bypass and fails closed.
 CODEX_REVIEW_AUTHORITY = "codex"
-OPENCODE_REVIEW_AUTHORITY = "opencode"
 #: The field the canonical reviewer pool is declared under inside
 #: ``review_authority`` of CODE_WRITE_POLICY.json.
 REVIEWER_POOL_FIELD = "reviewer_pool"

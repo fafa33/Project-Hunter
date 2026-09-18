@@ -656,8 +656,16 @@ def download_artifact(repository: str, token: str, artifact_id: int) -> bytes:
 
 
 def load_exhaustion(
-    repository: str, token: str, pr: int, head: str, pool: dict[str, Any], run_id: Any, authority_type: str = "opencode"
+    repository: str, token: str, pr: int, head: str, pool: dict[str, Any], run_id: Any, authority_type: str
 ) -> dict[str, Any]:
+    """Verify a trusted collector receipt for `authority_type` at this exact head.
+
+    `authority_type` carries no default. The last-resort guard is the only
+    authority that has to clear the extra live snapshot gates below, and it is
+    recognised by comparing this argument against the pool's declared
+    `last_resort`; a default here would let a caller that forgot to pass it be
+    read as some other reviewer and skip those gates entirely.
+    """
     if type(run_id) is not int or run_id <= 0:
         raise ValueError("a trusted collector run id is required")
     backend = GitHubBackend(repository, token, pr, head, "", run_id, 1)
