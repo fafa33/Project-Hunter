@@ -944,3 +944,14 @@ def test_parse_native_trigger_binds_head_claims_run_and_attempt():
         "attempt_number": 1,
     }
     assert collector.parse_native_trigger(body.replace(HEAD, "b" * 40, 1)) is None
+
+
+# Bootstrap regression: an oversized exact-head diff is bounded unavailability,
+# never an exception that aborts the ordered reviewer walk.
+def test_external_reviewer_oversized_diff_is_bounded_unavailability(monkeypatch):
+    backend = collector.GitHubBackend("owner/repo", "token", 473, HEAD, "d" * 64, 123, 1)
+    monkeypatch.setenv("GEMINI_API_KEY", "present")
+    monkeypatch.setattr(backend, "_candidate_diff", lambda: "")
+    payload = backend._invoke_external({"id": "gemini", "timeout_seconds": 300, "trigger_method": "api:gemini"}, 1)
+    assert payload["verdict"] == "unavailable"
+    assert "context budget" in payload["summary"]

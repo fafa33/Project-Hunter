@@ -387,7 +387,7 @@ class GitHubBackend:
         with urllib.request.urlopen(req, timeout=30) as response:
             data = response.read(EXTERNAL_PROMPT_LIMIT + 1)
         if len(data) > EXTERNAL_PROMPT_LIMIT:
-            raise ValueError("candidate diff exceeds external reviewer context budget")
+            return ""
         return data.decode("utf-8", errors="strict")
 
     def _invoke_external(self, agent: dict[str, Any], number: int) -> dict[str, Any]:
@@ -396,12 +396,18 @@ class GitHubBackend:
         key = os.environ.get(secret_name or "", "")
         if not key:
             return {"verdict": "unavailable", "summary": f"{provider} API key unavailable"}
+        candidate_diff = self._candidate_diff()
+        if not candidate_diff:
+            return {
+                "verdict": "unavailable",
+                "summary": f"{provider} unavailable: exact-head diff exceeds bounded external reviewer context budget",
+            }
         prompt = (
             "You are an independent hostile code reviewer. Review the COMPLETE exact-head diff below. "
             f"Repository={self.repository} PR={self.pr} HEAD={self.expected_head} claims_id={self.claims_id}. "
             'Return JSON only: {"verdict":"clear|blocking","summary":"..."}. '
             "Use clear only when no substantive correctness, security, governance, exact-head, or fail-closed defect remains. "
-            "Any finding must use blocking.\n\nDIFF:\n" + self._candidate_diff()
+            "Any finding must use blocking.\n\nDIFF:\n" + candidate_diff
         )
         if provider == "gemini":
             url = "https://generativelanguage.googleapis.com/v1beta/models/gemini-3.8-flash:generateContent"
