@@ -359,17 +359,15 @@ def native_copilot_verdict(body: str, inline_comment_count: int = 0) -> str:
     """Parse authenticated Copilot review bodies fail-closed."""
     if inline_comment_count:
         return "blocking"
-    normalized = " ".join(body.lower().split())
-    if "### 🟡 changes recommended" in normalized or "### 🔴" in normalized:
+    normalized = "\n".join(line.rstrip() for line in body.strip().splitlines())
+    lower = normalized.lower()
+    if "changes recommended" in lower or "blocking" in lower and "no unresolved blocking issues" not in lower:
         return "blocking"
-    clear_markers = (
-        "### 🟢 approval recommended",
-        "no unresolved blocking issues were identified",
-        "no unresolved review comments remain",
+    clear_shapes = (
+        re.compile(r"^### 🟢 Approval recommended\n+No unresolved blocking issues were identified\.?(?:\n[\s\S]*)?$"),
+        re.compile(r"^### 🟢 Approval recommended\n+No unresolved review comments remain\.?(?:\n[\s\S]*)?$"),
     )
-    if normalized and any(marker in normalized for marker in clear_markers):
-        return "clear"
-    return "unknown"
+    return "clear" if any(pattern.fullmatch(normalized) for pattern in clear_shapes) else "unknown"
 
 
 def native_codex_clear_review(body: str, head_sha: str) -> bool:
