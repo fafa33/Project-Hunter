@@ -522,8 +522,18 @@ def read_pr_pool_review_comments(
                     continue
                 # Keep all reviewers' actionable states, including empty approvals
                 # which can supersede a human changes-requested review.
-                if state == "COMMENTED" and (login not in enabled or not _substantive_review_body(body)):
+                if state == "COMMENTED" and login not in enabled:
                     continue
+                if state == "COMMENTED" and not _substantive_review_body(body) and enabled.get(login) != "copilot":
+                    continue
+                inline_comment_count = 0
+                if enabled.get(login) == "copilot" and review.get("id"):
+                    inline = request_json(
+                        repository, token, "GET", f"pulls/{pr_number}/reviews/{review['id']}/comments?per_page=100"
+                    )
+                    if not isinstance(inline, list):
+                        return [], "Copilot review comments payload is not a list"
+                    inline_comment_count = len(inline)
                 reviews.append(
                     {
                         "id": review.get("id"),
@@ -535,6 +545,7 @@ def read_pr_pool_review_comments(
                         "source_kind": "review",
                         "submitted_at": review.get("submitted_at", ""),
                         "html_url": review.get("html_url", ""),
+                        "inline_comment_count": inline_comment_count,
                     }
                 )
             if len(payload) < 100:
@@ -595,12 +606,12 @@ def read_pr_pool_review_comments(
             trigger = parse_native_trigger(str(comment.get("body") or ""))
             if (
                 trigger is not None
-                and trigger.get("reviewer_agent") == "codex"
+                and trigger.get("reviewer_agent") in {"codex", "copilot"}
                 and trusted_collector_run(repository, token, trigger)
             ):
                 native_triggers.append((str(comment.get("created_at") or ""), trigger))
         for review_item in reviews:
-            if review_item.get("agent_id") != "codex" or review_item.get("source_kind") != "review":
+            if review_item.get("agent_id") not in {"codex", "copilot"} or review_item.get("source_kind") != "review":
                 continue
             eligible = [
                 t
@@ -1889,6 +1900,24 @@ def verify_pre_ready_hostile_review(
                 and observation.get("source_kind") == "review"
                 and observation.get("trigger_claims_id") == claims_id
                 and native_codex_clear_review(observation["body"], head_sha)
+            ):
+                adopted.append(
+                    (
+                        observation,
+                        {
+                            "head_sha": head_sha,
+                            "claims_id": claims_id,
+                            "verdict": "clear",
+                        },
+                    )
+                )
+            if (
+                observation.get("agent_id") == "copilot"
+                and observation.get("source_kind") == "review"
+                and observation.get("trigger_claims_id") == claims_id
+                and observation.get("state") == "COMMENTED"
+                and int(observation.get("inline_comment_count") or 0) == 0
+                and "changes recommended" not in str(observation.get("body") or "").lower()
             ):
                 adopted.append(
                     (

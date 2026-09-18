@@ -315,7 +315,9 @@ def parse_api_result(body: str) -> dict[str, Any] | None:
 
 def trigger_body(head: str, claims_id: str, agent: dict[str, Any], run_id: int, run_attempt: int, number: int) -> str:
     method = str(agent["trigger_method"])
-    if not method.startswith("github-pr-comment:") or not governance.reviewer_login(agent):
+    if not (
+        method.startswith("github-pr-comment:") or method.startswith("github-review-request:")
+    ) or not governance.reviewer_login(agent):
         raise ValueError("reviewer has no supported authenticated GitHub trigger")
     ack = {
         "schema": "hunter.review-ack.v1",
@@ -326,7 +328,8 @@ def trigger_body(head: str, claims_id: str, agent: dict[str, Any], run_id: int, 
         "collector_run_id": run_id,
     }
     return (
-        method.split(":", 1)[1] + f"\nReview exact HEAD {head} and the complete review request in "
+        (method.split(":", 1)[1] if method.startswith("github-pr-comment:") else "Trusted GitHub review request")
+        + f"\nReview exact HEAD {head} and the complete review request in "
         f"{review.REVIEW_RELATIVE_PATH}. Report any blocking findings; do not issue a clear verdict if any remain. "
         "After completing the substantive review, if all requested claims are satisfied and no blockers remain, "
         "reply with only this JSON result, filling in your own substantive summary: "
@@ -515,6 +518,16 @@ class GitHubBackend:
                     result_comment_id=result.get("comment_id"),
                 )
             return existing
+        if method.startswith("github-review-request:"):
+            trigger = self._post_comment(
+                trigger_body(self.expected_head, self.claims_id, agent, self.run_id, self.run_attempt, number)
+            )
+            reviewer = method.split(":", 1)[1]
+            governance.request_json(
+                self.repository, self.token, "POST", f"pulls/{self.pr}/requested_reviewers", {"reviewers": [reviewer]}
+            )
+            trigger["collector_run_id"] = self.run_id
+            return trigger
         if method.startswith("api:"):
             provider = method.split(":", 1)[1]
             trigger = self._post_comment(
@@ -605,10 +618,16 @@ class GitHubBackend:
                 return "blocking"
             if state == "APPROVED":
                 return "clear"
-            if state == "COMMENTED" and governance._substantive_review_body(body):
-                if agent.get("id") == "codex" and self._native_clear(body, self.expected_head):
+            if state == "COMMENTED":
+                if agent.get("id") == "codex" and governance._substantive_review_body(body):
+                    return "clear" if self._native_clear(body, self.expected_head) else "blocking"
+                if agent.get("id") == "copilot":
+                    comments = _pages(self.repository, self.token, f"pulls/{self.pr}/reviews/{item['id']}/comments")
+                    if "changes recommended" in body.lower() or comments:
+                        return "blocking"
                     return "clear"
-                return "blocking"
+                if governance._substantive_review_body(body):
+                    return "blocking"
         for item in _pages(self.repository, self.token, f"issues/{self.pr}/comments"):
             if (item.get("user") or {}).get("login", "").lower() != login:
                 continue
