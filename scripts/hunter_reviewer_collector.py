@@ -1414,7 +1414,7 @@ def main() -> int:
     parser.add_argument(
         "--generation",
         default=BASE_GENERATION,
-        help="Remediation generation of this exact head, or empty for the candidate's first cycle.",
+        help="Remediation generation this run was dispatched for; empty to use whatever the evidence derives.",
     )
     parser.add_argument("--output", type=Path, required=True)
     args = parser.parse_args()
@@ -1437,13 +1437,17 @@ def main() -> int:
     if document.get("review_request") != {"schema": "hunter.review-request.v1", "claims_id": claims_id}:
         raise ValueError("an explicit current review request is required")
     # The dispatched generation correlates the run; it never authorises it. This
-    # trusted default-branch collector re-derives the generation from the same
-    # authenticated review-thread state and fails closed on any disagreement, so
-    # a dispatch input cannot buy a reviewer invocation the evidence does not.
-    actual_generation = orchestration.current_remediation_generation(repository, token, args.pr, args.head, claims_id)
-    if actual_generation != declared_generation:
+    # trusted default-branch collector derives the generation itself from the
+    # authenticated review-thread state, so the generation a reviewer invocation
+    # is spent against is always the evidence's and never the dispatcher's. An
+    # input is therefore only ever checked *against* that derivation: a
+    # generation the evidence does not support fails closed instead of being
+    # used. The pull-request-target entry point supplies none at all -- it has no
+    # run name to correlate -- and reviews the generation the evidence derives.
+    generation = orchestration.current_remediation_generation(repository, token, args.pr, args.head, claims_id)
+    if declared_generation and declared_generation != generation:
         raise ValueError("dispatched remediation generation is not the one trusted review-thread state derives")
-    backend = GitHubBackend(repository, token, args.pr, args.head, claims_id, run_id, run_attempt, declared_generation)
+    backend = GitHubBackend(repository, token, args.pr, args.head, claims_id, run_id, run_attempt, generation)
     attempts = collect_attempts(pool, args.head, backend)
     if backend.head() != args.head:
         raise ValueError("HEAD changed before receipt publication")
@@ -1455,7 +1459,7 @@ def main() -> int:
         "run_id": run_id,
         "run_attempt": run_attempt,
         "claims_id": claims_id,
-        "remediation_generation_id": declared_generation,
+        "remediation_generation_id": generation,
         "configuration_digest": configuration_digest(pool),
         "attempts": attempts,
     }

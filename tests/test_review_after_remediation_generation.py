@@ -485,6 +485,22 @@ def test_a_dispatched_generation_trusted_state_does_not_derive_fails_closed(monk
         collector.main()
 
 
+def test_the_pull_request_target_entry_point_reviews_the_derived_generation(monkeypatch, tmp_path):
+    """That entry point has no generation input and no run name to correlate.
+
+    It must still review the generation the evidence derives; requiring it to be
+    told one would fail every pull request that has ever had a blocking reviewer
+    finding resolved.
+    """
+
+    import json
+
+    output = _collector_main(monkeypatch, tmp_path, orchestrator.BASE_GENERATION_ID, GENERATION)
+
+    assert collector.main() == 0
+    assert json.loads(output.read_text(encoding="utf-8"))["remediation_generation_id"] == GENERATION
+
+
 def test_a_malformed_generation_input_is_refused_before_any_reviewer_is_invoked(monkeypatch, tmp_path):
     _collector_main(monkeypatch, tmp_path, "not-a-generation", GENERATION)
 
