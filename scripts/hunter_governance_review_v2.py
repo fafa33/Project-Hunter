@@ -364,8 +364,8 @@ def native_copilot_verdict(body: str, inline_comment_count: int = 0) -> str:
     if "changes recommended" in lower or "blocking" in lower and "no unresolved blocking issues" not in lower:
         return "blocking"
     clear_shapes = (
-        re.compile(r"^### 🟢 Approval recommended\n+No unresolved blocking issues were identified\.?(?:\n[\s\S]*)?$"),
-        re.compile(r"^### 🟢 Approval recommended\n+No unresolved review comments remain\.?(?:\n[\s\S]*)?$"),
+        re.compile(r"^### 🟢 Approval recommended\n+No unresolved blocking issues were identified\.?$"),
+        re.compile(r"^### 🟢 Approval recommended\n+No unresolved review comments remain\.?$"),
     )
     return "clear" if any(pattern.fullmatch(normalized) for pattern in clear_shapes) else "unknown"
 
@@ -631,7 +631,9 @@ def read_pr_pool_review_comments(
             eligible = [
                 t
                 for created, t in native_triggers
-                if created <= str(review_item.get("submitted_at") or "") and t.get("head_sha") == exact_head
+                if created <= str(review_item.get("submitted_at") or "")
+                and t.get("head_sha") == exact_head
+                and t.get("reviewer_agent") == review_item.get("agent_id")
             ]
             if eligible:
                 review_item["trigger_claims_id"] = eligible[-1]["claims_id"]
