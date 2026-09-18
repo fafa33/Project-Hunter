@@ -379,7 +379,7 @@ class GitHubBackend:
     def sleep(self, seconds: float) -> None:
         time.sleep(seconds)
 
-    def _candidate_diff(self) -> str:
+    def _candidate_diff(self) -> str | None:
         url = f"https://api.github.com/repos/{self.repository}/pulls/{self.pr}"
         req = urllib.request.Request(
             url, headers={"Authorization": f"Bearer {self.token}", "Accept": "application/vnd.github.v3.diff"}
@@ -387,7 +387,7 @@ class GitHubBackend:
         with urllib.request.urlopen(req, timeout=30) as response:
             data = response.read(EXTERNAL_PROMPT_LIMIT + 1)
         if len(data) > EXTERNAL_PROMPT_LIMIT:
-            return ""
+            return None
         return data.decode("utf-8", errors="strict")
 
     def _invoke_external(self, agent: dict[str, Any], number: int) -> dict[str, Any]:
@@ -397,7 +397,7 @@ class GitHubBackend:
         if not key:
             return {"verdict": "unavailable", "summary": f"{provider} API key unavailable"}
         candidate_diff = self._candidate_diff()
-        if not candidate_diff:
+        if candidate_diff is None:
             return {
                 "verdict": "unavailable",
                 "summary": f"{provider} unavailable: exact-head diff exceeds bounded external reviewer context budget",

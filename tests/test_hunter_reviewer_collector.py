@@ -951,7 +951,35 @@ def test_parse_native_trigger_binds_head_claims_run_and_attempt():
 def test_external_reviewer_oversized_diff_is_bounded_unavailability(monkeypatch):
     backend = collector.GitHubBackend("owner/repo", "token", 473, HEAD, "d" * 64, 123, 1)
     monkeypatch.setenv("GEMINI_API_KEY", "present")
-    monkeypatch.setattr(backend, "_candidate_diff", lambda: "")
+
+    class OversizedResponse:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_args):
+            return False
+
+        def read(self, _limit):
+            return b"x" * (collector.EXTERNAL_PROMPT_LIMIT + 1)
+
+    monkeypatch.setattr(collector.urllib.request, "urlopen", lambda *_args, **_kwargs: OversizedResponse())
     payload = backend._invoke_external({"id": "gemini", "timeout_seconds": 300, "trigger_method": "api:gemini"}, 1)
     assert payload["verdict"] == "unavailable"
     assert "context budget" in payload["summary"]
+
+
+def test_candidate_diff_preserves_legitimate_empty_diff(monkeypatch):
+    backend = collector.GitHubBackend("owner/repo", "token", 473, HEAD, "d" * 64, 123, 1)
+
+    class EmptyResponse:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_args):
+            return False
+
+        def read(self, _limit):
+            return b""
+
+    monkeypatch.setattr(collector.urllib.request, "urlopen", lambda *_args, **_kwargs: EmptyResponse())
+    assert backend._candidate_diff() == ""
