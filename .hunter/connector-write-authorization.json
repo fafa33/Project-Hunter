@@ -1,1 +1,32 @@
-{"authorization_id":"5d434327b914b818ed132b6c4264c3866fa208ad3c5b7e923f219a27c8ae657c","claims":{"base_ref":"main","base_sha":"a3c577fdc7cd37cb9256c3f101cc9b691a237386","capability":"feature-branch-write","changes":[{"blob_sha":"0a1d1008158b9ee3d8dc6bd8e1c104d6b03ae632","path":"src/hunter/automation/railway_opencode_permission_sandbox.py","previous_path":"","status":"modified"},{"blob_sha":"3da1624b2ab65509d9a042f6c026134dbf98b50f","path":"tests/test_railway_opencode_permission_sandbox.py","previous_path":"","status":"modified"}],"governance_scopes":[],"grant_fingerprint":"28d4f12d40624cd5dcdf82a0edd77b8ed82aeac626a181c4236781846c89c7cd","issue":"461","paths":["src/hunter/automation/railway_opencode_permission_sandbox.py","tests/test_railway_opencode_permission_sandbox.py"],"target_ref":"connector/issue-461-workspace-isolation","writer":"fafa33"},"schema":"hunter-connector-write-authorization-v4"}
+{
+  "authorization_id": "cad32d79f53937d3888ee6a9ca29cf2ba52ce93338e8d48d688e50bd5437bd4d",
+  "claims": {
+    "base_ref": "main",
+    "base_sha": "369210594f162205ea647befca063b097e56ca3b",
+    "capability": "feature-branch-write",
+    "changes": [
+      {
+        "blob_sha": "acdcd9f3fe295cb2fd88ab0aea7f4814d1d300af",
+        "path": "src/hunter/automation/railway_opencode_permission_sandbox.py",
+        "previous_path": "",
+        "status": "modified"
+      },
+      {
+        "blob_sha": "9e4bc76fb9954d40bc1bb85aeae4e6e6740c8d29",
+        "path": "tests/test_railway_opencode_permission_sandbox.py",
+        "previous_path": "",
+        "status": "modified"
+      }
+    ],
+    "governance_scopes": [],
+    "grant_fingerprint": "c57ac6978ba63f028a7d4efbcb207f2cfe09d374a1befad86658b7fbbafec560",
+    "issue": "461",
+    "paths": [
+      "src/hunter/automation/railway_opencode_permission_sandbox.py",
+      "tests/test_railway_opencode_permission_sandbox.py"
+    ],
+    "target_ref": "connector/issue-461-provider-capability-preflight",
+    "writer": "fafa33"
+  },
+  "schema": "hunter-connector-write-authorization-v4"
+}

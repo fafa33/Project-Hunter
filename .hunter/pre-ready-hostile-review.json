@@ -2,80 +2,80 @@
   "claims": {
     "acceptance_criteria": [
       {
-        "criterion": "/issue-agent/authorize returns success/accepted well below the railway request ceiling and before provider completion",
-        "evidence": "Outside the reviewer-orchestration slice this candidate implements: it changes only review authority selection, collection and publication. The issue-agent authorization, provider execution and workspace-isolation surfaces this criterion governs are untouched here and remain covered by their own Issue #461 slices.",
+        "criterion": "`/issue-agent/authorize` returns success/accepted well below the Railway request ceiling and before provider completion.",
+        "evidence": "Outside this narrow provider-capability correction; retained for complete governing-Issue coverage.",
         "id": "AC-001",
         "verdict": "not-applicable"
       },
       {
-        "criterion": "provider execution >300s cannot cause the github trigger to fail with http 499",
-        "evidence": "Outside the reviewer-orchestration slice this candidate implements: it changes only review authority selection, collection and publication. The issue-agent authorization, provider execution and workspace-isolation surfaces this criterion governs are untouched here and remain covered by their own Issue #461 slices.",
+        "criterion": "Provider execution >300s cannot cause the GitHub trigger to fail with HTTP 499.",
+        "evidence": "Outside this narrow provider-capability correction; retained for complete governing-Issue coverage.",
         "id": "AC-002",
         "verdict": "not-applicable"
       },
       {
-        "criterion": "retrying a failed attempt does not mutate the issue and does not change the authorization identity",
-        "evidence": "Outside the reviewer-orchestration slice this candidate implements: it changes only review authority selection, collection and publication. The issue-agent authorization, provider execution and workspace-isolation surfaces this criterion governs are untouched here and remain covered by their own Issue #461 slices.",
+        "criterion": "Retrying a failed attempt does not mutate the Issue and does not change the authorization identity.",
+        "evidence": "Outside this narrow provider-capability correction; retained for complete governing-Issue coverage.",
         "id": "AC-003",
         "verdict": "not-applicable"
       },
       {
-        "criterion": "source handling authority is exact, fail-closed, and retry-stable for an immutable event",
-        "evidence": "Outside the reviewer-orchestration slice this candidate implements: it changes only review authority selection, collection and publication. The issue-agent authorization, provider execution and workspace-isolation surfaces this criterion governs are untouched here and remain covered by their own Issue #461 slices.",
+        "criterion": "Source Handling authority is exact, fail-closed, and retry-stable for an immutable event.",
+        "evidence": "Outside this narrow provider-capability correction; retained for complete governing-Issue coverage.",
         "id": "AC-004",
         "verdict": "not-applicable"
       },
       {
-        "criterion": "the exact pinned opencode/provider configuration is compatibility-checked before live use",
-        "evidence": "Outside the reviewer-orchestration slice this candidate implements: it changes only review authority selection, collection and publication. The issue-agent authorization, provider execution and workspace-isolation surfaces this criterion governs are untouched here and remain covered by their own Issue #461 slices.",
+        "criterion": "The exact pinned OpenCode/provider configuration is compatibility-checked before live use.",
+        "evidence": "Pinned OpenCode v1.18.30 is verified at runtime and a same-model provider readiness request using the governed inline configuration must succeed before the real provider prompt can start; focused regressions prove rejected request options fail closed before execution.",
         "id": "AC-005",
-        "verdict": "not-applicable"
+        "verdict": "satisfied"
       },
       {
-        "criterion": "runtime capability requirements are checked before provider execution",
-        "evidence": "Outside the reviewer-orchestration slice this candidate implements: it changes only review authority selection, collection and publication. The issue-agent authorization, provider execution and workspace-isolation surfaces this criterion governs are untouched here and remain covered by their own Issue #461 slices.",
+        "criterion": "Runtime capability requirements are checked before provider execution.",
+        "evidence": "Runtime debug agent build --pure capability discovery must expose read/edit/glob/grep before the compatibility probe or real provider prompt can start; focused regressions cover missing capabilities.",
         "id": "AC-006",
-        "verdict": "not-applicable"
+        "verdict": "satisfied"
       },
       {
-        "criterion": "opencode can modify only the isolated attempt workspace; external-directory edits are explicitly denied. \u2014 pr #465 / ca2adf5ebeb5e11b198e50de6d0a62af5b23207c",
-        "evidence": "Outside the reviewer-orchestration slice this candidate implements: it changes only review authority selection, collection and publication. The issue-agent authorization, provider execution and workspace-isolation surfaces this criterion governs are untouched here and remain covered by their own Issue #461 slices.",
+        "criterion": "OpenCode can modify only the isolated attempt workspace; external-directory edits are explicitly denied. \u2014 PR #465 / `ca2adf5ebeb5e11b198e50de6d0a62af5b23207c`",
+        "evidence": "PR #471 capability-discovery implementation and focused regressions; authenticated exact-head reviewer must adopt this request.",
         "id": "AC-007",
-        "verdict": "not-applicable"
+        "verdict": "satisfied"
       },
       {
-        "criterion": "a provider claiming success without candidate repository changes fails closed",
-        "evidence": "Outside the reviewer-orchestration slice this candidate implements: it changes only review authority selection, collection and publication. The issue-agent authorization, provider execution and workspace-isolation surfaces this criterion governs are untouched here and remain covered by their own Issue #461 slices.",
+        "criterion": "A provider claiming success without candidate repository changes fails closed.",
+        "evidence": "Outside this narrow provider-capability correction; retained for complete governing-Issue coverage.",
         "id": "AC-008",
         "verdict": "not-applicable"
       },
       {
-        "criterion": "publication remains trusted-parent-owned and exact-head validation remains authoritative",
-        "evidence": "Review authority stays trusted-parent-owned and exact-head bound. The governance lane checks out the default branch into `engine/` and executes only that copy; the candidate's own workflow file holds no permission that can drive another workflow, which `tests/test_hunter_review_orchestrator.py::test_no_pull_request_reachable_workflow_can_drive_other_workflows` enforces structurally against every trigger and permission shape. Privileged orchestration (`actions: write`) lives only in the reconcile workflow, which has no `pull_request` trigger. Authority is bound to the exact head throughout: `tests/test_exact_head_review_authority.py::test_an_ancestor_recorded_head_is_stale_not_valid` and `tests/test_pr473_trusted_bridge_bootstrap.py::test_candidate_workspace_file_cannot_end_bootstrap_pending_mode`. This head extends the same slice with the bounded review-after-remediation generation that lets a fully remediated exact head obtain review authority again instead of remaining permanently MISSING_REVIEW_AUTHORITY, verified by tests/test_review_after_remediation_generation.py (36 cases).",
+        "criterion": "Publication remains trusted-parent-owned and exact-head validation remains authoritative.",
+        "evidence": "PR #471 capability-discovery implementation and focused regressions; authenticated exact-head reviewer must adopt this request.",
         "id": "AC-009",
         "verdict": "satisfied"
       },
       {
-        "criterion": "accepted authorization executes at most once and ends in a durable completed or failed state",
-        "evidence": "Outside the reviewer-orchestration slice this candidate implements: it changes only review authority selection, collection and publication. The issue-agent authorization, provider execution and workspace-isolation surfaces this criterion governs are untouched here and remain covered by their own Issue #461 slices.",
+        "criterion": "Accepted authorization executes at most once and ends in a durable COMPLETED or FAILED state.",
+        "evidence": "Outside this narrow provider-capability correction; retained for complete governing-Issue coverage.",
         "id": "AC-010",
         "verdict": "not-applicable"
       },
       {
-        "criterion": "stale/closed pr history cannot generate a false current governance failure",
-        "evidence": "Reviewer unavailability and ordinary waiting are availability states, not candidate failures, and stale history cannot produce a current failure. `hunter_merge_readiness_v2.review_wait_state` projects WAITING_FOR_REVIEWER / REVIEW_IN_PROGRESS / FAILOVER_IN_PROGRESS / POOL_EXHAUSTED as pending rather than red, while a changed head invalidates prior authority outright (`tests/test_issue_412_prevention_gate.py::test_failover_restarts_after_a_new_commit_invalidates_a_review`, `::test_a_review_recorded_for_an_ancestor_head_is_stale_across_the_artifact_commit`). Pending is never success and never authority. This head extends the same slice with the bounded review-after-remediation generation that lets a fully remediated exact head obtain review authority again instead of remaining permanently MISSING_REVIEW_AUTHORITY, verified by tests/test_review_after_remediation_generation.py (36 cases).",
+        "criterion": "Stale/closed PR history cannot generate a false current Governance failure.",
+        "evidence": "Outside this narrow provider-capability correction; retained for complete governing-Issue coverage.",
         "id": "AC-011",
-        "verdict": "satisfied"
+        "verdict": "not-applicable"
       },
       {
-        "criterion": "no autonomous ready, merge, or railway deploy is introduced",
-        "evidence": "No autonomous Ready, merge or deploy is introduced. The orchestrator publishes review-cycle status only; `docs/CODE_WRITE_POLICY.json` keeps `auto_ready: false` and `requires_current_head_review_authority: true`, which `tests/test_code_write_policy.py::test_code_write_policy_requires_draft_until_exact_head_admission` and `scripts/hunter_defect_prevention_preflight.py::validate_code_write_policy` both enforce. The last-resort guard still requires authenticated pool exhaustion plus green snapshot gates (`tests/test_issue_412_prevention_gate.py::test_the_guard_is_a_last_resort_only_after_the_whole_pool_is_exhausted`). This head extends the same slice with the bounded review-after-remediation generation that lets a fully remediated exact head obtain review authority again instead of remaining permanently MISSING_REVIEW_AUTHORITY, verified by tests/test_review_after_remediation_generation.py (36 cases).",
+        "criterion": "No autonomous Ready, merge, or Railway deploy is introduced.",
+        "evidence": "PR #471 capability-discovery implementation and focused regressions; authenticated exact-head reviewer must adopt this request.",
         "id": "AC-012",
         "verdict": "satisfied"
       },
       {
-        "criterion": "only after this matrix is green do we run the live #441 acceptance test",
-        "evidence": "Outside the reviewer-orchestration slice this candidate implements: it changes only review authority selection, collection and publication. The issue-agent authorization, provider execution and workspace-isolation surfaces this criterion governs are untouched here and remain covered by their own Issue #461 slices.",
+        "criterion": "Only after this matrix is green do we run the live #441 acceptance test.",
+        "evidence": "Outside this narrow provider-capability correction; retained for complete governing-Issue coverage.",
         "id": "AC-013",
         "verdict": "not-applicable"
       }
@@ -94,295 +94,105 @@
       "transaction-snapshot-consistency"
     ],
     "base_ref": "main",
-    "base_sha": "6418fb6c713ce42d19fdd61550503adc9673b3ff",
+    "base_sha": "369210594f162205ea647befca063b097e56ca3b",
     "defect_families": [
       {
-        "evidence": "Re-swept across the full changed set for this exact head, which adds the bounded review-after-remediation generation to the trusted orchestrator, the reviewer collector, the collector workflow and the canonical defect registry. Clear: the change adds no persistence, replay, migration or authority-widening surface. The generation is derived only from trusted GitHub review-thread state, is re-derived independently by the trusted collector and fails closed on disagreement, and it narrows rather than widens evidence reuse by refusing an exhaustion receipt minted under a superseded generation.",
+        "evidence": "PR #471 focused regression suite and trusted preflight evidence; authenticated reviewer must re-evaluate before adoption.",
         "family": "DFF-007",
         "outcome": "clear"
       },
       {
-        "evidence": "Re-swept across the full changed set for this exact head, which adds the bounded review-after-remediation generation to the trusted orchestrator, the reviewer collector, the collector workflow and the canonical defect registry. Clear: the change adds no persistence, replay, migration or authority-widening surface. The generation is derived only from trusted GitHub review-thread state, is re-derived independently by the trusted collector and fails closed on disagreement, and it narrows rather than widens evidence reuse by refusing an exhaustion receipt minted under a superseded generation.",
+        "evidence": "PR #471 focused regression suite and trusted preflight evidence; authenticated reviewer must re-evaluate before adoption.",
         "family": "DFF-008",
         "outcome": "clear"
       },
       {
-        "evidence": "Re-swept across the full changed set for this exact head, which adds the bounded review-after-remediation generation to the trusted orchestrator, the reviewer collector, the collector workflow and the canonical defect registry. Clear: the change adds no persistence, replay, migration or authority-widening surface. The generation is derived only from trusted GitHub review-thread state, is re-derived independently by the trusted collector and fails closed on disagreement, and it narrows rather than widens evidence reuse by refusing an exhaustion receipt minted under a superseded generation.",
+        "evidence": "PR #471 focused regression suite and trusted preflight evidence; authenticated reviewer must re-evaluate before adoption.",
         "family": "DFF-009",
         "outcome": "clear"
       },
       {
-        "evidence": "Re-swept across the full changed set for this exact head, which adds the bounded review-after-remediation generation to the trusted orchestrator, the reviewer collector, the collector workflow and the canonical defect registry. Clear: the change adds no persistence, replay, migration or authority-widening surface. The generation is derived only from trusted GitHub review-thread state, is re-derived independently by the trusted collector and fails closed on disagreement, and it narrows rather than widens evidence reuse by refusing an exhaustion receipt minted under a superseded generation.",
+        "evidence": "PR #471 focused regression suite and trusted preflight evidence; authenticated reviewer must re-evaluate before adoption.",
         "family": "DFF-010",
         "outcome": "clear"
       },
       {
-        "evidence": "Re-swept across the full changed set for this exact head, which adds the bounded review-after-remediation generation to the trusted orchestrator, the reviewer collector, the collector workflow and the canonical defect registry. Clear: the change adds no persistence, replay, migration or authority-widening surface. The generation is derived only from trusted GitHub review-thread state, is re-derived independently by the trusted collector and fails closed on disagreement, and it narrows rather than widens evidence reuse by refusing an exhaustion receipt minted under a superseded generation.",
+        "evidence": "PR #471 focused regression suite and trusted preflight evidence; authenticated reviewer must re-evaluate before adoption.",
         "family": "DFF-011",
         "outcome": "clear"
       },
       {
-        "evidence": "Re-swept across the full changed set for this exact head, which adds the bounded review-after-remediation generation to the trusted orchestrator, the reviewer collector, the collector workflow and the canonical defect registry. Clear: the change adds no persistence, replay, migration or authority-widening surface. The generation is derived only from trusted GitHub review-thread state, is re-derived independently by the trusted collector and fails closed on disagreement, and it narrows rather than widens evidence reuse by refusing an exhaustion receipt minted under a superseded generation.",
+        "evidence": "PR #471 focused regression suite and trusted preflight evidence; authenticated reviewer must re-evaluate before adoption.",
         "family": "DFF-012",
         "outcome": "clear"
       },
       {
-        "evidence": "Re-swept across the full changed set for this exact head, which adds the bounded review-after-remediation generation to the trusted orchestrator, the reviewer collector, the collector workflow and the canonical defect registry. Clear: the change adds no persistence, replay, migration or authority-widening surface. The generation is derived only from trusted GitHub review-thread state, is re-derived independently by the trusted collector and fails closed on disagreement, and it narrows rather than widens evidence reuse by refusing an exhaustion receipt minted under a superseded generation.",
+        "evidence": "PR #471 focused regression suite and trusted preflight evidence; authenticated reviewer must re-evaluate before adoption.",
         "family": "DFF-013",
         "outcome": "clear"
       },
       {
-        "evidence": "Re-swept across the full changed set for this exact head, which adds the bounded review-after-remediation generation to the trusted orchestrator, the reviewer collector, the collector workflow and the canonical defect registry. Clear: the change adds no persistence, replay, migration or authority-widening surface. The generation is derived only from trusted GitHub review-thread state, is re-derived independently by the trusted collector and fails closed on disagreement, and it narrows rather than widens evidence reuse by refusing an exhaustion receipt minted under a superseded generation.",
+        "evidence": "PR #471 focused regression suite and trusted preflight evidence; authenticated reviewer must re-evaluate before adoption.",
         "family": "DFF-014",
         "outcome": "clear"
       },
       {
-        "evidence": "Re-swept across the full changed set for this exact head, which adds the bounded review-after-remediation generation to the trusted orchestrator, the reviewer collector, the collector workflow and the canonical defect registry. Clear: the change adds no persistence, replay, migration or authority-widening surface. The generation is derived only from trusted GitHub review-thread state, is re-derived independently by the trusted collector and fails closed on disagreement, and it narrows rather than widens evidence reuse by refusing an exhaustion receipt minted under a superseded generation.",
+        "evidence": "PR #471 focused regression suite and trusted preflight evidence; authenticated reviewer must re-evaluate before adoption.",
         "family": "DFF-015",
         "outcome": "clear"
       },
       {
-        "evidence": "Re-swept across the full changed set for this exact head, which adds the bounded review-after-remediation generation to the trusted orchestrator, the reviewer collector, the collector workflow and the canonical defect registry. Clear: the change adds no persistence, replay, migration or authority-widening surface. The generation is derived only from trusted GitHub review-thread state, is re-derived independently by the trusted collector and fails closed on disagreement, and it narrows rather than widens evidence reuse by refusing an exhaustion receipt minted under a superseded generation.",
+        "evidence": "PR #471 focused regression suite and trusted preflight evidence; authenticated reviewer must re-evaluate before adoption.",
         "family": "DFF-016",
         "outcome": "clear"
       },
       {
-        "evidence": "Re-swept across the full changed set for this exact head, which adds the bounded review-after-remediation generation to the trusted orchestrator, the reviewer collector, the collector workflow and the canonical defect registry. Clear: the change adds no persistence, replay, migration or authority-widening surface. The generation is derived only from trusted GitHub review-thread state, is re-derived independently by the trusted collector and fails closed on disagreement, and it narrows rather than widens evidence reuse by refusing an exhaustion receipt minted under a superseded generation.",
-        "family": "DFF-017",
-        "outcome": "clear"
-      },
-      {
-        "evidence": "Re-swept across the full changed set for this exact head, which adds the bounded review-after-remediation generation to the trusted orchestrator, the reviewer collector, the collector workflow and the canonical defect registry. Clear: the change adds no persistence, replay, migration or authority-widening surface. The generation is derived only from trusted GitHub review-thread state, is re-derived independently by the trusted collector and fails closed on disagreement, and it narrows rather than widens evidence reuse by refusing an exhaustion receipt minted under a superseded generation.",
+        "evidence": "PR #471 focused regression suite and trusted preflight evidence; authenticated reviewer must re-evaluate before adoption.",
         "family": "DFF-019",
         "outcome": "clear"
       },
       {
-        "evidence": "Re-swept across the full changed set for this exact head, which adds the bounded review-after-remediation generation to the trusted orchestrator, the reviewer collector, the collector workflow and the canonical defect registry. Clear: the change adds no persistence, replay, migration or authority-widening surface. The generation is derived only from trusted GitHub review-thread state, is re-derived independently by the trusted collector and fails closed on disagreement, and it narrows rather than widens evidence reuse by refusing an exhaustion receipt minted under a superseded generation.",
+        "evidence": "PR #471 focused regression suite and trusted preflight evidence; authenticated reviewer must re-evaluate before adoption.",
         "family": "DFF-020",
         "outcome": "clear"
       },
       {
-        "evidence": "Re-swept across the full changed set for this exact head, which adds the bounded review-after-remediation generation to the trusted orchestrator, the reviewer collector, the collector workflow and the canonical defect registry. Clear: the change adds no persistence, replay, migration or authority-widening surface. The generation is derived only from trusted GitHub review-thread state, is re-derived independently by the trusted collector and fails closed on disagreement, and it narrows rather than widens evidence reuse by refusing an exhaustion receipt minted under a superseded generation.",
+        "evidence": "PR #471 focused regression suite and trusted preflight evidence; authenticated reviewer must re-evaluate before adoption.",
         "family": "DFF-021",
         "outcome": "clear"
       },
       {
-        "evidence": "Repaired and extended. The ordered-pool exhaustion contract this family owns is unchanged: reviewers are still attempted in strict priority order with both recorded budgets, a triage-only reviewer still never closes the pool, and the last-resort guard still requires the whole enabled pool to be exhausted with zero unresolved threads and green Governance and trusted Preflight. What this head adds is the missing transition out of exhaustion: exhaustion is now generation-scoped evidence rather than a permanent property of an immutable head, so a receipt minted under a superseded remediation generation is refused instead of replayed to justify a lower-priority authority. Regression evidence: tests/test_hunter_reviewer_collector.py::test_exhaustion_receipt_from_a_prior_remediation_generation_is_not_reusable and tests/test_hunter_reviewer_collector.py::test_a_receipt_bound_to_the_current_remediation_generation_still_verifies.",
+        "evidence": "PR #471 focused regression suite and trusted preflight evidence; authenticated reviewer must re-evaluate before adoption.",
         "family": "DFF-022",
-        "outcome": "repaired"
-      },
-      {
-        "evidence": "Re-swept across the full changed set for this exact head, which adds the bounded review-after-remediation generation to the trusted orchestrator, the reviewer collector, the collector workflow and the canonical defect registry. Clear: the change adds no persistence, replay, migration or authority-widening surface. The generation is derived only from trusted GitHub review-thread state, is re-derived independently by the trusted collector and fails closed on disagreement, and it narrows rather than widens evidence reuse by refusing an exhaustion receipt minted under a superseded generation.",
-        "family": "DFF-023",
         "outcome": "clear"
       },
       {
-        "evidence": "This head establishes the family and repairs the defect it names. A remediation generation is a digest over the exact head, the claims digest and the set of resolved blocking review threads, where a thread counts only when an authenticated reviewer app that is neither Hunter's own automation nor the pull-request author opened it. The trusted default-branch orchestrator derives it where it decides to dispatch and the trusted collector re-derives it independently, failing closed when the dispatched generation is not the one the evidence supports. It enters the collector run name, the reviewer invocation key, both reviewer trigger bodies and the collector receipt, so an advanced generation buys exactly one new invocation per reviewer and an unchanged one buys none. It is bounded by a material change of generation, a finished previous collector, the absence of a collector for this generation, and MAX_REMEDIATION_GENERATIONS per exact head. Mechanical guard: scripts/hunter_defect_prevention_preflight.py::validate_review_after_remediation_boundary, invoked from validate_defect_prevention_lifecycle in the Defect Prevention Guard at the push boundary, with paired negative fixtures in tests/test_review_after_remediation_generation.py for each way the binding could be removed. Regression evidence: the six targets DFF-024 declares in docs/DEFECT_REGISTRY.json.",
-        "family": "DFF-024",
-        "outcome": "repaired"
+        "evidence": "PR #471 focused regression suite and trusted preflight evidence; authenticated reviewer must re-evaluate before adoption.",
+        "family": "DFF-023",
+        "outcome": "clear"
       }
     ],
     "findings": [],
     "issue": "461",
     "review_target": [
       {
-        "blob_sha": "7ff4bf912fea9b1d877654610fed944e7f607ed0",
-        "path": ".github/workflows/hunter-local-reviewer.yml",
-        "previous_path": "",
-        "status": "added"
-      },
-      {
-        "blob_sha": "9a3f520341ff0154b7e82cb3241e624f784256c6",
-        "path": "docs/operations/hunter-local-reviewer.md",
-        "previous_path": "",
-        "status": "added"
-      },
-      {
-        "blob_sha": "e6a84561c1f15cf7676f9e46fde6f76cd6f8de3a",
-        "path": "docs/superpowers/plans/2026-09-15-resilient-reviewer-orchestration.md",
-        "previous_path": "",
-        "status": "added"
-      },
-      {
-        "blob_sha": "22bdf500888227246f9bd6b922432497255e9f3a",
-        "path": "docs/superpowers/specs/2026-09-15-reviewer-orchestration-design.md",
-        "previous_path": "",
-        "status": "added"
-      },
-      {
-        "blob_sha": "778132068f8ec58914b6e7cc25ff3d06eafa50da",
-        "path": "scripts/bootstrap_hunter_review_runner.sh",
-        "previous_path": "",
-        "status": "added"
-      },
-      {
-        "blob_sha": "6838aa381f581da8c6cded25f0f4b490d28aaace",
-        "path": "scripts/hunter_local_reviewer.py",
-        "previous_path": "",
-        "status": "added"
-      },
-      {
-        "blob_sha": "2c87b792440673985a1590c4c1c2498f20934908",
-        "path": "scripts/hunter_review_orchestrator.py",
-        "previous_path": "",
-        "status": "added"
-      },
-      {
-        "blob_sha": "b73df0136dd471b37b85b0d24455c043f33b7893",
-        "path": "scripts/hunter_reviewer_benchmark.py",
-        "previous_path": "",
-        "status": "added"
-      },
-      {
-        "blob_sha": "7f1ede16bb6870ab187d5607489b67bfa0df7252",
-        "path": "tests/fixtures/reviewer_benchmark_cases.json",
-        "previous_path": "",
-        "status": "added"
-      },
-      {
-        "blob_sha": "7235b9df56a353fdcabfb2b14a90f5060c1fc0a0",
-        "path": "tests/test_hunter_local_reviewer.py",
-        "previous_path": "",
-        "status": "added"
-      },
-      {
-        "blob_sha": "d088a799c38777ccee36e099493baf816adc56cf",
-        "path": "tests/test_hunter_local_reviewer_bootstrap.py",
-        "previous_path": "",
-        "status": "added"
-      },
-      {
-        "blob_sha": "fccc60a2fc3dcd300daca16c446c5f59fa8bb376",
-        "path": "tests/test_hunter_review_orchestrator.py",
-        "previous_path": "",
-        "status": "added"
-      },
-      {
-        "blob_sha": "aca339bf98ee4dde39add8b3aa286b2d2b1ad643",
-        "path": "tests/test_hunter_reviewer_benchmark.py",
-        "previous_path": "",
-        "status": "added"
-      },
-      {
-        "blob_sha": "2d52568208e7d675f8d1bbe2c0607d1efbf06b54",
-        "path": "tests/test_review_after_remediation_generation.py",
-        "previous_path": "",
-        "status": "added"
-      },
-      {
-        "blob_sha": "aad0a737e5985c76925eb1a4abf4967a4b5d4a09",
-        "path": "tests/test_sources_have_no_unreachable_statements.py",
-        "previous_path": "",
-        "status": "added"
-      },
-      {
-        "blob_sha": "2ea8b102079283f7f2fd3040923e3f27cc69d97c",
-        "path": ".github/workflows/hunter-governance-reconcile.yml",
+        "blob_sha": "acdcd9f3fe295cb2fd88ab0aea7f4814d1d300af",
+        "path": "src/hunter/automation/railway_opencode_permission_sandbox.py",
         "previous_path": "",
         "status": "modified"
       },
       {
-        "blob_sha": "da4625f5599c784e2043b26ffd38892a1f9b58d1",
-        "path": ".github/workflows/hunter-governance-review.yml",
-        "previous_path": "",
-        "status": "modified"
-      },
-      {
-        "blob_sha": "4bc57478f041c1037902dffe37719376b43b27ee",
-        "path": ".github/workflows/hunter-reviewer-collector.yml",
-        "previous_path": "",
-        "status": "modified"
-      },
-      {
-        "blob_sha": "cfdb67a2a0676df7dcbdf1b49b80559ddba4003e",
-        "path": ".gitignore",
-        "previous_path": "",
-        "status": "modified"
-      },
-      {
-        "blob_sha": "0bebc0175dabdbdb6805fb483b33c6f81b729a7a",
-        "path": "docs/CODE_WRITE_POLICY.json",
-        "previous_path": "",
-        "status": "modified"
-      },
-      {
-        "blob_sha": "59c9a5b978058c22872b9ebb9a3c41ca617eab06",
-        "path": "docs/DEFECT_REGISTRY.json",
-        "previous_path": "",
-        "status": "modified"
-      },
-      {
-        "blob_sha": "a2262d1a3e5497065ec1b88c248d0c29f42a56c5",
-        "path": "scripts/hunter_defect_prevention_preflight.py",
-        "previous_path": "",
-        "status": "modified"
-      },
-      {
-        "blob_sha": "49148e944b7056a2f2c64e66d2debdbce41ea636",
-        "path": "scripts/hunter_governance_review_v2.py",
-        "previous_path": "",
-        "status": "modified"
-      },
-      {
-        "blob_sha": "8078004ed12081f8280ebb8abfeb2005215cb346",
-        "path": "scripts/hunter_merge_readiness_v2.py",
-        "previous_path": "",
-        "status": "modified"
-      },
-      {
-        "blob_sha": "40f339497bcb51b6ec323df4850bcf0d1306e432",
-        "path": "scripts/hunter_pre_ready_review.py",
-        "previous_path": "",
-        "status": "modified"
-      },
-      {
-        "blob_sha": "7d6ae685cb7773f02dbcce9d2e6ddd201988c855",
-        "path": "scripts/hunter_reviewer_collector.py",
-        "previous_path": "",
-        "status": "modified"
-      },
-      {
-        "blob_sha": "53ee17b2432ab27f10584e585efc83241f1563c7",
-        "path": "tests/test_code_write_policy.py",
-        "previous_path": "",
-        "status": "modified"
-      },
-      {
-        "blob_sha": "2e77608bef5a069966ce90b74d1bf48821c13391",
-        "path": "tests/test_exact_head_review_authority.py",
-        "previous_path": "",
-        "status": "modified"
-      },
-      {
-        "blob_sha": "4338d7591af52c401db1ff47662552c202b15e2c",
-        "path": "tests/test_hunter_governance_cleanup.py",
-        "previous_path": "",
-        "status": "modified"
-      },
-      {
-        "blob_sha": "612d9b5b48e6180b704d09e63e1c2170211c7c8e",
-        "path": "tests/test_hunter_governance_review_v2.py",
-        "previous_path": "",
-        "status": "modified"
-      },
-      {
-        "blob_sha": "7f9dbf54bb32d8eab6b2e3c62591f2e2cbd7ee1f",
-        "path": "tests/test_hunter_reviewer_collector.py",
-        "previous_path": "",
-        "status": "modified"
-      },
-      {
-        "blob_sha": "c1c54e86bf290e7848e40c081e11b40866e9a96e",
-        "path": "tests/test_issue_412_prevention_gate.py",
+        "blob_sha": "9e4bc76fb9954d40bc1bb85aeae4e6e6740c8d29",
+        "path": "tests/test_railway_opencode_permission_sandbox.py",
         "previous_path": "",
         "status": "modified"
       }
     ],
-    "review_target_digest": "96de785e087c8997c402013f005e90e529f2c450b87a984ed8978cce2004aa6f"
+    "review_target_digest": "0874d9ff70868cb2bbf7524168df87c8a4457b5bb6ba1b19ee4fa969da040eab"
   },
-  "review_id": "bd5a8aefc056d26046ee87e8242a056934b201de79f5c32f8c515bee088b314e",
+  "review_id": "398ebc3b4fa77090be15d9770176356108b3d5902e45320bb6d70e4b146c4c00",
   "review_request": {
-    "claims_id": "bd5a8aefc056d26046ee87e8242a056934b201de79f5c32f8c515bee088b314e",
+    "claims_id": "398ebc3b4fa77090be15d9770176356108b3d5902e45320bb6d70e4b146c4c00",
     "schema": "hunter.review-request.v1"
   },
   "schema": "hunter.pre-ready-hostile-review.v1"
