@@ -322,7 +322,8 @@ def test_lifecycle_contract_accepts_an_equivalent_prerequisite_publisher(tmp_pat
             "    )\n"
             "    return record\n"
             "def ensure_current(repo, tok, number):\n"
-            "    return publish_prerequisite_block(repo, tok, number, 'h', 'x', previous=None)\n"
+            "    previous = object()\n"
+            "    return publish_prerequisite_block(repo, tok, number, 'h', 'x', previous=previous)\n"
         ),
     }.items():
         (tmp_path / "scripts" / name).write_text(body, encoding="utf-8")
@@ -359,3 +360,60 @@ def test_lifecycle_contract_rejects_a_non_object_present_document_read_as_missin
     errors = prevention.validate_review_request_lifecycle_contract()
 
     assert any("not an object" in error for error in errors)
+
+
+def test_lifecycle_contract_rejects_fake_review_verifier_receiver(tmp_path, monkeypatch):
+    """Calling another object's same-named method must not satisfy the push-boundary edge."""
+
+    (tmp_path / "scripts").mkdir(parents=True, exist_ok=True)
+    sources = {
+        "hunter_pre_ready_review.py": "def verify_local_review_request():\n    return True\n",
+        "hunter_pre_push.py": (
+            "def enforce_declared_review_request():\n"
+            "    return fake.verify_local_review_request()\n"
+            "def enforce_pre_push():\n"
+            "    enforce_declared_review_request()\n"
+        ),
+        "hunter_review_orchestrator.py": (
+            "def publish_prerequisite_block(repo, tok, number, sha, why, *, previous=None):\n"
+            "    return ReviewCycle(trigger_id=previous.trigger_id if previous else None)\n"
+            "def ensure_current():\n"
+            "    previous = object()\n"
+            "    return publish_prerequisite_block('r', 't', 1, 'h', 'x', previous=previous)\n"
+        ),
+    }
+    for name, body in sources.items():
+        (tmp_path / "scripts" / name).write_text(body, encoding="utf-8")
+    monkeypatch.setattr(prevention, "ROOT", tmp_path)
+
+    errors = prevention.validate_review_request_lifecycle_contract()
+
+    assert any("verify_local_review_request" in error for error in errors)
+
+
+def test_lifecycle_contract_rejects_previous_keyword_hardcoded_to_none(tmp_path, monkeypatch):
+    """A keyword named previous is not enough; the existing cycle must flow through it."""
+
+    (tmp_path / "scripts").mkdir(parents=True, exist_ok=True)
+    sources = {
+        "hunter_pre_ready_review.py": "def verify_local_review_request():\n    return True\n",
+        "hunter_pre_push.py": (
+            "def enforce_declared_review_request():\n"
+            "    return review.verify_local_review_request()\n"
+            "def enforce_pre_push():\n"
+            "    enforce_declared_review_request()\n"
+        ),
+        "hunter_review_orchestrator.py": (
+            "def publish_prerequisite_block(repo, tok, number, sha, why, *, previous=None):\n"
+            "    return ReviewCycle(trigger_id=previous.trigger_id if previous else None)\n"
+            "def ensure_current():\n"
+            "    return publish_prerequisite_block('r', 't', 1, 'h', 'x', previous=None)\n"
+        ),
+    }
+    for name, body in sources.items():
+        (tmp_path / "scripts" / name).write_text(body, encoding="utf-8")
+    monkeypatch.setattr(prevention, "ROOT", tmp_path)
+
+    errors = prevention.validate_review_request_lifecycle_contract()
+
+    assert any("existing cycle" in error for error in errors)

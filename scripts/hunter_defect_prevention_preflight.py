@@ -1665,6 +1665,8 @@ def validate_review_request_lifecycle_contract() -> list[str]:
         if enforce is None or not any(
             isinstance(call, ast.Call)
             and isinstance(call.func, ast.Attribute)
+            and isinstance(call.func.value, ast.Name)
+            and call.func.value.id == "review"
             and call.func.attr == "verify_local_review_request"
             for call in ast.walk(enforce)
         ):
@@ -1704,8 +1706,18 @@ def validate_review_request_lifecycle_contract() -> list[str]:
     for call in ast.walk(publisher):
         if isinstance(call, ast.Call) and isinstance(call.func, ast.Name) and call.func.id == "ReviewCycle":
             trigger_values.extend(kw.value for kw in call.keywords if kw.arg == "trigger_id")
-    trigger_source = " ".join(ast.unparse(value) for value in trigger_values)
-    if "previous.trigger_id" not in trigger_source or "None" not in trigger_source:
+    preserves_previous_trigger = any(
+        any(
+            isinstance(node, ast.Attribute)
+            and isinstance(node.value, ast.Name)
+            and node.value.id == "previous"
+            and node.attr == "trigger_id"
+            for node in ast.walk(value)
+        )
+        and any(isinstance(node, ast.Constant) and node.value is None for node in ast.walk(value))
+        for value in trigger_values
+    )
+    if not preserves_previous_trigger:
         errors.append(
             "prerequisite publication must preserve previous.trigger_id and use None only when no dispatch exists"
         )
@@ -1718,7 +1730,11 @@ def validate_review_request_lifecycle_contract() -> list[str]:
         isinstance(call, ast.Call)
         and isinstance(call.func, ast.Name)
         and call.func.id == "publish_prerequisite_block"
-        and any(keyword.arg == "previous" for keyword in call.keywords)
+        and any(
+            keyword.arg == "previous"
+            and any(isinstance(node, ast.Name) and node.id == "previous" for node in ast.walk(keyword.value))
+            for keyword in call.keywords
+        )
         for call in ast.walk(ensure_current)
     ):
         errors.append("ensure_current must pass the existing cycle into prerequisite publication")

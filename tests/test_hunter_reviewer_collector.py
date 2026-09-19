@@ -2010,3 +2010,82 @@ def test_collect_attempts_keeps_nonzero_identity_for_post_trigger_api_failure(mo
 
     assert records[0]["outcome"] == "unavailable"
     assert records[0]["trigger_id"] == 992
+
+
+def test_provider_refusal_after_api_trigger_persists_verifiable_unavailability(monkeypatch):
+    """A real trigger plus provider refusal must leave durable API-result evidence."""
+
+    backend = _backend()
+    agent = {
+        "id": "gemini",
+        "trigger_method": "api:gemini",
+        "priority": 1,
+        "enabled": True,
+        "retryable": False,
+        "ack_timeout_seconds": 1,
+        "review_timeout_seconds": 1,
+        "evidence_parser": "parser",
+        "authority_eligible": True,
+    }
+    monkeypatch.setattr(collector, "_pages", lambda *_a, **_k: [])
+    posted = []
+
+    def post(body):
+        posted.append(body)
+        return {
+            "id": 1200 + len(posted),
+            "created_at": "2026-09-19T20:00:00Z",
+            "body": body,
+        }
+
+    monkeypatch.setattr(backend, "_post_comment", post)
+    monkeypatch.setattr(
+        backend,
+        "_invoke_external",
+        lambda *_a, **_k: (_ for _ in ()).throw(_request_error(403)),
+    )
+
+    trigger = backend.trigger(agent, 1)
+
+    assert trigger["id"] == 1201
+    assert trigger["state"] == "unavailable"
+    assert trigger["result_comment_id"] == 1202
+    assert trigger["response_digest"]
+    assert len(posted) == 2
+    assert '"verdict":"unavailable"' in posted[1].replace(" ", "")
+
+
+def test_api_result_persistence_failure_after_provider_return_fails_closed(monkeypatch):
+    """A completed provider call without durable result evidence may not authorise failover."""
+
+    backend = _backend()
+    agent = {
+        "id": "gemini",
+        "trigger_method": "api:gemini",
+        "priority": 1,
+        "enabled": True,
+        "retryable": False,
+        "ack_timeout_seconds": 1,
+        "review_timeout_seconds": 1,
+        "evidence_parser": "parser",
+        "authority_eligible": True,
+    }
+    monkeypatch.setattr(collector, "_pages", lambda *_a, **_k: [])
+    calls = 0
+
+    def post(_body):
+        nonlocal calls
+        calls += 1
+        if calls == 1:
+            return {"id": 1301, "created_at": "2026-09-19T20:00:00Z", "body": "trigger"}
+        raise _request_error(403)
+
+    monkeypatch.setattr(backend, "_post_comment", post)
+    monkeypatch.setattr(
+        backend,
+        "_invoke_external",
+        lambda *_a, **_k: {"verdict": "clear", "summary": "clean"},
+    )
+
+    with pytest.raises(collector.governance.transport.GitHubRequestError):
+        backend.trigger(agent, 1)
