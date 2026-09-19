@@ -51,7 +51,10 @@ _PERMISSION_CONFIG = {
     }
 }
 _REQUIRED_PROVIDER_CAPABILITIES = frozenset({"read", "edit", "glob", "grep"})
+_PINNED_OPENCODE_VERSION = "1.18.30"
 _PROVIDER_RUNTIME_INSTRUCTION_FILE = "hunter-provider-runtime.md"
+_PROVIDER_COMPATIBILITY_PROMPT = "Reply with exactly HUNTER_PROVIDER_READY and do not use tools."
+_PROVIDER_COMPATIBILITY_SENTINEL = "HUNTER_PROVIDER_READY"
 _PROVIDER_RUNTIME_INSTRUCTIONS = (
     "Operate only with the provider tools enabled by this governed runtime: "
     "read, edit, glob, grep, and lsp. "
@@ -164,6 +167,49 @@ def _validate_provider_capabilities() -> dict[str, str]:
     return normalized
 
 
+def _validate_pinned_runtime(executable: str, env: dict[str, str]) -> None:
+    completed = subprocess.run(
+        [executable, "--version"],
+        cwd=Path(env["HOME"]),
+        env=env,
+        check=False,
+        capture_output=True,
+        text=True,
+        timeout=30,
+    )
+    if completed.returncode != 0:
+        raise SandboxShimError("provider runtime version probe failed")
+    observed = completed.stdout.strip().removeprefix("v")
+    if observed != _PINNED_OPENCODE_VERSION:
+        raise SandboxShimError(
+            f"provider runtime version mismatch: expected {_PINNED_OPENCODE_VERSION}, observed {observed or '(empty)'}"
+        )
+
+
+def _validate_provider_compatibility(executable: str, provider_args: list[str], env: dict[str, str]) -> None:
+    model_args: list[str] = []
+    if "--model" in provider_args:
+        index = provider_args.index("--model")
+        if index + 1 >= len(provider_args):
+            raise SandboxShimError("provider model option is missing its value")
+        model_args = ["--model", provider_args[index + 1]]
+    completed = subprocess.run(
+        [executable, "--pure", "run", *model_args, _PROVIDER_COMPATIBILITY_PROMPT],
+        cwd=Path(env["HOME"]),
+        env=env,
+        check=False,
+        capture_output=True,
+        text=True,
+        timeout=60,
+    )
+    if completed.returncode != 0:
+        detail = (completed.stderr or completed.stdout).strip()
+        suffix = f": {detail[:240]}" if detail else ""
+        raise SandboxShimError(f"provider compatibility probe failed{suffix}")
+    if _PROVIDER_COMPATIBILITY_SENTINEL not in completed.stdout:
+        raise SandboxShimError("provider compatibility probe returned an unexpected response")
+
+
 def _validate_runtime_provider_capabilities(executable: str, env: dict[str, str]) -> None:
     completed = subprocess.run(
         [executable, "debug", "agent", "build", "--pure"],
@@ -221,7 +267,9 @@ def main(argv: list[str] | None = None) -> int:
     try:
         workspace, credential_home, executable, provider_args = _parse(list(sys.argv[1:] if argv is None else argv))
         env = _restricted_environment(credential_home)
+        _validate_pinned_runtime(executable, env)
         _validate_runtime_provider_capabilities(executable, env)
+        _validate_provider_compatibility(executable, provider_args, env)
         completed = subprocess.run(
             [executable, "--pure", *provider_args],
             cwd=workspace,
