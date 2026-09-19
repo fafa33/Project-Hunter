@@ -2690,3 +2690,27 @@ def test_malformed_review_evidence_does_not_block_an_ordinary_draft_push(monkeyp
     assert "READY-ELIGIBLE" not in captured.out
     assert "AttributeError" not in captured.out
     assert captured.err == ""
+
+
+def test_trusted_preflight_wakeup_requires_real_yaml_membership(monkeypatch, tmp_path) -> None:
+    workflow = tmp_path / ".github/workflows/hunter-governance-reconcile.yml"
+    workflow.parent.mkdir(parents=True)
+    workflow.write_text(
+        "name: reconcile\n"
+        "on:\n"
+        "  workflow_run:\n"
+        "    workflows:\n"
+        "      - Hunter Reviewer Collector\n"
+        "      # - Hunter / Trusted Preflight Upgrade\n"
+        "    types:\n"
+        "      # - completed\n"
+        "      - requested\n",
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(prevention, "ROOT", tmp_path)
+
+    errors = prevention.validate_trusted_preflight_reconcile_wakeup()
+
+    assert errors == [
+        "trusted preflight completion must trigger governance reconcile so exact-head review orchestration cannot stall"
+    ]

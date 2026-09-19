@@ -634,3 +634,16 @@ def test_defect_prevention_guards_review_request_lifecycle_contract() -> None:
     import hunter_defect_prevention_preflight as prevention
 
     assert prevention.validate_review_request_lifecycle_contract() == []
+
+
+def test_repository_root_request_has_no_trailing_slash(monkeypatch) -> None:
+    seen = []
+
+    def request_rest_json(**kwargs):
+        seen.append(kwargs["url"])
+        return {"default_branch": "main"}
+
+    monkeypatch.setattr(core.transport, "request_rest_json", request_rest_json)
+
+    assert core.request_json("owner/repo", "token", "GET", "") == {"default_branch": "main"}
+    assert seen == ["https://api.github.com/repos/owner/repo"]

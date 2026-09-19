@@ -1492,12 +1492,25 @@ def validate_trusted_preflight_reconcile_wakeup() -> list[str]:
     """A completed trusted preflight must immediately wake review orchestration."""
 
     try:
-        text = (ROOT / GOVERNANCE_RECONCILE_WORKFLOW).read_text(encoding="utf-8")
-    except OSError as exc:
+        document = yaml.safe_load((ROOT / GOVERNANCE_RECONCILE_WORKFLOW).read_text(encoding="utf-8"))
+    except (OSError, yaml.YAMLError) as exc:
         return [f"trusted-preflight reconcile workflow unavailable: {exc}"]
-    marker = f"      - {TRUSTED_PREFLIGHT_WORKFLOW_NAME}"
-    workflow_run = text.partition("  workflow_run:")[2].partition("  pull_request_review:")[0]
-    if marker not in workflow_run or "      - completed" not in workflow_run:
+    if not isinstance(document, dict):
+        return ["trusted-preflight reconcile workflow must be a YAML mapping"]
+    triggers = document.get("on")
+    # PyYAML's YAML 1.1 resolver treats the unquoted GitHub Actions key `on` as
+    # boolean true. Accept that parsed key while still inspecting list structure.
+    if triggers is None:
+        triggers = document.get(True)
+    workflow_run = triggers.get("workflow_run") if isinstance(triggers, dict) else None
+    workflows = workflow_run.get("workflows") if isinstance(workflow_run, dict) else None
+    types = workflow_run.get("types") if isinstance(workflow_run, dict) else None
+    if not (
+        isinstance(workflows, list)
+        and TRUSTED_PREFLIGHT_WORKFLOW_NAME in workflows
+        and isinstance(types, list)
+        and "completed" in types
+    ):
         return [
             "trusted preflight completion must trigger governance reconcile so exact-head review orchestration cannot stall"
         ]
