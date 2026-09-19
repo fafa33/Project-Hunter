@@ -1,5 +1,5 @@
 {
-  "authorization_id": "66eadf0be74707a0172009569be577a940b67ce37f3fff27a0df34e0b8ecb16c",
+  "authorization_id": "cad32d79f53937d3888ee6a9ca29cf2ba52ce93338e8d48d688e50bd5437bd4d",
   "claims": {
     "base_ref": "main",
     "base_sha": "369210594f162205ea647befca063b097e56ca3b",
@@ -12,7 +12,7 @@
         "status": "modified"
       },
       {
-        "blob_sha": "5d3c4ac18f9e0e69143b5f0c609c71a425a214c8",
+        "blob_sha": "9e4bc76fb9954d40bc1bb85aeae4e6e6740c8d29",
         "path": "tests/test_railway_opencode_permission_sandbox.py",
         "previous_path": "",
         "status": "modified"

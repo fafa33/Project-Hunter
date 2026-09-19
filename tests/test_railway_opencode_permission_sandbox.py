@@ -49,6 +49,38 @@ def _argv(tmp_path: Path) -> tuple[list[str], Path, Path]:
     return argv, workspace, credential_home
 
 
+def _provider_sequence(
+    calls: list[list[str]],
+    *,
+    tools: dict[str, bool] | None = None,
+    compatibility_returncode: int = 0,
+):
+    resolved_tools = tools or {"read": True, "edit": True, "glob": True, "grep": True}
+
+    def fake_run(command, **kwargs):
+        calls.append(list(command))
+        if command[1:] == ["--version"]:
+            return shim.subprocess.CompletedProcess(command, 0, stdout="1.18.30\n", stderr="")
+        if command[1:4] == ["debug", "agent", "build"]:
+            return shim.subprocess.CompletedProcess(command, 0, stdout=json.dumps({"tools": resolved_tools}), stderr="")
+        if shim._PROVIDER_COMPATIBILITY_PROMPT in command:
+            if compatibility_returncode:
+                return shim.subprocess.CompletedProcess(
+                    command,
+                    compatibility_returncode,
+                    stdout="",
+                    stderr="unsupported request option: prompt_cache_key",
+                )
+            return shim.subprocess.CompletedProcess(
+                command, 0, stdout=shim._PROVIDER_COMPATIBILITY_SENTINEL + "\n", stderr=""
+            )
+        if command[-1] == "prompt":
+            return shim.subprocess.CompletedProcess(command, 0, stdout="", stderr="")
+        pytest.fail(f"unexpected provider command: {command}")
+
+    return fake_run
+
+
 def test_parse_accepts_exact_hunter_contract(tmp_path: Path) -> None:
     argv, workspace, credential_home = _argv(tmp_path)
 
@@ -173,17 +205,8 @@ def test_provider_capability_contract_keeps_shell_and_external_directory_denied(
 def test_main_fails_closed_before_provider_run_when_runtime_capability_is_missing(tmp_path: Path, monkeypatch) -> None:
     argv, _, _ = _argv(tmp_path)
     calls: list[list[str]] = []
-
-    def fake_run(command, **kwargs):
-        calls.append(list(command))
-        if command[1:] == ["--version"]:
-            return shim.subprocess.CompletedProcess(command, 0, stdout="1.18.30\n", stderr="")
-        if command[1:4] == ["debug", "agent", "build"]:
-            tools = {"read": True, "edit": False, "glob": True, "grep": True}
-            return shim.subprocess.CompletedProcess(command, 0, stdout=json.dumps({"tools": tools}), stderr="")
-        pytest.fail("provider execution must not start when runtime capability discovery is incomplete")
-
-    monkeypatch.setattr(shim.subprocess, "run", fake_run)
+    tools = {"read": True, "edit": False, "glob": True, "grep": True}
+    monkeypatch.setattr(shim.subprocess, "run", _provider_sequence(calls, tools=tools))
 
     assert shim.main(argv) == 1
     assert calls == [
@@ -249,23 +272,7 @@ def test_main_runs_version_capability_and_provider_compatibility_before_real_pro
 ) -> None:
     argv, _, _ = _argv(tmp_path)
     calls: list[list[str]] = []
-
-    def fake_run(command, **kwargs):
-        calls.append(list(command))
-        if command[1:] == ["--version"]:
-            return shim.subprocess.CompletedProcess(command, 0, stdout="1.18.30\n", stderr="")
-        if command[1:4] == ["debug", "agent", "build"]:
-            tools = {"read": True, "edit": True, "glob": True, "grep": True}
-            return shim.subprocess.CompletedProcess(command, 0, stdout=json.dumps({"tools": tools}), stderr="")
-        if shim._PROVIDER_COMPATIBILITY_PROMPT in command:
-            return shim.subprocess.CompletedProcess(
-                command, 0, stdout=shim._PROVIDER_COMPATIBILITY_SENTINEL + "\n", stderr=""
-            )
-        if command[-1] == "prompt":
-            return shim.subprocess.CompletedProcess(command, 0, stdout="", stderr="")
-        pytest.fail(f"unexpected provider command: {command}")
-
-    monkeypatch.setattr(shim.subprocess, "run", fake_run)
+    monkeypatch.setattr(shim.subprocess, "run", _provider_sequence(calls))
 
     assert shim.main(argv) == 0
     assert calls[-1][-1] == "prompt"
@@ -275,21 +282,11 @@ def test_main_runs_version_capability_and_provider_compatibility_before_real_pro
 def test_main_fails_before_real_prompt_when_provider_compatibility_probe_fails(tmp_path: Path, monkeypatch) -> None:
     argv, _, _ = _argv(tmp_path)
     calls: list[list[str]] = []
-
-    def fake_run(command, **kwargs):
-        calls.append(list(command))
-        if command[1:] == ["--version"]:
-            return shim.subprocess.CompletedProcess(command, 0, stdout="1.18.30\n", stderr="")
-        if command[1:4] == ["debug", "agent", "build"]:
-            tools = {"read": True, "edit": True, "glob": True, "grep": True}
-            return shim.subprocess.CompletedProcess(command, 0, stdout=json.dumps({"tools": tools}), stderr="")
-        if shim._PROVIDER_COMPATIBILITY_PROMPT in command:
-            return shim.subprocess.CompletedProcess(
-                command, 1, stdout="", stderr="unsupported request option: prompt_cache_key"
-            )
-        pytest.fail("real provider prompt must not start after a failed compatibility probe")
-
-    monkeypatch.setattr(shim.subprocess, "run", fake_run)
+    monkeypatch.setattr(
+        shim.subprocess,
+        "run",
+        _provider_sequence(calls, compatibility_returncode=1),
+    )
 
     assert shim.main(argv) == 1
     assert all(command[-1] != "prompt" for command in calls)
