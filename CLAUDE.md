@@ -71,4 +71,4 @@ When the next in-scope action is clear and permitted, continue without asking fo
 
 ## Durable remote checkpoints
 
-Validated work must not remain only in an ephemeral or local workspace. After each meaningful validated checkpoint, commit it, push it to the authorized remote branch, and verify that the remote branch HEAD exactly matches the local commit before substantial work continues. If push fails, stop, preserve the exact local commit, and report the failure instead of continuing on unpersisted work.
+Validated work must not remain only in an ephemeral or local workspace. After each meaningful validated checkpoint, commit it, push it to the authorized remote branch, and verify that the remote branch HEAD exactly matches the local commit before substantial work continues. If push fails, stop, preserve the exact local commit, and report the failure instead of continuing on unpersisted work. An explicit owner instruction not to push takes precedence; in that case preserve the exact commit locally and report that remote persistence is intentionally withheld.
