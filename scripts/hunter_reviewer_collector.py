@@ -1416,7 +1416,19 @@ def load_exhaustion(
                     break
                 continue
             if trigger_id == 0:
-                raise ValueError("duplicate or invalid invocation identity")
+                # The trigger was refused before it could exist: no comment was
+                # posted, so there is no id any evidence could be verified
+                # against. Admissible only as recorded unavailability, exactly
+                # as a workflow dispatch the trusted branch never accepted is --
+                # a verdict or a spent review budget would assert a trigger that
+                # demonstrably never existed. Absence is not an identity, so it
+                # is never added to `seen`: two undrivable reviewers must not
+                # collide as a duplicate invocation.
+                if outcome not in {"unavailable", "unacknowledged"}:
+                    raise ValueError("a reviewer with no trusted trigger must record unavailability")
+                if outcome != "timed_out":
+                    break
+                continue
             seen.add((scheme, trigger_id))
             try:
                 trigger = governance.request_json(repository, token, "GET", f"issues/comments/{trigger_id}")

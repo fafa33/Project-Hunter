@@ -1852,3 +1852,87 @@ def test_pool_isolation_does_not_swallow_a_head_change():
 
     with pytest.raises(ValueError, match="HEAD changed"):
         collector.collect_attempts(_isolation_pool(), HEAD, Moved(_request_error(404)))
+
+
+# --- A refused non-workflow trigger has no id to verify against ---------------
+
+
+def _refused_trigger(outcome, elapsed=0.0):
+    """Rewrite the receipt's single attempt as a trigger that was never posted."""
+
+    def mutate(receipt):
+        receipt["attempts"][0].update(
+            trigger_id=0, trigger_created_at="", outcome=outcome, elapsed_seconds=elapsed, ack_elapsed_seconds=0.0
+        )
+
+    return mutate
+
+
+def test_a_refused_comment_trigger_verifies_as_recorded_unavailability(monkeypatch):
+    """Per-reviewer isolation must produce a receipt the trusted verifier accepts.
+
+    A 403/404/422 from the comment post means no comment exists, so there is no
+    id to verify against -- the same situation as a workflow dispatch the trusted
+    branch never accepted, and admissible on the same terms.
+    """
+
+    pool = _install_receipt(monkeypatch, mutate=_refused_trigger("unavailable"))
+
+    result = collector.load_exhaustion("owner/repo", "token", 469, HEAD, pool, 123, "alternate")
+
+    assert [attempt["agent_id"] for attempt in result["reviewer_attempts"]] == ["codex"]
+
+
+def test_a_refused_comment_trigger_may_not_claim_a_spent_review_budget(monkeypatch):
+    """Zero trigger id plus a timeout asserts a trigger that never existed."""
+
+    pool = _install_receipt(monkeypatch, mutate=_refused_trigger("timed_out", elapsed=300.0))
+
+    with pytest.raises(ValueError, match="must record unavailability"):
+        collector.load_exhaustion("owner/repo", "token", 469, HEAD, pool, 123, "alternate")
+
+
+def test_an_undrivable_api_reviewer_is_isolated_like_a_workflow_reviewer():
+    """The isolation must cover every scheme, not only workflow dispatch."""
+
+    class ApiBackend(_PoolBackend):
+        def trigger(self, agent, number):
+            self.triggered.append(agent["id"])
+            if agent["id"] == "gemini":
+                raise self.error
+            return {"id": 1, "created_at": "t"}
+
+    backend = ApiBackend(_request_error(403))
+    pool = {
+        "timeout_policy": {"retries_per_agent": 0},
+        "agents": [
+            {
+                "id": "gemini",
+                "priority": 1,
+                "enabled": True,
+                "retryable": False,
+                "ack_timeout_seconds": 1,
+                "review_timeout_seconds": 1,
+                "trigger_method": "api:gemini",
+                "evidence_parser": "parser",
+                "authority_eligible": True,
+            },
+            {
+                "id": "codex",
+                "priority": 2,
+                "enabled": True,
+                "retryable": False,
+                "ack_timeout_seconds": 1,
+                "review_timeout_seconds": 1,
+                "trigger_method": "github-pr-comment:@codex review",
+                "evidence_parser": "parser",
+                "authority_eligible": True,
+            },
+        ],
+    }
+
+    records = collector.collect_attempts(pool, HEAD, backend)
+
+    assert backend.triggered == ["gemini", "codex"]
+    assert records[0]["outcome"] == "unavailable"
+    assert records[0]["trigger_id"] == 0

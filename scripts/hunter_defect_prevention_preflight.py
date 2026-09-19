@@ -1616,6 +1616,26 @@ def validate_review_request_lifecycle_contract() -> list[str]:
         if actual != state:
             errors.append(f"prerequisite reason {reason.split(':')[0]} must classify as {state}, not {actual}")
 
+    # Only an absent request artifact is a transient missing request. Unreadable
+    # JSON and unavailable evidence must not inherit its wait, or the transport's
+    # fail-closed outcome would be republished as pending.
+    read_codes = {
+        "absent": "REVIEW_REQUEST_MISSING",
+        "invalid": "REVIEW_REQUEST_MALFORMED",
+        "unavailable": "REVIEW_REQUEST_UNAVAILABLE",
+        "some_future_read_state": "REVIEW_REQUEST_MALFORMED",
+    }
+    for read_state, code in read_codes.items():
+        actual_code = orchestration._request_read_code(read_state, None)
+        if actual_code != code:
+            errors.append(f"pre-ready read state {read_state} must report {code}, not {actual_code}")
+        elif read_state != "absent" and orchestration.prerequisite_cycle_state(f"{actual_code}:d") != (
+            "PREREQUISITE_BLOCKED"
+        ):
+            errors.append(f"pre-ready read state {read_state} must block rather than wait")
+    if orchestration._request_read_code("present", ["not", "an", "object"]) != "REVIEW_REQUEST_MALFORMED":
+        errors.append("a present pre-ready document that is not an object must report a malformed request")
+
     # Waiting states must be projected as pending, and a blocked prerequisite
     # must not be, or a decided failure would be reported as mere waiting.
     for state in ("WAITING_FOR_REVIEW_REQUEST", "WAITING_FOR_PREREQUISITE"):

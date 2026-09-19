@@ -916,3 +916,61 @@ def test_a_real_dispatch_inside_the_grace_is_still_not_duplicated(monkeypatch):
 
     assert stored["dispatches"] == 0
     assert result.trigger_id == 123
+
+
+# --- Only an absent request is a transient missing request --------------------
+
+
+@pytest.mark.parametrize(
+    ("read_state", "expected_code", "expected_cycle"),
+    [
+        ("absent", "REVIEW_REQUEST_MISSING", "WAITING_FOR_REVIEW_REQUEST"),
+        # Unreadable JSON and unavailable evidence are not absence.
+        ("invalid", "REVIEW_REQUEST_MALFORMED", "PREREQUISITE_BLOCKED"),
+        ("unavailable", "REVIEW_REQUEST_UNAVAILABLE", "PREREQUISITE_BLOCKED"),
+        ("some_future_state", "REVIEW_REQUEST_MALFORMED", "PREREQUISITE_BLOCKED"),
+    ],
+)
+def test_only_an_absent_review_request_is_a_transient_wait(read_state, expected_code, expected_cycle):
+    code = orchestrator._request_read_code(read_state, None)
+
+    assert code == expected_code
+    assert orchestrator.prerequisite_cycle_state(f"{code}:detail") == expected_cycle
+
+
+def test_a_present_but_non_object_document_is_malformed_not_missing():
+    """`present` with a non-object body is a broken artifact, not an absent one."""
+
+    assert orchestrator._request_read_code("present", ["not", "an", "object"]) == "REVIEW_REQUEST_MALFORMED"
+    assert orchestrator.prerequisite_cycle_state("REVIEW_REQUEST_MALFORMED:detail") == "PREREQUISITE_BLOCKED"
+
+
+@pytest.mark.parametrize("read_state", ["invalid", "unavailable"])
+def test_unreadable_request_evidence_blocks_rather_than_waits(monkeypatch, read_state):
+    """End to end: unreadable evidence must not publish a pending cycle."""
+
+    import hunter_governance_review_v2 as governance
+
+    monkeypatch.setattr(governance, "read_trusted_upgrade_status", lambda *_a, **_k: ("success", "ok"))
+    monkeypatch.setattr(
+        governance, "read_head_pre_ready_review", lambda *_a, **_k: (read_state, None, "evidence is not readable")
+    )
+
+    ready, claims_id, reason = orchestrator.review_request_state("owner/repo", "token", 472, HEAD)
+
+    assert ready is False
+    assert claims_id == ""
+    assert orchestrator.prerequisite_cycle_state(reason) == "PREREQUISITE_BLOCKED"
+
+
+def test_an_absent_request_still_waits_end_to_end(monkeypatch):
+    """The transient case must keep waiting: pushing the artifact resolves it."""
+
+    import hunter_governance_review_v2 as governance
+
+    monkeypatch.setattr(governance, "read_trusted_upgrade_status", lambda *_a, **_k: ("success", "ok"))
+    monkeypatch.setattr(governance, "read_head_pre_ready_review", lambda *_a, **_k: ("absent", None, None))
+
+    _ready, _claims, reason = orchestrator.review_request_state("owner/repo", "token", 472, HEAD)
+
+    assert orchestrator.prerequisite_cycle_state(reason) == "WAITING_FOR_REVIEW_REQUEST"

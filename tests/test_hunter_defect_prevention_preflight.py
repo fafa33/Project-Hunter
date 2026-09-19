@@ -327,3 +327,31 @@ def test_lifecycle_contract_accepts_an_equivalent_prerequisite_publisher(tmp_pat
     monkeypatch.setattr(prevention, "ROOT", tmp_path)
 
     assert not [e for e in prevention.validate_review_request_lifecycle_contract() if "trigger_id" in e]
+
+
+def test_lifecycle_contract_rejects_unreadable_evidence_treated_as_absent(monkeypatch):
+    """The second-round finding: only `absent` may map to the transient code."""
+
+    import hunter_review_orchestrator as orchestration
+
+    monkeypatch.setattr(orchestration, "_request_read_code", lambda state, document: "REVIEW_REQUEST_MISSING")
+
+    errors = prevention.validate_review_request_lifecycle_contract()
+
+    assert any("invalid" in error for error in errors)
+    assert any("unavailable" in error for error in errors)
+
+
+def test_lifecycle_contract_rejects_a_non_object_present_document_read_as_missing(monkeypatch):
+    import hunter_review_orchestrator as orchestration
+
+    real = orchestration._request_read_code
+    monkeypatch.setattr(
+        orchestration,
+        "_request_read_code",
+        lambda state, document: "REVIEW_REQUEST_MISSING" if state == "present" else real(state, document),
+    )
+
+    errors = prevention.validate_review_request_lifecycle_contract()
+
+    assert any("not an object" in error for error in errors)

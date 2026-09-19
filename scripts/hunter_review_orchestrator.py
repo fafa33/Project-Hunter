@@ -768,6 +768,31 @@ def ensure_collector(
     return cycle
 
 
+#: How each ``read_head_pre_ready_review`` outcome is reported. Only ``absent``
+#: is a transient missing request: the candidate has not pushed the artifact
+#: yet, and pushing it resolves the wait on its own. Unreadable JSON and
+#: unavailable evidence are not that. Collapsing them all into the missing code
+#: made them inherit its wait, so a malformed request -- or GitHub evidence the
+#: transport had already failed closed on -- published a pending cycle instead
+#: of blocking. Unreadable evidence is never read as absence.
+REQUEST_READ_CODES = {
+    "absent": "REVIEW_REQUEST_MISSING",
+    "invalid": "REVIEW_REQUEST_MALFORMED",
+    "unavailable": "REVIEW_REQUEST_UNAVAILABLE",
+}
+
+
+def _request_read_code(request_state: str, document: object) -> str:
+    """The reason code for a request that did not read as a present document.
+
+    A state this does not recognise, and a ``present`` result whose document is
+    not an object, both fall through to the malformed code, so an unrecognised
+    outcome blocks rather than inheriting a wait.
+    """
+
+    return REQUEST_READ_CODES.get(request_state, "REVIEW_REQUEST_MALFORMED")
+
+
 def review_request_state(repository: str, token: str, pr_number: int, head_sha: str) -> tuple[bool, str, str]:
     """Return ``(ready, claims_id, reason)`` for exact-head reviewer prerequisites.
 
@@ -785,7 +810,7 @@ def review_request_state(repository: str, token: str, pr_number: int, head_sha: 
     request_state, document, request_error = governance.read_head_pre_ready_review(repository, token, head_sha)
     if request_state != "present" or not isinstance(document, dict):
         detail = request_error or request_state
-        return False, "", f"REVIEW_REQUEST_MISSING:{detail}"
+        return False, "", f"{_request_read_code(request_state, document)}:{detail}"
     request = document.get("review_request")
     if not (
         isinstance(request, dict)
