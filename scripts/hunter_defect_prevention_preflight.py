@@ -522,6 +522,11 @@ MACHINE_FAMILY_BINDINGS: dict[tuple[str, str, str], str] = {
         "local-pre-push",
         "scripts/hunter_defect_prevention_preflight.py::validate_review_after_remediation_boundary",
     ): "scripts/hunter_defect_prevention_preflight.py::validate_defect_prevention_lifecycle",
+    (
+        "DFF-025",
+        "local-pre-push",
+        "scripts/hunter_defect_prevention_preflight.py::validate_reviewer_unavailability_is_per_reviewer",
+    ): "scripts/hunter_defect_prevention_preflight.py::validate_defect_prevention_lifecycle",
 }
 
 
@@ -1517,53 +1522,177 @@ def validate_trusted_preflight_reconcile_wakeup() -> list[str]:
     return []
 
 
-def validate_review_request_lifecycle_contract() -> list[str]:
-    """Review requests must be valid before push and failures must stay observable.
+def _module_ast(relative: str) -> tuple[ast.Module | None, str]:
+    try:
+        return ast.parse((ROOT / relative).read_text(encoding="utf-8")), ""
+    except (OSError, SyntaxError) as exc:
+        return None, f"{relative}: {exc}"
 
-    This guards the state-machine edges that previously allowed a stale/incomplete
-    request to pass the local write boundary and then disappear inside a silent
-    orchestrator no-op, surfacing later as the unrelated MISSING_REVIEW_AUTHORITY
-    symptom.
+
+def _defined_functions(tree: ast.Module) -> set[str]:
+    return {node.name for node in ast.walk(tree) if isinstance(node, ast.FunctionDef | ast.AsyncFunctionDef)}
+
+
+def _string_constants(tree: ast.Module) -> set[str]:
+    """Every string that is actually evaluated, never a comment or a docstring.
+
+    Comments are absent from the AST entirely and docstrings are excluded here,
+    so a marker written into prose cannot satisfy a structural invariant. That
+    distinction is the point: a contract satisfied by a comment is not enforced.
     """
 
-    required = {
-        "scripts/hunter_pre_ready_review.py": (
-            "def verify_local_review_request(",
-            "verdict = verify_review_request(",
-            'raise ValueError(f"review request is {verdict.state}: {verdict.reason}")',
-        ),
-        "scripts/hunter_pre_push.py": (
-            "def enforce_declared_review_request(",
-            "enforce_declared_review_request(after_head, updates)",
-            "verify_local_review_request(base, head_sha, issue_criteria=issue_criteria)",
-        ),
-        "scripts/hunter_governance_review_v2.py": (
-            "branch_issue = issue_for_branch(head_ref)",
-            "if branch_issue is not None and issue != branch_issue:",
-        ),
-        "scripts/hunter_merge_readiness_v2.py": (
-            '"WAITING_FOR_REVIEW_REQUEST",',
-            '"WAITING_FOR_PREREQUISITE",',
-        ),
+    docstrings = {
+        node.body[0].value
+        for node in ast.walk(tree)
+        if isinstance(node, ast.Module | ast.ClassDef | ast.FunctionDef | ast.AsyncFunctionDef)
+        and node.body
+        and isinstance(node.body[0], ast.Expr)
+        and isinstance(node.body[0].value, ast.Constant)
+        and isinstance(node.body[0].value.value, str)
+    }
+    return {
+        node.value
+        for node in ast.walk(tree)
+        if isinstance(node, ast.Constant) and isinstance(node.value, str) and node not in docstrings
+    }
+
+
+def validate_review_request_lifecycle_contract() -> list[str]:
+    """Review-request lifecycle states must exist as executable structure.
+
+    This guards the state-machine edges that previously allowed a stale or
+    incomplete request to pass the local write boundary and then disappear
+    inside a silent orchestrator no-op, surfacing later as the unrelated
+    MISSING_REVIEW_AUTHORITY symptom.
+
+    It is deliberately structural rather than a source-text search. A guard that
+    matches exact source lines fails on a rename or a reformat that changes no
+    behaviour -- false merge blockage is itself a defect -- and is satisfied by a
+    comment that executes nothing. Functions are read from the AST and states
+    from evaluated string constants, so neither failure mode is possible.
+    """
+
+    required_functions = {
+        "scripts/hunter_pre_ready_review.py": ("verify_local_review_request",),
+        "scripts/hunter_pre_push.py": ("enforce_declared_review_request",),
+        "scripts/hunter_review_orchestrator.py": ("publish_prerequisite_block",),
+    }
+    required_states = {
+        "scripts/hunter_merge_readiness_v2.py": ("WAITING_FOR_REVIEW_REQUEST", "WAITING_FOR_PREREQUISITE"),
         "scripts/hunter_review_orchestrator.py": (
-            'return False, "", f"REVIEW_REQUEST_INVALID:{reason}"',
-            "def publish_prerequisite_block(",
-            'return "PREREQUISITE_BLOCKED"',
-            'return "WAITING_FOR_REVIEW_REQUEST"',
-            'return "WAITING_FOR_PREREQUISITE"',
-            "return publish_prerequisite_block(repository, token, pr_number, head_sha, reason)",
+            "WAITING_FOR_REVIEW_REQUEST",
+            "WAITING_FOR_PREREQUISITE",
+            "PREREQUISITE_BLOCKED",
         ),
     }
     errors: list[str] = []
-    for relative, markers in required.items():
-        try:
-            text = (ROOT / relative).read_text(encoding="utf-8")
-        except OSError as exc:
-            errors.append(f"review-request lifecycle source unavailable ({relative}: {exc})")
+    trees: dict[str, ast.Module] = {}
+    for relative in {*required_functions, *required_states}:
+        tree, error = _module_ast(relative)
+        if tree is None:
+            errors.append(f"review-request lifecycle source unavailable ({error})")
             continue
-        for marker in markers:
-            if marker not in text:
-                errors.append(f"review-request lifecycle invariant missing from {relative}: {marker}")
+        trees[relative] = tree
+    for relative, functions in required_functions.items():
+        tree = trees.get(relative)
+        if tree is None:
+            continue
+        defined = _defined_functions(tree)
+        errors.extend(
+            f"review-request lifecycle function missing from {relative}: {name}"
+            for name in functions
+            if name not in defined
+        )
+    for relative, states in required_states.items():
+        tree = trees.get(relative)
+        if tree is None:
+            continue
+        constants = _string_constants(tree)
+        errors.extend(
+            f"review-request lifecycle state missing from {relative}: {state}"
+            for state in states
+            if not any(state in constant for constant in constants)
+        )
+    return errors
+
+
+REVIEWER_COLLECTOR_SOURCE = "scripts/hunter_reviewer_collector.py"
+
+
+def validate_reviewer_unavailability_is_per_reviewer() -> list[str]:
+    """DFF-025: one undrivable reviewer must not strand the whole collection.
+
+    Reviewer unavailability is decided in more than one place -- the dispatch,
+    the adoption probe that precedes it, and the state read on an already
+    dispatched run. When only some of those honoured the policy, a single
+    rejection aborted collection before the remaining reviewers were invoked and
+    a healthy candidate was reported as MISSING_REVIEW_AUTHORITY.
+
+    The invariants are that the classification has exactly one decision point,
+    that it refuses to classify exhausted infrastructure as unavailability, and
+    that the pool loop isolates each reviewer's trigger.
+    """
+
+    tree, error = _module_ast(REVIEWER_COLLECTOR_SOURCE)
+    if tree is None:
+        return [f"reviewer collector source unavailable ({error})"]
+    errors: list[str] = []
+
+    predicate = next(
+        (
+            node
+            for node in ast.walk(tree)
+            if isinstance(node, ast.FunctionDef) and node.name == "reviewer_dispatch_unavailable"
+        ),
+        None,
+    )
+    if predicate is None:
+        return [
+            "reviewer unavailability must be decided by a single "
+            "reviewer_dispatch_unavailable predicate so every call site agrees"
+        ]
+    if not any(isinstance(node, ast.Attribute) and node.attr == "GitHubUnavailable" for node in ast.walk(predicate)):
+        errors.append(
+            "reviewer_dispatch_unavailable must exclude GitHubUnavailable: exhausted "
+            "retries (including the node-resolution 404) are fail-closed, never a skippable reviewer"
+        )
+
+    # Outside that predicate nothing may re-derive the policy from status codes.
+    for node in ast.walk(tree):
+        if not isinstance(node, ast.FunctionDef) or node.name == "reviewer_dispatch_unavailable":
+            continue
+        for inner in ast.walk(node):
+            if (
+                isinstance(inner, ast.Compare)
+                and any(isinstance(op, ast.In | ast.NotIn) for op in inner.ops)
+                and isinstance(inner.left, ast.Attribute)
+                and inner.left.attr == "status_code"
+            ):
+                errors.append(
+                    f"{node.name} re-derives reviewer unavailability from status_code; "
+                    "call reviewer_dispatch_unavailable so the policy has one decision point"
+                )
+
+    collect = next(
+        (node for node in ast.walk(tree) if isinstance(node, ast.FunctionDef) and node.name == "collect_attempts"),
+        None,
+    )
+    if collect is None:
+        errors.append("collect_attempts is missing from the reviewer collector")
+        return errors
+    isolated = any(
+        any(
+            isinstance(call, ast.Call) and isinstance(call.func, ast.Attribute) and call.func.attr == "trigger"
+            for call in ast.walk(handler_parent)
+        )
+        for handler_parent in ast.walk(collect)
+        if isinstance(handler_parent, ast.Try) and handler_parent.handlers
+    )
+    if not isolated:
+        errors.append(
+            "collect_attempts must invoke backend.trigger inside a try so one undrivable "
+            "reviewer cannot end the collection before the rest of the pool is invoked"
+        )
     return errors
 
 
@@ -1787,6 +1916,7 @@ def validate_defect_prevention_lifecycle() -> list[str]:
     errors.extend(validate_recurring_defect_families(registry, lifecycle))
     errors.extend(validate_trusted_preflight_reconcile_wakeup())
     errors.extend(validate_review_request_lifecycle_contract())
+    errors.extend(validate_reviewer_unavailability_is_per_reviewer())
     errors.extend(validate_review_after_remediation_boundary())
     errors.extend(validate_code_write_policy())
     errors.extend(validate_reviewer_finding_dispositions())

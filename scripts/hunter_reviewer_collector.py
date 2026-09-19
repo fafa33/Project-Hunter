@@ -47,6 +47,34 @@ STARTED_RUN_STATES = frozenset({"in_progress", "completed"})
 #: ``unsupported_pool_triggers`` -- because an unperformable trigger aborts the
 #: whole ordered collection before any later reviewer is attempted.
 TRIGGER_SCHEMES = frozenset({"api", "github-pr-comment", "github-review-request", "github-workflow"})
+#: The dispatch rejections that mean "this reviewer cannot be driven from the
+#: trusted branch right now" rather than "the candidate is defective": the
+#: workflow is not on the branch yet (404), this token may not drive it (403),
+#: or the branch will not accept the dispatch (422). This policy already governed
+#: the dispatch call itself; it is declared here because every step that reaches
+#: GitHub on a reviewer's behalf has to apply the same classification, otherwise
+#: one reviewer's unavailability aborts the whole pool and the candidate is left
+#: with no authority at all. Every other failure -- notably GitHubUnavailable
+#: from exhausted bounded retries -- stays fail-closed and propagates.
+REVIEWER_UNAVAILABLE_DISPATCH_STATUS = frozenset({403, 404, 422})
+
+
+def reviewer_dispatch_unavailable(exc: governance.transport.GitHubRequestError) -> bool:
+    """Is this failure "that reviewer cannot be driven", rather than fail-closed?
+
+    Only a direct rejection by GitHub qualifies. A :class:`GitHubUnavailable` is
+    excluded even when it carries one of these codes, because bounded retries are
+    exhausted only for retryable categories -- including the node-resolution 404,
+    which the transport documents as an infrastructure inconsistency that must
+    never be read as absence. Treating that as reviewer unavailability would turn
+    a fail-closed infrastructure outcome into a silently skipped reviewer.
+    """
+
+    if isinstance(exc, governance.transport.GitHubUnavailable):
+        return False
+    return exc.status_code in REVIEWER_UNAVAILABLE_DISPATCH_STATUS
+
+
 #: A workflow trigger names a workflow file, never a path: the value is
 #: interpolated into an Actions API route, so a separator or traversal segment
 #: would address a different resource entirely.
@@ -179,7 +207,40 @@ def collect_attempts(pool: dict[str, Any], head: str, backend: Backend) -> list[
         for number in range(1, count + 1):
             if backend.head() != head:
                 raise ValueError("HEAD changed before reviewer invocation")
-            trigger = backend.trigger(agent, number)
+            try:
+                trigger = backend.trigger(agent, number)
+            except governance.transport.GitHubRequestError as exc:
+                # A reviewer the trusted branch cannot drive is unavailability,
+                # and unavailability is per reviewer. Aborting the loop here would
+                # leave every later reviewer un-invoked and the candidate with no
+                # authority at all -- surfaced as MISSING_REVIEW_AUTHORITY, a
+                # candidate defect, when nothing about the candidate was wrong.
+                # Exact-head binding, authority eligibility and fail-closed
+                # semantics are untouched: an unavailable reviewer is never a
+                # verdict, so this can only widen the search, never approve.
+                # Anything outside the declared policy still propagates.
+                if not reviewer_dispatch_unavailable(exc):
+                    raise
+                records.append(
+                    {
+                        "agent_id": agent["id"],
+                        "priority": agent["priority"],
+                        "ack_timeout_seconds": agent["ack_timeout_seconds"],
+                        "review_timeout_seconds": agent["review_timeout_seconds"],
+                        "trigger_method": agent["trigger_method"],
+                        "evidence_parser": agent["evidence_parser"],
+                        "retryable": agent["retryable"],
+                        "attempt_number": number,
+                        "trigger_id": 0,
+                        "trigger_created_at": "",
+                        "collector_run_id": int(getattr(backend, "run_id", 0)),
+                        "collector_run_attempt": int(getattr(backend, "run_attempt", 0)),
+                        "ack_elapsed_seconds": 0.0,
+                        "elapsed_seconds": 0.0,
+                        "outcome": "unavailable",
+                    }
+                )
+                break
             start = backend.now()
             ack_deadline = start + agent["ack_timeout_seconds"]
             review_deadline = start + agent["review_timeout_seconds"]
@@ -580,8 +641,16 @@ class GitHubBackend:
         """The trusted default branch, which is the only ref a reviewer may run from."""
 
         if self._default_branch is None:
-            repo = governance.request_json(self.repository, self.token, "GET", "")
-            branch = str(repo.get("default_branch") or "") if isinstance(repo, dict) else ""
+            # The collector job runs only when `github.ref` is the default branch,
+            # so the runner has already proven this value locally. Reading it from
+            # the run context keeps a required branch name from depending on a
+            # network round trip that can fail the entire collection before any
+            # reviewer is invoked. The API stays as the fallback for callers with
+            # no run context.
+            branch = str(os.environ.get("GITHUB_REF_NAME") or "").strip()
+            if not branch:
+                repo = governance.request_json(self.repository, self.token, "GET", "")
+                branch = str(repo.get("default_branch") or "") if isinstance(repo, dict) else ""
             if not branch:
                 raise ValueError("trusted default branch is unavailable")
             self._default_branch = branch
@@ -785,8 +854,17 @@ class GitHubBackend:
             "collector_run_id": self.run_id,
             "collector_run_attempt": self.run_attempt,
         }
-        if self._adopt_workflow_run(pending) is not None:
-            return pending
+        try:
+            if self._adopt_workflow_run(pending) is not None:
+                return pending
+        except governance.transport.GitHubRequestError as exc:
+            # The probe reaches the same trusted-branch resources the dispatch
+            # does, so a rejection here means the same thing the docstring
+            # promises: this reviewer is unavailable, not that the collection
+            # must be abandoned before the rest of the pool is tried.
+            if reviewer_dispatch_unavailable(exc):
+                return {**pending, "state": "unavailable", "dispatch_status": exc.status_code}
+            raise
         try:
             governance.request_json(
                 self.repository,
@@ -804,7 +882,7 @@ class GitHubBackend:
                 },
             )
         except governance.transport.GitHubRequestError as exc:
-            if exc.status_code in {403, 404, 422}:
+            if reviewer_dispatch_unavailable(exc):
                 return {**pending, "state": "unavailable", "dispatch_status": exc.status_code}
             raise
         return pending
@@ -814,7 +892,12 @@ class GitHubBackend:
 
         if str(trigger.get("state") or "") == "unavailable":
             return "unavailable"
-        run = self._adopt_workflow_run(trigger)
+        try:
+            run = self._adopt_workflow_run(trigger)
+        except governance.transport.GitHubRequestError as exc:
+            if reviewer_dispatch_unavailable(exc):
+                return "unavailable"
+            raise
         if run is None or str(run.get("status") or "") != "completed":
             return "waiting"
         if str(run.get("conclusion") or "") != "success":

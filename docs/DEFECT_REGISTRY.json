@@ -392,6 +392,16 @@
       "guard": "Every reviewer invocation was keyed by exact head and claims digest alone, and the collector run that correlates those invocations was named the same way, so a cycle whose reviewers had all been exhausted or timed out was terminal for that immutable head: the collector read as already completed, the reviewer trigger comment read as already posted, and remediating the blocking findings the cycle itself produced could buy no further review. The repair is a remediation generation: a digest over the exact head, the claims digest and the full set of resolved blocking review threads, where a blocking thread counts only when an authenticated reviewer app that is neither Hunter's own automation nor the pull-request author opened it. It is derived from trusted GitHub review-thread state by the trusted default-branch orchestrator and re-derived independently by the trusted collector, which fails closed when the generation it was dispatched for is not the one the evidence supports, so neither candidate prose nor a dispatch input can mint one. The generation enters the collector run name, the reviewer invocation key, the reviewer trigger body and the collector receipt, so a new generation buys exactly one new invocation per reviewer while an unchanged generation stays idempotent; an exhaustion receipt from a superseded generation is refused rather than replayed. The transition is bounded on every side: the previous generation's collector must be finished, a collector must not already exist for this generation, and one exact head may spend at most MAX_REMEDIATION_GENERATIONS generations before the candidate stays pending. Exact-head and claims binding, authenticated reviewer identity, fail-closed pending semantics and human merge approval are unchanged.",
       "test": "tests/test_review_after_remediation_generation.py::test_exhausted_cycle_redispatches_exactly_once_after_blockers_are_resolved",
       "status": "guarded"
+    },
+    {
+      "id": "TCP-001",
+      "class": "trusted-control-plane-repair-requires-the-component-being-repaired",
+      "source": "PR #482/#483, 2026-09-19: the trusted Reviewer Collector crashed in default_branch() on a repository-root request before invoking any reviewer, so every candidate -- including the ones carrying the repair -- reported MISSING_REVIEW_AUTHORITY",
+      "classification": "systemic",
+      "guard_boundary": "trusted default-branch reviewer collection and dispatch classification",
+      "guard": "Reviewer unavailability now has exactly one decision point, reviewer_dispatch_unavailable, which every step that reaches GitHub on a reviewer's behalf consults: the dispatch, the adoption probe that precedes it, the state read on an already dispatched run, and the pool loop itself. It excludes GitHubUnavailable so exhausted retries -- including the node-resolution 404, which carries status 404 but means infrastructure inconsistency rather than absence -- stay fail-closed instead of silently skipping a reviewer. collect_attempts records an undrivable reviewer as that reviewer's unavailability and continues to the next, so a single infrastructure rejection can no longer strand the whole pool. default_branch reads the branch the job has already proven locally instead of asking the network for it. validate_reviewer_unavailability_is_per_reviewer enforces all of this structurally at the push boundary.",
+      "test": "tests/test_hunter_reviewer_collector.py::test_one_undispatchable_reviewer_does_not_strand_the_whole_pool",
+      "status": "guarded"
     }
   ],
   "families": [
@@ -1210,6 +1220,44 @@
       ],
       "sources": [
         "Issue #461 (2026-09-18): PR #473 remediated both authenticated Codex P1 findings (threads r4042982311 and r4042982318) and resolved every review thread, yet stayed permanently MISSING_REVIEW_AUTHORITY because the exact-head collector run 35348625886 had already completed with Codex timed out, Gemini 503 and Groq 403, and no identity existed that could ask any of them again"
+      ]
+    },
+    {
+      "id": "DFF-025",
+      "title": "trusted-control-plane-change-never-executed-before-it-becomes-trusted",
+      "invariant": "Every governance control-plane component executes only from the default branch, so a pull request that changes one is validated by that component's previous version and its new code first executes in production as the trusted control plane. Because the same control plane is also what must approve its own repair, a defect shipped this way is self-trapping: the candidate carrying the fix is validated by the broken component, and no sequence of further candidates can escape. Two invariants follow. First, reviewer unavailability is per reviewer and is decided at exactly one point: a reviewer the trusted branch cannot drive -- the workflow is not on it, the token may not drive it, or the dispatch is refused -- must be recorded as that reviewer's unavailability and the remaining pool must still be invoked, at every step that reaches GitHub on a reviewer's behalf, so that an infrastructure rejection is never reported as the candidate defect MISSING_REVIEW_AUTHORITY. Exhausted bounded retries are excluded from that classification even when they carry one of those status codes, because the node-resolution 404 is an infrastructure inconsistency that must stay fail-closed and must never read as a skippable reviewer. Second, a required value the runtime already holds locally must not be re-acquired over the network, so a control-plane step cannot fail before any reviewer is invoked for want of a fact it already had. Neither invariant weakens exact-head binding, authority eligibility, reviewer requirements or fail-closed admission: an unavailable reviewer is never a verdict, so honouring the policy can only widen the search for legitimate authority, never approve anything.",
+      "lifecycle": "locally-enforced",
+      "applicability": {
+        "changed_paths": [
+          "scripts/hunter_reviewer_collector.py",
+          "scripts/hunter_governance_review_v2.py",
+          "scripts/hunter_review_orchestrator.py",
+          ".github/workflows/hunter-reviewer-collector.yml",
+          ".github/workflows/hunter-governance-reconcile.yml"
+        ],
+        "rationale": "These are the components that execute only from the default branch. A change to any of them is never executed by the governance system before it becomes the governance system, so its failure modes have to be enforced structurally at the push boundary rather than discovered in production."
+      },
+      "prevention": {
+        "mechanism": "scripts/hunter_defect_prevention_preflight.py::validate_reviewer_unavailability_is_per_reviewer runs inside the Defect Prevention Guard at the push boundary and in the hosted preflight. It checks the invariant structurally against the live implementation rather than by wording: that reviewer unavailability has exactly one decision point (reviewer_dispatch_unavailable), that the predicate excludes GitHubUnavailable so exhausted infrastructure stays fail-closed, that no other function re-derives the policy from a status_code membership test, and that collect_attempts invokes backend.trigger inside a handler so one undrivable reviewer cannot end the collection. Because it reads the AST, a marker written in a comment or a docstring cannot satisfy it and a rename or reformat that changes no behaviour cannot break it.",
+        "boundary": "local-pre-push",
+        "guard_reference": "scripts/hunter_defect_prevention_preflight.py::validate_reviewer_unavailability_is_per_reviewer"
+      },
+      "regression_evidence": [
+        "tests/test_hunter_reviewer_collector.py::test_one_undispatchable_reviewer_does_not_strand_the_whole_pool",
+        "tests/test_hunter_reviewer_collector.py::test_undispatchable_reviewer_probe_is_unavailability_not_collection_failure",
+        "tests/test_hunter_reviewer_collector.py::test_exhausted_node_resolution_404_is_never_reviewer_unavailability",
+        "tests/test_hunter_reviewer_collector.py::test_exhausted_infrastructure_still_fails_closed",
+        "tests/test_hunter_reviewer_collector.py::test_pool_isolation_does_not_swallow_a_head_change",
+        "tests/test_hunter_reviewer_collector.py::test_default_branch_uses_run_context_without_a_network_call",
+        "tests/test_hunter_defect_prevention_preflight.py::test_dff025_guard_rejects_a_second_decision_point",
+        "tests/test_hunter_defect_prevention_preflight.py::test_dff025_guard_rejects_an_unisolated_pool_loop",
+        "tests/test_hunter_defect_prevention_preflight.py::test_dff025_guard_rejects_classifying_exhausted_infrastructure_as_unavailable",
+        "tests/test_hunter_defect_prevention_preflight.py::test_dff025_guard_accepts_a_renamed_but_equivalent_implementation",
+        "tests/test_hunter_defect_prevention_preflight.py::test_lifecycle_contract_is_not_satisfied_by_a_comment"
+      ],
+      "sources": [
+        "PR #482 (2026-09-19): commit 3692105 (PR #473) added GitHubBackend.default_branch and _dispatch_workflow_reviewer to the trusted collector and removed pull_request_target from its workflow in the same commit. PR #473's own collector runs 34-38 executed the pre-#473 collector, which contained neither function, so the new trusted control-plane code was never executed once before it became the trusted control plane. Collector runs 35459241663, 35460400305 and 35461071533 then failed in about fourteen seconds each, before any reviewer was invoked, and PR #482 reported the status failure 'MISSING_REVIEW_AUTHORITY: no authenticated exact-head adoption of the review request' although nothing about the candidate was defective.",
+        "The recurrence, not the incident, is the defect: PR #470, #476, #479, #480 and #483 were each opened to bootstrap or repair a previous governance pull request, and #479 never merged. Repairing the trusted collector through the normal candidate path is impossible because every candidate is validated by the component it repairs, so PR #483 had to be merged as a bounded operator-authorized recovery."
       ]
     }
   ]

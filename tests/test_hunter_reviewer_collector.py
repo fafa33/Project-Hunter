@@ -1694,3 +1694,179 @@ def test_copilot_clean_exact_head_review_is_clear(monkeypatch):
 
     monkeypatch.setattr(collector, "_pages", pages)
     assert backend.response_state(agent, trigger) == "clear"
+
+
+# --- DFF-025: a reviewer the trusted branch cannot drive is per-reviewer
+# --- unavailability, never the end of the collection. -------------------------
+
+
+def _request_error(status):
+    return collector.governance.transport.GitHubRequestError("x", category="permanent", status_code=status)
+
+
+def _exhausted(status):
+    last = collector.governance.transport.GitHubRequestError("x", category="transient", status_code=status)
+    return collector.governance.transport.GitHubUnavailable("what", attempts=3, last=last)
+
+
+def _backend():
+    backend = collector.GitHubBackend.__new__(collector.GitHubBackend)
+    backend.repository, backend.token, backend.pr = "owner/repo", "token", 1
+    backend.expected_head, backend.claims_id = HEAD, "claims"
+    backend.run_id, backend.run_attempt = 1, 1
+    backend.generation_id = collector.BASE_GENERATION
+    backend._default_branch = None
+    return backend
+
+
+WORKFLOW_AGENT = {"id": "codex", "trigger_method": "github-workflow:hunter-local-reviewer.yml"}
+
+
+def test_default_branch_uses_run_context_without_a_network_call(monkeypatch):
+    """The job only runs on the default branch, so the branch name is already known."""
+
+    calls = []
+    monkeypatch.setattr(collector.governance, "request_json", lambda *a, **k: calls.append(a) or {})
+    monkeypatch.setenv("GITHUB_REF_NAME", "main")
+
+    assert _backend().default_branch() == "main"
+    assert calls == []
+
+
+def test_default_branch_falls_back_to_the_api_without_run_context(monkeypatch):
+    monkeypatch.delenv("GITHUB_REF_NAME", raising=False)
+    monkeypatch.setattr(collector.governance, "request_json", lambda *a, **k: {"default_branch": "trunk"})
+
+    assert _backend().default_branch() == "trunk"
+
+
+@pytest.mark.parametrize("status", [403, 404, 422])
+def test_undispatchable_reviewer_probe_is_unavailability_not_collection_failure(monkeypatch, status):
+    """The adoption probe reaches the same resources the dispatch does.
+
+    Before DFF-025 only the dispatch call itself honoured this policy, so a
+    rejection from the probe that precedes it aborted the whole collection.
+    """
+
+    def request_json(repository, token, method, path, payload=None):
+        if path.startswith("actions/workflows/"):
+            raise _request_error(status)
+        return {"default_branch": "main"}
+
+    monkeypatch.setattr(collector.governance, "request_json", request_json)
+    monkeypatch.setenv("GITHUB_REF_NAME", "main")
+
+    trigger = _backend()._dispatch_workflow_reviewer(WORKFLOW_AGENT, 1)
+
+    assert trigger["state"] == "unavailable"
+    assert trigger["dispatch_status"] == status
+
+
+def test_exhausted_infrastructure_still_fails_closed(monkeypatch):
+    def request_json(repository, token, method, path, payload=None):
+        raise _exhausted(503)
+
+    monkeypatch.setattr(collector.governance, "request_json", request_json)
+    monkeypatch.setenv("GITHUB_REF_NAME", "main")
+
+    with pytest.raises(collector.governance.transport.GitHubUnavailable):
+        _backend()._dispatch_workflow_reviewer(WORKFLOW_AGENT, 1)
+
+
+def test_exhausted_node_resolution_404_is_never_reviewer_unavailability(monkeypatch):
+    """A retried-out 404 carries status 404 but is an infrastructure inconsistency.
+
+    The transport documents it as never meaning absence, so it must stay
+    fail-closed instead of silently skipping a reviewer that may be healthy.
+    """
+
+    def request_json(repository, token, method, path, payload=None):
+        raise _exhausted(404)
+
+    monkeypatch.setattr(collector.governance, "request_json", request_json)
+    monkeypatch.setenv("GITHUB_REF_NAME", "main")
+
+    with pytest.raises(collector.governance.transport.GitHubUnavailable):
+        _backend()._dispatch_workflow_reviewer(WORKFLOW_AGENT, 1)
+
+
+class _PoolBackend:
+    """Only the first reviewer is undispatchable; the rest are healthy."""
+
+    def __init__(self, error):
+        self.error, self.triggered = error, []
+
+    def head(self):
+        return HEAD
+
+    def now(self):
+        return 0.0
+
+    def sleep(self, seconds):
+        pass
+
+    def trigger(self, agent, number):
+        self.triggered.append(agent["id"])
+        if agent["id"] == "codex":
+            raise self.error
+        return {"id": 1, "created_at": "t"}
+
+    def response_state(self, agent, trigger):
+        return "clear"
+
+    def acknowledged(self, agent, trigger):
+        return True
+
+
+def _isolation_pool():
+    def agent(identifier, priority, trigger_method):
+        return {
+            "id": identifier,
+            "priority": priority,
+            "enabled": True,
+            "retryable": False,
+            "ack_timeout_seconds": 1,
+            "review_timeout_seconds": 1,
+            "trigger_method": trigger_method,
+            "evidence_parser": "parser",
+            "authority_eligible": True,
+        }
+
+    return {
+        "timeout_policy": {"retries_per_agent": 0},
+        "agents": [agent("codex", 1, "github-workflow:x.yml"), agent("gemini", 2, "api:gemini")],
+    }
+
+
+def test_one_undispatchable_reviewer_does_not_strand_the_whole_pool():
+    """The defect that produced MISSING_REVIEW_AUTHORITY on a healthy candidate.
+
+    A single undispatchable reviewer used to abort collection before any later
+    reviewer was invoked, so the candidate was reported as lacking authority
+    when nothing about the candidate was wrong.
+    """
+
+    backend = _PoolBackend(_request_error(404))
+
+    records = collector.collect_attempts(_isolation_pool(), HEAD, backend)
+
+    assert backend.triggered == ["codex", "gemini"]
+    assert [record["outcome"] for record in records] == ["unavailable", "clear"]
+
+
+def test_pool_isolation_does_not_swallow_infrastructure_exhaustion():
+    backend = _PoolBackend(_exhausted(503))
+
+    with pytest.raises(collector.governance.transport.GitHubUnavailable):
+        collector.collect_attempts(_isolation_pool(), HEAD, backend)
+
+
+def test_pool_isolation_does_not_swallow_a_head_change():
+    """HEAD movement is a correctness signal and must still abort."""
+
+    class Moved(_PoolBackend):
+        def head(self):
+            return "b" * 40
+
+    with pytest.raises(ValueError, match="HEAD changed"):
+        collector.collect_attempts(_isolation_pool(), HEAD, Moved(_request_error(404)))
