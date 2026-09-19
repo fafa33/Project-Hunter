@@ -9,7 +9,7 @@ import os
 import re
 import sys
 from collections.abc import Iterable
-from dataclasses import dataclass, replace
+from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
@@ -67,7 +67,28 @@ MAX_REMEDIATION_GENERATIONS = 3
 #: Hunter's own automation identity. It authors the reviewer trigger comments, so
 #: a thread it opened is never independent review evidence and must never be able
 #: to mint the permission to dispatch another review of its own.
-HUNTER_AUTOMATION_LOGIN = "github-actions"
+HUNTER_AUTOMATION_LOGIN = "github-actions[bot]"
+
+
+def _normalized_bot_login(value: str) -> str:
+    """Normalize GitHub App logins without weakening configured identity binding."""
+
+    login = str(value or "").strip().lower()
+    return login[:-5] if login.endswith("[bot]") else login
+
+
+def authority_reviewer_logins() -> frozenset[str]:
+    """Configured authenticated reviewer identities allowed to mint remediation."""
+
+    pool, error = pre_ready.load_reviewer_pool()
+    if pool is None or error:
+        raise RuntimeError(f"reviewer pool unavailable: {error}")
+    return frozenset(
+        _normalized_bot_login(str(agent.get("github_login") or ""))
+        for agent in pre_ready.authority_pool_reviewers(pool)
+        if str(agent.get("github_login") or "").strip()
+    )
+
 
 _BLOCKING_THREADS_QUERY = """
 query($owner: String!, $name: String!, $number: Int!, $after: String) {
@@ -139,6 +160,8 @@ def blocking_reviewer_threads(repository: str, token: str, pr_number: int) -> tu
     """
 
     owner, name = repository.split("/", 1)
+    trusted_reviewers = authority_reviewer_logins()
+    hunter_login = _normalized_bot_login(HUNTER_AUTOMATION_LOGIN)
     cursor: str | None = None
     seen: set[str] = set()
     threads: list[BlockingThread] = []
@@ -165,15 +188,24 @@ def blocking_reviewer_threads(repository: str, token: str, pr_number: int) -> tu
                 raise ValueError("malformed review thread comment evidence")
             opening = comments[0]
             opener = opening.get("author") or {}
-            login = str(opener.get("login") or "").lower()
+            login = _normalized_bot_login(str(opener.get("login") or ""))
             comment_id = opening.get("databaseId")
             created_at = str(opening.get("createdAt") or "")
             if type(comment_id) is not int or comment_id <= 0 or not created_at:
                 raise ValueError("malformed review thread comment identity")
             if opener.get("__typename") != "Bot":
                 continue
-            if not login or login == HUNTER_AUTOMATION_LOGIN or login == author:
+            if (
+                not login
+                or login == hunter_login
+                or login == _normalized_bot_login(author)
+                or login not in trusted_reviewers
+            ):
                 continue
+            # Hunter governance treats every unresolved inline review thread as a
+            # blocking finding. A resolved thread from a configured authenticated
+            # authority reviewer is therefore durable evidence that a real blocker
+            # existed and was remediated; unrelated bots cannot mint generations.
             threads.append(BlockingThread(str(node["id"]), comment_id, created_at, bool(node["isResolved"])))
         if not page["hasNextPage"]:
             return tuple(threads)
@@ -699,27 +731,27 @@ def ensure_collector(
         elif not remediation_generation_admissible(repository, token, existing, generation_id):
             return existing
 
+    # Persist the dispatch identity and liveness timestamp *before* dispatch.
+    # This status is the durable idempotency record: if GitHub accepts the
+    # workflow dispatch and this process dies immediately afterwards, the next
+    # reconciliation observes a dispatched cycle and checks correlated collector
+    # runs instead of blindly issuing a duplicate dispatch. If dispatch itself
+    # never produces a run, the bounded liveness grace permits one recovery.
+    run_id = current_run_id()
+    if run_id is None:
+        raise RuntimeError("trusted orchestration requires GITHUB_RUN_ID")
     cycle = ReviewCycle(
         pr_number=pr_number,
         head_sha=head_sha,
         state="WAITING_FOR_REVIEWER",
         provider_id="",
-        trigger_id=None,
-        started_at="",
+        trigger_id=run_id,
+        started_at=datetime.now(UTC).strftime("%Y-%m-%dT%H:%M:%SZ"),
         config_digest=digest,
         generation_id=generation_id,
     )
-    # The dispatch identity is resolved before the dispatch, never after it.
-    # Failing afterwards would leave a live collector recorded with no trigger,
-    # and the next pass reads a missing trigger as "never dispatched" -- a second
-    # collector invocation against the same exact HEAD.
-    run_id = current_run_id()
-    if run_id is None:
-        raise RuntimeError("trusted orchestration requires GITHUB_RUN_ID")
     publish_cycle(repository, token, head_sha, cycle=cycle)
     dispatch_collector(repository, token, pr_number, head_sha, generation_id)
-    cycle = replace(cycle, trigger_id=run_id)
-    publish_cycle(repository, token, head_sha, cycle=cycle)
     return cycle
 
 

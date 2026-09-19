@@ -586,3 +586,43 @@ def test_web_flow_merge_commit_is_not_an_authorized_ingress_signer(monkeypatch) 
 
     assert state == "failure"
     assert "unauthorized ingress signer web-flow" in description
+
+
+def test_native_codex_clear_review_must_match_current_trigger_claims():
+    claims_id = "c" * 64
+    observation = {
+        "agent_id": core.pre_ready.CODEX_REVIEW_AUTHORITY,
+        "source_kind": "review",
+        "state": "COMMENTED",
+        "commit_id": HEAD,
+        "trigger_claims_id": "d" * 64,
+        "body": f"Codex Review: Didn't find any major issues.\n**Reviewed commit:** `{HEAD}`",
+    }
+
+    assert core.review_adoption_acknowledgement(observation, HEAD, claims_id) is None
+
+    observation["trigger_claims_id"] = claims_id
+    adopted = core.review_adoption_acknowledgement(observation, HEAD, claims_id)
+    assert adopted is not None
+    assert adopted["claims_id"] == claims_id
+    assert adopted["head_sha"] == HEAD
+
+
+def test_review_orchestration_state_reads_trusted_cycle(monkeypatch):
+    import hunter_review_orchestrator as orchestration
+
+    cycle = orchestration.ReviewCycle(
+        pr_number=473,
+        head_sha=HEAD,
+        state="REVIEW_IN_PROGRESS",
+        provider_id="codex",
+        trigger_id=321,
+        started_at="2026-09-19T12:00:00Z",
+        config_digest="d" * 64,
+    )
+    monkeypatch.setattr(orchestration, "read_cycle", lambda *_args: ("present", cycle, None))
+
+    state, detail = core.review_orchestration_state("owner/repo", "token", 473, HEAD)
+    assert state == "REVIEW_IN_PROGRESS"
+    assert "provider=codex" in detail
+    assert "trigger=321" in detail

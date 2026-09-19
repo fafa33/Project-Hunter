@@ -729,3 +729,62 @@ def test_collector_completion_accepts_trusted_ancestor_of_current_main(monkeypat
     assert reason is None
     assert state == "present"
     assert run_id == 777
+
+
+def test_remediation_generation_accepts_only_configured_authority_bots(monkeypatch):
+    def graphql(**_kwargs):
+        def node(thread_id, login):
+            return {
+                "id": thread_id,
+                "isResolved": True,
+                "comments": {
+                    "nodes": [
+                        {
+                            "databaseId": len(thread_id),
+                            "createdAt": "2026-09-19T12:00:00Z",
+                            "author": {"login": login, "__typename": "Bot"},
+                        }
+                    ]
+                },
+            }
+
+        return {
+            "repository": {
+                "pullRequest": {
+                    "author": {"login": "fafa33"},
+                    "reviewThreads": {
+                        "nodes": [
+                            node("codex-thread", "chatgpt-codex-connector"),
+                            node("hunter-thread", "github-actions[bot]"),
+                            node("random-thread", "unrelated-review-bot"),
+                        ],
+                        "pageInfo": {"hasNextPage": False, "endCursor": None},
+                    },
+                }
+            }
+        }
+
+    monkeypatch.setattr(orchestrator.transport, "request_graphql_json", graphql)
+    threads = orchestrator.blocking_reviewer_threads("owner/repo", "token", 473)
+    assert [thread.thread_id for thread in threads] == ["codex-thread"]
+
+
+def test_dispatch_identity_and_timestamp_are_durable_before_dispatch(monkeypatch):
+    published = []
+    monkeypatch.setattr(orchestrator, "read_cycle", lambda *_args: ("absent", None, None))
+    monkeypatch.setattr(orchestrator, "reviewer_pool_config_digest", lambda: "d" * 64)
+    monkeypatch.setattr(orchestrator, "current_run_id", lambda: 777)
+    monkeypatch.setattr(orchestrator, "publish_cycle", lambda *_args, cycle: published.append(cycle))
+
+    def accepted_then_process_dies(*_args):
+        raise RuntimeError("post-acceptance transport loss")
+
+    monkeypatch.setattr(orchestrator, "dispatch_collector", accepted_then_process_dies)
+
+    with pytest.raises(RuntimeError, match="post-acceptance"):
+        orchestrator.ensure_collector("owner/repo", "token", 473, HEAD)
+
+    assert len(published) == 1
+    assert published[0].trigger_id == 777
+    assert published[0].started_at
+    assert orchestrator._older_than(published[0].started_at, orchestrator.COLLECTOR_LIVENESS_GRACE_SECONDS) is False

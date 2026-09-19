@@ -522,6 +522,7 @@ def review_adoption_acknowledgement(
         or observation.get("source_kind") != "review"
         or observation.get("state") not in {"COMMENTED", "APPROVED"}
         or observation.get("commit_id") != head_sha
+        or observation.get("trigger_claims_id") != claims_id
     ):
         return None
     body = str(observation.get("body") or "").strip()
@@ -1879,6 +1880,22 @@ def valid_current_review_request(
         head_sha=head_sha,
     )
     return verdict.ok, verdict.reason
+
+
+def review_orchestration_state(repository: str, token: str, pr_number: int, head_sha: str) -> tuple[str, str]:
+    """Read the trusted exact-head orchestration state used by merge readiness."""
+
+    import hunter_review_orchestrator as orchestration
+
+    state, cycle, error = orchestration.read_cycle(repository, token, pr_number, head_sha)
+    if state == "present" and cycle is not None:
+        detail = f"provider={cycle.provider_id or 'unassigned'} trigger={cycle.trigger_id or 0}"
+        if cycle.generation_id:
+            detail += f" generation={cycle.generation_id}"
+        return cycle.state, detail
+    if state == "absent":
+        return "WAITING_FOR_REVIEWER", "no trusted exact-head orchestration cycle has been published"
+    raise RuntimeError(error or f"invalid review orchestration state: {state}")
 
 
 def verify_pre_ready_hostile_review(
