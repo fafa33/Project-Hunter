@@ -412,3 +412,15 @@ def test_ordinary_workflow_completion_without_association_uses_exact_head(monkey
     )
 
     assert core.candidate_prs() == (501,)
+
+
+def test_review_request_prerequisite_waits_are_non_red() -> None:
+    assert core.review_wait_state("WAITING_FOR_REVIEW_REQUEST", "request absent") == (
+        "pending",
+        "WAITING_FOR_REVIEW_REQUEST: request absent",
+    )
+    assert core.review_wait_state("WAITING_FOR_PREREQUISITE", "trusted preflight running") == (
+        "pending",
+        "WAITING_FOR_PREREQUISITE: trusted preflight running",
+    )
+    assert core.review_wait_state("PREREQUISITE_BLOCKED", "request invalid") is None

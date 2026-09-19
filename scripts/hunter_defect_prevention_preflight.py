@@ -1528,6 +1528,10 @@ def validate_review_request_lifecycle_contract() -> list[str]:
             "branch_issue = issue_for_branch(head_ref)",
             "if branch_issue is not None and issue != branch_issue:",
         ),
+        "scripts/hunter_merge_readiness_v2.py": (
+            '"WAITING_FOR_REVIEW_REQUEST",',
+            '"WAITING_FOR_PREREQUISITE",',
+        ),
         "scripts/hunter_review_orchestrator.py": (
             'return False, "", f"REVIEW_REQUEST_INVALID:{reason}"',
             "def publish_prerequisite_block(",
