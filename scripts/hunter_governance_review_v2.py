@@ -363,11 +363,19 @@ def native_copilot_verdict(body: str, inline_comment_count: int = 0) -> str:
     lower = normalized.lower()
     if "changes recommended" in lower or "blocking" in lower and "no unresolved blocking issues" not in lower:
         return "blocking"
+    metadata_suffix = re.compile(
+        r"\n+<details>\n<summary>Review details</summary>\n\n"
+        r"- \*\*Files reviewed:\*\* \d+/\d+ changed files\n"
+        r"- \*\*Comments generated:\*\* \d+ new\n"
+        r"- \*\*Review effort level:\*\* [A-Za-z]+\n"
+        r"</details>\Z"
+    )
+    verdict_section = metadata_suffix.sub("", normalized)
     clear_shapes = (
         re.compile(r"^### 🟢 Approval recommended\n+No unresolved blocking issues were identified\.?$"),
         re.compile(r"^### 🟢 Approval recommended\n+No unresolved review comments remain\.?$"),
     )
-    return "clear" if any(pattern.fullmatch(normalized) for pattern in clear_shapes) else "unknown"
+    return "clear" if any(pattern.fullmatch(verdict_section) for pattern in clear_shapes) else "unknown"
 
 
 def native_codex_clear_review(body: str, head_sha: str) -> bool:
@@ -637,6 +645,7 @@ def read_pr_pool_review_comments(
             ]
             if eligible:
                 review_item["trigger_claims_id"] = eligible[-1]["claims_id"]
+                review_item["trigger_collector_run_id"] = eligible[-1]["collector_run_id"]
         for comment in issue_comments:
             login = str(comment["user"].get("login") or "").lower()
             body = str(comment.get("body") or "")
@@ -1932,6 +1941,7 @@ def verify_pre_ready_hostile_review(
                             "head_sha": head_sha,
                             "claims_id": claims_id,
                             "verdict": "clear",
+                            "collector_run_id": observation.get("trigger_collector_run_id"),
                         },
                     )
                 )
@@ -1952,6 +1962,7 @@ def verify_pre_ready_hostile_review(
                             "head_sha": head_sha,
                             "claims_id": claims_id,
                             "verdict": "clear",
+                            "collector_run_id": observation.get("trigger_collector_run_id"),
                         },
                     )
                 )
