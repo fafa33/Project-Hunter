@@ -27,13 +27,13 @@
       },
       {
         "criterion": "The exact pinned OpenCode/provider configuration is compatibility-checked before live use.",
-        "evidence": "PR #471 capability-discovery implementation and focused regressions; authenticated exact-head reviewer must adopt this request.",
+        "evidence": "Pinned OpenCode v1.18.30 is verified at runtime and a same-model provider readiness request using the governed inline configuration must succeed before the real provider prompt can start; focused regressions prove rejected request options fail closed before execution.",
         "id": "AC-005",
         "verdict": "satisfied"
       },
       {
         "criterion": "Runtime capability requirements are checked before provider execution.",
-        "evidence": "PR #471 capability-discovery implementation and focused regressions; authenticated exact-head reviewer must adopt this request.",
+        "evidence": "Runtime debug agent build --pure capability discovery must expose read/edit/glob/grep before the compatibility probe or real provider prompt can start; focused regressions cover missing capabilities.",
         "id": "AC-006",
         "verdict": "satisfied"
       },
@@ -176,23 +176,23 @@
     "issue": "461",
     "review_target": [
       {
-        "blob_sha": "78879bb13c3ccf1ae704a90b66d849a831873284",
+        "blob_sha": "acdcd9f3fe295cb2fd88ab0aea7f4814d1d300af",
         "path": "src/hunter/automation/railway_opencode_permission_sandbox.py",
         "previous_path": "",
         "status": "modified"
       },
       {
-        "blob_sha": "e6ec120b8930ac4aa59a70d8b522c58114e79f57",
+        "blob_sha": "5d3c4ac18f9e0e69143b5f0c609c71a425a214c8",
         "path": "tests/test_railway_opencode_permission_sandbox.py",
         "previous_path": "",
         "status": "modified"
       }
     ],
-    "review_target_digest": "8692300905ce9a5d81ac7381cb3060f40c76b23b99639b98ca238e91d409a785"
+    "review_target_digest": "82d13edabd697cf438497f2f1b22dff64d9df136017d7c66620a6fdb36a8422b"
   },
-  "review_id": "3db6e7241974d053b970f52d92d118985260cbf05f229bdca99d9324ea598692",
+  "review_id": "ec5a1f5b9bf0ee6c9d956e63fd3e7bfe204c4fa35bedbd00393bf63e4065962f",
   "review_request": {
-    "claims_id": "3db6e7241974d053b970f52d92d118985260cbf05f229bdca99d9324ea598692",
+    "claims_id": "ec5a1f5b9bf0ee6c9d956e63fd3e7bfe204c4fa35bedbd00393bf63e4065962f",
     "schema": "hunter.review-request.v1"
   },
   "schema": "hunter.pre-ready-hostile-review.v1"
