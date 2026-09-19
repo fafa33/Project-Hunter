@@ -210,6 +210,7 @@ def test_reconcile_continues_after_one_pr_failure_and_drops_checkout_credentials
     review_comment = trigger_block("pull_request_review_comment", "schedule")
 
     assert "- Hunter / Pre-PR Preflight" in workflow_run
+    assert "- Hunter / Trusted Preflight Upgrade" in workflow_run
     assert "- Hunter Reviewer Collector" in workflow_run
     assert "- completed" in workflow_run
     assert "- submitted" in review

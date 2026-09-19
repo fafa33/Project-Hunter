@@ -1484,6 +1484,24 @@ def validate_recurring_defect_families(registry: dict[str, Any], lifecycle: dict
 
 
 REVIEWER_COLLECTOR_WORKFLOW = ".github/workflows/hunter-reviewer-collector.yml"
+GOVERNANCE_RECONCILE_WORKFLOW = ".github/workflows/hunter-governance-reconcile.yml"
+TRUSTED_PREFLIGHT_WORKFLOW_NAME = "Hunter / Trusted Preflight Upgrade"
+
+
+def validate_trusted_preflight_reconcile_wakeup() -> list[str]:
+    """A completed trusted preflight must immediately wake review orchestration."""
+
+    try:
+        text = (ROOT / GOVERNANCE_RECONCILE_WORKFLOW).read_text(encoding="utf-8")
+    except OSError as exc:
+        return [f"trusted-preflight reconcile workflow unavailable: {exc}"]
+    marker = f"      - {TRUSTED_PREFLIGHT_WORKFLOW_NAME}"
+    workflow_run = text.partition("  workflow_run:")[2].partition("  pull_request_review:")[0]
+    if marker not in workflow_run or "      - completed" not in workflow_run:
+        return [
+            "trusted preflight completion must trigger governance reconcile so exact-head review orchestration cannot stall"
+        ]
+    return []
 
 
 def validate_review_after_remediation_boundary() -> list[str]:
@@ -1704,6 +1722,7 @@ def validate_defect_prevention_lifecycle() -> list[str]:
             errors.append(f"{defect_id}: prevented state requires recurrence escalation")
 
     errors.extend(validate_recurring_defect_families(registry, lifecycle))
+    errors.extend(validate_trusted_preflight_reconcile_wakeup())
     errors.extend(validate_review_after_remediation_boundary())
     errors.extend(validate_code_write_policy())
     errors.extend(validate_reviewer_finding_dispositions())
