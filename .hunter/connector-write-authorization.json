@@ -1,25 +1,25 @@
 {
-  "authorization_id": "7265b45fb4adc8d6cdf99151393f523e4e5fc77031f119237865bdcd5d52a353",
+  "authorization_id": "66eadf0be74707a0172009569be577a940b67ce37f3fff27a0df34e0b8ecb16c",
   "claims": {
     "base_ref": "main",
-    "base_sha": "fea16ec43ecd728198733b14050f0037ea66080a",
+    "base_sha": "369210594f162205ea647befca063b097e56ca3b",
     "capability": "feature-branch-write",
     "changes": [
       {
-        "blob_sha": "78879bb13c3ccf1ae704a90b66d849a831873284",
+        "blob_sha": "acdcd9f3fe295cb2fd88ab0aea7f4814d1d300af",
         "path": "src/hunter/automation/railway_opencode_permission_sandbox.py",
         "previous_path": "",
         "status": "modified"
       },
       {
-        "blob_sha": "e6ec120b8930ac4aa59a70d8b522c58114e79f57",
+        "blob_sha": "5d3c4ac18f9e0e69143b5f0c609c71a425a214c8",
         "path": "tests/test_railway_opencode_permission_sandbox.py",
         "previous_path": "",
         "status": "modified"
       }
     ],
     "governance_scopes": [],
-    "grant_fingerprint": "aacd323333c03193a08bf3536ecd83b98ca1462abe445b1a1b275edecf46ec34",
+    "grant_fingerprint": "c57ac6978ba63f028a7d4efbcb207f2cfe09d374a1befad86658b7fbbafec560",
     "issue": "461",
     "paths": [
       "src/hunter/automation/railway_opencode_permission_sandbox.py",

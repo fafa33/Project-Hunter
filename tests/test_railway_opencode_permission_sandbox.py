@@ -176,6 +176,8 @@ def test_main_fails_closed_before_provider_run_when_runtime_capability_is_missin
 
     def fake_run(command, **kwargs):
         calls.append(list(command))
+        if command[1:] == ["--version"]:
+            return shim.subprocess.CompletedProcess(command, 0, stdout="1.18.30\n", stderr="")
         if command[1:4] == ["debug", "agent", "build"]:
             tools = {"read": True, "edit": False, "glob": True, "grep": True}
             return shim.subprocess.CompletedProcess(command, 0, stdout=json.dumps({"tools": tools}), stderr="")
@@ -184,4 +186,115 @@ def test_main_fails_closed_before_provider_run_when_runtime_capability_is_missin
     monkeypatch.setattr(shim.subprocess, "run", fake_run)
 
     assert shim.main(argv) == 1
-    assert calls == [["/app/bin/opencode", "debug", "agent", "build", "--pure"]]
+    assert calls == [
+        ["/app/bin/opencode", "--version"],
+        ["/app/bin/opencode", "debug", "agent", "build", "--pure"],
+    ]
+
+
+def test_pinned_runtime_version_is_checked_before_provider_execution(tmp_path: Path, monkeypatch) -> None:
+    credential_home = tmp_path / "credential-home"
+    credential_home.mkdir()
+    env = shim._restricted_environment(credential_home)
+
+    def fake_run(command, **kwargs):
+        return shim.subprocess.CompletedProcess(command, 0, stdout="1.18.29\n", stderr="")
+
+    monkeypatch.setattr(shim.subprocess, "run", fake_run)
+
+    with pytest.raises(shim.SandboxShimError, match="provider runtime version mismatch"):
+        shim._validate_pinned_runtime("/app/bin/opencode", env)
+
+
+def test_provider_compatibility_probe_uses_exact_model_and_fails_closed_on_rejected_option(
+    tmp_path: Path, monkeypatch
+) -> None:
+    credential_home = tmp_path / "credential-home"
+    credential_home.mkdir()
+    env = shim._restricted_environment(credential_home)
+    calls: list[list[str]] = []
+
+    def fake_run(command, **kwargs):
+        calls.append(list(command))
+        return shim.subprocess.CompletedProcess(
+            command,
+            1,
+            stdout="",
+            stderr="unsupported request option: prompt_cache_key",
+        )
+
+    monkeypatch.setattr(shim.subprocess, "run", fake_run)
+
+    with pytest.raises(shim.SandboxShimError, match="provider compatibility probe failed"):
+        shim._validate_provider_compatibility(
+            "/app/bin/opencode",
+            ["run", "--model", "openai/gpt-test", "real prompt"],
+            env,
+        )
+
+    assert calls == [
+        [
+            "/app/bin/opencode",
+            "--pure",
+            "run",
+            "--model",
+            "openai/gpt-test",
+            shim._PROVIDER_COMPATIBILITY_PROMPT,
+        ]
+    ]
+
+
+def test_main_runs_version_capability_and_provider_compatibility_before_real_prompt(
+    tmp_path: Path, monkeypatch
+) -> None:
+    argv, _, _ = _argv(tmp_path)
+    calls: list[list[str]] = []
+
+    def fake_run(command, **kwargs):
+        calls.append(list(command))
+        if command[1:] == ["--version"]:
+            return shim.subprocess.CompletedProcess(command, 0, stdout="1.18.30\n", stderr="")
+        if command[1:4] == ["debug", "agent", "build"]:
+            tools = {"read": True, "edit": True, "glob": True, "grep": True}
+            return shim.subprocess.CompletedProcess(command, 0, stdout=json.dumps({"tools": tools}), stderr="")
+        if shim._PROVIDER_COMPATIBILITY_PROMPT in command:
+            return shim.subprocess.CompletedProcess(
+                command, 0, stdout=shim._PROVIDER_COMPATIBILITY_SENTINEL + "\n", stderr=""
+            )
+        if command[-1] == "prompt":
+            return shim.subprocess.CompletedProcess(command, 0, stdout="", stderr="")
+        pytest.fail(f"unexpected provider command: {command}")
+
+    monkeypatch.setattr(shim.subprocess, "run", fake_run)
+
+    assert shim.main(argv) == 0
+    assert calls[-1][-1] == "prompt"
+    assert shim._PROVIDER_COMPATIBILITY_PROMPT in calls[-2]
+
+
+def test_main_fails_before_real_prompt_when_provider_compatibility_probe_fails(tmp_path: Path, monkeypatch) -> None:
+    argv, _, _ = _argv(tmp_path)
+    calls: list[list[str]] = []
+
+    def fake_run(command, **kwargs):
+        calls.append(list(command))
+        if command[1:] == ["--version"]:
+            return shim.subprocess.CompletedProcess(command, 0, stdout="1.18.30\n", stderr="")
+        if command[1:4] == ["debug", "agent", "build"]:
+            tools = {"read": True, "edit": True, "glob": True, "grep": True}
+            return shim.subprocess.CompletedProcess(command, 0, stdout=json.dumps({"tools": tools}), stderr="")
+        if shim._PROVIDER_COMPATIBILITY_PROMPT in command:
+            return shim.subprocess.CompletedProcess(
+                command, 1, stdout="", stderr="unsupported request option: prompt_cache_key"
+            )
+        pytest.fail("real provider prompt must not start after a failed compatibility probe")
+
+    monkeypatch.setattr(shim.subprocess, "run", fake_run)
+
+    assert shim.main(argv) == 1
+    assert all(command[-1] != "prompt" for command in calls)
+
+
+def test_runtime_contract_matches_canonical_installer_pin() -> None:
+    installer = Path("scripts/install_opencode_runtime.py").read_text(encoding="utf-8")
+    assert f'OPENCODE_VERSION = "{shim._PINNED_OPENCODE_VERSION}"' in installer
