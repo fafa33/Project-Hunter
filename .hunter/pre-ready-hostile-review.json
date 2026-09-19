@@ -1,18 +1,4 @@
 {
-  "authority": {
-    "artifact": ".hunter/pre-ready-hostile-review.json",
-    "fallback_reason": "Codex authenticated review was unavailable (test environment)",
-    "governance_state": "success",
-    "head_sha": "f0c87d248615a60d46b2332317e3b3fc5b9faac2",
-    "reviewed_at": "2026-09-19T22:45:00Z",
-    "schema": "hunter.pre-ready-authority.v1",
-    "structured_evidence_status": "complete",
-    "summary": "PR #482 lifecycle fail-closed gaps repaired and regression coverage added; DFF-025/026/027 cleared.",
-    "tool": "OpenCode",
-    "trusted_preflight_state": "success",
-    "type": "hunter-guard",
-    "unresolved_thread_count": 0
-  },
   "claims": {
     "acceptance_criteria": [
       {
@@ -108,7 +94,7 @@
       "transaction-snapshot-consistency"
     ],
     "base_ref": "main",
-    "base_sha": "origin/main",
+    "base_sha": "b2c14d8cb2f1e76cdd970c46eab289c9ae79daf6",
     "defect_families": [
       {
         "evidence": "Covered by exact-head request validation, pre-push/orchestrator/merge-readiness regressions, and the DPM lifecycle structural guard.",
@@ -319,6 +305,10 @@
     ],
     "review_target_digest": "c1401598d16ff91c513f6d41b10bf7c734c70127558d60b0cf53fb46de02c635"
   },
-  "review_id": "5cd811dfb2a42b0e28fbc8b7afb6a5edea1676242e2ce90ca1cbf19cb31281a1",
+  "review_id": "6e67a0977512d634865c276a7965d01241d921ac8ccfb141b392f363423bf8cb",
+  "review_request": {
+    "claims_id": "6e67a0977512d634865c276a7965d01241d921ac8ccfb141b392f363423bf8cb",
+    "schema": "hunter.review-request.v1"
+  },
   "schema": "hunter.pre-ready-hostile-review.v1"
 }
