@@ -201,3 +201,13 @@ def test_candidate_admission_workflow_is_trusted_and_reconciles_after_preflight(
     assert "github.event.workflow_run.head_sha" in workflow
     assert '--head-sha "${EVENT_HEAD_SHA}"' in workflow
     assert "hunter_candidate_admission.py" in workflow
+
+
+def test_pull_request_target_does_not_run_admission_before_trusted_preflight_completion() -> None:
+    """A synchronize event must not publish a false red while exact-head proof is still running."""
+    import yaml
+
+    workflow = yaml.safe_load((ROOT / ".github" / "workflows" / "hunter-candidate-admission.yml").read_text())
+    condition = workflow["jobs"]["candidate-admission"]["if"]
+    assert "github.event_name == 'workflow_run'" in condition
+    assert "github.event_name == 'pull_request_target'" not in condition

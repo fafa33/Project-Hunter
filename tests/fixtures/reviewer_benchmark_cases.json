@@ -1,0 +1,7 @@
+[
+  {"id":"stale-head","expected":"finding","text":"Review authority is accepted even when review.commit_id differs from the current PR head SHA.","focus":"stale exact-head authority"},
+  {"id":"missing-authority","expected":"finding","text":"Merge readiness returns success when no authenticated exact-head review authority exists.","focus":"missing review authority"},
+  {"id":"retry-exhaustion","expected":"finding","text":"After the reviewer acknowledgement deadline expires, the same provider is retried forever and no fallback is selected.","focus":"unbounded retry/exhaustion"},
+  {"id":"workflow-permission","expected":"finding","text":"The trusted collector dispatches another Actions workflow but its permissions contain actions: read.","focus":"workflow dispatch permission"},
+  {"id":"clean-control","expected":"clear","text":"A current exact-head authenticated review is required; waiting reviewers remain pending and blocking findings remain failure.","focus":"correct review lifecycle"}
+]

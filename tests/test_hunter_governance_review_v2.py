@@ -162,7 +162,7 @@ def test_protected_preflight_ordinary_candidate_cannot_self_authorize(monkeypatc
     assert description == "trusted proof missing"
 
 
-def test_workflow_uses_only_trusted_v2_controller_without_bootstrap():
+def test_workflow_uses_only_trusted_v2_controller_with_safe_bootstrap():
     workflow = (
         Path(__file__).resolve().parents[1] / ".github" / "workflows" / "hunter-governance-review.yml"
     ).read_text(encoding="utf-8")
@@ -173,8 +173,20 @@ def test_workflow_uses_only_trusted_v2_controller_without_bootstrap():
     assert "persist-credentials: false" in workflow
     assert 'PR_NUMBER} = "283"' not in workflow
     assert "python -m hunter_governance_review" not in workflow
-    assert "bootstrap" not in workflow.lower()
+    # Privileged orchestration moved to the reconcile workflow, which has no
+    # `pull_request` trigger: a `pull_request` run executes the candidate's own
+    # copy of this file, so `actions: write` here would be candidate-reachable.
+    assert "python scripts/hunter_review_orchestrator.py" not in workflow
+    assert "actions: write" not in workflow
+    assert "actions: read" in workflow
     assert "hunter_governance_review_v2.py" in workflow
+
+    reconcile = (
+        Path(__file__).resolve().parents[1] / ".github" / "workflows" / "hunter-governance-reconcile.yml"
+    ).read_text(encoding="utf-8")
+    assert "actions: write" in reconcile
+    assert "python scripts/hunter_review_orchestrator.py ensure" in reconcile
+    assert "if [ ! -f scripts/hunter_review_orchestrator.py ]; then" in reconcile
 
 
 def test_reconcile_continues_after_one_pr_failure_and_drops_checkout_credentials():
@@ -187,6 +199,29 @@ def test_reconcile_continues_after_one_pr_failure_and_drops_checkout_credentials
     assert "if ! python scripts/hunter_governance_review_v2.py" in workflow
     assert "failures=1" in workflow
     assert 'exit "${failures}"' in workflow
+
+    def trigger_block(name: str, next_name: str) -> str:
+        start = workflow.index(f"  {name}:")
+        end = workflow.index(f"  {next_name}:", start)
+        return workflow[start:end]
+
+    workflow_run = trigger_block("workflow_run", "pull_request_review")
+    review = trigger_block("pull_request_review", "pull_request_review_comment")
+    review_comment = trigger_block("pull_request_review_comment", "schedule")
+
+    assert "- Hunter / Pre-PR Preflight" in workflow_run
+    assert "- Hunter Reviewer Collector" in workflow_run
+    assert "- completed" in workflow_run
+    assert "- submitted" in review
+    assert "- edited" in review
+    assert "- dismissed" in review
+    assert "- created" in review_comment
+    assert "- edited" in review_comment
+    assert "- deleted" in review_comment
+    # Review-state changes must reconcile immediately; the scheduled sweep is
+    # recovery only and must not be the normal authority-refresh path.
+    assert workflow.index("pull_request_review:") < workflow.index("schedule:")
+    assert workflow.index("pull_request_review_comment:") < workflow.index("schedule:")
 
 
 ANCESTOR = "d" * 40
@@ -551,3 +586,43 @@ def test_web_flow_merge_commit_is_not_an_authorized_ingress_signer(monkeypatch) 
 
     assert state == "failure"
     assert "unauthorized ingress signer web-flow" in description
+
+
+def test_native_codex_clear_review_must_match_current_trigger_claims():
+    claims_id = "c" * 64
+    observation = {
+        "agent_id": core.pre_ready.CODEX_REVIEW_AUTHORITY,
+        "source_kind": "review",
+        "state": "COMMENTED",
+        "commit_id": HEAD,
+        "trigger_claims_id": "d" * 64,
+        "body": f"Codex Review: Didn't find any major issues.\n**Reviewed commit:** `{HEAD}`",
+    }
+
+    assert core.review_adoption_acknowledgement(observation, HEAD, claims_id) is None
+
+    observation["trigger_claims_id"] = claims_id
+    adopted = core.review_adoption_acknowledgement(observation, HEAD, claims_id)
+    assert adopted is not None
+    assert adopted["claims_id"] == claims_id
+    assert adopted["head_sha"] == HEAD
+
+
+def test_review_orchestration_state_reads_trusted_cycle(monkeypatch):
+    import hunter_review_orchestrator as orchestration
+
+    cycle = orchestration.ReviewCycle(
+        pr_number=473,
+        head_sha=HEAD,
+        state="REVIEW_IN_PROGRESS",
+        provider_id="codex",
+        trigger_id=321,
+        started_at="2026-09-19T12:00:00Z",
+        config_digest="d" * 64,
+    )
+    monkeypatch.setattr(orchestration, "read_cycle", lambda *_args: ("present", cycle, None))
+
+    state, detail = core.review_orchestration_state("owner/repo", "token", 473, HEAD)
+    assert state == "REVIEW_IN_PROGRESS"
+    assert "provider=codex" in detail
+    assert "trigger=321" in detail

@@ -1,0 +1,71 @@
+name: Hunter Local Reviewer
+
+# The run name carries the exact collector invocation identity. GitHub does not
+# report workflow-dispatch inputs on a run, so the trusted collector correlates a
+# run to its own dispatch through this name; timestamp, event and branch alone
+# would also match a run dispatched for another attempt or another candidate.
+run-name: Hunter Local Reviewer ${{ inputs.correlation_id }}
+
+on:
+  workflow_dispatch:
+    inputs:
+      pr_number:
+        required: true
+        type: string
+      head_sha:
+        required: true
+        type: string
+      claims_id:
+        required: true
+        type: string
+      correlation_id:
+        description: Unique trusted collector invocation identity for this dispatch
+        required: true
+        type: string
+
+permissions:
+  contents: read
+  pull-requests: read
+  actions: read
+
+concurrency:
+  group: hunter-local-review-${{ inputs.pr_number }}
+  cancel-in-progress: true
+
+jobs:
+  review:
+    runs-on: [self-hosted, macOS, hunter-reviewer]
+    timeout-minutes: 20
+    steps:
+      - name: Checkout trusted default branch
+        uses: actions/checkout@v7
+        with:
+          ref: main
+          persist-credentials: false
+      # Every dispatch input reaches the shell through the environment, never
+      # through `${{ }}` interpolation into the script body: interpolation is
+      # textual substitution before the shell parses the command, so a crafted
+      # input would run as this self-hosted runner rather than be read as an
+      # argument. The reviewer itself re-validates each value it is handed.
+      - name: Run local exact-head review
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPOSITORY: ${{ github.repository }}
+          PR_NUMBER: ${{ inputs.pr_number }}
+          HEAD_SHA: ${{ inputs.head_sha }}
+          CLAIMS_ID: ${{ inputs.claims_id }}
+        run: |
+          python3 scripts/hunter_local_reviewer.py \
+            --repository "${REPOSITORY}" \
+            --pr "${PR_NUMBER}" \
+            --head-sha "${HEAD_SHA}" \
+            --claims-id "${CLAIMS_ID}" \
+            --output reviewer-result.json
+
+      - name: Upload structured local review
+        uses: actions/upload-artifact@v4
+        with:
+          name: hunter-local-review-${{ inputs.pr_number }}-${{ inputs.head_sha }}
+          path: reviewer-result.json
+          if-no-files-found: error
+          retention-days: 14

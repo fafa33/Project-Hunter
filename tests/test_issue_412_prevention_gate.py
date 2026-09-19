@@ -525,9 +525,11 @@ def _attempt(
     *,
     status: str = "exhausted",
     reason: str = "unavailable (rate-limited)",
-    timeout_seconds: int = 900,
+    timeout_seconds: int = 300,
+    ack_timeout_seconds: int = 30,
+    review_timeout_seconds: int = 300,
     failure_class: str = "transient",
-    attempt_count: int = 2,
+    attempt_count: int = 1,
     invocation_reference: str = "actions/runs/12345",
 ) -> dict[str, Any]:
     """One machine-checkable reviewer-pool exhaustion attempt record."""
@@ -536,6 +538,8 @@ def _attempt(
         "status": status,
         "reason": reason,
         "timeout_seconds": timeout_seconds,
+        "ack_timeout_seconds": ack_timeout_seconds,
+        "review_timeout_seconds": review_timeout_seconds,
         "failure_class": failure_class,
         "attempt_count": attempt_count,
         "invocation_reference": invocation_reference,
@@ -547,23 +551,27 @@ ALTERNATE_AGENT = {
     "priority": 2,
     "enabled": True,
     "exact_head_support": True,
-    "timeout_seconds": 900,
+    "timeout_seconds": 300,
+    "ack_timeout_seconds": 30,
+    "review_timeout_seconds": 300,
     "github_login": "alternate-reviewer[bot]",
 }
 
 
-def _pool(*, agents: tuple = (), last_resort: str = "opencode", max_seconds: int = 1800) -> dict[str, Any]:
+def _pool(*, agents: tuple = (), last_resort: str = "hunter-guard", max_seconds: int = 300) -> dict[str, Any]:
     """A normalized reviewer pool, the shape ``review.load_reviewer_pool`` returns."""
     base_agent = {
         "id": "codex",
         "priority": 1,
         "enabled": True,
         "exact_head_support": True,
-        "timeout_seconds": 900,
+        "timeout_seconds": 300,
+        "ack_timeout_seconds": 30,
+        "review_timeout_seconds": 300,
     }
     return {
         "last_resort": last_resort,
-        "timeout_policy": {"bounded": True, "default_seconds": 900, "max_seconds": max_seconds, "retries_per_agent": 1},
+        "timeout_policy": {"bounded": True, "default_seconds": 300, "max_seconds": max_seconds, "retries_per_agent": 0},
         "agents": (base_agent,) + tuple(agents),
     }
 
@@ -590,7 +598,7 @@ def _authority(
     """
     if authority_type == "codex":
         tool = "codex-cli"
-    elif authority_type == "opencode":
+    elif authority_type == "hunter-guard":
         tool = "opencode-hunter-review"
     else:
         tool = f"{authority_type}-review"
@@ -601,7 +609,7 @@ def _authority(
         "reviewed_at": "2026-09-13T00:00:00Z",
         "artifact": review.REVIEW_RELATIVE_PATH,
     }
-    if authority_type == "opencode":
+    if authority_type == "hunter-guard":
         authority.update(
             {
                 "fallback_reason": "Codex unavailable (rate-limited)",
@@ -612,7 +620,10 @@ def _authority(
             }
         )
     if authority_type != "codex":
-        authority["reviewer_attempts"] = list(attempts) if attempts is not None else [dict(_attempt())]
+        default_attempts = [dict(_attempt())]
+        if authority_type == "hunter-guard":
+            default_attempts += [dict(_attempt("copilot")), dict(_attempt("gemini")), dict(_attempt("groq"))]
+        authority["reviewer_attempts"] = list(attempts) if attempts is not None else default_attempts
     authority.update(overrides)
     return authority
 
@@ -811,14 +822,23 @@ def test_a_codex_review_of_the_exact_head_is_valid() -> None:
     assert verdict.ok is True
 
 
-def test_a_fallback_review_of_the_exact_head_is_valid_when_codex_is_unavailable() -> None:
-    """Fallback authority: the canonical OpenCode hostile review counts.
-
-    Machine-readability is preserved, so `verify_claims` cannot tell the two
-    authorities apart -- the difference is only the recorded authority record,
-    and the fallback record is the report of *why* Codex could not review.
-    """
-    document = _review_document(authority=_authority(authority_type="opencode"))
+def test_a_fallback_review_of_the_exact_head_is_valid_when_codex_is_unavailable(monkeypatch) -> None:
+    """Fallback authority counts only after the configured reviewer pool is exhausted."""
+    _use_pool(
+        monkeypatch,
+        _pool(
+            agents=(
+                {**ALTERNATE_AGENT, "id": "gemini", "priority": 2, "retryable": False},
+                {**ALTERNATE_AGENT, "id": "groq", "priority": 3, "retryable": False},
+            )
+        ),
+    )
+    document = _review_document(
+        authority=_authority(
+            authority_type="hunter-guard",
+            attempts=[dict(_attempt()), dict(_attempt("gemini")), dict(_attempt("groq"))],
+        )
+    )
 
     verdict = _verify(document)
 
@@ -853,7 +873,7 @@ def test_a_fallback_review_without_a_recorded_reason_is_refused() -> None:
     machine-checkable form. An empty or missing reason is exactly the skipped
     primary authority case, and it fails closed.
     """
-    document = _review_document(authority=_authority(authority_type="opencode", fallback_reason=""))
+    document = _review_document(authority=_authority(authority_type="hunter-guard", fallback_reason=""))
 
     verdict = _verify(document)
 
@@ -863,7 +883,7 @@ def test_a_fallback_review_without_a_recorded_reason_is_refused() -> None:
 
 def test_a_fallback_review_recorded_for_an_older_head_is_stale() -> None:
     """The recorded exact head binds the review; an amended head invalidates it."""
-    document = _review_document(authority=_authority(authority_type="opencode", head_sha="d" * 40))
+    document = _review_document(authority=_authority(authority_type="hunter-guard", head_sha="d" * 40))
 
     verdict = _verify(document, head_sha=HEAD)
 
@@ -882,7 +902,7 @@ def test_a_review_recorded_for_an_ancestor_head_is_stale_across_the_artifact_com
     """
     recorded = "c" * 40
     evaluated = "e" * 40
-    document = _review_document(authority=_authority(authority_type="opencode", head_sha=recorded))
+    document = _review_document(authority=_authority(authority_type="hunter-guard", head_sha=recorded))
 
     verdict = _verify(document, head_sha=evaluated)
 
@@ -953,7 +973,7 @@ def test_unverified_fallback_review_emitting_canonical_claims_is_rejected(monkey
     monkeypatch.setattr(
         core,
         "read_head_pre_ready_review",
-        lambda *_a: ("present", _review_document(authority=_authority(authority_type="opencode")), None),
+        lambda *_a: ("present", _review_document(authority=_authority(authority_type="hunter-guard")), None),
     )
     monkeypatch.setattr(core.pre_ready, "load_families", lambda *_a, **_k: (FAMILIES, ""))
     monkeypatch.setattr(core, "read_issue_acceptance_criteria", lambda *_a: ("present", (), ""))
@@ -1040,7 +1060,7 @@ def test_local_and_hosted_consume_the_same_canonical_claim_set_definition(monkey
 
 
 def test_a_fallback_review_with_unresolved_threads_recorded_is_refused() -> None:
-    document = _review_document(authority=_authority(authority_type="opencode", unresolved_thread_count=1))
+    document = _review_document(authority=_authority(authority_type="hunter-guard", unresolved_thread_count=1))
 
     verdict = _verify(document)
 
@@ -1049,7 +1069,7 @@ def test_a_fallback_review_with_unresolved_threads_recorded_is_refused() -> None
 
 
 def test_a_fallback_review_without_recorded_governance_success_is_refused() -> None:
-    document = _review_document(authority=_authority(authority_type="opencode", governance_state="pending"))
+    document = _review_document(authority=_authority(authority_type="hunter-guard", governance_state="pending"))
 
     verdict = _verify(document)
 
@@ -1058,7 +1078,7 @@ def test_a_fallback_review_without_recorded_governance_success_is_refused() -> N
 
 
 def test_a_fallback_review_without_recorded_preflight_success_is_refused() -> None:
-    document = _review_document(authority=_authority(authority_type="opencode", trusted_preflight_state="failure"))
+    document = _review_document(authority=_authority(authority_type="hunter-guard", trusted_preflight_state="failure"))
 
     verdict = _verify(document)
 
@@ -1067,7 +1087,9 @@ def test_a_fallback_review_without_recorded_preflight_success_is_refused() -> No
 
 
 def test_a_fallback_review_without_complete_structured_evidence_status_is_refused() -> None:
-    document = _review_document(authority=_authority(authority_type="opencode", structured_evidence_status="partial"))
+    document = _review_document(
+        authority=_authority(authority_type="hunter-guard", structured_evidence_status="partial")
+    )
 
     verdict = _verify(document)
 
@@ -1078,7 +1100,7 @@ def test_a_fallback_review_without_complete_structured_evidence_status_is_refuse
 def test_a_fallback_review_with_a_resolved_finding_missing_structured_evidence_is_refused() -> None:
     """Requirement 8 applies to every reviewer, whatever authority ran the review."""
     finding = {"id": "F-9", "severity": "blocking", "resolution": "resolved", "evidence": "fixed it"}
-    document = _review_document(authority=_authority(authority_type="opencode"), findings=(finding,))
+    document = _review_document(authority=_authority(authority_type="hunter-guard"), findings=(finding,))
 
     verdict = _verify(document)
 
@@ -1089,7 +1111,7 @@ def test_a_fallback_review_with_a_resolved_finding_missing_structured_evidence_i
 def test_malformed_review_authority_metadata_fails_closed() -> None:
     """Forged or malformed authority evidence cannot lengthen the review's reach."""
     malformed = [
-        _authority(authority_type="opencode", unresolved_thread_count=True),
+        _authority(authority_type="hunter-guard", unresolved_thread_count=True),
         _authority(head_sha="not-a-sha"),
         _authority(tool=""),
         _authority(reviewed_at=""),
@@ -1151,7 +1173,7 @@ def test_an_untried_higher_priority_reviewer_blocks_an_alternate_review(monkeypa
 def test_the_guard_is_a_last_resort_only_after_the_whole_pool_is_exhausted(monkeypatch) -> None:
     """A guard review that never tried an enabled alternate is a bypass, not a fallback."""
     _use_pool(monkeypatch, _pool(agents=(ALTERNATE_AGENT,)))
-    document = _review_document(authority=_authority(authority_type="opencode", attempts=[dict(_attempt())]))
+    document = _review_document(authority=_authority(authority_type="hunter-guard", attempts=[dict(_attempt())]))
 
     verdict = _verify(document)
 
@@ -1161,7 +1183,7 @@ def test_the_guard_is_a_last_resort_only_after_the_whole_pool_is_exhausted(monke
 
 
 def test_the_guard_review_requires_exhaustion_evidence_for_the_whole_enabled_pool() -> None:
-    document = _review_document(authority=_authority(authority_type="opencode", attempts=[]))
+    document = _review_document(authority=_authority(authority_type="hunter-guard", attempts=[]))
 
     verdict = _verify(document)
 
@@ -1170,7 +1192,7 @@ def test_the_guard_review_requires_exhaustion_evidence_for_the_whole_enabled_poo
 
 
 def test_guard_exhaustion_does_not_relax_the_green_snapshot_gates() -> None:
-    document = _review_document(authority=_authority(authority_type="opencode", governance_state="pending"))
+    document = _review_document(authority=_authority(authority_type="hunter-guard", governance_state="pending"))
 
     verdict = _verify(document)
 
@@ -1182,7 +1204,7 @@ def test_a_skipped_higher_priority_reviewer_is_not_exhaustion_evidence(monkeypat
     _use_pool(monkeypatch, _pool(agents=(ALTERNATE_AGENT,)))
     document = _review_document(
         authority=_authority(
-            authority_type="opencode",
+            authority_type="hunter-guard",
             attempts=[dict(_attempt()), _attempt(ALTERNATE_AGENT["id"], status="skipped")],
         )
     )
@@ -1195,19 +1217,19 @@ def test_a_skipped_higher_priority_reviewer_is_not_exhaustion_evidence(monkeypat
 
 def test_exhaustion_evidence_must_record_a_timeout_within_the_bounded_policy(monkeypatch) -> None:
     _use_pool(monkeypatch, _pool(agents=(), max_seconds=1800))
-    too_long = _authority(authority_type="opencode", attempts=[_attempt("codex", timeout_seconds=3600)])
-    unbounded = _authority(authority_type="opencode", attempts=[_attempt("codex", timeout_seconds="never")])
+    too_long = _authority(authority_type="hunter-guard", attempts=[_attempt("codex", review_timeout_seconds=3600)])
+    unbounded = _authority(authority_type="hunter-guard", attempts=[_attempt("codex", review_timeout_seconds="never")])
 
     for document in (_review_document(authority=too_long), _review_document(authority=unbounded)):
         verdict = _verify(document)
         assert verdict.state == "incomplete"
-        assert "timeout_seconds" in verdict.reason
+        assert "timeout" in verdict.reason
 
 
 def test_exhaustion_evidence_from_an_unknown_agent_fails_closed(monkeypatch) -> None:
     _use_pool(monkeypatch, _pool(agents=(ALTERNATE_AGENT,)))
     document = _review_document(
-        authority=_authority(authority_type="opencode", attempts=[dict(_attempt()), _attempt("ghost")])
+        authority=_authority(authority_type="hunter-guard", attempts=[dict(_attempt()), _attempt("ghost")])
     )
 
     verdict = _verify(document)
@@ -1217,7 +1239,7 @@ def test_exhaustion_evidence_from_an_unknown_agent_fails_closed(monkeypatch) -> 
 
 
 def test_malformed_exhaustion_evidence_fails_closed() -> None:
-    document = _review_document(authority=_authority(authority_type="opencode", attempts=["not an attempt record"]))
+    document = _review_document(authority=_authority(authority_type="hunter-guard", attempts=["not an attempt record"]))
 
     verdict = _verify(document)
 
@@ -1230,7 +1252,7 @@ def test_a_disabled_pool_agent_is_neither_admissible_nor_required(monkeypatch) -
     disabled = {"id": "retired-agent", "priority": 2, "enabled": False, "exact_head_support": True}
     _use_pool(monkeypatch, _pool(agents=(disabled,)))
 
-    guard = _review_document(authority=_authority(authority_type="opencode"))
+    guard = _review_document(authority=_authority(authority_type="hunter-guard", attempts=[dict(_attempt())]))
     assert _verify(guard).ok is True
 
     retired = _review_document(authority=_authority(authority_type="retired-agent"))
@@ -1253,7 +1275,7 @@ def test_failover_restarts_after_a_new_commit_invalidates_a_review(monkeypatch) 
 
 def test_unproven_exhaustion_fails_closed_like_a_missing_review() -> None:
     """A guard review whose exhaustion cannot be proven is refused, never admitted."""
-    document = _review_document(authority=_authority(authority_type="opencode"))
+    document = _review_document(authority=_authority(authority_type="hunter-guard"))
     document["authority"].pop("reviewer_attempts")
 
     verdict = _verify(document)
@@ -1316,7 +1338,7 @@ def test_a_guard_review_that_skips_an_enabled_alternate_blocks_end_to_end(monkey
     monkeypatch.setattr(
         core,
         "read_head_pre_ready_review",
-        lambda *_a: ("present", _review_document(authority=_authority(authority_type="opencode")), None),
+        lambda *_a: ("present", _review_document(authority=_authority(authority_type="hunter-guard")), None),
     )
     monkeypatch.setattr(core.pre_ready, "load_families", lambda *_a, **_k: (FAMILIES, ""))
     monkeypatch.setattr(core, "read_issue_acceptance_criteria", lambda *_a: ("present", (), ""))

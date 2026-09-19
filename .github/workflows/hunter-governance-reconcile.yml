@@ -4,6 +4,11 @@ name: Hunter Governance Review Reconcile
 # reconstructed and no PR prose is evaluated. Exact-head branch preflight
 # completion triggers an immediate refresh so API-written heads cannot remain
 # admitted on stale governance state.
+#
+# This workflow also owns privileged reviewer orchestration (`actions: write`).
+# It has no `pull_request` trigger, so GitHub always runs the trusted
+# default-branch version of this file: a candidate cannot reach this permission
+# by editing a workflow on its own branch.
 
 on:
   push:
@@ -12,14 +17,25 @@ on:
   workflow_run:
     workflows:
       - Hunter / Pre-PR Preflight
+      - Hunter Reviewer Collector
     types:
       - completed
+  pull_request_review:
+    types:
+      - submitted
+      - edited
+      - dismissed
+  pull_request_review_comment:
+    types:
+      - created
+      - edited
+      - deleted
   schedule:
     - cron: "*/30 * * * *"
   workflow_dispatch:
 
 permissions:
-  actions: read
+  actions: write
   checks: read
   contents: read
   pull-requests: read
@@ -70,6 +86,19 @@ jobs:
               --pr "${pr_number}" \
               --repository "${GITHUB_REPOSITORY}"; then
               echo "::error::Governance refresh failed for PR #${pr_number}; continuing."
+              failures=1
+            fi
+            # Bootstrap detection: until hunter_review_orchestrator.py exists on the
+            # trusted default branch, there is no trusted orchestrator to run. Never
+            # run a candidate copy in its place, and do not fail the refresh merely
+            # because the trusted orchestrator is not available yet; the governance
+            # step above still owns exact-head review authority.
+            if [ ! -f scripts/hunter_review_orchestrator.py ]; then
+              echo "::notice::Bootstrap phase: hunter_review_orchestrator.py not yet on default branch; skipping orchestration for PR #${pr_number}."
+            elif ! python scripts/hunter_review_orchestrator.py ensure \
+              --pr "${pr_number}" \
+              --repository "${GITHUB_REPOSITORY}"; then
+              echo "::error::Review orchestration failed for PR #${pr_number}; continuing."
               failures=1
             fi
           done <<< "${pr_numbers}"
