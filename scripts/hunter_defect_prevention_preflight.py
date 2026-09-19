@@ -1577,25 +1577,11 @@ def validate_review_request_lifecycle_contract() -> list[str]:
         "scripts/hunter_pre_push.py": ("enforce_declared_review_request",),
         "scripts/hunter_review_orchestrator.py": ("publish_prerequisite_block",),
     }
-    required_states = {
-        "scripts/hunter_merge_readiness_v2.py": ("WAITING_FOR_REVIEW_REQUEST", "WAITING_FOR_PREREQUISITE"),
-        "scripts/hunter_review_orchestrator.py": (
-            "WAITING_FOR_REVIEW_REQUEST",
-            "WAITING_FOR_PREREQUISITE",
-            "PREREQUISITE_BLOCKED",
-        ),
-    }
     errors: list[str] = []
-    trees: dict[str, ast.Module] = {}
-    for relative in {*required_functions, *required_states}:
+    for relative, functions in required_functions.items():
         tree, error = _module_ast(relative)
         if tree is None:
             errors.append(f"review-request lifecycle source unavailable ({error})")
-            continue
-        trees[relative] = tree
-    for relative, functions in required_functions.items():
-        tree = trees.get(relative)
-        if tree is None:
             continue
         defined = _defined_functions(tree)
         errors.extend(
@@ -1603,16 +1589,67 @@ def validate_review_request_lifecycle_contract() -> list[str]:
             for name in functions
             if name not in defined
         )
-    for relative, states in required_states.items():
-        tree = trees.get(relative)
-        if tree is None:
+
+    try:
+        import hunter_merge_readiness_v2 as readiness
+        import hunter_review_orchestrator as orchestration
+    except Exception as exc:  # pragma: no cover - import failure is itself the defect
+        return [*errors, f"review-request lifecycle modules are unavailable: {type(exc).__name__}: {exc}"]
+
+    # The classification itself, exercised rather than searched for. A state name
+    # present in the source proves only that the token exists; it does not prove
+    # which reason produces it, and a guard satisfied by a mention is satisfied by
+    # a mention inside an unrelated string.
+    expected = {
+        "REVIEW_REQUEST_MISSING:detail": "WAITING_FOR_REVIEW_REQUEST",
+        "TRUSTED_PREFLIGHT_PENDING:detail": "WAITING_FOR_PREREQUISITE",
+        # An absent or failed exact-head proof is decided, not slow.
+        "TRUSTED_PREFLIGHT_FAILURE:detail": "PREREQUISITE_BLOCKED",
+        "TRUSTED_PREFLIGHT_MISSING:detail": "PREREQUISITE_BLOCKED",
+        "REVIEW_REQUEST_INVALID:detail": "PREREQUISITE_BLOCKED",
+        "REVIEW_REQUEST_MALFORMED:detail": "PREREQUISITE_BLOCKED",
+        # An unrecognised reason must fail closed rather than inherit a wait.
+        "SOME_FUTURE_PREREQUISITE:detail": "PREREQUISITE_BLOCKED",
+    }
+    for reason, state in expected.items():
+        actual = orchestration.prerequisite_cycle_state(reason)
+        if actual != state:
+            errors.append(f"prerequisite reason {reason.split(':')[0]} must classify as {state}, not {actual}")
+
+    # Waiting states must be projected as pending, and a blocked prerequisite
+    # must not be, or a decided failure would be reported as mere waiting.
+    for state in ("WAITING_FOR_REVIEW_REQUEST", "WAITING_FOR_PREREQUISITE"):
+        if readiness.review_wait_state(state, "") is None:
+            errors.append(f"merge readiness must project {state} as pending rather than red")
+    if readiness.review_wait_state("PREREQUISITE_BLOCKED", "") is not None:
+        errors.append("merge readiness must not project PREREQUISITE_BLOCKED as pending: it is a decided block")
+
+    # A prerequisite cycle records no collector dispatch. Checked on the AST of
+    # the call itself, so it cannot be satisfied by the literal appearing anywhere
+    # else in the module.
+    tree, error = _module_ast("scripts/hunter_review_orchestrator.py")
+    if tree is None:
+        errors.append(f"review-request lifecycle source unavailable ({error})")
+        return errors
+    publisher = next(
+        (
+            node
+            for node in ast.walk(tree)
+            if isinstance(node, ast.FunctionDef) and node.name == "publish_prerequisite_block"
+        ),
+        None,
+    )
+    if publisher is None:
+        return errors
+    for call in ast.walk(publisher):
+        if not (isinstance(call, ast.Call) and isinstance(call.func, ast.Name) and call.func.id == "ReviewCycle"):
             continue
-        constants = _string_constants(tree)
-        errors.extend(
-            f"review-request lifecycle state missing from {relative}: {state}"
-            for state in states
-            if not any(state in constant for constant in constants)
-        )
+        trigger = next((kw.value for kw in call.keywords if kw.arg == "trigger_id"), None)
+        if not (isinstance(trigger, ast.Constant) and trigger.value is None):
+            errors.append(
+                "publish_prerequisite_block must record trigger_id=None: a prerequisite block dispatches no "
+                "collector, and a non-None trigger id makes ensure_collector skip the first real dispatch"
+            )
     return errors
 
 

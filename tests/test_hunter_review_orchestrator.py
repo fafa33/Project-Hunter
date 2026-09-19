@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import pathlib
 import re
+from datetime import UTC, datetime
 
 import hunter_github_transport as transport
 import hunter_review_orchestrator as orchestrator
@@ -807,3 +808,111 @@ def test_dispatch_identity_and_timestamp_are_durable_before_dispatch(monkeypatch
     assert published[0].trigger_id == 777
     assert published[0].started_at
     assert orchestrator._older_than(published[0].started_at, orchestrator.COLLECTOR_LIVENESS_GRACE_SECONDS) is False
+
+
+# --- Prerequisite classification: only a genuinely transient proof may wait ----
+
+
+@pytest.mark.parametrize(
+    ("reason", "expected"),
+    [
+        ("REVIEW_REQUEST_MISSING:not yet pushed", "WAITING_FOR_REVIEW_REQUEST"),
+        ("TRUSTED_PREFLIGHT_PENDING:still running", "WAITING_FOR_PREREQUISITE"),
+        # A proof that is absent or failed is decided, not slow.
+        ("TRUSTED_PREFLIGHT_FAILURE:validation=failure", "PREREQUISITE_BLOCKED"),
+        ("TRUSTED_PREFLIGHT_MISSING:status is missing", "PREREQUISITE_BLOCKED"),
+        ("REVIEW_REQUEST_INVALID:stale claims", "PREREQUISITE_BLOCKED"),
+        ("REVIEW_REQUEST_MALFORMED:identity/schema", "PREREQUISITE_BLOCKED"),
+    ],
+)
+def test_prerequisite_state_waits_only_for_a_transient_prerequisite(reason, expected):
+    assert orchestrator.prerequisite_cycle_state(reason) == expected
+
+
+def test_an_unrecognised_prerequisite_reason_fails_closed():
+    """The default is to block, so a new reason cannot inherit a wait by accident."""
+
+    assert orchestrator.prerequisite_cycle_state("SOME_FUTURE_PREREQUISITE:detail") == "PREREQUISITE_BLOCKED"
+
+
+@pytest.mark.parametrize(
+    "reason",
+    [
+        "TRUSTED_PREFLIGHT_FAILED:detail",
+        "TRUSTED_PREFLIGHT_PENDING_REVIEW:detail",
+        "TRUSTED_PREFLIGHT_:detail",
+        "TRUSTED_PREFLIGHT_PENDINGX:detail",
+        "XTRUSTED_PREFLIGHT_PENDING:detail",
+    ],
+)
+def test_a_near_miss_of_a_transient_code_does_not_inherit_its_wait(reason):
+    """Classification is by exact code, never by prefix family.
+
+    Matching ``TRUSTED_PREFLIGHT_`` as a family made a failed proof
+    indistinguishable from one still running, so a decided failure was published
+    as a non-red waiting state and the candidate waited for an outcome that had
+    already gone against it.
+    """
+
+    assert orchestrator.prerequisite_cycle_state(reason) == "PREREQUISITE_BLOCKED"
+
+
+def test_prerequisite_classification_ignores_case_and_padding():
+    assert orchestrator.prerequisite_cycle_state("  trusted_preflight_pending:detail") == "WAITING_FOR_PREREQUISITE"
+
+
+# --- A prerequisite block is not a collector dispatch -------------------------
+
+
+def _publish_harness(monkeypatch):
+    published = []
+    monkeypatch.setattr(orchestrator, "reviewer_pool_config_digest", lambda: "d" * 64, raising=False)
+    monkeypatch.setattr(orchestrator, "current_run_id", lambda: 4242, raising=False)
+    monkeypatch.setattr(orchestrator, "publish_cycle", lambda *_args, cycle: published.append(cycle), raising=False)
+    return published
+
+
+def test_a_prerequisite_block_records_no_collector_dispatch_identity(monkeypatch):
+    """trigger_id means "the run that dispatched a collector"; none was dispatched."""
+
+    published = _publish_harness(monkeypatch)
+
+    cycle = orchestrator.publish_prerequisite_block(
+        "owner/repo", "token", 472, HEAD, "TRUSTED_PREFLIGHT_PENDING:still running"
+    )
+
+    assert cycle.trigger_id is None
+    assert published[0].trigger_id is None
+
+
+def test_a_prerequisite_cycle_does_not_suppress_the_first_collector_dispatch(monkeypatch):
+    """The defect: a prerequisite block starved the reviewer it was waiting for.
+
+    ``collector_needs_dispatch`` returns False inside the liveness grace, so a
+    freshly published prerequisite cycle carrying a non-None trigger id made
+    ``ensure_collector`` return early and skip the first real dispatch.
+    """
+
+    fresh = datetime.now(UTC).strftime("%Y-%m-%dT%H:%M:%SZ")
+    cycle = make_cycle(state="WAITING_FOR_PREREQUISITE", provider_id="TRUSTED_PREFLIGHT_PENDING", trigger_id=None)
+    cycle = orchestrator.ReviewCycle(**{**cycle.__dict__, "started_at": fresh})
+    stored = _ensure_harness(monkeypatch, cycle, [])
+
+    result = orchestrator.ensure_collector("owner/repo", "token", 472, HEAD)
+
+    assert stored["dispatches"] == 1
+    assert result.state == "WAITING_FOR_REVIEWER"
+    assert result.trigger_id == 999
+
+
+def test_a_real_dispatch_inside_the_grace_is_still_not_duplicated(monkeypatch):
+    """The suppression that must survive: a genuine dispatch is idempotent."""
+
+    fresh = datetime.now(UTC).strftime("%Y-%m-%dT%H:%M:%SZ")
+    cycle = make_cycle(trigger_id=123, started_at=fresh)
+    stored = _ensure_harness(monkeypatch, cycle, [])
+
+    result = orchestrator.ensure_collector("owner/repo", "token", 472, HEAD)
+
+    assert stored["dispatches"] == 0
+    assert result.trigger_id == 123

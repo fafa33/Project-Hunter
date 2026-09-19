@@ -201,5 +201,129 @@ def test_lifecycle_contract_is_not_satisfied_by_a_comment(tmp_path, monkeypatch)
 
     errors = prevention.validate_review_request_lifecycle_contract()
 
+    # Functions are read from the AST, so a commented-out definition is absent.
+    # The lifecycle states are no longer text-checked at all: they are verified
+    # by exercising the classifier, which prose cannot satisfy either way.
     assert any("function missing" in error for error in errors)
-    assert any("state missing" in error for error in errors)
+
+
+# --- The lifecycle contract is exercised, not searched for --------------------
+
+
+def test_lifecycle_contract_passes_against_the_live_implementation():
+    assert prevention.validate_review_request_lifecycle_contract() == []
+
+
+def test_lifecycle_contract_rejects_a_transient_wait_for_a_decided_failure(monkeypatch):
+    """The finding: a failed or missing proof must never classify as waiting.
+
+    A source-text guard could not catch this -- the state names all still appear
+    in the module. Only exercising the classifier does.
+    """
+
+    import hunter_review_orchestrator as orchestration
+
+    monkeypatch.setattr(
+        orchestration,
+        "prerequisite_cycle_state",
+        lambda reason: (
+            "WAITING_FOR_PREREQUISITE" if reason.startswith("TRUSTED_PREFLIGHT_") else "PREREQUISITE_BLOCKED"
+        ),
+    )
+
+    errors = prevention.validate_review_request_lifecycle_contract()
+
+    assert any("TRUSTED_PREFLIGHT_FAILURE" in error for error in errors)
+    assert any("TRUSTED_PREFLIGHT_MISSING" in error for error in errors)
+
+
+def test_lifecycle_contract_rejects_an_unknown_reason_inheriting_a_wait(monkeypatch):
+    import hunter_review_orchestrator as orchestration
+
+    monkeypatch.setattr(orchestration, "prerequisite_cycle_state", lambda reason: "WAITING_FOR_PREREQUISITE")
+
+    errors = prevention.validate_review_request_lifecycle_contract()
+
+    assert any("SOME_FUTURE_PREREQUISITE" in error for error in errors)
+
+
+def test_lifecycle_contract_rejects_a_blocked_prerequisite_projected_as_pending(monkeypatch):
+    import hunter_merge_readiness_v2 as readiness
+
+    monkeypatch.setattr(readiness, "review_wait_state", lambda state, detail: ("pending", state))
+
+    errors = prevention.validate_review_request_lifecycle_contract()
+
+    assert any("PREREQUISITE_BLOCKED" in error and "decided block" in error for error in errors)
+
+
+def test_lifecycle_contract_rejects_a_waiting_state_projected_as_red(monkeypatch):
+    import hunter_merge_readiness_v2 as readiness
+
+    monkeypatch.setattr(readiness, "review_wait_state", lambda state, detail: None)
+
+    errors = prevention.validate_review_request_lifecycle_contract()
+
+    assert any("WAITING_FOR_PREREQUISITE" in error and "pending" in error for error in errors)
+
+
+def test_lifecycle_contract_rejects_a_prerequisite_block_that_records_a_dispatch(tmp_path, monkeypatch):
+    """A prerequisite cycle carrying a trigger id suppresses the first dispatch."""
+
+    (tmp_path / "scripts").mkdir(parents=True, exist_ok=True)
+    for name, body in {
+        "hunter_pre_ready_review.py": "def verify_local_review_request():\n    pass\n",
+        "hunter_pre_push.py": "def enforce_declared_review_request():\n    pass\n",
+        "hunter_review_orchestrator.py": (
+            "def publish_prerequisite_block(repository, token, pr, head, reason):\n"
+            "    # trigger_id=None\n"
+            "    return ReviewCycle(state='x', trigger_id=current_run_id())\n"
+        ),
+    }.items():
+        (tmp_path / "scripts" / name).write_text(body, encoding="utf-8")
+    monkeypatch.setattr(prevention, "ROOT", tmp_path)
+
+    errors = prevention.validate_review_request_lifecycle_contract()
+
+    assert any("trigger_id=None" in error for error in errors)
+
+
+def test_lifecycle_contract_is_not_satisfied_by_a_commented_trigger_id(tmp_path, monkeypatch):
+    """The comment in the fixture above says trigger_id=None; the code does not."""
+
+    (tmp_path / "scripts").mkdir(parents=True, exist_ok=True)
+    for name, body in {
+        "hunter_pre_ready_review.py": "def verify_local_review_request():\n    pass\n",
+        "hunter_pre_push.py": "def enforce_declared_review_request():\n    pass\n",
+        "hunter_review_orchestrator.py": (
+            '"""trigger_id=None WAITING_FOR_PREREQUISITE PREREQUISITE_BLOCKED"""\n'
+            "def publish_prerequisite_block(repository, token, pr, head, reason):\n"
+            "    return ReviewCycle(state='x', trigger_id=7)\n"
+        ),
+    }.items():
+        (tmp_path / "scripts" / name).write_text(body, encoding="utf-8")
+    monkeypatch.setattr(prevention, "ROOT", tmp_path)
+
+    assert any("trigger_id=None" in error for error in prevention.validate_review_request_lifecycle_contract())
+
+
+def test_lifecycle_contract_accepts_an_equivalent_prerequisite_publisher(tmp_path, monkeypatch):
+    """A canonically valid equivalent must not be blocked."""
+
+    (tmp_path / "scripts").mkdir(parents=True, exist_ok=True)
+    for name, body in {
+        "hunter_pre_ready_review.py": "def verify_local_review_request():\n    pass\n",
+        "hunter_pre_push.py": "def enforce_declared_review_request():\n    pass\n",
+        "hunter_review_orchestrator.py": (
+            "def publish_prerequisite_block(repo, tok, number, sha, why):\n"
+            "    record = ReviewCycle(\n"
+            "        state=prerequisite_cycle_state(why),\n"
+            "        trigger_id=None,\n"
+            "    )\n"
+            "    return record\n"
+        ),
+    }.items():
+        (tmp_path / "scripts" / name).write_text(body, encoding="utf-8")
+    monkeypatch.setattr(prevention, "ROOT", tmp_path)
+
+    assert not [e for e in prevention.validate_review_request_lifecycle_contract() if "trigger_id" in e]

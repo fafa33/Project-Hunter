@@ -811,14 +811,29 @@ def _prerequisite_code(reason: str) -> str:
     return re.sub(r"[^A-Z0-9_-]", "_", code.upper())[:48]
 
 
+#: The only prerequisite reasons that are genuinely transient, and the waiting
+#: state each one publishes. Everything else -- including every other trusted
+#: preflight outcome -- is deterministic invalidity and fails closed.
+#:
+#: Membership is by exact reason code, never by prefix family. Matching
+#: ``TRUSTED_PREFLIGHT_`` as a family made a *failed* or *missing* exact-head
+#: proof indistinguishable from one that is still running, so a candidate whose
+#: proof had genuinely failed was published as merely waiting: a non-red state
+#: that merge readiness projects as pending, leaving it to wait for an outcome
+#: that had already been decided against it. A proof that is absent or failed is
+#: not a slow proof. Adding a reason here is therefore a deliberate assertion
+#: that it can still resolve on its own; the default is to block.
+TRANSIENT_PREREQUISITE_STATES = {
+    "REVIEW_REQUEST_MISSING": "WAITING_FOR_REVIEW_REQUEST",
+    "TRUSTED_PREFLIGHT_PENDING": "WAITING_FOR_PREREQUISITE",
+}
+
+
 def prerequisite_cycle_state(reason: str) -> str:
     """Classify a prerequisite as transient waiting or deterministic invalidity."""
 
-    if reason.startswith("REVIEW_REQUEST_MISSING:"):
-        return "WAITING_FOR_REVIEW_REQUEST"
-    if reason.startswith("TRUSTED_PREFLIGHT_"):
-        return "WAITING_FOR_PREREQUISITE"
-    return "PREREQUISITE_BLOCKED"
+    code = reason.split(":", 1)[0].strip().upper()
+    return TRANSIENT_PREREQUISITE_STATES.get(code, "PREREQUISITE_BLOCKED")
 
 
 def publish_prerequisite_block(repository: str, token: str, pr_number: int, head_sha: str, reason: str) -> ReviewCycle:
@@ -829,7 +844,13 @@ def publish_prerequisite_block(repository: str, token: str, pr_number: int, head
         head_sha=head_sha,
         state=prerequisite_cycle_state(reason),
         provider_id=_prerequisite_code(reason),
-        trigger_id=current_run_id(),
+        # No collector was dispatched, so this cycle records no dispatch
+        # identity. `trigger_id` means "the orchestrator run that dispatched a
+        # collector for this head"; writing this reconcile run's id there made
+        # `ensure_collector` read the cycle as an existing dispatch and skip the
+        # first real Collector dispatch for the whole liveness grace -- a
+        # prerequisite block suppressing the very reviewer it was waiting for.
+        trigger_id=None,
         started_at=datetime.now(UTC).strftime("%Y-%m-%dT%H:%M:%SZ"),
         config_digest=reviewer_pool_config_digest(),
     )
