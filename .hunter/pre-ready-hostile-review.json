@@ -182,7 +182,7 @@
         "outcome": "clear"
       },
       {
-        "evidence": "Reviewer unavailability is decided at a single point (reviewer_dispatch_unavailable) consulted by the dispatch, the adoption probe, the state read and the pool loop; it excludes GitHubUnavailable so exhausted retries, including the node-resolution 404, stay fail-closed. Regression evidence: tests/test_hunter_reviewer_collector.py::test_one_undispatchable_reviewer_does_not_strand_the_whole_pool, ::test_undispatchable_reviewer_probe_is_unavailability_not_collection_failure, ::test_exhausted_node_resolution_404_is_never_reviewer_unavailability, ::test_exhausted_infrastructure_still_fails_closed, ::test_pool_isolation_does_not_swallow_a_head_change, ::test_default_branch_uses_run_context_without_a_network_call. Structural push-boundary guard: scripts/hunter_defect_prevention_preflight.py::validate_reviewer_unavailability_is_per_reviewer with paired negative fixtures in tests/test_hunter_defect_prevention_preflight.py.",
+        "evidence": "Reviewer unavailability is decided at a single point (reviewer_dispatch_unavailable) consulted by the dispatch, the adoption probe, the state read and the pool loop; it excludes GitHubUnavailable so exhausted retries, including the node-resolution 404, stay fail-closed. Regression evidence: tests/test_hunter_reviewer_collector.py::test_one_undispatchable_reviewer_does_not_strand_the_whole_pool, ::test_undispatchable_reviewer_probe_is_unavailability_not_collection_failure, ::test_exhausted_node_resolution_404_is_never_reviewer_unavailability, ::test_exhausted_infrastructure_still_fails_closed, ::test_pool_isolation_does_not_swallow_a_head_change. Structural push-boundary guard: scripts/hunter_defect_prevention_preflight.py::validate_reviewer_unavailability_is_per_reviewer with paired negative fixtures in tests/test_hunter_defect_prevention_preflight.py.",
         "family": "DFF-025",
         "outcome": "repaired"
       }
@@ -197,7 +197,7 @@
         "status": "modified"
       },
       {
-        "blob_sha": "81dbcf4fa64c7a7116ad2641a262152ea992cff8",
+        "blob_sha": "ed2d9db1d63d1c0b7f5a8863a6712afc0bf90d32",
         "path": "docs/DEFECT_REGISTRY.json",
         "previous_path": "",
         "status": "modified"
@@ -239,7 +239,7 @@
         "status": "modified"
       },
       {
-        "blob_sha": "c26cfcbd6a7b64529a5ba7a5e80cecd25f4ea947",
+        "blob_sha": "3f248c62406d97dc61831e49600a49c1f73d39f9",
         "path": "scripts/hunter_reviewer_collector.py",
         "previous_path": "",
         "status": "modified"
@@ -281,7 +281,7 @@
         "status": "modified"
       },
       {
-        "blob_sha": "da26f6955f043adaaacb8578bf1f5b0433e1f688",
+        "blob_sha": "6c2b703fdae29352d96eb83ea2791c7cc9f12cfe",
         "path": "tests/test_hunter_reviewer_collector.py",
         "previous_path": "",
         "status": "modified"
@@ -293,11 +293,11 @@
         "status": "modified"
       }
     ],
-    "review_target_digest": "19892712abb618572a5776bb5d0be4b08f98fe43c8332ff02e9064366a1e3d5e"
+    "review_target_digest": "458ff219ff20ebe261be15ce31920cb7994c772077a7f540138eaa597f3eccd1"
   },
-  "review_id": "6c8be4164fd511c237297142eb629128ae18ef89bd499a3175f2b90447be0f8d",
+  "review_id": "e6102c2fb50c7664251066fbe69f69ac3ed4be4e2eab91aa9179b8271e37e805",
   "review_request": {
-    "claims_id": "6c8be4164fd511c237297142eb629128ae18ef89bd499a3175f2b90447be0f8d",
+    "claims_id": "e6102c2fb50c7664251066fbe69f69ac3ed4be4e2eab91aa9179b8271e37e805",
     "schema": "hunter.review-request.v1"
   },
   "schema": "hunter.pre-ready-hostile-review.v1"
