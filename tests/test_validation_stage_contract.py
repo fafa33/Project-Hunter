@@ -98,6 +98,13 @@ def test_agent_instruction_surfaces_point_at_the_stage_contract() -> None:
         assert "docs/VALIDATION_STAGE_CONTRACT.md" in path.read_text(encoding="utf-8"), path
 
 
+def test_agent_instruction_surfaces_require_durable_remote_checkpoints() -> None:
+    required = ("checkpoint", "push", "remote", "HEAD")
+    for path in INSTRUCTION_SURFACES:
+        text = path.read_text(encoding="utf-8")
+        assert all(token in text for token in required), path
+
+
 def test_push_safety_lane_is_the_normal_gate_chain_without_the_full_suite() -> None:
     assert preflight.PUSH_SAFETY_GATES == preflight.NORMAL_QUALITY_GATES[:-1]
     assert preflight.NORMAL_QUALITY_GATES[-1] == preflight.PYTEST_GATE
