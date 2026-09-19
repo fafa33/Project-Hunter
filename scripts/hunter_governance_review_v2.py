@@ -355,6 +355,27 @@ def _substantive_review_body(body: str) -> bool:
     return sum(not c.isspace() for c in stripped) >= 40
 
 
+def native_copilot_verdict(body: str, inline_comment_count: int = 0) -> str:
+    """Parse authenticated Copilot review bodies fail-closed."""
+    if inline_comment_count:
+        return "blocking"
+    normalized = "\n".join(line.rstrip() for line in body.strip().splitlines())
+    lower = normalized.lower()
+    if "changes recommended" in lower or "blocking" in lower and "no unresolved blocking issues" not in lower:
+        return "blocking"
+    verdict_shapes = (
+        r"### 🟢 Approval recommended\n+No unresolved blocking issues were identified\.?",
+        r"### 🟢 Approval recommended\n+No unresolved review comments remain\.?",
+    )
+    metadata = (
+        r"(?:\n+<details>\n<summary>Review details</summary>\n+"
+        r"- \*\*Files reviewed:\*\* \d+/\d+ changed files\n"
+        r"- \*\*Comments generated:\*\* 0 new\n"
+        r"- \*\*Review effort level:\*\* (?:Lite|Standard|Deep)\n</details>)?"
+    )
+    return "clear" if any(re.fullmatch(shape + metadata, normalized) for shape in verdict_shapes) else "unknown"
+
+
 def native_codex_clear_review(body: str, head_sha: str) -> bool:
     """Recognize authenticated Codex's native exact-head clear outcome."""
     raw = body.strip()
@@ -522,8 +543,18 @@ def read_pr_pool_review_comments(
                     continue
                 # Keep all reviewers' actionable states, including empty approvals
                 # which can supersede a human changes-requested review.
-                if state == "COMMENTED" and (login not in enabled or not _substantive_review_body(body)):
+                if state == "COMMENTED" and login not in enabled:
                     continue
+                if state == "COMMENTED" and not _substantive_review_body(body) and enabled.get(login) != "copilot":
+                    continue
+                inline_comment_count = 0
+                if enabled.get(login) == "copilot" and review.get("id"):
+                    inline = request_json(
+                        repository, token, "GET", f"pulls/{pr_number}/reviews/{review['id']}/comments?per_page=100"
+                    )
+                    if not isinstance(inline, list):
+                        return [], "Copilot review comments payload is not a list"
+                    inline_comment_count = len(inline)
                 reviews.append(
                     {
                         "id": review.get("id"),
@@ -535,6 +566,7 @@ def read_pr_pool_review_comments(
                         "source_kind": "review",
                         "submitted_at": review.get("submitted_at", ""),
                         "html_url": review.get("html_url", ""),
+                        "inline_comment_count": inline_comment_count,
                     }
                 )
             if len(payload) < 100:
@@ -595,20 +627,24 @@ def read_pr_pool_review_comments(
             trigger = parse_native_trigger(str(comment.get("body") or ""))
             if (
                 trigger is not None
-                and trigger.get("reviewer_agent") == "codex"
+                and trigger.get("reviewer_agent") in {"codex", "copilot"}
                 and trusted_collector_run(repository, token, trigger)
             ):
                 native_triggers.append((str(comment.get("created_at") or ""), trigger))
         for review_item in reviews:
-            if review_item.get("agent_id") != "codex" or review_item.get("source_kind") != "review":
+            if review_item.get("agent_id") not in {"codex", "copilot"} or review_item.get("source_kind") != "review":
                 continue
             eligible = [
                 t
                 for created, t in native_triggers
-                if created <= str(review_item.get("submitted_at") or "") and t.get("head_sha") == exact_head
+                if created <= str(review_item.get("submitted_at") or "")
+                and t.get("head_sha") == exact_head
+                and t.get("reviewer_agent") == review_item.get("agent_id")
             ]
             if eligible:
-                review_item["trigger_claims_id"] = eligible[-1]["claims_id"]
+                matched_trigger = eligible[-1]
+                review_item["trigger_claims_id"] = matched_trigger["claims_id"]
+                review_item["trigger_collector_run_id"] = matched_trigger["collector_run_id"]
         for comment in issue_comments:
             login = str(comment["user"].get("login") or "").lower()
             body = str(comment.get("body") or "")
@@ -1838,7 +1874,14 @@ def verify_pre_ready_hostile_review(
                 and review_acknowledgement(str(r.get("body") or "")) is not None
             )
         )
-        and _substantive_review_body(str(r.get("body") or ""))
+        and (
+            _substantive_review_body(str(r.get("body") or ""))
+            or (
+                r.get("agent_id") == "copilot"
+                and native_copilot_verdict(str(r.get("body") or ""), int(r.get("inline_comment_count") or 0))
+                != "unknown"
+            )
+        )
     ]
     # An out-of-band structured review avoids a self-referential artifact commit.
     # Only a document emitted by the authenticated exact-head reviewer is eligible.
@@ -1896,6 +1939,27 @@ def verify_pre_ready_hostile_review(
                         {
                             "head_sha": head_sha,
                             "claims_id": claims_id,
+                            "verdict": "clear",
+                        },
+                    )
+                )
+            if (
+                observation.get("agent_id") == "copilot"
+                and observation.get("source_kind") == "review"
+                and observation.get("trigger_claims_id") == claims_id
+                and observation.get("state") == "COMMENTED"
+                and native_copilot_verdict(
+                    str(observation.get("body") or ""), int(observation.get("inline_comment_count") or 0)
+                )
+                == "clear"
+            ):
+                adopted.append(
+                    (
+                        observation,
+                        {
+                            "head_sha": head_sha,
+                            "claims_id": claims_id,
+                            "collector_run_id": observation.get("trigger_collector_run_id"),
                             "verdict": "clear",
                         },
                     )

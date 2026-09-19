@@ -892,6 +892,20 @@ def verify_claims(
     if document.get("review_id") != review_id(claims):
         return ReviewVerdict("stale", "pre-ready hostile review identifier does not match its own claims")
 
+    authority = document.get("authority")
+    if isinstance(authority, dict):
+        recorded_head = authority.get("head_sha")
+        if (
+            head_sha is not None
+            and isinstance(recorded_head, str)
+            and _GIT_SHA.fullmatch(recorded_head)
+            and recorded_head.lower() != head_sha.lower()
+        ):
+            return ReviewVerdict(
+                "stale",
+                f"the pre-ready hostile review was recorded for exact head {recorded_head[:10]}, not the evaluated exact head {head_sha[:10]}",
+            )
+
     # Issue #467: the authority is document-level review metadata recorded beside
     # the canonical claims. It must exist and satisfy the authority contract
     # (Codex primary, recorded-reason OpenCode fallback) before anything that

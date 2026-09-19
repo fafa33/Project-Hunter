@@ -315,7 +315,9 @@ def parse_api_result(body: str) -> dict[str, Any] | None:
 
 def trigger_body(head: str, claims_id: str, agent: dict[str, Any], run_id: int, run_attempt: int, number: int) -> str:
     method = str(agent["trigger_method"])
-    if not method.startswith("github-pr-comment:") or not governance.reviewer_login(agent):
+    if not (
+        method.startswith("github-pr-comment:") or method.startswith("github-review-request:")
+    ) or not governance.reviewer_login(agent):
         raise ValueError("reviewer has no supported authenticated GitHub trigger")
     ack = {
         "schema": "hunter.review-ack.v1",
@@ -326,7 +328,8 @@ def trigger_body(head: str, claims_id: str, agent: dict[str, Any], run_id: int, 
         "collector_run_id": run_id,
     }
     return (
-        method.split(":", 1)[1] + f"\nReview exact HEAD {head} and the complete review request in "
+        (method.split(":", 1)[1] if method.startswith("github-pr-comment:") else "Trusted GitHub review request")
+        + f"\nReview exact HEAD {head} and the complete review request in "
         f"{review.REVIEW_RELATIVE_PATH}. Report any blocking findings; do not issue a clear verdict if any remain. "
         "After completing the substantive review, if all requested claims are satisfied and no blockers remain, "
         "reply with only this JSON result, filling in your own substantive summary: "
@@ -379,15 +382,23 @@ class GitHubBackend:
     def sleep(self, seconds: float) -> None:
         time.sleep(seconds)
 
-    def _candidate_diff(self) -> str:
-        url = f"https://api.github.com/repos/{self.repository}/pulls/{self.pr}"
+    def _candidate_diff(self) -> str | None:
+        pr = governance.request_json(self.repository, self.token, "GET", f"pulls/{self.pr}")
+        if not isinstance(pr, dict) or not isinstance(pr.get("base"), dict):
+            raise ValueError("pull request base ref is unavailable")
+        if str((pr.get("head") or {}).get("sha") or "") != self.expected_head:
+            raise ValueError("HEAD changed before immutable diff acquisition")
+        base_sha = str(pr["base"].get("sha") or "")
+        if not re.fullmatch(r"[0-9a-f]{40}", base_sha):
+            raise ValueError("pull request base SHA is invalid")
+        url = f"https://api.github.com/repos/{self.repository}/compare/{base_sha}...{self.expected_head}"
         req = urllib.request.Request(
             url, headers={"Authorization": f"Bearer {self.token}", "Accept": "application/vnd.github.v3.diff"}
         )
         with urllib.request.urlopen(req, timeout=30) as response:
             data = response.read(EXTERNAL_PROMPT_LIMIT + 1)
         if len(data) > EXTERNAL_PROMPT_LIMIT:
-            raise ValueError("candidate diff exceeds external reviewer context budget")
+            return None
         return data.decode("utf-8", errors="strict")
 
     def _invoke_external(self, agent: dict[str, Any], number: int) -> dict[str, Any]:
@@ -396,12 +407,18 @@ class GitHubBackend:
         key = os.environ.get(secret_name or "", "")
         if not key:
             return {"verdict": "unavailable", "summary": f"{provider} API key unavailable"}
+        candidate_diff = self._candidate_diff()
+        if candidate_diff is None:
+            return {
+                "verdict": "unavailable",
+                "summary": f"{provider} unavailable: exact-head diff exceeds bounded external reviewer context budget",
+            }
         prompt = (
             "You are an independent hostile code reviewer. Review the COMPLETE exact-head diff below. "
             f"Repository={self.repository} PR={self.pr} HEAD={self.expected_head} claims_id={self.claims_id}. "
             'Return JSON only: {"verdict":"clear|blocking","summary":"..."}. '
             "Use clear only when no substantive correctness, security, governance, exact-head, or fail-closed defect remains. "
-            "Any finding must use blocking.\n\nDIFF:\n" + self._candidate_diff()
+            "Any finding must use blocking.\n\nDIFF:\n" + candidate_diff
         )
         if provider == "gemini":
             url = "https://generativelanguage.googleapis.com/v1beta/models/gemini-3.8-flash:generateContent"
@@ -509,6 +526,26 @@ class GitHubBackend:
                     result_comment_id=result.get("comment_id"),
                 )
             return existing
+        if method.startswith("github-review-request:"):
+            trigger = self._post_comment(
+                trigger_body(self.expected_head, self.claims_id, agent, self.run_id, self.run_attempt, number)
+            )
+            reviewer = method.split(":", 1)[1]
+            try:
+                governance.request_json(
+                    self.repository,
+                    self.token,
+                    "POST",
+                    f"pulls/{self.pr}/requested_reviewers",
+                    {"reviewers": [reviewer]},
+                )
+            except Exception as exc:
+                trigger["collector_run_id"] = self.run_id
+                trigger["state"] = "unavailable"
+                trigger["request_error"] = type(exc).__name__
+                return trigger
+            trigger["collector_run_id"] = self.run_id
+            return trigger
         if method.startswith("api:"):
             provider = method.split(":", 1)[1]
             trigger = self._post_comment(
@@ -577,6 +614,8 @@ class GitHubBackend:
         )
 
     def response_state(self, agent: dict[str, Any], trigger: dict[str, Any]) -> str:
+        if trigger.get("state") == "unavailable":
+            return "unavailable"
         if str(agent["trigger_method"]).startswith("api:"):
             result = self._api_result(agent, trigger)
             if result is None:
@@ -599,10 +638,15 @@ class GitHubBackend:
                 return "blocking"
             if state == "APPROVED":
                 return "clear"
-            if state == "COMMENTED" and governance._substantive_review_body(body):
-                if agent.get("id") == "codex" and self._native_clear(body, self.expected_head):
-                    return "clear"
-                return "blocking"
+            if state == "COMMENTED":
+                if agent.get("id") == "codex" and governance._substantive_review_body(body):
+                    return "clear" if self._native_clear(body, self.expected_head) else "blocking"
+                if agent.get("id") == "copilot":
+                    comments = _pages(self.repository, self.token, f"pulls/{self.pr}/reviews/{item['id']}/comments")
+                    verdict = governance.native_copilot_verdict(body, len(comments))
+                    return verdict if verdict != "unknown" else "blocking"
+                if governance._substantive_review_body(body):
+                    return "blocking"
         for item in _pages(self.repository, self.token, f"issues/{self.pr}/comments"):
             if (item.get("user") or {}).get("login", "").lower() != login:
                 continue

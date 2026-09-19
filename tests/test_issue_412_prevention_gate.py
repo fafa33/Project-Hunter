@@ -614,7 +614,7 @@ def _authority(
     if authority_type != "codex":
         default_attempts = [dict(_attempt())]
         if authority_type == "opencode":
-            default_attempts += [dict(_attempt("gemini")), dict(_attempt("groq"))]
+            default_attempts += [dict(_attempt("copilot")), dict(_attempt("gemini")), dict(_attempt("groq"))]
         authority["reviewer_attempts"] = list(attempts) if attempts is not None else default_attempts
     authority.update(overrides)
     return authority
@@ -820,8 +820,9 @@ def test_a_fallback_review_of_the_exact_head_is_valid_when_codex_is_unavailable(
         monkeypatch,
         _pool(
             agents=(
-                {**ALTERNATE_AGENT, "id": "gemini", "priority": 2, "retryable": False},
-                {**ALTERNATE_AGENT, "id": "groq", "priority": 3, "retryable": False},
+                {**ALTERNATE_AGENT, "id": "copilot", "priority": 2, "retryable": False},
+                {**ALTERNATE_AGENT, "id": "gemini", "priority": 3, "retryable": False},
+                {**ALTERNATE_AGENT, "id": "groq", "priority": 4, "retryable": False},
             )
         ),
     )

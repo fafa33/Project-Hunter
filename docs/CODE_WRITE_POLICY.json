@@ -41,7 +41,7 @@
       ],
       "reviewer_pool": {
         "model": "ordered-priority-with-failover",
-        "ordering": "strict-priority-first: Codex, then server-side Gemini API, then server-side Groq API; each enabled reviewer is attempted exactly once per exact HEAD before the Hostile-Review last resort.",
+        "ordering": "strict-priority-first: Codex, then authenticated GitHub Copilot code review, then server-side Gemini API, then server-side Groq API; each enabled reviewer is attempted exactly once per exact HEAD before the Hostile-Review last resort.",
         "last_resort": "opencode",
         "exhaustion_semantics": "Every enabled higher-priority reviewer is invoked exactly once per exact HEAD. Authenticated explicit unavailability fails over immediately; silence is bounded by the configured timeout. Clear or blocking substantive responses stop failover. Trusted collector receipts bind trigger identity, head, timing and terminal outcome; malformed or unavailable evidence fails closed.",
         "timeout_policy": {
@@ -62,13 +62,27 @@
             "retryable": false,
             "evidence_parser": "github-review-ack.v1",
             "fallback_eligibility": false,
-            "note": "Tier 1 primary reviewer. chatgpt-codex-connector[bot] is the only agent-reviewer integration observed on this repository (COMMENTED reviews on PRs #458, #460, #466); every other PR has zero reviews, so the Tier 2 pool is empty until an approved agent reviewer is actually installed on the repository.",
-            "evidence": "Discovered by inspecting check-suites and PR reviews on main (commit dca20dd): installed apps are claude, freebuff-web, github-actions, railway-app, tembo, vercel; no Copilot code review, CodeRabbit, Jules, or CODEOWNERS exists on this repository.",
+            "note": "Tier 1 primary reviewer. The historical observation below predates the PR #480 Copilot bootstrap; Copilot is now separately configured as the authenticated Tier 2 fallback.",
+            "evidence": "Historical pre-bootstrap observation at main commit dca20dd; superseded for Copilot availability by authenticated exact-head reviews observed on PR #480. It remains provenance, not current reviewer-pool state.",
             "github_login": "chatgpt-codex-connector[bot]"
           },
           {
-            "id": "gemini",
+            "id": "copilot",
             "priority": 2,
+            "enabled": true,
+            "trigger_method": "github-review-request:copilot-pull-request-reviewer[bot]",
+            "exact_head_support": true,
+            "timeout_seconds": 300,
+            "retryable": false,
+            "evidence_parser": "github-review-native.v1",
+            "fallback_eligibility": false,
+            "note": "Authenticated GitHub Copilot pull-request review is an authority-eligible fallback after Codex unavailability. Exact-head binding and trusted collector request are required.",
+            "evidence": "GitHub review identity copilot-pull-request-reviewer[bot] is observed on PR #480 and is bound to exact commit_id; candidate-authored comments cannot impersonate this GitHub App.",
+            "github_login": "copilot-pull-request-reviewer[bot]"
+          },
+          {
+            "id": "gemini",
+            "priority": 3,
             "enabled": true,
             "trigger_method": "api:gemini",
             "exact_head_support": true,
@@ -81,7 +95,7 @@
           },
           {
             "id": "groq",
-            "priority": 3,
+            "priority": 4,
             "enabled": true,
             "trigger_method": "api:groq",
             "exact_head_support": true,

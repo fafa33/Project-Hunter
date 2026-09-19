@@ -510,14 +510,15 @@ def test_substantive_rate_limit_phrase_is_not_unavailability():
     )
 
 
-def test_policy_enables_server_side_gemini_and_groq_after_codex():
+def test_policy_orders_copilot_before_server_side_api_fallbacks():
     pool, error = collector.review.load_reviewer_pool()
     assert not error and pool is not None
     agents = sorted(collector.review.enabled_pool_reviewers(pool), key=lambda a: a["priority"])
-    assert [(a["id"], a["priority"]) for a in agents[:3]] == [("codex", 1), ("gemini", 2), ("groq", 3)]
-    assert agents[1]["trigger_method"] == "api:gemini"
-    assert agents[2]["trigger_method"] == "api:groq"
-    assert all(a["timeout_seconds"] == 300 for a in agents[:3])
+    assert [(a["id"], a["priority"]) for a in agents[:4]] == [("codex", 1), ("copilot", 2), ("gemini", 3), ("groq", 4)]
+    assert agents[1]["trigger_method"] == "github-review-request:copilot-pull-request-reviewer[bot]"
+    assert agents[2]["trigger_method"] == "api:gemini"
+    assert agents[3]["trigger_method"] == "api:groq"
+    assert all(a["timeout_seconds"] == 300 for a in agents[:4])
 
 
 def test_collector_workflow_exposes_only_server_reviewer_secrets():
@@ -944,3 +945,118 @@ def test_parse_native_trigger_binds_head_claims_run_and_attempt():
         "attempt_number": 1,
     }
     assert collector.parse_native_trigger(body.replace(HEAD, "b" * 40, 1)) is None
+
+
+# Bootstrap regression: an oversized exact-head diff is bounded unavailability,
+# never an exception that aborts the ordered reviewer walk.
+def test_external_reviewer_oversized_diff_is_bounded_unavailability(monkeypatch):
+    backend = collector.GitHubBackend("owner/repo", "token", 473, HEAD, "d" * 64, 123, 1)
+    monkeypatch.setenv("GEMINI_API_KEY", "present")
+
+    class OversizedResponse:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_args):
+            return False
+
+        def read(self, _limit=None):
+            return b"x" * (collector.EXTERNAL_PROMPT_LIMIT + 1)
+
+    monkeypatch.setattr(
+        collector.governance,
+        "request_json",
+        lambda *_args, **_kwargs: {"state": "open", "base": {"sha": "0" * 40}, "head": {"sha": HEAD}},
+    )
+    monkeypatch.setattr(collector.urllib.request, "urlopen", lambda *_args, **_kwargs: OversizedResponse())
+    payload = backend._invoke_external({"id": "gemini", "timeout_seconds": 300, "trigger_method": "api:gemini"}, 1)
+    assert payload["verdict"] == "unavailable"
+    assert "context budget" in payload["summary"]
+
+
+def test_candidate_diff_preserves_legitimate_empty_diff(monkeypatch):
+    backend = collector.GitHubBackend("owner/repo", "token", 473, HEAD, "d" * 64, 123, 1)
+
+    class EmptyResponse:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_args):
+            return False
+
+        def read(self, _limit=None):
+            return b""
+
+    monkeypatch.setattr(
+        collector.governance,
+        "request_json",
+        lambda *_args, **_kwargs: {"state": "open", "base": {"sha": "0" * 40}, "head": {"sha": HEAD}},
+    )
+    monkeypatch.setattr(collector.urllib.request, "urlopen", lambda *_args, **_kwargs: EmptyResponse())
+    assert backend._candidate_diff() == ""
+
+
+def test_copilot_policy_uses_authenticated_review_request():
+    pool, error = collector.review.load_reviewer_pool()
+    assert not error and pool is not None
+    copilot = next(a for a in collector.review.enabled_pool_reviewers(pool) if a["id"] == "copilot")
+    assert copilot["github_login"] == "copilot-pull-request-reviewer[bot]"
+    assert copilot["trigger_method"] == "github-review-request:copilot-pull-request-reviewer[bot]"
+    assert copilot["timeout_seconds"] == 300
+    assert copilot["retryable"] is False
+
+
+def test_copilot_comment_review_with_findings_is_blocking(monkeypatch):
+    backend = collector.GitHubBackend("owner/repo", "token", 480, HEAD, "d" * 64, 123, 1)
+    agent = {
+        "id": "copilot",
+        "trigger_method": "github-review-request:copilot-pull-request-reviewer[bot]",
+        "github_login": "copilot-pull-request-reviewer[bot]",
+    }
+    trigger = {"created_at": "2026-09-18T20:00:00Z", "collector_run_id": 123, "id": 9}
+    review = {
+        "id": 77,
+        "user": {"login": "copilot-pull-request-reviewer[bot]"},
+        "submitted_at": "2026-09-18T20:01:00Z",
+        "commit_id": HEAD,
+        "state": "COMMENTED",
+        "body": "Changes recommended",
+    }
+
+    def pages(_repo, _token, path):
+        if path.endswith("/reviews"):
+            return [review]
+        if "/reviews/77/comments" in path:
+            return [{"id": 1}]
+        return []
+
+    monkeypatch.setattr(collector, "_pages", pages)
+    assert backend.response_state(agent, trigger) == "blocking"
+
+
+def test_copilot_clean_exact_head_review_is_clear(monkeypatch):
+    backend = collector.GitHubBackend("owner/repo", "token", 480, HEAD, "d" * 64, 123, 1)
+    agent = {
+        "id": "copilot",
+        "trigger_method": "github-review-request:copilot-pull-request-reviewer[bot]",
+        "github_login": "copilot-pull-request-reviewer[bot]",
+    }
+    trigger = {"created_at": "2026-09-18T20:00:00Z", "collector_run_id": 123, "id": 9}
+    review = {
+        "id": 78,
+        "user": {"login": "copilot-pull-request-reviewer[bot]"},
+        "submitted_at": "2026-09-18T20:01:00Z",
+        "commit_id": HEAD,
+        "state": "COMMENTED",
+        "body": "### 🟢 Approval recommended\n\nNo unresolved blocking issues were identified.",
+    }
+
+    def pages(_repo, _token, path):
+        if path.endswith("/reviews"):
+            return [review]
+        if "/reviews/78/comments" in path:
+            return []
+        return []
+
+    monkeypatch.setattr(collector, "_pages", pages)
+    assert backend.response_state(agent, trigger) == "clear"
