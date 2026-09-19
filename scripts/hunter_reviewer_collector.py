@@ -985,21 +985,49 @@ class GitHubBackend:
                     self.generation_id,
                 )
             )
-            payload = self._invoke_external(agent, number)
+            # A durable trigger comment now exists. Any later reviewer/API
+            # rejection must preserve that identity; letting it escape to the
+            # outer pre-trigger handler would incorrectly record trigger_id=0.
+            try:
+                payload = self._invoke_external(agent, number)
+            except governance.transport.GitHubRequestError as exc:
+                if not reviewer_dispatch_unavailable(exc):
+                    raise
+                trigger.update(
+                    provider=provider,
+                    head_sha=self.expected_head,
+                    state="unavailable",
+                    collector_run_id=self.run_id,
+                    request_error=type(exc).__name__,
+                )
+                return trigger
             state = "unavailable" if payload.get("verdict") == "unavailable" else external_verdict(payload)
             digest = hashlib.sha256(json.dumps(payload, sort_keys=True, separators=(",", ":")).encode()).hexdigest()
-            result_comment = self._post_comment(
-                api_result_body(
-                    self.expected_head,
-                    self.claims_id,
-                    agent,
-                    self.run_id,
-                    int(trigger["id"]),
-                    state,
-                    str(payload.get("summary") or ""),
-                    digest,
+            try:
+                result_comment = self._post_comment(
+                    api_result_body(
+                        self.expected_head,
+                        self.claims_id,
+                        agent,
+                        self.run_id,
+                        int(trigger["id"]),
+                        state,
+                        str(payload.get("summary") or ""),
+                        digest,
+                    )
                 )
-            )
+            except governance.transport.GitHubRequestError as exc:
+                if not reviewer_dispatch_unavailable(exc):
+                    raise
+                trigger.update(
+                    provider=provider,
+                    response_digest=digest,
+                    head_sha=self.expected_head,
+                    state="unavailable",
+                    collector_run_id=self.run_id,
+                    request_error=type(exc).__name__,
+                )
+                return trigger
             if state == "clear":
                 self._post_comment(
                     json.dumps(

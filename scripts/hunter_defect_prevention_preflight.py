@@ -1644,9 +1644,42 @@ def validate_review_request_lifecycle_contract() -> list[str]:
     if readiness.review_wait_state("PREREQUISITE_BLOCKED", "") is not None:
         errors.append("merge readiness must not project PREREQUISITE_BLOCKED as pending: it is a decided block")
 
-    # A prerequisite cycle records no collector dispatch. Checked on the AST of
-    # the call itself, so it cannot be satisfied by the literal appearing anywhere
-    # else in the module.
+    # Prove the lifecycle edges are wired, not merely defined. A detached guard
+    # function is dead code and must not satisfy DPM.
+    pre_push_tree, pre_push_error = _module_ast("scripts/hunter_pre_push.py")
+    if pre_push_tree is None:
+        errors.append(f"review-request lifecycle source unavailable ({pre_push_error})")
+    else:
+        enforce = next(
+            (
+                n
+                for n in ast.walk(pre_push_tree)
+                if isinstance(n, ast.FunctionDef) and n.name == "enforce_declared_review_request"
+            ),
+            None,
+        )
+        boundary = next(
+            (n for n in ast.walk(pre_push_tree) if isinstance(n, ast.FunctionDef) and n.name == "enforce_pre_push"),
+            None,
+        )
+        if enforce is None or not any(
+            isinstance(call, ast.Call)
+            and isinstance(call.func, ast.Attribute)
+            and call.func.attr == "verify_local_review_request"
+            for call in ast.walk(enforce)
+        ):
+            errors.append("enforce_declared_review_request must execute verify_local_review_request")
+        if boundary is None or not any(
+            isinstance(call, ast.Call)
+            and isinstance(call.func, ast.Name)
+            and call.func.id == "enforce_declared_review_request"
+            for call in ast.walk(boundary)
+        ):
+            errors.append("enforce_pre_push must execute enforce_declared_review_request")
+
+    # A prerequisite transition may not invent a dispatch identity, but it must
+    # preserve one that already exists for this exact head. Otherwise a temporary
+    # prerequisite regression erases idempotency state and permits duplicate work.
     tree, error = _module_ast("scripts/hunter_review_orchestrator.py")
     if tree is None:
         errors.append(f"review-request lifecycle source unavailable ({error})")
@@ -1659,17 +1692,36 @@ def validate_review_request_lifecycle_contract() -> list[str]:
         ),
         None,
     )
+    ensure_current = next(
+        (node for node in ast.walk(tree) if isinstance(node, ast.FunctionDef) and node.name == "ensure_current"),
+        None,
+    )
     if publisher is None:
         return errors
+    if not any(arg.arg == "previous" for arg in (*publisher.args.args, *publisher.args.kwonlyargs)):
+        errors.append("publish_prerequisite_block must accept the previous cycle so dispatch identity cannot be erased")
+    trigger_values = []
     for call in ast.walk(publisher):
-        if not (isinstance(call, ast.Call) and isinstance(call.func, ast.Name) and call.func.id == "ReviewCycle"):
-            continue
-        trigger = next((kw.value for kw in call.keywords if kw.arg == "trigger_id"), None)
-        if not (isinstance(trigger, ast.Constant) and trigger.value is None):
-            errors.append(
-                "publish_prerequisite_block must record trigger_id=None: a prerequisite block dispatches no "
-                "collector, and a non-None trigger id makes ensure_collector skip the first real dispatch"
-            )
+        if isinstance(call, ast.Call) and isinstance(call.func, ast.Name) and call.func.id == "ReviewCycle":
+            trigger_values.extend(kw.value for kw in call.keywords if kw.arg == "trigger_id")
+    trigger_source = " ".join(ast.unparse(value) for value in trigger_values)
+    if "previous.trigger_id" not in trigger_source or "None" not in trigger_source:
+        errors.append(
+            "prerequisite publication must preserve previous.trigger_id and use None only when no dispatch exists"
+        )
+    if any(
+        isinstance(call, ast.Call) and isinstance(call.func, ast.Name) and call.func.id == "current_run_id"
+        for call in ast.walk(publisher)
+    ):
+        errors.append("a prerequisite publisher must never mint a collector trigger id from the current reconcile run")
+    if ensure_current is None or not any(
+        isinstance(call, ast.Call)
+        and isinstance(call.func, ast.Name)
+        and call.func.id == "publish_prerequisite_block"
+        and any(keyword.arg == "previous" for keyword in call.keywords)
+        for call in ast.walk(ensure_current)
+    ):
+        errors.append("ensure_current must pass the existing cycle into prerequisite publication")
     return errors
 
 
@@ -1750,6 +1802,51 @@ def validate_reviewer_unavailability_is_per_reviewer() -> list[str]:
             "collect_attempts must invoke backend.trigger inside a try so one undrivable "
             "reviewer cannot end the collection before the rest of the pool is invoked"
         )
+
+    # Once an API trigger comment exists, later provider/result failures are no
+    # longer pre-trigger rejection. The backend must classify them before they
+    # escape to collect_attempts, otherwise the outer handler records trigger_id=0
+    # and destroys the durable invocation identity.
+    backend = next(
+        (node for node in ast.walk(tree) if isinstance(node, ast.ClassDef) and node.name == "GitHubBackend"),
+        None,
+    )
+    trigger_method = (
+        next(
+            (node for node in ast.walk(backend) if isinstance(node, ast.FunctionDef) and node.name == "trigger"),
+            None,
+        )
+        if backend is not None
+        else None
+    )
+    # Small synthetic DPM fixtures need not reproduce the whole backend class.
+    # When the production backend exists, however, its post-trigger boundary is
+    # part of the invariant and is checked below.
+    if backend is not None and trigger_method is None:
+        errors.append("GitHubBackend.trigger is missing from the reviewer collector")
+    elif trigger_method is not None:
+        protected_post_trigger = False
+        for attempt in (node for node in ast.walk(trigger_method) if isinstance(node, ast.Try)):
+            calls = [
+                call
+                for call in ast.walk(attempt)
+                if isinstance(call, ast.Call) and isinstance(call.func, ast.Attribute)
+            ]
+            if not any(call.func.attr == "_invoke_external" for call in calls):
+                continue
+            if any(
+                isinstance(call, ast.Call)
+                and isinstance(call.func, ast.Name)
+                and call.func.id == "reviewer_dispatch_unavailable"
+                for handler in attempt.handlers
+                for call in ast.walk(handler)
+            ):
+                protected_post_trigger = True
+        if not protected_post_trigger:
+            errors.append(
+                "GitHubBackend.trigger must classify API failure after durable trigger creation "
+                "without letting collect_attempts erase the trigger identity"
+            )
     return errors
 
 

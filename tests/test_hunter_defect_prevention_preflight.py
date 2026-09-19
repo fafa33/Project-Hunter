@@ -285,7 +285,7 @@ def test_lifecycle_contract_rejects_a_prerequisite_block_that_records_a_dispatch
 
     errors = prevention.validate_review_request_lifecycle_contract()
 
-    assert any("trigger_id=None" in error for error in errors)
+    assert any("previous.trigger_id" in error or "current reconcile run" in error for error in errors)
 
 
 def test_lifecycle_contract_is_not_satisfied_by_a_commented_trigger_id(tmp_path, monkeypatch):
@@ -304,7 +304,7 @@ def test_lifecycle_contract_is_not_satisfied_by_a_commented_trigger_id(tmp_path,
         (tmp_path / "scripts" / name).write_text(body, encoding="utf-8")
     monkeypatch.setattr(prevention, "ROOT", tmp_path)
 
-    assert any("trigger_id=None" in error for error in prevention.validate_review_request_lifecycle_contract())
+    assert any("previous.trigger_id" in error for error in prevention.validate_review_request_lifecycle_contract())
 
 
 def test_lifecycle_contract_accepts_an_equivalent_prerequisite_publisher(tmp_path, monkeypatch):
@@ -315,18 +315,22 @@ def test_lifecycle_contract_accepts_an_equivalent_prerequisite_publisher(tmp_pat
         "hunter_pre_ready_review.py": "def verify_local_review_request():\n    pass\n",
         "hunter_pre_push.py": "def enforce_declared_review_request():\n    pass\n",
         "hunter_review_orchestrator.py": (
-            "def publish_prerequisite_block(repo, tok, number, sha, why):\n"
+            "def publish_prerequisite_block(repo, tok, number, sha, why, *, previous=None):\n"
             "    record = ReviewCycle(\n"
             "        state=prerequisite_cycle_state(why),\n"
-            "        trigger_id=None,\n"
+            "        trigger_id=previous.trigger_id if previous is not None else None,\n"
             "    )\n"
             "    return record\n"
+            "def ensure_current(repo, tok, number):\n"
+            "    return publish_prerequisite_block(repo, tok, number, 'h', 'x', previous=None)\n"
         ),
     }.items():
         (tmp_path / "scripts" / name).write_text(body, encoding="utf-8")
     monkeypatch.setattr(prevention, "ROOT", tmp_path)
 
-    assert not [e for e in prevention.validate_review_request_lifecycle_contract() if "trigger_id" in e]
+    assert not [
+        e for e in prevention.validate_review_request_lifecycle_contract() if "trigger_id" in e or "existing cycle" in e
+    ]
 
 
 def test_lifecycle_contract_rejects_unreadable_evidence_treated_as_absent(monkeypatch):

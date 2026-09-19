@@ -861,23 +861,34 @@ def prerequisite_cycle_state(reason: str) -> str:
     return TRANSIENT_PREREQUISITE_STATES.get(code, "PREREQUISITE_BLOCKED")
 
 
-def publish_prerequisite_block(repository: str, token: str, pr_number: int, head_sha: str, reason: str) -> ReviewCycle:
-    """Publish the exact-head prerequisite state without dispatching a reviewer."""
+def publish_prerequisite_block(
+    repository: str,
+    token: str,
+    pr_number: int,
+    head_sha: str,
+    reason: str,
+    *,
+    previous: ReviewCycle | None = None,
+) -> ReviewCycle:
+    """Publish a prerequisite state without losing an existing dispatch identity.
 
+    A prerequisite transition never creates a collector identity. If this exact
+    head already has one, however, dropping it would make the next reconciliation
+    believe no collector exists and permit a duplicate dispatch. Preserve that
+    durable identity, timestamp and generation while changing only the
+    prerequisite state.
+    """
+
+    preserve = previous is not None and previous.head_sha == head_sha and previous.trigger_id is not None
     cycle = ReviewCycle(
         pr_number=pr_number,
         head_sha=head_sha,
         state=prerequisite_cycle_state(reason),
         provider_id=_prerequisite_code(reason),
-        # No collector was dispatched, so this cycle records no dispatch
-        # identity. `trigger_id` means "the orchestrator run that dispatched a
-        # collector for this head"; writing this reconcile run's id there made
-        # `ensure_collector` read the cycle as an existing dispatch and skip the
-        # first real Collector dispatch for the whole liveness grace -- a
-        # prerequisite block suppressing the very reviewer it was waiting for.
-        trigger_id=None,
-        started_at=datetime.now(UTC).strftime("%Y-%m-%dT%H:%M:%SZ"),
+        trigger_id=previous.trigger_id if preserve else None,
+        started_at=previous.started_at if preserve else datetime.now(UTC).strftime("%Y-%m-%dT%H:%M:%SZ"),
         config_digest=reviewer_pool_config_digest(),
+        generation_id=previous.generation_id if preserve else BASE_GENERATION_ID,
     )
     publish_cycle(repository, token, head_sha, cycle=cycle)
     print(f"Review orchestration prerequisite blocked for PR #{pr_number} at {head_sha[:10]}: {reason}")
@@ -893,7 +904,15 @@ def ensure_current(repository: str, token: str, pr_number: int) -> ReviewCycle |
         raise RuntimeError("current pull-request head is unavailable")
     ready, claims_id, reason = review_request_state(repository, token, pr_number, head_sha)
     if not ready:
-        return publish_prerequisite_block(repository, token, pr_number, head_sha, reason)
+        cycle_state, previous, _cycle_error = read_cycle(repository, token, pr_number, head_sha)
+        return publish_prerequisite_block(
+            repository,
+            token,
+            pr_number,
+            head_sha,
+            reason,
+            previous=previous if cycle_state == "present" else None,
+        )
     # Derived here, never accepted from a dispatch input or from candidate prose:
     # the generation is what authorises one more reviewer invocation, so only
     # trusted GitHub review-thread state may decide it.

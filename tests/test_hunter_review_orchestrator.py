@@ -556,7 +556,7 @@ def test_current_pr_publishes_prerequisite_failure_without_dispatch(monkeypatch)
     monkeypatch.setattr(
         orchestrator,
         "publish_prerequisite_block",
-        lambda _repo, _token, pr, head, reason: blocked.append((pr, head, reason))
+        lambda _repo, _token, pr, head, reason, **_kwargs: blocked.append((pr, head, reason))
         or make_cycle(state="PREREQUISITE_BLOCKED", provider_id="REVIEW_REQUEST_INVALID"),
     )
 
@@ -974,3 +974,54 @@ def test_an_absent_request_still_waits_end_to_end(monkeypatch):
     _ready, _claims, reason = orchestrator.review_request_state("owner/repo", "token", 472, HEAD)
 
     assert orchestrator.prerequisite_cycle_state(reason) == "WAITING_FOR_REVIEW_REQUEST"
+
+
+def test_prerequisite_regression_preserves_existing_collector_identity(monkeypatch):
+    """A prerequisite regression may block, but must not erase an in-flight dispatch."""
+    previous = make_cycle(
+        state="WAITING_FOR_REVIEWER",
+        trigger_id=777,
+        started_at="2026-09-19T18:00:00Z",
+        generation_id="a" * 16,
+    )
+    published = _publish_harness(monkeypatch)
+
+    cycle = orchestrator.publish_prerequisite_block(
+        "owner/repo",
+        "token",
+        472,
+        HEAD,
+        "REVIEW_REQUEST_UNAVAILABLE:transport",
+        previous=previous,
+    )
+
+    assert cycle.state == "PREREQUISITE_BLOCKED"
+    assert cycle.trigger_id == 777
+    assert cycle.started_at == previous.started_at
+    assert cycle.generation_id == previous.generation_id
+    assert published == [cycle]
+
+
+def test_ensure_current_carries_existing_dispatch_through_prerequisite_failure(monkeypatch):
+    previous = make_cycle(state="WAITING_FOR_REVIEWER", trigger_id=777, generation_id="a" * 16)
+    monkeypatch.setattr(
+        orchestrator,
+        "request_json",
+        lambda *_args: {"state": "open", "head": {"sha": HEAD}},
+    )
+    monkeypatch.setattr(
+        orchestrator,
+        "review_request_state",
+        lambda *_args: (False, "", "REVIEW_REQUEST_INVALID:changed"),
+    )
+    monkeypatch.setattr(orchestrator, "read_cycle", lambda *_args: ("present", previous, None))
+    monkeypatch.setattr(orchestrator, "reviewer_pool_config_digest", lambda: previous.config_digest)
+    published = []
+    monkeypatch.setattr(orchestrator, "publish_cycle", lambda *_args, cycle: published.append(cycle))
+
+    result = orchestrator.ensure_current("owner/repo", "token", 472)
+
+    assert result is not None
+    assert result.state == "PREREQUISITE_BLOCKED"
+    assert result.trigger_id == 777
+    assert result.generation_id == previous.generation_id

@@ -1936,3 +1936,77 @@ def test_an_undrivable_api_reviewer_is_isolated_like_a_workflow_reviewer():
     assert backend.triggered == ["gemini", "codex"]
     assert records[0]["outcome"] == "unavailable"
     assert records[0]["trigger_id"] == 0
+
+
+def test_api_failure_after_trigger_creation_preserves_trigger_identity(monkeypatch):
+    """A provider rejection after the trigger comment exists is not a zero-id refusal."""
+    backend = _backend()
+    agent = {
+        "id": "gemini",
+        "trigger_method": "api:gemini",
+        "priority": 1,
+        "enabled": True,
+        "retryable": False,
+        "ack_timeout_seconds": 1,
+        "review_timeout_seconds": 1,
+        "evidence_parser": "parser",
+        "authority_eligible": True,
+    }
+    monkeypatch.setattr(collector, "_pages", lambda *_a, **_k: [])
+    monkeypatch.setattr(
+        backend,
+        "_post_comment",
+        lambda _body: {
+            "id": 991,
+            "created_at": "2026-09-19T18:00:00Z",
+            "body": "trigger",
+        },
+    )
+
+    def fail_after_trigger(*_args, **_kwargs):
+        raise _request_error(403)
+
+    monkeypatch.setattr(backend, "_invoke_external", fail_after_trigger)
+
+    trigger = backend.trigger(agent, 1)
+
+    assert trigger["id"] == 991
+    assert trigger["state"] == "unavailable"
+    assert trigger["collector_run_id"] == backend.run_id
+
+
+def test_collect_attempts_keeps_nonzero_identity_for_post_trigger_api_failure(monkeypatch):
+    backend = _backend()
+    agent = {
+        "id": "gemini",
+        "trigger_method": "api:gemini",
+        "priority": 1,
+        "enabled": True,
+        "retryable": False,
+        "ack_timeout_seconds": 1,
+        "review_timeout_seconds": 1,
+        "evidence_parser": "parser",
+        "authority_eligible": True,
+    }
+    pool = {"timeout_policy": {"retries_per_agent": 0}, "agents": [agent]}
+    monkeypatch.setattr(backend, "head", lambda: HEAD)
+    monkeypatch.setattr(collector, "_pages", lambda *_a, **_k: [])
+    monkeypatch.setattr(
+        backend,
+        "_post_comment",
+        lambda _body: {
+            "id": 992,
+            "created_at": "2026-09-19T18:00:00Z",
+            "body": "trigger",
+        },
+    )
+    monkeypatch.setattr(
+        backend,
+        "_invoke_external",
+        lambda *_a, **_k: (_ for _ in ()).throw(_request_error(422)),
+    )
+
+    records = collector.collect_attempts(pool, HEAD, backend)
+
+    assert records[0]["outcome"] == "unavailable"
+    assert records[0]["trigger_id"] == 992
