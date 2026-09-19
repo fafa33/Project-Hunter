@@ -1,13 +1,10 @@
 name: Hunter Reviewer Collector
 
+run-name: >-
+  Hunter Reviewer Collector PR ${{ inputs.pr_number }} HEAD ${{ inputs.head_sha }}${{
+  inputs.generation_id && format(' GEN {0}', inputs.generation_id) || '' }}
+
 on:
-  pull_request_target:
-    branches:
-      - main
-    types:
-      - opened
-      - reopened
-      - synchronize
   workflow_dispatch:
     inputs:
       pr_number:
@@ -18,14 +15,27 @@ on:
         description: Exact 40-character candidate HEAD
         required: true
         type: string
+      generation_id:
+        description: >-
+          Remediation generation of this exact head, or empty for the candidate's
+          first cycle. The collector re-derives it from trusted review-thread
+          state and fails closed on disagreement, so this input correlates the
+          run; it never authorises one.
+        required: false
+        default: ""
+        type: string
 
+# `actions: write` is what lets this collector dispatch a reviewer that runs as
+# its own workflow. The collector is dispatch-only: the trusted default-branch
+# orchestrator is the single entry point, so PR lifecycle events cannot race or
+# duplicate the exact-head collector cycle.
 permissions:
   contents: read
-  actions: read
+  actions: write
   pull-requests: write
 
 concurrency:
-  group: hunter-reviewer-collector-${{ github.event.pull_request.number || inputs.pr_number }}
+  group: hunter-reviewer-collector-${{ inputs.pr_number }}
   cancel-in-progress: false
 
 jobs:
@@ -43,15 +53,17 @@ jobs:
           GITHUB_TOKEN: ${{ github.token }}
           GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
           GROQ_API_KEY: ${{ secrets.GROQ_API_KEY }}
-          PR_NUMBER: ${{ github.event.pull_request.number || inputs.pr_number }}
-          CANDIDATE_HEAD: ${{ github.event.pull_request.head.sha || inputs.head_sha }}
+          PR_NUMBER: ${{ inputs.pr_number }}
+          CANDIDATE_HEAD: ${{ inputs.head_sha }}
+          REMEDIATION_GENERATION: ${{ inputs.generation_id }}
         run: >-
           python scripts/hunter_reviewer_collector.py
           --pr "$PR_NUMBER" --head "$CANDIDATE_HEAD"
+          --generation "$REMEDIATION_GENERATION"
           --output reviewer-results.json
       - uses: actions/upload-artifact@v4
         with:
-          name: hunter-reviewer-results-${{ github.event.pull_request.head.sha || inputs.head_sha }}-${{ github.run_attempt }}
+          name: hunter-reviewer-results-${{ inputs.head_sha }}-${{ github.run_attempt }}
           path: reviewer-results.json
           if-no-files-found: error
           retention-days: 30

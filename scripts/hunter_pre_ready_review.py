@@ -99,7 +99,6 @@ FINDING_RESOLUTIONS = frozenset({"resolved", "unresolved"})
 #: lower-tier reviewer without the exhaustion trail, or a guard review that
 #: skipped an enabled reviewer, is a bypass and fails closed.
 CODEX_REVIEW_AUTHORITY = "codex"
-OPENCODE_REVIEW_AUTHORITY = "opencode"
 #: The field the canonical reviewer pool is declared under inside
 #: ``review_authority`` of CODE_WRITE_POLICY.json.
 REVIEWER_POOL_FIELD = "reviewer_pool"
@@ -355,6 +354,81 @@ def document_for(claims: dict[str, Any], authority: dict[str, Any] | None = None
 # --- Ordered reviewer pool --------------------------------------------------
 
 
+def _number(value: Any) -> float | None:
+    """A real numeric measurement; booleans are claims, not measurements."""
+
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        return None
+    return float(value)
+
+
+def _quality_gate_problems(entry: Mapping[str, Any], agent_id: Any) -> list[str]:
+    """Bind authority eligibility to the reviewer's own recorded benchmark result.
+
+    A reviewer that declares a required quality gate is authority-eligible only
+    while its recorded benchmark actually meets the thresholds that gate
+    declares. Without this the eligibility flag is an independent assertion:
+    flipping ``authority_eligible`` to true -- or simply deleting it, since an
+    absent flag defaults to eligible -- would promote a triage-only or
+    benchmark-failing reviewer to full review authority with nothing in trusted
+    parsing to contradict it. The invariant is enforced here, in the shared
+    parser every consumer reads the pool through, rather than only in the
+    configuration file that the flag lives in or in tests that read it.
+    """
+
+    problems: list[str] = []
+    authority_eligible = entry.get("authority_eligible")
+    if authority_eligible is not None and not isinstance(authority_eligible, bool):
+        problems.append(f"{REVIEWER_POOL_FIELD} agent {agent_id!r} authority_eligible must be a boolean when declared")
+        authority_eligible = None
+    gate = entry.get("quality_gate")
+    if gate is None:
+        return problems
+    if not isinstance(gate, Mapping):
+        return problems + [f"{REVIEWER_POOL_FIELD} agent {agent_id!r} quality_gate must be an object"]
+    if gate.get("required") is not True:
+        return problems
+
+    minimum_recall = _number(gate.get("minimum_recall"))
+    maximum_false_positive_rate = _number(gate.get("maximum_false_positive_rate"))
+    if not isinstance(gate.get("benchmark_id"), str) or not str(gate["benchmark_id"]).strip():
+        problems.append(f"{REVIEWER_POOL_FIELD} agent {agent_id!r} quality_gate must name its benchmark_id")
+    if minimum_recall is None or maximum_false_positive_rate is None:
+        problems.append(
+            f"{REVIEWER_POOL_FIELD} agent {agent_id!r} quality_gate must declare numeric minimum_recall "
+            "and maximum_false_positive_rate thresholds"
+        )
+    benchmark = gate.get("last_benchmark")
+    recall = _number(benchmark.get("recall")) if isinstance(benchmark, Mapping) else None
+    false_positive_rate = _number(benchmark.get("false_positive_rate")) if isinstance(benchmark, Mapping) else None
+    passed = benchmark.get("passed") if isinstance(benchmark, Mapping) else None
+    if (
+        not isinstance(benchmark, Mapping)
+        or recall is None
+        or false_positive_rate is None
+        or not isinstance(passed, bool)
+    ):
+        problems.append(
+            f"{REVIEWER_POOL_FIELD} agent {agent_id!r} quality_gate must record a last_benchmark with a numeric "
+            "recall, a numeric false_positive_rate, and a boolean passed result"
+        )
+        benchmark_passes = False
+    else:
+        benchmark_passes = (
+            passed
+            and minimum_recall is not None
+            and maximum_false_positive_rate is not None
+            and recall >= minimum_recall
+            and false_positive_rate <= maximum_false_positive_rate
+        )
+    if not benchmark_passes and authority_eligible is not False:
+        problems.append(
+            f"{REVIEWER_POOL_FIELD} agent {agent_id!r} has not passed its required quality gate, so it must "
+            "declare authority_eligible false and remain triage-only"
+        )
+    return problems
+
+
 def _pool_problems(policy: Mapping[str, Any]) -> list[str]:
     """Structural validation of the reviewer-pool declaration; empty means valid.
 
@@ -423,7 +497,8 @@ def _pool_problems(policy: Mapping[str, Any]) -> list[str]:
         return problems
     seen_ids: set[str] = set()
     seen_priorities: set[int] = set()
-    codex_primary = False
+    codex_enabled = False
+    enabled_priority_one = False
     for entry in agents:
         if not isinstance(entry, dict):
             problems.append(f"{REVIEWER_POOL_FIELD} agents must be objects")
@@ -465,23 +540,42 @@ def _pool_problems(policy: Mapping[str, Any]) -> list[str]:
                 f"{REVIEWER_POOL_FIELD} agent {agent_id!r} cannot be fallback-eligible; only the declared "
                 "last_resort guard may close the pool"
             )
-        timeout_seconds = entry.get("timeout_seconds")
-        if isinstance(timeout_seconds, bool) or not isinstance(timeout_seconds, int) or timeout_seconds <= 0:
-            if enabled is True:
+        ack_timeout = entry.get("ack_timeout_seconds")
+        review_timeout = entry.get("review_timeout_seconds")
+        if enabled is True:
+            if isinstance(ack_timeout, bool) or not isinstance(ack_timeout, int) or not 1 <= ack_timeout <= 90:
                 problems.append(
-                    f"{REVIEWER_POOL_FIELD} enabled agent {agent_id!r} must declare a positive timeout_seconds"
+                    f"{REVIEWER_POOL_FIELD} enabled agent {agent_id!r} must declare ack_timeout_seconds in 1..90"
                 )
-        else:
-            max_seconds = timeout.get("max_seconds")
-            if isinstance(max_seconds, int) and not isinstance(max_seconds, bool) and timeout_seconds > max_seconds:
+            if isinstance(review_timeout, bool) or not isinstance(review_timeout, int) or review_timeout <= 0:
                 problems.append(
-                    f"{REVIEWER_POOL_FIELD} agent {agent_id!r} timeout_seconds cannot exceed the "
-                    f"pool max_seconds ({max_seconds})"
+                    f"{REVIEWER_POOL_FIELD} enabled agent {agent_id!r} must declare a positive review_timeout_seconds"
                 )
-        if agent_id == CODEX_REVIEW_AUTHORITY and enabled is True and priority == 1:
-            codex_primary = True
-    if not codex_primary:
-        problems.append(f"{REVIEWER_POOL_FIELD} must declare Codex as the enabled priority-1 primary reviewer")
+            elif isinstance(ack_timeout, int) and not isinstance(ack_timeout, bool) and review_timeout <= ack_timeout:
+                problems.append(
+                    f"{REVIEWER_POOL_FIELD} agent {agent_id!r} review_timeout_seconds must exceed ack_timeout_seconds"
+                )
+        max_seconds = timeout.get("max_seconds")
+        if (
+            isinstance(review_timeout, int)
+            and not isinstance(review_timeout, bool)
+            and isinstance(max_seconds, int)
+            and not isinstance(max_seconds, bool)
+            and review_timeout > max_seconds
+        ):
+            problems.append(
+                f"{REVIEWER_POOL_FIELD} agent {agent_id!r} review_timeout_seconds cannot exceed the "
+                f"pool max_seconds ({max_seconds})"
+            )
+        problems.extend(_quality_gate_problems(entry, agent_id))
+        if enabled is True and priority == 1:
+            enabled_priority_one = True
+        if agent_id == CODEX_REVIEW_AUTHORITY and enabled is True:
+            codex_enabled = True
+    if not enabled_priority_one:
+        problems.append(f"{REVIEWER_POOL_FIELD} must declare an enabled priority-1 reviewer")
+    if not codex_enabled:
+        problems.append(f"{REVIEWER_POOL_FIELD} must retain Codex as an enabled hosted fallback reviewer")
     if isinstance(last_resort, str) and last_resort in seen_ids:
         problems.append(f"{REVIEWER_POOL_FIELD} last_resort {last_resort!r} must not also be a pool agent")
     return problems
@@ -538,6 +632,11 @@ def enabled_pool_reviewers(pool: Mapping[str, Any]) -> tuple[dict[str, Any], ...
     return tuple(agent for agent in pool["agents"] if agent.get("enabled") is True)
 
 
+def authority_pool_reviewers(pool: Mapping[str, Any]) -> tuple[dict[str, Any], ...]:
+    """Enabled reviewers eligible to establish or block review authority."""
+    return tuple(agent for agent in enabled_pool_reviewers(pool) if agent.get("authority_eligible") is not False)
+
+
 def _exhaustion_error(pool: Mapping[str, Any], authority: Mapping[str, Any], authority_type: str) -> str | None:
     """Machine-checkable proof that every higher-priority enabled reviewer was exhausted.
 
@@ -567,7 +666,7 @@ def _exhaustion_error_impl(
     reference). ``unproven`` is ``True`` only for a genuine failure.
     """
 
-    enabled = enabled_pool_reviewers(pool)
+    enabled = authority_pool_reviewers(pool)
     priorities = {str(agent["id"]): int(agent["priority"]) for agent in enabled}
     if authority_type == str(pool["last_resort"]):
         required = enabled
@@ -622,19 +721,24 @@ def _exhaustion_error_impl(
         reason = attempt.get("reason")
         if not isinstance(reason, str) or not reason.strip():
             problems.append(f"reviewer attempt for {agent_id} must record why it was exhausted")
-        configured_timeout = next(
-            (agent.get("timeout_seconds") for agent in required if str(agent.get("id")) == agent_id), None
+        configured_agent = next((agent for agent in required if str(agent.get("id")) == agent_id), None)
+        configured_ack = configured_agent.get("ack_timeout_seconds") if isinstance(configured_agent, Mapping) else None
+        configured_review = (
+            configured_agent.get("review_timeout_seconds") if isinstance(configured_agent, Mapping) else None
         )
-        timeout = attempt.get("timeout_seconds")
+        ack_timeout = attempt.get("ack_timeout_seconds")
+        review_timeout = attempt.get("review_timeout_seconds")
         if (
-            isinstance(timeout, bool)
-            or not isinstance(timeout, int)
-            or not isinstance(configured_timeout, int)
-            or timeout != configured_timeout
+            isinstance(ack_timeout, bool)
+            or not isinstance(ack_timeout, int)
+            or ack_timeout != configured_ack
+            or isinstance(review_timeout, bool)
+            or not isinstance(review_timeout, int)
+            or review_timeout != configured_review
         ):
             problems.append(
-                f"reviewer attempt for {agent_id} must record timeout_seconds equal to the configured "
-                f"reviewer timeout ({configured_timeout!r})"
+                f"reviewer attempt for {agent_id} must record ack/review timeout budgets equal to the configured "
+                f"reviewer timeouts ({configured_ack!r}/{configured_review!r})"
             )
         failure_class = attempt.get("failure_class")
         if failure_class not in ("transient", "permanent"):
@@ -722,7 +826,9 @@ def _authority_error(document: dict[str, Any]) -> str | None:
     if not isinstance(authority, dict):
         return "review document must carry a review-authority record"
     authority_type = authority.get("type")
-    admissible = {str(agent["id"]) for agent in enabled_pool_reviewers(pool)} | {str(pool["last_resort"])}
+    admissible = {
+        str(agent["id"]) for agent in enabled_pool_reviewers(pool) if agent.get("authority_eligible") is not False
+    } | {str(pool["last_resort"])}
     if authority_type not in admissible:
         return f"review authority type must be one of {sorted(admissible)}"
     if not isinstance(authority.get("tool"), str) or not authority["tool"].strip():
@@ -739,7 +845,7 @@ def _authority_error(document: dict[str, Any]) -> str | None:
         reason = authority.get("fallback_reason")
         if not isinstance(reason, str) or not reason.strip():
             return (
-                "opencode fallback authority must record why Codex could not review; "
+                "last-resort guard authority must record why Codex could not review; "
                 "skipping Codex without a reason is forbidden"
             )
         # A guard review is legitimate only when nothing is waiting on it: the
@@ -748,7 +854,7 @@ def _authority_error(document: dict[str, Any]) -> str | None:
         unresolved = authority.get("unresolved_thread_count")
         # bool is an int subclass; a True is a claim that something waited.
         if isinstance(unresolved, bool) or not isinstance(unresolved, int) or unresolved != 0:
-            return "opencode fallback authority must record a zero unresolved-thread count at review time"
+            return "last-resort guard authority must record a zero unresolved-thread count at review time"
         readable_gates = {
             "governance_state": "Governance",
             "trusted_preflight_state": "trusted Preflight",
@@ -758,7 +864,7 @@ def _authority_error(document: dict[str, Any]) -> str | None:
             required = FALLBACK_REQUIRED_GATE_STATES[gate]
             if authority.get(gate) != required:
                 return (
-                    f"opencode fallback authority requires recorded {readable_gates[gate]} "
+                    f"last-resort guard authority requires recorded {readable_gates[gate]} "
                     f"== {required!r} at review time"
                 )
 
@@ -857,6 +963,7 @@ def verify_claims(
     issue_criteria: tuple[str, ...] | None = None,
     resolution_corrections: frozenset[str] | None = None,
     head_sha: str | None = None,
+    require_authority: bool = True,
 ) -> ReviewVerdict:
     """Compare repository-owned review state against the exact candidate content.
 
@@ -892,27 +999,32 @@ def verify_claims(
     if document.get("review_id") != review_id(claims):
         return ReviewVerdict("stale", "pre-ready hostile review identifier does not match its own claims")
 
+    # Exact-head identity is independent of reviewer-pool membership. Check it
+    # before pool/exhaustion validation so an old artifact cannot be misclassified
+    # merely because the configured reviewer pool evolved after that head.
     authority = document.get("authority")
     if isinstance(authority, dict):
         recorded_head = authority.get("head_sha")
         if (
             head_sha is not None
             and isinstance(recorded_head, str)
-            and _GIT_SHA.fullmatch(recorded_head)
-            and recorded_head.lower() != head_sha.lower()
+            and re.fullmatch(r"[0-9a-fA-F]{40}", recorded_head)
+            and recorded_head.strip().lower() != head_sha.strip().lower()
         ):
             return ReviewVerdict(
                 "stale",
-                f"the pre-ready hostile review was recorded for exact head {recorded_head[:10]}, not the evaluated exact head {head_sha[:10]}",
+                f"the pre-ready hostile review was recorded for exact head {recorded_head[:10]}, "
+                f"not the evaluated exact head {head_sha[:10]}",
             )
 
     # Issue #467: the authority is document-level review metadata recorded beside
     # the canonical claims. It must exist and satisfy the authority contract
     # (Codex primary, recorded-reason OpenCode fallback) before anything that
     # binds the candidate is trusted.
-    authority_problem = _authority_error(document)
-    if authority_problem is not None:
-        return ReviewVerdict("incomplete", authority_problem)
+    if require_authority:
+        authority_problem = _authority_error(document)
+        if authority_problem is not None:
+            return ReviewVerdict("incomplete", authority_problem)
 
     problem = _structural_error(claims)
     if problem is not None:
@@ -942,14 +1054,6 @@ def verify_claims(
     # anything on the candidate's history. The self-inserted artifact commit is
     # therefore deliberately inert -- it records the pre-commit HEAD and can never
     # be treated as authority for the commit that records it.
-    recorded_head = document["authority"]["head_sha"]
-    if head_sha is not None and recorded_head.strip().lower() != head_sha.strip().lower():
-        return ReviewVerdict(
-            "stale",
-            f"the pre-ready hostile review was recorded for exact head {recorded_head[:10]}, "
-            f"not the evaluated exact head {head_sha[:10]}",
-        )
-
     changed_paths = tuple(sorted({path for change in target_changes(changes) for path in change.affected_paths()}))
     required = set(applicable_family_ids(families, changed_paths))
     reviewed = {str(item.get("family")) for item in claims["defect_families"]}
@@ -1016,6 +1120,48 @@ def verify_claims(
         f"{len(required)} applicable recurring-defect famil{'y' if len(required) == 1 else 'ies'} "
         f"and {len(claims['acceptance_criteria'])} acceptance criteria"
         + (f", including all {len(issue_criteria)} the Issue defines" if issue_criteria else ""),
+    )
+
+
+def verify_review_request(
+    document: Any,
+    *,
+    base_sha: str,
+    changes: tuple[ingress.ConnectorFileChange, ...],
+    families: tuple[dict[str, Any], ...],
+    issue_criteria: tuple[str, ...] | None = None,
+    head_sha: str | None = None,
+) -> ReviewVerdict:
+    """Validate the content a reviewer would be asked to authorize.
+
+    A request is not authority, but it must already describe the current
+    base-to-head candidate before trusted orchestration consumes reviewer
+    capacity.  Authority-specific checks intentionally wait for the response.
+    """
+
+    if not isinstance(document, dict) or document.get("schema") != REVIEW_SCHEMA:
+        return ReviewVerdict("missing", f"pre-ready review request must use schema {REVIEW_SCHEMA}")
+    request = document.get("review_request")
+    claims = document.get("claims")
+    if (
+        not isinstance(request, dict)
+        or request.get("schema") != "hunter.review-request.v1"
+        or not isinstance(claims, dict)
+        or request.get("claims_id") != review_id(claims)
+        or document.get("review_id") != review_id(claims)
+    ):
+        return ReviewVerdict("incomplete", "review request identity does not bind its claims")
+    candidate = dict(document)
+    candidate.pop("review_request", None)
+    candidate.pop("authority", None)
+    return verify_claims(
+        candidate,
+        base_sha=base_sha,
+        changes=changes,
+        families=families,
+        issue_criteria=issue_criteria,
+        head_sha=head_sha,
+        require_authority=False,
     )
 
 

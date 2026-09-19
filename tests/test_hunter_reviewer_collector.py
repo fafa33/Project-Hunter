@@ -1,13 +1,31 @@
 from __future__ import annotations
 
 import copy
+import hashlib
+import io
 import json
 import urllib.error
+import zipfile
 
 import hunter_reviewer_collector as collector
 import pytest
 
 HEAD = "a" * 40
+
+
+@pytest.fixture(autouse=True)
+def _no_resolved_blocking_threads(monkeypatch):
+    """Default every case in this module to the base remediation generation.
+
+    These cases describe a candidate whose authenticated blocking findings have
+    never been resolved, which is exactly the base generation. Stubbing the
+    thread read keeps them off the network; the remediation-generation behaviour
+    itself is exercised by tests that patch this evidence explicitly.
+    """
+
+    monkeypatch.setattr(collector.orchestration, "blocking_reviewer_threads", lambda *_a, **_k: ())
+
+
 POOL = {
     "last_resort": "opencode",
     "timeout_policy": {"retries_per_agent": 0},
@@ -16,7 +34,8 @@ POOL = {
             "id": "codex",
             "priority": 1,
             "enabled": True,
-            "timeout_seconds": 300,
+            "ack_timeout_seconds": 30,
+            "review_timeout_seconds": 300,
             "retryable": True,
             "trigger_method": "github-pr-comment:@codex review",
             "github_login": "chatgpt-codex-connector[bot]",
@@ -27,13 +46,14 @@ POOL = {
 
 
 class Backend:
-    def __init__(self, response=False, mutate=False):
+    def __init__(self, response=False, mutate=False, response_state=None):
         self.clock = 0.0
         self.run_id = 123
         self.run_attempt = 1
         self.triggers = []
         self.response = response
         self.mutate = mutate
+        self.forced_state = response_state
 
     def now(self):
         return self.clock
@@ -51,7 +71,12 @@ class Backend:
     def responded(self, agent, trigger):
         return self.response
 
+    def acknowledged(self, agent, trigger):
+        return True
+
     def response_state(self, agent, trigger):
+        if self.forced_state:
+            return self.forced_state
         return "clear" if self.response else "waiting"
 
 
@@ -113,13 +138,23 @@ def test_trusted_run_must_execute_default_branch_revision():
     assert not collector.valid_run({**run, "path": ".github/workflows/untrusted.yml"}, 123, "main", "c" * 40)
 
 
-def _install_receipt(monkeypatch, *, mutate=None, available=False, response_state=None):
+def _install_receipt(
+    monkeypatch,
+    *,
+    mutate=None,
+    available=False,
+    response_state=None,
+    retries=0,
+    generation_id=collector.BASE_GENERATION,
+):
     import hashlib
     import io
     import json
     import zipfile
 
-    records = collector.collect_attempts(POOL, HEAD, Backend())
+    pool = copy.deepcopy(POOL)
+    pool["timeout_policy"]["retries_per_agent"] = retries
+    records = collector.collect_attempts(pool, HEAD, Backend(response_state=response_state))
     receipt = {
         "schema": collector.SCHEMA,
         "repository": "owner/repo",
@@ -128,7 +163,7 @@ def _install_receipt(monkeypatch, *, mutate=None, available=False, response_stat
         "run_id": 123,
         "run_attempt": 1,
         "claims_id": "d" * 64,
-        "configuration_digest": collector.configuration_digest(POOL),
+        "configuration_digest": collector.configuration_digest(pool),
         "attempts": records,
     }
     if mutate:
@@ -173,7 +208,7 @@ def _install_receipt(monkeypatch, *, mutate=None, available=False, response_stat
             if number != 1:
                 raise AssertionError(path)
             return {
-                "body": collector.trigger_body(HEAD, "d" * 64, POOL["agents"][0], 123, 1, number),
+                "body": collector.trigger_body(HEAD, "d" * 64, POOL["agents"][0], 123, 1, number, generation_id),
                 "created_at": "2026-09-13T00:00:00Z",
                 "user": {"login": "github-actions[bot]"},
                 "issue_url": "https://api.github.com/repos/owner/repo/issues/469",
@@ -197,8 +232,42 @@ def _install_receipt(monkeypatch, *, mutate=None, available=False, response_stat
         lambda *a: response_state or ("clear" if available else "waiting"),
     )
     # This fixture validates exhaustion for an alternate, not Guard snapshot gates.
-    pool = copy.deepcopy(POOL)
     return pool
+
+
+def test_exhaustion_receipt_from_a_prior_remediation_generation_is_not_reusable(monkeypatch):
+    """Exhaustion is generation-scoped, never a permanent property of the head.
+
+    Once the blocking findings a cycle produced are resolved, every reviewer that
+    cycle recorded as exhausted is owed another invocation. Replaying the old
+    receipt would hand authority to a lower-priority reviewer over one that has
+    not actually been asked about the remediated state.
+    """
+
+    pool = _install_receipt(monkeypatch)
+    monkeypatch.setattr(
+        collector.orchestration,
+        "blocking_reviewer_threads",
+        lambda *_a, **_k: (collector.orchestration.BlockingThread("PRRT_1", 4042982311, "2026-09-18T01:35:24Z", True),),
+    )
+
+    with pytest.raises(ValueError, match="predates the current remediation generation"):
+        collector.load_exhaustion("owner/repo", "token", 469, HEAD, pool, 123, "alternate")
+
+
+def test_a_receipt_bound_to_the_current_remediation_generation_still_verifies(monkeypatch):
+    resolved = collector.orchestration.BlockingThread("PRRT_1", 4042982311, "2026-09-18T01:35:24Z", True)
+    generation = collector.orchestration.remediation_generation_id(HEAD, "d" * 64, (resolved,))
+    pool = _install_receipt(
+        monkeypatch,
+        mutate=lambda receipt: receipt.update(remediation_generation_id=generation),
+        generation_id=generation,
+    )
+    monkeypatch.setattr(collector.orchestration, "blocking_reviewer_threads", lambda *_a, **_k: (resolved,))
+
+    result = collector.load_exhaustion("owner/repo", "token", 469, HEAD, pool, 123, "alternate")
+
+    assert [attempt["agent_id"] for attempt in result["reviewer_attempts"]] == ["codex"]
 
 
 def test_immutable_collector_receipt_proves_configured_exhaustion(monkeypatch):
@@ -245,7 +314,8 @@ def test_collector_run_off_current_default_branch_history_fails_closed(monkeypat
         lambda r: r.update(head_sha="b" * 40),
         lambda r: r.update(run_attempt=2),
         lambda r: r["attempts"].pop(),
-        lambda r: r["attempts"][0].update(timeout_seconds=1),
+        lambda r: r["attempts"][0].update(review_timeout_seconds=1),
+        lambda r: r["attempts"][0].update(ack_timeout_seconds=1),
         lambda r: r["attempts"][0].update(elapsed_seconds=1),
         lambda r: r["attempts"][0].update(trigger_id=999),
         lambda r: r["attempts"][0].update(outcome="clear"),
@@ -363,7 +433,7 @@ def test_codex_policy_is_single_bounded_300_second_invocation():
     assert not error and pool is not None
     codex = next(agent for agent in pool["agents"] if agent["id"] == "codex")
     assert pool["timeout_policy"]["retries_per_agent"] == 0
-    assert codex["timeout_seconds"] == 300
+    assert codex["review_timeout_seconds"] == 300
 
 
 def test_native_codex_unavailable_response_fails_over_immediately(monkeypatch):
@@ -457,14 +527,6 @@ def test_unavailable_codex_does_not_grant_review_authority(monkeypatch):
     assert not collector.governance.native_codex_clear_review(unavailable["body"], HEAD)
 
 
-def test_collector_automatically_runs_for_each_pr_head_change():
-    workflow = (collector.review.ROOT / collector.WORKFLOW).read_text()
-    assert "pull_request_target:" in workflow
-    assert "- synchronize" in workflow
-    assert "github.event.pull_request.number" in workflow
-    assert "github.event.pull_request.head.sha" in workflow
-
-
 def test_explicit_unavailability_is_valid_exhaustion_without_waiting_full_timeout(monkeypatch):
     pool = _install_receipt(
         monkeypatch,
@@ -490,12 +552,10 @@ def test_pull_request_target_collector_run_is_trusted_on_default_branch():
     assert collector.valid_run(run, 123, "main", "b" * 40)
 
 
-def test_automatic_artifact_name_uses_derived_candidate_head():
+def test_dispatch_only_artifact_name_uses_exact_input_head():
     workflow = (collector.review.ROOT / collector.WORKFLOW).read_text()
-    assert (
-        "name: hunter-reviewer-results-${{ github.event.pull_request.head.sha || inputs.head_sha }}-${{ github.run_attempt }}"
-        in workflow
-    )
+    assert "pull_request_target:" not in workflow
+    assert "name: hunter-reviewer-results-${{ inputs.head_sha }}-${{ github.run_attempt }}" in workflow
 
 
 def test_substantive_not_available_phrase_is_not_unavailability():
@@ -510,15 +570,21 @@ def test_substantive_rate_limit_phrase_is_not_unavailability():
     )
 
 
-def test_policy_orders_copilot_before_server_side_api_fallbacks():
+def test_policy_enables_server_side_gemini_and_groq_after_codex():
     pool, error = collector.review.load_reviewer_pool()
     assert not error and pool is not None
     agents = sorted(collector.review.enabled_pool_reviewers(pool), key=lambda a: a["priority"])
-    assert [(a["id"], a["priority"]) for a in agents[:4]] == [("codex", 1), ("copilot", 2), ("gemini", 3), ("groq", 4)]
-    assert agents[1]["trigger_method"] == "github-review-request:copilot-pull-request-reviewer[bot]"
-    assert agents[2]["trigger_method"] == "api:gemini"
-    assert agents[3]["trigger_method"] == "api:groq"
-    assert all(a["timeout_seconds"] == 300 for a in agents[:4])
+    assert [(a["id"], a["priority"]) for a in agents] == [
+        ("local-ollama", 1),
+        ("codex", 2),
+        ("copilot", 3),
+        ("gemini", 4),
+        ("groq", 5),
+    ]
+    assert agents[2]["trigger_method"] == "github-review-request:copilot-pull-request-reviewer[bot]"
+    assert agents[3]["trigger_method"] == "api:gemini"
+    assert agents[4]["trigger_method"] == "api:groq"
+    assert all(a["review_timeout_seconds"] == 300 for a in agents[1:])
 
 
 def test_collector_workflow_exposes_only_server_reviewer_secrets():
@@ -547,7 +613,8 @@ def test_api_reviewer_trigger_is_exact_head_bound_and_synchronous(monkeypatch):
         "id": "gemini",
         "priority": 2,
         "enabled": True,
-        "timeout_seconds": 300,
+        "ack_timeout_seconds": 30,
+        "review_timeout_seconds": 300,
         "retryable": False,
         "trigger_method": "api:gemini",
         "evidence_parser": "provider-json.v1",
@@ -723,7 +790,8 @@ def test_groq_authority_verifies_prior_api_exhaustion_from_trusted_collector(mon
             "id": "gemini",
             "priority": 2,
             "enabled": True,
-            "timeout_seconds": 300,
+            "ack_timeout_seconds": 30,
+            "review_timeout_seconds": 300,
             "retryable": False,
             "trigger_method": "api:gemini",
             "evidence_parser": "provider-json.v1",
@@ -732,7 +800,8 @@ def test_groq_authority_verifies_prior_api_exhaustion_from_trusted_collector(mon
             "id": "groq",
             "priority": 3,
             "enabled": True,
-            "timeout_seconds": 300,
+            "ack_timeout_seconds": 30,
+            "review_timeout_seconds": 300,
             "retryable": False,
             "trigger_method": "api:groq",
             "evidence_parser": "provider-json.v1",
@@ -753,7 +822,8 @@ def test_groq_authority_verifies_prior_api_exhaustion_from_trusted_collector(mon
             {
                 "agent_id": "codex",
                 "priority": 1,
-                "timeout_seconds": 300,
+                "ack_timeout_seconds": 30,
+                "review_timeout_seconds": 300,
                 "trigger_method": "github-pr-comment:@codex review",
                 "evidence_parser": "github-review-ack.v1",
                 "retryable": True,
@@ -766,7 +836,8 @@ def test_groq_authority_verifies_prior_api_exhaustion_from_trusted_collector(mon
             {
                 "agent_id": "gemini",
                 "priority": 2,
-                "timeout_seconds": 300,
+                "ack_timeout_seconds": 30,
+                "review_timeout_seconds": 300,
                 "trigger_method": "api:gemini",
                 "evidence_parser": "provider-json.v1",
                 "retryable": False,
@@ -894,6 +965,39 @@ def test_native_codex_clear_rejects_same_line_blocker_and_accepts_heading():
     assert not collector.governance.native_codex_clear_review(bad, HEAD)
 
 
+def test_external_reviewers_use_supported_provider_models(monkeypatch):
+    backend = collector.GitHubBackend("owner/repo", "token", 469, HEAD, "claims", 1, 1)
+    monkeypatch.setattr(backend, "_candidate_diff", lambda: "diff --git a/x b/x")
+    seen = []
+
+    class Response:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_args):
+            return False
+
+        def read(self, _limit):
+            if "generativelanguage.googleapis.com" in seen[-1][0]:
+                return b'{"candidates":[{"content":{"parts":[{"text":"{\\"verdict\\":\\"clear\\",\\"summary\\":\\"No blockers\\"}"}]}}]}'
+            return (
+                b'{"choices":[{"message":{"content":"{\\"verdict\\":\\"clear\\",\\"summary\\":\\"No blockers\\"}"}}]}'
+            )
+
+    def capture(req, **_kwargs):
+        body = json.loads(req.data.decode())
+        seen.append((req.full_url, body))
+        return Response()
+
+    monkeypatch.setattr(collector.urllib.request, "urlopen", capture)
+    monkeypatch.setenv("GEMINI_API_KEY", "test")
+    monkeypatch.setenv("GROQ_API_KEY", "test")
+    backend._invoke_external({"id": "gemini", "review_timeout_seconds": 1, "trigger_method": "api:gemini"}, 1)
+    backend._invoke_external({"id": "groq", "review_timeout_seconds": 1, "trigger_method": "api:groq"}, 1)
+    assert "models/gemini-3.7-flash:generateContent" in seen[0][0]
+    assert seen[1][1]["model"] == "openai/gpt-oss-120b"
+
+
 def test_api_auth_failures_are_explicit_unavailability(monkeypatch):
     backend = collector.GitHubBackend("owner/repo", "token", 469, HEAD, "claims", 1, 1)
     monkeypatch.setenv("GEMINI_API_KEY", "bad")
@@ -903,7 +1007,7 @@ def test_api_auth_failures_are_explicit_unavailability(monkeypatch):
         raise urllib.error.HTTPError("https://example", 401, "unauthorized", {}, None)
 
     monkeypatch.setattr(collector.urllib.request, "urlopen", denied)
-    payload = backend._invoke_external({"id": "gemini", "timeout_seconds": 1, "trigger_method": "api:gemini"}, 1)
+    payload = backend._invoke_external({"id": "gemini", "review_timeout_seconds": 1, "trigger_method": "api:gemini"}, 1)
     assert payload["verdict"] == "unavailable"
 
 
@@ -943,12 +1047,539 @@ def test_parse_native_trigger_binds_head_claims_run_and_attempt():
         "collector_run_id": 123,
         "collector_run_attempt": 2,
         "attempt_number": 1,
+        "remediation_generation_id": collector.BASE_GENERATION,
     }
     assert collector.parse_native_trigger(body.replace(HEAD, "b" * 40, 1)) is None
 
 
-# Bootstrap regression: an oversized exact-head diff is bounded unavailability,
-# never an exception that aborts the ordered reviewer walk.
+def test_canonical_pool_preserves_server_side_fallback_chain():
+    import json
+
+    policy = json.loads((collector.review.ROOT / "docs/CODE_WRITE_POLICY.json").read_text(encoding="utf-8"))
+    pool = policy["review_progression"]["review_authority"]["reviewer_pool"]
+    agents = sorted(pool["agents"], key=lambda a: a["priority"])
+    assert [a["id"] for a in agents] == ["local-ollama", "codex", "copilot", "gemini", "groq"]
+    assert [a["id"] for a in collector.review.authority_pool_reviewers(pool)] == ["codex", "copilot", "gemini", "groq"]
+    assert agents[2]["trigger_method"] == "github-review-request:copilot-pull-request-reviewer[bot]"
+    assert agents[3]["trigger_method"] == "api:gemini"
+    assert agents[4]["trigger_method"] == "api:groq"
+    assert all(a["review_timeout_seconds"] == 300 and a["retryable"] is False for a in agents[1:])
+    assert pool["last_resort"] == "hunter-guard"
+
+
+def test_collector_workflow_exposes_server_side_provider_secrets():
+    workflow = (collector.review.ROOT / ".github/workflows/hunter-reviewer-collector.yml").read_text(encoding="utf-8")
+    assert "GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}" in workflow
+    assert "GROQ_API_KEY: ${{ secrets.GROQ_API_KEY }}" in workflow
+
+
+def test_last_resort_recognition_has_no_default_authority_type():
+    """The guard's extra snapshot gates cannot be skipped by omitting an argument.
+
+    ``load_exhaustion`` decides whether the extra live prerequisites apply by
+    comparing its ``authority_type`` argument against the pool's declared
+    ``last_resort``. A default value for that argument would read a caller who
+    omitted it as some other reviewer and silently waive those gates, so the
+    argument is required and this pins that.
+    """
+    import inspect
+
+    signature = inspect.signature(collector.load_exhaustion)
+    parameter = signature.parameters["authority_type"]
+    assert parameter.default is inspect.Parameter.empty
+
+
+LOCAL_TRIAGE = {
+    "id": "local-ollama",
+    "priority": 1,
+    "enabled": True,
+    "ack_timeout_seconds": 30,
+    "review_timeout_seconds": 300,
+    "retryable": False,
+    "trigger_method": "github-workflow:hunter-local-reviewer.yml",
+    "evidence_parser": "hunter.local-review.v1",
+    "authority_eligible": False,
+}
+
+
+def _local_review(**overrides):
+    result = {
+        "schema": "hunter.local-review.v1",
+        "head_sha": HEAD,
+        "claims_id": "d" * 64,
+        "model": "qwen2.5-coder:7b",
+        "verdict": "clear",
+        "summary": "Reviewed the exact-head diff and found no blocking defect.",
+        "findings": [],
+    }
+    result.update(overrides)
+    return result
+
+
+def test_every_enabled_canonical_reviewer_declares_a_trigger_the_collector_performs():
+    """The defect: a reviewer was enabled at priority 1 with an unimplemented trigger.
+
+    Collection is ordered and fail-closed, so that did not skip the local
+    reviewer -- it aborted the walk before Codex or any other authority reviewer
+    was ever attempted.
+    """
+
+    pool, error = collector.review.load_reviewer_pool()
+    assert not error and pool is not None
+    assert collector.unsupported_pool_triggers(pool) == ()
+    assert {collector.trigger_scheme(agent) for agent in pool["agents"]} <= collector.TRIGGER_SCHEMES
+
+
+def test_an_enabled_reviewer_with_an_unperformable_trigger_is_reported():
+    pool = {
+        "last_resort": "opencode",
+        "timeout_policy": {"retries_per_agent": 0},
+        "agents": ({**LOCAL_TRIAGE, "trigger_method": "carrier-pigeon:hunter"}, POOL["agents"][0]),
+    }
+    assert collector.unsupported_pool_triggers(pool) == ("local-ollama",)
+    # A disabled reviewer cannot abort a walk it is not part of.
+    disabled = {**pool, "agents": ({**pool["agents"][0], "enabled": False}, POOL["agents"][0])}
+    assert collector.unsupported_pool_triggers(disabled) == ()
+
+
+def test_the_push_boundary_guard_refuses_an_unperformable_reviewer_trigger(monkeypatch):
+    import hunter_defect_prevention_preflight as preflight
+
+    pool = {
+        "last_resort": "hunter-guard",
+        "timeout_policy": {"retries_per_agent": 0},
+        "agents": ({**LOCAL_TRIAGE, "trigger_method": "carrier-pigeon:hunter"},),
+    }
+    monkeypatch.setattr(preflight.pre_ready, "load_reviewer_pool", lambda _policy: (pool, ""))
+    errors = preflight.validate_code_write_policy()
+    assert any("cannot perform" in error and "local-ollama" in error for error in errors)
+
+
+def test_a_workflow_reviewer_is_dispatched_from_the_trusted_default_branch(monkeypatch):
+    backend = collector.GitHubBackend("owner/repo", "token", 469, HEAD, "d" * 64, 123, 2)
+    calls = []
+
+    def request(repository, token, method, path, payload=None):
+        calls.append((method, path, payload))
+        if path == "":
+            return {"default_branch": "main"}
+        if path.endswith("/runs?event=workflow_dispatch&branch=main&per_page=100"):
+            return {"workflow_runs": []}
+        if path.endswith("/dispatches"):
+            return {}
+        raise AssertionError(path)
+
+    monkeypatch.setattr(collector.governance, "request_json", request)
+    trigger = backend.trigger(LOCAL_TRIAGE, 1)
+
+    dispatch = next(call for call in calls if call[1].endswith("/dispatches"))
+    assert dispatch[0] == "POST"
+    assert dispatch[1] == "actions/workflows/hunter-local-reviewer.yml/dispatches"
+    assert dispatch[2]["ref"] == "main"
+    assert dispatch[2]["inputs"] == {
+        "pr_number": "469",
+        "head_sha": HEAD,
+        "claims_id": "d" * 64,
+        "correlation_id": collector.workflow_correlation_id(HEAD, "d" * 64, "local-ollama", 123, 2, 1),
+    }
+    assert trigger["workflow"] == "hunter-local-reviewer.yml"
+    assert trigger["correlation_id"] == dispatch[2]["inputs"]["correlation_id"]
+
+
+def test_a_workflow_trigger_method_cannot_address_another_actions_route():
+    for hostile in ("../../secrets.yml", "owner/repo/actions", "hunter-local-reviewer.yml?x=1", ""):
+        with pytest.raises(ValueError):
+            collector.workflow_trigger_file({**LOCAL_TRIAGE, "trigger_method": f"github-workflow:{hostile}"})
+    assert collector.workflow_trigger_file(LOCAL_TRIAGE) == "hunter-local-reviewer.yml"
+
+
+def test_a_dispatch_the_trusted_branch_cannot_accept_is_reviewer_unavailability(monkeypatch):
+    backend = collector.GitHubBackend("owner/repo", "token", 469, HEAD, "d" * 64, 123, 1)
+
+    def request(repository, token, method, path, payload=None):
+        if path == "":
+            return {"default_branch": "main"}
+        if path.endswith("/runs?event=workflow_dispatch&branch=main&per_page=100"):
+            return {"workflow_runs": []}
+        raise collector.governance.transport.GitHubRequestError(
+            "workflow not found on the trusted branch", category="permanent", status_code=404
+        )
+
+    monkeypatch.setattr(collector.governance, "request_json", request)
+    trigger = backend.trigger(LOCAL_TRIAGE, 1)
+    assert backend.response_state(LOCAL_TRIAGE, trigger) == "unavailable"
+    assert backend.acknowledged(LOCAL_TRIAGE, trigger) is False
+
+
+def _workflow_backend(monkeypatch, *, run, artifact_result, pr=469):
+    backend = collector.GitHubBackend("owner/repo", "token", pr, HEAD, "d" * 64, 123, 1)
+    archive = None
+    if artifact_result is not None:
+        stream = io.BytesIO()
+        with zipfile.ZipFile(stream, "w") as bundle:
+            bundle.writestr("reviewer-result.json", json.dumps(artifact_result))
+        archive = stream.getvalue()
+
+    def request(repository, token, method, path, payload=None):
+        if path == "":
+            return {"default_branch": "main"}
+        if path.endswith("/runs?event=workflow_dispatch&branch=main&per_page=100"):
+            return {"workflow_runs": [run] if run else []}
+        if path.endswith("/dispatches"):
+            return {}
+        raise AssertionError(path)
+
+    monkeypatch.setattr(collector.governance, "request_json", request)
+    monkeypatch.setattr(
+        collector,
+        "_pages",
+        lambda *_a, **_k: (
+            [
+                {
+                    "id": 5,
+                    "name": f"hunter-local-review-{pr}-{HEAD}",
+                    "expired": False,
+                    "workflow_run": {"id": 7001},
+                    "digest": "sha256:" + hashlib.sha256(archive).hexdigest(),
+                }
+            ]
+            if archive is not None
+            else []
+        ),
+    )
+    monkeypatch.setattr(collector, "download_artifact", lambda *_a: archive)
+    return backend
+
+
+def _run(**overrides):
+    run = {
+        "id": 7001,
+        "event": "workflow_dispatch",
+        "head_branch": "main",
+        "path": ".github/workflows/hunter-local-reviewer.yml",
+        "name": collector.LOCAL_REVIEW_RUN_NAME_PREFIX
+        + collector.workflow_correlation_id(HEAD, "d" * 64, "local-ollama", 123, 1, 1),
+        "created_at": "2026-09-18T00:00:00Z",
+        "status": "completed",
+        "conclusion": "success",
+    }
+    run.update(overrides)
+    return run
+
+
+def test_a_dispatched_local_review_result_becomes_the_reviewer_verdict(monkeypatch):
+    backend = _workflow_backend(monkeypatch, run=_run(), artifact_result=_local_review())
+    trigger = backend.trigger(LOCAL_TRIAGE, 1)
+    assert backend.acknowledged(LOCAL_TRIAGE, trigger) is True
+    assert backend.response_state(LOCAL_TRIAGE, trigger) == "clear"
+    assert trigger["id"] == 7001
+    assert trigger["created_at"] == "2026-09-18T00:00:00Z"
+
+
+def test_a_dispatched_local_review_finding_is_a_blocking_result(monkeypatch):
+    findings = [{"severity": "high", "path": "a.py", "line": 1, "evidence": "unbounded retry"}]
+    backend = _workflow_backend(
+        monkeypatch, run=_run(), artifact_result=_local_review(verdict="findings", findings=findings)
+    )
+    trigger = backend.trigger(LOCAL_TRIAGE, 1)
+    assert backend.response_state(LOCAL_TRIAGE, trigger) == "blocking"
+
+
+def test_a_queued_dispatched_run_is_not_yet_acknowledged(monkeypatch):
+    backend = _workflow_backend(monkeypatch, run=_run(status="queued", conclusion=None), artifact_result=None)
+    trigger = backend.trigger(LOCAL_TRIAGE, 1)
+    assert backend.acknowledged(LOCAL_TRIAGE, trigger) is False
+    assert backend.response_state(LOCAL_TRIAGE, trigger) == "waiting"
+
+
+def test_a_failed_or_resultless_dispatched_run_is_unavailability_not_a_verdict(monkeypatch):
+    failed = _workflow_backend(monkeypatch, run=_run(conclusion="failure"), artifact_result=None)
+    assert failed.response_state(LOCAL_TRIAGE, failed.trigger(LOCAL_TRIAGE, 1)) == "unavailable"
+    empty = _workflow_backend(monkeypatch, run=_run(), artifact_result=None)
+    assert empty.response_state(LOCAL_TRIAGE, empty.trigger(LOCAL_TRIAGE, 1)) == "unavailable"
+
+
+def test_an_unrelated_run_of_the_same_workflow_is_not_this_invocation(monkeypatch):
+    for mutation in (
+        {"name": "Hunter Local Reviewer " + "0" * 64, "display_title": ""},
+        {"head_branch": "candidate"},
+        {"event": "push"},
+        {"path": ".github/workflows/untrusted.yml"},
+    ):
+        backend = _workflow_backend(monkeypatch, run=_run(**mutation), artifact_result=_local_review())
+        trigger = backend.trigger(LOCAL_TRIAGE, 1)
+        assert backend.response_state(LOCAL_TRIAGE, trigger) == "waiting"
+        assert backend.acknowledged(LOCAL_TRIAGE, trigger) is False
+
+
+@pytest.mark.parametrize(
+    ("result", "expected"),
+    [
+        (_local_review(), "clear"),
+        (_local_review(verdict="findings", findings=[{"severity": "high"}]), "blocking"),
+        # A clear verdict that still lists findings fails closed to its findings.
+        (_local_review(findings=[{"severity": "high"}]), "blocking"),
+        # A blocking verdict with no finding names no defect to act on.
+        (_local_review(verdict="findings"), "unavailable"),
+        (_local_review(head_sha="b" * 40), "unavailable"),
+        (_local_review(claims_id="e" * 64), "unavailable"),
+        (_local_review(schema="hunter.local-review.v0"), "unavailable"),
+        (_local_review(summary="  "), "unavailable"),
+        (_local_review(findings="none"), "unavailable"),
+        (_local_review(verdict="approved"), "unavailable"),
+        (None, "unavailable"),
+    ],
+)
+def test_only_an_exact_head_claims_bound_consistent_local_review_is_a_verdict(result, expected):
+    assert collector.local_review_state(result, HEAD, "d" * 64) == expected
+
+
+def test_a_triage_only_verdict_does_not_end_the_authority_search():
+    """The triage reviewer is never review authority, so it cannot close the pool."""
+
+    class TriageBackend(Backend):
+        def response_state(self, agent, trigger):
+            return "clear" if agent["id"] == "local-ollama" else "waiting"
+
+    pool = {
+        "last_resort": "opencode",
+        "timeout_policy": {"retries_per_agent": 0},
+        "agents": (LOCAL_TRIAGE, {**POOL["agents"][0], "priority": 2}),
+    }
+    backend = TriageBackend()
+    records = collector.collect_attempts(pool, HEAD, backend)
+
+    assert backend.triggers == [("local-ollama", 1), ("codex", 1)]
+    assert [record["outcome"] for record in records] == ["clear", "timed_out"]
+
+
+def test_an_unacknowledged_reviewer_fails_over_on_its_acknowledgement_budget():
+    """An offline runner costs the acknowledgement budget, not the review budget."""
+
+    class SilentBackend(Backend):
+        def acknowledged(self, agent, trigger):
+            return agent["id"] != "local-ollama"
+
+        def response_state(self, agent, trigger):
+            return "waiting"
+
+    pool = {
+        "last_resort": "opencode",
+        "timeout_policy": {"retries_per_agent": 0},
+        "agents": (LOCAL_TRIAGE, {**POOL["agents"][0], "priority": 2}),
+    }
+    backend = SilentBackend()
+    records = collector.collect_attempts(pool, HEAD, backend)
+
+    assert [record["outcome"] for record in records] == ["unacknowledged", "timed_out"]
+    assert records[0]["elapsed_seconds"] == 30
+    assert records[1]["elapsed_seconds"] == 300
+
+
+def _triage_receipt(monkeypatch, *, local_outcome="clear", local_run_id=7001, local_ack=True, mutate=None):
+    """A trusted receipt whose pool leads with the triage-only local reviewer."""
+
+    pool = {
+        "last_resort": "opencode",
+        "timeout_policy": {"retries_per_agent": 0},
+        "agents": (LOCAL_TRIAGE, {**POOL["agents"][0], "priority": 2}),
+    }
+
+    class MixedBackend(Backend):
+        def __init__(self):
+            super().__init__()
+            self.run_id, self.run_attempt = 123, 1
+
+        def trigger(self, agent, number):
+            self.triggers.append((agent["id"], number))
+            if agent["id"] == "local-ollama":
+                return {
+                    "id": local_run_id,
+                    "created_at": "2026-09-18T00:00:00Z",
+                    "kind": "github-workflow",
+                    "workflow": "hunter-local-reviewer.yml",
+                    "correlation_id": collector.workflow_correlation_id(HEAD, "d" * 64, "local-ollama", 123, 1, number),
+                }
+            return {"id": 1, "created_at": "2026-09-13T00:00:00Z"}
+
+        def acknowledged(self, agent, trigger):
+            return local_ack or agent["id"] != "local-ollama"
+
+        def response_state(self, agent, trigger):
+            return local_outcome if agent["id"] == "local-ollama" else "waiting"
+
+    records = collector.collect_attempts(pool, HEAD, MixedBackend())
+    receipt = {
+        "schema": collector.SCHEMA,
+        "repository": "owner/repo",
+        "pr_number": 469,
+        "head_sha": HEAD,
+        "run_id": 123,
+        "run_attempt": 1,
+        "claims_id": "d" * 64,
+        "configuration_digest": collector.configuration_digest(pool),
+        "attempts": records,
+    }
+    if mutate:
+        mutate(receipt)
+    stream = io.BytesIO()
+    with zipfile.ZipFile(stream, "w") as bundle:
+        bundle.writestr("reviewer-results.json", json.dumps(receipt))
+    archive = stream.getvalue()
+
+    def request(repository, token, method, path, payload=None):
+        if path == "":
+            return {"default_branch": "main"}
+        if path == "commits/main":
+            return {"sha": "c" * 40}
+        if path == "actions/runs/123":
+            return {
+                "id": 123,
+                "run_attempt": 1,
+                "head_sha": "c" * 40,
+                "head_branch": "main",
+                "path": collector.WORKFLOW,
+                "event": "workflow_dispatch",
+                "status": "completed",
+                "conclusion": "success",
+            }
+        if path.startswith("actions/runs/") and path[len("actions/runs/") :].isdigit():
+            other = int(path[len("actions/runs/") :])
+            if other == local_run_id:
+                return _run(id=local_run_id)
+            # A real, well-formed run of the same workflow that this dispatch
+            # did not produce: only the correlation identity separates them.
+            return _run(id=other, name="Hunter Local Reviewer " + "0" * 64)
+        if path.startswith("compare/"):
+            return {"status": "ahead"}
+        if path.startswith("actions/runs/123/artifacts?"):
+            return {
+                "artifacts": [
+                    {
+                        "id": 5,
+                        "name": f"hunter-reviewer-results-{HEAD}-1",
+                        "expired": False,
+                        "workflow_run": {"id": 123},
+                        "digest": "sha256:" + hashlib.sha256(archive).hexdigest(),
+                    }
+                ]
+            }
+        if path.startswith("issues/comments/"):
+            return {
+                "body": collector.trigger_body(HEAD, "d" * 64, pool["agents"][1], 123, 1, 1),
+                "created_at": "2026-09-13T00:00:00Z",
+                "user": {"login": "github-actions[bot]"},
+                "issue_url": "https://api.github.com/repos/owner/repo/issues/469",
+            }
+        if path == "pulls/469":
+            return {"state": "open", "head": {"sha": HEAD}}
+        if path.startswith(f"commits/{HEAD}/check-runs?"):
+            return {
+                "check_runs": [
+                    {"id": 9, "name": "Governance Agent Preflight", "status": "completed", "conclusion": "success"}
+                ]
+            }
+        raise AssertionError(path)
+
+    monkeypatch.setattr(collector.governance, "request_json", request)
+    monkeypatch.setattr(collector, "download_artifact", lambda *a: archive)
+    monkeypatch.setattr(collector.GitHubBackend, "response_state", lambda *a: "waiting")
+    monkeypatch.setattr(collector.governance, "read_unresolved_review_threads", lambda *a: ((), None))
+    monkeypatch.setattr(collector.governance, "read_trusted_upgrade_status", lambda *a: ("success", ""))
+    return pool
+
+
+def test_a_triage_reviewer_is_verified_but_never_becomes_exhaustion_evidence(monkeypatch):
+    """The reconciliation end-to-end: no legacy budget field, no unknown agent.
+
+    The receipt still proves the triage reviewer was actually dispatched and
+    answered at this exact head, so a skipped reviewer is caught; but the
+    exhaustion evidence names only authority-eligible reviewers, because the
+    shared authority verifier rejects any other agent id outright.
+    """
+
+    pool = _triage_receipt(monkeypatch)
+    evidence = collector.load_exhaustion("owner/repo", "token", 469, HEAD, pool, 123, "opencode")
+
+    attempts = evidence["reviewer_attempts"]
+    assert [attempt["agent_id"] for attempt in attempts] == ["codex"]
+    assert attempts[0]["ack_timeout_seconds"] == 30
+    assert attempts[0]["review_timeout_seconds"] == 300
+    assert "timeout_seconds" not in attempts[0]
+    assert collector.review._exhaustion_error(pool, {"reviewer_attempts": attempts}, "opencode") is None
+
+
+@pytest.mark.parametrize(
+    ("reason", "mutation"),
+    [
+        # A run this dispatch did not produce.
+        ("trigger mismatch", lambda r: r["attempts"][0].update(trigger_id=9999)),
+        # A timestamp the run itself does not carry.
+        ("trigger mismatch", lambda r: r["attempts"][0].update(trigger_created_at="2026-01-01T00:00:00Z")),
+        # A different collector attempt derives a different correlation identity.
+        ("trigger mismatch", lambda r: r["attempts"][0].update(collector_run_attempt=9)),
+        # No run at all can only be recorded as unavailability, never as a verdict.
+        ("must record unavailability", lambda r: r["attempts"][0].update(trigger_id=0)),
+        # The triage reviewer's record is replaced by the next reviewer's.
+        ("configuration/retry result mismatch", lambda r: r["attempts"].pop(0)),
+        # The ordered walk produced no evidence at all.
+        ("skipped or not fully retried", lambda r: r["attempts"].clear()),
+        # Legacy single-budget evidence is no longer admissible.
+        (
+            "configuration/retry result mismatch",
+            lambda r: r["attempts"][0].pop("review_timeout_seconds"),
+        ),
+    ],
+)
+def test_a_forged_triage_invocation_fails_the_trusted_receipt_closed(monkeypatch, reason, mutation):
+    pool = _triage_receipt(monkeypatch, mutate=mutation)
+    with pytest.raises(ValueError, match=reason):
+        collector.load_exhaustion("owner/repo", "token", 469, HEAD, pool, 123, "opencode")
+
+
+def test_an_offline_local_runner_is_admissible_receipt_evidence(monkeypatch):
+    """The common case: the Mac is off, so the dispatch produces no run at all.
+
+    That must not invalidate the receipt the hosted authority reviewer depends
+    on -- an unreachable triage runner is an availability state, never a
+    candidate defect.
+    """
+
+    pool = _triage_receipt(monkeypatch, local_outcome="waiting", local_run_id=0, local_ack=False)
+    evidence = collector.load_exhaustion("owner/repo", "token", 469, HEAD, pool, 123, "opencode")
+    assert [attempt["agent_id"] for attempt in evidence["reviewer_attempts"]] == ["codex"]
+
+
+def test_a_dispatch_with_no_run_cannot_claim_a_verdict(monkeypatch):
+    pool = _triage_receipt(
+        monkeypatch,
+        local_outcome="waiting",
+        local_run_id=0,
+        local_ack=False,
+        mutate=lambda r: r["attempts"][0].update(outcome="clear"),
+    )
+    with pytest.raises(ValueError, match="must record unavailability"):
+        collector.load_exhaustion("owner/repo", "token", 469, HEAD, pool, 123, "opencode")
+
+
+def test_recorded_attempt_count_is_what_the_reviewer_actually_cost(monkeypatch):
+    """A reviewer that settles on its first attempt never claims the retry budget.
+
+    Only a silent timeout is retried, so an explicit unavailability produces one
+    record; the verifier must account for exactly that, because the shared
+    authority verifier enforces the full retry count for transient failures.
+    """
+
+    pool = _install_receipt(
+        monkeypatch,
+        response_state="unavailable",
+        retries=1,
+    )
+    result = collector.load_exhaustion("owner/repo", "token", 469, HEAD, pool, 123, "alternate")
+    assert result["reviewer_attempts"][0]["attempt_count"] == 1
+    assert result["reviewer_attempts"][0]["failure_class"] == "permanent"
+
+
 def test_external_reviewer_oversized_diff_is_bounded_unavailability(monkeypatch):
     backend = collector.GitHubBackend("owner/repo", "token", 473, HEAD, "d" * 64, 123, 1)
     monkeypatch.setenv("GEMINI_API_KEY", "present")
@@ -969,7 +1600,9 @@ def test_external_reviewer_oversized_diff_is_bounded_unavailability(monkeypatch)
         lambda *_args, **_kwargs: {"state": "open", "base": {"sha": "0" * 40}, "head": {"sha": HEAD}},
     )
     monkeypatch.setattr(collector.urllib.request, "urlopen", lambda *_args, **_kwargs: OversizedResponse())
-    payload = backend._invoke_external({"id": "gemini", "timeout_seconds": 300, "trigger_method": "api:gemini"}, 1)
+    payload = backend._invoke_external(
+        {"id": "gemini", "review_timeout_seconds": 300, "trigger_method": "api:gemini"}, 1
+    )
     assert payload["verdict"] == "unavailable"
     assert "context budget" in payload["summary"]
 
@@ -1002,7 +1635,8 @@ def test_copilot_policy_uses_authenticated_review_request():
     copilot = next(a for a in collector.review.enabled_pool_reviewers(pool) if a["id"] == "copilot")
     assert copilot["github_login"] == "copilot-pull-request-reviewer[bot]"
     assert copilot["trigger_method"] == "github-review-request:copilot-pull-request-reviewer[bot]"
-    assert copilot["timeout_seconds"] == 300
+    assert copilot["ack_timeout_seconds"] == 30
+    assert copilot["review_timeout_seconds"] == 300
     assert copilot["retryable"] is False
 
 
