@@ -641,16 +641,15 @@ class GitHubBackend:
         """The trusted default branch, which is the only ref a reviewer may run from."""
 
         if self._default_branch is None:
-            # The collector job runs only when `github.ref` is the default branch,
-            # so the runner has already proven this value locally. Reading it from
-            # the run context keeps a required branch name from depending on a
-            # network round trip that can fail the entire collection before any
-            # reviewer is invoked. The API stays as the fallback for callers with
-            # no run context.
-            branch = str(os.environ.get("GITHUB_REF_NAME") or "").strip()
-            if not branch:
-                repo = governance.request_json(self.repository, self.token, "GET", "")
-                branch = str(repo.get("default_branch") or "") if isinstance(repo, dict) else ""
+            # Resolved from the repository itself, never from the run context.
+            # `GITHUB_REF_NAME` is the ref the *current* workflow is running on,
+            # which is the merge ref under `pull_request` and only incidentally
+            # the default branch under the collector's own dispatch. Reading it
+            # here would silently query reviewer runs on the wrong branch and
+            # find none, which reads as reviewer unavailability rather than as
+            # the configuration error it is.
+            repo = governance.request_json(self.repository, self.token, "GET", "")
+            branch = str(repo.get("default_branch") or "") if isinstance(repo, dict) else ""
             if not branch:
                 raise ValueError("trusted default branch is unavailable")
             self._default_branch = branch

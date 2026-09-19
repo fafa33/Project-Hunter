@@ -1722,24 +1722,6 @@ def _backend():
 WORKFLOW_AGENT = {"id": "codex", "trigger_method": "github-workflow:hunter-local-reviewer.yml"}
 
 
-def test_default_branch_uses_run_context_without_a_network_call(monkeypatch):
-    """The job only runs on the default branch, so the branch name is already known."""
-
-    calls = []
-    monkeypatch.setattr(collector.governance, "request_json", lambda *a, **k: calls.append(a) or {})
-    monkeypatch.setenv("GITHUB_REF_NAME", "main")
-
-    assert _backend().default_branch() == "main"
-    assert calls == []
-
-
-def test_default_branch_falls_back_to_the_api_without_run_context(monkeypatch):
-    monkeypatch.delenv("GITHUB_REF_NAME", raising=False)
-    monkeypatch.setattr(collector.governance, "request_json", lambda *a, **k: {"default_branch": "trunk"})
-
-    assert _backend().default_branch() == "trunk"
-
-
 @pytest.mark.parametrize("status", [403, 404, 422])
 def test_undispatchable_reviewer_probe_is_unavailability_not_collection_failure(monkeypatch, status):
     """The adoption probe reaches the same resources the dispatch does.
