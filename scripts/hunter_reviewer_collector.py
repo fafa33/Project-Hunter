@@ -1130,7 +1130,9 @@ class GitHubBackend:
                     int(trigger["id"]),
                 )
                 ack_comment_id = ack_comment.get("id") or ack_comment.get("durable_trigger_id")
-            return_state = state if (result_comment.get("id") and (state != "clear" or ack_comment_id)) else "unavailable"
+            return_state = (
+                state if (result_comment.get("id") and (state != "clear" or ack_comment_id)) else "unavailable"
+            )
             return {
                 **trigger,
                 "provider": provider,
