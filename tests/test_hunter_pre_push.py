@@ -272,7 +272,11 @@ def test_declared_invalid_review_request_blocks_push_boundary(monkeypatch) -> No
     monkeypatch.setattr(
         hunter_pre_push.review,
         "local_changes",
-        lambda *_a, **_k: (hunter_pre_push.review.ingress.ConnectorFileChange("modified", hunter_pre_push.review.REVIEW_RELATIVE_PATH, "", "a" * 40),),
+        lambda *_a, **_k: (
+            hunter_pre_push.review.ingress.ConnectorFileChange(
+                "modified", hunter_pre_push.review.REVIEW_RELATIVE_PATH, "", "a" * 40
+            ),
+        ),
     )
     monkeypatch.setattr(hunter_pre_push, "_governing_issue_criteria", lambda _updates: ("461", (), ""))
     monkeypatch.setattr(
