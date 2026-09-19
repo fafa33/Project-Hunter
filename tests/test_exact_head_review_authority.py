@@ -1412,6 +1412,7 @@ def test_review_request_is_content_bound_without_committed_authority(monkeypatch
         "findings": [],
     }
     monkeypatch.setattr(review, "local_changes", lambda *_a, **_k: CANDIDATE_CHANGES)
+    monkeypatch.setattr(review, "load_families", lambda: (FAMILIES, ""))
     document = review.prepare_request(issue="467", base=BASE, head=HEAD, base_ref="main", judgement=judgement)
 
     assert "authority" not in document
@@ -1420,6 +1421,22 @@ def test_review_request_is_content_bound_without_committed_authority(monkeypatch
         "claims_id": document["review_id"],
     }
     assert document["claims"]["review_target"] == [change.document() for change in CANDIDATE_CHANGES]
+
+
+def test_prepare_request_rejects_missing_applicable_defect_families(monkeypatch):
+    judgement = {
+        "acceptance_criteria": [
+            {"id": "AC-1", "criterion": "the gate blocks Ready", "verdict": "satisfied", "evidence": "suite"}
+        ],
+        "adversarial_dimensions": list(review.REQUIRED_ADVERSARIAL_DIMENSIONS),
+        "defect_families": [],
+        "findings": [],
+    }
+    monkeypatch.setattr(review, "local_changes", lambda *_a, **_k: CANDIDATE_CHANGES)
+    monkeypatch.setattr(review, "load_families", lambda: (FAMILIES, ""))
+
+    with pytest.raises(ValueError, match="applicable recurring-defect prevention checks are incomplete"):
+        review.prepare_request(issue="467", base=BASE, head=HEAD, base_ref="main", judgement=judgement)
 
 
 def _fallback_pool(login: str = "fafa33") -> dict[str, Any]:
@@ -1725,3 +1742,34 @@ def test_trusted_collector_trigger_rejects_unrelated_actions_bot_run(monkeypatch
         ),
     )
     assert not core.trusted_collector_run("repo", "token", trigger)
+
+
+def test_review_request_branch_issue_binding_is_checked_before_reviewer_dispatch(monkeypatch) -> None:
+    """Reviewer capacity must never be spent on claims for a different governing Issue."""
+    monkeypatch.setattr(
+        core,
+        "read_pr_refs",
+        lambda *_args: (True, "connector/issue-461-provider-capability-preflight", "main", None),
+    )
+    monkeypatch.setattr(core, "read_merge_base", lambda *_args: (True, BASE, None))
+    monkeypatch.setattr(
+        core,
+        "read_pr_changed_files",
+        lambda *_args: (True, (core.PullRequestFile("modified", "src/hunter/example.py", "", "3" * 40),), None),
+    )
+    monkeypatch.setattr(core.pre_ready, "load_families", lambda: ((), ""))
+    called: list[bool] = []
+
+    def unexpected_verify(*_args, **_kwargs):
+        called.append(True)
+        return review.ReviewVerdict("valid", "unexpected")
+
+    monkeypatch.setattr(core.pre_ready, "verify_review_request", unexpected_verify)
+    document = {"claims": {"issue": "999"}}
+
+    valid, reason = core.valid_current_review_request("repo", "token", 471, HEAD, document)
+
+    assert valid is False
+    assert "claims Issue #999" in reason
+    assert "binds Issue #461" in reason
+    assert called == []

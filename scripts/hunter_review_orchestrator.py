@@ -42,7 +42,16 @@ MAX_COLLECTOR_DISPATCHES = 3
 #: only once the cycle is older than this, so an ordinary listing lag cannot be
 #: mistaken for a dead collector and duplicate the dispatch.
 COLLECTOR_LIVENESS_GRACE_SECONDS = 180
-PENDING_STATES = frozenset({"WAITING_FOR_REVIEWER", "REVIEW_IN_PROGRESS", "FAILOVER_IN_PROGRESS", "POOL_EXHAUSTED"})
+PENDING_STATES = frozenset(
+    {
+        "WAITING_FOR_REVIEWER",
+        "WAITING_FOR_REVIEW_REQUEST",
+        "WAITING_FOR_PREREQUISITE",
+        "REVIEW_IN_PROGRESS",
+        "FAILOVER_IN_PROGRESS",
+        "POOL_EXHAUSTED",
+    }
+)
 #: Issue #461 / PR #473: an exact-head cycle whose reviewers were all exhausted
 #: used to be the end of the line. Remediating the blocking findings it produced
 #: could never start another review of the same immutable head, so the candidate
@@ -706,7 +715,11 @@ def publish_cycle(
         "POST",
         f"statuses/{head_sha}",
         {
-            "state": "pending" if cycle.state != "REVIEW_CLEAR" else "success",
+            "state": (
+                "success"
+                if cycle.state == "REVIEW_CLEAR"
+                else "failure" if cycle.state == "PREREQUISITE_BLOCKED" else "pending"
+            ),
             "context": f"{CONTEXT_PREFIX}{cycle.pr_number}",
             "description": description,
             "target_url": target_url,
@@ -755,22 +768,24 @@ def ensure_collector(
     return cycle
 
 
-def review_request_state(repository: str, token: str, pr_number: int, head_sha: str) -> tuple[bool, str]:
-    """Whether this head carries a current review request, and which claims it is.
+def review_request_state(repository: str, token: str, pr_number: int, head_sha: str) -> tuple[bool, str, str]:
+    """Return ``(ready, claims_id, reason)`` for exact-head reviewer prerequisites.
 
-    The claims digest is returned with the readiness answer because the
-    remediation generation is bound to it: resolving the request twice would let
-    the generation be derived from claims the dispatch decision never saw.
+    ``reason`` is deliberately preserved instead of collapsing every prerequisite
+    failure into a silent no-op. The reconcile controller can therefore publish a
+    deterministic machine-readable blocked state and never strand a candidate
+    behind the later, misleading ``MISSING_REVIEW_AUTHORITY`` symptom.
     """
 
     import hunter_governance_review_v2 as governance
 
-    preflight_state, _ = governance.read_trusted_upgrade_status(repository, token, head_sha, pr_number)
+    preflight_state, preflight_reason = governance.read_trusted_upgrade_status(repository, token, head_sha, pr_number)
     if preflight_state != "success":
-        return False, ""
-    request_state, document, _ = governance.read_head_pre_ready_review(repository, token, head_sha)
+        return False, "", f"TRUSTED_PREFLIGHT_{preflight_state.upper()}:{preflight_reason}"
+    request_state, document, request_error = governance.read_head_pre_ready_review(repository, token, head_sha)
     if request_state != "present" or not isinstance(document, dict):
-        return False, ""
+        detail = request_error or request_state
+        return False, "", f"REVIEW_REQUEST_MISSING:{detail}"
     request = document.get("review_request")
     if not (
         isinstance(request, dict)
@@ -778,13 +793,49 @@ def review_request_state(repository: str, token: str, pr_number: int, head_sha: 
         and isinstance(request.get("claims_id"), str)
         and len(request["claims_id"]) == 64
     ):
-        return False, ""
-    valid, _reason = governance.valid_current_review_request(repository, token, pr_number, head_sha, document)
-    return bool(valid), str(request["claims_id"]) if valid else ""
+        return False, "", "REVIEW_REQUEST_MALFORMED:identity/schema"
+    valid, reason = governance.valid_current_review_request(repository, token, pr_number, head_sha, document)
+    if not valid:
+        return False, "", f"REVIEW_REQUEST_INVALID:{reason}"
+    return True, str(request["claims_id"]), "READY"
 
 
 def review_prerequisites_ready(repository: str, token: str, pr_number: int, head_sha: str) -> bool:
     return review_request_state(repository, token, pr_number, head_sha)[0]
+
+
+def _prerequisite_code(reason: str) -> str:
+    """Stable status code for a prerequisite failure; detail remains in workflow logs."""
+
+    code = reason.split(":", 1)[0].strip() or "PREREQUISITE_BLOCKED"
+    return re.sub(r"[^A-Z0-9_-]", "_", code.upper())[:48]
+
+
+def prerequisite_cycle_state(reason: str) -> str:
+    """Classify a prerequisite as transient waiting or deterministic invalidity."""
+
+    if reason.startswith("REVIEW_REQUEST_MISSING:"):
+        return "WAITING_FOR_REVIEW_REQUEST"
+    if reason.startswith("TRUSTED_PREFLIGHT_"):
+        return "WAITING_FOR_PREREQUISITE"
+    return "PREREQUISITE_BLOCKED"
+
+
+def publish_prerequisite_block(repository: str, token: str, pr_number: int, head_sha: str, reason: str) -> ReviewCycle:
+    """Publish the exact-head prerequisite state without dispatching a reviewer."""
+
+    cycle = ReviewCycle(
+        pr_number=pr_number,
+        head_sha=head_sha,
+        state=prerequisite_cycle_state(reason),
+        provider_id=_prerequisite_code(reason),
+        trigger_id=current_run_id(),
+        started_at=datetime.now(UTC).strftime("%Y-%m-%dT%H:%M:%SZ"),
+        config_digest=reviewer_pool_config_digest(),
+    )
+    publish_cycle(repository, token, head_sha, cycle=cycle)
+    print(f"Review orchestration prerequisite blocked for PR #{pr_number} at {head_sha[:10]}: {reason}")
+    return cycle
 
 
 def ensure_current(repository: str, token: str, pr_number: int) -> ReviewCycle | None:
@@ -794,9 +845,9 @@ def ensure_current(repository: str, token: str, pr_number: int) -> ReviewCycle |
     head_sha = str((pr.get("head") or {}).get("sha") or "")
     if not head_sha:
         raise RuntimeError("current pull-request head is unavailable")
-    ready, claims_id = review_request_state(repository, token, pr_number, head_sha)
+    ready, claims_id, reason = review_request_state(repository, token, pr_number, head_sha)
     if not ready:
-        return None
+        return publish_prerequisite_block(repository, token, pr_number, head_sha, reason)
     # Derived here, never accepted from a dispatch input or from candidate prose:
     # the generation is what authorises one more reviewer invocation, so only
     # trusted GitHub review-thread state may decide it.

@@ -1286,6 +1286,44 @@ def read_review_document(path: Path | None = None) -> Any:
         raise GitEvidenceUnavailable(f"{REVIEW_RELATIVE_PATH} is unreadable ({type(exc).__name__}: {exc})") from exc
 
 
+def verify_local_review_request(
+    base: str,
+    head: str = "HEAD",
+    *,
+    cwd: Path | None = None,
+    issue_criteria: tuple[str, ...] | None = None,
+) -> ReviewVerdict:
+    """Fail-closed local validation for a declared reviewer request.
+
+    Draft work may exist without a request. Once ``review_request`` is present,
+    however, it is a machine-readable claim that the exact candidate is ready to
+    consume reviewer capacity. Validate that claim at the write boundary against
+    the same content/base/family/Issue evidence the trusted hosted controller
+    uses.
+    """
+    families, error = load_families()
+    if error:
+        return ReviewVerdict("incomplete", error)
+    try:
+        changes = local_changes(base, head, cwd=cwd)
+        document = read_review_document()
+    except GitEvidenceUnavailable as exc:
+        return ReviewVerdict("incomplete", f"pre-ready review request evidence is unavailable ({exc})")
+    if not isinstance(document, dict) or "review_request" not in document:
+        return ReviewVerdict("absent", "no review request is declared")
+    exact_head = (
+        head if _GIT_SHA.fullmatch(head) else _run_git("rev-parse", "--verify", f"{head}^{{commit}}", cwd=cwd).strip()
+    )
+    return verify_review_request(
+        document,
+        base_sha=base,
+        changes=changes,
+        families=families,
+        issue_criteria=issue_criteria,
+        head_sha=exact_head,
+    )
+
+
 def verify_local(
     base: str,
     head: str = "HEAD",
@@ -1371,6 +1409,21 @@ def prepare_request(
     )
     document = document_for(claims)
     document["review_request"] = {"schema": "hunter.review-request.v1", "claims_id": document["review_id"]}
+    families, families_error = load_families()
+    if families_error:
+        raise ValueError(families_error)
+    exact_head = (
+        head if _GIT_SHA.fullmatch(head) else _run_git("rev-parse", "--verify", f"{head}^{{commit}}", cwd=cwd).strip()
+    )
+    verdict = verify_review_request(
+        document,
+        base_sha=base,
+        changes=changes,
+        families=families,
+        head_sha=exact_head,
+    )
+    if not verdict.ok:
+        raise ValueError(f"review request is {verdict.state}: {verdict.reason}")
     return document
 
 

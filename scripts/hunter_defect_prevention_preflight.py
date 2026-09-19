@@ -1504,6 +1504,52 @@ def validate_trusted_preflight_reconcile_wakeup() -> list[str]:
     return []
 
 
+def validate_review_request_lifecycle_contract() -> list[str]:
+    """Review requests must be valid before push and failures must stay observable.
+
+    This guards the state-machine edges that previously allowed a stale/incomplete
+    request to pass the local write boundary and then disappear inside a silent
+    orchestrator no-op, surfacing later as the unrelated MISSING_REVIEW_AUTHORITY
+    symptom.
+    """
+
+    required = {
+        "scripts/hunter_pre_ready_review.py": (
+            "def verify_local_review_request(",
+            "verdict = verify_review_request(",
+            'raise ValueError(f"review request is {verdict.state}: {verdict.reason}")',
+        ),
+        "scripts/hunter_pre_push.py": (
+            "def enforce_declared_review_request(",
+            "enforce_declared_review_request(after_head, updates)",
+            "verify_local_review_request(base, head_sha, issue_criteria=issue_criteria)",
+        ),
+        "scripts/hunter_governance_review_v2.py": (
+            "branch_issue = issue_for_branch(head_ref)",
+            "if branch_issue is not None and issue != branch_issue:",
+        ),
+        "scripts/hunter_review_orchestrator.py": (
+            'return False, "", f"REVIEW_REQUEST_INVALID:{reason}"',
+            "def publish_prerequisite_block(",
+            'return "PREREQUISITE_BLOCKED"',
+            'return "WAITING_FOR_REVIEW_REQUEST"',
+            'return "WAITING_FOR_PREREQUISITE"',
+            "return publish_prerequisite_block(repository, token, pr_number, head_sha, reason)",
+        ),
+    }
+    errors: list[str] = []
+    for relative, markers in required.items():
+        try:
+            text = (ROOT / relative).read_text(encoding="utf-8")
+        except OSError as exc:
+            errors.append(f"review-request lifecycle source unavailable ({relative}: {exc})")
+            continue
+        for marker in markers:
+            if marker not in text:
+                errors.append(f"review-request lifecycle invariant missing from {relative}: {marker}")
+    return errors
+
+
 def validate_review_after_remediation_boundary() -> list[str]:
     """DFF-024: a remediated exact head must still be able to be reviewed again.
 
@@ -1723,6 +1769,7 @@ def validate_defect_prevention_lifecycle() -> list[str]:
 
     errors.extend(validate_recurring_defect_families(registry, lifecycle))
     errors.extend(validate_trusted_preflight_reconcile_wakeup())
+    errors.extend(validate_review_request_lifecycle_contract())
     errors.extend(validate_review_after_remediation_boundary())
     errors.extend(validate_code_write_policy())
     errors.extend(validate_reviewer_finding_dispositions())

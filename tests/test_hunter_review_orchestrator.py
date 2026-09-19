@@ -530,22 +530,41 @@ def test_review_prerequisites_reject_stale_request_before_hosted_review_dispatch
     monkeypatch.setattr(governance, "read_head_pre_ready_review", lambda *_args: ("present", document, None))
 
     assert orchestrator.review_prerequisites_ready("owner/repo", "token", 472, HEAD) is False
+    ready, claims_id, reason = orchestrator.review_request_state("owner/repo", "token", 472, HEAD)
+    assert ready is False
+    assert claims_id == ""
+    assert reason.startswith("REVIEW_REQUEST_INVALID:")
+    assert "older base" in reason
 
 
-def test_current_pr_waits_for_trusted_review_prerequisites(monkeypatch):
+def test_current_pr_publishes_prerequisite_failure_without_dispatch(monkeypatch):
     monkeypatch.setattr(
         orchestrator,
         "request_json",
         lambda *_args: {"state": "open", "head": {"sha": HEAD}},
     )
-    monkeypatch.setattr(orchestrator, "review_request_state", lambda *_args: (False, ""), raising=False)
-    calls = []
-    monkeypatch.setattr(orchestrator, "ensure_collector", lambda *_args: calls.append(True), raising=False)
+    monkeypatch.setattr(
+        orchestrator,
+        "review_request_state",
+        lambda *_args: (False, "", "REVIEW_REQUEST_INVALID:missing DFF-001"),
+        raising=False,
+    )
+    collector_calls = []
+    blocked = []
+    monkeypatch.setattr(orchestrator, "ensure_collector", lambda *_args: collector_calls.append(True), raising=False)
+    monkeypatch.setattr(
+        orchestrator,
+        "publish_prerequisite_block",
+        lambda _repo, _token, pr, head, reason: blocked.append((pr, head, reason))
+        or make_cycle(state="PREREQUISITE_BLOCKED", provider_id="REVIEW_REQUEST_INVALID"),
+    )
 
     result = orchestrator.ensure_current("owner/repo", "token", 472)
 
-    assert result is None
-    assert calls == []
+    assert result is not None
+    assert result.state == "PREREQUISITE_BLOCKED"
+    assert blocked == [(472, HEAD, "REVIEW_REQUEST_INVALID:missing DFF-001")]
+    assert collector_calls == []
 
 
 def test_offline_mac_skips_local_without_red(monkeypatch):

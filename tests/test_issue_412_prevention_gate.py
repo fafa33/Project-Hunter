@@ -1746,6 +1746,7 @@ def test_pre_push_admits_a_bound_multi_commit_range(monkeypatch, tmp_path: Path)
     monkeypatch.setattr(hunter_pre_push.os, "chdir", lambda _path: None)
     monkeypatch.setattr(hunter_pre_push, "_validate_receipt_freshness", lambda _head: None)
     monkeypatch.setattr(hunter_pre_push, "report_pre_ready_review_state", lambda _head, _updates: None)
+    monkeypatch.setattr(hunter_pre_push, "enforce_declared_review_request", lambda _head, _updates: None)
     monkeypatch.setattr(hunter_pre_push.provenance, "check_range", lambda *_a, **_k: None)
     monkeypatch.setattr(hunter_pre_push, "_select_preflight_mode", lambda _head: hunter_pre_push.NORMAL_MODE)
 

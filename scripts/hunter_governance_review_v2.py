@@ -1839,7 +1839,7 @@ def valid_current_review_request(
 ) -> tuple[bool, str]:
     """Verify request claims before the trusted collector spends reviewer capacity."""
 
-    ok_refs, _head_ref, base_ref, refs_error = read_pr_refs(repository, token, pr_number)
+    ok_refs, head_ref, base_ref, refs_error = read_pr_refs(repository, token, pr_number)
     if not ok_refs:
         return False, f"pull-request ref evidence is unavailable ({refs_error})"
     ok_base, merge_base, base_error = read_merge_base(repository, token, base_ref, head_sha)
@@ -1866,6 +1866,11 @@ def valid_current_review_request(
         return False, families_error
     claims = document.get("claims") if isinstance(document, dict) else None
     issue = str((claims or {}).get("issue") or "").strip().lstrip("#")
+    branch_issue = issue_for_branch(head_ref)
+    if branch_issue is not None and issue != branch_issue:
+        return False, (
+            f"review request claims Issue #{issue or 'none'}, but branch {head_ref} binds Issue #{branch_issue}"
+        )
     issue_criteria: tuple[str, ...] | None = None
     if issue.isdigit():
         criteria_state, issue_criteria, criteria_error = read_issue_acceptance_criteria(repository, token, issue)
@@ -1982,6 +1987,14 @@ def verify_pre_ready_hostile_review(
         # earlier PR's stale/malformed review outcome either.
         document = None
         document_from_committed_artifact = False
+
+    if isinstance(document, dict) and "review_request" in document:
+        valid_request, request_reason = valid_current_review_request(repository, token, pr_number, head_sha, document)
+        if not valid_request:
+            return (
+                "failure",
+                f"MALFORMED_REVIEW: review request is not current: {request_reason}",
+            )
 
     pool, pool_error = pre_ready.load_reviewer_pool()
     if pool_error or pool is None:

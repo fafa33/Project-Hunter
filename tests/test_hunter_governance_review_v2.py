@@ -627,3 +627,10 @@ def test_review_orchestration_state_reads_trusted_cycle(monkeypatch):
     assert state == "REVIEW_IN_PROGRESS"
     assert "provider=codex" in detail
     assert "trigger=321" in detail
+
+
+def test_defect_prevention_guards_review_request_lifecycle_contract() -> None:
+    assert core.pre_ready is not None  # module import sanity beside the DPM contract
+    import hunter_defect_prevention_preflight as prevention
+
+    assert prevention.validate_review_request_lifecycle_contract() == []

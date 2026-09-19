@@ -370,6 +370,35 @@ def _governing_issue_criteria(updates: Iterable[tuple[str, str, str]]) -> tuple[
     return issue, criteria, ""
 
 
+def enforce_declared_review_request(head_sha: str, updates: Iterable[tuple[str, str, str]]) -> None:
+    """Block a push only when it declares a reviewer request that is not current.
+
+    Ordinary incomplete Draft work remains pushable. A committed review request
+    is different: it asks trusted orchestration to spend reviewer capacity, so it
+    must already bind the exact content/base, governing Issue acceptance criteria,
+    and every applicable recurring-defect family.
+    """
+    try:
+        document = review.read_review_document()
+    except review.GitEvidenceUnavailable as exc:
+        raise RuntimeError(f"declared review request is unreadable ({exc})") from exc
+    if not isinstance(document, dict) or "review_request" not in document:
+        return
+    base = provenance.resolve_governed_base(head_sha)
+    changes = review.local_changes(base, head_sha)
+    if not any(change.path == review.REVIEW_RELATIVE_PATH for change in changes):
+        # Historical request state inherited unchanged from the governed base is
+        # not a declaration by this candidate. Hosted governance makes the same
+        # distinction before it attributes review evidence to a pull request.
+        return
+    _issue, issue_criteria, criteria_reason = _governing_issue_criteria(updates)
+    if issue_criteria is None and criteria_reason:
+        raise RuntimeError(f"declared review request cannot be validated: {criteria_reason}")
+    verdict = review.verify_local_review_request(base, head_sha, issue_criteria=issue_criteria)
+    if not verdict.ok:
+        raise RuntimeError(f"declared review request is {verdict.state}: {verdict.reason}")
+
+
 def report_pre_ready_review_state(head_sha: str, updates: Iterable[tuple[str, str, str]]) -> None:
     """Report, without blocking, whether this head could stand as Ready.
 
@@ -450,6 +479,7 @@ def enforce_pre_push(lines: Iterable[str]) -> int:
         return 2
 
     report_full_repository_proof_ownership(repo_root, after_head, mode)
+    enforce_declared_review_request(after_head, updates)
     report_pre_ready_review_state(after_head, updates)
     print(f"[Hunter Pre-Push] PASS: exact HEAD {after_head} passed the {_lane_label(mode)}")
     return 0
