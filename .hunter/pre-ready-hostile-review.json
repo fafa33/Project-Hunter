@@ -94,7 +94,7 @@
       "transaction-snapshot-consistency"
     ],
     "base_ref": "main",
-    "base_sha": "fea16ec43ecd728198733b14050f0037ea66080a",
+    "base_sha": "369210594f162205ea647befca063b097e56ca3b",
     "defect_families": [
       {
         "evidence": "PR #471 focused regression suite and trusted preflight evidence; authenticated reviewer must re-evaluate before adoption.",
@@ -190,9 +190,9 @@
     ],
     "review_target_digest": "8692300905ce9a5d81ac7381cb3060f40c76b23b99639b98ca238e91d409a785"
   },
-  "review_id": "bab2d13ab2e1cf2a81af87f1d6062b86fbbeb2b17037723e78701291563b50ae",
+  "review_id": "3db6e7241974d053b970f52d92d118985260cbf05f229bdca99d9324ea598692",
   "review_request": {
-    "claims_id": "bab2d13ab2e1cf2a81af87f1d6062b86fbbeb2b17037723e78701291563b50ae",
+    "claims_id": "3db6e7241974d053b970f52d92d118985260cbf05f229bdca99d9324ea598692",
     "schema": "hunter.review-request.v1"
   },
   "schema": "hunter.pre-ready-hostile-review.v1"
