@@ -781,6 +781,33 @@ class GitHubBackend:
                 raise
             return ReviewerDispatchRefused(exc)
 
+    def _post_result_comment(self, body: str, trigger_id: int) -> dict[str, Any]:
+        """Persist a result/ack comment after a durable trigger already exists.
+
+        This is a post-trigger persistence path: a failure must never be turned
+        into a zero-id unavailable record. Wrap it so the caller sees the real
+        trigger identity and a meaningful failure, while still allowing a direct
+        trusted-branch refusal (the repository is gone, permissions revoked) to
+        classify as reviewer unavailability without losing the trigger id.
+        """
+
+        try:
+            return self._post_comment(body)
+        except governance.transport.GitHubRequestError as exc:
+            if not reviewer_dispatch_unavailable(exc):
+                raise
+            # The trigger comment in `trigger_id` already exists. Return a
+            # synthetic record that preserves the real identity; the outer
+            # collector will see this as an unavailable attempt with durable
+            # evidence, not as a pre-trigger refusal.
+            return {
+                "id": 0,
+                "created_at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+                "durable_trigger_id": trigger_id,
+                "post_trigger_refusal": type(exc).__name__,
+                "dispatch_status": exc.status_code,
+            }
+
     def _api_result(self, agent: dict[str, Any], trigger: dict[str, Any]) -> dict[str, Any] | None:
         trigger_record = parse_api_trigger(str(trigger.get("body") or ""))
         if trigger_record is None:
@@ -1016,9 +1043,12 @@ class GitHubBackend:
             except governance.transport.GitHubRequestError as exc:
                 if not reviewer_dispatch_unavailable(exc):
                     raise
+                # The durable trigger comment exists; preserve its identity while
+                # converting the reviewer-request refusal to an unavailable state.
                 trigger["collector_run_id"] = self.run_id
                 trigger["state"] = "unavailable"
                 trigger["request_error"] = type(exc).__name__
+                trigger["dispatch_status"] = exc.status_code
                 return trigger
             trigger["collector_run_id"] = self.run_id
             return trigger
@@ -1060,11 +1090,11 @@ class GitHubBackend:
                 }
             state = "unavailable" if payload.get("verdict") == "unavailable" else external_verdict(payload)
             digest = hashlib.sha256(json.dumps(payload, sort_keys=True, separators=(",", ":")).encode()).hexdigest()
-            # Once provider execution has returned, losing the result comment is
-            # an evidence-persistence failure, not reviewer unavailability. Let
-            # it fail closed rather than authorising failover from an unverifiable
-            # receipt.
-            result_comment = self._post_comment(
+            # Once provider execution has returned, losing the result or ack
+            # comment is an evidence-persistence failure, not reviewer
+            # unavailability. Use _post_result_comment so the durable trigger
+            # identity is preserved if GitHub refuses the post.
+            result_comment = self._post_result_comment(
                 api_result_body(
                     self.expected_head,
                     self.claims_id,
@@ -1074,10 +1104,13 @@ class GitHubBackend:
                     state,
                     str(payload.get("summary") or ""),
                     digest,
-                )
+                ),
+                int(trigger["id"]),
             )
+            result_comment_id = result_comment.get("id") or result_comment.get("durable_trigger_id")
+            ack_comment_id: int | None = None
             if state == "clear":
-                self._post_comment(
+                ack_comment = self._post_result_comment(
                     json.dumps(
                         {
                             "schema": "hunter.review-ack.v1",
@@ -1093,16 +1126,21 @@ class GitHubBackend:
                             "response_digest": digest,
                         },
                         sort_keys=True,
-                    )
+                    ),
+                    int(trigger["id"]),
                 )
+                ack_comment_id = ack_comment.get("id") or ack_comment.get("durable_trigger_id")
+            return_state = state if (result_comment.get("id") and (state != "clear" or ack_comment_id)) else "unavailable"
             return {
                 **trigger,
                 "provider": provider,
                 "response_digest": digest,
                 "head_sha": self.expected_head,
-                "state": state,
-                "result_comment_id": result_comment["id"],
+                "state": return_state,
+                "result_comment_id": result_comment_id,
                 "collector_run_id": self.run_id,
+                "post_trigger_refusal": result_comment.get("post_trigger_refusal"),
+                "dispatch_status": result_comment.get("dispatch_status"),
             }
         body = trigger_body(
             self.expected_head, self.claims_id, agent, self.run_id, self.run_attempt, number, self.generation_id

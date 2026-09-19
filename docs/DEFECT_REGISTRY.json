@@ -1281,7 +1281,7 @@
         "tests/test_hunter_reviewer_collector.py::test_api_failure_after_trigger_creation_preserves_trigger_identity",
         "tests/test_hunter_reviewer_collector.py::test_collect_attempts_keeps_nonzero_identity_for_post_trigger_api_failure",
         "tests/test_hunter_reviewer_collector.py::test_provider_refusal_after_api_trigger_persists_verifiable_unavailability",
-        "tests/test_hunter_reviewer_collector.py::test_api_result_persistence_failure_after_provider_return_fails_closed",
+        "tests/test_hunter_reviewer_collector.py::test_api_result_persistence_failure_after_provider_return_keeps_trigger_identity",
         "tests/test_hunter_reviewer_collector.py::test_existing_api_trigger_adoption_preserves_identity_on_result_read_failure",
         "tests/test_hunter_defect_prevention_preflight.py::test_dff025_guard_rejects_a_broad_pool_exception_catcher"
       ],

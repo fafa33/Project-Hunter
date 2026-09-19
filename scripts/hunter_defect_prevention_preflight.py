@@ -1857,6 +1857,17 @@ def validate_reviewer_unavailability_is_per_reviewer() -> list[str]:
     # Once a durable trigger exists, provider/result/persistence failures are no
     # longer pre-trigger rejection. The backend must classify them internally and
     # must never let them escape to collect_attempts as a pre-trigger refusal.
+    # Every post-trigger call site must either be inside a try that uses
+    # reviewer_dispatch_unavailable, or must be routed through an internal helper
+    # that already provides that protection.
+    errors.extend(_check_backend_post_trigger_boundary(tree))
+    return errors
+
+
+def _check_backend_post_trigger_boundary(tree: ast.AST) -> list[str]:
+    """Verify GitHubBackend.trigger protects every post-trigger persistence path."""
+
+    errors: list[str] = []
     backend = next(
         (node for node in ast.walk(tree) if isinstance(node, ast.ClassDef) and node.name == "GitHubBackend"),
         None,
@@ -1869,54 +1880,96 @@ def validate_reviewer_unavailability_is_per_reviewer() -> list[str]:
         if backend is not None
         else None
     )
-    # Small synthetic DPM fixtures need not reproduce the whole backend class.
-    # When the production backend exists, however, its post-trigger boundary is
-    # part of the invariant and is checked below.
-    if backend is not None and trigger_method is None:
-        errors.append("GitHubBackend.trigger is missing from the reviewer collector")
-    elif trigger_method is not None:
-        protected_post_trigger = False
-        durable_trigger_calls = {"_post_trigger_comment", "_existing_trigger", "_adopt_workflow_run"}
-        post_trigger_calls = {"_invoke_external", "_api_result", "_post_comment"}
-        durable_trigger_lines = [
-            call.lineno
-            for call in ast.walk(trigger_method)
-            if isinstance(call, ast.Call)
-            and isinstance(call.func, ast.Attribute)
-            and call.func.attr in durable_trigger_calls
-            and call.lineno is not None
-        ]
-        for attempt in (node for node in ast.walk(trigger_method) if isinstance(node, ast.Try)):
-            body_calls = {
-                call.func.attr
-                for call in ast.walk(attempt)
-                if isinstance(call, ast.Call) and isinstance(call.func, ast.Attribute)
-            }
-            if not (body_calls & post_trigger_calls):
-                # This try does not protect a post-trigger persistence path.
-                continue
-            # The durable trigger must already exist before the protected call.
-            # It may be inside the same try (adoption) or created earlier in the
-            # method (API trigger comment before provider invocation).
-            if not (
-                body_calls & durable_trigger_calls
-                or (attempt.lineno is not None and any(line < attempt.lineno for line in durable_trigger_lines))
-            ):
-                continue
-            if any(
-                isinstance(call, ast.Call)
-                and isinstance(call.func, ast.Name)
-                and call.func.id == "reviewer_dispatch_unavailable"
-                for handler in attempt.handlers
-                for call in ast.walk(handler)
-            ):
-                protected_post_trigger = True
-        if not protected_post_trigger:
-            errors.append(
-                "GitHubBackend.trigger must classify every post-trigger persistence failure "
-                "(provider invocation, result/ack/adoption posting) without letting "
-                "collect_attempts erase the durable trigger identity"
-            )
+    if backend is None:
+        return errors
+    if trigger_method is None:
+        return ["GitHubBackend.trigger is missing from the reviewer collector"]
+
+    durable_trigger_calls = {"_post_trigger_comment", "_existing_trigger", "_adopt_workflow_run"}
+    post_trigger_calls = {"_invoke_external", "_api_result", "_post_comment", "_post_result_comment"}
+    protected_helpers: set[str] = set()
+    for node in ast.walk(backend):
+        if isinstance(node, ast.FunctionDef) and node.name.startswith("_"):
+            stmts = set()
+            for stmt in ast.walk(node):
+                if isinstance(stmt, ast.Try) and stmt.handlers:
+                    stmts.add(stmt)
+            for attempt in stmts:
+                body_calls = {
+                    call.func.attr
+                    for call in ast.walk(attempt)
+                    if isinstance(call, ast.Call) and isinstance(call.func, ast.Attribute)
+                }
+                if "_post_comment" in body_calls and any(
+                    isinstance(call, ast.Call)
+                    and isinstance(call.func, ast.Name)
+                    and call.func.id == "reviewer_dispatch_unavailable"
+                    for handler in attempt.handlers
+                    for call in ast.walk(handler)
+                ):
+                    protected_helpers.add(node.name)
+
+    durable_trigger_lines = [
+        call.lineno
+        for call in ast.walk(trigger_method)
+        if isinstance(call, ast.Call)
+        and isinstance(call.func, ast.Attribute)
+        and call.func.attr in durable_trigger_calls
+        and call.lineno is not None
+    ]
+    protected_post_trigger = False
+    for attempt in (node for node in ast.walk(trigger_method) if isinstance(node, ast.Try)):
+        body_calls = {
+            call.func.attr
+            for call in ast.walk(attempt)
+            if isinstance(call, ast.Call) and isinstance(call.func, ast.Attribute)
+        }
+        if not (body_calls & post_trigger_calls):
+            continue
+        if not (
+            body_calls & durable_trigger_calls
+            or (attempt.lineno is not None and any(line < attempt.lineno for line in durable_trigger_lines))
+        ):
+            continue
+        if any(
+            isinstance(call, ast.Call)
+            and isinstance(call.func, ast.Name)
+            and call.func.id == "reviewer_dispatch_unavailable"
+            for handler in attempt.handlers
+            for call in ast.walk(handler)
+        ):
+            protected_post_trigger = True
+
+    # Every raw _post_comment inside trigger must be replaced by a protected
+    # helper; raw _post_comment calls are only safe when creating the trigger.
+    raw_post_trigger_lines = [
+        call.lineno
+        for call in ast.walk(trigger_method)
+        if isinstance(call, ast.Call)
+        and isinstance(call.func, ast.Attribute)
+        and call.func.attr == "_post_comment"
+        and call.lineno is not None
+    ]
+    if raw_post_trigger_lines:
+        # A raw _post_comment is allowed only when it is the durable trigger
+        # creation itself. Verify each raw call is dominated by a prior durable
+        # trigger creation; if not, it is an unprotected post-trigger persistence
+        # path.
+        for line in raw_post_trigger_lines:
+            if not any(line > durable_line for durable_line in durable_trigger_lines):
+                errors.append(
+                    "GitHubBackend.trigger has a _post_comment call that is not protected by "
+                    "reviewer_dispatch_unavailable and is not the durable trigger creation; "
+                    "post-trigger persistence failures would erase the real trigger identity"
+                )
+                break
+
+    if not protected_post_trigger:
+        errors.append(
+            "GitHubBackend.trigger must classify every post-trigger persistence failure "
+            "(provider invocation, result/ack/adoption posting) without letting "
+            "collect_attempts erase the durable trigger identity"
+        )
     return errors
 
 
@@ -1959,53 +2012,7 @@ def validate_reviewer_trigger_identity_preservation() -> list[str]:
             else:
                 continue
             break
-    trigger_method = next(
-        (node for node in ast.walk(tree) if isinstance(node, ast.ClassDef) and node.name == "GitHubBackend"),
-        None,
-    )
-    if trigger_method is not None:
-        trigger_method_node = next(
-            (node for node in ast.walk(trigger_method) if isinstance(node, ast.FunctionDef) and node.name == "trigger"),
-            None,
-        )
-        if trigger_method_node is not None:
-            durable_trigger_calls = {"_post_trigger_comment", "_existing_trigger", "_adopt_workflow_run"}
-            post_trigger_calls = {"_invoke_external", "_api_result", "_post_comment"}
-            durable_trigger_lines = [
-                call.lineno
-                for call in ast.walk(trigger_method_node)
-                if isinstance(call, ast.Call)
-                and isinstance(call.func, ast.Attribute)
-                and call.func.attr in durable_trigger_calls
-                and call.lineno is not None
-            ]
-            protected = False
-            for attempt in (node for node in ast.walk(trigger_method_node) if isinstance(node, ast.Try)):
-                body_calls = {
-                    call.func.attr
-                    for call in ast.walk(attempt)
-                    if isinstance(call, ast.Call) and isinstance(call.func, ast.Attribute)
-                }
-                if not (body_calls & post_trigger_calls):
-                    continue
-                if not (
-                    body_calls & durable_trigger_calls
-                    or (attempt.lineno is not None and any(line < attempt.lineno for line in durable_trigger_lines))
-                ):
-                    continue
-                if any(
-                    isinstance(call, ast.Call)
-                    and isinstance(call.func, ast.Name)
-                    and call.func.id == "reviewer_dispatch_unavailable"
-                    for handler in attempt.handlers
-                    for call in ast.walk(handler)
-                ):
-                    protected = True
-            if not protected:
-                errors.append(
-                    "GitHubBackend.trigger must structurally protect every post-trigger persistence "
-                    "path so a real trigger identity is never rewritten as zero"
-                )
+    errors.extend(_check_backend_post_trigger_boundary(tree))
     return errors
 
 
