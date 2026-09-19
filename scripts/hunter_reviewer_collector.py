@@ -766,11 +766,12 @@ class GitHubBackend:
             raise ValueError("GitHub did not confirm trusted collector evidence")
         return result
 
-    def _post_trigger_comment(self, body: str) -> dict[str, Any] | ReviewerDispatchRefused:
-        """Create a durable trigger comment, mapping a refusal to the canonical exception.
+    def _post_trigger_comment(self, body: str) -> dict[str, Any]:
+        """Create a durable trigger comment, raising a refusal into the outer loop.
 
         A failure here means no durable trigger identity exists yet, so the
-        outer collection loop is allowed to record per-reviewer unavailability.
+        outer collection loop is allowed to record per-reviewer unavailability
+        by catching the deliberate :class:`ReviewerDispatchRefused` exception.
         Any other exception propagates and fails closed.
         """
 
@@ -779,7 +780,7 @@ class GitHubBackend:
         except governance.transport.GitHubRequestError as exc:
             if not reviewer_dispatch_unavailable(exc):
                 raise
-            return ReviewerDispatchRefused(exc)
+            raise ReviewerDispatchRefused(exc) from exc
 
     def _post_result_comment(self, body: str, trigger_id: int) -> dict[str, Any]:
         """Persist a result/ack comment after a durable trigger already exists.
@@ -1024,13 +1025,6 @@ class GitHubBackend:
                     self.expected_head, self.claims_id, agent, self.run_id, self.run_attempt, number, self.generation_id
                 )
             )
-            if isinstance(trigger, ReviewerDispatchRefused):
-                return {
-                    "id": 0,
-                    "state": "unavailable",
-                    "collector_run_id": self.run_id,
-                    "request_error": trigger.request_error,
-                }
             reviewer = method.split(":", 1)[1]
             try:
                 governance.request_json(
@@ -1065,13 +1059,6 @@ class GitHubBackend:
                     self.generation_id,
                 )
             )
-            if isinstance(trigger, ReviewerDispatchRefused):
-                return {
-                    "id": 0,
-                    "state": "unavailable",
-                    "collector_run_id": self.run_id,
-                    "request_error": trigger.request_error,
-                }
             # A durable trigger comment now exists. Any later reviewer/API
             # rejection must preserve that identity; letting it escape to the
             # outer pre-trigger handler would incorrectly record trigger_id=0.
@@ -1129,7 +1116,10 @@ class GitHubBackend:
                     ),
                     int(trigger["id"]),
                 )
-                ack_comment_id = ack_comment.get("id") or ack_comment.get("durable_trigger_id")
+                if ack_comment.get("id"):
+                    ack_comment_id = int(ack_comment["id"])
+                else:
+                    ack_comment_id = None
             return_state = (
                 state if (result_comment.get("id") and (state != "clear" or ack_comment_id)) else "unavailable"
             )
@@ -1148,13 +1138,6 @@ class GitHubBackend:
             self.expected_head, self.claims_id, agent, self.run_id, self.run_attempt, number, self.generation_id
         )
         trigger = self._post_trigger_comment(body)
-        if isinstance(trigger, ReviewerDispatchRefused):
-            return {
-                "id": 0,
-                "state": "unavailable",
-                "collector_run_id": self.run_id,
-                "request_error": trigger.request_error,
-            }
         trigger["collector_run_id"] = self.run_id
         return trigger
 
