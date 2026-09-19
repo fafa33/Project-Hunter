@@ -918,6 +918,59 @@ def test_a_real_dispatch_inside_the_grace_is_still_not_duplicated(monkeypatch):
     assert result.trigger_id == 123
 
 
+def test_orchestration_status_description_never_exceeds_github_limit():
+    """The encoded cycle must always fit in GitHub's 140-character status field."""
+
+    cycle = make_cycle(
+        state="PREREQUISITE_BLOCKED",
+        provider_id="REVIEW_REQUEST_UNAVAILABLE",
+        trigger_id=999_999_999_999,
+        generation_id="g" * 16,
+    )
+    description = orchestrator.cycle_status_description(cycle)
+
+    assert len(description) <= 140
+    assert orchestrator._decode_trigger_id(description.split("|")[2]) == cycle.trigger_id
+
+
+def test_orchestration_status_parses_legacy_decimal_descriptions(monkeypatch):
+    """Cycles published before the base36 encoding still round-trip."""
+
+    def request(_repository, _token, _method, path, _payload=None):
+        if path == "pulls/472":
+            return {"state": "open", "head": {"sha": HEAD}}
+        if path == f"commits/{HEAD}/status":
+            return {
+                "statuses": [
+                    {
+                        "context": "Hunter Review Orchestration / PR #472",
+                        "description": f"WAITING_FOR_REVIEWER|local|123|{'d' * 64}|{orchestrator.BASE_GENERATION_ID}",
+                        "target_url": "https://github.com/owner/repo/actions/runs/123",
+                        "created_at": "2026-09-15T00:00:00Z",
+                        "creator": {"login": "github-actions[bot]"},
+                    }
+                ]
+            }
+        if path == "":
+            return {"default_branch": "main"}
+        if path == "actions/runs/123":
+            return {
+                "id": 123,
+                "head_branch": "main",
+                "path": ".github/workflows/hunter-governance-reconcile.yml",
+                "event": "workflow_dispatch",
+            }
+        raise AssertionError(f"unexpected {path}")
+
+    monkeypatch.setattr(orchestrator, "request_json", request)
+    state, cycle, _error = orchestrator.read_cycle("owner/repo", "token", 472, HEAD)
+
+    assert state == "present"
+    assert cycle is not None
+    assert cycle.trigger_id == 123
+    assert cycle.generation_id == orchestrator.BASE_GENERATION_ID
+
+
 # --- Only an absent request is a transient missing request --------------------
 
 

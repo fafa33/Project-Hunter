@@ -400,7 +400,7 @@ def _parse_cycle(status: dict[str, Any], pr_number: int, head_sha: str) -> Revie
     if parts[4] != BASE_GENERATION_ID and not GENERATION_ID_PATTERN.fullmatch(parts[4]):
         return None
     try:
-        trigger = int(parts[2]) or None
+        trigger = _decode_trigger_id(parts[2])
     except ValueError:
         return None
     return ReviewCycle(
@@ -697,6 +697,65 @@ def remediation_generation_admissible(repository: str, token: str, cycle: Review
     return True
 
 
+STATUS_DESCRIPTION_LIMIT = 140
+
+
+_BASE36 = "0123456789abcdefghijklmnopqrstuvwxyz"
+
+
+def _encode_trigger_id(trigger_id: int | None) -> str:
+    """Compact base36 encoding for the durable trigger identity.
+
+    GitHub Actions run IDs are currently eleven decimal digits and growing. A
+    base36 representation is roughly 40% shorter (eleven decimal digits become
+    seven characters), deterministic, and still round-trips through
+    ``int(text, 36)``. Zero/None encodes as ``"0"`` so the parser can
+    distinguish "no dispatch identity" from a missing field. A ``t`` prefix
+    disambiguates the new encoding from legacy decimal descriptions during
+    transition.
+    """
+
+    if trigger_id is None or trigger_id == 0:
+        return "0"
+    value = int(trigger_id)
+    if value < 0:
+        raise ValueError("trigger_id must be non-negative")
+    digits: list[str] = []
+    while value:
+        value, remainder = divmod(value, 36)
+        digits.append(_BASE36[remainder])
+    return "t" + "".join(reversed(digits))
+
+
+def _decode_trigger_id(text: str) -> int | None:
+    if not text or text == "0":
+        return None
+    try:
+        if text.startswith("t"):
+            return int(text[1:], 36)
+        return int(text) or None
+    except ValueError as exc:
+        raise ValueError("invalid trigger encoding") from exc
+
+
+def cycle_status_description(cycle: ReviewCycle) -> str:
+    """Encode a parseable orchestration cycle within GitHub's status limit.
+
+    State, the durable trigger identity, the full configuration digest, and the
+    remediation generation are lifecycle evidence and are never truncated. The
+    provider id is diagnostic only, so it consumes the remaining bounded field
+    budget. The encoding must always fit inside GitHub's 140-character limit.
+    """
+
+    trigger = _encode_trigger_id(cycle.trigger_id)
+    suffix = f"|{trigger}|{cycle.config_digest}|{cycle.generation_id}"
+    provider_budget = STATUS_DESCRIPTION_LIMIT - len(cycle.state) - 1 - len(suffix)
+    if provider_budget < 0:
+        raise ValueError("review orchestration status identity exceeds GitHub's description limit")
+    provider = cycle.provider_id[:provider_budget]
+    return f"{cycle.state}|{provider}{suffix}"
+
+
 def publish_cycle(
     repository: str,
     token: str,
@@ -704,8 +763,7 @@ def publish_cycle(
     *,
     cycle: ReviewCycle,
 ) -> None:
-    trigger = cycle.trigger_id or 0
-    description = f"{cycle.state}|{cycle.provider_id}|{trigger}|{cycle.config_digest}|{cycle.generation_id}"
+    description = cycle_status_description(cycle)
     run_id = current_run_id()
     server = os.environ.get("GITHUB_SERVER_URL") or "https://github.com"
     target_url = f"{server}/{repository}/actions/runs/{run_id}" if run_id else ""

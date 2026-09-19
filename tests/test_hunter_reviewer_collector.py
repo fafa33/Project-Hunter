@@ -1704,6 +1704,10 @@ def _request_error(status):
     return collector.governance.transport.GitHubRequestError("x", category="permanent", status_code=status)
 
 
+def _dispatch_refused(status):
+    return collector.ReviewerDispatchRefused(_request_error(status))
+
+
 def _exhausted(status):
     last = collector.governance.transport.GitHubRequestError("x", category="transient", status_code=status)
     return collector.governance.transport.GitHubUnavailable("what", attempts=3, last=last)
@@ -1828,7 +1832,7 @@ def test_one_undispatchable_reviewer_does_not_strand_the_whole_pool():
     when nothing about the candidate was wrong.
     """
 
-    backend = _PoolBackend(_request_error(404))
+    backend = _PoolBackend(_dispatch_refused(404))
 
     records = collector.collect_attempts(_isolation_pool(), HEAD, backend)
 
@@ -1851,7 +1855,7 @@ def test_pool_isolation_does_not_swallow_a_head_change():
             return "b" * 40
 
     with pytest.raises(ValueError, match="HEAD changed"):
-        collector.collect_attempts(_isolation_pool(), HEAD, Moved(_request_error(404)))
+        collector.collect_attempts(_isolation_pool(), HEAD, Moved(_dispatch_refused(404)))
 
 
 # --- A refused non-workflow trigger has no id to verify against ---------------
@@ -1902,7 +1906,7 @@ def test_an_undrivable_api_reviewer_is_isolated_like_a_workflow_reviewer():
                 raise self.error
             return {"id": 1, "created_at": "t"}
 
-    backend = ApiBackend(_request_error(403))
+    backend = ApiBackend(_dispatch_refused(403))
     pool = {
         "timeout_policy": {"retries_per_agent": 0},
         "agents": [
@@ -2089,3 +2093,41 @@ def test_api_result_persistence_failure_after_provider_return_fails_closed(monke
 
     with pytest.raises(collector.governance.transport.GitHubRequestError):
         backend.trigger(agent, 1)
+
+
+def test_existing_api_trigger_adoption_preserves_identity_on_result_read_failure(monkeypatch):
+    """A post-trigger _api_result failure must keep the real trigger id and mark unavailable."""
+
+    backend = _backend()
+    agent = {
+        "id": "gemini",
+        "trigger_method": "api:gemini",
+        "priority": 1,
+        "enabled": True,
+        "retryable": False,
+        "ack_timeout_seconds": 1,
+        "review_timeout_seconds": 1,
+        "evidence_parser": "parser",
+        "authority_eligible": True,
+    }
+    marker = backend.invocation_marker(agent, 1)
+    existing = {
+        "id": 7777,
+        "created_at": "2026-09-19T19:00:00Z",
+        "body": f"Collector invocation: 1/1/gemini/1.\nInvocation key: {marker}.",
+    }
+    monkeypatch.setattr(backend, "_existing_trigger", lambda _a, _n: existing)
+    calls = []
+
+    def api_result(_a, trigger):
+        calls.append(trigger["id"])
+        raise _request_error(403)
+
+    monkeypatch.setattr(backend, "_api_result", api_result)
+
+    trigger = backend.trigger(agent, 1)
+
+    assert trigger["id"] == 7777
+    assert trigger["state"] == "unavailable"
+    assert trigger["dispatch_status"] == 403
+    assert calls == [7777]

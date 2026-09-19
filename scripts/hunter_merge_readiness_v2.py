@@ -278,7 +278,11 @@ def review_authority_state(head_sha: str, pr_number: int) -> tuple[str, str]:
         waiting = review_wait_state(orchestration_state, orchestration_detail)
         if waiting is not None:
             return waiting
-        return "pending", f"{verdict.state}: {verdict.detail}"
+        return (
+            "failure",
+            f"BLOCKING_REVIEW_ORCHESTRATION: {orchestration_state}"
+            + (f": {orchestration_detail}" if orchestration_detail else ""),
+        )
     except Exception as exc:
         return "pending", f"Review authority evidence unavailable: {type(exc).__name__}: {exc}"
 

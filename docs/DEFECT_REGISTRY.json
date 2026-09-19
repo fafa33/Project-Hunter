@@ -1238,12 +1238,13 @@
         "rationale": "These are the components that execute only from the default branch. A change to any of them is never executed by the governance system before it becomes the governance system, so its failure modes have to be enforced structurally at the push boundary rather than discovered in production."
       },
       "prevention": {
-        "mechanism": "scripts/hunter_defect_prevention_preflight.py::validate_reviewer_unavailability_is_per_reviewer runs inside the Defect Prevention Guard at the push boundary and in the hosted preflight. It checks the invariant structurally against the live implementation rather than by wording: that reviewer unavailability has exactly one decision point (reviewer_dispatch_unavailable), that the predicate excludes GitHubUnavailable so exhausted infrastructure stays fail-closed, that no other function re-derives the policy from a status_code membership test, and that collect_attempts invokes backend.trigger inside a handler so one undrivable reviewer cannot end the collection. Because it reads the AST, a marker written in a comment or a docstring cannot satisfy it and a rename or reformat that changes no behaviour cannot break it.",
+        "mechanism": "scripts/hunter_defect_prevention_preflight.py::validate_reviewer_unavailability_is_per_reviewer runs inside the Defect Prevention Guard at the push boundary and in the hosted preflight. It checks the invariant structurally against the live implementation rather than by wording: that reviewer unavailability has exactly one decision point (reviewer_dispatch_unavailable); that the predicate excludes GitHubUnavailable so exhausted infrastructure stays fail-closed; that no other function re-derives the policy from a status_code membership test; that collect_attempts invokes backend.trigger inside a handler; and that the outer handler catches only the deliberate ReviewerDispatchRefused exception so a post-trigger failure cannot be rewritten as a pre-trigger refusal. Because it reads the AST, a marker written in a comment or a docstring cannot satisfy it and a rename or reformat that changes no behaviour cannot break it.",
         "boundary": "local-pre-push",
         "guard_reference": "scripts/hunter_defect_prevention_preflight.py::validate_reviewer_unavailability_is_per_reviewer"
       },
       "regression_evidence": [
         "tests/test_hunter_reviewer_collector.py::test_one_undispatchable_reviewer_does_not_strand_the_whole_pool",
+        "tests/test_hunter_reviewer_collector.py::test_an_undrivable_api_reviewer_is_isolated_like_a_workflow_reviewer",
         "tests/test_hunter_reviewer_collector.py::test_undispatchable_reviewer_probe_is_unavailability_not_collection_failure",
         "tests/test_hunter_reviewer_collector.py::test_exhausted_node_resolution_404_is_never_reviewer_unavailability",
         "tests/test_hunter_reviewer_collector.py::test_exhausted_infrastructure_still_fails_closed",
@@ -1251,12 +1252,67 @@
         "tests/test_hunter_defect_prevention_preflight.py::test_dff025_guard_rejects_a_second_decision_point",
         "tests/test_hunter_defect_prevention_preflight.py::test_dff025_guard_rejects_an_unisolated_pool_loop",
         "tests/test_hunter_defect_prevention_preflight.py::test_dff025_guard_rejects_classifying_exhausted_infrastructure_as_unavailable",
+        "tests/test_hunter_defect_prevention_preflight.py::test_dff025_guard_rejects_a_broad_pool_exception_catcher",
         "tests/test_hunter_defect_prevention_preflight.py::test_dff025_guard_accepts_a_renamed_but_equivalent_implementation",
         "tests/test_hunter_defect_prevention_preflight.py::test_lifecycle_contract_is_not_satisfied_by_a_comment"
       ],
       "sources": [
         "PR #482 (2026-09-19): commit 3692105 (PR #473) added GitHubBackend.default_branch and _dispatch_workflow_reviewer to the trusted collector and removed pull_request_target from its workflow in the same commit. PR #473's own collector runs 34-38 executed the pre-#473 collector, which contained neither function, so the new trusted control-plane code was never executed once before it became the trusted control plane. Collector runs 35459241663, 35460400305 and 35461071533 then failed in about fourteen seconds each, before any reviewer was invoked, and PR #482 reported the status failure 'MISSING_REVIEW_AUTHORITY: no authenticated exact-head adoption of the review request' although nothing about the candidate was defective.",
         "The recurrence, not the incident, is the defect: PR #470, #476, #479, #480 and #483 were each opened to bootstrap or repair a previous governance pull request, and #479 never merged. Repairing the trusted collector through the normal candidate path is impossible because every candidate is validated by the component it repairs, so PR #483 had to be merged as a bounded operator-authorized recovery."
+      ]
+    },
+    {
+      "id": "DFF-026",
+      "title": "reviewer-trigger-identity-erased-after-durable-creation",
+      "invariant": "Once a reviewer has a durable trigger identity, every later failure -- provider invocation, result persistence, acknowledgement persistence, adoption of an existing trigger -- preserves that identity or fails closed. A failure after trigger creation must never be converted into a zero-id unavailable record, because that creates unverifiable exhaustion/failover authority.",
+      "applicability": {
+        "changed_paths": [
+          "scripts/hunter_reviewer_collector.py",
+          "scripts/hunter_defect_prevention_preflight.py"
+        ],
+        "rationale": "The collector creates durable trigger comments and must protect their identity across every subsequent persistence step."
+      },
+      "prevention": {
+        "mechanism": "scripts/hunter_defect_prevention_preflight.py::validate_reviewer_trigger_identity_preservation enforces that collect_attempts catches only the deliberate ReviewerDispatchRefused exception for pre-trigger refusals, and that GitHubBackend.trigger structurally protects every post-trigger persistence path so a real trigger identity is never rewritten as zero.",
+        "boundary": "local-pre-push",
+        "guard_reference": "scripts/hunter_defect_prevention_preflight.py::validate_reviewer_trigger_identity_preservation"
+      },
+      "regression_evidence": [
+        "tests/test_hunter_reviewer_collector.py::test_api_failure_after_trigger_creation_preserves_trigger_identity",
+        "tests/test_hunter_reviewer_collector.py::test_collect_attempts_keeps_nonzero_identity_for_post_trigger_api_failure",
+        "tests/test_hunter_reviewer_collector.py::test_provider_refusal_after_api_trigger_persists_verifiable_unavailability",
+        "tests/test_hunter_reviewer_collector.py::test_api_result_persistence_failure_after_provider_return_fails_closed",
+        "tests/test_hunter_reviewer_collector.py::test_existing_api_trigger_adoption_preserves_identity_on_result_read_failure",
+        "tests/test_hunter_defect_prevention_preflight.py::test_dff025_guard_rejects_a_broad_pool_exception_catcher"
+      ],
+      "lifecycle": "locally-enforced",
+      "sources": [
+        "PR #482 (2026-09-19): Copilot review round three identified that the outer collect_attempts handler wrapped every backend.trigger call, so an API trigger that had already created a durable comment could still be recorded with trigger_id=0, authorizing failover without verifiable evidence."
+      ]
+    },
+    {
+      "id": "DFF-027",
+      "title": "orchestration-status-description-exceeds-github-limit",
+      "invariant": "A published review-orchestration commit-status description never exceeds GitHub's 140-character limit while remaining parseable, preserving trigger identity, configuration digest, remediation generation, and exact-head semantics.",
+      "applicability": {
+        "changed_paths": [
+          "scripts/hunter_review_orchestrator.py",
+          "scripts/hunter_defect_prevention_preflight.py"
+        ],
+        "rationale": "The orchestrator publishes machine-readable lifecycle state as a GitHub commit-status description, which has a hard 140-character bound."
+      },
+      "prevention": {
+        "mechanism": "scripts/hunter_defect_prevention_preflight.py::validate_orchestration_status_description_is_bounded exercises the real encoder with worst-case trigger ids, long provider codes, full configuration digests and long remediation generations, and verifies that the description always fits the limit and round-trips.",
+        "boundary": "local-pre-push",
+        "guard_reference": "scripts/hunter_defect_prevention_preflight.py::validate_orchestration_status_description_is_bounded"
+      },
+      "regression_evidence": [
+        "tests/test_hunter_review_orchestrator.py::test_orchestration_status_description_never_exceeds_github_limit",
+        "tests/test_hunter_review_orchestrator.py::test_orchestration_status_parses_legacy_decimal_descriptions"
+      ],
+      "lifecycle": "locally-enforced",
+      "sources": [
+        "PR #482 (2026-09-19): Copilot review round three noted that a blocked prerequisite preserving a non-base remediation generation and an 11-digit Actions run ID could produce a 141-character status description, causing GitHub to reject the blocked-state publication."
       ]
     }
   ]

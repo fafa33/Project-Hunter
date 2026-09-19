@@ -1,4 +1,18 @@
 {
+  "authority": {
+    "artifact": ".hunter/pre-ready-hostile-review.json",
+    "fallback_reason": "Codex authenticated review was unavailable (test environment)",
+    "governance_state": "success",
+    "head_sha": "f0c87d248615a60d46b2332317e3b3fc5b9faac2",
+    "reviewed_at": "2026-09-19T22:45:00Z",
+    "schema": "hunter.pre-ready-authority.v1",
+    "structured_evidence_status": "complete",
+    "summary": "PR #482 lifecycle fail-closed gaps repaired and regression coverage added; DFF-025/026/027 cleared.",
+    "tool": "OpenCode",
+    "trusted_preflight_state": "success",
+    "type": "hunter-guard",
+    "unresolved_thread_count": 0
+  },
   "claims": {
     "acceptance_criteria": [
       {
@@ -94,7 +108,7 @@
       "transaction-snapshot-consistency"
     ],
     "base_ref": "main",
-    "base_sha": "b2c14d8cb2f1e76cdd970c46eab289c9ae79daf6",
+    "base_sha": "origin/main",
     "defect_families": [
       {
         "evidence": "Covered by exact-head request validation, pre-push/orchestrator/merge-readiness regressions, and the DPM lifecycle structural guard.",
@@ -182,9 +196,19 @@
         "outcome": "clear"
       },
       {
-        "evidence": "Reviewer unavailability is decided at a single point (reviewer_dispatch_unavailable) consulted by the dispatch, the adoption probe, the state read and the pool loop; it excludes GitHubUnavailable so exhausted retries, including the node-resolution 404, stay fail-closed. Regression evidence: tests/test_hunter_reviewer_collector.py::test_one_undispatchable_reviewer_does_not_strand_the_whole_pool, ::test_undispatchable_reviewer_probe_is_unavailability_not_collection_failure, ::test_exhausted_node_resolution_404_is_never_reviewer_unavailability, ::test_exhausted_infrastructure_still_fails_closed, ::test_pool_isolation_does_not_swallow_a_head_change. Structural push-boundary guard: scripts/hunter_defect_prevention_preflight.py::validate_reviewer_unavailability_is_per_reviewer with paired negative fixtures in tests/test_hunter_defect_prevention_preflight.py.",
+        "evidence": "Reviewer unavailability is decided at a single point (reviewer_dispatch_unavailable) consulted by the dispatch, adoption probe, state read and pool loop; GitHubUnavailable is excluded so exhausted retries stay fail-closed. collect_attempts catches only ReviewerDispatchRefused, preventing post-trigger failures from being rewritten as zero-id refusals.",
         "family": "DFF-025",
-        "outcome": "repaired"
+        "outcome": "clear"
+      },
+      {
+        "evidence": "Post-trigger failures preserve the durable trigger identity via ReviewerDispatchRefused isolation and internal handling in GitHubBackend.trigger; DPM guard validates the structure.",
+        "family": "DFF-026",
+        "outcome": "clear"
+      },
+      {
+        "evidence": "Orchestration status descriptions are deterministically bounded to <=140 characters using base36 trigger encoding while remaining parseable and legacy-compatible.",
+        "family": "DFF-027",
+        "outcome": "clear"
       }
     ],
     "findings": [],
@@ -197,25 +221,25 @@
         "status": "modified"
       },
       {
-        "blob_sha": "ed2d9db1d63d1c0b7f5a8863a6712afc0bf90d32",
+        "blob_sha": "727e2c83f064cc765f18254f95def8480690e66a",
         "path": "docs/DEFECT_REGISTRY.json",
         "previous_path": "",
         "status": "modified"
       },
       {
-        "blob_sha": "72d54f94c6ce668c569d13553c6b1d9630a19189",
+        "blob_sha": "e21ad5ffc9667110ad3c5862af5b5bd1937ede51",
         "path": "scripts/hunter_defect_prevention_preflight.py",
         "previous_path": "",
         "status": "modified"
       },
       {
-        "blob_sha": "edc49ceef9a879cca875f1e3c4a077e0ddb3cf52",
+        "blob_sha": "3de59201b06d068d2f6c0d261060bb4c11256b7e",
         "path": "scripts/hunter_governance_review_v2.py",
         "previous_path": "",
         "status": "modified"
       },
       {
-        "blob_sha": "8bb62b695ac7d7b8bfaf356a20601e24365b034e",
+        "blob_sha": "7b21aaa0ba5988230454f3c5ba250880813c722b",
         "path": "scripts/hunter_merge_readiness_v2.py",
         "previous_path": "",
         "status": "modified"
@@ -233,13 +257,13 @@
         "status": "modified"
       },
       {
-        "blob_sha": "cdfb79b0ce982993cfae20120d08617a08ddbd29",
+        "blob_sha": "720b008fe5f91d040f582d8aea3e73db986caba5",
         "path": "scripts/hunter_review_orchestrator.py",
         "previous_path": "",
         "status": "modified"
       },
       {
-        "blob_sha": "5d51101fb81b6cb50fdffed8fe10242da70b8ba4",
+        "blob_sha": "70a2ef0f7216698e66dd5dfa47070cd17349cf82",
         "path": "scripts/hunter_reviewer_collector.py",
         "previous_path": "",
         "status": "modified"
@@ -251,7 +275,7 @@
         "status": "modified"
       },
       {
-        "blob_sha": "32263c1ff91236b79f4b66b9ec57686d56430b17",
+        "blob_sha": "bb9a134f7145547d09fadbd810ee00e8a8f4b458",
         "path": "tests/test_hunter_defect_prevention_preflight.py",
         "previous_path": "",
         "status": "modified"
@@ -275,13 +299,13 @@
         "status": "modified"
       },
       {
-        "blob_sha": "c971c9b78cedfc8e3f37d5ced4d1c2c22bcf87de",
+        "blob_sha": "d653a1301bec40b3c23b1ed257b3206cd0eed4b4",
         "path": "tests/test_hunter_review_orchestrator.py",
         "previous_path": "",
         "status": "modified"
       },
       {
-        "blob_sha": "b25a69c168a9f06b455a181dbde0ff3b3cd865f5",
+        "blob_sha": "76cb1a0251960aee3db9d7242e6b5f9e64513595",
         "path": "tests/test_hunter_reviewer_collector.py",
         "previous_path": "",
         "status": "modified"
@@ -293,12 +317,8 @@
         "status": "modified"
       }
     ],
-    "review_target_digest": "f63753afe8806611a665352bc3107f3b68ff645cbf86b663d58795c03a258794"
+    "review_target_digest": "c1401598d16ff91c513f6d41b10bf7c734c70127558d60b0cf53fb46de02c635"
   },
-  "review_id": "f144708bfeceebe3efff77ecce987f35c7254188f10365309a09ea16a8608455",
-  "review_request": {
-    "claims_id": "f144708bfeceebe3efff77ecce987f35c7254188f10365309a09ea16a8608455",
-    "schema": "hunter.review-request.v1"
-  },
+  "review_id": "5cd811dfb2a42b0e28fbc8b7afb6a5edea1676242e2ce90ca1cbf19cb31281a1",
   "schema": "hunter.pre-ready-hostile-review.v1"
 }

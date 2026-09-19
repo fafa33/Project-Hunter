@@ -1805,6 +1805,41 @@ def validate_reviewer_unavailability_is_per_reviewer() -> list[str]:
     if collect is None:
         errors.append("collect_attempts is missing from the reviewer collector")
         return errors
+
+    # The outer loop must only catch the deliberate pre-trigger refusal.
+    # Catching GitHubRequestError here would let a post-trigger persistence
+    # failure escape from backend.trigger and be rewritten as trigger_id=0.
+    for try_node in (node for node in ast.walk(collect) if isinstance(node, ast.Try) and node.handlers):
+        for handler in try_node.handlers:
+            if handler.type is None:
+                errors.append(
+                    "collect_attempts may not catch a bare exception when converting "
+                    "reviewer unavailability; use ReviewerDispatchRefused so post-trigger "
+                    "failures stay fail-closed"
+                )
+                break
+            if isinstance(handler.type, ast.Name) and handler.type.id in {
+                "Exception",
+                "GitHubRequestError",
+                "RuntimeError",
+            }:
+                errors.append(
+                    "collect_attempts may not catch a broad exception when converting "
+                    "reviewer unavailability; use ReviewerDispatchRefused so post-trigger "
+                    "failures stay fail-closed"
+                )
+                break
+            if isinstance(handler.type, ast.Attribute) and handler.type.attr == "GitHubRequestError":
+                errors.append(
+                    "collect_attempts may not catch GitHubRequestError when converting "
+                    "reviewer unavailability; use ReviewerDispatchRefused so post-trigger "
+                    "failures stay fail-closed"
+                )
+                break
+        else:
+            # A handler with no type check occurred above; stop scanning after reporting.
+            continue
+        break
     isolated = any(
         any(
             isinstance(call, ast.Call) and isinstance(call.func, ast.Attribute) and call.func.attr == "trigger"
@@ -1819,10 +1854,9 @@ def validate_reviewer_unavailability_is_per_reviewer() -> list[str]:
             "reviewer cannot end the collection before the rest of the pool is invoked"
         )
 
-    # Once an API trigger comment exists, later provider/result failures are no
-    # longer pre-trigger rejection. The backend must classify them before they
-    # escape to collect_attempts, otherwise the outer handler records trigger_id=0
-    # and destroys the durable invocation identity.
+    # Once a durable trigger exists, provider/result/persistence failures are no
+    # longer pre-trigger rejection. The backend must classify them internally and
+    # must never let them escape to collect_attempts as a pre-trigger refusal.
     backend = next(
         (node for node in ast.walk(tree) if isinstance(node, ast.ClassDef) and node.name == "GitHubBackend"),
         None,
@@ -1842,13 +1876,32 @@ def validate_reviewer_unavailability_is_per_reviewer() -> list[str]:
         errors.append("GitHubBackend.trigger is missing from the reviewer collector")
     elif trigger_method is not None:
         protected_post_trigger = False
+        durable_trigger_calls = {"_post_trigger_comment", "_existing_trigger", "_adopt_workflow_run"}
+        post_trigger_calls = {"_invoke_external", "_api_result", "_post_comment"}
+        durable_trigger_lines = [
+            call.lineno
+            for call in ast.walk(trigger_method)
+            if isinstance(call, ast.Call)
+            and isinstance(call.func, ast.Attribute)
+            and call.func.attr in durable_trigger_calls
+            and call.lineno is not None
+        ]
         for attempt in (node for node in ast.walk(trigger_method) if isinstance(node, ast.Try)):
-            calls = [
-                call
+            body_calls = {
+                call.func.attr
                 for call in ast.walk(attempt)
                 if isinstance(call, ast.Call) and isinstance(call.func, ast.Attribute)
-            ]
-            if not any(call.func.attr == "_invoke_external" for call in calls):
+            }
+            if not (body_calls & post_trigger_calls):
+                # This try does not protect a post-trigger persistence path.
+                continue
+            # The durable trigger must already exist before the protected call.
+            # It may be inside the same try (adoption) or created earlier in the
+            # method (API trigger comment before provider invocation).
+            if not (
+                body_calls & durable_trigger_calls
+                or (attempt.lineno is not None and any(line < attempt.lineno for line in durable_trigger_lines))
+            ):
                 continue
             if any(
                 isinstance(call, ast.Call)
@@ -1860,9 +1913,143 @@ def validate_reviewer_unavailability_is_per_reviewer() -> list[str]:
                 protected_post_trigger = True
         if not protected_post_trigger:
             errors.append(
-                "GitHubBackend.trigger must classify API failure after durable trigger creation "
-                "without letting collect_attempts erase the trigger identity"
+                "GitHubBackend.trigger must classify every post-trigger persistence failure "
+                "(provider invocation, result/ack/adoption posting) without letting "
+                "collect_attempts erase the durable trigger identity"
             )
+    return errors
+
+
+def validate_reviewer_trigger_identity_preservation() -> list[str]:
+    """DFF-026: a real trigger identity must survive post-trigger failures.
+
+    Once a durable trigger comment exists, any later failure -- provider
+    invocation, result/ack posting, or adoption of an existing trigger -- must
+    keep that identity. Converting those failures into a zero-id unavailable
+    record lets failover proceed without verifiable evidence.
+    """
+
+    tree, error = _module_ast(REVIEWER_COLLECTOR_SOURCE)
+    if tree is None:
+        return [f"reviewer collector source unavailable ({error})"]
+    errors: list[str] = []
+    if not next(
+        (node for node in ast.walk(tree) if isinstance(node, ast.ClassDef) and node.name == "ReviewerDispatchRefused"),
+        None,
+    ):
+        errors.append(
+            "a dedicated ReviewerDispatchRefused exception must separate pre-trigger "
+            "refusals from post-trigger failures"
+        )
+    collect = next(
+        (node for node in ast.walk(tree) if isinstance(node, ast.FunctionDef) and node.name == "collect_attempts"),
+        None,
+    )
+    if collect is not None:
+        for try_node in (node for node in ast.walk(collect) if isinstance(node, ast.Try) and node.handlers):
+            for handler in try_node.handlers:
+                if handler.type is None or not (
+                    isinstance(handler.type, ast.Name) and handler.type.id == "ReviewerDispatchRefused"
+                ):
+                    errors.append(
+                        "collect_attempts must catch only ReviewerDispatchRefused for pre-trigger "
+                        "refusals; any other exception escaping backend.trigger would erase a real trigger identity"
+                    )
+                    break
+            else:
+                continue
+            break
+    trigger_method = next(
+        (node for node in ast.walk(tree) if isinstance(node, ast.ClassDef) and node.name == "GitHubBackend"),
+        None,
+    )
+    if trigger_method is not None:
+        trigger_method_node = next(
+            (node for node in ast.walk(trigger_method) if isinstance(node, ast.FunctionDef) and node.name == "trigger"),
+            None,
+        )
+        if trigger_method_node is not None:
+            durable_trigger_calls = {"_post_trigger_comment", "_existing_trigger", "_adopt_workflow_run"}
+            post_trigger_calls = {"_invoke_external", "_api_result", "_post_comment"}
+            durable_trigger_lines = [
+                call.lineno
+                for call in ast.walk(trigger_method_node)
+                if isinstance(call, ast.Call)
+                and isinstance(call.func, ast.Attribute)
+                and call.func.attr in durable_trigger_calls
+                and call.lineno is not None
+            ]
+            protected = False
+            for attempt in (node for node in ast.walk(trigger_method_node) if isinstance(node, ast.Try)):
+                body_calls = {
+                    call.func.attr
+                    for call in ast.walk(attempt)
+                    if isinstance(call, ast.Call) and isinstance(call.func, ast.Attribute)
+                }
+                if not (body_calls & post_trigger_calls):
+                    continue
+                if not (
+                    body_calls & durable_trigger_calls
+                    or (attempt.lineno is not None and any(line < attempt.lineno for line in durable_trigger_lines))
+                ):
+                    continue
+                if any(
+                    isinstance(call, ast.Call)
+                    and isinstance(call.func, ast.Name)
+                    and call.func.id == "reviewer_dispatch_unavailable"
+                    for handler in attempt.handlers
+                    for call in ast.walk(handler)
+                ):
+                    protected = True
+            if not protected:
+                errors.append(
+                    "GitHubBackend.trigger must structurally protect every post-trigger persistence "
+                    "path so a real trigger identity is never rewritten as zero"
+                )
+    return errors
+
+
+def validate_orchestration_status_description_is_bounded() -> list[str]:
+    """DFF-027: published orchestration statuses must always fit GitHub's field limit.
+
+    The status description carries state, trigger identity, configuration digest
+    and remediation generation. Any of these can grow large enough to exceed
+    GitHub's 140-character commit-status description limit, which would make the
+    blocked/waiting state unpublishable at the moment it matters most.
+    """
+
+    try:
+        import hunter_review_orchestrator as orchestration
+    except Exception as exc:  # pragma: no cover
+        return [f"orchestration module unavailable: {type(exc).__name__}: {exc}"]
+
+    errors: list[str] = []
+    max_state = "PREREQUISITE_BLOCKED"
+    provider = "REVIEW_REQUEST_UNAVAILABLE"
+    digest = "d" * 64
+    generation = "g" * 16
+    for trigger in (0, 1, 999_999_999_999, 10**15):
+        cycle = orchestration.ReviewCycle(
+            pr_number=1,
+            head_sha="a" * 40,
+            state=max_state,
+            provider_id=provider,
+            trigger_id=trigger,
+            started_at="2026-09-19T00:00:00Z",
+            config_digest=digest,
+            generation_id=generation,
+        )
+        description = orchestration.cycle_status_description(cycle)
+        if len(description) > 140:
+            errors.append(
+                f"orchestration status description exceeds 140 characters for trigger_id={trigger}: "
+                f"{len(description)}"
+            )
+        parts = description.split("|")
+        if len(parts) != 5:
+            errors.append(f"orchestration status description is not five-field parseable: {description}")
+        elif orchestration._decode_trigger_id(parts[2]) != (cycle.trigger_id or None):
+            errors.append(f"orchestration status description round-trip failed for trigger_id={trigger}")
     return errors
 
 
@@ -2087,6 +2274,8 @@ def validate_defect_prevention_lifecycle() -> list[str]:
     errors.extend(validate_trusted_preflight_reconcile_wakeup())
     errors.extend(validate_review_request_lifecycle_contract())
     errors.extend(validate_reviewer_unavailability_is_per_reviewer())
+    errors.extend(validate_reviewer_trigger_identity_preservation())
+    errors.extend(validate_orchestration_status_description_is_bounded())
     errors.extend(validate_review_after_remediation_boundary())
     errors.extend(validate_code_write_policy())
     errors.extend(validate_reviewer_finding_dispositions())

@@ -90,6 +90,11 @@ PER_REVIEWER_ISOLATION_SOURCE = """
 import governance
 
 
+class ReviewerDispatchRefused(RuntimeError):
+    def __init__(self, request_error):
+        self.request_error = request_error
+
+
 def reviewer_dispatch_unavailable(exc):
     if isinstance(exc, governance.transport.GitHubUnavailable):
         return False
@@ -100,9 +105,7 @@ def collect_attempts(pool, head, backend):
     for agent in pool:
         try:
             trigger = backend.trigger(agent, 1)
-        except governance.transport.GitHubRequestError as exc:
-            if not reviewer_dispatch_unavailable(exc):
-                raise
+        except ReviewerDispatchRefused:
             continue
 """
 
@@ -169,9 +172,7 @@ def test_dff025_guard_rejects_an_unisolated_pool_loop(tmp_path, monkeypatch):
     source = PER_REVIEWER_ISOLATION_SOURCE.replace(
         """        try:
             trigger = backend.trigger(agent, 1)
-        except governance.transport.GitHubRequestError as exc:
-            if not reviewer_dispatch_unavailable(exc):
-                raise
+        except ReviewerDispatchRefused:
             continue""",
         "        trigger = backend.trigger(agent, 1)",
     )
@@ -180,6 +181,20 @@ def test_dff025_guard_rejects_an_unisolated_pool_loop(tmp_path, monkeypatch):
     errors = prevention.validate_reviewer_unavailability_is_per_reviewer()
 
     assert any("try" in error for error in errors)
+
+
+def test_dff025_guard_rejects_a_broad_pool_exception_catcher(tmp_path, monkeypatch):
+    """Catching GitHubRequestError in the outer loop erases post-trigger identities."""
+
+    source = PER_REVIEWER_ISOLATION_SOURCE.replace(
+        "        except ReviewerDispatchRefused:\n            continue",
+        "        except governance.transport.GitHubRequestError as exc:\n            if not reviewer_dispatch_unavailable(exc): raise\n            continue",
+    )
+    monkeypatch.setattr(prevention, "ROOT", _collector_tree(tmp_path, source))
+
+    errors = prevention.validate_reviewer_unavailability_is_per_reviewer()
+
+    assert any("GitHubRequestError" in error for error in errors)
 
 
 def test_lifecycle_contract_is_not_satisfied_by_a_comment(tmp_path, monkeypatch):

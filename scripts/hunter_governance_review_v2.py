@@ -1775,6 +1775,8 @@ def read_head_pre_ready_review(repository: str, token: str, head_sha: str) -> tu
     encoded_path = quote(pre_ready.REVIEW_RELATIVE_PATH, safe="/")
     try:
         payload = request_json(repository, token, "GET", f"contents/{encoded_path}?ref={encoded_sha}")
+    except transport.GitHubUnavailable as exc:
+        return "unavailable", None, f"GitHub infrastructure unavailable: {exc}"
     except transport.GitHubRequestError as exc:
         if exc.status_code == 404:
             return "absent", None, None
