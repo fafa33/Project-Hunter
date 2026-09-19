@@ -626,3 +626,16 @@ def test_review_orchestration_state_reads_trusted_cycle(monkeypatch):
     assert state == "REVIEW_IN_PROGRESS"
     assert "provider=codex" in detail
     assert "trigger=321" in detail
+
+
+def test_repository_root_request_has_no_trailing_slash(monkeypatch) -> None:
+    seen = []
+
+    def request_rest_json(**kwargs):
+        seen.append(kwargs["url"])
+        return {"default_branch": "main"}
+
+    monkeypatch.setattr(core.transport, "request_rest_json", request_rest_json)
+
+    assert core.request_json("owner/repo", "token", "GET", "") == {"default_branch": "main"}
+    assert seen == ["https://api.github.com/repos/owner/repo"]
