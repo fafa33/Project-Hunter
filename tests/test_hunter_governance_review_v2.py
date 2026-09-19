@@ -187,6 +187,16 @@ def test_reconcile_continues_after_one_pr_failure_and_drops_checkout_credentials
     assert "if ! python scripts/hunter_governance_review_v2.py" in workflow
     assert "failures=1" in workflow
     assert 'exit "${failures}"' in workflow
+    assert "pull_request_review:" in workflow
+    assert "pull_request_review_comment:" in workflow
+    assert "- submitted" in workflow
+    assert "- edited" in workflow
+    assert "- dismissed" in workflow
+    assert "- deleted" in workflow
+    # Review-state changes must reconcile immediately; the scheduled sweep is
+    # recovery only and must not be the normal authority-refresh path.
+    assert workflow.index("pull_request_review:") < workflow.index("schedule:")
+    assert workflow.index("pull_request_review_comment:") < workflow.index("schedule:")
 
 
 ANCESTOR = "d" * 40
