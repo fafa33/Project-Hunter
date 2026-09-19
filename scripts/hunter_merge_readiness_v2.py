@@ -252,6 +252,7 @@ def review_authority_state(head_sha: str, pr_number: int) -> tuple[str, str]:
     # this module, and governance pulls in hunter_pre_ready_review which imports
     # hunter_workflow_state, so a module-level import would be a three-way cycle.
     import hunter_governance_review_v2 as governance
+    import hunter_review_orchestrator as orchestration
 
     try:
         if unresolved_review_threads(pr_number) or changes_requested_reviewers(pr_number):
@@ -265,9 +266,9 @@ def review_authority_state(head_sha: str, pr_number: int) -> tuple[str, str]:
         if verdict.state in {"BLOCKING_FINDINGS", "MALFORMED_REVIEW"}:
             return "failure", f"{verdict.state}: {verdict.detail}"
         try:
-            orchestration_state, orchestration_detail = governance.review_orchestration_state(
-                REPO, TOKEN, pr_number, head_sha
-            )
+            cycle_status, cycle, reader_detail = orchestration.read_cycle(REPO, TOKEN, pr_number, head_sha)
+            orchestration_state = cycle.state if cycle is not None else cycle_status
+            orchestration_detail = reader_detail or ""
         except Exception as exc:
             return (
                 "pending",

@@ -265,6 +265,22 @@ def test_only_authenticated_reviewer_apps_can_open_a_blocking_thread(monkeypatch
     assert [thread.thread_id for thread in threads] == ["PRRT_reviewer"]
 
 
+def test_the_automation_exclusion_matches_the_real_canonical_login(monkeypatch):
+    """GitHub actually returns ``github-actions[bot]``, not the bare ``github-actions``."""
+
+    _graphql(
+        monkeypatch,
+        [
+            _node("PRRT_reviewer", "chatgpt-codex-connector"),
+            _node("PRRT_automation", "github-actions[bot]"),
+        ],
+    )
+
+    threads = orchestrator.blocking_reviewer_threads("owner/repo", "token", 472)
+
+    assert [thread.thread_id for thread in threads] == ["PRRT_reviewer"]
+
+
 def test_candidate_authored_evidence_cannot_mint_a_remediation_generation(monkeypatch):
     """A candidate resolving threads it opened itself buys exactly nothing."""
 

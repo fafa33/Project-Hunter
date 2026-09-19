@@ -66,8 +66,23 @@ GENERATION_RUN_NAME_SEPARATOR = " GEN "
 MAX_REMEDIATION_GENERATIONS = 3
 #: Hunter's own automation identity. It authors the reviewer trigger comments, so
 #: a thread it opened is never independent review evidence and must never be able
-#: to mint the permission to dispatch another review of its own.
-HUNTER_AUTOMATION_LOGIN = "github-actions"
+#: to mint the permission to dispatch another review of its own. GitHub's GraphQL
+#: API returns this bot's login as ``github-actions[bot]``, the same canonical
+#: form used everywhere else in this repository, so that is what is compared.
+HUNTER_AUTOMATION_LOGIN = "github-actions[bot]"
+
+
+def _normalized_bot_login(login: str) -> str:
+    """A bot login with any trailing ``[bot]`` marker stripped.
+
+    GitHub renders the same automation identity as both ``github-actions`` and
+    ``github-actions[bot]`` depending on the API surface. Normalizing both sides
+    of the comparison means neither form can slip past the exclusion and be
+    treated as an independent reviewer thread.
+    """
+
+    return login[: -len("[bot]")] if login.endswith("[bot]") else login
+
 
 _BLOCKING_THREADS_QUERY = """
 query($owner: String!, $name: String!, $number: Int!, $after: String) {
@@ -172,7 +187,11 @@ def blocking_reviewer_threads(repository: str, token: str, pr_number: int) -> tu
                 raise ValueError("malformed review thread comment identity")
             if opener.get("__typename") != "Bot":
                 continue
-            if not login or login == HUNTER_AUTOMATION_LOGIN or login == author:
+            if (
+                not login
+                or _normalized_bot_login(login) == _normalized_bot_login(HUNTER_AUTOMATION_LOGIN)
+                or login == author
+            ):
                 continue
             threads.append(BlockingThread(str(node["id"]), comment_id, created_at, bool(node["isResolved"])))
         if not page["hasNextPage"]:
