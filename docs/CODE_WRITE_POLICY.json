@@ -41,7 +41,7 @@
       ],
       "reviewer_pool": {
         "model": "ordered-priority-with-failover",
-        "ordering": "free-first strict priority: local-ollama triage, then Codex, then server-side Gemini API, then server-side Groq API; each authority reviewer is attempted exactly once per exact HEAD before the deterministic hunter-guard last resort.",
+        "ordering": "free-first strict priority: local-ollama triage, then Codex, then authenticated GitHub Copilot code review, then server-side Gemini API, then server-side Groq API; each authority reviewer is attempted exactly once per exact HEAD before the deterministic hunter-guard last resort.",
         "last_resort": "hunter-guard",
         "exhaustion_semantics": "Every enabled higher-priority reviewer must have authenticated exact-head invocation results. The trusted default-branch Hunter Reviewer Collector records actual trigger IDs, both configured budgets (ack_timeout_seconds and review_timeout_seconds) and all retries, and immutable artifact provenance. A triage-only reviewer is invoked and recorded in that order but never closes the pool, and a reviewer whose declared trigger_method the collector cannot perform may not be enabled at all. A substantive response proves availability and forbids failover, even if its format is invalid; an authenticated explicit usage-limit, rate-limit, or quota denial is unavailability evidence and permits immediate failover. Candidate prose, skipped reviewers, failed GitHub reads, changed HEAD, wrong configuration, insufficient elapsed time, candidate-ref collector runs, or missing retries fail closed.",
         "timeout_policy": {
@@ -96,8 +96,24 @@
             "review_timeout_seconds": 300
           },
           {
-            "id": "gemini",
+            "id": "copilot",
             "priority": 3,
+            "enabled": true,
+            "trigger_method": "github-review-request:copilot-pull-request-reviewer[bot]",
+            "exact_head_support": true,
+            "retryable": false,
+            "evidence_parser": "github-review-native.v1",
+            "fallback_eligibility": false,
+            "note": "Authenticated GitHub Copilot pull-request review is an authority-eligible fallback after Codex unavailability. Exact-head binding and trusted collector request are required.",
+            "evidence": "GitHub review identity copilot-pull-request-reviewer[bot] is bound to exact commit_id; candidate-authored comments cannot impersonate this GitHub App.",
+            "github_login": "copilot-pull-request-reviewer[bot]",
+            "ack_timeout_seconds": 30,
+            "review_timeout_seconds": 300,
+            "authority_eligible": true
+          },
+          {
+            "id": "gemini",
+            "priority": 4,
             "enabled": true,
             "trigger_method": "api:gemini",
             "exact_head_support": true,
@@ -112,7 +128,7 @@
           },
           {
             "id": "groq",
-            "priority": 4,
+            "priority": 5,
             "enabled": true,
             "trigger_method": "api:groq",
             "exact_head_support": true,

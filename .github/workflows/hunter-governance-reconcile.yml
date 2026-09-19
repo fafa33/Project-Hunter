@@ -20,6 +20,16 @@ on:
       - Hunter Reviewer Collector
     types:
       - completed
+  pull_request_review:
+    types:
+      - submitted
+      - edited
+      - dismissed
+  pull_request_review_comment:
+    types:
+      - created
+      - edited
+      - deleted
   schedule:
     - cron: "*/30 * * * *"
   workflow_dispatch:

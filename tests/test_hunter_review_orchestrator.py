@@ -575,7 +575,7 @@ def test_failover_target_is_the_pools_hosted_authority_not_a_retired_provider():
     # Triage-only reviewers cannot terminate the authority search, so they are
     # never a failover destination even though they are first in the pool.
     assert orchestrator.first_pool_provider() == "local-ollama"
-    assert orchestrator.next_authority_provider(after="codex") == "gemini"
+    assert orchestrator.next_authority_provider(after="codex") == "copilot"
     assert orchestrator.next_authority_provider(after="gemini") == "groq"
     assert orchestrator.next_authority_provider(after="groq") == str(pool["last_resort"]) == "hunter-guard"
 

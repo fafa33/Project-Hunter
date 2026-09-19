@@ -622,7 +622,7 @@ def _authority(
     if authority_type != "codex":
         default_attempts = [dict(_attempt())]
         if authority_type == "hunter-guard":
-            default_attempts += [dict(_attempt("gemini")), dict(_attempt("groq"))]
+            default_attempts += [dict(_attempt("copilot")), dict(_attempt("gemini")), dict(_attempt("groq"))]
         authority["reviewer_attempts"] = list(attempts) if attempts is not None else default_attempts
     authority.update(overrides)
     return authority
@@ -833,7 +833,12 @@ def test_a_fallback_review_of_the_exact_head_is_valid_when_codex_is_unavailable(
             )
         ),
     )
-    document = _review_document(authority=_authority(authority_type="hunter-guard"))
+    document = _review_document(
+        authority=_authority(
+            authority_type="hunter-guard",
+            attempts=[dict(_attempt()), dict(_attempt("gemini")), dict(_attempt("groq"))],
+        )
+    )
 
     verdict = _verify(document)
 

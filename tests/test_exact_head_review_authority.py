@@ -113,7 +113,7 @@ def _authority(authority_type: str = "codex", head_sha: str = HEAD, attempts=Non
     if authority_type != "codex":
         default_attempts = [dict(_attempt())]
         if authority_type == "opencode":
-            default_attempts += [dict(_attempt("gemini")), dict(_attempt("groq"))]
+            default_attempts += [dict(_attempt("copilot")), dict(_attempt("gemini")), dict(_attempt("groq"))]
         authority["reviewer_attempts"] = list(attempts) if attempts is not None else default_attempts
     authority.update(overrides)
     return authority
