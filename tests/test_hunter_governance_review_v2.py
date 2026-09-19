@@ -189,6 +189,10 @@ def test_reconcile_continues_after_one_pr_failure_and_drops_checkout_credentials
     assert 'exit "${failures}"' in workflow
     assert "pull_request_review:" in workflow
     assert "pull_request_review_comment:" in workflow
+    assert "workflow_run:" in workflow
+    assert "- Hunter / Pre-PR Preflight" in workflow
+    assert "- Hunter Reviewer Collector" in workflow
+    assert "- completed" in workflow
     assert "- submitted" in workflow
     assert "- edited" in workflow
     assert "- dismissed" in workflow

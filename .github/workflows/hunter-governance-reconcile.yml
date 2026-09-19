@@ -12,6 +12,7 @@ on:
   workflow_run:
     workflows:
       - Hunter / Pre-PR Preflight
+      - Hunter Reviewer Collector
     types:
       - completed
   pull_request_review:
