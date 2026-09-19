@@ -102,8 +102,9 @@ def check_reviewer_dispositions() -> tuple[bool, str]:
 
 def request_json(repository: str, token: str, method: str, path: str, payload: dict[str, Any] | None = None) -> Any:
     data = None if payload is None else json.dumps(payload).encode("utf-8")
+    suffix = f"/{path}" if path else ""
     return transport.request_rest_json(
-        url=f"https://api.github.com/repos/{repository}/{path}",
+        url=f"https://api.github.com/repos/{repository}{suffix}",
         method=method,
         headers={},
         data=data,
