@@ -2059,8 +2059,8 @@ def test_provider_refusal_after_api_trigger_persists_verifiable_unavailability(m
     assert '"verdict":"unavailable"' in posted[1].replace(" ", "")
 
 
-def test_api_result_persistence_failure_after_provider_return_keeps_trigger_identity(monkeypatch):
-    """A completed provider call without durable result evidence keeps the real trigger id."""
+def test_api_result_persistence_failure_after_provider_return_fails_closed(monkeypatch):
+    """A completed provider call without durable result evidence fails closed."""
 
     backend = _backend()
     agent = {
@@ -2091,12 +2091,8 @@ def test_api_result_persistence_failure_after_provider_return_keeps_trigger_iden
         lambda *_a, **_k: {"verdict": "clear", "summary": "clean"},
     )
 
-    trigger = backend.trigger(agent, 1)
-
-    assert trigger["id"] == 1301
-    assert trigger["state"] == "unavailable"
-    assert trigger["post_trigger_refusal"] == "GitHubRequestError"
-    assert trigger["dispatch_status"] == 403
+    with pytest.raises(ValueError, match="API result comment could not be persisted"):
+        backend.trigger(agent, 1)
 
 
 def test_existing_api_trigger_adoption_preserves_identity_on_result_read_failure(monkeypatch):

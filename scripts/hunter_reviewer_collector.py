@@ -1010,14 +1010,20 @@ class GitHubBackend:
                         dispatch_status=exc.status_code,
                     )
                     return existing
-                if result is not None:
-                    existing.update(
-                        provider=method.split(":", 1)[1],
-                        response_digest=result.get("response_digest"),
-                        head_sha=self.expected_head,
-                        state=result.get("verdict"),
-                        result_comment_id=result.get("comment_id"),
-                    )
+                if result is None:
+                    # API invocation is synchronous; a durable trigger with no
+                    # durable result means the original process died before
+                    # persisting evidence. The verifier will reject any receipt
+                    # for this trigger because _api_result is mandatory. Fail
+                    # closed rather than waiting for a result that cannot arrive.
+                    raise ValueError("existing API trigger has no durable result evidence")
+                existing.update(
+                    provider=method.split(":", 1)[1],
+                    response_digest=result.get("response_digest"),
+                    head_sha=self.expected_head,
+                    state=result.get("verdict"),
+                    result_comment_id=result.get("comment_id"),
+                )
             return existing
         if method.startswith("github-review-request:"):
             trigger = self._post_trigger_comment(
@@ -1094,7 +1100,15 @@ class GitHubBackend:
                 ),
                 int(trigger["id"]),
             )
-            result_comment_id = result_comment.get("id") or result_comment.get("durable_trigger_id")
+            if not result_comment.get("id"):
+                # The durable result comment could not be persisted. Without it
+                # the verifier cannot reconstruct the review outcome, so any
+                # exhaustion/failover based on this attempt would be unprovable.
+                # Fail closed rather than recording an unavailable attempt and
+                # letting a lower-priority reviewer inherit an unverifiable
+                # exhaustion.
+                raise ValueError("API result comment could not be persisted")
+            result_comment_id = int(result_comment["id"])
             ack_comment_id: int | None = None
             if state == "clear":
                 ack_comment = self._post_result_comment(
@@ -1128,7 +1142,7 @@ class GitHubBackend:
                 # load_exhaustion would see the durable clear result and reject
                 # exhaustion. Fail closed instead.
                 raise ValueError("API clear acknowledgement could not be persisted")
-            return_state = "unavailable" if not result_comment.get("id") else state
+            return_state = state
             return {
                 **trigger,
                 "provider": provider,

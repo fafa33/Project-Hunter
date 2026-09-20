@@ -937,24 +937,35 @@ def publish_prerequisite_block(
     prerequisite state.
     """
 
-    # Preserve an existing collector dispatch only when the previous cycle was
-    # itself an active/waiting collector state. If the previous cycle is a
-    # completed collector run, a transient prerequisite failure must not freeze
-    # that completion: the next reconcile will recover from the collector
-    # completion status instead. This prevents a temporary prerequisite read
-    # failure from permanently replacing a finished review cycle.
+    completed_state = previous is not None and previous.state in {"REVIEW_CLEAR", "FINDINGS_OPEN", "POOL_EXHAUSTED"}
     active_prior_state = previous is not None and previous.state in PENDING_STATES | {"REVIEW_IN_PROGRESS"}
     preserve = active_prior_state and previous.head_sha == head_sha and previous.trigger_id is not None
-    cycle = ReviewCycle(
-        pr_number=pr_number,
-        head_sha=head_sha,
-        state=prerequisite_cycle_state(reason),
-        provider_id=_prerequisite_code(reason),
-        trigger_id=previous.trigger_id if preserve else None,
-        started_at=previous.started_at if preserve else datetime.now(UTC).strftime("%Y-%m-%dT%H:%M:%SZ"),
-        config_digest=reviewer_pool_config_digest(),
-        generation_id=previous.generation_id if preserve else BASE_GENERATION_ID,
-    )
+    if completed_state:
+        # A terminal cycle already exists. A transient prerequisite failure must
+        # not overwrite it with a trigger-less prerequisite cycle, because after
+        # recovery no code path restores the terminal state. Re-publish the
+        # terminal cycle unchanged so it survives the outage.
+        cycle = ReviewCycle(
+            pr_number=pr_number,
+            head_sha=head_sha,
+            state=previous.state,
+            provider_id=previous.provider_id,
+            trigger_id=previous.trigger_id,
+            started_at=previous.started_at,
+            config_digest=previous.config_digest,
+            generation_id=previous.generation_id,
+        )
+    else:
+        cycle = ReviewCycle(
+            pr_number=pr_number,
+            head_sha=head_sha,
+            state=prerequisite_cycle_state(reason),
+            provider_id=_prerequisite_code(reason),
+            trigger_id=previous.trigger_id if preserve else None,
+            started_at=previous.started_at if preserve else datetime.now(UTC).strftime("%Y-%m-%dT%H:%M:%SZ"),
+            config_digest=reviewer_pool_config_digest(),
+            generation_id=previous.generation_id if preserve else BASE_GENERATION_ID,
+        )
     publish_cycle(repository, token, head_sha, cycle=cycle)
     print(f"Review orchestration prerequisite blocked for PR #{pr_number} at {head_sha[:10]}: {reason}")
     return cycle
