@@ -1120,9 +1120,15 @@ class GitHubBackend:
                     ack_comment_id = int(ack_comment["id"])
                 else:
                     ack_comment_id = None
-            return_state = (
-                state if (result_comment.get("id") and (state != "clear" or ack_comment_id)) else "unavailable"
-            )
+            if state == "clear" and not ack_comment_id:
+                # The provider returned clear but the acknowledgement comment
+                # could not be persisted. This is an evidence-persistence failure,
+                # not reviewer unavailability; recording it as unavailable would
+                # make any lower-priority clearance unverifiable because
+                # load_exhaustion would see the durable clear result and reject
+                # exhaustion. Fail closed instead.
+                raise ValueError("API clear acknowledgement could not be persisted")
+            return_state = "unavailable" if not result_comment.get("id") else state
             return {
                 **trigger,
                 "provider": provider,
