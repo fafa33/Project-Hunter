@@ -207,13 +207,19 @@
         "status": "modified"
       },
       {
+        "blob_sha": "6aa4d1dc289434902e5575540e451253794d2c6e",
+        "path": ".gitignore",
+        "previous_path": "",
+        "status": "modified"
+      },
+      {
         "blob_sha": "727e2c83f064cc765f18254f95def8480690e66a",
         "path": "docs/DEFECT_REGISTRY.json",
         "previous_path": "",
         "status": "modified"
       },
       {
-        "blob_sha": "e21ad5ffc9667110ad3c5862af5b5bd1937ede51",
+        "blob_sha": "1fd88fe3f900d7d31e1fb9af90c4e65679ecec7c",
         "path": "scripts/hunter_defect_prevention_preflight.py",
         "previous_path": "",
         "status": "modified"
@@ -243,13 +249,13 @@
         "status": "modified"
       },
       {
-        "blob_sha": "720b008fe5f91d040f582d8aea3e73db986caba5",
+        "blob_sha": "4e5167ecaba12c500f4df101e5e45326a7f17d06",
         "path": "scripts/hunter_review_orchestrator.py",
         "previous_path": "",
         "status": "modified"
       },
       {
-        "blob_sha": "70a2ef0f7216698e66dd5dfa47070cd17349cf82",
+        "blob_sha": "20a59c6795ce251243ee684b4de64e10d14e934f",
         "path": "scripts/hunter_reviewer_collector.py",
         "previous_path": "",
         "status": "modified"
@@ -291,7 +297,7 @@
         "status": "modified"
       },
       {
-        "blob_sha": "76cb1a0251960aee3db9d7242e6b5f9e64513595",
+        "blob_sha": "9bfe2a6085bc45721de3749f3bedfc226e08f099",
         "path": "tests/test_hunter_reviewer_collector.py",
         "previous_path": "",
         "status": "modified"
@@ -303,11 +309,11 @@
         "status": "modified"
       }
     ],
-    "review_target_digest": "c1401598d16ff91c513f6d41b10bf7c734c70127558d60b0cf53fb46de02c635"
+    "review_target_digest": "8ee184745ff37e546626e1337057317aa200671b8fa298da44f0b1dc018d72fd"
   },
-  "review_id": "6e67a0977512d634865c276a7965d01241d921ac8ccfb141b392f363423bf8cb",
+  "review_id": "749ff62d01606a18e7b20c8ba19acf035d9d058daf4a700dfc038461f23a3713",
   "review_request": {
-    "claims_id": "6e67a0977512d634865c276a7965d01241d921ac8ccfb141b392f363423bf8cb",
+    "claims_id": "749ff62d01606a18e7b20c8ba19acf035d9d058daf4a700dfc038461f23a3713",
     "schema": "hunter.review-request.v1"
   },
   "schema": "hunter.pre-ready-hostile-review.v1"
