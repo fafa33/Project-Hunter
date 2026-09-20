@@ -937,7 +937,18 @@ def publish_prerequisite_block(
     prerequisite state.
     """
 
-    preserve = previous is not None and previous.head_sha == head_sha and previous.trigger_id is not None
+    # Preserve an existing collector dispatch only when the previous cycle was
+    # itself an active/waiting collector state. If the previous cycle is a
+    # completed collector run, a transient prerequisite failure must not freeze
+    # that completion: the next reconcile will recover from the collector
+    # completion status instead. This prevents a temporary prerequisite read
+    # failure from permanently replacing a finished review cycle.
+    active_prior_state = previous is not None and previous.state in PENDING_STATES | {"REVIEW_IN_PROGRESS"}
+    preserve = (
+        active_prior_state
+        and previous.head_sha == head_sha
+        and previous.trigger_id is not None
+    )
     cycle = ReviewCycle(
         pr_number=pr_number,
         head_sha=head_sha,
