@@ -1033,8 +1033,8 @@ def test_prerequisite_regression_preserves_existing_collector_identity(monkeypat
     """A prerequisite regression may block, but must not erase an in-flight dispatch."""
     previous = make_cycle(
         state="WAITING_FOR_REVIEWER",
+        provider_id="codex",
         trigger_id=777,
-        started_at="2026-09-19T18:00:00Z",
         generation_id="a" * 16,
     )
     published = _publish_harness(monkeypatch)
@@ -1078,3 +1078,52 @@ def test_ensure_current_carries_existing_dispatch_through_prerequisite_failure(m
     assert result.state == "PREREQUISITE_BLOCKED"
     assert result.trigger_id == 777
     assert result.generation_id == previous.generation_id
+
+
+def test_deterministic_prerequisite_overwrites_old_terminal_cycle(monkeypatch):
+    """An old REVIEW_CLEAR must not hide a current deterministic prerequisite failure."""
+    previous = make_cycle(
+        state="REVIEW_CLEAR",
+        provider_id="codex",
+        trigger_id=123,
+        generation_id="a" * 16,
+    )
+    _publish_harness(monkeypatch)
+
+    cycle = orchestrator.publish_prerequisite_block(
+        "owner/repo",
+        "token",
+        472,
+        HEAD,
+        "TRUSTED_PREFLIGHT_FAILED:exact-head proof rejected",
+        previous=previous,
+    )
+
+    assert cycle.state == "PREREQUISITE_BLOCKED"
+    assert cycle.provider_id == "TRUSTED_PREFLIGHT_FAILED"
+    assert cycle.trigger_id is None
+
+
+def test_transient_prerequisite_preserves_old_terminal_cycle(monkeypatch):
+    """A transient outage must not erase an already-completed terminal cycle."""
+    previous = make_cycle(
+        state="REVIEW_CLEAR",
+        provider_id="codex",
+        trigger_id=123,
+        generation_id="a" * 16,
+    )
+    published = _publish_harness(monkeypatch)
+
+    cycle = orchestrator.publish_prerequisite_block(
+        "owner/repo",
+        "token",
+        472,
+        HEAD,
+        "TRUSTED_PREFLIGHT_PENDING:still running",
+        previous=previous,
+    )
+
+    assert cycle.state == "REVIEW_CLEAR"
+    assert cycle.provider_id == previous.provider_id
+    assert cycle.trigger_id == previous.trigger_id
+    assert cycle == published[0]

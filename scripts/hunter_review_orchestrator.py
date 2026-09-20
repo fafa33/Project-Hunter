@@ -940,11 +940,14 @@ def publish_prerequisite_block(
     completed_state = previous is not None and previous.state in {"REVIEW_CLEAR", "FINDINGS_OPEN", "POOL_EXHAUSTED"}
     active_prior_state = previous is not None and previous.state in PENDING_STATES | {"REVIEW_IN_PROGRESS"}
     preserve = active_prior_state and previous.head_sha == head_sha and previous.trigger_id is not None
-    if completed_state:
-        # A terminal cycle already exists. A transient prerequisite failure must
-        # not overwrite it with a trigger-less prerequisite cycle, because after
-        # recovery no code path restores the terminal state. Re-publish the
-        # terminal cycle unchanged so it survives the outage.
+    current_state = prerequisite_cycle_state(reason)
+    terminal_due_to_transient = completed_state and current_state in set(TRANSIENT_PREREQUISITE_STATES.values())
+    if terminal_due_to_transient:
+        # A terminal cycle already exists and the latest prerequisite failure is
+        # genuinely transient. A transient outage must not overwrite the terminal
+        # state with a trigger-less prerequisite cycle, because after recovery no
+        # code path restores the terminal state. Re-publish the terminal cycle
+        # unchanged so it survives the outage.
         cycle = ReviewCycle(
             pr_number=pr_number,
             head_sha=head_sha,
