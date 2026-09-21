@@ -13,9 +13,16 @@ def test_json_parser_accepts_pure_or_last_line_json():
 def test_hermes_review_runs_safe_cli_and_validates_contract(monkeypatch):
     monkeypatch.setattr(hermes, "hermes_binary", lambda: "/tmp/hermes")
     seen = {}
+
     def run(command, **kwargs):
         seen["command"] = command
-        return subprocess.CompletedProcess(command, 0, stdout=json.dumps({"verdict":"clear","summary":"No blocking defects","findings":[]}), stderr="")
+        return subprocess.CompletedProcess(
+            command,
+            0,
+            stdout=json.dumps({"verdict": "clear", "summary": "No blocking defects", "findings": []}),
+            stderr="",
+        )
+
     monkeypatch.setattr(hermes.subprocess, "run", run)
     result = hermes.hermes_review("diff --git a/a b/a")
     assert result["verdict"] == "clear"
