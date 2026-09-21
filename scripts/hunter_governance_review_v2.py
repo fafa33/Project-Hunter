@@ -2102,29 +2102,58 @@ def verify_pre_ready_hostile_review(
                         },
                     )
                 )
-        if not adopted:
-            return "failure", "MISSING_REVIEW_AUTHORITY: no authenticated exact-head adoption of the review request"
         priorities = {str(a["id"]): int(a["priority"]) for a in pre_ready.authority_pool_reviewers(pool)}
-        observation, ack = min(adopted, key=lambda item: priorities.get(item[0]["agent_id"], 10**9))
-        authority = {
-            "type": observation["agent_id"],
-            "tool": "authenticated-github-review",
-            "head_sha": observation["commit_id"],
-            "reviewed_at": observation.get("submitted_at") or "GitHub review observation",
-            "artifact": observation.get("html_url") or f"GitHub review {observation['id']}",
-        }
-        if priorities.get(authority["type"], 10**9) > min(priorities.values()):
+        if adopted:
+            observation, ack = min(adopted, key=lambda item: priorities.get(item[0]["agent_id"], 10**9))
+            authority = {
+                "type": observation["agent_id"],
+                "tool": "authenticated-github-review",
+                "head_sha": observation["commit_id"],
+                "reviewed_at": observation.get("submitted_at") or "GitHub review observation",
+                "artifact": observation.get("html_url") or f"GitHub review {observation['id']}",
+            }
+            if priorities.get(authority["type"], 10**9) > min(priorities.values()):
+                from hunter_reviewer_collector import load_exhaustion
+
+                try:
+                    authority.update(
+                        load_exhaustion(
+                            repository, token, pr_number, head_sha, pool, ack.get("collector_run_id"), authority["type"]
+                        )
+                    )
+                except Exception as exc:
+                    return "failure", f"EXHAUSTION_UNPROVEN: {exc}"
+        else:
+            # The deterministic last resort is real authority only after the
+            # trusted collector has exhausted every authority-eligible reviewer.
+            # load_exhaustion re-verifies the immutable receipt and the guard's
+            # live exact-head snapshot gates (zero unresolved threads, trusted
+            # preflight success, and independent Governance Agent Preflight).
+            # If any of that evidence is absent, remain blocked; never manufacture
+            # a guard clearance from mere reviewer silence.
+            import hunter_review_orchestrator as orchestration
             from hunter_reviewer_collector import load_exhaustion
 
+            collector_state, collector_run_id, collector_error = orchestration.read_collector_completion(
+                repository, token, pr_number, head_sha
+            )
+            if collector_state != "present" or collector_run_id is None:
+                detail = collector_error or "trusted collector completion is unavailable"
+                return "failure", f"MISSING_REVIEW_AUTHORITY: {detail}"
+            authority = {
+                "type": str(pool["last_resort"]),
+                "tool": "hunter-guard",
+                "head_sha": head_sha,
+                "reviewed_at": "trusted collector completion",
+                "artifact": f"actions/runs/{collector_run_id}",
+            }
             try:
                 authority.update(
-                    load_exhaustion(
-                        repository, token, pr_number, head_sha, pool, ack.get("collector_run_id"), authority["type"]
-                    )
+                    load_exhaustion(repository, token, pr_number, head_sha, pool, collector_run_id, authority["type"])
                 )
             except Exception as exc:
-                return "failure", f"EXHAUSTION_UNPROVEN: {exc}"
-        # This is NEW authority from the current reviewer; the historical record is unchanged.
+                return "failure", f"POOL_EXHAUSTED: last-resort guard not admissible: {exc}"
+        # This is NEW authority from the current reviewer/guard; the historical record is unchanged.
         document = pre_ready.document_for(claims, authority=authority)
 
     # The Issue the review claims must be the Issue the branch binds, when the

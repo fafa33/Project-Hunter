@@ -1010,6 +1010,33 @@ def test_api_auth_failures_are_explicit_unavailability(monkeypatch):
     monkeypatch.setattr(collector.urllib.request, "urlopen", denied)
     payload = backend._invoke_external({"id": "gemini", "review_timeout_seconds": 1, "trigger_method": "api:gemini"}, 1)
     assert payload["verdict"] == "unavailable"
+    assert payload["failure_class"] == "permanent"
+
+
+def test_api_service_failure_is_transient_unavailability(monkeypatch):
+    backend = collector.GitHubBackend("owner/repo", "token", 469, HEAD, "claims", 1, 1)
+    monkeypatch.setenv("GROQ_API_KEY", "present")
+    monkeypatch.setattr(backend, "_candidate_diff", lambda: "diff --git a/x b/x")
+
+    def unavailable(*_a, **_k):
+        raise urllib.error.HTTPError("https://example", 503, "unavailable", {}, None)
+
+    monkeypatch.setattr(collector.urllib.request, "urlopen", unavailable)
+    payload = backend._invoke_external({"id": "groq", "review_timeout_seconds": 1, "trigger_method": "api:groq"}, 1)
+    assert payload["verdict"] == "unavailable"
+    assert payload["failure_class"] == "transient"
+
+
+def test_hosted_trigger_creation_is_not_reviewer_acknowledgement():
+    backend = collector.GitHubBackend("owner/repo", "token", 482, HEAD, "d" * 64, 123, 1)
+    trigger = {"id": 99, "created_at": "2026-09-21T00:00:00Z"}
+    codex = {"id": "codex", "trigger_method": "github-pr-comment:@codex review"}
+    copilot = {
+        "id": "copilot",
+        "trigger_method": "github-review-request:copilot-pull-request-reviewer[bot]",
+    }
+    assert backend.acknowledged(codex, trigger) is False
+    assert backend.acknowledged(copilot, trigger) is False
 
 
 def test_response_state_uses_latest_exact_head_review(monkeypatch):

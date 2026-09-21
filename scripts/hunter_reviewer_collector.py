@@ -302,7 +302,13 @@ def collect_attempts(pool: dict[str, Any], head: str, backend: Backend) -> list[
                     "ack_elapsed_seconds": ack_elapsed,
                     "elapsed_seconds": backend.now() - start,
                     "outcome": state,
-                    **({k: trigger[k] for k in ("provider", "response_digest", "head_sha") if k in trigger}),
+                    **(
+                        {
+                            k: trigger[k]
+                            for k in ("provider", "response_digest", "head_sha", "failure_class")
+                            if k in trigger
+                        }
+                    ),
                 }
             )
             if state in {"clear", "blocking"}:
@@ -744,10 +750,18 @@ class GitHubBackend:
                 raw = response.read(LIMIT + 1)
         except urllib.error.HTTPError as exc:
             if exc.code in {401, 403, 408, 413, 429, 500, 502, 503, 504}:
-                return {"verdict": "unavailable", "summary": f"{provider} HTTP {exc.code}"}
+                return {
+                    "verdict": "unavailable",
+                    "summary": f"{provider} HTTP {exc.code}",
+                    "failure_class": "permanent" if exc.code in {401, 403} else "transient",
+                }
             raise
         except (TimeoutError, urllib.error.URLError):
-            return {"verdict": "unavailable", "summary": f"{provider} transport unavailable"}
+            return {
+                "verdict": "unavailable",
+                "summary": f"{provider} transport unavailable",
+                "failure_class": "transient",
+            }
         if len(raw) > LIMIT:
             raise ValueError("external reviewer response too large")
         envelope = json.loads(raw)
@@ -1188,6 +1202,7 @@ class GitHubBackend:
                 "collector_run_id": self.run_id,
                 "post_trigger_refusal": result_comment.get("post_trigger_refusal"),
                 "dispatch_status": result_comment.get("dispatch_status"),
+                "failure_class": payload.get("failure_class"),
             }
         body = trigger_body(
             self.expected_head, self.claims_id, agent, self.run_id, self.run_attempt, number, self.generation_id
@@ -1289,11 +1304,22 @@ class GitHubBackend:
         full review budget rather than being abandoned for being slow.
         """
 
-        if trigger_scheme(agent) == "github-workflow":
+        scheme = trigger_scheme(agent)
+        if scheme == "github-workflow":
             if str(trigger.get("state") or "") == "unavailable":
                 return False
             run = self._adopt_workflow_run(trigger)
             return run is not None and str(run.get("status") or "") in STARTED_RUN_STATES
+        if scheme in {"github-pr-comment", "github-review-request"}:
+            # Creating a trigger comment or GitHub review request proves only
+            # that Hunter asked. It does not prove the hosted reviewer accepted
+            # or started the job. These integrations expose no separate trusted
+            # started signal, so silence remains unacknowledged and yields after
+            # the short acknowledgement budget. A substantive response is
+            # detected by response_state() before this method is consulted.
+            return False
+        # API execution is synchronous: once the durable trigger exists the
+        # provider call itself is the acknowledgement/execution boundary.
         return type(trigger.get("id")) is int and int(trigger["id"]) > 0
 
 
@@ -1679,7 +1705,11 @@ def load_exhaustion(
                 ),
                 "ack_timeout_seconds": agent["ack_timeout_seconds"],
                 "review_timeout_seconds": agent["review_timeout_seconds"],
-                "failure_class": "permanent" if terminal == "unavailable" else "transient",
+                "failure_class": (
+                    str(records[offset - 1].get("failure_class") or "permanent")
+                    if terminal == "unavailable"
+                    else "transient"
+                ),
                 "attempt_count": spent,
                 "invocation_reference": f"actions/runs/{run_id}",
             }

@@ -2011,6 +2011,99 @@ def _check_backend_post_trigger_boundary(tree: ast.AST) -> list[str]:
     return errors
 
 
+def validate_reviewer_pool_operational_admission() -> list[str]:
+    """DFF-025: configured reviewers must be operationally admitted, not merely named.
+
+    Hosted trigger creation is not acknowledgement, permanent API auth failures
+    remain distinguishable from transient outages, and the declared deterministic
+    last resort must be wired through trusted exhaustion verification.
+    """
+
+    collector_tree, error = _module_ast(REVIEWER_COLLECTOR_SOURCE)
+    if collector_tree is None:
+        return [f"reviewer collector source unavailable ({error})"]
+    errors: list[str] = []
+    backend = next(
+        (node for node in ast.walk(collector_tree) if isinstance(node, ast.ClassDef) and node.name == "GitHubBackend"),
+        None,
+    )
+    acknowledged = (
+        next(
+            (node for node in ast.walk(backend) if isinstance(node, ast.FunctionDef) and node.name == "acknowledged"),
+            None,
+        )
+        if backend is not None
+        else None
+    )
+    if acknowledged is None:
+        errors.append("DFF-025: GitHubBackend.acknowledged is missing")
+    else:
+        constants = {node.value for node in ast.walk(acknowledged) if isinstance(node, ast.Constant)}
+        if not {"github-pr-comment", "github-review-request"} <= constants:
+            errors.append("DFF-025: hosted comment/review-request creation must not count as reviewer acknowledgement")
+
+    invoke = (
+        next(
+            (
+                node
+                for node in ast.walk(backend)
+                if isinstance(node, ast.FunctionDef) and node.name == "_invoke_external"
+            ),
+            None,
+        )
+        if backend is not None
+        else None
+    )
+    if invoke is None:
+        errors.append("DFF-025: external reviewer invocation is missing")
+    else:
+        constants = {node.value for node in ast.walk(invoke) if isinstance(node, ast.Constant)}
+        if not {401, 403, "permanent", "transient", "failure_class"} <= constants:
+            errors.append(
+                "DFF-025: API auth/permission failures must remain durably distinguishable from transient outages"
+            )
+
+    governance_tree, governance_error = _module_ast("scripts/hunter_governance_review_v2.py")
+    if governance_tree is None:
+        errors.append(f"governance source unavailable ({governance_error})")
+    else:
+        verify = next(
+            (
+                node
+                for node in ast.walk(governance_tree)
+                if isinstance(node, ast.FunctionDef) and node.name == "verify_pre_ready_hostile_review"
+            ),
+            None,
+        )
+        calls = (
+            {
+                node.func.id
+                for node in ast.walk(verify)
+                if isinstance(node, ast.Call) and isinstance(node.func, ast.Name)
+            }
+            if verify is not None
+            else set()
+        )
+        last_resort_refs = (
+            [
+                node
+                for node in ast.walk(verify)
+                if isinstance(node, ast.Subscript)
+                and isinstance(node.value, ast.Name)
+                and node.value.id == "pool"
+                and isinstance(node.slice, ast.Constant)
+                and node.slice.value == "last_resort"
+            ]
+            if verify is not None
+            else []
+        )
+        if "load_exhaustion" not in calls or not last_resort_refs:
+            errors.append(
+                "DFF-025: declared last_resort must be admitted only through trusted load_exhaustion verification"
+            )
+    return errors
+
+
 def validate_reviewer_trigger_identity_preservation() -> list[str]:
     """DFF-026: a real trigger identity must survive post-trigger failures.
 
@@ -2371,6 +2464,7 @@ def validate_defect_prevention_lifecycle() -> list[str]:
     errors.extend(validate_trusted_preflight_reconcile_wakeup())
     errors.extend(validate_review_request_lifecycle_contract())
     errors.extend(validate_reviewer_unavailability_is_per_reviewer())
+    errors.extend(validate_reviewer_pool_operational_admission())
     errors.extend(validate_reviewer_trigger_identity_preservation())
     errors.extend(validate_orchestration_status_description_is_bounded())
     errors.extend(validate_review_after_remediation_boundary())
