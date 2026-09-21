@@ -38,3 +38,9 @@ def test_privileged_reviewer_orchestration_stays_on_trusted_reconcile_path() -> 
     assert "actions: write" in reconcile
     assert "python scripts/hunter_review_orchestrator.py ensure" in reconcile
     assert "python scripts/hunter_review_orchestrator.py ensure" not in review
+
+
+def test_candidate_admission_uses_canonical_controller() -> None:
+    admission = _workflow("hunter-candidate-admission.yml")
+    assert "engine/scripts/hunter_candidate_admission.py" in admission
+    assert BRIDGE not in admission

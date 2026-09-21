@@ -78,12 +78,11 @@ jobs:
             exit 0
           fi
 
-          # Legacy invariant marker retained for migration-contract tests: hunter_candidate_admission.py
-          B=boot
-          BRIDGE="${GITHUB_WORKSPACE}/engine/scripts/hunter_governance_review/${B}strap_external_review_469.py"
+          # Cutover: candidate admission is the canonical controller itself.
+          # The historical bootstrap bridge has no runtime workflow edge.
           while IFS= read -r PR_NUMBER; do
             [[ -n "${PR_NUMBER}" ]] || continue
-            python "${BRIDGE}" candidate \
+            python "${GITHUB_WORKSPACE}/engine/scripts/hunter_candidate_admission.py" \
               --pr "${PR_NUMBER}" \
               --repository "${GH_REPO}" \
               --head-sha "${EVENT_HEAD_SHA}"

@@ -551,7 +551,8 @@ def parse_api_result(body: str) -> dict[str, Any] | None:
         return None
     if not re.fullmatch(r"[0-9a-f]{64}", str(value.get("claims_id") or "")):
         return None
-    if str(value.get("reviewer_agent") or "") not in {"gemini", "groq"}:
+    reviewer_agent = str(value.get("reviewer_agent") or "")
+    if re.fullmatch(r"[a-z0-9_-]+", reviewer_agent) is None:
         return None
     if type(value.get("collector_run_id")) is not int or value["collector_run_id"] <= 0:
         return None
@@ -810,6 +811,36 @@ class GitHubBackend:
                 "dispatch_status": exc.status_code,
             }
 
+    def _durable_reviewer_result(self, agent: dict[str, Any], trigger: dict[str, Any]) -> dict[str, Any] | None:
+        """Trusted result marker bound to this exact trigger, head, claims and reviewer.
+
+        Native reviewer dispatch can fail *after* its trigger comment exists (for
+        example Copilot review-request refusal). That failure may be used for
+        failover only when it is durable and therefore re-verifiable later by
+        load_exhaustion. In-memory ``state=unavailable`` is never enough.
+        """
+        trigger_id = int(trigger.get("id") or 0)
+        if trigger_id <= 0:
+            return None
+        matches = []
+        for item in _pages(self.repository, self.token, f"issues/{self.pr}/comments"):
+            if (item.get("user") or {}).get("login", "").lower() != "github-actions[bot]":
+                continue
+            result = parse_api_result(str(item.get("body") or ""))
+            if result is None:
+                continue
+            if (
+                result["head_sha"] == self.expected_head
+                and result["claims_id"] == self.claims_id
+                and result["reviewer_agent"] == str(agent["id"])
+                and result["collector_run_id"] == int(trigger.get("collector_run_id") or self.run_id)
+                and result["trigger_id"] == trigger_id
+            ):
+                matches.append({**result, "comment_id": int(item.get("id") or 0)})
+        if not matches:
+            return None
+        return min(matches, key=lambda item: int(item.get("comment_id") or 0))
+
     def _api_result(self, agent: dict[str, Any], trigger: dict[str, Any]) -> dict[str, Any] | None:
         trigger_record = parse_api_trigger(str(trigger.get("body") or ""))
         if trigger_record is None:
@@ -820,24 +851,7 @@ class GitHubBackend:
             or trigger_record["reviewer_agent"] != str(agent["id"])
         ):
             raise ValueError("external reviewer response is not exact-head bound")
-        matches = []
-        for item in _pages(self.repository, self.token, f"issues/{self.pr}/comments"):
-            if (item.get("user") or {}).get("login", "").lower() != "github-actions[bot]":
-                continue
-            result = parse_api_result(str(item.get("body") or ""))
-            if result is None:
-                continue
-            if (
-                result["head_sha"] == trigger_record["head_sha"]
-                and result["claims_id"] == trigger_record["claims_id"]
-                and result["reviewer_agent"] == trigger_record["reviewer_agent"]
-                and result["collector_run_id"] == trigger_record["collector_run_id"]
-                and result["trigger_id"] == int(trigger.get("id") or 0)
-            ):
-                matches.append({**result, "comment_id": int(item.get("id") or 0)})
-        if not matches:
-            return None
-        return min(matches, key=lambda item: int(item.get("comment_id") or 0))
+        return self._durable_reviewer_result(agent, trigger)
 
     def _workflow_run(self, trigger: dict[str, Any]) -> dict[str, Any] | None:
         """The trusted default-branch run this exact dispatch produced, or nothing.
@@ -1002,23 +1016,10 @@ class GitHubBackend:
             existing["collector_run_id"] = int(m.group(1)) if m else self.run_id
             existing["collector_run_attempt"] = int(m.group(2)) if m else self.run_attempt
             if method.startswith("api:"):
-                try:
-                    result = self._api_result(agent, existing)
-                except governance.transport.GitHubRequestError as exc:
-                    # Reading the durable result for an existing trigger is
-                    # post-trigger. Preserving the real id is mandatory; a
-                    # dispatch-unavailable error marks the attempt unavailable,
-                    # anything else fails closed.
-                    if not reviewer_dispatch_unavailable(exc):
-                        raise
-                    existing.update(
-                        provider=method.split(":", 1)[1],
-                        head_sha=self.expected_head,
-                        state="unavailable",
-                        request_error=type(exc).__name__,
-                        dispatch_status=exc.status_code,
-                    )
-                    return existing
+                # This is post-trigger evidence. If it cannot be read, no
+                # exhaustion receipt can ever prove what happened, so propagate
+                # and fail closed instead of manufacturing in-memory unavailability.
+                result = self._api_result(agent, existing)
                 if result is None:
                     # API invocation is synchronous; a durable trigger with no
                     # durable result means the original process died before
@@ -1052,12 +1053,37 @@ class GitHubBackend:
             except governance.transport.GitHubRequestError as exc:
                 if not reviewer_dispatch_unavailable(exc):
                     raise
-                # The durable trigger comment exists; preserve its identity while
-                # converting the reviewer-request refusal to an unavailable state.
-                trigger["collector_run_id"] = self.run_id
-                trigger["state"] = "unavailable"
-                trigger["request_error"] = type(exc).__name__
-                trigger["dispatch_status"] = exc.status_code
+                # The trigger already exists, so failover is permitted only with
+                # a durable, trigger-bound refusal marker that load_exhaustion
+                # can re-read later. An in-memory state would be unverifiable.
+                payload = {
+                    "verdict": "unavailable",
+                    "summary": f"review request refused: HTTP {exc.status_code}",
+                }
+                digest = hashlib.sha256(json.dumps(payload, sort_keys=True, separators=(",", ":")).encode()).hexdigest()
+                result_comment = self._post_result_comment(
+                    api_result_body(
+                        self.expected_head,
+                        self.claims_id,
+                        agent,
+                        self.run_id,
+                        int(trigger["id"]),
+                        "unavailable",
+                        payload["summary"],
+                        digest,
+                    ),
+                    int(trigger["id"]),
+                )
+                if not result_comment.get("id"):
+                    raise ValueError("reviewer-request refusal could not be persisted") from exc
+                trigger.update(
+                    collector_run_id=self.run_id,
+                    state="unavailable",
+                    request_error=type(exc).__name__,
+                    dispatch_status=exc.status_code,
+                    response_digest=digest,
+                    result_comment_id=int(result_comment["id"]),
+                )
                 return trigger
             trigger["collector_run_id"] = self.run_id
             return trigger
@@ -1194,6 +1220,9 @@ class GitHubBackend:
             if result is None:
                 return "waiting"
             return str(result["verdict"])
+        durable_result = self._durable_reviewer_result(agent, trigger)
+        if durable_result is not None and durable_result.get("verdict") == "unavailable":
+            return "unavailable"
         login = governance.reviewer_login(agent)
         created = str(trigger["created_at"])
         matching_reviews = [

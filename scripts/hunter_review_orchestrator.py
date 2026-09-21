@@ -938,7 +938,10 @@ def publish_prerequisite_block(
     """
 
     completed_state = previous is not None and previous.state in {"REVIEW_CLEAR", "FINDINGS_OPEN", "POOL_EXHAUSTED"}
-    active_prior_state = previous is not None and previous.state in PENDING_STATES | {"REVIEW_IN_PROGRESS"}
+    active_prior_state = previous is not None and previous.state in PENDING_STATES | {
+        "REVIEW_IN_PROGRESS",
+        "PREREQUISITE_BLOCKED",
+    }
     preserve = active_prior_state and previous.head_sha == head_sha and previous.trigger_id is not None
     current_state = prerequisite_cycle_state(reason)
     terminal_due_to_transient = completed_state and current_state in set(TRANSIENT_PREREQUISITE_STATES.values())

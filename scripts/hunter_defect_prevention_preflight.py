@@ -1940,6 +1940,44 @@ def _check_backend_post_trigger_boundary(tree: ast.AST) -> list[str]:
         ):
             protected_post_trigger = True
 
+    # A single protected path must not mask an unsafe sibling path. No helper
+    # used after durable trigger creation may raise ReviewerDispatchRefused, and
+    # trigger itself may not catch that pre-trigger-only exception around any
+    # post-trigger operation. This is checked per helper/handler rather than by
+    # one aggregate "protected_post_trigger" flag.
+    post_trigger_helper_names = (post_trigger_calls | protected_helpers) - {"_post_trigger_comment"}
+    helper_nodes = {
+        node.name: node
+        for node in ast.walk(backend)
+        if isinstance(node, ast.FunctionDef) and node.name in post_trigger_helper_names
+    }
+    for helper_name, helper in helper_nodes.items():
+        if any(
+            isinstance(node, ast.Raise)
+            and isinstance(node.exc, ast.Call)
+            and isinstance(node.exc.func, ast.Name)
+            and node.exc.func.id == "ReviewerDispatchRefused"
+            for node in ast.walk(helper)
+        ):
+            errors.append(
+                f"{helper_name} is post-trigger and may not raise ReviewerDispatchRefused; "
+                "durable trigger identity must be preserved or the failure must propagate fail-closed"
+            )
+    for attempt in (node for node in ast.walk(trigger_method) if isinstance(node, ast.Try)):
+        attempt_calls = {
+            call.func.attr
+            for call in ast.walk(attempt)
+            if isinstance(call, ast.Call) and isinstance(call.func, ast.Attribute)
+        }
+        if not (attempt_calls & post_trigger_helper_names):
+            continue
+        for handler in attempt.handlers:
+            if isinstance(handler.type, ast.Name) and handler.type.id == "ReviewerDispatchRefused":
+                errors.append(
+                    "GitHubBackend.trigger catches ReviewerDispatchRefused around a post-trigger path; "
+                    "that would erase durable trigger identity"
+                )
+
     # Every raw _post_comment inside trigger must be replaced by a protected
     # helper; raw _post_comment calls are only safe when creating the trigger.
     raw_post_trigger_lines = [
@@ -2201,6 +2239,7 @@ def _authority_cutover_contract_errors(workflows: dict[str, str]) -> list[str]:
     review = workflows.get("hunter-governance-review.yml", "")
     reconcile = workflows.get("hunter-governance-reconcile.yml", "")
     readiness = workflows.get("hunter-merge-readiness.yml", "")
+    admission = workflows.get("hunter-candidate-admission.yml", "")
     bridge = "bootstrap_external_review_469.py"
 
     for name, text in workflows.items():
@@ -2213,6 +2252,8 @@ def _authority_cutover_contract_errors(workflows: dict[str, str]) -> list[str]:
         errors.append("DFF-028: governance reconcile must invoke the canonical governance controller")
     if "python scripts/hunter_merge_readiness_v2.py" not in readiness:
         errors.append("DFF-028: merge readiness must invoke the canonical readiness projector")
+    if "engine/scripts/hunter_candidate_admission.py" not in admission:
+        errors.append("DFF-028: candidate admission must invoke the canonical admission controller")
     if "python scripts/hunter_review_orchestrator.py ensure" not in reconcile:
         errors.append("DFF-028: privileged reviewer orchestration must remain on reconcile")
     if "python scripts/hunter_review_orchestrator.py ensure" in review:
@@ -2230,6 +2271,7 @@ def validate_authority_cutover_single_owner() -> list[str]:
         "hunter-governance-review.yml",
         "hunter-governance-reconcile.yml",
         "hunter-merge-readiness.yml",
+        "hunter-candidate-admission.yml",
     )
     workflows: dict[str, str] = {}
     errors: list[str] = []

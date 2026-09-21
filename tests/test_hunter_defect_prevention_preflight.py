@@ -443,6 +443,7 @@ def test_dff028_guard_rejects_reintroduced_legacy_bridge_runtime_edge():
         "hunter-governance-review.yml": "actions: read\npython engine/scripts/hunter_governance_review_v2.py",
         "hunter-governance-reconcile.yml": "actions: write\npython scripts/hunter_governance_review_v2.py\npython scripts/hunter_review_orchestrator.py ensure",
         "hunter-merge-readiness.yml": "python scripts/hunter_merge_readiness_v2.py\nbootstrap_external_review_469.py readiness",
+        "hunter-candidate-admission.yml": "python engine/scripts/hunter_candidate_admission.py",
     }
     errors = prevention._authority_cutover_contract_errors(workflows)
     assert any("legacy bootstrap bridge remains runtime-reachable" in error for error in errors)
@@ -453,6 +454,29 @@ def test_dff028_guard_rejects_missing_canonical_readiness_projection():
         "hunter-governance-review.yml": "actions: read\npython engine/scripts/hunter_governance_review_v2.py",
         "hunter-governance-reconcile.yml": "actions: write\npython scripts/hunter_governance_review_v2.py\npython scripts/hunter_review_orchestrator.py ensure",
         "hunter-merge-readiness.yml": "echo no canonical readiness",
+        "hunter-candidate-admission.yml": "python engine/scripts/hunter_candidate_admission.py",
     }
     errors = prevention._authority_cutover_contract_errors(workflows)
     assert any("canonical readiness projector" in error for error in errors)
+
+
+def test_dff026_guard_rejects_one_unsafe_post_trigger_helper_even_when_another_is_protected(tmp_path, monkeypatch):
+    source = PER_REVIEWER_ISOLATION_SOURCE + """
+
+class GitHubBackend:
+    def _post_result_comment(self, body, trigger_id):
+        raise ReviewerDispatchRefused(Exception('bad'))
+
+    def trigger(self, agent, number):
+        durable = self._post_trigger_comment('trigger')
+        return self._post_result_comment('result', durable['id'])
+
+    def _post_trigger_comment(self, body):
+        return self._post_comment(body)
+
+    def _post_comment(self, body):
+        return {'id': 1}
+"""
+    monkeypatch.setattr(prevention, "ROOT", _collector_tree(tmp_path, source))
+    errors = prevention.validate_reviewer_trigger_identity_preservation()
+    assert any("post-trigger" in error and "ReviewerDispatchRefused" in error for error in errors)

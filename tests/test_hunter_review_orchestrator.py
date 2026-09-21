@@ -1132,3 +1132,21 @@ def test_transient_prerequisite_preserves_old_terminal_cycle(monkeypatch):
     assert cycle.provider_id == previous.provider_id
     assert cycle.trigger_id == previous.trigger_id
     assert cycle == published[0]
+
+
+def test_repeated_deterministic_prerequisite_block_preserves_live_trigger_identity(monkeypatch):
+    previous = make_cycle(
+        state="PREREQUISITE_BLOCKED",
+        provider_id="REVIEW_REQUEST_INVALID",
+        trigger_id=777,
+        generation_id="a" * 16,
+    )
+    published = _publish_harness(monkeypatch)
+    cycle = orchestrator.publish_prerequisite_block(
+        "owner/repo", "token", 482, HEAD, "REVIEW_REQUEST_INVALID:still invalid", previous=previous
+    )
+    assert cycle.state == "PREREQUISITE_BLOCKED"
+    assert cycle.trigger_id == 777
+    assert cycle.generation_id == previous.generation_id
+    assert cycle.started_at == previous.started_at
+    assert published == [cycle]

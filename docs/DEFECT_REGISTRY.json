@@ -1282,8 +1282,10 @@
         "tests/test_hunter_reviewer_collector.py::test_collect_attempts_keeps_nonzero_identity_for_post_trigger_api_failure",
         "tests/test_hunter_reviewer_collector.py::test_provider_refusal_after_api_trigger_persists_verifiable_unavailability",
         "tests/test_hunter_reviewer_collector.py::test_api_result_persistence_failure_after_provider_return_fails_closed",
-        "tests/test_hunter_reviewer_collector.py::test_existing_api_trigger_adoption_preserves_identity_on_result_read_failure",
-        "tests/test_hunter_defect_prevention_preflight.py::test_dff025_guard_rejects_a_broad_pool_exception_catcher"
+        "tests/test_hunter_reviewer_collector.py::test_existing_api_trigger_adoption_fails_closed_when_result_evidence_is_unreadable",
+        "tests/test_hunter_defect_prevention_preflight.py::test_dff025_guard_rejects_a_broad_pool_exception_catcher",
+        "tests/test_hunter_reviewer_collector.py::test_native_reviewer_request_refusal_persists_trigger_bound_unavailability",
+        "tests/test_hunter_defect_prevention_preflight.py::test_dff026_guard_rejects_one_unsafe_post_trigger_helper_even_when_another_is_protected"
       ],
       "lifecycle": "locally-enforced",
       "sources": [
@@ -1318,7 +1320,7 @@
     {
       "id": "DFF-028",
       "title": "legacy-review-authority-remains-runtime-reachable-after-cutover",
-      "invariant": "After reviewer-authority cutover, each current governance fact has exactly one runtime publisher. No trusted workflow may invoke bootstrap_external_review_469.py; Governance Review and Governance Reconcile must invoke the canonical governance controller, Merge Readiness must invoke the canonical readiness projector, and privileged reviewer orchestration must remain only on the trusted reconcile lane. The historical bridge may remain in the repository for audit/rollback evidence until post-cutover removal, but it has no workflow execution edge. Reintroducing any invocation creates competing authority and is a prevention-system failure, not a harmless fallback.",
+      "invariant": "After reviewer-authority cutover, each current governance fact has exactly one runtime publisher. No trusted workflow may invoke bootstrap_external_review_469.py; Governance Review and Governance Reconcile must invoke the canonical governance controller, Merge Readiness must invoke the canonical readiness projector, Candidate Admission must invoke the canonical admission controller, and privileged reviewer orchestration must remain only on the trusted reconcile lane. The historical bridge may remain in the repository for audit/rollback evidence until post-cutover removal, but it has no workflow execution edge. Reintroducing any invocation creates competing authority and is a prevention-system failure, not a harmless fallback.",
       "lifecycle": "locally-enforced",
       "applicability": {
         "changed_paths": [
@@ -1328,7 +1330,9 @@
           "scripts/hunter_governance_review/bootstrap_external_review_469.py",
           "scripts/hunter_governance_review_v2.py",
           "scripts/hunter_merge_readiness_v2.py",
-          "scripts/hunter_review_orchestrator.py"
+          "scripts/hunter_review_orchestrator.py",
+          ".github/workflows/hunter-candidate-admission.yml",
+          "scripts/hunter_candidate_admission.py"
         ],
         "rationale": "These files define the publication and wake-up edges whose duplication would restore dual authority after cutover."
       },
@@ -1341,7 +1345,8 @@
         "tests/test_authority_cutover_contract.py::test_legacy_bootstrap_bridge_has_no_runtime_workflow_authority_after_cutover",
         "tests/test_authority_cutover_contract.py::test_governance_has_one_canonical_runtime_controller",
         "tests/test_authority_cutover_contract.py::test_readiness_has_one_canonical_runtime_projection",
-        "tests/test_hunter_defect_prevention_preflight.py::test_dff028_guard_rejects_reintroduced_legacy_bridge_runtime_edge"
+        "tests/test_hunter_defect_prevention_preflight.py::test_dff028_guard_rejects_reintroduced_legacy_bridge_runtime_edge",
+        "tests/test_authority_cutover_contract.py::test_candidate_admission_uses_canonical_controller"
       ],
       "sources": [
         "Issue #484 (2026-09-21): Phase 4A cutover requires the historical bootstrap path to become audit-only before the new reviewer orchestration can become the sole production authority."

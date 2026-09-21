@@ -2096,8 +2096,8 @@ def test_api_result_persistence_failure_after_provider_return_fails_closed(monke
         backend.trigger(agent, 1)
 
 
-def test_existing_api_trigger_adoption_preserves_identity_on_result_read_failure(monkeypatch):
-    """A post-trigger _api_result failure must keep the real trigger id and mark unavailable."""
+def test_existing_api_trigger_adoption_fails_closed_when_result_evidence_is_unreadable(monkeypatch):
+    """A post-trigger result read failure cannot prove reviewer exhaustion."""
 
     backend = _backend()
     agent = {
@@ -2126,11 +2126,8 @@ def test_existing_api_trigger_adoption_preserves_identity_on_result_read_failure
 
     monkeypatch.setattr(backend, "_api_result", api_result)
 
-    trigger = backend.trigger(agent, 1)
-
-    assert trigger["id"] == 7777
-    assert trigger["state"] == "unavailable"
-    assert trigger["dispatch_status"] == 403
+    with pytest.raises(collector.governance.transport.GitHubRequestError):
+        backend.trigger(agent, 1)
     assert calls == [7777]
 
 
@@ -2180,3 +2177,45 @@ def test_unknown_runner_probe_still_uses_authenticated_ack_path(monkeypatch):
     trigger = backend.trigger({**LOCAL_TRIAGE, "availability_probe": "self-hosted-runner"}, 1)
     assert trigger["id"] == 0
     assert any(path.endswith("/dispatches") for _, path, _ in calls)
+
+
+def test_native_reviewer_request_refusal_persists_trigger_bound_unavailability(monkeypatch):
+    backend = _backend()
+    agent = {
+        "id": "copilot",
+        "trigger_method": "github-review-request:copilot-pull-request-reviewer[bot]",
+        "priority": 1,
+        "enabled": True,
+        "retryable": False,
+        "ack_timeout_seconds": 30,
+        "review_timeout_seconds": 300,
+        "evidence_parser": "github-native-review",
+        "authority_eligible": True,
+        "github_login": "copilot-pull-request-reviewer[bot]",
+    }
+    posted = []
+
+    def post(body):
+        posted.append(body)
+        return {"id": 9000 + len(posted), "created_at": "2026-09-21T20:00:00Z", "body": body}
+
+    def request(_repo, _token, method, path, payload=None):
+        if method == "POST" and path.endswith("requested_reviewers"):
+            raise _request_error(403)
+        raise AssertionError((method, path, payload))
+
+    monkeypatch.setattr(backend, "_post_comment", post)
+    monkeypatch.setattr(collector.governance, "request_json", request)
+    monkeypatch.setattr(
+        collector,
+        "_pages",
+        lambda *_a, **_k: (
+            [{"id": 9002, "user": {"login": "github-actions[bot]"}, "body": posted[1]}] if len(posted) > 1 else []
+        ),
+    )
+
+    trigger = backend.trigger(agent, 1)
+    assert trigger["id"] == 9001
+    assert trigger["state"] == "unavailable"
+    assert trigger["result_comment_id"] == 9002
+    assert backend.response_state(agent, trigger) == "unavailable"
