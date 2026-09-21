@@ -2196,7 +2196,6 @@ def validate_review_after_remediation_boundary() -> list[str]:
     return errors
 
 
-
 def _authority_cutover_contract_errors(workflows: dict[str, str]) -> list[str]:
     errors: list[str] = []
     review = workflows.get("hunter-governance-review.yml", "")
@@ -2243,6 +2242,7 @@ def validate_authority_cutover_single_owner() -> list[str]:
     if errors:
         return errors
     return _authority_cutover_contract_errors(workflows)
+
 
 def validate_defect_prevention_lifecycle() -> list[str]:
     errors: list[str] = []

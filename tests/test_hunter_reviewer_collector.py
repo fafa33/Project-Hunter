@@ -2133,6 +2133,7 @@ def test_existing_api_trigger_adoption_preserves_identity_on_result_read_failure
     assert trigger["dispatch_status"] == 403
     assert calls == [7777]
 
+
 def test_canonical_pool_includes_hermes_as_benchmark_gated_triage():
     policy = json.loads((collector.review.ROOT / "docs/CODE_WRITE_POLICY.json").read_text(encoding="utf-8"))
     pool = policy["review_progression"]["review_authority"]["reviewer_pool"]
@@ -2148,7 +2149,11 @@ def test_canonical_pool_includes_hermes_as_benchmark_gated_triage():
 def test_definitively_offline_self_hosted_runner_fails_over_without_dispatch(monkeypatch):
     backend = collector.GitHubBackend("owner/repo", "token", 469, HEAD, "d" * 64, 123, 1)
     monkeypatch.setattr(collector.orchestration, "runner_state", lambda *_a, **_k: "offline")
-    monkeypatch.setattr(collector.governance, "request_json", lambda *_a, **_k: (_ for _ in ()).throw(AssertionError("must not dispatch")))
+    monkeypatch.setattr(
+        collector.governance,
+        "request_json",
+        lambda *_a, **_k: (_ for _ in ()).throw(AssertionError("must not dispatch")),
+    )
     trigger = backend.trigger({**LOCAL_TRIAGE, "availability_probe": "self-hosted-runner"}, 1)
     assert trigger["id"] == 0
     assert trigger["state"] == "unavailable"
@@ -2160,6 +2165,7 @@ def test_unknown_runner_probe_still_uses_authenticated_ack_path(monkeypatch):
     backend = collector.GitHubBackend("owner/repo", "token", 469, HEAD, "d" * 64, 123, 1)
     monkeypatch.setattr(collector.orchestration, "runner_state", lambda *_a, **_k: "unknown")
     calls = []
+
     def request(repository, token, method, path, payload=None):
         calls.append((method, path, payload))
         if path == "":
@@ -2169,6 +2175,7 @@ def test_unknown_runner_probe_still_uses_authenticated_ack_path(monkeypatch):
         if path.endswith("/dispatches"):
             return {}
         raise AssertionError(path)
+
     monkeypatch.setattr(collector.governance, "request_json", request)
     trigger = backend.trigger({**LOCAL_TRIAGE, "availability_probe": "self-hosted-runner"}, 1)
     assert trigger["id"] == 0
