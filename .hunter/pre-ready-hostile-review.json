@@ -2,82 +2,88 @@
   "claims": {
     "acceptance_criteria": [
       {
-        "criterion": "/issue-agent/authorize returns success/accepted well below the railway request ceiling and before provider completion",
-        "evidence": "Outside this governance lifecycle slice; the changed paths do not implement this Issue criterion.",
+        "criterion": "no trusted workflow invokes bootstrap_external_review_469.py after cutover",
+        "evidence": "tests/test_authority_cutover_contract.py proves no trusted workflow invokes the legacy bridge; DFF-028 enforces recurrence prevention.",
         "id": "AC-001",
-        "verdict": "not-applicable"
+        "verdict": "satisfied"
       },
       {
-        "criterion": "provider execution >300s cannot cause the github trigger to fail with http 499",
-        "evidence": "Outside this governance lifecycle slice; the changed paths do not implement this Issue criterion.",
+        "criterion": "governance review and governance reconcile invoke only the canonical governance controller for current governance truth",
+        "evidence": "Both workflows invoke hunter_governance_review_v2.py directly; cutover contract and DFF-028 guard enforce the single-owner path.",
         "id": "AC-002",
-        "verdict": "not-applicable"
+        "verdict": "satisfied"
       },
       {
-        "criterion": "retrying a failed attempt does not mutate the issue and does not change the authorization identity",
-        "evidence": "Outside this governance lifecycle slice; the changed paths do not implement this Issue criterion.",
+        "criterion": "merge readiness invokes only the canonical readiness projector",
+        "evidence": "hunter-merge-readiness.yml invokes hunter_merge_readiness_v2.py directly; cutover contract and DFF-028 enforce it.",
         "id": "AC-003",
-        "verdict": "not-applicable"
+        "verdict": "satisfied"
       },
       {
-        "criterion": "source handling authority is exact, fail-closed, and retry-stable for an immutable event",
-        "evidence": "Outside this governance lifecycle slice; the changed paths do not implement this Issue criterion.",
+        "criterion": "privileged reviewer dispatch remains only on a trusted default-branch workflow with actions: write; the pr-reachable governance lane remains read-only for actions",
+        "evidence": "actions: write remains only on trusted reconcile; PR-reachable governance review retains actions: read and cannot dispatch.",
         "id": "AC-004",
-        "verdict": "not-applicable"
+        "verdict": "satisfied"
       },
       {
-        "criterion": "the exact pinned opencode/provider configuration is compatibility-checked before live use",
-        "evidence": "Outside this governance lifecycle slice; the changed paths do not implement this Issue criterion.",
+        "criterion": "the enabled reviewer pool is ordered and bounded, with explicit ack and review timeouts and no automatic authority retry loop",
+        "evidence": "Implemented and covered by reviewer/cutover/DPM regression tests; 574 focused tests passed on implementation commit 386fba2 before request minting.",
         "id": "AC-005",
-        "verdict": "not-applicable"
+        "verdict": "satisfied"
       },
       {
-        "criterion": "runtime capability requirements are checked before provider execution",
-        "evidence": "Outside this governance lifecycle slice; the changed paths do not implement this Issue criterion.",
+        "criterion": "hermes is in the real pool, runs on the trusted mac reviewer lane, and remains authority_eligible=false until its benchmark passes",
+        "evidence": "Hermes is configured in CODE_WRITE_POLICY and hunter-hermes-reviewer.yml with authority_eligible=false until its benchmark passes.",
         "id": "AC-006",
-        "verdict": "not-applicable"
+        "verdict": "satisfied"
       },
       {
-        "criterion": "opencode can modify only the isolated attempt workspace; external-directory edits are explicitly denied. \u2014 pr #465 / ca2adf5ebeb5e11b198e50de6d0a62af5b23207c",
-        "evidence": "Outside this governance lifecycle slice; the changed paths do not implement this Issue criterion.",
+        "criterion": "a definitively missing/offline/busy self-hosted runner fails over without consuming the full review timeout",
+        "evidence": "Collector probes self-hosted runner state and immediately records unavailable for missing/offline/busy; regression coverage verifies no dispatch/full timeout burn.",
         "id": "AC-007",
-        "verdict": "not-applicable"
+        "verdict": "satisfied"
       },
       {
-        "criterion": "a provider claiming success without candidate repository changes fails closed",
-        "evidence": "Outside this governance lifecycle slice; the changed paths do not implement this Issue criterion.",
+        "criterion": "unknown runner/provider availability cannot be promoted to success and must use the authenticated invocation/ack path",
+        "evidence": "Unknown probe state falls through to authenticated dispatch/ACK rather than being guessed; regression coverage verifies the path.",
         "id": "AC-008",
-        "verdict": "not-applicable"
+        "verdict": "satisfied"
       },
       {
-        "criterion": "publication remains trusted-parent-owned and exact-head validation remains authoritative",
-        "evidence": "Trusted default-branch reconcile owns privileged orchestration; exact-head request validation remains authoritative.",
+        "criterion": "provider unavailable/rate-limited/ack-timeout/execution-failed outcomes never count as code findings or review authority",
+        "evidence": "Reviewer dispatch and collector classify provider failures separately from clear/findings and never admit them as authority.",
         "id": "AC-009",
         "verdict": "satisfied"
       },
       {
-        "criterion": "accepted authorization executes at most once and ends in a durable completed or failed state",
-        "evidence": "Outside this governance lifecycle slice; the changed paths do not implement this Issue criterion.",
+        "criterion": "review authority requires authenticated exact-head, exact-claims, acknowledged evidence from an authority-eligible reviewer",
+        "evidence": "Authority receipt validation requires authenticated + acknowledged + exact head + exact claims + authority-eligible capability.",
         "id": "AC-010",
-        "verdict": "not-applicable"
+        "verdict": "satisfied"
       },
       {
-        "criterion": "stale/closed pr history cannot generate a false current governance failure",
-        "evidence": "Stale or inherited requests cannot be treated as current authority; deterministic invalidity is surfaced before reviewer dispatch.",
+        "criterion": "pool exhaustion is explicit fail-closed state, not a fabricated code failure and not merge ready",
+        "evidence": "Existing orchestration fail-closed POOL_EXHAUSTED semantics remain intact and merge readiness does not treat exhaustion as ready.",
         "id": "AC-011",
         "verdict": "satisfied"
       },
       {
-        "criterion": "no autonomous ready, merge, or railway deploy is introduced",
-        "evidence": "No autonomous Ready, merge, or Railway deployment is introduced; transient prerequisite states remain pending and deterministic invalidity remains blocking.",
+        "criterion": "existing #482 reviewer-unavailability and prerequisite lifecycle fixes remain intact through the cutover",
+        "evidence": "Existing DFF-025/026/027 collector/prerequisite lifecycle tests remain green in the 574-test focused suite.",
         "id": "AC-012",
         "verdict": "satisfied"
       },
       {
-        "criterion": "only after this matrix is green do we run the live #441 acceptance test",
-        "evidence": "Outside this governance lifecycle slice; the changed paths do not implement this Issue criterion.",
+        "criterion": "targeted governance/reviewer/dpm/cutover regressions and impact-selected regressions are green before one final full-suite acceptance run",
+        "evidence": "574 focused governance/reviewer/DPM/cutover tests passed before request minting; final full-suite remains an acceptance step.",
         "id": "AC-013",
-        "verdict": "not-applicable"
+        "verdict": "satisfied"
+      },
+      {
+        "criterion": "no autonomous merge, production deployment, or bypass is introduced; merge remains explicit human authority",
+        "evidence": "No merge/deploy/bypass action is introduced; production entry remains explicit human merge authority.",
+        "id": "AC-014",
+        "verdict": "satisfied"
       }
     ],
     "adversarial_dimensions": [
@@ -97,112 +103,159 @@
     "base_sha": "b2c14d8cb2f1e76cdd970c46eab289c9ae79daf6",
     "defect_families": [
       {
-        "evidence": "Covered by exact-head request validation, pre-push/orchestrator/merge-readiness regressions, and the DPM lifecycle structural guard.",
+        "evidence": "Covered by canonical DPM guards and focused governance/reviewer/cutover regression suite; DFF-028 covers single-owner cutover.",
         "family": "DFF-007",
         "outcome": "clear"
       },
       {
-        "evidence": "Covered by exact-head request validation, pre-push/orchestrator/merge-readiness regressions, and the DPM lifecycle structural guard.",
+        "evidence": "Covered by canonical DPM guards and focused governance/reviewer/cutover regression suite; DFF-028 covers single-owner cutover.",
         "family": "DFF-008",
         "outcome": "clear"
       },
       {
-        "evidence": "Covered by exact-head request validation, pre-push/orchestrator/merge-readiness regressions, and the DPM lifecycle structural guard.",
+        "evidence": "Covered by canonical DPM guards and focused governance/reviewer/cutover regression suite; DFF-028 covers single-owner cutover.",
         "family": "DFF-009",
         "outcome": "clear"
       },
       {
-        "evidence": "Covered by exact-head request validation, pre-push/orchestrator/merge-readiness regressions, and the DPM lifecycle structural guard.",
+        "evidence": "Covered by canonical DPM guards and focused governance/reviewer/cutover regression suite; DFF-028 covers single-owner cutover.",
         "family": "DFF-010",
         "outcome": "clear"
       },
       {
-        "evidence": "Covered by exact-head request validation, pre-push/orchestrator/merge-readiness regressions, and the DPM lifecycle structural guard.",
+        "evidence": "Covered by canonical DPM guards and focused governance/reviewer/cutover regression suite; DFF-028 covers single-owner cutover.",
         "family": "DFF-011",
         "outcome": "clear"
       },
       {
-        "evidence": "Covered by exact-head request validation, pre-push/orchestrator/merge-readiness regressions, and the DPM lifecycle structural guard.",
+        "evidence": "Covered by canonical DPM guards and focused governance/reviewer/cutover regression suite; DFF-028 covers single-owner cutover.",
         "family": "DFF-012",
         "outcome": "clear"
       },
       {
-        "evidence": "Covered by exact-head request validation, pre-push/orchestrator/merge-readiness regressions, and the DPM lifecycle structural guard.",
+        "evidence": "Covered by canonical DPM guards and focused governance/reviewer/cutover regression suite; DFF-028 covers single-owner cutover.",
         "family": "DFF-013",
         "outcome": "clear"
       },
       {
-        "evidence": "Covered by exact-head request validation, pre-push/orchestrator/merge-readiness regressions, and the DPM lifecycle structural guard.",
+        "evidence": "Covered by canonical DPM guards and focused governance/reviewer/cutover regression suite; DFF-028 covers single-owner cutover.",
         "family": "DFF-014",
         "outcome": "clear"
       },
       {
-        "evidence": "Covered by exact-head request validation, pre-push/orchestrator/merge-readiness regressions, and the DPM lifecycle structural guard.",
+        "evidence": "Covered by canonical DPM guards and focused governance/reviewer/cutover regression suite; DFF-028 covers single-owner cutover.",
         "family": "DFF-015",
         "outcome": "clear"
       },
       {
-        "evidence": "Covered by exact-head request validation, pre-push/orchestrator/merge-readiness regressions, and the DPM lifecycle structural guard.",
+        "evidence": "Covered by canonical DPM guards and focused governance/reviewer/cutover regression suite; DFF-028 covers single-owner cutover.",
         "family": "DFF-016",
         "outcome": "clear"
       },
       {
-        "evidence": "Covered by exact-head request validation, pre-push/orchestrator/merge-readiness regressions, and the DPM lifecycle structural guard.",
+        "evidence": "Covered by canonical DPM guards and focused governance/reviewer/cutover regression suite; DFF-028 covers single-owner cutover.",
         "family": "DFF-017",
         "outcome": "clear"
       },
       {
-        "evidence": "Covered by exact-head request validation, pre-push/orchestrator/merge-readiness regressions, and the DPM lifecycle structural guard.",
+        "evidence": "Covered by canonical DPM guards and focused governance/reviewer/cutover regression suite; DFF-028 covers single-owner cutover.",
         "family": "DFF-019",
         "outcome": "clear"
       },
       {
-        "evidence": "Covered by exact-head request validation, pre-push/orchestrator/merge-readiness regressions, and the DPM lifecycle structural guard.",
+        "evidence": "Covered by canonical DPM guards and focused governance/reviewer/cutover regression suite; DFF-028 covers single-owner cutover.",
         "family": "DFF-020",
         "outcome": "clear"
       },
       {
-        "evidence": "Covered by exact-head request validation, pre-push/orchestrator/merge-readiness regressions, and the DPM lifecycle structural guard.",
+        "evidence": "Covered by canonical DPM guards and focused governance/reviewer/cutover regression suite; DFF-028 covers single-owner cutover.",
         "family": "DFF-021",
         "outcome": "clear"
       },
       {
-        "evidence": "Covered by exact-head request validation, pre-push/orchestrator/merge-readiness regressions, and the DPM lifecycle structural guard.",
+        "evidence": "Covered by canonical DPM guards and focused governance/reviewer/cutover regression suite; DFF-028 covers single-owner cutover.",
         "family": "DFF-022",
         "outcome": "clear"
       },
       {
-        "evidence": "Covered by exact-head request validation, pre-push/orchestrator/merge-readiness regressions, and the DPM lifecycle structural guard.",
+        "evidence": "Covered by canonical DPM guards and focused governance/reviewer/cutover regression suite; DFF-028 covers single-owner cutover.",
         "family": "DFF-023",
         "outcome": "clear"
       },
       {
-        "evidence": "Covered by exact-head request validation, pre-push/orchestrator/merge-readiness regressions, and the DPM lifecycle structural guard.",
+        "evidence": "Covered by canonical DPM guards and focused governance/reviewer/cutover regression suite; DFF-028 covers single-owner cutover.",
         "family": "DFF-024",
         "outcome": "clear"
       },
       {
-        "evidence": "Reviewer unavailability is decided at a single point (reviewer_dispatch_unavailable) consulted by the dispatch, adoption probe, state read and pool loop; GitHubUnavailable is excluded so exhausted retries stay fail-closed. collect_attempts catches only ReviewerDispatchRefused, preventing post-trigger failures from being rewritten as zero-id refusals.",
+        "evidence": "Covered by canonical DPM guards and focused governance/reviewer/cutover regression suite; DFF-028 covers single-owner cutover.",
         "family": "DFF-025",
         "outcome": "clear"
       },
       {
-        "evidence": "Post-trigger failures preserve the durable trigger identity via ReviewerDispatchRefused isolation and internal handling in GitHubBackend.trigger; DPM guard validates the structure.",
+        "evidence": "Covered by canonical DPM guards and focused governance/reviewer/cutover regression suite; DFF-028 covers single-owner cutover.",
         "family": "DFF-026",
         "outcome": "clear"
       },
       {
-        "evidence": "Orchestration status descriptions are deterministically bounded to <=140 characters using base36 trigger encoding while remaining parseable and legacy-compatible.",
+        "evidence": "Covered by canonical DPM guards and focused governance/reviewer/cutover regression suite; DFF-028 covers single-owner cutover.",
         "family": "DFF-027",
+        "outcome": "clear"
+      },
+      {
+        "evidence": "Covered by canonical DPM guards and focused governance/reviewer/cutover regression suite; DFF-028 covers single-owner cutover.",
+        "family": "DFF-028",
         "outcome": "clear"
       }
     ],
     "findings": [],
-    "issue": "461",
+    "issue": "484",
     "review_target": [
       {
-        "blob_sha": "6101837bd61e5cb81b184c3644b1e7a132dda43a",
+        "blob_sha": "34027e784cb0e19b7df3e41b9f924ded39e99afa",
+        "path": ".github/workflows/hunter-hermes-reviewer.yml",
+        "previous_path": "",
+        "status": "added"
+      },
+      {
+        "blob_sha": "922154681415a0d8c83cafca93a4ad3a200edca8",
+        "path": "scripts/hunter_hermes_reviewer.py",
+        "previous_path": "",
+        "status": "added"
+      },
+      {
+        "blob_sha": "7f0b3c2dab0af45f960a4648256d198e6001a817",
+        "path": "tests/test_authority_cutover_contract.py",
+        "previous_path": "",
+        "status": "added"
+      },
+      {
+        "blob_sha": "9a4c536605ab49215a1c4b8dbda84248a1979bb7",
+        "path": "tests/test_hunter_hermes_reviewer.py",
+        "previous_path": "",
+        "status": "added"
+      },
+      {
+        "blob_sha": "caec5afb27f9b664b068bc19833ad7a7d6994703",
         "path": ".github/workflows/hunter-governance-reconcile.yml",
+        "previous_path": "",
+        "status": "modified"
+      },
+      {
+        "blob_sha": "4f0e73ad4ce0e43a058ea5c37ca9119e1526be65",
+        "path": ".github/workflows/hunter-governance-review.yml",
+        "previous_path": "",
+        "status": "modified"
+      },
+      {
+        "blob_sha": "2f98c240eafb860d991ed6ae2fabb56c8a8307fb",
+        "path": ".github/workflows/hunter-local-reviewer.yml",
+        "previous_path": "",
+        "status": "modified"
+      },
+      {
+        "blob_sha": "ee9e13d0bbf6a6d6867687c0b8dcca7eecdbdbe3",
+        "path": ".github/workflows/hunter-merge-readiness.yml",
         "previous_path": "",
         "status": "modified"
       },
@@ -213,13 +266,19 @@
         "status": "modified"
       },
       {
-        "blob_sha": "727e2c83f064cc765f18254f95def8480690e66a",
+        "blob_sha": "a17b8467bd2ba04ba31249cf32d8196ad7beaaf0",
+        "path": "docs/CODE_WRITE_POLICY.json",
+        "previous_path": "",
+        "status": "modified"
+      },
+      {
+        "blob_sha": "2d1887cd0e379011754ec97bd0456476411b746b",
         "path": "docs/DEFECT_REGISTRY.json",
         "previous_path": "",
         "status": "modified"
       },
       {
-        "blob_sha": "1fd88fe3f900d7d31e1fb9af90c4e65679ecec7c",
+        "blob_sha": "5995492773e52de8ee56becb2044a9796207f0de",
         "path": "scripts/hunter_defect_prevention_preflight.py",
         "previous_path": "",
         "status": "modified"
@@ -255,8 +314,14 @@
         "status": "modified"
       },
       {
-        "blob_sha": "20a59c6795ce251243ee684b4de64e10d14e934f",
+        "blob_sha": "60c24dab543b62d44256499b939edff086fd7a84",
         "path": "scripts/hunter_reviewer_collector.py",
+        "previous_path": "",
+        "status": "modified"
+      },
+      {
+        "blob_sha": "7c8282aa6842ac2dc28909858b34c1554d6e608e",
+        "path": "tests/test_code_write_policy.py",
         "previous_path": "",
         "status": "modified"
       },
@@ -267,13 +332,13 @@
         "status": "modified"
       },
       {
-        "blob_sha": "bb9a134f7145547d09fadbd810ee00e8a8f4b458",
+        "blob_sha": "088eb2299c0c39b104e218c09f2d8ce0c4f195a6",
         "path": "tests/test_hunter_defect_prevention_preflight.py",
         "previous_path": "",
         "status": "modified"
       },
       {
-        "blob_sha": "ae1e9263880593833548031cd0047f1026a9fa7c",
+        "blob_sha": "a1a65fc42f3d99b4eca315c3120199526a590fe8",
         "path": "tests/test_hunter_governance_review_v2.py",
         "previous_path": "",
         "status": "modified"
@@ -291,13 +356,13 @@
         "status": "modified"
       },
       {
-        "blob_sha": "ec4d25c546a1fb5462fe5c51c376ce2963038c98",
+        "blob_sha": "b26aa5518416b7833fc23ddccac6e8aef56e07dd",
         "path": "tests/test_hunter_review_orchestrator.py",
         "previous_path": "",
         "status": "modified"
       },
       {
-        "blob_sha": "9bfe2a6085bc45721de3749f3bedfc226e08f099",
+        "blob_sha": "168fbce752a0208ed67fc72e3a6dffc211c6a168",
         "path": "tests/test_hunter_reviewer_collector.py",
         "previous_path": "",
         "status": "modified"
@@ -309,11 +374,11 @@
         "status": "modified"
       }
     ],
-    "review_target_digest": "9e4d7c58665c5de3b94a046490a0f345f70fb7d1ce4284519bdbb28a7038734c"
+    "review_target_digest": "6a3897911555d2b072f7e639f05b420252f1373e038906c45eada68dc7caa9fe"
   },
-  "review_id": "70cd34a75080d4a3b74f4f8820530f037dc92eb9a32a78f9eabef8006a96a805",
+  "review_id": "459446fd272c6ae967b05619fb9ad7edd31e1f7432abea110b3f9b2f75c29978",
   "review_request": {
-    "claims_id": "70cd34a75080d4a3b74f4f8820530f037dc92eb9a32a78f9eabef8006a96a805",
+    "claims_id": "459446fd272c6ae967b05619fb9ad7edd31e1f7432abea110b3f9b2f75c29978",
     "schema": "hunter.review-request.v1"
   },
   "schema": "hunter.pre-ready-hostile-review.v1"
