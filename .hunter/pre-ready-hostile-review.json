@@ -284,13 +284,19 @@
         "status": "modified"
       },
       {
-        "blob_sha": "e1e79f5cfcaa836340d7593abb09a0d7341e9631",
+        "blob_sha": "446998f4b926709a6c6d9099e1a36df2c65ed803",
+        "path": "docs/superpowers/specs/2026-09-15-reviewer-orchestration-design.md",
+        "previous_path": "",
+        "status": "modified"
+      },
+      {
+        "blob_sha": "4d396fab3d1469f276411150e42f9ad42749c4cc",
         "path": "scripts/hunter_defect_prevention_preflight.py",
         "previous_path": "",
         "status": "modified"
       },
       {
-        "blob_sha": "3de59201b06d068d2f6c0d261060bb4c11256b7e",
+        "blob_sha": "84b395f33a1ecafb37dfc3b80d37731c06ee95f2",
         "path": "scripts/hunter_governance_review_v2.py",
         "previous_path": "",
         "status": "modified"
@@ -320,7 +326,7 @@
         "status": "modified"
       },
       {
-        "blob_sha": "e412704e0860a6027a3ef237ecc82b2ee11dbd0f",
+        "blob_sha": "669070dfb935351285bd9bb987e1f3503e4b100c",
         "path": "scripts/hunter_reviewer_collector.py",
         "previous_path": "",
         "status": "modified"
@@ -374,7 +380,7 @@
         "status": "modified"
       },
       {
-        "blob_sha": "1dd3a9151d106c0379a0814ebe68fd61a51a139d",
+        "blob_sha": "2c8d2ac11b97dfe7c2c3d22e87702656fc1a681f",
         "path": "tests/test_hunter_reviewer_collector.py",
         "previous_path": "",
         "status": "modified"
@@ -386,11 +392,11 @@
         "status": "modified"
       }
     ],
-    "review_target_digest": "dcf0390148dd3c084af2fa0fca515d9cdf476ccba6b7edaaa87cd94ad5731271"
+    "review_target_digest": "f524574097e3f306b54d04a298b1e0db2285dcdccda728796c37687e23d230fb"
   },
-  "review_id": "e669af3d5c6361a8c6bc85832f546df0a758edce398587e2492950a67efafdb9",
+  "review_id": "f56578a36d2a4413637087a10998444e47a76d6dc1b9d294ad663de86086af46",
   "review_request": {
-    "claims_id": "e669af3d5c6361a8c6bc85832f546df0a758edce398587e2492950a67efafdb9",
+    "claims_id": "f56578a36d2a4413637087a10998444e47a76d6dc1b9d294ad663de86086af46",
     "schema": "hunter.review-request.v1"
   },
   "schema": "hunter.pre-ready-hostile-review.v1"
