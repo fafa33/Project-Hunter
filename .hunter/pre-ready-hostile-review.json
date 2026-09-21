@@ -278,7 +278,7 @@
         "status": "modified"
       },
       {
-        "blob_sha": "5995492773e52de8ee56becb2044a9796207f0de",
+        "blob_sha": "776b448293b2187ead621395f7a355f99b0e6b13",
         "path": "scripts/hunter_defect_prevention_preflight.py",
         "previous_path": "",
         "status": "modified"
@@ -362,7 +362,7 @@
         "status": "modified"
       },
       {
-        "blob_sha": "168fbce752a0208ed67fc72e3a6dffc211c6a168",
+        "blob_sha": "05ea8e69c34bb8051f3dddff3d5c56d1d6e78c8f",
         "path": "tests/test_hunter_reviewer_collector.py",
         "previous_path": "",
         "status": "modified"
@@ -374,11 +374,11 @@
         "status": "modified"
       }
     ],
-    "review_target_digest": "055682e768e42f12a3b09c001d0eed932ab8b42fa1fd194eb79e538f3784b1ef"
+    "review_target_digest": "3ea449ff208b0c282e4590ab06c6c4482ef15db87a71bfc16d56cf61e271c214"
   },
-  "review_id": "d870284dfd08ccc3ca17cc8d7091993e7bf678c2c6ff474d16482d07bd9f8caa",
+  "review_id": "e0b46aa45f7e46c35efc4224ce1df0144876e5f5769bcf59b79da9bf070fc11b",
   "review_request": {
-    "claims_id": "d870284dfd08ccc3ca17cc8d7091993e7bf678c2c6ff474d16482d07bd9f8caa",
+    "claims_id": "e0b46aa45f7e46c35efc4224ce1df0144876e5f5769bcf59b79da9bf070fc11b",
     "schema": "hunter.review-request.v1"
   },
   "schema": "hunter.pre-ready-hostile-review.v1"
