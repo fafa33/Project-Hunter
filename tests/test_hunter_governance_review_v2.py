@@ -162,7 +162,7 @@ def test_protected_preflight_ordinary_candidate_cannot_self_authorize(monkeypatc
     assert description == "trusted proof missing"
 
 
-def test_workflow_uses_only_trusted_v2_controller_with_safe_bootstrap():
+def test_workflow_uses_only_trusted_v2_controller_after_cutover():
     workflow = (
         Path(__file__).resolve().parents[1] / ".github" / "workflows" / "hunter-governance-review.yml"
     ).read_text(encoding="utf-8")
@@ -186,7 +186,7 @@ def test_workflow_uses_only_trusted_v2_controller_with_safe_bootstrap():
     ).read_text(encoding="utf-8")
     assert "actions: write" in reconcile
     assert "python scripts/hunter_review_orchestrator.py ensure" in reconcile
-    assert "if [ ! -f scripts/hunter_review_orchestrator.py ]; then" in reconcile
+    assert "if [ ! -f scripts/hunter_review_orchestrator.py ]; then" not in reconcile
 
 
 def test_reconcile_continues_after_one_pr_failure_and_drops_checkout_credentials():

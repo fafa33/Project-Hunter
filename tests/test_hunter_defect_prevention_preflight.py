@@ -432,3 +432,27 @@ def test_lifecycle_contract_rejects_previous_keyword_hardcoded_to_none(tmp_path,
     errors = prevention.validate_review_request_lifecycle_contract()
 
     assert any("existing cycle" in error for error in errors)
+
+
+def test_dff028_guard_accepts_single_owner_cutover_contract():
+    assert prevention.validate_authority_cutover_single_owner() == []
+
+
+def test_dff028_guard_rejects_reintroduced_legacy_bridge_runtime_edge():
+    workflows = {
+        "hunter-governance-review.yml": "actions: read\npython engine/scripts/hunter_governance_review_v2.py",
+        "hunter-governance-reconcile.yml": "actions: write\npython scripts/hunter_governance_review_v2.py\npython scripts/hunter_review_orchestrator.py ensure",
+        "hunter-merge-readiness.yml": "python scripts/hunter_merge_readiness_v2.py\nbootstrap_external_review_469.py readiness",
+    }
+    errors = prevention._authority_cutover_contract_errors(workflows)
+    assert any("legacy bootstrap bridge remains runtime-reachable" in error for error in errors)
+
+
+def test_dff028_guard_rejects_missing_canonical_readiness_projection():
+    workflows = {
+        "hunter-governance-review.yml": "actions: read\npython engine/scripts/hunter_governance_review_v2.py",
+        "hunter-governance-reconcile.yml": "actions: write\npython scripts/hunter_governance_review_v2.py\npython scripts/hunter_review_orchestrator.py ensure",
+        "hunter-merge-readiness.yml": "echo no canonical readiness",
+    }
+    errors = prevention._authority_cutover_contract_errors(workflows)
+    assert any("canonical readiness projector" in error for error in errors)

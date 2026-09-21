@@ -444,25 +444,30 @@ def test_governance_review_workflow_keeps_only_read_access_to_actions():
     assert "python scripts/hunter_review_orchestrator.py" not in path.read_text(encoding="utf-8")
 
 
-def test_orchestration_bootstraps_only_from_the_trusted_default_branch_checkout():
-    text = pathlib.Path(REPOSITORY_ROOT, ".github/workflows/hunter-governance-reconcile.yml").read_text(
-        encoding="utf-8"
-    )
-    assert "if [ ! -f scripts/hunter_review_orchestrator.py ]; then" in text
-    assert "Bootstrap phase" in text
+def test_orchestration_after_cutover_is_required_from_the_trusted_default_branch_checkout():
+    path = pathlib.Path(REPOSITORY_ROOT, ".github/workflows/hunter-governance-reconcile.yml")
+    text = path.read_text(encoding="utf-8")
+    document = yaml.safe_load(text)
+
+    assert "if [ ! -f scripts/hunter_review_orchestrator.py ]; then" not in text
+    assert "Bootstrap phase" not in text
+    assert "python scripts/hunter_review_orchestrator.py ensure" in text
+
+    checkouts = [
+        step
+        for job in document["jobs"].values()
+        for step in job["steps"]
+        if str(step.get("uses", "")).startswith("actions/checkout")
+    ]
+    assert checkouts
+    for step in checkouts:
+        with_block = step.get("with") or {}
+        assert with_block.get("ref") == "main"
+        assert with_block.get("persist-credentials") is False
 
 
-def test_default_branch_without_orchestrator_publishes_bootstrap_pending_without_dispatching_authority():
-    """A bootstrap PR cannot invoke a controller that trusted main does not contain.
-
-    The migration state itself is decided by the trusted default-branch bridge --
-    see ``tests/test_pr473_trusted_bridge_bootstrap.py`` -- because only that tree
-    can tell whether the controller has landed, and only that tree can adopt an
-    exact-head review once one exists. What this lane owns is the guarantee that
-    it hands the decision to that bridge and does nothing else: it runs the
-    trusted copy out of ``engine/``, never a candidate copy of the orchestrator,
-    and reaches no dispatch or comment surface on the way.
-    """
+def test_governance_lane_uses_canonical_controller_and_never_the_legacy_bridge():
+    """After cutover the read-only PR lane executes only trusted canonical governance."""
 
     path = pathlib.Path(REPOSITORY_ROOT, ".github/workflows/hunter-governance-review.yml")
     workflow = path.read_text(encoding="utf-8")
@@ -471,13 +476,13 @@ def test_default_branch_without_orchestrator_publishes_bootstrap_pending_without
     runs = [
         step["run"] for job in document["jobs"].values() for step in job["steps"] if isinstance(step.get("run"), str)
     ]
-    assert any('python "${BRIDGE}" governance' in run for run in runs)
+    assert any("engine/scripts/hunter_governance_review_v2.py" in run for run in runs)
+    assert all("bootstrap_external_review_469.py" not in run for run in runs)
 
     for run in runs:
         assert "python scripts/hunter_review_orchestrator.py" not in run
         assert "actions/workflows/" not in run
         assert "issues/${PR_NUMBER}/comments" not in run
-        assert "${GITHUB_WORKSPACE}/engine/scripts/" in run or "BRIDGE" not in run
 
     checkouts = [
         step

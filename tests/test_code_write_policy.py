@@ -78,7 +78,7 @@ def test_code_write_policy_declares_codex_primary_with_a_recorded_reason_fallbac
 
 
 def test_code_write_policy_declares_an_ordered_reviewer_pool_with_a_last_resort_guard() -> None:
-    """The ordered reviewer pool: local free-first, Codex hosted fallback, guard last resort."""
+    """The ordered reviewer pool: local + Hermes triage first, Codex hosted authority fallback, guard last resort."""
     policy = json.loads((ROOT / "docs" / "CODE_WRITE_POLICY.json").read_text(encoding="utf-8"))
     pool = policy["review_progression"]["review_authority"]["reviewer_pool"]
 
@@ -89,7 +89,7 @@ def test_code_write_policy_declares_an_ordered_reviewer_pool_with_a_last_resort_
     by_id = {agent["id"]: agent for agent in pool["agents"]}
     assert by_id["codex"]["enabled"] is True
     assert by_id["local-ollama"]["priority"] == 1
-    assert by_id["codex"]["priority"] == 2
+    assert by_id["codex"]["priority"] == 3
     assert by_id["codex"]["exact_head_support"] is True
 
 

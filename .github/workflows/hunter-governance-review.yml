@@ -83,16 +83,9 @@ jobs:
           GITHUB_SERVER_URL: ${{ github.server_url }}
         run: |
           set -euo pipefail
-          # The bridge below is always the trusted default-branch copy, and it
-          # owns the controller-migration state itself: while the default branch
-          # cannot yet orchestrate exact-head review it publishes an explicit
-          # pending state, and it adopts an authenticated exact-head review as
-          # soon as one exists. Short-circuiting that decision here would also
-          # suppress the only pre-merge path that can clear the migration.
-          # Legacy invariant marker retained for migration-contract tests:
-          # python "${GITHUB_WORKSPACE}/engine/scripts/hunter_governance_review_v2.py"
-          B=boot
-          BRIDGE="${GITHUB_WORKSPACE}/engine/scripts/hunter_governance_review/${B}strap_external_review_469.py"
-          python "${BRIDGE}" governance \
+          # Cutover: the canonical v2 controller is now the only governance
+          # publisher. The historical bootstrap bridge remains in the tree as
+          # rollback/audit evidence, but no workflow may invoke it after cutover.
+          python "${GITHUB_WORKSPACE}/engine/scripts/hunter_governance_review_v2.py" \
             --pr "${PR_NUMBER}" \
             --repository "${GH_REPO}"

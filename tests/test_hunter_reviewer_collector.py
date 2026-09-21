@@ -576,14 +576,15 @@ def test_policy_enables_server_side_gemini_and_groq_after_codex():
     agents = sorted(collector.review.enabled_pool_reviewers(pool), key=lambda a: a["priority"])
     assert [(a["id"], a["priority"]) for a in agents] == [
         ("local-ollama", 1),
-        ("codex", 2),
-        ("copilot", 3),
-        ("gemini", 4),
-        ("groq", 5),
+        ("hermes", 2),
+        ("codex", 3),
+        ("copilot", 4),
+        ("gemini", 5),
+        ("groq", 6),
     ]
-    assert agents[2]["trigger_method"] == "github-review-request:copilot-pull-request-reviewer[bot]"
-    assert agents[3]["trigger_method"] == "api:gemini"
-    assert agents[4]["trigger_method"] == "api:groq"
+    assert agents[3]["trigger_method"] == "github-review-request:copilot-pull-request-reviewer[bot]"
+    assert agents[4]["trigger_method"] == "api:gemini"
+    assert agents[5]["trigger_method"] == "api:groq"
     assert all(a["review_timeout_seconds"] == 300 for a in agents[1:])
 
 
@@ -1058,11 +1059,11 @@ def test_canonical_pool_preserves_server_side_fallback_chain():
     policy = json.loads((collector.review.ROOT / "docs/CODE_WRITE_POLICY.json").read_text(encoding="utf-8"))
     pool = policy["review_progression"]["review_authority"]["reviewer_pool"]
     agents = sorted(pool["agents"], key=lambda a: a["priority"])
-    assert [a["id"] for a in agents] == ["local-ollama", "codex", "copilot", "gemini", "groq"]
+    assert [a["id"] for a in agents] == ["local-ollama", "hermes", "codex", "copilot", "gemini", "groq"]
     assert [a["id"] for a in collector.review.authority_pool_reviewers(pool)] == ["codex", "copilot", "gemini", "groq"]
-    assert agents[2]["trigger_method"] == "github-review-request:copilot-pull-request-reviewer[bot]"
-    assert agents[3]["trigger_method"] == "api:gemini"
-    assert agents[4]["trigger_method"] == "api:groq"
+    assert agents[3]["trigger_method"] == "github-review-request:copilot-pull-request-reviewer[bot]"
+    assert agents[4]["trigger_method"] == "api:gemini"
+    assert agents[5]["trigger_method"] == "api:groq"
     assert all(a["review_timeout_seconds"] == 300 and a["retryable"] is False for a in agents[1:])
     assert pool["last_resort"] == "hunter-guard"
 
@@ -2131,3 +2132,44 @@ def test_existing_api_trigger_adoption_preserves_identity_on_result_read_failure
     assert trigger["state"] == "unavailable"
     assert trigger["dispatch_status"] == 403
     assert calls == [7777]
+
+def test_canonical_pool_includes_hermes_as_benchmark_gated_triage():
+    policy = json.loads((collector.review.ROOT / "docs/CODE_WRITE_POLICY.json").read_text(encoding="utf-8"))
+    pool = policy["review_progression"]["review_authority"]["reviewer_pool"]
+    agents = sorted(pool["agents"], key=lambda a: a["priority"])
+    hermes = next(a for a in agents if a["id"] == "hermes")
+    assert hermes["trigger_method"] == "github-workflow:hunter-hermes-reviewer.yml"
+    assert hermes["authority_eligible"] is False
+    assert hermes["ack_timeout_seconds"] == 30
+    assert hermes["review_timeout_seconds"] == 300
+    assert "hermes" not in {a["id"] for a in collector.review.authority_pool_reviewers(pool)}
+
+
+def test_definitively_offline_self_hosted_runner_fails_over_without_dispatch(monkeypatch):
+    backend = collector.GitHubBackend("owner/repo", "token", 469, HEAD, "d" * 64, 123, 1)
+    monkeypatch.setattr(collector.orchestration, "runner_state", lambda *_a, **_k: "offline")
+    monkeypatch.setattr(collector.governance, "request_json", lambda *_a, **_k: (_ for _ in ()).throw(AssertionError("must not dispatch")))
+    trigger = backend.trigger({**LOCAL_TRIAGE, "availability_probe": "self-hosted-runner"}, 1)
+    assert trigger["id"] == 0
+    assert trigger["state"] == "unavailable"
+    assert trigger["availability_probe"] == "offline"
+    assert backend.response_state(LOCAL_TRIAGE, trigger) == "unavailable"
+
+
+def test_unknown_runner_probe_still_uses_authenticated_ack_path(monkeypatch):
+    backend = collector.GitHubBackend("owner/repo", "token", 469, HEAD, "d" * 64, 123, 1)
+    monkeypatch.setattr(collector.orchestration, "runner_state", lambda *_a, **_k: "unknown")
+    calls = []
+    def request(repository, token, method, path, payload=None):
+        calls.append((method, path, payload))
+        if path == "":
+            return {"default_branch": "main"}
+        if path.endswith("/runs?event=workflow_dispatch&branch=main&per_page=100"):
+            return {"workflow_runs": []}
+        if path.endswith("/dispatches"):
+            return {}
+        raise AssertionError(path)
+    monkeypatch.setattr(collector.governance, "request_json", request)
+    trigger = backend.trigger({**LOCAL_TRIAGE, "availability_probe": "self-hosted-runner"}, 1)
+    assert trigger["id"] == 0
+    assert any(path.endswith("/dispatches") for _, path, _ in calls)

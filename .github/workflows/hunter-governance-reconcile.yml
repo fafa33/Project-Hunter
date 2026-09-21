@@ -80,23 +80,16 @@ jobs:
           failures=0
           while read -r pr_number; do
             [ -z "${pr_number}" ] && continue
-            # Legacy invariant marker: if ! python scripts/hunter_governance_review_v2.py
-            B=boot
-            BRIDGE="scripts/hunter_governance_review/${B}strap_external_review_469.py"
-            if ! python "${BRIDGE}" governance \
+            # Cutover: only the canonical governance controller may publish
+            # current governance truth; the historical bootstrap bridge is fenced
+            # by having no workflow invocation path.
+            if ! python scripts/hunter_governance_review_v2.py \
               --pr "${pr_number}" \
               --repository "${GITHUB_REPOSITORY}"; then
               echo "::error::Governance refresh failed for PR #${pr_number}; continuing."
               failures=1
             fi
-            # Bootstrap detection: until hunter_review_orchestrator.py exists on the
-            # trusted default branch, there is no trusted orchestrator to run. Never
-            # run a candidate copy in its place, and do not fail the refresh merely
-            # because the trusted orchestrator is not available yet; the governance
-            # step above still owns exact-head review authority.
-            if [ ! -f scripts/hunter_review_orchestrator.py ]; then
-              echo "::notice::Bootstrap phase: hunter_review_orchestrator.py not yet on default branch; skipping orchestration for PR #${pr_number}."
-            elif ! python scripts/hunter_review_orchestrator.py ensure \
+            if ! python scripts/hunter_review_orchestrator.py ensure \
               --pr "${pr_number}" \
               --repository "${GITHUB_REPOSITORY}"; then
               echo "::error::Review orchestration failed for PR #${pr_number}; continuing."

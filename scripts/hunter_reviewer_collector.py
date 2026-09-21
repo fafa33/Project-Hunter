@@ -37,7 +37,8 @@ LOCAL_REVIEW_SCHEMA = "hunter.local-review.v1"
 #: The run name a dispatched reviewer workflow renders from its correlation
 #: input. GitHub does not report workflow_dispatch inputs on a run, so the run
 #: name is how this collector recognises the run its own dispatch produced.
-LOCAL_REVIEW_RUN_NAME_PREFIX = "Hunter Local Reviewer "
+WORKFLOW_REVIEW_RUN_NAME_PREFIX = "Hunter Reviewer "
+LOCAL_REVIEW_RUN_NAME_PREFIX = WORKFLOW_REVIEW_RUN_NAME_PREFIX
 #: A dispatched run has acknowledged the invocation only once a runner has
 #: actually picked it up: a queued run proves nothing about runner availability,
 #: which is exactly what the acknowledgement budget exists to decide.
@@ -907,14 +908,22 @@ class GitHubBackend:
             "collector_run_id": self.run_id,
             "collector_run_attempt": self.run_attempt,
         }
+        # Definitive self-hosted runner absence is reviewer unavailability, not a
+        # candidate defect and not a reason to spend the full review budget.
+        # An unreadable runner endpoint remains UNKNOWN and falls through to the
+        # authenticated dispatch/ACK path; lack of admin permission must never
+        # masquerade as a known outage.
+        if agent.get("availability_probe") == "self-hosted-runner":
+            runner = orchestration.runner_state(self.repository, self.token)
+            if runner in {"missing", "offline", "busy"}:
+                return {**pending, "state": "unavailable", "availability_probe": runner}
         try:
             if self._adopt_workflow_run(pending) is not None:
                 return pending
         except governance.transport.GitHubRequestError as exc:
             # The probe reaches the same trusted-branch resources the dispatch
-            # does, so a rejection here means the same thing the docstring
-            # promises: this reviewer is unavailable, not that the collection
-            # must be abandoned before the rest of the pool is tried.
+            # does, so a rejection here means this reviewer is unavailable, not
+            # that collection must be abandoned before later reviewers run.
             if reviewer_dispatch_unavailable(exc):
                 return {**pending, "state": "unavailable", "dispatch_status": exc.status_code}
             raise

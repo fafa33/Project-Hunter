@@ -2196,6 +2196,54 @@ def validate_review_after_remediation_boundary() -> list[str]:
     return errors
 
 
+
+def _authority_cutover_contract_errors(workflows: dict[str, str]) -> list[str]:
+    errors: list[str] = []
+    review = workflows.get("hunter-governance-review.yml", "")
+    reconcile = workflows.get("hunter-governance-reconcile.yml", "")
+    readiness = workflows.get("hunter-merge-readiness.yml", "")
+    bridge = "bootstrap_external_review_469.py"
+
+    for name, text in workflows.items():
+        if bridge in text:
+            errors.append(f"DFF-028: legacy bootstrap bridge remains runtime-reachable from {name}")
+
+    if "hunter_governance_review_v2.py" not in review:
+        errors.append("DFF-028: governance review must invoke the canonical governance controller")
+    if "hunter_governance_review_v2.py" not in reconcile:
+        errors.append("DFF-028: governance reconcile must invoke the canonical governance controller")
+    if "python scripts/hunter_merge_readiness_v2.py" not in readiness:
+        errors.append("DFF-028: merge readiness must invoke the canonical readiness projector")
+    if "python scripts/hunter_review_orchestrator.py ensure" not in reconcile:
+        errors.append("DFF-028: privileged reviewer orchestration must remain on reconcile")
+    if "python scripts/hunter_review_orchestrator.py ensure" in review:
+        errors.append("DFF-028: PR-reachable governance review may not dispatch reviewer orchestration")
+    if "actions: write" in review:
+        errors.append("DFF-028: PR-reachable governance review may not have actions: write")
+    if "actions: write" not in reconcile:
+        errors.append("DFF-028: trusted reconcile must retain actions: write for reviewer dispatch")
+    return errors
+
+
+def validate_authority_cutover_single_owner() -> list[str]:
+    workflow_root = ROOT / ".github" / "workflows"
+    names = (
+        "hunter-governance-review.yml",
+        "hunter-governance-reconcile.yml",
+        "hunter-merge-readiness.yml",
+    )
+    workflows: dict[str, str] = {}
+    errors: list[str] = []
+    for name in names:
+        path = workflow_root / name
+        try:
+            workflows[name] = path.read_text(encoding="utf-8")
+        except OSError as exc:
+            errors.append(f"DFF-028: cannot read {name}: {exc}")
+    if errors:
+        return errors
+    return _authority_cutover_contract_errors(workflows)
+
 def validate_defect_prevention_lifecycle() -> list[str]:
     errors: list[str] = []
     registry = _load_object(REGISTRY_PATH)
@@ -2284,6 +2332,7 @@ def validate_defect_prevention_lifecycle() -> list[str]:
     errors.extend(validate_reviewer_trigger_identity_preservation())
     errors.extend(validate_orchestration_status_description_is_bounded())
     errors.extend(validate_review_after_remediation_boundary())
+    errors.extend(validate_authority_cutover_single_owner())
     errors.extend(validate_code_write_policy())
     errors.extend(validate_reviewer_finding_dispositions())
     errors.extend(validate_historical_defect_backfill())

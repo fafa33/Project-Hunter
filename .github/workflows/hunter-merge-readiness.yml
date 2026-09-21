@@ -82,4 +82,4 @@ jobs:
           GH_TOKEN: ${{ github.token }}
           GH_REPO: ${{ github.repository }}
           RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
-        run: python scripts/hunter_governance_review/bootstrap_external_review_469.py readiness
+        run: python scripts/hunter_merge_readiness_v2.py

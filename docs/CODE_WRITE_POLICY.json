@@ -31,7 +31,7 @@
     "review_authority": {
       "primary": "codex",
       "fallback": "hunter-guard",
-      "fallback_only_when_unavailable": "Local triage runs first when healthy; authority then fails over Codex -> Gemini -> Groq, one attempt each with a 300-second maximum. hunter-guard remains last resort only after authenticated exhaustion of the enabled authority pool.",
+      "fallback_only_when_unavailable": "Local triage runs first when healthy; Hermes runs next as benchmark-gated triage; authority then fails over Codex -> Copilot -> Gemini -> Groq, one attempt each with a 300-second maximum. hunter-guard remains last resort only after authenticated exhaustion of the enabled authority pool.",
       "fallback_requires_recorded_reason": true,
       "fallback_requires_snapshot_gates": [
         "governance=success",
@@ -41,7 +41,7 @@
       ],
       "reviewer_pool": {
         "model": "ordered-priority-with-failover",
-        "ordering": "free-first strict priority: local-ollama triage, then Codex, then authenticated GitHub Copilot code review, then server-side Gemini API, then server-side Groq API; each authority reviewer is attempted exactly once per exact HEAD before the deterministic hunter-guard last resort.",
+        "ordering": "free-first strict priority: local-ollama triage, then Hermes triage, then Codex, then authenticated GitHub Copilot code review, then server-side Gemini API, then server-side Groq API; each authority reviewer is attempted exactly once per exact HEAD before the deterministic hunter-guard last resort.",
         "last_resort": "hunter-guard",
         "exhaustion_semantics": "Every enabled higher-priority reviewer must have authenticated exact-head invocation results. The trusted default-branch Hunter Reviewer Collector records actual trigger IDs, both configured budgets (ack_timeout_seconds and review_timeout_seconds) and all retries, and immutable artifact provenance. A triage-only reviewer is invoked and recorded in that order but never closes the pool, and a reviewer whose declared trigger_method the collector cannot perform may not be enabled at all. A substantive response proves availability and forbids failover, even if its format is invalid; an authenticated explicit usage-limit, rate-limit, or quota denial is unavailability evidence and permits immediate failover. Candidate prose, skipped reviewers, failed GitHub reads, changed HEAD, wrong configuration, insufficient elapsed time, candidate-ref collector runs, or missing retries fail closed.",
         "timeout_policy": {
@@ -78,11 +78,41 @@
                 "latency_seconds": 152.276,
                 "passed": false
               }
-            }
+            },
+            "availability_probe": "self-hosted-runner"
+          },
+          {
+            "id": "hermes",
+            "priority": 2,
+            "enabled": true,
+            "trigger_method": "github-workflow:hunter-hermes-reviewer.yml",
+            "exact_head_support": true,
+            "ack_timeout_seconds": 30,
+            "review_timeout_seconds": 300,
+            "retryable": false,
+            "evidence_parser": "hunter.local-review.v1",
+            "fallback_eligibility": false,
+            "authority_eligible": false,
+            "note": "Trusted Mac-hosted Hermes reviewer. Enabled as triage/hostile-review support, but not authority-eligible until Hunter benchmark gates are passed.",
+            "quality_gate": {
+              "required": true,
+              "benchmark_id": "hunter-hermes-reviewer-v1",
+              "minimum_recall": 0.75,
+              "maximum_false_positive_rate": 0.25,
+              "authority_until_pass": "triage-only",
+              "last_benchmark": {
+                "model": "hermes-configured-default",
+                "recall": 0.0,
+                "false_positive_rate": 1.0,
+                "latency_seconds": 0.0,
+                "passed": false
+              }
+            },
+            "availability_probe": "self-hosted-runner"
           },
           {
             "id": "codex",
-            "priority": 2,
+            "priority": 3,
             "enabled": true,
             "trigger_method": "github-pr-comment:@codex review",
             "exact_head_support": true,
@@ -97,7 +127,7 @@
           },
           {
             "id": "copilot",
-            "priority": 3,
+            "priority": 4,
             "enabled": true,
             "trigger_method": "github-review-request:copilot-pull-request-reviewer[bot]",
             "exact_head_support": true,
@@ -113,7 +143,7 @@
           },
           {
             "id": "gemini",
-            "priority": 4,
+            "priority": 5,
             "enabled": true,
             "trigger_method": "api:gemini",
             "exact_head_support": true,
@@ -128,7 +158,7 @@
           },
           {
             "id": "groq",
-            "priority": 5,
+            "priority": 6,
             "enabled": true,
             "trigger_method": "api:groq",
             "exact_head_support": true,

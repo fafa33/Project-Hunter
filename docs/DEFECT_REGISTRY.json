@@ -266,10 +266,10 @@
     {
       "id": "MA-006",
       "class": "retry-authorized-by-caller-intent-rather-than-by-predecessor-outcome-evidence",
-      "source": "Issue #313 ADR 0034 Phase B hostile self-review: prepare_attempt accepted attempt_ordinal > 1 with only a predecessor attempt identity, so a caller could prepare and dispatch a second attempt after an uncertain first attempt whose request the provider may already have accepted. Recurrence on PR #314 independent review (Codex P1): the first guard derived its decision from the caller-supplied predecessor ModelAttemptOutcomeRecord, so a fabricated record naming the predecessor and claiming RETRY_REQUIRES_NEW_ATTEMPT defeated the gate entirely while the repository held an uncertain outcome or none at all — the prior hardening was insufficient because it checked the shape of the evidence instead of resolving the authority",
+      "source": "Issue #313 ADR 0034 Phase B hostile self-review: prepare_attempt accepted attempt_ordinal > 1 with only a predecessor attempt identity, so a caller could prepare and dispatch a second attempt after an uncertain first attempt whose request the provider may already have accepted. Recurrence on PR #314 independent review (Codex P1): the first guard derived its decision from the caller-supplied predecessor ModelAttemptOutcomeRecord, so a fabricated record naming the predecessor and claiming RETRY_REQUIRES_NEW_ATTEMPT defeated the gate entirely while the repository held an uncertain outcome or none at all \u2014 the prior hardening was insufficient because it checked the shape of the evidence instead of resolving the authority",
       "classification": "systemic",
       "guard_boundary": "ModelAdapterService.prepare_attempt, before any authority resolution or durable write",
-      "guard": "a retry requires the predecessor attempt's own DURABLE outcome, resolved from persistence via authoritative_outcome() strict-known at the new attempt's cutoff and following the supersession chain, checked before Source Handling is resolved and before anything durable exists. A caller-supplied record is evidence only: it is compared against the durable one and a mismatch is rejected, never used in its place — the same treatment prepare_attempt already gives a caller-supplied Source Handling decision and the ADR 0033 persistence invariant requires generally. Retry is admitted only when the durable outcome's retry_authorization is RETRY_REQUIRES_NEW_ATTEMPT, which derive_retry_authorization() grants only where the transport proved non-delivery or the provider established it rejected the request instead of executing it; an attempt with no durable outcome is uncertain and blocks retry. An authorized retry still gets a new attempt, cutoff, Source Handling resolution, handoff, and idempotency key, and terminal_outcome_exists() prevents re-dispatching an attempt that already has an outcome",
+      "guard": "a retry requires the predecessor attempt's own DURABLE outcome, resolved from persistence via authoritative_outcome() strict-known at the new attempt's cutoff and following the supersession chain, checked before Source Handling is resolved and before anything durable exists. A caller-supplied record is evidence only: it is compared against the durable one and a mismatch is rejected, never used in its place \u2014 the same treatment prepare_attempt already gives a caller-supplied Source Handling decision and the ADR 0033 persistence invariant requires generally. Retry is admitted only when the durable outcome's retry_authorization is RETRY_REQUIRES_NEW_ATTEMPT, which derive_retry_authorization() grants only where the transport proved non-delivery or the provider established it rejected the request instead of executing it; an attempt with no durable outcome is uncertain and blocks retry. An authorized retry still gets a new attempt, cutoff, Source Handling resolution, handoff, and idempotency key, and terminal_outcome_exists() prevents re-dispatching an attempt that already has an outcome",
       "test": "tests/test_model_adapter_phase_b.py::test_a_fabricated_predecessor_outcome_cannot_authorize_a_retry",
       "status": "guarded"
     },
@@ -299,7 +299,7 @@
       "source": "PR #314 independent review (Codex P2): strict_known_response_artifact ordered ascending with LIMIT 1, so once append_outcome admitted a superseding correction carrying revised response evidence, every later strict-known read returned the original artifact permanently and the correction was invisible",
       "classification": "systemic",
       "guard_boundary": "Model Adapter persistence strict-known historical reads",
-      "guard": "authoritative_outcome() resolves the head of the supersession chain — the outcome that no other outcome KNOWN AT THE SAME CUTOFF supersedes — and strict_known_response_artifact() returns the artifact attached to that governing outcome, falling back to the most recent earlier artifact when the correction records no new response evidence. Both remain strict-known, so a correction recorded after the cutoff does not retroactively govern an earlier read and the superseded original is preserved rather than overwritten. The general rule: wherever a record family admits append-only corrections, a historical read must follow the supersession chain, because neither the earliest row nor a blind latest row is the authoritative one",
+      "guard": "authoritative_outcome() resolves the head of the supersession chain \u2014 the outcome that no other outcome KNOWN AT THE SAME CUTOFF supersedes \u2014 and strict_known_response_artifact() returns the artifact attached to that governing outcome, falling back to the most recent earlier artifact when the correction records no new response evidence. Both remain strict-known, so a correction recorded after the cutoff does not retroactively govern an earlier read and the superseded original is preserved rather than overwritten. The general rule: wherever a record family admits append-only corrections, a historical read must follow the supersession chain, because neither the earliest row nor a blind latest row is the authoritative one",
       "test": "tests/test_model_adapter_phase_b.py::test_a_superseding_correction_is_what_a_later_replay_reads",
       "status": "guarded"
     },
@@ -1313,6 +1313,38 @@
       "lifecycle": "locally-enforced",
       "sources": [
         "PR #482 (2026-09-19): Copilot review round three noted that a blocked prerequisite preserving a non-base remediation generation and an 11-digit Actions run ID could produce a 141-character status description, causing GitHub to reject the blocked-state publication."
+      ]
+    },
+    {
+      "id": "DFF-028",
+      "title": "legacy-review-authority-remains-runtime-reachable-after-cutover",
+      "invariant": "After reviewer-authority cutover, each current governance fact has exactly one runtime publisher. No trusted workflow may invoke bootstrap_external_review_469.py; Governance Review and Governance Reconcile must invoke the canonical governance controller, Merge Readiness must invoke the canonical readiness projector, and privileged reviewer orchestration must remain only on the trusted reconcile lane. The historical bridge may remain in the repository for audit/rollback evidence until post-cutover removal, but it has no workflow execution edge. Reintroducing any invocation creates competing authority and is a prevention-system failure, not a harmless fallback.",
+      "lifecycle": "locally-enforced",
+      "applicability": {
+        "changed_paths": [
+          ".github/workflows/hunter-governance-review.yml",
+          ".github/workflows/hunter-governance-reconcile.yml",
+          ".github/workflows/hunter-merge-readiness.yml",
+          "scripts/hunter_governance_review/bootstrap_external_review_469.py",
+          "scripts/hunter_governance_review_v2.py",
+          "scripts/hunter_merge_readiness_v2.py",
+          "scripts/hunter_review_orchestrator.py"
+        ],
+        "rationale": "These files define the publication and wake-up edges whose duplication would restore dual authority after cutover."
+      },
+      "prevention": {
+        "mechanism": "scripts/hunter_defect_prevention_preflight.py::validate_authority_cutover_single_owner reads the trusted workflow definitions and rejects any runtime bootstrap-bridge invocation, missing canonical governance/readiness publisher, privileged orchestration outside reconcile, or write-level Actions permission on the PR-reachable governance lane.",
+        "boundary": "local-pre-push",
+        "guard_reference": "scripts/hunter_defect_prevention_preflight.py::validate_authority_cutover_single_owner"
+      },
+      "regression_evidence": [
+        "tests/test_authority_cutover_contract.py::test_legacy_bootstrap_bridge_has_no_runtime_workflow_authority_after_cutover",
+        "tests/test_authority_cutover_contract.py::test_governance_has_one_canonical_runtime_controller",
+        "tests/test_authority_cutover_contract.py::test_readiness_has_one_canonical_runtime_projection",
+        "tests/test_hunter_defect_prevention_preflight.py::test_dff028_guard_rejects_reintroduced_legacy_bridge_runtime_edge"
+      ],
+      "sources": [
+        "Issue #484 (2026-09-21): Phase 4A cutover requires the historical bootstrap path to become audit-only before the new reviewer orchestration can become the sole production authority."
       ]
     }
   ]
