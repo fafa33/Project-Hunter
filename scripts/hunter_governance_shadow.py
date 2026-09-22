@@ -86,7 +86,6 @@ def main() -> int:
     ap.add_argument("--repository", required=True)
     ap.add_argument("--pr", required=True, type=int)
     ap.add_argument("--generation", required=True, type=int)
-    ap.add_argument("--output", required=True)
     args = ap.parse_args()
     token = os.environ.get("GH_TOKEN") or os.environ.get("GITHUB_TOKEN") or ""
     snap = snapshot(args.repository, token, args.pr)
@@ -102,7 +101,8 @@ def main() -> int:
         "semantic_parity_claimed": any(item.get("semantic_state") == "COMPARED" for item in projections.values()),
         "all_domains_compared": all(item.get("semantic_state") == "COMPARED" for item in projections.values()),
     }
-    out = Path(args.output)
+    workspace = Path(os.environ.get("GITHUB_WORKSPACE") or Path.cwd()).resolve()
+    out = workspace / "shadow" / "observation.json"
     out.parent.mkdir(parents=True, exist_ok=True)
     out.write_text(json.dumps(record, sort_keys=True, indent=2) + "\n")
     return 0

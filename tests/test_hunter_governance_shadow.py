@@ -44,3 +44,14 @@ def test_draft_merge_readiness_can_compare_real_legacy_state(monkeypatch):
 def test_non_draft_readiness_stays_unknown_without_complete_authority_snapshot():
     snap = {"head_sha": "abc", "draft": False, "mergeable": True, "checks": [], "reviews": [], "statuses": []}
     assert shadow.project(snap)["merge-readiness"]["semantic_state"] == "UNKNOWN"
+
+
+def test_shadow_output_path_is_not_cli_controlled():
+    text = Path("scripts/hunter_governance_shadow.py").read_text()
+    assert 'add_argument("--output"' not in text
+    assert 'workspace / "shadow" / "observation.json"' in text
+
+
+def test_shadow_workflow_does_not_install_dependencies():
+    text = Path(".github/workflows/hunter-governance-shadow.yml").read_text()
+    assert "pip install" not in text

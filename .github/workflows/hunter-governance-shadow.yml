@@ -27,13 +27,11 @@ jobs:
       - uses: actions/setup-python@v6
         with:
           python-version: "3.11"
-      - name: Install project
-        run: pip install -e .
       - name: Record non-authoritative shadow observation
         env:
           GH_TOKEN: ${{ github.token }}
           PR_NUMBER: ${{ github.event.pull_request.number || github.event.inputs.pr_number }}
-        run: python scripts/hunter_governance_shadow.py --repository "${{ github.repository }}" --pr "${PR_NUMBER}" --generation 1 --output shadow/observation.json
+        run: PYTHONPATH=scripts:src python scripts/hunter_governance_shadow.py --repository "${{ github.repository }}" --pr "${PR_NUMBER}" --generation 1
       - uses: actions/upload-artifact@v6
         with:
           name: hunter-governance-shadow-${{ github.event.pull_request.head.sha || github.sha }}
