@@ -599,9 +599,25 @@ def test_collector_workflow_exposes_only_server_reviewer_secrets():
 @pytest.mark.parametrize(
     ("payload", "expected"),
     [
-        ({"verdict": "clear", "summary": "No blocking defects."}, "clear"),
-        ({"verdict": "blocking", "summary": "Unsafe authority bypass."}, "blocking"),
-        ({"verdict": "clear", "summary": "Blocking finding remains."}, "blocking"),
+        ({"verdict": "clear", "summary": "No blocking defects.", "findings": []}, "clear"),
+        (
+            {
+                "verdict": "blocking",
+                "summary": "Unsafe authority bypass.",
+                "findings": [{"severity": "high", "path": "gate.py", "line": 1, "evidence": "authority bypass"}],
+            },
+            "blocking",
+        ),
+        (
+            {
+                "verdict": "clear",
+                "summary": "Blocking finding remains.",
+                "findings": [
+                    {"severity": "high", "path": "gate.py", "line": 1, "evidence": "blocking finding remains"}
+                ],
+            },
+            "blocking",
+        ),
     ],
 )
 def test_external_reviewer_verdict_is_fail_closed(payload, expected):
@@ -623,7 +639,11 @@ def test_api_reviewer_trigger_is_exact_head_bound_and_synchronous(monkeypatch):
     monkeypatch.setattr(
         backend,
         "_invoke_external",
-        lambda a, n: {"verdict": "clear", "summary": "No blocking defects remain after exact-head review."},
+        lambda a, n: {
+            "verdict": "clear",
+            "summary": "No blocking defects remain after exact-head review.",
+            "findings": [],
+        },
     )
     monkeypatch.setattr(backend, "_existing_trigger", lambda a, n: None)
     ids = iter(range(10, 20))
@@ -653,6 +673,7 @@ def test_api_reviewer_trigger_is_exact_head_bound_and_synchronous(monkeypatch):
                         "trigger_id": 10,
                         "verdict": "clear",
                         "summary": "No blocking defects remain after exact-head review.",
+                        "findings": [],
                         "response_digest": trigger["response_digest"],
                     },
                     sort_keys=True,
@@ -723,7 +744,11 @@ def test_api_trigger_and_result_are_persisted_before_authority(monkeypatch):
     monkeypatch.setattr(
         backend,
         "_invoke_external",
-        lambda *_a: {"verdict": "clear", "summary": "No blocking defects remain after exact-head review."},
+        lambda *_a: {
+            "verdict": "clear",
+            "summary": "No blocking defects remain after exact-head review.",
+            "findings": [],
+        },
     )
     bodies = []
     monkeypatch.setattr(
@@ -786,7 +811,7 @@ def test_reused_api_invocation_recovers_persisted_result(monkeypatch):
         "id": 78,
         "created_at": "2026-09-17T00:00:01Z",
         "body": collector.api_result_body(
-            HEAD, "d" * 64, agent, 123, 77, "unavailable", "provider unavailable", "e" * 64
+            HEAD, "d" * 64, agent, 123, 77, "unavailable", "provider unavailable", [], "e" * 64
         ),
         "user": {"login": "github-actions[bot]"},
     }
@@ -957,6 +982,7 @@ def test_groq_authority_verifies_prior_api_exhaustion_from_trusted_collector(mon
                             "trigger_id": 2,
                             "verdict": "unavailable",
                             "summary": "gemini HTTP 429",
+                            "findings": [],
                             "response_digest": "e" * 64,
                         },
                         sort_keys=True,
@@ -979,14 +1005,16 @@ def test_groq_authority_verifies_prior_api_exhaustion_from_trusted_collector(mon
 
 # Copilot review 2026-09-17: fail-closed parser and ordering regressions.
 def test_external_verdict_rejects_non_string_contract_fields():
-    assert collector.external_verdict({"verdict": "clear", "summary": ["No blockers"]}) == "blocking"
-    assert collector.external_verdict({"verdict": ["clear"], "summary": "No blockers"}) == "blocking"
+    assert collector.external_verdict({"verdict": "clear", "summary": ["No blockers"], "findings": []}) == "unavailable"
+    assert collector.external_verdict({"verdict": ["clear"], "summary": "No blockers", "findings": []}) == "unavailable"
 
 
 def test_external_verdict_rejects_ambiguous_clear_summary():
     assert (
-        collector.external_verdict({"verdict": "clear", "summary": "Critical security vulnerability remains"})
-        == "blocking"
+        collector.external_verdict(
+            {"verdict": "clear", "summary": "Critical security vulnerability remains", "findings": []}
+        )
+        == "unavailable"
     )
 
 
@@ -1732,3 +1760,76 @@ def test_copilot_clean_exact_head_review_is_clear(monkeypatch):
 
     monkeypatch.setattr(collector, "_pages", pages)
     assert backend.response_state(agent, trigger) == "clear"
+
+
+def test_external_blocking_without_actionable_findings_is_unavailable():
+    payload = {"verdict": "blocking", "summary": "Authority may be unsafe.", "findings": []}
+    assert collector.external_verdict(payload) == "unavailable"
+
+
+def test_external_blocking_requires_structured_actionable_finding():
+    payload = {
+        "verdict": "blocking",
+        "summary": "Unsafe authority bypass.",
+        "findings": [{"severity": "high", "path": "scripts/gate.py", "line": 42, "evidence": "bypass remains"}],
+    }
+    assert collector.external_verdict(payload) == "blocking"
+
+
+def test_external_clear_requires_empty_findings():
+    payload = {
+        "verdict": "clear",
+        "summary": "No blocking defects remain.",
+        "findings": [{"severity": "high", "path": "scripts/gate.py", "line": 42, "evidence": "bypass remains"}],
+    }
+    assert collector.external_verdict(payload) == "blocking"
+
+
+def test_api_blocking_result_publishes_actionable_findings(monkeypatch):
+    backend = collector.GitHubBackend("owner/repo", "token", 476, HEAD, "d" * 64, 123, 1)
+    agent = {**POOL["agents"][0], "id": "gemini", "priority": 2, "trigger_method": "api:gemini"}
+    finding = {"severity": "high", "path": "scripts/gate.py", "line": 42, "evidence": "authority bypass remains"}
+    monkeypatch.setattr(backend, "_existing_trigger", lambda *_a: None)
+    monkeypatch.setattr(
+        backend,
+        "_invoke_external",
+        lambda *_a: {"verdict": "blocking", "summary": "Authority bypass remains.", "findings": [finding]},
+    )
+    bodies = []
+    monkeypatch.setattr(
+        backend,
+        "_post_comment",
+        lambda body: bodies.append(body) or {"id": len(bodies), "created_at": "2026-09-22T00:00:00Z", "body": body},
+    )
+    trigger = backend.trigger(agent, 1)
+    result = collector.parse_api_result(bodies[1])
+    assert trigger["state"] == "blocking"
+    assert result is not None
+    assert result["findings"] == [finding]
+
+
+def test_invalid_api_blocker_fails_over_with_precise_reason():
+    class InvalidThenClear(Backend):
+        def trigger(self, agent, number):
+            self.triggers.append((agent["id"], number))
+            state = "unavailable" if agent["id"] == "gemini" else "clear"
+            return {
+                "id": len(self.triggers),
+                "created_at": "2026-09-22T00:00:00Z",
+                "state": state,
+                "invalid_result": agent["id"] == "gemini",
+            }
+
+        def response_state(self, agent, trigger):
+            return trigger["state"]
+
+    pool = copy.deepcopy(POOL)
+    pool["agents"] = (
+        {**pool["agents"][0], "id": "gemini", "priority": 1, "trigger_method": "api:gemini"},
+        {**pool["agents"][0], "id": "groq", "priority": 2, "trigger_method": "api:groq"},
+    )
+    backend = InvalidThenClear()
+    results = collector.collect_attempts(pool, HEAD, backend)
+    assert backend.triggers == [("gemini", 1), ("groq", 1)]
+    assert results[0]["reason_code"] == "INVALID_REVIEW_RESULT"
+    assert results[1]["outcome"] == "clear"

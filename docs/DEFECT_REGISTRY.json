@@ -1179,7 +1179,10 @@
         "tests/test_hunter_reviewer_collector.py::test_a_triage_only_verdict_does_not_end_the_authority_search",
         "tests/test_hunter_reviewer_collector.py::test_an_unacknowledged_reviewer_fails_over_on_its_acknowledgement_budget",
         "tests/test_hunter_reviewer_collector.py::test_a_triage_reviewer_is_verified_but_never_becomes_exhaustion_evidence",
-        "tests/test_hunter_reviewer_collector.py::test_a_forged_triage_invocation_fails_the_trusted_receipt_closed"
+        "tests/test_hunter_reviewer_collector.py::test_a_forged_triage_invocation_fails_the_trusted_receipt_closed",
+    "tests/test_hunter_reviewer_collector.py::test_external_blocking_without_actionable_findings_is_unavailable",
+    "tests/test_hunter_reviewer_collector.py::test_api_blocking_result_publishes_actionable_findings",
+    "tests/test_hunter_reviewer_collector.py::test_invalid_api_blocker_fails_over_with_precise_reason"
       ],
       "lifecycle": "regression-tested",
       "sources": [
