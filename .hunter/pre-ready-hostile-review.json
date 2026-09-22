@@ -329,13 +329,13 @@
         "status": "added"
       },
       {
-        "blob_sha": "df2319147b2f86ab165e6e3420aa64eee780d30d",
+        "blob_sha": "61b369da433f9dbe4d1ea87d6723275fa8ff8252",
         "path": "docs/CODE_WRITE_POLICY.json",
         "previous_path": "",
         "status": "modified"
       },
       {
-        "blob_sha": "bd1238ea300daf728ab4441010c5677c1c193f96",
+        "blob_sha": "358b31bcf168c72aa7538ae01a884d2dd8b5af47",
         "path": "docs/DEFECT_REGISTRY.json",
         "previous_path": "",
         "status": "modified"
@@ -353,13 +353,19 @@
         "status": "modified"
       },
       {
-        "blob_sha": "f3bd73490ea7b42d7a6e8c30b7656d0736e2e763",
+        "blob_sha": "8ab099c67d8c81f391526a2ddcf3809592df4d94",
+        "path": "scripts/hunter_pre_ready_review.py",
+        "previous_path": "",
+        "status": "modified"
+      },
+      {
+        "blob_sha": "d85dc7b1a82e888b1b52572756dbf9958c7dccb4",
         "path": "scripts/hunter_reviewer_collector.py",
         "previous_path": "",
         "status": "modified"
       },
       {
-        "blob_sha": "52f2a637f81968d9d893784e8fd3bfce4df90401",
+        "blob_sha": "1e6fe985ea4591ccae5b32c49e188cf7d4daf5b0",
         "path": "tests/test_code_write_policy.py",
         "previous_path": "",
         "status": "modified"
@@ -383,17 +389,23 @@
         "status": "modified"
       },
       {
-        "blob_sha": "c7c389982efce2bc09e3d4368c83d79a910d2df4",
+        "blob_sha": "4de359f5d516fac36565cd5d4c9c12181646eb19",
         "path": "tests/test_hunter_reviewer_collector.py",
+        "previous_path": "",
+        "status": "modified"
+      },
+      {
+        "blob_sha": "7c24aa4f1a3a5777bb80c7b6269893952253efbf",
+        "path": "tests/test_issue_412_prevention_gate.py",
         "previous_path": "",
         "status": "modified"
       }
     ],
-    "review_target_digest": "01ecb2bb3566a4cd949172325e3eff01f927c8cd6022aca5e22928f3d72c7559"
+    "review_target_digest": "80f57bf563ffb3fdef34a227dcee5a5c49eb3481a65b0b8f98eda46f00dcc1dc"
   },
-  "review_id": "85a01d0f1978d855eeda9f15ccf27c78e63e1e7a0660576d48aa4d133099404b",
+  "review_id": "e6b07c2106439056d270d8a7eb1525f81f6c9afa1fdfc7a97fab98394a907634",
   "review_request": {
-    "claims_id": "85a01d0f1978d855eeda9f15ccf27c78e63e1e7a0660576d48aa4d133099404b",
+    "claims_id": "e6b07c2106439056d270d8a7eb1525f81f6c9afa1fdfc7a97fab98394a907634",
     "schema": "hunter.review-request.v1"
   },
   "schema": "hunter.pre-ready-hostile-review.v1"
