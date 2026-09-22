@@ -170,6 +170,7 @@ class CutoverAuthority:
             raise ValueError("incoherent cutover record: legacy disabled without complete fence")
         if record.state in new_states and not record.enabled_at:
             raise ValueError("incoherent cutover record: successor active without enablement time")
+        self._validate_persisted_evidence_chain(record)
         return record
 
     def transition(self, target: CutoverState, evidence: CutoverEvidence | None = None) -> CutoverRecord:
@@ -204,7 +205,10 @@ class CutoverAuthority:
                 current = replace(current, evidence=current.evidence + (proof,))
         if target == CutoverState.NEW_AUTHORITY_ENABLED:
             current = replace(
-                current, enabled_at=evidence.produced_at if evidence else None, new_authority_fenced=False
+                current,
+                enabled_at=evidence.produced_at if evidence else None,
+                new_authority_fenced=False,
+                rollback_hold=False,
             )
         current = replace(current, state=target)
         self._write(current)
@@ -282,6 +286,27 @@ class CutoverAuthority:
         )
         self._write(updated)
         return updated
+
+    @staticmethod
+    def _validate_persisted_evidence_chain(record: CutoverRecord) -> None:
+        state_order = list(CutoverState)
+        reached = state_order.index(record.state)
+        required = [EvidenceKind.SHADOW_PROOF]
+        for state, kind in _REQUIRED_KIND.items():
+            if state_order.index(state) <= reached:
+                required.append(kind)
+        by_kind = {evidence.kind: evidence for evidence in record.evidence}
+        for kind in required:
+            evidence = by_kind.get(kind)
+            if evidence is None:
+                raise ValueError(f"incoherent cutover record: evidence chain missing {kind.value}")
+            payload = evidence.payload
+            if (
+                payload.get("generation") != record.generation
+                or payload.get("implementation_sha") != record.implementation_sha
+                or payload.get("policy_sha") != record.policy_sha
+            ):
+                raise ValueError(f"incoherent cutover record: evidence chain identity mismatch for {kind.value}")
 
     @staticmethod
     def _same_install(current: CutoverRecord, evidence: CutoverEvidence) -> bool:

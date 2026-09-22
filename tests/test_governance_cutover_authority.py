@@ -183,3 +183,32 @@ def test_disabled_gap_has_no_publisher_even_with_current_generation(tmp_path):
     a.transition(CutoverState.LEGACY_AUTHORITY_DISABLED)
     assert not a.publication_allowed(PublicationOwner.LEGACY, 1)
     assert not a.publication_allowed(PublicationOwner.NEW, 1)
+
+
+def test_loaded_active_record_requires_complete_bound_transition_evidence(tmp_path):
+    import json
+
+    path = tmp_path / "state.json"
+    a = enabled(path)
+    raw = json.loads(path.read_text())
+    raw["evidence"] = []
+    path.write_text(json.dumps(raw))
+    with pytest.raises(ValueError, match="evidence chain"):
+        a.load()
+
+
+def test_reauthorized_successor_clears_rollback_hold(tmp_path):
+    a = enabled(tmp_path / "state.json")
+    a.fence_successor(ev(EvidenceKind.ROLLBACK_EXCLUDED))
+    a.rollback(ev(EvidenceKind.TRANSFER_AUTHORIZED))
+    a.fence_legacy(
+        ev(EvidenceKind.FENCING_VERIFIED),
+        workflow_disabled=True,
+        triggers_removed=True,
+        writers_fenced=True,
+        consumers_switched=True,
+    )
+    a.transition(CutoverState.LEGACY_AUTHORITY_DISABLED)
+    state = a.transition(CutoverState.NEW_AUTHORITY_ENABLED, ev(EvidenceKind.TRANSFER_AUTHORIZED))
+    assert state.rollback_hold is False
+    assert a.publication_allowed(PublicationOwner.NEW, 1)
