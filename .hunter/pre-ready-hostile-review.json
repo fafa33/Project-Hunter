@@ -269,7 +269,7 @@
         "status": "added"
       },
       {
-        "blob_sha": "7336385579b1bbcf84fc338960b63a5234ec9c80",
+        "blob_sha": "c18839ca490894dfd5a4ef37b953070e6e979b7f",
         "path": "src/hunter/governance_cutover/authority.py",
         "previous_path": "",
         "status": "added"
@@ -293,7 +293,7 @@
         "status": "added"
       },
       {
-        "blob_sha": "bfdd699af36e7b819a4a179c7e9b20f7ae9295cc",
+        "blob_sha": "fcf1454be71cdd7119ee377714e00de4665ea14d",
         "path": "tests/test_governance_cutover_authority.py",
         "previous_path": "",
         "status": "added"
@@ -401,11 +401,11 @@
         "status": "modified"
       }
     ],
-    "review_target_digest": "24089ffa0f851ff44bd3ee9207deb46b1142f11944ec3e22673893476edfdcf2"
+    "review_target_digest": "ef4f7f9bacd654b8bd0f7560dd9b4970e3c588d9a2b794d3ccc8863660ad3255"
   },
-  "review_id": "d834e0fe34edaa1c33d75a136fa2a5233372e9663b589996bdc2d35b9db29caf",
+  "review_id": "cc4c1f7fb13ccd184be2f1ff79ea341dad3dcbb0979e5fba275ef02c3e852e3d",
   "review_request": {
-    "claims_id": "d834e0fe34edaa1c33d75a136fa2a5233372e9663b589996bdc2d35b9db29caf",
+    "claims_id": "cc4c1f7fb13ccd184be2f1ff79ea341dad3dcbb0979e5fba275ef02c3e852e3d",
     "schema": "hunter.review-request.v1"
   },
   "schema": "hunter.pre-ready-hostile-review.v1"
