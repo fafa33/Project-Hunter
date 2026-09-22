@@ -2310,7 +2310,12 @@ def test_pending_review_authority_does_not_redraft_or_fail_candidate_controller(
     monkeypatch.setattr(core, "read_mergeability", lambda *a: pr)
     monkeypatch.setattr(core, "candidate_admission", lambda *a: ("pending", "review orchestration is in progress"))
     converted: list[str] = []
-    monkeypatch.setattr(admission, "convert_to_draft", lambda token, node: converted.append(node) or True)
+
+    def convert(token: str, node: str) -> bool:
+        converted.append(node)
+        return True
+
+    monkeypatch.setattr(admission, "convert_to_draft", convert)
 
     assert admission.enforce_candidate_admission("repo", "token", PR_NUMBER) == 0
     assert converted == []
