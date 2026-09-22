@@ -4,7 +4,9 @@ import hunter_governance_shadow as shadow
 
 
 def test_shadow_projection_never_claims_semantic_parity():
-    p = shadow.project({"head_sha": "abc", "draft": True, "mergeable": None, "checks": [], "reviews": [], "statuses": []})
+    p = shadow.project(
+        {"head_sha": "abc", "draft": True, "mergeable": None, "checks": [], "reviews": [], "statuses": []}
+    )
     assert set(p) == set(shadow.DOMAINS)
 
 
