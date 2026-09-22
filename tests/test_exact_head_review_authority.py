@@ -1037,7 +1037,7 @@ def test_pr469_zero_review_ready_transition_is_returned_to_draft(monkeypatch):
     assert transitions == ["PR469"]
 
 
-def test_pending_admission_cannot_leave_a_pr_ready(monkeypatch):
+def test_pending_admission_keeps_ready_pr_available_to_reviewers(monkeypatch):
     import hunter_candidate_admission as admission
 
     pr = {"state": "open", "draft": False, "head": {"sha": HEAD}, "base": {"ref": "main"}, "node_id": "PR469"}
@@ -1045,11 +1045,11 @@ def test_pending_admission_cannot_leave_a_pr_ready(monkeypatch):
     monkeypatch.setattr(core, "candidate_admission", lambda *a: ("pending", "review authority is unproven"))
     transitions = []
     monkeypatch.setattr(admission, "convert_to_draft", lambda token, node: transitions.append(node) or True)
-    assert admission.enforce_candidate_admission("repo", "token", PR_NUMBER) == 1
-    assert transitions == ["PR469"]
+    assert admission.enforce_candidate_admission("repo", "token", PR_NUMBER) == 0
+    assert transitions == []
 
 
-def test_reviewed_candidate_with_missing_security_checks_returns_to_draft(monkeypatch):
+def test_reviewed_candidate_waits_ready_for_unpublished_security_checks(monkeypatch):
     import hunter_candidate_admission as admission
 
     pr = {
@@ -1065,8 +1065,8 @@ def test_reviewed_candidate_with_missing_security_checks_returns_to_draft(monkey
     monkeypatch.setattr(core, "request_json", lambda *a: {"check_runs": []} if "check-runs" in a[-1] else [])
     transitions = []
     monkeypatch.setattr(admission, "convert_to_draft", lambda token, node: transitions.append(node) or True)
-    assert admission.enforce_candidate_admission("repo", "token", PR_NUMBER) == 1
-    assert transitions == ["PR469"]
+    assert admission.enforce_candidate_admission("repo", "token", PR_NUMBER) == 0
+    assert transitions == []
 
 
 def test_external_structured_review_cannot_claim_another_reviewers_identity(monkeypatch):
@@ -1163,6 +1163,11 @@ def test_review_fetch_rejects_authenticated_native_codex_clear_issue_comment(mon
 
 
 def test_authenticated_native_codex_issue_comment_does_not_adopt_exact_head_review_request(monkeypatch):
+    monkeypatch.setattr(
+        core,
+        "pending_review_authority_state",
+        lambda *_a: ("failure", "MISSING_REVIEW_AUTHORITY: terminal reviewer exhaustion"),
+    )
     document, _ = _request_and_ack()
     native = {
         **_trusted_review(
@@ -1195,12 +1200,22 @@ def test_a_current_authenticated_acknowledgement_establishes_new_exact_head_auth
 
 
 def test_a_request_without_explicit_reviewer_adoption_is_not_authority(monkeypatch):
+    monkeypatch.setattr(
+        core,
+        "pending_review_authority_state",
+        lambda *_a: ("failure", "MISSING_REVIEW_AUTHORITY: terminal reviewer exhaustion"),
+    )
     document, ack = _request_and_ack()
     _install_governance(monkeypatch, document=document, comments=(_trusted_review(),))
     assert core.verify_pre_ready_hostile_review("repo", "token", HEAD, PR_NUMBER)[0] == "failure"
 
 
 def test_review_request_adoption_of_another_claims_digest_is_blocked(monkeypatch):
+    monkeypatch.setattr(
+        core,
+        "pending_review_authority_state",
+        lambda *_a: ("failure", "MISSING_REVIEW_AUTHORITY: terminal reviewer exhaustion"),
+    )
     document, ack = _request_and_ack()
     ack["claims_id"] = "0" * 64
     _install_governance(monkeypatch, document=document, comments=(_trusted_review(body=json.dumps(ack)),))
@@ -1485,6 +1500,11 @@ def test_mismatched_login_cannot_map_to_opencode(monkeypatch):
 
 
 def test_unverified_opencode_fallback_is_rejected_even_after_codex_exhaustion(monkeypatch):
+    monkeypatch.setattr(
+        core,
+        "pending_review_authority_state",
+        lambda *_a: ("failure", "MISSING_REVIEW_AUTHORITY: terminal reviewer exhaustion"),
+    )
     evidence = _fallback_ack()
     observation = {
         "id": 43,
@@ -1518,6 +1538,11 @@ def test_unverified_opencode_fallback_is_rejected_even_after_codex_exhaustion(mo
 
 
 def test_missing_fallback_identity_leaves_request_blocked_not_ready(monkeypatch):
+    monkeypatch.setattr(
+        core,
+        "pending_review_authority_state",
+        lambda *_a: ("failure", "MISSING_REVIEW_AUTHORITY: terminal reviewer exhaustion"),
+    )
     document, _ = _request_and_ack()
     _install_governance(monkeypatch, document=document, comments=())
     monkeypatch.setattr(review, "load_reviewer_pool", lambda *_a, **_k: (_pool(), ""))
@@ -1624,6 +1649,11 @@ def test_reviewer_result_observation_rejects_blank_summary():
 
 def test_api_ack_with_matching_result_still_requires_verified_collector_evidence(monkeypatch):
     """Bot comments alone are not authority; the trusted collector must bind the invocation."""
+    monkeypatch.setattr(
+        core,
+        "pending_review_authority_state",
+        lambda *_a: ("failure", "MISSING_REVIEW_AUTHORITY: terminal reviewer exhaustion"),
+    )
     document, ack = _request_and_ack()
     ack.update({"reviewer_agent": "gemini", "collector_run_id": 123, "trigger_id": 456, "response_digest": "e" * 64})
     result = {

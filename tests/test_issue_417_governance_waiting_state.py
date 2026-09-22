@@ -390,10 +390,10 @@ def test_merge_readiness_still_passes_a_successful_governance_status() -> None:
     assert readiness.evaluate(_readiness_observation({"id": 99, "state": "success"})).state == "success"
 
 
-def test_candidate_admission_controller_returns_a_waiting_head_to_draft(
+def test_candidate_admission_controller_keeps_a_waiting_head_ready(
     monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
 ) -> None:
-    """Pending exact-head proof is not admission authority and stays Draft."""
+    """Pending exact-head proof grants no merge authority but must not disable Ready-only reviewers."""
     import hunter_candidate_admission as controller
 
     drafted: list[str] = []
@@ -423,7 +423,6 @@ def test_candidate_admission_controller_returns_a_waiting_head_to_draft(
     result = controller.enforce_candidate_admission(REPO, "token", PR, HEAD)
     output = capsys.readouterr().out
 
-    assert result == 1
-    assert drafted == ["drafted"]
-    assert "returned to Draft" in output
-    assert "pending" in output
+    assert result == 0
+    assert drafted == []
+    assert "candidate admission is pending" in output
