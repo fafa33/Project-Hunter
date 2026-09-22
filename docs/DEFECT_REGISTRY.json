@@ -400,17 +400,8 @@
       "classification": "systemic",
       "guard_boundary": "reviewer-pool admission and trusted health gating",
       "guard": "A self-hosted reviewer that is triage-only may not be enabled in the canonical active reviewer pool unless trusted default-branch health admission proves a fresh heartbeat before dispatch. Offline, sleeping, disconnected, or unhealthy local compute is an availability condition, never a candidate failure and never a reason to delay authority progression. Until that health gate exists, local-ollama remains disabled and authority progression starts with Codex; enabling it requires both the benchmark gate and trusted health admission.",
-      "applicability": [
-        "docs/CODE_WRITE_POLICY.json",
-        "scripts/hunter_defect_prevention_preflight.py",
-        "scripts/hunter_reviewer_collector.py",
-        ".github/workflows/hunter-local-reviewer.yml"
-      ],
-      "regression_evidence": [
-        "tests/test_code_write_policy.py::test_local_ollama_is_triage_only_and_disabled_without_health_admission",
-        "tests/test_hunter_reviewer_collector.py::test_policy_enables_server_side_gemini_and_groq_after_codex"
-      ],
-      "status": "guarded"
+      "status": "guarded",
+      "test": "tests/test_code_write_policy.py::test_local_ollama_is_triage_only_and_disabled_without_health_admission"
     }
   ],
   "families": [
