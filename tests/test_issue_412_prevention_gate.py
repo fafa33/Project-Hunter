@@ -2303,21 +2303,39 @@ def test_candidate_admission_reconciles_after_the_trusted_upgrade_completes() ->
     assert "pull_request_target" in condition and "push" in condition
 
 
-def test_the_draft_controller_keeps_pending_authority_in_draft(monkeypatch) -> None:
+def test_pending_review_authority_does_not_redraft_or_fail_candidate_controller(monkeypatch) -> None:
     import hunter_candidate_admission as admission
 
     pr = {"state": "open", "draft": False, "head": {"sha": HEAD}, "base": {"ref": "main"}, "node_id": "pending"}
     monkeypatch.setattr(core, "read_mergeability", lambda *a: pr)
-    monkeypatch.setattr(core, "candidate_admission", lambda *a: ("pending", "proof is incomplete"))
+    monkeypatch.setattr(core, "candidate_admission", lambda *a: ("pending", "review orchestration is in progress"))
     converted: list[str] = []
+    monkeypatch.setattr(admission, "convert_to_draft", lambda token, node: converted.append(node) or True)
 
-    def convert(token: str, node: str) -> bool:
-        converted.append(node)
-        return True
+    assert admission.enforce_candidate_admission("repo", "token", PR_NUMBER) == 0
+    assert converted == []
 
-    monkeypatch.setattr(admission, "convert_to_draft", convert)
-    assert admission.enforce_candidate_admission("repo", "token", PR_NUMBER) == 1
-    assert converted == ["pending"]
+
+def test_missing_adoption_is_pending_while_exact_head_review_cycle_is_active(monkeypatch) -> None:
+    monkeypatch.setattr(
+        core, "review_orchestration_state", lambda *a: ("REVIEW_IN_PROGRESS", "provider=codex trigger=77")
+    )
+    # The lifecycle mapper is intentionally small and deterministic: active review
+    # is waiting, not failed authority.
+    state, detail = core.pending_review_authority_state("repo", "token", PR_NUMBER, HEAD)
+    assert state == "pending"
+    assert "REVIEW_IN_PROGRESS" in detail
+
+
+def test_missing_adoption_stays_failure_when_no_exact_head_cycle_exists(monkeypatch) -> None:
+    monkeypatch.setattr(
+        core,
+        "review_orchestration_state",
+        lambda *a: ("WAITING_FOR_REVIEWER", "no trusted exact-head orchestration cycle has been published"),
+    )
+    state, detail = core.pending_review_authority_state("repo", "token", PR_NUMBER, HEAD)
+    assert state == "failure"
+    assert "MISSING_REVIEW_AUTHORITY" in detail
 
 
 # --------------------------------------------------------------------------

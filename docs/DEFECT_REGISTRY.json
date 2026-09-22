@@ -826,7 +826,7 @@
         "tests/test_issue_412_prevention_gate.py::test_a_running_hosted_proof_is_pending_not_failure",
         "tests/test_issue_412_prevention_gate.py::test_an_invalid_hosted_proof_remains_failure",
         "tests/test_issue_412_prevention_gate.py::test_candidate_admission_reconciles_after_the_trusted_upgrade_completes",
-        "tests/test_issue_412_prevention_gate.py::test_the_draft_controller_keeps_pending_authority_in_draft",
+        "tests/test_issue_412_prevention_gate.py::test_pending_review_authority_does_not_redraft_or_fail_candidate_controller",
         "tests/test_issue_417_governance_waiting_state.py::test_an_eligible_active_trusted_run_is_waiting_not_failure",
         "tests/test_issue_417_governance_waiting_state.py::test_an_ineligible_active_run_is_not_a_waiting_dependency",
         "tests/test_issue_417_governance_waiting_state.py::test_a_real_blocker_alongside_an_active_run_is_failure_not_waiting",

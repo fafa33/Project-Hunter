@@ -1899,6 +1899,17 @@ def review_orchestration_state(repository: str, token: str, pr_number: int, head
     raise RuntimeError(error or f"invalid review orchestration state: {state}")
 
 
+def pending_review_authority_state(repository: str, token: str, pr_number: int, head_sha: str) -> tuple[str, str]:
+    """Distinguish live exact-head review from missing or terminal authority."""
+
+    cycle_state, detail = review_orchestration_state(repository, token, pr_number, head_sha)
+    if cycle_state in {"REVIEW_IN_PROGRESS", "FAILOVER_IN_PROGRESS"}:
+        return "pending", f"{cycle_state}: {detail}"
+    if cycle_state == "WAITING_FOR_REVIEWER" and not detail.startswith("no trusted exact-head orchestration cycle"):
+        return "pending", f"{cycle_state}: {detail}"
+    return "failure", f"MISSING_REVIEW_AUTHORITY: {cycle_state}: {detail}"
+
+
 def verify_pre_ready_hostile_review(
     repository: str,
     token: str,
@@ -2088,6 +2099,10 @@ def verify_pre_ready_hostile_review(
                     )
                 )
         if not adopted:
+            if pr_number is not None:
+                pending_state, pending_detail = pending_review_authority_state(repository, token, pr_number, head_sha)
+                if pending_state == "pending":
+                    return pending_state, pending_detail
             return "failure", "MISSING_REVIEW_AUTHORITY: no authenticated exact-head adoption of the review request"
         priorities = {str(a["id"]): int(a["priority"]) for a in pre_ready.authority_pool_reviewers(pool)}
         observation, ack = min(adopted, key=lambda item: priorities.get(item[0]["agent_id"], 10**9))

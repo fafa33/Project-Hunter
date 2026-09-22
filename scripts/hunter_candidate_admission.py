@@ -115,8 +115,12 @@ def enforce_candidate_admission(
     if admission_state == "success":
         print(f"PR #{pr_number} admitted for review: {description}")
         return 0
-    # Pending proof is not admission authority. Both pending and failed
-    # candidates must remain Draft until every prerequisite is established.
+    if admission_state == "pending":
+        # Review orchestration is asynchronous. Pending grants no merge authority,
+        # but re-drafting a Ready PR would disable Ready-only reviewers and create
+        # a lifecycle deadlock. Merge Readiness remains fail-closed until authority lands.
+        print(f"PR #{pr_number} candidate admission is pending: {description}")
+        return 0
 
     latest = governance.read_mergeability(repository, token, pr_number)
     latest_head_sha = str((latest.get("head") or {}).get("sha") or "").strip()
