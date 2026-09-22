@@ -1905,7 +1905,11 @@ def pending_review_authority_state(repository: str, token: str, pr_number: int, 
     cycle_state, detail = review_orchestration_state(repository, token, pr_number, head_sha)
     if cycle_state in {"REVIEW_IN_PROGRESS", "FAILOVER_IN_PROGRESS"}:
         return "pending", f"{cycle_state}: {detail}"
-    if cycle_state == "WAITING_FOR_REVIEWER" and not detail.startswith("no trusted exact-head orchestration cycle"):
+    if cycle_state == "WAITING_FOR_REVIEWER":
+        # The privileged reconcile/collector path is asynchronous and is woken by
+        # trusted-preflight completion. Absence of a cycle before that dispatch
+        # settles is waiting, not failed authority. Merge readiness remains closed
+        # until authenticated exact-head authority is actually published.
         return "pending", f"{cycle_state}: {detail}"
     return "failure", f"MISSING_REVIEW_AUTHORITY: {cycle_state}: {detail}"
 

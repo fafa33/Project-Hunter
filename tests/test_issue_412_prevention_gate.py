@@ -2332,15 +2332,15 @@ def test_missing_adoption_is_pending_while_exact_head_review_cycle_is_active(mon
     assert "REVIEW_IN_PROGRESS" in detail
 
 
-def test_missing_adoption_stays_failure_when_no_exact_head_cycle_exists(monkeypatch) -> None:
+def test_missing_adoption_is_pending_before_exact_head_cycle_is_published(monkeypatch) -> None:
     monkeypatch.setattr(
         core,
         "review_orchestration_state",
         lambda *a: ("WAITING_FOR_REVIEWER", "no trusted exact-head orchestration cycle has been published"),
     )
     state, detail = core.pending_review_authority_state("repo", "token", PR_NUMBER, HEAD)
-    assert state == "failure"
-    assert "MISSING_REVIEW_AUTHORITY" in detail
+    assert state == "pending"
+    assert "WAITING_FOR_REVIEWER" in detail
 
 
 # --------------------------------------------------------------------------
