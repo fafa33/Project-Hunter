@@ -140,12 +140,20 @@ def test_consumer_generation_required_before_legacy_disable(tmp_path):
 def test_duplicate_target_with_different_evidence_is_rejected(tmp_path):
     a = installed(tmp_path / "state.json")
     a.transition(CutoverState.HISTORICAL_REPLAY_VERIFIED, ev(EvidenceKind.REPLAY_EQUALITY))
-    conflicting = CutoverEvidence(EvidenceKind.REPLAY_EQUALITY, "different", "2026-09-22T05:01:00Z", "other", {"generation": 1, "implementation_sha": "impl", "policy_sha": "policy"})
+    conflicting = CutoverEvidence(
+        EvidenceKind.REPLAY_EQUALITY,
+        "different",
+        "2026-09-22T05:01:00Z",
+        "other",
+        {"generation": 1, "implementation_sha": "impl", "policy_sha": "policy"},
+    )
     with pytest.raises(ValueError, match="idempotent replay"):
         a.transition(CutoverState.HISTORICAL_REPLAY_VERIFIED, conflicting)
 
+
 def test_loaded_record_rejects_incoherent_authority_flags(tmp_path):
     import json
+
     path = tmp_path / "state.json"
     a = enabled(path)
     raw = json.loads(path.read_text())
@@ -153,6 +161,7 @@ def test_loaded_record_rejects_incoherent_authority_flags(tmp_path):
     path.write_text(json.dumps(raw))
     with pytest.raises(ValueError, match="incoherent"):
         a.load()
+
 
 def test_candidate_cannot_enable_successor_without_legacy_disable_and_transfer_authority(tmp_path):
     a = candidate(tmp_path / "state.json")
@@ -164,7 +173,13 @@ def test_candidate_cannot_enable_successor_without_legacy_disable_and_transfer_a
 
 def test_disabled_gap_has_no_publisher_even_with_current_generation(tmp_path):
     a = candidate(tmp_path / "state.json")
-    a.fence_legacy(ev(EvidenceKind.FENCING_VERIFIED), workflow_disabled=True, triggers_removed=True, writers_fenced=True, consumers_switched=True)
+    a.fence_legacy(
+        ev(EvidenceKind.FENCING_VERIFIED),
+        workflow_disabled=True,
+        triggers_removed=True,
+        writers_fenced=True,
+        consumers_switched=True,
+    )
     a.transition(CutoverState.LEGACY_AUTHORITY_DISABLED)
     assert not a.publication_allowed(PublicationOwner.LEGACY, 1)
     assert not a.publication_allowed(PublicationOwner.NEW, 1)
