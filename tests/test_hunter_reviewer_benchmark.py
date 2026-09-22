@@ -96,6 +96,12 @@ def test_a_passing_benchmark_permits_authority_eligibility():
             },
         },
     )
+    local = next(agent for agent in policy["review_progression"]["review_authority"]["reviewer_pool"]["agents"] if agent["id"] == "local-ollama")
+    local["enabled"] = True
+    local["priority"] = 1
+    for agent in policy["review_progression"]["review_authority"]["reviewer_pool"]["agents"]:
+        if agent["id"] != "local-ollama":
+            agent["priority"] += 1
     pool, error = review.load_reviewer_pool(policy)
     assert pool is not None, error
     assert "local-ollama" in {agent["id"] for agent in review.authority_pool_reviewers(pool)}

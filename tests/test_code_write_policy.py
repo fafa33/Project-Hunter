@@ -65,7 +65,7 @@ def test_code_write_policy_declares_codex_primary_with_a_recorded_reason_fallbac
     authority = policy["review_progression"]["review_authority"]
 
     assert authority["primary"] == "codex"
-    assert authority["fast_fallback"] == "local-ollama"
+    assert authority["fast_fallback"] == "disabled-until-health-gated"
     assert authority["fallback"] == "hunter-guard"
     assert authority["fallback_requires_recorded_reason"] is True
     expected = {
@@ -88,8 +88,10 @@ def test_code_write_policy_declares_an_ordered_reviewer_pool_with_a_last_resort_
     assert pool["timeout_policy"]["max_seconds"] >= pool["timeout_policy"]["default_seconds"]
     by_id = {agent["id"]: agent for agent in pool["agents"]}
     assert by_id["codex"]["enabled"] is True
-    assert by_id["local-ollama"]["priority"] == 1
-    assert by_id["codex"]["priority"] == 2
+    assert by_id["local-ollama"]["priority"] > by_id["groq"]["priority"]
+    assert by_id["local-ollama"]["enabled"] is False
+    assert by_id["local-ollama"]["authority_eligible"] is False
+    assert by_id["codex"]["priority"] == 1
     assert by_id["codex"]["exact_head_support"] is True
 
 
@@ -297,16 +299,18 @@ def test_guard_rejects_an_enabled_grant_with_no_bound_writer_identity() -> None:
     assert any("binds no writer identity" in error for error in prevention.validate_connector_write_ingress(policy))
 
 
-def test_local_ollama_is_declared_as_fast_priority_one_provider() -> None:
+def test_local_ollama_is_triage_only_and_disabled_without_health_admission() -> None:
     policy = json.loads((ROOT / "docs" / "CODE_WRITE_POLICY.json").read_text(encoding="utf-8"))
     pool = policy["review_progression"]["review_authority"]["reviewer_pool"]
     by_id = {agent["id"]: agent for agent in pool["agents"]}
     local = by_id["local-ollama"]
-    assert local["enabled"] is True
-    assert local["priority"] == 1
+    assert local["enabled"] is False
+    assert local["authority_eligible"] is False
+    assert local["retryable"] is False
+    assert local["priority"] > by_id["groq"]["priority"]
     assert local["trigger_method"] == "github-workflow:hunter-local-reviewer.yml"
     assert local["ack_timeout_seconds"] == 30
-    assert by_id["codex"]["priority"] > local["priority"]
+    assert by_id["codex"]["priority"] == 1
 
 
 def test_codex_hard_review_budget_is_capped_at_five_minutes() -> None:

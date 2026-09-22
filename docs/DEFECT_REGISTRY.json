@@ -392,6 +392,25 @@
       "guard": "Every reviewer invocation was keyed by exact head and claims digest alone, and the collector run that correlates those invocations was named the same way, so a cycle whose reviewers had all been exhausted or timed out was terminal for that immutable head: the collector read as already completed, the reviewer trigger comment read as already posted, and remediating the blocking findings the cycle itself produced could buy no further review. The repair is a remediation generation: a digest over the exact head, the claims digest and the full set of resolved blocking review threads, where a blocking thread counts only when an authenticated reviewer app that is neither Hunter's own automation nor the pull-request author opened it. It is derived from trusted GitHub review-thread state by the trusted default-branch orchestrator and re-derived independently by the trusted collector, which fails closed when the generation it was dispatched for is not the one the evidence supports, so neither candidate prose nor a dispatch input can mint one. The generation enters the collector run name, the reviewer invocation key, the reviewer trigger body and the collector receipt, so a new generation buys exactly one new invocation per reviewer while an unchanged generation stays idempotent; an exhaustion receipt from a superseded generation is refused rather than replayed. The transition is bounded on every side: the previous generation's collector must be finished, a collector must not already exist for this generation, and one exact head may spend at most MAX_REMEDIATION_GENERATIONS generations before the candidate stays pending. Exact-head and claims binding, authenticated reviewer identity, fail-closed pending semantics and human merge approval are unchanged.",
       "test": "tests/test_review_after_remediation_generation.py::test_exhausted_cycle_redispatches_exactly_once_after_blockers_are_resolved",
       "status": "guarded"
+    },
+    {
+      "id": "DFF-029",
+      "class": "triage-only-self-hosted-reviewer-blocks-authority-progression",
+      "source": "PR #485 production cutover: Hunter Local Reviewer repeatedly failed while authority_eligible=false",
+      "classification": "systemic",
+      "guard_boundary": "reviewer-pool admission and trusted health gating",
+      "guard": "A self-hosted reviewer that is triage-only may not be enabled in the canonical active reviewer pool unless trusted default-branch health admission proves a fresh heartbeat before dispatch. Offline, sleeping, disconnected, or unhealthy local compute is an availability condition, never a candidate failure and never a reason to delay authority progression. Until that health gate exists, local-ollama remains disabled and authority progression starts with Codex; enabling it requires both the benchmark gate and trusted health admission.",
+      "applicability": [
+        "docs/CODE_WRITE_POLICY.json",
+        "scripts/hunter_defect_prevention_preflight.py",
+        "scripts/hunter_reviewer_collector.py",
+        ".github/workflows/hunter-local-reviewer.yml"
+      ],
+      "regression_evidence": [
+        "tests/test_code_write_policy.py::test_local_ollama_is_triage_only_and_disabled_without_health_admission",
+        "tests/test_hunter_reviewer_collector.py::test_policy_enables_server_side_gemini_and_groq_after_codex"
+      ],
+      "status": "guarded"
     }
   ],
   "families": [

@@ -808,8 +808,17 @@ def validate_code_write_policy() -> list[str]:
     else:
         if authority.get("primary") != "codex":
             errors.append("the review-authority model must declare Codex as the primary review authority")
-        if authority.get("fast_fallback") != "local-ollama":
-            errors.append("the review-authority model must declare local-ollama as the fast fallback reviewer")
+        if authority.get("fast_fallback") != "disabled-until-health-gated":
+            errors.append("triage-only local review must remain disabled until trusted health admission exists")
+        reviewer_pool = authority.get("reviewer_pool")
+        agents = reviewer_pool.get("agents", []) if isinstance(reviewer_pool, dict) else []
+        local = next((a for a in agents if isinstance(a, dict) and a.get("id") == "local-ollama"), None)
+        if (
+            not isinstance(local, dict)
+            or local.get("authority_eligible") is not False
+            or local.get("enabled") is not False
+        ):
+            errors.append("local-ollama must be triage-only and disabled until trusted health admission exists")
         reviewer_pool = authority.get("reviewer_pool")
         last_resort = reviewer_pool.get("last_resort") if isinstance(reviewer_pool, dict) else None
         if authority.get("fallback") != last_resort:

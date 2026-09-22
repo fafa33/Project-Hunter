@@ -575,16 +575,15 @@ def test_policy_enables_server_side_gemini_and_groq_after_codex():
     assert not error and pool is not None
     agents = sorted(collector.review.enabled_pool_reviewers(pool), key=lambda a: a["priority"])
     assert [(a["id"], a["priority"]) for a in agents] == [
-        ("local-ollama", 1),
-        ("codex", 2),
-        ("copilot", 3),
-        ("gemini", 4),
-        ("groq", 5),
+        ("codex", 1),
+        ("copilot", 2),
+        ("gemini", 3),
+        ("groq", 4),
     ]
-    assert agents[2]["trigger_method"] == "github-review-request:copilot-pull-request-reviewer[bot]"
-    assert agents[3]["trigger_method"] == "api:gemini"
-    assert agents[4]["trigger_method"] == "api:groq"
-    assert all(a["review_timeout_seconds"] == 300 for a in agents[1:])
+    assert agents[1]["trigger_method"] == "github-review-request:copilot-pull-request-reviewer[bot]"
+    assert agents[2]["trigger_method"] == "api:gemini"
+    assert agents[3]["trigger_method"] == "api:groq"
+    assert all(a["review_timeout_seconds"] == 300 for a in agents)
 
 
 def test_collector_workflow_exposes_only_server_reviewer_secrets():
@@ -1058,12 +1057,14 @@ def test_canonical_pool_preserves_server_side_fallback_chain():
     policy = json.loads((collector.review.ROOT / "docs/CODE_WRITE_POLICY.json").read_text(encoding="utf-8"))
     pool = policy["review_progression"]["review_authority"]["reviewer_pool"]
     agents = sorted(pool["agents"], key=lambda a: a["priority"])
-    assert [a["id"] for a in agents] == ["local-ollama", "codex", "copilot", "gemini", "groq"]
+    assert [a["id"] for a in agents] == ["codex", "copilot", "gemini", "groq", "local-ollama"]
+    assert agents[-1]["enabled"] is False
+    assert agents[-1]["authority_eligible"] is False
     assert [a["id"] for a in collector.review.authority_pool_reviewers(pool)] == ["codex", "copilot", "gemini", "groq"]
-    assert agents[2]["trigger_method"] == "github-review-request:copilot-pull-request-reviewer[bot]"
-    assert agents[3]["trigger_method"] == "api:gemini"
-    assert agents[4]["trigger_method"] == "api:groq"
-    assert all(a["review_timeout_seconds"] == 300 and a["retryable"] is False for a in agents[1:])
+    assert agents[1]["trigger_method"] == "github-review-request:copilot-pull-request-reviewer[bot]"
+    assert agents[2]["trigger_method"] == "api:gemini"
+    assert agents[3]["trigger_method"] == "api:groq"
+    assert all(a["review_timeout_seconds"] == 300 and a["retryable"] is False for a in agents[:4])
     assert pool["last_resort"] == "hunter-guard"
 
 
