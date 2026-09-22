@@ -1,109 +1,83 @@
 from __future__ import annotations
 
-import importlib.util
-import sys
+import json
 from pathlib import Path
 
 from hunter.governance_cutover import CutoverAuthority, CutoverEvidence, CutoverState, EvidenceKind, PublicationOwner
 
-LAB = Path(
-    "/Users/farhadafshari/Projects/Project-Hunter/.worktrees/lean-review-architecture-simulation/architecture_lab/cutover.py"
-)
-spec = importlib.util.spec_from_file_location("accepted_lab_cutover", LAB)
-assert spec and spec.loader
-lab = importlib.util.module_from_spec(spec)
-sys.modules[spec.name] = lab
-spec.loader.exec_module(lab)
+CONTRACT_PATH = Path("tests/fixtures/governance_cutover/accepted_phase4_contract.json")
 
 
-def pev(kind, **extra):
+def contract():
+    return json.loads(CONTRACT_PATH.read_text())
+
+
+def ev(kind, **extra):
     payload = {"generation": 1, "implementation_sha": "impl", "policy_sha": "policy"}
     payload.update(extra)
     return CutoverEvidence(kind, "sha", "2026-09-22T05:00:00Z", "parity", payload)
 
 
-def lev(kind, **extra):
-    payload = {"generation": 1, "implementation_sha": "impl", "policy_sha": "policy"}
-    payload.update(extra)
-    return lab.TransferEvidence(kind, "sha", "2026-09-22T05:00:00Z", "parity", payload)
+def test_production_state_and_evidence_vocab_match_versioned_accepted_contract():
+    accepted = contract()
+    assert [state.value for state in CutoverState] == accepted["states"]
+    assert {kind.value for kind in EvidenceKind} == set(accepted["evidence"])
 
 
 def test_forward_state_sequence_matches_accepted_lab(tmp_path):
-    prod = CutoverAuthority(tmp_path / "state.json")
-    model = lab.MigrationAuthority()
-    prod.install_shadow(pev(EvidenceKind.SHADOW_PROOF, authorized_by="human"))
-    model.transition(lab.TransferState.SHADOW_INSTALLED, lev(lab.EvidenceKind.SHADOW_PROOF, authorized_by="human"))
-    pairs = [
-        (
-            CutoverState.HISTORICAL_REPLAY_VERIFIED,
-            EvidenceKind.REPLAY_EQUALITY,
-            lab.TransferState.HISTORICAL_REPLAY_VERIFIED,
-            lab.EvidenceKind.REPLAY_EQUALITY,
-            {},
-        ),
-        (
-            CutoverState.SHADOW_RUNTIME_VERIFIED,
-            EvidenceKind.RUNTIME_PARITY,
-            lab.TransferState.SHADOW_RUNTIME_VERIFIED,
-            lab.EvidenceKind.RUNTIME_PARITY,
-            {},
-        ),
-        (
-            CutoverState.CUTOVER_CANDIDATE,
-            EvidenceKind.FENCING_VERIFIED,
-            lab.TransferState.CUTOVER_CANDIDATE,
-            lab.EvidenceKind.FENCING_VERIFIED,
-            {"transfer_authorized": True, "consumers_migrated": True, "consumer_generation": 1},
-        ),
-    ]
-    for ps, pk, ls, lk, extra in pairs:
-        prod.transition(ps, pev(pk, **extra))
-        model.transition(ls, lev(lk, **extra))
-        assert prod.load().state.value == model.state.transfer_state.value
-    prod.fence_legacy(
-        pev(EvidenceKind.FENCING_VERIFIED),
+    accepted = contract()
+    a = CutoverAuthority(tmp_path / "state.json")
+    a.install_shadow(ev(EvidenceKind.SHADOW_PROOF, authorized_by="human"))
+    a.transition(CutoverState.HISTORICAL_REPLAY_VERIFIED, ev(EvidenceKind.REPLAY_EQUALITY))
+    a.transition(CutoverState.SHADOW_RUNTIME_VERIFIED, ev(EvidenceKind.RUNTIME_PARITY))
+    a.transition(
+        CutoverState.CUTOVER_CANDIDATE,
+        ev(EvidenceKind.FENCING_VERIFIED, transfer_authorized=True, consumers_migrated=True, consumer_generation=1),
+    )
+    a.fence_legacy(
+        ev(EvidenceKind.FENCING_VERIFIED),
         workflow_disabled=True,
         triggers_removed=True,
         writers_fenced=True,
         consumers_switched=True,
     )
-    model.fence_legacy(
-        evidence=lev(lab.EvidenceKind.FENCING_VERIFIED),
-        workflow_disabled=True,
-        triggers_removed=True,
-        writers_wrapped=True,
-        consumers_switched=True,
-    )
-    prod.transition(CutoverState.LEGACY_AUTHORITY_DISABLED)
-    model.transition(lab.TransferState.LEGACY_AUTHORITY_DISABLED)
-    prod.transition(CutoverState.NEW_AUTHORITY_ENABLED, pev(EvidenceKind.TRANSFER_AUTHORIZED))
-    model.transition(lab.TransferState.NEW_AUTHORITY_ENABLED, lev(lab.EvidenceKind.TRANSFER_AUTHORIZED))
-    assert prod.load().state.value == model.state.transfer_state.value
-    assert prod.publication_allowed(PublicationOwner.LEGACY, 1) == model.accept_publication(
-        owner="legacy", generation=1
-    )
-    assert prod.publication_allowed(PublicationOwner.NEW, 1) == model.accept_publication(owner="new", generation=1)
+    a.transition(CutoverState.LEGACY_AUTHORITY_DISABLED)
+    assert accepted["invariants"]["disabled_gap_has_no_owner"]
+    assert not a.publication_allowed(PublicationOwner.LEGACY, 1)
+    assert not a.publication_allowed(PublicationOwner.NEW, 1)
+    a.transition(CutoverState.NEW_AUTHORITY_ENABLED, ev(EvidenceKind.TRANSFER_AUTHORIZED))
+    assert not a.publication_allowed(PublicationOwner.LEGACY, 1)
+    assert a.publication_allowed(PublicationOwner.NEW, 1)
 
 
 def test_rollback_is_at_least_as_fail_closed_as_lab(tmp_path):
-    prod = CutoverAuthority(tmp_path / "state.json")
-    prod.install_shadow(pev(EvidenceKind.SHADOW_PROOF, authorized_by="human"))
-    prod.transition(CutoverState.HISTORICAL_REPLAY_VERIFIED, pev(EvidenceKind.REPLAY_EQUALITY))
-    prod.transition(CutoverState.SHADOW_RUNTIME_VERIFIED, pev(EvidenceKind.RUNTIME_PARITY))
-    prod.transition(
+    a = CutoverAuthority(tmp_path / "state.json")
+    a.install_shadow(ev(EvidenceKind.SHADOW_PROOF, authorized_by="human"))
+    a.transition(CutoverState.HISTORICAL_REPLAY_VERIFIED, ev(EvidenceKind.REPLAY_EQUALITY))
+    a.transition(CutoverState.SHADOW_RUNTIME_VERIFIED, ev(EvidenceKind.RUNTIME_PARITY))
+    a.transition(
         CutoverState.CUTOVER_CANDIDATE,
-        pev(EvidenceKind.FENCING_VERIFIED, transfer_authorized=True, consumers_migrated=True, consumer_generation=1),
+        ev(EvidenceKind.FENCING_VERIFIED, transfer_authorized=True, consumers_migrated=True, consumer_generation=1),
     )
-    prod.fence_legacy(
-        pev(EvidenceKind.FENCING_VERIFIED),
+    a.fence_legacy(
+        ev(EvidenceKind.FENCING_VERIFIED),
         workflow_disabled=True,
         triggers_removed=True,
         writers_fenced=True,
         consumers_switched=True,
     )
-    prod.transition(CutoverState.LEGACY_AUTHORITY_DISABLED)
-    prod.transition(CutoverState.NEW_AUTHORITY_ENABLED, pev(EvidenceKind.TRANSFER_AUTHORIZED))
-    prod.fence_successor(pev(EvidenceKind.ROLLBACK_EXCLUDED))
-    prod.rollback(pev(EvidenceKind.TRANSFER_AUTHORIZED))
-    assert not prod.publication_allowed(PublicationOwner.LEGACY, 1)
-    assert not prod.publication_allowed(PublicationOwner.NEW, 1)
+    a.transition(CutoverState.LEGACY_AUTHORITY_DISABLED)
+    a.transition(CutoverState.NEW_AUTHORITY_ENABLED, ev(EvidenceKind.TRANSFER_AUTHORIZED))
+    a.fence_successor(ev(EvidenceKind.ROLLBACK_EXCLUDED))
+    a.rollback(ev(EvidenceKind.TRANSFER_AUTHORIZED))
+    assert not a.publication_allowed(PublicationOwner.LEGACY, 1)
+    assert not a.publication_allowed(PublicationOwner.NEW, 1)
+
+
+def test_cutover_tests_are_ci_portable():
+    import ast
+
+    tree = ast.parse(Path(__file__).read_text())
+    literals = [node.value for node in ast.walk(tree) if isinstance(node, ast.Constant) and isinstance(node.value, str)]
+    forbidden = (chr(47) + "Users" + chr(47), ".work" + "trees" + chr(47))
+    assert not any(token in value for value in literals for token in forbidden)
