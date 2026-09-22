@@ -36,8 +36,8 @@ def test_agent_instructions_use_current_state_governance() -> None:
     assert "dependency-review" in text
     assert "CodeQL" in text
     assert "missing, pending, cancelled, or failed" in text
-    assert "Hunter Governance Review` is missing or non-stale pending" in text
-    assert "Hunter Governance Review` is failed or errored" in text
+    assert "compatibility status during the authority cutover" in text
+    assert "not a second merge prerequisite" in text
     assert "head cannot be safely attributed" in text
     assert "Hunter Merge Readiness` is the final current-state controller" in text
 
@@ -83,8 +83,8 @@ def test_merge_readiness_docs_name_only_current_risk_inputs() -> None:
     assert "dependency-review" in text
     assert "CodeQL" in text
     assert "missing, pending, cancelled, or failed" in text
-    assert "Hunter Governance Review` is missing or non-stale pending" in text
-    assert "Hunter Governance Review` is failed or errored" in text
+    assert "compatibility status during the authority cutover" in text
+    assert "not a second merge prerequisite" in text
     assert "same head SHA is shared by another open PR" in text
     assert "Issue identity" in text
     assert "top-level PR comments" in text

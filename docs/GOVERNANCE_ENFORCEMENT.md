@@ -9,8 +9,8 @@ This document describes the active repository automation that enforces current m
 The trusted default branch provides three lightweight surfaces:
 
 1. `Hunter Governance Agent Preflight` — structural PR sanity only; it does not enforce Issue/branch/title/body/hostile-review ceremony.
-2. `Hunter Governance Review` — current mergeability sanity through `scripts/hunter_governance_review_v2.py`.
-3. `Hunter Merge Readiness` — final current-state controller through `scripts/hunter_merge_readiness_v2.py`.
+2. `Hunter Governance Review` — compatibility status during the production authority cutover; it is not a second input to the canonical readiness decision.
+3. `Hunter Merge Readiness` — final current-state aggregator through `scripts/hunter_merge_readiness_v2.py`, directly consuming mergeability, review authority/findings, and required code/security evidence.
 
 Required code/security checks are `Quality Gates`, `dependency-review`, and `CodeQL`.
 

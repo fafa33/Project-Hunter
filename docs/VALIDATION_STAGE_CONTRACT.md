@@ -122,6 +122,10 @@ reuse would raise wall-clock time in order to lower it. The wall-clock win comes
 from the two *serial* local full runs that no longer happen before the push, and
 from the parallel test lane; what `CI` reuse saves is duplicated runner work.
 
+## Merge-gate consolidation
+
+`Hunter Merge Readiness` is the single final aggregator. It directly consumes canonical candidate-admission proof, current mergeability, unresolved review findings, exact-head review authority, and the required code/security evidence. `Hunter Governance Review` remains a compatibility publisher only during the production cutover and is not an input to the canonical readiness decision. After the successor is authoritative on `main`, the target ruleset in `configs/governance_cutover_target.json` retires that legacy required status atomically. Internal preflight, admission, reconcile, collector, and shadow workflows produce or recover evidence; they are not additional merge gates.
+
 ## Proof identity and invalidation
 
 `scripts/hunter_validation_receipt.py` is the only place that decides whether a

@@ -422,6 +422,16 @@
       "guard": "Draft work may omit a review request, but once a review request exists it MUST bind the current governed range and governing Issue criteria before push. A stale request is blocked at pre-push rather than allowed to become a deterministic MISSING_REVIEW_AUTHORITY cycle with no collector dispatch.",
       "status": "guarded",
       "test": "tests/test_hunter_pre_push.py"
+    },
+    {
+      "id": "DFF-032",
+      "class": "duplicate-derived-merge-gates-amplify-single-defect",
+      "source": "PR #485 gate audit: Merge Readiness directly observed current blockers and then consumed Hunter Governance Review, a second derived status over overlapping evidence",
+      "classification": "systemic",
+      "guard_boundary": "merge-gate authority ownership and production ruleset cutover",
+      "guard": "Each merge invariant has one canonical evidence owner. Merge Readiness may aggregate direct exact-head validation, security, review-authority and current GitHub-state evidence, but MUST NOT require a second derived status that summarizes the same evidence. Internal orchestration workflows are not required merge gates. Legacy Governance Review may remain compatibility-only until atomic cutover, then is retired from required checks. Production target has no bypass actors.",
+      "status": "guarded",
+      "test": "tests/test_governance_gate_consolidation.py"
     }
   ],
   "families": [
@@ -820,7 +830,7 @@
         "tests/test_issue_417_governance_waiting_state.py::test_an_eligible_active_trusted_run_is_waiting_not_failure",
         "tests/test_issue_417_governance_waiting_state.py::test_an_ineligible_active_run_is_not_a_waiting_dependency",
         "tests/test_issue_417_governance_waiting_state.py::test_a_real_blocker_alongside_an_active_run_is_failure_not_waiting",
-        "tests/test_issue_417_governance_waiting_state.py::test_merge_readiness_does_not_read_a_governance_wait_as_success",
+        "tests/test_issue_419_trusted_parallel_lane.py::test_waiting_still_satisfies_neither_admission_nor_merge_readiness",
         "tests/test_issue_417_governance_waiting_state.py::test_the_same_head_succeeds_once_the_trusted_proof_lands"
       ],
       "lifecycle": "hosted-enforced",

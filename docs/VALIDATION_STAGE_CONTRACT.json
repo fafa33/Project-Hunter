@@ -58,7 +58,7 @@
       "id": "merge-readiness",
       "owner": "Hunter Merge Readiness (scripts/hunter_merge_readiness_v2.py)",
       "boundary": "merge-gate",
-      "proof": "Current GitHub state: Draft state, mergeability, unresolved substantive review threads, current CHANGES_REQUESTED, and the required Quality Gates, dependency-review, CodeQL and Hunter Governance Review checks on the exact head.",
+      "proof": "Current GitHub state: Draft state, mergeability, unresolved substantive review threads, current CHANGES_REQUESTED, canonical candidate-admission proof, exact-head review authority, and the required Quality Gates, dependency-review and CodeQL checks on the exact head. Legacy Hunter Governance Review is compatibility-only during cutover and is not a second prerequisite.",
       "full_repository_suite": "never",
       "must_not": "Substitute process history, PR prose, or a superseded run for current state."
     },

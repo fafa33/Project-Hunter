@@ -31,6 +31,7 @@ def _install_green(monkeypatch, pr: dict | None = None) -> None:
     monkeypatch.setattr(core, "latest_status", lambda _sha, _context: {"id": 99, "state": "success"})
     monkeypatch.setattr(core, "open_prs_for_head", lambda _sha: (501,))
     monkeypatch.setattr(core, "review_authority_state", lambda _sha, _number: ("success", "reviewed"))
+    monkeypatch.setattr(core, "candidate_admission_state", lambda _sha, _number: ("success", "admitted"))
 
 
 def test_green_current_state_is_merge_ready(monkeypatch):
@@ -265,37 +266,19 @@ def test_missing_required_check_waits(monkeypatch):
     assert decision.state == "pending"
 
 
-def test_failed_governance_status_blocks(monkeypatch):
+def test_legacy_governance_status_is_not_a_second_merge_gate(monkeypatch):
     _install_green(monkeypatch)
     monkeypatch.setattr(core, "latest_status", lambda _sha, _context: {"id": 99, "state": "failure"})
-
     _sha, decision = core.decide(501)
+    assert decision.state == "success"
+    assert core.GOVERNANCE_CONTEXT not in decision.description
 
-    assert decision.state == "failure"
-    assert "Hunter Governance Review=failure" in decision.description
 
-
-def test_governance_pending_blocks_even_on_resolved_mergeability(monkeypatch):
-    """Issue #417: a governance wait is a real dependency, not a stale artefact.
-
-    This previously passed such a status through, on the premise that the
-    governance controller could publish pending only while GitHub mergeability
-    was unresolved -- something readiness can re-observe for itself. Governance
-    now also publishes pending to mean "the required trusted exact-head proof is
-    still running", which readiness cannot derive, so passing it would let a
-    candidate reach ready-to-merge on a proof that does not yet exist.
-
-    Blocking here cannot become permanent: the governance controller republishes
-    on every event and on its schedule, so a wait that has since resolved is
-    replaced rather than left behind.
-    """
+def test_missing_legacy_governance_status_does_not_duplicate_current_evidence(monkeypatch):
     _install_green(monkeypatch)
-    monkeypatch.setattr(core, "latest_status", lambda _sha, _context: {"id": 99, "state": "pending"})
-
+    monkeypatch.setattr(core, "latest_status", lambda _sha, _context: None)
     _sha, decision = core.decide(501)
-
-    assert decision.state == "pending"
-    assert core.GOVERNANCE_CONTEXT in decision.description
+    assert decision.state == "success"
 
 
 def test_shared_head_waits_for_unique_attribution(monkeypatch):

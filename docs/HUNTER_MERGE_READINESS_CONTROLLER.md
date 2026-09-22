@@ -21,7 +21,6 @@ For each candidate PR, the controller reads:
 - unresolved inline review threads;
 - current `CHANGES_REQUESTED` reviewers;
 - exact-head `Quality Gates`, `dependency-review`, and `CodeQL` results;
-- current `Hunter Governance Review` status;
 - other open PRs sharing the same head SHA.
 
 ## Decision

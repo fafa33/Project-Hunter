@@ -6,7 +6,6 @@ name: Hunter / Merge Readiness
 # - current CHANGES_REQUESTED reviews
 # - missing, stale, incomplete, or unresolved exact-head review
 # - failed or incomplete exact-head code/security checks
-# - failed lightweight Hunter Governance Review
 
 on:
   pull_request_target:
@@ -32,7 +31,6 @@ on:
     workflows:
       - CI
       - Dependency review
-      - Hunter Governance Review
       - Hunter Governance Review Reconcile
       - CodeQL default setup bridge
     types:
