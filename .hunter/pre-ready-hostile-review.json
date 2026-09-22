@@ -347,6 +347,12 @@
         "status": "modified"
       },
       {
+        "blob_sha": "6101837bd61e5cb81b184c3644b1e7a132dda43a",
+        "path": ".github/workflows/hunter-governance-reconcile.yml",
+        "previous_path": "",
+        "status": "modified"
+      },
+      {
         "blob_sha": "d4fcd3976611134f8769210cd0f86f3e4a7b34f1",
         "path": ".github/workflows/hunter-merge-readiness.yml",
         "previous_path": "",
@@ -359,7 +365,7 @@
         "status": "modified"
       },
       {
-        "blob_sha": "74ce433069cd837e0537942f891a7ac32e8b79ec",
+        "blob_sha": "d45482488e13fcc0c2af0fd394c95c9fd11b3d0d",
         "path": "docs/DEFECT_REGISTRY.json",
         "previous_path": "",
         "status": "modified"
@@ -437,7 +443,7 @@
         "status": "modified"
       },
       {
-        "blob_sha": "90a234df8e70dd45b3090972df6f496e645f68d4",
+        "blob_sha": "2961853f1f223beeb718757c7d566f2fd7ae4ea4",
         "path": "tests/test_hunter_governance_cleanup.py",
         "previous_path": "",
         "status": "modified"
@@ -497,11 +503,11 @@
         "status": "modified"
       }
     ],
-    "review_target_digest": "6db38ef6211290bc4b135585aba26c83140668aa0fbf6686235292b682504ff5"
+    "review_target_digest": "f0314099ad25bba4458a4695c0df3586b2b249c00393c91cae52fd7c18810170"
   },
-  "review_id": "e32e41278ffc1924a5e29401a0dbc5fc2c369b424183d023394fa1f7631267b2",
+  "review_id": "d5f2cbc0426d511b5f90f8059ec4fdaff39d05542cbe777f2ca4d1e6f7a85ef8",
   "review_request": {
-    "claims_id": "e32e41278ffc1924a5e29401a0dbc5fc2c369b424183d023394fa1f7631267b2",
+    "claims_id": "d5f2cbc0426d511b5f90f8059ec4fdaff39d05542cbe777f2ca4d1e6f7a85ef8",
     "schema": "hunter.review-request.v1"
   },
   "schema": "hunter.pre-ready-hostile-review.v1"
