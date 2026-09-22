@@ -8,6 +8,7 @@ from pathlib import Path
 from typing import Any
 
 import hunter_github_transport as transport
+import hunter_merge_readiness_v2 as readiness
 
 DOMAINS = ("governance", "candidate-admission", "merge-readiness", "review-orchestration", "reviewer-collection")
 
@@ -44,13 +45,40 @@ def snapshot(repo: str, token: str, pr_number: int) -> dict[str, Any]:
     }
 
 
+def _latest_status(statuses: list[dict[str, Any]], context: str) -> dict[str, Any] | None:
+    matching = [s for s in statuses if str(s.get("context") or "") == context]
+    return max(matching, key=lambda s: int(s.get("id") or 0)) if matching else None
+
+
 def project(snap: dict[str, Any]) -> dict[str, dict[str, Any]]:
-    # Shadow v1 deliberately compares the canonical observable facts consumed by
-    # both authorities. It does not claim semantic parity until successor domain
-    # evaluators replace these identity projections.
     head = snap["head_sha"]
     base = {"head_sha": head, "draft": snap["draft"], "mergeable": snap["mergeable"]}
-    return {domain: dict(base, domain=domain) for domain in DOMAINS}
+    result = {domain: dict(base, domain=domain, semantic_state="UNKNOWN") for domain in DOMAINS}
+
+    legacy = _latest_status(snap["statuses"], readiness.CONTEXT)
+    governance = _latest_status(snap["statuses"], readiness.GOVERNANCE_CONTEXT)
+    successor = readiness.evaluate(
+        readiness.StaticReadinessObservation(
+            draft=bool(snap["draft"]),
+            mergeable=snap["mergeable"],
+            # A Draft decision terminates before review authority is consulted.
+            # Non-Draft semantic parity remains UNKNOWN until exact-head review
+            # authority and review-thread facts are added to the snapshot.
+            review_authority=("success", "shadow-placeholder"),
+            check_runs=tuple(snap["checks"]),
+            governance_status=governance,
+        )
+    )
+    if snap["draft"] and legacy is not None:
+        result["merge-readiness"] = {
+            **base,
+            "domain": "merge-readiness",
+            "semantic_state": "COMPARED",
+            "legacy_state": str(legacy.get("state") or ""),
+            "successor_state": successor.state,
+            "parity": str(legacy.get("state") or "") == successor.state,
+        }
+    return result
 
 
 def main() -> int:
@@ -71,7 +99,8 @@ def main() -> int:
         "head_sha": snap["head_sha"],
         "input_digest": hashlib.sha256(canonical).hexdigest(),
         "domains": projections,
-        "semantic_parity_claimed": False,
+        "semantic_parity_claimed": any(item.get("semantic_state") == "COMPARED" for item in projections.values()),
+        "all_domains_compared": all(item.get("semantic_state") == "COMPARED" for item in projections.values()),
     }
     out = Path(args.output)
     out.parent.mkdir(parents=True, exist_ok=True)
