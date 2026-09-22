@@ -402,6 +402,16 @@
       "guard": "A self-hosted reviewer that is triage-only may not be enabled in the canonical active reviewer pool unless trusted default-branch health admission proves a fresh heartbeat before dispatch. Offline, sleeping, disconnected, or unhealthy local compute is an availability condition, never a candidate failure and never a reason to delay authority progression. Until that health gate exists, local-ollama remains disabled and authority progression starts with Codex; enabling it requires both the benchmark gate and trusted health admission.",
       "status": "guarded",
       "test": "tests/test_code_write_policy.py::test_local_ollama_is_triage_only_and_disabled_without_health_admission"
+    },
+    {
+      "id": "DFF-030",
+      "class": "review-trigger-misclassified-as-provider-acknowledgement",
+      "source": "PR #485 reviewer collector: GitHub creation of @codex review comment was treated as Codex acknowledgement",
+      "classification": "systemic",
+      "guard_boundary": "reviewer dispatch acknowledgement semantics",
+      "guard": "Creating or persisting a reviewer trigger is delivery evidence only and MUST NOT count as provider acknowledgement. Comment-triggered reviewers require an independently attributable provider review/comment after the trigger before acknowledgement; absent that signal, the acknowledgement budget expires and progression fails over. Provider unavailable/quota responses count as provider responses and must advance failover rather than consume the full review budget.",
+      "status": "guarded",
+      "test": "tests/test_hunter_reviewer_collector.py::test_codex_trigger_creation_is_delivery_not_acknowledgement"
     }
   ],
   "families": [

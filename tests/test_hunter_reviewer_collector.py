@@ -664,6 +664,40 @@ def test_api_reviewer_trigger_is_exact_head_bound_and_synchronous(monkeypatch):
     assert backend.response_state(agent, trigger) == "clear"
 
 
+def test_codex_trigger_creation_is_delivery_not_acknowledgement(monkeypatch):
+    backend = collector.GitHubBackend("owner/repo", "token", 476, HEAD, "d" * 64, 123, 1)
+    agent = POOL["agents"][0]
+    trigger = {"id": 77, "created_at": "2026-09-22T09:52:53Z", "body": "@codex review"}
+    monkeypatch.setattr(collector, "_pages", lambda *_a, **_k: [])
+
+    assert backend.acknowledged(agent, trigger) is False
+
+
+def test_codex_provider_response_is_real_acknowledgement(monkeypatch):
+    backend = collector.GitHubBackend("owner/repo", "token", 476, HEAD, "d" * 64, 123, 1)
+    agent = POOL["agents"][0]
+    trigger = {"id": 77, "created_at": "2026-09-22T09:52:53Z", "body": "@codex review", "collector_run_id": 123}
+    monkeypatch.setattr(
+        collector,
+        "_pages",
+        lambda _repo, _token, path, *_a, **_k: (
+            [
+                {
+                    "id": 88,
+                    "user": {"login": collector.governance.reviewer_login(agent)},
+                    "created_at": "2026-09-22T09:52:54Z",
+                    "body": "Codex usage limit reached. Try again later.",
+                }
+            ]
+            if path.endswith("issues/476/comments")
+            else []
+        ),
+    )
+
+    assert backend.acknowledged(agent, trigger) is True
+    assert backend.response_state(agent, trigger) == "unavailable"
+
+
 def test_codex_trigger_is_reused_for_same_exact_head_claims(monkeypatch):
     backend = collector.GitHubBackend("owner/repo", "token", 476, HEAD, "d" * 64, 999, 1)
     agent = POOL["agents"][0]

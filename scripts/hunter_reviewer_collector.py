@@ -1048,6 +1048,27 @@ class GitHubBackend:
                 return False
             run = self._adopt_workflow_run(trigger)
             return run is not None and str(run.get("status") or "") in STARTED_RUN_STATES
+        if agent.get("id") == "codex":
+            login = governance.reviewer_login(agent)
+            created = str(trigger.get("created_at") or "")
+            reviews = _pages(self.repository, self.token, f"pulls/{self.pr}/reviews")
+            if any(
+                (item.get("user") or {}).get("login", "").lower() == login
+                and str(item.get("submitted_at") or "") >= created
+                and item.get("commit_id") == self.expected_head
+                for item in reviews
+            ):
+                return True
+            comments = _pages(self.repository, self.token, f"issues/{self.pr}/comments")
+            return any(
+                (item.get("user") or {}).get("login", "").lower() == login
+                and str(item.get("created_at") or "") >= created
+                for item in comments
+            )
+        # Synchronous API calls and GitHub's requested-reviewer endpoint provide
+        # a delivery acknowledgement. That is intentionally distinct from the
+        # Codex comment trigger, where creating our own comment proves nothing
+        # about whether Codex received or started the review.
         return type(trigger.get("id")) is int and int(trigger["id"]) > 0
 
 
