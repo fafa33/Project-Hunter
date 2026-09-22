@@ -229,6 +229,17 @@ def collect_attempts(pool: dict[str, Any], head: str, backend: Backend) -> list[
                     "ack_elapsed_seconds": ack_elapsed,
                     "elapsed_seconds": backend.now() - start,
                     "outcome": state,
+                    "reason_code": (
+                        "QUOTA_OR_USAGE_LIMIT"
+                        if state == "unavailable" and agent.get("id") == "codex"
+                        else {
+                            "unacknowledged": "NO_ACK_TIMEOUT",
+                            "timed_out": "REVIEW_TIMEOUT",
+                            "unavailable": "PROVIDER_UNAVAILABLE",
+                            "blocking": "BLOCKING_FINDINGS",
+                            "clear": "CLEAR",
+                        }[state]
+                    ),
                     **({k: trigger[k] for k in ("provider", "response_digest", "head_sha") if k in trigger}),
                 }
             )

@@ -99,8 +99,9 @@ def test_reviewer_requires_distinct_ack_and_review_budgets() -> None:
     policy = json.loads((ROOT / "docs" / "CODE_WRITE_POLICY.json").read_text(encoding="utf-8"))
     pool = policy["review_progression"]["review_authority"]["reviewer_pool"]
     for agent in (a for a in pool["agents"] if a.get("enabled")):
-        assert 1 <= agent["ack_timeout_seconds"] <= 90
-        assert agent["review_timeout_seconds"] > agent["ack_timeout_seconds"]
+        ack_limit = 300 if agent["trigger_method"].startswith("github-pr-comment:") else 90
+        assert 1 <= agent["ack_timeout_seconds"] <= ack_limit
+        assert agent["review_timeout_seconds"] >= agent["ack_timeout_seconds"]
 
 
 def test_code_write_policy_guard_rejects_a_pool_without_a_strict_last_resort(monkeypatch, tmp_path) -> None:
@@ -319,6 +320,6 @@ def test_codex_hard_review_budget_is_capped_at_five_minutes() -> None:
     codex = next(agent for agent in pool["agents"] if agent["id"] == "codex")
 
     assert codex["review_timeout_seconds"] == 300
-    assert codex["ack_timeout_seconds"] <= 30
+    assert codex["ack_timeout_seconds"] == 300
     assert codex["retryable"] is False
     assert pool["timeout_policy"]["max_seconds"] == 300

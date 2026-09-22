@@ -409,7 +409,7 @@
       "source": "PR #485 reviewer collector: GitHub creation of @codex review comment was treated as Codex acknowledgement",
       "classification": "systemic",
       "guard_boundary": "reviewer dispatch acknowledgement semantics",
-      "guard": "Creating or persisting a reviewer trigger is delivery evidence only and MUST NOT count as provider acknowledgement. Comment-triggered reviewers require an independently attributable provider review/comment after the trigger before acknowledgement; absent that signal, the acknowledgement budget expires and progression fails over. Provider unavailable/quota responses count as provider responses and must advance failover rather than consume the full review budget.",
+      "guard": "Creating or persisting a reviewer trigger is delivery evidence only and MUST NOT count as provider acknowledgement. Codex comment-trigger review receives one bounded 300-second initial-response window; only independently attributable provider evidence can acknowledge it. Silence terminates as NO_ACK_TIMEOUT, authenticated quota/usage denial terminates immediately as QUOTA_OR_USAGE_LIMIT, other provider unavailability as PROVIDER_UNAVAILABLE, review overrun as REVIEW_TIMEOUT, and findings/clear outcomes remain explicit. No automatic retry is permitted for the same exact HEAD.",
       "status": "guarded",
       "test": "tests/test_hunter_reviewer_collector.py::test_codex_trigger_creation_is_delivery_not_acknowledgement"
     },

@@ -526,7 +526,7 @@ def _attempt(
     status: str = "exhausted",
     reason: str = "unavailable (rate-limited)",
     timeout_seconds: int = 300,
-    ack_timeout_seconds: int = 30,
+    ack_timeout_seconds: int = 300,
     review_timeout_seconds: int = 300,
     failure_class: str = "transient",
     attempt_count: int = 1,
@@ -566,7 +566,7 @@ def _pool(*, agents: tuple = (), last_resort: str = "hunter-guard", max_seconds:
         "enabled": True,
         "exact_head_support": True,
         "timeout_seconds": 300,
-        "ack_timeout_seconds": 30,
+        "ack_timeout_seconds": 300,
         "review_timeout_seconds": 300,
     }
     return {
@@ -622,7 +622,11 @@ def _authority(
     if authority_type != "codex":
         default_attempts = [dict(_attempt())]
         if authority_type == "hunter-guard":
-            default_attempts += [dict(_attempt("copilot")), dict(_attempt("gemini")), dict(_attempt("groq"))]
+            default_attempts += [
+                dict(_attempt("copilot", ack_timeout_seconds=30)),
+                dict(_attempt("gemini", ack_timeout_seconds=30)),
+                dict(_attempt("groq", ack_timeout_seconds=30)),
+            ]
         authority["reviewer_attempts"] = list(attempts) if attempts is not None else default_attempts
     authority.update(overrides)
     return authority
@@ -1746,6 +1750,7 @@ def test_pre_push_admits_a_bound_multi_commit_range(monkeypatch, tmp_path: Path)
     monkeypatch.setattr(hunter_pre_push.os, "chdir", lambda _path: None)
     monkeypatch.setattr(hunter_pre_push, "_validate_receipt_freshness", lambda _head: None)
     monkeypatch.setattr(hunter_pre_push, "report_pre_ready_review_state", lambda _head, _updates: None)
+    monkeypatch.setattr(hunter_pre_push, "require_current_review_request_if_present", lambda _head, _updates: None)
     monkeypatch.setattr(hunter_pre_push.provenance, "check_range", lambda *_a, **_k: None)
     monkeypatch.setattr(hunter_pre_push, "_select_preflight_mode", lambda _head: hunter_pre_push.NORMAL_MODE)
 

@@ -434,6 +434,7 @@ def test_codex_policy_is_single_bounded_300_second_invocation():
     codex = next(agent for agent in pool["agents"] if agent["id"] == "codex")
     assert pool["timeout_policy"]["retries_per_agent"] == 0
     assert codex["review_timeout_seconds"] == 300
+    assert codex["ack_timeout_seconds"] == 300
 
 
 def test_native_codex_unavailable_response_fails_over_immediately(monkeypatch):
@@ -1408,7 +1409,9 @@ def test_an_unacknowledged_reviewer_fails_over_on_its_acknowledgement_budget():
 
     assert [record["outcome"] for record in records] == ["unacknowledged", "timed_out"]
     assert records[0]["elapsed_seconds"] == 30
+    assert records[0]["reason_code"] == "NO_ACK_TIMEOUT"
     assert records[1]["elapsed_seconds"] == 300
+    assert records[1]["reason_code"] == "REVIEW_TIMEOUT"
 
 
 def _triage_receipt(monkeypatch, *, local_outcome="clear", local_run_id=7001, local_ack=True, mutate=None):

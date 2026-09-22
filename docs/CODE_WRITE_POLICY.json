@@ -92,7 +92,7 @@
             "note": "Hosted fallback reviewer. Triggered immediately when the trusted local reviewer is offline/unresponsive or after its bounded review budget; exact-head authority remains supported.",
             "evidence": "Discovered by inspecting check-suites and PR reviews on main (commit dca20dd): installed apps are claude, freebuff-web, github-actions, railway-app, tembo, vercel; no Copilot code review, CodeRabbit, Jules, or CODEOWNERS exists on this repository.",
             "github_login": "chatgpt-codex-connector[bot]",
-            "ack_timeout_seconds": 30,
+            "ack_timeout_seconds": 300,
             "review_timeout_seconds": 300
           },
           {

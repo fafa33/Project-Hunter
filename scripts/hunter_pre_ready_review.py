@@ -543,17 +543,19 @@ def _pool_problems(policy: Mapping[str, Any]) -> list[str]:
         ack_timeout = entry.get("ack_timeout_seconds")
         review_timeout = entry.get("review_timeout_seconds")
         if enabled is True:
-            if isinstance(ack_timeout, bool) or not isinstance(ack_timeout, int) or not 1 <= ack_timeout <= 90:
+            trigger_method = str(entry.get("trigger_method") or "")
+            ack_limit = 300 if trigger_method.startswith("github-pr-comment:") else 90
+            if isinstance(ack_timeout, bool) or not isinstance(ack_timeout, int) or not 1 <= ack_timeout <= ack_limit:
                 problems.append(
-                    f"{REVIEWER_POOL_FIELD} enabled agent {agent_id!r} must declare ack_timeout_seconds in 1..90"
+                    f"{REVIEWER_POOL_FIELD} enabled agent {agent_id!r} must declare ack_timeout_seconds in 1..{ack_limit}"
                 )
             if isinstance(review_timeout, bool) or not isinstance(review_timeout, int) or review_timeout <= 0:
                 problems.append(
                     f"{REVIEWER_POOL_FIELD} enabled agent {agent_id!r} must declare a positive review_timeout_seconds"
                 )
-            elif isinstance(ack_timeout, int) and not isinstance(ack_timeout, bool) and review_timeout <= ack_timeout:
+            elif isinstance(ack_timeout, int) and not isinstance(ack_timeout, bool) and review_timeout < ack_timeout:
                 problems.append(
-                    f"{REVIEWER_POOL_FIELD} agent {agent_id!r} review_timeout_seconds must exceed ack_timeout_seconds"
+                    f"{REVIEWER_POOL_FIELD} agent {agent_id!r} review_timeout_seconds must be at least ack_timeout_seconds"
                 )
         max_seconds = timeout.get("max_seconds")
         if (
