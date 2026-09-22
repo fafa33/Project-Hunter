@@ -32,6 +32,7 @@ def _stub_issue_412_boundaries(monkeypatch) -> None:
     monkeypatch.setattr(hunter_pre_push, "_validate_writer_provenance", lambda _head: None)
     monkeypatch.setattr(hunter_pre_push, "_validate_receipt_freshness", lambda _head: None)
     monkeypatch.setattr(hunter_pre_push, "report_pre_ready_review_state", lambda _head, _updates: None)
+    monkeypatch.setattr(hunter_pre_push, "require_current_review_request_if_present", lambda _head, _updates: None)
 
 
 def test_pre_push_blocks_known_deterministic_failure_before_network_push(monkeypatch, tmp_path) -> None:

@@ -370,6 +370,43 @@ def _governing_issue_criteria(updates: Iterable[tuple[str, str, str]]) -> tuple[
     return issue, criteria, ""
 
 
+def require_current_review_request_if_present(head_sha: str, updates: Iterable[tuple[str, str, str]]) -> None:
+    """Reject a stale review request instead of silently pushing dead orchestration.
+
+    Draft work may legitimately have no request yet. Once a request exists,
+    however, trusted orchestration will consume it only if its claims still bind
+    the current governed range. Letting a stale request through merely creates a
+    deterministic MISSING_REVIEW_AUTHORITY cycle with no collector dispatch.
+    """
+
+    document = review.read_review_document()
+    if not isinstance(document, dict) or not isinstance(document.get("review_request"), dict):
+        return
+    base = provenance.resolve_governed_base(head_sha)
+    issue, issue_criteria, criteria_reason = _governing_issue_criteria(updates)
+    if criteria_reason or issue_criteria is None:
+        raise RuntimeError(
+            "existing pre-ready review request cannot be proven current: "
+            + (criteria_reason or f"Issue #{issue} criteria unavailable")
+        )
+    families, family_error = review.load_families()
+    if family_error:
+        raise RuntimeError(f"existing pre-ready review request cannot be proven current: {family_error}")
+    verdict = review.verify_review_request(
+        document,
+        base_sha=base,
+        changes=review.local_changes(base, head_sha),
+        families=families,
+        issue_criteria=issue_criteria,
+        head_sha=head_sha,
+    )
+    if not verdict.ok:
+        raise RuntimeError(
+            f"stale pre-ready review request ({verdict.state}: {verdict.reason}); "
+            "regenerate it for the current governed range before pushing"
+        )
+
+
 def report_pre_ready_review_state(head_sha: str, updates: Iterable[tuple[str, str, str]]) -> None:
     """Report, without blocking, whether this head could stand as Ready.
 
@@ -450,6 +487,7 @@ def enforce_pre_push(lines: Iterable[str]) -> int:
         return 2
 
     report_full_repository_proof_ownership(repo_root, after_head, mode)
+    require_current_review_request_if_present(after_head, updates)
     report_pre_ready_review_state(after_head, updates)
     print(f"[Hunter Pre-Push] PASS: exact HEAD {after_head} passed the {_lane_label(mode)}")
     return 0

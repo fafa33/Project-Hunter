@@ -412,6 +412,16 @@
       "guard": "Creating or persisting a reviewer trigger is delivery evidence only and MUST NOT count as provider acknowledgement. Comment-triggered reviewers require an independently attributable provider review/comment after the trigger before acknowledgement; absent that signal, the acknowledgement budget expires and progression fails over. Provider unavailable/quota responses count as provider responses and must advance failover rather than consume the full review budget.",
       "status": "guarded",
       "test": "tests/test_hunter_reviewer_collector.py::test_codex_trigger_creation_is_delivery_not_acknowledgement"
+    },
+    {
+      "id": "DFF-031",
+      "class": "stale-review-request-silently-prevents-collector-dispatch",
+      "source": "PR #485 after exact-head reviewer ACK fix: governed content changed while the prior review request remained present, so trusted orchestration rejected it and dispatched no collector",
+      "classification": "systemic",
+      "guard_boundary": "pre-push review-request freshness",
+      "guard": "Draft work may omit a review request, but once a review request exists it MUST bind the current governed range and governing Issue criteria before push. A stale request is blocked at pre-push rather than allowed to become a deterministic MISSING_REVIEW_AUTHORITY cycle with no collector dispatch.",
+      "status": "guarded",
+      "test": "tests/test_hunter_pre_push.py"
     }
   ],
   "families": [
