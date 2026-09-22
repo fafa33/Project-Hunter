@@ -455,6 +455,18 @@
         "status": "modified"
       },
       {
+        "blob_sha": "2ce97741d5c79f706387495ce9ecbe2b06df3cd9",
+        "path": "tests/test_exact_head_review_authority.py",
+        "previous_path": "",
+        "status": "modified"
+      },
+      {
+        "blob_sha": "67d0ea7e78cac4c4ee53e2d003ac7f537d031c4d",
+        "path": "tests/test_hunter_candidate_admission.py",
+        "previous_path": "",
+        "status": "modified"
+      },
+      {
         "blob_sha": "2961853f1f223beeb718757c7d566f2fd7ae4ea4",
         "path": "tests/test_hunter_governance_cleanup.py",
         "previous_path": "",
@@ -503,7 +515,7 @@
         "status": "modified"
       },
       {
-        "blob_sha": "7666fc722e34b54b0c58965fabcb5fb609f8fe97",
+        "blob_sha": "ca1606b6800f23fc36089b63e49ff55b87dc8e00",
         "path": "tests/test_issue_417_governance_waiting_state.py",
         "previous_path": "",
         "status": "modified"
@@ -515,11 +527,11 @@
         "status": "modified"
       }
     ],
-    "review_target_digest": "3d958cf81de03220684199718182cb40fbfee60bf05786d14ef75ac9a91a1bac"
+    "review_target_digest": "eb86f1cb3109ded6895925d6e0fedc5b2563cffc7ae03a4a79521d554898fcbb"
   },
-  "review_id": "4ca5becc2d6798fe35fbdf661e05d635dcfb45204c868707ec23c87afe4355f1",
+  "review_id": "783e7ba8e5cdd889b645f5a8ff661e1854c080bcb1fbcd6037bfe00e759a9c88",
   "review_request": {
-    "claims_id": "4ca5becc2d6798fe35fbdf661e05d635dcfb45204c868707ec23c87afe4355f1",
+    "claims_id": "783e7ba8e5cdd889b645f5a8ff661e1854c080bcb1fbcd6037bfe00e759a9c88",
     "schema": "hunter.review-request.v1"
   },
   "schema": "hunter.pre-ready-hostile-review.v1"
