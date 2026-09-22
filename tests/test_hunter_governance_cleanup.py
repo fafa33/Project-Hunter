@@ -2,6 +2,8 @@ from __future__ import annotations
 
 from pathlib import Path
 
+import yaml
+
 ROOT = Path(__file__).resolve().parents[1]
 
 RETIRED_PATHS = (
@@ -91,3 +93,15 @@ def test_merge_readiness_docs_name_only_current_risk_inputs() -> None:
     assert "metadata-only edits" in text
     assert "superseded historical runs" in text
     assert "Non-blocking recommendations do not" in text
+
+
+def test_reconcile_wakes_when_trusted_preflight_upgrade_completes() -> None:
+    """Exact-head proof completion must wake the only actions:write orchestrator."""
+    workflow = yaml.safe_load((ROOT / ".github/workflows/hunter-governance-reconcile.yml").read_text(encoding="utf-8"))
+    workflow_run = workflow[True]["workflow_run"]
+    triggers = workflow_run["workflows"]
+    assert "Hunter / Trusted Preflight Upgrade" in triggers
+    assert "completed" in workflow_run["types"]
+    assert workflow["permissions"]["actions"] == "write"
+    checkout = workflow["jobs"]["reconcile"]["steps"][0]
+    assert checkout["with"]["ref"] == "main"

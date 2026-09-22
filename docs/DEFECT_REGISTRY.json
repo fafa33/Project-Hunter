@@ -805,7 +805,7 @@
     {
       "id": "DFF-014",
       "title": "pending-prerequisite-reported-as-failure",
-      "invariant": "A hosted prerequisite that is still running publishes pending; only an invalid, absent, untrusted or wrongly-bound proof publishes failure. 'Still running' is decided from observable run state for the exact candidate head, never from the presence of a published status, because a proof that publishes its status last has no status for the whole time it is being produced. A head left pending is re-evaluated when the proof lands, and pending never satisfies admission, readiness or merge.",
+      "invariant": "A hosted prerequisite that is still running publishes pending; only an invalid, absent, untrusted or wrongly-bound proof publishes failure. 'Still running' is decided from observable run state for the exact candidate head, never from the presence of a published status, because a proof that publishes its status last has no status for the whole time it is being produced. A head left pending is re-evaluated when the proof lands, and pending never satisfies admission, readiness or merge. Every trusted proof completion that can move admission from pending to eligible must wake the privileged orchestrator; a status-only refresh is not sufficient.",
       "applicability": {
         "changed_paths": [
           "scripts/",
@@ -838,6 +838,9 @@
         "Issue #412",
         "PR #413 independent review (Codex P1)",
         "Issue #417 (recurrence observed on PR #416 head fda1ad0)"
+      ],
+      "regression_tests": [
+        "tests/test_hunter_governance_cleanup.py::test_reconcile_wakes_when_trusted_preflight_upgrade_completes"
       ]
     },
     {
@@ -1180,9 +1183,9 @@
         "tests/test_hunter_reviewer_collector.py::test_an_unacknowledged_reviewer_fails_over_on_its_acknowledgement_budget",
         "tests/test_hunter_reviewer_collector.py::test_a_triage_reviewer_is_verified_but_never_becomes_exhaustion_evidence",
         "tests/test_hunter_reviewer_collector.py::test_a_forged_triage_invocation_fails_the_trusted_receipt_closed",
-    "tests/test_hunter_reviewer_collector.py::test_external_blocking_without_actionable_findings_is_unavailable",
-    "tests/test_hunter_reviewer_collector.py::test_api_blocking_result_publishes_actionable_findings",
-    "tests/test_hunter_reviewer_collector.py::test_invalid_api_blocker_fails_over_with_precise_reason"
+        "tests/test_hunter_reviewer_collector.py::test_external_blocking_without_actionable_findings_is_unavailable",
+        "tests/test_hunter_reviewer_collector.py::test_api_blocking_result_publishes_actionable_findings",
+        "tests/test_hunter_reviewer_collector.py::test_invalid_api_blocker_fails_over_with_precise_reason"
       ],
       "lifecycle": "regression-tested",
       "sources": [
