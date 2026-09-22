@@ -840,7 +840,11 @@ def test_a_fallback_review_of_the_exact_head_is_valid_when_codex_is_unavailable(
     document = _review_document(
         authority=_authority(
             authority_type="hunter-guard",
-            attempts=[dict(_attempt()), dict(_attempt("gemini")), dict(_attempt("groq"))],
+            attempts=[
+                dict(_attempt()),
+                dict(_attempt("gemini", ack_timeout_seconds=30)),
+                dict(_attempt("groq", ack_timeout_seconds=30)),
+            ],
         )
     )
 
