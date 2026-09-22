@@ -572,9 +572,9 @@ def test_failover_target_is_the_pools_hosted_authority_not_a_retired_provider():
     assert pool is not None and not error
     assert "opencode" not in {str(agent["id"]) for agent in pool["agents"]}
     assert orchestrator.next_authority_provider() == "codex"
-    # Triage-only reviewers cannot terminate the authority search, so they are
-    # never a failover destination even though they are first in the pool.
-    assert orchestrator.first_pool_provider() == "local-ollama"
+    # Disabled triage-only reviewers are not part of the active pool. Until
+    # trusted health admission exists, authority progression starts at Codex.
+    assert orchestrator.first_pool_provider() == "codex"
     assert orchestrator.next_authority_provider(after="codex") == "copilot"
     assert orchestrator.next_authority_provider(after="gemini") == "groq"
     assert orchestrator.next_authority_provider(after="groq") == str(pool["last_resort"]) == "hunter-guard"
@@ -591,7 +591,7 @@ def test_unreadable_runner_probe_neither_crashes_nor_skips_the_reviewer(monkeypa
     assert orchestrator.runner_state("owner/repo", "token") == "unknown"
     decision = orchestrator.select_provider("owner/repo", "token")
     assert decision.state == "REVIEW_IN_PROGRESS"
-    assert decision.next_provider == "local-ollama"
+    assert decision.next_provider == "codex"
     assert decision.reason == "unknown"
 
 
