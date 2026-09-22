@@ -1211,6 +1211,41 @@
       "sources": [
         "Issue #461 (2026-09-18): PR #473 remediated both authenticated Codex P1 findings (threads r4042982311 and r4042982318) and resolved every review thread, yet stayed permanently MISSING_REVIEW_AUTHORITY because the exact-head collector run 35348625886 had already completed with Codex timed out, Gemini 503 and Groq 403, and no identity existed that could ask any of them again"
       ]
+    },
+    {
+      "id": "DFF-025",
+      "title": "governance-authority-cutover-dependency-cycle",
+      "invariant": "A governance successor may never authorize its own installation and a retiring legacy authority may never be required to understand successor semantics. Production authority transfer must be durable, generation-bound, single-owner, fail-closed, restart-safe and rollback-safe; legacy publication is fenced before successor enablement, and successor publication is rejected before enablement or for a stale generation.",
+      "lifecycle": "locally-enforced",
+      "applicability": {
+        "changed_paths": [
+          "src/hunter/governance_cutover/",
+          "scripts/hunter_governance_cutover_preflight.py",
+          ".github/workflows/",
+          "scripts/hunter_governance_review_v2.py",
+          "scripts/hunter_merge_readiness_v2.py",
+          "scripts/hunter_candidate_admission.py",
+          "scripts/hunter_review_orchestrator.py"
+        ],
+        "rationale": "These surfaces own or consume governance authority and can recreate the cutover deadlock exposed while migrating PR #482."
+      },
+      "prevention": {
+        "mechanism": "scripts/hunter_governance_cutover_preflight.py::validate_cutover_contract is invoked by the Defect Prevention Guard and requires the production cutover state machine, publication fencing, rollback and non-authoritative shadow boundary.",
+        "boundary": "local-pre-push",
+        "guard_reference": "scripts/hunter_governance_cutover_preflight.py::validate_cutover_contract"
+      },
+      "regression_evidence": [
+        "tests/test_governance_cutover_authority.py::test_forward_cutover_and_single_owner",
+        "tests/test_governance_cutover_authority.py::test_duplicate_target_with_different_evidence_is_rejected",
+        "tests/test_governance_cutover_authority.py::test_loaded_record_rejects_incoherent_authority_flags",
+        "tests/test_governance_cutover_lab_parity.py::test_forward_state_sequence_matches_accepted_lab",
+        "tests/test_governance_cutover_shadow.py::test_shadow_records_parity_without_side_effect_surface",
+        "tests/test_governance_cutover_adapters.py::test_adapter_exposes_real_divergence"
+      ],
+      "sources": [
+        "Architecture Lab Phase 4 authority-transfer contract",
+        "PR #482 production migration deadlock, 2026-09-22"
+      ]
     }
   ]
 }

@@ -1,0 +1,1 @@
+{"schema":"hunter.governance-cutover-shadow.v1","authoritative":false,"domains":["governance","candidate-admission","merge-readiness","review-orchestration","reviewer-collection"],"publication_allowed":false,"dispatch_allowed":false,"draft_mutation_allowed":false,"merge_allowed":false}

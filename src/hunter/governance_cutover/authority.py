@@ -157,11 +157,30 @@ class CutoverAuthority:
             for v in (record.implementation_sha, record.policy_sha, record.authorized_by, record.shadow_installed_at)
         ):
             raise ValueError("invalid or corrupt cutover record")
+        new_states = {
+            CutoverState.NEW_AUTHORITY_ENABLED,
+            CutoverState.POST_CUTOVER_VERIFIED,
+            CutoverState.LEGACY_CODE_REMOVABLE,
+            CutoverState.LEGACY_CODE_REMOVED,
+            CutoverState.CUTOVER_COMPLETE,
+        }
+        if record.state in new_states and not record.legacy_fence_complete:
+            raise ValueError("incoherent cutover record: successor active without complete legacy fence")
+        if record.state == CutoverState.LEGACY_AUTHORITY_DISABLED and not record.legacy_fence_complete:
+            raise ValueError("incoherent cutover record: legacy disabled without complete fence")
+        if record.state in new_states and not record.enabled_at:
+            raise ValueError("incoherent cutover record: successor active without enablement time")
         return record
 
     def transition(self, target: CutoverState, evidence: CutoverEvidence | None = None) -> CutoverRecord:
         current = self.load()
         if current.state == target:
+            required = _REQUIRED_KIND.get(target)
+            if required is None:
+                return current
+            proof = self._require_bound(current, evidence, required)
+            if proof not in current.evidence:
+                raise ValueError("idempotent replay evidence does not match accepted transition")
             return current
         if _NEXT.get(current.state) != target:
             raise ValueError(f"illegal transition {current.state.value} -> {target.value}")
