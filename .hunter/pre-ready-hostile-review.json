@@ -365,7 +365,7 @@
         "status": "modified"
       },
       {
-        "blob_sha": "d45482488e13fcc0c2af0fd394c95c9fd11b3d0d",
+        "blob_sha": "93f77c97b06c988a4d125f387ffa2165e4acecb4",
         "path": "docs/DEFECT_REGISTRY.json",
         "previous_path": "",
         "status": "modified"
@@ -401,8 +401,20 @@
         "status": "modified"
       },
       {
+        "blob_sha": "94618518ec11c1164d9ad2c1197b4f6ba7b7333f",
+        "path": "scripts/hunter_candidate_admission.py",
+        "previous_path": "",
+        "status": "modified"
+      },
+      {
         "blob_sha": "0bdf59fd592bf873e2525f6dd9936ae2e5bc3a45",
         "path": "scripts/hunter_defect_prevention_preflight.py",
+        "previous_path": "",
+        "status": "modified"
+      },
+      {
+        "blob_sha": "b6ad58ef9dbe564f76c1511d311dd572f396f5ce",
+        "path": "scripts/hunter_governance_review_v2.py",
         "previous_path": "",
         "status": "modified"
       },
@@ -485,7 +497,7 @@
         "status": "modified"
       },
       {
-        "blob_sha": "f056012f13dd63695f4ab9911f34eff3dd1e02ff",
+        "blob_sha": "65e16a14264edd7269bb034e7d0ac2e029b1fbe1",
         "path": "tests/test_issue_412_prevention_gate.py",
         "previous_path": "",
         "status": "modified"
@@ -503,11 +515,11 @@
         "status": "modified"
       }
     ],
-    "review_target_digest": "f0314099ad25bba4458a4695c0df3586b2b249c00393c91cae52fd7c18810170"
+    "review_target_digest": "56e14c2f0860a56be80e1e3faa6156e999da70df8f808571be150947ae923266"
   },
-  "review_id": "d5f2cbc0426d511b5f90f8059ec4fdaff39d05542cbe777f2ca4d1e6f7a85ef8",
+  "review_id": "c6c4cfe86cd51167b5297d0bf83f4c4a1b1cb429a3dadd4624fb68e1d7db95d0",
   "review_request": {
-    "claims_id": "d5f2cbc0426d511b5f90f8059ec4fdaff39d05542cbe777f2ca4d1e6f7a85ef8",
+    "claims_id": "c6c4cfe86cd51167b5297d0bf83f4c4a1b1cb429a3dadd4624fb68e1d7db95d0",
     "schema": "hunter.review-request.v1"
   },
   "schema": "hunter.pre-ready-hostile-review.v1"
