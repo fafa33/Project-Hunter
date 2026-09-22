@@ -1705,6 +1705,12 @@ def validate_defect_prevention_lifecycle() -> list[str]:
 
     errors.extend(validate_recurring_defect_families(registry, lifecycle))
     errors.extend(validate_review_after_remediation_boundary())
+    try:
+        import hunter_governance_cutover_preflight as cutover_preflight
+
+        errors.extend(cutover_preflight.validate_cutover_contract())
+    except Exception as exc:
+        errors.append(f"governance cutover prevention guard unavailable: {type(exc).__name__}: {exc}")
     errors.extend(validate_code_write_policy())
     errors.extend(validate_reviewer_finding_dispositions())
     errors.extend(validate_historical_defect_backfill())
