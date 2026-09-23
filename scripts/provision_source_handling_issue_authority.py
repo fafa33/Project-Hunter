@@ -94,13 +94,19 @@ AUTHORIZATION_EXPIRY = timedelta(minutes=10)
 # operator path validates the same strict-known antecedents the live edge would.
 PROVENANCE_RESOLVER = production_provenance_resolver
 
-# Exactly the four durable payload categories ``_issue_intake_durable_payload``
-# emits for the Issue Source path, each mapped to its governed category code.
+# Exactly the durable payload categories the Issue Source path emits and the
+# pre-model prompt-bundle persists, matching the canonical INTAKE_FIELD_MAP the
+# Issue Agent execution suite uses.  ``issue_content`` covers raw source bytes
+# and ``pre_model_bundle`` the compiled pre-model persistence envelope; without
+# both entries the registry the issuer resolves would reject the issued payload
+# as an unknown durable field category at dispatch time.
 FIELD_CATEGORY_REGISTRY_FIELD_MAP: dict[str, tuple[str, ...]] = {
+    "issue_content": ("SOURCE_BYTES",),
     "content_derived_ids": ("CONTENT_DERIVED_ID",),
     "locator_urls": ("LOCATOR_URL",),
     "source_derived_text": ("SOURCE_DERIVED_TEXT",),
     "intake_metadata": ("OPERATIONAL_METADATA",),
+    "pre_model_bundle": ("AUDIT_FIELD",),
 }
 
 _REPOSITORY_DEFAULTS: Mapping[str, str] = {

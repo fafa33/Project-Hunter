@@ -11,14 +11,35 @@
 # idempotently bootstraps the persistent /data volume before launching the
 # issuer, so a fresh volume is always initialised at runtime and an
 # already-bootstrapped volume remains deterministic. The bootstrap is the only
-# code path that may consume HUNTER_SOURCE_HANDLING_SIGNING_KEY; the long-running
-# issuer process starts with that variable removed from its environment.
+# code path in the issuer service that may consume
+# HUNTER_SOURCE_HANDLING_SIGNING_KEY; the long-running issuer process starts
+# with that variable removed from its environment.
 #
 # The evidence database is mounted by Railway as a persistent Volume at /data,
 # with HUNTER_ISSUE_AGENT_EVIDENCE_DB expected to point at
 # /data/evidence.sqlite. Volumes and secret/operator variables are applied from
 # Railway's own Volume/Variable configuration (the railway.toml schema does not
 # carry them); see docs/ISSUE_AGENT_ISSUER_DEPLOYMENT.md "Option 3: Railway".
+#
+# Issue #497: a second trusted provisioning Service is created from the same
+# repository and shares the same /data volume. Railway's per-service schema
+# (one Build/Deploy block per file) cannot express two services here, so the
+# provisioner Service is configured in the Railway dashboard with exactly:
+#
+#   build:      same as below (shared build command)
+#   startCommand: "python scripts/railway_provisioner_startup.py"
+#   healthcheckPath: "/healthz"
+#   healthcheckTimeout: 120
+#   volume:     the SAME /data volume the issuer Service mounts
+#   PORT:       8081 (provisioner default)
+#
+# The provisioner is the second and final holder of
+# HUNTER_SOURCE_HANDLING_SIGNING_KEY during its whole lifetime -- it must NOT be
+# scrubbed here (see scripts/railway_provisioner_startup.py) -- and it resolves
+# the same operator-root provenance environment against the shared evidence
+# database. The GitHub Actions trigger POSTs each signed authorization first to
+# the provisioner Service URL (/issue-agent/provision) and only dispatches to the
+# issuer (/issue-agent/authorize) after provisioning succeeds, fail-closed.
 
 [build]
 builder = "RAILPACK"
