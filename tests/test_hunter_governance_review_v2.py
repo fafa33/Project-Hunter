@@ -639,3 +639,36 @@ def test_repository_root_request_has_no_trailing_slash(monkeypatch) -> None:
 
     assert core.request_json("owner/repo", "token", "GET", "") == {"default_branch": "main"}
     assert seen == ["https://api.github.com/repos/owner/repo"]
+
+
+def test_connector_github_unavailable_is_pending_not_semantic_failure(monkeypatch):
+    monkeypatch.setattr(
+        core,
+        "read_pr_commits",
+        lambda *_a: (
+            True,
+            [
+                {
+                    "sha": HEAD,
+                    "commit": {"verification": {"verified": True, "reason": "valid"}},
+                    "committer": {"login": "fafa33"},
+                }
+            ],
+            None,
+        ),
+    )
+    monkeypatch.setattr(core, "read_pr_changed_files", lambda *_a: (True, (), None))
+    monkeypatch.setattr(core, "load_ingress_provenance_policy", lambda: ({"fafa33"}, None, None))
+    monkeypatch.setattr(core, "load_connector_write_ingress_policy", lambda: (True, {"fafa33"}, None))
+    monkeypatch.setattr(
+        core,
+        "verify_connector_ingress_authorization",
+        lambda *_a: core.ConnectorAdmission(
+            ok=False,
+            origin=False,
+            message="Candidate admission blocked: pull-request ref evidence is unavailable (GitHubUnavailable: GET pulls/501 unavailable after 3 attempts).",
+        ),
+    )
+    state, description = core.verify_code_write_ingress_provenance("fafa33/Project-Hunter", "token", HEAD, 501)
+    assert state == "pending"
+    assert "temporarily unavailable" in description
