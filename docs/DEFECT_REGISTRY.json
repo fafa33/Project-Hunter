@@ -521,13 +521,15 @@
         "tests/test_evidence_intelligence_source_handling_f9_contract.py::test_f9_integration_contract_has_no_permissive_retention_default",
         "tests/test_engineering_context_authority.py::test_noncanonical_registry_domains_fail_closed",
         "tests/test_knowledge_extraction_authority.py::test_noncanonical_affected_paths_fail_closed",
-        "tests/test_knowledge_extraction_authority.py::test_wrong_scalar_types_fail_closed"
+        "tests/test_knowledge_extraction_authority.py::test_wrong_scalar_types_fail_closed",
+        "tests/test_canonical_knowledge_integration.py::test_invalid_regression_target_fails_before_registry_candidate"
       ],
       "lifecycle": "regression-tested",
       "sources": [
         "PR #411 independent review",
         "PR #487 Codex review: noncanonical lifecycle/prevention values admitted by EngineeringContextAuthority",
-        "PR #489 Codex review: malformed traversal paths and wrong scalar types admitted by KnowledgeExtractionAuthority"
+        "PR #489 Codex review: malformed traversal paths and wrong scalar types admitted by KnowledgeExtractionAuthority",
+        "PR #491 Codex review: canonical integration admitted unresolved regression evidence targets"
       ]
     },
     {
@@ -625,13 +627,15 @@
         "tests/test_issue_412_prevention_gate.py::test_a_hand_edited_review_is_detected_by_its_own_digest",
         "tests/test_knowledge_extraction_authority.py::test_registry_snapshot_changes_proposal_identity",
         "tests/test_knowledge_extraction_authority.py::test_proposal_preserves_normalized_finding_evidence_for_replay",
-        "tests/test_knowledge_extraction_authority.py::test_executable_seam_has_no_caller_selected_write_path"
+        "tests/test_knowledge_extraction_authority.py::test_executable_seam_has_no_caller_selected_write_path",
+        "tests/test_canonical_knowledge_integration.py::test_reused_provider_event_id_with_changed_evidence_is_rejected_after_first_learning"
       ],
       "lifecycle": "hosted-enforced",
       "sources": [
         "PR #408/#410 independent review",
         "PR #489 Codex review: Knowledge Extraction proposal identity/evidence was not fully replay-bound",
-        "PR #489 Sonar pythonsecurity:S8707: caller-selected --output path could redirect Knowledge Extraction artifact writes"
+        "PR #489 Sonar pythonsecurity:S8707: caller-selected --output path could redirect Knowledge Extraction artifact writes",
+        "PR #491 Codex review: provider event identity was not bound to immutable event content"
       ]
     },
     {
