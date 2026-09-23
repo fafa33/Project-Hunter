@@ -28,6 +28,16 @@ Treat the repository and current GitHub state as the source of truth.
 - If a change adds or materially changes a parser, validator, artifact/workflow guard, or merge-blocking gate, perform an adversarial bypass pass before requesting independent review. Test whether non-semantic/literal/example content can impersonate real structure and whether valid equivalent structure is rejected. Use paired negative/positive fixtures where practical for relevant traps such as fenced or hidden content, quoted/escaped text, negation, partial/duplicate declarations, wrong field/column/scope binding, or unrelated matching structure. This is targeted to guard/parser/gate changes and must not become ceremony for ordinary PRs.
 - Link the relevant Issue/ADR when useful for traceability, but Issue identity, branch names, commit messages, PR titles/bodies, checkboxes, top-level PR comments, reactions, metadata-only edits, and superseded historical runs are not merge authority.
 
+## Persistence and remote checkpoints
+
+- Never treat validated work as complete while it exists only in an ephemeral or local agent workspace.
+- At every meaningful checkpoint, once the required checks for that checkpoint have the expected outcome, persist that exact state before substantial new work: commit it, push the intended branch through the repository pre-push boundary, then verify that the remote branch HEAD exactly matches the local commit SHA.
+- A local commit SHA is not remote proof. After every successful push, read the remote branch ref and compare it with `git rev-parse HEAD`; continue only after the two match.
+- If push fails, stop substantial new work immediately. Preserve and report the exact local commit SHA and the push blocker. Do not bury or replace validated-but-unpushed work with further changes.
+- Never discard, re-clone, or switch away from a workspace containing validated unpushed work unless that exact commit has first been preserved in an owner-approved durable location.
+- Completion for mutable work means the required checks for that checkpoint have the expected outcome, the work is committed, the intended remote branch contains that exact commit, and the remote HEAD has been verified.
+- This persistence rule does not override an explicit owner instruction not to push. In that case, preserve the exact commit locally and report that remote persistence is intentionally withheld.
+
 ## Review and correction
 
 - Treat review findings by materiality. Security, correctness, architecture, persistence/replay, evidence-integrity, and other substantive defects can block.

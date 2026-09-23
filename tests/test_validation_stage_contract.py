@@ -26,6 +26,10 @@ INSTRUCTION_SURFACES = (
     ROOT / "CLAUDE.md",
     ROOT / ".github" / "instructions" / "project-hunter.instructions.md",
 )
+CHECKPOINT_INSTRUCTION_SURFACES = INSTRUCTION_SURFACES + (
+    ROOT / ".github" / "copilot-instructions.md",
+    ROOT / "AGENTS.md",
+)
 
 PIPELINE_ORDER = (
     "focused-development-verification",
@@ -96,6 +100,14 @@ def test_agent_instruction_surfaces_point_at_the_stage_contract() -> None:
     """An agent cannot honour an ownership contract it is never pointed at."""
     for path in INSTRUCTION_SURFACES:
         assert "docs/VALIDATION_STAGE_CONTRACT.md" in path.read_text(encoding="utf-8"), path
+
+
+def test_agent_instruction_surfaces_require_durable_remote_checkpoints() -> None:
+    required = ("checkpoint", "push", "remote", "HEAD")
+    for path in CHECKPOINT_INSTRUCTION_SURFACES:
+        text = path.read_text(encoding="utf-8")
+        assert all(token in text for token in required), path
+        assert "owner" in text and "not to push" in text, path
 
 
 def test_push_safety_lane_is_the_normal_gate_chain_without_the_full_suite() -> None:
