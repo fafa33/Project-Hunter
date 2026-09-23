@@ -66,3 +66,32 @@ def test_oversized_issue_set_fails_closed_without_partial_learning():
     rows = module.collect("fafa33_Project-Hunter", 494, HEAD, BASE, get_json=getter(total=101))
     assert rows[0]["availability"] == "unavailable"
     assert "bounded limit" in rows[0]["message"]
+
+
+def test_analysis_sha_is_revalidated_after_issue_fetch():
+    calls = {"meta": 0}
+
+    def get(url: str):
+        if "project_pull_requests" in url:
+            calls["meta"] += 1
+            sha = HEAD if calls["meta"] == 1 else "c" * 40
+            return {"pullRequests": [{"key": "494", "commit": {"sha": sha}}]}
+        return {"issues": [], "total": 0}
+
+    rows = module.collect("fafa33_Project-Hunter", 494, HEAD, BASE, get_json=get)
+    assert calls["meta"] == 2
+    assert rows[0]["availability"] == "unavailable"
+    assert "changed during collection" in rows[0]["message"]
+
+
+def test_inconsistent_issue_count_fails_closed():
+    rows = module.collect("fafa33_Project-Hunter", 494, HEAD, BASE, get_json=getter(issues=[], total=1))
+    assert rows[0]["availability"] == "unavailable"
+    assert "count is inconsistent" in rows[0]["message"]
+
+
+def test_actual_issue_list_cannot_exceed_bound_even_if_total_lies():
+    issues = [{"key": str(i)} for i in range(module.MAX_ISSUES + 1)]
+    rows = module.collect("fafa33_Project-Hunter", 494, HEAD, BASE, get_json=getter(issues=issues, total=1))
+    assert rows[0]["availability"] == "unavailable"
+    assert "bounded limit" in rows[0]["message"]

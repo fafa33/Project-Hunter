@@ -67,6 +67,25 @@ def collect(project: str, pr: int, head: str, base: str, *, get_json: JsonGetter
         issues_payload = get_json(
             _url("issues/search", componentKeys=project, pullRequest=pr, resolved="false", ps=MAX_ISSUES)
         )
+        # Close the TOCTOU window: a newer Sonar analysis can replace the PR
+        # issue view between the first metadata read and issues/search.
+        refreshed = get_json(_url("project_pull_requests/list", project=project))
+        refreshed_prs = refreshed.get("pullRequests") if isinstance(refreshed, dict) else None
+        refreshed_match = (
+            next(
+                (item for item in refreshed_prs if isinstance(item, dict) and str(item.get("key")) == str(pr)),
+                None,
+            )
+            if isinstance(refreshed_prs, list)
+            else None
+        )
+        refreshed_commit = (
+            refreshed_match.get("commit")
+            if isinstance(refreshed_match, dict) and isinstance(refreshed_match.get("commit"), dict)
+            else {}
+        )
+        if not refreshed_match or refreshed_commit.get("sha") != head:
+            return _unavailable(pr, head, base, "Sonar analysis changed during collection")
     except Exception:  # noqa: BLE001 -- optional external sensor must degrade to bounded unavailability evidence
         return _unavailable(pr, head, base, "SonarQube Cloud is unavailable")
 
@@ -74,8 +93,10 @@ def collect(project: str, pr: int, head: str, base: str, *, get_json: JsonGetter
     total = issues_payload.get("total") if isinstance(issues_payload, dict) else None
     if not isinstance(issues, list) or type(total) is not int or total < 0:
         return _unavailable(pr, head, base, "Sonar issue payload is malformed")
-    if total > MAX_ISSUES:
+    if total > MAX_ISSUES or len(issues) > MAX_ISSUES:
         return _unavailable(pr, head, base, f"Sonar issue set exceeds bounded limit {MAX_ISSUES}")
+    if len(issues) != total:
+        return _unavailable(pr, head, base, "Sonar issue count is inconsistent")
 
     observations: list[dict[str, Any]] = []
     for item in issues:
