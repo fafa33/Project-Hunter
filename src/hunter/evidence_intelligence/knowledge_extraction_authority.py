@@ -50,6 +50,8 @@ class KnowledgeExtractionProposal:
     finding_id: str
     source_pr: int
     reviewed_head_sha: str
+    registry_digest: str
+    finding: KnowledgeFinding
     canonical_family_id: str | None
     canonical_write_authorized: bool
     rationale: str
@@ -59,6 +61,17 @@ def _tuple_of_strings(value: Any, field: str) -> tuple[str, ...]:
     if not isinstance(value, list) or any(not isinstance(item, str) for item in value):
         raise KnowledgeExtractionError(f"{field} must be a list of strings")
     return tuple(value)
+
+
+def _exact_scalar(raw: dict[str, Any], field: str, expected: type, *, optional: bool = False) -> Any:
+    if optional and raw.get(field) is None:
+        return None
+    if field not in raw:
+        raise KnowledgeExtractionError(f"finding input missing required field: {field}")
+    value = raw[field]
+    if type(value) is not expected:
+        raise KnowledgeExtractionError(f"{field} has invalid type")
+    return value
 
 
 def finding_from_dict(raw: Any) -> KnowledgeFinding:
@@ -85,23 +98,20 @@ def finding_from_dict(raw: Any) -> KnowledgeFinding:
     unknown = sorted(set(raw) - allowed)
     if unknown:
         raise KnowledgeExtractionError(f"finding input has unknown fields: {', '.join(unknown)}")
-    try:
-        return KnowledgeFinding(
-            source_kind=raw["source_kind"],
-            finding_id=raw["finding_id"],
-            source_pr=raw["source_pr"],
-            reviewed_head_sha=raw["reviewed_head_sha"],
-            reviewed_base_sha=raw["reviewed_base_sha"],
-            reviewer=raw["reviewer"],
-            classification=raw["classification"],
-            invariant=raw.get("invariant", ""),
-            affected_paths=_tuple_of_strings(raw.get("affected_paths", []), "affected_paths"),
-            fix_reference=raw.get("fix_reference", ""),
-            regression_evidence=_tuple_of_strings(raw.get("regression_evidence", []), "regression_evidence"),
-            claimed_family_id=raw.get("claimed_family_id"),
-        )
-    except KeyError as exc:
-        raise KnowledgeExtractionError(f"finding input missing required field: {exc.args[0]}") from exc
+    return KnowledgeFinding(
+        source_kind=_exact_scalar(raw, "source_kind", str),
+        finding_id=_exact_scalar(raw, "finding_id", str),
+        source_pr=_exact_scalar(raw, "source_pr", int),
+        reviewed_head_sha=_exact_scalar(raw, "reviewed_head_sha", str),
+        reviewed_base_sha=_exact_scalar(raw, "reviewed_base_sha", str),
+        reviewer=_exact_scalar(raw, "reviewer", str),
+        classification=_exact_scalar(raw, "classification", str),
+        invariant=_exact_scalar(raw, "invariant", str),
+        affected_paths=_tuple_of_strings(raw.get("affected_paths"), "affected_paths"),
+        fix_reference=_exact_scalar(raw, "fix_reference", str),
+        regression_evidence=_tuple_of_strings(raw.get("regression_evidence"), "regression_evidence"),
+        claimed_family_id=_exact_scalar(raw, "claimed_family_id", str, optional=True),
+    )
 
 
 class KnowledgeExtractionAuthority:
@@ -112,22 +122,21 @@ class KnowledgeExtractionAuthority:
 
     def extract(self, finding: KnowledgeFinding) -> KnowledgeExtractionProposal:
         self._validate_finding(finding)
-        proposal_id = self._proposal_id(finding)
+        families, registry_digest = self._load_families()
 
         if finding.classification in EXCLUDED_CLASSIFICATIONS:
             return self._proposal(
                 finding,
-                proposal_id,
+                registry_digest,
                 "excluded",
                 None,
                 "classification is explicitly excluded from canonical defect learning",
             )
 
-        families = self._load_families()
         if finding.claimed_family_id is None:
             return self._proposal(
                 finding,
-                proposal_id,
+                registry_digest,
                 "candidate-new-family",
                 None,
                 "confirmed finding has no deterministically asserted existing-family mapping",
@@ -137,7 +146,7 @@ class KnowledgeExtractionAuthority:
         if family is None:
             return self._proposal(
                 finding,
-                proposal_id,
+                registry_digest,
                 "ambiguous",
                 None,
                 "claimed family does not exist in the canonical registry",
@@ -146,7 +155,7 @@ class KnowledgeExtractionAuthority:
         if not self._matches(finding, family):
             return self._proposal(
                 finding,
-                proposal_id,
+                registry_digest,
                 "ambiguous",
                 None,
                 "claimed family conflicts with canonical invariant or applicability",
@@ -154,13 +163,29 @@ class KnowledgeExtractionAuthority:
 
         return self._proposal(
             finding,
-            proposal_id,
+            registry_digest,
             "existing-family",
             finding.claimed_family_id,
             "canonical invariant and applicability deterministically match the claimed family",
         )
 
     def _validate_finding(self, finding: KnowledgeFinding) -> None:
+        scalar_types = {
+            "source_kind": (finding.source_kind, str),
+            "finding_id": (finding.finding_id, str),
+            "source_pr": (finding.source_pr, int),
+            "reviewed_head_sha": (finding.reviewed_head_sha, str),
+            "reviewed_base_sha": (finding.reviewed_base_sha, str),
+            "reviewer": (finding.reviewer, str),
+            "classification": (finding.classification, str),
+            "invariant": (finding.invariant, str),
+            "fix_reference": (finding.fix_reference, str),
+        }
+        for field, (value, expected) in scalar_types.items():
+            if type(value) is not expected:
+                raise KnowledgeExtractionError(f"{field} has invalid type")
+        if finding.claimed_family_id is not None and type(finding.claimed_family_id) is not str:
+            raise KnowledgeExtractionError("claimed_family_id has invalid type")
         if finding.source_kind not in SOURCE_KINDS:
             raise KnowledgeExtractionError("source_kind must be canonical")
         if not finding.finding_id.strip():
@@ -187,16 +212,20 @@ class KnowledgeExtractionAuthority:
 
         if not finding.invariant.strip():
             raise KnowledgeExtractionError("confirmed finding invariant is required")
-        if not finding.affected_paths or any(not p.strip() for p in finding.affected_paths):
+        if not finding.affected_paths or any(type(p) is not str or not p.strip() for p in finding.affected_paths):
             raise KnowledgeExtractionError("confirmed finding affected_paths are required")
+        for path in finding.affected_paths:
+            if not self._is_canonical_repo_path(path):
+                raise KnowledgeExtractionError("affected_paths must be canonical repository-relative paths")
         if not finding.fix_reference.strip():
             raise KnowledgeExtractionError("confirmed finding fix_reference is required")
         if not finding.regression_evidence or any(not r.strip() for r in finding.regression_evidence):
             raise KnowledgeExtractionError("confirmed finding regression_evidence is required")
 
-    def _load_families(self) -> dict[str, dict[str, Any]]:
+    def _load_families(self) -> tuple[dict[str, dict[str, Any]], str]:
         try:
-            raw = json.loads(self._registry_path.read_text(encoding="utf-8"))
+            raw_bytes = self._registry_path.read_bytes()
+            raw = json.loads(raw_bytes)
         except (OSError, json.JSONDecodeError) as exc:
             raise KnowledgeExtractionError("canonical registry is unreadable") from exc
         families = raw.get("families") if isinstance(raw, dict) else None
@@ -232,7 +261,8 @@ class KnowledgeExtractionAuthority:
             if not isinstance(prevention, dict) or prevention.get("boundary") not in CANONICAL_PREVENTION_BOUNDARIES:
                 raise KnowledgeExtractionError(f"{family_id}: prevention boundary must be canonical")
             result[family_id] = family
-        return result
+        registry_digest = hashlib.sha256(raw_bytes).hexdigest()
+        return result, registry_digest
 
     @staticmethod
     def _normalize_invariant(value: str) -> str:
@@ -246,17 +276,37 @@ class KnowledgeExtractionAuthority:
         return any(cls._path_intersects(path, selector) for path in finding.affected_paths for selector in selectors)
 
     @staticmethod
+    def _is_canonical_repo_path(path: str) -> bool:
+        if not path or path != path.strip() or path.startswith(("/", "./", "../")):
+            return False
+        if "//" in path or "\\" in path:
+            return False
+        parts = path.split("/")
+        return all(part not in {"", ".", ".."} for part in parts)
+
+    @staticmethod
     def _path_intersects(path: str, selector: str) -> bool:
-        path = path.strip().lstrip("./")
-        selector = selector.strip().lstrip("./")
         if selector.endswith("/"):
             return path.startswith(selector)
         return path == selector or path.startswith(selector + "/")
 
     @staticmethod
-    def _proposal_id(finding: KnowledgeFinding) -> str:
+    def _proposal_id(
+        finding: KnowledgeFinding,
+        registry_digest: str,
+        outcome: str,
+        family_id: str | None,
+        rationale: str,
+    ) -> str:
         payload = json.dumps(
-            asdict(finding),
+            {
+                "schema_version": SCHEMA_VERSION,
+                "finding": asdict(finding),
+                "registry_digest": registry_digest,
+                "outcome": outcome,
+                "canonical_family_id": family_id,
+                "rationale": rationale,
+            },
             sort_keys=True,
             separators=(",", ":"),
             ensure_ascii=True,
@@ -266,11 +316,12 @@ class KnowledgeExtractionAuthority:
     @staticmethod
     def _proposal(
         finding: KnowledgeFinding,
-        proposal_id: str,
+        registry_digest: str,
         outcome: Literal["existing-family", "candidate-new-family", "excluded", "ambiguous"],
         family_id: str | None,
         rationale: str,
     ) -> KnowledgeExtractionProposal:
+        proposal_id = KnowledgeExtractionAuthority._proposal_id(finding, registry_digest, outcome, family_id, rationale)
         return KnowledgeExtractionProposal(
             schema_version=SCHEMA_VERSION,
             proposal_id=proposal_id,
@@ -278,6 +329,8 @@ class KnowledgeExtractionAuthority:
             finding_id=finding.finding_id,
             source_pr=finding.source_pr,
             reviewed_head_sha=finding.reviewed_head_sha,
+            registry_digest=registry_digest,
+            finding=finding,
             canonical_family_id=family_id,
             canonical_write_authorized=False,
             rationale=rationale,

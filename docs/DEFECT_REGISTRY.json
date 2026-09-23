@@ -519,12 +519,15 @@
       "regression_evidence": [
         "tests/test_source_handling_review_regressions.py::test_fact_publication_requires_complete_explicit_availability_state",
         "tests/test_evidence_intelligence_source_handling_f9_contract.py::test_f9_integration_contract_has_no_permissive_retention_default",
-        "tests/test_engineering_context_authority.py::test_noncanonical_registry_domains_fail_closed"
+        "tests/test_engineering_context_authority.py::test_noncanonical_registry_domains_fail_closed",
+        "tests/test_knowledge_extraction_authority.py::test_noncanonical_affected_paths_fail_closed",
+        "tests/test_knowledge_extraction_authority.py::test_wrong_scalar_types_fail_closed"
       ],
       "lifecycle": "regression-tested",
       "sources": [
         "PR #411 independent review",
-        "PR #487 Codex review: noncanonical lifecycle/prevention values admitted by EngineeringContextAuthority"
+        "PR #487 Codex review: noncanonical lifecycle/prevention values admitted by EngineeringContextAuthority",
+        "PR #489 Codex review: malformed traversal paths and wrong scalar types admitted by KnowledgeExtractionAuthority"
       ]
     },
     {
@@ -619,11 +622,14 @@
       },
       "regression_evidence": [
         "tests/test_connector_admission_channel.py::test_forged_receipt_fails",
-        "tests/test_issue_412_prevention_gate.py::test_a_hand_edited_review_is_detected_by_its_own_digest"
+        "tests/test_issue_412_prevention_gate.py::test_a_hand_edited_review_is_detected_by_its_own_digest",
+        "tests/test_knowledge_extraction_authority.py::test_registry_snapshot_changes_proposal_identity",
+        "tests/test_knowledge_extraction_authority.py::test_proposal_preserves_normalized_finding_evidence_for_replay"
       ],
       "lifecycle": "hosted-enforced",
       "sources": [
-        "PR #408/#410 independent review"
+        "PR #408/#410 independent review",
+        "PR #489 Codex review: Knowledge Extraction proposal identity/evidence was not fully replay-bound"
       ]
     },
     {
