@@ -59,7 +59,11 @@ def test_unknown_field_fails_closed():
 
 
 def test_duplicate_delivery_deterministic():
-    assert ingest_event("sonar", payload()) == ingest_event("sonar", payload())
+    event = payload()
+    first = ingest_event("sonar", event)
+    second = ingest_event("sonar", dict(event))
+    assert first == second
+    assert first.finding_id == second.finding_id
 
 
 def test_provider_drift_rejected():
