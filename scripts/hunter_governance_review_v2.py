@@ -1022,6 +1022,11 @@ def verify_code_write_ingress_provenance(
         repository, token, head_sha, pr_number, changed_files, range_commits
     )
     if not connector.ok:
+        if "GitHubUnavailable:" in connector.message:
+            return (
+                "pending",
+                "Candidate admission is waiting: GitHub evidence is temporarily unavailable after bounded retries.",
+            )
         return "failure", connector.message
 
     if connector.origin:

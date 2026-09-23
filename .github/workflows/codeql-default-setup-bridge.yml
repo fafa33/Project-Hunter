@@ -37,16 +37,17 @@ jobs:
           echo "Waiting for CodeQL default-setup analysis for head=${HEAD_SHA} merge=${merge_sha}"
 
           for attempt in $(seq 1 60); do
-            analyses="$(gh api --method GET "repos/${GH_REPO}/code-scanning/analyses" \
-              -f pr="${PR_NUMBER}" \
-              -f tool_name="CodeQL" \
-              -f per_page=100)"
+            if ! analyses="$(gh api --method GET "repos/${GH_REPO}/code-scanning/analyses"               -f pr="${PR_NUMBER}" -f tool_name="CodeQL" -f per_page=100 2>/dev/null)"; then
+              echo "CodeQL API unavailable on attempt ${attempt}/60; retrying."
+              sleep 10
+              continue
+            fi
 
-            current="$(jq -c \
-              --arg head "${HEAD_SHA}" \
-              --arg merge "${merge_sha}" \
-              '[.[] | select((.tool.name // "") == "CodeQL") | select(.commit_sha == $head or .commit_sha == $merge)] | sort_by(.created_at) | reverse | .[0] // empty' \
-              <<<"${analyses}")"
+            if ! current="$(jq -c               --arg head "${HEAD_SHA}" --arg merge "${merge_sha}"               '[.[] | select((.tool.name // "") == "CodeQL") | select(.commit_sha == $head or .commit_sha == $merge)] | sort_by(.created_at) | reverse | .[0] // empty'               <<<"${analyses}" 2>/dev/null)"; then
+              echo "CodeQL API returned malformed analysis data on attempt ${attempt}/60; retrying."
+              sleep 10
+              continue
+            fi
 
             if [ -n "${current}" ]; then
               error="$(jq -r '.error // ""' <<<"${current}")"
