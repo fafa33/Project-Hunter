@@ -68,7 +68,7 @@ def ready_checks(repository: str, token: str, head_sha: str, mergeable: bool | N
             readiness.StaticReadinessObservation(
                 draft=False,
                 mergeable=mergeable,
-                review_authority=("success", "admission review already verified"),
+                review_authority=("pending", "external LLM review is optional defense-in-depth"),
                 check_runs=tuple(checks),
                 governance_status=latest,
             )
@@ -116,9 +116,9 @@ def enforce_candidate_admission(
         print(f"PR #{pr_number} admitted for review: {description}")
         return 0
     if admission_state == "pending":
-        # Review orchestration is asynchronous. Pending grants no merge authority,
-        # but re-drafting a Ready PR would disable Ready-only reviewers and create
-        # a lifecycle deadlock. Merge Readiness remains fail-closed until authority lands.
+        # Pending means a deterministic prerequisite is still in flight. External
+        # LLM reviewer availability is diagnostic/defense-in-depth and does not
+        # create this state or grant merge authority.
         print(f"PR #{pr_number} candidate admission is pending: {description}")
         return 0
 

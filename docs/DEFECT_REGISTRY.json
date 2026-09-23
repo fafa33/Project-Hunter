@@ -1292,6 +1292,36 @@
         "Architecture Lab Phase 4 authority-transfer contract",
         "PR #482 production migration deadlock, 2026-09-22"
       ]
+    },
+    {
+      "id": "DFF-026",
+      "title": "external-reviewer-availability-cannot-deadlock-merge-authority",
+      "invariant": "External LLM reviewers are optional defense-in-depth, never a mandatory availability dependency for push, candidate admission, governance success, or merge readiness. Provider absence, quota exhaustion, rate limits, timeouts, or stale/missing optional review evidence cannot block an otherwise deterministically verified exact head. Authenticated blocking findings that do exist remain fail-closed until resolved through canonical findings, review threads, or CHANGES_REQUESTED. Human approval remains required for merge.",
+      "lifecycle": "locally-enforced",
+      "applicability": {
+        "changed_paths": [
+          "docs/CODE_WRITE_POLICY.json",
+          "scripts/hunter_pre_push.py",
+          "scripts/hunter_candidate_admission.py",
+          "scripts/hunter_governance_review_v2.py",
+          "scripts/hunter_merge_readiness_v2.py"
+        ],
+        "rationale": "These surfaces can accidentally turn an optional external reviewer into a mandatory liveness dependency and recreate the multi-PR deadlock observed from PR #471 through PR #485."
+      },
+      "prevention": {
+        "mechanism": "CODE_WRITE_POLICY declares deterministic governance as merge authority; Defect Prevention rejects mandatory external-review authority; merge readiness ignores reviewer availability while preserving canonical finding blockers; pre-push never blocks on optional review freshness.",
+        "boundary": "local-pre-push",
+        "guard_reference": "scripts/hunter_defect_prevention_preflight.py::validate_code_write_policy"
+      },
+      "regression_evidence": [
+        "tests/test_code_write_policy.py::test_code_write_policy_declares_codex_primary_with_a_recorded_reason_fallback",
+        "tests/test_exact_head_review_authority.py::test_merge_readiness_external_reviewer_unavailability_does_not_block_verified_head",
+        "tests/test_exact_head_review_authority.py::test_merge_readiness_existing_blocking_review_finding_still_blocks_without_provider_authority",
+        "tests/test_hunter_merge_readiness_v2.py::test_no_codex_review_on_current_head_blocks"
+      ],
+      "sources": [
+        "PR #485, 2026-09-23: external reviewer quota/outage states were identified as a liveness dependency that could prevent otherwise verified PRs from reaching merge readiness."
+      ]
     }
   ]
 }

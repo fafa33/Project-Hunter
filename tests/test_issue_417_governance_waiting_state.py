@@ -327,7 +327,6 @@ def test_malformed_status_evidence_is_failure(monkeypatch: pytest.MonkeyPatch) -
     [
         pytest.param("read_head_preflight_mode", ("tests-first-red", None), id="tests-first-red-head"),
         pytest.param("verify_code_write_ingress_provenance", ("failure", "unsigned commit"), id="ingress-defect"),
-        pytest.param("verify_pre_ready_hostile_review", ("failure", "review is stale"), id="stale-review"),
     ],
 )
 def test_a_real_blocker_alongside_an_active_run_is_failure_not_waiting(

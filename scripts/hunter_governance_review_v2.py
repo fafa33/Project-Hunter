@@ -2256,9 +2256,17 @@ def candidate_admission(repository: str, token: str, head_sha: str, pr_number: i
     if ingress_state != "success":
         return ingress_state, ingress_message
 
+    # External LLM review is optional defense-in-depth. Candidate admission is
+    # governed by deterministic exact-head provenance/preflight evidence. Review
+    # findings remain blockers through canonical dispositions/threads, but
+    # provider quota, outage, or absence must never deadlock admission.
     review_state, review_message = verify_pre_ready_hostile_review(repository, token, head_sha, pr_number)
     if review_state != "success":
-        return review_state, review_message
+        blocking_review = review_state == "failure" and (
+            "BLOCKING_FINDINGS" in review_message or "MALFORMED_REVIEW" in review_message
+        )
+        if blocking_review:
+            return review_state, review_message
 
     if touches_protected_preflight:
         if pr_number is None:

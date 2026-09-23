@@ -798,16 +798,18 @@ def validate_code_write_policy() -> list[str]:
     ready_requires = str(progression.get("ready_requires") or "")
     if "exact-head" not in ready_requires or "Pre-PR Preflight" not in ready_requires:
         errors.append("Ready progression must require successful exact-head Pre-PR Preflight")
-    if progression.get("requires_current_head_review_authority") is not True:
-        errors.append("Ready progression must require current exact-head review authority")
+    if progression.get("requires_current_head_review_authority") is not False:
+        errors.append("Ready progression must not require an external exact-head LLM review authority")
+    if progression.get("external_llm_review_required_for_merge") is not False:
+        errors.append("external LLM review must be optional defense-in-depth, not merge authority")
     if progression.get("requires_current_head_codex_review") is True:
         errors.append("Ready progression must not hard-code Codex when governed failover is enabled")
     authority = progression.get("review_authority")
     if not isinstance(authority, dict):
         errors.append("Ready progression must declare its review-authority model")
     else:
-        if authority.get("primary") != "codex":
-            errors.append("the review-authority model must declare Codex as the primary review authority")
+        if authority.get("primary") != "deterministic-governance":
+            errors.append("deterministic governance must be the primary merge authority")
         if authority.get("fast_fallback") != "disabled-until-health-gated":
             errors.append("triage-only local review must remain disabled until trusted health admission exists")
         reviewer_pool = authority.get("reviewer_pool")
@@ -820,9 +822,8 @@ def validate_code_write_policy() -> list[str]:
         ):
             errors.append("local-ollama must be triage-only and disabled until trusted health admission exists")
         reviewer_pool = authority.get("reviewer_pool")
-        last_resort = reviewer_pool.get("last_resort") if isinstance(reviewer_pool, dict) else None
-        if authority.get("fallback") != last_resort:
-            errors.append("the review-authority fallback must match reviewer_pool.last_resort")
+        if authority.get("fallback") != "none-required":
+            errors.append("external reviewer fallback must not be required for merge authority")
         if authority.get("fallback_requires_recorded_reason") is not True:
             errors.append(
                 "fallback review authority must require a recorded reason and never skip the ordered reviewer pool silently"

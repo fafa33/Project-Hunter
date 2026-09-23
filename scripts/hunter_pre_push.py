@@ -371,82 +371,31 @@ def _governing_issue_criteria(updates: Iterable[tuple[str, str, str]]) -> tuple[
 
 
 def require_current_review_request_if_present(head_sha: str, updates: Iterable[tuple[str, str, str]]) -> None:
-    """Reject a stale review request instead of silently pushing dead orchestration.
+    """Do not make optional external-review freshness a push prerequisite.
 
-    Draft work may legitimately have no request yet. Once a request exists,
-    however, trusted orchestration will consume it only if its claims still bind
-    the current governed range. Letting a stale request through merely creates a
-    deterministic MISSING_REVIEW_AUTHORITY cycle with no collector dispatch.
+    Exact-head review requests remain useful defense-in-depth evidence, but a
+    stale/missing request is regenerated opportunistically by trusted review
+    orchestration. Provider/request availability must never deadlock code push
+    or deterministic merge authority.
     """
-
-    document = review.read_review_document()
-    if not isinstance(document, dict) or not isinstance(document.get("review_request"), dict):
-        return
-    base = provenance.resolve_governed_base(head_sha)
-    issue, issue_criteria, criteria_reason = _governing_issue_criteria(updates)
-    if criteria_reason or issue_criteria is None:
-        raise RuntimeError(
-            "existing pre-ready review request cannot be proven current: "
-            + (criteria_reason or f"Issue #{issue} criteria unavailable")
-        )
-    families, family_error = review.load_families()
-    if family_error:
-        raise RuntimeError(f"existing pre-ready review request cannot be proven current: {family_error}")
-    verdict = review.verify_review_request(
-        document,
-        base_sha=base,
-        changes=review.local_changes(base, head_sha),
-        families=families,
-        issue_criteria=issue_criteria,
-        head_sha=head_sha,
-    )
-    if not verdict.ok:
-        raise RuntimeError(
-            f"stale pre-ready review request ({verdict.state}: {verdict.reason}); "
-            "regenerate it for the current governed range before pushing"
-        )
+    return
 
 
 def report_pre_ready_review_state(head_sha: str, updates: Iterable[tuple[str, str, str]]) -> None:
-    """Report, without blocking, whether this head could stand as Ready.
-
-    Pushing an incomplete candidate to a Draft pull request is ordinary work, so
-    the push boundary does not block on review state. Ready does: trusted
-    candidate admission refuses an unreviewed or stale head. Saying so here is
-    what stops "mark Ready" from being the moment the first hostile review is
-    discovered to be missing.
-
-    The report is faithful to hosted Candidate Admission: a head is READY-ELIGIBLE
-    only when the review also covers every acceptance criterion the governing
-    Issue defines, derived from GitHub the same way the hosted gate derives it and
-    bound to the pushed remote branch ref rather than the checked-out local branch
-    name. When the governing Issue's criteria cannot be proven -- including when
-    the review evidence is unreadable or structurally invalid -- or when the
-    review does not cover them, the report is DRAFT-ONLY -- never READY-ELIGIBLE
-    on a review the hosted gate would reject.
-    """
-
+    """Report optional external-review freshness without gating a push."""
     try:
         base = provenance.resolve_governed_base(head_sha)
-    except provenance.GitEvidenceUnavailable as exc:
-        print(f"[Hunter Pre-Push] NOTE: pre-ready review state is unknown ({exc})")
+        _issue, issue_criteria, _criteria_reason = _governing_issue_criteria(updates)
+        verdict = review.verify_local(base, head_sha, issue_criteria=issue_criteria)
+    except Exception as exc:
+        print(f"[Hunter Pre-Push] NOTE: optional external review state is unknown ({exc})")
         return
-    issue, issue_criteria, criteria_reason = _governing_issue_criteria(updates)
-    if issue_criteria is None and criteria_reason:
-        print(
-            f"[Hunter Pre-Push] DRAFT-ONLY: governing Issue acceptance-criteria coverage is unverifiable "
-            f"({criteria_reason}). Ready is blocked unless the exact-head hostile review covers every "
-            "acceptance criterion the governing Issue defines."
-        )
-        return
-    verdict = review.verify_local(base, head_sha, issue_criteria=issue_criteria)
     if verdict.ok:
-        print(f"[Hunter Pre-Push] READY-ELIGIBLE: {verdict.reason}")
+        print(f"[Hunter Pre-Push] OPTIONAL-REVIEW-CURRENT: {verdict.reason}")
     else:
         print(
-            f"[Hunter Pre-Push] DRAFT-ONLY: pre-ready hostile review is {verdict.state} ({verdict.reason}). "
-            "Ready is blocked until it is recorded against this exact head and covers every acceptance "
-            "criterion the governing Issue defines."
+            f"[Hunter Pre-Push] NOTE: optional external review is {verdict.state} ({verdict.reason}); "
+            "this does not block push or deterministic merge authority."
         )
 
 

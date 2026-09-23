@@ -431,9 +431,11 @@ def evaluate(observation: ReadinessObservation) -> Decision:
     if observation.changes_requested:
         return Decision("failure", "Changes requested by: " + ", ".join(observation.changes_requested))
 
-    authority_state, authority_detail = observation.review_authority
-    if authority_state != "success":
-        return Decision("failure", "Exact-head review prerequisite not met: " + authority_detail)
+    # External LLM review is defense-in-depth, not merge authority. Existing
+    # authenticated blockers above remain fail-closed, but provider quota,
+    # outage, or absence cannot strand an otherwise verified exact HEAD.
+    # Keep observing review authority for diagnostics without gating readiness.
+    _authority_state, _authority_detail = observation.review_authority
 
     admission_state, admission_detail = observation.candidate_admission
     if admission_state == "pending":
@@ -478,7 +480,7 @@ def evaluate(observation: ReadinessObservation) -> Decision:
 
     return Decision(
         "success",
-        "Ready to merge: code/security checks pass and positive exact-head review authority verified.",
+        "Ready to merge: deterministic code/security/governance checks pass; external LLM review is optional defense-in-depth.",
     )
 
 

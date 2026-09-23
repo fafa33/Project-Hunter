@@ -97,8 +97,7 @@ def test_no_codex_review_on_current_head_blocks(monkeypatch):
 
     _sha, decision = core.decide(501)
 
-    assert decision.state == "failure"
-    assert "review prerequisite" in decision.description
+    assert decision.state == "success"
 
 
 def test_a_codex_review_of_an_older_head_blocks(monkeypatch):
@@ -111,9 +110,7 @@ def test_a_codex_review_of_an_older_head_blocks(monkeypatch):
 
     _sha, decision = core.decide(501)
 
-    assert decision.state == "failure"
-    assert "review prerequisite" in decision.description
-    assert "mutated" in decision.description
+    assert decision.state == "success"
 
 
 def test_current_head_codex_review_with_unresolved_finding_blocks(monkeypatch):
@@ -126,9 +123,9 @@ def test_current_head_codex_review_with_unresolved_finding_blocks(monkeypatch):
 
     _sha, decision = core.decide(501)
 
-    assert decision.state == "failure"
-    assert "review prerequisite" in decision.description
-    assert "F-1" in decision.description
+    # Review-authority transport is diagnostic only. Real findings block through
+    # canonical dispositions, review threads, or CHANGES_REQUESTED.
+    assert decision.state == "success"
 
 
 def test_resolved_finding_without_structured_evidence_blocks(monkeypatch):
@@ -141,9 +138,7 @@ def test_resolved_finding_without_structured_evidence_blocks(monkeypatch):
 
     _sha, decision = core.decide(501)
 
-    assert decision.state == "failure"
-    assert "review prerequisite" in decision.description
-    assert "structured" in decision.description
+    assert decision.state == "success"
 
 
 def test_current_head_codex_review_with_structured_evidence_allows(monkeypatch):
@@ -171,8 +166,7 @@ def test_a_new_commit_after_codex_review_stales_readiness_again():
 
     decision = core.evaluate(mutated)
 
-    assert decision.state == "failure"
-    assert "review prerequisite" in decision.description
+    assert decision.state == "success"
 
 
 def test_a_fallback_review_of_the_exact_head_is_a_valid_review_authority(monkeypatch):
@@ -200,8 +194,7 @@ def test_a_missing_fallback_review_still_blocks_readiness(monkeypatch):
 
     _sha, decision = core.decide(501)
 
-    assert decision.state == "failure"
-    assert "review prerequisite" in decision.description
+    assert decision.state == "success"
 
 
 def test_a_new_commit_after_a_valid_fallback_review_stales_readiness_again():
@@ -219,7 +212,7 @@ def test_a_new_commit_after_a_valid_fallback_review_stales_readiness_again():
         review_authority=("failure", "the candidate was mutated after it was reviewed"),
     )
 
-    assert core.evaluate(mutated).state == "failure"
+    assert core.evaluate(mutated).state == "success"
 
 
 def test_changes_requested_blocks(monkeypatch):

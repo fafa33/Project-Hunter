@@ -25,13 +25,13 @@
   },
   "review_progression": {
     "unadmitted_head_state": "draft",
-    "ready_requires": "successful exact-head Pre-PR Preflight, positive substantive exact-head review authority, complete structured evidence, no unresolved blockers or threads, and green required code/security/governance checks",
+    "ready_requires": "successful exact-head Pre-PR Preflight, complete structured evidence, no unresolved validated findings or review threads, and green required code/security/governance checks; external LLM review is defense-in-depth and is not required for merge readiness",
     "auto_ready": false,
     "requires_current_head_codex_review": false,
     "review_authority": {
-      "primary": "codex",
-      "fallback": "hunter-guard",
-      "fallback_only_when_unavailable": "Local triage runs first when healthy; authority then fails over Codex -> Gemini -> Groq, one attempt each with a 300-second maximum. hunter-guard remains last resort only after authenticated exhaustion of the enabled authority pool.",
+      "primary": "deterministic-governance",
+      "fallback": "none-required",
+      "fallback_only_when_unavailable": "External reviewers are opportunistic defense-in-depth. Provider absence, quota exhaustion, rate limits, or outage never blocks merge readiness. Any authenticated blocking finding that exists must still be resolved.",
       "fallback_requires_recorded_reason": true,
       "fallback_requires_snapshot_gates": [
         "governance=success",
@@ -146,7 +146,9 @@
       "fast_fallback": "disabled-until-health-gated"
     },
     "finding_resolution": "a fixed review finding resolves only with structured evidence: the exact-head correction commit and a regression test committed in the change set, verified fail-closed before Merge Readiness",
-    "requires_current_head_review_authority": true
+    "requires_current_head_review_authority": false,
+    "external_llm_review_required_for_merge": false,
+    "external_llm_review_role": "optional-defense-in-depth"
   },
   "ingress_provenance": {
     "proof": "verified-commit-signature",

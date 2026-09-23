@@ -27,7 +27,8 @@ def test_code_write_policy_requires_draft_until_exact_head_admission() -> None:
     assert "exact-head" in progression["ready_requires"]
     assert "Pre-PR Preflight" in progression["ready_requires"]
     assert progression["auto_ready"] is False
-    assert progression["requires_current_head_review_authority"] is True
+    assert progression["requires_current_head_review_authority"] is False
+    assert progression["external_llm_review_required_for_merge"] is False
     assert progression["requires_current_head_codex_review"] is False
     assert "structured evidence" in progression["finding_resolution"]
     assert "regression test" in progression["finding_resolution"]
@@ -42,11 +43,11 @@ def _write_policy(monkeypatch, tmp_path, mutator) -> None:
     assert prevention.validate_code_write_policy() != []
 
 
-def test_code_write_policy_guard_rejects_a_dropped_current_head_review_requirement(monkeypatch, tmp_path) -> None:
+def test_code_write_policy_guard_rejects_mandatory_external_review(monkeypatch, tmp_path) -> None:
     _write_policy(
         monkeypatch,
         tmp_path,
-        lambda policy: policy["review_progression"].pop("requires_current_head_review_authority"),
+        lambda policy: policy["review_progression"].update(requires_current_head_review_authority=True),
     )
 
 
@@ -64,9 +65,9 @@ def test_code_write_policy_declares_codex_primary_with_a_recorded_reason_fallbac
     policy = json.loads((ROOT / "docs" / "CODE_WRITE_POLICY.json").read_text(encoding="utf-8"))
     authority = policy["review_progression"]["review_authority"]
 
-    assert authority["primary"] == "codex"
+    assert authority["primary"] == "deterministic-governance"
     assert authority["fast_fallback"] == "disabled-until-health-gated"
-    assert authority["fallback"] == "hunter-guard"
+    assert authority["fallback"] == "none-required"
     assert authority["fallback_requires_recorded_reason"] is True
     expected = {
         "governance=success",
@@ -112,13 +113,11 @@ def test_code_write_policy_guard_rejects_a_pool_without_a_strict_last_resort(mon
     )
 
 
-def test_code_write_policy_guard_rejects_fallback_last_resort_drift(monkeypatch, tmp_path) -> None:
+def test_code_write_policy_guard_rejects_required_external_fallback(monkeypatch, tmp_path) -> None:
     _write_policy(
         monkeypatch,
         tmp_path,
-        lambda policy: policy["review_progression"]["review_authority"]["reviewer_pool"].update(
-            last_resort="different-last-resort"
-        ),
+        lambda policy: policy["review_progression"]["review_authority"].update(fallback="hunter-guard"),
     )
 
 
