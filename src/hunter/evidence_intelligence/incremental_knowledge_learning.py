@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import re
 from dataclasses import asdict
 from pathlib import Path
 from typing import Any
@@ -98,10 +99,19 @@ def build_learning_ledger(
 ) -> dict[str, Any]:
     if type(pr) is not int or pr <= 0:
         raise LearningLedgerError("ledger PR must be positive")
-    if len(head) != 40 or len(base) != 40:
-        raise LearningLedgerError("ledger head/base must be exact 40-character SHAs")
+    if re.fullmatch(r"[0-9a-f]{40}", head) is None or re.fullmatch(r"[0-9a-f]{40}", base) is None:
+        raise LearningLedgerError("ledger head/base must be exact lowercase hexadecimal SHA")
     normalized = [_validate_observation(item, pr, head, base) for item in observations]
-    unique = {_digest(item): item for item in normalized}
+    identities: dict[tuple[str, str], str] = {}
+    unique = {}
+    for item in normalized:
+        digest = _digest(item)
+        identity = (str(item["provider"]), str(item["event_id"]))
+        previous = identities.get(identity)
+        if previous is not None and previous != digest:
+            raise LearningLedgerError("provider event identity is bound to conflicting evidence")
+        identities[identity] = digest
+        unique[digest] = item
     items: list[dict[str, Any]] = []
     availability: dict[str, str] = {}
     authority = KnowledgeExtractionAuthority(registry)

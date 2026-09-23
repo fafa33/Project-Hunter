@@ -49,6 +49,42 @@ def collect(repository: str, token: str, pr: int, head: str, base: str) -> list[
         if len(payload) < 100:
             break
         page += 1
+    page = 1
+    while True:
+        payload = governance.request_json(repository, token, "GET", f"pulls/{pr}/reviews?per_page=100&page={page}")
+        if not isinstance(payload, list):
+            raise ValueError("reviews payload must be a list")
+        for item in payload:
+            if not isinstance(item, dict) or item.get("commit_id") != head:
+                continue
+            body = str(item.get("body") or "").strip()
+            if not body:
+                continue
+            user = item.get("user") if isinstance(item.get("user"), dict) else {}
+            observations.append(
+                {
+                    "source": "github-review",
+                    "provider": "github-review",
+                    "event_id": f"review-{item.get('id')}",
+                    "source_pr": pr,
+                    "reviewed_head_sha": head,
+                    "reviewed_base_sha": base,
+                    "reviewer": str(user.get("login") or "github-review"),
+                    "path": None,
+                    "line": None,
+                    "message": body,
+                    "availability": "available",
+                    "classification": None,
+                    "invariant": None,
+                    "affected_paths": [],
+                    "fix_reference": None,
+                    "regression_evidence": [],
+                    "claimed_family_id": None,
+                }
+            )
+        if len(payload) < 100:
+            break
+        page += 1
     return observations
 
 

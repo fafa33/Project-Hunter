@@ -98,3 +98,15 @@ def test_historical_nondefect_remains_excluded_observation():
     nondefect = next(e for e in historical_events(HEAD, BASE) if e.get("classification") != "confirmed")
     ledger = build_learning_ledger(nondefect["source_pr"], HEAD, BASE, [nondefect], REGISTRY)
     assert ledger["items"][0]["state"] == "excluded"
+
+
+def test_reused_provider_event_identity_with_different_content_fails_closed():
+    first = observation()
+    second = observation(message="different evidence")
+    with pytest.raises(LearningLedgerError, match="event identity"):
+        build_learning_ledger(492, HEAD, BASE, [first, second], REGISTRY)
+
+
+def test_ledger_rejects_non_hex_exact_head():
+    with pytest.raises(LearningLedgerError, match="SHA"):
+        build_learning_ledger(492, "z" * 40, BASE, [], REGISTRY)
