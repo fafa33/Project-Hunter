@@ -94,3 +94,13 @@ def test_collector_reads_top_level_reviews(monkeypatch):
     monkeypatch.setattr(collector.governance, "request_json", fake)
     result = collector.collect("fafa33/Project-Hunter", "token", 492, head, base)
     assert [item["event_id"] for item in result] == ["review-7"]
+
+
+def test_learning_workflow_collects_optional_sonar_without_granting_write_authority():
+    text = WORKFLOW_PATH.read_text(encoding="utf-8")
+    assert "hunter_collect_sonar_observations.py" in text
+    assert '--head "$HEAD_SHA"' in text
+    assert '--base "$BASE_SHA"' in text
+    assert "sonar-learning-observations.json" in text
+    assert "pull_request_target" not in text
+    assert "contents: write" not in text

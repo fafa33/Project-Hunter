@@ -23,7 +23,7 @@ jobs:
       - name: Detect trusted learning engine
         id: engine
         run: |
-          if [[ -f scripts/hunter_collect_learning_observations.py && -f scripts/hunter_incremental_knowledge.py ]]; then
+          if [[ -f scripts/hunter_collect_learning_observations.py && -f scripts/hunter_collect_sonar_observations.py && -f scripts/hunter_incremental_knowledge.py ]]; then
             echo "available=true" >> "$GITHUB_OUTPUT"
           else
             echo "available=false" >> "$GITHUB_OUTPUT"
@@ -39,7 +39,14 @@ jobs:
           HEAD_SHA: ${{ github.event.pull_request.head.sha }}
           BASE_SHA: ${{ github.event.pull_request.base.sha }}
         run: |
-          python scripts/hunter_collect_learning_observations.py --repository "$REPOSITORY" --pr "$PR_NUMBER" --head "$HEAD_SHA" --base "$BASE_SHA" > learning-observations.json
+          python scripts/hunter_collect_learning_observations.py --repository "$REPOSITORY" --pr "$PR_NUMBER" --head "$HEAD_SHA" --base "$BASE_SHA" > github-learning-observations.json
+          python scripts/hunter_collect_sonar_observations.py --project "fafa33_Project-Hunter" --pr "$PR_NUMBER" --head "$HEAD_SHA" --base "$BASE_SHA" > sonar-learning-observations.json
+          python - <<'PY'
+          import json
+          github = json.load(open("github-learning-observations.json", encoding="utf-8"))
+          sonar = json.load(open("sonar-learning-observations.json", encoding="utf-8"))
+          open("learning-observations.json", "w", encoding="utf-8").write(json.dumps(github + sonar, sort_keys=True, indent=2) + "\n")
+          PY
           python scripts/hunter_incremental_knowledge.py --pr "$PR_NUMBER" --head "$HEAD_SHA" --base "$BASE_SHA" --observations learning-observations.json > hunter-learning-ledger.json
       - name: Publish non-authoritative learning artifact
         if: steps.engine.outputs.available == 'true'
