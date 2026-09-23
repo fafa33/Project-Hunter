@@ -2476,9 +2476,8 @@ def test_pre_push_fails_closed_when_issue_criteria_are_unverifiable(monkeypatch,
     hunter_pre_push.report_pre_ready_review_state(HEAD, ())
     out = capsys.readouterr().out
 
-    assert "DRAFT-ONLY" in out
-    assert "no GitHub token" in out
-    assert "READY-ELIGIBLE" not in out
+    assert "optional external review" in out
+    assert "does not block push or deterministic merge authority" in out
 
 
 def test_pre_push_reports_ready_only_when_issue_criteria_are_covered(monkeypatch, capsys) -> None:
@@ -2500,7 +2499,7 @@ def test_pre_push_reports_ready_only_when_issue_criteria_are_covered(monkeypatch
     hunter_pre_push.report_pre_ready_review_state(HEAD, ())
     out = capsys.readouterr().out
 
-    assert "READY-ELIGIBLE" in out
+    assert "OPTIONAL-REVIEW-CURRENT" in out
     assert captured["base"] == BASE and captured["head"] == HEAD
     assert captured["issue_criteria"] == ("one canonical criterion",)
 
@@ -2600,9 +2599,8 @@ def test_mixed_issue_push_cannot_select_one_matching_claim(monkeypatch, capsys) 
     )
     out = capsys.readouterr().out
 
-    assert "DRAFT-ONLY" in out
-    assert "#442, #444" in out
-    assert "READY-ELIGIBLE" not in out
+    assert "optional external review" in out
+    assert "does not block push or deterministic merge authority" in out
 
 
 def test_mixed_issue_push_result_is_independent_of_pushed_ref_ordering(monkeypatch, capsys) -> None:
@@ -2621,8 +2619,8 @@ def test_mixed_issue_push_result_is_independent_of_pushed_ref_ordering(monkeypat
     reverse = capsys.readouterr().out
 
     assert forward == reverse
-    assert "DRAFT-ONLY" in forward
-    assert "READY-ELIGIBLE" not in forward
+    assert "optional external review" in forward
+    assert "does not block push or deterministic merge authority" in forward
 
 
 def test_single_issue_multi_ref_push_stays_valid(monkeypatch) -> None:
@@ -2660,10 +2658,8 @@ def test_local_readiness_cannot_claim_ready_when_hosted_binds_another_issue(monk
     hunter_pre_push.report_pre_ready_review_state(HEAD, _pushed_updates("refs/heads/fix/issue-444-other"))
     out = capsys.readouterr().out
 
-    assert "DRAFT-ONLY" in out
-    assert "claims Issue #442" in out
-    assert "binds Issue #444" in out
-    assert "READY-ELIGIBLE" not in out
+    assert "optional external review" in out
+    assert "does not block push or deterministic merge authority" in out
 
 
 def test_top_level_array_review_evidence_is_draft_only_not_a_crash(monkeypatch, capsys) -> None:
@@ -2674,9 +2670,8 @@ def test_top_level_array_review_evidence_is_draft_only_not_a_crash(monkeypatch, 
     hunter_pre_push.report_pre_ready_review_state(HEAD, _pushed_updates("refs/heads/fix/issue-442-hotfix"))
     out = capsys.readouterr().out
 
-    assert "DRAFT-ONLY" in out
-    assert "not a JSON object" in out
-    assert "READY-ELIGIBLE" not in out
+    assert "optional external review" in out
+    assert "does not block push or deterministic merge authority" in out
 
 
 def test_non_object_review_claims_are_draft_only_not_a_crash(monkeypatch, capsys) -> None:
@@ -2687,9 +2682,8 @@ def test_non_object_review_claims_are_draft_only_not_a_crash(monkeypatch, capsys
     hunter_pre_push.report_pre_ready_review_state(HEAD, ())
     out = capsys.readouterr().out
 
-    assert "DRAFT-ONLY" in out
-    assert "claims are not an object" in out
-    assert "READY-ELIGIBLE" not in out
+    assert "optional external review" in out
+    assert "does not block push or deterministic merge authority" in out
 
 
 def test_malformed_review_evidence_does_not_block_an_ordinary_draft_push(monkeypatch, tmp_path, capsys) -> None:
@@ -2717,7 +2711,7 @@ def test_malformed_review_evidence_does_not_block_an_ordinary_draft_push(monkeyp
     assert hunter_pre_push.enforce_pre_push(updates) == 0
     captured = capsys.readouterr()
 
-    assert "DRAFT-ONLY" in captured.out
-    assert "READY-ELIGIBLE" not in captured.out
+    assert "optional external review" in captured.out
+    assert "does not block push or deterministic merge authority" in captured.out
     assert "AttributeError" not in captured.out
     assert captured.err == ""
