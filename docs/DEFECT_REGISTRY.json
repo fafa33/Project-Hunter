@@ -624,12 +624,14 @@
         "tests/test_connector_admission_channel.py::test_forged_receipt_fails",
         "tests/test_issue_412_prevention_gate.py::test_a_hand_edited_review_is_detected_by_its_own_digest",
         "tests/test_knowledge_extraction_authority.py::test_registry_snapshot_changes_proposal_identity",
-        "tests/test_knowledge_extraction_authority.py::test_proposal_preserves_normalized_finding_evidence_for_replay"
+        "tests/test_knowledge_extraction_authority.py::test_proposal_preserves_normalized_finding_evidence_for_replay",
+        "tests/test_knowledge_extraction_authority.py::test_executable_seam_has_no_caller_selected_write_path"
       ],
       "lifecycle": "hosted-enforced",
       "sources": [
         "PR #408/#410 independent review",
-        "PR #489 Codex review: Knowledge Extraction proposal identity/evidence was not fully replay-bound"
+        "PR #489 Codex review: Knowledge Extraction proposal identity/evidence was not fully replay-bound",
+        "PR #489 Sonar pythonsecurity:S8707: caller-selected --output path could redirect Knowledge Extraction artifact writes"
       ]
     },
     {

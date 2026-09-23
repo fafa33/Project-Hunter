@@ -208,3 +208,9 @@ def test_wrong_scalar_types_fail_closed(field: str, value: object) -> None:
     payload[field] = value
     with pytest.raises(KnowledgeExtractionError, match="type"):
         finding_from_dict(payload)
+
+
+def test_executable_seam_has_no_caller_selected_write_path() -> None:
+    script = Path("scripts/hunter_knowledge_extraction.py").read_text(encoding="utf-8")
+    assert 'add_argument("--output"' not in script
+    assert ".write_text(" not in script

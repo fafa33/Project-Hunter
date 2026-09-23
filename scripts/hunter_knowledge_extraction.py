@@ -23,7 +23,6 @@ def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("--input", type=Path, required=True)
     parser.add_argument("--registry", type=Path, default=DEFAULT_REGISTRY)
-    parser.add_argument("--output", type=Path)
     args = parser.parse_args(argv)
 
     try:
@@ -38,10 +37,7 @@ def main(argv: list[str] | None = None) -> int:
         return 2
 
     rendered = json.dumps(asdict(proposal), indent=2, sort_keys=True) + "\n"
-    if args.output:
-        args.output.write_text(rendered, encoding="utf-8")
-    else:
-        sys.stdout.write(rendered)
+    sys.stdout.write(rendered)
     return 0
 
 
