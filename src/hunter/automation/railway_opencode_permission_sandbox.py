@@ -6,8 +6,11 @@ exact bwrap-shaped argv emitted by Hunter, maps the isolated workspace/home
 back to their trusted host paths, and executes OpenCode in pure mode with a
 strict inline permission policy. Shell, external-directory, web, task, skill,
 and question actions remain denied; only project read/edit/search/LSP actions
-are allowed. Publication credentials stay outside the provider process and the
-trusted parent still owns commit signing, push, and exact-head validation.
+are allowed. The shim verifies the minimum provider capability contract before
+execution and gives OpenCode a trusted runtime instruction making parent-owned
+exact-head validation explicit. Publication credentials stay outside the
+provider process and the trusted parent still owns commit signing, push, and
+exact-head validation.
 """
 
 from __future__ import annotations
@@ -47,10 +50,28 @@ _PERMISSION_CONFIG = {
         "lsp": "allow",
     }
 }
+_REQUIRED_PROVIDER_CAPABILITIES = frozenset({"read", "edit", "glob", "grep"})
+_PINNED_OPENCODE_VERSION = "1.18.30"
+_PROVIDER_RUNTIME_INSTRUCTION_FILE = "hunter-provider-runtime.md"
+_PROVIDER_COMPATIBILITY_PROMPT = "Reply with exactly HUNTER_PROVIDER_READY and do not use tools."
+_PROVIDER_COMPATIBILITY_SENTINEL = "HUNTER_PROVIDER_READY"
+_RATE_LIMIT_EXIT_CODE = 75
+_PROVIDER_RUNTIME_INSTRUCTIONS = (
+    "Operate only with the provider tools enabled by this governed runtime: "
+    "read, edit, glob, grep, and lsp. "
+    "Do not attempt shell or test commands, web access, subagents/tasks, skills, questions, "
+    "or external-directory access. "
+    "Provider-side validation is not required completion evidence; the trusted parent owns "
+    "exact-head targeted validation after publication."
+)
 
 
 class SandboxShimError(RuntimeError):
     """Raised when the parent sandbox contract is not exactly recognized."""
+
+
+class ProviderRateLimited(RuntimeError):
+    """Raised when a preflight provider call reports the canonical rate-limit exit."""
 
 
 def _parse(argv: list[str]) -> tuple[Path, Path, str, list[str]]:
@@ -131,7 +152,98 @@ def _parse(argv: list[str]) -> tuple[Path, Path, str, list[str]]:
     return workspace, credential_home, host_executable, command[1:]
 
 
+def _validate_provider_capabilities() -> dict[str, str]:
+    permission = _PERMISSION_CONFIG.get("permission")
+    if not isinstance(permission, dict) or any(
+        not isinstance(name, str) or not isinstance(decision, str) for name, decision in permission.items()
+    ):
+        raise SandboxShimError("provider capability contract is malformed")
+    normalized = {str(name): str(decision) for name, decision in permission.items()}
+    allowed = {
+        name for name, decision in normalized.items() if name not in {"*", "external_directory"} and decision == "allow"
+    }
+    missing = sorted(_REQUIRED_PROVIDER_CAPABILITIES - allowed)
+    if missing:
+        raise SandboxShimError(f"provider capability mismatch: missing {', '.join(missing)}")
+    if normalized.get("external_directory") != "deny":
+        raise SandboxShimError("provider capability contract must deny external_directory")
+    if normalized.get("bash", "deny") != "deny":
+        raise SandboxShimError("provider capability contract must deny bash")
+    return normalized
+
+
+def _validate_pinned_runtime(executable: str, env: dict[str, str]) -> None:
+    completed = subprocess.run(
+        [executable, "--version"],
+        cwd=Path(env["HOME"]),
+        env=env,
+        check=False,
+        capture_output=True,
+        text=True,
+        timeout=30,
+    )
+    if completed.returncode != 0:
+        raise SandboxShimError("provider runtime version probe failed")
+    observed = completed.stdout.strip().removeprefix("v")
+    if observed != _PINNED_OPENCODE_VERSION:
+        raise SandboxShimError(
+            f"provider runtime version mismatch: expected {_PINNED_OPENCODE_VERSION}, observed {observed or '(empty)'}"
+        )
+
+
+def _validate_provider_compatibility(executable: str, provider_args: list[str], env: dict[str, str]) -> None:
+    model_args: list[str] = []
+    if "--model" in provider_args:
+        index = provider_args.index("--model")
+        if index + 1 >= len(provider_args):
+            raise SandboxShimError("provider model option is missing its value")
+        model_args = ["--model", provider_args[index + 1]]
+    completed = subprocess.run(
+        [executable, "--pure", "run", *model_args, _PROVIDER_COMPATIBILITY_PROMPT],
+        cwd=Path(env["HOME"]),
+        env=env,
+        check=False,
+        capture_output=True,
+        text=True,
+        timeout=60,
+    )
+    if completed.returncode == _RATE_LIMIT_EXIT_CODE:
+        raise ProviderRateLimited
+    if completed.returncode != 0:
+        detail = (completed.stderr or completed.stdout).strip()
+        suffix = f": {detail[:240]}" if detail else ""
+        raise SandboxShimError(f"provider compatibility probe failed{suffix}")
+    if _PROVIDER_COMPATIBILITY_SENTINEL not in completed.stdout:
+        raise SandboxShimError("provider compatibility probe returned an unexpected response")
+
+
+def _validate_runtime_provider_capabilities(executable: str, env: dict[str, str]) -> None:
+    completed = subprocess.run(
+        [executable, "debug", "agent", "build", "--pure"],
+        cwd=Path(env["HOME"]),
+        env=env,
+        check=False,
+        capture_output=True,
+        text=True,
+        timeout=30,
+    )
+    if completed.returncode != 0:
+        raise SandboxShimError("provider capability discovery failed")
+    try:
+        payload = json.loads(completed.stdout)
+    except (TypeError, json.JSONDecodeError) as error:
+        raise SandboxShimError("provider capability discovery returned malformed JSON") from error
+    tools = payload.get("tools") if isinstance(payload, dict) else None
+    if not isinstance(tools, dict):
+        raise SandboxShimError("provider capability discovery omitted tools")
+    available = {name for name, enabled in tools.items() if isinstance(name, str) and enabled is True}
+    missing = sorted(_REQUIRED_PROVIDER_CAPABILITIES - available)
+    if missing:
+        raise SandboxShimError(f"provider capability mismatch: missing {', '.join(missing)}")
+
+
 def _restricted_environment(credential_home: Path) -> dict[str, str]:
+    permission = _validate_provider_capabilities()
     env = dict(os.environ)
     for name in tuple(env):
         if name in _FORBIDDEN_ENV or name.startswith("GIT_") or name.startswith("HUNTER_PROMPT_"):
@@ -139,10 +251,16 @@ def _restricted_environment(credential_home: Path) -> dict[str, str]:
     config_home = credential_home / ".config"
     opencode_config = config_home / "opencode"
     opencode_config.mkdir(parents=True, exist_ok=True)
+    instruction_path = (opencode_config / _PROVIDER_RUNTIME_INSTRUCTION_FILE).resolve()
+    instruction_path.write_text(f"{_PROVIDER_RUNTIME_INSTRUCTIONS}\n", encoding="utf-8")
+    inline_config = {
+        "permission": permission,
+        "instructions": [str(instruction_path)],
+    }
     env["HOME"] = str(credential_home)
     env["XDG_CONFIG_HOME"] = str(config_home)
     env["OPENCODE_CONFIG_DIR"] = str(opencode_config)
-    env["OPENCODE_CONFIG_CONTENT"] = json.dumps(_PERMISSION_CONFIG, sort_keys=True, separators=(",", ":"))
+    env["OPENCODE_CONFIG_CONTENT"] = json.dumps(inline_config, sort_keys=True, separators=(",", ":"))
     env["OPENCODE_DISABLE_CLAUDE_CODE"] = "1"
     env["OPENCODE_AUTO_SHARE"] = "false"
     env["OPENCODE_DISABLE_AUTOUPDATE"] = "true"
@@ -156,6 +274,9 @@ def main(argv: list[str] | None = None) -> int:
     try:
         workspace, credential_home, executable, provider_args = _parse(list(sys.argv[1:] if argv is None else argv))
         env = _restricted_environment(credential_home)
+        _validate_pinned_runtime(executable, env)
+        _validate_runtime_provider_capabilities(executable, env)
+        _validate_provider_compatibility(executable, provider_args, env)
         completed = subprocess.run(
             [executable, "--pure", *provider_args],
             cwd=workspace,
@@ -164,6 +285,8 @@ def main(argv: list[str] | None = None) -> int:
             timeout=900,
         )
         return completed.returncode
+    except ProviderRateLimited:
+        return _RATE_LIMIT_EXIT_CODE
     except (OSError, subprocess.TimeoutExpired, SandboxShimError) as error:
         print(f"Railway OpenCode sandbox failed closed: {error}", file=sys.stderr)
         return 1
