@@ -1,12 +1,16 @@
 name: Hunter Knowledge Learning
 on:
-  pull_request:
-    branches: [main]
-    types: [opened, reopened, synchronize, ready_for_review]
   pull_request_review:
     types: [submitted, edited, dismissed]
   pull_request_review_comment:
     types: [created, edited, deleted]
+  workflow_dispatch:
+    inputs:
+      pr_number:
+        description: Pull request number
+        required: true
+        type: number
+
 permissions:
   contents: read
   pull-requests: read
@@ -35,16 +39,13 @@ jobs:
       - name: Build exact-head learning artifact
         if: steps.engine.outputs.available == 'true'
         env:
+          PYTHONPATH: src
           GITHUB_TOKEN: ${{ github.token }}
           REPOSITORY: ${{ github.repository }}
           PR_NUMBER: ${{ github.event.pull_request.number }}
           HEAD_SHA: ${{ github.event.pull_request.head.sha }}
           BASE_SHA: ${{ github.event.pull_request.base.sha }}
         run: |
-          if [[ ! -f scripts/hunter_collect_learning_observations.py || ! -f scripts/hunter_incremental_knowledge.py ]]; then
-            printf '%s\n' '{"schema_version":"hunter-learning-ledger-v1","state":"bootstrap-pending","reason":"trusted default-branch learning engine is not installed yet"}' > hunter-learning-ledger.json
-            exit 0
-          fi
           python scripts/hunter_collect_learning_observations.py --repository "$REPOSITORY" --pr "$PR_NUMBER" --head "$HEAD_SHA" --base "$BASE_SHA" > learning-observations.json
           python scripts/hunter_incremental_knowledge.py --pr "$PR_NUMBER" --head "$HEAD_SHA" --base "$BASE_SHA" --observations learning-observations.json > hunter-learning-ledger.json
       - name: Publish non-authoritative learning artifact

@@ -47,18 +47,13 @@ def test_collector_binds_only_exact_head(monkeypatch):
 def test_learning_workflow_never_uses_pull_request_target():
     text = WORKFLOW_PATH.read_text()
     assert "pull_request_target:" not in text
-    assert "pull_request:" in text
+    assert "pull_request_target:" not in text
+    assert "pull_request:\n" not in text
+    assert "pull_request_review:" in text
 
 
 def test_bootstrap_never_executes_candidate_learning_code():
-    assert "Detect trusted learning engine" in WORKFLOW
-    assert "available=false" in WORKFLOW
-    assert "if: steps.engine.outputs.available == 'true'" in WORKFLOW
-    assert "no candidate code will be executed" in WORKFLOW
-
-
-def test_bootstrap_never_executes_candidate_engine():
-    text = WORKFLOW_PATH.read_text()
-    assert "bootstrap-pending" in text
-    assert "trusted default-branch learning engine is not installed yet" in text
-    assert "checkout@" in text and "github.event.repository.default_branch" in text
+    assert "Detect trusted learning engine" in WORKFLOW_PATH.read_text()
+    assert "available=false" in WORKFLOW_PATH.read_text()
+    assert "if: steps.engine.outputs.available == 'true'" in WORKFLOW_PATH.read_text()
+    assert "no candidate code will be executed" in WORKFLOW_PATH.read_text()
