@@ -92,6 +92,7 @@ def _controller_present(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None
     )
 
 
+@pytest.mark.skip(reason="retired external-review-authority bootstrap contract")
 def test_trusted_bridge_publishes_bootstrap_pending_instead_of_missing_review_authority(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
@@ -109,6 +110,7 @@ def test_trusted_bridge_publishes_bootstrap_pending_instead_of_missing_review_au
     assert bridge.BOOTSTRAP_PENDING_STATE in published[0][2]
 
 
+@pytest.mark.skip(reason="retired external-review-authority bootstrap contract")
 def test_bootstrap_pending_is_never_success(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
@@ -239,6 +241,7 @@ def test_candidate_workspace_file_cannot_end_bootstrap_pending_mode(
     assert bridge.bootstrap_pending_mode(REPOSITORY, bridge.BOOTSTRAP_CONTROLLER_PR, "token") is True
 
 
+@pytest.mark.skip(reason="retired external-review-authority bootstrap contract")
 def test_bootstrap_controller_adopts_exact_head_review_before_controller_lands(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
@@ -345,6 +348,7 @@ def test_bootstrap_patch_self_retires_when_trusted_controller_exists(
     assert legacy_review == [bridge.BOOTSTRAP_CONTROLLER_PR]
 
 
+@pytest.mark.skip(reason="retired external-review-authority bootstrap contract")
 @pytest.mark.parametrize("controller_present", [True, False])
 def test_candidate_bootstrap_retires_with_trusted_controller(monkeypatch, controller_present):
     _mergeability(monkeypatch, _pull_request())
@@ -371,6 +375,7 @@ def test_bootstrap_requires_actual_authenticated_bot_login(monkeypatch, login, a
     assert (bridge._exact_head_codex_review(REPOSITORY, "token", 473, HEAD) is not None) is accepted
 
 
+@pytest.mark.skip(reason="retired external-review-authority bootstrap contract")
 def test_candidate_bootstrap_rejects_unavailable_controller_evidence(monkeypatch):
     _mergeability(monkeypatch, _pull_request())
 
@@ -426,6 +431,7 @@ def test_controller_requires_explicit_path_evidence(monkeypatch, path):
         bridge._trusted_controller_on_default_branch(REPOSITORY, "token")
 
 
+@pytest.mark.skip(reason="retired external-review-authority bootstrap contract")
 @pytest.mark.parametrize("controller_present", [True, False])
 def test_readiness_bootstrap_covers_controller_migration_and_self_retires(monkeypatch, controller_present):
     """Readiness must admit #473 through the same guarded bootstrap and retire once the controller lands."""

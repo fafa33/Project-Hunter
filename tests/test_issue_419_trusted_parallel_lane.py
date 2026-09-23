@@ -788,11 +788,13 @@ def test_waiting_still_satisfies_neither_admission_nor_merge_readiness(monkeypat
                 for index, name in enumerate(readiness.REQUIRED_CHECKS, start=1)
             ),
             governance_status={"id": 9, "state": state},
+            candidate_admission=(state, "trusted exact-head preflight is still running"),
         )
     )
 
     assert decision.state == "pending"
-    assert readiness.GOVERNANCE_CONTEXT in decision.description
+    assert "candidate admission" in decision.description.lower()
+    assert readiness.GOVERNANCE_CONTEXT not in decision.description
 
 
 def test_no_eligible_trusted_run_is_still_a_missing_proof(monkeypatch: pytest.MonkeyPatch) -> None:

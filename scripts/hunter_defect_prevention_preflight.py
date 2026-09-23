@@ -798,22 +798,32 @@ def validate_code_write_policy() -> list[str]:
     ready_requires = str(progression.get("ready_requires") or "")
     if "exact-head" not in ready_requires or "Pre-PR Preflight" not in ready_requires:
         errors.append("Ready progression must require successful exact-head Pre-PR Preflight")
-    if progression.get("requires_current_head_review_authority") is not True:
-        errors.append("Ready progression must require current exact-head review authority")
+    if progression.get("requires_current_head_review_authority") is not False:
+        errors.append("Ready progression must not require an external exact-head LLM review authority")
+    if progression.get("external_llm_review_required_for_merge") is not False:
+        errors.append("external LLM review must be optional defense-in-depth, not merge authority")
     if progression.get("requires_current_head_codex_review") is True:
         errors.append("Ready progression must not hard-code Codex when governed failover is enabled")
     authority = progression.get("review_authority")
     if not isinstance(authority, dict):
         errors.append("Ready progression must declare its review-authority model")
     else:
-        if authority.get("primary") != "codex":
-            errors.append("the review-authority model must declare Codex as the primary review authority")
-        if authority.get("fast_fallback") != "local-ollama":
-            errors.append("the review-authority model must declare local-ollama as the fast fallback reviewer")
+        if authority.get("primary") != "deterministic-governance":
+            errors.append("deterministic governance must be the primary merge authority")
+        if authority.get("fast_fallback") != "disabled-until-health-gated":
+            errors.append("triage-only local review must remain disabled until trusted health admission exists")
         reviewer_pool = authority.get("reviewer_pool")
-        last_resort = reviewer_pool.get("last_resort") if isinstance(reviewer_pool, dict) else None
-        if authority.get("fallback") != last_resort:
-            errors.append("the review-authority fallback must match reviewer_pool.last_resort")
+        agents = reviewer_pool.get("agents", []) if isinstance(reviewer_pool, dict) else []
+        local = next((a for a in agents if isinstance(a, dict) and a.get("id") == "local-ollama"), None)
+        if (
+            not isinstance(local, dict)
+            or local.get("authority_eligible") is not False
+            or local.get("enabled") is not False
+        ):
+            errors.append("local-ollama must be triage-only and disabled until trusted health admission exists")
+        reviewer_pool = authority.get("reviewer_pool")
+        if authority.get("fallback") != "none-required":
+            errors.append("external reviewer fallback must not be required for merge authority")
         if authority.get("fallback_requires_recorded_reason") is not True:
             errors.append(
                 "fallback review authority must require a recorded reason and never skip the ordered reviewer pool silently"
@@ -1705,6 +1715,12 @@ def validate_defect_prevention_lifecycle() -> list[str]:
 
     errors.extend(validate_recurring_defect_families(registry, lifecycle))
     errors.extend(validate_review_after_remediation_boundary())
+    try:
+        import hunter_governance_cutover_preflight as cutover_preflight
+
+        errors.extend(cutover_preflight.validate_cutover_contract())
+    except Exception as exc:
+        errors.append(f"governance cutover prevention guard unavailable: {type(exc).__name__}: {exc}")
     errors.extend(validate_code_write_policy())
     errors.extend(validate_reviewer_finding_dispositions())
     errors.extend(validate_historical_defect_backfill())

@@ -527,7 +527,7 @@ def test_a_stale_authority_state_is_surfaced_by_merge_readiness(monkeypatch) -> 
     assert "MISSING_REVIEW_AUTHORITY" in message
 
 
-def test_merge_ready_success_describes_the_positive_exact_head_authority() -> None:
+def test_merge_ready_success_describes_deterministic_authority() -> None:
     decision = readiness.evaluate(
         readiness.StaticReadinessObservation(
             review_authority=("success", "VALID_AGENT_REVIEW: exact-head review verified"),
@@ -539,7 +539,7 @@ def test_merge_ready_success_describes_the_positive_exact_head_authority() -> No
         )
     )
     assert decision.state == "success"
-    assert "exact-head review" in decision.description
+    assert "deterministic code/security/governance checks" in decision.description
 
 
 def test_required_authority_states_are_all_declared() -> None:
@@ -1008,7 +1008,7 @@ def test_audited_canonical_machine_boundary_is_gated():
     assert prevention._family_has_machine_gate(family)
 
 
-def test_pr469_zero_reviews_all_checks_green_is_not_merge_ready(monkeypatch):
+def test_pr469_zero_reviews_all_checks_green_uses_deterministic_merge_authority(monkeypatch):
     _install_governance(monkeypatch, document=_review_document())
     authority = core.verify_pre_ready_hostile_review("repo", "token", HEAD, PR_NUMBER)
     observation = readiness.StaticReadinessObservation(
@@ -1019,25 +1019,23 @@ def test_pr469_zero_reviews_all_checks_green_is_not_merge_ready(monkeypatch):
             for n, name in enumerate(readiness.REQUIRED_CHECKS, 1)
         ),
     )
-    assert readiness.evaluate(observation).state == "failure"
+    assert readiness.evaluate(observation).state == "success"
 
 
-def test_pr469_zero_review_ready_transition_is_returned_to_draft(monkeypatch):
+def test_zero_external_review_does_not_force_ready_candidate_back_to_draft(monkeypatch):
     import hunter_candidate_admission as admission
 
-    _install_governance(monkeypatch, document=_review_document())
     pr = {"state": "open", "draft": False, "head": {"sha": HEAD}, "base": {"ref": "main"}, "node_id": "PR469"}
     monkeypatch.setattr(core, "read_mergeability", lambda *a: pr)
-    monkeypatch.setattr(core, "read_head_preflight_mode", lambda *a: ("normal", None))
-    monkeypatch.setattr(core, "read_pr_changed_paths", lambda *a: (True, (), None))
-    monkeypatch.setattr(core, "verify_code_write_ingress_provenance", lambda *a: ("success", "green"))
+    monkeypatch.setattr(core, "candidate_admission", lambda *a: ("success", "deterministic admission verified"))
+    monkeypatch.setattr(admission, "ready_checks", lambda *a: ("success", "deterministic gates green"))
     transitions = []
     monkeypatch.setattr(admission, "convert_to_draft", lambda token, node: transitions.append(node) or True)
-    assert admission.enforce_candidate_admission("repo", "token", PR_NUMBER) == 1
-    assert transitions == ["PR469"]
+    assert admission.enforce_candidate_admission("repo", "token", PR_NUMBER) == 0
+    assert transitions == []
 
 
-def test_pending_admission_cannot_leave_a_pr_ready(monkeypatch):
+def test_pending_admission_keeps_ready_pr_available_to_reviewers(monkeypatch):
     import hunter_candidate_admission as admission
 
     pr = {"state": "open", "draft": False, "head": {"sha": HEAD}, "base": {"ref": "main"}, "node_id": "PR469"}
@@ -1045,11 +1043,11 @@ def test_pending_admission_cannot_leave_a_pr_ready(monkeypatch):
     monkeypatch.setattr(core, "candidate_admission", lambda *a: ("pending", "review authority is unproven"))
     transitions = []
     monkeypatch.setattr(admission, "convert_to_draft", lambda token, node: transitions.append(node) or True)
-    assert admission.enforce_candidate_admission("repo", "token", PR_NUMBER) == 1
-    assert transitions == ["PR469"]
+    assert admission.enforce_candidate_admission("repo", "token", PR_NUMBER) == 0
+    assert transitions == []
 
 
-def test_reviewed_candidate_with_missing_security_checks_returns_to_draft(monkeypatch):
+def test_reviewed_candidate_waits_ready_for_unpublished_security_checks(monkeypatch):
     import hunter_candidate_admission as admission
 
     pr = {
@@ -1065,8 +1063,8 @@ def test_reviewed_candidate_with_missing_security_checks_returns_to_draft(monkey
     monkeypatch.setattr(core, "request_json", lambda *a: {"check_runs": []} if "check-runs" in a[-1] else [])
     transitions = []
     monkeypatch.setattr(admission, "convert_to_draft", lambda token, node: transitions.append(node) or True)
-    assert admission.enforce_candidate_admission("repo", "token", PR_NUMBER) == 1
-    assert transitions == ["PR469"]
+    assert admission.enforce_candidate_admission("repo", "token", PR_NUMBER) == 0
+    assert transitions == []
 
 
 def test_external_structured_review_cannot_claim_another_reviewers_identity(monkeypatch):
@@ -1163,6 +1161,11 @@ def test_review_fetch_rejects_authenticated_native_codex_clear_issue_comment(mon
 
 
 def test_authenticated_native_codex_issue_comment_does_not_adopt_exact_head_review_request(monkeypatch):
+    monkeypatch.setattr(
+        core,
+        "pending_review_authority_state",
+        lambda *_a: ("failure", "MISSING_REVIEW_AUTHORITY: terminal reviewer exhaustion"),
+    )
     document, _ = _request_and_ack()
     native = {
         **_trusted_review(
@@ -1195,12 +1198,22 @@ def test_a_current_authenticated_acknowledgement_establishes_new_exact_head_auth
 
 
 def test_a_request_without_explicit_reviewer_adoption_is_not_authority(monkeypatch):
+    monkeypatch.setattr(
+        core,
+        "pending_review_authority_state",
+        lambda *_a: ("failure", "MISSING_REVIEW_AUTHORITY: terminal reviewer exhaustion"),
+    )
     document, ack = _request_and_ack()
     _install_governance(monkeypatch, document=document, comments=(_trusted_review(),))
     assert core.verify_pre_ready_hostile_review("repo", "token", HEAD, PR_NUMBER)[0] == "failure"
 
 
 def test_review_request_adoption_of_another_claims_digest_is_blocked(monkeypatch):
+    monkeypatch.setattr(
+        core,
+        "pending_review_authority_state",
+        lambda *_a: ("failure", "MISSING_REVIEW_AUTHORITY: terminal reviewer exhaustion"),
+    )
     document, ack = _request_and_ack()
     ack["claims_id"] = "0" * 64
     _install_governance(monkeypatch, document=document, comments=(_trusted_review(body=json.dumps(ack)),))
@@ -1485,6 +1498,11 @@ def test_mismatched_login_cannot_map_to_opencode(monkeypatch):
 
 
 def test_unverified_opencode_fallback_is_rejected_even_after_codex_exhaustion(monkeypatch):
+    monkeypatch.setattr(
+        core,
+        "pending_review_authority_state",
+        lambda *_a: ("failure", "MISSING_REVIEW_AUTHORITY: terminal reviewer exhaustion"),
+    )
     evidence = _fallback_ack()
     observation = {
         "id": 43,
@@ -1518,6 +1536,11 @@ def test_unverified_opencode_fallback_is_rejected_even_after_codex_exhaustion(mo
 
 
 def test_missing_fallback_identity_leaves_request_blocked_not_ready(monkeypatch):
+    monkeypatch.setattr(
+        core,
+        "pending_review_authority_state",
+        lambda *_a: ("failure", "MISSING_REVIEW_AUTHORITY: terminal reviewer exhaustion"),
+    )
     document, _ = _request_and_ack()
     _install_governance(monkeypatch, document=document, comments=())
     monkeypatch.setattr(review, "load_reviewer_pool", lambda *_a, **_k: (_pool(), ""))
@@ -1624,6 +1647,11 @@ def test_reviewer_result_observation_rejects_blank_summary():
 
 def test_api_ack_with_matching_result_still_requires_verified_collector_evidence(monkeypatch):
     """Bot comments alone are not authority; the trusted collector must bind the invocation."""
+    monkeypatch.setattr(
+        core,
+        "pending_review_authority_state",
+        lambda *_a: ("failure", "MISSING_REVIEW_AUTHORITY: terminal reviewer exhaustion"),
+    )
     document, ack = _request_and_ack()
     ack.update({"reviewer_agent": "gemini", "collector_run_id": 123, "trigger_id": 456, "response_digest": "e" * 64})
     result = {
@@ -1725,3 +1753,27 @@ def test_trusted_collector_trigger_rejects_unrelated_actions_bot_run(monkeypatch
         ),
     )
     assert not core.trusted_collector_run("repo", "token", trigger)
+
+
+def test_merge_readiness_external_reviewer_unavailability_does_not_block_verified_head() -> None:
+    observation = readiness.StaticReadinessObservation(
+        review_authority=("pending", "WAITING_FOR_REVIEWER: all external providers unavailable"),
+        candidate_admission=("success", "deterministic candidate admission verified"),
+        check_runs=(
+            {"name": "Quality Gates", "status": "completed", "conclusion": "success"},
+            {"name": "dependency-review", "status": "completed", "conclusion": "success"},
+            {"name": "CodeQL", "status": "completed", "conclusion": "success"},
+        ),
+    )
+    decision = readiness.evaluate(observation)
+    assert decision.state == "success"
+
+
+def test_merge_readiness_existing_blocking_review_finding_still_blocks_without_provider_authority() -> None:
+    observation = readiness.StaticReadinessObservation(
+        changes_requested=("authenticated-reviewer",),
+        review_authority=("pending", "WAITING_FOR_REVIEWER"),
+    )
+    decision = readiness.evaluate(observation)
+    assert decision.state == "failure"
+    assert "Changes requested" in decision.description

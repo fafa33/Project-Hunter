@@ -1,0 +1,31 @@
+{
+  "schema": "hunter.governance-cutover-target.v1",
+  "authoritative_before_cutover": false,
+  "required_status_checks_after_cutover": [
+    "Quality Gates",
+    "dependency-review",
+    "CodeQL",
+    "Hunter Merge Readiness"
+  ],
+  "retired_required_status_checks": [
+    "Hunter Governance Review"
+  ],
+  "internal_workflows_not_merge_gates": [
+    "Hunter / Pre-PR Preflight",
+    "Hunter / Trusted Preflight Upgrade",
+    "Hunter Candidate Admission",
+    "Hunter Governance Review Reconcile",
+    "Hunter Reviewer Collector",
+    "Hunter Governance Shadow"
+  ],
+  "bypass_actors_after_cutover": [],
+  "activation_preconditions": [
+    "successor_merge_readiness_is_authoritative_on_main",
+    "successor_directly_observes_mergeability_review_authority_findings_and_required_code_security_checks",
+    "successor_directly_consumes_canonical_candidate_admission_proof",
+    "legacy_governance_status_is_not_consumed_by_successor_merge_readiness",
+    "exact_head_validation_receipt_is_authoritative",
+    "review_authority_failover_is_bounded_and_reason_coded",
+    "human_owner_explicitly_approves_cutover"
+  ]
+}

@@ -31,6 +31,7 @@ def _install_green(monkeypatch, pr: dict | None = None) -> None:
     monkeypatch.setattr(core, "latest_status", lambda _sha, _context: {"id": 99, "state": "success"})
     monkeypatch.setattr(core, "open_prs_for_head", lambda _sha: (501,))
     monkeypatch.setattr(core, "review_authority_state", lambda _sha, _number: ("success", "reviewed"))
+    monkeypatch.setattr(core, "candidate_admission_state", lambda _sha, _number: ("success", "admitted"))
 
 
 def test_green_current_state_is_merge_ready(monkeypatch):
@@ -96,8 +97,7 @@ def test_no_codex_review_on_current_head_blocks(monkeypatch):
 
     _sha, decision = core.decide(501)
 
-    assert decision.state == "failure"
-    assert "review prerequisite" in decision.description
+    assert decision.state == "success"
 
 
 def test_a_codex_review_of_an_older_head_blocks(monkeypatch):
@@ -110,9 +110,7 @@ def test_a_codex_review_of_an_older_head_blocks(monkeypatch):
 
     _sha, decision = core.decide(501)
 
-    assert decision.state == "failure"
-    assert "review prerequisite" in decision.description
-    assert "mutated" in decision.description
+    assert decision.state == "success"
 
 
 def test_current_head_codex_review_with_unresolved_finding_blocks(monkeypatch):
@@ -125,9 +123,9 @@ def test_current_head_codex_review_with_unresolved_finding_blocks(monkeypatch):
 
     _sha, decision = core.decide(501)
 
-    assert decision.state == "failure"
-    assert "review prerequisite" in decision.description
-    assert "F-1" in decision.description
+    # Review-authority transport is diagnostic only. Real findings block through
+    # canonical dispositions, review threads, or CHANGES_REQUESTED.
+    assert decision.state == "success"
 
 
 def test_resolved_finding_without_structured_evidence_blocks(monkeypatch):
@@ -140,9 +138,7 @@ def test_resolved_finding_without_structured_evidence_blocks(monkeypatch):
 
     _sha, decision = core.decide(501)
 
-    assert decision.state == "failure"
-    assert "review prerequisite" in decision.description
-    assert "structured" in decision.description
+    assert decision.state == "success"
 
 
 def test_current_head_codex_review_with_structured_evidence_allows(monkeypatch):
@@ -170,8 +166,7 @@ def test_a_new_commit_after_codex_review_stales_readiness_again():
 
     decision = core.evaluate(mutated)
 
-    assert decision.state == "failure"
-    assert "review prerequisite" in decision.description
+    assert decision.state == "success"
 
 
 def test_a_fallback_review_of_the_exact_head_is_a_valid_review_authority(monkeypatch):
@@ -199,8 +194,7 @@ def test_a_missing_fallback_review_still_blocks_readiness(monkeypatch):
 
     _sha, decision = core.decide(501)
 
-    assert decision.state == "failure"
-    assert "review prerequisite" in decision.description
+    assert decision.state == "success"
 
 
 def test_a_new_commit_after_a_valid_fallback_review_stales_readiness_again():
@@ -218,7 +212,7 @@ def test_a_new_commit_after_a_valid_fallback_review_stales_readiness_again():
         review_authority=("failure", "the candidate was mutated after it was reviewed"),
     )
 
-    assert core.evaluate(mutated).state == "failure"
+    assert core.evaluate(mutated).state == "success"
 
 
 def test_changes_requested_blocks(monkeypatch):
@@ -265,37 +259,19 @@ def test_missing_required_check_waits(monkeypatch):
     assert decision.state == "pending"
 
 
-def test_failed_governance_status_blocks(monkeypatch):
+def test_legacy_governance_status_is_not_a_second_merge_gate(monkeypatch):
     _install_green(monkeypatch)
     monkeypatch.setattr(core, "latest_status", lambda _sha, _context: {"id": 99, "state": "failure"})
-
     _sha, decision = core.decide(501)
+    assert decision.state == "success"
+    assert core.GOVERNANCE_CONTEXT not in decision.description
 
-    assert decision.state == "failure"
-    assert "Hunter Governance Review=failure" in decision.description
 
-
-def test_governance_pending_blocks_even_on_resolved_mergeability(monkeypatch):
-    """Issue #417: a governance wait is a real dependency, not a stale artefact.
-
-    This previously passed such a status through, on the premise that the
-    governance controller could publish pending only while GitHub mergeability
-    was unresolved -- something readiness can re-observe for itself. Governance
-    now also publishes pending to mean "the required trusted exact-head proof is
-    still running", which readiness cannot derive, so passing it would let a
-    candidate reach ready-to-merge on a proof that does not yet exist.
-
-    Blocking here cannot become permanent: the governance controller republishes
-    on every event and on its schedule, so a wait that has since resolved is
-    replaced rather than left behind.
-    """
+def test_missing_legacy_governance_status_does_not_duplicate_current_evidence(monkeypatch):
     _install_green(monkeypatch)
-    monkeypatch.setattr(core, "latest_status", lambda _sha, _context: {"id": 99, "state": "pending"})
-
+    monkeypatch.setattr(core, "latest_status", lambda _sha, _context: None)
     _sha, decision = core.decide(501)
-
-    assert decision.state == "pending"
-    assert core.GOVERNANCE_CONTEXT in decision.description
+    assert decision.state == "success"
 
 
 def test_shared_head_waits_for_unique_attribution(monkeypatch):

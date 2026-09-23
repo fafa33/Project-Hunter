@@ -25,13 +25,13 @@
   },
   "review_progression": {
     "unadmitted_head_state": "draft",
-    "ready_requires": "successful exact-head Pre-PR Preflight, positive substantive exact-head review authority, complete structured evidence, no unresolved blockers or threads, and green required code/security/governance checks",
+    "ready_requires": "successful exact-head Pre-PR Preflight, complete structured evidence, no unresolved validated findings or review threads, and green required code/security/governance checks; external LLM review is defense-in-depth and is not required for merge readiness",
     "auto_ready": false,
     "requires_current_head_codex_review": false,
     "review_authority": {
-      "primary": "codex",
-      "fallback": "hunter-guard",
-      "fallback_only_when_unavailable": "Local triage runs first when healthy; authority then fails over Codex -> Gemini -> Groq, one attempt each with a 300-second maximum. hunter-guard remains last resort only after authenticated exhaustion of the enabled authority pool.",
+      "primary": "deterministic-governance",
+      "fallback": "none-required",
+      "fallback_only_when_unavailable": "External reviewers are opportunistic defense-in-depth. Provider absence, quota exhaustion, rate limits, or outage never blocks merge readiness. Any authenticated blocking finding that exists must still be resolved.",
       "fallback_requires_recorded_reason": true,
       "fallback_requires_snapshot_gates": [
         "governance=success",
@@ -41,7 +41,7 @@
       ],
       "reviewer_pool": {
         "model": "ordered-priority-with-failover",
-        "ordering": "free-first strict priority: local-ollama triage, then Codex, then authenticated GitHub Copilot code review, then server-side Gemini API, then server-side Groq API; each authority reviewer is attempted exactly once per exact HEAD before the deterministic hunter-guard last resort.",
+        "ordering": "authority order: Codex, authenticated GitHub Copilot code review, server-side Gemini API, server-side Groq API; disabled local-ollama remains optional triage only until trusted health admission exists; each authority reviewer is attempted exactly once per exact HEAD before the deterministic hunter-guard last resort.",
         "last_resort": "hunter-guard",
         "exhaustion_semantics": "Every enabled higher-priority reviewer must have authenticated exact-head invocation results. The trusted default-branch Hunter Reviewer Collector records actual trigger IDs, both configured budgets (ack_timeout_seconds and review_timeout_seconds) and all retries, and immutable artifact provenance. A triage-only reviewer is invoked and recorded in that order but never closes the pool, and a reviewer whose declared trigger_method the collector cannot perform may not be enabled at all. A substantive response proves availability and forbids failover, even if its format is invalid; an authenticated explicit usage-limit, rate-limit, or quota denial is unavailability evidence and permits immediate failover. Candidate prose, skipped reviewers, failed GitHub reads, changed HEAD, wrong configuration, insufficient elapsed time, candidate-ref collector runs, or missing retries fail closed.",
         "timeout_policy": {
@@ -54,17 +54,17 @@
         "agents": [
           {
             "id": "local-ollama",
-            "priority": 1,
-            "enabled": true,
+            "priority": 5,
+            "enabled": false,
             "trigger_method": "github-workflow:hunter-local-reviewer.yml",
             "exact_head_support": true,
             "ack_timeout_seconds": 30,
             "review_timeout_seconds": 300,
-            "retryable": true,
+            "retryable": false,
             "evidence_parser": "hunter.local-review.v1",
             "fallback_eligibility": false,
             "authority_eligible": false,
-            "note": "Trusted free first-pass reviewer on the dedicated Mac self-hosted runner. Candidate code is never executed; only GitHub diff/content is reviewed. Authority eligibility is benchmark-gated.",
+            "note": "Triage-only local reviewer. Disabled until a trusted fresh-heartbeat admission gate exists; an offline self-hosted Mac must never create a blocking or red review path.",
             "quality_gate": {
               "required": true,
               "benchmark_id": "hunter-local-reviewer-v1",
@@ -82,7 +82,7 @@
           },
           {
             "id": "codex",
-            "priority": 2,
+            "priority": 1,
             "enabled": true,
             "trigger_method": "github-pr-comment:@codex review",
             "exact_head_support": true,
@@ -92,12 +92,12 @@
             "note": "Hosted fallback reviewer. Triggered immediately when the trusted local reviewer is offline/unresponsive or after its bounded review budget; exact-head authority remains supported.",
             "evidence": "Discovered by inspecting check-suites and PR reviews on main (commit dca20dd): installed apps are claude, freebuff-web, github-actions, railway-app, tembo, vercel; no Copilot code review, CodeRabbit, Jules, or CODEOWNERS exists on this repository.",
             "github_login": "chatgpt-codex-connector[bot]",
-            "ack_timeout_seconds": 30,
+            "ack_timeout_seconds": 300,
             "review_timeout_seconds": 300
           },
           {
             "id": "copilot",
-            "priority": 3,
+            "priority": 2,
             "enabled": true,
             "trigger_method": "github-review-request:copilot-pull-request-reviewer[bot]",
             "exact_head_support": true,
@@ -113,7 +113,7 @@
           },
           {
             "id": "gemini",
-            "priority": 4,
+            "priority": 3,
             "enabled": true,
             "trigger_method": "api:gemini",
             "exact_head_support": true,
@@ -128,7 +128,7 @@
           },
           {
             "id": "groq",
-            "priority": 5,
+            "priority": 4,
             "enabled": true,
             "trigger_method": "api:groq",
             "exact_head_support": true,
@@ -143,10 +143,12 @@
           }
         ]
       },
-      "fast_fallback": "local-ollama"
+      "fast_fallback": "disabled-until-health-gated"
     },
     "finding_resolution": "a fixed review finding resolves only with structured evidence: the exact-head correction commit and a regression test committed in the change set, verified fail-closed before Merge Readiness",
-    "requires_current_head_review_authority": true
+    "requires_current_head_review_authority": false,
+    "external_llm_review_required_for_merge": false,
+    "external_llm_review_role": "optional-defense-in-depth"
   },
   "ingress_provenance": {
     "proof": "verified-commit-signature",
@@ -285,7 +287,8 @@
       "scripts/hunter_pre_ready_review.py",
       "scripts/hunter_reviewer_collector.py",
       "scripts/hunter_review_orchestrator.py",
-      "scripts/hunter_local_reviewer.py"
+      "scripts/hunter_local_reviewer.py",
+      "scripts/hunter_governance_cutover_preflight.py"
     ],
     "root_of_trust_semantics": "The files that decide whether a candidate may be written and admitted at all: the push boundary, the hosted workflows, the canonical gate chain, the connector authorizer, the governance/admission controllers, the merge-readiness controller, the validation-proof identity and reuse authority that decides when an existing proof may stand in for a run, the shared scope and transport primitives they depend on, the packaging/tooling pins that define the gates, and this policy. No capability on this ingress may write them and no scope may unblock them, so a candidate can never rewrite the authority under which it is itself evaluated. Mutating them stays a clone-capable, pre-push-bound, independently reviewed, owner-merged change; the trusted controller always evaluates a candidate against the default-branch version of this policy, so such a change takes effect only after merge and never for its own pull request.",
     "self_escalation_boundary": "A candidate may not widen the grant it is authorized under and then rely on the widened grant inside the same pull request. The authorization receipt pins grant_fingerprint, a SHA-256 over the authorization-relevant grant, and the trusted controller re-derives that fingerprint from the default branch: a receipt minted under any other version of the grant is stale and fails admission. The controller additionally compares the candidate head's policy against the trusted one and refuses any connector candidate whose head widens the grant -- a new capability, writer, allowed path, unblocked scope path, authorized Issue, removed prohibition, or removed root-of-trust entry.",

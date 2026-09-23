@@ -434,6 +434,7 @@ def test_codex_policy_is_single_bounded_300_second_invocation():
     codex = next(agent for agent in pool["agents"] if agent["id"] == "codex")
     assert pool["timeout_policy"]["retries_per_agent"] == 0
     assert codex["review_timeout_seconds"] == 300
+    assert codex["ack_timeout_seconds"] == 300
 
 
 def test_native_codex_unavailable_response_fails_over_immediately(monkeypatch):
@@ -575,16 +576,15 @@ def test_policy_enables_server_side_gemini_and_groq_after_codex():
     assert not error and pool is not None
     agents = sorted(collector.review.enabled_pool_reviewers(pool), key=lambda a: a["priority"])
     assert [(a["id"], a["priority"]) for a in agents] == [
-        ("local-ollama", 1),
-        ("codex", 2),
-        ("copilot", 3),
-        ("gemini", 4),
-        ("groq", 5),
+        ("codex", 1),
+        ("copilot", 2),
+        ("gemini", 3),
+        ("groq", 4),
     ]
-    assert agents[2]["trigger_method"] == "github-review-request:copilot-pull-request-reviewer[bot]"
-    assert agents[3]["trigger_method"] == "api:gemini"
-    assert agents[4]["trigger_method"] == "api:groq"
-    assert all(a["review_timeout_seconds"] == 300 for a in agents[1:])
+    assert agents[1]["trigger_method"] == "github-review-request:copilot-pull-request-reviewer[bot]"
+    assert agents[2]["trigger_method"] == "api:gemini"
+    assert agents[3]["trigger_method"] == "api:groq"
+    assert all(a["review_timeout_seconds"] == 300 for a in agents)
 
 
 def test_collector_workflow_exposes_only_server_reviewer_secrets():
@@ -599,9 +599,25 @@ def test_collector_workflow_exposes_only_server_reviewer_secrets():
 @pytest.mark.parametrize(
     ("payload", "expected"),
     [
-        ({"verdict": "clear", "summary": "No blocking defects."}, "clear"),
-        ({"verdict": "blocking", "summary": "Unsafe authority bypass."}, "blocking"),
-        ({"verdict": "clear", "summary": "Blocking finding remains."}, "blocking"),
+        ({"verdict": "clear", "summary": "No blocking defects.", "findings": []}, "clear"),
+        (
+            {
+                "verdict": "blocking",
+                "summary": "Unsafe authority bypass.",
+                "findings": [{"severity": "high", "path": "gate.py", "line": 1, "evidence": "authority bypass"}],
+            },
+            "blocking",
+        ),
+        (
+            {
+                "verdict": "clear",
+                "summary": "Blocking finding remains.",
+                "findings": [
+                    {"severity": "high", "path": "gate.py", "line": 1, "evidence": "blocking finding remains"}
+                ],
+            },
+            "blocking",
+        ),
     ],
 )
 def test_external_reviewer_verdict_is_fail_closed(payload, expected):
@@ -623,7 +639,11 @@ def test_api_reviewer_trigger_is_exact_head_bound_and_synchronous(monkeypatch):
     monkeypatch.setattr(
         backend,
         "_invoke_external",
-        lambda a, n: {"verdict": "clear", "summary": "No blocking defects remain after exact-head review."},
+        lambda a, n: {
+            "verdict": "clear",
+            "summary": "No blocking defects remain after exact-head review.",
+            "findings": [],
+        },
     )
     monkeypatch.setattr(backend, "_existing_trigger", lambda a, n: None)
     ids = iter(range(10, 20))
@@ -653,6 +673,7 @@ def test_api_reviewer_trigger_is_exact_head_bound_and_synchronous(monkeypatch):
                         "trigger_id": 10,
                         "verdict": "clear",
                         "summary": "No blocking defects remain after exact-head review.",
+                        "findings": [],
                         "response_digest": trigger["response_digest"],
                     },
                     sort_keys=True,
@@ -663,6 +684,40 @@ def test_api_reviewer_trigger_is_exact_head_bound_and_synchronous(monkeypatch):
     assert trigger["head_sha"] == HEAD
     assert trigger["provider"] == "gemini"
     assert backend.response_state(agent, trigger) == "clear"
+
+
+def test_codex_trigger_creation_is_delivery_not_acknowledgement(monkeypatch):
+    backend = collector.GitHubBackend("owner/repo", "token", 476, HEAD, "d" * 64, 123, 1)
+    agent = POOL["agents"][0]
+    trigger = {"id": 77, "created_at": "2026-09-22T09:52:53Z", "body": "@codex review"}
+    monkeypatch.setattr(collector, "_pages", lambda *_a, **_k: [])
+
+    assert backend.acknowledged(agent, trigger) is False
+
+
+def test_codex_provider_response_is_real_acknowledgement(monkeypatch):
+    backend = collector.GitHubBackend("owner/repo", "token", 476, HEAD, "d" * 64, 123, 1)
+    agent = POOL["agents"][0]
+    trigger = {"id": 77, "created_at": "2026-09-22T09:52:53Z", "body": "@codex review", "collector_run_id": 123}
+    monkeypatch.setattr(
+        collector,
+        "_pages",
+        lambda _repo, _token, path, *_a, **_k: (
+            [
+                {
+                    "id": 88,
+                    "user": {"login": collector.governance.reviewer_login(agent)},
+                    "created_at": "2026-09-22T09:52:54Z",
+                    "body": "Codex usage limit reached. Try again later.",
+                }
+            ]
+            if path.endswith("issues/476/comments")
+            else []
+        ),
+    )
+
+    assert backend.acknowledged(agent, trigger) is True
+    assert backend.response_state(agent, trigger) == "unavailable"
 
 
 def test_codex_trigger_is_reused_for_same_exact_head_claims(monkeypatch):
@@ -689,7 +744,11 @@ def test_api_trigger_and_result_are_persisted_before_authority(monkeypatch):
     monkeypatch.setattr(
         backend,
         "_invoke_external",
-        lambda *_a: {"verdict": "clear", "summary": "No blocking defects remain after exact-head review."},
+        lambda *_a: {
+            "verdict": "clear",
+            "summary": "No blocking defects remain after exact-head review.",
+            "findings": [],
+        },
     )
     bodies = []
     monkeypatch.setattr(
@@ -752,7 +811,7 @@ def test_reused_api_invocation_recovers_persisted_result(monkeypatch):
         "id": 78,
         "created_at": "2026-09-17T00:00:01Z",
         "body": collector.api_result_body(
-            HEAD, "d" * 64, agent, 123, 77, "unavailable", "provider unavailable", "e" * 64
+            HEAD, "d" * 64, agent, 123, 77, "unavailable", "provider unavailable", [], "e" * 64
         ),
         "user": {"login": "github-actions[bot]"},
     }
@@ -923,6 +982,7 @@ def test_groq_authority_verifies_prior_api_exhaustion_from_trusted_collector(mon
                             "trigger_id": 2,
                             "verdict": "unavailable",
                             "summary": "gemini HTTP 429",
+                            "findings": [],
                             "response_digest": "e" * 64,
                         },
                         sort_keys=True,
@@ -945,14 +1005,16 @@ def test_groq_authority_verifies_prior_api_exhaustion_from_trusted_collector(mon
 
 # Copilot review 2026-09-17: fail-closed parser and ordering regressions.
 def test_external_verdict_rejects_non_string_contract_fields():
-    assert collector.external_verdict({"verdict": "clear", "summary": ["No blockers"]}) == "blocking"
-    assert collector.external_verdict({"verdict": ["clear"], "summary": "No blockers"}) == "blocking"
+    assert collector.external_verdict({"verdict": "clear", "summary": ["No blockers"], "findings": []}) == "unavailable"
+    assert collector.external_verdict({"verdict": ["clear"], "summary": "No blockers", "findings": []}) == "unavailable"
 
 
 def test_external_verdict_rejects_ambiguous_clear_summary():
     assert (
-        collector.external_verdict({"verdict": "clear", "summary": "Critical security vulnerability remains"})
-        == "blocking"
+        collector.external_verdict(
+            {"verdict": "clear", "summary": "Critical security vulnerability remains", "findings": []}
+        )
+        == "unavailable"
     )
 
 
@@ -1058,12 +1120,14 @@ def test_canonical_pool_preserves_server_side_fallback_chain():
     policy = json.loads((collector.review.ROOT / "docs/CODE_WRITE_POLICY.json").read_text(encoding="utf-8"))
     pool = policy["review_progression"]["review_authority"]["reviewer_pool"]
     agents = sorted(pool["agents"], key=lambda a: a["priority"])
-    assert [a["id"] for a in agents] == ["local-ollama", "codex", "copilot", "gemini", "groq"]
+    assert [a["id"] for a in agents] == ["codex", "copilot", "gemini", "groq", "local-ollama"]
+    assert agents[-1]["enabled"] is False
+    assert agents[-1]["authority_eligible"] is False
     assert [a["id"] for a in collector.review.authority_pool_reviewers(pool)] == ["codex", "copilot", "gemini", "groq"]
-    assert agents[2]["trigger_method"] == "github-review-request:copilot-pull-request-reviewer[bot]"
-    assert agents[3]["trigger_method"] == "api:gemini"
-    assert agents[4]["trigger_method"] == "api:groq"
-    assert all(a["review_timeout_seconds"] == 300 and a["retryable"] is False for a in agents[1:])
+    assert agents[1]["trigger_method"] == "github-review-request:copilot-pull-request-reviewer[bot]"
+    assert agents[2]["trigger_method"] == "api:gemini"
+    assert agents[3]["trigger_method"] == "api:groq"
+    assert all(a["review_timeout_seconds"] == 300 and a["retryable"] is False for a in agents[:4])
     assert pool["last_resort"] == "hunter-guard"
 
 
@@ -1373,7 +1437,9 @@ def test_an_unacknowledged_reviewer_fails_over_on_its_acknowledgement_budget():
 
     assert [record["outcome"] for record in records] == ["unacknowledged", "timed_out"]
     assert records[0]["elapsed_seconds"] == 30
+    assert records[0]["reason_code"] == "NO_ACK_TIMEOUT"
     assert records[1]["elapsed_seconds"] == 300
+    assert records[1]["reason_code"] == "REVIEW_TIMEOUT"
 
 
 def _triage_receipt(monkeypatch, *, local_outcome="clear", local_run_id=7001, local_ack=True, mutate=None):
@@ -1694,3 +1760,76 @@ def test_copilot_clean_exact_head_review_is_clear(monkeypatch):
 
     monkeypatch.setattr(collector, "_pages", pages)
     assert backend.response_state(agent, trigger) == "clear"
+
+
+def test_external_blocking_without_actionable_findings_is_unavailable():
+    payload = {"verdict": "blocking", "summary": "Authority may be unsafe.", "findings": []}
+    assert collector.external_verdict(payload) == "unavailable"
+
+
+def test_external_blocking_requires_structured_actionable_finding():
+    payload = {
+        "verdict": "blocking",
+        "summary": "Unsafe authority bypass.",
+        "findings": [{"severity": "high", "path": "scripts/gate.py", "line": 42, "evidence": "bypass remains"}],
+    }
+    assert collector.external_verdict(payload) == "blocking"
+
+
+def test_external_clear_requires_empty_findings():
+    payload = {
+        "verdict": "clear",
+        "summary": "No blocking defects remain.",
+        "findings": [{"severity": "high", "path": "scripts/gate.py", "line": 42, "evidence": "bypass remains"}],
+    }
+    assert collector.external_verdict(payload) == "blocking"
+
+
+def test_api_blocking_result_publishes_actionable_findings(monkeypatch):
+    backend = collector.GitHubBackend("owner/repo", "token", 476, HEAD, "d" * 64, 123, 1)
+    agent = {**POOL["agents"][0], "id": "gemini", "priority": 2, "trigger_method": "api:gemini"}
+    finding = {"severity": "high", "path": "scripts/gate.py", "line": 42, "evidence": "authority bypass remains"}
+    monkeypatch.setattr(backend, "_existing_trigger", lambda *_a: None)
+    monkeypatch.setattr(
+        backend,
+        "_invoke_external",
+        lambda *_a: {"verdict": "blocking", "summary": "Authority bypass remains.", "findings": [finding]},
+    )
+    bodies = []
+    monkeypatch.setattr(
+        backend,
+        "_post_comment",
+        lambda body: bodies.append(body) or {"id": len(bodies), "created_at": "2026-09-22T00:00:00Z", "body": body},
+    )
+    trigger = backend.trigger(agent, 1)
+    result = collector.parse_api_result(bodies[1])
+    assert trigger["state"] == "blocking"
+    assert result is not None
+    assert result["findings"] == [finding]
+
+
+def test_invalid_api_blocker_fails_over_with_precise_reason():
+    class InvalidThenClear(Backend):
+        def trigger(self, agent, number):
+            self.triggers.append((agent["id"], number))
+            state = "unavailable" if agent["id"] == "gemini" else "clear"
+            return {
+                "id": len(self.triggers),
+                "created_at": "2026-09-22T00:00:00Z",
+                "state": state,
+                "invalid_result": agent["id"] == "gemini",
+            }
+
+        def response_state(self, agent, trigger):
+            return trigger["state"]
+
+    pool = copy.deepcopy(POOL)
+    pool["agents"] = (
+        {**pool["agents"][0], "id": "gemini", "priority": 1, "trigger_method": "api:gemini"},
+        {**pool["agents"][0], "id": "groq", "priority": 2, "trigger_method": "api:groq"},
+    )
+    backend = InvalidThenClear()
+    results = collector.collect_attempts(pool, HEAD, backend)
+    assert backend.triggers == [("gemini", 1), ("groq", 1)]
+    assert results[0]["reason_code"] == "INVALID_REVIEW_RESULT"
+    assert results[1]["outcome"] == "clear"

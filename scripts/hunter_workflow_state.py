@@ -559,7 +559,7 @@ def _all_checks_green(observation: PullRequestObservation | None) -> StateFindin
         return StateFinding(state, False, NONE, "no open pull request whose head can carry checks")
     decision = readiness.evaluate(observation.checks_only_observation())
     if decision.state == "success":
-        required = ", ".join((*readiness.REQUIRED_CHECKS, readiness.GOVERNANCE_CONTEXT))
+        required = ", ".join(readiness.REQUIRED_CHECKS)
         return StateFinding(state, True, GITHUB, f"green on head {observation.head_sha[:10]}: {required}")
     return StateFinding(state, False, GITHUB, decision.description)
 

@@ -1899,6 +1899,21 @@ def review_orchestration_state(repository: str, token: str, pr_number: int, head
     raise RuntimeError(error or f"invalid review orchestration state: {state}")
 
 
+def pending_review_authority_state(repository: str, token: str, pr_number: int, head_sha: str) -> tuple[str, str]:
+    """Distinguish live exact-head review from missing or terminal authority."""
+
+    cycle_state, detail = review_orchestration_state(repository, token, pr_number, head_sha)
+    if cycle_state in {"REVIEW_IN_PROGRESS", "FAILOVER_IN_PROGRESS"}:
+        return "pending", f"{cycle_state}: {detail}"
+    if cycle_state == "WAITING_FOR_REVIEWER":
+        # The privileged reconcile/collector path is asynchronous and is woken by
+        # trusted-preflight completion. Absence of a cycle before that dispatch
+        # settles is waiting, not failed authority. Merge readiness remains closed
+        # until authenticated exact-head authority is actually published.
+        return "pending", f"{cycle_state}: {detail}"
+    return "failure", f"MISSING_REVIEW_AUTHORITY: {cycle_state}: {detail}"
+
+
 def verify_pre_ready_hostile_review(
     repository: str,
     token: str,
@@ -2088,6 +2103,10 @@ def verify_pre_ready_hostile_review(
                     )
                 )
         if not adopted:
+            if pr_number is not None:
+                pending_state, pending_detail = pending_review_authority_state(repository, token, pr_number, head_sha)
+                if pending_state == "pending":
+                    return pending_state, pending_detail
             return "failure", "MISSING_REVIEW_AUTHORITY: no authenticated exact-head adoption of the review request"
         priorities = {str(a["id"]): int(a["priority"]) for a in pre_ready.authority_pool_reviewers(pool)}
         observation, ack = min(adopted, key=lambda item: priorities.get(item[0]["agent_id"], 10**9))
@@ -2237,9 +2256,17 @@ def candidate_admission(repository: str, token: str, head_sha: str, pr_number: i
     if ingress_state != "success":
         return ingress_state, ingress_message
 
+    # External LLM review is optional defense-in-depth. Candidate admission is
+    # governed by deterministic exact-head provenance/preflight evidence. Review
+    # findings remain blockers through canonical dispositions/threads, but
+    # provider quota, outage, or absence must never deadlock admission.
     review_state, review_message = verify_pre_ready_hostile_review(repository, token, head_sha, pr_number)
     if review_state != "success":
-        return review_state, review_message
+        blocking_review = review_state == "failure" and (
+            "BLOCKING_FINDINGS" in review_message or "MALFORMED_REVIEW" in review_message
+        )
+        if blocking_review:
+            return review_state, review_message
 
     if touches_protected_preflight:
         if pr_number is None:

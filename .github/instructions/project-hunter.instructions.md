@@ -45,8 +45,7 @@ The active merge path is current-state based. A PR is not ready while any of the
 - a substantive inline review thread remains unresolved;
 - a current review is `CHANGES_REQUESTED`;
 - `Quality Gates`, `dependency-review`, or `CodeQL` is missing, pending, cancelled, or failed;
-- `Hunter Governance Review` is missing or non-stale pending;
-- `Hunter Governance Review` is failed or errored;
+- `Hunter Governance Review` is a compatibility status during the authority cutover, not a second merge prerequisite;
 - the head cannot be safely attributed to the PR.
 
 `Hunter Merge Readiness` is the final current-state controller. Do not merge until it and every required gate on the final code head are green. Human merge approval remains required.

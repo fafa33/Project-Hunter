@@ -392,6 +392,46 @@
       "guard": "Every reviewer invocation was keyed by exact head and claims digest alone, and the collector run that correlates those invocations was named the same way, so a cycle whose reviewers had all been exhausted or timed out was terminal for that immutable head: the collector read as already completed, the reviewer trigger comment read as already posted, and remediating the blocking findings the cycle itself produced could buy no further review. The repair is a remediation generation: a digest over the exact head, the claims digest and the full set of resolved blocking review threads, where a blocking thread counts only when an authenticated reviewer app that is neither Hunter's own automation nor the pull-request author opened it. It is derived from trusted GitHub review-thread state by the trusted default-branch orchestrator and re-derived independently by the trusted collector, which fails closed when the generation it was dispatched for is not the one the evidence supports, so neither candidate prose nor a dispatch input can mint one. The generation enters the collector run name, the reviewer invocation key, the reviewer trigger body and the collector receipt, so a new generation buys exactly one new invocation per reviewer while an unchanged generation stays idempotent; an exhaustion receipt from a superseded generation is refused rather than replayed. The transition is bounded on every side: the previous generation's collector must be finished, a collector must not already exist for this generation, and one exact head may spend at most MAX_REMEDIATION_GENERATIONS generations before the candidate stays pending. Exact-head and claims binding, authenticated reviewer identity, fail-closed pending semantics and human merge approval are unchanged.",
       "test": "tests/test_review_after_remediation_generation.py::test_exhausted_cycle_redispatches_exactly_once_after_blockers_are_resolved",
       "status": "guarded"
+    },
+    {
+      "id": "DFF-029",
+      "class": "triage-only-self-hosted-reviewer-blocks-authority-progression",
+      "source": "PR #485 production cutover: Hunter Local Reviewer repeatedly failed while authority_eligible=false",
+      "classification": "systemic",
+      "guard_boundary": "reviewer-pool admission and trusted health gating",
+      "guard": "A self-hosted reviewer that is triage-only may not be enabled in the canonical active reviewer pool unless trusted default-branch health admission proves a fresh heartbeat before dispatch. Offline, sleeping, disconnected, or unhealthy local compute is an availability condition, never a candidate failure and never a reason to delay authority progression. Until that health gate exists, local-ollama remains disabled and authority progression starts with Codex; enabling it requires both the benchmark gate and trusted health admission.",
+      "status": "guarded",
+      "test": "tests/test_code_write_policy.py::test_local_ollama_is_triage_only_and_disabled_without_health_admission"
+    },
+    {
+      "id": "DFF-030",
+      "class": "review-trigger-misclassified-as-provider-acknowledgement",
+      "source": "PR #485 reviewer collector: GitHub creation of @codex review comment was treated as Codex acknowledgement",
+      "classification": "systemic",
+      "guard_boundary": "reviewer dispatch acknowledgement semantics",
+      "guard": "Creating or persisting a reviewer trigger is delivery evidence only and MUST NOT count as provider acknowledgement. Codex comment-trigger review receives one bounded 300-second initial-response window; only independently attributable provider evidence can acknowledge it. Silence terminates as NO_ACK_TIMEOUT, authenticated quota/usage denial terminates immediately as QUOTA_OR_USAGE_LIMIT, other provider unavailability as PROVIDER_UNAVAILABLE, review overrun as REVIEW_TIMEOUT, and findings/clear outcomes remain explicit. No automatic retry is permitted for the same exact HEAD.",
+      "status": "guarded",
+      "test": "tests/test_hunter_reviewer_collector.py::test_codex_trigger_creation_is_delivery_not_acknowledgement"
+    },
+    {
+      "id": "DFF-031",
+      "class": "stale-review-request-silently-prevents-collector-dispatch",
+      "source": "PR #485 after exact-head reviewer ACK fix: governed content changed while the prior review request remained present, so trusted orchestration rejected it and dispatched no collector",
+      "classification": "systemic",
+      "guard_boundary": "pre-push review-request freshness",
+      "guard": "Draft work may omit a review request, but once a review request exists it MUST bind the current governed range and governing Issue criteria before push. A stale request is blocked at pre-push rather than allowed to become a deterministic MISSING_REVIEW_AUTHORITY cycle with no collector dispatch.",
+      "status": "guarded",
+      "test": "tests/test_hunter_pre_push.py"
+    },
+    {
+      "id": "DFF-032",
+      "class": "duplicate-derived-merge-gates-amplify-single-defect",
+      "source": "PR #485 gate audit: Merge Readiness directly observed current blockers and then consumed Hunter Governance Review, a second derived status over overlapping evidence",
+      "classification": "systemic",
+      "guard_boundary": "merge-gate authority ownership and production ruleset cutover",
+      "guard": "Each merge invariant has one canonical evidence owner. Merge Readiness may aggregate direct exact-head validation, security, review-authority and current GitHub-state evidence, but MUST NOT require a second derived status that summarizes the same evidence. Internal orchestration workflows are not required merge gates. Legacy Governance Review may remain compatibility-only until atomic cutover, then is retired from required checks. Production target has no bypass actors.",
+      "status": "guarded",
+      "test": "tests/test_governance_gate_consolidation.py"
     }
   ],
   "families": [
@@ -765,7 +805,7 @@
     {
       "id": "DFF-014",
       "title": "pending-prerequisite-reported-as-failure",
-      "invariant": "A hosted prerequisite that is still running publishes pending; only an invalid, absent, untrusted or wrongly-bound proof publishes failure. 'Still running' is decided from observable run state for the exact candidate head, never from the presence of a published status, because a proof that publishes its status last has no status for the whole time it is being produced. A head left pending is re-evaluated when the proof lands, and pending never satisfies admission, readiness or merge.",
+      "invariant": "A hosted prerequisite that is still running publishes pending; only an invalid, absent, untrusted or wrongly-bound proof publishes failure. 'Still running' is decided from observable run state for the exact candidate head, never from the presence of a published status, because a proof that publishes its status last has no status for the whole time it is being produced. A head left pending is re-evaluated when the proof lands, and pending never satisfies admission, readiness or merge. Every trusted proof completion that can move admission from pending to eligible must wake the privileged orchestrator; a status-only refresh is not sufficient.",
       "applicability": {
         "changed_paths": [
           "scripts/",
@@ -786,11 +826,11 @@
         "tests/test_issue_412_prevention_gate.py::test_a_running_hosted_proof_is_pending_not_failure",
         "tests/test_issue_412_prevention_gate.py::test_an_invalid_hosted_proof_remains_failure",
         "tests/test_issue_412_prevention_gate.py::test_candidate_admission_reconciles_after_the_trusted_upgrade_completes",
-        "tests/test_issue_412_prevention_gate.py::test_the_draft_controller_keeps_pending_authority_in_draft",
+        "tests/test_issue_412_prevention_gate.py::test_pending_review_authority_does_not_redraft_or_fail_candidate_controller",
         "tests/test_issue_417_governance_waiting_state.py::test_an_eligible_active_trusted_run_is_waiting_not_failure",
         "tests/test_issue_417_governance_waiting_state.py::test_an_ineligible_active_run_is_not_a_waiting_dependency",
         "tests/test_issue_417_governance_waiting_state.py::test_a_real_blocker_alongside_an_active_run_is_failure_not_waiting",
-        "tests/test_issue_417_governance_waiting_state.py::test_merge_readiness_does_not_read_a_governance_wait_as_success",
+        "tests/test_issue_419_trusted_parallel_lane.py::test_waiting_still_satisfies_neither_admission_nor_merge_readiness",
         "tests/test_issue_417_governance_waiting_state.py::test_the_same_head_succeeds_once_the_trusted_proof_lands"
       ],
       "lifecycle": "hosted-enforced",
@@ -798,6 +838,9 @@
         "Issue #412",
         "PR #413 independent review (Codex P1)",
         "Issue #417 (recurrence observed on PR #416 head fda1ad0)"
+      ],
+      "regression_tests": [
+        "tests/test_hunter_governance_cleanup.py::test_reconcile_wakes_when_trusted_preflight_upgrade_completes"
       ]
     },
     {
@@ -1139,7 +1182,10 @@
         "tests/test_hunter_reviewer_collector.py::test_a_triage_only_verdict_does_not_end_the_authority_search",
         "tests/test_hunter_reviewer_collector.py::test_an_unacknowledged_reviewer_fails_over_on_its_acknowledgement_budget",
         "tests/test_hunter_reviewer_collector.py::test_a_triage_reviewer_is_verified_but_never_becomes_exhaustion_evidence",
-        "tests/test_hunter_reviewer_collector.py::test_a_forged_triage_invocation_fails_the_trusted_receipt_closed"
+        "tests/test_hunter_reviewer_collector.py::test_a_forged_triage_invocation_fails_the_trusted_receipt_closed",
+        "tests/test_hunter_reviewer_collector.py::test_external_blocking_without_actionable_findings_is_unavailable",
+        "tests/test_hunter_reviewer_collector.py::test_api_blocking_result_publishes_actionable_findings",
+        "tests/test_hunter_reviewer_collector.py::test_invalid_api_blocker_fails_over_with_precise_reason"
       ],
       "lifecycle": "regression-tested",
       "sources": [
@@ -1210,6 +1256,71 @@
       ],
       "sources": [
         "Issue #461 (2026-09-18): PR #473 remediated both authenticated Codex P1 findings (threads r4042982311 and r4042982318) and resolved every review thread, yet stayed permanently MISSING_REVIEW_AUTHORITY because the exact-head collector run 35348625886 had already completed with Codex timed out, Gemini 503 and Groq 403, and no identity existed that could ask any of them again"
+      ]
+    },
+    {
+      "id": "DFF-025",
+      "title": "governance-authority-cutover-dependency-cycle",
+      "invariant": "A governance successor may never authorize its own installation and a retiring legacy authority may never be required to understand successor semantics. Production authority transfer must be durable, generation-bound, single-owner, fail-closed, restart-safe and rollback-safe; legacy publication is fenced before successor enablement, and successor publication is rejected before enablement or for a stale generation.",
+      "lifecycle": "locally-enforced",
+      "applicability": {
+        "changed_paths": [
+          "src/hunter/governance_cutover/",
+          "scripts/hunter_governance_cutover_preflight.py",
+          ".github/workflows/",
+          "scripts/hunter_governance_review_v2.py",
+          "scripts/hunter_merge_readiness_v2.py",
+          "scripts/hunter_candidate_admission.py",
+          "scripts/hunter_review_orchestrator.py"
+        ],
+        "rationale": "These surfaces own or consume governance authority and can recreate the cutover deadlock exposed while migrating PR #482."
+      },
+      "prevention": {
+        "mechanism": "scripts/hunter_governance_cutover_preflight.py::validate_cutover_contract is invoked by the Defect Prevention Guard and requires the production cutover state machine, publication fencing, rollback and non-authoritative shadow boundary.",
+        "boundary": "local-pre-push",
+        "guard_reference": "scripts/hunter_governance_cutover_preflight.py::validate_cutover_contract"
+      },
+      "regression_evidence": [
+        "tests/test_governance_cutover_authority.py::test_forward_cutover_and_single_owner",
+        "tests/test_governance_cutover_authority.py::test_duplicate_target_with_different_evidence_is_rejected",
+        "tests/test_governance_cutover_authority.py::test_loaded_record_rejects_incoherent_authority_flags",
+        "tests/test_governance_cutover_lab_parity.py::test_forward_state_sequence_matches_accepted_lab",
+        "tests/test_governance_cutover_shadow.py::test_shadow_records_parity_without_side_effect_surface",
+        "tests/test_governance_cutover_adapters.py::test_adapter_exposes_real_divergence"
+      ],
+      "sources": [
+        "Architecture Lab Phase 4 authority-transfer contract",
+        "PR #482 production migration deadlock, 2026-09-22"
+      ]
+    },
+    {
+      "id": "DFF-026",
+      "title": "external-reviewer-availability-cannot-deadlock-merge-authority",
+      "invariant": "External LLM reviewers are optional defense-in-depth, never a mandatory availability dependency for push, candidate admission, governance success, or merge readiness. Provider absence, quota exhaustion, rate limits, timeouts, or stale/missing optional review evidence cannot block an otherwise deterministically verified exact head. Authenticated blocking findings that do exist remain fail-closed until resolved through canonical findings, review threads, or CHANGES_REQUESTED. Human approval remains required for merge.",
+      "lifecycle": "locally-enforced",
+      "applicability": {
+        "changed_paths": [
+          "docs/CODE_WRITE_POLICY.json",
+          "scripts/hunter_pre_push.py",
+          "scripts/hunter_candidate_admission.py",
+          "scripts/hunter_governance_review_v2.py",
+          "scripts/hunter_merge_readiness_v2.py"
+        ],
+        "rationale": "These surfaces can accidentally turn an optional external reviewer into a mandatory liveness dependency and recreate the multi-PR deadlock observed from PR #471 through PR #485."
+      },
+      "prevention": {
+        "mechanism": "CODE_WRITE_POLICY declares deterministic governance as merge authority; Defect Prevention rejects mandatory external-review authority; merge readiness ignores reviewer availability while preserving canonical finding blockers; pre-push never blocks on optional review freshness.",
+        "boundary": "local-pre-push",
+        "guard_reference": "scripts/hunter_defect_prevention_preflight.py::validate_code_write_policy"
+      },
+      "regression_evidence": [
+        "tests/test_code_write_policy.py::test_code_write_policy_declares_codex_primary_with_a_recorded_reason_fallback",
+        "tests/test_exact_head_review_authority.py::test_merge_readiness_external_reviewer_unavailability_does_not_block_verified_head",
+        "tests/test_exact_head_review_authority.py::test_merge_readiness_existing_blocking_review_finding_still_blocks_without_provider_authority",
+        "tests/test_hunter_merge_readiness_v2.py::test_no_codex_review_on_current_head_blocks"
+      ],
+      "sources": [
+        "PR #485, 2026-09-23: external reviewer quota/outage states were identified as a liveness dependency that could prevent otherwise verified PRs from reaching merge readiness."
       ]
     }
   ]

@@ -1,0 +1,35 @@
+{
+  "schema": "hunter.accepted-cutover-contract.v1",
+  "source": "Architecture Lab Phase 4A accepted contract",
+  "states": [
+    "LAB_VALIDATED",
+    "SHADOW_INSTALLED",
+    "HISTORICAL_REPLAY_VERIFIED",
+    "SHADOW_RUNTIME_VERIFIED",
+    "CUTOVER_CANDIDATE",
+    "LEGACY_AUTHORITY_DISABLED",
+    "NEW_AUTHORITY_ENABLED",
+    "POST_CUTOVER_VERIFIED",
+    "LEGACY_CODE_REMOVABLE",
+    "LEGACY_CODE_REMOVED",
+    "CUTOVER_COMPLETE"
+  ],
+  "evidence": [
+    "SHADOW_PROOF",
+    "REPLAY_EQUALITY",
+    "RUNTIME_PARITY",
+    "FENCING_VERIFIED",
+    "TRANSFER_AUTHORIZED",
+    "POST_CUTOVER_PARITY",
+    "LEGACY_REMOVAL_VERIFIED",
+    "LEGACY_REMOVED",
+    "ROLLBACK_EXCLUDED"
+  ],
+  "invariants": {
+    "single_owner": true,
+    "disabled_gap_has_no_owner": true,
+    "generation_bound": true,
+    "legacy_fenced_before_successor_enable": true,
+    "rollback_fences_successor_first": true
+  }
+}

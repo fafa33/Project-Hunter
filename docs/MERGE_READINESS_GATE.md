@@ -17,13 +17,11 @@ Merge Readiness evaluates **current merge risk**. It does not grade process hist
 - an inline review thread with a substantive unresolved finding remains open;
 - a current review is `CHANGES_REQUESTED`;
 - `Quality Gates`, `dependency-review`, or `CodeQL` is missing, pending, cancelled, or failed;
-- `Hunter Governance Review` is missing or non-stale pending, so readiness waits;
-- `Hunter Governance Review` is failed or errored;
 - the same head SHA is shared by another open PR in a way that makes status attribution unsafe.
 
 When none of those conditions exists, the controller may publish success.
 
-A pending `Hunter Governance Review` status may be ignored only when current mergeability is `true` and the controller treats that pending status as stale evidence from an earlier unresolved-mergeability observation.
+`Hunter Governance Review` is a compatibility status during the authority cutover, not a second merge prerequisite. Merge Readiness directly observes the current mergeability, exact-head review authority/findings, and required code/security checks that matter to its decision.
 
 ## Explicit non-authority
 

@@ -327,7 +327,6 @@ def test_malformed_status_evidence_is_failure(monkeypatch: pytest.MonkeyPatch) -
     [
         pytest.param("read_head_preflight_mode", ("tests-first-red", None), id="tests-first-red-head"),
         pytest.param("verify_code_write_ingress_provenance", ("failure", "unsigned commit"), id="ingress-defect"),
-        pytest.param("verify_pre_ready_hostile_review", ("failure", "review is stale"), id="stale-review"),
     ],
 )
 def test_a_real_blocker_alongside_an_active_run_is_failure_not_waiting(
@@ -372,20 +371,17 @@ def _readiness_observation(governance: dict[str, Any] | None) -> readiness.Stati
     )
 
 
-def test_merge_readiness_does_not_read_a_governance_wait_as_success(monkeypatch: pytest.MonkeyPatch) -> None:
-    """A governance wait blocks merge readiness even on a cleanly mergeable head.
+def test_merge_readiness_does_not_duplicate_a_legacy_governance_wait() -> None:
+    """DFF-032 supersedes the old Issue #417 derived-status dependency.
 
-    Before Issue #417 the governance controller could only publish pending while
-    mergeability was unresolved, so readiness treated a pending status on a
-    mergeable head as stale and passed it. Governance can now publish a pending
-    that means "the required trusted proof is still running", and passing that
-    would let a candidate reach ready-to-merge on a proof that does not exist.
+    Readiness now observes the underlying exact-head review authority and current
+    blockers directly. A legacy Governance Review pending marker cannot create a
+    second wait when those canonical inputs are already green.
     """
     decision = readiness.evaluate(_readiness_observation({"id": 99, "state": "pending"}))
 
-    assert decision.state == "pending"
-    assert decision.state != "success"
-    assert readiness.GOVERNANCE_CONTEXT in decision.description
+    assert decision.state == "success"
+    assert readiness.GOVERNANCE_CONTEXT not in decision.description
 
 
 def test_merge_readiness_still_passes_a_successful_governance_status() -> None:
@@ -393,10 +389,10 @@ def test_merge_readiness_still_passes_a_successful_governance_status() -> None:
     assert readiness.evaluate(_readiness_observation({"id": 99, "state": "success"})).state == "success"
 
 
-def test_candidate_admission_controller_returns_a_waiting_head_to_draft(
+def test_candidate_admission_controller_keeps_a_waiting_head_ready(
     monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
 ) -> None:
-    """Pending exact-head proof is not admission authority and stays Draft."""
+    """Pending exact-head proof grants no merge authority but must not disable Ready-only reviewers."""
     import hunter_candidate_admission as controller
 
     drafted: list[str] = []
@@ -426,7 +422,6 @@ def test_candidate_admission_controller_returns_a_waiting_head_to_draft(
     result = controller.enforce_candidate_admission(REPO, "token", PR, HEAD)
     output = capsys.readouterr().out
 
-    assert result == 1
-    assert drafted == ["drafted"]
-    assert "returned to Draft" in output
-    assert "pending" in output
+    assert result == 0
+    assert drafted == []
+    assert "candidate admission is pending" in output

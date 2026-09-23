@@ -526,7 +526,7 @@ def _attempt(
     status: str = "exhausted",
     reason: str = "unavailable (rate-limited)",
     timeout_seconds: int = 300,
-    ack_timeout_seconds: int = 30,
+    ack_timeout_seconds: int = 300,
     review_timeout_seconds: int = 300,
     failure_class: str = "transient",
     attempt_count: int = 1,
@@ -566,7 +566,7 @@ def _pool(*, agents: tuple = (), last_resort: str = "hunter-guard", max_seconds:
         "enabled": True,
         "exact_head_support": True,
         "timeout_seconds": 300,
-        "ack_timeout_seconds": 30,
+        "ack_timeout_seconds": 300,
         "review_timeout_seconds": 300,
     }
     return {
@@ -622,7 +622,11 @@ def _authority(
     if authority_type != "codex":
         default_attempts = [dict(_attempt())]
         if authority_type == "hunter-guard":
-            default_attempts += [dict(_attempt("copilot")), dict(_attempt("gemini")), dict(_attempt("groq"))]
+            default_attempts += [
+                dict(_attempt("copilot", ack_timeout_seconds=30)),
+                dict(_attempt("gemini", ack_timeout_seconds=30)),
+                dict(_attempt("groq", ack_timeout_seconds=30)),
+            ]
         authority["reviewer_attempts"] = list(attempts) if attempts is not None else default_attempts
     authority.update(overrides)
     return authority
@@ -836,7 +840,11 @@ def test_a_fallback_review_of_the_exact_head_is_valid_when_codex_is_unavailable(
     document = _review_document(
         authority=_authority(
             authority_type="hunter-guard",
-            attempts=[dict(_attempt()), dict(_attempt("gemini")), dict(_attempt("groq"))],
+            attempts=[
+                dict(_attempt()),
+                dict(_attempt("gemini", ack_timeout_seconds=30)),
+                dict(_attempt("groq", ack_timeout_seconds=30)),
+            ],
         )
     )
 
@@ -1746,6 +1754,7 @@ def test_pre_push_admits_a_bound_multi_commit_range(monkeypatch, tmp_path: Path)
     monkeypatch.setattr(hunter_pre_push.os, "chdir", lambda _path: None)
     monkeypatch.setattr(hunter_pre_push, "_validate_receipt_freshness", lambda _head: None)
     monkeypatch.setattr(hunter_pre_push, "report_pre_ready_review_state", lambda _head, _updates: None)
+    monkeypatch.setattr(hunter_pre_push, "require_current_review_request_if_present", lambda _head, _updates: None)
     monkeypatch.setattr(hunter_pre_push.provenance, "check_range", lambda *_a, **_k: None)
     monkeypatch.setattr(hunter_pre_push, "_select_preflight_mode", lambda _head: hunter_pre_push.NORMAL_MODE)
 
@@ -2294,12 +2303,12 @@ def test_candidate_admission_reconciles_after_the_trusted_upgrade_completes() ->
     assert "pull_request_target" in condition and "push" in condition
 
 
-def test_the_draft_controller_keeps_pending_authority_in_draft(monkeypatch) -> None:
+def test_pending_review_authority_does_not_redraft_or_fail_candidate_controller(monkeypatch) -> None:
     import hunter_candidate_admission as admission
 
     pr = {"state": "open", "draft": False, "head": {"sha": HEAD}, "base": {"ref": "main"}, "node_id": "pending"}
     monkeypatch.setattr(core, "read_mergeability", lambda *a: pr)
-    monkeypatch.setattr(core, "candidate_admission", lambda *a: ("pending", "proof is incomplete"))
+    monkeypatch.setattr(core, "candidate_admission", lambda *a: ("pending", "review orchestration is in progress"))
     converted: list[str] = []
 
     def convert(token: str, node: str) -> bool:
@@ -2307,8 +2316,31 @@ def test_the_draft_controller_keeps_pending_authority_in_draft(monkeypatch) -> N
         return True
 
     monkeypatch.setattr(admission, "convert_to_draft", convert)
-    assert admission.enforce_candidate_admission("repo", "token", PR_NUMBER) == 1
-    assert converted == ["pending"]
+
+    assert admission.enforce_candidate_admission("repo", "token", PR_NUMBER) == 0
+    assert converted == []
+
+
+def test_missing_adoption_is_pending_while_exact_head_review_cycle_is_active(monkeypatch) -> None:
+    monkeypatch.setattr(
+        core, "review_orchestration_state", lambda *a: ("REVIEW_IN_PROGRESS", "provider=codex trigger=77")
+    )
+    # The lifecycle mapper is intentionally small and deterministic: active review
+    # is waiting, not failed authority.
+    state, detail = core.pending_review_authority_state("repo", "token", PR_NUMBER, HEAD)
+    assert state == "pending"
+    assert "REVIEW_IN_PROGRESS" in detail
+
+
+def test_missing_adoption_is_pending_before_exact_head_cycle_is_published(monkeypatch) -> None:
+    monkeypatch.setattr(
+        core,
+        "review_orchestration_state",
+        lambda *a: ("WAITING_FOR_REVIEWER", "no trusted exact-head orchestration cycle has been published"),
+    )
+    state, detail = core.pending_review_authority_state("repo", "token", PR_NUMBER, HEAD)
+    assert state == "pending"
+    assert "WAITING_FOR_REVIEWER" in detail
 
 
 # --------------------------------------------------------------------------
@@ -2444,9 +2476,8 @@ def test_pre_push_fails_closed_when_issue_criteria_are_unverifiable(monkeypatch,
     hunter_pre_push.report_pre_ready_review_state(HEAD, ())
     out = capsys.readouterr().out
 
-    assert "DRAFT-ONLY" in out
-    assert "no GitHub token" in out
-    assert "READY-ELIGIBLE" not in out
+    assert "optional external review" in out
+    assert "does not block push or deterministic merge authority" in out
 
 
 def test_pre_push_reports_ready_only_when_issue_criteria_are_covered(monkeypatch, capsys) -> None:
@@ -2468,7 +2499,7 @@ def test_pre_push_reports_ready_only_when_issue_criteria_are_covered(monkeypatch
     hunter_pre_push.report_pre_ready_review_state(HEAD, ())
     out = capsys.readouterr().out
 
-    assert "READY-ELIGIBLE" in out
+    assert "OPTIONAL-REVIEW-CURRENT" in out
     assert captured["base"] == BASE and captured["head"] == HEAD
     assert captured["issue_criteria"] == ("one canonical criterion",)
 
@@ -2568,9 +2599,8 @@ def test_mixed_issue_push_cannot_select_one_matching_claim(monkeypatch, capsys) 
     )
     out = capsys.readouterr().out
 
-    assert "DRAFT-ONLY" in out
-    assert "#442, #444" in out
-    assert "READY-ELIGIBLE" not in out
+    assert "optional external review" in out
+    assert "does not block push or deterministic merge authority" in out
 
 
 def test_mixed_issue_push_result_is_independent_of_pushed_ref_ordering(monkeypatch, capsys) -> None:
@@ -2589,8 +2619,8 @@ def test_mixed_issue_push_result_is_independent_of_pushed_ref_ordering(monkeypat
     reverse = capsys.readouterr().out
 
     assert forward == reverse
-    assert "DRAFT-ONLY" in forward
-    assert "READY-ELIGIBLE" not in forward
+    assert "optional external review" in forward
+    assert "does not block push or deterministic merge authority" in forward
 
 
 def test_single_issue_multi_ref_push_stays_valid(monkeypatch) -> None:
@@ -2628,10 +2658,8 @@ def test_local_readiness_cannot_claim_ready_when_hosted_binds_another_issue(monk
     hunter_pre_push.report_pre_ready_review_state(HEAD, _pushed_updates("refs/heads/fix/issue-444-other"))
     out = capsys.readouterr().out
 
-    assert "DRAFT-ONLY" in out
-    assert "claims Issue #442" in out
-    assert "binds Issue #444" in out
-    assert "READY-ELIGIBLE" not in out
+    assert "optional external review" in out
+    assert "does not block push or deterministic merge authority" in out
 
 
 def test_top_level_array_review_evidence_is_draft_only_not_a_crash(monkeypatch, capsys) -> None:
@@ -2642,9 +2670,8 @@ def test_top_level_array_review_evidence_is_draft_only_not_a_crash(monkeypatch, 
     hunter_pre_push.report_pre_ready_review_state(HEAD, _pushed_updates("refs/heads/fix/issue-442-hotfix"))
     out = capsys.readouterr().out
 
-    assert "DRAFT-ONLY" in out
-    assert "not a JSON object" in out
-    assert "READY-ELIGIBLE" not in out
+    assert "optional external review" in out
+    assert "does not block push or deterministic merge authority" in out
 
 
 def test_non_object_review_claims_are_draft_only_not_a_crash(monkeypatch, capsys) -> None:
@@ -2655,9 +2682,8 @@ def test_non_object_review_claims_are_draft_only_not_a_crash(monkeypatch, capsys
     hunter_pre_push.report_pre_ready_review_state(HEAD, ())
     out = capsys.readouterr().out
 
-    assert "DRAFT-ONLY" in out
-    assert "claims are not an object" in out
-    assert "READY-ELIGIBLE" not in out
+    assert "optional external review" in out
+    assert "does not block push or deterministic merge authority" in out
 
 
 def test_malformed_review_evidence_does_not_block_an_ordinary_draft_push(monkeypatch, tmp_path, capsys) -> None:
@@ -2685,7 +2711,7 @@ def test_malformed_review_evidence_does_not_block_an_ordinary_draft_push(monkeyp
     assert hunter_pre_push.enforce_pre_push(updates) == 0
     captured = capsys.readouterr()
 
-    assert "DRAFT-ONLY" in captured.out
-    assert "READY-ELIGIBLE" not in captured.out
+    assert "optional external review" in captured.out
+    assert "does not block push or deterministic merge authority" in captured.out
     assert "AttributeError" not in captured.out
     assert captured.err == ""

@@ -53,7 +53,7 @@ def test_unadmitted_ready_candidate_is_returned_to_draft(monkeypatch) -> None:
     assert converted == [("token", "PR_test_node")]
 
 
-def test_pending_candidate_waits_in_draft(monkeypatch, capsys) -> None:
+def test_pending_candidate_stays_ready_without_merge_authority(monkeypatch, capsys) -> None:
     monkeypatch.setattr(
         admission.governance,
         "read_mergeability",
@@ -70,7 +70,16 @@ def test_pending_candidate_waits_in_draft(monkeypatch, capsys) -> None:
         lambda *_args: True,
     )
 
-    assert admission.enforce_candidate_admission("fafa33/Project-Hunter", "token", 369) == 1
+    converted: list[str] = []
+
+    def convert_to_draft(*_args: object) -> bool:
+        converted.append("draft")
+        return True
+
+    monkeypatch.setattr(admission, "convert_to_draft", convert_to_draft)
+
+    assert admission.enforce_candidate_admission("fafa33/Project-Hunter", "token", 369) == 0
+    assert converted == []
     assert "admission is pending" in capsys.readouterr().out
 
 

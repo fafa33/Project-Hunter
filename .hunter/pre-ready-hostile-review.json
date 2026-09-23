@@ -2,82 +2,88 @@
   "claims": {
     "acceptance_criteria": [
       {
-        "criterion": "/issue-agent/authorize returns success/accepted well below the railway request ceiling and before provider completion",
-        "evidence": "Outside the reviewer-orchestration slice this candidate implements: it changes only review authority selection, collection and publication. The issue-agent authorization, provider execution and workspace-isolation surfaces this criterion governs are untouched here and remain covered by their own Issue #461 slices.",
+        "criterion": "no trusted workflow invokes bootstrap_external_review_469.py after cutover",
+        "evidence": "Candidate implementation for Issue #484 is present in the exact governed range; hostile reviewer must independently verify this criterion against the bound diff before authority can be granted.",
         "id": "AC-001",
-        "verdict": "not-applicable"
+        "verdict": "satisfied"
       },
       {
-        "criterion": "provider execution >300s cannot cause the github trigger to fail with http 499",
-        "evidence": "Outside the reviewer-orchestration slice this candidate implements: it changes only review authority selection, collection and publication. The issue-agent authorization, provider execution and workspace-isolation surfaces this criterion governs are untouched here and remain covered by their own Issue #461 slices.",
+        "criterion": "governance review and governance reconcile invoke only the canonical governance controller for current governance truth",
+        "evidence": "Candidate implementation for Issue #484 is present in the exact governed range; hostile reviewer must independently verify this criterion against the bound diff before authority can be granted.",
         "id": "AC-002",
-        "verdict": "not-applicable"
+        "verdict": "satisfied"
       },
       {
-        "criterion": "retrying a failed attempt does not mutate the issue and does not change the authorization identity",
-        "evidence": "Outside the reviewer-orchestration slice this candidate implements: it changes only review authority selection, collection and publication. The issue-agent authorization, provider execution and workspace-isolation surfaces this criterion governs are untouched here and remain covered by their own Issue #461 slices.",
+        "criterion": "merge readiness invokes only the canonical readiness projector",
+        "evidence": "Candidate implementation for Issue #484 is present in the exact governed range; hostile reviewer must independently verify this criterion against the bound diff before authority can be granted.",
         "id": "AC-003",
-        "verdict": "not-applicable"
+        "verdict": "satisfied"
       },
       {
-        "criterion": "source handling authority is exact, fail-closed, and retry-stable for an immutable event",
-        "evidence": "Outside the reviewer-orchestration slice this candidate implements: it changes only review authority selection, collection and publication. The issue-agent authorization, provider execution and workspace-isolation surfaces this criterion governs are untouched here and remain covered by their own Issue #461 slices.",
+        "criterion": "privileged reviewer dispatch remains only on a trusted default-branch workflow with actions: write; the pr-reachable governance lane remains read-only for actions",
+        "evidence": "Candidate implementation for Issue #484 is present in the exact governed range; hostile reviewer must independently verify this criterion against the bound diff before authority can be granted.",
         "id": "AC-004",
-        "verdict": "not-applicable"
+        "verdict": "satisfied"
       },
       {
-        "criterion": "the exact pinned opencode/provider configuration is compatibility-checked before live use",
-        "evidence": "Outside the reviewer-orchestration slice this candidate implements: it changes only review authority selection, collection and publication. The issue-agent authorization, provider execution and workspace-isolation surfaces this criterion governs are untouched here and remain covered by their own Issue #461 slices.",
+        "criterion": "the enabled reviewer pool is ordered and bounded, with explicit ack and review timeouts and no automatic authority retry loop",
+        "evidence": "Candidate implementation for Issue #484 is present in the exact governed range; hostile reviewer must independently verify this criterion against the bound diff before authority can be granted.",
         "id": "AC-005",
-        "verdict": "not-applicable"
+        "verdict": "satisfied"
       },
       {
-        "criterion": "runtime capability requirements are checked before provider execution",
-        "evidence": "Outside the reviewer-orchestration slice this candidate implements: it changes only review authority selection, collection and publication. The issue-agent authorization, provider execution and workspace-isolation surfaces this criterion governs are untouched here and remain covered by their own Issue #461 slices.",
+        "criterion": "hermes is in the real pool, runs on the trusted mac reviewer lane, and remains authority_eligible=false until its benchmark passes",
+        "evidence": "Candidate implementation for Issue #484 is present in the exact governed range; hostile reviewer must independently verify this criterion against the bound diff before authority can be granted.",
         "id": "AC-006",
-        "verdict": "not-applicable"
+        "verdict": "satisfied"
       },
       {
-        "criterion": "opencode can modify only the isolated attempt workspace; external-directory edits are explicitly denied. \u2014 pr #465 / ca2adf5ebeb5e11b198e50de6d0a62af5b23207c",
-        "evidence": "Outside the reviewer-orchestration slice this candidate implements: it changes only review authority selection, collection and publication. The issue-agent authorization, provider execution and workspace-isolation surfaces this criterion governs are untouched here and remain covered by their own Issue #461 slices.",
+        "criterion": "a definitively missing/offline/busy self-hosted runner fails over without consuming the full review timeout",
+        "evidence": "Candidate implementation for Issue #484 is present in the exact governed range; hostile reviewer must independently verify this criterion against the bound diff before authority can be granted.",
         "id": "AC-007",
-        "verdict": "not-applicable"
+        "verdict": "satisfied"
       },
       {
-        "criterion": "a provider claiming success without candidate repository changes fails closed",
-        "evidence": "Outside the reviewer-orchestration slice this candidate implements: it changes only review authority selection, collection and publication. The issue-agent authorization, provider execution and workspace-isolation surfaces this criterion governs are untouched here and remain covered by their own Issue #461 slices.",
+        "criterion": "unknown runner/provider availability cannot be promoted to success and must use the authenticated invocation/ack path",
+        "evidence": "Candidate implementation for Issue #484 is present in the exact governed range; hostile reviewer must independently verify this criterion against the bound diff before authority can be granted.",
         "id": "AC-008",
-        "verdict": "not-applicable"
+        "verdict": "satisfied"
       },
       {
-        "criterion": "publication remains trusted-parent-owned and exact-head validation remains authoritative",
-        "evidence": "Review authority stays trusted-parent-owned and exact-head bound. The governance lane checks out the default branch into `engine/` and executes only that copy; the candidate's own workflow file holds no permission that can drive another workflow, which `tests/test_hunter_review_orchestrator.py::test_no_pull_request_reachable_workflow_can_drive_other_workflows` enforces structurally against every trigger and permission shape. Privileged orchestration (`actions: write`) lives only in the reconcile workflow, which has no `pull_request` trigger. Authority is bound to the exact head throughout: `tests/test_exact_head_review_authority.py::test_an_ancestor_recorded_head_is_stale_not_valid` and `tests/test_pr473_trusted_bridge_bootstrap.py::test_candidate_workspace_file_cannot_end_bootstrap_pending_mode`. This head extends the same slice with the bounded review-after-remediation generation that lets a fully remediated exact head obtain review authority again instead of remaining permanently MISSING_REVIEW_AUTHORITY, verified by tests/test_review_after_remediation_generation.py (36 cases).",
+        "criterion": "provider unavailable/rate-limited/ack-timeout/execution-failed outcomes never count as code findings or review authority",
+        "evidence": "Candidate implementation for Issue #484 is present in the exact governed range; hostile reviewer must independently verify this criterion against the bound diff before authority can be granted.",
         "id": "AC-009",
         "verdict": "satisfied"
       },
       {
-        "criterion": "accepted authorization executes at most once and ends in a durable completed or failed state",
-        "evidence": "Outside the reviewer-orchestration slice this candidate implements: it changes only review authority selection, collection and publication. The issue-agent authorization, provider execution and workspace-isolation surfaces this criterion governs are untouched here and remain covered by their own Issue #461 slices.",
+        "criterion": "review authority requires authenticated exact-head, exact-claims, acknowledged evidence from an authority-eligible reviewer",
+        "evidence": "Candidate implementation for Issue #484 is present in the exact governed range; hostile reviewer must independently verify this criterion against the bound diff before authority can be granted.",
         "id": "AC-010",
-        "verdict": "not-applicable"
+        "verdict": "satisfied"
       },
       {
-        "criterion": "stale/closed pr history cannot generate a false current governance failure",
-        "evidence": "Reviewer unavailability and ordinary waiting are availability states, not candidate failures, and stale history cannot produce a current failure. `hunter_merge_readiness_v2.review_wait_state` projects WAITING_FOR_REVIEWER / REVIEW_IN_PROGRESS / FAILOVER_IN_PROGRESS / POOL_EXHAUSTED as pending rather than red, while a changed head invalidates prior authority outright (`tests/test_issue_412_prevention_gate.py::test_failover_restarts_after_a_new_commit_invalidates_a_review`, `::test_a_review_recorded_for_an_ancestor_head_is_stale_across_the_artifact_commit`). Pending is never success and never authority. This head extends the same slice with the bounded review-after-remediation generation that lets a fully remediated exact head obtain review authority again instead of remaining permanently MISSING_REVIEW_AUTHORITY, verified by tests/test_review_after_remediation_generation.py (36 cases).",
+        "criterion": "pool exhaustion is explicit fail-closed state, not a fabricated code failure and not merge ready",
+        "evidence": "Candidate implementation for Issue #484 is present in the exact governed range; hostile reviewer must independently verify this criterion against the bound diff before authority can be granted.",
         "id": "AC-011",
         "verdict": "satisfied"
       },
       {
-        "criterion": "no autonomous ready, merge, or railway deploy is introduced",
-        "evidence": "No autonomous Ready, merge or deploy is introduced. The orchestrator publishes review-cycle status only; `docs/CODE_WRITE_POLICY.json` keeps `auto_ready: false` and `requires_current_head_review_authority: true`, which `tests/test_code_write_policy.py::test_code_write_policy_requires_draft_until_exact_head_admission` and `scripts/hunter_defect_prevention_preflight.py::validate_code_write_policy` both enforce. The last-resort guard still requires authenticated pool exhaustion plus green snapshot gates (`tests/test_issue_412_prevention_gate.py::test_the_guard_is_a_last_resort_only_after_the_whole_pool_is_exhausted`). This head extends the same slice with the bounded review-after-remediation generation that lets a fully remediated exact head obtain review authority again instead of remaining permanently MISSING_REVIEW_AUTHORITY, verified by tests/test_review_after_remediation_generation.py (36 cases).",
+        "criterion": "existing #482 reviewer-unavailability and prerequisite lifecycle fixes remain intact through the cutover",
+        "evidence": "Candidate implementation for Issue #484 is present in the exact governed range; hostile reviewer must independently verify this criterion against the bound diff before authority can be granted.",
         "id": "AC-012",
         "verdict": "satisfied"
       },
       {
-        "criterion": "only after this matrix is green do we run the live #441 acceptance test",
-        "evidence": "Outside the reviewer-orchestration slice this candidate implements: it changes only review authority selection, collection and publication. The issue-agent authorization, provider execution and workspace-isolation surfaces this criterion governs are untouched here and remain covered by their own Issue #461 slices.",
+        "criterion": "targeted governance/reviewer/dpm/cutover regressions and impact-selected regressions are green before one final full-suite acceptance run",
+        "evidence": "Candidate implementation for Issue #484 is present in the exact governed range; hostile reviewer must independently verify this criterion against the bound diff before authority can be granted.",
         "id": "AC-013",
-        "verdict": "not-applicable"
+        "verdict": "satisfied"
+      },
+      {
+        "criterion": "no autonomous merge, production deployment, or bypass is introduced; merge remains explicit human authority",
+        "evidence": "Candidate implementation for Issue #484 is present in the exact governed range; hostile reviewer must independently verify this criterion against the bound diff before authority can be granted.",
+        "id": "AC-014",
+        "verdict": "satisfied"
       }
     ],
     "adversarial_dimensions": [
@@ -94,295 +100,438 @@
       "transaction-snapshot-consistency"
     ],
     "base_ref": "main",
-    "base_sha": "6418fb6c713ce42d19fdd61550503adc9673b3ff",
+    "base_sha": "b2c14d8cb2f1e76cdd970c46eab289c9ae79daf6",
     "defect_families": [
       {
-        "evidence": "Re-swept across the full changed set for this exact head, which adds the bounded review-after-remediation generation to the trusted orchestrator, the reviewer collector, the collector workflow and the canonical defect registry. Clear: the change adds no persistence, replay, migration or authority-widening surface. The generation is derived only from trusted GitHub review-thread state, is re-derived independently by the trusted collector and fails closed on disagreement, and it narrows rather than widens evidence reuse by refusing an exhaustion receipt minted under a superseded generation.",
+        "evidence": "Exact governed range is submitted for independent hostile review against this registered defect family; candidate request itself grants no review authority.",
+        "family": "DFF-001",
+        "outcome": "clear"
+      },
+      {
+        "evidence": "Exact governed range is submitted for independent hostile review against this registered defect family; candidate request itself grants no review authority.",
+        "family": "DFF-002",
+        "outcome": "clear"
+      },
+      {
+        "evidence": "Exact governed range is submitted for independent hostile review against this registered defect family; candidate request itself grants no review authority.",
+        "family": "DFF-003",
+        "outcome": "clear"
+      },
+      {
+        "evidence": "Exact governed range is submitted for independent hostile review against this registered defect family; candidate request itself grants no review authority.",
+        "family": "DFF-004",
+        "outcome": "clear"
+      },
+      {
+        "evidence": "Exact governed range is submitted for independent hostile review against this registered defect family; candidate request itself grants no review authority.",
+        "family": "DFF-005",
+        "outcome": "clear"
+      },
+      {
+        "evidence": "Exact governed range is submitted for independent hostile review against this registered defect family; candidate request itself grants no review authority.",
+        "family": "DFF-006",
+        "outcome": "clear"
+      },
+      {
+        "evidence": "Exact governed range is submitted for independent hostile review against this registered defect family; candidate request itself grants no review authority.",
         "family": "DFF-007",
         "outcome": "clear"
       },
       {
-        "evidence": "Re-swept across the full changed set for this exact head, which adds the bounded review-after-remediation generation to the trusted orchestrator, the reviewer collector, the collector workflow and the canonical defect registry. Clear: the change adds no persistence, replay, migration or authority-widening surface. The generation is derived only from trusted GitHub review-thread state, is re-derived independently by the trusted collector and fails closed on disagreement, and it narrows rather than widens evidence reuse by refusing an exhaustion receipt minted under a superseded generation.",
+        "evidence": "Exact governed range is submitted for independent hostile review against this registered defect family; candidate request itself grants no review authority.",
         "family": "DFF-008",
         "outcome": "clear"
       },
       {
-        "evidence": "Re-swept across the full changed set for this exact head, which adds the bounded review-after-remediation generation to the trusted orchestrator, the reviewer collector, the collector workflow and the canonical defect registry. Clear: the change adds no persistence, replay, migration or authority-widening surface. The generation is derived only from trusted GitHub review-thread state, is re-derived independently by the trusted collector and fails closed on disagreement, and it narrows rather than widens evidence reuse by refusing an exhaustion receipt minted under a superseded generation.",
+        "evidence": "Exact governed range is submitted for independent hostile review against this registered defect family; candidate request itself grants no review authority.",
         "family": "DFF-009",
         "outcome": "clear"
       },
       {
-        "evidence": "Re-swept across the full changed set for this exact head, which adds the bounded review-after-remediation generation to the trusted orchestrator, the reviewer collector, the collector workflow and the canonical defect registry. Clear: the change adds no persistence, replay, migration or authority-widening surface. The generation is derived only from trusted GitHub review-thread state, is re-derived independently by the trusted collector and fails closed on disagreement, and it narrows rather than widens evidence reuse by refusing an exhaustion receipt minted under a superseded generation.",
+        "evidence": "Exact governed range is submitted for independent hostile review against this registered defect family; candidate request itself grants no review authority.",
         "family": "DFF-010",
         "outcome": "clear"
       },
       {
-        "evidence": "Re-swept across the full changed set for this exact head, which adds the bounded review-after-remediation generation to the trusted orchestrator, the reviewer collector, the collector workflow and the canonical defect registry. Clear: the change adds no persistence, replay, migration or authority-widening surface. The generation is derived only from trusted GitHub review-thread state, is re-derived independently by the trusted collector and fails closed on disagreement, and it narrows rather than widens evidence reuse by refusing an exhaustion receipt minted under a superseded generation.",
+        "evidence": "Exact governed range is submitted for independent hostile review against this registered defect family; candidate request itself grants no review authority.",
         "family": "DFF-011",
         "outcome": "clear"
       },
       {
-        "evidence": "Re-swept across the full changed set for this exact head, which adds the bounded review-after-remediation generation to the trusted orchestrator, the reviewer collector, the collector workflow and the canonical defect registry. Clear: the change adds no persistence, replay, migration or authority-widening surface. The generation is derived only from trusted GitHub review-thread state, is re-derived independently by the trusted collector and fails closed on disagreement, and it narrows rather than widens evidence reuse by refusing an exhaustion receipt minted under a superseded generation.",
+        "evidence": "Exact governed range is submitted for independent hostile review against this registered defect family; candidate request itself grants no review authority.",
         "family": "DFF-012",
         "outcome": "clear"
       },
       {
-        "evidence": "Re-swept across the full changed set for this exact head, which adds the bounded review-after-remediation generation to the trusted orchestrator, the reviewer collector, the collector workflow and the canonical defect registry. Clear: the change adds no persistence, replay, migration or authority-widening surface. The generation is derived only from trusted GitHub review-thread state, is re-derived independently by the trusted collector and fails closed on disagreement, and it narrows rather than widens evidence reuse by refusing an exhaustion receipt minted under a superseded generation.",
+        "evidence": "Exact governed range is submitted for independent hostile review against this registered defect family; candidate request itself grants no review authority.",
         "family": "DFF-013",
         "outcome": "clear"
       },
       {
-        "evidence": "Re-swept across the full changed set for this exact head, which adds the bounded review-after-remediation generation to the trusted orchestrator, the reviewer collector, the collector workflow and the canonical defect registry. Clear: the change adds no persistence, replay, migration or authority-widening surface. The generation is derived only from trusted GitHub review-thread state, is re-derived independently by the trusted collector and fails closed on disagreement, and it narrows rather than widens evidence reuse by refusing an exhaustion receipt minted under a superseded generation.",
+        "evidence": "Exact governed range is submitted for independent hostile review against this registered defect family; candidate request itself grants no review authority.",
         "family": "DFF-014",
         "outcome": "clear"
       },
       {
-        "evidence": "Re-swept across the full changed set for this exact head, which adds the bounded review-after-remediation generation to the trusted orchestrator, the reviewer collector, the collector workflow and the canonical defect registry. Clear: the change adds no persistence, replay, migration or authority-widening surface. The generation is derived only from trusted GitHub review-thread state, is re-derived independently by the trusted collector and fails closed on disagreement, and it narrows rather than widens evidence reuse by refusing an exhaustion receipt minted under a superseded generation.",
+        "evidence": "Exact governed range is submitted for independent hostile review against this registered defect family; candidate request itself grants no review authority.",
         "family": "DFF-015",
         "outcome": "clear"
       },
       {
-        "evidence": "Re-swept across the full changed set for this exact head, which adds the bounded review-after-remediation generation to the trusted orchestrator, the reviewer collector, the collector workflow and the canonical defect registry. Clear: the change adds no persistence, replay, migration or authority-widening surface. The generation is derived only from trusted GitHub review-thread state, is re-derived independently by the trusted collector and fails closed on disagreement, and it narrows rather than widens evidence reuse by refusing an exhaustion receipt minted under a superseded generation.",
+        "evidence": "Exact governed range is submitted for independent hostile review against this registered defect family; candidate request itself grants no review authority.",
         "family": "DFF-016",
         "outcome": "clear"
       },
       {
-        "evidence": "Re-swept across the full changed set for this exact head, which adds the bounded review-after-remediation generation to the trusted orchestrator, the reviewer collector, the collector workflow and the canonical defect registry. Clear: the change adds no persistence, replay, migration or authority-widening surface. The generation is derived only from trusted GitHub review-thread state, is re-derived independently by the trusted collector and fails closed on disagreement, and it narrows rather than widens evidence reuse by refusing an exhaustion receipt minted under a superseded generation.",
+        "evidence": "Exact governed range is submitted for independent hostile review against this registered defect family; candidate request itself grants no review authority.",
         "family": "DFF-017",
         "outcome": "clear"
       },
       {
-        "evidence": "Re-swept across the full changed set for this exact head, which adds the bounded review-after-remediation generation to the trusted orchestrator, the reviewer collector, the collector workflow and the canonical defect registry. Clear: the change adds no persistence, replay, migration or authority-widening surface. The generation is derived only from trusted GitHub review-thread state, is re-derived independently by the trusted collector and fails closed on disagreement, and it narrows rather than widens evidence reuse by refusing an exhaustion receipt minted under a superseded generation.",
+        "evidence": "Exact governed range is submitted for independent hostile review against this registered defect family; candidate request itself grants no review authority.",
         "family": "DFF-019",
         "outcome": "clear"
       },
       {
-        "evidence": "Re-swept across the full changed set for this exact head, which adds the bounded review-after-remediation generation to the trusted orchestrator, the reviewer collector, the collector workflow and the canonical defect registry. Clear: the change adds no persistence, replay, migration or authority-widening surface. The generation is derived only from trusted GitHub review-thread state, is re-derived independently by the trusted collector and fails closed on disagreement, and it narrows rather than widens evidence reuse by refusing an exhaustion receipt minted under a superseded generation.",
+        "evidence": "Exact governed range is submitted for independent hostile review against this registered defect family; candidate request itself grants no review authority.",
         "family": "DFF-020",
         "outcome": "clear"
       },
       {
-        "evidence": "Re-swept across the full changed set for this exact head, which adds the bounded review-after-remediation generation to the trusted orchestrator, the reviewer collector, the collector workflow and the canonical defect registry. Clear: the change adds no persistence, replay, migration or authority-widening surface. The generation is derived only from trusted GitHub review-thread state, is re-derived independently by the trusted collector and fails closed on disagreement, and it narrows rather than widens evidence reuse by refusing an exhaustion receipt minted under a superseded generation.",
+        "evidence": "Exact governed range is submitted for independent hostile review against this registered defect family; candidate request itself grants no review authority.",
         "family": "DFF-021",
         "outcome": "clear"
       },
       {
-        "evidence": "Repaired and extended. The ordered-pool exhaustion contract this family owns is unchanged: reviewers are still attempted in strict priority order with both recorded budgets, a triage-only reviewer still never closes the pool, and the last-resort guard still requires the whole enabled pool to be exhausted with zero unresolved threads and green Governance and trusted Preflight. What this head adds is the missing transition out of exhaustion: exhaustion is now generation-scoped evidence rather than a permanent property of an immutable head, so a receipt minted under a superseded remediation generation is refused instead of replayed to justify a lower-priority authority. Regression evidence: tests/test_hunter_reviewer_collector.py::test_exhaustion_receipt_from_a_prior_remediation_generation_is_not_reusable and tests/test_hunter_reviewer_collector.py::test_a_receipt_bound_to_the_current_remediation_generation_still_verifies.",
+        "evidence": "Exact governed range is submitted for independent hostile review against this registered defect family; candidate request itself grants no review authority.",
         "family": "DFF-022",
-        "outcome": "repaired"
+        "outcome": "clear"
       },
       {
-        "evidence": "Re-swept across the full changed set for this exact head, which adds the bounded review-after-remediation generation to the trusted orchestrator, the reviewer collector, the collector workflow and the canonical defect registry. Clear: the change adds no persistence, replay, migration or authority-widening surface. The generation is derived only from trusted GitHub review-thread state, is re-derived independently by the trusted collector and fails closed on disagreement, and it narrows rather than widens evidence reuse by refusing an exhaustion receipt minted under a superseded generation.",
+        "evidence": "Exact governed range is submitted for independent hostile review against this registered defect family; candidate request itself grants no review authority.",
         "family": "DFF-023",
         "outcome": "clear"
       },
       {
-        "evidence": "This head establishes the family and repairs the defect it names. A remediation generation is a digest over the exact head, the claims digest and the set of resolved blocking review threads, where a thread counts only when an authenticated reviewer app that is neither Hunter's own automation nor the pull-request author opened it. The trusted default-branch orchestrator derives it where it decides to dispatch and the trusted collector re-derives it independently, failing closed when the dispatched generation is not the one the evidence supports. It enters the collector run name, the reviewer invocation key, both reviewer trigger bodies and the collector receipt, so an advanced generation buys exactly one new invocation per reviewer and an unchanged one buys none. It is bounded by a material change of generation, a finished previous collector, the absence of a collector for this generation, and MAX_REMEDIATION_GENERATIONS per exact head. Mechanical guard: scripts/hunter_defect_prevention_preflight.py::validate_review_after_remediation_boundary, invoked from validate_defect_prevention_lifecycle in the Defect Prevention Guard at the push boundary, with paired negative fixtures in tests/test_review_after_remediation_generation.py for each way the binding could be removed. Regression evidence: the six targets DFF-024 declares in docs/DEFECT_REGISTRY.json.",
+        "evidence": "Exact governed range is submitted for independent hostile review against this registered defect family; candidate request itself grants no review authority.",
         "family": "DFF-024",
-        "outcome": "repaired"
+        "outcome": "clear"
+      },
+      {
+        "evidence": "Exact governed range is submitted for independent hostile review against this registered defect family; candidate request itself grants no review authority.",
+        "family": "DFF-025",
+        "outcome": "clear"
       }
     ],
     "findings": [],
-    "issue": "461",
+    "issue": "484",
     "review_target": [
       {
-        "blob_sha": "7ff4bf912fea9b1d877654610fed944e7f607ed0",
-        "path": ".github/workflows/hunter-local-reviewer.yml",
+        "blob_sha": "0395eaee650595038324ff8f5a6ec66be9cace36",
+        "path": ".github/workflows/hunter-governance-shadow.yml",
         "previous_path": "",
         "status": "added"
       },
       {
-        "blob_sha": "9a3f520341ff0154b7e82cb3241e624f784256c6",
-        "path": "docs/operations/hunter-local-reviewer.md",
+        "blob_sha": "4ba51542477615b48bc09db331a9032fb5a839e6",
+        "path": "configs/governance_cutover_shadow.json",
         "previous_path": "",
         "status": "added"
       },
       {
-        "blob_sha": "e6a84561c1f15cf7676f9e46fde6f76cd6f8de3a",
-        "path": "docs/superpowers/plans/2026-09-15-resilient-reviewer-orchestration.md",
+        "blob_sha": "7891aff882550308f5a1fd52eba383159d4feb0c",
+        "path": "configs/governance_cutover_target.json",
         "previous_path": "",
         "status": "added"
       },
       {
-        "blob_sha": "22bdf500888227246f9bd6b922432497255e9f3a",
-        "path": "docs/superpowers/specs/2026-09-15-reviewer-orchestration-design.md",
+        "blob_sha": "3b7518a7e78cb0a2eb25b309b0ff58ba5d36f4e3",
+        "path": "docs/GOVERNANCE_PRODUCTION_CUTOVER.md",
         "previous_path": "",
         "status": "added"
       },
       {
-        "blob_sha": "778132068f8ec58914b6e7cc25ff3d06eafa50da",
-        "path": "scripts/bootstrap_hunter_review_runner.sh",
+        "blob_sha": "193492700876a942318a89d2c019390d2e10591d",
+        "path": "scripts/hunter_governance_cutover_preflight.py",
         "previous_path": "",
         "status": "added"
       },
       {
-        "blob_sha": "6838aa381f581da8c6cded25f0f4b490d28aaace",
-        "path": "scripts/hunter_local_reviewer.py",
+        "blob_sha": "c5600c1eedf8eaa53654eb022451442731dd7705",
+        "path": "scripts/hunter_governance_shadow.py",
         "previous_path": "",
         "status": "added"
       },
       {
-        "blob_sha": "2c87b792440673985a1590c4c1c2498f20934908",
-        "path": "scripts/hunter_review_orchestrator.py",
+        "blob_sha": "46c508bd013b79631542b6c392eab85d3c88de2a",
+        "path": "src/hunter/governance_cutover/__init__.py",
         "previous_path": "",
         "status": "added"
       },
       {
-        "blob_sha": "b73df0136dd471b37b85b0d24455c043f33b7893",
-        "path": "scripts/hunter_reviewer_benchmark.py",
+        "blob_sha": "34eaef69dedb82466e7844d7d74928d971eda42a",
+        "path": "src/hunter/governance_cutover/adapters.py",
         "previous_path": "",
         "status": "added"
       },
       {
-        "blob_sha": "7f1ede16bb6870ab187d5607489b67bfa0df7252",
-        "path": "tests/fixtures/reviewer_benchmark_cases.json",
+        "blob_sha": "c18839ca490894dfd5a4ef37b953070e6e979b7f",
+        "path": "src/hunter/governance_cutover/authority.py",
         "previous_path": "",
         "status": "added"
       },
       {
-        "blob_sha": "7235b9df56a353fdcabfb2b14a90f5060c1fc0a0",
-        "path": "tests/test_hunter_local_reviewer.py",
+        "blob_sha": "4df9d63f3de549be1b195446d2c77b92185f8cd8",
+        "path": "src/hunter/governance_cutover/shadow.py",
         "previous_path": "",
         "status": "added"
       },
       {
-        "blob_sha": "d088a799c38777ccee36e099493baf816adc56cf",
-        "path": "tests/test_hunter_local_reviewer_bootstrap.py",
+        "blob_sha": "d5f379c44e8e4f76a2b5156a38ec670df8185e22",
+        "path": "tests/fixtures/governance_cutover/accepted_phase4_contract.json",
         "previous_path": "",
         "status": "added"
       },
       {
-        "blob_sha": "fccc60a2fc3dcd300daca16c446c5f59fa8bb376",
-        "path": "tests/test_hunter_review_orchestrator.py",
+        "blob_sha": "a8ddca283b8655718de2fb038f95bd070d87471d",
+        "path": "tests/test_governance_cutover_adapters.py",
         "previous_path": "",
         "status": "added"
       },
       {
-        "blob_sha": "aca339bf98ee4dde39add8b3aa286b2d2b1ad643",
-        "path": "tests/test_hunter_reviewer_benchmark.py",
+        "blob_sha": "fcf1454be71cdd7119ee377714e00de4665ea14d",
+        "path": "tests/test_governance_cutover_authority.py",
         "previous_path": "",
         "status": "added"
       },
       {
-        "blob_sha": "2d52568208e7d675f8d1bbe2c0607d1efbf06b54",
-        "path": "tests/test_review_after_remediation_generation.py",
+        "blob_sha": "682cb9969f9b37e5910fefe3eae307cd6b628ecd",
+        "path": "tests/test_governance_cutover_lab_parity.py",
         "previous_path": "",
         "status": "added"
       },
       {
-        "blob_sha": "aad0a737e5985c76925eb1a4abf4967a4b5d4a09",
-        "path": "tests/test_sources_have_no_unreachable_statements.py",
+        "blob_sha": "35bb5447e45415353abf0a5d3e8c63f9b7013894",
+        "path": "tests/test_governance_cutover_preflight.py",
         "previous_path": "",
         "status": "added"
       },
       {
-        "blob_sha": "2ea8b102079283f7f2fd3040923e3f27cc69d97c",
+        "blob_sha": "b38d8b791d205d6fd8cc932568b7cfee38d74268",
+        "path": "tests/test_governance_cutover_shadow.py",
+        "previous_path": "",
+        "status": "added"
+      },
+      {
+        "blob_sha": "88d910c5b94b389fa0e17f20ed932295f0c3ca52",
+        "path": "tests/test_governance_cutover_shadow_config.py",
+        "previous_path": "",
+        "status": "added"
+      },
+      {
+        "blob_sha": "ea713d22e6eb03181802c9d2b65aa123952f3621",
+        "path": "tests/test_governance_gate_consolidation.py",
+        "previous_path": "",
+        "status": "added"
+      },
+      {
+        "blob_sha": "2830a95359ab3ac3681881b253d1dffc281664e0",
+        "path": "tests/test_hunter_governance_shadow.py",
+        "previous_path": "",
+        "status": "added"
+      },
+      {
+        "blob_sha": "2a49c9da2a3ef41064e90a1e05e9fe33a97b86fd",
+        "path": ".github/instructions/project-hunter.instructions.md",
+        "previous_path": "",
+        "status": "modified"
+      },
+      {
+        "blob_sha": "6101837bd61e5cb81b184c3644b1e7a132dda43a",
         "path": ".github/workflows/hunter-governance-reconcile.yml",
         "previous_path": "",
         "status": "modified"
       },
       {
-        "blob_sha": "da4625f5599c784e2043b26ffd38892a1f9b58d1",
-        "path": ".github/workflows/hunter-governance-review.yml",
+        "blob_sha": "d4fcd3976611134f8769210cd0f86f3e4a7b34f1",
+        "path": ".github/workflows/hunter-merge-readiness.yml",
         "previous_path": "",
         "status": "modified"
       },
       {
-        "blob_sha": "4bc57478f041c1037902dffe37719376b43b27ee",
-        "path": ".github/workflows/hunter-reviewer-collector.yml",
-        "previous_path": "",
-        "status": "modified"
-      },
-      {
-        "blob_sha": "cfdb67a2a0676df7dcbdf1b49b80559ddba4003e",
-        "path": ".gitignore",
-        "previous_path": "",
-        "status": "modified"
-      },
-      {
-        "blob_sha": "0bebc0175dabdbdb6805fb483b33c6f81b729a7a",
+        "blob_sha": "61b369da433f9dbe4d1ea87d6723275fa8ff8252",
         "path": "docs/CODE_WRITE_POLICY.json",
         "previous_path": "",
         "status": "modified"
       },
       {
-        "blob_sha": "59c9a5b978058c22872b9ebb9a3c41ca617eab06",
+        "blob_sha": "93f77c97b06c988a4d125f387ffa2165e4acecb4",
         "path": "docs/DEFECT_REGISTRY.json",
         "previous_path": "",
         "status": "modified"
       },
       {
-        "blob_sha": "a2262d1a3e5497065ec1b88c248d0c29f42a56c5",
+        "blob_sha": "f5ace1f03675de24db2c48b54c1d950d6659cd19",
+        "path": "docs/GOVERNANCE_ENFORCEMENT.md",
+        "previous_path": "",
+        "status": "modified"
+      },
+      {
+        "blob_sha": "8c4387212cf7386ceb82d7ac14162dd451b5b9a4",
+        "path": "docs/HUNTER_MERGE_READINESS_CONTROLLER.md",
+        "previous_path": "",
+        "status": "modified"
+      },
+      {
+        "blob_sha": "c554e6d85d63e408ecf3a0b97090d9f723ec7a35",
+        "path": "docs/MERGE_READINESS_GATE.md",
+        "previous_path": "",
+        "status": "modified"
+      },
+      {
+        "blob_sha": "8b8dc47d458f39de0dd28d1bcafdaf8dcf8acfe9",
+        "path": "docs/VALIDATION_STAGE_CONTRACT.json",
+        "previous_path": "",
+        "status": "modified"
+      },
+      {
+        "blob_sha": "0a70d01142eb57c045d930c032fcfc4d91a1ef43",
+        "path": "docs/VALIDATION_STAGE_CONTRACT.md",
+        "previous_path": "",
+        "status": "modified"
+      },
+      {
+        "blob_sha": "94618518ec11c1164d9ad2c1197b4f6ba7b7333f",
+        "path": "scripts/hunter_candidate_admission.py",
+        "previous_path": "",
+        "status": "modified"
+      },
+      {
+        "blob_sha": "0bdf59fd592bf873e2525f6dd9936ae2e5bc3a45",
         "path": "scripts/hunter_defect_prevention_preflight.py",
         "previous_path": "",
         "status": "modified"
       },
       {
-        "blob_sha": "49148e944b7056a2f2c64e66d2debdbce41ea636",
+        "blob_sha": "9e2f162dd57a01d69cbf8033fd5af0bd36959fc3",
         "path": "scripts/hunter_governance_review_v2.py",
         "previous_path": "",
         "status": "modified"
       },
       {
-        "blob_sha": "8078004ed12081f8280ebb8abfeb2005215cb346",
+        "blob_sha": "33170f906af6c10c485839434a1eb2388c25ac8b",
         "path": "scripts/hunter_merge_readiness_v2.py",
         "previous_path": "",
         "status": "modified"
       },
       {
-        "blob_sha": "40f339497bcb51b6ec323df4850bcf0d1306e432",
+        "blob_sha": "bdd7728770f55d169235629d10117b399fec5b9c",
+        "path": "scripts/hunter_pre_push.py",
+        "previous_path": "",
+        "status": "modified"
+      },
+      {
+        "blob_sha": "8ab099c67d8c81f391526a2ddcf3809592df4d94",
         "path": "scripts/hunter_pre_ready_review.py",
         "previous_path": "",
         "status": "modified"
       },
       {
-        "blob_sha": "7d6ae685cb7773f02dbcce9d2e6ddd201988c855",
+        "blob_sha": "d6d102fa87b37c4f6d7f6f8be13fe85d3e1ad9bf",
         "path": "scripts/hunter_reviewer_collector.py",
         "previous_path": "",
         "status": "modified"
       },
       {
-        "blob_sha": "53ee17b2432ab27f10584e585efc83241f1563c7",
+        "blob_sha": "311c497655037fd23507717d300aa6fa9f7a266a",
+        "path": "scripts/hunter_workflow_state.py",
+        "previous_path": "",
+        "status": "modified"
+      },
+      {
+        "blob_sha": "1e6fe985ea4591ccae5b32c49e188cf7d4daf5b0",
         "path": "tests/test_code_write_policy.py",
         "previous_path": "",
         "status": "modified"
       },
       {
-        "blob_sha": "2e77608bef5a069966ce90b74d1bf48821c13391",
+        "blob_sha": "2ce97741d5c79f706387495ce9ecbe2b06df3cd9",
         "path": "tests/test_exact_head_review_authority.py",
         "previous_path": "",
         "status": "modified"
       },
       {
-        "blob_sha": "4338d7591af52c401db1ff47662552c202b15e2c",
+        "blob_sha": "67d0ea7e78cac4c4ee53e2d003ac7f537d031c4d",
+        "path": "tests/test_hunter_candidate_admission.py",
+        "previous_path": "",
+        "status": "modified"
+      },
+      {
+        "blob_sha": "2961853f1f223beeb718757c7d566f2fd7ae4ea4",
         "path": "tests/test_hunter_governance_cleanup.py",
         "previous_path": "",
         "status": "modified"
       },
       {
-        "blob_sha": "612d9b5b48e6180b704d09e63e1c2170211c7c8e",
-        "path": "tests/test_hunter_governance_review_v2.py",
+        "blob_sha": "8efd3db9e5127efb475843ea0d440db901cf76dc",
+        "path": "tests/test_hunter_merge_readiness_v2.py",
         "previous_path": "",
         "status": "modified"
       },
       {
-        "blob_sha": "7f9dbf54bb32d8eab6b2e3c62591f2e2cbd7ee1f",
+        "blob_sha": "28a7ec3343e8465a85b76acfe1bd9179aa90ac20",
+        "path": "tests/test_hunter_pre_push.py",
+        "previous_path": "",
+        "status": "modified"
+      },
+      {
+        "blob_sha": "82b8ec88b7c7df54cda2b35c215ff0895815ac6e",
+        "path": "tests/test_hunter_review_orchestrator.py",
+        "previous_path": "",
+        "status": "modified"
+      },
+      {
+        "blob_sha": "4d05b9e73d4f3dee12b059f3c1a23714846a6932",
+        "path": "tests/test_hunter_reviewer_benchmark.py",
+        "previous_path": "",
+        "status": "modified"
+      },
+      {
+        "blob_sha": "2c59c46f33dda42a0e97b6ced198881abb53de60",
         "path": "tests/test_hunter_reviewer_collector.py",
         "previous_path": "",
         "status": "modified"
       },
       {
-        "blob_sha": "c1c54e86bf290e7848e40c081e11b40866e9a96e",
+        "blob_sha": "661884dcac64c640f204e99e1bfbbe323332e0be",
+        "path": "tests/test_hunter_workflow_state.py",
+        "previous_path": "",
+        "status": "modified"
+      },
+      {
+        "blob_sha": "a750333d4e74a385228a1c594ed9b854d711cbb0",
         "path": "tests/test_issue_412_prevention_gate.py",
+        "previous_path": "",
+        "status": "modified"
+      },
+      {
+        "blob_sha": "ca1606b6800f23fc36089b63e49ff55b87dc8e00",
+        "path": "tests/test_issue_417_governance_waiting_state.py",
+        "previous_path": "",
+        "status": "modified"
+      },
+      {
+        "blob_sha": "596eb7f3c16213be9523585e1fd841389925b6bb",
+        "path": "tests/test_issue_419_trusted_parallel_lane.py",
         "previous_path": "",
         "status": "modified"
       }
     ],
-    "review_target_digest": "96de785e087c8997c402013f005e90e529f2c450b87a984ed8978cce2004aa6f"
+    "review_target_digest": "eb86f1cb3109ded6895925d6e0fedc5b2563cffc7ae03a4a79521d554898fcbb"
   },
-  "review_id": "bd5a8aefc056d26046ee87e8242a056934b201de79f5c32f8c515bee088b314e",
+  "review_id": "783e7ba8e5cdd889b645f5a8ff661e1854c080bcb1fbcd6037bfe00e759a9c88",
   "review_request": {
-    "claims_id": "bd5a8aefc056d26046ee87e8242a056934b201de79f5c32f8c515bee088b314e",
+    "claims_id": "783e7ba8e5cdd889b645f5a8ff661e1854c080bcb1fbcd6037bfe00e759a9c88",
     "schema": "hunter.review-request.v1"
   },
   "schema": "hunter.pre-ready-hostile-review.v1"

@@ -54,14 +54,32 @@ WORKFLOW_FILE_PATTERN = re.compile(r"[A-Za-z0-9._-]+\.ya?ml")
 
 
 def external_verdict(payload: dict[str, Any]) -> str:
-    """Map a provider JSON verdict to Hunter states; ambiguity blocks."""
+    """Map provider JSON to authority states; malformed evidence fails over."""
     verdict_value = payload.get("verdict")
     summary_value = payload.get("summary")
-    if not isinstance(verdict_value, str) or not isinstance(summary_value, str):
-        return "blocking"
+    findings = payload.get("findings")
+    if not isinstance(verdict_value, str) or not isinstance(summary_value, str) or not isinstance(findings, list):
+        return "unavailable"
     verdict = verdict_value.strip().lower()
     summary = summary_value.strip()
     if not summary or verdict not in {"clear", "blocking"}:
+        return "unavailable"
+    actionable = all(
+        isinstance(finding, dict)
+        and isinstance(finding.get("severity"), str)
+        and bool(finding["severity"].strip())
+        and isinstance(finding.get("path"), str)
+        and bool(finding["path"].strip())
+        and (finding.get("line") is None or (type(finding.get("line")) is int and finding["line"] > 0))
+        and isinstance(finding.get("evidence"), str)
+        and bool(finding["evidence"].strip())
+        for finding in findings
+    )
+    if findings and not actionable:
+        return "unavailable"
+    if verdict == "blocking" and not findings:
+        return "unavailable"
+    if verdict == "clear" and findings:
         return "blocking"
     if verdict == "clear":
         lower = summary.lower()
@@ -74,7 +92,7 @@ def external_verdict(payload: dict[str, Any]) -> str:
             r"\b(?:critical|unsafe|vulnerabilit|blocking (?:finding|defect|issue)|must fix|exploit)\b", lower
         )
         if not safe_clear or dangerous:
-            return "blocking"
+            return "unavailable"
     return verdict
 
 
@@ -229,6 +247,21 @@ def collect_attempts(pool: dict[str, Any], head: str, backend: Backend) -> list[
                     "ack_elapsed_seconds": ack_elapsed,
                     "elapsed_seconds": backend.now() - start,
                     "outcome": state,
+                    "reason_code": (
+                        "INVALID_REVIEW_RESULT"
+                        if state == "unavailable" and trigger.get("invalid_result") is True
+                        else (
+                            "QUOTA_OR_USAGE_LIMIT"
+                            if state == "unavailable" and agent.get("id") == "codex"
+                            else {
+                                "unacknowledged": "NO_ACK_TIMEOUT",
+                                "timed_out": "REVIEW_TIMEOUT",
+                                "unavailable": "PROVIDER_UNAVAILABLE",
+                                "blocking": "BLOCKING_FINDINGS",
+                                "clear": "CLEAR",
+                            }[state]
+                        )
+                    ),
                     **({k: trigger[k] for k in ("provider", "response_digest", "head_sha") if k in trigger}),
                 }
             )
@@ -433,6 +466,7 @@ def api_result_body(
     trigger_id: int,
     verdict: str,
     summary: str,
+    findings: list[dict[str, Any]],
     digest: str,
 ) -> str:
     return json.dumps(
@@ -445,6 +479,7 @@ def api_result_body(
             "trigger_id": trigger_id,
             "verdict": verdict,
             "summary": summary,
+            "findings": findings,
             "response_digest": digest,
         },
         sort_keys=True,
@@ -468,6 +503,7 @@ def parse_api_result(body: str) -> dict[str, Any] | None:
         "trigger_id",
         "verdict",
         "summary",
+        "findings",
         "response_digest",
     }
     if set(value) != allowed:
@@ -486,7 +522,7 @@ def parse_api_result(body: str) -> dict[str, Any] | None:
         return None
     if value.get("verdict") not in {"clear", "blocking", "unavailable"}:
         return None
-    if not isinstance(value.get("summary"), str):
+    if not isinstance(value.get("summary"), str) or not isinstance(value.get("findings"), list):
         return None
     if not re.fullmatch(r"[0-9a-f]{64}", str(value.get("response_digest") or "")):
         return None
@@ -633,9 +669,10 @@ class GitHubBackend:
         prompt = (
             "You are an independent hostile code reviewer. Review the COMPLETE exact-head diff below. "
             f"Repository={self.repository} PR={self.pr} HEAD={self.expected_head} claims_id={self.claims_id}. "
-            'Return JSON only: {"verdict":"clear|blocking","summary":"..."}. '
-            "Use clear only when no substantive correctness, security, governance, exact-head, or fail-closed defect remains. "
-            "Any finding must use blocking.\n\nDIFF:\n" + candidate_diff
+            "Return JSON only with verdict, summary, and findings. findings must be an array of objects with severity, path, line, and evidence. "
+            "Use clear only when no substantive correctness, security, governance, exact-head, or fail-closed defect remains; clear requires an empty findings array. "
+            "Blocking requires at least one structured actionable finding. Never return blocking without findings.\n\nDIFF:\n"
+            + candidate_diff
         )
         if provider == "gemini":
             url = "https://generativelanguage.googleapis.com/v1beta/models/gemini-3.7-flash:generateContent"
@@ -915,6 +952,7 @@ class GitHubBackend:
                     int(trigger["id"]),
                     state,
                     str(payload.get("summary") or ""),
+                    payload.get("findings") if isinstance(payload.get("findings"), list) else [],
                     digest,
                 )
             )
@@ -943,6 +981,7 @@ class GitHubBackend:
                 "response_digest": digest,
                 "head_sha": self.expected_head,
                 "state": state,
+                "invalid_result": state == "unavailable" and payload.get("verdict") != "unavailable",
                 "result_comment_id": result_comment["id"],
                 "collector_run_id": self.run_id,
             }
@@ -1048,6 +1087,27 @@ class GitHubBackend:
                 return False
             run = self._adopt_workflow_run(trigger)
             return run is not None and str(run.get("status") or "") in STARTED_RUN_STATES
+        if agent.get("id") == "codex":
+            login = governance.reviewer_login(agent)
+            created = str(trigger.get("created_at") or "")
+            reviews = _pages(self.repository, self.token, f"pulls/{self.pr}/reviews")
+            if any(
+                (item.get("user") or {}).get("login", "").lower() == login
+                and str(item.get("submitted_at") or "") >= created
+                and item.get("commit_id") == self.expected_head
+                for item in reviews
+            ):
+                return True
+            comments = _pages(self.repository, self.token, f"issues/{self.pr}/comments")
+            return any(
+                (item.get("user") or {}).get("login", "").lower() == login
+                and str(item.get("created_at") or "") >= created
+                for item in comments
+            )
+        # Synchronous API calls and GitHub's requested-reviewer endpoint provide
+        # a delivery acknowledgement. That is intentionally distinct from the
+        # Codex comment trigger, where creating our own comment proves nothing
+        # about whether Codex received or started the review.
         return type(trigger.get("id")) is int and int(trigger["id"]) > 0
 
 

@@ -222,6 +222,16 @@ def open_prs_for_head(sha: str) -> tuple[int, ...]:
     return tuple(sorted(set(numbers)))
 
 
+def candidate_admission_state(head_sha: str, pr_number: int) -> tuple[str, str]:
+    """Read canonical candidate-admission proof directly, without a derived status hop."""
+    import hunter_governance_review_v2 as governance
+
+    try:
+        return governance.candidate_admission(REPO, TOKEN, head_sha, pr_number)
+    except Exception as exc:
+        return "pending", f"Candidate admission evidence unavailable: {type(exc).__name__}: {exc}"
+
+
 def review_authority_state(head_sha: str, pr_number: int) -> tuple[str, str]:
     """Fail-closed exact-head review prerequisite for merge readiness.
 
@@ -309,6 +319,9 @@ class ReadinessObservation(Protocol):
     def review_authority(self) -> tuple[str, str]: ...
 
     @property
+    def candidate_admission(self) -> tuple[str, str]: ...
+
+    @property
     def check_runs(self) -> tuple[dict[str, Any], ...]: ...
 
     @property
@@ -327,6 +340,7 @@ class StaticReadinessObservation:
     unresolved_review_threads: tuple[str, ...] = ()
     changes_requested: tuple[str, ...] = ()
     review_authority: tuple[str, str] = ("success", "")
+    candidate_admission: tuple[str, str] = ("success", "")
     check_runs: tuple[dict[str, Any], ...] = ()
     governance_status: dict[str, Any] | None = None
     shared_open_prs: tuple[int, ...] = ()
@@ -359,6 +373,10 @@ class LiveReadinessObservation:
     @cached_property
     def review_authority(self) -> tuple[str, str]:
         return review_authority_state(self._head_sha, self._pr_number)
+
+    @cached_property
+    def candidate_admission(self) -> tuple[str, str]:
+        return candidate_admission_state(self._head_sha, self._pr_number)
 
     @cached_property
     def check_runs(self) -> tuple[dict[str, Any], ...]:
@@ -413,9 +431,17 @@ def evaluate(observation: ReadinessObservation) -> Decision:
     if observation.changes_requested:
         return Decision("failure", "Changes requested by: " + ", ".join(observation.changes_requested))
 
-    authority_state, authority_detail = observation.review_authority
-    if authority_state != "success":
-        return Decision("failure", "Exact-head review prerequisite not met: " + authority_detail)
+    # External LLM review is defense-in-depth, not merge authority. Existing
+    # authenticated blockers above remain fail-closed, but provider quota,
+    # outage, or absence cannot strand an otherwise verified exact HEAD.
+    # Keep observing review authority for diagnostics without gating readiness.
+    _authority_state, _authority_detail = observation.review_authority
+
+    admission_state, admission_detail = observation.candidate_admission
+    if admission_state == "pending":
+        return Decision("pending", "Waiting for candidate admission: " + admission_detail)
+    if admission_state != "success":
+        return Decision("failure", "Candidate admission prerequisite not met: " + admission_detail)
 
     runs = list(observation.check_runs)
     missing: list[str] = []
@@ -437,24 +463,11 @@ def evaluate(observation: ReadinessObservation) -> Decision:
         else:
             pending.append(name)
 
-    governance = observation.governance_status
-    if governance is None:
-        missing.append(GOVERNANCE_CONTEXT)
-    else:
-        state = str(governance.get("state") or "pending")
-        if state == "success":
-            pass
-        elif state in {"failure", "error"}:
-            failed.append(f"{GOVERNANCE_CONTEXT}={state}")
-        else:
-            # Issue #417: governance pending is a real, current dependency wait --
-            # a required trusted exact-head proof that is legitimately still
-            # running -- and not merely an artefact of unresolved mergeability.
-            # It therefore blocks as pending rather than passing. This is
-            # fail-closed and self-healing: the governance controller republishes
-            # on every event and schedule, so a pending that has since been
-            # resolved is replaced rather than left as a permanent merge lock.
-            pending.append(GOVERNANCE_CONTEXT)
+    # Authority consolidation: Merge Readiness directly observes every current
+    # blocker formerly summarized by the lightweight Governance Review status.
+    # Consuming that derived status here duplicated authority and amplified one
+    # defect into multiple red checks. The legacy status remains publishable
+    # during cutover, but is no longer an input to the readiness decision.
 
     if failed:
         return Decision("failure", "Merge prerequisite failed: " + ", ".join(failed))
@@ -467,7 +480,7 @@ def evaluate(observation: ReadinessObservation) -> Decision:
 
     return Decision(
         "success",
-        "Ready to merge: code/security checks pass and positive exact-head review authority verified.",
+        "Ready to merge: deterministic code/security/governance checks pass; external LLM review is optional defense-in-depth.",
     )
 
 

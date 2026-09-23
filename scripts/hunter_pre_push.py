@@ -370,46 +370,32 @@ def _governing_issue_criteria(updates: Iterable[tuple[str, str, str]]) -> tuple[
     return issue, criteria, ""
 
 
-def report_pre_ready_review_state(head_sha: str, updates: Iterable[tuple[str, str, str]]) -> None:
-    """Report, without blocking, whether this head could stand as Ready.
+def require_current_review_request_if_present(head_sha: str, updates: Iterable[tuple[str, str, str]]) -> None:
+    """Do not make optional external-review freshness a push prerequisite.
 
-    Pushing an incomplete candidate to a Draft pull request is ordinary work, so
-    the push boundary does not block on review state. Ready does: trusted
-    candidate admission refuses an unreviewed or stale head. Saying so here is
-    what stops "mark Ready" from being the moment the first hostile review is
-    discovered to be missing.
-
-    The report is faithful to hosted Candidate Admission: a head is READY-ELIGIBLE
-    only when the review also covers every acceptance criterion the governing
-    Issue defines, derived from GitHub the same way the hosted gate derives it and
-    bound to the pushed remote branch ref rather than the checked-out local branch
-    name. When the governing Issue's criteria cannot be proven -- including when
-    the review evidence is unreadable or structurally invalid -- or when the
-    review does not cover them, the report is DRAFT-ONLY -- never READY-ELIGIBLE
-    on a review the hosted gate would reject.
+    Exact-head review requests remain useful defense-in-depth evidence, but a
+    stale/missing request is regenerated opportunistically by trusted review
+    orchestration. Provider/request availability must never deadlock code push
+    or deterministic merge authority.
     """
+    return
 
+
+def report_pre_ready_review_state(head_sha: str, updates: Iterable[tuple[str, str, str]]) -> None:
+    """Report optional external-review freshness without gating a push."""
     try:
         base = provenance.resolve_governed_base(head_sha)
-    except provenance.GitEvidenceUnavailable as exc:
-        print(f"[Hunter Pre-Push] NOTE: pre-ready review state is unknown ({exc})")
+        _issue, issue_criteria, _criteria_reason = _governing_issue_criteria(updates)
+        verdict = review.verify_local(base, head_sha, issue_criteria=issue_criteria)
+    except Exception as exc:
+        print(f"[Hunter Pre-Push] NOTE: optional external review state is unknown ({exc})")
         return
-    issue, issue_criteria, criteria_reason = _governing_issue_criteria(updates)
-    if issue_criteria is None and criteria_reason:
-        print(
-            f"[Hunter Pre-Push] DRAFT-ONLY: governing Issue acceptance-criteria coverage is unverifiable "
-            f"({criteria_reason}). Ready is blocked unless the exact-head hostile review covers every "
-            "acceptance criterion the governing Issue defines."
-        )
-        return
-    verdict = review.verify_local(base, head_sha, issue_criteria=issue_criteria)
     if verdict.ok:
-        print(f"[Hunter Pre-Push] READY-ELIGIBLE: {verdict.reason}")
+        print(f"[Hunter Pre-Push] OPTIONAL-REVIEW-CURRENT: {verdict.reason}")
     else:
         print(
-            f"[Hunter Pre-Push] DRAFT-ONLY: pre-ready hostile review is {verdict.state} ({verdict.reason}). "
-            "Ready is blocked until it is recorded against this exact head and covers every acceptance "
-            "criterion the governing Issue defines."
+            f"[Hunter Pre-Push] NOTE: optional external review is {verdict.state} ({verdict.reason}); "
+            "this does not block push or deterministic merge authority."
         )
 
 
@@ -450,6 +436,7 @@ def enforce_pre_push(lines: Iterable[str]) -> int:
         return 2
 
     report_full_repository_proof_ownership(repo_root, after_head, mode)
+    require_current_review_request_if_present(after_head, updates)
     report_pre_ready_review_state(after_head, updates)
     print(f"[Hunter Pre-Push] PASS: exact HEAD {after_head} passed the {_lane_label(mode)}")
     return 0
