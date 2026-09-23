@@ -36,7 +36,11 @@ def test_collector_binds_only_exact_head(monkeypatch):
         {"id": 1, "commit_id": head, "user": {"login": "codex"}, "path": "x.py", "line": 7, "body": "finding"},
         {"id": 2, "commit_id": "c" * 40, "user": {"login": "old"}, "path": "y.py", "line": 9, "body": "stale"},
     ]
-    monkeypatch.setattr(collector.governance, "request_json", lambda *args, **kwargs: payload)
+
+    def fake(_repo, _token, _method, path):
+        return payload if "/comments?" in path else []
+
+    monkeypatch.setattr(collector.governance, "request_json", fake)
     result = collector.collect("fafa33/Project-Hunter", "token", 492, head, base)
     assert len(result) == 1
     assert result[0]["event_id"] == "review-comment-1"
