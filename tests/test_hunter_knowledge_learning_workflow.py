@@ -57,3 +57,36 @@ def test_bootstrap_never_executes_candidate_learning_code():
     assert "available=false" in WORKFLOW_PATH.read_text()
     assert "if: steps.engine.outputs.available == 'true'" in WORKFLOW_PATH.read_text()
     assert "no candidate code will be executed" in WORKFLOW_PATH.read_text()
+
+
+def test_learning_workflow_exposes_src_package():
+    assert "PYTHONPATH: src" in WORKFLOW_PATH.read_text()
+
+
+def test_collector_reads_top_level_reviews(monkeypatch):
+    import sys
+
+    sys.path.insert(0, str(Path("scripts").resolve()))
+    import hunter_collect_learning_observations as collector
+
+    head = "a" * 40
+    base = "b" * 40
+
+    def fake(_repo, _token, _method, path):
+        if "/comments?" in path:
+            return []
+        if "/reviews?" in path:
+            return [
+                {
+                    "id": 7,
+                    "commit_id": head,
+                    "user": {"login": "codex"},
+                    "body": "top level finding",
+                    "state": "CHANGES_REQUESTED",
+                }
+            ]
+        raise AssertionError(path)
+
+    monkeypatch.setattr(collector.governance, "request_json", fake)
+    result = collector.collect("fafa33/Project-Hunter", "token", 492, head, base)
+    assert [item["event_id"] for item in result] == ["review-7"]

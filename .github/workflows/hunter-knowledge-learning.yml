@@ -41,6 +41,7 @@ jobs:
         env:
           PYTHONPATH: src
           GITHUB_TOKEN: ${{ github.token }}
+          PYTHONPATH: src
           REPOSITORY: ${{ github.repository }}
           PR_NUMBER: ${{ github.event.pull_request.number }}
           HEAD_SHA: ${{ github.event.pull_request.head.sha }}
