@@ -57,6 +57,26 @@ def test_malformed_applicability_fails_closed(tmp_path: Path) -> None:
         authority.compile(ENGINEERING_IMPLEMENT_TASK_KEY)
 
 
+@pytest.mark.parametrize(
+    ("field", "value", "match"),
+    [
+        ("lifecycle", "invented", "lifecycle must be canonical"),
+        ("prevention_boundary", "deploy-now", "prevention boundary must be canonical"),
+    ],
+)
+def test_noncanonical_registry_domains_fail_closed(tmp_path: Path, field: str, value: str, match: str) -> None:
+    family = _family("DFF-001")
+    if field == "lifecycle":
+        family["lifecycle"] = value
+    else:
+        prevention = cast(dict[str, object], family["prevention"])
+        prevention["boundary"] = value
+    authority = EngineeringContextAuthority(registry_path=_registry(tmp_path, [family]))
+
+    with pytest.raises(EngineeringContextAuthorityError, match=match):
+        authority.compile(ENGINEERING_IMPLEMENT_TASK_KEY)
+
+
 def test_caller_text_is_not_an_input_to_family_selection(tmp_path: Path) -> None:
     authority = EngineeringContextAuthority(registry_path=_registry(tmp_path, [_family("DFF-018")]))
     context = authority.compile(ENGINEERING_IMPLEMENT_TASK_KEY)

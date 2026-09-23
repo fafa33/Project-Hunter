@@ -27,6 +27,10 @@ ENGINEERING_IMPLEMENT_ROUTE_SURFACES = (
     "tests/",
 )
 ENGINEERING_CONTEXT_SCHEMA_VERSION = "engineering-context-authority-v1"
+CANONICAL_DEFECT_LIFECYCLES = frozenset(
+    {"recorded", "regression-tested", "locally-enforced", "hosted-enforced", "merge-enforced", "prevented"}
+)
+CANONICAL_PREVENTION_BOUNDARIES = frozenset({"review", "local-pre-push", "hosted-gate", "merge-gate"})
 
 
 class EngineeringContextAuthorityError(RuntimeError):
@@ -78,10 +82,16 @@ class EngineeringContextAuthority:
             prevention = raw.get("prevention")
             if not isinstance(prevention, dict):
                 raise EngineeringContextAuthorityError(f"{identifier} prevention must be an object")
-            _required_text(f"{identifier} prevention boundary", prevention.get("boundary"))
+            boundary = _required_text(f"{identifier} prevention boundary", prevention.get("boundary"))
+            if boundary not in CANONICAL_PREVENTION_BOUNDARIES:
+                raise EngineeringContextAuthorityError(
+                    f"{identifier} prevention boundary must be canonical: {boundary!r}"
+                )
             _required_text(f"{identifier} title", raw.get("title"))
             _required_text(f"{identifier} invariant", raw.get("invariant"))
-            _required_text(f"{identifier} lifecycle", raw.get("lifecycle"))
+            lifecycle = _required_text(f"{identifier} lifecycle", raw.get("lifecycle"))
+            if lifecycle not in CANONICAL_DEFECT_LIFECYCLES:
+                raise EngineeringContextAuthorityError(f"{identifier} lifecycle must be canonical: {lifecycle!r}")
             families.append(raw)
         return families
 
