@@ -7,7 +7,7 @@ import argparse
 import json
 from pathlib import Path
 
-from hunter.evidence_intelligence.incremental_knowledge_learning import build_learning_ledger, historical_events
+from hunter.evidence_intelligence.incremental_knowledge_learning import build_learning_ledger
 
 
 def main() -> int:
@@ -16,8 +16,6 @@ def main() -> int:
     parser.add_argument("--head", required=True)
     parser.add_argument("--base", required=True)
     parser.add_argument("--observations", type=Path)
-    parser.add_argument("--historical", type=Path)
-    parser.add_argument("--registry", type=Path, default=Path("docs/DEFECT_REGISTRY.json"))
     args = parser.parse_args()
     observations = []
     if args.observations:
@@ -25,11 +23,7 @@ def main() -> int:
         if not isinstance(raw, list):
             raise SystemExit("observations must be a JSON list")
         observations.extend(raw)
-    if args.historical:
-        observations.extend(
-            e for e in historical_events(args.historical, args.head, args.base) if e["source_pr"] == args.pr
-        )
-    ledger = build_learning_ledger(args.pr, args.head, args.base, observations, args.registry)
+    ledger = build_learning_ledger(args.pr, args.head, args.base, observations, Path("docs/DEFECT_REGISTRY.json"))
     print(json.dumps(ledger, sort_keys=True, indent=2))
     return 0
 
