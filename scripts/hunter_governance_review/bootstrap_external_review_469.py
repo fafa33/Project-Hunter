@@ -299,53 +299,24 @@ def _install_bootstrap_patch(repository: str, token: str, pr_number: int, head_s
 
 
 def governance_mode(repository: str, token: str, pr_number: int) -> int:
-    # Trusted `workflow_run` and reconcile executions reach this bridge from the
-    # default branch. While that branch cannot orchestrate exact-head review for
-    # the controller migration itself, running the legacy review here would
-    # overwrite the candidate run's bootstrap state with MISSING_REVIEW_AUTHORITY
-    # on the same exact head. Publish the migration state instead; it is pending
-    # only, and it stops applying as soon as the trusted controller lands.
-    if repository == TARGET_REPOSITORY and pr_number in {TARGET_PR, BOOTSTRAP_CONTROLLER_PR}:
-        pr = governance.read_mergeability(repository, token, pr_number)
-        if pr.get("state") == "open" and str((pr.get("base") or {}).get("ref") or "").strip() == "main":
-            head_sha = str((pr.get("head") or {}).get("sha") or "").strip()
-            if head_sha:
-                try:
-                    if not _trusted_controller_on_default_branch(repository, token):
-                        if _install_bootstrap_patch(repository, token, pr_number, head_sha):
-                            return governance.review(repository, token, pr_number)
-                except RuntimeError as exc:
-                    print(f"Bootstrap authority unavailable; remaining fail-closed: {exc}")
-    if bootstrap_pending_mode(repository, pr_number, token):
-        return publish_bootstrap_pending(repository, token, pr_number)
+    """Run canonical governance without synthesizing external-review authority.
+
+    External LLM review is optional defense-in-depth. The trusted default-branch
+    bridge must not reintroduce the retired Codex-authority bootstrap contract.
+    Canonical governance remains fail-closed for deterministic admission,
+    conflicts, provenance, security/preflight proof, and recorded findings.
+    """
     return governance.review(repository, token, pr_number)
 
 
 def candidate_mode(repository: str, token: str, pr_number: int, expected_head_sha: str | None) -> int:
-    if repository == TARGET_REPOSITORY and pr_number in {TARGET_PR, BOOTSTRAP_CONTROLLER_PR}:
-        pr = governance.read_mergeability(repository, token, pr_number)
-        head_sha = str((pr.get("head") or {}).get("sha") or "").strip()
-        if head_sha and not _trusted_controller_on_default_branch(repository, token):
-            _install_bootstrap_patch(repository, token, pr_number, head_sha)
+    """Run canonical candidate admission; reviewer availability is non-authoritative."""
     return candidate.enforce_candidate_admission(repository, token, pr_number, expected_head_sha)
 
 
 def readiness_mode(repository: str, token: str) -> int:
-    if repository == TARGET_REPOSITORY:
-        for pr_number in (TARGET_PR, BOOTSTRAP_CONTROLLER_PR):
-            try:
-                pr = governance.read_mergeability(repository, token, pr_number)
-                if pr.get("state") == "open":
-                    head_sha = str((pr.get("head") or {}).get("sha") or "").strip()
-                    if head_sha:
-                        if pr_number == BOOTSTRAP_CONTROLLER_PR and _trusted_controller_on_default_branch(
-                            repository, token
-                        ):
-                            continue
-                        _install_bootstrap_patch(repository, token, pr_number, head_sha)
-            except Exception as exc:
-                print(f"Bootstrap evidence unavailable; continuing fail-closed: {type(exc).__name__}: {exc}")
-
+    """Run canonical deterministic merge readiness from the trusted checkout."""
+    del repository, token
     import hunter_merge_readiness_v2 as readiness
 
     return readiness.main()
