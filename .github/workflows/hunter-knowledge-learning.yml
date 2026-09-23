@@ -1,0 +1,42 @@
+name: Hunter Knowledge Learning
+on:
+  pull_request_target:
+    branches: [main]
+    types: [opened, reopened, synchronize, ready_for_review]
+  pull_request_review:
+    types: [submitted, edited, dismissed]
+  pull_request_review_comment:
+    types: [created, edited, deleted]
+permissions:
+  contents: read
+  pull-requests: read
+concurrency:
+  group: hunter-knowledge-learning
+  cancel-in-progress: false
+jobs:
+  learn:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Checkout trusted learning engine
+        uses: actions/checkout@v7
+        with:
+          ref: ${{ github.event.repository.default_branch }}
+          persist-credentials: false
+      - name: Build exact-head learning artifact
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+          REPOSITORY: ${{ github.repository }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+        run: |
+          python scripts/hunter_collect_learning_observations.py --repository "$REPOSITORY" --pr "$PR_NUMBER" --head "$HEAD_SHA" --base "$BASE_SHA" > learning-observations.json
+          python scripts/hunter_incremental_knowledge.py --pr "$PR_NUMBER" --head "$HEAD_SHA" --base "$BASE_SHA" --observations learning-observations.json > hunter-learning-ledger.json
+      - name: Publish non-authoritative learning artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: hunter-learning
+          path: hunter-learning-ledger.json
+          if-no-files-found: error
+          retention-days: 90
