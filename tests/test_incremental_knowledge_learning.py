@@ -12,7 +12,6 @@ from hunter.evidence_intelligence.incremental_knowledge_learning import (
 )
 
 REGISTRY = Path("docs/DEFECT_REGISTRY.json")
-BACKFILL = Path("docs/HISTORICAL_DEFECT_BACKFILL.json")
 HEAD = "a" * 40
 BASE = "b" * 40
 
@@ -88,7 +87,7 @@ def test_complete_governed_event_enters_existing_family_pipeline():
 
 
 def test_historical_backfill_translates_through_same_event_contract():
-    events = historical_events(BACKFILL, HEAD, BASE)
+    events = historical_events(HEAD, BASE)
     confirmed = [e for e in events if e.get("classification") == "confirmed"]
     assert confirmed
     ledger = build_learning_ledger(confirmed[0]["source_pr"], HEAD, BASE, [confirmed[0]], REGISTRY)
@@ -96,6 +95,6 @@ def test_historical_backfill_translates_through_same_event_contract():
 
 
 def test_historical_nondefect_remains_excluded_observation():
-    nondefect = next(e for e in historical_events(BACKFILL, HEAD, BASE) if e.get("classification") != "confirmed")
+    nondefect = next(e for e in historical_events(HEAD, BASE) if e.get("classification") != "confirmed")
     ledger = build_learning_ledger(nondefect["source_pr"], HEAD, BASE, [nondefect], REGISTRY)
     assert ledger["items"][0]["state"] == "excluded"

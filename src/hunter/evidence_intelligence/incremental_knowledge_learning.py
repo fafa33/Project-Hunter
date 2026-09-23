@@ -137,8 +137,11 @@ def build_learning_ledger(
     return body
 
 
-def historical_events(backfill: Path, head: str, base: str) -> list[dict[str, Any]]:
-    raw = json.loads(backfill.read_text(encoding="utf-8"))
+HISTORICAL_BACKFILL_PATH = Path("docs/HISTORICAL_DEFECT_BACKFILL.json")
+
+
+def historical_events(head: str, base: str) -> list[dict[str, Any]]:
+    raw = json.loads(HISTORICAL_BACKFILL_PATH.read_text(encoding="utf-8"))
     records = raw.get("records")
     if not isinstance(records, list):
         raise LearningLedgerError("historical backfill records must be a list")
