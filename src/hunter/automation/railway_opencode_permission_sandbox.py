@@ -55,6 +55,7 @@ _PINNED_OPENCODE_VERSION = "1.18.30"
 _PROVIDER_RUNTIME_INSTRUCTION_FILE = "hunter-provider-runtime.md"
 _PROVIDER_COMPATIBILITY_PROMPT = "Reply with exactly HUNTER_PROVIDER_READY and do not use tools."
 _PROVIDER_COMPATIBILITY_SENTINEL = "HUNTER_PROVIDER_READY"
+_RATE_LIMIT_EXIT_CODE = 75
 _PROVIDER_RUNTIME_INSTRUCTIONS = (
     "Operate only with the provider tools enabled by this governed runtime: "
     "read, edit, glob, grep, and lsp. "
@@ -67,6 +68,10 @@ _PROVIDER_RUNTIME_INSTRUCTIONS = (
 
 class SandboxShimError(RuntimeError):
     """Raised when the parent sandbox contract is not exactly recognized."""
+
+
+class ProviderRateLimited(RuntimeError):
+    """Raised when a preflight provider call reports the canonical rate-limit exit."""
 
 
 def _parse(argv: list[str]) -> tuple[Path, Path, str, list[str]]:
@@ -202,6 +207,8 @@ def _validate_provider_compatibility(executable: str, provider_args: list[str], 
         text=True,
         timeout=60,
     )
+    if completed.returncode == _RATE_LIMIT_EXIT_CODE:
+        raise ProviderRateLimited
     if completed.returncode != 0:
         detail = (completed.stderr or completed.stdout).strip()
         suffix = f": {detail[:240]}" if detail else ""
@@ -278,6 +285,8 @@ def main(argv: list[str] | None = None) -> int:
             timeout=900,
         )
         return completed.returncode
+    except ProviderRateLimited:
+        return _RATE_LIMIT_EXIT_CODE
     except (OSError, subprocess.TimeoutExpired, SandboxShimError) as error:
         print(f"Railway OpenCode sandbox failed closed: {error}", file=sys.stderr)
         return 1

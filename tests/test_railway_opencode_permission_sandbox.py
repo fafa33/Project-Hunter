@@ -279,6 +279,19 @@ def test_main_runs_version_capability_and_provider_compatibility_before_real_pro
     assert shim._PROVIDER_COMPATIBILITY_PROMPT in calls[-2]
 
 
+def test_main_preserves_rate_limit_exit_from_provider_compatibility_probe(tmp_path: Path, monkeypatch) -> None:
+    argv, _, _ = _argv(tmp_path)
+    calls: list[list[str]] = []
+    monkeypatch.setattr(
+        shim.subprocess,
+        "run",
+        _provider_sequence(calls, compatibility_returncode=shim._RATE_LIMIT_EXIT_CODE),
+    )
+
+    assert shim.main(argv) == shim._RATE_LIMIT_EXIT_CODE
+    assert all(command[-1] != "prompt" for command in calls)
+
+
 def test_main_fails_before_real_prompt_when_provider_compatibility_probe_fails(tmp_path: Path, monkeypatch) -> None:
     argv, _, _ = _argv(tmp_path)
     calls: list[list[str]] = []

@@ -1,18 +1,18 @@
 {
-  "authorization_id": "455e492309533a9004558a9a3df4a488ff435f341ac9de40c98b5a38205680ca",
+  "authorization_id": "f6b99a8d2b4e1407fec0e0f86ec1176046fa3107d2731f696eadcc1603c44775",
   "claims": {
     "base_ref": "main",
     "base_sha": "2cf6905c55903ed650f4e774415e55959c898b76",
     "capability": "feature-branch-write",
     "changes": [
       {
-        "blob_sha": "acdcd9f3fe295cb2fd88ab0aea7f4814d1d300af",
+        "blob_sha": "c85703ce00c5506f55630757495e54ada3388eeb",
         "path": "src/hunter/automation/railway_opencode_permission_sandbox.py",
         "previous_path": "",
         "status": "modified"
       },
       {
-        "blob_sha": "9e4bc76fb9954d40bc1bb85aeae4e6e6740c8d29",
+        "blob_sha": "1c1f4994ac3432b786c719921639914d1e7e5b76",
         "path": "tests/test_railway_opencode_permission_sandbox.py",
         "previous_path": "",
         "status": "modified"
