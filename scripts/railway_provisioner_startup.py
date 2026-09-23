@@ -38,58 +38,21 @@ import os
 import sys
 from pathlib import Path
 
+from railway_startup import (
+    ensure_runtime_import_paths,
+    require_evidence_database,
+    require_signing_key,
+    setup_logging,
+)
+
 _SCRIPTS_DIR = Path(__file__).resolve().parent
 
-_SIGNING_KEY_ENV = "HUNTER_SOURCE_HANDLING_SIGNING_KEY"
-_EVIDENCE_DB_ENV = "HUNTER_ISSUE_AGENT_EVIDENCE_DB"
-_RUNTIME_VENDOR_DIR_ENV = "HUNTER_RUNTIME_VENDOR_DIR"
-_DEFAULT_VENDOR_DIR = "/app/vendor"
-
 logger = logging.getLogger("railway_provisioner_startup")
-
-
-def _runtime_vendor_dir() -> Path | None:
-    """Return the configured pip ``--target`` install dir when it exists.
-
-    Mirrors ``railway_issuer_startup``: the Railway build installs Hunter into
-    ``/app/vendor`` (``pip install . --target /app/vendor``), so the deployed
-    image does not carry Hunter in the interpreter's default site-packages.
-    """
-    configured = os.environ.get(_RUNTIME_VENDOR_DIR_ENV, _DEFAULT_VENDOR_DIR).strip()
-    if not configured:
-        return None
-    vendor = Path(configured)
-    return vendor if vendor.is_dir() else None
-
-
-def _ensure_runtime_import_paths() -> None:
-    """Expose the Railway runtime install dir to this process and its child."""
-    vendor = _runtime_vendor_dir()
-    if vendor is None:
-        return
-    vendor_path = str(vendor)
-    if vendor_path not in sys.path:
-        sys.path.insert(0, vendor_path)
-    existing = os.environ.get("PYTHONPATH", "")
-    entries = [entry for entry in existing.split(os.pathsep) if entry and entry != vendor_path]
-    os.environ["PYTHONPATH"] = os.pathsep.join([vendor_path, *entries])
 
 
 def _import_bootstrap():  # type: ignore[no-untyped-def]
     """Import the canonical bootstrap module from the scripts directory."""
     return importlib.import_module("bootstrap_source_handling_authority")
-
-
-def _evidence_volume_not_mounted(data_dir: Path) -> str | None:
-    """Return an error message when *data_dir* cannot be shown to be a mounted volume."""
-    if not data_dir.is_dir():
-        return f"data directory {data_dir} does not exist; the Railway volume is not mounted"
-    if not os.path.ismount(data_dir):
-        return (
-            f"data directory {data_dir} exists but is not a mounted Railway volume "
-            "(ephemeral container storage); refusing to bootstrap into transient data"
-        )
-    return None
 
 
 def _bootstrap(database: str) -> dict[str, object]:
@@ -119,38 +82,19 @@ def _exec_provisioner() -> None:
 
 
 def main() -> int:
-    logging.basicConfig(
-        level=logging.INFO,
-        format="%(asctime)s %(levelname)s %(name)s: %(message)s",
-        datefmt="%Y-%m-%dT%H:%M:%S%z",
-    )
+    setup_logging()
 
-    _ensure_runtime_import_paths()
+    ensure_runtime_import_paths()
 
-    database = os.environ.get(_EVIDENCE_DB_ENV, "").strip()
-    if not database:
-        logger.error(
-            "required environment variable %s is not set; refusing to start",
-            _EVIDENCE_DB_ENV,
-        )
+    database = require_evidence_database(environ=os.environ, logger=logger)
+    if database is None:
         return 1
 
-    db_path = Path(database)
-    data_dir = db_path.parent
-    volume_error = _evidence_volume_not_mounted(data_dir)
-    if volume_error is not None:
-        logger.error("%s", volume_error)
-        return 1
-
-    if _SIGNING_KEY_ENV not in os.environ or not os.environ[_SIGNING_KEY_ENV].strip():
-        logger.error(
-            "required environment variable %s is not set; " "the signing key is needed for bootstrap and minting",
-            _SIGNING_KEY_ENV,
-        )
+    if not require_signing_key(environ=os.environ, logger=logger, purpose="bootstrap and minting"):
         return 1
 
     try:
-        outcome = _bootstrap(database)
+        outcome = _bootstrap(str(database))
     except Exception as error:  # noqa: BLE001 - fail closed before provisioner
         logger.error("bootstrap failed: %s", error)
         return 1

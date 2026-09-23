@@ -35,20 +35,24 @@ this process and the operator bootstrap may hold it.
 from __future__ import annotations
 
 import argparse
-import json
 import logging
 import os
 import signal
 import threading
 from collections.abc import Mapping
 from dataclasses import dataclass
-from http.server import BaseHTTPRequestHandler, HTTPServer
 from pathlib import Path
-from socketserver import ThreadingMixIn
-from typing import Any, Final
+from typing import Any
 
 import bootstrap_source_handling_authority as bootstrap
 import provision_source_handling_issue_authority as provisioning
+from issue_agent_edge_transport import (
+    MAX_CONCURRENT_REQUEST_WORKERS,
+    REQUEST_READ_TIMEOUT_SECONDS,
+    BoundedThreadingHTTPServer,
+    IssueAgentEdgeRequestHandler,
+    setup_logging,
+)
 
 from hunter.automation.issue_agent_execution import (
     EVIDENCE_DATABASE_ENV,
@@ -65,15 +69,8 @@ from hunter.automation.issue_agent_execution import (
 from hunter.evidence_intelligence.source_handling import AUTHORITY_COMPONENT_ID
 from hunter.evidence_intelligence.source_handling_persistence import SourceHandlingBlockedError
 
-#: Maximum request body size in bytes (256 KiB), matching the trigger envelope cap.
-_MAX_REQUEST_BYTES: Final[int] = 256 * 1024
-
-#: Small explicit bound on concurrent request workers (modeled on the issuer edge).
-_MAX_CONCURRENT_REQUEST_WORKERS: Final[int] = 8
-
-#: Finite socket read deadline applied before the body is read.
-_REQUEST_READ_TIMEOUT_SECONDS: Final[float] = 15.0
-
+#: Maximum request body size and transport bound are inherited from the shared
+#: issue-agent edge transport; the response schema for this edge stays here.
 PROVISION_RESPONSE_SCHEMA_VERSION = "hunter-issue-agent-provision-response-v1"
 _SOURCE_HANDLING_SIGNING_KEY_ENV = bootstrap.SIGNING_KEY_ENV
 
@@ -193,52 +190,28 @@ def provision_issue_authority(
     return outcome
 
 
-def _canonical_json(value: object) -> str:
-    return json.dumps(value, sort_keys=True, separators=(",", ":"), ensure_ascii=False)
+class _ProvisionerRequestHandler(IssueAgentEdgeRequestHandler):
+    """HTTP handler for the trusted provisioning edge.
 
-
-class _ProvisionerRequestHandler(BaseHTTPRequestHandler):
-    """HTTP handler for the trusted provisioning edge."""
+    The bounded body parsing and canonical JSON responses come from the shared
+    issue-agent edge transport; only the provisioning disposition is this
+    edge's own.
+    """
 
     configuration: ProvisionerConfiguration | None = None
 
-    def do_POST(self) -> None:
-        """Handle a provisioning request carrying one signed authorization."""
-        if self.path != "/issue-agent/provision":
-            self._send_error(404, "Not Found")
-            return
+    endpoint = "/issue-agent/provision"
+    service_name = "hunter-issue-agent-provisioner"
+    error_schema_version = PROVISION_RESPONSE_SCHEMA_VERSION
 
-        content_length = self.headers.get("Content-Length")
-        if content_length is None:
-            self._send_error(411, "Length Required")
-            return
-        try:
-            length = int(content_length)
-        except ValueError:
-            self._send_error(400, "Invalid Content-Length")
-            return
-        if length > _MAX_REQUEST_BYTES:
-            self._send_error(413, "Payload Too Large")
-            return
+    def handle_authorization(self, signed: SignedIssueAgentAuthorization) -> None:
+        """Provision the canonical authority for one verified authorization.
 
-        try:
-            body = self.rfile.read(length)
-        except TimeoutError:
-            self._send_error(408, "Request body read timed out")
-            return
-        if len(body) != length:
-            self._send_error(400, "Incomplete request body")
-            return
-
-        try:
-            signed = SignedIssueAgentAuthorization.from_json(body)
-        except IssueAgentIssuerError as error:
-            self._send_error(401, str(error))
-            return
-        except IssueAgentAuthorizationError as error:
-            self._send_error(400, str(error))
-            return
-
+        The transport already parsed the canonical signed document; verification
+        and repository/owner gating happen here, before any write, and only the
+        repository-owned record families derived by the canonical operator
+        machinery are provisioned.
+        """
         assert self.configuration is not None
         try:
             outcome = provision_issue_authority(self.configuration, signed)
@@ -273,81 +246,6 @@ class _ProvisionerRequestHandler(BaseHTTPRequestHandler):
             },
         )
 
-    def do_GET(self) -> None:
-        """Health check endpoint."""
-        if self.path == "/healthz":
-            self._send_json(200, {"status": "ok", "service": "hunter-issue-agent-provisioner"})
-        else:
-            self._send_error(404, "Not Found")
-
-    def _send_json(self, status: int, payload: dict[str, Any]) -> None:
-        self.send_response(status)
-        self.send_header("Content-Type", "application/json")
-        body = _canonical_json(payload).encode("utf-8")
-        self.send_header("Content-Length", str(len(body)))
-        self.end_headers()
-        self.wfile.write(body)
-
-    def _send_error(self, status: int, message: str) -> None:
-        self.send_response(status)
-        self.send_header("Content-Type", "application/json")
-        body = _canonical_json({"error": message, "schema_version": PROVISION_RESPONSE_SCHEMA_VERSION}).encode("utf-8")
-        self.send_header("Content-Length", str(len(body)))
-        self.end_headers()
-        self.wfile.write(body)
-
-    def log_message(self, format: str, *args: Any) -> None:
-        logging.getLogger(__name__).info("%s - %s", self.address_string(), format % args)
-
-
-class _BoundedThreadingHTTPServer(ThreadingMixIn, HTTPServer):
-    """HTTPServer with a small, explicit concurrency bound (modeled on the issuer)."""
-
-    daemon_threads = True
-    allow_reuse_address = True
-
-    def __init__(
-        self,
-        server_address: tuple[str, int],
-        RequestHandlerClass: type[BaseHTTPRequestHandler],
-        *,
-        max_workers: int,
-    ) -> None:
-        if max_workers < 1:
-            raise ValueError("concurrent worker bound must be a positive integer")
-        super().__init__(server_address, RequestHandlerClass)
-        self._worker_slots = threading.Semaphore(max_workers)
-
-    def process_request(self, request: Any, client_address: Any) -> None:
-        if not self._worker_slots.acquire(blocking=False):
-            self._reject_saturated(request)
-            self.shutdown_request(request)
-            return
-        try:
-            super().process_request(request, client_address)
-        except BaseException:
-            self._worker_slots.release()
-            self.shutdown_request(request)
-            raise
-
-    def process_request_thread(self, request: Any, client_address: Any) -> None:
-        try:
-            super().process_request_thread(request, client_address)
-        finally:
-            self._worker_slots.release()
-
-    def _reject_saturated(self, request: Any) -> None:
-        try:
-            request.settimeout(5.0)
-            request.sendall(
-                b"HTTP/1.1 503 Service Unavailable\r\n"
-                b"Content-Type: application/json\r\n"
-                b"Content-Length: 0\r\n"
-                b"Connection: close\r\n\r\n"
-            )
-        except OSError:
-            pass
-
 
 class ProvisionerServer:
     """Bounded concurrent HTTP server for the trusted provisioning edge."""
@@ -358,8 +256,8 @@ class ProvisionerServer:
         port: int,
         configuration: ProvisionerConfiguration,
         *,
-        read_timeout: float = _REQUEST_READ_TIMEOUT_SECONDS,
-        max_workers: int = _MAX_CONCURRENT_REQUEST_WORKERS,
+        read_timeout: float = REQUEST_READ_TIMEOUT_SECONDS,
+        max_workers: int = MAX_CONCURRENT_REQUEST_WORKERS,
     ) -> None:
         self._host = host
         self._port = port
@@ -370,7 +268,7 @@ class ProvisionerServer:
             timeout = read_timeout
 
         Handler.configuration = configuration
-        self._server = _BoundedThreadingHTTPServer(
+        self._server = BoundedThreadingHTTPServer(
             (host, port),
             Handler,
             max_workers=max_workers,
@@ -396,15 +294,6 @@ class ProvisionerServer:
         logging.getLogger(__name__).info("trusted provisioning edge stopped")
 
 
-def _setup_logging(verbose: bool) -> None:
-    level = logging.DEBUG if verbose else logging.INFO
-    logging.basicConfig(
-        level=level,
-        format="%(asctime)s %(levelname)s %(name)s: %(message)s",
-        datefmt="%Y-%m-%dT%H:%M:%S%z",
-    )
-
-
 def _parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="hunter_issue_agent_provisioner")
     parser.add_argument("--host", default="0.0.0.0", help="bind address")
@@ -416,7 +305,7 @@ def _parser() -> argparse.ArgumentParser:
 
 def main(argv: list[str] | None = None) -> int:
     arguments = _parser().parse_args(argv)
-    _setup_logging(arguments.verbose)
+    setup_logging(arguments.verbose)
     logger = logging.getLogger(__name__)
 
     try:

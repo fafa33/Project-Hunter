@@ -37,6 +37,8 @@ import provision_source_handling_issue_authority as provisioning
 import pytest
 from cryptography.hazmat.primitives import serialization
 from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
+from issue_agent_edge_transport import MAX_REQUEST_BYTES
+from issue_agent_wire import EdgeTransportClientMixin
 
 from hunter.automation.agent_fallback_runtime import AgentFallbackRuntimeReceipt
 from hunter.automation.issue_agent_execution import (
@@ -205,7 +207,7 @@ class RecordingFallback:
 # --- Wire harness: real threaded HTTPServer on an ephemeral port -------------
 
 
-class ProvisioningEdge:
+class ProvisioningEdge(EdgeTransportClientMixin):
     def __init__(self, configuration: provisioner.ProvisionerConfiguration, *, max_workers: int = 8) -> None:
         self.server = provisioner.ProvisionerServer(
             "127.0.0.1",
@@ -224,19 +226,8 @@ class ProvisioningEdge:
         connection.close()
         return response.status, received.decode("utf-8")
 
-    def get(self, path: str) -> tuple[int, str]:
-        connection = http.client.HTTPConnection("127.0.0.1", self.port, timeout=15)
-        connection.request("GET", path)
-        response = connection.getresponse()
-        received = response.read()
-        connection.close()
-        return response.status, received.decode("utf-8")
 
-    def close(self) -> None:
-        self.server.shutdown()
-
-
-class IssuerEdge:
+class IssuerEdge(EdgeTransportClientMixin):
     def __init__(self, services: issuer.IssuerServices) -> None:
         self.server = issuer.IssuerServer("127.0.0.1", 0, services)
         self.server.start()
@@ -249,9 +240,6 @@ class IssuerEdge:
         received = response.read()
         connection.close()
         return response.status, received.decode("utf-8")
-
-    def close(self) -> None:
-        self.server.shutdown()
 
 
 @pytest.fixture(autouse=True)
@@ -335,7 +323,7 @@ def test_payload_too_large_is_refused(deployment: dict[str, Any], edge: Any) -> 
     connection = http.client.HTTPConnection("127.0.0.1", hook.port, timeout=15)
     connection.putrequest("POST", "/issue-agent/provision")
     connection.putheader("Content-Type", "application/json")
-    connection.putheader("Content-Length", str(provisioner._MAX_REQUEST_BYTES + 1))
+    connection.putheader("Content-Length", str(MAX_REQUEST_BYTES + 1))
     connection.endheaders()
     response = connection.getresponse()
     received = response.read()

@@ -54,52 +54,30 @@ import os
 import sys
 from pathlib import Path
 
+from railway_startup import (
+    DEFAULT_VENDOR_DIR,
+    EVIDENCE_DB_ENV,
+    RUNTIME_VENDOR_DIR_ENV,
+    SIGNING_KEY_ENV,
+    ensure_runtime_import_paths,
+    require_evidence_database,
+    require_signing_key,
+    scrub_signing_key,
+    setup_logging,
+)
+
 _SCRIPTS_DIR = Path(__file__).resolve().parent
 
-_SIGNING_KEY_ENV = "HUNTER_SOURCE_HANDLING_SIGNING_KEY"
-_EVIDENCE_DB_ENV = "HUNTER_ISSUE_AGENT_EVIDENCE_DB"
-_RUNTIME_VENDOR_DIR_ENV = "HUNTER_RUNTIME_VENDOR_DIR"
-_DEFAULT_VENDOR_DIR = "/app/vendor"
+#: Backwards-compatible private aliases (shared state lives in railway_startup).
+_SIGNING_KEY_ENV = SIGNING_KEY_ENV
+_EVIDENCE_DB_ENV = EVIDENCE_DB_ENV
+_RUNTIME_VENDOR_DIR_ENV = RUNTIME_VENDOR_DIR_ENV
+_DEFAULT_VENDOR_DIR = DEFAULT_VENDOR_DIR
+_ensure_runtime_import_paths = ensure_runtime_import_paths
 
 _PROVENANCE_RESOLVER = "hunter.evidence_intelligence.source_handling_provenance.production_provenance_resolver"
 
 logger = logging.getLogger("railway_issuer_startup")
-
-
-def _runtime_vendor_dir() -> Path | None:
-    """Return the configured pip ``--target`` install dir when it exists.
-
-    The Railway build installs Hunter into ``/app/vendor`` (``pip install . --
-    target /app/vendor``), so the deployed image does not carry Hunter in the
-    interpreter's default site-packages.  The start command must make that
-    directory importable both for this seam and for the issuer process it
-    ``exec``s.
-    """
-    configured = os.environ.get(_RUNTIME_VENDOR_DIR_ENV, _DEFAULT_VENDOR_DIR).strip()
-    if not configured:
-        return None
-    vendor = Path(configured)
-    return vendor if vendor.is_dir() else None
-
-
-def _ensure_runtime_import_paths() -> None:
-    """Expose the Railway runtime install dir to this process and its issuer child.
-
-    The module-freezing import of ``bootstrap_source_handling_authority`` (and
-    the ``hunter`` package it imports) happens lazily in the seam, while the
-    issuer is ``exec``ed into a fresh interpreter.  Both need the pip
-    ``--target`` directory on the import path: this process via ``sys.path``
-    and the child via an exported ``PYTHONPATH``.
-    """
-    vendor = _runtime_vendor_dir()
-    if vendor is None:
-        return
-    vendor_path = str(vendor)
-    if vendor_path not in sys.path:
-        sys.path.insert(0, vendor_path)
-    existing = os.environ.get("PYTHONPATH", "")
-    entries = [entry for entry in existing.split(os.pathsep) if entry and entry != vendor_path]
-    os.environ["PYTHONPATH"] = os.pathsep.join([vendor_path, *entries])
 
 
 def _import_bootstrap():  # type: ignore[no-untyped-def]
@@ -109,25 +87,6 @@ def _import_bootstrap():  # type: ignore[no-untyped-def]
     on repeat calls, so the import itself is the whole idempotent contract.
     """
     return importlib.import_module("bootstrap_source_handling_authority")
-
-
-def _evidence_volume_not_mounted(data_dir: Path) -> str | None:
-    """Return an error message when *data_dir* cannot be shown to be a mounted volume.
-
-    A directory that merely exists is not proof that Railway mounted the
-    persistent volume: the path could have been created by a build step or
-    baked into the image, and bootstrapping there would silently write into
-    ephemeral container storage that is lost on the next restart.  The seam
-    fails closed unless the evidence directory is a real mount point.
-    """
-    if not data_dir.is_dir():
-        return f"data directory {data_dir} does not exist; the Railway volume is not mounted"
-    if not os.path.ismount(data_dir):
-        return (
-            f"data directory {data_dir} exists but is not a mounted Railway volume "
-            "(ephemeral container storage); refusing to bootstrap into transient data"
-        )
-    return None
 
 
 def _bootstrap(database: str) -> dict[str, object]:
@@ -142,7 +101,7 @@ def _bootstrap(database: str) -> dict[str, object]:
 
 def _scrub_signing_key() -> None:
     """Remove ``HUNTER_SOURCE_HANDLING_SIGNING_KEY`` from the process env."""
-    os.environ.pop(_SIGNING_KEY_ENV, None)
+    scrub_signing_key()
 
 
 def _exec_issuer() -> None:
@@ -168,38 +127,19 @@ def _exec_issuer() -> None:
 
 
 def main() -> int:
-    logging.basicConfig(
-        level=logging.INFO,
-        format="%(asctime)s %(levelname)s %(name)s: %(message)s",
-        datefmt="%Y-%m-%dT%H:%M:%S%z",
-    )
+    setup_logging()
 
-    _ensure_runtime_import_paths()
+    ensure_runtime_import_paths()
 
-    database = os.environ.get(_EVIDENCE_DB_ENV, "").strip()
-    if not database:
-        logger.error(
-            "required environment variable %s is not set; refusing to start",
-            _EVIDENCE_DB_ENV,
-        )
+    database = require_evidence_database(environ=os.environ, logger=logger)
+    if database is None:
         return 1
 
-    db_path = Path(database)
-    data_dir = db_path.parent
-    volume_error = _evidence_volume_not_mounted(data_dir)
-    if volume_error is not None:
-        logger.error("%s", volume_error)
-        return 1
-
-    if _SIGNING_KEY_ENV not in os.environ or not os.environ[_SIGNING_KEY_ENV].strip():
-        logger.error(
-            "required environment variable %s is not set; " "the signing key is needed for bootstrap",
-            _SIGNING_KEY_ENV,
-        )
+    if not require_signing_key(environ=os.environ, logger=logger, purpose="bootstrap"):
         return 1
 
     try:
-        outcome = _bootstrap(database)
+        outcome = _bootstrap(str(database))
     except Exception as error:  # noqa: BLE001 - fail closed before issuer
         logger.error("bootstrap failed: %s", error)
         return 1
