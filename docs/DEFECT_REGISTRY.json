@@ -518,11 +518,13 @@
       },
       "regression_evidence": [
         "tests/test_source_handling_review_regressions.py::test_fact_publication_requires_complete_explicit_availability_state",
-        "tests/test_evidence_intelligence_source_handling_f9_contract.py::test_f9_integration_contract_has_no_permissive_retention_default"
+        "tests/test_evidence_intelligence_source_handling_f9_contract.py::test_f9_integration_contract_has_no_permissive_retention_default",
+        "tests/test_engineering_context_authority.py::test_noncanonical_registry_domains_fail_closed"
       ],
       "lifecycle": "regression-tested",
       "sources": [
-        "PR #411 independent review"
+        "PR #411 independent review",
+        "PR #487 Codex review: noncanonical lifecycle/prevention values admitted by EngineeringContextAuthority"
       ]
     },
     {

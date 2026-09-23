@@ -20,6 +20,7 @@ still compiles.
 
 from __future__ import annotations
 
+import json
 from dataclasses import asdict, replace
 from pathlib import Path
 from types import SimpleNamespace
@@ -322,7 +323,9 @@ def test_non_bounded_engineering_oversize_fails_closed_with_machine_reason(
     assert "request" not in captured
 
 
-def test_non_bounded_route_within_policy_compiles_unchanged(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_implementation_route_injects_governed_dpm_context_without_changing_task_identity(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     _machine, ingress, captured = _implement_machine(monkeypatch)
     del _machine
     task_text = "implement only the configured symbol within the available budget"
@@ -335,7 +338,12 @@ def test_non_bounded_route_within_policy_compiles_unchanged(monkeypatch: pytest.
 
     result = ingress.compile(request)
 
-    assert cast(Any, captured["request"]).task_text == task_text
+    compiled_text = cast(Any, captured["request"]).task_text
+    payload = json.loads(compiled_text)
+    assert payload["untrusted_task"] == task_text
+    family_ids = {item["id"] for item in payload["governed_prevention_context"]["applicable_defect_families"]}
+    assert "DFF-018" in family_ids
+    assert result.envelope.task_request_id == request.request_id
     assert result.envelope.route_identity == ENGINEERING_IMPLEMENT_ROUTE.route_identity
     assert result.envelope.profile_identity == ENGINEERING_IMPLEMENT_PROFILE.profile_identity
 
