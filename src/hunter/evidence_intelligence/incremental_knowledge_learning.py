@@ -74,8 +74,11 @@ def _event_from_observation(raw: dict[str, Any]) -> dict[str, Any] | None:
     classification = raw.get("classification")
     if classification is None:
         return None
-    if classification != "confirmed":
-        classification = "false-positive"
+    supported = {"confirmed", "false-positive", "style", "obsolete", "infrastructure", "provider-unavailable"}
+    if classification not in supported:
+        raise LearningLedgerError("learning observation classification is invalid")
+    if raw["availability"] == "unavailable":
+        classification = "provider-unavailable"
     affected = raw.get("affected_paths") or ([raw["path"]] if raw.get("path") else [])
     return {
         "schema_version": EVENT_SCHEMA_VERSION,

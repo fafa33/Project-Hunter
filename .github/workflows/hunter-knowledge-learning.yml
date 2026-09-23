@@ -8,8 +8,8 @@ permissions:
   contents: read
   pull-requests: read
 concurrency:
-  group: hunter-knowledge-learning
-  cancel-in-progress: false
+  group: hunter-knowledge-learning-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
 jobs:
   learn:
     runs-on: ubuntu-latest

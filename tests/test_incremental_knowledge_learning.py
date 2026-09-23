@@ -110,3 +110,32 @@ def test_reused_provider_event_identity_with_different_content_fails_closed():
 def test_ledger_rejects_non_hex_exact_head():
     with pytest.raises(LearningLedgerError, match="SHA"):
         build_learning_ledger(492, "z" * 40, BASE, [], REGISTRY)
+
+
+def test_unavailable_confirmed_event_is_never_learned_as_defect():
+    family = next(f for f in json.loads(REGISTRY.read_text())["families"] if f["id"] == "DFF-004")
+    item = observation(
+        availability="unavailable",
+        classification="confirmed",
+        invariant=family["invariant"],
+        affected_paths=["src/hunter/example.py"],
+        fix_reference="PR #493",
+        regression_evidence=[family["regression_evidence"][0]],
+        claimed_family_id="DFF-004",
+    )
+    ledger = build_learning_ledger(492, HEAD, BASE, [item], REGISTRY)
+    assert ledger["items"][0]["state"] == "excluded"
+    assert ledger["items"][0]["proposal"]["finding"]["classification"] == "provider-unavailable"
+
+
+@pytest.mark.parametrize("classification", ["style", "obsolete", "infrastructure", "provider-unavailable"])
+def test_supported_exclusion_classification_is_preserved(classification):
+    item = observation(classification=classification)
+    ledger = build_learning_ledger(492, HEAD, BASE, [item], REGISTRY)
+    assert ledger["items"][0]["state"] == "excluded"
+    assert ledger["items"][0]["proposal"]["finding"]["classification"] == classification
+
+
+def test_unknown_classification_fails_closed():
+    with pytest.raises(LearningLedgerError, match="classification"):
+        build_learning_ledger(492, HEAD, BASE, [observation(classification="maybe-defect")], REGISTRY)
