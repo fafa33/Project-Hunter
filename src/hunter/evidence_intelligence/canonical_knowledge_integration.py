@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import ast
 import hashlib
 import json
 from dataclasses import dataclass
@@ -62,6 +63,9 @@ class CanonicalIntegrationAuthority:
         evidence = family.get("regression_evidence")
         if not isinstance(sources, list) or not isinstance(evidence, list):
             raise CanonicalIntegrationError("canonical family learning fields are malformed")
+        self._reject_event_identity_conflict(proposal, sources)
+        for item in proposal.finding.regression_evidence:
+            self._validate_regression_target(item)
         source = self._source_record(proposal)
         if source not in sources:
             sources.append(source)
@@ -71,6 +75,48 @@ class CanonicalIntegrationAuthority:
         changed = family != before
         rendered = (json.dumps(document, indent=2, ensure_ascii=False) + "\n").encode()
         return CanonicalIntegrationResult(rendered, changed, proposal.canonical_family_id)
+
+    @staticmethod
+    def _stable_event_identity(finding_id: str) -> str:
+        return finding_id.split("@", 1)[0]
+
+    @classmethod
+    def _reject_event_identity_conflict(cls, proposal: KnowledgeExtractionProposal, sources: list[object]) -> None:
+        stable = cls._stable_event_identity(proposal.finding.finding_id)
+        marker = f" {stable}@"
+        current = f" {proposal.finding.finding_id} "
+        for source in sources:
+            if isinstance(source, str) and marker in source and current not in source:
+                raise CanonicalIntegrationError("provider event identity is already bound to different evidence")
+
+    @staticmethod
+    def _validate_regression_target(reference: str) -> None:
+        path_text, separator, node = reference.partition("::")
+        if not separator or not path_text or not node:
+            raise CanonicalIntegrationError("regression evidence must be a resolvable pytest target")
+        path = Path(path_text)
+        if path.is_absolute() or ".." in path.parts or not path.is_file() or path.suffix != ".py":
+            raise CanonicalIntegrationError("regression evidence target is invalid")
+        try:
+            tree = ast.parse(path.read_text(encoding="utf-8"))
+        except (OSError, SyntaxError) as exc:
+            raise CanonicalIntegrationError("regression evidence target is unreadable") from exc
+        parts = node.split("::")
+        bodies = [tree.body]
+        for index, part in enumerate(parts):
+            candidates = []
+            for body in bodies:
+                candidates.extend(
+                    item
+                    for item in body
+                    if isinstance(item, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)) and item.name == part
+                )
+            if not candidates:
+                raise CanonicalIntegrationError("regression evidence target does not resolve")
+            if index < len(parts) - 1:
+                bodies = [item.body for item in candidates if isinstance(item, ast.ClassDef)]
+                if not bodies:
+                    raise CanonicalIntegrationError("regression evidence target does not resolve")
 
     @staticmethod
     def _source_record(proposal: KnowledgeExtractionProposal) -> str:

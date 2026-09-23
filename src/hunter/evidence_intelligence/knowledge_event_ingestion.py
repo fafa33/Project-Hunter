@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import hashlib
+import json
 from typing import Any
 
 from hunter.evidence_intelligence.knowledge_extraction_authority import (
@@ -54,10 +56,14 @@ def ingest_event(source: str, raw: Any) -> KnowledgeFinding:
     event_id = raw.get("event_id")
     if type(event_id) is not str or not event_id.strip():
         raise EventIngestionError("event_id is required")
+    identity_payload = {key: raw.get(key) for key in sorted(_ALLOWED_FIELDS)}
+    payload_digest = hashlib.sha256(
+        json.dumps(identity_payload, sort_keys=True, separators=(",", ":"), ensure_ascii=False).encode("utf-8")
+    ).hexdigest()
     payload = {
         "schema_version": SCHEMA_VERSION,
         "source_kind": SOURCE_MAP[source],
-        "finding_id": f"{source}:{event_id}",
+        "finding_id": f"{source}:{event_id}@{payload_digest}",
         "source_pr": raw.get("source_pr"),
         "reviewed_head_sha": raw.get("reviewed_head_sha"),
         "reviewed_base_sha": raw.get("reviewed_base_sha"),

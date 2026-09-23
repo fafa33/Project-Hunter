@@ -98,3 +98,28 @@ def test_mutated_proposal_identity_cannot_bypass_replay() -> None:
     p = replace(proposal(), proposal_id="KXP-" + "0" * 24)
     with pytest.raises(CanonicalIntegrationError, match="replay"):
         CanonicalIntegrationAuthority().integrate(p, REGISTRY.read_bytes())
+
+
+def test_invalid_regression_target_fails_before_registry_candidate() -> None:
+    q = payload()
+    q["regression_evidence"] = ["tests/does_not_exist.py::test_missing"]
+    finding = ingest_event("sonar", q)
+    proposal = KnowledgeExtractionAuthority(REGISTRY).extract(finding)
+    with pytest.raises(CanonicalIntegrationError, match="regression evidence"):
+        CanonicalIntegrationAuthority().integrate(proposal, REGISTRY.read_bytes())
+
+
+def test_reused_provider_event_id_with_changed_evidence_is_rejected_after_first_learning(tmp_path: Path) -> None:
+    original = payload()
+    first_finding = ingest_event("sonar", original)
+    first_proposal = KnowledgeExtractionAuthority(REGISTRY).extract(first_finding)
+    first = CanonicalIntegrationAuthority().integrate(first_proposal, REGISTRY.read_bytes())
+    updated = tmp_path / "registry.json"
+    updated.write_bytes(first.registry_bytes)
+
+    changed = payload()
+    changed["fix_reference"] = "PR #490 different remediation"
+    changed_finding = ingest_event("sonar", changed)
+    changed_proposal = KnowledgeExtractionAuthority(updated).extract(changed_finding)
+    with pytest.raises(CanonicalIntegrationError, match="event identity"):
+        CanonicalIntegrationAuthority().integrate(changed_proposal, first.registry_bytes)

@@ -74,3 +74,11 @@ def test_false_positive_excluded():
     p["classification"] = "false-positive"
     p["claimed_family_id"] = None
     assert KnowledgeExtractionAuthority(REGISTRY).extract(ingest_event("sonar", p)).outcome == "excluded"
+
+
+def test_same_provider_event_id_with_changed_payload_has_different_content_identity() -> None:
+    first = ingest_event("sonar", payload())
+    changed = payload()
+    changed["fix_reference"] = "PR #489 commit DIFFERENT"
+    second = ingest_event("sonar", changed)
+    assert first.finding_id != second.finding_id
