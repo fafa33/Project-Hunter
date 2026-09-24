@@ -52,6 +52,7 @@ def _canonical_registry_target(monkeypatch, tmp_path):
     registry = tmp_path / "DEFECT_REGISTRY.json"
     registry.write_bytes(REGISTRY.read_bytes())
     monkeypatch.setattr(module, "CANONICAL_DEFECT_REGISTRY", registry)
+    monkeypatch.setattr(module, "CANONICAL_LEARNING_LEDGER", tmp_path / "hunter-learning-ledger.json")
 
 
 def test_existing_family_ledger_produces_candidate_without_persisting():
@@ -98,10 +99,10 @@ def test_materialize_verified_ledger_atomically_updates_candidate_registry(tmp_p
     registry = tmp_path / "DEFECT_REGISTRY.json"
     registry.write_bytes(REGISTRY.read_bytes())
     ledger = build_learning_ledger(504, HEAD, BASE, [observation()], registry)
-    ledger_path = tmp_path / "ledger.json"
+    ledger_path = tmp_path / "hunter-learning-ledger.json"
     ledger_path.write_text(json.dumps(ledger), encoding="utf-8")
 
-    result = materialize_learning_ledger(ledger_path)
+    result = materialize_learning_ledger()
 
     assert result.changed is True
     assert registry.read_bytes() == result.registry_bytes
@@ -115,13 +116,13 @@ def test_materialize_replay_is_idempotent(tmp_path):
     registry = tmp_path / "DEFECT_REGISTRY.json"
     registry.write_bytes(REGISTRY.read_bytes())
     ledger = build_learning_ledger(504, HEAD, BASE, [observation()], registry)
-    ledger_path = tmp_path / "ledger.json"
+    ledger_path = tmp_path / "hunter-learning-ledger.json"
     ledger_path.write_text(json.dumps(ledger), encoding="utf-8")
-    first = materialize_learning_ledger(ledger_path)
+    first = materialize_learning_ledger()
     before = registry.read_bytes()
 
     # Replaying the exact same accepted ledger is a no-op, not an error.
-    second = materialize_learning_ledger(ledger_path)
+    second = materialize_learning_ledger()
 
     assert registry.read_bytes() == second.registry_bytes
     family = next(f for f in json.loads(registry.read_text())["families"] if f["id"] == "DFF-008")
@@ -138,11 +139,11 @@ def test_materialize_tampered_ledger_leaves_registry_unchanged(tmp_path):
     before = registry.read_bytes()
     ledger = build_learning_ledger(504, HEAD, BASE, [observation()], registry)
     ledger["reviewed_head_sha"] = "c" * 40
-    ledger_path = tmp_path / "ledger.json"
+    ledger_path = tmp_path / "hunter-learning-ledger.json"
     ledger_path.write_text(json.dumps(ledger), encoding="utf-8")
 
     with pytest.raises(ControlledLearningIntegrationError, match="digest"):
-        materialize_learning_ledger(ledger_path)
+        materialize_learning_ledger()
     assert registry.read_bytes() == before
 
 
@@ -153,10 +154,10 @@ def test_materialize_non_defect_evidence_never_mutates_registry(tmp_path):
     registry.write_bytes(REGISTRY.read_bytes())
     before = registry.read_bytes()
     ledger = build_learning_ledger(504, HEAD, BASE, [observation("provider-unavailable")], registry)
-    ledger_path = tmp_path / "ledger.json"
+    ledger_path = tmp_path / "hunter-learning-ledger.json"
     ledger_path.write_text(json.dumps(ledger), encoding="utf-8")
 
-    result = materialize_learning_ledger(ledger_path)
+    result = materialize_learning_ledger()
     assert result.changed is False
     assert registry.read_bytes() == before
 
@@ -167,9 +168,9 @@ def test_materialize_replay_rejects_tampered_full_proposal_contract(tmp_path):
     registry = tmp_path / "DEFECT_REGISTRY.json"
     registry.write_bytes(REGISTRY.read_bytes())
     ledger = build_learning_ledger(504, HEAD, BASE, [observation()], registry)
-    ledger_path = tmp_path / "ledger.json"
+    ledger_path = tmp_path / "hunter-learning-ledger.json"
     ledger_path.write_text(json.dumps(ledger), encoding="utf-8")
-    materialize_learning_ledger(ledger_path)
+    materialize_learning_ledger()
 
     ledger["items"][0]["proposal"]["schema_version"] = "tampered-schema"
     ledger["items"][0]["proposal"]["canonical_write_authorized"] = True
@@ -184,7 +185,7 @@ def test_materialize_replay_rejects_tampered_full_proposal_contract(tmp_path):
     ledger_path.write_text(json.dumps(ledger), encoding="utf-8")
 
     with pytest.raises(ControlledLearningIntegrationError, match="does not replay"):
-        materialize_learning_ledger(ledger_path)
+        materialize_learning_ledger()
 
 
 def test_materialize_detects_concurrent_registry_change_before_replace(tmp_path, monkeypatch):
@@ -193,7 +194,7 @@ def test_materialize_detects_concurrent_registry_change_before_replace(tmp_path,
     registry = tmp_path / "DEFECT_REGISTRY.json"
     registry.write_bytes(REGISTRY.read_bytes())
     ledger = build_learning_ledger(504, HEAD, BASE, [observation()], registry)
-    ledger_path = tmp_path / "ledger.json"
+    ledger_path = tmp_path / "hunter-learning-ledger.json"
     ledger_path.write_text(json.dumps(ledger), encoding="utf-8")
     real_integrate = module.integrate_learning_ledger
 
@@ -204,10 +205,11 @@ def test_materialize_detects_concurrent_registry_change_before_replace(tmp_path,
 
     monkeypatch.setattr(module, "integrate_learning_ledger", racing_integrate)
     with pytest.raises(ControlledLearningIntegrationError, match="changed during"):
-        module.materialize_learning_ledger(ledger_path)
+        module.materialize_learning_ledger()
 
 
 def test_materialization_cli_has_no_caller_selected_registry_write_target():
     script = Path("scripts/hunter_materialize_learning_candidate.py").read_text(encoding="utf-8")
     assert 'add_argument("--registry"' not in script
+    assert 'add_argument("ledger"' not in script
     assert 'registry = Path("docs/DEFECT_REGISTRY.json")' not in script

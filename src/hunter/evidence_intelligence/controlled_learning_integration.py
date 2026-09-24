@@ -21,7 +21,9 @@ from hunter.evidence_intelligence.knowledge_extraction_authority import (
 _ALLOWED_STATES = {"existing-family", "candidate-new-family", "excluded", "ambiguous", "insufficient-evidence"}
 
 
-CANONICAL_DEFECT_REGISTRY = Path(__file__).resolve().parents[3] / "docs" / "DEFECT_REGISTRY.json"
+REPO_ROOT = Path(__file__).resolve().parents[3]
+CANONICAL_DEFECT_REGISTRY = REPO_ROOT / "docs" / "DEFECT_REGISTRY.json"
+CANONICAL_LEARNING_LEDGER = REPO_ROOT / "hunter-learning-ledger.json"
 
 
 class ControlledLearningIntegrationError(ValueError):
@@ -154,7 +156,7 @@ def integrate_learning_ledger(ledger: Any, registry_bytes: bytes) -> ControlledL
     return ControlledLearningIntegrationResult(current, current != initial, tuple(integrated), skipped)
 
 
-def materialize_learning_ledger(ledger_path: Path, *, dry_run: bool = False) -> ControlledLearningIntegrationResult:
+def materialize_learning_ledger(*, dry_run: bool = False) -> ControlledLearningIntegrationResult:
     """Materialize one verified ledger into a governed registry candidate.
 
     This function has repository-content authority only.  It never commits,
@@ -164,7 +166,7 @@ def materialize_learning_ledger(ledger_path: Path, *, dry_run: bool = False) -> 
     successfully against the exact current registry bytes.
     """
     try:
-        ledger = json.loads(Path(ledger_path).read_text(encoding="utf-8"))
+        ledger = json.loads(CANONICAL_LEARNING_LEDGER.read_text(encoding="utf-8"))
         registry_bytes = CANONICAL_DEFECT_REGISTRY.read_bytes()
     except (OSError, UnicodeError, json.JSONDecodeError) as error:
         raise ControlledLearningIntegrationError("learning promotion inputs are unavailable or malformed") from error
