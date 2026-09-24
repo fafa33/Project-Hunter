@@ -44,7 +44,13 @@ from typing import Any
 
 import hunter_merge_readiness_v2 as readiness
 
-from hunter.task_scope import TaskScopeContract, path_matches_scope_entry
+# Repository hooks may run from a worktree while the venv has another editable
+# checkout installed. Put this checkout first so canonical scope code comes from
+# the exact candidate being evaluated.
+_REPOSITORY_SRC = str(Path(__file__).resolve().parents[1] / "src")
+if _REPOSITORY_SRC not in sys.path:
+    sys.path.insert(0, _REPOSITORY_SRC)
+from hunter.task_scope import TaskScopeContract, path_matches_scope_entry  # noqa: E402
 
 # The exact-head check that runs the canonical preflight in normal mode
 # (`.github/workflows/ci.yml` runs `scripts/hunter_pr_preflight.py --mode normal`).
