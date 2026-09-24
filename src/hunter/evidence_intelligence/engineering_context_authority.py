@@ -112,17 +112,19 @@ class EngineeringContextAuthority:
         selected: list[dict[str, str]] = []
         for family in self._families():
             paths = family["applicability"]["changed_paths"]
-            if not any(
-                _path_intersects(path, allowed) or path_matches_scope_entry(path, allowed)
-                for path in paths
-                for allowed in scope.allowed_paths
-            ):
-                continue
-            if any(
-                _path_intersects(path, prohibited) or path_matches_scope_entry(path, prohibited)
-                for path in paths
-                for prohibited in scope.prohibited_paths
-            ):
+
+            def permitted(path: str) -> bool:
+                allowed = any(
+                    _path_intersects(path, entry) or path_matches_scope_entry(path, entry)
+                    for entry in scope.allowed_paths
+                )
+                prohibited = any(
+                    _path_intersects(path, entry) or path_matches_scope_entry(path, entry)
+                    for entry in scope.prohibited_paths
+                )
+                return allowed and not prohibited
+
+            if not any(permitted(path) for path in paths):
                 continue
             prevention = family["prevention"]
             item = {

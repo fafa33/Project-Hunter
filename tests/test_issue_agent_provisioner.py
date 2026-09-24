@@ -42,7 +42,7 @@ import pytest
 from cryptography.hazmat.primitives import serialization
 from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
 from issue_agent_edge_transport import MAX_REQUEST_BYTES
-from issue_agent_wire import EdgeTransportClientMixin
+from issue_agent_wire import EdgeTransportClientMixin, issue_body_with_scope
 
 from hunter.automation.agent_fallback_runtime import AgentFallbackRuntimeReceipt
 from hunter.automation.issue_agent_execution import (
@@ -167,7 +167,7 @@ def _event(*, body: str = ISSUE_BODY, title: str = ISSUE_TITLE) -> dict[str, Any
             "state": "open",
             "html_url": ISSUE_URL,
             "title": title,
-            "body": body,
+            "body": issue_body_with_scope(body),
             "updated_at": UPDATED_AT,
         },
     }

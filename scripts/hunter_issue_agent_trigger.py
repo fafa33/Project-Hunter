@@ -132,6 +132,15 @@ def authorization_signing_message(payload: dict[str, Any], scope: dict[str, Any]
     return SIGNATURE_DOMAIN + _canonical_json({"authorization": payload, "implementation_scope": scope}).encode("utf-8")
 
 
+def _reject_scope_duplicate_keys(pairs: list[tuple[str, Any]]) -> dict[str, Any]:
+    values: dict[str, Any] = {}
+    for key, value in pairs:
+        if key in values:
+            raise IssueAgentTriggerError("Issue task scope block contains duplicate JSON keys")
+        values[key] = value
+    return values
+
+
 def implementation_scope_from_issue_body(body: str, *, task_id: str) -> TaskScopeContract:
     prefix, suffix = "<!-- hunter-task-scope-v1\n", "\n-->"
     starts = [i for i in range(len(body)) if body.startswith(prefix, i)]
@@ -142,7 +151,7 @@ def implementation_scope_from_issue_body(body: str, *, task_id: str) -> TaskScop
     if end < 0:
         raise IssueAgentTriggerError("Issue task scope block is malformed")
     try:
-        raw = json.loads(body[start:end])
+        raw = json.loads(body[start:end], object_pairs_hook=_reject_scope_duplicate_keys)
     except ValueError:
         raise IssueAgentTriggerError("Issue task scope block must be valid JSON") from None
     if not isinstance(raw, dict) or "task_id" in raw:

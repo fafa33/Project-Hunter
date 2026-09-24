@@ -88,3 +88,18 @@ def test_caller_text_is_not_an_input_to_family_selection(tmp_path: Path) -> None
     families = cast(list[dict[str, object]], context["applicable_defect_families"])
     assert families[0]["id"] == "DFF-018"
     assert "task_text" not in json.dumps(context, sort_keys=True)
+
+
+def test_multi_surface_family_survives_when_one_surface_is_still_permitted(tmp_path: Path) -> None:
+    family = _family("DFF-MULTI", "src/hunter/automation/")
+    family["applicability"] = {"changed_paths": ["src/hunter/automation/", "scripts/"], "rationale": "test"}
+    authority = EngineeringContextAuthority(registry_path=_registry(tmp_path, [family]))
+    scope = TaskScopeContract(
+        task_id="test-task",
+        branch_pattern="issue-*",
+        base_sha="a" * 40,
+        allowed_paths=("src/hunter/automation/",),
+        prohibited_paths=("scripts/",),
+    )
+    result = authority.compile(ENGINEERING_IMPLEMENT_TASK_KEY, scope=scope)
+    assert [item["id"] for item in result["applicable_defect_families"]] == ["DFF-MULTI"]

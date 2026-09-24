@@ -730,3 +730,12 @@ def test_missing_machine_readable_scope_is_refused_before_signing() -> None:
     event["issue"]["body"] = "ordinary prose only"
     with pytest.raises(IssueAgentTriggerError, match="exactly one hunter-task-scope-v1"):
         _signed(event)
+
+
+def test_duplicate_scope_keys_fail_closed_before_signing() -> None:
+    event = _event()
+    body = event["issue"]["body"]
+    body = body.replace('"allowed_paths":[', '"allowed_paths":["src/"],"allowed_paths":[')
+    event["issue"]["body"] = body
+    with pytest.raises(IssueAgentTriggerError, match="duplicate JSON keys"):
+        _signed(event)
