@@ -196,3 +196,9 @@ def test_materialize_detects_concurrent_registry_change_before_replace(tmp_path,
     monkeypatch.setattr(module, "integrate_learning_ledger", racing_integrate)
     with pytest.raises(ControlledLearningIntegrationError, match="changed during"):
         module.materialize_learning_ledger(ledger_path, registry)
+
+
+def test_materialization_cli_has_no_caller_selected_registry_write_target():
+    script = Path("scripts/hunter_materialize_learning_candidate.py").read_text(encoding="utf-8")
+    assert 'add_argument("--registry"' not in script
+    assert 'registry = Path("docs/DEFECT_REGISTRY.json")' in script
