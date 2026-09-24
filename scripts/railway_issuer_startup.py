@@ -53,6 +53,7 @@ from __future__ import annotations
 import importlib
 import logging
 import os
+import shutil
 import subprocess
 import sys
 from pathlib import Path
@@ -79,6 +80,74 @@ _DEFAULT_VENDOR_DIR = DEFAULT_VENDOR_DIR
 _ensure_runtime_import_paths = ensure_runtime_import_paths
 
 _PROVENANCE_RESOLVER = "hunter.evidence_intelligence.source_handling_provenance.production_provenance_resolver"
+_REPOSITORY_ENV = "HUNTER_ISSUE_AGENT_REPOSITORY"
+_REPOSITORY_CHECKOUT_ENV = "HUNTER_ISSUE_AGENT_REPO_DIR"
+_EXECUTION_BRANCH_ENV = "HUNTER_ISSUE_AGENT_EXECUTION_BRANCH"
+
+
+def _canonical_github_remote(repository: str) -> str:
+    """Return the credential-free GitHub URL for an owner/repository slug."""
+    parts = repository.strip().split("/")
+    if len(parts) != 2 or not all(parts):
+        raise RuntimeError(f"{_REPOSITORY_ENV} must be an owner/repository slug")
+    owner, name = parts
+    allowed = set("abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789_.-")
+    if any(ch not in allowed for ch in owner + name):
+        raise RuntimeError(f"{_REPOSITORY_ENV} contains invalid GitHub repository characters")
+    return f"https://github.com/{owner}/{name}.git"
+
+
+def _prepare_repository_checkout() -> None:
+    """Materialize and verify the configured execution checkout before issuer composition.
+
+    Railway images contain installed Hunter code, not a writable Git checkout.  The
+    fallback runtime deliberately requires a real checkout with a credential-free
+    pinned GitHub origin.  Startup therefore owns this deployment concern rather
+    than relying on dashboard shell patches.
+    """
+    repository = os.environ.get(_REPOSITORY_ENV, "").strip()
+    checkout_raw = os.environ.get(_REPOSITORY_CHECKOUT_ENV, "").strip()
+    branch = os.environ.get(_EXECUTION_BRANCH_ENV, "").strip()
+    configured = (bool(repository), bool(checkout_raw), bool(branch))
+    if not any(configured):
+        # Unit/bootstrap-only invocations do not compose the issuer. The issuer
+        # itself still requires all three variables; production supplies them.
+        return
+    if not all(configured):
+        raise RuntimeError("repository checkout configuration is incomplete")
+    checkout = Path(checkout_raw).resolve()
+    remote = _canonical_github_remote(repository)
+    if (
+        checkout == Path("/")
+        or checkout == Path("/app")
+        or "/data" == str(checkout)
+        or str(checkout).startswith("/data/")
+    ):
+        raise RuntimeError("repository checkout must use disposable runtime storage")
+    if checkout.exists():
+        shutil.rmtree(checkout)
+    checkout.parent.mkdir(parents=True, exist_ok=True)
+    completed = subprocess.run(
+        ("git", "clone", "--no-tags", "--single-branch", "--branch", branch, remote, str(checkout)),
+        text=True,
+        capture_output=True,
+        timeout=120,
+        check=False,
+    )
+    if completed.returncode != 0:
+        raise RuntimeError("failed to materialize configured execution checkout")
+    pinned = subprocess.run(
+        ("git", "remote", "get-url", "origin"),
+        cwd=checkout,
+        text=True,
+        capture_output=True,
+        timeout=30,
+        check=False,
+    )
+    if pinned.returncode != 0 or pinned.stdout.strip() != remote:
+        raise RuntimeError("execution checkout origin is not the canonical credential-free GitHub remote")
+    logger.info("execution checkout prepared for %s on branch %s", repository, branch)
+
 
 logger = logging.getLogger("railway_issuer_startup")
 
@@ -175,6 +244,12 @@ def main() -> int:
         outcome.get("operator_root"),
         outcome.get("genesis_record_id"),
     )
+
+    try:
+        _prepare_repository_checkout()
+    except Exception as error:  # noqa: BLE001 - fail closed before issuer
+        logger.error("repository checkout preparation failed: %s", error)
+        return 1
 
     provisioner = _start_provisioner()
     if provisioner.poll() is not None:
