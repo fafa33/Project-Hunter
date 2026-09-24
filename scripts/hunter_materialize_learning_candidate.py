@@ -14,11 +14,10 @@ from hunter.evidence_intelligence.controlled_learning_integration import (
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("ledger", type=Path)
-    registry = Path("docs/DEFECT_REGISTRY.json")
     parser.add_argument("--dry-run", action="store_true")
     args = parser.parse_args()
     try:
-        result = materialize_learning_ledger(args.ledger, registry, dry_run=args.dry_run)
+        result = materialize_learning_ledger(args.ledger, dry_run=args.dry_run)
     except ControlledLearningIntegrationError as error:
         print(f"[Hunter Learning Promotion] FAIL: {error}")
         return 1
