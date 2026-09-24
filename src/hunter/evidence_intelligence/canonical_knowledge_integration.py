@@ -54,12 +54,14 @@ class CanonicalIntegrationAuthority:
         evidence = family.get("regression_evidence")
         if not isinstance(sources, list) or not isinstance(evidence, list):
             raise CanonicalIntegrationError("canonical family learning fields are malformed")
+        self._validate_proposal_contract(proposal)
         self._reject_event_identity_conflict(proposal, sources)
         return self._source_record(proposal) in sources and all(
             item in evidence for item in proposal.finding.regression_evidence
         )
 
-    def integrate(self, proposal: KnowledgeExtractionProposal, registry_bytes: bytes) -> CanonicalIntegrationResult:
+    @staticmethod
+    def _validate_proposal_contract(proposal: KnowledgeExtractionProposal) -> None:
         if proposal.schema_version != SCHEMA_VERSION:
             raise CanonicalIntegrationError("proposal schema is unsupported")
         if proposal.outcome != "existing-family" or proposal.canonical_family_id is None:
@@ -68,6 +70,9 @@ class CanonicalIntegrationAuthority:
             raise CanonicalIntegrationError("proposal must not self-authorize canonical writes")
         if proposal.finding.claimed_family_id != proposal.canonical_family_id:
             raise CanonicalIntegrationError("proposal family claim conflicts with canonical family")
+
+    def integrate(self, proposal: KnowledgeExtractionProposal, registry_bytes: bytes) -> CanonicalIntegrationResult:
+        self._validate_proposal_contract(proposal)
         digest = hashlib.sha256(registry_bytes).hexdigest()
         if digest != proposal.registry_digest:
             raise CanonicalIntegrationError("stale registry snapshot; re-extraction is required")

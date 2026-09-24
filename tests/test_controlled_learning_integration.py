@@ -150,3 +150,49 @@ def test_materialize_non_defect_evidence_never_mutates_registry(tmp_path):
     result = materialize_learning_ledger(ledger_path, registry)
     assert result.changed is False
     assert registry.read_bytes() == before
+
+
+def test_materialize_replay_rejects_tampered_full_proposal_contract(tmp_path):
+    from hunter.evidence_intelligence.controlled_learning_integration import materialize_learning_ledger
+
+    registry = tmp_path / "DEFECT_REGISTRY.json"
+    registry.write_bytes(REGISTRY.read_bytes())
+    ledger = build_learning_ledger(504, HEAD, BASE, [observation()], registry)
+    ledger_path = tmp_path / "ledger.json"
+    ledger_path.write_text(json.dumps(ledger), encoding="utf-8")
+    materialize_learning_ledger(ledger_path, registry)
+
+    ledger["items"][0]["proposal"]["schema_version"] = "tampered-schema"
+    ledger["items"][0]["proposal"]["canonical_write_authorized"] = True
+    ledger["items"][0]["proposal"]["proposal_id"] = "tampered-proposal"
+    body = dict(ledger)
+    body.pop("ledger_digest")
+    import hashlib
+
+    ledger["ledger_digest"] = hashlib.sha256(
+        json.dumps(body, sort_keys=True, separators=(",", ":"), ensure_ascii=False).encode()
+    ).hexdigest()
+    ledger_path.write_text(json.dumps(ledger), encoding="utf-8")
+
+    with pytest.raises(ControlledLearningIntegrationError, match="does not replay"):
+        materialize_learning_ledger(ledger_path, registry)
+
+
+def test_materialize_detects_concurrent_registry_change_before_replace(tmp_path, monkeypatch):
+    from hunter.evidence_intelligence import controlled_learning_integration as module
+
+    registry = tmp_path / "DEFECT_REGISTRY.json"
+    registry.write_bytes(REGISTRY.read_bytes())
+    ledger = build_learning_ledger(504, HEAD, BASE, [observation()], registry)
+    ledger_path = tmp_path / "ledger.json"
+    ledger_path.write_text(json.dumps(ledger), encoding="utf-8")
+    real_integrate = module.integrate_learning_ledger
+
+    def racing_integrate(payload, snapshot):
+        result = real_integrate(payload, snapshot)
+        registry.write_bytes(snapshot + b"\n")
+        return result
+
+    monkeypatch.setattr(module, "integrate_learning_ledger", racing_integrate)
+    with pytest.raises(ControlledLearningIntegrationError, match="changed during"):
+        module.materialize_learning_ledger(ledger_path, registry)

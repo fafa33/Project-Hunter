@@ -125,8 +125,13 @@ def integrate_learning_ledger(ledger: Any, registry_bytes: bytes) -> ControlledL
             ):
                 raise ControlledLearningIntegrationError("proposal is not bound to the exact ledger identity")
             integration = CanonicalIntegrationAuthority()
-            if integration.already_integrated(supplied, initial):
-                continue
+            try:
+                if integration.already_integrated(supplied, initial):
+                    continue
+            except ValueError as error:
+                raise ControlledLearningIntegrationError(
+                    "ledger proposal does not replay against canonical registry"
+                ) from error
             if authority.extract(finding) != supplied:
                 raise ControlledLearningIntegrationError("ledger proposal does not replay against canonical registry")
             proposals.append(supplied)
@@ -176,6 +181,13 @@ def materialize_learning_ledger(
             handle.write(result.registry_bytes)
             handle.flush()
             temporary = Path(handle.name)
+        # Atomic rename prevents torn writes; this compare prevents a lost update.
+        # If another materializer changed the registry after our snapshot, this
+        # candidate is stale and must be rebuilt rather than overwrite it.
+        if target.read_bytes() != registry_bytes:
+            raise ControlledLearningIntegrationError(
+                "registry changed during learning promotion; retry from current truth"
+            )
         temporary.replace(target)
     except OSError as error:
         if temporary is not None:
