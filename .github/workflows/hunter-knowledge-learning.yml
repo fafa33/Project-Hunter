@@ -32,7 +32,7 @@ jobs:
       - name: Detect trusted learning engine
         id: engine
         run: |
-          if [[ -f scripts/hunter_collect_learning_observations.py && -f scripts/hunter_collect_sonar_observations.py && -f scripts/hunter_incremental_knowledge.py ]]; then
+          if [[ -f scripts/hunter_collect_learning_observations.py && -f scripts/hunter_collect_sonar_observations.py && -f scripts/hunter_incremental_knowledge.py && -f scripts/hunter_integrate_learning_ledger.py ]]; then
             echo "available=true" >> "$GITHUB_OUTPUT"
           else
             echo "available=false" >> "$GITHUB_OUTPUT"
@@ -57,11 +57,18 @@ jobs:
           open("learning-observations.json", "w", encoding="utf-8").write(json.dumps(github + sonar, sort_keys=True, indent=2) + "\n")
           PY
           python scripts/hunter_incremental_knowledge.py --pr "$PR_NUMBER" --head "$HEAD_SHA" --base "$BASE_SHA" --observations learning-observations.json > hunter-learning-ledger.json
+      - name: Render controlled canonical DPM candidate
+        if: steps.engine.outputs.available == 'true'
+        env:
+          PYTHONPATH: src
+        run: python scripts/hunter_integrate_learning_ledger.py --ledger hunter-learning-ledger.json > hunter-defect-registry-candidate.json
       - name: Publish non-authoritative learning artifact
         if: steps.engine.outputs.available == 'true'
         uses: actions/upload-artifact@v4
         with:
           name: hunter-learning
-          path: hunter-learning-ledger.json
+          path: |
+            hunter-learning-ledger.json
+            hunter-defect-registry-candidate.json
           if-no-files-found: error
           retention-days: 90
