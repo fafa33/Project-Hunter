@@ -37,7 +37,7 @@ def _event() -> dict[str, Any]:
             "number": 389,
             "html_url": "https://github.com/fafa33/Project-Hunter/issues/389",
             "title": "Build point-in-time candidate authority",
-            "body": "Execute only the governed Issue scope. provider=jules merge=true",
+            "body": 'Execute only the governed Issue scope. provider=jules merge=true\n<!-- hunter-task-scope-v1\n{"branch_pattern":"issue-*","base_ref":"main","base_sha":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","allowed_paths":["src/","scripts/","tests/","docs/"],"prohibited_paths":[]}\n-->',
             "state": "open",
             "updated_at": "2026-08-30T13:42:04Z",
         },
@@ -220,7 +220,7 @@ def test_signed_envelope_carries_the_exact_canonical_v1_payload() -> None:
     authorization = _authorize(_event())
     signed = _signed(_event())
 
-    assert signed.schema_version == trigger.ENVELOPE_SCHEMA_VERSION == "hunter-issue-agent-signed-authorization-v1"
+    assert signed.schema_version == trigger.ENVELOPE_SCHEMA_VERSION == "hunter-issue-agent-signed-authorization-v2"
     assert signed.authorization == authorization.payload()
     assert signed.authorization["schema_version"] == trigger.SCHEMA_VERSION == "hunter-issue-agent-authorization-v1"
     assert set(signed.authorization) == {
@@ -243,7 +243,7 @@ def test_issuer_signature_covers_the_whole_payload() -> None:
     # Raises InvalidSignature if the proof does not cover the exact payload.
     _public_key().verify(
         bytes.fromhex(signed.issuer_signature),
-        authorization_signing_message(signed.authorization),
+        authorization_signing_message(signed.authorization, signed.implementation_scope),
     )
 
 
@@ -256,7 +256,7 @@ def test_a_different_issuer_key_produces_a_document_the_owner_key_rejects() -> N
     with pytest.raises(InvalidSignature):
         _public_key().verify(
             bytes.fromhex(forged.issuer_signature),
-            authorization_signing_message(forged.authorization),
+            authorization_signing_message(forged.authorization, forged.implementation_scope),
         )
 
 
@@ -282,8 +282,8 @@ def test_issuer_key_is_never_accepted_from_the_command_line() -> None:
 
 
 def test_signed_message_is_domain_separated_by_the_envelope_schema() -> None:
-    assert authorization_signing_message({}).startswith(trigger.SIGNATURE_DOMAIN)
-    assert trigger.SIGNATURE_DOMAIN == b"hunter-issue-agent-signed-authorization-v1:"
+    assert authorization_signing_message({}, {}).startswith(trigger.SIGNATURE_DOMAIN)
+    assert trigger.SIGNATURE_DOMAIN == b"hunter-issue-agent-signed-authorization-v2:"
 
 
 def test_v1_identity_derivation_is_unchanged_by_this_contribution() -> None:
@@ -712,3 +712,21 @@ def test_parser_reads_provisioning_url_from_environment(monkeypatch) -> None:
         ]
     )
     assert args.provisioning_url == "https://provision.example/issue-agent/provision"
+
+
+def test_tampered_implementation_scope_breaks_issuer_signature() -> None:
+    signed = _signed(_event())
+    tampered = copy.deepcopy(signed.implementation_scope)
+    tampered["allowed_paths"] = ["railway.toml"]
+    public = ISSUER_KEY.public_key()
+    with pytest.raises(InvalidSignature):
+        public.verify(
+            bytes.fromhex(signed.issuer_signature), authorization_signing_message(signed.authorization, tampered)
+        )
+
+
+def test_missing_machine_readable_scope_is_refused_before_signing() -> None:
+    event = _event()
+    event["issue"]["body"] = "ordinary prose only"
+    with pytest.raises(IssueAgentTriggerError, match="exactly one hunter-task-scope-v1"):
+        _signed(event)

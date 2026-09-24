@@ -11,7 +11,7 @@ This module is that missing consumer and nothing else. It owns no routing, no
 prompt profile, no signing key, no transport, no provider order and no merge
 authority; every one of those stays with the component that already holds it:
 
-``hunter-issue-agent-signed-authorization-v1``
+``hunter-issue-agent-signed-authorization-v2``
     the only executable input. It carries the canonical
     ``hunter-issue-agent-authorization-v1`` payload named by accepted ADR 0036
     s7 verbatim -- this contribution wraps that document, it never redefines it
@@ -103,13 +103,14 @@ from hunter.evidence_intelligence.source_handling_persistence import (
     SqliteSourceHandlingAuthorityReadView,
 )
 from hunter.execution import Clock, SystemClock
+from hunter.task_scope import TaskScopeContract, strip_task_scope_block
 
 #: The inner payload named by accepted ADR 0036 s7, carried verbatim and never
 #: redefined here.
 ISSUE_AGENT_AUTHORIZATION_SCHEMA_VERSION = "hunter-issue-agent-authorization-v1"
 
 #: The issuer-authenticated transport that carries it. Only this is executable.
-ISSUE_AGENT_SIGNED_AUTHORIZATION_SCHEMA_VERSION = "hunter-issue-agent-signed-authorization-v1"
+ISSUE_AGENT_SIGNED_AUTHORIZATION_SCHEMA_VERSION = "hunter-issue-agent-signed-authorization-v2"
 
 ISSUE_AGENT_AUTHORIZATION_LABEL = "hunter-agent-execute"
 ISSUE_AGENT_AUTHORIZATION_IDENTITY_PREFIX = "hunter-issue-agent-authorization"
@@ -117,7 +118,7 @@ ISSUE_AGENT_AUTHORIZATION_IDENTITY_PREFIX = "hunter-issue-agent-authorization"
 #: Domain separator the issuer mixes into the signed message. It must match
 #: ``scripts/hunter_issue_agent_trigger.py`` exactly; the cross-binding test
 #: pins the two together.
-ISSUE_AGENT_AUTHORIZATION_SIGNATURE_DOMAIN = b"hunter-issue-agent-signed-authorization-v1:"
+ISSUE_AGENT_AUTHORIZATION_SIGNATURE_DOMAIN = b"hunter-issue-agent-signed-authorization-v2:"
 ISSUE_AGENT_VERIFYING_KEY_ENV = "HUNTER_ISSUE_AGENT_AUTHORIZATION_VERIFYING_KEY"
 _ISSUE_AGENT_KEY_BYTES = 32
 _ISSUE_AGENT_SIGNATURE_BYTES = 64
@@ -327,7 +328,7 @@ class IssueAgentAuthorizationVerifier:
         try:
             Ed25519PublicKey.from_public_bytes(self._public_key_bytes).verify(
                 signature,
-                signed.authorization.signed_message,
+                signed.signed_message,
             )
         except InvalidSignature:
             raise IssueAgentIssuerError(
@@ -471,15 +472,27 @@ class SignedIssueAgentAuthorization:
     """
 
     authorization: IssueAgentAuthorization
+    implementation_scope: TaskScopeContract
     issuer_signature: str
     schema_version: str = ISSUE_AGENT_SIGNED_AUTHORIZATION_SCHEMA_VERSION
 
     def __post_init__(self) -> None:
         if not isinstance(self.authorization, IssueAgentAuthorization):
             raise IssueAgentAuthorizationError("signed authorization must carry a canonical v1 payload")
+        if not isinstance(self.implementation_scope, TaskScopeContract):
+            raise IssueAgentAuthorizationError("signed authorization must carry canonical implementation scope")
+        incomplete = self.implementation_scope.incompleteness()
+        if incomplete:
+            raise IssueAgentAuthorizationError(incomplete)
         if self.schema_version != ISSUE_AGENT_SIGNED_AUTHORIZATION_SCHEMA_VERSION:
             raise IssueAgentAuthorizationError("unknown signed authorization schema version")
         _canonical_issuer_signature(self.issuer_signature)
+
+    @property
+    def signed_message(self) -> bytes:
+        return ISSUE_AGENT_AUTHORIZATION_SIGNATURE_DOMAIN + _canonical_json(
+            {"authorization": asdict(self.authorization), "implementation_scope": asdict(self.implementation_scope)}
+        ).encode("utf-8")
 
     @classmethod
     def from_json(cls, document: str | bytes) -> SignedIssueAgentAuthorization:
@@ -490,7 +503,7 @@ class SignedIssueAgentAuthorization:
         is a schema mismatch rather than a missing-signature afterthought.
         """
         decoded = _decode_bounded_json_object(document)
-        expected = {"authorization", "issuer_signature", "schema_version"}
+        expected = {"authorization", "implementation_scope", "issuer_signature", "schema_version"}
         if set(decoded) != expected:
             raise IssueAgentAuthorizationError("signed authorization document schema mismatch")
         if decoded["schema_version"] != ISSUE_AGENT_SIGNED_AUTHORIZATION_SCHEMA_VERSION:
@@ -500,8 +513,16 @@ class SignedIssueAgentAuthorization:
         payload = decoded["authorization"]
         if not isinstance(payload, dict):
             raise IssueAgentAuthorizationError("signed authorization must carry a JSON object payload")
+        scope_payload = decoded["implementation_scope"]
+        if not isinstance(scope_payload, dict):
+            raise IssueAgentAuthorizationError("signed authorization implementation_scope must be an object")
+        try:
+            scope = TaskScopeContract.from_dict(scope_payload)
+        except ValueError as error:
+            raise IssueAgentAuthorizationError(str(error)) from None
         return cls(
             authorization=IssueAgentAuthorization._from_mapping(payload),
+            implementation_scope=scope,
             issuer_signature=decoded["issuer_signature"],
         )
 
@@ -509,6 +530,7 @@ class SignedIssueAgentAuthorization:
         return _canonical_json(
             {
                 "authorization": asdict(self.authorization),
+                "implementation_scope": asdict(self.implementation_scope),
                 "issuer_signature": self.issuer_signature,
                 "schema_version": self.schema_version,
             }
@@ -526,7 +548,7 @@ def issue_agent_task_text(authorization: IssueAgentAuthorization) -> str:
     """
     return _canonical_json(
         {
-            "issue_body": authorization.issue_body,
+            "issue_body": strip_task_scope_block(authorization.issue_body),
             "issue_title": authorization.issue_title,
             "issue_url": authorization.issue_url,
         }
@@ -542,7 +564,7 @@ def issue_agent_intake_reference(authorization: IssueAgentAuthorization) -> Evid
     boundary accepts, and the label recorded is the governed constant rather than
     whatever labels the Issue happens to carry.
     """
-    if not authorization.issue_body.strip():
+    if not strip_task_scope_block(authorization.issue_body).strip():
         raise IssueAgentAuthorizationError("an authorized Issue must carry body content to execute")
     identity = f"github-issue:{authorization.repository}#{authorization.issue_number}"
     return EvidenceIntakeReference(
@@ -556,7 +578,7 @@ def issue_agent_intake_reference(authorization: IssueAgentAuthorization) -> Evid
         source_type="issue",
         source_claimed_authority="repository-owner",
         title=authorization.issue_title,
-        content=authorization.issue_body,
+        content=strip_task_scope_block(authorization.issue_body),
         metadata={
             "issue_number": authorization.issue_number,
             "labels": [ISSUE_AGENT_AUTHORIZATION_LABEL],
@@ -1125,7 +1147,7 @@ class GovernedIssueAgentExecutionService:
     def execute(self, document: str | bytes) -> IssueAgentExecutionReceipt:
         """Run one signed authorization through the existing governed runtime.
 
-        The only accepted input is a ``hunter-issue-agent-signed-authorization-v1``
+        The only accepted input is a ``hunter-issue-agent-signed-authorization-v2``
         envelope. A bare canonical v1 payload is refused on the outer schema, so
         an unsigned document has no execution path here at all.
         """
@@ -1137,6 +1159,8 @@ class GovernedIssueAgentExecutionService:
         # until it verifies.
         self._issuer_verifier.verify(signed)
         authorization = signed.authorization
+        if signed.implementation_scope.task_id != authorization.authorization_id:
+            raise IssueAgentAuthorizationError("implementation scope task_id must bind authorization identity")
         if authorization.repository != self._configuration.repository:
             raise IssueAgentAuthorizationError("authorization names a different repository than this deployment")
         if authorization.authorized_by != self._configuration.owner_login:
@@ -1169,7 +1193,7 @@ class GovernedIssueAgentExecutionService:
             processed_at=_aware_utc("Issue execution intake time", self._clock.now()),
         )
 
-        compiled = self._ingress.compile(request)
+        compiled = self._ingress.compile(request, implementation_scope=signed.implementation_scope)
         envelope = compiled.envelope
         envelope.verify_issuer_signature(self._verifier)
         if envelope.build_record_id != compiled.compilation.manifest.build_record_id:

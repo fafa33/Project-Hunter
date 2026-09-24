@@ -16,6 +16,8 @@ from typing import Any
 
 from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
 
+from hunter.task_scope import TaskScopeContract
+
 #: The inner authorization payload named by accepted ADR 0036 s7. Its shape and
 #: its identity derivation are unchanged: this contribution wraps it, and never
 #: redefines it.
@@ -24,7 +26,7 @@ SCHEMA_VERSION = "hunter-issue-agent-authorization-v1"
 #: The transport that carries that exact payload plus issuer authentication.
 #: Authentication is added as a separate outer schema precisely so the canonical
 #: inner payload keeps the meaning the accepted ADR gave it.
-ENVELOPE_SCHEMA_VERSION = "hunter-issue-agent-signed-authorization-v1"
+ENVELOPE_SCHEMA_VERSION = "hunter-issue-agent-signed-authorization-v2"
 
 #: The repository-owned trusted provisioning boundary endpoint (Issue #497).
 #: Every dispatch provisions the canonical per-Issue Source Handling authority
@@ -56,7 +58,7 @@ DEFAULT_TRANSPORT_MAX_DELAY_SECONDS = 10.0
 #: Domain separator mixed into the signed message. Without it a signature over
 #: these canonical bytes could be replayed as a signature over any other
 #: structure that happens to canonicalize identically.
-SIGNATURE_DOMAIN = b"hunter-issue-agent-signed-authorization-v1:"
+SIGNATURE_DOMAIN = b"hunter-issue-agent-signed-authorization-v2:"
 
 
 class IssueAgentTriggerError(RuntimeError):
@@ -113,6 +115,7 @@ class SignedIssueAgentAuthorization:
     """
 
     authorization: dict[str, Any]
+    implementation_scope: dict[str, Any]
     issuer_signature: str
     schema_version: str = ENVELOPE_SCHEMA_VERSION
 
@@ -124,9 +127,36 @@ def _canonical_json(value: Any) -> str:
     return json.dumps(value, sort_keys=True, separators=(",", ":"), ensure_ascii=False)
 
 
-def authorization_signing_message(payload: dict[str, Any]) -> bytes:
-    """Return the exact bytes the issuer signature covers."""
-    return SIGNATURE_DOMAIN + _canonical_json(payload).encode("utf-8")
+def authorization_signing_message(payload: dict[str, Any], scope: dict[str, Any]) -> bytes:
+    """Return exact authenticated bytes for authorization plus governed scope."""
+    return SIGNATURE_DOMAIN + _canonical_json({"authorization": payload, "implementation_scope": scope}).encode("utf-8")
+
+
+def implementation_scope_from_issue_body(body: str, *, task_id: str) -> TaskScopeContract:
+    prefix, suffix = "<!-- hunter-task-scope-v1\n", "\n-->"
+    starts = [i for i in range(len(body)) if body.startswith(prefix, i)]
+    if len(starts) != 1:
+        raise IssueAgentTriggerError("Issue must contain exactly one hunter-task-scope-v1 block")
+    start = starts[0] + len(prefix)
+    end = body.find(suffix, start)
+    if end < 0:
+        raise IssueAgentTriggerError("Issue task scope block is malformed")
+    try:
+        raw = json.loads(body[start:end])
+    except ValueError:
+        raise IssueAgentTriggerError("Issue task scope block must be valid JSON") from None
+    if not isinstance(raw, dict) or "task_id" in raw:
+        raise IssueAgentTriggerError("Issue task scope must be an object and cannot choose task_id")
+    try:
+        scope = TaskScopeContract.from_dict({**raw, "task_id": task_id})
+    except ValueError as error:
+        raise IssueAgentTriggerError(str(error)) from None
+    incomplete = scope.incompleteness()
+    if incomplete:
+        raise IssueAgentTriggerError(incomplete)
+    if len(scope.base_sha) != 40 or any(c not in "0123456789abcdef" for c in scope.base_sha):
+        raise IssueAgentTriggerError("scope base_sha must be an exact lowercase commit SHA")
+    return scope
 
 
 def load_signing_key(value: object) -> Ed25519PrivateKey:
@@ -237,9 +267,12 @@ def sign_authorization(
     if not isinstance(signing_key, Ed25519PrivateKey):
         raise IssueAgentTriggerError("issuer signing authority is required to authorize execution")
     payload = authorization.payload()
+    scope = implementation_scope_from_issue_body(authorization.issue_body, task_id=authorization.authorization_id)
+    scope_payload = asdict(scope)
     return SignedIssueAgentAuthorization(
         authorization=payload,
-        issuer_signature=signing_key.sign(authorization_signing_message(payload)).hex(),
+        implementation_scope=scope_payload,
+        issuer_signature=signing_key.sign(authorization_signing_message(payload, scope_payload)).hex(),
     )
 
 

@@ -11,6 +11,8 @@ import json
 from pathlib import Path
 from typing import Any
 
+from hunter.task_scope import TaskScopeContract, path_matches_scope_entry
+
 ENGINEERING_IMPLEMENT_TASK_KEY = "engineering.implement"
 
 DEFAULT_DEFECT_REGISTRY_PATH = Path(__file__).resolve().parents[3] / "docs" / "DEFECT_REGISTRY.json"
@@ -95,14 +97,31 @@ class EngineeringContextAuthority:
             families.append(raw)
         return families
 
-    def compile(self, task_key: str) -> dict[str, object]:
+    def compile(self, task_key: str, *, scope: TaskScopeContract) -> dict[str, object]:
         if task_key != ENGINEERING_IMPLEMENT_TASK_KEY:
             raise EngineeringContextAuthorityError(f"unsupported engineering context route: {task_key}")
+        if not isinstance(scope, TaskScopeContract):
+            raise EngineeringContextAuthorityError(
+                "engineering implementation requires the canonical task scope contract"
+            )
+        incomplete = scope.incompleteness()
+        if incomplete:
+            raise EngineeringContextAuthorityError(incomplete)
+        if len(scope.base_sha) != 40 or any(c not in "0123456789abcdef" for c in scope.base_sha):
+            raise EngineeringContextAuthorityError("scope contract base_sha must be an exact lowercase commit SHA")
         selected: list[dict[str, str]] = []
         for family in self._families():
             paths = family["applicability"]["changed_paths"]
             if not any(
-                _path_intersects(path, surface) for path in paths for surface in ENGINEERING_IMPLEMENT_ROUTE_SURFACES
+                _path_intersects(path, allowed) or path_matches_scope_entry(path, allowed)
+                for path in paths
+                for allowed in scope.allowed_paths
+            ):
+                continue
+            if any(
+                _path_intersects(path, prohibited) or path_matches_scope_entry(path, prohibited)
+                for path in paths
+                for prohibited in scope.prohibited_paths
             ):
                 continue
             prevention = family["prevention"]
@@ -123,8 +142,14 @@ class EngineeringContextAuthority:
         return {
             "schema_version": ENGINEERING_CONTEXT_SCHEMA_VERSION,
             "task_key": task_key,
+            "scope_task_id": scope.task_id,
+            "scope_base_sha": scope.base_sha,
+            "scope_allowed_paths": list(scope.allowed_paths),
+            "scope_prohibited_paths": list(scope.prohibited_paths),
             "applicable_defect_families": selected,
         }
 
-    def canonical_json(self, task_key: str) -> str:
-        return json.dumps(self.compile(task_key), sort_keys=True, separators=(",", ":"), ensure_ascii=False)
+    def canonical_json(self, task_key: str, *, scope: TaskScopeContract) -> str:
+        return json.dumps(
+            self.compile(task_key, scope=scope), sort_keys=True, separators=(",", ":"), ensure_ascii=False
+        )

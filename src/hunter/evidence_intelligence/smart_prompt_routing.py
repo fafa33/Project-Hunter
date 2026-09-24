@@ -24,6 +24,7 @@ from hunter.evidence_intelligence.smart_prompt_machine import (
     SourceHandlingAuthorityResolver,
 )
 from hunter.execution import Clock
+from hunter.task_scope import TaskScopeContract
 
 PROMPT_TASK_REQUEST_SCHEMA_VERSION = "smart-prompt-task-request-v1"
 PROMPT_TASK_ROUTE_SCHEMA_VERSION = "smart-prompt-task-route-v1"
@@ -599,7 +600,9 @@ class SmartPromptMachine:
             clock=clock,
         )
 
-    def compile_task(self, request: PromptTaskRequest) -> PromptTaskCompilationResult:
+    def compile_task(
+        self, request: PromptTaskRequest, *, implementation_scope: TaskScopeContract | None = None
+    ) -> PromptTaskCompilationResult:
         """Resolve the governed route, compile, and mint an envelope only for READY builds.
 
         A build whose canonical compiled allocation outcome is not ``READY``, or
@@ -618,7 +621,13 @@ class SmartPromptMachine:
                 raise PromptTaskAuthorityError("engineering review-fix governed profile identity mismatch")
             task_text = _compile_engineering_review_fix_prompt(request.task_text)
         elif route.route_identity == ENGINEERING_IMPLEMENT_ROUTE.route_identity:
-            prevention_context = self._engineering_context_authority.compile(request.task_key)
+            if implementation_scope is None or implementation_scope.task_id != request.execution_owner_id:
+                raise PromptTaskAuthorityError(
+                    "engineering implementation scope must bind the execution owner identity"
+                )
+            prevention_context = self._engineering_context_authority.compile(
+                request.task_key, scope=implementation_scope
+            )
             task_text = json.dumps(
                 {
                     "governed_prevention_context": prevention_context,

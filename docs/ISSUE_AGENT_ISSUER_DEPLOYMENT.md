@@ -2,7 +2,7 @@
 
 This document describes the exact operational steps to deploy the trusted issuer HTTP edge required by Issue #423, plus the repository-owned
 provisioning boundary (Issue #497) that auto-provisions per-Issue authority records before dispatch. The edge consumes
-`hunter-issue-agent-signed-authorization-v1` from the GitHub trigger, verifies the authorization, invokes the production
+`hunter-issue-agent-signed-authorization-v2` from the GitHub trigger, verifies the authorization, invokes the production
 `GovernedIssueAgentExecutionService` composition root, persists the canonical Smart Prompt build, issues the signed
 `PromptAutomationEnvelopeHandoff`, and forwards it unchanged into the existing fallback runtime.
 
@@ -130,7 +130,7 @@ Contract and invariants:
 - **The provisioned registry vocabulary matches what the issuer actually persists.** The boundary's contract registry covers the Issue
   Source durable payload fields (`issue_content`, `content_derived_ids`, `locator_urls`, `source_derived_text`, `intake_metadata`) and the
   compiled pre-model bundle (`pre_model_bundle` → `AUDIT_FIELD`), so an auto-provisioned Issue dispatches cleanly.
-- **Transport hygiene.** Requests are `hunter-issue-agent-signed-authorization-v1` envelopes from the same issuer key the trigger holds the
+- **Transport hygiene.** Requests are `hunter-issue-agent-signed-authorization-v2` envelopes from the same issuer key the trigger holds the
   private half of; bodies are capped at 256 KiB; `Content-Length` is mandatory within that cap; a malformed signature is 401, a
   repository/owner mismatch 403, malformed envelope 400, oversized body 413, and missing/partial body 411/400.
 
@@ -527,7 +527,7 @@ curl -X POST https://your-issuer-url/issue-agent/authorize \
   -d '{}'
 # Expected: 400 Bad Request with error message
 
-# A well-formed `hunter-issue-agent-signed-authorization-v1` envelope signed by
+# A well-formed `hunter-issue-agent-signed-authorization-v2` envelope signed by
 # a key this edge does not trust fails closed with 401 before any execution.
 # The complete envelope shape (inner v1 payload + issuer_signature + the
 # issuer keypair) is exercised by the repository-owned issuer tests; see
@@ -568,7 +568,7 @@ logs for detailed error messages. All failures are fail-closed by design.
 
 ## Security Notes
 
-- The issuer edge **only accepts** `hunter-issue-agent-signed-authorization-v1` envelopes
+- The issuer edge **only accepts** `hunter-issue-agent-signed-authorization-v2` envelopes
 - The **private signing key never leaves** the GitHub Actions runner (trigger side)
 - The **public verifying key** is captured at issuer bootstrap and never re-read
 - Issue text **never** reaches the fallback runtime (only non-content handoff does)
@@ -588,7 +588,7 @@ GitHub Issue (labeled by owner)
 │  - POSTs to provisioning URL first  │  (fail-closed; retries only 502/503/504)
 │  - Only then POSTs to webhook URL   │
 └─────────────────────────────────────┘
-        │  hunter-issue-agent-signed-authorization-v1
+        │  hunter-issue-agent-signed-authorization-v2
         ├──────────────────────────────►
         ▼                              │
 ┌──────────────────┐                   │

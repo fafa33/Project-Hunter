@@ -10,6 +10,7 @@ they live here instead of drifting apart.
 from __future__ import annotations
 
 import http.client
+import json
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
@@ -35,3 +36,15 @@ class EdgeTransportClientMixin:
 
     def close(self) -> None:
         self.server.shutdown()
+
+
+def issue_body_with_scope(body: str) -> str:
+    """Attach the canonical owner scope fixture used by Issue-agent tests."""
+    scope = {
+        "branch_pattern": "issue-*",
+        "base_ref": "main",
+        "base_sha": "a" * 40,
+        "allowed_paths": ["src/", "scripts/", "tests/", "docs/"],
+        "prohibited_paths": [],
+    }
+    return body + "\n<!-- hunter-task-scope-v1\n" + json.dumps(scope, separators=(",", ":")) + "\n-->"

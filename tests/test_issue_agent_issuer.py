@@ -32,7 +32,7 @@ import pytest
 from cryptography.hazmat.primitives import serialization
 from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
 from issue_agent_edge_transport import MAX_REQUEST_BYTES
-from issue_agent_wire import EdgeTransportClientMixin
+from issue_agent_wire import EdgeTransportClientMixin, issue_body_with_scope
 
 from hunter.automation.agent_fallback_runtime import AgentFallbackRuntimeReceipt
 from hunter.automation.issue_agent_execution import (
@@ -350,7 +350,7 @@ def _event(
             "state": state,
             "html_url": ISSUE_URL,
             "title": title,
-            "body": body,
+            "body": issue_body_with_scope(body),
             "updated_at": UPDATED_AT,
         },
     }
@@ -701,7 +701,7 @@ def test_malformed_bodies_fail_closed(tmp_path: Path, webhook: Any, body: bytes)
 def test_duplicate_json_keys_fail_closed(tmp_path: Path, webhook: Any) -> None:
     hook = webhook(Deployment(tmp_path).services())
     body = (
-        b'{"schema_version": "hunter-issue-agent-signed-authorization-v1", '
+        b'{"schema_version": "hunter-issue-agent-signed-authorization-v2", '
         b'"issuer_signature": "ab", "issuer_signature": "cd", "authorization": {}}'
     )
     status, _body = hook.post(body)
@@ -1294,7 +1294,7 @@ def test_issuer_edge_reuses_existing_authorities_only(tmp_path: Path, monkeypatc
 
     source = Path("scripts/hunter_issue_agent_issuer.py").read_text(encoding="utf-8")
     assert "GovernedEngineeringTaskIngress" in source
-    assert "services.ingress.compile(request)" in source
+    assert "services.ingress.compile(request, implementation_scope=signed.implementation_scope)" in source
     assert "ISSUE_AGENT_ROUTE_REGISTRY" in source
     assert "_ISSUE_AGENT_PROFILE_REGISTRY" not in source
     assert "_ISSUE_AGENT_ROUTE_REGISTRY" not in source

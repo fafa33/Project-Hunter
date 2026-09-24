@@ -11,6 +11,11 @@ from hunter.evidence_intelligence.engineering_context_authority import (
     EngineeringContextAuthorityError,
 )
 from hunter.evidence_intelligence.smart_prompt_routing import ENGINEERING_IMPLEMENT_TASK_KEY
+from hunter.task_scope import TaskScopeContract
+
+
+def _scope(*paths: str) -> TaskScopeContract:
+    return TaskScopeContract(task_id="test-task", branch_pattern="issue-*", base_sha="a" * 40, allowed_paths=paths)
 
 
 def _registry(tmp_path: Path, families: list[dict[str, object]]) -> Path:
@@ -36,8 +41,8 @@ def test_implementation_context_selects_applicable_families_deterministically(tm
     path = _registry(tmp_path, [_family("DFF-002", "scripts/"), _family("DFF-001", "src/hunter/")])
     authority = EngineeringContextAuthority(registry_path=path)
 
-    first = authority.compile(ENGINEERING_IMPLEMENT_TASK_KEY)
-    second = authority.compile(ENGINEERING_IMPLEMENT_TASK_KEY)
+    first = authority.compile(ENGINEERING_IMPLEMENT_TASK_KEY, scope=_scope("src/hunter/", "scripts/"))
+    second = authority.compile(ENGINEERING_IMPLEMENT_TASK_KEY, scope=_scope("src/hunter/", "scripts/"))
 
     assert first == second
     assert [item["id"] for item in first["applicable_defect_families"]] == ["DFF-001", "DFF-002"]
@@ -46,7 +51,7 @@ def test_implementation_context_selects_applicable_families_deterministically(tm
 def test_duplicate_family_identity_fails_closed(tmp_path: Path) -> None:
     authority = EngineeringContextAuthority(registry_path=_registry(tmp_path, [_family("DFF-001"), _family("DFF-001")]))
     with pytest.raises(EngineeringContextAuthorityError, match="duplicate defect family"):
-        authority.compile(ENGINEERING_IMPLEMENT_TASK_KEY)
+        authority.compile(ENGINEERING_IMPLEMENT_TASK_KEY, scope=_scope("src/hunter/", "scripts/"))
 
 
 def test_malformed_applicability_fails_closed(tmp_path: Path) -> None:
@@ -54,7 +59,7 @@ def test_malformed_applicability_fails_closed(tmp_path: Path) -> None:
     family["applicability"] = {"changed_paths": "src/hunter/"}
     authority = EngineeringContextAuthority(registry_path=_registry(tmp_path, [family]))
     with pytest.raises(EngineeringContextAuthorityError, match="changed_paths"):
-        authority.compile(ENGINEERING_IMPLEMENT_TASK_KEY)
+        authority.compile(ENGINEERING_IMPLEMENT_TASK_KEY, scope=_scope("src/hunter/", "scripts/"))
 
 
 @pytest.mark.parametrize(
@@ -74,12 +79,12 @@ def test_noncanonical_registry_domains_fail_closed(tmp_path: Path, field: str, v
     authority = EngineeringContextAuthority(registry_path=_registry(tmp_path, [family]))
 
     with pytest.raises(EngineeringContextAuthorityError, match=match):
-        authority.compile(ENGINEERING_IMPLEMENT_TASK_KEY)
+        authority.compile(ENGINEERING_IMPLEMENT_TASK_KEY, scope=_scope("src/hunter/", "scripts/"))
 
 
 def test_caller_text_is_not_an_input_to_family_selection(tmp_path: Path) -> None:
     authority = EngineeringContextAuthority(registry_path=_registry(tmp_path, [_family("DFF-018")]))
-    context = authority.compile(ENGINEERING_IMPLEMENT_TASK_KEY)
+    context = authority.compile(ENGINEERING_IMPLEMENT_TASK_KEY, scope=_scope("src/hunter/", "scripts/"))
     families = cast(list[dict[str, object]], context["applicable_defect_families"])
     assert families[0]["id"] == "DFF-018"
     assert "task_text" not in json.dumps(context, sort_keys=True)
