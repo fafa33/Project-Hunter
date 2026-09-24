@@ -21,6 +21,11 @@ from hunter.evidence_intelligence.knowledge_extraction_authority import (
 _ALLOWED_STATES = {"existing-family", "candidate-new-family", "excluded", "ambiguous", "insufficient-evidence"}
 
 
+REPO_ROOT = Path(__file__).resolve().parents[3]
+CANONICAL_DEFECT_REGISTRY = REPO_ROOT / "docs" / "DEFECT_REGISTRY.json"
+CANONICAL_LEARNING_LEDGER = REPO_ROOT / "hunter-learning-ledger.json"
+
+
 class ControlledLearningIntegrationError(ValueError):
     """Raised when a learning artifact cannot safely produce a registry candidate."""
 
@@ -124,6 +129,14 @@ def integrate_learning_ledger(ledger: Any, registry_bytes: bytes) -> ControlledL
                 or finding.reviewed_base_sha != ledger["reviewed_base_sha"]
             ):
                 raise ControlledLearningIntegrationError("proposal is not bound to the exact ledger identity")
+            integration = CanonicalIntegrationAuthority()
+            try:
+                if integration.already_integrated(supplied, initial):
+                    continue
+            except ValueError as error:
+                raise ControlledLearningIntegrationError(
+                    "ledger proposal does not replay against canonical registry"
+                ) from error
             if authority.extract(finding) != supplied:
                 raise ControlledLearningIntegrationError("ledger proposal does not replay against canonical registry")
             proposals.append(supplied)
@@ -141,3 +154,48 @@ def integrate_learning_ledger(ledger: Any, registry_bytes: bytes) -> ControlledL
             current = result.registry_bytes
             integrated.append(fresh.proposal_id)
     return ControlledLearningIntegrationResult(current, current != initial, tuple(integrated), skipped)
+
+
+def materialize_learning_ledger(*, dry_run: bool = False) -> ControlledLearningIntegrationResult:
+    """Materialize one verified ledger into a governed registry candidate.
+
+    This function has repository-content authority only.  It never commits,
+    pushes, opens/marks Ready, merges, deploys, or contacts a provider.  The
+    normal PR + owner-merge path remains the sole route to canonical ``main``.
+    The write is atomic and happens only after the complete ledger has replayed
+    successfully against the exact current registry bytes.
+    """
+    try:
+        ledger = json.loads(CANONICAL_LEARNING_LEDGER.read_text(encoding="utf-8"))
+        registry_bytes = CANONICAL_DEFECT_REGISTRY.read_bytes()
+    except (OSError, UnicodeError, json.JSONDecodeError) as error:
+        raise ControlledLearningIntegrationError("learning promotion inputs are unavailable or malformed") from error
+
+    result = integrate_learning_ledger(ledger, registry_bytes)
+    if dry_run or not result.changed:
+        return result
+
+    target = CANONICAL_DEFECT_REGISTRY
+    temporary: Path | None = None
+    try:
+        with NamedTemporaryFile(
+            mode="wb", prefix=f".{target.name}.", suffix=".tmp", dir=target.parent, delete=False
+        ) as handle:
+            handle.write(result.registry_bytes)
+            handle.flush()
+            temporary = Path(handle.name)
+        # Atomic rename prevents torn writes; this compare prevents a lost update.
+        # If another materializer changed the registry after our snapshot, this
+        # candidate is stale and must be rebuilt rather than overwrite it.
+        if target.read_bytes() != registry_bytes:
+            raise ControlledLearningIntegrationError(
+                "registry changed during learning promotion; retry from current truth"
+            )
+        temporary.replace(target)
+    except OSError as error:
+        if temporary is not None:
+            temporary.unlink(missing_ok=True)
+        raise ControlledLearningIntegrationError(
+            "learning promotion could not materialize registry candidate"
+        ) from error
+    return result
