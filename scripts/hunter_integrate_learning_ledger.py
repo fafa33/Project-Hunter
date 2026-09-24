@@ -3,20 +3,17 @@
 
 from __future__ import annotations
 
-import argparse
 import json
 from pathlib import Path
 
 from hunter.evidence_intelligence.controlled_learning_integration import integrate_learning_ledger
 
 REGISTRY = Path("docs/DEFECT_REGISTRY.json")
+LEDGER = Path("hunter-learning-ledger.json")
 
 
 def main() -> int:
-    parser = argparse.ArgumentParser()
-    parser.add_argument("--ledger", required=True)
-    args = parser.parse_args()
-    ledger = json.loads(Path(args.ledger).read_text(encoding="utf-8"))
+    ledger = json.loads(LEDGER.read_text(encoding="utf-8"))
     result = integrate_learning_ledger(ledger, REGISTRY.read_bytes())
     print(result.registry_bytes.decode("utf-8"), end="")
     return 0

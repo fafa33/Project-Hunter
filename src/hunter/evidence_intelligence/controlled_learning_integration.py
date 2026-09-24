@@ -6,7 +6,7 @@ import hashlib
 import json
 from dataclasses import dataclass
 from pathlib import Path
-from tempfile import TemporaryDirectory
+from tempfile import NamedTemporaryFile
 from typing import Any
 
 from hunter.evidence_intelligence.canonical_knowledge_integration import CanonicalIntegrationAuthority
@@ -101,9 +101,10 @@ def integrate_learning_ledger(ledger: Any, registry_bytes: bytes) -> ControlledL
     initial = bytes(registry_bytes)
     proposals = []
     skipped = 0
-    with TemporaryDirectory() as directory:
-        registry_path = Path(directory) / "registry.json"
-        registry_path.write_bytes(initial)
+    with NamedTemporaryFile(prefix="hunter-registry-", suffix=".json") as registry_file:
+        registry_file.write(initial)
+        registry_file.flush()
+        registry_path = Path(registry_file.name)
         authority = KnowledgeExtractionAuthority(registry_path)
         for item in ledger["items"]:
             if not isinstance(item, dict) or set(item) != {"observation_id", "state", "observation", "proposal"}:
@@ -129,7 +130,10 @@ def integrate_learning_ledger(ledger: Any, registry_bytes: bytes) -> ControlledL
         current = initial
         integrated = []
         for supplied in proposals:
-            registry_path.write_bytes(current)
+            registry_file.seek(0)
+            registry_file.truncate()
+            registry_file.write(current)
+            registry_file.flush()
             fresh = KnowledgeExtractionAuthority(registry_path).extract(supplied.finding)
             if fresh.outcome != "existing-family":
                 raise ControlledLearningIntegrationError("proposal no longer maps to an existing canonical family")

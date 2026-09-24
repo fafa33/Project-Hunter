@@ -61,7 +61,7 @@ jobs:
         if: steps.engine.outputs.available == 'true'
         env:
           PYTHONPATH: src
-        run: python scripts/hunter_integrate_learning_ledger.py --ledger hunter-learning-ledger.json > hunter-defect-registry-candidate.json
+        run: python scripts/hunter_integrate_learning_ledger.py > hunter-defect-registry-candidate.json
       - name: Publish non-authoritative learning artifact
         if: steps.engine.outputs.available == 'true'
         uses: actions/upload-artifact@v4
