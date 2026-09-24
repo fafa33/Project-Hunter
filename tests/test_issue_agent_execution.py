@@ -1734,6 +1734,12 @@ def test_the_workflow_pins_setup_python_to_an_immutable_commit() -> None:
     assert "secrets.HUNTER_ISSUE_AGENT_AUTHORIZATION_SIGNING_KEY" in workflow
 
 
+def test_the_workflow_exposes_repository_src_to_the_direct_trigger_script() -> None:
+    workflow = Path(".github/workflows/hunter-issue-agent-trigger.yml").read_text(encoding="utf-8")
+    assert "PYTHONPATH: src" in workflow
+    assert "python scripts/hunter_issue_agent_trigger.py" in workflow
+
+
 # --- Issue #439: rendered budget, not raw size, decides dispatchability --------
 
 
