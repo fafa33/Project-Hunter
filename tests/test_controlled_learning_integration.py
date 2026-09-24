@@ -81,3 +81,75 @@ def test_tampered_existing_family_proposal_fails_replay():
     ).hexdigest()
     with pytest.raises(ControlledLearningIntegrationError, match="replay"):
         integrate_learning_ledger(ledger, REGISTRY.read_bytes())
+
+
+def test_materialize_verified_ledger_atomically_updates_candidate_registry(tmp_path):
+    from hunter.evidence_intelligence.controlled_learning_integration import materialize_learning_ledger
+
+    registry = tmp_path / "DEFECT_REGISTRY.json"
+    registry.write_bytes(REGISTRY.read_bytes())
+    ledger = build_learning_ledger(504, HEAD, BASE, [observation()], registry)
+    ledger_path = tmp_path / "ledger.json"
+    ledger_path.write_text(json.dumps(ledger), encoding="utf-8")
+
+    result = materialize_learning_ledger(ledger_path, registry)
+
+    assert result.changed is True
+    assert registry.read_bytes() == result.registry_bytes
+    family = next(f for f in json.loads(registry.read_text())["families"] if f["id"] == "DFF-008")
+    assert any("issue-504" in source for source in family["sources"])
+
+
+def test_materialize_replay_is_idempotent(tmp_path):
+    from hunter.evidence_intelligence.controlled_learning_integration import materialize_learning_ledger
+
+    registry = tmp_path / "DEFECT_REGISTRY.json"
+    registry.write_bytes(REGISTRY.read_bytes())
+    ledger = build_learning_ledger(504, HEAD, BASE, [observation()], registry)
+    ledger_path = tmp_path / "ledger.json"
+    ledger_path.write_text(json.dumps(ledger), encoding="utf-8")
+    first = materialize_learning_ledger(ledger_path, registry)
+    before = registry.read_bytes()
+
+    # Rebuild the same canonical observation against the now-current registry;
+    # replay may enrich once, but never duplicates canonical source truth.
+    replay = build_learning_ledger(504, HEAD, BASE, [observation()], registry)
+    ledger_path.write_text(json.dumps(replay), encoding="utf-8")
+    second = materialize_learning_ledger(ledger_path, registry)
+
+    assert registry.read_bytes() == second.registry_bytes
+    family = next(f for f in json.loads(registry.read_text())["families"] if f["id"] == "DFF-008")
+    assert sum("issue-504" in source for source in family["sources"]) == 1
+    assert first.changed is True
+    assert registry.read_bytes() == before
+
+
+def test_materialize_tampered_ledger_leaves_registry_unchanged(tmp_path):
+    from hunter.evidence_intelligence.controlled_learning_integration import materialize_learning_ledger
+
+    registry = tmp_path / "DEFECT_REGISTRY.json"
+    registry.write_bytes(REGISTRY.read_bytes())
+    before = registry.read_bytes()
+    ledger = build_learning_ledger(504, HEAD, BASE, [observation()], registry)
+    ledger["reviewed_head_sha"] = "c" * 40
+    ledger_path = tmp_path / "ledger.json"
+    ledger_path.write_text(json.dumps(ledger), encoding="utf-8")
+
+    with pytest.raises(ControlledLearningIntegrationError, match="digest"):
+        materialize_learning_ledger(ledger_path, registry)
+    assert registry.read_bytes() == before
+
+
+def test_materialize_non_defect_evidence_never_mutates_registry(tmp_path):
+    from hunter.evidence_intelligence.controlled_learning_integration import materialize_learning_ledger
+
+    registry = tmp_path / "DEFECT_REGISTRY.json"
+    registry.write_bytes(REGISTRY.read_bytes())
+    before = registry.read_bytes()
+    ledger = build_learning_ledger(504, HEAD, BASE, [observation("provider-unavailable")], registry)
+    ledger_path = tmp_path / "ledger.json"
+    ledger_path.write_text(json.dumps(ledger), encoding="utf-8")
+
+    result = materialize_learning_ledger(ledger_path, registry)
+    assert result.changed is False
+    assert registry.read_bytes() == before

@@ -141,3 +141,43 @@ def integrate_learning_ledger(ledger: Any, registry_bytes: bytes) -> ControlledL
             current = result.registry_bytes
             integrated.append(fresh.proposal_id)
     return ControlledLearningIntegrationResult(current, current != initial, tuple(integrated), skipped)
+
+
+def materialize_learning_ledger(
+    ledger_path: Path, registry_path: Path, *, dry_run: bool = False
+) -> ControlledLearningIntegrationResult:
+    """Materialize one verified ledger into a governed registry candidate.
+
+    This function has repository-content authority only.  It never commits,
+    pushes, opens/marks Ready, merges, deploys, or contacts a provider.  The
+    normal PR + owner-merge path remains the sole route to canonical ``main``.
+    The write is atomic and happens only after the complete ledger has replayed
+    successfully against the exact current registry bytes.
+    """
+    try:
+        ledger = json.loads(Path(ledger_path).read_text(encoding="utf-8"))
+        registry_bytes = Path(registry_path).read_bytes()
+    except (OSError, UnicodeError, json.JSONDecodeError) as error:
+        raise ControlledLearningIntegrationError("learning promotion inputs are unavailable or malformed") from error
+
+    result = integrate_learning_ledger(ledger, registry_bytes)
+    if dry_run or not result.changed:
+        return result
+
+    target = Path(registry_path)
+    temporary: Path | None = None
+    try:
+        with NamedTemporaryFile(
+            mode="wb", prefix=f".{target.name}.", suffix=".tmp", dir=target.parent, delete=False
+        ) as handle:
+            handle.write(result.registry_bytes)
+            handle.flush()
+            temporary = Path(handle.name)
+        temporary.replace(target)
+    except OSError as error:
+        if temporary is not None:
+            temporary.unlink(missing_ok=True)
+        raise ControlledLearningIntegrationError(
+            "learning promotion could not materialize registry candidate"
+        ) from error
+    return result
