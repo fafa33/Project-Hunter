@@ -103,3 +103,17 @@ def test_multi_surface_family_survives_when_one_surface_is_still_permitted(tmp_p
     )
     result = authority.compile(ENGINEERING_IMPLEMENT_TASK_KEY, scope=scope)
     assert [item["id"] for item in result["applicable_defect_families"]] == ["DFF-MULTI"]
+
+
+def test_broad_family_survives_nested_prohibition_when_permitted_surface_remains(tmp_path: Path) -> None:
+    family = _family("DFF-BROAD", "src/hunter/")
+    authority = EngineeringContextAuthority(registry_path=_registry(tmp_path, [family]))
+    scope = TaskScopeContract(
+        task_id="test-task",
+        branch_pattern="issue-*",
+        base_sha="a" * 40,
+        allowed_paths=("src/hunter/",),
+        prohibited_paths=("src/hunter/automation/",),
+    )
+    result = authority.compile(ENGINEERING_IMPLEMENT_TASK_KEY, scope=scope)
+    assert [item["id"] for item in result["applicable_defect_families"]] == ["DFF-BROAD"]

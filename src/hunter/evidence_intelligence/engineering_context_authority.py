@@ -114,15 +114,16 @@ class EngineeringContextAuthority:
             paths = family["applicability"]["changed_paths"]
 
             def permitted(path: str) -> bool:
-                allowed = any(
-                    _path_intersects(path, entry) or path_matches_scope_entry(path, entry)
-                    for entry in scope.allowed_paths
+                intersections = [entry for entry in scope.allowed_paths if _path_intersects(path, entry)]
+                if not intersections:
+                    return False
+                # A prohibition removes an applicability surface only when it
+                # covers that whole allowed intersection. A nested prohibition
+                # leaves the rest of a broader allowed surface applicable.
+                return any(
+                    not any(path_matches_scope_entry(candidate, prohibited) for prohibited in scope.prohibited_paths)
+                    for candidate in intersections
                 )
-                prohibited = any(
-                    _path_intersects(path, entry) or path_matches_scope_entry(path, entry)
-                    for entry in scope.prohibited_paths
-                )
-                return allowed and not prohibited
 
             if not any(permitted(path) for path in paths):
                 continue
