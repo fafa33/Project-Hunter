@@ -32,6 +32,7 @@ from __future__ import annotations
 
 import argparse
 import os
+import time
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass
 from datetime import UTC, datetime
@@ -64,6 +65,7 @@ Fetch = Callable[[str, str, str], Any]
 class ReuseDecision:
     reusable: bool
     reason: str
+    pending: bool = False
 
 
 def _fetch(repository: str, token: str, path: str) -> Any:
@@ -99,7 +101,7 @@ def trusted_branch_preflight_run(runs: Sequence[Any], head_sha: str) -> tuple[di
 
     latest = max(matching, key=lambda run: int(run.get("id") or 0))
     if str(latest.get("status") or "") != "completed":
-        return None, f"exact-head {PRE_PR_WORKFLOW_NAME} has not completed"
+        return latest, f"exact-head {PRE_PR_WORKFLOW_NAME} has not completed"
     conclusion = str(latest.get("conclusion") or "")
     if conclusion != "success":
         return None, f"exact-head {PRE_PR_WORKFLOW_NAME} concluded {conclusion or 'unknown'}"
@@ -169,6 +171,8 @@ def resolve(
     run, problem = trusted_branch_preflight_run(runs, head_sha)
     if run is None:
         return ReuseDecision(False, problem)
+    if problem:
+        return ReuseDecision(False, problem, pending=True)
     produced_at, problem = _run_produced_at(run)
     if produced_at is None:
         return ReuseDecision(False, problem)
@@ -213,19 +217,32 @@ def main(argv: Sequence[str] | None = None) -> int:
     parser.add_argument("--event-name", default=os.environ.get("GITHUB_EVENT_NAME", ""))
     parser.add_argument("--head-sha", default=os.environ.get("PR_HEAD_SHA", ""))
     parser.add_argument("--repository", default=os.environ.get("GH_REPO", ""))
+    parser.add_argument("--wait-seconds", type=float, default=420.0)
+    parser.add_argument("--poll-seconds", type=float, default=10.0)
     args = parser.parse_args(argv)
 
     token = os.environ.get("GITHUB_TOKEN") or os.environ.get("GH_TOKEN") or ""
-    try:
-        decision = resolve(
-            ROOT,
-            event_name=args.event_name,
-            head_sha=args.head_sha,
-            repository=args.repository,
-            token=token,
-        )
-    except Exception as exc:  # noqa: BLE001 - any failure here must fall back to full validation
-        decision = ReuseDecision(False, f"reuse evidence could not be established ({type(exc).__name__}: {exc})")
+    deadline = time.monotonic() + max(0.0, args.wait_seconds)
+    while True:
+        try:
+            decision = resolve(
+                ROOT,
+                event_name=args.event_name,
+                head_sha=args.head_sha,
+                repository=args.repository,
+                token=token,
+            )
+        except Exception as exc:  # noqa: BLE001 - any failure here must fall back to full validation
+            decision = ReuseDecision(False, f"reuse evidence could not be established ({type(exc).__name__}: {exc})")
+        if not decision.pending:
+            break
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+            decision = ReuseDecision(False, f"{decision.reason}; bounded wait expired")
+            break
+        delay = min(max(0.1, args.poll_seconds), remaining)
+        print(f"[Hunter Validation Reuse] WAIT: {decision.reason}; polling again in {delay:g}s", flush=True)
+        time.sleep(delay)
     _emit(decision)
     return 0
 
