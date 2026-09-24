@@ -31,6 +31,34 @@ class CanonicalIntegrationResult:
 class CanonicalIntegrationAuthority:
     """Integrate only replay-proven existing-family evidence; never persist it."""
 
+    def already_integrated(self, proposal: KnowledgeExtractionProposal, registry_bytes: bytes) -> bool:
+        """Return whether this exact accepted event is already canonical.
+
+        This is the only stale-registry exception: replaying byte-identical accepted
+        evidence after it was integrated is a no-op. A conflicting reuse of the
+        provider event identity still fails closed.
+        """
+        try:
+            document = json.loads(registry_bytes)
+        except json.JSONDecodeError as exc:
+            raise CanonicalIntegrationError("registry is unreadable") from exc
+        families = document.get("families")
+        if not isinstance(families, list) or proposal.canonical_family_id is None:
+            return False
+        family = next(
+            (f for f in families if isinstance(f, dict) and f.get("id") == proposal.canonical_family_id), None
+        )
+        if not isinstance(family, dict):
+            return False
+        sources = family.get("sources")
+        evidence = family.get("regression_evidence")
+        if not isinstance(sources, list) or not isinstance(evidence, list):
+            raise CanonicalIntegrationError("canonical family learning fields are malformed")
+        self._reject_event_identity_conflict(proposal, sources)
+        return self._source_record(proposal) in sources and all(
+            item in evidence for item in proposal.finding.regression_evidence
+        )
+
     def integrate(self, proposal: KnowledgeExtractionProposal, registry_bytes: bytes) -> CanonicalIntegrationResult:
         if proposal.schema_version != SCHEMA_VERSION:
             raise CanonicalIntegrationError("proposal schema is unsupported")

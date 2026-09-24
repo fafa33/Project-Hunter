@@ -124,6 +124,9 @@ def integrate_learning_ledger(ledger: Any, registry_bytes: bytes) -> ControlledL
                 or finding.reviewed_base_sha != ledger["reviewed_base_sha"]
             ):
                 raise ControlledLearningIntegrationError("proposal is not bound to the exact ledger identity")
+            integration = CanonicalIntegrationAuthority()
+            if integration.already_integrated(supplied, initial):
+                continue
             if authority.extract(finding) != supplied:
                 raise ControlledLearningIntegrationError("ledger proposal does not replay against canonical registry")
             proposals.append(supplied)

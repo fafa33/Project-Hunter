@@ -111,10 +111,7 @@ def test_materialize_replay_is_idempotent(tmp_path):
     first = materialize_learning_ledger(ledger_path, registry)
     before = registry.read_bytes()
 
-    # Rebuild the same canonical observation against the now-current registry;
-    # replay may enrich once, but never duplicates canonical source truth.
-    replay = build_learning_ledger(504, HEAD, BASE, [observation()], registry)
-    ledger_path.write_text(json.dumps(replay), encoding="utf-8")
+    # Replaying the exact same accepted ledger is a no-op, not an error.
     second = materialize_learning_ledger(ledger_path, registry)
 
     assert registry.read_bytes() == second.registry_bytes
