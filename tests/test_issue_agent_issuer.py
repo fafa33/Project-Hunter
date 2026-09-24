@@ -31,6 +31,8 @@ import hunter_issue_agent_trigger as trigger
 import pytest
 from cryptography.hazmat.primitives import serialization
 from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
+from issue_agent_edge_transport import MAX_REQUEST_BYTES
+from issue_agent_wire import EdgeTransportClientMixin
 
 from hunter.automation.agent_fallback_runtime import AgentFallbackRuntimeReceipt
 from hunter.automation.issue_agent_execution import (
@@ -540,7 +542,7 @@ class Deployment:
 # --- Wire harness: real threaded HTTPServer on an ephemeral port ------------
 
 
-class Webhook:
+class Webhook(EdgeTransportClientMixin):
     def __init__(
         self,
         services: issuer.IssuerServices,
@@ -578,17 +580,6 @@ class Webhook:
         received = response.read()
         connection.close()
         return response.status, received.decode("utf-8")
-
-    def get(self, path: str) -> tuple[int, str]:
-        connection = http.client.HTTPConnection("127.0.0.1", self.port, timeout=15)
-        connection.request("GET", path)
-        response = connection.getresponse()
-        received = response.read()
-        connection.close()
-        return response.status, received.decode("utf-8")
-
-    def close(self) -> None:
-        self.server.shutdown()
 
 
 @pytest.fixture(autouse=True)
@@ -685,9 +676,15 @@ def test_invalid_content_length_is_refused(tmp_path: Path, webhook: Any) -> None
     assert status == 400
 
 
+def test_negative_content_length_is_refused_before_reading(tmp_path: Path, webhook: Any) -> None:
+    hook = webhook(Deployment(tmp_path).services())
+    status, _body = hook.post_raw(headers={"Content-Length": "-1"})
+    assert status == 400
+
+
 def test_oversized_content_length_is_refused_before_reading(tmp_path: Path, webhook: Any) -> None:
     hook = webhook(Deployment(tmp_path).services())
-    status, _body = hook.post_raw(headers={"Content-Length": str(issuer._MAX_REQUEST_BYTES + 1)})
+    status, _body = hook.post_raw(headers={"Content-Length": str(MAX_REQUEST_BYTES + 1)})
     assert status == 413
 
 

@@ -16,7 +16,6 @@ ever committed; all secrets are environment/repository secrets only.
 from __future__ import annotations
 
 import argparse
-import json
 import logging
 import os
 import secrets
@@ -24,10 +23,16 @@ import signal
 import threading
 from collections.abc import Mapping
 from dataclasses import dataclass
-from http.server import BaseHTTPRequestHandler, HTTPServer
 from pathlib import Path
-from socketserver import ThreadingMixIn
 from typing import Any, Final
+
+from issue_agent_edge_transport import (
+    MAX_CONCURRENT_REQUEST_WORKERS,
+    REQUEST_READ_TIMEOUT_SECONDS,
+    BoundedThreadingHTTPServer,
+    IssueAgentEdgeRequestHandler,
+    setup_logging,
+)
 
 from hunter.automation.agent_fallback_runtime import (
     AgentFallbackRuntimeReceipt,
@@ -81,23 +86,8 @@ from hunter.evidence_intelligence.source_handling_persistence import (
 )
 from hunter.execution import Clock, SystemClock
 
-#: Maximum request body size in bytes (256 KiB)
-_MAX_REQUEST_BYTES: Final[int] = 256 * 1024
-
-#: Small explicit bound on concurrent request workers. A stalled body holds
-#: exactly one slot and is released by the read deadline below, so an
-#: unauthenticated client can never monopolize the transport with one-thread
-#: starvation or unbounded thread churn.
-_MAX_CONCURRENT_REQUEST_WORKERS: Final[int] = 8
-
-#: Finite socket read deadline applied to every request connection before the
-#: body is read, so a client that withholds its declared body terminates within
-#: a bounded time (fail-closed 408) instead of occupying a worker indefinitely.
-_REQUEST_READ_TIMEOUT_SECONDS: Final[float] = 15.0
-
-#: Background provider work must also be bounded. HTTP workers are released
-#: immediately after durable acceptance, so this separate bound prevents a
-#: burst of accepted authorizations from creating unbounded execution threads.
+#: Maximum request body size and transport bound are inherited from the shared
+#: issue-agent edge transport; the issuer-specific execution bound stays here.
 _MAX_CONCURRENT_EXECUTIONS: Final[int] = 2
 _EXECUTION_SLOTS = threading.BoundedSemaphore(_MAX_CONCURRENT_EXECUTIONS)
 _ISSUE_AGENT_ACCEPTED_SCHEMA = "hunter-issue-agent-accepted-v1"
@@ -490,65 +480,32 @@ def _accepted_payload(prepared: PreparedIssueAgentExecution) -> dict[str, Any]:
     }
 
 
-def _canonical_json(value: object) -> str:
-    return json.dumps(value, sort_keys=True, separators=(",", ":"), ensure_ascii=False)
-
-
-class _IssuerRequestHandler(BaseHTTPRequestHandler):
-    """HTTP handler for the trusted issuer edge.
+class _IssuerRequestHandler(IssueAgentEdgeRequestHandler):
+    """HTTP handler for the trusted issuer edge's admission of one authorization.
 
     ``timeout`` is set per-server on the concrete subclass: it is the finite
     socket read deadline applied by ``setup()`` before any byte is trusted, so
     a connection that stalls while awaiting its declared body is bounded instead
-    of holding a worker forever.
+    of holding a worker forever.  The bounded body parsing and canonical JSON
+    responses come from the shared issue-agent edge transport.
     """
 
     services: IssuerServices | None = None
     shutdown_event: threading.Event | None = None
     execution_registry: ExecutionWorkerRegistry | None = None
 
-    def do_POST(self) -> None:
-        """Handle POST request with signed authorization."""
-        if self.path != "/issue-agent/authorize":
-            self._send_error(404, "Not Found")
-            return
+    endpoint = "/issue-agent/authorize"
+    service_name = "hunter-issue-agent-issuer"
+    error_schema_version = ISSUE_AGENT_EXECUTION_RECEIPT_SCHEMA_VERSION
 
-        # Read and validate request
-        content_length = self.headers.get("Content-Length")
-        if content_length is None:
-            self._send_error(411, "Length Required")
-            return
-        try:
-            length = int(content_length)
-        except ValueError:
-            self._send_error(400, "Invalid Content-Length")
-            return
-        if length > _MAX_REQUEST_BYTES:
-            self._send_error(413, "Payload Too Large")
-            return
+    def handle_authorization(self, signed: SignedIssueAgentAuthorization) -> None:
+        """Admit one verified, durably prepared authorization.
 
-        try:
-            body = self.rfile.read(length)
-        except TimeoutError:
-            self._send_error(408, "Request body read timed out")
-            return
-        if len(body) != length:
-            self._send_error(400, "Incomplete request body")
-            return
-
-        # Parse and validate the signed authorization (bytes only: the canonical
-        # parser enforces bounded size, UTF-8, duplicate-key refusal and object
-        # shape, so the transport duplicates none of that trust logic).
-        try:
-            signed = SignedIssueAgentAuthorization.from_json(body)
-        except IssueAgentIssuerError as error:
-            self._send_error(401, str(error))
-            return
-        except IssueAgentAuthorizationError as error:
-            self._send_error(400, str(error))
-            return
-
-        # Admission is bounded independently of the long provider phase.
+        The transport already parsed the canonical signed document; this is the
+        issuer's own trust boundary: claim execution ownership and persist the
+        exact handoff durably, then ACK before the slow provider phase so
+        admission is bounded independently of provider duration.
+        """
         if not _EXECUTION_SLOTS.acquire(blocking=False):
             self._send_error(503, "Issue Agent execution capacity is saturated")
             return
@@ -623,92 +580,6 @@ class _IssuerRequestHandler(BaseHTTPRequestHandler):
         # authorization ownership and the exact handoff are already durable.
         self._send_json(200, _accepted_payload(prepared))
 
-    def do_GET(self) -> None:
-        """Health check endpoint."""
-        if self.path == "/healthz":
-            self._send_json(200, {"status": "ok", "service": "hunter-issue-agent-issuer"})
-        else:
-            self._send_error(404, "Not Found")
-
-    def _send_json(self, status: int, payload: dict[str, Any]) -> None:
-        self.send_response(status)
-        self.send_header("Content-Type", "application/json")
-        body = _canonical_json(payload).encode("utf-8")
-        self.send_header("Content-Length", str(len(body)))
-        self.end_headers()
-        self.wfile.write(body)
-
-    def _send_error(self, status: int, message: str) -> None:
-        self.send_response(status)
-        self.send_header("Content-Type", "application/json")
-        body = _canonical_json(
-            {"error": message, "schema_version": ISSUE_AGENT_EXECUTION_RECEIPT_SCHEMA_VERSION}
-        ).encode("utf-8")
-        self.send_header("Content-Length", str(len(body)))
-        self.end_headers()
-        self.wfile.write(body)
-
-    def log_message(self, format: str, *args: Any) -> None:
-        logging.getLogger(__name__).info("%s - %s", self.address_string(), format % args)
-
-
-class _BoundedThreadingHTTPServer(ThreadingMixIn, HTTPServer):
-    """HTTPServer with a small, explicit concurrency bound.
-
-    A request is admitted to a worker only while a slot is free; when every
-    worker is busy the transport answers with a deterministic 503 at the
-    socket instead of queueing behind an unbounded thread. Workers are daemon
-    threads so shutdown is never blocked by a stalled peer, and every admitted
-    request runs under the connection's finite read deadline, so a withheld
-    body can hold a slot only until that deadline fires.
-    """
-
-    daemon_threads = True
-    allow_reuse_address = True
-
-    def __init__(
-        self,
-        server_address: tuple[str, int],
-        RequestHandlerClass: type[BaseHTTPRequestHandler],
-        *,
-        max_workers: int,
-    ) -> None:
-        if max_workers < 1:
-            raise ValueError("concurrent worker bound must be a positive integer")
-        super().__init__(server_address, RequestHandlerClass)
-        self._worker_slots = threading.Semaphore(max_workers)
-
-    def process_request(self, request: Any, client_address: Any) -> None:
-        if not self._worker_slots.acquire(blocking=False):
-            self._reject_saturated(request)
-            self.shutdown_request(request)
-            return
-        try:
-            super().process_request(request, client_address)
-        except BaseException:
-            self._worker_slots.release()
-            self.shutdown_request(request)
-            raise
-
-    def process_request_thread(self, request: Any, client_address: Any) -> None:
-        try:
-            super().process_request_thread(request, client_address)
-        finally:
-            self._worker_slots.release()
-
-    def _reject_saturated(self, request: Any) -> None:
-        """Fail closed on a bounded 503 without leaking internal detail."""
-        try:
-            request.settimeout(5.0)
-            request.sendall(
-                b"HTTP/1.1 503 Service Unavailable\r\n"
-                b"Content-Type: application/json\r\n"
-                b"Content-Length: 0\r\n"
-                b"Connection: close\r\n\r\n"
-            )
-        except OSError:
-            pass
-
 
 class IssuerServer:
     """Bounded concurrent HTTP server for the trusted issuer edge.
@@ -733,8 +604,8 @@ class IssuerServer:
         services: IssuerServices,
         *,
         shutdown_event: threading.Event | None = None,
-        read_timeout: float = _REQUEST_READ_TIMEOUT_SECONDS,
-        max_workers: int = _MAX_CONCURRENT_REQUEST_WORKERS,
+        read_timeout: float = REQUEST_READ_TIMEOUT_SECONDS,
+        max_workers: int = MAX_CONCURRENT_REQUEST_WORKERS,
         lease_renewal_interval: float = _LEASE_RENEWAL_INTERVAL_SECONDS,
     ) -> None:
         self._host = host
@@ -751,7 +622,7 @@ class IssuerServer:
             execution_registry = self._executions
 
         Handler.services = services
-        self._server = _BoundedThreadingHTTPServer(
+        self._server = BoundedThreadingHTTPServer(
             (host, port),
             Handler,
             max_workers=max_workers,
@@ -811,15 +682,6 @@ class IssuerServer:
         logger.info("Trusted issuer edge stopped")
 
 
-def _setup_logging(verbose: bool) -> None:
-    level = logging.DEBUG if verbose else logging.INFO
-    logging.basicConfig(
-        level=level,
-        format="%(asctime)s %(levelname)s %(name)s: %(message)s",
-        datefmt="%Y-%m-%dT%H:%M:%S%z",
-    )
-
-
 def _parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="hunter_issue_agent_issuer")
     parser.add_argument("--host", default="0.0.0.0", help="bind address")
@@ -843,7 +705,7 @@ def _import_provenance_resolver(path: str) -> ProvenanceResolver:
 
 def main(argv: list[str] | None = None) -> int:
     arguments = _parser().parse_args(argv)
-    _setup_logging(arguments.verbose)
+    setup_logging(arguments.verbose)
     logger = logging.getLogger(__name__)
 
     try:
