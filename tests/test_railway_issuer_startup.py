@@ -7,7 +7,7 @@ import sqlite3
 import sys
 from pathlib import Path
 from typing import Any
-from unittest.mock import patch
+from unittest.mock import Mock, patch
 
 import bootstrap_source_handling_authority as bootstrap
 import pytest
@@ -106,6 +106,7 @@ def _run_startup(
     with (
         patch.dict(os.environ, env, clear=True),
         patch.object(startup.os, "execvpe", side_effect=captured),
+        patch.object(startup, "_start_provisioner", return_value=Mock(poll=Mock(return_value=None))),
         patch.object(startup.os.path, "ismount", return_value=True),
     ):
         try:
@@ -335,6 +336,21 @@ def test_tampered_authority_preserved_after_mismatch_rejection(tmp_path: Path) -
 # --- Signing-key lifecycle -------------------------------------------------
 
 
+def test_provisioner_child_inherits_key_and_dedicated_port(monkeypatch: pytest.MonkeyPatch) -> None:
+    import railway_issuer_startup as startup
+
+    monkeypatch.setenv(_SIGNING_KEY_ENV, "ab" * 32)
+    monkeypatch.setenv("HUNTER_ISSUE_AGENT_PROVISIONER_PORT", "8181")
+    child = Mock()
+    with patch.object(startup.subprocess, "Popen", return_value=child) as popen:
+        assert startup._start_provisioner() is child
+    argv = popen.call_args.args[0]
+    env = popen.call_args.kwargs["env"]
+    assert "hunter_issue_agent_provisioner.py" in " ".join(argv)
+    assert argv[argv.index("--port") + 1] == "8181"
+    assert env[_SIGNING_KEY_ENV] == "ab" * 32
+
+
 def test_signing_key_scrubbed_from_issuer_environment(tmp_path: Path) -> None:
     database = str(tmp_path / "evidence.sqlite")
     key = _private_key_bytes()
@@ -368,6 +384,7 @@ def test_signing_key_still_present_during_bootstrap(tmp_path: Path) -> None:
     with (
         patch.dict(os.environ, env, clear=True),
         patch.object(startup.os, "execvpe", side_effect=captured),
+        patch.object(startup, "_start_provisioner", return_value=Mock(poll=Mock(return_value=None))),
         patch.object(startup.os.path, "ismount", return_value=True),
         patch.object(bootstrap, "_load_signing_key", side_effect=_tracking_load),
     ):
@@ -419,6 +436,7 @@ def test_issuer_launch_cannot_happen_before_successful_bootstrap(tmp_path: Path)
     with (
         patch.dict(os.environ, env, clear=True),
         patch.object(startup.os, "execvpe", side_effect=captured),
+        patch.object(startup, "_start_provisioner", return_value=Mock(poll=Mock(return_value=None))),
         patch.object(startup.os.path, "ismount", return_value=True),
         patch.object(startup, "_bootstrap", side_effect=_tracking_bootstrap),
     ):
@@ -447,6 +465,7 @@ def test_bootstrap_failure_prevents_issuer_launch(tmp_path: Path) -> None:
     with (
         patch.dict(os.environ, env, clear=True),
         patch.object(startup.os, "execvpe", side_effect=captured),
+        patch.object(startup, "_start_provisioner", return_value=Mock(poll=Mock(return_value=None))),
         patch.object(startup.os.path, "ismount", return_value=True),
         patch.object(startup, "_bootstrap", side_effect=_failing_bootstrap),
     ):

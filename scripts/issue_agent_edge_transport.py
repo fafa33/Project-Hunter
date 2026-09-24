@@ -106,6 +106,9 @@ class IssueAgentEdgeRequestHandler(BaseHTTPRequestHandler):
         except ValueError:
             self._send_error(400, "Invalid Content-Length")
             return None
+        if length < 0:
+            self._send_error(400, "Invalid Content-Length")
+            return None
         if length > self.max_request_bytes:
             self._send_error(413, "Payload Too Large")
             return None

@@ -306,25 +306,41 @@ def _provenance_plans(
     document_id: str,
     authority_identity: str,
     at: datetime,
+    restrictive_fact_detector: bool = False,
 ) -> tuple[dict[str, Any], ...]:
-    return tuple(
-        {
-            "provenance_id": provenance_id,
-            "provenance_kind": provenance_kind,
-            "authority_identity": authority_identity,
-            "evidence_strength": EVIDENCE_STRENGTH if provenance_kind == "EVIDENCE" else None,
-            "evidence_method": EVIDENCE_METHOD if provenance_kind == "EVIDENCE" else None,
-            "verifier_type": VERIFIER_TYPE if provenance_kind == "VERIFIER" else None,
-        }
-        for provenance_id, provenance_kind in (
-            (f"evidence:auth:fact:{document_id}", "EVIDENCE"),
-            (f"verifier:auth:fact:{document_id}", "VERIFIER"),
-            (f"evidence:auth:registry:{document_id}", "EVIDENCE"),
-            (f"verifier:auth:registry:{document_id}", "VERIFIER"),
-            (f"evidence:auth:policy:{document_id}", "EVIDENCE"),
-            (f"verifier:auth:policy:{document_id}", "VERIFIER"),
+    plans: list[dict[str, Any]] = []
+    for provenance_id, provenance_kind, family in (
+        (f"evidence:auth:fact:{document_id}", "EVIDENCE", "FACT"),
+        (f"verifier:auth:fact:{document_id}", "VERIFIER", "FACT"),
+        (f"evidence:auth:registry:{document_id}", "EVIDENCE", "REGISTRY"),
+        (f"verifier:auth:registry:{document_id}", "VERIFIER", "REGISTRY"),
+        (f"evidence:auth:policy:{document_id}", "EVIDENCE", "POLICY"),
+        (f"verifier:auth:policy:{document_id}", "VERIFIER", "POLICY"),
+    ):
+        detector = restrictive_fact_detector and family == "FACT"
+        plans.append(
+            {
+                "provenance_id": provenance_id,
+                "provenance_kind": provenance_kind,
+                "authority_identity": authority_identity,
+                "evidence_strength": (
+                    "OBSERVED_RESTRICTIVE_SIGNAL"
+                    if detector and provenance_kind == "EVIDENCE"
+                    else EVIDENCE_STRENGTH if provenance_kind == "EVIDENCE" else None
+                ),
+                "evidence_method": (
+                    "AUTOMATED_RESTRICTIVE_DETECTOR"
+                    if detector and provenance_kind == "EVIDENCE"
+                    else EVIDENCE_METHOD if provenance_kind == "EVIDENCE" else None
+                ),
+                "verifier_type": (
+                    "DETECTOR"
+                    if detector and provenance_kind == "VERIFIER"
+                    else VERIFIER_TYPE if provenance_kind == "VERIFIER" else None
+                ),
+            }
         )
-    )
+    return tuple(plans)
 
 
 def _check_provenance_heads_exact(
@@ -605,6 +621,16 @@ def _provision_authority_record(
             f"existing {plan['family']} head for scope {plan['scope']!r} does not match the derived content; "
             "refusing to replace provisioned authority state"
         )
+    evidence = PROVENANCE_RESOLVER(plan["evidence_id"], "EVIDENCE", at)
+    verifier = PROVENANCE_RESOLVER(plan["verifier_id"], "VERIFIER", at)
+    if evidence is None or verifier is None:
+        raise SourceHandlingBlockedError("canonical publication provenance is unavailable at authority cutoff")
+    evidence_strength = evidence.get("evidence_strength")
+    evidence_method = evidence.get("evidence_method")
+    verifier_type = verifier.get("verifier_type")
+    if not all(isinstance(value, str) and value for value in (evidence_strength, evidence_method, verifier_type)):
+        raise SourceHandlingBlockedError("canonical publication provenance classification is incomplete")
+
     authorization = service.issue_authorization(
         publication_kind=plan["family"],
         governed_subject_scope=plan["scope"],
@@ -612,10 +638,10 @@ def _provision_authority_record(
         authorization_rule_id=plan["rule_id"],
         expected_current_head_id=None,
         evidence_ids=(plan["evidence_id"],),
-        evidence_strength=EVIDENCE_STRENGTH,
-        evidence_method=EVIDENCE_METHOD,
+        evidence_strength=evidence_strength,
+        evidence_method=evidence_method,
         verifier_ids=(plan["verifier_id"],),
-        verifier_type=VERIFIER_TYPE,
+        verifier_type=verifier_type,
         effective_from=at,
         recorded_at=at,
         known_at=at,
@@ -667,6 +693,7 @@ def _run(
     policy_options: _PolicyOptions,
     provenance_authority_identity: str,
     as_of: datetime | None,
+    restrictive_fact_detector: bool = False,
 ) -> dict[str, Any]:
     _assert_canonical_provenance_values()
     _validate_options(fact_options, policy_options)
@@ -685,6 +712,7 @@ def _run(
         document_id=document_id,
         authority_identity=provenance_authority_identity,
         at=datetime.now(UTC),
+        restrictive_fact_detector=restrictive_fact_detector,
     )
     planned_pairs = tuple((p["provenance_id"], p["provenance_kind"]) for p in dummy_plan_list)
 
@@ -718,6 +746,7 @@ def _run(
         document_id=document_id,
         authority_identity=provenance_authority_identity,
         at=on_or_after,
+        restrictive_fact_detector=restrictive_fact_detector,
     )
     _check_provenance_heads_exact(provenance_plans, on_or_after)
     _require_rule_strict_known(database, signing_key, operator_root, on_or_after)

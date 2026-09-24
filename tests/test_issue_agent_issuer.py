@@ -676,6 +676,12 @@ def test_invalid_content_length_is_refused(tmp_path: Path, webhook: Any) -> None
     assert status == 400
 
 
+def test_negative_content_length_is_refused_before_reading(tmp_path: Path, webhook: Any) -> None:
+    hook = webhook(Deployment(tmp_path).services())
+    status, _body = hook.post_raw(headers={"Content-Length": "-1"})
+    assert status == 400
+
+
 def test_oversized_content_length_is_refused_before_reading(tmp_path: Path, webhook: Any) -> None:
     hook = webhook(Deployment(tmp_path).services())
     status, _body = hook.post_raw(headers={"Content-Length": str(MAX_REQUEST_BYTES + 1)})

@@ -329,20 +329,16 @@ The bootstrap is the **only** code path that may consume `HUNTER_SOURCE_HANDLING
 that variable removed from its environment.  No pre-deploy command, no parallel bootstrap mechanism, and no dashboard-only configuration
 bypasses this seam.
 
-#### Provisioner Service Startup Seam (Issue #497)
+#### Provisioner Startup Seam (Issue #497)
 
-The provisioning boundary is a **second Railway Service** created from the same repository, mounting the **same `/data` volume**. Its
-start command delegates to `scripts/railway_provisioner_startup.py`, which idempotently bootstraps the shared volume at runtime (after the
-volume is mounted) and then launches the provisioner itself. The sequence is:
-
-1. Verify the evidence data directory is the mounted persistent volume (same fail-closed check as the issuer seam).
-2. Verify `HUNTER_SOURCE_HANDLING_SIGNING_KEY` is present and bootstrap the volume through the shared `bootstrap_authority` contract.
-3. **Do not scrub the signing key** — the provisioner is the trusted writer and holds it for its lifetime. This is the one deliberate
-   asymmetry versus `railway_issuer_startup.py`.
-4. `exec` the canonical provisioner (`python scripts/hunter_issue_agent_provisioner.py`), default port 8081, replying to Railway's `PORT`.
-
-The provisioner Service variables mirror the issuer's four operator-provenance variables plus the deployment identity variables, all
-pointing at the same `/data/evidence.sqlite` (see steps b′ and the configuration reference below).
+Railway persistent volumes are service-scoped, so the provisioner is **not** a
+second Railway Service. The single volume-owning Issue Agent service starts the
+trusted provisioner child on `HUNTER_ISSUE_AGENT_PROVISIONER_PORT` (default
+8081) before it scrubs the Source Handling signing key and `exec`s the issuer on
+Railway's `$PORT`. The provisioner child retains the key; the issuer environment
+does not. Both logical edges therefore use the same `/data/evidence.sqlite`
+without an impossible cross-service volume attachment. Railway exposes a second
+domain/target-port for the provisioner port.
 
 #### Railway Setup Steps (a–f)
 
@@ -363,37 +359,27 @@ The start command will not run any bootstrap from a `preDeploy` hook or one-off 
 - Fallback runtime provider variables (`HUNTER_AGENT_*`)
 - `HUNTER_ISSUE_AGENT_EVIDENCE_DB=/data/evidence.sqlite` (already set by `railway.toml`)
 
-**b′. Set provisioner runtime variables** — on the provisioner Service (Issue #497), set:
-- `HUNTER_SOURCE_HANDLING_SIGNING_KEY` (secret — retained for the provisioner's whole lifetime)
-- `HUNTER_SOURCE_HANDLING_VERIFICATION_KEY`
-- `HUNTER_SOURCE_HANDLING_VERIFICATION_KEY_SHA256`
-- `HUNTER_SOURCE_HANDLING_GENESIS_RULE_SHA256`
-- `HUNTER_ISSUE_AGENT_AUTHORIZATION_VERIFYING_KEY`
-- `HUNTER_ISSUE_AGENT_REPOSITORY`, `HUNTER_ISSUE_AGENT_OWNER_LOGIN`
-- `HUNTER_ISSUE_AGENT_EVIDENCE_DB=/data/evidence.sqlite`
+**b′. Expose the provisioner target port** — on the same Railway Service set
+`HUNTER_ISSUE_AGENT_PROVISIONER_PORT=8081` (or another dedicated port) and add
+a Railway domain targeting that port. Record that domain plus
+`/issue-agent/provision` as GitHub secret `HUNTER_ISSUE_AGENT_PROVISIONING_URL`.
+No second service or second volume is created.
 
-Note the provisioner deliberately does **not** need the prompt-automation keys, the execution branch, the repository checkout, or the
-fallback runtime variables. Recording the provisioner's Service URL as GitHub secret `HUNTER_ISSUE_AGENT_PROVISIONING_URL`
-(`<provisioner-url>/issue-agent/provision`) is required before the trigger can auto-provision (step f below).
+**c. Deploy the single Issue Agent Service** — `railway_issuer_startup.py`
+verifies and bootstraps the mounted volume, starts the trusted provisioner child
+while the signing key is still present, then scrubs the key from the parent and
+execs the canonical issuer. The provisioner and issuer therefore share the same
+SQLite authority store while only the provisioner process retains minting
+material.
 
-**c. Deploy the issuer (bootstraps the mounted volume)** — trigger a Railway deploy. The `railway.toml` start command runs
-`python scripts/railway_issuer_startup.py`, which verifies the mounted volume, invokes the canonical bootstrap through the shared public
-`bootstrap_authority` contract (provisioning the operator root and genesis rule on this fresh volume), scrubs the signing key, and execs
-the canonical issuer. The issuer reads the pinned operator root and genesis rule, and each authorization attempt re-verifies the
-provisioned `EVIDENCE` / `VERIFIER` provenance antecedents against the same database with the exact strength/method/verifier type the
-operator provisioned.
-
-**c′. Deploy the provisioner (same volume, retains the signing key)** — create the provisioner Service, attach the **same** `/data`
-volume, and set its start command to `python scripts/railway_provisioner_startup.py`. Its seam bootstraps the shared volume (idempotent;
-the deploy in step c already did), then execs the provisioner which now holds the signing key ready to sign per-Issue authority records.
-
-**d. Verify both Services started** — confirm in the logs that each startup seam reported the bootstrap outcome (`status`, `operator_root`,
-`genesis`) and that both processes are serving (`/healthz` on the issuer, `/healthz` on the provisioner). `curl <provisioner-url>/healthz`
-should return `{"status":"ok","service":"hunter-issue-agent-provisioner"}`.
+**d. Verify both logical edges** — confirm the one Service log shows bootstrap,
+provisioner launch, signing-key scrub, and issuer launch. Verify `/healthz` on
+the issuer domain and on the provisioner target-port domain; the latter returns
+`{"status":"ok","service":"hunter-issue-agent-provisioner"}`.
 
 **e. No manual per-Issue provisioning** — the operator step that previously had to run
 `provision_source_handling_issue_authority.py` for every new authorized Issue is **gone**. The boundary provisions each document
-automatically from repository-owned defaults on first authorization, writes the six `EVIDENCE` / `VERIFIER` provenance records the three
+automatically after Source Handling performs its independent restrictive transient-content classification, writes the six `EVIDENCE` / `VERIFIER` provenance records the three
 issuances require at operator as-of, and is exactly idempotent on re-runs. The CLI remains available for offline/operator workflows but is
 no longer part of the admission path.
 
@@ -405,23 +391,20 @@ head) stops the run before the issuer is ever contacted.
 
 #### Railway Configuration Reference
 
-1. **Set the secrets as variables** on the services:
-   `HUNTER_SOURCE_HANDLING_SIGNING_KEY` (issuer *and* provisioner), `HUNTER_PROMPT_AUTOMATION_SIGNING_KEY` (issuer only),
-   `HUNTER_ISSUE_AGENT_AUTHORIZATION_VERIFYING_KEY` (issuer *and* provisioner).
-   The Source Handling non-secret values are set as regular variables (derived from steps b/b′ above).
+1. **Set secrets on the single Issue Agent Service**: `HUNTER_SOURCE_HANDLING_SIGNING_KEY`,
+   `HUNTER_PROMPT_AUTOMATION_SIGNING_KEY`, and `HUNTER_ISSUE_AGENT_AUTHORIZATION_VERIFYING_KEY`, plus the
+   Source Handling verification values. Startup passes the Source Handling signing key only to the provisioner child and scrubs it before issuer exec.
 
-2. **Set the deployment variables** on the issuer Service:
-   `HUNTER_ISSUE_AGENT_REPOSITORY`, `HUNTER_ISSUE_AGENT_OWNER_LOGIN`, `HUNTER_ISSUE_AGENT_EXECUTION_BRANCH`, `HUNTER_ISSUE_AGENT_REPO_DIR`.
-   The Railway-provided `PORT` is consumed by the startup seam as `--port $PORT`. The provisioner Service needs only
-   `HUNTER_ISSUE_AGENT_REPOSITORY` and `HUNTER_ISSUE_AGENT_OWNER_LOGIN` (defaults to its own port 8081).
+2. **Set deployment variables** on that Service: `HUNTER_ISSUE_AGENT_REPOSITORY`,
+   `HUNTER_ISSUE_AGENT_OWNER_LOGIN`, `HUNTER_ISSUE_AGENT_EXECUTION_BRANCH`, `HUNTER_ISSUE_AGENT_REPO_DIR`, and
+   `HUNTER_ISSUE_AGENT_PROVISIONER_PORT=8081`. Railway `$PORT` remains the issuer port.
 
-3. **Create the volume and the two Services** — Railway provisions the `/data` Volume from `railway.toml` for the issuer; create the
-   provisioner Service from the same repository and attach the **same** volume (start command `python scripts/railway_provisioner_startup.py`).
-   On each deploy the respective startup seams idempotently bootstrap the shared volume and launch their process.
+3. **Create one volume and one Service** — mount `/data` once on the Issue Agent Service. Do not create a second provisioner Service.
+   Add a second Railway domain/target-port for the provisioner port on this same Service.
 
-4. **Configure the webhook and provisioning URLs** — copy the issuer Service URL (public + 443) and set
-   `HUNTER_ISSUE_AGENT_WEBHOOK_URL` to `<issuer-url>/issue-agent/authorize`; copy the provisioner Service URL and set
-   `HUNTER_ISSUE_AGENT_PROVISIONING_URL` to `<provisioner-url>/issue-agent/provision`. Both as GitHub repository secrets.
+4. **Configure both URLs** — set `HUNTER_ISSUE_AGENT_WEBHOOK_URL` to the issuer-domain
+   `/issue-agent/authorize` URL and `HUNTER_ISSUE_AGENT_PROVISIONING_URL` to the provisioner target-port domain
+   `/issue-agent/provision` URL. Both are GitHub repository secrets.
 
 ### Option 4: Self-hosted / Docker Compose
 

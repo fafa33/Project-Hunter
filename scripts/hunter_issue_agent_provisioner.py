@@ -66,6 +66,7 @@ from hunter.automation.issue_agent_execution import (
     SignedIssueAgentAuthorization,
     issue_agent_document_id,
 )
+from hunter.evidence_intelligence.model_adapter import response_content_credential_risk
 from hunter.evidence_intelligence.source_handling import AUTHORITY_COMPONENT_ID
 from hunter.evidence_intelligence.source_handling_persistence import SourceHandlingBlockedError
 
@@ -75,21 +76,31 @@ PROVISION_RESPONSE_SCHEMA_VERSION = "hunter-issue-agent-provision-response-v1"
 _SOURCE_HANDLING_SIGNING_KEY_ENV = bootstrap.SIGNING_KEY_ENV
 
 
-def _repository_default_options() -> tuple[provisioning._FactOptions, provisioning._PolicyOptions]:
-    """The repository-owned Fact/Policy options powering every provisioning run.
+def _classified_options(
+    signed: SignedIssueAgentAuthorization,
+) -> tuple[provisioning._FactOptions, provisioning._PolicyOptions]:
+    """Classify transient Issue content before any Source Handling publication.
 
-    Only canonical contracts from ``_REPOSITORY_DEFAULTS`` (and the CLI's empty
-    restriction/presence defaults with ``ALLOW`` dispositions) are ever used.
-    Nothing in the authorization document -- body, title, or caller selection --
-    may influence a derived record's classification.
+    Owner authorization proves who requested execution; it never grants content
+    permissions.  The Source Handling boundary therefore applies an independent,
+    deterministic restrictive classification to the transient title/body before
+    minting authority.  Exact Issue bytes are never classified as PUBLIC by
+    this path.  Credential-shaped content tightens the classification to
+    RESTRICTED/NO_PERSISTENCE; only content that passes the independent
+    credential-risk detector receives INTERNAL/FULL_CONTENT_ALLOWED so the
+    existing durable Issue intake can proceed without owner authorization being
+    treated as classification evidence.
     """
-    defaults = provisioning._REPOSITORY_DEFAULTS
+    authorization = signed.authorization
+    transient_content = f"{authorization.issue_title}\n{authorization.issue_body}"
+    credential_risk = response_content_credential_risk(transient_content)
     fact_options = provisioning._FactOptions(
-        sensitivity=defaults["sensitivity"],
+        sensitivity="RESTRICTED" if credential_risk is not None else "INTERNAL",
         operation_restrictions=(),
-        persistence_restriction=defaults["persistence_restriction"],
-        secret_presence=(),
+        persistence_restriction="NO_PERSISTENCE" if credential_risk is not None else "FULL_CONTENT_ALLOWED",
+        secret_presence=("CREDENTIAL_PRESENT",) if credential_risk is not None else (),
     )
+    defaults = provisioning._REPOSITORY_DEFAULTS
     policy_options = provisioning._PolicyOptions(
         processing_decision=defaults["processing_decision"],
         retention_decision=defaults["retention_decision"],
@@ -174,7 +185,7 @@ def provision_issue_authority(
         raise IssueAgentAuthorizationError("only the configured repository owner may authorize execution")
 
     document_id = issue_agent_document_id(authorization)
-    fact_options, policy_options = _repository_default_options()
+    fact_options, policy_options = _classified_options(signed)
     outcome = provisioning._run(
         database=str(configuration.evidence_database),
         signing_key=configuration.signing_key,
@@ -184,6 +195,7 @@ def provision_issue_authority(
         policy_options=policy_options,
         provenance_authority_identity=AUTHORITY_COMPONENT_ID,
         as_of=None,
+        restrictive_fact_detector=True,
     )
     if outcome["document_id"] != document_id:
         raise SourceHandlingBlockedError("provisioned authority records do not bind the derived document identity")

@@ -318,6 +318,12 @@ def test_invalid_content_length_is_bad_request(deployment: dict[str, Any], edge:
     assert status == 400
 
 
+def test_negative_content_length_is_bad_request(deployment: dict[str, Any], edge: Any) -> None:
+    hook = edge(deployment["configuration"])
+    status, _ = hook.post(b"", headers={"Content-Length": "-1"})
+    assert status == 400
+
+
 def test_payload_too_large_is_refused(deployment: dict[str, Any], edge: Any) -> None:
     hook = edge(deployment["configuration"])
     connection = http.client.HTTPConnection("127.0.0.1", hook.port, timeout=15)
@@ -378,7 +384,7 @@ def test_fresh_issue_provisions_and_rerun_is_an_idempotent_noop(deployment: dict
     document = _authorization_document().encode("utf-8")
 
     status, body = hook.post(document)
-    assert status == 200
+    assert status == 200, body
     payload = json.loads(body)
     assert payload["authorization_id"]
     assert payload["document_id"] == issue_agent_document_id(
@@ -398,15 +404,24 @@ def test_fresh_issue_provisions_and_rerun_is_an_idempotent_noop(deployment: dict
     )
 
 
-def test_provisioning_binds_only_repository_defaults() -> None:
-    """Issue body text can change the document identity, never the classification options."""
-    fact_options, policy_options = provisioner._repository_default_options()
-    assert fact_options.sensitivity == "PUBLIC"
+def test_provisioning_classifies_transient_issue_restrictively() -> None:
+    signed = SignedIssueAgentAuthorization.from_json(_authorization_document())
+    fact_options, policy_options = provisioner._classified_options(signed)
+    assert fact_options.sensitivity == "INTERNAL"
     assert fact_options.persistence_restriction == "FULL_CONTENT_ALLOWED"
     assert fact_options.operation_restrictions == ()
     assert fact_options.secret_presence == ()
     assert policy_options.processing_decision == "ALLOW"
-    assert policy_options.delete_or_expire_disposition == "ALLOW"
+
+
+def test_credential_shaped_issue_never_receives_permissive_authority() -> None:
+    signed = SignedIssueAgentAuthorization.from_json(
+        _authorization_document(body="credential accidentally pasted: ghp_1234567890abcdef")
+    )
+    fact_options, _policy_options = provisioner._classified_options(signed)
+    assert fact_options.sensitivity == "RESTRICTED"
+    assert fact_options.persistence_restriction == "NO_PERSISTENCE"
+    assert fact_options.secret_presence == ("CREDENTIAL_PRESENT",)
 
 
 def test_mismatched_existing_authority_fails_closed_without_mutation(deployment: dict[str, Any], edge: Any) -> None:
@@ -426,7 +441,7 @@ def test_mismatched_existing_authority_fails_closed_without_mutation(deployment:
         persistence_restriction="FULL_CONTENT_ALLOWED",
         secret_presence=(),
     )
-    _, policy_options = provisioner._repository_default_options()
+    _, policy_options = provisioner._classified_options(SignedIssueAgentAuthorization.from_json(document))
     provisioning._run(
         database=str(database),
         signing_key=signing_key,
@@ -440,7 +455,7 @@ def test_mismatched_existing_authority_fails_closed_without_mutation(deployment:
 
     status, body = hook.post(document.encode("utf-8"))
     assert status == 422
-    assert "refusing to replace" in json.loads(body)["error"]
+    assert "already heads different content" in json.loads(body)["error"]
 
     rerun = provisioning._run(
         database=str(database),

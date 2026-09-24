@@ -23,11 +23,13 @@ Sequence
     idempotency check passes through without mutation; on a tampered or
     mismatched volume the bootstrap fails closed before any issuer state is
     composed.
-4.  Scrub ``HUNTER_SOURCE_HANDLING_SIGNING_KEY`` from the process environment
-    so the long-running steady-state issuer never retains bootstrap-only
-    signing material.
-5.  ``exec`` the canonical issuer with unchanged arguments; the current
-    process is replaced so no Python wrapper lingers.
+4.  Start the trusted provisioner child on its dedicated target port while the
+    signing key is still present. The child and issuer share this service's one
+    mounted evidence volume.
+5.  Scrub ``HUNTER_SOURCE_HANDLING_SIGNING_KEY`` from the parent environment so
+    the long-running issuer never receives minting material.
+6.  ``exec`` the canonical issuer with unchanged arguments; the current process
+    is replaced so no Python wrapper lingers.
 
 Design constraints
 ------------------
@@ -51,6 +53,7 @@ from __future__ import annotations
 import importlib
 import logging
 import os
+import subprocess
 import sys
 from pathlib import Path
 
@@ -104,6 +107,28 @@ def _scrub_signing_key() -> None:
     scrub_signing_key()
 
 
+def _start_provisioner() -> subprocess.Popen[bytes]:
+    """Start the trusted provisioning edge inside this volume-owning service.
+
+    The child is forked before the parent scrubs the Source Handling signing key,
+    so only the provisioner retains minting material.  Both edges therefore see
+    the same service-scoped /data volume without pretending Railway can attach
+    one volume to two services.
+    """
+    host = "0.0.0.0"
+    port = os.environ.get("HUNTER_ISSUE_AGENT_PROVISIONER_PORT", "8081")
+    argv = [
+        sys.executable,
+        str(_SCRIPTS_DIR / "hunter_issue_agent_provisioner.py"),
+        "--host",
+        host,
+        "--port",
+        port,
+    ]
+    logger.info("launching trusted provisioner on port %s", port)
+    return subprocess.Popen(argv, env=os.environ.copy())
+
+
 def _exec_issuer() -> None:
     """Replace the current process with the canonical issuer.
 
@@ -151,8 +176,13 @@ def main() -> int:
         outcome.get("genesis_record_id"),
     )
 
+    provisioner = _start_provisioner()
+    if provisioner.poll() is not None:
+        logger.error("trusted provisioner exited during startup")
+        return 1
+
     _scrub_signing_key()
-    logger.info("signing key scrubbed from environment")
+    logger.info("signing key scrubbed from issuer environment")
 
     _exec_issuer()
     return 0
