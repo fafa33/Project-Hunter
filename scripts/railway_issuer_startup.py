@@ -83,7 +83,7 @@ _PROVENANCE_RESOLVER = "hunter.evidence_intelligence.source_handling_provenance.
 _REPOSITORY_ENV = "HUNTER_ISSUE_AGENT_REPOSITORY"
 _REPOSITORY_CHECKOUT_ENV = "HUNTER_ISSUE_AGENT_REPO_DIR"
 _EXECUTION_BRANCH_ENV = "HUNTER_ISSUE_AGENT_EXECUTION_BRANCH"
-_DISPOSABLE_CHECKOUT_ROOT = Path("/tmp/hunter-runtime-checkouts")
+_DISPOSABLE_CHECKOUT_ROOT = Path("/app/.hunter-runtime-checkouts")
 
 
 def _canonical_github_remote(repository: str) -> str:
