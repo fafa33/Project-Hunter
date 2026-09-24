@@ -1007,7 +1007,7 @@
         "rationale": "Railway volumes are not mounted during preDeploy commands, so any one-off bootstrap job running before the Service start cannot access /data.  The repository-owned start command is the only place a runtime bootstrap can safely execute, and it is where the signing-key scrub and issuer exec must be sequenced correctly."
       },
       "prevention": {
-        "mechanism": "A single repository-owned startup seam (railway_issuer_startup.py) is pinned in railway.toml as the start command.  It verifies the evidence data directory is the mounted persistent Railway volume (a directory that merely exists is not accepted as proof, so it never bootstraps into ephemeral container storage), then idempotently invokes the canonical bootstrap through its shared public contract (bootstrap_source_handling_authority.bootstrap_authority, also used by the operator CLI) before exec'ing the canonical issuer, scrubs HUNTER_SOURCE_HANDLING_SIGNING_KEY from the process environment after bootstrap and before exec, and fails closed on any error.  No pre-deploy command, no parallel bootstrap, and no dashboard-only configuration bypasses this seam.  Regression coverage exercises fresh-volume bootstrap, mounted-volume verification, idempotency, tamper/mismatch fail-closed, signing-key lifecycle isolation, ordering invariants, and the shared public bootstrap contract.",
+        "mechanism": "A single repository-owned startup seam (railway_issuer_startup.py) is pinned in railway.toml as the start command.  It verifies the evidence data directory is the mounted persistent Railway volume (a directory that merely exists is not accepted as proof, so it never bootstraps into ephemeral container storage), then idempotently invokes the canonical bootstrap through its shared public contract (bootstrap_source_handling_authority.bootstrap_authority, also used by the operator CLI) before launching any edge, starts the trusted provisioner on loopback with the key, scrubs HUNTER_SOURCE_HANDLING_SIGNING_KEY from the process environment before launching the loopback issuer and the secret-free public ingress that alone owns Railway's single public $PORT and routes exactly /issue-agent/provision and /issue-agent/authorize to their distinct internal ports, supervises all three, and fails closed on any error.  No pre-deploy command, no parallel bootstrap, and no dashboard-only configuration bypasses this seam.  Regression coverage exercises fresh-volume bootstrap, mounted-volume verification, idempotency, tamper/mismatch fail-closed, signing-key lifecycle isolation, ordering invariants, and the shared public bootstrap contract.",
         "boundary": "review",
         "guard_reference": "scripts/railway_issuer_startup.py::main"
       },
@@ -1029,11 +1029,15 @@
         "tests/test_railway_issuer_startup.py::test_bootstrap_failure_prevents_issuer_launch",
         "tests/test_railway_issuer_startup.py::test_startup_uses_canonical_provenance_resolver",
         "tests/test_railway_issuer_startup.py::test_startup_issuer_command_matches_canonical",
-        "tests/test_railway_issuer_startup.py::test_startup_passes_port_from_environment"
+        "tests/test_railway_issuer_startup.py::test_startup_passes_port_from_environment",
+        "tests/test_railway_issuer_startup.py::test_railway_public_port_is_owned_by_ingress_routing_both_canonical_edges",
+        "tests/test_railway_issuer_startup.py::test_only_the_provisioner_receives_the_signing_key",
+        "tests/test_issue_agent_provisioner.py::test_railway_single_public_port_reaches_both_isolated_authorities"
       ],
       "lifecycle": "regression-tested",
       "sources": [
-        "Issue #442 Railway issuer runtime bootstrap volume-aware (2026-09-09)"
+        "Issue #442 Railway issuer runtime bootstrap volume-aware (2026-09-09)",
+        "Production 2026-09-24: with the issuer bound to Railway's only public $PORT, POST /issue-agent/provision answered 404; unit tests had passed because no test exercised the single-public-port topology"
       ]
     },
     {

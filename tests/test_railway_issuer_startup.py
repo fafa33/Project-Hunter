@@ -68,14 +68,21 @@ def _bootstrap(database: Path, private_key: bytes) -> None:
 
 
 class _ExecCapture:
-    """Captures ``os.execvpe`` calls instead of replacing the process."""
+    """Captures governed-topology child launches instead of starting processes.
+
+    ``calls`` holds only the issuer launch as ``(program, argv, env)``;
+    ``launches`` holds every child as ``(role, argv, env)`` in launch order.
+    """
 
     def __init__(self) -> None:
         self.calls: list[tuple[str, list[str], dict[str, str]]] = []
+        self.launches: list[tuple[str, list[str], dict[str, str]]] = []
 
-    def __call__(self, program: str, argv: list[str], env: dict[str, str]) -> None:
-        self.calls.append((program, list(argv), dict(env)))
-        raise SystemExit(0)
+    def __call__(self, role: str, argv: list[str], env: dict[str, str]) -> Mock:
+        self.launches.append((role, list(argv), dict(env)))
+        if role == "issuer":
+            self.calls.append((argv[0], list(argv), dict(env)))
+        return Mock(poll=Mock(return_value=None))
 
 
 @pytest.fixture(autouse=True)
@@ -92,7 +99,7 @@ def _run_startup(
     *,
     extra_env: dict[str, str] | None = None,
 ) -> tuple[int, list[tuple[str, list[str], dict[str, str]]]]:
-    """Run the startup seam script in-process, capturing execvpe calls."""
+    """Run the startup seam script in-process, capturing child launches."""
     import railway_issuer_startup as startup
 
     env = {
@@ -105,8 +112,9 @@ def _run_startup(
     captured = _ExecCapture()
     with (
         patch.dict(os.environ, env, clear=True),
-        patch.object(startup.os, "execvpe", side_effect=captured),
-        patch.object(startup, "_start_provisioner", return_value=Mock(poll=Mock(return_value=None))),
+        patch.object(startup, "_spawn", side_effect=captured),
+        patch.object(startup, "_install_stop_signals"),
+        patch.object(startup, "supervise", return_value=0),
         patch.object(startup.os.path, "ismount", return_value=True),
     ):
         try:
@@ -301,7 +309,9 @@ def test_evidence_directory_without_a_mounted_volume_fails_closed(tmp_path: Path
     with (
         patch.dict(os.environ, env, clear=True),
         patch.object(startup.os.path, "ismount", return_value=False),
-        patch.object(startup.os, "execvpe", side_effect=captured),
+        patch.object(startup, "_spawn", side_effect=captured),
+        patch.object(startup, "_install_stop_signals"),
+        patch.object(startup, "supervise", return_value=0),
         patch.object(startup, "_bootstrap", side_effect=_tracking_bootstrap),
     ):
         rc = startup.main()
@@ -336,19 +346,273 @@ def test_tampered_authority_preserved_after_mismatch_rejection(tmp_path: Path) -
 # --- Signing-key lifecycle -------------------------------------------------
 
 
-def test_provisioner_child_inherits_key_and_dedicated_port(monkeypatch: pytest.MonkeyPatch) -> None:
+def _launches_by_role(
+    launches: list[tuple[str, list[str], dict[str, str]]],
+) -> dict[str, tuple[list[str], dict[str, str]]]:
+    roles = [role for role, _, _ in launches]
+    assert roles == ["provisioner", "issuer", "ingress"]
+    return {role: (argv, env) for role, argv, env in launches}
+
+
+def _flag(argv: list[str], flag: str) -> str:
+    return argv[argv.index(flag) + 1]
+
+
+def _run_topology(
+    tmp_path: Path, *, extra_env: dict[str, str] | None = None
+) -> tuple[int, dict[str, tuple[list[str], dict[str, str]]], str]:
     import railway_issuer_startup as startup
 
-    monkeypatch.setenv(_SIGNING_KEY_ENV, "ab" * 32)
-    monkeypatch.setenv("HUNTER_ISSUE_AGENT_PROVISIONER_PORT", "8181")
-    child = Mock()
-    with patch.object(startup.subprocess, "Popen", return_value=child) as popen:
-        assert startup._start_provisioner() is child
-    argv = popen.call_args.args[0]
-    env = popen.call_args.kwargs["env"]
+    database = str(tmp_path / "evidence.sqlite")
+    key_hex = _signing_key_hex(_private_key_bytes())
+    env = {_EVIDENCE_DB_ENV: database, _SIGNING_KEY_ENV: key_hex, "PATH": "/usr/bin", "OPERATOR_TOKEN": "t0k3n"}
+    env.update(extra_env or {})
+    captured = _ExecCapture()
+    with (
+        patch.dict(os.environ, env, clear=True),
+        patch.object(startup, "_spawn", side_effect=captured),
+        patch.object(startup, "_install_stop_signals"),
+        patch.object(startup, "supervise", return_value=0),
+        patch.object(startup.os.path, "ismount", return_value=True),
+    ):
+        rc = startup.main()
+    return rc, _launches_by_role(captured.launches), key_hex
+
+
+def test_provisioner_child_inherits_key_and_dedicated_port(tmp_path: Path) -> None:
+    rc, launches, key_hex = _run_topology(tmp_path, extra_env={"HUNTER_ISSUE_AGENT_PROVISIONER_PORT": "8181"})
+
+    assert rc == 0
+    argv, env = launches["provisioner"]
     assert "hunter_issue_agent_provisioner.py" in " ".join(argv)
-    assert argv[argv.index("--port") + 1] == "8181"
-    assert env[_SIGNING_KEY_ENV] == "ab" * 32
+    assert _flag(argv, "--port") == "8181"
+    assert env[_SIGNING_KEY_ENV] == key_hex
+
+
+# --- Single public ingress topology (Railway 404 regression) ---------------
+
+
+def test_railway_public_port_is_owned_by_ingress_routing_both_canonical_edges(tmp_path: Path) -> None:
+    """Regression: production exposed only $PORT and it was bound by the issuer.
+
+    POST /issue-agent/provision therefore reached the issuer and was answered
+    404.  The public port must be owned by the ingress, whose fixed upstreams
+    are exactly the internal ports the provisioner and issuer listen on.
+    """
+    rc, launches, _ = _run_topology(tmp_path, extra_env={"PORT": "9999"})
+
+    assert rc == 0
+    ingress_argv, _ = launches["ingress"]
+    provisioner_argv, _ = launches["provisioner"]
+    issuer_argv, _ = launches["issuer"]
+    assert "hunter_issue_agent_ingress.py" in " ".join(ingress_argv)
+    assert _flag(ingress_argv, "--port") == "9999"
+    assert _flag(ingress_argv, "--host") == "0.0.0.0"
+    assert _flag(ingress_argv, "--provisioner-port") == _flag(provisioner_argv, "--port")
+    assert _flag(ingress_argv, "--issuer-port") == _flag(issuer_argv, "--port")
+    assert _flag(issuer_argv, "--port") != "9999"
+    assert _flag(provisioner_argv, "--port") != "9999"
+
+
+def test_internal_edges_bind_loopback_only(tmp_path: Path) -> None:
+    rc, launches, _ = _run_topology(tmp_path)
+
+    assert rc == 0
+    assert _flag(launches["provisioner"][0], "--host") == "127.0.0.1"
+    assert _flag(launches["issuer"][0], "--host") == "127.0.0.1"
+    public = [role for role, (argv, _) in launches.items() if _flag(argv, "--host") != "127.0.0.1"]
+    assert public == ["ingress"]
+
+
+def test_only_the_provisioner_receives_the_signing_key(tmp_path: Path) -> None:
+    rc, launches, key_hex = _run_topology(tmp_path)
+
+    assert rc == 0
+    assert launches["provisioner"][1][_SIGNING_KEY_ENV] == key_hex
+    for role in ("issuer", "ingress"):
+        env = launches[role][1]
+        assert _SIGNING_KEY_ENV not in env, role
+        assert all(key_hex not in value for value in env.values()), role
+
+
+def test_public_ingress_environment_is_allowlisted_and_secret_free(tmp_path: Path) -> None:
+    import railway_issuer_startup as startup
+
+    rc, launches, _ = _run_topology(tmp_path)
+
+    assert rc == 0
+    env = launches["ingress"][1]
+    assert set(env) <= set(startup.INGRESS_ENVIRONMENT_ALLOWLIST)
+    assert "OPERATOR_TOKEN" not in env
+    assert env["PATH"] == "/usr/bin"
+    # The issuer still receives its ordinary operational configuration.
+    assert launches["issuer"][1]["OPERATOR_TOKEN"] == "t0k3n"
+
+
+def test_parent_environment_is_scrubbed_before_issuer_and_ingress_launch(tmp_path: Path) -> None:
+    import railway_issuer_startup as startup
+
+    database = str(tmp_path / "evidence.sqlite")
+    parent_has_key: dict[str, bool] = {}
+
+    def _spawn(role: str, argv: list[str], env: dict[str, str]) -> Mock:
+        parent_has_key[role] = _SIGNING_KEY_ENV in os.environ
+        return Mock(poll=Mock(return_value=None))
+
+    env = {_EVIDENCE_DB_ENV: database, _SIGNING_KEY_ENV: _signing_key_hex(_private_key_bytes())}
+    with (
+        patch.dict(os.environ, env, clear=True),
+        patch.object(startup, "_spawn", side_effect=_spawn),
+        patch.object(startup, "_install_stop_signals"),
+        patch.object(startup, "supervise", return_value=0),
+        patch.object(startup.os.path, "ismount", return_value=True),
+    ):
+        assert startup.main() == 0
+        assert _SIGNING_KEY_ENV not in os.environ
+
+    assert parent_has_key == {"provisioner": True, "issuer": False, "ingress": False}
+
+
+@pytest.mark.parametrize(
+    "ports",
+    [
+        {"PORT": "8081"},
+        {"PORT": "8082"},
+        {"HUNTER_ISSUE_AGENT_PROVISIONER_PORT": "8082"},
+        {"PORT": "7000", "HUNTER_ISSUE_AGENT_ISSUER_PORT": "7000"},
+        {"PORT": "0"},
+        {"PORT": "70000"},
+        {"PORT": "80a"},
+        {"HUNTER_ISSUE_AGENT_ISSUER_PORT": "-1"},
+        {"PORT": "\u0668\u0660\u0668\u0660"},
+        {"PORT": ""},
+    ],
+)
+def test_port_collision_or_invalid_port_fails_closed_before_any_launch(tmp_path: Path, ports: dict[str, str]) -> None:
+    import railway_issuer_startup as startup
+
+    env = {
+        _EVIDENCE_DB_ENV: str(tmp_path / "evidence.sqlite"),
+        _SIGNING_KEY_ENV: _signing_key_hex(_private_key_bytes()),
+    }
+    env.update(ports)
+    captured = _ExecCapture()
+    with (
+        patch.dict(os.environ, env, clear=True),
+        patch.object(startup, "_spawn", side_effect=captured),
+        patch.object(startup, "_install_stop_signals"),
+        patch.object(startup, "supervise", return_value=0),
+        patch.object(startup.os.path, "ismount", return_value=True),
+    ):
+        assert startup.main() == 1
+    assert captured.launches == []
+
+
+def test_default_port_plan_is_distinct() -> None:
+    import railway_issuer_startup as startup
+
+    ports = startup.resolve_runtime_ports({})
+    assert (ports.public, ports.provisioner, ports.issuer) == (8080, 8081, 8082)
+
+
+def test_child_launch_failure_stops_started_children_and_fails_closed(tmp_path: Path) -> None:
+    import railway_issuer_startup as startup
+
+    provisioner_child = Mock(poll=Mock(return_value=None))
+
+    def _spawn(role: str, argv: list[str], env: dict[str, str]) -> Mock:
+        if role == "issuer":
+            raise OSError("exec failed")
+        return provisioner_child
+
+    env = {
+        _EVIDENCE_DB_ENV: str(tmp_path / "evidence.sqlite"),
+        _SIGNING_KEY_ENV: _signing_key_hex(_private_key_bytes()),
+    }
+    with (
+        patch.dict(os.environ, env, clear=True),
+        patch.object(startup, "_spawn", side_effect=_spawn),
+        patch.object(startup, "_install_stop_signals"),
+        patch.object(startup, "supervise") as supervise,
+        patch.object(startup.os.path, "ismount", return_value=True),
+    ):
+        assert startup.main() == 1
+        assert _SIGNING_KEY_ENV not in os.environ
+    provisioner_child.terminate.assert_called_once()
+    supervise.assert_not_called()
+
+
+def test_child_exiting_during_startup_fails_closed(tmp_path: Path) -> None:
+    import railway_issuer_startup as startup
+
+    children = {
+        "provisioner": Mock(poll=Mock(return_value=None)),
+        "issuer": Mock(poll=Mock(return_value=None)),
+        "ingress": Mock(poll=Mock(return_value=2)),
+    }
+    env = {
+        _EVIDENCE_DB_ENV: str(tmp_path / "evidence.sqlite"),
+        _SIGNING_KEY_ENV: _signing_key_hex(_private_key_bytes()),
+    }
+    with (
+        patch.dict(os.environ, env, clear=True),
+        patch.object(startup, "_spawn", side_effect=lambda role, argv, env: children[role]),
+        patch.object(startup, "_install_stop_signals"),
+        patch.object(startup, "supervise") as supervise,
+        patch.object(startup.os.path, "ismount", return_value=True),
+    ):
+        assert startup.main() == 1
+    children["provisioner"].terminate.assert_called_once()
+    children["issuer"].terminate.assert_called_once()
+    supervise.assert_not_called()
+
+
+class _FakeChild:
+    def __init__(self, name: str, order: list[str], *, exit_code: int | None = None) -> None:
+        self.name = name
+        self.order = order
+        self.exit_code = exit_code
+
+    def poll(self) -> int | None:
+        return self.exit_code
+
+    def terminate(self) -> None:
+        self.order.append(self.name)
+        self.exit_code = -15
+
+    def wait(self, timeout: float | None = None) -> int | None:
+        return self.exit_code
+
+    def kill(self) -> None:  # pragma: no cover - only on a stop timeout
+        self.exit_code = -9
+
+
+def test_supervisor_stops_the_topology_when_a_required_child_dies() -> None:
+    import threading
+
+    import railway_issuer_startup as startup
+
+    order: list[str] = []
+    children = [
+        ("provisioner", _FakeChild("provisioner", order, exit_code=1)),
+        ("issuer", _FakeChild("issuer", order)),
+        ("ingress", _FakeChild("ingress", order)),
+    ]
+    assert startup.supervise(children, threading.Event(), poll_interval=0.01) == 1
+    assert order == ["ingress", "issuer"]
+
+
+def test_supervisor_stop_signal_stops_ingress_first_and_exits_cleanly() -> None:
+    import threading
+
+    import railway_issuer_startup as startup
+
+    order: list[str] = []
+    children = [(name, _FakeChild(name, order)) for name in ("provisioner", "issuer", "ingress")]
+    stop = threading.Event()
+    stop.set()
+    assert startup.supervise(children, stop, poll_interval=0.01) == 0
+    assert order == ["ingress", "issuer", "provisioner"]
 
 
 def test_signing_key_scrubbed_from_issuer_environment(tmp_path: Path) -> None:
@@ -383,8 +647,9 @@ def test_signing_key_still_present_during_bootstrap(tmp_path: Path) -> None:
     captured = _ExecCapture()
     with (
         patch.dict(os.environ, env, clear=True),
-        patch.object(startup.os, "execvpe", side_effect=captured),
-        patch.object(startup, "_start_provisioner", return_value=Mock(poll=Mock(return_value=None))),
+        patch.object(startup, "_spawn", side_effect=captured),
+        patch.object(startup, "_install_stop_signals"),
+        patch.object(startup, "supervise", return_value=0),
         patch.object(startup.os.path, "ismount", return_value=True),
         patch.object(bootstrap, "_load_signing_key", side_effect=_tracking_load),
     ):
@@ -435,8 +700,9 @@ def test_issuer_launch_cannot_happen_before_successful_bootstrap(tmp_path: Path)
     captured = _ExecCapture()
     with (
         patch.dict(os.environ, env, clear=True),
-        patch.object(startup.os, "execvpe", side_effect=captured),
-        patch.object(startup, "_start_provisioner", return_value=Mock(poll=Mock(return_value=None))),
+        patch.object(startup, "_spawn", side_effect=captured),
+        patch.object(startup, "_install_stop_signals"),
+        patch.object(startup, "supervise", return_value=0),
         patch.object(startup.os.path, "ismount", return_value=True),
         patch.object(startup, "_bootstrap", side_effect=_tracking_bootstrap),
     ):
@@ -464,8 +730,9 @@ def test_bootstrap_failure_prevents_issuer_launch(tmp_path: Path) -> None:
     captured = _ExecCapture()
     with (
         patch.dict(os.environ, env, clear=True),
-        patch.object(startup.os, "execvpe", side_effect=captured),
-        patch.object(startup, "_start_provisioner", return_value=Mock(poll=Mock(return_value=None))),
+        patch.object(startup, "_spawn", side_effect=captured),
+        patch.object(startup, "_install_stop_signals"),
+        patch.object(startup, "supervise", return_value=0),
         patch.object(startup.os.path, "ismount", return_value=True),
         patch.object(startup, "_bootstrap", side_effect=_failing_bootstrap),
     ):
@@ -503,14 +770,11 @@ def test_startup_issuer_command_matches_canonical(tmp_path: Path) -> None:
 
 
 def test_startup_passes_port_from_environment(tmp_path: Path) -> None:
-    database = str(tmp_path / "evidence.sqlite")
-    key = _private_key_bytes()
-    _, calls = _run_startup(database, _signing_key_hex(key), extra_env={"PORT": "9999"})
+    rc, launches, _ = _run_topology(tmp_path, extra_env={"PORT": "9999", "HUNTER_ISSUE_AGENT_ISSUER_PORT": "9123"})
 
-    assert len(calls) == 1
-    _, argv, _ = calls[0]
-    port_idx = argv.index("--port")
-    assert argv[port_idx + 1] == "9999"
+    assert rc == 0
+    assert _flag(launches["ingress"][0], "--port") == "9999"
+    assert _flag(launches["issuer"][0], "--port") == "9123"
 
 
 # --- Shared public canonical bootstrap contract ----------------------------
@@ -549,7 +813,9 @@ def test_seam_and_cli_invoke_the_same_public_bootstrap_contract(tmp_path: Path) 
         patch.dict(os.environ, env, clear=True),
         patch.object(bootstrap, "bootstrap_authority", side_effect=_contract),
         patch.object(startup.os.path, "ismount", return_value=True),
-        patch.object(startup.os, "execvpe", side_effect=captured),
+        patch.object(startup, "_spawn", side_effect=captured),
+        patch.object(startup, "_install_stop_signals"),
+        patch.object(startup, "supervise", return_value=0),
     ):
         cli_rc = bootstrap.main(["--database", database, "--json"])
         try:
@@ -715,3 +981,12 @@ def test_prepare_repository_checkout_rejects_existing_path_outside_disposable_ro
     with pytest.raises(RuntimeError, match="must be contained beneath"):
         startup._prepare_repository_checkout()
     assert sentinel.read_text() == "keep"
+
+
+def test_railway_start_command_launches_the_ingress_owning_seam() -> None:
+    """The repository-owned Railway config must start the seam whose ingress owns $PORT."""
+    import tomllib
+
+    config = tomllib.loads((_REPO_ROOT / "railway.toml").read_text(encoding="utf-8"))
+    assert config["deploy"]["startCommand"] == "python scripts/railway_issuer_startup.py"
+    assert config["deploy"]["healthcheckPath"] == "/healthz"

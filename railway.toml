@@ -22,19 +22,19 @@
 # carry them); see docs/ISSUE_AGENT_ISSUER_DEPLOYMENT.md "Option 3: Railway".
 #
 # Issue #497: Railway volumes are service-scoped, so the provisioner is NOT a
-# second Railway service.  This one volume-owning service starts both logical
-# edges: the trusted provisioner child on HUNTER_ISSUE_AGENT_PROVISIONER_PORT
-# (default 8081), then the issuer on Railway's $PORT.  Railway must expose a
-# second domain/target-port for 8081; both ports belong to this same service and
-# therefore see the same /data/evidence.sqlite volume.
-#
-# The provisioner child is forked before the startup parent scrubs
-# HUNTER_SOURCE_HANDLING_SIGNING_KEY.  The issuer is then exec'd with that key
-# absent, so the execution path still cannot mint Source Handling authority.
-# The GitHub Actions trigger POSTs the byte-identical signed authorization first
-# to /issue-agent/provision on the provisioner target port and only dispatches
-# to /issue-agent/authorize on the issuer target port after provisioning
-# succeeds, fail-closed.
+# second Railway service, and Railway exposes ONE public domain routed to $PORT.
+# The start command therefore runs three supervised children in this one
+# volume-owning service: the trusted provisioner on 127.0.0.1:
+# HUNTER_ISSUE_AGENT_PROVISIONER_PORT (default 8081, the only child holding
+# HUNTER_SOURCE_HANDLING_SIGNING_KEY), the issuer on 127.0.0.1:
+# HUNTER_ISSUE_AGENT_ISSUER_PORT (default 8082, key scrubbed), and the public
+# ingress on 0.0.0.0:$PORT (secret-free environment).  The ingress routes only
+# POST /issue-agent/provision -> provisioner, POST /issue-agent/authorize ->
+# issuer and GET /healthz (healthy only when both internal edges serve); every
+# other path/method fails closed.  No second domain/target-port is required:
+# the GitHub Actions trigger POSTs the byte-identical signed authorization to
+# https://<public-domain>/issue-agent/provision and, only after provisioning
+# succeeds, to https://<public-domain>/issue-agent/authorize, fail-closed.
 
 [build]
 builder = "RAILPACK"

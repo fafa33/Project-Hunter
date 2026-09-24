@@ -23,7 +23,11 @@ import hashlib
 import http.client
 import json
 import os
+import socket
+import subprocess
 import threading
+import time
+import urllib.request
 from dataclasses import replace
 from datetime import UTC, datetime
 from pathlib import Path
@@ -618,3 +622,200 @@ def test_composition_without_provisioning_the_issuer_refuses(tmp_path: Path, dep
 
     assert status == 422
     assert "authority" in json.loads(body)["error"].lower()
+
+
+# --- Railway single-public-port topology (production 404 regression) -------
+
+
+def _free_loopback_ports(count: int) -> list[int]:
+    sockets = []
+    try:
+        for _ in range(count):
+            probe = socket.socket()
+            probe.bind(("127.0.0.1", 0))
+            sockets.append(probe)
+        return [int(probe.getsockname()[1]) for probe in sockets]
+    finally:
+        for probe in sockets:
+            probe.close()
+
+
+class _PublicDomainToIngress(urllib.request.HTTPSHandler):
+    """Deliver the trigger's HTTPS requests for the one public domain to the ingress.
+
+    Railway terminates TLS at its edge and forwards plain HTTP to ``$PORT``;
+    this handler stands in for that edge and nothing else, so the trigger's own
+    dispatch code (URL validation, redirect refusal, retry classification)
+    runs unchanged.
+    """
+
+    def __init__(self, public_port: int) -> None:
+        super().__init__()
+        self._public_port = public_port
+
+    def https_open(self, req: urllib.request.Request) -> Any:
+        assert req.host == "hunter.example.up.railway.app"
+        return self.do_open(
+            lambda host, timeout=None, **_: http.client.HTTPConnection("127.0.0.1", self._public_port, timeout=timeout),
+            req,
+        )
+
+
+def _wait_until(predicate: Any, *, timeout: float = 20.0) -> None:
+    deadline = time.monotonic() + timeout
+    while time.monotonic() < deadline:
+        if predicate():
+            return
+        time.sleep(0.05)
+    raise AssertionError("condition not reached before deadline")
+
+
+def _ingress_health(port: int) -> int:
+    try:
+        connection = http.client.HTTPConnection("127.0.0.1", port, timeout=5)
+        connection.request("GET", "/healthz")
+        status = connection.getresponse().status
+        connection.close()
+        return status
+    except OSError:
+        return 0
+
+
+def test_pre_ingress_topology_reproduces_the_production_404(tmp_path: Path, deployment: dict[str, Any]) -> None:
+    """Root cause, pinned: the issuer alone on the public port answers provisioning with 404."""
+    issuer_environment = _issuer_environment(
+        tmp_path, deployment["database"], _public_key_bytes(deployment["private_key"]), overrides={}
+    )
+    issuer_configuration = issuer.IssuerConfiguration.from_environment(
+        environ=issuer_environment, provenance_resolver=production_provenance_resolver
+    )
+    public = IssuerEdge(_issuer_services(issuer_configuration, fallback=RecordingFallback()))
+    try:
+        connection = http.client.HTTPConnection("127.0.0.1", public.port, timeout=15)
+        document = _authorization_document().encode("utf-8")
+        connection.request("POST", "/issue-agent/provision", body=document)
+        assert connection.getresponse().status == 404
+        connection.close()
+    finally:
+        public.close()
+
+
+def test_railway_single_public_port_reaches_both_isolated_authorities(
+    tmp_path: Path, deployment: dict[str, Any], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The real topology: public ingress process + loopback provisioner + loopback issuer.
+
+    Every bind address and port comes from the Railway startup seam's own port
+    plan and argv, the ingress runs as a separate process from the seam's argv
+    and environment builder, and the trigger's real dispatch code drives both
+    canonical URLs on the one public domain.  Provisioning must reach the
+    provisioner (not 404 at the issuer), authorization must then reach the
+    issuer, both with the identical signed document, and a re-dispatch must
+    never execute the Issue twice.
+    """
+    import railway_issuer_startup as startup
+
+    public_port, provisioner_port, issuer_port = _free_loopback_ports(3)
+    ports = startup.resolve_runtime_ports(
+        {
+            "PORT": str(public_port),
+            "HUNTER_ISSUE_AGENT_PROVISIONER_PORT": str(provisioner_port),
+            "HUNTER_ISSUE_AGENT_ISSUER_PORT": str(issuer_port),
+        }
+    )
+
+    order: list[tuple[str, str, str]] = []
+    real_provision = provisioner.provision_issue_authority
+    real_prepare = issuer.prepare_authorization
+
+    def _recording_provision(configuration: Any, signed: SignedIssueAgentAuthorization) -> Any:
+        order.append(("provision", signed.authorization.authorization_id, signed.issuer_signature))
+        return real_provision(configuration, signed)
+
+    def _recording_prepare(services: Any, signed: SignedIssueAgentAuthorization) -> Any:
+        order.append(("authorize", signed.authorization.authorization_id, signed.issuer_signature))
+        return real_prepare(services, signed)
+
+    monkeypatch.setattr(provisioner, "provision_issue_authority", _recording_provision)
+    monkeypatch.setattr(issuer, "prepare_authorization", _recording_prepare)
+
+    provisioner_args = provisioner._parser().parse_args(startup.provisioner_argv(ports)[2:])
+    issuer_args = issuer._parser().parse_args(startup.issuer_argv(ports)[2:])
+    assert (provisioner_args.host, issuer_args.host) == ("127.0.0.1", "127.0.0.1")
+
+    provisioning_edge = provisioner.ProvisionerServer(
+        provisioner_args.host, provisioner_args.port, deployment["configuration"]
+    )
+    issuer_configuration = issuer.IssuerConfiguration.from_environment(
+        environ=_issuer_environment(
+            tmp_path, deployment["database"], _public_key_bytes(deployment["private_key"]), overrides={}
+        ),
+        provenance_resolver=production_provenance_resolver,
+    )
+    fallback = RecordingFallback()
+    issuer_edge = issuer.IssuerServer(
+        issuer_args.host, issuer_args.port, _issuer_services(issuer_configuration, fallback=fallback)
+    )
+    assert provisioning_edge._server.server_address[0] == "127.0.0.1"
+    assert issuer_edge._server.server_address[0] == "127.0.0.1"
+
+    source_environment = dict(os.environ)
+    source_environment["PYTHONPATH"] = os.pathsep.join(
+        [str(Path(__file__).resolve().parents[1] / "src"), source_environment.get("PYTHONPATH", "")]
+    )
+    source_environment[bootstrap.SIGNING_KEY_ENV] = deployment["private_key"].hex()
+    ingress_environment = startup.ingress_environment(source_environment)
+    assert bootstrap.SIGNING_KEY_ENV not in ingress_environment
+    public_ingress = subprocess.Popen(startup.ingress_argv(ports), env=ingress_environment)
+    try:
+        # Health is not "ingress alive": it stays 503 until both authorities serve.
+        _wait_until(lambda: _ingress_health(ports.public) == 503)
+        provisioning_edge.start()
+        _wait_until(lambda: _ingress_health(ports.public) == 503)
+        issuer_edge.start()
+        _wait_until(lambda: _ingress_health(ports.public) == 200)
+
+        environ_path = Path(f"/proc/{public_ingress.pid}/environ")
+        if environ_path.exists():
+            names = {entry.split(b"=", 1)[0] for entry in environ_path.read_bytes().split(b"\0") if entry}
+            assert bootstrap.SIGNING_KEY_ENV.encode() not in names
+
+        # Environment proxies are disabled so the request reaches the stand-in edge.
+        opener = urllib.request.build_opener(
+            urllib.request.ProxyHandler({}), trigger._RejectRedirects, _PublicDomainToIngress(ports.public)
+        )
+        monkeypatch.setattr(trigger, "_OPENER", opener)
+        document = _authorization_document()
+        trigger._provision_and_dispatch(
+            "https://hunter.example.up.railway.app/issue-agent/provision",
+            "https://hunter.example.up.railway.app/issue-agent/authorize",
+            document,
+            timeout=30,
+        )
+
+        signed = SignedIssueAgentAuthorization.from_json(document.encode("utf-8"))
+        identity = (signed.authorization.authorization_id, signed.issuer_signature)
+        assert order == [("provision", *identity), ("authorize", *identity)]
+        _wait_until(lambda: len(fallback.documents) == 1)
+
+        # A re-dispatch of the identical document provisions idempotently and is
+        # refused by the issuer's replay ledger: the Issue never executes twice.
+        with pytest.raises(trigger.IssueAgentTriggerError, match="HTTP 409"):
+            trigger._provision_and_dispatch(
+                "https://hunter.example.up.railway.app/issue-agent/provision",
+                "https://hunter.example.up.railway.app/issue-agent/authorize",
+                document,
+                timeout=30,
+            )
+        assert [step for step, _, _ in order] == ["provision", "authorize", "provision", "authorize"]
+        time.sleep(0.5)
+        assert len(fallback.documents) == 1
+
+        # A dead internal authority makes the public health fail.
+        provisioning_edge.shutdown()
+        _wait_until(lambda: _ingress_health(ports.public) == 503)
+    finally:
+        public_ingress.terminate()
+        public_ingress.wait(timeout=30)
+        provisioning_edge.shutdown()
+        issuer_edge.shutdown()
