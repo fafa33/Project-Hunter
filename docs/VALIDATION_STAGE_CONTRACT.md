@@ -112,15 +112,19 @@ unsuccessful run, a run belonging to another head or another workflow, a
 toolchain that does not match its pin, or a receipt that does not verify.
 Refusing reuse is always safe — it costs time, not proof.
 
-Reuse is therefore opportunistic, and deliberately so. Pushing a branch and
-opening or updating a pull request happen seconds apart, so `CI` usually starts
-while the branch preflight is still running and correctly refuses to reuse a
-proof that does not exist yet. It reuses on a later `synchronize`, on a re-run,
-and whenever the hosted proof landed first. That is the right trade: the two
-hosted lanes run **concurrently**, so making `CI` wait for a proof it could then
-reuse would raise wall-clock time in order to lower it. The wall-clock win comes
-from the two *serial* local full runs that no longer happen before the push, and
-from the parallel test lane; what `CI` reuse saves is duplicated runner work.
+Reuse is exact-identity coordinated rather than opportunistic. Pushing a branch
+and opening or updating a pull request happen seconds apart, so `CI` commonly
+starts while the authoritative exact-head branch preflight is still running.
+When that exact proof is queued or in progress, the reuse resolver waits for it
+for a bounded interval instead of starting a second full repository suite for
+the same identity. A successful completion is reused. Failure, cancellation,
+missing or malformed evidence, identity mismatch, or expiry of the bounded wait
+fails closed onto the full CI lane.
+
+This coordination deliberately trades a short wait in the duplicate CI lane for
+the invariant that one unchanged candidate does not pay for two concurrent full
+validations. The authoritative preflight remains the producer; CI remains a
+consumer when identity matches and an independent validator when it does not.
 
 ## Merge-gate consolidation
 

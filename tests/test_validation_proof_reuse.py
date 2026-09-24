@@ -466,7 +466,39 @@ def test_incomplete_run_cannot_authorize_reuse(tmp_path: Path, monkeypatch: pyte
     decision = _resolve(tmp_path, [_run(status="in_progress", conclusion=None)])
 
     assert not decision.reusable
+    assert decision.pending
     assert "not completed" in decision.reason
+
+
+def test_pending_exact_head_proof_is_polled_then_reused(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    output = tmp_path / "output.txt"
+    monkeypatch.setenv("GITHUB_OUTPUT", str(output))
+    decisions = iter(
+        [
+            reuse.ReuseDecision(False, "exact-head proof has not completed", pending=True),
+            reuse.ReuseDecision(True, "exact-head proof completed"),
+        ]
+    )
+    monkeypatch.setattr(reuse, "resolve", lambda *args, **kwargs: next(decisions))
+    monkeypatch.setattr(reuse.time, "sleep", lambda seconds: None)
+
+    assert reuse.main(["--wait-seconds", "30", "--poll-seconds", "1"]) == 0
+    assert output.read_text(encoding="utf-8").strip() == "reusable=true"
+
+
+def test_pending_exact_head_proof_timeout_falls_back_to_full_lane(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    output = tmp_path / "output.txt"
+    monkeypatch.setenv("GITHUB_OUTPUT", str(output))
+    monkeypatch.setattr(
+        reuse,
+        "resolve",
+        lambda *args, **kwargs: reuse.ReuseDecision(False, "exact-head proof has not completed", pending=True),
+    )
+
+    assert reuse.main(["--wait-seconds", "0"]) == 0
+    assert output.read_text(encoding="utf-8").strip() == "reusable=false"
 
 
 def test_latest_run_for_the_head_decides_rather_than_any_green_one(
