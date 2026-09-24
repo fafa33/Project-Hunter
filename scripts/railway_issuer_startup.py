@@ -83,6 +83,7 @@ _PROVENANCE_RESOLVER = "hunter.evidence_intelligence.source_handling_provenance.
 _REPOSITORY_ENV = "HUNTER_ISSUE_AGENT_REPOSITORY"
 _REPOSITORY_CHECKOUT_ENV = "HUNTER_ISSUE_AGENT_REPO_DIR"
 _EXECUTION_BRANCH_ENV = "HUNTER_ISSUE_AGENT_EXECUTION_BRANCH"
+_DISPOSABLE_CHECKOUT_ROOT = Path("/tmp/hunter-runtime-checkouts")
 
 
 def _canonical_github_remote(repository: str) -> str:
@@ -117,13 +118,9 @@ def _prepare_repository_checkout() -> None:
         raise RuntimeError("repository checkout configuration is incomplete")
     checkout = Path(checkout_raw).resolve()
     remote = _canonical_github_remote(repository)
-    if (
-        checkout == Path("/")
-        or checkout == Path("/app")
-        or "/data" == str(checkout)
-        or str(checkout).startswith("/data/")
-    ):
-        raise RuntimeError("repository checkout must use disposable runtime storage")
+    disposable_root = _DISPOSABLE_CHECKOUT_ROOT.resolve()
+    if checkout == disposable_root or disposable_root not in checkout.parents:
+        raise RuntimeError(f"repository checkout must be contained beneath {disposable_root}")
     if checkout.exists():
         shutil.rmtree(checkout)
     checkout.parent.mkdir(parents=True, exist_ok=True)

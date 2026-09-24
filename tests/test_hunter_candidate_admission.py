@@ -196,11 +196,11 @@ def test_rejected_candidate_preserves_failure_when_draft_conversion_is_forbidden
 def test_candidate_admission_workflow_is_trusted_and_reconciles_after_preflight() -> None:
     workflow = (ROOT / ".github" / "workflows" / "hunter-candidate-admission.yml").read_text(encoding="utf-8")
 
-    assert "pull_request_target:" in workflow
+    assert "pull_request_target:" not in workflow
     assert "workflow_run:" in workflow
     assert "Hunter / Pre-PR Preflight" in workflow
     assert "completed" in workflow
-    assert "ready_for_review" in workflow
+    assert "ready_for_review" not in workflow
     assert "pull-requests: write" in workflow
     assert "ref: ${{ github.event.repository.default_branch }}" in workflow
     assert "persist-credentials: false" in workflow

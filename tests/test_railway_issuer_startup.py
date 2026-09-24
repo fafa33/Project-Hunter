@@ -643,7 +643,9 @@ def test_vendor_module_is_importable_from_railway_layout(tmp_path: Path, monkeyp
 def test_prepare_repository_checkout_clones_canonical_credential_free_remote(tmp_path: Path, monkeypatch) -> None:
     import railway_issuer_startup as startup
 
-    checkout = tmp_path / "runtime"
+    disposable_root = tmp_path / "checkouts"
+    checkout = disposable_root / "runtime"
+    monkeypatch.setattr(startup, "_DISPOSABLE_CHECKOUT_ROOT", disposable_root)
     monkeypatch.setenv("HUNTER_ISSUE_AGENT_REPOSITORY", "fafa33/Project-Hunter")
     monkeypatch.setenv("HUNTER_ISSUE_AGENT_REPO_DIR", str(checkout))
     monkeypatch.setenv("HUNTER_ISSUE_AGENT_EXECUTION_BRANCH", "issue-agent-execution")
@@ -687,9 +689,29 @@ def test_prepare_repository_checkout_rejects_credential_or_url_shaped_repository
 def test_prepare_repository_checkout_fails_closed_when_clone_fails(tmp_path: Path, monkeypatch) -> None:
     import railway_issuer_startup as startup
 
+    disposable_root = tmp_path / "checkouts"
+    checkout = disposable_root / "runtime"
+    monkeypatch.setattr(startup, "_DISPOSABLE_CHECKOUT_ROOT", disposable_root)
     monkeypatch.setenv("HUNTER_ISSUE_AGENT_REPOSITORY", "fafa33/Project-Hunter")
-    monkeypatch.setenv("HUNTER_ISSUE_AGENT_REPO_DIR", str(tmp_path / "runtime"))
+    monkeypatch.setenv("HUNTER_ISSUE_AGENT_REPO_DIR", str(checkout))
     monkeypatch.setenv("HUNTER_ISSUE_AGENT_EXECUTION_BRANCH", "issue-agent-execution")
     with patch.object(startup.subprocess, "run", return_value=Mock(returncode=128, stdout="", stderr="denied")):
         with pytest.raises(RuntimeError, match="failed to materialize"):
             startup._prepare_repository_checkout()
+
+
+def test_prepare_repository_checkout_rejects_existing_path_outside_disposable_root(tmp_path: Path, monkeypatch) -> None:
+    import railway_issuer_startup as startup
+
+    disposable_root = tmp_path / "approved"
+    protected = tmp_path / "application"
+    protected.mkdir()
+    sentinel = protected / "keep.txt"
+    sentinel.write_text("keep")
+    monkeypatch.setattr(startup, "_DISPOSABLE_CHECKOUT_ROOT", disposable_root)
+    monkeypatch.setenv("HUNTER_ISSUE_AGENT_REPOSITORY", "fafa33/Project-Hunter")
+    monkeypatch.setenv("HUNTER_ISSUE_AGENT_REPO_DIR", str(protected))
+    monkeypatch.setenv("HUNTER_ISSUE_AGENT_EXECUTION_BRANCH", "issue-agent-execution")
+    with pytest.raises(RuntimeError, match="must be contained beneath"):
+        startup._prepare_repository_checkout()
+    assert sentinel.read_text() == "keep"
