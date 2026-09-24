@@ -24,6 +24,7 @@ import hunter_issue_agent_trigger as trigger
 import pytest
 from cryptography.hazmat.primitives import serialization
 from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
+from issue_agent_wire import issue_body_with_scope
 
 from hunter.automation.agent_fallback import (
     PROVIDER_ORDER,
@@ -377,7 +378,7 @@ def _event(
             "state": state,
             "html_url": ISSUE_URL,
             "title": title,
-            "body": body,
+            "body": issue_body_with_scope(body),
             "updated_at": UPDATED_AT,
         },
     }
@@ -690,7 +691,7 @@ def test_oversized_authorization_fails_closed() -> None:
     "changes",
     [
         {"schema_version": "hunter-issue-agent-authorization-v2"},
-        {"schema_version": "hunter-issue-agent-signed-authorization-v1"},
+        {"schema_version": "hunter-issue-agent-signed-authorization-v2"},
         {"authorization_label": "documentation"},
         {"issue_number": "390"},
         {"issue_number": True},
@@ -747,7 +748,10 @@ def test_trigger_and_composition_root_share_one_schema_authority() -> None:
     assert trigger.ENVELOPE_SCHEMA_VERSION == signed.schema_version
     assert trigger.ENVELOPE_SCHEMA_VERSION == ISSUE_AGENT_SIGNED_AUTHORIZATION_SCHEMA_VERSION
     assert trigger.SIGNATURE_DOMAIN == ISSUE_AGENT_AUTHORIZATION_SIGNATURE_DOMAIN
-    assert trigger.authorization_signing_message(asdict(signed.authorization)) == signed.authorization.signed_message
+    assert (
+        trigger.authorization_signing_message(asdict(signed.authorization), asdict(signed.implementation_scope))
+        == signed.signed_message
+    )
     assert trigger.SIGNING_KEY_ENV == "HUNTER_ISSUE_AGENT_AUTHORIZATION_SIGNING_KEY"
     assert ISSUE_AGENT_VERIFYING_KEY_ENV == "HUNTER_ISSUE_AGENT_AUTHORIZATION_VERIFYING_KEY"
     assert trigger.SIGNING_KEY_ENV != ISSUE_AGENT_VERIFYING_KEY_ENV
@@ -1553,12 +1557,15 @@ def test_a_forged_authorization_still_cannot_execute_arbitrary_content(tmp_path:
 
 def _resign(payload: dict[str, Any], *, signing_key: Any) -> str:
     """Wrap an arbitrary payload mapping in an envelope signed by `signing_key`."""
-    message = trigger.authorization_signing_message(payload)
+    scope = trigger.implementation_scope_from_issue_body(payload["issue_body"], task_id=payload["authorization_id"])
+    scope_payload = asdict(scope)
+    message = trigger.authorization_signing_message(payload, scope_payload)
     return json.dumps(
         {
             "authorization": payload,
+            "implementation_scope": scope_payload,
             "issuer_signature": signing_key.sign(message).hex(),
-            "schema_version": "hunter-issue-agent-signed-authorization-v1",
+            "schema_version": "hunter-issue-agent-signed-authorization-v2",
         }
     )
 

@@ -2,7 +2,7 @@
 """Trusted issuer HTTP edge for governed Issue agent execution.
 
 This is the deployable endpoint that consumes
-``hunter-issue-agent-signed-authorization-v1`` from the GitHub trigger,
+``hunter-issue-agent-signed-authorization-v2`` from the GitHub trigger,
 verifies the authorization, invokes the production SmartPromptMachine
 composition root, persists the canonical build, issues the signed
 ``PromptAutomationEnvelopeHandoff``, and forwards it unchanged into the
@@ -277,6 +277,8 @@ def prepare_authorization(
     """Validate, claim, compile and durably record dispatch before HTTP ACK."""
     services.configuration.issuer_verifier.verify(signed)
     authorization = signed.authorization
+    if signed.implementation_scope.task_id != authorization.authorization_id:
+        raise IssueAgentAuthorizationError("implementation scope task_id must bind authorization identity")
 
     if authorization.repository != services.configuration.repository:
         raise IssueAgentAuthorizationError("authorization names a different repository than this deployment")
@@ -307,7 +309,7 @@ def prepare_authorization(
             processed_at=services.configuration.clock.now(),
         )
 
-        compiled = services.ingress.compile(request)
+        compiled = services.ingress.compile(request, implementation_scope=signed.implementation_scope)
         envelope = compiled.envelope
         envelope.verify_issuer_signature(services.configuration.prompt_verifier)
         if envelope.build_record_id != compiled.compilation.manifest.build_record_id:

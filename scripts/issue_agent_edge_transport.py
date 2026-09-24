@@ -3,7 +3,7 @@
 
 Both the trusted provisioning boundary (``scripts/hunter_issue_agent_provisioner.py``)
 and the read-only execution issuer (``scripts/hunter_issue_agent_issuer.py``)
-receive exactly one canonical ``hunter-issue-agent-signed-authorization-v1``
+receive exactly one canonical ``hunter-issue-agent-signed-authorization-v2``
 body over the same small, hardened wire contract, and the two edges must agree
 on it so a document that reaches either edge is rejected or admitted under one
 discipline:

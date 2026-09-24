@@ -12,9 +12,9 @@ Issue #486 connects existing defect-prevention knowledge to the canonical engine
 
 ## Scope model
 
-The current `engineering.implement` route is repository-wide engineering work and has no pre-execution trusted changed-file set. Therefore the first production-safe integration uses the route's governed engineering surfaces as its conservative scope and selects every DFF family whose declared applicability intersects those surfaces. It must not infer authoritative scope from Issue prose.
+The original integration used the route's governed engineering surfaces conservatively because no pre-execution trusted changed-file set existed. Issue #506 supersedes that temporary scope rule with the repository-owned `TaskScopeContract`: the owner supplies one explicit machine-readable scope block, the trusted trigger validates and signs it with the authorization transport, and SPM requires its task identity to match the execution owner. Free-form Issue prose still has no scope authority.
 
-A future narrower planner may reduce context only after it produces a separately governed, machine-verifiable implementation scope. Until that exists, conservative route scope is safer than an LLM/text heuristic.
+No LLM or provider may widen this scope. A required expansion must produce a newly owner-authorized scope contract; missing, malformed, tampered, or cross-task scope fails closed before dispatch.
 
 ## Context contract
 
