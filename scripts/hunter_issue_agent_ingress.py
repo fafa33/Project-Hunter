@@ -92,7 +92,9 @@ MAX_HEALTH_RESPONSE_BYTES: Final[int] = 4 * 1024
 #: it admits twice an edge's bound before answering 503 at the socket.
 MAX_CONCURRENT_INGRESS_WORKERS: Final[int] = 16
 
-_DECIMAL = re.compile(r"[0-9]+")
+#: A strict decimal length of at most 19 digits: enough for any bounded body,
+#: and short enough that conversion can never hit Python's int-string limit.
+_DECIMAL = re.compile(r"[0-9]{1,19}")
 
 
 @dataclass(frozen=True, slots=True)

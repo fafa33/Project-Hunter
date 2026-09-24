@@ -123,6 +123,12 @@ INGRESS_ENVIRONMENT_ALLOWLIST = ("PATH", "PYTHONPATH", "HOME", "LANG", "LC_ALL",
 _SUPERVISOR_POLL_SECONDS = 0.5
 _CHILD_STOP_TIMEOUT_SECONDS = 30.0
 
+#: Children the supervisor never kills on a deadline.  The issuer runs accepted
+#: authorizations on non-daemon workers and stays alive until each reaches a
+#: durable terminal ledger outcome; only the platform's own stop grace period
+#: may bound that drain, exactly as when the issuer was the container's process.
+_DRAIN_WITHOUT_DEADLINE = frozenset({"issuer"})
+
 
 def _canonical_github_remote(repository: str) -> str:
     """Return the credential-free GitHub URL for an owner/repository slug."""
@@ -309,11 +315,20 @@ def _spawn(role: str, argv: list[str], env: dict[str, str]) -> Any:
 
 
 def _stop_children(children: list[tuple[str, Any]]) -> None:
-    """Stop children in reverse launch order: ingress first, provisioner last."""
+    """Stop children in reverse launch order: ingress first, provisioner last.
+
+    Every child is signalled first, so the ingress stops admitting before the
+    issuer drains.  The issuer is waited on without a deadline (see
+    ``_DRAIN_WITHOUT_DEADLINE``); the ingress and provisioner hold no accepted
+    long-running work and are killed if they outlive the stop timeout.
+    """
     for _role, child in reversed(children):
         if child.poll() is None:
             child.terminate()
     for role, child in reversed(children):
+        if role in _DRAIN_WITHOUT_DEADLINE:
+            child.wait()
+            continue
         try:
             child.wait(timeout=_CHILD_STOP_TIMEOUT_SECONDS)
         except subprocess.TimeoutExpired:

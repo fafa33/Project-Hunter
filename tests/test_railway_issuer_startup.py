@@ -4,6 +4,7 @@ import hashlib
 import json
 import os
 import sqlite3
+import subprocess
 import sys
 from pathlib import Path
 from typing import Any
@@ -568,10 +569,13 @@ def test_child_exiting_during_startup_fails_closed(tmp_path: Path) -> None:
 
 
 class _FakeChild:
-    def __init__(self, name: str, order: list[str], *, exit_code: int | None = None) -> None:
+    def __init__(self, name: str, order: list[str], *, exit_code: int | None = None, stalls: bool = False) -> None:
         self.name = name
         self.order = order
         self.exit_code = exit_code
+        self.stalls = stalls
+        self.wait_timeouts: list[float | None] = []
+        self.killed = False
 
     def poll(self) -> int | None:
         return self.exit_code
@@ -581,9 +585,14 @@ class _FakeChild:
         self.exit_code = -15
 
     def wait(self, timeout: float | None = None) -> int | None:
+        self.wait_timeouts.append(timeout)
+        if timeout is not None and self.stalls:
+            raise subprocess.TimeoutExpired(self.name, timeout)
         return self.exit_code
 
-    def kill(self) -> None:  # pragma: no cover - only on a stop timeout
+    def kill(self) -> None:
+        self.killed = True
+        self.stalls = False
         self.exit_code = -9
 
 
@@ -990,3 +999,29 @@ def test_railway_start_command_launches_the_ingress_owning_seam() -> None:
     config = tomllib.loads((_REPO_ROOT / "railway.toml").read_text(encoding="utf-8"))
     assert config["deploy"]["startCommand"] == "python scripts/railway_issuer_startup.py"
     assert config["deploy"]["healthcheckPath"] == "/healthz"
+
+
+def test_supervisor_never_kills_the_issuer_during_its_execution_drain() -> None:
+    """An accepted authorization must reach a durable terminal outcome.
+
+    The issuer drains non-daemon execution workers after SIGTERM; a supervisor
+    deadline kill would strand an acknowledged authorization RUNNING.  Only the
+    ingress and provisioner, which hold no accepted work, are bounded.
+    """
+    import threading
+
+    import railway_issuer_startup as startup
+
+    order: list[str] = []
+    provisioner = _FakeChild("provisioner", order, stalls=True)
+    issuer = _FakeChild("issuer", order, stalls=True)
+    ingress = _FakeChild("ingress", order)
+    stop = threading.Event()
+    stop.set()
+
+    assert startup.supervise([("provisioner", provisioner), ("issuer", issuer), ("ingress", ingress)], stop) == 0
+
+    assert issuer.wait_timeouts == [None]
+    assert not issuer.killed
+    assert provisioner.killed
+    assert provisioner.wait_timeouts[0] == startup._CHILD_STOP_TIMEOUT_SECONDS

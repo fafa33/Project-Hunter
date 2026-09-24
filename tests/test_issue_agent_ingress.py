@@ -311,6 +311,20 @@ def test_malformed_or_negative_content_length_fails_closed(topology: Any, value:
     assert edges.upstream_hits() == 0
 
 
+@pytest.mark.parametrize("value", ["9" * 5000, "1" + "0" * 25, "0" * 20])
+def test_overlong_content_length_fails_closed_with_a_bounded_answer(topology: Any, value: str) -> None:
+    edges = topology()
+    raw = edges.raw(b"POST /issue-agent/authorize HTTP/1.1\r\nHost: x\r\nContent-Length: %s\r\n\r\n" % value.encode())
+
+    assert _status_line(raw) == 400
+    assert edges.upstream_hits() == 0
+
+
+def test_overlong_upstream_content_length_is_refused_without_conversion() -> None:
+    assert ingress._single_content_length(["9" * 5000], bound=ingress.MAX_UPSTREAM_RESPONSE_BYTES) is None
+    assert ingress._single_content_length(["12"], bound=ingress.MAX_UPSTREAM_RESPONSE_BYTES) == 12
+
+
 def test_duplicate_content_length_fails_closed(topology: Any) -> None:
     edges = topology()
     raw = edges.raw(
