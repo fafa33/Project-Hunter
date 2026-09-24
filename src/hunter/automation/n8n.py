@@ -56,6 +56,7 @@ _N8N_DESTINATION_REGISTRY = PromptAutomationDestinationRegistry((N8N_DESTINATION
 
 _DEFAULT_TIMEOUT_SECONDS = 10.0
 _MAX_ACKNOWLEDGEMENT_BYTES = 64 * 1024
+_MAX_ACKNOWLEDGEMENT_JSON_DEPTH = 64
 _MAX_RECEIPT_ID_LENGTH = 256
 _MAX_ENDPOINT_PERCENT_DECODE_ROUNDS = 8
 _RECEIPT_ID_CHARACTERS = frozenset("abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789-_.:")
@@ -74,6 +75,31 @@ def _reject_duplicate_json_keys(pairs: list[tuple[str, Any]]) -> dict[str, Any]:
             raise _DuplicateJSONKeyError(key)
         values[key] = value
     return values
+
+
+def _json_nesting_exceeds(value: bytes, maximum_depth: int) -> bool:
+    """Measure untrusted JSON nesting iteratively without recursive parsing."""
+    depth = 0
+    in_string = False
+    escaped = False
+    for byte in value:
+        if in_string:
+            if escaped:
+                escaped = False
+            elif byte == 0x5C:
+                escaped = True
+            elif byte == 0x22:
+                in_string = False
+            continue
+        if byte == 0x22:
+            in_string = True
+        elif byte in (0x5B, 0x7B):
+            depth += 1
+            if depth > maximum_depth:
+                return True
+        elif byte in (0x5D, 0x7D):
+            depth = max(0, depth - 1)
+    return False
 
 
 class _RejectRedirectHandler(urllib.request.HTTPRedirectHandler):
@@ -429,6 +455,8 @@ class N8nPromptAutomationTransport:
             )
         if content_type.split(";", 1)[0].strip().lower() != "application/json":
             raise PromptAutomationTransportError("n8n webhook acknowledgement must use application/json")
+        if _json_nesting_exceeds(raw, _MAX_ACKNOWLEDGEMENT_JSON_DEPTH):
+            raise PromptAutomationTransportError("n8n webhook acknowledgement is malformed JSON")
         try:
             decoded = json.loads(raw.decode("utf-8"), object_pairs_hook=_reject_duplicate_json_keys)
         except _DuplicateJSONKeyError:

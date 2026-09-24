@@ -46,8 +46,8 @@ Configure the following in **GitHub Repository Settings → Secrets and variable
 
 | Secret Name | Description | Example Value |
 |-------------|-------------|---------------|
-| `HUNTER_ISSUE_AGENT_WEBHOOK_URL` | HTTPS URL of the deployed issuer edge + `/issue-agent/authorize` | `https://hunter-issuer.example.com/issue-agent/authorize` |
-| `HUNTER_ISSUE_AGENT_PROVISIONING_URL` | HTTPS URL of the deployed provisioning boundary + `/issue-agent/provision` | `https://hunter-provisioner.example.com/issue-agent/provision` |
+| `HUNTER_ISSUE_AGENT_WEBHOOK_URL` | HTTPS URL of the deployed issuer edge + `/issue-agent/authorize` (on Railway: the one public service domain) | `https://hunter.example.com/issue-agent/authorize` |
+| `HUNTER_ISSUE_AGENT_PROVISIONING_URL` | HTTPS URL of the deployed provisioning boundary + `/issue-agent/provision` (on Railway: the same public service domain) | `https://hunter.example.com/issue-agent/provision` |
 | `HUNTER_ISSUE_AGENT_AUTHORIZATION_SIGNING_KEY` | Hex-encoded Ed25519 private key (32 bytes = 64 hex chars) | `a1b2c3d4...` (64 hex chars) |
 | `HUNTER_PROMPT_AUTOMATION_SIGNING_KEY` | Hex-encoded Ed25519 private key (32 bytes = 64 hex chars) | `e5f6a7b8...` (64 hex chars) |
 | `HUNTER_SOURCE_HANDLING_VERIFICATION_KEY` | Hex-encoded Ed25519 public key (32 bytes = 64 hex chars) | `12345678...` (64 hex chars) |
@@ -315,8 +315,11 @@ The startup sequence is:
 4. Invoke the existing canonical bootstrap through its shared public contract (`bootstrap_authority`), which provisions the operator root and genesis rule.
    On a fresh volume this writes the authority; on an already-bootstrapped volume the idempotency check passes through; on a tampered or
    mismatched volume the bootstrap fails closed before the issuer starts.
-5. Scrub `HUNTER_SOURCE_HANDLING_SIGNING_KEY` from the process environment.
-6. `exec` the canonical issuer with unchanged arguments (`--host 0.0.0.0 --port $PORT --provenance-resolver ...`).
+5. Resolve the port plan (`$PORT`, `HUNTER_ISSUE_AGENT_PROVISIONER_PORT`, `HUNTER_ISSUE_AGENT_ISSUER_PORT`); any collision fails closed.
+6. Start the trusted provisioner child on loopback while the key is present.
+7. Scrub `HUNTER_SOURCE_HANDLING_SIGNING_KEY` from the process environment.
+8. Start the canonical issuer on loopback (`--host 127.0.0.1 --port $HUNTER_ISSUE_AGENT_ISSUER_PORT --provenance-resolver ...`) and the
+   public ingress on `0.0.0.0:$PORT`, then supervise all three (see *Single Public Ingress Topology* below).
 
 The `railway.toml` start command is therefore:
 
@@ -325,20 +328,36 @@ The `railway.toml` start command is therefore:
 startCommand = "python scripts/railway_issuer_startup.py"
 ```
 
-The bootstrap is the **only** code path that may consume `HUNTER_SOURCE_HANDLING_SIGNING_KEY`; the long-running issuer process starts with
-that variable removed from its environment.  No pre-deploy command, no parallel bootstrap mechanism, and no dashboard-only configuration
+The bootstrap and the trusted provisioner child are the **only** code paths that may consume `HUNTER_SOURCE_HANDLING_SIGNING_KEY`; the
+long-running issuer process and the public ingress start with that variable removed from their environments.  No pre-deploy command, no parallel bootstrap mechanism, and no dashboard-only configuration
 bypasses this seam.
 
-#### Provisioner Startup Seam (Issue #497)
+#### Single Public Ingress Topology
 
 Railway persistent volumes are service-scoped, so the provisioner is **not** a
-second Railway Service. The single volume-owning Issue Agent service starts the
-trusted provisioner child on `HUNTER_ISSUE_AGENT_PROVISIONER_PORT` (default
-8081) before it scrubs the Source Handling signing key and `exec`s the issuer on
-Railway's `$PORT`. The provisioner child retains the key; the issuer environment
-does not. Both logical edges therefore use the same `/data/evidence.sqlite`
-without an impossible cross-service volume attachment. Railway exposes a second
-domain/target-port for the provisioner port.
+second Railway Service, and Railway exposes **one** public domain per service,
+routed to `$PORT`. The single volume-owning Issue Agent service therefore runs
+three supervised children of `railway_issuer_startup.py`:
+
+| Child | Bind | Signing key | Role |
+|-------|------|-------------|------|
+| `hunter_issue_agent_provisioner.py` | `127.0.0.1:$HUNTER_ISSUE_AGENT_PROVISIONER_PORT` (default 8081) | present | trusted minting boundary |
+| `hunter_issue_agent_issuer.py` | `127.0.0.1:$HUNTER_ISSUE_AGENT_ISSUER_PORT` (default 8082) | absent | read-only execution issuer |
+| `hunter_issue_agent_ingress.py` | `0.0.0.0:$PORT` | absent (allowlisted, secret-free environment) | fixed-route public ingress |
+
+The ingress serves exactly `GET /healthz`, `POST /issue-agent/provision`
+(to the loopback provisioner) and `POST /issue-agent/authorize` (to the
+loopback issuer). Every other path answers 404 and every other method 405/501;
+the body is bounded, `Transfer-Encoding` is refused, client headers are never
+forwarded, upstream calls are made once with a finite timeout and never follow
+a redirect. `/healthz` returns 200 only when both internal authorities answer
+their own health endpoint; otherwise 503. If any child exits the supervisor
+stops the rest and exits non-zero so Railway restarts the whole topology. The
+three ports must be distinct; a collision fails closed at startup.
+
+Before this topology, the issuer itself was exec'd on `$PORT` and the
+provisioner listened on a port no public route reached, so
+`POST /issue-agent/provision` on the public domain answered 404.
 
 #### Railway Setup Steps (a–f)
 
@@ -359,23 +378,27 @@ The start command will not run any bootstrap from a `preDeploy` hook or one-off 
 - Fallback runtime provider variables (`HUNTER_AGENT_*`)
 - `HUNTER_ISSUE_AGENT_EVIDENCE_DB=/data/evidence.sqlite` (already set by `railway.toml`)
 
-**b′. Expose the provisioner target port** — on the same Railway Service set
-`HUNTER_ISSUE_AGENT_PROVISIONER_PORT=8081` (or another dedicated port) and add
-a Railway domain targeting that port. Record that domain plus
-`/issue-agent/provision` as GitHub secret `HUNTER_ISSUE_AGENT_PROVISIONING_URL`.
-No second service or second volume is created.
+**b′. Point both trigger URLs at the one public domain** — no second domain or
+target port is needed. Record the service's public domain plus
+`/issue-agent/provision` as GitHub secret `HUNTER_ISSUE_AGENT_PROVISIONING_URL`
+and the same domain plus `/issue-agent/authorize` as
+`HUNTER_ISSUE_AGENT_WEBHOOK_URL`. Optionally set
+`HUNTER_ISSUE_AGENT_PROVISIONER_PORT` / `HUNTER_ISSUE_AGENT_ISSUER_PORT`; they
+are loopback-only and must differ from `$PORT` and each other. No second
+service or second volume is created.
 
 **c. Deploy the single Issue Agent Service** — `railway_issuer_startup.py`
-verifies and bootstraps the mounted volume, starts the trusted provisioner child
-while the signing key is still present, then scrubs the key from the parent and
-execs the canonical issuer. The provisioner and issuer therefore share the same
-SQLite authority store while only the provisioner process retains minting
-material.
+verifies and bootstraps the mounted volume, starts the trusted loopback
+provisioner child while the signing key is still present, scrubs the key from
+its own environment, then starts the loopback issuer and the public ingress
+without it. The provisioner and issuer therefore share the same SQLite
+authority store while only the provisioner process retains minting material.
 
 **d. Verify both logical edges** — confirm the one Service log shows bootstrap,
-provisioner launch, signing-key scrub, and issuer launch. Verify `/healthz` on
-the issuer domain and on the provisioner target-port domain; the latter returns
-`{"status":"ok","service":"hunter-issue-agent-provisioner"}`.
+provisioner launch, signing-key scrub, issuer launch, and ingress launch.
+`GET /healthz` on the public domain returns
+`{"schema_version":"hunter-issue-agent-ingress-response-v1","service":"hunter-issue-agent-ingress","status":"ok","upstreams":{"issuer":"ok","provisioner":"ok"}}`
+only when both internal edges are serving.
 
 **e. No manual per-Issue provisioning** — the operator step that previously had to run
 `provision_source_handling_issue_authority.py` for every new authorized Issue is **gone**. The boundary provisions each document
@@ -393,18 +416,19 @@ head) stops the run before the issuer is ever contacted.
 
 1. **Set secrets on the single Issue Agent Service**: `HUNTER_SOURCE_HANDLING_SIGNING_KEY`,
    `HUNTER_PROMPT_AUTOMATION_SIGNING_KEY`, and `HUNTER_ISSUE_AGENT_AUTHORIZATION_VERIFYING_KEY`, plus the
-   Source Handling verification values. Startup passes the Source Handling signing key only to the provisioner child and scrubs it before issuer exec.
+   Source Handling verification values. Startup passes the Source Handling signing key only to the provisioner child and scrubs it before
+   launching the issuer and the public ingress.
 
 2. **Set deployment variables** on that Service: `HUNTER_ISSUE_AGENT_REPOSITORY`,
    `HUNTER_ISSUE_AGENT_OWNER_LOGIN`, `HUNTER_ISSUE_AGENT_EXECUTION_BRANCH`, `HUNTER_ISSUE_AGENT_REPO_DIR`, and
-   `HUNTER_ISSUE_AGENT_PROVISIONER_PORT=8081`. Railway `$PORT` remains the issuer port.
+   optionally `HUNTER_ISSUE_AGENT_PROVISIONER_PORT` / `HUNTER_ISSUE_AGENT_ISSUER_PORT` (defaults 8081/8082, loopback-only).
+   Railway `$PORT` is owned by the public ingress.
 
 3. **Create one volume and one Service** — mount `/data` once on the Issue Agent Service. Do not create a second provisioner Service.
-   Add a second Railway domain/target-port for the provisioner port on this same Service.
+   Keep the one public Railway domain targeting `$PORT`; no second domain/target-port is needed.
 
-4. **Configure both URLs** — set `HUNTER_ISSUE_AGENT_WEBHOOK_URL` to the issuer-domain
-   `/issue-agent/authorize` URL and `HUNTER_ISSUE_AGENT_PROVISIONING_URL` to the provisioner target-port domain
-   `/issue-agent/provision` URL. Both are GitHub repository secrets.
+4. **Configure both URLs** — set `HUNTER_ISSUE_AGENT_WEBHOOK_URL` to `https://<public-domain>/issue-agent/authorize` and
+   `HUNTER_ISSUE_AGENT_PROVISIONING_URL` to `https://<public-domain>/issue-agent/provision`. Both are GitHub repository secrets.
 
 ### Option 4: Self-hosted / Docker Compose
 
