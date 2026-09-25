@@ -48,14 +48,27 @@ _PERMISSION_CONFIG = {
         "glob": "allow",
         "grep": "allow",
         "lsp": "allow",
+        "bash": "allow",
     }
 }
 _REQUIRED_PROVIDER_CAPABILITIES = frozenset({"read", "edit", "glob", "grep"})
 _PINNED_OPENCODE_VERSION = "1.18.30"
 _PROVIDER_RUNTIME_INSTRUCTION_FILE = "hunter-provider-runtime.md"
+_PROVIDER_GUARD_PLUGIN_FILE = "hunter-provider-guard.js"
 _PROVIDER_COMPATIBILITY_PROMPT = "Reply with exactly HUNTER_PROVIDER_READY and do not use tools."
 _PROVIDER_COMPATIBILITY_SENTINEL = "HUNTER_PROVIDER_READY"
 _RATE_LIMIT_EXIT_CODE = 75
+_FORBIDDEN_PROVIDER_TOOLS = ("bash", "webfetch", "websearch", "task", "skill", "question")
+_PROVIDER_GUARD_PLUGIN = """export const HunterProviderGuard = async () => ({
+  "tool.execute.before": async (input) => {
+    const forbidden = new Set(["bash", "webfetch", "websearch", "task", "skill", "question"]);
+    if (forbidden.has(input.tool)) {
+      throw new Error("Hunter governed runtime forbids tool: " + input.tool);
+    }
+  },
+});
+"""
+
 _PROVIDER_RUNTIME_INSTRUCTIONS = (
     "Operate only with the provider tools enabled by this governed runtime: "
     "read, edit, glob, grep, and lsp. "
@@ -167,8 +180,8 @@ def _validate_provider_capabilities() -> dict[str, str]:
         raise SandboxShimError(f"provider capability mismatch: missing {', '.join(missing)}")
     if normalized.get("external_directory") != "deny":
         raise SandboxShimError("provider capability contract must deny external_directory")
-    if normalized.get("bash", "deny") != "deny":
-        raise SandboxShimError("provider capability contract must deny bash")
+    if normalized.get("bash") != "allow":
+        raise SandboxShimError("provider compatibility contract must expose bash for the OpenCode free-tier classifier")
     return normalized
 
 
@@ -253,6 +266,10 @@ def _restricted_environment(credential_home: Path) -> dict[str, str]:
     opencode_config.mkdir(parents=True, exist_ok=True)
     instruction_path = (opencode_config / _PROVIDER_RUNTIME_INSTRUCTION_FILE).resolve()
     instruction_path.write_text(f"{_PROVIDER_RUNTIME_INSTRUCTIONS}\n", encoding="utf-8")
+    plugin_dir = opencode_config / "plugins"
+    plugin_dir.mkdir(parents=True, exist_ok=True)
+    plugin_path = (plugin_dir / _PROVIDER_GUARD_PLUGIN_FILE).resolve()
+    plugin_path.write_text(_PROVIDER_GUARD_PLUGIN, encoding="utf-8")
     inline_config = {
         "permission": permission,
         "instructions": [str(instruction_path)],
