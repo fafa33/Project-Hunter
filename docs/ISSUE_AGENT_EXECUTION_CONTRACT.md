@@ -221,11 +221,10 @@ work does not rediscover the same boundary failures:
 - Railway remains a candidate authority/ledger/ingress boundary. Moving execution to
   GitHub-hosted ephemeral jobs is a design direction under investigation, not yet an
   implemented or accepted runtime claim.
-- No Issue carrying the live execution label MUST be triggered while the current Railway
-  execution path remains admission-capable and the publication/validation defects below
-  are unguarded. This prohibition is path-wide, not specific to Issue #520. PR-A must
-  make it mechanical by returning 503 before authorization claim/dispatch for the entire
-  provider pool. Old consumed/failed authorizations are never replayed. Issue #520 is
+- Railway execution admission is mechanically retired: the issuer returns HTTP 503 before
+  authorization claim/dispatch for the entire provider pool. No Issue carrying the live
+  execution label is permitted until the replacement executor is rehearsed and separately
+  authorized. This prohibition is path-wide, not specific to Issue #520. Old consumed/failed authorizations are never replayed. Issue #520 is
   only the canary to resume after the replacement path has rehearsal evidence.
 
 ### Proposed replacement-executor invariants (UNIMPLEMENTED)

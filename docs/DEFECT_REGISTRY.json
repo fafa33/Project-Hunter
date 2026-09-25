@@ -266,10 +266,10 @@
     {
       "id": "MA-006",
       "class": "retry-authorized-by-caller-intent-rather-than-by-predecessor-outcome-evidence",
-      "source": "Issue #313 ADR 0034 Phase B hostile self-review: prepare_attempt accepted attempt_ordinal > 1 with only a predecessor attempt identity, so a caller could prepare and dispatch a second attempt after an uncertain first attempt whose request the provider may already have accepted. Recurrence on PR #314 independent review (Codex P1): the first guard derived its decision from the caller-supplied predecessor ModelAttemptOutcomeRecord, so a fabricated record naming the predecessor and claiming RETRY_REQUIRES_NEW_ATTEMPT defeated the gate entirely while the repository held an uncertain outcome or none at all — the prior hardening was insufficient because it checked the shape of the evidence instead of resolving the authority",
+      "source": "Issue #313 ADR 0034 Phase B hostile self-review: prepare_attempt accepted attempt_ordinal > 1 with only a predecessor attempt identity, so a caller could prepare and dispatch a second attempt after an uncertain first attempt whose request the provider may already have accepted. Recurrence on PR #314 independent review (Codex P1): the first guard derived its decision from the caller-supplied predecessor ModelAttemptOutcomeRecord, so a fabricated record naming the predecessor and claiming RETRY_REQUIRES_NEW_ATTEMPT defeated the gate entirely while the repository held an uncertain outcome or none at all \u2014 the prior hardening was insufficient because it checked the shape of the evidence instead of resolving the authority",
       "classification": "systemic",
       "guard_boundary": "ModelAdapterService.prepare_attempt, before any authority resolution or durable write",
-      "guard": "a retry requires the predecessor attempt's own DURABLE outcome, resolved from persistence via authoritative_outcome() strict-known at the new attempt's cutoff and following the supersession chain, checked before Source Handling is resolved and before anything durable exists. A caller-supplied record is evidence only: it is compared against the durable one and a mismatch is rejected, never used in its place — the same treatment prepare_attempt already gives a caller-supplied Source Handling decision and the ADR 0033 persistence invariant requires generally. Retry is admitted only when the durable outcome's retry_authorization is RETRY_REQUIRES_NEW_ATTEMPT, which derive_retry_authorization() grants only where the transport proved non-delivery or the provider established it rejected the request instead of executing it; an attempt with no durable outcome is uncertain and blocks retry. An authorized retry still gets a new attempt, cutoff, Source Handling resolution, handoff, and idempotency key, and terminal_outcome_exists() prevents re-dispatching an attempt that already has an outcome",
+      "guard": "a retry requires the predecessor attempt's own DURABLE outcome, resolved from persistence via authoritative_outcome() strict-known at the new attempt's cutoff and following the supersession chain, checked before Source Handling is resolved and before anything durable exists. A caller-supplied record is evidence only: it is compared against the durable one and a mismatch is rejected, never used in its place \u2014 the same treatment prepare_attempt already gives a caller-supplied Source Handling decision and the ADR 0033 persistence invariant requires generally. Retry is admitted only when the durable outcome's retry_authorization is RETRY_REQUIRES_NEW_ATTEMPT, which derive_retry_authorization() grants only where the transport proved non-delivery or the provider established it rejected the request instead of executing it; an attempt with no durable outcome is uncertain and blocks retry. An authorized retry still gets a new attempt, cutoff, Source Handling resolution, handoff, and idempotency key, and terminal_outcome_exists() prevents re-dispatching an attempt that already has an outcome",
       "test": "tests/test_model_adapter_phase_b.py::test_a_fabricated_predecessor_outcome_cannot_authorize_a_retry",
       "status": "guarded"
     },
@@ -299,7 +299,7 @@
       "source": "PR #314 independent review (Codex P2): strict_known_response_artifact ordered ascending with LIMIT 1, so once append_outcome admitted a superseding correction carrying revised response evidence, every later strict-known read returned the original artifact permanently and the correction was invisible",
       "classification": "systemic",
       "guard_boundary": "Model Adapter persistence strict-known historical reads",
-      "guard": "authoritative_outcome() resolves the head of the supersession chain — the outcome that no other outcome KNOWN AT THE SAME CUTOFF supersedes — and strict_known_response_artifact() returns the artifact attached to that governing outcome, falling back to the most recent earlier artifact when the correction records no new response evidence. Both remain strict-known, so a correction recorded after the cutoff does not retroactively govern an earlier read and the superseded original is preserved rather than overwritten. The general rule: wherever a record family admits append-only corrections, a historical read must follow the supersession chain, because neither the earliest row nor a blind latest row is the authoritative one",
+      "guard": "authoritative_outcome() resolves the head of the supersession chain \u2014 the outcome that no other outcome KNOWN AT THE SAME CUTOFF supersedes \u2014 and strict_known_response_artifact() returns the artifact attached to that governing outcome, falling back to the most recent earlier artifact when the correction records no new response evidence. Both remain strict-known, so a correction recorded after the cutoff does not retroactively govern an earlier read and the superseded original is preserved rather than overwritten. The general rule: wherever a record family admits append-only corrections, a historical read must follow the supersession chain, because neither the earliest row nor a blind latest row is the authoritative one",
       "test": "tests/test_model_adapter_phase_b.py::test_a_superseding_correction_is_what_a_later_replay_reads",
       "status": "guarded"
     },
@@ -432,6 +432,26 @@
       "guard": "Each merge invariant has one canonical evidence owner. Merge Readiness may aggregate direct exact-head validation, security, review-authority and current GitHub-state evidence, but MUST NOT require a second derived status that summarizes the same evidence. Internal orchestration workflows are not required merge gates. Legacy Governance Review may remain compatibility-only until atomic cutover, then is retired from required checks. Production target has no bypass actors.",
       "status": "guarded",
       "test": "tests/test_governance_gate_consolidation.py"
+    },
+    {
+      "id": "PRH-058",
+      "class": "test-harness-not-updated-for-fail-closed-admission-default",
+      "source": "PR #522 Codex P1 and local focused suite, 2026-09-25",
+      "classification": "systemic",
+      "guard_boundary": "Issue Agent topology/issuer regression suite plus canonical normal preflight before candidate push",
+      "guard": "Any direct IssuerServer harness that intentionally exercises the retired legacy execution path must opt in explicitly; production/default construction remains fail closed. The affected topology and issuer suites must pass before candidate publication.",
+      "test": "tests/test_issue_agent_provisioner.py::test_railway_single_public_port_reaches_both_isolated_authorities",
+      "status": "guarded"
+    },
+    {
+      "id": "PRH-059",
+      "class": "defect-family-applicability-omits-its-own-enforcement-surface",
+      "source": "PR #522 Codex P2, 2026-09-25",
+      "classification": "systemic",
+      "guard_boundary": "Defect Prevention family applicability and pre-ready family selection",
+      "guard": "A locally-enforced defect family must include the concrete file that contains its guard in changed_paths whenever applicability is path-selected; DFF-027 therefore includes scripts/hunter_issue_agent_issuer.py so edits to the admission guard require DFF-027 coverage.",
+      "test": "tests/test_issue_412_prevention_gate.py::test_applicable_family_ids_use_changed_paths",
+      "status": "guarded"
     }
   ],
   "families": [
@@ -1349,18 +1369,23 @@
         "changed_paths": [
           "src/hunter/automation/",
           ".github/workflows/",
-          "scripts/railway_issuer_startup.py"
+          "scripts/railway_issuer_startup.py",
+          "scripts/hunter_issue_agent_issuer.py"
         ],
         "rationale": "These surfaces select or admit the Issue Agent execution backend and can diverge between readiness and real execution."
       },
       "prevention": {
-        "mechanism": "Recorded finding only. PR-A/replacement-executor work must establish fail-closed pre-claim admission and externally enforced runner/backend eligibility before this family can advance.",
-        "boundary": "review"
+        "mechanism": "Railway IssuerServer defaults execution admission to disabled and the authorization handler returns 503 before slot acquisition, ledger claim, handoff compilation, dispatch, or provider invocation. Only explicit test harnesses can exercise the retired legacy path.",
+        "boundary": "local-pre-push",
+        "guard_reference": "scripts/hunter_issue_agent_issuer.py::_IssuerRequestHandler::handle_authorization"
       },
-      "regression_evidence": [],
-      "lifecycle": "recorded",
+      "regression_evidence": [
+        "tests/test_issue_agent_issuer.py::test_default_issuer_admission_fails_closed_before_claim_or_provider"
+      ],
+      "lifecycle": "locally-enforced",
       "sources": [
-        "PR #519 startup self-check and Issue #520 production canary, 2026-09-25"
+        "PR #519 startup self-check and Issue #520 production canary, 2026-09-25",
+        "PR #522 Codex P2, 2026-09-25: the runtime admission guard existed but its own issuer file was omitted from DFF-027 changed_paths, so applicability could fail to require the family when the guard itself changed."
       ]
     },
     {
@@ -1383,6 +1408,30 @@
       "lifecycle": "recorded",
       "sources": [
         "Post-PR #519 publication-path inspection after Issue #520 canary, 2026-09-25"
+      ]
+    },
+    {
+      "id": "DFF-029",
+      "title": "candidate-must-pass-canonical-preflight-before-pr-publication",
+      "invariant": "A candidate branch must not be published for PR review until the same canonical deterministic preflight required by hosted CI has passed locally on the exact candidate content; focused tests are diagnostic evidence only and cannot substitute for the canonical gate.",
+      "applicability": {
+        "changed_paths": [
+          "scripts/",
+          "src/",
+          "tests/",
+          ".github/workflows/",
+          "docs/DEFECT_REGISTRY.json"
+        ],
+        "rationale": "Changes to executable code, tests, workflows, or the defect-prevention authority can invalidate the shared deterministic preflight even when focused tests pass."
+      },
+      "prevention": {
+        "mechanism": "Recorded recurrence from PR #522. The correcting contribution must make exact-candidate canonical preflight success a machine-enforced prerequisite to PR publication/push rather than a human convention.",
+        "boundary": "review"
+      },
+      "regression_evidence": [],
+      "lifecycle": "recorded",
+      "sources": [
+        "PR #522, 2026-09-25: the candidate was published after focused tests while Hunter / Pre-PR Preflight, CI, and Trusted Candidate Preflight all failed from the shared deterministic preflight."
       ]
     }
   ]
