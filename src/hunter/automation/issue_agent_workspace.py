@@ -96,7 +96,16 @@ def materialize_workspace(workspace_root: Path, target: IssueAgentExecutionTarge
         # authorization never executed to completion here, so it is disposable.
         shutil.rmtree(workspace)
     workspace.mkdir()
+    try:
+        return _prepare_workspace(workspace, target, remote_url=remote_url)
+    except BaseException:
+        # A refused or failed materialization leaves nothing behind: each
+        # authorization has its own digest, so a leftover would accumulate.
+        shutil.rmtree(workspace, ignore_errors=True)
+        raise
 
+
+def _prepare_workspace(workspace: Path, target: IssueAgentExecutionTarget, *, remote_url: str) -> Path:
     _require(_git(workspace, "init", "--quiet"), "workspace initialization")
     _require(_git(workspace, "remote", "add", "origin", remote_url), "canonical origin binding")
     _require(_git(workspace, "config", "core.hooksPath", ".githooks"), "push boundary binding")

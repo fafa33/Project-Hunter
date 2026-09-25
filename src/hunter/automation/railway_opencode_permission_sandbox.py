@@ -222,9 +222,17 @@ def _validate_provider_compatibility(executable: str, provider_args: list[str], 
 
 
 def _validate_runtime_provider_capabilities(executable: str, env: dict[str, str]) -> None:
+    """Resolve the agent tool set exactly where, and as, the real run resolves it.
+
+    OpenCode merges project-local configuration (for example an agent definition
+    in the workspace's ``opencode.json``) from the directory named by ``PWD``, so
+    the tool set is resolved in the provider's own working directory with the
+    provider's own environment. Resolving it anywhere else could report no
+    forbidden tool while the real run offers one.
+    """
     completed = subprocess.run(
         [executable, "debug", "agent", "build", "--pure"],
-        cwd=Path(env["HOME"]),
+        cwd=Path(env["PWD"]),
         env=env,
         check=False,
         capture_output=True,
@@ -287,13 +295,14 @@ def main(argv: list[str] | None = None) -> int:
     try:
         workspace, credential_home, executable, provider_args = _parse(list(sys.argv[1:] if argv is None else argv))
         env = _restricted_environment(credential_home)
+        run_env = {**env, "PWD": str(workspace)}
         _validate_pinned_runtime(executable, env)
-        _validate_runtime_provider_capabilities(executable, env)
+        _validate_runtime_provider_capabilities(executable, run_env)
         _validate_provider_compatibility(executable, provider_args, env)
         completed = subprocess.run(
             [executable, "--pure", *provider_args],
             cwd=workspace,
-            env={**env, "PWD": str(workspace)},
+            env=run_env,
             check=False,
             timeout=900,
         )

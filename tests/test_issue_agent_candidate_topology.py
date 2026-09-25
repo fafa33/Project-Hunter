@@ -457,6 +457,7 @@ def test_base_not_on_main_fails_closed_without_running_a_provider(topology: Any,
     assert entry.state == "FAILED"
     assert entry.failure_code == "BASE_NOT_ON_MAIN"
     assert not run.marker.exists()
+    assert not any(run.workspace_root.iterdir()), "a refused workspace must not be left on disk"
     assert github.head(_expected_branch(run.document)) is None
     code, payload = run.status()
     assert code == 200
@@ -475,6 +476,7 @@ def test_foreign_remote_branch_is_never_taken_over(topology: Any, github: FakeGi
     assert entry.failure_code == "REMOTE_BRANCH_CONFLICT"
     assert github.head(branch) == github.main_head
     assert not run.marker.exists()
+    assert not any(run.workspace_root.iterdir()), "a refused workspace must not be left on disk"
 
 
 def test_merging_main_into_the_authorization_branch_is_never_a_valid_candidate(
