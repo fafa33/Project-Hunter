@@ -351,7 +351,18 @@ def _post_authorization(
     except urllib.error.HTTPError as error:
         if error.code in TRANSIENT_HTTP_STATUS_CODES:
             raise _TransientDispatchError(f"issue-agent webhook answered transient HTTP {error.code}") from None
-        raise _RejectedDispatchError(f"issue-agent webhook rejected the authorization with HTTP {error.code}") from None
+        detail = ""
+        try:
+            raw = error.read(MAX_EVENT_BYTES)
+            payload = json.loads(raw.decode("utf-8"))
+            if isinstance(payload, dict) and isinstance(payload.get("error"), str):
+                detail = payload["error"].strip()
+        except (OSError, UnicodeDecodeError, ValueError):
+            detail = ""
+        suffix = f": {detail}" if detail else ""
+        raise _RejectedDispatchError(
+            f"issue-agent webhook rejected the authorization with HTTP {error.code}{suffix}"
+        ) from None
     except urllib.error.URLError:
         raise _TransientDispatchError("issue-agent webhook dispatch failed (network error)") from None
     except (TimeoutError, OSError):
