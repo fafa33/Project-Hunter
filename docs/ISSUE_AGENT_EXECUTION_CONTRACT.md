@@ -164,40 +164,25 @@ returns only non-secret fields:
 It never returns the handoff document, the prompt or free-form failure text.
 Malformed identities are refused by the ingress before anything is forwarded.
 
-### I8. The provider is self-checked at startup
+### I8. Readiness evidence must exercise the real execution boundary
 
-When the OpenCode provider is configured, Railway startup runs
-`hunter.automation.opencode_provider_self_check` before launching any child.
-It uses the issuer's environment, never the Source Handling signing key. The
-probe runs the configured provider exactly as a real execution does:
+The #519 startup self-check is **not** security authority for the production execution
+path. Canary #520 disproved the earlier same-path claim: startup preserved
+`RAILWAY_ENVIRONMENT` and selected the Railway permission shim, while the real
+provider child environment stripped that marker and launcher selection fell through
+to bubblewrap. Railway then refused namespace creation (`Operation not permitted`).
+A probe executed through a different environment, launcher, workspace, credential
+set, or privilege boundary cannot establish readiness for the real path.
 
-- the same sandbox launcher and permission contract;
-- the same pinned runtime and the same model;
-- a disposable attempt workspace.
+Any future readiness contract must distinguish external enforcement from diagnostic
+self-probes. A runner cannot establish its own trust merely by reporting that an
+in-job probe passed. External platform controls establish the permitted runner class;
+in-job probes may detect misconfiguration but are never the security authority.
 
-The probe instructs the provider to run one shell command, which creates a
-marker named by a random nonce. The nonce exists only in the provider's
-process environment, never in the prompt, so a file-writing tool cannot forge
-the marker; only an executed shell command can. Startup fails closed, and the
-issuer never starts, if:
-
-- the pinned runtime's resolved tool set offers `bash`, `webfetch`,
-  `websearch`, `task`, `skill` or `question`. The sandbox shim checks this
-  against `opencode debug agent build` before every run, not only at startup;
-- the nonce marker exists after the run, meaning a shell command executed;
-- the provider cannot complete the probe (unreachable, rejected by its
-  service, or rate-limited). An execution path that cannot be proven safe is
-  not started.
-
-Evidence behind this check, from OpenCode 1.18.30 driven by a local stand-in
-model that always requests a `bash` tool call:
-
-- under Hunter's contract the model is offered only `edit`, `glob`, `grep`,
-  `read` and `write`, and the `bash` call is rejected as an unavailable tool;
-- with `bash: allow` the same call executes.
-
-`tests/test_opencode_provider_self_check.py` repeats that experiment when
-`HUNTER_TEST_OPENCODE_EXECUTABLE` names the pinned runtime.
+The currently configured Railway permission shim is an OpenCode tool-permission
+boundary, not OS/process/filesystem isolation, and MUST NOT be promoted as a secure
+production execution backend merely to make a canary pass. Backend selection must be
+explicit and fail closed; it must not be inferred from ambient deployment markers.
 
 ### I9. OpenCode runs in the directory it is given
 
@@ -208,6 +193,67 @@ directory but with the issuer's `PWD`, so every read and edit targeted the
 issuer's directory instead of the isolated workspace. Every OpenCode process
 now runs with `PWD` bound to its own working directory (`/workspace` inside
 the bubblewrap sandbox), and `OLDPWD` removed.
+
+
+## Post-#519 evidence and current execution status
+
+The production canary evidence after #519 is intentionally preserved here so later
+work does not rediscover the same boundary failures:
+
+- Issue #520 reached signed provisioning and authorization successfully, then real
+  execution selected `bwrap` and failed with namespace `Operation not permitted`; no
+  candidate PR was created.
+- The startup provider self-check and the real execution did not select the same
+  launcher because their child environments differed. Therefore the previous I8
+  same-launcher assertion was false.
+- Inspection of the publication path found a separate security defect: candidate
+  content can influence `.githooks/` / repository scripts that publication may execute
+  while publication credentials are present. Candidate-controlled code must never
+  execute in the credential-bearing publisher boundary.
+- Targeted validation likewise must not execute candidate-controlled code on a
+  secret-bearing orchestration host merely because that host is convenient.
+- `allowed_paths` / `prohibited_paths` authority comes from the canonical Task Scope
+  contract. A publisher must not invent a second protected-path authority.
+- Repository visibility is public. Exact prompts, Evidence/Source Handling material,
+  and candidate patch artifacts must therefore be classified for confidentiality
+  before any design places them in Actions logs or publicly readable artifacts.
+- Railway remains a candidate authority/ledger/ingress boundary. Moving execution to
+  GitHub-hosted ephemeral jobs is a design direction under investigation, not yet an
+  implemented or accepted runtime claim.
+- Issue #520 MUST NOT be triggered again until execution admission is fail-closed, the
+  replacement path has rehearsal evidence, and a fresh authorization is intentionally
+  created. Old consumed/failed authorizations are never replayed.
+
+### Replacement-executor invariants already established
+
+1. Agent/model execution and publication authority are separate trust domains. The
+   agent receives no repository write/signing credential; its output is untrusted data.
+2. A publisher receives no model authority and executes no candidate-controlled code.
+   It validates candidate data against the canonical Task Scope before publication.
+3. Runner trust is established by external platform enforcement (for example an
+   appropriately restricted ephemeral/JIT runner group). An in-job probe is diagnostic
+   only and cannot self-attest runner trust.
+4. Rehearsal must be structurally non-publishing: it receives no write credential and
+   uses a distinct authorization/result class. A boolean flag beside a live write token
+   is not sufficient isolation.
+5. GitHub-hosted execution must treat the inter-job patch/artifact as hostile input.
+   Exact validation rules will be derived from existing Task Scope authority rather
+   than from a new hard-coded protected-path registry.
+
+### Open questions required before a GitHub executor is implemented
+
+These are evidence requirements, not decisions:
+
+- Trace `authorize -> exact_prompt/handoff -> dispatch -> result -> ledger` and choose
+  a result-return contract. GitHub OIDC push reporting and Railway pull observation
+  must be compared against the existing ledger semantics.
+- Determine the publication token/identity that both triggers downstream workflows and
+  satisfies Candidate Admission writer provenance / verified-signature requirements.
+- Determine which exact-prompt, Evidence, Source Handling, patch, log, and artifact
+  fields may be exposed by a public repository's Actions surface.
+- Trace the entire configured provider pool, not only OpenCode, before disabling the
+  Railway executor. The unexplained visibility of the `bwrap` stderr line despite the
+  expected `DEVNULL` provider stderr remains an open diagnostic question.
 
 ## Failure states
 
