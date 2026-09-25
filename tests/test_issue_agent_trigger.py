@@ -499,6 +499,17 @@ def test_gateway_transient_status_is_retried_byte_identically(monkeypatch, code:
     assert len(recorded) == 1
 
 
+def test_http_error_semantic_rejection_surfaces_bounded_upstream_error(monkeypatch) -> None:
+    class _HTTPErrorOpener:
+        def open(self, request, timeout):
+            body = io.BytesIO(b'{"error":"canonical preparation failed","schema_version":"v1"}')
+            raise urllib.error.HTTPError("https://hook.example/dispatch", 500, "internal", {}, body)
+
+    monkeypatch.setattr(trigger, "_OPENER", _HTTPErrorOpener())
+    with pytest.raises(trigger._RejectedDispatchError, match="canonical preparation failed"):
+        trigger._post_authorization("https://hook.example/dispatch", "{}")
+
+
 def test_http_error_transient_status_maps_to_retry_signal(monkeypatch) -> None:
     class _HTTPErrorOpener:
         code = 503
