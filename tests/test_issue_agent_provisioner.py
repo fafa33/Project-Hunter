@@ -203,7 +203,7 @@ class RecordingFallback:
             validation_succeeded=True,
         )
 
-    def dispatch(self, document: str | bytes) -> AgentFallbackRuntimeReceipt:
+    def dispatch(self, document: str | bytes, target: Any) -> AgentFallbackRuntimeReceipt:
         self.documents.append(document)
         return self._receipt
 

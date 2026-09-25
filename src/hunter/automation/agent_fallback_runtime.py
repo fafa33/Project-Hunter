@@ -50,6 +50,8 @@ PROVIDER_ENV_ALLOWLIST_ENV = MappingProxyType(
     }
 )
 VALIDATION_COMMAND_ENV = "HUNTER_AGENT_VALIDATION_COMMAND"
+#: The signed execution base handed to providers and validation for one authorization.
+BASE_SHA_ENV = "HUNTER_AGENT_BASE_SHA"
 VALIDATION_ENV_ALLOWLIST_ENV = "HUNTER_AGENT_VALIDATION_ENV_ALLOWLIST"
 ATTEMPT_TIMEOUT_ENV = "HUNTER_AGENT_ATTEMPT_TIMEOUT_SECONDS"
 DEFAULT_ATTEMPT_TIMEOUT_SECONDS = 900.0
@@ -233,8 +235,54 @@ def _pinned_github_remote(repo_dir: Path) -> str:
     return remote
 
 
+@dataclass(frozen=True, slots=True)
+class AgentFallbackRuntimeSettings:
+    """The provider pool configuration, parsed and validated once."""
+
+    timeout: float
+    commands: Mapping[str, tuple[str, ...]]
+    provider_env_allowlists: Mapping[str, tuple[str, ...]]
+    validation_command: tuple[str, ...]
+    validation_env_allowlist: tuple[str, ...]
+    verifier: PromptAutomationVerifier
+
+    @classmethod
+    def from_environment(cls, environ: Mapping[str, str]) -> AgentFallbackRuntimeSettings:
+        """Parse the provider pool or fail closed, before any execution needs it."""
+        return cls(
+            timeout=_timeout(environ),
+            commands=MappingProxyType(
+                {
+                    provider: _argv(environ.get(PROVIDER_COMMAND_ENV[provider]), name=PROVIDER_COMMAND_ENV[provider])
+                    for provider in PROVIDER_ORDER
+                }
+            ),
+            provider_env_allowlists=MappingProxyType(
+                {
+                    provider: _environment_allowlist(
+                        environ.get(PROVIDER_ENV_ALLOWLIST_ENV[provider]),
+                        name=PROVIDER_ENV_ALLOWLIST_ENV[provider],
+                    )
+                    for provider in PROVIDER_ORDER
+                }
+            ),
+            validation_command=_argv(environ.get(VALIDATION_COMMAND_ENV), name=VALIDATION_COMMAND_ENV),
+            validation_env_allowlist=_environment_allowlist(
+                environ.get(VALIDATION_ENV_ALLOWLIST_ENV),
+                name=VALIDATION_ENV_ALLOWLIST_ENV,
+            ),
+            verifier=PromptAutomationVerifier.from_environment(environ=environ),
+        )
+
+
 class OperationalAgentFallbackRuntime:
-    """Bind the deterministic dispatcher to real local provider command adapters."""
+    """Bind the deterministic dispatcher to real local provider command adapters.
+
+    With ``base_sha`` the runtime executes one Issue authorization's own branch
+    (``docs/ISSUE_AGENT_EXECUTION_CONTRACT.md``): a branch absent from GitHub is
+    at its signed base, so head advancement is measured from ``base_sha``, and
+    providers and validation receive the base to prove the fork point against.
+    """
 
     def __init__(
         self,
@@ -242,34 +290,25 @@ class OperationalAgentFallbackRuntime:
         repo_dir: str | Path,
         branch: str,
         environ: Mapping[str, str] | None = None,
+        base_sha: str | None = None,
+        settings: AgentFallbackRuntimeSettings | None = None,
     ) -> None:
         self._repo_dir = Path(repo_dir).resolve()
         if not self._repo_dir.is_dir():
             raise AgentFallbackRuntimeError("repository directory does not exist")
         self._branch = _branch(branch)
+        if base_sha is not None and re.fullmatch(r"[0-9a-f]{40}", base_sha) is None:
+            raise AgentFallbackRuntimeError("execution base must be an exact lowercase commit SHA")
+        self._base_sha = base_sha
         self._environ = dict(os.environ if environ is None else environ)
-        self._timeout = _timeout(self._environ)
+        resolved = settings or AgentFallbackRuntimeSettings.from_environment(self._environ)
+        self._timeout = resolved.timeout
         self._remote_url = _pinned_github_remote(self._repo_dir)
-        self._commands = {
-            provider: _argv(self._environ.get(PROVIDER_COMMAND_ENV[provider]), name=PROVIDER_COMMAND_ENV[provider])
-            for provider in PROVIDER_ORDER
-        }
-        self._provider_env_allowlists = {
-            provider: _environment_allowlist(
-                self._environ.get(PROVIDER_ENV_ALLOWLIST_ENV[provider]),
-                name=PROVIDER_ENV_ALLOWLIST_ENV[provider],
-            )
-            for provider in PROVIDER_ORDER
-        }
-        self._validation_command = _argv(
-            self._environ.get(VALIDATION_COMMAND_ENV),
-            name=VALIDATION_COMMAND_ENV,
-        )
-        self._validation_env_allowlist = _environment_allowlist(
-            self._environ.get(VALIDATION_ENV_ALLOWLIST_ENV),
-            name=VALIDATION_ENV_ALLOWLIST_ENV,
-        )
-        self._verifier = PromptAutomationVerifier.from_environment(environ=self._environ)
+        self._commands = dict(resolved.commands)
+        self._provider_env_allowlists = dict(resolved.provider_env_allowlists)
+        self._validation_command = resolved.validation_command
+        self._validation_env_allowlist = resolved.validation_env_allowlist
+        self._verifier = resolved.verifier
 
     def _base_child_environment(self, allowlist: tuple[str, ...]) -> dict[str, str]:
         names = tuple(dict.fromkeys((*_SAFE_BASE_ENV, *allowlist)))
@@ -280,6 +319,8 @@ class OperationalAgentFallbackRuntime:
         child["HUNTER_AGENT_PROVIDER"] = provider
         child["HUNTER_AGENT_BRANCH"] = self._branch
         child["HUNTER_AGENT_REPO_DIR"] = str(self._repo_dir)
+        if self._base_sha is not None:
+            child[BASE_SHA_ENV] = self._base_sha
         if provider == "opencode":
             for name in _OPENCODE_TRUSTED_ENV:
                 if name in self._environ:
@@ -305,6 +346,8 @@ class OperationalAgentFallbackRuntime:
         return AgentExecutionReport("failed", "provider_failed")
 
     def _read_remote_head(self) -> str:
+        if self._base_sha is not None:
+            return self._read_authorization_branch_head(self._base_sha)
         try:
             completed = subprocess.run(
                 ("git", "ls-remote", "--exit-code", self._remote_url, f"refs/heads/{self._branch}"),
@@ -323,10 +366,35 @@ class OperationalAgentFallbackRuntime:
             raise AgentFallbackRuntimeError("remote branch HEAD response is invalid")
         return fields[0].lower()
 
+    def _read_authorization_branch_head(self, base_sha: str) -> str:
+        """The GitHub-visible head of an authorization branch; absent means at its base."""
+        try:
+            completed = subprocess.run(
+                ("git", "ls-remote", self._remote_url, f"refs/heads/{self._branch}"),
+                cwd=self._repo_dir,
+                text=True,
+                capture_output=True,
+                timeout=30,
+                check=False,
+            )
+        except (OSError, subprocess.TimeoutExpired):
+            raise AgentFallbackRuntimeError("cannot read GitHub-visible branch HEAD") from None
+        if completed.returncode != 0:
+            raise AgentFallbackRuntimeError("cannot read GitHub-visible branch HEAD")
+        lines = [line for line in completed.stdout.splitlines() if line.strip()]
+        if not lines:
+            return base_sha
+        fields = lines[0].split()
+        if len(lines) != 1 or len(fields) != 2 or not re.fullmatch(r"[0-9a-fA-F]{40}", fields[0]):
+            raise AgentFallbackRuntimeError("remote branch HEAD response is invalid")
+        return fields[0].lower()
+
     def _validate(self, head: str) -> bool:
         child = self._base_child_environment(self._validation_env_allowlist)
         child["HUNTER_AGENT_EXPECTED_HEAD"] = head
         child["HUNTER_AGENT_BRANCH"] = self._branch
+        if self._base_sha is not None:
+            child[BASE_SHA_ENV] = self._base_sha
         outcome = _run_isolated(
             self._validation_command,
             cwd=self._repo_dir,
@@ -390,8 +458,10 @@ def main(argv: Sequence[str] | None = None) -> int:
 
 __all__ = [
     "ATTEMPT_TIMEOUT_ENV",
+    "BASE_SHA_ENV",
     "AgentFallbackRuntimeError",
     "AgentFallbackRuntimeReceipt",
+    "AgentFallbackRuntimeSettings",
     "OperationalAgentFallbackRuntime",
     "PROVIDER_COMMAND_ENV",
     "PROVIDER_ENV_ALLOWLIST_ENV",

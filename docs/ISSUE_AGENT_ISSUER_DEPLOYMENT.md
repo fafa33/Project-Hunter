@@ -29,11 +29,13 @@ The following must be provisioned **before** deployment:
    - Must contain a strict-known provenance record per `EVIDENCE` / `VERIFIER` identity those authorizations will name
      (see "Provisioning Source Handling Provenance")
 
-5. **Repository checkout** for provider commands
-   - Path configured by `HUNTER_ISSUE_AGENT_REPO_DIR`
+5. **Workspace root** for per-authorization execution workspaces
+   - Path configured by `HUNTER_ISSUE_AGENT_REPO_DIR` (on Railway, beneath `/app/.hunter-runtime-checkouts`)
+   - Each authorization executes in its own workspace, forked at its signed `base_sha` on the branch
+     `issue-<n>-<16 hex of the authorization digest>` (see `docs/ISSUE_AGENT_EXECUTION_CONTRACT.md`)
 
-6. **Execution branch** that providers must advance
-   - Configured by `HUNTER_ISSUE_AGENT_EXECUTION_BRANCH` (e.g., `issue-agent-execution`)
+6. **No execution branch configuration**
+   - `HUNTER_ISSUE_AGENT_EXECUTION_BRANCH` is retired and ignored; remove it from the deployment
 
 7. **Fallback runtime provider configuration** (already required)
    - `HUNTER_AGENT_CODEX_COMMAND`, `HUNTER_AGENT_CLAUDE_COMMAND`, etc.
@@ -67,8 +69,7 @@ The deployed issuer edge requires these environment variables (set in your deplo
 | `HUNTER_ISSUE_AGENT_REPOSITORY` | Repository setting | Exact `owner/name` (e.g., `fafa33/Project-Hunter`) |
 | `HUNTER_ISSUE_AGENT_OWNER_LOGIN` | Repository setting | Repository owner login (e.g., `fafa33`) |
 | `HUNTER_ISSUE_AGENT_EVIDENCE_DB` | Deployment config | Absolute path to Evidence SQLite database |
-| `HUNTER_ISSUE_AGENT_EXECUTION_BRANCH` | Deployment config | Remote branch providers must advance |
-| `HUNTER_ISSUE_AGENT_REPO_DIR` | Deployment config | Absolute path to repository checkout |
+| `HUNTER_ISSUE_AGENT_REPO_DIR` | Deployment config | Absolute workspace root for per-authorization workspaces |
 | `HUNTER_SOURCE_HANDLING_VERIFICATION_KEY` | Secret | Hex Ed25519 public key |
 | `HUNTER_SOURCE_HANDLING_VERIFICATION_KEY_SHA256` | Secret | SHA-256 of the above public key |
 | `HUNTER_SOURCE_HANDLING_GENESIS_RULE_SHA256` | Secret | Genesis rule digest |
@@ -236,7 +237,7 @@ gcloud run deploy ${SERVICE_NAME} \
   --max-instances 3 \
   --timeout 300 \
   --concurrency 10 \
-  --set-env-vars="HUNTER_ISSUE_AGENT_REPOSITORY=${REPOSITORY},HUNTER_ISSUE_AGENT_OWNER_LOGIN=${OWNER},HUNTER_ISSUE_AGENT_EVIDENCE_DB=/data/evidence.sqlite,HUNTER_ISSUE_AGENT_EXECUTION_BRANCH=issue-agent-execution,HUNTER_ISSUE_AGENT_REPO_DIR=/workspace,HUNTER_SOURCE_HANDLING_VERIFICATION_KEY=${SOURCE_HANDLING_VERIFICATION_KEY},HUNTER_SOURCE_HANDLING_VERIFICATION_KEY_SHA256=${SOURCE_HANDLING_VERIFICATION_KEY_SHA256},HUNTER_SOURCE_HANDLING_GENESIS_RULE_SHA256=${SOURCE_HANDLING_GENESIS_RULE_SHA256},HUNTER_PROMPT_AUTOMATION_VERIFYING_KEY=${PROMPT_AUTOMATION_VERIFYING_KEY},HUNTER_PROMPT_AUTOMATION_SIGNING_KEY=${PROMPT_AUTOMATION_SIGNING_KEY},HUNTER_ISSUE_AGENT_AUTHORIZATION_VERIFYING_KEY=${ISSUE_AGENT_AUTHORIZATION_VERIFYING_KEY},PYTHONPATH=/workspace/src" \
+  --set-env-vars="HUNTER_ISSUE_AGENT_REPOSITORY=${REPOSITORY},HUNTER_ISSUE_AGENT_OWNER_LOGIN=${OWNER},HUNTER_ISSUE_AGENT_EVIDENCE_DB=/data/evidence.sqlite,HUNTER_ISSUE_AGENT_REPO_DIR=/workspace/issue-agent,HUNTER_SOURCE_HANDLING_VERIFICATION_KEY=${SOURCE_HANDLING_VERIFICATION_KEY},HUNTER_SOURCE_HANDLING_VERIFICATION_KEY_SHA256=${SOURCE_HANDLING_VERIFICATION_KEY_SHA256},HUNTER_SOURCE_HANDLING_GENESIS_RULE_SHA256=${SOURCE_HANDLING_GENESIS_RULE_SHA256},HUNTER_PROMPT_AUTOMATION_VERIFYING_KEY=${PROMPT_AUTOMATION_VERIFYING_KEY},HUNTER_PROMPT_AUTOMATION_SIGNING_KEY=${PROMPT_AUTOMATION_SIGNING_KEY},HUNTER_ISSUE_AGENT_AUTHORIZATION_VERIFYING_KEY=${ISSUE_AGENT_AUTHORIZATION_VERIFYING_KEY},PYTHONPATH=/workspace/src" \
   --service-account=${SERVICE_ACCOUNT_EMAIL} \
   --vpc-connector=projects/${PROJECT_ID}/locations/${REGION}/connectors/hunter-vpc
 ```
@@ -260,8 +261,7 @@ primary_region = "ord"
   HUNTER_ISSUE_AGENT_REPOSITORY = "fafa33/Project-Hunter"
   HUNTER_ISSUE_AGENT_OWNER_LOGIN = "fafa33"
   HUNTER_ISSUE_AGENT_EVIDENCE_DB = "/data/evidence.sqlite"
-  HUNTER_ISSUE_AGENT_EXECUTION_BRANCH = "issue-agent-execution"
-  HUNTER_ISSUE_AGENT_REPO_DIR = "/workspace"
+  HUNTER_ISSUE_AGENT_REPO_DIR = "/workspace/issue-agent"
   PYTHONPATH = "/workspace/src"
 
 [mounts]
@@ -374,7 +374,8 @@ The start command will not run any bootstrap from a `preDeploy` hook or one-off 
 - `HUNTER_PROMPT_AUTOMATION_SIGNING_KEY` (secret)
 - `HUNTER_PROMPT_AUTOMATION_VERIFYING_KEY`
 - `HUNTER_ISSUE_AGENT_AUTHORIZATION_VERIFYING_KEY`
-- `HUNTER_ISSUE_AGENT_REPOSITORY`, `HUNTER_ISSUE_AGENT_OWNER_LOGIN`, `HUNTER_ISSUE_AGENT_EXECUTION_BRANCH`, `HUNTER_ISSUE_AGENT_REPO_DIR`
+- `HUNTER_ISSUE_AGENT_REPOSITORY`, `HUNTER_ISSUE_AGENT_OWNER_LOGIN`, `HUNTER_ISSUE_AGENT_REPO_DIR`
+  (for example `/app/.hunter-runtime-checkouts/issue-agent`)
 - Fallback runtime provider variables (`HUNTER_AGENT_*`)
 - `HUNTER_ISSUE_AGENT_EVIDENCE_DB=/data/evidence.sqlite` (already set by `railway.toml`)
 
@@ -420,7 +421,7 @@ head) stops the run before the issuer is ever contacted.
    launching the issuer and the public ingress.
 
 2. **Set deployment variables** on that Service: `HUNTER_ISSUE_AGENT_REPOSITORY`,
-   `HUNTER_ISSUE_AGENT_OWNER_LOGIN`, `HUNTER_ISSUE_AGENT_EXECUTION_BRANCH`, `HUNTER_ISSUE_AGENT_REPO_DIR`, and
+   `HUNTER_ISSUE_AGENT_OWNER_LOGIN`, `HUNTER_ISSUE_AGENT_REPO_DIR`, and
    optionally `HUNTER_ISSUE_AGENT_PROVISIONER_PORT` / `HUNTER_ISSUE_AGENT_ISSUER_PORT` (defaults 8081/8082, loopback-only).
    Railway `$PORT` is owned by the public ingress.
 
@@ -444,8 +445,7 @@ services:
       - HUNTER_ISSUE_AGENT_REPOSITORY=fafa33/Project-Hunter
       - HUNTER_ISSUE_AGENT_OWNER_LOGIN=fafa33
       - HUNTER_ISSUE_AGENT_EVIDENCE_DB=/data/evidence.sqlite
-      - HUNTER_ISSUE_AGENT_EXECUTION_BRANCH=issue-agent-execution
-      - HUNTER_ISSUE_AGENT_REPO_DIR=/workspace
+      - HUNTER_ISSUE_AGENT_REPO_DIR=/workspace/issue-agent
       - HUNTER_SOURCE_HANDLING_VERIFICATION_KEY=${SOURCE_HANDLING_VERIFICATION_KEY}
       - HUNTER_SOURCE_HANDLING_VERIFICATION_KEY_SHA256=${SOURCE_HANDLING_VERIFICATION_KEY_SHA256}
       - HUNTER_SOURCE_HANDLING_GENESIS_RULE_SHA256=${SOURCE_HANDLING_GENESIS_RULE_SHA256}

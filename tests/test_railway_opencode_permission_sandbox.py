@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import os
 from pathlib import Path
 
 import pytest
@@ -308,3 +309,100 @@ def test_main_fails_before_real_prompt_when_provider_compatibility_probe_fails(t
 def test_runtime_contract_matches_canonical_installer_pin() -> None:
     installer = Path("scripts/install_opencode_runtime.py").read_text(encoding="utf-8")
     assert f'OPENCODE_VERSION = "{shim._PINNED_OPENCODE_VERSION}"' in installer
+
+
+@pytest.mark.parametrize(
+    "tools",
+    [
+        {"read": True, "edit": True, "glob": True, "grep": True, "bash": True},
+        {"read": True, "edit": True, "glob": True, "grep": True, "bash": "true"},
+        {"read": True, "edit": True, "glob": True, "grep": True, "bash": False, "webfetch": True},
+        {"read": True, "edit": True, "glob": True, "grep": True, "task": 1},
+    ],
+    ids=["bash-enabled", "bash-truthy-string", "webfetch-enabled", "task-truthy-int"],
+)
+def test_main_fails_closed_when_the_resolved_tool_set_offers_a_forbidden_tool(
+    tmp_path: Path, monkeypatch, tools: dict
+) -> None:
+    argv, _, _ = _argv(tmp_path)
+    calls: list[list[str]] = []
+    monkeypatch.setattr(shim.subprocess, "run", _provider_sequence(calls, tools=tools))
+
+    assert shim.main(argv) == 1
+    assert calls[-1] == ["/app/bin/opencode", "debug", "agent", "build", "--pure"]
+
+
+def test_the_pinned_runtime_resolution_of_the_hunter_contract_passes(monkeypatch) -> None:
+    # The exact tool set OpenCode 1.18.30 resolves for this permission contract.
+    resolved = {
+        "invalid": False,
+        "question": False,
+        "bash": False,
+        "read": True,
+        "glob": True,
+        "grep": True,
+        "edit": True,
+        "write": True,
+        "task": False,
+        "webfetch": False,
+        "todowrite": False,
+        "skill": False,
+    }
+    calls: list[list[str]] = []
+    monkeypatch.setattr(shim.subprocess, "run", _provider_sequence(calls, tools=resolved))
+    shim._validate_runtime_provider_capabilities("/app/bin/opencode", {"HOME": "/tmp", "PWD": "/tmp"})
+
+
+def test_every_opencode_process_runs_with_pwd_bound_to_its_own_directory(tmp_path: Path, monkeypatch) -> None:
+    # OpenCode 1.18.30 resolves its project from PWD, not the process cwd, so an
+    # inherited PWD would move every read and edit out of the workspace.
+    argv, workspace, credential_home = _argv(tmp_path)
+    monkeypatch.setenv("PWD", "/app")
+    monkeypatch.setenv("OLDPWD", "/")
+    seen: list[tuple[list[str], dict, Path]] = []
+    fake = _provider_sequence([])
+
+    def recording_run(command, **kwargs):
+        seen.append((list(command), dict(kwargs["env"]), Path(kwargs["cwd"])))
+        return fake(command, **kwargs)
+
+    monkeypatch.setattr(shim.subprocess, "run", recording_run)
+
+    assert shim.main(argv) == 0
+    assert seen
+    for _command, env, cwd in seen:
+        assert env["PWD"] == str(cwd)
+        assert "OLDPWD" not in env
+    assert seen[-1][2] == workspace
+    assert seen[0][2] == credential_home
+    # The tool set is resolved where the real run resolves it: in the workspace.
+    (discovery,) = [entry for entry in seen if entry[0][1:4] == ["debug", "agent", "build"]]
+    assert discovery[2] == workspace
+    assert discovery[1] == seen[-1][1]
+
+
+@pytest.mark.skipif(
+    not os.environ.get("HUNTER_TEST_OPENCODE_EXECUTABLE"),
+    reason="the pinned OpenCode runtime is not available in this environment",
+)
+def test_a_workspace_agent_definition_that_enables_bash_is_refused_by_the_pinned_runtime(tmp_path: Path) -> None:
+    executable = os.environ["HUNTER_TEST_OPENCODE_EXECUTABLE"]
+    credential_home = tmp_path / "credential-home"
+    credential_home.mkdir()
+    workspace = tmp_path / "repo"
+    workspace.mkdir()
+    env = shim._restricted_environment(credential_home)
+
+    # The Hunter contract resolves bash off, in the home and in a plain workspace.
+    shim._validate_runtime_provider_capabilities(executable, env)
+    shim._validate_runtime_provider_capabilities(executable, {**env, "PWD": str(workspace)})
+
+    # Project-local configuration in the workspace can turn bash back on for the
+    # real run; resolving the tool set in the workspace is what catches it.
+    (workspace / "opencode.json").write_text(
+        json.dumps({"agent": {"build": {"permission": {"bash": "allow"}, "tools": {"bash": True}}}}),
+        encoding="utf-8",
+    )
+    shim._validate_runtime_provider_capabilities(executable, env)
+    with pytest.raises(shim.SandboxShimError, match="forbidden tools: bash"):
+        shim._validate_runtime_provider_capabilities(executable, {**env, "PWD": str(workspace)})

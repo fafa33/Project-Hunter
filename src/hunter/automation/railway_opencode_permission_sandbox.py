@@ -51,6 +51,10 @@ _PERMISSION_CONFIG = {
     }
 }
 _REQUIRED_PROVIDER_CAPABILITIES = frozenset({"read", "edit", "glob", "grep"})
+#: Tools the resolved OpenCode agent must never offer the model. Proven against
+#: the pinned runtime's own resolution (``debug agent build``), not assumed from
+#: the permission configuration that is meant to produce it.
+_FORBIDDEN_PROVIDER_TOOLS = ("bash", "webfetch", "websearch", "task", "skill", "question")
 _PINNED_OPENCODE_VERSION = "1.18.30"
 _PROVIDER_RUNTIME_INSTRUCTION_FILE = "hunter-provider-runtime.md"
 _PROVIDER_COMPATIBILITY_PROMPT = "Reply with exactly HUNTER_PROVIDER_READY and do not use tools."
@@ -218,9 +222,17 @@ def _validate_provider_compatibility(executable: str, provider_args: list[str], 
 
 
 def _validate_runtime_provider_capabilities(executable: str, env: dict[str, str]) -> None:
+    """Resolve the agent tool set exactly where, and as, the real run resolves it.
+
+    OpenCode merges project-local configuration (for example an agent definition
+    in the workspace's ``opencode.json``) from the directory named by ``PWD``, so
+    the tool set is resolved in the provider's own working directory with the
+    provider's own environment. Resolving it anywhere else could report no
+    forbidden tool while the real run offers one.
+    """
     completed = subprocess.run(
         [executable, "debug", "agent", "build", "--pure"],
-        cwd=Path(env["HOME"]),
+        cwd=Path(env["PWD"]),
         env=env,
         check=False,
         capture_output=True,
@@ -240,6 +252,9 @@ def _validate_runtime_provider_capabilities(executable: str, env: dict[str, str]
     missing = sorted(_REQUIRED_PROVIDER_CAPABILITIES - available)
     if missing:
         raise SandboxShimError(f"provider capability mismatch: missing {', '.join(missing)}")
+    forbidden = sorted(name for name in _FORBIDDEN_PROVIDER_TOOLS if tools.get(name) is not False and name in tools)
+    if forbidden:
+        raise SandboxShimError(f"provider tool set enables forbidden tools: {', '.join(forbidden)}")
 
 
 def _restricted_environment(credential_home: Path) -> dict[str, str]:
@@ -258,6 +273,12 @@ def _restricted_environment(credential_home: Path) -> dict[str, str]:
         "instructions": [str(instruction_path)],
     }
     env["HOME"] = str(credential_home)
+    # OpenCode resolves its project directory from the inherited ``PWD`` rather
+    # than the process working directory. A parent's ``PWD`` would silently move
+    # every read and edit out of the isolated workspace, so it is always set to
+    # the directory each process actually runs in.
+    env.pop("OLDPWD", None)
+    env["PWD"] = str(credential_home)
     env["XDG_CONFIG_HOME"] = str(config_home)
     env["OPENCODE_CONFIG_DIR"] = str(opencode_config)
     env["OPENCODE_CONFIG_CONTENT"] = json.dumps(inline_config, sort_keys=True, separators=(",", ":"))
@@ -274,13 +295,14 @@ def main(argv: list[str] | None = None) -> int:
     try:
         workspace, credential_home, executable, provider_args = _parse(list(sys.argv[1:] if argv is None else argv))
         env = _restricted_environment(credential_home)
+        run_env = {**env, "PWD": str(workspace)}
         _validate_pinned_runtime(executable, env)
-        _validate_runtime_provider_capabilities(executable, env)
+        _validate_runtime_provider_capabilities(executable, run_env)
         _validate_provider_compatibility(executable, provider_args, env)
         completed = subprocess.run(
             [executable, "--pure", *provider_args],
             cwd=workspace,
-            env=env,
+            env=run_env,
             check=False,
             timeout=900,
         )

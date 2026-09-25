@@ -12,9 +12,13 @@ was answered 404: the provisioner listened on a port nothing public routed to.
 This process owns ``$PORT`` and nothing else. It is a fixed route table, not a
 proxy:
 
--   exactly three routes are served: ``GET /healthz``,
-    ``POST /issue-agent/provision`` and ``POST /issue-agent/authorize``;
-    every other path answers 404 and every other method on a known path 405;
+-   exactly four routes are served: ``GET /healthz``,
+    ``POST /issue-agent/provision``, ``POST /issue-agent/authorize`` and the
+    read-only ``GET /issue-agent/status/<authorization_id>`` (the issuer's
+    non-secret execution status, ``docs/ISSUE_AGENT_EXECUTION_CONTRACT.md``
+    I7), whose identity must be the exact canonical digest form before
+    anything is forwarded; every other path answers 404 and every other
+    method on a known path 405;
 -   the destination of each route is fixed at startup to the loopback address
     and the internal port of that one authority; no request content (path,
     ``Host``, absolute-form target, headers) can select or alter a destination,
@@ -67,6 +71,25 @@ LOOPBACK_HOST: Final[str] = "127.0.0.1"
 HEALTH_PATH: Final[str] = "/healthz"
 PROVISION_PATH: Final[str] = "/issue-agent/provision"
 AUTHORIZE_PATH: Final[str] = "/issue-agent/authorize"
+#: The read-only execution status route, byte-exact canonical identities only.
+STATUS_PATH_PREFIX: Final[str] = "/issue-agent/status/hunter-issue-agent-authorization:"
+STATUS_PATH_RE: Final[re.Pattern[str]] = re.compile(
+    r"/issue-agent/status/hunter-issue-agent-authorization:([0-9a-f]{64})"
+)
+
+
+def canonical_status_path(path: str) -> str | None:
+    """The upstream status path for a canonical request target, else ``None``.
+
+    The forwarded path is rebuilt from the constant prefix and the numeric value
+    of the digest, never relayed from the client, so no client byte reaches the
+    upstream request line.
+    """
+    match = STATUS_PATH_RE.fullmatch(path)
+    if match is None:
+        return None
+    return f"{STATUS_PATH_PREFIX}{int(match.group(1), 16):064x}"
+
 
 #: Health service names answered by the two internal edges.
 PROVISIONER_SERVICE_NAME: Final[str] = "hunter-issue-agent-provisioner"
@@ -211,6 +234,9 @@ class IngressRequestHandler(BaseHTTPRequestHandler):
     def do_GET(self) -> None:
         if self.path == HEALTH_PATH:
             self._send_health()
+        elif (status_path := canonical_status_path(self.path)) is not None:
+            assert self.routes is not None
+            self._forward(self.routes.issuer, None, path=status_path)
         elif self._is_known_post_path():
             self._send_error(405, "Method Not Allowed", allow="POST")
         else:
@@ -220,7 +246,7 @@ class IngressRequestHandler(BaseHTTPRequestHandler):
         assert self.routes is not None
         upstream = self.routes.post_route(self.path)
         if upstream is None:
-            if self.path == HEALTH_PATH:
+            if self.path == HEALTH_PATH or STATUS_PATH_RE.fullmatch(self.path) is not None:
                 self._send_error(405, "Method Not Allowed", allow="GET")
             else:
                 self._send_error(404, "Not Found")
@@ -231,7 +257,7 @@ class IngressRequestHandler(BaseHTTPRequestHandler):
         self._forward(upstream, body)
 
     def _refuse_method(self) -> None:
-        if self.path == HEALTH_PATH:
+        if self.path == HEALTH_PATH or STATUS_PATH_RE.fullmatch(self.path) is not None:
             self._send_error(405, "Method Not Allowed", allow="GET")
         elif self._is_known_post_path():
             self._send_error(405, "Method Not Allowed", allow="POST")
@@ -247,7 +273,8 @@ class IngressRequestHandler(BaseHTTPRequestHandler):
 
     def do_HEAD(self) -> None:
         # A HEAD response carries no body, so it is answered with headers only.
-        self.send_response(404 if not (self.path == HEALTH_PATH or self._is_known_post_path()) else 405)
+        known = self.path == HEALTH_PATH or self._is_known_post_path() or STATUS_PATH_RE.fullmatch(self.path)
+        self.send_response(405 if known else 404)
         self.send_header("Content-Length", "0")
         self.send_header("Connection", "close")
         self.end_headers()
@@ -285,16 +312,24 @@ class IngressRequestHandler(BaseHTTPRequestHandler):
 
     # -- forwarding ---------------------------------------------------------
 
-    def _forward(self, upstream: Upstream, body: bytes) -> None:
-        """Make exactly one bounded upstream call and relay its framed answer."""
+    def _forward(self, upstream: Upstream, body: bytes | None, *, path: str | None = None) -> None:
+        """Make exactly one bounded upstream call and relay its framed answer.
+
+        ``body=None`` is the read-only status GET, forwarded to the path that
+        ``canonical_status_path`` rebuilt; every other forward is the upstream's
+        canonical POST path.
+        """
         connection = http.client.HTTPConnection(LOOPBACK_HOST, upstream.port, timeout=self.upstream_timeout)
         try:
-            connection.request(
-                "POST",
-                upstream.path,
-                body=body,
-                headers={"Content-Type": "application/json", "Content-Length": str(len(body))},
-            )
+            if body is None:
+                connection.request("GET", path or upstream.path)
+            else:
+                connection.request(
+                    "POST",
+                    upstream.path,
+                    body=body,
+                    headers={"Content-Type": "application/json", "Content-Length": str(len(body))},
+                )
             response = connection.getresponse()
             status = response.status
             if 300 <= status < 400:
