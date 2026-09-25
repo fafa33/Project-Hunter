@@ -232,7 +232,7 @@ def _fact_payload(
 
 def _registry_payload(document_id: str, at: datetime, *, registry_id: str) -> dict[str, Any]:
     return {
-        "scope": f"registry:{document_id}:v1",
+        "scope": registry_id,
         "field_category_registry_id": registry_id,
         "field_map": {name: list(categories) for name, categories in FIELD_CATEGORY_REGISTRY_FIELD_MAP.items()},
         "safe_control_proofs": {},
@@ -346,8 +346,10 @@ def _provenance_plans(
 def _check_provenance_heads_exact(
     plans: Sequence[Mapping[str, Any]],
     at: datetime,
+    *,
+    allow_successor: bool = False,
 ) -> None:
-    """Fail closed before any write unless each existing head verifies and exactly matches."""
+    """Require an exact head for a retry, or a verified predecessor for a newer Issue revision."""
     cutoff = datetime.max.replace(tzinfo=UTC)
     for plan in plans:
         record = PROVENANCE_RESOLVER(plan["provenance_id"], plan["provenance_kind"], cutoff)
@@ -362,7 +364,7 @@ def _check_provenance_heads_exact(
             evidence_method=plan["evidence_method"],
             verifier_type=plan["verifier_type"],
         )
-        if record.get("record_id") != expected:
+        if record.get("record_id") != expected and not allow_successor:
             raise SourceHandlingBlockedError(
                 f"provenance identity {plan['provenance_id']} already heads different content; "
                 "fix the inputs or pin --as-of to the original provisioning instant instead of superseding"
@@ -410,10 +412,10 @@ def _validate_options(fact_options: _FactOptions, policy_options: _PolicyOptions
 def _existing_provenance_info(
     database: str,
     planned_pairs: Sequence[tuple[str, str]],
-) -> tuple[datetime | None, str | None]:
+) -> tuple[datetime | None, str | None, bool]:
     """Resolve and verify existing provenance for the planned identities."""
     if not planned_pairs:
-        return None, None
+        return None, None, False
     planned_ids = [p[0] for p in planned_pairs]
     planned_dict = dict(planned_pairs)
     connection = sqlite3.connect(database)
@@ -427,7 +429,7 @@ def _existing_provenance_info(
         }
         expected_tables = {SOURCE_HANDLING_PROVENANCE_RECORDS, SOURCE_HANDLING_PROVENANCE_HEADS}
         if not tables:
-            return None, None
+            return None, None, False
         if tables != expected_tables:
             raise SourceHandlingBlockedError("Source Handling provenance storage is incomplete")
 
@@ -438,7 +440,7 @@ def _existing_provenance_info(
             tuple(planned_ids),
         ).fetchall()
         if not rows:
-            return None, None
+            return None, None, False
 
         cutoff = datetime.now(UTC)
         resolved_records: list[Mapping[str, Any]] = []
@@ -459,17 +461,36 @@ def _existing_provenance_info(
             resolved_records.append(record)
 
         known_ats = {_aware_utc("recovered provenance known_at", record.get("known_at")) for record in resolved_records}
+        recovering_successor = False
         if len(known_ats) > 1:
-            raise SourceHandlingBlockedError(
-                "existing provenance records for this Issue carry inconsistent known_at timestamps"
-            )
+            # A successor batch is written one provenance identity at a time. If
+            # execution stops mid-batch, verified current heads legitimately
+            # contain the predecessor timestamp plus one newer successor
+            # timestamp. Recover only that narrow shape: exactly two timestamps,
+            # and every head at the newer timestamp must itself be a successor.
+            # Any other mixed state remains fail-closed.
+            if len(known_ats) != 2:
+                raise SourceHandlingBlockedError(
+                    "existing provenance records for this Issue carry inconsistent known_at timestamps"
+                )
+            successor_at = max(known_ats)
+            successor_records = [
+                record
+                for record in resolved_records
+                if _aware_utc("recovered provenance known_at", record.get("known_at")) == successor_at
+            ]
+            if not successor_records or any(record.get("supersedes_record_id") is None for record in successor_records):
+                raise SourceHandlingBlockedError(
+                    "existing provenance records for this Issue carry inconsistent known_at timestamps"
+                )
+            recovering_successor = True
         authority_identities = {record.get("authority_identity") for record in resolved_records}
         authority_identity = next(iter(authority_identities)) if len(authority_identities) == 1 else None
         if not isinstance(authority_identity, str) or not authority_identity.strip():
             raise SourceHandlingBlockedError(
                 "existing provenance records for this Issue carry inconsistent authority identities"
             )
-        return next(iter(known_ats)), authority_identity
+        return max(known_ats), authority_identity, recovering_successor
     finally:
         connection.close()
 
@@ -502,15 +523,19 @@ def _family_plans(
     rule_id: str,
     fact_options: _FactOptions,
     policy_options: _PolicyOptions,
+    authorization_id: str | None = None,
 ) -> tuple[dict[str, Any], ...]:
-    registry_id = f"registry:{document_id}:v1"
+    registry_id = (
+        f"registry:{document_id}:{authorization_id}" if authorization_id is not None else f"registry:{document_id}:v1"
+    )
+    authorization_suffix = f":{authorization_id}" if authorization_id is not None else ""
     return (
         {
             "family": "FACT",
             "scope": document_id,
             "rule_id": rule_id,
             "payload": _fact_payload(document_id, at, options=fact_options),
-            "authorization_id": f"auth:fact:{document_id}",
+            "authorization_id": f"auth:fact:{document_id}{authorization_suffix}",
             "evidence_id": f"evidence:auth:fact:{document_id}",
             "verifier_id": f"verifier:auth:fact:{document_id}",
         },
@@ -519,7 +544,7 @@ def _family_plans(
             "scope": registry_id,
             "rule_id": rule_id,
             "payload": _registry_payload(document_id, at, registry_id=registry_id),
-            "authorization_id": f"auth:registry:{document_id}",
+            "authorization_id": f"auth:registry:{document_id}{authorization_suffix}",
             "evidence_id": f"evidence:auth:registry:{document_id}",
             "verifier_id": f"verifier:auth:registry:{document_id}",
         },
@@ -528,7 +553,7 @@ def _family_plans(
             "scope": f"policy:{document_id}:v1",
             "rule_id": rule_id,
             "payload": _policy_payload(document_id, at, registry_id=registry_id, options=policy_options),
-            "authorization_id": f"auth:policy:{document_id}",
+            "authorization_id": f"auth:policy:{document_id}{authorization_suffix}",
             "evidence_id": f"evidence:auth:policy:{document_id}",
             "verifier_id": f"verifier:auth:policy:{document_id}",
         },
@@ -569,6 +594,7 @@ def _check_authority_heads_exact(
     signing_key: bytes,
     operator_root: SourceHandlingOperatorRoot,
     plans: Sequence[Mapping[str, Any]],
+    allow_successor: bool = False,
 ) -> None:
     """Fail closed before any provenance write if an authority head already heads other content.
 
@@ -588,7 +614,27 @@ def _check_authority_heads_exact(
         current_head = store.current_canonical_head_id(plan["family"], plan["scope"])
         if current_head is None:
             continue
-        if current_head != _expected_authority_record_id(plan):
+        if current_head != _expected_authority_record_id(plan) and not allow_successor:
+            try:
+                current_record = resolve_canonical_head(
+                    store,
+                    family=plan["family"],
+                    scope=plan["scope"],
+                    cutoff=datetime.max.replace(tzinfo=UTC),
+                )
+            except SourceHandlingBlockedError as error:
+                raise SourceHandlingBlockedError(
+                    f"existing {plan['family']} head for scope {plan['scope']!r} does not match the derived content; "
+                    "refusing to replace provisioned authority state"
+                ) from error
+            retry_payload = dict(plan["payload"])
+            predecessor = current_record.get("supersedes_record_id")
+            if predecessor is not None:
+                retry_payload["supersedes_record_id"] = predecessor
+            retry_plan = dict(plan)
+            retry_plan["payload"] = retry_payload
+            if current_head == _expected_authority_record_id(retry_plan):
+                continue
             raise SourceHandlingBlockedError(
                 f"existing {plan['family']} head for scope {plan['scope']!r} does not match the derived content; "
                 "refusing to replace provisioned authority state"
@@ -602,6 +648,7 @@ def _provision_authority_record(
     operator_root: SourceHandlingOperatorRoot,
     at: datetime,
     plan: Mapping[str, Any],
+    allow_successor: bool = False,
 ) -> dict[str, Any]:
     service = SourceHandlingAuthorityService(
         database,
@@ -611,12 +658,27 @@ def _provision_authority_record(
     )
     now = datetime.now(UTC)
     store = service.resolver()(f"provision-{plan['family']}", now).store
-    payload = plan["payload"]
-    expected_record_id = _expected_authority_record_id(plan)
     current_head = store.current_canonical_head_id(plan["family"], plan["scope"])
+    payload = dict(plan["payload"])
+    if current_head is not None:
+        if allow_successor:
+            payload["supersedes_record_id"] = current_head
+        else:
+            current_record = resolve_canonical_head(
+                store,
+                family=plan["family"],
+                scope=plan["scope"],
+                cutoff=datetime.max.replace(tzinfo=UTC),
+            )
+            predecessor = current_record.get("supersedes_record_id")
+            if predecessor is not None:
+                payload["supersedes_record_id"] = predecessor
+    expected_plan = dict(plan)
+    expected_plan["payload"] = payload
+    expected_record_id = _expected_authority_record_id(expected_plan)
     if current_head == expected_record_id:
         return {"record_id": expected_record_id, "status": "already-provisioned"}
-    if current_head is not None:
+    if current_head is not None and not allow_successor:
         raise SourceHandlingBlockedError(
             f"existing {plan['family']} head for scope {plan['scope']!r} does not match the derived content; "
             "refusing to replace provisioned authority state"
@@ -636,7 +698,7 @@ def _provision_authority_record(
         governed_subject_scope=plan["scope"],
         payload=payload,
         authorization_rule_id=plan["rule_id"],
-        expected_current_head_id=None,
+        expected_current_head_id=current_head,
         evidence_ids=(plan["evidence_id"],),
         evidence_strength=evidence_strength,
         evidence_method=evidence_method,
@@ -651,7 +713,7 @@ def _provision_authority_record(
     result = service.publish(
         family=plan["family"],
         scope=plan["scope"],
-        expected_current_head_id=None,
+        expected_current_head_id=current_head,
         payload=payload,
         authorization=authorization,
     )
@@ -716,10 +778,38 @@ def _run(
     )
     planned_pairs = tuple((p["provenance_id"], p["provenance_kind"]) for p in dummy_plan_list)
 
+    existing_known_at, _, recovering_successor = _existing_provenance_info(database, planned_pairs)
+    try:
+        first_provenance = PROVENANCE_RESOLVER(
+            planned_pairs[0][0],
+            planned_pairs[0][1],
+            datetime.max.replace(tzinfo=UTC),
+        )
+    except SourceHandlingBlockedError as error:
+        if str(error) != "Source Handling provenance tables are unavailable":
+            raise
+        first_provenance = None
+    current_provenance_is_successor = (
+        first_provenance is not None and first_provenance.get("supersedes_record_id") is not None
+    )
+    newer_issue_revision = recovering_successor or (existing_known_at is not None and issued_at > existing_known_at)
+    revision_authorization_id = (
+        authorization.authorization_id if newer_issue_revision or current_provenance_is_successor else None
+    )
     if as_of is not None:
         on_or_after = as_of
+    elif recovering_successor:
+        # Resume an interrupted successor batch at the exact timestamp already
+        # selected by the first successful successor write. This makes each
+        # remaining record id deterministic and lets record_provenance no-op the
+        # successors that were committed before the interruption.
+        on_or_after = existing_known_at
+    elif newer_issue_revision:
+        # A changed Issue is new source state. ADR 0036 requires an append-only
+        # successor that is knowable after that revision; reusing the predecessor
+        # timestamp would backdate the new classification and is correctly blocked.
+        on_or_after = datetime.now(UTC)
     else:
-        existing_known_at, _ = _existing_provenance_info(database, planned_pairs)
         on_or_after = existing_known_at if existing_known_at is not None else datetime.now(UTC)
 
     on_or_after = _aware_utc("provisioning as-of", on_or_after)
@@ -748,7 +838,7 @@ def _run(
         at=on_or_after,
         restrictive_fact_detector=restrictive_fact_detector,
     )
-    _check_provenance_heads_exact(provenance_plans, on_or_after)
+    _check_provenance_heads_exact(provenance_plans, on_or_after, allow_successor=newer_issue_revision)
     _require_rule_strict_known(database, signing_key, operator_root, on_or_after)
 
     # Fail closed on an existing but mismatched authority head BEFORE any
@@ -767,12 +857,14 @@ def _run(
         rule_id=authorization_rule_id,
         fact_options=fact_options,
         policy_options=policy_options,
+        authorization_id=revision_authorization_id,
     )
     _check_authority_heads_exact(
         database=database,
         signing_key=signing_key,
         operator_root=operator_root,
         plans=preview_plans,
+        allow_successor=newer_issue_revision,
     )
 
     for plan in provenance_plans:
@@ -805,6 +897,7 @@ def _run(
         rule_id=authorization_rule_id,
         fact_options=fact_options,
         policy_options=policy_options,
+        authorization_id=revision_authorization_id,
     )
     records: dict[str, Any] = {}
     for plan in plans:
@@ -814,6 +907,7 @@ def _run(
             operator_root=operator_root,
             at=authority_at,
             plan=plan,
+            allow_successor=newer_issue_revision,
         )
     status = (
         "provisioned" if any(entry["status"] == "provisioned" for entry in records.values()) else "already-provisioned"
