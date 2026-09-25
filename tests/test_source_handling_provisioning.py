@@ -669,6 +669,171 @@ def test_finding_2_invalid_vocabulary_fails_closed_before_any_write(
         )
 
 
+def test_newer_issue_revision_appends_successor_instead_of_reusing_stale_as_of(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A later Issue updated_at creates canonical successors without backdating classification."""
+    database, key, _ = _prepare(tmp_path, monkeypatch)
+    rule = bootstrap._load_production_rule()
+    first_updated = datetime.now(UTC)
+    first_as_of = first_updated
+
+    fact_options = provisioning._FactOptions(
+        sensitivity="INTERNAL",
+        operation_restrictions=(),
+        persistence_restriction="FULL_CONTENT_ALLOWED",
+        secret_presence=(),
+    )
+    defaults = provisioning._REPOSITORY_DEFAULTS
+    policy_options = provisioning._PolicyOptions(
+        processing_decision=defaults["processing_decision"],
+        retention_decision=defaults["retention_decision"],
+        reconstruction_decision=defaults["reconstruction_decision"],
+        access_decision=defaults["access_decision"],
+        deletion_lifecycle_decision=defaults["deletion_lifecycle_decision"],
+        persist_disposition="ALLOW",
+        read_access_disposition="ALLOW",
+        reconstruct_disposition="ALLOW",
+        delete_or_expire_disposition="ALLOW",
+    )
+
+    first = provisioning._run(
+        database=str(database),
+        signing_key=key,
+        rule=rule,
+        authorization=_authorization(433, provisioning._time_text(first_updated), "auth-433-v1"),
+        fact_options=fact_options,
+        policy_options=policy_options,
+        provenance_authority_identity=provisioning.AUTHORITY_COMPONENT_ID,
+        as_of=first_as_of,
+    )
+    assert first["status"] == "provisioned"
+
+    second_updated = datetime.now(UTC)
+    second_authorization = _authorization(433, provisioning._time_text(second_updated), "auth-433-v2")
+    second = provisioning._run(
+        database=str(database),
+        signing_key=key,
+        rule=rule,
+        authorization=second_authorization,
+        fact_options=fact_options,
+        policy_options=policy_options,
+        provenance_authority_identity=provisioning.AUTHORITY_COMPONENT_ID,
+        as_of=None,
+    )
+    assert second["status"] == "provisioned"
+    assert provisioning._parse_time(second["as_of"]) >= second_updated
+    assert all(entry["status"] == "provisioned" for entry in second["records"].values())
+
+    retry = provisioning._run(
+        database=str(database),
+        signing_key=key,
+        rule=rule,
+        authorization=second_authorization,
+        fact_options=fact_options,
+        policy_options=policy_options,
+        provenance_authority_identity=provisioning.AUTHORITY_COMPONENT_ID,
+        as_of=None,
+    )
+    assert retry["status"] == "already-provisioned"
+    assert all(entry["status"] == "already-provisioned" for entry in retry["records"].values())
+
+
+def test_interrupted_newer_revision_provenance_batch_recovers_at_selected_timestamp(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A retry completes a partially committed successor provenance batch."""
+    database, key, _ = _prepare(tmp_path, monkeypatch)
+    rule = bootstrap._load_production_rule()
+    fact_options = provisioning._FactOptions(
+        sensitivity="INTERNAL",
+        operation_restrictions=(),
+        persistence_restriction="FULL_CONTENT_ALLOWED",
+        secret_presence=(),
+    )
+    defaults = provisioning._REPOSITORY_DEFAULTS
+    policy_options = provisioning._PolicyOptions(
+        processing_decision=defaults["processing_decision"],
+        retention_decision=defaults["retention_decision"],
+        reconstruction_decision=defaults["reconstruction_decision"],
+        access_decision=defaults["access_decision"],
+        deletion_lifecycle_decision=defaults["deletion_lifecycle_decision"],
+        persist_disposition="ALLOW",
+        read_access_disposition="ALLOW",
+        reconstruct_disposition="ALLOW",
+        delete_or_expire_disposition="ALLOW",
+    )
+    first_updated = datetime.now(UTC)
+    first_authorization = _authorization(438, provisioning._time_text(first_updated), "auth-438-v1")
+    first = provisioning._run(
+        database=str(database),
+        signing_key=key,
+        rule=rule,
+        authorization=first_authorization,
+        fact_options=fact_options,
+        policy_options=policy_options,
+        provenance_authority_identity=provisioning.AUTHORITY_COMPONENT_ID,
+        as_of=first_updated,
+    )
+    assert first["status"] == "provisioned"
+
+    second_updated = datetime.now(UTC)
+    second_authorization = _authorization(438, provisioning._time_text(second_updated), "auth-438-v2")
+    successor_at = datetime.now(UTC)
+    document_id = issue_agent_document_id(second_authorization)
+    plans = provisioning._provenance_plans(
+        document_id=document_id,
+        authority_identity=provisioning.AUTHORITY_COMPONENT_ID,
+        at=successor_at,
+    )
+    _, verification_key_sha256, genesis_rule_sha256 = bootstrap._derived_digests(key, rule)
+    repository = provenance_module.SourceHandlingProvenanceAuthorityRepository(
+        database,
+        signing_private_key=key,
+        operator_root=SourceHandlingOperatorRoot(
+            genesis_rule_sha256=genesis_rule_sha256,
+            verification_key_sha256=verification_key_sha256,
+        ),
+    )
+    for plan in plans[:2]:
+        repository.record_provenance(
+            provenance_id=plan["provenance_id"],
+            provenance_kind=plan["provenance_kind"],
+            authority_identity=plan["authority_identity"],
+            effective_from=successor_at,
+            recorded_at=successor_at,
+            known_at=successor_at,
+            evidence_strength=plan["evidence_strength"],
+            evidence_method=plan["evidence_method"],
+            verifier_type=plan["verifier_type"],
+        )
+
+    recovered = provisioning._run(
+        database=str(database),
+        signing_key=key,
+        rule=rule,
+        authorization=second_authorization,
+        fact_options=fact_options,
+        policy_options=policy_options,
+        provenance_authority_identity=provisioning.AUTHORITY_COMPONENT_ID,
+        as_of=None,
+    )
+    assert recovered["status"] == "provisioned"
+    assert recovered["as_of"] == provisioning._time_text(successor_at)
+
+    with sqlite3.connect(database) as connection:
+        heads = connection.execute(
+            "SELECT r.known_at, r.supersedes_record_id "
+            "FROM source_handling_provenance_heads h "
+            "JOIN source_handling_provenance_records r ON r.record_id = h.current_record_id "
+            "WHERE r.provenance_id LIKE ? ORDER BY r.provenance_id",
+            (f"%{document_id}",),
+        ).fetchall()
+    assert len(heads) == 6
+    assert {known_at for known_at, _ in heads} == {provisioning._time_text(successor_at)}
+    assert all(predecessor is not None for _, predecessor in heads)
+
+
 def test_finding_3_interrupted_provisioning_recovery(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
 ) -> None:
