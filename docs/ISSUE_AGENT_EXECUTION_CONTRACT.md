@@ -122,9 +122,10 @@ opens a Draft PR only when all of the following hold:
 - the workflow-run head SHA is still the branch head;
 - Issue `<n>` exists and is an Issue, not a pull request;
 - no pull request is open for that branch;
-- every commit between `main` and the head has exactly one parent, and the
-  head carries a verified signature from an authorized signer in
-  `docs/CODE_WRITE_POLICY.json`.
+- the commit range from `main` is complete and non-empty, ends at the head,
+  and contains no merge commit;
+- every commit in that range carries a verified signature from an authorized
+  signer in `docs/CODE_WRITE_POLICY.json`.
 
 The PR is created with a dedicated token (`HUNTER_ISSUE_AGENT_PR_TOKEN`), not
 the workflow `GITHUB_TOKEN`. GitHub does not start `pull_request` workflows for
@@ -146,9 +147,12 @@ returns only non-secret fields:
 
 - `state`, `claimed_at`, `dispatched_at`, `completed_at`, `failed_at`;
 - `execution_branch`, `base_sha`, `head_after`, `provider`;
-- `failure_type`, `failure_code`.
+- `failure_type`, `failure_code`;
+- `failure_attempts`, the per-provider attempt outcomes of an exhausted
+  provider pool. These are runtime-owned fixed strings, never provider output.
 
 It never returns the handoff document, the prompt or free-form failure text.
+Malformed identities are refused by the ingress before anything is forwarded.
 
 ### I8. The provider is self-checked at startup
 
@@ -176,7 +180,7 @@ A provider that cannot pass this check can never be dispatched to.
 | F5 | `base_sha` not a commit reachable from `main` | workspace materialization | ledger `FAILED`, `failure_code=BASE_NOT_ON_MAIN` | yes |
 | F6 | remote branch exists at a foreign head | workspace materialization | `FAILED`, `REMOTE_BRANCH_CONFLICT`; nothing pushed | yes |
 | F7 | git transport failure while materializing | workspace materialization | `FAILED`, `WORKSPACE_UNAVAILABLE` | yes |
-| F8 | every provider fails, is rate-limited, or does not advance the head | fallback dispatcher | `FAILED`, `PROVIDER_POOL_EXHAUSTED` with per-provider codes | yes |
+| F8 | every provider fails, is rate-limited, or does not advance the head | fallback dispatcher | `FAILED`, `PROVIDER_POOL_EXHAUSTED`, per-provider `failure_attempts` | yes |
 | F9 | candidate not linear from `base_sha`, head mismatch, or preflight red | targeted validation | provider attempt failed; a branch the trusted publication created is deleted | yes |
 | F10 | provider environment unsuitable | fallback dispatcher | `FAILED`, `ENVIRONMENT_UNSUITABLE` | yes |
 | F11 | issuer restarted mid-execution (lease lapsed) | startup recovery | `FAILED`, `PROCESS_RESTART` | yes |

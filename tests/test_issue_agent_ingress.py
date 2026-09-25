@@ -42,9 +42,19 @@ class _Upstream:
 
         class Handler(BaseHTTPRequestHandler):
             def do_GET(self) -> None:
+                if self.path != "/healthz":
+                    with upstream.lock:
+                        upstream.requests.append(
+                            {"method": "GET", "path": self.path, "headers": dict(self.headers.items()), "body": b""}
+                        )
+                    self.send_response(upstream.status)
+                    self.send_header("Content-Length", str(len(upstream.body)))
+                    self.end_headers()
+                    self.wfile.write(upstream.body)
+                    return
                 body = json.dumps({"service": upstream.health_service, "status": "ok"}).encode()
                 time.sleep(upstream.delay)
-                self.send_response(200 if self.path == "/healthz" else 404)
+                self.send_response(200)
                 self.send_header("Content-Length", str(len(body)))
                 self.end_headers()
                 self.wfile.write(body)
@@ -179,6 +189,55 @@ def test_authorize_routes_only_to_the_issuer(topology: Any) -> None:
     assert [request["path"] for request in edges.issuer.requests] == ["/issue-agent/authorize"]
     assert edges.issuer.requests[0]["body"] == DOCUMENT
     assert edges.provisioner.requests == []
+
+
+STATUS_ID = "hunter-issue-agent-authorization:" + "0123456789abcdef" * 4
+
+
+def test_status_reads_route_only_to_the_issuer_by_the_exact_path(topology: Any) -> None:
+    edges = topology()
+    edges.issuer.body = b'{"state":"COMPLETED"}'
+
+    status, _, body = edges.request("GET", f"/issue-agent/status/{STATUS_ID}", headers={"Authorization": "x"})
+
+    assert status == 200
+    assert body == b'{"state":"COMPLETED"}'
+    assert [(request["method"], request["path"]) for request in edges.issuer.requests] == [
+        ("GET", f"/issue-agent/status/{STATUS_ID}")
+    ]
+    assert "Authorization" not in edges.issuer.requests[0]["headers"]
+    assert edges.provisioner.requests == []
+
+
+@pytest.mark.parametrize(
+    "path",
+    [
+        "/issue-agent/status/",
+        "/issue-agent/status/" + STATUS_ID.upper(),
+        "/issue-agent/status/" + STATUS_ID[:-1],
+        "/issue-agent/status/" + STATUS_ID + "0",
+        "/issue-agent/status/" + STATUS_ID + "/",
+        "/issue-agent/status/" + STATUS_ID + "?verbose=1",
+        "/issue-agent/status/../authorize",
+        "//issue-agent/status/" + STATUS_ID,
+        "/issue-agent/status/%2e%2e%2fauthorize",
+        "/issue-agent/status/hunter-issue-agent-authorization%3A" + "0" * 64,
+    ],
+)
+def test_non_canonical_status_paths_never_reach_an_upstream(topology: Any, path: str) -> None:
+    edges = topology()
+    status, _, _ = edges.request("GET", path)
+    assert status == 404
+    assert edges.upstream_hits() == 0
+
+
+@pytest.mark.parametrize("method", ["POST", "PUT", "DELETE", "PATCH"])
+def test_status_is_read_only(topology: Any, method: str) -> None:
+    edges = topology()
+    status, headers, _ = edges.request(method, f"/issue-agent/status/{STATUS_ID}", b"", {"Content-Length": "0"})
+    assert status == 405
+    assert headers["Allow"] == "GET"
+    assert edges.upstream_hits() == 0
 
 
 def test_upstream_status_and_body_are_relayed_byte_for_byte(topology: Any) -> None:

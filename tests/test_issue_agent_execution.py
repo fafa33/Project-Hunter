@@ -58,11 +58,14 @@ from hunter.automation.issue_agent_execution import (
     IssueAgentExecutionConfiguration,
     IssueAgentExecutionError,
     IssueAgentExecutionLedger,
+    IssueAgentExecutionTarget,
     IssueAgentIssuerError,
     IssueAgentReplayError,
     SignedIssueAgentAuthorization,
     build_production_source_handling_resolver,
+    derive_execution_target,
     issue_agent_document_id,
+    issue_agent_execution_branch,
     issue_agent_intake_reference,
     issue_agent_task_request,
     issue_agent_task_text,
@@ -418,6 +421,7 @@ class RecordingFallback:
 
     def __init__(self, receipt: AgentFallbackRuntimeReceipt | None = None) -> None:
         self.documents: list[str | bytes] = []
+        self.targets: list[Any] = []
         self._receipt = receipt or AgentFallbackRuntimeReceipt(
             provider="codex",
             head_before="a" * 40,
@@ -426,8 +430,9 @@ class RecordingFallback:
             validation_succeeded=True,
         )
 
-    def dispatch(self, document: str | bytes) -> AgentFallbackRuntimeReceipt:
+    def dispatch(self, document: str | bytes, target: Any) -> AgentFallbackRuntimeReceipt:
         self.documents.append(document)
+        self.targets.append(target)
         return self._receipt
 
 
@@ -437,7 +442,7 @@ class ExplodingFallback:
     def __init__(self) -> None:
         self.documents: list[str | bytes] = []
 
-    def dispatch(self, document: str | bytes) -> AgentFallbackRuntimeReceipt:
+    def dispatch(self, document: str | bytes, target: Any) -> AgentFallbackRuntimeReceipt:
         self.documents.append(document)
         raise OSError("network outcome is uncertain")
 
@@ -464,7 +469,7 @@ class GovernedFallbackAdapter:
         self.calls.append((provider, document))
         return AgentExecutionReport("completed", "provider says the merge is done and approved")
 
-    def dispatch(self, document: str | bytes) -> AgentFallbackRuntimeReceipt:
+    def dispatch(self, document: str | bytes, target: Any) -> AgentFallbackRuntimeReceipt:
         result = self._dispatcher.dispatch_document(document)
         return AgentFallbackRuntimeReceipt(
             provider=result.provider,
@@ -508,7 +513,6 @@ class Deployment:
             repository=REPOSITORY,
             owner_login=OWNER,
             evidence_database=self.database,
-            execution_branch=BRANCH,
             repository_checkout=tmp_path,
             source_handling_verification_key=_public_key_bytes(self._signing_key),
             source_handling_operator_root=SourceHandlingOperatorRoot(
@@ -779,7 +783,6 @@ def _environment(tmp_path: Path) -> dict[str, str]:
         REPOSITORY_ENV,
         OWNER_LOGIN_ENV,
         EVIDENCE_DATABASE_ENV,
-        EXECUTION_BRANCH_ENV,
         REPOSITORY_CHECKOUT_ENV,
         SOURCE_HANDLING_VERIFICATION_KEY_ENV,
         SOURCE_HANDLING_VERIFICATION_KEY_SHA256_ENV,
@@ -810,7 +813,6 @@ def test_absent_authority_database_cannot_degrade_to_a_test_double(tmp_path: Pat
         repository=REPOSITORY,
         owner_login=OWNER,
         evidence_database=tmp_path / "nothing-here.sqlite",
-        execution_branch=BRANCH,
         repository_checkout=tmp_path,
         source_handling_verification_key=_public_key_bytes(_private_key_bytes()),
         source_handling_operator_root=SourceHandlingOperatorRoot(
@@ -914,6 +916,15 @@ def test_exact_handoff_is_passed_unchanged_to_the_fallback_runtime(tmp_path: Pat
     assert receipt.handoff_document == serialize_prompt_automation_handoff(envelope)
     assert deployment.ledger.entry(receipt.authorization_id).handoff_document == receipt.handoff_document
 
+    # The runtime is told exactly where to execute: the target derived from the
+    # signed authorization, which the ledger recorded before dispatch.
+    (target,) = deployment.fallback.targets
+    signed = SignedIssueAgentAuthorization.from_json(_authorization_document())
+    assert target == derive_execution_target(signed)
+    entry = deployment.ledger.entry(receipt.authorization_id)
+    assert (entry.execution_branch, entry.base_sha) == (target.branch, target.base_sha)
+    assert (entry.provider, entry.head_after) == ("codex", "b" * 40)
+
 
 def test_no_issue_text_reaches_the_fallback_runtime(tmp_path: Path) -> None:
     secret = "PROVIDER=jules DESTINATION=https://evil.example/hook MERGE=true"
@@ -955,10 +966,12 @@ def test_issue_text_cannot_choose_route_provider_destination_or_merge(tmp_path: 
     # is the one that ran -- not the one the Issue named.
     assert [provider for provider, _ in fallback.calls] == [PROVIDER_ORDER[0]]
     assert receipt.fallback.provider == PROVIDER_ORDER[0]
-    # The provider received the exact handoff, and the destination/branch stay
-    # operational configuration.
+    # The provider received the exact handoff, and the branch is derived from
+    # the signed authorization -- never the "branch=main" the Issue text named.
     assert fallback.calls[0][1] == receipt.handoff_document
-    assert deployment.configuration.execution_branch == BRANCH
+    entry = deployment.ledger.entry(receipt.authorization_id)
+    assert entry.execution_branch == issue_agent_execution_branch(authorization)
+    assert entry.execution_branch != "main"
 
 
 def test_fallback_provider_order_is_unchanged_by_this_contribution() -> None:
@@ -1001,7 +1014,7 @@ def test_tampered_handoff_fails_the_existing_verifier(tmp_path: Path) -> None:
 
 def test_composition_root_rejects_a_forged_receipt_type(tmp_path: Path) -> None:
     class TextIsSuccess:
-        def dispatch(self, document: str | bytes) -> Any:
+        def dispatch(self, document: str | bytes, target: Any) -> Any:
             return "the provider says it is done"
 
     deployment = _deployment(tmp_path, fallback=TextIsSuccess())
@@ -1122,6 +1135,18 @@ def test_ledger_survives_a_reopened_database(tmp_path: Path) -> None:
         IssueAgentExecutionLedger(tmp_path / "ledger.sqlite").claim(authorization, claimed_at=START)
 
 
+def _ledger_target(authorization: IssueAgentAuthorization) -> IssueAgentExecutionTarget:
+    """The execution target a dispatch of this authorization records."""
+    return IssueAgentExecutionTarget(
+        authorization_id=authorization.authorization_id,
+        issue_number=authorization.issue_number,
+        repository=authorization.repository,
+        branch=issue_agent_execution_branch(authorization),
+        base_ref="main",
+        base_sha="a" * 40,
+    )
+
+
 def test_ledger_transitions_require_the_exact_claimed_content(tmp_path: Path) -> None:
     authorization = _inner(_authorization_document())
     ledger = IssueAgentExecutionLedger(tmp_path / "ledger.sqlite")
@@ -1141,6 +1166,7 @@ def test_ledger_transitions_require_the_exact_claimed_content(tmp_path: Path) ->
             build_record_id="b",
             envelope_id="e",
             handoff_document="{}",
+            target=_ledger_target(authorization),
             dispatched_at=START,
         )
 
@@ -1174,6 +1200,7 @@ def test_a_live_foreign_lease_is_never_failed_or_reclaimed(tmp_path: Path) -> No
         build_record_id="b",
         envelope_id="e",
         handoff_document="{}",
+        target=_ledger_target(authorization),
         dispatched_at=START,
     )
     dispatched = owner.entry(authorization.authorization_id)
@@ -1205,6 +1232,7 @@ def test_an_expired_incomplete_owner_is_recovered_fail_closed(tmp_path: Path) ->
         build_record_id="b",
         envelope_id="e",
         handoff_document="{}",
+        target=_ledger_target(authorization),
         dispatched_at=START,
     )
 
@@ -1238,6 +1266,7 @@ def test_a_wrong_instance_cannot_complete_or_fail_another_instances_execution(
         build_record_id="b",
         envelope_id="e",
         handoff_document="{}",
+        target=_ledger_target(authorization),
         dispatched_at=START,
     )
 
@@ -1270,6 +1299,7 @@ def test_active_execution_records_a_renewable_lease(tmp_path: Path) -> None:
         build_record_id="b",
         envelope_id="e",
         handoff_document="{}",
+        target=_ledger_target(authorization),
         dispatched_at=START,
     )
 
@@ -1302,6 +1332,7 @@ def test_a_pre_lease_row_without_an_owner_is_never_guessed_at_by_recovery(
         build_record_id="b",
         envelope_id="e",
         handoff_document="{}",
+        target=_ledger_target(authorization),
         dispatched_at=START,
     )
 
@@ -1490,6 +1521,7 @@ def test_ledger_state_is_monotonic(tmp_path: Path) -> None:
         build_record_id="b",
         envelope_id="e",
         handoff_document="{}",
+        target=_ledger_target(authorization),
         dispatched_at=START,
     )
     ledger.complete(authorization, completed_at=START)
@@ -1503,6 +1535,7 @@ def test_ledger_state_is_monotonic(tmp_path: Path) -> None:
             build_record_id="b",
             envelope_id="e",
             handoff_document="{}",
+            target=_ledger_target(authorization),
             dispatched_at=START,
         )
     with pytest.raises(IssueAgentReplayError):

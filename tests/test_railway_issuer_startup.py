@@ -912,83 +912,68 @@ def test_vendor_module_is_importable_from_railway_layout(tmp_path: Path, monkeyp
         os.environ[startup._RUNTIME_VENDOR_DIR_ENV] = original_vendor
 
 
-# --- Repository-owned runtime checkout -------------------------------------
+# --- Per-authorization workspace root ----------------------------------------
 
 
-def test_prepare_repository_checkout_clones_canonical_credential_free_remote(tmp_path: Path, monkeypatch) -> None:
+def test_prepare_workspace_root_creates_an_empty_disposable_root_without_cloning(
+    tmp_path: Path, monkeypatch, caplog
+) -> None:
     import railway_issuer_startup as startup
 
     disposable_root = tmp_path / "checkouts"
-    checkout = disposable_root / "runtime"
+    root = disposable_root / "issue-agent"
+    stale = root / ("0" * 64)
+    stale.mkdir(parents=True)
+    (stale / "leftover.txt").write_text("from a previous process")
     monkeypatch.setattr(startup, "_DISPOSABLE_CHECKOUT_ROOT", disposable_root)
     monkeypatch.setenv("HUNTER_ISSUE_AGENT_REPOSITORY", "fafa33/Project-Hunter")
-    monkeypatch.setenv("HUNTER_ISSUE_AGENT_REPO_DIR", str(checkout))
+    monkeypatch.setenv("HUNTER_ISSUE_AGENT_REPO_DIR", str(root))
     monkeypatch.setenv("HUNTER_ISSUE_AGENT_EXECUTION_BRANCH", "issue-agent-execution")
 
-    calls: list[tuple[tuple[str, ...], Path | None]] = []
+    with patch.object(startup.subprocess, "run", side_effect=AssertionError("startup must not clone")):
+        with caplog.at_level("WARNING", logger="railway_issuer_startup"):
+            startup._prepare_workspace_root()
 
-    def fake_run(argv, **kwargs):
-        calls.append((tuple(argv), kwargs.get("cwd")))
-        if argv[1] == "clone":
-            checkout.mkdir(parents=True)
-            return Mock(returncode=0, stdout="", stderr="")
-        return Mock(returncode=0, stdout="https://github.com/fafa33/Project-Hunter.git\n", stderr="")
-
-    with patch.object(startup.subprocess, "run", side_effect=fake_run):
-        startup._prepare_repository_checkout()
-
-    assert calls[0][0] == (
-        "git",
-        "clone",
-        "--no-tags",
-        "--single-branch",
-        "--branch",
-        "issue-agent-execution",
-        "https://github.com/fafa33/Project-Hunter.git",
-        str(checkout.resolve()),
-    )
-    assert calls[1][0] == ("git", "remote", "get-url", "origin")
-    assert calls[1][1] == checkout.resolve()
+    assert root.is_dir()
+    assert list(root.iterdir()) == []
+    assert "HUNTER_ISSUE_AGENT_EXECUTION_BRANCH is retired and ignored" in caplog.text
 
 
-def test_prepare_repository_checkout_rejects_credential_or_url_shaped_repository(tmp_path: Path, monkeypatch) -> None:
+def test_prepare_workspace_root_rejects_credential_or_url_shaped_repository(tmp_path: Path, monkeypatch) -> None:
     import railway_issuer_startup as startup
 
+    monkeypatch.setattr(startup, "_DISPOSABLE_CHECKOUT_ROOT", tmp_path)
     monkeypatch.setenv("HUNTER_ISSUE_AGENT_REPOSITORY", "https://token@github.com/fafa33/Project-Hunter")
     monkeypatch.setenv("HUNTER_ISSUE_AGENT_REPO_DIR", str(tmp_path / "runtime"))
-    monkeypatch.setenv("HUNTER_ISSUE_AGENT_EXECUTION_BRANCH", "issue-agent-execution")
     with pytest.raises(RuntimeError, match="owner/repository slug"):
-        startup._prepare_repository_checkout()
+        startup._prepare_workspace_root()
 
 
-def test_prepare_repository_checkout_fails_closed_when_clone_fails(tmp_path: Path, monkeypatch) -> None:
+def test_prepare_workspace_root_requires_complete_configuration(tmp_path: Path, monkeypatch) -> None:
     import railway_issuer_startup as startup
 
-    disposable_root = tmp_path / "checkouts"
-    checkout = disposable_root / "runtime"
-    monkeypatch.setattr(startup, "_DISPOSABLE_CHECKOUT_ROOT", disposable_root)
     monkeypatch.setenv("HUNTER_ISSUE_AGENT_REPOSITORY", "fafa33/Project-Hunter")
-    monkeypatch.setenv("HUNTER_ISSUE_AGENT_REPO_DIR", str(checkout))
-    monkeypatch.setenv("HUNTER_ISSUE_AGENT_EXECUTION_BRANCH", "issue-agent-execution")
-    with patch.object(startup.subprocess, "run", return_value=Mock(returncode=128, stdout="", stderr="denied")):
-        with pytest.raises(RuntimeError, match="failed to materialize"):
-            startup._prepare_repository_checkout()
+    monkeypatch.delenv("HUNTER_ISSUE_AGENT_REPO_DIR", raising=False)
+    with pytest.raises(RuntimeError, match="configuration is incomplete"):
+        startup._prepare_workspace_root()
 
 
-def test_prepare_repository_checkout_rejects_existing_path_outside_disposable_root(tmp_path: Path, monkeypatch) -> None:
+@pytest.mark.parametrize("inside", [False, True], ids=["outside-approved-root", "the-approved-root-itself"])
+def test_prepare_workspace_root_never_deletes_outside_the_disposable_root(
+    tmp_path: Path, monkeypatch, inside: bool
+) -> None:
     import railway_issuer_startup as startup
 
     disposable_root = tmp_path / "approved"
-    protected = tmp_path / "application"
+    protected = disposable_root if inside else tmp_path / "application"
     protected.mkdir()
     sentinel = protected / "keep.txt"
     sentinel.write_text("keep")
     monkeypatch.setattr(startup, "_DISPOSABLE_CHECKOUT_ROOT", disposable_root)
     monkeypatch.setenv("HUNTER_ISSUE_AGENT_REPOSITORY", "fafa33/Project-Hunter")
     monkeypatch.setenv("HUNTER_ISSUE_AGENT_REPO_DIR", str(protected))
-    monkeypatch.setenv("HUNTER_ISSUE_AGENT_EXECUTION_BRANCH", "issue-agent-execution")
     with pytest.raises(RuntimeError, match="must be contained beneath"):
-        startup._prepare_repository_checkout()
+        startup._prepare_workspace_root()
     assert sentinel.read_text() == "keep"
 
 

@@ -142,52 +142,40 @@ def _canonical_github_remote(repository: str) -> str:
     return f"https://github.com/{owner}/{name}.git"
 
 
-def _prepare_repository_checkout() -> None:
-    """Materialize and verify the configured execution checkout before issuer composition.
+def _prepare_workspace_root() -> None:
+    """Prepare the empty root beneath which each authorization gets its own workspace.
 
-    Railway images contain installed Hunter code, not a writable Git checkout.  The
-    fallback runtime deliberately requires a real checkout with a credential-free
-    pinned GitHub origin.  Startup therefore owns this deployment concern rather
-    than relying on dashboard shell patches.
+    ``docs/ISSUE_AGENT_EXECUTION_CONTRACT.md`` I3: nothing is cloned at startup
+    and no branch is configured. Every execution materializes its own isolated
+    workspace at its signed base, on its derived branch, after dispatch. Startup
+    only guarantees that the configured root is a disposable directory beneath
+    the approved checkout root and that no workspace from a previous process
+    survives into this one.
     """
     repository = os.environ.get(_REPOSITORY_ENV, "").strip()
-    checkout_raw = os.environ.get(_REPOSITORY_CHECKOUT_ENV, "").strip()
-    branch = os.environ.get(_EXECUTION_BRANCH_ENV, "").strip()
-    configured = (bool(repository), bool(checkout_raw), bool(branch))
+    root_raw = os.environ.get(_REPOSITORY_CHECKOUT_ENV, "").strip()
+    if os.environ.get(_EXECUTION_BRANCH_ENV, "").strip():
+        logger.warning(
+            "%s is retired and ignored: each authorization executes on the branch derived from its "
+            "signed scope; remove it from the deployment",
+            _EXECUTION_BRANCH_ENV,
+        )
+    configured = (bool(repository), bool(root_raw))
     if not any(configured):
         # Unit/bootstrap-only invocations do not compose the issuer. The issuer
-        # itself still requires all three variables; production supplies them.
+        # itself still requires both variables; production supplies them.
         return
     if not all(configured):
-        raise RuntimeError("repository checkout configuration is incomplete")
-    checkout = Path(checkout_raw).resolve()
-    remote = _canonical_github_remote(repository)
+        raise RuntimeError("issue agent workspace configuration is incomplete")
+    _canonical_github_remote(repository)
+    root = Path(root_raw).resolve()
     disposable_root = _DISPOSABLE_CHECKOUT_ROOT.resolve()
-    if checkout == disposable_root or disposable_root not in checkout.parents:
-        raise RuntimeError(f"repository checkout must be contained beneath {disposable_root}")
-    if checkout.exists():
-        shutil.rmtree(checkout)
-    checkout.parent.mkdir(parents=True, exist_ok=True)
-    completed = subprocess.run(
-        ("git", "clone", "--no-tags", "--single-branch", "--branch", branch, remote, str(checkout)),
-        text=True,
-        capture_output=True,
-        timeout=120,
-        check=False,
-    )
-    if completed.returncode != 0:
-        raise RuntimeError("failed to materialize configured execution checkout")
-    pinned = subprocess.run(
-        ("git", "remote", "get-url", "origin"),
-        cwd=checkout,
-        text=True,
-        capture_output=True,
-        timeout=30,
-        check=False,
-    )
-    if pinned.returncode != 0 or pinned.stdout.strip() != remote:
-        raise RuntimeError("execution checkout origin is not the canonical credential-free GitHub remote")
-    logger.info("execution checkout prepared for %s on branch %s", repository, branch)
+    if root == disposable_root or disposable_root not in root.parents:
+        raise RuntimeError(f"issue agent workspace root must be contained beneath {disposable_root}")
+    if root.exists():
+        shutil.rmtree(root)
+    root.mkdir(parents=True)
+    logger.info("issue agent workspace root prepared for %s", repository)
 
 
 logger = logging.getLogger("railway_issuer_startup")
@@ -418,9 +406,9 @@ def main() -> int:
     )
 
     try:
-        _prepare_repository_checkout()
+        _prepare_workspace_root()
     except Exception as error:  # noqa: BLE001 - fail closed before issuer
-        logger.error("repository checkout preparation failed: %s", error)
+        logger.error("issue agent workspace preparation failed: %s", error)
         return 1
 
     try:

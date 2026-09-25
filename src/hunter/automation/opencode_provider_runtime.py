@@ -103,26 +103,10 @@ def _publication_environment(token: str, askpass: Path) -> dict[str, str]:
     return env
 
 
-def _push_trusted(
-    repo: Path,
-    branch: str,
-    push_url: str,
-    expected_remote_head: str,
-    *,
-    source_ref: str = "HEAD",
-    run_pre_push: bool = True,
-) -> None:
+def _authenticated_git(repo: Path, *args: str) -> str:
     token = os.environ.get(_PUSH_TOKEN_ENV, "").strip()
-    args = [
-        "push",
-        f"--force-with-lease=refs/heads/{branch}:{expected_remote_head}",
-    ]
-    if not run_pre_push:
-        args.append("--no-verify")
-    args.extend((push_url, f"{source_ref}:refs/heads/{branch}"))
     if not token:
-        _git(repo, *args)
-        return
+        return _git(repo, *args)
 
     with tempfile.TemporaryDirectory(prefix="hunter-git-askpass-") as directory:
         askpass = Path(directory) / "askpass.sh"
@@ -135,7 +119,39 @@ def _push_trusted(
             encoding="utf-8",
         )
         askpass.chmod(0o700)
-        _git(repo, *args, env=_publication_environment(token, askpass))
+        return _git(repo, *args, env=_publication_environment(token, askpass))
+
+
+def _push_trusted(
+    repo: Path,
+    branch: str,
+    push_url: str,
+    expected_remote_head: str,
+    *,
+    source_ref: str = "HEAD",
+    run_pre_push: bool = True,
+) -> None:
+    """Push under an exact lease; an empty expected head is a create-only lease."""
+    args = [
+        "push",
+        f"--force-with-lease=refs/heads/{branch}:{expected_remote_head}",
+    ]
+    if not run_pre_push:
+        args.append("--no-verify")
+    args.extend((push_url, f"{source_ref}:refs/heads/{branch}"))
+    _authenticated_git(repo, *args)
+
+
+def _remote_branch_head(repo: Path, branch: str, push_url: str) -> str | None:
+    """The GitHub-visible head of the execution branch, or ``None`` when absent."""
+    output = _authenticated_git(repo, "ls-remote", push_url, f"refs/heads/{branch}")
+    lines = [line for line in output.splitlines() if line.strip()]
+    if not lines:
+        return None
+    fields = lines[0].split()
+    if len(lines) != 1 or len(fields) != 2 or re.fullmatch(r"[0-9a-fA-F]{40}", fields[0]) is None:
+        raise ProviderAdapterError("remote execution branch head is invalid")
+    return fields[0].lower()
 
 
 def _model_environment(credential_home: Path) -> dict[str, str]:
@@ -330,7 +346,9 @@ def _publish_result(
     head_before: str,
     push_url: str,
     root: Path,
+    remote_before: str | None = None,
 ) -> str:
+    """Publish one signed result; ``remote_before=None`` means the branch is created here."""
     publisher = _trusted_publication_clone(repo, root / "publisher", branch, head_before)
     trusted_hooks = (publisher / ".githooks").read_bytes() if (publisher / ".githooks").is_file() else None
     _mirror_worktree(sandbox, publisher)
@@ -342,16 +360,18 @@ def _publish_result(
     _git(publisher, "commit", "-S", "-m", "chore: apply governed OpenCode provider result")
     head_after = _git(publisher, "rev-parse", "HEAD")
     _git(publisher, "verify-commit", head_after)
-    _push_trusted(publisher, branch, push_url, head_before)
+    _push_trusted(publisher, branch, push_url, remote_before or "")
     try:
         _validate_published_candidate(publisher, branch, head_after)
     except ProviderAdapterError:
+        # Undo only this publication: delete a branch it created, or restore
+        # the exact previous head of a branch that already existed.
         _push_trusted(
             publisher,
             branch,
             push_url,
             head_after,
-            source_ref=head_before,
+            source_ref="" if remote_before is None else head_before,
             run_pre_push=False,
         )
         raise
@@ -388,6 +408,12 @@ def run(document: str) -> int:
     if _git(repo, "status", "--porcelain=v1", "--untracked-files=normal"):
         raise ProviderAdapterError("provider checkout must be clean before execution")
     head_before = _git(repo, "rev-parse", "HEAD")
+    # A governed authorization branch may not exist on GitHub yet; then this
+    # publication creates it under a create-only lease. An existing branch must
+    # be exactly where this checkout starts, or someone else wrote it.
+    remote_before = _remote_branch_head(repo, branch, push_url)
+    if remote_before is not None and remote_before != head_before:
+        raise ProviderAdapterError("remote execution branch is not at the provider starting HEAD")
 
     prompt = _exact_prompt(document, database)
     executable_name = os.environ.get(_EXECUTABLE_ENV, "opencode").strip() or "opencode"
@@ -416,7 +442,7 @@ def run(document: str) -> int:
         if completed.returncode != 0:
             return 1
 
-        head_after = _publish_result(repo, sandbox, branch, head_before, push_url, root)
+        head_after = _publish_result(repo, sandbox, branch, head_before, push_url, root, remote_before)
         _sync_primary_checkout(repo, branch, head_before, head_after, push_url)
     return 0
 

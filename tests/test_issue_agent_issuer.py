@@ -392,6 +392,7 @@ class RecordingFallback:
 
     def __init__(self, receipt: AgentFallbackRuntimeReceipt | None = None) -> None:
         self.documents: list[str | bytes] = []
+        self.targets: list[Any] = []
         self._receipt = receipt or AgentFallbackRuntimeReceipt(
             provider="codex",
             head_before="a" * 40,
@@ -400,8 +401,9 @@ class RecordingFallback:
             validation_succeeded=True,
         )
 
-    def dispatch(self, document: str | bytes) -> AgentFallbackRuntimeReceipt:
+    def dispatch(self, document: str | bytes, target: Any) -> AgentFallbackRuntimeReceipt:
         self.documents.append(document)
+        self.targets.append(target)
         return self._receipt
 
 
@@ -413,7 +415,7 @@ class BlockingFallback(RecordingFallback):
         self.started = threading.Event()
         self.release = threading.Event()
 
-    def dispatch(self, document: str | bytes) -> AgentFallbackRuntimeReceipt:
+    def dispatch(self, document: str | bytes, target: Any) -> AgentFallbackRuntimeReceipt:
         self.documents.append(document)
         self.started.set()
         if not self.release.wait(timeout=10):
@@ -427,7 +429,7 @@ class ExplodingFallback:
     def __init__(self) -> None:
         self.documents: list[str | bytes] = []
 
-    def dispatch(self, document: str | bytes) -> AgentFallbackRuntimeReceipt:
+    def dispatch(self, document: str | bytes, target: Any) -> AgentFallbackRuntimeReceipt:
         self.documents.append(document)
         raise OSError("network outcome is uncertain")
 
@@ -435,14 +437,14 @@ class ExplodingFallback:
 class ValueRaisingFallback:
     """Simulates an unexpected runtime failure outside the canonical error set."""
 
-    def dispatch(self, document: str | bytes) -> AgentFallbackRuntimeReceipt:
+    def dispatch(self, document: str | bytes, target: Any) -> AgentFallbackRuntimeReceipt:
         raise ValueError("provider subprocess vanished")
 
 
 class TextIsSuccess:
     """A compromised runtime that tries to turn provider prose into success."""
 
-    def dispatch(self, document: str | bytes) -> Any:
+    def dispatch(self, document: str | bytes, target: Any) -> Any:
         return "the provider says it is done"
 
 
@@ -980,7 +982,8 @@ def test_noncanonical_provider_success_becomes_durable_failure(
         authorization.authorization_id,
         "FAILED",
     )
-    assert entry.failure_type == "IssueAgentExecutionError"
+    assert entry.failure_type == "IssueAgentRuntimeReceiptError"
+    assert entry.failure_code == "NONCANONICAL_RUNTIME_RECEIPT"
     assert "canonical execution receipt" in (entry.failure_message or "")
 
 
@@ -1221,7 +1224,6 @@ def _required_names() -> list[str]:
         REPOSITORY_ENV,
         OWNER_LOGIN_ENV,
         EVIDENCE_DATABASE_ENV,
-        EXECUTION_BRANCH_ENV,
         REPOSITORY_CHECKOUT_ENV,
         SOURCE_HANDLING_VERIFICATION_KEY_ENV,
         SOURCE_HANDLING_VERIFICATION_KEY_SHA256_ENV,
@@ -1307,7 +1309,8 @@ def test_issuer_edge_reuses_existing_authorities_only(tmp_path: Path, monkeypatc
         monkeypatch.setenv(name, value)
 
     services = issuer.compose_services(configuration)
-    assert isinstance(services.fallback, issuer.OperationalAgentFallbackRuntime)
+    assert isinstance(services.fallback, issuer.IssueAgentWorkspaceRuntime)
+    assert services.fallback.workspace_root == configuration.repository_checkout
     assert services.configuration is configuration
     assert services.repository is not None
     assert isinstance(services.ingress, GovernedEngineeringTaskIngress)

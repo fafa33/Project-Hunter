@@ -59,8 +59,7 @@ All of the following are required; any missing or malformed value fails closed b
 | `HUNTER_ISSUE_AGENT_REPOSITORY` | Exact `owner/name` this deployment executes for. |
 | `HUNTER_ISSUE_AGENT_OWNER_LOGIN` | The only login whose authorization is accepted. |
 | `HUNTER_ISSUE_AGENT_EVIDENCE_DB` | Evidence Intelligence database, which must also hold the Source Handling authority history. |
-| `HUNTER_ISSUE_AGENT_EXECUTION_BRANCH` | Remote branch providers must advance. Never taken from Issue text. |
-| `HUNTER_ISSUE_AGENT_REPO_DIR` | Repository checkout provider commands run in. |
+| `HUNTER_ISSUE_AGENT_REPO_DIR` | Workspace root; each authorization executes in its own workspace at its signed `base_sha`, on the branch derived from the signed authorization (never from Issue text or configuration). See `docs/ISSUE_AGENT_EXECUTION_CONTRACT.md`. |
 | `HUNTER_SOURCE_HANDLING_VERIFICATION_KEY` | Hex Ed25519 public key for the authority history. |
 | `HUNTER_SOURCE_HANDLING_VERIFICATION_KEY_SHA256` | Operator-provisioned fingerprint of that key. |
 | `HUNTER_SOURCE_HANDLING_GENESIS_RULE_SHA256` | Operator-provisioned genesis authorization-rule digest. |

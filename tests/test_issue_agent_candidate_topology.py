@@ -12,9 +12,10 @@ for GitHub:
 Every component is the production one. Only three things are stand-ins, and
 each is genuinely external to this repository:
 
-- GitHub itself. A bare repository, reached through `url.<bare>.insteadOf`
-  in a test-only global Git config, so the production code keeps its pinned
-  canonical `https://github.com/<owner>/<name>.git` remote byte-for-byte.
+- GitHub itself. A bare repository, reached through a test-only
+  ``git-remote-https`` helper on a test ``GIT_EXEC_PATH``, so the production
+  code keeps its pinned canonical ``https://github.com/<owner>/<name>.git``
+  origin byte-for-byte and no production code path is aware of the stand-in.
 - The model provider. A deterministic script edits, commits and pushes like
   an agent would.
 - The candidate repository's own `scripts/hunter_pr_preflight.py`, which is
@@ -175,10 +176,23 @@ class FakeGitHub:
         return commits
 
 
+def _exec_path_with_fake_github(root: Path, bare: Path) -> Path:
+    """A Git exec path whose ``https`` transport reaches the bare repository."""
+    exec_dir = root / "git-exec"
+    exec_dir.mkdir()
+    real = Path(_git(root, "--exec-path"))
+    for entry in real.iterdir():
+        if entry.name != "git-remote-https":
+            (exec_dir / entry.name).symlink_to(entry)
+    helper = exec_dir / "git-remote-https"
+    helper.write_text(f'#!/bin/sh\nexec git remote-ext "$1" "git-%s {bare}"\n', encoding="utf-8")
+    helper.chmod(0o755)
+    return exec_dir
+
+
 @pytest.fixture
 def github(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> FakeGitHub:
     config = tmp_path / "gitconfig"
-    bare = tmp_path / "github.git"
     config.write_text(
         "[user]\n"
         "\tname = Farhad5778\n"
@@ -186,13 +200,12 @@ def github(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> FakeGitHub:
         "[commit]\n"
         "\tgpgsign = false\n"
         "[init]\n"
-        "\tdefaultBranch = main\n"
-        f'[url "file://{bare}"]\n'
-        f"\tinsteadOf = {CANONICAL_REMOTE}\n",
+        "\tdefaultBranch = main\n",
         encoding="utf-8",
     )
     monkeypatch.setenv("GIT_CONFIG_GLOBAL", str(config))
     monkeypatch.setenv("GIT_CONFIG_NOSYSTEM", "1")
+    monkeypatch.setenv("GIT_EXEC_PATH", str(_exec_path_with_fake_github(tmp_path, tmp_path / "github.git")))
     return FakeGitHub(tmp_path)
 
 
@@ -247,7 +260,7 @@ def _provider_environment(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> Pa
     script.write_text(_FAKE_PROVIDER, encoding="utf-8")
     marker = tmp_path / "provider-ran"
     failing = json.dumps([sys.executable, "-c", "import sys; sys.stdin.read(); sys.exit(1)"])
-    git_env = ["GIT_CONFIG_GLOBAL", "GIT_CONFIG_NOSYSTEM"]
+    git_env = ["GIT_CONFIG_GLOBAL", "GIT_CONFIG_NOSYSTEM", "GIT_EXEC_PATH"]
     for provider in PROVIDERS:
         name = provider.upper()
         command = json.dumps([sys.executable, str(script)]) if provider == "codex" else failing
@@ -258,7 +271,9 @@ def _provider_environment(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> Pa
         "HUNTER_AGENT_VALIDATION_COMMAND",
         json.dumps([sys.executable, "-m", "hunter.automation.agent_targeted_validation"]),
     )
-    monkeypatch.setenv("HUNTER_AGENT_VALIDATION_ENV_ALLOWLIST", json.dumps(git_env))
+    # PYTHONPATH lets the validation subprocess import this checkout's own code.
+    monkeypatch.setenv("HUNTER_AGENT_VALIDATION_ENV_ALLOWLIST", json.dumps([*git_env, "PYTHONPATH"]))
+    monkeypatch.setenv("PYTHONPATH", str(Path(__file__).resolve().parents[1] / "src"))
     monkeypatch.setenv("HUNTER_AGENT_ATTEMPT_TIMEOUT_SECONDS", "60")
     monkeypatch.setenv("FAKE_PROVIDER_MARKER", str(marker))
     monkeypatch.setenv("HUNTER_PROMPT_AUTOMATION_SIGNING_KEY", AUTOMATION_SIGNING_KEY_HEX)

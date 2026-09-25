@@ -1,0 +1,66 @@
+name: Hunter / Issue Agent Candidate PR
+
+# docs/ISSUE_AGENT_EXECUTION_CONTRACT.md I6. A governed Issue Agent execution
+# pushes its candidate to its own issue-<n>-<16 hex> branch; Railway never opens
+# a pull request. After Hunter / Pre-PR Preflight passes on that exact head, the
+# trusted default-branch decision module opens one Draft PR against main, which
+# then enters the existing Candidate Admission and governance chain unchanged.
+#
+# The PR is created with HUNTER_ISSUE_AGENT_PR_TOKEN rather than GITHUB_TOKEN,
+# because GitHub starts no pull_request workflows for events GITHUB_TOKEN
+# creates. A missing token fails closed and opens nothing. This workflow never
+# marks a PR ready, approves or merges.
+
+on:
+  workflow_run:
+    workflows:
+      - Hunter / Pre-PR Preflight
+    types:
+      - completed
+
+permissions:
+  contents: read
+  issues: read
+  pull-requests: read
+
+concurrency:
+  group: hunter-issue-agent-candidate-pr-${{ github.event.workflow_run.head_branch }}
+  cancel-in-progress: false
+
+jobs:
+  open-draft-pr:
+    if: >-
+      github.event.workflow_run.event == 'push' &&
+      github.event.workflow_run.conclusion == 'success' &&
+      startsWith(github.event.workflow_run.head_branch, 'issue-')
+    name: Open governed Issue Agent Draft PR
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+
+    steps:
+      - name: Checkout trusted controller
+        uses: actions/checkout@v7
+        with:
+          ref: ${{ github.event.repository.default_branch }}
+          path: engine
+          persist-credentials: false
+
+      - name: Set up Python
+        uses: actions/setup-python@v6
+        with:
+          python-version: "3.11.13"
+
+      - name: Open the Draft PR when the candidate is eligible
+        working-directory: engine/scripts
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+          HUNTER_ISSUE_AGENT_PR_TOKEN: ${{ secrets.HUNTER_ISSUE_AGENT_PR_TOKEN }}
+          GH_REPO: ${{ github.repository }}
+          HEAD_BRANCH: ${{ github.event.workflow_run.head_branch }}
+          HEAD_SHA: ${{ github.event.workflow_run.head_sha }}
+        run: |
+          set -euo pipefail
+          python hunter_issue_agent_candidate_pr.py \
+            --repository "${GH_REPO}" \
+            --branch "${HEAD_BRANCH}" \
+            --head-sha "${HEAD_SHA}"
