@@ -113,10 +113,20 @@ hosted exact-head preflight proof. This contract changes neither requirement.
 ### I6. The Draft PR is opened by GitHub, conservatively
 
 `.github/workflows/hunter-issue-agent-candidate-pr.yml` runs when
-`Hunter / Pre-PR Preflight` completes successfully for a `push`. The trusted
-default-branch decision module (`scripts/hunter_issue_agent_candidate_pr.py`)
-opens a Draft PR only when all of the following hold:
+`Hunter / Pre-PR Preflight` completes successfully for a `push` whose head
+repository is this repository.
 
+`workflow_run` runs with this repository's permissions and secrets, so the job
+never checks out, installs or executes candidate content. Its only checkout is
+the workflow's own trusted default-branch commit (no ref is taken from event
+data). Candidate identifiers reach the trusted script only as environment
+values, and the dedicated token exists only in that one step.
+
+The trusted default-branch decision module
+(`scripts/hunter_issue_agent_candidate_pr.py`) opens a Draft PR only when all
+of the following hold:
+
+- the candidate head repository is this repository, never a fork;
 - the head branch has the exact agent-branch shape
   `issue-<n>-<16 lowercase hex>` and binds Issue `<n>`;
 - the workflow-run head SHA is still the branch head;

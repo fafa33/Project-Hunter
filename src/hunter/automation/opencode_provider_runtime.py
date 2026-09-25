@@ -39,6 +39,13 @@ _PRIVATE_RUNTIME_ENV = {
     _REPOSITORY_ENV,
     "HUNTER_ISSUE_AGENT_REPO_DIR",
 }
+#: Where the isolated attempt workspace is mounted inside the provider sandbox.
+_SANDBOX_WORKSPACE = "/workspace"
+#: The environment variable OpenCode resolves its project directory from. It
+#: names the working directory, not a credential, and must always equal the
+#: directory the provider actually runs in (the sandbox ``--chdir`` target).
+_WORKING_DIRECTORY_ENV = "PWD"
+_PREVIOUS_WORKING_DIRECTORY_ENV = "OLDPWD"
 _CANONICAL_WRITER_NAME = "Farhad5778"
 _CANONICAL_WRITER_EMAIL = "34549283+fafa33@users.noreply.github.com"
 
@@ -162,8 +169,8 @@ def _model_environment(credential_home: Path) -> dict[str, str]:
     child_env["HOME"] = "/home/hunter"
     # OpenCode takes its project directory from ``PWD``, not the process working
     # directory, so the parent's ``PWD`` must never leak into the sandbox.
-    child_env.pop("OLDPWD", None)
-    child_env["PWD"] = "/workspace"
+    child_env.pop(_PREVIOUS_WORKING_DIRECTORY_ENV, None)
+    child_env[_WORKING_DIRECTORY_ENV] = _SANDBOX_WORKSPACE
     child_env["XDG_CONFIG_HOME"] = "/home/hunter/.config"
     child_env["GIT_CONFIG_GLOBAL"] = os.devnull
     child_env["GIT_CONFIG_NOSYSTEM"] = "1"
@@ -203,7 +210,7 @@ def _sandbox_executable_path(executable: str, sandbox: Path, credential_home: Pa
     itself is visible inside the sandbox.
     """
     candidate = Path(executable)
-    for root, mount_point in ((sandbox, "/workspace"), (credential_home, "/home/hunter")):
+    for root, mount_point in ((sandbox, _SANDBOX_WORKSPACE), (credential_home, "/home/hunter")):
         try:
             relative = candidate.relative_to(root)
         except ValueError:
@@ -271,12 +278,12 @@ def _sandbox_command(executable: str, argv: list[str], sandbox: Path, credential
         + [
             "--bind",
             str(sandbox),
-            "/workspace",
+            _SANDBOX_WORKSPACE,
             "--bind",
             str(credential_home),
             "/home/hunter",
             "--chdir",
-            "/workspace",
+            _SANDBOX_WORKSPACE,
             in_sandbox_executable,
             *argv[1:],
         ]

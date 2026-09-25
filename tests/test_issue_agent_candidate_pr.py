@@ -153,6 +153,7 @@ def test_run_opens_the_draft_pr_with_the_dedicated_token_only_for_the_write() ->
     github = FakeGitHub()
     code, decision = candidate_pr.run(
         repository="fafa33/Project-Hunter",
+        head_repository="fafa33/Project-Hunter",
         branch=BRANCH,
         head_sha=HEAD,
         environ=ENVIRON,
@@ -172,6 +173,7 @@ def test_run_fails_closed_without_the_pr_token_and_writes_nothing() -> None:
     github = FakeGitHub()
     code, decision = candidate_pr.run(
         repository="fafa33/Project-Hunter",
+        head_repository="fafa33/Project-Hunter",
         branch=BRANCH,
         head_sha=HEAD,
         environ={"GITHUB_TOKEN": "read-token"},
@@ -188,6 +190,7 @@ def test_run_ignores_non_agent_branches_without_touching_github() -> None:
     github = FakeGitHub()
     code, decision = candidate_pr.run(
         repository="fafa33/Project-Hunter",
+        head_repository="fafa33/Project-Hunter",
         branch="issue-423-human-feature",
         head_sha=HEAD,
         environ={},
@@ -202,6 +205,7 @@ def test_run_refuses_a_truncated_commit_range() -> None:
     with pytest.raises(RuntimeError, match="incomplete"):
         candidate_pr.run(
             repository="fafa33/Project-Hunter",
+            head_repository="fafa33/Project-Hunter",
             branch=BRANCH,
             head_sha=HEAD,
             environ=ENVIRON,
@@ -214,6 +218,7 @@ def test_run_refuses_a_missing_governing_issue_without_writing() -> None:
     github = FakeGitHub(issue_status=404)
     code, decision = candidate_pr.run(
         repository="fafa33/Project-Hunter",
+        head_repository="fafa33/Project-Hunter",
         branch=BRANCH,
         head_sha=HEAD,
         environ=ENVIRON,
@@ -224,13 +229,17 @@ def test_run_refuses_a_missing_governing_issue_without_writing() -> None:
     assert not [call for call in github.calls if call[1] == "POST"]
 
 
-def test_the_workflow_runs_the_trusted_module_only_after_a_green_push_preflight() -> None:
+def _workflow() -> dict:
     from pathlib import Path
 
     import yaml
 
     path = Path(__file__).resolve().parents[1] / ".github" / "workflows" / "hunter-issue-agent-candidate-pr.yml"
-    workflow = yaml.safe_load(path.read_text(encoding="utf-8"))
+    return yaml.safe_load(path.read_text(encoding="utf-8"))
+
+
+def test_the_workflow_runs_the_trusted_module_only_after_a_green_push_preflight() -> None:
+    workflow = _workflow()
     triggers = workflow.get("on", workflow.get(True))
     assert triggers == {"workflow_run": {"workflows": ["Hunter / Pre-PR Preflight"], "types": ["completed"]}}
     # The workflow token can read only; the one write uses the dedicated token.
@@ -240,18 +249,67 @@ def test_the_workflow_runs_the_trusted_module_only_after_a_green_push_preflight(
     condition = " ".join(job["if"].split())
     assert "github.event.workflow_run.event == 'push'" in condition
     assert "github.event.workflow_run.conclusion == 'success'" in condition
+    assert "github.event.workflow_run.head_repository.full_name == github.repository" in condition
 
-    checkout, _python, step = job["steps"]
-    assert checkout["with"] == {
-        "ref": "${{ github.event.repository.default_branch }}",
-        "path": "engine",
-        "persist-credentials": False,
-    }
+    _checkout, _python, step = job["steps"]
     assert step["working-directory"] == "engine/scripts"
     assert step["env"]["HUNTER_ISSUE_AGENT_PR_TOKEN"] == "${{ secrets.HUNTER_ISSUE_AGENT_PR_TOKEN }}"
     # Event data reaches the script only through the environment, never the shell text.
     assert "${{" not in step["run"]
     assert "python hunter_issue_agent_candidate_pr.py" in step["run"]
+    assert '--head-repository "${HEAD_REPOSITORY}"' in step["run"]
+
+
+def test_the_privileged_job_never_checks_out_or_executes_candidate_content() -> None:
+    (job,) = _workflow()["jobs"].values()
+    checkout, python, step = job["steps"]
+
+    # The only checkout is this workflow's own trusted default-branch commit:
+    # no ref, repository or path taken from event data, and no persisted token.
+    assert checkout["uses"].startswith("actions/checkout@")
+    assert checkout["with"] == {"path": "engine", "persist-credentials": False}
+    assert python["uses"].startswith("actions/setup-python@")
+    assert set(python["with"]) == {"python-version"}
+
+    # Candidate identifiers appear only as environment values of the trusted
+    # step, never in a checkout, a `uses`, a working directory or shell text.
+    for current in job["steps"]:
+        rendered = {key: value for key, value in current.items() if key != "env"}
+        assert "workflow_run.head" not in repr(rendered)
+    assert {name for name, value in step["env"].items() if "workflow_run.head" in value} == {
+        "HEAD_REPOSITORY",
+        "HEAD_BRANCH",
+        "HEAD_SHA",
+    }
+    # The dedicated token exists in exactly one step, and only there.
+    assert [current for current in job["steps"] if "secrets." in repr(current)] == [step]
+    assert "secrets." not in repr({key: value for key, value in _workflow().items() if key != "jobs"})
+
+
+@pytest.mark.parametrize(
+    "head_repository",
+    ["attacker/Project-Hunter", "fafa33/Project-Hunter-fork", "", "fafa33/Project-Hunter/../x", "fafa33"],
+)
+def test_a_fork_or_foreign_head_never_reaches_privileged_pr_creation(head_repository: str) -> None:
+    github = FakeGitHub()
+    code, decision = candidate_pr.run(
+        repository="fafa33/Project-Hunter",
+        head_repository=head_repository,
+        branch=BRANCH,
+        head_sha=HEAD,
+        environ=ENVIRON,
+        request_json=github,
+        authorized_signers=SIGNERS,
+    )
+    assert (code, decision.open) == (2, False)
+    assert "is not" in decision.reason
+    # Refused before any request, so the dedicated token is never used.
+    assert github.calls == []
+
+
+def test_the_command_line_requires_the_head_repository() -> None:
+    with pytest.raises(SystemExit):
+        candidate_pr.main(["--repository", "fafa33/Project-Hunter", "--branch", BRANCH, "--head-sha", HEAD])
 
 
 @pytest.mark.parametrize("head_sha", ["HEAD", "C" * 40, "c" * 39, "c" * 40 + "?x=1", "../../pulls"])
@@ -259,6 +317,7 @@ def test_run_refuses_a_malformed_head_before_any_github_request(head_sha: str) -
     github = FakeGitHub()
     code, decision = candidate_pr.run(
         repository="fafa33/Project-Hunter",
+        head_repository="fafa33/Project-Hunter",
         branch=BRANCH,
         head_sha=head_sha,
         environ=ENVIRON,

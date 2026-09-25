@@ -8,6 +8,7 @@ Preflight`` passes on that exact head, the workflow
 the trusted default branch. It opens one Draft pull request against ``main``,
 and only when every one of these holds:
 
+- the candidate head lives in this repository, never a fork;
 - the branch has the exact governed agent-branch shape and binds Issue ``<n>``;
 - the preflight run's head SHA is still the branch head;
 - Issue ``<n>`` exists, is open and is an Issue rather than a pull request;
@@ -45,6 +46,7 @@ BASE_BRANCH = "main"
 PR_TOKEN_ENV = "HUNTER_ISSUE_AGENT_PR_TOKEN"
 READ_TOKEN_ENV = "GITHUB_TOKEN"
 _COMMIT_SHA_RE = re.compile(r"[0-9a-f]{40}")
+_REPOSITORY_RE = re.compile(r"[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+")
 _TITLE_LIMIT = 200
 
 #: ``(repository, token, method, path, payload) -> decoded JSON``
@@ -82,6 +84,12 @@ def governed_issue_number(branch: str) -> int | None:
     """The Issue a governed agent branch binds, or ``None`` for any other branch."""
     match = AGENT_BRANCH_RE.fullmatch(branch)
     return int(match.group(1)) if match is not None else None
+
+
+def _same_repository(head_repository: str, repository: str) -> bool:
+    """Whether the candidate head lives in this repository (never a fork)."""
+    head = head_repository.strip()
+    return bool(head) and _REPOSITORY_RE.fullmatch(head) is not None and head.casefold() == repository.casefold()
 
 
 def _refuse(reason: str, issue_number: int | None = None) -> CandidatePrDecision:
@@ -269,13 +277,23 @@ def gather_evidence(
 def run(
     *,
     repository: str,
+    head_repository: str,
     branch: str,
     head_sha: str,
     environ: Mapping[str, str],
     request_json: RequestJson | None = None,
     authorized_signers: frozenset[str] | None = None,
 ) -> tuple[int, CandidatePrDecision]:
-    """Evaluate one pushed branch and open its Draft PR when eligible."""
+    """Evaluate one pushed branch and open its Draft PR when eligible.
+
+    Nothing here executes candidate content. The candidate is identified only
+    by data, every piece of which is verified against this repository before
+    the one write the dedicated token is used for.
+    """
+    if not _same_repository(head_repository, repository):
+        # A fork or any other repository's head never reaches privileged PR
+        # creation, whatever its branch is named.
+        return 2, _refuse(f"candidate head repository {head_repository!r} is not {repository!r}")
     if governed_issue_number(branch) is None:
         return 0, _refuse(f"branch {branch!r} is not a governed Issue Agent branch; nothing to open")
     if _COMMIT_SHA_RE.fullmatch(head_sha) is None:
@@ -318,12 +336,14 @@ def run(
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(prog="hunter_issue_agent_candidate_pr")
     parser.add_argument("--repository", required=True)
+    parser.add_argument("--head-repository", required=True)
     parser.add_argument("--branch", required=True)
     parser.add_argument("--head-sha", required=True)
     arguments = parser.parse_args(argv)
     try:
         code, decision = run(
             repository=arguments.repository,
+            head_repository=arguments.head_repository,
             branch=arguments.branch,
             head_sha=arguments.head_sha,
             environ=os.environ,

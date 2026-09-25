@@ -6,10 +6,24 @@ name: Hunter / Issue Agent Candidate PR
 # trusted default-branch decision module opens one Draft PR against main, which
 # then enters the existing Candidate Admission and governance chain unchanged.
 #
+# Trust boundary. workflow_run runs with this repository's permissions and
+# secrets, so nothing from the candidate is ever executed here:
+# - the job runs only for a push to this repository, never for a fork
+#   (the head repository must be this repository);
+# - the only checkout is this workflow's own trusted commit on the default
+#   branch (actions/checkout's default in a workflow_run context, with no ref
+#   taken from event data); the candidate branch and head are never checked
+#   out, installed or executed;
+# - candidate identifiers reach the trusted script only as environment data,
+#   and the script re-verifies the head repository, the branch shape, the
+#   exact head SHA, the Issue binding and signed linear history from the
+#   GitHub API before it writes anything.
+#
 # The PR is created with HUNTER_ISSUE_AGENT_PR_TOKEN rather than GITHUB_TOKEN,
 # because GitHub starts no pull_request workflows for events GITHUB_TOKEN
-# creates. A missing token fails closed and opens nothing. This workflow never
-# marks a PR ready, approves or merges.
+# creates. The token is visible only to that one trusted step. A missing token
+# fails closed and opens nothing. This workflow never marks a PR ready,
+# approves or merges.
 
 on:
   workflow_run:
@@ -24,7 +38,7 @@ permissions:
   pull-requests: read
 
 concurrency:
-  group: hunter-issue-agent-candidate-pr-${{ github.event.workflow_run.head_branch }}
+  group: hunter-issue-agent-candidate-pr-${{ github.event.workflow_run.id }}
   cancel-in-progress: false
 
 jobs:
@@ -32,16 +46,16 @@ jobs:
     if: >-
       github.event.workflow_run.event == 'push' &&
       github.event.workflow_run.conclusion == 'success' &&
+      github.event.workflow_run.head_repository.full_name == github.repository &&
       startsWith(github.event.workflow_run.head_branch, 'issue-')
     name: Open governed Issue Agent Draft PR
     runs-on: ubuntu-latest
     timeout-minutes: 5
 
     steps:
-      - name: Checkout trusted controller
+      - name: Checkout trusted default-branch controller
         uses: actions/checkout@v7
         with:
-          ref: ${{ github.event.repository.default_branch }}
           path: engine
           persist-credentials: false
 
@@ -56,11 +70,13 @@ jobs:
           GITHUB_TOKEN: ${{ github.token }}
           HUNTER_ISSUE_AGENT_PR_TOKEN: ${{ secrets.HUNTER_ISSUE_AGENT_PR_TOKEN }}
           GH_REPO: ${{ github.repository }}
+          HEAD_REPOSITORY: ${{ github.event.workflow_run.head_repository.full_name }}
           HEAD_BRANCH: ${{ github.event.workflow_run.head_branch }}
           HEAD_SHA: ${{ github.event.workflow_run.head_sha }}
         run: |
           set -euo pipefail
           python hunter_issue_agent_candidate_pr.py \
             --repository "${GH_REPO}" \
+            --head-repository "${HEAD_REPOSITORY}" \
             --branch "${HEAD_BRANCH}" \
             --head-sha "${HEAD_SHA}"
