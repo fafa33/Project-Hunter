@@ -560,6 +560,7 @@ class Webhook(EdgeTransportClientMixin):
             read_timeout=read_timeout,
             max_workers=max_workers,
             lease_renewal_interval=lease_renewal_interval,
+            execution_admission_enabled=True,
         )
         self.server.start()
         self.port = self.server._server.server_address[1]
@@ -789,6 +790,28 @@ def test_foreign_repository_is_refused_after_verification(tmp_path: Path, webhoo
 
 
 # --- Authorized execution over the wire -------------------------------------
+
+
+def test_default_issuer_admission_fails_closed_before_claim_or_provider(tmp_path: Path) -> None:
+    deployment = Deployment(tmp_path)
+    services = deployment.services()
+    server = issuer.IssuerServer("127.0.0.1", 0, services)
+    server.start()
+    port = server._server.server_address[1]
+    document = _authorization_document()
+    authorization = _inner(document)
+    try:
+        connection = http.client.HTTPConnection("127.0.0.1", port, timeout=15)
+        connection.request("POST", "/issue-agent/authorize", body=document.encode("utf-8"))
+        response = connection.getresponse()
+        body = response.read().decode("utf-8")
+        connection.close()
+        assert response.status == 503
+        assert "execution backend is unavailable" in body
+        assert services.ledger.entry(authorization.authorization_id) is None
+        assert deployment.fallback.documents == []
+    finally:
+        server.shutdown()
 
 
 def test_authorized_issue_acks_before_provider_completion(tmp_path: Path, webhook: Any) -> None:

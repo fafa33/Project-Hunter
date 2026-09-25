@@ -233,7 +233,7 @@ class ProvisioningEdge(EdgeTransportClientMixin):
 
 class IssuerEdge(EdgeTransportClientMixin):
     def __init__(self, services: issuer.IssuerServices) -> None:
-        self.server = issuer.IssuerServer("127.0.0.1", 0, services)
+        self.server = issuer.IssuerServer("127.0.0.1", 0, services, execution_admission_enabled=True)
         self.server.start()
         self.port = self.server._server.server_address[1]
 

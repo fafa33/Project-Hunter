@@ -407,11 +407,7 @@ automatically after Source Handling performs its independent restrictive transie
 issuances require at operator as-of, and is exactly idempotent on re-runs. The CLI remains available for offline/operator workflows but is
 no longer part of the admission path.
 
-**f. Live authorized E2E** — apply the `hunter-agent-execute` label to a test Issue. The trigger workflow signs the authorization, retries
-only transport-level 502/503/504 (otherwise fail-closed), POSTs first to `HUNTER_ISSUE_AGENT_PROVISIONING_URL`
-(`/issue-agent/provision`, expects 200/provisioned), and only if provisioning succeeds POSTs to the issuer webhook
-(`/issue-agent/authorize`). Check issuer and provisioner logs for the complete path; a provisioning 422 (e.g. a mismatched pre-existing
-head) stops the run before the issuer is ever contacted.
+**f. Live execution is retired pending PR-B** — do **not** apply the `hunter-agent-execute` label to any Issue. The Railway issuer now returns HTTP 503 before authorization claim, handoff compilation, dispatch, execution-slot acquisition, or provider invocation. Provisioning may remain observable, but no live execution is admitted until the replacement executor is rehearsed and separately authorized.
 
 #### Railway Configuration Reference
 
@@ -536,21 +532,7 @@ curl -X POST https://your-issuer-url/issue-agent/authorize \
 
 ## End-to-End Test Procedure
 
-Once deployed and configured:
-
-1. **Create a test Issue** in the repository with some content
-2. **Apply the label** `hunter-agent-execute` as the repository owner
-3. **Observe the workflow** `Hunter / Governed Issue Agent Trigger` run
-4. **Check the issuer edge logs** for the execution
-5. **Verify the fallback runtime** executed and advanced the remote branch
-6. **Verify targeted validation** passed
-
-The GitHub Actions workflow `hunter-issue-agent-trigger.yml` will automatically:
-- Detect the `hunter-agent-execute` label by the repository owner
-- Generate the signed authorization
-- POST it first to `HUNTER_ISSUE_AGENT_PROVISIONING_URL` (`/issue-agent/provision`) to auto-provision the per-Issue authority
-- Only after provisioning succeeds, POST it to `HUNTER_ISSUE_AGENT_WEBHOOK_URL` (`/issue-agent/authorize`)
-- The issuer edge will execute the full governed path
+Live Issue-Agent execution is intentionally suspended. Do not apply `hunter-agent-execute` while PR-A is active. The permitted production check is HTTP 503 from `/issue-agent/authorize` before ledger claim/dispatch, with no provider invocation. A fresh canary resumes only after PR-B rehearsal and owner authorization.
 
 ## Troubleshooting
 

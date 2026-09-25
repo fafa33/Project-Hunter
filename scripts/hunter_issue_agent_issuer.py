@@ -548,6 +548,7 @@ class _IssuerRequestHandler(IssueAgentEdgeRequestHandler):
     services: IssuerServices | None = None
     shutdown_event: threading.Event | None = None
     execution_registry: ExecutionWorkerRegistry | None = None
+    execution_admission_enabled: bool = False
 
     endpoint = "/issue-agent/authorize"
     service_name = "hunter-issue-agent-issuer"
@@ -574,6 +575,10 @@ class _IssuerRequestHandler(IssueAgentEdgeRequestHandler):
         exact handoff durably, then ACK before the slow provider phase so
         admission is bounded independently of provider duration.
         """
+        # PR-A: retire Railway execution before claim/dispatch/provider reachability.
+        if not self.execution_admission_enabled:
+            self._send_error(503, "Issue Agent execution backend is unavailable")
+            return
         if not _EXECUTION_SLOTS.acquire(blocking=False):
             self._send_error(503, "Issue Agent execution capacity is saturated")
             return
@@ -682,6 +687,7 @@ class IssuerServer:
         read_timeout: float = REQUEST_READ_TIMEOUT_SECONDS,
         max_workers: int = MAX_CONCURRENT_REQUEST_WORKERS,
         lease_renewal_interval: float = _LEASE_RENEWAL_INTERVAL_SECONDS,
+        execution_admission_enabled: bool = False,
     ) -> None:
         self._host = host
         self._port = port
@@ -697,6 +703,7 @@ class IssuerServer:
             execution_registry = self._executions
 
         Handler.services = services
+        Handler.execution_admission_enabled = execution_admission_enabled
         self._server = BoundedThreadingHTTPServer(
             (host, port),
             Handler,
