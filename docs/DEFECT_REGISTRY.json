@@ -1355,8 +1355,8 @@
       },
       "prevention": {
         "mechanism": "Railway IssuerServer defaults execution admission to disabled and the authorization handler returns 503 before slot acquisition, ledger claim, handoff compilation, dispatch, or provider invocation. Only explicit test harnesses can exercise the retired legacy path.",
-        "boundary": "Railway issuer authorization admission",
-        "guard_reference": "scripts/hunter_issue_agent_issuer.py::_IssuerRequestHandler.handle_authorization"
+        "boundary": "local-pre-push",
+        "guard_reference": "scripts/hunter_issue_agent_issuer.py::_IssuerRequestHandler::handle_authorization"
       },
       "regression_evidence": [
         "tests/test_issue_agent_issuer.py::test_default_issuer_admission_fails_closed_before_claim_or_provider"
