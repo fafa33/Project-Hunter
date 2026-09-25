@@ -206,6 +206,28 @@ def test_budget_exclusion_is_explicit_and_not_silent_truncation() -> None:
     assert "x" * 100 not in result.prompt_artifact.content
 
 
+def test_multiple_budget_exclusions_use_same_canonical_missingness_in_preflight_and_final() -> None:
+    required = _span("span-1", "required")
+    optional_a = _span("span-2", "x" * 2000)
+    optional_b = _span("span-3", "y" * 2000)
+    result = _authorized_build(
+        execution_owner_id="run-1",
+        intent=_intent(),
+        policy=_policy(required=("span-1",), optional=("span-2", "span-3")),
+        specification=_spec(),
+        capability=_cap(1000),
+        canonical_inventory=(required, optional_a, optional_b),
+        candidate_span_ids=("span-1", "span-2", "span-3"),
+    )
+
+    assert result.allocation.outcome == "READY"
+    assert result.allocation.budget_excluded_span_ids == ("span-2", "span-3")
+    assert result.prompt_artifact is not None
+    assert result.prompt_plan is not None
+    assert result.prompt_plan.missingness_reason_codes == ("BUDGET_EXCLUDED",)
+    assert result.prompt_artifact.measured_size_bytes == result.allocation.preflight_size_bytes
+
+
 def test_required_context_that_cannot_fit_is_insufficient_budget() -> None:
     required = _span("span-1", "x" * 2000)
     result = _authorized_build(
