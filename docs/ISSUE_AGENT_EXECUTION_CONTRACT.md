@@ -3,8 +3,9 @@
 This document is the architecture and failure-state contract for the governed
 Issue Agent path, from an owner-signed Issue authorization to a Draft pull
 request that enters the existing Candidate Admission and governance chain. It
-names one execution contract, and every component listed here is implemented
-and proven against it together.
+names one execution contract. Sections describing the current executable path are
+implemented/proven only where stated; sections explicitly marked proposed, replacement,
+or open evidence requirements are not implementation claims.
 
 It adds no new authority. Candidate Admission, Hunter Governance Review,
 Pre-Ready review, Merge Readiness and owner merge approval keep exactly their

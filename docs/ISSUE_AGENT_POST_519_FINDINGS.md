@@ -26,6 +26,11 @@ defect registry. This note creates no new authority.
   expected provider subprocess stderr is redirected to `DEVNULL`. This does not negate
   the reproduced backend divergence, but it must not be silently declared solved.
 
+> **Live-trigger safety:** Until PR-A makes admission fail closed before claim/dispatch,
+> no Issue carrying the live execution label may be triggered. This prohibition is
+> path-wide, not specific to Issue #520. Issue #520 is only the canary to resume after
+> rehearsal evidence and a fresh authorization.
+
 ## Security findings
 
 1. A same-process/self-check result cannot prove a different execution path safe.
