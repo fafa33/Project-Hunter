@@ -754,7 +754,10 @@ def test_railway_single_public_port_reaches_both_isolated_authorities(
     )
     fallback = RecordingFallback()
     issuer_edge = issuer.IssuerServer(
-        issuer_args.host, issuer_args.port, _issuer_services(issuer_configuration, fallback=fallback)
+        issuer_args.host,
+        issuer_args.port,
+        _issuer_services(issuer_configuration, fallback=fallback),
+        execution_admission_enabled=True,
     )
     assert provisioning_edge._server.server_address[0] == "127.0.0.1"
     assert issuer_edge._server.server_address[0] == "127.0.0.1"
