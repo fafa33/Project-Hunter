@@ -660,8 +660,7 @@ def test_pre_model_invariant_exposes_safe_reason_code(
 
     assert status == 422
     assert json.loads(body)["error"] == (
-        "pre-model invariant rejected execution preparation: "
-        "REQUIRED_SPAN_NOT_IN_CANONICAL_INVENTORY"
+        "pre-model invariant rejected execution preparation: " "REQUIRED_SPAN_NOT_IN_CANONICAL_INVENTORY"
     )
 
 
