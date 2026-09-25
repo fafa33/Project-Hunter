@@ -160,6 +160,10 @@ def _model_environment(credential_home: Path) -> dict[str, str]:
         if name in _PUBLICATION_CREDENTIAL_ENV or name in _PRIVATE_RUNTIME_ENV or name.startswith("GIT_"):
             child_env.pop(name, None)
     child_env["HOME"] = "/home/hunter"
+    # OpenCode takes its project directory from ``PWD``, not the process working
+    # directory, so the parent's ``PWD`` must never leak into the sandbox.
+    child_env.pop("OLDPWD", None)
+    child_env["PWD"] = "/workspace"
     child_env["XDG_CONFIG_HOME"] = "/home/hunter/.config"
     child_env["GIT_CONFIG_GLOBAL"] = os.devnull
     child_env["GIT_CONFIG_NOSYSTEM"] = "1"

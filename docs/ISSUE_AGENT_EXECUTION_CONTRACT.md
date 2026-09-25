@@ -156,18 +156,48 @@ Malformed identities are refused by the ingress before anything is forwarded.
 
 ### I8. The provider is self-checked at startup
 
-When the OpenCode provider is configured, Railway startup runs the governed
-provider through the same sandbox shim and permission contract used for real
-executions, in a disposable probe workspace. The probe runs before the issuer
-starts, and startup fails closed if:
+When the OpenCode provider is configured, Railway startup runs
+`hunter.automation.opencode_provider_self_check` before launching any child.
+It uses the issuer's environment, never the Source Handling signing key. The
+probe runs the configured provider exactly as a real execution does:
 
-- the resolved agent tool set enables `bash` (a deterministic check against
-  `opencode debug agent build`);
-- an instructed forbidden bash attempt leaves a side effect in the probe
-  workspace;
-- the provider cannot complete the compatibility probe at all.
+- the same sandbox launcher and permission contract;
+- the same pinned runtime and the same model;
+- a disposable attempt workspace.
 
-A provider that cannot pass this check can never be dispatched to.
+The probe instructs the provider to run one shell command, which creates a
+marker named by a random nonce. The nonce exists only in the provider's
+process environment, never in the prompt, so a file-writing tool cannot forge
+the marker; only an executed shell command can. Startup fails closed, and the
+issuer never starts, if:
+
+- the pinned runtime's resolved tool set offers `bash`, `webfetch`,
+  `websearch`, `task`, `skill` or `question`. The sandbox shim checks this
+  against `opencode debug agent build` before every run, not only at startup;
+- the nonce marker exists after the run, meaning a shell command executed;
+- the provider cannot complete the probe (unreachable, rejected by its
+  service, or rate-limited). An execution path that cannot be proven safe is
+  not started.
+
+Evidence behind this check, from OpenCode 1.18.30 driven by a local stand-in
+model that always requests a `bash` tool call:
+
+- under Hunter's contract the model is offered only `edit`, `glob`, `grep`,
+  `read` and `write`, and the `bash` call is rejected as an unavailable tool;
+- with `bash: allow` the same call executes.
+
+`tests/test_opencode_provider_self_check.py` repeats that experiment when
+`HUNTER_TEST_OPENCODE_EXECUTABLE` names the pinned runtime.
+
+### I9. OpenCode runs in the directory it is given
+
+OpenCode 1.18.30 resolves its project directory from the inherited `PWD`
+variable, not from the process working directory. Before this contract, the
+Railway sandbox shim launched OpenCode with the workspace as its working
+directory but with the issuer's `PWD`, so every read and edit targeted the
+issuer's directory instead of the isolated workspace. Every OpenCode process
+now runs with `PWD` bound to its own working directory (`/workspace` inside
+the bubblewrap sandbox), and `OLDPWD` removed.
 
 ## Failure states
 
@@ -186,7 +216,7 @@ A provider that cannot pass this check can never be dispatched to.
 | F11 | issuer restarted mid-execution (lease lapsed) | startup recovery | `FAILED`, `PROCESS_RESTART` | yes |
 | F12 | pushed branch not agent-shaped, merge commit present, unsigned head, PR already open, Issue missing | Draft PR workflow | no PR; the workflow reports the refusal | n/a |
 | F13 | `HUNTER_ISSUE_AGENT_PR_TOKEN` missing | Draft PR workflow | workflow fails closed; no PR | n/a |
-| F14 | provider self-check fails | Railway startup | issuer never starts; `/healthz` not ready | n/a |
+| F14 | provider self-check fails: forbidden tool offered, shell executed, or probe cannot complete | Railway startup | no child starts; the service is not ready | n/a |
 
 A consumed authorization is never retried. To try again, the owner creates a
 new Issue event, which produces a new authorization, identity and branch.

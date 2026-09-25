@@ -23,6 +23,11 @@ Sequence
     idempotency check passes through without mutation; on a tampered or
     mismatched volume the bootstrap fails closed before any issuer state is
     composed.
+3a. Prepare the empty per-authorization workspace root; nothing is cloned
+    (``docs/ISSUE_AGENT_EXECUTION_CONTRACT.md`` I3).
+3b. When the OpenCode provider is configured, run its self-check with the
+    issuer's environment: a forbidden shell attempt must be rejected, or
+    nothing starts (contract I8).
 4.  Resolve one port plan: Railway's public ``$PORT`` plus two distinct
     internal ports (``HUNTER_ISSUE_AGENT_PROVISIONER_PORT``, default 8081, and
     ``HUNTER_ISSUE_AGENT_ISSUER_PORT``, default 8082).  Any collision fails
@@ -176,6 +181,34 @@ def _prepare_workspace_root() -> None:
         shutil.rmtree(root)
     root.mkdir(parents=True)
     logger.info("issue agent workspace root prepared for %s", repository)
+
+
+#: The governed OpenCode provider command; when configured, it must pass the
+#: startup self-check before any child of the topology is launched.
+_OPENCODE_COMMAND_ENV = "HUNTER_AGENT_OPENCODE_COMMAND"
+_PROVIDER_SELF_CHECK_MODULE = "hunter.automation.opencode_provider_self_check"
+_PROVIDER_SELF_CHECK_TIMEOUT_SECONDS = 900
+
+
+def _run_provider_self_check() -> None:
+    """Prove the governed provider rejects a forbidden shell attempt, or fail closed.
+
+    ``docs/ISSUE_AGENT_EXECUTION_CONTRACT.md`` I8. The probe runs with the
+    issuer's own environment (never the Source Handling signing key), through
+    the same sandbox launcher and permission contract as a real execution.
+    """
+    if not os.environ.get(_OPENCODE_COMMAND_ENV, "").strip():
+        # Unit/bootstrap-only invocations configure no provider pool.
+        return
+    completed = subprocess.run(
+        (sys.executable, "-m", _PROVIDER_SELF_CHECK_MODULE),
+        env=issuer_environment(os.environ),
+        check=False,
+        timeout=_PROVIDER_SELF_CHECK_TIMEOUT_SECONDS,
+    )
+    if completed.returncode != 0:
+        raise RuntimeError("the governed OpenCode provider failed its startup self-check")
+    logger.info("governed OpenCode provider passed its startup self-check")
 
 
 logger = logging.getLogger("railway_issuer_startup")
@@ -409,6 +442,12 @@ def main() -> int:
         _prepare_workspace_root()
     except Exception as error:  # noqa: BLE001 - fail closed before issuer
         logger.error("issue agent workspace preparation failed: %s", error)
+        return 1
+
+    try:
+        _run_provider_self_check()
+    except Exception as error:  # noqa: BLE001 - fail closed before issuer
+        logger.error("provider self-check failed: %s", error)
         return 1
 
     try:

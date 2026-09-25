@@ -977,6 +977,68 @@ def test_prepare_workspace_root_never_deletes_outside_the_disposable_root(
     assert sentinel.read_text() == "keep"
 
 
+# --- Governed provider startup self-check --------------------------------------
+
+
+def test_provider_self_check_runs_with_the_issuer_environment_and_never_the_signing_key(monkeypatch) -> None:
+    import railway_issuer_startup as startup
+
+    monkeypatch.setenv(
+        "HUNTER_AGENT_OPENCODE_COMMAND", '["python", "-m", "hunter.automation.opencode_provider_runtime"]'
+    )
+    monkeypatch.setenv(_SIGNING_KEY_ENV, "secret-signing-key")
+    calls: list[tuple[tuple[str, ...], dict[str, str]]] = []
+
+    def fake_run(argv, **kwargs):
+        calls.append((tuple(argv), dict(kwargs["env"])))
+        return Mock(returncode=0)
+
+    with patch.object(startup.subprocess, "run", side_effect=fake_run):
+        startup._run_provider_self_check()
+
+    ((argv, env),) = calls
+    assert argv[1:] == ("-m", "hunter.automation.opencode_provider_self_check")
+    assert _SIGNING_KEY_ENV not in env
+
+
+def test_a_failed_provider_self_check_fails_startup_closed(monkeypatch) -> None:
+    import railway_issuer_startup as startup
+
+    monkeypatch.setenv("HUNTER_AGENT_OPENCODE_COMMAND", '["opencode"]')
+    with patch.object(startup.subprocess, "run", return_value=Mock(returncode=1)):
+        with pytest.raises(RuntimeError, match="failed its startup self-check"):
+            startup._run_provider_self_check()
+
+
+def test_no_provider_pool_means_no_self_check(monkeypatch) -> None:
+    import railway_issuer_startup as startup
+
+    monkeypatch.delenv("HUNTER_AGENT_OPENCODE_COMMAND", raising=False)
+    with patch.object(startup.subprocess, "run", side_effect=AssertionError("no provider to check")):
+        startup._run_provider_self_check()
+
+
+def test_startup_launches_nothing_when_the_provider_self_check_fails(tmp_path: Path) -> None:
+    import railway_issuer_startup as startup
+
+    env = {
+        _EVIDENCE_DB_ENV: str(tmp_path / "evidence.sqlite"),
+        _SIGNING_KEY_ENV: _signing_key_hex(_private_key_bytes()),
+        "HUNTER_AGENT_OPENCODE_COMMAND": '["opencode"]',
+    }
+    captured = _ExecCapture()
+    with (
+        patch.dict(os.environ, env, clear=True),
+        patch.object(startup, "_spawn", side_effect=captured),
+        patch.object(startup, "_install_stop_signals"),
+        patch.object(startup, "supervise", return_value=0),
+        patch.object(startup.os.path, "ismount", return_value=True),
+        patch.object(startup.subprocess, "run", return_value=Mock(returncode=1)),
+    ):
+        assert startup.main() == 1
+    assert captured.launches == []
+
+
 def test_railway_start_command_launches_the_ingress_owning_seam() -> None:
     """The repository-owned Railway config must start the seam whose ingress owns $PORT."""
     import tomllib
