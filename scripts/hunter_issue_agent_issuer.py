@@ -579,6 +579,10 @@ class _IssuerRequestHandler(IssueAgentEdgeRequestHandler):
         if not self.execution_admission_enabled:
             self._send_error(503, "Issue Agent execution backend is unavailable")
             return
+        # PR-A: retire Railway execution before claim/dispatch/provider reachability.
+        if not self.execution_admission_enabled:
+            self._send_error(503, "Issue Agent execution backend is unavailable")
+            return
         if not _EXECUTION_SLOTS.acquire(blocking=False):
             self._send_error(503, "Issue Agent execution capacity is saturated")
             return
@@ -703,6 +707,7 @@ class IssuerServer:
             execution_registry = self._executions
 
         Handler.services = services
+        Handler.execution_admission_enabled = execution_admission_enabled
         Handler.execution_admission_enabled = execution_admission_enabled
         self._server = BoundedThreadingHTTPServer(
             (host, port),
