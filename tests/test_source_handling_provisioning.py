@@ -738,6 +738,19 @@ def test_newer_issue_revision_appends_successor_instead_of_reusing_stale_as_of(
     assert retry["status"] == "already-provisioned"
     assert all(entry["status"] == "already-provisioned" for entry in retry["records"].values())
 
+    retry_again = provisioning._run(
+        database=str(database),
+        signing_key=key,
+        rule=rule,
+        authorization=second_authorization,
+        fact_options=fact_options,
+        policy_options=policy_options,
+        provenance_authority_identity=provisioning.AUTHORITY_COMPONENT_ID,
+        as_of=None,
+    )
+    assert retry_again["status"] == "already-provisioned"
+    assert all(entry["status"] == "already-provisioned" for entry in retry_again["records"].values())
+
 
 def test_interrupted_newer_revision_provenance_batch_recovers_at_selected_timestamp(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch

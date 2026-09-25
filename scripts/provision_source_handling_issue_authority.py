@@ -660,19 +660,25 @@ def _provision_authority_record(
     store = service.resolver()(f"provision-{plan['family']}", now).store
     current_head = store.current_canonical_head_id(plan["family"], plan["scope"])
     payload = dict(plan["payload"])
+    expected_plan = dict(plan)
+    expected_plan["payload"] = payload
+    expected_record_id = _expected_authority_record_id(expected_plan)
+    if current_head == expected_record_id:
+        return {"record_id": expected_record_id, "status": "already-provisioned"}
+
     if current_head is not None:
-        if allow_successor:
+        current_record = resolve_canonical_head(
+            store,
+            family=plan["family"],
+            scope=plan["scope"],
+            cutoff=datetime.max.replace(tzinfo=UTC),
+        )
+        predecessor = current_record.get("supersedes_record_id")
+        if predecessor is not None:
+            payload["supersedes_record_id"] = predecessor
+        elif allow_successor:
             payload["supersedes_record_id"] = current_head
-        else:
-            current_record = resolve_canonical_head(
-                store,
-                family=plan["family"],
-                scope=plan["scope"],
-                cutoff=datetime.max.replace(tzinfo=UTC),
-            )
-            predecessor = current_record.get("supersedes_record_id")
-            if predecessor is not None:
-                payload["supersedes_record_id"] = predecessor
+
     expected_plan = dict(plan)
     expected_plan["payload"] = payload
     expected_record_id = _expected_authority_record_id(expected_plan)
@@ -907,7 +913,7 @@ def _run(
             operator_root=operator_root,
             at=authority_at,
             plan=plan,
-            allow_successor=newer_issue_revision,
+            allow_successor=newer_issue_revision or current_provenance_is_successor,
         )
     status = (
         "provisioned" if any(entry["status"] == "provisioned" for entry in records.values()) else "already-provisioned"
