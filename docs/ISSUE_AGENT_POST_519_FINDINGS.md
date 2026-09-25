@@ -40,7 +40,7 @@ defect registry. This note creates no new authority.
    External platform enforcement owns runner eligibility; in-job probes only diagnose
    configuration drift.
 
-## Current direction, not yet implementation authority
+## Current direction, not yet implementation authority (UNIMPLEMENTED)
 
 The preferred design direction is to keep Railway as authorization/ledger/ingress and
 move untrusted agent execution to ephemeral GitHub-hosted execution, separating agent
@@ -62,7 +62,7 @@ secret-free boundary. This direction requires the open evidence below before PR-
 
 ## Defect-registry transition
 
-Two systemic defect classes are identified by this evidence: readiness probes that exercise a different execution boundary, and candidate-controlled code executing inside a credential-bearing publication boundary. They are intentionally not marked `guarded` in `DEFECT_REGISTRY` by this evidence-only contribution. PR-A, the correcting governed contribution, must register them with their real machine-enforced prevention boundary and regression tests.
+Two systemic defect classes are identified by this evidence: readiness probes that exercise a different execution boundary, and candidate-controlled code executing inside a credential-bearing publication boundary. This evidence contribution records both classes in `DEFECT_REGISTRY` at lifecycle status `recorded`; it does not claim a guard exists. PR-A/PR-B must promote them to `guarded` only together with the real machine-enforced prevention boundary and regression tests.
 
 ## Bounded next steps
 

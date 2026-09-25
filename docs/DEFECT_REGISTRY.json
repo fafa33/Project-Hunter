@@ -1340,6 +1340,50 @@
       "sources": [
         "PR #485, 2026-09-23: external reviewer quota/outage states were identified as a liveness dependency that could prevent otherwise verified PRs from reaching merge readiness."
       ]
+    },
+    {
+      "id": "DFF-027",
+      "title": "readiness-probe-must-exercise-real-execution-boundary",
+      "invariant": "A readiness or security probe cannot authorize execution unless it exercises the same externally enforced execution boundary, launcher selection inputs, and privilege class as the execution it admits; an in-job self-probe is diagnostic evidence, never self-attested security authority.",
+      "applicability": {
+        "changed_paths": [
+          "src/hunter/automation/",
+          ".github/workflows/",
+          "scripts/railway_issuer_startup.py"
+        ],
+        "rationale": "These surfaces select or admit the Issue Agent execution backend and can diverge between readiness and real execution."
+      },
+      "prevention": {
+        "mechanism": "Recorded finding only. PR-A/replacement-executor work must establish fail-closed pre-claim admission and externally enforced runner/backend eligibility before this family can advance.",
+        "boundary": "review"
+      },
+      "regression_evidence": [],
+      "lifecycle": "recorded",
+      "sources": [
+        "PR #519 startup self-check and Issue #520 production canary, 2026-09-25"
+      ]
+    },
+    {
+      "id": "DFF-028",
+      "title": "candidate-code-must-not-execute-with-publication-credentials",
+      "invariant": "Candidate-controlled hooks, scripts, tests, plugins, or other executable repository content never execute inside a boundary that holds candidate-publication write/signing credentials.",
+      "applicability": {
+        "changed_paths": [
+          "src/hunter/automation/",
+          ".github/workflows/",
+          "scripts/hunter_issue_agent_candidate_pr.py"
+        ],
+        "rationale": "These surfaces can validate or publish Issue Agent candidate output and therefore define the candidate-code/publication-credential privilege boundary."
+      },
+      "prevention": {
+        "mechanism": "Recorded finding only. The correcting publisher contribution must treat candidate output as hostile data and structurally separate publication authority from all candidate execution before this family can advance.",
+        "boundary": "review"
+      },
+      "regression_evidence": [],
+      "lifecycle": "recorded",
+      "sources": [
+        "Post-PR #519 publication-path inspection after Issue #520 canary, 2026-09-25"
+      ]
     }
   ]
 }

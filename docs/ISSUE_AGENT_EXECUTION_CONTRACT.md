@@ -220,11 +220,14 @@ work does not rediscover the same boundary failures:
 - Railway remains a candidate authority/ledger/ingress boundary. Moving execution to
   GitHub-hosted ephemeral jobs is a design direction under investigation, not yet an
   implemented or accepted runtime claim.
-- Issue #520 MUST NOT be triggered again until execution admission is fail-closed, the
-  replacement path has rehearsal evidence, and a fresh authorization is intentionally
-  created. Old consumed/failed authorizations are never replayed.
+- No Issue carrying the live execution label MUST be triggered while the current Railway
+  execution path remains admission-capable and the publication/validation defects below
+  are unguarded. This prohibition is path-wide, not specific to Issue #520. PR-A must
+  make it mechanical by returning 503 before authorization claim/dispatch for the entire
+  provider pool. Old consumed/failed authorizations are never replayed. Issue #520 is
+  only the canary to resume after the replacement path has rehearsal evidence.
 
-### Replacement-executor invariants already established
+### Proposed replacement-executor invariants (UNIMPLEMENTED)
 
 1. Agent/model execution and publication authority are separate trust domains. The
    agent receives no repository write/signing credential; its output is untrusted data.
