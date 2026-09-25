@@ -252,3 +252,18 @@ def test_the_workflow_runs_the_trusted_module_only_after_a_green_push_preflight(
     # Event data reaches the script only through the environment, never the shell text.
     assert "${{" not in step["run"]
     assert "python hunter_issue_agent_candidate_pr.py" in step["run"]
+
+
+@pytest.mark.parametrize("head_sha", ["HEAD", "C" * 40, "c" * 39, "c" * 40 + "?x=1", "../../pulls"])
+def test_run_refuses_a_malformed_head_before_any_github_request(head_sha: str) -> None:
+    github = FakeGitHub()
+    code, decision = candidate_pr.run(
+        repository="fafa33/Project-Hunter",
+        branch=BRANCH,
+        head_sha=head_sha,
+        environ=ENVIRON,
+        request_json=github,
+        authorized_signers=SIGNERS,
+    )
+    assert (code, decision.open) == (2, False)
+    assert github.calls == []

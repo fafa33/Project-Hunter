@@ -231,6 +231,12 @@ def test_non_canonical_status_paths_never_reach_an_upstream(topology: Any, path:
     assert edges.upstream_hits() == 0
 
 
+def test_the_forwarded_status_path_is_rebuilt_not_relayed() -> None:
+    assert ingress.canonical_status_path(f"/issue-agent/status/{STATUS_ID}") == f"/issue-agent/status/{STATUS_ID}"
+    assert ingress.canonical_status_path(f"/issue-agent/status/{STATUS_ID}x") is None
+    assert ingress.canonical_status_path("/issue-agent/status/" + STATUS_ID.upper()) is None
+
+
 @pytest.mark.parametrize("method", ["POST", "PUT", "DELETE", "PATCH"])
 def test_status_is_read_only(topology: Any, method: str) -> None:
     edges = topology()

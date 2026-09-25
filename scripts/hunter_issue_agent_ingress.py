@@ -72,9 +72,24 @@ HEALTH_PATH: Final[str] = "/healthz"
 PROVISION_PATH: Final[str] = "/issue-agent/provision"
 AUTHORIZE_PATH: Final[str] = "/issue-agent/authorize"
 #: The read-only execution status route, byte-exact canonical identities only.
+STATUS_PATH_PREFIX: Final[str] = "/issue-agent/status/hunter-issue-agent-authorization:"
 STATUS_PATH_RE: Final[re.Pattern[str]] = re.compile(
-    r"/issue-agent/status/hunter-issue-agent-authorization:[0-9a-f]{64}"
+    r"/issue-agent/status/hunter-issue-agent-authorization:([0-9a-f]{64})"
 )
+
+
+def canonical_status_path(path: str) -> str | None:
+    """The upstream status path for a canonical request target, else ``None``.
+
+    The forwarded path is rebuilt from the constant prefix and the numeric value
+    of the digest, never relayed from the client, so no client byte reaches the
+    upstream request line.
+    """
+    match = STATUS_PATH_RE.fullmatch(path)
+    if match is None:
+        return None
+    return f"{STATUS_PATH_PREFIX}{int(match.group(1), 16):064x}"
+
 
 #: Health service names answered by the two internal edges.
 PROVISIONER_SERVICE_NAME: Final[str] = "hunter-issue-agent-provisioner"
@@ -219,9 +234,9 @@ class IngressRequestHandler(BaseHTTPRequestHandler):
     def do_GET(self) -> None:
         if self.path == HEALTH_PATH:
             self._send_health()
-        elif STATUS_PATH_RE.fullmatch(self.path) is not None:
+        elif (status_path := canonical_status_path(self.path)) is not None:
             assert self.routes is not None
-            self._forward(self.routes.issuer, None, path=self.path)
+            self._forward(self.routes.issuer, None, path=status_path)
         elif self._is_known_post_path():
             self._send_error(405, "Method Not Allowed", allow="POST")
         else:
@@ -300,9 +315,9 @@ class IngressRequestHandler(BaseHTTPRequestHandler):
     def _forward(self, upstream: Upstream, body: bytes | None, *, path: str | None = None) -> None:
         """Make exactly one bounded upstream call and relay its framed answer.
 
-        ``body=None`` is the read-only status GET, forwarded to the exact path
-        already validated against ``STATUS_PATH_RE``; every other forward is the
-        upstream's canonical POST path.
+        ``body=None`` is the read-only status GET, forwarded to the path that
+        ``canonical_status_path`` rebuilt; every other forward is the upstream's
+        canonical POST path.
         """
         connection = http.client.HTTPConnection(LOOPBACK_HOST, upstream.port, timeout=self.upstream_timeout)
         try:

@@ -278,6 +278,8 @@ def run(
     """Evaluate one pushed branch and open its Draft PR when eligible."""
     if governed_issue_number(branch) is None:
         return 0, _refuse(f"branch {branch!r} is not a governed Issue Agent branch; nothing to open")
+    if _COMMIT_SHA_RE.fullmatch(head_sha) is None:
+        return 2, _refuse("the preflight head is not an exact lowercase commit SHA")
     pr_token = environ.get(PR_TOKEN_ENV, "").strip()
     if not pr_token:
         return 2, _refuse(
