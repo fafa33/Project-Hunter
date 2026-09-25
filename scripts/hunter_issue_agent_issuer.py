@@ -70,6 +70,7 @@ from hunter.automation.issue_agent_execution import (
 from hunter.automation.n8n_handoff import serialize_prompt_automation_handoff
 from hunter.evidence_intelligence.engineering_task_ingress import GovernedEngineeringTaskIngress
 from hunter.evidence_intelligence.intake import EvidenceIntelligenceIntakeService
+from hunter.evidence_intelligence.pre_model import PreModelInvariantError
 from hunter.evidence_intelligence.repository import EvidenceIntelligenceRepository
 from hunter.evidence_intelligence.smart_prompt_routing import (
     _PROMPT_AUTOMATION_SIGNING_KEY_ENV,
@@ -542,6 +543,13 @@ class _IssuerRequestHandler(IssueAgentEdgeRequestHandler):
         except SmartPromptMachineError as error:
             _EXECUTION_SLOTS.release()
             self._send_error(422, str(error))
+            return
+        except PreModelInvariantError as error:
+            _EXECUTION_SLOTS.release()
+            self._send_error(
+                422,
+                f"pre-model invariant rejected execution preparation: {error.reason_code}",
+            )
             return
         except Exception as error:  # noqa: BLE001
             _EXECUTION_SLOTS.release()

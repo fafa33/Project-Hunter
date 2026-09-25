@@ -60,7 +60,7 @@ from hunter.automation.issue_agent_execution import (
 from hunter.evidence_intelligence import smart_prompt_routing
 from hunter.evidence_intelligence.engineering_task_ingress import GovernedEngineeringTaskIngress
 from hunter.evidence_intelligence.intake import EvidenceIntelligenceIntakeService
-from hunter.evidence_intelligence.pre_model import resolve_pre_model_source_handling
+from hunter.evidence_intelligence.pre_model import PreModelInvariantError, resolve_pre_model_source_handling
 from hunter.evidence_intelligence.repository import EvidenceIntelligenceRepository
 from hunter.evidence_intelligence.smart_prompt_routing import SmartPromptMachine
 from hunter.evidence_intelligence.source_handling import PublicationAuthorization
@@ -641,6 +641,27 @@ def _wait_for_lease_renewal(
     entry = ledger.entry(authorization_id)
     raise AssertionError(
         f"ledger lease was not renewed past {later_than!r}; current={None if entry is None else entry.lease_expires_at!r}"
+    )
+
+
+def test_pre_model_invariant_exposes_safe_reason_code(
+    tmp_path: Path,
+    webhook: Any,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    deployment = Deployment(tmp_path)
+    hook = webhook(deployment.services())
+
+    def _reject(*_args: Any, **_kwargs: Any) -> Any:
+        raise PreModelInvariantError("REQUIRED_SPAN_NOT_IN_CANONICAL_INVENTORY")
+
+    monkeypatch.setattr(issuer, "prepare_authorization", _reject)
+    status, body = hook.post(_authorization_document().encode("utf-8"))
+
+    assert status == 422
+    assert json.loads(body)["error"] == (
+        "pre-model invariant rejected execution preparation: "
+        "REQUIRED_SPAN_NOT_IN_CANONICAL_INVENTORY"
     )
 
 
