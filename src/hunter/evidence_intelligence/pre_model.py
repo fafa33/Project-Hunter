@@ -517,7 +517,7 @@ def build_evidence_pre_model(
             intent=intent,
             specification=specification,
             spans=tuple(spans_by_id[span_id] for span_id in span_ids),
-            missingness_reason_codes=tuple(sorted(missingness + ["BUDGET_EXCLUDED"] * len(excluded))),
+            missingness_reason_codes=tuple(sorted(missingness + (["BUDGET_EXCLUDED"] if excluded else []))),
         )
         return len(prompt.encode("utf-8"))
 

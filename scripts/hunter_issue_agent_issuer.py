@@ -2,11 +2,18 @@
 """Trusted issuer HTTP edge for governed Issue agent execution.
 
 This is the deployable endpoint that consumes
-``hunter-issue-agent-signed-authorization-v1`` from the GitHub trigger,
+``hunter-issue-agent-signed-authorization-v2`` from the GitHub trigger,
 verifies the authorization, invokes the production SmartPromptMachine
 composition root, persists the canonical build, issues the signed
 ``PromptAutomationEnvelopeHandoff``, and forwards it unchanged into the
-existing fallback runtime.
+governed fallback runtime, which executes it in an isolated per-authorization
+workspace on the branch and base derived from the signed authorization
+(``docs/ISSUE_AGENT_EXECUTION_CONTRACT.md``).
+
+Execution outcomes after the ACK are served read-only at
+``GET /issue-agent/status/<authorization_id>``: only the ledger state, the
+execution target, the verified outcome and a fixed-vocabulary failure code,
+never the handoff, the prompt or free-form failure text.
 
 It is deployed behind the ``HUNTER_ISSUE_AGENT_WEBHOOK_URL`` and operates
 entirely from trusted repository-owned configuration. No secret material is
@@ -16,8 +23,10 @@ ever committed; all secrets are environment/repository secrets only.
 from __future__ import annotations
 
 import argparse
+import json
 import logging
 import os
+import re
 import secrets
 import signal
 import threading
@@ -34,13 +43,9 @@ from issue_agent_edge_transport import (
     setup_logging,
 )
 
-from hunter.automation.agent_fallback_runtime import (
-    AgentFallbackRuntimeReceipt,
-    OperationalAgentFallbackRuntime,
-)
+from hunter.automation.agent_fallback_runtime import AgentFallbackRuntimeReceipt
 from hunter.automation.issue_agent_execution import (
     EVIDENCE_DATABASE_ENV,
-    EXECUTION_BRANCH_ENV,
     ISSUE_AGENT_EXECUTION_RECEIPT_SCHEMA_VERSION,
     ISSUE_AGENT_PROFILE_REGISTRY,
     ISSUE_AGENT_ROUTE_REGISTRY,
@@ -58,18 +63,27 @@ from hunter.automation.issue_agent_execution import (
     IssueAgentExecutionError,
     IssueAgentExecutionLedger,
     IssueAgentExecutionReceipt,
+    IssueAgentExecutionTarget,
+    IssueAgentFallbackRuntime,
     IssueAgentIssuerError,
+    IssueAgentLedgerEntry,
     IssueAgentReplayError,
+    IssueAgentRuntimeReceiptError,
     SignedIssueAgentAuthorization,
     SourceHandlingBlockedError,
     build_production_source_handling_resolver,
+    derive_execution_target,
     issue_agent_document_id,
+    issue_agent_failure_attempts,
+    issue_agent_failure_code,
     issue_agent_intake_reference,
     issue_agent_task_request,
 )
+from hunter.automation.issue_agent_workspace import IssueAgentWorkspaceRuntime
 from hunter.automation.n8n_handoff import serialize_prompt_automation_handoff
 from hunter.evidence_intelligence.engineering_task_ingress import GovernedEngineeringTaskIngress
 from hunter.evidence_intelligence.intake import EvidenceIntelligenceIntakeService
+from hunter.evidence_intelligence.pre_model import PreModelInvariantError
 from hunter.evidence_intelligence.repository import EvidenceIntelligenceRepository
 from hunter.evidence_intelligence.smart_prompt_routing import (
     _PROMPT_AUTOMATION_SIGNING_KEY_ENV,
@@ -91,6 +105,9 @@ from hunter.execution import Clock, SystemClock
 _MAX_CONCURRENT_EXECUTIONS: Final[int] = 2
 _EXECUTION_SLOTS = threading.BoundedSemaphore(_MAX_CONCURRENT_EXECUTIONS)
 _ISSUE_AGENT_ACCEPTED_SCHEMA = "hunter-issue-agent-accepted-v1"
+_ISSUE_AGENT_STATUS_SCHEMA = "hunter-issue-agent-status-v1"
+STATUS_PATH_PREFIX: Final[str] = "/issue-agent/status/"
+_STATUS_PATH_RE = re.compile(r"/issue-agent/status/(hunter-issue-agent-authorization:[0-9a-f]{64})")
 
 #: How often the issuer renews the durable execution lease of every accepted
 #: execution it is still genuinely running. The ledger lease window is far
@@ -117,7 +134,6 @@ _REQUIRED_ENV: Final[tuple[str, ...]] = (
     REPOSITORY_ENV,
     OWNER_LOGIN_ENV,
     EVIDENCE_DATABASE_ENV,
-    EXECUTION_BRANCH_ENV,
     REPOSITORY_CHECKOUT_ENV,
     SOURCE_HANDLING_VERIFICATION_KEY_ENV,
     SOURCE_HANDLING_VERIFICATION_KEY_SHA256_ENV,
@@ -135,7 +151,6 @@ class IssuerConfiguration:
     repository: str
     owner_login: str
     evidence_database: Path
-    execution_branch: str
     repository_checkout: Path
     source_handling_verification_key: bytes
     source_handling_operator_root: SourceHandlingOperatorRoot
@@ -186,7 +201,6 @@ class IssuerConfiguration:
             repository=source.get(REPOSITORY_ENV, "").strip(),
             owner_login=source.get(OWNER_LOGIN_ENV, "").strip(),
             evidence_database=Path(source.get(EVIDENCE_DATABASE_ENV, "").strip()),
-            execution_branch=source.get(EXECUTION_BRANCH_ENV, "").strip(),
             repository_checkout=Path(source.get(REPOSITORY_CHECKOUT_ENV, "").strip()),
             source_handling_verification_key=verification_key,
             source_handling_operator_root=operator_root,
@@ -206,7 +220,7 @@ class IssuerServices:
     repository: EvidenceIntelligenceRepository
     source_handling_resolver: ProductionSourceHandlingAuthorityResolver
     ledger: IssueAgentExecutionLedger
-    fallback: OperationalAgentFallbackRuntime
+    fallback: IssueAgentFallbackRuntime
     ingress: GovernedEngineeringTaskIngress
     boundary: IssueSourceTransientIntakeBoundary
 
@@ -243,9 +257,9 @@ def compose_services(configuration: IssuerConfiguration) -> IssuerServices:
         routes=ISSUE_AGENT_ROUTE_REGISTRY,
         profiles=ISSUE_AGENT_PROFILE_REGISTRY,
     )
-    fallback = OperationalAgentFallbackRuntime(
-        repo_dir=configuration.repository_checkout,
-        branch=configuration.execution_branch,
+    fallback = IssueAgentWorkspaceRuntime(
+        workspace_root=configuration.repository_checkout,
+        repository=configuration.repository,
         environ=os.environ,
     )
     return IssuerServices(
@@ -268,6 +282,7 @@ class PreparedIssueAgentExecution:
     build_record_id: str
     envelope_id: str
     handoff_document: str
+    target: IssueAgentExecutionTarget
 
 
 def prepare_authorization(
@@ -277,12 +292,16 @@ def prepare_authorization(
     """Validate, claim, compile and durably record dispatch before HTTP ACK."""
     services.configuration.issuer_verifier.verify(signed)
     authorization = signed.authorization
+    if signed.implementation_scope.task_id != authorization.authorization_id:
+        raise IssueAgentAuthorizationError("implementation scope task_id must bind authorization identity")
 
     if authorization.repository != services.configuration.repository:
         raise IssueAgentAuthorizationError("authorization names a different repository than this deployment")
     if authorization.authorized_by != services.configuration.owner_login:
         raise IssueAgentAuthorizationError("only the configured repository owner may authorize execution")
 
+    # Pure: an underivable target is refused before the identity is consumed.
+    target = derive_execution_target(signed)
     reference = issue_agent_intake_reference(authorization)
     document_id = issue_agent_document_id(authorization)
     request = issue_agent_task_request(authorization)
@@ -307,7 +326,7 @@ def prepare_authorization(
             processed_at=services.configuration.clock.now(),
         )
 
-        compiled = services.ingress.compile(request)
+        compiled = services.ingress.compile(request, implementation_scope=signed.implementation_scope)
         envelope = compiled.envelope
         envelope.verify_issuer_signature(services.configuration.prompt_verifier)
         if envelope.build_record_id != compiled.compilation.manifest.build_record_id:
@@ -321,15 +340,11 @@ def prepare_authorization(
             build_record_id=envelope.build_record_id,
             envelope_id=envelope.envelope_id,
             handoff_document=handoff_document,
+            target=target,
             dispatched_at=services.configuration.clock.now(),
         )
     except BaseException as error:
-        services.ledger.fail(
-            authorization,
-            failed_at=services.configuration.clock.now(),
-            failure_type=type(error).__name__,
-            failure_message=str(error),
-        )
+        _record_failure(services, authorization, error)
         raise
 
     return PreparedIssueAgentExecution(
@@ -338,6 +353,18 @@ def prepare_authorization(
         build_record_id=envelope.build_record_id,
         envelope_id=envelope.envelope_id,
         handoff_document=handoff_document,
+        target=target,
+    )
+
+
+def _record_failure(services: IssuerServices, authorization: IssueAgentAuthorization, error: BaseException) -> None:
+    services.ledger.fail(
+        authorization,
+        failed_at=services.configuration.clock.now(),
+        failure_type=type(error).__name__,
+        failure_message=str(error),
+        failure_code=issue_agent_failure_code(error),
+        failure_attempts=issue_agent_failure_attempts(error),
     )
 
 
@@ -348,13 +375,15 @@ def finish_prepared_authorization(
     """Run only the slow provider phase and persist a terminal outcome."""
     authorization = prepared.authorization
     try:
-        receipt = services.fallback.dispatch(prepared.handoff_document)
+        receipt = services.fallback.dispatch(prepared.handoff_document, prepared.target)
         if not isinstance(receipt, AgentFallbackRuntimeReceipt):
-            raise IssueAgentExecutionError("fallback runtime did not return a canonical execution receipt")
+            raise IssueAgentRuntimeReceiptError("fallback runtime did not return a canonical execution receipt")
 
         services.ledger.complete(
             authorization,
             completed_at=services.configuration.clock.now(),
+            provider=receipt.provider,
+            head_after=receipt.head_after,
         )
 
         return IssueAgentExecutionReceipt(
@@ -366,12 +395,7 @@ def finish_prepared_authorization(
             fallback=receipt,
         )
     except BaseException as error:
-        services.ledger.fail(
-            authorization,
-            failed_at=services.configuration.clock.now(),
-            failure_type=type(error).__name__,
-            failure_message=str(error),
-        )
+        _record_failure(services, authorization, error)
         raise
 
 
@@ -468,6 +492,37 @@ def _run_lease_renewer(
                 registry.unregister(worker)
 
 
+def status_payload(entry: IssueAgentLedgerEntry) -> dict[str, Any]:
+    """The non-secret execution status of one ledger row.
+
+    Only the lifecycle state, the execution target, the verified outcome and a
+    fixed-vocabulary failure classification. The handoff document, the prompt
+    and free-form failure text are never part of it.
+    """
+    attempts: Any = None
+    if entry.failure_attempts:
+        try:
+            attempts = json.loads(entry.failure_attempts)
+        except json.JSONDecodeError:
+            attempts = None
+    return {
+        "authorization_id": entry.authorization_id,
+        "state": entry.state,
+        "claimed_at": entry.claimed_at,
+        "dispatched_at": entry.dispatched_at,
+        "completed_at": entry.completed_at,
+        "failed_at": entry.failed_at,
+        "execution_branch": entry.execution_branch,
+        "base_sha": entry.base_sha,
+        "provider": entry.provider,
+        "head_after": entry.head_after,
+        "failure_type": entry.failure_type,
+        "failure_code": entry.failure_code,
+        "failure_attempts": attempts,
+        "schema_version": _ISSUE_AGENT_STATUS_SCHEMA,
+    }
+
+
 def _accepted_payload(prepared: PreparedIssueAgentExecution) -> dict[str, Any]:
     return {
         "authorization_id": prepared.authorization.authorization_id,
@@ -493,10 +548,24 @@ class _IssuerRequestHandler(IssueAgentEdgeRequestHandler):
     services: IssuerServices | None = None
     shutdown_event: threading.Event | None = None
     execution_registry: ExecutionWorkerRegistry | None = None
+    execution_admission_enabled: bool = False
 
     endpoint = "/issue-agent/authorize"
     service_name = "hunter-issue-agent-issuer"
     error_schema_version = ISSUE_AGENT_EXECUTION_RECEIPT_SCHEMA_VERSION
+
+    def do_GET(self) -> None:
+        """Health, plus the read-only execution status of one authorization."""
+        if not self.path.startswith(STATUS_PATH_PREFIX):
+            super().do_GET()
+            return
+        match = _STATUS_PATH_RE.fullmatch(self.path)
+        assert self.services is not None
+        entry = self.services.ledger.entry(match.group(1)) if match is not None else None
+        if entry is None:
+            self._send_error(404, "Not Found")
+            return
+        self._send_json(200, status_payload(entry))
 
     def handle_authorization(self, signed: SignedIssueAgentAuthorization) -> None:
         """Admit one verified, durably prepared authorization.
@@ -506,6 +575,10 @@ class _IssuerRequestHandler(IssueAgentEdgeRequestHandler):
         exact handoff durably, then ACK before the slow provider phase so
         admission is bounded independently of provider duration.
         """
+        # PR-A: retire Railway execution before claim/dispatch/provider reachability.
+        if not self.execution_admission_enabled:
+            self._send_error(503, "Issue Agent execution backend is unavailable")
+            return
         if not _EXECUTION_SLOTS.acquire(blocking=False):
             self._send_error(503, "Issue Agent execution capacity is saturated")
             return
@@ -540,6 +613,13 @@ class _IssuerRequestHandler(IssueAgentEdgeRequestHandler):
         except SmartPromptMachineError as error:
             _EXECUTION_SLOTS.release()
             self._send_error(422, str(error))
+            return
+        except PreModelInvariantError as error:
+            _EXECUTION_SLOTS.release()
+            self._send_error(
+                422,
+                f"pre-model invariant rejected execution preparation: {error.reason_code}",
+            )
             return
         except Exception as error:  # noqa: BLE001
             _EXECUTION_SLOTS.release()
@@ -607,6 +687,7 @@ class IssuerServer:
         read_timeout: float = REQUEST_READ_TIMEOUT_SECONDS,
         max_workers: int = MAX_CONCURRENT_REQUEST_WORKERS,
         lease_renewal_interval: float = _LEASE_RENEWAL_INTERVAL_SECONDS,
+        execution_admission_enabled: bool = False,
     ) -> None:
         self._host = host
         self._port = port
@@ -622,6 +703,7 @@ class IssuerServer:
             execution_registry = self._executions
 
         Handler.services = services
+        Handler.execution_admission_enabled = execution_admission_enabled
         self._server = BoundedThreadingHTTPServer(
             (host, port),
             Handler,

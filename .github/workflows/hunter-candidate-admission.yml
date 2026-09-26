@@ -1,14 +1,6 @@
 name: Hunter Candidate Admission
 
 on:
-  pull_request_target:
-    branches:
-      - main
-    types:
-      - opened
-      - reopened
-      - synchronize
-      - ready_for_review
   workflow_run:
     workflows:
       - Hunter / Pre-PR Preflight
@@ -29,12 +21,9 @@ concurrency:
 
 jobs:
   candidate-admission:
-    # Admission is a convergence consumer, not an eager synchronize gate.
-    # A pull_request_target synchronize races the trusted exact-head proof and
-    # produces a false terminal red while that proof is legitimately running.
-    # Reconcile only after one of the trusted proof-producing workflows has
-    # completed; admission still re-reads exact-head state and fails closed if
-    # that completed proof is missing, stale, or failed.
+    # Admission is a convergence consumer. It runs only after a trusted
+    # proof-producing workflow completes, then re-reads exact-head state and
+    # fails closed if that proof is missing, stale, or failed.
     if: >-
       github.event_name == 'workflow_run' &&
       (github.event.workflow_run.event == 'push' ||

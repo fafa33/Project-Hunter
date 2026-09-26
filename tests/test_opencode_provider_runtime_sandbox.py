@@ -74,3 +74,23 @@ def test_sandbox_command_uses_in_sandbox_executable_path(
         "/app/bin/opencode",
     ]
     assert command[source_index + 1] == "/opt/hunter/bin/opencode"
+
+
+def test_model_environment_binds_pwd_to_the_sandbox_workspace(tmp_path: Path, monkeypatch) -> None:
+    monkeypatch.setenv("PWD", "/app")
+    monkeypatch.setenv("OLDPWD", "/")
+    monkeypatch.setenv("HUNTER_AGENT_GITHUB_PUSH_TOKEN", "secret")
+    env = runtime._model_environment(tmp_path / "credential-home")
+    assert env["PWD"] == "/workspace"
+    assert "OLDPWD" not in env
+    assert "HUNTER_AGENT_GITHUB_PUSH_TOKEN" not in env
+
+
+def test_pwd_is_exactly_the_sandbox_working_directory(tmp_path: Path, monkeypatch) -> None:
+    monkeypatch.setenv("PWD", "/app")
+    monkeypatch.setenv("RAILWAY_ENVIRONMENT", "production")
+    command = runtime._sandbox_command("/usr/bin/opencode", ["opencode", "run", "x"], tmp_path / "repo", tmp_path)
+    chdir = command[command.index("--chdir") + 1]
+    workspace_bind = command[command.index(str(tmp_path / "repo")) + 1]
+    env = runtime._model_environment(tmp_path / "credential-home")
+    assert env["PWD"] == chdir == workspace_bind == "/workspace"

@@ -2,7 +2,7 @@
 
 Issue #390 adds the first repository-owned execution edge for GitHub Issues. It is intentionally narrower than the existing n8n fallback worker and must not be used to bypass Smart Prompt Machine authority.
 
-The edge has two halves. `scripts/hunter_issue_agent_trigger.py` runs inside GitHub Actions and only *authorizes*: it turns one exact `issues:labeled` event into a deterministic `hunter-issue-agent-authorization-v1` payload and wraps it in an issuer-signed `hunter-issue-agent-signed-authorization-v1` envelope. `hunter.automation.issue_agent_execution.GovernedIssueAgentExecutionService` is the production composition root that *consumes* that document behind the trusted issuer endpoint. Neither half can execute anything on its own.
+The edge has two halves. `scripts/hunter_issue_agent_trigger.py` runs inside GitHub Actions and only *authorizes*: it turns one exact `issues:labeled` event into a deterministic `hunter-issue-agent-authorization-v1` payload and wraps it in an issuer-signed `hunter-issue-agent-signed-authorization-v2` envelope. `hunter.automation.issue_agent_execution.GovernedIssueAgentExecutionService` is the production composition root that *consumes* that document behind the trusted issuer endpoint. Neither half can execute anything on its own.
 
 ## Authorization
 
@@ -36,7 +36,7 @@ Authentication is added as a **separate outer schema** so the canonical inner pa
 | Schema | Role |
 | --- | --- |
 | `hunter-issue-agent-authorization-v1` | The canonical authorization payload the ADR names. Unchanged: same fields, same `authorization_id` derivation. It answers *what was authorized*. |
-| `hunter-issue-agent-signed-authorization-v1` | The transport. Carries that payload **verbatim** plus the Ed25519 issuer proof. It answers *who minted it*. |
+| `hunter-issue-agent-signed-authorization-v2` | The transport. Carries the v1 payload **verbatim**, the validated `TaskScopeContract`, and one Ed25519 issuer proof over both. It answers *who minted the authorization and its exact implementation scope*. |
 
 Only the envelope is executable. A bare `hunter-issue-agent-authorization-v1` document is refused at the composition root on the outer field set — it has no execution path at all, so an unsigned payload cannot reach mapping, the ledger, intake, compilation or dispatch.
 
@@ -59,8 +59,7 @@ All of the following are required; any missing or malformed value fails closed b
 | `HUNTER_ISSUE_AGENT_REPOSITORY` | Exact `owner/name` this deployment executes for. |
 | `HUNTER_ISSUE_AGENT_OWNER_LOGIN` | The only login whose authorization is accepted. |
 | `HUNTER_ISSUE_AGENT_EVIDENCE_DB` | Evidence Intelligence database, which must also hold the Source Handling authority history. |
-| `HUNTER_ISSUE_AGENT_EXECUTION_BRANCH` | Remote branch providers must advance. Never taken from Issue text. |
-| `HUNTER_ISSUE_AGENT_REPO_DIR` | Repository checkout provider commands run in. |
+| `HUNTER_ISSUE_AGENT_REPO_DIR` | Workspace root; each authorization executes in its own workspace at its signed `base_sha`, on the branch derived from the signed authorization (never from Issue text or configuration). See `docs/ISSUE_AGENT_EXECUTION_CONTRACT.md`. |
 | `HUNTER_SOURCE_HANDLING_VERIFICATION_KEY` | Hex Ed25519 public key for the authority history. |
 | `HUNTER_SOURCE_HANDLING_VERIFICATION_KEY_SHA256` | Operator-provisioned fingerprint of that key. |
 | `HUNTER_SOURCE_HANDLING_GENESIS_RULE_SHA256` | Operator-provisioned genesis authorization-rule digest. |

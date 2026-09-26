@@ -10,7 +10,10 @@ from urllib.parse import urlsplit
 
 _EXPECTED_HEAD_ENV = "HUNTER_AGENT_EXPECTED_HEAD"
 _BRANCH_ENV = "HUNTER_AGENT_BRANCH"
+#: Set by the fallback runtime for a governed Issue authorization branch.
+_BASE_SHA_ENV = "HUNTER_AGENT_BASE_SHA"
 _REPOSITORY_RE = re.compile(r"^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$")
+_COMMIT_SHA_RE = re.compile(r"^[0-9a-f]{40}$")
 
 
 class ValidationAdapterError(RuntimeError):
@@ -62,6 +65,36 @@ def _canonical_remote_url(repo: Path) -> str:
     return f"https://github.com/{repository}.git"
 
 
+def _require_linear_from_signed_base(repo: Path, expected: str) -> None:
+    """An authorization branch is its signed base plus linear commits, never a merge.
+
+    ``docs/ISSUE_AGENT_EXECUTION_CONTRACT.md`` I2: the base is immutable per
+    authorization, so main is never merged into the branch and the branch is
+    never rebased. A changed base is a new authorization and a new branch.
+    """
+    import os
+
+    base = os.environ.get(_BASE_SHA_ENV, "").strip()
+    if not base:
+        return
+    if _COMMIT_SHA_RE.fullmatch(base) is None:
+        raise ValidationAdapterError("signed execution base must be an exact lowercase commit SHA")
+    ancestry = subprocess.run(
+        ("git", "merge-base", "--is-ancestor", base, expected),
+        cwd=repo,
+        capture_output=True,
+        text=True,
+        check=False,
+        timeout=120,
+    )
+    if ancestry.returncode != 0:
+        raise ValidationAdapterError("candidate does not descend from the signed execution base")
+    if base == expected:
+        raise ValidationAdapterError("candidate does not advance the signed execution base")
+    if _git(repo, "rev-list", "--min-parents=2", f"{base}..{expected}"):
+        raise ValidationAdapterError("candidate history from the signed execution base contains a merge commit")
+
+
 def run() -> int:
     repo = Path.cwd().resolve()
     expected = _required_env(_EXPECTED_HEAD_ENV).lower()
@@ -78,6 +111,8 @@ def run() -> int:
     local_head = _git(repo, "rev-parse", "HEAD").lower()
     if local_head != expected:
         raise ValidationAdapterError("local HEAD does not match fallback expected HEAD")
+
+    _require_linear_from_signed_base(repo, expected)
 
     remote_line = _git(repo, "ls-remote", "--exit-code", remote_url, f"refs/heads/{branch}")
     fields = remote_line.split()

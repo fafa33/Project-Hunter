@@ -104,3 +104,12 @@ def test_learning_workflow_collects_optional_sonar_without_granting_write_author
     assert "sonar-learning-observations.json" in text
     assert "pull_request_target" not in text
     assert "contents: write" not in text
+
+
+def test_learning_workflow_renders_controlled_registry_candidate_without_write_authority():
+    text = WORKFLOW_PATH.read_text(encoding="utf-8")
+    assert "hunter_integrate_learning_ledger.py" in text
+    assert "hunter-defect-registry-candidate.json" in text
+    assert "contents: write" not in text
+    assert "git commit" not in text
+    assert "git push" not in text

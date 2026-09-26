@@ -57,6 +57,7 @@ from hunter.evidence_intelligence.smart_prompt_routing import (
     PromptTaskUnreadyError,
     SmartPromptMachine,
 )
+from hunter.task_scope import TaskScopeContract
 
 ENGINEERING_TASK_INGRESS_SCHEMA_VERSION = "engineering-task-ingress-v1"
 
@@ -178,7 +179,9 @@ class GovernedEngineeringTaskIngress:
         profile = self._profiles.resolve(route.profile_id, route.profile_version)
         return _engineering_route_budget(route, profile)
 
-    def compile(self, request: PromptTaskRequest) -> PromptTaskCompilationResult:
+    def compile(
+        self, request: PromptTaskRequest, *, implementation_scope: TaskScopeContract | None = None
+    ) -> PromptTaskCompilationResult:
         """Compile exactly one governed caller task through the canonical path."""
         if not isinstance(request, PromptTaskRequest):
             raise TypeError("the engineering-task ingress accepts only the canonical PromptTaskRequest")
@@ -195,7 +198,7 @@ class GovernedEngineeringTaskIngress:
                     maximum_input_bytes=budget.maximum_input_bytes,
                     actual_bytes=actual,
                 )
-        compiled = self._machine.compile_task(request)
+        compiled = self._machine.compile_task(request, implementation_scope=implementation_scope)
         # Defense-in-depth invariant at the network boundary. The canonical
         # machine already refuses to mint an envelope for a non-READY build or a
         # concrete-artifact-less READY build, so this branch can only fire if a

@@ -11,7 +11,7 @@ This module is that missing consumer and nothing else. It owns no routing, no
 prompt profile, no signing key, no transport, no provider order and no merge
 authority; every one of those stays with the component that already holds it:
 
-``hunter-issue-agent-signed-authorization-v1``
+``hunter-issue-agent-signed-authorization-v2``
     the only executable input. It carries the canonical
     ``hunter-issue-agent-authorization-v1`` payload named by accepted ADR 0036
     s7 verbatim -- this contribution wraps that document, it never redefines it
@@ -48,8 +48,10 @@ authority; every one of those stays with the component that already holds it:
 
 Issue text is caller data at every step. It selects no route, no provider, no
 destination, no branch and no merge behaviour: the task key, the prompt profile
-and the route registry are repository-owned constants, and the execution branch
-and repository checkout come from operational configuration only.
+and the route registry are repository-owned constants. The execution branch and
+base are a pure function of the signed authorization (``derive_execution_target``,
+``docs/ISSUE_AGENT_EXECUTION_CONTRACT.md``), never of Issue text or deployment
+configuration, and every execution runs in its own isolated workspace.
 """
 
 from __future__ import annotations
@@ -58,30 +60,35 @@ import hashlib
 import json
 import logging
 import os
+import re
 import secrets
 import sqlite3
 from collections.abc import Mapping
 from contextlib import closing
 from dataclasses import asdict, dataclass
 from datetime import UTC, datetime, timedelta
+from fnmatch import fnmatchcase
 from pathlib import Path
 from typing import Any, Protocol
 
 from cryptography.exceptions import InvalidSignature
 from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PublicKey
 
+from hunter.automation.agent_fallback import AgentEnvironmentUnsuitableError, AgentFallbackExhaustedError
 from hunter.automation.agent_fallback_runtime import (
+    AgentFallbackRuntimeError,
     AgentFallbackRuntimeReceipt,
-    OperationalAgentFallbackRuntime,
 )
-from hunter.automation.n8n_handoff import serialize_prompt_automation_handoff
+from hunter.automation.n8n_handoff import PromptAutomationHandoffError, serialize_prompt_automation_handoff
 from hunter.evidence_intelligence.engineering_task_ingress import GovernedEngineeringTaskIngress
 from hunter.evidence_intelligence.intake import (
     EvidenceIntakeReference,
     EvidenceIntelligenceIntakeService,
     evidence_document_id,
 )
+from hunter.evidence_intelligence.pre_model import PreModelInvariantError
 from hunter.evidence_intelligence.repository import EvidenceIntelligenceRepository
+from hunter.evidence_intelligence.smart_prompt_machine import SmartPromptMachineError
 from hunter.evidence_intelligence.smart_prompt_routing import (
     ENGINEERING_IMPLEMENT_PROFILE,
     ENGINEERING_IMPLEMENT_ROUTE,
@@ -103,13 +110,14 @@ from hunter.evidence_intelligence.source_handling_persistence import (
     SqliteSourceHandlingAuthorityReadView,
 )
 from hunter.execution import Clock, SystemClock
+from hunter.task_scope import TaskScopeContract, strip_task_scope_block
 
 #: The inner payload named by accepted ADR 0036 s7, carried verbatim and never
 #: redefined here.
 ISSUE_AGENT_AUTHORIZATION_SCHEMA_VERSION = "hunter-issue-agent-authorization-v1"
 
 #: The issuer-authenticated transport that carries it. Only this is executable.
-ISSUE_AGENT_SIGNED_AUTHORIZATION_SCHEMA_VERSION = "hunter-issue-agent-signed-authorization-v1"
+ISSUE_AGENT_SIGNED_AUTHORIZATION_SCHEMA_VERSION = "hunter-issue-agent-signed-authorization-v2"
 
 ISSUE_AGENT_AUTHORIZATION_LABEL = "hunter-agent-execute"
 ISSUE_AGENT_AUTHORIZATION_IDENTITY_PREFIX = "hunter-issue-agent-authorization"
@@ -117,7 +125,7 @@ ISSUE_AGENT_AUTHORIZATION_IDENTITY_PREFIX = "hunter-issue-agent-authorization"
 #: Domain separator the issuer mixes into the signed message. It must match
 #: ``scripts/hunter_issue_agent_trigger.py`` exactly; the cross-binding test
 #: pins the two together.
-ISSUE_AGENT_AUTHORIZATION_SIGNATURE_DOMAIN = b"hunter-issue-agent-signed-authorization-v1:"
+ISSUE_AGENT_AUTHORIZATION_SIGNATURE_DOMAIN = b"hunter-issue-agent-signed-authorization-v2:"
 ISSUE_AGENT_VERIFYING_KEY_ENV = "HUNTER_ISSUE_AGENT_AUTHORIZATION_VERIFYING_KEY"
 _ISSUE_AGENT_KEY_BYTES = 32
 _ISSUE_AGENT_SIGNATURE_BYTES = 64
@@ -143,8 +151,19 @@ ISSUE_AGENT_ROUTE_REGISTRY = PromptTaskRouteRegistry(
 REPOSITORY_ENV = "HUNTER_ISSUE_AGENT_REPOSITORY"
 OWNER_LOGIN_ENV = "HUNTER_ISSUE_AGENT_OWNER_LOGIN"
 EVIDENCE_DATABASE_ENV = "HUNTER_ISSUE_AGENT_EVIDENCE_DB"
+#: Retired. The execution branch is derived from the signed authorization; a
+#: value still present in a deployment is ignored (startup warns about it).
 EXECUTION_BRANCH_ENV = "HUNTER_ISSUE_AGENT_EXECUTION_BRANCH"
+#: The workspace root beneath which one isolated workspace per authorization is
+#: materialized (``docs/ISSUE_AGENT_EXECUTION_CONTRACT.md`` I3).
 REPOSITORY_CHECKOUT_ENV = "HUNTER_ISSUE_AGENT_REPO_DIR"
+
+#: The only base branch the governance chain admits an Issue candidate against.
+ISSUE_AGENT_BASE_REF = "main"
+#: Hex characters of the authorization identity digest carried in the branch.
+ISSUE_AGENT_BRANCH_DIGEST_LENGTH = 16
+_AUTHORIZATION_DIGEST_RE = re.compile(r"[0-9a-f]{64}")
+_COMMIT_SHA_RE = re.compile(r"[0-9a-f]{40}")
 SOURCE_HANDLING_VERIFICATION_KEY_ENV = "HUNTER_SOURCE_HANDLING_VERIFICATION_KEY"
 SOURCE_HANDLING_VERIFICATION_KEY_SHA256_ENV = "HUNTER_SOURCE_HANDLING_VERIFICATION_KEY_SHA256"
 SOURCE_HANDLING_GENESIS_RULE_SHA256_ENV = "HUNTER_SOURCE_HANDLING_GENESIS_RULE_SHA256"
@@ -168,9 +187,30 @@ CREATE TABLE IF NOT EXISTS {_LEDGER_TABLE} (
     failure_message TEXT,
     owner_instance_id TEXT,
     leased_at TEXT,
-    lease_expires_at TEXT
+    lease_expires_at TEXT,
+    execution_branch TEXT,
+    base_sha TEXT,
+    provider TEXT,
+    head_after TEXT,
+    failure_code TEXT,
+    failure_attempts TEXT
 )
 """
+#: Columns added after the first ledger schema, migrated in place on open.
+_LEDGER_MIGRATED_COLUMNS = (
+    "failed_at",
+    "failure_type",
+    "failure_message",
+    "owner_instance_id",
+    "leased_at",
+    "lease_expires_at",
+    "execution_branch",
+    "base_sha",
+    "provider",
+    "head_after",
+    "failure_code",
+    "failure_attempts",
+)
 _STATE_CLAIMED = "CLAIMED"
 _STATE_DISPATCHED = "DISPATCHED"
 _STATE_COMPLETED = "COMPLETED"
@@ -209,6 +249,85 @@ class IssueAgentIssuerError(IssueAgentAuthorizationError):
 
 class IssueAgentConfigurationError(IssueAgentExecutionError):
     """Raised when required operational configuration is absent or malformed."""
+
+
+class IssueAgentRuntimeReceiptError(IssueAgentExecutionError):
+    """The fallback runtime returned something other than its canonical receipt."""
+
+
+class IssueAgentWorkspaceError(IssueAgentExecutionError):
+    """An isolated execution workspace could not be materialized safely."""
+
+    def __init__(self, reason_code: str, message: str) -> None:
+        if reason_code not in _WORKSPACE_FAILURE_CODES:
+            raise ValueError(f"unknown workspace failure code {reason_code!r}")
+        self.reason_code = reason_code
+        super().__init__(f"{reason_code}: {message}")
+
+
+_WORKSPACE_FAILURE_CODES = frozenset({"BASE_NOT_ON_MAIN", "REMOTE_BRANCH_CONFLICT", "WORKSPACE_UNAVAILABLE"})
+
+#: The fixed, non-secret vocabulary a terminal ledger failure is classified by.
+ISSUE_AGENT_FAILURE_CODES = frozenset(
+    {
+        *_WORKSPACE_FAILURE_CODES,
+        "ENVIRONMENT_UNSUITABLE",
+        "PROVIDER_POOL_EXHAUSTED",
+        "RUNTIME_FAILURE",
+        "HANDOFF_INVALID",
+        "NONCANONICAL_RUNTIME_RECEIPT",
+        "PRE_MODEL_INVARIANT",
+        "PROMPT_COMPILATION_REJECTED",
+        "SOURCE_HANDLING_BLOCKED",
+        "PROCESS_RESTART",
+        "EXECUTION_ERROR",
+    }
+)
+
+
+def issue_agent_failure_code(error: BaseException) -> str:
+    """Classify one terminal execution failure into the fixed failure vocabulary."""
+    if isinstance(error, IssueAgentWorkspaceError):
+        return error.reason_code
+    if isinstance(error, AgentEnvironmentUnsuitableError):
+        return "ENVIRONMENT_UNSUITABLE"
+    if isinstance(error, AgentFallbackExhaustedError):
+        return "PROVIDER_POOL_EXHAUSTED"
+    if isinstance(error, AgentFallbackRuntimeError):
+        return "RUNTIME_FAILURE"
+    if isinstance(error, PromptAutomationHandoffError):
+        return "HANDOFF_INVALID"
+    if isinstance(error, PreModelInvariantError):
+        return "PRE_MODEL_INVARIANT"
+    if isinstance(error, SmartPromptMachineError):
+        return "PROMPT_COMPILATION_REJECTED"
+    if isinstance(error, SourceHandlingBlockedError):
+        return "SOURCE_HANDLING_BLOCKED"
+    if isinstance(error, IssueAgentRuntimeReceiptError):
+        return "NONCANONICAL_RUNTIME_RECEIPT"
+    return "EXECUTION_ERROR"
+
+
+def issue_agent_failure_attempts(error: BaseException) -> str | None:
+    """The provider attempts behind an exhausted pool, as canonical JSON, if any.
+
+    Attempt details are runtime-owned fixed strings (never provider output), so
+    they are safe to persist and to report.
+    """
+    attempts = getattr(error, "attempts", None) if isinstance(error, AgentFallbackExhaustedError) else None
+    if not attempts:
+        return None
+    return _canonical_json(
+        [
+            {
+                "provider": attempt.provider,
+                "state": attempt.state,
+                "validation_passed": attempt.validation_passed,
+                "detail": attempt.detail,
+            }
+            for attempt in attempts
+        ]
+    )
 
 
 class _DuplicateJSONKeyError(ValueError):
@@ -327,7 +446,7 @@ class IssueAgentAuthorizationVerifier:
         try:
             Ed25519PublicKey.from_public_bytes(self._public_key_bytes).verify(
                 signature,
-                signed.authorization.signed_message,
+                signed.signed_message,
             )
         except InvalidSignature:
             raise IssueAgentIssuerError(
@@ -471,15 +590,27 @@ class SignedIssueAgentAuthorization:
     """
 
     authorization: IssueAgentAuthorization
+    implementation_scope: TaskScopeContract
     issuer_signature: str
     schema_version: str = ISSUE_AGENT_SIGNED_AUTHORIZATION_SCHEMA_VERSION
 
     def __post_init__(self) -> None:
         if not isinstance(self.authorization, IssueAgentAuthorization):
             raise IssueAgentAuthorizationError("signed authorization must carry a canonical v1 payload")
+        if not isinstance(self.implementation_scope, TaskScopeContract):
+            raise IssueAgentAuthorizationError("signed authorization must carry canonical implementation scope")
+        incomplete = self.implementation_scope.incompleteness()
+        if incomplete:
+            raise IssueAgentAuthorizationError(incomplete)
         if self.schema_version != ISSUE_AGENT_SIGNED_AUTHORIZATION_SCHEMA_VERSION:
             raise IssueAgentAuthorizationError("unknown signed authorization schema version")
         _canonical_issuer_signature(self.issuer_signature)
+
+    @property
+    def signed_message(self) -> bytes:
+        return ISSUE_AGENT_AUTHORIZATION_SIGNATURE_DOMAIN + _canonical_json(
+            {"authorization": asdict(self.authorization), "implementation_scope": asdict(self.implementation_scope)}
+        ).encode("utf-8")
 
     @classmethod
     def from_json(cls, document: str | bytes) -> SignedIssueAgentAuthorization:
@@ -490,7 +621,7 @@ class SignedIssueAgentAuthorization:
         is a schema mismatch rather than a missing-signature afterthought.
         """
         decoded = _decode_bounded_json_object(document)
-        expected = {"authorization", "issuer_signature", "schema_version"}
+        expected = {"authorization", "implementation_scope", "issuer_signature", "schema_version"}
         if set(decoded) != expected:
             raise IssueAgentAuthorizationError("signed authorization document schema mismatch")
         if decoded["schema_version"] != ISSUE_AGENT_SIGNED_AUTHORIZATION_SCHEMA_VERSION:
@@ -500,8 +631,16 @@ class SignedIssueAgentAuthorization:
         payload = decoded["authorization"]
         if not isinstance(payload, dict):
             raise IssueAgentAuthorizationError("signed authorization must carry a JSON object payload")
+        scope_payload = decoded["implementation_scope"]
+        if not isinstance(scope_payload, dict):
+            raise IssueAgentAuthorizationError("signed authorization implementation_scope must be an object")
+        try:
+            scope = TaskScopeContract.from_dict(scope_payload)
+        except ValueError as error:
+            raise IssueAgentAuthorizationError(str(error)) from None
         return cls(
             authorization=IssueAgentAuthorization._from_mapping(payload),
+            implementation_scope=scope,
             issuer_signature=decoded["issuer_signature"],
         )
 
@@ -509,6 +648,7 @@ class SignedIssueAgentAuthorization:
         return _canonical_json(
             {
                 "authorization": asdict(self.authorization),
+                "implementation_scope": asdict(self.implementation_scope),
                 "issuer_signature": self.issuer_signature,
                 "schema_version": self.schema_version,
             }
@@ -526,7 +666,7 @@ def issue_agent_task_text(authorization: IssueAgentAuthorization) -> str:
     """
     return _canonical_json(
         {
-            "issue_body": authorization.issue_body,
+            "issue_body": strip_task_scope_block(authorization.issue_body),
             "issue_title": authorization.issue_title,
             "issue_url": authorization.issue_url,
         }
@@ -542,7 +682,7 @@ def issue_agent_intake_reference(authorization: IssueAgentAuthorization) -> Evid
     boundary accepts, and the label recorded is the governed constant rather than
     whatever labels the Issue happens to carry.
     """
-    if not authorization.issue_body.strip():
+    if not strip_task_scope_block(authorization.issue_body).strip():
         raise IssueAgentAuthorizationError("an authorized Issue must carry body content to execute")
     identity = f"github-issue:{authorization.repository}#{authorization.issue_number}"
     return EvidenceIntakeReference(
@@ -556,7 +696,7 @@ def issue_agent_intake_reference(authorization: IssueAgentAuthorization) -> Evid
         source_type="issue",
         source_claimed_authority="repository-owner",
         title=authorization.issue_title,
-        content=authorization.issue_body,
+        content=strip_task_scope_block(authorization.issue_body),
         metadata={
             "issue_number": authorization.issue_number,
             "labels": [ISSUE_AGENT_AUTHORIZATION_LABEL],
@@ -580,6 +720,71 @@ def issue_agent_task_request(authorization: IssueAgentAuthorization) -> PromptTa
 
 
 @dataclass(frozen=True, slots=True)
+class IssueAgentExecutionTarget:
+    """Where one authorization executes: its own branch, forked at its exact base.
+
+    Every field is derived from the verified signed authorization by
+    ``derive_execution_target``. Nothing here is configurable, and nothing here
+    is taken from Issue text, deployment configuration or provider output.
+    """
+
+    authorization_id: str
+    issue_number: int
+    repository: str
+    branch: str
+    base_ref: str
+    base_sha: str
+
+
+def issue_agent_execution_branch(authorization: IssueAgentAuthorization) -> str:
+    """The deterministic candidate branch ``issue-<n>-<16 hex of the identity digest>``.
+
+    The branch binds the governing Issue in the shape the governance chain reads
+    (``issue-<n>-...``), and the digest binds it to exactly one authorization: a
+    changed Issue, scope or base is a new authorization and so a new branch.
+    """
+    prefix, separator, digest = authorization.authorization_id.partition(":")
+    if (
+        prefix != ISSUE_AGENT_AUTHORIZATION_IDENTITY_PREFIX
+        or not separator
+        or _AUTHORIZATION_DIGEST_RE.fullmatch(digest) is None
+    ):
+        raise IssueAgentAuthorizationError("authorization identity is not a canonical digest identity")
+    return f"issue-{authorization.issue_number}-{digest[:ISSUE_AGENT_BRANCH_DIGEST_LENGTH]}"
+
+
+def derive_execution_target(signed: SignedIssueAgentAuthorization) -> IssueAgentExecutionTarget:
+    """Derive the execution target from the signed authorization, or refuse it.
+
+    Pure and side-effect free, so it runs before the ledger claim: a document
+    whose target cannot be derived is refused without consuming its identity.
+    """
+    authorization = signed.authorization
+    scope = signed.implementation_scope
+    if scope.task_id != authorization.authorization_id:
+        raise IssueAgentAuthorizationError("implementation scope task_id must bind authorization identity")
+    if _COMMIT_SHA_RE.fullmatch(scope.base_sha) is None:
+        raise IssueAgentAuthorizationError("signed implementation scope must pin an exact lowercase base_sha")
+    if scope.base_ref != ISSUE_AGENT_BASE_REF:
+        raise IssueAgentAuthorizationError(
+            f"signed implementation scope base_ref must be {ISSUE_AGENT_BASE_REF!r}, the only admitted base"
+        )
+    branch = issue_agent_execution_branch(authorization)
+    if not fnmatchcase(branch, scope.branch_pattern):
+        raise IssueAgentAuthorizationError(
+            f"execution branch {branch!r} does not match the signed branch_pattern {scope.branch_pattern!r}"
+        )
+    return IssueAgentExecutionTarget(
+        authorization_id=authorization.authorization_id,
+        issue_number=authorization.issue_number,
+        repository=authorization.repository,
+        branch=branch,
+        base_ref=scope.base_ref,
+        base_sha=scope.base_sha,
+    )
+
+
+@dataclass(frozen=True, slots=True)
 class IssueAgentLedgerEntry:
     """The durable execution-ownership row for one authorization."""
 
@@ -596,6 +801,15 @@ class IssueAgentLedgerEntry:
     owner_instance_id: str | None
     leased_at: str | None
     lease_expires_at: str | None
+    claimed_at: str | None = None
+    dispatched_at: str | None = None
+    completed_at: str | None = None
+    execution_branch: str | None = None
+    base_sha: str | None = None
+    provider: str | None = None
+    head_after: str | None = None
+    failure_code: str | None = None
+    failure_attempts: str | None = None
 
 
 class IssueAgentExecutionLedger:
@@ -631,14 +845,7 @@ class IssueAgentExecutionLedger:
         with closing(self._connect()) as connection:
             connection.execute(_LEDGER_SCHEMA)
             columns = {str(row["name"]) for row in connection.execute(f"PRAGMA table_info({_LEDGER_TABLE})").fetchall()}
-            for name in (
-                "failed_at",
-                "failure_type",
-                "failure_message",
-                "owner_instance_id",
-                "leased_at",
-                "lease_expires_at",
-            ):
+            for name in _LEDGER_MIGRATED_COLUMNS:
                 if name not in columns:
                     connection.execute(f"ALTER TABLE {_LEDGER_TABLE} ADD COLUMN {name} TEXT")
             connection.commit()
@@ -679,6 +886,15 @@ class IssueAgentExecutionLedger:
             owner_instance_id=row["owner_instance_id"],
             leased_at=row["leased_at"],
             lease_expires_at=row["lease_expires_at"],
+            claimed_at=row["claimed_at"],
+            dispatched_at=row["dispatched_at"],
+            completed_at=row["completed_at"],
+            execution_branch=row["execution_branch"],
+            base_sha=row["base_sha"],
+            provider=row["provider"],
+            head_after=row["head_after"],
+            failure_code=row["failure_code"],
+            failure_attempts=row["failure_attempts"],
         )
 
     def claim(self, authorization: IssueAgentAuthorization, *, claimed_at: datetime) -> None:
@@ -726,16 +942,21 @@ class IssueAgentExecutionLedger:
         build_record_id: str,
         envelope_id: str,
         handoff_document: str,
+        target: IssueAgentExecutionTarget,
         dispatched_at: datetime,
     ) -> None:
-        """Record the exact handoff durably *before* it is handed to the runtime."""
+        """Record the exact handoff and execution target durably *before* the runtime sees them."""
+        if not isinstance(target, IssueAgentExecutionTarget) or target.authorization_id != (
+            authorization.authorization_id
+        ):
+            raise IssueAgentExecutionError("ledger dispatch requires the execution target of this authorization")
         moment = _aware_utc("ledger dispatch time", dispatched_at)
         expires_at = moment + timedelta(seconds=ISSUE_AGENT_LEDGER_LEASE_SECONDS)
         self._advance(
             authorization,
             sql=(
                 f"UPDATE {_LEDGER_TABLE} SET state = ?, document_id = ?, build_record_id = ?, "
-                "envelope_id = ?, handoff_document = ?, dispatched_at = ?, "
+                "envelope_id = ?, handoff_document = ?, execution_branch = ?, base_sha = ?, dispatched_at = ?, "
                 "leased_at = ?, lease_expires_at = ? "
                 "WHERE authorization_id = ? AND authorization_digest = ? AND state = ? "
                 "AND owner_instance_id = ? AND lease_expires_at > ?"
@@ -746,6 +967,8 @@ class IssueAgentExecutionLedger:
                 build_record_id,
                 envelope_id,
                 handoff_document,
+                target.branch,
+                target.base_sha,
                 moment.isoformat(),
                 moment.isoformat(),
                 expires_at.isoformat(),
@@ -758,19 +981,28 @@ class IssueAgentExecutionLedger:
             failure="ledger dispatch state is not the exact claimed authorization owned by this instance",
         )
 
-    def complete(self, authorization: IssueAgentAuthorization, *, completed_at: datetime) -> None:
+    def complete(
+        self,
+        authorization: IssueAgentAuthorization,
+        *,
+        completed_at: datetime,
+        provider: str | None = None,
+        head_after: str | None = None,
+    ) -> None:
         """Mark one authorization finished after the runtime returned a receipt."""
         moment = _aware_utc("ledger completion time", completed_at).isoformat()
         self._advance(
             authorization,
             sql=(
-                f"UPDATE {_LEDGER_TABLE} SET state = ?, completed_at = ? "
+                f"UPDATE {_LEDGER_TABLE} SET state = ?, completed_at = ?, provider = ?, head_after = ? "
                 "WHERE authorization_id = ? AND authorization_digest = ? AND state = ? "
                 "AND owner_instance_id = ?"
             ),
             parameters=(
                 _STATE_COMPLETED,
                 moment,
+                provider,
+                head_after,
                 authorization.authorization_id,
                 authorization.content_digest,
                 _STATE_DISPATCHED,
@@ -786,6 +1018,8 @@ class IssueAgentExecutionLedger:
         failed_at: datetime,
         failure_type: str,
         failure_message: str,
+        failure_code: str | None = None,
+        failure_attempts: str | None = None,
     ) -> None:
         """Persist a terminal failure without ever releasing replay ownership."""
         moment = _aware_utc("ledger failure time", failed_at).isoformat()
@@ -793,12 +1027,15 @@ class IssueAgentExecutionLedger:
         message = str(failure_message).strip() or kind
         if len(message) > 2000:
             message = message[:2000]
+        code = failure_code if failure_code in ISSUE_AGENT_FAILURE_CODES else "EXECUTION_ERROR"
+        attempts = failure_attempts[:4000] if isinstance(failure_attempts, str) else None
 
         self._advance(
             authorization,
             sql=(
                 f"UPDATE {_LEDGER_TABLE} "
-                "SET state = ?, failed_at = ?, failure_type = ?, failure_message = ? "
+                "SET state = ?, failed_at = ?, failure_type = ?, failure_message = ?, "
+                "failure_code = ?, failure_attempts = ? "
                 "WHERE authorization_id = ? AND authorization_digest = ? "
                 "AND state IN (?, ?) AND owner_instance_id = ?"
             ),
@@ -807,6 +1044,8 @@ class IssueAgentExecutionLedger:
                 moment,
                 kind,
                 message,
+                code,
+                attempts,
                 authorization.authorization_id,
                 authorization.content_digest,
                 _STATE_CLAIMED,
@@ -869,7 +1108,7 @@ class IssueAgentExecutionLedger:
                 connection.execute("BEGIN IMMEDIATE")
                 cursor = connection.execute(
                     f"UPDATE {_LEDGER_TABLE} "
-                    "SET state = ?, failed_at = ?, failure_type = ?, failure_message = ? "
+                    "SET state = ?, failed_at = ?, failure_type = ?, failure_message = ?, failure_code = ? "
                     "WHERE state IN (?, ?) "
                     "AND lease_expires_at IS NOT NULL AND lease_expires_at < ?",
                     (
@@ -877,6 +1116,7 @@ class IssueAgentExecutionLedger:
                         moment,
                         "ProcessRestart",
                         "issuer lease expired before a durable terminal outcome",
+                        "PROCESS_RESTART",
                         _STATE_CLAIMED,
                         _STATE_DISPATCHED,
                         moment,
@@ -935,9 +1175,13 @@ class IssueAgentExecutionReceipt:
 
 
 class IssueAgentFallbackRuntime(Protocol):
-    """The existing fallback runtime seam; the handoff is passed unchanged."""
+    """The fallback runtime seam: the handoff unchanged, plus where it executes.
 
-    def dispatch(self, document: str | bytes) -> AgentFallbackRuntimeReceipt: ...
+    The target is always the one ``derive_execution_target`` derived from the
+    signed authorization and recorded in the ledger before dispatch.
+    """
+
+    def dispatch(self, document: str | bytes, target: IssueAgentExecutionTarget) -> AgentFallbackRuntimeReceipt: ...
 
 
 @dataclass(frozen=True, slots=True)
@@ -946,13 +1190,14 @@ class IssueAgentExecutionConfiguration:
 
     Nothing here is reachable from Issue text, and nothing here is re-read from
     the environment later: a mid-run environment mutation cannot move the
-    execution to another repository, branch, checkout or authority database.
+    execution to another repository, workspace root or authority database. The
+    branch and base are not configuration at all; they come from the signed
+    authorization.
     """
 
     repository: str
     owner_login: str
     evidence_database: Path
-    execution_branch: str
     repository_checkout: Path
     source_handling_verification_key: bytes
     source_handling_operator_root: SourceHandlingOperatorRoot
@@ -981,7 +1226,6 @@ class IssueAgentExecutionConfiguration:
             repository=_required_text(REPOSITORY_ENV, source.get(REPOSITORY_ENV)),
             owner_login=_required_text(OWNER_LOGIN_ENV, source.get(OWNER_LOGIN_ENV)),
             evidence_database=Path(_required_text(EVIDENCE_DATABASE_ENV, source.get(EVIDENCE_DATABASE_ENV))),
-            execution_branch=_required_text(EXECUTION_BRANCH_ENV, source.get(EXECUTION_BRANCH_ENV)),
             repository_checkout=Path(_required_text(REPOSITORY_CHECKOUT_ENV, source.get(REPOSITORY_CHECKOUT_ENV))),
             source_handling_verification_key=verification_key,
             source_handling_operator_root=operator_root,
@@ -1009,6 +1253,19 @@ def build_production_source_handling_resolver(
         provenance_resolver=provenance_resolver,
     )
     return ProductionSourceHandlingAuthorityResolver(view)
+
+
+def _workspace_runtime(
+    configuration: IssueAgentExecutionConfiguration, environ: Mapping[str, str]
+) -> IssueAgentFallbackRuntime:
+    # Imported here: the workspace runtime builds on this module's contract.
+    from hunter.automation.issue_agent_workspace import IssueAgentWorkspaceRuntime
+
+    return IssueAgentWorkspaceRuntime(
+        workspace_root=configuration.repository_checkout,
+        repository=configuration.repository,
+        environ=environ,
+    )
 
 
 class GovernedIssueAgentExecutionService:
@@ -1112,11 +1369,7 @@ class GovernedIssueAgentExecutionService:
             repository=EvidenceIntelligenceRepository(configuration.evidence_database),
             source_handling_resolver=resolver,
             ledger=IssueAgentExecutionLedger(configuration.evidence_database),
-            fallback=OperationalAgentFallbackRuntime(
-                repo_dir=configuration.repository_checkout,
-                branch=configuration.execution_branch,
-                environ=source,
-            ),
+            fallback=_workspace_runtime(configuration, source),
             verifier=PromptAutomationVerifier.from_environment(environ=source),
             issuer_verifier=IssueAgentAuthorizationVerifier.from_environment(environ=source),
             clock=clock,
@@ -1125,7 +1378,7 @@ class GovernedIssueAgentExecutionService:
     def execute(self, document: str | bytes) -> IssueAgentExecutionReceipt:
         """Run one signed authorization through the existing governed runtime.
 
-        The only accepted input is a ``hunter-issue-agent-signed-authorization-v1``
+        The only accepted input is a ``hunter-issue-agent-signed-authorization-v2``
         envelope. A bare canonical v1 payload is refused on the outer schema, so
         an unsigned document has no execution path here at all.
         """
@@ -1137,6 +1390,8 @@ class GovernedIssueAgentExecutionService:
         # until it verifies.
         self._issuer_verifier.verify(signed)
         authorization = signed.authorization
+        if signed.implementation_scope.task_id != authorization.authorization_id:
+            raise IssueAgentAuthorizationError("implementation scope task_id must bind authorization identity")
         if authorization.repository != self._configuration.repository:
             raise IssueAgentAuthorizationError("authorization names a different repository than this deployment")
         if authorization.authorized_by != self._configuration.owner_login:
@@ -1146,6 +1401,7 @@ class GovernedIssueAgentExecutionService:
         # so it is done before ownership is taken. A document that could never
         # execute does not burn its own authorization identity, and the claim
         # still precedes every step that can actually run something.
+        target = derive_execution_target(signed)
         reference = issue_agent_intake_reference(authorization)
         document_id = evidence_document_id(reference)
         request = issue_agent_task_request(authorization)
@@ -1169,7 +1425,7 @@ class GovernedIssueAgentExecutionService:
             processed_at=_aware_utc("Issue execution intake time", self._clock.now()),
         )
 
-        compiled = self._ingress.compile(request)
+        compiled = self._ingress.compile(request, implementation_scope=signed.implementation_scope)
         envelope = compiled.envelope
         envelope.verify_issuer_signature(self._verifier)
         if envelope.build_record_id != compiled.compilation.manifest.build_record_id:
@@ -1182,13 +1438,19 @@ class GovernedIssueAgentExecutionService:
             build_record_id=envelope.build_record_id,
             envelope_id=envelope.envelope_id,
             handoff_document=handoff_document,
+            target=target,
             dispatched_at=self._clock.now(),
         )
 
-        receipt = self._fallback.dispatch(handoff_document)
+        receipt = self._fallback.dispatch(handoff_document, target)
         if not isinstance(receipt, AgentFallbackRuntimeReceipt):
-            raise IssueAgentExecutionError("fallback runtime did not return a canonical execution receipt")
-        self._ledger.complete(authorization, completed_at=self._clock.now())
+            raise IssueAgentRuntimeReceiptError("fallback runtime did not return a canonical execution receipt")
+        self._ledger.complete(
+            authorization,
+            completed_at=self._clock.now(),
+            provider=receipt.provider,
+            head_after=receipt.head_after,
+        )
         return IssueAgentExecutionReceipt(
             authorization_id=authorization.authorization_id,
             document_id=document_id,
@@ -1203,6 +1465,16 @@ __all__ = [
     "EVIDENCE_DATABASE_ENV",
     "EXECUTION_BRANCH_ENV",
     "GovernedIssueAgentExecutionService",
+    "ISSUE_AGENT_BASE_REF",
+    "ISSUE_AGENT_BRANCH_DIGEST_LENGTH",
+    "ISSUE_AGENT_FAILURE_CODES",
+    "IssueAgentExecutionTarget",
+    "IssueAgentRuntimeReceiptError",
+    "IssueAgentWorkspaceError",
+    "derive_execution_target",
+    "issue_agent_execution_branch",
+    "issue_agent_failure_attempts",
+    "issue_agent_failure_code",
     "ISSUE_AGENT_AUTHORIZATION_LABEL",
     "ISSUE_AGENT_AUTHORIZATION_SCHEMA_VERSION",
     "ISSUE_AGENT_EXECUTION_RECEIPT_SCHEMA_VERSION",

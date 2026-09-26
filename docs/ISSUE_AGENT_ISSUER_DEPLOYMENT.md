@@ -2,7 +2,7 @@
 
 This document describes the exact operational steps to deploy the trusted issuer HTTP edge required by Issue #423, plus the repository-owned
 provisioning boundary (Issue #497) that auto-provisions per-Issue authority records before dispatch. The edge consumes
-`hunter-issue-agent-signed-authorization-v1` from the GitHub trigger, verifies the authorization, invokes the production
+`hunter-issue-agent-signed-authorization-v2` from the GitHub trigger, verifies the authorization, invokes the production
 `GovernedIssueAgentExecutionService` composition root, persists the canonical Smart Prompt build, issues the signed
 `PromptAutomationEnvelopeHandoff`, and forwards it unchanged into the existing fallback runtime.
 
@@ -29,11 +29,13 @@ The following must be provisioned **before** deployment:
    - Must contain a strict-known provenance record per `EVIDENCE` / `VERIFIER` identity those authorizations will name
      (see "Provisioning Source Handling Provenance")
 
-5. **Repository checkout** for provider commands
-   - Path configured by `HUNTER_ISSUE_AGENT_REPO_DIR`
+5. **Workspace root** for per-authorization execution workspaces
+   - Path configured by `HUNTER_ISSUE_AGENT_REPO_DIR` (on Railway, beneath `/app/.hunter-runtime-checkouts`)
+   - Each authorization executes in its own workspace, forked at its signed `base_sha` on the branch
+     `issue-<n>-<16 hex of the authorization digest>` (see `docs/ISSUE_AGENT_EXECUTION_CONTRACT.md`)
 
-6. **Execution branch** that providers must advance
-   - Configured by `HUNTER_ISSUE_AGENT_EXECUTION_BRANCH` (e.g., `issue-agent-execution`)
+6. **No execution branch configuration**
+   - `HUNTER_ISSUE_AGENT_EXECUTION_BRANCH` is retired and ignored; remove it from the deployment
 
 7. **Fallback runtime provider configuration** (already required)
    - `HUNTER_AGENT_CODEX_COMMAND`, `HUNTER_AGENT_CLAUDE_COMMAND`, etc.
@@ -46,8 +48,8 @@ Configure the following in **GitHub Repository Settings → Secrets and variable
 
 | Secret Name | Description | Example Value |
 |-------------|-------------|---------------|
-| `HUNTER_ISSUE_AGENT_WEBHOOK_URL` | HTTPS URL of the deployed issuer edge + `/issue-agent/authorize` | `https://hunter-issuer.example.com/issue-agent/authorize` |
-| `HUNTER_ISSUE_AGENT_PROVISIONING_URL` | HTTPS URL of the deployed provisioning boundary + `/issue-agent/provision` | `https://hunter-provisioner.example.com/issue-agent/provision` |
+| `HUNTER_ISSUE_AGENT_WEBHOOK_URL` | HTTPS URL of the deployed issuer edge + `/issue-agent/authorize` (on Railway: the one public service domain) | `https://hunter.example.com/issue-agent/authorize` |
+| `HUNTER_ISSUE_AGENT_PROVISIONING_URL` | HTTPS URL of the deployed provisioning boundary + `/issue-agent/provision` (on Railway: the same public service domain) | `https://hunter.example.com/issue-agent/provision` |
 | `HUNTER_ISSUE_AGENT_AUTHORIZATION_SIGNING_KEY` | Hex-encoded Ed25519 private key (32 bytes = 64 hex chars) | `a1b2c3d4...` (64 hex chars) |
 | `HUNTER_PROMPT_AUTOMATION_SIGNING_KEY` | Hex-encoded Ed25519 private key (32 bytes = 64 hex chars) | `e5f6a7b8...` (64 hex chars) |
 | `HUNTER_SOURCE_HANDLING_VERIFICATION_KEY` | Hex-encoded Ed25519 public key (32 bytes = 64 hex chars) | `12345678...` (64 hex chars) |
@@ -67,8 +69,7 @@ The deployed issuer edge requires these environment variables (set in your deplo
 | `HUNTER_ISSUE_AGENT_REPOSITORY` | Repository setting | Exact `owner/name` (e.g., `fafa33/Project-Hunter`) |
 | `HUNTER_ISSUE_AGENT_OWNER_LOGIN` | Repository setting | Repository owner login (e.g., `fafa33`) |
 | `HUNTER_ISSUE_AGENT_EVIDENCE_DB` | Deployment config | Absolute path to Evidence SQLite database |
-| `HUNTER_ISSUE_AGENT_EXECUTION_BRANCH` | Deployment config | Remote branch providers must advance |
-| `HUNTER_ISSUE_AGENT_REPO_DIR` | Deployment config | Absolute path to repository checkout |
+| `HUNTER_ISSUE_AGENT_REPO_DIR` | Deployment config | Absolute workspace root for per-authorization workspaces |
 | `HUNTER_SOURCE_HANDLING_VERIFICATION_KEY` | Secret | Hex Ed25519 public key |
 | `HUNTER_SOURCE_HANDLING_VERIFICATION_KEY_SHA256` | Secret | SHA-256 of the above public key |
 | `HUNTER_SOURCE_HANDLING_GENESIS_RULE_SHA256` | Secret | Genesis rule digest |
@@ -130,7 +131,7 @@ Contract and invariants:
 - **The provisioned registry vocabulary matches what the issuer actually persists.** The boundary's contract registry covers the Issue
   Source durable payload fields (`issue_content`, `content_derived_ids`, `locator_urls`, `source_derived_text`, `intake_metadata`) and the
   compiled pre-model bundle (`pre_model_bundle` → `AUDIT_FIELD`), so an auto-provisioned Issue dispatches cleanly.
-- **Transport hygiene.** Requests are `hunter-issue-agent-signed-authorization-v1` envelopes from the same issuer key the trigger holds the
+- **Transport hygiene.** Requests are `hunter-issue-agent-signed-authorization-v2` envelopes from the same issuer key the trigger holds the
   private half of; bodies are capped at 256 KiB; `Content-Length` is mandatory within that cap; a malformed signature is 401, a
   repository/owner mismatch 403, malformed envelope 400, oversized body 413, and missing/partial body 411/400.
 
@@ -236,7 +237,7 @@ gcloud run deploy ${SERVICE_NAME} \
   --max-instances 3 \
   --timeout 300 \
   --concurrency 10 \
-  --set-env-vars="HUNTER_ISSUE_AGENT_REPOSITORY=${REPOSITORY},HUNTER_ISSUE_AGENT_OWNER_LOGIN=${OWNER},HUNTER_ISSUE_AGENT_EVIDENCE_DB=/data/evidence.sqlite,HUNTER_ISSUE_AGENT_EXECUTION_BRANCH=issue-agent-execution,HUNTER_ISSUE_AGENT_REPO_DIR=/workspace,HUNTER_SOURCE_HANDLING_VERIFICATION_KEY=${SOURCE_HANDLING_VERIFICATION_KEY},HUNTER_SOURCE_HANDLING_VERIFICATION_KEY_SHA256=${SOURCE_HANDLING_VERIFICATION_KEY_SHA256},HUNTER_SOURCE_HANDLING_GENESIS_RULE_SHA256=${SOURCE_HANDLING_GENESIS_RULE_SHA256},HUNTER_PROMPT_AUTOMATION_VERIFYING_KEY=${PROMPT_AUTOMATION_VERIFYING_KEY},HUNTER_PROMPT_AUTOMATION_SIGNING_KEY=${PROMPT_AUTOMATION_SIGNING_KEY},HUNTER_ISSUE_AGENT_AUTHORIZATION_VERIFYING_KEY=${ISSUE_AGENT_AUTHORIZATION_VERIFYING_KEY},PYTHONPATH=/workspace/src" \
+  --set-env-vars="HUNTER_ISSUE_AGENT_REPOSITORY=${REPOSITORY},HUNTER_ISSUE_AGENT_OWNER_LOGIN=${OWNER},HUNTER_ISSUE_AGENT_EVIDENCE_DB=/data/evidence.sqlite,HUNTER_ISSUE_AGENT_REPO_DIR=/workspace/issue-agent,HUNTER_SOURCE_HANDLING_VERIFICATION_KEY=${SOURCE_HANDLING_VERIFICATION_KEY},HUNTER_SOURCE_HANDLING_VERIFICATION_KEY_SHA256=${SOURCE_HANDLING_VERIFICATION_KEY_SHA256},HUNTER_SOURCE_HANDLING_GENESIS_RULE_SHA256=${SOURCE_HANDLING_GENESIS_RULE_SHA256},HUNTER_PROMPT_AUTOMATION_VERIFYING_KEY=${PROMPT_AUTOMATION_VERIFYING_KEY},HUNTER_PROMPT_AUTOMATION_SIGNING_KEY=${PROMPT_AUTOMATION_SIGNING_KEY},HUNTER_ISSUE_AGENT_AUTHORIZATION_VERIFYING_KEY=${ISSUE_AGENT_AUTHORIZATION_VERIFYING_KEY},PYTHONPATH=/workspace/src" \
   --service-account=${SERVICE_ACCOUNT_EMAIL} \
   --vpc-connector=projects/${PROJECT_ID}/locations/${REGION}/connectors/hunter-vpc
 ```
@@ -260,8 +261,7 @@ primary_region = "ord"
   HUNTER_ISSUE_AGENT_REPOSITORY = "fafa33/Project-Hunter"
   HUNTER_ISSUE_AGENT_OWNER_LOGIN = "fafa33"
   HUNTER_ISSUE_AGENT_EVIDENCE_DB = "/data/evidence.sqlite"
-  HUNTER_ISSUE_AGENT_EXECUTION_BRANCH = "issue-agent-execution"
-  HUNTER_ISSUE_AGENT_REPO_DIR = "/workspace"
+  HUNTER_ISSUE_AGENT_REPO_DIR = "/workspace/issue-agent"
   PYTHONPATH = "/workspace/src"
 
 [mounts]
@@ -315,8 +315,11 @@ The startup sequence is:
 4. Invoke the existing canonical bootstrap through its shared public contract (`bootstrap_authority`), which provisions the operator root and genesis rule.
    On a fresh volume this writes the authority; on an already-bootstrapped volume the idempotency check passes through; on a tampered or
    mismatched volume the bootstrap fails closed before the issuer starts.
-5. Scrub `HUNTER_SOURCE_HANDLING_SIGNING_KEY` from the process environment.
-6. `exec` the canonical issuer with unchanged arguments (`--host 0.0.0.0 --port $PORT --provenance-resolver ...`).
+5. Resolve the port plan (`$PORT`, `HUNTER_ISSUE_AGENT_PROVISIONER_PORT`, `HUNTER_ISSUE_AGENT_ISSUER_PORT`); any collision fails closed.
+6. Start the trusted provisioner child on loopback while the key is present.
+7. Scrub `HUNTER_SOURCE_HANDLING_SIGNING_KEY` from the process environment.
+8. Start the canonical issuer on loopback (`--host 127.0.0.1 --port $HUNTER_ISSUE_AGENT_ISSUER_PORT --provenance-resolver ...`) and the
+   public ingress on `0.0.0.0:$PORT`, then supervise all three (see *Single Public Ingress Topology* below).
 
 The `railway.toml` start command is therefore:
 
@@ -325,20 +328,36 @@ The `railway.toml` start command is therefore:
 startCommand = "python scripts/railway_issuer_startup.py"
 ```
 
-The bootstrap is the **only** code path that may consume `HUNTER_SOURCE_HANDLING_SIGNING_KEY`; the long-running issuer process starts with
-that variable removed from its environment.  No pre-deploy command, no parallel bootstrap mechanism, and no dashboard-only configuration
+The bootstrap and the trusted provisioner child are the **only** code paths that may consume `HUNTER_SOURCE_HANDLING_SIGNING_KEY`; the
+long-running issuer process and the public ingress start with that variable removed from their environments.  No pre-deploy command, no parallel bootstrap mechanism, and no dashboard-only configuration
 bypasses this seam.
 
-#### Provisioner Startup Seam (Issue #497)
+#### Single Public Ingress Topology
 
 Railway persistent volumes are service-scoped, so the provisioner is **not** a
-second Railway Service. The single volume-owning Issue Agent service starts the
-trusted provisioner child on `HUNTER_ISSUE_AGENT_PROVISIONER_PORT` (default
-8081) before it scrubs the Source Handling signing key and `exec`s the issuer on
-Railway's `$PORT`. The provisioner child retains the key; the issuer environment
-does not. Both logical edges therefore use the same `/data/evidence.sqlite`
-without an impossible cross-service volume attachment. Railway exposes a second
-domain/target-port for the provisioner port.
+second Railway Service, and Railway exposes **one** public domain per service,
+routed to `$PORT`. The single volume-owning Issue Agent service therefore runs
+three supervised children of `railway_issuer_startup.py`:
+
+| Child | Bind | Signing key | Role |
+|-------|------|-------------|------|
+| `hunter_issue_agent_provisioner.py` | `127.0.0.1:$HUNTER_ISSUE_AGENT_PROVISIONER_PORT` (default 8081) | present | trusted minting boundary |
+| `hunter_issue_agent_issuer.py` | `127.0.0.1:$HUNTER_ISSUE_AGENT_ISSUER_PORT` (default 8082) | absent | read-only execution issuer |
+| `hunter_issue_agent_ingress.py` | `0.0.0.0:$PORT` | absent (allowlisted, secret-free environment) | fixed-route public ingress |
+
+The ingress serves exactly `GET /healthz`, `POST /issue-agent/provision`
+(to the loopback provisioner) and `POST /issue-agent/authorize` (to the
+loopback issuer). Every other path answers 404 and every other method 405/501;
+the body is bounded, `Transfer-Encoding` is refused, client headers are never
+forwarded, upstream calls are made once with a finite timeout and never follow
+a redirect. `/healthz` returns 200 only when both internal authorities answer
+their own health endpoint; otherwise 503. If any child exits the supervisor
+stops the rest and exits non-zero so Railway restarts the whole topology. The
+three ports must be distinct; a collision fails closed at startup.
+
+Before this topology, the issuer itself was exec'd on `$PORT` and the
+provisioner listened on a port no public route reached, so
+`POST /issue-agent/provision` on the public domain answered 404.
 
 #### Railway Setup Steps (a–f)
 
@@ -355,27 +374,32 @@ The start command will not run any bootstrap from a `preDeploy` hook or one-off 
 - `HUNTER_PROMPT_AUTOMATION_SIGNING_KEY` (secret)
 - `HUNTER_PROMPT_AUTOMATION_VERIFYING_KEY`
 - `HUNTER_ISSUE_AGENT_AUTHORIZATION_VERIFYING_KEY`
-- `HUNTER_ISSUE_AGENT_REPOSITORY`, `HUNTER_ISSUE_AGENT_OWNER_LOGIN`, `HUNTER_ISSUE_AGENT_EXECUTION_BRANCH`, `HUNTER_ISSUE_AGENT_REPO_DIR`
+- `HUNTER_ISSUE_AGENT_REPOSITORY`, `HUNTER_ISSUE_AGENT_OWNER_LOGIN`, `HUNTER_ISSUE_AGENT_REPO_DIR`
+  (for example `/app/.hunter-runtime-checkouts/issue-agent`)
 - Fallback runtime provider variables (`HUNTER_AGENT_*`)
 - `HUNTER_ISSUE_AGENT_EVIDENCE_DB=/data/evidence.sqlite` (already set by `railway.toml`)
 
-**b′. Expose the provisioner target port** — on the same Railway Service set
-`HUNTER_ISSUE_AGENT_PROVISIONER_PORT=8081` (or another dedicated port) and add
-a Railway domain targeting that port. Record that domain plus
-`/issue-agent/provision` as GitHub secret `HUNTER_ISSUE_AGENT_PROVISIONING_URL`.
-No second service or second volume is created.
+**b′. Point both trigger URLs at the one public domain** — no second domain or
+target port is needed. Record the service's public domain plus
+`/issue-agent/provision` as GitHub secret `HUNTER_ISSUE_AGENT_PROVISIONING_URL`
+and the same domain plus `/issue-agent/authorize` as
+`HUNTER_ISSUE_AGENT_WEBHOOK_URL`. Optionally set
+`HUNTER_ISSUE_AGENT_PROVISIONER_PORT` / `HUNTER_ISSUE_AGENT_ISSUER_PORT`; they
+are loopback-only and must differ from `$PORT` and each other. No second
+service or second volume is created.
 
 **c. Deploy the single Issue Agent Service** — `railway_issuer_startup.py`
-verifies and bootstraps the mounted volume, starts the trusted provisioner child
-while the signing key is still present, then scrubs the key from the parent and
-execs the canonical issuer. The provisioner and issuer therefore share the same
-SQLite authority store while only the provisioner process retains minting
-material.
+verifies and bootstraps the mounted volume, starts the trusted loopback
+provisioner child while the signing key is still present, scrubs the key from
+its own environment, then starts the loopback issuer and the public ingress
+without it. The provisioner and issuer therefore share the same SQLite
+authority store while only the provisioner process retains minting material.
 
 **d. Verify both logical edges** — confirm the one Service log shows bootstrap,
-provisioner launch, signing-key scrub, and issuer launch. Verify `/healthz` on
-the issuer domain and on the provisioner target-port domain; the latter returns
-`{"status":"ok","service":"hunter-issue-agent-provisioner"}`.
+provisioner launch, signing-key scrub, issuer launch, and ingress launch.
+`GET /healthz` on the public domain returns
+`{"schema_version":"hunter-issue-agent-ingress-response-v1","service":"hunter-issue-agent-ingress","status":"ok","upstreams":{"issuer":"ok","provisioner":"ok"}}`
+only when both internal edges are serving.
 
 **e. No manual per-Issue provisioning** — the operator step that previously had to run
 `provision_source_handling_issue_authority.py` for every new authorized Issue is **gone**. The boundary provisions each document
@@ -383,28 +407,25 @@ automatically after Source Handling performs its independent restrictive transie
 issuances require at operator as-of, and is exactly idempotent on re-runs. The CLI remains available for offline/operator workflows but is
 no longer part of the admission path.
 
-**f. Live authorized E2E** — apply the `hunter-agent-execute` label to a test Issue. The trigger workflow signs the authorization, retries
-only transport-level 502/503/504 (otherwise fail-closed), POSTs first to `HUNTER_ISSUE_AGENT_PROVISIONING_URL`
-(`/issue-agent/provision`, expects 200/provisioned), and only if provisioning succeeds POSTs to the issuer webhook
-(`/issue-agent/authorize`). Check issuer and provisioner logs for the complete path; a provisioning 422 (e.g. a mismatched pre-existing
-head) stops the run before the issuer is ever contacted.
+**f. Live execution is retired pending PR-B** — do **not** apply the `hunter-agent-execute` label to any Issue. The Railway issuer now returns HTTP 503 before authorization claim, handoff compilation, dispatch, execution-slot acquisition, or provider invocation. Provisioning may remain observable, but no live execution is admitted until the replacement executor is rehearsed and separately authorized.
 
 #### Railway Configuration Reference
 
 1. **Set secrets on the single Issue Agent Service**: `HUNTER_SOURCE_HANDLING_SIGNING_KEY`,
    `HUNTER_PROMPT_AUTOMATION_SIGNING_KEY`, and `HUNTER_ISSUE_AGENT_AUTHORIZATION_VERIFYING_KEY`, plus the
-   Source Handling verification values. Startup passes the Source Handling signing key only to the provisioner child and scrubs it before issuer exec.
+   Source Handling verification values. Startup passes the Source Handling signing key only to the provisioner child and scrubs it before
+   launching the issuer and the public ingress.
 
 2. **Set deployment variables** on that Service: `HUNTER_ISSUE_AGENT_REPOSITORY`,
-   `HUNTER_ISSUE_AGENT_OWNER_LOGIN`, `HUNTER_ISSUE_AGENT_EXECUTION_BRANCH`, `HUNTER_ISSUE_AGENT_REPO_DIR`, and
-   `HUNTER_ISSUE_AGENT_PROVISIONER_PORT=8081`. Railway `$PORT` remains the issuer port.
+   `HUNTER_ISSUE_AGENT_OWNER_LOGIN`, `HUNTER_ISSUE_AGENT_REPO_DIR`, and
+   optionally `HUNTER_ISSUE_AGENT_PROVISIONER_PORT` / `HUNTER_ISSUE_AGENT_ISSUER_PORT` (defaults 8081/8082, loopback-only).
+   Railway `$PORT` is owned by the public ingress.
 
 3. **Create one volume and one Service** — mount `/data` once on the Issue Agent Service. Do not create a second provisioner Service.
-   Add a second Railway domain/target-port for the provisioner port on this same Service.
+   Keep the one public Railway domain targeting `$PORT`; no second domain/target-port is needed.
 
-4. **Configure both URLs** — set `HUNTER_ISSUE_AGENT_WEBHOOK_URL` to the issuer-domain
-   `/issue-agent/authorize` URL and `HUNTER_ISSUE_AGENT_PROVISIONING_URL` to the provisioner target-port domain
-   `/issue-agent/provision` URL. Both are GitHub repository secrets.
+4. **Configure both URLs** — set `HUNTER_ISSUE_AGENT_WEBHOOK_URL` to `https://<public-domain>/issue-agent/authorize` and
+   `HUNTER_ISSUE_AGENT_PROVISIONING_URL` to `https://<public-domain>/issue-agent/provision`. Both are GitHub repository secrets.
 
 ### Option 4: Self-hosted / Docker Compose
 
@@ -420,8 +441,7 @@ services:
       - HUNTER_ISSUE_AGENT_REPOSITORY=fafa33/Project-Hunter
       - HUNTER_ISSUE_AGENT_OWNER_LOGIN=fafa33
       - HUNTER_ISSUE_AGENT_EVIDENCE_DB=/data/evidence.sqlite
-      - HUNTER_ISSUE_AGENT_EXECUTION_BRANCH=issue-agent-execution
-      - HUNTER_ISSUE_AGENT_REPO_DIR=/workspace
+      - HUNTER_ISSUE_AGENT_REPO_DIR=/workspace/issue-agent
       - HUNTER_SOURCE_HANDLING_VERIFICATION_KEY=${SOURCE_HANDLING_VERIFICATION_KEY}
       - HUNTER_SOURCE_HANDLING_VERIFICATION_KEY_SHA256=${SOURCE_HANDLING_VERIFICATION_KEY_SHA256}
       - HUNTER_SOURCE_HANDLING_GENESIS_RULE_SHA256=${SOURCE_HANDLING_GENESIS_RULE_SHA256}
@@ -503,7 +523,7 @@ curl -X POST https://your-issuer-url/issue-agent/authorize \
   -d '{}'
 # Expected: 400 Bad Request with error message
 
-# A well-formed `hunter-issue-agent-signed-authorization-v1` envelope signed by
+# A well-formed `hunter-issue-agent-signed-authorization-v2` envelope signed by
 # a key this edge does not trust fails closed with 401 before any execution.
 # The complete envelope shape (inner v1 payload + issuer_signature + the
 # issuer keypair) is exercised by the repository-owned issuer tests; see
@@ -512,21 +532,7 @@ curl -X POST https://your-issuer-url/issue-agent/authorize \
 
 ## End-to-End Test Procedure
 
-Once deployed and configured:
-
-1. **Create a test Issue** in the repository with some content
-2. **Apply the label** `hunter-agent-execute` as the repository owner
-3. **Observe the workflow** `Hunter / Governed Issue Agent Trigger` run
-4. **Check the issuer edge logs** for the execution
-5. **Verify the fallback runtime** executed and advanced the remote branch
-6. **Verify targeted validation** passed
-
-The GitHub Actions workflow `hunter-issue-agent-trigger.yml` will automatically:
-- Detect the `hunter-agent-execute` label by the repository owner
-- Generate the signed authorization
-- POST it first to `HUNTER_ISSUE_AGENT_PROVISIONING_URL` (`/issue-agent/provision`) to auto-provision the per-Issue authority
-- Only after provisioning succeeds, POST it to `HUNTER_ISSUE_AGENT_WEBHOOK_URL` (`/issue-agent/authorize`)
-- The issuer edge will execute the full governed path
+Live Issue-Agent execution is intentionally suspended. Do not apply `hunter-agent-execute` while PR-A is active. The permitted production check is HTTP 503 from `/issue-agent/authorize` before ledger claim/dispatch, with no provider invocation. A fresh canary resumes only after PR-B rehearsal and owner authorization.
 
 ## Troubleshooting
 
@@ -544,7 +550,7 @@ logs for detailed error messages. All failures are fail-closed by design.
 
 ## Security Notes
 
-- The issuer edge **only accepts** `hunter-issue-agent-signed-authorization-v1` envelopes
+- The issuer edge **only accepts** `hunter-issue-agent-signed-authorization-v2` envelopes
 - The **private signing key never leaves** the GitHub Actions runner (trigger side)
 - The **public verifying key** is captured at issuer bootstrap and never re-read
 - Issue text **never** reaches the fallback runtime (only non-content handoff does)
@@ -564,7 +570,7 @@ GitHub Issue (labeled by owner)
 │  - POSTs to provisioning URL first  │  (fail-closed; retries only 502/503/504)
 │  - Only then POSTs to webhook URL   │
 └─────────────────────────────────────┘
-        │  hunter-issue-agent-signed-authorization-v1
+        │  hunter-issue-agent-signed-authorization-v2
         ├──────────────────────────────►
         ▼                              │
 ┌──────────────────┐                   │

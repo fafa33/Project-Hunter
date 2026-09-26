@@ -32,7 +32,7 @@ import pytest
 from cryptography.hazmat.primitives import serialization
 from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
 from issue_agent_edge_transport import MAX_REQUEST_BYTES
-from issue_agent_wire import EdgeTransportClientMixin
+from issue_agent_wire import EdgeTransportClientMixin, issue_body_with_scope
 
 from hunter.automation.agent_fallback_runtime import AgentFallbackRuntimeReceipt
 from hunter.automation.issue_agent_execution import (
@@ -60,7 +60,7 @@ from hunter.automation.issue_agent_execution import (
 from hunter.evidence_intelligence import smart_prompt_routing
 from hunter.evidence_intelligence.engineering_task_ingress import GovernedEngineeringTaskIngress
 from hunter.evidence_intelligence.intake import EvidenceIntelligenceIntakeService
-from hunter.evidence_intelligence.pre_model import resolve_pre_model_source_handling
+from hunter.evidence_intelligence.pre_model import PreModelInvariantError, resolve_pre_model_source_handling
 from hunter.evidence_intelligence.repository import EvidenceIntelligenceRepository
 from hunter.evidence_intelligence.smart_prompt_routing import SmartPromptMachine
 from hunter.evidence_intelligence.source_handling import PublicationAuthorization
@@ -350,7 +350,7 @@ def _event(
             "state": state,
             "html_url": ISSUE_URL,
             "title": title,
-            "body": body,
+            "body": issue_body_with_scope(body),
             "updated_at": UPDATED_AT,
         },
     }
@@ -392,6 +392,7 @@ class RecordingFallback:
 
     def __init__(self, receipt: AgentFallbackRuntimeReceipt | None = None) -> None:
         self.documents: list[str | bytes] = []
+        self.targets: list[Any] = []
         self._receipt = receipt or AgentFallbackRuntimeReceipt(
             provider="codex",
             head_before="a" * 40,
@@ -400,8 +401,9 @@ class RecordingFallback:
             validation_succeeded=True,
         )
 
-    def dispatch(self, document: str | bytes) -> AgentFallbackRuntimeReceipt:
+    def dispatch(self, document: str | bytes, target: Any) -> AgentFallbackRuntimeReceipt:
         self.documents.append(document)
+        self.targets.append(target)
         return self._receipt
 
 
@@ -413,7 +415,7 @@ class BlockingFallback(RecordingFallback):
         self.started = threading.Event()
         self.release = threading.Event()
 
-    def dispatch(self, document: str | bytes) -> AgentFallbackRuntimeReceipt:
+    def dispatch(self, document: str | bytes, target: Any) -> AgentFallbackRuntimeReceipt:
         self.documents.append(document)
         self.started.set()
         if not self.release.wait(timeout=10):
@@ -427,7 +429,7 @@ class ExplodingFallback:
     def __init__(self) -> None:
         self.documents: list[str | bytes] = []
 
-    def dispatch(self, document: str | bytes) -> AgentFallbackRuntimeReceipt:
+    def dispatch(self, document: str | bytes, target: Any) -> AgentFallbackRuntimeReceipt:
         self.documents.append(document)
         raise OSError("network outcome is uncertain")
 
@@ -435,14 +437,14 @@ class ExplodingFallback:
 class ValueRaisingFallback:
     """Simulates an unexpected runtime failure outside the canonical error set."""
 
-    def dispatch(self, document: str | bytes) -> AgentFallbackRuntimeReceipt:
+    def dispatch(self, document: str | bytes, target: Any) -> AgentFallbackRuntimeReceipt:
         raise ValueError("provider subprocess vanished")
 
 
 class TextIsSuccess:
     """A compromised runtime that tries to turn provider prose into success."""
 
-    def dispatch(self, document: str | bytes) -> Any:
+    def dispatch(self, document: str | bytes, target: Any) -> Any:
         return "the provider says it is done"
 
 
@@ -558,6 +560,7 @@ class Webhook(EdgeTransportClientMixin):
             read_timeout=read_timeout,
             max_workers=max_workers,
             lease_renewal_interval=lease_renewal_interval,
+            execution_admission_enabled=True,
         )
         self.server.start()
         self.port = self.server._server.server_address[1]
@@ -644,6 +647,26 @@ def _wait_for_lease_renewal(
     )
 
 
+def test_pre_model_invariant_exposes_safe_reason_code(
+    tmp_path: Path,
+    webhook: Any,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    deployment = Deployment(tmp_path)
+    hook = webhook(deployment.services())
+
+    def _reject(*_args: Any, **_kwargs: Any) -> Any:
+        raise PreModelInvariantError("REQUIRED_SPAN_NOT_IN_CANONICAL_INVENTORY")
+
+    monkeypatch.setattr(issuer, "prepare_authorization", _reject)
+    status, body = hook.post(_authorization_document().encode("utf-8"))
+
+    assert status == 422
+    assert json.loads(body)["error"] == (
+        "pre-model invariant rejected execution preparation: " "REQUIRED_SPAN_NOT_IN_CANONICAL_INVENTORY"
+    )
+
+
 # --- Transport boundary -----------------------------------------------------
 
 
@@ -701,7 +724,7 @@ def test_malformed_bodies_fail_closed(tmp_path: Path, webhook: Any, body: bytes)
 def test_duplicate_json_keys_fail_closed(tmp_path: Path, webhook: Any) -> None:
     hook = webhook(Deployment(tmp_path).services())
     body = (
-        b'{"schema_version": "hunter-issue-agent-signed-authorization-v1", '
+        b'{"schema_version": "hunter-issue-agent-signed-authorization-v2", '
         b'"issuer_signature": "ab", "issuer_signature": "cd", "authorization": {}}'
     )
     status, _body = hook.post(body)
@@ -767,6 +790,28 @@ def test_foreign_repository_is_refused_after_verification(tmp_path: Path, webhoo
 
 
 # --- Authorized execution over the wire -------------------------------------
+
+
+def test_default_issuer_admission_fails_closed_before_claim_or_provider(tmp_path: Path) -> None:
+    deployment = Deployment(tmp_path)
+    services = deployment.services()
+    server = issuer.IssuerServer("127.0.0.1", 0, services)
+    server.start()
+    port = server._server.server_address[1]
+    document = _authorization_document()
+    authorization = _inner(document)
+    try:
+        connection = http.client.HTTPConnection("127.0.0.1", port, timeout=15)
+        connection.request("POST", "/issue-agent/authorize", body=document.encode("utf-8"))
+        response = connection.getresponse()
+        body = response.read().decode("utf-8")
+        connection.close()
+        assert response.status == 503
+        assert "execution backend is unavailable" in body
+        assert services.ledger.entry(authorization.authorization_id) is None
+        assert deployment.fallback.documents == []
+    finally:
+        server.shutdown()
 
 
 def test_authorized_issue_acks_before_provider_completion(tmp_path: Path, webhook: Any) -> None:
@@ -960,7 +1005,8 @@ def test_noncanonical_provider_success_becomes_durable_failure(
         authorization.authorization_id,
         "FAILED",
     )
-    assert entry.failure_type == "IssueAgentExecutionError"
+    assert entry.failure_type == "IssueAgentRuntimeReceiptError"
+    assert entry.failure_code == "NONCANONICAL_RUNTIME_RECEIPT"
     assert "canonical execution receipt" in (entry.failure_message or "")
 
 
@@ -1201,7 +1247,6 @@ def _required_names() -> list[str]:
         REPOSITORY_ENV,
         OWNER_LOGIN_ENV,
         EVIDENCE_DATABASE_ENV,
-        EXECUTION_BRANCH_ENV,
         REPOSITORY_CHECKOUT_ENV,
         SOURCE_HANDLING_VERIFICATION_KEY_ENV,
         SOURCE_HANDLING_VERIFICATION_KEY_SHA256_ENV,
@@ -1287,14 +1332,15 @@ def test_issuer_edge_reuses_existing_authorities_only(tmp_path: Path, monkeypatc
         monkeypatch.setenv(name, value)
 
     services = issuer.compose_services(configuration)
-    assert isinstance(services.fallback, issuer.OperationalAgentFallbackRuntime)
+    assert isinstance(services.fallback, issuer.IssueAgentWorkspaceRuntime)
+    assert services.fallback.workspace_root == configuration.repository_checkout
     assert services.configuration is configuration
     assert services.repository is not None
     assert isinstance(services.ingress, GovernedEngineeringTaskIngress)
 
     source = Path("scripts/hunter_issue_agent_issuer.py").read_text(encoding="utf-8")
     assert "GovernedEngineeringTaskIngress" in source
-    assert "services.ingress.compile(request)" in source
+    assert "services.ingress.compile(request, implementation_scope=signed.implementation_scope)" in source
     assert "ISSUE_AGENT_ROUTE_REGISTRY" in source
     assert "_ISSUE_AGENT_PROFILE_REGISTRY" not in source
     assert "_ISSUE_AGENT_ROUTE_REGISTRY" not in source
