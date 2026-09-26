@@ -101,6 +101,15 @@ def check_reviewer_dispositions() -> tuple[bool, str]:
 
 
 def request_json(repository: str, token: str, method: str, path: str, payload: dict[str, Any] | None = None) -> Any:
+    """Repository-scoped REST request.
+
+    ``path`` is always resolved *under* ``/repos/{repository}``. A handful of
+    GitHub REST endpoints are global and have no repository sub-resource, so
+    they cannot be expressed here; ``request_global_json`` is the seam for
+    those. Guessing which scope a path belongs to is deliberately not done here,
+    because a global endpoint addressed under ``/repos/...`` is a permanent 404
+    that reads like an authorization failure.
+    """
     data = None if payload is None else json.dumps(payload).encode("utf-8")
     suffix = f"/{path}" if path else ""
     return transport.request_rest_json(
@@ -108,6 +117,36 @@ def request_json(repository: str, token: str, method: str, path: str, payload: d
         method=method,
         headers={},
         data=data,
+        token=token,
+        what=f"{method} {path}",
+    )
+
+
+#: Global (non-repository-scoped) REST endpoints this repository reads.
+#:
+#: Allowlisted so the global seam cannot become a second, unreviewed way to
+#: reach arbitrary GitHub paths. Adding an endpoint is a governed change.
+GLOBAL_REST_PATHS = frozenset({"rate_limit"})
+
+
+def request_global_json(token: str, method: str, path: str) -> Any:
+    """Global REST request through the same governed transport boundary.
+
+    Crosses ``transport.request_rest_json`` exactly like :func:`request_json`,
+    so bounded retry, ``Retry-After`` handling, and transient/permanent
+    classification are identical for both scopes -- this seam only differs in
+    the URL it addresses. It is read-only and allowlisted; a global endpoint
+    that is not listed fails closed here rather than being requested.
+    """
+    if method.upper() != "GET":
+        raise ValueError(f"global REST seam is read-only; refusing {method} {path}")
+    if path not in GLOBAL_REST_PATHS:
+        raise ValueError(f"path is not a governed global REST endpoint: {path}")
+    return transport.request_rest_json(
+        url=f"https://api.github.com/{path}",
+        method=method,
+        headers={},
+        data=None,
         token=token,
         what=f"{method} {path}",
     )

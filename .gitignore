@@ -11,6 +11,20 @@ __pycache__/
 *.log
 nohup.out
 reports/
+# Historical full-PR scan artifacts. The raw per-PR scan ledger, the worker
+# checkpoints and the per-PR reconstruction/adjudication caches are large and
+# regenerable from the frozen scan, so they stay out of git. The deterministic
+# manifests and the hand-adjudicated verdicts the conclusions rest on are tracked,
+# so a checkout can byte-compare a re-run against the recorded result.
+# Patterns exclude contents rather than the directories themselves: git cannot
+# re-include a file whose parent directory is excluded.
+data/full_history_defect_scan/*
+!data/full_history_defect_scan/historical_closure_manifest.json
+!data/full_history_defect_scan/full_history_coverage_manifest.json
+!data/full_history_defect_scan/reconstruction/
+data/full_history_defect_scan/reconstruction/*
+!data/full_history_defect_scan/reconstruction/invariant_verdicts.json
+!data/full_history_defect_scan/reconstruction/recurrence_verdicts.json
 .aider*
 .freebuff/project-id
 
