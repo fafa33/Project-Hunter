@@ -148,7 +148,6 @@ def test_inline_permissions_allow_only_project_editing_capabilities(
     assert permission["grep"] == "allow"
     assert permission["lsp"] == "allow"
     for denied in (
-        "bash",
         "webfetch",
         "websearch",
         "task",
@@ -197,10 +196,14 @@ def test_provider_capability_contract_keeps_shell_and_external_directory_denied(
     permission = json.loads(env["OPENCODE_CONFIG_CONTENT"])["permission"]
 
     assert permission["external_directory"] == "deny"
-    assert permission.get("bash", "deny") == "deny"
+    assert permission["bash"] == "allow"
     assert set(shim._REQUIRED_PROVIDER_CAPABILITIES) <= {
         name for name, decision in permission.items() if decision == "allow"
     }
+    plugin = credential_home / ".config" / "opencode" / "plugins" / shim._PROVIDER_GUARD_PLUGIN_FILE
+    assert plugin.is_file()
+    assert '"bash"' in plugin.read_text(encoding="utf-8")
+    assert "forbids tool" in plugin.read_text(encoding="utf-8")
 
 
 def test_main_fails_closed_before_provider_run_when_runtime_capability_is_missing(tmp_path: Path, monkeypatch) -> None:
