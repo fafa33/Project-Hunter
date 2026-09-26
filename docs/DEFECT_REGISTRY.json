@@ -1469,6 +1469,146 @@
         "PR #522, 2026-09-25: the candidate was published after focused tests while Hunter / Pre-PR Preflight, CI, and Trusted Candidate Preflight all failed from the shared deterministic preflight.",
         "Validation Stage Contract reconciliation during Issue #523, 2026-09-26: full pytest is hosted-only by canonical architecture; branch push and Draft PR publication are distinct boundaries."
       ]
+    },
+    {
+      "id": "DFF-033",
+      "title": "tracked-governance-asset-not-loadable-at-its-path",
+      "invariant": "Every tracked governance asset resolves to a path its declared consumer can actually load, and no tracked path carries characters that the consumer's own path grammar rejects. A tracked asset its consumer cannot load contributes no enforcement, and its absence must be a machine-detected condition rather than a silent one.",
+      "applicability": {
+        "changed_paths": [
+          ".github/workflows/",
+          ".githooks/",
+          "scripts/",
+          "docs/",
+          "⁠.github/workflows/ai-review.yml⁠"
+        ],
+        "rationale": "These are the surfaces that hold tracked enforcement assets. Loadability is decided by the consumer's path grammar, not by the repository, so an asset stored anywhere else -- including a path that merely resembles a canonical one -- is inert. Note that a prefix match on '.github/workflows/' does not match a directory whose name differs by an invisible character, which is how the recorded instance escaped selection. The exact malformed tracked path is selected explicitly until a consumer-grammar-derived selector replaces this recorded review boundary."
+      },
+      "prevention": {
+        "mechanism": "Recorded finding only. A correcting contribution must derive each tracked asset's loadability from the consumer's own path grammar over the tracked path set and reject any asset whose stored path cannot be loaded, before this family can advance. The recorded instance must not be remediated by renaming the asset into a loadable path, because doing so would activate the superseded action major, floating third-party action tag, and repository secret exposure it declares.",
+        "boundary": "review"
+      },
+      "regression_evidence": [],
+      "lifecycle": "recorded",
+      "sources": [
+        "Tracked path '\\u2060.github/workflows/ai-review.yml\\u2060' on origin/main@9eda014: U+2060 WORD JOINER on both the directory name and the filename, so GitHub Actions never loads it. Introduced by commit 6e7b64d (2026-08-05, 'Add AI PR Auditor workflow for pull request reviews'); the only non-ASCII path among 1274 tracked paths, unchanged since introduction, with zero references anywhere in the tree and zero workflow runs under its declared name. Content declares actions/checkout@v3, the floating tag anc95/ChatGPT-Action@v1, and secrets.OPENAI_API_KEY on pull_request opened/synchronize. Historical knowledge import 2026-09-26; knowledge only, no workflow change authorized."
+      ]
+    },
+    {
+      "id": "DFF-034",
+      "title": "transient-retry-budget-not-derived-from-operation-timeout",
+      "invariant": "A retry budget over a long-running dispatch is bounded by one explicit overall dispatch deadline shared across every endpoint and retry loop. Per-request timeouts, attempt counts, and backoff consume the remaining overall budget; no retry may start when its worst-case request plus backoff cannot fit, and retry-budget exhaustion remains distinguishable from terminal refusal.",
+      "applicability": {
+        "changed_paths": [
+          "scripts/hunter_issue_agent_trigger.py",
+          "scripts/hunter_github_transport.py",
+          ".github/workflows/hunter-issue-agent-trigger.yml"
+        ],
+        "rationale": "These surfaces carry both webhook endpoints, their retry/backoff behavior, and the workflow-level deadline. The governing budget is the overall dispatch deadline across both retry loops; a per-request timeout is only a consumer of that budget, never its source."
+      },
+      "prevention": {
+        "mechanism": "Recorded finding only. A correcting contribution must establish one explicit overall dispatch deadline covering authorization and dispatch endpoints together, derive each request timeout/retry/backoff decision from the remaining deadline, and classify deadline/retry exhaustion separately from terminal refusal before this family can advance.",
+        "boundary": "review"
+      },
+      "regression_evidence": [],
+      "lifecycle": "recorded",
+      "sources": [
+        "scripts/hunter_issue_agent_trigger.py@9eda014 declares TRANSIENT_HTTP_STATUS_CODES = {502, 503, 504} (line 52) and DEFAULT_TRANSPORT_ATTEMPTS = 4 (line 54) with backoff min(base_delay * 2**(attempt-1), max_delay) (line 379), giving a 2s/4s/8s total budget, while .github/workflows/hunter-issue-agent-trigger.yml sets HUNTER_ISSUE_AGENT_WEBHOOK_TIMEOUT_SECONDS to 900. Observed: run 36186705581 'issue-agent trigger rejected: issue-agent webhook remained unavailable after 4 attempts: issue-agent webhook answered transient HTTP 503' (exit 2); the same _RetryBudgetExhaustedError signature in run 36173092199 (CI) and run 36173057865 (Hunter / Pre-PR Preflight). Workflow failure volume 2026-09: Governed Issue Agent Trigger 34, CI 44, Pre-PR Preflight 49. Unlanded fix tracked as OPEN Issue #457."
+      ]
+    },
+    {
+      "id": "DFF-035",
+      "title": "external-precondition-asserted-inside-deterministic-test-lane",
+      "invariant": "The deterministic validation lane asserts only on repository-owned state. A precondition owned outside the repository -- an Issue body, a remote API response, a live network endpoint -- is validated on the runtime path that actually consumes it and reported as its own attributable signal, never as a deterministic-lane assertion whose failure is indistinguishable from a defect in the change under test.",
+      "applicability": {
+        "changed_paths": [
+          "tests/",
+          "scripts/hunter_pre_push.py",
+          "scripts/hunter_defect_prevention_preflight.py",
+          "src/hunter/task_scope.py",
+          "scripts/hunter_issue_agent_trigger.py"
+        ],
+        "rationale": "These surfaces define the deterministic lane and the owner-authored Issue-body contract that was observed being asserted from inside it, so they are where lane purity is decided and where the external precondition is defined."
+      },
+      "prevention": {
+        "mechanism": "Recorded finding only. A correcting contribution must keep the deterministic lane hermetic -- classifying any test whose truth depends on Issue bodies, remote API state, or a live endpoint as integration, and giving integration failures an attributable signal distinct from deterministic failures -- before this family can advance. The owner-authored task-scope contract itself must not be relaxed; the defect is the lane that asserts it, not the contract.",
+        "boundary": "review"
+      },
+      "regression_evidence": [],
+      "lifecycle": "recorded",
+      "sources": [
+        "External Issue-body precondition: scripts/hunter_issue_agent_trigger.py:148 raises 'Issue must contain exactly one hunter-task-scope-v1 block' (block prefix defined at src/hunter/task_scope.py:122), and that assertion was reached from inside the shared deterministic pytest lane, turning three independent required gates red for a condition unrelated to the candidate under test. Observed in run 36038698592 and run 36037969936 (Hunter / Pre-PR Preflight) and run 36173092199 (CI). Live-API precondition: run 35742703180 (CI) raised hunter_github_transport.GitHubRequestError 'GitHub HTTP 404' from inside assert admission.enforce_candidate_admission('repo', 'token', PR_NUMBER) == 1 and core.verify_pre_ready_hostile_review(...). Both occurrences share one root cause -- the deterministic lane asserting on state the repository does not own -- and are deduplicated into this single family."
+      ]
+    },
+    {
+      "id": "DFF-036",
+      "title": "workflow-environment-dependency-not-provisioned",
+      "invariant": "Every import reachable from a required workflow's entrypoint is satisfied by that workflow's own provisioning step before the entrypoint runs, and provisioning failure is surfaced as a provisioning failure. A declared runtime dependency that is not importable in the environment that needs it is a provisioning defect, not a runtime import error.",
+      "applicability": {
+        "changed_paths": [
+          ".github/workflows/",
+          "pyproject.toml",
+          "src/hunter/persistence/",
+          "scripts/hunter_incremental_knowledge.py",
+          "scripts/hunter_integrate_learning_ledger.py"
+        ],
+        "rationale": "Workflow definitions, declared project dependencies, reachable persistence imports, and the two observed knowledge entrypoints can affect whether a required workflow provisions its import closure. Dependency lock/constraint manifests remain deliberately outside review-family selection; they are evidence for diagnosis, not an implementation surface for this recorded family."
+      },
+      "prevention": {
+        "mechanism": "Recorded finding only. A correcting contribution must derive each required workflow's import closure and compare it against that workflow's provisioned requirements, failing loudly at verification time rather than at first import, before this family can advance. The precise provisioning step that omitted the dependency in the recorded instance was not established by the completed mining and must be diagnosed before this mechanism is treated as the fix.",
+        "boundary": "review"
+      },
+      "regression_evidence": [],
+      "lifecycle": "recorded",
+      "sources": [
+        "Run 35962558106 (Hunter Knowledge Learning, 2026-09-24) failed with 'ModuleNotFoundError: No module named sqlalchemy', exit 1; 5 failures recorded for this workflow in the mined window. The dependency is declared (pyproject.toml 'sqlalchemy>=2.0,<3') and constrained (requirements/ci-constraints.txt 'SQLAlchemy==2.0.51'), and the workflow provisions with 'python -m pip install --only-binary :all: -c requirements/ci-constraints.txt .', so the defect is that the declared runtime dependency was not importable in the environment that required it, not that it was undeclared. Imported by src/hunter/persistence/ (experimental.py, prediction_evaluation.py, sql/base.py, sql/engine.py, sql/factory.py, sql/metadata.py, sql/session.py, sql/unit_of_work.py)."
+      ]
+    },
+    {
+      "id": "DFF-037",
+      "title": "governance-verdict-not-machine-readable",
+      "invariant": "Every mandatory merge/governance gate emits its authoritative verdict on a machine-readable channel, and prose is derived from that verdict rather than carrying it. Consumers of mandatory evidence read the structured verdict with prose removed; unavailable mandatory evidence fails closed. Optional external-review reporting remains explicitly non-blocking and cannot be promoted into merge authority by this family.",
+      "applicability": {
+        "changed_paths": [
+          "scripts/hunter_pre_push.py",
+          "scripts/hunter_governance_review_v2.py",
+          "scripts/hunter_merge_readiness_v2.py",
+          "scripts/hunter_pre_ready_review.py"
+        ],
+        "rationale": "These surfaces emit or consume governance/readiness verdicts. This family governs mandatory decision evidence only; optional external-review reporting in hunter_pre_push.py remains non-blocking under DFF-026 even when it shares the same file."
+      },
+      "prevention": {
+        "mechanism": "Recorded finding only. A correcting contribution must give mandatory merge/governance gates structured verdict fields and require authoritative consumers to read those fields, prohibiting prose-token assertions as a decision interface. Unresolvable mandatory evidence blocks. Optional external-review evidence governed by DFF-026 remains advisory/non-blocking and is outside this family's fail-closed requirement.",
+        "boundary": "review"
+      },
+      "regression_evidence": [],
+      "lifecycle": "recorded",
+      "sources": [
+        "scripts/hunter_pre_push.py@9eda014 carries its verdict only as prose banner text: 'DRAFT-ONLY:' (line 152), 'NOTE:' (lines 160, 391, 397), 'OPTIONAL-REVIEW-CURRENT:' (line 394), 'BLOCKED:' (lines 422, 429, 435, 449), 'PASS:' (line 441), with no machine-readable verdict channel. Observed: run 35834631717 (CI, 2026-09-23) failed assert 'DRAFT-ONLY' in out against actual output '[Hunter Pre-Push] NOTE: optional external review is incomplete (pre-ready hostile review evidence is unavailable (fatal: bad object bbbb...)); this does not block push or deterministic merge authority.' and assert 'READY-ELIGIBLE' in out against '[Hunter Pre-Push] OPTIONAL-REVIEW-CURRENT: complete base->HEAD hostile review for Issue #442'. The same log records the paired fail-open: a nonexistent commit produced 'fatal: bad object' and a non-blocking NOTE rather than a block."
+      ]
+    },
+    {
+      "id": "DFF-038",
+      "title": "required-governance-capability-degraded-best-effort-silently",
+      "invariant": "A governance capability that a containment boundary depends on either holds or fails loudly. A best-effort continuation never stands in for a containment boundary: where an unavailable capability would let work reach a state the boundary exists to prevent, the run fails and names the missing capability rather than warning and proceeding.",
+      "applicability": {
+        "changed_paths": [
+          "scripts/hunter_candidate_admission.py",
+          "scripts/hunter_governance_review_v2.py",
+          ".github/workflows/hunter-candidate-admission.yml",
+          "docs/CODE_WRITE_POLICY.json"
+        ],
+        "rationale": "These surfaces hold the admission capability and the workflow credential that supplies it, and the Draft-only transition they perform is a containment boundary: a silent skip leaves the candidate outside the state the boundary exists to hold it in."
+      },
+      "prevention": {
+        "mechanism": "Recorded finding only. A correcting contribution must make a required admission capability fail loudly when unavailable, and must not remove the best-effort Draft transition without first granting the token the permission it requires, before this family can advance.",
+        "boundary": "review"
+      },
+      "regression_evidence": [],
+      "lifecycle": "recorded",
+      "sources": [
+        "scripts/hunter_candidate_admission.py@9eda014:40 prints 'Warning: GraphQL convertPullRequestToDraft failed (...); continuing with admission failure.' and line 154 appends '(Best-effort Draft transition was not completed).' The underlying GraphQL error is FORBIDDEN / 'Resource not accessible by integration', i.e. the workflow GITHUB_TOKEN lacks the permission, and the path continues. Observed in every sampled Hunter Candidate Admission failure run, including 36173739583, 35266950873, 35191466527, 34639137141 and 35746047121. 185 such failures were recorded in the mined window, 131 of them on main."
+      ]
     }
   ]
 }
