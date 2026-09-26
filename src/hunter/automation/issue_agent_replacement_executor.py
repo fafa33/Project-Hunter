@@ -40,6 +40,7 @@ class CandidateFile:
 @dataclass(frozen=True, slots=True)
 class ValidatedReplacementResult:
     authorization_id: str
+    repository: str
     branch: str
     base_sha: str
     files: tuple[CandidateFile, ...]
@@ -122,7 +123,13 @@ def validate_replacement_result(
         if not _path_allowed(path, signed_authorization.implementation_scope):
             raise ReplacementExecutorError(f"candidate path is outside signed TaskScope: {path}")
     return ValidatedReplacementResult(
-        target.authorization_id, target.branch, target.base_sha, files, hashlib.sha256(raw).hexdigest(), rehearsal
+        target.authorization_id,
+        target.repository,
+        target.branch,
+        target.base_sha,
+        files,
+        hashlib.sha256(raw).hexdigest(),
+        rehearsal,
     )
 
 
@@ -293,12 +300,61 @@ def build_signed_candidate_commit(
     return head
 
 
+def _run_pre_push_safety(repo: Path, *, validated: ValidatedReplacementResult, head: str, push_url: str) -> None:
+    """Run the trusted pre-push hook against exact candidate content without publication authority."""
+    hook = _git_plumbing(repo, "show", f"{validated.base_sha}:.githooks/pre-push").encode()
+    with tempfile.TemporaryDirectory(prefix="hunter-replacement-pre-push-") as directory:
+        root = Path(directory)
+        worktree = root / "candidate"
+        hook_path = root / "pre-push"
+        hook_path.write_bytes(hook)
+        hook_path.chmod(0o700)
+        _git_plumbing(repo, "-c", "core.hooksPath=/dev/null", "worktree", "add", "--detach", str(worktree), head)
+        env = dict(os.environ)
+        for name in tuple(env):
+            if (
+                name
+                in {
+                    "HUNTER_AGENT_GITHUB_PUSH_TOKEN",
+                    "HUNTER_ISSUE_AGENT_PR_TOKEN",
+                    "GITHUB_TOKEN",
+                    "GH_TOKEN",
+                    "SSH_AUTH_SOCK",
+                }
+                or name.endswith("_API_KEY")
+                or (name.startswith("HUNTER_AGENT_") and name.endswith("_COMMAND"))
+                or name.startswith("GIT_")
+            ):
+                env.pop(name, None)
+        env["GIT_CONFIG_GLOBAL"] = os.devnull
+        env["GIT_CONFIG_NOSYSTEM"] = "1"
+        env["GIT_TERMINAL_PROMPT"] = "0"
+        line = f"refs/heads/{validated.branch} {head} refs/heads/{validated.branch} {'0' * 40}\n"
+        try:
+            completed = subprocess.run(
+                (str(hook_path), "origin", push_url),
+                cwd=worktree,
+                env=env,
+                input=line.encode(),
+                capture_output=True,
+                check=False,
+                timeout=900,
+            )
+            if completed.returncode != 0:
+                detail = (
+                    completed.stderr.decode(errors="replace").strip()
+                    or completed.stdout.decode(errors="replace").strip()
+                )
+                raise ReplacementExecutorError("candidate pre-push safety failed: " + (detail or "unknown failure"))
+        finally:
+            _git_plumbing(repo, "-c", "core.hooksPath=/dev/null", "worktree", "remove", "--force", str(worktree))
+
+
 def publish_create_only(
     repo: str | Path,
     *,
     validated: ValidatedReplacementResult,
     verified_receipt: ReplacementValidationReceipt,
-    push_url: str,
     signing_key: str = "",
 ) -> ReplacementPublication:
     """Publish validated data under a create-only lease; never execute candidate content."""
@@ -315,10 +371,14 @@ def publish_create_only(
     if verified_receipt.branch != validated.branch:
         raise ReplacementExecutorError("publication receipt branch mismatch")
     root = Path(repo).resolve()
+    if re.fullmatch(r"[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+", validated.repository) is None:
+        raise ReplacementExecutorError("signed repository identity is invalid")
+    push_url = f"https://github.com/{validated.repository}.git"
     remote = _git_plumbing(root, "ls-remote", push_url, f"refs/heads/{validated.branch}")
     if remote:
         raise ReplacementExecutorError("authorization branch already exists; create-only publication refused")
     head = build_signed_candidate_commit(root, validated=validated, signing_key=signing_key)
+    _run_pre_push_safety(root, validated=validated, head=head, push_url=push_url)
     _git_plumbing(
         root,
         "push",

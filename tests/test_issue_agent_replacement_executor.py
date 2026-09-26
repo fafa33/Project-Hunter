@@ -194,7 +194,7 @@ def test_rehearsal_result_can_never_reach_publisher(monkeypatch, tmp_path):
         validated.authorization_id, validated.base_sha, validated.branch, "0" * 64, "v1"
     )
     with pytest.raises(core.ReplacementExecutorError, match="rehearsal result cannot be published"):
-        core.publish_create_only(tmp_path, validated=validated, verified_receipt=receipt, push_url="unused")
+        core.publish_create_only(tmp_path, validated=validated, verified_receipt=receipt)
 
 
 def test_publisher_refuses_existing_branch_before_building_commit(monkeypatch, tmp_path):
@@ -215,8 +215,9 @@ def test_publisher_refuses_existing_branch_before_building_commit(monkeypatch, t
     monkeypatch.setattr(core, "_git_plumbing", fake_git)
     monkeypatch.setattr(core, "publisher_environment_is_safe", lambda _env: True)
     with pytest.raises(core.ReplacementExecutorError, match="already exists"):
-        core.publish_create_only(tmp_path, validated=validated, verified_receipt=receipt, push_url="origin")
+        core.publish_create_only(tmp_path, validated=validated, verified_receipt=receipt)
     assert calls and calls[0][0] == "ls-remote"
+    assert calls[0][1] == "https://github.com/fafa33/Project-Hunter.git"
 
 
 def test_publisher_uses_data_only_git_plumbing_and_create_only_lease(monkeypatch, tmp_path):
@@ -229,16 +230,18 @@ def test_publisher_uses_data_only_git_plumbing_and_create_only_lease(monkeypatch
     calls = []
     monkeypatch.setattr(core, "publisher_environment_is_safe", lambda _env: True)
     monkeypatch.setattr(core, "build_signed_candidate_commit", lambda *_a, **_k: "b" * 40)
+    monkeypatch.setattr(core, "_run_pre_push_safety", lambda *_a, **_k: None)
 
     def fake_git(_repo, *args, **_kwargs):
         calls.append(args)
         return ""
 
     monkeypatch.setattr(core, "_git_plumbing", fake_git)
-    publication = core.publish_create_only(tmp_path, validated=validated, verified_receipt=receipt, push_url="origin")
+    publication = core.publish_create_only(tmp_path, validated=validated, verified_receipt=receipt)
     assert publication.head_sha == "b" * 40
     push = calls[-1]
     assert push[:3] == ("push", "--no-verify", f"--force-with-lease=refs/heads/{validated.branch}:")
+    assert push[3] == "https://github.com/fafa33/Project-Hunter.git"
     assert not any(x in {"checkout", "commit", "merge"} for call in calls for x in call)
 
 
@@ -273,4 +276,59 @@ def test_publisher_rejects_receipt_for_different_result(monkeypatch, tmp_path):
     )
     monkeypatch.setattr(core, "publisher_environment_is_safe", lambda _env: True)
     with pytest.raises(core.ReplacementExecutorError, match="does not bind"):
-        core.publish_create_only(tmp_path, validated=validated, verified_receipt=receipt, push_url="unused")
+        core.publish_create_only(tmp_path, validated=validated, verified_receipt=receipt)
+
+
+def test_pre_push_safety_scrubs_publication_and_model_authority(monkeypatch, tmp_path):
+    import hunter.automation.issue_agent_replacement_executor as core
+
+    signed = _signed()
+    validated = core.validate_replacement_result(_result(signed), signed_authorization=signed, rehearsal=False)
+    seen = {}
+
+    def fake_git(_repo, *args, **_kwargs):
+        if args[0] == "show":
+            return "#!/bin/sh\nexit 0\n"
+        return ""
+
+    class Done:
+        returncode = 0
+        stdout = b""
+        stderr = b""
+
+    def fake_run(*_args, **kwargs):
+        seen.update(kwargs["env"])
+        return Done()
+
+    monkeypatch.setattr(core, "_git_plumbing", fake_git)
+    monkeypatch.setattr(core.subprocess, "run", fake_run)
+    monkeypatch.setenv("HUNTER_AGENT_GITHUB_PUSH_TOKEN", "write")
+    monkeypatch.setenv("OPENAI_API_KEY", "model")
+    core._run_pre_push_safety(
+        tmp_path, validated=validated, head="b" * 40, push_url="https://github.com/fafa33/Project-Hunter.git"
+    )
+    assert "HUNTER_AGENT_GITHUB_PUSH_TOKEN" not in seen
+    assert "OPENAI_API_KEY" not in seen
+    assert seen["GIT_TERMINAL_PROMPT"] == "0"
+
+
+def test_publisher_remote_is_derived_from_signed_repository(monkeypatch, tmp_path):
+    import hunter.automation.issue_agent_replacement_executor as core
+
+    signed = _signed()
+    doc = _result(signed)
+    validated = core.validate_replacement_result(doc, signed_authorization=signed, rehearsal=False)
+    receipt = core.validation_receipt(doc, signed_authorization=signed, validation_definition="v1")
+    seen = []
+    monkeypatch.setattr(core, "publisher_environment_is_safe", lambda _env: True)
+    monkeypatch.setattr(core, "build_signed_candidate_commit", lambda *_a, **_k: "b" * 40)
+    monkeypatch.setattr(core, "_run_pre_push_safety", lambda *_a, **_k: None)
+
+    def fake_git(_repo, *args, **_kwargs):
+        seen.append(args)
+        return ""
+
+    monkeypatch.setattr(core, "_git_plumbing", fake_git)
+    core.publish_create_only(tmp_path, validated=validated, verified_receipt=receipt)
+    assert seen[0][1] == "https://github.com/fafa33/Project-Hunter.git"
+    assert seen[-1][3] == "https://github.com/fafa33/Project-Hunter.git"

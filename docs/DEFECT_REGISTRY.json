@@ -452,6 +452,26 @@
       "guard": "A locally-enforced defect family must include the concrete file that contains its guard in changed_paths whenever applicability is path-selected; DFF-027 therefore includes scripts/hunter_issue_agent_issuer.py so edits to the admission guard require DFF-027 coverage.",
       "test": "tests/test_issue_412_prevention_gate.py::test_applicable_family_ids_use_changed_paths",
       "status": "guarded"
+    },
+    {
+      "id": "PRH-060",
+      "class": "replacement-publisher-bypasses-required-pre-push-boundary",
+      "source": "PR #524 Codex P1, 2026-09-26",
+      "classification": "systemic",
+      "guard_boundary": "credential-isolated replacement publication",
+      "guard": "The exact candidate commit is checked in a temporary credential-free worktree and must pass the trusted base pre-push hook before the publisher may create the authorization branch; publication/model credentials are scrubbed from that execution environment.",
+      "test": "tests/test_issue_agent_replacement_executor.py::test_pre_push_safety_scrubs_publication_and_model_authority",
+      "status": "guarded"
+    },
+    {
+      "id": "PRH-061",
+      "class": "replacement-publication-remote-not-bound-to-signed-repository",
+      "source": "PR #524 Codex P1, 2026-09-26",
+      "classification": "systemic",
+      "guard_boundary": "signed authorization to publication destination binding",
+      "guard": "The replacement result retains the repository identity derived from the signed authorization and the publisher derives the canonical github.com remote from that identity; callers cannot supply an independent publication destination.",
+      "test": "tests/test_issue_agent_replacement_executor.py::test_publisher_remote_is_derived_from_signed_repository",
+      "status": "guarded"
     }
   ],
   "families": [
@@ -1413,7 +1433,8 @@
         "tests/test_issue_agent_replacement_executor.py::test_validation_receipt_is_exact_result_and_definition_bound",
         "tests/test_issue_agent_replacement_executor.py::test_validation_receipt_cannot_be_reused_after_definition_change",
         "tests/test_issue_agent_replacement_executor.py::test_rehearsal_result_can_never_reach_publisher",
-        "tests/test_issue_agent_replacement_executor.py::test_publisher_uses_data_only_git_plumbing_and_create_only_lease"
+        "tests/test_issue_agent_replacement_executor.py::test_publisher_uses_data_only_git_plumbing_and_create_only_lease",
+        "tests/test_issue_agent_replacement_executor.py::test_pre_push_safety_scrubs_publication_and_model_authority"
       ],
       "lifecycle": "regression-tested",
       "sources": [
