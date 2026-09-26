@@ -259,7 +259,7 @@ def test_rehearsal_workflow_has_no_publication_or_model_secret():
         assert forbidden not in text
     assert "HUNTER_ISSUE_AGENT_AUTHORIZATION_VERIFYING_KEY" in text
     assert "requirements/ci-constraints.txt" in text
-    assert '"cryptography>=50.0.0,<51"' in text
+    assert '--only-binary=:all: "cryptography==50.0.0"' in text
 
 
 def test_publisher_rejects_receipt_for_different_result(monkeypatch, tmp_path):
