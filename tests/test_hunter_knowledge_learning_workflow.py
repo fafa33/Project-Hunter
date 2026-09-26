@@ -113,3 +113,35 @@ def test_learning_workflow_renders_controlled_registry_candidate_without_write_a
     assert "contents: write" not in text
     assert "git commit" not in text
     assert "git push" not in text
+
+
+def test_learning_workflow_bootstrap_gate_covers_the_canonicalization_cli():
+    text = WORKFLOW_PATH.read_text(encoding="utf-8")
+    detect_step = text.split("Detect trusted learning engine", 1)[1].split("Build exact-head", 1)[0]
+    assert "scripts/hunter_canonicalize_learning.py" in detect_step
+
+
+def test_learning_workflow_proves_materialization_automatically_and_only_as_dry_run():
+    text = WORKFLOW_PATH.read_text(encoding="utf-8")
+    # The one and only invocation of the CLI in this workflow must carry
+    # --dry-run on the same line: this job has no contents: write permission
+    # and must never attempt the real atomic registry write.
+    assert (
+        'python scripts/hunter_canonicalize_learning.py --pr "$PR_NUMBER" --head "$HEAD_SHA" '
+        '--base "$BASE_SHA" --observations learning-observations.json --dry-run' in text
+    )
+    invocations = [line for line in text.splitlines() if "hunter_canonicalize_learning.py" in line and "python" in line]
+    assert len(invocations) == 1
+    assert all("--dry-run" in line for line in invocations)
+
+
+def test_learning_workflow_materialization_proof_cannot_block_the_job():
+    text = WORKFLOW_PATH.read_text(encoding="utf-8")
+    step = text.split("Prove canonicalization materialization", 1)[1].split("Publish non-authoritative", 1)[0]
+    assert "continue-on-error: true" in step
+
+
+def test_learning_workflow_publishes_the_materialization_proof_log():
+    text = WORKFLOW_PATH.read_text(encoding="utf-8")
+    publish_step = text.split("Publish non-authoritative learning artifact", 1)[1]
+    assert "hunter-canonicalization-dry-run.log" in publish_step

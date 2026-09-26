@@ -168,3 +168,52 @@ without persisting, atomic apply, idempotent replay, exclusion classes never
 integrating, conflicting evidence under one event identity failing closed
 without mutating the registry, malformed input failing closed, and the
 no-caller-selected-write-target / no-network-dependency shape invariants.
+
+## Follow-on: automatic, non-blocking materialization proof
+
+Applying a canonicalized change still requires a human to run
+`scripts/hunter_canonicalize_learning.py` locally and carry the result through
+the normal commit/push/PR/review/merge path. That is not an implementation
+gap being deferred -- it is this repository's own current, deliberate
+authorization boundary. `grep -rn "contents: write" .github/workflows/`
+finds exactly one match, `acquire-sky-supply-basis.yml`: an explicitly
+labelled "TEMPORARY OPERATIONAL ESCAPE HATCH -- NOT PRODUCTION ARCHITECTURE",
+manual-`workflow_dispatch`-only, scoped to committing one unrelated data file
+(`data/data_ops.sqlite`) to one hardcoded milestone branch via a
+`github-actions[bot]` identity that `docs/CODE_WRITE_POLICY.json`'s
+`writer_identity_binding` does not bind -- not a reusable write pathway, and
+not one this follow-on extends or relies on. No production, always-on
+workflow in this repository holds `contents: write`, and
+`docs/CODE_WRITE_POLICY.json`'s `connector_write_ingress` -- the only grant
+capable of an automated non-clone write -- has no
+`governance_maintenance_authorizations` entry for the `defect-registry`
+scope that unblocks `docs/DEFECT_REGISTRY.json`. Granting that scope to an
+Issue is a repository-owner decision (see the one existing entry's own
+`authorized_by`/`authorization` fields); it is not something a contribution
+can grant itself, per `connector_write_ingress.self_escalation_boundary`. A
+proposal remaining "evidence... never canonical truth" until a human
+integrates it is this design's own stated guarantee, not a limitation of
+this follow-on.
+
+What *is* automatable without any new authorization, and without a second
+learning/write pathway, is proving -- continuously and automatically, on the
+same trigger this workflow already has -- that the exact recovery command a
+human will eventually run actually produces the result it claims to. The
+"Prove canonicalization materialization is reproducible" step in
+`hunter-knowledge-learning.yml` runs `hunter_canonicalize_learning.py
+--dry-run` against the same `learning-observations.json` the job already
+collects, on every `pull_request_review`/`pull_request_review_comment` event,
+with `continue-on-error: true` so a failure here cannot skip the artifact
+upload or affect any required check (this workflow already is not one).
+`--dry-run` never varies with the observation content -- it is the one and
+only invocation of that script in this file. This closes the one gap PR #528
+identified without moving the write boundary: `materialize_learning_ledger`
+now runs automatically on every relevant event instead of only inside unit
+tests and a human's eventual local `--apply`, so a human applying the
+candidate later is applying a path already exercised against live PR data,
+not a cold, untested one.
+
+Regression: `tests/test_hunter_knowledge_learning_workflow.py` proves the
+bootstrap gate covers the new script, the workflow's only invocation of it
+always carries `--dry-run`, a failure in that step cannot block the job, and
+the artifact upload carries its output log.

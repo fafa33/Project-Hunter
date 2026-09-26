@@ -37,3 +37,4 @@ data/full_history_defect_scan/reconstruction/*
 # meant to be committed.
 hunter-learning-ledger.json
 hunter-defect-registry-candidate.json
+hunter-canonicalization-dry-run.log
