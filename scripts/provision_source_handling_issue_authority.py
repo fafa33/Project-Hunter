@@ -661,18 +661,28 @@ def _provision_authority_record(
     current_head = store.current_canonical_head_id(plan["family"], plan["scope"])
     payload = dict(plan["payload"])
     if current_head is not None:
+        current_record = resolve_canonical_head(
+            store,
+            family=plan["family"],
+            scope=plan["scope"],
+            cutoff=datetime.max.replace(tzinfo=UTC),
+        )
+        # A retry after a partially committed successor batch must distinguish
+        # a family already advanced by this revision from a family still at its
+        # predecessor. Reconstruct the already-published successor identity
+        # first; only append when the current head is genuinely the predecessor.
+        retry_payload = dict(payload)
+        predecessor = current_record.get("supersedes_record_id")
+        if predecessor is not None:
+            retry_payload["supersedes_record_id"] = predecessor
+        retry_plan = dict(plan)
+        retry_plan["payload"] = retry_payload
+        if current_head == _expected_authority_record_id(retry_plan):
+            return {"record_id": current_head, "status": "already-provisioned"}
         if allow_successor:
             payload["supersedes_record_id"] = current_head
-        else:
-            current_record = resolve_canonical_head(
-                store,
-                family=plan["family"],
-                scope=plan["scope"],
-                cutoff=datetime.max.replace(tzinfo=UTC),
-            )
-            predecessor = current_record.get("supersedes_record_id")
-            if predecessor is not None:
-                payload["supersedes_record_id"] = predecessor
+        elif predecessor is not None:
+            payload["supersedes_record_id"] = predecessor
     expected_plan = dict(plan)
     expected_plan["payload"] = payload
     expected_record_id = _expected_authority_record_id(expected_plan)
@@ -859,12 +869,13 @@ def _run(
         policy_options=policy_options,
         authorization_id=revision_authorization_id,
     )
+    authority_successor_allowed = newer_issue_revision or current_provenance_is_successor
     _check_authority_heads_exact(
         database=database,
         signing_key=signing_key,
         operator_root=operator_root,
         plans=preview_plans,
-        allow_successor=newer_issue_revision,
+        allow_successor=authority_successor_allowed,
     )
 
     for plan in provenance_plans:
@@ -907,7 +918,7 @@ def _run(
             operator_root=operator_root,
             at=authority_at,
             plan=plan,
-            allow_successor=newer_issue_revision,
+            allow_successor=authority_successor_allowed,
         )
     status = (
         "provisioned" if any(entry["status"] == "provisioned" for entry in records.values()) else "already-provisioned"
