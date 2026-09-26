@@ -252,64 +252,82 @@ command. Human merge approval, `Hunter Governance Review`,
 `Hunter Merge Readiness`, and every other required check are unaffected and
 still apply to the resulting PR like any other.
 
-### The Routine
+### The Routine was attempted, tested by firing it, and found blocked by a platform limitation -- not a Hunter governance one
 
-**Name:** `Hunter Defect-Registry Canonicalization` · **Cadence:** hourly,
-fresh session per firing (`create_new_session_on_fire: true`) -- no
-dependency on any specific Claude session surviving between firings.
+A Claude Code Remote Routine (`Hunter Defect-Registry Canonicalization`,
+hourly, `create_new_session_on_fire: true`) was created to run the same
+procedure described above (list open PRs, build observations without ever
+inventing classification, run the unmodified
+`scripts/hunter_canonicalize_learning.py` per PR, then create-or-update one
+Draft PR on a fixed branch if anything changed). Rather than trust that
+design and report it as done, it was fired manually
+(`fire_trigger`) and the resulting session was inspected directly.
 
-Each firing:
+**Result: it did nothing.** No `canonicalization/defect-registry-auto`
+branch and no new PR exist on `fafa33/Project-Hunter` after the firing. The
+fired session's own tool list contained neither `add_repo`/any other
+`mcp__Claude_Code_Remote__*` tool nor any `mcp__github__*` tool -- only a
+minimal baseline (`Bash`, `Read`, `Write`, `Edit`, `Glob`, `Grep`, `Agent`,
+`WebFetch`, `WebSearch`, `Artifact`, a few more). It could not attach the
+repository and could not read or write anything on GitHub, so -- per its own
+explicit instruction not to retry in a loop or improvise a different write
+path -- it ended cleanly having done nothing. That is the correct, safe
+outcome of a session missing the access it needs; it is not evidence the
+procedure itself is unsound.
 
-1. Attaches and clones `fafa33/project-hunter` fresh, checks out `main`,
-   installs dependencies, and runs `python scripts/install_hunter_git_hooks.py`
-   -- exactly the bootstrap this PR's own commits used.
-2. Lists open pull requests and, for each, reads its reviews and review
-   comments via the session's own GitHub access (read-only). It never uses
-   this content to invent a `classification`, `invariant`,
-   `claimed_family_id`, `affected_paths`, or `fix_reference` -- those are
-   left `null`/empty for every constructed observation, exactly matching
-   `hunter_collect_learning_observations.py`'s own tested behavior
-   (`tests/test_hunter_knowledge_learning_workflow.py::test_collector_does_not_invent_defect_classification`).
-   A finding only ever becomes `"confirmed"` when it is entered by a human
-   (or a future, separately-designed and separately-reviewed structured
-   disposition source) -- not by this Routine's own judgment. In today's
-   codebase this means most firings find nothing actionable and end cleanly
-   without creating a branch or PR; that is correct, fail-closed behavior,
-   not a defect.
-3. For each PR with at least one well-formed observation, runs
-   `scripts/hunter_canonicalize_learning.py --pr <n> --head <sha> --base <sha>
-   --observations <file> --dry-run` first, then the same call without
-   `--dry-run` only if it reports `changed=true` -- the unmodified CLI from
-   this PR's first commit, called once per pending PR against the same
-   working tree so results accumulate (see
-   `tests/test_canonicalize_learning_cli.py::test_sequential_apply_across_two_prs_accumulates_without_cross_pr_duplication`).
-4. If `docs/DEFECT_REGISTRY.json` changed relative to `origin/main`, commits
-   *only* that file to the fixed branch `canonicalization/defect-registry-auto`
-   (created from latest `main` if absent, reset to latest `main` and
-   reapplied if it already exists) and pushes it through the normal
-   `.githooks/pre-push` boundary.
-5. Checks whether an open PR already targets that branch. If yes, the push
-   already updated it and nothing further happens. If no, opens **one**
-   Draft PR from it. It never marks a PR Ready, approves, or merges --
-   human merge approval is unchanged and mandatory.
+Per `read_documentation(topic="github.access")` and
+`read_documentation(topic="connectors.add")`: **"a session's repositories
+are chosen when it starts"** and **"connectors are read when a session
+starts"** -- both are fixed at session-creation time, normally by a person
+picking them in the claude.ai UI. `create_trigger`'s own result confirmed
+this from the other side: *"this trigger stores no MCP connectors... this
+call had none to pass through (no session context, or no passable connector
+grants)."* A person is never present when an hourly cron fires, and this
+session had no repository/connector grant of its own that `create_trigger`
+could hand to a brand-new session. This is a Claude Code Remote platform
+constraint on how fresh-session Routines are provisioned -- unrelated to
+`docs/CODE_WRITE_POLICY.json`, `connector_write_ingress`, or any Hunter
+governance document, all of which remain exactly as described above and
+were never touched.
 
-### Requirement-by-requirement
+**The Routine was disabled** (`enabled: false`) immediately after this was
+confirmed, rather than left firing hourly while doing nothing -- silently
+inert is worse than visibly off, since an operator checking on it later
+should see it needs attention rather than assume it is working.
 
-| Requirement | How it is met |
+**What this means for automatic apply today:** it is not solved by this PR.
+The two things that *are* solved and merged are (a) the CLI itself
+(`scripts/hunter_canonicalize_learning.py`, unchanged, fully tested, the
+supported fallback/recovery path run by hand) and (b) the automatic,
+continuous, non-blocking dry-run proof that CLI's materialization logic
+actually works, wired into existing CI
+(see "Follow-on: automatic, non-blocking materialization proof" above). An
+automatic path all the way to an opened canonicalization PR, with zero
+person present, needs one of: a person granting a persistent session (not a
+fresh-per-fire one) the repository and GitHub access it needs, then binding
+the Routine to that session's id instead of `create_new_session_on_fire`;
+or a platform-level way to pass a repository/connector grant into a
+fresh-fired session that was not available from this tool here. Either is a
+decision and an action for the repository owner to take through the
+claude.ai Routines UI or a dedicated persistent session -- not something to
+guess at or self-provision from inside this PR.
+
+### Requirement-by-requirement -- honest status
+
+| Requirement | Status |
 |---|---|
-| Non-merge-blocking for the originating PR | The Routine never touches the PR that captured the finding; it only ever writes to its own dedicated branch/PR |
-| Not a required check | Not wired into any check at all -- it is a platform-level schedule, outside `.github/workflows/` entirely |
-| No repository-write authority broadened | Zero changes to `docs/CODE_WRITE_POLICY.json`; reuses the existing, already-unrestricted `local_git_push` grant |
-| Never writes to `main` / never merges its own PR | Commits go to `canonicalization/defect-registry-auto` only; the Routine has no merge step |
-| Recoverable if Claude Remote is unavailable, stopped, or removed | The backlog is GitHub's own PR/review history plus `docs/DEFECT_REGISTRY.json`'s own current state -- both independent of Claude Remote and durable regardless of it; `scripts/hunter_canonicalize_learning.py` run by hand is the unchanged, fully-supported fallback (see the Local/Mac section above) |
-| Idempotent / duplicate executions converge | `already_integrated` plus the registry-digest replay check (unchanged, existing) make replaying any PR's observations a no-op; the fixed branch name plus the create-or-update check make repeated firings converge on one PR, never a duplicate |
-| No new AI/provider dependency | The Routine's own read step uses the session's already-available GitHub access; canonicalization itself remains the same deterministic, provider-free authorities |
-| DPM/SPM authority unchanged | `EngineeringContextAuthority` still only ever reads `docs/DEFECT_REGISTRY.json` as merged on `main` -- an unmerged canonicalization PR is not canonical truth, exactly as this design's authority graph already states, regardless of who or what prepared it |
+| Automatic, non-blocking computation/proof that materialization works | **Done and merged** -- the CI dry-run step above, already exercised on every relevant PR event |
+| Automatic create-or-update of a canonicalization PR with no person present | **Not achieved** -- blocked by the platform limitation just described; the Routine exists but is disabled |
+| Local/Mac CLI remains a fully supported recovery/fallback path | **Done, unchanged** -- `scripts/hunter_canonicalize_learning.py`, run by hand, is currently the *only* way a canonicalized change actually reaches a PR |
+| No repository-write authority broadened; no new CODE_WRITE_POLICY grant; never writes `main`; never self-merges | **True of everything actually implemented** -- nothing in this PR touches `docs/CODE_WRITE_POLICY.json`, and the disabled Routine's design (had it worked) also never would have |
+| Idempotent / duplicate executions converge | **True of what is implemented** -- proven by `tests/test_canonicalize_learning_cli.py::test_sequential_apply_across_two_prs_accumulates_without_cross_pr_duplication` for the CLI composition the (disabled) Routine's design depended on |
+| No new AI/provider dependency | **True** |
+| DPM/SPM authority unchanged | **True** -- `EngineeringContextAuthority` still only ever reads `docs/DEFECT_REGISTRY.json` as merged on `main`; nothing unmerged is ever authoritative |
 
-Regression: this behavior's only new, testable surface is the composition
-property in requirement 3 above (sequential apply across independent PRs);
-everything else is either an existing, already-tested authority (idempotency,
-staleness fail-closed, exclusion, dedup) or an operational procedure with no
-new production code, verified by inspection against
-`docs/CODE_WRITE_POLICY.json` and `docs/CONNECTOR_WRITE_INGRESS.md` rather
-than by a unit test.
+Regression: `tests/test_canonicalize_learning_cli.py::test_sequential_apply_across_two_prs_accumulates_without_cross_pr_duplication`
+proves the one new, testable property this attempt depended on --
+sequential apply of the existing, unmodified CLI across two independent PRs
+accumulates correctly and stays idempotent. That property remains true and
+useful for whoever picks this up (by hand, or from a properly-provisioned
+persistent session) even though the fully-automatic Routine itself is
+currently disabled.
