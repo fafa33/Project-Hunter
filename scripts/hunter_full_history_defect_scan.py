@@ -22,6 +22,11 @@ CLI behavior mirrors the mission requirements:
     --catch-up           capture a new final snapshot and process PRs created
                          after the initial snapshot until coverage_gap == 0
     --report             rebuild and print the coverage manifest from artifacts
+    --adjudicate         re-adjudicate the frozen scan's ledger in place into
+                         confirmed / mapped-to-family / excluded-with-evidence
+                         or an explicit owner queue (no re-fetch, no --fresh)
+    --owner-login        repository owner login; owner authority is the
+                         adjudication signal for --adjudicate
     --collect-statuses   also preserve the head commit status payloads (CI
                          evidence; optional because it materially raises the
                          GitHub request budget)
@@ -57,6 +62,7 @@ DEFAULT_REPOSITORY = "fafa33/Project-Hunter"
 DEFAULT_DATA_DIR = ROOT / "data" / "full_history_defect_scan"
 
 RestRequest = Callable[..., Any]
+GlobalRestRequest = Callable[..., Any]
 
 
 def _token() -> str:
@@ -66,7 +72,8 @@ def _token() -> str:
     return token
 
 
-def _request() -> RestRequest:
+def _governed() -> tuple[Any, Any, Any]:
+    """Import the governed governance surface and its typed transport failures."""
     scripts_dir = str(ROOT / "scripts")
     if scripts_dir not in sys.path:
         sys.path.insert(0, scripts_dir)
@@ -75,26 +82,65 @@ def _request() -> RestRequest:
     import hunter_governance_review_v2 as governance
 
     transport = importlib.import_module("hunter_github_transport")
-    unavailable_type = getattr(transport, "GitHubUnavailable", RuntimeError)
-    request_error_type = getattr(transport, "GitHubRequestError", RuntimeError)
+    return (
+        governance,
+        getattr(transport, "GitHubUnavailable", RuntimeError),
+        getattr(transport, "GitHubRequestError", RuntimeError),
+    )
+
+
+def _governed_call(call: Callable[[], Any], unavailable_type: Any, request_error_type: Any) -> Any:
+    """Map the governed transport failure domain onto scan states.
+
+    One mapping shared by every GitHub call this scanner makes, so a second
+    request seam cannot introduce a weaker classification than the first.
+    """
     import urllib.error
 
+    try:
+        return call()
+    except unavailable_type as exc:
+        raise scanner.ScanInfrastructureUnavailable(str(exc)) from exc
+    except request_error_type as exc:
+        raise scanner.ScanPermanentError(str(exc)) from exc
+    except urllib.error.URLError as exc:
+        raise scanner.ScanInfrastructureUnavailable(str(exc)) from exc
+
+
+def _request() -> RestRequest:
+    governance, unavailable_type, request_error_type = _governed()
+
     def request(repository: str, token: str, method: str, path: str) -> Any:
-        """Adapter mapping the governed transport failure domain to scan states."""
-        try:
-            return governance.request_json(repository, token, method, path)
-        except unavailable_type as exc:
-            raise scanner.ScanInfrastructureUnavailable(str(exc)) from exc
-        except request_error_type as exc:
-            raise scanner.ScanPermanentError(str(exc)) from exc
-        except urllib.error.URLError as exc:
-            raise scanner.ScanInfrastructureUnavailable(str(exc)) from exc
+        """Repository-scoped adapter; ``path`` resolves under /repos/{repository}."""
+        return _governed_call(
+            lambda: governance.request_json(repository, token, method, path),
+            unavailable_type,
+            request_error_type,
+        )
 
     return request
 
 
-def _verify_authentication(request: RestRequest, repository: str, token: str) -> None:
-    payload = request(repository, token, "GET", "rate_limit")
+def _global_request() -> GlobalRestRequest:
+    """Adapter for GitHub's global REST endpoints, which have no repo sub-resource."""
+    governance, unavailable_type, request_error_type = _governed()
+
+    def request(token: str, method: str, path: str) -> Any:
+        return _governed_call(
+            lambda: governance.request_global_json(token, method, path),
+            unavailable_type,
+            request_error_type,
+        )
+
+    return request
+
+
+def _verify_authentication(request: GlobalRestRequest, repository: str, token: str) -> None:
+    # /rate_limit is a global endpoint. Requesting it through the
+    # repository-scoped seam addresses /repos/{repository}/rate_limit, which
+    # does not exist and fails permanently with HTTP 404 -- a valid token
+    # reported as if it were unauthorized.
+    payload = request(token, "GET", "rate_limit")
     if not isinstance(payload, dict):
         raise SystemExit("GitHub rate_limit endpoint returned an unexpected payload")
     resources = payload.get("resources")
@@ -167,9 +213,15 @@ def run(args: argparse.Namespace) -> int:
     if args.report:
         return _report(args.repository, data_dir)
 
+    if args.reconstruct:
+        return _reconstruct(args, data_dir)
+
+    if args.adjudicate:
+        return _adjudicate(args, data_dir)
+
     token = _token()
     request = _request()
-    _verify_authentication(request, args.repository, token)
+    _verify_authentication(_global_request(), args.repository, token)
     owner_login = _repository_owner(request, args.repository, token)
 
     registry_path = Path(args.registry).resolve()
@@ -405,7 +457,12 @@ def _report(repository: str, data_dir: Path) -> int:
     records = _all_records(data_dir, numbers)
     progress = scanner.read_progress(data_dir)
     batches_completed = progress.get("next_batch", 1) - 1 if progress else 0
-    batches_total = len(scanner.partition_batches(numbers, scanner.DEFAULT_BATCH_SIZE))
+    # The batch size that produced this run is persisted with the run, so the
+    # report describes the run that happened rather than the default size. A
+    # report of a run executed with a non-default --batch-size previously
+    # reported a total that did not match its own checkpoint count.
+    run_batch_size = (progress or {}).get("batch_size") or scanner.DEFAULT_BATCH_SIZE
+    batches_total = len(scanner.partition_batches(numbers, run_batch_size))
     manifest = scanner.build_coverage_manifest(
         repository=repository,
         initial_snapshot=initial,
@@ -417,6 +474,137 @@ def _report(repository: str, data_dir: Path) -> int:
     )
     print(json.dumps(manifest, indent=2, sort_keys=True))
     return 0
+
+
+def _verdicts(path: str | None) -> dict[str, Any] | None:
+    """Load a verdict file as a whole payload.
+
+    The payload is passed through unwrapped so a single file can carry the
+    verdicts and the cluster declarations that explain them; the readers unwrap
+    the inner map themselves.
+    """
+    if not path:
+        return None
+    payload = scanner.read_json_file(Path(path), required=False)
+    return payload if isinstance(payload, dict) else None
+
+
+def _reconstruct(args: argparse.Namespace, data_dir: Path) -> int:
+    """Reconstruct repository-owned disposition evidence from local history.
+
+    Reads the frozen scan and the local integration base only. No re-fetch, no
+    rescan, no checkpoint mutation, and no write to canonical history: new
+    families are returned as proposals for the canonicalization phase.
+    """
+    import importlib
+
+    reconstruction = importlib.import_module("hunter.evidence_intelligence.historical_evidence_reconstruction")
+    registry_path = Path(args.registry).resolve()
+    if not registry_path.is_file():
+        raise SystemExit(f"canonical registry not found: {registry_path}")
+    if not args.owner_login:
+        raise SystemExit("--owner-login is required: repository-owned authority is the disposition signal")
+    manifest = reconstruction.run_reconstruction(
+        data_dir=data_dir,
+        registry_path=registry_path,
+        owner_login=args.owner_login,
+        repository=args.repository,
+        repo_root=ROOT,
+        ref=args.base_ref,
+        resume=not args.no_resume_reconstruction,
+        recurrence_verdicts=_verdicts(args.recurrence_verdicts),
+        invariant_verdicts=_verdicts(args.invariant_verdicts),
+    )
+    print(f"reconstructed: {manifest['reconciliation']['reconstructed_items']} ledger items")
+    print(f"  reconciles exactly          : {manifest['reconciliation']['reconciles_exactly']}")
+    reconciliation = manifest["reconciliation"]
+    print(
+        f"  summary container bodies    : {reconciliation['summary_container_bodies']}"
+        f" -> {reconciliation['derived_claims']} derived claim(s)"
+        f" (reconcile: {reconciliation['derived_claims_reconcile_exactly']})"
+    )
+    duplicates = (manifest["derived_claims"]["duplicate_of_existing_observation_count"]) or 0
+    if duplicates:
+        print(f"  already observed elsewhere   : {duplicates} carried claim(s) not re-derived")
+    print("dispositions:")
+    for name, count in manifest["dispositions"].items():
+        print(f"  {name:34s} {count}")
+    print("historical defect truth:")
+    for name, count in manifest["historical_defect_truth"].items():
+        print(f"  {name:34s} {count}")
+    print("closure dimensions:")
+    for key in (
+        "scan_coverage_gap",
+        "adjudication_coverage_gap",
+        "canonical_mapping_gap",
+        "unresolved_evidence_count",
+    ):
+        print(f"  {key:28s} {manifest[key]}")
+    print(f"  {'coverage_gap':28s} {manifest['coverage_gap']}")
+    non_recurrence = manifest.get("non_recurrence_resolution") or {}
+    print(f"resolved non-recurring        : {non_recurrence.get('resolved_non_recurring', 0)}")
+    for reason, count in (non_recurrence.get("withheld_reasons") or {}).items():
+        print(f"  withheld: {reason} ({count})")
+    proposals = manifest["family_proposals"]
+    print(
+        f"family mapping: {proposals['mapped_item_count']} item(s) to "
+        f"{len(proposals['existing_family_mappings'])} existing family(ies); "
+        f"{proposals['new_family_proposal_count']} new-family proposal(s)"
+    )
+    print(
+        f"owner required: {manifest['owner_required']['count']} in "
+        f"{manifest['owner_required']['group_count']} evidence-gap group(s)"
+        f" ({manifest['owner_required']['ledger_item_count']} ledger item(s) + "
+        f"{manifest['owner_required']['derived_claim_count']} derived claim(s))"
+    )
+    print(f"manifest: {data_dir / 'historical_closure_manifest.json'}")
+    return 0 if manifest["coverage_gap"] == 0 else 2
+
+
+def _adjudicate(args: argparse.Namespace, data_dir: Path) -> int:
+    """Re-adjudicate the frozen scan's ledger in place. No re-fetch, no --fresh.
+
+    This is the evidence phase the scan completion manifest cannot stand in for:
+    it resolves the ledger items the scan left as ``insufficient-evidence`` into
+    exactly one of confirmed / mapped-to-family / excluded-with-evidence, or an
+    explicit owner queue. It reads only artifacts already on disk.
+    """
+    import importlib
+
+    adjudication = importlib.import_module("hunter.evidence_intelligence.historical_evidence_adjudication")
+    registry_path = Path(args.registry).resolve()
+    if not registry_path.is_file():
+        raise SystemExit(f"canonical registry not found: {registry_path}")
+    owner_login = args.owner_login
+    if not owner_login:
+        raise SystemExit("--owner-login is required to adjudicate: owner authority is the adjudication signal")
+
+    manifest = adjudication.run_adjudication(
+        data_dir=data_dir,
+        registry_path=registry_path,
+        owner_login=owner_login,
+        repository=args.repository,
+        resume=not args.no_resume_adjudication,
+    )
+    print(f"adjudication: {manifest['reconciliation']['raw_scan_ledger_items']} ledger items re-adjudicated")
+    print(f"  reconciles exactly          : {manifest['reconciliation']['reconciles_exactly']}")
+    for name, count in manifest["dispositions"].items():
+        print(f"  {name:24s}: {count}")
+    print("closure dimensions:")
+    for key in (
+        "scan_coverage_gap",
+        "adjudication_coverage_gap",
+        "canonical_mapping_gap",
+        "unresolved_evidence_count",
+    ):
+        print(f"  {key:28s}: {manifest[key]}")
+    print(f"  {'coverage_gap':28s}: {manifest['coverage_gap']}")
+    queue = json.loads((data_dir / "adjudication" / "owner_decision_queue.json").read_text(encoding="utf-8"))["queue"]
+    print(
+        f"owner queue: {queue['ambiguous_item_count']} ambiguous item(s) " f"in {queue['group_count']} grouped case(s)"
+    )
+    print(f"manifest: {data_dir / 'historical_closure_manifest.json'}")
+    return 0 if manifest["coverage_gap"] == 0 else 2
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -432,6 +620,40 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--fresh", action="store_true")
     parser.add_argument("--catch-up", action="store_true")
     parser.add_argument("--report", action="store_true")
+    parser.add_argument(
+        "--adjudicate",
+        action="store_true",
+        help="re-adjudicate the frozen scan's ledger in place (no re-fetch, no --fresh)",
+    )
+    parser.add_argument(
+        "--owner-login",
+        default=os.environ.get("GITHUB_OWNER_LOGIN") or "",
+        help="repository owner login; owner authority is the adjudication signal",
+    )
+    parser.add_argument("--no-resume-adjudication", action="store_true")
+    parser.add_argument(
+        "--reconstruct",
+        action="store_true",
+        help="reconstruct repository-owned disposition evidence for every ledger item "
+        "(local history only; no re-fetch, no rescan, no canonical write)",
+    )
+    parser.add_argument(
+        "--base-ref",
+        default="origin/main",
+        help="integration base used as the anchor for surviving implementation",
+    )
+    parser.add_argument("--no-resume-reconstruction", action="store_true")
+    parser.add_argument(
+        "--recurrence-verdicts",
+        help="JSON file of recorded judgements about extracted invariant candidates, "
+        "keyed by observation id. A candidate without a verdict stays unverified.",
+    )
+    parser.add_argument(
+        "--invariant-verdicts",
+        help="JSON file of recorded judgements about extracted invariant candidates, keyed by "
+        "observation id. A candidate with no verdict stays unverified, so nothing is resolved "
+        "on an unexamined extraction.",
+    )
     parser.add_argument("--collect-statuses", action="store_true")
     parser.add_argument(
         "--classifications",

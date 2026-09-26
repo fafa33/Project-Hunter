@@ -1,0 +1,70 @@
+{
+  "schema_version": "hunter-full-history-coverage-manifest-v1",
+  "repository": "fafa33/Project-Hunter",
+  "initial_snapshot": {
+    "id": "0bb8154002c0d72e7bccd470175a18f4e74084d535a356fe131f3bab064024a0",
+    "captured_at": "2026-09-26T10:37:58Z",
+    "total_prs": 357
+  },
+  "final_snapshot": {
+    "id": "0bb8154002c0d72e7bccd470175a18f4e74084d535a356fe131f3bab064024a0",
+    "captured_at": "2026-09-26T10:37:58Z",
+    "total_prs": 357
+  },
+  "total_prs_in_final_scope": 357,
+  "total_statused": 357,
+  "status_counts": {
+    "CONFIRMED_DEFECT": 0,
+    "DUPLICATE_DEFECT": 6,
+    "FALSE_POSITIVE": 3,
+    "FINDING_EXTRACTED": 191,
+    "INFRA_PROVIDER_FAILURE": 0,
+    "OUT_OF_SCOPE": 0,
+    "SCANNED_NO_FINDING": 137,
+    "STYLE_OR_NON_DEFECT": 20,
+    "UNRESOLVED": 0
+  },
+  "no_finding_count": 137,
+  "extracted_finding_count": 191,
+  "confirmed_defect_count": 0,
+  "duplicate_count": 6,
+  "false_positive_count": 3,
+  "style_non_defect_count": 20,
+  "out_of_scope_count": 0,
+  "infra_provider_exclusion_count": 0,
+  "unresolved_count": 0,
+  "existing_family_mappings": {
+    "DFF-018": [
+      438
+    ],
+    "DFF-013": [
+      443,
+      444
+    ],
+    "DFF-019": [
+      443
+    ],
+    "DFF-023": [
+      450
+    ],
+    "DFF-020": [
+      466
+    ],
+    "DFF-021": [
+      466
+    ],
+    "DFF-022": [
+      468
+    ]
+  },
+  "new_family_proposals": [],
+  "catch_up_pr_count": 0,
+  "missing_status_records": [],
+  "checkpoint_summary": {
+    "batches_total": 36,
+    "batches_completed": 36,
+    "last_checkpoint": "checkpoint-0036.json"
+  },
+  "coverage_gap": 0,
+  "complete": true
+}

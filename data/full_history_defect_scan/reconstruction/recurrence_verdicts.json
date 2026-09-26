@@ -1,0 +1,438 @@
+{
+  "clusters": {
+    "candidate-admission-requires-authorized-ingress-decision": {
+      "evidence": "PR391 (4c5dd059) and PR404 (d3ca3c6126) independently rejected the same rule in different functions: a commit must be admitted only on an authorized ingress decision, and committer or signature metadata is not that proof. Fixed twice in two PRs, so this is recurrence.",
+      "family_id": "candidate-admission-requires-authorized-ingress-decision",
+      "observation_ids": [
+        "aba4d65934d6a8e1304805921272c3af70c1fa2714a5f0a2b3811f9d52343b7e",
+        "b65854bf02337229cef9b847ae4fc769a0fadb7c2e88e46c75caf0cf073c19d7"
+      ],
+      "same_invariant": true,
+      "violated_invariant": "A commit may be admitted as candidate work only on an authorized ingress decision; committer or signature metadata is not proof of one."
+    },
+    "readiness-publication-must-stay-bound-to-observed-head": {
+      "evidence": "PR238 (f76949b4) and PR258 (a7f6307) both found a readiness status left authoritative for a head the run no longer observes: PR238 because pending is published only after the dependent queries, PR258 because a mid-loop state movement retracts only the last head and leaves this run's other greens published. Same rule, two PRs, two code paths.",
+      "family_id": "readiness-publication-must-stay-bound-to-observed-head",
+      "observation_ids": [
+        "3eefc9f92bbcd6ab4c827a5cd63f3d35319118a40101a4d4b27d0cfec71e8212",
+        "8852114261ac65f64b3789c812bb887e15d1297dc8a27ccc30e529e7d9f3733f"
+      ],
+      "same_invariant": true,
+      "violated_invariant": "A published readiness status must be bound to the exact head the run observed, so a status this run published for a head it no longer observes is never left authoritative."
+    }
+  },
+  "note": "Recurrence verdicts for the confirmed population. same_invariant is stated only where the members' own evidence decides it. A cluster with no verdict stays unreviewed and its findings remain blocked from the non-recurring outcome, so nothing is resolved on an unexamined signal. Families are declared explicitly, never inferred from a shared path or similar wording.",
+  "schema_version": 1,
+  "verdicts": {
+    "code_location::.github/workflows/hunter-merge-readiness.yml::b544792caa65681289d54245411e167b0e01af45": {
+      "evidence": "PR234 ships three unrelated obligations in one commit: publish a terminal failure status before re-raising a controller exception, evaluate feedback once per run instead of on every poll, and never let scheduled reconciliation overwrite a lifecycle invalidation with an older same-SHA result. The members therefore do not state one shared violated invariant and no family is owed. Members: PR234 1ec5460c3b55, PR234 d870031011ed, PR234 e4b63cefda94.",
+      "family_id": "",
+      "same_invariant": false
+    },
+    "code_location::.github/workflows/hunter-reviewer-collector.yml::d232180e9b74d4769f5c7bfbc90b582673405bc3": {
+      "evidence": "PR476 records two separate rules corrected by the same commit: the artifact name and its consumer must derive the candidate head from the identical expression, and run validation must admit trusted default-branch pull_request_target runs as well as workflow_dispatch. The members therefore do not state one shared violated invariant and no family is owed. Members: PR476 27934a63b46c, PR476 fe0a569626fc.",
+      "family_id": "",
+      "same_invariant": false
+    },
+    "code_location::.github/workflows/hunter-reviewer-collector.yml::pull_request_target": {
+      "evidence": "PR476 admits automatic pull_request_target runs as trusted evidence and separately requires naming their artifacts from the derived candidate head; PR473 reports the absent workflow inputs. Trust admission and artifact naming are distinct rules. Members: PR476 496d7e0badc1, PR476 70389f000c5b, PR473 f47c969d535e.",
+      "family_id": "",
+      "same_invariant": false
+    },
+    "code_location::.hunter/pre-ready-hostile-review.json::verify_claims": {
+      "evidence": "Distinct rules stated by the members themselves: Refresh the review request after the final fix; Regenerate the review request after the readiness fix.",
+      "family_id": "",
+      "same_invariant": false
+    },
+    "code_location::docs/ADR/0023-supply-basis-coherence-tolerance.md::SupplyBasisSnapshot": {
+      "evidence": "Both PR119 members require the tolerance version to be persisted on the snapshot and re-validated version-aware, one in the owner's words and one in the finding's own words. Members state the same rule for one defect inside a single change, so this is not a family. Members: PR119 626d4150303d, PR119 f3cd6386dcbf.",
+      "family_id": "",
+      "same_invariant": true
+    },
+    "code_location::docs/ADR/0034-evidence-intelligence-model-adapter-provider-attempt-boundary.md::CAPABILITY_UNSUPPORTED": {
+      "evidence": "One defect closed by a single commit e4ac255 in PR300: the cluster holds the repository finding and the dispositions that recorded the same fix, not separate defects. Members: PR300 b5a87265d695, PR300 f984d0e50de4.",
+      "family_id": "",
+      "same_invariant": true
+    },
+    "code_location::docs/ADR/0034-evidence-intelligence-model-adapter-provider-attempt-boundary.md::e4ac255": {
+      "evidence": "One defect closed by a single commit e4ac255 in PR300: the cluster holds the repository finding and the dispositions that recorded the same fix, not separate defects. Members: PR300 0bcc03b3b930, PR300 5575041ae40f, PR300 a71482b1f247.",
+      "family_id": "",
+      "same_invariant": true
+    },
+    "code_location::docs/AGENT_WORKFLOW_STATE_ENFORCEMENT.md::hunter_workflow_state": {
+      "evidence": "One defect closed by a single commit 51bf119 in PR310: the cluster holds the repository finding and the dispositions that recorded the same fix, not separate defects. Members: PR310 6ee3d5c97a72, PR310 e8b06ba050b6.",
+      "family_id": "",
+      "same_invariant": true
+    },
+    "code_location::docs/AI_DEVELOPMENT_PLAYBOOK.md::DEVELOPMENT_GOVERNANCE.md": {
+      "evidence": "PR259 corrects two unrelated documentation obligations in 78fd70e: finding a construct in one place does not discharge finding its other instances in the same change, and a rule that recommendations must not delay merge constrains the reviewer only and may not be restated as a prohibition on the implementer or owner. The members therefore do not state one shared violated invariant and no family is owed. Members: PR259 4c33ef8a1c13, PR259 b38a0730ef08.",
+      "family_id": "",
+      "same_invariant": false
+    },
+    "code_location::docs/AI_DEVELOPMENT_PLAYBOOK.md::Proposed": {
+      "evidence": "PR259 records two different rules: a review-report rule must not impose a mandatory issue-creation disposition on every non-blocking category (03fe495), and a Proposed ADR or an unlisted document may not be treated as binding architectural authority (59b99b2). The members therefore do not state one shared violated invariant and no family is owed. Members: PR259 54d8786b3c0a, PR259 60052b626e28, PR259 c8e9665485b4.",
+      "family_id": "",
+      "same_invariant": false
+    },
+    "code_location::docs/AUDITS/POST_PR64_COMMITTEE_AUTHORITY_AUDIT.md::CommitteeInputSet.alerts": {
+      "evidence": "Both PR65 members state that the decision-changing alerts input must pass the same resolver, cutoff, identity, and lineage validation as every other scoring input. Members state the same rule for one defect inside a single change, so this is not a family. Members: PR65 7777a036c5a7, PR65 b64843a1e9a1.",
+      "family_id": "",
+      "same_invariant": true
+    },
+    "code_location::docs/CODE_WRITE_POLICY.json::ack_timeout_seconds": {
+      "evidence": "One defect closed by a single commit f99ff826e865 in PR473: the cluster holds the repository finding and the dispositions that recorded the same fix, not separate defects. Members: PR473 2ed1038eac28, PR473 419b06a45c2a.",
+      "family_id": "",
+      "same_invariant": true
+    },
+    "code_location::docs/IMPLEMENTATION_REPORTS/v3.6.0-milestone-1-entity-registration.md::c7be300": {
+      "evidence": "PR110 records two independent obligations: a report must not mark a scope criterion met when a required field was deliberately omitted and a supply basis must satisfy the coherence invariant, and a correction must be recorded by append-only supersession that actually binds the claimed rule field. The members therefore do not state one shared violated invariant and no family is owed. Members: PR110 76533597f9d5, PR110 7c6e869246b0.",
+      "family_id": "",
+      "same_invariant": false
+    },
+    "code_location::docs/MERGE_READINESS_GATE.md::DEVELOPMENT_GOVERNANCE.md": {
+      "evidence": "One defect closed by a single commit 2fab2e0 in PR111: the cluster holds the repository finding and the dispositions that recorded the same fix, not separate defects. Members: PR111 70a65dc94e92, PR111 90031b2b37b2.",
+      "family_id": "",
+      "same_invariant": true
+    },
+    "code_location::docs/SOURCE_HANDLING_AUTHORITY_DESIGN_CONTRACT.md::e997f66dc42fa28f0143d674d64d55ea08e495e4": {
+      "evidence": "The four PR268 members are four separate contract requirements root-fixed on the same head: publication authorization must bind kind, subject, scope, and a recomputed payload digest, publication must be an atomic compare-and-append against the expected current head id, lifecycle dispositions need an explicit operation-specific order, and authorization rule history must be immutable and versioned with strict-known selection. The members therefore do not state one shared violated invariant and no family is owed. Members: PR268 244036edcaf6, PR268 63d298f5252c, PR268 dcf4e9087f55, PR268 e1ae541e161a.",
+      "family_id": "",
+      "same_invariant": false
+    },
+    "code_location::docs/architecture-records/ADPR-0009-evidence-intelligence-model-adapter.md::ModelAttemptRecord": {
+      "evidence": "Both PR288 members require a durable immutable pre-send attempt record with the terminal state in a separate append-only outcome record, and both treat an uncertain provider call as DELIVERY_UNKNOWN/OUTCOME_UNKNOWN with retry blocked until reconciliation. Members state the same rule for one defect inside a single change, so this is not a family. Members: PR288 2b18f15418a3, PR288 70dc415ccb1d.",
+      "family_id": "",
+      "same_invariant": true
+    },
+    "code_location::docs/architecture-records/ADPR-0009-evidence-intelligence-model-adapter.md::ProviderRequestArtifact": {
+      "evidence": "Distinct rules stated by the members themselves: Define an atomic Source Handling handoff before ADR readiness.; Keep durable request-artifact ownership in the Model Adapter..",
+      "family_id": "",
+      "same_invariant": false
+    },
+    "code_location::docs/architecture-records/ADPR-0010-evidence-intelligence-response-validator.md::correction_cutoff": {
+      "evidence": "Distinct rules stated by the members themselves: Allocate correction cutoffs at the trusted boundary; Check predecessor time before claiming correction generation; Persist the base record's durable-acceptance coordinate.",
+      "family_id": "",
+      "same_invariant": false
+    },
+    "code_location::docs/architecture-records/ADPR-0010-evidence-intelligence-response-validator.md::validation_recorded_at": {
+      "evidence": "The PR325 members state two different obligations corrected by different commits: base cutoff must be enforced before durable acceptance, and base terminal append must atomically stamp a persistence-owned validation_recorded_at whose caller, validator, and attestation values are non-authoritative, with a mechanically defined predecessor coordinate. The members therefore do not state one shared violated invariant and no family is owed. Members: PR325 4278d28539dc, PR325 6f5e973e286a.",
+      "family_id": "",
+      "same_invariant": false
+    },
+    "code_location::docs/architecture-reviews/ADR-0032-independent-architecture-review.md::READY_FOR_ADR": {
+      "evidence": "One defect closed by a single commit 2b1868462382 in PR248: the cluster holds the repository finding and the dispositions that recorded the same fix, not separate defects. Members: PR248 9723f99835e6, PR248 b5cf963b510a.",
+      "family_id": "",
+      "same_invariant": true
+    },
+    "code_location::docs/audits/post-pr82-committee-authority-audit.md::test_committee_authority_final_e2e": {
+      "evidence": "Distinct rules stated by the members themselves: Add a post-evaluation persistence failure proof; Block closure until rank reaches dashboard.",
+      "family_id": "",
+      "same_invariant": false
+    },
+    "code_location::railway.toml::opencode_provider_runtime": {
+      "evidence": "One defect closed by a single commit 5310ef0 in PR454: the cluster holds the repository finding and the dispositions that recorded the same fix, not separate defects. Members: PR454 ba23770a175c, PR454 fa5db2f17539.",
+      "family_id": "",
+      "same_invariant": true
+    },
+    "code_location::scripts/hunter_collect_sonar_observations.py::e715215c22e9a47beeacd16710ab12c5f2c1ade5": {
+      "evidence": "PR495 corrects two independent collector rules in one commit: a capped collection must verify the item cap and page/total consistency, and an exact-head collection must re-verify the analyzed commit SHA after the issue search to close the TOCTOU window. The members therefore do not state one shared violated invariant and no family is owed. Members: PR495 547aba3e8816, PR495 918dc7dceb69.",
+      "family_id": "",
+      "same_invariant": false
+    },
+    "code_location::scripts/hunter_defect_prevention_preflight.py::enforce_pre_push": {
+      "evidence": "Both PR482 members state the same rule: a structural pre-push guard must verify the executable call edges of the enforcement chain rather than the mere presence of function definitions, and the owner's b8dd555 record of those edges is the fix for the finding's own wording. Members state the same rule for one defect inside a single change, so this is not a family. Members: PR482 32d07e290237, PR482 c76228eee8bb.",
+      "family_id": "",
+      "same_invariant": true
+    },
+    "code_location::scripts/hunter_draft_promotion_signal.py::issue_comment": {
+      "evidence": "One defect closed by a single commit 085cb17d323a in PR275: the cluster holds the repository finding and the dispositions that recorded the same fix, not separate defects. Members: PR275 318cc03418b6, PR275 746d40e21d26.",
+      "family_id": "",
+      "same_invariant": true
+    },
+    "code_location::scripts/hunter_governance_preflight.py::generate_pr_body": {
+      "evidence": "All three PR277 members state that a body generator described as consuming the canonical pull-request template must transform that template text and preserve its checklist and instructions instead of emitting a hard-coded body. Members state the same rule for one defect inside a single change, so this is not a family. Members: PR277 18ae0b01e8f9, PR277 3ece5d028af4, PR277 cef7c91e587f.",
+      "family_id": "",
+      "same_invariant": true
+    },
+    "code_location::scripts/hunter_governance_preflight.py::validate_pr_body": {
+      "evidence": "All three PR277 members state that the canonical PR body validator must require exactly one of every canonical template section, in canonical order, before matrix, readiness, and trace validation. Members state the same rule for one defect inside a single change, so this is not a family. Members: PR277 96b439274b74, PR277 b2aad10e903b, PR277 e0ad06d3f241.",
+      "family_id": "",
+      "same_invariant": true
+    },
+    "code_location::scripts/hunter_governance_review/bootstrap_external_review_469.py::MISSING_REVIEW_AUTHORITY": {
+      "evidence": "Distinct rules stated by the members themselves: Bind controller evidence to the checked-out commit; Validate the controller contents response.",
+      "family_id": "",
+      "same_invariant": false
+    },
+    "code_location::scripts/hunter_governance_review/bootstrap_external_review_469.py::candidate_mode": {
+      "evidence": "All three PR476 members state that candidate_mode must check trusted controller existence before installing synthetic authority and fail closed when that evidence is unavailable, and the P1 member is the finding that stated the rule. Members state the same rule for one defect inside a single change, so this is not a family. Members: PR476 6d8892054ccb, PR476 c56e2819e925, PR476 fbf962379920.",
+      "family_id": "",
+      "same_invariant": true
+    },
+    "code_location::scripts/hunter_governance_review/bootstrap_external_review_469.py::test_pr473_trusted_bridge_bootstrap": {
+      "evidence": "The four PR476 members corrected by 860aa7d35e76 are four different rules that happen to share a test file: the latest exact-head bot review must be selected before clearance is evaluated, the bootstrap must require the exact authenticated REST bot identity, and the controller response must carry an explicit string path equal to the requested path. The fourth member restates the bot-identity rule from the parallel review thread. The members therefore do not state one shared violated invariant and no family is owed. Members: PR476 6cdbef59158f, PR476 ab185af8209b, PR476 ca6531439bb1, PR476 d2f6a13654be.",
+      "family_id": "",
+      "same_invariant": false
+    },
+    "code_location::scripts/hunter_governance_review/contracts.py::to_dict": {
+      "evidence": "Both PR275 members state that classification_complete must serialize as a real JSON boolean rather than the strings \"true\"/\"false\", with regression coverage asserting the typing. Members state the same rule for one defect inside a single change, so this is not a family. Members: PR275 439e47f5bf18, PR275 522582c76860.",
+      "family_id": "",
+      "same_invariant": true
+    },
+    "code_location::scripts/hunter_governance_review_v2.py::COMMENTED": {
+      "evidence": "One defect closed by a single commit 3c959eaa5429 in PR480: the cluster holds the repository finding and the dispositions that recorded the same fix, not separate defects. Members: PR480 6352ca25faf0, PR480 d64096185151.",
+      "family_id": "",
+      "same_invariant": true
+    },
+    "code_location::scripts/hunter_governance_review_v2.py::OpenCode": {
+      "evidence": "One defect closed by a single commit 8039523a4baa in PR469: the cluster holds the repository finding and the dispositions that recorded the same fix, not separate defects. Members: PR469 5f34b9041149, PR469 863c7ca0a443.",
+      "family_id": "",
+      "same_invariant": true
+    },
+    "code_location::scripts/hunter_governance_review_v2.py::bypass_actors": {
+      "evidence": "One defect closed by a single commit 24915dfd36a4 in PR371: the cluster holds the repository finding and the dispositions that recorded the same fix, not separate defects. Members: PR371 2d864a7bea88, PR371 8b63a6b9d3cd.",
+      "family_id": "",
+      "same_invariant": true
+    },
+    "code_location::scripts/hunter_governance_review_v2.py::candidate_admission": {
+      "evidence": "PR391 (4c5dd059) and PR404 (d3ca3c6126) independently rejected the same rule in different functions: a commit must be admitted only on an authorized ingress decision, and committer or signature metadata is not that proof. Fixed twice in two PRs, so this is recurrence. Members: PR391 aba4d65934d6, PR404 b65854bf0233.",
+      "family_id": "candidate-admission-requires-authorized-ingress-decision",
+      "same_invariant": true
+    },
+    "code_location::scripts/hunter_governance_review_v2.py::dc3b5b2": {
+      "evidence": "One defect closed by a single commit dc3b5b2 in PR410: the cluster holds the repository finding and the dispositions that recorded the same fix, not separate defects. Members: PR410 7aa6e54a060a, PR410 e7eb8412faac.",
+      "family_id": "",
+      "same_invariant": true
+    },
+    "code_location::scripts/hunter_governance_review_v2.py::pending": {
+      "evidence": "PR413 reconciles admission after a trusted upgrade completes; PR283 concerns candidate admission being bound to a required merge status. Different rules that merely share a status name. Members: PR413 232e94fffbc4, PR283 8562f91d9eef.",
+      "family_id": "",
+      "same_invariant": false
+    },
+    "code_location::scripts/hunter_governance_review_v2.py::trigger_claims_id": {
+      "evidence": "Both PR473 members state that native review adoption must require the trusted trigger's claims id to equal the current claims id, otherwise a clear review produced for an older request can be assigned the current claims id and become authority. Members state the same rule for one defect inside a single change, so this is not a family. Members: PR473 3cead9977020, PR473 b6b58cd3223a.",
+      "family_id": "",
+      "same_invariant": true
+    },
+    "code_location::scripts/hunter_issue_agent_ingress.py::ValueError": {
+      "evidence": "Both PR501 members state that an overlong Content-Length must be rejected by an explicit bounded decimal parse shared with the upstream-response path, so the handler answers instead of raising past Python's integer-string conversion limit. Members state the same rule for one defect inside a single change, so this is not a family. Members: PR501 0b8677a941db, PR501 6d158a4ae258.",
+      "family_id": "",
+      "same_invariant": true
+    },
+    "code_location::scripts/hunter_issue_agent_issuer.py::IssuerServer": {
+      "evidence": "One defect closed by a single commit 1ba5536afa13 in PR466: the cluster holds the repository finding and the dispositions that recorded the same fix, not separate defects. Members: PR466 0f388286acf3, PR466 dd902a29b957.",
+      "family_id": "",
+      "same_invariant": true
+    },
+    "code_location::scripts/hunter_merge_readiness.py::a7f6307": {
+      "evidence": "The PR258 members state two different mechanisms of the same write window: a run that withdraws a green must retract every green that run published rather than only the head it last observed, and a guard must not be decided from a value computed before the write it protects. The cross-PR head-binding recurrence over these PR238 and PR258 findings is already declared as readiness-publication-must-stay-bound-to-observed-head, so no new family is opened here. The members therefore do not state one shared violated invariant and no family is owed. Members: PR258 0e20cbf24c55, PR258 744e9b6240b4.",
+      "family_id": "",
+      "same_invariant": false
+    },
+    "code_location::scripts/hunter_merge_readiness.py::c303507": {
+      "evidence": "Three PR258 members, of which two state one rule and one states another: a terminal readiness write must be head-exact at the moment of the write and pair the status with the head from the same observation, while a commit status keyed by (SHA, context) is shared by every pull request on that head and so an ambiguous shared head is a correctness defect, not a display ambiguity. The members therefore do not state one shared violated invariant and no family is owed. Members: PR258 056d236b308d, PR258 8dc749217a5b, PR258 bfc06d73ecc3.",
+      "family_id": "",
+      "same_invariant": false
+    },
+    "code_location::scripts/hunter_merge_readiness.py::c9eba10": {
+      "evidence": "Four PR258 obligations corrected around c9eba10 are unrelated to each other: a per-candidate state read must not paginate the whole open pull-request list, sibling detection must be scoped to the same status context the controller writes, every route to publishing success must pass the same admission check, and a documented guarantee must not be stronger than the mechanism implementing it. The members therefore do not state one shared violated invariant and no family is owed. Members: PR258 46f509ad0f76, PR258 571f88e24642, PR258 7326171f9dc1, PR258 e800f363a1ea.",
+      "family_id": "",
+      "same_invariant": false
+    },
+    "code_location::scripts/hunter_merge_readiness.py::eee5d88": {
+      "evidence": "The PR258 members state two different obligations: controller-upgrade admission must consider renamed paths so a controller-owned path renamed away from itself cannot escape the gate, and a freshness check that releases its lock before the caller publishes does not protect the write. The members therefore do not state one shared violated invariant and no family is owed. Members: PR258 3f3ea3bd74ba, PR258 c3020e71ba58.",
+      "family_id": "",
+      "same_invariant": false
+    },
+    "code_location::scripts/hunter_merge_readiness.py::f76949b41bc685121353f2dcd30fa81753ef9aa6": {
+      "evidence": "The PR238 members state two different obligations: a Governance result that started before the latest invalidating PR event must be rejected even at the same SHA, and a run must publish a non-green status on the observed head before lengthy dependent queries so an interruption cannot leave a stale green authoritative. The members therefore do not state one shared violated invariant and no family is owed. Members: PR238 301363aa8b8c, PR238 c2630afa3ae6.",
+      "family_id": "",
+      "same_invariant": false
+    },
+    "code_location::scripts/hunter_merge_readiness.py::greened_heads": {
+      "evidence": "One defect closed by a single commit a7f6307 in PR258: the cluster holds the repository finding and the dispositions that recorded the same fix, not separate defects. Members: PR258 5d3f41164f88, PR258 f979abcb6959.",
+      "family_id": "",
+      "same_invariant": true
+    },
+    "code_location::scripts/hunter_merge_readiness.py::pending": {
+      "evidence": "PR238 (f76949b4) and PR258 (a7f6307) both found a readiness status left authoritative for a head the run no longer observes: PR238 because pending is published only after the dependent queries, PR258 because a mid-loop state movement retracts only the last head and leaves this run's other greens published. Same rule, two PRs, two code paths. Members: PR238 3eefc9f92bbc, PR258 8852114261ac.",
+      "family_id": "readiness-publication-must-stay-bound-to-observed-head",
+      "same_invariant": true
+    },
+    "code_location::scripts/hunter_merge_readiness.py::subprocess.TimeoutExpired": {
+      "evidence": "Both PR277 members state that the trusted preflight subprocess must run under an explicit timeout, catch subprocess.TimeoutExpired fail-closed, keep diagnostics in the logs, and return only a fixed status-safe description. Members state the same rule for one defect inside a single change, so this is not a family. Members: PR277 1be463dd6f18, PR277 651edd4520f5.",
+      "family_id": "",
+      "same_invariant": true
+    },
+    "code_location::scripts/hunter_merge_readiness.py::trusted_governance_preflight_error": {
+      "evidence": "Three PR277 members state one rule, that raw subprocess stdout/stderr must never reach a public commit status description, and the fourth states a different rule, that the external CLI preflight needs an explicit timeout. The timeout rule is already judged on its own in the subprocess.TimeoutExpired cluster. The members therefore do not state one shared violated invariant and no family is owed. Members: PR277 4fdb2d3f7f44, PR277 9cf60c8c1482, PR277 aaafd8ced0fe, PR277 add5459e2819.",
+      "family_id": "",
+      "same_invariant": false
+    },
+    "code_location::scripts/hunter_merge_readiness.py::workflow_run": {
+      "evidence": "Both PR257 members state that a readiness verdict from a shared head must reach only the pull request that run actually names and must fail closed unless the run metadata identifies exactly one, never broadcasting to every PR on the head. Members state the same rule for one defect inside a single change, so this is not a family. Members: PR257 47353e4690c4, PR257 498dc444680b.",
+      "family_id": "",
+      "same_invariant": true
+    },
+    "code_location::scripts/hunter_merge_readiness_entrypoint.py::get_latest_invalidation_time": {
+      "evidence": "Both PR246 members state that governance-freshness filtering must exempt only the allowlisted bot status comments and must keep every human comment, unknown bot, review, and inline review comment freshness-invalidating. Members state the same rule for one defect inside a single change, so this is not a family. Members: PR246 928722cb99ad, PR246 c124741b4ec0.",
+      "family_id": "",
+      "same_invariant": true
+    },
+    "code_location::scripts/hunter_merge_readiness_v2.py::CodeQL": {
+      "evidence": "The PR283 members do not agree on a rule and were corrected in opposite directions: ac1a20710083 adds CodeQL to REQUIRED_CHECKS with a workflow_run bridge as an enforced fail-closed prerequisite, while 89ba67e removes the nonexistent CodeQL entry because a required check must name a job that exists. An ambiguous cluster like this is not a shared invariant. The members therefore do not state one shared violated invariant and no family is owed. Members: PR283 3de92361d1d5, PR283 9f8824607c90, PR283 b76f1eb8c564.",
+      "family_id": "",
+      "same_invariant": false
+    },
+    "code_location::scripts/hunter_merge_readiness_v2.py::review_orchestration_state": {
+      "evidence": "Both PR473 members state one rule: readiness must consume explicit orchestration state and detail read from the trusted exact-head cycle, and the finding's own evidence is that the new call had no implementation, so every non-terminal result degraded to generic pending in the exception handler. Members state the same rule for one defect inside a single change, so this is not a family. Members: PR473 9120cc515fe0, PR473 f0a42c72312b.",
+      "family_id": "",
+      "same_invariant": true
+    },
+    "code_location::scripts/hunter_opencode_provider.py::OpenCode": {
+      "evidence": "One defect closed by a single commit 96c02b1 in PR447: the cluster holds the repository finding and the dispositions that recorded the same fix, not separate defects. Members: PR447 7bff70a13c6f, PR447 a23f249d03f7, PR447 a641e4d84747, PR447 bf876a14b351.",
+      "family_id": "",
+      "same_invariant": true
+    },
+    "code_location::scripts/hunter_review_orchestrator.py::started_at": {
+      "evidence": "Both PR473 members state that trigger identity and a real UTC started_at must be durably published before workflow dispatch, so an accepted dispatch followed by a process or status failure is recovered through correlated collector liveness instead of being treated as never dispatched. Members state the same rule for one defect inside a single change, so this is not a family. Members: PR473 02eaabb5fdc4, PR473 353482f789c8.",
+      "family_id": "",
+      "same_invariant": true
+    },
+    "code_location::scripts/hunter_review_orchestrator.py::trigger_id": {
+      "evidence": "All three PR482 members state one rule: prerequisite publication must never create or erase a false collector dispatch identity, whether by overwriting an active cycle with trigger_id=None, by failing to preserve trigger_id, started_at, and remediation generation, or by minting an unrelated reconcile run id that the liveness grace reads as proof of dispatch. Members state the same rule for one defect inside a single change, so this is not a family. Members: PR482 2148b74bc7bd, PR482 456dad32acf7, PR482 6ffbe3f16e0a.",
+      "family_id": "",
+      "same_invariant": true
+    },
+    "code_location::scripts/hunter_reviewer_collector.py::backend.trigger": {
+      "evidence": "Both PR482 members state one rule: a zero trigger identity must unambiguously mean refusal before durable trigger creation, and the isolation handler must not record later provider or result failures with id 0 that non-workflow verification or load_exhaustion would accept. Members state the same rule for one defect inside a single change, so this is not a family. Members: PR482 0f7734ed03af, PR482 d6405f9daa35.",
+      "family_id": "",
+      "same_invariant": true
+    },
+    "code_location::scripts/hunter_reviewer_collector.py::c2083d0": {
+      "evidence": "One defect closed by a single commit 84b139acfd42 in PR476: the cluster holds the repository finding and the dispositions that recorded the same fix, not separate defects. Members: PR476 dbb044049151, PR476 eec3b4b6ad49.",
+      "family_id": "",
+      "same_invariant": true
+    },
+    "code_location::scripts/hunter_reviewer_collector.py::load_exhaustion": {
+      "evidence": "The two members are from different PRs and state different rules: PR476 requires a canonical hunter.reviewer-trigger.v1 payload and parser that consumers verify instead of the executable GitHub-comment trigger format, and PR480 requires a reviewer-request unavailability to be persisted as trusted revalidatable exact-head-bound evidence. A shared function name is not a shared invariant, so no cross-PR family is declared. The members therefore do not state one shared violated invariant and no family is owed. Members: PR476 36abea45b5fc, PR480 9643a7aa2123.",
+      "family_id": "",
+      "same_invariant": false
+    },
+    "code_location::scripts/hunter_workflow_state.py::allowed_paths": {
+      "evidence": "Distinct rules stated by the members themselves: Fail closed when the PR file listing is truncated; Reject scalar path-list values; Reject string values for `allowed_paths` and `prohibited_paths`..",
+      "family_id": "",
+      "same_invariant": false
+    },
+    "code_location::src/hunter/asymmetry/command.py::chain": {
+      "evidence": "Both PR188 members state that an optional field supplied as JSON null must be treated as absent and never coerced to a non-empty placeholder, so two nulls cannot satisfy the paired-presence invariant. Members state the same rule for one defect inside a single change, so this is not a family. Members: PR188 5a4a13633998, PR188 8a3b4f051dfa.",
+      "family_id": "",
+      "same_invariant": true
+    },
+    "code_location::src/hunter/asymmetry/command.py::formula_version": {
+      "evidence": "Both PR188 members state that JSON null must never be stringified into a persisted field: it must fall back to the intended default while any other non-string value is rejected outright, because a literal \"None\" persists an unsupported formula_version or trips the supersedes_record_id pairing check. Members state the same rule for one defect inside a single change, so this is not a family. Members: PR188 71065cd35842, PR188 8450e27fd37f.",
+      "family_id": "",
+      "same_invariant": true
+    },
+    "code_location::src/hunter/automation/agent_fallback.py::OperationalAgentFallbackRuntime": {
+      "evidence": "One defect closed by a single commit f93fbecc8a18 in PR388: the cluster holds the repository finding and the dispositions that recorded the same fix, not separate defects. Members: PR388 74ab304fbee1, PR388 9569615b64ce.",
+      "family_id": "",
+      "same_invariant": true
+    },
+    "code_location::src/hunter/automation/n8n.py::c8c759d4fa559995ac40a94cb47c2b926cf3676d": {
+      "evidence": "One PR363 member requires the only network-capable path to demand an exact signed envelope with issuer signature and lineage verified and no permit mint, while the other three require bounded percent decoding of the endpoint hostname and path to a fixed point. Authority at the boundary and normalization of the components are different rules. The members therefore do not state one shared violated invariant and no family is owed. Members: PR363 6c56a5165ded, PR363 764c37e30bce, PR363 c8d9a2b9f4e5, PR363 fe3e266be784.",
+      "family_id": "",
+      "same_invariant": false
+    },
+    "code_location::src/hunter/automation/n8n.py::http.client.IncompleteRead": {
+      "evidence": "One defect closed by a single commit 03ef53af in PR360: the cluster holds the repository finding and the dispositions that recorded the same fix, not separate defects. Members: PR360 0108fdf6251a, PR360 98e5e6ca5e5f, PR360 f80a32374c00.",
+      "family_id": "",
+      "same_invariant": true
+    },
+    "code_location::src/hunter/automation/n8n.py::receipt_id": {
+      "evidence": "PR360 rejected reflected endpoint components in receipt identifiers and PR363 required percent-decoding to reach a fixed point before any comparison. Reflection and normalisation are separate rules, so no shared invariant is demonstrated across the two PRs. Members: PR360 1e3083e4256f, PR360 364f6ba6e90b, PR363 3966f8f3515e, PR360 e29d4d1be5e2.",
+      "family_id": "",
+      "same_invariant": false
+    },
+    "code_location::src/hunter/automation/opencode_provider_runtime.py::OpenCode": {
+      "evidence": "Distinct rules stated by the members themselves: Delay branch sync until validation succeeds; Forward the OpenCode adapter's required environment.",
+      "family_id": "",
+      "same_invariant": false
+    },
+    "code_location::src/hunter/evidence_intelligence/model_adapter.py::response_capture_identity": {
+      "evidence": "One defect closed by a single commit 50999b2ce9c2 in PR335: the cluster holds the repository finding and the dispositions that recorded the same fix, not separate defects. Members: PR335 a6766cda712a, PR335 e08f130fbe98.",
+      "family_id": "",
+      "same_invariant": true
+    },
+    "code_location::src/hunter/evidence_intelligence/pre_model_persistence.py::f5eb488cd64913eace6f89f3459927e13529b9eb": {
+      "evidence": "The four PR256 members record four independent obligations corrected by one commit: an AVAILABLE reconstruction with missing prompt bytes is bundle corruption, a build that records exact-prompt retention as prohibited must not leave that prompt regenerable, the first persisted bundle must be validated against its own declared lineage, and the canonical orchestration path must persist its build durably. The members therefore do not state one shared violated invariant and no family is owed. Members: PR256 311f4e40a4a0, PR256 41a7e85210b4, PR256 75f4e7885946, PR256 aacc4679e464.",
+      "family_id": "",
+      "same_invariant": false
+    },
+    "code_location::src/hunter/evidence_intelligence/pre_model_persistence.py::orchestrate_evidence_pre_model": {
+      "evidence": "Distinct rules stated by the members themselves: Persist builds from the repository-backed orchestration path; The bound is inclusive: a build recorded at exactly the instant its evidence became valid .",
+      "family_id": "",
+      "same_invariant": false
+    },
+    "code_location::src/hunter/evidence_intelligence/response_validator.py::Decimal": {
+      "evidence": "The PR335 members state two different obligations: every JSON fractional or exponent number must be parsed as a lossless Decimal in both parsers, and the JSON type matcher must accept a finite integral Decimal as an integer while still rejecting booleans and non-integral values. The members therefore do not state one shared violated invariant and no family is owed. Members: PR335 b24b49f62d1d, PR335 fec2b862e2be.",
+      "family_id": "",
+      "same_invariant": false
+    },
+    "code_location::src/hunter/evidence_intelligence/response_validator.py::_is_non_negative_json_integer": {
+      "evidence": "The PR335 members state two different obligations: the JSON integer predicate must accept a finite non-negative integral Decimal so schema size keywords written as 1.0 validate, and Decimal size bounds must be compared without converting them to int. The members therefore do not state one shared violated invariant and no family is owed. Members: PR335 11db34ec6c69, PR335 b75c42e06b47.",
+      "family_id": "",
+      "same_invariant": false
+    },
+    "code_location::src/hunter/evidence_intelligence/response_validator.py::const": {
+      "evidence": "One defect closed by a single commit 0ae2a18 in PR335: the cluster holds the repository finding and the dispositions that recorded the same fix, not separate defects. Members: PR335 00b6dcaffc12, PR335 9cbfa900bb83.",
+      "family_id": "",
+      "same_invariant": true
+    },
+    "code_location::src/hunter/evidence_intelligence/response_validator.py::parse_constant": {
+      "evidence": "The PR335 members state two different obligations: parsing must preserve distinct large JSON numbers, and parsing must reject Python's non-standard NaN and Infinity constants in both the provider-response and requested-output-contract parsers. The members therefore do not state one shared violated invariant and no family is owed. Members: PR335 0c90cce01974, PR335 409b3e026745.",
+      "family_id": "",
+      "same_invariant": false
+    },
+    "code_location::src/hunter/evidence_intelligence/response_validator_corrections.py::correction_recorded_at": {
+      "evidence": "One defect closed by a single commit 874740f4cf61 in PR347: the cluster holds the repository finding and the dispositions that recorded the same fix, not separate defects. Members: PR347 054828095b95, PR347 6f409431f40b, PR347 d6d8fc6e9aaa.",
+      "family_id": "",
+      "same_invariant": true
+    },
+    "code_location::src/hunter/evidence_intelligence/response_validator_persistence.py::applicability_key": {
+      "evidence": "One defect closed by a single commit 024d409243bc in PR333: the cluster holds the repository finding and the dispositions that recorded the same fix, not separate defects. Members: PR333 1c717dfe3d29, PR333 93937e74641a.",
+      "family_id": "",
+      "same_invariant": true
+    },
+    "code_location::src/hunter/evidence_intelligence/smart_prompt_transport.py::c8c759d4fa559995ac40a94cb47c2b926cf3676d": {
+      "evidence": "Both PR363 members state that the dispatch permit type and its public mint path must be removed entirely and that delivery must require the exact signed envelope with matching payload lineage before any network request. Members state the same rule for one defect inside a single change, so this is not a family. Members: PR363 7279e145f61b, PR363 7ad05c7753df.",
+      "family_id": "",
+      "same_invariant": true
+    },
+    "code_location::src/hunter/evidence_intelligence/transient_worker.py::AuthorityStore": {
+      "evidence": "One defect closed by a single commit 4271c6b0f6a5 in PR335: the cluster holds the repository finding and the dispositions that recorded the same fix, not separate defects. Members: PR335 37dbb353092d, PR335 d716359d9551.",
+      "family_id": "",
+      "same_invariant": true
+    },
+    "code_location::src/hunter/governance_cutover/authority.py::rollback_hold": {
+      "evidence": "One defect closed by a single commit cd1f16e in PR485: the cluster holds the repository finding and the dispositions that recorded the same fix, not separate defects. Members: PR485 88b8058f6cc6, PR485 94d030fec34b.",
+      "family_id": "",
+      "same_invariant": true
+    },
+    "code_location::src/hunter/mispricing/command.py::status": {
+      "evidence": "Both PR184 members state that a read-only status query must not create or migrate the persistence database as a side effect. Members state the same rule for one defect inside a single change, so this is not a family. Members: PR184 0f9bacd48a72, PR184 cede15f422d0.",
+      "family_id": "",
+      "same_invariant": true
+    },
+    "code_location::src/hunter/value_capture/repository.py::logical_id": {
+      "evidence": "One defect closed by a single commit 9c61b5c in PR102: the cluster holds the repository finding and the dispositions that recorded the same fix, not separate defects. Members: PR102 f8de54b7d63a, PR102 febeeae79c4a.",
+      "family_id": "",
+      "same_invariant": true
+    },
+    "invariant_wording::an available reconstruction whose persisted prompt bytes are missing or empty must fail closed as persisted bundle corruption rather than silently downgrading to unavailable": {
+      "evidence": "Both PR256 members record the identical rule that an AVAILABLE reconstruction with missing or empty persisted prompt bytes must fail closed as bundle corruption, corrected by the same commit f5eb488cd649. Members state the same rule for one defect inside a single change, so this is not a family. Members: PR256 311f4e40a4a0, PR256 3695cd79caaa.",
+      "family_id": "",
+      "same_invariant": true
+    }
+  }
+}

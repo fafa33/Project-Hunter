@@ -1102,3 +1102,285 @@ def test_worker_never_sends_mutations(tmp_path: Path) -> None:
     mutations = [method for _, method in transport.calls if method != "GET"]
     assert mutations == []
     assert transport.calls, "worker should have issued GET reads"
+
+
+# ---------------------------------------------------------------------------
+# 18. Scanner authentication seam: global vs repository-scoped request scope
+#
+# The scanner used to verify its token by asking the repository-scoped
+# governed seam for "rate_limit", which addresses
+# /repos/{repository}/rate_limit. That sub-resource does not exist, so GitHub
+# answers a permanent 404 and a valid token is reported as if it were
+# unauthorized. These tests pin both scopes so the two cannot be conflated
+# again, and pin that the global seam keeps the governed failure
+# classification and fails closed.
+# ---------------------------------------------------------------------------
+
+
+def _governed_modules() -> tuple[Any, Any]:
+    import hunter_github_transport as gh_transport
+    import hunter_governance_review_v2 as governance
+
+    return governance, gh_transport
+
+
+def _rate_limit_payload(remaining: int = 4999, limit: int = 5000) -> dict[str, Any]:
+    return {"resources": {"core": {"remaining": remaining, "limit": limit}}}
+
+
+def test_auth_verification_uses_global_rate_limit_endpoint(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Authentication must address GitHub's global /rate_limit, not a repo sub-resource."""
+    governance, _ = _governed_modules()
+    global_calls: list[tuple[Any, ...]] = []
+    repository_calls: list[tuple[Any, ...]] = []
+
+    def global_stub(*args: Any) -> Any:
+        global_calls.append(args)
+        return _rate_limit_payload()
+
+    def repository_stub(*args: Any) -> Any:
+        repository_calls.append(args)
+        return None
+
+    monkeypatch.setattr(governance, "request_global_json", global_stub)
+    monkeypatch.setattr(governance, "request_json", repository_stub)
+
+    cli._verify_authentication(cli._global_request(), REPO, "tok")
+
+    assert global_calls == [("tok", "GET", "rate_limit")]
+    assert repository_calls == [], "authentication must not use the repository-scoped seam"
+
+
+def test_global_seam_addresses_global_url_through_governed_transport(monkeypatch: pytest.MonkeyPatch) -> None:
+    """The global seam still crosses transport.request_rest_json, with the global URL."""
+    governance, _ = _governed_modules()
+    seen: list[dict[str, Any]] = []
+
+    def stub(**kwargs: Any) -> Any:
+        seen.append(kwargs)
+        return _rate_limit_payload()
+
+    monkeypatch.setattr(governance.transport, "request_rest_json", stub)
+
+    governance.request_global_json("tok", "GET", "rate_limit")
+
+    assert len(seen) == 1
+    assert seen[0]["url"] == "https://api.github.com/rate_limit"
+    assert seen[0]["method"] == "GET"
+    assert seen[0]["token"] == "tok"
+    assert seen[0]["data"] is None
+    assert seen[0]["what"] == "GET rate_limit"
+
+
+def test_repository_scoped_request_behavior_is_unchanged(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Repository-scoped paths still resolve under /repos/{repository}."""
+    governance, _ = _governed_modules()
+    seen: list[dict[str, Any]] = []
+
+    def repo_stub(**kwargs: Any) -> Any:
+        seen.append(kwargs)
+        return {"owner": {"login": "owner-1"}}
+
+    monkeypatch.setattr(governance.transport, "request_rest_json", repo_stub)
+
+    assert cli._request()(REPO, "tok", "GET", "") == {"owner": {"login": "owner-1"}}
+    assert seen[0]["url"] == f"https://api.github.com/repos/{REPO}"
+
+    governance.request_json(REPO, "tok", "GET", "pulls/1")
+    assert seen[1]["url"] == f"https://api.github.com/repos/{REPO}/pulls/1"
+
+
+def test_repository_scoped_seam_does_not_silently_absorb_global_paths(monkeypatch: pytest.MonkeyPatch) -> None:
+    """A repository-scoped helper must not quietly route a global path correctly.
+
+    The wrong-scope URL is the defect: it must stay observable at this seam
+    rather than being auto-corrected, so callers are forced onto the
+    explicit global seam.
+    """
+    governance, _ = _governed_modules()
+    seen: list[dict[str, Any]] = []
+
+    def stub(**kwargs: Any) -> Any:
+        seen.append(kwargs)
+        return _rate_limit_payload()
+
+    monkeypatch.setattr(governance.transport, "request_rest_json", stub)
+
+    governance.request_json(REPO, "tok", "GET", "rate_limit")
+
+    assert seen[0]["url"] == f"https://api.github.com/repos/{REPO}/rate_limit"
+
+
+def test_global_seam_is_read_only_and_allowlisted(monkeypatch: pytest.MonkeyPatch) -> None:
+    """The global seam cannot become a second unreviewed way to reach GitHub."""
+    governance, _ = _governed_modules()
+    called: list[dict[str, Any]] = []
+
+    def must_not_run(**kwargs: Any) -> Any:
+        called.append(kwargs)
+        return _rate_limit_payload()
+
+    monkeypatch.setattr(governance.transport, "request_rest_json", must_not_run)
+
+    with pytest.raises(ValueError, match="read-only"):
+        governance.request_global_json("tok", "POST", "rate_limit")
+    with pytest.raises(ValueError, match="not a governed global REST endpoint"):
+        governance.request_global_json("tok", "GET", "user")
+    assert called == [], "a refused global request must not reach the transport"
+
+
+def test_authentication_failure_fails_closed(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Permanent and unavailable auth failures stay typed scan errors."""
+    governance, gh_transport = _governed_modules()
+
+    def refuse(*_args: Any) -> Any:
+        raise gh_transport.GitHubRequestError("GitHub HTTP 401: Bad credentials", category="permanent")
+
+    monkeypatch.setattr(governance, "request_global_json", refuse)
+    with pytest.raises(scanner.ScanPermanentError):
+        cli._verify_authentication(cli._global_request(), REPO, "bad-token")
+
+    def unavailable(*_args: Any) -> Any:
+        raise gh_transport.GitHubUnavailable(
+            "GET rate_limit",
+            attempts=3,
+            last=gh_transport.GitHubRequestError("GitHub HTTP 503", category="transient", status_code=503),
+        )
+
+    monkeypatch.setattr(governance, "request_global_json", unavailable)
+    with pytest.raises(scanner.ScanInfrastructureUnavailable):
+        cli._verify_authentication(cli._global_request(), REPO, "tok")
+
+
+@pytest.mark.parametrize(
+    "payload",
+    [
+        pytest.param([], id="not-a-mapping"),
+        pytest.param({}, id="missing-resources"),
+        pytest.param({"resources": []}, id="resources-not-a-mapping"),
+    ],
+)
+def test_authentication_malformed_payload_fails_closed(monkeypatch: pytest.MonkeyPatch, payload: Any) -> None:
+    """A malformed rate_limit body must not be read as a successful auth check."""
+    governance, _ = _governed_modules()
+    monkeypatch.setattr(governance, "request_global_json", lambda *args: payload)
+
+    with pytest.raises(SystemExit):
+        cli._verify_authentication(cli._global_request(), REPO, "tok")
+
+
+def test_global_seam_preserves_transient_retry_then_exhaustion(monkeypatch: pytest.MonkeyPatch) -> None:
+    """A 429 on /rate_limit retries boundedly, then fails closed as unavailable."""
+    import io
+    import urllib.error
+
+    governance, gh_transport = _governed_modules()
+    real_request_rest_json = gh_transport.request_rest_json
+    attempts: list[int] = []
+
+    def fast_retry(**kwargs: Any) -> Any:
+        kwargs["sleeper"] = lambda _seconds: None
+        return real_request_rest_json(**kwargs)
+
+    def always_rate_limited(**_kwargs: Any) -> Any:
+        attempts.append(1)
+        raise urllib.error.HTTPError(
+            "https://api.github.com/rate_limit",
+            429,
+            "too many requests",
+            {},
+            io.BytesIO(b'{"message": "API rate limit exceeded"}'),
+        )
+
+    monkeypatch.setattr(gh_transport, "request_rest_json", fast_retry)
+    monkeypatch.setattr(governance.transport, "rest_json", always_rate_limited)
+
+    with pytest.raises(scanner.ScanInfrastructureUnavailable):
+        cli._verify_authentication(cli._global_request(), REPO, "tok")
+    assert len(attempts) == gh_transport.DEFAULT_RETRY_ATTEMPTS
+
+
+def test_global_seam_keeps_permanent_status_unretried(monkeypatch: pytest.MonkeyPatch) -> None:
+    """A 404 on the global endpoint is permanent, not retried into unavailability."""
+    import io
+    import urllib.error
+
+    governance, gh_transport = _governed_modules()
+    real_request_rest_json = gh_transport.request_rest_json
+    attempts: list[int] = []
+
+    def fast_retry(**kwargs: Any) -> Any:
+        kwargs["sleeper"] = lambda _seconds: None
+        return real_request_rest_json(**kwargs)
+
+    def not_found(**_kwargs: Any) -> Any:
+        attempts.append(1)
+        raise urllib.error.HTTPError(
+            "https://api.github.com/rate_limit",
+            404,
+            "not found",
+            {},
+            io.BytesIO(b'{"message": "Not Found"}'),
+        )
+
+    monkeypatch.setattr(gh_transport, "request_rest_json", fast_retry)
+    monkeypatch.setattr(governance.transport, "rest_json", not_found)
+
+    with pytest.raises(scanner.ScanPermanentError):
+        cli._verify_authentication(cli._global_request(), REPO, "tok")
+    assert len(attempts) == 1, "a permanent status must not be retried"
+
+
+# ---------------------------------------------------------------------------
+# 19. Report describes the run that happened, not the default batch size
+#
+# --report derived batches_total from scanner.DEFAULT_BATCH_SIZE while the run
+# persisted its own batch size, so a run executed with a non-default
+# --batch-size reported a total that contradicted its own checkpoints.
+# ---------------------------------------------------------------------------
+
+
+def test_report_batches_total_uses_persisted_run_batch_size(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
+    summaries = [make_pr_summary(n) for n in range(1, 7)]
+    transport = empty_transport()
+    run_scan(
+        tmp_path,
+        summaries,
+        transport,
+        registry=make_registry(tmp_path, "DFF-111"),
+        backfill=make_backfill(tmp_path),
+        batch_size=2,
+    )
+    build_snapshot_file(tmp_path, summaries)
+
+    persisted = json.loads((tmp_path / "progress.json").read_text(encoding="utf-8"))
+    assert persisted["batch_size"] == 2
+    assert persisted["batch_size"] != scanner.DEFAULT_BATCH_SIZE, "test must exercise a non-default batch size"
+
+    capsys.readouterr()
+    assert cli.main(["--report", "--data-dir", str(tmp_path)]) == 0
+    summary = json.loads(capsys.readouterr().out)["checkpoint_summary"]
+
+    assert summary["batches_completed"] == 3
+    assert summary["batches_total"] == 3, "report must reflect the run's batch size, not the default"
+
+
+def test_report_batches_total_defaults_when_no_run_progress(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
+    """With snapshots but no progress, the report falls back to the default size."""
+    summaries = [make_pr_summary(n) for n in range(1, 4)]
+    build_snapshot_file(tmp_path, summaries)
+    for number in (1, 2, 3):
+        scanner.store_record(
+            tmp_path,
+            {
+                "pr_number": number,
+                "status": scanner.PR_STATUS_SCANNED_NO_FINDING,
+                "record_digest": sha(f"r{number}"),
+            },
+        )
+    capsys.readouterr()
+    assert cli.main(["--report", "--data-dir", str(tmp_path)]) == 0
+    summary = json.loads(capsys.readouterr().out)["checkpoint_summary"]
+
+    assert summary["batches_completed"] == 0
+    assert summary["batches_total"] == len(scanner.partition_batches([1, 2, 3], scanner.DEFAULT_BATCH_SIZE))

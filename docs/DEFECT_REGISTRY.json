@@ -1336,6 +1336,35 @@
       "sources": [
         "PR #485, 2026-09-23: external reviewer quota/outage states were identified as a liveness dependency that could prevent otherwise verified PRs from reaching merge readiness."
       ]
+    },
+    {
+      "id": "DFF-039",
+      "title": "global-rest-endpoint-addressed-through-repository-scoped-seam",
+      "invariant": "A REST endpoint is addressed at the scope it actually exists at. A repository-scoped request helper resolves every path under /repos/{owner}/{repo}, so passing a global endpoint to it produces a path that does not exist and fails as HTTP 404 -- a permanent status indistinguishable from an authorization failure, which misreports a valid token as unauthorized. A global endpoint is therefore requested through a seam that addresses it at the global scope, and that seam is read-only and allowlisted so it cannot become a second, unreviewed way to reach arbitrary GitHub paths.",
+      "applicability": {
+        "changed_paths": [
+          "scripts/hunter_governance_review_v2.py",
+          "scripts/hunter_full_history_defect_scan.py"
+        ],
+        "rationale": "These two surfaces hold the governed REST request seams and the scanner bootstrap that calls them before any other work. A scope mistake here fails closed at authentication, so it presents as a credential problem and halts the run before its first request rather than surfacing as a routing bug."
+      },
+      "prevention": {
+        "mechanism": "request_global_json addresses global endpoints at https://api.github.com/{path} through the same transport.request_rest_json boundary the repository-scoped request_json uses, so bounded retry, Retry-After handling, and transient/permanent classification are identical for both scopes and the new seam cannot carry a weaker classification than the first. It refuses any non-GET method and any path outside the GLOBAL_REST_PATHS allowlist, failing closed rather than requesting it; adding an endpoint is a governed change. _verify_authentication requests rate_limit through that seam. Repository-scoped request_json is unchanged and now documents that its path always resolves under /repos/{repository}, so the two scopes cannot be confused at the call site.",
+        "boundary": "review",
+        "guard_reference": "scripts/hunter_governance_review_v2.py::request_global_json"
+      },
+      "regression_evidence": [
+        "tests/test_full_history_defect_scan.py::test_auth_verification_uses_global_rate_limit_endpoint",
+        "tests/test_full_history_defect_scan.py::test_global_seam_addresses_global_url_through_governed_transport",
+        "tests/test_full_history_defect_scan.py::test_repository_scoped_seam_does_not_silently_absorb_global_paths",
+        "tests/test_full_history_defect_scan.py::test_global_seam_is_read_only_and_allowlisted",
+        "tests/test_full_history_defect_scan.py::test_global_seam_preserves_transient_retry_then_exhaustion",
+        "tests/test_full_history_defect_scan.py::test_global_seam_keeps_permanent_status_unretried"
+      ],
+      "lifecycle": "regression-tested",
+      "sources": [
+        "Full-history defect scanner bootstrap on branch chore/full-history-defect-backfill, 2026-09-26: _verify_authentication requested the global rate_limit endpoint through the repository-scoped helper, which addressed https://api.github.com/repos/fafa33/Project-Hunter/rate_limit and returned HTTP 404 on a valid token, halting the 357-PR historical scan before its first request. Corrected by the governed global REST seam in the same contribution."
+      ]
     }
   ]
 }
