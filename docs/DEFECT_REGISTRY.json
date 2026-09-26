@@ -266,10 +266,10 @@
     {
       "id": "MA-006",
       "class": "retry-authorized-by-caller-intent-rather-than-by-predecessor-outcome-evidence",
-      "source": "Issue #313 ADR 0034 Phase B hostile self-review: prepare_attempt accepted attempt_ordinal > 1 with only a predecessor attempt identity, so a caller could prepare and dispatch a second attempt after an uncertain first attempt whose request the provider may already have accepted. Recurrence on PR #314 independent review (Codex P1): the first guard derived its decision from the caller-supplied predecessor ModelAttemptOutcomeRecord, so a fabricated record naming the predecessor and claiming RETRY_REQUIRES_NEW_ATTEMPT defeated the gate entirely while the repository held an uncertain outcome or none at all \u2014 the prior hardening was insufficient because it checked the shape of the evidence instead of resolving the authority",
+      "source": "Issue #313 ADR 0034 Phase B hostile self-review: prepare_attempt accepted attempt_ordinal > 1 with only a predecessor attempt identity, so a caller could prepare and dispatch a second attempt after an uncertain first attempt whose request the provider may already have accepted. Recurrence on PR #314 independent review (Codex P1): the first guard derived its decision from the caller-supplied predecessor ModelAttemptOutcomeRecord, so a fabricated record naming the predecessor and claiming RETRY_REQUIRES_NEW_ATTEMPT defeated the gate entirely while the repository held an uncertain outcome or none at all — the prior hardening was insufficient because it checked the shape of the evidence instead of resolving the authority",
       "classification": "systemic",
       "guard_boundary": "ModelAdapterService.prepare_attempt, before any authority resolution or durable write",
-      "guard": "a retry requires the predecessor attempt's own DURABLE outcome, resolved from persistence via authoritative_outcome() strict-known at the new attempt's cutoff and following the supersession chain, checked before Source Handling is resolved and before anything durable exists. A caller-supplied record is evidence only: it is compared against the durable one and a mismatch is rejected, never used in its place \u2014 the same treatment prepare_attempt already gives a caller-supplied Source Handling decision and the ADR 0033 persistence invariant requires generally. Retry is admitted only when the durable outcome's retry_authorization is RETRY_REQUIRES_NEW_ATTEMPT, which derive_retry_authorization() grants only where the transport proved non-delivery or the provider established it rejected the request instead of executing it; an attempt with no durable outcome is uncertain and blocks retry. An authorized retry still gets a new attempt, cutoff, Source Handling resolution, handoff, and idempotency key, and terminal_outcome_exists() prevents re-dispatching an attempt that already has an outcome",
+      "guard": "a retry requires the predecessor attempt's own DURABLE outcome, resolved from persistence via authoritative_outcome() strict-known at the new attempt's cutoff and following the supersession chain, checked before Source Handling is resolved and before anything durable exists. A caller-supplied record is evidence only: it is compared against the durable one and a mismatch is rejected, never used in its place — the same treatment prepare_attempt already gives a caller-supplied Source Handling decision and the ADR 0033 persistence invariant requires generally. Retry is admitted only when the durable outcome's retry_authorization is RETRY_REQUIRES_NEW_ATTEMPT, which derive_retry_authorization() grants only where the transport proved non-delivery or the provider established it rejected the request instead of executing it; an attempt with no durable outcome is uncertain and blocks retry. An authorized retry still gets a new attempt, cutoff, Source Handling resolution, handoff, and idempotency key, and terminal_outcome_exists() prevents re-dispatching an attempt that already has an outcome",
       "test": "tests/test_model_adapter_phase_b.py::test_a_fabricated_predecessor_outcome_cannot_authorize_a_retry",
       "status": "guarded"
     },
@@ -299,7 +299,7 @@
       "source": "PR #314 independent review (Codex P2): strict_known_response_artifact ordered ascending with LIMIT 1, so once append_outcome admitted a superseding correction carrying revised response evidence, every later strict-known read returned the original artifact permanently and the correction was invisible",
       "classification": "systemic",
       "guard_boundary": "Model Adapter persistence strict-known historical reads",
-      "guard": "authoritative_outcome() resolves the head of the supersession chain \u2014 the outcome that no other outcome KNOWN AT THE SAME CUTOFF supersedes \u2014 and strict_known_response_artifact() returns the artifact attached to that governing outcome, falling back to the most recent earlier artifact when the correction records no new response evidence. Both remain strict-known, so a correction recorded after the cutoff does not retroactively govern an earlier read and the superseded original is preserved rather than overwritten. The general rule: wherever a record family admits append-only corrections, a historical read must follow the supersession chain, because neither the earliest row nor a blind latest row is the authoritative one",
+      "guard": "authoritative_outcome() resolves the head of the supersession chain — the outcome that no other outcome KNOWN AT THE SAME CUTOFF supersedes — and strict_known_response_artifact() returns the artifact attached to that governing outcome, falling back to the most recent earlier artifact when the correction records no new response evidence. Both remain strict-known, so a correction recorded after the cutoff does not retroactively govern an earlier read and the superseded original is preserved rather than overwritten. The general rule: wherever a record family admits append-only corrections, a historical read must follow the supersession chain, because neither the earliest row nor a blind latest row is the authoritative one",
       "test": "tests/test_model_adapter_phase_b.py::test_a_superseding_correction_is_what_a_later_replay_reads",
       "status": "guarded"
     },
@@ -451,6 +451,26 @@
       "guard_boundary": "Defect Prevention family applicability and pre-ready family selection",
       "guard": "A locally-enforced defect family must include the concrete file that contains its guard in changed_paths whenever applicability is path-selected; DFF-027 therefore includes scripts/hunter_issue_agent_issuer.py so edits to the admission guard require DFF-027 coverage.",
       "test": "tests/test_issue_412_prevention_gate.py::test_applicable_family_ids_use_changed_paths",
+      "status": "guarded"
+    },
+    {
+      "id": "PRH-060",
+      "class": "replacement-publisher-bypasses-required-pre-push-boundary",
+      "source": "PR #524 Codex P1, 2026-09-26",
+      "classification": "systemic",
+      "guard_boundary": "credential-isolated replacement publication",
+      "guard": "The exact candidate commit is checked in a temporary credential-free worktree and must pass the trusted base pre-push hook before the publisher may create the authorization branch; publication/model credentials are scrubbed from that execution environment.",
+      "test": "tests/test_issue_agent_replacement_executor.py::test_pre_push_safety_scrubs_publication_and_model_authority",
+      "status": "guarded"
+    },
+    {
+      "id": "PRH-061",
+      "class": "replacement-publication-remote-not-bound-to-signed-repository",
+      "source": "PR #524 Codex P1, 2026-09-26",
+      "classification": "systemic",
+      "guard_boundary": "signed authorization to publication destination binding",
+      "guard": "The replacement result retains the repository identity derived from the signed authorization and the publisher derives the canonical github.com remote from that identity; callers cannot supply an independent publication destination.",
+      "test": "tests/test_issue_agent_replacement_executor.py::test_publisher_remote_is_derived_from_signed_repository",
       "status": "guarded"
     }
   ],
@@ -1401,11 +1421,22 @@
         "rationale": "These surfaces can validate or publish Issue Agent candidate output and therefore define the candidate-code/publication-credential privilege boundary."
       },
       "prevention": {
-        "mechanism": "Recorded finding only. The correcting publisher contribution must treat candidate output as hostile data and structurally separate publication authority from all candidate execution before this family can advance.",
-        "boundary": "review"
+        "mechanism": "The replacement-executor boundary accepts provider output only as a closed-schema hostile file-data result bound to the signed authorization, exact base, derived branch and canonical TaskScope. Exact prompt/evidence fields are structurally rejected. Rehearsal rejects every publication credential, publisher environments reject model/provider authority, and a validation receipt binds the exact result digest plus validation-definition identity before a separate publisher may consume it. Candidate content is data at this boundary and is never executed under publication authority.",
+        "boundary": "review",
+        "guard_reference": "src/hunter/automation/issue_agent_replacement_executor.py::validate_replacement_result"
       },
-      "regression_evidence": [],
-      "lifecycle": "recorded",
+      "regression_evidence": [
+        "tests/test_issue_agent_replacement_executor.py::test_hostile_paths_fail_closed",
+        "tests/test_issue_agent_replacement_executor.py::test_result_cannot_add_prompt_or_evidence_fields",
+        "tests/test_issue_agent_replacement_executor.py::test_rehearsal_structurally_rejects_publication_credentials",
+        "tests/test_issue_agent_replacement_executor.py::test_publisher_rejects_model_authority",
+        "tests/test_issue_agent_replacement_executor.py::test_validation_receipt_is_exact_result_and_definition_bound",
+        "tests/test_issue_agent_replacement_executor.py::test_validation_receipt_cannot_be_reused_after_definition_change",
+        "tests/test_issue_agent_replacement_executor.py::test_rehearsal_result_can_never_reach_publisher",
+        "tests/test_issue_agent_replacement_executor.py::test_publisher_uses_data_only_git_plumbing_and_create_only_lease",
+        "tests/test_issue_agent_replacement_executor.py::test_pre_push_safety_scrubs_publication_and_model_authority"
+      ],
+      "lifecycle": "regression-tested",
       "sources": [
         "Post-PR #519 publication-path inspection after Issue #520 canary, 2026-09-25"
       ]
@@ -1413,7 +1444,7 @@
     {
       "id": "DFF-029",
       "title": "candidate-must-pass-canonical-preflight-before-pr-publication",
-      "invariant": "A candidate branch must not be published for PR review until the same canonical deterministic preflight required by hosted CI has passed locally on the exact candidate content; focused tests are diagnostic evidence only and cannot substitute for the canonical gate.",
+      "invariant": "A candidate may be pushed only through the repository pre-push safety boundary; the full canonical pytest proof runs exactly once in the hosted exact-HEAD Pre-PR stage, and a Draft PR may be opened only after that hosted proof succeeds. Focused tests are diagnostic evidence and never substitute for the hosted canonical proof.",
       "applicability": {
         "changed_paths": [
           "scripts/",
@@ -1425,13 +1456,18 @@
         "rationale": "Changes to executable code, tests, workflows, or the defect-prevention authority can invalidate the shared deterministic preflight even when focused tests pass."
       },
       "prevention": {
-        "mechanism": "Recorded recurrence from PR #522. The correcting contribution must make exact-candidate canonical preflight success a machine-enforced prerequisite to PR publication/push rather than a human convention.",
-        "boundary": "review"
+        "mechanism": "The validation-stage contract keeps full pytest out of pre-push while Hunter / Issue Agent Candidate PR is triggered only by a successful Hunter / Pre-PR Preflight workflow_run for the exact pushed candidate head. Branch publication therefore enables hosted proof but cannot itself publish a Draft PR.",
+        "boundary": "hosted-gate",
+        "guard_reference": "scripts/hunter_issue_agent_candidate_pr.py::decide_candidate_pr"
       },
-      "regression_evidence": [],
-      "lifecycle": "recorded",
+      "regression_evidence": [
+        "tests/test_validation_stage_contract.py::test_push_safety_lane_is_the_normal_gate_chain_without_the_full_suite",
+        "tests/test_issue_agent_candidate_pr.py::test_the_workflow_runs_the_trusted_module_only_after_a_green_push_preflight"
+      ],
+      "lifecycle": "regression-tested",
       "sources": [
-        "PR #522, 2026-09-25: the candidate was published after focused tests while Hunter / Pre-PR Preflight, CI, and Trusted Candidate Preflight all failed from the shared deterministic preflight."
+        "PR #522, 2026-09-25: the candidate was published after focused tests while Hunter / Pre-PR Preflight, CI, and Trusted Candidate Preflight all failed from the shared deterministic preflight.",
+        "Validation Stage Contract reconciliation during Issue #523, 2026-09-26: full pytest is hosted-only by canonical architecture; branch push and Draft PR publication are distinct boundaries."
       ]
     }
   ]
