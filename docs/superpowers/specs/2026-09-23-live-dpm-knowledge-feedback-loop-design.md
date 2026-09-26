@@ -301,16 +301,59 @@ The two things that *are* solved and merged are (a) the CLI itself
 supported fallback/recovery path run by hand) and (b) the automatic,
 continuous, non-blocking dry-run proof that CLI's materialization logic
 actually works, wired into existing CI
-(see "Follow-on: automatic, non-blocking materialization proof" above). An
-automatic path all the way to an opened canonicalization PR, with zero
-person present, needs one of: a person granting a persistent session (not a
-fresh-per-fire one) the repository and GitHub access it needs, then binding
-the Routine to that session's id instead of `create_new_session_on_fire`;
-or a platform-level way to pass a repository/connector grant into a
-fresh-fired session that was not available from this tool here. Either is a
-decision and an action for the repository owner to take through the
-claude.ai Routines UI or a dedicated persistent session -- not something to
-guess at or self-provision from inside this PR.
+(see "Follow-on: automatic, non-blocking materialization proof" above).
+
+### The persistent-session alternative was also tried, and also found blocked
+
+Owner authorization separately requested a minimal, non-destructive proof
+of one specific alternative before any further implementation: whether a
+*persistent* session (not fresh-per-fire) could retain repository and
+GitHub access across a later Routine wake, avoiding the fresh-session
+limitation above.
+
+A dedicated persistent session was created (`create_session`, not
+`create_trigger`) with a strictly read-only task: attach
+`fafa33/project-hunter` via `add_repo`, then confirm via its own
+`mcp__github__` tools that it could list open PRs and read `main`'s current
+HEAD SHA. No branch, commit, or PR was created or attempted.
+
+Two independent, decisive results, both against this same session, before
+any Routine was ever created for it (so step 2 of that plan -- binding a
+trigger to it -- was correctly never reached):
+
+1. **Its tool list was identical to the fresh Routine-fired session's** --
+   `Bash`, `Read`, `Write`, `Edit`, `Glob`, `Grep`, `Agent`, `WebFetch`,
+   `WebSearch`, `Artifact`, a few more -- with neither `add_repo`/any
+   `mcp__Claude_Code_Remote__*` tool nor any `mcp__github__*` tool present.
+   `create_session` provisions the same restricted baseline as
+   `create_new_session_on_fire`; the richer toolset this conversation itself
+   has is tied to how *this* session was started (through the interactive
+   product surface with sources/connectors already selected), not something
+   either programmatic session-creation path grants.
+2. Attempting the repository-attach step itself surfaced a platform safety
+   gate: the session's status became `need_input` /
+   `"prompt injection detected; awaiting user confirmation"`, requiring a
+   human to confirm in the claude.ai UI that they actually asked for the
+   clone. This is an additional, independent blocker on top of (1): even if
+   the tool were present, an unattended Routine wake has no person available
+   to answer that confirmation, so it could never pass this gate either.
+
+Per the instruction not to invent a workaround: no attempt was made to
+route around either finding (no message sent asking the blocked session's
+safety confirmation to be waved through, no alternate credential, no new
+secret). The session was left as-is, still visible to the repository owner
+if they want to inspect or clear it themselves.
+
+**Conclusion: neither of this platform's two session-creation paths
+(fresh-per-fire or persistent-via-`create_session`) currently supports an
+unattended-canonicalization Routine.** Unblocking this needs a
+platform-level capability outside what these tools expose today -- most
+plausibly, a session created through the interactive UI (where a person
+selects the repository and any needed access at creation time) bound to a
+Routine via `persistent_session_id`, which this conversation cannot
+provision for itself. Nothing here touched `docs/CODE_WRITE_POLICY.json`,
+added a secret, or created any new write authority, per that same
+instruction.
 
 ### Requirement-by-requirement -- honest status
 
