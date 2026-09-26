@@ -153,6 +153,62 @@ def test_conflicting_evidence_for_same_event_identity_fails_closed(tmp_path, _ca
     assert registry.read_bytes() == before
 
 
+def _observation_for_family(pr: int, family_id: str, path: str) -> dict[str, object]:
+    family = next(f for f in json.loads(REGISTRY.read_text())["families"] if f["id"] == family_id)
+    return {
+        "source": "sonar",
+        "provider": "sonar",
+        "event_id": f"issue-{pr}",
+        "source_pr": pr,
+        "reviewed_head_sha": HEAD,
+        "reviewed_base_sha": BASE,
+        "reviewer": "deterministic-fixture",
+        "path": path,
+        "line": 1,
+        "message": "validated recurrence",
+        "availability": "available",
+        "classification": "confirmed",
+        "invariant": family["invariant"],
+        "affected_paths": [path],
+        "fix_reference": f"PR #{pr} focused remediation",
+        "regression_evidence": [
+            "tests/test_canonicalize_learning_cli.py::"
+            "test_sequential_apply_across_two_prs_accumulates_without_cross_pr_duplication"
+        ],
+        "claimed_family_id": family_id,
+    }
+
+
+def test_sequential_apply_across_two_prs_accumulates_without_cross_pr_duplication(tmp_path, _canonical_targets):
+    # A Routine that processes a backlog of pending PRs calls this CLI once per
+    # PR, in a loop, against the same working-tree registry -- there is no
+    # separate multi-PR accumulation function. This proves that composition is
+    # itself correct: two different PRs against two different families both
+    # land, and replaying either one afterwards adds nothing further.
+    registry = _canonical_targets
+    obs_a_dir = tmp_path / "a"
+    obs_a_dir.mkdir()
+    obs_a = _write_observations(
+        obs_a_dir, [_observation_for_family(920, "DFF-008", "scripts/hunter_knowledge_extraction.py")]
+    )
+    obs_b_dir = tmp_path / "b"
+    obs_b_dir.mkdir()
+    obs_b = _write_observations(obs_b_dir, [_observation_for_family(921, "DFF-001", "src/hunter/cli.py")])
+
+    code_a = main(["--pr", "920", "--head", HEAD, "--base", BASE, "--observations", str(obs_a)])
+    code_b = main(["--pr", "921", "--head", HEAD, "--base", BASE, "--observations", str(obs_b)])
+    after_both = registry.read_bytes()
+    # Re-applying the first PR again, after the second PR already landed,
+    # must not duplicate its own entry or disturb the second PR's entry.
+    code_a_replay = main(["--pr", "920", "--head", HEAD, "--base", BASE, "--observations", str(obs_a)])
+
+    assert (code_a, code_b, code_a_replay) == (0, 0, 0)
+    assert registry.read_bytes() == after_both
+    families = {f["id"]: f for f in json.loads(registry.read_text())["families"]}
+    assert sum("issue-920" in s for s in families["DFF-008"]["sources"]) == 1
+    assert sum("issue-921" in s for s in families["DFF-001"]["sources"]) == 1
+
+
 def test_cli_has_no_caller_selected_write_target():
     script = Path("scripts/hunter_canonicalize_learning.py").read_text(encoding="utf-8")
     assert 'add_argument("--registry"' not in script

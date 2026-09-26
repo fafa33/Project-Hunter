@@ -217,3 +217,99 @@ Regression: `tests/test_hunter_knowledge_learning_workflow.py` proves the
 bootstrap gate covers the new script, the workflow's only invocation of it
 always carries `--dry-run`, a failure in that step cannot block the job, and
 the artifact upload carries its output log.
+
+## Follow-on: automatic apply via the existing clone-capable writer channel
+
+The owner separately authorized designing the narrowest write ingress needed
+for automated canonicalization -- explicitly *not* permission to write to
+`main`, bypass review, bypass provenance, or self-merge.
+
+**Governance check performed first, per that authorization's own
+instruction not to self-escalate:** the only automated-write mechanism this
+repository defines, `connector_write_ingress`, cannot serve this need at
+all, with or without a new Issue authorization. `docs/CODE_WRITE_POLICY.json`
+requires each write to carry a receipt minted per-request (`python
+scripts/hunter_connector_write_ingress.py --request write-request.json
+--emit-receipt ...`) by "the owner's connected ChatGPT assistant" -- a live,
+per-occasion, interactively-authenticated session, per
+`docs/CONNECTOR_WRITE_INGRESS.md`. It has no mechanism for a headless,
+scheduled/event-triggered job with no session behind it to invoke it. So an
+Issue authorizing the `defect-registry` `governance-maintenance` scope would
+not, by itself, make unattended automatic writes possible through that
+channel.
+
+The channel that *does* fit, requiring **no new repository authorization at
+all**, is the other one this repository already defines and already
+uses for every human contribution: `local_git_push` -- unrestricted by path,
+gated only on `.githooks/pre-push` and a verified commit signature from an
+address in `ingress_provenance.authorized_signers` (`claude` or `fafa33`).
+This PR's own commits already went through exactly that channel. A scheduled
+Claude Code Remote Routine that spawns a fresh session, which commits under
+the same bound `Claude <noreply@anthropic.com>` identity and pushes through
+the same `.githooks/pre-push` boundary, is not a new grant -- it is the
+existing grant, invoked on a schedule instead of by a person typing a
+command. Human merge approval, `Hunter Governance Review`,
+`Hunter Merge Readiness`, and every other required check are unaffected and
+still apply to the resulting PR like any other.
+
+### The Routine
+
+**Name:** `Hunter Defect-Registry Canonicalization` · **Cadence:** hourly,
+fresh session per firing (`create_new_session_on_fire: true`) -- no
+dependency on any specific Claude session surviving between firings.
+
+Each firing:
+
+1. Attaches and clones `fafa33/project-hunter` fresh, checks out `main`,
+   installs dependencies, and runs `python scripts/install_hunter_git_hooks.py`
+   -- exactly the bootstrap this PR's own commits used.
+2. Lists open pull requests and, for each, reads its reviews and review
+   comments via the session's own GitHub access (read-only). It never uses
+   this content to invent a `classification`, `invariant`,
+   `claimed_family_id`, `affected_paths`, or `fix_reference` -- those are
+   left `null`/empty for every constructed observation, exactly matching
+   `hunter_collect_learning_observations.py`'s own tested behavior
+   (`tests/test_hunter_knowledge_learning_workflow.py::test_collector_does_not_invent_defect_classification`).
+   A finding only ever becomes `"confirmed"` when it is entered by a human
+   (or a future, separately-designed and separately-reviewed structured
+   disposition source) -- not by this Routine's own judgment. In today's
+   codebase this means most firings find nothing actionable and end cleanly
+   without creating a branch or PR; that is correct, fail-closed behavior,
+   not a defect.
+3. For each PR with at least one well-formed observation, runs
+   `scripts/hunter_canonicalize_learning.py --pr <n> --head <sha> --base <sha>
+   --observations <file> --dry-run` first, then the same call without
+   `--dry-run` only if it reports `changed=true` -- the unmodified CLI from
+   this PR's first commit, called once per pending PR against the same
+   working tree so results accumulate (see
+   `tests/test_canonicalize_learning_cli.py::test_sequential_apply_across_two_prs_accumulates_without_cross_pr_duplication`).
+4. If `docs/DEFECT_REGISTRY.json` changed relative to `origin/main`, commits
+   *only* that file to the fixed branch `canonicalization/defect-registry-auto`
+   (created from latest `main` if absent, reset to latest `main` and
+   reapplied if it already exists) and pushes it through the normal
+   `.githooks/pre-push` boundary.
+5. Checks whether an open PR already targets that branch. If yes, the push
+   already updated it and nothing further happens. If no, opens **one**
+   Draft PR from it. It never marks a PR Ready, approves, or merges --
+   human merge approval is unchanged and mandatory.
+
+### Requirement-by-requirement
+
+| Requirement | How it is met |
+|---|---|
+| Non-merge-blocking for the originating PR | The Routine never touches the PR that captured the finding; it only ever writes to its own dedicated branch/PR |
+| Not a required check | Not wired into any check at all -- it is a platform-level schedule, outside `.github/workflows/` entirely |
+| No repository-write authority broadened | Zero changes to `docs/CODE_WRITE_POLICY.json`; reuses the existing, already-unrestricted `local_git_push` grant |
+| Never writes to `main` / never merges its own PR | Commits go to `canonicalization/defect-registry-auto` only; the Routine has no merge step |
+| Recoverable if Claude Remote is unavailable, stopped, or removed | The backlog is GitHub's own PR/review history plus `docs/DEFECT_REGISTRY.json`'s own current state -- both independent of Claude Remote and durable regardless of it; `scripts/hunter_canonicalize_learning.py` run by hand is the unchanged, fully-supported fallback (see the Local/Mac section above) |
+| Idempotent / duplicate executions converge | `already_integrated` plus the registry-digest replay check (unchanged, existing) make replaying any PR's observations a no-op; the fixed branch name plus the create-or-update check make repeated firings converge on one PR, never a duplicate |
+| No new AI/provider dependency | The Routine's own read step uses the session's already-available GitHub access; canonicalization itself remains the same deterministic, provider-free authorities |
+| DPM/SPM authority unchanged | `EngineeringContextAuthority` still only ever reads `docs/DEFECT_REGISTRY.json` as merged on `main` -- an unmerged canonicalization PR is not canonical truth, exactly as this design's authority graph already states, regardless of who or what prepared it |
+
+Regression: this behavior's only new, testable surface is the composition
+property in requirement 3 above (sequential apply across independent PRs);
+everything else is either an existing, already-tested authority (idempotency,
+staleness fail-closed, exclusion, dedup) or an operational procedure with no
+new production code, verified by inspection against
+`docs/CODE_WRITE_POLICY.json` and `docs/CONNECTOR_WRITE_INGRESS.md` rather
+than by a unit test.
