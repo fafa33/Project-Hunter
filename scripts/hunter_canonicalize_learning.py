@@ -18,6 +18,8 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
+import tempfile
 from pathlib import Path
 
 from hunter.evidence_intelligence import controlled_learning_integration as learning
@@ -53,13 +55,29 @@ def main(argv: list[str] | None = None) -> int:
         print(f"{_PREFIX} FAIL: {exc}")
         return 2
 
-    learning.CANONICAL_LEARNING_LEDGER.write_text(json.dumps(ledger, sort_keys=True, indent=2), encoding="utf-8")
-
+    # A per-invocation temporary ledger file, swapped in for the shared
+    # CANONICAL_LEARNING_LEDGER path only for the duration of this call and
+    # always restored: two invocations processing different PRs against the
+    # same working tree must never race on one shared scratch file, where a
+    # later write could make an earlier invocation materialize the wrong
+    # PR's evidence while silently dropping its own.
+    fd, temp_ledger_name = tempfile.mkstemp(
+        prefix=".hunter-learning-ledger-", suffix=".json", dir=learning.CANONICAL_LEARNING_LEDGER.parent
+    )
+    os.close(fd)
+    temp_ledger_path = Path(temp_ledger_name)
+    temp_ledger_path.write_text(json.dumps(ledger, sort_keys=True, indent=2), encoding="utf-8")
+    original_ledger_path = learning.CANONICAL_LEARNING_LEDGER
+    learning.CANONICAL_LEARNING_LEDGER = temp_ledger_path
     try:
-        result = learning.materialize_learning_ledger(dry_run=args.dry_run)
-    except learning.ControlledLearningIntegrationError as exc:
-        print(f"{_PREFIX} FAIL: {exc}")
-        return 1
+        try:
+            result = learning.materialize_learning_ledger(dry_run=args.dry_run)
+        except learning.ControlledLearningIntegrationError as exc:
+            print(f"{_PREFIX} FAIL: {exc}")
+            return 1
+    finally:
+        learning.CANONICAL_LEARNING_LEDGER = original_ledger_path
+        temp_ledger_path.unlink(missing_ok=True)
 
     mode = "DRY-RUN" if args.dry_run else "PASS"
     print(

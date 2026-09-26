@@ -88,6 +88,26 @@ def test_apply_atomically_updates_registry(tmp_path, capsys, _canonical_targets)
     assert any("issue-911" in source for source in family["sources"])
 
 
+def test_apply_never_writes_to_the_shared_ledger_path(tmp_path, _canonical_targets):
+    # Codex P2 finding on this PR: two overlapping invocations processing
+    # different PRs against the same working tree both wrote
+    # CANONICAL_LEARNING_LEDGER, and materialize_learning_ledger() reopened
+    # that shared path rather than consuming the local ledger -- a later
+    # write could make an earlier invocation materialize the wrong PR's
+    # evidence while silently dropping its own. The fix uses a per-invocation
+    # temporary ledger instead, so the shared path configured by
+    # _canonical_targets must never be touched at all, and no temp ledger
+    # should survive the call.
+    shared_ledger_path = learning.CANONICAL_LEARNING_LEDGER
+    observations = _write_observations(tmp_path, [_observation(917)])
+
+    code = main(["--pr", "917", "--head", HEAD, "--base", BASE, "--observations", str(observations)])
+
+    assert code == 0
+    assert not shared_ledger_path.exists()
+    assert list(shared_ledger_path.parent.glob(".hunter-learning-ledger-*.json")) == []
+
+
 def test_apply_is_idempotent_on_replay(tmp_path, _canonical_targets):
     registry = _canonical_targets
     observations = _write_observations(tmp_path, [_observation(912)])
