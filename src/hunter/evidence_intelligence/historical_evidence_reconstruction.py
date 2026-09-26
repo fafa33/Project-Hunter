@@ -43,6 +43,11 @@ from typing import Any
 from hunter.evidence_intelligence import historical_evidence_adjudication as base
 from hunter.evidence_intelligence import semantic_invariant_extraction
 
+# The scanner owns the PR status vocabulary. Terminality is read from it rather
+# than restated here, so this module and ``build_coverage_manifest`` cannot drift
+# into two different definitions of "statused" over the same records.
+from hunter.evidence_intelligence.full_history_defect_scan import PR_STATUSES
+
 # ---------------------------------------------------------------------------
 # Is this text a claim about the code at all?
 # ---------------------------------------------------------------------------
@@ -501,6 +506,18 @@ class GitHistory:
             text=True,
         )
         return proc.stdout if proc.returncode == 0 else None
+
+    @lru_cache(maxsize=1)  # noqa: B019 - one history per process
+    def resolved_ref(self) -> str:
+        """The commit ``ref`` currently names, or ``""`` when it cannot resolve.
+
+        The ref *name* is not the evidence identity: ``origin/main`` advances,
+        and every "does this implementation still exist" answer is taken against
+        whatever commit it pointed at. Callers that cache a decision therefore
+        key on this, not on ``self.ref``.
+        """
+        out = self._run(["rev-parse", self.ref])
+        return out.strip() if out else ""
 
     @lru_cache(maxsize=1)  # noqa: B019 - one history per process
     def tree_paths(self) -> frozenset[str]:
@@ -1765,10 +1782,6 @@ def build_reconstruction_manifest(
     }
 
 
-# A PR record is terminal when the scanner recorded a terminal scan state.
-_TERMINAL_SCAN_STATES = frozenset({"complete"})
-
-
 def scan_status_counts(data_dir: Path) -> tuple[int, int]:
     """``(statused_prs, total_prs)`` derived from persisted records.
 
@@ -1776,6 +1789,15 @@ def scan_status_counts(data_dir: Path) -> tuple[int, int]:
     the numerator counts only PR records the scanner actually marked terminal.
     Reading this from disk is what lets a missing record show up as scan
     coverage instead of being silently rounded away.
+
+    "Terminal" is read from the record's own explicit status, which is the same
+    rule ``build_coverage_manifest`` counts by -- not from a second list of scan
+    states kept here. A PR that exhausted its infrastructure retries or hit a
+    permanent evidence error is deliberately recorded as ``INFRA_PROVIDER_FAILURE``
+    or ``UNRESOLVED``: the scanner is done with it, and the coverage manifest
+    counts it. Counting only ``scan_state == "complete"`` here made the same
+    persisted scan report a scan coverage gap that no amount of further work
+    could close, because there was no work left to do.
     """
     snapshot = base.read_json_file(data_dir / "snapshot.json", required=True)
     assert isinstance(snapshot, dict)
@@ -1783,7 +1805,7 @@ def scan_status_counts(data_dir: Path) -> tuple[int, int]:
     statused = 0
     for path in sorted((data_dir / "prs").glob("*.json")):
         record = base.read_json_file(path, required=True)
-        if isinstance(record, dict) and str(record.get("scan_state") or "") in _TERMINAL_SCAN_STATES:
+        if isinstance(record, dict) and record.get("status") in PR_STATUSES:
             statused += 1
     return statused, total
 
@@ -1830,8 +1852,11 @@ def run_reconstruction(
 
     The frozen scan is read, never written: no re-fetch, no rescan, no
     checkpoint mutation, and no write to canonical history. Per-PR results are
-    cached so an interrupted run resumes, and the cache is keyed on the engine
-    and registry digests so a rule change can never be masked by stale results.
+    cached so an interrupted run resumes, and the cache is keyed on every input
+    the cached disposition was decided from -- the engine and registry digests,
+    the owner login, the resolved integration-base commit, the invariant and
+    recurrence verdicts, and the frozen record's own digest -- so no change to
+    any of them can be masked by a stale result.
     """
     families = base._family_index(registry_path)
     registry_digest = base.stable_json_digest({"families": families})
@@ -1839,6 +1864,20 @@ def run_reconstruction(
     history = GitHistory(repo_root, ref)
     anchors = squash_anchors(repo_root, ref)
     recurrence_verdicts = recurrence_verdicts or {}
+    # Everything besides the registry and the rules that a cached disposition
+    # was actually decided from. A cached result may only be reused when all of
+    # it still holds: the post-passes below act on CONFIRMED findings only, so a
+    # stale RESOLVED_NON_RECURRING or family outcome restored here would never be
+    # revisited and would be republished as current evidence.
+    inputs_digest = base.stable_json_digest(
+        {
+            "owner_login": owner_login,
+            "repository": repository,
+            "base_ref_commit": history.resolved_ref(),
+            "invariant_verdicts": base.stable_json_digest(invariant_verdicts or {}),
+            "recurrence_verdicts": base.stable_json_digest(recurrence_verdicts),
+        }
+    )
 
     out_dir = data_dir / "reconstruction"
     out_dir.mkdir(parents=True, exist_ok=True)
@@ -1855,6 +1894,13 @@ def run_reconstruction(
                 isinstance(cached, dict)
                 and cached.get("registry_digest") == registry_digest
                 and cached.get("engine_digest") == rules_digest
+                and cached.get("inputs_digest") == inputs_digest
+                # Fail closed on an absent digest: equal ``None`` on both sides
+                # would prove nothing about the frozen record behind it, and a
+                # cached disposition is only reusable against a record we can
+                # still identify.
+                and bool(record.get("record_digest"))
+                and cached.get("record_digest") == record.get("record_digest")
             ):
                 restored = [Reconstruction.from_json(entry) for entry in cached["reconstructions"]]
                 top_level = [item for item in restored if not item.derived_from]
@@ -1892,6 +1938,8 @@ def run_reconstruction(
                 "source_pr": pr_number,
                 "registry_digest": registry_digest,
                 "engine_digest": rules_digest,
+                "inputs_digest": inputs_digest,
+                "record_digest": record.get("record_digest"),
                 "reconstructions": [item.to_json() for item in decided + carried],
             },
         )
@@ -1953,6 +2001,8 @@ def run_reconstruction(
                 "source_pr": pr_number,
                 "registry_digest": registry_digest,
                 "engine_digest": rules_digest,
+                "inputs_digest": inputs_digest,
+                "record_digest": (records.get(pr_number) or {}).get("record_digest"),
                 "reconstructions": entries,
             },
         )

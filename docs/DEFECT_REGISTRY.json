@@ -472,6 +472,36 @@
       "guard": "The replacement result retains the repository identity derived from the signed authorization and the publisher derives the canonical github.com remote from that identity; callers cannot supply an independent publication destination.",
       "test": "tests/test_issue_agent_replacement_executor.py::test_publisher_remote_is_derived_from_signed_repository",
       "status": "guarded"
+    },
+    {
+      "id": "PRH-062",
+      "class": "cached-disposition-reused-without-binding-its-deciding-inputs",
+      "source": "PR #526 Codex P1, 2026-09-26",
+      "classification": "systemic",
+      "guard_boundary": "historical evidence reconstruction resume authority",
+      "guard": "The per-PR reconstruction cache is keyed on every input its disposition was decided from -- registry and engine digests, owner login, repository, the resolved integration-base commit, and digests of the invariant and recurrence verdicts -- and additionally bound to the frozen record's own digest, failing closed when that digest is absent rather than matching an absent value against itself. Recorded as an individual defect and dispositioned to existing family DFF-016, whose invariant it violates; no new family was created.",
+      "test": "tests/test_historical_evidence_reconstruction.py::test_changed_evidence_inputs_invalidate_the_reconstruction_cache",
+      "status": "guarded"
+    },
+    {
+      "id": "PRH-063",
+      "class": "rest-endpoint-response-shape-not-the-contract-the-caller-requires",
+      "source": "PR #526 Codex P2, 2026-09-26",
+      "classification": "systemic",
+      "guard_boundary": "full-history scan head-status evidence collection",
+      "guard": "Head commit statuses are collected from the plural, list-returning commits/{sha}/statuses endpoint, which is the shape the paginated collector requires. The singular commits/{sha}/status is the combined roll-up and returns an object wrapping a statuses array; passing it to the list collector raised FullHistoryScanError, which is not a per-PR retry state and therefore aborted the whole scan on its first PR. Kept as an individual defect: this is the endpoint's response-shape contract, a different rule from DFF-039's endpoint scope, so their own evidence does not establish one shared invariant and no family was manufactured.",
+      "test": "tests/test_full_history_defect_scan.py::test_collect_statuses_uses_the_list_endpoint",
+      "status": "guarded"
+    },
+    {
+      "id": "PRH-064",
+      "class": "one-derived-fact-defined-independently-by-two-components",
+      "source": "PR #526 Codex P2, 2026-09-26",
+      "classification": "systemic",
+      "guard_boundary": "scan terminality definition shared by coverage manifest and reconstruction",
+      "guard": "Terminality is read from the record's own explicit status against the scanner-owned PR_STATUSES vocabulary, the same rule build_coverage_manifest counts by, instead of a second list of terminal scan states kept in the reconstruction module. INFRA_PROVIDER_FAILURE and UNRESOLVED are terminal outcomes the scanner is finished with, so counting only scan_state == complete made the same persisted scan report a scan_coverage_gap no further work could close. Kept as an individual defect: one occurrence, so recurrence is unproven and no family was manufactured.",
+      "test": "tests/test_historical_evidence_reconstruction.py::test_statused_rule_matches_the_coverage_manifest",
+      "status": "guarded"
     }
   ],
   "families": [
@@ -938,9 +968,10 @@
           ".githooks/",
           ".github/workflows/",
           "docs/VALIDATION_STAGE_CONTRACT.json",
-          "scripts/"
+          "scripts/",
+          "src/hunter/evidence_intelligence/historical_evidence_reconstruction.py"
         ],
-        "rationale": "The validation boundaries and the reuse authority are where a proof made for one candidate can be re-aimed at another, and where removing duplicate proof can quietly become removing proof."
+        "rationale": "The validation boundaries and the reuse authority are where a proof made for one candidate can be re-aimed at another, and where removing duplicate proof can quietly become removing proof. The historical evidence reconstruction module is named explicitly for the same reason: it caches an expensive per-PR disposition and reuses it, so it is a reuse authority, and its post-passes revisit only CONFIRMED findings -- a wrongly reused non-CONFIRMED disposition can never be rolled back. The file is named rather than its directory, so the family is required where proof reuse actually happens instead of across every unrelated module beside it."
       },
       "prevention": {
         "mechanism": "One place decides reuse, from identities the verifier recomputes rather than accepts: the Git tree content identity, the validation-definition identity over the declared definition files and the gate chain, the measured toolchain, and the exact head. The head binding carries no default, so a caller cannot drop it by omitting a keyword -- the defect independent review found on PR #416, where the push boundary supplied it and the local reuse path did not, letting content identity alone decide on one of the two production paths. A receipt can therefore only narrow reuse, never widen it, and every non-matching branch falls back to executing the full lane.",
@@ -955,12 +986,17 @@
         "tests/test_validation_proof_reuse.py::test_changed_validation_definition_invalidates_reusable_proof",
         "tests/test_validation_proof_reuse.py::test_stale_receipt_fails_closed",
         "tests/test_validation_proof_reuse.py::test_malformed_receipt_documents_fail_closed",
-        "tests/test_validation_proof_reuse.py::test_another_workflow_wearing_the_same_name_cannot_authorize_reuse"
+        "tests/test_validation_proof_reuse.py::test_another_workflow_wearing_the_same_name_cannot_authorize_reuse",
+        "tests/test_historical_evidence_reconstruction.py::test_changed_evidence_inputs_invalidate_the_reconstruction_cache",
+        "tests/test_historical_evidence_reconstruction.py::test_changed_frozen_record_invalidates_the_reconstruction_cache",
+        "tests/test_historical_evidence_reconstruction.py::test_record_without_a_digest_is_never_reused_from_cache",
+        "tests/test_historical_evidence_reconstruction.py::test_reconstruction_cache_records_every_input_it_is_keyed_on"
       ],
       "lifecycle": "hosted-enforced",
       "sources": [
         "Issue #415",
-        "PR #416 independent owner review on 2026-09-06"
+        "PR #416 independent owner review on 2026-09-06",
+        "PR #526 Codex P1, 2026-09-26: the historical reconstruction resume path admitted a finalized per-PR disposition on the registry and rule digests alone, although the disposition was also decided from the owner login, the resolved integration-base commit, the invariant and recurrence verdicts, and the frozen record itself -- the same shape as the PR #416 defect, where one of two reuse paths bound fewer identities than the decision depended on. Corrected by binding every such input plus the frozen record digest, failing closed when that digest is absent."
       ]
     },
     {

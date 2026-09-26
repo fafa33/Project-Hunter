@@ -1384,3 +1384,66 @@ def test_report_batches_total_defaults_when_no_run_progress(tmp_path: Path, caps
 
     assert summary["batches_completed"] == 0
     assert summary["batches_total"] == len(scanner.partition_batches([1, 2, 3], scanner.DEFAULT_BATCH_SIZE))
+
+
+# ---------------------------------------------------------------------------
+# Head commit statuses: endpoint shape (--collect-statuses)
+# ---------------------------------------------------------------------------
+
+
+def _statuses_transport(number: int = 1) -> tuple[FakeTransport, str]:
+    transport = empty_transport()
+    head_sha = make_pr_summary(number)["head_sha"]
+    return transport, head_sha
+
+
+def test_collect_statuses_uses_the_list_endpoint(tmp_path: Path) -> None:
+    """``--collect-statuses`` must request the plural, list-returning endpoint.
+
+    GitHub's singular ``commits/{sha}/status`` is the combined roll-up and
+    returns an object wrapping a ``statuses`` array. The paginated collector
+    requires a list, so addressing the singular endpoint raised
+    ``FullHistoryScanError`` on the very first PR.
+    """
+    transport, head_sha = _statuses_transport()
+    rows = [{"context": "ci/build", "state": "success"}, {"context": "ci/test", "state": "failure"}]
+    transport.route_pages(f"commits/{head_sha}/statuses", [rows])
+
+    evidence = scanner.collect_pr_evidence(transport, REPO, "tok", 1, collect_statuses=True)
+
+    assert evidence["statuses"] == rows
+    assert transport.count(f"commits/{head_sha}/statuses") == 1
+    assert transport.count(f"commits/{head_sha}/status") == 0, "the singular roll-up endpoint must not be used"
+
+
+def test_collect_statuses_would_have_aborted_on_the_combined_endpoint(tmp_path: Path) -> None:
+    """Pin the failure mode, so the singular endpoint cannot quietly return.
+
+    Routing only the combined object proves two things at once: the scanner no
+    longer asks for it, and had it done so the payload would not have satisfied
+    the list collector.
+    """
+    transport, head_sha = _statuses_transport()
+    combined = {"state": "success", "total_count": 1, "statuses": [{"context": "ci/build", "state": "success"}]}
+    transport.route_single(f"commits/{head_sha}/status", combined)
+
+    # The plural route is absent, so the collector raises KeyError from the fake
+    # rather than silently accepting the combined object's shape.
+    with pytest.raises(KeyError):
+        scanner.collect_pr_evidence(transport, REPO, "tok", 1, collect_statuses=True)
+    assert transport.count(f"commits/{head_sha}/status") == 0
+
+    # And the combined payload is exactly what the list collector rejects.
+    reject = FakeTransport()
+    reject.route_single(f"commits/{head_sha}/statuses", combined)
+    route_empty_pr(reject, 1)
+    with pytest.raises(scanner.FullHistoryScanError):
+        scanner.collect_pr_evidence(reject, REPO, "tok", 1, collect_statuses=True)
+
+
+def test_collect_statuses_disabled_requests_no_status_endpoint(tmp_path: Path) -> None:
+    transport, head_sha = _statuses_transport()
+    evidence = scanner.collect_pr_evidence(transport, REPO, "tok", 1, collect_statuses=False)
+    assert evidence["statuses"] == []
+    assert transport.count(f"commits/{head_sha}/statuses") == 0
+    assert transport.count(f"commits/{head_sha}/status") == 0

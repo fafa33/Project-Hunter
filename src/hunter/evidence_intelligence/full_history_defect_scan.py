@@ -352,7 +352,14 @@ def collect_pr_evidence(
         head = metadata.get("head")
         head_sha = head.get("sha") if isinstance(head, dict) else None
         if isinstance(head_sha, str) and head_sha:
-            statuses = collect_page(f"commits/{head_sha}/status")
+            # The plural endpoint, deliberately: singular ``commits/{sha}/status``
+            # is the combined roll-up and returns an *object* wrapping a
+            # ``statuses`` array, which ``collect_page`` rejects as not a list --
+            # and ``FullHistoryScanError`` is not a per-PR retry state, so it
+            # aborts the whole scan on the first PR. ``statuses`` returns the
+            # individual status rows as a paginated list, which is both the
+            # shape this collector requires and the fuller CI evidence.
+            statuses = collect_page(f"commits/{head_sha}/statuses")
 
     return {
         "metadata": metadata,

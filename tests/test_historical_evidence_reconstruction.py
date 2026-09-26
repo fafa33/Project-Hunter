@@ -551,7 +551,12 @@ def _seed(tmp_path: Path, items: list[dict[str, Any]], *, prs: int = 1) -> Path:
     )
     for number in range(1, prs + 1):
         record = make_record(items, pr_number=number)
+        # A real scanner record carries both: the state machine's terminal state
+        # and the explicit status derived from it. Seeding only the former made
+        # the fixture disagree with every record the scanner actually writes.
         record["scan_state"] = "complete"
+        record["status"] = "FINDING_EXTRACTED"
+        record["record_digest"] = f"digest-of-frozen-record-{number}"
         (data_dir / "prs" / f"{number}.json").write_text(json.dumps(record), encoding="utf-8")
     return data_dir
 
@@ -713,16 +718,192 @@ def test_stale_rule_digest_is_not_reused(tmp_path: Path) -> None:
     assert result["reconciliation"]["reconciles_exactly"] is True
 
 
+def _cached_reconstruction_inputs(tmp_path: Path) -> tuple[Path, Path]:
+    """Two frozen PRs and a registry, so a partial cache reuse is observable."""
+    items = [make_item(event_id=f"review-comment-{n}") for n in range(2)]
+    data_dir = _seed(tmp_path, items, prs=2)
+    registry = tmp_path / "DEFECT_REGISTRY.json"
+    registry.write_text(json.dumps({"families": []}), encoding="utf-8")
+    return data_dir, registry
+
+
+def test_changed_evidence_inputs_invalidate_the_reconstruction_cache(tmp_path: Path) -> None:
+    """A cached disposition may only be reused while all of its inputs hold.
+
+    The resume check once accepted a finalized reconstruction on the registry and
+    rule digests alone, although the disposition was also decided from the owner
+    login, the integration base the implementation was checked against, the
+    verdicts, and the frozen record itself. Because the post-passes revisit only
+    CONFIRMED findings, a stale RESOLVED_NON_RECURRING or family outcome restored
+    here could never be rolled back, and the regenerated closure manifest would
+    republish obsolete evidence as current.
+    """
+    base_kwargs: dict[str, Any] = {"repository": REPO, "repo_root": tmp_path}
+
+    def run(**overrides: Any) -> dict[str, Any]:
+        data_dir, registry = overrides.pop("paths")
+        kwargs = {
+            "data_dir": data_dir,
+            "registry_path": registry,
+            "owner_login": OWNER,
+            **base_kwargs,
+            **overrides,
+        }
+        return recon.run_reconstruction(**kwargs)
+
+    # Each mutation changes an input the cached disposition was decided from.
+    for label, overrides in (
+        ("owner login", {"owner_login": "someone-else"}),
+        ("invariant verdicts", {"invariant_verdicts": {"obs-x": {"verified": True}}}),
+        ("recurrence verdicts", {"recurrence_verdicts": {"c": {"same_invariant": True}}}),
+    ):
+        paths = _cached_reconstruction_inputs(tmp_path / label.replace(" ", "-"))
+        first = run(paths=paths)
+        assert first["reused_pr_records"] == 0, label
+        assert run(paths=paths)["reused_pr_records"] == 2, f"{label}: unchanged inputs must still resume"
+        assert (
+            run(paths=paths, **overrides)["reused_pr_records"] == 0
+        ), f"{label} changed but the stale cache was reused"
+
+
+def test_changed_frozen_record_invalidates_the_reconstruction_cache(tmp_path: Path) -> None:
+    """The frozen record is an input too, so its digest binds the cache."""
+    data_dir, registry = _cached_reconstruction_inputs(tmp_path)
+    kwargs: dict[str, Any] = {
+        "data_dir": data_dir,
+        "registry_path": registry,
+        "owner_login": OWNER,
+        "repository": REPO,
+        "repo_root": tmp_path,
+    }
+    recon.run_reconstruction(**kwargs)
+    assert recon.run_reconstruction(**kwargs)["reused_pr_records"] == 2
+
+    cached = data_dir / "reconstruction" / "1.json"
+    payload = json.loads(cached.read_text())
+    payload["record_digest"] = "digest-of-a-different-frozen-record"
+    cached.write_text(json.dumps(payload), encoding="utf-8")
+
+    # Only PR 1's cache no longer matches its frozen record, so only PR 1 is
+    # re-decided; PR 2 still legitimately resumes. The invalidation is per
+    # record, not a blanket cache drop.
+    assert recon.run_reconstruction(**kwargs)["reused_pr_records"] == 1
+
+
+def test_reconstruction_cache_records_every_input_it_is_keyed_on(tmp_path: Path) -> None:
+    """The persisted cache must carry the identity the resume check compares.
+
+    A key the writer never records is a key that can never match, which would
+    silently turn resume off rather than make it correct.
+    """
+    data_dir, registry = _cached_reconstruction_inputs(tmp_path)
+    recon.run_reconstruction(
+        data_dir=data_dir, registry_path=registry, owner_login=OWNER, repository=REPO, repo_root=tmp_path
+    )
+    payload = json.loads((data_dir / "reconstruction" / "1.json").read_text())
+    for key in ("registry_digest", "engine_digest", "inputs_digest", "record_digest"):
+        assert payload.get(key), f"cache is keyed on {key} but does not persist it"
+
+
+def test_record_without_a_digest_is_never_reused_from_cache(tmp_path: Path) -> None:
+    """An unidentifiable frozen record fails closed rather than matching on None.
+
+    Two absent digests comparing equal would "prove" a record unchanged while
+    establishing nothing about it, which is the weakest possible form of the
+    same defect.
+    """
+    data_dir, registry = _cached_reconstruction_inputs(tmp_path)
+    kwargs: dict[str, Any] = {
+        "data_dir": data_dir,
+        "registry_path": registry,
+        "owner_login": OWNER,
+        "repository": REPO,
+        "repo_root": tmp_path,
+    }
+    recon.run_reconstruction(**kwargs)
+    assert recon.run_reconstruction(**kwargs)["reused_pr_records"] == 2
+
+    frozen = data_dir / "prs" / "1.json"
+    record = json.loads(frozen.read_text())
+    del record["record_digest"]
+    frozen.write_text(json.dumps(record), encoding="utf-8")
+
+    assert recon.run_reconstruction(**kwargs)["reused_pr_records"] == 1
+
+
 def test_scan_status_is_derived_not_assumed(tmp_path: Path) -> None:
     items = [make_item(event_id=f"review-comment-{n}") for n in range(2)]
     data_dir = _seed(tmp_path, items, prs=2)
     assert recon.scan_status_counts(data_dir) == (2, 2)
-    # Mark one record non-terminal: the gap must appear rather than round away.
+    # Mark one record genuinely non-terminal, the shape the scanner writes while
+    # a PR is still inside its bounded infrastructure retries: no explicit status
+    # yet. The gap must appear rather than round away.
     target = data_dir / "prs" / "2.json"
     payload = json.loads(target.read_text())
-    payload["scan_state"] = "pending"
+    payload["scan_state"] = "infra-retryable"
+    payload["status"] = None
     target.write_text(json.dumps(payload), encoding="utf-8")
     assert recon.scan_status_counts(data_dir) == (1, 2)
+
+
+def test_permanent_scan_outcomes_count_as_statused(tmp_path: Path) -> None:
+    """A PR the scanner is permanently done with is statused, not a scan gap.
+
+    ``build_coverage_manifest`` counts any record carrying an explicit status,
+    ``INFRA_PROVIDER_FAILURE`` and ``UNRESOLVED`` included. Counting only
+    ``scan_state == "complete"`` here made the same persisted scan report a
+    ``scan_coverage_gap`` that no further work could ever close, because the
+    scanner had already finished with those PRs.
+    """
+    items = [make_item(event_id=f"review-comment-{n}") for n in range(2)]
+    data_dir = _seed(tmp_path, items, prs=3)
+    for number, scan_state, status in (
+        (2, "infra-permanent", "INFRA_PROVIDER_FAILURE"),
+        (3, "permanent-error", "UNRESOLVED"),
+    ):
+        target = data_dir / "prs" / f"{number}.json"
+        payload = json.loads(target.read_text())
+        payload["scan_state"] = scan_state
+        payload["status"] = status
+        target.write_text(json.dumps(payload), encoding="utf-8")
+
+    assert recon.scan_status_counts(data_dir) == (3, 3)
+
+    # The rule is the record's own explicit status, so an unknown status is not
+    # silently promoted to terminal just because its scan_state looks finished.
+    target = data_dir / "prs" / "3.json"
+    payload = json.loads(target.read_text())
+    payload["status"] = "NOT_A_REAL_STATUS"
+    target.write_text(json.dumps(payload), encoding="utf-8")
+    assert recon.scan_status_counts(data_dir) == (2, 3)
+
+
+def test_statused_rule_matches_the_coverage_manifest(tmp_path: Path) -> None:
+    """The two components must not keep separate definitions of "statused".
+
+    This is the defect itself: reconstruction and the scan coverage manifest
+    each decided terminality independently, so the same records produced two
+    different statused counts.
+    """
+    from hunter.evidence_intelligence import full_history_defect_scan as base
+
+    records: list[dict[str, Any]] = [
+        {"pr_number": 1, "status": "FINDING_EXTRACTED", "scan_state": "complete"},
+        {"pr_number": 2, "status": "INFRA_PROVIDER_FAILURE", "scan_state": "infra-permanent"},
+        {"pr_number": 3, "status": "UNRESOLVED", "scan_state": "permanent-error"},
+        {"pr_number": 4, "status": None, "scan_state": "infra-retryable"},
+    ]
+    data_dir = tmp_path / "scan"
+    (data_dir / "prs").mkdir(parents=True)
+    (data_dir / "snapshot.json").write_text(
+        json.dumps({"prs": [{"number": r["pr_number"]} for r in records]}), encoding="utf-8"
+    )
+    for record in records:
+        (data_dir / "prs" / f"{record['pr_number']}.json").write_text(json.dumps(record), encoding="utf-8")
+
+    manifest_statused = sum(1 for r in records if r["status"] in base.PR_STATUSES)
+    assert recon.scan_status_counts(data_dir) == (manifest_statused, 4)
+    assert manifest_statused == 3
 
 
 # ---------------------------------------------------------------------------
