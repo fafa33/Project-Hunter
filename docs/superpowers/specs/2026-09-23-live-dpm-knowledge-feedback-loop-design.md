@@ -103,3 +103,68 @@ TDD first. Regression must prove the PR #487 noncanonical lifecycle/boundary
 finding maps to DFF-004, exclusion classes cannot become defect proposals,
 unknown claimed families fail closed/ambiguous, replay is idempotent, and
 candidate-new-family cannot claim canonical authority.
+
+## Follow-on: closing the loop from candidate to canonical registry
+
+`hunter-knowledge-learning.yml` builds the exact-head ledger and renders a
+registry candidate on every `pull_request_review`/`pull_request_review_comment`
+event -- capture and candidate-rendering already run off the merge-critical
+path, since neither step is a required check. But `materialize_learning_ledger`
+(the one function with actual write authority over `docs/DEFECT_REGISTRY.json`,
+still gated exactly as this design specifies: local-content-only, never
+committing, pushing, or opening a PR) had no caller. The workflow only
+uploaded the ledger and candidate as a 90-day, non-authoritative CI artifact,
+so the "canonical-integration decision by existing repository/human authority"
+step in the authority graph above had no ingress: nothing ever turned a
+rendered candidate back into a change a human could review and merge through
+the normal PR path.
+
+`scripts/hunter_canonicalize_learning.py` closes that gap by composing the
+existing `build_learning_ledger` and `materialize_learning_ledger` authorities
+behind one CLI, with no new registry, persistence, or replay semantics:
+
+```
+python scripts/hunter_canonicalize_learning.py \
+  --pr <N> --head <exact-head-sha> --base <exact-base-sha> \
+  --observations <path-to-collected-observations.json> [--dry-run]
+```
+
+- **Durable backlog, no new persistence layer.** GitHub's own PR review/comment
+  history is the backlog: `hunter_collect_learning_observations.py` and
+  `hunter_collect_sonar_observations.py` already page through the *complete*
+  history for an exact head on every run, not a delta, so a missed CI run, a
+  stopped worker, or a GitHub-Actions outage loses nothing -- rerunning later
+  reproduces the identical observation set. `docs/DEFECT_REGISTRY.json` itself
+  is the second half of the backlog contract: `already_integrated` and the
+  registry-digest replay check in `controlled_learning_integration.py` make
+  reprocessing any PR, at any later time, safe and idempotent, and a registry
+  that has since moved on fails closed with "stale registry snapshot" rather
+  than silently mis-integrating -- no separate pending-queue file is needed or
+  introduced.
+- **Local/Mac execution path.** The script takes no network or provider
+  dependency; it requires only a previously-collected `--observations` file
+  (the same input contract `hunter_incremental_knowledge.py` already defines).
+  It can run identically on a local machine or inside CI.
+- **No caller-selected write target.** Matching the existing
+  `hunter_materialize_learning_candidate.py`/`hunter_incremental_knowledge.py`
+  convention, the script exposes no `--registry`/`--output` flag; the registry
+  and ledger paths are read from `controlled_learning_integration`'s own
+  module constants, so a caller cannot redirect where the write lands.
+- **Still never merge-blocking.** The script is not wired into any required
+  check or into `hunter_pr_preflight.py`. Applying its result to
+  `docs/DEFECT_REGISTRY.json` is a local file edit a human then carries through
+  the unchanged, fully-governed commit/push/PR/review/merge path -- exactly
+  the "normal PR + owner-merge path remains the sole route to canonical main"
+  guarantee this design already states.
+- **Bounded DPM/SPM reuse, already wired.** No further integration step exists
+  or is needed: `EngineeringContextAuthority` already reads
+  `docs/DEFECT_REGISTRY.json` live and performs the bounded family selection
+  that feeds `SmartPromptMachine`. Once a canonicalized update merges through
+  the normal path, it is available on the next SPM invocation with no
+  additional wiring.
+
+Regression: `tests/test_canonicalize_learning_cli.py` proves dry-run preview
+without persisting, atomic apply, idempotent replay, exclusion classes never
+integrating, conflicting evidence under one event identity failing closed
+without mutating the registry, malformed input failing closed, and the
+no-caller-selected-write-target / no-network-dependency shape invariants.
