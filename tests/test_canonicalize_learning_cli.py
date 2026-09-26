@@ -1,12 +1,19 @@
 from __future__ import annotations
 
+import importlib.util
 import json
 from pathlib import Path
 
 import pytest
 
 from hunter.evidence_intelligence import controlled_learning_integration as learning
-from scripts.hunter_canonicalize_learning import main
+
+_SCRIPT = Path("scripts/hunter_canonicalize_learning.py")
+_spec = importlib.util.spec_from_file_location("hunter_canonicalize_learning_cli", _SCRIPT)
+assert _spec and _spec.loader
+_module = importlib.util.module_from_spec(_spec)
+_spec.loader.exec_module(_module)
+main = _module.main
 
 REGISTRY = Path("docs/DEFECT_REGISTRY.json")
 HEAD = "a" * 40
