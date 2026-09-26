@@ -1547,12 +1547,11 @@
         "changed_paths": [
           ".github/workflows/",
           "pyproject.toml",
-          "requirements/",
           "src/hunter/persistence/",
           "scripts/hunter_incremental_knowledge.py",
           "scripts/hunter_integrate_learning_ledger.py"
         ],
-        "rationale": "These surfaces declare runtime dependencies and provision them per workflow, and they hold the entrypoints a required workflow actually runs. The import closure reachable from those entrypoints is what must be satisfied, and src/hunter/persistence/ is where the observed unreachable import lived."
+        "rationale": "Workflow definitions, declared project dependencies, reachable persistence imports, and the two observed knowledge entrypoints can affect whether a required workflow provisions its import closure. Dependency lock/constraint manifests remain deliberately outside review-family selection; they are evidence for diagnosis, not an implementation surface for this recorded family."
       },
       "prevention": {
         "mechanism": "Recorded finding only. A correcting contribution must derive each required workflow's import closure and compare it against that workflow's provisioned requirements, failing loudly at verification time rather than at first import, before this family can advance. The precise provisioning step that omitted the dependency in the recorded instance was not established by the completed mining and must be diagnosed before this mechanism is treated as the fix.",
