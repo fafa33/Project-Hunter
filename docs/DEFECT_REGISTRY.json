@@ -1479,9 +1479,10 @@
           ".github/workflows/",
           ".githooks/",
           "scripts/",
-          "docs/"
+          "docs/",
+          "⁠.github/workflows/ai-review.yml⁠"
         ],
-        "rationale": "These are the surfaces that hold tracked enforcement assets. Loadability is decided by the consumer's path grammar, not by the repository, so an asset stored anywhere else -- including a path that merely resembles a canonical one -- is inert. Note that a prefix match on '.github/workflows/' does not match a directory whose name differs by an invisible character, which is how the recorded instance escaped selection."
+        "rationale": "These are the surfaces that hold tracked enforcement assets. Loadability is decided by the consumer's path grammar, not by the repository, so an asset stored anywhere else -- including a path that merely resembles a canonical one -- is inert. Note that a prefix match on '.github/workflows/' does not match a directory whose name differs by an invisible character, which is how the recorded instance escaped selection. The exact malformed tracked path is selected explicitly until a consumer-grammar-derived selector replaces this recorded review boundary."
       },
       "prevention": {
         "mechanism": "Recorded finding only. A correcting contribution must derive each tracked asset's loadability from the consumer's own path grammar over the tracked path set and reject any asset whose stored path cannot be loaded, before this family can advance. The recorded instance must not be remediated by renaming the asset into a loadable path, because doing so would activate the superseded action major, floating third-party action tag, and repository secret exposure it declares.",
@@ -1496,17 +1497,17 @@
     {
       "id": "DFF-034",
       "title": "transient-retry-budget-not-derived-from-operation-timeout",
-      "invariant": "A retry budget over a long-running operation is derived from that operation's own timeout rather than stated independently, so exhausting the budget while the operation still has time left is not reachable. A transient upstream refusal is retried only within a budget the operation timeout affords, and budget exhaustion is a distinguishable outcome from terminal refusal.",
+      "invariant": "A retry budget over a long-running dispatch is bounded by one explicit overall dispatch deadline shared across every endpoint and retry loop. Per-request timeouts, attempt counts, and backoff consume the remaining overall budget; no retry may start when its worst-case request plus backoff cannot fit, and retry-budget exhaustion remains distinguishable from terminal refusal.",
       "applicability": {
         "changed_paths": [
           "scripts/hunter_issue_agent_trigger.py",
           "scripts/hunter_github_transport.py",
           ".github/workflows/hunter-issue-agent-trigger.yml"
         ],
-        "rationale": "These surfaces carry the webhook dispatch transport, its attempt and backoff constants, and the workflow that supplies the operation timeout the budget must be reconciled against."
+        "rationale": "These surfaces carry both webhook endpoints, their retry/backoff behavior, and the workflow-level deadline. The governing budget is the overall dispatch deadline across both retry loops; a per-request timeout is only a consumer of that budget, never its source."
       },
       "prevention": {
-        "mechanism": "Recorded finding only. A correcting contribution must derive the attempt count and backoff ceiling from the operation timeout declared for the same dispatch, and must classify retry-budget exhaustion as a state distinct from terminal refusal, before this family can advance.",
+        "mechanism": "Recorded finding only. A correcting contribution must establish one explicit overall dispatch deadline covering authorization and dispatch endpoints together, derive each request timeout/retry/backoff decision from the remaining deadline, and classify deadline/retry exhaustion separately from terminal refusal before this family can advance.",
         "boundary": "review"
       },
       "regression_evidence": [],
@@ -1566,7 +1567,7 @@
     {
       "id": "DFF-037",
       "title": "governance-verdict-not-machine-readable",
-      "invariant": "Every gate emits its verdict on a machine-readable channel, and prose is derived from that verdict rather than carrying it. A consumer reads the structured verdict with all prose removed, and evidence that cannot be resolved blocks rather than degrading to an advisory note.",
+      "invariant": "Every mandatory merge/governance gate emits its authoritative verdict on a machine-readable channel, and prose is derived from that verdict rather than carrying it. Consumers of mandatory evidence read the structured verdict with prose removed; unavailable mandatory evidence fails closed. Optional external-review reporting remains explicitly non-blocking and cannot be promoted into merge authority by this family.",
       "applicability": {
         "changed_paths": [
           "scripts/hunter_pre_push.py",
@@ -1574,10 +1575,10 @@
           "scripts/hunter_merge_readiness_v2.py",
           "scripts/hunter_pre_ready_review.py"
         ],
-        "rationale": "These surfaces emit and consume gate verdicts. Where the verdict token exists only inside a human-readable banner, any consumer that decides must substring-match prose, and a banner that cannot be produced degrades silently instead of blocking."
+        "rationale": "These surfaces emit or consume governance/readiness verdicts. This family governs mandatory decision evidence only; optional external-review reporting in hunter_pre_push.py remains non-blocking under DFF-026 even when it shares the same file."
       },
       "prevention": {
-        "mechanism": "Recorded finding only. A correcting contribution must give each gate a structured verdict field and require consumers to read that field, prohibiting prose-token assertions as an interface, and must make unresolvable evidence a blocking outcome rather than a non-blocking note, before this family can advance.",
+        "mechanism": "Recorded finding only. A correcting contribution must give mandatory merge/governance gates structured verdict fields and require authoritative consumers to read those fields, prohibiting prose-token assertions as a decision interface. Unresolvable mandatory evidence blocks. Optional external-review evidence governed by DFF-026 remains advisory/non-blocking and is outside this family's fail-closed requirement.",
         "boundary": "review"
       },
       "regression_evidence": [],

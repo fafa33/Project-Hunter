@@ -4,6 +4,7 @@ import hashlib
 import json
 
 import hunter_defect_prevention_preflight as prevention
+import hunter_pre_ready_review as review
 
 
 def _family(family_id: str = "DFF-023", *, regression: list[str] | None = None) -> dict[str, object]:
@@ -236,3 +237,21 @@ def test_backfill_rejects_a_family_without_applicability_selector(monkeypatch, t
     _patch_registry(monkeypatch, tmp_path, [family])
     errors = prevention.validate_historical_defect_backfill()
     assert any("families_without_selector" in error for error in errors)
+
+
+def test_imported_families_preserve_selector_and_authority_boundaries() -> None:
+    families, error = review.load_families()
+    assert not error
+    by_id = {family["id"]: family for family in families}
+
+    malformed = "\u2060.github/workflows/ai-review.yml\u2060"
+    assert "DFF-033" in review.applicable_family_ids(families, (malformed,))
+
+    retry = by_id["DFF-034"]
+    assert "overall dispatch deadline" in retry["invariant"]
+    assert "Per-request timeouts" in retry["invariant"]
+
+    verdict = by_id["DFF-037"]
+    assert "mandatory" in verdict["invariant"]
+    assert "Optional external-review" in verdict["invariant"]
+    assert "DFF-026" in verdict["prevention"]["mechanism"]
