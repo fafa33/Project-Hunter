@@ -312,20 +312,38 @@
     "issue": "532",
     "review_target": [
       {
-        "blob_sha": "525dcebd136d3fb66456b147ce598a1a4838ceae",
+        "blob_sha": "d392ea64188fb04fc66886b291c5e95603283f70",
+        "path": ".github/workflows/hunter-canonicalization-auto.yml",
+        "previous_path": "",
+        "status": "added"
+      },
+      {
+        "blob_sha": "8947db700e27691628d4aa4d6189549a508d25e0",
         "path": "scripts/hunter_canonicalization_candidate_pr.py",
         "previous_path": "",
         "status": "added"
       },
       {
-        "blob_sha": "636aec2a193f711b012be628a4af917995a05467",
+        "blob_sha": "4ecda46f74623e4c983f3e8e4a405911686ec905",
         "path": "tests/test_hunter_canonicalization_candidate_pr.py",
         "previous_path": "",
         "status": "added"
       },
       {
+        "blob_sha": "16827760fc704440511131d205a4224f4444eb02",
+        "path": ".github/workflows/hunter-reviewer-collector.yml",
+        "previous_path": "",
+        "status": "modified"
+      },
+      {
         "blob_sha": "cf2b0f84c1f5b3c5909dc788a02d8c10ff3a89a6",
         "path": "docs/ARCHITECTURE_AUDITS/adpr-0012-source-handling-independent-audit.md",
+        "previous_path": "",
+        "status": "modified"
+      },
+      {
+        "blob_sha": "e26f29a3503a2c69fb54664c5fbeaf3ceba7949e",
+        "path": "scripts/hunter_collect_learning_observations.py",
         "previous_path": "",
         "status": "modified"
       },
@@ -336,8 +354,20 @@
         "status": "modified"
       },
       {
+        "blob_sha": "d1b9eb2a65c8e6d9a3b776ab31c7d47dd26c09b8",
+        "path": "scripts/hunter_review_orchestrator.py",
+        "previous_path": "",
+        "status": "modified"
+      },
+      {
         "blob_sha": "0dbc8fe98f2c4d141e864e306728de242c36f000",
         "path": "src/hunter/evidence_intelligence/engineering_context_authority.py",
+        "previous_path": "",
+        "status": "modified"
+      },
+      {
+        "blob_sha": "57aebe1c19cde866dcf4a0e80b36d93f63889565",
+        "path": "src/hunter/evidence_intelligence/incremental_knowledge_learning.py",
         "previous_path": "",
         "status": "modified"
       },
@@ -360,17 +390,35 @@
         "status": "modified"
       },
       {
+        "blob_sha": "14f6c829dd18f8562ca9e1ab0688d44e9e7e46ee",
+        "path": "tests/test_hunter_knowledge_learning_workflow.py",
+        "previous_path": "",
+        "status": "modified"
+      },
+      {
         "blob_sha": "55257ac0480c06a27a4c7b8e27c4744bf44ab047",
         "path": "tests/test_hunter_merge_readiness_v2.py",
         "previous_path": "",
         "status": "modified"
+      },
+      {
+        "blob_sha": "f3e08d4ff42c7e7bd1457b2d4fc49aeca1a250a6",
+        "path": "tests/test_hunter_review_orchestrator.py",
+        "previous_path": "",
+        "status": "modified"
+      },
+      {
+        "blob_sha": "f743b1c9041bb1c4036953885bce9e1cc7890f10",
+        "path": "tests/test_review_after_remediation_generation.py",
+        "previous_path": "",
+        "status": "modified"
       }
     ],
-    "review_target_digest": "bd7b88b6f9764c3f181a7d42ceb49348713c376bee20e20c9bb141bab4bd5f2d"
+    "review_target_digest": "11682f6ae27d2b09653420f02f71da7f84ef7d072b603bd07f1807cfd2f7a9d9"
   },
-  "review_id": "b6bc2ddf409a40900e3860d6375084ea8a0244d3926a7b03cc905c4b397b7d63",
+  "review_id": "c523b6ea791e9416dd233ce2daa0ffee9167a90ab2b1b8bf1694e79787b4db19",
   "review_request": {
-    "claims_id": "b6bc2ddf409a40900e3860d6375084ea8a0244d3926a7b03cc905c4b397b7d63",
+    "claims_id": "c523b6ea791e9416dd233ce2daa0ffee9167a90ab2b1b8bf1694e79787b4db19",
     "schema": "hunter.review-request.v1"
   },
   "schema": "hunter.pre-ready-hostile-review.v1"

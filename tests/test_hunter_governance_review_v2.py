@@ -189,6 +189,18 @@ def test_workflow_uses_only_trusted_v2_controller_with_safe_bootstrap():
     assert "if [ ! -f scripts/hunter_review_orchestrator.py ]; then" in reconcile
 
 
+def test_event_reconcile_scopes_to_triggering_pr_and_reserves_full_sweep_for_recovery():
+    workflow = (
+        Path(__file__).resolve().parents[1] / ".github" / "workflows" / "hunter-governance-reconcile.yml"
+    ).read_text(encoding="utf-8")
+    assert 'event_name="${{ github.event_name }}"' in workflow
+    assert 'pr_numbers="${{ github.event.pull_request.number }}"' in workflow
+    assert '--search "${{ github.event.workflow_run.head_sha }}"' in workflow
+    assert 'select(.headRefOid == "${{ github.event.workflow_run.head_sha }}")' in workflow
+    assert 'elif [[ "${event_name}" == "workflow_run" ]]' in workflow
+    assert 'else\n            pr_numbers="$(' in workflow
+
+
 def test_reconcile_continues_after_one_pr_failure_and_drops_checkout_credentials():
     workflow = (
         Path(__file__).resolve().parents[1] / ".github" / "workflows" / "hunter-governance-reconcile.yml"
