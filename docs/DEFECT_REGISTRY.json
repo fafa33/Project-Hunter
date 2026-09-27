@@ -1764,6 +1764,37 @@
       "sources": [
         "PR #535 exact HEAD 0553514f411a9ef16053bce75678b5357c78d403, live evidence: at least two Hunter Reviewer Collector runs (36340127965 and 36340195915) were dispatched for the same exact-head cycle, and the trusted orchestration status was republished with different reconcile trigger IDs for the same exact-head waiting cycle -- despite ensure_collector persisting a cycle status before every dispatch and COLLECTOR_LIVENESS_GRACE_SECONDS existing specifically to protect against GitHub listing lag -- proving GitHub's combined-status read can still report 'absent' to a second, closely-spaced reconcile execution after an earlier one had already posted its status and dispatched."
       ]
+    },
+    {
+      "id": "DFF-043",
+      "title": "canonical-knowledge-growth-causes-linear-per-task-prompt-growth",
+      "invariant": "Canonical knowledge growth (docs/DEFECT_REGISTRY.json) must not produce linear per-task prompt growth. Smart Prompt Machine must retrieve, deduplicate, compact, and bound trusted prevention context by task relevance before compilation, rather than inlining the full prose of every registry family whose applicability merely intersects a broad authorized-path root. Applicability (whether a family may ever be selected) stays a pure, unweakened structural path match; only the *rendering* of an applicable family -- full detail, compact summary, or omission -- may be bounded, and only by deterministic, offline, reproducible structural signals already present in canonical registry metadata and the owner-authored TaskScopeContract, never by caller-controlled task prose (preserving the PR #507 trust boundary) and never by an external LLM/API/network call. When even the most compact rendering of every genuinely applicable family cannot fit the governed budget, the compiler fails closed with a precise, structured reason naming the overflow and its largest contributors; it never silently truncates arbitrary JSON or text.",
+      "applicability": {
+        "changed_paths": [
+          "src/hunter/evidence_intelligence/engineering_context_authority.py",
+          "src/hunter/evidence_intelligence/smart_prompt_routing.py",
+          "docs/DEFECT_REGISTRY.json"
+        ],
+        "rationale": "engineering_context_authority.py is the sole compiler of governed_prevention_context from the defect registry, and smart_prompt_routing.py is the sole caller that inlines that compiled context into the engineering.implement prompt text the deeper Smart Prompt Machine pipeline measures for budget. Any future change to how registry families are selected, rendered, deduplicated, or bounded for that prompt -- or a change to docs/DEFECT_REGISTRY.json's own family schema that these two modules consume -- can reintroduce or mask this defect."
+      },
+      "prevention": {
+        "mechanism": "EngineeringContextAuthority.compile() now takes an explicit budget_bytes parameter (smart_prompt_routing.ENGINEERING_IMPLEMENT_PREVENTION_CONTEXT_MAX_BYTES: a fixed 40% share of the profile's own existing, unchanged ENGINEERING_IMPLEMENT_MAX_SOURCE_BYTES -- the overall prompt budget itself is never raised). Applicability filtering is unchanged (a family is selected iff a changed_paths entry structurally intersects scope.allowed_paths, net of scope.prohibited_paths). Selected families are then rendered: a family whose most specific matching changed_paths entry names an exact file gets its full title/invariant/lifecycle/prevention_boundary/guard_reference; one that only matches through a directory root gets a compact {id, title, prevention_boundary} summary -- id remains a durable lookup key into the untouched canonical registry, so nothing is deleted. Families the registry explicitly declares equivalent (same non-empty prevention.equivalence_class, a new optional field) are deduplicated to their single highest-priority representative (most specific match, then most-advanced lifecycle, then id) before rendering. If the rendered set still exceeds the budget, directory-matched entries are omitted (broadest/shortest/lowest-id first, their ids recorded in an elided_family_ids list rather than silently vanishing) and, failing that, file-specific entries are downgraded to compact form, least-specific first; only if even a fully-compact rendering of every applicable family still cannot fit does compile() raise EngineeringContextAuthorityError naming the exact byte overflow and largest contributors, never truncating the JSON itself.",
+        "boundary": "review"
+      },
+      "regression_evidence": [
+        "tests/test_engineering_context_authority.py::test_unrelated_registry_growth_does_not_grow_a_narrow_tasks_prompt",
+        "tests/test_engineering_context_authority.py::test_broad_allowed_root_does_not_authorise_inlining_every_touching_family",
+        "tests/test_engineering_context_authority.py::test_a_specific_relevant_defect_survives_bounded_selection_in_full",
+        "tests/test_engineering_context_authority.py::test_equivalent_prevention_invariants_are_deduplicated_not_deleted",
+        "tests/test_engineering_context_authority.py::test_dedup_picks_the_more_specific_representative_deterministically",
+        "tests/test_engineering_context_authority.py::test_bounded_selection_fails_closed_rather_than_truncating_when_nothing_fits",
+        "tests/test_engineering_context_authority.py::test_selection_is_deterministic_and_offline_across_repeated_compiles",
+        "tests/test_engineering_context_authority.py::test_representative_engineering_implement_scope_fits_the_real_prevention_budget"
+      ],
+      "lifecycle": "regression-tested",
+      "sources": [
+        "PR #535 exact HEAD 7de343136d7c7bdcd8b0cb6de92698b3aa3032c5, live evidence and read-only causal trace (owner-directed re-diagnosis after an initial, incorrect 'unrelated/pre-existing' characterization was withdrawn): EngineeringContextAuthority.compile() inlined the full title/invariant/lifecycle/prevention_boundary/guard_reference text of every applicable defect family whenever its applicability intersected the broad allowed_paths every Issue Agent test fixture shares (tests/issue_agent_wire.py::issue_body_with_scope: src/, scripts/, tests/, docs/). Measured directly against three real registry revisions with this exact fixture: main/base 156ed2fad (36 applicable families) compiled to ~27,366 bytes against a 28,672-byte budget; PR #535 before this session's own commits, 0553514f (+DFF-040, 37 families) to ~28,244 bytes; this session's own DFF-041/DFF-042 additions (39 families) pushed it to ~30,040 bytes -- over budget, reproducing the hosted INSUFFICIENT_BUDGET failure's own reported preflight size almost exactly. 32 tests across tests/test_issue_agent_execution.py, tests/test_issue_agent_issuer.py, and tests/test_issue_agent_provisioner.py failed identically as a downstream consequence."
+      ]
     }
   ]
 }

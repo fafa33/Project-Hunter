@@ -40,6 +40,17 @@ ENGINEERING_IMPLEMENT_ROUTE_ID = "engineering-implement-route"
 ENGINEERING_IMPLEMENT_VERSION = "1"
 ENGINEERING_IMPLEMENT_MAX_SOURCE_BYTES = 32_768
 ENGINEERING_IMPLEMENT_RESERVED_COMPLETION_BYTES = 4_096
+#: Canonical registry knowledge (docs/DEFECT_REGISTRY.json) may grow without
+#: bound; the per-task prompt it feeds must not grow linearly with it. This
+#: reserves a fixed share of the profile's own existing, unchanged input
+#: budget for EngineeringContextAuthority's compiled prevention context, so
+#: registry growth is bounded by that share rather than by whatever remains
+#: after the task payload -- and the task payload's own existing budget and
+#: fail-closed behaviour (PromptTaskUnreadyError, DFF-018) are unaffected.
+ENGINEERING_IMPLEMENT_PREVENTION_CONTEXT_BUDGET_FRACTION = 0.4
+ENGINEERING_IMPLEMENT_PREVENTION_CONTEXT_MAX_BYTES = int(
+    ENGINEERING_IMPLEMENT_MAX_SOURCE_BYTES * ENGINEERING_IMPLEMENT_PREVENTION_CONTEXT_BUDGET_FRACTION
+)
 
 _PROMPT_AUTOMATION_SIGNING_KEY_ENV = "HUNTER_PROMPT_AUTOMATION_SIGNING_KEY"
 _PROMPT_AUTOMATION_VERIFYING_KEY_ENV = "HUNTER_PROMPT_AUTOMATION_VERIFYING_KEY"
@@ -629,7 +640,9 @@ class SmartPromptMachine:
                     "engineering implementation scope must bind the execution owner identity"
                 )
             prevention_context = self._engineering_context_authority.compile(
-                request.task_key, scope=implementation_scope
+                request.task_key,
+                scope=implementation_scope,
+                budget_bytes=ENGINEERING_IMPLEMENT_PREVENTION_CONTEXT_MAX_BYTES,
             )
             task_text = json.dumps(
                 {
