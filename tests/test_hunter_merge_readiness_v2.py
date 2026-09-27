@@ -566,3 +566,19 @@ def test_decide_completion_returns_none_for_a_pr_that_is_not_open(monkeypatch):
     monkeypatch.setattr(core, "request_json", lambda method, path, payload=None: {**_pr(), "state": "closed"})
 
     assert core.decide_completion(501) is None
+
+
+def test_normal_decide_path_enforces_completion_gate(monkeypatch):
+    pr = {"state": "open", "head": {"sha": "a" * 40}}
+    monkeypatch.setattr(core, "request_json", lambda *args, **kwargs: pr)
+    monkeypatch.setattr(core, "LiveReadinessObservation", lambda *args: object())
+    monkeypatch.setattr(
+        core,
+        "evaluate_completion_claim",
+        lambda observation: core.CompletionVerdict(False, "COMPLETION_REJECTED", "worker completion rejected"),
+    )
+    monkeypatch.setattr(core, "evaluate", lambda observation: core.Decision("pending", "waiting"))
+    head, decision = core.decide(530)
+    assert head == "a" * 40
+    assert decision.state == "pending"
+    assert decision.description == "worker completion rejected"

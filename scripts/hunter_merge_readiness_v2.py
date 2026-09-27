@@ -567,7 +567,12 @@ def decide(pr_number: int) -> tuple[str, Decision] | None:
     if not head_sha:
         return "", Decision("pending", "Waiting: current PR head SHA is unavailable.")
 
-    return head_sha, evaluate(LiveReadinessObservation(pr_number, pr, head_sha))
+    observation = LiveReadinessObservation(pr_number, pr, head_sha)
+    verdict = evaluate_completion_claim(observation)
+    if verdict.accepted:
+        return head_sha, Decision("success", verdict.reason)
+    decision = evaluate(observation)
+    return head_sha, Decision(decision.state, verdict.reason)
 
 
 def decide_completion(pr_number: int) -> CompletionVerdict | None:

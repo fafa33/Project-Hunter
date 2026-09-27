@@ -15,6 +15,9 @@ def test_codeql_bridge_still_fails_on_real_analysis_error():
     assert "exit 1" in WORKFLOW
 
 
-def test_codeql_bridge_uses_event_merge_sha_without_redundant_pr_api_reads():
+def test_codeql_bridge_refreshes_synthetic_merge_sha_while_polling():
     assert "github.event.pull_request.merge_commit_sha" in WORKFLOW
-    assert 'gh api "repos/${GH_REPO}/pulls/${PR_NUMBER}"' not in WORKFLOW
+    assert 'gh api "repos/${GH_REPO}/pulls/${PR_NUMBER}"' in WORKFLOW
+    loop = WORKFLOW.index("for attempt in $(seq 1 60); do")
+    refresh = WORKFLOW.index('gh api "repos/${GH_REPO}/pulls/${PR_NUMBER}"')
+    assert refresh > loop
