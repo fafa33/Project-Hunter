@@ -27,7 +27,7 @@
       },
       {
         "criterion": "No false READY while the bounded independent-review opportunity is still pending: a candidate is not reported fully ready to merge while a legitimately requested review has not yet reached a terminal state.",
-        "evidence": "hunter_merge_readiness_v2.evaluate() deliberately does not gate its success decision on review-authority state (explicit design comment in the source, and tests/test_hunter_merge_readiness_v2.py::test_a_new_commit_after_codex_review_stales_readiness_again asserts state stays 'success' even when review_authority reports failure) -- an existing, intentional architectural choice this PR does not change. Closing the specific gap of gating success on an in-flight, not-yet-terminal review would mean modifying this exact-head, security-critical, previously-regressed (RFD-416-001) code path; that is a real, separate piece of work this PR does not attempt. See finding F-1.",
+        "evidence": "hunter_merge_readiness_v2.evaluate() -- the function that actually decides the GitHub-visible 'Hunter Merge Readiness' status humans merge against -- still deliberately does not gate success on review-authority state (unchanged by this PR, per DFF-026: external review is defense-in-depth, never a mandatory merge dependency). What this PR does add is a stricter, separate completion gate: evaluate_completion_claim()/decide_completion() now reject completion (not mergeability) while review_authority reports 'pending'. This closes the concern for 'should a worker consider this done', not for what GitHub's own merge-readiness check reports; the criterion as literally worded ('reported fully ready to merge') is about the latter and remains not-applicable to this diff. See finding F-1 (now resolved for the completion-gate reading) for the full history.",
         "id": "AC-5",
         "verdict": "not-applicable"
       },
@@ -45,7 +45,7 @@
       },
       {
         "criterion": "An independent Completion Gate evaluates completion against real, current, exact-HEAD evidence (required hosted checks green, governance/verification gates green, the bounded independent-review opportunity at a legitimate terminal state, no unresolved substantive finding), not against any agent's self-report.",
-        "evidence": "evaluate_completion_claim() re-derives its verdict from the same current-hosted-state evaluate() Merge Readiness uses (draft state, mergeability, unresolved review threads, changes requested, unresolved validated reviewer dispositions, candidate admission, required checks Quality Gates/dependency-review/CodeQL, shared-head attribution) every time it is called. The review-opportunity-terminal-state clause is the one piece not yet gated here -- see AC-5/finding F-1.",
+        "evidence": "evaluate_completion_claim() re-derives its verdict from the same current-hosted-state evaluate() Merge Readiness uses (draft state, mergeability, unresolved review threads, changes requested, unresolved validated reviewer dispositions, candidate admission, required checks Quality Gates/dependency-review/CodeQL, shared-head attribution) every time it is called, AND -- following independent review confirming this gap (finding F-1) -- now additionally rejects while the independent-review opportunity has not reached a terminal state. decide_completion() (finding F-6) makes this a real, invokable production check against a live PR, not only unit-tested logic.",
         "id": "AC-8",
         "verdict": "satisfied"
       },
@@ -218,7 +218,7 @@
         "outcome": "clear"
       },
       {
-        "evidence": "evaluate_completion_claim() introduces no new dependency on external reviewer availability; it reuses evaluate(), which already treats external review as optional defense-in-depth, unchanged.",
+        "evidence": "evaluate_completion_claim() introduces no new dependency on external reviewer availability; it reuses evaluate(), which already treats external review as optional defense-in-depth, unchanged. The new review-pending rejection in evaluate_completion_claim() (finding F-1) is a stricter, separate completion question, not a merge-authority gate: it never blocks push, candidate admission, governance success, or evaluate()'s own merge-readiness decision, so no reviewer's absence can deadlock merge authority through it.",
         "family": "DFF-026",
         "outcome": "clear"
       },
@@ -245,10 +245,14 @@
     ],
     "findings": [
       {
-        "evidence": "AC-5 (no false READY while review is pending) is not closed by this PR: hunter_merge_readiness_v2.evaluate() deliberately does not gate success on review-authority state, so a PR that is Ready (non-Draft) with green required checks but a still-in-progress review would currently report success. Closing this narrowly would mean modifying exact-head, security-critical review-authority code that had a real prior regression (RFD-416-001); that is real, separate, carefully-scoped work this PR intentionally does not rush. Tracked under Issue #532 for follow-up.",
+        "evidence": "AC-5/AC-8 (no false READY / no false completion while review is pending): independent review (chatgpt-codex-connector[bot]) confirmed this exact gap on this PR and treated it as P1, which is the signal to stop deferring it. evaluate_completion_claim() now additionally rejects while review_authority reports 'pending' (covers WAITING_FOR_REVIEWER/REVIEW_IN_PROGRESS/POOL_EXHAUSTED), without touching evaluate()'s own merge-readiness decision or its GitHub status output -- so 'currently mergeable' (unaffected, external review remains defense-in-depth per DFF-026) and 'genuinely done' (now stricter) stay correctly distinct.",
         "id": "F-1",
-        "resolution": "unresolved",
-        "severity": "non-blocking"
+        "resolution": "resolved",
+        "resolution_evidence": {
+          "correction": "be62241961d8d7222d6087060d5983e46afb0290",
+          "regression_test": "tests/test_hunter_merge_readiness_v2.py"
+        },
+        "severity": "blocking"
       },
       {
         "evidence": "evaluate_completion_claim() collapses evaluate()'s pending/failure distinction into a single COMPLETION_REJECTED state (DFF-014 evidence above explains why this is safe for this function's specific purpose). A future caller that needs the pending-vs-failure distinction should read CompletionVerdict.reason or call evaluate() directly rather than assume evaluate_completion_claim()'s two-state model is exhaustive.",
@@ -277,18 +281,44 @@
         "id": "F-5",
         "resolution": "unresolved",
         "severity": "non-blocking"
+      },
+      {
+        "evidence": "Independent review (chatgpt-codex-connector[bot], P1) found evaluate_completion_claim() had no production caller -- only the unit tests exercised it, so it could not reject any real worker's completion claim; AC-7/AC-8 were convention, not enforcement. Fixed: hunter_merge_readiness_v2.py gains decide_completion(pr_number), building the same live GitHub observation decide() already uses, and `python scripts/hunter_merge_readiness_v2.py completion <pr>` is now a genuine invokable production path.",
+        "id": "F-6",
+        "resolution": "resolved",
+        "resolution_evidence": {
+          "correction": "be62241961d8d7222d6087060d5983e46afb0290",
+          "regression_test": "tests/test_hunter_merge_readiness_v2.py"
+        },
+        "severity": "blocking"
+      },
+      {
+        "evidence": "Independent review (chatgpt-codex-connector[bot], P1) found propose() could silently orphan the dedicated branch forever: if a prior run's push succeeded but its own `gh pr create` call then failed (a transient network blip, a crash), the branch carried real unmerged content with no PR, and every later run computing the identical already-applied observations would just report NO-OP without ever discovering the missing PR. Fixed: propose() now reconciles a real, unmerged, PR-less dedicated branch by opening the missing PR for it, with no new commit needed.",
+        "id": "F-7",
+        "resolution": "resolved",
+        "resolution_evidence": {
+          "correction": "be62241961d8d7222d6087060d5983e46afb0290",
+          "regression_test": "tests/test_hunter_canonicalization_candidate_pr.py"
+        },
+        "severity": "blocking"
+      },
+      {
+        "evidence": "Independent review (chatgpt-codex-connector[bot], P1) confirmed AC-4 (bounded independent review) and AC-9 (automatic finding-to-remediation orchestration) remain genuinely open: no unattended caller exists for hunter_canonicalization_candidate_pr.py, and docs/REVIEWER_FINDING_DISPOSITIONS.json remains hand-curated with no ingestion pipeline. Both were already disclosed as 'not-applicable' to this diff with evidence in AC-4/AC-9 above; this finding records that independent review examined and agrees these are real, currently-unaddressed gaps rather than resolved or dismissed items -- closing them needs either a new secret or a new CODE_WRITE_POLICY.json connector_write_ingress scope for an unattended writer, both outside this session's authority to self-grant. Tracked under Issue #532 for follow-up; not claimed as done here.",
+        "id": "F-8",
+        "resolution": "unresolved",
+        "severity": "non-blocking"
       }
     ],
     "issue": "532",
     "review_target": [
       {
-        "blob_sha": "fb897f972815ee46bf05a05cb0de0d0225f5ee59",
+        "blob_sha": "525dcebd136d3fb66456b147ce598a1a4838ceae",
         "path": "scripts/hunter_canonicalization_candidate_pr.py",
         "previous_path": "",
         "status": "added"
       },
       {
-        "blob_sha": "845d27205c92b5a3169b5c90561bb9e0ba610339",
+        "blob_sha": "636aec2a193f711b012be628a4af917995a05467",
         "path": "tests/test_hunter_canonicalization_candidate_pr.py",
         "previous_path": "",
         "status": "added"
@@ -300,7 +330,7 @@
         "status": "modified"
       },
       {
-        "blob_sha": "41f159285c6cfb8616c00bd9f8d3fee5274333a9",
+        "blob_sha": "c4a9cd1753dbccb0a0714ad2a73a0795ee7973f6",
         "path": "scripts/hunter_merge_readiness_v2.py",
         "previous_path": "",
         "status": "modified"
@@ -330,17 +360,17 @@
         "status": "modified"
       },
       {
-        "blob_sha": "c82beef773d9d61e324b002e29b974223f6ac37b",
+        "blob_sha": "55257ac0480c06a27a4c7b8e27c4744bf44ab047",
         "path": "tests/test_hunter_merge_readiness_v2.py",
         "previous_path": "",
         "status": "modified"
       }
     ],
-    "review_target_digest": "a7cb31a1dc8ed4d1826cb0fa714f78f439c76f22b4e1bd259af17e647631b5c5"
+    "review_target_digest": "bd7b88b6f9764c3f181a7d42ceb49348713c376bee20e20c9bb141bab4bd5f2d"
   },
-  "review_id": "e446e43bdd98f7cbdb97a939499b03aa92a63e7cbf06f26da47d5c302f0db7cd",
+  "review_id": "b6bc2ddf409a40900e3860d6375084ea8a0244d3926a7b03cc905c4b397b7d63",
   "review_request": {
-    "claims_id": "e446e43bdd98f7cbdb97a939499b03aa92a63e7cbf06f26da47d5c302f0db7cd",
+    "claims_id": "b6bc2ddf409a40900e3860d6375084ea8a0244d3926a7b03cc905c4b397b7d63",
     "schema": "hunter.review-request.v1"
   },
   "schema": "hunter.pre-ready-hostile-review.v1"
