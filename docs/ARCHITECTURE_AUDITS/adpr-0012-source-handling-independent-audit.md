@@ -118,6 +118,7 @@ Additional canonical sources examined: `docs/HUNTER_IMPLEMENTATION_CONTRACT.md`;
 | ADR 0033 | reviewed; governing decision. Ownership honoured, mechanics supplied, no amendment attempted |
 | ADR 0034 | reviewed; no conflict — Model Adapter remains a consumer |
 | ADR 0035 | reviewed; no conflict — Response Validator remains a consumer |
+| ADR 0036 | reviewed; no conflict — ADPR-0012 explicitly defers all binding force and mechanics to ADR 0036; this audit's verdict authorized only ADR 0036's drafting lifecycle, not its later acceptance, and ADR 0036 accepted no substantive architecture this audit did not already review |
 
 ## Controlling Document Review
 
