@@ -118,7 +118,7 @@ Additional canonical sources examined: `docs/HUNTER_IMPLEMENTATION_CONTRACT.md`;
 | ADR 0033 | reviewed; governing decision. Ownership honoured, mechanics supplied, no amendment attempted |
 | ADR 0034 | reviewed; no conflict — Model Adapter remains a consumer |
 | ADR 0035 | reviewed; no conflict — Response Validator remains a consumer |
-| ADR 0036 | reviewed; no conflict — ADPR-0012 explicitly defers binding force to ADR 0036, and this audit's verdict authorized only ADR 0036's drafting lifecycle. ADR 0036's draft added the repository-assigned `admission_time` cutoff-eligibility mechanic (§§3, 8) beyond what this audit's pinned ADPR-0012 revision specified (which used only the issuer-claimed `effective_from`/`recorded_at`/`known_at` triple); this row accounts for ADR 0036's governing relationship to the audited ADPR-0012 without asserting review coverage of that later mechanic |
+| ADR 0036 | reviewed; no conflict — ADPR-0012 explicitly defers binding force to ADR 0036, and this audit's verdict authorized only ADR 0036's drafting lifecycle. ADR 0036's draft added the repository-assigned `admission_time` cutoff-eligibility mechanic (§§3, 8) beyond what this audit's pinned ADPR-0012 revision specified (which used only the issuer-claimed `effective_from`/`recorded_at`/`known_at` triple); this row accounts for ADR 0036's governing relationship to the audited ADPR-0012 review_coverage(admission_time)=false |
 
 ## Controlling Document Review
 

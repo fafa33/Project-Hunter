@@ -154,9 +154,24 @@ def test_adr_0036_accounting_row_does_not_overclaim_review_coverage() -> None:
     row = next(line for line in text.splitlines() if line.startswith("| ADR 0036 |"))
 
     assert "admission_time" in row, "the row must name the mechanic it does not claim to cover"
-    assert (
-        "without asserting review coverage of that later mechanic" in row
-    ), "the row must affirmatively state that the later admission_time mechanic was not review-covered"
+
+    def admission_time_review_coverage(value: str) -> bool:
+        marker = "review_coverage(admission_time)="
+        fields = [part.strip() for part in value.split("|")]
+        matches = [field for field in fields if marker in field]
+        assert len(matches) == 1, "the row must carry exactly one structured admission_time coverage claim"
+        claim = matches[0].split(marker, 1)[1].split()[0].rstrip(".,;")
+        assert claim in {"true", "false"}, "admission_time review coverage must be explicitly boolean"
+        return claim == "true"
+
+    assert admission_time_review_coverage(row) is False
+
+    contradictory_row = row.replace(
+        "review_coverage(admission_time)=false",
+        "review_coverage(admission_time)=true",
+    )
+    assert admission_time_review_coverage(contradictory_row) is True
+
     assert "accepted no substantive architecture this audit did not already review" not in row
 
 
