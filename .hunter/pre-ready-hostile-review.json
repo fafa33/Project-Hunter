@@ -54,6 +54,12 @@
         "evidence": "ensure_collector now cross-checks the collector run listing (a separate, directly-queried endpoint from the combined-status read) before minting a fresh dispatch whenever no trusted cycle status is visible at all, converging on an already-live/dead/completed run instead of dispatching again; unreadable cross-check evidence fails closed to not dispatching. The pre-existing 'present'-cycle branch (COLLECTOR_LIVENESS_GRACE_SECONDS, MAX_COLLECTOR_DISPATCHES, collector_needs_dispatch) is completely unmodified, so bounded recovery of a genuinely dead dispatch is unaffected.",
         "id": "AC-9",
         "verdict": "satisfied"
+      },
+      {
+        "criterion": "Canonical prevention-knowledge growth (docs/DEFECT_REGISTRY.json) must not cause linear per-task engineering.implement prompt growth; the compiler must retrieve/deduplicate/compact/bound trusted prevention context by deterministic, offline, task-scoped relevance signals only (never caller-controlled task prose, never an external LLM/API call), and must fail closed rather than silently truncate when genuinely applicable knowledge cannot fit even fully compacted.",
+        "evidence": "EngineeringContextAuthority.compile(budget_bytes=...) implements applicability-preserving bounded rendering (full detail for exact-file matches, compact {id,title,prevention_boundary} for directory-root-only matches, explicit prevention.equivalence_class deduplication, tiered omission/downgrade, and a structured EngineeringContextAuthorityError when nothing fits). smart_prompt_routing.py reserves a fixed 40% share of the unchanged ENGINEERING_IMPLEMENT_MAX_SOURCE_BYTES for it. Measured against the real registry (40 families) for the exact scope every Issue Agent test shares: families blob 11,208 bytes (budget 13,107), estimated total preflight ~15,629 bytes, well under the unchanged 28,672-byte available budget.",
+        "id": "AC-10",
+        "verdict": "satisfied"
       }
     ],
     "adversarial_dimensions": [
@@ -216,6 +222,46 @@
         "evidence": "This diff is the correcting contribution for the newly-recorded DFF-042 (exact-head-initial-dispatch-not-idempotent-under-stale-status-read): ensure_collector now cross-checks the collector run listing before minting a fresh dispatch whenever no trusted cycle status is visible, proven by test_two_racing_reconcile_calls_never_double_dispatch_when_the_status_read_lags; the pre-existing bounded dead-dispatch recovery path is unaffected, proven by the unchanged test_a_failed_collector_is_redispatched_rather_than_parking_the_cycle continuing to pass.",
         "family": "DFF-042",
         "outcome": "clear"
+      },
+      {
+        "evidence": "This diff is the correcting contribution for the newly-recorded DFF-043 (canonical-knowledge-growth-causes-linear-per-task-prompt-growth): EngineeringContextAuthority.compile() now takes an explicit budget_bytes and bounds/deduplicates/compacts rendering by deterministic structural relevance rather than inlining every applicable family's full prose, proven by the 8 new regression tests in tests/test_engineering_context_authority.py (TEST1-6 per the owner's authorized mission), and by the 32 previously-failing tests/test_issue_agent_execution.py, tests/test_issue_agent_issuer.py, tests/test_issue_agent_provisioner.py tests now passing.",
+        "family": "DFF-043",
+        "outcome": "clear"
+      },
+      {
+        "evidence": "This diff adds no clock/cutoff/temporal-authority logic; EngineeringContextAuthority.compile() consumes no caller-supplied time value.",
+        "family": "DFF-001",
+        "outcome": "clear"
+      },
+      {
+        "evidence": "This diff touches no database transaction/snapshot boundary; engineering_context_authority.py and smart_prompt_routing.py are pure in-memory derivations over the registry file and an owner-authored scope object.",
+        "family": "DFF-002",
+        "outcome": "clear"
+      },
+      {
+        "evidence": "No logical identity is minted or reused by this diff; family ids continue to come from, and be uniqueness-checked against, the unmodified canonical registry parser.",
+        "family": "DFF-003",
+        "outcome": "clear"
+      },
+      {
+        "evidence": "The new optional prevention.equivalence_class field and the new budget_bytes parameter are both validated fail-closed (EngineeringContextAuthorityError on a non-string/empty equivalence_class or a non-positive budget_bytes) rather than silently accepted, consistent with this module's existing schema validation style.",
+        "family": "DFF-004",
+        "outcome": "clear"
+      },
+      {
+        "evidence": "This diff persists nothing; compile() is a pure function over its registry file and scope/budget arguments with no nested-metadata write path.",
+        "family": "DFF-005",
+        "outcome": "clear"
+      },
+      {
+        "evidence": "compile() is deterministic and stateless across calls/restarts (proven by test_selection_is_deterministic_and_offline_across_repeated_compiles); it carries no monotonic counter or restart-sensitive state.",
+        "family": "DFF-006",
+        "outcome": "clear"
+      },
+      {
+        "evidence": "The dispatchability gate this family guards (PromptTaskUnreadyError raised from the compiled allocation outcome in smart_prompt_routing.compile_task) is completely unmodified by this diff; this diff only changes what is fed into compilation (bounding the prevention-context contribution), never the READY/outcome decision itself, which remains the sole authority over whether a build may be wrapped into an envelope.",
+        "family": "DFF-018",
+        "outcome": "clear"
       }
     ],
     "findings": [
@@ -258,6 +304,16 @@
           "regression_test": "tests/test_hunter_review_orchestrator.py"
         },
         "severity": "blocking"
+      },
+      {
+        "evidence": "Live PR #535 evidence (owner-directed re-diagnosis after this session's own initial 'unrelated/pre-existing' characterization of 32 hosted test failures was shown incorrect and withdrawn): EngineeringContextAuthority.compile() inlined every applicable defect family's full prose whenever its applicability intersected a broad allowed_paths root, so canonical registry growth (this PR's own DFF-040/041/042 additions included) grew the compiled engineering.implement prompt linearly, crossing the fixed 28,672-byte budget and causing 32 downstream INSUFFICIENT_BUDGET test failures.",
+        "id": "F-5",
+        "resolution": "resolved",
+        "resolution_evidence": {
+          "correction": "ac0572e4645211bccec6d25ab1c2f14eacdcd91a",
+          "regression_test": "tests/test_engineering_context_authority.py"
+        },
+        "severity": "blocking"
       }
     ],
     "issue": "534",
@@ -269,7 +325,7 @@
         "status": "modified"
       },
       {
-        "blob_sha": "ca5db28c46b6763ada6abed872dfd26b9770237a",
+        "blob_sha": "67d263d34fb9e09b3e2dce23f2a2800350a28fbf",
         "path": ".github/workflows/hunter-reviewer-collector.yml",
         "previous_path": "",
         "status": "modified"
@@ -281,7 +337,7 @@
         "status": "modified"
       },
       {
-        "blob_sha": "a13b969b2aa6a281d5f261978e1eedd82bfb7617",
+        "blob_sha": "97a451e7c8be76b72884f36817c34d8753e541f4",
         "path": "docs/DEFECT_REGISTRY.json",
         "previous_path": "",
         "status": "modified"
@@ -311,8 +367,26 @@
         "status": "modified"
       },
       {
-        "blob_sha": "d761b4b32ed4d6e91eefe8f66131d867915ee323",
+        "blob_sha": "7d647a7953f967dd96d1090fcad73efe9ab89688",
+        "path": "src/hunter/evidence_intelligence/engineering_context_authority.py",
+        "previous_path": "",
+        "status": "modified"
+      },
+      {
+        "blob_sha": "8c93df8acb8e1874d32288b30e32c6ecabbbe7ae",
+        "path": "src/hunter/evidence_intelligence/smart_prompt_routing.py",
+        "previous_path": "",
+        "status": "modified"
+      },
+      {
+        "blob_sha": "b9ac82235f1ba15971b539f315e62c7176fba702",
         "path": "tests/test_code_write_policy.py",
+        "previous_path": "",
+        "status": "modified"
+      },
+      {
+        "blob_sha": "6454b1999e08ff5affece7248e42899f863a2296",
+        "path": "tests/test_engineering_context_authority.py",
         "previous_path": "",
         "status": "modified"
       },
@@ -329,13 +403,13 @@
         "status": "modified"
       },
       {
-        "blob_sha": "abc6d394feab5ad226cc14d7bfb9142e9dc60dce",
+        "blob_sha": "907e4a3b9f56195c6b60fedb505a1693256b1c3a",
         "path": "tests/test_hunter_review_orchestrator.py",
         "previous_path": "",
         "status": "modified"
       },
       {
-        "blob_sha": "5701a4108798125fded387dd425ff610b3101997",
+        "blob_sha": "d480c8b3d8748d3867cb3b8014e487fbded7ba2f",
         "path": "tests/test_hunter_reviewer_collector.py",
         "previous_path": "",
         "status": "modified"
@@ -347,11 +421,11 @@
         "status": "modified"
       }
     ],
-    "review_target_digest": "4a87e26f0adf59caa44dd59006c3ebf7debb495be953ef7486e5f2319108e47b"
+    "review_target_digest": "bb567b52ab6dda038ee3c071edeaf0adb27cd3975ad343fc8381c0f99e8293a1"
   },
-  "review_id": "74c2de61a2e123b27bdbbd97dfc55922a4ab8ccf893ef5407bf79232b69d3621",
+  "review_id": "b4fb75fd0174161427a26bf2f06143e67bd793d5cac1cae75c8eb7c3509054cb",
   "review_request": {
-    "claims_id": "74c2de61a2e123b27bdbbd97dfc55922a4ab8ccf893ef5407bf79232b69d3621",
+    "claims_id": "b4fb75fd0174161427a26bf2f06143e67bd793d5cac1cae75c8eb7c3509054cb",
     "schema": "hunter.review-request.v1"
   },
   "schema": "hunter.pre-ready-hostile-review.v1"
