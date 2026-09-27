@@ -58,6 +58,17 @@ jobs:
             echo "available=false" >> "$GITHUB_OUTPUT"
             echo "Bootstrap: trusted default branch does not contain the canonicalization engine yet; candidate code will not be executed."
           fi
+      - name: Set up Python
+        if: steps.engine.outputs.available == 'true'
+        uses: actions/setup-python@v6
+        with:
+          python-version: "3.11"
+          cache: pip
+      - name: Install trusted canonicalization engine
+        if: steps.engine.outputs.available == 'true'
+        env:
+          PIP_CONSTRAINT: requirements/ci-constraints.txt
+        run: python -m pip install --only-binary ':all:' -c requirements/ci-constraints.txt .
       - name: Capture authenticated finding lifecycle
         if: steps.engine.outputs.available == 'true'
         env:
