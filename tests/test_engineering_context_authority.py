@@ -105,6 +105,28 @@ def test_multi_surface_family_survives_when_one_surface_is_still_permitted(tmp_p
     assert [item["id"] for item in result["applicable_defect_families"]] == ["DFF-MULTI"]
 
 
+def test_compiled_context_carries_the_no_repository_rediscovery_execution_rule(tmp_path: Path) -> None:
+    authority = EngineeringContextAuthority(registry_path=_registry(tmp_path, [_family("DFF-018")]))
+    context = authority.compile(ENGINEERING_IMPLEMENT_TASK_KEY, scope=_scope("src/hunter/", "scripts/"))
+
+    discipline = cast(list[str], context["execution_discipline"])
+    assert discipline, "execution_discipline must be non-empty for every compiled engineering context"
+    joined = " ".join(discipline).lower()
+    assert "restart" in joined and "onboarding" in joined
+    assert "full test suite" in joined
+    assert "concrete evidence" in joined
+
+
+def test_execution_discipline_is_fixed_and_does_not_vary_with_scope_or_families(tmp_path: Path) -> None:
+    path = _registry(tmp_path, [_family("DFF-001", "src/hunter/"), _family("DFF-002", "scripts/")])
+    authority = EngineeringContextAuthority(registry_path=path)
+
+    narrow = authority.compile(ENGINEERING_IMPLEMENT_TASK_KEY, scope=_scope("src/hunter/"))
+    broad = authority.compile(ENGINEERING_IMPLEMENT_TASK_KEY, scope=_scope("src/hunter/", "scripts/"))
+
+    assert narrow["execution_discipline"] == broad["execution_discipline"]
+
+
 def test_broad_family_survives_nested_prohibition_when_permitted_surface_remains(tmp_path: Path) -> None:
     family = _family("DFF-BROAD", "src/hunter/")
     authority = EngineeringContextAuthority(registry_path=_registry(tmp_path, [family]))

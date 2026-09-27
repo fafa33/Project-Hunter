@@ -28,7 +28,29 @@ ENGINEERING_IMPLEMENT_ROUTE_SURFACES = (
     "src/",
     "tests/",
 )
-ENGINEERING_CONTEXT_SCHEMA_VERSION = "engineering-context-authority-v1"
+ENGINEERING_CONTEXT_SCHEMA_VERSION = "engineering-context-authority-v2"
+
+#: A fresh agent session inherits repository state, not repository amnesia: it
+#: must not restart onboarding-style discovery just because the session
+#: restarted. This is a fixed, non-derived rule set -- it does not depend on
+#: task text, scope, or the defect registry, so it never affects the
+#: deterministic-repeat-compile invariant the callers of `compile()` rely on.
+#: Reconciles the general "inspect the repository/branch/PR/architecture at
+#: session start" guidance with the no-repository-rediscovery execution rule:
+#: both hold, because this scopes what "inspect" means to what this task
+#: actually needs, not a general audit.
+EXECUTION_DISCIPLINE_RULES: tuple[str, ...] = (
+    "A fresh agent session continues from current repository state; it is not "
+    "a reason to restart repository onboarding or general architecture discovery.",
+    "Read a file only for a task-specific reason; do not scan unrelated "
+    "directories, and do not reread historical ADRs, Issues, or PRs merely for "
+    "general familiarity.",
+    "Do not run the full test suite for reassurance; verify this task with " "focused, scoped checks.",
+    "Expanding scope beyond scope_allowed_paths above requires concrete "
+    "evidence that the current scope is insufficient, not a preference for "
+    "more context.",
+)
+
 CANONICAL_DEFECT_LIFECYCLES = frozenset(
     {"recorded", "regression-tested", "locally-enforced", "hosted-enforced", "merge-enforced", "prevented"}
 )
@@ -150,6 +172,7 @@ class EngineeringContextAuthority:
             "scope_allowed_paths": list(scope.allowed_paths),
             "scope_prohibited_paths": list(scope.prohibited_paths),
             "applicable_defect_families": selected,
+            "execution_discipline": list(EXECUTION_DISCIPLINE_RULES),
         }
 
     def canonical_json(self, task_key: str, *, scope: TaskScopeContract) -> str:

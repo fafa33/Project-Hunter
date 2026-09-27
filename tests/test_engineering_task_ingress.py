@@ -354,6 +354,8 @@ def test_implementation_route_injects_governed_dpm_context_without_changing_task
     family_ids = {item["id"] for item in payload["governed_prevention_context"]["applicable_defect_families"]}
     assert "DFF-018" in family_ids
     assert "DFF-019" not in family_ids
+    assert payload["governed_prevention_context"]["execution_discipline"]
+    assert "execution_discipline" in ENGINEERING_IMPLEMENT_PROFILE.specification.trusted_system_constraints
     assert result.envelope.task_request_id == request.request_id
     assert result.envelope.route_identity == ENGINEERING_IMPLEMENT_ROUTE.route_identity
     assert result.envelope.profile_identity == ENGINEERING_IMPLEMENT_PROFILE.profile_identity

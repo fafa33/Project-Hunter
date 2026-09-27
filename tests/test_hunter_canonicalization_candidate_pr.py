@@ -1,0 +1,343 @@
+from __future__ import annotations
+
+import importlib.util
+import json
+import subprocess
+import sys
+from pathlib import Path
+
+import pytest
+
+_SCRIPT = Path("scripts/hunter_canonicalization_candidate_pr.py")
+_MODULE_NAME = "hunter_canonicalization_candidate_pr"
+_spec = importlib.util.spec_from_file_location(_MODULE_NAME, _SCRIPT)
+assert _spec and _spec.loader
+candidate_pr = importlib.util.module_from_spec(_spec)
+# Registering in sys.modules before exec_module matters here (unlike the
+# simpler existing hunter_canonicalize_learning_cli test module): this
+# script's frozen dataclass, combined with `from __future__ import
+# annotations`, needs `sys.modules[cls.__module__]` resolvable while the
+# class body executes.
+sys.modules[_MODULE_NAME] = candidate_pr
+_spec.loader.exec_module(candidate_pr)
+
+REGISTRY = Path("docs/DEFECT_REGISTRY.json")
+HEAD = "a" * 40
+BASE = "b" * 40
+
+
+def _observation(
+    pr: int,
+    classification: str = "confirmed",
+    regression_test: str = "test_compute_plan_is_pure_and_deterministic",
+) -> dict[str, object]:
+    if classification == "false_positive":
+        classification = "false-positive"
+    family = next(f for f in json.loads(REGISTRY.read_text())["families"] if f["id"] == "DFF-008")
+    return {
+        "source": "sonar",
+        "provider": "sonar",
+        "event_id": f"issue-{pr}",
+        "source_pr": pr,
+        "reviewed_head_sha": HEAD,
+        "reviewed_base_sha": BASE,
+        "reviewer": "deterministic-fixture",
+        "path": "scripts/hunter_knowledge_extraction.py",
+        "line": 1,
+        "message": "validated recurrence",
+        "availability": "available",
+        "classification": classification,
+        "invariant": family["invariant"] if classification == "confirmed" else "",
+        "affected_paths": ["scripts/hunter_knowledge_extraction.py"] if classification == "confirmed" else [],
+        "fix_reference": f"PR #{pr} focused remediation" if classification == "confirmed" else "",
+        "regression_evidence": (
+            # Must resolve to a real pytest target (AST-checked by
+            # CanonicalIntegrationAuthority); reuse a real test in this file,
+            # matching the same self-referential pattern
+            # tests/test_canonicalize_learning_cli.py already uses.
+            [f"tests/test_hunter_canonicalization_candidate_pr.py::{regression_test}"]
+            if classification == "confirmed"
+            else []
+        ),
+        "claimed_family_id": "DFF-008" if classification == "confirmed" else None,
+    }
+
+
+def _git(args: list[str], cwd: Path) -> None:
+    subprocess.run(["git", *args], cwd=cwd, check=True, capture_output=True, text=True)
+
+
+@pytest.fixture
+def origin_repo(tmp_path: Path) -> Path:
+    """A bare local repo seeded with the real registry, used as the git remote."""
+
+    origin = tmp_path / "origin.git"
+    seed = tmp_path / "seed"
+    seed.mkdir()
+    origin.mkdir()
+    _git(["init", "-q", "--bare", "-b", "main"], cwd=origin)
+    _git(["init", "-q", "-b", "main"], cwd=seed)
+    _git(["config", "user.email", "fixture@example.invalid"], cwd=seed)
+    _git(["config", "user.name", "Fixture"], cwd=seed)
+    (seed / "docs").mkdir()
+    (seed / "docs" / "DEFECT_REGISTRY.json").write_bytes(REGISTRY.read_bytes())
+    _git(["add", "."], cwd=seed)
+    _git(["commit", "-q", "-m", "seed"], cwd=seed)
+    _git(["remote", "add", "origin", str(origin)], cwd=seed)
+    _git(["push", "-q", "origin", "main"], cwd=seed)
+    return origin
+
+
+class RecordingRun:
+    """Passes real `git` commands through; fakes `gh` so tests need no network/auth."""
+
+    def __init__(self, *, existing_pr: int | None = None) -> None:
+        self.calls: list[list[str]] = []
+        self.existing_pr = existing_pr
+        self.pr_create_calls = 0
+
+    def __call__(self, command: list[str]) -> subprocess.CompletedProcess[str]:
+        self.calls.append(list(command))
+        if command[0] == "gh":
+            return self._fake_gh(command)
+        return subprocess.run(list(command), check=True, capture_output=True, text=True)
+
+    def _fake_gh(self, command: list[str]) -> subprocess.CompletedProcess[str]:
+        if command[1:3] == ["pr", "list"]:
+            stdout = str(self.existing_pr) if self.existing_pr is not None else ""
+            return subprocess.CompletedProcess(command, 0, stdout=stdout, stderr="")
+        if command[1:3] == ["pr", "create"]:
+            self.pr_create_calls += 1
+            return subprocess.CompletedProcess(command, 0, stdout="https://example.invalid/pull/1\n", stderr="")
+        raise AssertionError(f"unexpected gh command: {command}")
+
+
+def test_compute_plan_is_pure_and_deterministic() -> None:
+    registry_bytes = REGISTRY.read_bytes()
+    observations = [_observation(101)]
+
+    first = candidate_pr.compute_plan(
+        pr=101, head=HEAD, base=BASE, observations=observations, origin_registry_bytes=registry_bytes
+    )
+    second = candidate_pr.compute_plan(
+        pr=101, head=HEAD, base=BASE, observations=observations, origin_registry_bytes=registry_bytes
+    )
+
+    assert first.changed is True
+    assert first == second
+
+
+def test_compute_plan_noop_for_non_confirmed_observation() -> None:
+    registry_bytes = REGISTRY.read_bytes()
+    observations = [_observation(102, classification="false_positive")]
+
+    plan = candidate_pr.compute_plan(
+        pr=102, head=HEAD, base=BASE, observations=observations, origin_registry_bytes=registry_bytes
+    )
+
+    assert plan.changed is False
+    assert plan.registry_bytes == registry_bytes
+
+
+def test_propose_noop_makes_no_git_write_or_pr_calls(origin_repo: Path, tmp_path: Path) -> None:
+    recorder = RecordingRun()
+    observations = [_observation(201, classification="false_positive")]
+
+    message = candidate_pr.propose(
+        pr=201,
+        head=HEAD,
+        base=BASE,
+        observations=observations,
+        repo=str(origin_repo),
+        repo_root=tmp_path / "seed",
+        run=recorder,
+    )
+
+    assert "NO-OP" in message
+    assert not any("push" in call for call in recorder.calls)
+    assert not any(call[0] == "gh" for call in recorder.calls)
+
+
+def test_propose_opens_draft_pr_for_confirmed_finding(origin_repo: Path, tmp_path: Path) -> None:
+    recorder = RecordingRun(existing_pr=None)
+    observations = [_observation(301)]
+
+    message = candidate_pr.propose(
+        pr=301,
+        head=HEAD,
+        base=BASE,
+        observations=observations,
+        repo=str(origin_repo),
+        repo_root=tmp_path / "seed",
+        run=recorder,
+    )
+
+    assert "OPENED" in message
+    assert recorder.pr_create_calls == 1
+
+    push_calls = [call for call in recorder.calls if call[:1] == ["git"] and "push" in call]
+    assert len(push_calls) == 1
+    assert push_calls[0][-1] == f"HEAD:refs/heads/{candidate_pr.DEDICATED_BRANCH}"
+
+    create_calls = [call for call in recorder.calls if call[:1] == ["gh"] and call[1:3] == ["pr", "create"]]
+    assert create_calls[0][create_calls[0].index("--head") + 1] == candidate_pr.DEDICATED_BRANCH
+    assert create_calls[0][create_calls[0].index("--base") + 1] == "main"
+    assert "--draft" in create_calls[0]
+
+
+def test_propose_never_targets_main_for_write_operations(origin_repo: Path, tmp_path: Path) -> None:
+    recorder = RecordingRun()
+    observations = [_observation(401)]
+
+    candidate_pr.propose(
+        pr=401,
+        head=HEAD,
+        base=BASE,
+        observations=observations,
+        repo=str(origin_repo),
+        repo_root=tmp_path / "seed",
+        run=recorder,
+    )
+
+    for call in recorder.calls:
+        # Check for an actual merge *command token*, not the word "merge"
+        # appearing inside free-text PR-body prose (which legitimately
+        # explains that this script never self-merges).
+        assert "merge" not in (token.lower() for token in call)
+        if "checkout" in call and "-B" in call:
+            assert "main" not in call
+        if "push" in call:
+            assert "refs/heads/main" not in " ".join(call)
+
+
+def test_propose_second_run_with_identical_observations_is_idempotent_noop(origin_repo: Path, tmp_path: Path) -> None:
+    observations = [_observation(501)]
+
+    first = candidate_pr.propose(
+        pr=501,
+        head=HEAD,
+        base=BASE,
+        observations=observations,
+        repo=str(origin_repo),
+        repo_root=tmp_path / "seed",
+        run=RecordingRun(),
+    )
+    assert "OPENED" in first
+
+    second_recorder = RecordingRun(existing_pr=1)
+    second = candidate_pr.propose(
+        pr=501,
+        head=HEAD,
+        base=BASE,
+        observations=observations,
+        repo=str(origin_repo),
+        repo_root=tmp_path / "seed",
+        run=second_recorder,
+    )
+
+    assert "NO-OP" in second
+    assert not any("push" in call for call in second_recorder.calls)
+    assert second_recorder.pr_create_calls == 0
+
+
+def test_propose_updates_existing_pr_without_creating_duplicate(origin_repo: Path, tmp_path: Path) -> None:
+    recorder = RecordingRun(existing_pr=42)
+    observations = [_observation(601)]
+
+    message = candidate_pr.propose(
+        pr=601,
+        head=HEAD,
+        base=BASE,
+        observations=observations,
+        repo=str(origin_repo),
+        repo_root=tmp_path / "seed",
+        run=recorder,
+    )
+
+    assert "UPDATED" in message
+    assert "#42" in message
+    assert recorder.pr_create_calls == 0
+    assert any("push" in call for call in recorder.calls)
+
+
+def test_propose_accumulates_a_second_finding_onto_an_unmerged_first_candidate(
+    origin_repo: Path, tmp_path: Path
+) -> None:
+    """Regression for a real defect found in adversarial self-review.
+
+    Basing every run on a fresh `main` checkout unconditionally would let a
+    second finding's push silently replace a first, still-unmerged finding's
+    proposal on the same dedicated branch/PR -- losing the first finding's
+    canonicalization work. This proves two findings processed back-to-back,
+    before either PR merges, both end up present on the branch.
+    """
+
+    first = candidate_pr.propose(
+        pr=701,
+        head=HEAD,
+        base=BASE,
+        observations=[_observation(701, regression_test="test_compute_plan_is_pure_and_deterministic")],
+        repo=str(origin_repo),
+        repo_root=tmp_path / "seed",
+        run=RecordingRun(existing_pr=None),
+    )
+    assert "OPENED" in first
+
+    second = candidate_pr.propose(
+        pr=702,
+        head=HEAD,
+        base=BASE,
+        observations=[_observation(702, regression_test="test_compute_plan_noop_for_non_confirmed_observation")],
+        repo=str(origin_repo),
+        repo_root=tmp_path / "seed",
+        run=RecordingRun(existing_pr=99),
+    )
+    assert "UPDATED" in second
+    assert "#99" in second
+
+    branch_registry = subprocess.run(
+        ["git", "show", f"{candidate_pr.DEDICATED_BRANCH}:docs/DEFECT_REGISTRY.json"],
+        cwd=origin_repo,
+        check=True,
+        capture_output=True,
+        text=True,
+    ).stdout
+    assert "test_compute_plan_is_pure_and_deterministic" in branch_registry
+    assert "test_compute_plan_noop_for_non_confirmed_observation" in branch_registry
+
+
+def test_propose_rebuilds_fresh_once_dedicated_branch_is_stale(origin_repo: Path, tmp_path: Path) -> None:
+    """A dedicated branch already merged into main (an ancestor of it) must not
+    be treated as unmerged accumulation state -- it should be discarded and
+    rebuilt from current main instead of being built on top of forever."""
+
+    first = candidate_pr.propose(
+        pr=801,
+        head=HEAD,
+        base=BASE,
+        observations=[_observation(801)],
+        repo=str(origin_repo),
+        repo_root=tmp_path / "seed",
+        run=RecordingRun(existing_pr=None),
+    )
+    assert "OPENED" in first
+
+    # Simulate the first candidate PR having been merged into main.
+    _git(["fetch", "-q", str(origin_repo), candidate_pr.DEDICATED_BRANCH], cwd=tmp_path / "seed")
+    _git(["checkout", "-q", "main"], cwd=tmp_path / "seed")
+    _git(["merge", "-q", "--no-edit", "FETCH_HEAD"], cwd=tmp_path / "seed")
+    _git(["push", "-q", "origin", "main"], cwd=tmp_path / "seed")
+
+    second_recorder = RecordingRun(existing_pr=None)
+    second = candidate_pr.propose(
+        pr=802,
+        head=HEAD,
+        base=BASE,
+        observations=[_observation(802, regression_test="test_compute_plan_noop_for_non_confirmed_observation")],
+        repo=str(origin_repo),
+        repo_root=tmp_path / "seed",
+        run=second_recorder,
+    )
+
+    assert "OPENED" in second
+    assert second_recorder.pr_create_calls == 1
