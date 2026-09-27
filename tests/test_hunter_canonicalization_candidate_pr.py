@@ -479,3 +479,115 @@ def test_duplicate_github_review_capture_is_idempotent(origin_repo: Path, tmp_pa
         run=RecordingRun(existing_pr=1),
     )
     assert "NO-OP" in second
+
+
+DISPOSITIONS = Path("docs/REVIEWER_FINDING_DISPOSITIONS.json")
+
+
+def _github_review_observation(
+    *,
+    event_id: str = "review-comment-1001",
+    source_pr: int = 530,
+    message: str = "deleted comment's substantive finding text",
+    path: str | None = "scripts/x.py",
+    line: int | None = 9,
+    reviewed_head_sha: str = HEAD,
+) -> dict[str, object]:
+    return {
+        "source": "github-review",
+        "provider": "github-review",
+        "event_id": event_id,
+        "source_pr": source_pr,
+        "reviewed_head_sha": reviewed_head_sha,
+        "reviewed_base_sha": BASE,
+        "source_event_head_sha": "c" * 40,
+        "reviewer": "chatgpt-codex-connector[bot]",
+        "path": path,
+        "line": line,
+        "message": message,
+        "availability": "available",
+        "classification": None,
+        "invariant": None,
+        "affected_paths": [],
+        "fix_reference": None,
+        "regression_evidence": [],
+        "claimed_family_id": None,
+    }
+
+
+def test_capture_reviewer_findings_persists_message_path_and_line_for_deleted_finding() -> None:
+    """Codex P1-B (PR #530), invariants 1 and 2: the durable RFD record must
+    carry the finding's own substantive content, not just provenance, so it
+    stays useful after the source GitHub comment is deleted and the 90-day
+    transient lifecycle artifact has expired."""
+    observation = _github_review_observation(
+        message="the deleted comment's actual finding text", path="scripts/example.py", line=42
+    )
+    rendered, added = candidate_pr.capture_reviewer_findings(
+        observations=[observation], origin_bytes=DISPOSITIONS.read_bytes()
+    )
+    assert added == ("RFD-AUTO-530-review-comment-1001",)
+    document = json.loads(rendered)
+    entry = next(item for item in document["findings"] if item["id"] == "RFD-AUTO-530-review-comment-1001")
+    assert entry["finding_evidence"] == {
+        "message": "the deleted comment's actual finding text",
+        "path": "scripts/example.py",
+        "line": 42,
+    }
+    # Provenance identity (already captured before this fix) must still be present.
+    assert entry["source_provenance"]["reviewer"] == "chatgpt-codex-connector[bot]"
+    assert entry["source_provenance"]["pr_number"] == 530
+    assert "c" * 40 in entry["source_provenance"]["reference"]
+
+
+def test_capture_reviewer_findings_evidence_omits_absent_path_and_line() -> None:
+    """A top-level review body (no path/line) still durably captures its
+    message; absent optional fields are omitted rather than fabricated."""
+    observation = _github_review_observation(
+        event_id="review-2002", message="top-level review body", path=None, line=None
+    )
+    rendered, added = candidate_pr.capture_reviewer_findings(
+        observations=[observation], origin_bytes=DISPOSITIONS.read_bytes()
+    )
+    assert added == ("RFD-AUTO-530-review-2002",)
+    document = json.loads(rendered)
+    entry = next(item for item in document["findings"] if item["id"] == "RFD-AUTO-530-review-2002")
+    assert entry["finding_evidence"] == {"message": "top-level review body"}
+
+
+def test_capture_reviewer_findings_replay_is_idempotent_and_does_not_mutate_identity() -> None:
+    """Codex P1-B (PR #530), invariant 3: replaying the same provider event
+    must not create a duplicate RFD record or mutate its identity/content,
+    even if the caller's HEAD/base later moved."""
+    first_observation = _github_review_observation(reviewed_head_sha=HEAD)
+    rendered_once, added_once = candidate_pr.capture_reviewer_findings(
+        observations=[first_observation], origin_bytes=DISPOSITIONS.read_bytes()
+    )
+    assert len(added_once) == 1
+
+    # Replay of the identical provider event, but as if HEAD/base moved since.
+    replayed_observation = _github_review_observation(reviewed_head_sha="9" * 40)
+    rendered_twice, added_twice = candidate_pr.capture_reviewer_findings(
+        observations=[replayed_observation], origin_bytes=rendered_once
+    )
+    assert added_twice == ()
+    assert rendered_twice == rendered_once
+    document = json.loads(rendered_twice)
+    matches = [item for item in document["findings"] if item["id"] == "RFD-AUTO-530-review-comment-1001"]
+    assert len(matches) == 1
+
+
+def test_capture_reviewer_findings_never_promotes_validation_state() -> None:
+    """Codex P1-B (PR #530), invariant 4: durable capture alone must never
+    mark a finding confirmed/resolved/canonical -- only the governed
+    validation/canonicalization lifecycle may do that."""
+    observation = _github_review_observation()
+    rendered, _added = candidate_pr.capture_reviewer_findings(
+        observations=[observation], origin_bytes=DISPOSITIONS.read_bytes()
+    )
+    document = json.loads(rendered)
+    entry = next(item for item in document["findings"] if item["id"] == "RFD-AUTO-530-review-comment-1001")
+    assert entry["validation_state"] == "unvalidated"
+    assert "classification" not in entry
+    assert "resolution_state" not in entry
+    assert "mapped_defect_id" not in entry

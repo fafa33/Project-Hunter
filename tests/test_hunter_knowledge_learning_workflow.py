@@ -344,3 +344,96 @@ def test_collector_preserves_deleted_review_comment_from_event_payload(tmp_path,
     assert [item["event_id"] for item in observations] == ["review-comment-991"]
     assert observations[0]["message"] == "P1 durable finding"
     assert observations[0]["source_event_head_sha"] == "a" * 40
+
+
+def test_collector_preserves_deleted_trusted_reviewer_finding_via_deleted_action(tmp_path, monkeypatch):
+    """Codex P1-A (PR #530), invariant 1: a deleted trusted-reviewer opening
+    finding is still recovered as durable neutral evidence when the webhook
+    event explicitly carries ``action: deleted``."""
+    import json
+
+    import hunter_collect_learning_observations as collector
+
+    event = {
+        "action": "deleted",
+        "repository": {"full_name": "fafa33/Project-Hunter"},
+        "pull_request": {"number": 530},
+        "comment": {
+            "id": 992,
+            "user": {"login": "chatgpt-codex-connector"},
+            "body": "deleted trusted finding",
+            "commit_id": "a" * 40,
+            "path": "scripts/example.py",
+            "line": 7,
+        },
+    }
+    event_path = tmp_path / "event.json"
+    event_path.write_text(json.dumps(event), encoding="utf-8")
+    monkeypatch.setenv("GITHUB_EVENT_PATH", str(event_path))
+    monkeypatch.setattr(collector, "_trusted_reviewer_logins", lambda: frozenset({"chatgpt-codex-connector"}))
+    monkeypatch.setattr(collector, "_review_threads", lambda *args: {})
+
+    def request_json(_repository, _token, _method, endpoint):
+        if "/comments?" in endpoint or "/reviews?" in endpoint:
+            return []
+        raise AssertionError(endpoint)
+
+    monkeypatch.setattr(collector.governance, "request_json", request_json)
+    observations = collector.collect("fafa33/Project-Hunter", "token", 530, "b" * 40, "c" * 40)
+    assert [item["event_id"] for item in observations] == ["review-comment-992"]
+    assert observations[0]["message"] == "deleted trusted finding"
+    assert observations[0]["classification"] is None
+
+
+def test_deleted_owner_disposition_reply_is_not_revived_as_active_disposition(tmp_path, monkeypatch):
+    """Codex P1-A (PR #530), invariants 2 and 3: a deleted OWNER structured
+    disposition reply recovered from the webhook payload must not be treated
+    as an active disposition, and must not confirm/canonicalize the finding
+    it replied to -- even though the thread itself remains resolved."""
+    import json
+
+    import hunter_collect_learning_observations as collector
+
+    fix = "1" * 40
+    test_ref = "tests/test_hunter_knowledge_learning_workflow.py::test_collector_does_not_invent_defect_classification"
+    live_comments = [
+        {
+            "id": 21,
+            "commit_id": "c" * 40,
+            "user": {"login": "chatgpt-codex-connector[bot]"},
+            "path": "scripts/x.py",
+            "line": 8,
+            "body": "real defect",
+        }
+    ]
+    event = {
+        "action": "deleted",
+        "repository": {"full_name": "fafa33/Project-Hunter"},
+        "pull_request": {"number": 530},
+        "comment": {
+            "id": 22,
+            "in_reply_to_id": 21,
+            "user": {"login": "fafa33"},
+            "body": f"confirmed and fixed {fix}: canonical invariant [family:DFF-008] [test:{test_ref}]",
+        },
+    }
+    event_path = tmp_path / "event.json"
+    event_path.write_text(json.dumps(event), encoding="utf-8")
+    monkeypatch.setenv("GITHUB_EVENT_PATH", str(event_path))
+    monkeypatch.setattr(collector, "_trusted_reviewer_logins", lambda: frozenset({"chatgpt-codex-connector"}))
+    # The underlying thread is (and remains) resolved -- exactly the condition
+    # under which a live owner "confirmed" disposition would canonicalize the
+    # finding. A retracted/deleted one must not be able to do the same.
+    monkeypatch.setattr(collector, "_review_threads", lambda *args: {21: True})
+    monkeypatch.setattr(
+        collector.governance,
+        "request_json",
+        lambda _r, _t, _m, endpoint: live_comments if "/comments?" in endpoint else [],
+    )
+    observations = collector.collect("fafa33/Project-Hunter", "token", 530, "b" * 40, "c" * 40)
+    assert [item["event_id"] for item in observations] == ["review-comment-21"]
+    finding = observations[0]
+    assert finding["classification"] is None
+    assert finding["claimed_family_id"] is None
+    assert finding["invariant"] is None
+    assert finding["fix_reference"] is None

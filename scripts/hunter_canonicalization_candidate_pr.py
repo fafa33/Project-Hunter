@@ -182,6 +182,14 @@ def capture_reviewer_findings(
     call it confirmed/resolved.  Validation/canonicalization remains governed by
     the existing replayable evidence path. Stable provider event identity makes
     duplicate review events a byte-identical no-op.
+
+    The captured record also carries the finding's own substantive content
+    (message, and path/line when the observation has them) under
+    ``finding_evidence``. Provenance alone (reviewer/PR/event id/source SHA) is
+    not enough: the transient lifecycle artifact that also holds this content
+    expires after 90 days, and the source GitHub comment can itself be deleted
+    (Codex P1, PR #530) -- without this, the durable RFD record would outlive
+    every copy of what the finding actually said.
     """
     try:
         document = json.loads(origin_bytes)
@@ -198,18 +206,28 @@ def capture_reviewer_findings(
         event_id = observation.get("event_id")
         reviewer = observation.get("reviewer")
         source_pr = observation.get("source_pr")
+        message = observation.get("message")
         if (
             not isinstance(event_id, str)
             or not event_id.strip()
             or not isinstance(reviewer, str)
             or not reviewer.strip()
             or type(source_pr) is not int
+            or not isinstance(message, str)
+            or not message.strip()
         ):
             raise CanonicalizationCandidatePrError("review finding capture evidence is malformed")
         finding_id = f"RFD-AUTO-{source_pr}-{event_id}"
         if finding_id in existing:
             continue
         source_head = observation.get("source_event_head_sha") or observation.get("reviewed_head_sha")
+        finding_evidence: dict[str, object] = {"message": message}
+        path = observation.get("path")
+        if path is not None:
+            finding_evidence["path"] = path
+        line = observation.get("line")
+        if line is not None:
+            finding_evidence["line"] = line
         findings.append(
             {
                 "id": finding_id,
@@ -218,6 +236,7 @@ def capture_reviewer_findings(
                     "pr_number": source_pr,
                     "reference": f"GitHub authority review event {event_id}; source_head={source_head}",
                 },
+                "finding_evidence": finding_evidence,
                 "validation_state": "unvalidated",
             }
         )

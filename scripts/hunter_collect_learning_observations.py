@@ -133,11 +133,23 @@ def collect(repository: str, token: str, pr: int, head: str, base: str) -> list[
             break
         page += 1
 
+    owner = repository.split("/", 1)[0]
+
     # The webhook payload is immutable evidence for the event that woke this
     # collector. Current-state REST reconstruction alone is insufficient: a
     # trusted review comment may already have been deleted by the time a queued
     # job runs. Merge the authenticated event comment back into the scan before
     # disposition capture so created/deleted races cannot silently erase it.
+    #
+    # A deleted trusted-reviewer finding must be recovered this way (it is
+    # never a reply, so it can only ever become a durable neutral observation
+    # below -- never a disposition). A deleted OWNER *disposition reply*,
+    # however, must never be revived as a live disposition: recovering it
+    # into `comments` would let `_owner_replies()` parse a retracted
+    # confirmation and, on an already-resolved thread, incorrectly promote a
+    # finding to `confirmed`. The distinction uses the authenticated event's
+    # own action plus the comment's author/reply-relationship identity, not
+    # any inference from current REST state.
     event_path = os.environ.get("GITHUB_EVENT_PATH") or ""
     if event_path:
         try:
@@ -147,14 +159,22 @@ def collect(repository: str, token: str, pr: int, head: str, base: str) -> list[
             raise ValueError("GitHub event payload is unreadable") from exc
         event_repo = (event.get("repository") or {}).get("full_name") if isinstance(event, dict) else None
         event_pr = (event.get("pull_request") or {}).get("number") if isinstance(event, dict) else None
+        event_action = event.get("action") if isinstance(event, dict) else None
         event_comment = event.get("comment") if isinstance(event, dict) else None
         if event_comment is not None and event_repo == repository and event_pr == pr:
             if not isinstance(event_comment, dict) or not isinstance(event_comment.get("id"), int):
                 raise ValueError("GitHub review-comment event evidence is malformed")
             if not any(item.get("id") == event_comment["id"] for item in comments):
-                comments.append(event_comment)
+                event_user = event_comment.get("user") if isinstance(event_comment.get("user"), dict) else {}
+                event_login = str(event_user.get("login") or "")
+                is_deleted_owner_disposition_reply = (
+                    event_action == "deleted"
+                    and event_comment.get("in_reply_to_id") is not None
+                    and event_login == owner
+                )
+                if not is_deleted_owner_disposition_reply:
+                    comments.append(event_comment)
 
-    owner = repository.split("/", 1)[0]
     trusted_reviewers = _trusted_reviewer_logins()
     dispositions = _owner_replies(comments, owner)
     thread_state = _review_threads(repository, token, pr) if dispositions else {}
