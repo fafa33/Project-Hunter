@@ -13,3 +13,8 @@ def test_codeql_bridge_retries_transient_api_and_parse_failures():
 def test_codeql_bridge_still_fails_on_real_analysis_error():
     assert "CodeQL default-setup analysis failed:" in WORKFLOW
     assert "exit 1" in WORKFLOW
+
+
+def test_codeql_bridge_uses_event_merge_sha_without_redundant_pr_api_reads():
+    assert "github.event.pull_request.merge_commit_sha" in WORKFLOW
+    assert 'gh api "repos/${GH_REPO}/pulls/${PR_NUMBER}"' not in WORKFLOW
