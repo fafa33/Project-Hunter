@@ -51,13 +51,13 @@
       },
       {
         "criterion": "Automatic finding-to-remediation orchestration: a validated finding is durably captured and cannot be silently dropped or falsely marked resolved by the remediation lifecycle.",
-        "evidence": "Not implemented by this PR. docs/REVIEWER_FINDING_DISPOSITIONS.json remains hand-curated (verified during this session: no automated ingestion CLI exists that turns raw reviewer output into a classified disposition entry). This PR's own findings (F-1 through F-4 in this document) are handled the same existing way: recorded here, with severity and resolution, for human/reviewer disposition.",
+        "evidence": "scripts/hunter_collect_learning_observations.py now ingests the complete authenticated authority-review history rather than only current-HEAD comments, preserves each original source head as source_event_head_sha, rejects untrusted reviewer identities, and accepts a terminal owner disposition only on the exact resolved thread. Confirmed findings require complete replayable evidence (fix SHA, canonical family, invariant, regression target) before canonical learning; unresolved/incomplete evidence remains durable neutral evidence and cannot be falsely canonicalized. .github/workflows/hunter-canonicalization-auto.yml captures this lifecycle automatically and preserves its artifact. Regressions: tests/test_hunter_knowledge_learning_workflow.py, including older-head catch-up, untrusted-review rejection, resolved structured disposition, and unresolved-thread rejection.",
         "id": "AC-9",
-        "verdict": "not-applicable"
+        "verdict": "satisfied"
       },
       {
         "criterion": "Automatic finding-to-canonical-knowledge lifecycle: a resolved finding that maps to an existing canonical defect family is automatically turned into a canonicalization candidate branch and Draft PR, without requiring the owner to run the canonicalization CLI by hand, and without ever writing directly to main or auto-merging.",
-        "evidence": "scripts/hunter_canonicalization_candidate_pr.py implements exactly this: computes the canonicalization delta via the unmodified PR #528 authorities, and opens/updates one Draft PR on one fixed branch (canonicalization/defect-registry-auto) via local_git_push -- the channel docs/superpowers/specs/2026-09-23-live-dpm-knowledge-feedback-loop-design.md identifies as requiring no new authorization, after that same design doc's own investigation found the unattended-Routine alternative blocked by a platform limitation (not retested here, per this mission's own instruction). Never checks out or pushes to main; no command in the module can merge. Regression: tests/test_hunter_canonicalization_candidate_pr.py (9 tests).",
+        "evidence": ".github/workflows/hunter-canonicalization-auto.yml is the automatic trusted-default-branch trigger for pull_request_review / pull_request_review_comment events, with workflow_dispatch catch-up. It invokes scripts/hunter_collect_learning_observations.py and then the existing scripts/hunter_canonicalization_candidate_pr.py path on the self-hosted Mac. The GitHub token remains contents:read / pull-requests:read; the candidate push crosses the already-authorized local_git_push + .githooks/pre-push boundary, targets only canonicalization/defect-registry-auto, opens/updates a Draft PR, and never writes main or merges. A bootstrap guard refuses to execute candidate code until the engine is present on the trusted default branch; the local/manual PR #528 recovery path remains available.",
         "id": "AC-10",
         "verdict": "satisfied"
       },
@@ -303,9 +303,9 @@
         "severity": "blocking"
       },
       {
-        "evidence": "Independent review (chatgpt-codex-connector[bot], P1) confirmed AC-4 (bounded independent review) and AC-9 (automatic finding-to-remediation orchestration) remain genuinely open: no unattended caller exists for hunter_canonicalization_candidate_pr.py, and docs/REVIEWER_FINDING_DISPOSITIONS.json remains hand-curated with no ingestion pipeline. Both were already disclosed as 'not-applicable' to this diff with evidence in AC-4/AC-9 above; this finding records that independent review examined and agrees these are real, currently-unaddressed gaps rather than resolved or dismissed items -- closing them needs either a new secret or a new CODE_WRITE_POLICY.json connector_write_ingress scope for an unattended writer, both outside this session's authority to self-grant. Tracked under Issue #532 for follow-up; not claimed as done here.",
+        "evidence": "Resolved by d861b7798ae0e1dc98b37667267ff2114108c063 plus bootstrap correction 929756ddfcee02cec6fe738b15ad8c3c2224d698: authenticated finding ingestion/catch-up is now automatic and the automatic canonicalization workflow calls the existing candidate-PR path without adding GitHub repository-write permission. The workflow uses the existing local_git_push authority on the self-hosted Mac and fails safely during pre-merge bootstrap rather than executing candidate code as trusted code.",
         "id": "F-8",
-        "resolution": "unresolved",
+        "resolution": "resolved",
         "severity": "non-blocking"
       }
     ],
