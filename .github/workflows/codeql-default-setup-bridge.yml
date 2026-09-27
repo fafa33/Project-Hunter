@@ -33,10 +33,18 @@ jobs:
         run: |
           set -euo pipefail
 
-          merge_sha="$(gh api "repos/${GH_REPO}/pulls/${PR_NUMBER}" --jq '.merge_commit_sha // empty')"
+          merge_sha="${{ github.event.pull_request.merge_commit_sha }}"
           echo "Waiting for CodeQL default-setup analysis for head=${HEAD_SHA} merge=${merge_sha}"
 
           for attempt in $(seq 1 60); do
+            # GitHub can regenerate the synthetic merge commit when main moves
+            # while this bounded poll is running. Refresh it before matching
+            # analysis evidence so a valid current CodeQL result is not rejected
+            # merely because the event payload carried the previous merge SHA.
+            if refreshed_merge_sha="$(gh api "repos/${GH_REPO}/pulls/${PR_NUMBER}" --jq '.merge_commit_sha // empty' 2>/dev/null)" \
+              && [ -n "${refreshed_merge_sha}" ]; then
+              merge_sha="${refreshed_merge_sha}"
+            fi
             if ! analyses="$(gh api --method GET "repos/${GH_REPO}/code-scanning/analyses"               -f pr="${PR_NUMBER}" -f tool_name="CodeQL" -f per_page=100 2>/dev/null)"; then
               echo "CodeQL API unavailable on attempt ${attempt}/60; retrying."
               sleep 10
@@ -64,7 +72,6 @@ jobs:
 
             echo "CodeQL analysis not current yet (attempt ${attempt}/60)."
             sleep 10
-            merge_sha="$(gh api "repos/${GH_REPO}/pulls/${PR_NUMBER}" --jq '.merge_commit_sha // empty')"
           done
 
           echo "Timed out waiting for a current successful CodeQL default-setup analysis."

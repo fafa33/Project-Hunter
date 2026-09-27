@@ -1008,7 +1008,7 @@ def test_audited_canonical_machine_boundary_is_gated():
     assert prevention._family_has_machine_gate(family)
 
 
-def test_pr469_zero_reviews_all_checks_green_uses_deterministic_merge_authority(monkeypatch):
+def test_pr469_zero_reviews_all_checks_green_requires_terminal_review_opportunity(monkeypatch):
     _install_governance(monkeypatch, document=_review_document())
     authority = core.verify_pre_ready_hostile_review("repo", "token", HEAD, PR_NUMBER)
     observation = readiness.StaticReadinessObservation(
@@ -1019,7 +1019,7 @@ def test_pr469_zero_reviews_all_checks_green_uses_deterministic_merge_authority(
             for n, name in enumerate(readiness.REQUIRED_CHECKS, 1)
         ),
     )
-    assert readiness.evaluate(observation).state == "success"
+    assert readiness.evaluate(observation).state == "failure"
 
 
 def test_zero_external_review_does_not_force_ready_candidate_back_to_draft(monkeypatch):
@@ -1755,9 +1755,9 @@ def test_trusted_collector_trigger_rejects_unrelated_actions_bot_run(monkeypatch
     assert not core.trusted_collector_run("repo", "token", trigger)
 
 
-def test_merge_readiness_external_reviewer_unavailability_does_not_block_verified_head() -> None:
+def test_merge_readiness_waits_while_bounded_review_opportunity_is_live() -> None:
     observation = readiness.StaticReadinessObservation(
-        review_authority=("pending", "WAITING_FOR_REVIEWER: all external providers unavailable"),
+        review_authority=("pending", "WAITING_FOR_REVIEWER: bounded exact-head opportunity is live"),
         candidate_admission=("success", "deterministic candidate admission verified"),
         check_runs=(
             {"name": "Quality Gates", "status": "completed", "conclusion": "success"},
@@ -1765,8 +1765,20 @@ def test_merge_readiness_external_reviewer_unavailability_does_not_block_verifie
             {"name": "CodeQL", "status": "completed", "conclusion": "success"},
         ),
     )
-    decision = readiness.evaluate(observation)
-    assert decision.state == "success"
+    assert readiness.evaluate(observation).state == "pending"
+
+
+def test_merge_readiness_external_reviewer_unavailability_does_not_block_verified_head() -> None:
+    observation = readiness.StaticReadinessObservation(
+        review_authority=("success", "REVIEWER_UNAVAILABLE: bounded exact-head opportunity ended without review"),
+        candidate_admission=("success", "deterministic candidate admission verified"),
+        check_runs=(
+            {"name": "Quality Gates", "status": "completed", "conclusion": "success"},
+            {"name": "dependency-review", "status": "completed", "conclusion": "success"},
+            {"name": "CodeQL", "status": "completed", "conclusion": "success"},
+        ),
+    )
+    assert readiness.evaluate(observation).state == "success"
 
 
 def test_merge_readiness_existing_blocking_review_finding_still_blocks_without_provider_authority() -> None:

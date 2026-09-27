@@ -61,8 +61,13 @@ class TestClassification:
         assert exc.category == "permanent"
         assert not exc.retryable
 
-    def test_other_status_permanent(self):
-        exc = transport.classify_http_error(_http_error(403, "rate limited"))
+    def test_rate_limit_403_is_transient(self):
+        exc = transport.classify_http_error(_http_error(403, "API rate limit exceeded for installation"))
+        assert exc.category == "transient"
+        assert exc.retryable
+
+    def test_permission_403_remains_permanent(self):
+        exc = transport.classify_http_error(_http_error(403, "Resource not accessible by integration"))
         assert exc.category == "permanent"
         assert not exc.retryable
 
@@ -78,6 +83,11 @@ class TestClassification:
         exc = transport.classify_cli_failure("gh api failed: HTTP 503\nNo server is currently available")
         assert exc.category == "transient"
         assert exc.status_code == 503
+        assert exc.retryable
+
+    def test_cli_rate_limit_403_is_transient(self):
+        exc = transport.classify_cli_failure("gh: API rate limit exceeded for installation (HTTP 403)")
+        assert exc.category == "transient"
         assert exc.retryable
 
     def test_cli_failure_node_resolution_404_classified(self):

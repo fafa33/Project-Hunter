@@ -12,7 +12,6 @@ derived from trusted GitHub review-thread state, never from the candidate.
 
 from __future__ import annotations
 
-import dataclasses
 import pathlib
 import sys
 
@@ -80,7 +79,7 @@ class FakeOrchestration:
         return ("present", self.cycle, None) if self.cycle is not None else ("absent", None, None)
 
     def _publish_cycle(self, *_args, cycle):
-        self.cycle = dataclasses.replace(cycle, started_at="2020-01-01T00:00:00Z")
+        self.cycle = cycle
 
     def _dispatch(self, _repository, _token, pr_number, head_sha, generation_id=orchestrator.BASE_GENERATION_ID):
         self.dispatches.append(generation_id)

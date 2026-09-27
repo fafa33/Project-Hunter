@@ -12,6 +12,12 @@ HEAD = "a" * 40
 REPOSITORY_ROOT = pathlib.Path(orchestrator.__file__).resolve().parents[1]
 
 
+def _five_minutes_ago():
+    from datetime import UTC, datetime, timedelta
+
+    return (datetime.now(UTC) - timedelta(minutes=5)).strftime("%Y-%m-%dT%H:%M:%SZ")
+
+
 def make_cycle(**overrides):
     values = {
         "pr_number": 472,
@@ -97,6 +103,32 @@ def test_ready_review_request_dispatches_collector_once(monkeypatch):
     assert stored["dispatches"] == 1
 
 
+def test_review_opportunity_timeout_finalizes_pending_cycle_without_redispatch(monkeypatch):
+    cycle = make_cycle(trigger_id=123, started_at="2020-01-01T00:00:00Z")
+    stored = _ensure_harness(monkeypatch, cycle, [_collector_run("in_progress")])
+    result = orchestrator.ensure_collector("owner/repo", "token", 472, HEAD)
+    assert result.state == "REVIEW_TIMED_OUT"
+    assert stored["dispatches"] == 0
+    assert stored["published"][-1].state == "REVIEW_TIMED_OUT"
+    assert orchestrator.governance_projection(result) == ("success", "REVIEW_TIMED_OUT")
+
+
+def test_review_timeout_is_terminal_and_idempotent(monkeypatch):
+    cycle = make_cycle(state="REVIEW_TIMED_OUT", trigger_id=123, started_at="2020-01-01T00:00:00Z")
+    stored = _ensure_harness(monkeypatch, cycle, [])
+    result = orchestrator.ensure_collector("owner/repo", "token", 472, HEAD)
+    assert result == cycle
+    assert stored["dispatches"] == 0
+    assert stored["published"] == []
+
+
+def test_collector_workflow_caps_whole_review_opportunity_at_fifteen_minutes():
+    document = yaml.safe_load(
+        pathlib.Path(REPOSITORY_ROOT, ".github/workflows/hunter-reviewer-collector.yml").read_text()
+    )
+    assert document["jobs"]["collect"]["timeout-minutes"] == 15
+
+
 def test_a_missing_run_id_refuses_before_any_collector_is_dispatched(monkeypatch):
     """A dispatch this run cannot name would be re-dispatched on the next pass.
 
@@ -165,7 +197,7 @@ def _collector_run(status, conclusion=None, pr_number=472, head_sha=HEAD, run_id
 def test_a_failed_collector_is_redispatched_rather_than_parking_the_cycle(monkeypatch):
     """A recorded trigger id is not proof that the collector ran to completion."""
 
-    cycle = make_cycle(trigger_id=123, started_at="2020-01-01T00:00:00Z")
+    cycle = make_cycle(trigger_id=123, started_at=_five_minutes_ago())
     stored = _ensure_harness(monkeypatch, cycle, [_collector_run("completed", "failure")])
 
     result = orchestrator.ensure_collector("owner/repo", "token", 472, HEAD)
@@ -175,7 +207,7 @@ def test_a_failed_collector_is_redispatched_rather_than_parking_the_cycle(monkey
 
 
 def test_a_missing_collector_run_is_redispatched(monkeypatch):
-    cycle = make_cycle(trigger_id=123, started_at="2020-01-01T00:00:00Z")
+    cycle = make_cycle(trigger_id=123, started_at=_five_minutes_ago())
     stored = _ensure_harness(monkeypatch, cycle, [])
 
     orchestrator.ensure_collector("owner/repo", "token", 472, HEAD)
@@ -189,7 +221,7 @@ def test_a_live_or_successful_collector_is_never_duplicated(monkeypatch):
         _collector_run("queued"),
         _collector_run("completed", "success"),
     ):
-        cycle = make_cycle(trigger_id=123, started_at="2020-01-01T00:00:00Z")
+        cycle = make_cycle(trigger_id=123, started_at=_five_minutes_ago())
         stored = _ensure_harness(monkeypatch, cycle, [run])
 
         result = orchestrator.ensure_collector("owner/repo", "token", 472, HEAD)
@@ -199,7 +231,7 @@ def test_a_live_or_successful_collector_is_never_duplicated(monkeypatch):
 
 
 def test_redispatch_stops_at_the_bounded_budget(monkeypatch):
-    cycle = make_cycle(trigger_id=123, started_at="2020-01-01T00:00:00Z")
+    cycle = make_cycle(trigger_id=123, started_at=_five_minutes_ago())
     runs = [
         _collector_run("completed", "failure", run_id=index)
         for index in range(1, orchestrator.MAX_COLLECTOR_DISPATCHES + 1)
@@ -224,7 +256,7 @@ def test_a_freshly_dispatched_cycle_is_not_redispatched_before_runs_are_listed(m
 
 
 def test_unreadable_collector_liveness_evidence_never_redispatches(monkeypatch):
-    cycle = make_cycle(trigger_id=123, started_at="2020-01-01T00:00:00Z")
+    cycle = make_cycle(trigger_id=123, started_at=_five_minutes_ago())
 
     def unavailable(*_args, **_kwargs):
         raise transport.GitHubRequestError("rate limited", category="transient", status_code=429)

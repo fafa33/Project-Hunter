@@ -68,14 +68,33 @@ jobs:
           GITHUB_SERVER_URL: ${{ github.server_url }}
         run: |
           set -euo pipefail
-          pr_numbers="$(
-            gh pr list \
-              --repo "${GITHUB_REPOSITORY}" \
-              --state open \
-              --base main \
-              --json number \
-              --jq '.[].number'
-          )"
+          # Event-driven reconciliation is deliberately scoped to the PR that
+          # caused the event. Sweeping every open PR for each review/check event
+          # multiplies API traffic and can exhaust the installation rate limit.
+          # Scheduled/manual recovery remains the bounded full-sweep path.
+          event_name="${{ github.event_name }}"
+          if [[ "${event_name}" == "pull_request_review" || "${event_name}" == "pull_request_review_comment" ]]; then
+            pr_numbers="${{ github.event.pull_request.number }}"
+          elif [[ "${event_name}" == "workflow_run" ]]; then
+            pr_numbers="$(
+              gh pr list \
+                --repo "${GITHUB_REPOSITORY}" \
+                --state open \
+                --base main \
+                --search "${{ github.event.workflow_run.head_sha }}" \
+                --json number,headRefOid \
+                --jq '.[] | select(.headRefOid == "${{ github.event.workflow_run.head_sha }}") | .number'
+            )"
+          else
+            pr_numbers="$(
+              gh pr list \
+                --repo "${GITHUB_REPOSITORY}" \
+                --state open \
+                --base main \
+                --json number \
+                --jq '.[].number'
+            )"
+          fi
 
           failures=0
           while read -r pr_number; do

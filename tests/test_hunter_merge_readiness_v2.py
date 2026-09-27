@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import hunter_merge_readiness_v2 as core
+import pytest
 
 
 def _pr(*, draft: bool = False, mergeable: bool | None = True, body: str = "anything") -> dict:
@@ -97,7 +98,7 @@ def test_no_codex_review_on_current_head_blocks(monkeypatch):
 
     _sha, decision = core.decide(501)
 
-    assert decision.state == "success"
+    assert decision.state == "failure"
 
 
 def test_a_codex_review_of_an_older_head_blocks(monkeypatch):
@@ -110,7 +111,7 @@ def test_a_codex_review_of_an_older_head_blocks(monkeypatch):
 
     _sha, decision = core.decide(501)
 
-    assert decision.state == "success"
+    assert decision.state == "failure"
 
 
 def test_current_head_codex_review_with_unresolved_finding_blocks(monkeypatch):
@@ -123,9 +124,9 @@ def test_current_head_codex_review_with_unresolved_finding_blocks(monkeypatch):
 
     _sha, decision = core.decide(501)
 
-    # Review-authority transport is diagnostic only. Real findings block through
-    # canonical dispositions, review threads, or CHANGES_REQUESTED.
-    assert decision.state == "success"
+    # A non-terminal authority failure remains fail-closed; timeout/unavailability
+    # are represented separately as successful terminal opportunity states.
+    assert decision.state == "failure"
 
 
 def test_resolved_finding_without_structured_evidence_blocks(monkeypatch):
@@ -138,7 +139,7 @@ def test_resolved_finding_without_structured_evidence_blocks(monkeypatch):
 
     _sha, decision = core.decide(501)
 
-    assert decision.state == "success"
+    assert decision.state == "failure"
 
 
 def test_current_head_codex_review_with_structured_evidence_allows(monkeypatch):
@@ -166,7 +167,7 @@ def test_a_new_commit_after_codex_review_stales_readiness_again():
 
     decision = core.evaluate(mutated)
 
-    assert decision.state == "success"
+    assert decision.state == "failure"
 
 
 def test_a_fallback_review_of_the_exact_head_is_a_valid_review_authority(monkeypatch):
@@ -194,7 +195,7 @@ def test_a_missing_fallback_review_still_blocks_readiness(monkeypatch):
 
     _sha, decision = core.decide(501)
 
-    assert decision.state == "success"
+    assert decision.state == "failure"
 
 
 def test_a_new_commit_after_a_valid_fallback_review_stales_readiness_again():
@@ -212,7 +213,7 @@ def test_a_new_commit_after_a_valid_fallback_review_stales_readiness_again():
         review_authority=("failure", "the candidate was mutated after it was reviewed"),
     )
 
-    assert core.evaluate(mutated).state == "success"
+    assert core.evaluate(mutated).state == "failure"
 
 
 def test_changes_requested_blocks(monkeypatch):
@@ -388,3 +389,196 @@ def test_ordinary_workflow_completion_without_association_uses_exact_head(monkey
     )
 
     assert core.candidate_prs() == (501,)
+
+
+# --- Completion authority: a worker's self-report is never the source of truth ---
+#
+# These prove the "premature agent completion" failure mode is already
+# structurally prevented by this controller: `evaluate_completion_claim`
+# re-derives its verdict from current hosted state every time, so nothing an
+# agent asserts (a final report, a pushed commit, a passed local preflight, an
+# opened PR) can make a candidate COMPLETION_ACCEPTED on its own.
+
+
+def _green_observation() -> core.StaticReadinessObservation:
+    return core.StaticReadinessObservation(
+        check_runs=tuple(_green_check(name, index) for index, name in enumerate(core.REQUIRED_CHECKS, start=1)),
+    )
+
+
+def test_worker_says_done_while_required_checks_are_red_is_rejected():
+    runs = [_green_check(name, index) for index, name in enumerate(core.REQUIRED_CHECKS, start=1)]
+    runs[0] = {**runs[0], "conclusion": "failure"}
+    observation = core.StaticReadinessObservation(check_runs=tuple(runs))
+
+    verdict = core.evaluate_completion_claim(observation)
+
+    assert verdict.accepted is False
+    assert verdict.state == "COMPLETION_REJECTED"
+    assert "failed" in verdict.reason.lower()
+
+
+def test_worker_says_done_while_pr_is_still_draft_is_rejected():
+    """A Draft PR is the concrete, current-state form of "the review/readiness
+    opportunity is still pending" this controller already gates on: it is not
+    merge-ready no matter what any agent claims about it in the meantime."""
+
+    observation = core.StaticReadinessObservation(
+        draft=True,
+        check_runs=tuple(_green_check(name, index) for index, name in enumerate(core.REQUIRED_CHECKS, start=1)),
+    )
+
+    verdict = core.evaluate_completion_claim(observation)
+
+    assert verdict.accepted is False
+    assert verdict.state == "COMPLETION_REJECTED"
+    assert "Draft" in verdict.reason
+
+
+def test_worker_says_done_with_unresolved_validated_finding_is_rejected(tmp_path, monkeypatch):
+    dispositions = tmp_path / "REVIEWER_FINDING_DISPOSITIONS.json"
+    dispositions.write_text(
+        '{"findings": [{"id": "RFD-1", "validation_state": "validated", "resolution_state": "unresolved"}]}',
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(core, "REVIEWER_DISPOSITIONS_PATH", dispositions)
+
+    verdict = core.evaluate_completion_claim(_green_observation())
+
+    assert verdict.accepted is False
+    assert verdict.state == "COMPLETION_REJECTED"
+    assert "RFD-1" in verdict.reason
+
+
+def test_exact_head_with_all_required_evidence_satisfied_is_accepted():
+    verdict = core.evaluate_completion_claim(_green_observation())
+
+    assert verdict.accepted is True
+    assert verdict.state == "COMPLETION_ACCEPTED"
+
+
+def test_completion_verdict_does_not_depend_on_a_self_reported_claim():
+    """There is no `claimed_done` input at all: calling the same observation
+    twice, as any real caller would whether or not a worker claims completion,
+    must produce the identical verdict -- self-report cannot move this."""
+
+    observation = _green_observation()
+
+    first = core.evaluate_completion_claim(observation)
+    second = core.evaluate_completion_claim(observation)
+
+    assert first == second == core.CompletionVerdict(True, "COMPLETION_ACCEPTED", first.reason)
+
+
+@pytest.mark.parametrize("orchestration_state", ["WAITING_FOR_REVIEWER", "REVIEW_IN_PROGRESS"])
+def test_worker_says_done_while_independent_review_is_pending_is_rejected(orchestration_state):
+    """A live exact-HEAD review opportunity is bounded waiting, not readiness.
+
+    No provider has permanent merge authority: timeout/unavailability becomes a
+    non-blocking terminal state, covered by the paired terminal tests below.
+    """
+
+    observation = core.StaticReadinessObservation(
+        check_runs=tuple(_green_check(name, index) for index, name in enumerate(core.REQUIRED_CHECKS, start=1)),
+        review_authority=("pending", f"{orchestration_state}: no trusted exact-head orchestration cycle yet"),
+    )
+
+    # Merge readiness waits only while the bounded opportunity is live.
+    assert core.evaluate(observation).state == "pending"
+
+    verdict = core.evaluate_completion_claim(observation)
+
+    assert verdict.accepted is False
+    assert verdict.state == "COMPLETION_REJECTED"
+    assert "bounded independent-review opportunity" in verdict.reason
+
+
+@pytest.mark.parametrize("terminal_state", ["REVIEW_TIMED_OUT", "REVIEWER_UNAVAILABLE", "POOL_EXHAUSTED"])
+def test_terminal_review_opportunity_does_not_lock_merge_readiness(terminal_state):
+    observation = core.StaticReadinessObservation(
+        check_runs=tuple(_green_check(name, index) for index, name in enumerate(core.REQUIRED_CHECKS, start=1)),
+        review_authority=("success", f"{terminal_state}: bounded opportunity ended without review"),
+    )
+    assert core.evaluate(observation).state == "success"
+
+
+def test_live_review_opportunity_blocks_ready_to_merge_without_turning_red():
+    observation = core.StaticReadinessObservation(
+        check_runs=tuple(_green_check(name, index) for index, name in enumerate(core.REQUIRED_CHECKS, start=1)),
+        review_authority=("pending", "WAITING_FOR_REVIEWER: exact HEAD dispatched"),
+    )
+    decision = core.evaluate(observation)
+    assert decision.state == "pending"
+    assert "bounded independent-review opportunity" in decision.description
+
+
+def test_worker_says_done_after_independent_review_reaches_a_terminal_state_is_accepted():
+    """The paired positive: a terminal review-authority outcome (success,
+    failure/exhausted-and-guarded, or anything other than the generic
+    "pending" review_wait_state projects) does not block completion once
+    every other current-state signal is green."""
+
+    observation = core.StaticReadinessObservation(
+        check_runs=tuple(_green_check(name, index) for index, name in enumerate(core.REQUIRED_CHECKS, start=1)),
+        review_authority=("success", "VALID_LAST_RESORT_GUARD: pool exhausted, guard reviewed"),
+    )
+
+    verdict = core.evaluate_completion_claim(observation)
+
+    assert verdict.accepted is True
+    assert verdict.state == "COMPLETION_ACCEPTED"
+
+
+def test_decide_completion_is_a_real_production_caller_against_a_live_pr(monkeypatch):
+    """Codex P1 (PR #530 review): a repo-wide search found no production
+    caller of `evaluate_completion_claim` -- only the unit tests. This proves
+    a real one exists: `decide_completion` builds the same live GitHub
+    observation `decide()` uses and asks the completion question against it,
+    so `python scripts/hunter_merge_readiness_v2.py completion <pr>` (see
+    `main()`) is a genuine, invokable production path, not test-only code."""
+
+    _install_green(monkeypatch)
+
+    verdict = core.decide_completion(501)
+
+    assert verdict == core.CompletionVerdict(True, "COMPLETION_ACCEPTED", verdict.reason)
+
+
+def test_decide_completion_rejects_against_the_same_live_pr_when_checks_are_red(monkeypatch):
+    _install_green(monkeypatch)
+    monkeypatch.setattr(
+        core,
+        "all_check_runs",
+        lambda _sha: [
+            {"id": 1, "name": name, "status": "completed", "conclusion": "failure" if index == 1 else "success"}
+            for index, name in enumerate(core.REQUIRED_CHECKS, start=1)
+        ],
+    )
+
+    verdict = core.decide_completion(501)
+
+    assert verdict is not None
+    assert verdict.accepted is False
+    assert verdict.state == "COMPLETION_REJECTED"
+
+
+def test_decide_completion_returns_none_for_a_pr_that_is_not_open(monkeypatch):
+    monkeypatch.setattr(core, "request_json", lambda method, path, payload=None: {**_pr(), "state": "closed"})
+
+    assert core.decide_completion(501) is None
+
+
+def test_normal_decide_path_enforces_completion_gate(monkeypatch):
+    pr = {"state": "open", "head": {"sha": "a" * 40}}
+    monkeypatch.setattr(core, "request_json", lambda *args, **kwargs: pr)
+    monkeypatch.setattr(core, "LiveReadinessObservation", lambda *args: object())
+    monkeypatch.setattr(
+        core,
+        "evaluate_completion_claim",
+        lambda observation: core.CompletionVerdict(False, "COMPLETION_REJECTED", "worker completion rejected"),
+    )
+    monkeypatch.setattr(core, "evaluate", lambda observation: core.Decision("pending", "waiting"))
+    head, decision = core.decide(530)
+    assert head == "a" * 40
+    assert decision.state == "pending"
+    assert decision.description == "worker completion rejected"

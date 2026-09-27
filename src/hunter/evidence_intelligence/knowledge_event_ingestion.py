@@ -56,7 +56,9 @@ def ingest_event(source: str, raw: Any) -> KnowledgeFinding:
     event_id = raw.get("event_id")
     if type(event_id) is not str or not event_id.strip():
         raise EventIngestionError("event_id is required")
-    identity_payload = {key: raw.get(key) for key in sorted(_ALLOWED_FIELDS)}
+    identity_payload = {
+        key: raw.get(key) for key in sorted(_ALLOWED_FIELDS - {"reviewed_head_sha", "reviewed_base_sha"})
+    }
     payload_digest = hashlib.sha256(
         json.dumps(identity_payload, sort_keys=True, separators=(",", ":"), ensure_ascii=False).encode("utf-8")
     ).hexdigest()

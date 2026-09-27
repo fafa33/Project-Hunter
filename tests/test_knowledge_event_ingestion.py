@@ -86,3 +86,14 @@ def test_same_provider_event_id_with_changed_payload_has_different_content_ident
     changed["fix_reference"] = "PR #489 commit DIFFERENT"
     second = ingest_event("sonar", changed)
     assert first.finding_id != second.finding_id
+
+
+def test_provider_event_identity_ignores_moving_catch_up_head_and_base() -> None:
+    first_payload = payload("github-review")
+    second_payload = dict(first_payload)
+    second_payload["reviewed_head_sha"] = "a" * 40
+    second_payload["reviewed_base_sha"] = "b" * 40
+    first = ingest_event("github-review", first_payload)
+    second = ingest_event("github-review", second_payload)
+    assert first.finding_id == second.finding_id
+    assert first.reviewed_head_sha != second.reviewed_head_sha

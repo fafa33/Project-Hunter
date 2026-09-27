@@ -55,6 +55,13 @@ NON_RED_REVIEW_STATES = frozenset(
         "WAITING_FOR_REVIEWER",
         "REVIEW_IN_PROGRESS",
         "FAILOVER_IN_PROGRESS",
+    }
+)
+
+TERMINAL_NONBLOCKING_REVIEW_STATES = frozenset(
+    {
+        "REVIEW_TIMED_OUT",
+        "REVIEWER_UNAVAILABLE",
         "POOL_EXHAUSTED",
     }
 )
@@ -286,6 +293,12 @@ def review_authority_state(head_sha: str, pr_number: int) -> tuple[str, str]:
         waiting = review_wait_state(orchestration_state, orchestration_detail)
         if waiting is not None:
             return waiting
+        if orchestration_state in TERMINAL_NONBLOCKING_REVIEW_STATES:
+            return (
+                "success",
+                f"{orchestration_state}: independent-review opportunity ended without review; "
+                f"{orchestration_detail}",
+            )
         return "pending", f"{verdict.state}: {verdict.detail}"
     except Exception as exc:
         return "pending", f"Review authority evidence unavailable: {type(exc).__name__}: {exc}"
@@ -431,11 +444,16 @@ def evaluate(observation: ReadinessObservation) -> Decision:
     if observation.changes_requested:
         return Decision("failure", "Changes requested by: " + ", ".join(observation.changes_requested))
 
-    # External LLM review is defense-in-depth, not merge authority. Existing
-    # authenticated blockers above remain fail-closed, but provider quota,
-    # outage, or absence cannot strand an otherwise verified exact HEAD.
-    # Keep observing review authority for diagnostics without gating readiness.
-    _authority_state, _authority_detail = observation.review_authority
+    # Independent review is defense-in-depth, but the *opportunity* is a bounded
+    # exact-HEAD prerequisite.  While that opportunity is live, readiness waits.
+    # A terminal timeout/unavailability is deliberately non-blocking: it records
+    # the missing review honestly without giving any provider permanent merge
+    # authority. Authenticated findings above remain fail-closed.
+    authority_state, authority_detail = observation.review_authority
+    if authority_state == "pending":
+        return Decision("pending", "Waiting for bounded independent-review opportunity: " + authority_detail)
+    if authority_state != "success":
+        return Decision("failure", "Independent-review authority failed: " + authority_detail)
 
     admission_state, admission_detail = observation.candidate_admission
     if admission_state == "pending":
@@ -480,8 +498,64 @@ def evaluate(observation: ReadinessObservation) -> Decision:
 
     return Decision(
         "success",
-        "Ready to merge: deterministic code/security/governance checks pass; external LLM review is optional defense-in-depth.",
+        "Ready to merge: deterministic code/security/governance checks pass and the bounded independent-review opportunity is terminal.",
     )
+
+
+@dataclass(frozen=True)
+class CompletionVerdict:
+    """The authoritative answer to "is this candidate actually done".
+
+    A worker session's own narrative -- a final report declaring success, a
+    pushed commit, an opened PR, a passed local preflight -- carries no
+    completion authority by itself. This function is that authority: it
+    always re-derives the verdict from current hosted state via the same
+    `evaluate()` Merge Readiness already uses, so a worker cannot make a
+    mission "done" merely by asserting it, and repeating the assertion changes
+    nothing about the verdict. There is deliberately no `claimed_done`
+    parameter: completion cannot depend on self-report, so accepting one as
+    an input this function then ignores would invite exactly the confusion
+    this exists to prevent.
+    """
+
+    accepted: bool
+    state: str
+    reason: str
+
+
+def evaluate_completion_claim(observation: ReadinessObservation) -> CompletionVerdict:
+    """Independently evaluate whether a candidate is genuinely complete.
+
+    Reuses `evaluate()`'s decision for every deterministic merge blocker --
+    this is not a second readiness definition. It adds exactly one further,
+    stricter check `evaluate()` deliberately omits: `evaluate()` treats
+    external review as pure defense-in-depth and never lets a pending review
+    block the merge-authority decision (Codex/other reviewers cannot deadlock
+    push or merge -- `review_authority_state()`'s "pending" covers exactly
+    the orchestration states in `NON_RED_REVIEW_STATES`, e.g.
+    `WAITING_FOR_REVIEWER`, `REVIEW_IN_PROGRESS`, embedded in its detail
+    string). "Is this candidate genuinely done" is a higher bar than "is this
+    candidate mergeable by deterministic gates", so a bounded
+    independent-review opportunity that was actually requested and has not
+    yet reached a terminal state means completion is rejected here even when
+    `evaluate()` itself would report success. This does not change what
+    `evaluate()` publishes to the GitHub status API or what Merge Readiness
+    allows a human to merge -- only what this narrower "should a worker
+    consider this done" question answers.
+    """
+
+    decision = evaluate(observation)
+    if decision.state != "success":
+        return CompletionVerdict(False, "COMPLETION_REJECTED", decision.description)
+    authority_state, authority_detail = observation.review_authority
+    if authority_state == "pending":
+        return CompletionVerdict(
+            False,
+            "COMPLETION_REJECTED",
+            f"Independent-review opportunity has not reached a terminal state ({authority_detail}); "
+            "merge-readiness itself does not block on this, but completion does.",
+        )
+    return CompletionVerdict(True, "COMPLETION_ACCEPTED", decision.description)
 
 
 def decide(pr_number: int) -> tuple[str, Decision] | None:
@@ -493,7 +567,34 @@ def decide(pr_number: int) -> tuple[str, Decision] | None:
     if not head_sha:
         return "", Decision("pending", "Waiting: current PR head SHA is unavailable.")
 
-    return head_sha, evaluate(LiveReadinessObservation(pr_number, pr, head_sha))
+    observation = LiveReadinessObservation(pr_number, pr, head_sha)
+    verdict = evaluate_completion_claim(observation)
+    if verdict.accepted:
+        return head_sha, Decision("success", verdict.reason)
+    decision = evaluate(observation)
+    return head_sha, Decision(decision.state, verdict.reason)
+
+
+def decide_completion(pr_number: int) -> CompletionVerdict | None:
+    """The real, PR-scoped counterpart to `evaluate_completion_claim`.
+
+    Codex P1 (PR #530): a repo-wide search found no production caller of
+    `evaluate_completion_claim` -- only the unit tests exercised it, so it
+    could not actually reject any real worker's completion claim. This is
+    that caller: it builds the same live observation `decide()` uses against
+    a real GitHub PR and asks the completion question against it, so a
+    worker (or a CI step) can run
+    `python scripts/hunter_merge_readiness_v2.py completion <pr>` and get an
+    answer that depends on nothing it asserted about its own work.
+    """
+
+    pr = request_json("GET", f"pulls/{pr_number}")
+    if not isinstance(pr, dict) or pr.get("state") != "open":
+        return None
+    head_sha = str((pr.get("head") or {}).get("sha") or "").strip()
+    if not head_sha:
+        return CompletionVerdict(False, "COMPLETION_REJECTED", "current PR head SHA is unavailable")
+    return evaluate_completion_claim(LiveReadinessObservation(pr_number, pr, head_sha))
 
 
 def publish(sha: str, decision: Decision) -> None:
@@ -571,6 +672,23 @@ def candidate_prs() -> tuple[int, ...]:
 
 
 def main() -> int:
+    if len(sys.argv) >= 3 and sys.argv[1] == "completion":
+        try:
+            pr_number = int(sys.argv[2])
+        except ValueError:
+            print("usage: hunter_merge_readiness_v2.py completion <pr-number>", file=sys.stderr)
+            return 2
+        try:
+            verdict = decide_completion(pr_number)
+        except transport.GitHubUnavailable as exc:
+            print(f"Completion evidence unavailable: {exc}", file=sys.stderr)
+            return 1
+        if verdict is None:
+            print(f"PR #{pr_number} is not open; no completion verdict applies.")
+            return 1
+        print(f"{verdict.state}: {verdict.reason}")
+        return 0 if verdict.accepted else 1
+
     try:
         numbers = candidate_prs()
     except transport.GitHubUnavailable as exc:

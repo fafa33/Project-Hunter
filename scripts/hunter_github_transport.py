@@ -11,6 +11,7 @@ being misread as a semantic governance result.
 Classification invariants:
 
 - ``429/500/502/503/504`` are transient and retryable.
+- ``403`` is retryable only when GitHub explicitly reports API rate-limit exhaustion; ordinary permission-denied 403 remains permanent.
 - A ``404`` whose body is the GitHub node-resolution inconsistency
   ("Could not resolve to a node with the global id ...") is an
   infrastructure/data-resolution failure: retryable with the same bounded
@@ -37,6 +38,7 @@ from dataclasses import dataclass
 from typing import Any
 
 TRANSIENT_STATUS_CODES = frozenset({429, 500, 502, 503, 504})
+RATE_LIMIT_403_PATTERNS = (re.compile(r"(?:api|secondary) rate limit (?:exceeded|hit)", re.IGNORECASE),)
 
 # GitHub's REST API occasionally answers a live repository object with a 404
 # whose body explains that an internal node reference cannot be resolved
@@ -141,7 +143,9 @@ def classify_http_error(exc: urllib.error.HTTPError) -> GitHubRequestError:
     """Classify a raw HTTPError into a typed, retryable or permanent error."""
     body = _read_http_error_body(exc)
     code = exc.code
-    if code in TRANSIENT_STATUS_CODES:
+    if code in TRANSIENT_STATUS_CODES or (
+        code == 403 and any(pattern.search(body) for pattern in RATE_LIMIT_403_PATTERNS)
+    ):
         return GitHubRequestError(
             f"GitHub HTTP {code}: {body[:200] or 'no response body'}",
             category="transient",
@@ -180,7 +184,9 @@ def classify_cli_failure(detail: str) -> GitHubRequestError:
     """
     status_match = re.search(r"\bHTTP(?:/[0-9.]+)?\s+(?P<code>[0-9]{3})\b", detail, re.IGNORECASE)
     code = int(status_match.group("code")) if status_match else None
-    if code in TRANSIENT_STATUS_CODES:
+    if code in TRANSIENT_STATUS_CODES or (
+        code == 403 and any(pattern.search(detail) for pattern in RATE_LIMIT_403_PATTERNS)
+    ):
         return GitHubRequestError(f"GitHub HTTP {code}: {detail[:200]}", category="transient", status_code=code)
     if code == 404 and any(pattern.search(detail) for pattern in NODE_RESOLUTION_404_PATTERNS):
         return GitHubRequestError(
