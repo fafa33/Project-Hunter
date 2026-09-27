@@ -2,87 +2,39 @@
   "claims": {
     "acceptance_criteria": [
       {
-        "criterion": "Lean Governance: extend existing authorities (Merge Readiness, Governance Review, the pre-ready hostile review, the DPM/SPM context path) rather than introducing a parallel governance or orchestration framework.",
-        "evidence": "evaluate_completion_claim() wraps hunter_merge_readiness_v2.evaluate() unchanged rather than restating its decision logic; the canonicalization script reuses build_learning_ledger/materialize_learning_ledger from PR #528 unchanged with no new registry/persistence/replay semantics; EngineeringContextAuthority's existing schema (v1) is extended to v2 by adding one field rather than replaced. Where an existing mechanism already fully satisfied a criterion (SCOPE_MUTATION_REJECTED via hunter_pre_ready_review.py, validation-receipt reuse via hunter_validation_receipt.py), no new code was added for it -- see AC-6 and AC-3 evidence.",
+        "criterion": "Draft -> Ready for Review must deterministically and promptly trigger the trusted default-branch reconciliation/orchestration path for that exact PR/HEAD.",
+        "evidence": "hunter-governance-reconcile.yml gained a pull_request_target(ready_for_review) trigger scoped to main, resolved from the base branch's copy of the file (non-candidate-controlled); proven by test_reconcile_wakes_when_a_pr_becomes_ready_for_review.",
         "id": "AC-1",
         "verdict": "satisfied"
       },
       {
-        "criterion": "No Repository Rediscovery reaches the machine-consumed agent execution path, not only human-facing documentation.",
-        "evidence": "EngineeringContextAuthority.compile() now returns an execution_discipline field carrying the no-rediscovery rule set, and ENGINEERING_IMPLEMENT_PROFILE.specification.trusted_system_constraints explicitly references it -- this is the actual SmartPromptMachine-compiled prompt text an engineering.implement agent receives, not only CLAUDE.md prose. Regression: tests/test_engineering_context_authority.py::test_compiled_context_carries_the_no_repository_rediscovery_execution_rule and tests/test_engineering_task_ingress.py's assertion that 'execution_discipline' is present in the compiled payload and referenced in the profile's own constraint text.",
+        "criterion": "Do not solve this by granting privileged actions:write to a candidate-controlled pull_request workflow; preserve the trusted-default-branch boundary.",
+        "evidence": "pull_request_target (never pull_request) is used; no permissions block changed. Proven generically by this repo's own pre-existing test_candidate_controlled_triggers_are_read_from_every_declaration_shape and test_no_pull_request_reachable_workflow_can_drive_other_workflows, both passing unchanged.",
         "id": "AC-2",
         "verdict": "satisfied"
       },
       {
-        "criterion": "Execution Economy: focused verification is used by default; full-repository validation runs only at the repository-defined stage or when concrete evidence requires it; unchanged exact-HEAD validation evidence is reused rather than rerun.",
-        "evidence": "This mission ran the full local pytest suite a bounded number of times (once per branch before push, as CLAUDE.md's push-boundary instruction requires), reusing ruff/black/mypy (fast, deterministic) for every incremental change instead of rerunning pytest per edit. The exact-HEAD validation-receipt-reuse mechanism itself (hunter_validation_receipt.py, hunter_pr_preflight.py --reuse-receipt) is untouched by this PR and remains covered by its own existing tests/test_validation_proof_reuse.py, including the RFD-416-001 regression for reuse being bound to the exact head.",
+        "criterion": "Root cause completeness: live GitHub evidence (PR #535, trusted Reconcile run 36335901035) must be traced to its exact predicate, not assumed fixed by the trigger alone.",
+        "evidence": "Traced to hunter_review_orchestrator.ensure_current requiring a valid, content-bound .hunter/pre-ready-hostile-review.json review-request document that nothing was producing; confirmed via GitHub Contents API that PR #535's exact head carried an unrelated PR's stale leftover document.",
         "id": "AC-3",
         "verdict": "satisfied"
       },
       {
-        "criterion": "Bounded Independent Review: the review opportunity has a visible state and does not wait on any single provider indefinitely; explicit reviewer failure, quota exhaustion, or timeout is recorded and does not paralyze the candidate.",
-        "evidence": "Not implemented or modified by this PR's diff. hunter_reviewer_collector.py / hunter_review_orchestrator.py already implement bounded per-reviewer ack/review timeouts and WAITING_FOR_REVIEWER / REVIEW_IN_PROGRESS / FAILOVER_IN_PROGRESS / POOL_EXHAUSTED states (existing, tested by tests/test_hunter_reviewer_collector.py and tests/test_hunter_review_orchestrator.py, both untouched here). This PR did exercise that real mechanism operationally for its own review request (see AC-10/finding F-2), but added no new bounded-timeout machinery of its own.",
+        "criterion": "Do not turn missing evidence into success, do not bypass exact-head validation, do not fabricate a review on the candidate's own behalf.",
+        "evidence": "ensure_current's fail-closed no-op for 'no valid request' is left unchanged/unweakened; the fix commits an honest, content-bound request for this candidate's own real diff via the existing hunter_pre_ready_review.py --request mechanism, not by auto-generating claims inside the orchestrator.",
         "id": "AC-4",
-        "verdict": "not-applicable"
+        "verdict": "satisfied"
       },
       {
-        "criterion": "No false READY while the bounded independent-review opportunity is still pending: a candidate is not reported fully ready to merge while a legitimately requested review has not yet reached a terminal state.",
-        "evidence": "hunter_merge_readiness_v2.evaluate() -- the function that actually decides the GitHub-visible 'Hunter Merge Readiness' status humans merge against -- still deliberately does not gate success on review-authority state (unchanged by this PR, per DFF-026: external review is defense-in-depth, never a mandatory merge dependency). What this PR does add is a stricter, separate completion gate: evaluate_completion_claim()/decide_completion() now reject completion (not mergeability) while review_authority reports 'pending'. This closes the concern for 'should a worker consider this done', not for what GitHub's own merge-readiness check reports; the criterion as literally worded ('reported fully ready to merge') is about the latter and remains not-applicable to this diff. See finding F-1 (now resolved for the completion-gate reading) for the full history.",
+        "criterion": "The live failure must become regression evidence, not a prose-only or grep-only proxy.",
+        "evidence": "test_a_foreign_review_request_document_is_rejected_for_a_different_candidate reproduces PR #535's exact failure shape behaviorally (a foreign document rejected by real content-binding code); test_a_freshly_prepared_review_request_bound_to_the_current_candidate_is_valid proves the fix mechanism.",
         "id": "AC-5",
-        "verdict": "not-applicable"
+        "verdict": "satisfied"
       },
       {
-        "criterion": "A machine-consumable Execution Contract constrains agent execution: acceptance criteria and mission scope are immutable to the worker: an agent may not silently omit, defer, reinterpret, or narrow a criterion, and any scope expansion must be evidence-gated (state why current scope is insufficient, the exact additional scope, and its cost, before acting on it).",
-        "evidence": "The scope-immutability and evidence-gated-expansion rules are now explicit entries in EngineeringContextAuthority.EXECUTION_DISCIPLINE_RULES, reaching the same compiled context as AC-2. Separately, and already existing before this PR: hunter_pre_ready_review.py's verify_claims/verify_review_request already reject any review whose claims omit one of the governing Issue's acceptance criteria -- proven by the existing tests/test_issue_412_prevention_gate.py::test_a_review_omitting_all_but_one_criterion_is_refused (Issue #412) and test_a_review_covering_one_self_authored_criterion_is_refused. This review request document is itself bound by, and satisfies, that exact mechanism: it covers all 14 of this Issue's criteria (verified via parse_issue_acceptance_criteria against this Issue's real body).",
+        "criterion": "Update DFF-040 (or an existing applicable family) through the canonical defect-learning path rather than hand-editing a duplicate family.",
+        "evidence": "DFF-040 updated with root cause 2 and live evidence; additionally, while tracing this, an already-existing but overclaiming legacy entry (DFF-031) was found and corrected rather than left silently false, per this repository's own instruction to strengthen the earliest reliable reusable guard when a defect class recurs.",
         "id": "AC-6",
-        "verdict": "satisfied"
-      },
-      {
-        "criterion": "Prevention of Premature Agent Completion: an agent's own claim of completion, a final report, a passed local preflight, a pushed commit, or an opened pull request does not itself complete the mission.",
-        "evidence": "scripts/hunter_merge_readiness_v2.py::evaluate_completion_claim() has no `claimed_done` parameter at all -- completion cannot depend on self-report by construction, not merely by convention. Regression: tests/test_hunter_merge_readiness_v2.py::test_worker_says_done_while_required_checks_are_red_is_rejected, test_worker_says_done_while_pr_is_still_draft_is_rejected, test_worker_says_done_with_unresolved_validated_finding_is_rejected, test_completion_verdict_does_not_depend_on_a_self_reported_claim.",
-        "id": "AC-7",
-        "verdict": "satisfied"
-      },
-      {
-        "criterion": "An independent Completion Gate evaluates completion against real, current, exact-HEAD evidence (required hosted checks green, governance/verification gates green, the bounded independent-review opportunity at a legitimate terminal state, no unresolved substantive finding), not against any agent's self-report.",
-        "evidence": "evaluate_completion_claim() re-derives its verdict from the same current-hosted-state evaluate() Merge Readiness uses (draft state, mergeability, unresolved review threads, changes requested, unresolved validated reviewer dispositions, candidate admission, required checks Quality Gates/dependency-review/CodeQL, shared-head attribution) every time it is called, AND -- following independent review confirming this gap (finding F-1) -- now additionally rejects while the independent-review opportunity has not reached a terminal state. decide_completion() (finding F-6) makes this a real, invokable production check against a live PR, not only unit-tested logic.",
-        "id": "AC-8",
-        "verdict": "satisfied"
-      },
-      {
-        "criterion": "Automatic finding-to-remediation orchestration: a validated finding is durably captured and cannot be silently dropped or falsely marked resolved by the remediation lifecycle.",
-        "evidence": "scripts/hunter_collect_learning_observations.py now ingests the complete authenticated authority-review history rather than only current-HEAD comments, preserves each original source head as source_event_head_sha, rejects untrusted reviewer identities, and accepts a terminal owner disposition only on the exact resolved thread. Confirmed findings require complete replayable evidence (fix SHA, canonical family, invariant, regression target) before canonical learning; unresolved/incomplete evidence remains durable neutral evidence and cannot be falsely canonicalized. .github/workflows/hunter-canonicalization-auto.yml captures this lifecycle automatically and preserves its artifact. Regressions: tests/test_hunter_knowledge_learning_workflow.py, including older-head catch-up, untrusted-review rejection, resolved structured disposition, and unresolved-thread rejection. scripts/hunter_canonicalization_candidate_pr.py also appends every authenticated github-review event to the existing docs/REVIEWER_FINDING_DISPOSITIONS.json as a stable RFD-AUTO-* entry with validation_state=unvalidated, on the same dedicated knowledge candidate branch/Draft PR. Therefore a finding is durably proposed even before enough evidence exists to classify or map it; duplicate events are byte-identical no-ops and cannot be silently omitted by HEAD movement. Regressions: test_github_review_finding_is_durably_captured_even_before_classification and test_duplicate_github_review_capture_is_idempotent.",
-        "id": "AC-9",
-        "verdict": "satisfied"
-      },
-      {
-        "criterion": "Automatic finding-to-canonical-knowledge lifecycle: a resolved finding that maps to an existing canonical defect family is automatically turned into a canonicalization candidate branch and Draft PR, without requiring the owner to run the canonicalization CLI by hand, and without ever writing directly to main or auto-merging.",
-        "evidence": ".github/workflows/hunter-canonicalization-auto.yml is the automatic trusted-default-branch trigger for pull_request_review / pull_request_review_comment events, with workflow_dispatch catch-up. It invokes scripts/hunter_collect_learning_observations.py and then the existing scripts/hunter_canonicalization_candidate_pr.py path on the self-hosted Mac. The GitHub token remains contents:read / pull-requests:read; the candidate push crosses the already-authorized local_git_push + .githooks/pre-push boundary, targets only canonicalization/defect-registry-auto, opens/updates a Draft PR, and never writes main or merges. A bootstrap guard refuses to execute candidate code until the engine is present on the trusted default branch; the local/manual PR #528 recovery path remains available.",
-        "id": "AC-10",
-        "verdict": "satisfied"
-      },
-      {
-        "criterion": "One controlled, real end-to-end proof of the automatic finding-to-canonicalization lifecycle exists, using a safe representative finding.",
-        "evidence": "tests/test_hunter_canonicalization_candidate_pr.py exercises the real mechanism end to end -- real git worktree creation, real commit, real push to a real (local, disposable) git remote, real idempotency and cross-finding accumulation behaviour -- using the DFF-008 family's real invariant text as the representative finding, with only the GitHub API (`gh`) calls stubbed. A live demonstration against the production fafa33/Project-Hunter registry was deliberately not forced: materialize_learning_ledger can only reinforce an existing DEFECT_REGISTRY.json family whose invariant deterministically matches the finding, and this session's own real accumulation-bug finding (see finding F-3) does not genuinely match DFF-008 or any of the branch/concurrency-adjacent families checked (DFF-012, DFF-016, DFF-017, DFF-021, DFF-022, DFF-024, DFF-025, DFF-026) -- minting a new family requires human/canonical approval this automation must not self-grant. See finding F-4.",
-        "id": "AC-11",
-        "verdict": "satisfied"
-      },
-      {
-        "criterion": "No repository-write authority is broadened, no new CODE_WRITE_POLICY.json grant is added, main is never written to directly, and no auto-merge exists anywhere in the new mechanism.",
-        "evidence": "git diff origin/main...HEAD does not touch docs/CODE_WRITE_POLICY.json. grep for the literal token \"merge\" across scripts/hunter_canonicalization_candidate_pr.py and scripts/hunter_merge_readiness_v2.py's new evaluate_completion_claim finds no merge command. tests/test_hunter_canonicalization_candidate_pr.py::test_propose_never_targets_main_for_write_operations asserts no git command in the whole propose() call sequence checks out or pushes main.",
-        "id": "AC-12",
-        "verdict": "satisfied"
-      },
-      {
-        "criterion": "No mandatory paid or external AI provider dependency is introduced anywhere in the new mechanism; the local/manual CLI recovery path from PR #528 remains fully supported.",
-        "evidence": "scripts/hunter_canonicalize_learning.py (PR #528's manual CLI) is untouched by this PR and remains the fully supported local/Mac fallback. scripts/hunter_canonicalization_candidate_pr.py takes no network/provider dependency beyond git and gh (the same tools any human contributor already uses); it composes build_learning_ledger/materialize_learning_ledger, neither of which contacts a provider.",
-        "id": "AC-13",
-        "verdict": "satisfied"
-      },
-      {
-        "criterion": "Human merge approval remains the final, sole authority to integrate into main; nothing in this mission marks a PR ready or merges it.",
-        "evidence": "Both PR #529 and PR #530 remain Draft throughout this mission. No `gh pr merge`, `gh pr ready`, or git merge-to-main command was run by any script or by this session. hunter_merge_readiness_v2.py's evaluate()/evaluate_completion_claim() are read-only decision functions; neither performs a write action.",
-        "id": "AC-14",
         "verdict": "satisfied"
       }
     ],
@@ -100,100 +52,65 @@
       "transaction-snapshot-consistency"
     ],
     "base_ref": "main",
-    "base_sha": "c25b48228f422a7a4e3e85112bd9ffdc216da849",
+    "base_sha": "156ed2fad8638dabc9bd1c45a4efbfece2b2d69c",
     "defect_families": [
       {
-        "evidence": "No time-based admission/ordering/cutoff decision is introduced; nothing samples a clock.",
-        "family": "DFF-001",
-        "outcome": "clear"
-      },
-      {
-        "evidence": "compute_plan() reads the supplied registry snapshot once into an isolated scratch copy before computing; materialize_learning_ledger's own atomic compare-and-swap (unchanged) is the only writer, so no decision spans two independently-taken views.",
-        "family": "DFF-002",
-        "outcome": "clear"
-      },
-      {
-        "evidence": "No caller-supplied identity can select or override a repository-assigned logical identity anywhere in this diff.",
-        "family": "DFF-003",
-        "outcome": "clear"
-      },
-      {
-        "evidence": "compute_plan()/propose() raise CanonicalizationCandidatePrError on any malformed or incomplete observation via build_learning_ledger's existing validation; nothing defaults absence to permission.",
-        "family": "DFF-004",
-        "outcome": "clear"
-      },
-      {
-        "evidence": "No persistence-restriction or metadata-nesting surface exists in this diff.",
-        "family": "DFF-005",
-        "outcome": "clear"
-      },
-      {
-        "evidence": "The accumulation-bug fix (finding F-3) is exactly a monotonicity/restart-stability fix: propose() now bases each run on the dedicated branch's own tip when it still carries unmerged content, and rebuilds fresh only once that tip is provably an ancestor of main, so repeated or restarted runs never regress or duplicate an already-accumulated candidate. Regression: test_propose_accumulates_a_second_finding_onto_an_unmerged_first_candidate, test_propose_rebuilds_fresh_once_dedicated_branch_is_stale, test_propose_second_run_with_identical_observations_is_idempotent_noop.",
-        "family": "DFF-006",
-        "outcome": "repaired"
-      },
-      {
-        "evidence": "No authorization-minting surface exists in this diff.",
+        "evidence": "No caller-supplied authorization/replay surface is touched by this diff.",
         "family": "DFF-007",
         "outcome": "clear"
       },
       {
-        "evidence": "No new evidence-forgery surface is introduced; the canonicalization script only ever writes docs/DEFECT_REGISTRY.json through the existing, unmodified, digest-bound materialize_learning_ledger.",
+        "evidence": "No history rewrite; every commit in this range is an ordinary forward commit (no amend/rebase/force-push).",
         "family": "DFF-008",
         "outcome": "clear"
       },
       {
-        "evidence": "connector_write_ingress is not touched by this diff.",
+        "evidence": "connector_write_ingress.py and its evidence lifecycle are not touched by this diff.",
         "family": "DFF-009",
         "outcome": "clear"
       },
       {
-        "evidence": "This session found and fixed exactly this defect class in its own commits: 58da9c6/76dbe2e were originally authored/committed as Claude <noreply@anthropic.com> but signed with a key GitHub recognizes only under the fafa33 identity, producing verification reason=unknown_key on GitHub (confirmed via gh api .../commits/<sha> before the fix). Corrected so every commit's author and committer both independently resolve to the bound Farhad5778/fafa33 identity; re-verified true via `git verify-commit` locally and `verified: true, reason: valid` from the GitHub commits API for every commit now in both PR #529 and PR #530's range.",
+        "evidence": "Every commit is authored and committed as the bound writer identity (Claude <noreply@anthropic.com>); no identity-binding logic is touched.",
         "family": "DFF-010",
-        "outcome": "repaired"
+        "outcome": "clear"
       },
       {
-        "evidence": "The amend/rebase operations used to fix DFF-010 replaced commits in place (git commit --amend --reset-author, git rebase) rather than stranding an intermediate commit; both branches' full histories were re-verified after the force-with-lease push (explicitly authorized) and every commit resolves to bound writer evidence.",
+        "evidence": "Ordinary forward commits only; no intermediate commit is stranded by a rebase or force-push.",
         "family": "DFF-011",
         "outcome": "clear"
       },
       {
-        "evidence": "propose()'s staleness check (git merge-base --is-ancestor) is exactly this invariant applied to the dedicated canonicalization branch: a receipt/tip inherited unchanged from an already-merged state is never treated as current, live accumulation state.",
+        "evidence": "No connector authorization receipt is touched by this diff.",
         "family": "DFF-012",
         "outcome": "clear"
       },
       {
-        "evidence": "This review request document is itself the complete base->HEAD hostile review this family requires before candidate admission, produced and committed before requesting external review.",
+        "evidence": "This diff's whole subject is enabling a review REQUEST to exist and content-bind correctly for PR #535; verify_claims still correctly treats a request-only document ('review_request' present) as 'missing', never as a completed review -- unweakened, proven by test_a_review_request_cannot_be_verified_locally_as_a_completed_review (untouched, still passing).",
         "family": "DFF-013",
         "outcome": "clear"
       },
       {
-        "evidence": "evaluate() (unchanged) already distinguishes a still-running check (status != completed -> pending) from an actual failure (conclusion in HARD_FAILURES -> failed). evaluate_completion_claim() collapses evaluate()'s three states (success/pending/failure) into a binary COMPLETION_ACCEPTED/COMPLETION_REJECTED for its own narrower question (should an agent report done), but preserves decision.reason verbatim in CompletionVerdict.reason so the pending-vs-failure distinction is not lost to an inspector -- it does not publish anything to the GitHub status API, so DFF-014's own publish()-level guarantee is unaffected. See non-blocking finding F-2 for the collapse itself.",
+        "evidence": "ensure_current's clean None return for 'no valid request yet' is a legitimate no-op, not conflated with or reported as a failure; the reconcile workflow step still exits 0 correctly for this state, unchanged by this diff.",
         "family": "DFF-014",
         "outcome": "clear"
       },
       {
-        "evidence": "This PR's own reporting distinguishes 'regression-tested' from 'prevented' throughout (see acceptance-criteria evidence above), and does not claim hosted-gate or merge-gate enforcement for anything only locally tested.",
+        "evidence": "Directly repaired: DFF-031's own registry entry falsely claimed 'blocked at pre-push' for require_current_review_request_if_present, which has been an unconditional no-op since its introduction and had zero real test coverage (every reference stubbed it out). Corrected the entry's guard text and added real coverage of its actual no-op contract.",
         "family": "DFF-015",
-        "outcome": "clear"
+        "outcome": "repaired"
       },
       {
-        "evidence": "hunter_validation_receipt.py is not modified by this diff.",
+        "evidence": "hunter_validation_receipt.py and immutable build-identity reuse are not touched by this diff.",
         "family": "DFF-016",
         "outcome": "clear"
       },
       {
-        "evidence": "SmartPromptMachine's own allocation/dispatch decision logic (smart_prompt_machine.py, smart_prompt_routing.py's compile_task) is unchanged; only ENGINEERING_IMPLEMENT_PROFILE's constraint prose and EngineeringContextAuthority's compiled payload gained one additional field each, verified by the full existing tests/test_engineering_task_ingress.py and tests/test_smart_prompt_machine_*.py suites passing unchanged (154 tests).",
-        "family": "DFF-018",
-        "outcome": "clear"
-      },
-      {
-        "evidence": "Issue-agent Railway bootstrap is not touched by this diff.",
+        "evidence": "Issue-agent Railway runtime bootstrap is not touched by this diff.",
         "family": "DFF-019",
         "outcome": "clear"
       },
       {
-        "evidence": "Issue-agent live-instance ownership is not touched by this diff.",
+        "evidence": "Issue-agent live-instance execution ownership is not touched by this diff.",
         "family": "DFF-020",
         "outcome": "clear"
       },
@@ -203,222 +120,139 @@
         "outcome": "clear"
       },
       {
-        "evidence": "hunter_merge_readiness_v2.py's existing review_authority_state()/evaluate() logic is byte-for-byte unchanged by this diff; evaluate_completion_claim() is a pure addition after the existing evaluate() function.",
+        "evidence": "hunter_merge_readiness_v2.py's evaluate()/review_authority_state() are not touched by this diff.",
         "family": "DFF-022",
         "outcome": "clear"
       },
       {
-        "evidence": "Issue-agent execution-ledger ordering is not touched by this diff.",
+        "evidence": "Issue-agent execution-ledger preflight ordering is not touched by this diff.",
         "family": "DFF-023",
         "outcome": "clear"
       },
       {
-        "evidence": "No governance-authority-successor/cutover mechanism is touched by this diff.",
+        "evidence": "hunter_review_orchestrator.py's remediation-generation logic (current_remediation_generation, ensure_collector) is unchanged; this diff only adds an early Draft short-circuit (prior commit) and does not touch review-after-remediation transitions.",
+        "family": "DFF-024",
+        "outcome": "clear"
+      },
+      {
+        "evidence": "Governance-authority cutover/dependency-cycle machinery is not touched by this diff.",
         "family": "DFF-025",
         "outcome": "clear"
       },
       {
-        "evidence": "evaluate_completion_claim() introduces no new dependency on external reviewer availability; it reuses evaluate(), which already treats external review as optional defense-in-depth, unchanged. The new review-pending rejection in evaluate_completion_claim() (finding F-1) is a stricter, separate completion question, not a merge-authority gate: it never blocks push, candidate admission, governance success, or evaluate()'s own merge-readiness decision, so no reviewer's absence can deadlock merge authority through it.",
+        "evidence": "Directly preserved: require_current_review_request_if_present remains, by explicit design documented in its corrected docstring and locked down by a new test, a no-op that never blocks a push regardless of reviewer/request availability.",
         "family": "DFF-026",
         "outcome": "clear"
       },
       {
-        "evidence": "hunter_canonicalization_candidate_pr.py pushes through the ordinary .githooks/pre-push safety boundary like any human contribution, then opens its Draft PR immediately after push rather than waiting for the hosted Pre-PR Preflight run to complete first -- unlike hunter_issue_agent_candidate_pr.py, which is itself only invoked by a workflow_run trigger after that hosted preflight already passed. This differs because the trust model differs: this script is run by the same identity that authored the content (no elevated-trust PR-opener certifying someone else's unverified candidate), so there is no privileged-attestation-before-proof gap of the kind this family targets. Flagged as a non-blocking design question rather than asserted definitively resolved -- see finding F-5.",
+        "evidence": "Railway readiness-probe execution boundary is not touched by this diff.",
+        "family": "DFF-027",
+        "outcome": "clear"
+      },
+      {
+        "evidence": "Candidate-code publication-credential isolation is not touched by this diff.",
+        "family": "DFF-028",
+        "outcome": "clear"
+      },
+      {
+        "evidence": "Candidate preflight-before-publication ordering is not touched by this diff.",
         "family": "DFF-029",
         "outcome": "clear"
       },
       {
-        "evidence": "scripts/hunter_canonicalization_candidate_pr.py and its test module both import and load cleanly (verified: full mypy run across 865 source files succeeds, and pytest collects and runs both new files without a loader error).",
+        "evidence": "docs/DEFECT_REGISTRY.json is edited as ordinary well-formed JSON; `python scripts/hunter_defect_prevention_preflight.py` passes against it, confirming it remains loadable at its governed path.",
         "family": "DFF-033",
         "outcome": "clear"
       },
       {
-        "evidence": "tests/test_hunter_canonicalization_candidate_pr.py's deterministic assertions run only against repository-owned/local state (a disposable local git remote in tmp_path); the only external-facing calls (`gh`) are stubbed in the test lane, never asserted against a live network response.",
+        "evidence": "New tests (test_missing_review_request_state_names_the_command_to_start_it, test_stale_review_request_state_does_not_carry_the_missing_only_hint, test_require_current_review_request_if_present_is_intentionally_a_no_op, and the two in test_exact_head_review_authority.py) mock only repository-owned functions (review.verify_local, review.local_changes) inside the deterministic test lane; none asserts against a live external precondition.",
         "family": "DFF-035",
         "outcome": "clear"
       },
       {
-        "evidence": "CompletionVerdict is a structured dataclass (accepted: bool, state: str, reason: str) consumers read directly, not prose an agent must parse; `state` is always exactly \"COMPLETION_ACCEPTED\" or \"COMPLETION_REJECTED\".",
+        "evidence": "No new import or workflow-environment dependency is introduced by this diff.",
+        "family": "DFF-036",
+        "outcome": "clear"
+      },
+      {
+        "evidence": "review.ReviewVerdict remains the same structured dataclass (state, reason, ok) consumers already read directly; unchanged by this diff.",
         "family": "DFF-037",
         "outcome": "clear"
+      },
+      {
+        "evidence": "Root cause 2 (this diff): a trigger existing (prior commit) was not sufficient because the trusted producer had no code path that could ever materialize the review-request prerequisite for a candidate that had never committed one; and a false comment asserted one did. Corrected both the docstring/message accuracy and DFF-031's overclaimed registry text, with direct regression proof that a foreign request is rejected and a fresh one validates.",
+        "family": "DFF-040",
+        "outcome": "repaired"
       }
     ],
     "findings": [
       {
-        "evidence": "AC-5/AC-8 (no false READY / no false completion while review is pending): independent review (chatgpt-codex-connector[bot]) confirmed this exact gap on this PR and treated it as P1, which is the signal to stop deferring it. evaluate_completion_claim() now additionally rejects while review_authority reports 'pending' (covers WAITING_FOR_REVIEWER/REVIEW_IN_PROGRESS/POOL_EXHAUSTED), without touching evaluate()'s own merge-readiness decision or its GitHub status output -- so 'currently mergeable' (unaffected, external review remains defense-in-depth per DFF-026) and 'genuinely done' (now stricter) stay correctly distinct.",
+        "evidence": "DEFECT_REGISTRY.json's legacy DFF-031 entry claimed require_current_review_request_if_present 'blocked at pre-push' since PR #485, but that function has been an unconditional no-op since the exact commit that introduced it, with zero real test coverage (every reference stubbed it out) -- an overclaimed-prevention-state (DFF-015) instance discovered while investigating PR #535's live failure.",
         "id": "F-1",
         "resolution": "resolved",
         "resolution_evidence": {
-          "correction": "be62241961d8d7222d6087060d5983e46afb0290",
-          "regression_test": "tests/test_hunter_merge_readiness_v2.py"
+          "correction": "b2179ac151cf30b9f8b0c9d5e3e6a34a3db906df",
+          "regression_test": "tests/test_hunter_pre_push.py"
         },
-        "severity": "blocking"
-      },
-      {
-        "evidence": "evaluate_completion_claim() collapses evaluate()'s pending/failure distinction into a single COMPLETION_REJECTED state (DFF-014 evidence above explains why this is safe for this function's specific purpose). A future caller that needs the pending-vs-failure distinction should read CompletionVerdict.reason or call evaluate() directly rather than assume evaluate_completion_claim()'s two-state model is exhaustive.",
-        "id": "F-2",
-        "resolution": "unresolved",
-        "severity": "non-blocking"
-      },
-      {
-        "evidence": "Real defect found via this session's own adversarial self-review, before hunter_canonicalization_candidate_pr.py was ever proposed: propose() originally rebuilt the dedicated branch unconditionally from main, so a second finding processed while a first finding's PR was still open would silently overwrite the first finding's proposal. Corrected to accumulate on the dedicated branch's own tip unless it is already an ancestor of main.",
-        "id": "F-3",
-        "resolution": "resolved",
-        "resolution_evidence": {
-          "correction": "6d14c86c19c0b7ce6c9f789f42be9cfb2aab2548",
-          "regression_test": "tests/test_hunter_canonicalization_candidate_pr.py"
-        },
-        "severity": "blocking"
-      },
-      {
-        "evidence": "AC-11's end-to-end proof runs in a controlled local test harness (a disposable local git remote), not against the production fafa33/Project-Hunter registry, because no currently-open, honestly-matching existing defect family was available to demonstrate against without fabricating or misclassifying evidence. This is disclosed explicitly rather than presented as a production demonstration.",
-        "id": "F-4",
-        "resolution": "unresolved",
-        "severity": "non-blocking"
-      },
-      {
-        "evidence": "hunter_canonicalization_candidate_pr.py opens its Draft PR immediately after push rather than waiting for hosted Pre-PR Preflight to complete first, unlike the trusted-candidate-PR-opener pattern in hunter_issue_agent_candidate_pr.py. See DFF-029 evidence for why the differing trust model makes this a design question rather than a violation; still recorded here for visibility.",
-        "id": "F-5",
-        "resolution": "unresolved",
-        "severity": "non-blocking"
-      },
-      {
-        "evidence": "Independent review (chatgpt-codex-connector[bot], P1) found evaluate_completion_claim() had no production caller -- only the unit tests exercised it, so it could not reject any real worker's completion claim; AC-7/AC-8 were convention, not enforcement. Fixed: hunter_merge_readiness_v2.py gains decide_completion(pr_number), building the same live GitHub observation decide() already uses, and `python scripts/hunter_merge_readiness_v2.py completion <pr>` is now a genuine invokable production path.",
-        "id": "F-6",
-        "resolution": "resolved",
-        "resolution_evidence": {
-          "correction": "be62241961d8d7222d6087060d5983e46afb0290",
-          "regression_test": "tests/test_hunter_merge_readiness_v2.py"
-        },
-        "severity": "blocking"
-      },
-      {
-        "evidence": "Independent review (chatgpt-codex-connector[bot], P1) found propose() could silently orphan the dedicated branch forever: if a prior run's push succeeded but its own `gh pr create` call then failed (a transient network blip, a crash), the branch carried real unmerged content with no PR, and every later run computing the identical already-applied observations would just report NO-OP without ever discovering the missing PR. Fixed: propose() now reconciles a real, unmerged, PR-less dedicated branch by opening the missing PR for it, with no new commit needed.",
-        "id": "F-7",
-        "resolution": "resolved",
-        "resolution_evidence": {
-          "correction": "be62241961d8d7222d6087060d5983e46afb0290",
-          "regression_test": "tests/test_hunter_canonicalization_candidate_pr.py"
-        },
-        "severity": "blocking"
-      },
-      {
-        "evidence": "Resolved by d861b7798ae0e1dc98b37667267ff2114108c063 plus bootstrap correction 929756ddfcee02cec6fe738b15ad8c3c2224d698: authenticated finding ingestion/catch-up is now automatic and the automatic canonicalization workflow calls the existing candidate-PR path without adding GitHub repository-write permission. The workflow uses the existing local_git_push authority on the self-hosted Mac and fails safely during pre-merge bootstrap rather than executing candidate code as trusted code.",
-        "id": "F-8",
-        "resolution": "resolved",
         "severity": "non-blocking"
       }
     ],
-    "issue": "532",
+    "issue": "534",
     "review_target": [
       {
-        "blob_sha": "d392ea64188fb04fc66886b291c5e95603283f70",
-        "path": ".github/workflows/hunter-canonicalization-auto.yml",
-        "previous_path": "",
-        "status": "added"
-      },
-      {
-        "blob_sha": "8947db700e27691628d4aa4d6189549a508d25e0",
-        "path": "scripts/hunter_canonicalization_candidate_pr.py",
-        "previous_path": "",
-        "status": "added"
-      },
-      {
-        "blob_sha": "4ecda46f74623e4c983f3e8e4a405911686ec905",
-        "path": "tests/test_hunter_canonicalization_candidate_pr.py",
-        "previous_path": "",
-        "status": "added"
-      },
-      {
-        "blob_sha": "16827760fc704440511131d205a4224f4444eb02",
-        "path": ".github/workflows/hunter-reviewer-collector.yml",
+        "blob_sha": "cdb99a967671ce969a177362da10431dba02a863",
+        "path": ".github/workflows/hunter-governance-reconcile.yml",
         "previous_path": "",
         "status": "modified"
       },
       {
-        "blob_sha": "cf2b0f84c1f5b3c5909dc788a02d8c10ff3a89a6",
-        "path": "docs/ARCHITECTURE_AUDITS/adpr-0012-source-handling-independent-audit.md",
+        "blob_sha": "699d801dd2bb767bf8794d40cbe28b5e066d9dd0",
+        "path": "docs/DEFECT_REGISTRY.json",
         "previous_path": "",
         "status": "modified"
       },
       {
-        "blob_sha": "e26f29a3503a2c69fb54664c5fbeaf3ceba7949e",
-        "path": "scripts/hunter_collect_learning_observations.py",
+        "blob_sha": "df74458309a62f6a82219c950710fc59a2633352",
+        "path": "scripts/hunter_pre_push.py",
         "previous_path": "",
         "status": "modified"
       },
       {
-        "blob_sha": "c4a9cd1753dbccb0a0714ad2a73a0795ee7973f6",
-        "path": "scripts/hunter_merge_readiness_v2.py",
-        "previous_path": "",
-        "status": "modified"
-      },
-      {
-        "blob_sha": "d1b9eb2a65c8e6d9a3b776ab31c7d47dd26c09b8",
+        "blob_sha": "e7ebcad4a48fd49f21eae9b603103e781df23309",
         "path": "scripts/hunter_review_orchestrator.py",
         "previous_path": "",
         "status": "modified"
       },
       {
-        "blob_sha": "0dbc8fe98f2c4d141e864e306728de242c36f000",
-        "path": "src/hunter/evidence_intelligence/engineering_context_authority.py",
+        "blob_sha": "ee6ed6526e393902cfabac759fdf4cca7950d157",
+        "path": "tests/test_exact_head_review_authority.py",
         "previous_path": "",
         "status": "modified"
       },
       {
-        "blob_sha": "57aebe1c19cde866dcf4a0e80b36d93f63889565",
-        "path": "src/hunter/evidence_intelligence/incremental_knowledge_learning.py",
+        "blob_sha": "edcad7d726b8d26bd531af46a1c79b8f0fa144a9",
+        "path": "tests/test_hunter_pre_push.py",
         "previous_path": "",
         "status": "modified"
       },
       {
-        "blob_sha": "a6d6e670150c688af23e25338616e79c7f1da7a5",
-        "path": "src/hunter/evidence_intelligence/smart_prompt_routing.py",
-        "previous_path": "",
-        "status": "modified"
-      },
-      {
-        "blob_sha": "3b7cc140449d6c6af07c6357a4d38ec0ba2c3426",
-        "path": "tests/test_engineering_context_authority.py",
-        "previous_path": "",
-        "status": "modified"
-      },
-      {
-        "blob_sha": "b10fb766da40f53c7c059cc23ba5925909d23726",
-        "path": "tests/test_engineering_task_ingress.py",
-        "previous_path": "",
-        "status": "modified"
-      },
-      {
-        "blob_sha": "14f6c829dd18f8562ca9e1ab0688d44e9e7e46ee",
-        "path": "tests/test_hunter_knowledge_learning_workflow.py",
-        "previous_path": "",
-        "status": "modified"
-      },
-      {
-        "blob_sha": "55257ac0480c06a27a4c7b8e27c4744bf44ab047",
-        "path": "tests/test_hunter_merge_readiness_v2.py",
-        "previous_path": "",
-        "status": "modified"
-      },
-      {
-        "blob_sha": "f3e08d4ff42c7e7bd1457b2d4fc49aeca1a250a6",
+        "blob_sha": "b7055dfe2163dbbe8443f3e0e2e9a302c6e3564b",
         "path": "tests/test_hunter_review_orchestrator.py",
         "previous_path": "",
         "status": "modified"
       },
       {
-        "blob_sha": "f743b1c9041bb1c4036953885bce9e1cc7890f10",
-        "path": "tests/test_review_after_remediation_generation.py",
+        "blob_sha": "f59c51b8d10bf5125e71b79bdd6e1e3785314947",
+        "path": "tests/test_issue_412_prevention_gate.py",
         "previous_path": "",
         "status": "modified"
       }
     ],
-    "review_target_digest": "11682f6ae27d2b09653420f02f71da7f84ef7d072b603bd07f1807cfd2f7a9d9"
+    "review_target_digest": "1280932097cb1d6be3d35d2791fb1ea114eda098a1a2975f2407043f6d6ab7f3"
   },
-  "review_id": "c523b6ea791e9416dd233ce2daa0ffee9167a90ab2b1b8bf1694e79787b4db19",
+  "review_id": "259f345f7efe3673615f15f6d05a2d093d7dfe1721a68b0f0a3a7842e776cdbc",
   "review_request": {
-    "claims_id": "c523b6ea791e9416dd233ce2daa0ffee9167a90ab2b1b8bf1694e79787b4db19",
+    "claims_id": "259f345f7efe3673615f15f6d05a2d093d7dfe1721a68b0f0a3a7842e776cdbc",
     "schema": "hunter.review-request.v1"
   },
   "schema": "hunter.pre-ready-hostile-review.v1"
