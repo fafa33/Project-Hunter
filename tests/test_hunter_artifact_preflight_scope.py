@@ -134,6 +134,29 @@ def test_every_existing_architecture_audit_artifact_is_currently_mergeable() -> 
     assert hunter_artifact_preflight.validate_changed_artifacts(paths) == []
 
 
+def test_adr_0036_accounting_row_does_not_overclaim_review_coverage() -> None:
+    """Codex P2 (PR #529 review): the ADR 0036 accounting row must not claim
+    this audit reviewed architecture ADR 0036 added beyond the audited
+    ADPR-0012 revision. The audited revision's Sections 3/8 specify only the
+    issuer-claimed effective_from/recorded_at/known_at triple; ADR 0036's
+    draft separately added the repository-assigned admission_time
+    cutoff-eligibility mechanic, which this pinned-to-an-earlier-revision
+    audit never reviewed. The row must name that limitation rather than
+    assert blanket coverage."""
+
+    path = (
+        hunter_artifact_preflight.ROOT
+        / "docs"
+        / "ARCHITECTURE_AUDITS"
+        / "adpr-0012-source-handling-independent-audit.md"
+    )
+    text = path.read_text(encoding="utf-8")
+    row = next(line for line in text.splitlines() if line.startswith("| ADR 0036 |"))
+
+    assert "admission_time" in row, "the row must name the mechanic it does not claim to cover"
+    assert "accepted no substantive architecture this audit did not already review" not in row
+
+
 def test_malformed_readiness_audit_cannot_escape_by_deleting_the_protocol_declaration() -> None:
     """Deleting one convenient discriminator must not disable readiness validation.
 
