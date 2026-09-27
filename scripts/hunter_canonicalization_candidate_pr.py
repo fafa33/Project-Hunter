@@ -208,6 +208,37 @@ def _is_ancestor(run: RunCommand, root: str, ancestor_sha: str, descendant_sha: 
     return True
 
 
+def _open_candidate_pr(run: RunCommand, *, pr: int, extra_body: str) -> str:
+    body = (
+        "Automatic canonicalization candidate, opened by "
+        "`scripts/hunter_canonicalization_candidate_pr.py` per "
+        "`docs/superpowers/specs/2026-09-23-live-dpm-knowledge-feedback-loop-design.md`.\n\n"
+        f"{extra_body}\n"
+        f"- source PR: #{pr}\n\n"
+        "This PR only ever touches `docs/DEFECT_REGISTRY.json` and carries the unmodified output "
+        "of `materialize_learning_ledger`. It never self-merges; normal Hunter governance/review "
+        "and human merge approval apply."
+    )
+    return _run(
+        run,
+        [
+            "gh",
+            "pr",
+            "create",
+            "--base",
+            BASE_BRANCH,
+            "--head",
+            DEDICATED_BRANCH,
+            "--draft",
+            "--title",
+            PR_TITLE,
+            "--body",
+            body,
+        ],
+        what="open candidate PR",
+    )
+
+
 def _existing_open_pr_number(run: RunCommand, branch: str) -> int | None:
     output = _run(
         run,
@@ -289,6 +320,27 @@ def propose(
                 origin_registry_bytes=registry_path.read_bytes(),
             )
             if not plan.changed:
+                # Codex P1 (PR #530): if a *prior* run's push succeeded but it
+                # then crashed, or its own `gh` call failed, before opening a
+                # PR, the dedicated branch already carries real unmerged
+                # content with nothing representing it. Every later run would
+                # otherwise keep computing "no new content" against that same
+                # content and return NO-OP forever, silently orphaning the
+                # branch. Reconcile it here: if the branch is real, unmerged,
+                # and has no open PR, open one for it -- no new commit needed.
+                if previous_sha is not None and not _is_ancestor(run, root, previous_sha, main_sha):
+                    if _existing_open_pr_number(run, DEDICATED_BRANCH) is None:
+                        create_output = _open_candidate_pr(
+                            run,
+                            pr=pr,
+                            extra_body=(
+                                "Reconciled: this branch already carried this exact content from a prior "
+                                "run that pushed but never opened a PR for it (for example a transient "
+                                "`gh` failure). No new commit was made; this call only supplies the "
+                                "missing PR.\n"
+                            ),
+                        )
+                        return f"{_PREFIX} RECONCILED: opened the missing PR for already-pushed content: {create_output.strip()}"
                 return f"{_PREFIX} NO-OP: observations produced no registry change; nothing proposed."
 
             registry_path.write_bytes(plan.registry_bytes)
@@ -342,34 +394,13 @@ def propose(
             if existing is not None:
                 return f"{_PREFIX} UPDATED: pushed new canonicalization content to existing PR #{existing}."
 
-            body = (
-                "Automatic canonicalization candidate, opened by "
-                "`scripts/hunter_canonicalization_candidate_pr.py` per "
-                "`docs/superpowers/specs/2026-09-23-live-dpm-knowledge-feedback-loop-design.md`.\n\n"
-                f"- integrated proposal ids: {list(plan.integrated_proposal_ids)}\n"
-                f"- skipped items: {plan.skipped_items}\n"
-                f"- source PR: #{pr}\n\n"
-                "This PR only ever touches `docs/DEFECT_REGISTRY.json` and carries the unmodified output "
-                "of `materialize_learning_ledger`. It never self-merges; normal Hunter governance/review "
-                "and human merge approval apply."
-            )
-            create_output = _run(
+            create_output = _open_candidate_pr(
                 run,
-                [
-                    "gh",
-                    "pr",
-                    "create",
-                    "--base",
-                    BASE_BRANCH,
-                    "--head",
-                    DEDICATED_BRANCH,
-                    "--draft",
-                    "--title",
-                    PR_TITLE,
-                    "--body",
-                    body,
-                ],
-                what="open candidate PR",
+                pr=pr,
+                extra_body=(
+                    f"- integrated proposal ids: {list(plan.integrated_proposal_ids)}\n"
+                    f"- skipped items: {plan.skipped_items}\n"
+                ),
             )
             return f"{_PREFIX} OPENED: {create_output.strip()}"
         finally:

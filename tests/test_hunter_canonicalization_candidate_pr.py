@@ -91,9 +91,10 @@ def origin_repo(tmp_path: Path) -> Path:
 class RecordingRun:
     """Passes real `git` commands through; fakes `gh` so tests need no network/auth."""
 
-    def __init__(self, *, existing_pr: int | None = None) -> None:
+    def __init__(self, *, existing_pr: int | None = None, fail_pr_create: bool = False) -> None:
         self.calls: list[list[str]] = []
         self.existing_pr = existing_pr
+        self.fail_pr_create = fail_pr_create
         self.pr_create_calls = 0
 
     def __call__(self, command: list[str]) -> subprocess.CompletedProcess[str]:
@@ -107,6 +108,8 @@ class RecordingRun:
             stdout = str(self.existing_pr) if self.existing_pr is not None else ""
             return subprocess.CompletedProcess(command, 0, stdout=stdout, stderr="")
         if command[1:3] == ["pr", "create"]:
+            if self.fail_pr_create:
+                raise subprocess.CalledProcessError(1, command, output="", stderr="simulated transient gh failure")
             self.pr_create_calls += 1
             return subprocess.CompletedProcess(command, 0, stdout="https://example.invalid/pull/1\n", stderr="")
         raise AssertionError(f"unexpected gh command: {command}")
@@ -341,3 +344,46 @@ def test_propose_rebuilds_fresh_once_dedicated_branch_is_stale(origin_repo: Path
 
     assert "OPENED" in second
     assert second_recorder.pr_create_calls == 1
+
+
+def test_propose_reconciles_an_orphaned_branch_left_by_a_failed_pr_create(origin_repo: Path, tmp_path: Path) -> None:
+    """Regression for Codex P1 (PR #530 review): if a prior run's push
+    succeeded but its own `gh pr create` call then failed (a transient
+    network blip, a crash), the dedicated branch is left with real,
+    unmerged content and no PR representing it. Every later run computing
+    the identical, already-applied observations must not just report NO-OP
+    forever -- it must notice the branch is real, unmerged and PR-less, and
+    open the missing PR without needing a new commit."""
+
+    failing_recorder = RecordingRun(existing_pr=None, fail_pr_create=True)
+    observations = [_observation(901)]
+
+    with pytest.raises(candidate_pr.CanonicalizationCandidatePrError):
+        candidate_pr.propose(
+            pr=901,
+            head=HEAD,
+            base=BASE,
+            observations=observations,
+            repo=str(origin_repo),
+            repo_root=tmp_path / "seed",
+            run=failing_recorder,
+        )
+
+    # The push itself must have succeeded before the simulated gh failure:
+    assert any("push" in call for call in failing_recorder.calls)
+    assert failing_recorder.pr_create_calls == 0
+
+    recovery_recorder = RecordingRun(existing_pr=None)
+    message = candidate_pr.propose(
+        pr=901,
+        head=HEAD,
+        base=BASE,
+        observations=observations,
+        repo=str(origin_repo),
+        repo_root=tmp_path / "seed",
+        run=recovery_recorder,
+    )
+
+    assert "RECONCILED" in message
+    assert recovery_recorder.pr_create_calls == 1
+    assert not any("push" in call for call in recovery_recorder.calls), "reconciliation must not need a new push"

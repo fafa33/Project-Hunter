@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import hunter_merge_readiness_v2 as core
+import pytest
 
 
 def _pr(*, draft: bool = False, mergeable: bool | None = True, body: str = "anything") -> dict:
@@ -467,3 +468,83 @@ def test_completion_verdict_does_not_depend_on_a_self_reported_claim():
     second = core.evaluate_completion_claim(observation)
 
     assert first == second == core.CompletionVerdict(True, "COMPLETION_ACCEPTED", first.reason)
+
+
+@pytest.mark.parametrize("orchestration_state", ["WAITING_FOR_REVIEWER", "REVIEW_IN_PROGRESS", "POOL_EXHAUSTED"])
+def test_worker_says_done_while_independent_review_is_pending_is_rejected(orchestration_state):
+    """Codex P1 (PR #530 review): `evaluate()` deliberately never lets a
+    pending independent review block the merge-authority decision (external
+    review is defense-in-depth, never a mandatory dependency) -- but
+    "genuinely done" is a stricter question than "currently mergeable", so
+    completion must still reject while the review opportunity a worker
+    actually requested has not reached a terminal state."""
+
+    observation = core.StaticReadinessObservation(
+        check_runs=tuple(_green_check(name, index) for index, name in enumerate(core.REQUIRED_CHECKS, start=1)),
+        review_authority=("pending", f"{orchestration_state}: no trusted exact-head orchestration cycle yet"),
+    )
+
+    # The underlying merge-readiness decision is unaffected -- still success.
+    assert core.evaluate(observation).state == "success"
+
+    verdict = core.evaluate_completion_claim(observation)
+
+    assert verdict.accepted is False
+    assert verdict.state == "COMPLETION_REJECTED"
+    assert "not reached a terminal state" in verdict.reason
+
+
+def test_worker_says_done_after_independent_review_reaches_a_terminal_state_is_accepted():
+    """The paired positive: a terminal review-authority outcome (success,
+    failure/exhausted-and-guarded, or anything other than the generic
+    "pending" review_wait_state projects) does not block completion once
+    every other current-state signal is green."""
+
+    observation = core.StaticReadinessObservation(
+        check_runs=tuple(_green_check(name, index) for index, name in enumerate(core.REQUIRED_CHECKS, start=1)),
+        review_authority=("success", "VALID_LAST_RESORT_GUARD: pool exhausted, guard reviewed"),
+    )
+
+    verdict = core.evaluate_completion_claim(observation)
+
+    assert verdict.accepted is True
+    assert verdict.state == "COMPLETION_ACCEPTED"
+
+
+def test_decide_completion_is_a_real_production_caller_against_a_live_pr(monkeypatch):
+    """Codex P1 (PR #530 review): a repo-wide search found no production
+    caller of `evaluate_completion_claim` -- only the unit tests. This proves
+    a real one exists: `decide_completion` builds the same live GitHub
+    observation `decide()` uses and asks the completion question against it,
+    so `python scripts/hunter_merge_readiness_v2.py completion <pr>` (see
+    `main()`) is a genuine, invokable production path, not test-only code."""
+
+    _install_green(monkeypatch)
+
+    verdict = core.decide_completion(501)
+
+    assert verdict == core.CompletionVerdict(True, "COMPLETION_ACCEPTED", verdict.reason)
+
+
+def test_decide_completion_rejects_against_the_same_live_pr_when_checks_are_red(monkeypatch):
+    _install_green(monkeypatch)
+    monkeypatch.setattr(
+        core,
+        "all_check_runs",
+        lambda _sha: [
+            {"id": 1, "name": name, "status": "completed", "conclusion": "failure" if index == 1 else "success"}
+            for index, name in enumerate(core.REQUIRED_CHECKS, start=1)
+        ],
+    )
+
+    verdict = core.decide_completion(501)
+
+    assert verdict is not None
+    assert verdict.accepted is False
+    assert verdict.state == "COMPLETION_REJECTED"
+
+
+def test_decide_completion_returns_none_for_a_pr_that_is_not_open(monkeypatch):
+    monkeypatch.setattr(core, "request_json", lambda method, path, payload=None: {**_pr(), "state": "closed"})
+
+    assert core.decide_completion(501) is None

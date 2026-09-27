@@ -508,17 +508,36 @@ class CompletionVerdict:
 def evaluate_completion_claim(observation: ReadinessObservation) -> CompletionVerdict:
     """Independently evaluate whether a candidate is genuinely complete.
 
-    Reuses `evaluate()` unchanged -- this is not a second readiness
-    definition, only a named entry point that makes "is this actually done"
-    directly askable without inlining Merge Readiness's own decision logic
-    at every call site that needs a completion answer rather than a status
-    string.
+    Reuses `evaluate()`'s decision for every deterministic merge blocker --
+    this is not a second readiness definition. It adds exactly one further,
+    stricter check `evaluate()` deliberately omits: `evaluate()` treats
+    external review as pure defense-in-depth and never lets a pending review
+    block the merge-authority decision (Codex/other reviewers cannot deadlock
+    push or merge -- `review_authority_state()`'s "pending" covers exactly
+    the orchestration states in `NON_RED_REVIEW_STATES`, e.g.
+    `WAITING_FOR_REVIEWER`, `REVIEW_IN_PROGRESS`, embedded in its detail
+    string). "Is this candidate genuinely done" is a higher bar than "is this
+    candidate mergeable by deterministic gates", so a bounded
+    independent-review opportunity that was actually requested and has not
+    yet reached a terminal state means completion is rejected here even when
+    `evaluate()` itself would report success. This does not change what
+    `evaluate()` publishes to the GitHub status API or what Merge Readiness
+    allows a human to merge -- only what this narrower "should a worker
+    consider this done" question answers.
     """
 
     decision = evaluate(observation)
-    if decision.state == "success":
-        return CompletionVerdict(True, "COMPLETION_ACCEPTED", decision.description)
-    return CompletionVerdict(False, "COMPLETION_REJECTED", decision.description)
+    if decision.state != "success":
+        return CompletionVerdict(False, "COMPLETION_REJECTED", decision.description)
+    authority_state, authority_detail = observation.review_authority
+    if authority_state == "pending":
+        return CompletionVerdict(
+            False,
+            "COMPLETION_REJECTED",
+            f"Independent-review opportunity has not reached a terminal state ({authority_detail}); "
+            "merge-readiness itself does not block on this, but completion does.",
+        )
+    return CompletionVerdict(True, "COMPLETION_ACCEPTED", decision.description)
 
 
 def decide(pr_number: int) -> tuple[str, Decision] | None:
@@ -531,6 +550,28 @@ def decide(pr_number: int) -> tuple[str, Decision] | None:
         return "", Decision("pending", "Waiting: current PR head SHA is unavailable.")
 
     return head_sha, evaluate(LiveReadinessObservation(pr_number, pr, head_sha))
+
+
+def decide_completion(pr_number: int) -> CompletionVerdict | None:
+    """The real, PR-scoped counterpart to `evaluate_completion_claim`.
+
+    Codex P1 (PR #530): a repo-wide search found no production caller of
+    `evaluate_completion_claim` -- only the unit tests exercised it, so it
+    could not actually reject any real worker's completion claim. This is
+    that caller: it builds the same live observation `decide()` uses against
+    a real GitHub PR and asks the completion question against it, so a
+    worker (or a CI step) can run
+    `python scripts/hunter_merge_readiness_v2.py completion <pr>` and get an
+    answer that depends on nothing it asserted about its own work.
+    """
+
+    pr = request_json("GET", f"pulls/{pr_number}")
+    if not isinstance(pr, dict) or pr.get("state") != "open":
+        return None
+    head_sha = str((pr.get("head") or {}).get("sha") or "").strip()
+    if not head_sha:
+        return CompletionVerdict(False, "COMPLETION_REJECTED", "current PR head SHA is unavailable")
+    return evaluate_completion_claim(LiveReadinessObservation(pr_number, pr, head_sha))
 
 
 def publish(sha: str, decision: Decision) -> None:
@@ -608,6 +649,23 @@ def candidate_prs() -> tuple[int, ...]:
 
 
 def main() -> int:
+    if len(sys.argv) >= 3 and sys.argv[1] == "completion":
+        try:
+            pr_number = int(sys.argv[2])
+        except ValueError:
+            print("usage: hunter_merge_readiness_v2.py completion <pr-number>", file=sys.stderr)
+            return 2
+        try:
+            verdict = decide_completion(pr_number)
+        except transport.GitHubUnavailable as exc:
+            print(f"Completion evidence unavailable: {exc}", file=sys.stderr)
+            return 1
+        if verdict is None:
+            print(f"PR #{pr_number} is not open; no completion verdict applies.")
+            return 1
+        print(f"{verdict.state}: {verdict.reason}")
+        return 0 if verdict.accepted else 1
+
     try:
         numbers = candidate_prs()
     except transport.GitHubUnavailable as exc:
