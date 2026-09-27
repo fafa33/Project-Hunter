@@ -36,6 +36,12 @@
         "evidence": "DFF-040 updated with root cause 2 and live evidence; additionally, while tracing this, an already-existing but overclaiming legacy entry (DFF-031) was found and corrected rather than left silently false, per this repository's own instruction to strengthen the earliest reliable reusable guard when a defect class recurs.",
         "id": "AC-6",
         "verdict": "satisfied"
+      },
+      {
+        "criterion": "Root cause completeness (round 2): live GitHub evidence that the missing-trigger fix alone still left PR #535 stuck (WAITING_FOR_REVIEWER despite a published orchestration cycle) must be traced to its exact predicate and fixed without bypassing exact-head validation, fabricating a review, or turning missing evidence into success.",
+        "evidence": "Traced live (PR #535 exact HEAD c05da168545c5fa95fe300706eccaac2228fc391) to hunter_merge_readiness_v2.resolve_review_authority never handling a legitimate status=='pending' verification result from hunter_governance_review_v2.verify_pre_ready_hostile_review; it silently defaulted to MALFORMED_REVIEW instead of falling through to the existing review_wait_state/orchestration-state pending path. Fixed by adding one explicit 'pending' branch that classifies it as MISSING_REVIEW_AUTHORITY (the same no-authority-yet outcome a missing document already produces); no trust boundary, exact-head binding, or orchestration path changed, and no review authority is fabricated -- the candidate still cannot merge until a reviewer actually completes one.",
+        "id": "AC-7",
+        "verdict": "satisfied"
       }
     ],
     "adversarial_dimensions": [
@@ -120,9 +126,9 @@
         "outcome": "clear"
       },
       {
-        "evidence": "hunter_merge_readiness_v2.py's evaluate()/review_authority_state() are not touched by this diff.",
+        "evidence": "hunter_merge_readiness_v2.py's resolve_review_authority gains one explicit branch for a status=='pending' verification result (root cause 3, this diff); evaluate() and review_authority_state() themselves are unchanged, and the branch only widens which non-success statuses fall through to the caller's existing review_wait_state/orchestration-state pending path instead of hard-failing -- it narrows a false-failure surface, it does not weaken any admission/merge check. Proven unchanged by the full existing test_exact_head_review_authority.py suite (95/95 passing) plus two new regression tests for the exact live failure.",
         "family": "DFF-022",
-        "outcome": "clear"
+        "outcome": "repaired"
       },
       {
         "evidence": "Issue-agent execution-ledger preflight ordering is not touched by this diff.",
@@ -180,7 +186,7 @@
         "outcome": "clear"
       },
       {
-        "evidence": "Root cause 2 (this diff): a trigger existing (prior commit) was not sufficient because the trusted producer had no code path that could ever materialize the review-request prerequisite for a candidate that had never committed one; and a false comment asserted one did. Corrected both the docstring/message accuracy and DFF-031's overclaimed registry text, with direct regression proof that a foreign request is rejected and a fresh one validates.",
+        "evidence": "Root cause 3 (this diff, live PR #535 exact HEAD c05da168545c5fa95fe300706eccaac2228fc391): after root causes 1 and 2 were both fixed and pushed, the trusted reconcile run correctly published a real 'Hunter Review Orchestration / PR #535' pending WAITING_FOR_REVIEWER cycle, but Hunter Merge Readiness still reported hard failure (MALFORMED_REVIEW). Traced to hunter_merge_readiness_v2.resolve_review_authority never handling a legitimate status=='pending' verification result, silently defaulting any non-success status to MALFORMED_REVIEW. Corrected by classifying 'pending' as MISSING_REVIEW_AUTHORITY, letting the caller's existing orchestration-state pending fallback run as designed. DFF-040's invariant, applicability, and regression_evidence updated with this live evidence; the compiled-prompt budget regression from the prior broadening was empirically re-checked (the same 3 previously-failing tests plus 238 broader SPM/engineering-context tests pass clean) since the revised invariant (657 chars) is shorter than the prior one (672 chars).",
         "family": "DFF-040",
         "outcome": "repaired"
       }
@@ -195,6 +201,16 @@
           "regression_test": "tests/test_hunter_pre_push.py"
         },
         "severity": "non-blocking"
+      },
+      {
+        "evidence": "Live PR #535 evidence (exact HEAD c05da168545c5fa95fe300706eccaac2228fc391): after root causes 1 and 2 were fixed, hunter_merge_readiness_v2.resolve_review_authority misclassified a live, legitimate 'pending' (WAITING_FOR_REVIEWER, orchestration cycle genuinely published) verification result as a hard MALFORMED_REVIEW failure, so Hunter Merge Readiness could never reach the pending state its own sibling review_wait_state mechanism exists to produce -- an unrecoverable false failure, since no contributor push can complete a review a reviewer was never actually dispatched to perform.",
+        "id": "F-2",
+        "resolution": "resolved",
+        "resolution_evidence": {
+          "correction": "5917bd93708fbb38b89a861f068313558ef5d376",
+          "regression_test": "tests/test_exact_head_review_authority.py"
+        },
+        "severity": "blocking"
       }
     ],
     "issue": "534",
@@ -206,8 +222,14 @@
         "status": "modified"
       },
       {
-        "blob_sha": "661979e65ab12d6f6622d9d6778e1807c7f24f79",
+        "blob_sha": "8614de226c0e241779b477748b849d81f8a9f072",
         "path": "docs/DEFECT_REGISTRY.json",
+        "previous_path": "",
+        "status": "modified"
+      },
+      {
+        "blob_sha": "71c202c115709bf20259cd14bdc3746ba2260051",
+        "path": "scripts/hunter_merge_readiness_v2.py",
         "previous_path": "",
         "status": "modified"
       },
@@ -224,7 +246,7 @@
         "status": "modified"
       },
       {
-        "blob_sha": "ee6ed6526e393902cfabac759fdf4cca7950d157",
+        "blob_sha": "68a04e91d41de55d41bfcb045b5078768599c88b",
         "path": "tests/test_exact_head_review_authority.py",
         "previous_path": "",
         "status": "modified"
@@ -248,11 +270,11 @@
         "status": "modified"
       }
     ],
-    "review_target_digest": "446a833983df6949f352588e06de86311f5afea9adc6fcacafa35b7cf981e89f"
+    "review_target_digest": "253f38b95971822fc3e6ecad02e5ff55a92c0142d42c89b9e2d38f766127b13f"
   },
-  "review_id": "09017e8525785a76c24198d35ee299b23ae10cbed530079ccb705ed9641fb2ac",
+  "review_id": "f468eb9e6c4650476f2983f73ef05d18886b263f6c847f4a84720714ae33667b",
   "review_request": {
-    "claims_id": "09017e8525785a76c24198d35ee299b23ae10cbed530079ccb705ed9641fb2ac",
+    "claims_id": "f468eb9e6c4650476f2983f73ef05d18886b263f6c847f4a84720714ae33667b",
     "schema": "hunter.review-request.v1"
   },
   "schema": "hunter.pre-ready-hostile-review.v1"
