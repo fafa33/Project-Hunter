@@ -42,6 +42,10 @@ MAX_COLLECTOR_DISPATCHES = 3
 #: only once the cycle is older than this, so an ordinary listing lag cannot be
 #: mistaken for a dead collector and duplicate the dispatch.
 COLLECTOR_LIVENESS_GRACE_SECONDS = 180
+# One global opportunity budget across the whole reviewer chain. A completed or
+# timed-out opportunity must never leave the exact-head status pending forever.
+INDEPENDENT_REVIEW_OPPORTUNITY_SECONDS = 15 * 60
+TERMINAL_NONBLOCKING_STATES = frozenset({"REVIEW_TIMED_OUT", "REVIEWER_UNAVAILABLE", "POOL_EXHAUSTED"})
 PENDING_STATES = frozenset({"WAITING_FOR_REVIEWER", "REVIEW_IN_PROGRESS", "FAILOVER_IN_PROGRESS", "POOL_EXHAUSTED"})
 #: Issue #461 / PR #473: an exact-head cycle whose reviewers were all exhausted
 #: used to be the end of the line. Remediating the blocking findings it produced
@@ -343,7 +347,7 @@ def classify_cycle(cycle: ReviewCycle, current_head: str) -> str:
 def governance_projection(cycle: ReviewCycle) -> tuple[str, str]:
     if cycle.state in PENDING_STATES:
         return "pending", cycle.state
-    if cycle.state == "REVIEW_CLEAR":
+    if cycle.state == "REVIEW_CLEAR" or cycle.state in TERMINAL_NONBLOCKING_STATES:
         return "success", cycle.state
     if cycle.state == "FINDINGS_OPEN":
         return "failure", cycle.state
@@ -706,7 +710,9 @@ def publish_cycle(
         "POST",
         f"statuses/{head_sha}",
         {
-            "state": "pending" if cycle.state != "REVIEW_CLEAR" else "success",
+            "state": (
+                "success" if cycle.state == "REVIEW_CLEAR" or cycle.state in TERMINAL_NONBLOCKING_STATES else "pending"
+            ),
             "context": f"{CONTEXT_PREFIX}{cycle.pr_number}",
             "description": description,
             "target_url": target_url,
@@ -724,8 +730,23 @@ def ensure_collector(
             # The same generation is idempotent: whatever happened to this head's
             # reviewers already happened for these exact claims and this exact
             # resolved-finding set, so nothing here may invoke them a second time.
-            if existing.state in {"REVIEW_CLEAR", "FINDINGS_OPEN", "POOL_EXHAUSTED"}:
+            if existing.state in {"REVIEW_CLEAR", "FINDINGS_OPEN"} | TERMINAL_NONBLOCKING_STATES:
                 return existing
+            if existing.state in PENDING_STATES and _older_than(
+                existing.started_at, INDEPENDENT_REVIEW_OPPORTUNITY_SECONDS
+            ):
+                terminal = ReviewCycle(
+                    pr_number=existing.pr_number,
+                    head_sha=existing.head_sha,
+                    state="REVIEW_TIMED_OUT",
+                    provider_id=existing.provider_id,
+                    trigger_id=existing.trigger_id,
+                    started_at=existing.started_at,
+                    config_digest=existing.config_digest,
+                    generation_id=existing.generation_id,
+                )
+                publish_cycle(repository, token, head_sha, cycle=terminal)
+                return terminal
             if existing.trigger_id is not None and not collector_needs_dispatch(repository, token, existing):
                 return existing
         elif not remediation_generation_admissible(repository, token, existing, generation_id):
