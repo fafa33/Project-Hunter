@@ -1674,6 +1674,30 @@
       "sources": [
         "Full-history defect scanner bootstrap on branch chore/full-history-defect-backfill, 2026-09-26: _verify_authentication requested the global rate_limit endpoint through the repository-scoped helper, which addressed https://api.github.com/repos/fafa33/Project-Hunter/rate_limit and returned HTTP 404 on a valid token, halting the 357-PR historical scan before its first request. Corrected by the governed global REST seam in the same contribution."
       ]
+    },
+    {
+      "id": "DFF-040",
+      "title": "lifecycle-event-wiring-asymmetry",
+      "invariant": "If a downstream gate reacts to a lifecycle transition and requires an upstream trusted artifact or cycle to already exist, that same lifecycle transition must also have a trusted event-driven path that creates or reconciles the prerequisite. Scheduled recovery is fallback for that transition, never the primary path: a downstream gate must not be able to wake and report a missing prerequisite that nothing was driving into existence.",
+      "applicability": {
+        "changed_paths": [
+          ".github/workflows/"
+        ],
+        "rationale": "This is a wiring property between a repository's governance workflows: which lifecycle events each one's `on:` block reacts to. A gap can only be introduced or reintroduced by editing workflow trigger configuration."
+      },
+      "prevention": {
+        "mechanism": "Structural regression tests assert that the trusted workflow driving privileged reviewer orchestration (hunter-governance-reconcile.yml) has an event-driven trigger for the Draft to Ready for Review transition -- the same transition hunter-merge-readiness.yml already reacts to immediately -- so readiness evaluation can never wake before its prerequisite orchestration cycle has a chance to exist. The trigger is `pull_request_target`, not `pull_request`: GitHub resolves a `pull_request_target` workflow from the base branch's copy of the file, so it stays on the trusted-default-branch execution path already proven non-candidate-controlled by the existing `test_candidate_controlled_triggers_are_read_from_every_declaration_shape` guard. A second regression asserts the orchestrator itself never dispatches review for a Draft PR.",
+        "boundary": "review",
+        "guard_reference": "scripts/hunter_review_orchestrator.py::ensure_current"
+      },
+      "regression_evidence": [
+        "tests/test_hunter_review_orchestrator.py::test_reconcile_wakes_when_a_pr_becomes_ready_for_review",
+        "tests/test_hunter_review_orchestrator.py::test_current_pr_never_dispatches_for_a_draft_pr"
+      ],
+      "lifecycle": "regression-tested",
+      "sources": [
+        "Issue #534, discovered via PR #533 exact HEAD 1184dac8cf6d87bf879a81a8a5fdb8858237ae95: transitioning PR #533 from Draft to Ready for Review caused Hunter / Merge Readiness to wake immediately (it listens for `ready_for_review`), but hunter-governance-reconcile.yml -- the only workflow that runs the privileged `hunter_review_orchestrator.py ensure` -- had no trigger for that transition, so Merge Readiness published WAITING_FOR_REVIEWER: no trusted exact-head orchestration cycle has been published, and no reviewer opportunity had actually started."
+      ]
     }
   ]
 }

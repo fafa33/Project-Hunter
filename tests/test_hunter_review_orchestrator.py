@@ -475,6 +475,40 @@ def test_governance_review_workflow_keeps_only_read_access_to_actions():
     assert "python scripts/hunter_review_orchestrator.py" not in path.read_text(encoding="utf-8")
 
 
+def test_reconcile_wakes_when_a_pr_becomes_ready_for_review():
+    """Issue #534: Draft -> Ready must promptly reach trusted reconciliation.
+
+    ``Hunter / Merge Readiness`` reacts to ``ready_for_review`` immediately
+    (see ``hunter-merge-readiness.yml``); this workflow -- the only one that
+    runs the privileged orchestrator -- must react to the same transition so
+    a Ready PR is never left waiting on the next unrelated event or the
+    30-minute schedule for its first orchestration cycle to exist.
+    ``pull_request_target`` (not ``pull_request``) is required here: it is
+    resolved from the base branch's copy of this file, so it is not
+    candidate-controlled -- already proven generically by
+    ``test_candidate_controlled_triggers_are_read_from_every_declaration_shape``
+    above for exactly this trigger shape.
+    """
+    path = pathlib.Path(REPOSITORY_ROOT, ".github/workflows/hunter-governance-reconcile.yml")
+    document = yaml.safe_load(path.read_text(encoding="utf-8"))
+
+    triggers = document.get("on", document.get(True))
+    pull_request_target = triggers.get("pull_request_target")
+    assert pull_request_target is not None, "reconcile has no pull_request_target trigger"
+    assert pull_request_target.get("branches") == ["main"]
+    assert "ready_for_review" in pull_request_target.get("types", [])
+    # A Draft PR must never reach this workflow via this trigger: GitHub only
+    # fires `ready_for_review` on the transition out of Draft, never while a
+    # PR remains Draft, so scoping to exactly this type is itself the guard.
+    assert "opened" not in pull_request_target.get("types", [])
+    assert "synchronize" not in pull_request_target.get("types", [])
+
+    text = path.read_text(encoding="utf-8")
+    assert '"${event_name}" == "pull_request_target"' in text
+    checkout = document["jobs"]["reconcile"]["steps"][0]
+    assert checkout["with"]["ref"] == "main"
+
+
 def test_orchestration_bootstraps_only_from_the_trusted_default_branch_checkout():
     text = pathlib.Path(REPOSITORY_ROOT, ".github/workflows/hunter-governance-reconcile.yml").read_text(
         encoding="utf-8"
@@ -578,6 +612,35 @@ def test_current_pr_waits_for_trusted_review_prerequisites(monkeypatch):
 
     assert result is None
     assert calls == []
+
+
+def test_current_pr_never_dispatches_for_a_draft_pr(monkeypatch):
+    """Issue #534, requirement 5: a Draft PR must never start candidate review.
+
+    This is checked directly on the PR's own state rather than left to the
+    indirect fact that a Draft head typically has no pre-ready review request
+    yet: the draft check runs, and short-circuits, before that lookup.
+    """
+    monkeypatch.setattr(
+        orchestrator,
+        "request_json",
+        lambda *_args: {"state": "open", "draft": True, "head": {"sha": HEAD}},
+    )
+    prerequisite_calls = []
+    monkeypatch.setattr(
+        orchestrator,
+        "review_request_state",
+        lambda *_args: prerequisite_calls.append(True) or (True, "d" * 64),
+        raising=False,
+    )
+    dispatch_calls = []
+    monkeypatch.setattr(orchestrator, "ensure_collector", lambda *_args: dispatch_calls.append(True), raising=False)
+
+    result = orchestrator.ensure_current("owner/repo", "token", 472)
+
+    assert result is None
+    assert prerequisite_calls == []
+    assert dispatch_calls == []
 
 
 def test_offline_mac_skips_local_without_red(monkeypatch):

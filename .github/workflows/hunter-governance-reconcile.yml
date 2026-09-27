@@ -9,6 +9,17 @@ name: Hunter Governance Review Reconcile
 # It has no `pull_request` trigger, so GitHub always runs the trusted
 # default-branch version of this file: a candidate cannot reach this permission
 # by editing a workflow on its own branch.
+#
+# Issue #534: Draft -> Ready for Review is a lifecycle transition that
+# `Hunter / Merge Readiness` reacts to immediately (it listens for
+# `ready_for_review`), but until this trigger existed, reconciliation here
+# only happened on the next push/review/workflow_run event or the 30-minute
+# schedule -- readiness could wake and report a missing orchestration cycle
+# before one had a chance to exist. `pull_request_target` is deliberately
+# used instead of `pull_request`: GitHub resolves a `pull_request_target`
+# workflow from the base branch's copy of the file, so this stays on the same
+# trusted-default-branch execution path as every other trigger above, and a
+# candidate branch cannot grant itself `actions: write` by editing this file.
 
 on:
   push:
@@ -31,6 +42,11 @@ on:
       - created
       - edited
       - deleted
+  pull_request_target:
+    branches:
+      - main
+    types:
+      - ready_for_review
   schedule:
     - cron: "*/30 * * * *"
   workflow_dispatch:
@@ -73,7 +89,7 @@ jobs:
           # multiplies API traffic and can exhaust the installation rate limit.
           # Scheduled/manual recovery remains the bounded full-sweep path.
           event_name="${{ github.event_name }}"
-          if [[ "${event_name}" == "pull_request_review" || "${event_name}" == "pull_request_review_comment" ]]; then
+          if [[ "${event_name}" == "pull_request_review" || "${event_name}" == "pull_request_review_comment" || "${event_name}" == "pull_request_target" ]]; then
             pr_numbers="${{ github.event.pull_request.number }}"
           elif [[ "${event_name}" == "workflow_run" ]]; then
             pr_numbers="$(

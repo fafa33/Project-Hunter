@@ -812,6 +812,14 @@ def ensure_current(repository: str, token: str, pr_number: int) -> ReviewCycle |
     pr = request_json(repository, token, "GET", f"pulls/{pr_number}")
     if not isinstance(pr, dict) or str(pr.get("state") or "") != "open":
         return None
+    # Issue #534: a Draft PR must never start a candidate review cycle, even
+    # though every other trigger that reaches here (schedule sweep, review
+    # events, workflow_run) iterates or fires without first checking draft
+    # state itself. This is enforced here, once, rather than relied upon
+    # indirectly through the pre-ready review request never existing yet for
+    # a Draft head.
+    if bool(pr.get("draft")):
+        return None
     head_sha = str((pr.get("head") or {}).get("sha") or "")
     if not head_sha:
         raise RuntimeError("current pull-request head is unavailable")
