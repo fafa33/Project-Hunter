@@ -5,19 +5,20 @@ Resolves the trust-boundary bootstrap deadlock: ``hunter_review_orchestrator.py`
 only from the trusted default branch, by deliberate design, so a candidate PR
 that changes this controller logic can never exercise its own change from its
 own live CI. This harness replays the candidate's controller modules against
-fixed, offline, deterministic scenario fixtures inside a read-only job with no
-write credentials (``run``); a second job with no write permission at all
-independently recomputes each scenario's candidate-module digest from its own
-candidate checkout (``verify-digests``); and a third job that never checks
-out candidate content re-derives every other trusted-side digest and
-publishes a status (``validate``). Splitting the candidate-touching digest
-recomputation into its own zero-permission job, separate from the
-status-publishing job, means no job that checks out untrusted candidate
-content ever also holds a write permission -- avoiding "checkout of untrusted
-code in a privileged context" regardless of the fact that this harness only
-ever reads candidate bytes to hash them, never executes them outside the
-first, credential-blanked job. See
-``.github/workflows/hunter-trusted-orchestrator-replay.yml``.
+fixed, offline, deterministic scenario fixtures inside two jobs (``run`` then
+``verify-digests``) that never hold a write permission, a secret, or a
+status-publishing token -- see
+``.github/workflows/hunter-trusted-orchestrator-replay-validate.yml``, which is
+deliberately triggered by ``pull_request``, never ``pull_request_target``, so
+there is nothing for the untrusted candidate code both jobs execute (inside a
+further credential-blanked, process-isolated subprocess) to escalate. A
+separate, privileged workflow --
+``.github/workflows/hunter-trusted-orchestrator-replay-publish.yml``, triggered
+by ``workflow_run`` and always resolved from the default branch -- never
+checks out candidate content at all: it re-derives every other trusted-side
+digest itself and publishes a status (``validate``), taking the candidate
+module digest result from the unprivileged ``verify-digests`` job rather than
+trusting either job's own account of what it did.
 
 What a green replay proves, and what it does not
 -------------------------------------------------
@@ -142,20 +143,89 @@ def _isolated_env() -> dict[str, str]:
     return env
 
 
-def resolve_candidate_root(raw: str) -> Path:
-    """Resolve and validate a candidate-root argument before it reaches any
-    subprocess argv or file read. ``strict=True`` fails closed on a
-    nonexistent path rather than silently accepting an arbitrary string, and
-    the directory check rejects a path that resolves to something else.
+def _reject_unsafe_relative(relative: str, *, label: str) -> Path:
+    """First line of defense for every externally supplied path argument on
+    this CLI (candidate root, receipt, digest-check, fixture, output paths):
+    reject an absolute path or any literal '..' traversal component before
+    any filesystem access happens at all.
     """
 
-    candidate_root = Path(raw).resolve(strict=True)
-    if not candidate_root.is_dir():
-        raise ValueError(f"--candidate-root {raw!r} does not resolve to a directory")
-    return candidate_root
+    relative_path = Path(relative)
+    if relative_path.is_absolute():
+        raise ValueError(f"{label} {relative!r} must be a relative path, not absolute")
+    if ".." in relative_path.parts:
+        raise ValueError(f"{label} {relative!r} must not contain '..' traversal")
+    if not relative_path.parts:
+        raise ValueError(f"{label} must be a non-empty relative path")
+    return relative_path
 
 
-def _run_scenario(scenario_id: str, candidate_root: Path, fixture_path: Path) -> dict[str, Any]:
+def resolve_workspace_root(raw: str | None) -> Path:
+    """The one trusted root every other path argument is confined under.
+
+    Defaults to the current working directory, which in the hosted workflow
+    is always the fixed ``$GITHUB_WORKSPACE`` the job's own trusted checkout
+    steps populated -- never a location a candidate PR controls.
+    """
+
+    root = Path(raw) if raw else Path.cwd()
+    resolved = root.resolve(strict=True)
+    if not resolved.is_dir():
+        raise ValueError(f"--workspace-root {raw!r} does not resolve to a directory")
+    return resolved
+
+
+def resolve_confined_existing(workspace_root: Path, relative: str, *, must_be_dir: bool, label: str) -> Path:
+    """Resolve an existing file/directory named `relative` under the trusted
+    `workspace_root`, failing closed on any escape attempt. Confinement is
+    checked against the fully symlink-resolved path, so a `relative` name
+    that is itself a symlink pointing outside the workspace root is rejected
+    exactly like a literal '../' traversal would be -- resolving through
+    symlinks and then re-checking containment is what actually closes that
+    gap; checking the unresolved path alone would not.
+    """
+
+    relative_path = _reject_unsafe_relative(relative, label=label)
+    resolved = (workspace_root / relative_path).resolve(strict=True)
+    try:
+        resolved.relative_to(workspace_root)
+    except ValueError:
+        raise ValueError(f"{label} {relative!r} resolves outside the trusted workspace root {workspace_root}") from None
+    if must_be_dir and not resolved.is_dir():
+        raise ValueError(f"{label} {relative!r} does not resolve to a directory")
+    if not must_be_dir and not resolved.is_file():
+        raise ValueError(f"{label} {relative!r} does not resolve to a file")
+    return resolved
+
+
+def resolve_confined_output(workspace_root: Path, relative: str, *, label: str) -> Path:
+    """Resolve a not-yet-existing output path named `relative` under the
+    trusted `workspace_root`. The file itself need not exist yet, but its
+    parent directory must already exist inside the workspace root and must
+    not itself be a symlink escaping it.
+    """
+
+    relative_path = _reject_unsafe_relative(relative, label=label)
+    candidate = workspace_root / relative_path
+    resolved_parent = candidate.parent.resolve(strict=True)
+    try:
+        resolved_parent.relative_to(workspace_root)
+    except ValueError:
+        raise ValueError(f"{label} {relative!r} resolves outside the trusted workspace root {workspace_root}") from None
+    return resolved_parent / candidate.name
+
+
+def resolve_candidate_root(workspace_root: Path, raw: str) -> Path:
+    """Resolve and confine the --candidate-root argument to the trusted
+    workspace root before it reaches any subprocess argv or file read.
+    """
+
+    return resolve_confined_existing(workspace_root, raw, must_be_dir=True, label="--candidate-root")
+
+
+def _run_scenario(
+    scenario_id: str, candidate_root: Path, fixture_path: Path, *, workspace_root: Path
+) -> dict[str, Any]:
     if scenario_id not in REQUIRED_SCENARIO_IDS:
         raise ValueError(f"scenario_id {scenario_id!r} is not one of the canonical {REQUIRED_SCENARIO_IDS}")
     started = datetime.now(UTC)
@@ -163,12 +233,14 @@ def _run_scenario(scenario_id: str, candidate_root: Path, fixture_path: Path) ->
         [
             sys.executable,
             str(WORKER_PATH),
+            "--workspace-root",
+            str(workspace_root),
             "--candidate-root",
-            str(candidate_root),
+            str(candidate_root.relative_to(workspace_root)),
             "--scenario",
             scenario_id,
             "--fixture",
-            str(fixture_path),
+            str(fixture_path.relative_to(workspace_root)),
         ],
         cwd=str(ROOT),
         env=_isolated_env(),
@@ -196,11 +268,14 @@ def _run_scenario(scenario_id: str, candidate_root: Path, fixture_path: Path) ->
     return payload
 
 
-def build_receipt(*, candidate_root: Path, pr_number: int, candidate_sha: str) -> dict[str, Any]:
+def build_receipt(*, candidate_root: Path, pr_number: int, candidate_sha: str, workspace_root: Path) -> dict[str, Any]:
     fixture_path = candidate_root.parent / ".hunter-orchestrator-replay-fixture.json"
     fixture_path.write_text(json.dumps(FIXTURE, sort_keys=True), encoding="utf-8")
     try:
-        scenario_results = [_run_scenario(sid, candidate_root, fixture_path) for sid in REQUIRED_SCENARIO_IDS]
+        scenario_results = [
+            _run_scenario(sid, candidate_root, fixture_path, workspace_root=workspace_root)
+            for sid in REQUIRED_SCENARIO_IDS
+        ]
     finally:
         fixture_path.unlink(missing_ok=True)
 
@@ -387,13 +462,17 @@ def validate_receipt(
 
 
 def _cmd_run(args: argparse.Namespace) -> int:
+    workspace_root = resolve_workspace_root(args.workspace_root)
+    candidate_root = resolve_candidate_root(workspace_root, args.candidate_root)
+    out_path = resolve_confined_output(workspace_root, args.out, label="--out")
     receipt = build_receipt(
-        candidate_root=resolve_candidate_root(args.candidate_root),
+        candidate_root=candidate_root,
         pr_number=args.pr,
         candidate_sha=args.candidate_sha,
+        workspace_root=workspace_root,
     )
-    Path(args.out).write_text(json.dumps(receipt, indent=2, sort_keys=True), encoding="utf-8")
-    print(f"wrote replay receipt to {args.out}: overall_result={receipt['overall_result']}")
+    out_path.write_text(json.dumps(receipt, indent=2, sort_keys=True), encoding="utf-8")
+    print(f"wrote replay receipt to {out_path}: overall_result={receipt['overall_result']}")
     return 0 if receipt["overall_result"] == "pass" else 1
 
 
@@ -404,19 +483,26 @@ def _cmd_verify_digests(args: argparse.Namespace) -> int:
     access itself."""
 
     try:
-        receipt = json.loads(Path(args.receipt).read_text(encoding="utf-8"))
-    except (OSError, json.JSONDecodeError) as exc:
-        Path(args.out).write_text(
-            json.dumps({"errors": [f"replay receipt is unreadable or malformed: {exc}"]}), encoding="utf-8"
+        workspace_root = resolve_workspace_root(args.workspace_root)
+        out_path = resolve_confined_output(workspace_root, args.out, label="--out")
+    except (OSError, ValueError) as exc:
+        print(f"DIGEST VERIFICATION FAILED: workspace/output path is invalid: {exc}", file=sys.stderr)
+        return 1
+    try:
+        receipt_path = resolve_confined_existing(workspace_root, args.receipt, must_be_dir=False, label="--receipt")
+        receipt = json.loads(receipt_path.read_text(encoding="utf-8"))
+    except (OSError, ValueError, json.JSONDecodeError) as exc:
+        out_path.write_text(
+            json.dumps({"errors": [f"replay receipt is unreadable, invalid, or malformed: {exc}"]}), encoding="utf-8"
         )
         return 1
     try:
-        candidate_root = resolve_candidate_root(args.candidate_root)
+        candidate_root = resolve_candidate_root(workspace_root, args.candidate_root)
     except (OSError, ValueError) as exc:
-        Path(args.out).write_text(json.dumps({"errors": [f"candidate root is invalid: {exc}"]}), encoding="utf-8")
+        out_path.write_text(json.dumps({"errors": [f"candidate root is invalid: {exc}"]}), encoding="utf-8")
         return 1
     errors = verify_candidate_module_digests(receipt, candidate_root)
-    Path(args.out).write_text(json.dumps({"errors": errors}, indent=2), encoding="utf-8")
+    out_path.write_text(json.dumps({"errors": errors}, indent=2), encoding="utf-8")
     if errors:
         for error in errors:
             print(f"DIGEST VERIFICATION FAILED: {error}", file=sys.stderr)
@@ -432,16 +518,25 @@ def _cmd_validate(args: argparse.Namespace) -> int:
     job), rather than trusting either the receipt or a self-report."""
 
     try:
-        receipt = json.loads(Path(args.receipt).read_text(encoding="utf-8"))
-    except (OSError, json.JSONDecodeError) as exc:
-        print(f"replay receipt is unreadable or malformed: {exc}", file=sys.stderr)
+        workspace_root = resolve_workspace_root(args.workspace_root)
+    except (OSError, ValueError) as exc:
+        print(f"REPLAY VALIDATION FAILED: workspace root is invalid: {exc}", file=sys.stderr)
+        return 1
+    try:
+        receipt_path = resolve_confined_existing(workspace_root, args.receipt, must_be_dir=False, label="--receipt")
+        receipt = json.loads(receipt_path.read_text(encoding="utf-8"))
+    except (OSError, ValueError, json.JSONDecodeError) as exc:
+        print(f"replay receipt is unreadable, invalid, or malformed: {exc}", file=sys.stderr)
         return 1
     errors = validate_receipt_trusted_fields(receipt, pr_number=args.pr, candidate_sha=args.candidate_sha)
 
     try:
-        digest_check = json.loads(Path(args.digest_check).read_text(encoding="utf-8"))
-    except (OSError, json.JSONDecodeError) as exc:
-        errors.append(f"candidate module digest verification result is unreadable or malformed: {exc}")
+        digest_check_path = resolve_confined_existing(
+            workspace_root, args.digest_check, must_be_dir=False, label="--digest-check"
+        )
+        digest_check = json.loads(digest_check_path.read_text(encoding="utf-8"))
+    except (OSError, ValueError, json.JSONDecodeError) as exc:
+        errors.append(f"candidate module digest verification result is unreadable, invalid, or malformed: {exc}")
         digest_check = None
     if digest_check is not None:
         digest_errors = digest_check.get("errors") if isinstance(digest_check, dict) else None
@@ -463,17 +558,20 @@ def parser() -> argparse.ArgumentParser:
     sub = result.add_subparsers(dest="command", required=True)
 
     run = sub.add_parser("run")
+    run.add_argument("--workspace-root")
     run.add_argument("--candidate-root", required=True)
     run.add_argument("--pr", type=int, required=True)
     run.add_argument("--candidate-sha", required=True)
     run.add_argument("--out", required=True)
 
     verify_digests = sub.add_parser("verify-digests")
+    verify_digests.add_argument("--workspace-root")
     verify_digests.add_argument("--receipt", required=True)
     verify_digests.add_argument("--candidate-root", required=True)
     verify_digests.add_argument("--out", required=True)
 
     validate = sub.add_parser("validate")
+    validate.add_argument("--workspace-root")
     validate.add_argument("--receipt", required=True)
     validate.add_argument("--digest-check", required=True)
     validate.add_argument("--pr", type=int, required=True)

@@ -237,7 +237,7 @@ def _fixture_path(tmp_path: Path) -> Path:
 
 def test_scenario_a_passes_against_a_pool_derived_opportunity(tmp_path):
     root = _candidate_root(tmp_path, orchestrator_src=SCENARIO_A_FIXED)
-    result = replay._run_scenario("A", root, _fixture_path(tmp_path))
+    result = replay._run_scenario("A", root, _fixture_path(tmp_path), workspace_root=tmp_path)
     assert result["outcome"] == "pass", result.get("error")
     assert result["measurements"]["baseline_seconds"] == result["measurements"]["worst_case_seconds"]
     assert result["measurements"]["mutated_seconds"] > result["measurements"]["baseline_seconds"]
@@ -245,7 +245,7 @@ def test_scenario_a_passes_against_a_pool_derived_opportunity(tmp_path):
 
 def test_scenario_a_fails_against_a_hardcoded_opportunity(tmp_path):
     root = _candidate_root(tmp_path, orchestrator_src=SCENARIO_A_BUGGY)
-    result = replay._run_scenario("A", root, _fixture_path(tmp_path))
+    result = replay._run_scenario("A", root, _fixture_path(tmp_path), workspace_root=tmp_path)
     assert result["outcome"] == "fail"
     assert "must equal the candidate's own trusted worst-case-budget derivation" in result["error"]
 
@@ -255,14 +255,14 @@ def test_scenario_a_fails_against_a_hardcoded_opportunity(tmp_path):
 
 def test_scenario_b_passes_against_a_liveness_checked_dispatch(tmp_path):
     root = _candidate_root(tmp_path, orchestrator_src=SCENARIO_B_FIXED)
-    result = replay._run_scenario("B", root, _fixture_path(tmp_path))
+    result = replay._run_scenario("B", root, _fixture_path(tmp_path), workspace_root=tmp_path)
     assert result["outcome"] == "pass", result.get("error")
     assert result["measurements"]["dispatches"] == 1
 
 
 def test_scenario_b_fails_against_an_unconditional_dispatch(tmp_path):
     root = _candidate_root(tmp_path, orchestrator_src=SCENARIO_B_BUGGY)
-    result = replay._run_scenario("B", root, _fixture_path(tmp_path))
+    result = replay._run_scenario("B", root, _fixture_path(tmp_path), workspace_root=tmp_path)
     assert result["outcome"] == "fail"
     assert "exactly one dispatch" in result["error"]
 
@@ -275,7 +275,7 @@ def test_scenario_fails_against_a_candidate_that_forges_a_passing_payload_and_ex
     the harness reports fail rather than being fooled by forged stdout."""
 
     root = _candidate_root(tmp_path, orchestrator_src=HOSTILE_EARLY_EXIT_ORCHESTRATOR)
-    result = replay._run_scenario("B", root, _fixture_path(tmp_path))
+    result = replay._run_scenario("B", root, _fixture_path(tmp_path), workspace_root=tmp_path)
     assert result["outcome"] == "fail"
     assert "trusted completion message" in result["error"]
 
@@ -285,29 +285,63 @@ def test_scenario_fails_against_a_candidate_that_forges_a_passing_payload_and_ex
 
 def test_scenario_g_passes_against_correct_end_to_end_classification(tmp_path):
     root = _candidate_root(tmp_path, orchestrator_src=SCENARIO_B_FIXED, governance_src=FIXED_GOVERNANCE)
-    result = replay._run_scenario("G", root, _fixture_path(tmp_path))
+    result = replay._run_scenario("G", root, _fixture_path(tmp_path), workspace_root=tmp_path)
     assert result["outcome"] == "pass", result.get("error")
 
 
 def test_scenario_g_fails_against_a_swallowed_fail_closed_path(tmp_path):
     root = _candidate_root(tmp_path, orchestrator_src=SCENARIO_B_FIXED, governance_src=BUGGY_GOVERNANCE)
-    result = replay._run_scenario("G", root, _fixture_path(tmp_path))
+    result = replay._run_scenario("G", root, _fixture_path(tmp_path), workspace_root=tmp_path)
     assert result["outcome"] == "fail"
     assert "fail closed" in result["error"]
 
 
-# --- Trusted digests are pure and deterministic ----------------------------
+# --- Trusted digests are pure, deterministic, and content-sensitive -------
+#
+# Each digest is checked two ways: calling it twice with nothing changed
+# must agree (determinism), and changing the underlying trusted content it
+# covers must change the digest (content sensitivity) -- proving these
+# assertions are non-vacuous, since a function that always returned a fixed
+# constant would pass a same-value comparison but fail this second check.
 
 
-def test_trusted_digests_are_deterministic():
-    assert replay.trusted_harness_definition_digest() == replay.trusted_harness_definition_digest()
-    assert replay.scenario_set_digest() == replay.scenario_set_digest()
-    assert replay.fixture_digest() == replay.fixture_digest()
+def test_trusted_harness_definition_digest_is_deterministic_and_content_sensitive(monkeypatch):
+    first = replay.trusted_harness_definition_digest()
+    second = replay.trusted_harness_definition_digest()
+    assert first == second
+
+    monkeypatch.setattr(replay, "TRUSTED_DEFINITION_FILES", replay.TRUSTED_DEFINITION_FILES[:1])
+    changed = replay.trusted_harness_definition_digest()
+    assert changed != first, "digest must depend on which trusted files it covers, not be a constant"
+
+
+def test_scenario_set_digest_is_deterministic_and_content_sensitive(monkeypatch):
+    first = replay.scenario_set_digest()
+    second = replay.scenario_set_digest()
+    assert first == second
+
+    mutated_invariants = dict(replay.SCENARIO_INVARIANTS)
+    mutated_invariants["A"] = mutated_invariants["A"] + " (mutated for this test)"
+    monkeypatch.setattr(replay, "SCENARIO_INVARIANTS", mutated_invariants)
+    changed = replay.scenario_set_digest()
+    assert changed != first, "digest must depend on the actual invariant text, not be a constant"
+
+
+def test_fixture_digest_is_deterministic_and_content_sensitive(monkeypatch):
+    first = replay.fixture_digest()
+    second = replay.fixture_digest()
+    assert first == second
+
+    mutated_fixture = dict(replay.FIXTURE)
+    mutated_fixture["run_id"] = int(mutated_fixture["run_id"]) + 1
+    monkeypatch.setattr(replay, "FIXTURE", mutated_fixture)
+    changed = replay.fixture_digest()
+    assert changed != first, "digest must depend on the actual fixture content, not be a constant"
 
 
 def _good_receipt(tmp_path: Path) -> tuple[dict, Path]:
     root = _candidate_root(tmp_path, orchestrator_src=SCENARIO_A_FIXED + SCENARIO_B_FIXED)
-    receipt = replay.build_receipt(candidate_root=root, pr_number=535, candidate_sha="a" * 40)
+    receipt = replay.build_receipt(candidate_root=root, pr_number=535, candidate_sha="a" * 40, workspace_root=tmp_path)
     return receipt, root
 
 
@@ -355,12 +389,14 @@ def test_verify_digests_and_validate_cli_round_trip_through_two_unprivileged_ste
             sys.executable,
             str(script),
             "verify-digests",
+            "--workspace-root",
+            str(tmp_path),
             "--receipt",
-            str(receipt_path),
+            receipt_path.name,
             "--candidate-root",
-            str(root),
+            root.name,
             "--out",
-            str(digest_check_path),
+            digest_check_path.name,
         ],
         capture_output=True,
         text=True,
@@ -373,10 +409,12 @@ def test_verify_digests_and_validate_cli_round_trip_through_two_unprivileged_ste
             sys.executable,
             str(script),
             "validate",
+            "--workspace-root",
+            str(tmp_path),
             "--receipt",
-            str(receipt_path),
+            receipt_path.name,
             "--digest-check",
-            str(digest_check_path),
+            digest_check_path.name,
             "--pr",
             "535",
             "--candidate-sha",
@@ -401,10 +439,12 @@ def test_validate_cli_rejects_a_digest_check_reporting_errors(tmp_path):
             sys.executable,
             str(Path(replay.__file__)),
             "validate",
+            "--workspace-root",
+            str(tmp_path),
             "--receipt",
-            str(receipt_path),
+            receipt_path.name,
             "--digest-check",
-            str(digest_check_path),
+            digest_check_path.name,
             "--pr",
             "535",
             "--candidate-sha",
@@ -415,6 +455,138 @@ def test_validate_cli_rejects_a_digest_check_reporting_errors(tmp_path):
     )
     assert validate_run.returncode == 1
     assert "forged module digest detected" in validate_run.stderr
+
+
+# --- Path-confinement adversarial tests (Sonar path-traversal findings) ----
+
+
+def test_run_cli_rejects_a_traversal_candidate_root(tmp_path):
+    root = _candidate_root(tmp_path, orchestrator_src=SCENARIO_A_FIXED + SCENARIO_B_FIXED)
+    script = Path(replay.__file__)
+    (tmp_path / "workspace").mkdir()
+
+    run = subprocess.run(
+        [
+            sys.executable,
+            str(script),
+            "run",
+            "--workspace-root",
+            str(tmp_path / "workspace"),
+            "--candidate-root",
+            f"../{root.name}",
+            "--pr",
+            "535",
+            "--candidate-sha",
+            "a" * 40,
+            "--out",
+            "receipt.json",
+        ],
+        capture_output=True,
+        text=True,
+    )
+    assert run.returncode != 0
+    assert "traversal" in run.stderr
+
+
+def test_run_cli_rejects_an_absolute_candidate_root(tmp_path):
+    root = _candidate_root(tmp_path, orchestrator_src=SCENARIO_A_FIXED + SCENARIO_B_FIXED)
+    script = Path(replay.__file__)
+
+    run = subprocess.run(
+        [
+            sys.executable,
+            str(script),
+            "run",
+            "--workspace-root",
+            str(tmp_path),
+            "--candidate-root",
+            str(root),
+            "--pr",
+            "535",
+            "--candidate-sha",
+            "a" * 40,
+            "--out",
+            "receipt.json",
+        ],
+        capture_output=True,
+        text=True,
+    )
+    assert run.returncode != 0
+    assert "absolute" in run.stderr
+
+
+def test_candidate_root_resolution_rejects_a_symlink_escaping_the_workspace_root(tmp_path):
+    outside = tmp_path / "outside"
+    outside.mkdir()
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    escape_link = workspace / "escape"
+    escape_link.symlink_to(outside, target_is_directory=True)
+
+    with pytest.raises(ValueError, match="outside the trusted workspace root"):
+        replay.resolve_candidate_root(workspace.resolve(), "escape")
+
+
+def test_verify_digests_cli_rejects_a_wrong_type_candidate_root(tmp_path):
+    root = _candidate_root(tmp_path, orchestrator_src=SCENARIO_A_FIXED + SCENARIO_B_FIXED)
+    receipt = replay.build_receipt(candidate_root=root, pr_number=535, candidate_sha="a" * 40, workspace_root=tmp_path)
+    receipt_path = tmp_path / "receipt.json"
+    receipt_path.write_text(json.dumps(receipt), encoding="utf-8")
+    # A file, not a directory, given as --candidate-root.
+    not_a_dir = tmp_path / "not_a_dir"
+    not_a_dir.write_text("nope", encoding="utf-8")
+    script = Path(replay.__file__)
+
+    run = subprocess.run(
+        [
+            sys.executable,
+            str(script),
+            "verify-digests",
+            "--workspace-root",
+            str(tmp_path),
+            "--receipt",
+            receipt_path.name,
+            "--candidate-root",
+            not_a_dir.name,
+            "--out",
+            "digest-check.json",
+        ],
+        capture_output=True,
+        text=True,
+    )
+    assert run.returncode != 0
+    result = json.loads((tmp_path / "digest-check.json").read_text())
+    assert any("directory" in error for error in result["errors"])
+
+
+def test_validate_cli_rejects_a_receipt_path_substituted_outside_the_workspace(tmp_path):
+    receipt, _root = _good_receipt(tmp_path)
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    outside_receipt = tmp_path / "outside-receipt.json"
+    outside_receipt.write_text(json.dumps(receipt), encoding="utf-8")
+
+    validate_run = subprocess.run(
+        [
+            sys.executable,
+            str(Path(replay.__file__)),
+            "validate",
+            "--workspace-root",
+            str(workspace),
+            "--receipt",
+            "../outside-receipt.json",
+            "--digest-check",
+            "digest-check.json",
+            "--pr",
+            "535",
+            "--candidate-sha",
+            "a" * 40,
+        ],
+        capture_output=True,
+        text=True,
+    )
+    assert validate_run.returncode == 1
+    assert "traversal" in validate_run.stderr
 
 
 # --- 11 adversarial trust-boundary tests ------------------------------------

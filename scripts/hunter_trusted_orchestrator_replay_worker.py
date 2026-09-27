@@ -386,28 +386,57 @@ def _run_scenario_isolated(scenario_id: str, candidate_root: Path, fixture: dict
 
 def _parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="Trusted orchestrator replay worker (subprocess-isolated)")
+    parser.add_argument("--workspace-root", required=True)
     parser.add_argument("--candidate-root", required=True)
     parser.add_argument("--scenario", required=True, choices=sorted(SCENARIOS))
     parser.add_argument("--fixture", required=True)
     return parser
 
 
-def _resolve_existing(raw: str, *, must_be_dir: bool) -> Path:
-    """Fail closed on a nonexistent path rather than passing an unvalidated
-    argv string on to import machinery or file reads."""
+def _reject_unsafe_relative(relative: str, *, label: str) -> Path:
+    """Reject an absolute path or any '..' traversal component before any
+    filesystem access happens at all. Both --candidate-root and --fixture
+    are relative names, confined to --workspace-root below -- never
+    accepted as arbitrary caller-supplied absolute paths.
+    """
 
-    resolved = Path(raw).resolve(strict=True)
+    relative_path = Path(relative)
+    if relative_path.is_absolute():
+        raise ValueError(f"{label} {relative!r} must be a relative path, not absolute")
+    if ".." in relative_path.parts:
+        raise ValueError(f"{label} {relative!r} must not contain '..' traversal")
+    if not relative_path.parts:
+        raise ValueError(f"{label} must be a non-empty relative path")
+    return relative_path
+
+
+def _resolve_confined(workspace_root: Path, relative: str, *, must_be_dir: bool, label: str) -> Path:
+    """Resolve `relative` under the trusted `workspace_root`, failing closed
+    on any escape attempt -- including a symlink at `relative` that points
+    outside the root, which resolving through it and re-checking containment
+    (rather than checking the unresolved path alone) is what actually closes.
+    """
+
+    relative_path = _reject_unsafe_relative(relative, label=label)
+    resolved = (workspace_root / relative_path).resolve(strict=True)
+    try:
+        resolved.relative_to(workspace_root)
+    except ValueError:
+        raise ValueError(f"{label} {relative!r} resolves outside the trusted workspace root {workspace_root}") from None
     if must_be_dir and not resolved.is_dir():
-        raise ValueError(f"{raw!r} does not resolve to a directory")
+        raise ValueError(f"{label} {relative!r} does not resolve to a directory")
     if not must_be_dir and not resolved.is_file():
-        raise ValueError(f"{raw!r} does not resolve to a file")
+        raise ValueError(f"{label} {relative!r} does not resolve to a file")
     return resolved
 
 
 def main() -> int:
     args = _parser().parse_args()
-    candidate_root = _resolve_existing(args.candidate_root, must_be_dir=True)
-    fixture_path = _resolve_existing(args.fixture, must_be_dir=False)
+    workspace_root = Path(args.workspace_root).resolve(strict=True)
+    if not workspace_root.is_dir():
+        raise ValueError(f"--workspace-root {args.workspace_root!r} does not resolve to a directory")
+    candidate_root = _resolve_confined(workspace_root, args.candidate_root, must_be_dir=True, label="--candidate-root")
+    fixture_path = _resolve_confined(workspace_root, args.fixture, must_be_dir=False, label="--fixture")
     fixture = json.loads(fixture_path.read_text(encoding="utf-8"))
     scenario_id = args.scenario
 
