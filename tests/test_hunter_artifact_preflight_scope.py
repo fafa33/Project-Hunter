@@ -154,6 +154,9 @@ def test_adr_0036_accounting_row_does_not_overclaim_review_coverage() -> None:
     row = next(line for line in text.splitlines() if line.startswith("| ADR 0036 |"))
 
     assert "admission_time" in row, "the row must name the mechanic it does not claim to cover"
+    assert (
+        "without asserting review coverage of that later mechanic" in row
+    ), "the row must affirmatively state that the later admission_time mechanic was not review-covered"
     assert "accepted no substantive architecture this audit did not already review" not in row
 
 
