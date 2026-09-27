@@ -20,6 +20,7 @@ _ALLOWED = {
     "source_pr",
     "reviewed_head_sha",
     "reviewed_base_sha",
+    "source_event_head_sha",
     "reviewer",
     "path",
     "line",
@@ -59,6 +60,11 @@ def _validate_observation(raw: Any, pr: int, head: str, base: str) -> dict[str, 
         raise LearningLedgerError("learning observation does not match exact head")
     if raw.get("reviewed_base_sha") != base:
         raise LearningLedgerError("learning observation does not match exact base")
+    source_event_head = raw.get("source_event_head_sha")
+    if source_event_head is not None and (
+        type(source_event_head) is not str or re.fullmatch(r"[0-9a-f]{40}", source_event_head) is None
+    ):
+        raise LearningLedgerError("learning observation source_event_head_sha is invalid")
     if raw.get("availability") not in {"available", "unavailable"}:
         raise LearningLedgerError("learning observation availability is invalid")
     for field in ("event_id", "reviewer", "message"):

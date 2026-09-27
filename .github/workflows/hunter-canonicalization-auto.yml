@@ -1,0 +1,76 @@
+name: Hunter Automatic Canonicalization
+
+# Trusted-default-branch, self-hosted continuation of the review lifecycle.
+# The repository token is read-only.  The only content-write channel is the
+# already-authorized local_git_push path on the owner's Mac, so this workflow
+# grants no new GitHub repository-write authority.
+on:
+  pull_request_review:
+    types: [submitted, edited, dismissed]
+  pull_request_review_comment:
+    types: [created, edited, deleted]
+  workflow_dispatch:
+    inputs:
+      pr_number:
+        description: PR to catch up/reconcile
+        required: true
+        type: string
+
+permissions:
+  contents: read
+  pull-requests: read
+
+env:
+  PYTHONPATH: src
+
+jobs:
+  canonicalize:
+    runs-on: [self-hosted, macOS]
+    timeout-minutes: 10
+    steps:
+      - name: Checkout trusted default branch
+        uses: actions/checkout@v7
+        with:
+          ref: ${{ github.event.repository.default_branch }}
+          persist-credentials: false
+          fetch-depth: 0
+      - name: Resolve exact PR identity
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPOSITORY: ${{ github.repository }}
+          EVENT_PR: ${{ github.event.pull_request.number }}
+          INPUT_PR: ${{ inputs.pr_number }}
+        run: |
+          set -euo pipefail
+          PR_NUMBER="${EVENT_PR:-${INPUT_PR:-}}"
+          [[ "${PR_NUMBER}" =~ ^[1-9][0-9]*$ ]]
+          gh pr view "${PR_NUMBER}" --repo "${REPOSITORY}" --json headRefOid,baseRefOid \
+            --jq '"HEAD_SHA=" + .headRefOid + "\\nBASE_SHA=" + .baseRefOid' >> "$GITHUB_ENV"
+          echo "PR_NUMBER=${PR_NUMBER}" >> "$GITHUB_ENV"
+      - name: Capture authenticated finding lifecycle
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+          REPOSITORY: ${{ github.repository }}
+        run: |
+          python scripts/hunter_collect_learning_observations.py \
+            --repository "${REPOSITORY}" --pr "${PR_NUMBER}" --head "${HEAD_SHA}" --base "${BASE_SHA}" \
+            > hunter-finding-lifecycle.json
+      - name: Propose canonical knowledge when replayable evidence exists
+        env:
+          REPOSITORY: ${{ github.repository }}
+        run: |
+          # Keep GitHub's workflow token read-only. Pushes use the owner's existing
+          # local SSH identity and still cross the canonical pre-push hook.
+          git config core.hooksPath .githooks
+          git remote set-url origin "git@github.com:${REPOSITORY}.git"
+          python scripts/hunter_canonicalization_candidate_pr.py \
+            --pr "${PR_NUMBER}" --head "${HEAD_SHA}" --base "${BASE_SHA}" \
+            --observations hunter-finding-lifecycle.json --repo origin
+      - name: Preserve lifecycle evidence even when no family maps
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: hunter-finding-lifecycle-${{ env.PR_NUMBER }}-${{ env.HEAD_SHA }}
+          path: hunter-finding-lifecycle.json
+          if-no-files-found: warn
+          retention-days: 90
