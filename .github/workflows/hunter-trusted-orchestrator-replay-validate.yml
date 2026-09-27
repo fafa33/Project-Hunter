@@ -88,13 +88,15 @@ jobs:
         env:
           GITHUB_TOKEN: ""
           GH_TOKEN: ""
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+          CANDIDATE_SHA: ${{ github.event.pull_request.head.sha }}
         run: |
           set -euo pipefail
           python scripts/hunter_trusted_orchestrator_replay.py run \
             --workspace-root "$GITHUB_WORKSPACE" \
             --candidate-root candidate \
-            --pr "${{ github.event.pull_request.number }}" \
-            --candidate-sha "${{ github.event.pull_request.head.sha }}" \
+            --pr "$PR_NUMBER" \
+            --candidate-sha "$CANDIDATE_SHA" \
             --out replay-receipt.json
 
       - name: Upload replay receipt
