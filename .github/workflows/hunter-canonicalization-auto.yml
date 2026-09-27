@@ -44,10 +44,22 @@ jobs:
           set -euo pipefail
           PR_NUMBER="${EVENT_PR:-${INPUT_PR:-}}"
           [[ "${PR_NUMBER}" =~ ^[1-9][0-9]*$ ]]
-          gh pr view "${PR_NUMBER}" --repo "${REPOSITORY}" --json headRefOid,baseRefOid \
-            --jq '"HEAD_SHA=" + .headRefOid + "\\nBASE_SHA=" + .baseRefOid' >> "$GITHUB_ENV"
+          HEAD_SHA="$(gh pr view "${PR_NUMBER}" --repo "${REPOSITORY}" --json headRefOid --jq .headRefOid)"
+          BASE_SHA="$(gh pr view "${PR_NUMBER}" --repo "${REPOSITORY}" --json baseRefOid --jq .baseRefOid)"
           echo "PR_NUMBER=${PR_NUMBER}" >> "$GITHUB_ENV"
+          echo "HEAD_SHA=${HEAD_SHA}" >> "$GITHUB_ENV"
+          echo "BASE_SHA=${BASE_SHA}" >> "$GITHUB_ENV"
+      - name: Detect trusted canonicalization engine
+        id: engine
+        run: |
+          if [[ -f scripts/hunter_collect_learning_observations.py && -f scripts/hunter_canonicalization_candidate_pr.py ]]; then
+            echo "available=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "available=false" >> "$GITHUB_OUTPUT"
+            echo "Bootstrap: trusted default branch does not contain the canonicalization engine yet; candidate code will not be executed."
+          fi
       - name: Capture authenticated finding lifecycle
+        if: steps.engine.outputs.available == 'true'
         env:
           GITHUB_TOKEN: ${{ github.token }}
           REPOSITORY: ${{ github.repository }}
@@ -56,6 +68,7 @@ jobs:
             --repository "${REPOSITORY}" --pr "${PR_NUMBER}" --head "${HEAD_SHA}" --base "${BASE_SHA}" \
             > hunter-finding-lifecycle.json
       - name: Propose canonical knowledge when replayable evidence exists
+        if: steps.engine.outputs.available == 'true'
         env:
           REPOSITORY: ${{ github.repository }}
         run: |
@@ -67,7 +80,7 @@ jobs:
             --pr "${PR_NUMBER}" --head "${HEAD_SHA}" --base "${BASE_SHA}" \
             --observations hunter-finding-lifecycle.json --repo origin
       - name: Preserve lifecycle evidence even when no family maps
-        if: always()
+        if: steps.engine.outputs.available == 'true' && always()
         uses: actions/upload-artifact@v4
         with:
           name: hunter-finding-lifecycle-${{ env.PR_NUMBER }}-${{ env.HEAD_SHA }}

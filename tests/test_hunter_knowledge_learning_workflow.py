@@ -168,6 +168,10 @@ def test_automatic_canonicalization_uses_existing_local_git_push_without_token_w
     text = path.read_text(encoding="utf-8")
     assert "hunter_collect_learning_observations.py" in text
     assert "hunter_canonicalization_candidate_pr.py" in text
+    assert "Detect trusted canonicalization engine" in text
+    assert "candidate code will not be executed" in text
+    assert "steps.engine.outputs.available == 'true'" in text
+    assert 'HEAD_SHA="$(gh pr view' in text
     assert "runs-on: [self-hosted, macOS]" in text
     assert "contents: read" in text
     assert "pull-requests: read" in text
