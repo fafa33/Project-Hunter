@@ -55,6 +55,13 @@ NON_RED_REVIEW_STATES = frozenset(
         "WAITING_FOR_REVIEWER",
         "REVIEW_IN_PROGRESS",
         "FAILOVER_IN_PROGRESS",
+    }
+)
+
+TERMINAL_NONBLOCKING_REVIEW_STATES = frozenset(
+    {
+        "REVIEW_TIMED_OUT",
+        "REVIEWER_UNAVAILABLE",
         "POOL_EXHAUSTED",
     }
 )
@@ -286,6 +293,12 @@ def review_authority_state(head_sha: str, pr_number: int) -> tuple[str, str]:
         waiting = review_wait_state(orchestration_state, orchestration_detail)
         if waiting is not None:
             return waiting
+        if orchestration_state in TERMINAL_NONBLOCKING_REVIEW_STATES:
+            return (
+                "success",
+                f"{orchestration_state}: independent-review opportunity ended without review; "
+                f"{orchestration_detail}",
+            )
         return "pending", f"{verdict.state}: {verdict.detail}"
     except Exception as exc:
         return "pending", f"Review authority evidence unavailable: {type(exc).__name__}: {exc}"
@@ -431,11 +444,16 @@ def evaluate(observation: ReadinessObservation) -> Decision:
     if observation.changes_requested:
         return Decision("failure", "Changes requested by: " + ", ".join(observation.changes_requested))
 
-    # External LLM review is defense-in-depth, not merge authority. Existing
-    # authenticated blockers above remain fail-closed, but provider quota,
-    # outage, or absence cannot strand an otherwise verified exact HEAD.
-    # Keep observing review authority for diagnostics without gating readiness.
-    _authority_state, _authority_detail = observation.review_authority
+    # Independent review is defense-in-depth, but the *opportunity* is a bounded
+    # exact-HEAD prerequisite.  While that opportunity is live, readiness waits.
+    # A terminal timeout/unavailability is deliberately non-blocking: it records
+    # the missing review honestly without giving any provider permanent merge
+    # authority. Authenticated findings above remain fail-closed.
+    authority_state, authority_detail = observation.review_authority
+    if authority_state == "pending":
+        return Decision("pending", "Waiting for bounded independent-review opportunity: " + authority_detail)
+    if authority_state != "success":
+        return Decision("failure", "Independent-review authority failed: " + authority_detail)
 
     admission_state, admission_detail = observation.candidate_admission
     if admission_state == "pending":
@@ -480,7 +498,7 @@ def evaluate(observation: ReadinessObservation) -> Decision:
 
     return Decision(
         "success",
-        "Ready to merge: deterministic code/security/governance checks pass; external LLM review is optional defense-in-depth.",
+        "Ready to merge: deterministic code/security/governance checks pass and the bounded independent-review opportunity is terminal.",
     )
 
 
