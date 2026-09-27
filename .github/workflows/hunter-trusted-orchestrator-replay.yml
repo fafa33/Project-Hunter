@@ -12,11 +12,26 @@ name: Hunter / Trusted Orchestrator Replay
 # against main, which does not yet contain the candidate's change. This is the
 # "trust-boundary bootstrap deadlock".
 #
-# This workflow breaks the deadlock without weakening the boundary: it replays
-# the candidate's controller-logic modules against fixed, offline scenario
-# fixtures inside a read-only validation job that has no write credentials, and
-# a separate publish-proof job -- which never executes candidate code -- proves
-# the replay's own receipt is what it claims to be before publishing a status.
+# This workflow breaks the deadlock without weakening the boundary, in three
+# jobs of strictly increasing trust and strictly decreasing candidate contact:
+#   1. validate-replay   (contents: read, blanked tokens) checks out the exact
+#      candidate and replays its controller-logic modules against fixed,
+#      offline scenario fixtures, producing a receipt.
+#   2. verify-candidate-digest (contents: read ONLY -- no write permission of
+#      any kind) independently re-checks-out the exact candidate and
+#      recomputes each scenario's candidate-module digest itself, never
+#      trusting job 1's receipt.
+#   3. publish-proof (statuses: write) never checks out candidate content at
+#      all: it re-derives every other trusted quantity itself and takes the
+#      digest result from job 2, then publishes a status.
+#
+# Splitting the candidate-touching recomputation (job 2) out of the
+# status-publishing job (job 3) means no job that checks out untrusted
+# candidate content ever also holds a write permission, so this design does
+# not trip "checkout of untrusted code in a privileged context" even though
+# the harness only ever reads candidate bytes to hash or replay them, never
+# executes them outside job 1's credential-blanked subprocess worker.
+#
 # The candidate never gets production write credentials, never runs from a
 # workflow the candidate's own branch controls, and can never convert a passing
 # replay into merge authority: no production authority resolver (Merge
@@ -90,15 +105,17 @@ jobs:
           path: replay-receipt.json
           retention-days: 14
 
-  publish-proof:
-    name: Publish Exact-Head Trusted Replay Proof
+  verify-candidate-digest:
+    name: Independently Verify Candidate Module Digests
     needs: validate-replay
-    if: ${{ always() && !cancelled() }}
+    if: ${{ always() && !cancelled() && needs.validate-replay.result == 'success' }}
     runs-on: ubuntu-latest
     timeout-minutes: 10
+    # No write permission of any kind. This is the only job that touches
+    # candidate content after job 1, and it must never also be able to mint a
+    # status, check, or PR write -- see the workflow-level comment above.
     permissions:
       contents: read
-      statuses: write
 
     steps:
       - name: Checkout trusted controller
@@ -108,14 +125,67 @@ jobs:
           fetch-depth: 0
           persist-credentials: false
 
-      # The candidate is re-checked-out here, independently of job 1's uploaded
-      # artifact, so this job can recompute candidate module digests itself
-      # rather than trusting the artifact's own account of what it hashed.
+      # Re-checked-out here, independently of job 1, so this job recomputes
+      # candidate module digests itself rather than trusting job 1's receipt.
       - name: Checkout exact candidate as untrusted input
         uses: actions/checkout@v7
         with:
           ref: ${{ github.event.pull_request.head.sha }}
           path: candidate
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Set up Python
+        uses: actions/setup-python@v6
+        with:
+          python-version: "3.11.13"
+
+      - name: Download replay receipt
+        uses: actions/download-artifact@v4
+        with:
+          name: replay-receipt
+          path: .
+
+      - name: Verify candidate module digests
+        env:
+          GITHUB_TOKEN: ""
+          GH_TOKEN: ""
+        run: |
+          set -euo pipefail
+          python scripts/hunter_trusted_orchestrator_replay.py verify-digests \
+            --receipt replay-receipt.json \
+            --candidate-root candidate \
+            --out digest-check.json
+
+      # Runs even when the step above found a mismatch and exited non-zero,
+      # so publish-proof still gets the specific per-scenario error detail
+      # rather than falling back to a generic "evidence missing" failure.
+      - name: Upload digest verification result
+        if: ${{ always() }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: digest-check
+          path: digest-check.json
+          retention-days: 14
+
+  publish-proof:
+    name: Publish Exact-Head Trusted Replay Proof
+    needs: [validate-replay, verify-candidate-digest]
+    if: ${{ always() && !cancelled() }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    # Never checks out candidate content (see the workflow-level comment
+    # above) -- only trusted controller code and two small trusted-produced
+    # JSON artifacts.
+    permissions:
+      contents: read
+      statuses: write
+
+    steps:
+      - name: Checkout trusted controller
+        uses: actions/checkout@v7
+        with:
+          ref: ${{ github.event.repository.default_branch }}
           fetch-depth: 0
           persist-credentials: false
 
@@ -131,6 +201,14 @@ jobs:
           name: replay-receipt
           path: .
 
+      - name: Download digest verification result
+        if: ${{ always() }}
+        uses: actions/download-artifact@v4
+        with:
+          name: digest-check
+          path: .
+        continue-on-error: true
+
       - name: Independently validate the trusted replay receipt
         id: validate_receipt
         env:
@@ -138,14 +216,14 @@ jobs:
           GH_TOKEN: ""
         run: |
           set -euo pipefail
-          if [ "${{ needs.validate-replay.result }}" != "success" ]; then
-            echo "validate-replay job did not succeed; treating replay as failed" >&2
+          if [ "${{ needs.validate-replay.result }}" != "success" ] || [ ! -f digest-check.json ]; then
+            echo "validate-replay or verify-candidate-digest did not produce evidence; treating replay as failed" >&2
             echo "result=failure" >> "$GITHUB_OUTPUT"
             exit 0
           fi
           if python scripts/hunter_trusted_orchestrator_replay.py validate \
             --receipt replay-receipt.json \
-            --candidate-root candidate \
+            --digest-check digest-check.json \
             --pr "${{ github.event.pull_request.number }}" \
             --candidate-sha "${{ github.event.pull_request.head.sha }}"; then
             echo "result=success" >> "$GITHUB_OUTPUT"

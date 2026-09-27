@@ -6,9 +6,18 @@ only from the trusted default branch, by deliberate design, so a candidate PR
 that changes this controller logic can never exercise its own change from its
 own live CI. This harness replays the candidate's controller modules against
 fixed, offline, deterministic scenario fixtures inside a read-only job with no
-write credentials (``run``), and a separate job with no candidate execution at
-all independently re-derives every trusted-side digest before publishing a
-status (``validate``). See ``.github/workflows/hunter-trusted-orchestrator-replay.yml``.
+write credentials (``run``); a second job with no write permission at all
+independently recomputes each scenario's candidate-module digest from its own
+candidate checkout (``verify-digests``); and a third job that never checks
+out candidate content re-derives every other trusted-side digest and
+publishes a status (``validate``). Splitting the candidate-touching digest
+recomputation into its own zero-permission job, separate from the
+status-publishing job, means no job that checks out untrusted candidate
+content ever also holds a write permission -- avoiding "checkout of untrusted
+code in a privileged context" regardless of the fact that this harness only
+ever reads candidate bytes to hash them, never executes them outside the
+first, credential-blanked job. See
+``.github/workflows/hunter-trusted-orchestrator-replay.yml``.
 
 What a green replay proves, and what it does not
 -------------------------------------------------
@@ -219,17 +228,63 @@ def _parse_timestamp(value: Any) -> datetime | None:
         return None
 
 
-def validate_receipt(
+def _index_scenario_results(results: list[Any]) -> dict[str, dict[str, Any]]:
+    by_id: dict[str, dict[str, Any]] = {}
+    for entry in results:
+        if isinstance(entry, dict) and isinstance(entry.get("scenario_id"), str):
+            by_id[entry["scenario_id"]] = entry
+    return by_id
+
+
+def verify_candidate_module_digests(receipt: Any, candidate_root: Path) -> list[str]:
+    """The one part of receipt validation that needs candidate file access.
+
+    Independently recomputes each scenario's ``candidate_module_digest`` from
+    this call's own candidate checkout -- never trusting the receipt's claim.
+    Kept as its own function (and, in the hosted workflow, its own job with no
+    write permission) so that the job which publishes a status never also
+    needs to check out untrusted candidate content.
+    """
+
+    if not isinstance(receipt, dict):
+        return ["receipt is not a JSON object"]
+    results = receipt.get("scenario_results")
+    if not isinstance(results, list):
+        return ["receipt scenario_results must be a list"]
+    by_id = _index_scenario_results(results)
+
+    import hunter_trusted_orchestrator_replay_worker as worker
+
+    errors: list[str] = []
+    for scenario_id in REQUIRED_SCENARIO_IDS:
+        entry = by_id.get(scenario_id)
+        if entry is None:
+            continue
+        try:
+            expected_module_digest = worker.candidate_module_digest(candidate_root, scenario_id)
+        except OSError as exc:
+            errors.append(f"scenario {scenario_id} candidate module files could not be read for verification: {exc}")
+            continue
+        if entry.get("candidate_module_digest") != expected_module_digest:
+            errors.append(
+                f"scenario {scenario_id} candidate_module_digest does not match this job's own "
+                "independent recomputation from the candidate checkout"
+            )
+    return errors
+
+
+def validate_receipt_trusted_fields(
     receipt: Any,
     *,
-    candidate_root: Path,
     pr_number: int,
     candidate_sha: str,
 ) -> list[str]:
-    """Fail-closed validation. Every trusted quantity is recomputed here, never
-    trusted from the receipt's own account of it; every candidate-controlled
-    quantity (paths, filenames, scenario definitions, expected results, status
-    context names) is likewise never taken from the receipt.
+    """Fail-closed validation of everything checkable without candidate
+    checkout access. Every trusted quantity is recomputed here, never trusted
+    from the receipt's own account of it; every candidate-controlled quantity
+    (paths, filenames, scenario definitions, expected results, status context
+    names) is likewise never taken from the receipt. Candidate module digests
+    are verified separately by ``verify_candidate_module_digests``.
     """
 
     errors: list[str] = []
@@ -272,10 +327,7 @@ def validate_receipt(
     if not isinstance(results, list):
         return errors + ["receipt scenario_results must be a list"]
 
-    by_id = {}
-    for entry in results:
-        if isinstance(entry, dict) and isinstance(entry.get("scenario_id"), str):
-            by_id[entry["scenario_id"]] = entry
+    by_id = _index_scenario_results(results)
     # 8. exactly the required scenario ids, no substitution and no omission
     if set(by_id) != set(REQUIRED_SCENARIO_IDS):
         errors.append(
@@ -292,20 +344,7 @@ def validate_receipt(
         # 10. outcome must actually be pass
         if entry.get("outcome") != "pass":
             errors.append(f"scenario {scenario_id} outcome is {entry.get('outcome')!r}, not 'pass'")
-        # 11. candidate_module_digest independently recomputed from this job's own candidate checkout
-        import hunter_trusted_orchestrator_replay_worker as worker
-
-        try:
-            expected_module_digest = worker.candidate_module_digest(candidate_root, scenario_id)
-        except OSError as exc:
-            errors.append(f"scenario {scenario_id} candidate module files could not be read for verification: {exc}")
-            continue
-        if entry.get("candidate_module_digest") != expected_module_digest:
-            errors.append(
-                f"scenario {scenario_id} candidate_module_digest does not match this job's own "
-                "independent recomputation from the candidate checkout"
-            )
-        # 12. timestamps must be present, parseable, non-reversed and boundedly short
+        # 11. timestamps must be present, parseable, non-reversed and boundedly short
         started = _parse_timestamp(entry.get("started_at"))
         finished = _parse_timestamp(entry.get("finished_at"))
         if started is None or finished is None:
@@ -315,7 +354,7 @@ def validate_receipt(
         elif (finished - started).total_seconds() > MAX_SCENARIO_SECONDS:
             errors.append(f"scenario {scenario_id} duration exceeds the {MAX_SCENARIO_SECONDS}s sanity ceiling")
 
-    # 13. overall_result must be internally consistent with the individual scenario outcomes
+    # 12. overall_result must be internally consistent with the individual scenario outcomes
     all_pass = bool(by_id) and all(by_id.get(sid, {}).get("outcome") == "pass" for sid in REQUIRED_SCENARIO_IDS)
     expected_overall = "pass" if all_pass else "fail"
     if receipt.get("overall_result") != expected_overall:
@@ -324,6 +363,26 @@ def validate_receipt(
             f"scenario outcomes (expected {expected_overall!r})"
         )
 
+    return errors
+
+
+def validate_receipt(
+    receipt: Any,
+    *,
+    candidate_root: Path,
+    pr_number: int,
+    candidate_sha: str,
+) -> list[str]:
+    """Combines trusted-fields validation with candidate module digest
+    verification in one call, for a caller that has both trusted and
+    candidate access in the same process (direct callers, tests). The hosted
+    workflow instead runs these two checks in separate jobs with different
+    privilege levels -- see ``verify_candidate_module_digests``'s docstring.
+    """
+
+    errors = validate_receipt_trusted_fields(receipt, pr_number=pr_number, candidate_sha=candidate_sha)
+    if isinstance(receipt, dict):
+        errors = errors + verify_candidate_module_digests(receipt, candidate_root)
     return errors
 
 
@@ -338,23 +397,59 @@ def _cmd_run(args: argparse.Namespace) -> int:
     return 0 if receipt["overall_result"] == "pass" else 1
 
 
+def _cmd_verify_digests(args: argparse.Namespace) -> int:
+    """Runs in the unprivileged, candidate-touching job: recomputes each
+    scenario's candidate_module_digest and writes the result for the
+    status-publishing job to consume, without ever giving that job candidate
+    access itself."""
+
+    try:
+        receipt = json.loads(Path(args.receipt).read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError) as exc:
+        Path(args.out).write_text(
+            json.dumps({"errors": [f"replay receipt is unreadable or malformed: {exc}"]}), encoding="utf-8"
+        )
+        return 1
+    try:
+        candidate_root = resolve_candidate_root(args.candidate_root)
+    except (OSError, ValueError) as exc:
+        Path(args.out).write_text(json.dumps({"errors": [f"candidate root is invalid: {exc}"]}), encoding="utf-8")
+        return 1
+    errors = verify_candidate_module_digests(receipt, candidate_root)
+    Path(args.out).write_text(json.dumps({"errors": errors}, indent=2), encoding="utf-8")
+    if errors:
+        for error in errors:
+            print(f"DIGEST VERIFICATION FAILED: {error}", file=sys.stderr)
+        return 1
+    print("DIGEST VERIFICATION PASSED")
+    return 0
+
+
 def _cmd_validate(args: argparse.Namespace) -> int:
+    """Runs in the status-publishing job, which never checks out candidate
+    content: it validates every trusted field itself and takes the candidate
+    module digest result from ``verify-digests`` (a separate, unprivileged
+    job), rather than trusting either the receipt or a self-report."""
+
     try:
         receipt = json.loads(Path(args.receipt).read_text(encoding="utf-8"))
     except (OSError, json.JSONDecodeError) as exc:
         print(f"replay receipt is unreadable or malformed: {exc}", file=sys.stderr)
         return 1
+    errors = validate_receipt_trusted_fields(receipt, pr_number=args.pr, candidate_sha=args.candidate_sha)
+
     try:
-        candidate_root = resolve_candidate_root(args.candidate_root)
-    except (OSError, ValueError) as exc:
-        print(f"REPLAY VALIDATION FAILED: candidate root is invalid: {exc}", file=sys.stderr)
-        return 1
-    errors = validate_receipt(
-        receipt,
-        candidate_root=candidate_root,
-        pr_number=args.pr,
-        candidate_sha=args.candidate_sha,
-    )
+        digest_check = json.loads(Path(args.digest_check).read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError) as exc:
+        errors.append(f"candidate module digest verification result is unreadable or malformed: {exc}")
+        digest_check = None
+    if digest_check is not None:
+        digest_errors = digest_check.get("errors") if isinstance(digest_check, dict) else None
+        if not isinstance(digest_errors, list):
+            errors.append("candidate module digest verification result is malformed")
+        else:
+            errors.extend(str(error) for error in digest_errors)
+
     if errors:
         for error in errors:
             print(f"REPLAY VALIDATION FAILED: {error}", file=sys.stderr)
@@ -373,9 +468,14 @@ def parser() -> argparse.ArgumentParser:
     run.add_argument("--candidate-sha", required=True)
     run.add_argument("--out", required=True)
 
+    verify_digests = sub.add_parser("verify-digests")
+    verify_digests.add_argument("--receipt", required=True)
+    verify_digests.add_argument("--candidate-root", required=True)
+    verify_digests.add_argument("--out", required=True)
+
     validate = sub.add_parser("validate")
     validate.add_argument("--receipt", required=True)
-    validate.add_argument("--candidate-root", required=True)
+    validate.add_argument("--digest-check", required=True)
     validate.add_argument("--pr", type=int, required=True)
     validate.add_argument("--candidate-sha", required=True)
 
@@ -386,6 +486,8 @@ def main() -> int:
     args = parser().parse_args()
     if args.command == "run":
         return _cmd_run(args)
+    if args.command == "verify-digests":
+        return _cmd_verify_digests(args)
     return _cmd_validate(args)
 
 

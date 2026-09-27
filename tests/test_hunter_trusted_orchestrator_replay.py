@@ -18,6 +18,8 @@ from __future__ import annotations
 
 import json
 import re
+import subprocess
+import sys
 from pathlib import Path
 
 import hunter_trusted_orchestrator_replay as replay
@@ -279,6 +281,105 @@ def test_build_receipt_round_trips_through_validate(tmp_path):
     assert receipt["overall_result"] == "pass"
     errors = replay.validate_receipt(receipt, candidate_root=root, pr_number=535, candidate_sha="a" * 40)
     assert errors == []
+
+
+# --- Trusted-field validation and candidate-digest verification split ------
+#
+# The hosted workflow splits validate_receipt into two calls run in separate
+# jobs with different privilege levels, precisely so the job that eventually
+# publishes a status never also checks out untrusted candidate content (see
+# verify_candidate_module_digests's docstring). These tests exercise that
+# split directly, including through the real two-step CLI the workflow uses.
+
+
+def test_trusted_fields_validation_needs_no_candidate_access(tmp_path):
+    receipt, _root = _good_receipt(tmp_path)
+    receipt["schema"] = "forged"
+    errors = replay.validate_receipt_trusted_fields(receipt, pr_number=535, candidate_sha="a" * 40)
+    assert any("schema" in e for e in errors)
+
+
+def test_candidate_digest_verification_alone_catches_a_forged_digest(tmp_path):
+    receipt, root = _good_receipt(tmp_path)
+    for entry in receipt["scenario_results"]:
+        if entry["scenario_id"] == "B":
+            entry["candidate_module_digest"] = "0" * 64
+    errors = replay.verify_candidate_module_digests(receipt, root)
+    assert any("candidate_module_digest" in e for e in errors)
+
+
+def test_verify_digests_and_validate_cli_round_trip_through_two_unprivileged_steps(tmp_path):
+    receipt, root = _good_receipt(tmp_path)
+    receipt_path = tmp_path / "receipt.json"
+    receipt_path.write_text(json.dumps(receipt), encoding="utf-8")
+    digest_check_path = tmp_path / "digest-check.json"
+    script = Path(replay.__file__)
+
+    verify_run = subprocess.run(
+        [
+            sys.executable,
+            str(script),
+            "verify-digests",
+            "--receipt",
+            str(receipt_path),
+            "--candidate-root",
+            str(root),
+            "--out",
+            str(digest_check_path),
+        ],
+        capture_output=True,
+        text=True,
+    )
+    assert verify_run.returncode == 0, verify_run.stderr
+    assert json.loads(digest_check_path.read_text())["errors"] == []
+
+    validate_run = subprocess.run(
+        [
+            sys.executable,
+            str(script),
+            "validate",
+            "--receipt",
+            str(receipt_path),
+            "--digest-check",
+            str(digest_check_path),
+            "--pr",
+            "535",
+            "--candidate-sha",
+            "a" * 40,
+        ],
+        capture_output=True,
+        text=True,
+    )
+    assert validate_run.returncode == 0, validate_run.stderr
+    assert "REPLAY VALIDATION PASSED" in validate_run.stdout
+
+
+def test_validate_cli_rejects_a_digest_check_reporting_errors(tmp_path):
+    receipt, _root = _good_receipt(tmp_path)
+    receipt_path = tmp_path / "receipt.json"
+    receipt_path.write_text(json.dumps(receipt), encoding="utf-8")
+    digest_check_path = tmp_path / "digest-check.json"
+    digest_check_path.write_text(json.dumps({"errors": ["forged module digest detected"]}), encoding="utf-8")
+
+    validate_run = subprocess.run(
+        [
+            sys.executable,
+            str(Path(replay.__file__)),
+            "validate",
+            "--receipt",
+            str(receipt_path),
+            "--digest-check",
+            str(digest_check_path),
+            "--pr",
+            "535",
+            "--candidate-sha",
+            "a" * 40,
+        ],
+        capture_output=True,
+        text=True,
+    )
+    assert validate_run.returncode == 1
+    assert "forged module digest detected" in validate_run.stderr
 
 
 # --- 11 adversarial trust-boundary tests ------------------------------------
