@@ -51,6 +51,7 @@ from __future__ import annotations
 import argparse
 import hashlib
 import json
+import re
 import subprocess
 import sys
 from datetime import UTC, datetime
@@ -158,6 +159,21 @@ def _reject_unsafe_relative(relative: str, *, label: str) -> Path:
     if not relative_path.parts:
         raise ValueError(f"{label} must be a non-empty relative path")
     return relative_path
+
+
+#: A candidate_sha is an *identifier* (bound to trusted event fields via
+#: ``validate_receipt_trusted_fields``), never a filesystem path. GitHub's own
+#: ``pull_request.head.sha`` / ``workflow_run.head_sha`` are always exactly
+#: this shape; anything else is rejected before it enters trusted execution
+#: or the published receipt, rather than trusted to stay inert just because
+#: nothing downstream currently happens to build a path from it.
+CANDIDATE_SHA_PATTERN = re.compile(r"^[0-9a-fA-F]{40}$")
+
+
+def validate_candidate_sha(raw: str, *, label: str = "--candidate-sha") -> str:
+    if not CANDIDATE_SHA_PATTERN.fullmatch(raw):
+        raise ValueError(f"{label} {raw!r} must be exactly 40 hexadecimal characters (a git commit SHA), not a path")
+    return raw
 
 
 def resolve_workspace_root(raw: str | None) -> Path:
@@ -462,13 +478,14 @@ def validate_receipt(
 
 
 def _cmd_run(args: argparse.Namespace) -> int:
+    candidate_sha = validate_candidate_sha(args.candidate_sha)
     workspace_root = resolve_workspace_root(args.workspace_root)
     candidate_root = resolve_candidate_root(workspace_root, args.candidate_root)
     out_path = resolve_confined_output(workspace_root, args.out, label="--out")
     receipt = build_receipt(
         candidate_root=candidate_root,
         pr_number=args.pr,
-        candidate_sha=args.candidate_sha,
+        candidate_sha=candidate_sha,
         workspace_root=workspace_root,
     )
     out_path.write_text(json.dumps(receipt, indent=2, sort_keys=True), encoding="utf-8")
@@ -518,6 +535,11 @@ def _cmd_validate(args: argparse.Namespace) -> int:
     job), rather than trusting either the receipt or a self-report."""
 
     try:
+        candidate_sha = validate_candidate_sha(args.candidate_sha)
+    except ValueError as exc:
+        print(f"REPLAY VALIDATION FAILED: {exc}", file=sys.stderr)
+        return 1
+    try:
         workspace_root = resolve_workspace_root(args.workspace_root)
     except (OSError, ValueError) as exc:
         print(f"REPLAY VALIDATION FAILED: workspace root is invalid: {exc}", file=sys.stderr)
@@ -528,7 +550,7 @@ def _cmd_validate(args: argparse.Namespace) -> int:
     except (OSError, ValueError, json.JSONDecodeError) as exc:
         print(f"replay receipt is unreadable, invalid, or malformed: {exc}", file=sys.stderr)
         return 1
-    errors = validate_receipt_trusted_fields(receipt, pr_number=args.pr, candidate_sha=args.candidate_sha)
+    errors = validate_receipt_trusted_fields(receipt, pr_number=args.pr, candidate_sha=candidate_sha)
 
     try:
         digest_check_path = resolve_confined_existing(

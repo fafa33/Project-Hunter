@@ -589,6 +589,200 @@ def test_validate_cli_rejects_a_receipt_path_substituted_outside_the_workspace(t
     assert "traversal" in validate_run.stderr
 
 
+def test_run_cli_rejects_an_out_path_substituted_outside_the_workspace(tmp_path):
+    workspace = tmp_path / "workspace"
+    _candidate_root(workspace, orchestrator_src=SCENARIO_A_FIXED + SCENARIO_B_FIXED)
+
+    run = subprocess.run(
+        [
+            sys.executable,
+            str(Path(replay.__file__)),
+            "run",
+            "--workspace-root",
+            str(workspace),
+            "--candidate-root",
+            "candidate",
+            "--pr",
+            "535",
+            "--candidate-sha",
+            "a" * 40,
+            "--out",
+            "../escape-receipt.json",
+        ],
+        capture_output=True,
+        text=True,
+    )
+    assert run.returncode != 0
+    assert "traversal" in run.stderr
+    assert not (tmp_path / "escape-receipt.json").exists()
+
+
+def test_run_cli_rejects_a_candidate_root_that_escapes_a_substituted_alternate_workspace_root(tmp_path):
+    """Swapping which (legitimate, existing) directory is declared as
+    --workspace-root must not let a relative --candidate-root reach outside
+    *that* root: confinement is enforced against whichever workspace root is
+    actually given, never against some other, real one the caller has in
+    mind.
+    """
+
+    real_workspace = tmp_path / "real-workspace"
+    real_workspace.mkdir()
+    _candidate_root(real_workspace, orchestrator_src=SCENARIO_A_FIXED + SCENARIO_B_FIXED)
+    alt_workspace = tmp_path / "alt-workspace"
+    alt_workspace.mkdir()
+
+    run = subprocess.run(
+        [
+            sys.executable,
+            str(Path(replay.__file__)),
+            "run",
+            "--workspace-root",
+            str(alt_workspace),
+            "--candidate-root",
+            "../real-workspace/candidate",
+            "--pr",
+            "535",
+            "--candidate-sha",
+            "a" * 40,
+            "--out",
+            "receipt.json",
+        ],
+        capture_output=True,
+        text=True,
+    )
+    assert run.returncode != 0
+    assert "traversal" in run.stderr
+
+
+def test_verify_digests_cli_rejects_an_alternate_candidate_root_substitution(tmp_path):
+    """A caller (or a compromised validate job) that swaps in a different
+    candidate checkout than the one the receipt's digests were computed
+    against must be caught by independent recomputation, never accepted as
+    an equivalent candidate root.
+    """
+
+    receipt, _root = _good_receipt(tmp_path)
+    receipt_path = tmp_path / "receipt.json"
+    receipt_path.write_text(json.dumps(receipt), encoding="utf-8")
+    # A second, differently-sourced candidate checkout under the same
+    # workspace -- structurally valid, but not the one the receipt was built
+    # against, so its recomputed digests must not match. Built in a separate
+    # parent directory first, since _candidate_root always names its output
+    # "candidate" and the real one already occupies that name in tmp_path.
+    unrenamed_alternate_root = _candidate_root(
+        tmp_path / "alt-source",
+        orchestrator_src=SCENARIO_A_FIXED,
+        governance_src=FIXED_GOVERNANCE + "\n# alternate candidate checkout\n",
+    )
+    alternate_root = unrenamed_alternate_root.rename(tmp_path / "candidate-alternate")
+    digest_check_path = tmp_path / "digest-check.json"
+
+    run = subprocess.run(
+        [
+            sys.executable,
+            str(Path(replay.__file__)),
+            "verify-digests",
+            "--workspace-root",
+            str(tmp_path),
+            "--receipt",
+            receipt_path.name,
+            "--candidate-root",
+            alternate_root.name,
+            "--out",
+            digest_check_path.name,
+        ],
+        capture_output=True,
+        text=True,
+    )
+    assert run.returncode == 1
+    assert json.loads(digest_check_path.read_text())["errors"] != []
+
+
+@pytest.mark.parametrize(
+    "malformed_sha",
+    [
+        pytest.param("a" * 39, id="too_short"),
+        pytest.param("a" * 41, id="too_long"),
+        pytest.param("g" * 40, id="non_hex_characters"),
+        pytest.param("../../../etc/passwd", id="traversal_text"),
+        pytest.param("a" * 20 + "/etc/passwd", id="path_separator"),
+        pytest.param("a" * 30 + ";rm -rf /", id="shell_metacharacters"),
+        pytest.param("a" * 30 + "$(whoami)", id="command_substitution"),
+        pytest.param("", id="empty"),
+    ],
+)
+def test_run_cli_rejects_a_malformed_candidate_sha(tmp_path, malformed_sha):
+    root = _candidate_root(tmp_path, orchestrator_src=SCENARIO_A_FIXED + SCENARIO_B_FIXED)
+    (tmp_path / "workspace").mkdir()
+
+    run = subprocess.run(
+        [
+            sys.executable,
+            str(Path(replay.__file__)),
+            "run",
+            "--workspace-root",
+            str(tmp_path / "workspace"),
+            "--candidate-root",
+            str(root),
+            "--pr",
+            "535",
+            "--candidate-sha",
+            malformed_sha,
+            "--out",
+            "receipt.json",
+        ],
+        capture_output=True,
+        text=True,
+    )
+    assert run.returncode != 0
+    assert "40 hexadecimal" in run.stderr
+    assert not (tmp_path / "workspace" / "receipt.json").exists()
+
+
+def test_validate_cli_rejects_a_malformed_candidate_sha(tmp_path):
+    receipt, _root = _good_receipt(tmp_path)
+    receipt_path = tmp_path / "receipt.json"
+    receipt_path.write_text(json.dumps(receipt), encoding="utf-8")
+    digest_check_path = tmp_path / "digest-check.json"
+    digest_check_path.write_text(json.dumps({"errors": []}), encoding="utf-8")
+
+    validate_run = subprocess.run(
+        [
+            sys.executable,
+            str(Path(replay.__file__)),
+            "validate",
+            "--workspace-root",
+            str(tmp_path),
+            "--receipt",
+            receipt_path.name,
+            "--digest-check",
+            digest_check_path.name,
+            "--pr",
+            "535",
+            "--candidate-sha",
+            "not-a-sha",
+        ],
+        capture_output=True,
+        text=True,
+    )
+    assert validate_run.returncode == 1
+    assert "40 hexadecimal" in validate_run.stderr
+
+
+def test_validate_candidate_sha_accepts_exactly_40_hex_characters():
+    assert replay.validate_candidate_sha("a" * 40) == "a" * 40
+    assert replay.validate_candidate_sha("F" * 40) == "F" * 40
+
+
+@pytest.mark.parametrize(
+    "malformed_sha",
+    ["a" * 39, "g" * 40, "../etc/passwd", "a" * 20 + "/x", "a" * 30 + ";touch pwned"],
+)
+def test_validate_candidate_sha_rejects_anything_not_exactly_40_hex_characters(malformed_sha):
+    with pytest.raises(ValueError, match="40 hexadecimal"):
+        replay.validate_candidate_sha(malformed_sha)
+
+
 # --- 11 adversarial trust-boundary tests ------------------------------------
 
 
