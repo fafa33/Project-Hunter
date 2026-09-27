@@ -81,6 +81,9 @@ def origin_repo(tmp_path: Path) -> Path:
     _git(["config", "user.name", "Fixture"], cwd=seed)
     (seed / "docs").mkdir()
     (seed / "docs" / "DEFECT_REGISTRY.json").write_bytes(REGISTRY.read_bytes())
+    (seed / "docs" / "REVIEWER_FINDING_DISPOSITIONS.json").write_bytes(
+        Path("docs/REVIEWER_FINDING_DISPOSITIONS.json").read_bytes()
+    )
     _git(["add", "."], cwd=seed)
     _git(["commit", "-q", "-m", "seed"], cwd=seed)
     _git(["remote", "add", "origin", str(origin)], cwd=seed)
@@ -387,3 +390,92 @@ def test_propose_reconciles_an_orphaned_branch_left_by_a_failed_pr_create(origin
     assert "RECONCILED" in message
     assert recovery_recorder.pr_create_calls == 1
     assert not any("push" in call for call in recovery_recorder.calls), "reconciliation must not need a new push"
+
+
+def test_github_review_finding_is_durably_captured_even_before_classification(
+    origin_repo: Path, tmp_path: Path
+) -> None:
+    observation = {
+        "source": "github-review",
+        "provider": "github-review",
+        "event_id": "review-comment-4114624029",
+        "source_pr": 530,
+        "reviewed_head_sha": HEAD,
+        "reviewed_base_sha": BASE,
+        "source_event_head_sha": "c" * 40,
+        "reviewer": "chatgpt-codex-connector[bot]",
+        "path": "scripts/x.py",
+        "line": 9,
+        "message": "validated reviewer finding",
+        "availability": "available",
+        "classification": None,
+        "invariant": None,
+        "affected_paths": [],
+        "fix_reference": None,
+        "regression_evidence": [],
+        "claimed_family_id": None,
+    }
+    message = candidate_pr.propose(
+        pr=530,
+        head=HEAD,
+        base=BASE,
+        observations=[observation],
+        repo=str(origin_repo),
+        repo_root=tmp_path / "seed",
+        run=RecordingRun(existing_pr=None),
+    )
+    assert "OPENED" in message
+    captured = subprocess.run(
+        ["git", "show", f"{candidate_pr.DEDICATED_BRANCH}:docs/REVIEWER_FINDING_DISPOSITIONS.json"],
+        cwd=origin_repo,
+        check=True,
+        capture_output=True,
+        text=True,
+    ).stdout
+    document = json.loads(captured)
+    entry = next(item for item in document["findings"] if item["id"] == "RFD-AUTO-530-review-comment-4114624029")
+    assert entry["validation_state"] == "unvalidated"
+    assert "source_head=" + "c" * 40 in entry["source_provenance"]["reference"]
+
+
+def test_duplicate_github_review_capture_is_idempotent(origin_repo: Path, tmp_path: Path) -> None:
+    observation = {
+        "source": "github-review",
+        "provider": "github-review",
+        "event_id": "review-comment-99",
+        "source_pr": 530,
+        "reviewed_head_sha": HEAD,
+        "reviewed_base_sha": BASE,
+        "source_event_head_sha": HEAD,
+        "reviewer": "chatgpt-codex-connector[bot]",
+        "path": "x.py",
+        "line": 1,
+        "message": "finding",
+        "availability": "available",
+        "classification": None,
+        "invariant": None,
+        "affected_paths": [],
+        "fix_reference": None,
+        "regression_evidence": [],
+        "claimed_family_id": None,
+    }
+    first = candidate_pr.propose(
+        pr=530,
+        head=HEAD,
+        base=BASE,
+        observations=[observation],
+        repo=str(origin_repo),
+        repo_root=tmp_path / "seed",
+        run=RecordingRun(),
+    )
+    assert "OPENED" in first
+    second = candidate_pr.propose(
+        pr=530,
+        head=HEAD,
+        base=BASE,
+        observations=[observation],
+        repo=str(origin_repo),
+        repo_root=tmp_path / "seed",
+        run=RecordingRun(existing_pr=1),
+    )
+    assert "NO-OP" in second

@@ -36,7 +36,7 @@ channel the design doc identifies as requiring no new authorization at all.
 
 Safety properties, all verified by the accompanying regression tests:
 
-- writes only ``docs/DEFECT_REGISTRY.json``, inside a disposable worktree --
+- writes only the existing governed knowledge surfaces ``docs/DEFECT_REGISTRY.json`` and ``docs/REVIEWER_FINDING_DISPOSITIONS.json``, inside a disposable worktree --
   the caller's own checkout and working tree are never touched;
 - commits and pushes only to one fixed, dedicated branch
   (``canonicalization/defect-registry-auto``); ``main`` is never checked out
@@ -84,6 +84,7 @@ _PREFIX = "[Hunter Canonicalization Candidate PR]"
 DEDICATED_BRANCH = "canonicalization/defect-registry-auto"
 BASE_BRANCH = "main"
 REGISTRY_RELATIVE_PATH = "docs/DEFECT_REGISTRY.json"
+DISPOSITIONS_RELATIVE_PATH = "docs/REVIEWER_FINDING_DISPOSITIONS.json"
 PR_TITLE = "chore(dpm): automatic defect-registry canonicalization"
 
 #: Injectable command runner so tests never touch a real git remote or `gh`.
@@ -171,6 +172,61 @@ def compute_plan(
         )
 
 
+def capture_reviewer_findings(
+    *, observations: list[dict[str, object]], origin_bytes: bytes
+) -> tuple[bytes, tuple[str, ...]]:
+    """Append authenticated review observations as unvalidated durable findings.
+
+    Capture is deliberately weaker than validation: seeing an authority-review
+    finding is enough to make it impossible to disappear, but never enough to
+    call it confirmed/resolved.  Validation/canonicalization remains governed by
+    the existing replayable evidence path. Stable provider event identity makes
+    duplicate review events a byte-identical no-op.
+    """
+    try:
+        document = json.loads(origin_bytes)
+    except json.JSONDecodeError as exc:
+        raise CanonicalizationCandidatePrError("reviewer disposition registry is unreadable") from exc
+    findings = document.get("findings") if isinstance(document, dict) else None
+    if document.get("version") != 1 or not isinstance(findings, list):
+        raise CanonicalizationCandidatePrError("reviewer disposition registry is malformed")
+    existing = {str(item.get("id")) for item in findings if isinstance(item, dict)}
+    added: list[str] = []
+    for observation in observations:
+        if observation.get("source") != "github-review" or observation.get("provider") != "github-review":
+            continue
+        event_id = observation.get("event_id")
+        reviewer = observation.get("reviewer")
+        source_pr = observation.get("source_pr")
+        if (
+            not isinstance(event_id, str)
+            or not event_id.strip()
+            or not isinstance(reviewer, str)
+            or not reviewer.strip()
+            or type(source_pr) is not int
+        ):
+            raise CanonicalizationCandidatePrError("review finding capture evidence is malformed")
+        finding_id = f"RFD-AUTO-{source_pr}-{event_id}"
+        if finding_id in existing:
+            continue
+        source_head = observation.get("source_event_head_sha") or observation.get("reviewed_head_sha")
+        findings.append(
+            {
+                "id": finding_id,
+                "source_provenance": {
+                    "reviewer": reviewer,
+                    "pr_number": source_pr,
+                    "reference": f"GitHub authority review event {event_id}; source_head={source_head}",
+                },
+                "validation_state": "unvalidated",
+            }
+        )
+        existing.add(finding_id)
+        added.append(finding_id)
+    rendered = (json.dumps(document, indent=2, ensure_ascii=False) + "\n").encode()
+    return rendered, tuple(added)
+
+
 def _run(run: RunCommand, command: Sequence[str], *, what: str) -> str:
     try:
         completed = run(command)
@@ -215,9 +271,10 @@ def _open_candidate_pr(run: RunCommand, *, pr: int, extra_body: str) -> str:
         "`docs/superpowers/specs/2026-09-23-live-dpm-knowledge-feedback-loop-design.md`.\n\n"
         f"{extra_body}\n"
         f"- source PR: #{pr}\n\n"
-        "This PR only ever touches `docs/DEFECT_REGISTRY.json` and carries the unmodified output "
-        "of `materialize_learning_ledger`. It never self-merges; normal Hunter governance/review "
-        "and human merge approval apply."
+        "This PR only ever touches the governed knowledge surfaces `docs/DEFECT_REGISTRY.json` and "
+        "`docs/REVIEWER_FINDING_DISPOSITIONS.json`; canonical family changes carry the unmodified output "
+        "of `materialize_learning_ledger`, while raw authority-review findings are captured as unvalidated evidence. "
+        "It never self-merges; normal Hunter governance/review and human merge approval apply."
     )
     return _run(
         run,
@@ -312,6 +369,11 @@ def propose(
         )
         try:
             registry_path = worktree / REGISTRY_RELATIVE_PATH
+            dispositions_path = worktree / DISPOSITIONS_RELATIVE_PATH
+            captured_bytes, captured_ids = capture_reviewer_findings(
+                observations=observations, origin_bytes=dispositions_path.read_bytes()
+            )
+            dispositions_changed = captured_bytes != dispositions_path.read_bytes()
             plan = compute_plan(
                 pr=pr,
                 head=head,
@@ -319,7 +381,7 @@ def propose(
                 observations=observations,
                 origin_registry_bytes=registry_path.read_bytes(),
             )
-            if not plan.changed:
+            if not plan.changed and not dispositions_changed:
                 # Codex P1 (PR #530): if a *prior* run's push succeeded but it
                 # then crashed, or its own `gh` call failed, before opening a
                 # PR, the dedicated branch already carries real unmerged
@@ -343,17 +405,21 @@ def propose(
                         return f"{_PREFIX} RECONCILED: opened the missing PR for already-pushed content: {create_output.strip()}"
                 return f"{_PREFIX} NO-OP: observations produced no registry change; nothing proposed."
 
-            registry_path.write_bytes(plan.registry_bytes)
+            if plan.changed:
+                registry_path.write_bytes(plan.registry_bytes)
+            if dispositions_changed:
+                dispositions_path.write_bytes(captured_bytes)
             _run(run, ["git", "-C", str(worktree), "checkout", "-B", DEDICATED_BRANCH], what="create dedicated branch")
             _run(
                 run,
-                ["git", "-C", str(worktree), "add", "--", REGISTRY_RELATIVE_PATH],
-                what="stage registry candidate",
+                ["git", "-C", str(worktree), "add", "--", REGISTRY_RELATIVE_PATH, DISPOSITIONS_RELATIVE_PATH],
+                what="stage knowledge candidate",
             )
             message = (
                 f"chore(dpm): canonicalize {len(plan.integrated_proposal_ids)} proposal(s) from PR #{pr}\n\n"
                 f"integrated_proposal_ids={list(plan.integrated_proposal_ids)}\n"
                 f"skipped_items={plan.skipped_items}\n"
+                f"captured_finding_ids={list(captured_ids)}\n"
                 f"source_head={head}\n"
                 "Generated by scripts/hunter_canonicalization_candidate_pr.py; carries "
                 "materialize_learning_ledger's own atomic, replay-bound output unchanged."
