@@ -47,9 +47,10 @@
         "timeout_policy": {
           "bounded": true,
           "default_seconds": 300,
-          "max_seconds": 300,
+          "max_seconds": 1800,
           "retries_per_agent": 0,
-          "retry_scope": "No automatic retries. Explicit authenticated unavailability fails over immediately; silence is bounded to one reviewer timeout."
+          "retry_scope": "No automatic retries. Explicit authenticated unavailability fails over immediately; silence is bounded to one reviewer timeout.",
+          "max_seconds_rationale": "Issue #534/#536 (PR #535 live evidence): PR #529 triggered Codex at 07:47:35 and its formal review posted at 08:16:32 (~29 min); PR #530 triggered at 07:56:23 and posted at 08:17:48 (~21 min). max_seconds is the pool-wide per-agent ceiling every enabled agent's ack_timeout_seconds (for github-pr-comment triggers) and review_timeout_seconds are validated against, so it must cover Codex's slowest observed normal latency with headroom rather than the collector treating that normal latency as unavailability."
         },
         "agents": [
           {
@@ -89,11 +90,11 @@
             "retryable": false,
             "evidence_parser": "github-review-ack.v1",
             "fallback_eligibility": false,
-            "note": "Hosted fallback reviewer. Triggered immediately when the trusted local reviewer is offline/unresponsive or after its bounded review budget; exact-head authority remains supported.",
+            "note": "Hosted fallback reviewer. Triggered immediately when the trusted local reviewer is offline/unresponsive or after its bounded review budget; exact-head authority remains supported. ack_timeout_seconds equals review_timeout_seconds because Codex's own acknowledgement signal (an authored review or comment) is the same trusted evidence as its formal review -- there is no earlier, distinct delivery signal for this trigger scheme -- so a shorter ack budget would just be a second, earlier place for the same silence to be misread as unavailability.",
             "evidence": "Discovered by inspecting check-suites and PR reviews on main (commit dca20dd): installed apps are claude, freebuff-web, github-actions, railway-app, tembo, vercel; no Copilot code review, CodeRabbit, Jules, or CODEOWNERS exists on this repository.",
             "github_login": "chatgpt-codex-connector[bot]",
-            "ack_timeout_seconds": 300,
-            "review_timeout_seconds": 300
+            "ack_timeout_seconds": 1800,
+            "review_timeout_seconds": 1800
           },
           {
             "id": "copilot",

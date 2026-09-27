@@ -42,9 +42,28 @@ MAX_COLLECTOR_DISPATCHES = 3
 #: only once the cycle is older than this, so an ordinary listing lag cannot be
 #: mistaken for a dead collector and duplicate the dispatch.
 COLLECTOR_LIVENESS_GRACE_SECONDS = 180
-# One global opportunity budget across the whole reviewer chain. A completed or
-# timed-out opportunity must never leave the exact-head status pending forever.
-INDEPENDENT_REVIEW_OPPORTUNITY_SECONDS = 15 * 60
+
+
+def independent_review_opportunity_seconds() -> int:
+    """One global opportunity budget across the whole reviewer chain.
+
+    A completed or timed-out opportunity must never leave the exact-head
+    status pending forever, but the budget itself must never be a second,
+    disconnected magic number either: it is derived from the same
+    ``CODE_WRITE_POLICY.json`` reviewer pool that the collector workflow's own
+    declared lifetime is validated against (see
+    ``test_collector_workflow_lifetime_covers_the_reviewer_chain_budget``), so
+    raising or lowering any one reviewer's configured budget can never leave
+    this orchestrator-side timeout silently out of sync with what the pool
+    actually configures.
+    """
+
+    pool, error = pre_ready.load_reviewer_pool()
+    if pool is None or error:
+        raise RuntimeError(f"reviewer pool unavailable: {error}")
+    return pre_ready.reviewer_chain_worst_case_seconds(pool)
+
+
 TERMINAL_NONBLOCKING_STATES = frozenset({"REVIEW_TIMED_OUT", "REVIEWER_UNAVAILABLE", "POOL_EXHAUSTED"})
 PENDING_STATES = frozenset({"WAITING_FOR_REVIEWER", "REVIEW_IN_PROGRESS", "FAILOVER_IN_PROGRESS", "POOL_EXHAUSTED"})
 #: Issue #461 / PR #473: an exact-head cycle whose reviewers were all exhausted
@@ -733,7 +752,7 @@ def ensure_collector(
             if existing.state in {"REVIEW_CLEAR", "FINDINGS_OPEN"} | TERMINAL_NONBLOCKING_STATES:
                 return existing
             if existing.state in PENDING_STATES and _older_than(
-                existing.started_at, INDEPENDENT_REVIEW_OPPORTUNITY_SECONDS
+                existing.started_at, independent_review_opportunity_seconds()
             ):
                 terminal = ReviewCycle(
                     pr_number=existing.pr_number,
@@ -751,6 +770,42 @@ def ensure_collector(
                 return existing
         elif not remediation_generation_admissible(repository, token, existing, generation_id):
             return existing
+    elif state != "present" or existing is None:
+        # No trusted cycle status is visible for this exact head at all. That is
+        # not proof no dispatch has happened for this exact (pr, head,
+        # generation) identity: GitHub's combined-status read is not guaranteed
+        # read-your-write consistent, so a status a near-simultaneous
+        # reconciliation of the same event already posted -- or that this very
+        # process is about to post -- can still be reported absent here. The
+        # collector *run* listing is a separate, directly-queried endpoint; if
+        # it already shows a run for this exact identity, that initial dispatch
+        # has already happened and this call must converge on it rather than
+        # mint a second one. Only the branch that would otherwise mint a brand
+        # new cycle is guarded this way: an already-`present` cycle's own
+        # bounded recovery path below is unaffected and keeps deciding
+        # redispatch from `collector_needs_dispatch`, as before.
+        try:
+            liveness, _count = collector_liveness(repository, token, pr_number, head_sha, generation_id)
+        except transport.GitHubRequestError as exc:
+            # Unreadable liveness evidence is not evidence that no collector
+            # exists yet. Refusing to dispatch here, exactly as
+            # `collector_needs_dispatch` refuses to redispatch on the same
+            # unreadable evidence, leaves the candidate pending for one more
+            # reconciliation pass rather than risking a second collector for a
+            # dispatch that may already be in flight.
+            print(f"Collector liveness evidence unavailable; not dispatching: {exc}", file=sys.stderr)
+            liveness = "active"
+        if liveness != "missing":
+            return ReviewCycle(
+                pr_number=pr_number,
+                head_sha=head_sha,
+                state="WAITING_FOR_REVIEWER",
+                provider_id="",
+                trigger_id=None,
+                started_at=datetime.now(UTC).strftime("%Y-%m-%dT%H:%M:%SZ"),
+                config_digest=digest,
+                generation_id=generation_id,
+            )
 
     # Persist the dispatch identity and liveness timestamp *before* dispatch.
     # This status is the durable idempotency record: if GitHub accepts the

@@ -4,6 +4,7 @@ import pathlib
 import re
 
 import hunter_github_transport as transport
+import hunter_pre_ready_review as pre_ready
 import hunter_review_orchestrator as orchestrator
 import pytest
 import yaml
@@ -89,6 +90,7 @@ def test_ready_review_request_dispatches_collector_once(monkeypatch):
     monkeypatch.setattr(orchestrator, "reviewer_pool_config_digest", lambda: "d" * 64, raising=False)
     monkeypatch.setattr(orchestrator, "current_run_id", lambda: 123, raising=False)
     monkeypatch.setattr(orchestrator, "publish_cycle", lambda *_args, cycle: stored.update(cycle=cycle), raising=False)
+    monkeypatch.setattr(orchestrator, "collector_liveness", lambda *_args: ("missing", 0), raising=False)
     monkeypatch.setattr(
         orchestrator,
         "dispatch_collector",
@@ -101,6 +103,46 @@ def test_ready_review_request_dispatches_collector_once(monkeypatch):
 
     assert first == second
     assert stored["dispatches"] == 1
+
+
+def test_two_racing_reconcile_calls_never_double_dispatch_when_the_status_read_lags(monkeypatch):
+    """Issue #536 (PR #535 live evidence, runs 36340127965 and 36340195915).
+
+    GitHub's combined-status read (what ``read_cycle`` uses) is not guaranteed
+    read-your-write consistent: a status one reconcile execution just posted
+    can still be reported "absent" to a second, near-simultaneous execution of
+    the same event. Both here report "absent" on every call -- the worst case,
+    where the status read never catches up within the test -- so only the
+    collector *run* listing (a separate, directly-queried endpoint) can tell
+    the second caller that this exact identity has already been dispatched.
+    """
+
+    stored = {"dispatches": 0}
+    runs: list[dict] = []
+
+    monkeypatch.setattr(orchestrator, "read_cycle", lambda *_args: ("absent", None, None))
+    monkeypatch.setattr(orchestrator, "reviewer_pool_config_digest", lambda: "d" * 64, raising=False)
+    monkeypatch.setattr(orchestrator, "current_run_id", lambda: 999, raising=False)
+    monkeypatch.setattr(orchestrator, "publish_cycle", lambda *_args, **_kwargs: None, raising=False)
+
+    def dispatch_collector(_repository, _token, pr_number, head_sha, generation_id=orchestrator.BASE_GENERATION_ID):
+        stored["dispatches"] += 1
+        runs.append(_collector_run("in_progress", pr_number=pr_number, head_sha=head_sha, run_id=stored["dispatches"]))
+
+    monkeypatch.setattr(orchestrator, "dispatch_collector", dispatch_collector, raising=False)
+
+    def request_json(_repository, _token, _method, path, _payload=None):
+        assert path.startswith(f"actions/workflows/{orchestrator.COLLECTOR_WORKFLOW}/runs")
+        return {"workflow_runs": runs}
+
+    monkeypatch.setattr(orchestrator, "request_json", request_json)
+
+    first = orchestrator.ensure_collector("owner/repo", "token", 472, HEAD)
+    second = orchestrator.ensure_collector("owner/repo", "token", 472, HEAD)
+
+    assert stored["dispatches"] == 1
+    assert first.state == "WAITING_FOR_REVIEWER"
+    assert second.state == "WAITING_FOR_REVIEWER"
 
 
 def test_review_opportunity_timeout_finalizes_pending_cycle_without_redispatch(monkeypatch):
@@ -122,11 +164,41 @@ def test_review_timeout_is_terminal_and_idempotent(monkeypatch):
     assert stored["published"] == []
 
 
-def test_collector_workflow_caps_whole_review_opportunity_at_fifteen_minutes():
+def test_collector_workflow_lifetime_covers_the_reviewer_chain_budget():
+    """Issue #536: the collector's declared lifetime must not silently
+
+    contradict the reviewer budgets it is supposed to run to completion. A
+    workflow ``timeout-minutes`` shorter than the worst case every enabled
+    reviewer can spend (as ``docs/CODE_WRITE_POLICY.json`` itself configures
+    it) cancels the job mid-invocation and turns a reviewer still within its
+    own configured budget into a false "unavailable". This is the single
+    coherence check both magic numbers -- the workflow's static YAML timeout
+    and the pool's per-agent budgets -- are validated against, rather than two
+    independently hand-set figures that can drift apart again.
+    """
+
     document = yaml.safe_load(
         pathlib.Path(REPOSITORY_ROOT, ".github/workflows/hunter-reviewer-collector.yml").read_text()
     )
-    assert document["jobs"]["collect"]["timeout-minutes"] == 15
+    workflow_seconds = int(document["jobs"]["collect"]["timeout-minutes"]) * 60
+
+    pool, error = pre_ready.load_reviewer_pool()
+    assert pool is not None and not error
+    required_seconds = pre_ready.reviewer_chain_worst_case_seconds(pool)
+
+    assert workflow_seconds >= required_seconds
+
+
+def test_independent_review_opportunity_matches_the_same_canonical_budget():
+    """The orchestrator's own pending-cycle timeout must derive from the same
+
+    source as the collector workflow's lifetime, not carry its own
+    disconnected constant that can silently fall out of step with it.
+    """
+
+    pool, error = pre_ready.load_reviewer_pool()
+    assert pool is not None and not error
+    assert orchestrator.independent_review_opportunity_seconds() == pre_ready.reviewer_chain_worst_case_seconds(pool)
 
 
 def test_a_missing_run_id_refuses_before_any_collector_is_dispatched(monkeypatch):
@@ -144,6 +216,7 @@ def test_a_missing_run_id_refuses_before_any_collector_is_dispatched(monkeypatch
     monkeypatch.setattr(orchestrator, "reviewer_pool_config_digest", lambda: "d" * 64, raising=False)
     monkeypatch.setattr(orchestrator, "current_run_id", lambda: None, raising=False)
     monkeypatch.setattr(orchestrator, "publish_cycle", lambda *_args, cycle: stored.update(cycle=cycle), raising=False)
+    monkeypatch.setattr(orchestrator, "collector_liveness", lambda *_args: ("missing", 0), raising=False)
     monkeypatch.setattr(
         orchestrator,
         "dispatch_collector",
@@ -870,6 +943,7 @@ def test_dispatch_identity_and_timestamp_are_durable_before_dispatch(monkeypatch
     monkeypatch.setattr(orchestrator, "reviewer_pool_config_digest", lambda: "d" * 64)
     monkeypatch.setattr(orchestrator, "current_run_id", lambda: 777)
     monkeypatch.setattr(orchestrator, "publish_cycle", lambda *_args, cycle: published.append(cycle))
+    monkeypatch.setattr(orchestrator, "collector_liveness", lambda *_args: ("missing", 0))
 
     def accepted_then_process_dies(*_args):
         raise RuntimeError("post-acceptance transport loss")

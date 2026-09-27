@@ -1105,8 +1105,18 @@ def test_a_fallback_review_without_complete_structured_evidence_status_is_refuse
     assert "structured evidence" in verdict.reason
 
 
-def test_a_fallback_review_with_a_resolved_finding_missing_structured_evidence_is_refused() -> None:
+def test_a_fallback_review_with_a_resolved_finding_missing_structured_evidence_is_refused(monkeypatch) -> None:
     """Requirement 8 applies to every reviewer, whatever authority ran the review."""
+    _use_pool(
+        monkeypatch,
+        _pool(
+            agents=(
+                {**ALTERNATE_AGENT, "id": "copilot", "priority": 2, "retryable": False},
+                {**ALTERNATE_AGENT, "id": "gemini", "priority": 3, "retryable": False},
+                {**ALTERNATE_AGENT, "id": "groq", "priority": 4, "retryable": False},
+            )
+        ),
+    )
     finding = {"id": "F-9", "severity": "blocking", "resolution": "resolved", "evidence": "fixed it"}
     document = _review_document(authority=_authority(authority_type="hunter-guard"), findings=(finding,))
 

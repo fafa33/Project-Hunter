@@ -1709,6 +1709,61 @@
         "Issue #534 root cause 2, live evidence: after the ready_for_review trigger was added and pushed (PR #535 exact HEAD 9c02a1e8c45b80943e9c459b85ddc9668c2ed692), a manually re-run trusted Hunter Governance Review Reconcile (run 36335901035, attempt 2, against trusted main HEAD 156ed2fad8638dabc9bd1c45a4efbfece2b2d69c) completed SUCCESS but still published no orchestration cycle and dispatched no collector run for PR #535. GitHub Contents API confirmed the cause: `.hunter/pre-ready-hostile-review.json` at that exact head was a leftover review-request document from an unrelated, already-merged candidate (Issue #532's content, base_sha c25b48228f422a7a4e3e85112bd9ffdc216da849, an entirely different review_target), so `hunter_governance_review_v2.valid_current_review_request` correctly found it stale/invalid for PR #535's actual content and `ensure_current` correctly no-op'd. No PR for #535 or #532 had ever committed a review-request document that actually described its own content.",
         "Issue #534 root cause 3, live evidence: after root causes 1 and 2 were fixed and pushed (PR #535 exact HEAD c05da168545c5fa95fe300706eccaac2228fc391), hosted `Hunter Governance Review Reconcile` run 36338855130 (workflow_run trigger, path .github/workflows/hunter-governance-reconcile.yml, head_branch main) completed SUCCESS and published commit status `Hunter Review Orchestration / PR #535` = pending, description `WAITING_FOR_REVIEWER||36338855130|<config-digest>|`, at 2026-09-27T17:58:22Z -- proving the orchestration cycle genuinely existed. Twenty-six seconds later, run 36338905562 (`Hunter Merge Readiness`) still published `Independent-review authority failed: MALFORMED_REVIEW: WAITING_FOR_REVIEWER: no trusted exact-head orchestration cycle has been published`, a hard `failure` state. Traced to `hunter_merge_readiness_v2.resolve_review_authority` never handling a `pending` verification status from `hunter_governance_review_v2.verify_pre_ready_hostile_review`."
       ]
+    },
+    {
+      "id": "DFF-041",
+      "title": "reviewer-chain-timeout-not-derived-from-canonical-budget",
+      "invariant": "A reviewer opportunity budget, the collector workflow's declared lifetime, and any independent pending-cycle timeout that all govern the same ordered reviewer chain must derive from one canonical, pool-declared budget rather than duplicated, independently hand-set magic numbers; none of the three may silently fall below what the chain's own configured per-agent budgets require, and a comment-triggered reviewer's acknowledgement deadline may not be shorter than its review deadline when its only acknowledgement signal is the same evidence as its formal response.",
+      "applicability": {
+        "changed_paths": [
+          "docs/CODE_WRITE_POLICY.json",
+          "scripts/hunter_pre_ready_review.py",
+          "scripts/hunter_review_orchestrator.py",
+          ".github/workflows/hunter-reviewer-collector.yml"
+        ],
+        "rationale": "These are the four places a reviewer chain's timing lives: the pool's own per-agent ack_timeout_seconds/review_timeout_seconds and pool-wide timeout_policy.max_seconds cap; the validator in hunter_pre_ready_review.py that bounds them; the trusted orchestrator's own pending-cycle opportunity budget; and the collector workflow's static job-level timeout-minutes. Changing any one of these in isolation -- raising an agent's budget without raising the pool cap, the workflow lifetime, or the orchestrator's opportunity budget together -- reintroduces exactly this defect."
+      },
+      "prevention": {
+        "mechanism": "hunter_pre_ready_review.reviewer_chain_worst_case_seconds(pool) is the single canonical derivation: the worst-case sum of every enabled agent's review_timeout_seconds across its configured attempts, plus a named fixed orchestration-overhead constant. hunter_review_orchestrator.independent_review_opportunity_seconds() calls it directly instead of carrying its own hardcoded constant, and a structural regression test parses the collector workflow's static timeout-minutes and asserts it is not below the same computed value, so the three can never drift back out of sync. The pool validator's previously-hardcoded 300-second ack ceiling for github-pr-comment-triggered reviewers was also replaced with a derivation from the pool's own declared timeout_policy.max_seconds, removing a second, disconnected copy of the same magic number. This is the same abstract invariant DFF-034 already recorded for the issue-agent-trigger webhook retry surface (a per-request timeout must be a consumer of one shared overall budget, never its independent source); DFF-034's own applicability (the webhook retry/backoff loop) remains a separate, still-open instance (Issue #457) and is not resolved by this family.",
+        "boundary": "review"
+      },
+      "regression_evidence": [
+        "tests/test_hunter_review_orchestrator.py::test_collector_workflow_lifetime_covers_the_reviewer_chain_budget",
+        "tests/test_hunter_review_orchestrator.py::test_independent_review_opportunity_matches_the_same_canonical_budget",
+        "tests/test_code_write_policy.py::test_codex_hard_review_budget_covers_its_observed_hosted_latency",
+        "tests/test_code_write_policy.py::test_reviewer_requires_distinct_ack_and_review_budgets",
+        "tests/test_hunter_reviewer_collector.py::test_codex_policy_is_single_bounded_invocation_covering_observed_latency"
+      ],
+      "lifecycle": "regression-tested",
+      "sources": [
+        "Issue #536, PR #535 exact HEAD 0553514f411a9ef16053bce75678b5357c78d403, live evidence: docs/CODE_WRITE_POLICY.json's reviewer_pool declared codex ack_timeout_seconds=300 and review_timeout_seconds=300 (capped there by timeout_policy.max_seconds=300 and a validator-hardcoded 300-second ceiling for github-pr-comment-triggered reviewers), while Codex's own normal hosted latency on this repository is roughly 20-30 minutes: PR #529 triggered @codex review at 07:47:35, formal review posted 08:16:32 (~29 min); PR #530 triggered at 07:56:23, formal review posted 08:17:48 (~21 min). hunter_reviewer_collector.collect_attempts computes both an agent's acknowledgement deadline and its review deadline from the same start time, so equal 300-second budgets left Codex with no real time between an acknowledgement signal and completing its review; the collector accordingly failed over Codex -> Copilot -> Gemini -> Groq after ~5 minutes on live PR #535, where Gemini returned HTTP 503 and Groq HTTP 403. hunter-reviewer-collector.yml's own timeout-minutes (15) and hunter_review_orchestrator.INDEPENDENT_REVIEW_OPPORTUNITY_SECONDS (900, hardcoded independently of the pool) were already too short to let Codex's real latency complete even had its own per-agent budget alone been raised."
+      ]
+    },
+    {
+      "id": "DFF-042",
+      "title": "exact-head-initial-dispatch-not-idempotent-under-stale-status-read",
+      "invariant": "For the identity (PR number, exact HEAD, remediation generation, reviewer-pool config identity), at most one initial collector dispatch may ever be minted. The trusted commit-combined-status read the orchestrator uses to detect an already-established cycle is not guaranteed read-your-write consistent, so an 'absent' result from that read alone is never sufficient evidence that no dispatch has happened for that identity; a second, independently-queried source (the collector workflow's own run listing) must be consulted before minting a fresh dispatch, and only when both report absent may a new cycle be established. Bounded recovery of a genuinely dead prior dispatch remains governed exclusively by the existing liveness-grace/dispatch-budget mechanism and is never blocked by this check, and unreadable cross-check evidence fails closed to not dispatching rather than risking a duplicate.",
+      "applicability": {
+        "changed_paths": [
+          "scripts/hunter_review_orchestrator.py",
+          ".github/workflows/hunter-governance-reconcile.yml",
+          ".github/workflows/hunter-reviewer-collector.yml"
+        ],
+        "rationale": "hunter_review_orchestrator.ensure_collector is the sole trusted mint point for a collector dispatch, and hunter-governance-reconcile.yml is the only workflow that invokes it. Near-simultaneous or closely-spaced reconcile executions -- triggered by distinct events (a review, a review comment, a workflow_run completion, ready_for_review, the schedule) that this same workflow already reacts to -- are exactly the condition under which two calls can each observe a stale 'absent' status read for the same exact-head identity."
+      },
+      "prevention": {
+        "mechanism": "ensure_collector now cross-checks the collector run listing (collector_liveness) before minting a fresh dispatch whenever no trusted cycle status is visible at all for the requested identity (read_cycle reports anything other than a matching 'present'), converging on an already-live, dead, or completed run for that exact (pr, head, generation) identity instead of dispatching again. Unreadable liveness evidence fails closed to not dispatching, exactly as the existing collector_needs_dispatch and remediation_generation_admissible checks already fail closed on their own unreadable evidence. The pre-existing, unmodified 'present' branch -- COLLECTOR_LIVENESS_GRACE_SECONDS, MAX_COLLECTOR_DISPATCHES, collector_needs_dispatch -- continues to govern bounded recovery of a genuinely dead dispatch unaffected by this check.",
+        "boundary": "review"
+      },
+      "regression_evidence": [
+        "tests/test_hunter_review_orchestrator.py::test_two_racing_reconcile_calls_never_double_dispatch_when_the_status_read_lags",
+        "tests/test_hunter_review_orchestrator.py::test_a_failed_collector_is_redispatched_rather_than_parking_the_cycle",
+        "tests/test_hunter_review_orchestrator.py::test_ready_review_request_dispatches_collector_once"
+      ],
+      "lifecycle": "regression-tested",
+      "sources": [
+        "Issue #536, PR #535 exact HEAD 0553514f411a9ef16053bce75678b5357c78d403, live evidence: at least two Hunter Reviewer Collector runs (36340127965 and 36340195915) were dispatched for the same exact-head cycle, and the trusted orchestration status was republished with different reconcile trigger IDs for the same exact-head waiting cycle -- despite ensure_collector persisting a cycle status before every dispatch and COLLECTOR_LIVENESS_GRACE_SECONDS existing specifically to protect against GitHub listing lag -- proving GitHub's combined-status read can still report 'absent' to a second, closely-spaced reconcile execution after an earlier one had already posted its status and dispatched."
+      ]
     }
   ]
 }

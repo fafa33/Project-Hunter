@@ -428,13 +428,23 @@ def test_native_codex_wrong_head_is_not_a_response(monkeypatch):
     assert backend.response_state(POOL["agents"][0], trigger) == "blocking"
 
 
-def test_codex_policy_is_single_bounded_300_second_invocation():
+def test_codex_policy_is_single_bounded_invocation_covering_observed_latency():
+    """Codex's budget must be bounded, single-attempt, and not shorter than its
+
+    own observed normal latency (PR #529 ~29 min, PR #530 ~21 min; Issue #536).
+    ack_timeout_seconds equals review_timeout_seconds because Codex's only
+    acknowledgement signal for this trigger scheme is the same evidence as its
+    formal review -- there is no earlier, distinct delivery signal to budget
+    separately.
+    """
+
     pool, error = collector.review.load_reviewer_pool()
     assert not error and pool is not None
     codex = next(agent for agent in pool["agents"] if agent["id"] == "codex")
     assert pool["timeout_policy"]["retries_per_agent"] == 0
-    assert codex["review_timeout_seconds"] == 300
-    assert codex["ack_timeout_seconds"] == 300
+    assert codex["review_timeout_seconds"] >= 30 * 60
+    assert codex["ack_timeout_seconds"] == codex["review_timeout_seconds"]
+    assert codex["review_timeout_seconds"] <= pool["timeout_policy"]["max_seconds"]
 
 
 def test_native_codex_unavailable_response_fails_over_immediately(monkeypatch):
@@ -584,7 +594,7 @@ def test_policy_enables_server_side_gemini_and_groq_after_codex():
     assert agents[1]["trigger_method"] == "github-review-request:copilot-pull-request-reviewer[bot]"
     assert agents[2]["trigger_method"] == "api:gemini"
     assert agents[3]["trigger_method"] == "api:groq"
-    assert all(a["review_timeout_seconds"] == 300 for a in agents)
+    assert all(a["review_timeout_seconds"] == 300 for a in agents[1:])
 
 
 def test_collector_workflow_exposes_only_server_reviewer_secrets():
@@ -1127,7 +1137,8 @@ def test_canonical_pool_preserves_server_side_fallback_chain():
     assert agents[1]["trigger_method"] == "github-review-request:copilot-pull-request-reviewer[bot]"
     assert agents[2]["trigger_method"] == "api:gemini"
     assert agents[3]["trigger_method"] == "api:groq"
-    assert all(a["review_timeout_seconds"] == 300 and a["retryable"] is False for a in agents[:4])
+    assert all(a["retryable"] is False for a in agents[:4])
+    assert all(a["review_timeout_seconds"] == 300 for a in agents[1:4])
     assert pool["last_resort"] == "hunter-guard"
 
 
