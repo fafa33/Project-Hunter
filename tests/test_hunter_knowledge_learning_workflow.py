@@ -309,3 +309,38 @@ def test_unresolved_thread_cannot_be_falsely_canonicalized(monkeypatch):
     result = collector.collect("fafa33/Project-Hunter", "token", 530, head, base)
     assert result[0]["classification"] is None
     assert result[0]["claimed_family_id"] is None
+
+
+def test_collector_preserves_deleted_review_comment_from_event_payload(tmp_path, monkeypatch):
+    import json
+
+    import hunter_collect_learning_observations as collector
+
+    event = {
+        "repository": {"full_name": "fafa33/Project-Hunter"},
+        "pull_request": {"number": 530},
+        "comment": {
+            "id": 991,
+            "user": {"login": "chatgpt-codex-connector"},
+            "body": "P1 durable finding",
+            "commit_id": "a" * 40,
+            "path": "scripts/example.py",
+            "line": 7,
+        },
+    }
+    event_path = tmp_path / "event.json"
+    event_path.write_text(json.dumps(event), encoding="utf-8")
+    monkeypatch.setenv("GITHUB_EVENT_PATH", str(event_path))
+    monkeypatch.setattr(collector, "_trusted_reviewer_logins", lambda: frozenset({"chatgpt-codex-connector"}))
+    monkeypatch.setattr(collector, "_review_threads", lambda *args: {})
+
+    def request_json(repository, token, method, endpoint):
+        if "/comments?" in endpoint or "/reviews?" in endpoint:
+            return []
+        raise AssertionError(endpoint)
+
+    monkeypatch.setattr(collector.governance, "request_json", request_json)
+    observations = collector.collect("fafa33/Project-Hunter", "token", 530, "b" * 40, "c" * 40)
+    assert [item["event_id"] for item in observations] == ["review-comment-991"]
+    assert observations[0]["message"] == "P1 durable finding"
+    assert observations[0]["source_event_head_sha"] == "a" * 40

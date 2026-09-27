@@ -133,6 +133,27 @@ def collect(repository: str, token: str, pr: int, head: str, base: str) -> list[
             break
         page += 1
 
+    # The webhook payload is immutable evidence for the event that woke this
+    # collector. Current-state REST reconstruction alone is insufficient: a
+    # trusted review comment may already have been deleted by the time a queued
+    # job runs. Merge the authenticated event comment back into the scan before
+    # disposition capture so created/deleted races cannot silently erase it.
+    event_path = os.environ.get("GITHUB_EVENT_PATH") or ""
+    if event_path:
+        try:
+            with open(event_path, encoding="utf-8") as handle:
+                event = json.load(handle)
+        except (OSError, json.JSONDecodeError) as exc:
+            raise ValueError("GitHub event payload is unreadable") from exc
+        event_repo = (event.get("repository") or {}).get("full_name") if isinstance(event, dict) else None
+        event_pr = (event.get("pull_request") or {}).get("number") if isinstance(event, dict) else None
+        event_comment = event.get("comment") if isinstance(event, dict) else None
+        if event_comment is not None and event_repo == repository and event_pr == pr:
+            if not isinstance(event_comment, dict) or not isinstance(event_comment.get("id"), int):
+                raise ValueError("GitHub review-comment event evidence is malformed")
+            if not any(item.get("id") == event_comment["id"] for item in comments):
+                comments.append(event_comment)
+
     owner = repository.split("/", 1)[0]
     trusted_reviewers = _trusted_reviewer_logins()
     dispositions = _owner_replies(comments, owner)
