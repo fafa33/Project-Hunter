@@ -157,10 +157,8 @@ def test_adr_0036_accounting_row_does_not_overclaim_review_coverage() -> None:
 
     def admission_time_review_coverage(value: str) -> bool:
         marker = "review_coverage(admission_time)="
-        fields = [part.strip() for part in value.split("|")]
-        matches = [field for field in fields if marker in field]
-        assert len(matches) == 1, "the row must carry exactly one structured admission_time coverage claim"
-        claim = matches[0].split(marker, 1)[1].split()[0].rstrip(".,;")
+        assert value.count(marker) == 1, "the row must carry exactly one structured admission_time coverage declaration"
+        claim = value.split(marker, 1)[1].split()[0].rstrip(".,;|")
         assert claim in {"true", "false"}, "admission_time review coverage must be explicitly boolean"
         return claim == "true"
 
@@ -168,9 +166,14 @@ def test_adr_0036_accounting_row_does_not_overclaim_review_coverage() -> None:
 
     contradictory_row = row.replace(
         "review_coverage(admission_time)=false",
-        "review_coverage(admission_time)=true",
+        "review_coverage(admission_time)=false review_coverage(admission_time)=true",
     )
-    assert admission_time_review_coverage(contradictory_row) is True
+    try:
+        admission_time_review_coverage(contradictory_row)
+    except AssertionError:
+        pass
+    else:
+        raise AssertionError("contradictory same-cell admission_time coverage declarations must be rejected")
 
     assert "accepted no substantive architecture this audit did not already review" not in row
 
