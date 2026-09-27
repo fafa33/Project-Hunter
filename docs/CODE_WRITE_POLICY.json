@@ -287,6 +287,8 @@
       "scripts/hunter_pre_ready_review.py",
       "scripts/hunter_reviewer_collector.py",
       "scripts/hunter_review_orchestrator.py",
+      "scripts/hunter_trusted_orchestrator_replay.py",
+      "scripts/hunter_trusted_orchestrator_replay_worker.py",
       "scripts/hunter_local_reviewer.py",
       "scripts/hunter_governance_cutover_preflight.py"
     ],
