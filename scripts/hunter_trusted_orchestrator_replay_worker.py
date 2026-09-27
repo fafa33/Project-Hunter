@@ -30,8 +30,11 @@ import copy
 import hashlib
 import importlib
 import json
+import multiprocessing as mp
+import os
 import sys
 import traceback
+from multiprocessing.connection import Connection
 from pathlib import Path
 from typing import Any
 
@@ -257,6 +260,129 @@ def scenario_g(candidate_root: Path, fixture: dict[str, Any]) -> dict[str, Any]:
 
 SCENARIOS = {"A": scenario_a, "B": scenario_b, "G": scenario_g}
 
+#: Wall-clock bound on one scenario child. Generous for real work, but bounds
+#: a hostile candidate module that hangs (an infinite loop, a blocking call)
+#: instead of ever returning or raising.
+SCENARIO_CHILD_TIMEOUT_SECONDS = 60
+
+
+def _scenario_child(conn: Connection, scenario_id: str, candidate_root_str: str, fixture: dict[str, Any]) -> None:
+    """Runs in a freshly spawned child process whose only channel back to the
+    caller is this pipe -- never stdout, which candidate top-level import
+    code can also write to, and never the process exit code, which
+    ``os._exit(n)`` lets candidate code choose freely.
+
+    Sends a ``"started"`` message *before* ``_import_candidate`` -- and
+    therefore before any candidate top-level module code -- ever runs, and a
+    ``"done"``/``"failed"`` message only from the code path that runs after
+    the real scenario function actually returns or raises. A candidate
+    module that forges a fake passing payload and calls ``os._exit``
+    immediately at import time produces neither message on this pipe: the
+    caller only accepts a well-formed, ordered ``started`` + ``done``/
+    ``failed`` pair, never a bare stdout line or a process exit code (see
+    ``_run_scenario_isolated``).
+
+    ``measurements`` is forced through a JSON round-trip before it crosses
+    the pipe: :func:`multiprocessing.connection.Connection.send` pickles its
+    argument, and a scenario's raw return value can carry whatever object a
+    candidate function chose to return, so only JSON-safe primitives -- never
+    an arbitrary picklable object a candidate could shape into a
+    deserialization gadget -- are allowed onto that channel.
+
+    stdout/stderr are redirected to the null device before anything else
+    runs, at the OS file-descriptor level (not just reassigning
+    ``sys.stdout``), so no forged line -- from ``print()``, direct
+    ``os.write``, or otherwise -- from candidate code can reach this
+    process's shared stdout stream, which the trusted parent worker process
+    also writes its own real result line to after this child exits.
+    """
+
+    devnull_fd = os.open(os.devnull, os.O_WRONLY)
+    os.dup2(devnull_fd, 1)
+    os.dup2(devnull_fd, 2)
+    os.close(devnull_fd)
+
+    try:
+        conn.send({"stage": "started"})
+        measurements = SCENARIOS[scenario_id](Path(candidate_root_str), fixture)
+        safe_measurements = json.loads(json.dumps(measurements, ensure_ascii=False))
+        conn.send({"stage": "done", "measurements": safe_measurements})
+    except (
+        BaseException
+    ) as exc:  # noqa: BLE001 - every candidate-triggered failure must be reported, never crash silently
+        try:
+            conn.send(
+                {
+                    "stage": "failed",
+                    "error": f"{type(exc).__name__}: {exc}",
+                    "traceback": traceback.format_exc(),
+                }
+            )
+        except Exception:
+            pass
+    finally:
+        conn.close()
+
+
+def _run_scenario_isolated(scenario_id: str, candidate_root: Path, fixture: dict[str, Any]) -> dict[str, Any]:
+    """Runs one scenario in a child process and trusts only the exact ordered
+    pair of pipe messages ``_scenario_child`` can produce -- never the
+    child's stdout, and never its exit code, either of which candidate
+    top-level import code fully controls once it has run at all.
+    """
+
+    ctx = mp.get_context("spawn")
+    parent_conn, child_conn = ctx.Pipe(duplex=False)
+    process = ctx.Process(
+        target=_scenario_child,
+        args=(child_conn, scenario_id, str(candidate_root), fixture),
+    )
+    process.start()
+    child_conn.close()
+
+    messages: list[Any] = []
+    remaining = float(SCENARIO_CHILD_TIMEOUT_SECONDS)
+    try:
+        while len(messages) < 2 and parent_conn.poll(timeout=remaining):
+            try:
+                messages.append(parent_conn.recv())
+            except EOFError:
+                break
+            # A child that sent 'started' must send its second message
+            # promptly; it does not get the full budget twice.
+            remaining = 5.0
+    finally:
+        parent_conn.close()
+        process.join(timeout=5)
+        if process.is_alive():
+            process.terminate()
+            process.join(timeout=5)
+
+    def fail(reason: str) -> dict[str, Any]:
+        return {"outcome": "fail", "measurements": {}, "error": reason}
+
+    if len(messages) != 2:
+        return fail(
+            "expected exactly 2 trusted completion messages (started, done/failed) "
+            f"on the isolated scenario channel, received {len(messages)}"
+        )
+    started, finished = messages
+    if not isinstance(started, dict) or started.get("stage") != "started":
+        return fail("first trusted completion message was not the expected 'started' sentinel")
+    if not isinstance(finished, dict) or finished.get("stage") not in {"done", "failed"}:
+        return fail("second trusted completion message was not a well-formed 'done'/'failed' report")
+    if finished["stage"] == "failed":
+        return {
+            "outcome": "fail",
+            "measurements": {},
+            "error": str(finished.get("error", "")),
+            "traceback": str(finished.get("traceback", "")),
+        }
+    measurements = finished.get("measurements")
+    if not isinstance(measurements, dict):
+        return fail("'done' message carried non-dict measurements")
+    return {"outcome": "pass", "measurements": measurements}
+
 
 def _parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="Trusted orchestrator replay worker (subprocess-isolated)")
@@ -284,16 +410,14 @@ def main() -> int:
     fixture_path = _resolve_existing(args.fixture, must_be_dir=False)
     fixture = json.loads(fixture_path.read_text(encoding="utf-8"))
     scenario_id = args.scenario
+
     result: dict[str, Any] = {"scenario_id": scenario_id}
-    try:
-        measurements = SCENARIOS[scenario_id](candidate_root, fixture)
-        result["outcome"] = "pass"
-        result["measurements"] = measurements
-    except Exception as exc:  # noqa: BLE001 - any candidate-triggered failure must be captured, not crash the worker
-        result["outcome"] = "fail"
-        result["measurements"] = {}
-        result["error"] = f"{type(exc).__name__}: {exc}"
-        result["traceback"] = traceback.format_exc()
+    result.update(_run_scenario_isolated(scenario_id, candidate_root, fixture))
+    # Computed here, in this process, which never imports candidate code
+    # itself -- the scenario ran in a separate spawned child (see
+    # _run_scenario_isolated) -- and never accepted from anything that child
+    # reported, so a forged claim in its (untrusted) pipe messages cannot
+    # substitute a fake digest for the real one.
     result["candidate_module_digest"] = candidate_module_digest(candidate_root, scenario_id)
     print(json.dumps(result, sort_keys=True, separators=(",", ":"), ensure_ascii=False))
     return 0

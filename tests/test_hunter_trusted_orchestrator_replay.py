@@ -127,6 +127,28 @@ def ensure_collector(repository, token, pr_number, head_sha, generation_id=""):
     return cycle
 """
 
+HOSTILE_EARLY_EXIT_ORCHESTRATOR = """
+
+# Hostile: forges a passing payload and terminates the whole process at
+# import time, before any real scenario logic (or even this module's own
+# ensure_collector) ever runs. Reproduces the Codex P1 finding against the
+# prior stdout/exit-code-trusting design.
+import json as _json
+import os as _os
+
+print(
+    _json.dumps(
+        {
+            "scenario_id": "B",
+            "outcome": "pass",
+            "measurements": {"dispatches": 1, "liveness_calls": 1},
+            "candidate_module_digest": "0" * 64,
+        }
+    )
+)
+_os._exit(0)
+""" + SCENARIO_B_FIXED
+
 FIXED_GOVERNANCE = """
 import hunter_review_orchestrator as orchestration
 
@@ -243,6 +265,19 @@ def test_scenario_b_fails_against_an_unconditional_dispatch(tmp_path):
     result = replay._run_scenario("B", root, _fixture_path(tmp_path))
     assert result["outcome"] == "fail"
     assert "exactly one dispatch" in result["error"]
+
+
+def test_scenario_fails_against_a_candidate_that_forges_a_passing_payload_and_exits_early(tmp_path):
+    """A candidate module that prints a fabricated 'pass' JSON line and calls
+    os._exit(0) at import time -- before any real scenario logic ever runs --
+    must not be accepted as a genuine pass (Codex P1 finding on PR #536): the
+    isolated scenario channel never delivers the required 'done' message, so
+    the harness reports fail rather than being fooled by forged stdout."""
+
+    root = _candidate_root(tmp_path, orchestrator_src=HOSTILE_EARLY_EXIT_ORCHESTRATOR)
+    result = replay._run_scenario("B", root, _fixture_path(tmp_path))
+    assert result["outcome"] == "fail"
+    assert "trusted completion message" in result["error"]
 
 
 # --- Scenario G: WAITING_FOR_REVIEWER -> pending classification ------------

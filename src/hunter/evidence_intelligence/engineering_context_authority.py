@@ -112,10 +112,17 @@ def _is_file_leaf(path: str) -> bool:
     while ``scripts/hunter_review_orchestrator.py`` cannot mean anything
     broader than that one file. Neither caller-supplied task prose nor any
     external heuristic is consulted -- see the module docstring.
+
+    Uses the registry's own trailing-slash convention (every directory root
+    in ``docs/DEFECT_REGISTRY.json`` is written with a trailing ``/``, every
+    file entry without one), rather than inspecting the leaf name for a dot:
+    a dot-based test misclassifies dotfile directory roots like ``.github/``
+    or ``.githooks/`` as exact files (their leaf name itself starts with a
+    literal ``.``), and misclassifies an extensionless real file (a
+    ``Dockerfile`` or ``Makefile``) as a directory.
     """
 
-    leaf = path.rstrip("/").rsplit("/", 1)[-1]
-    return "." in leaf
+    return not path.endswith("/")
 
 
 def _specificity(matched_paths: list[str]) -> tuple[bool, int, int]:
@@ -285,15 +292,18 @@ class EngineeringContextAuthority:
             rendered_entries.append(max(members, key=priority))
         rendered_entries.sort(key=lambda entry: entry["id"])
 
-        # Bounded rendering: try the most detailed representation first (full
-        # detail for a family whose match names an exact file, compact for one
-        # that only matches through a directory root), then -- only if that
-        # still will not fit -- degrade in deterministic, lowest-priority-first
-        # steps. Canonical knowledge is never deleted by this: every step below
-        # is a rendering decision over the same `rendered_entries`, and a
-        # dropped entry's id is still recorded so nothing disappears silently.
+        # Bounded rendering: try full detail for every applicable entry first,
+        # regardless of whether its match was through an exact file or a
+        # directory root, and only degrade -- in deterministic,
+        # lowest-priority-first steps -- once that genuinely does not fit.
+        # A directory-matched family is never downgraded merely because it
+        # matched through a directory; it is downgraded only when the budget
+        # actually requires it, exactly like a file-matched family is.
+        # Canonical knowledge is never deleted by this: every step below is a
+        # rendering decision over the same `rendered_entries`, and a dropped
+        # entry's id is still recorded so nothing disappears silently.
         def render(entry: dict[str, Any], full: bool) -> dict[str, object]:
-            return entry["full"] if full and entry["specificity"][0] else entry["compact"]
+            return entry["full"] if full else entry["compact"]
 
         def blob_bytes(items: list[dict[str, object]]) -> int:
             ordered = sorted(items, key=lambda item: str(item["id"]))
@@ -301,11 +311,28 @@ class EngineeringContextAuthority:
 
         included = list(rendered_entries)
         elided: list[str] = []
-        rendered = [render(entry, full=True) for entry in included]
+        full_ids = {entry["id"] for entry in included}
+
+        def rendered_now() -> list[dict[str, object]]:
+            return [render(entry, entry["id"] in full_ids) for entry in included]
+
+        rendered = rendered_now()
         if blob_bytes(rendered) > budget_bytes:
-            # Tier 2: drop directory-matched (non-file-specific) entries
-            # entirely, broadest/shortest/lowest-id first, until it fits or
-            # none remain.
+            # Tier 2: downgrade directory-matched (non-file-specific) entries
+            # to compact, broadest/shortest/lowest-id first, until it fits or
+            # none of them remain full.
+            downgradable = sorted(
+                (entry for entry in included if not entry["specificity"][0]),
+                key=priority,
+            )
+            for entry in downgradable:
+                if blob_bytes(rendered) <= budget_bytes:
+                    break
+                full_ids.discard(entry["id"])
+                rendered = rendered_now()
+        if blob_bytes(rendered) > budget_bytes:
+            # Tier 3: drop directory-matched entries entirely, broadest first,
+            # until it fits or none remain.
             droppable = sorted(
                 (entry for entry in included if not entry["specificity"][0]),
                 key=priority,
@@ -314,18 +341,18 @@ class EngineeringContextAuthority:
                 if blob_bytes(rendered) <= budget_bytes:
                     break
                 included.remove(entry)
+                full_ids.discard(entry["id"])
                 elided.append(str(entry["id"]))
-                rendered = [render(item, full=True) for item in included]
+                rendered = rendered_now()
         if blob_bytes(rendered) > budget_bytes:
-            # Tier 3: only file-specific entries remain; downgrade them to
-            # compact form, least-specific first, before ever failing closed.
-            downgrade_order = sorted(included, key=priority)
-            downgraded: set[str] = set()
+            # Tier 4: only file-specific entries remain full; downgrade them
+            # to compact form, least-specific first, before failing closed.
+            downgrade_order = sorted((entry for entry in included if entry["id"] in full_ids), key=priority)
             for entry in downgrade_order:
                 if blob_bytes(rendered) <= budget_bytes:
                     break
-                downgraded.add(str(entry["id"]))
-                rendered = [render(item, full=item["id"] not in downgraded) for item in included]
+                full_ids.discard(entry["id"])
+                rendered = rendered_now()
         final_bytes = blob_bytes(rendered)
         if final_bytes > budget_bytes:
             overflow = final_bytes - budget_bytes

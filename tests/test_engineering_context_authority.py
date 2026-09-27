@@ -160,6 +160,48 @@ def test_execution_discipline_is_fixed_and_does_not_vary_with_scope_or_families(
     assert narrow["execution_discipline"] == broad["execution_discipline"]
 
 
+def test_directory_matched_family_keeps_full_detail_when_budget_easily_allows_it(tmp_path: Path) -> None:
+    """A directory-root match is not downgraded merely for matching through a
+    directory; it keeps full detail whenever the budget has room, exactly
+    like a file-specific match does (Codex P1 finding on PR #536)."""
+
+    family = _family("DFF-DIR", "scripts/")
+    authority = EngineeringContextAuthority(registry_path=_registry(tmp_path, [family]))
+
+    result = authority.compile(ENGINEERING_IMPLEMENT_TASK_KEY, scope=_scope("scripts/"))
+
+    families = cast(list[dict[str, object]], result["applicable_defect_families"])
+    assert families == [
+        {
+            "id": "DFF-DIR",
+            "title": "title-DFF-DIR",
+            "invariant": "invariant-DFF-DIR",
+            "lifecycle": "regression-tested",
+            "prevention_boundary": "review",
+        }
+    ]
+
+
+def test_dotfile_directory_root_is_classified_as_a_directory_not_a_file(tmp_path: Path) -> None:
+    """A registry root like ``.github/`` must not be treated as more specific
+
+    than it is merely because its leaf name starts with a dot (Codex P2
+    finding on PR #536): it is a directory match, downgraded before a
+    genuinely file-specific match under a constrained budget."""
+
+    dotfile_dir = _family("DFF-DOTDIR", ".github/", invariant=_LONG_INVARIANT)
+    exact_file = _family("DFF-EXACT-FILE", "scripts/hunter_x", invariant=_LONG_INVARIANT)
+    authority = EngineeringContextAuthority(registry_path=_registry(tmp_path, [dotfile_dir, exact_file]))
+    scope = _scope(".github/", "scripts/hunter_x")
+
+    result = authority.compile(ENGINEERING_IMPLEMENT_TASK_KEY, scope=scope, budget_bytes=1_200)
+
+    families = cast(list[dict[str, object]], result["applicable_defect_families"])
+    by_id = {item["id"]: item for item in families}
+    assert "invariant" not in by_id["DFF-DOTDIR"], ".github/ must be treated as a directory root, downgraded first"
+    assert "invariant" in by_id["DFF-EXACT-FILE"], "an extensionless exact file match must keep full detail"
+
+
 def test_broad_family_survives_nested_prohibition_when_permitted_surface_remains(tmp_path: Path) -> None:
     family = _family("DFF-BROAD", "src/hunter/")
     authority = EngineeringContextAuthority(registry_path=_registry(tmp_path, [family]))
