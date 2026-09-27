@@ -431,7 +431,7 @@ def test_native_codex_wrong_head_is_not_a_response(monkeypatch):
 def test_codex_policy_is_single_bounded_invocation_covering_observed_latency():
     """Codex's budget must be bounded, single-attempt, and not shorter than its
 
-    own observed normal latency (PR #529 ~29 min, PR #530 ~21 min; Issue #536).
+    own observed normal latency (PR #529 ~29 min, PR #530 ~21 min; PR #535 live evidence).
     ack_timeout_seconds equals review_timeout_seconds because Codex's only
     acknowledgement signal for this trigger scheme is the same evidence as its
     formal review -- there is no earlier, distinct delivery signal to budget

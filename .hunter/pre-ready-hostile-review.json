@@ -42,6 +42,18 @@
         "evidence": "Traced live (PR #535 exact HEAD c05da168545c5fa95fe300706eccaac2228fc391) to hunter_merge_readiness_v2.resolve_review_authority never handling a legitimate status=='pending' verification result from hunter_governance_review_v2.verify_pre_ready_hostile_review; it silently defaulted to MALFORMED_REVIEW instead of falling through to the existing review_wait_state/orchestration-state pending path. Fixed by adding one explicit 'pending' branch that classifies it as MISSING_REVIEW_AUTHORITY (the same no-authority-yet outcome a missing document already produces); no trust boundary, exact-head binding, or orchestration path changed, and no review authority is fabricated -- the candidate still cannot merge until a reviewer actually completes one.",
         "id": "AC-7",
         "verdict": "satisfied"
+      },
+      {
+        "criterion": "The Codex opportunity budget and collector/orchestrator lifetime must be internally consistent with Codex's actual observed hosted latency (~20-30 min), derived from one canonical source rather than duplicated independent magic numbers, while remaining finite and never weakening provider ordering, explicit-unavailability failover, or a substantive response's ability to prevent failover.",
+        "evidence": "docs/CODE_WRITE_POLICY.json raised codex ack_timeout_seconds/review_timeout_seconds and timeout_policy.max_seconds to 1800s (matching observed latency with headroom); hunter_pre_ready_review.reviewer_chain_worst_case_seconds(pool) is the one canonical derivation hunter_review_orchestrator.independent_review_opportunity_seconds() calls directly and the collector workflow's static timeout-minutes (47) is validated against by a new structural test, so none of the three can silently drift out of sync again. Explicit-unavailability failover (hunter_reviewer_collector._unavailable) and substantive-response-prevents-failover (response_state breaking the wait loop) are unchanged.",
+        "id": "AC-8",
+        "verdict": "satisfied"
+      },
+      {
+        "criterion": "For the identity (PR number, exact HEAD, remediation generation, reviewer-pool config identity), only one initial collector dispatch may be created; repeated/concurrent reconciliation must converge on the already-established cycle without weakening exact-head identity, collector liveness, or bounded recovery.",
+        "evidence": "ensure_collector now cross-checks the collector run listing (a separate, directly-queried endpoint from the combined-status read) before minting a fresh dispatch whenever no trusted cycle status is visible at all, converging on an already-live/dead/completed run instead of dispatching again; unreadable cross-check evidence fails closed to not dispatching. The pre-existing 'present'-cycle branch (COLLECTOR_LIVENESS_GRACE_SECONDS, MAX_COLLECTOR_DISPATCHES, collector_needs_dispatch) is completely unmodified, so bounded recovery of a genuinely dead dispatch is unaffected.",
+        "id": "AC-9",
+        "verdict": "satisfied"
       }
     ],
     "adversarial_dimensions": [
@@ -189,6 +201,21 @@
         "evidence": "Root cause 3 (this diff, live PR #535 exact HEAD c05da168545c5fa95fe300706eccaac2228fc391): after root causes 1 and 2 were both fixed and pushed, the trusted reconcile run correctly published a real 'Hunter Review Orchestration / PR #535' pending WAITING_FOR_REVIEWER cycle, but Hunter Merge Readiness still reported hard failure (MALFORMED_REVIEW). Traced to hunter_merge_readiness_v2.resolve_review_authority never handling a legitimate status=='pending' verification result, silently defaulting any non-success status to MALFORMED_REVIEW. Corrected by classifying 'pending' as MISSING_REVIEW_AUTHORITY, letting the caller's existing orchestration-state pending fallback run as designed. DFF-040's invariant, applicability, and regression_evidence updated with this live evidence; the compiled-prompt budget regression from the prior broadening was empirically re-checked (the same 3 previously-failing tests plus 238 broader SPM/engineering-context tests pass clean) since the revised invariant (657 chars) is shorter than the prior one (672 chars).",
         "family": "DFF-040",
         "outcome": "repaired"
+      },
+      {
+        "evidence": "This diff's changes to docs/CODE_WRITE_POLICY.json are limited to the reviewer_pool's timeout_policy.max_seconds, the codex agent's ack/review timeout fields, and a documentary max_seconds_rationale field; no admission-capability degrade/best-effort/silent-continuation logic (hunter_candidate_admission.py, hunter-candidate-admission.yml) is touched by this diff.",
+        "family": "DFF-038",
+        "outcome": "clear"
+      },
+      {
+        "evidence": "This diff is the correcting contribution for the newly-recorded DFF-041 (reviewer-chain-timeout-not-derived-from-canonical-budget): hunter_pre_ready_review.reviewer_chain_worst_case_seconds(pool) is now the single canonical derivation the collector workflow's timeout-minutes and hunter_review_orchestrator.independent_review_opportunity_seconds() are both validated against/derived from, proven by test_collector_workflow_lifetime_covers_the_reviewer_chain_budget and test_independent_review_opportunity_matches_the_same_canonical_budget.",
+        "family": "DFF-041",
+        "outcome": "clear"
+      },
+      {
+        "evidence": "This diff is the correcting contribution for the newly-recorded DFF-042 (exact-head-initial-dispatch-not-idempotent-under-stale-status-read): ensure_collector now cross-checks the collector run listing before minting a fresh dispatch whenever no trusted cycle status is visible, proven by test_two_racing_reconcile_calls_never_double_dispatch_when_the_status_read_lags; the pre-existing bounded dead-dispatch recovery path is unaffected, proven by the unchanged test_a_failed_collector_is_redispatched_rather_than_parking_the_cycle continuing to pass.",
+        "family": "DFF-042",
+        "outcome": "clear"
       }
     ],
     "findings": [
@@ -211,6 +238,26 @@
           "regression_test": "tests/test_exact_head_review_authority.py"
         },
         "severity": "blocking"
+      },
+      {
+        "evidence": "Live PR #535 evidence (exact HEAD 0553514f411a9ef16053bce75678b5357c78d403): Hunter invoked Codex correctly via '@codex review', but treated the absence of a response after only ~300 seconds (codex's own ack_timeout_seconds/review_timeout_seconds, both capped at the pool's timeout_policy.max_seconds of 300) as sufficient to fail over through the reviewer pool, even though Codex's own normal hosted latency on this repository is ~20-30 minutes (PR #529 ~29min, PR #530 ~21min). Hunter failed over Codex -> Copilot -> Gemini -> Groq, where Gemini returned HTTP 503 and Groq HTTP 403.",
+        "id": "F-3",
+        "resolution": "resolved",
+        "resolution_evidence": {
+          "correction": "ced1051e469f54b4be1a482260470e47deac26f5",
+          "regression_test": "tests/test_hunter_review_orchestrator.py"
+        },
+        "severity": "blocking"
+      },
+      {
+        "evidence": "Live PR #535 evidence (same exact HEAD): at least two Hunter Reviewer Collector runs (36340127965 and 36340195915) were dispatched for the same exact-head cycle, and the trusted orchestration status was republished with different reconcile trigger IDs for the same exact-head waiting cycle, despite ensure_collector persisting a cycle status before every dispatch -- because GitHub's combined-status read is not guaranteed read-your-write consistent, so a second, closely-spaced reconcile execution can still observe 'absent' after an earlier one already dispatched.",
+        "id": "F-4",
+        "resolution": "resolved",
+        "resolution_evidence": {
+          "correction": "ced1051e469f54b4be1a482260470e47deac26f5",
+          "regression_test": "tests/test_hunter_review_orchestrator.py"
+        },
+        "severity": "blocking"
       }
     ],
     "issue": "534",
@@ -222,7 +269,19 @@
         "status": "modified"
       },
       {
-        "blob_sha": "8614de226c0e241779b477748b849d81f8a9f072",
+        "blob_sha": "ca5db28c46b6763ada6abed872dfd26b9770237a",
+        "path": ".github/workflows/hunter-reviewer-collector.yml",
+        "previous_path": "",
+        "status": "modified"
+      },
+      {
+        "blob_sha": "ae60ed94b37c2805a3dcaf48d749164da3055117",
+        "path": "docs/CODE_WRITE_POLICY.json",
+        "previous_path": "",
+        "status": "modified"
+      },
+      {
+        "blob_sha": "a13b969b2aa6a281d5f261978e1eedd82bfb7617",
         "path": "docs/DEFECT_REGISTRY.json",
         "previous_path": "",
         "status": "modified"
@@ -240,8 +299,20 @@
         "status": "modified"
       },
       {
-        "blob_sha": "e7ebcad4a48fd49f21eae9b603103e781df23309",
+        "blob_sha": "4cb4e99b5d1271a422e69b81bb40804326eabb40",
+        "path": "scripts/hunter_pre_ready_review.py",
+        "previous_path": "",
+        "status": "modified"
+      },
+      {
+        "blob_sha": "c26aa98049cfb98c527c0ecfa5b92952b36a2261",
         "path": "scripts/hunter_review_orchestrator.py",
+        "previous_path": "",
+        "status": "modified"
+      },
+      {
+        "blob_sha": "d761b4b32ed4d6e91eefe8f66131d867915ee323",
+        "path": "tests/test_code_write_policy.py",
         "previous_path": "",
         "status": "modified"
       },
@@ -258,23 +329,29 @@
         "status": "modified"
       },
       {
-        "blob_sha": "b7055dfe2163dbbe8443f3e0e2e9a302c6e3564b",
+        "blob_sha": "abc6d394feab5ad226cc14d7bfb9142e9dc60dce",
         "path": "tests/test_hunter_review_orchestrator.py",
         "previous_path": "",
         "status": "modified"
       },
       {
-        "blob_sha": "f59c51b8d10bf5125e71b79bdd6e1e3785314947",
+        "blob_sha": "5701a4108798125fded387dd425ff610b3101997",
+        "path": "tests/test_hunter_reviewer_collector.py",
+        "previous_path": "",
+        "status": "modified"
+      },
+      {
+        "blob_sha": "433d28ba4438ac40543a5716851b8ba5a792972d",
         "path": "tests/test_issue_412_prevention_gate.py",
         "previous_path": "",
         "status": "modified"
       }
     ],
-    "review_target_digest": "253f38b95971822fc3e6ecad02e5ff55a92c0142d42c89b9e2d38f766127b13f"
+    "review_target_digest": "4a87e26f0adf59caa44dd59006c3ebf7debb495be953ef7486e5f2319108e47b"
   },
-  "review_id": "f468eb9e6c4650476f2983f73ef05d18886b263f6c847f4a84720714ae33667b",
+  "review_id": "74c2de61a2e123b27bdbbd97dfc55922a4ab8ccf893ef5407bf79232b69d3621",
   "review_request": {
-    "claims_id": "f468eb9e6c4650476f2983f73ef05d18886b263f6c847f4a84720714ae33667b",
+    "claims_id": "74c2de61a2e123b27bdbbd97dfc55922a4ab8ccf893ef5407bf79232b69d3621",
     "schema": "hunter.review-request.v1"
   },
   "schema": "hunter.pre-ready-hostile-review.v1"

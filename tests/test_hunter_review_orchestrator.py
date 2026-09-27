@@ -106,7 +106,7 @@ def test_ready_review_request_dispatches_collector_once(monkeypatch):
 
 
 def test_two_racing_reconcile_calls_never_double_dispatch_when_the_status_read_lags(monkeypatch):
-    """Issue #536 (PR #535 live evidence, runs 36340127965 and 36340195915).
+    """PR #535 live evidence (runs 36340127965 and 36340195915).
 
     GitHub's combined-status read (what ``read_cycle`` uses) is not guaranteed
     read-your-write consistent: a status one reconcile execution just posted
@@ -165,7 +165,7 @@ def test_review_timeout_is_terminal_and_idempotent(monkeypatch):
 
 
 def test_collector_workflow_lifetime_covers_the_reviewer_chain_budget():
-    """Issue #536: the collector's declared lifetime must not silently
+    """PR #535 live evidence: the collector's declared lifetime must not silently
 
     contradict the reviewer budgets it is supposed to run to completion. A
     workflow ``timeout-minutes`` shorter than the worst case every enabled

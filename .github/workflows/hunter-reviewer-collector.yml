@@ -45,7 +45,7 @@ jobs:
     # Global independent-review opportunity budget. Completion triggers trusted
     # reconcile, which finalizes timeout/unavailability without blocking.
     #
-    # Issue #536: this must never be shorter than the worst case every enabled
+    # PR #535 live evidence: this must never be shorter than the worst case every enabled
     # reviewer in docs/CODE_WRITE_POLICY.json's reviewer_pool can spend before
     # the collector moves on (each agent's review_timeout_seconds, summed in
     # priority order) plus this job's own checkout/publish overhead --

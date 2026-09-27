@@ -321,7 +321,7 @@ def test_local_ollama_is_triage_only_and_disabled_without_health_admission() -> 
 
 
 def test_codex_hard_review_budget_covers_its_observed_hosted_latency() -> None:
-    """Issue #536 (PR #535 live evidence): a 5-minute budget silently failed
+    """PR #535 live evidence: a 5-minute budget silently failed
 
     over Codex before its own normal ~20-30 minute hosted latency (PR #529
     ~29 min, PR #530 ~21 min) could ever complete. The budget is still hard
