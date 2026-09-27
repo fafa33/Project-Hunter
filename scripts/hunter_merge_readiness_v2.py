@@ -484,6 +484,43 @@ def evaluate(observation: ReadinessObservation) -> Decision:
     )
 
 
+@dataclass(frozen=True)
+class CompletionVerdict:
+    """The authoritative answer to "is this candidate actually done".
+
+    A worker session's own narrative -- a final report declaring success, a
+    pushed commit, an opened PR, a passed local preflight -- carries no
+    completion authority by itself. This function is that authority: it
+    always re-derives the verdict from current hosted state via the same
+    `evaluate()` Merge Readiness already uses, so a worker cannot make a
+    mission "done" merely by asserting it, and repeating the assertion changes
+    nothing about the verdict. There is deliberately no `claimed_done`
+    parameter: completion cannot depend on self-report, so accepting one as
+    an input this function then ignores would invite exactly the confusion
+    this exists to prevent.
+    """
+
+    accepted: bool
+    state: str
+    reason: str
+
+
+def evaluate_completion_claim(observation: ReadinessObservation) -> CompletionVerdict:
+    """Independently evaluate whether a candidate is genuinely complete.
+
+    Reuses `evaluate()` unchanged -- this is not a second readiness
+    definition, only a named entry point that makes "is this actually done"
+    directly askable without inlining Merge Readiness's own decision logic
+    at every call site that needs a completion answer rather than a status
+    string.
+    """
+
+    decision = evaluate(observation)
+    if decision.state == "success":
+        return CompletionVerdict(True, "COMPLETION_ACCEPTED", decision.description)
+    return CompletionVerdict(False, "COMPLETION_REJECTED", decision.description)
+
+
 def decide(pr_number: int) -> tuple[str, Decision] | None:
     pr = request_json("GET", f"pulls/{pr_number}")
     if not isinstance(pr, dict) or pr.get("state") != "open":

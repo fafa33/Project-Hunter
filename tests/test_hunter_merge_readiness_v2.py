@@ -388,3 +388,82 @@ def test_ordinary_workflow_completion_without_association_uses_exact_head(monkey
     )
 
     assert core.candidate_prs() == (501,)
+
+
+# --- Completion authority: a worker's self-report is never the source of truth ---
+#
+# These prove the "premature agent completion" failure mode is already
+# structurally prevented by this controller: `evaluate_completion_claim`
+# re-derives its verdict from current hosted state every time, so nothing an
+# agent asserts (a final report, a pushed commit, a passed local preflight, an
+# opened PR) can make a candidate COMPLETION_ACCEPTED on its own.
+
+
+def _green_observation() -> core.StaticReadinessObservation:
+    return core.StaticReadinessObservation(
+        check_runs=tuple(_green_check(name, index) for index, name in enumerate(core.REQUIRED_CHECKS, start=1)),
+    )
+
+
+def test_worker_says_done_while_required_checks_are_red_is_rejected():
+    runs = [_green_check(name, index) for index, name in enumerate(core.REQUIRED_CHECKS, start=1)]
+    runs[0] = {**runs[0], "conclusion": "failure"}
+    observation = core.StaticReadinessObservation(check_runs=tuple(runs))
+
+    verdict = core.evaluate_completion_claim(observation)
+
+    assert verdict.accepted is False
+    assert verdict.state == "COMPLETION_REJECTED"
+    assert "failed" in verdict.reason.lower()
+
+
+def test_worker_says_done_while_pr_is_still_draft_is_rejected():
+    """A Draft PR is the concrete, current-state form of "the review/readiness
+    opportunity is still pending" this controller already gates on: it is not
+    merge-ready no matter what any agent claims about it in the meantime."""
+
+    observation = core.StaticReadinessObservation(
+        draft=True,
+        check_runs=tuple(_green_check(name, index) for index, name in enumerate(core.REQUIRED_CHECKS, start=1)),
+    )
+
+    verdict = core.evaluate_completion_claim(observation)
+
+    assert verdict.accepted is False
+    assert verdict.state == "COMPLETION_REJECTED"
+    assert "Draft" in verdict.reason
+
+
+def test_worker_says_done_with_unresolved_validated_finding_is_rejected(tmp_path, monkeypatch):
+    dispositions = tmp_path / "REVIEWER_FINDING_DISPOSITIONS.json"
+    dispositions.write_text(
+        '{"findings": [{"id": "RFD-1", "validation_state": "validated", "resolution_state": "unresolved"}]}',
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(core, "REVIEWER_DISPOSITIONS_PATH", dispositions)
+
+    verdict = core.evaluate_completion_claim(_green_observation())
+
+    assert verdict.accepted is False
+    assert verdict.state == "COMPLETION_REJECTED"
+    assert "RFD-1" in verdict.reason
+
+
+def test_exact_head_with_all_required_evidence_satisfied_is_accepted():
+    verdict = core.evaluate_completion_claim(_green_observation())
+
+    assert verdict.accepted is True
+    assert verdict.state == "COMPLETION_ACCEPTED"
+
+
+def test_completion_verdict_does_not_depend_on_a_self_reported_claim():
+    """There is no `claimed_done` input at all: calling the same observation
+    twice, as any real caller would whether or not a worker claims completion,
+    must produce the identical verdict -- self-report cannot move this."""
+
+    observation = _green_observation()
+
+    first = core.evaluate_completion_claim(observation)
+    second = core.evaluate_completion_claim(observation)
+
+    assert first == second == core.CompletionVerdict(True, "COMPLETION_ACCEPTED", first.reason)

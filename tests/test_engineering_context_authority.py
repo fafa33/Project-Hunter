@@ -117,6 +117,19 @@ def test_compiled_context_carries_the_no_repository_rediscovery_execution_rule(t
     assert "concrete evidence" in joined
 
 
+def test_compiled_context_forbids_self_declared_completion(tmp_path: Path) -> None:
+    """Prevention-of-premature-completion invariant: reachable from a fresh agent
+    session before it ever gets to declare anything "done"."""
+
+    authority = EngineeringContextAuthority(registry_path=_registry(tmp_path, [_family("DFF-018")]))
+    context = authority.compile(ENGINEERING_IMPLEMENT_TASK_KEY, scope=_scope("src/hunter/", "scripts/"))
+
+    joined = " ".join(cast(list[str], context["execution_discipline"])).lower()
+    assert "does not itself complete a mission" in joined
+    assert "immutable to the agent" in joined
+    assert "evaluate_completion_claim" in joined
+
+
 def test_execution_discipline_is_fixed_and_does_not_vary_with_scope_or_families(tmp_path: Path) -> None:
     path = _registry(tmp_path, [_family("DFF-001", "src/hunter/"), _family("DFF-002", "scripts/")])
     authority = EngineeringContextAuthority(registry_path=path)

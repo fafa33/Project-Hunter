@@ -48,7 +48,19 @@ EXECUTION_DISCIPLINE_RULES: tuple[str, ...] = (
     "Do not run the full test suite for reassurance; verify this task with " "focused, scoped checks.",
     "Expanding scope beyond scope_allowed_paths above requires concrete "
     "evidence that the current scope is insufficient, not a preference for "
-    "more context.",
+    "more context; state the evidence, the exact additional scope, and its "
+    "expected cost before acting on it, never after.",
+    "Acceptance criteria and mission scope are immutable to the agent: an "
+    "agent may not silently omit, defer, reinterpret, or narrow a criterion "
+    "it was given. A completion report that does so is not authoritative -- "
+    "only Hunter's own current-state controllers are.",
+    "An agent's own claim of completion, a final report, a passed local "
+    "preflight, a pushed commit, or an opened pull request does not itself "
+    "complete a mission. Completion is decided only by Hunter's independent, "
+    "current-state evaluation of the exact HEAD (for example Hunter Merge "
+    "Readiness's evaluate()/evaluate_completion_claim(), and the governing "
+    "Issue's acceptance-criteria coverage check in hunter_pre_ready_review.py) "
+    "-- never by what the agent asserts about its own work.",
 )
 
 CANONICAL_DEFECT_LIFECYCLES = frozenset(
