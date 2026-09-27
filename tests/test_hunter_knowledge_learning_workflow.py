@@ -179,6 +179,10 @@ def test_automatic_canonicalization_uses_existing_local_git_push_without_token_w
     assert "pull-requests: read" in text
     assert "contents: write" not in text
     assert "pull-requests: write" not in text
+    assert "pull_request_review_thread:" in text
+    assert "types: [resolved]" in text
+    assert "path: reviewed-pr" in text
+    assert "HUNTER_REGRESSION_ROOT: ${{ github.workspace }}/reviewed-pr" in text
     assert "git@github.com:${REPOSITORY}.git" in text
     assert "core.hooksPath .githooks" in text
     assert "gh pr merge" not in text

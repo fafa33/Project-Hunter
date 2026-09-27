@@ -123,3 +123,12 @@ def test_reused_provider_event_id_with_changed_evidence_is_rejected_after_first_
     changed_proposal = KnowledgeExtractionAuthority(updated).extract(changed_finding)
     with pytest.raises(CanonicalIntegrationError, match="event identity"):
         CanonicalIntegrationAuthority().integrate(changed_proposal, first.registry_bytes)
+
+
+def test_regression_target_can_resolve_from_explicit_reviewed_head_root(tmp_path: Path) -> None:
+    root = tmp_path / "reviewed-head"
+    target = root / "tests" / "test_new_regression.py"
+    target.parent.mkdir(parents=True)
+    target.write_text("def test_new_regression():\n    pass\n", encoding="utf-8")
+    authority = CanonicalIntegrationAuthority(regression_root=root)
+    authority._validate_regression_target("tests/test_new_regression.py::test_new_regression")

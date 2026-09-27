@@ -5,6 +5,7 @@ from __future__ import annotations
 import ast
 import hashlib
 import json
+import os
 from dataclasses import dataclass
 from pathlib import Path
 from tempfile import TemporaryDirectory
@@ -30,6 +31,10 @@ class CanonicalIntegrationResult:
 
 class CanonicalIntegrationAuthority:
     """Integrate only replay-proven existing-family evidence; never persist it."""
+
+    def __init__(self, regression_root: Path | None = None) -> None:
+        configured = os.environ.get("HUNTER_REGRESSION_ROOT")
+        self._regression_root = regression_root or (Path(configured) if configured else Path("."))
 
     def already_integrated(self, proposal: KnowledgeExtractionProposal, registry_bytes: bytes) -> bool:
         """Return whether this exact accepted event is already canonical.
@@ -122,13 +127,13 @@ class CanonicalIntegrationAuthority:
             if isinstance(source, str) and marker in source and current not in source:
                 raise CanonicalIntegrationError("provider event identity is already bound to different evidence")
 
-    @staticmethod
-    def _validate_regression_target(reference: str) -> None:
+    def _validate_regression_target(self, reference: str) -> None:
         path_text, separator, node = reference.partition("::")
         if not separator or not path_text or not node:
             raise CanonicalIntegrationError("regression evidence must be a resolvable pytest target")
-        path = Path(path_text)
-        if path.is_absolute() or ".." in path.parts or not path.is_file() or path.suffix != ".py":
+        relative = Path(path_text)
+        path = self._regression_root / relative
+        if relative.is_absolute() or ".." in relative.parts or not path.is_file() or path.suffix != ".py":
             raise CanonicalIntegrationError("regression evidence target is invalid")
         try:
             tree = ast.parse(path.read_text(encoding="utf-8"))
