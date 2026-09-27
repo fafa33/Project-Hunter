@@ -266,10 +266,23 @@ def _parser() -> argparse.ArgumentParser:
     return parser
 
 
+def _resolve_existing(raw: str, *, must_be_dir: bool) -> Path:
+    """Fail closed on a nonexistent path rather than passing an unvalidated
+    argv string on to import machinery or file reads."""
+
+    resolved = Path(raw).resolve(strict=True)
+    if must_be_dir and not resolved.is_dir():
+        raise ValueError(f"{raw!r} does not resolve to a directory")
+    if not must_be_dir and not resolved.is_file():
+        raise ValueError(f"{raw!r} does not resolve to a file")
+    return resolved
+
+
 def main() -> int:
     args = _parser().parse_args()
-    candidate_root = Path(args.candidate_root).resolve()
-    fixture = json.loads(Path(args.fixture).read_text(encoding="utf-8"))
+    candidate_root = _resolve_existing(args.candidate_root, must_be_dir=True)
+    fixture_path = _resolve_existing(args.fixture, must_be_dir=False)
+    fixture = json.loads(fixture_path.read_text(encoding="utf-8"))
     scenario_id = args.scenario
     result: dict[str, Any] = {"scenario_id": scenario_id}
     try:

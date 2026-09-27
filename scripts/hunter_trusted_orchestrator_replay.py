@@ -133,7 +133,22 @@ def _isolated_env() -> dict[str, str]:
     return env
 
 
+def resolve_candidate_root(raw: str) -> Path:
+    """Resolve and validate a candidate-root argument before it reaches any
+    subprocess argv or file read. ``strict=True`` fails closed on a
+    nonexistent path rather than silently accepting an arbitrary string, and
+    the directory check rejects a path that resolves to something else.
+    """
+
+    candidate_root = Path(raw).resolve(strict=True)
+    if not candidate_root.is_dir():
+        raise ValueError(f"--candidate-root {raw!r} does not resolve to a directory")
+    return candidate_root
+
+
 def _run_scenario(scenario_id: str, candidate_root: Path, fixture_path: Path) -> dict[str, Any]:
+    if scenario_id not in REQUIRED_SCENARIO_IDS:
+        raise ValueError(f"scenario_id {scenario_id!r} is not one of the canonical {REQUIRED_SCENARIO_IDS}")
     started = datetime.now(UTC)
     process = subprocess.run(
         [
@@ -314,7 +329,7 @@ def validate_receipt(
 
 def _cmd_run(args: argparse.Namespace) -> int:
     receipt = build_receipt(
-        candidate_root=Path(args.candidate_root).resolve(),
+        candidate_root=resolve_candidate_root(args.candidate_root),
         pr_number=args.pr,
         candidate_sha=args.candidate_sha,
     )
@@ -329,9 +344,14 @@ def _cmd_validate(args: argparse.Namespace) -> int:
     except (OSError, json.JSONDecodeError) as exc:
         print(f"replay receipt is unreadable or malformed: {exc}", file=sys.stderr)
         return 1
+    try:
+        candidate_root = resolve_candidate_root(args.candidate_root)
+    except (OSError, ValueError) as exc:
+        print(f"REPLAY VALIDATION FAILED: candidate root is invalid: {exc}", file=sys.stderr)
+        return 1
     errors = validate_receipt(
         receipt,
-        candidate_root=Path(args.candidate_root).resolve(),
+        candidate_root=candidate_root,
         pr_number=args.pr,
         candidate_sha=args.candidate_sha,
     )
