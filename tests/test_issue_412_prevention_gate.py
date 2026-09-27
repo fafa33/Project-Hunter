@@ -2504,6 +2504,61 @@ def test_pre_push_reports_ready_only_when_issue_criteria_are_covered(monkeypatch
     assert captured["issue_criteria"] == ("one canonical criterion",)
 
 
+def test_missing_review_request_state_names_the_command_to_start_it(monkeypatch, capsys) -> None:
+    """Issue #534, root cause 2: PR #535 lived in this exact state.
+
+    A foreign/stale review-request document left over from an unrelated,
+    already-merged PR reports ``missing`` here -- content-bound identity, not
+    presence, decides validity. Nothing regenerates a review request
+    automatically (``require_current_review_request_if_present`` is a
+    documented no-op), so a candidate can sit in this state indefinitely with
+    only this NOTE as a signal. The NOTE must therefore name the exact command
+    that starts a reviewer opportunity, not just describe the symptom.
+    """
+    monkeypatch.setattr(provenance, "resolve_governed_base", lambda _head, **_kwargs: BASE)
+    monkeypatch.setattr(hunter_pre_push, "_governing_issue_criteria", lambda _updates: ("534", (), ""))
+    monkeypatch.setattr(
+        hunter_pre_push.review,
+        "verify_local",
+        lambda *_a, **_k: review.ReviewVerdict(
+            "missing", "a review request is not completed exact-head review authority"
+        ),
+    )
+
+    hunter_pre_push.report_pre_ready_review_state(HEAD, ())
+    out = capsys.readouterr().out
+
+    assert "optional external review is missing" in out
+    assert "does not block push or deterministic merge authority" in out
+    assert "hunter_pre_ready_review.py --request" in out
+    assert "nothing regenerates it automatically" in out
+
+
+def test_stale_review_request_state_does_not_carry_the_missing_only_hint(monkeypatch, capsys) -> None:
+    """The paired negative: a stale (not missing) review carries no false hint.
+
+    A stale review already exists and is content-bound to older/different
+    content; re-running ``--request`` is not what a stale review needs (a
+    fresh valid one is), so the ``missing``-specific actionable text must not
+    be attached to a different verdict state.
+    """
+    monkeypatch.setattr(provenance, "resolve_governed_base", lambda _head, **_kwargs: BASE)
+    monkeypatch.setattr(hunter_pre_push, "_governing_issue_criteria", lambda _updates: ("534", (), ""))
+    monkeypatch.setattr(
+        hunter_pre_push.review,
+        "verify_local",
+        lambda *_a, **_k: review.ReviewVerdict(
+            "stale", "the pre-ready hostile review digest does not bind this candidate's content"
+        ),
+    )
+
+    hunter_pre_push.report_pre_ready_review_state(HEAD, ())
+    out = capsys.readouterr().out
+
+    assert "optional external review is stale" in out
+    assert "hunter_pre_ready_review.py --request" not in out
+
+
 # --------------------------------------------------------------------------
 # PR #443 follow-up: local pre-push divergences from hosted Candidate Admission.
 # The local boundary derived the criteria repository by preferring the fork,

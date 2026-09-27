@@ -232,6 +232,23 @@ def test_hook_installer_owns_repository_hooks_path() -> None:
     assert '"git", "config", "core.hooksPath", HOOKS_PATH' in text
 
 
+def test_require_current_review_request_if_present_is_intentionally_a_no_op() -> None:
+    """DFF-031 correction: this function has never blocked a push, by design.
+
+    Every other reference to this function in the test suite stubs it out, so
+    nothing ever exercised its real body -- which is how DEFECT_REGISTRY.json
+    carried a false "blocked at pre-push" claim for it since PR #485. Blocking
+    here would also contradict this module's own stated boundary (module
+    docstring: it owns only defects a history rewrite would be needed to fix
+    after publication; a stale review request is always forward-fixable by an
+    ordinary next commit, so it belongs to the downstream content-binding
+    check in hunter_pre_ready_review.verify_review_request, not here). This
+    locks the honest contract down so a future registry entry cannot silently
+    overclaim it again.
+    """
+    hunter_pre_push.require_current_review_request_if_present("a" * 40, [])
+
+
 def test_repository_derivation_prefers_canonical_upstream_over_the_fork(monkeypatch) -> None:
     """Fork workflow: origin names the fork, upstream the canonical base.
 

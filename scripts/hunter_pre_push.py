@@ -371,18 +371,24 @@ def _governing_issue_criteria(updates: Iterable[tuple[str, str, str]]) -> tuple[
 
 
 def require_current_review_request_if_present(head_sha: str, updates: Iterable[tuple[str, str, str]]) -> None:
-    """Do not make optional external-review freshness a push prerequisite.
+    """Do not make review-request freshness a push prerequisite.
 
-    Exact-head review requests remain useful defense-in-depth evidence, but a
-    stale/missing request is regenerated opportunistically by trusted review
-    orchestration. Provider/request availability must never deadlock code push
-    or deterministic merge authority.
+    A missing or stale review-request document must never deadlock code push
+    or deterministic merge authority. Issue #534 (root cause 2): nothing in
+    this repository auto-generates or regenerates a review-request document --
+    `hunter_review_orchestrator.ensure_current` only ever consumes an existing
+    valid one, it never produces one. The contributor commits it via
+    `python scripts/hunter_pre_ready_review.py --request`, and until that
+    lands at the exact head, trusted review orchestration has nothing valid to
+    act on: no orchestration cycle can be published and the reviewer
+    opportunity cannot start. `report_pre_ready_review_state` below prints an
+    actionable NOTE for exactly this state; nothing here blocks the push.
     """
     return
 
 
 def report_pre_ready_review_state(head_sha: str, updates: Iterable[tuple[str, str, str]]) -> None:
-    """Report optional external-review freshness without gating a push."""
+    """Report review-request/review freshness without gating a push."""
     try:
         base = provenance.resolve_governed_base(head_sha)
         _issue, issue_criteria, _criteria_reason = _governing_issue_criteria(updates)
@@ -392,11 +398,18 @@ def report_pre_ready_review_state(head_sha: str, updates: Iterable[tuple[str, st
         return
     if verdict.ok:
         print(f"[Hunter Pre-Push] OPTIONAL-REVIEW-CURRENT: {verdict.reason}")
-    else:
-        print(
-            f"[Hunter Pre-Push] NOTE: optional external review is {verdict.state} ({verdict.reason}); "
-            "this does not block push or deterministic merge authority."
-        )
+        return
+    actionable = (
+        " Once this candidate is Ready for Review, no reviewer opportunity can start until a review "
+        "request for this exact head is committed (python scripts/hunter_pre_ready_review.py --request "
+        "<judgement.json> --issue <N> --base <base-sha>); nothing regenerates it automatically."
+        if verdict.state == "missing"
+        else ""
+    )
+    print(
+        f"[Hunter Pre-Push] NOTE: optional external review is {verdict.state} ({verdict.reason}); "
+        f"this does not block push or deterministic merge authority.{actionable}"
+    )
 
 
 def enforce_pre_push(lines: Iterable[str]) -> int:

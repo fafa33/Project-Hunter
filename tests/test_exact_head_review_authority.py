@@ -1435,6 +1435,64 @@ def test_review_request_is_content_bound_without_committed_authority(monkeypatch
     assert document["claims"]["review_target"] == [change.document() for change in CANDIDATE_CHANGES]
 
 
+def _request_judgement(*, families: tuple[str, ...] = ("DFF-010", "DFF-013")) -> dict[str, Any]:
+    return {
+        "acceptance_criteria": [
+            {"id": "AC-1", "criterion": "the gate blocks Ready", "verdict": "satisfied", "evidence": "this suite"}
+        ],
+        "adversarial_dimensions": list(review.REQUIRED_ADVERSARIAL_DIMENSIONS),
+        "defect_families": [{"family": name, "outcome": "clear", "evidence": "swept"} for name in families],
+        "findings": [],
+    }
+
+
+def test_a_foreign_review_request_document_is_rejected_for_a_different_candidate(monkeypatch) -> None:
+    """Issue #534, root cause 2, live: PR #535's exact failure.
+
+    A `.hunter/pre-ready-hostile-review.json` request left committed by an
+    unrelated, already-merged PR (base/content it does not describe) is found
+    at the current exact head -- the file's mere presence proves nothing;
+    content binding does. `hunter_review_orchestrator.ensure_current` reached
+    exactly this verdict for PR #535 and correctly did not dispatch a
+    collector cycle: this is the fail-closed behaviour proven here directly,
+    not a defect.
+    """
+    foreign_base = "9" * 40
+    foreign_changes = (_change("docs/unrelated-file.md", "8" * 40, "added"),)
+    monkeypatch.setattr(review, "local_changes", lambda *_a, **_k: foreign_changes)
+    foreign_document = review.prepare_request(
+        issue="532", base=foreign_base, head=HEAD, base_ref="main", judgement=_request_judgement(families=())
+    )
+
+    verdict = review.verify_review_request(
+        foreign_document, base_sha=BASE, changes=CANDIDATE_CHANGES, families=FAMILIES, head_sha=HEAD
+    )
+
+    assert verdict.ok is False
+    assert verdict.state == "stale"
+
+
+def test_a_freshly_prepared_review_request_bound_to_the_current_candidate_is_valid(monkeypatch) -> None:
+    """The paired positive and the fix: a request prepared for THIS candidate.
+
+    `hunter_pre_ready_review.py --request` -- run once by the contributor
+    before the PR reaches Ready -- produces exactly this document shape.
+    Once committed at the exact head, the same `verify_review_request` call
+    `valid_current_review_request` makes finds it valid, which is what lets
+    `ensure_current` proceed to `ensure_collector` instead of no-op'ing.
+    """
+    monkeypatch.setattr(review, "local_changes", lambda *_a, **_k: CANDIDATE_CHANGES)
+    document = review.prepare_request(
+        issue="534", base=BASE, head=HEAD, base_ref="main", judgement=_request_judgement()
+    )
+
+    verdict = review.verify_review_request(
+        document, base_sha=BASE, changes=CANDIDATE_CHANGES, families=FAMILIES, head_sha=HEAD
+    )
+
+    assert verdict.ok is True, verdict.reason
+
+
 def _fallback_pool(login: str = "fafa33") -> dict[str, Any]:
     return {**_pool(), "last_resort_github_login": login}
 
