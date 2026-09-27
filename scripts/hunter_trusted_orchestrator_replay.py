@@ -54,55 +54,42 @@ import json
 import re
 import subprocess
 import sys
+from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
 ROOT = Path(__file__).resolve().parents[1]
 WORKER_PATH = ROOT / "scripts" / "hunter_trusted_orchestrator_replay_worker.py"
+DEFINITION_PATH = ROOT / "scripts" / "hunter_trusted_orchestrator_replay_definition.json"
+#: Every file whose content the privileged publish workflow must be able to
+#: independently re-derive `trusted_harness_definition_digest` from -- by
+#: fetching each one's raw bytes as inert data via the read-only GitHub
+#: Contents API, never by checking out or executing repository code (see
+#: hunter-trusted-orchestrator-replay-publish.yml). The scenario invariants
+#: and fixture live in DEFINITION_PATH specifically so that publisher can
+#: obtain their actual values the same inert way, instead of duplicating
+#: them as a second, hand-maintained literal copy inside the workflow file.
 TRUSTED_DEFINITION_FILES: tuple[str, ...] = (
     "scripts/hunter_trusted_orchestrator_replay.py",
     "scripts/hunter_trusted_orchestrator_replay_worker.py",
+    "scripts/hunter_trusted_orchestrator_replay_definition.json",
 )
 
-RECEIPT_SCHEMA = "hunter.trusted-orchestrator-replay.v1"
-SCENARIO_SET_ID = "hunter-orchestrator-replay-v1"
-REQUIRED_SCENARIO_IDS: tuple[str, ...] = ("A", "B", "G")
-SCENARIO_INVARIANTS: dict[str, str] = {
-    "A": (
-        "The independent review opportunity is derived from, and at least "
-        "covers, the candidate's own real reviewer-pool worst-case budget, "
-        "with strictly positive reserved overhead and a bounded ceiling."
-    ),
-    "B": (
-        "An exact-head collector is dispatched at most once across racing or "
-        "repeated reconcile calls made while the combined-status read has not "
-        "yet observed a prior write, and reconcile recovers cleanly once the "
-        "read catches up."
-    ),
-    "G": (
-        "A WAITING_FOR_REVIEWER exact-head cycle classifies to pending "
-        "end-to-end through the real resolution path for absent and "
-        "in-progress cycle evidence, and malformed cycle evidence fails "
-        "closed rather than classifying as pending."
-    ),
-}
+_DEFINITION: dict[str, Any] = json.loads(DEFINITION_PATH.read_text(encoding="utf-8"))
+RECEIPT_SCHEMA = _DEFINITION["schema"]
+SCENARIO_SET_ID = _DEFINITION["scenario_set_id"]
+REQUIRED_SCENARIO_IDS: tuple[str, ...] = tuple(_DEFINITION["required_scenario_ids"])
+SCENARIO_INVARIANTS: dict[str, str] = _DEFINITION["scenario_invariants"]
 #: Fixed, deterministic, offline scenario input. Part of the trusted
 #: definition: a candidate cannot supply its own fixture, and no field here
 #: depends on wall-clock time, network state, or repository content outside
 #: what each scenario explicitly reads from the candidate checkout.
-FIXTURE: dict[str, Any] = {
-    "timeout_delta_seconds": 9_000,
-    "absolute_ceiling_seconds": 6 * 60 * 60,
-    "head_sha": "b" * 40,
-    "pr_number": 535,
-    "config_digest": "f" * 64,
-    "run_id": 4242,
-}
+FIXTURE: dict[str, Any] = _DEFINITION["fixture"]
 #: Sanity bound on one scenario's own wall-clock duration. Generous: this
 #: guards against a receipt claiming instantaneous or reversed timing, not
 #: against ordinary CI variance.
-MAX_SCENARIO_SECONDS = 300
+MAX_SCENARIO_SECONDS = _DEFINITION["max_scenario_seconds"]
 WORKER_TIMEOUT_SECONDS = 120
 
 
@@ -174,6 +161,45 @@ def validate_candidate_sha(raw: str, *, label: str = "--candidate-sha") -> str:
     if not CANDIDATE_SHA_PATTERN.fullmatch(raw):
         raise ValueError(f"{label} {raw!r} must be exactly 40 hexadecimal characters (a git commit SHA), not a path")
     return raw
+
+
+#: A GitHub pull request number is a small, positive, per-repository sequential
+#: integer. This ceiling is generous headroom, not a real domain limit -- it
+#: exists only to fail closed on a value that could not plausibly be one
+#: (e.g. a stray timestamp or an unrelated large integer), the same way
+#: validate_candidate_sha fails closed on a value that could not plausibly be
+#: a git commit SHA.
+MIN_PR_NUMBER = 1
+MAX_PR_NUMBER = 10_000_000
+
+
+def _validate_pr_number(raw: int, *, label: str = "--pr") -> int:
+    if not (MIN_PR_NUMBER <= raw <= MAX_PR_NUMBER):
+        raise ValueError(f"{label} {raw!r} must be between {MIN_PR_NUMBER} and {MAX_PR_NUMBER}")
+    return raw
+
+
+@dataclass(frozen=True)
+class TrustedReplayIdentity:
+    """A validated, normalized identity for one replay run.
+
+    Constructed exactly once, at CLI ingress, from validated primitives --
+    never carried forward as the raw ``argparse.Namespace`` values a caller
+    supplied. Every downstream use (``build_receipt``, the persisted receipt,
+    trusted-field comparison) reads from this object, so there is no
+    execution path in which an unvalidated ``args.pr``/``args.candidate_sha``
+    reaches trusted execution or the filesystem-writing sink.
+    """
+
+    pr_number: int
+    candidate_sha: str
+
+
+def parse_trusted_replay_identity(*, raw_pr: int, raw_candidate_sha: str) -> TrustedReplayIdentity:
+    return TrustedReplayIdentity(
+        pr_number=_validate_pr_number(raw_pr),
+        candidate_sha=validate_candidate_sha(raw_candidate_sha),
+    )
 
 
 def resolve_workspace_root(raw: str | None) -> Path:
@@ -478,14 +504,18 @@ def validate_receipt(
 
 
 def _cmd_run(args: argparse.Namespace) -> int:
-    candidate_sha = validate_candidate_sha(args.candidate_sha)
+    # Constructed once, from validated primitives, before anything else
+    # runs: build_receipt and the persisted receipt below read only this
+    # normalized identity, never the raw CLI-supplied fields it came from
+    # (see TrustedReplayIdentity's docstring).
+    identity = parse_trusted_replay_identity(raw_pr=args.pr, raw_candidate_sha=args.candidate_sha)
     workspace_root = resolve_workspace_root(args.workspace_root)
     candidate_root = resolve_candidate_root(workspace_root, args.candidate_root)
     out_path = resolve_confined_output(workspace_root, args.out, label="--out")
     receipt = build_receipt(
         candidate_root=candidate_root,
-        pr_number=args.pr,
-        candidate_sha=candidate_sha,
+        pr_number=identity.pr_number,
+        candidate_sha=identity.candidate_sha,
         workspace_root=workspace_root,
     )
     out_path.write_text(json.dumps(receipt, indent=2, sort_keys=True), encoding="utf-8")
@@ -535,7 +565,9 @@ def _cmd_validate(args: argparse.Namespace) -> int:
     job), rather than trusting either the receipt or a self-report."""
 
     try:
-        candidate_sha = validate_candidate_sha(args.candidate_sha)
+        # Same normalized-identity construction as _cmd_run: everything below
+        # reads this identity, never the raw CLI-supplied fields directly.
+        identity = parse_trusted_replay_identity(raw_pr=args.pr, raw_candidate_sha=args.candidate_sha)
     except ValueError as exc:
         print(f"REPLAY VALIDATION FAILED: {exc}", file=sys.stderr)
         return 1
@@ -550,7 +582,9 @@ def _cmd_validate(args: argparse.Namespace) -> int:
     except (OSError, ValueError, json.JSONDecodeError) as exc:
         print(f"replay receipt is unreadable, invalid, or malformed: {exc}", file=sys.stderr)
         return 1
-    errors = validate_receipt_trusted_fields(receipt, pr_number=args.pr, candidate_sha=candidate_sha)
+    errors = validate_receipt_trusted_fields(
+        receipt, pr_number=identity.pr_number, candidate_sha=identity.candidate_sha
+    )
 
     try:
         digest_check_path = resolve_confined_existing(

@@ -1686,6 +1686,7 @@
           "scripts/hunter_governance_review_v2.py",
           "scripts/hunter_trusted_orchestrator_replay.py",
           "scripts/hunter_trusted_orchestrator_replay_worker.py",
+          "scripts/hunter_trusted_orchestrator_replay_definition.json",
           ".github/workflows/hunter-trusted-orchestrator-replay-validate.yml",
           ".github/workflows/hunter-trusted-orchestrator-replay-publish.yml",
           ".github/workflows/hunter-governance-review.yml",

@@ -20,6 +20,7 @@ import json
 import re
 import subprocess
 import sys
+import tempfile
 from pathlib import Path
 
 import hunter_trusted_orchestrator_replay as replay
@@ -886,3 +887,378 @@ def test_no_production_authority_resolver_consults_the_replay_status(relative_pa
     source = (root / relative_path).read_text(encoding="utf-8")
     assert "Hunter Trusted Orchestrator Replay" not in source
     assert not re.search(r"orchestrator[-_]replay", source, re.IGNORECASE)
+
+
+# --- S7631: the privileged publisher is checkout-free by construction ------
+#
+# githubactions:S7631 ("no untrusted code executed from a fork") was still
+# open after pinning the trusted-controller checkout's ref to the literal
+# `main`: Sonar's live trace kept flagging the mere presence of
+# actions/checkout inside the workflow_run-triggered (privileged) job,
+# regardless of its ref. The structural fix removes that checkout entirely --
+# these tests prove it stays removed, that nothing replaces it with an
+# equivalent repository-materializing or repository-executing step, and that
+# the inline validation logic that took its place still behaves identically
+# to validate_receipt_trusted_fields for both an accepted and a rejected
+# receipt.
+
+
+def _publish_workflow_path() -> Path:
+    return (
+        Path(__file__).resolve().parents[1] / ".github" / "workflows" / "hunter-trusted-orchestrator-replay-publish.yml"
+    )
+
+
+def _publish_workflow_text() -> str:
+    return _publish_workflow_path().read_text(encoding="utf-8")
+
+
+def _publish_workflow_doc() -> dict:
+    import yaml
+
+    return yaml.safe_load(_publish_workflow_text())
+
+
+def _publish_workflow_step_directives() -> list[str]:
+    """Every step's `uses:`/`run:` value -- i.e. what the job actually does,
+    as YAML parses it, excluding prose comments (which this file's own
+    header comments legitimately mention "actions/checkout" and "git clone"
+    *by name*, to explain what is no longer present).
+    """
+
+    doc = _publish_workflow_doc()
+    steps = doc["jobs"]["publish-proof"]["steps"]
+    directives = []
+    for step in steps:
+        if "uses" in step:
+            directives.append(step["uses"])
+        if "run" in step:
+            directives.append(step["run"])
+    return directives
+
+
+def test_publish_workflow_contains_no_checkout_action():
+    for directive in _publish_workflow_step_directives():
+        assert "actions/checkout" not in directive
+
+
+def test_publish_workflow_contains_no_git_clone_fetch_or_checkout_commands():
+    for directive in _publish_workflow_step_directives():
+        for forbidden in ("git clone", "git fetch", "git checkout", "git pull"):
+            assert forbidden not in directive, f"found {forbidden!r} in the checkout-free privileged publisher"
+
+
+def test_publish_workflow_executes_no_repository_script():
+    text = _publish_workflow_text()
+    # The only `python` invocations left are `python - <<'PY' ... PY`
+    # heredocs running this file's own inline, non-repository script text --
+    # never `python scripts/...` (a repository-hosted script path).
+    assert "python scripts/" not in text
+    assert re.search(r"^\s*python - <<'PY'\s*$", text, re.MULTILINE)
+
+
+def test_publish_workflow_inline_validation_treats_downloaded_artifacts_only_as_data():
+    doc = _publish_workflow_doc()
+    steps = doc["jobs"]["publish-proof"]["steps"]
+    validate_step = next(s for s in steps if s.get("id") == "validate_receipt")
+    inline_source = validate_step["run"]
+    # Only ever opened/parsed as text/JSON -- never executed, imported, or
+    # handed to a subprocess/shell.
+    for forbidden in ("exec(", "eval(", "import_module", "__import__(", "subprocess", "os.system", "os.popen"):
+        assert forbidden not in inline_source, f"found {forbidden!r} in the checkout-free inline validator"
+    assert "json.load" in inline_source or "json.loads" in inline_source
+
+
+def test_publish_workflow_uses_no_candidate_controlled_field_as_an_executable_path():
+    doc = _publish_workflow_doc()
+    steps = doc["jobs"]["publish-proof"]["steps"]
+    for step in steps:
+        run_text = step.get("run")
+        if not run_text:
+            continue
+        # No candidate/workflow_run-sourced expression is ever spliced
+        # directly into a shell/run body -- every such value is threaded
+        # through `env:` and read back as a shell/Python variable instead
+        # (the same invariant the earlier expression-injection fix
+        # established, re-checked here so a future edit can't reintroduce it
+        # specifically in the now-checkout-free publisher).
+        assert not re.search(r"\$\{\{\s*github\.event\.(pull_request|workflow_run)\.", run_text)
+
+
+def test_publish_workflow_pr_head_binding_remains_fail_closed():
+    doc = _publish_workflow_doc()
+    steps = doc["jobs"]["publish-proof"]["steps"]
+    context_step = next(s for s in steps if s.get("id") == "context")
+    assert context_step["env"]["RUN_ID"] == "${{ github.event.workflow_run.id }}"
+    assert "pull_requests[0].number" in context_step["run"]
+    assert "exit 1" in context_step["run"]
+
+
+def _extract_inline_validate_script() -> str:
+    import textwrap
+
+    doc = _publish_workflow_doc()
+    steps = doc["jobs"]["publish-proof"]["steps"]
+    run_text = next(s["run"] for s in steps if s.get("id") == "validate_receipt")
+    lines = run_text.splitlines()
+    start = next(i for i, line in enumerate(lines) if line.strip() == "python - <<'PY'")
+    end = next(i for i, line in enumerate(lines) if i > start and line.strip() == "PY")
+    return textwrap.dedent("\n".join(lines[start + 1 : end]))
+
+
+def test_inline_validate_script_is_syntactically_valid_python():
+    import ast
+
+    ast.parse(_extract_inline_validate_script())
+
+
+def _run_inline_validate_script(
+    work: Path, *, conclusion: str, pr_number: int, candidate_sha: str
+) -> tuple[int, str, str, str]:
+    import os as _os
+
+    script_path = work / "inline_validate.py"
+    script_path.write_text(_extract_inline_validate_script(), encoding="utf-8")
+    github_output = work / "github_output.txt"
+    github_output.write_text("", encoding="utf-8")
+    env = dict(_os.environ)
+    env.update(
+        {
+            "WORKFLOW_CONCLUSION": conclusion,
+            "PR_NUMBER": str(pr_number),
+            "CANDIDATE_SHA": candidate_sha,
+            "GITHUB_OUTPUT": str(github_output),
+        }
+    )
+    result = subprocess.run([sys.executable, str(script_path)], cwd=str(work), env=env, capture_output=True, text=True)
+    return result.returncode, result.stdout, result.stderr, github_output.read_text(encoding="utf-8")
+
+
+def _write_trusted_fetched_files(work: Path) -> None:
+    repo_root = Path(__file__).resolve().parents[1]
+    (work / "trusted-controller.fetched").write_text(
+        (repo_root / "scripts" / "hunter_trusted_orchestrator_replay.py").read_text(encoding="utf-8"),
+        encoding="utf-8",
+    )
+    (work / "trusted-worker.fetched").write_text(
+        (repo_root / "scripts" / "hunter_trusted_orchestrator_replay_worker.py").read_text(encoding="utf-8"),
+        encoding="utf-8",
+    )
+    (work / "trusted-definition.fetched").write_text(
+        (repo_root / "scripts" / "hunter_trusted_orchestrator_replay_definition.json").read_text(encoding="utf-8"),
+        encoding="utf-8",
+    )
+    (work / "trusted-main-sha.fetched").write_text(replay._trusted_harness_sha(), encoding="utf-8")
+
+
+def test_checkout_free_inline_validator_accepts_a_genuinely_good_receipt(tmp_path):
+    receipt, _root = _good_receipt(tmp_path)
+    (tmp_path / "replay-receipt.json").write_text(json.dumps(receipt), encoding="utf-8")
+    (tmp_path / "digest-check.json").write_text(json.dumps({"errors": []}), encoding="utf-8")
+    _write_trusted_fetched_files(tmp_path)
+
+    returncode, stdout, _stderr, github_output = _run_inline_validate_script(
+        tmp_path, conclusion="success", pr_number=535, candidate_sha="a" * 40
+    )
+    assert returncode == 0
+    assert "REPLAY VALIDATION PASSED" in stdout
+    assert "result=success" in github_output
+
+    # And it agrees with the trusted module's own validate_receipt_trusted_fields
+    # for the identical receipt and trusted event fields.
+    assert replay.validate_receipt_trusted_fields(receipt, pr_number=535, candidate_sha="a" * 40) == []
+
+
+def test_checkout_free_inline_validator_rejects_a_forged_candidate_sha(tmp_path):
+    receipt, _root = _good_receipt(tmp_path)
+    receipt["candidate_sha"] = "f" * 40
+    (tmp_path / "replay-receipt.json").write_text(json.dumps(receipt), encoding="utf-8")
+    (tmp_path / "digest-check.json").write_text(json.dumps({"errors": []}), encoding="utf-8")
+    _write_trusted_fetched_files(tmp_path)
+
+    returncode, _stdout, stderr, github_output = _run_inline_validate_script(
+        tmp_path, conclusion="success", pr_number=535, candidate_sha="a" * 40
+    )
+    assert returncode == 0  # the inline script itself exits 0; failure is reported via GITHUB_OUTPUT
+    assert "candidate_sha" in stderr
+    assert "result=failure" in github_output
+
+    # Same disposition as the trusted module's own validation for the same forgery.
+    module_errors = replay.validate_receipt_trusted_fields(receipt, pr_number=535, candidate_sha="a" * 40)
+    assert any("candidate_sha" in e for e in module_errors)
+
+
+def test_checkout_free_inline_validator_rejects_incomplete_evidence():
+    with tempfile.TemporaryDirectory() as tmp:
+        work = Path(tmp)
+        # No replay-receipt.json / digest-check.json written -- mirrors a
+        # failed or cancelled upstream validate-replay run.
+        returncode, _stdout, stderr, github_output = _run_inline_validate_script(
+            work, conclusion="success", pr_number=535, candidate_sha="a" * 40
+        )
+        assert returncode == 0
+        assert "did not produce complete evidence" in stderr
+        assert "result=failure" in github_output
+
+
+def test_checkout_free_inline_validator_rejects_a_non_success_workflow_conclusion(tmp_path):
+    receipt, _root = _good_receipt(tmp_path)
+    (tmp_path / "replay-receipt.json").write_text(json.dumps(receipt), encoding="utf-8")
+    (tmp_path / "digest-check.json").write_text(json.dumps({"errors": []}), encoding="utf-8")
+
+    returncode, _stdout, stderr, github_output = _run_inline_validate_script(
+        tmp_path, conclusion="failure", pr_number=535, candidate_sha="a" * 40
+    )
+    assert returncode == 0
+    assert "did not produce complete evidence" in stderr
+    assert "result=failure" in github_output
+
+
+# --- S8707: raw argparse values never reach build_receipt or the receipt --
+#
+# pythonsecurity:S8707 stayed open after validating candidate_sha in place:
+# the live trace showed args.pr flowing, unvalidated, straight into
+# build_receipt and the persisted receipt. The fix builds a new,
+# validated TrustedReplayIdentity from validated primitives at CLI ingress
+# and threads *that* everywhere in place of args.pr / args.candidate_sha.
+# These tests prove the normalization actually rejects out-of-domain input,
+# that a valid identity still succeeds end to end, that the persisted
+# receipt carries only the normalized values, and that _cmd_run/_cmd_validate
+# no longer reference the raw argparse fields at all.
+
+
+def test_run_cli_rejects_a_non_integer_pr(tmp_path):
+    root = _candidate_root(tmp_path, orchestrator_src=SCENARIO_A_FIXED + SCENARIO_B_FIXED)
+    run = subprocess.run(
+        [
+            sys.executable,
+            str(Path(replay.__file__)),
+            "run",
+            "--workspace-root",
+            str(tmp_path),
+            "--candidate-root",
+            str(root),
+            "--pr",
+            "not-a-number",
+            "--candidate-sha",
+            "a" * 40,
+            "--out",
+            "receipt.json",
+        ],
+        capture_output=True,
+        text=True,
+    )
+    assert run.returncode == 2  # argparse's own usage error for a malformed --pr
+    assert "invalid int value" in run.stderr
+
+
+@pytest.mark.parametrize("bad_pr", [0, -5, -1])
+def test_run_cli_rejects_a_zero_or_negative_pr(tmp_path, bad_pr):
+    root = _candidate_root(tmp_path, orchestrator_src=SCENARIO_A_FIXED + SCENARIO_B_FIXED)
+    run = subprocess.run(
+        [
+            sys.executable,
+            str(Path(replay.__file__)),
+            "run",
+            "--workspace-root",
+            str(tmp_path),
+            "--candidate-root",
+            str(root),
+            "--pr",
+            f"{bad_pr}",
+            "--candidate-sha",
+            "a" * 40,
+            "--out",
+            "receipt.json",
+        ],
+        capture_output=True,
+        text=True,
+    )
+    assert run.returncode != 0
+    assert "must be between" in run.stderr
+
+
+def test_run_cli_rejects_an_oversized_pr(tmp_path):
+    root = _candidate_root(tmp_path, orchestrator_src=SCENARIO_A_FIXED + SCENARIO_B_FIXED)
+    run = subprocess.run(
+        [
+            sys.executable,
+            str(Path(replay.__file__)),
+            "run",
+            "--workspace-root",
+            str(tmp_path),
+            "--candidate-root",
+            str(root),
+            "--pr",
+            "99999999999",
+            "--candidate-sha",
+            "a" * 40,
+            "--out",
+            "receipt.json",
+        ],
+        capture_output=True,
+        text=True,
+    )
+    assert run.returncode != 0
+    assert "must be between" in run.stderr
+
+
+def test_parse_trusted_replay_identity_accepts_a_valid_pr_and_sha():
+    identity = replay.parse_trusted_replay_identity(raw_pr=535, raw_candidate_sha="a" * 40)
+    assert identity.pr_number == 535
+    assert identity.candidate_sha == "a" * 40
+
+
+@pytest.mark.parametrize("bad_pr", [0, -1, 10_000_001])
+def test_parse_trusted_replay_identity_rejects_out_of_domain_pr(bad_pr):
+    with pytest.raises(ValueError, match="must be between"):
+        replay.parse_trusted_replay_identity(raw_pr=bad_pr, raw_candidate_sha="a" * 40)
+
+
+def test_run_cli_persists_only_the_normalized_identity_values(tmp_path):
+    root = _candidate_root(tmp_path, orchestrator_src=SCENARIO_A_FIXED + SCENARIO_B_FIXED)
+    out_path = tmp_path / "receipt.json"
+
+    run = subprocess.run(
+        [
+            sys.executable,
+            str(Path(replay.__file__)),
+            "run",
+            "--workspace-root",
+            str(tmp_path),
+            "--candidate-root",
+            root.name,
+            "--pr",
+            "535",
+            "--candidate-sha",
+            "A" * 40,  # uppercase hex, valid but not yet "normalized" casing
+            "--out",
+            out_path.name,
+        ],
+        capture_output=True,
+        text=True,
+    )
+    assert run.returncode == 0, run.stderr
+    receipt = json.loads(out_path.read_text())
+    assert receipt["candidate_pr"] == 535
+    assert isinstance(receipt["candidate_pr"], int)
+    assert receipt["candidate_sha"] == "A" * 40
+    assert isinstance(receipt["candidate_sha"], str)
+
+
+def test_cmd_run_and_cmd_validate_never_forward_raw_argparse_pr_or_sha():
+    import inspect
+
+    run_source = inspect.getsource(replay._cmd_run)
+    validate_source = inspect.getsource(replay._cmd_validate)
+    for source, name in ((run_source, "_cmd_run"), (validate_source, "_cmd_validate")):
+        assert "parse_trusted_replay_identity" in source, f"{name} does not construct a normalized identity"
+        # `args.pr`/`args.candidate_sha` may appear exactly once each -- as
+        # the raw_pr=/raw_candidate_sha= inputs to parse_trusted_replay_identity
+        # itself -- and never again downstream (build_receipt,
+        # validate_receipt_trusted_fields, or the persisted receipt must
+        # read only the normalized `identity` object).
+        assert source.count("args.pr") == 1, f"{name} references args.pr somewhere other than identity construction"
+        assert (
+            source.count("args.candidate_sha") == 1
+        ), f"{name} references args.candidate_sha somewhere other than identity construction"
