@@ -191,7 +191,7 @@
         "id": "F-1",
         "resolution": "resolved",
         "resolution_evidence": {
-          "correction": "b2179ac151cf30b9f8b0c9d5e3e6a34a3db906df",
+          "correction": "54ef6da3704dc6bd103251f0c92cce80d55f2dc2",
           "regression_test": "tests/test_hunter_pre_push.py"
         },
         "severity": "non-blocking"
@@ -206,7 +206,7 @@
         "status": "modified"
       },
       {
-        "blob_sha": "699d801dd2bb767bf8794d40cbe28b5e066d9dd0",
+        "blob_sha": "661979e65ab12d6f6622d9d6778e1807c7f24f79",
         "path": "docs/DEFECT_REGISTRY.json",
         "previous_path": "",
         "status": "modified"
@@ -248,11 +248,11 @@
         "status": "modified"
       }
     ],
-    "review_target_digest": "1280932097cb1d6be3d35d2791fb1ea114eda098a1a2975f2407043f6d6ab7f3"
+    "review_target_digest": "446a833983df6949f352588e06de86311f5afea9adc6fcacafa35b7cf981e89f"
   },
-  "review_id": "259f345f7efe3673615f15f6d05a2d093d7dfe1721a68b0f0a3a7842e776cdbc",
+  "review_id": "09017e8525785a76c24198d35ee299b23ae10cbed530079ccb705ed9641fb2ac",
   "review_request": {
-    "claims_id": "259f345f7efe3673615f15f6d05a2d093d7dfe1721a68b0f0a3a7842e776cdbc",
+    "claims_id": "09017e8525785a76c24198d35ee299b23ae10cbed530079ccb705ed9641fb2ac",
     "schema": "hunter.review-request.v1"
   },
   "schema": "hunter.pre-ready-hostile-review.v1"
