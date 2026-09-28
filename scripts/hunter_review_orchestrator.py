@@ -12,7 +12,7 @@ from collections.abc import Iterable
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import Any
+from typing import Any, NamedTuple
 from urllib.parse import urlparse
 
 import hunter_github_transport as transport
@@ -807,15 +807,33 @@ def ensure_collector(
                 generation_id=generation_id,
             )
 
+    run_id = current_run_id()
+    if run_id is None:
+        raise RuntimeError("trusted orchestration requires GITHUB_RUN_ID")
+
+    # The branch above is not the only idempotency boundary: it only fires when
+    # `read_cycle` itself reports "present" with a matching digest. A stale,
+    # missing, or racy read of the commit-status cycle -- two reconciles landing
+    # close together, or any other reason the status observation disagrees with
+    # reality -- must never fall through to a blind duplicate dispatch when a
+    # collector run correlated to this exact (PR, head, generation) is already
+    # active or has already succeeded. This check is independent of whatever
+    # `read_cycle` answered, and unreadable evidence fails closed rather than
+    # authorising a dispatch it cannot rule out as a duplicate.
+    try:
+        liveness, _count = collector_liveness(repository, token, pr_number, head_sha, generation_id)
+    except transport.GitHubRequestError as exc:
+        raise RuntimeError(
+            f"collector correlation evidence unavailable for PR #{pr_number} at {head_sha[:10]}; "
+            f"refusing to risk a duplicate dispatch: {exc}"
+        ) from exc
+
     # Persist the dispatch identity and liveness timestamp *before* dispatch.
     # This status is the durable idempotency record: if GitHub accepts the
     # workflow dispatch and this process dies immediately afterwards, the next
     # reconciliation observes a dispatched cycle and checks correlated collector
     # runs instead of blindly issuing a duplicate dispatch. If dispatch itself
     # never produces a run, the bounded liveness grace permits one recovery.
-    run_id = current_run_id()
-    if run_id is None:
-        raise RuntimeError("trusted orchestration requires GITHUB_RUN_ID")
     cycle = ReviewCycle(
         pr_number=pr_number,
         head_sha=head_sha,
@@ -827,26 +845,62 @@ def ensure_collector(
         generation_id=generation_id,
     )
     publish_cycle(repository, token, head_sha, cycle=cycle)
-    dispatch_collector(repository, token, pr_number, head_sha, generation_id)
+    if liveness not in {"active", "completed"}:
+        dispatch_collector(repository, token, pr_number, head_sha, generation_id)
     return cycle
 
 
-def review_request_state(repository: str, token: str, pr_number: int, head_sha: str) -> tuple[bool, str]:
+class ReviewRequestBlocked(RuntimeError):
+    """The exact-head prerequisites are complete but the review request is not.
+
+    This is distinct from "not ready yet". Once the trusted prerequisite has
+    succeeded, no further reconcile of the same immutable head can change the
+    answer on its own: the pre-ready review request is a committed artifact, so
+    a new valid one only appears with a new commit. Silently returning here is
+    what let PR #540 report a successful Reconcile while never publishing an
+    exact-head orchestration cycle.
+    """
+
+
+class ReviewRequestReadiness(NamedTuple):
+    """Why orchestration may or may not begin for one exact head.
+
+    The reason is carried rather than discarded so the reconcile can report
+    the precise blocker instead of a bare success, and so a blocked head is
+    distinguishable from a prerequisite that is still running.
+    """
+
+    ready: bool
+    claims_id: str
+    reason: str
+    prerequisite_state: str
+
+
+def review_request_state(repository: str, token: str, pr_number: int, head_sha: str) -> ReviewRequestReadiness:
     """Whether this head carries a current review request, and which claims it is.
 
     The claims digest is returned with the readiness answer because the
     remediation generation is bound to it: resolving the request twice would let
-    the generation be derived from claims the dispatch decision never saw.
+    the generation be derived from claims the dispatch decision never saw. The
+    blocking reason is returned for the same reason -- a readiness decision
+    nobody can explain is a readiness decision nobody can act on.
     """
 
     import hunter_governance_review_v2 as governance
 
-    preflight_state, _ = governance.read_trusted_upgrade_status(repository, token, head_sha, pr_number)
+    preflight_state, preflight_reason = governance.read_trusted_upgrade_status(repository, token, head_sha, pr_number)
     if preflight_state != "success":
-        return False, ""
-    request_state, document, _ = governance.read_head_pre_ready_review(repository, token, head_sha)
+        return ReviewRequestReadiness(
+            False, "", f"exact-head trusted prerequisite is {preflight_state}: {preflight_reason}", preflight_state
+        )
+    request_state, document, request_error = governance.read_head_pre_ready_review(repository, token, head_sha)
     if request_state != "present" or not isinstance(document, dict):
-        return False, ""
+        return ReviewRequestReadiness(
+            False,
+            "",
+            f"exact-head pre-ready review request is {request_state} at {head_sha[:10]}: {request_error or 'absent'}",
+            preflight_state,
+        )
     request = document.get("review_request")
     if not (
         isinstance(request, dict)
@@ -854,13 +908,25 @@ def review_request_state(repository: str, token: str, pr_number: int, head_sha: 
         and isinstance(request.get("claims_id"), str)
         and len(request["claims_id"]) == 64
     ):
-        return False, ""
-    valid, _reason = governance.valid_current_review_request(repository, token, pr_number, head_sha, document)
-    return bool(valid), str(request["claims_id"]) if valid else ""
+        return ReviewRequestReadiness(
+            False,
+            "",
+            f"exact-head pre-ready review request at {head_sha[:10]} carries no usable review_request claims binding",
+            preflight_state,
+        )
+    valid, reason = governance.valid_current_review_request(repository, token, pr_number, head_sha, document)
+    if not valid:
+        return ReviewRequestReadiness(
+            False,
+            "",
+            f"exact-head pre-ready review request at {head_sha[:10]} is not valid for this head: {reason}",
+            preflight_state,
+        )
+    return ReviewRequestReadiness(True, str(request["claims_id"]), "", preflight_state)
 
 
 def review_prerequisites_ready(repository: str, token: str, pr_number: int, head_sha: str) -> bool:
-    return review_request_state(repository, token, pr_number, head_sha)[0]
+    return review_request_state(repository, token, pr_number, head_sha).ready
 
 
 def ensure_current(repository: str, token: str, pr_number: int) -> ReviewCycle | None:
@@ -878,13 +944,25 @@ def ensure_current(repository: str, token: str, pr_number: int) -> ReviewCycle |
     head_sha = str((pr.get("head") or {}).get("sha") or "")
     if not head_sha:
         raise RuntimeError("current pull-request head is unavailable")
-    ready, claims_id = review_request_state(repository, token, pr_number, head_sha)
-    if not ready:
+    readiness = review_request_state(repository, token, pr_number, head_sha)
+    if not readiness.ready:
+        # A prerequisite that is still pending or running retries on its own:
+        # the trusted upgrade status and the scheduled sweep both re-enter here.
+        # A prerequisite that already succeeded cannot resolve itself, because
+        # the request is a committed artifact of the head. That case must not
+        # disappear into a successful reconcile with no future orchestration
+        # opportunity, so it is reported instead of swallowed.
+        if readiness.prerequisite_state == "success":
+            raise ReviewRequestBlocked(
+                f"exact-head review orchestration cannot start for PR #{pr_number} at {head_sha[:10]}: "
+                f"{readiness.reason}. Trusted preflight already passed, so this head needs a pre-ready review "
+                f"request committed for it; reconcile will start orchestration as soon as one is."
+            )
         return None
     # Derived here, never accepted from a dispatch input or from candidate prose:
     # the generation is what authorises one more reviewer invocation, so only
     # trusted GitHub review-thread state may decide it.
-    generation_id = current_remediation_generation(repository, token, pr_number, head_sha, claims_id)
+    generation_id = current_remediation_generation(repository, token, pr_number, head_sha, readiness.claims_id)
     return ensure_collector(repository, token, pr_number, head_sha, generation_id)
 
 
@@ -911,6 +989,14 @@ def main() -> int:
         else:
             ensure_current(args.repository, token, args.pr)
         return 0
+    except ReviewRequestBlocked as exc:
+        # Reported, not swallowed: the reconcile step turns this into a visible
+        # failure instead of a green run that promised orchestration it never
+        # performed. The blocker is the committed pre-ready review request, so
+        # the operator action is to commit one for this exact head; the next
+        # reconcile then dispatches exactly once.
+        print(f"::error::{exc}", file=sys.stderr)
+        return 1
     except transport.GitHubUnavailable as exc:
         print(f"Review orchestration infrastructure unavailable; remaining pending: {exc}", file=sys.stderr)
         return 0

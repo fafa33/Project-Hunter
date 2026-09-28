@@ -630,6 +630,50 @@ def test_required_authority_states_are_all_declared() -> None:
 
 
 # ---------------------------------------------------------------------------
+# PR #541: a pending verifier tri-state must never be misclassified as a hard
+# failure. The verifier's own contract is success/pending/failure, and only
+# "pending" can legitimately carry an orchestration-cycle state name (like
+# "WAITING_FOR_REVIEWER") that shares no prefix with any REVIEW_AUTHORITY_STATES
+# entry. Production observed exactly this: a freshly committed, structurally
+# valid review request with no orchestration cycle published yet was reported
+# by Hunter Merge Readiness as "failure: MALFORMED_REVIEW: WAITING_FOR_REVIEWER:
+# ..." instead of the benign wait it actually was.
+# ---------------------------------------------------------------------------
+
+
+def test_resolve_review_authority_does_not_misclassify_a_pending_wait_as_malformed() -> None:
+    verdict = readiness.resolve_review_authority(
+        ("pending", "WAITING_FOR_REVIEWER: no trusted exact-head orchestration cycle has been published")
+    )
+
+    assert verdict.state != "MALFORMED_REVIEW"
+    assert verdict.state == readiness.PENDING_VERIFICATION
+
+
+def test_review_authority_state_stays_pending_while_a_fresh_request_awaits_orchestration(monkeypatch) -> None:
+    """PR #541 regression: a valid, unadopted review request is a wait, not a failure."""
+    monkeypatch.setattr(readiness, "unresolved_review_threads", lambda _number: ())
+    monkeypatch.setattr(readiness, "changes_requested_reviewers", lambda _number: ())
+    monkeypatch.setattr(core, "check_reviewer_dispositions", lambda: (True, ""))
+    monkeypatch.setattr(
+        core,
+        "verify_pre_ready_hostile_review",
+        lambda *_a: ("pending", "WAITING_FOR_REVIEWER: no trusted exact-head orchestration cycle has been published"),
+    )
+    monkeypatch.setattr(
+        core,
+        "review_orchestration_state",
+        lambda *_a: ("WAITING_FOR_REVIEWER", "no trusted exact-head orchestration cycle has been published"),
+    )
+
+    state, message = readiness.review_authority_state(HEAD, PR_NUMBER)
+
+    assert state == "pending", message
+    assert "MALFORMED_REVIEW" not in message
+    assert "WAITING_FOR_REVIEWER" in message
+
+
+# ---------------------------------------------------------------------------
 # Historical backfill manifest: the curated record set is pinned against drift.
 # ---------------------------------------------------------------------------
 

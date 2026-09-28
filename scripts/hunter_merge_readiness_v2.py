@@ -81,6 +81,14 @@ class ReviewAuthorityVerdict:
     detail: str
 
 
+#: Not one of REVIEW_AUTHORITY_STATES on purpose: it is never matched by the
+#: prefix loop below, and the caller's fall-through to the orchestration-state
+#: check (which already exists for exactly this purpose) is what actually
+#: resolves it, so it never needs to appear in the merge-admissible or
+#: hard-failure sets a caller branches on.
+PENDING_VERIFICATION = "PENDING_VERIFICATION"
+
+
 def resolve_review_authority(verification: tuple[str, str]) -> ReviewAuthorityVerdict:
     """Classify the shared verifier's result; raw comments cannot establish authority."""
     status, detail = verification
@@ -91,19 +99,14 @@ def resolve_review_authority(verification: tuple[str, str]) -> ReviewAuthorityVe
                 return ReviewAuthorityVerdict(state, detail)
         return ReviewAuthorityVerdict("MALFORMED_REVIEW", "Verifier did not establish positive review authority.")
     if status == "pending":
-        # Issue #534 root cause #2: the shared verifier itself now reports a
-        # third, legitimate outcome -- a review request is committed and bound
-        # to this exact head, but no reviewer has adopted it yet, while a
-        # trusted exact-head orchestration cycle is genuinely still live
-        # (WAITING_FOR_REVIEWER/REVIEW_IN_PROGRESS/FAILOVER_IN_PROGRESS). That is
-        # not evidence of a malformed review; it is the same "no authority yet"
-        # outcome MISSING_REVIEW_AUTHORITY already names, and the caller's own
-        # orchestration-state fallback (review_wait_state) is what correctly
-        # projects it to pending. Falling through to the REVIEW_AUTHORITY_STATES
-        # loop below would find no textual match (none of those states are
-        # ever the prefix of a pending detail) and silently mint a hard
-        # MALFORMED_REVIEW failure out of an ordinary, expected wait.
-        return ReviewAuthorityVerdict("MISSING_REVIEW_AUTHORITY", detail)
+        # The verifier's own tri-state already says "not yet resolved, retry
+        # later" -- never a hard failure. A pending detail can legitimately
+        # carry an orchestration-cycle state name (e.g. "WAITING_FOR_REVIEWER")
+        # that happens to share no prefix with any REVIEW_AUTHORITY_STATES
+        # entry, so pending must be recognised here, before the prefix-match
+        # loop below runs, or it silently falls through to MALFORMED_REVIEW --
+        # turning a benign wait into a hard merge-readiness failure.
+        return ReviewAuthorityVerdict(PENDING_VERIFICATION, detail)
     for state in REVIEW_AUTHORITY_STATES:
         if state not in valid_states and state + ":" in detail:
             return ReviewAuthorityVerdict(state, detail)
