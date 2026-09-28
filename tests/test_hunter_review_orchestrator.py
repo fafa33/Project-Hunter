@@ -627,6 +627,14 @@ def test_governance_review_workflow_keeps_only_read_access_to_actions():
     assert "python scripts/hunter_review_orchestrator.py" not in path.read_text(encoding="utf-8")
 
 
+def _pull_request_target_types(workflow_name):
+    document = yaml.safe_load(
+        pathlib.Path(REPOSITORY_ROOT, ".github/workflows", workflow_name).read_text(encoding="utf-8")
+    )
+    triggers = document.get("on", document.get(True))
+    return triggers, triggers.get("pull_request_target") or {}
+
+
 def test_reconcile_wakes_when_a_pr_becomes_ready_for_review():
     """Issue #534: Draft -> Ready must promptly reach trusted reconciliation.
 
@@ -649,16 +657,163 @@ def test_reconcile_wakes_when_a_pr_becomes_ready_for_review():
     assert pull_request_target is not None, "reconcile has no pull_request_target trigger"
     assert pull_request_target.get("branches") == ["main"]
     assert "ready_for_review" in pull_request_target.get("types", [])
-    # A Draft PR must never reach this workflow via this trigger: GitHub only
-    # fires `ready_for_review` on the transition out of Draft, never while a
-    # PR remains Draft, so scoping to exactly this type is itself the guard.
-    assert "opened" not in pull_request_target.get("types", [])
-    assert "synchronize" not in pull_request_target.get("types", [])
+    # Drafting a PR is a withdrawal of review, not a request for it, and the
+    # transition back to Ready is what carries the request; this trigger must
+    # never also wake on the transition that removes it.
+    assert "converted_to_draft" not in pull_request_target.get("types", [])
 
     text = path.read_text(encoding="utf-8")
     assert '"${event_name}" == "pull_request_target"' in text
     checkout = document["jobs"]["reconcile"]["steps"][0]
     assert checkout["with"]["ref"] == "main"
+
+
+def test_reconcile_wakes_when_a_pr_head_is_pushed():
+    """Issue #534 recurrence, PR #535 exact HEAD 51108333821ab42d1ab7aa0b812a72d890f73795.
+
+    ``synchronize`` is the lifecycle event that *changes a PR's exact HEAD*,
+    and Merge Readiness reacts to it immediately. Without the same trigger
+    here, a pushed head has no trusted event-driven path to the orchestrator
+    that must produce its exact-head cycle, and readiness correctly reports
+    MALFORMED_REVIEW: WAITING_FOR_REVIEWER against a prerequisite nobody was
+    asked to create. The `workflow_run` reconciliations that eventually ran
+    (36393517015, 36393716517) are recovery: they depend on an unrelated
+    workflow completing first, so they cannot be the primary mechanism.
+    """
+    _triggers_block, pull_request_target = _pull_request_target_types("hunter-governance-reconcile.yml")
+    assert pull_request_target.get("branches") == ["main"]
+    assert "synchronize" in pull_request_target.get("types", [])
+
+
+def test_reconcile_wakes_on_every_lifecycle_event_that_needs_or_moves_the_exact_head():
+    """DFF-045, generalised: the prerequisite must keep pace with the gate.
+
+    Whenever Merge Readiness reacts immediately to a transition that makes
+    review required or moves the exact HEAD it is judged against, the trusted
+    workflow that owns the orchestration prerequisite must react to the same
+    transition directly. This asserts the two triggers cannot drift apart
+    again for a third event variant.
+    """
+    _readiness_triggers, readiness = _pull_request_target_types("hunter-merge-readiness.yml")
+    _reconcile_triggers, reconcile = _pull_request_target_types("hunter-governance-reconcile.yml")
+
+    for event_type in ("ready_for_review", "synchronize"):
+        assert event_type in readiness.get("types", []), f"Merge Readiness no longer reacts to {event_type}"
+        assert event_type in reconcile.get(
+            "types", []
+        ), f"{event_type} wakes Merge Readiness but not the trusted orchestration prerequisite"
+    assert reconcile.get("branches") == readiness.get("branches") == ["main"]
+
+
+def test_a_pushed_head_reaches_orchestration_as_the_exact_current_head(monkeypatch):
+    """The target is trusted state, never the event payload or a stale head.
+
+    ``ensure_current`` re-derives the current HEAD from the pull-request API
+    on every call, so the reconcile step can pass only ``--pr`` and a pushed
+    head is still reconciled against the head GitHub reports -- including a
+    head pushed again between the event and the run.
+    """
+    pushed = "b" * 40
+    monkeypatch.setattr(
+        orchestrator,
+        "request_json",
+        lambda *_args: {"state": "open", "draft": False, "head": {"sha": pushed}},
+    )
+    monkeypatch.setattr(orchestrator, "review_request_state", lambda *_args: (True, "d" * 64), raising=False)
+    monkeypatch.setattr(orchestrator, "current_remediation_generation", lambda *_args: orchestrator.BASE_GENERATION_ID)
+    targets = []
+    monkeypatch.setattr(
+        orchestrator,
+        "ensure_collector",
+        lambda _repo, _token, pr_number, head_sha, *args: targets.append((pr_number, head_sha)),
+        raising=False,
+    )
+
+    orchestrator.ensure_current("owner/repo", "token", 535)
+
+    assert targets == [(535, pushed)]
+
+    # The privileged step itself must not be able to name a head at all.
+    text = pathlib.Path(REPOSITORY_ROOT, ".github/workflows/hunter-governance-reconcile.yml").read_text(
+        encoding="utf-8"
+    )
+    assert re.search(
+        r"python scripts/hunter_review_orchestrator\.py ensure\s*\\\n\s*--pr \"\$\{pr_number\}\" \\\n\s*"
+        r"--repository \"\$\{GITHUB_REPOSITORY\}\"",
+        text,
+    ), "the ensure call must pass only the PR, so the orchestrator re-derives the exact head"
+    assert "--head" not in text
+
+
+def test_a_pushed_head_on_a_draft_pr_dispatches_nothing(monkeypatch):
+    """``synchronize`` fires for Draft PRs; that must not start a review cycle.
+
+    Unlike ``ready_for_review``, which GitHub only fires on the transition out
+    of Draft, ``synchronize`` fires for every push to a Draft branch. The
+    trigger therefore cannot be the Draft guard: the guard is the orchestrator's
+    own draft short-circuit, which runs before the review-request lookup and
+    before any dispatch.
+    """
+    monkeypatch.setattr(
+        orchestrator,
+        "request_json",
+        lambda *_args: {"state": "open", "draft": True, "head": {"sha": HEAD}},
+    )
+    prerequisite_calls = []
+    monkeypatch.setattr(
+        orchestrator,
+        "review_request_state",
+        lambda *_args: prerequisite_calls.append(True) or (True, "d" * 64),
+        raising=False,
+    )
+    dispatch_calls = []
+    monkeypatch.setattr(orchestrator, "ensure_collector", lambda *_args: dispatch_calls.append(True), raising=False)
+
+    assert orchestrator.ensure_current("owner/repo", "token", 535) is None
+    assert prerequisite_calls == []
+    assert dispatch_calls == []
+
+
+def test_unrelated_pull_request_events_do_not_dispatch_reviewer_orchestration():
+    """The trigger set is exactly the review-relevant lifecycle events.
+
+    Waking privileged orchestration on events that cannot change a PR's exact
+    HEAD or its review-required state spends `actions: write` budget and can
+    mint cycles for PRs that have no review request to satisfy.
+    """
+    triggers, pull_request_target = _pull_request_target_types("hunter-governance-reconcile.yml")
+    assert set(pull_request_target.get("types", [])) == {"ready_for_review", "synchronize"}
+    for unrelated in ("closed", "reopened", "labeled", "unlabeled", "edited", "assigned", "converted_to_draft"):
+        assert unrelated not in pull_request_target.get("types", []), unrelated
+    # Nothing else may route an arbitrary pull request event into this job.
+    for other in ("pull_request", "issue_comment", "pull_request_review_thread", "check_run", "check_suite"):
+        assert other not in triggers, other
+
+
+def test_synchronize_reconciliation_never_executes_candidate_code():
+    """The new trigger must stay on the trusted default-branch path.
+
+    `pull_request_target` resolves this file from the base branch and the job
+    checks out `main` with `persist-credentials: false`, so the privileged
+    `actions: write` token is never used to run anything a PR controls.
+    """
+    document = yaml.safe_load(
+        pathlib.Path(REPOSITORY_ROOT, ".github/workflows/hunter-governance-reconcile.yml").read_text(encoding="utf-8")
+    )
+    assert "pull_request" not in _triggers(document)
+
+    steps = document["jobs"]["reconcile"]["steps"]
+    checkouts = [step for step in steps if str(step.get("uses", "")).startswith("actions/checkout")]
+    assert checkouts
+    for step in checkouts:
+        assert step["with"]["ref"] == "main"
+        assert step["with"]["persist-credentials"] is False
+
+    text = pathlib.Path(REPOSITORY_ROOT, ".github/workflows/hunter-governance-reconcile.yml").read_text(
+        encoding="utf-8"
+    )
+    assert "github.event.pull_request.head.sha" not in text
+    assert "actions/checkout@${{" not in text
 
 
 def test_orchestration_bootstraps_only_from_the_trusted_default_branch_checkout():
