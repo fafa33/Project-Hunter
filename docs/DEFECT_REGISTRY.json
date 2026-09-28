@@ -1715,6 +1715,31 @@
       "sources": [
         "PR #535 live CI on branch issue-534-ready-review-orchestration, 2026-09: fixes to hunter_review_orchestrator.py's exact-head collector dispatch and reviewer-opportunity timing could not be exercised by the PR's own live CI runs, because hunter-governance-review.yml / hunter-governance-reconcile.yml / hunter-reviewer-collector.yml execute only from the trusted default branch, which does not yet contain the candidate's unmerged controller-logic change -- confirmed via git diff main HEAD -- scripts/hunter_merge_readiness_v2.py showing the relevant fix code exists only on the candidate branch. Resolved by the Trusted Candidate Orchestrator Replay Harness in this contribution."
       ]
+    },
+    {
+      "id": "DFF-041",
+      "title": "trusted-grader-self-update-bootstrap-boundary",
+      "invariant": "The Trusted Candidate Orchestrator Replay Harness's own grading logic (scripts/hunter_trusted_orchestrator_replay.py, scripts/hunter_trusted_orchestrator_replay_worker.py, scripts/hunter_trusted_orchestrator_replay_definition.json) is, by the same trust boundary it enforces for candidates, always executed from the trusted default branch -- never from the candidate branch under test, even when that candidate branch is the one changing the grader itself. A defect discovered in the grader's own scenario logic (a stale assertion, an incorrect bound, a missing case) can therefore never be fixed, proven, or self-validated from within the candidate PR that discovered it: that PR's own hosted replay run will keep loading and grading against the unfixed default-branch copy of the grader regardless of what the candidate branch itself contains, no matter how correct the candidate's own fix is. This is not a bug in that candidate PR and must never be worked around by weakening the trust boundary (e.g. sourcing grader code from the candidate) -- the correction to the grader must land on the default branch through its own minimal, directly-reviewed contribution before any candidate PR's replay can exercise it.",
+      "applicability": {
+        "changed_paths": [
+          "scripts/hunter_trusted_orchestrator_replay.py",
+          "scripts/hunter_trusted_orchestrator_replay_worker.py",
+          "scripts/hunter_trusted_orchestrator_replay_definition.json"
+        ],
+        "rationale": "These are exactly the trusted grader's own implementation files -- the ones a hosted validate-replay run always checks out from the default branch, never from the candidate under test. A change to any of them can only ever take effect for candidates once merged; no candidate branch's own copy of these files is ever consulted for its own or any other candidate's grading."
+      },
+      "prevention": {
+        "mechanism": "A defect discovered in the grader's own scenario logic is corrected in a minimal, standalone contribution scoped only to the grader implementation and its directly corresponding trusted-harness test file -- never bundled with the production-controller change that happened to surface it -- and reviewed and merged to the default branch on its own before the discovering candidate reconciles against the corrected grader. The discovering candidate's own hosted replay result against the still-unfixed default-branch grader is not treated as a merge blocker for that specific, already-diagnosed defect class, since it is definitionally unfixable from that candidate's own branch; it is treated as evidence supporting the standalone grader fix instead.",
+        "boundary": "review"
+      },
+      "regression_evidence": [
+        "tests/test_hunter_trusted_orchestrator_replay.py::test_scenario_a_passes_when_no_reviewer_is_retryable_and_retries_per_agent_is_zero",
+        "tests/test_hunter_trusted_orchestrator_replay.py::test_scenario_a_fails_when_retryable_flag_affects_timing_despite_zero_retries"
+      ],
+      "lifecycle": "regression-tested",
+      "sources": [
+        "PR #535 exact HEAD a78cfc143b2fb938aa21da59f4a79136294ba4aa, live evidence: Scenario A (scripts/hunter_trusted_orchestrator_replay_worker.py) required an enabled reviewer with retryable=true to exist in the candidate's real reviewer pool before it would test anything, raising AssertionError('fixture pool must enable at least one retryable reviewer') against PR #535's own docs/CODE_WRITE_POLICY.json, whose reviewer_pool.timeout_policy.retries_per_agent is deliberately 0 pool-wide ('No automatic retries. Explicit authenticated unavailability fails over immediately; silence is bounded to one reviewer timeout.'), making every enabled reviewer correctly retryable=false. The candidate's fix (falling back to any enabled reviewer, an exact attempt-count bound, and an adversarial retryable-inertness check) was verified locally (A/B/G all pass against PR #535's real candidate content) and pushed to PR #535's own branch, but PR #535's subsequent hosted replay run still failed with the identical original assertion -- confirmed by inspecting origin/main's own copy of hunter_trusted_orchestrator_replay_worker.py, which still contained the unfixed assertion -- proving the fix cannot take effect from the candidate branch that discovered it, only from a default-branch contribution."
+      ]
     }
   ]
 }
