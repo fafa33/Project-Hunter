@@ -752,15 +752,33 @@ def ensure_collector(
         elif not remediation_generation_admissible(repository, token, existing, generation_id):
             return existing
 
+    run_id = current_run_id()
+    if run_id is None:
+        raise RuntimeError("trusted orchestration requires GITHUB_RUN_ID")
+
+    # The branch above is not the only idempotency boundary: it only fires when
+    # `read_cycle` itself reports "present" with a matching digest. A stale,
+    # missing, or racy read of the commit-status cycle -- two reconciles landing
+    # close together, or any other reason the status observation disagrees with
+    # reality -- must never fall through to a blind duplicate dispatch when a
+    # collector run correlated to this exact (PR, head, generation) is already
+    # active or has already succeeded. This check is independent of whatever
+    # `read_cycle` answered, and unreadable evidence fails closed rather than
+    # authorising a dispatch it cannot rule out as a duplicate.
+    try:
+        liveness, _count = collector_liveness(repository, token, pr_number, head_sha, generation_id)
+    except transport.GitHubRequestError as exc:
+        raise RuntimeError(
+            f"collector correlation evidence unavailable for PR #{pr_number} at {head_sha[:10]}; "
+            f"refusing to risk a duplicate dispatch: {exc}"
+        ) from exc
+
     # Persist the dispatch identity and liveness timestamp *before* dispatch.
     # This status is the durable idempotency record: if GitHub accepts the
     # workflow dispatch and this process dies immediately afterwards, the next
     # reconciliation observes a dispatched cycle and checks correlated collector
     # runs instead of blindly issuing a duplicate dispatch. If dispatch itself
     # never produces a run, the bounded liveness grace permits one recovery.
-    run_id = current_run_id()
-    if run_id is None:
-        raise RuntimeError("trusted orchestration requires GITHUB_RUN_ID")
     cycle = ReviewCycle(
         pr_number=pr_number,
         head_sha=head_sha,
@@ -772,7 +790,8 @@ def ensure_collector(
         generation_id=generation_id,
     )
     publish_cycle(repository, token, head_sha, cycle=cycle)
-    dispatch_collector(repository, token, pr_number, head_sha, generation_id)
+    if liveness not in {"active", "completed"}:
+        dispatch_collector(repository, token, pr_number, head_sha, generation_id)
     return cycle
 
 

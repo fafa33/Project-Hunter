@@ -104,11 +104,13 @@ _RECOVERY_FLAG_SET = (
 )
 _RECOVERY_PUBLISH_SKIPPED = (
     """    publish_cycle(repository, token, head_sha, cycle=cycle)
-    dispatch_collector(repository, token, pr_number, head_sha, generation_id)
+    if liveness not in {"active", "completed"}:
+        dispatch_collector(repository, token, pr_number, head_sha, generation_id)
     return cycle""",
     """    if not _recovering:
         publish_cycle(repository, token, head_sha, cycle=cycle)
-    dispatch_collector(repository, token, pr_number, head_sha, generation_id)
+    if liveness not in {"active", "completed"}:
+        dispatch_collector(repository, token, pr_number, head_sha, generation_id)
     return cycle""",
 )
 RECOVERY_DISPATCHES_WITHOUT_REFRESHING_RECORD = (

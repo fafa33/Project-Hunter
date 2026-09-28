@@ -195,9 +195,17 @@ def test_event_reconcile_scopes_to_triggering_pr_and_reserves_full_sweep_for_rec
     ).read_text(encoding="utf-8")
     assert 'event_name="${{ github.event_name }}"' in workflow
     assert 'pr_numbers="${{ github.event.pull_request.number }}"' in workflow
-    assert '--search "${{ github.event.workflow_run.head_sha }}"' in workflow
-    assert 'select(.headRefOid == "${{ github.event.workflow_run.head_sha }}")' in workflow
+    assert '--search "${EVENT_WORKFLOW_RUN_HEAD_SHA}"' in workflow
+    assert 'select(.headRefOid == \\"${EVENT_WORKFLOW_RUN_HEAD_SHA}\\")' in workflow
     assert 'elif [[ "${event_name}" == "workflow_run" ]]' in workflow
+    # PR #541: a completed Hunter Reviewer Collector run always executes from
+    # the trusted default branch, so its own workflow_run.head_sha is main's,
+    # never the candidate's -- it must be scoped by its own trusted run-name
+    # identity instead, never by that head_sha.
+    assert (
+        'elif [[ "${event_name}" == "workflow_run" '
+        '&& "${EVENT_WORKFLOW_RUN_NAME}" == "Hunter Reviewer Collector" ]]; then'
+    ) in workflow
     assert 'else\n            pr_numbers="$(' in workflow
 
 
