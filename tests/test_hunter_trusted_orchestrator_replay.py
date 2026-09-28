@@ -18,6 +18,7 @@ from __future__ import annotations
 
 import json
 import re
+import shutil
 import subprocess
 import sys
 import tempfile
@@ -26,107 +27,52 @@ from pathlib import Path
 import hunter_trusted_orchestrator_replay as replay
 import pytest
 
-FIXED_PRE_READY = """
-import json
-from pathlib import Path
+REPO_ROOT = Path(__file__).resolve().parents[1]
 
+#: Real production regressions each corrected scenario must still catch. Every
+#: entry is a narrow, named mutation of this repository's *real*
+#: ``hunter_review_orchestrator.py``, so the negative tests below prove the
+#: scenarios discriminate against production code itself. Substituting a
+#: purpose-built fake for the module under test is precisely what let the prior
+#: harness assert an invariant production never implemented while its own suite
+#: stayed green, so the fixed/buggy module pairs that used to stand in for
+#: production are gone.
+#
+#: Each mutation is ``(anchor, replacement)``; the anchor must still be present
+#: in the real source, so a production refactor that moves these lines fails
+#: loudly here instead of silently making a negative test vacuous.
+DROPS_OPPORTUNITY_TERMINALITY = (
+    """            if existing.state in PENDING_STATES and _older_than(
+                existing.started_at, INDEPENDENT_REVIEW_OPPORTUNITY_SECONDS
+            ):""",
+    "            if False:",
+)
 
-def load_reviewer_pool(source=None):
-    path = Path(__file__).resolve().parents[1] / "docs" / "CODE_WRITE_POLICY.json"
-    data = json.loads(path.read_text(encoding="utf-8"))
-    return data["pool"], ""
+MAKES_OPPORTUNITY_NON_POSITIVE = (
+    "INDEPENDENT_REVIEW_OPPORTUNITY_SECONDS = 15 * 60",
+    "INDEPENDENT_REVIEW_OPPORTUNITY_SECONDS = 0",
+)
 
+MAKES_OPPORTUNITY_UNCONDITIONAL = (
+    """            if existing.state in PENDING_STATES and _older_than(
+                existing.started_at, INDEPENDENT_REVIEW_OPPORTUNITY_SECONDS
+            ):""",
+    "            if existing.state in PENDING_STATES:",
+)
 
-def enabled_pool_reviewers(pool):
-    return tuple(a for a in pool["agents"] if a.get("enabled"))
+DROPS_COLLECTOR_IDEMPOTENCY_RECORD = (
+    """            if existing.trigger_id is not None and not collector_needs_dispatch(repository, token, existing):
+                return existing""",
+    "            pass",
+)
 
+DROPS_LIVENESS_RECOVERY = (
+    """    if not _older_than(cycle.started_at, COLLECTOR_LIVENESS_GRACE_SECONDS):
+        return False""",
+    "    return False",
+)
 
-def reviewer_chain_worst_case_seconds(pool):
-    total = 0
-    for agent in enabled_pool_reviewers(pool):
-        attempts = 1 + (pool["timeout_policy"]["retries_per_agent"] if agent["retryable"] else 0)
-        total += attempts * int(agent["review_timeout_seconds"])
-    return total + 120
-"""
-
-FIXED_ORCHESTRATOR_HEADER = """
-from dataclasses import dataclass
-
-import hunter_pre_ready_review as pre_ready
-
-
-@dataclass(frozen=True)
-class ReviewCycle:
-    pr_number: int
-    head_sha: str
-    state: str
-    provider_id: str
-    trigger_id: int | None
-    started_at: str
-    config_digest: str
-    generation_id: str = ""
-"""
-
-SCENARIO_A_FIXED = """
-
-def independent_review_opportunity_seconds():
-    pool, error = pre_ready.load_reviewer_pool()
-    if pool is None or error:
-        raise RuntimeError(error)
-    return pre_ready.reviewer_chain_worst_case_seconds(pool)
-"""
-
-SCENARIO_A_BUGGY = """
-
-def independent_review_opportunity_seconds():
-    # Still the pre-fix hardcoded constant: ignores the reviewer pool entirely.
-    return 900
-"""
-
-SCENARIO_B_FIXED = """
-
-def ensure_collector(repository, token, pr_number, head_sha, generation_id=""):
-    digest = reviewer_pool_config_digest()
-    state, existing, _error = read_cycle(repository, token, pr_number, head_sha)
-    if (
-        state == "present"
-        and existing is not None
-        and existing.config_digest == digest
-        and existing.generation_id == generation_id
-    ):
-        return existing
-    # Fixed: check collector liveness before dispatching, even when the status
-    # read still reports the cycle as absent/stale.
-    liveness, _count = collector_liveness(repository, token, pr_number, head_sha, generation_id)
-    if liveness in {"active", "completed"}:
-        return ReviewCycle(pr_number, head_sha, "WAITING_FOR_REVIEWER", "", None, "", digest, generation_id)
-    run_id = current_run_id()
-    cycle = ReviewCycle(pr_number, head_sha, "WAITING_FOR_REVIEWER", "", run_id, "now", digest, generation_id)
-    publish_cycle(repository, token, head_sha, cycle=cycle)
-    dispatch_collector(repository, token, pr_number, head_sha, generation_id)
-    return cycle
-"""
-
-SCENARIO_B_BUGGY = """
-
-def ensure_collector(repository, token, pr_number, head_sha, generation_id=""):
-    digest = reviewer_pool_config_digest()
-    state, existing, _error = read_cycle(repository, token, pr_number, head_sha)
-    if (
-        state == "present"
-        and existing is not None
-        and existing.config_digest == digest
-        and existing.generation_id == generation_id
-    ):
-        return existing
-    # Buggy: dispatches unconditionally whenever the read is not "present",
-    # with no liveness check -- duplicates under a stale read.
-    run_id = current_run_id()
-    cycle = ReviewCycle(pr_number, head_sha, "WAITING_FOR_REVIEWER", "", run_id, "now", digest, generation_id)
-    publish_cycle(repository, token, head_sha, cycle=cycle)
-    dispatch_collector(repository, token, pr_number, head_sha, generation_id)
-    return cycle
-"""
+DROPS_DISPATCH_BUDGET = ("    if count >= MAX_COLLECTOR_DISPATCHES:", "    if False:")
 
 HOSTILE_EARLY_EXIT_ORCHESTRATOR = """
 
@@ -148,28 +94,11 @@ print(
     )
 )
 _os._exit(0)
-""" + SCENARIO_B_FIXED
-
-FIXED_GOVERNANCE = """
-import hunter_review_orchestrator as orchestration
-
-
-def review_orchestration_state(repository, token, pr_number, head_sha):
-    state, cycle, error = orchestration.read_cycle(repository, token, pr_number, head_sha)
-    if state == "present" and cycle is not None:
-        return cycle.state, f"provider={cycle.provider_id or 'unassigned'}"
-    if state == "absent":
-        return "WAITING_FOR_REVIEWER", "no trusted exact-head orchestration cycle has been published"
-    raise RuntimeError(error or f"invalid review orchestration state: {state}")
-
-
-def pending_review_authority_state(repository, token, pr_number, head_sha):
-    cycle_state, detail = review_orchestration_state(repository, token, pr_number, head_sha)
-    if cycle_state in {"REVIEW_IN_PROGRESS", "FAILOVER_IN_PROGRESS", "WAITING_FOR_REVIEWER"}:
-        return "pending", f"{cycle_state}: {detail}"
-    return "failure", f"MISSING_REVIEW_AUTHORITY: {cycle_state}: {detail}"
 """
 
+#: Swallows the fail-closed path: a malformed cycle record is treated as "no
+#: cycle" instead of raising, so an unreadable exact-head state would classify
+#: as pending rather than blocking.
 BUGGY_GOVERNANCE = """
 import hunter_review_orchestrator as orchestration
 
@@ -195,110 +124,6 @@ def pending_review_authority_state(repository, token, pr_number, head_sha):
     return "failure", f"MISSING_REVIEW_AUTHORITY: {cycle_state}: {detail}"
 """
 
-POLICY_JSON = {
-    "pool": {
-        "timeout_policy": {"retries_per_agent": 1},
-        "agents": [
-            {"id": "codex", "enabled": True, "retryable": True, "review_timeout_seconds": 1800, "priority": 1},
-            {"id": "copilot", "enabled": True, "retryable": False, "review_timeout_seconds": 300, "priority": 2},
-            {"id": "unused", "enabled": False, "retryable": True, "review_timeout_seconds": 300, "priority": 3},
-        ],
-    }
-}
-
-#: Mirrors the "no automatic retries" pool shape a real, deliberate policy may
-#: use: every enabled reviewer is correctly retryable=false because the pool
-#: grants zero retries pool-wide, not because any reviewer was mis-declared.
-POLICY_JSON_NO_RETRYABLE = {
-    "pool": {
-        "timeout_policy": {"retries_per_agent": 0},
-        "agents": [
-            {"id": "codex", "enabled": True, "retryable": False, "review_timeout_seconds": 1800, "priority": 1},
-            {"id": "copilot", "enabled": True, "retryable": False, "review_timeout_seconds": 300, "priority": 2},
-        ],
-    }
-}
-
-BUGGY_PRE_READY_RETRYABLE_IGNORES_POLICY = """
-import json
-from pathlib import Path
-
-
-def load_reviewer_pool(source=None):
-    path = Path(__file__).resolve().parents[1] / "docs" / "CODE_WRITE_POLICY.json"
-    data = json.loads(path.read_text(encoding="utf-8"))
-    return data["pool"], ""
-
-
-def enabled_pool_reviewers(pool):
-    return tuple(a for a in pool["agents"] if a.get("enabled"))
-
-
-def reviewer_chain_worst_case_seconds(pool):
-    total = 0
-    for agent in enabled_pool_reviewers(pool):
-        # Buggy: a retryable agent always costs one extra attempt, ignoring
-        # the pool's own retries_per_agent (which may correctly be 0).
-        attempts = 2 if agent["retryable"] else 1
-        total += attempts * int(agent["review_timeout_seconds"])
-    return total + 120
-"""
-
-
-#: Legitimate alternative to a fixed additive overhead constant: overhead is
-#: a 10% buffer on the raw chain, so it grows when a reviewer's timeout does.
-PROPORTIONAL_OVERHEAD_PRE_READY = """
-import json
-from pathlib import Path
-
-
-def load_reviewer_pool(source=None):
-    path = Path(__file__).resolve().parents[1] / "docs" / "CODE_WRITE_POLICY.json"
-    data = json.loads(path.read_text(encoding="utf-8"))
-    return data["pool"], ""
-
-
-def enabled_pool_reviewers(pool):
-    return tuple(a for a in pool["agents"] if a.get("enabled"))
-
-
-def reviewer_chain_worst_case_seconds(pool):
-    total = 0
-    for agent in enabled_pool_reviewers(pool):
-        attempts = 1 + (pool["timeout_policy"]["retries_per_agent"] if agent["retryable"] else 0)
-        total += attempts * int(agent["review_timeout_seconds"])
-    return total + int(total * 0.10)
-"""
-
-#: Buggy: doubles the retryable attempt multiplier on top of the policy's own
-#: retries_per_agent, an unbounded-looking retry component this scenario must
-#: still reject even though it no longer requires an exact-equality match.
-BUGGY_PRE_READY_DOUBLES_RETRYABLE_ATTEMPTS = """
-import json
-from pathlib import Path
-
-
-def load_reviewer_pool(source=None):
-    path = Path(__file__).resolve().parents[1] / "docs" / "CODE_WRITE_POLICY.json"
-    data = json.loads(path.read_text(encoding="utf-8"))
-    return data["pool"], ""
-
-
-def enabled_pool_reviewers(pool):
-    return tuple(a for a in pool["agents"] if a.get("enabled"))
-
-
-def reviewer_chain_worst_case_seconds(pool):
-    total = 0
-    for agent in enabled_pool_reviewers(pool):
-        if agent["retryable"]:
-            attempts = 2 * (1 + pool["timeout_policy"]["retries_per_agent"])
-        else:
-            attempts = 1
-        total += attempts * int(agent["review_timeout_seconds"])
-    return total + 120
-"""
-
 
 def _write(path: Path, content: str) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
@@ -308,16 +133,34 @@ def _write(path: Path, content: str) -> None:
 def _candidate_root(
     tmp_path: Path,
     *,
-    orchestrator_src: str,
-    governance_src: str = FIXED_GOVERNANCE,
-    pre_ready_src: str = FIXED_PRE_READY,
-    policy_json: dict = POLICY_JSON,
+    orchestrator_mutations: tuple[tuple[str, str], ...] = (),
+    orchestrator_src: str | None = None,
+    governance_src: str | None = None,
 ) -> Path:
+    """Build a candidate root out of this repository's *real* production modules.
+
+    Scenarios are validated against production code itself. A negative test
+    proves a scenario still catches a real regression either by applying a
+    narrow, named mutation to the real orchestrator (``orchestrator_mutations``)
+    or by replacing exactly one module outright (``orchestrator_src`` /
+    ``governance_src``). Standing in a synthetic module for the code under test
+    is what previously let the harness assert an invariant production never
+    implemented while its own suite stayed green.
+    """
     root = tmp_path / "candidate"
-    _write(root / "scripts" / "hunter_pre_ready_review.py", pre_ready_src)
-    _write(root / "scripts" / "hunter_review_orchestrator.py", FIXED_ORCHESTRATOR_HEADER + orchestrator_src)
-    _write(root / "scripts" / "hunter_governance_review_v2.py", governance_src)
-    _write(root / "docs" / "CODE_WRITE_POLICY.json", json.dumps(policy_json))
+    shutil.copytree(REPO_ROOT / "scripts", root / "scripts")
+    shutil.copytree(REPO_ROOT / "src", root / "src")
+    (root / "docs").mkdir(parents=True, exist_ok=True)
+    shutil.copy(REPO_ROOT / "docs" / "CODE_WRITE_POLICY.json", root / "docs" / "CODE_WRITE_POLICY.json")
+
+    orchestrator_path = root / "scripts" / "hunter_review_orchestrator.py"
+    source = orchestrator_path.read_text(encoding="utf-8") if orchestrator_src is None else orchestrator_src
+    for anchor, replacement in orchestrator_mutations:
+        assert anchor in source, f"mutation anchor missing from candidate orchestrator: {anchor!r}"
+        source = source.replace(anchor, replacement, 1)
+    _write(orchestrator_path, source)
+    if governance_src is not None:
+        _write(root / "scripts" / "hunter_governance_review_v2.py", governance_src)
     return root
 
 
@@ -327,112 +170,99 @@ def _fixture_path(tmp_path: Path) -> Path:
     return path
 
 
-# --- Scenario A: reviewer opportunity timing -------------------------------
+# --- Scenario A: bounded review opportunity that ends a cycle ---------------
 
 
-def test_scenario_a_passes_against_a_pool_derived_opportunity(tmp_path):
-    root = _candidate_root(tmp_path, orchestrator_src=SCENARIO_A_FIXED)
-    result = replay._run_scenario("A", root, _fixture_path(tmp_path), workspace_root=tmp_path)
-    assert result["outcome"] == "pass", result.get("error")
-    assert result["measurements"]["baseline_seconds"] == result["measurements"]["worst_case_seconds"]
-    assert result["measurements"]["mutated_seconds"] > result["measurements"]["baseline_seconds"]
+def test_scenario_a_passes_against_real_production(tmp_path):
+    """The scenario must pass against the candidate's real production
+    orchestrator. The pre-fix harness could not do this at all: it called an
+    API production never had, so every fixture in this file substituted a
+    synthetic module and the suite stayed green while the real replay failed.
+    """
 
-
-def test_scenario_a_fails_against_a_hardcoded_opportunity(tmp_path):
-    root = _candidate_root(tmp_path, orchestrator_src=SCENARIO_A_BUGGY)
-    result = replay._run_scenario("A", root, _fixture_path(tmp_path), workspace_root=tmp_path)
-    assert result["outcome"] == "fail"
-    assert "must equal the candidate's own trusted worst-case-budget derivation" in result["error"]
-
-
-def test_scenario_a_passes_when_no_reviewer_is_retryable_and_retries_per_agent_is_zero(tmp_path):
-    """A pool that grants zero retries pool-wide, with every enabled reviewer
-    correctly declaring retryable=false, is a legitimate real-world shape --
-    not a fixture defect -- and this scenario must not require a retryable
-    reviewer to exist in order to prove the opportunity is pool-derived."""
-
-    root = _candidate_root(tmp_path, orchestrator_src=SCENARIO_A_FIXED, policy_json=POLICY_JSON_NO_RETRYABLE)
+    root = _candidate_root(tmp_path)
     result = replay._run_scenario("A", root, _fixture_path(tmp_path), workspace_root=tmp_path)
     assert result["outcome"] == "pass", result.get("error")
     measurements = result["measurements"]
-    # retries_per_agent is 0, so exactly one attempt: the increase must equal
-    # the injected delta exactly, not merely be "at least" it.
-    assert measurements["mutated_seconds"] - measurements["baseline_seconds"] == measurements["injected_delta_seconds"]
+    assert measurements["opportunity_seconds"] > 0
+    assert measurements["timed_out_state"] == "REVIEW_TIMED_OUT"
+    assert measurements["in_opportunity_state"] != "REVIEW_TIMED_OUT"
 
 
-def test_scenario_a_fails_when_retryable_flag_affects_timing_despite_zero_retries(tmp_path):
-    """Adversarial: a candidate whose own worst-case derivation lets a
-    reviewer's retryable flag change the result even though the pool's own
-    retries_per_agent is 0 must be rejected -- proving this scenario cannot
-    be satisfied merely by a fixture/receipt claiming retryable=true."""
+def test_scenario_a_fails_when_a_pending_cycle_can_stay_pending_forever(tmp_path):
+    """Regression: production's own contract is that a completed or timed-out
+    opportunity must never leave the exact-head status pending forever. A
+    candidate that stops enforcing that must be rejected."""
 
-    root = _candidate_root(
-        tmp_path,
-        orchestrator_src=SCENARIO_A_FIXED,
-        pre_ready_src=BUGGY_PRE_READY_RETRYABLE_IGNORES_POLICY,
-        policy_json=POLICY_JSON_NO_RETRYABLE,
-    )
+    root = _candidate_root(tmp_path, orchestrator_mutations=(DROPS_OPPORTUNITY_TERMINALITY,))
     result = replay._run_scenario("A", root, _fixture_path(tmp_path), workspace_root=tmp_path)
     assert result["outcome"] == "fail"
-    assert "retryable must be inert when the pool grants no retries" in result["error"]
+    assert "must reach a terminal state" in result["error"]
 
 
-def test_scenario_a_passes_with_a_proportional_overhead_budget(tmp_path):
-    """Adversarial (Codex review finding on PR #537): Scenario A's declared
-    invariant only requires the opportunity to cover the raw chain and reserve
-    bounded positive overhead -- it does not require that overhead to be a
-    fixed additive constant. A candidate that legitimately derives overhead
-    proportionally from the chain duration (e.g. a percentage buffer) must
-    still pass even though raising one reviewer's timeout then grows the
-    overhead too, making the increase exceed the raw per-reviewer delta."""
+def test_scenario_a_fails_when_the_opportunity_is_not_a_real_bound(tmp_path):
+    """A non-positive budget is not a bound, so it cannot be the thing that ends
+    a cycle."""
 
-    root = _candidate_root(
-        tmp_path,
-        orchestrator_src=SCENARIO_A_FIXED,
-        pre_ready_src=PROPORTIONAL_OVERHEAD_PRE_READY,
-        policy_json=POLICY_JSON_NO_RETRYABLE,
-    )
+    root = _candidate_root(tmp_path, orchestrator_mutations=(MAKES_OPPORTUNITY_NON_POSITIVE,))
     result = replay._run_scenario("A", root, _fixture_path(tmp_path), workspace_root=tmp_path)
+    assert result["outcome"] == "fail"
+    assert "must be strictly positive" in result["error"]
+
+
+def test_scenario_a_fails_when_the_opportunity_is_ignored(tmp_path):
+    """Proves the in-budget half of the invariant is load-bearing: timing out
+    every pending cycle regardless of age is an unbounded wait in the other
+    direction and must not pass."""
+
+    root = _candidate_root(tmp_path, orchestrator_mutations=(MAKES_OPPORTUNITY_UNCONDITIONAL,))
+    result = replay._run_scenario("A", root, _fixture_path(tmp_path), workspace_root=tmp_path)
+    assert result["outcome"] == "fail"
+    assert "must not be timed out" in result["error"]
+
+
+# --- Scenario B: bounded, idempotent exact-head collector dispatch ----------
+
+
+def test_scenario_b_passes_against_real_production(tmp_path):
+    root = _candidate_root(tmp_path)
+    result = replay._run_scenario("B", root, _fixture_path(tmp_path), workspace_root=tmp_path)
     assert result["outcome"] == "pass", result.get("error")
     measurements = result["measurements"]
-    # The proportional overhead makes the increase exceed a pure 1:1 delta --
-    # exactly what the old exact-equality check would have wrongly rejected.
-    assert measurements["mutated_seconds"] - measurements["baseline_seconds"] > measurements["injected_delta_seconds"]
+    # One dispatch for the unrecorded head, one bounded recovery for the cycle
+    # whose collector never showed up, and nothing after that.
+    assert measurements["dispatches"] == 2
+    assert measurements["exhausted_state"] == "WAITING_FOR_REVIEWER"
 
 
-def test_scenario_a_fails_when_retry_multiplier_is_unbounded(tmp_path):
-    """Adversarial: loosening the check to a bounded range (to admit
-    proportional overhead, above) must not make it toothless -- a candidate
-    that doubles the retryable attempt multiplier on top of the policy's own
-    retries_per_agent still produces an increase outside the plausible bound
-    and must still be rejected."""
+def test_scenario_b_fails_when_a_recorded_cycle_is_dispatched_again(tmp_path):
+    """Regression: the published cycle is the durable idempotency record, so a
+    reconcile that can observe it must never issue a duplicate dispatch."""
 
-    root = _candidate_root(
-        tmp_path,
-        orchestrator_src=SCENARIO_A_FIXED,
-        pre_ready_src=BUGGY_PRE_READY_DOUBLES_RETRYABLE_ATTEMPTS,
-        policy_json=POLICY_JSON,
-    )
-    result = replay._run_scenario("A", root, _fixture_path(tmp_path), workspace_root=tmp_path)
-    assert result["outcome"] == "fail"
-    assert "unbounded or open-ended retry component" in result["error"]
-
-
-# --- Scenario B: exact-head collector idempotency --------------------------
-
-
-def test_scenario_b_passes_against_a_liveness_checked_dispatch(tmp_path):
-    root = _candidate_root(tmp_path, orchestrator_src=SCENARIO_B_FIXED)
-    result = replay._run_scenario("B", root, _fixture_path(tmp_path), workspace_root=tmp_path)
-    assert result["outcome"] == "pass", result.get("error")
-    assert result["measurements"]["dispatches"] == 1
-
-
-def test_scenario_b_fails_against_an_unconditional_dispatch(tmp_path):
-    root = _candidate_root(tmp_path, orchestrator_src=SCENARIO_B_BUGGY)
+    root = _candidate_root(tmp_path, orchestrator_mutations=(DROPS_COLLECTOR_IDEMPOTENCY_RECORD,))
     result = replay._run_scenario("B", root, _fixture_path(tmp_path), workspace_root=tmp_path)
     assert result["outcome"] == "fail"
-    assert "exactly one dispatch" in result["error"]
+    assert "must dispatch no further collector" in result["error"]
+
+
+def test_scenario_b_fails_without_bounded_liveness_recovery(tmp_path):
+    """A dispatch that never produces a run must recover, or the exact head
+    stays pending forever."""
+
+    root = _candidate_root(tmp_path, orchestrator_mutations=(DROPS_LIVENESS_RECOVERY,))
+    result = replay._run_scenario("B", root, _fixture_path(tmp_path), workspace_root=tmp_path)
+    assert result["outcome"] == "fail"
+    assert "must recover exactly one further dispatch" in result["error"]
+
+
+def test_scenario_b_fails_when_dispatch_is_unbounded(tmp_path):
+    """Production states the bound explicitly: a cycle that keeps failing must
+    settle into a blocked pending state rather than dispatch without end."""
+
+    root = _candidate_root(tmp_path, orchestrator_mutations=(DROPS_DISPATCH_BUDGET,))
+    result = replay._run_scenario("B", root, _fixture_path(tmp_path), workspace_root=tmp_path)
+    assert result["outcome"] == "fail"
+    assert "must stay pending rather than dispatching without end" in result["error"]
 
 
 def test_scenario_fails_against_a_candidate_that_forges_a_passing_payload_and_exits_early(tmp_path):
@@ -452,13 +282,13 @@ def test_scenario_fails_against_a_candidate_that_forges_a_passing_payload_and_ex
 
 
 def test_scenario_g_passes_against_correct_end_to_end_classification(tmp_path):
-    root = _candidate_root(tmp_path, orchestrator_src=SCENARIO_B_FIXED, governance_src=FIXED_GOVERNANCE)
+    root = _candidate_root(tmp_path)
     result = replay._run_scenario("G", root, _fixture_path(tmp_path), workspace_root=tmp_path)
     assert result["outcome"] == "pass", result.get("error")
 
 
 def test_scenario_g_fails_against_a_swallowed_fail_closed_path(tmp_path):
-    root = _candidate_root(tmp_path, orchestrator_src=SCENARIO_B_FIXED, governance_src=BUGGY_GOVERNANCE)
+    root = _candidate_root(tmp_path, governance_src=BUGGY_GOVERNANCE)
     result = replay._run_scenario("G", root, _fixture_path(tmp_path), workspace_root=tmp_path)
     assert result["outcome"] == "fail"
     assert "fail closed" in result["error"]
@@ -508,7 +338,7 @@ def test_fixture_digest_is_deterministic_and_content_sensitive(monkeypatch):
 
 
 def _good_receipt(tmp_path: Path) -> tuple[dict, Path]:
-    root = _candidate_root(tmp_path, orchestrator_src=SCENARIO_A_FIXED + SCENARIO_B_FIXED)
+    root = _candidate_root(tmp_path)
     receipt = replay.build_receipt(candidate_root=root, pr_number=535, candidate_sha="a" * 40, workspace_root=tmp_path)
     return receipt, root
 
@@ -629,7 +459,7 @@ def test_validate_cli_rejects_a_digest_check_reporting_errors(tmp_path):
 
 
 def test_run_cli_rejects_a_traversal_candidate_root(tmp_path):
-    root = _candidate_root(tmp_path, orchestrator_src=SCENARIO_A_FIXED + SCENARIO_B_FIXED)
+    root = _candidate_root(tmp_path)
     script = Path(replay.__file__)
     (tmp_path / "workspace").mkdir()
 
@@ -657,7 +487,7 @@ def test_run_cli_rejects_a_traversal_candidate_root(tmp_path):
 
 
 def test_run_cli_rejects_an_absolute_candidate_root(tmp_path):
-    root = _candidate_root(tmp_path, orchestrator_src=SCENARIO_A_FIXED + SCENARIO_B_FIXED)
+    root = _candidate_root(tmp_path)
     script = Path(replay.__file__)
 
     run = subprocess.run(
@@ -696,7 +526,7 @@ def test_candidate_root_resolution_rejects_a_symlink_escaping_the_workspace_root
 
 
 def test_verify_digests_cli_rejects_a_wrong_type_candidate_root(tmp_path):
-    root = _candidate_root(tmp_path, orchestrator_src=SCENARIO_A_FIXED + SCENARIO_B_FIXED)
+    root = _candidate_root(tmp_path)
     receipt = replay.build_receipt(candidate_root=root, pr_number=535, candidate_sha="a" * 40, workspace_root=tmp_path)
     receipt_path = tmp_path / "receipt.json"
     receipt_path.write_text(json.dumps(receipt), encoding="utf-8")
@@ -759,7 +589,7 @@ def test_validate_cli_rejects_a_receipt_path_substituted_outside_the_workspace(t
 
 def test_run_cli_rejects_an_out_path_substituted_outside_the_workspace(tmp_path):
     workspace = tmp_path / "workspace"
-    _candidate_root(workspace, orchestrator_src=SCENARIO_A_FIXED + SCENARIO_B_FIXED)
+    _candidate_root(workspace)
 
     run = subprocess.run(
         [
@@ -795,7 +625,7 @@ def test_run_cli_rejects_a_candidate_root_that_escapes_a_substituted_alternate_w
 
     real_workspace = tmp_path / "real-workspace"
     real_workspace.mkdir()
-    _candidate_root(real_workspace, orchestrator_src=SCENARIO_A_FIXED + SCENARIO_B_FIXED)
+    _candidate_root(real_workspace)
     alt_workspace = tmp_path / "alt-workspace"
     alt_workspace.mkdir()
 
@@ -839,8 +669,9 @@ def test_verify_digests_cli_rejects_an_alternate_candidate_root_substitution(tmp
     # "candidate" and the real one already occupies that name in tmp_path.
     unrenamed_alternate_root = _candidate_root(
         tmp_path / "alt-source",
-        orchestrator_src=SCENARIO_A_FIXED,
-        governance_src=FIXED_GOVERNANCE + "\n# alternate candidate checkout\n",
+        orchestrator_mutations=(DROPS_DISPATCH_BUDGET,),
+        governance_src=(REPO_ROOT / "scripts" / "hunter_governance_review_v2.py").read_text(encoding="utf-8")
+        + "\n# alternate candidate checkout\n",
     )
     alternate_root = unrenamed_alternate_root.rename(tmp_path / "candidate-alternate")
     digest_check_path = tmp_path / "digest-check.json"
@@ -880,7 +711,7 @@ def test_verify_digests_cli_rejects_an_alternate_candidate_root_substitution(tmp
     ],
 )
 def test_run_cli_rejects_a_malformed_candidate_sha(tmp_path, malformed_sha):
-    root = _candidate_root(tmp_path, orchestrator_src=SCENARIO_A_FIXED + SCENARIO_B_FIXED)
+    root = _candidate_root(tmp_path)
     (tmp_path / "workspace").mkdir()
 
     run = subprocess.run(
@@ -1033,7 +864,7 @@ def test_adversarial_10_reversed_or_missing_timestamps_are_rejected(tmp_path):
 
 
 def test_adversarial_11_malformed_receipt_json_fails_closed(tmp_path):
-    root = _candidate_root(tmp_path, orchestrator_src=SCENARIO_B_FIXED)
+    root = _candidate_root(tmp_path)
     errors = replay.validate_receipt("not a dict", candidate_root=root, pr_number=535, candidate_sha="a" * 40)
     assert errors == ["receipt is not a JSON object"]
 
@@ -1295,7 +1126,7 @@ def test_checkout_free_inline_validator_rejects_a_non_success_workflow_conclusio
 
 
 def test_run_cli_rejects_a_non_integer_pr(tmp_path):
-    root = _candidate_root(tmp_path, orchestrator_src=SCENARIO_A_FIXED + SCENARIO_B_FIXED)
+    root = _candidate_root(tmp_path)
     run = subprocess.run(
         [
             sys.executable,
@@ -1321,7 +1152,7 @@ def test_run_cli_rejects_a_non_integer_pr(tmp_path):
 
 @pytest.mark.parametrize("bad_pr", [0, -5, -1])
 def test_run_cli_rejects_a_zero_or_negative_pr(tmp_path, bad_pr):
-    root = _candidate_root(tmp_path, orchestrator_src=SCENARIO_A_FIXED + SCENARIO_B_FIXED)
+    root = _candidate_root(tmp_path)
     run = subprocess.run(
         [
             sys.executable,
@@ -1346,7 +1177,7 @@ def test_run_cli_rejects_a_zero_or_negative_pr(tmp_path, bad_pr):
 
 
 def test_run_cli_rejects_an_oversized_pr(tmp_path):
-    root = _candidate_root(tmp_path, orchestrator_src=SCENARIO_A_FIXED + SCENARIO_B_FIXED)
+    root = _candidate_root(tmp_path)
     run = subprocess.run(
         [
             sys.executable,
@@ -1383,7 +1214,7 @@ def test_parse_trusted_replay_identity_rejects_out_of_domain_pr(bad_pr):
 
 
 def test_run_cli_persists_only_the_normalized_identity_values(tmp_path):
-    root = _candidate_root(tmp_path, orchestrator_src=SCENARIO_A_FIXED + SCENARIO_B_FIXED)
+    root = _candidate_root(tmp_path)
     out_path = tmp_path / "receipt.json"
 
     run = subprocess.run(
