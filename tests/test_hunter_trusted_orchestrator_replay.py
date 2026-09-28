@@ -74,6 +74,89 @@ DROPS_LIVENESS_RECOVERY = (
 
 DROPS_DISPATCH_BUDGET = ("    if count >= MAX_COLLECTOR_DISPATCHES:", "    if False:")
 
+#: Codex P1 on PR #539: the declared budget is wider than the threshold the
+#: candidate actually enforces. Sampling the two probes far apart only proves
+#: *some* cutoff sits between them, so a 1.5x threshold still passed.
+OPPORTUNITY_THRESHOLD_EXCEEDS_DECLARED = (
+    "                existing.started_at, INDEPENDENT_REVIEW_OPPORTUNITY_SECONDS",
+    "                existing.started_at, INDEPENDENT_REVIEW_OPPORTUNITY_SECONDS * 3 // 2",
+)
+
+#: Codex P1 on PR #539: the recovery dispatch is real, but the durable cycle it
+#: was dispatched for is never refreshed, so every later reconcile recovers the
+#: same exact head again off the original stale record. Written as a
+#: three-part mutation (a recovery flag, its initialisation, and a publish that
+#: skips the recovery) because suppressing the publish for the recovery alone
+#: requires distinguishing the recovery path from the first dispatch.
+_RECOVERY_FLAG_INIT = (
+    """    digest = reviewer_pool_config_digest()
+    state, existing, _error = read_cycle(repository, token, pr_number, head_sha)""",
+    """    digest = reviewer_pool_config_digest()
+    _recovering = False
+    state, existing, _error = read_cycle(repository, token, pr_number, head_sha)""",
+)
+_RECOVERY_FLAG_SET = (
+    """            if existing.trigger_id is not None and not collector_needs_dispatch(repository, token, existing):
+                return existing""",
+    """            if existing.trigger_id is not None and not collector_needs_dispatch(repository, token, existing):
+                return existing
+            _recovering = True""",
+)
+_RECOVERY_PUBLISH_SKIPPED = (
+    """    publish_cycle(repository, token, head_sha, cycle=cycle)
+    dispatch_collector(repository, token, pr_number, head_sha, generation_id)
+    return cycle""",
+    """    if not _recovering:
+        publish_cycle(repository, token, head_sha, cycle=cycle)
+    dispatch_collector(repository, token, pr_number, head_sha, generation_id)
+    return cycle""",
+)
+RECOVERY_DISPATCHES_WITHOUT_REFRESHING_RECORD = (
+    _RECOVERY_FLAG_INIT,
+    _RECOVERY_FLAG_SET,
+    _RECOVERY_PUBLISH_SKIPPED,
+)
+
+# Codex P1 on PR #540: the pre-fix dispatch stub always created a correlated
+# run, so the stale-cycle recovery probe could only ever observe ("dead", 1).
+# ("missing", 0) -- a dispatch that was accepted but never produced a run --
+# was never exercised, and a candidate that refuses recovery specifically in
+# that state slipped through.
+RECOVERY_DECLINED_WHEN_NO_RUN_EXISTS = (
+    (
+        """    if liveness in {"active", "completed"}:
+        return False
+    if count >= MAX_COLLECTOR_DISPATCHES:""",
+        """    if liveness in {"active", "completed"}:
+        return False
+    if liveness == "missing" and count == 0:
+        return False
+    if count >= MAX_COLLECTOR_DISPATCHES:""",
+    ),
+)
+
+_DATETIME_IMPORT_WITH_TIMEDELTA = (
+    "from datetime import UTC, datetime",
+    "from datetime import UTC, datetime, timedelta",
+)
+
+# Codex P1 on PR #540: the pre-fix scenario aged/replaced the durable record
+# right after recovery, so it never reconciled the refreshed record the
+# recovery actually published. A candidate that published a distinct record
+# while preserving an already-stale liveness timestamp passed even though the
+# very next real reconcile re-dispatches the same exact head.
+RECOVERY_REFRESH_PRESERVES_STALE_STARTED_AT = (
+    _DATETIME_IMPORT_WITH_TIMEDELTA,
+    (
+        """        started_at=datetime.now(UTC).strftime("%Y-%m-%dT%H:%M:%SZ"),""",
+        """        started_at=(
+            datetime.now(UTC) - timedelta(seconds=COLLECTOR_LIVENESS_GRACE_SECONDS + 60)
+            if existing is not None
+            else datetime.now(UTC)
+        ).strftime("%Y-%m-%dT%H:%M:%SZ"),""",
+    ),
+)
+
 HOSTILE_EARLY_EXIT_ORCHESTRATOR = """
 
 # Hostile: forges a passing payload and terminates the whole process at
@@ -184,9 +267,35 @@ def test_scenario_a_passes_against_real_production(tmp_path):
     result = replay._run_scenario("A", root, _fixture_path(tmp_path), workspace_root=tmp_path)
     assert result["outcome"] == "pass", result.get("error")
     measurements = result["measurements"]
-    assert measurements["opportunity_seconds"] > 0
+    budget = measurements["opportunity_seconds"]
+    assert budget > 0
+    # The two probes must straddle the candidate's own declared budget
+    # immediately, not merely sit on either side of some wider threshold.
+    assert measurements["below_boundary_seconds"] < budget < measurements["above_boundary_seconds"], (
+        f"the boundary probes must straddle the declared {budget}s budget, got "
+        f"{measurements['below_boundary_seconds']}s and {measurements['above_boundary_seconds']}s"
+    )
+    assert (
+        budget - measurements["below_boundary_seconds"] <= 2
+    ), "the inside probe must sit immediately below the boundary"
+    assert (
+        measurements["above_boundary_seconds"] - budget <= 2
+    ), "the outside probe must sit immediately above the boundary"
     assert measurements["timed_out_state"] == "REVIEW_TIMED_OUT"
     assert measurements["in_opportunity_state"] != "REVIEW_TIMED_OUT"
+
+
+def test_scenario_a_fails_when_the_real_threshold_exceeds_the_declared_budget(tmp_path):
+    """Codex P1 on PR #539: a candidate whose real timeout cutoff is wider than
+    the budget it declares must be rejected. The pre-fix probes (1s inside,
+    2x outside) both sat inside such a candidate's 1.5x threshold, so it passed
+    while still leaving an exact head pending well past the bound it advertised.
+    """
+
+    root = _candidate_root(tmp_path, orchestrator_mutations=(OPPORTUNITY_THRESHOLD_EXCEEDS_DECLARED,))
+    result = replay._run_scenario("A", root, _fixture_path(tmp_path), workspace_root=tmp_path)
+    assert result["outcome"] == "fail"
+    assert "real timeout threshold is wider than the budget it declares" in result["error"]
 
 
 def test_scenario_a_fails_when_a_pending_cycle_can_stay_pending_forever(tmp_path):
@@ -229,10 +338,67 @@ def test_scenario_b_passes_against_real_production(tmp_path):
     result = replay._run_scenario("B", root, _fixture_path(tmp_path), workspace_root=tmp_path)
     assert result["outcome"] == "pass", result.get("error")
     measurements = result["measurements"]
-    # One dispatch for the unrecorded head, one bounded recovery for the cycle
-    # whose collector never showed up, and nothing after that.
-    assert measurements["dispatches"] == 2
+    # Production spends MAX_COLLECTOR_DISPATCHES on correlated runs, not on
+    # dispatches: ``collector_liveness`` returns len(runs) and
+    # ``collector_needs_dispatch`` compares that count to the budget. The two
+    # dispatches that produced no run therefore do not consume it, so the bound
+    # is asserted on the run count, with the dispatch total checked to be
+    # exactly those no-run dispatches plus the budget.
+    assert measurements["correlated_runs"] == measurements["max_dispatches"], (
+        "the dispatch budget must be consumed by the runs production actually created, got "
+        f"{measurements['correlated_runs']} run(s)"
+    )
+    assert measurements["dispatches"] == measurements["max_dispatches"] + 2, (
+        f"expected 2 dispatches that produced no correlated run plus the {measurements['max_dispatches']}-run "
+        f"budget, got {measurements['dispatches']} dispatch(es)"
+    )
+    # The recovery refreshes the durable record, so more than one durable cycle
+    # exists beyond the initial record and the stale probe.
+    assert measurements["durable_records_published"] > 1
     assert measurements["exhausted_state"] == "WAITING_FOR_REVIEWER"
+
+
+def test_scenario_b_fails_when_recovery_does_not_refresh_the_durable_record(tmp_path):
+    """Codex P1 on PR #539: a candidate may dispatch the recovery and still
+    leave the original stale durable record in place. Every later reconcile then
+    recovers the same exact head again off a record that never changed. The
+    pre-fix scenario substituted a synthetic liveness count at exactly this
+    point, so it never read the durable record back and this passed.
+    """
+
+    root = _candidate_root(tmp_path, orchestrator_mutations=RECOVERY_DISPATCHES_WITHOUT_REFRESHING_RECORD)
+    result = replay._run_scenario("B", root, _fixture_path(tmp_path), workspace_root=tmp_path)
+    assert result["outcome"] == "fail"
+    assert "must publish/refresh the durable cycle record" in result["error"]
+
+
+def test_scenario_b_fails_when_recovery_declines_a_cycle_with_no_run(tmp_path):
+    """Codex P1 on PR #540: a dispatch can be accepted and still never produce
+    a run, which production reports as ("missing", 0). The pre-fix dispatch stub
+    always created a run, so the recovery probe could only observe ("dead", 1)
+    and this candidate -- which refuses recovery in exactly the missing-run
+    state -- passed while leaving the exact head pending forever.
+    """
+
+    root = _candidate_root(tmp_path, orchestrator_mutations=RECOVERY_DECLINED_WHEN_NO_RUN_EXISTS)
+    result = replay._run_scenario("B", root, _fixture_path(tmp_path), workspace_root=tmp_path)
+    assert result["outcome"] == "fail"
+    assert "must recover exactly one further dispatch" in result["error"]
+
+
+def test_scenario_b_fails_when_the_refresh_keeps_a_stale_liveness_timestamp(tmp_path):
+    """Codex P1 on PR #540: the pre-fix scenario aged/replaced the durable record
+    straight after recovery, so the refreshed record was never reconciled on its
+    own. A candidate that published a distinct record while preserving an
+    already-stale started_at therefore passed, even though the next real
+    reconcile re-dispatches the same exact head. Reconciling the refreshed
+    record before ageing anything catches it.
+    """
+
+    root = _candidate_root(tmp_path, orchestrator_mutations=RECOVERY_REFRESH_PRESERVES_STALE_STARTED_AT)
+    result = replay._run_scenario("B", root, _fixture_path(tmp_path), workspace_root=tmp_path)
+    assert result["outcome"] == "fail"
+    assert "reconciling the refreshed durable record must dispatch no further collector" in result["error"]
 
 
 def test_scenario_b_fails_when_a_recorded_cycle_is_dispatched_again(tmp_path):
@@ -262,7 +428,7 @@ def test_scenario_b_fails_when_dispatch_is_unbounded(tmp_path):
     root = _candidate_root(tmp_path, orchestrator_mutations=(DROPS_DISPATCH_BUDGET,))
     result = replay._run_scenario("B", root, _fixture_path(tmp_path), workspace_root=tmp_path)
     assert result["outcome"] == "fail"
-    assert "must stay pending rather than dispatching without end" in result["error"]
+    assert "spent the dispatch budget must dispatch no further collector" in result["error"]
 
 
 def test_scenario_fails_against_a_candidate_that_forges_a_passing_payload_and_exits_early(tmp_path):

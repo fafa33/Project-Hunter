@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import pathlib
 import re
+import sys
 
 import hunter_github_transport as transport
 import hunter_review_orchestrator as orchestrator
@@ -570,7 +571,12 @@ def test_current_pr_waits_for_trusted_review_prerequisites(monkeypatch):
         "request_json",
         lambda *_args: {"state": "open", "head": {"sha": HEAD}},
     )
-    monkeypatch.setattr(orchestrator, "review_request_state", lambda *_args: (False, ""), raising=False)
+    monkeypatch.setattr(
+        orchestrator,
+        "review_request_state",
+        lambda *_args: orchestrator.ReviewRequestReadiness(False, "", "still running", "pending"),
+        raising=False,
+    )
     calls = []
     monkeypatch.setattr(orchestrator, "ensure_collector", lambda *_args: calls.append(True), raising=False)
 
@@ -578,6 +584,171 @@ def test_current_pr_waits_for_trusted_review_prerequisites(monkeypatch):
 
     assert result is None
     assert calls == []
+
+
+def _readiness_harness(monkeypatch, *, prerequisite_state, request_valid):
+    """Wire the exact-head prerequisites the reconcile transition reads."""
+
+    head = HEAD
+    monkeypatch.setattr(
+        orchestrator,
+        "request_json",
+        lambda *_args: {"state": "open", "head": {"sha": head}},
+        raising=False,
+    )
+    document = {"review_request": {"schema": "hunter.review-request.v1", "claims_id": "c" * 64}}
+
+    import hunter_governance_review_v2 as governance
+
+    monkeypatch.setattr(
+        governance, "read_trusted_upgrade_status", lambda *_args: (prerequisite_state, "prereq detail"), raising=False
+    )
+    monkeypatch.setattr(
+        governance, "read_head_pre_ready_review", lambda *_args: ("present", document, None), raising=False
+    )
+    monkeypatch.setattr(
+        governance,
+        "valid_current_review_request",
+        lambda *_args: (request_valid, "stale finding F-8 has no exact-head correction evidence"),
+        raising=False,
+    )
+    return document
+
+
+def _collector_harness(monkeypatch):
+    stored = {"cycle": None, "dispatches": 0}
+    monkeypatch.setattr(
+        orchestrator,
+        "read_cycle",
+        lambda *_args: ("present", stored["cycle"], None) if stored["cycle"] else ("absent", None, None),
+        raising=False,
+    )
+    monkeypatch.setattr(orchestrator, "reviewer_pool_config_digest", lambda: "d" * 64, raising=False)
+    monkeypatch.setattr(orchestrator, "current_run_id", lambda: 555, raising=False)
+    monkeypatch.setattr(orchestrator, "publish_cycle", lambda *_args, cycle: stored.update(cycle=cycle), raising=False)
+    monkeypatch.setattr(
+        orchestrator,
+        "dispatch_collector",
+        lambda *_args: stored.update(dispatches=stored["dispatches"] + 1),
+        raising=False,
+    )
+    monkeypatch.setattr(orchestrator, "current_remediation_generation", lambda *_args: "gen-1", raising=False)
+    return stored
+
+
+def test_blocked_review_request_reports_the_reason_and_never_dispatches(monkeypatch):
+    """PR #540: trusted preflight already passed but the exact-head pre-ready
+    review request is not valid for this head. A reconcile must not report
+    success here, and it must not spend reviewer capacity either."""
+
+    _readiness_harness(monkeypatch, prerequisite_state="success", request_valid=False)
+    stored = _collector_harness(monkeypatch)
+
+    with pytest.raises(orchestrator.ReviewRequestBlocked) as blocked:
+        orchestrator.ensure_current("owner/repo", "token", 472)
+
+    assert "stale finding F-8" in str(blocked.value)
+    assert "needs a pre-ready review request committed for it" in str(blocked.value)
+    assert stored["dispatches"] == 0
+    assert stored["cycle"] is None
+
+
+def test_blocked_review_request_makes_the_reconcile_exit_non_zero(monkeypatch):
+    """The reconcile step only fails visibly when the orchestrator exits
+    non-zero, so a blocked head must not exit 0."""
+
+    _readiness_harness(monkeypatch, prerequisite_state="success", request_valid=False)
+    _collector_harness(monkeypatch)
+    monkeypatch.setattr(sys, "argv", ["orchestrator", "ensure", "--repository", "owner/repo", "--pr", "472"])
+
+    assert orchestrator.main() == 1
+
+
+def test_new_head_starts_orchestration_once_after_its_prerequisite_completes(monkeypatch):
+    """The #540 defect shape, end to end.
+
+    A candidate gets a new head. The first reconcile sees the trusted
+    prerequisite still running, so it does nothing and stays retryable. The
+    prerequisite then succeeds and the pre-ready review request becomes valid
+    for that same exact head, so the next reconcile publishes the exact-head
+    cycle and dispatches the collector exactly once. Further reconciles of the
+    same head stay idempotent.
+    """
+
+    stored = _collector_harness(monkeypatch)
+    # 1 + 2: same exact head, prerequisite incomplete -> no dispatch, no cycle.
+    _readiness_harness(monkeypatch, prerequisite_state="pending", request_valid=False)
+    assert orchestrator.ensure_current("owner/repo", "token", 472) is None
+    assert stored["dispatches"] == 0
+    assert stored["cycle"] is None
+
+    # 3 + 4 + 5 + 6: prerequisite succeeded and the request now binds this head.
+    _readiness_harness(monkeypatch, prerequisite_state="success", request_valid=True)
+    cycle = orchestrator.ensure_current("owner/repo", "token", 472)
+
+    # 7: repeated reconciliation of the same exact head is idempotent.
+    again = orchestrator.ensure_current("owner/repo", "token", 472)
+
+    assert cycle is not None
+    assert cycle.head_sha == HEAD
+    assert cycle.state == "WAITING_FOR_REVIEWER"
+    assert again is cycle
+    assert stored["dispatches"] == 1
+    assert stored["cycle"] is cycle
+
+
+def test_incomplete_prerequisite_never_dispatches_and_stays_retryable(monkeypatch):
+    """Untrusted or unfinished prerequisites still cannot dispatch, and they
+    keep the benign pending exit so the ordinary dependency wait is not turned
+    into a red reconcile."""
+
+    _readiness_harness(monkeypatch, prerequisite_state="pending", request_valid=False)
+    stored = _collector_harness(monkeypatch)
+    monkeypatch.setattr(sys, "argv", ["orchestrator", "ensure", "--repository", "owner/repo", "--pr", "472"])
+
+    assert orchestrator.ensure_current("owner/repo", "token", 472) is None
+    assert orchestrator.main() == 0
+    assert stored["dispatches"] == 0
+
+
+def test_superseded_head_is_never_dispatched_against(monkeypatch):
+    """A recorded cycle for a superseded head must not be mistaken for the
+    current head's idempotency record, and reviewer capacity is only ever
+    spent on the head the pull request actually points at."""
+
+    _readiness_harness(monkeypatch, prerequisite_state="success", request_valid=True)
+    stored = _collector_harness(monkeypatch)
+    stored["cycle"] = make_cycle(head_sha="b" * 40)
+
+    result = orchestrator.ensure_current("owner/repo", "token", 472)
+
+    # The stale cycle is not resumed: the single dispatch belongs to the head
+    # the pull request actually points at, never to the superseded one.
+    assert stored["dispatches"] == 1
+    assert stored["cycle"].head_sha == HEAD
+    assert stored["cycle"].head_sha != "b" * 40
+    assert result.head_sha == HEAD
+    # And that new record is now the idempotency record for this head.
+    again = orchestrator.ensure_current("owner/repo", "token", 472)
+    assert again is stored["cycle"]
+    assert stored["dispatches"] == 1
+
+
+def test_readiness_reports_which_blocker_applies(monkeypatch):
+    """The reason survives to the caller, so the blocker is actionable rather
+    than a bare False."""
+
+    _readiness_harness(monkeypatch, prerequisite_state="success", request_valid=False)
+    blocked = orchestrator.review_request_state("owner/repo", "token", 472, HEAD)
+    assert blocked.ready is False
+    assert blocked.prerequisite_state == "success"
+    assert "stale finding F-8" in blocked.reason
+
+    _readiness_harness(monkeypatch, prerequisite_state="pending", request_valid=False)
+    pending = orchestrator.review_request_state("owner/repo", "token", 472, HEAD)
+    assert pending.ready is False
+    assert pending.prerequisite_state == "pending"
+    assert "prereq detail" in pending.reason
 
 
 def test_offline_mac_skips_local_without_red(monkeypatch):
