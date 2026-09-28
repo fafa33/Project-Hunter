@@ -80,9 +80,18 @@ def scenario_a(candidate_root: Path, fixture: dict[str, Any]) -> dict[str, Any]:
     1. The published opportunity equals the candidate's own worst-case-budget
        derivation over its own real reviewer pool (single source of truth).
     2. Raising one enabled reviewer's timeout strictly increases the
-       opportunity (it is derived, not a fixed constant) by *exactly* that
-       reviewer's own attempt count times the injected delta -- never more,
-       proving the budget has no unbounded or open-ended retry component.
+       opportunity (it is derived, not a fixed constant). The increase is
+       bounded on both sides against a raw reviewer-chain delta this scenario
+       computes independently of the candidate's own formula (that reviewer's
+       trusted attempt count times the injected delta): it can never be
+       *less* than that raw delta (no attempt silently dropped) and never
+       *more* than that raw delta plus this scenario's own already-declared
+       overhead budget (no unbounded or open-ended retry component). The
+       check does not require the candidate's overhead to be a fixed additive
+       constant -- a candidate may legitimately derive orchestration overhead
+       proportionally from the chain duration (e.g. a percentage buffer),
+       which grows the increase beyond the raw delta by a bounded amount
+       rather than matching it exactly.
        A reviewer need not be ``retryable`` for this: a pool may legitimately
        set ``retries_per_agent: 0`` ("No automatic retries. Explicit
        authenticated unavailability fails over immediately" is this
@@ -120,6 +129,23 @@ def scenario_a(candidate_root: Path, fixture: dict[str, Any]) -> dict[str, Any]:
     if not enabled:
         raise AssertionError("fixture pool must enable at least one reviewer")
     retries_per_agent = int(real_pool["timeout_policy"]["retries_per_agent"])
+
+    def _raw_chain_seconds(pool_agents: Any) -> int:
+        return sum(
+            (1 + (retries_per_agent if agent["retryable"] else 0)) * int(agent["review_timeout_seconds"])
+            for agent in pool_agents
+        )
+
+    lower_bound = _raw_chain_seconds(enabled)
+    ceiling = int(fixture["absolute_ceiling_seconds"])
+    assert baseline_seconds >= lower_bound, (
+        f"opportunity {baseline_seconds} is shorter than the worst-case reviewer " f"chain {lower_bound} it must cover"
+    )
+    assert lower_bound < baseline_seconds <= ceiling, (
+        f"opportunity {baseline_seconds} must reserve positive overhead above "
+        f"{lower_bound} and stay within the {ceiling}s sanity ceiling"
+    )
+
     # Prefer a retryable reviewer when the pool has one, so a pool that does
     # grant retries still exercises the attempt-count multiplier below; a
     # pool with none (a legitimate, deliberate "no automatic retries" policy)
@@ -142,11 +168,16 @@ def scenario_a(candidate_root: Path, fixture: dict[str, Any]) -> dict[str, Any]:
     assert mutated_seconds > baseline_seconds, (
         "opportunity did not increase after a reviewer timeout increase; " "it looks hardcoded rather than pool-derived"
     )
-    assert mutated_seconds - baseline_seconds == target_attempts * delta, (
-        f"opportunity increased by {mutated_seconds - baseline_seconds}s for a {delta}s timeout increase on "
+    raw_chain_delta = target_attempts * delta
+    overhead_budget = ceiling - lower_bound
+    actual_delta = mutated_seconds - baseline_seconds
+    assert raw_chain_delta <= actual_delta <= raw_chain_delta + overhead_budget, (
+        f"opportunity increased by {actual_delta}s for a {delta}s timeout increase on "
         f"{'a retryable' if target.get('retryable') else 'a non-retryable'} reviewer with "
-        f"retries_per_agent={retries_per_agent}; expected exactly {target_attempts * delta}s "
-        f"({target_attempts} attempt(s)) -- an unbounded or open-ended retry component would show up here"
+        f"retries_per_agent={retries_per_agent}; expected between {raw_chain_delta}s (the raw reviewer-chain "
+        f"growth alone, {target_attempts} attempt(s)) and {raw_chain_delta + overhead_budget}s (allowing this "
+        f"scenario's own already-declared overhead budget to also grow) -- a smaller increase means an attempt "
+        f"was silently dropped, a larger one means an unbounded or open-ended retry component"
     )
 
     if retries_per_agent == 0 and not target.get("retryable"):
@@ -160,20 +191,6 @@ def scenario_a(candidate_root: Path, fixture: dict[str, Any]) -> dict[str, Any]:
             "retries_per_agent is 0 -- retryable must be inert when the pool grants no retries, "
             "so a reported pool cannot game this scenario merely by claiming retryable=true"
         )
-
-    lower_bound = sum(
-        (1 + (real_pool["timeout_policy"]["retries_per_agent"] if agent["retryable"] else 0))
-        * int(agent["review_timeout_seconds"])
-        for agent in enabled
-    )
-    assert baseline_seconds >= lower_bound, (
-        f"opportunity {baseline_seconds} is shorter than the worst-case reviewer " f"chain {lower_bound} it must cover"
-    )
-    ceiling = int(fixture["absolute_ceiling_seconds"])
-    assert lower_bound < baseline_seconds <= ceiling, (
-        f"opportunity {baseline_seconds} must reserve positive overhead above "
-        f"{lower_bound} and stay within the {ceiling}s sanity ceiling"
-    )
 
     return {
         "baseline_seconds": baseline_seconds,

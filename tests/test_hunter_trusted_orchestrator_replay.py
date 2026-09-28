@@ -245,6 +245,61 @@ def reviewer_chain_worst_case_seconds(pool):
 """
 
 
+#: Legitimate alternative to a fixed additive overhead constant: overhead is
+#: a 10% buffer on the raw chain, so it grows when a reviewer's timeout does.
+PROPORTIONAL_OVERHEAD_PRE_READY = """
+import json
+from pathlib import Path
+
+
+def load_reviewer_pool(source=None):
+    path = Path(__file__).resolve().parents[1] / "docs" / "CODE_WRITE_POLICY.json"
+    data = json.loads(path.read_text(encoding="utf-8"))
+    return data["pool"], ""
+
+
+def enabled_pool_reviewers(pool):
+    return tuple(a for a in pool["agents"] if a.get("enabled"))
+
+
+def reviewer_chain_worst_case_seconds(pool):
+    total = 0
+    for agent in enabled_pool_reviewers(pool):
+        attempts = 1 + (pool["timeout_policy"]["retries_per_agent"] if agent["retryable"] else 0)
+        total += attempts * int(agent["review_timeout_seconds"])
+    return total + int(total * 0.10)
+"""
+
+#: Buggy: doubles the retryable attempt multiplier on top of the policy's own
+#: retries_per_agent, an unbounded-looking retry component this scenario must
+#: still reject even though it no longer requires an exact-equality match.
+BUGGY_PRE_READY_DOUBLES_RETRYABLE_ATTEMPTS = """
+import json
+from pathlib import Path
+
+
+def load_reviewer_pool(source=None):
+    path = Path(__file__).resolve().parents[1] / "docs" / "CODE_WRITE_POLICY.json"
+    data = json.loads(path.read_text(encoding="utf-8"))
+    return data["pool"], ""
+
+
+def enabled_pool_reviewers(pool):
+    return tuple(a for a in pool["agents"] if a.get("enabled"))
+
+
+def reviewer_chain_worst_case_seconds(pool):
+    total = 0
+    for agent in enabled_pool_reviewers(pool):
+        if agent["retryable"]:
+            attempts = 2 * (1 + pool["timeout_policy"]["retries_per_agent"])
+        else:
+            attempts = 1
+        total += attempts * int(agent["review_timeout_seconds"])
+    return total + 120
+"""
+
+
 def _write(path: Path, content: str) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(content, encoding="utf-8")
@@ -320,6 +375,47 @@ def test_scenario_a_fails_when_retryable_flag_affects_timing_despite_zero_retrie
     result = replay._run_scenario("A", root, _fixture_path(tmp_path), workspace_root=tmp_path)
     assert result["outcome"] == "fail"
     assert "retryable must be inert when the pool grants no retries" in result["error"]
+
+
+def test_scenario_a_passes_with_a_proportional_overhead_budget(tmp_path):
+    """Adversarial (Codex review finding on PR #537): Scenario A's declared
+    invariant only requires the opportunity to cover the raw chain and reserve
+    bounded positive overhead -- it does not require that overhead to be a
+    fixed additive constant. A candidate that legitimately derives overhead
+    proportionally from the chain duration (e.g. a percentage buffer) must
+    still pass even though raising one reviewer's timeout then grows the
+    overhead too, making the increase exceed the raw per-reviewer delta."""
+
+    root = _candidate_root(
+        tmp_path,
+        orchestrator_src=SCENARIO_A_FIXED,
+        pre_ready_src=PROPORTIONAL_OVERHEAD_PRE_READY,
+        policy_json=POLICY_JSON_NO_RETRYABLE,
+    )
+    result = replay._run_scenario("A", root, _fixture_path(tmp_path), workspace_root=tmp_path)
+    assert result["outcome"] == "pass", result.get("error")
+    measurements = result["measurements"]
+    # The proportional overhead makes the increase exceed a pure 1:1 delta --
+    # exactly what the old exact-equality check would have wrongly rejected.
+    assert measurements["mutated_seconds"] - measurements["baseline_seconds"] > measurements["injected_delta_seconds"]
+
+
+def test_scenario_a_fails_when_retry_multiplier_is_unbounded(tmp_path):
+    """Adversarial: loosening the check to a bounded range (to admit
+    proportional overhead, above) must not make it toothless -- a candidate
+    that doubles the retryable attempt multiplier on top of the policy's own
+    retries_per_agent still produces an increase outside the plausible bound
+    and must still be rejected."""
+
+    root = _candidate_root(
+        tmp_path,
+        orchestrator_src=SCENARIO_A_FIXED,
+        pre_ready_src=BUGGY_PRE_READY_DOUBLES_RETRYABLE_ATTEMPTS,
+        policy_json=POLICY_JSON,
+    )
+    result = replay._run_scenario("A", root, _fixture_path(tmp_path), workspace_root=tmp_path)
+    assert result["outcome"] == "fail"
+    assert "unbounded or open-ended retry component" in result["error"]
 
 
 # --- Scenario B: exact-head collector idempotency --------------------------
