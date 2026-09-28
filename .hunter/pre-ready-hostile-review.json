@@ -76,7 +76,7 @@
       "transaction-snapshot-consistency"
     ],
     "base_ref": "main",
-    "base_sha": "156ed2fad8638dabc9bd1c45a4efbfece2b2d69c",
+    "base_sha": "191d2ca7a9d13ba1a3534e4d361ec8fdaa4d4c91",
     "defect_families": [
       {
         "evidence": "No caller-supplied authorization/replay surface is touched by this diff.",
@@ -204,8 +204,8 @@
         "outcome": "clear"
       },
       {
-        "evidence": "Root cause 3 (this diff, live PR #535 exact HEAD c05da168545c5fa95fe300706eccaac2228fc391): after root causes 1 and 2 were both fixed and pushed, the trusted reconcile run correctly published a real 'Hunter Review Orchestration / PR #535' pending WAITING_FOR_REVIEWER cycle, but Hunter Merge Readiness still reported hard failure (MALFORMED_REVIEW). Traced to hunter_merge_readiness_v2.resolve_review_authority never handling a legitimate status=='pending' verification result, silently defaulting any non-success status to MALFORMED_REVIEW. Corrected by classifying 'pending' as MISSING_REVIEW_AUTHORITY, letting the caller's existing orchestration-state pending fallback run as designed. DFF-040's invariant, applicability, and regression_evidence updated with this live evidence; the compiled-prompt budget regression from the prior broadening was empirically re-checked (the same 3 previously-failing tests plus 238 broader SPM/engineering-context tests pass clean) since the revised invariant (657 chars) is shorter than the prior one (672 chars).",
-        "family": "DFF-040",
+        "evidence": "Root cause 3 (this diff, live PR #535 exact HEAD c05da168545c5fa95fe300706eccaac2228fc391): after root causes 1 and 2 were both fixed and pushed, the trusted reconcile run correctly published a real 'Hunter Review Orchestration / PR #535' pending WAITING_FOR_REVIEWER cycle, but Hunter Merge Readiness still reported hard failure (MALFORMED_REVIEW). Traced to hunter_merge_readiness_v2.resolve_review_authority never handling a legitimate status=='pending' verification result, silently defaulting any non-success status to MALFORMED_REVIEW. Corrected by classifying 'pending' as MISSING_REVIEW_AUTHORITY, letting the caller's existing orchestration-state pending fallback run as designed. DFF-045's invariant, applicability, and regression_evidence updated with this live evidence; the compiled-prompt budget regression from the prior broadening was empirically re-checked (the same 3 previously-failing tests plus 238 broader SPM/engineering-context tests pass clean) since the revised invariant (657 chars) is shorter than the prior one (672 chars).",
+        "family": "DFF-045",
         "outcome": "repaired"
       },
       {
@@ -261,6 +261,11 @@
       {
         "evidence": "The dispatchability gate this family guards (PromptTaskUnreadyError raised from the compiled allocation outcome in smart_prompt_routing.compile_task) is completely unmodified by this diff; this diff only changes what is fed into compilation (bounding the prevention-context contribution), never the READY/outcome decision itself, which remains the sole authority over whether a build may be wrapped into an envelope.",
         "family": "DFF-018",
+        "outcome": "clear"
+      },
+      {
+        "evidence": "This diff's changes to scripts/hunter_review_orchestrator.py and .github/workflows/hunter-governance-reconcile.yml / hunter-reviewer-collector.yml are exactly the trusted-controller-logic surfaces DFF-040 covers: candidate changes to code that executes only from the trusted default branch. This candidate's own hosted Trusted Candidate Orchestrator Replay Harness run at this exact head (bb9720693c208c516de818d9586bd8780400d483) is the resolution DFF-040 itself records: Scenario A, Scenario B, and Scenario G all reported outcome=pass, candidate module digest verification passed, and the privileged publish-proof status 'Hunter Trusted Orchestrator Replay / PR #535' reported success -- proving these exact controller-logic changes were validated against the candidate's own real content before merge, resolving the self-validation bootstrap deadlock DFF-040 exists to prevent.",
+        "family": "DFF-040",
         "outcome": "clear"
       }
     ],
@@ -331,13 +336,13 @@
         "status": "modified"
       },
       {
-        "blob_sha": "ae60ed94b37c2805a3dcaf48d749164da3055117",
+        "blob_sha": "fb6d4f3a65c1ce8bed4d547e16237c37e25f7930",
         "path": "docs/CODE_WRITE_POLICY.json",
         "previous_path": "",
         "status": "modified"
       },
       {
-        "blob_sha": "97a451e7c8be76b72884f36817c34d8753e541f4",
+        "blob_sha": "bf187e6e1930aba4f37d1d7989fa8141b9967299",
         "path": "docs/DEFECT_REGISTRY.json",
         "previous_path": "",
         "status": "modified"
@@ -367,26 +372,8 @@
         "status": "modified"
       },
       {
-        "blob_sha": "7d647a7953f967dd96d1090fcad73efe9ab89688",
-        "path": "src/hunter/evidence_intelligence/engineering_context_authority.py",
-        "previous_path": "",
-        "status": "modified"
-      },
-      {
-        "blob_sha": "8c93df8acb8e1874d32288b30e32c6ecabbbe7ae",
-        "path": "src/hunter/evidence_intelligence/smart_prompt_routing.py",
-        "previous_path": "",
-        "status": "modified"
-      },
-      {
         "blob_sha": "b9ac82235f1ba15971b539f315e62c7176fba702",
         "path": "tests/test_code_write_policy.py",
-        "previous_path": "",
-        "status": "modified"
-      },
-      {
-        "blob_sha": "6454b1999e08ff5affece7248e42899f863a2296",
-        "path": "tests/test_engineering_context_authority.py",
         "previous_path": "",
         "status": "modified"
       },
@@ -421,11 +408,11 @@
         "status": "modified"
       }
     ],
-    "review_target_digest": "bb567b52ab6dda038ee3c071edeaf0adb27cd3975ad343fc8381c0f99e8293a1"
+    "review_target_digest": "fca24cca815dcc69396859fe891591449d8352693f6edcc85ad3c20bd1c4ec0d"
   },
-  "review_id": "b4fb75fd0174161427a26bf2f06143e67bd793d5cac1cae75c8eb7c3509054cb",
+  "review_id": "57f09cbd5c48fc02c06918bbe90c56b2eef7cf21fa13fc0c5bec244db6a4ae75",
   "review_request": {
-    "claims_id": "b4fb75fd0174161427a26bf2f06143e67bd793d5cac1cae75c8eb7c3509054cb",
+    "claims_id": "57f09cbd5c48fc02c06918bbe90c56b2eef7cf21fa13fc0c5bec244db6a4ae75",
     "schema": "hunter.review-request.v1"
   },
   "schema": "hunter.pre-ready-hostile-review.v1"
