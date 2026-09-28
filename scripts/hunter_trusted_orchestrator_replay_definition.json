@@ -7,8 +7,8 @@
     "G"
   ],
   "scenario_invariants": {
-    "A": "The published review opportunity is a strictly positive, finite budget, and it is the budget that ends a cycle: a recorded pending cycle older than the candidate's own budget is driven to a terminal state and published, while a cycle still inside that budget is left pending.",
-    "B": "Collector dispatch for an exact head is bounded and idempotent: a first reconcile against an unrecorded head dispatches exactly once, reconciles that observe the recorded cycle dispatch nothing further, a recorded cycle whose collector produced no run recovers exactly one further dispatch after the liveness grace, and a cycle that has spent its dispatch budget stays pending rather than dispatching without end.",
+    "A": "The published review opportunity is a strictly positive, finite budget, and it is the budget that ends a cycle: probed immediately on both sides of the candidate's own declared boundary, a recorded pending cycle just inside the budget stays pending while one just outside it is driven to a terminal state and published.",
+    "B": "Collector dispatch for an exact head is bounded and idempotent, and every step reads back the durable record production actually published rather than a substituted liveness reading: a first reconcile against an unrecorded head dispatches exactly once and publishes the durable cycle, reconciles observing that record dispatch nothing further, a durable record whose collector produced no run and that exceeds the liveness grace recovers exactly one further dispatch, that recovery refreshes the durable record so later reconciles consume it, and a cycle whose real accumulated runs have spent the dispatch budget stays pending rather than dispatching without end.",
     "G": "A WAITING_FOR_REVIEWER exact-head cycle classifies to pending end-to-end through the real resolution path for absent and in-progress cycle evidence, and malformed cycle evidence fails closed rather than classifying as pending."
   },
   "fixture": {
