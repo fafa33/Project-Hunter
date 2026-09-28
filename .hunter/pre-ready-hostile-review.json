@@ -2,8 +2,8 @@
   "claims": {
     "acceptance_criteria": [
       {
-        "criterion": "Draft -> Ready for Review must deterministically and promptly trigger the trusted default-branch reconciliation/orchestration path for that exact PR/HEAD.",
-        "evidence": "hunter-governance-reconcile.yml gained a pull_request_target(ready_for_review) trigger scoped to main, resolved from the base branch's copy of the file (non-candidate-controlled); proven by test_reconcile_wakes_when_a_pr_becomes_ready_for_review.",
+        "criterion": "Draft -> Ready for Review AND any exact-HEAD-changing lifecycle event Merge Readiness reacts to immediately (synchronize) must deterministically and promptly trigger the trusted default-branch reconciliation/orchestration path for that exact PR/HEAD, as a primary event-driven path rather than only as a schedule or unrelated workflow_run recovery.",
+        "evidence": "hunter-governance-reconcile.yml pull_request_target types are exactly [ready_for_review, synchronize], scoped to main and resolved from the base branch's copy of the file (non-candidate-controlled). ready_for_review: test_reconcile_wakes_when_a_pr_becomes_ready_for_review (retained, rewritten so its Draft guard now asserts the transition that actually withdraws review, converted_to_draft, is absent). synchronize (root cause 4, live PR #535 exact HEAD 51108333821ab42d1ab7aa0b812a72d890f73795): test_reconcile_wakes_when_a_pr_head_is_pushed, and test_reconcile_wakes_on_every_lifecycle_event_that_needs_or_moves_the_exact_head derives the requirement from hunter-merge-readiness.yml's own trigger set rather than restating a literal, so a third event variant cannot silently reintroduce the asymmetry. Both are mutation-checked: removing synchronize from the trigger fails 3 of them.",
         "id": "AC-1",
         "verdict": "satisfied"
       },
@@ -60,6 +60,12 @@
         "evidence": "EngineeringContextAuthority.compile(budget_bytes=...) implements applicability-preserving bounded rendering (full detail for exact-file matches, compact {id,title,prevention_boundary} for directory-root-only matches, explicit prevention.equivalence_class deduplication, tiered omission/downgrade, and a structured EngineeringContextAuthorityError when nothing fits). smart_prompt_routing.py reserves a fixed 40% share of the unchanged ENGINEERING_IMPLEMENT_MAX_SOURCE_BYTES for it. Measured against the real registry (40 families) for the exact scope every Issue Agent test shares: families blob 11,208 bytes (budget 13,107), estimated total preflight ~15,629 bytes, well under the unchanged 28,672-byte available budget.",
         "id": "AC-10",
         "verdict": "satisfied"
+      },
+      {
+        "criterion": "The synchronize fix must not weaken the trusted-default-branch boundary, exact-head binding, Draft short-circuiting, provenance, review authority, or retry policy, and must not broaden into unrelated reviewer architecture.",
+        "evidence": "Trusted boundary: the trigger stays pull_request_target (base-branch-resolved); the job still checks out 'ref: main' with 'persist-credentials: false' and the workflow's permissions block is unchanged (test_synchronize_reconciliation_never_executes_candidate_code, plus the untouched test_no_pull_request_reachable_workflow_can_drive_other_workflows and test_trusted_orchestration_runs_only_from_workflows_without_pull_request_triggers). Exact-head binding: the privileged step still passes only --pr and never a head, and ensure_current re-derives the current HEAD from the pull-request API on every call, so the new head is taken from trusted state rather than the event payload (test_a_pushed_head_reaches_orchestration_as_the_exact_current_head, which also asserts the workflow text contains neither 'github.event.pull_request.head.sha' nor '--head'). Draft: adding synchronize means the trigger is no longer itself the Draft guard (synchronize also fires on Draft pushes), so the guard is now proven behaviourally at the orchestrator's own short-circuit, which returns before the review-request lookup and before any dispatch (test_a_pushed_head_on_a_draft_pr_dispatches_nothing, plus the retained test_current_pr_never_dispatches_for_a_draft_pr; both mutation-checked to fail when the draft check is deleted). Scope: the only behaviour change is one added trigger type plus comments; scripts/hunter_review_orchestrator.py is byte-identical in this commit, no permissions block changed, no reviewer policy in docs/CODE_WRITE_POLICY.json changed, no provider retry added, and Merge Readiness's already-fixed pending-state classification is untouched. Unrelated events cannot dispatch: test_unrelated_pull_request_events_do_not_dispatch_reviewer_orchestration pins the trigger set to exactly {ready_for_review, synchronize} and asserts no pull_request/issue_comment/pull_request_review_thread/check_run/check_suite trigger exists on this workflow.",
+        "id": "AC-11",
+        "verdict": "satisfied"
       }
     ],
     "adversarial_dimensions": [
@@ -109,12 +115,12 @@
         "outcome": "clear"
       },
       {
-        "evidence": "This diff's whole subject is enabling a review REQUEST to exist and content-bind correctly for PR #535; verify_claims still correctly treats a request-only document ('review_request' present) as 'missing', never as a completed review -- unweakened, proven by test_a_review_request_cannot_be_verified_locally_as_a_completed_review (untouched, still passing).",
+        "evidence": "This diff does not touch verify_claims or its request-only-is-'missing' rule; test_a_review_request_cannot_be_verified_locally_as_a_completed_review is untouched and still passing. The diff's subject is wiring the trusted prerequisite's trigger to the second transition class, so the request document can be consumed for a pushed head as promptly as for a Ready PR.",
         "family": "DFF-013",
         "outcome": "clear"
       },
       {
-        "evidence": "ensure_current's clean None return for 'no valid request yet' is a legitimate no-op, not conflated with or reported as a failure; the reconcile workflow step still exits 0 correctly for this state, unchanged by this diff.",
+        "evidence": "ensure_current's clean None return for 'no valid request yet' is a legitimate no-op, not conflated with or reported as a failure; the reconcile workflow step still exits 0 correctly for this state, and this diff does not touch it. The DFF-014 clause that every trusted proof completion that can move admission from pending to eligible must wake the privileged orchestrator is satisfied in a stronger form here: the exact-head-changing event that invalidates the previous cycle (synchronize) now wakes the privileged orchestrator directly, rather than only after some other workflow completes (proven by test_reconcile_wakes_on_every_lifecycle_event_that_needs_or_moves_the_exact_head).",
         "family": "DFF-014",
         "outcome": "clear"
       },
@@ -154,7 +160,7 @@
         "outcome": "clear"
       },
       {
-        "evidence": "hunter_review_orchestrator.py's remediation-generation logic (current_remediation_generation, ensure_collector) is unchanged; this diff only adds an early Draft short-circuit (prior commit) and does not touch review-after-remediation transitions.",
+        "evidence": "scripts/hunter_review_orchestrator.py is byte-identical in this commit: current_remediation_generation, ensure_collector, the generation identity, collector_run_name and the dispatch budget are all untouched, and the full test_review_after_remediation_generation.py and tests/test_hunter_review_orchestrator.py suites pass unchanged. Adding a trigger that reaches the same ensure_current entry point cannot mint an extra generation, because the generation is derived from trusted review-thread state per (head, claims, resolved threads).",
         "family": "DFF-024",
         "outcome": "clear"
       },
@@ -164,7 +170,7 @@
         "outcome": "clear"
       },
       {
-        "evidence": "Directly preserved: require_current_review_request_if_present remains, by explicit design documented in its corrected docstring and locked down by a new test, a no-op that never blocks a push regardless of reviewer/request availability.",
+        "evidence": "require_current_review_request_if_present remains, by explicit design documented in its corrected docstring and locked down by a test, a no-op that never blocks a push regardless of reviewer/request availability. This diff makes the missing-request NOTE more likely to be actionable in practice (a pushed head now reconciles promptly) without changing that NOTE's non-blocking status.",
         "family": "DFF-026",
         "outcome": "clear"
       },
@@ -184,7 +190,7 @@
         "outcome": "clear"
       },
       {
-        "evidence": "docs/DEFECT_REGISTRY.json is edited as ordinary well-formed JSON; `python scripts/hunter_defect_prevention_preflight.py` passes against it, confirming it remains loadable at its governed path.",
+        "evidence": "docs/DEFECT_REGISTRY.json is edited as ordinary well-formed JSON; `python scripts/hunter_defect_prevention_preflight.py` passes against it, confirming it remains loadable at its governed path and that DFF-045's declared regression_evidence entries all resolve.",
         "family": "DFF-033",
         "outcome": "clear"
       },
@@ -204,7 +210,7 @@
         "outcome": "clear"
       },
       {
-        "evidence": "Root cause 3 (this diff, live PR #535 exact HEAD c05da168545c5fa95fe300706eccaac2228fc391): after root causes 1 and 2 were both fixed and pushed, the trusted reconcile run correctly published a real 'Hunter Review Orchestration / PR #535' pending WAITING_FOR_REVIEWER cycle, but Hunter Merge Readiness still reported hard failure (MALFORMED_REVIEW). Traced to hunter_merge_readiness_v2.resolve_review_authority never handling a legitimate status=='pending' verification result, silently defaulting any non-success status to MALFORMED_REVIEW. Corrected by classifying 'pending' as MISSING_REVIEW_AUTHORITY, letting the caller's existing orchestration-state pending fallback run as designed. DFF-045's invariant, applicability, and regression_evidence updated with this live evidence; the compiled-prompt budget regression from the prior broadening was empirically re-checked (the same 3 previously-failing tests plus 238 broader SPM/engineering-context tests pass clean) since the revised invariant (657 chars) is shorter than the prior one (672 chars).",
+        "evidence": "Root cause 4 (this diff, live PR #535 exact HEAD 51108333821ab42d1ab7aa0b812a72d890f73795): a pull_request_target synchronize at 07:40:33Z woke Merge Readiness, Trusted Preflight Upgrade and Governance Agent Preflight but not Hunter Governance Review Reconcile, the only workflow that runs the privileged hunter_review_orchestrator.py ensure, so no trusted exact-head orchestration cycle was published and Merge Readiness correctly reported MALFORMED_REVIEW: WAITING_FOR_REVIEWER. hunter-governance-reconcile.yml declared types: [ready_for_review] only, so Issue #534's earlier fix had covered one of the two transition classes this family binds and not the exact-HEAD-changing one. Corrected by adding synchronize to the same pull_request_target trigger and by making the regression derive the requirement from hunter-merge-readiness.yml's own trigger set (test_reconcile_wakes_on_every_lifecycle_event_that_needs_or_moves_the_exact_head) so the two cannot drift apart again for either class. DFF-045's invariant was widened in place, not duplicated, to bind both classes explicitly and to state that a schedule or an unrelated producer's workflow_run is a recovery fallback, never the primary mechanism. Adding synchronize moved the Draft guard rather than weakening it, so the previously structural Draft assertion was replaced with behavioural coverage of the orchestrator's own draft short-circuit.",
         "family": "DFF-045",
         "outcome": "repaired"
       },
@@ -214,57 +220,22 @@
         "outcome": "clear"
       },
       {
-        "evidence": "This diff is the correcting contribution for the newly-recorded DFF-041 (reviewer-chain-timeout-not-derived-from-canonical-budget): hunter_pre_ready_review.reviewer_chain_worst_case_seconds(pool) is now the single canonical derivation the collector workflow's timeout-minutes and hunter_review_orchestrator.independent_review_opportunity_seconds() are both validated against/derived from, proven by test_collector_workflow_lifetime_covers_the_reviewer_chain_budget and test_independent_review_opportunity_matches_the_same_canonical_budget.",
-        "family": "DFF-041",
-        "outcome": "clear"
-      },
-      {
-        "evidence": "This diff is the correcting contribution for the newly-recorded DFF-042 (exact-head-initial-dispatch-not-idempotent-under-stale-status-read): ensure_collector now cross-checks the collector run listing before minting a fresh dispatch whenever no trusted cycle status is visible, proven by test_two_racing_reconcile_calls_never_double_dispatch_when_the_status_read_lags; the pre-existing bounded dead-dispatch recovery path is unaffected, proven by the unchanged test_a_failed_collector_is_redispatched_rather_than_parking_the_cycle continuing to pass.",
+        "evidence": "This diff is the correcting contribution for DFF-042 (reviewer-chain-timeout-not-derived-from-canonical-budget; renumbered from DFF-041 during reconciliation with main, which independently added its own DFF-041 for the trusted-grader self-update bootstrap boundary): hunter_pre_ready_review.reviewer_chain_worst_case_seconds(pool) is now the single canonical derivation the collector workflow's timeout-minutes and hunter_review_orchestrator.independent_review_opportunity_seconds() are both validated against/derived from, proven by test_collector_workflow_lifetime_covers_the_reviewer_chain_budget and test_independent_review_opportunity_matches_the_same_canonical_budget.",
         "family": "DFF-042",
         "outcome": "clear"
       },
       {
-        "evidence": "This diff is the correcting contribution for the newly-recorded DFF-043 (canonical-knowledge-growth-causes-linear-per-task-prompt-growth): EngineeringContextAuthority.compile() now takes an explicit budget_bytes and bounds/deduplicates/compacts rendering by deterministic structural relevance rather than inlining every applicable family's full prose, proven by the 8 new regression tests in tests/test_engineering_context_authority.py (TEST1-6 per the owner's authorized mission), and by the 32 previously-failing tests/test_issue_agent_execution.py, tests/test_issue_agent_issuer.py, tests/test_issue_agent_provisioner.py tests now passing.",
+        "evidence": "This diff is the correcting contribution for DFF-043 (exact-head-initial-dispatch-not-idempotent-under-stale-status-read; renumbered from DFF-042 during reconciliation with main): ensure_collector now cross-checks the collector run listing before minting a fresh dispatch whenever no trusted cycle status is visible, proven by test_two_racing_reconcile_calls_never_double_dispatch_when_the_status_read_lags; the pre-existing bounded dead-dispatch recovery path is unaffected, proven by the unchanged test_a_failed_collector_is_redispatched_rather_than_parking_the_cycle continuing to pass.",
         "family": "DFF-043",
         "outcome": "clear"
       },
       {
-        "evidence": "This diff adds no clock/cutoff/temporal-authority logic; EngineeringContextAuthority.compile() consumes no caller-supplied time value.",
-        "family": "DFF-001",
+        "evidence": "This diff is the correcting contribution for DFF-044 (canonical-knowledge-growth-causes-linear-per-task-prompt-growth; renumbered from DFF-043 during reconciliation with main): EngineeringContextAuthority.compile() now takes an explicit budget_bytes and bounds/deduplicates/compacts rendering by deterministic structural relevance rather than inlining every applicable family's full prose, proven by the 8 new regression tests in tests/test_engineering_context_authority.py (TEST1-6 per the owner's authorized mission), and by the 32 previously-failing tests/test_issue_agent_execution.py, tests/test_issue_agent_issuer.py, tests/test_issue_agent_provisioner.py tests now passing.",
+        "family": "DFF-044",
         "outcome": "clear"
       },
       {
-        "evidence": "This diff touches no database transaction/snapshot boundary; engineering_context_authority.py and smart_prompt_routing.py are pure in-memory derivations over the registry file and an owner-authored scope object.",
-        "family": "DFF-002",
-        "outcome": "clear"
-      },
-      {
-        "evidence": "No logical identity is minted or reused by this diff; family ids continue to come from, and be uniqueness-checked against, the unmodified canonical registry parser.",
-        "family": "DFF-003",
-        "outcome": "clear"
-      },
-      {
-        "evidence": "The new optional prevention.equivalence_class field and the new budget_bytes parameter are both validated fail-closed (EngineeringContextAuthorityError on a non-string/empty equivalence_class or a non-positive budget_bytes) rather than silently accepted, consistent with this module's existing schema validation style.",
-        "family": "DFF-004",
-        "outcome": "clear"
-      },
-      {
-        "evidence": "This diff persists nothing; compile() is a pure function over its registry file and scope/budget arguments with no nested-metadata write path.",
-        "family": "DFF-005",
-        "outcome": "clear"
-      },
-      {
-        "evidence": "compile() is deterministic and stateless across calls/restarts (proven by test_selection_is_deterministic_and_offline_across_repeated_compiles); it carries no monotonic counter or restart-sensitive state.",
-        "family": "DFF-006",
-        "outcome": "clear"
-      },
-      {
-        "evidence": "The dispatchability gate this family guards (PromptTaskUnreadyError raised from the compiled allocation outcome in smart_prompt_routing.compile_task) is completely unmodified by this diff; this diff only changes what is fed into compilation (bounding the prevention-context contribution), never the READY/outcome decision itself, which remains the sole authority over whether a build may be wrapped into an envelope.",
-        "family": "DFF-018",
-        "outcome": "clear"
-      },
-      {
-        "evidence": "This diff's changes to scripts/hunter_review_orchestrator.py and .github/workflows/hunter-governance-reconcile.yml / hunter-reviewer-collector.yml are exactly the trusted-controller-logic surfaces DFF-040 covers: candidate changes to code that executes only from the trusted default branch. This candidate's own hosted Trusted Candidate Orchestrator Replay Harness run at this exact head (bb9720693c208c516de818d9586bd8780400d483) is the resolution DFF-040 itself records: Scenario A, Scenario B, and Scenario G all reported outcome=pass, candidate module digest verification passed, and the privileged publish-proof status 'Hunter Trusted Orchestrator Replay / PR #535' reported success -- proving these exact controller-logic changes were validated against the candidate's own real content before merge, resolving the self-validation bootstrap deadlock DFF-040 exists to prevent.",
+        "evidence": "This diff's changes to .github/workflows/hunter-governance-reconcile.yml are exactly the trusted-controller surface DFF-040 covers. The candidate changes no executable trusted logic at all -- scripts/hunter_review_orchestrator.py is byte-identical -- only which lifecycle event enters the existing trusted path, and every new regression test runs entirely offline against repository-owned files and functions, with no live GitHub precondition and no privileged token. DFF-040's hosted replay harness therefore remains the mechanism for validating the candidate's own controller-logic content, and the trigger addition is a wiring fact the structural regressions prove directly.",
         "family": "DFF-040",
         "outcome": "clear"
       }
@@ -311,12 +282,12 @@
         "severity": "blocking"
       },
       {
-        "evidence": "Live PR #535 evidence (owner-directed re-diagnosis after this session's own initial 'unrelated/pre-existing' characterization of 32 hosted test failures was shown incorrect and withdrawn): EngineeringContextAuthority.compile() inlined every applicable defect family's full prose whenever its applicability intersected a broad allowed_paths root, so canonical registry growth (this PR's own DFF-040/041/042 additions included) grew the compiled engineering.implement prompt linearly, crossing the fixed 28,672-byte budget and causing 32 downstream INSUFFICIENT_BUDGET test failures.",
-        "id": "F-5",
+        "evidence": "Live PR #535 evidence (exact HEAD 51108333821ab42d1ab7aa0b812a72d890f73795): the pull_request_target synchronize at 07:40:33Z triggered Hunter / Merge Readiness, Hunter / Trusted Preflight Upgrade and Hunter Governance Agent Preflight, but not Hunter Governance Review Reconcile and not Hunter Reviewer Collector for that exact HEAD. The only reconciliations that ran (36393517015, 36393716517) were workflow_run-triggered recoveries depending on other workflows' completions, and no trusted exact-head orchestration cycle was published for that HEAD, so Merge Readiness run 36393772215 correctly published MALFORMED_REVIEW: WAITING_FOR_REVIEWER. hunter-governance-reconcile.yml declared types: [ready_for_review] only, so Issue #534's earlier fix had covered one of the two transition classes that can invalidate the exact-head prerequisite and not the exact-HEAD-changing one. A secondary consequence of the same defect: because synchronize also fires on pushes to a Draft PR, once the trigger was added the trigger could no longer be the Draft guard, and the pre-existing structural regression had been asserting the defect itself ('synchronize' not in types).",
+        "id": "F-6",
         "resolution": "resolved",
         "resolution_evidence": {
-          "correction": "ac0572e4645211bccec6d25ab1c2f14eacdcd91a",
-          "regression_test": "tests/test_engineering_context_authority.py"
+          "correction": "38a1d58ff91fed12284956f4bd04474b3578909a",
+          "regression_test": "tests/test_hunter_review_orchestrator.py"
         },
         "severity": "blocking"
       }
@@ -324,7 +295,7 @@
     "issue": "534",
     "review_target": [
       {
-        "blob_sha": "cdb99a967671ce969a177362da10431dba02a863",
+        "blob_sha": "4d6ec4e9a5308623c096aea481b1f56fad42bf12",
         "path": ".github/workflows/hunter-governance-reconcile.yml",
         "previous_path": "",
         "status": "modified"
@@ -342,7 +313,7 @@
         "status": "modified"
       },
       {
-        "blob_sha": "bf187e6e1930aba4f37d1d7989fa8141b9967299",
+        "blob_sha": "ddd85a844602223cdb522e15ebeaa4cae8295ebb",
         "path": "docs/DEFECT_REGISTRY.json",
         "previous_path": "",
         "status": "modified"
@@ -390,7 +361,7 @@
         "status": "modified"
       },
       {
-        "blob_sha": "907e4a3b9f56195c6b60fedb505a1693256b1c3a",
+        "blob_sha": "474c45b53b6260db64f8c1f8e63be4e788a5acb5",
         "path": "tests/test_hunter_review_orchestrator.py",
         "previous_path": "",
         "status": "modified"
@@ -408,11 +379,11 @@
         "status": "modified"
       }
     ],
-    "review_target_digest": "fca24cca815dcc69396859fe891591449d8352693f6edcc85ad3c20bd1c4ec0d"
+    "review_target_digest": "2813e7296d29adf647152a71446a4c2bf9afbffa9c51c50532bf5b302ee88c28"
   },
-  "review_id": "57f09cbd5c48fc02c06918bbe90c56b2eef7cf21fa13fc0c5bec244db6a4ae75",
+  "review_id": "c8323ce857474f503edede58dc1ab8b906c4c82e2ed1b998c609c0f502f0a545",
   "review_request": {
-    "claims_id": "57f09cbd5c48fc02c06918bbe90c56b2eef7cf21fa13fc0c5bec244db6a4ae75",
+    "claims_id": "c8323ce857474f503edede58dc1ab8b906c4c82e2ed1b998c609c0f502f0a545",
     "schema": "hunter.review-request.v1"
   },
   "schema": "hunter.pre-ready-hostile-review.v1"
