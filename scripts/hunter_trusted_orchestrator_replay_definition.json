@@ -1,0 +1,23 @@
+{
+  "schema": "hunter.trusted-orchestrator-replay.v1",
+  "scenario_set_id": "hunter-orchestrator-replay-v1",
+  "required_scenario_ids": [
+    "A",
+    "B",
+    "G"
+  ],
+  "scenario_invariants": {
+    "A": "The independent review opportunity is derived from, and at least covers, the candidate's own real reviewer-pool worst-case budget, with strictly positive reserved overhead and a bounded ceiling.",
+    "B": "An exact-head collector is dispatched at most once across racing or repeated reconcile calls made while the combined-status read has not yet observed a prior write, and reconcile recovers cleanly once the read catches up.",
+    "G": "A WAITING_FOR_REVIEWER exact-head cycle classifies to pending end-to-end through the real resolution path for absent and in-progress cycle evidence, and malformed cycle evidence fails closed rather than classifying as pending."
+  },
+  "fixture": {
+    "timeout_delta_seconds": 9000,
+    "absolute_ceiling_seconds": 21600,
+    "head_sha": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+    "pr_number": 535,
+    "config_digest": "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
+    "run_id": 4242
+  },
+  "max_scenario_seconds": 300
+}

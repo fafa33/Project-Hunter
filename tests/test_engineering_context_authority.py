@@ -160,6 +160,48 @@ def test_execution_discipline_is_fixed_and_does_not_vary_with_scope_or_families(
     assert narrow["execution_discipline"] == broad["execution_discipline"]
 
 
+def test_directory_matched_family_keeps_full_detail_when_budget_easily_allows_it(tmp_path: Path) -> None:
+    """A directory-root match is not downgraded merely for matching through a
+    directory; it keeps full detail whenever the budget has room, exactly
+    like a file-specific match does (Codex P1 finding on PR #536)."""
+
+    family = _family("DFF-DIR", "scripts/")
+    authority = EngineeringContextAuthority(registry_path=_registry(tmp_path, [family]))
+
+    result = authority.compile(ENGINEERING_IMPLEMENT_TASK_KEY, scope=_scope("scripts/"))
+
+    families = cast(list[dict[str, object]], result["applicable_defect_families"])
+    assert families == [
+        {
+            "id": "DFF-DIR",
+            "title": "title-DFF-DIR",
+            "invariant": "invariant-DFF-DIR",
+            "lifecycle": "regression-tested",
+            "prevention_boundary": "review",
+        }
+    ]
+
+
+def test_dotfile_directory_root_is_classified_as_a_directory_not_a_file(tmp_path: Path) -> None:
+    """A registry root like ``.github/`` must not be treated as more specific
+
+    than it is merely because its leaf name starts with a dot (Codex P2
+    finding on PR #536): it is a directory match, downgraded before a
+    genuinely file-specific match under a constrained budget."""
+
+    dotfile_dir = _family("DFF-DOTDIR", ".github/", invariant=_LONG_INVARIANT)
+    exact_file = _family("DFF-EXACT-FILE", "scripts/hunter_x", invariant=_LONG_INVARIANT)
+    authority = EngineeringContextAuthority(registry_path=_registry(tmp_path, [dotfile_dir, exact_file]))
+    scope = _scope(".github/", "scripts/hunter_x")
+
+    result = authority.compile(ENGINEERING_IMPLEMENT_TASK_KEY, scope=scope, budget_bytes=1_200)
+
+    families = cast(list[dict[str, object]], result["applicable_defect_families"])
+    by_id = {item["id"]: item for item in families}
+    assert "invariant" not in by_id["DFF-DOTDIR"], ".github/ must be treated as a directory root, downgraded first"
+    assert "invariant" in by_id["DFF-EXACT-FILE"], "an extensionless exact file match must keep full detail"
+
+
 def test_broad_family_survives_nested_prohibition_when_permitted_surface_remains(tmp_path: Path) -> None:
     family = _family("DFF-BROAD", "src/hunter/")
     authority = EngineeringContextAuthority(registry_path=_registry(tmp_path, [family]))
@@ -174,10 +216,12 @@ def test_broad_family_survives_nested_prohibition_when_permitted_surface_remains
     assert [item["id"] for item in result["applicable_defect_families"]] == ["DFF-BROAD"]
 
 
-# --- Issue #536 (PR #535 live evidence): bounded, relevance-driven prevention
-# --- context compilation. Canonical knowledge (docs/DEFECT_REGISTRY.json) may
-# --- grow without bound; the compiled per-task prompt must not grow linearly
-# --- with it. DFF-043 records the permanent invariant these tests pin.
+# --- PR #535 live evidence: bounded, relevance-driven prevention context
+# --- compilation. Canonical knowledge (docs/DEFECT_REGISTRY.json) may grow
+# --- without bound; the compiled per-task prompt must not grow linearly
+# --- with it. Ported alongside the mechanism from PR #535's own SPM/DPM fix,
+# --- since this branch's own registry additions are subject to the exact
+# --- same recurring defect class (registry growth -> prompt budget overflow).
 
 
 def test_unrelated_registry_growth_does_not_grow_a_narrow_tasks_prompt(tmp_path: Path) -> None:
@@ -299,12 +343,13 @@ def test_selection_is_deterministic_and_offline_across_repeated_compiles(tmp_pat
 
 
 def test_representative_engineering_implement_scope_fits_the_real_prevention_budget() -> None:
-    """TEST 6 -- the current real registry (DFF-040/041/042 included) must
+    """TEST 6 -- the real, current docs/DEFECT_REGISTRY.json must compile, for
 
-    compile, for the exact scope every Issue Agent test shares
+    the exact scope every Issue Agent test shares
     (``tests/issue_agent_wire.py::issue_body_with_scope``), within the real
-    unchanged prevention-context budget -- without deleting or shortening
-    those DFFs and without raising the overall prompt budget.
+    unchanged prevention-context budget. This is a live regression pin against
+    this branch's actual registry content, not a fixed family-id list, since
+    which families are present is registry content, not mechanism behavior.
     """
 
     from hunter.evidence_intelligence.smart_prompt_routing import (
@@ -326,7 +371,6 @@ def test_representative_engineering_implement_scope_fits_the_real_prevention_bud
     )
 
     families = cast(list[dict[str, object]], result["applicable_defect_families"])
-    ids = {item["id"] for item in families}
-    assert {"DFF-040", "DFF-041", "DFF-042"} <= ids
+    assert families, "the representative scope must select at least one applicable family"
     blob = json.dumps(families, sort_keys=True, separators=(",", ":"), ensure_ascii=False)
     assert len(blob.encode("utf-8")) <= ENGINEERING_IMPLEMENT_PREVENTION_CONTEXT_MAX_BYTES

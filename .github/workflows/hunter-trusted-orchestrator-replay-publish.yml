@@ -1,0 +1,331 @@
+name: Hunter / Trusted Orchestrator Replay Publish
+
+# Trusted candidate orchestrator replay harness (Issue #534 follow-on) --
+# privileged half. See hunter-trusted-orchestrator-replay-validate.yml for
+# the candidate-touching half.
+#
+# This workflow is triggered by `workflow_run`, which GitHub always resolves
+# and runs from the BASE repository's own copy of this file, on the default
+# branch, regardless of what triggered the upstream run or what that PR
+# branch's own copy of any workflow file says.
+#
+# This job is checkout-free by construction: it never runs actions/checkout,
+# git clone, git fetch, or any other step that materializes repository
+# content onto the runner's filesystem, and it never executes a repository
+# script. "No untrusted code ever executes in a job holding write
+# credentials, secrets, or a mutation-capable token" is therefore true
+# structurally, not just because the one thing it used to check out
+# (main, never candidate) happened to be safe -- there is nothing here left
+# that could be pointed at the wrong ref in the first place.
+#
+# It only ever touches three kinds of content, all of it inert data, never
+# executed, imported, or used to select an executable path:
+#   1. Two small JSON artifacts the validate workflow produced, downloaded by
+#      fixed name from the exact triggering run id.
+#   2. The exact byte content of three trusted definition files (the two
+#      controller scripts plus their shared JSON definition file), fetched
+#      as plain text through the read-only GitHub Contents API at ref=main --
+#      never checked out, never written to disk as an executable ".py" path,
+#      never imported -- solely to be hashed by this step's own inline
+#      Python, so it can independently recompute
+#      trusted_harness_definition_digest / scenario_set_digest /
+#      input_fixture_digest without trusting the validate job's receipt.
+#   3. The current tip SHA of `main`, resolved through the read-only GitHub
+#      Commits API (never `git rev-parse` against a checkout).
+#
+# The inline validation script below is this file's OWN trusted logic --
+# not sourced from the repository at execution time -- reimplementing only
+# the receipt-comparison half of validate_receipt_trusted_fields
+# (scripts/hunter_trusted_orchestrator_replay.py). It deliberately does not
+# duplicate the scenario-execution half (subprocess isolation, candidate
+# module imports, running scenarios): that stays exclusively in the
+# unprivileged validate-replay job, which is the only job that ever touches
+# candidate content, and which never runs under a trigger that grants
+# secrets or a privileged token in the first place.
+#
+# A green "Hunter Trusted Orchestrator Replay" status proves the candidate's
+# controller-logic modules satisfy fixed, deterministic, offline invariants
+# against fixed fixtures. It does NOT prove real GitHub propagation delay,
+# real reviewer-provider latency, real webhook timing, or real provider
+# availability -- those remain live, post-merge canary evidence. See
+# scripts/hunter_trusted_orchestrator_replay.py for the full evidence boundary.
+
+on:
+  workflow_run:
+    workflows: ["Hunter / Trusted Orchestrator Replay Validate"]
+    types:
+      - completed
+
+jobs:
+  publish-proof:
+    name: Publish Exact-Head Trusted Replay Proof
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    # Checkout-free: no step in this job runs actions/checkout, git clone,
+    # git fetch, or any other repository-materializing action, and no step
+    # executes a repository script. See the file-level comment above.
+    permissions:
+      contents: read
+      actions: read
+      statuses: write
+
+    steps:
+      - name: Resolve exact-head PR context from the triggering run
+        id: context
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          RUN_ID: ${{ github.event.workflow_run.id }}
+        run: |
+          set -euo pipefail
+          pr_number="$(gh api "repos/${GH_REPO}/actions/runs/${RUN_ID}" --jq '.pull_requests[0].number // empty')"
+          if [ -z "$pr_number" ]; then
+            echo "no associated pull request found for triggering run ${RUN_ID}" >&2
+            exit 1
+          fi
+          echo "pr_number=$pr_number" >> "$GITHUB_OUTPUT"
+
+      - name: Set up Python
+        uses: actions/setup-python@v6
+        with:
+          python-version: "3.11.13"
+
+      - name: Download replay receipt
+        if: ${{ github.event.workflow_run.conclusion == 'success' }}
+        uses: actions/download-artifact@v4
+        with:
+          name: replay-receipt
+          path: .
+          github-token: ${{ github.token }}
+          run-id: ${{ github.event.workflow_run.id }}
+        continue-on-error: true
+
+      - name: Download digest verification result
+        if: ${{ always() }}
+        uses: actions/download-artifact@v4
+        with:
+          name: digest-check
+          path: .
+          github-token: ${{ github.token }}
+          run-id: ${{ github.event.workflow_run.id }}
+        continue-on-error: true
+
+      - name: Fetch trusted definition files as inert data (no checkout, never executed)
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+        run: |
+          set -euo pipefail
+          fetch_inert_file() {
+            # Fetches one file's exact byte content via the read-only
+            # Contents API and writes it to a plain ".fetched" data file --
+            # never a ".py"/executable path, never passed to `python` or
+            # `source`, only ever opened and hashed as text by the inline
+            # script below.
+            local repo_path="$1"
+            local out_file="$2"
+            gh api "repos/${GH_REPO}/contents/${repo_path}?ref=main" --jq '.content' \
+              | base64 -d > "$out_file"
+          }
+          fetch_inert_file "scripts/hunter_trusted_orchestrator_replay.py" \
+            "trusted-controller.fetched"
+          fetch_inert_file "scripts/hunter_trusted_orchestrator_replay_worker.py" \
+            "trusted-worker.fetched"
+          fetch_inert_file "scripts/hunter_trusted_orchestrator_replay_definition.json" \
+            "trusted-definition.fetched"
+          gh api "repos/${GH_REPO}/commits/main" --jq '.sha' > trusted-main-sha.fetched
+
+      - name: Independently validate the trusted replay receipt (checkout-free)
+        id: validate_receipt
+        env:
+          GITHUB_TOKEN: ""
+          GH_TOKEN: ""
+          WORKFLOW_CONCLUSION: ${{ github.event.workflow_run.conclusion }}
+          PR_NUMBER: ${{ steps.context.outputs.pr_number }}
+          CANDIDATE_SHA: ${{ github.event.workflow_run.head_sha }}
+        run: |
+          set -euo pipefail
+          python - <<'PY'
+          import hashlib
+          import json
+          import os
+          import sys
+          from datetime import UTC, datetime
+
+          def _digest(payload):
+              encoded = json.dumps(payload, sort_keys=True, separators=(",", ":"), ensure_ascii=False).encode("utf-8")
+              return hashlib.sha256(encoded).hexdigest()
+
+          def _parse_timestamp(value):
+              if not isinstance(value, str) or not value:
+                  return None
+              try:
+                  return datetime.strptime(value, "%Y-%m-%dT%H:%M:%S.%fZ").replace(tzinfo=UTC)
+              except ValueError:
+                  return None
+
+          def _write_result(result: str) -> None:
+              with open(os.environ["GITHUB_OUTPUT"], "a", encoding="utf-8") as fh:
+                  fh.write(f"result={result}\n")
+
+          conclusion = os.environ["WORKFLOW_CONCLUSION"]
+          pr_number = int(os.environ["PR_NUMBER"])
+          candidate_sha = os.environ["CANDIDATE_SHA"]
+
+          if conclusion != "success" or not os.path.isfile("replay-receipt.json") or not os.path.isfile(
+              "digest-check.json"
+          ):
+              print("validate workflow did not produce complete evidence; treating replay as failed", file=sys.stderr)
+              _write_result("failure")
+              sys.exit(0)
+
+          with open("replay-receipt.json", encoding="utf-8") as fh:
+              receipt = json.load(fh)
+          with open("digest-check.json", encoding="utf-8") as fh:
+              digest_check = json.load(fh)
+
+          # Read only as text, for hashing -- never imported, never executed,
+          # never written to an executable path.
+          with open("trusted-definition.fetched", encoding="utf-8") as fh:
+              definition_text = fh.read()
+          with open("trusted-controller.fetched", encoding="utf-8") as fh:
+              controller_text = fh.read()
+          with open("trusted-worker.fetched", encoding="utf-8") as fh:
+              worker_text = fh.read()
+          with open("trusted-main-sha.fetched", encoding="utf-8") as fh:
+              expected_harness_sha = fh.read().strip()
+
+          definition = json.loads(definition_text)
+          schema = definition["schema"]
+          scenario_set_id = definition["scenario_set_id"]
+          required_scenario_ids = tuple(definition["required_scenario_ids"])
+          scenario_invariants = definition["scenario_invariants"]
+          fixture = definition["fixture"]
+          max_scenario_seconds = definition["max_scenario_seconds"]
+
+          file_payload = {
+              "scripts/hunter_trusted_orchestrator_replay.py": controller_text,
+              "scripts/hunter_trusted_orchestrator_replay_worker.py": worker_text,
+              "scripts/hunter_trusted_orchestrator_replay_definition.json": definition_text,
+          }
+          expected_definition_digest = _digest(file_payload)
+          expected_scenario_set_digest = _digest({"scenario_set_id": scenario_set_id, "invariants": scenario_invariants})
+          expected_fixture_digest = _digest(fixture)
+
+          errors: list[str] = []
+          if not isinstance(receipt, dict):
+              errors.append("receipt is not a JSON object")
+          else:
+              if receipt.get("schema") != schema:
+                  errors.append(f"receipt schema {receipt.get('schema')!r} != {schema!r}")
+              if receipt.get("candidate_pr") != pr_number:
+                  errors.append(f"receipt candidate_pr {receipt.get('candidate_pr')!r} != trusted PR #{pr_number}")
+              if receipt.get("candidate_sha") != candidate_sha:
+                  errors.append(
+                      f"receipt candidate_sha {receipt.get('candidate_sha')!r} != trusted head {candidate_sha!r}"
+                  )
+              if receipt.get("trusted_harness_sha") != expected_harness_sha:
+                  errors.append(
+                      "receipt trusted_harness_sha does not match this job's own independently "
+                      "resolved trusted main SHA"
+                  )
+              if receipt.get("trusted_harness_definition_digest") != expected_definition_digest:
+                  errors.append("receipt trusted_harness_definition_digest does not match the trusted harness definition")
+              if receipt.get("scenario_set_digest") != expected_scenario_set_digest:
+                  errors.append("receipt scenario_set_digest does not match the trusted canonical scenario definitions")
+              if receipt.get("input_fixture_digest") != expected_fixture_digest:
+                  errors.append("receipt input_fixture_digest does not match the trusted fixed fixture")
+
+              results = receipt.get("scenario_results")
+              if not isinstance(results, list):
+                  errors.append("receipt scenario_results must be a list")
+              else:
+                  by_id = {
+                      entry["scenario_id"]: entry
+                      for entry in results
+                      if isinstance(entry, dict) and isinstance(entry.get("scenario_id"), str)
+                  }
+                  if set(by_id) != set(required_scenario_ids):
+                      errors.append(
+                          f"receipt scenario_results must cover exactly {sorted(required_scenario_ids)}, "
+                          f"found {sorted(by_id)}"
+                      )
+                  for scenario_id in required_scenario_ids:
+                      entry = by_id.get(scenario_id)
+                      if entry is None:
+                          continue
+                      if entry.get("invariant") != scenario_invariants[scenario_id]:
+                          errors.append(f"scenario {scenario_id} invariant text does not match the trusted canonical invariant")
+                      if entry.get("outcome") != "pass":
+                          errors.append(f"scenario {scenario_id} outcome is {entry.get('outcome')!r}, not 'pass'")
+                      started = _parse_timestamp(entry.get("started_at"))
+                      finished = _parse_timestamp(entry.get("finished_at"))
+                      if started is None or finished is None:
+                          errors.append(f"scenario {scenario_id} timestamps are missing or unparseable")
+                      elif finished < started:
+                          errors.append(f"scenario {scenario_id} finished_at precedes started_at")
+                      elif (finished - started).total_seconds() > max_scenario_seconds:
+                          errors.append(f"scenario {scenario_id} duration exceeds the {max_scenario_seconds}s sanity ceiling")
+
+                  all_pass = bool(by_id) and all(
+                      by_id.get(sid, {}).get("outcome") == "pass" for sid in required_scenario_ids
+                  )
+                  expected_overall = "pass" if all_pass else "fail"
+                  if receipt.get("overall_result") != expected_overall:
+                      errors.append("receipt overall_result is inconsistent with its own scenario outcomes")
+
+          digest_errors = digest_check.get("errors") if isinstance(digest_check, dict) else None
+          if not isinstance(digest_errors, list):
+              errors.append("candidate module digest verification result is malformed")
+          else:
+              errors.extend(str(e) for e in digest_errors)
+
+          for error in errors:
+              print(f"REPLAY VALIDATION FAILED: {error}", file=sys.stderr)
+          if errors:
+              _write_result("failure")
+          else:
+              print("REPLAY VALIDATION PASSED")
+              _write_result("success")
+          PY
+
+      - name: Publish exact-head PR-bound status
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          HEAD_SHA: ${{ github.event.workflow_run.head_sha }}
+          PR_NUMBER: ${{ steps.context.outputs.pr_number }}
+          VALIDATION_RESULT: ${{ steps.validate_receipt.outputs.result }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          set -euo pipefail
+          python - <<'PY'
+          import json
+          import os
+          import urllib.request
+
+          result = os.environ["VALIDATION_RESULT"]
+          state = "success" if result == "success" else "failure"
+          payload = json.dumps(
+              {
+                  "state": state,
+                  "context": f"Hunter Trusted Orchestrator Replay / PR #{os.environ['PR_NUMBER']}",
+                  "description": f"Trusted candidate controller replay {state} ({result})",
+                  "target_url": os.environ["RUN_URL"],
+              }
+          ).encode("utf-8")
+          request = urllib.request.Request(
+              f"https://api.github.com/repos/{os.environ['GH_REPO']}/statuses/{os.environ['HEAD_SHA']}",
+              data=payload,
+              method="POST",
+              headers={
+                  "Authorization": f"Bearer {os.environ['GITHUB_TOKEN']}",
+                  "Accept": "application/vnd.github+json",
+                  "X-GitHub-Api-Version": "2022-11-28",
+                  "Content-Type": "application/json",
+              },
+          )
+          with urllib.request.urlopen(request, timeout=30) as response:
+              if response.status != 201:
+                  raise RuntimeError(f"status publication returned HTTP {response.status}")
+          PY

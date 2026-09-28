@@ -1,0 +1,172 @@
+name: Hunter / Trusted Orchestrator Replay Validate
+
+# Trusted candidate orchestrator replay harness (Issue #534 follow-on) --
+# candidate-touching half. See hunter-trusted-orchestrator-replay-publish.yml
+# for the privileged half and the full two-workflow trust boundary rationale.
+#
+# hunter_review_orchestrator.py, hunter_reviewer_collector.py and
+# hunter_governance_review_v2.py execute only from the trusted default branch
+# (pull_request_target / workflow_run / push:main), by deliberate trust-boundary
+# design: a candidate branch must never self-authorize privileged execution of
+# its own controller-logic changes. That design is correct, but it also means a
+# candidate PR that changes this trusted controller logic can never exercise its
+# own fix from its own live CI runs -- reconcile/collector/readiness always run
+# against main, which does not yet contain the candidate's change. This is the
+# "trust-boundary bootstrap deadlock".
+#
+# This workflow replays the candidate's controller-logic modules against
+# fixed, offline scenario fixtures and independently recomputes their module
+# digests -- and does nothing else. It is deliberately triggered by
+# `pull_request`, never `pull_request_target`: no job here ever holds a write
+# permission, a repository secret, or a status/check-publishing token, so
+# there is nothing for untrusted candidate code (which both jobs below
+# execute, by necessity, inside a further credential-blanked, process-isolated
+# subprocess -- see scripts/hunter_trusted_orchestrator_replay_worker.py) to
+# escalate even if a candidate branch's own copy of this workflow file were
+# tampered with. The only thing either job produces is an artifact; the
+# separate, privileged publish workflow re-derives every trusted quantity
+# itself and never trusts either job's own account of what it did.
+#
+# validate-replay   (contents: read, blanked tokens) checks out the exact
+#   candidate and replays its controller-logic modules against fixed,
+#   offline scenario fixtures, producing a receipt.
+# verify-candidate-digest (contents: read ONLY -- no write permission of any
+#   kind) independently re-checks-out the exact candidate and recomputes each
+#   scenario's candidate-module digest itself, never trusting job 1's receipt.
+#
+# A green "Hunter Trusted Orchestrator Replay" status (published by the
+# separate publish workflow) proves the candidate's controller-logic modules
+# satisfy fixed, deterministic, offline invariants against fixed fixtures. It
+# does NOT prove real GitHub propagation delay, real reviewer-provider
+# latency, real webhook timing, or real provider availability -- those remain
+# live, post-merge canary evidence. See
+# scripts/hunter_trusted_orchestrator_replay.py for the full evidence boundary.
+
+on:
+  pull_request:
+    branches:
+      - main
+    types:
+      - opened
+      - reopened
+      - synchronize
+
+concurrency:
+  group: hunter-orchestrator-replay-validate-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+jobs:
+  validate-replay:
+    name: Trusted Candidate Orchestrator Replay
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      contents: read
+
+    steps:
+      - name: Checkout trusted controller
+        uses: actions/checkout@v7
+        with:
+          ref: ${{ github.event.repository.default_branch }}
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Checkout exact candidate as untrusted input
+        uses: actions/checkout@v7
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+          path: candidate
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Set up Python
+        uses: actions/setup-python@v6
+        with:
+          python-version: "3.11.13"
+
+      - name: Run trusted candidate orchestrator replay
+        env:
+          GITHUB_TOKEN: ""
+          GH_TOKEN: ""
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+          CANDIDATE_SHA: ${{ github.event.pull_request.head.sha }}
+        run: |
+          set -euo pipefail
+          python scripts/hunter_trusted_orchestrator_replay.py run \
+            --workspace-root "$GITHUB_WORKSPACE" \
+            --candidate-root candidate \
+            --pr "$PR_NUMBER" \
+            --candidate-sha "$CANDIDATE_SHA" \
+            --out replay-receipt.json
+
+      - name: Upload replay receipt
+        uses: actions/upload-artifact@v4
+        with:
+          name: replay-receipt
+          path: replay-receipt.json
+          retention-days: 14
+
+  verify-candidate-digest:
+    name: Independently Verify Candidate Module Digests
+    needs: validate-replay
+    if: ${{ always() && !cancelled() && needs.validate-replay.result == 'success' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    # No write permission of any kind -- this job touches candidate content
+    # a second time, independently of job 1, and must never also be able to
+    # mint a status, check, or PR write.
+    permissions:
+      contents: read
+
+    steps:
+      - name: Checkout trusted controller
+        uses: actions/checkout@v7
+        with:
+          ref: ${{ github.event.repository.default_branch }}
+          fetch-depth: 0
+          persist-credentials: false
+
+      # Re-checked-out here, independently of job 1, so this job recomputes
+      # candidate module digests itself rather than trusting job 1's receipt.
+      - name: Checkout exact candidate as untrusted input
+        uses: actions/checkout@v7
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+          path: candidate
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Set up Python
+        uses: actions/setup-python@v6
+        with:
+          python-version: "3.11.13"
+
+      - name: Download replay receipt
+        uses: actions/download-artifact@v4
+        with:
+          name: replay-receipt
+          path: .
+
+      - name: Verify candidate module digests
+        env:
+          GITHUB_TOKEN: ""
+          GH_TOKEN: ""
+        run: |
+          set -euo pipefail
+          python scripts/hunter_trusted_orchestrator_replay.py verify-digests \
+            --workspace-root "$GITHUB_WORKSPACE" \
+            --receipt replay-receipt.json \
+            --candidate-root candidate \
+            --out digest-check.json
+
+      # Runs even when the step above found a mismatch and exited non-zero,
+      # so the publish workflow still gets the specific per-scenario error
+      # detail rather than falling back to a generic "evidence missing"
+      # failure.
+      - name: Upload digest verification result
+        if: ${{ always() }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: digest-check
+          path: digest-check.json
+          retention-days: 14
