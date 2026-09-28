@@ -1674,6 +1674,47 @@
       "sources": [
         "Full-history defect scanner bootstrap on branch chore/full-history-defect-backfill, 2026-09-26: _verify_authentication requested the global rate_limit endpoint through the repository-scoped helper, which addressed https://api.github.com/repos/fafa33/Project-Hunter/rate_limit and returned HTTP 404 on a valid token, halting the 357-PR historical scan before its first request. Corrected by the governed global REST seam in the same contribution."
       ]
+    },
+    {
+      "id": "DFF-040",
+      "title": "trusted-controller-logic-candidate-cannot-self-validate-across-a-load-bearing-trust-boundary",
+      "invariant": "Trusted default-branch controller logic (exact-head review orchestration, reviewer collection, governance readiness classification) is deliberately executed only from the trusted default branch, never from a candidate's own branch, so a candidate cannot self-authorize privileged execution of its own controller-logic change. That boundary is correct, but it also means a candidate PR that changes this trusted controller logic can never exercise its own change from its own live CI runs, because those runs execute the default branch's copy of the logic, not the candidate's. A candidate changing trusted controller logic must therefore be validated by a harness that: (1) never grants the candidate production write credentials or a privileged token, (2) never lets a pull_request_target-class workflow execute untrusted candidate code with a privileged token, (3) executes the candidate's controller-logic modules only inside a read-only job with no write credentials, isolated from any process that will later publish a status, (4) treats every candidate-controlled artifact -- receipt content, file paths, scenario definitions, expected results, status-context names -- as untrusted until an independent, trusted re-derivation confirms it, and (5) never lets the candidate's own tests, receipt, or self-report constitute or substitute for that independent re-derivation, so passing this harness can never convert into production merge authority for the candidate on its own say-so. A candidate branch that changes trusted controller logic without such a harness is validated only by unit tests plus prose review, which is not evidence that the trusted controller path itself behaves as intended once merged.",
+      "applicability": {
+        "changed_paths": [
+          "scripts/hunter_review_orchestrator.py",
+          "scripts/hunter_reviewer_collector.py",
+          "scripts/hunter_governance_review_v2.py",
+          "scripts/hunter_trusted_orchestrator_replay.py",
+          "scripts/hunter_trusted_orchestrator_replay_worker.py",
+          "scripts/hunter_trusted_orchestrator_replay_definition.json",
+          ".github/workflows/hunter-trusted-orchestrator-replay-validate.yml",
+          ".github/workflows/hunter-trusted-orchestrator-replay-publish.yml",
+          ".github/workflows/hunter-governance-review.yml",
+          ".github/workflows/hunter-governance-reconcile.yml",
+          ".github/workflows/hunter-reviewer-collector.yml"
+        ],
+        "rationale": "These are the trusted controller surfaces that execute only from the default branch by design, and the harness surfaces that replay them for a candidate. A change to any of them either re-creates the bootstrap deadlock (controller logic) or governs the harness that resolves it (replay harness surfaces), so both sides of the invariant are in scope."
+      },
+      "prevention": {
+        "mechanism": "The Trusted Candidate Orchestrator Replay Harness (Issue #534 follow-on) replays a candidate's controller-logic modules against fixed, deterministic, offline scenario fixtures inside a validate-replay job that holds only contents:read and a blanked GITHUB_TOKEN/GH_TOKEN, executing candidate code only through a subprocess-isolated trusted worker rather than importing it into the same process. A separate publish-proof job never executes candidate code at all: it independently re-derives every trusted quantity (harness definition digest, scenario-set digest, fixture digest, candidate module digests recomputed from its own independent candidate checkout) and fails closed on any mismatch, rather than trusting the validate-replay job's receipt. No production authority resolver (Merge Readiness, Governance Review, candidate admission) consults the harness's diagnostic status context, so a passing replay can never itself confer merge authority; it is machine-checked evidence that the candidate's controller-logic modules satisfy the harness's fixed invariants, documented as never equivalent to live post-merge canary evidence of real GitHub timing or reviewer provider behavior.",
+        "boundary": "review",
+        "guard_reference": "scripts/hunter_trusted_orchestrator_replay.py::validate_receipt"
+      },
+      "regression_evidence": [
+        "tests/test_hunter_trusted_orchestrator_replay.py::test_scenario_a_passes_against_a_pool_derived_opportunity",
+        "tests/test_hunter_trusted_orchestrator_replay.py::test_scenario_a_fails_against_a_hardcoded_opportunity",
+        "tests/test_hunter_trusted_orchestrator_replay.py::test_scenario_b_passes_against_a_liveness_checked_dispatch",
+        "tests/test_hunter_trusted_orchestrator_replay.py::test_scenario_b_fails_against_an_unconditional_dispatch",
+        "tests/test_hunter_trusted_orchestrator_replay.py::test_scenario_g_passes_against_correct_end_to_end_classification",
+        "tests/test_hunter_trusted_orchestrator_replay.py::test_scenario_g_fails_against_a_swallowed_fail_closed_path",
+        "tests/test_hunter_trusted_orchestrator_replay.py::test_adversarial_8_forged_candidate_module_digest_is_rejected",
+        "tests/test_hunter_trusted_orchestrator_replay.py::test_adversarial_9_inconsistent_overall_result_is_rejected",
+        "tests/test_hunter_trusted_orchestrator_replay.py::test_no_production_authority_resolver_consults_the_replay_status"
+      ],
+      "lifecycle": "regression-tested",
+      "sources": [
+        "PR #535 live CI on branch issue-534-ready-review-orchestration, 2026-09: fixes to hunter_review_orchestrator.py's exact-head collector dispatch and reviewer-opportunity timing could not be exercised by the PR's own live CI runs, because hunter-governance-review.yml / hunter-governance-reconcile.yml / hunter-reviewer-collector.yml execute only from the trusted default branch, which does not yet contain the candidate's unmerged controller-logic change -- confirmed via git diff main HEAD -- scripts/hunter_merge_readiness_v2.py showing the relevant fix code exists only on the candidate branch. Resolved by the Trusted Candidate Orchestrator Replay Harness in this contribution."
+      ]
     }
   ]
 }

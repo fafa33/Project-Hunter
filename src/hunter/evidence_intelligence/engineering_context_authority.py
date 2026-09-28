@@ -67,6 +67,24 @@ CANONICAL_DEFECT_LIFECYCLES = frozenset(
     {"recorded", "regression-tested", "locally-enforced", "hosted-enforced", "merge-enforced", "prevented"}
 )
 CANONICAL_PREVENTION_BOUNDARIES = frozenset({"review", "local-pre-push", "hosted-gate", "merge-gate"})
+#: Rank used only to break ties when bounded selection must prefer one
+#: representative over another (dedup, and drop/downgrade ordering); it never
+#: decides applicability, which stays a pure structural path match.
+_LIFECYCLE_RANK = {
+    stage: index
+    for index, stage in enumerate(
+        ("recorded", "regression-tested", "locally-enforced", "hosted-enforced", "merge-enforced", "prevented")
+    )
+}
+
+#: Bound on the serialized ``applicable_defect_families`` payload when no
+#: caller-supplied budget is given (direct/test use of this module). A Smart
+#: Prompt Machine caller should instead pass its own derived share of the
+#: governed profile's ``maximum_input_bytes`` -- see
+#: ``smart_prompt_routing.ENGINEERING_IMPLEMENT_PREVENTION_CONTEXT_MAX_BYTES``
+#: -- so this default is never the number that actually governs a real
+#: engineering.implement compilation.
+DEFAULT_PREVENTION_CONTEXT_MAX_BYTES = 12_000
 
 
 class EngineeringContextAuthorityError(RuntimeError):
@@ -83,6 +101,48 @@ def _path_intersects(left: str, right: str) -> bool:
     left = left.rstrip("/")
     right = right.rstrip("/")
     return left == right or left.startswith(right + "/") or right.startswith(left + "/")
+
+
+def _is_file_leaf(path: str) -> bool:
+    """Whether a changed_paths entry names an exact file rather than a directory.
+
+    This is the only trusted, structural signal this module has for how
+    precisely a family's applicability actually pins down the task at hand:
+    a bare root like ``scripts/`` matches every file ever added under it,
+    while ``scripts/hunter_review_orchestrator.py`` cannot mean anything
+    broader than that one file. Neither caller-supplied task prose nor any
+    external heuristic is consulted -- see the module docstring.
+
+    Uses the registry's own trailing-slash convention (every directory root
+    in ``docs/DEFECT_REGISTRY.json`` is written with a trailing ``/``, every
+    file entry without one), rather than inspecting the leaf name for a dot:
+    a dot-based test misclassifies dotfile directory roots like ``.github/``
+    or ``.githooks/`` as exact files (their leaf name itself starts with a
+    literal ``.``), and misclassifies an extensionless real file (a
+    ``Dockerfile`` or ``Makefile``) as a directory.
+    """
+
+    return not path.endswith("/")
+
+
+def _specificity(matched_paths: list[str]) -> tuple[bool, int, int]:
+    """The best (is_file, depth, length) reading among a family's own matches.
+
+    Used only to break ties in bounded selection -- never to decide whether a
+    family is applicable, which stays the unchanged structural path-intersect
+    test above.
+    """
+
+    best = (False, 0, 0)
+    for path in matched_paths:
+        candidate = (_is_file_leaf(path), path.rstrip("/").count("/") + 1, len(path))
+        if candidate > best:
+            best = candidate
+    return best
+
+
+def _lifecycle_rank(lifecycle: str) -> int:
+    return _LIFECYCLE_RANK.get(lifecycle, -1)
 
 
 class EngineeringContextAuthority:
@@ -128,10 +188,23 @@ class EngineeringContextAuthority:
             lifecycle = _required_text(f"{identifier} lifecycle", raw.get("lifecycle"))
             if lifecycle not in CANONICAL_DEFECT_LIFECYCLES:
                 raise EngineeringContextAuthorityError(f"{identifier} lifecycle must be canonical: {lifecycle!r}")
+            equivalence_class = prevention.get("equivalence_class")
+            if equivalence_class is not None and (
+                not isinstance(equivalence_class, str) or not equivalence_class.strip()
+            ):
+                raise EngineeringContextAuthorityError(
+                    f"{identifier} prevention equivalence_class must be a non-empty string when declared"
+                )
             families.append(raw)
         return families
 
-    def compile(self, task_key: str, *, scope: TaskScopeContract) -> dict[str, object]:
+    def compile(
+        self,
+        task_key: str,
+        *,
+        scope: TaskScopeContract,
+        budget_bytes: int = DEFAULT_PREVENTION_CONTEXT_MAX_BYTES,
+    ) -> dict[str, object]:
         if task_key != ENGINEERING_IMPLEMENT_TASK_KEY:
             raise EngineeringContextAuthorityError(f"unsupported engineering context route: {task_key}")
         if not isinstance(scope, TaskScopeContract):
@@ -143,7 +216,10 @@ class EngineeringContextAuthority:
             raise EngineeringContextAuthorityError(incomplete)
         if len(scope.base_sha) != 40 or any(c not in "0123456789abcdef" for c in scope.base_sha):
             raise EngineeringContextAuthorityError("scope contract base_sha must be an exact lowercase commit SHA")
-        selected: list[dict[str, str]] = []
+        if isinstance(budget_bytes, bool) or not isinstance(budget_bytes, int) or budget_bytes <= 0:
+            raise EngineeringContextAuthorityError("prevention context budget_bytes must be a positive integer")
+
+        candidates: list[dict[str, Any]] = []
         for family in self._families():
             paths = family["applicability"]["changed_paths"]
 
@@ -159,10 +235,11 @@ class EngineeringContextAuthority:
                     for candidate in intersections
                 )
 
-            if not any(permitted(path) for path in paths):
+            matched = [path for path in paths if permitted(path)]
+            if not matched:
                 continue
             prevention = family["prevention"]
-            item = {
+            full_item: dict[str, object] = {
                 "id": family["id"],
                 "title": family["title"],
                 "invariant": family["invariant"],
@@ -171,23 +248,148 @@ class EngineeringContextAuthority:
             }
             guard_reference = prevention.get("guard_reference")
             if guard_reference is not None:
-                item["guard_reference"] = _required_text(f"{family['id']} guard_reference", guard_reference)
-            selected.append(item)
-        selected.sort(key=lambda item: item["id"])
-        if not selected:
+                full_item["guard_reference"] = _required_text(f"{family['id']} guard_reference", guard_reference)
+            compact_item: dict[str, object] = {
+                "id": family["id"],
+                "title": family["title"],
+                "prevention_boundary": prevention["boundary"],
+            }
+            candidates.append(
+                {
+                    "id": family["id"],
+                    "specificity": _specificity(matched),
+                    "lifecycle_rank": _lifecycle_rank(family["lifecycle"]),
+                    "equivalence_class": prevention.get("equivalence_class"),
+                    "full": full_item,
+                    "compact": compact_item,
+                }
+            )
+        if not candidates:
             raise EngineeringContextAuthorityError("no applicable defect families for engineering implementation route")
-        return {
+
+        # Deduplication: within a group of families the registry explicitly
+        # declares equivalent (same non-empty prevention.equivalence_class),
+        # only the single best representative is ever rendered. This never
+        # affects applicability -- every group member is still "applicable"
+        # canonical knowledge -- it only stops the compiled prompt from
+        # inlining the same prevention requirement's prose more than once.
+        # The winner is chosen by the same priority bounded selection uses
+        # below (most specific match, then most-advanced lifecycle, then id
+        # as a final fully-deterministic tiebreak), never by registry order.
+        def priority(entry: dict[str, Any]) -> tuple[Any, ...]:
+            return (entry["specificity"], entry["lifecycle_rank"], entry["id"])
+
+        groups: dict[str, list[dict[str, Any]]] = {}
+        singletons: list[dict[str, Any]] = []
+        for entry in candidates:
+            group_key = entry["equivalence_class"]
+            if group_key is None:
+                singletons.append(entry)
+            else:
+                groups.setdefault(group_key, []).append(entry)
+        rendered_entries = list(singletons)
+        for members in groups.values():
+            rendered_entries.append(max(members, key=priority))
+        rendered_entries.sort(key=lambda entry: entry["id"])
+
+        # Bounded rendering: try full detail for every applicable entry first,
+        # regardless of whether its match was through an exact file or a
+        # directory root, and only degrade -- in deterministic,
+        # lowest-priority-first steps -- once that genuinely does not fit.
+        # A directory-matched family is never downgraded merely because it
+        # matched through a directory; it is downgraded only when the budget
+        # actually requires it, exactly like a file-matched family is.
+        # Canonical knowledge is never deleted by this: every step below is a
+        # rendering decision over the same `rendered_entries`, and a dropped
+        # entry's id is still recorded so nothing disappears silently.
+        def render(entry: dict[str, Any], full: bool) -> dict[str, object]:
+            return entry["full"] if full else entry["compact"]
+
+        def blob_bytes(items: list[dict[str, object]]) -> int:
+            ordered = sorted(items, key=lambda item: str(item["id"]))
+            return len(json.dumps(ordered, sort_keys=True, separators=(",", ":"), ensure_ascii=False).encode("utf-8"))
+
+        included = list(rendered_entries)
+        elided: list[str] = []
+        full_ids = {entry["id"] for entry in included}
+
+        def rendered_now() -> list[dict[str, object]]:
+            return [render(entry, entry["id"] in full_ids) for entry in included]
+
+        rendered = rendered_now()
+        if blob_bytes(rendered) > budget_bytes:
+            # Tier 2: downgrade directory-matched (non-file-specific) entries
+            # to compact, broadest/shortest/lowest-id first, until it fits or
+            # none of them remain full.
+            downgradable = sorted(
+                (entry for entry in included if not entry["specificity"][0]),
+                key=priority,
+            )
+            for entry in downgradable:
+                if blob_bytes(rendered) <= budget_bytes:
+                    break
+                full_ids.discard(entry["id"])
+                rendered = rendered_now()
+        if blob_bytes(rendered) > budget_bytes:
+            # Tier 3: drop directory-matched entries entirely, broadest first,
+            # until it fits or none remain.
+            droppable = sorted(
+                (entry for entry in included if not entry["specificity"][0]),
+                key=priority,
+            )
+            for entry in droppable:
+                if blob_bytes(rendered) <= budget_bytes:
+                    break
+                included.remove(entry)
+                full_ids.discard(entry["id"])
+                elided.append(str(entry["id"]))
+                rendered = rendered_now()
+        if blob_bytes(rendered) > budget_bytes:
+            # Tier 4: only file-specific entries remain full; downgrade them
+            # to compact form, least-specific first, before failing closed.
+            downgrade_order = sorted((entry for entry in included if entry["id"] in full_ids), key=priority)
+            for entry in downgrade_order:
+                if blob_bytes(rendered) <= budget_bytes:
+                    break
+                full_ids.discard(entry["id"])
+                rendered = rendered_now()
+        final_bytes = blob_bytes(rendered)
+        if final_bytes > budget_bytes:
+            overflow = final_bytes - budget_bytes
+            largest = sorted(included, key=priority, reverse=True)[:3]
+            raise EngineeringContextAuthorityError(
+                "governed prevention context for "
+                f"{task_key} exceeds its {budget_bytes}-byte budget by {overflow} bytes even after full "
+                "compaction; largest remaining contributors: " + ", ".join(str(entry["id"]) for entry in largest)
+            )
+        result: dict[str, object] = {
             "schema_version": ENGINEERING_CONTEXT_SCHEMA_VERSION,
             "task_key": task_key,
             "scope_task_id": scope.task_id,
             "scope_base_sha": scope.base_sha,
             "scope_allowed_paths": list(scope.allowed_paths),
             "scope_prohibited_paths": list(scope.prohibited_paths),
-            "applicable_defect_families": selected,
+            "applicable_defect_families": rendered,
             "execution_discipline": list(EXECUTION_DISCIPLINE_RULES),
         }
+        if elided:
+            # Canonical knowledge is never deleted -- these ids are still
+            # applicable and still fully described in docs/DEFECT_REGISTRY.json
+            # -- only omitted from this bounded prompt because higher-priority
+            # matches (a more specific path, or a more fully-enforced lifecycle)
+            # already claimed the budget. Recorded so the omission is never
+            # silent, matching the fail-closed contract used when even this
+            # is not enough to fit (see the EngineeringContextAuthorityError
+            # raised above).
+            result["elided_family_ids"] = sorted(elided)
+        return result
 
-    def canonical_json(self, task_key: str, *, scope: TaskScopeContract) -> str:
+    def canonical_json(
+        self, task_key: str, *, scope: TaskScopeContract, budget_bytes: int = DEFAULT_PREVENTION_CONTEXT_MAX_BYTES
+    ) -> str:
         return json.dumps(
-            self.compile(task_key, scope=scope), sort_keys=True, separators=(",", ":"), ensure_ascii=False
+            self.compile(task_key, scope=scope, budget_bytes=budget_bytes),
+            sort_keys=True,
+            separators=(",", ":"),
+            ensure_ascii=False,
         )
