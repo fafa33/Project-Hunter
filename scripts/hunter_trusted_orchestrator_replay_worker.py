@@ -205,15 +205,22 @@ def scenario_b(candidate_root: Path, fixture: dict[str, Any]) -> dict[str, Any]:
        dispatches exactly one collector and publishes the durable cycle.
     2. A reconcile that observes that durable record dispatches nothing
        further and returns it unchanged.
-    3. A recorded cycle whose collector produced no run and that exceeds the
-       liveness grace recovers exactly one further dispatch.
+    3. A recorded cycle whose collector produced no run at all -- liveness
+       exactly ``("missing", 0)`` -- and that exceeds the liveness grace
+       recovers exactly one further dispatch. Whether a dispatch produces a
+       run is modelled, not assumed, so this probe is genuinely distinct from
+       the dead-run case.
     4. That recovery refreshes the durable record: a fresh durable cycle is
        published for it. A candidate that dispatches the recovery without
        republishing leaves the stale record in place, so this step fails.
-    5. Reconciles that observe the refreshed durable record dispatch nothing
-       further, and once the dispatch budget that real record has accumulated
-       is spent, the cycle stays pending and dispatches no more rather than
-       dispatching without end.
+    5. That exact refreshed record is then reconciled again, with nothing
+       aged or substituted in between. A refresh that kept an already-stale
+       liveness timestamp would be immediately re-dispatchable, so a candidate
+       that publishes a distinct record without resetting the liveness clock
+       fails here rather than passing behind a synthesized replacement.
+    6. Only then are records aged to spend the dispatch budget that real runs
+       have accumulated; the cycle stays pending and dispatches no more once
+       that budget is spent, rather than dispatching without end.
     """
 
     orchestrator = _import_candidate(candidate_root, "hunter_review_orchestrator")
@@ -231,23 +238,34 @@ def scenario_b(candidate_root: Path, fixture: dict[str, Any]) -> dict[str, Any]:
         f"({opportunity}s) so a dead collector is recovered before the cycle times out"
     )
 
-    state: dict[str, Any] = {"dispatches": 0, "published": [], "runs": []}
+    # Dispatches start out leaving no correlated run at all, which is a real
+    # outcome of a dispatch and the state the missing-run recovery probe needs.
+    # Run creation is switched on only for the later dead-run budget exercise.
+    state: dict[str, Any] = {"dispatches": 0, "published": [], "runs": [], "runs_created": False}
     orchestrator.reviewer_pool_config_digest = lambda: digest
     orchestrator.current_run_id = lambda: run_id
     orchestrator.publish_cycle = lambda *_a, cycle: state["published"].append(cycle)
 
     def fake_dispatch_collector(*_args: Any) -> None:
         state["dispatches"] += 1
-        # A dispatched collector is a correlated run for this exact head, which
-        # is what production counts toward MAX_COLLECTOR_DISPATCHES.
-        state["runs"].append(head)
+        # A dispatched collector normally leaves a correlated run for this
+        # exact head, which is what production counts toward
+        # MAX_COLLECTOR_DISPATCHES. Whether a run appears is a real, separate
+        # outcome of a dispatch: a dispatch can be accepted and still never
+        # produce a run, which is precisely the case
+        # ``collector_needs_dispatch`` exists to recover. ``runs_created``
+        # models that, so the missing-run path is exercised against real
+        # production rather than assumed.
+        if state["runs_created"]:
+            state["runs"].append(head)
 
     orchestrator.dispatch_collector = fake_dispatch_collector
 
     #: Real liveness evidence, derived from the runs this scenario's own
     #: dispatch hook created. Nothing here is substituted for the durable
     #: record: the count is the number of correlated runs, exactly as
-    #: ``collector_liveness`` reports it.
+    #: ``collector_liveness`` reports it, and a dispatch that produced no run
+    #: reports the production-valid ``("missing", 0)``.
     def fake_collector_liveness(
         _repository: str, _token: str, liveness_pr: int, liveness_head: str, generation_id: str = ""
     ) -> tuple[str, int]:
@@ -301,22 +319,30 @@ def scenario_b(candidate_root: Path, fixture: dict[str, Any]) -> dict[str, Any]:
         second.state == recorded.state and third.state == recorded.state
     ), f"reconciles that observe the durable record must return it unchanged, got {second.state!r} and {third.state!r}"
 
-    # Recovery: the durable record has outlived the liveness grace and the
-    # collector run it recorded never became live, so production re-dispatches.
+    # Recovery with no correlated run at all. A dispatch can be accepted and
+    # still never produce a run, which production reports as ("missing", 0);
+    # a cycle in that state must be recovered rather than left pending
+    # forever. Every dispatch so far produced no run, so this is the genuine
+    # production state rather than a substituted reading -- pinned explicitly
+    # so the probe cannot quietly degenerate into the dead-run case below.
+    assert orchestrator.collector_liveness("owner/repo", "token", pr_number, head) == (
+        "missing",
+        0,
+    ), "this probe must recover a cycle whose collector produced no run at all"
     stale = _recorded(grace + 1)
     state["published"].append(stale)
     published_before_recovery = len(state["published"])
     _read_durable()
     recovered = orchestrator.ensure_collector("owner/repo", "token", pr_number, head)
     assert state["dispatches"] == 2, (
-        f"a durable record whose collector produced no run must recover exactly one further dispatch after the "
+        f"a durable record with no correlated collector run must recover exactly one further dispatch after the "
         f"{grace}s liveness grace, got {state['dispatches'] - 1}"
     )
     assert (
         recovered.state == WAITING_FOR_REVIEWER_STATE
     ), f"a recovered cycle must stay pending, got {recovered.state!r}"
 
-    # (4) The recovery must refresh the durable record. Reading back the newest
+    # The recovery must refresh the durable record. Reading back the newest
     # published cycle is what proves this, and the check is relative so it stays
     # valid however many records the sequence has produced. A candidate that
     # re-dispatches without republishing leaves the stale record as the newest
@@ -332,26 +358,56 @@ def scenario_b(candidate_root: Path, fixture: dict[str, Any]) -> dict[str, Any]:
         "a recovery dispatch must publish exactly one refreshed durable cycle, published "
         f"{len(state['published']) - published_before_recovery}"
     )
-    assert refreshed.started_at != stale.started_at, (
-        "the refreshed durable cycle must carry the recovery's own liveness timestamp, not the stale one the "
-        "recovery was dispatched for"
+
+    # The refreshed record must be usable as-is. Reconciling it immediately,
+    # before this scenario ages anything, is what proves the refresh actually
+    # reset the liveness clock rather than publishing a distinct record that is
+    # still stale: a refresh that kept an already-stale started_at would be
+    # eligible for re-dispatch on this very next reconcile, and the exact head
+    # would be re-dispatched over and over. No replacement record is
+    # synthesized between the recovery and this proof.
+    _read_durable()
+    settled = orchestrator.ensure_collector("owner/repo", "token", pr_number, head)
+    assert state["dispatches"] == 2, (
+        "reconciling the refreshed durable record must dispatch no further collector; a refresh that preserves an "
+        f"already-stale liveness timestamp is immediately re-dispatchable, and {state['dispatches'] - 2} extra "
+        "dispatch(es) occurred"
+    )
+    assert (
+        settled is refreshed or settled.state == refreshed.state
+    ), f"the refreshed durable record must be the current authority, got {settled.state!r}"
+    assert not orchestrator._older_than(refreshed.started_at, orchestrator.COLLECTOR_LIVENESS_GRACE_SECONDS), (
+        f"the refreshed durable record ({refreshed.started_at}) is already older than the "
+        f"{grace}s liveness grace, so it would be re-dispatched on the next reconcile"
     )
 
-    # (5) Later reconciles consume that refreshed record, and the dispatch
-    # budget is spent by the runs the real dispatches created. Ageing the
-    # record past the grace each time is the only concession to wall-clock
-    # here; the budget arithmetic stays production's.
-    while state["dispatches"] < max_dispatches:
+    # Dispatch-budget exhaustion is exercised only after that proof, and on the
+    # dead-run path. Dispatches now leave a correlated run, which is what
+    # production actually counts toward MAX_COLLECTOR_DISPATCHES -- the two
+    # earlier dispatches left none, so they correctly do not consume the budget.
+    # The budget arithmetic stays production's: runs are counted per head and
+    # read back through the candidate's own liveness listing.
+    state["runs_created"] = True
+
+    def _correlated_runs() -> int:
+        return sum(1 for run in state["runs"] if run == head)
+
+    while _correlated_runs() < max_dispatches:
         state["published"].append(_recorded(grace + 1))
         _read_durable()
         orchestrator.ensure_collector("owner/repo", "token", pr_number, head)
 
+    dispatches_when_exhausted = state["dispatches"]
     state["published"].append(_recorded(grace + 1))
     _read_durable()
     exhausted = orchestrator.ensure_collector("owner/repo", "token", pr_number, head)
-    assert state["dispatches"] == max_dispatches, (
-        f"a cycle that has spent its dispatch budget must stay pending rather than dispatching without end "
-        f"(MAX_COLLECTOR_DISPATCHES={max_dispatches}), got {state['dispatches']} dispatch(es)"
+    assert state["dispatches"] == dispatches_when_exhausted, (
+        "a cycle whose real accumulated runs have spent the dispatch budget must dispatch no further collector, "
+        f"got {state['dispatches'] - dispatches_when_exhausted} more"
+    )
+    assert _correlated_runs() == max_dispatches, (
+        f"the real correlated-run listing must reach the dispatch budget, got {_correlated_runs()} of "
+        f"{max_dispatches} (MAX_COLLECTOR_DISPATCHES)"
     )
     assert (
         exhausted.state == WAITING_FOR_REVIEWER_STATE
@@ -359,7 +415,7 @@ def scenario_b(candidate_root: Path, fixture: dict[str, Any]) -> dict[str, Any]:
 
     return {
         "dispatches": state["dispatches"],
-        "correlated_runs": len(state["runs"]),
+        "correlated_runs": _correlated_runs(),
         "durable_records_published": len(state["published"]),
         "liveness_grace_seconds": grace,
         "max_dispatches": max_dispatches,

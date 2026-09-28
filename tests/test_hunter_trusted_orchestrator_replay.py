@@ -117,6 +117,46 @@ RECOVERY_DISPATCHES_WITHOUT_REFRESHING_RECORD = (
     _RECOVERY_PUBLISH_SKIPPED,
 )
 
+# Codex P1 on PR #540: the pre-fix dispatch stub always created a correlated
+# run, so the stale-cycle recovery probe could only ever observe ("dead", 1).
+# ("missing", 0) -- a dispatch that was accepted but never produced a run --
+# was never exercised, and a candidate that refuses recovery specifically in
+# that state slipped through.
+RECOVERY_DECLINED_WHEN_NO_RUN_EXISTS = (
+    (
+        """    if liveness in {"active", "completed"}:
+        return False
+    if count >= MAX_COLLECTOR_DISPATCHES:""",
+        """    if liveness in {"active", "completed"}:
+        return False
+    if liveness == "missing" and count == 0:
+        return False
+    if count >= MAX_COLLECTOR_DISPATCHES:""",
+    ),
+)
+
+_DATETIME_IMPORT_WITH_TIMEDELTA = (
+    "from datetime import UTC, datetime",
+    "from datetime import UTC, datetime, timedelta",
+)
+
+# Codex P1 on PR #540: the pre-fix scenario aged/replaced the durable record
+# right after recovery, so it never reconciled the refreshed record the
+# recovery actually published. A candidate that published a distinct record
+# while preserving an already-stale liveness timestamp passed even though the
+# very next real reconcile re-dispatches the same exact head.
+RECOVERY_REFRESH_PRESERVES_STALE_STARTED_AT = (
+    _DATETIME_IMPORT_WITH_TIMEDELTA,
+    (
+        """        started_at=datetime.now(UTC).strftime("%Y-%m-%dT%H:%M:%SZ"),""",
+        """        started_at=(
+            datetime.now(UTC) - timedelta(seconds=COLLECTOR_LIVENESS_GRACE_SECONDS + 60)
+            if existing is not None
+            else datetime.now(UTC)
+        ).strftime("%Y-%m-%dT%H:%M:%SZ"),""",
+    ),
+)
+
 HOSTILE_EARLY_EXIT_ORCHESTRATOR = """
 
 # Hostile: forges a passing payload and terminates the whole process at
@@ -298,15 +338,19 @@ def test_scenario_b_passes_against_real_production(tmp_path):
     result = replay._run_scenario("B", root, _fixture_path(tmp_path), workspace_root=tmp_path)
     assert result["outcome"] == "pass", result.get("error")
     measurements = result["measurements"]
-    # The budget is spent by the runs the real dispatches created, so the
-    # dispatch count and the correlated-run count agree on the bound.
-    assert measurements["dispatches"] == measurements["max_dispatches"], (
-        f"dispatch must stop at the candidate's own budget of {measurements['max_dispatches']}, "
-        f"got {measurements['dispatches']}"
-    )
+    # Production spends MAX_COLLECTOR_DISPATCHES on correlated runs, not on
+    # dispatches: ``collector_liveness`` returns len(runs) and
+    # ``collector_needs_dispatch`` compares that count to the budget. The two
+    # dispatches that produced no run therefore do not consume it, so the bound
+    # is asserted on the run count, with the dispatch total checked to be
+    # exactly those no-run dispatches plus the budget.
     assert measurements["correlated_runs"] == measurements["max_dispatches"], (
         "the dispatch budget must be consumed by the runs production actually created, got "
         f"{measurements['correlated_runs']} run(s)"
+    )
+    assert measurements["dispatches"] == measurements["max_dispatches"] + 2, (
+        f"expected 2 dispatches that produced no correlated run plus the {measurements['max_dispatches']}-run "
+        f"budget, got {measurements['dispatches']} dispatch(es)"
     )
     # The recovery refreshes the durable record, so more than one durable cycle
     # exists beyond the initial record and the stale probe.
@@ -326,6 +370,35 @@ def test_scenario_b_fails_when_recovery_does_not_refresh_the_durable_record(tmp_
     result = replay._run_scenario("B", root, _fixture_path(tmp_path), workspace_root=tmp_path)
     assert result["outcome"] == "fail"
     assert "must publish/refresh the durable cycle record" in result["error"]
+
+
+def test_scenario_b_fails_when_recovery_declines_a_cycle_with_no_run(tmp_path):
+    """Codex P1 on PR #540: a dispatch can be accepted and still never produce
+    a run, which production reports as ("missing", 0). The pre-fix dispatch stub
+    always created a run, so the recovery probe could only observe ("dead", 1)
+    and this candidate -- which refuses recovery in exactly the missing-run
+    state -- passed while leaving the exact head pending forever.
+    """
+
+    root = _candidate_root(tmp_path, orchestrator_mutations=RECOVERY_DECLINED_WHEN_NO_RUN_EXISTS)
+    result = replay._run_scenario("B", root, _fixture_path(tmp_path), workspace_root=tmp_path)
+    assert result["outcome"] == "fail"
+    assert "must recover exactly one further dispatch" in result["error"]
+
+
+def test_scenario_b_fails_when_the_refresh_keeps_a_stale_liveness_timestamp(tmp_path):
+    """Codex P1 on PR #540: the pre-fix scenario aged/replaced the durable record
+    straight after recovery, so the refreshed record was never reconciled on its
+    own. A candidate that published a distinct record while preserving an
+    already-stale started_at therefore passed, even though the next real
+    reconcile re-dispatches the same exact head. Reconciling the refreshed
+    record before ageing anything catches it.
+    """
+
+    root = _candidate_root(tmp_path, orchestrator_mutations=RECOVERY_REFRESH_PRESERVES_STALE_STARTED_AT)
+    result = replay._run_scenario("B", root, _fixture_path(tmp_path), workspace_root=tmp_path)
+    assert result["outcome"] == "fail"
+    assert "reconciling the refreshed durable record must dispatch no further collector" in result["error"]
 
 
 def test_scenario_b_fails_when_a_recorded_cycle_is_dispatched_again(tmp_path):
@@ -355,7 +428,7 @@ def test_scenario_b_fails_when_dispatch_is_unbounded(tmp_path):
     root = _candidate_root(tmp_path, orchestrator_mutations=(DROPS_DISPATCH_BUDGET,))
     result = replay._run_scenario("B", root, _fixture_path(tmp_path), workspace_root=tmp_path)
     assert result["outcome"] == "fail"
-    assert "must stay pending rather than dispatching without end" in result["error"]
+    assert "spent the dispatch budget must dispatch no further collector" in result["error"]
 
 
 def test_scenario_fails_against_a_candidate_that_forges_a_passing_payload_and_exits_early(tmp_path):
