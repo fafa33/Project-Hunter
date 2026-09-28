@@ -95,6 +95,35 @@ WRITE_POLICY_PATH = ROOT / "docs" / "CODE_WRITE_POLICY.json"
 REVIEWER_DISPOSITIONS_PATH = ROOT / "docs" / "REVIEWER_FINDING_DISPOSITIONS.json"
 BACKFILL_PATH = ROOT / "docs" / "HISTORICAL_DEFECT_BACKFILL.json"
 BINDING_FIELD = provenance.BINDING_FIELD
+# The properties that make owner recovery a recovery rather than a mixed-writer
+# allowance. They are checked as an exact set so that deleting one, renaming one,
+# or flipping one to false is a preflight failure rather than a subtle widening.
+REQUIRED_BOUNDARY_PROPERTIES = frozenset(
+    {
+        "boundary_commit_authored_and_committed_by_owner",
+        "boundary_signing_key_bound_to_owner",
+        "departed_writer_already_authorization_bound",
+        "recovery_writer_is_repository_owner",
+        "previous_epoch_single_writer",
+        "previous_epoch_not_reattributed",
+        "recovery_epoch_single_writer",
+        "boundary_pins_exact_parent_sha",
+        "boundary_count_bounded_to_one",
+        "unknown_signing_key_refused",
+    }
+)
+REQUIRED_FORBIDDEN_RECOVERIES = frozenset(
+    {
+        "agent_to_agent",
+        "unauthorized_writer",
+        "unknown_key",
+        "second_writer_after_takeover",
+        "multiple_boundaries_in_range",
+        "boundary_at_first_commit",
+        "historical_reattribution",
+        "undeclared_or_inferred_boundary",
+    }
+)
 # Files that define or bind the connector write ingress itself. If the grant let a
 # connector rewrite these, the ingress could widen its own boundary, so the grant
 # is invalid unless its prohibited scope covers every one of them.
@@ -937,6 +966,131 @@ def validate_writer_identity_binding(policy: dict[str, Any]) -> list[str]:
                 f"{BINDING_FIELD} binds Git identities for logins no ingress authorizes: " + ", ".join(unbound)
             )
 
+    errors.extend(_validate_writer_signing_key_bindings(policy, binding))
+    errors.extend(_validate_owner_recovery(policy, binding))
+    return errors
+
+
+def _validate_writer_signing_key_bindings(policy: dict[str, Any], binding: Any) -> list[str]:
+    """Require the identity/key binding, and require it to be switched on.
+
+    The provenance defect this closes is a commit whose author/committer headers
+    name one account while the signature belongs to another. Headers are
+    caller-chosen, so unless the *signing key* is bound to the resolved writer,
+    the binding is a claim rather than a proof. Two structural rules follow:
+
+    1. the section must exist, and must require the key to be bound -- a policy
+       that dropped or disabled it would silently restore the defect; and
+    2. every bound fingerprint must be a full SSH SHA-256 fingerprint, because a
+       truncated or wildcard value would admit any key sharing that prefix.
+    """
+
+    errors: list[str] = []
+    raw = policy.get(BINDING_FIELD)
+    raw = raw if isinstance(raw, dict) else {}
+    section = raw.get(provenance.SIGNING_KEY_BINDINGS_FIELD)
+    label = f"{BINDING_FIELD}.{provenance.SIGNING_KEY_BINDINGS_FIELD}"
+    if not isinstance(section, dict):
+        return [f"{label} must be an object binding each writer to its signing key"]
+    if section.get("require_key_bound_to_resolved_writer") is not True:
+        errors.append(f"{label} must require the signing key to be bound to the resolved writer")
+    if not binding.require_key_bound_to_writer:
+        errors.append(f"{label} is not enforced by the canonical parser")
+
+    for field in ("purpose", "why", "evidence_source", "binding_evidence", "unsigned_commit_semantics", "fail_closed"):
+        if not section.get(field):
+            errors.append(f"{label} must declare {field}")
+
+    for identity in binding.identities:
+        if not identity.signing_keys:
+            errors.append(f"{label} binds no signing key for {identity.login}")
+        for key in sorted(identity.signing_keys):
+            if not provenance.SSH_KEY_FINGERPRINT.match(key):
+                errors.append(f"{label} binds a malformed SSH fingerprint for {identity.login}: {key!r}")
+    return errors
+
+
+def _validate_owner_recovery(policy: dict[str, Any], binding: Any) -> list[str]:
+    """Require the owner-recovery boundary to be narrow, owner-only and closed.
+
+    This section is the one place where a range may hold two writers, so it is
+    validated as a privilege grant rather than as documentation. What is
+    required, and why:
+
+    1. the recovery writer is the repository owner, and the owner is a login the
+       binding already authorizes -- otherwise this would be a general
+       writer-handover mechanism, which is exactly what it must not be; and
+    2. it declares the properties that keep it non-generic, so removing the
+       rationale is itself a detectable policy change.
+    """
+
+    errors: list[str] = []
+    raw = policy.get(BINDING_FIELD)
+    raw = raw if isinstance(raw, dict) else {}
+    owner = raw.get(provenance.OWNER_WRITER_FIELD)
+    owner_label = f"{BINDING_FIELD}.{provenance.OWNER_WRITER_FIELD}"
+    if not isinstance(owner, dict):
+        return [f"{owner_label} must be an object naming the repository owner"]
+    login = owner.get("login")
+    if not isinstance(login, str) or not login.strip():
+        return [f"{owner_label}.login must name the repository owner"]
+    if binding.identity_for(login) is None:
+        errors.append(f"{owner_label}.login {login!r} is not an authorization-bound writer identity")
+    if not _is_non_empty_str(owner.get("authority")):
+        errors.append(f"{owner_label} must declare the owner authority it rests on")
+    if not _is_non_empty_str(owner.get("evidence")):
+        errors.append(f"{owner_label} must declare evidence that the login is the repository owner")
+
+    section_label = f"{BINDING_FIELD}.{provenance.OWNER_RECOVERY_FIELD}"
+    recovery = binding.owner_recovery
+    if recovery is None:
+        errors.append(f"{section_label} is unusable or absent")
+        return errors
+    if recovery.owner_login.strip() != login.strip():
+        errors.append(
+            f"{section_label} recovers to {recovery.owner_login!r}, which is not the declared owner {login!r}"
+        )
+    if recovery.max_boundaries != 1:
+        errors.append(
+            f"{section_label}.max_boundaries_per_range must be exactly 1, so a range can hold at most one "
+            "departed epoch and one recovery epoch"
+        )
+
+    section = raw.get(provenance.OWNER_RECOVERY_FIELD)
+    section = section if isinstance(section, dict) else {}
+    for field in (
+        "purpose",
+        "semantics",
+        "why_not_generic_mixed_writers",
+        "determinism",
+        "fail_closed",
+    ):
+        if not _is_non_empty_str(section.get(field)):
+            errors.append(f"{section_label} must declare {field}")
+
+    # The prose says what the boundary means; these booleans are what the guard
+    # can actually hold it to, so a policy edit that weakens one of them is a
+    # detectable change rather than a change of emphasis in a paragraph.
+    properties = section.get("required_boundary_properties")
+    if not isinstance(properties, dict) or not properties:
+        errors.append(f"{section_label} must declare required_boundary_properties")
+    else:
+        for name, value in sorted(properties.items()):
+            if value is not True:
+                errors.append(
+                    f"{section_label}.required_boundary_properties.{name} must be true; the owner-recovery "
+                    "boundary is not a relaxation of single-writer provenance"
+                )
+        missing = sorted(REQUIRED_BOUNDARY_PROPERTIES - set(properties))
+        if missing:
+            errors.append(f"{section_label}.required_boundary_properties is missing: " + ", ".join(missing))
+
+    forbidden = section.get("forbidden")
+    if not isinstance(forbidden, list) or not forbidden:
+        errors.append(f"{section_label} must enumerate the transitions it forbids")
+    else:
+        for required in sorted(REQUIRED_FORBIDDEN_RECOVERIES - set(str(item) for item in forbidden)):
+            errors.append(f"{section_label}.forbidden must include {required!r}")
     return errors
 
 
