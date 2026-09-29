@@ -213,6 +213,11 @@
         "outcome": "clear"
       },
       {
+        "evidence": "remediation_generation_admissible() is unchanged and still refuses a non-material generation, an active prior-generation collector, an already-started collector for the new generation, and any generation beyond MAX_REMEDIATION_GENERATIONS, leaving the review pending. The new INDEPENDENT_REVIEW_OPPORTUNITY_SECONDS branch in ensure_collector() finalizes only the cycle it was handed, reusing existing.generation_id and publishing REVIEW_TIMED_OUT without re-entering dispatch; REVIEW_TIMED_OUT, REVIEWER_UNAVAILABLE and POOL_EXHAUSTED were added to the same early-return set as REVIEW_CLEAR/FINDINGS_OPEN, so a finalized cycle can neither dispatch again nor buy another generation, and hunter-reviewer-collector.yml's job timeout moved 120->15 minutes to match the opportunity budget rather than to extend any reviewer invocation.",
+        "family": "DFF-024",
+        "outcome": "clear"
+      },
+      {
         "evidence": "No governance-authority-successor/cutover mechanism is touched by this diff.",
         "family": "DFF-025",
         "outcome": "clear"
@@ -220,6 +225,16 @@
       {
         "evidence": "evaluate_completion_claim() introduces no new dependency on external reviewer availability; it reuses evaluate(), which already treats external review as optional defense-in-depth, unchanged. The new review-pending rejection in evaluate_completion_claim() (finding F-1) is a stricter, separate completion question, not a merge-authority gate: it never blocks push, candidate admission, governance success, or evaluate()'s own merge-readiness decision, so no reviewer's absence can deadlock merge authority through it.",
         "family": "DFF-026",
+        "outcome": "clear"
+      },
+      {
+        "evidence": "Each of the six workflows gates execution on the same condition it probes with. hunter-canonicalization-auto.yml's 'Detect trusted canonicalization engine' step tests for exactly the two scripts the job later runs (hunter_collect_learning_observations.py, hunter_canonicalization_candidate_pr.py) and every install, checkout, execute and push step is conditioned on that same output, so the local_git_push step is unreachable whenever the probe reports unavailable, and the unavailable case is surfaced as a named bootstrap message. The two replay workflows probe nothing and admit nothing conditionally: replay-validate runs its entrypoint unconditionally after actions/setup-python, and the privileged replay-publish half is checkout-free and runs only its own inline trusted logic. No in-job self-report stands in as security authority in any of the six.",
+        "family": "DFF-027",
+        "outcome": "clear"
+      },
+      {
+        "evidence": "No candidate-controlled content executes inside a credential-holding boundary. hunter-canonicalization-auto.yml runs only the trusted default-branch copies of its two entrypoints (the first checkout has no path:, so the workspace root is main; the reviewed PR is checked out separately into reviewed-pr/ with persist-credentials: false), and neither hunter_collect_learning_observations.py nor hunter_canonicalization_candidate_pr.py references HUNTER_REGRESSION_ROOT or reads that directory, so the candidate tree is inert data in the job that holds the publication SSH identity. replay-publish holds statuses: write but never checks out, clones, fetches, or executes repository content -- the three trusted files are fetched as inert .fetched text at ref=main and only hashed. replay-validate is the only job that executes candidate controller modules and runs them with GITHUB_TOKEN and GH_TOKEN explicitly blanked to \"\" under permissions contents: read.",
+        "family": "DFF-028",
         "outcome": "clear"
       },
       {
@@ -233,13 +248,38 @@
         "outcome": "clear"
       },
       {
+        "evidence": "The change widens retryability only where GitHub explicitly reports rate-limit exhaustion: RATE_LIMIT_403_PATTERNS gates the new 403 case in both classify_http_error and classify_cli_failure, so an ordinary permission-denied 403 stays permanent. It adds no budget of any kind -- execute_with_retry still runs exactly policy.attempts iterations with deterministic backoff clamped to policy.max_delay_seconds, no attempt count or deadline is derived from a per-operation timeout, and exhaustion still raises GitHubUnavailable(what, attempts, last) which remains distinguishable from a permanent GitHubRequestError raised on the first non-retryable failure. tests/test_hunter_github_transport.py pins both directions: test_rate_limit_403_is_transient, test_permission_403_remains_permanent, test_cli_rate_limit_403_is_transient.",
+        "family": "DFF-034",
+        "outcome": "clear"
+      },
+      {
         "evidence": "tests/test_hunter_canonicalization_candidate_pr.py's deterministic assertions run only against repository-owned/local state (a disposable local git remote in tmp_path); the only external-facing calls (`gh`) are stubbed in the test lane, never asserted against a live network response.",
         "family": "DFF-035",
         "outcome": "clear"
       },
       {
+        "evidence": "No workflow entrypoint gained an undeclared runtime dependency. Both replay entrypoints (hunter_trusted_orchestrator_replay.py and hunter_trusted_orchestrator_replay_worker.py) import only the standard library, so actions/setup-python alone provisions them and neither job needs a pip step. hunter-canonicalization-auto.yml provisions the engine it installs with 'python -m pip install --only-binary :all: -c requirements/ci-constraints.txt .' before running it, and an engine that is not on the trusted default branch is reported as a named bootstrap condition rather than surfacing as a runtime ImportError. The codeql bridge and governance reconcile changes use only the preinstalled gh CLI and stdlib hashing.",
+        "family": "DFF-036",
+        "outcome": "clear"
+      },
+      {
         "evidence": "CompletionVerdict is a structured dataclass (accepted: bool, state: str, reason: str) consumers read directly, not prose an agent must parse; `state` is always exactly \"COMPLETION_ACCEPTED\" or \"COMPLETION_REJECTED\".",
         "family": "DFF-037",
+        "outcome": "clear"
+      },
+      {
+        "evidence": "The only change to this file is three additive entries in connector_write_ingress.root_of_trust_paths (hunter_trusted_orchestrator_replay.py, hunter_trusted_orchestrator_replay_worker.py, hunter_trusted_orchestrator_replay_definition.json), which widens declared trust-root coverage rather than relaxing it; no path was removed and no grant was added. The capability is held loudly, not best-effort: hunter_connector_write_ingress.py and hunter_artifact_preflight.py refuse the run when governed trust-root content is unauthorized, and this branch's own pre-push Artifact Guard reported 'PASS: defect registry and changed governed artifacts' over exactly this change. Making the harness a declared trust-root path therefore makes its unauthorized modification fail closed rather than proceed unreported.",
+        "family": "DFF-038",
+        "outcome": "clear"
+      },
+      {
+        "evidence": "The candidate-touching half is pull_request-triggered (never pull_request_target), declares permissions contents: read only, checks out with persist-credentials: false, and blanks GITHUB_TOKEN and GH_TOKEN to \"\" in both jobs. Candidate controller modules are executed only inside hunter_trusted_orchestrator_replay_worker.py, a credential-blanked subprocess; the second job re-checks-out the exact candidate independently and recomputes each scenario's module digest itself via verify_candidate_module_digests() rather than trusting job 1's receipt. The privileged half is workflow_run-triggered (GitHub runs the base repository's own copy), is checkout-free by construction, and independently re-derives trusted_harness_definition_digest, scenario_set_digest, input_fixture_digest and main's tip from read-only API reads at ref=main, comparing the receipt's scenario ids, invariant text, per-scenario outcome, timestamps and overall_result against that trusted definition and treating any missing artifact or field as failure. Publishing a status requires statuses: write in that trusted job, so no candidate test, receipt or self-report can substitute for the independent re-derivation.",
+        "family": "DFF-040",
+        "outcome": "clear"
+      },
+      {
+        "evidence": "The grader is never sourced from the candidate. hunter_trusted_orchestrator_replay.py resolves WORKER_PATH and DEFINITION_PATH from ROOT = Path(__file__).resolve().parents[1] -- the trusted checkout that actions/checkout placed at the default branch -- and loads the scenario set, invariants and fixture from that trusted definition file at import time; _run_scenario() launches that same trusted worker with the candidate supplied only as a confined relative path (resolve_confined_existing refuses any path escaping the workspace root). The privileged publish job independently re-fetches all three grader files at ref=main and refuses a receipt whose trusted_harness_definition_digest, scenario_set_digest or trusted_harness_sha disagrees, so a candidate branch's own copy of the grader can never grade itself. While the grader is not yet on main those ref=main reads fail under 'set -euo pipefail' and the job fails closed; there is no fallback to candidate-supplied grader content.",
+        "family": "DFF-041",
         "outcome": "clear"
       }
     ],
@@ -306,28 +346,80 @@
         "evidence": "Resolved by d861b7798ae0e1dc98b37667267ff2114108c063 plus bootstrap correction 929756ddfcee02cec6fe738b15ad8c3c2224d698: authenticated finding ingestion/catch-up is now automatic and the automatic canonicalization workflow calls the existing candidate-PR path without adding GitHub repository-write permission. The workflow uses the existing local_git_push authority on the self-hosted Mac and fails safely during pre-merge bootstrap rather than executing candidate code as trusted code.",
         "id": "F-8",
         "resolution": "resolved",
+        "resolution_evidence": {
+          "correction": "929756ddfcee02cec6fe738b15ad8c3c2224d698",
+          "regression_test": "tests/test_hunter_knowledge_learning_workflow.py"
+        },
         "severity": "non-blocking"
       }
     ],
     "issue": "532",
     "review_target": [
       {
-        "blob_sha": "d392ea64188fb04fc66886b291c5e95603283f70",
+        "blob_sha": "8cf12374ae583e8751b1da2bbe34c674ef874e86",
         "path": ".github/workflows/hunter-canonicalization-auto.yml",
         "previous_path": "",
         "status": "added"
       },
       {
-        "blob_sha": "8947db700e27691628d4aa4d6189549a508d25e0",
+        "blob_sha": "d9d5a5dc46d423f5e7d1ca5367ff505bdf64a10f",
+        "path": ".github/workflows/hunter-trusted-orchestrator-replay-publish.yml",
+        "previous_path": "",
+        "status": "added"
+      },
+      {
+        "blob_sha": "625a70c48a460aac4ac91b7ef1d52cad89335599",
+        "path": ".github/workflows/hunter-trusted-orchestrator-replay-validate.yml",
+        "previous_path": "",
+        "status": "added"
+      },
+      {
+        "blob_sha": "c2a9ee4eff7d86475e398c2c01757c2896246812",
         "path": "scripts/hunter_canonicalization_candidate_pr.py",
         "previous_path": "",
         "status": "added"
       },
       {
-        "blob_sha": "4ecda46f74623e4c983f3e8e4a405911686ec905",
+        "blob_sha": "06327de542a7ff906d3e72829f856707eab713cc",
+        "path": "scripts/hunter_trusted_orchestrator_replay.py",
+        "previous_path": "",
+        "status": "added"
+      },
+      {
+        "blob_sha": "57af00867a7c16a522101c93438bd07527053baf",
+        "path": "scripts/hunter_trusted_orchestrator_replay_definition.json",
+        "previous_path": "",
+        "status": "added"
+      },
+      {
+        "blob_sha": "21a743db407f5bdc189f4862ce5def9d0893d665",
+        "path": "scripts/hunter_trusted_orchestrator_replay_worker.py",
+        "previous_path": "",
+        "status": "added"
+      },
+      {
+        "blob_sha": "9af29a48c62b8030551ea0b3450cf0830717c987",
         "path": "tests/test_hunter_canonicalization_candidate_pr.py",
         "previous_path": "",
         "status": "added"
+      },
+      {
+        "blob_sha": "bd98aa570bcac948e5e7ad7863dc9e87026ef4c4",
+        "path": "tests/test_hunter_trusted_orchestrator_replay.py",
+        "previous_path": "",
+        "status": "added"
+      },
+      {
+        "blob_sha": "a6a7f8b3540c93cd9f27db1e8ce861c1a391fedd",
+        "path": ".github/workflows/codeql-default-setup-bridge.yml",
+        "previous_path": "",
+        "status": "modified"
+      },
+      {
+        "blob_sha": "2fabf1df12602a0fcb271ce98a284b8deaa42742",
+        "path": ".github/workflows/hunter-governance-reconcile.yml",
+        "previous_path": "",
+        "status": "modified"
       },
       {
         "blob_sha": "16827760fc704440511131d205a4224f4444eb02",
@@ -336,31 +428,61 @@
         "status": "modified"
       },
       {
-        "blob_sha": "cf2b0f84c1f5b3c5909dc788a02d8c10ff3a89a6",
+        "blob_sha": "eea7b0ecf9e1faa84af8b838326f886ae87f0311",
         "path": "docs/ARCHITECTURE_AUDITS/adpr-0012-source-handling-independent-audit.md",
         "previous_path": "",
         "status": "modified"
       },
       {
-        "blob_sha": "e26f29a3503a2c69fb54664c5fbeaf3ceba7949e",
+        "blob_sha": "8e8828d100edaa67ca06f4f9b7760ff8d059a3a2",
+        "path": "docs/CODE_WRITE_POLICY.json",
+        "previous_path": "",
+        "status": "modified"
+      },
+      {
+        "blob_sha": "9ee1c0f6c7f1747af4cbe3eb167aeec5841fd4a2",
+        "path": "docs/DEFECT_REGISTRY.json",
+        "previous_path": "",
+        "status": "modified"
+      },
+      {
+        "blob_sha": "98e897f5d6abd9d812f32617d6deb4d3779bae43",
         "path": "scripts/hunter_collect_learning_observations.py",
         "previous_path": "",
         "status": "modified"
       },
       {
-        "blob_sha": "c4a9cd1753dbccb0a0714ad2a73a0795ee7973f6",
+        "blob_sha": "a1be408cdbbd042c446320ae24b0f7e87d9e6d2b",
+        "path": "scripts/hunter_github_transport.py",
+        "previous_path": "",
+        "status": "modified"
+      },
+      {
+        "blob_sha": "29fecb8542b7a3ee863fc9917ca6481c89f96632",
         "path": "scripts/hunter_merge_readiness_v2.py",
         "previous_path": "",
         "status": "modified"
       },
       {
-        "blob_sha": "d1b9eb2a65c8e6d9a3b776ab31c7d47dd26c09b8",
+        "blob_sha": "77690b03a00d8de9f6ad027222074605cbf2635f",
         "path": "scripts/hunter_review_orchestrator.py",
         "previous_path": "",
         "status": "modified"
       },
       {
-        "blob_sha": "0dbc8fe98f2c4d141e864e306728de242c36f000",
+        "blob_sha": "e261ebf0f79663a1d9fe723404ebe1f682f05cfe",
+        "path": "scripts/hunter_reviewer_collector.py",
+        "previous_path": "",
+        "status": "modified"
+      },
+      {
+        "blob_sha": "e9ace2ad2e1e5116296faf9e90b75b53738b5a9d",
+        "path": "src/hunter/evidence_intelligence/canonical_knowledge_integration.py",
+        "previous_path": "",
+        "status": "modified"
+      },
+      {
+        "blob_sha": "83ac7407632cfc4c7f7ee8c88b2f2dcd04abeacd",
         "path": "src/hunter/evidence_intelligence/engineering_context_authority.py",
         "previous_path": "",
         "status": "modified"
@@ -372,13 +494,31 @@
         "status": "modified"
       },
       {
-        "blob_sha": "a6d6e670150c688af23e25338616e79c7f1da7a5",
+        "blob_sha": "d8492e4fd23a5e5f6c7f80ec689d12c44cf1090c",
+        "path": "src/hunter/evidence_intelligence/knowledge_event_ingestion.py",
+        "previous_path": "",
+        "status": "modified"
+      },
+      {
+        "blob_sha": "8c93df8acb8e1874d32288b30e32c6ecabbbe7ae",
         "path": "src/hunter/evidence_intelligence/smart_prompt_routing.py",
         "previous_path": "",
         "status": "modified"
       },
       {
-        "blob_sha": "3b7cc140449d6c6af07c6357a4d38ec0ba2c3426",
+        "blob_sha": "36d949b5d2090e503526cada95177885c340ece3",
+        "path": "tests/test_canonical_knowledge_integration.py",
+        "previous_path": "",
+        "status": "modified"
+      },
+      {
+        "blob_sha": "30fb0ff0581edbf7f23384af2c255c7d696e5808",
+        "path": "tests/test_codeql_bridge_resilience.py",
+        "previous_path": "",
+        "status": "modified"
+      },
+      {
+        "blob_sha": "a186cb392086eacf1c5171fcd5f8c705d4c9e730",
         "path": "tests/test_engineering_context_authority.py",
         "previous_path": "",
         "status": "modified"
@@ -390,20 +530,56 @@
         "status": "modified"
       },
       {
-        "blob_sha": "14f6c829dd18f8562ca9e1ab0688d44e9e7e46ee",
+        "blob_sha": "2d1f7b966fa372127f361477b21f41cdc26f836e",
+        "path": "tests/test_exact_head_review_authority.py",
+        "previous_path": "",
+        "status": "modified"
+      },
+      {
+        "blob_sha": "a8a553d10351875d7381b1def0759946c7a6a0bf",
+        "path": "tests/test_hunter_artifact_preflight_scope.py",
+        "previous_path": "",
+        "status": "modified"
+      },
+      {
+        "blob_sha": "196419fff4b0f4c29aee9495ff98feada77e9a9f",
+        "path": "tests/test_hunter_github_transport.py",
+        "previous_path": "",
+        "status": "modified"
+      },
+      {
+        "blob_sha": "42c79071035e056383cf4221f056c6a6916493a1",
+        "path": "tests/test_hunter_governance_review_v2.py",
+        "previous_path": "",
+        "status": "modified"
+      },
+      {
+        "blob_sha": "3a7aa055fa93eae51cde0472998984a1054034f3",
         "path": "tests/test_hunter_knowledge_learning_workflow.py",
         "previous_path": "",
         "status": "modified"
       },
       {
-        "blob_sha": "55257ac0480c06a27a4c7b8e27c4744bf44ab047",
+        "blob_sha": "73ac3f6a6d29e959fe6591f29dbc1b61e3547a93",
         "path": "tests/test_hunter_merge_readiness_v2.py",
         "previous_path": "",
         "status": "modified"
       },
       {
-        "blob_sha": "f3e08d4ff42c7e7bd1457b2d4fc49aeca1a250a6",
+        "blob_sha": "7f18f6e970a5c107f4ec838ffa1eeb17e38487df",
         "path": "tests/test_hunter_review_orchestrator.py",
+        "previous_path": "",
+        "status": "modified"
+      },
+      {
+        "blob_sha": "b25e9d68b71a8dd98cfcc5c0eff2239c3fed1023",
+        "path": "tests/test_hunter_reviewer_collector.py",
+        "previous_path": "",
+        "status": "modified"
+      },
+      {
+        "blob_sha": "9ae2d3d6b38133010c668b5bb5fff3f172f2fdf0",
+        "path": "tests/test_knowledge_event_ingestion.py",
         "previous_path": "",
         "status": "modified"
       },
@@ -414,11 +590,11 @@
         "status": "modified"
       }
     ],
-    "review_target_digest": "11682f6ae27d2b09653420f02f71da7f84ef7d072b603bd07f1807cfd2f7a9d9"
+    "review_target_digest": "c72a31fa3e2783d76894e7f0e189af51db63ac5344da2a9d36a525511c972609"
   },
-  "review_id": "c523b6ea791e9416dd233ce2daa0ffee9167a90ab2b1b8bf1694e79787b4db19",
+  "review_id": "77f40c89f6ad74d9342729a17c7a9728bb918158c286eaab1677fdcae32afb92",
   "review_request": {
-    "claims_id": "c523b6ea791e9416dd233ce2daa0ffee9167a90ab2b1b8bf1694e79787b4db19",
+    "claims_id": "77f40c89f6ad74d9342729a17c7a9728bb918158c286eaab1677fdcae32afb92",
     "schema": "hunter.review-request.v1"
   },
   "schema": "hunter.pre-ready-hostile-review.v1"
