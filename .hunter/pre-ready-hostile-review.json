@@ -251,7 +251,7 @@
         "id": "F-3",
         "resolution": "resolved",
         "resolution_evidence": {
-          "correction": "26241bdfc3a373abeda7f263dd9993e8f6a90792",
+          "correction": "06cf01ec2c766e0044f1131155bbeba06146cb2f",
           "regression_test": "tests/test_exact_head_review_authority.py"
         },
         "severity": "blocking"
@@ -261,7 +261,7 @@
         "id": "F-4",
         "resolution": "resolved",
         "resolution_evidence": {
-          "correction": "9e7896de50fab3e26d42f0e8fc610db23e2ee21e",
+          "correction": "06cf01ec2c766e0044f1131155bbeba06146cb2f",
           "regression_test": "tests/test_hunter_review_orchestrator.py"
         },
         "severity": "blocking"
@@ -277,7 +277,7 @@
         "id": "F-6",
         "resolution": "resolved",
         "resolution_evidence": {
-          "correction": "cb791408e81f2d8ee61d5c321977075099ad113b",
+          "correction": "06cf01ec2c766e0044f1131155bbeba06146cb2f",
           "regression_test": "tests/test_hunter_trusted_orchestrator_replay.py"
         },
         "severity": "non-blocking"
@@ -348,9 +348,9 @@
     ],
     "review_target_digest": "35560664819a3c08f25dde2483940efb03ec28af203e1a36c110114d2a126e92"
   },
-  "review_id": "21c211c35decc6906ff9d769acbea1a8d7af3078cb1d263e9bdf633c7f2a0d8d",
+  "review_id": "8f9cfbb83bf78459a38404bf8d0ab0aa62566f79092bfe47c8a39020a0a3b8fb",
   "review_request": {
-    "claims_id": "21c211c35decc6906ff9d769acbea1a8d7af3078cb1d263e9bdf633c7f2a0d8d",
+    "claims_id": "8f9cfbb83bf78459a38404bf8d0ab0aa62566f79092bfe47c8a39020a0a3b8fb",
     "schema": "hunter.review-request.v1"
   },
   "schema": "hunter.pre-ready-hostile-review.v1"
