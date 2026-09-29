@@ -1936,6 +1936,94 @@ def test_external_verdict_production_wording_with_findings_still_blocks():
     )
 
 
+# The P1 review finding on PR #542: CLEAR_DENIAL walked an open run of words
+# between "no" and the defect term, so a summary whose *subject* had changed, or
+# which conceded the possibility of defects, read as a clean denial of them.
+def test_production_gemini_no_defect_sentence_is_still_a_clean_denial():
+    assert collector.clear_summary_denies_defects("No security, correctness, or fail-closed defects identified.")
+    assert collector.external_verdict(dict(GEMINI_P541_PRODUCTION_RESULT)) == "clear"
+
+
+@pytest.mark.parametrize(
+    "summary",
+    [
+        # The denial never names defects: it reports the review, not its result.
+        "No review was performed and possible issues remain.",
+        "No review was performed; the diff could not be read.",
+        "No substantive review was conducted and potential governance gaps remain.",
+        "The exact-head diff was not reviewed.",
+        # A clean denial and a residue in the same sentence.
+        "No blocking defects, but the concurrency path may still be wrong.",
+        "No defects found; deeper correctness issues could exist.",
+    ],
+)
+def test_external_verdict_rejects_review_failure_and_hedged_clear_summaries(summary):
+    assert collector.external_verdict({"verdict": "clear", "summary": summary, "findings": []}) == "unavailable"
+
+
+@pytest.mark.parametrize(
+    "summary",
+    [
+        "No substantive non-blocking issues were found.",
+        "No not-blocking issues are guaranteed here.",
+        "No non-blocking defects remain.",
+        "No issues other than two cosmetic nits.",
+    ],
+)
+def test_external_verdict_rejects_negated_defect_denials(summary):
+    assert collector.external_verdict({"verdict": "clear", "summary": summary, "findings": []}) == "unavailable"
+
+
+@pytest.mark.parametrize(
+    "summary",
+    [
+        "No way to tell whether the gate actually holds.",
+        "Unclear whether any defects remain.",
+        "The change looks reasonable to me.",
+        "Looks clean overall.",
+    ],
+)
+def test_external_verdict_rejects_ambiguous_clear_summaries(summary):
+    assert collector.external_verdict({"verdict": "clear", "summary": summary, "findings": []}) == "unavailable"
+
+
+def test_external_verdict_rejects_a_denial_run_that_stops_denying_defects():
+    # "foo" is not a defect qualifier, so the run is denying something other
+    # than defects even though the clause ends in a defect term.
+    assert (
+        collector.external_verdict({"verdict": "clear", "summary": "No foo issues in the diff.", "findings": []})
+        == "unavailable"
+    )
+    # One incoherent denial is enough: a second clean denial cannot rescue it.
+    assert (
+        collector.external_verdict(
+            {"verdict": "clear", "summary": "No review was conducted. No blocking defects.", "findings": []}
+        )
+        == "unavailable"
+    )
+
+
+def test_external_verdict_keeps_real_blocking_findings_blocking():
+    finding = {
+        "severity": "high",
+        "path": "scripts/hunter_reviewer_collector.py",
+        "line": 60,
+        "evidence": "clear denial admits a summary that concedes open issues",
+    }
+    assert (
+        collector.external_verdict(
+            {
+                "verdict": "blocking",
+                "summary": "No review was performed and possible issues remain.",
+                "findings": [finding],
+            }
+        )
+        == "blocking"
+    )
+    # A clear verdict that still carries findings fails closed to those findings.
+    assert collector.external_verdict({**GEMINI_P541_PRODUCTION_RESULT, "findings": [finding]}) == "blocking"
+
+
 def _provider_http_error(code, payload, headers=None):
     body = payload if isinstance(payload, bytes) else json.dumps(payload).encode()
     return urllib.error.HTTPError(

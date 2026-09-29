@@ -51,15 +51,115 @@ TRIGGER_SCHEMES = frozenset({"api", "github-pr-comment", "github-review-request"
 #: interpolated into an Actions API route, so a separator or traversal segment
 #: would address a different resource entirely.
 WORKFLOW_FILE_PATTERN = re.compile(r"[A-Za-z0-9._-]+\.ya?ml")
-#: A clear summary is admissible only if it *denies* a defect term. The
-#: production Gemini review of PR #541 -- "No security, correctness, or
-#: fail-closed defects identified." -- qualifies the defects it denies, so the
-#: qualifier run walks words; a summary that merely says "no" ("no way to tell
-#: whether the gate holds") still denies nothing, and the run may not carry its
-#: own negation, so "no not-blocking issues" is not a denial either.
-CLEAR_DENIAL = re.compile(
-    r"\bno (?!\b(?:not|non|never)\b)(?:[\w-]+(?:,?\s+[\w-]+)*)?\s*(?:findings|defects|issues|blockers)\b"
+#: The defect terms a clear verdict has to deny. Denying the word "no" denies
+#: nothing: "no way to tell whether the gate holds" says nothing at all about
+#: defects, so a clear summary has to name what it found none of.
+DEFECT_TERMS = ("findings", "defects", "issues", "blockers")
+#: The closed qualifier vocabulary a denial may walk before its defect term.
+#: The production Gemini review of PR #541 -- "No security, correctness, or
+#: fail-closed defects identified." -- qualifies exactly these words, and the
+#: external reviewer's own prompt asks for exactly these terms. An open word run
+#: admitted a denial whose *subject* had changed, which is how contradictory
+#: summaries read as clean: "no review was performed and possible issues remain"
+#: walked "review was performed and possible" into the noun, and "no substantive
+#: non-blocking issues were found" walked a negation a leading-word lookahead
+#: could not see. Every word the run walks has to be a word that still denies
+#: defects, or the denial is about something else and clears nothing.
+CLEAR_DENIAL_QUALIFIERS = frozenset(
+    {
+        "additional",
+        "blocking",
+        "correctness",
+        "exact-head",
+        "fail-closed",
+        "governance",
+        "known",
+        "major",
+        "minor",
+        "new",
+        "outstanding",
+        "remaining",
+        "reproducible",
+        "security",
+        "substantive",
+        "unresolved",
+    }
 )
+#: Every word a denial run may consist of: the qualifiers, the conjunctions that
+#: chain them, and the other defect terms the run denies before the one it lands
+#: on ("no remaining substantive findings or issues"). Nothing else is
+#: admissible between "no" and the defect term.
+CLEAR_DENIAL_WORDS = CLEAR_DENIAL_QUALIFIERS | frozenset(DEFECT_TERMS) | {"and", "or"}
+#: A denial is "no", the words it walks, and the defect term it lands on. The
+#: run is captured so every word in it can be checked against
+#: ``CLEAR_DENIAL_WORDS`` rather than trusted to be a qualifier.
+CLEAR_DENIAL = re.compile(
+    r"\bno\s+(?P<qualifier>(?:[\w-]+(?:\s*(?:,|and|or)\s*|\s+))*[ \t]*)" r"(?:" + "|".join(DEFECT_TERMS) + r")\b"
+)
+#: Wording that reports the review itself did not happen or could not. A
+#: reviewer that performed no review has cleared nothing, so this is
+#: unavailability even when the sentence also says "no".
+REVIEW_NOT_PERFORMED = re.compile(
+    r"\bno\s+(?:substantive|adversarial|hostile|independent|meaningful|thorough|complete|full|formal|proper"
+    r"|conclusive|independent\s+hostile)?\s*reviews?\b"
+    r"|\breviews?\s+(?:was|were|is|are|has|have)?\s*not\s+(?:performed|conducted|completed|carried\s+out|done)\b"
+    r"|\b(?:did|do|does|could|couldn'?t|would|can|can'?t|unable\s+to|failed\s+to|never)\s+(?:\w+\s+){0,2}?reviews?\b"
+    r"|\bnot\s+reviewed\b"
+    r"|\breviews?\s+(?:skipped|unavailable|impossible|not\s+possible)\b"
+    r"|\bwithout\s+(?:a|an|any)?\s*reviews?\b"
+)
+#: Language that concedes the possibility of a defect instead of denying one.
+#: A review that leaves possible issues open has not cleared the candidate, and
+#: the hedge can sit outside the denial clause entirely ("no review was
+#: performed and possible issues remain"), so it is judged over the summary.
+CLEAR_HEDGE = re.compile(
+    r"\b(?:possible|possibly|potential|potentially|presumed|presumably|probable|probably"
+    r"|may|might|could|can|cannot|apparently|seemingly|arguably|perhaps|likely|unlikely"
+    r"|appears?|seems?|appeared|sounded|unclear|uncertain|uncertainty|unsure|doubt|doubts"
+    r"|unknown|unverified|unconfirmed|undetermined|indeterminate|suspect(?:ed|s)?"
+    r"|no\s+way\s+to|unable\s+to|not\s+able\s+to|couldn'?t\s+tell|can'?t\s+tell|insufficient)\b"
+)
+#: A denial that keeps, withholds, or disclaims a defect is not a denial of
+#: defects: "no non-blocking issues" and "no issues other than" both report
+#: defects while appearing to deny them.
+NEGATED_DEFECT = re.compile(
+    r"\bno\s+(?:not|non|never)\b"
+    r"|\b(?:not|non)[\s-]?(?:blocking|blockers?|critical|catastrophic|severe|fatal|serious|substantive"
+    r"|defects?|issues?|findings?|problems?|bugs?)\b"
+    r"|\b(?:nothing\s+but|other\s+than|except\s+for|aside\s+from|besides|excluding)\b"
+)
+#: A summary that discloses severity alongside its denial is not admissible as a
+#: clear result, whatever else it says. Unchanged from the guard that opened
+#: this path, and never relaxed by the denial rules below.
+DANGEROUS_SUMMARY = re.compile(
+    r"\b(?:critical|unsafe|vulnerabilit|exploit\w*|blocking (?:finding|defect|issue)|must fix)\b"
+)
+
+
+def clear_summary_denies_defects(summary: str) -> bool:
+    """Whether a clear summary unambiguously denies actual defects.
+
+    A clear verdict is review authority, so it has to be an unambiguous denial
+    of real findings, defects, issues, or blockers. Three things disqualify it.
+    A summary that reports no review, or hedges, contradicts a clear result
+    rather than supporting it. A denial whose walked words are not all defect
+    words is denying something else -- the subject moved ("no review was
+    performed and possible issues remain") or a negation was smuggled in past
+    the noun ("no substantive non-blocking issues were found"). And a summary
+    that discloses severity is unusable however it is phrased. Every denial it
+    makes has to qualify, so one incoherent denial is enough to fail the whole
+    summary closed rather than be read past.
+    """
+
+    lower = summary.lower()
+    if DANGEROUS_SUMMARY.search(lower):
+        return False
+    if REVIEW_NOT_PERFORMED.search(lower) or CLEAR_HEDGE.search(lower) or NEGATED_DEFECT.search(lower):
+        return False
+    denials = list(CLEAR_DENIAL.finditer(lower))
+    return bool(denials) and all(
+        set(re.findall(r"[\w-]+", denial.group("qualifier"))) <= CLEAR_DENIAL_WORDS for denial in denials
+    )
 
 
 def external_verdict(payload: dict[str, Any]) -> str:
@@ -91,11 +191,7 @@ def external_verdict(payload: dict[str, Any]) -> str:
     if verdict == "clear" and findings:
         return "blocking"
     if verdict == "clear":
-        lower = summary.lower()
-        dangerous = re.search(
-            r"\b(?:critical|unsafe|vulnerabilit|exploit\w*|blocking (?:finding|defect|issue)|must fix)\b", lower
-        )
-        if not CLEAR_DENIAL.search(lower) or dangerous:
+        if not clear_summary_denies_defects(summary):
             return "unavailable"
     return verdict
 
