@@ -397,6 +397,79 @@ def is_ancestor(candidate: str, descendant: str, *, cwd: Path | None = None) -> 
     raise GitEvidenceUnavailable(detail)
 
 
+def _candidate_writers(binding: WriterIdentityBinding, commits: tuple[CommitProvenance, ...]) -> set[str]:
+    """Every authorized login the governed candidate range was written under.
+
+    Author and committer are resolved independently, exactly as
+    :func:`evaluate_commit` resolves them, so a commit that splits its provenance
+    between two authorized writers contributes both. A commit that resolves to no
+    authorized identity contributes nothing: it carries no evidence about who
+    wrote the candidate, and whether it may be published was already decided where
+    it was published. Re-governing it here is the defect Issue #545 removed.
+    """
+
+    writers: set[str] = set()
+    for commit in commits:
+        author = binding.resolve(commit.author_name, commit.author_email)
+        if author is not None:
+            writers.add(author.login)
+        committer = binding.resolve(commit.committer_name, commit.committer_email)
+        if committer is not None:
+            writers.add(committer.login)
+    return writers
+
+
+def check_candidate_single_writer(
+    head: str, *, base_ref: str = "main", remote: str = "origin", cwd: Path | None = None
+) -> str | None:
+    """Require the whole governed candidate range to name exactly one authorized writer.
+
+    This is a property of the *candidate*, not of one push. Issue #545 moved
+    per-commit admission onto the published range so a push is not re-governed over
+    history the destination ref already accepted, and the single-writer rule moved
+    with it by accident: measuring only ``remote..local`` lets a second authorized
+    writer take over a branch across two separate pushes, because the second push
+    sees only its own commit and never the first writer's.
+
+    The range walked here is the governed fork point to ``head``, the same range
+    :func:`check_range` walks, so the invariant keeps the scope it always had. It
+    asks only who the candidate was written under: commits bound to no authorized
+    writer are skipped rather than refused, so this never re-governs history the
+    candidate inherited.
+    """
+
+    binding, error = load_binding()
+    if binding is None:
+        return f"writer provenance is unknown ({error})"
+    if not binding.require_single_writer_per_range:
+        return None
+
+    try:
+        base = resolve_governed_base(head, base_ref=base_ref, remote=remote, cwd=cwd)
+        commits = read_range_commits(base, head, cwd=cwd)
+    except GitEvidenceUnavailable as exc:
+        return f"writer provenance evidence is unavailable ({exc})"
+
+    if not commits:
+        return None
+
+    writers = _candidate_writers(binding, commits)
+    if not writers:
+        return (
+            f"no commit in the governed candidate range {(base or head)[:10]}..{head[:10]} resolves to an "
+            f"authorization-bound writer identity, so the candidate's single writer cannot be established. "
+            f"{remediation(binding)}"
+        )
+    if len(writers) > 1:
+        return (
+            "the governed candidate range mixes authorization-bound writers: "
+            + ", ".join(sorted(writers))
+            + f". A feature branch is published by one writer; a second authorized writer cannot take it over "
+            f"across separate pushes. {remediation(binding)}"
+        )
+    return None
+
+
 def check_publish_range(remote_sha: str, local_sha: str, *, cwd: Path | None = None) -> str | None:
     """Validate exactly the commits one ref update publishes: ``remote_sha..local_sha``.
 

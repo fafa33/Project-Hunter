@@ -227,7 +227,17 @@ def _publish_provenance_problem(local_ref: str, local_sha: str, remote_sha: str)
         )
 
     problem = provenance.check_publish_range(remote_sha, local_sha)
-    return None if problem is None else f"{label}: {problem}"
+    if problem is not None:
+        return f"{label}: {problem}"
+
+    # The published range admits only what this push publishes. Who the *candidate*
+    # belongs to is a separate question that the narrowed range cannot answer: a
+    # second authorized writer can take the branch over across two pushes, because
+    # the second push publishes only its own commit. That would leave the branch
+    # carrying two writers while every individual push stayed admissible, so the
+    # candidate-wide single-writer rule is checked separately here.
+    candidate_problem = provenance.check_candidate_single_writer(local_sha)
+    return None if candidate_problem is None else f"{label}: {candidate_problem}"
 
 
 def _validate_writer_provenance(head_sha: str, publish_ranges: Sequence[tuple[str, str, str]]) -> None:
@@ -242,6 +252,12 @@ def _validate_writer_provenance(head_sha: str, publish_ranges: Sequence[tuple[st
     destination ref already holds was admitted when it arrived; re-walking it from
     a fork point is what made Issue #545 refuse a push that published one
     correctly signed commit, over a commit already on the remote.
+
+    Narrowing that range must not cost the candidate-wide single-writer invariant,
+    so the two concerns are kept apart rather than merged: per-commit admission
+    runs over the published range, and :func:`check_candidate_single_writer` runs
+    over the governed candidate range. The second check is what stops a second
+    authorized writer from taking a feature branch over one push at a time.
     """
 
     del head_sha  # the exact-HEAD contract is enforced separately, by _require_exact_head

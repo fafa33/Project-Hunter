@@ -287,6 +287,25 @@ def _bound_binding() -> hunter_writer_provenance.WriterIdentityBinding:
     )
 
 
+def _second_bound_binding() -> hunter_writer_provenance.WriterIdentityBinding:
+    """The same binding plus a second authorized writer, as the real policy declares."""
+
+    return hunter_writer_provenance.WriterIdentityBinding(
+        identities=_bound_binding().identities
+        + (
+            hunter_writer_provenance.WriterIdentity(
+                login="claude",
+                # Bound sets are stored normalised, as parse_binding produces them.
+                names=frozenset({"claude"}),
+                emails=frozenset({"noreply@anthropic.com"}),
+                canonical_name="Claude",
+                canonical_email="noreply@anthropic.com",
+            ),
+        ),
+        require_single_writer_per_range=True,
+    )
+
+
 def _git(repo: Path, *args: str, env: dict[str, str] | None = None) -> str:
     completed = subprocess.run(
         ("git", *args),
@@ -527,3 +546,135 @@ def test_issue_545_check_publish_range_does_not_re_resolve_the_base(monkeypatch,
         assert hunter_pre_push.provenance.check_publish_range(remote_tip, local_tip) is None
     finally:
         hunter_pre_push.os.chdir(monkey_repo)
+
+
+# --------------------------------------------------------------------------
+# Issue #545 P1: the candidate-wide single-writer invariant survives the fix
+# --------------------------------------------------------------------------
+
+
+def test_issue_545_p1_same_writer_may_push_twice(monkeypatch, publish_repo: Path) -> None:
+    """The invariant is single-writer per candidate, not single-push.
+
+    Writer A publishes the branch, then A publishes again. Both pushes publish
+    only commits bound to A, so the candidate resolves to one writer and the
+    second push is admitted.
+    """
+
+    _bind_publish_provenance(monkeypatch, _second_bound_binding())
+    remote_tip = _git(publish_repo, "rev-parse", "HEAD")
+    first = _commit(publish_repo, "A: first push")
+    _validate(publish_repo, "refs/heads/feature", first, remote_tip)
+
+    second = _commit(publish_repo, "A: second push")
+    _validate(publish_repo, "refs/heads/feature", second, first)
+    assert _validate_publishes(publish_repo, first, second) == (second,)
+
+
+def test_issue_545_p1_a_second_authorized_writer_cannot_take_the_branch_over(monkeypatch, publish_repo: Path) -> None:
+    """The P1 finding: B takes A's branch across two pushes, and the second must fail.
+
+    B's commit is itself authorization-bound, so the published-range check that
+    Issue #545 added cannot see the problem -- it sees exactly one commit, bound to
+    one writer. Only the candidate-wide rule can, because the candidate carries
+    both A's commit and B's.
+    """
+
+    _bind_publish_provenance(monkeypatch, _second_bound_binding())
+    remote_tip = _git(publish_repo, "rev-parse", "HEAD")
+    by_a = _commit(publish_repo, "A: the branch")
+    _validate(publish_repo, "refs/heads/feature", by_a, remote_tip)
+
+    by_b = _commit(publish_repo, "B: takeover", name="Claude", email="noreply@anthropic.com")
+
+    # B's own commit is admissible in isolation: one commit, one authorized writer.
+    assert hunter_writer_provenance.evaluate_range(
+        _second_bound_binding(),
+        hunter_writer_provenance.read_range_commits(by_a, by_b, cwd=publish_repo),
+    ).ok
+    assert hunter_writer_provenance.check_publish_range(by_a, by_b, cwd=publish_repo) is None
+
+    # The candidate does not stay silent about it.
+    with pytest.raises(RuntimeError, match="mixes authorization-bound writers"):
+        _validate(publish_repo, "refs/heads/feature", by_b, by_a)
+
+
+def test_issue_545_p1_single_writer_check_ignores_unbound_history(monkeypatch, publish_repo: Path) -> None:
+    """Restoring the candidate-wide check must not re-govern inherited history.
+
+    The fixture's destination ref carries a ``GitHub <noreply@github.com>`` commit
+    that no authorized writer claims. That commit is inside the governed candidate
+    range, and it is already on the remote, so it must not become admissible to
+    re-govern: the candidate still resolves to the single writer A. This is the
+    Issue #545 bug, and restoring the single-writer check must not reintroduce it.
+    """
+
+    _bind_publish_provenance(monkeypatch, _second_bound_binding())
+    remote_tip = _git(publish_repo, "rev-parse", "HEAD")
+    local_tip = _commit(publish_repo, "A: the branch")
+
+    candidate = hunter_writer_provenance.read_range_commits(
+        hunter_writer_provenance.resolve_governed_base(local_tip, cwd=publish_repo),
+        local_tip,
+        cwd=publish_repo,
+    )
+    # The unbound commit really is inside the candidate range the check walks.
+    assert any(commit.committer_name == "GitHub" for commit in candidate)
+    # ...and it contributes no writer, so the candidate stays single-writer.
+    assert hunter_writer_provenance.check_candidate_single_writer(local_tip, cwd=publish_repo) is None
+    _validate(publish_repo, "refs/heads/feature", local_tip, remote_tip)
+
+
+def test_issue_545_p1_base_commits_outside_the_candidate_are_not_governed(monkeypatch, publish_repo: Path) -> None:
+    """The governed range is the candidate's; the base branch is nobody's candidate.
+
+    ``origin/main`` is advanced past the branch point with a commit under a second
+    authorized writer. The candidate does not contain that commit, so it cannot make
+    the candidate's own single writer ambiguous -- and the base work stays ungoverned.
+    """
+
+    _bind_publish_provenance(monkeypatch, _second_bound_binding())
+    remote_tip = _git(publish_repo, "rev-parse", "HEAD")
+    local_tip = _commit(publish_repo, "A: the branch")
+
+    _git(publish_repo, "checkout", "-q", "main")
+    base_by_b = _commit(publish_repo, "base work by B", name="Claude", email="noreply@anthropic.com")
+    _git(publish_repo, "update-ref", "refs/remotes/origin/main", base_by_b)
+    _git(publish_repo, "checkout", "-q", "feature")
+
+    fork_point = _git(publish_repo, "merge-base", local_tip, "origin/main")
+    governed = _git(publish_repo, "rev-list", f"{fork_point}..{local_tip}").split()
+    assert base_by_b not in governed, "the base commit is outside the candidate range"
+    assert hunter_writer_provenance.check_candidate_single_writer(local_tip, cwd=publish_repo) is None
+    _validate(publish_repo, "refs/heads/feature", local_tip, remote_tip)
+
+
+def test_issue_545_p1_single_writer_check_fails_closed_without_evidence(monkeypatch, publish_repo: Path) -> None:
+    """The candidate-wide check is itself fail-closed, not a best-effort extra.
+
+    A publishable range over a candidate whose fork point cannot be established is
+    not a candidate whose single writer is unknown-and-therefore-fine; it is unknown.
+    """
+
+    _bind_publish_provenance(monkeypatch, _second_bound_binding())
+    remote_tip = _git(publish_repo, "rev-parse", "HEAD")
+    local_tip = _commit(publish_repo, "A: the branch")
+    _git(publish_repo, "update-ref", "-d", "refs/remotes/origin/main")
+
+    # The published range is clean, so only the candidate-wide check can refuse this.
+    assert hunter_writer_provenance.check_publish_range(remote_tip, local_tip, cwd=publish_repo) is None
+    with pytest.raises(RuntimeError, match="fork point"):
+        _validate(publish_repo, "refs/heads/feature", local_tip, remote_tip)
+
+
+def test_issue_545_p1_single_writer_check_depends_on_the_policy_flag(monkeypatch, publish_repo: Path) -> None:
+    """A policy that does not require one writer per range does not get the check."""
+
+    relaxed = hunter_writer_provenance.WriterIdentityBinding(
+        identities=_second_bound_binding().identities,
+        require_single_writer_per_range=False,
+    )
+    _bind_publish_provenance(monkeypatch, relaxed)
+    local_tip = _git(publish_repo, "rev-parse", "HEAD")
+
+    assert hunter_writer_provenance.check_candidate_single_writer(local_tip, cwd=publish_repo) is None
