@@ -143,6 +143,7 @@
           }
         ]
       },
+      "coverage_scopes": [],
       "fast_fallback": "disabled-until-health-gated"
     },
     "finding_resolution": "a fixed review finding resolves only with structured evidence: the exact-head correction commit and a regression test committed in the change set, verified fail-closed before Merge Readiness",

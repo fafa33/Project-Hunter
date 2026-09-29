@@ -1916,15 +1916,19 @@ def valid_current_review_request(
         criteria_state, issue_criteria, criteria_error = read_issue_acceptance_criteria(repository, token, issue)
         if criteria_state != "present":
             return False, f"governing Issue #{issue} acceptance-criteria evidence is unavailable ({criteria_error})"
+    coverage_scopes, scopes_error = pre_ready.load_coverage_scopes()
+    if scopes_error or coverage_scopes is None:
+        return False, f"owner coverage authorizations are unavailable ({scopes_error})"
     verdict = pre_ready.verify_review_request(
         document,
         base_sha=merge_base,
         changes=changes,
         families=families,
         issue_criteria=issue_criteria,
+        coverage_scopes=coverage_scopes,
         head_sha=head_sha,
     )
-    return verdict.ok, verdict.reason
+    return verdict.ok or verdict.state == pre_ready.SCOPED_STATE, verdict.reason
 
 
 def review_orchestration_state(repository: str, token: str, pr_number: int, head_sha: str) -> tuple[str, str]:
@@ -2046,6 +2050,12 @@ def verify_pre_ready_hostile_review(
     pool, pool_error = pre_ready.load_reviewer_pool()
     if pool_error or pool is None:
         return "failure", f"Candidate admission blocked: reviewer pool unavailable ({pool_error})."
+    coverage_scopes, scopes_error = pre_ready.load_coverage_scopes()
+    if scopes_error or coverage_scopes is None:
+        return (
+            "failure",
+            f"Candidate admission blocked: owner coverage authorizations unavailable ({scopes_error}).",
+        )
     reviews, reviews_error = read_pr_pool_review_comments(repository, token, pr_number, pool, head_sha)
     if reviews_error:
         return "failure", f"Candidate admission blocked: {reviews_error}"
@@ -2173,7 +2183,12 @@ def verify_pre_ready_hostile_review(
             except Exception as exc:
                 return "failure", f"EXHAUSTION_UNPROVEN: {exc}"
         # This is NEW authority from the current reviewer; the historical record is unchanged.
-        document = pre_ready.document_for(claims, authority=authority)
+        request_coverage_scope = document.get("coverage_scope") if isinstance(document, dict) else None
+        document = pre_ready.document_for(
+            claims,
+            authority=authority,
+            coverage_scope=request_coverage_scope,
+        )
 
     # The Issue the review claims must be the Issue the branch binds, when the
     # branch binds one, so a review cannot be measured against a conveniently
@@ -2236,11 +2251,19 @@ def verify_pre_ready_hostile_review(
         changes=changes,
         families=families,
         issue_criteria=issue_criteria or None,
+        coverage_scopes=coverage_scopes,
         resolution_corrections=resolution_corrections,
         head_sha=head_sha,
     )
 
-    if not verdict.ok:
+    scoped_detail = ""
+    if verdict.state == pre_ready.SCOPED_STATE:
+        # A bounded correction owes a subset of the Issue's criteria, and is
+        # admitted for exactly that subset. Every check below still runs: this
+        # relaxes the coverage obligation and nothing else, and it is reported
+        # under its own kind so it is never read as Issue completion.
+        scoped_detail = verdict.reason
+    elif not verdict.ok:
         kind = "STALE_REVIEW" if verdict.state == "stale" else "MALFORMED_REVIEW"
         authority = document.get("authority", {}) if isinstance(document, dict) else {}
         if isinstance(authority, dict):
@@ -2273,6 +2296,8 @@ def verify_pre_ready_hostile_review(
             f"Candidate admission blocked: the pre-ready hostile review was taken against base branch "
             f"{claimed_base_ref!r}, not this pull request's {base_ref!r}."
         )
+    if scoped_detail:
+        return "success", f"VALID_SCOPED_CORRECTION: {scoped_detail}"
     kind = "VALID_LAST_RESORT_GUARD" if authority["type"] == pool["last_resort"] else "VALID_AGENT_REVIEW"
     return (
         "success",

@@ -548,6 +548,7 @@ def test_required_authority_states_are_all_declared() -> None:
         "MISSING_REVIEW_AUTHORITY",
         "VALID_AGENT_REVIEW",
         "VALID_LAST_RESORT_GUARD",
+        "VALID_SCOPED_CORRECTION",
         "STALE_REVIEW",
         "MALFORMED_REVIEW",
         "BLOCKING_FINDINGS",
