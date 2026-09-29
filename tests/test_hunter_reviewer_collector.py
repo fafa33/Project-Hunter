@@ -1942,9 +1942,11 @@ def _provider_http_error(code, payload, headers=None):
         "https://api.groq.com/openai/v1/chat/completions",
         code,
         "Forbidden",
-        headers
-        if headers is not None
-        else {"Authorization": "Bearer gsk_LIVE_HEADER_SECRET", "X-Key": "gsk_LIVE_HEADER_SECRET"},
+        (
+            headers
+            if headers is not None
+            else {"Authorization": "Bearer gsk_LIVE_HEADER_SECRET", "X-Key": "gsk_LIVE_HEADER_SECRET"}
+        ),
         io.BytesIO(body),
     )
 
