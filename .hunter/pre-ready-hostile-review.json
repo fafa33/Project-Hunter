@@ -58,7 +58,7 @@
       "transaction-snapshot-consistency"
     ],
     "base_ref": "main",
-    "base_sha": "1ce5e09701874f704748552bfed033754577d62b",
+    "base_sha": "bc9de0f8c49bcbe82567d60d1d41747922724a77",
     "defect_families": [
       {
         "evidence": "A scope must match the trusted Issue and mode, is bound to the evaluated exact head from trusted evidence (hunter_pre_ready_review.py:1163), and any claimed criterion outside the authorized set is refused, so an authorization cannot be replayed onto a different Issue, mode, head, or wider criteria set.",
@@ -192,7 +192,7 @@
         "id": "F-1",
         "resolution": "resolved",
         "resolution_evidence": {
-          "correction": "1b9f28eda5030246f92cea5a57c22fb9c376fdaf",
+          "correction": "07e55e3fd25e20bb9c911901c964b84328d1aef3",
           "regression_test": "tests/test_scoped_acceptance_coverage.py"
         },
         "severity": "non-blocking"
@@ -219,7 +219,7 @@
         "status": "modified"
       },
       {
-        "blob_sha": "c404f9df478903aac8288b2bcf45bf5314465696",
+        "blob_sha": "1a385e3d186ed48d113e0ff53924e57811e06e8c",
         "path": "scripts/hunter_merge_readiness_v2.py",
         "previous_path": "",
         "status": "modified"
@@ -231,17 +231,17 @@
         "status": "modified"
       },
       {
-        "blob_sha": "ef814586975a834ffaa5828c0070e9f022333607",
+        "blob_sha": "1d09524966fe6bfce863d14cbd239f97e2936e73",
         "path": "tests/test_exact_head_review_authority.py",
         "previous_path": "",
         "status": "modified"
       }
     ],
-    "review_target_digest": "58dc1fb3ebdeeef206a8e33df88a5c175885c8c8ff9845451bf8fe926b2c9b04"
+    "review_target_digest": "4a16f3a9c695f2b924b9426c281fb9f0be3fe85288662830abb623eef4367fe4"
   },
-  "review_id": "f0fd5977333840cc2947c4479397c054235eb8d16498be01be51de504300d399",
+  "review_id": "8cbb2279910f0d781ca7285009636092626faee91971f26c5ec1fa81c5338db4",
   "review_request": {
-    "claims_id": "f0fd5977333840cc2947c4479397c054235eb8d16498be01be51de504300d399",
+    "claims_id": "8cbb2279910f0d781ca7285009636092626faee91971f26c5ec1fa81c5338db4",
     "schema": "hunter.review-request.v1"
   },
   "schema": "hunter.pre-ready-hostile-review.v1"
