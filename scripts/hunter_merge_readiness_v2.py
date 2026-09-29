@@ -81,6 +81,14 @@ class ReviewAuthorityVerdict:
     detail: str
 
 
+#: Not one of REVIEW_AUTHORITY_STATES on purpose: it is never matched by the
+#: prefix loop below, and the caller's fall-through to the orchestration-state
+#: check (which already exists for exactly this purpose) is what actually
+#: resolves it, so it never needs to appear in the merge-admissible or
+#: hard-failure sets a caller branches on.
+PENDING_VERIFICATION = "PENDING_VERIFICATION"
+
+
 def resolve_review_authority(verification: tuple[str, str]) -> ReviewAuthorityVerdict:
     """Classify the shared verifier's result; raw comments cannot establish authority."""
     status, detail = verification
@@ -90,6 +98,15 @@ def resolve_review_authority(verification: tuple[str, str]) -> ReviewAuthorityVe
             if detail.startswith(state + ":"):
                 return ReviewAuthorityVerdict(state, detail)
         return ReviewAuthorityVerdict("MALFORMED_REVIEW", "Verifier did not establish positive review authority.")
+    if status == "pending":
+        # The verifier's own tri-state already says "not yet resolved, retry
+        # later" -- never a hard failure. A pending detail can legitimately
+        # carry an orchestration-cycle state name (e.g. "WAITING_FOR_REVIEWER")
+        # that happens to share no prefix with any REVIEW_AUTHORITY_STATES
+        # entry, so pending must be recognised here, before the prefix-match
+        # loop below runs, or it silently falls through to MALFORMED_REVIEW --
+        # turning a benign wait into a hard merge-readiness failure.
+        return ReviewAuthorityVerdict(PENDING_VERIFICATION, detail)
     for state in REVIEW_AUTHORITY_STATES:
         if state not in valid_states and state + ":" in detail:
             return ReviewAuthorityVerdict(state, detail)

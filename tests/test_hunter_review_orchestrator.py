@@ -1,7 +1,9 @@
 from __future__ import annotations
 
+import os
 import pathlib
 import re
+import subprocess
 import sys
 
 import hunter_github_transport as transport
@@ -90,6 +92,7 @@ def test_ready_review_request_dispatches_collector_once(monkeypatch):
     monkeypatch.setattr(orchestrator, "reviewer_pool_config_digest", lambda: "d" * 64, raising=False)
     monkeypatch.setattr(orchestrator, "current_run_id", lambda: 123, raising=False)
     monkeypatch.setattr(orchestrator, "publish_cycle", lambda *_args, cycle: stored.update(cycle=cycle), raising=False)
+    monkeypatch.setattr(orchestrator, "collector_liveness", lambda *_args: ("missing", 0), raising=False)
     monkeypatch.setattr(
         orchestrator,
         "dispatch_collector",
@@ -265,6 +268,82 @@ def test_unreadable_collector_liveness_evidence_never_redispatches(monkeypatch):
     monkeypatch.setattr(orchestrator, "request_json", unavailable)
 
     assert orchestrator.collector_needs_dispatch("owner/repo", "token", cycle) is False
+
+
+# ---------------------------------------------------------------------------
+# Production defect: two reconciles landing close together each observed the
+# commit-status cycle as "absent" (a stale/racy read of that one idempotency
+# record) and each independently dispatched a collector for the same PR, exact
+# head, and generation. `ensure_collector` must suppress a duplicate dispatch
+# whenever a correlated collector run already exists, independent of whatever
+# `read_cycle` itself answered -- never relying on the commit-status cycle as
+# the only idempotency boundary.
+# ---------------------------------------------------------------------------
+
+
+def test_absent_cycle_read_does_not_duplicate_an_already_active_correlated_collector(monkeypatch):
+    monkeypatch.setattr(orchestrator, "read_cycle", lambda *_args: ("absent", None, None))
+    monkeypatch.setattr(orchestrator, "reviewer_pool_config_digest", lambda: "d" * 64, raising=False)
+    monkeypatch.setattr(orchestrator, "current_run_id", lambda: 999, raising=False)
+    published = []
+    monkeypatch.setattr(orchestrator, "publish_cycle", lambda *_args, cycle: published.append(cycle), raising=False)
+    dispatches = []
+    monkeypatch.setattr(orchestrator, "dispatch_collector", lambda *_args: dispatches.append(_args), raising=False)
+    monkeypatch.setattr(orchestrator, "collector_liveness", lambda *_args: ("active", 1), raising=False)
+
+    result = orchestrator.ensure_collector("owner/repo", "token", 472, HEAD)
+
+    assert dispatches == []
+    assert result.trigger_id == 999
+    assert published
+
+
+def test_absent_cycle_read_does_not_duplicate_an_already_successful_correlated_collector(monkeypatch):
+    monkeypatch.setattr(orchestrator, "read_cycle", lambda *_args: ("absent", None, None))
+    monkeypatch.setattr(orchestrator, "reviewer_pool_config_digest", lambda: "d" * 64, raising=False)
+    monkeypatch.setattr(orchestrator, "current_run_id", lambda: 999, raising=False)
+    monkeypatch.setattr(orchestrator, "publish_cycle", lambda *_args, cycle: None, raising=False)
+    dispatches = []
+    monkeypatch.setattr(orchestrator, "dispatch_collector", lambda *_args: dispatches.append(_args), raising=False)
+    monkeypatch.setattr(orchestrator, "collector_liveness", lambda *_args: ("completed", 1), raising=False)
+
+    orchestrator.ensure_collector("owner/repo", "token", 472, HEAD)
+
+    assert dispatches == []
+
+
+def test_absent_cycle_read_still_dispatches_when_no_correlated_collector_exists(monkeypatch):
+    """Bounded recovery for a genuinely missing/dead collector still works."""
+
+    monkeypatch.setattr(orchestrator, "read_cycle", lambda *_args: ("absent", None, None))
+    monkeypatch.setattr(orchestrator, "reviewer_pool_config_digest", lambda: "d" * 64, raising=False)
+    monkeypatch.setattr(orchestrator, "current_run_id", lambda: 999, raising=False)
+    monkeypatch.setattr(orchestrator, "publish_cycle", lambda *_args, cycle: None, raising=False)
+    dispatches = []
+    monkeypatch.setattr(orchestrator, "dispatch_collector", lambda *_args: dispatches.append(_args), raising=False)
+    monkeypatch.setattr(orchestrator, "collector_liveness", lambda *_args: ("missing", 0), raising=False)
+
+    orchestrator.ensure_collector("owner/repo", "token", 472, HEAD)
+
+    assert len(dispatches) == 1
+
+
+def test_unreadable_collector_correlation_evidence_refuses_to_risk_a_duplicate_dispatch(monkeypatch):
+    monkeypatch.setattr(orchestrator, "read_cycle", lambda *_args: ("absent", None, None))
+    monkeypatch.setattr(orchestrator, "reviewer_pool_config_digest", lambda: "d" * 64, raising=False)
+    monkeypatch.setattr(orchestrator, "current_run_id", lambda: 999, raising=False)
+    dispatches = []
+    monkeypatch.setattr(orchestrator, "dispatch_collector", lambda *_args: dispatches.append(_args), raising=False)
+
+    def unavailable(*_args, **_kwargs):
+        raise transport.GitHubRequestError("rate limited", category="transient", status_code=429)
+
+    monkeypatch.setattr(orchestrator, "collector_liveness", unavailable, raising=False)
+
+    with pytest.raises(RuntimeError, match="correlation evidence unavailable"):
+        orchestrator.ensure_collector("owner/repo", "token", 472, HEAD)
+
+    assert dispatches == []
 
 
 def test_collector_liveness_ignores_runs_for_another_candidate(monkeypatch):
@@ -626,6 +705,7 @@ def _collector_harness(monkeypatch):
     monkeypatch.setattr(orchestrator, "reviewer_pool_config_digest", lambda: "d" * 64, raising=False)
     monkeypatch.setattr(orchestrator, "current_run_id", lambda: 555, raising=False)
     monkeypatch.setattr(orchestrator, "publish_cycle", lambda *_args, cycle: stored.update(cycle=cycle), raising=False)
+    monkeypatch.setattr(orchestrator, "collector_liveness", lambda *_args: ("missing", 0), raising=False)
     monkeypatch.setattr(
         orchestrator,
         "dispatch_collector",
@@ -894,6 +974,95 @@ def test_reconcile_runs_when_reviewer_collector_completes():
     assert "Hunter Reviewer Collector" in text
 
 
+# ---------------------------------------------------------------------------
+# Production defect: a completed Hunter Reviewer Collector run always executes
+# from the trusted default branch, so its own workflow_run.head_sha is main's
+# SHA, never the candidate's. Reconcile's PR derivation must never search open
+# PRs by that head_sha for this specific trigger; the candidate PR/head is
+# instead the trusted identity the collector's own run-name already carries.
+# ---------------------------------------------------------------------------
+
+RECONCILE_WORKFLOW = REPOSITORY_ROOT / ".github" / "workflows" / "hunter-governance-reconcile.yml"
+COLLECTOR_WORKFLOW_FILE = REPOSITORY_ROOT / ".github" / "workflows" / "hunter-reviewer-collector.yml"
+_COLLECTOR_BRANCH_MARKER = (
+    'elif [[ "${event_name}" == "workflow_run" '
+    '&& "${EVENT_WORKFLOW_RUN_NAME}" == "Hunter Reviewer Collector" ]]; then'
+)
+
+
+def _reconcile_run_script() -> str:
+    document = yaml.safe_load(RECONCILE_WORKFLOW.read_text(encoding="utf-8"))
+    for step in document["jobs"]["reconcile"]["steps"]:
+        if step.get("name") == "Refresh lightweight governance status":
+            return str(step["run"])
+    raise AssertionError("reconcile governance-refresh step not found")
+
+
+def _collector_branch_body() -> str:
+    script = _reconcile_run_script()
+    assert _COLLECTOR_BRANCH_MARKER in script
+    return script.split(_COLLECTOR_BRANCH_MARKER, 1)[1].split("elif", 1)[0]
+
+
+def _extract_collector_pr_numbers(title: str) -> str:
+    """Run the exact committed shell text that derives pr_numbers for a
+    completed 'Hunter Reviewer Collector' run, against a real bash process --
+    exercising the real committed script rather than a reimplementation."""
+
+    completed = subprocess.run(
+        ["bash", "-c", f'set -euo pipefail\n{_collector_branch_body()}\nprintf "%s" "$pr_numbers"'],
+        env={"EVENT_WORKFLOW_RUN_TITLE": title, "PATH": os.environ.get("PATH", "/usr/bin:/bin")},
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+    return completed.stdout
+
+
+def test_collector_completion_pr_derivation_never_uses_workflow_run_head_sha():
+    """Defect B: main's own SHA must never be mistaken for the candidate HEAD."""
+
+    assert "EVENT_WORKFLOW_RUN_HEAD_SHA" not in _collector_branch_body()
+
+
+def test_collector_completion_pr_derivation_extracts_the_correlated_pr_number():
+    title = f"Hunter Reviewer Collector PR 541 HEAD {'e' * 40}"
+    assert _extract_collector_pr_numbers(title) == "541"
+
+
+def test_collector_completion_pr_derivation_extracts_the_pr_number_with_a_remediation_generation_suffix():
+    title = f"Hunter Reviewer Collector PR 541 HEAD {'e' * 40} GEN {'a' * 16}"
+    assert _extract_collector_pr_numbers(title) == "541"
+
+
+def test_collector_completion_pr_derivation_yields_nothing_for_malformed_or_foreign_titles():
+    """Malformed/mismatched run correlation must never select a PR or head."""
+
+    assert _extract_collector_pr_numbers("some unrelated bot posted this title") == ""
+    assert _extract_collector_pr_numbers("Hunter Reviewer CollectorPR541 HEAD deadbeef") == ""
+    assert _extract_collector_pr_numbers("Hunter Reviewer Collector PR HEAD " + "e" * 40) == ""
+
+
+def test_collector_workflow_publishes_completion_from_its_own_trusted_inputs():
+    """Completion must reconcile the exact PR/head the collector was dispatched
+    for, derived only from its own dispatch inputs -- never from workflow_run
+    metadata, and never re-guessed or parsed after the fact."""
+
+    document = yaml.safe_load(COLLECTOR_WORKFLOW_FILE.read_text(encoding="utf-8"))
+    assert document["permissions"]["statuses"] == "write"
+    steps = document["jobs"]["collect"]["steps"]
+    completion = next(step for step in steps if step.get("name") == "Publish collector completion")
+
+    assert completion.get("if") == "success()"
+    run = str(completion["run"])
+    assert "collector-complete" in run
+    assert '--pr "$PR_NUMBER"' in run
+    assert '--head "$CANDIDATE_HEAD"' in run
+    env = completion.get("env", {})
+    assert env.get("PR_NUMBER") == "${{ inputs.pr_number }}"
+    assert env.get("CANDIDATE_HEAD") == "${{ inputs.head_sha }}"
+
+
 def test_collector_completion_accepts_trusted_ancestor_of_current_main(monkeypatch):
     old_main = "b" * 40
     current_main = "c" * 40
@@ -978,6 +1147,7 @@ def test_dispatch_identity_and_timestamp_are_durable_before_dispatch(monkeypatch
     monkeypatch.setattr(orchestrator, "reviewer_pool_config_digest", lambda: "d" * 64)
     monkeypatch.setattr(orchestrator, "current_run_id", lambda: 777)
     monkeypatch.setattr(orchestrator, "publish_cycle", lambda *_args, cycle: published.append(cycle))
+    monkeypatch.setattr(orchestrator, "collector_liveness", lambda *_args: ("missing", 0))
 
     def accepted_then_process_dies(*_args):
         raise RuntimeError("post-acceptance transport loss")

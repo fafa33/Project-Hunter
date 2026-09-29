@@ -9,8 +9,10 @@ on:
     types: [submitted, edited, dismissed]
   pull_request_review_comment:
     types: [created, edited, deleted]
-  pull_request_review_thread:
-    types: [resolved]
+  # GitHub Actions has no pull_request_review_thread trigger. Thread-resolution
+  # state is therefore reconciled on the supported review/comment events below
+  # and by explicit workflow_dispatch catch-up; never declare an unsupported
+  # event here because GitHub rejects the whole workflow before any job starts.
   workflow_dispatch:
     inputs:
       pr_number:

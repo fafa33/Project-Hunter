@@ -179,8 +179,12 @@ def test_automatic_canonicalization_uses_existing_local_git_push_without_token_w
     assert "pull-requests: read" in text
     assert "contents: write" not in text
     assert "pull-requests: write" not in text
-    assert "pull_request_review_thread:" in text
-    assert "types: [resolved]" in text
+    # GitHub Actions does not support pull_request_review_thread as an `on:` event.
+    # Declaring it invalidates the workflow before any job can be created.
+    assert "pull_request_review_thread:" not in text
+    assert "pull_request_review:" in text
+    assert "pull_request_review_comment:" in text
+    assert "workflow_dispatch:" in text
     assert "path: reviewed-pr" in text
     assert "HUNTER_REGRESSION_ROOT: ${{ github.workspace }}/reviewed-pr" in text
     assert "git@github.com:${REPOSITORY}.git" in text
