@@ -821,6 +821,44 @@ class ReviewRequestReadiness(NamedTuple):
     prerequisite_state: str
 
 
+#: One-time, owner-authorized root-of-trust migration identity (Issue #541).
+#:
+#: The separated orchestrator -- Review Opportunity independent of Candidate
+#: Admission -- is contributed by PR #535, but Hunter intentionally executes
+#: orchestration from the default branch, so the candidate cannot activate its
+#: own trust-boundary change. That is the same irreducible bootstrap limitation
+#: ``scripts/hunter_controller_admission.py`` documents, and it is resolved the
+#: same way: a human-authorized root-of-trust cutover, structurally identical to
+#: the ``bootstrap_external_review_469.py`` bridge that installed the reviewer
+#: orchestration controller for PR #473.
+#:
+#: This grants exactly one thing: for this one trusted migration identity, the
+#: Review Opportunity path is no longer gated behind the trusted preflight, so an
+#: independently authenticated review can be collected for a candidate that is
+#: blocked from admission. It grants NOTHING else. Candidate admission, ingress
+#: provenance, verified signatures, the trusted hosted preflight, deterministic
+#: gates, governance, merge readiness and owner approval are all read from
+#: their own trusted evidence and remain fail-closed; a completed review carries
+#: no merge authority.
+#:
+#: The identity is a literal in trusted default-branch code compared against the
+#: pull request the hosted workflow itself derived from GitHub. It is never read
+#: from candidate content, so no pull request, commit, file, comment or status
+#: can assert or extend it, and no future candidate can opt itself in.
+#:
+#: It expires by deletion. Once the permanent separated orchestrator is the
+#: default-branch norm, this block is removed and nothing widens: the ordinary
+#: path returns to consulting the preflight, and the migration identity stops
+#: existing. Deleting the block is a strictly narrowing change.
+REVIEW_OPPORTUNITY_MIGRATION_IDENTITIES = frozenset({("fafa33/Project-Hunter", 535)})
+
+
+def _review_opportunity_migration(repository: str, pr_number: int) -> bool:
+    """Whether this pull request is the trusted root-of-trust migration identity."""
+
+    return (repository, int(pr_number)) in REVIEW_OPPORTUNITY_MIGRATION_IDENTITIES
+
+
 def review_request_state(repository: str, token: str, pr_number: int, head_sha: str) -> ReviewRequestReadiness:
     """Whether this head carries a current review request, and which claims it is.
 
@@ -833,18 +871,31 @@ def review_request_state(repository: str, token: str, pr_number: int, head_sha: 
 
     import hunter_governance_review_v2 as governance
 
-    preflight_state, preflight_reason = governance.read_trusted_upgrade_status(repository, token, head_sha, pr_number)
-    if preflight_state != "success":
-        return ReviewRequestReadiness(
-            False, "", f"exact-head trusted prerequisite is {preflight_state}: {preflight_reason}", preflight_state
+    migration = _review_opportunity_migration(repository, pr_number)
+    if migration:
+        # Review Opportunity for the trusted migration identity is not gated on
+        # Candidate Admission. Its prerequisite is the exact-head request below,
+        # so an absent request stays retryable and a present-but-unusable one
+        # stays terminal for this head.
+        prerequisite_state = "review-opportunity"
+    else:
+        preflight_state, preflight_reason = governance.read_trusted_upgrade_status(
+            repository, token, head_sha, pr_number
         )
+        if preflight_state != "success":
+            return ReviewRequestReadiness(
+                False, "", f"exact-head trusted prerequisite is {preflight_state}: {preflight_reason}", preflight_state
+            )
+        prerequisite_state = preflight_state
     request_state, document, request_error = governance.read_head_pre_ready_review(repository, token, head_sha)
+    if migration:
+        prerequisite_state = request_state
     if request_state != "present" or not isinstance(document, dict):
         return ReviewRequestReadiness(
             False,
             "",
             f"exact-head pre-ready review request is {request_state} at {head_sha[:10]}: {request_error or 'absent'}",
-            preflight_state,
+            prerequisite_state,
         )
     request = document.get("review_request")
     if not (
@@ -853,21 +904,25 @@ def review_request_state(repository: str, token: str, pr_number: int, head_sha: 
         and isinstance(request.get("claims_id"), str)
         and len(request["claims_id"]) == 64
     ):
+        if migration:
+            prerequisite_state = "present"
         return ReviewRequestReadiness(
             False,
             "",
             f"exact-head pre-ready review request at {head_sha[:10]} carries no usable review_request claims binding",
-            preflight_state,
+            prerequisite_state,
         )
     valid, reason = governance.valid_current_review_request(repository, token, pr_number, head_sha, document)
     if not valid:
+        if migration:
+            prerequisite_state = "present"
         return ReviewRequestReadiness(
             False,
             "",
             f"exact-head pre-ready review request at {head_sha[:10]} is not valid for this head: {reason}",
-            preflight_state,
+            prerequisite_state,
         )
-    return ReviewRequestReadiness(True, str(request["claims_id"]), "", preflight_state)
+    return ReviewRequestReadiness(True, str(request["claims_id"]), "", prerequisite_state)
 
 
 def review_prerequisites_ready(repository: str, token: str, pr_number: int, head_sha: str) -> bool:
@@ -877,6 +932,16 @@ def review_prerequisites_ready(repository: str, token: str, pr_number: int, head
 def ensure_current(repository: str, token: str, pr_number: int) -> ReviewCycle | None:
     pr = request_json(repository, token, "GET", f"pulls/{pr_number}")
     if not isinstance(pr, dict) or str(pr.get("state") or "") != "open":
+        return None
+    # Issue #534: a Draft PR must never start a candidate review cycle, even
+    # though every other trigger that reaches here (schedule sweep, review
+    # events, workflow_run) iterates or fires without first checking draft
+    # state itself. This is enforced here, once, rather than relied upon
+    # indirectly. The cutover below removes the preflight gate for one trusted
+    # migration identity, so this guard is what keeps a Draft head from gaining
+    # review authority through it: the ordinary path was incidentally protected
+    # by the preflight, the migration path would not be.
+    if bool(pr.get("draft")):
         return None
     head_sha = str((pr.get("head") or {}).get("sha") or "")
     if not head_sha:
@@ -894,6 +959,15 @@ def ensure_current(repository: str, token: str, pr_number: int) -> ReviewCycle |
                 f"exact-head review orchestration cannot start for PR #{pr_number} at {head_sha[:10]}: "
                 f"{readiness.reason}. Trusted preflight already passed, so this head needs a pre-ready review "
                 f"request committed for it; reconcile will start orchestration as soon as one is."
+            )
+        # The migration identity's prerequisite is the request itself, so a
+        # request that is present but unusable is terminal for this head too and
+        # is reported rather than swallowed.
+        if readiness.prerequisite_state == "present":
+            raise ReviewRequestBlocked(
+                f"exact-head review orchestration cannot start for PR #{pr_number} at {head_sha[:10]}: "
+                f"{readiness.reason}. This head carries a pre-ready review request that is not usable for it; "
+                f"reconcile will start orchestration as soon as a usable one is committed."
             )
         return None
     # Derived here, never accepted from a dispatch input or from candidate prose:
