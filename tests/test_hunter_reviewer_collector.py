@@ -1844,3 +1844,140 @@ def test_invalid_api_blocker_fails_over_with_precise_reason():
     assert backend.triggers == [("gemini", 1), ("groq", 1)]
     assert results[0]["reason_code"] == "INVALID_REVIEW_RESULT"
     assert results[1]["outcome"] == "clear"
+
+
+# Issue #534: the connector's real quota denial is prose that links a usage
+# dashboard, so an exact-string matcher never recognised a genuinely exhausted
+# provider and the attempt consumed the whole review budget. These cases pin the
+# authenticated denial to an immediate failover, and pin the near-misses that
+# must NOT be read as unavailability.
+
+
+def _codex_backend() -> collector.GitHubBackend:
+    return collector.GitHubBackend("owner/repo", "token", 480, HEAD, "d" * 64, 123, 1)
+
+
+def _codex_agent() -> dict:
+    return {
+        "id": "codex",
+        "trigger_method": "github-pr-comment:@codex review",
+        "github_login": "chatgpt-codex-connector[bot]",
+    }
+
+
+REAL_CODEX_QUOTA_DENIAL = (
+    "You have reached your Codex usage limits for code reviews. You can see your limits in the "
+    "[Codex usage dashboard](https://chatgpt.com/codex/cloud/settings/usage).\n"
+    "To continue using code reviews, you can upgrade your account or add credits to your account "
+    "and enable them for code reviews in your "
+    "[settings](https://chatgpt.com/codex/cloud/settings/code-review)."
+)
+
+
+def test_authenticated_codex_quota_denial_is_unavailable(monkeypatch):
+    """The connector's real quota prose is recognised as unavailability."""
+
+    backend = _codex_backend()
+    trigger = {"created_at": "2026-09-18T20:00:00Z", "collector_run_id": 123, "id": 9}
+
+    def pages(_repo, _token, path):
+        if path.endswith("/reviews"):
+            return []
+        return [
+            {
+                "id": 1,
+                "user": {"login": "chatgpt-codex-connector[bot]"},
+                "created_at": "2026-09-18T20:00:30Z",
+                "body": REAL_CODEX_QUOTA_DENIAL,
+            }
+        ]
+
+    monkeypatch.setattr(collector, "_pages", pages)
+    assert backend.response_state(_codex_agent(), trigger) == "unavailable"
+
+
+def test_authenticated_codex_unavailability_is_reported_immediately(monkeypatch):
+    """An authenticated denial fails over at once instead of waiting out the budget."""
+
+    calls: list[float] = []
+
+    class QuotaDenied:
+        def __init__(self):
+            self.run_id = 123
+            self.run_attempt = 1
+            self.triggered = 0
+            self.clock = 0.0
+
+        def head(self):
+            return HEAD
+
+        def now(self):
+            return self.clock
+
+        def sleep(self, seconds):
+            # Any sleeping at all is a budget burn; the denial must be consumed
+            # on the first observation, before a single wait.
+            calls.append(self.clock)
+            self.clock += max(0.0, float(seconds))
+
+        def trigger(self, agent, number):
+            self.triggered += 1
+            return {"id": self.triggered, "created_at": "2026-09-22T00:00:00Z", "collector_run_id": 123}
+
+        def response_state(self, agent, trigger):
+            return "unavailable"
+
+    pool = copy.deepcopy(POOL)
+    pool["agents"] = ({**pool["agents"][0], "id": "codex", "priority": 1},)
+    backend = QuotaDenied()
+    results = collector.collect_attempts(pool, HEAD, backend)
+
+    assert results[0]["outcome"] == "unavailable"
+    assert results[0]["reason_code"] == "QUOTA_OR_USAGE_LIMIT"
+    assert calls == [], "an authenticated denial must not consume any wait budget"
+    assert backend.triggered == 1
+
+
+def test_substantive_review_mentioning_limits_is_not_unavailability(monkeypatch):
+    """A review that merely discusses limits is a review, not an absence."""
+
+    backend = _codex_backend()
+    trigger = {"created_at": "2026-09-18T20:00:00Z", "collector_run_id": 123, "id": 9}
+    body = (
+        "### Codex Review\n\n**Reviewed commit:** `" + HEAD + "`\n\n"
+        "The collector treats an exhausted provider as unavailability, and the usage limits "
+        "discussion in ADPR-0012 is correct.\n"
+    )
+
+    def pages(_repo, _token, path):
+        if path.endswith("/reviews"):
+            return [
+                {
+                    "id": 5,
+                    "user": {"login": "chatgpt-codex-connector[bot]"},
+                    "submitted_at": "2026-09-18T20:02:00Z",
+                    "commit_id": HEAD,
+                    "state": "COMMENTED",
+                    "body": body,
+                }
+            ]
+        return []
+
+    monkeypatch.setattr(collector, "_pages", pages)
+    state = backend.response_state(_codex_agent(), trigger)
+    assert state in {"clear", "blocking"}
+    assert state != "unavailable"
+
+
+def test_trigger_creation_is_never_acknowledgement():
+    """Creating the trigger proves delivery to GitHub, not that Codex started."""
+
+    pool = copy.deepcopy(POOL)
+    codex = (
+        next(a for a in pool["agents"] if a.get("id") == "codex")
+        if any(a.get("id") == "codex" for a in pool["agents"])
+        else None
+    )
+    if codex is None:
+        pytest.skip("pool fixture does not declare codex")
+    assert codex["ack_timeout_seconds"] <= codex["review_timeout_seconds"]

@@ -1000,11 +1000,27 @@ class GitHubBackend:
     def _unavailable(body: str) -> bool:
         text = body.lower()
         normalized = " ".join(text.split())
-        return bool(
+        if (
             re.fullmatch(r"(?:codex )?usage limit reached\.?(?: try again later\.?)?", normalized)
             or re.fullmatch(r"codex is temporarily unavailable\. please try again later\.?", normalized)
             or re.fullmatch(r"to use codex(?: here)?, create a codex account and connect to github\.?", normalized)
-        )
+        ):
+            return True
+        # Issue #534: the connector's real quota denial is prose, not a fixed
+        # string, and it is the only authenticated negative signal Codex emits.
+        # Matching it by anchor rather than by equality is deliberate: the body
+        # links a usage dashboard and upgrade instructions that vary by account,
+        # so an exact match silently failed to recognise a genuinely exhausted
+        # provider and the attempt then consumed the whole 1800-second review
+        # budget. The anchors are the denial itself, so a substantive review that
+        # merely discusses limits is still read as a review, not as absence.
+        if "you have reached your codex usage limits" in normalized:
+            return True
+        if "codex usage limits have been reached" in normalized:
+            return True
+        if re.search(r"codex (?:is )?(?:temporarily |currently )?unavailable[.!]", normalized):
+            return True
+        return False
 
     def response_state(self, agent: dict[str, Any], trigger: dict[str, Any]) -> str:
         if trigger.get("state") == "unavailable":

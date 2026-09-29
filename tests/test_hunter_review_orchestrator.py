@@ -366,8 +366,13 @@ def test_absent_cycle_read_does_not_duplicate_an_already_active_correlated_colle
     result = orchestrator.ensure_collector("owner/repo", "token", 472, HEAD)
 
     assert dispatches == []
-    assert result.trigger_id == 999
-    assert published
+    # A correlated collector run already active for this exact identity is
+    # authoritative even when the commit-status read raced and reported the
+    # cycle absent. Converge on it without minting a second trigger identity and
+    # without publishing a competing cycle.
+    assert result.trigger_id is None
+    assert result.state == "WAITING_FOR_REVIEWER"
+    assert published == []
 
 
 def test_absent_cycle_read_does_not_duplicate_an_already_successful_correlated_collector(monkeypatch):
@@ -412,10 +417,15 @@ def test_unreadable_collector_correlation_evidence_refuses_to_risk_a_duplicate_d
 
     monkeypatch.setattr(orchestrator, "collector_liveness", unavailable, raising=False)
 
-    with pytest.raises(RuntimeError, match="correlation evidence unavailable"):
-        orchestrator.ensure_collector("owner/repo", "token", 472, HEAD)
+    # Unreadable correlation evidence is not evidence that no collector exists.
+    # It must fail closed: stay pending and dispatch nothing, leaving the
+    # candidate for one more reconciliation pass rather than risking a
+    # duplicate dispatch for a run that may already be in flight.
+    result = orchestrator.ensure_collector("owner/repo", "token", 472, HEAD)
 
     assert dispatches == []
+    assert result.state == "WAITING_FOR_REVIEWER"
+    assert result.trigger_id is None
 
 
 def test_collector_liveness_ignores_runs_for_another_candidate(monkeypatch):
@@ -719,7 +729,12 @@ def test_a_pushed_head_reaches_orchestration_as_the_exact_current_head(monkeypat
         "request_json",
         lambda *_args: {"state": "open", "draft": False, "head": {"sha": pushed}},
     )
-    monkeypatch.setattr(orchestrator, "review_request_state", lambda *_args: (True, "d" * 64), raising=False)
+    monkeypatch.setattr(
+        orchestrator,
+        "review_request_state",
+        lambda *_args: orchestrator.ReviewRequestReadiness(True, "d" * 64, "", "success"),
+        raising=False,
+    )
     monkeypatch.setattr(orchestrator, "current_remediation_generation", lambda *_args: orchestrator.BASE_GENERATION_ID)
     targets = []
     monkeypatch.setattr(
@@ -763,7 +778,8 @@ def test_a_pushed_head_on_a_draft_pr_dispatches_nothing(monkeypatch):
     monkeypatch.setattr(
         orchestrator,
         "review_request_state",
-        lambda *_args: prerequisite_calls.append(True) or (True, "d" * 64),
+        lambda *_args: prerequisite_calls.append(True)
+        or orchestrator.ReviewRequestReadiness(True, "d" * 64, "", "success"),
         raising=False,
     )
     dispatch_calls = []
@@ -942,7 +958,8 @@ def test_current_pr_never_dispatches_for_a_draft_pr(monkeypatch):
     monkeypatch.setattr(
         orchestrator,
         "review_request_state",
-        lambda *_args: prerequisite_calls.append(True) or (True, "d" * 64),
+        lambda *_args: prerequisite_calls.append(True)
+        or orchestrator.ReviewRequestReadiness(True, "d" * 64, "", "success"),
         raising=False,
     )
     dispatch_calls = []

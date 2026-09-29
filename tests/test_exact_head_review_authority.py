@@ -464,8 +464,11 @@ def test_a_live_pending_orchestration_cycle_is_not_misclassified_as_malformed() 
     verdict = readiness.resolve_review_authority(
         ("pending", "WAITING_FOR_REVIEWER: no trusted exact-head orchestration cycle has been published")
     )
-    assert verdict.state == "MISSING_REVIEW_AUTHORITY"
+    # A live wait is a third outcome, not a hard failure. The tri-state landed on
+    # main (#541) is the authority here: a pending exact-head cycle is reported as
+    # PENDING_VERIFICATION so readiness blocks on the wait and resolves itself.
     assert verdict.state != "MALFORMED_REVIEW"
+    assert verdict.state == readiness.PENDING_VERIFICATION
 
 
 def test_review_authority_state_waits_while_a_committed_review_request_is_unadopted(monkeypatch) -> None:
