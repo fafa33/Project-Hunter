@@ -972,8 +972,13 @@ def test_current_pr_never_dispatches_for_a_draft_pr(monkeypatch):
     assert dispatch_calls == []
 
 
-def _readiness_harness(monkeypatch, *, prerequisite_state, request_valid):
-    """Wire the exact-head prerequisites the reconcile transition reads."""
+def _readiness_harness(monkeypatch, *, prerequisite_state, request_valid, request_state="present"):
+    """Wire the exact-head prerequisites the reconcile transition reads.
+
+    `prerequisite_state` is the trusted preflight/admission state. It is
+    witnessed here only so a test can prove Review Opportunity ignores it; the
+    orchestrator must never read it.
+    """
 
     head = HEAD
     monkeypatch.setattr(
@@ -986,12 +991,18 @@ def _readiness_harness(monkeypatch, *, prerequisite_state, request_valid):
 
     import hunter_governance_review_v2 as governance
 
-    monkeypatch.setattr(
-        governance, "read_trusted_upgrade_status", lambda *_args: (prerequisite_state, "prereq detail"), raising=False
-    )
-    monkeypatch.setattr(
-        governance, "read_head_pre_ready_review", lambda *_args: ("present", document, None), raising=False
-    )
+    def _unreachable_preflight(*_args, **_kwargs):
+        raise AssertionError("Review Opportunity must not read Candidate Admission preflight state")
+
+    monkeypatch.setattr(governance, "read_trusted_upgrade_status", _unreachable_preflight, raising=False)
+    if request_state == "present":
+        monkeypatch.setattr(
+            governance, "read_head_pre_ready_review", lambda *_args: ("present", document, None), raising=False
+        )
+    else:
+        monkeypatch.setattr(
+            governance, "read_head_pre_ready_review", lambda *_args: (request_state, None, "absent"), raising=False
+        )
     monkeypatch.setattr(
         governance,
         "valid_current_review_request",
@@ -1024,10 +1035,9 @@ def _collector_harness(monkeypatch):
 
 
 def test_blocked_review_request_reports_the_reason_and_never_dispatches(monkeypatch):
-    """PR #540: trusted preflight already passed but the exact-head pre-ready
-    review request is not valid for this head. A reconcile must not report
-    success here, and it must not spend reviewer capacity either."""
-
+    """PR #540: the exact-head pre-ready review request is present but not
+    valid for this head. A reconcile must not report success here, and it must
+    not spend reviewer capacity either."""
     _readiness_harness(monkeypatch, prerequisite_state="success", request_valid=False)
     stored = _collector_harness(monkeypatch)
 
@@ -1035,7 +1045,7 @@ def test_blocked_review_request_reports_the_reason_and_never_dispatches(monkeypa
         orchestrator.ensure_current("owner/repo", "token", 472)
 
     assert "stale finding F-8" in str(blocked.value)
-    assert "needs a pre-ready review request committed for it" in str(blocked.value)
+    assert "pre-ready review request that is not usable for it" in str(blocked.value)
     assert stored["dispatches"] == 0
     assert stored["cycle"] is None
 
@@ -1063,13 +1073,13 @@ def test_new_head_starts_orchestration_once_after_its_prerequisite_completes(mon
     """
 
     stored = _collector_harness(monkeypatch)
-    # 1 + 2: same exact head, prerequisite incomplete -> no dispatch, no cycle.
-    _readiness_harness(monkeypatch, prerequisite_state="pending", request_valid=False)
+    # 1 + 2: same exact head, request not yet committed -> no dispatch, no cycle.
+    _readiness_harness(monkeypatch, prerequisite_state="pending", request_valid=False, request_state="absent")
     assert orchestrator.ensure_current("owner/repo", "token", 472) is None
     assert stored["dispatches"] == 0
     assert stored["cycle"] is None
 
-    # 3 + 4 + 5 + 6: prerequisite succeeded and the request now binds this head.
+    # 3 + 4 + 5 + 6: the request is now committed and binds this exact head.
     _readiness_harness(monkeypatch, prerequisite_state="success", request_valid=True)
     cycle = orchestrator.ensure_current("owner/repo", "token", 472)
 
@@ -1089,7 +1099,7 @@ def test_incomplete_prerequisite_never_dispatches_and_stays_retryable(monkeypatc
     keep the benign pending exit so the ordinary dependency wait is not turned
     into a red reconcile."""
 
-    _readiness_harness(monkeypatch, prerequisite_state="pending", request_valid=False)
+    _readiness_harness(monkeypatch, prerequisite_state="pending", request_valid=False, request_state="absent")
     stored = _collector_harness(monkeypatch)
     monkeypatch.setattr(sys, "argv", ["orchestrator", "ensure", "--repository", "owner/repo", "--pr", "472"])
 
@@ -1128,14 +1138,14 @@ def test_readiness_reports_which_blocker_applies(monkeypatch):
     _readiness_harness(monkeypatch, prerequisite_state="success", request_valid=False)
     blocked = orchestrator.review_request_state("owner/repo", "token", 472, HEAD)
     assert blocked.ready is False
-    assert blocked.prerequisite_state == "success"
+    assert blocked.prerequisite_state == "present"
     assert "stale finding F-8" in blocked.reason
 
-    _readiness_harness(monkeypatch, prerequisite_state="pending", request_valid=False)
+    _readiness_harness(monkeypatch, prerequisite_state="pending", request_valid=False, request_state="absent")
     pending = orchestrator.review_request_state("owner/repo", "token", 472, HEAD)
     assert pending.ready is False
-    assert pending.prerequisite_state == "pending"
-    assert "prereq detail" in pending.reason
+    assert pending.prerequisite_state == "absent"
+    assert "absent" in pending.reason
 
 
 def test_offline_mac_skips_local_without_red(monkeypatch):
@@ -1468,3 +1478,207 @@ def test_dispatch_identity_and_timestamp_are_durable_before_dispatch(monkeypatch
     assert published[0].trigger_id == 777
     assert published[0].started_at
     assert orchestrator._older_than(published[0].started_at, orchestrator.COLLECTOR_LIVENESS_GRACE_SECONDS) is False
+
+
+# ---------------------------------------------------------------------------
+# Issue #541: the dependency edge between Review Opportunity and Candidate
+# Admission. Review is non-authoritative defense-in-depth, so a candidate that
+# is not yet merge-admissible must still be able to earn an independent review.
+# The other side of the boundary must not move: Admission stays fail-closed and
+# a completed review grants no merge authority.
+# ---------------------------------------------------------------------------
+
+
+def _admission_blocked_on_ingress_signature(monkeypatch, *, reason="unknown_key"):
+    """Model the live #535 state: Candidate Admission fails on a commit whose
+    pre-push ingress signature GitHub cannot verify."""
+
+    import hunter_governance_review_v2 as governance
+
+    monkeypatch.setattr(
+        governance,
+        "read_trusted_upgrade_status",
+        lambda *_args: (
+            "failure",
+            f"Candidate admission blocked: commit a87bc81ab4 has no verified pre-push ingress signature (reason={reason}).",
+        ),
+        raising=False,
+    )
+    return governance
+
+
+def test_review_opportunity_starts_while_candidate_admission_is_blocked(monkeypatch):
+    """Boundary, side A: an exact-head PR blocked from admission by an
+    unverified ingress signature must still start a trusted review cycle.
+
+    This is the whole point of the separation. Admission authority is not
+    consulted at all here, so an `unknown_key` signature cannot prevent an
+    independent reviewer from ever seeing the head.
+    """
+
+    _admission_blocked_on_ingress_signature(monkeypatch)
+    stored = _collector_harness(monkeypatch)
+    _readiness_harness(monkeypatch, prerequisite_state="failure", request_valid=True)
+
+    cycle = orchestrator.ensure_current("owner/repo", "token", 472)
+
+    assert cycle is not None
+    assert cycle.head_sha == HEAD
+    assert cycle.state == "WAITING_FOR_REVIEWER"
+    assert stored["dispatches"] == 1
+    assert stored["cycle"] is cycle
+
+
+def test_blocked_candidate_admission_stays_blocked_for_merge(monkeypatch):
+    """Boundary, side B: the very same candidate is still NOT merge-admissible.
+
+    Separating the paths must not have quietly turned the admission failure
+    into a success anywhere. Admission reads the preflight directly and is
+    unchanged by the review separation.
+    """
+
+    governance = _admission_blocked_on_ingress_signature(monkeypatch)
+    unverified_sha = "a87bc81ab4" + "0" * 30
+    monkeypatch.setattr(
+        governance,
+        "read_pr_commits",
+        lambda *_args, **_kwargs: (
+            True,
+            [
+                {
+                    "sha": unverified_sha,
+                    "commit": {"verification": {"verified": False, "reason": "unknown_key"}},
+                },
+                {
+                    "sha": HEAD,
+                    "commit": {"verification": {"verified": True, "reason": "valid"}},
+                },
+            ],
+            None,
+        ),
+        raising=False,
+    )
+    # Both commits count as written by the candidate, so the unverified
+    # signature is actually reached rather than exempted by an attestation floor.
+    monkeypatch.setattr(
+        governance,
+        "read_commits_beyond_attestation_floor",
+        lambda *_args, **_kwargs: (True, frozenset({unverified_sha, HEAD}), None),
+        raising=False,
+    )
+    monkeypatch.setattr(
+        governance,
+        "read_pr_changed_files",
+        lambda *_args, **_kwargs: (
+            True,
+            [{"path": "scripts/hunter_review_orchestrator.py", "status": "modified"}],
+            None,
+        ),
+        raising=False,
+    )
+    monkeypatch.setattr(
+        governance,
+        "verify_connector_ingress_authorization",
+        lambda *_args, **_kwargs: type("V", (), {"ok": True, "message": "", "origin": False})(),
+        raising=False,
+    )
+
+    verdict, reason = governance.verify_code_write_ingress_provenance("owner/repo", "token", HEAD, 472)
+
+    assert verdict == "failure"
+    assert "no verified pre-push ingress signature" in reason
+    assert "unknown_key" in reason
+
+
+def test_candidate_authored_review_request_cannot_mint_review_authority(monkeypatch):
+    """A candidate cannot grant itself reviewer authority by committing its own
+    review request. The request is not believed: its claims are re-derived from
+    trusted GitHub state, so a self-issued request that does not match that
+    state is rejected."""
+
+    _admission_blocked_on_ingress_signature(monkeypatch)
+    stored = _collector_harness(monkeypatch)
+    _readiness_harness(monkeypatch, prerequisite_state="failure", request_valid=False)
+
+    with pytest.raises(orchestrator.ReviewRequestBlocked):
+        orchestrator.ensure_current("owner/repo", "token", 472)
+
+    # No cycle, no dispatch, and no reviewer capacity spent on a self-issued
+    # request whose claims are not the ones trusted state derives.
+    assert stored["cycle"] is None
+    assert stored["dispatches"] == 0
+
+
+def test_stale_head_review_cannot_create_authority(monkeypatch):
+    """A request that is not valid for the current exact head stays
+    non-authoritative, even when Candidate Admission is fully satisfied."""
+
+    _admission_blocked_on_ingress_signature(monkeypatch)
+    stored = _collector_harness(monkeypatch)
+    stored["cycle"] = make_cycle(head_sha="b" * 40)
+    _readiness_harness(monkeypatch, prerequisite_state="failure", request_valid=False)
+
+    with pytest.raises(orchestrator.ReviewRequestBlocked):
+        orchestrator.ensure_current("owner/repo", "token", 472)
+
+    assert stored["dispatches"] == 0
+    # The superseded head's cycle is left alone and is not reused as authority.
+    assert stored["cycle"].head_sha == "b" * 40
+
+
+def test_draft_pr_cannot_start_review_even_though_admission_is_blocked(monkeypatch):
+    """Relaxing the admission edge must not leak into Draft. A Draft PR still
+    starts nothing, and the head it would have used is never published."""
+
+    _admission_blocked_on_ingress_signature(monkeypatch)
+    stored = _collector_harness(monkeypatch)
+    _readiness_harness(monkeypatch, prerequisite_state="failure", request_valid=True)
+    monkeypatch.setattr(
+        orchestrator,
+        "request_json",
+        lambda *_args: {"state": "open", "draft": True, "head": {"sha": HEAD}},
+        raising=False,
+    )
+
+    assert orchestrator.ensure_current("owner/repo", "token", 472) is None
+    assert stored["cycle"] is None
+    assert stored["dispatches"] == 0
+
+
+def test_post_remediation_synchronize_reaches_orchestration_without_admission(monkeypatch):
+    """The post-remediation path: a finding is corrected, the candidate gets a
+    NEW head, and synchronize must reach trusted review orchestration for that
+    new head without first satisfying full merge admission.
+    """
+
+    _admission_blocked_on_ingress_signature(monkeypatch)
+    stored = _collector_harness(monkeypatch)
+    new_head = "c" * 40
+    # The remediation moved the generation, exactly as an exact-head
+    # correction does; the request binds the new head.
+    monkeypatch.setattr(orchestrator, "current_remediation_generation", lambda *_args: "gen-2", raising=False)
+    _readiness_harness(monkeypatch, prerequisite_state="failure", request_valid=True)
+    # synchronize: the pull request now points at the corrected head.
+    monkeypatch.setattr(
+        orchestrator,
+        "request_json",
+        lambda *_args: {"state": "open", "head": {"sha": new_head}},
+        raising=False,
+    )
+    monkeypatch.setattr(
+        orchestrator,
+        "read_head_pre_ready_review",
+        lambda *_args: (
+            "present",
+            {"review_request": {"schema": "hunter.review-request.v1", "claims_id": "e" * 64}},
+            None,
+        ),
+        raising=False,
+    )
+
+    cycle = orchestrator.ensure_current("owner/repo", "token", 472)
+
+    assert cycle is not None
+    assert cycle.head_sha == new_head
+    assert cycle.head_sha != HEAD
+    assert stored["dispatches"] == 1

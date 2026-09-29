@@ -884,22 +884,35 @@ def review_request_state(repository: str, token: str, pr_number: int, head_sha: 
     the generation be derived from claims the dispatch decision never saw. The
     blocking reason is returned for the same reason -- a readiness decision
     nobody can explain is a readiness decision nobody can act on.
+
+    Review Opportunity is deliberately NOT gated on Candidate Admission. The
+    review request itself is the minimum trust boundary: it is read at the
+    exact head, and `valid_current_review_request` recomputes its claims from
+    trusted GitHub state (refs, merge base, changed files, defect families and
+    the governing Issue's acceptance criteria). A candidate therefore cannot
+    mint review authority by committing its own request, because the claims it
+    would have to invent are re-derived rather than believed.
+
+    Admission authority -- ingress provenance, verified signatures, the trusted
+    hosted preflight, deterministic gates and governance -- is a separate
+    fail-closed path that reads `read_trusted_upgrade_status` directly. A
+    head that cannot start a review is not thereby mergeable, and a review that
+    completes grants no merge authority whatsoever.
     """
 
     import hunter_governance_review_v2 as governance
 
-    preflight_state, preflight_reason = governance.read_trusted_upgrade_status(repository, token, head_sha, pr_number)
-    if preflight_state != "success":
-        return ReviewRequestReadiness(
-            False, "", f"exact-head trusted prerequisite is {preflight_state}: {preflight_reason}", preflight_state
-        )
+    # The prerequisite is now the exact-head review request itself rather than
+    # the trusted preflight, so an absent request is a benign retryable state
+    # (nothing has been committed for this head yet) while a request that is
+    # present but unusable is terminal for this head.
     request_state, document, request_error = governance.read_head_pre_ready_review(repository, token, head_sha)
     if request_state != "present" or not isinstance(document, dict):
         return ReviewRequestReadiness(
             False,
             "",
             f"exact-head pre-ready review request is {request_state} at {head_sha[:10]}: {request_error or 'absent'}",
-            preflight_state,
+            request_state,
         )
     request = document.get("review_request")
     if not (
@@ -912,7 +925,7 @@ def review_request_state(repository: str, token: str, pr_number: int, head_sha: 
             False,
             "",
             f"exact-head pre-ready review request at {head_sha[:10]} carries no usable review_request claims binding",
-            preflight_state,
+            "present",
         )
     valid, reason = governance.valid_current_review_request(repository, token, pr_number, head_sha, document)
     if not valid:
@@ -920,9 +933,9 @@ def review_request_state(repository: str, token: str, pr_number: int, head_sha: 
             False,
             "",
             f"exact-head pre-ready review request at {head_sha[:10]} is not valid for this head: {reason}",
-            preflight_state,
+            "present",
         )
-    return ReviewRequestReadiness(True, str(request["claims_id"]), "", preflight_state)
+    return ReviewRequestReadiness(True, str(request["claims_id"]), "", "present")
 
 
 def review_prerequisites_ready(repository: str, token: str, pr_number: int, head_sha: str) -> bool:
@@ -946,17 +959,17 @@ def ensure_current(repository: str, token: str, pr_number: int) -> ReviewCycle |
         raise RuntimeError("current pull-request head is unavailable")
     readiness = review_request_state(repository, token, pr_number, head_sha)
     if not readiness.ready:
-        # A prerequisite that is still pending or running retries on its own:
-        # the trusted upgrade status and the scheduled sweep both re-enter here.
-        # A prerequisite that already succeeded cannot resolve itself, because
-        # the request is a committed artifact of the head. That case must not
-        # disappear into a successful reconcile with no future orchestration
-        # opportunity, so it is reported instead of swallowed.
-        if readiness.prerequisite_state == "success":
+        # A request that has not been committed for this head yet is retryable:
+        # the schedule sweep and any later synchronize re-enter here. A request
+        # that IS present but unusable cannot resolve itself, because the request
+        # is a committed artifact of the head. That case must not disappear into
+        # a successful reconcile with no future orchestration opportunity, so it
+        # is reported instead of swallowed.
+        if readiness.prerequisite_state == "present":
             raise ReviewRequestBlocked(
                 f"exact-head review orchestration cannot start for PR #{pr_number} at {head_sha[:10]}: "
-                f"{readiness.reason}. Trusted preflight already passed, so this head needs a pre-ready review "
-                f"request committed for it; reconcile will start orchestration as soon as one is."
+                f"{readiness.reason}. This head carries a pre-ready review request that is not usable for it; "
+                f"reconcile will start orchestration as soon as a usable one is committed."
             )
         return None
     # Derived here, never accepted from a dispatch input or from candidate prose:
