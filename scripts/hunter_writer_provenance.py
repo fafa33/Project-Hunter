@@ -362,6 +362,65 @@ def resolve_governed_base(head: str, *, base_ref: str = "main", remote: str = "o
     )
 
 
+def _evaluate_commits(binding: WriterIdentityBinding, commits: tuple[CommitProvenance, ...]) -> str | None:
+    """Evaluate an already-read commit range under an already-loaded binding."""
+
+    if not commits:
+        # Nothing new is being published, so there is no governed range to bind.
+        return None
+
+    verdict = evaluate_range(binding, commits)
+    if verdict.ok:
+        return None
+    return f"{verdict.reason}. {remediation(binding)}"
+
+
+def is_ancestor(candidate: str, descendant: str, *, cwd: Path | None = None) -> bool:
+    """True only when ``candidate`` is an ancestor of ``descendant``.
+
+    Unreadable revisions are *not* an answer: they raise, so a caller cannot
+    mistake "the relationship could not be established" for "it holds".
+    """
+
+    completed = subprocess.run(
+        ("git", "merge-base", "--is-ancestor", candidate, descendant),
+        check=False,
+        capture_output=True,
+        text=True,
+        cwd=None if cwd is None else str(cwd),
+    )
+    if completed.returncode == 0:
+        return True
+    if completed.returncode == 1:
+        return False
+    detail = completed.stderr.strip() or completed.stdout.strip() or "git merge-base --is-ancestor failed"
+    raise GitEvidenceUnavailable(detail)
+
+
+def check_publish_range(remote_sha: str, local_sha: str, *, cwd: Path | None = None) -> str | None:
+    """Validate exactly the commits one ref update publishes: ``remote_sha..local_sha``.
+
+    A push publishes the commits reachable from the new tip that the remote ref
+    does not already carry, and nothing else. Commits already reachable from
+    ``remote_sha`` are history the remote accepted under whatever regime applied
+    when they arrived, so re-governing them here could refuse a push over commits
+    the writer can no longer repair without rewriting shared history.
+
+    The base is the caller's explicit ``remote_sha`` rather than a fork point
+    re-derived against a tracking ref, because that re-derivation is what made
+    the range depend on how current a local ``origin/<base>`` happened to be.
+    """
+
+    binding, error = load_binding()
+    if binding is None:
+        return f"writer provenance is unknown ({error})"
+    try:
+        commits = read_range_commits(remote_sha, local_sha, cwd=cwd)
+    except GitEvidenceUnavailable as exc:
+        return f"writer provenance evidence is unavailable ({exc})"
+    return _evaluate_commits(binding, commits)
+
+
 def check_range(head: str, *, base_ref: str = "main", remote: str = "origin", cwd: Path | None = None) -> str | None:
     """Validate the governed range, returning an actionable diagnosis or ``None``."""
 
@@ -374,14 +433,7 @@ def check_range(head: str, *, base_ref: str = "main", remote: str = "origin", cw
     except GitEvidenceUnavailable as exc:
         return f"writer provenance evidence is unavailable ({exc})"
 
-    if not commits:
-        # Nothing new is being published, so there is no governed range to bind.
-        return None
-
-    verdict = evaluate_range(binding, commits)
-    if verdict.ok:
-        return None
-    return f"{verdict.reason}. {remediation(binding)}"
+    return _evaluate_commits(binding, commits)
 
 
 def remediation(binding: WriterIdentityBinding) -> str:

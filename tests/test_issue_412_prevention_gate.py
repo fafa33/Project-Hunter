@@ -2701,7 +2701,7 @@ def test_malformed_review_evidence_does_not_block_an_ordinary_draft_push(monkeyp
 
     monkeypatch.setattr(hunter_pre_push, "_run_git", fake_git)
     monkeypatch.setattr(hunter_pre_push.os, "chdir", lambda _path: None)
-    monkeypatch.setattr(hunter_pre_push, "_validate_writer_provenance", lambda _head: None)
+    monkeypatch.setattr(hunter_pre_push, "_validate_writer_provenance", lambda *_args: None)
     monkeypatch.setattr(hunter_pre_push, "_validate_receipt_freshness", lambda _head: None)
     monkeypatch.setattr(hunter_pre_push, "_select_preflight_mode", lambda _head: hunter_pre_push.NORMAL_MODE)
     monkeypatch.setattr(hunter_pre_push.preflight, "run_quality_gates", lambda _gates: 0)

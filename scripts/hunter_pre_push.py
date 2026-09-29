@@ -25,7 +25,7 @@ import os
 import re
 import subprocess
 import sys
-from collections.abc import Iterable
+from collections.abc import Iterable, Sequence
 from pathlib import Path
 from typing import Any
 
@@ -60,6 +60,25 @@ def _run_git(*args: str) -> str:
 
 def _parse_updates(lines: Iterable[str]) -> list[tuple[str, str, str]]:
     updates: list[tuple[str, str, str]] = []
+    for local_ref, local_sha, remote_ref, _remote_sha in _ref_updates(lines):
+        updates.append((local_ref, local_sha, remote_ref))
+    return updates
+
+
+def _parse_publish_ranges(lines: Iterable[str]) -> list[tuple[str, str, str]]:
+    """The ``(local_ref, local_sha, remote_sha)`` each ref update actually publishes.
+
+    The remote SHA is what git reports the destination ref currently holds, so
+    ``remote_sha..local_sha`` is the exact set of commits this push would add.
+    A deletion publishes nothing and is dropped; a zero remote SHA means the ref
+    does not exist yet.
+    """
+
+    return [(local_ref, local_sha, remote_sha) for local_ref, local_sha, _remote_ref, remote_sha in _ref_updates(lines)]
+
+
+def _ref_updates(lines: Iterable[str]) -> list[tuple[str, str, str, str]]:
+    updates: list[tuple[str, str, str, str]] = []
     for raw in lines:
         line = raw.strip()
         if not line:
@@ -67,10 +86,10 @@ def _parse_updates(lines: Iterable[str]) -> list[tuple[str, str, str]]:
         parts = line.split()
         if len(parts) != 4:
             raise ValueError("malformed pre-push ref update")
-        local_ref, local_sha, remote_ref, _remote_sha = parts
+        local_ref, local_sha, remote_ref, remote_sha = parts
         if local_sha == ZERO_SHA:
             continue
-        updates.append((local_ref, local_sha, remote_ref))
+        updates.append((local_ref, local_sha, remote_ref, remote_sha))
     return updates
 
 
@@ -171,18 +190,65 @@ def report_full_repository_proof_ownership(repo_root: Path, head_sha: str, mode:
     )
 
 
-def _validate_writer_provenance(head_sha: str) -> None:
+def _publish_provenance_problem(local_ref: str, local_sha: str, remote_sha: str) -> str | None:
+    """The provenance problem for one ref update, or ``None`` when it is publishable.
+
+    Every branch that cannot publish a range is refused rather than guessed at:
+    an unreadable remote tip, a rewritten destination, or a destination the
+    writer cannot establish as a fast-forward all leave the published set unknown.
+    """
+
+    label = f"{local_ref}"
+    if not remote_sha or remote_sha == ZERO_SHA:
+        # A ref that does not exist yet publishes everything the local tip adds to
+        # the base branch, so the governed fork point is the correct base and is
+        # the same evidence check_range always applied.
+        problem = provenance.check_range(local_sha)
+        return None if problem is None else f"{label}: {problem}"
+
+    try:
+        provenance.read_range_commits(remote_sha, remote_sha, cwd=None)
+    except provenance.GitEvidenceUnavailable as exc:
+        return (
+            f"{label}: the remote tip {remote_sha} could not be read, so the commits this push "
+            f"publishes are unknown ({exc}); run `git fetch origin` so the destination ref is present"
+        )
+
+    try:
+        fast_forward = provenance.is_ancestor(remote_sha, local_sha)
+    except provenance.GitEvidenceUnavailable as exc:
+        return f"{label}: the relationship between {remote_sha} and {local_sha} is unknown ({exc})"
+
+    if not fast_forward:
+        return (
+            f"{label}: this update rewrites published history ({remote_sha} is not an ancestor of "
+            f"{local_sha}), and no owner policy authorizes a non-fast-forward provenance range; "
+            "re-governing a rewritten history is not something this boundary can validate"
+        )
+
+    problem = provenance.check_publish_range(remote_sha, local_sha)
+    return None if problem is None else f"{label}: {problem}"
+
+
+def _validate_writer_provenance(head_sha: str, publish_ranges: Sequence[tuple[str, str, str]]) -> None:
     """Refuse to publish a range whose commit identity is not authorization-bound.
 
     The mismatch PR #411 hit -- commits recorded under an implementation agent's
     Git identity instead of the authorization-bound writer -- is only repairable
     by rewriting the commits, so discovering it after the push is what forces a
     rewind. Checked here, the repair is local and free.
+
+    Each ref update is measured on the commits it actually publishes. History the
+    destination ref already holds was admitted when it arrived; re-walking it from
+    a fork point is what made Issue #545 refuse a push that published one
+    correctly signed commit, over a commit already on the remote.
     """
 
-    problem = provenance.check_range(head_sha)
-    if problem is not None:
-        raise RuntimeError(problem)
+    del head_sha  # the exact-HEAD contract is enforced separately, by _require_exact_head
+    for local_ref, local_sha, remote_sha in publish_ranges:
+        problem = _publish_provenance_problem(local_ref, local_sha, remote_sha)
+        if problem is not None:
+            raise RuntimeError(problem)
 
 
 def _validate_receipt_freshness(head_sha: str) -> None:
@@ -400,7 +466,10 @@ def report_pre_ready_review_state(head_sha: str, updates: Iterable[tuple[str, st
 
 
 def enforce_pre_push(lines: Iterable[str]) -> int:
-    updates = _parse_updates(lines)
+    # git hands the hook one line per ref update and does not re-iterate stdin, so
+    # the lines are materialized once and both parses read the same evidence.
+    materialised = list(lines)
+    updates = _parse_updates(materialised)
     if not updates:
         return 0
 
@@ -409,7 +478,7 @@ def enforce_pre_push(lines: Iterable[str]) -> int:
     before_head = _run_git("rev-parse", "HEAD")
     _require_clean_tree()
     _require_exact_head(updates, before_head)
-    _validate_writer_provenance(before_head)
+    _validate_writer_provenance(before_head, _parse_publish_ranges(materialised))
     _validate_receipt_freshness(before_head)
     mode = _select_preflight_mode(before_head)
 

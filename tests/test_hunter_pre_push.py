@@ -1,12 +1,14 @@
 from __future__ import annotations
 
 import os
+import subprocess
 from collections.abc import Callable
 from pathlib import Path
 from types import SimpleNamespace
 
 import hunter_pr_preflight
 import hunter_pre_push
+import hunter_writer_provenance
 import pytest
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -29,7 +31,7 @@ def _stub_issue_412_boundaries(monkeypatch) -> None:
     for, instead of turning every one of them into an end-to-end git fixture.
     """
 
-    monkeypatch.setattr(hunter_pre_push, "_validate_writer_provenance", lambda _head: None)
+    monkeypatch.setattr(hunter_pre_push, "_validate_writer_provenance", lambda *_args: None)
     monkeypatch.setattr(hunter_pre_push, "_validate_receipt_freshness", lambda _head: None)
     monkeypatch.setattr(hunter_pre_push, "report_pre_ready_review_state", lambda _head, _updates: None)
     monkeypatch.setattr(hunter_pre_push, "require_current_review_request_if_present", lambda _head, _updates: None)
@@ -210,8 +212,8 @@ def test_pre_push_still_blocks_every_pre_network_rewrite_defect(monkeypatch, tmp
     monkeypatch.setattr(hunter_pre_push, "_run_git", fake_git)
     monkeypatch.setattr(hunter_pre_push.os, "chdir", lambda _path: None)
 
-    def failing(name: str) -> Callable[[str], None]:
-        def check(_head: str) -> None:
+    def failing(name: str) -> Callable[..., None]:
+        def check(*_args: object) -> None:
             order.append(name)
             raise RuntimeError(name)
 
@@ -221,7 +223,7 @@ def test_pre_push_still_blocks_every_pre_network_rewrite_defect(monkeypatch, tmp
         monkeypatch.setattr(hunter_pre_push, name, failing(name))
         with pytest.raises(RuntimeError, match=name):
             hunter_pre_push.enforce_pre_push(_update())
-        monkeypatch.setattr(hunter_pre_push, name, lambda _head: None)
+        monkeypatch.setattr(hunter_pre_push, name, lambda *_args: None)
 
     assert order == ["_validate_writer_provenance", "_validate_receipt_freshness"]
 
@@ -263,3 +265,265 @@ def test_repository_derivation_falls_back_to_origin_in_a_direct_clone(monkeypatc
     monkeypatch.setattr(hunter_pre_push, "_run_git", fake_git)
 
     assert hunter_pre_push._repository_from_remotes() == "fafa33/Project-Hunter"
+
+
+# --------------------------------------------------------------------------
+# Issue #545: provenance governs what a push publishes, not the whole fork point
+# --------------------------------------------------------------------------
+
+
+def _bound_binding() -> hunter_writer_provenance.WriterIdentityBinding:
+    return hunter_writer_provenance.WriterIdentityBinding(
+        identities=(
+            hunter_writer_provenance.WriterIdentity(
+                login="fafa33",
+                names=frozenset({"farhad5778"}),
+                emails=frozenset({"34549283+fafa33@users.noreply.github.com"}),
+                canonical_name="Farhad5778",
+                canonical_email="34549283+fafa33@users.noreply.github.com",
+            ),
+        ),
+        require_single_writer_per_range=True,
+    )
+
+
+def _git(repo: Path, *args: str, env: dict[str, str] | None = None) -> str:
+    completed = subprocess.run(
+        ("git", *args),
+        check=True,
+        capture_output=True,
+        text=True,
+        cwd=str(repo),
+        env=env,
+    )
+    return completed.stdout.strip()
+
+
+def _commit(
+    repo: Path,
+    message: str,
+    *,
+    name: str = "Farhad5778",
+    email: str = "34549283+fafa33@users.noreply.github.com",
+) -> str:
+    """One commit whose author and committer are the identities under test."""
+
+    ident = {
+        "GIT_AUTHOR_NAME": name,
+        "GIT_AUTHOR_EMAIL": email,
+        "GIT_COMMITTER_NAME": name,
+        "GIT_COMMITTER_EMAIL": email,
+        "GIT_AUTHOR_DATE": "2026-01-01T00:00:00+00:00",
+        "GIT_COMMITTER_DATE": "2026-01-01T00:00:00+00:00",
+    }
+    (repo / "file.txt").write_text(message + "\n", encoding="utf-8")
+    _git(repo, "add", "file.txt")
+    _git(repo, "commit", "-m", message, env={**_git_env(), **ident})
+    return _git(repo, "rev-parse", "HEAD")
+
+
+def _git_env() -> dict[str, str]:
+    return {
+        "PATH": os.environ["PATH"],
+        "HOME": os.environ["HOME"],
+        "GIT_CONFIG_GLOBAL": os.devnull,
+        "GIT_CONFIG_SYSTEM": os.devnull,
+    }
+
+
+@pytest.fixture
+def publish_repo(tmp_path: Path) -> Path:
+    """A repository whose branch carries one already-remote unbound commit.
+
+    The unbound commit stands in for a squash-merged main commit: its committer is
+    ``GitHub <noreply@github.com>``, which is deliberately not on the allowlist, and
+    it is already reachable from the destination ref. A local ``origin/main`` that
+    still predates it reproduces the lag that made Issue #545 walk that far back.
+    """
+
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    _git(repo, "init", "-q", "-b", "main")
+    base = _commit(repo, "base")
+    _git(repo, "remote", "add", "origin", str(tmp_path / "remote.git"))
+    _git(repo, "update-ref", "refs/remotes/origin/main", base)
+
+    _git(repo, "checkout", "-q", "-b", "feature")
+    _commit(repo, "remote tip", name="GitHub", email="noreply@github.com")
+    return repo
+
+
+def _bind_publish_provenance(monkeypatch, binding: hunter_writer_provenance.WriterIdentityBinding) -> None:
+    monkeypatch.setattr(hunter_pre_push.provenance, "load_binding", lambda *_a, **_k: (binding, ""))
+
+
+def _validate(repo: Path, local_ref: str, local_sha: str, remote_sha: str) -> None:
+    monkey_repo = hunter_pre_push.os.getcwd()
+    hunter_pre_push.os.chdir(repo)
+    try:
+        hunter_pre_push._validate_writer_provenance(
+            local_sha,
+            [(local_ref, local_sha, remote_sha)],
+        )
+    finally:
+        hunter_pre_push.os.chdir(monkey_repo)
+
+
+def test_issue_545_history_already_on_the_remote_is_not_re_governed(monkeypatch, publish_repo: Path) -> None:
+    """The Issue #545 false block: one new bound commit over remote history.
+
+    The destination ref already carries an unbound commit that predates it. The
+    fork point of the branch from a lagging ``origin/main`` reaches that commit,
+    so re-governing the fork-point range refuses a push that publishes only the
+    new, correctly signed commit.
+    """
+
+    _bind_publish_provenance(monkeypatch, _bound_binding())
+    remote_tip = _git(publish_repo, "rev-parse", "HEAD")
+    local_tip = _commit(publish_repo, "new authorized commit")
+
+    # The old behaviour: the fork point from a lagging origin/main still contains
+    # the unbound commit, so the governed range is inadmissible.
+    fork_point = _git(publish_repo, "merge-base", "HEAD", "origin/main")
+    assert _git(publish_repo, "rev-list", "--count", f"{fork_point}..HEAD") == "2"
+    assert hunter_pre_push.provenance.check_range(local_tip) is not None
+
+    # The behaviour Issue #545 asks for: only the published commit is governed.
+    assert _validate_publishes(publish_repo, remote_tip, local_tip) == (local_tip,)
+    _validate(publish_repo, "refs/heads/feature", local_tip, remote_tip)
+
+
+def _validate_publishes(repo: Path, remote_tip: str, local_tip: str) -> tuple[str, ...]:
+    published = _git(repo, "log", "--format=%H", f"{remote_tip}..{local_tip}").split()
+    return tuple(reversed(published))
+
+
+def test_issue_545_only_the_published_commits_are_evaluated(monkeypatch, publish_repo: Path) -> None:
+    """Requirement 3: the range evaluated is exactly ``remote_sha..local_sha``."""
+
+    _bind_publish_provenance(monkeypatch, _bound_binding())
+    remote_tip = _git(publish_repo, "rev-parse", "HEAD")
+    first = _commit(publish_repo, "first new commit")
+    second = _commit(publish_repo, "second new commit")
+
+    _validate(publish_repo, "refs/heads/feature", first, remote_tip)
+    _validate(publish_repo, "refs/heads/feature", second, first)
+    assert _validate_publishes(publish_repo, remote_tip, second) == (first, second)
+
+
+def test_issue_545_a_newly_introduced_unbound_commit_is_refused(monkeypatch, publish_repo: Path) -> None:
+    """Requirement 2: a bound remote tip does not launder an unbound new commit."""
+
+    _bind_publish_provenance(monkeypatch, _bound_binding())
+    remote_tip = _git(publish_repo, "rev-parse", "HEAD")
+    _commit(publish_repo, "unbound new commit", name="Claude", email="noreply@anthropic.com")
+
+    with pytest.raises(RuntimeError, match="authorization-bound writer identity"):
+        _validate(publish_repo, "refs/heads/feature", _git(publish_repo, "rev-parse", "HEAD"), remote_tip)
+
+
+def test_issue_545_a_new_ref_keeps_the_governed_base_and_fails_closed(monkeypatch, publish_repo: Path) -> None:
+    """Requirement 5: a zero remote SHA has no published range, so the fork point governs."""
+
+    _bind_publish_provenance(monkeypatch, _bound_binding())
+    local_tip = _git(publish_repo, "rev-parse", "HEAD")
+
+    recorded: list[str] = []
+
+    def _record(head: str, **_kwargs: object) -> None:
+        recorded.append(head)
+
+    monkeypatch.setattr(hunter_pre_push.provenance, "check_range", _record)
+    _validate(publish_repo, "refs/heads/brand-new", local_tip, hunter_pre_push.ZERO_SHA)
+    assert recorded == [local_tip]
+
+
+def test_issue_545_a_new_ref_fails_closed_when_the_fork_point_is_unavailable(monkeypatch, publish_repo: Path) -> None:
+    _bind_publish_provenance(monkeypatch, _bound_binding())
+    _git(publish_repo, "update-ref", "-d", "refs/remotes/origin/main")
+    local_tip = _git(publish_repo, "rev-parse", "HEAD")
+
+    with pytest.raises(RuntimeError, match="fork point"):
+        _validate(publish_repo, "refs/heads/brand-new", local_tip, hunter_pre_push.ZERO_SHA)
+
+
+def test_issue_545_a_non_fast_forward_update_is_refused(monkeypatch, publish_repo: Path) -> None:
+    """Requirement 6: a rewritten destination has no governed range to validate."""
+
+    _bind_publish_provenance(monkeypatch, _bound_binding())
+    first = _commit(publish_repo, "first")
+    second = _commit(publish_repo, "second")
+    _git(publish_repo, "reset", "-q", "--hard", first)
+
+    with pytest.raises(RuntimeError, match="rewrites published history"):
+        _validate(publish_repo, "refs/heads/feature", first, second)
+
+
+def test_issue_545_unreadable_remote_tip_fails_closed(monkeypatch, publish_repo: Path) -> None:
+    _bind_publish_provenance(monkeypatch, _bound_binding())
+    local_tip = _git(publish_repo, "rev-parse", "HEAD")
+
+    with pytest.raises(RuntimeError, match="could not be read"):
+        _validate(publish_repo, "refs/heads/feature", local_tip, "d" * 40)
+
+
+def test_issue_545_each_ref_update_is_evaluated_independently(monkeypatch, publish_repo: Path) -> None:
+    """Requirement 4: one ref's defect never excuses, and never is excused by, another."""
+
+    _bind_publish_provenance(monkeypatch, _bound_binding())
+    remote_tip = _git(publish_repo, "rev-parse", "HEAD")
+    good = _commit(publish_repo, "good commit")
+    bad = _commit(publish_repo, "unbound commit", name="Jules", email="jules@example.invalid")
+
+    ranges = [("refs/heads/one", good, remote_tip), ("refs/heads/two", bad, remote_tip)]
+    monkey_repo = os.getcwd()
+    hunter_pre_push.os.chdir(publish_repo)
+    try:
+        with pytest.raises(RuntimeError, match="refs/heads/two"):
+            hunter_pre_push._validate_writer_provenance(good, ranges)
+    finally:
+        hunter_pre_push.os.chdir(monkey_repo)
+
+    hunter_pre_push.os.chdir(publish_repo)
+    try:
+        hunter_pre_push._validate_writer_provenance(good, [("refs/heads/one", good, remote_tip)])
+    finally:
+        hunter_pre_push.os.chdir(monkey_repo)
+
+
+def test_issue_545_publish_range_reads_only_the_destination_ref() -> None:
+    """The parser keeps the remote SHA that Issue #545 depends on."""
+
+    lines = [
+        "refs/heads/feature " + "1" * 40 + " refs/heads/feature " + "2" * 40 + "\n",
+        "refs/tags/v1 " + "3" * 40 + " refs/tags/v1 " + hunter_pre_push.ZERO_SHA + "\n",
+        f"refs/heads/gone {hunter_pre_push.ZERO_SHA} refs/heads/gone " + "4" * 40 + "\n",
+    ]
+    assert hunter_pre_push._parse_publish_ranges(lines) == [
+        ("refs/heads/feature", "1" * 40, "2" * 40),
+        ("refs/tags/v1", "3" * 40, hunter_pre_push.ZERO_SHA),
+    ]
+    assert hunter_pre_push._parse_updates(lines) == [
+        ("refs/heads/feature", "1" * 40, "refs/heads/feature"),
+        ("refs/tags/v1", "3" * 40, "refs/tags/v1"),
+    ]
+
+
+def test_issue_545_check_publish_range_does_not_re_resolve_the_base(monkeypatch, publish_repo: Path) -> None:
+    """The publish base is the caller's remote SHA, never a re-derived fork point."""
+
+    monkeypatch.setattr(hunter_pre_push.provenance, "load_binding", lambda *_a, **_k: (_bound_binding(), ""))
+    monkeypatch.setattr(
+        hunter_pre_push.provenance,
+        "resolve_governed_base",
+        lambda *_a, **_k: (_ for _ in ()).throw(AssertionError("the fork point must not be re-derived")),
+    )
+    remote_tip = _git(publish_repo, "rev-parse", "HEAD")
+    local_tip = _commit(publish_repo, "new authorized commit")
+
+    monkey_repo = os.getcwd()
+    hunter_pre_push.os.chdir(publish_repo)
+    try:
+        assert hunter_pre_push.provenance.check_publish_range(remote_tip, local_tip) is None
+    finally:
+        hunter_pre_push.os.chdir(monkey_repo)
