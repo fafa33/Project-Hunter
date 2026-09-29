@@ -51,6 +51,15 @@ TRIGGER_SCHEMES = frozenset({"api", "github-pr-comment", "github-review-request"
 #: interpolated into an Actions API route, so a separator or traversal segment
 #: would address a different resource entirely.
 WORKFLOW_FILE_PATTERN = re.compile(r"[A-Za-z0-9._-]+\.ya?ml")
+#: A clear summary is admissible only if it *denies* a defect term. The
+#: production Gemini review of PR #541 -- "No security, correctness, or
+#: fail-closed defects identified." -- qualifies the defects it denies, so the
+#: qualifier run walks words; a summary that merely says "no" ("no way to tell
+#: whether the gate holds") still denies nothing, and the run may not carry its
+#: own negation, so "no not-blocking issues" is not a denial either.
+CLEAR_DENIAL = re.compile(
+    r"\bno (?!\b(?:not|non|never)\b)(?:[\w-]+(?:,?\s+[\w-]+)*)?\s*(?:findings|defects|issues|blockers)\b"
+)
 
 
 def external_verdict(payload: dict[str, Any]) -> str:
@@ -83,17 +92,77 @@ def external_verdict(payload: dict[str, Any]) -> str:
         return "blocking"
     if verdict == "clear":
         lower = summary.lower()
-        safe_clear = re.search(
-            r"\bno (?:substantive |remaining )?(?:blocking )?(?:findings|defects|issues|blockers)\b", lower
-        ) or re.search(
-            r"\bfound no (?:substantive |remaining )?(?:blocking )?(?:findings|defects|issues|blockers)\b", lower
-        )
         dangerous = re.search(
-            r"\b(?:critical|unsafe|vulnerabilit|blocking (?:finding|defect|issue)|must fix|exploit)\b", lower
+            r"\b(?:critical|unsafe|vulnerabilit|exploit\w*|blocking (?:finding|defect|issue)|must fix)\b", lower
         )
-        if not safe_clear or dangerous:
+        if not CLEAR_DENIAL.search(lower) or dangerous:
             return "unavailable"
     return verdict
+
+
+#: A provider error body is read only far enough to recognise a small error
+#: envelope, and only its ``error`` fields are ever retained. The collector
+#: publishes this summary in a public review comment, so it must never carry a
+#: body, a request header, or anything credential-shaped the provider echoed.
+PROVIDER_ERROR_BODY_LIMIT = 4096
+PROVIDER_ERROR_DETAIL_LIMIT = 160
+PROVIDER_ERROR_SECRETS = re.compile(
+    r"(?i)\bbearer\s+\S+"
+    r"|\b(?:x-)?(?:api[-_]?key|authorization|access[-_]?token|token|secret)\b\s*[:=]\s*\S+"
+    r"|\b(?:gsk|xai|sk|ghp|github_pat)[-_][A-Za-z0-9_-]{6,}"
+    r"|\bAIza[A-Za-z0-9_-]{10,}"
+    r"|\b[A-Za-z0-9_-]{40,}\b"
+)
+#: Closed, ordered causes, most specific first. A status alone cannot separate an
+#: unusable key from a model this account may not call, a spent quota, and a
+#: request the provider refuses.
+PROVIDER_ERROR_CAUSES = (
+    ("model_access", "model"),
+    ("quota_or_account", "quota|rate_?limit|billing|credit|insufficient|usage|suspend|deactivat|account"),
+    ("authentication_or_permission", "auth|api[-_ ]?key|credential|unauthori|forbidden|permission|access|denied"),
+    ("malformed_request", "invalid|malformed|unsupported|validation|parameter|payload|too_?long|filter"),
+)
+
+
+def provider_http_error_summary(provider: str, exc: urllib.error.HTTPError, secret: str) -> str:
+    """Name the cause of a provider HTTP failure without echoing anything secret.
+
+    "groq HTTP 403" is indistinguishable between an unusable key, a model the
+    account may not use, an exhausted quota and a request Groq will not accept,
+    and the collector records permanent unavailability from it, so the cause has
+    to survive. Only a bounded slice of the error envelope is parsed, only its
+    known scalar fields are kept, and every fragment is redacted. Headers and the
+    reason phrase are never read: the API key and bearer token live there.
+    """
+
+    def detail(value: Any) -> str:
+        if not isinstance(value, (str, int)) or isinstance(value, bool):
+            return ""
+        text = " ".join(str(value).split()).replace(secret, "[redacted]")
+        text = PROVIDER_ERROR_SECRETS.sub("[redacted]", text)
+        return "".join(character for character in text if character.isprintable())[:PROVIDER_ERROR_DETAIL_LIMIT]
+
+    try:
+        envelope = json.loads(exc.read(PROVIDER_ERROR_BODY_LIMIT) or b"")
+    except Exception:
+        envelope = None
+    if not isinstance(envelope, dict):
+        return f"{provider} HTTP {exc.code}"
+    error = envelope.get("error")
+    fields = error if isinstance(error, dict) else envelope
+    # The machine-readable fields outrank the free text, so a generic
+    # ``invalid_request_error`` never masks a specific ``model_not_found``.
+    parts = [detail(fields.get(name)) for name in ("code", "status", "type")]
+    message = detail(fields.get("message"))
+    cause = next(
+        (name for name, pattern in PROVIDER_ERROR_CAUSES if any(re.search(pattern, part, re.I) for part in parts)),
+        "unspecified",
+    )
+    if cause == "unspecified":
+        cause = next((name for name, pattern in PROVIDER_ERROR_CAUSES if re.search(pattern, message, re.I)), cause)
+    # A numeric provider code only repeats the status this summary already carries.
+    kept = " ".join(part for part in (*parts, message) if part and not part.isdigit())
+    return f"{provider} HTTP {exc.code} [{cause}]{f': {kept}' if kept else ''}"
 
 
 def configuration_digest(pool: dict[str, Any]) -> str:
@@ -700,7 +769,7 @@ class GitHubBackend:
                 raw = response.read(LIMIT + 1)
         except urllib.error.HTTPError as exc:
             if exc.code in {401, 403, 408, 413, 429, 500, 502, 503, 504}:
-                return {"verdict": "unavailable", "summary": f"{provider} HTTP {exc.code}"}
+                return {"verdict": "unavailable", "summary": provider_http_error_summary(provider, exc, key)}
             raise
         except (TimeoutError, urllib.error.URLError):
             return {"verdict": "unavailable", "summary": f"{provider} transport unavailable"}
