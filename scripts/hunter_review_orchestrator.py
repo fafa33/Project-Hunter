@@ -852,6 +852,15 @@ class ReviewRequestReadiness(NamedTuple):
 #: existing. Deleting the block is a strictly narrowing change.
 REVIEW_OPPORTUNITY_MIGRATION_IDENTITIES = frozenset({("fafa33/Project-Hunter", 535)})
 
+#: ``read_head_pre_ready_review`` states that mean a review request is committed
+#: for this exact head but can never be dispatched as it stands. Both are terminal
+#: for that head: the request is a committed artifact, so it cannot resolve
+#: itself, and swallowing either one makes reconcile exit successfully with no
+#: reviewer ever dispatched. "absent" and "unavailable" are deliberately not here
+#: -- nothing is committed yet, or trusted GitHub evidence is transiently
+#: unreadable -- so both keep the ordinary retryable path.
+TERMINAL_REQUEST_STATES = frozenset({"present", "invalid"})
+
 
 def _review_opportunity_migration(repository: str, pr_number: int) -> bool:
     """Whether this pull request is the trusted root-of-trust migration identity."""
@@ -961,9 +970,17 @@ def ensure_current(repository: str, token: str, pr_number: int) -> ReviewCycle |
                 f"request committed for it; reconcile will start orchestration as soon as one is."
             )
         # The migration identity's prerequisite is the request itself, so a
-        # request that is present but unusable is terminal for this head too and
-        # is reported rather than swallowed.
-        if readiness.prerequisite_state == "present":
+        # request that exists for this head but cannot be used is terminal and is
+        # reported rather than swallowed. That covers a committed request that is
+        # present but unusable AND a request that is present-but-unreadable
+        # ("invalid"): both are a committed artifact of this exact head that will
+        # never become dispatchable on its own. Reporting only "present" let an
+        # "invalid" request return None, so reconcile exited successfully and the
+        # head silently stalled with no reviewer ever dispatched. "absent" stays
+        # retryable (nothing is committed yet) and "unavailable" stays retryable
+        # (trusted GitHub evidence is transiently unreadable); neither is a defect
+        # in the head.
+        if readiness.prerequisite_state in TERMINAL_REQUEST_STATES:
             raise ReviewRequestBlocked(
                 f"exact-head review orchestration cannot start for PR #{pr_number} at {head_sha[:10]}: "
                 f"{readiness.reason}. This head carries a pre-ready review request that is not usable for it; "

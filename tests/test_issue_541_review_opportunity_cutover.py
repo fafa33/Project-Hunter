@@ -10,6 +10,8 @@ These tests cover the changed trusted boundary only.
 
 from __future__ import annotations
 
+import sys
+
 import hunter_review_orchestrator as orchestrator
 import pytest
 
@@ -26,6 +28,34 @@ def _ago_minutes(minutes: int) -> str:
     return (datetime.now(UTC) - timedelta(minutes=minutes)).strftime("%Y-%m-%dT%H:%M:%SZ")
 
 
+#: Shared parametrize scaffolding. Declaring the cases once keeps the repeated
+#: `[(pytest.param(...), ...)]` boilerplate out of every decorated test, which is
+#: the only remaining duplicated shape in this file.
+def _cases(*specs):
+    """`[(pytest.param(*values, id=name), ...)]` from `(*values, name)` specs."""
+
+    return [pytest.param(*values[:-1], id=values[-1]) for values in specs]
+
+
+def _stub(monkeypatch, target, **stubs):
+    """Patch several attributes of one module in a single call.
+
+    Every test reaches the orchestrator and the governance module through
+    repeated `monkeypatch.setattr(<module>, ...)` blocks; routing them through
+    one helper keeps that the only place the pattern appears.
+    """
+
+    for name, value in stubs.items():
+        monkeypatch.setattr(target, name, value, raising=False)
+    return target
+
+
+def _stub_governance(monkeypatch, **stubs):
+    """Patch the trusted governance module in one call."""
+
+    return _stub(monkeypatch, _governance(), **stubs)
+
+
 def _governance():
     import hunter_governance_review_v2 as governance
 
@@ -35,35 +65,27 @@ def _governance():
 def _admission_blocked_unknown_key(monkeypatch, state="failure"):
     """Candidate Admission fails on an unverified pre-push ingress signature."""
 
-    governance = _governance()
-    monkeypatch.setattr(
-        governance,
-        "read_trusted_upgrade_status",
-        lambda *_args, **_kwargs: (
+    return _stub_governance(
+        monkeypatch,
+        read_trusted_upgrade_status=lambda *_args, **_kwargs: (
             state,
             "Candidate admission blocked: commit a87bc81ab4 has no verified pre-push ingress signature (reason=unknown_key).",
         ),
-        raising=False,
     )
-    return governance
 
 
 def _request_valid_for_this_head(monkeypatch, *, valid=True, state="present"):
-    governance = _governance()
     document = {"review_request": {"schema": "hunter.review-request.v1", "claims_id": "c" * 64}}
-    if state == "present":
-        monkeypatch.setattr(
-            governance, "read_head_pre_ready_review", lambda *_args: ("present", document, None), raising=False
-        )
-    else:
-        monkeypatch.setattr(
-            governance, "read_head_pre_ready_review", lambda *_args: (state, None, "absent"), raising=False
-        )
-    monkeypatch.setattr(
-        governance,
-        "valid_current_review_request",
-        lambda *_args: (valid, "the pre-ready hostile review describes different content than this candidate head"),
-        raising=False,
+    reader = (
+        (lambda *_args: ("present", document, None)) if state == "present" else (lambda *_args: (state, None, "absent"))
+    )
+    _stub_governance(
+        monkeypatch,
+        read_head_pre_ready_review=reader,
+        valid_current_review_request=lambda *_args: (
+            valid,
+            "the pre-ready hostile review describes different content than this candidate head",
+        ),
     )
     return document
 
@@ -77,40 +99,73 @@ def _open_pr(monkeypatch, head=HEAD, draft=False):
     )
 
 
+def _dispatched_nothing(stored):
+    """No cycle published and no reviewer capacity spent on this head."""
+
+    assert stored["cycle"] is None
+    assert stored["dispatches"] == 0
+    return True
+
+
+def _blocked_migration_candidate(monkeypatch, *, request_state="present", valid=True, draft=False, head=HEAD):
+    """Arm the migration identity as an admission-blocked candidate at an exact head.
+
+    Admission stays blocked on an unverified ingress signature, the pull request
+    is open at `head`, and the collector is armed so any dispatch is observable.
+    """
+
+    _admission_blocked_unknown_key(monkeypatch)
+    _open_pr(monkeypatch, head=head, draft=draft)
+    _request_valid_for_this_head(monkeypatch, valid=valid, state=request_state)
+    return _collector(monkeypatch)
+
+
 def _collector(monkeypatch):
+    """Arm the collector boundary so any dispatch is observable."""
+
     stored = {"cycle": None, "dispatches": 0}
-    monkeypatch.setattr(
+    _stub(
+        monkeypatch,
         orchestrator,
-        "read_cycle",
-        lambda *_args: ("present", stored["cycle"], None) if stored["cycle"] else ("absent", None, None),
-        raising=False,
+        read_cycle=lambda *_a: ("present", stored["cycle"], None) if stored["cycle"] else ("absent", None, None),
+        reviewer_pool_config_digest=lambda: "d" * 64,
+        current_run_id=lambda: 555,
+        publish_cycle=lambda *_a, cycle: stored.update(cycle=cycle),
+        collector_liveness=lambda *_a: ("missing", 0),
+        dispatch_collector=lambda *_a: stored.update(dispatches=stored["dispatches"] + 1),
+        current_remediation_generation=lambda *_a: "gen-1",
     )
-    monkeypatch.setattr(orchestrator, "reviewer_pool_config_digest", lambda: "d" * 64, raising=False)
-    monkeypatch.setattr(orchestrator, "current_run_id", lambda: 555, raising=False)
-    monkeypatch.setattr(orchestrator, "publish_cycle", lambda *_args, cycle: stored.update(cycle=cycle), raising=False)
-    monkeypatch.setattr(orchestrator, "collector_liveness", lambda *_args: ("missing", 0), raising=False)
-    monkeypatch.setattr(
-        orchestrator,
-        "dispatch_collector",
-        lambda *_args: stored.update(dispatches=stored["dispatches"] + 1),
-        raising=False,
-    )
-    monkeypatch.setattr(orchestrator, "current_remediation_generation", lambda *_args: "gen-1", raising=False)
     return stored
 
 
 # --- 1. the migration identity does get Review Opportunity -------------------
 
 
-def test_admission_blocked_migration_candidate_receives_review_opportunity(monkeypatch):
-    """Requirement 1: a candidate blocked from admission can still earn review."""
+@pytest.mark.parametrize(
+    ("repository", "pr_number", "preflight"),
+    _cases(
+        (MIGRATION_REPOSITORY, MIGRATION_PR, "failure", "migration-identity-admission-blocked"),
+        (ORDINARY_REPOSITORY, ORDINARY_PR, "success", "ordinary-pr-preflight-passed"),
+    ),
+)
+def test_valid_request_starts_exactly_one_cycle(monkeypatch, repository, pr_number, preflight):
+    """Requirements 1 and 10: a request that binds this exact head dispatches the
+    collector once.
 
-    _admission_blocked_unknown_key(monkeypatch)
-    _open_pr(monkeypatch)
-    _request_valid_for_this_head(monkeypatch)
-    stored = _collector(monkeypatch)
+    Both paths reach the same outcome by different gates -- the migration
+    identity reaches it with admission blocked, the ordinary path reaches it
+    with the preflight satisfied -- so the expectation is asserted once.
+    """
 
-    cycle = orchestrator.ensure_current(MIGRATION_REPOSITORY, "token", MIGRATION_PR)
+    if pr_number == MIGRATION_PR:
+        stored = _blocked_migration_candidate(monkeypatch)
+    else:
+        _admission_blocked_unknown_key(monkeypatch, state=preflight)
+        _open_pr(monkeypatch)
+        _request_valid_for_this_head(monkeypatch)
+        stored = _collector(monkeypatch)
+
+    cycle = orchestrator.ensure_current(repository, "token", pr_number)
 
     assert cycle is not None
     assert cycle.head_sha == HEAD
@@ -126,10 +181,9 @@ def test_migration_candidate_remains_candidate_admission_failure(monkeypatch):
 
     governance = _admission_blocked_unknown_key(monkeypatch)
     unverified = "a87bc81ab4" + "0" * 30
-    monkeypatch.setattr(
-        governance,
-        "read_pr_commits",
-        lambda *_args, **_kwargs: (
+    _stub_governance(
+        monkeypatch,
+        read_pr_commits=lambda *_a, **_k: (
             True,
             [
                 {"sha": unverified, "commit": {"verification": {"verified": False, "reason": "unknown_key"}}},
@@ -137,25 +191,11 @@ def test_migration_candidate_remains_candidate_admission_failure(monkeypatch):
             ],
             None,
         ),
-        raising=False,
-    )
-    monkeypatch.setattr(
-        governance,
-        "read_commits_beyond_attestation_floor",
-        lambda *_args, **_kwargs: (True, frozenset({unverified, HEAD}), None),
-        raising=False,
-    )
-    monkeypatch.setattr(
-        governance,
-        "read_pr_changed_files",
-        lambda *_args, **_kwargs: (True, [{"path": "scripts/x.py", "status": "modified"}], None),
-        raising=False,
-    )
-    monkeypatch.setattr(
-        governance,
-        "verify_connector_ingress_authorization",
-        lambda *_args, **_kwargs: type("V", (), {"ok": True, "message": "", "origin": False})(),
-        raising=False,
+        read_commits_beyond_attestation_floor=lambda *_a, **_k: (True, frozenset({unverified, HEAD}), None),
+        read_pr_changed_files=lambda *_a, **_k: (True, [{"path": "scripts/x.py", "status": "modified"}], None),
+        verify_connector_ingress_authorization=lambda *_a, **_k: type(
+            "V", (), {"ok": True, "message": "", "origin": False}
+        )(),
     )
 
     verdict, reason = governance.verify_code_write_ingress_provenance(MIGRATION_REPOSITORY, "token", HEAD, MIGRATION_PR)
@@ -247,10 +287,7 @@ def test_no_environment_or_injected_claim_can_activate_the_cutover(monkeypatch, 
     assert orchestrator._review_opportunity_migration(MIGRATION_REPOSITORY, 1) is False
     assert orchestrator._review_opportunity_migration(MIGRATION_REPOSITORY, 999) is False
     # And the ordinary path still requires the preflight under the same sweep.
-    _admission_blocked_unknown_key(monkeypatch)
-    _open_pr(monkeypatch)
-    _request_valid_for_this_head(monkeypatch)
-    stored = _collector(monkeypatch)
+    stored = _blocked_migration_candidate(monkeypatch)
     assert orchestrator.ensure_current(ORDINARY_REPOSITORY, "token", ORDINARY_PR) is None
     assert stored["dispatches"] == 0
 
@@ -258,30 +295,38 @@ def test_no_environment_or_injected_claim_can_activate_the_cutover(monkeypatch, 
 # --- 6/7/8. evidence and exact-head binding --------------------------------
 
 
-def test_candidate_authored_review_evidence_creates_no_authority(monkeypatch):
-    """Requirement 6: a self-issued request whose claims do not re-derive from
-    trusted state cannot start a review."""
+@pytest.mark.parametrize(
+    ("request_state", "valid", "head"),
+    _cases(
+        ("present", False, HEAD, "self-issued-request"),
+        ("invalid", None, HEAD, "unreadable-request"),
+    ),
+)
+def test_unusable_request_creates_no_authority(monkeypatch, request_state, valid, head):
+    """Requirements 6 and the P2 fix: a request that exists for this head but
+    cannot be dispatched as it stands is terminal and spends no capacity.
 
-    _admission_blocked_unknown_key(monkeypatch)
-    _open_pr(monkeypatch)
-    _request_valid_for_this_head(monkeypatch, valid=False)
-    stored = _collector(monkeypatch)
+    A self-issued request whose claims do not re-derive from trusted state, and a
+    committed request that is not readable JSON, are the same defect from the
+    orchestrator's point of view: the head cannot resolve it by waiting.
+    """
+
+    kwargs = {"request_state": request_state, "head": head}
+    if valid is not None:
+        kwargs["valid"] = valid
+    stored = _blocked_migration_candidate(monkeypatch, **kwargs)
 
     with pytest.raises(orchestrator.ReviewRequestBlocked):
         orchestrator.ensure_current(MIGRATION_REPOSITORY, "token", MIGRATION_PR)
 
-    assert stored["cycle"] is None
-    assert stored["dispatches"] == 0
+    assert _dispatched_nothing(stored)
 
 
 def test_stale_head_review_evidence_remains_invalid(monkeypatch):
     """Requirement 7: a request that does not bind the current exact head is
     still refused, even for the migration identity."""
 
-    _admission_blocked_unknown_key(monkeypatch)
-    _open_pr(monkeypatch, head="d" * 40)
-    _request_valid_for_this_head(monkeypatch, valid=False)
-    stored = _collector(monkeypatch)
+    stored = _blocked_migration_candidate(monkeypatch, head="d" * 40, valid=False)
     stored["cycle"] = orchestrator.ReviewCycle(
         pr_number=MIGRATION_PR,
         head_sha="b" * 40,
@@ -318,70 +363,23 @@ def test_exact_head_binding_remains_mandatory(monkeypatch):
 # --- 9. draft stays safe ----------------------------------------------------
 
 
-def test_draft_migration_pr_gets_no_review_authority(monkeypatch):
-    """Requirement 9: the migration identity does not leak into Draft."""
-
-    _admission_blocked_unknown_key(monkeypatch)
-    _open_pr(monkeypatch, draft=True)
-    _request_valid_for_this_head(monkeypatch)
-    stored = _collector(monkeypatch)
-
-    assert orchestrator.ensure_current(MIGRATION_REPOSITORY, "token", MIGRATION_PR) is None
-    assert stored["cycle"] is None
-    assert stored["dispatches"] == 0
-
-
 # --- 10. ordinary behaviour is untouched -----------------------------------
 
 
 def test_ordinary_pr_still_requires_the_trusted_preflight(monkeypatch):
     """Requirement 10: outside the migration identity nothing changes."""
 
-    _admission_blocked_unknown_key(monkeypatch)
-    _open_pr(monkeypatch)
-    _request_valid_for_this_head(monkeypatch)
-    stored = _collector(monkeypatch)
+    stored = _blocked_migration_candidate(monkeypatch)
 
     assert orchestrator.ensure_current(ORDINARY_REPOSITORY, "token", ORDINARY_PR) is None
-    assert stored["cycle"] is None
-    assert stored["dispatches"] == 0
+    assert _dispatched_nothing(stored)
 
     readiness = orchestrator.review_request_state(ORDINARY_REPOSITORY, "token", ORDINARY_PR, HEAD)
     assert readiness.ready is False
     assert readiness.prerequisite_state == "failure"
 
 
-def test_ordinary_pr_behaves_identically_when_preflight_succeeds(monkeypatch):
-    """Requirement 10, positive side: the ordinary path is unchanged."""
-
-    _admission_blocked_unknown_key(monkeypatch, state="success")
-    _open_pr(monkeypatch)
-    _request_valid_for_this_head(monkeypatch)
-    stored = _collector(monkeypatch)
-
-    cycle = orchestrator.ensure_current(ORDINARY_REPOSITORY, "token", ORDINARY_PR)
-
-    assert cycle is not None
-    assert stored["dispatches"] == 1
-
-
 # --- 11. the cutover cannot outlive its purpose ----------------------------
-
-
-def test_removing_the_migration_identity_narrows_and_never_widens(monkeypatch):
-    """Requirement 11: with the identity gone the ordinary gate is back, and the
-    migration candidate is refused exactly as any other would be."""
-
-    _admission_blocked_unknown_key(monkeypatch)
-    _open_pr(monkeypatch)
-    _request_valid_for_this_head(monkeypatch)
-    stored = _collector(monkeypatch)
-
-    monkeypatch.setattr(orchestrator, "REVIEW_OPPORTUNITY_MIGRATION_IDENTITIES", frozenset(), raising=False)
-
-    assert orchestrator.ensure_current(MIGRATION_REPOSITORY, "token", MIGRATION_PR) is None
-    assert stored["cycle"] is None
-    assert stored["dispatches"] == 0
 
 
 def test_cutover_grants_no_admission_surface_in_the_orchestrator():
@@ -405,3 +403,64 @@ def test_cutover_grants_no_admission_surface_in_the_orchestrator():
     # The only governance surface the cutover removes is the preflight read that
     # gated review; admission still reads it directly.
     assert source.count("read_trusted_upgrade_status") == 1
+
+
+# --- 9. draft stays safe / identity is only a temporary widening -------------
+
+
+@pytest.mark.parametrize(
+    ("draft", "drop_identity", "why"),
+    _cases(
+        (True, False, "draft", "draft-pr"),
+        (False, True, "identity-removed", "identity-removed-narrows"),
+    ),
+)
+def test_migration_grants_nothing_where_it_must_not(monkeypatch, draft, drop_identity, why):
+    """Requirement 9 and 11: Draft never gains authority, and once the migration
+    identity is gone the candidate is refused exactly as any other would be.
+
+    Both are the same observable outcome -- no cycle, no dispatch -- reached by
+    different gates, so they are asserted together rather than twice.
+    """
+
+    stored = _blocked_migration_candidate(monkeypatch, draft=draft)
+    if drop_identity:
+        monkeypatch.setattr(orchestrator, "REVIEW_OPPORTUNITY_MIGRATION_IDENTITIES", frozenset(), raising=False)
+
+    assert orchestrator.ensure_current(MIGRATION_REPOSITORY, "token", MIGRATION_PR) is None, why
+    assert _dispatched_nothing(stored)
+
+
+# --- Codex P2: a committed-but-unusable request is terminal ------------------
+#
+# read_head_pre_ready_review() can report "invalid" when the committed request
+# is not readable JSON. The migration path propagated that state straight into
+# prerequisite_state, and ensure_current() only raised for "present", so an
+# invalid request returned None: reconcile exited successfully and this head
+# silently stalled with no reviewer ever dispatched.
+
+
+@pytest.mark.parametrize(
+    "request_state",
+    _cases(("absent", "nothing-committed-yet"), ("unavailable", "transient-github-evidence")),
+)
+def test_absent_or_unavailable_migration_request_stays_retryable(monkeypatch, request_state):
+    """The benign states keep the ordinary retry path: no block, no dispatch."""
+
+    stored = _blocked_migration_candidate(monkeypatch, request_state=request_state)
+
+    assert orchestrator.ensure_current(MIGRATION_REPOSITORY, "token", MIGRATION_PR) is None
+    assert _dispatched_nothing(stored)
+    # A retryable wait must not be reported as a red reconcile.
+    monkeypatch.setattr(
+        sys, "argv", ["orchestrator", "ensure", "--repository", MIGRATION_REPOSITORY, "--pr", str(MIGRATION_PR)]
+    )
+    assert orchestrator.main() == 0
+
+
+def test_terminal_request_states_exclude_the_retryable_ones():
+    """The classification is explicit, so a future state cannot fall through."""
+
+    assert orchestrator.TERMINAL_REQUEST_STATES == frozenset({"present", "invalid"})
+    for benign in ("absent", "unavailable"):
+        assert benign not in orchestrator.TERMINAL_REQUEST_STATES
