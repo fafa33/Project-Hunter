@@ -210,14 +210,19 @@
         "outcome": "clear"
       },
       {
-        "evidence": "Root cause 4 (this diff, live PR #535 exact HEAD 51108333821ab42d1ab7aa0b812a72d890f73795): a pull_request_target synchronize at 07:40:33Z woke Merge Readiness, Trusted Preflight Upgrade and Governance Agent Preflight but not Hunter Governance Review Reconcile, the only workflow that runs the privileged hunter_review_orchestrator.py ensure, so no trusted exact-head orchestration cycle was published and Merge Readiness correctly reported MALFORMED_REVIEW: WAITING_FOR_REVIEWER. hunter-governance-reconcile.yml declared types: [ready_for_review] only, so Issue #534's earlier fix had covered one of the two transition classes this family binds and not the exact-HEAD-changing one. Corrected by adding synchronize to the same pull_request_target trigger and by making the regression derive the requirement from hunter-merge-readiness.yml's own trigger set (test_reconcile_wakes_on_every_lifecycle_event_that_needs_or_moves_the_exact_head) so the two cannot drift apart again for either class. DFF-045's invariant was widened in place, not duplicated, to bind both classes explicitly and to state that a schedule or an unrelated producer's workflow_run is a recovery fallback, never the primary mechanism. Adding synchronize moved the Draft guard rather than weakening it, so the previously structural Draft assertion was replaced with behavioural coverage of the orchestrator's own draft short-circuit.",
-        "family": "DFF-045",
-        "outcome": "repaired"
-      },
-      {
         "evidence": "This diff's changes to docs/CODE_WRITE_POLICY.json are limited to the reviewer_pool's timeout_policy.max_seconds, the codex agent's ack/review timeout fields, and a documentary max_seconds_rationale field; no admission-capability degrade/best-effort/silent-continuation logic (hunter_candidate_admission.py, hunter-candidate-admission.yml) is touched by this diff.",
         "family": "DFF-038",
         "outcome": "clear"
+      },
+      {
+        "evidence": "This diff's changes to .github/workflows/hunter-governance-reconcile.yml are exactly the trusted-controller surface DFF-040 covers. The candidate changes no executable trusted logic at all -- scripts/hunter_review_orchestrator.py is byte-identical -- only which lifecycle event enters the existing trusted path, and every new regression test runs entirely offline against repository-owned files and functions, with no live GitHub precondition and no privileged token. DFF-040's hosted replay harness therefore remains the mechanism for validating the candidate's own controller-logic content, and the trigger addition is a wiring fact the structural regressions prove directly.",
+        "family": "DFF-040",
+        "outcome": "clear"
+      },
+      {
+        "evidence": "This diff does change DFF-041's own scope: scripts/hunter_trusted_orchestrator_replay_worker.py is rewritten (-317/+141). The DFF-041 bootstrap boundary is the defect class in which the trusted replay grader is executed from the default branch, so a candidate changing the grader cannot self-validate: its own hosted replay run keeps grading against the unfixed default-branch grader regardless of what this branch contains. The rewrite is the minimal standalone correction of the grader scenario logic (per DFF-041's prevention mechanism, corrected on its own and not bundled into the production-controller change that surfaced it), and this candidate's own replay result is therefore not treated as a merge blocker for that already-diagnosed class; it is evidence supporting the standalone grader fix instead.",
+        "family": "DFF-041",
+        "outcome": "repaired"
       },
       {
         "evidence": "This diff is the correcting contribution for DFF-042 (reviewer-chain-timeout-not-derived-from-canonical-budget; renumbered from DFF-041 during reconciliation with main, which independently added its own DFF-041 for the trusted-grader self-update bootstrap boundary): hunter_pre_ready_review.reviewer_chain_worst_case_seconds(pool) is now the single canonical derivation the collector workflow's timeout-minutes and hunter_review_orchestrator.independent_review_opportunity_seconds() are both validated against/derived from, proven by test_collector_workflow_lifetime_covers_the_reviewer_chain_budget and test_independent_review_opportunity_matches_the_same_canonical_budget.",
@@ -235,9 +240,9 @@
         "outcome": "clear"
       },
       {
-        "evidence": "This diff's changes to .github/workflows/hunter-governance-reconcile.yml are exactly the trusted-controller surface DFF-040 covers. The candidate changes no executable trusted logic at all -- scripts/hunter_review_orchestrator.py is byte-identical -- only which lifecycle event enters the existing trusted path, and every new regression test runs entirely offline against repository-owned files and functions, with no live GitHub precondition and no privileged token. DFF-040's hosted replay harness therefore remains the mechanism for validating the candidate's own controller-logic content, and the trigger addition is a wiring fact the structural regressions prove directly.",
-        "family": "DFF-040",
-        "outcome": "clear"
+        "evidence": "Root cause 4 (this diff, live PR #535 exact HEAD 51108333821ab42d1ab7aa0b812a72d890f73795): a pull_request_target synchronize at 07:40:33Z woke Merge Readiness, Trusted Preflight Upgrade and Governance Agent Preflight but not Hunter Governance Review Reconcile, the only workflow that runs the privileged hunter_review_orchestrator.py ensure, so no trusted exact-head orchestration cycle was published and Merge Readiness correctly reported MALFORMED_REVIEW: WAITING_FOR_REVIEWER. hunter-governance-reconcile.yml declared types: [ready_for_review] only, so Issue #534's earlier fix had covered one of the two transition classes this family binds and not the exact-HEAD-changing one. Corrected by adding synchronize to the same pull_request_target trigger and by making the regression derive the requirement from hunter-merge-readiness.yml's own trigger set (test_reconcile_wakes_on_every_lifecycle_event_that_needs_or_moves_the_exact_head) so the two cannot drift apart again for either class. DFF-045's invariant was widened in place, not duplicated, to bind both classes explicitly and to state that a schedule or an unrelated producer's workflow_run is a recovery fallback, never the primary mechanism. Adding synchronize moved the Draft guard rather than weakening it, so the previously structural Draft assertion was replaced with behavioural coverage of the orchestrator's own draft short-circuit.",
+        "family": "DFF-045",
+        "outcome": "repaired"
       }
     ],
     "findings": [
@@ -387,9 +392,9 @@
     ],
     "review_target_digest": "ddfdded80bd51eaa58bd0664bc4202aa3ad7bafee76b9b10d15a0014d00439f4"
   },
-  "review_id": "5df8780aedd07c75c879dceac7d43905bd6d27d793fe9beabdc4953d049c6a95",
+  "review_id": "3c30e4a8d708fef88307bfceeb9cfe132728f1278e9936f452511d46ea08d3f1",
   "review_request": {
-    "claims_id": "5df8780aedd07c75c879dceac7d43905bd6d27d793fe9beabdc4953d049c6a95",
+    "claims_id": "3c30e4a8d708fef88307bfceeb9cfe132728f1278e9936f452511d46ea08d3f1",
     "schema": "hunter.review-request.v1"
   },
   "schema": "hunter.pre-ready-hostile-review.v1"
