@@ -47,6 +47,7 @@ COLLECTOR_LIVENESS_GRACE_SECONDS = 180
 INDEPENDENT_REVIEW_OPPORTUNITY_SECONDS = 15 * 60
 TERMINAL_NONBLOCKING_STATES = frozenset({"REVIEW_TIMED_OUT", "REVIEWER_UNAVAILABLE", "POOL_EXHAUSTED"})
 PENDING_STATES = frozenset({"WAITING_FOR_REVIEWER", "REVIEW_IN_PROGRESS", "FAILOVER_IN_PROGRESS", "POOL_EXHAUSTED"})
+
 #: Issue #461 / PR #473: an exact-head cycle whose reviewers were all exhausted
 #: used to be the end of the line. Remediating the blocking findings it produced
 #: could never start another review of the same immutable head, so the candidate
@@ -381,6 +382,26 @@ def _run_id(target_url: str) -> int | None:
 
 
 def _parse_cycle(status: dict[str, Any], pr_number: int, head_sha: str) -> ReviewCycle | None:
+    # Provenance of the cycle payload.
+    #
+    # A commit status is only as trustworthy as the account that posted it, and
+    # the context, description and target_url are all caller-controlled, so the
+    # publisher must be authenticated before any of them is believed. That check
+    # is strictly required: there is no creator-less path, no age-based or
+    # status-age authentication, and no caller-controlled target_url standing in
+    # for provenance.
+    #
+    # The strict form used to be impossible, which is why a creator-less fallback
+    # was introduced and then hardened twice. The actual cause was the reading
+    # endpoint, not the publisher: `read_cycle` read the combined status endpoint,
+    # which reports `creator: null` for every status including trusted workflow
+    # posts. It now reads the status list endpoint, which carries the real
+    # publisher, so the strict check stands on its own and the derivation path is
+    # gone. See `read_cycle` for the live evidence.
+    #
+    # `read_cycle` remains the outer bound: it independently re-fetches the run
+    # the status cites and requires it to be on the default branch and to come from
+    # a trusted governance workflow.
     if str((status.get("creator") or {}).get("login") or "") != TRUSTED_STATUS_CREATOR:
         return None
     if str(status.get("context") or "") != f"{CONTEXT_PREFIX}{pr_number}":
@@ -420,8 +441,21 @@ def read_cycle(
     if current_head != head_sha:
         return "superseded", None, f"current head is {current_head or 'unavailable'}"
 
-    combined = request_json(repository, token, "GET", f"commits/{head_sha}/status")
-    statuses = combined.get("statuses", []) if isinstance(combined, dict) else []
+    # Provenance-sensitive status reading uses the status LIST endpoint, not the
+    # combined endpoint. `GET /commits/{sha}/status` returns every status with
+    # `creator: null`, while `GET /commits/{sha}/statuses?per_page=100` returns the
+    # same status objects with the real publisher populated. Verified live on this
+    # repository: for one identical status id the combined endpoint reported
+    # `creator: null` while the list endpoint reported `github-actions[bot]`. The
+    # combined endpoint simply does not carry the publisher, so a creator check
+    # read from it can never be satisfied -- which is what previously forced a
+    # creator-less fallback that trusted a caller-controlled payload. Reading the
+    # list endpoint restores a real authenticated publisher and lets the strict
+    # check in `_parse_cycle` stand on its own. Only the latest statuses are
+    # listed, and the context, description, digest, generation and cited run are
+    # all still re-verified below and in `_parse_cycle`.
+    listed = request_json(repository, token, "GET", f"commits/{head_sha}/statuses?per_page=100")
+    statuses = listed if isinstance(listed, list) else []
     repository_info = request_json(repository, token, "GET", "")
     default_branch = str((repository_info or {}).get("default_branch") or "main")
     for status in statuses:
