@@ -267,6 +267,7 @@
       "scripts/hunter_defect_prevention_preflight.py",
       "scripts/hunter_connector_write_ingress.py",
       "scripts/hunter_governance_review_v2.py",
+      "scripts/hunter_governance_revision.py",
       "scripts/hunter_governance_review/",
       "scripts/hunter_governance_preflight.py",
       "scripts/hunter_candidate_admission.py",
