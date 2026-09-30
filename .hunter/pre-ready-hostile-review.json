@@ -82,7 +82,7 @@
       "transaction-snapshot-consistency"
     ],
     "base_ref": "main",
-    "base_sha": "191d2ca7a9d13ba1a3534e4d361ec8fdaa4d4c91",
+    "base_sha": "bc9de0f8c49bcbe82567d60d1d41747922724a77",
     "defect_families": [
       {
         "evidence": "No caller-supplied authorization/replay surface is touched by this diff.",
@@ -295,13 +295,13 @@
     "issue": "534",
     "review_target": [
       {
-        "blob_sha": "4d6ec4e9a5308623c096aea481b1f56fad42bf12",
+        "blob_sha": "f087803e410c3ab82e3b80d5597d8981bc4f31c6",
         "path": ".github/workflows/hunter-governance-reconcile.yml",
         "previous_path": "",
         "status": "modified"
       },
       {
-        "blob_sha": "67d263d34fb9e09b3e2dce23f2a2800350a28fbf",
+        "blob_sha": "7561b9c4d886d54a189ac74ccfcb0cb89b4b15a3",
         "path": ".github/workflows/hunter-reviewer-collector.yml",
         "previous_path": "",
         "status": "modified"
@@ -313,14 +313,8 @@
         "status": "modified"
       },
       {
-        "blob_sha": "ddd85a844602223cdb522e15ebeaa4cae8295ebb",
+        "blob_sha": "19d3024f3685e8087314b24aa1e14f3d76e9ef06",
         "path": "docs/DEFECT_REGISTRY.json",
-        "previous_path": "",
-        "status": "modified"
-      },
-      {
-        "blob_sha": "71c202c115709bf20259cd14bdc3746ba2260051",
-        "path": "scripts/hunter_merge_readiness_v2.py",
         "previous_path": "",
         "status": "modified"
       },
@@ -337,8 +331,20 @@
         "status": "modified"
       },
       {
-        "blob_sha": "c26aa98049cfb98c527c0ecfa5b92952b36a2261",
+        "blob_sha": "0e7dfedd387629b7e7977f75128ef27afbb0ba9f",
         "path": "scripts/hunter_review_orchestrator.py",
+        "previous_path": "",
+        "status": "modified"
+      },
+      {
+        "blob_sha": "4b214288632282f48c8254dab7ca882744cd780a",
+        "path": "scripts/hunter_reviewer_collector.py",
+        "previous_path": "",
+        "status": "modified"
+      },
+      {
+        "blob_sha": "1d8d3cb0136f991737f322d7eedf993ca2aa42a2",
+        "path": "scripts/hunter_trusted_orchestrator_replay_worker.py",
         "previous_path": "",
         "status": "modified"
       },
@@ -349,7 +355,7 @@
         "status": "modified"
       },
       {
-        "blob_sha": "68a04e91d41de55d41bfcb045b5078768599c88b",
+        "blob_sha": "3f0367a7e9cf6a88a53e5bf501d8eb79c3fba0b6",
         "path": "tests/test_exact_head_review_authority.py",
         "previous_path": "",
         "status": "modified"
@@ -361,13 +367,13 @@
         "status": "modified"
       },
       {
-        "blob_sha": "474c45b53b6260db64f8c1f8e63be4e788a5acb5",
+        "blob_sha": "458b127b12b5dc068aa21e965775151877b1342d",
         "path": "tests/test_hunter_review_orchestrator.py",
         "previous_path": "",
         "status": "modified"
       },
       {
-        "blob_sha": "d480c8b3d8748d3867cb3b8014e487fbded7ba2f",
+        "blob_sha": "b92b3b948fb556958f8e6f754e6199df60f02c93",
         "path": "tests/test_hunter_reviewer_collector.py",
         "previous_path": "",
         "status": "modified"
@@ -379,11 +385,11 @@
         "status": "modified"
       }
     ],
-    "review_target_digest": "2813e7296d29adf647152a71446a4c2bf9afbffa9c51c50532bf5b302ee88c28"
+    "review_target_digest": "ddfdded80bd51eaa58bd0664bc4202aa3ad7bafee76b9b10d15a0014d00439f4"
   },
-  "review_id": "c8323ce857474f503edede58dc1ab8b906c4c82e2ed1b998c609c0f502f0a545",
+  "review_id": "5df8780aedd07c75c879dceac7d43905bd6d27d793fe9beabdc4953d049c6a95",
   "review_request": {
-    "claims_id": "c8323ce857474f503edede58dc1ab8b906c4c82e2ed1b998c609c0f502f0a545",
+    "claims_id": "5df8780aedd07c75c879dceac7d43905bd6d27d793fe9beabdc4953d049c6a95",
     "schema": "hunter.review-request.v1"
   },
   "schema": "hunter.pre-ready-hostile-review.v1"
