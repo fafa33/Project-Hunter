@@ -58,7 +58,7 @@
       "transaction-snapshot-consistency"
     ],
     "base_ref": "main",
-    "base_sha": "bc9de0f8c49bcbe82567d60d1d41747922724a77",
+    "base_sha": "6882933981e4dfb52e13192fea034a7fff29ab30",
     "defect_families": [
       {
         "evidence": "A scope must match the trusted Issue and mode, is bound to the evaluated exact head from trusted evidence (hunter_pre_ready_review.py:1163), and any claimed criterion outside the authorized set is refused, so an authorization cannot be replayed onto a different Issue, mode, head, or wider criteria set.",
@@ -192,7 +192,7 @@
         "id": "F-1",
         "resolution": "resolved",
         "resolution_evidence": {
-          "correction": "07e55e3fd25e20bb9c911901c964b84328d1aef3",
+          "correction": "c4ef18eb965f4d4fda7fb3c16c1deba7dab99fff",
           "regression_test": "tests/test_scoped_acceptance_coverage.py"
         },
         "severity": "non-blocking"
@@ -207,7 +207,7 @@
         "status": "added"
       },
       {
-        "blob_sha": "5a61e4736bcfbd0850551b862be928eab03cf729",
+        "blob_sha": "a434738679c5ada51146443aa58b5a2364c92278",
         "path": "docs/CODE_WRITE_POLICY.json",
         "previous_path": "",
         "status": "modified"
@@ -237,11 +237,11 @@
         "status": "modified"
       }
     ],
-    "review_target_digest": "4a16f3a9c695f2b924b9426c281fb9f0be3fe85288662830abb623eef4367fe4"
+    "review_target_digest": "fedb702db248d8e37c694e7a75f5fd762031f71472201c7eb4a17ff65f1f3bba"
   },
-  "review_id": "8cbb2279910f0d781ca7285009636092626faee91971f26c5ec1fa81c5338db4",
+  "review_id": "78796d79a22b486b1083b0b43795298511567ffc3d4bd6d14b76472243299f69",
   "review_request": {
-    "claims_id": "8cbb2279910f0d781ca7285009636092626faee91971f26c5ec1fa81c5338db4",
+    "claims_id": "78796d79a22b486b1083b0b43795298511567ffc3d4bd6d14b76472243299f69",
     "schema": "hunter.review-request.v1"
   },
   "schema": "hunter.pre-ready-hostile-review.v1"
