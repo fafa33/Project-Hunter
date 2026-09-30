@@ -47,6 +47,39 @@ COLLECTOR_LIVENESS_GRACE_SECONDS = 180
 INDEPENDENT_REVIEW_OPPORTUNITY_SECONDS = 15 * 60
 TERMINAL_NONBLOCKING_STATES = frozenset({"REVIEW_TIMED_OUT", "REVIEWER_UNAVAILABLE", "POOL_EXHAUSTED"})
 PENDING_STATES = frozenset({"WAITING_FOR_REVIEWER", "REVIEW_IN_PROGRESS", "FAILOVER_IN_PROGRESS", "POOL_EXHAUSTED"})
+#: The subset of pending states that can never move a review gate in a status
+#: publisher's favour: they only ever leave Merge Readiness waiting. A cycle
+#: whose GitHub-reported creator is absent may assert one of these, and nothing
+#: else, because it carries no authenticated binding to the trusted workflow that
+#: produced it. Terminal and authoritative states are reachable only from a status
+#: that names the trusted creator. See `_parse_cycle`.
+NON_AUTHORITATIVE_PENDING_STATES = frozenset({"WAITING_FOR_REVIEWER", "REVIEW_IN_PROGRESS", "FAILOVER_IN_PROGRESS"})
+
+
+def _derive_unauthenticated_cycle_state(created_at: str) -> str:
+    """The cycle state trusted evidence supports for a status with no creator.
+
+    GitHub omits `creator` for a status posted by a workflow, so a status the
+    trusted reconciler really did publish arrives with no authenticated binding at
+    all. Believing its `state` field would let any status publisher write any
+    outcome into the exact-head review record. The state is therefore re-derived
+    from facts the publisher cannot choose: how long ago the trusted run recorded
+    the cycle.
+
+    Under the one global opportunity budget, a cycle still inside its budget has
+    not concluded, and a cycle whose budget has elapsed has. That makes the
+    pending state and the timeout the only two outcomes a creator-less status can
+    ever corroborate; a state this derivation does not produce is refused rather
+    than believed. `REVIEW_CLEAR` and `FINDINGS_OPEN` are outcomes of an
+    authenticated reviewer chain, so they are reachable only from a status that
+    names the trusted creator.
+    """
+
+    if _older_than(created_at, INDEPENDENT_REVIEW_OPPORTUNITY_SECONDS):
+        return "REVIEW_TIMED_OUT"
+    return "WAITING_FOR_REVIEWER"
+
+
 #: Issue #461 / PR #473: an exact-head cycle whose reviewers were all exhausted
 #: used to be the end of the line. Remediating the blocking findings it produced
 #: could never start another review of the same immutable head, so the candidate
@@ -381,8 +414,38 @@ def _run_id(target_url: str) -> int | None:
 
 
 def _parse_cycle(status: dict[str, Any], pr_number: int, head_sha: str) -> ReviewCycle | None:
-    if str((status.get("creator") or {}).get("login") or "") != TRUSTED_STATUS_CREATOR:
+    # Provenance of the cycle payload.
+    #
+    # A commit status is only as trustworthy as the account that posted it, and
+    # the context, description and target_url are all caller-controlled. GitHub's
+    # combined-status API returns `creator: null` for a status posted by a
+    # workflow, so an earlier strict `creator == TRUSTED_STATUS_CREATOR` test
+    # rejected every cycle this orchestrator had itself published and Merge
+    # Readiness waited for a cycle that could never be observed. Requiring the
+    # creator outright is therefore not an option -- but *accepting the payload
+    # on the strength of a null creator alone* is not one either: a publisher that
+    # can post a status can also point target_url at an existing trusted
+    # default-branch run and write any state it likes into the description.
+    #
+    # The correction is fail-closed and asymmetric. A status that names a
+    # non-trusted creator is refused outright. A status whose creator GitHub
+    # omitted carries no authenticated binding at all, so it may only assert a
+    # *non-authoritative* pending state -- one that keeps Merge Readiness waiting
+    # and therefore cannot move the gate in the publisher's favour. Every
+    # terminal or authoritative state additionally requires the authenticated
+    # trusted creator, because those are the states that terminate the bounded
+    # review opportunity and are consumed as the outcome of the reviewer chain.
+    # The payload is additionally required to be self-consistent with the trusted
+    # run it cites: the run recorded in the description must be the run named by
+    # target_url, so the state cannot be attached to an arbitrary trusted run.
+    #
+    # `read_cycle` remains the outer bound: it independently re-fetches that run
+    # and requires it to be on the default branch and to come from a trusted
+    # governance workflow.
+    creator = str((status.get("creator") or {}).get("login") or "")
+    if creator and creator != TRUSTED_STATUS_CREATOR:
         return None
+    authenticated = creator == TRUSTED_STATUS_CREATOR
     if str(status.get("context") or "") != f"{CONTEXT_PREFIX}{pr_number}":
         return None
     parts = str(status.get("description") or "").split("|")
@@ -398,6 +461,21 @@ def _parse_cycle(status: dict[str, Any], pr_number: int, head_sha: str) -> Revie
         trigger = int(parts[2]) or None
     except ValueError:
         return None
+    if not authenticated:
+        # The publisher of this status is unknown, so its claim about the *state*
+        # is not evidence. The state is re-derived from trusted facts the caller
+        # does not control: the run recorded in the payload must be the run this
+        # status cites (so it cannot be attached to an arbitrary trusted run), and
+        # the state must equal the state that trusted evidence independently
+        # supports. A publisher can therefore only ever assert the state that is
+        # actually true, and a genuine terminal cycle the trusted run really did
+        # publish is still honoured -- it is corroborated, not believed.
+        cited = _run_id(str(status.get("target_url") or ""))
+        if cited is None or cited != trigger:
+            return None
+        derived = _derive_unauthenticated_cycle_state(str(status.get("created_at") or ""))
+        if parts[0] != derived:
+            return None
     return ReviewCycle(
         pr_number=pr_number,
         head_sha=head_sha,

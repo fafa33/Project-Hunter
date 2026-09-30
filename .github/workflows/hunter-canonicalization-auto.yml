@@ -29,7 +29,15 @@ env:
 
 jobs:
   canonicalize:
-    runs-on: [self-hosted, macOS]
+    # Standard GitHub-hosted Apple Silicon macOS. This job installs the project
+    # with --only-binary, so it needs an arm64 wheel: cryptography 50.0.0 -- the
+    # version the project pins -- ships macOS wheels for arm64 only. The
+    # self-hosted Mac (hunter-reviewer) is Intel x86_64, where no cryptography
+    # 50.x macOS wheel exists for any Python version, so dependency resolution
+    # there could not succeed without changing the pin or allowing a source
+    # build. Both are excluded. The self-hosted Mac is retained for
+    # hunter-local-reviewer.yml, which runs local models and needs it.
+    runs-on: macos-15
     timeout-minutes: 10
     steps:
       - name: Checkout trusted default branch
@@ -66,7 +74,9 @@ jobs:
         if: steps.engine.outputs.available == 'true'
         uses: actions/setup-python@v6
         with:
-          python-version: "3.11"
+          # 3.12 is the version this job is validated against. The pinned
+          # cryptography 50.0.0 arm64 wheel is cp311-abi3, which covers 3.11+.
+          python-version: "3.12"
           cache: pip
       - name: Install trusted canonicalization engine
         if: steps.engine.outputs.available == 'true'

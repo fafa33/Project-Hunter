@@ -591,3 +591,59 @@ def test_capture_reviewer_findings_never_promotes_validation_state() -> None:
     assert "classification" not in entry
     assert "resolution_state" not in entry
     assert "mapped_defect_id" not in entry
+
+
+def test_canonicalization_runs_on_hosted_arm64_macos():
+    """Canonicalization needs an arm64 wheel and must not run on the x86_64 Mac.
+
+    The project pins cryptography 50.0.0, which ships macOS wheels for arm64
+    only. The self-hosted `hunter-reviewer` Mac is Intel x86_64, where no
+    cryptography 50.x macOS wheel exists for any Python version, and the job
+    installs with --only-binary, so dependency resolution there cannot succeed
+    without changing the pin or allowing a source build. The job therefore runs
+    on a standard GitHub-hosted Apple Silicon macOS runner, with the pinned
+    interpreter provisioned the normal way.
+    """
+
+    import yaml
+
+    root = Path(__file__).resolve().parents[1]
+    path = root / ".github" / "workflows" / "hunter-canonicalization-auto.yml"
+    workflow = yaml.safe_load(path.read_text())
+    source = path.read_text()
+
+    job = workflow["jobs"]["canonicalize"]
+
+    # A standard hosted Apple Silicon macOS label, not the self-hosted Intel Mac.
+    assert job["runs-on"] == "macos-15"
+
+    steps = job["steps"]
+    setup = next(s for s in steps if s.get("name") == "Set up Python")
+    assert str(setup.get("uses", "")).startswith("actions/setup-python")
+    assert (setup.get("with") or {}).get("python-version") == "3.12"
+    assert (setup.get("with") or {}).get("cache") == "pip"
+
+    # The self-hosted Mac is retained for the local-reviewer workflow, which
+    # actually needs it, so this change is scoped to canonicalization alone.
+    local_reviewer = (root / ".github" / "workflows" / "hunter-local-reviewer.yml").read_text()
+    assert "self-hosted" in local_reviewer
+
+    # No machine-specific path assumption remains in executable lines.
+    executable = "\n".join(line for line in source.splitlines() if not line.lstrip().startswith("#"))
+    assert "/Users/" not in executable
+    assert "farhadafshari" not in executable
+    assert "hunter-reviewer" not in executable
+
+
+def test_cryptography_pin_is_unchanged():
+    """The dependency that forced the runner change must not be relaxed."""
+
+    import tomllib
+
+    root = Path(__file__).resolve().parents[1]
+    pyproject = tomllib.loads((root / "pyproject.toml").read_text())
+    deps = [d for d in pyproject["project"]["dependencies"] if d.lower().startswith("cryptography")]
+    assert deps == ["cryptography>=50.0.0,<51"], deps
+
+    constraints = (root / "requirements" / "ci-constraints.txt").read_text()
+    assert "cryptography==50.0.0" in constraints

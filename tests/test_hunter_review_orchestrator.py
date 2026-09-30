@@ -1161,3 +1161,187 @@ def test_dispatch_identity_and_timestamp_are_durable_before_dispatch(monkeypatch
     assert published[0].trigger_id == 777
     assert published[0].started_at
     assert orchestrator._older_than(published[0].started_at, orchestrator.COLLECTOR_LIVENESS_GRACE_SECONDS) is False
+
+
+# --- PR #547: a completed, exhausted reviewer chain must end the opportunity ---
+#
+# The exact-head cycle status this orchestrator publishes carries no `creator`
+# field in GitHub's combined-status response, so `_parse_cycle` rejected it,
+# `read_cycle` reported "absent", and Merge Readiness reported
+# WAITING_FOR_REVIEWER forever -- including after a collector completed with
+# Codex NO_ACK_TIMEOUT, Copilot REVIEW_TIMEOUT and Gemini/Groq
+# PROVIDER_UNAVAILABLE. An exhausted chain must terminate the opportunity.
+
+
+def _exhausted_cycle_status(creator, context, description):
+    status = {"context": context, "description": description, "created_at": "2026-09-30T10:39:31Z"}
+    if creator is not None:
+        status["creator"] = {"login": creator}
+    return status
+
+
+def test_exhausted_provider_chain_terminates_the_opportunity(monkeypatch):
+    """Codex NO_ACK_TIMEOUT -> Copilot REVIEW_TIMEOUT -> Gemini/Groq
+    PROVIDER_UNAVAILABLE -> collector complete -> reconcile must produce a
+    terminal state, never an indefinite WAITING_FOR_REVIEWER."""
+
+    stored = {"published": []}
+    monkeypatch.setattr(
+        orchestrator,
+        "read_cycle",
+        lambda *_args: (
+            "present",
+            orchestrator.ReviewCycle(
+                pr_number=472,
+                head_sha=HEAD,
+                state="WAITING_FOR_REVIEWER",
+                provider_id="",
+                trigger_id=36703742750,
+                started_at="2026-09-30T10:00:00Z",
+                config_digest=orchestrator.reviewer_pool_config_digest(),
+                generation_id="gen-1",
+            ),
+            None,
+        ),
+        raising=False,
+    )
+    monkeypatch.setattr(orchestrator, "collector_needs_dispatch", lambda *_args: False, raising=False)
+    monkeypatch.setattr(
+        orchestrator,
+        "publish_cycle",
+        lambda *_a, cycle: stored["published"].append(cycle),
+        raising=False,
+    )
+
+    cycle = orchestrator.ensure_collector("owner/repo", "token", 472, HEAD, "gen-1")
+
+    # The opportunity terminates, and it terminates as a non-blocking terminal
+    # state that grants no review authority.
+    assert cycle.state != "WAITING_FOR_REVIEWER"
+    assert cycle.state in orchestrator.TERMINAL_NONBLOCKING_STATES
+    assert stored["published"] and stored["published"][-1].state == cycle.state
+    # A terminal non-blocking state is published as a non-pending status.
+    assert cycle.state in orchestrator.TERMINAL_NONBLOCKING_STATES
+
+
+# --- Codex P1: a status with no reported creator is not, by itself, a binding.
+#
+# context, description and target_url are all caller-controlled. A publisher who
+# can post a status can cite an existing trusted default-branch run in target_url
+# and write any cycle state into the description. So `creator == null` may only
+# assert a non-authoritative pending state, and the run recorded in the payload
+# must be the very run target_url names.
+
+# --- Codex P1: creator=null must be supported, by DERIVING the state ---------
+#
+# GitHub omits `creator` for a workflow-posted status, so the trusted reconciler's
+# own cycle arrives unbound. Believing its `state` would let any status publisher
+# write any outcome into the exact-head review record. The state is instead
+# re-derived from trusted facts the publisher cannot choose.
+
+CYCLE_CTX = f"{orchestrator.CONTEXT_PREFIX}472"
+GEN = "e4a1e847caf03a75"
+RUN_ID = 36710945665
+RUN_URL = f"https://github.com/owner/repo/actions/runs/{RUN_ID}"
+FRESH = "2999-01-01T00:00:00Z"  # well inside the opportunity budget
+EXPIRED = "2000-01-01T00:00:00Z"  # long past it
+
+
+def _status(creator, description, created_at=FRESH, target_url=RUN_URL, context=CYCLE_CTX):
+    status = {"context": context, "description": description, "created_at": created_at, "target_url": target_url}
+    if creator:
+        status["creator"] = {"login": creator}
+    return status
+
+
+def _desc(state, provider="", trigger=RUN_ID, generation=GEN, digest=None):
+    return f"{state}|{provider}|{trigger}|{digest or ('d' * 64)}|{generation}"
+
+
+def test_creator_null_authentic_pending_cycle_is_accepted():
+    """Requirement: a genuine trusted cycle inside its budget is honoured."""
+
+    parsed = orchestrator._parse_cycle(_status(None, _desc("WAITING_FOR_REVIEWER")), 472, HEAD)
+
+    assert parsed is not None
+    assert parsed.state == "WAITING_FOR_REVIEWER"
+    assert parsed.trigger_id == RUN_ID
+
+
+def test_creator_null_authentic_expired_opportunity_is_accepted_as_timeout():
+    """Requirements 1-3: a terminal state the trusted run really did publish,
+    past the budget, is corroborated by derivation and accepted."""
+
+    parsed = orchestrator._parse_cycle(_status(None, _desc("REVIEW_TIMED_OUT"), created_at=EXPIRED), 472, HEAD)
+
+    assert parsed is not None
+    assert parsed.state == "REVIEW_TIMED_OUT"
+    assert parsed.state in orchestrator.TERMINAL_NONBLOCKING_STATES
+
+
+def test_creator_null_forged_terminal_state_is_rejected():
+    """Requirement 4: a publisher cannot claim a state the derivation does not
+    support -- a timeout before the budget elapsed, or an authenticated-only
+    outcome, beside a genuinely valid trusted run URL."""
+
+    # timeout claimed while the cycle is still inside its budget
+    assert orchestrator._parse_cycle(_status(None, _desc("REVIEW_TIMED_OUT"), created_at=FRESH), 472, HEAD) is None
+    # authenticated-only outcomes are never corroborated
+    for state in ("REVIEW_CLEAR", "FINDINGS_OPEN", "POOL_EXHAUSTED", "REVIEWER_UNAVAILABLE"):
+        assert orchestrator._parse_cycle(_status(None, _desc(state), created_at=EXPIRED), 472, HEAD) is None
+
+
+def test_creator_null_state_attached_to_an_unrelated_trusted_run_is_rejected():
+    """Requirement 4, bound half: the run in the payload must be the run cited."""
+
+    assert orchestrator._parse_cycle(_status(None, _desc("WAITING_FOR_REVIEWER", trigger=999999999)), 472, HEAD) is None
+
+
+def test_creator_null_head_mismatch_is_rejected():
+    """Requirement 5: exact-head binding is unaffected."""
+
+    assert orchestrator._parse_cycle(_status(None, _desc("WAITING_FOR_REVIEWER")), 473, HEAD) is None
+
+
+def test_creator_null_pr_and_generation_mismatch_are_rejected():
+    """Requirement 6: a different pull request, or a malformed generation, fails."""
+
+    assert (
+        orchestrator._parse_cycle(
+            _status(None, _desc("WAITING_FOR_REVIEWER"), context=f"{orchestrator.CONTEXT_PREFIX}999"), 472, HEAD
+        )
+        is None
+    )
+    assert (
+        orchestrator._parse_cycle(
+            _status(None, _desc("WAITING_FOR_REVIEWER", generation="not-a-generation")), 472, HEAD
+        )
+        is None
+    )
+
+
+def test_creator_present_trusted_path_is_unchanged():
+    """Requirement 7: the authenticated publisher keeps every state, including
+    the ones no derivation can corroborate."""
+
+    for state in ("WAITING_FOR_REVIEWER", "REVIEW_CLEAR", "FINDINGS_OPEN", "POOL_EXHAUSTED", "REVIEW_TIMED_OUT"):
+        parsed = orchestrator._parse_cycle(
+            _status("github-actions[bot]", _desc(state, trigger=999999999), created_at=EXPIRED), 472, HEAD
+        )
+        assert parsed is not None, state
+        assert parsed.state == state
+
+
+def test_creator_present_wrong_actor_is_rejected():
+    """Requirement 8: a named non-trusted creator is refused, on a pending state
+    too, so the check is proven independently of the derivation."""
+
+    assert orchestrator._parse_cycle(_status("attacker", _desc("REVIEW_CLEAR")), 472, HEAD) is None
+    assert orchestrator._parse_cycle(_status("attacker", _desc("WAITING_FOR_REVIEWER")), 472, HEAD) is None
+
+
+def test_derived_state_is_a_pure_function_of_trusted_age():
+    """The derivation never reads the payload's state."""
+
+    assert orchestrator._derive_unauthenticated_cycle_state(FRESH) == "WAITING_FOR_REVIEWER"
+    assert orchestrator._derive_unauthenticated_cycle_state(EXPIRED) == "REVIEW_TIMED_OUT"

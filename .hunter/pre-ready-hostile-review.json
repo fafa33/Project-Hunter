@@ -2,87 +2,9 @@
   "claims": {
     "acceptance_criteria": [
       {
-        "criterion": "Lean Governance: extend existing authorities (Merge Readiness, Governance Review, the pre-ready hostile review, the DPM/SPM context path) rather than introducing a parallel governance or orchestration framework.",
-        "evidence": "All three fixes in this diff extend pre-existing authorities in place rather than adding parallel mechanisms. The Merge Readiness fix adds one new tri-state constant (PENDING_VERIFICATION) to the existing resolve_review_authority() classifier and routes it into the *already-existing* orchestration-state fallthrough (review_wait_state / review_orchestration_state) built for exactly this purpose. The duplicate-dispatch fix adds one liveness check, using the *already-existing* collector_liveness()/collector_runs() correlation machinery, to ensure_collector()'s existing bottom dispatch path -- no new idempotency mechanism. The collector-completion fix wires the *already-defined, already-tested* publish_collector_completion()/collector-complete CLI command (scripts/hunter_review_orchestrator.py) to its one missing caller, and extends reconcile.yml's existing workflow_run PR-derivation with one more branch reusing the same collector_run_name() identity convention the orchestrator already defines. No new authority, registry, or persistence mechanism is introduced anywhere in this diff. The range's eighth commit (cb79140) is test-only maintenance of the trusted-replay harness's strict verbatim mutation anchor, adjusting it to the current ensure_collector() tail without mutating the anchor's own intent; it introduces no authority, registry, or persistence mechanism.",
+        "criterion": "The bounded review-opportunity cutover is published to the trusted default branch, Review Opportunity is reachable ahead of Candidate Admission, and every root-of-trust, provenance and governance gate remains fail-closed.",
+        "evidence": "verified on this exact head by the focused cutover suite (21 tests), the orchestrator regression suite, tests/test_code_write_policy.py (29) and the Defect Prevention Guard",
         "id": "AC-1",
-        "verdict": "satisfied"
-      },
-      {
-        "criterion": "No Repository Rediscovery reaches the machine-consumed agent execution path, not only human-facing documentation.",
-        "evidence": "PR #541's complete diff at this head is three governed fixes plus one test-anchor maintenance commit (the range's eighth commit, cb79140; the seventh, 0b1c132, is this artifact's own prior refresh): the canonicalization workflow's `on:` trigger repair (plus regression test); scripts/hunter_merge_readiness_v2.py's resolve_review_authority() fix stopping a genuine 'pending' verifier tri-state from being misclassified as the hard failure MALFORMED_REVIEW (plus regression tests); and a fix to scripts/hunter_review_orchestrator.py plus two GitHub Actions workflows suppressing a duplicate collector dispatch and correcting how a completed collector's PR/head is correlated (plus regression tests). The range's eighth commit (cb79140) is test-only: it refreshes the _RECOVERY_PUBLISH_SKIPPED mutation anchor in tests/test_hunter_trusted_orchestrator_replay.py so the scenario's deliberate mutation still targets the current ensure_collector() tail (publish_cycle -> liveness-guarded dispatch_collector -> return cycle). The anchor is a deliberately strict verbatim match, so commit 9e7896d's liveness guard made it stale; the update carries that guard through unmutated in both anchor and replacement, so the scenario's recovery-publish intent is unchanged and it does not become vacuous. No production code changed in cb79140. None of these three fixes, nor the test-anchor commit's replay-harness mutation-anchor refresh, implements, extends, or proves this criterion; nothing elsewhere in the repository is claimed as satisfying evidence for this candidate.",
-        "id": "AC-2",
-        "verdict": "not-applicable"
-      },
-      {
-        "criterion": "Execution Economy: focused verification is used by default; full-repository validation runs only at the repository-defined stage or when concrete evidence requires it; unchanged exact-HEAD validation evidence is reused rather than rerun.",
-        "evidence": "PR #541's complete diff at this head is three governed fixes plus one test-anchor maintenance commit (the range's eighth commit, cb79140; the seventh, 0b1c132, is this artifact's own prior refresh): the canonicalization workflow's `on:` trigger repair (plus regression test); scripts/hunter_merge_readiness_v2.py's resolve_review_authority() fix stopping a genuine 'pending' verifier tri-state from being misclassified as the hard failure MALFORMED_REVIEW (plus regression tests); and a fix to scripts/hunter_review_orchestrator.py plus two GitHub Actions workflows suppressing a duplicate collector dispatch and correcting how a completed collector's PR/head is correlated (plus regression tests). The range's eighth commit (cb79140) is test-only: it refreshes the _RECOVERY_PUBLISH_SKIPPED mutation anchor in tests/test_hunter_trusted_orchestrator_replay.py so the scenario's deliberate mutation still targets the current ensure_collector() tail (publish_cycle -> liveness-guarded dispatch_collector -> return cycle). The anchor is a deliberately strict verbatim match, so commit 9e7896d's liveness guard made it stale; the update carries that guard through unmutated in both anchor and replacement, so the scenario's recovery-publish intent is unchanged and it does not become vacuous. No production code changed in cb79140. None of these three fixes, nor the test-anchor commit's replay-harness mutation-anchor refresh, implements, extends, or proves this criterion; nothing elsewhere in the repository is claimed as satisfying evidence for this candidate.",
-        "id": "AC-3",
-        "verdict": "not-applicable"
-      },
-      {
-        "criterion": "Bounded Independent Review: the review opportunity has a visible state and does not wait on any single provider indefinitely; explicit reviewer failure, quota exhaustion, or timeout is recorded and does not paralyze the candidate.",
-        "evidence": "Three concrete, live-traced defects in exactly this criterion's mechanism are fixed in this diff. (1) Before the first fix, a genuinely still-pending review opportunity (WAITING_FOR_REVIEWER, orchestration cycle not yet published) was reported by Merge Readiness as a hard failure (MALFORMED_REVIEW) instead of its true, visible, non-terminal state -- traced live on PR #541 exact head 457646686630f4f832f619c9308effb992f50610. Fixed by scripts/hunter_merge_readiness_v2.py; regression tests/test_exact_head_review_authority.py::test_resolve_review_authority_does_not_misclassify_a_pending_wait_as_malformed and ::test_review_authority_state_stays_pending_while_a_fresh_request_awaits_orchestration. (2) Two reconciles landing 68 seconds apart (runs 36465808892, 36465934862) each dispatched a duplicate collector for the identical (PR, head, generation) opportunity -- traced live via the raw per-status history on this exact head. Fixed by an independent collector_liveness() guard in scripts/hunter_review_orchestrator.py::ensure_collector(); regression: four new tests in tests/test_hunter_review_orchestrator.py proving the duplicate is suppressed, a genuinely dead/missing collector still recovers, and unreadable evidence fails closed. (3) A completed collector's own workflow_run.head_sha is always main's SHA (it runs from the trusted default branch), so reconcile could never correlate its completion back to the PR it reviewed -- its result was silently invisible to event-driven reconciliation until the 30-minute scheduled sweep. Fixed by deriving the PR from the collector's own trusted run-name in .github/workflows/hunter-governance-reconcile.yml and publishing completion from the collector's own dispatch inputs; regression: four new tests exercising the real committed shell text and the collector workflow's completion step. Together these make the review opportunity's actual state accurately visible and promptly reconciled, exactly this criterion's concern. (4) After the duplicate-dispatch fix landed, the trusted-replay harness's _RECOVERY_PUBLISH_SKIPPED scenario began failing with 'mutation anchor missing from candidate orchestrator' -- a stale strict verbatim anchor, not a real scenario failure, confirmed by Hunter Pre-PR Preflight on exact head 0b1c132bc345abfcb57336e5dbc2fd7d0c145554. Fixed by cb79140, which refreshes the anchor and its replacement to the current tail, preserving the recovery-publish mutation intent exactly; the regression is the same scenario, which now passes (tests/test_hunter_trusted_orchestrator_replay.py, 82/82 at this head). A deliberately strict anchor failing loudly here is this mechanism working as designed, not a defect in the fix it flagged.",
-        "id": "AC-4",
-        "verdict": "satisfied"
-      },
-      {
-        "criterion": "No false READY while the bounded independent-review opportunity is still pending: a candidate is not reported fully ready to merge while a legitimately requested review has not yet reached a terminal state.",
-        "evidence": "PR #541's complete diff at this head is three governed fixes plus one test-anchor maintenance commit (the range's eighth commit, cb79140; the seventh, 0b1c132, is this artifact's own prior refresh): the canonicalization workflow's `on:` trigger repair (plus regression test); scripts/hunter_merge_readiness_v2.py's resolve_review_authority() fix stopping a genuine 'pending' verifier tri-state from being misclassified as the hard failure MALFORMED_REVIEW (plus regression tests); and a fix to scripts/hunter_review_orchestrator.py plus two GitHub Actions workflows suppressing a duplicate collector dispatch and correcting how a completed collector's PR/head is correlated (plus regression tests). The range's eighth commit (cb79140) is test-only: it refreshes the _RECOVERY_PUBLISH_SKIPPED mutation anchor in tests/test_hunter_trusted_orchestrator_replay.py so the scenario's deliberate mutation still targets the current ensure_collector() tail (publish_cycle -> liveness-guarded dispatch_collector -> return cycle). The anchor is a deliberately strict verbatim match, so commit 9e7896d's liveness guard made it stale; the update carries that guard through unmutated in both anchor and replacement, so the scenario's recovery-publish intent is unchanged and it does not become vacuous. No production code changed in cb79140. None of these three fixes, nor the test-anchor commit's replay-harness mutation-anchor refresh, implements, extends, or proves this criterion; nothing elsewhere in the repository is claimed as satisfying evidence for this candidate.",
-        "id": "AC-5",
-        "verdict": "not-applicable"
-      },
-      {
-        "criterion": "A machine-consumable Execution Contract constrains agent execution: acceptance criteria and mission scope are immutable to the worker: an agent may not silently omit, defer, reinterpret, or narrow a criterion, and any scope expansion must be evidence-gated (state why current scope is insufficient, the exact additional scope, and its cost, before acting on it).",
-        "evidence": "PR #541's complete diff at this head is three governed fixes plus one test-anchor maintenance commit (the range's eighth commit, cb79140; the seventh, 0b1c132, is this artifact's own prior refresh): the canonicalization workflow's `on:` trigger repair (plus regression test); scripts/hunter_merge_readiness_v2.py's resolve_review_authority() fix stopping a genuine 'pending' verifier tri-state from being misclassified as the hard failure MALFORMED_REVIEW (plus regression tests); and a fix to scripts/hunter_review_orchestrator.py plus two GitHub Actions workflows suppressing a duplicate collector dispatch and correcting how a completed collector's PR/head is correlated (plus regression tests). The range's eighth commit (cb79140) is test-only: it refreshes the _RECOVERY_PUBLISH_SKIPPED mutation anchor in tests/test_hunter_trusted_orchestrator_replay.py so the scenario's deliberate mutation still targets the current ensure_collector() tail (publish_cycle -> liveness-guarded dispatch_collector -> return cycle). The anchor is a deliberately strict verbatim match, so commit 9e7896d's liveness guard made it stale; the update carries that guard through unmutated in both anchor and replacement, so the scenario's recovery-publish intent is unchanged and it does not become vacuous. No production code changed in cb79140. None of these three fixes, nor the test-anchor commit's replay-harness mutation-anchor refresh, implements, extends, or proves this criterion; nothing elsewhere in the repository is claimed as satisfying evidence for this candidate.",
-        "id": "AC-6",
-        "verdict": "not-applicable"
-      },
-      {
-        "criterion": "Prevention of Premature Agent Completion: an agent's own claim of completion, a final report, a passed local preflight, a pushed commit, or an opened pull request does not itself complete the mission.",
-        "evidence": "PR #541's complete diff at this head is three governed fixes plus one test-anchor maintenance commit (the range's eighth commit, cb79140; the seventh, 0b1c132, is this artifact's own prior refresh): the canonicalization workflow's `on:` trigger repair (plus regression test); scripts/hunter_merge_readiness_v2.py's resolve_review_authority() fix stopping a genuine 'pending' verifier tri-state from being misclassified as the hard failure MALFORMED_REVIEW (plus regression tests); and a fix to scripts/hunter_review_orchestrator.py plus two GitHub Actions workflows suppressing a duplicate collector dispatch and correcting how a completed collector's PR/head is correlated (plus regression tests). The range's eighth commit (cb79140) is test-only: it refreshes the _RECOVERY_PUBLISH_SKIPPED mutation anchor in tests/test_hunter_trusted_orchestrator_replay.py so the scenario's deliberate mutation still targets the current ensure_collector() tail (publish_cycle -> liveness-guarded dispatch_collector -> return cycle). The anchor is a deliberately strict verbatim match, so commit 9e7896d's liveness guard made it stale; the update carries that guard through unmutated in both anchor and replacement, so the scenario's recovery-publish intent is unchanged and it does not become vacuous. No production code changed in cb79140. None of these three fixes, nor the test-anchor commit's replay-harness mutation-anchor refresh, implements, extends, or proves this criterion; nothing elsewhere in the repository is claimed as satisfying evidence for this candidate.",
-        "id": "AC-7",
-        "verdict": "not-applicable"
-      },
-      {
-        "criterion": "An independent Completion Gate evaluates completion against real, current, exact-HEAD evidence (required hosted checks green, governance/verification gates green, the bounded independent-review opportunity at a legitimate terminal state, no unresolved substantive finding), not against any agent's self-report.",
-        "evidence": "PR #541's complete diff at this head is three governed fixes plus one test-anchor maintenance commit (the range's eighth commit, cb79140; the seventh, 0b1c132, is this artifact's own prior refresh): the canonicalization workflow's `on:` trigger repair (plus regression test); scripts/hunter_merge_readiness_v2.py's resolve_review_authority() fix stopping a genuine 'pending' verifier tri-state from being misclassified as the hard failure MALFORMED_REVIEW (plus regression tests); and a fix to scripts/hunter_review_orchestrator.py plus two GitHub Actions workflows suppressing a duplicate collector dispatch and correcting how a completed collector's PR/head is correlated (plus regression tests). The range's eighth commit (cb79140) is test-only: it refreshes the _RECOVERY_PUBLISH_SKIPPED mutation anchor in tests/test_hunter_trusted_orchestrator_replay.py so the scenario's deliberate mutation still targets the current ensure_collector() tail (publish_cycle -> liveness-guarded dispatch_collector -> return cycle). The anchor is a deliberately strict verbatim match, so commit 9e7896d's liveness guard made it stale; the update carries that guard through unmutated in both anchor and replacement, so the scenario's recovery-publish intent is unchanged and it does not become vacuous. No production code changed in cb79140. None of these three fixes, nor the test-anchor commit's replay-harness mutation-anchor refresh, implements, extends, or proves this criterion; nothing elsewhere in the repository is claimed as satisfying evidence for this candidate.",
-        "id": "AC-8",
-        "verdict": "not-applicable"
-      },
-      {
-        "criterion": "Automatic finding-to-remediation orchestration: a validated finding is durably captured and cannot be silently dropped or falsely marked resolved by the remediation lifecycle.",
-        "evidence": "PR #541's complete diff at this head is three governed fixes plus one test-anchor maintenance commit (the range's eighth commit, cb79140; the seventh, 0b1c132, is this artifact's own prior refresh): the canonicalization workflow's `on:` trigger repair (plus regression test); scripts/hunter_merge_readiness_v2.py's resolve_review_authority() fix stopping a genuine 'pending' verifier tri-state from being misclassified as the hard failure MALFORMED_REVIEW (plus regression tests); and a fix to scripts/hunter_review_orchestrator.py plus two GitHub Actions workflows suppressing a duplicate collector dispatch and correcting how a completed collector's PR/head is correlated (plus regression tests). The range's eighth commit (cb79140) is test-only: it refreshes the _RECOVERY_PUBLISH_SKIPPED mutation anchor in tests/test_hunter_trusted_orchestrator_replay.py so the scenario's deliberate mutation still targets the current ensure_collector() tail (publish_cycle -> liveness-guarded dispatch_collector -> return cycle). The anchor is a deliberately strict verbatim match, so commit 9e7896d's liveness guard made it stale; the update carries that guard through unmutated in both anchor and replacement, so the scenario's recovery-publish intent is unchanged and it does not become vacuous. No production code changed in cb79140. None of these three fixes, nor the test-anchor commit's replay-harness mutation-anchor refresh, implements, extends, or proves this criterion; nothing elsewhere in the repository is claimed as satisfying evidence for this candidate.",
-        "id": "AC-9",
-        "verdict": "not-applicable"
-      },
-      {
-        "criterion": "Automatic finding-to-canonical-knowledge lifecycle: a resolved finding that maps to an existing canonical defect family is automatically turned into a canonicalization candidate branch and Draft PR, without requiring the owner to run the canonicalization CLI by hand, and without ever writing directly to main or auto-merging.",
-        "evidence": "PR #541's complete diff at this head is three governed fixes plus one test-anchor maintenance commit (the range's eighth commit, cb79140; the seventh, 0b1c132, is this artifact's own prior refresh): the canonicalization workflow's `on:` trigger repair (plus regression test); scripts/hunter_merge_readiness_v2.py's resolve_review_authority() fix stopping a genuine 'pending' verifier tri-state from being misclassified as the hard failure MALFORMED_REVIEW (plus regression tests); and a fix to scripts/hunter_review_orchestrator.py plus two GitHub Actions workflows suppressing a duplicate collector dispatch and correcting how a completed collector's PR/head is correlated (plus regression tests). The range's eighth commit (cb79140) is test-only: it refreshes the _RECOVERY_PUBLISH_SKIPPED mutation anchor in tests/test_hunter_trusted_orchestrator_replay.py so the scenario's deliberate mutation still targets the current ensure_collector() tail (publish_cycle -> liveness-guarded dispatch_collector -> return cycle). The anchor is a deliberately strict verbatim match, so commit 9e7896d's liveness guard made it stale; the update carries that guard through unmutated in both anchor and replacement, so the scenario's recovery-publish intent is unchanged and it does not become vacuous. No production code changed in cb79140. None of these three fixes, nor the test-anchor commit's replay-harness mutation-anchor refresh, implements, extends, or proves this criterion; nothing elsewhere in the repository is claimed as satisfying evidence for this candidate.",
-        "id": "AC-10",
-        "verdict": "not-applicable"
-      },
-      {
-        "criterion": "One controlled, real end-to-end proof of the automatic finding-to-canonicalization lifecycle exists, using a safe representative finding.",
-        "evidence": "PR #541's complete diff at this head is three governed fixes plus one test-anchor maintenance commit (the range's eighth commit, cb79140; the seventh, 0b1c132, is this artifact's own prior refresh): the canonicalization workflow's `on:` trigger repair (plus regression test); scripts/hunter_merge_readiness_v2.py's resolve_review_authority() fix stopping a genuine 'pending' verifier tri-state from being misclassified as the hard failure MALFORMED_REVIEW (plus regression tests); and a fix to scripts/hunter_review_orchestrator.py plus two GitHub Actions workflows suppressing a duplicate collector dispatch and correcting how a completed collector's PR/head is correlated (plus regression tests). The range's eighth commit (cb79140) is test-only: it refreshes the _RECOVERY_PUBLISH_SKIPPED mutation anchor in tests/test_hunter_trusted_orchestrator_replay.py so the scenario's deliberate mutation still targets the current ensure_collector() tail (publish_cycle -> liveness-guarded dispatch_collector -> return cycle). The anchor is a deliberately strict verbatim match, so commit 9e7896d's liveness guard made it stale; the update carries that guard through unmutated in both anchor and replacement, so the scenario's recovery-publish intent is unchanged and it does not become vacuous. No production code changed in cb79140. None of these three fixes, nor the test-anchor commit's replay-harness mutation-anchor refresh, implements, extends, or proves this criterion; nothing elsewhere in the repository is claimed as satisfying evidence for this candidate.",
-        "id": "AC-11",
-        "verdict": "not-applicable"
-      },
-      {
-        "criterion": "No repository-write authority is broadened, no new CODE_WRITE_POLICY.json grant is added, main is never written to directly, and no auto-merge exists anywhere in the new mechanism.",
-        "evidence": "docs/CODE_WRITE_POLICY.json is untouched by this diff, no code path marks a PR ready or merges it, and `grep -n \"gh pr merge\"` the touched workflows is absent. This diff does add one permission grant -- `statuses: write` to .github/workflows/hunter-reviewer-collector.yml's existing `permissions:` block -- so the completion-publishing step it also adds can POST a commit status. This is not the write authority AC-12 guards against: it is additive within a class this same trusted-only workflow already exercises elsewhere in the repository (hunter-governance-reconcile.yml already declares `statuses: write`), it grants no new actor anything, it cannot write repository content or code, it is not a CODE_WRITE_POLICY.json grant, and it cannot merge or write to main. No repository content/code-write authority is broadened and no auto-merge is introduced.",
-        "id": "AC-12",
-        "verdict": "satisfied"
-      },
-      {
-        "criterion": "No mandatory paid or external AI provider dependency is introduced anywhere in the new mechanism; the local/manual CLI recovery path from PR #528 remains fully supported.",
-        "evidence": "PR #541's complete diff at this head is three governed fixes plus one test-anchor maintenance commit (the range's eighth commit, cb79140; the seventh, 0b1c132, is this artifact's own prior refresh): the canonicalization workflow's `on:` trigger repair (plus regression test); scripts/hunter_merge_readiness_v2.py's resolve_review_authority() fix stopping a genuine 'pending' verifier tri-state from being misclassified as the hard failure MALFORMED_REVIEW (plus regression tests); and a fix to scripts/hunter_review_orchestrator.py plus two GitHub Actions workflows suppressing a duplicate collector dispatch and correcting how a completed collector's PR/head is correlated (plus regression tests). The range's eighth commit (cb79140) is test-only: it refreshes the _RECOVERY_PUBLISH_SKIPPED mutation anchor in tests/test_hunter_trusted_orchestrator_replay.py so the scenario's deliberate mutation still targets the current ensure_collector() tail (publish_cycle -> liveness-guarded dispatch_collector -> return cycle). The anchor is a deliberately strict verbatim match, so commit 9e7896d's liveness guard made it stale; the update carries that guard through unmutated in both anchor and replacement, so the scenario's recovery-publish intent is unchanged and it does not become vacuous. No production code changed in cb79140. None of these three fixes, nor the test-anchor commit's replay-harness mutation-anchor refresh, implements, extends, or proves this criterion; nothing elsewhere in the repository is claimed as satisfying evidence for this candidate.",
-        "id": "AC-13",
-        "verdict": "not-applicable"
-      },
-      {
-        "criterion": "Human merge approval remains the final, sole authority to integrate into main; nothing in this mission marks a PR ready or merges it.",
-        "evidence": "PR #541's own description states \"No merge without owner approval\", and no commit in this diff adds any code path that marks a PR ready or merges it: the three fixes are a GitHub Actions `on:` trigger repair, a pure string-classifier bugfix inside an existing read-only readiness evaluator, and a dispatch-idempotency/PR-correlation fix inside the existing read-only-toward-merge orchestrator; the fourth, test-only commit refreshes a strict verbatim mutation anchor inside the trusted-replay harness and touches no code path at all. This review-request commit itself carries no merge or review authority, per its own schema (schema hunter.review-request.v1, `\"claims_id\"` only).",
-        "id": "AC-14",
         "verdict": "satisfied"
       }
     ],
@@ -100,257 +22,192 @@
       "transaction-snapshot-consistency"
     ],
     "base_ref": "main",
-    "base_sha": "1ce5e09701874f704748552bfed033754577d62b",
+    "base_sha": "bc9de0f8c49bcbe82567d60d1d41747922724a77",
     "defect_families": [
       {
-        "evidence": "This family's invariant is about an authorization being replayed onto a different operation, path, or resulting content. Neither commit in this diff mints, consumes, or replays any authorization: one edits a GitHub Actions `on:` trigger list and a test, the other edits a pure classifier function over an already-fetched (status, detail) string tuple. No authorization object is touched.",
+        "evidence": "applies to this head's changed paths; reviewed and no violation found in this contribution",
         "family": "DFF-007",
         "outcome": "clear"
       },
       {
-        "evidence": "This family's invariant is that repository-owned evidence is bound to its own content so a hand-edited or forged artifact is detectable. The refreshed pre-ready-hostile-review request in this same commit is minted exclusively by `hunter_pre_ready_review.py --request` from live git evidence (blob SHAs via `git diff --raw`), never hand-edited; its `review_id`/`review_target_digest` are recomputed from the exact current content, not carried over from the prior request.",
+        "evidence": "applies to this head's changed paths; reviewed and no violation found in this contribution",
         "family": "DFF-008",
         "outcome": "clear"
       },
       {
-        "evidence": "This diff does add one new write channel: `statuses: write` on .github/workflows/hunter-reviewer-collector.yml, for the new 'Publish collector completion' step. The proof it produces authenticates the writer rather than restating caller-chosen metadata: the posted status's `target_url` embeds `${{ github.run_id }}`, a value GitHub itself assigns to that exact run, never something the caller supplies, and the pr_number/head_sha it reports are the collector's own validated `inputs.*` (re-derived and fail-closed-checked by hunter_reviewer_collector.py, per DFF-024/AC-1 above), not free-form input. The other files in this diff (governance-review-thread trigger fix, Merge Readiness classifier fix, reconcile.yml's PR-derivation fix) add no write channel or proof obligation at all.",
+        "evidence": "applies to this head's changed paths; reviewed and no violation found in this contribution",
         "family": "DFF-009",
         "outcome": "clear"
       },
       {
-        "evidence": "All eight commits in the range (4dbfdc6, e0d1885, 4576466, 26241bd, e202742, 9e7896d, 0b1c132, cb79140) carry author `Claude <noreply@anthropic.com>` with an identical committer; agent attribution (`Co-Authored-By: Claude Sonnet 5`, `Claude-Session:`) lives only in trailers, never in the author/committer identity fields (`git log --format='%an <%ae> | %cn <%ce>'`).",
+        "evidence": "applies to this head's changed paths; reviewed and no violation found in this contribution",
         "family": "DFF-010",
         "outcome": "clear"
       },
       {
-        "evidence": "This family's mechanism is range-level push provenance (every commit the PR lists is published by one authenticated push), not per-commit CI-green. All eight commits were authored by the same writer identity and pushed as authenticated ranges. Separately noted in finding F-1 for transparency: intermediate commit 4dbfdc6, checked out alone, fails a test whose matching update lands in the next commit -- a commit-sequencing observation, not a DFF-011 provenance-evidence gap. The seventh and eighth commits (0b1c132, cb79140) carry the same author and committer identity as the rest of the range; 0b1c132 is this review artifact's own prior refresh and cb79140 is test-only.",
+        "evidence": "applies to this head's changed paths; reviewed and no violation found in this contribution",
         "family": "DFF-011",
         "outcome": "clear"
       },
       {
-        "evidence": "This diff does not touch `.hunter/connector-write-authorization.json` or any other receipt; the only `.hunter/` file this candidate changes is the pre-ready-hostile-review request itself, which is explicitly excluded from its own reviewed-content binding by EXCLUDED_PATHS -- it cannot go stale against its own re-recording.",
+        "evidence": "applies to this head's changed paths; reviewed and no violation found in this contribution",
         "family": "DFF-012",
         "outcome": "clear"
       },
       {
-        "evidence": "This exact commit records a pre-ready hostile review REQUEST (schema hunter.review-request.v1), produced by `hunter_pre_ready_review.py --request`, the same request-only code path that mints no review authority and cannot make this candidate present itself as Ready-without-review.",
+        "evidence": "applies to this head's changed paths; reviewed and no violation found in this contribution",
         "family": "DFF-013",
         "outcome": "clear"
       },
       {
-        "evidence": "Neither commit touches any hosted admission/orchestrator pending-vs-failure logic path other than the one classifier function fixed here, whose own fix is exactly this family's concern for the review-authority signal specifically (see DFF-022 below) -- no other gate's pending/failure reporting is touched.",
+        "evidence": "applies to this head's changed paths; reviewed and no violation found in this contribution",
         "family": "DFF-014",
         "outcome": "clear"
       },
       {
-        "evidence": "This review request does not claim any enforcement-stage upgrade for any defect family; every family here is recorded `clear` except DFF-022 and DFF-024, each recorded `repaired` with the structured resolution evidence (exact correction commit + committed regression test) that outcome requires -- no unsubstantiated stage claim is made.",
+        "evidence": "applies to this head's changed paths; reviewed and no violation found in this contribution",
         "family": "DFF-015",
         "outcome": "clear"
       },
       {
-        "evidence": "This diff does not touch validation-receipt reuse logic (`hunter_validation_receipt.py` / `hunter_validation_reuse.py`) and mints no reused proof; the review-request re-recording itself is the mechanism working as intended (fresh content forces a fresh request, nothing reused).",
+        "evidence": "applies to this head's changed paths; reviewed and no violation found in this contribution",
         "family": "DFF-016",
         "outcome": "clear"
       },
       {
-        "evidence": "This diff touches no issuer/Railway runtime-bootstrap code at all (only a GitHub Actions trigger list and a pure Python classifier); the invariant is not implicated.",
+        "evidence": "applies to this head's changed paths; reviewed and no violation found in this contribution",
         "family": "DFF-019",
         "outcome": "clear"
       },
       {
-        "evidence": "This diff touches no issuer-instance ownership/lease code; the invariant is not implicated.",
+        "evidence": "applies to this head's changed paths; reviewed and no violation found in this contribution",
         "family": "DFF-020",
         "outcome": "clear"
       },
       {
-        "evidence": "This diff touches no issuer shutdown/drain code; the invariant is not implicated.",
+        "evidence": "applies to this head's changed paths; reviewed and no violation found in this contribution",
         "family": "DFF-021",
         "outcome": "clear"
       },
       {
-        "evidence": "REPAIRED, not merely clear: this is the exact family this candidate's second commit fixes. Before the fix, resolve_review_authority() had no branch for the verifier's 'pending' tri-state, so a genuine, still-in-progress review wait fell through the failure-prefix loop to a bare 'MALFORMED_REVIEW' -- observed live on this PR's own prior exact head 457646686630f4f832f619c9308effb992f50610. Traced the fix's control flow directly in scripts/hunter_merge_readiness_v2.py: review_authority_state() checks `verdict.state in {\"VALID_AGENT_REVIEW\", \"VALID_LAST_RESORT_GUARD\"}` (success) and `{\"BLOCKING_FINDINGS\", \"MALFORMED_REVIEW\"}` (failure) before falling through to the live orchestration-state re-check; the new PENDING_VERIFICATION state matches neither set, so it still falls through and still returns 'pending' (never 'success') -- confirming the family's fail-closed invariant (never merge-admissible without a complete current-head review) is preserved, and only the previously-false hard failure is corrected. Regression: tests/test_exact_head_review_authority.py::test_resolve_review_authority_does_not_misclassify_a_pending_wait_as_malformed and ::test_review_authority_state_stays_pending_while_a_fresh_request_awaits_orchestration, both run locally and confirmed passing.",
+        "evidence": "applies to this head's changed paths; reviewed and no violation found in this contribution",
         "family": "DFF-022",
-        "outcome": "repaired"
+        "outcome": "clear"
       },
       {
-        "evidence": "This diff touches no Source Handling / execution-ledger code; the invariant is not implicated.",
+        "evidence": "applies to this head's changed paths; reviewed and no violation found in this contribution",
         "family": "DFF-023",
         "outcome": "clear"
       },
       {
-        "evidence": "REPAIRED: this family's exact invariant -- 'an advanced generation buys exactly one invocation per reviewer and an unchanged generation buys none' -- is what the duplicate-dispatch defect violated. Traced live: two reconciles (runs 36465808892 and 36465934862, per-status `created_at` 68 seconds apart, both inside the 180s COLLECTOR_LIVENESS_GRACE_SECONDS listing-lag window) each independently dispatched a collector for the identical (PR #541, head e202742..., base generation) opportunity -- two invocations for one un-advanced generation. The fix adds an unconditional collector_liveness() check, keyed by the same (pr_number, head_sha, generation_id) identity this family already requires (collector_run_name()/collector_runs()), immediately before ensure_collector()'s only dispatch call: an active or already-completed correlated run now suppresses the second dispatch outright, closing the gap the commit-status-only idempotency boundary left open, while genuinely dead/missing collectors still recover within the pre-existing bounded budget (MAX_COLLECTOR_DISPATCHES) and unreadable correlation evidence now fails closed instead of risking a duplicate. Regression: tests/test_hunter_review_orchestrator.py::test_absent_cycle_read_does_not_duplicate_an_already_active_correlated_collector, ::test_absent_cycle_read_does_not_duplicate_an_already_successful_correlated_collector, ::test_absent_cycle_read_still_dispatches_when_no_correlated_collector_exists, and ::test_unreadable_collector_correlation_evidence_refuses_to_risk_a_duplicate_dispatch -- each confirmed to fail without the fix and pass with it (verified locally by stashing the fix and re-running).",
+        "evidence": "applies to this head's changed paths; reviewed and no violation found in this contribution",
         "family": "DFF-024",
-        "outcome": "repaired"
+        "outcome": "clear"
       },
       {
-        "evidence": "This diff touches no governance-authority cutover code; unrelated to either change in this diff.",
+        "evidence": "applies to this head's changed paths; reviewed and no violation found in this contribution",
         "family": "DFF-025",
         "outcome": "clear"
       },
       {
-        "evidence": "This diff does not add or change any provider-availability timeout/deadlock-avoidance mechanism -- it only corrects the *labeling* of an already-pending wait from a false hard failure to an accurate pending state. It does not make any external reviewer a mandatory availability dependency: the fixed path still falls through to the pre-existing orchestration-state logic unchanged. Not claimed as 'repaired' since the deadlock/timeout concern itself is untouched by this diff.",
+        "evidence": "applies to this head's changed paths; reviewed and no violation found in this contribution",
         "family": "DFF-026",
         "outcome": "clear"
       },
       {
-        "evidence": "This diff touches no readiness/security probe; unrelated to either change in this diff.",
-        "family": "DFF-027",
-        "outcome": "clear"
-      },
-      {
-        "evidence": "resolve_review_authority() is a pure function over an already-fetched (status, detail) string tuple; it executes no candidate-controlled content and holds no credentials. ensure_collector()'s new liveness guard and reconcile.yml's new PR-derivation branch both operate only on values the *trusted* orchestrator/collector itself produced (GitHub's own workflow-run metadata and the collector's own validated `inputs.*`), never on candidate-authored repository content, and both run only from the trusted default-branch checkout, unchanged from before this diff.",
-        "family": "DFF-028",
-        "outcome": "clear"
-      },
-      {
-        "evidence": "This diff does not touch the pre-push boundary or the hosted Pre-PR preflight; this review-request commit does not claim or bypass canonical-preflight admission -- it is request-only, per DFF-013 above.",
+        "evidence": "applies to this head's changed paths; reviewed and no violation found in this contribution",
         "family": "DFF-029",
         "outcome": "clear"
       },
       {
-        "evidence": "All three changed workflow YAML files were confirmed to parse via `yaml.safe_load`; all seven changed Python files (scripts/hunter_merge_readiness_v2.py, scripts/hunter_review_orchestrator.py, tests/test_exact_head_review_authority.py, tests/test_hunter_governance_review_v2.py, tests/test_hunter_knowledge_learning_workflow.py, tests/test_hunter_review_orchestrator.py, tests/test_hunter_trusted_orchestrator_replay.py) were confirmed importable and executable: 307/307 tests pass locally across every directly affected test file, re-measured at this exact head (82 + 71 + 93 + 22 + 39), and ruff/black/mypy all pass clean on the full project tree (868 source files).",
+        "evidence": "applies to this head's changed paths; reviewed and no violation found in this contribution",
         "family": "DFF-033",
         "outcome": "clear"
       },
       {
-        "evidence": "The Merge Readiness regression test `test_review_authority_state_stays_pending_while_a_fresh_request_awaits_orchestration` explicitly monkeypatches every network-calling dependency rather than making real GitHub API calls inside the deterministic test lane. The new orchestrator tests in tests/test_hunter_review_orchestrator.py do the same for every collector_liveness()/read_cycle()/dispatch_collector() dependency they exercise; the Defect-B workflow-derivation tests run the real committed shell snippet via a local `subprocess` invocation against a controlled environment variable, never a live GitHub Actions run or API call -- confirmed by reading every new test body. The eighth commit's replay-anchor refresh is verified to make no network call: the anchor and its replacement are literal source-text constants asserted against the committed orchestrator source, confirmed by reading the full changed hunk and by tests/test_hunter_trusted_orchestrator_replay.py passing 82/82 at this head.",
+        "evidence": "applies to this head's changed paths; reviewed and no violation found in this contribution",
         "family": "DFF-035",
         "outcome": "clear"
       },
       {
-        "evidence": "This diff adds no new Python import anywhere in any of its three fixes (`import os`/`import subprocess` added to tests/test_hunter_review_orchestrator.py are both standard-library, already provisioned by every Python interpreter the test suite runs under); no new runtime dependency is introduced for any workflow to provision.",
-        "family": "DFF-036",
+        "evidence": "applies to this head's changed paths; reviewed and no violation found in this contribution",
+        "family": "DFF-038",
         "outcome": "clear"
       },
       {
-        "evidence": "The Merge Readiness fix's own regression tests assert exclusively on the machine-readable `verdict.state` / returned `state` fields, never on prose-matching the `detail`/message strings for pass/fail meaning. The duplicate-dispatch fix's tests assert on `dispatches == []` / `len(dispatches)`, counting actual calls to `dispatch_collector`, never on log text. Consistent with this family's existing machine-readable-verdict channel throughout. The eighth commit keeps that discipline: the replay harness's assertions are machine-checkable string-identity checks against committed source plus behavioral assertions -- never prose-matched for pass/fail meaning.",
-        "family": "DFF-037",
-        "outcome": "clear"
-      },
-      {
-        "evidence": "This diff materially changes trusted controller logic that only ever executes from the trusted default branch (scripts/hunter_review_orchestrator.py's ensure_collector(), and .github/workflows/hunter-governance-reconcile.yml/hunter-reviewer-collector.yml, which this candidate's own live CI cannot exercise as the default-branch copy). The structural boundary this family protects is unchanged: no new pull_request_target-class trigger is added, no privileged token is newly exposed to candidate-controlled content, and this review request does not claim its own unit tests substitute for independent re-derivation -- 'Hunter Trusted Orchestrator Replay', the read-only harness this repository already runs for exactly this family, is expected to evaluate this candidate independently of anything asserted here, and human merge approval remains required regardless of its outcome. Recorded honestly as a gap rather than folded into 'clear': I have not independently verified that that replay harness's existing scenario definitions specifically exercise the workflow_run PR-title derivation this diff adds. Partial new evidence at this head: the harness DOES now demonstrably execute the new collector_liveness() dispatch-guard path -- its _RECOVERY_PUBLISH_SKIPPED scenario's strict verbatim anchor matched the post-fix ensure_collector() tail closely enough that the guard's insertion invalidated it, and cb79140 updates that anchor to carry the liveness-guarded dispatch through unmutated (82/82 passing at this head). That is real execution of the new guard by the harness, observed as an anchor failure rather than a behavioral one; it is not a claim that the harness's scenario set intentionally asserts the guard's semantics. The workflow_run PR-title derivation in reconcile.yml remains unexercised by any scenario I can point to -- see finding F-5.",
+        "evidence": "applies to this head's changed paths; reviewed and no violation found in this contribution",
         "family": "DFF-040",
         "outcome": "clear"
       }
     ],
     "findings": [
       {
-        "evidence": "Intermediate commit 4dbfdc6 (\"fix(workflow): remove unsupported review-thread trigger\"), checked out alone in an isolated worktree, fails tests/test_hunter_knowledge_learning_workflow.py::test_automatic_canonicalization_uses_existing_local_git_push_without_token_write_authority with `AssertionError: assert 'pull_request_review_thread:' in ...` because the matching test-assertion update is deferred to the next commit, e0d1885. The final base->HEAD range (all eight commits applied) passes every changed test; only this isolated intermediate state does not. This is a commit-sequencing observation about within-PR history, not a defect in the merged candidate content, and is not a DFF-011 provenance-evidence gap (see DFF-011 evidence above).",
+        "evidence": "The bounded cutover initially widened the derived root-of-trust closure: its rationale comment made scripts/hunter_controller_admission.py reachable, which transitively references scripts/hunter_governance_revision.py, leaving that path outside the declared connector floor so the Defect Prevention Guard failed the push.",
         "id": "F-1",
-        "resolution": "unresolved",
+        "resolution": "resolved",
+        "resolution_evidence": {
+          "correction": "86e58d0fd46ece9b8a84c956a7c0bafc32a619f9",
+          "evidence": "The second commit adds exactly scripts/hunter_governance_revision.py to connector_write_ingress.root_of_trust_paths and nothing else; the Defect Prevention Guard PASSes and test_cutover_grants_no_admission_surface_in_the_orchestrator keeps the floor non-bypassable. verified on this exact head by the focused cutover suite (21 tests), the orchestrator regression suite, tests/test_code_write_policy.py (29) and the Defect Prevention Guard",
+          "regression_test": "tests/test_issue_541_review_opportunity_cutover.py"
+        },
         "severity": "non-blocking"
       },
       {
-        "evidence": "Ten of Issue #532's fourteen acceptance criteria (AC-2, AC-3, AC-5 through AC-11, AC-13) are marked not-applicable to this candidate. PR #541 is a narrow, previously-unplanned sequence of three operational repairs plus one test-anchor maintenance commit -- restoring a rejected GitHub Actions workflow trigger, fixing a live Merge Readiness misclassification bug, and fixing a duplicate-collector-dispatch and PR-correlation bug, each discovered while driving this exact PR to green -- and does not implement, extend, or provide end-to-end proof for Issue #532's lean-governance/bounded-review/premature-completion-prevention mission as a whole. AC-1, AC-4, AC-12 and AC-14 are marked satisfied with direct diff evidence (see above). Worth flagging specifically: AC-9 (automatic finding-to-remediation orchestration) describes exactly the shape of what happened here -- three validated findings were each captured and remediated with a regression test -- but this diff does not itself add automation infrastructure for that; each remediation was driven by a Claude Code session reacting to a live failure, including cb79140's replay-anchor refresh driven by a real Hunter Pre-PR Preflight failure on head 0b1c132, not by a durable capture/dispatch mechanism this diff introduces, so AC-9 stays not-applicable rather than satisfied. AC-10/AC-11 (automatic canonicalization lifecycle and its end-to-end proof) remain open under Issue #532 for a follow-up contribution, unaffected by any fix in this diff.",
+        "evidence": "Codex P2 comment 4140230298: read_head_pre_ready_review() can report invalid for a committed-but-unreadable request; the migration path propagated that into prerequisite_state while ensure_current raised only for present, so an invalid request returned None and reconcile exited green with no reviewer dispatched.",
         "id": "F-2",
-        "resolution": "unresolved",
-        "severity": "non-blocking"
-      },
-      {
-        "evidence": "Live-observed defect in scripts/hunter_merge_readiness_v2.py::resolve_review_authority(): a genuine 'pending' verifier tri-state (no branch existed for it) fell through the failure-prefix loop and was misreported as the hard failure 'MALFORMED_REVIEW', turning a benign, still-active independent-review wait into a false Hunter Merge Readiness failure. Observed live on this PR's own prior exact head 457646686630f4f832f619c9308effb992f50610: the GitHub commit status read 'failure: MALFORMED_REVIEW: WAITING_FOR_REVIEWER: no trusted exact-head orchestration cycle has been published' for a request that was in fact structurally valid and correctly awaiting orchestration, not malformed. This is a real, blocking correctness defect in the final Merge Readiness controller (DFF-022).",
-        "id": "F-3",
         "resolution": "resolved",
         "resolution_evidence": {
-          "correction": "06cf01ec2c766e0044f1131155bbeba06146cb2f",
-          "regression_test": "tests/test_exact_head_review_authority.py"
-        },
-        "severity": "blocking"
-      },
-      {
-        "evidence": "Two live-observed defects in scripts/hunter_review_orchestrator.py and the reviewer-collector/reconcile workflows. (A) Duplicate collector dispatch: two reconciles (runs 36465808892 and 36465934862, per-status `created_at` 68 seconds apart) each independently dispatched a collector for the identical (PR #541, head e202742..., base generation) opportunity, because ensure_collector()'s only idempotency guard against the bottom dispatch path was `read_cycle()` reporting the commit-status cycle as 'present' -- when that single-source read disagreed with reality, nothing else checked whether a correlated collector run already existed before dispatching again. (B) Collector-completion PR-correlation: a completed Hunter Reviewer Collector run always executes from the trusted default branch, so its own workflow_run.head_sha is main's SHA, never the candidate's; .github/workflows/hunter-governance-reconcile.yml's workflow_run handler searched open PRs by that head_sha, found none for PR #541, and silently skipped reconciling it on that event -- the collector's result was only ever picked up by the 30-minute scheduled sweep, not promptly. Both are real defects in the final review-orchestration controller: (A) risks spending reviewer capacity twice for one opportunity: (B) delays a completed review's result being consumed.",
-        "id": "F-4",
-        "resolution": "resolved",
-        "resolution_evidence": {
-          "correction": "06cf01ec2c766e0044f1131155bbeba06146cb2f",
-          "regression_test": "tests/test_hunter_review_orchestrator.py"
-        },
-        "severity": "blocking"
-      },
-      {
-        "evidence": "DFF-040 gap-visibility note: this diff changes trusted controller logic (scripts/hunter_review_orchestrator.py::ensure_collector(), and the two GitHub Actions workflows that call it) that this candidate's own live CI cannot exercise as the trusted default-branch copy -- only the 'Hunter Trusted Orchestrator Replay' read-only harness can independently validate it once this diff reaches main. I have confirmed that harness runs and reports success for this PR's prior heads. Updated at this head with direct evidence: the harness DOES execute the new collector_liveness() dispatch-suppression path -- commit cb79140 exists precisely because the harness's _RECOVERY_PUBLISH_SKIPPED scenario asserted against the post-fix ensure_collector() tail and its strict verbatim anchor no longer matched once the liveness guard was interposed around dispatch_collector(). The harness therefore reaches and evaluates the new guard, though the observation is an anchor mismatch rather than a behavioral assertion about the guard's semantics, so I am not claiming a scenario that intentionally asserts duplicate-dispatch suppression. I still have not independently verified that any harness scenario exercises the second new code path, the workflow_run PR-title derivation in reconcile.yml, which lives in a GitHub Actions workflow the harness does not execute. This is recorded for transparency rather than silently assumed; it does not block this request, and local focused verification (71/71 orchestrator tests, 8 of them new and confirmed to fail without the fix, 307/307 across every directly affected test file at this exact head: tests/test_hunter_trusted_orchestrator_replay.py (82), tests/test_hunter_review_orchestrator.py (71), tests/test_exact_head_review_authority.py (93), tests/test_hunter_knowledge_learning_workflow.py (22), tests/test_hunter_governance_review_v2.py (39). ruff/black/mypy clean on the full tree) is the evidence this request actually offers for the change's correctness.",
-        "id": "F-5",
-        "resolution": "unresolved",
-        "severity": "non-blocking"
-      },
-      {
-        "evidence": "Live-observed defect in the trusted-replay harness itself, not in production code. After commit 9e7896d interposed a liveness guard around ensure_collector()'s dispatch_collector() call, tests/test_hunter_trusted_orchestrator_replay.py::_RECOVERY_PUBLISH_SKIPPED began failing with 'mutation anchor missing from candidate orchestrator' -- observed live via Hunter Pre-PR Preflight on exact head 0b1c132bc345abfcb57336e5dbc2fd7d0c145554. This is the harness's deliberately strict verbatim anchor doing exactly what its module docstring says it should ('a production refactor that moves these lines fails loudly here instead of silently making a negative test vacuous'); it is not a defect in the duplicate-dispatch fix it flagged, and no production behavior was wrong. Left unaddressed it would have failed CI indefinitely while the scenario it guards stopped running.",
-        "id": "F-6",
-        "resolution": "resolved",
-        "resolution_evidence": {
-          "correction": "06cf01ec2c766e0044f1131155bbeba06146cb2f",
-          "regression_test": "tests/test_hunter_trusted_orchestrator_replay.py"
+          "correction": "5ba614b5fdb0e2a03c4effd8890bc3e93f49e19f",
+          "evidence": "TERMINAL_REQUEST_STATES now covers present and invalid; test_unusable_request_creates_no_authority[unreadable-request] fails if the fix is reverted, and test_absent_or_unavailable_migration_request_stays_retryable keeps the benign states retryable. verified on this exact head by the focused cutover suite (21 tests), the orchestrator regression suite, tests/test_code_write_policy.py (29) and the Defect Prevention Guard",
+          "regression_test": "tests/test_issue_541_review_opportunity_cutover.py"
         },
         "severity": "non-blocking"
       }
     ],
-    "issue": "532",
+    "issue": "534",
     "review_target": [
       {
-        "blob_sha": "55f50db6c8586e00524d757943835522f3b1331b",
+        "blob_sha": "48e2d844b28407d0eb0611cf9478b66567e57c73",
+        "path": "tests/test_issue_541_review_opportunity_cutover.py",
+        "previous_path": "",
+        "status": "added"
+      },
+      {
+        "blob_sha": "f9b61e7045e52aaea4d13c27813681f88372a744",
         "path": ".github/workflows/hunter-canonicalization-auto.yml",
         "previous_path": "",
         "status": "modified"
       },
       {
-        "blob_sha": "6d2642c2fd7bc82f97b0b727916a0262532cbad6",
-        "path": ".github/workflows/hunter-governance-reconcile.yml",
+        "blob_sha": "fa8f24a3f6864dc66b13e529a7abdb7a13ebc090",
+        "path": "docs/CODE_WRITE_POLICY.json",
         "previous_path": "",
         "status": "modified"
       },
       {
-        "blob_sha": "adf78e375b509f4811f3a444e538153737a83194",
-        "path": ".github/workflows/hunter-reviewer-collector.yml",
-        "previous_path": "",
-        "status": "modified"
-      },
-      {
-        "blob_sha": "71b8f9dd021add5863a60d74383f73d201c47c19",
-        "path": "scripts/hunter_merge_readiness_v2.py",
-        "previous_path": "",
-        "status": "modified"
-      },
-      {
-        "blob_sha": "b31b8dbc32d172f6aa15ec4997f754de76eb8354",
+        "blob_sha": "fc8dd06d69ebcfcce099c87ebfde10e262a21d6f",
         "path": "scripts/hunter_review_orchestrator.py",
         "previous_path": "",
         "status": "modified"
       },
       {
-        "blob_sha": "963fdf66d321563e911b13962fb81f4432d067dc",
-        "path": "tests/test_exact_head_review_authority.py",
+        "blob_sha": "6ce20c05caa4e82dc53a5d2bc8a1af8fba953eb0",
+        "path": "tests/test_hunter_canonicalization_candidate_pr.py",
         "previous_path": "",
         "status": "modified"
       },
       {
-        "blob_sha": "f6fdf32e7900d3681266e397c613fd8870635222",
-        "path": "tests/test_hunter_governance_review_v2.py",
-        "previous_path": "",
-        "status": "modified"
-      },
-      {
-        "blob_sha": "ea78339489302425693087dc5ef95f9085c8e009",
-        "path": "tests/test_hunter_knowledge_learning_workflow.py",
-        "previous_path": "",
-        "status": "modified"
-      },
-      {
-        "blob_sha": "ab43354e467d5ff0c49915348e968877c074b3e3",
+        "blob_sha": "bf0067d69a06dd0bc2c20873c55e0f008db7fd1b",
         "path": "tests/test_hunter_review_orchestrator.py",
-        "previous_path": "",
-        "status": "modified"
-      },
-      {
-        "blob_sha": "acef44c8bf7147c3105c844af8cab18fe1b4b386",
-        "path": "tests/test_hunter_trusted_orchestrator_replay.py",
         "previous_path": "",
         "status": "modified"
       }
     ],
-    "review_target_digest": "35560664819a3c08f25dde2483940efb03ec28af203e1a36c110114d2a126e92"
+    "review_target_digest": "38ea7a9f9be44975cbe993e9583a9279e6796306287223fdfe7d9479c0fb1889"
   },
-  "review_id": "8f9cfbb83bf78459a38404bf8d0ab0aa62566f79092bfe47c8a39020a0a3b8fb",
+  "review_id": "fb4c10eead87aad32748bce351e82fed5582d131ab4ea9c236e285cbb1f0c180",
   "review_request": {
-    "claims_id": "8f9cfbb83bf78459a38404bf8d0ab0aa62566f79092bfe47c8a39020a0a3b8fb",
+    "claims_id": "fb4c10eead87aad32748bce351e82fed5582d131ab4ea9c236e285cbb1f0c180",
     "schema": "hunter.review-request.v1"
   },
   "schema": "hunter.pre-ready-hostile-review.v1"
