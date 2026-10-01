@@ -2340,7 +2340,7 @@ def verify_pre_ready_hostile_review(
         base_sha=merge_base,
         changes=changes,
         families=families,
-        issue_criteria=issue_criteria or None,
+        issue_criteria=issue_criteria,
         coverage_scopes=coverage_scopes,
         resolution_corrections=resolution_corrections,
         head_sha=head_sha,
