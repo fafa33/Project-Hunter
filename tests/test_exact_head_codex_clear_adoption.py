@@ -378,11 +378,20 @@ def test_the_latest_clear_is_adopted_and_an_older_finding_does_not_block_it(monk
     assert _adopted_everywhere(monkeypatch, reviews) == {True}
 
 
-def test_native_clear_without_current_claims_binding_is_not_adopted(monkeypatch):
+def test_shared_predicate_rejects_native_clear_without_current_claims_binding():
+    review = _review(body=_clear_body())
+    review.pop("trigger_claims_id")
+    assert core.latest_codex_review_is_exact_head_clear([review], HEAD, CLAIMS) is False
+
+
+def test_live_consumers_enrich_raw_exact_head_review_after_trusted_request(monkeypatch):
     review = _review(body=_clear_body())
     review.pop("trigger_claims_id")
     reviews = [review]
-    assert _adopted_everywhere(monkeypatch, reviews) == {False}
+    monkeypatch.setattr(orchestrator, "request_json", lambda *_a: reviews)
+    backend = _collector_backend(monkeypatch, reviews)
+    assert orchestrator.exact_head_codex_clear_exists("owner/repo", "token", 544, HEAD, CLAIMS) is True
+    assert backend._exact_head_native_clear() is True
 
 
 def test_malformed_review_ids_fail_closed_everywhere(monkeypatch):

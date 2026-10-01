@@ -556,6 +556,12 @@ def review_adoption_acknowledgement(
 
     ack = review_acknowledgement(str(observation.get("body") or ""))
     if ack is not None:
+        if (
+            observation.get("commit_id") != head_sha
+            or ack.get("head_sha") != head_sha
+            or ack.get("claims_id") != claims_id
+        ):
+            return None
         return ack
     if (
         observation.get("agent_id") != pre_ready.CODEX_REVIEW_AUTHORITY
@@ -584,6 +590,22 @@ def review_adoption_acknowledgement(
         "verdict": "clear",
         "summary": "Authenticated Codex exact-head review found no major issues for the current committed review request.",
     }
+
+
+def bind_native_codex_reviews_to_claims(reviews: Any, head_sha: str, claims_id: str) -> list[dict[str, Any]]:
+    """Bind raw native Codex reviews after the caller validates the trusted current request."""
+    if not isinstance(reviews, list):
+        raise ValueError("review payload is not a list")
+    login = reviewer_login({"id": "codex"})
+    bound: list[dict[str, Any]] = []
+    for item in reviews:
+        if not isinstance(item, dict) or not isinstance(item.get("user"), dict):
+            raise ValueError("malformed review record")
+        copy = dict(item)
+        if str(item["user"].get("login") or "").strip().lower() == login and item.get("commit_id") == head_sha:
+            copy["trigger_claims_id"] = claims_id
+        bound.append(copy)
+    return bound
 
 
 def latest_codex_review_is_exact_head_clear(reviews: Any, head_sha: str, claims_id: str) -> bool:
