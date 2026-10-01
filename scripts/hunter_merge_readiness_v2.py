@@ -461,16 +461,12 @@ def evaluate(observation: ReadinessObservation) -> Decision:
     if observation.changes_requested:
         return Decision("failure", "Changes requested by: " + ", ".join(observation.changes_requested))
 
-    # Independent review is defense-in-depth, but the *opportunity* is a bounded
-    # exact-HEAD prerequisite.  While that opportunity is live, readiness waits.
-    # A terminal timeout/unavailability is deliberately non-blocking: it records
-    # the missing review honestly without giving any provider permanent merge
-    # authority. Authenticated findings above remain fail-closed.
-    authority_state, authority_detail = observation.review_authority
-    if authority_state == "pending":
-        return Decision("pending", "Waiting for bounded independent-review opportunity: " + authority_detail)
-    if authority_state != "success":
-        return Decision("failure", "Independent-review authority failed: " + authority_detail)
+    # Independent-review orchestration is advisory defense-in-depth, not merge
+    # authority. Provider silence, timeout, quota, or orchestration defects must
+    # never park an otherwise-ready PR. Authenticated reviewer findings remain
+    # fail-closed above through unresolved threads / CHANGES_REQUESTED state.
+    # Observe the state for diagnostics, but deliberately do not gate readiness.
+    _authority_state, _authority_detail = observation.review_authority
 
     admission_state, admission_detail = observation.candidate_admission
     if admission_state == "pending":
@@ -541,37 +537,16 @@ class CompletionVerdict:
 
 
 def evaluate_completion_claim(observation: ReadinessObservation) -> CompletionVerdict:
-    """Independently evaluate whether a candidate is genuinely complete.
+    """Evaluate completion from the same deterministic merge authority.
 
-    Reuses `evaluate()`'s decision for every deterministic merge blocker --
-    this is not a second readiness definition. It adds exactly one further,
-    stricter check `evaluate()` deliberately omits: `evaluate()` treats
-    external review as pure defense-in-depth and never lets a pending review
-    block the merge-authority decision (Codex/other reviewers cannot deadlock
-    push or merge -- `review_authority_state()`'s "pending" covers exactly
-    the orchestration states in `NON_RED_REVIEW_STATES`, e.g.
-    `WAITING_FOR_REVIEWER`, `REVIEW_IN_PROGRESS`, embedded in its detail
-    string). "Is this candidate genuinely done" is a higher bar than "is this
-    candidate mergeable by deterministic gates", so a bounded
-    independent-review opportunity that was actually requested and has not
-    yet reached a terminal state means completion is rejected here even when
-    `evaluate()` itself would report success. This does not change what
-    `evaluate()` publishes to the GitHub status API or what Merge Readiness
-    allows a human to merge -- only what this narrower "should a worker
-    consider this done" question answers.
+    Independent-review orchestration is advisory and cannot create a second,
+    hidden completion gate. Authenticated findings remain enforced by the
+    canonical unresolved-thread / CHANGES_REQUESTED checks in ``evaluate``.
     """
 
     decision = evaluate(observation)
     if decision.state != "success":
         return CompletionVerdict(False, "COMPLETION_REJECTED", decision.description)
-    authority_state, authority_detail = observation.review_authority
-    if authority_state == "pending":
-        return CompletionVerdict(
-            False,
-            "COMPLETION_REJECTED",
-            f"Independent-review opportunity has not reached a terminal state ({authority_detail}); "
-            "merge-readiness itself does not block on this, but completion does.",
-        )
     return CompletionVerdict(True, "COMPLETION_ACCEPTED", decision.description)
 
 

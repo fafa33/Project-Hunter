@@ -556,6 +556,12 @@ def review_adoption_acknowledgement(
 
     ack = review_acknowledgement(str(observation.get("body") or ""))
     if ack is not None:
+        if (
+            observation.get("commit_id") != head_sha
+            or ack.get("head_sha") != head_sha
+            or ack.get("claims_id") != claims_id
+        ):
+            return None
         return ack
     if (
         observation.get("agent_id") != pre_ready.CODEX_REVIEW_AUTHORITY
@@ -584,6 +590,83 @@ def review_adoption_acknowledgement(
         "verdict": "clear",
         "summary": "Authenticated Codex exact-head review found no major issues for the current committed review request.",
     }
+
+
+def bind_native_codex_reviews_to_claims(reviews: Any, head_sha: str, claims_id: str) -> list[dict[str, Any]]:
+    """Bind raw native Codex reviews after the caller validates the trusted current request."""
+    if not isinstance(reviews, list):
+        raise ValueError("review payload is not a list")
+    login = reviewer_login({"id": "codex"})
+    bound: list[dict[str, Any]] = []
+    for item in reviews:
+        if not isinstance(item, dict) or not isinstance(item.get("user"), dict):
+            raise ValueError("malformed review record")
+        copy = dict(item)
+        if str(item["user"].get("login") or "").strip().lower() == login and item.get("commit_id") == head_sha:
+            copy["trigger_claims_id"] = claims_id
+        bound.append(copy)
+    return bound
+
+
+def latest_codex_review_is_exact_head_clear(reviews: Any, head_sha: str, claims_id: str) -> bool:
+    """Whether the newest admissible Codex review is an adoptable clear of ``head_sha``.
+
+    This is the one shared statement of governance's selection semantics for the
+    collector and orchestrator: the same admissible review states, the same
+    per-reviewer latest ordering by ``(submitted_at, id)``, and the same adoption
+    predicate. Only the latest review may establish clear authority, so a later
+    finding, ``CHANGES_REQUESTED``, dismissal or review of another commit
+    supersedes an earlier clear. A malformed collection raises ``ValueError``
+    exactly where governance rejects the whole collection, so no caller can
+    treat evidence governance would refuse as authority.
+    """
+
+    if not isinstance(reviews, list):
+        raise ValueError("review payload is not a list")
+    login = reviewer_login({"id": "codex"})
+    latest: dict[str, Any] | None = None
+    latest_key: tuple[str, int] | None = None
+    latest_actionable: tuple[int, str] | None = None
+    for item in reviews:
+        if not isinstance(item, dict) or not isinstance(item.get("user"), dict):
+            raise ValueError("malformed review record")
+        if str(item["user"].get("login") or "").strip().lower() != login:
+            continue
+        state = item.get("state")
+        body = str(item.get("body") or "")
+        if state not in {"APPROVED", "COMMENTED", "CHANGES_REQUESTED", "DISMISSED"}:
+            continue
+        if state == "COMMENTED" and not _substantive_review_body(body):
+            continue
+        raw_review_id = item.get("id")
+        if isinstance(raw_review_id, bool) or not isinstance(raw_review_id, (int, str)):
+            raise ValueError("malformed review record")
+        try:
+            review_id = int(raw_review_id)
+        except (TypeError, ValueError):
+            raise ValueError("malformed review record") from None
+        if review_id <= 0:
+            raise ValueError("malformed review record")
+        key = (str(item.get("submitted_at") or ""), review_id)
+        if latest_key is None or key > latest_key:
+            latest, latest_key = item, key
+        if state in {"APPROVED", "CHANGES_REQUESTED", "DISMISSED"} and (
+            latest_actionable is None or review_id > latest_actionable[0]
+        ):
+            latest_actionable = (review_id, str(state))
+    if latest is None:
+        return False
+    if latest_actionable is not None and latest_actionable[1] == "CHANGES_REQUESTED":
+        return False
+    observation = {
+        "agent_id": pre_ready.CODEX_REVIEW_AUTHORITY,
+        "source_kind": "review",
+        "state": latest.get("state"),
+        "commit_id": latest.get("commit_id"),
+        "body": str(latest.get("body") or ""),
+        "trigger_claims_id": latest.get("trigger_claims_id"),
+    }
+    return review_adoption_acknowledgement(observation, head_sha, claims_id) is not None
 
 
 def reviewer_login(agent: dict[str, Any]) -> str:
@@ -732,8 +815,13 @@ def read_pr_pool_review_comments(
                 )
             ] = result
 
-        # Bind native Codex reviews to the latest canonical trusted trigger that
-        # precedes the review. A same-HEAD review from an older request is stale.
+        # Bind native Codex reviews to the latest canonical trusted trigger of the
+        # same exact HEAD. Binding is by head, never by ordering: GitHub binds an
+        # authenticated review to its commit, and the review request is a
+        # committed artifact of that commit, so a review of this exact HEAD that
+        # was submitted before a later (e.g. remediation-generation) trigger is
+        # still a review of this request. HEAD mutation invalidates it, because
+        # the review's commit_id then no longer equals the exact HEAD.
         native_triggers = []
         for comment in issue_comments:
             if str((comment.get("user") or {}).get("login") or "").lower() != "github-actions[bot]":
@@ -748,10 +836,12 @@ def read_pr_pool_review_comments(
         for review_item in reviews:
             if review_item.get("agent_id") != "codex" or review_item.get("source_kind") != "review":
                 continue
+            if review_item.get("commit_id") != exact_head:
+                continue
             eligible = [
                 t
-                for created, t in native_triggers
-                if created <= str(review_item.get("submitted_at") or "") and t.get("head_sha") == exact_head
+                for _created, t in sorted(native_triggers, key=lambda item: item[0])
+                if t.get("head_sha") == exact_head
             ]
             if eligible:
                 review_item["trigger_claims_id"] = eligible[-1]["claims_id"]

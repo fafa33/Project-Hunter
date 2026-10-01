@@ -397,6 +397,9 @@ def test_native_codex_clear_is_correlated_to_trigger_and_exact_head(monkeypatch)
     monkeypatch.setattr(collector, "_pages", lambda *_a, **_k: [] if "reviews" in _a[2] else [native])
 
     assert backend.response_state(POOL["agents"][0], trigger) == "clear"
+    # A native clear *comment* that predates the trigger is still not a response:
+    # exact-head adoption regardless of ordering covers authenticated review
+    # objects only (see tests/test_exact_head_codex_clear_adoption.py).
     native["created_at"] = "2026-09-16T23:59:59Z"
     assert backend.response_state(POOL["agents"][0], trigger) == "waiting"
 
@@ -428,13 +431,15 @@ def test_native_codex_wrong_head_is_not_a_response(monkeypatch):
     assert backend.response_state(POOL["agents"][0], trigger) == "blocking"
 
 
-def test_codex_policy_is_single_bounded_300_second_invocation():
+def test_codex_policy_uses_github_native_review_request_with_bounded_review_budget():
     pool, error = collector.review.load_reviewer_pool()
     assert not error and pool is not None
     codex = next(agent for agent in pool["agents"] if agent["id"] == "codex")
     assert pool["timeout_policy"]["retries_per_agent"] == 0
     assert codex["review_timeout_seconds"] == 300
-    assert codex["ack_timeout_seconds"] == 300
+    assert codex["ack_timeout_seconds"] == 30
+    assert codex["trigger_method"] == "github-review-request:chatgpt-codex-connector[bot]"
+    assert codex["evidence_parser"] == "github-review-native.v1"
 
 
 def test_native_codex_unavailable_response_fails_over_immediately(monkeypatch):
