@@ -715,6 +715,26 @@ def _collector_harness(monkeypatch):
     return stored
 
 
+def test_an_exact_head_codex_clear_dispatches_no_redundant_collector(monkeypatch):
+    """An authenticated Codex clear of this exact head is already authority.
+
+    Reconcile must not post another bot ``@codex review`` for unchanged content,
+    and a head with no such clear still dispatches exactly once.
+    """
+
+    stored = _collector_harness(monkeypatch)
+    _readiness_harness(monkeypatch, prerequisite_state="success", request_valid=True)
+
+    monkeypatch.setattr(orchestrator, "exact_head_codex_clear_exists", lambda *_args: True)
+    assert orchestrator.ensure_current("owner/repo", "token", 472) is None
+    assert stored["dispatches"] == 0
+    assert stored["cycle"] is None
+
+    monkeypatch.setattr(orchestrator, "exact_head_codex_clear_exists", lambda *_args: False)
+    assert orchestrator.ensure_current("owner/repo", "token", 472) is not None
+    assert stored["dispatches"] == 1
+
+
 def test_blocked_review_request_reports_the_reason_and_never_dispatches(monkeypatch):
     """PR #540: trusted preflight already passed but the exact-head pre-ready
     review request is not valid for this head. A reconcile must not report
