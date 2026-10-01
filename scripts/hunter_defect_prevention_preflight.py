@@ -1609,6 +1609,7 @@ def validate_review_after_remediation_boundary() -> list[str]:
             "body": body,
             "commit_id": head,
             "submitted_at": when,
+            "trigger_claims_id": claims,
         }
 
     older = codex_review(1, "2026-09-30T09:00:00Z", clear_body)
