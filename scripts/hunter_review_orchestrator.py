@@ -972,6 +972,33 @@ def review_prerequisites_ready(repository: str, token: str, pr_number: int, head
     return review_request_state(repository, token, pr_number, head_sha).ready
 
 
+def exact_head_codex_clear_exists(repository: str, token: str, pr_number: int, head_sha: str) -> bool:
+    """Whether authenticated Codex has a native clear review bound to ``head_sha``."""
+
+    import hunter_governance_review_v2 as governance
+
+    login = governance.reviewer_login({"id": "codex"})
+    page = 1
+    while True:
+        batch = request_json(repository, token, "GET", f"pulls/{pr_number}/reviews?per_page=100&page={page}")
+        if not isinstance(batch, list):
+            # Unreadable evidence adopts nothing: dispatch proceeds exactly as it
+            # did before exact-head adoption existed.
+            return False
+        for item in batch:
+            if (
+                isinstance(item, dict)
+                and str((item.get("user") or {}).get("login") or "").lower() == login
+                and item.get("commit_id") == head_sha
+                and str(item.get("state") or "").upper() == "COMMENTED"
+                and governance.native_codex_clear_review(str(item.get("body") or ""), head_sha)
+            ):
+                return True
+        if len(batch) < 100:
+            return False
+        page += 1
+
+
 def ensure_current(repository: str, token: str, pr_number: int) -> ReviewCycle | None:
     pr = request_json(repository, token, "GET", f"pulls/{pr_number}")
     if not isinstance(pr, dict) or str(pr.get("state") or "") != "open":
@@ -1024,6 +1051,13 @@ def ensure_current(repository: str, token: str, pr_number: int) -> ReviewCycle |
     # Derived here, never accepted from a dispatch input or from candidate prose:
     # the generation is what authorises one more reviewer invocation, so only
     # trusted GitHub review-thread state may decide it.
+    # An authenticated Codex clear of this exact HEAD is already review
+    # authority for it, whatever order triggers and reviews happened in, and
+    # governance adopts it directly. Asking Codex again about unchanged content
+    # would only add a redundant bot request, so none is dispatched. A new HEAD
+    # has no such clear and dispatches as usual.
+    if exact_head_codex_clear_exists(repository, token, pr_number, head_sha):
+        return None
     generation_id = current_remediation_generation(repository, token, pr_number, head_sha, readiness.claims_id)
     return ensure_collector(repository, token, pr_number, head_sha, generation_id)
 

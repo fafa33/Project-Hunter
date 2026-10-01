@@ -1006,6 +1006,32 @@ class GitHubBackend:
             or re.fullmatch(r"to use codex(?: here)?, create a codex account and connect to github\.?", normalized)
         )
 
+    def _exact_head_native_clear(self, login: str) -> bool:
+        """Whether authenticated Codex already cleared this exact HEAD.
+
+        A clear is bound to the commit it names, not to when it was written. The
+        trigger timestamp therefore cannot invalidate it: a review of this exact
+        HEAD that predates a later trigger (for example a remediation
+        generation's) still reviewed this immutable content. Only the clear
+        outcome is adopted regardless of ordering, and only as an authenticated
+        review object, the one form governance adopts. A review that carries
+        findings keeps requiring a response after the trigger, because
+        remediation owes a fresh review. HEAD mutation invalidates the clear:
+        the review's commit_id and its named reviewed commit then no longer
+        match the exact HEAD.
+        """
+
+        for item in _pages(self.repository, self.token, f"pulls/{self.pr}/reviews"):
+            if (
+                (item.get("user") or {}).get("login", "").lower() == login
+                and item.get("commit_id") == self.expected_head
+                and str(item.get("state") or "").upper() == "COMMENTED"
+                and governance._substantive_review_body(str(item.get("body") or ""))
+                and self._native_clear(str(item.get("body") or ""), self.expected_head)
+            ):
+                return True
+        return False
+
     def response_state(self, agent: dict[str, Any], trigger: dict[str, Any]) -> str:
         if trigger.get("state") == "unavailable":
             return "unavailable"
@@ -1018,6 +1044,8 @@ class GitHubBackend:
             return str(result["verdict"])
         login = governance.reviewer_login(agent)
         created = str(trigger["created_at"])
+        if agent.get("id") == "codex" and self._exact_head_native_clear(login):
+            return "clear"
         matching_reviews = [
             item
             for item in _pages(self.repository, self.token, f"pulls/{self.pr}/reviews")

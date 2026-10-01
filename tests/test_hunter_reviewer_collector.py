@@ -397,6 +397,9 @@ def test_native_codex_clear_is_correlated_to_trigger_and_exact_head(monkeypatch)
     monkeypatch.setattr(collector, "_pages", lambda *_a, **_k: [] if "reviews" in _a[2] else [native])
 
     assert backend.response_state(POOL["agents"][0], trigger) == "clear"
+    # A native clear *comment* that predates the trigger is still not a response:
+    # exact-head adoption regardless of ordering covers authenticated review
+    # objects only (see tests/test_exact_head_codex_clear_adoption.py).
     native["created_at"] = "2026-09-16T23:59:59Z"
     assert backend.response_state(POOL["agents"][0], trigger) == "waiting"
 

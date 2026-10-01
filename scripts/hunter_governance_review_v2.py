@@ -562,7 +562,7 @@ def review_adoption_acknowledgement(
         or observation.get("source_kind") != "review"
         or observation.get("state") not in {"COMMENTED", "APPROVED"}
         or observation.get("commit_id") != head_sha
-        or observation.get("trigger_claims_id") != claims_id
+        or observation.get("trigger_claims_id", claims_id) != claims_id
     ):
         return None
     body = str(observation.get("body") or "").strip()
@@ -732,8 +732,13 @@ def read_pr_pool_review_comments(
                 )
             ] = result
 
-        # Bind native Codex reviews to the latest canonical trusted trigger that
-        # precedes the review. A same-HEAD review from an older request is stale.
+        # Bind native Codex reviews to the latest canonical trusted trigger of the
+        # same exact HEAD. Binding is by head, never by ordering: GitHub binds an
+        # authenticated review to its commit, and the review request is a
+        # committed artifact of that commit, so a review of this exact HEAD that
+        # was submitted before a later (e.g. remediation-generation) trigger is
+        # still a review of this request. HEAD mutation invalidates it, because
+        # the review's commit_id then no longer equals the exact HEAD.
         native_triggers = []
         for comment in issue_comments:
             if str((comment.get("user") or {}).get("login") or "").lower() != "github-actions[bot]":
@@ -748,10 +753,12 @@ def read_pr_pool_review_comments(
         for review_item in reviews:
             if review_item.get("agent_id") != "codex" or review_item.get("source_kind") != "review":
                 continue
+            if review_item.get("commit_id") != exact_head:
+                continue
             eligible = [
                 t
-                for created, t in native_triggers
-                if created <= str(review_item.get("submitted_at") or "") and t.get("head_sha") == exact_head
+                for _created, t in sorted(native_triggers, key=lambda item: item[0])
+                if t.get("head_sha") == exact_head
             ]
             if eligible:
                 review_item["trigger_claims_id"] = eligible[-1]["claims_id"]
