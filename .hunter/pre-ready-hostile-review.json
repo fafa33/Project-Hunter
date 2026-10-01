@@ -2,51 +2,45 @@
   "claims": {
     "acceptance_criteria": [
       {
-        "criterion": "Codex review waiting is bounded to at most 300 seconds per exact candidate HEAD.",
-        "evidence": "This change does not alter this behaviour: the collector timeout, trigger, failover and exhaustion code paths it concerns are untouched by the diff. Existing coverage remains in tests/test_hunter_reviewer_collector.py and tests/test_exact_head_review_authority.py, which pass unchanged.",
+        "criterion": "review_authority in docs/CODE_WRITE_POLICY.json carries a coverage_scopes key, defaulting to [].",
+        "evidence": "docs/CODE_WRITE_POLICY.json declares review_progression.review_authority.coverage_scopes = []; load_coverage_scopes returns no scopes when the key is absent or empty, so the introducing pull request ships no authorization.",
         "id": "AC-1",
-        "verdict": "not-applicable"
+        "verdict": "satisfied"
       },
       {
-        "criterion": "Codex trigger permission failures such as GitHub HTTP 403 are recorded as reviewer unavailability and cause failover instead of crashing the collector.",
-        "evidence": "This change does not alter this behaviour: the collector timeout, trigger, failover and exhaustion code paths it concerns are untouched by the diff. Existing coverage remains in tests/test_hunter_reviewer_collector.py and tests/test_exact_head_review_authority.py, which pass unchanged.",
+        "criterion": "A trusted loader reads it, failing closed on any malformed or ambiguous entry.",
+        "evidence": "load_coverage_scopes reads only the trusted CODE_WRITE_POLICY_PATH and returns an error for a non-list value, an unknown mode, a blank or non-string criterion, a missing owner field, or a duplicate Issue+mode entry; tests/test_scoped_acceptance_coverage.py asserts each case fails closed.",
         "id": "AC-2",
-        "verdict": "not-applicable"
+        "verdict": "satisfied"
       },
       {
-        "criterion": "A standard authenticated Codex clear review bound to the exact HEAD can satisfy review adoption without requiring an artificial response format.",
-        "evidence": "An authenticated Codex clear review whose commit_id and named reviewed commit equal the exact HEAD is adopted regardless of when it was submitted relative to a bot trigger, in governance (read_pr_pool_review_comments binds by head, review_adoption_acknowledgement), in the collector live response state, and in orchestrator dispatch. tests/test_exact_head_codex_clear_adoption.py covers adoption, HEAD mutation, untrusted identity, mismatched commit, findings-bearing reviews, and hidden-finding clears.",
+        "criterion": "A review may declare a bounded_correction coverage scope; the trusted controller admits it only against an owner authorization naming the same Issue, mode, and a criteria subset.",
+        "evidence": "A candidate declares a document-level coverage_scope. _coverage_scope_error requires the claimed criteria to be the governing Issue's own normalized criteria, then requires a trusted authorization with the same Issue and mode; a claimed criterion outside the authorized set is refused as excess, never clamped. Only then is SCOPED_STATE returned.",
         "id": "AC-3",
         "verdict": "satisfied"
       },
       {
-        "criterion": "Reviewer exhaustion is accepted only from a trusted default-branch collector run with immutable exact-head/configuration evidence.",
-        "evidence": "This change does not alter this behaviour: the collector timeout, trigger, failover and exhaustion code paths it concerns are untouched by the diff. Existing coverage remains in tests/test_hunter_reviewer_collector.py and tests/test_exact_head_review_authority.py, which pass unchanged. The exhaustion verifier calls the same live response state, so an exact-head Codex clear now correctly refuses reuse of a lower-priority exhaustion receipt; this only narrows what is accepted.",
+        "criterion": "A valid bounded correction produces a scoped outcome that is never the verdict satisfying the Issue.",
+        "evidence": "ReviewVerdict.ok is False for the scoped state and the verdict text states it is not Issue completion and satisfies no remaining criterion. VALID_SCOPED_CORRECTION is an admission state only, and hunter_merge_readiness_v2.py records it alongside rather than as the valid review state.",
         "id": "AC-4",
-        "verdict": "not-applicable"
+        "verdict": "satisfied"
       },
       {
-        "criterion": "If all eligible reviewers are exhausted, a deterministic last-resort guard may progress only when trusted preflight and governance preflight are green, structured evidence is complete, and unresolved review-thread count is zero.",
-        "evidence": "This change does not alter this behaviour: the collector timeout, trigger, failover and exhaustion code paths it concerns are untouched by the diff. Existing coverage remains in tests/test_hunter_reviewer_collector.py and tests/test_exact_head_review_authority.py, which pass unchanged.",
+        "criterion": "With no declaration or no authorization, the full Issue criteria remain required.",
+        "evidence": "With no declared scope or no trusted authorization, _coverage_scope_error returns an incomplete problem and the document is measured against every criterion the Issue defines. Absence never grants the relaxation; tests cover self-declaration without authorization and a declaration with no trusted entry.",
         "id": "AC-5",
-        "verdict": "not-applicable"
+        "verdict": "satisfied"
       },
       {
-        "criterion": "Missing, stale, malformed, candidate-authored, or untrusted exhaustion evidence fails closed.",
-        "evidence": "This change does not alter this behaviour: the collector timeout, trigger, failover and exhaustion code paths it concerns are untouched by the diff. Existing coverage remains in tests/test_hunter_reviewer_collector.py and tests/test_exact_head_review_authority.py, which pass unchanged. The new adoption path fails closed: unreadable review evidence adopts nothing, and only the trusted Codex identity bound to the exact HEAD is adopted.",
+        "criterion": "Exact head, exact content, applicable defect families, findings, regression evidence, and correction-commit range remain mandatory under a bounded scope.",
+        "evidence": "verify_claims runs the same sequence before and after the scope decision: exact review_target equality, review_target_digest, base_sha binding, applicable defect families from the trusted registry, resolved findings' regression test present in the change set, correction commits inside the candidate range, and exact-head authority. The bounded path relaxes only the criterion set; tests/test_scoped_acceptance_coverage.py re-proves each invariant under a declared scope.",
         "id": "AC-6",
-        "verdict": "not-applicable"
+        "verdict": "satisfied"
       },
       {
-        "criterion": "The reviewer-orchestration bootstrap never executes candidate-controlled code as trusted authority before the orchestration implementation is merged to main.",
-        "evidence": "No bootstrap or candidate-code execution path is touched. Trusted controller code still executes only from the default branch; the trusted replay harness passes against this candidate with main as the grader.",
+        "criterion": "This feature is inert for the pull request that introduces it.",
+        "evidence": "coverage_scopes ships empty and the trusted controller reads the default branch's policy. Verified against origin/main@1ce5e097 that trusted main has no load_coverage_scopes, no SCOPED_STATE and no coverage_scopes parameter on verify_claims, so this candidate is evaluated under full-Issue rules by code that predates the feature.",
         "id": "AC-7",
-        "verdict": "not-applicable"
-      },
-      {
-        "criterion": "No autonomous Ready, merge, or deployment action is introduced; owner approval remains required for merge.",
-        "evidence": "The diff adds no Ready, merge or deployment action and no write authority. Adoption of an exact-head clear only avoids a redundant reviewer request; merge remains an owner action behind Merge Readiness.",
-        "id": "AC-8",
         "verdict": "satisfied"
       }
     ],
@@ -64,246 +58,190 @@
       "transaction-snapshot-consistency"
     ],
     "base_ref": "main",
-    "base_sha": "6882933981e4dfb52e13192fea034a7fff29ab30",
+    "base_sha": "1c0ec5f9ee791644a039e12351fdbced13f46954",
     "defect_families": [
       {
-        "evidence": "Adoption binds the exact operation and content: the review's commit_id and named reviewed commit must both equal the exact HEAD, so a review of one head cannot authorize another (test_b_*).",
+        "evidence": "A scope must match the trusted Issue and mode, is bound to the evaluated exact head from trusted evidence (hunter_pre_ready_review.py:1163), and any claimed criterion outside the authorized set is refused, so an authorization cannot be replayed onto a different Issue, mode, head, or wider criteria set.",
         "family": "DFF-007",
         "outcome": "clear"
       },
       {
-        "evidence": "Adoption relies on GitHub-authenticated review identity bound to a commit; no repository-owned artifact is made forgeable and the clear body is still validated by the governance predicate, including its trailing content.",
+        "evidence": "review_id and review_request.claims_id are SHA-256 over the canonical claims (hunter_pre_ready_review.py:233) and are recomputed by verify_claims, which rejects a hand-edited document as stale; observed live on this candidate. review_target_digest and base_sha give the same content and fork-point binding.",
         "family": "DFF-008",
         "outcome": "clear"
       },
       {
-        "evidence": "Reviewed the diff against this family's invariant: the change touches review-evidence adoption in the trusted controller only, and does not touch the surface this family governs.",
+        "evidence": "No connector ingress path is added or modified. The new field is read from the trusted default-branch policy, so a candidate cannot supply the authorization it is measured against, and no ingress proof format is altered.",
         "family": "DFF-009",
         "outcome": "clear"
       },
       {
-        "evidence": "Reviewed the diff against this family's invariant: the change touches review-evidence adoption in the trusted controller only, and does not touch the surface this family governs.",
+        "evidence": "No author, committer or identity handling is introduced. Writer Provenance reports the governed range up to HEAD as authorization-bound, and every commit in the range carries the authorized Farhad5778 identity.",
         "family": "DFF-010",
         "outcome": "clear"
       },
       {
-        "evidence": "Reviewed the diff against this family's invariant: the change touches review-evidence adoption in the trusted controller only, and does not touch the surface this family governs.",
+        "evidence": "The candidate is a single signed commit over the fork point, so no intermediate commit exists to strand. The pre-ready artifact is regenerated from current content and is the final mutation of the candidate, so no per-commit rewind is required.",
         "family": "DFF-011",
         "outcome": "clear"
       },
       {
-        "evidence": "Reviewed the diff against this family's invariant: the change touches review-evidence adoption in the trusted controller only, and does not touch the surface this family governs.",
+        "evidence": "No authorization receipt is written or modified and the receipt path is untouched. The artifact is regenerated from the exact current base..HEAD content, and the pre-push hook blocks a dirty tree.",
         "family": "DFF-012",
         "outcome": "clear"
       },
       {
-        "evidence": "A complete exact-head hostile review is still required; adoption only supplies the independent reviewer's authenticated clear for the same exact head and claims.",
+        "evidence": "The document is generated in --request mode and records no authority. verify_claims refuses any document carrying review_request as 'a review request is not completed exact-head review authority' (hunter_pre_ready_review.py:1218); admission still requires a completed exact-head review.",
         "family": "DFF-013",
         "outcome": "clear"
       },
       {
-        "evidence": "Reviewed the diff against this family's invariant: the change touches review-evidence adoption in the trusted controller only, and does not touch the surface this family governs.",
+        "evidence": "No hosted prerequisite or status mapping is added or modified; GITHUB_STATUS_MAP and canonical_status are untouched and an unrecognised status still fails closed.",
         "family": "DFF-014",
         "outcome": "clear"
       },
       {
-        "evidence": "DFF-015 prevention state is not changed by this correction; docs/DEFECT_REGISTRY.json is present elsewhere in the PR for the separately registered DFF-042 lifecycle defect, so no untouched-registry claim is made.",
+        "evidence": "docs/DEFECT_REGISTRY.json is untouched, so no family claims a prevention stage. The change adds regression tests rather than a prevention-stage claim.",
         "family": "DFF-015",
         "outcome": "clear"
       },
       {
-        "evidence": "Reviewed the diff against this family's invariant: the change touches review-evidence adoption in the trusted controller only, and does not touch the surface this family governs.",
+        "evidence": "review_target must equal the trusted base..HEAD change set and review_target_digest must match, so a review cannot be reused across mutated content; verify_claims rejects a document describing different content.",
         "family": "DFF-016",
         "outcome": "clear"
       },
       {
-        "evidence": "Reviewed the diff against this family's invariant: the change touches review-evidence adoption in the trusted controller only, and does not touch the surface this family governs.",
+        "evidence": "Not applicable: no issuer composition, volume mount or runtime bootstrap path is added or modified. The change is confined to policy loading, verdict construction, admission and merge-readiness state sets.",
         "family": "DFF-019",
         "outcome": "clear"
       },
       {
-        "evidence": "Reviewed the diff against this family's invariant: the change touches review-evidence adoption in the trusted controller only, and does not touch the surface this family governs.",
+        "evidence": "No live instance, execution ledger or ownership identity is added or modified.",
         "family": "DFF-020",
         "outcome": "clear"
       },
       {
-        "evidence": "Reviewed the diff against this family's invariant: the change touches review-evidence adoption in the trusted controller only, and does not touch the surface this family governs.",
+        "evidence": "No worker, drain or shutdown handling is added or modified; the change has no runtime lifecycle surface.",
         "family": "DFF-021",
         "outcome": "clear"
       },
       {
-        "evidence": "Merge Readiness is unchanged and still fails closed without a current-head review adopted by governance; the new path adds an adoption route for an exact-head clear only.",
+        "evidence": "hunter_merge_readiness_v2.py only adds VALID_SCOPED_CORRECTION to the three authority state sets beside the existing valid state; the required complete exact-head review and trusted PR evidence checks are unchanged, so readiness still fails closed without a current-head review.",
         "family": "DFF-022",
         "outcome": "clear"
       },
       {
-        "evidence": "Reviewed the diff against this family's invariant: the change touches review-evidence adoption in the trusted controller only, and does not touch the surface this family governs.",
+        "evidence": "No execution entry point or ledger claim is added or modified.",
         "family": "DFF-023",
         "outcome": "clear"
       },
       {
-        "evidence": "Review-after-remediation is unchanged: only a clear is adopted regardless of ordering; a review carrying findings still requires a response after the trigger, and unresolved threads stay blocking.",
+        "evidence": "No review generation, cycle or remediation transition is modified. The document is a request for external exact-head review and authority is adopted out of band, so accepting a review still requires no additional candidate commit.",
         "family": "DFF-024",
         "outcome": "clear"
       },
       {
-        "evidence": "Reviewed the diff against this family's invariant: the change touches review-evidence adoption in the trusted controller only, and does not touch the surface this family governs.",
+        "evidence": "No authority cutover is performed. The reviewer pool, the Codex primary and the exhaustion rules are untouched, and coverage_scopes sits beside reviewer_pool without changing tiering.",
         "family": "DFF-025",
         "outcome": "clear"
       },
       {
-        "evidence": "A dispatch-suppression deadlock shape was found during the adversarial pass and corrected before this head: the first version suppressed collector dispatch for a clear the governance predicate would refuse (hidden findings in a collapsed trailer). Dispatch is now skipped only for a review governance itself adopts; unreadable evidence falls back to the previous dispatch behaviour. Regression: test_a_clear_whose_trailing_content_hides_findings_is_adopted_nowhere.",
+        "evidence": "A coverage scope is an owner authorization read from the default branch, not an external provider dependency. With no scope or no reviewer the strict full-Issue path stands, so provider absence cannot deadlock merge authority; the pre-push hook reports a missing external review as a non-blocking NOTE.",
         "family": "DFF-026",
-        "outcome": "repaired"
+        "outcome": "clear"
       },
       {
-        "evidence": "Reviewed the diff against this family's invariant: the change touches review-evidence adoption in the trusted controller only, and does not touch the surface this family governs.",
+        "evidence": "The candidate was pushed only through .githooks/pre-push, which ran the Architecture Index, Artifact, Defect Prevention, Ruff, Black and Mypy guards and the push-safety lane for this exact HEAD before the remote accepted it. No --no-verify was used and the change adds no draft-PR bypass.",
         "family": "DFF-029",
         "outcome": "clear"
       },
       {
-        "evidence": "Reviewed the diff against this family's invariant: the change touches review-evidence adoption in the trusted controller only, and does not touch the surface this family governs.",
+        "evidence": "The only tracked asset added is the coverage_scopes key inside the existing tracked docs/CODE_WRITE_POLICY.json, read by load_coverage_scopes at its declared path. The tracked path grammar is unchanged and the committed policy parses.",
         "family": "DFF-033",
         "outcome": "clear"
       },
       {
-        "evidence": "Reviewed the diff against this family's invariant: the change touches review-evidence adoption in the trusted controller only, and does not touch the surface this family governs.",
+        "evidence": "The new tests assert only on repository-owned state: they construct claims and documents in-process and call verify_claims and verify_review_request directly. No test reads an Issue body, a remote API response or a live endpoint.",
         "family": "DFF-035",
         "outcome": "clear"
       },
       {
-        "evidence": "Reviewed the diff against this family's invariant: the change touches review-evidence adoption in the trusted controller only, and does not touch the surface this family governs.",
+        "evidence": "Governance classification stays machine-readable: a valid bounded correction maps to the VALID_SCOPED_CORRECTION state string and verify_claims returns the SCOPED_STATE verdict token rather than prose deciding the outcome.",
         "family": "DFF-037",
         "outcome": "clear"
       },
       {
-        "evidence": "Reviewed the diff against this family's invariant: the change touches review-evidence adoption in the trusted controller only, and does not touch the surface this family governs.",
+        "evidence": "load_coverage_scopes fails closed and returns an error for malformed, duplicate or unknown-mode entries, and the controller refuses when scope evidence is unavailable rather than continuing best-effort. A scoped verdict never silently degrades to a valid one.",
         "family": "DFF-038",
         "outcome": "clear"
       },
       {
-        "evidence": "Reviewed the diff against this family's invariant: the change touches review-evidence adoption in the trusted controller only, and does not touch the surface this family governs.",
+        "evidence": "No REST endpoint or repository-scoped request helper is added or modified; the change makes no network call.",
         "family": "DFF-039",
         "outcome": "clear"
       },
       {
-        "evidence": "This is a trusted-controller change that cannot execute for its own pull request. The trusted orchestrator replay harness passes against this candidate with main as the grader, and the change takes effect only after owner merge.",
+        "evidence": "coverage_scopes is read from the trusted default branch and the introducing candidate is judged by trusted main's copy, which has no scoped branch. Verified against origin/main@1ce5e097: no load_coverage_scopes, no SCOPED_STATE, no coverage_scopes parameter, so the new semantics cannot admit this candidate and no bootstrap exception is required.",
         "family": "DFF-040",
-        "outcome": "clear"
-      },
-      {
-        "evidence": "The governed change to scripts/hunter_defect_prevention_preflight.py uses only standard-library inspect and the in-repo hunter_governance_review_v2 module for a semantic boundary check. It adds no external tooling, optional plugin, pytest selection option, dependency pin, or trusted-runner provisioning requirement.",
-        "family": "DFF-017",
-        "outcome": "clear"
-      },
-      {
-        "evidence": "Hunter Governance Review completion is now a workflow_run trigger for the trusted default-branch Reconcile workflow. Reconcile derives the triggering PR number from the workflow_run pull-request association and invokes the privileged orchestrator; regression coverage is tests/test_hunter_governance_review_v2.py::test_event_reconcile_scopes_to_triggering_pr_and_reserves_full_sweep_for_recovery.",
-        "family": "DFF-042",
-        "outcome": "repaired"
-      },
-      {
-        "evidence": "The workflow-only change hands a trusted workflow_run PR association to the existing default-branch reconcile/orchestrator. It does not alter Issue Agent execution admission, launcher selection, Railway issuer startup, or any readiness probe/execution boundary.",
-        "family": "DFF-027",
-        "outcome": "clear"
-      },
-      {
-        "evidence": "The changed workflow executes the trusted default-branch reconcile implementation and introduces no candidate execution under publication, signing, or candidate-publication credentials. The candidate-reachable Governance Review remains read-only; actions:write stays in the trusted reconcile boundary.",
-        "family": "DFF-028",
-        "outcome": "clear"
-      },
-      {
-        "evidence": "The reconcile workflow change adds only an event trigger, one GitHub-provided PR-number environment value, and shell branching to the already provisioned existing orchestrator path. It adds no import, package, runtime dependency, setup action, or new workflow entrypoint dependency.",
-        "family": "DFF-036",
         "outcome": "clear"
       }
     ],
-    "findings": [],
-    "issue": "474",
+    "findings": [
+      {
+        "evidence": "An earlier revision of this candidate's committed artifact carried another candidate's claims and a derived digest that no longer matched them. Hunter's own binding detected it independently: verify_claims rejects review_id/review_request.claims_id that do not recompute from the claims, and separately rejects a review_target and base_sha that are not this candidate's. The artifact has been regenerated through the canonical hunter_pre_ready_review --request path, so every derived field is Hunter-derived and the digest binding is a standing guard rather than a one-time fix.",
+        "id": "F-1",
+        "resolution": "resolved",
+        "resolution_evidence": {
+          "correction": "c4ef18eb965f4d4fda7fb3c16c1deba7dab99fff",
+          "regression_test": "tests/test_scoped_acceptance_coverage.py"
+        },
+        "severity": "non-blocking"
+      }
+    ],
+    "issue": "543",
     "review_target": [
       {
-        "blob_sha": "7d789f4e2d88bf97025d783dd8f93718a079d761",
-        "path": "tests/test_exact_head_codex_clear_adoption.py",
+        "blob_sha": "d53f7264bf427745673a8f99bb65825fe69bbf01",
+        "path": "tests/test_scoped_acceptance_coverage.py",
         "previous_path": "",
         "status": "added"
       },
       {
-        "blob_sha": "c92570a6bd9f7a2365b1ae7d9546a7a52d05d37b",
-        "path": ".github/workflows/hunter-governance-reconcile.yml",
-        "previous_path": "",
-        "status": "modified"
-      },
-      {
-        "blob_sha": "2ed1290af38098147dd3e2204395b28303db54b0",
+        "blob_sha": "c0b675293ad9caf0f3f1ef06c6842b9c22391a98",
         "path": "docs/CODE_WRITE_POLICY.json",
         "previous_path": "",
         "status": "modified"
       },
       {
-        "blob_sha": "9ca00c0144783ba5ad508946c7fc0cffe9fc08bc",
-        "path": "docs/DEFECT_REGISTRY.json",
-        "previous_path": "",
-        "status": "modified"
-      },
-      {
-        "blob_sha": "f4270fee49f120bcd70d805ae07ff628147f0459",
-        "path": "scripts/hunter_defect_prevention_preflight.py",
-        "previous_path": "",
-        "status": "modified"
-      },
-      {
-        "blob_sha": "611adcfb6e8ea71965ad3a465c47108242edb8a8",
+        "blob_sha": "dedc783153d35deeefb4a26470778f9f8e6391bd",
         "path": "scripts/hunter_governance_review_v2.py",
         "previous_path": "",
         "status": "modified"
       },
       {
-        "blob_sha": "326906900dc5abceb9ce0d59a0eb29703ad1d062",
-        "path": "scripts/hunter_review_orchestrator.py",
+        "blob_sha": "4129b08b3be009ba18c85cc2b9959d784a3a34db",
+        "path": "scripts/hunter_merge_readiness_v2.py",
         "previous_path": "",
         "status": "modified"
       },
       {
-        "blob_sha": "8de5bab6bdb672532920b8c2b6f9e0037ff18dad",
-        "path": "scripts/hunter_reviewer_collector.py",
+        "blob_sha": "2b57eee47341a6a47a4e748be751f49a6132dcfc",
+        "path": "scripts/hunter_pre_ready_review.py",
         "previous_path": "",
         "status": "modified"
       },
       {
-        "blob_sha": "936b872c4dc113c8e2b1c3477fee16523820e85b",
-        "path": "tests/test_code_write_policy.py",
-        "previous_path": "",
-        "status": "modified"
-      },
-      {
-        "blob_sha": "8338a71b00c77c12698f338a3c707eb29a5c317b",
-        "path": "tests/test_hunter_governance_review_v2.py",
-        "previous_path": "",
-        "status": "modified"
-      },
-      {
-        "blob_sha": "b0ace7507a5353d3e8492d7c23721104cdc08f85",
-        "path": "tests/test_hunter_review_orchestrator.py",
-        "previous_path": "",
-        "status": "modified"
-      },
-      {
-        "blob_sha": "8042f1e2f03f654acb1b0a397c8916cbdb13f71c",
-        "path": "tests/test_hunter_reviewer_collector.py",
-        "previous_path": "",
-        "status": "modified"
-      },
-      {
-        "blob_sha": "97e3fe4cefa2927a7836edebd66f9ea962300052",
-        "path": "tests/test_issue_412_prevention_gate.py",
+        "blob_sha": "cbff88a4ada3bf30f9c07a2ed1eb08e9c1e159c2",
+        "path": "tests/test_exact_head_review_authority.py",
         "previous_path": "",
         "status": "modified"
       }
     ],
-    "review_target_digest": "c682385528d705527f5f840dd2d82f902e0b2f00853d7d07cfcd185d3ca02821"
+    "review_target_digest": "12e7bd5f0ba4fe956b936e18dc557653babb512de5c09103c81d100f75d2f079"
   },
-  "review_id": "9013fb83f4f3d1b39f8ed16c515046edd09e5309010340aaf751ef087cc1df47",
+  "review_id": "9f7bea93bfec5f63f91248b800931d717d8d4dd49dc642d943c89316c2f7e7d2",
   "review_request": {
-    "claims_id": "9013fb83f4f3d1b39f8ed16c515046edd09e5309010340aaf751ef087cc1df47",
+    "claims_id": "9f7bea93bfec5f63f91248b800931d717d8d4dd49dc642d943c89316c2f7e7d2",
     "schema": "hunter.review-request.v1"
   },
   "schema": "hunter.pre-ready-hostile-review.v1"
