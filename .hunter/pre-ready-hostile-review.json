@@ -15,7 +15,7 @@
       },
       {
         "criterion": "A standard authenticated Codex clear review bound to the exact HEAD can satisfy review adoption without requiring an artificial response format.",
-        "evidence": "An authenticated Codex clear review whose commit_id and named reviewed commit equal the exact HEAD is adopted regardless of when it was submitted relative to a bot trigger, in governance (read_pr_pool_review_comments binds by head, review_adoption_acknowledgement), in the collector live response state, and in orchestrator dispatch. tests/test_exact_head_codex_clear_adoption.py covers adoption, HEAD mutation, untrusted identity, mismatched commit, findings-bearing reviews, and hidden-finding clears.",
+        "evidence": "An authenticated Codex clear review whose commit_id and named reviewed commit equal the exact HEAD is adopted regardless of when it was submitted relative to a bot trigger, provided a trusted trigger for the same exact head binds it to the claims (a clear with no trusted trigger is not adopted) and it is the reviewer's latest review, in governance (read_pr_pool_review_comments binds by head, review_adoption_acknowledgement), in the collector live response state, and in orchestrator dispatch. tests/test_exact_head_codex_clear_adoption.py covers adoption, HEAD mutation, untrusted identity, mismatched commit, findings-bearing reviews, and hidden-finding clears.",
         "id": "AC-3",
         "verdict": "satisfied"
       },
@@ -142,7 +142,7 @@
         "outcome": "clear"
       },
       {
-        "evidence": "Review-after-remediation is unchanged: only a clear is adopted regardless of ordering; a review carrying findings still requires a response after the trigger, and unresolved threads stay blocking.",
+        "evidence": "Review-after-remediation is unchanged: only the reviewer's LATEST review can be adopted and only when it is a clear, so an older clear never masks a newer review with findings; a review carrying findings still requires a response after the trigger, and unresolved threads stay blocking.",
         "family": "DFF-024",
         "outcome": "clear"
       },
@@ -152,7 +152,7 @@
         "outcome": "clear"
       },
       {
-        "evidence": "A dispatch-suppression deadlock shape was found during the adversarial pass and corrected before this head: the first version suppressed collector dispatch for a clear the governance predicate would refuse (hidden findings in a collapsed trailer). Dispatch is now skipped only for a review governance itself adopts; unreadable evidence falls back to the previous dispatch behaviour. Regression: test_a_clear_whose_trailing_content_hides_findings_is_adopted_nowhere.",
+        "evidence": "Two dispatch-suppression shapes were found in review and corrected before this head: dispatch was suppressed for a clear governance would refuse (hidden findings in a collapsed trailer), and an older clear could suppress dispatch after a newer review with findings. The orchestrator now asks governance's own readers and adoption predicate about the latest Codex review, so dispatch is skipped only for a review governance adopts; unreadable evidence falls back to the previous dispatch behaviour. Regressions: test_a_clear_whose_trailing_content_hides_findings_is_adopted_nowhere, test_an_older_clear_never_overrides_a_newer_review_with_findings.",
         "family": "DFF-026",
         "outcome": "repaired"
       },
@@ -196,25 +196,25 @@
     "issue": "474",
     "review_target": [
       {
-        "blob_sha": "07de0433221c146bb95db242ab5c4af39497c591",
+        "blob_sha": "4e3e7dea9d4f81696924fd2f258df69f498a20f4",
         "path": "tests/test_exact_head_codex_clear_adoption.py",
         "previous_path": "",
         "status": "added"
       },
       {
-        "blob_sha": "bd334ef22aa88e505b0957a91be78a3254c89ad8",
+        "blob_sha": "b4a766e47416fb645f49c7032fb433869444a8fb",
         "path": "scripts/hunter_governance_review_v2.py",
         "previous_path": "",
         "status": "modified"
       },
       {
-        "blob_sha": "38afc0a40e1655ff28180de89dacea00c3f9cfe3",
+        "blob_sha": "d8f97e608ff56785307a21fd3ec790e43ce5c8ad",
         "path": "scripts/hunter_review_orchestrator.py",
         "previous_path": "",
         "status": "modified"
       },
       {
-        "blob_sha": "501149dd3eb2ff3a68f243af0a38f3eb494c9206",
+        "blob_sha": "16eb14dbfd6d7b823ed4b5b7036ee022e4614ee8",
         "path": "scripts/hunter_reviewer_collector.py",
         "previous_path": "",
         "status": "modified"
@@ -232,11 +232,11 @@
         "status": "modified"
       }
     ],
-    "review_target_digest": "992bbcef1b44fbd3be2781014b4316ef8cbca0a65f77d1363f0697871a66f15b"
+    "review_target_digest": "3aa9d6c54fb5370f1d57c42b845e0bd227b7150c1e25818fb2feab3ef75046c9"
   },
-  "review_id": "3d09477e50e6c3377ad6f6d122f85a1d44d5ed611dce69c0113054c17bebddc9",
+  "review_id": "55634df3cf94710e102dff513c9f5672d9e02d40c4d385e96f35865c8d36fcf9",
   "review_request": {
-    "claims_id": "3d09477e50e6c3377ad6f6d122f85a1d44d5ed611dce69c0113054c17bebddc9",
+    "claims_id": "55634df3cf94710e102dff513c9f5672d9e02d40c4d385e96f35865c8d36fcf9",
     "schema": "hunter.review-request.v1"
   },
   "schema": "hunter.pre-ready-hostile-review.v1"
