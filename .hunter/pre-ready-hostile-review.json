@@ -107,7 +107,7 @@
         "outcome": "clear"
       },
       {
-        "evidence": "No prevention state is claimed or changed; DEFECT_REGISTRY.json is untouched.",
+        "evidence": "DFF-015 prevention state is not changed by this correction; docs/DEFECT_REGISTRY.json is present elsewhere in the PR for the separately registered DFF-042 lifecycle defect, so no untouched-registry claim is made.",
         "family": "DFF-015",
         "outcome": "clear"
       },
@@ -221,7 +221,7 @@
     "issue": "474",
     "review_target": [
       {
-        "blob_sha": "1981b4f6a149b436109921969a9a2f5df0512ba6",
+        "blob_sha": "c5f3588b328abfb22b7337ab62ea8566497c232d",
         "path": "tests/test_exact_head_codex_clear_adoption.py",
         "previous_path": "",
         "status": "added"
@@ -251,7 +251,7 @@
         "status": "modified"
       },
       {
-        "blob_sha": "3c0478cc3698e899abcddabdb552839b9905e95d",
+        "blob_sha": "fb718eebb80f98ab38a895887e2da677cc7f5010",
         "path": "scripts/hunter_governance_review_v2.py",
         "previous_path": "",
         "status": "modified"
@@ -287,11 +287,11 @@
         "status": "modified"
       }
     ],
-    "review_target_digest": "3aed24965ca3b3e4fbc9dc8f7b79fcbcebf2551498853f1a3265b94660986570"
+    "review_target_digest": "29c2e9feb259d0fa8ba773bfbda73d730fec3c23166b282ae62251b65c306e8c"
   },
-  "review_id": "5cf4de264fa2e590f75e32f3a4eb0b0a1bbd4c929e865f5fcf780d2b04b57769",
+  "review_id": "f045b767b6846b1da3b571e903d6b2d278f744fcf2e773b7d6db2248e8fe3522",
   "review_request": {
-    "claims_id": "5cf4de264fa2e590f75e32f3a4eb0b0a1bbd4c929e865f5fcf780d2b04b57769",
+    "claims_id": "f045b767b6846b1da3b571e903d6b2d278f744fcf2e773b7d6db2248e8fe3522",
     "schema": "hunter.review-request.v1"
   },
   "schema": "hunter.pre-ready-hostile-review.v1"
