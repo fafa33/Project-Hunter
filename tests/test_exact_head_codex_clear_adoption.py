@@ -42,10 +42,16 @@ def _clear_body(head: str = HEAD) -> str:
 
 
 def _review(
-    *, body: str, commit_id: str = HEAD, login: str = CODEX, state: str = "COMMENTED", submitted_at: str = REVIEW_TIME
+    *,
+    body: str,
+    commit_id: str = HEAD,
+    login: str = CODEX,
+    state: str = "COMMENTED",
+    submitted_at: str = REVIEW_TIME,
+    review_id: int = 8,
 ) -> dict:
     return {
-        "id": 8,
+        "id": review_id,
         "user": {"login": login},
         "state": state,
         "body": body,
@@ -309,3 +315,100 @@ def test_a_standard_codex_clear_with_collapsed_about_section_is_adopted(monkeypa
     assert orchestrator.exact_head_codex_clear_exists("owner/repo", "token", 544, HEAD, CLAIMS) is True
     backend = _collector_backend(monkeypatch, [_review(body=body)])
     assert backend.response_state(_codex_agent(), {"id": 7, "created_at": LATER_TRIGGER_TIME}) == "clear"
+
+
+# --- Only the latest Codex review establishes clear authority ----------------------
+
+OLD = "2026-09-30T09:30:00Z"
+NEWER = "2026-09-30T10:30:00Z"
+
+
+def _old_clear() -> dict:
+    return _review(body=_clear_body(), submitted_at=OLD, review_id=1)
+
+
+def _adopted_everywhere(monkeypatch, reviews: list) -> set[bool]:
+    """The verdict of every consumer of the shared latest-review predicate."""
+
+    monkeypatch.setattr(orchestrator, "request_json", lambda *_a: reviews)
+    backend = _collector_backend(monkeypatch, reviews)
+    return {
+        core.latest_codex_review_is_exact_head_clear(reviews, HEAD, CLAIMS),
+        orchestrator.exact_head_codex_clear_exists("owner/repo", "token", 544, HEAD, CLAIMS),
+        backend._exact_head_native_clear(),
+    }
+
+
+def test_old_clear_then_newer_clear_the_newest_valid_clear_governs(monkeypatch):
+    reviews = [_old_clear(), _review(body=_clear_body(), submitted_at=NEWER, review_id=2)]
+
+    assert _adopted_everywhere(monkeypatch, reviews) == {True}
+
+
+def test_old_clear_then_newer_finding_is_not_clear(monkeypatch):
+    reviews = [_old_clear(), _review(body=FINDINGS_BODY, submitted_at=NEWER, review_id=2)]
+
+    assert _adopted_everywhere(monkeypatch, reviews) == {False}
+    # Order of arrival in the API payload is irrelevant; submission order governs.
+    assert _adopted_everywhere(monkeypatch, list(reversed(reviews))) == {False}
+
+
+def test_old_clear_then_newer_changes_requested_is_not_clear(monkeypatch):
+    reviews = [_old_clear(), _review(body="blocking", state="CHANGES_REQUESTED", submitted_at=NEWER, review_id=2)]
+
+    assert _adopted_everywhere(monkeypatch, reviews) == {False}
+
+
+def test_old_clear_then_newer_dismissed_review_is_not_clear(monkeypatch):
+    reviews = [_old_clear(), _review(body="", state="DISMISSED", submitted_at=NEWER, review_id=2)]
+
+    assert _adopted_everywhere(monkeypatch, reviews) == {False}
+
+
+def test_old_clear_then_newer_review_of_another_commit_is_not_clear(monkeypatch):
+    reviews = [_old_clear(), _review(body=_clear_body(NEW_HEAD), commit_id=NEW_HEAD, submitted_at=NEWER, review_id=2)]
+
+    assert _adopted_everywhere(monkeypatch, reviews) == {False}
+
+
+def test_the_latest_clear_is_adopted_and_an_older_finding_does_not_block_it(monkeypatch):
+    reviews = [_review(body=FINDINGS_BODY, submitted_at=OLD, review_id=1), _review(body=_clear_body(), review_id=2)]
+
+    assert _adopted_everywhere(monkeypatch, reviews) == {True}
+
+
+def test_a_malformed_review_record_fails_closed_everywhere(monkeypatch):
+    """Governance rejects the whole collection, so no consumer may adopt from it."""
+
+    for bad in ("not-an-object", {"id": 9, "state": "COMMENTED"}, {"id": 9, "user": "x"}, {"id": 9, "user": None}):
+        reviews = [_review(body=_clear_body()), bad]
+        _, error = _read_observations_error(monkeypatch, reviews)
+        assert error == "malformed review record", bad
+        monkeypatch.setattr(orchestrator, "request_json", lambda *_a, r=reviews: r)
+        assert orchestrator.exact_head_codex_clear_exists("owner/repo", "token", 544, HEAD, CLAIMS) is False
+        try:
+            core.latest_codex_review_is_exact_head_clear(reviews, HEAD, CLAIMS)
+        except ValueError:
+            pass
+        else:
+            raise AssertionError(f"shared predicate accepted malformed record {bad!r}")
+        backend = _collector_backend(monkeypatch, reviews)
+        try:
+            backend._exact_head_native_clear()
+        except ValueError:
+            pass
+        else:
+            raise AssertionError(f"collector adopted from malformed collection {bad!r}")
+
+
+def _read_observations_error(monkeypatch, reviews: list):
+    monkeypatch.setattr(
+        core, "request_json", lambda _r, _t, _m, path, *_a: reviews if path.startswith("pulls/") else []
+    )
+    return core.read_pr_pool_review_comments("owner/repo", "token", 544, _pool(), HEAD)
+
+
+def test_exact_head_mismatch_and_hidden_findings_are_not_adopted_by_the_shared_predicate(monkeypatch):
+    assert _adopted_everywhere(monkeypatch, [_review(body=_clear_body(), commit_id=NEW_HEAD)]) == {False}
+    assert _adopted_everywhere(monkeypatch, [_review(body=HIDDEN_FINDING_BODY)]) == {False}
+    assert _adopted_everywhere(monkeypatch, [_review(body=_clear_body())]) == {True}

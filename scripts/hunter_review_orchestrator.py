@@ -973,39 +973,30 @@ def review_prerequisites_ready(repository: str, token: str, pr_number: int, head
 
 
 def exact_head_codex_clear_exists(repository: str, token: str, pr_number: int, head_sha: str, claims_id: str) -> bool:
-    """Whether governance would adopt an authenticated Codex clear of ``head_sha``.
+    """Whether governance would adopt the latest Codex review of ``head_sha`` as a clear.
 
-    This asks the same question governance asks, through governance's own
-    adoption predicate, so dispatch is skipped only for a review governance will
-    in fact adopt. A clear whose trailing content hides findings is not adopted
-    there, so it must not suppress dispatch here.
+    Dispatch is skipped only when governance's own latest-review selection and
+    adoption predicate accept the review. An older clear superseded by a later
+    finding, change request or dismissal, a clear that hides findings, and a
+    malformed collection (which governance rejects whole) all dispatch as before.
     """
 
     import hunter_governance_review_v2 as governance
 
-    login = governance.reviewer_login({"id": "codex"})
+    reviews: list[Any] = []
     page = 1
     while True:
         batch = request_json(repository, token, "GET", f"pulls/{pr_number}/reviews?per_page=100&page={page}")
         if not isinstance(batch, list):
-            # Unreadable evidence adopts nothing: dispatch proceeds exactly as it
-            # did before exact-head adoption existed.
             return False
-        for item in batch:
-            if not isinstance(item, dict) or str((item.get("user") or {}).get("login") or "").lower() != login:
-                continue
-            observation = {
-                "agent_id": pre_ready.CODEX_REVIEW_AUTHORITY,
-                "source_kind": "review",
-                "state": str(item.get("state") or "").upper(),
-                "commit_id": item.get("commit_id"),
-                "body": str(item.get("body") or ""),
-            }
-            if governance.review_adoption_acknowledgement(observation, head_sha, claims_id) is not None:
-                return True
+        reviews.extend(batch)
         if len(batch) < 100:
-            return False
+            break
         page += 1
+    try:
+        return governance.latest_codex_review_is_exact_head_clear(reviews, head_sha, claims_id)
+    except ValueError:
+        return False
 
 
 def ensure_current(repository: str, token: str, pr_number: int) -> ReviewCycle | None:

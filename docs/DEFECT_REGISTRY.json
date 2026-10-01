@@ -1356,7 +1356,9 @@
         "tests/test_review_after_remediation_generation.py::test_candidate_authored_evidence_cannot_mint_a_remediation_generation",
         "tests/test_review_after_remediation_generation.py::test_remediation_stays_inside_a_bounded_generation_budget",
         "tests/test_review_after_remediation_generation.py::test_a_dispatched_generation_trusted_state_does_not_derive_fails_closed",
-        "tests/test_hunter_reviewer_collector.py::test_exhaustion_receipt_from_a_prior_remediation_generation_is_not_reusable"
+        "tests/test_hunter_reviewer_collector.py::test_exhaustion_receipt_from_a_prior_remediation_generation_is_not_reusable",
+        "tests/test_exact_head_codex_clear_adoption.py::test_old_clear_then_newer_finding_is_not_clear",
+        "tests/test_exact_head_codex_clear_adoption.py::test_a_malformed_review_record_fails_closed_everywhere"
       ],
       "sources": [
         "Issue #461 (2026-09-18): PR #473 remediated both authenticated Codex P1 findings (threads r4042982311 and r4042982318) and resolved every review thread, yet stayed permanently MISSING_REVIEW_AUTHORITY because the exact-head collector run 35348625886 had already completed with Codex timed out, Gemini 503 and Groq 403, and no identity existed that could ask any of them again"

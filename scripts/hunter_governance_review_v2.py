@@ -586,6 +586,58 @@ def review_adoption_acknowledgement(
     }
 
 
+def latest_codex_review_is_exact_head_clear(reviews: Any, head_sha: str, claims_id: str) -> bool:
+    """Whether the newest admissible Codex review is an adoptable clear of ``head_sha``.
+
+    This is the one shared statement of governance's selection semantics for the
+    collector and orchestrator: the same admissible review states, the same
+    per-reviewer latest ordering by ``(submitted_at, id)``, and the same adoption
+    predicate. Only the latest review may establish clear authority, so a later
+    finding, ``CHANGES_REQUESTED``, dismissal or review of another commit
+    supersedes an earlier clear. A malformed collection raises ``ValueError``
+    exactly where governance rejects the whole collection, so no caller can
+    treat evidence governance would refuse as authority.
+    """
+
+    if not isinstance(reviews, list):
+        raise ValueError("review payload is not a list")
+    login = reviewer_login({"id": "codex"})
+    latest: dict[str, Any] | None = None
+    latest_key: tuple[str, int] | None = None
+    latest_actionable: tuple[int, str] | None = None
+    for item in reviews:
+        if not isinstance(item, dict) or not isinstance(item.get("user"), dict):
+            raise ValueError("malformed review record")
+        if str(item["user"].get("login") or "").strip().lower() != login:
+            continue
+        state = item.get("state")
+        body = str(item.get("body") or "")
+        if state not in {"APPROVED", "COMMENTED", "CHANGES_REQUESTED", "DISMISSED"}:
+            continue
+        if state == "COMMENTED" and not _substantive_review_body(body):
+            continue
+        review_id = int(item.get("id") or 0)
+        key = (str(item.get("submitted_at") or ""), review_id)
+        if latest_key is None or key > latest_key:
+            latest, latest_key = item, key
+        if state in {"APPROVED", "CHANGES_REQUESTED", "DISMISSED"} and (
+            latest_actionable is None or review_id > latest_actionable[0]
+        ):
+            latest_actionable = (review_id, str(state))
+    if latest is None:
+        return False
+    if latest_actionable is not None and latest_actionable[1] == "CHANGES_REQUESTED":
+        return False
+    observation = {
+        "agent_id": pre_ready.CODEX_REVIEW_AUTHORITY,
+        "source_kind": "review",
+        "state": latest.get("state"),
+        "commit_id": latest.get("commit_id"),
+        "body": str(latest.get("body") or ""),
+    }
+    return review_adoption_acknowledgement(observation, head_sha, claims_id) is not None
+
+
 def reviewer_login(agent: dict[str, Any]) -> str:
     # Integration identity is configuration, never a field supplied by a candidate.
     if agent.get("id") == "codex":
