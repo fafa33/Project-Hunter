@@ -661,18 +661,28 @@ def _provision_authority_record(
     current_head = store.current_canonical_head_id(plan["family"], plan["scope"])
     payload = dict(plan["payload"])
     if current_head is not None:
+        current_record = resolve_canonical_head(
+            store,
+            family=plan["family"],
+            scope=plan["scope"],
+            cutoff=datetime.max.replace(tzinfo=UTC),
+        )
+        # A retry after a partially committed successor batch must distinguish
+        # a family already advanced by this revision from a family still at its
+        # predecessor. Reconstruct the already-published successor identity
+        # first; only append when the current head is genuinely the predecessor.
+        retry_payload = dict(payload)
+        predecessor = current_record.get("supersedes_record_id")
+        if predecessor is not None:
+            retry_payload["supersedes_record_id"] = predecessor
+        retry_plan = dict(plan)
+        retry_plan["payload"] = retry_payload
+        if current_head == _expected_authority_record_id(retry_plan):
+            return {"record_id": current_head, "status": "already-provisioned"}
         if allow_successor:
             payload["supersedes_record_id"] = current_head
-        else:
-            current_record = resolve_canonical_head(
-                store,
-                family=plan["family"],
-                scope=plan["scope"],
-                cutoff=datetime.max.replace(tzinfo=UTC),
-            )
-            predecessor = current_record.get("supersedes_record_id")
-            if predecessor is not None:
-                payload["supersedes_record_id"] = predecessor
+        elif predecessor is not None:
+            payload["supersedes_record_id"] = predecessor
     expected_plan = dict(plan)
     expected_plan["payload"] = payload
     expected_record_id = _expected_authority_record_id(expected_plan)
@@ -792,6 +802,20 @@ def _run(
     current_provenance_is_successor = (
         first_provenance is not None and first_provenance.get("supersedes_record_id") is not None
     )
+    if current_provenance_is_successor and not recovering_successor:
+        with sqlite3.connect(database) as connection:
+            row = connection.execute(
+                "SELECT r.authorization_id FROM source_handling_canonical_keys AS k "
+                "JOIN source_handling_authority_records AS r ON r.record_id = k.current_record_id "
+                "WHERE k.family = 'FACT' AND k.scope = ?",
+                (document_id,),
+            ).fetchone()
+        current_auth = str(row[0]) if row is not None and row[0] is not None else None
+        expected_auth = f"auth:fact:{document_id}:{authorization.authorization_id}"
+        if current_auth is not None and current_auth != expected_auth:
+            raise SourceHandlingBlockedError(
+                "the incoming Issue authorization does not match the current provisioned revision"
+            )
     newer_issue_revision = recovering_successor or (existing_known_at is not None and issued_at > existing_known_at)
     revision_authorization_id = (
         authorization.authorization_id if newer_issue_revision or current_provenance_is_successor else None
@@ -859,12 +883,13 @@ def _run(
         policy_options=policy_options,
         authorization_id=revision_authorization_id,
     )
+    authority_successor_allowed = newer_issue_revision or current_provenance_is_successor
     _check_authority_heads_exact(
         database=database,
         signing_key=signing_key,
         operator_root=operator_root,
         plans=preview_plans,
-        allow_successor=newer_issue_revision,
+        allow_successor=authority_successor_allowed,
     )
 
     for plan in provenance_plans:
@@ -907,7 +932,7 @@ def _run(
             operator_root=operator_root,
             at=authority_at,
             plan=plan,
-            allow_successor=newer_issue_revision,
+            allow_successor=authority_successor_allowed,
         )
     status = (
         "provisioned" if any(entry["status"] == "provisioned" for entry in records.values()) else "already-provisioned"
