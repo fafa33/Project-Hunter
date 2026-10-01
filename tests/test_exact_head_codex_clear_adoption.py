@@ -58,6 +58,7 @@ def _review(
         "commit_id": commit_id,
         "submitted_at": submitted_at,
         "html_url": "https://github.com/owner/repo/pull/1#pullrequestreview-8",
+        "trigger_claims_id": CLAIMS,
     }
 
 
@@ -190,13 +191,13 @@ def test_a_governance_adopts_a_clear_that_predates_a_later_trigger(monkeypatch):
     assert adopted["head_sha"] == HEAD and adopted["claims_id"] == CLAIMS and adopted["verdict"] == "clear"
 
 
-def test_a_governance_adopts_a_clear_when_no_trigger_exists_for_the_head(monkeypatch):
-    """The review is bound to the commit that carries the request, so it needs no trigger."""
+def test_governance_rejects_a_clear_when_no_trusted_trigger_exists_for_the_head(monkeypatch):
+    """Exact-head identity alone does not replace the current claims provenance binding."""
 
     observations, error = _read_observations(monkeypatch, [_review(body=_clear_body())], trigger_created_at=None)
 
     assert error is None
-    assert core.review_adoption_acknowledgement(observations[0], HEAD, CLAIMS) is not None
+    assert core.review_adoption_acknowledgement(observations[0], HEAD, CLAIMS) is None
 
 
 def test_a_governance_still_rejects_a_clear_bound_to_other_claims(monkeypatch):
@@ -375,6 +376,26 @@ def test_the_latest_clear_is_adopted_and_an_older_finding_does_not_block_it(monk
     reviews = [_review(body=FINDINGS_BODY, submitted_at=OLD, review_id=1), _review(body=_clear_body(), review_id=2)]
 
     assert _adopted_everywhere(monkeypatch, reviews) == {True}
+
+
+def test_native_clear_without_current_claims_binding_is_not_adopted(monkeypatch):
+    review = _review(body=_clear_body())
+    review.pop("trigger_claims_id")
+    reviews = [review]
+    assert _adopted_everywhere(monkeypatch, reviews) == {False}
+
+
+def test_malformed_review_ids_fail_closed_everywhere(monkeypatch):
+    for bad_id in (None, 0, "not-a-number", [], {}, True):
+        reviews = [_review(body=_clear_body(), review_id=bad_id)]
+        monkeypatch.setattr(orchestrator, "request_json", lambda *_a, r=reviews: r)
+        assert orchestrator.exact_head_codex_clear_exists("owner/repo", "token", 544, HEAD, CLAIMS) is False
+        try:
+            core.latest_codex_review_is_exact_head_clear(reviews, HEAD, CLAIMS)
+        except ValueError:
+            pass
+        else:
+            raise AssertionError(f"shared predicate accepted malformed review id {bad_id!r}")
 
 
 def test_a_malformed_review_record_fails_closed_everywhere(monkeypatch):

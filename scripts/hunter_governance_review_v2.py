@@ -562,7 +562,7 @@ def review_adoption_acknowledgement(
         or observation.get("source_kind") != "review"
         or observation.get("state") not in {"COMMENTED", "APPROVED"}
         or observation.get("commit_id") != head_sha
-        or observation.get("trigger_claims_id", claims_id) != claims_id
+        or observation.get("trigger_claims_id") != claims_id
     ):
         return None
     body = str(observation.get("body") or "").strip()
@@ -616,7 +616,15 @@ def latest_codex_review_is_exact_head_clear(reviews: Any, head_sha: str, claims_
             continue
         if state == "COMMENTED" and not _substantive_review_body(body):
             continue
-        review_id = int(item.get("id") or 0)
+        raw_review_id = item.get("id")
+        if isinstance(raw_review_id, bool) or not isinstance(raw_review_id, (int, str)):
+            raise ValueError("malformed review record")
+        try:
+            review_id = int(raw_review_id)
+        except (TypeError, ValueError):
+            raise ValueError("malformed review record") from None
+        if review_id <= 0:
+            raise ValueError("malformed review record")
         key = (str(item.get("submitted_at") or ""), review_id)
         if latest_key is None or key > latest_key:
             latest, latest_key = item, key
@@ -634,6 +642,7 @@ def latest_codex_review_is_exact_head_clear(reviews: Any, head_sha: str, claims_
         "state": latest.get("state"),
         "commit_id": latest.get("commit_id"),
         "body": str(latest.get("body") or ""),
+        "trigger_claims_id": latest.get("trigger_claims_id"),
     }
     return review_adoption_acknowledgement(observation, head_sha, claims_id) is not None
 
