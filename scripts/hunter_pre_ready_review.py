@@ -1027,7 +1027,10 @@ def load_coverage_scopes(
     else:
         return None, "coverage scope source must be a policy mapping or a path"
 
-    authority = (policy.get("review_progression") or {}).get("review_authority") or {}
+    progression = policy.get("review_progression")
+    if not isinstance(progression, dict):
+        return None, "CODE_WRITE_POLICY review_progression must be an object"
+    authority = progression.get("review_authority")
     if not isinstance(authority, dict):
         return None, "CODE_WRITE_POLICY review_authority must be an object"
     raw_entries = authority.get(COVERAGE_SCOPES_FIELD, [])
@@ -1160,7 +1163,13 @@ def _coverage_scope_error(
             "incomplete",
             tuple(issue_criteria),
         )
-    if trusted.head_sha and head_sha and trusted.head_sha.lower() != head_sha.strip().lower():
+    if not head_sha or not _GIT_SHA.fullmatch(head_sha.strip()):
+        return (
+            f"a declared coverage scope for Issue #{issue} requires the evaluated exact head SHA",
+            "incomplete",
+            tuple(issue_criteria),
+        )
+    if trusted.head_sha and trusted.head_sha.lower() != head_sha.strip().lower():
         return (
             f"the owner authorization for Issue #{issue} is bound to head {trusted.head_sha[:10]}, "
             f"not the evaluated exact head {head_sha.strip().lower()[:10]}",
@@ -1296,7 +1305,8 @@ def verify_claims(
 
     scope_state: str | None = None
     required_criteria: tuple[str, ...] = ()
-    if issue_criteria is not None:
+    declared_scope = document.get("coverage_scope")
+    if issue_criteria is not None or declared_scope is not None:
         scope_problem, scope_state, required_criteria = _coverage_scope_error(
             document, claims, issue_criteria, coverage_scopes or (), head_sha
         )
