@@ -1027,6 +1027,9 @@ class GitHubBackend:
         # governance would adopt it. A malformed collection raises, as it does in
         # governance, rather than being skipped.
         reviews = _pages(self.repository, self.token, f"pulls/{self.pr}/reviews")
+        # The current collector invocation is the trusted provenance boundary;
+        # bind only while evaluating its own response, never as a global/manual
+        # dispatch-suppression shortcut.
         bound = governance.bind_native_codex_reviews_to_claims(reviews, self.expected_head, self.claims_id)
         return governance.latest_codex_review_is_exact_head_clear(bound, self.expected_head, self.claims_id)
 

@@ -993,9 +993,11 @@ def exact_head_codex_clear_exists(repository: str, token: str, pr_number: int, h
         if len(batch) < 100:
             break
         page += 1
+    # Raw GitHub reviews carry no Hunter claims provenance.  Do not synthesize
+    # it here: only governance's trusted collector-trigger binding may do that.
+    # A manual/unbound clear must therefore not suppress collector dispatch.
     try:
-        bound = governance.bind_native_codex_reviews_to_claims(reviews, head_sha, claims_id)
-        return governance.latest_codex_review_is_exact_head_clear(bound, head_sha, claims_id)
+        return governance.latest_codex_review_is_exact_head_clear(reviews, head_sha, claims_id)
     except ValueError:
         return False
 
