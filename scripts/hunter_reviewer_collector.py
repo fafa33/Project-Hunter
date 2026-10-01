@@ -1113,7 +1113,7 @@ class GitHubBackend:
                 return False
             run = self._adopt_workflow_run(trigger)
             return run is not None and str(run.get("status") or "") in STARTED_RUN_STATES
-        if agent.get("id") == "codex":
+        if agent.get("id") == "codex" and trigger_scheme(agent) == "github-pr-comment":
             login = governance.reviewer_login(agent)
             created = str(trigger.get("created_at") or "")
             reviews = _pages(self.repository, self.token, f"pulls/{self.pr}/reviews")
