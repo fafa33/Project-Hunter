@@ -1751,6 +1751,31 @@
       "sources": [
         "PR #535 exact HEAD a78cfc143b2fb938aa21da59f4a79136294ba4aa, live evidence: Scenario A (scripts/hunter_trusted_orchestrator_replay_worker.py) required an enabled reviewer with retryable=true to exist in the candidate's real reviewer pool before it would test anything, raising AssertionError('fixture pool must enable at least one retryable reviewer') against PR #535's own docs/CODE_WRITE_POLICY.json, whose reviewer_pool.timeout_policy.retries_per_agent is deliberately 0 pool-wide ('No automatic retries. Explicit authenticated unavailability fails over immediately; silence is bounded to one reviewer timeout.'), making every enabled reviewer correctly retryable=false. The candidate's fix (falling back to any enabled reviewer, an exact attempt-count bound, and an adversarial retryable-inertness check) was verified locally (A/B/G all pass against PR #535's real candidate content) and pushed to PR #535's own branch, but PR #535's subsequent hosted replay run still failed with the identical original assertion -- confirmed by inspecting origin/main's own copy of hunter_trusted_orchestrator_replay_worker.py, which still contained the unfixed assertion -- proving the fix cannot take effect from the candidate branch that discovered it, only from a default-branch contribution."
       ]
+    },
+    {
+      "id": "DFF-042",
+      "title": "pending-governance-state-must-handoff-to-privileged-exact-head-review-orchestration",
+      "invariant": "When a pull-request synchronize changes HEAD and the read-only Hunter Governance Review detects that exact-head review authority is pending, a trusted default-branch event path must hand that PR to the privileged reconcile/orchestrator workflow. A green governance status must never terminate the lifecycle before a collector/reviewer opportunity is dispatched for the new exact HEAD.",
+      "applicability": {
+        "changed_paths": [
+          ".github/workflows/hunter-governance-review.yml",
+          ".github/workflows/hunter-governance-reconcile.yml",
+          "scripts/hunter_review_orchestrator.py"
+        ],
+        "rationale": "These surfaces detect pending review state and perform the trusted actions:write handoff/dispatch."
+      },
+      "prevention": {
+        "mechanism": "Hunter Governance Review completion is a workflow_run trigger for Hunter Governance Review Reconcile. Reconcile derives the PR from the trusted workflow_run pull-request association and invokes the default-branch orchestrator, preserving the security boundary that forbids actions:write on the candidate-reachable pull_request workflow.",
+        "boundary": "review",
+        "guard_reference": "scripts/hunter_review_orchestrator.py::ensure_current"
+      },
+      "regression_evidence": [
+        "tests/test_hunter_governance_review_v2.py::test_event_reconcile_scopes_to_triggering_pr_and_reserves_full_sweep_for_recovery"
+      ],
+      "lifecycle": "regression-tested",
+      "sources": [
+        "PR #549 exact HEAD ad9b58160d4d0c0856f838ff5c855a2b3c7a4f8a, 2026-10-01: Hunter Governance Review reported candidate admission pending because exact-head review authority was required, then completed successfully; no Codex/Copilot review or collector dispatch was created for that HEAD. The privileged reconcile workflow had no workflow_run trigger for Hunter Governance Review, so the detected pending state had no event-driven handoff to actions:write orchestration."
+      ]
     }
   ]
 }
