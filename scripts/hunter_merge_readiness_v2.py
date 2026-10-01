@@ -43,6 +43,7 @@ REVIEW_AUTHORITY_STATES = (
     "MISSING_REVIEW_AUTHORITY",
     "VALID_AGENT_REVIEW",
     "VALID_LAST_RESORT_GUARD",
+    "VALID_SCOPED_CORRECTION",
     "STALE_REVIEW",
     "MALFORMED_REVIEW",
     "BLOCKING_FINDINGS",
@@ -92,7 +93,7 @@ PENDING_VERIFICATION = "PENDING_VERIFICATION"
 def resolve_review_authority(verification: tuple[str, str]) -> ReviewAuthorityVerdict:
     """Classify the shared verifier's result; raw comments cannot establish authority."""
     status, detail = verification
-    valid_states = {"VALID_AGENT_REVIEW", "VALID_LAST_RESORT_GUARD"}
+    valid_states = {"VALID_AGENT_REVIEW", "VALID_LAST_RESORT_GUARD", "VALID_SCOPED_CORRECTION"}
     if status == "success":
         for state in valid_states:
             if detail.startswith(state + ":"):
@@ -294,7 +295,7 @@ def review_authority_state(head_sha: str, pr_number: int) -> tuple[str, str]:
         if not ok:
             return "failure", f"BLOCKING_FINDINGS: {problem}"
         verdict = resolve_review_authority(governance.verify_pre_ready_hostile_review(REPO, TOKEN, head_sha, pr_number))
-        if verdict.state in {"VALID_AGENT_REVIEW", "VALID_LAST_RESORT_GUARD"}:
+        if verdict.state in {"VALID_AGENT_REVIEW", "VALID_LAST_RESORT_GUARD", "VALID_SCOPED_CORRECTION"}:
             return "success", f"{verdict.state}: {verdict.detail}"
         if verdict.state in {"BLOCKING_FINDINGS", "MALFORMED_REVIEW"}:
             return "failure", f"{verdict.state}: {verdict.detail}"
