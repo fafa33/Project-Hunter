@@ -562,7 +562,7 @@ def review_adoption_acknowledgement(
         or observation.get("source_kind") != "review"
         or observation.get("state") not in {"COMMENTED", "APPROVED"}
         or observation.get("commit_id") != head_sha
-        or observation.get("trigger_claims_id", claims_id) != claims_id
+        or observation.get("trigger_claims_id") != claims_id
     ):
         return None
     body = str(observation.get("body") or "").strip()

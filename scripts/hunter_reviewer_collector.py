@@ -1007,35 +1007,36 @@ class GitHubBackend:
         )
 
     def _exact_head_native_clear(self, login: str) -> bool:
-        """Whether authenticated Codex already cleared this exact HEAD.
+        """Whether authenticated Codex's latest review clears this exact HEAD.
 
-        A clear is bound to the commit it names, not to when it was written. The
-        trigger timestamp therefore cannot invalidate it: a review of this exact
-        HEAD that predates a later trigger (for example a remediation
-        generation's) still reviewed this immutable content. Only the clear
-        outcome is adopted regardless of ordering, and only as an authenticated
-        review object, the one form governance adopts. A review that carries
-        findings keeps requiring a response after the trigger, because
-        remediation owes a fresh review. HEAD mutation invalidates the clear:
-        the review's commit_id and its named reviewed commit then no longer
-        match the exact HEAD.
+        A clear is bound to the commit it names, not to when it was written, so
+        a trigger timestamp cannot invalidate it. Only the reviewer's LATEST
+        review counts, selected exactly as governance selects it (greatest
+        ``submitted_at``, then id): an older clear never overrides a newer review
+        that carries findings or requests changes, so remediation still owes a
+        fresh review. The trigger being polled is the trusted one this collector
+        posted for these claims, which is the binding governance requires. HEAD
+        mutation invalidates the clear: the review's commit_id and its named
+        reviewed commit then no longer match the exact HEAD.
         """
 
-        for item in _pages(self.repository, self.token, f"pulls/{self.pr}/reviews"):
-            if (item.get("user") or {}).get("login", "").lower() != login:
-                continue
-            observation = {
-                "agent_id": review.CODEX_REVIEW_AUTHORITY,
-                "source_kind": "review",
-                "state": str(item.get("state") or "").upper(),
-                "commit_id": item.get("commit_id"),
-                "body": str(item.get("body") or ""),
-            }
-            # Governance's own adoption predicate, so a clear counts here only if
-            # governance would adopt it (trailing content hiding findings does not).
-            if governance.review_adoption_acknowledgement(observation, self.expected_head, self.claims_id) is not None:
-                return True
-        return False
+        reviews = [
+            item
+            for item in _pages(self.repository, self.token, f"pulls/{self.pr}/reviews")
+            if (item.get("user") or {}).get("login", "").lower() == login
+        ]
+        if not reviews:
+            return False
+        latest = max(reviews, key=lambda item: (str(item.get("submitted_at") or ""), int(item.get("id") or 0)))
+        observation = {
+            "agent_id": review.CODEX_REVIEW_AUTHORITY,
+            "source_kind": "review",
+            "state": str(latest.get("state") or "").upper(),
+            "commit_id": latest.get("commit_id"),
+            "body": str(latest.get("body") or ""),
+            "trigger_claims_id": self.claims_id,
+        }
+        return governance.review_adoption_acknowledgement(observation, self.expected_head, self.claims_id) is not None
 
     def response_state(self, agent: dict[str, Any], trigger: dict[str, Any]) -> str:
         if trigger.get("state") == "unavailable":

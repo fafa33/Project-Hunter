@@ -973,39 +973,41 @@ def review_prerequisites_ready(repository: str, token: str, pr_number: int, head
 
 
 def exact_head_codex_clear_exists(repository: str, token: str, pr_number: int, head_sha: str, claims_id: str) -> bool:
-    """Whether governance would adopt an authenticated Codex clear of ``head_sha``.
+    """Whether governance would adopt authenticated Codex's latest review of ``head_sha``.
 
-    This asks the same question governance asks, through governance's own
-    adoption predicate, so dispatch is skipped only for a review governance will
-    in fact adopt. A clear whose trailing content hides findings is not adopted
-    there, so it must not suppress dispatch here.
+    This asks governance's own question through governance's own readers: the
+    observations it builds (with their trusted-trigger claim binding) and the
+    same latest-review selection and adoption predicate. Dispatch is therefore
+    skipped only for a review governance will in fact adopt. An older clear
+    never suppresses dispatch after a newer Codex review of findings, a clear
+    whose trailing content hides findings is not adopted, and a clear with no
+    trusted trigger bound to these claims is not adopted either.
     """
 
     import hunter_governance_review_v2 as governance
 
-    login = governance.reviewer_login({"id": "codex"})
-    page = 1
-    while True:
-        batch = request_json(repository, token, "GET", f"pulls/{pr_number}/reviews?per_page=100&page={page}")
-        if not isinstance(batch, list):
-            # Unreadable evidence adopts nothing: dispatch proceeds exactly as it
-            # did before exact-head adoption existed.
-            return False
-        for item in batch:
-            if not isinstance(item, dict) or str((item.get("user") or {}).get("login") or "").lower() != login:
-                continue
-            observation = {
-                "agent_id": pre_ready.CODEX_REVIEW_AUTHORITY,
-                "source_kind": "review",
-                "state": str(item.get("state") or "").upper(),
-                "commit_id": item.get("commit_id"),
-                "body": str(item.get("body") or ""),
-            }
-            if governance.review_adoption_acknowledgement(observation, head_sha, claims_id) is not None:
-                return True
-        if len(batch) < 100:
-            return False
-        page += 1
+    pool, pool_error = pre_ready.load_reviewer_pool()
+    if pool_error or pool is None:
+        return False
+    try:
+        observations, error = governance.read_pr_pool_review_comments(repository, token, pr_number, pool, head_sha)
+    except transport.GitHubUnavailable:
+        raise
+    except Exception:
+        return False
+    if error:
+        # Unreadable evidence adopts nothing: dispatch proceeds exactly as it
+        # did before exact-head adoption existed.
+        return False
+    codex = [
+        item
+        for item in observations
+        if item.get("agent_id") == pre_ready.CODEX_REVIEW_AUTHORITY and item.get("source_kind") == "review"
+    ]
+    if not codex:
+        return False
+    latest = max(codex, key=lambda item: (str(item.get("submitted_at") or ""), int(item.get("id") or 0)))
+    return governance.review_adoption_acknowledgement(latest, head_sha, claims_id) is not None
 
 
 def ensure_current(repository: str, token: str, pr_number: int) -> ReviewCycle | None:

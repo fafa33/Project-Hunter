@@ -184,13 +184,18 @@ def test_a_governance_adopts_a_clear_that_predates_a_later_trigger(monkeypatch):
     assert adopted["head_sha"] == HEAD and adopted["claims_id"] == CLAIMS and adopted["verdict"] == "clear"
 
 
-def test_a_governance_adopts_a_clear_when_no_trigger_exists_for_the_head(monkeypatch):
-    """The review is bound to the commit that carries the request, so it needs no trigger."""
+def test_governance_still_requires_a_trusted_trigger_bound_to_the_claims(monkeypatch):
+    """A Codex clear with no trusted trigger for the head stays fail-closed.
+
+    Ordering is waived, the trigger's existence is not: an out-of-band clear is
+    not authority until a trusted trigger binds it to these claims.
+    """
 
     observations, error = _read_observations(monkeypatch, [_review(body=_clear_body())], trigger_created_at=None)
 
     assert error is None
-    assert core.review_adoption_acknowledgement(observations[0], HEAD, CLAIMS) is not None
+    assert "trigger_claims_id" not in observations[0]
+    assert core.review_adoption_acknowledgement(observations[0], HEAD, CLAIMS) is None
 
 
 def test_a_governance_still_rejects_a_clear_bound_to_other_claims(monkeypatch):
@@ -240,12 +245,38 @@ def test_d_governance_never_adopts_a_review_that_carries_findings(monkeypatch):
 # --- Orchestrator: no redundant bot request for unchanged content ------------------
 
 
+def _orchestrator_adopts(monkeypatch, reviews, *, head: str = HEAD, trigger: bool = True) -> bool:
+    """Run the orchestrator's skip decision over governance's own readers."""
+
+    comments = []
+    if trigger:
+        comments.append(
+            {
+                "id": 456,
+                "user": {"login": "github-actions[bot]"},
+                "body": collector.trigger_body(head, CLAIMS, _codex_agent(), 123, 1, 1),
+                "created_at": LATER_TRIGGER_TIME,
+                "html_url": "trigger",
+            }
+        )
+
+    def request(_repository, _token, _method, path, *_args):
+        if path.startswith("pulls/"):
+            return reviews
+        if path.startswith("issues/"):
+            return comments
+        raise AssertionError(path)
+
+    monkeypatch.setattr(core, "request_json", request)
+    monkeypatch.setattr(core, "trusted_collector_run", lambda *_a, **_k: True)
+    return orchestrator.exact_head_codex_clear_exists("owner/repo", "token", 544, head, CLAIMS)
+
+
 def test_the_orchestrator_detects_an_exact_head_codex_clear(monkeypatch):
     rows = [_review(body=_clear_body())]
-    monkeypatch.setattr(orchestrator, "request_json", lambda *_a: rows)
 
-    assert orchestrator.exact_head_codex_clear_exists("owner/repo", "token", 544, HEAD, CLAIMS) is True
-    assert orchestrator.exact_head_codex_clear_exists("owner/repo", "token", 544, NEW_HEAD, CLAIMS) is False
+    assert _orchestrator_adopts(monkeypatch, rows) is True
+    assert _orchestrator_adopts(monkeypatch, rows, head=NEW_HEAD) is False
 
 
 def test_the_orchestrator_does_not_count_untrusted_mismatched_or_findings_reviews(monkeypatch):
@@ -255,14 +286,67 @@ def test_the_orchestrator_does_not_count_untrusted_mismatched_or_findings_review
         _review(body=FINDINGS_BODY),
         _review(body=_clear_body(), state="CHANGES_REQUESTED"),
     ):
-        monkeypatch.setattr(orchestrator, "request_json", lambda *_a, row=row: [row])
-        assert orchestrator.exact_head_codex_clear_exists("owner/repo", "token", 544, HEAD, CLAIMS) is False
+        assert _orchestrator_adopts(monkeypatch, [row]) is False
+
+
+def test_the_orchestrator_does_not_skip_dispatch_for_a_clear_without_a_trusted_trigger(monkeypatch):
+    """Skipping would strand the head: governance refuses an unbound clear, and nothing would dispatch."""
+
+    assert _orchestrator_adopts(monkeypatch, [_review(body=_clear_body())], trigger=False) is False
 
 
 def test_unreadable_review_evidence_adopts_nothing(monkeypatch):
-    monkeypatch.setattr(orchestrator, "request_json", lambda *_a: {"unexpected": "shape"})
+    def request(*_a):
+        return {"unexpected": "shape"}
+
+    monkeypatch.setattr(core, "request_json", request)
 
     assert orchestrator.exact_head_codex_clear_exists("owner/repo", "token", 544, HEAD, CLAIMS) is False
+
+
+# --- The latest Codex review decides, exactly as governance selects it ------------
+
+NEWER = "2026-09-30T10:30:00Z"
+
+
+def _clear_review(rid: int, submitted_at: str, commit_id: str = HEAD) -> dict:
+    return {**_review(body=_clear_body(commit_id), commit_id=commit_id, submitted_at=submitted_at), "id": rid}
+
+
+def _findings_review(rid: int, submitted_at: str, commit_id: str = HEAD) -> dict:
+    return {**_review(body=FINDINGS_BODY, commit_id=commit_id, submitted_at=submitted_at), "id": rid}
+
+
+def test_an_older_clear_never_overrides_a_newer_review_with_findings(monkeypatch):
+    """An older exact-head clear must not mask a newer findings review.
+
+    Otherwise resolving the newer review's threads would leave the older clear as
+    authority with no fresh review, which is the resolved-finding bypass.
+    """
+
+    rows = [_clear_review(8, REVIEW_TIME), _findings_review(9, NEWER)]
+
+    assert _orchestrator_adopts(monkeypatch, rows) is False
+    backend = _collector_backend(monkeypatch, rows)
+    assert backend.response_state(_codex_agent(), {"id": 7, "created_at": LATER_TRIGGER_TIME}) != "clear"
+
+
+def test_an_older_clear_never_overrides_a_newer_review_of_another_commit(monkeypatch):
+    rows = [_clear_review(8, REVIEW_TIME), _findings_review(9, NEWER, commit_id=NEW_HEAD)]
+
+    assert _orchestrator_adopts(monkeypatch, rows) is False
+    backend = _collector_backend(monkeypatch, rows)
+    assert backend.response_state(_codex_agent(), {"id": 7, "created_at": LATER_TRIGGER_TIME}) != "clear"
+
+
+def test_a_newer_clear_after_older_findings_is_the_review_of_record(monkeypatch):
+    """Codex itself re-reviewed the unchanged HEAD and cleared it; that is its latest word."""
+
+    rows = [_findings_review(8, REVIEW_TIME), _clear_review(9, NEWER)]
+
+    assert _orchestrator_adopts(monkeypatch, rows) is True
+    backend = _collector_backend(monkeypatch, rows)
+    assert backend.response_state(_codex_agent(), {"id": 7, "created_at": LATER_TRIGGER_TIME}) == "clear"
 
 
 # --- One predicate everywhere: a clear that hides findings is adopted nowhere ------
@@ -290,8 +374,7 @@ def test_a_clear_whose_trailing_content_hides_findings_is_adopted_nowhere(monkey
     }
     assert core.review_adoption_acknowledgement(observation, HEAD, CLAIMS) is None
 
-    monkeypatch.setattr(orchestrator, "request_json", lambda *_a: [_review(body=HIDDEN_FINDING_BODY)])
-    assert orchestrator.exact_head_codex_clear_exists("owner/repo", "token", 544, HEAD, CLAIMS) is False
+    assert _orchestrator_adopts(monkeypatch, [_review(body=HIDDEN_FINDING_BODY)]) is False
 
     backend = _collector_backend(monkeypatch, [_review(body=HIDDEN_FINDING_BODY)])
     assert backend.response_state(_codex_agent(), {"id": 7, "created_at": LATER_TRIGGER_TIME}) != "clear"
@@ -304,8 +387,6 @@ def test_a_standard_codex_clear_with_collapsed_about_section_is_adopted(monkeypa
         _clear_body()
         + "\n\n<details><summary>ℹ️ About Codex in GitHub</summary>\nGitHub integration details\n</details>"
     )
-    monkeypatch.setattr(orchestrator, "request_json", lambda *_a: [_review(body=body)])
-
-    assert orchestrator.exact_head_codex_clear_exists("owner/repo", "token", 544, HEAD, CLAIMS) is True
+    assert _orchestrator_adopts(monkeypatch, [_review(body=body)]) is True
     backend = _collector_backend(monkeypatch, [_review(body=body)])
     assert backend.response_state(_codex_agent(), {"id": 7, "created_at": LATER_TRIGGER_TIME}) == "clear"
