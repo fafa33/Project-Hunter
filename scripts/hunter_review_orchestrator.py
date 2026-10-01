@@ -972,8 +972,14 @@ def review_prerequisites_ready(repository: str, token: str, pr_number: int, head
     return review_request_state(repository, token, pr_number, head_sha).ready
 
 
-def exact_head_codex_clear_exists(repository: str, token: str, pr_number: int, head_sha: str) -> bool:
-    """Whether authenticated Codex has a native clear review bound to ``head_sha``."""
+def exact_head_codex_clear_exists(repository: str, token: str, pr_number: int, head_sha: str, claims_id: str) -> bool:
+    """Whether governance would adopt an authenticated Codex clear of ``head_sha``.
+
+    This asks the same question governance asks, through governance's own
+    adoption predicate, so dispatch is skipped only for a review governance will
+    in fact adopt. A clear whose trailing content hides findings is not adopted
+    there, so it must not suppress dispatch here.
+    """
 
     import hunter_governance_review_v2 as governance
 
@@ -986,13 +992,16 @@ def exact_head_codex_clear_exists(repository: str, token: str, pr_number: int, h
             # did before exact-head adoption existed.
             return False
         for item in batch:
-            if (
-                isinstance(item, dict)
-                and str((item.get("user") or {}).get("login") or "").lower() == login
-                and item.get("commit_id") == head_sha
-                and str(item.get("state") or "").upper() == "COMMENTED"
-                and governance.native_codex_clear_review(str(item.get("body") or ""), head_sha)
-            ):
+            if not isinstance(item, dict) or str((item.get("user") or {}).get("login") or "").lower() != login:
+                continue
+            observation = {
+                "agent_id": pre_ready.CODEX_REVIEW_AUTHORITY,
+                "source_kind": "review",
+                "state": str(item.get("state") or "").upper(),
+                "commit_id": item.get("commit_id"),
+                "body": str(item.get("body") or ""),
+            }
+            if governance.review_adoption_acknowledgement(observation, head_sha, claims_id) is not None:
                 return True
         if len(batch) < 100:
             return False
@@ -1056,7 +1065,7 @@ def ensure_current(repository: str, token: str, pr_number: int) -> ReviewCycle |
     # governance adopts it directly. Asking Codex again about unchanged content
     # would only add a redundant bot request, so none is dispatched. A new HEAD
     # has no such clear and dispatches as usual.
-    if exact_head_codex_clear_exists(repository, token, pr_number, head_sha):
+    if exact_head_codex_clear_exists(repository, token, pr_number, head_sha, readiness.claims_id):
         return None
     generation_id = current_remediation_generation(repository, token, pr_number, head_sha, readiness.claims_id)
     return ensure_collector(repository, token, pr_number, head_sha, generation_id)

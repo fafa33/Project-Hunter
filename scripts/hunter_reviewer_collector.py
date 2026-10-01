@@ -1022,13 +1022,18 @@ class GitHubBackend:
         """
 
         for item in _pages(self.repository, self.token, f"pulls/{self.pr}/reviews"):
-            if (
-                (item.get("user") or {}).get("login", "").lower() == login
-                and item.get("commit_id") == self.expected_head
-                and str(item.get("state") or "").upper() == "COMMENTED"
-                and governance._substantive_review_body(str(item.get("body") or ""))
-                and self._native_clear(str(item.get("body") or ""), self.expected_head)
-            ):
+            if (item.get("user") or {}).get("login", "").lower() != login:
+                continue
+            observation = {
+                "agent_id": review.CODEX_REVIEW_AUTHORITY,
+                "source_kind": "review",
+                "state": str(item.get("state") or "").upper(),
+                "commit_id": item.get("commit_id"),
+                "body": str(item.get("body") or ""),
+            }
+            # Governance's own adoption predicate, so a clear counts here only if
+            # governance would adopt it (trailing content hiding findings does not).
+            if governance.review_adoption_acknowledgement(observation, self.expected_head, self.claims_id) is not None:
                 return True
         return False
 

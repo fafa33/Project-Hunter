@@ -244,8 +244,8 @@ def test_the_orchestrator_detects_an_exact_head_codex_clear(monkeypatch):
     rows = [_review(body=_clear_body())]
     monkeypatch.setattr(orchestrator, "request_json", lambda *_a: rows)
 
-    assert orchestrator.exact_head_codex_clear_exists("owner/repo", "token", 544, HEAD) is True
-    assert orchestrator.exact_head_codex_clear_exists("owner/repo", "token", 544, NEW_HEAD) is False
+    assert orchestrator.exact_head_codex_clear_exists("owner/repo", "token", 544, HEAD, CLAIMS) is True
+    assert orchestrator.exact_head_codex_clear_exists("owner/repo", "token", 544, NEW_HEAD, CLAIMS) is False
 
 
 def test_the_orchestrator_does_not_count_untrusted_mismatched_or_findings_reviews(monkeypatch):
@@ -256,10 +256,56 @@ def test_the_orchestrator_does_not_count_untrusted_mismatched_or_findings_review
         _review(body=_clear_body(), state="CHANGES_REQUESTED"),
     ):
         monkeypatch.setattr(orchestrator, "request_json", lambda *_a, row=row: [row])
-        assert orchestrator.exact_head_codex_clear_exists("owner/repo", "token", 544, HEAD) is False
+        assert orchestrator.exact_head_codex_clear_exists("owner/repo", "token", 544, HEAD, CLAIMS) is False
 
 
 def test_unreadable_review_evidence_adopts_nothing(monkeypatch):
     monkeypatch.setattr(orchestrator, "request_json", lambda *_a: {"unexpected": "shape"})
 
-    assert orchestrator.exact_head_codex_clear_exists("owner/repo", "token", 544, HEAD) is False
+    assert orchestrator.exact_head_codex_clear_exists("owner/repo", "token", 544, HEAD, CLAIMS) is False
+
+
+# --- One predicate everywhere: a clear that hides findings is adopted nowhere ------
+
+HIDDEN_FINDING_BODY = (
+    _clear_body()
+    + "\n\n<details><summary>Details</summary>\n\n- **P1** unsafe bypass in scripts/hunter_x.py:12\n</details>"
+)
+
+
+def test_a_clear_whose_trailing_content_hides_findings_is_adopted_nowhere(monkeypatch):
+    """Dispatch is skipped only for a review governance will actually adopt.
+
+    The orchestrator and collector use governance's own adoption predicate. A
+    lenient clear match here would suppress the collector for a review that
+    governance then refuses, stranding the head with no review opportunity.
+    """
+
+    observation = {
+        "agent_id": "codex",
+        "source_kind": "review",
+        "state": "COMMENTED",
+        "commit_id": HEAD,
+        "body": HIDDEN_FINDING_BODY,
+    }
+    assert core.review_adoption_acknowledgement(observation, HEAD, CLAIMS) is None
+
+    monkeypatch.setattr(orchestrator, "request_json", lambda *_a: [_review(body=HIDDEN_FINDING_BODY)])
+    assert orchestrator.exact_head_codex_clear_exists("owner/repo", "token", 544, HEAD, CLAIMS) is False
+
+    backend = _collector_backend(monkeypatch, [_review(body=HIDDEN_FINDING_BODY)])
+    assert backend.response_state(_codex_agent(), {"id": 7, "created_at": LATER_TRIGGER_TIME}) != "clear"
+
+
+def test_a_standard_codex_clear_with_collapsed_about_section_is_adopted(monkeypatch):
+    """The ordinary Codex footer (a collapsed, finding-free section) still adopts."""
+
+    body = (
+        _clear_body()
+        + "\n\n<details><summary>ℹ️ About Codex in GitHub</summary>\nGitHub integration details\n</details>"
+    )
+    monkeypatch.setattr(orchestrator, "request_json", lambda *_a: [_review(body=body)])
+
+    assert orchestrator.exact_head_codex_clear_exists("owner/repo", "token", 544, HEAD, CLAIMS) is True
+    backend = _collector_backend(monkeypatch, [_review(body=body)])
+    assert backend.response_state(_codex_agent(), {"id": 7, "created_at": LATER_TRIGGER_TIME}) == "clear"
