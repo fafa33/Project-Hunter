@@ -190,32 +190,81 @@
         "evidence": "This is a trusted-controller change that cannot execute for its own pull request. The trusted orchestrator replay harness passes against this candidate with main as the grader, and the change takes effect only after owner merge.",
         "family": "DFF-040",
         "outcome": "clear"
+      },
+      {
+        "evidence": "The governed change to scripts/hunter_defect_prevention_preflight.py uses only standard-library inspect and the in-repo hunter_governance_review_v2 module for a semantic boundary check. It adds no external tooling, optional plugin, pytest selection option, dependency pin, or trusted-runner provisioning requirement.",
+        "family": "DFF-017",
+        "outcome": "clear"
+      },
+      {
+        "evidence": "Hunter Governance Review completion is now a workflow_run trigger for the trusted default-branch Reconcile workflow. Reconcile derives the triggering PR number from the workflow_run pull-request association and invokes the privileged orchestrator; regression coverage is tests/test_hunter_governance_review_v2.py::test_event_reconcile_scopes_to_triggering_pr_and_reserves_full_sweep_for_recovery.",
+        "family": "DFF-042",
+        "outcome": "repaired"
+      },
+      {
+        "evidence": "The workflow-only change hands a trusted workflow_run PR association to the existing default-branch reconcile/orchestrator. It does not alter Issue Agent execution admission, launcher selection, Railway issuer startup, or any readiness probe/execution boundary.",
+        "family": "DFF-027",
+        "outcome": "clear"
+      },
+      {
+        "evidence": "The changed workflow executes the trusted default-branch reconcile implementation and introduces no candidate execution under publication, signing, or candidate-publication credentials. The candidate-reachable Governance Review remains read-only; actions:write stays in the trusted reconcile boundary.",
+        "family": "DFF-028",
+        "outcome": "clear"
+      },
+      {
+        "evidence": "The reconcile workflow change adds only an event trigger, one GitHub-provided PR-number environment value, and shell branching to the already provisioned existing orchestrator path. It adds no import, package, runtime dependency, setup action, or new workflow entrypoint dependency.",
+        "family": "DFF-036",
+        "outcome": "clear"
       }
     ],
     "findings": [],
     "issue": "474",
     "review_target": [
       {
-        "blob_sha": "07de0433221c146bb95db242ab5c4af39497c591",
+        "blob_sha": "1981b4f6a149b436109921969a9a2f5df0512ba6",
         "path": "tests/test_exact_head_codex_clear_adoption.py",
         "previous_path": "",
         "status": "added"
       },
       {
-        "blob_sha": "bd334ef22aa88e505b0957a91be78a3254c89ad8",
+        "blob_sha": "c92570a6bd9f7a2365b1ae7d9546a7a52d05d37b",
+        "path": ".github/workflows/hunter-governance-reconcile.yml",
+        "previous_path": "",
+        "status": "modified"
+      },
+      {
+        "blob_sha": "9ca00c0144783ba5ad508946c7fc0cffe9fc08bc",
+        "path": "docs/DEFECT_REGISTRY.json",
+        "previous_path": "",
+        "status": "modified"
+      },
+      {
+        "blob_sha": "81057aff221fd430216a75b9b4177abecb9f8078",
+        "path": "scripts/hunter_defect_prevention_preflight.py",
+        "previous_path": "",
+        "status": "modified"
+      },
+      {
+        "blob_sha": "3c0478cc3698e899abcddabdb552839b9905e95d",
         "path": "scripts/hunter_governance_review_v2.py",
         "previous_path": "",
         "status": "modified"
       },
       {
-        "blob_sha": "38afc0a40e1655ff28180de89dacea00c3f9cfe3",
+        "blob_sha": "cdf35abce8edcc880fdc255788f449eb18da418c",
         "path": "scripts/hunter_review_orchestrator.py",
         "previous_path": "",
         "status": "modified"
       },
       {
-        "blob_sha": "501149dd3eb2ff3a68f243af0a38f3eb494c9206",
+        "blob_sha": "7f0558ef40ee7369e2b728220fc9d984f11b92ff",
         "path": "scripts/hunter_reviewer_collector.py",
+        "previous_path": "",
+        "status": "modified"
+      },
+      {
+        "blob_sha": "8338a71b00c77c12698f338a3c707eb29a5c317b",
+        "path": "tests/test_hunter_governance_review_v2.py",
         "previous_path": "",
         "status": "modified"
       },
@@ -232,11 +281,11 @@
         "status": "modified"
       }
     ],
-    "review_target_digest": "992bbcef1b44fbd3be2781014b4316ef8cbca0a65f77d1363f0697871a66f15b"
+    "review_target_digest": "8f79db873c1b6d00492954e9ae7d3f22afbb8f44e4ae32c0433e04849e3cd398"
   },
-  "review_id": "3d09477e50e6c3377ad6f6d122f85a1d44d5ed611dce69c0113054c17bebddc9",
+  "review_id": "11fb6546b8afdf37f68eb43c15337f4bf4e5de86e586379fd0f7fcccf1e05a64",
   "review_request": {
-    "claims_id": "3d09477e50e6c3377ad6f6d122f85a1d44d5ed611dce69c0113054c17bebddc9",
+    "claims_id": "11fb6546b8afdf37f68eb43c15337f4bf4e5de86e586379fd0f7fcccf1e05a64",
     "schema": "hunter.review-request.v1"
   },
   "schema": "hunter.pre-ready-hostile-review.v1"
