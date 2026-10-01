@@ -221,7 +221,7 @@
     "issue": "474",
     "review_target": [
       {
-        "blob_sha": "c5f3588b328abfb22b7337ab62ea8566497c232d",
+        "blob_sha": "7d789f4e2d88bf97025d783dd8f93718a079d761",
         "path": "tests/test_exact_head_codex_clear_adoption.py",
         "previous_path": "",
         "status": "added"
@@ -251,19 +251,19 @@
         "status": "modified"
       },
       {
-        "blob_sha": "fb718eebb80f98ab38a895887e2da677cc7f5010",
+        "blob_sha": "611adcfb6e8ea71965ad3a465c47108242edb8a8",
         "path": "scripts/hunter_governance_review_v2.py",
         "previous_path": "",
         "status": "modified"
       },
       {
-        "blob_sha": "cdf35abce8edcc880fdc255788f449eb18da418c",
+        "blob_sha": "326906900dc5abceb9ce0d59a0eb29703ad1d062",
         "path": "scripts/hunter_review_orchestrator.py",
         "previous_path": "",
         "status": "modified"
       },
       {
-        "blob_sha": "54b4516f86b734ae3b0bb7531707da770db8feb0",
+        "blob_sha": "8de5bab6bdb672532920b8c2b6f9e0037ff18dad",
         "path": "scripts/hunter_reviewer_collector.py",
         "previous_path": "",
         "status": "modified"
@@ -299,11 +299,11 @@
         "status": "modified"
       }
     ],
-    "review_target_digest": "f6f0eb976fc99e45a92dbc51d2bae3a8d24c4f4a9a5c937d42c752237c3d4ee4"
+    "review_target_digest": "c682385528d705527f5f840dd2d82f902e0b2f00853d7d07cfcd185d3ca02821"
   },
-  "review_id": "7b0f6c40216c06324215fecce61344510e3b585ea194d14c1f04c5027adfbe74",
+  "review_id": "9013fb83f4f3d1b39f8ed16c515046edd09e5309010340aaf751ef087cc1df47",
   "review_request": {
-    "claims_id": "7b0f6c40216c06324215fecce61344510e3b585ea194d14c1f04c5027adfbe74",
+    "claims_id": "9013fb83f4f3d1b39f8ed16c515046edd09e5309010340aaf751ef087cc1df47",
     "schema": "hunter.review-request.v1"
   },
   "schema": "hunter.pre-ready-hostile-review.v1"
