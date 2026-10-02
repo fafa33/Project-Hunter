@@ -148,7 +148,6 @@ def test_inline_permissions_allow_only_project_editing_capabilities(
     assert permission["grep"] == "allow"
     assert permission["lsp"] == "allow"
     for denied in (
-        "bash",
         "webfetch",
         "websearch",
         "task",
@@ -197,10 +196,16 @@ def test_provider_capability_contract_keeps_shell_and_external_directory_denied(
     permission = json.loads(env["OPENCODE_CONFIG_CONTENT"])["permission"]
 
     assert permission["external_directory"] == "deny"
-    assert permission.get("bash", "deny") == "deny"
+    assert permission["bash"] == "allow"
     assert set(shim._REQUIRED_PROVIDER_CAPABILITIES) <= {
         name for name, decision in permission.items() if decision == "allow"
     }
+    plugin = credential_home / ".config" / "opencode" / "plugins" / shim._PROVIDER_GUARD_PLUGIN_FILE
+    assert plugin.is_file()
+    assert '"bash"' in plugin.read_text(encoding="utf-8")
+    assert "forbids tool" in plugin.read_text(encoding="utf-8")
+    config = json.loads(env["OPENCODE_CONFIG_CONTENT"])
+    assert config["plugin"] == [plugin.resolve().as_uri()]
 
 
 def test_main_fails_closed_before_provider_run_when_runtime_capability_is_missing(tmp_path: Path, monkeypatch) -> None:
@@ -379,6 +384,21 @@ def test_every_opencode_process_runs_with_pwd_bound_to_its_own_directory(tmp_pat
     (discovery,) = [entry for entry in seen if entry[0][1:4] == ["debug", "agent", "build"]]
     assert discovery[2] == workspace
     assert discovery[1] == seen[-1][1]
+
+
+def test_pure_mode_registers_guard_explicitly_and_actual_bash_attempt_is_guarded(tmp_path: Path) -> None:
+    credential_home = tmp_path / "credential-home"
+    credential_home.mkdir()
+    env = shim._restricted_environment(credential_home)
+    config = json.loads(env["OPENCODE_CONFIG_CONTENT"])
+    plugin_uri = config["plugin"][0]
+    assert plugin_uri.startswith("file://")
+    guard = Path(plugin_uri.removeprefix("file://")).read_text(encoding="utf-8")
+    # This is the hook invoked by OpenCode for a real model-issued bash tool call.
+    assert '"tool.execute.before"' in guard
+    assert "forbidden.has(input.tool)" in guard
+    assert 'throw new Error("Hunter governed runtime forbids tool: " + input.tool)' in guard
+    assert '"bash"' in guard
 
 
 @pytest.mark.skipif(
