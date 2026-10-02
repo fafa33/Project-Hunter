@@ -172,6 +172,26 @@
     "require_author_and_committer_independently": true,
     "independence_semantics": "The author headers and the committer headers are each resolved to a bound identity on their own, and the two must resolve to the same writer. One field matching never authorizes the other, and a bound name paired with an unbound email is not a partial match another identity can complete.",
     "require_single_writer_per_range": true,
+    "signing_key_bindings": {
+      "purpose": "Bind each authorization-bound writer to the exact SSH signing key fingerprints its commits may carry, so a commit that claims one writer's identity while carrying another writer's key is refused at the push boundary instead of being published and rejected later by hosted governance.",
+      "why": "Issue #534 follow-on, observed live on PR #535. Commit 38a1d58ff91fed12284956f4bd04474b3578909a is authored and committed as 'Claude <noreply@anthropic.com>' but signed with the repository owner's key, so GitHub resolves the key against the claimed committer, finds no registration for 'claude', and reports reason=unknown_key. Local pre-push read only the author/committer headers -- which are caller-chosen strings -- so it passed the range; trusted hosted governance read commit.verification and rejected it after publication. The declared provenance invariant was therefore enforced as two complementary halves at two boundaries, and nothing reconciled them.",
+      "evidence_source": "The fingerprint is read from the commit object itself via git's own %GK pretty-format, which resolves the SSH signing key embedded in the commit's gpgsig header. It is exact commit evidence, not a caller-supplied claim, needs no keyring, no private key, and no network access, and it agrees byte-for-byte with the fingerprint GitHub reports.",
+      "require_key_bound_to_resolved_writer": true,
+      "bindings": {
+        "claude": [
+          "SHA256:32dP45eSMmVSt/G/CGvcxl/P+MO3Nwj9xeTh/GSA2wc"
+        ],
+        "fafa33": [
+          "SHA256:Yee9tbonym7Jvs2UbjpudVIRkv3aF1tcFlK240pXuBo"
+        ]
+      },
+      "binding_evidence": {
+        "claude": "Trusted-main evidence: SHA256:32dP45eSMmVSt/G/CGvcxl/P+MO3Nwj9xeTh/GSA2wc is the %GK fingerprint of every SSH-signed commit reachable from main at 207475240223027ce5875c8cdbc30f4f288baafb (83 commits), each authored and committed as 'Claude <noreply@anthropic.com>' and admitted through governed ingress that requires GitHub verified=true reason=valid for authorized signer 'claude'.",
+        "fafa33": "SHA256:Yee9tbonym7Jvs2UbjpudVIRkv3aF1tcFlK240pXuBo is the public SSH signing key registered on the GitHub account fafa33 ('Mac Git Signing', key id 1160850) and the repository owner's configured git signing key; the fingerprints are identical."
+      },
+      "unsigned_commit_semantics": "A governed-range commit that carries no signing key has no fingerprint to bind and is refused. Hosted governance already requires verified=true reason=valid for every commit in the range beyond ingress_provenance.attested_from_commit, so this is parity with the authority boundary rather than a new obligation; it simply surfaces before publication instead of after.",
+      "fail_closed": "Missing or malformed signing_key_bindings, a binding for a login no writer_identity_binding.identities entry binds, an empty fingerprint list, a fingerprint that is not a full SSH SHA-256 fingerprint, unreadable commit metadata, a commit with no readable signing key, and a commit whose signing key is not bound to the writer its author/committer headers resolved to all block the push."
+    },
     "attribution_semantics": "Implementation-agent attribution (for example a Co-Authored-By or session trailer) is carried in commit trailers only. Identity is read exclusively from the author and committer headers, so a trailer can never establish, replace or mutate the authorization-bound writer identity, and an agent keeps its attribution while the commit is recorded under the bound writer.",
     "identities": [
       {
