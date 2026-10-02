@@ -82,6 +82,35 @@ OPPORTUNITY_THRESHOLD_EXCEEDS_DECLARED = (
     "                existing.started_at, INDEPENDENT_REVIEW_OPPORTUNITY_SECONDS * 3 // 2",
 )
 
+#: PR #535 / DFF-041: production that withholds the nominal timeout while the
+#: cycle's correlated collector is still running, bounded at twice the budget.
+#: Scenario A must not reject it: its straddle probes are about the nominal
+#: budget, not about finalizing a live collector out from under itself.
+WITHHOLDS_TIMEOUT_WHILE_COLLECTOR_ACTIVE = (
+    """            if existing.state in PENDING_STATES and _older_than(
+                existing.started_at, INDEPENDENT_REVIEW_OPPORTUNITY_SECONDS
+            ):""",
+    """            if (
+                existing.state in PENDING_STATES
+                and _older_than(existing.started_at, INDEPENDENT_REVIEW_OPPORTUNITY_SECONDS)
+                and (
+                    collector_liveness(repository, token, pr_number, head_sha, generation_id)[0] != "active"
+                    or _older_than(existing.started_at, INDEPENDENT_REVIEW_OPPORTUNITY_SECONDS * 2)
+                )
+            ):""",
+)
+
+#: Codex P1 on PR #552: the same deferral with no upper bound. A perpetually
+#: active or wedged collector would leave the exact head pending forever.
+WITHHOLDS_TIMEOUT_WHILE_COLLECTOR_ACTIVE_UNBOUNDED = (
+    WITHHOLDS_TIMEOUT_WHILE_COLLECTOR_ACTIVE[0],
+    """            if (
+                existing.state in PENDING_STATES
+                and _older_than(existing.started_at, INDEPENDENT_REVIEW_OPPORTUNITY_SECONDS)
+                and collector_liveness(repository, token, pr_number, head_sha, generation_id)[0] != "active"
+            ):""",
+)
+
 #: Codex P1 on PR #539: the recovery dispatch is real, but the durable cycle it
 #: was dispatched for is never refreshed, so every later reconcile recovers the
 #: same exact head again off the original stale record. Written as a
@@ -330,6 +359,32 @@ def test_scenario_a_fails_when_the_opportunity_is_ignored(tmp_path):
     result = replay._run_scenario("A", root, _fixture_path(tmp_path), workspace_root=tmp_path)
     assert result["outcome"] == "fail"
     assert "must not be timed out" in result["error"]
+
+
+def test_scenario_a_does_not_require_timing_out_an_active_correlated_collector(tmp_path):
+    """DFF-041 / PR #535: the straddle probes once stubbed the correlated
+    collector as still active, so a candidate that correctly withheld the
+    nominal timeout from a live collector was graded as a failure. The nominal
+    boundary must be judged with that collector already finished, while the
+    terminality regressions above stay rejected."""
+
+    root = _candidate_root(tmp_path, orchestrator_mutations=(WITHHOLDS_TIMEOUT_WHILE_COLLECTOR_ACTIVE,))
+    result = replay._run_scenario("A", root, _fixture_path(tmp_path), workspace_root=tmp_path)
+    assert result["outcome"] == "pass", result.get("error")
+    assert result["measurements"]["timed_out_state"] == "REVIEW_TIMED_OUT"
+    assert result["measurements"]["in_opportunity_state"] != "REVIEW_TIMED_OUT"
+    assert result["measurements"]["active_ceiling_state"] == "REVIEW_TIMED_OUT"
+
+
+def test_scenario_a_fails_when_an_active_collector_holds_the_cycle_open_without_bound(tmp_path):
+    """Codex P1 on PR #552: withholding the nominal timeout from a live
+    collector is only legitimate while it stays bounded. A candidate that never
+    times out an active collector must be rejected by the trusted ceiling."""
+
+    root = _candidate_root(tmp_path, orchestrator_mutations=(WITHHOLDS_TIMEOUT_WHILE_COLLECTOR_ACTIVE_UNBOUNDED,))
+    result = replay._run_scenario("A", root, _fixture_path(tmp_path), workspace_root=tmp_path)
+    assert result["outcome"] == "fail"
+    assert "an active collector can hold the exact head pending without bound" in result["error"]
 
 
 # --- Scenario B: bounded, idempotent exact-head collector dispatch ----------
