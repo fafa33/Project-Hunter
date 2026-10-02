@@ -426,6 +426,20 @@ def test_a_key_outside_the_bound_set_is_refused_even_when_well_formed() -> None:
     assert unknown in verdict.reason
 
 
+def test_a_signing_key_bound_to_two_writers_fails_closed() -> None:
+    """One key is one GitHub account; sharing it would let a commit claim either writer."""
+    document = _policy()
+    document[provenance.BINDING_FIELD][provenance.SIGNING_KEY_BINDINGS_FIELD]["bindings"] = {
+        "claude": [CLAUDE_KEY, OWNER_KEY],
+        "fafa33": [OWNER_KEY],
+    }
+
+    parsed, error = provenance.parse_binding(document)
+
+    assert parsed is None
+    assert "may identify only one writer" in error
+
+
 def test_a_malformed_fingerprint_in_policy_fails_closed() -> None:
     """A truncated or wildcard binding would admit any key sharing a prefix."""
 
@@ -997,19 +1011,23 @@ def _signed_repository(tmp_path: Path) -> tuple[Path, str, str, str, str]:
     base = git("rev-parse", "HEAD")
     git("commit", "-q", "--allow-empty", "-S", "-m", "first signed")
     middle = git("rev-parse", "HEAD")
-    git("commit", "-q", "--allow-empty", "-S", "-m", "second signed")
+    git("commit", "-q", "--allow-empty", "-S", "-m", "second signed", "-m", "Hunter-Writer-Recovery: fixture")
     return repo, fingerprint, base, middle, git("rev-parse", "HEAD")
 
 
-def test_signing_keys_and_parents_are_read_for_real_signed_commits(monkeypatch, tmp_path) -> None:
+@pytest.mark.parametrize("ambient", ("", "[log]\n\tshowSignature = true\n"), ids=("hosted", "show-signature"))
+def test_signing_keys_and_parents_are_read_for_real_signed_commits(monkeypatch, tmp_path, ambient: str) -> None:
     """The %GK wiring against real signed commits, not only synthetic records.
 
-    Global and system git config are excluded so the read runs exactly as on a
-    hosted runner, where no ``gpg.ssh.allowedSignersFile`` is configured: a
-    developer's own git config must not be what makes the fingerprint readable.
+    System git config is excluded and the global config is either empty -- as on
+    a hosted runner, where no ``gpg.ssh.allowedSignersFile`` is configured -- or
+    a developer's ``log.showSignature``, which makes git print verification
+    diagnostics into stdout. Neither may change what is read.
     """
 
-    monkeypatch.setenv("GIT_CONFIG_GLOBAL", os.devnull)
+    global_config = tmp_path / "global.gitconfig"
+    global_config.write_text(ambient, encoding="utf-8")
+    monkeypatch.setenv("GIT_CONFIG_GLOBAL", str(global_config))
     monkeypatch.setenv("GIT_CONFIG_NOSYSTEM", "1")
     repo, fingerprint, base, middle, head = _signed_repository(tmp_path)
 
@@ -1020,6 +1038,9 @@ def test_signing_keys_and_parents_are_read_for_real_signed_commits(monkeypatch, 
     assert all(commit.signature_status in provenance.GOOD_SIGNATURE_STATUSES for commit in commits)
     assert commits[0].parents == base
     assert commits[1].parents == middle
+    # The trailer read must key on the same SHAs as the record read, or a valid
+    # recovery declaration would silently never attach.
+    assert (commits[0].recovery_declaration, commits[1].recovery_declaration) == ("", "fixture")
 
     def binding(**keys: list[str]) -> provenance.WriterIdentityBinding:
         enforced = _policy()

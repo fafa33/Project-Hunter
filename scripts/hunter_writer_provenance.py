@@ -99,7 +99,16 @@ GOOD_SIGNATURE_STATUSES = frozenset({"G", "U"})
 #: the key embedded in the commit (``%G?`` = ``U``) without trusting any local
 #: keyring, so the fingerprint is read identically everywhere. A signature that
 #: does not verify still yields no fingerprint and fails closed.
-GIT_SIGNATURE_READ_CONFIG = ("-c", f"gpg.ssh.allowedSignersFile={os.devnull}")
+#:
+#: ``log.showSignature`` is forced off: when a user enables it, git prepends
+#: verification diagnostics to stdout ahead of the formatted record, corrupting
+#: the parsed SHAs. Every machine-readable ``git log`` here uses this config.
+GIT_SIGNATURE_READ_CONFIG = (
+    "-c",
+    f"gpg.ssh.allowedSignersFile={os.devnull}",
+    "-c",
+    "log.showSignature=false",
+)
 
 
 def normalize_identity_value(value: str) -> str:
@@ -245,6 +254,11 @@ def parse_signing_key_bindings(policy: Any) -> tuple[dict[str, frozenset[str]] |
         return None, f"{BINDING_FIELD}.{SIGNING_KEY_BINDINGS_FIELD}.bindings must be a non-empty object"
 
     bindings: dict[str, frozenset[str]] = {}
+    # A key identifies exactly one account on GitHub, which is how hosted
+    # governance resolves it. A fingerprint shared between two writers would let
+    # a commit claim either one and pass here while hosted governance rejects it
+    # as unknown_key -- the very local/hosted split this binding exists to close.
+    owners: dict[str, str] = {}
     for login, value in raw.items():
         if not isinstance(login, str) or not login.strip():
             return None, f"{BINDING_FIELD}.{SIGNING_KEY_BINDINGS_FIELD}.bindings has an unnamed writer"
@@ -254,6 +268,15 @@ def parse_signing_key_bindings(policy: Any) -> tuple[dict[str, frozenset[str]] |
                 f"{BINDING_FIELD}.{SIGNING_KEY_BINDINGS_FIELD}.bindings.{login} must be a non-empty array of "
                 "full SSH SHA-256 fingerprints"
             )
+        if login.strip() in bindings:
+            return None, f"{BINDING_FIELD}.{SIGNING_KEY_BINDINGS_FIELD}.bindings names {login.strip()!r} twice"
+        for key in sorted(keys):
+            if key in owners:
+                return None, (
+                    f"{BINDING_FIELD}.{SIGNING_KEY_BINDINGS_FIELD}.bindings binds {key} to both "
+                    f"{owners[key]!r} and {login.strip()!r}; a signing key may identify only one writer"
+                )
+            owners[key] = login.strip()
         bindings[login.strip()] = keys
     return bindings, ""
 
@@ -759,6 +782,7 @@ def read_range_commits(base: str, head: str, *, cwd: Path | None = None) -> tupl
         return commits
     trailer = recovery.owner_recovery.trailer
     declarations = _run_git(
+        *GIT_SIGNATURE_READ_CONFIG,
         "log",
         "--reverse",
         f"--format=%H{GIT_FIELD_SEPARATOR}%(trailers:key={trailer},valueonly,separator={GIT_FIELD_SEPARATOR})",
