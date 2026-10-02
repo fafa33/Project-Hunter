@@ -668,6 +668,24 @@ def independent_review_opportunity_seconds() -> int:
     return pre_ready.reviewer_chain_worst_case_seconds(pool)
 
 
+def __getattr__(name: str) -> Any:
+    """Derive ``INDEPENDENT_REVIEW_OPPORTUNITY_SECONDS`` on demand.
+
+    The budget is a derivation, not a declared constant, but trusted
+    default-branch readers still reach it as a module attribute -- notably the
+    trusted orchestrator replay harness, which imports this *candidate's* module
+    and reads that name while its own scenario logic is still main's version.
+    Resolving it here rather than assigning it at import keeps every such reader
+    working across the cutover, keeps the value pool-derived instead of a second
+    hand-set number, and surfaces an unreadable reviewer pool at the point of use
+    instead of breaking module import for every other caller.
+    """
+
+    if name == "INDEPENDENT_REVIEW_OPPORTUNITY_SECONDS":
+        return independent_review_opportunity_seconds()
+    raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
+
+
 def collector_needs_dispatch(repository: str, token: str, cycle: ReviewCycle) -> bool:
     """Whether a pending cycle has no live collector and may be re-dispatched.
 

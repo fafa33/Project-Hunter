@@ -203,6 +203,30 @@ def test_independent_review_opportunity_matches_the_same_canonical_budget():
     assert orchestrator.independent_review_opportunity_seconds() == pre_ready.reviewer_chain_worst_case_seconds(pool)
 
 
+def test_the_derived_budget_is_still_readable_as_a_module_attribute():
+    """The budget is a derivation, but trusted default-branch readers still reach
+    it as a module attribute.
+
+    The trusted orchestrator replay harness imports this *candidate's* module
+    while its own scenario logic is still the default branch's version, and that
+    version reads the budget through `INDEPENDENT_REVIEW_OPPORTUNITY_SECONDS`.
+    Dropping the name broke the candidate-facing half of that harness before the
+    candidate can ever prove itself, which is the same bootstrap limitation the
+    Review Opportunity migration identity exists to work around. Both access forms
+    must therefore keep resolving, to the same derived value.
+    """
+
+    pool, error = pre_ready.load_reviewer_pool()
+    assert pool is not None and not error
+    derived = pre_ready.reviewer_chain_worst_case_seconds(pool)
+
+    assert orchestrator.INDEPENDENT_REVIEW_OPPORTUNITY_SECONDS == derived
+    assert orchestrator.independent_review_opportunity_seconds() == derived
+
+    with pytest.raises(AttributeError):
+        _unknown = orchestrator.NOT_A_REAL_ORCHESTRATOR_ATTRIBUTE
+
+
 def test_a_missing_run_id_refuses_before_any_collector_is_dispatched(monkeypatch):
     """A dispatch this run cannot name would be re-dispatched on the next pass.
 
