@@ -107,16 +107,21 @@ def test_ready_review_request_dispatches_collector_once(monkeypatch):
     assert stored["dispatches"] == 1
 
 
-def test_two_racing_reconcile_calls_never_double_dispatch_when_the_status_read_lags(monkeypatch):
+def test_a_second_call_sees_the_correlated_collector_and_does_not_redispatch(monkeypatch):
     """PR #535 live evidence (runs 36340127965 and 36340195915).
 
     GitHub's combined-status read (what ``read_cycle`` uses) is not guaranteed
     read-your-write consistent: a status one reconcile execution just posted
-    can still be reported "absent" to a second, near-simultaneous execution of
-    the same event. Both here report "absent" on every call -- the worst case,
-    where the status read never catches up within the test -- so only the
-    collector *run* listing (a separate, directly-queried endpoint) can tell
-    the second caller that this exact identity has already been dispatched.
+    can still be reported "absent" to a later, near-simultaneous execution of
+    the same event. Both report "absent" on every call here, so only the
+    collector *run* listing (a separate, directly-queried endpoint) can tell the
+    second caller that this exact identity has already been dispatched.
+
+    Scope, deliberately narrow: these two calls are serial, so the first one's
+    dispatch is already visible to the second one's liveness read. This proves
+    the correlated-run case converges on one dispatch. It does NOT prove two
+    genuinely simultaneous reconciles cannot both dispatch -- see
+    ``test_two_genuinely_simultaneous_dispatches_can_both_miss_the_correlated_run``.
     """
 
     stored = {"dispatches": 0}
@@ -143,6 +148,61 @@ def test_two_racing_reconcile_calls_never_double_dispatch_when_the_status_read_l
     second = orchestrator.ensure_collector("owner/repo", "token", 472, HEAD)
 
     assert stored["dispatches"] == 1
+    assert first.state == "WAITING_FOR_REVIEWER"
+    assert second.state == "WAITING_FOR_REVIEWER"
+
+
+def test_two_genuinely_simultaneous_dispatches_can_both_miss_the_correlated_run(monkeypatch):
+    """Documents the residual window the previous test's name overclaimed.
+
+    Two reconciles that both read the cycle status as absent *and* both read
+    collector liveness before either has dispatched will each dispatch. Nothing
+    in the current design closes that window: GitHub's status API has no
+    compare-and-set, so publishing the durable record is not atomic with acting
+    on it. The bounded recovery path in ``collector_needs_dispatch`` is what
+    keeps the consequence bounded -- a redundant collector, never a false clear --
+    so this is recorded as a known limitation rather than asserted away.
+
+    Closing it needs an atomic claim (a lock/lease on the exact identity), which
+    is a trust-boundary change for the owner to authorize rather than something
+    to slip in while reconciling a conflict.
+    """
+
+    stored = {"dispatches": 0, "reads": []}
+    runs: list[dict] = []
+
+    monkeypatch.setattr(orchestrator, "read_cycle", lambda *_args: ("absent", None, None))
+    monkeypatch.setattr(orchestrator, "reviewer_pool_config_digest", lambda: "d" * 64, raising=False)
+    monkeypatch.setattr(orchestrator, "current_run_id", lambda: 999, raising=False)
+    monkeypatch.setattr(orchestrator, "publish_cycle", lambda *_args, **_kwargs: None, raising=False)
+
+    def collector_liveness(_repository, _token, _pr, _head, _generation_id=orchestrator.BASE_GENERATION_ID):
+        # Read liveness before honouring any dispatch, so neither call can see
+        # the other's run -- the true simultaneous case.
+        stored["reads"].append(stored["dispatches"])
+        return ("missing", 0)
+
+    monkeypatch.setattr(orchestrator, "collector_liveness", collector_liveness, raising=False)
+
+    def dispatch_collector(_repository, _token, pr_number, head_sha, generation_id=orchestrator.BASE_GENERATION_ID):
+        stored["dispatches"] += 1
+        runs.append(_collector_run("in_progress", pr_number=pr_number, head_sha=head_sha, run_id=stored["dispatches"]))
+
+    monkeypatch.setattr(orchestrator, "dispatch_collector", dispatch_collector, raising=False)
+
+    def request_json(_repository, _token, _method, path, _payload=None):
+        assert path.startswith(f"actions/workflows/{orchestrator.COLLECTOR_WORKFLOW}/runs")
+        return {"workflow_runs": runs}
+
+    monkeypatch.setattr(orchestrator, "request_json", request_json)
+
+    first = orchestrator.ensure_collector("owner/repo", "token", 472, HEAD)
+    second = orchestrator.ensure_collector("owner/repo", "token", 472, HEAD)
+
+    # Both calls observed a missing correlated run: neither saw the other's.
+    assert stored["reads"] == [0, 1]
+    assert stored["dispatches"] == 2
+    # Both still publish the same durable, non-authoritative pending state.
     assert first.state == "WAITING_FOR_REVIEWER"
     assert second.state == "WAITING_FOR_REVIEWER"
 

@@ -96,6 +96,12 @@ CLEAR_DENIAL_WORDS = CLEAR_DENIAL_QUALIFIERS | frozenset(DEFECT_TERMS) | {"and",
 CLEAR_DENIAL = re.compile(
     r"\bno\s+(?P<qualifier>(?:[\w-]+(?:\s*(?:,|and|or)\s*|\s+))*[ \t]*)" r"(?:" + "|".join(DEFECT_TERMS) + r")\b"
 )
+#: Codex's own marker that a body is an actual review rather than a provider
+#: notice. The connector's quota denial links a usage dashboard and upgrade
+#: instructions, so it is far longer than any minimum-substantive threshold and
+#: cannot be told apart from a review by length. It carries no reviewed-commit
+#: marker, so requiring one separates the two structurally instead.
+CODEX_REVIEWED_COMMIT_MARKER = re.compile(r"\*\*reviewed commit:\*\*\s*`[0-9a-f]{7,40}`", re.IGNORECASE)
 #: Wording that reports the review itself did not happen or could not. A
 #: reviewer that performed no review has cleared nothing, so this is
 #: unavailability even when the sentence also says "no".
@@ -1199,6 +1205,14 @@ class GitHubBackend:
     def _unavailable(body: str) -> bool:
         text = body.lower()
         normalized = " ".join(text.split())
+        # A body carrying Codex's own reviewed-commit marker is a review, not a
+        # provider notice. Denial wording is matched below by anchor because the
+        # real quota denial is long prose, so without this a substantive review
+        # that merely quotes or discusses the denial would be classified
+        # unavailable and fail the chain over. The genuine denial carries no such
+        # marker, so requiring one keeps it recognised.
+        if CODEX_REVIEWED_COMMIT_MARKER.search(text):
+            return False
         if (
             re.fullmatch(r"(?:codex )?usage limit reached\.?(?: try again later\.?)?", normalized)
             or re.fullmatch(r"codex is temporarily unavailable\. please try again later\.?", normalized)

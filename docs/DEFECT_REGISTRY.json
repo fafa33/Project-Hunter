@@ -419,7 +419,7 @@
       "source": "PR #485 after exact-head reviewer ACK fix: governed content changed while the prior review request remained present, so trusted orchestration rejected it and dispatched no collector",
       "classification": "systemic",
       "guard_boundary": "pre-push review-request freshness",
-      "guard": "Draft work may omit a review request, but once a review request exists it MUST bind the current governed range and governing Issue criteria before push. A stale request is blocked at pre-push rather than allowed to become a deterministic MISSING_REVIEW_AUTHORITY cycle with no collector dispatch.",
+      "guard": "Draft work may omit a review request, but once a review request exists it MUST bind the current governed range and governing Issue criteria. That binding is enforced downstream, not at pre-push: hunter_governance_review_v2.valid_current_review_request re-derives the request's base SHA, changed files, defect families and governing Issue criteria from trusted GitHub evidence at the exact head and rejects a request that no longer describes it, so a stale request produces no orchestration cycle and no collector dispatch instead of a false clear. hunter_pre_push.require_current_review_request_if_present deliberately does NOT gate on this: it is an unconditional no-op because a stale review request is always forward-fixable by an ordinary commit, and gating push on it would deadlock code push and deterministic merge authority for a defect that needs no history rewrite. Do not restate this entry as a pre-push block -- that is the DFF-015 overclaim this text previously carried.",
       "status": "guarded",
       "test": "tests/test_hunter_pre_push.py"
     },
@@ -1823,7 +1823,8 @@
         "boundary": "review"
       },
       "regression_evidence": [
-        "tests/test_hunter_review_orchestrator.py::test_two_racing_reconcile_calls_never_double_dispatch_when_the_status_read_lags",
+        "tests/test_hunter_review_orchestrator.py::test_a_second_call_sees_the_correlated_collector_and_does_not_redispatch",
+        "tests/test_hunter_review_orchestrator.py::test_two_genuinely_simultaneous_dispatches_can_both_miss_the_correlated_run",
         "tests/test_hunter_review_orchestrator.py::test_a_failed_collector_is_redispatched_rather_than_parking_the_cycle",
         "tests/test_hunter_review_orchestrator.py::test_ready_review_request_dispatches_collector_once"
       ],

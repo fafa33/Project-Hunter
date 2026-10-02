@@ -1975,6 +1975,68 @@ def test_substantive_review_mentioning_limits_is_not_unavailability(monkeypatch)
     assert state != "unavailable"
 
 
+def test_a_review_quoting_the_denial_on_an_issue_comment_is_not_unavailability(monkeypatch):
+    """A substantive review that quotes the denial prose must still be a review.
+
+    The issue-comment path classifies denial before substantive review text, and
+    the real quota denial is long prose, so length cannot separate the two. A
+    review that quotes the denial therefore has to be separated structurally --
+    by Codex's own reviewed-commit marker -- or a genuine review of this exact
+    head is failed over as though the provider had never answered.
+    """
+
+    backend = _codex_backend()
+    trigger = {"created_at": "2026-09-18T20:00:00Z", "collector_run_id": 123, "id": 9}
+    body = (
+        "**Reviewed commit:** `" + HEAD + "`\n\n"
+        'The earlier connector notice said "You have reached your Codex usage limits", '
+        "which I believe was stale: this review found one substantive defect in "
+        "scripts/hunter_review_orchestrator.py and must be remediated."
+    )
+
+    def pages(_repo, _token, path):
+        if "issues/" in path and path.endswith("/comments"):
+            return [
+                {
+                    "user": {"login": "chatgpt-codex-connector[bot]"},
+                    "created_at": "2026-09-18T20:02:00Z",
+                    "body": body,
+                }
+            ]
+        return []
+
+    monkeypatch.setattr(collector, "_pages", pages)
+    state = backend.response_state(_codex_agent(), trigger)
+    assert state == "blocking", state
+    assert state != "unavailable"
+
+
+def test_the_real_quota_denial_on_an_issue_comment_is_still_unavailable(monkeypatch):
+    """The structural marker must not mask a genuine denial.
+
+    The denial is 317 non-space characters -- longer than any minimum-substantive
+    threshold -- so it is recognised by carrying no reviewed-commit marker, not
+    by being short.
+    """
+
+    backend = _codex_backend()
+    trigger = {"created_at": "2026-09-18T20:00:00Z", "collector_run_id": 123, "id": 9}
+
+    def pages(_repo, _token, path):
+        if "issues/" in path and path.endswith("/comments"):
+            return [
+                {
+                    "user": {"login": "chatgpt-codex-connector[bot]"},
+                    "created_at": "2026-09-18T20:02:00Z",
+                    "body": REAL_CODEX_QUOTA_DENIAL,
+                }
+            ]
+        return []
+
+    monkeypatch.setattr(collector, "_pages", pages)
+    assert backend.response_state(_codex_agent(), trigger) == "unavailable"
+
+
 def test_trigger_creation_is_never_acknowledgement():
     """Creating the trigger proves delivery to GitHub, not that Codex started."""
 
