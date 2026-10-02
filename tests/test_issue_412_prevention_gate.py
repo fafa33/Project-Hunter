@@ -1129,7 +1129,7 @@ def _attempt(
     status: str = "exhausted",
     reason: str = "unavailable (rate-limited)",
     timeout_seconds: int = 300,
-    ack_timeout_seconds: int = 300,
+    ack_timeout_seconds: int = 30,
     review_timeout_seconds: int = 300,
     failure_class: str = "transient",
     attempt_count: int = 1,
@@ -1169,7 +1169,7 @@ def _pool(*, agents: tuple = (), last_resort: str = "hunter-guard", max_seconds:
         "enabled": True,
         "exact_head_support": True,
         "timeout_seconds": 300,
-        "ack_timeout_seconds": 300,
+        "ack_timeout_seconds": 30,
         "review_timeout_seconds": 300,
     }
     return {
@@ -1708,8 +1708,18 @@ def test_a_fallback_review_without_complete_structured_evidence_status_is_refuse
     assert "structured evidence" in verdict.reason
 
 
-def test_a_fallback_review_with_a_resolved_finding_missing_structured_evidence_is_refused() -> None:
+def test_a_fallback_review_with_a_resolved_finding_missing_structured_evidence_is_refused(monkeypatch) -> None:
     """Requirement 8 applies to every reviewer, whatever authority ran the review."""
+    _use_pool(
+        monkeypatch,
+        _pool(
+            agents=(
+                {**ALTERNATE_AGENT, "id": "copilot", "priority": 2, "retryable": False},
+                {**ALTERNATE_AGENT, "id": "gemini", "priority": 3, "retryable": False},
+                {**ALTERNATE_AGENT, "id": "groq", "priority": 4, "retryable": False},
+            )
+        ),
+    )
     finding = {"id": "F-9", "severity": "blocking", "resolution": "resolved", "evidence": "fixed it"}
     document = _review_document(authority=_authority(authority_type="hunter-guard"), findings=(finding,))
 
@@ -3105,6 +3115,61 @@ def test_pre_push_reports_ready_only_when_issue_criteria_are_covered(monkeypatch
     assert "OPTIONAL-REVIEW-CURRENT" in out
     assert captured["base"] == BASE and captured["head"] == HEAD
     assert captured["issue_criteria"] == ("one canonical criterion",)
+
+
+def test_missing_review_request_state_names_the_command_to_start_it(monkeypatch, capsys) -> None:
+    """Issue #534, root cause 2: PR #535 lived in this exact state.
+
+    A foreign/stale review-request document left over from an unrelated,
+    already-merged PR reports ``missing`` here -- content-bound identity, not
+    presence, decides validity. Nothing regenerates a review request
+    automatically (``require_current_review_request_if_present`` is a
+    documented no-op), so a candidate can sit in this state indefinitely with
+    only this NOTE as a signal. The NOTE must therefore name the exact command
+    that starts a reviewer opportunity, not just describe the symptom.
+    """
+    monkeypatch.setattr(provenance, "resolve_governed_base", lambda _head, **_kwargs: BASE)
+    monkeypatch.setattr(hunter_pre_push, "_governing_issue_criteria", lambda _updates: ("534", (), ""))
+    monkeypatch.setattr(
+        hunter_pre_push.review,
+        "verify_local",
+        lambda *_a, **_k: review.ReviewVerdict(
+            "missing", "a review request is not completed exact-head review authority"
+        ),
+    )
+
+    hunter_pre_push.report_pre_ready_review_state(HEAD, ())
+    out = capsys.readouterr().out
+
+    assert "optional external review is missing" in out
+    assert "does not block push or deterministic merge authority" in out
+    assert "hunter_pre_ready_review.py --request" in out
+    assert "nothing regenerates it automatically" in out
+
+
+def test_stale_review_request_state_does_not_carry_the_missing_only_hint(monkeypatch, capsys) -> None:
+    """The paired negative: a stale (not missing) review carries no false hint.
+
+    A stale review already exists and is content-bound to older/different
+    content; re-running ``--request`` is not what a stale review needs (a
+    fresh valid one is), so the ``missing``-specific actionable text must not
+    be attached to a different verdict state.
+    """
+    monkeypatch.setattr(provenance, "resolve_governed_base", lambda _head, **_kwargs: BASE)
+    monkeypatch.setattr(hunter_pre_push, "_governing_issue_criteria", lambda _updates: ("534", (), ""))
+    monkeypatch.setattr(
+        hunter_pre_push.review,
+        "verify_local",
+        lambda *_a, **_k: review.ReviewVerdict(
+            "stale", "the pre-ready hostile review digest does not bind this candidate's content"
+        ),
+    )
+
+    hunter_pre_push.report_pre_ready_review_state(HEAD, ())
+    out = capsys.readouterr().out
+
+    assert "optional external review is stale" in out
+    assert "hunter_pre_ready_review.py --request" not in out
 
 
 # --------------------------------------------------------------------------

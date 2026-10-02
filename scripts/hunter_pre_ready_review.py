@@ -39,7 +39,7 @@ import unicodedata
 from collections.abc import Mapping
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any
+from typing import Any, NamedTuple
 
 import hunter_connector_write_ingress as ingress
 from hunter_workflow_state import path_matches_scope_entry
@@ -102,6 +102,15 @@ CODEX_REVIEW_AUTHORITY = "codex"
 #: The field the canonical reviewer pool is declared under inside
 #: ``review_authority`` of CODE_WRITE_POLICY.json.
 REVIEWER_POOL_FIELD = "reviewer_pool"
+#: The field owner-authored candidate-scoped coverage authorizations are declared
+#: under, beside the reviewer pool in ``review_authority`` of
+#: ``CODE_WRITE_POLICY.json``. Same carrier, same trusted default branch, same
+#: fail-closed loader, so a candidate cannot widen its own obligation.
+COVERAGE_SCOPES_FIELD = "coverage_scopes"
+#: The only coverage mode that relaxes anything. A review under it is *scoped*:
+#: it never produces the verdict that satisfies the governing Issue.
+SCOPED_MODE = "bounded_correction"
+SCOPED_STATE = "scoped"
 #: The gate states a recorded last-resort guard review must claim at review
 #: time. Each field has its own admissible value because the states mean
 #: different things: Governance and trusted Preflight report "success"/"failure"
@@ -337,17 +346,27 @@ def build_claims(
     }
 
 
-def document_for(claims: dict[str, Any], authority: dict[str, Any] | None = None) -> dict[str, Any]:
+def document_for(
+    claims: dict[str, Any],
+    authority: dict[str, Any] | None = None,
+    coverage_scope: dict[str, Any] | None = None,
+) -> dict[str, Any]:
     """Assemble the review document: canonical claims plus document-level metadata.
 
     ``claims`` is exactly the canonical claim set. The authority is review
     metadata recorded BESIDE the claims (like the review_id) -- not inside them --
     so the claims stay the canonical set the trusted default-branch controller
     verifies while the exact-head authority contract still binds the document.
+    A candidate's coverage-scope claim is recorded beside them for the same
+    reason: it is a request for a relaxation, so it is deliberately outside the
+    hashed claims and is re-measured against the trusted authorizations rather
+    than trusted because the review signed it.
     """
     document: dict[str, Any] = {"schema": REVIEW_SCHEMA, "claims": claims, "review_id": review_id(claims)}
     if authority is not None:
         document["authority"] = dict(sorted(authority.items()))
+    if coverage_scope is not None:
+        document["coverage_scope"] = dict(sorted(coverage_scope.items()))
     return document
 
 
@@ -491,6 +510,11 @@ def _pool_problems(policy: Mapping[str, Any]) -> list[str]:
         if isinstance(retries, bool) or not isinstance(retries, int) or retries < 0:
             problems.append(f"{REVIEWER_POOL_FIELD} timeout_policy retries_per_agent must be a non-negative integer")
 
+    pool_max_seconds = timeout.get("max_seconds")
+    valid_pool_max_seconds = (
+        isinstance(pool_max_seconds, int) and not isinstance(pool_max_seconds, bool) and pool_max_seconds > 0
+    )
+
     agents = raw.get("agents")
     if not isinstance(agents, list) or not agents:
         problems.append(f"{REVIEWER_POOL_FIELD} agents must be a non-empty list")
@@ -544,7 +568,21 @@ def _pool_problems(policy: Mapping[str, Any]) -> list[str]:
         review_timeout = entry.get("review_timeout_seconds")
         if enabled is True:
             trigger_method = str(entry.get("trigger_method") or "")
-            ack_limit = 300 if trigger_method.startswith("github-pr-comment:") else 90
+            is_comment_trigger = trigger_method.startswith("github-pr-comment:")
+            # The comment-trigger ceiling is the pool's own declared max_seconds,
+            # never a second hardcoded number: a reviewer invoked by an authored
+            # PR comment (Codex) has no delivery signal distinct from its actual
+            # response, so its ack budget is bounded by the same cap that bounds
+            # its review budget, and raising one can never silently leave the
+            # other stuck at a stale, disconnected ceiling. Reviewers triggered
+            # synchronously (API calls, GitHub's review-request endpoint) get a
+            # real, separate delivery acknowledgement, so their ack ceiling stays
+            # a short, fixed budget unrelated to how long the review itself takes.
+            ack_limit = (
+                pool_max_seconds
+                if is_comment_trigger and valid_pool_max_seconds
+                else (300 if is_comment_trigger else 90)
+            )
             if isinstance(ack_timeout, bool) or not isinstance(ack_timeout, int) or not 1 <= ack_timeout <= ack_limit:
                 problems.append(
                     f"{REVIEWER_POOL_FIELD} enabled agent {agent_id!r} must declare ack_timeout_seconds in 1..{ack_limit}"
@@ -557,17 +595,15 @@ def _pool_problems(policy: Mapping[str, Any]) -> list[str]:
                 problems.append(
                     f"{REVIEWER_POOL_FIELD} agent {agent_id!r} review_timeout_seconds must be at least ack_timeout_seconds"
                 )
-        max_seconds = timeout.get("max_seconds")
         if (
             isinstance(review_timeout, int)
             and not isinstance(review_timeout, bool)
-            and isinstance(max_seconds, int)
-            and not isinstance(max_seconds, bool)
-            and review_timeout > max_seconds
+            and valid_pool_max_seconds
+            and review_timeout > pool_max_seconds
         ):
             problems.append(
                 f"{REVIEWER_POOL_FIELD} agent {agent_id!r} review_timeout_seconds cannot exceed the "
-                f"pool max_seconds ({max_seconds})"
+                f"pool max_seconds ({pool_max_seconds})"
             )
         problems.extend(_quality_gate_problems(entry, agent_id))
         if enabled is True and priority == 1:
@@ -637,6 +673,40 @@ def enabled_pool_reviewers(pool: Mapping[str, Any]) -> tuple[dict[str, Any], ...
 def authority_pool_reviewers(pool: Mapping[str, Any]) -> tuple[dict[str, Any], ...]:
     """Enabled reviewers eligible to establish or block review authority."""
     return tuple(agent for agent in enabled_pool_reviewers(pool) if agent.get("authority_eligible") is not False)
+
+
+#: Fixed, non-reviewer time this repository's trusted collector spends around
+#: the reviewer chain itself: checkout, script startup, and publishing its
+#: trusted receipt. Named once so every consumer of the derived chain budget
+#: below reserves the same margin instead of guessing its own.
+RESERVED_ORCHESTRATION_OVERHEAD_SECONDS = 120
+
+
+def reviewer_chain_worst_case_seconds(pool: Mapping[str, Any]) -> int:
+    """The worst-case wall-clock time the whole ordered reviewer chain can spend.
+
+    Each enabled agent's own ``review_timeout_seconds`` is already the true
+    upper bound the collector enforces for that agent (its acknowledgement
+    deadline can only ever be earlier or equal, never later -- see
+    ``hunter_reviewer_collector.collect_attempts``), so the worst case for the
+    whole chain is every enabled agent, in order, spending its full budget
+    across every attempt the pool grants it before the collector moves on.
+
+    This is the single canonical timing source a collector workflow's declared
+    lifetime and the trusted orchestrator's independent review-opportunity
+    budget both must derive from (or be validated against): raising or
+    lowering any one reviewer's configured budget in ``CODE_WRITE_POLICY.json``
+    changes this number, and both of those consumers change with it rather
+    than keeping their own disconnected, independently hand-set figure that
+    can silently drift out of sync with what the pool actually configures.
+    """
+
+    retries_per_agent = int(pool["timeout_policy"]["retries_per_agent"])
+    total = 0
+    for agent in enabled_pool_reviewers(pool):
+        attempts = 1 + (retries_per_agent if agent["retryable"] else 0)
+        total += attempts * int(agent["review_timeout_seconds"])
+    return total + RESERVED_ORCHESTRATION_OVERHEAD_SECONDS
 
 
 def _exhaustion_error(pool: Mapping[str, Any], authority: Mapping[str, Any], authority_type: str) -> str | None:
@@ -956,6 +1026,217 @@ def _structural_error(claims: dict[str, Any]) -> str | None:
     return None
 
 
+class CoverageScope(NamedTuple):
+    """One owner-authored authorization to review a corrective candidate against
+    a subset of its governing Issue's acceptance criteria.
+
+    Declared on the trusted default branch, so the candidate contributes nothing
+    to what it is allowed to owe: it may only *claim* a subset, and the claim is
+    measured against this record. ``head_sha`` optionally pins the authorization
+    to one exact commit, which is the strongest form available to an owner who
+    wants the relaxation spent once rather than held open for a candidate.
+    """
+
+    issue: str
+    mode: str
+    criteria: frozenset[str]
+    authorized_by: str
+    authorization: str
+    reason: str
+    head_sha: str
+
+
+def load_coverage_scopes(
+    source: Any = None,
+) -> tuple[tuple[CoverageScope, ...] | None, str]:
+    """Read the owner-authored coverage authorizations from the trusted policy.
+
+    Returns ``(scopes, "")`` on success -- an empty tuple when the policy
+    declares none, which is the strict default -- and ``(None, message)`` when
+    the declaration is missing, unreadable or structurally invalid. An authority
+    that cannot be read unambiguously is never partially honoured: the caller
+    fails closed rather than falling back to whatever subset happened to parse.
+
+    Like ``load_reviewer_pool`` this is one implementation consumed by every
+    reader, so the local verifier, the hosted trusted controller and the guard
+    cannot drift into different readings of the same declaration.
+    """
+
+    if source is None or isinstance(source, Path):
+        target = source if source is not None else CODE_WRITE_POLICY_PATH
+        try:
+            loaded = json.loads(target.read_text(encoding="utf-8"))
+        except FileNotFoundError:
+            return None, f"{CODE_WRITE_POLICY_RELATIVE_PATH} is missing"
+        except (OSError, UnicodeError, json.JSONDecodeError) as exc:
+            return None, f"{CODE_WRITE_POLICY_RELATIVE_PATH} is unreadable ({type(exc).__name__}: {exc})"
+        if not isinstance(loaded, dict):
+            return None, f"{CODE_WRITE_POLICY_RELATIVE_PATH} must be a JSON object"
+        policy = loaded
+    elif isinstance(source, Mapping):
+        policy = dict(source)
+    else:
+        return None, "coverage scope source must be a policy mapping or a path"
+
+    progression = policy.get("review_progression")
+    if not isinstance(progression, dict):
+        return None, "CODE_WRITE_POLICY review_progression must be an object"
+    authority = progression.get("review_authority")
+    if not isinstance(authority, dict):
+        return None, "CODE_WRITE_POLICY review_authority must be an object"
+    raw_entries = authority.get(COVERAGE_SCOPES_FIELD, [])
+    if not isinstance(raw_entries, list):
+        return None, f"CODE_WRITE_POLICY {COVERAGE_SCOPES_FIELD} must be a list"
+
+    scopes: list[CoverageScope] = []
+    seen: set[str] = set()
+    for entry in raw_entries:
+        if not isinstance(entry, dict):
+            return None, f"CODE_WRITE_POLICY {COVERAGE_SCOPES_FIELD} entry is malformed"
+        issue = str(entry.get("issue", "")).strip().lstrip("#")
+        if not issue.isdigit():
+            return None, f"CODE_WRITE_POLICY {COVERAGE_SCOPES_FIELD} must name one governing Issue"
+        mode = str(entry.get("mode", "")).strip()
+        if mode != SCOPED_MODE:
+            return None, (
+                f"CODE_WRITE_POLICY {COVERAGE_SCOPES_FIELD} names an unrecognised mode {mode!r} " f"for Issue #{issue}"
+            )
+        raw_criteria = entry.get("criteria")
+        if not isinstance(raw_criteria, list) or not all(
+            isinstance(item, str) and item.strip() for item in raw_criteria
+        ):
+            return None, f"the coverage authorization for Issue #{issue} must declare a criterion list"
+        criteria = frozenset(normalize_criterion(item) for item in raw_criteria)
+        if not criteria or "" in criteria:
+            return None, f"the coverage authorization for Issue #{issue} must authorize at least one criterion"
+        for field in ("authorized_by", "authorization", "reason"):
+            if not isinstance(entry.get(field), str) or not entry[field].strip():
+                return None, f"the coverage authorization for Issue #{issue} must declare {field}"
+        head = entry.get("head_sha")
+        if head is not None and (not isinstance(head, str) or not _GIT_SHA.fullmatch(head.strip())):
+            return None, f"the coverage authorization for Issue #{issue} head_sha must be one commit SHA"
+        if issue in seen:
+            return None, f"CODE_WRITE_POLICY authorizes Issue #{issue} more than once"
+        seen.add(issue)
+        scopes.append(
+            CoverageScope(
+                issue=issue,
+                mode=mode,
+                criteria=criteria,
+                authorized_by=str(entry["authorized_by"]).strip(),
+                authorization=str(entry["authorization"]).strip(),
+                reason=str(entry["reason"]).strip(),
+                head_sha=head.strip() if isinstance(head, str) else "",
+            )
+        )
+    return tuple(scopes), ""
+
+
+def _coverage_scope_error(
+    document: Any,
+    claims: dict[str, Any],
+    issue_criteria: tuple[str, ...] | None,
+    coverage_scopes: tuple[CoverageScope, ...],
+    head_sha: str | None,
+) -> tuple[str | None, str | None, tuple[str, ...]]:
+    """Resolve the candidate's claimed coverage against the trusted authorizations.
+
+    Returns ``(problem, state, required_criteria)``. With no claim, ``state`` is
+    ``None`` and the Issue's full criteria are required -- the strict default,
+    unchanged. With an authorized claim, ``state`` is ``"scoped"`` and only the
+    authorized criteria are required, which is a strictly narrower obligation.
+
+    A claim is a request, never an authority: the issue it names must be the one
+    the review claims, its criteria must be the governing Issue's own words, and
+    it must be a subset of what the owner authorized. Anything else is refused
+    rather than clamped, so widening is never silently reduced to something a
+    candidate did not ask for and then treated as satisfied.
+    """
+
+    declared = document.get("coverage_scope") if isinstance(document, dict) else None
+    if declared is None:
+        return None, None, tuple(issue_criteria or ())
+    if not isinstance(declared, dict):
+        return "a declared coverage scope must be an object", "incomplete", tuple(issue_criteria or ())
+
+    issue = str(claims.get("issue", "")).strip().lstrip("#")
+    declared_issue = str(declared.get("issue", "")).strip().lstrip("#")
+    if not declared_issue.isdigit() or declared_issue != issue:
+        return (
+            f"the declared coverage scope names Issue #{declared_issue or '?'}, "
+            f"which does not match the reviewed Issue #{issue}",
+            "incomplete",
+            tuple(issue_criteria or ()),
+        )
+    mode = str(declared.get("mode", "")).strip()
+    if not mode:
+        return "a declared coverage scope must name a coverage mode", "incomplete", tuple(issue_criteria or ())
+    for field in ("authorized_by", "authorization", "reason"):
+        if not isinstance(declared.get(field), str) or not declared[field].strip():
+            return (
+                f"a declared coverage scope must carry a non-empty {field}",
+                "incomplete",
+                tuple(issue_criteria or ()),
+            )
+    raw = declared.get("criteria")
+    if not isinstance(raw, list) or not all(isinstance(item, str) and item.strip() for item in raw):
+        return (
+            "a declared coverage scope must name at least one acceptance criterion",
+            "incomplete",
+            tuple(issue_criteria or ()),
+        )
+    claimed = frozenset(normalize_criterion(item) for item in raw)
+    if not claimed or "" in claimed:
+        return (
+            "a declared coverage scope must name at least one acceptance criterion",
+            "incomplete",
+            tuple(issue_criteria or ()),
+        )
+    if issue_criteria is None:
+        return (
+            f"the governing Issue #{issue} acceptance criteria are unavailable, "
+            "so a coverage scope cannot be authenticated",
+            "incomplete",
+            (),
+        )
+    unknown = sorted(claimed - set(issue_criteria))
+    if unknown:
+        return (
+            "the declared coverage scope names criteria the governing Issue does not define: " + "; ".join(unknown[:3]),
+            "incomplete",
+            tuple(issue_criteria),
+        )
+
+    trusted = next((scope for scope in coverage_scopes if scope.issue == issue and scope.mode == mode), None)
+    if trusted is None:
+        return (
+            f"no owner authorization for a {mode} review of Issue #{issue} on the trusted default branch",
+            "incomplete",
+            tuple(issue_criteria),
+        )
+    if not head_sha or not _GIT_SHA.fullmatch(head_sha.strip()):
+        return (
+            f"a declared coverage scope for Issue #{issue} requires the evaluated exact head SHA",
+            "incomplete",
+            tuple(issue_criteria),
+        )
+    if trusted.head_sha and trusted.head_sha.lower() != head_sha.strip().lower():
+        return (
+            f"the owner authorization for Issue #{issue} is bound to head {trusted.head_sha[:10]}, "
+            f"not the evaluated exact head {head_sha.strip().lower()[:10]}",
+            "incomplete",
+            tuple(issue_criteria),
+        )
+    excess = sorted(claimed - trusted.criteria)
+    if excess:
+        return (
+            f"the declared coverage scope names criteria not authorized for Issue #{issue}: " + "; ".join(excess[:3]),
+            "incomplete",
+            tuple(issue_criteria),
+        )
+    return None, SCOPED_STATE, tuple(sorted(claimed))
+
+
 def verify_claims(
     document: Any,
     *,
@@ -963,6 +1244,7 @@ def verify_claims(
     changes: tuple[ingress.ConnectorFileChange, ...],
     families: tuple[dict[str, Any], ...],
     issue_criteria: tuple[str, ...] | None = None,
+    coverage_scopes: tuple[CoverageScope, ...] | None = None,
     resolution_corrections: frozenset[str] | None = None,
     head_sha: str | None = None,
     require_authority: bool = True,
@@ -1072,14 +1354,22 @@ def verify_claims(
             "applicable recurring-defect prevention checks are incomplete: " + ", ".join(missing),
         )
 
-    if issue_criteria is not None:
+    scope_state: str | None = None
+    required_criteria: tuple[str, ...] = ()
+    declared_scope = document.get("coverage_scope")
+    if issue_criteria is not None or declared_scope is not None:
+        scope_problem, scope_state, required_criteria = _coverage_scope_error(
+            document, claims, issue_criteria, coverage_scopes or (), head_sha
+        )
+        if scope_problem is not None:
+            return ReviewVerdict("incomplete", scope_problem)
         reviewed_criteria = {normalize_criterion(str(item.get("criterion"))) for item in claims["acceptance_criteria"]}
-        uncovered = [criterion for criterion in issue_criteria if criterion not in reviewed_criteria]
+        uncovered = [criterion for criterion in required_criteria if criterion not in reviewed_criteria]
         if uncovered:
             preview = "; ".join(criterion[:70] for criterion in uncovered[:3])
             return ReviewVerdict(
                 "incomplete",
-                f"the review does not cover {len(uncovered)} of the {len(issue_criteria)} acceptance criteria "
+                f"the review does not cover {len(uncovered)} of the {len(required_criteria)} acceptance criteria "
                 f"the governing Issue defines: {preview}",
             )
 
@@ -1116,6 +1406,15 @@ def verify_claims(
     if unresolved:
         return ReviewVerdict("unresolved", "substantive review findings remain unresolved: " + ", ".join(unresolved))
 
+    if scope_state == SCOPED_STATE:
+        return ReviewVerdict(
+            SCOPED_STATE,
+            f"bounded corrective review of Issue #{claims['issue']} covers {len(required_criteria)} of the "
+            f"{len(issue_criteria)} acceptance criteria the Issue defines, under the owner authorization "
+            f"{tuple(scope.authorization for scope in coverage_scopes or () if scope.issue == claims['issue'])!r}; "
+            "this is not Issue completion and satisfies no remaining criterion",
+        )
+
     return ReviewVerdict(
         "valid",
         f"complete base->HEAD hostile review for Issue #{claims['issue']} covers "
@@ -1132,6 +1431,7 @@ def verify_review_request(
     changes: tuple[ingress.ConnectorFileChange, ...],
     families: tuple[dict[str, Any], ...],
     issue_criteria: tuple[str, ...] | None = None,
+    coverage_scopes: tuple[CoverageScope, ...] | None = None,
     head_sha: str | None = None,
 ) -> ReviewVerdict:
     """Validate the content a reviewer would be asked to authorize.
@@ -1162,6 +1462,7 @@ def verify_review_request(
         changes=changes,
         families=families,
         issue_criteria=issue_criteria,
+        coverage_scopes=coverage_scopes,
         head_sha=head_sha,
         require_authority=False,
     )
@@ -1294,6 +1595,7 @@ def verify_local(
     *,
     cwd: Path | None = None,
     issue_criteria: tuple[str, ...] | None = None,
+    coverage_scopes: tuple[CoverageScope, ...] | None = None,
 ) -> ReviewVerdict:
     """Verify the review against local git evidence, optionally against the Issue.
 
@@ -1327,6 +1629,7 @@ def verify_local(
         changes=changes,
         families=families,
         issue_criteria=issue_criteria,
+        coverage_scopes=coverage_scopes,
         head_sha=exact_head,
     )
 
@@ -1338,6 +1641,7 @@ JUDGEMENT_KEYS = (
     "defect_families",
     "findings",
 )
+OPTIONAL_JUDGEMENT_KEYS = ("coverage_scope",)
 REQUEST_JUDGEMENT_KEYS = tuple(key for key in JUDGEMENT_KEYS if key != "authority")
 
 
@@ -1371,7 +1675,7 @@ def prepare_request(
         findings=tuple(judgement["findings"]),
         adversarial_dimensions=tuple(judgement["adversarial_dimensions"]),
     )
-    document = document_for(claims)
+    document = document_for(claims, coverage_scope=judgement.get("coverage_scope"))
     document["review_request"] = {"schema": "hunter.review-request.v1", "claims_id": document["review_id"]}
     return document
 
@@ -1417,7 +1721,7 @@ def record(
         findings=tuple(judgement["findings"]),
         adversarial_dimensions=tuple(judgement["adversarial_dimensions"]),
     )
-    return document_for(claims, authority=authority)
+    return document_for(claims, authority=authority, coverage_scope=judgement.get("coverage_scope"))
 
 
 def main() -> int:

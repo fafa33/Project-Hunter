@@ -419,7 +419,7 @@
       "source": "PR #485 after exact-head reviewer ACK fix: governed content changed while the prior review request remained present, so trusted orchestration rejected it and dispatched no collector",
       "classification": "systemic",
       "guard_boundary": "pre-push review-request freshness",
-      "guard": "Draft work may omit a review request, but once a review request exists it MUST bind the current governed range and governing Issue criteria before push. A stale request is blocked at pre-push rather than allowed to become a deterministic MISSING_REVIEW_AUTHORITY cycle with no collector dispatch.",
+      "guard": "Draft work may omit a review request, but once a review request exists it MUST bind the current governed range and governing Issue criteria. That binding is enforced downstream, not at pre-push: hunter_governance_review_v2.valid_current_review_request re-derives the request's base SHA, changed files, defect families and governing Issue criteria from trusted GitHub evidence at the exact head and rejects a request that no longer describes it, so a stale request produces no orchestration cycle and no collector dispatch instead of a false clear. hunter_pre_push.require_current_review_request_if_present deliberately does NOT gate on this: it is an unconditional no-op because a stale review request is always forward-fixable by an ordinary commit, and gating push on it would deadlock code push and deterministic merge authority for a defect that needs no history rewrite. Do not restate this entry as a pre-push block -- that is the DFF-015 overclaim this text previously carried.",
       "status": "guarded",
       "test": "tests/test_hunter_pre_push.py"
     },
@@ -501,6 +501,16 @@
       "guard_boundary": "scan terminality definition shared by coverage manifest and reconstruction",
       "guard": "Terminality is read from the record's own explicit status against the scanner-owned PR_STATUSES vocabulary, the same rule build_coverage_manifest counts by, instead of a second list of terminal scan states kept in the reconstruction module. INFRA_PROVIDER_FAILURE and UNRESOLVED are terminal outcomes the scanner is finished with, so counting only scan_state == complete made the same persisted scan report a scan_coverage_gap no further work could close. Kept as an individual defect: one occurrence, so recurrence is unproven and no family was manufactured.",
       "test": "tests/test_historical_evidence_reconstruction.py::test_statused_rule_matches_the_coverage_manifest",
+      "status": "guarded"
+    },
+    {
+      "id": "PRH-065",
+      "class": "trusted-harness-invariant-not-derived-from-production-contract",
+      "source": "PR #536 trusted replay harness scenarios A and B, 2026-09-28: first-bad surgery between last-known-good 156ed2fad8638dabc9bd1c45a4efbfece2b2d69c (no replay harness) and first-bad 31cdf4b8c4cf6e600b996f90e4e44c7eaec780e4",
+      "classification": "systemic",
+      "guard_boundary": "trusted replay scenario assertions vs the production controller contract they claim to check",
+      "guard": "A trusted validation harness must derive each scenario's assertions from an authoritative production contract or an already-observable production invariant, and must never require an API or an execution the production code does not implement. Scenario A asserted the candidate's review opportunity equals a reviewer-pool worst-case derivation, calling hunter_review_orchestrator.independent_review_opportunity_seconds and hunter_pre_ready_review.reviewer_chain_worst_case_seconds; neither symbol has ever existed on any commit, and production's own documented contract is only that one global opportunity budget (INDEPENDENT_REVIEW_OPPORTUNITY_SECONDS) must never leave an exact head pending forever. Scenario B pinned the combined-status read to permanently return absent and required exactly one dispatch, an execution production's own ensure_collector comment explicitly rules out ('the next reconciliation observes a dispatched cycle'); suppressing a duplicate under a read that never catches up would have required a new local durability authority, not a correction. The defect was invisible because tests/test_hunter_trusted_orchestrator_replay.py substituted purpose-built fixed/buggy modules for the code under test, so the suite exercised injected stand-ins rather than the real production shape and stayed green while the real replay failed on every candidate. The correction restates both scenarios as properties the production code already documents -- a positive finite budget that actually ends an over-budget cycle while leaving an in-budget one pending, and dispatch that is one for an unrecorded head, zero further once the recorded cycle is observed, one bounded liveness recovery, and none once the dispatch budget is spent -- and the harness tests now build candidates from this repository's real production modules, proving discrimination through narrowly named mutations of the real hunter_review_orchestrator.py (DROPS_OPPORTUNITY_TERMINALITY, MAKES_OPPORTUNITY_NON_POSITIVE, MAKES_OPPORTUNITY_UNCONDITIONAL, DROPS_COLLECTOR_IDEMPOTENCY_RECORD, DROPS_LIVENESS_RECOVERY, DROPS_DISPATCH_BUDGET) whose anchors must still exist, so a refactor fails loudly rather than making a negative test vacuous. A repair to a trusted harness is incomplete until its scenarios are replayed against at least one known-valid unchanged candidate and prove the harness does not reject that valid candidate for harness/production drift; PR #538 at a91cc8f9ac3f99d10588bb06973d9a403ccc7e16 was that candidate, and A/B/G all pass against it unchanged.",
+      "test": "tests/test_hunter_trusted_orchestrator_replay.py::test_scenario_a_passes_against_real_production",
       "status": "guarded"
     }
   ],
@@ -1373,7 +1383,9 @@
         "tests/test_review_after_remediation_generation.py::test_candidate_authored_evidence_cannot_mint_a_remediation_generation",
         "tests/test_review_after_remediation_generation.py::test_remediation_stays_inside_a_bounded_generation_budget",
         "tests/test_review_after_remediation_generation.py::test_a_dispatched_generation_trusted_state_does_not_derive_fails_closed",
-        "tests/test_hunter_reviewer_collector.py::test_exhaustion_receipt_from_a_prior_remediation_generation_is_not_reusable"
+        "tests/test_hunter_reviewer_collector.py::test_exhaustion_receipt_from_a_prior_remediation_generation_is_not_reusable",
+        "tests/test_exact_head_codex_clear_adoption.py::test_old_clear_then_newer_finding_is_not_clear",
+        "tests/test_exact_head_codex_clear_adoption.py::test_a_malformed_review_record_fails_closed_everywhere"
       ],
       "sources": [
         "Issue #461 (2026-09-18): PR #473 remediated both authenticated Codex P1 findings (threads r4042982311 and r4042982318) and resolved every review thread, yet stayed permanently MISSING_REVIEW_AUTHORITY because the exact-head collector run 35348625886 had already completed with Codex timed out, Gemini 503 and Groq 403, and no identity existed that could ask any of them again"
@@ -1728,15 +1740,14 @@
         "guard_reference": "scripts/hunter_trusted_orchestrator_replay.py::validate_receipt"
       },
       "regression_evidence": [
-        "tests/test_hunter_trusted_orchestrator_replay.py::test_scenario_a_passes_against_a_pool_derived_opportunity",
-        "tests/test_hunter_trusted_orchestrator_replay.py::test_scenario_a_fails_against_a_hardcoded_opportunity",
-        "tests/test_hunter_trusted_orchestrator_replay.py::test_scenario_b_passes_against_a_liveness_checked_dispatch",
-        "tests/test_hunter_trusted_orchestrator_replay.py::test_scenario_b_fails_against_an_unconditional_dispatch",
-        "tests/test_hunter_trusted_orchestrator_replay.py::test_scenario_g_passes_against_correct_end_to_end_classification",
-        "tests/test_hunter_trusted_orchestrator_replay.py::test_scenario_g_fails_against_a_swallowed_fail_closed_path",
-        "tests/test_hunter_trusted_orchestrator_replay.py::test_adversarial_8_forged_candidate_module_digest_is_rejected",
-        "tests/test_hunter_trusted_orchestrator_replay.py::test_adversarial_9_inconsistent_overall_result_is_rejected",
-        "tests/test_hunter_trusted_orchestrator_replay.py::test_no_production_authority_resolver_consults_the_replay_status"
+        "tests/test_hunter_trusted_orchestrator_replay.py::test_scenario_a_passes_against_real_production",
+        "tests/test_hunter_trusted_orchestrator_replay.py::test_scenario_a_fails_when_a_pending_cycle_can_stay_pending_forever",
+        "tests/test_hunter_trusted_orchestrator_replay.py::test_scenario_a_fails_when_the_opportunity_is_not_a_real_bound",
+        "tests/test_hunter_trusted_orchestrator_replay.py::test_scenario_a_fails_when_the_opportunity_is_ignored",
+        "tests/test_hunter_trusted_orchestrator_replay.py::test_scenario_b_passes_against_real_production",
+        "tests/test_hunter_trusted_orchestrator_replay.py::test_scenario_b_fails_when_a_recorded_cycle_is_dispatched_again",
+        "tests/test_hunter_trusted_orchestrator_replay.py::test_scenario_b_fails_without_bounded_liveness_recovery",
+        "tests/test_hunter_trusted_orchestrator_replay.py::test_scenario_b_fails_when_dispatch_is_unbounded"
       ],
       "lifecycle": "regression-tested",
       "sources": [
@@ -1760,12 +1771,166 @@
         "boundary": "review"
       },
       "regression_evidence": [
-        "tests/test_hunter_trusted_orchestrator_replay.py::test_scenario_a_passes_when_no_reviewer_is_retryable_and_retries_per_agent_is_zero",
-        "tests/test_hunter_trusted_orchestrator_replay.py::test_scenario_a_fails_when_retryable_flag_affects_timing_despite_zero_retries"
+        "tests/test_hunter_trusted_orchestrator_replay.py::test_scenario_a_passes_against_real_production",
+        "tests/test_hunter_trusted_orchestrator_replay.py::test_scenario_b_passes_against_real_production"
       ],
       "lifecycle": "regression-tested",
       "sources": [
         "PR #535 exact HEAD a78cfc143b2fb938aa21da59f4a79136294ba4aa, live evidence: Scenario A (scripts/hunter_trusted_orchestrator_replay_worker.py) required an enabled reviewer with retryable=true to exist in the candidate's real reviewer pool before it would test anything, raising AssertionError('fixture pool must enable at least one retryable reviewer') against PR #535's own docs/CODE_WRITE_POLICY.json, whose reviewer_pool.timeout_policy.retries_per_agent is deliberately 0 pool-wide ('No automatic retries. Explicit authenticated unavailability fails over immediately; silence is bounded to one reviewer timeout.'), making every enabled reviewer correctly retryable=false. The candidate's fix (falling back to any enabled reviewer, an exact attempt-count bound, and an adversarial retryable-inertness check) was verified locally (A/B/G all pass against PR #535's real candidate content) and pushed to PR #535's own branch, but PR #535's subsequent hosted replay run still failed with the identical original assertion -- confirmed by inspecting origin/main's own copy of hunter_trusted_orchestrator_replay_worker.py, which still contained the unfixed assertion -- proving the fix cannot take effect from the candidate branch that discovered it, only from a default-branch contribution."
+      ]
+    },
+    {
+      "id": "DFF-042",
+      "title": "pending-governance-state-must-handoff-to-privileged-exact-head-review-orchestration",
+      "invariant": "When a pull-request synchronize changes HEAD and the read-only Hunter Governance Review detects that exact-head review authority is pending, a trusted default-branch event path must hand that PR to the privileged reconcile/orchestrator workflow. A green governance status must never terminate the lifecycle before a collector/reviewer opportunity is dispatched for the new exact HEAD.",
+      "applicability": {
+        "changed_paths": [
+          ".github/workflows/hunter-governance-review.yml",
+          ".github/workflows/hunter-governance-reconcile.yml",
+          "scripts/hunter_review_orchestrator.py"
+        ],
+        "rationale": "These surfaces detect pending review state and perform the trusted actions:write handoff/dispatch."
+      },
+      "prevention": {
+        "mechanism": "Hunter Governance Review completion is a workflow_run trigger for Hunter Governance Review Reconcile. Reconcile derives the PR from the trusted workflow_run pull-request association and invokes the default-branch orchestrator, preserving the security boundary that forbids actions:write on the candidate-reachable pull_request workflow.",
+        "boundary": "review",
+        "guard_reference": "scripts/hunter_review_orchestrator.py::ensure_current"
+      },
+      "regression_evidence": [
+        "tests/test_hunter_governance_review_v2.py::test_event_reconcile_scopes_to_triggering_pr_and_reserves_full_sweep_for_recovery"
+      ],
+      "lifecycle": "regression-tested",
+      "sources": [
+        "PR #549 exact HEAD ad9b58160d4d0c0856f838ff5c855a2b3c7a4f8a, 2026-10-01: Hunter Governance Review reported candidate admission pending because exact-head review authority was required, then completed successfully; no Codex/Copilot review or collector dispatch was created for that HEAD. The privileged reconcile workflow had no workflow_run trigger for Hunter Governance Review, so the detected pending state had no event-driven handoff to actions:write orchestration."
+      ]
+    },
+    {
+      "id": "DFF-043",
+      "title": "reviewer-chain-timeout-not-derived-from-canonical-budget",
+      "invariant": "A reviewer opportunity budget, the collector workflow's declared lifetime, and any independent pending-cycle timeout that all govern the same ordered reviewer chain must derive from one canonical, pool-declared budget rather than duplicated, independently hand-set magic numbers; none of the three may silently fall below what the chain's own configured per-agent budgets require, and a comment-triggered reviewer's acknowledgement deadline may not be shorter than its review deadline when its only acknowledgement signal is the same evidence as its formal response.",
+      "applicability": {
+        "changed_paths": [
+          "docs/CODE_WRITE_POLICY.json",
+          "scripts/hunter_pre_ready_review.py",
+          "scripts/hunter_review_orchestrator.py",
+          ".github/workflows/hunter-reviewer-collector.yml"
+        ],
+        "rationale": "These are the four places a reviewer chain's timing lives: the pool's own per-agent ack_timeout_seconds/review_timeout_seconds and pool-wide timeout_policy.max_seconds cap; the validator in hunter_pre_ready_review.py that bounds them; the trusted orchestrator's own pending-cycle opportunity budget; and the collector workflow's static job-level timeout-minutes. Changing any one of these in isolation -- raising an agent's budget without raising the pool cap, the workflow lifetime, or the orchestrator's opportunity budget together -- reintroduces exactly this defect."
+      },
+      "prevention": {
+        "mechanism": "hunter_pre_ready_review.reviewer_chain_worst_case_seconds(pool) is the single canonical derivation: the worst-case sum of every enabled agent's review_timeout_seconds across its configured attempts, plus a named fixed orchestration-overhead constant. hunter_review_orchestrator.independent_review_opportunity_seconds() calls it directly instead of carrying its own hardcoded constant, and a structural regression test parses the collector workflow's static timeout-minutes and asserts it is not below the same computed value, so the three can never drift back out of sync. The pool validator's previously-hardcoded 300-second ack ceiling for github-pr-comment-triggered reviewers was also replaced with a derivation from the pool's own declared timeout_policy.max_seconds, removing a second, disconnected copy of the same magic number. This is the same abstract invariant DFF-034 already recorded for the issue-agent-trigger webhook retry surface (a per-request timeout must be a consumer of one shared overall budget, never its independent source); DFF-034's own applicability (the webhook retry/backoff loop) remains a separate, still-open instance (Issue #457) and is not resolved by this family.",
+        "boundary": "review"
+      },
+      "regression_evidence": [
+        "tests/test_hunter_review_orchestrator.py::test_collector_workflow_lifetime_covers_the_reviewer_chain_budget",
+        "tests/test_hunter_review_orchestrator.py::test_independent_review_opportunity_matches_the_same_canonical_budget",
+        "tests/test_code_write_policy.py::test_codex_hard_review_budget_covers_its_observed_hosted_latency",
+        "tests/test_code_write_policy.py::test_reviewer_requires_distinct_ack_and_review_budgets",
+        "tests/test_hunter_reviewer_collector.py::test_codex_policy_uses_github_native_review_request_with_bounded_review_budget"
+      ],
+      "lifecycle": "regression-tested",
+      "sources": [
+        "PR #535 exact HEAD 0553514f411a9ef16053bce75678b5357c78d403, live evidence: docs/CODE_WRITE_POLICY.json's reviewer_pool declared codex ack_timeout_seconds=300 and review_timeout_seconds=300 (capped there by timeout_policy.max_seconds=300 and a validator-hardcoded 300-second ceiling for github-pr-comment-triggered reviewers), while Codex's own normal hosted latency on this repository is roughly 20-30 minutes: PR #529 triggered @codex review at 07:47:35, formal review posted 08:16:32 (~29 min); PR #530 triggered at 07:56:23, formal review posted 08:17:48 (~21 min). hunter_reviewer_collector.collect_attempts computes both an agent's acknowledgement deadline and its review deadline from the same start time, so equal 300-second budgets left Codex with no real time between an acknowledgement signal and completing its review; the collector accordingly failed over Codex -> Copilot -> Gemini -> Groq after ~5 minutes on live PR #535, where Gemini returned HTTP 503 and Groq HTTP 403. hunter-reviewer-collector.yml's own timeout-minutes (15) and hunter_review_orchestrator.INDEPENDENT_REVIEW_OPPORTUNITY_SECONDS (900, hardcoded independently of the pool) were already too short to let Codex's real latency complete even had its own per-agent budget alone been raised."
+      ]
+    },
+    {
+      "id": "DFF-044",
+      "title": "exact-head-initial-dispatch-not-idempotent-under-stale-status-read",
+      "invariant": "For the identity (PR number, exact HEAD, remediation generation, reviewer-pool config identity), at most one initial collector dispatch may ever be minted. The trusted commit-combined-status read the orchestrator uses to detect an already-established cycle is not guaranteed read-your-write consistent, so an 'absent' result from that read alone is never sufficient evidence that no dispatch has happened for that identity; a second, independently-queried source (the collector workflow's own run listing) must be consulted before minting a fresh dispatch, and only when both report absent may a new cycle be established. Bounded recovery of a genuinely dead prior dispatch remains governed exclusively by the existing liveness-grace/dispatch-budget mechanism and is never blocked by this check, and unreadable cross-check evidence fails closed to not dispatching rather than risking a duplicate.",
+      "applicability": {
+        "changed_paths": [
+          "scripts/hunter_review_orchestrator.py",
+          ".github/workflows/hunter-governance-reconcile.yml",
+          ".github/workflows/hunter-reviewer-collector.yml"
+        ],
+        "rationale": "hunter_review_orchestrator.ensure_collector is the sole trusted mint point for a collector dispatch, and hunter-governance-reconcile.yml is the only workflow that invokes it. Near-simultaneous or closely-spaced reconcile executions -- triggered by distinct events (a review, a review comment, a workflow_run completion, ready_for_review, the schedule) that this same workflow already reacts to -- are exactly the condition under which two calls can each observe a stale 'absent' status read for the same exact-head identity."
+      },
+      "prevention": {
+        "mechanism": "ensure_collector now cross-checks the collector run listing (collector_liveness) before minting a fresh dispatch whenever no trusted cycle status is visible at all for the requested identity (read_cycle reports anything other than a matching 'present'), converging on an already-live, dead, or completed run for that exact (pr, head, generation) identity instead of dispatching again. Unreadable liveness evidence fails closed to not dispatching, exactly as the existing collector_needs_dispatch and remediation_generation_admissible checks already fail closed on their own unreadable evidence. The pre-existing, unmodified 'present' branch -- COLLECTOR_LIVENESS_GRACE_SECONDS, MAX_COLLECTOR_DISPATCHES, collector_needs_dispatch -- continues to govern bounded recovery of a genuinely dead dispatch unaffected by this check.",
+        "boundary": "review"
+      },
+      "regression_evidence": [
+        "tests/test_hunter_review_orchestrator.py::test_a_second_call_sees_the_correlated_collector_and_does_not_redispatch",
+        "tests/test_hunter_review_orchestrator.py::test_two_genuinely_simultaneous_dispatches_can_both_miss_the_correlated_run",
+        "tests/test_hunter_review_orchestrator.py::test_a_failed_collector_is_redispatched_rather_than_parking_the_cycle",
+        "tests/test_hunter_review_orchestrator.py::test_ready_review_request_dispatches_collector_once"
+      ],
+      "lifecycle": "regression-tested",
+      "sources": [
+        "PR #535 exact HEAD 0553514f411a9ef16053bce75678b5357c78d403, live evidence: at least two Hunter Reviewer Collector runs (36340127965 and 36340195915) were dispatched for the same exact-head cycle, and the trusted orchestration status was republished with different reconcile trigger IDs for the same exact-head waiting cycle -- despite ensure_collector persisting a cycle status before every dispatch and COLLECTOR_LIVENESS_GRACE_SECONDS existing specifically to protect against GitHub listing lag -- proving GitHub's combined-status read can still report 'absent' to a second, closely-spaced reconcile execution after an earlier one had already posted its status and dispatched."
+      ]
+    },
+    {
+      "id": "DFF-045",
+      "title": "canonical-knowledge-growth-causes-linear-per-task-prompt-growth",
+      "invariant": "Canonical knowledge growth (docs/DEFECT_REGISTRY.json) must not produce linear per-task prompt growth. Smart Prompt Machine must retrieve, deduplicate, compact, and bound trusted prevention context by task relevance before compilation, rather than inlining the full prose of every registry family whose applicability merely intersects a broad authorized-path root. Applicability (whether a family may ever be selected) stays a pure, unweakened structural path match; only the *rendering* of an applicable family -- full detail, compact summary, or omission -- may be bounded, and only by deterministic, offline, reproducible structural signals already present in canonical registry metadata and the owner-authored TaskScopeContract, never by caller-controlled task prose (preserving the PR #507 trust boundary) and never by an external LLM/API/network call. When even the most compact rendering of every genuinely applicable family cannot fit the governed budget, the compiler fails closed with a precise, structured reason naming the overflow and its largest contributors; it never silently truncates arbitrary JSON or text.",
+      "applicability": {
+        "changed_paths": [
+          "src/hunter/evidence_intelligence/engineering_context_authority.py",
+          "src/hunter/evidence_intelligence/smart_prompt_routing.py",
+          "docs/DEFECT_REGISTRY.json"
+        ],
+        "rationale": "engineering_context_authority.py is the sole compiler of governed_prevention_context from the defect registry, and smart_prompt_routing.py is the sole caller that inlines that compiled context into the engineering.implement prompt text the deeper Smart Prompt Machine pipeline measures for budget. Any future change to how registry families are selected, rendered, deduplicated, or bounded for that prompt -- or a change to docs/DEFECT_REGISTRY.json's own family schema that these two modules consume -- can reintroduce or mask this defect."
+      },
+      "prevention": {
+        "mechanism": "EngineeringContextAuthority.compile() now takes an explicit budget_bytes parameter (smart_prompt_routing.ENGINEERING_IMPLEMENT_PREVENTION_CONTEXT_MAX_BYTES: a fixed 40% share of the profile's own existing, unchanged ENGINEERING_IMPLEMENT_MAX_SOURCE_BYTES -- the overall prompt budget itself is never raised). Applicability filtering is unchanged (a family is selected iff a changed_paths entry structurally intersects scope.allowed_paths, net of scope.prohibited_paths). Selected families are then rendered: a family whose most specific matching changed_paths entry names an exact file gets its full title/invariant/lifecycle/prevention_boundary/guard_reference; one that only matches through a directory root gets a compact {id, title, prevention_boundary} summary -- id remains a durable lookup key into the untouched canonical registry, so nothing is deleted. Families the registry explicitly declares equivalent (same non-empty prevention.equivalence_class, a new optional field) are deduplicated to their single highest-priority representative (most specific match, then most-advanced lifecycle, then id) before rendering. If the rendered set still exceeds the budget, directory-matched entries are omitted (broadest/shortest/lowest-id first, their ids recorded in an elided_family_ids list rather than silently vanishing) and, failing that, file-specific entries are downgraded to compact form, least-specific first; only if even a fully-compact rendering of every applicable family still cannot fit does compile() raise EngineeringContextAuthorityError naming the exact byte overflow and largest contributors, never truncating the JSON itself.",
+        "boundary": "review"
+      },
+      "regression_evidence": [
+        "tests/test_engineering_context_authority.py::test_unrelated_registry_growth_does_not_grow_a_narrow_tasks_prompt",
+        "tests/test_engineering_context_authority.py::test_broad_allowed_root_does_not_authorise_inlining_every_touching_family",
+        "tests/test_engineering_context_authority.py::test_a_specific_relevant_defect_survives_bounded_selection_in_full",
+        "tests/test_engineering_context_authority.py::test_equivalent_prevention_invariants_are_deduplicated_not_deleted",
+        "tests/test_engineering_context_authority.py::test_dedup_picks_the_more_specific_representative_deterministically",
+        "tests/test_engineering_context_authority.py::test_bounded_selection_fails_closed_rather_than_truncating_when_nothing_fits",
+        "tests/test_engineering_context_authority.py::test_selection_is_deterministic_and_offline_across_repeated_compiles",
+        "tests/test_engineering_context_authority.py::test_representative_engineering_implement_scope_fits_the_real_prevention_budget"
+      ],
+      "lifecycle": "regression-tested",
+      "sources": [
+        "PR #535 exact HEAD 7de343136d7c7bdcd8b0cb6de92698b3aa3032c5, live evidence and read-only causal trace (owner-directed re-diagnosis after an initial, incorrect 'unrelated/pre-existing' characterization was withdrawn): EngineeringContextAuthority.compile() inlined the full title/invariant/lifecycle/prevention_boundary/guard_reference text of every applicable defect family whenever its applicability intersected the broad allowed_paths every Issue Agent test fixture shares (tests/issue_agent_wire.py::issue_body_with_scope: src/, scripts/, tests/, docs/). Measured directly against three real registry revisions with this exact fixture: main/base 156ed2fad (36 applicable families) compiled to ~27,366 bytes against a 28,672-byte budget; PR #535 before this session's own commits, 0553514f (+DFF-040, 37 families) to ~28,244 bytes; this session's own DFF-041/DFF-043 additions (39 families) pushed it to ~30,040 bytes -- over budget, reproducing the hosted INSUFFICIENT_BUDGET failure's own reported preflight size almost exactly. 32 tests across tests/test_issue_agent_execution.py, tests/test_issue_agent_issuer.py, and tests/test_issue_agent_provisioner.py failed identically as a downstream consequence."
+      ]
+    },
+    {
+      "id": "DFF-046",
+      "title": "lifecycle-event-wiring-asymmetry",
+      "invariant": "If a downstream gate reacts to a lifecycle transition and requires an upstream trusted artifact or cycle to already exist, that transition must also have a trusted event-driven path that creates or reconciles the prerequisite, and every legitimate state that path can report -- including an in-progress wait, not only success or absence -- must be a state the consumer explicitly recognizes. This binds every lifecycle transition the downstream gate reacts to, and it binds in particular the two classes of transition that can invalidate an existing prerequisite: one that makes review *required* (Draft -> Ready for Review), and one that changes the *exact HEAD* the prerequisite is bound to (synchronize, i.e. a push). A transition of either class must be wired directly on the trusted prerequisite producer; a schedule or an unrelated producer's `workflow_run` completion is a bounded recovery fallback, never the primary mechanism, because a fallback that depends on some other workflow completing first is silent about the case where that workflow never completes. A trigger existing is not sufficient, a workflow step exiting SUCCESS is not proof of materialization, a fallback path is not a primary path, and a classifier that treats any unrecognized-but-legitimate producer state as failure is this same asymmetry wearing a consumer gap instead of a missing trigger.",
+      "applicability": {
+        "changed_paths": [
+          ".github/workflows/",
+          "scripts/hunter_pre_push.py",
+          "scripts/hunter_review_orchestrator.py",
+          "scripts/hunter_merge_readiness_v2.py"
+        ],
+        "rationale": "This is a wiring property between a repository's governance workflows and the trusted scripts they run: which lifecycle events each workflow's `on:` block reacts to, whether the code that reacts to an event is actually capable of producing what a downstream consumer requires, and whether that consumer recognizes every state its producer can legitimately report. A gap can be introduced or reintroduced by editing workflow trigger configuration, by editing what a triggered script actually does on that event, by a comment asserting a producer responsibility that no code fulfills, or by a consumer-side classifier (such as Hunter Merge Readiness's review-authority resolver) that only enumerates terminal states and silently defaults an unrecognized in-progress state to failure."
+      },
+      "prevention": {
+        "mechanism": "Structural regression tests assert that the trusted workflow driving privileged reviewer orchestration (hunter-governance-reconcile.yml) has an event-driven trigger for the Draft to Ready for Review transition -- the same transition hunter-merge-readiness.yml already reacts to immediately -- so readiness evaluation can never wake before its prerequisite orchestration cycle has a chance to exist. The trigger is `pull_request_target`, not `pull_request`: GitHub resolves a `pull_request_target` workflow from the base branch's copy of the file, so it stays on the trusted-default-branch execution path already proven non-candidate-controlled by the existing `test_candidate_controlled_triggers_are_read_from_every_declaration_shape` guard. A second regression asserts the orchestrator itself never dispatches review for a Draft PR. Root cause 2 (live, PR #535): the trigger alone was not sufficient. `ensure_current` requires an exact-head-bound `.hunter/pre-ready-hostile-review.json` review-request document (content-bound via `hunter_pre_ready_review.verify_review_request`) before it will call `ensure_collector`; nothing in this repository auto-generates or regenerates that document -- it is committed by the contributor via `hunter_pre_ready_review.py --request`, a step `hunter_pre_push.py`'s own docstring falsely claimed happened 'opportunistically' via trusted orchestration. Corrected: the docstring now states the true producer/consumer contract, and the push-time NOTE for exactly the `missing` verdict state names the command to run, so the signal is actionable instead of a dismissible NOTE. Root cause 3 (live, PR #535, same exact HEAD c05da168545c5fa95fe300706eccaac2228fc391): after root causes 1 and 2 were both fixed, `hunter-governance-reconcile.yml` correctly ran on `ready_for_review`, correctly found a valid review-request document, and correctly published a `Hunter Review Orchestration / PR #535` commit status reporting the legitimate WAITING_FOR_REVIEWER cycle state -- but Hunter Merge Readiness still reported hard `failure`. `hunter_governance_review_v2.verify_pre_ready_hostile_review` legitimately returns a third status, `pending`, via `pending_review_authority_state` (an unadopted-but-orchestrated review request is neither success nor a terminal failure). `hunter_merge_readiness_v2.resolve_review_authority`, the sole classifier of that verifier's result, only ever branched on `status == \"success\"`; any other status -- including this legitimate `pending` -- fell into a loop that searches `detail` for a REVIEW_AUTHORITY_STATES prefix, none of which a pending WAITING_FOR_REVIEWER/REVIEW_IN_PROGRESS/FAILOVER_IN_PROGRESS detail ever contains, so it silently defaulted to a hard MALFORMED_REVIEW failure -- masking the exact live-progress state the sibling `review_wait_state`/`NON_RED_REVIEW_STATES` mechanism a few lines later in the same caller exists specifically to project as pending, and pre-empting that mechanism from ever running. Corrected: `resolve_review_authority` now classifies a `pending` status as `MISSING_REVIEW_AUTHORITY`, the same no-authority-yet outcome a missing document already produces, letting the caller's existing orchestration-state fallback correctly project it to pending instead of failure. Root cause 4 (live, PR #535 exact HEAD 51108333821ab42d1ab7aa0b812a72d890f73795): the fix above only covered one of the two transition classes this family binds. `synchronize` is the exact-HEAD-changing transition Merge Readiness also reacts to immediately, and hunter-governance-reconcile.yml still declared `types: [ready_for_review]` only, so a pushed head had no trusted event-driven path to the orchestrator that must produce its exact-head cycle. A push at 2026-09-28T07:40:33Z woke Merge Readiness, Trusted Preflight Upgrade and Governance Agent Preflight but not reconcile; the only reconciliations that did run (36393517015, 36393716517) came from `workflow_run` completions of other workflows and the 30-minute schedule -- recovery, not a primary mechanism -- and Merge Readiness run 36393772215 correctly published MALFORMED_REVIEW: WAITING_FOR_REVIEWER: no trusted exact-head orchestration cycle has been published. Corrected: `synchronize` was added to the same `pull_request_target` trigger, and the regression now asserts the producer/consumer trigger sets cannot drift apart again for either class. Adding `synchronize` does not weaken the boundary, and the Draft guard had to move with it: unlike `ready_for_review` (which GitHub fires only on leaving Draft), `synchronize` also fires for pushes to a Draft branch, so the trigger is no longer itself the Draft guard. The guard is the trusted orchestrator's own draft short-circuit in `ensure_current`, which returns before the review-request lookup and before any dispatch, and both Draft regressions now cover it. Exact-head binding is untouched: the privileged step passes only `--pr`, and the orchestrator re-derives the current HEAD from the pull-request API on every call, so a pushed head is reconciled against what GitHub reports rather than against the event payload or a head the workflow chose.",
+        "boundary": "review",
+        "guard_reference": "scripts/hunter_merge_readiness_v2.py::resolve_review_authority"
+      },
+      "regression_evidence": [
+        "tests/test_hunter_review_orchestrator.py::test_reconcile_wakes_when_a_pr_becomes_ready_for_review",
+        "tests/test_hunter_review_orchestrator.py::test_reconcile_wakes_when_a_pr_head_is_pushed",
+        "tests/test_hunter_review_orchestrator.py::test_reconcile_wakes_on_every_lifecycle_event_that_needs_or_moves_the_exact_head",
+        "tests/test_hunter_review_orchestrator.py::test_a_pushed_head_reaches_orchestration_as_the_exact_current_head",
+        "tests/test_hunter_review_orchestrator.py::test_a_pushed_head_on_a_draft_pr_dispatches_nothing",
+        "tests/test_hunter_review_orchestrator.py::test_unrelated_pull_request_events_do_not_dispatch_reviewer_orchestration",
+        "tests/test_hunter_review_orchestrator.py::test_synchronize_reconciliation_never_executes_candidate_code",
+        "tests/test_hunter_review_orchestrator.py::test_current_pr_never_dispatches_for_a_draft_pr",
+        "tests/test_exact_head_review_authority.py::test_a_foreign_review_request_document_is_rejected_for_a_different_candidate",
+        "tests/test_exact_head_review_authority.py::test_a_freshly_prepared_review_request_bound_to_the_current_candidate_is_valid",
+        "tests/test_issue_412_prevention_gate.py::test_missing_review_request_state_names_the_command_to_start_it",
+        "tests/test_issue_412_prevention_gate.py::test_stale_review_request_state_does_not_carry_the_missing_only_hint",
+        "tests/test_exact_head_review_authority.py::test_a_live_pending_orchestration_cycle_is_not_misclassified_as_malformed",
+        "tests/test_exact_head_review_authority.py::test_review_authority_state_waits_while_a_committed_review_request_is_unadopted"
+      ],
+      "lifecycle": "regression-tested",
+      "sources": [
+        "Issue #534, discovered via PR #533 exact HEAD 1184dac8cf6d87bf879a81a8a5fdb8858237ae95: transitioning PR #533 from Draft to Ready for Review caused Hunter / Merge Readiness to wake immediately (it listens for `ready_for_review`), but hunter-governance-reconcile.yml -- the only workflow that runs the privileged `hunter_review_orchestrator.py ensure` -- had no trigger for that transition, so Merge Readiness published WAITING_FOR_REVIEWER: no trusted exact-head orchestration cycle has been published, and no reviewer opportunity had actually started.",
+        "Issue #534 root cause 2, live evidence: after the ready_for_review trigger was added and pushed (PR #535 exact HEAD 9c02a1e8c45b80943e9c459b85ddc9668c2ed692), a manually re-run trusted Hunter Governance Review Reconcile (run 36335901035, attempt 2, against trusted main HEAD 156ed2fad8638dabc9bd1c45a4efbfece2b2d69c) completed SUCCESS but still published no orchestration cycle and dispatched no collector run for PR #535. GitHub Contents API confirmed the cause: `.hunter/pre-ready-hostile-review.json` at that exact head was a leftover review-request document from an unrelated, already-merged candidate (Issue #532's content, base_sha c25b48228f422a7a4e3e85112bd9ffdc216da849, an entirely different review_target), so `hunter_governance_review_v2.valid_current_review_request` correctly found it stale/invalid for PR #535's actual content and `ensure_current` correctly no-op'd. No PR for #535 or #532 had ever committed a review-request document that actually described its own content.",
+        "Issue #534 root cause 3, live evidence: after root causes 1 and 2 were fixed and pushed (PR #535 exact HEAD c05da168545c5fa95fe300706eccaac2228fc391), hosted `Hunter Governance Review Reconcile` run 36338855130 (workflow_run trigger, path .github/workflows/hunter-governance-reconcile.yml, head_branch main) completed SUCCESS and published commit status `Hunter Review Orchestration / PR #535` = pending, description `WAITING_FOR_REVIEWER||36338855130|<config-digest>|`, at 2026-09-27T17:58:22Z -- proving the orchestration cycle genuinely existed. Twenty-six seconds later, run 36338905562 (`Hunter Merge Readiness`) still published `Independent-review authority failed: MALFORMED_REVIEW: WAITING_FOR_REVIEWER: no trusted exact-head orchestration cycle has been published`, a hard `failure` state. Traced to `hunter_merge_readiness_v2.resolve_review_authority` never handling a `pending` verification status from `hunter_governance_review_v2.verify_pre_ready_hostile_review`.",
+        "Issue #534 root cause 4, live evidence on PR #535 exact HEAD 51108333821ab42d1ab7aa0b812a72d890f73795: a pull_request_target `synchronize` at 2026-09-28T07:40:33Z triggered `Hunter / Merge Readiness`, `Hunter / Trusted Preflight Upgrade` and `Hunter Governance Agent Preflight` but not `Hunter Governance Review Reconcile`, the only workflow that runs the privileged `hunter_review_orchestrator.py ensure`, and not `Hunter Reviewer Collector` for that exact HEAD. The reconcile runs that did occur (36393517015, 36393716517) were `workflow_run`-triggered recoveries that depend on a different workflow completing first, and no trusted exact-head orchestration cycle was published for 51108333821ab42d1ab7aa0b812a72d890f73795; Merge Readiness run 36393772215 therefore correctly published `MALFORMED_REVIEW: WAITING_FOR_REVIEWER: no trusted exact-head orchestration cycle has been published`. Same defect as root cause 1 (missing trusted trigger) and root cause 3 (consumer not recognizing a legitimate producer state), on the second transition class this family binds."
       ]
     }
   ]

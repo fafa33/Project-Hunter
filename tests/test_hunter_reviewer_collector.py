@@ -397,6 +397,9 @@ def test_native_codex_clear_is_correlated_to_trigger_and_exact_head(monkeypatch)
     monkeypatch.setattr(collector, "_pages", lambda *_a, **_k: [] if "reviews" in _a[2] else [native])
 
     assert backend.response_state(POOL["agents"][0], trigger) == "clear"
+    # A native clear *comment* that predates the trigger is still not a response:
+    # exact-head adoption regardless of ordering covers authenticated review
+    # objects only (see tests/test_exact_head_codex_clear_adoption.py).
     native["created_at"] = "2026-09-16T23:59:59Z"
     assert backend.response_state(POOL["agents"][0], trigger) == "waiting"
 
@@ -428,13 +431,26 @@ def test_native_codex_wrong_head_is_not_a_response(monkeypatch):
     assert backend.response_state(POOL["agents"][0], trigger) == "blocking"
 
 
-def test_codex_policy_is_single_bounded_300_second_invocation():
+def test_codex_policy_uses_github_native_review_request_with_bounded_review_budget():
+    """Codex is invoked through GitHub's native requested-reviewer endpoint, so
+    the acknowledgement budget is a genuine, separate delivery acknowledgement
+    (it settles the moment the trigger exists) and stays short.
+
+    The review budget, however, must be bounded, single-attempt, and not
+    shorter than Codex's own observed normal latency (PR #529 ~29 min,
+    PR #530 ~21 min; PR #535 live evidence) -- otherwise the collector treats
+    ordinary hosted latency as unavailability and fails over for a reviewer
+    that was still within its own configured budget.
+    """
     pool, error = collector.review.load_reviewer_pool()
     assert not error and pool is not None
     codex = next(agent for agent in pool["agents"] if agent["id"] == "codex")
     assert pool["timeout_policy"]["retries_per_agent"] == 0
-    assert codex["review_timeout_seconds"] == 300
-    assert codex["ack_timeout_seconds"] == 300
+    assert codex["review_timeout_seconds"] >= 30 * 60
+    assert codex["review_timeout_seconds"] <= pool["timeout_policy"]["max_seconds"]
+    assert codex["ack_timeout_seconds"] == 30
+    assert codex["trigger_method"] == "github-review-request:chatgpt-codex-connector[bot]"
+    assert codex["evidence_parser"] == "github-review-native.v1"
 
 
 def test_native_codex_unavailable_response_fails_over_immediately(monkeypatch):
@@ -584,7 +600,7 @@ def test_policy_enables_server_side_gemini_and_groq_after_codex():
     assert agents[1]["trigger_method"] == "github-review-request:copilot-pull-request-reviewer[bot]"
     assert agents[2]["trigger_method"] == "api:gemini"
     assert agents[3]["trigger_method"] == "api:groq"
-    assert all(a["review_timeout_seconds"] == 300 for a in agents)
+    assert all(a["review_timeout_seconds"] == 300 for a in agents[1:])
 
 
 def test_collector_workflow_exposes_only_server_reviewer_secrets():
@@ -1127,7 +1143,8 @@ def test_canonical_pool_preserves_server_side_fallback_chain():
     assert agents[1]["trigger_method"] == "github-review-request:copilot-pull-request-reviewer[bot]"
     assert agents[2]["trigger_method"] == "api:gemini"
     assert agents[3]["trigger_method"] == "api:groq"
-    assert all(a["review_timeout_seconds"] == 300 and a["retryable"] is False for a in agents[:4])
+    assert all(a["retryable"] is False for a in agents[:4])
+    assert all(a["review_timeout_seconds"] == 300 for a in agents[1:4])
     assert pool["last_resort"] == "hunter-guard"
 
 
@@ -1833,3 +1850,690 @@ def test_invalid_api_blocker_fails_over_with_precise_reason():
     assert backend.triggers == [("gemini", 1), ("groq", 1)]
     assert results[0]["reason_code"] == "INVALID_REVIEW_RESULT"
     assert results[1]["outcome"] == "clear"
+
+
+# Issue #534: the connector's real quota denial is prose that links a usage
+# dashboard, so an exact-string matcher never recognised a genuinely exhausted
+# provider and the attempt consumed the whole review budget. These cases pin the
+# authenticated denial to an immediate failover, and pin the near-misses that
+# must NOT be read as unavailability.
+
+
+def _codex_backend() -> collector.GitHubBackend:
+    return collector.GitHubBackend("owner/repo", "token", 480, HEAD, "d" * 64, 123, 1)
+
+
+def _codex_agent() -> dict:
+    return {
+        "id": "codex",
+        "trigger_method": "github-pr-comment:@codex review",
+        "github_login": "chatgpt-codex-connector[bot]",
+    }
+
+
+REAL_CODEX_QUOTA_DENIAL = (
+    "You have reached your Codex usage limits for code reviews. You can see your limits in the "
+    "[Codex usage dashboard](https://chatgpt.com/codex/cloud/settings/usage).\n"
+    "To continue using code reviews, you can upgrade your account or add credits to your account "
+    "and enable them for code reviews in your "
+    "[settings](https://chatgpt.com/codex/cloud/settings/code-review)."
+)
+
+
+def test_authenticated_codex_quota_denial_is_unavailable(monkeypatch):
+    """The connector's real quota prose is recognised as unavailability."""
+
+    backend = _codex_backend()
+    trigger = {"created_at": "2026-09-18T20:00:00Z", "collector_run_id": 123, "id": 9}
+
+    def pages(_repo, _token, path):
+        if path.endswith("/reviews"):
+            return []
+        return [
+            {
+                "id": 1,
+                "user": {"login": "chatgpt-codex-connector[bot]"},
+                "created_at": "2026-09-18T20:00:30Z",
+                "body": REAL_CODEX_QUOTA_DENIAL,
+            }
+        ]
+
+    monkeypatch.setattr(collector, "_pages", pages)
+    assert backend.response_state(_codex_agent(), trigger) == "unavailable"
+
+
+def test_authenticated_codex_unavailability_is_reported_immediately(monkeypatch):
+    """An authenticated denial fails over at once instead of waiting out the budget."""
+
+    calls: list[float] = []
+
+    class QuotaDenied:
+        def __init__(self):
+            self.run_id = 123
+            self.run_attempt = 1
+            self.triggered = 0
+            self.clock = 0.0
+
+        def head(self):
+            return HEAD
+
+        def now(self):
+            return self.clock
+
+        def sleep(self, seconds):
+            # Any sleeping at all is a budget burn; the denial must be consumed
+            # on the first observation, before a single wait.
+            calls.append(self.clock)
+            self.clock += max(0.0, float(seconds))
+
+        def trigger(self, agent, number):
+            self.triggered += 1
+            return {"id": self.triggered, "created_at": "2026-09-22T00:00:00Z", "collector_run_id": 123}
+
+        def response_state(self, agent, trigger):
+            return "unavailable"
+
+    pool = copy.deepcopy(POOL)
+    pool["agents"] = ({**pool["agents"][0], "id": "codex", "priority": 1},)
+    backend = QuotaDenied()
+    results = collector.collect_attempts(pool, HEAD, backend)
+
+    assert results[0]["outcome"] == "unavailable"
+    assert results[0]["reason_code"] == "QUOTA_OR_USAGE_LIMIT"
+    assert calls == [], "an authenticated denial must not consume any wait budget"
+    assert backend.triggered == 1
+
+
+def test_substantive_review_mentioning_limits_is_not_unavailability(monkeypatch):
+    """A review that merely discusses limits is a review, not an absence."""
+
+    backend = _codex_backend()
+    trigger = {"created_at": "2026-09-18T20:00:00Z", "collector_run_id": 123, "id": 9}
+    body = (
+        "### Codex Review\n\n**Reviewed commit:** `" + HEAD + "`\n\n"
+        "The collector treats an exhausted provider as unavailability, and the usage limits "
+        "discussion in ADPR-0012 is correct.\n"
+    )
+
+    def pages(_repo, _token, path):
+        if path.endswith("/reviews"):
+            return [
+                {
+                    "id": 5,
+                    "user": {"login": "chatgpt-codex-connector[bot]"},
+                    "submitted_at": "2026-09-18T20:02:00Z",
+                    "commit_id": HEAD,
+                    "state": "COMMENTED",
+                    "body": body,
+                }
+            ]
+        return []
+
+    monkeypatch.setattr(collector, "_pages", pages)
+    state = backend.response_state(_codex_agent(), trigger)
+    assert state in {"clear", "blocking"}
+    assert state != "unavailable"
+
+
+def test_a_review_quoting_the_denial_on_an_issue_comment_is_not_unavailability(monkeypatch):
+    """A substantive review that quotes the denial prose must still be a review.
+
+    The issue-comment path classifies denial before substantive review text, and
+    the real quota denial is long prose, so length cannot separate the two. A
+    review that quotes the denial therefore has to be separated structurally --
+    by Codex's own reviewed-commit marker -- or a genuine review of this exact
+    head is failed over as though the provider had never answered.
+    """
+
+    backend = _codex_backend()
+    trigger = {"created_at": "2026-09-18T20:00:00Z", "collector_run_id": 123, "id": 9}
+    body = (
+        "**Reviewed commit:** `" + HEAD + "`\n\n"
+        'The earlier connector notice said "You have reached your Codex usage limits", '
+        "which I believe was stale: this review found one substantive defect in "
+        "scripts/hunter_review_orchestrator.py and must be remediated."
+    )
+
+    def pages(_repo, _token, path):
+        if "issues/" in path and path.endswith("/comments"):
+            return [
+                {
+                    "user": {"login": "chatgpt-codex-connector[bot]"},
+                    "created_at": "2026-09-18T20:02:00Z",
+                    "body": body,
+                }
+            ]
+        return []
+
+    monkeypatch.setattr(collector, "_pages", pages)
+    state = backend.response_state(_codex_agent(), trigger)
+    assert state == "blocking", state
+    assert state != "unavailable"
+
+
+def test_the_real_quota_denial_on_an_issue_comment_is_still_unavailable(monkeypatch):
+    """The structural marker must not mask a genuine denial.
+
+    The denial is 317 non-space characters -- longer than any minimum-substantive
+    threshold -- so it is recognised by carrying no reviewed-commit marker, not
+    by being short.
+    """
+
+    backend = _codex_backend()
+    trigger = {"created_at": "2026-09-18T20:00:00Z", "collector_run_id": 123, "id": 9}
+
+    def pages(_repo, _token, path):
+        if "issues/" in path and path.endswith("/comments"):
+            return [
+                {
+                    "user": {"login": "chatgpt-codex-connector[bot]"},
+                    "created_at": "2026-09-18T20:02:00Z",
+                    "body": REAL_CODEX_QUOTA_DENIAL,
+                }
+            ]
+        return []
+
+    monkeypatch.setattr(collector, "_pages", pages)
+    assert backend.response_state(_codex_agent(), trigger) == "unavailable"
+
+
+def test_trigger_creation_is_never_acknowledgement():
+    """Creating the trigger proves delivery to GitHub, not that Codex started."""
+
+    pool = copy.deepcopy(POOL)
+    codex = (
+        next(a for a in pool["agents"] if a.get("id") == "codex")
+        if any(a.get("id") == "codex" for a in pool["agents"])
+        else None
+    )
+    if codex is None:
+        pytest.skip("pool fixture does not declare codex")
+    assert codex["ack_timeout_seconds"] <= codex["review_timeout_seconds"]
+
+
+# Collector run 36496500403 reviewed PR #541 and Gemini returned a substantive
+# no-finding review of it. The collector filed that review as
+# outcome=unavailable / reason_code=INVALID_REVIEW_RESULT, so the ordered pool
+# read a performed review as no review at all.
+GEMINI_P541_PRODUCTION_RESULT = {
+    "verdict": "clear",
+    "summary": "No security, correctness, or fail-closed defects identified.",
+    "findings": [],
+}
+
+
+def test_gemini_production_no_finding_review_of_pr_541_is_clear():
+    assert collector.external_verdict(dict(GEMINI_P541_PRODUCTION_RESULT)) == "clear"
+
+
+def test_gemini_production_clear_ends_collection_as_clear_not_invalid(monkeypatch):
+    class ExternalBackend(collector.GitHubBackend):
+        def __init__(self, *args, **kwargs):
+            super().__init__(*args, **kwargs)
+            self.clock = 0.0
+
+        def now(self):
+            return self.clock
+
+        def sleep(self, _seconds):
+            return None
+
+    backend = ExternalBackend("owner/repo", "token", 541, HEAD, "d" * 64, 123, 1)
+    monkeypatch.setattr(
+        collector.governance, "request_json", lambda *_a, **_k: {"state": "open", "head": {"sha": HEAD}}
+    )
+    monkeypatch.setattr(backend, "_existing_trigger", lambda *_a: None)
+    monkeypatch.setattr(backend, "_invoke_external", lambda *_a: dict(GEMINI_P541_PRODUCTION_RESULT))
+    bodies = []
+    monkeypatch.setattr(
+        backend,
+        "_post_comment",
+        lambda body: bodies.append(body) or {"id": len(bodies), "created_at": "2026-09-29T00:00:00Z", "body": body},
+    )
+    monkeypatch.setattr(
+        collector,
+        "_pages",
+        lambda *_a, **_k: [
+            {"id": index + 10, "user": {"login": "github-actions[bot]"}, "body": body}
+            for index, body in enumerate(bodies)
+        ],
+    )
+    pool = copy.deepcopy(POOL)
+    pool["agents"] = ({**POOL["agents"][0], "id": "gemini", "priority": 1, "trigger_method": "api:gemini"},)
+    attempts = collector.collect_attempts(pool, HEAD, backend)
+    assert [attempt["outcome"] for attempt in attempts] == ["clear"]
+    assert attempts[0]["reason_code"] == "CLEAR"
+    assert collector.parse_api_result(bodies[1])["summary"] == GEMINI_P541_PRODUCTION_RESULT["summary"]
+
+
+@pytest.mark.parametrize(
+    "summary",
+    [
+        "No blocking defects.",
+        "No blocking defects remain after exact-head review.",
+        "No security, correctness, or fail-closed defects identified.",
+        "No remaining substantive findings or issues.",
+        "No new major issues were identified.",
+        "no security, correctness, or fail-closed defects identified",
+        "Found no reproducible defects.",
+        "There are no outstanding blocking findings in the diff.",
+    ],
+)
+def test_external_verdict_accepts_qualified_no_defect_summaries(summary):
+    assert collector.external_verdict({"verdict": "clear", "summary": summary, "findings": []}) == "clear"
+
+
+@pytest.mark.parametrize(
+    "summary",
+    [
+        "The change looks reasonable to me.",
+        "No way to tell whether the gate actually holds.",
+        "No review was performed; the diff could not be read.",
+        "No not-blocking issues are guaranteed here.",
+        "No findings, but one critical defect remains in trust verification.",
+        "No security, correctness, or fail-closed defects identified; the bypass is exploitable.",
+    ],
+)
+def test_external_verdict_still_fails_closed_on_non_denials_and_disclosures(summary):
+    assert collector.external_verdict({"verdict": "clear", "summary": summary, "findings": []}) == "unavailable"
+
+
+def test_external_verdict_production_wording_with_findings_still_blocks():
+    assert (
+        collector.external_verdict(
+            {
+                **GEMINI_P541_PRODUCTION_RESULT,
+                "findings": [
+                    {"severity": "high", "path": "scripts/gate.py", "line": 42, "evidence": "authority bypass"}
+                ],
+            }
+        )
+        == "blocking"
+    )
+
+
+# The P1 review finding on PR #542: CLEAR_DENIAL walked an open run of words
+# between "no" and the defect term, so a summary whose *subject* had changed, or
+# which conceded the possibility of defects, read as a clean denial of them.
+def test_production_gemini_no_defect_sentence_is_still_a_clean_denial():
+    assert collector.clear_summary_denies_defects("No security, correctness, or fail-closed defects identified.")
+    assert collector.external_verdict(dict(GEMINI_P541_PRODUCTION_RESULT)) == "clear"
+
+
+@pytest.mark.parametrize(
+    "summary",
+    [
+        # The denial never names defects: it reports the review, not its result.
+        "No review was performed and possible issues remain.",
+        "No review was performed; the diff could not be read.",
+        "No substantive review was conducted and potential governance gaps remain.",
+        "The exact-head diff was not reviewed.",
+        # A clean denial and a residue in the same sentence.
+        "No blocking defects, but the concurrency path may still be wrong.",
+        "No defects found; deeper correctness issues could exist.",
+    ],
+)
+def test_external_verdict_rejects_review_failure_and_hedged_clear_summaries(summary):
+    assert collector.external_verdict({"verdict": "clear", "summary": summary, "findings": []}) == "unavailable"
+
+
+@pytest.mark.parametrize(
+    "summary",
+    [
+        "No substantive non-blocking issues were found.",
+        "No not-blocking issues are guaranteed here.",
+        "No non-blocking defects remain.",
+        "No issues other than two cosmetic nits.",
+    ],
+)
+def test_external_verdict_rejects_negated_defect_denials(summary):
+    assert collector.external_verdict({"verdict": "clear", "summary": summary, "findings": []}) == "unavailable"
+
+
+@pytest.mark.parametrize(
+    "summary",
+    [
+        "No way to tell whether the gate actually holds.",
+        "Unclear whether any defects remain.",
+        "The change looks reasonable to me.",
+        "Looks clean overall.",
+    ],
+)
+def test_external_verdict_rejects_ambiguous_clear_summaries(summary):
+    assert collector.external_verdict({"verdict": "clear", "summary": summary, "findings": []}) == "unavailable"
+
+
+def test_external_verdict_rejects_a_denial_run_that_stops_denying_defects():
+    # "foo" is not a defect qualifier, so the run is denying something other
+    # than defects even though the clause ends in a defect term.
+    assert (
+        collector.external_verdict({"verdict": "clear", "summary": "No foo issues in the diff.", "findings": []})
+        == "unavailable"
+    )
+    # One incoherent denial is enough: a second clean denial cannot rescue it.
+    assert (
+        collector.external_verdict(
+            {"verdict": "clear", "summary": "No review was conducted. No blocking defects.", "findings": []}
+        )
+        == "unavailable"
+    )
+
+
+def test_external_verdict_keeps_real_blocking_findings_blocking():
+    finding = {
+        "severity": "high",
+        "path": "scripts/hunter_reviewer_collector.py",
+        "line": 60,
+        "evidence": "clear denial admits a summary that concedes open issues",
+    }
+    assert (
+        collector.external_verdict(
+            {
+                "verdict": "blocking",
+                "summary": "No review was performed and possible issues remain.",
+                "findings": [finding],
+            }
+        )
+        == "blocking"
+    )
+    # A clear verdict that still carries findings fails closed to those findings.
+    assert collector.external_verdict({**GEMINI_P541_PRODUCTION_RESULT, "findings": [finding]}) == "blocking"
+
+
+def _provider_http_error(code, payload, headers=None):
+    body = payload if isinstance(payload, bytes) else json.dumps(payload).encode()
+    return urllib.error.HTTPError(
+        "https://api.groq.com/openai/v1/chat/completions",
+        code,
+        "Forbidden",
+        (
+            headers
+            if headers is not None
+            else {"Authorization": "Bearer gsk_LIVE_HEADER_SECRET", "X-Key": "gsk_LIVE_HEADER_SECRET"}
+        ),
+        io.BytesIO(body),
+    )
+
+
+def _groq_http_error_payload(monkeypatch, code, payload, key="gsk_LIVE_BODY_SECRET_0123456789"):
+    backend = collector.GitHubBackend("owner/repo", "token", 541, HEAD, "d" * 64, 123, 1)
+    monkeypatch.setenv("GROQ_API_KEY", key)
+    monkeypatch.setattr(backend, "_candidate_diff", lambda: "diff --git a/x b/x")
+
+    def denied(*_args, **_kwargs):
+        raise _provider_http_error(code, payload)
+
+    monkeypatch.setattr(collector.urllib.request, "urlopen", denied)
+    return backend._invoke_external({"id": "groq", "review_timeout_seconds": 1, "trigger_method": "api:groq"}, 1)
+
+
+@pytest.mark.parametrize(
+    ("payload", "cause"),
+    [
+        (
+            {
+                "error": {
+                    "message": "Model 'openai/gpt-oss-120b' is not available for your account",
+                    "type": "invalid_request_error",
+                    "param": None,
+                    "code": "model_not_found",
+                }
+            },
+            "model_access",
+        ),
+        (
+            {"error": {"message": "Invalid API Key", "type": "invalid_request_error", "code": "invalid_api_key"}},
+            "authentication_or_permission",
+        ),
+        (
+            {"error": {"message": "Access denied", "type": "forbidden", "code": "permission_denied"}},
+            "authentication_or_permission",
+        ),
+        (
+            {"error": {"message": "Rate limit reached", "type": "rate_limit_error", "code": "rate_limit_exceeded"}},
+            "quota_or_account",
+        ),
+        (
+            {"error": {"message": "You have no credits remaining", "code": "insufficient_quota"}},
+            "quota_or_account",
+        ),
+        (
+            {"error": {"message": "missing required parameter 'model'", "type": "invalid_request_error"}},
+            "malformed_request",
+        ),
+    ],
+)
+def test_groq_http_failure_names_the_provider_cause(monkeypatch, payload, cause):
+    code = 401 if payload["error"].get("code") == "invalid_api_key" else 403
+    summary = _groq_http_error_payload(monkeypatch, code, payload)["summary"]
+    assert f"groq HTTP {code} [{cause}]" in summary
+    for expected in (
+        "model_not_found",
+        "invalid_api_key",
+        "permission_denied",
+        "rate_limit_exceeded",
+        "insufficient_quota",
+    ):
+        if expected in json.dumps(payload["error"]):
+            assert expected in summary
+
+
+def test_gemini_permission_denial_is_distinguished_from_a_bad_key(monkeypatch):
+    backend = collector.GitHubBackend("owner/repo", "token", 541, HEAD, "d" * 64, 123, 1)
+    monkeypatch.setenv("GEMINI_API_KEY", "AIzaSyLiveGeminiKeySecret0123456789")
+    monkeypatch.setattr(backend, "_candidate_diff", lambda: "diff --git a/x b/x")
+
+    def denied(*_args, **_kwargs):
+        raise _provider_http_error(
+            403,
+            {
+                "error": {
+                    "code": 403,
+                    "message": "API key not valid. Please pass a valid API key.",
+                    "status": "PERMISSION_DENIED",
+                }
+            },
+        )
+
+    monkeypatch.setattr(collector.urllib.request, "urlopen", denied)
+    summary = backend._invoke_external(
+        {"id": "gemini", "review_timeout_seconds": 1, "trigger_method": "api:gemini"}, 1
+    )["summary"]
+    assert "[authentication_or_permission]" in summary
+    assert "PERMISSION_DENIED" in summary
+    assert "AIzaSyLiveGeminiKeySecret0123456789" not in summary
+
+
+def test_provider_http_failure_keeps_its_unavailability_semantics(monkeypatch):
+    payload = _groq_http_error_payload(
+        monkeypatch, 403, {"error": {"message": "Access denied", "code": "permission_denied"}}
+    )
+    assert payload["verdict"] == "unavailable"
+    assert set(payload) == {"verdict", "summary"}
+
+    agent = {**POOL["agents"][0], "id": "groq", "priority": 1, "trigger_method": "api:groq", "retryable": False}
+    backend = collector.GitHubBackend("owner/repo", "token", 541, HEAD, "d" * 64, 123, 1)
+    monkeypatch.setattr(backend, "_existing_trigger", lambda *_a: None)
+    monkeypatch.setattr(backend, "_invoke_external", lambda *_a: payload)
+    bodies = []
+    monkeypatch.setattr(
+        backend,
+        "_post_comment",
+        lambda body: bodies.append(body) or {"id": len(bodies), "created_at": "2026-09-29T00:00:00Z", "body": body},
+    )
+    trigger = backend.trigger(agent, 1)
+    assert trigger["state"] == "unavailable"
+    assert trigger["invalid_result"] is False
+    assert collector.parse_api_result(bodies[1])["verdict"] == "unavailable"
+
+
+def test_provider_http_diagnostics_never_expose_secrets_or_raw_bodies(monkeypatch):
+    key = "gsk_LIVE_BODY_SECRET_0123456789"
+    echo = _groq_http_error_payload(
+        monkeypatch,
+        403,
+        {
+            "error": {
+                "message": (
+                    f"Request rejected. api_key={key} Authorization: Bearer gsk_LIVE_ECHOED_TOKEN_VALUE "
+                    f"x-api-key: {key} hunter-Aa1Bb2Cc3Dd4Ee5Ff6Gg7Hh8Ii9Jj0Kk9Ll8"
+                ),
+                "code": "permission_denied",
+                "type": "forbidden",
+            }
+        },
+        key=key,
+    )
+    summary = echo["summary"]
+    for secret in (
+        key,
+        "gsk_LIVE_ECHOED_TOKEN_VALUE",
+        "hunter-Aa1Bb2Cc3Dd4Ee5Ff6Gg7Hh8Ii9Jj0Kk9Ll8",
+        "gsk_LIVE_HEADER_SECRET",
+        "Authorization",
+    ):
+        assert secret not in summary
+    assert "Bearer" not in summary
+    assert "[authentication_or_permission]" in summary
+
+
+@pytest.mark.parametrize(
+    "body",
+    [
+        b"<html><body>Blocked by corporate proxy. token=hunter-Aa1Bb2Cc3Dd4Ee5Ff6Gg7Hh8Ii9Jj0Kk9Ll8</body></html>",
+        b"",
+        b"not json at all",
+        json.dumps({"error": {"message": "z" * 20000, "code": "y" * 20000}}).encode(),
+        b'{"unexpected": {"nested": ["shape", 1, true, null]}}',
+        b"\xff\xfe\x00binary",
+    ],
+)
+def test_provider_http_diagnostics_stay_bounded_on_unusable_bodies(monkeypatch, body):
+    summary = _groq_http_error_payload(monkeypatch, 403, body)["summary"]
+    assert summary.startswith("groq HTTP 403")
+    assert len(summary) <= 64
+    assert "hunter-Aa1Bb2Cc3Dd4Ee5Ff6Gg7Hh8Ii9Jj0Kk9Ll8" not in summary
+
+
+# Copilot review of PR #542 at 2502778: a denial clears only what it denies, so
+# anything outside it that asserts a defect or contrasts with it fails closed.
+@pytest.mark.parametrize(
+    "summary",
+    [
+        "No blocking defects, but one issue remains.",
+        "No security defects identified, but the implementation has a correctness issue.",
+        "No blocking findings; one minor issue is still open.",
+        "No security defects. The implementation has a correctness bug.",
+        "No blocking issues were found, however the retry path is broken.",
+        "No new findings, although the migration is incorrect.",
+        "No outstanding defects; tests fail on the exact head.",
+        "No blocking defects identified, yet two regressions were introduced.",
+        "No security issues. One problem remains in the parser.",
+    ],
+)
+def test_clear_summary_with_a_disclosure_outside_its_denial_is_not_clear(summary):
+    assert not collector.clear_summary_denies_defects(summary)
+    assert collector.external_verdict({"verdict": "clear", "summary": summary, "findings": []}) == "unavailable"
+
+
+@pytest.mark.parametrize(
+    "summary",
+    [
+        "No security, correctness, or fail-closed defects identified.",
+        "No blocking defects remain after exact-head review.",
+        "No security, correctness, or fail-closed defects identified; the gate remains fail-closed.",
+        "Reviewed the complete exact-head diff and found no blocking governance defects.",
+    ],
+)
+def test_clear_summary_without_any_residual_assertion_stays_clear(summary):
+    assert collector.external_verdict({"verdict": "clear", "summary": summary, "findings": []}) == "clear"
+
+
+def test_specific_model_message_outranks_a_generic_forbidden_type(monkeypatch):
+    payload = {"error": {"type": "forbidden", "message": "model is not available for this account"}}
+    summary = _groq_http_error_payload(monkeypatch, 403, payload)["summary"]
+    assert summary.startswith("groq HTTP 403 [model_access]")
+    assert "gsk_LIVE_BODY_SECRET_0123456789" not in summary
+    assert "gsk_LIVE_HEADER_SECRET" not in summary
+
+
+def test_generic_type_still_classifies_when_no_specific_evidence_exists(monkeypatch):
+    payload = {"error": {"type": "forbidden", "message": "Request refused."}}
+    summary = _groq_http_error_payload(monkeypatch, 403, payload)["summary"]
+    assert summary.startswith("groq HTTP 403 [authentication_or_permission]")
+
+
+def test_groq_http_400_is_unavailable_with_a_bounded_redacted_diagnostic(monkeypatch):
+    key = "gsk_LIVE_BODY_SECRET_0123456789"
+    payload = {
+        "error": {
+            "message": f"'response_format' is unsupported for this request (key {key})" + " x" * 400,
+            "type": "invalid_request_error",
+        }
+    }
+    result = _groq_http_error_payload(monkeypatch, 400, payload, key=key)
+    assert result["verdict"] == "unavailable"
+    assert result["summary"].startswith("groq HTTP 400 [malformed_request]")
+    assert key not in result["summary"]
+    assert len(result["summary"]) < 400
+
+
+def test_groq_http_400_fails_over_to_the_next_reviewer_without_authority(monkeypatch):
+    class ExternalBackend(collector.GitHubBackend):
+        def __init__(self, *args, **kwargs):
+            super().__init__(*args, **kwargs)
+            self.clock = 0.0
+
+        def now(self):
+            return self.clock
+
+        def sleep(self, _seconds):
+            return None
+
+    backend = ExternalBackend("owner/repo", "token", 541, HEAD, "d" * 64, 123, 1)
+    monkeypatch.setenv("GROQ_API_KEY", "gsk_LIVE_BODY_SECRET_0123456789")
+    monkeypatch.setattr(backend, "_candidate_diff", lambda: "diff --git a/x b/x")
+    monkeypatch.setattr(
+        collector.governance, "request_json", lambda *_a, **_k: {"state": "open", "head": {"sha": HEAD}}
+    )
+    monkeypatch.setattr(backend, "_existing_trigger", lambda *_a: None)
+
+    def malformed(*_args, **_kwargs):
+        raise _provider_http_error(400, {"error": {"message": "invalid payload", "type": "invalid_request_error"}})
+
+    monkeypatch.setattr(collector.urllib.request, "urlopen", malformed)
+    invoke = backend._invoke_external
+    monkeypatch.setattr(
+        backend,
+        "_invoke_external",
+        lambda agent, *rest: (invoke(agent, *rest) if agent["id"] == "groq" else dict(GEMINI_P541_PRODUCTION_RESULT)),
+    )
+    bodies = []
+    monkeypatch.setattr(
+        backend,
+        "_post_comment",
+        lambda body: bodies.append(body) or {"id": len(bodies), "created_at": "2026-09-29T00:00:00Z", "body": body},
+    )
+    monkeypatch.setattr(
+        collector,
+        "_pages",
+        lambda *_a, **_k: [
+            {"id": index + 10, "user": {"login": "github-actions[bot]"}, "body": body}
+            for index, body in enumerate(bodies)
+        ],
+    )
+    pool = copy.deepcopy(POOL)
+    pool["agents"] = (
+        {**POOL["agents"][0], "id": "groq", "priority": 1, "trigger_method": "api:groq"},
+        {**POOL["agents"][0], "id": "gemini", "priority": 2, "trigger_method": "api:gemini"},
+    )
+    attempts = collector.collect_attempts(pool, HEAD, backend)
+    assert [attempt["agent_id"] for attempt in attempts] == ["groq", "gemini"]
+    assert [attempt["outcome"] for attempt in attempts] == ["unavailable", "clear"]
+    groq_result = next(
+        collector.parse_api_result(body)
+        for body in bodies
+        if (collector.parse_api_result(body) or {}).get("reviewer_agent") == "groq"
+    )
+    assert groq_result["verdict"] == "unavailable"
+    assert "[malformed_request]" in groq_result["summary"]

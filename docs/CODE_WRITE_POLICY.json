@@ -47,9 +47,10 @@
         "timeout_policy": {
           "bounded": true,
           "default_seconds": 300,
-          "max_seconds": 300,
+          "max_seconds": 1800,
           "retries_per_agent": 0,
-          "retry_scope": "No automatic retries. Explicit authenticated unavailability fails over immediately; silence is bounded to one reviewer timeout."
+          "retry_scope": "No automatic retries. Explicit authenticated unavailability fails over immediately; silence is bounded to one reviewer timeout.",
+          "max_seconds_rationale": "Issue #534/#536 (PR #535 live evidence): PR #529 triggered Codex at 07:47:35 and its formal review posted at 08:16:32 (~29 min); PR #530 triggered at 07:56:23 and posted at 08:17:48 (~21 min). max_seconds is the pool-wide per-agent ceiling every enabled agent's ack_timeout_seconds (for github-pr-comment triggers) and review_timeout_seconds are validated against, so it must cover Codex's slowest observed normal latency with headroom rather than the collector treating that normal latency as unavailability."
         },
         "agents": [
           {
@@ -84,16 +85,16 @@
             "id": "codex",
             "priority": 1,
             "enabled": true,
-            "trigger_method": "github-pr-comment:@codex review",
+            "trigger_method": "github-review-request:chatgpt-codex-connector[bot]",
             "exact_head_support": true,
             "retryable": false,
-            "evidence_parser": "github-review-ack.v1",
+            "evidence_parser": "github-review-native.v1",
             "fallback_eligibility": false,
-            "note": "Hosted fallback reviewer. Triggered immediately when the trusted local reviewer is offline/unresponsive or after its bounded review budget; exact-head authority remains supported.",
+"note": "Hosted reviewer requested through GitHub-native pull-request review assignment. Hunter observes and validates the authenticated exact-HEAD review; it does not depend on a bot-authored @codex comment trigger. ack_timeout_seconds is therefore a genuine, separate delivery acknowledgement (GitHub's requested-reviewer endpoint settles delivery the moment the trigger exists), so it stays a short fixed budget. review_timeout_seconds covers Codex's own observed hosted review latency and equals the pool-wide max_seconds; see timeout_policy.max_seconds_rationale.",
             "evidence": "Discovered by inspecting check-suites and PR reviews on main (commit dca20dd): installed apps are claude, freebuff-web, github-actions, railway-app, tembo, vercel; no Copilot code review, CodeRabbit, Jules, or CODEOWNERS exists on this repository.",
             "github_login": "chatgpt-codex-connector[bot]",
-            "ack_timeout_seconds": 300,
-            "review_timeout_seconds": 300
+            "ack_timeout_seconds": 30,
+            "review_timeout_seconds": 1800
           },
           {
             "id": "copilot",
@@ -143,6 +144,7 @@
           }
         ]
       },
+      "coverage_scopes": [],
       "fast_fallback": "disabled-until-health-gated"
     },
     "finding_resolution": "a fixed review finding resolves only with structured evidence: the exact-head correction commit and a regression test committed in the change set, verified fail-closed before Merge Readiness",
@@ -334,6 +336,7 @@
       "scripts/hunter_defect_prevention_preflight.py",
       "scripts/hunter_connector_write_ingress.py",
       "scripts/hunter_governance_review_v2.py",
+      "scripts/hunter_governance_revision.py",
       "scripts/hunter_governance_review/",
       "scripts/hunter_governance_preflight.py",
       "scripts/hunter_candidate_admission.py",

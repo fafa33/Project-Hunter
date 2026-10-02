@@ -12,7 +12,7 @@ from collections.abc import Iterable
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import Any
+from typing import Any, NamedTuple
 from urllib.parse import urlparse
 
 import hunter_github_transport as transport
@@ -42,11 +42,21 @@ MAX_COLLECTOR_DISPATCHES = 3
 #: only once the cycle is older than this, so an ordinary listing lag cannot be
 #: mistaken for a dead collector and duplicate the dispatch.
 COLLECTOR_LIVENESS_GRACE_SECONDS = 180
-# One global opportunity budget across the whole reviewer chain. A completed or
-# timed-out opportunity must never leave the exact-head status pending forever.
-INDEPENDENT_REVIEW_OPPORTUNITY_SECONDS = 15 * 60
+#: A correlated collector that is genuinely queued or in progress must not be
+#: finalized as timed out merely because the nominal opportunity budget expired.
+#: That budget starts at dispatch, so GitHub's queue delay is spent out of it while
+#: the collector has not begun running, and the collector's own job lifetime
+#: (``timeout-minutes``) is counted from when it starts -- publishing
+#: REVIEW_TIMED_OUT in that window ends the opportunity while a live collector can
+#: still publish a competing result for the same exact head. The cycle is therefore
+#: given one further full budget window before a timeout becomes legitimate. That
+#: bound is derived from the same canonical reviewer-chain budget and is checked
+#: unconditionally, so the wait stays bounded at twice that budget whether the
+#: liveness evidence reads active, dead, or cannot be read at all.
+ACTIVE_COLLECTOR_GRACE_MULTIPLIER = 2
 TERMINAL_NONBLOCKING_STATES = frozenset({"REVIEW_TIMED_OUT", "REVIEWER_UNAVAILABLE", "POOL_EXHAUSTED"})
 PENDING_STATES = frozenset({"WAITING_FOR_REVIEWER", "REVIEW_IN_PROGRESS", "FAILOVER_IN_PROGRESS", "POOL_EXHAUSTED"})
+
 #: Issue #461 / PR #473: an exact-head cycle whose reviewers were all exhausted
 #: used to be the end of the line. Remediating the blocking findings it produced
 #: could never start another review of the same immutable head, so the candidate
@@ -381,6 +391,26 @@ def _run_id(target_url: str) -> int | None:
 
 
 def _parse_cycle(status: dict[str, Any], pr_number: int, head_sha: str) -> ReviewCycle | None:
+    # Provenance of the cycle payload.
+    #
+    # A commit status is only as trustworthy as the account that posted it, and
+    # the context, description and target_url are all caller-controlled, so the
+    # publisher must be authenticated before any of them is believed. That check
+    # is strictly required: there is no creator-less path, no age-based or
+    # status-age authentication, and no caller-controlled target_url standing in
+    # for provenance.
+    #
+    # The strict form used to be impossible, which is why a creator-less fallback
+    # was introduced and then hardened twice. The actual cause was the reading
+    # endpoint, not the publisher: `read_cycle` read the combined status endpoint,
+    # which reports `creator: null` for every status including trusted workflow
+    # posts. It now reads the status list endpoint, which carries the real
+    # publisher, so the strict check stands on its own and the derivation path is
+    # gone. See `read_cycle` for the live evidence.
+    #
+    # `read_cycle` remains the outer bound: it independently re-fetches the run
+    # the status cites and requires it to be on the default branch and to come from
+    # a trusted governance workflow.
     if str((status.get("creator") or {}).get("login") or "") != TRUSTED_STATUS_CREATOR:
         return None
     if str(status.get("context") or "") != f"{CONTEXT_PREFIX}{pr_number}":
@@ -420,8 +450,21 @@ def read_cycle(
     if current_head != head_sha:
         return "superseded", None, f"current head is {current_head or 'unavailable'}"
 
-    combined = request_json(repository, token, "GET", f"commits/{head_sha}/status")
-    statuses = combined.get("statuses", []) if isinstance(combined, dict) else []
+    # Provenance-sensitive status reading uses the status LIST endpoint, not the
+    # combined endpoint. `GET /commits/{sha}/status` returns every status with
+    # `creator: null`, while `GET /commits/{sha}/statuses?per_page=100` returns the
+    # same status objects with the real publisher populated. Verified live on this
+    # repository: for one identical status id the combined endpoint reported
+    # `creator: null` while the list endpoint reported `github-actions[bot]`. The
+    # combined endpoint simply does not carry the publisher, so a creator check
+    # read from it can never be satisfied -- which is what previously forced a
+    # creator-less fallback that trusted a caller-controlled payload. Reading the
+    # list endpoint restores a real authenticated publisher and lets the strict
+    # check in `_parse_cycle` stand on its own. Only the latest statuses are
+    # listed, and the context, description, digest, generation and cited run are
+    # all still re-verified below and in `_parse_cycle`.
+    listed = request_json(repository, token, "GET", f"commits/{head_sha}/statuses?per_page=100")
+    statuses = listed if isinstance(listed, list) else []
     repository_info = request_json(repository, token, "GET", "")
     default_branch = str((repository_info or {}).get("default_branch") or "main")
     for status in statuses:
@@ -617,6 +660,78 @@ def _older_than(started_at: str, seconds: int) -> bool:
     return (datetime.now(UTC) - started).total_seconds() >= seconds
 
 
+def _active_collector_still_running(repository: str, token: str, cycle: ReviewCycle, budget: int) -> bool:
+    """Whether a correlated collector may still legitimately be running.
+
+    ``started_at`` is written *before* the collector is dispatched, so the nominal
+    opportunity budget is already partly spent on GitHub's queue and dispatch delay
+    by the time the collector is running. Finalizing on that nominal deadline alone
+    would end the opportunity while a correlated collector is genuinely queued or
+    in progress, and that collector can later publish a competing result for the
+    same exact head. Its job lifetime (``timeout-minutes``) is counted from when it
+    starts, not from when it was requested.
+
+    Such a collector is therefore given one further full budget window
+    (``ACTIVE_COLLECTOR_GRACE_MULTIPLIER``). That bound is evaluated *before* any
+    liveness evidence is read, so it holds even when that evidence is unreadable:
+    the wait is bounded at twice the canonical budget, never open-ended, and an
+    eventually genuine timeout still happens.
+
+    Liveness is read only for this cycle's own exact (pull request, head,
+    generation), so exact-head and generation binding are neither relaxed nor
+    substituted. Unreadable evidence is not evidence that no collector is running,
+    so it defers rather than finalizing; the bound above is what keeps that
+    deferral from becoming a permanent wait.
+    """
+
+    if _older_than(cycle.started_at, budget * ACTIVE_COLLECTOR_GRACE_MULTIPLIER):
+        return False
+    try:
+        liveness, _count = collector_liveness(repository, token, cycle.pr_number, cycle.head_sha, cycle.generation_id)
+    except transport.GitHubRequestError as exc:
+        print(f"Collector liveness evidence unavailable; not finalizing a timeout: {exc}", file=sys.stderr)
+        return True
+    return liveness == "active"
+
+
+def independent_review_opportunity_seconds() -> int:
+    """One global opportunity budget across the whole reviewer chain.
+
+    A completed or timed-out opportunity must never leave the exact-head status
+    pending forever, but the budget itself must never be a second, disconnected
+    magic number either: it is derived from the same ``CODE_WRITE_POLICY.json``
+    reviewer pool that the collector workflow's own declared lifetime is
+    validated against (see
+    ``test_collector_workflow_lifetime_covers_the_reviewer_chain_budget``), so
+    raising or lowering any one reviewer's configured budget can never leave
+    this orchestrator-side timeout silently out of sync with what the pool
+    actually configures.
+    """
+
+    pool, error = pre_ready.load_reviewer_pool()
+    if pool is None or error:
+        raise RuntimeError(f"reviewer pool unavailable: {error}")
+    return pre_ready.reviewer_chain_worst_case_seconds(pool)
+
+
+def __getattr__(name: str) -> Any:
+    """Derive ``INDEPENDENT_REVIEW_OPPORTUNITY_SECONDS`` on demand.
+
+    The budget is a derivation, not a declared constant, but trusted
+    default-branch readers still reach it as a module attribute -- notably the
+    trusted orchestrator replay harness, which imports this *candidate's* module
+    and reads that name while its own scenario logic is still main's version.
+    Resolving it here rather than assigning it at import keeps every such reader
+    working across the cutover, keeps the value pool-derived instead of a second
+    hand-set number, and surfaces an unreadable reviewer pool at the point of use
+    instead of breaking module import for every other caller.
+    """
+
+    if name == "INDEPENDENT_REVIEW_OPPORTUNITY_SECONDS":
+        return independent_review_opportunity_seconds()
+    raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
+
+
 def collector_needs_dispatch(repository: str, token: str, cycle: ReviewCycle) -> bool:
     """Whether a pending cycle has no live collector and may be re-dispatched.
 
@@ -733,24 +848,57 @@ def ensure_collector(
             if existing.state in {"REVIEW_CLEAR", "FINDINGS_OPEN"} | TERMINAL_NONBLOCKING_STATES:
                 return existing
             if existing.state in PENDING_STATES and _older_than(
-                existing.started_at, INDEPENDENT_REVIEW_OPPORTUNITY_SECONDS
+                existing.started_at, independent_review_opportunity_seconds()
             ):
-                terminal = ReviewCycle(
-                    pr_number=existing.pr_number,
-                    head_sha=existing.head_sha,
-                    state="REVIEW_TIMED_OUT",
-                    provider_id=existing.provider_id,
-                    trigger_id=existing.trigger_id,
-                    started_at=existing.started_at,
-                    config_digest=existing.config_digest,
-                    generation_id=existing.generation_id,
-                )
-                publish_cycle(repository, token, head_sha, cycle=terminal)
-                return terminal
+                # A correlated collector that is genuinely queued or in progress is
+                # not finalized on the nominal deadline alone: that deadline is
+                # measured from before dispatch, so GitHub's queue delay would be
+                # spent out of it while the collector has not started running. In
+                # that case no terminal transition is published at all -- the durable
+                # pending record stands unchanged, so no competing terminal result
+                # can exist here -- and control deliberately falls through to the
+                # liveness/recovery branch below, which is unchanged.
+                if not _active_collector_still_running(
+                    repository, token, existing, independent_review_opportunity_seconds()
+                ):
+                    terminal = ReviewCycle(
+                        pr_number=existing.pr_number,
+                        head_sha=existing.head_sha,
+                        state="REVIEW_TIMED_OUT",
+                        provider_id=existing.provider_id,
+                        trigger_id=existing.trigger_id,
+                        started_at=existing.started_at,
+                        config_digest=existing.config_digest,
+                        generation_id=existing.generation_id,
+                    )
+                    publish_cycle(repository, token, head_sha, cycle=terminal)
+                    return terminal
+                return existing
             if existing.trigger_id is not None and not collector_needs_dispatch(repository, token, existing):
                 return existing
         elif not remediation_generation_admissible(repository, token, existing, generation_id):
             return existing
+
+    run_id = current_run_id()
+    if run_id is None:
+        raise RuntimeError("trusted orchestration requires GITHUB_RUN_ID")
+
+    # The branch above is not the only idempotency boundary: it only fires when
+    # `read_cycle` itself reports "present" with a matching digest. A stale,
+    # missing, or racy read of the commit-status cycle -- two reconciles landing
+    # close together, or any other reason the status observation disagrees with
+    # reality -- must never fall through to a blind duplicate dispatch when a
+    # collector run correlated to this exact (PR, head, generation) is already
+    # active or has already succeeded. This check is independent of whatever
+    # `read_cycle` answered, and unreadable evidence fails closed rather than
+    # authorising a dispatch it cannot rule out as a duplicate.
+    try:
+        liveness, _count = collector_liveness(repository, token, pr_number, head_sha, generation_id)
+    except transport.GitHubRequestError as exc:
+        raise RuntimeError(
+            f"collector correlation evidence unavailable for PR #{pr_number} at {head_sha[:10]}; "
+            f"refusing to risk a duplicate dispatch: {exc}"
+        ) from exc
 
     # Persist the dispatch identity and liveness timestamp *before* dispatch.
     # This status is the durable idempotency record: if GitHub accepts the
@@ -758,9 +906,6 @@ def ensure_collector(
     # reconciliation observes a dispatched cycle and checks correlated collector
     # runs instead of blindly issuing a duplicate dispatch. If dispatch itself
     # never produces a run, the bounded liveness grace permits one recovery.
-    run_id = current_run_id()
-    if run_id is None:
-        raise RuntimeError("trusted orchestration requires GITHUB_RUN_ID")
     cycle = ReviewCycle(
         pr_number=pr_number,
         head_sha=head_sha,
@@ -772,26 +917,122 @@ def ensure_collector(
         generation_id=generation_id,
     )
     publish_cycle(repository, token, head_sha, cycle=cycle)
-    dispatch_collector(repository, token, pr_number, head_sha, generation_id)
+    if liveness not in {"active", "completed"}:
+        dispatch_collector(repository, token, pr_number, head_sha, generation_id)
     return cycle
 
 
-def review_request_state(repository: str, token: str, pr_number: int, head_sha: str) -> tuple[bool, str]:
+class ReviewRequestBlocked(RuntimeError):
+    """The exact-head prerequisites are complete but the review request is not.
+
+    This is distinct from "not ready yet". Once the trusted prerequisite has
+    succeeded, no further reconcile of the same immutable head can change the
+    answer on its own: the pre-ready review request is a committed artifact, so
+    a new valid one only appears with a new commit. Silently returning here is
+    what let PR #540 report a successful Reconcile while never publishing an
+    exact-head orchestration cycle.
+    """
+
+
+class ReviewRequestReadiness(NamedTuple):
+    """Why orchestration may or may not begin for one exact head.
+
+    The reason is carried rather than discarded so the reconcile can report
+    the precise blocker instead of a bare success, and so a blocked head is
+    distinguishable from a prerequisite that is still running.
+    """
+
+    ready: bool
+    claims_id: str
+    reason: str
+    prerequisite_state: str
+
+
+#: One-time, owner-authorized root-of-trust migration identity (Issue #541).
+#:
+#: The separated orchestrator -- Review Opportunity independent of Candidate
+#: Admission -- is contributed by PR #535, but Hunter intentionally executes
+#: orchestration from the default branch, so the candidate cannot activate its
+#: own trust-boundary change. That is the same irreducible bootstrap limitation
+#: ``scripts/hunter_controller_admission.py`` documents, and it is resolved the
+#: same way: a human-authorized root-of-trust cutover, structurally identical to
+#: the ``bootstrap_external_review_469.py`` bridge that installed the reviewer
+#: orchestration controller for PR #473.
+#:
+#: This grants exactly one thing: for this one trusted migration identity, the
+#: Review Opportunity path is no longer gated behind the trusted preflight, so an
+#: independently authenticated review can be collected for a candidate that is
+#: blocked from admission. It grants NOTHING else. Candidate admission, ingress
+#: provenance, verified signatures, the trusted hosted preflight, deterministic
+#: gates, governance, merge readiness and owner approval are all read from
+#: their own trusted evidence and remain fail-closed; a completed review carries
+#: no merge authority.
+#:
+#: The identity is a literal in trusted default-branch code compared against the
+#: pull request the hosted workflow itself derived from GitHub. It is never read
+#: from candidate content, so no pull request, commit, file, comment or status
+#: can assert or extend it, and no future candidate can opt itself in.
+#:
+#: It expires by deletion. Once the permanent separated orchestrator is the
+#: default-branch norm, this block is removed and nothing widens: the ordinary
+#: path returns to consulting the preflight, and the migration identity stops
+#: existing. Deleting the block is a strictly narrowing change.
+REVIEW_OPPORTUNITY_MIGRATION_IDENTITIES = frozenset({("fafa33/Project-Hunter", 535)})
+
+#: ``read_head_pre_ready_review`` states that mean a review request is committed
+#: for this exact head but can never be dispatched as it stands. Both are terminal
+#: for that head: the request is a committed artifact, so it cannot resolve
+#: itself, and swallowing either one makes reconcile exit successfully with no
+#: reviewer ever dispatched. "absent" and "unavailable" are deliberately not here
+#: -- nothing is committed yet, or trusted GitHub evidence is transiently
+#: unreadable -- so both keep the ordinary retryable path.
+TERMINAL_REQUEST_STATES = frozenset({"present", "invalid"})
+
+
+def _review_opportunity_migration(repository: str, pr_number: int) -> bool:
+    """Whether this pull request is the trusted root-of-trust migration identity."""
+
+    return (repository, int(pr_number)) in REVIEW_OPPORTUNITY_MIGRATION_IDENTITIES
+
+
+def review_request_state(repository: str, token: str, pr_number: int, head_sha: str) -> ReviewRequestReadiness:
     """Whether this head carries a current review request, and which claims it is.
 
     The claims digest is returned with the readiness answer because the
     remediation generation is bound to it: resolving the request twice would let
-    the generation be derived from claims the dispatch decision never saw.
+    the generation be derived from claims the dispatch decision never saw. The
+    blocking reason is returned for the same reason -- a readiness decision
+    nobody can explain is a readiness decision nobody can act on.
     """
 
     import hunter_governance_review_v2 as governance
 
-    preflight_state, _ = governance.read_trusted_upgrade_status(repository, token, head_sha, pr_number)
-    if preflight_state != "success":
-        return False, ""
-    request_state, document, _ = governance.read_head_pre_ready_review(repository, token, head_sha)
+    migration = _review_opportunity_migration(repository, pr_number)
+    if migration:
+        # Review Opportunity for the trusted migration identity is not gated on
+        # Candidate Admission. Its prerequisite is the exact-head request below,
+        # so an absent request stays retryable and a present-but-unusable one
+        # stays terminal for this head.
+        prerequisite_state = "review-opportunity"
+    else:
+        preflight_state, preflight_reason = governance.read_trusted_upgrade_status(
+            repository, token, head_sha, pr_number
+        )
+        if preflight_state != "success":
+            return ReviewRequestReadiness(
+                False, "", f"exact-head trusted prerequisite is {preflight_state}: {preflight_reason}", preflight_state
+            )
+        prerequisite_state = preflight_state
+    request_state, document, request_error = governance.read_head_pre_ready_review(repository, token, head_sha)
+    if migration:
+        prerequisite_state = request_state
     if request_state != "present" or not isinstance(document, dict):
-        return False, ""
+        return ReviewRequestReadiness(
+            False,
+            "",
+            f"exact-head pre-ready review request is {request_state} at {head_sha[:10]}: {request_error or 'absent'}",
+            prerequisite_state,
+        )
     request = document.get("review_request")
     if not (
         isinstance(request, dict)
@@ -799,29 +1040,121 @@ def review_request_state(repository: str, token: str, pr_number: int, head_sha: 
         and isinstance(request.get("claims_id"), str)
         and len(request["claims_id"]) == 64
     ):
-        return False, ""
-    valid, _reason = governance.valid_current_review_request(repository, token, pr_number, head_sha, document)
-    return bool(valid), str(request["claims_id"]) if valid else ""
+        if migration:
+            prerequisite_state = "present"
+        return ReviewRequestReadiness(
+            False,
+            "",
+            f"exact-head pre-ready review request at {head_sha[:10]} carries no usable review_request claims binding",
+            prerequisite_state,
+        )
+    valid, reason = governance.valid_current_review_request(repository, token, pr_number, head_sha, document)
+    if not valid:
+        if migration:
+            prerequisite_state = "present"
+        return ReviewRequestReadiness(
+            False,
+            "",
+            f"exact-head pre-ready review request at {head_sha[:10]} is not valid for this head: {reason}",
+            prerequisite_state,
+        )
+    return ReviewRequestReadiness(True, str(request["claims_id"]), "", prerequisite_state)
 
 
 def review_prerequisites_ready(repository: str, token: str, pr_number: int, head_sha: str) -> bool:
-    return review_request_state(repository, token, pr_number, head_sha)[0]
+    return review_request_state(repository, token, pr_number, head_sha).ready
+
+
+def exact_head_codex_clear_exists(repository: str, token: str, pr_number: int, head_sha: str, claims_id: str) -> bool:
+    """Whether governance would adopt the latest Codex review of ``head_sha`` as a clear.
+
+    Dispatch is skipped only when governance's own latest-review selection and
+    adoption predicate accept the review. An older clear superseded by a later
+    finding, change request or dismissal, a clear that hides findings, and a
+    malformed collection (which governance rejects whole) all dispatch as before.
+    """
+
+    import hunter_governance_review_v2 as governance
+
+    reviews: list[Any] = []
+    page = 1
+    while True:
+        batch = request_json(repository, token, "GET", f"pulls/{pr_number}/reviews?per_page=100&page={page}")
+        if not isinstance(batch, list):
+            return False
+        reviews.extend(batch)
+        if len(batch) < 100:
+            break
+        page += 1
+    # Raw GitHub reviews carry no Hunter claims provenance.  Do not synthesize
+    # it here: only governance's trusted collector-trigger binding may do that.
+    # A manual/unbound clear must therefore not suppress collector dispatch.
+    try:
+        return governance.latest_codex_review_is_exact_head_clear(reviews, head_sha, claims_id)
+    except ValueError:
+        return False
 
 
 def ensure_current(repository: str, token: str, pr_number: int) -> ReviewCycle | None:
     pr = request_json(repository, token, "GET", f"pulls/{pr_number}")
     if not isinstance(pr, dict) or str(pr.get("state") or "") != "open":
         return None
+    # Issue #534: a Draft PR must never start a candidate review cycle, even
+    # though every other trigger that reaches here (schedule sweep, review
+    # events, workflow_run) iterates or fires without first checking draft
+    # state itself. This is enforced here, once, rather than relied upon
+    # indirectly. The cutover below removes the preflight gate for one trusted
+    # migration identity, so this guard is what keeps a Draft head from gaining
+    # review authority through it: the ordinary path was incidentally protected
+    # by the preflight, the migration path would not be.
+    if bool(pr.get("draft")):
+        return None
     head_sha = str((pr.get("head") or {}).get("sha") or "")
     if not head_sha:
         raise RuntimeError("current pull-request head is unavailable")
-    ready, claims_id = review_request_state(repository, token, pr_number, head_sha)
-    if not ready:
+    readiness = review_request_state(repository, token, pr_number, head_sha)
+    if not readiness.ready:
+        # A prerequisite that is still pending or running retries on its own:
+        # the trusted upgrade status and the scheduled sweep both re-enter here.
+        # A prerequisite that already succeeded cannot resolve itself, because
+        # the request is a committed artifact of the head. That case must not
+        # disappear into a successful reconcile with no future orchestration
+        # opportunity, so it is reported instead of swallowed.
+        if readiness.prerequisite_state == "success":
+            raise ReviewRequestBlocked(
+                f"exact-head review orchestration cannot start for PR #{pr_number} at {head_sha[:10]}: "
+                f"{readiness.reason}. Trusted preflight already passed, so this head needs a pre-ready review "
+                f"request committed for it; reconcile will start orchestration as soon as one is."
+            )
+        # The migration identity's prerequisite is the request itself, so a
+        # request that exists for this head but cannot be used is terminal and is
+        # reported rather than swallowed. That covers a committed request that is
+        # present but unusable AND a request that is present-but-unreadable
+        # ("invalid"): both are a committed artifact of this exact head that will
+        # never become dispatchable on its own. Reporting only "present" let an
+        # "invalid" request return None, so reconcile exited successfully and the
+        # head silently stalled with no reviewer ever dispatched. "absent" stays
+        # retryable (nothing is committed yet) and "unavailable" stays retryable
+        # (trusted GitHub evidence is transiently unreadable); neither is a defect
+        # in the head.
+        if readiness.prerequisite_state in TERMINAL_REQUEST_STATES:
+            raise ReviewRequestBlocked(
+                f"exact-head review orchestration cannot start for PR #{pr_number} at {head_sha[:10]}: "
+                f"{readiness.reason}. This head carries a pre-ready review request that is not usable for it; "
+                f"reconcile will start orchestration as soon as a usable one is committed."
+            )
         return None
     # Derived here, never accepted from a dispatch input or from candidate prose:
     # the generation is what authorises one more reviewer invocation, so only
     # trusted GitHub review-thread state may decide it.
-    generation_id = current_remediation_generation(repository, token, pr_number, head_sha, claims_id)
+    # An authenticated Codex clear of this exact HEAD is already review
+    # authority for it, whatever order triggers and reviews happened in, and
+    # governance adopts it directly. Asking Codex again about unchanged content
+    # would only add a redundant bot request, so none is dispatched. A new HEAD
+    # has no such clear and dispatches as usual.
+    if exact_head_codex_clear_exists(repository, token, pr_number, head_sha, readiness.claims_id):
+        return None
+    generation_id = current_remediation_generation(repository, token, pr_number, head_sha, readiness.claims_id)
     return ensure_collector(repository, token, pr_number, head_sha, generation_id)
 
 
@@ -848,6 +1181,14 @@ def main() -> int:
         else:
             ensure_current(args.repository, token, args.pr)
         return 0
+    except ReviewRequestBlocked as exc:
+        # Reported, not swallowed: the reconcile step turns this into a visible
+        # failure instead of a green run that promised orchestration it never
+        # performed. The blocker is the committed pre-ready review request, so
+        # the operator action is to commit one for this exact head; the next
+        # reconcile then dispatches exactly once.
+        print(f"::error::{exc}", file=sys.stderr)
+        return 1
     except transport.GitHubUnavailable as exc:
         print(f"Review orchestration infrastructure unavailable; remaining pending: {exc}", file=sys.stderr)
         return 0
