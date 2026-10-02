@@ -77,11 +77,19 @@ SSH_KEY_FINGERPRINT = re.compile(r"\ASHA256:[A-Za-z0-9+/]{43}\Z")
 #: One record per commit, as produced by ``git log`` with this format. The unit
 #: separator cannot appear in a name, an email, a SHA, or a key fingerprint,
 #: and the record separator cannot appear inside any of those fields either.
-#: ``%P`` carries the parent list and ``%GK`` the SSH signing key fingerprint,
-#: both read from the commit object rather than from anything the caller chose.
+#: ``%P`` carries the parent list, ``%GK`` the SSH signing key fingerprint and
+#: ``%G?`` whether the signature over this commit verified, all read from the
+#: commit object rather than from anything the caller chose.
 GIT_FIELD_SEPARATOR = "\x1f"
 GIT_RECORD_SEPARATOR = "\x1e"
-GIT_LOG_FORMAT = GIT_FIELD_SEPARATOR.join(("%H", "%an", "%ae", "%cn", "%ce", "%P", "%GK")) + GIT_RECORD_SEPARATOR
+GIT_LOG_FIELDS = ("%H", "%an", "%ae", "%cn", "%ce", "%P", "%GK", "%G?")
+GIT_LOG_FORMAT = GIT_FIELD_SEPARATOR.join(GIT_LOG_FIELDS) + GIT_RECORD_SEPARATOR
+
+#: ``%G?`` values for a signature that cryptographically verified. ``U`` (good,
+#: validity unknown) is what an empty allowed-signers file yields; ``G`` is
+#: accepted for a configured trust store. Every other status -- bad, expired,
+#: revoked, uncheckable, or absent -- binds nothing, whatever key it names.
+GOOD_SIGNATURE_STATUSES = frozenset({"G", "U"})
 
 #: git populates ``%GK`` for an SSH signature only after running signature
 #: verification, and it refuses to verify at all unless
@@ -177,6 +185,7 @@ class CommitProvenance:
     parents: str = ""
     signing_key: str = ""
     recovery_declaration: str = ""
+    signature_status: str = ""
 
     @property
     def first_parent(self) -> str:
@@ -465,6 +474,12 @@ def verify_signing_key_identity(
             f"commit {short} claims writer {writer.login!r} but carries no readable SSH signing key, so nothing "
             "binds the claimed identity to a signature"
         )
+    status = commit.signature_status.strip()
+    if status not in GOOD_SIGNATURE_STATUSES:
+        return (
+            f"commit {short} claims writer {writer.login!r} but its signature by {key} did not verify "
+            f"(signature status {status or 'none'!r}), so the key binds nothing"
+        )
     if not writer.signing_keys:
         return f"commit {short} writer {writer.login!r} has no signing key bound in policy"
     if key not in writer.signing_keys:
@@ -696,10 +711,10 @@ def _run_git(*args: str, cwd: Path | None = None) -> str:
 def parse_commit_records(raw: str) -> tuple[CommitProvenance, ...]:
     """Parse ``git log`` output produced with :data:`GIT_LOG_FORMAT`.
 
-    A record that does not carry at least the five identity fields is unreadable
-    commit metadata, which fails closed rather than being skipped. The parent
-    list, signing key and recovery declaration are optional here and required
-    only where a rule needs them, so a five-field record still parses.
+    Every record must carry exactly the fields :data:`GIT_LOG_FIELDS` requests.
+    The separators cannot occur in well-formed commit metadata, so any other
+    count means the record was split or the format drifted, and it fails closed
+    rather than being read with fields shifted or silently dropped.
     """
 
     commits: list[CommitProvenance] = []
@@ -708,11 +723,9 @@ def parse_commit_records(raw: str) -> tuple[CommitProvenance, ...]:
         if not stripped.strip():
             continue
         fields = stripped.split(GIT_FIELD_SEPARATOR)
-        if len(fields) < 5:
+        if len(fields) != len(GIT_LOG_FIELDS):
             raise GitEvidenceUnavailable("commit metadata could not be parsed into canonical provenance fields")
-        sha, author_name, author_email, committer_name, committer_email = fields[:5]
-        parents = fields[5].strip() if len(fields) > 5 else ""
-        signing_key = fields[6].strip() if len(fields) > 6 else ""
+        sha, author_name, author_email, committer_name, committer_email, parents, signing_key, status = fields
         commits.append(
             CommitProvenance(
                 sha=sha.strip(),
@@ -720,8 +733,9 @@ def parse_commit_records(raw: str) -> tuple[CommitProvenance, ...]:
                 author_email=author_email,
                 committer_name=committer_name,
                 committer_email=committer_email,
-                parents=parents,
-                signing_key=signing_key,
+                parents=parents.strip(),
+                signing_key=signing_key.strip(),
+                signature_status=status.strip(),
             )
         )
     return tuple(commits)
@@ -764,6 +778,34 @@ def read_range_commits(base: str, head: str, *, cwd: Path | None = None) -> tupl
         commit if commit.sha.lower() not in found else replace(commit, recovery_declaration=found[commit.sha.lower()])
         for commit in commits
     )
+
+
+#: The ``owner/repo`` pair a GitHub https or ssh remote URL names.
+_REMOTE_OWNER_REPO = re.compile(r"github\.com[:/](?P<owner>[A-Za-z0-9_.-]+)/[A-Za-z0-9_.-]+?(?:\.git)?/?\Z")
+
+
+def repository_owner(*, cwd: Path | None = None) -> str | None:
+    """The owner of the canonical repository, from repository identity rather than policy.
+
+    The policy's own ``owner_writer`` is the claim being checked, so it cannot be
+    its own evidence. Hosted runs read the base repository GitHub names in
+    ``GITHUB_REPOSITORY``; a clone reads ``upstream`` before ``origin``, so a
+    fork resolves to the repository it was forked from. ``None`` when neither is
+    available, which the caller treats as unknown rather than as a match.
+    """
+
+    hosted = os.environ.get("GITHUB_REPOSITORY", "").strip()
+    if "/" in hosted:
+        return hosted.split("/", 1)[0] or None
+    for remote in ("upstream", "origin"):
+        try:
+            url = _run_git("config", "--get", f"remote.{remote}.url", cwd=cwd).strip()
+        except GitEvidenceUnavailable:
+            continue
+        match = _REMOTE_OWNER_REPO.search(url)
+        if match is not None:
+            return match.group("owner")
+    return None
 
 
 def resolve_governed_base(head: str, *, base_ref: str = "main", remote: str = "origin", cwd: Path | None = None) -> str:

@@ -142,8 +142,12 @@ def _commit(
     parents: str = "",
     signing_key: str = "",
     recovery_declaration: str = "",
+    signature_status: str | None = None,
 ) -> provenance.CommitProvenance:
+    """A synthetic commit record; a signed one defaults to a verified signature."""
     committer = committer if committer is not None else author
+    if signature_status is None:
+        signature_status = "U" if signing_key else ""
     return provenance.CommitProvenance(
         sha,
         author[0],
@@ -153,6 +157,7 @@ def _commit(
         parents=parents,
         signing_key=signing_key,
         recovery_declaration=recovery_declaration,
+        signature_status=signature_status,
     )
 
 
@@ -290,6 +295,49 @@ def test_unreadable_commit_metadata_fails_closed() -> None:
         provenance.parse_commit_records("deadbeef\x1fonly\x1fthree\x1e")
 
 
+_RECORD_FIELDS = (
+    "deadbeef",
+    "Claude",
+    "noreply@anthropic.com",
+    "Claude",
+    "noreply@anthropic.com",
+    "cafe",
+    CLAUDE_KEY,
+    "U",
+)
+
+
+def test_a_record_with_exactly_the_requested_fields_parses() -> None:
+    (commit,) = provenance.parse_commit_records("\x1f".join(_RECORD_FIELDS) + "\x1e")
+
+    assert (commit.parents, commit.signing_key, commit.signature_status) == ("cafe", CLAUDE_KEY, "U")
+
+
+@pytest.mark.parametrize(
+    "fields",
+    (
+        _RECORD_FIELDS[:5],  # the old identity-only shape: no key or status to bind
+        _RECORD_FIELDS[:7],  # key without its verification status
+        _RECORD_FIELDS + ("extra",),  # a split or drifted record
+    ),
+    ids=("five", "seven", "nine"),
+)
+def test_a_record_with_any_other_field_count_fails_closed(fields: tuple[str, ...]) -> None:
+    with pytest.raises(provenance.GitEvidenceUnavailable):
+        provenance.parse_commit_records("\x1f".join(fields) + "\x1e")
+
+
+@pytest.mark.parametrize("status", ("B", "X", "Y", "R", "E", "N", ""))
+def test_a_bound_key_on_a_signature_that_did_not_verify_binds_nothing(status: str) -> None:
+    """``%GK`` names a key; only ``%G?`` says the signature over this commit is good."""
+    verdict = provenance.evaluate_range(
+        _key_enforced_binding(), (_commit(signing_key=CLAUDE_KEY, signature_status=status),)
+    )
+
+    assert verdict.ok is False
+    assert "did not verify" in verdict.reason
+
+
 def test_the_repository_binding_names_the_identity_an_agent_must_configure() -> None:
     """The identity is discoverable from policy before the first commit exists."""
     binding, error = provenance.load_binding()
@@ -417,9 +465,10 @@ def test_the_repository_policy_switches_key_binding_on_for_every_bound_writer() 
         assert all(provenance.SSH_KEY_FINGERPRINT.match(key) for key in identity.signing_keys)
 
 
-def test_the_repository_policy_bounds_recovery_to_the_repository_owner() -> None:
+def test_the_repository_policy_bounds_recovery_to_the_repository_owner(monkeypatch) -> None:
     """Recovery is a privilege grant, so its shape is checked, not just present."""
 
+    monkeypatch.setenv("GITHUB_REPOSITORY", "fafa33/Project-Hunter")
     policy = json.loads((ROOT / "docs" / "CODE_WRITE_POLICY.json").read_text(encoding="utf-8"))
     errors = prevention._validate_owner_recovery(policy, provenance.load_binding()[0])
 
@@ -450,6 +499,61 @@ def test_weakening_the_recovery_grant_is_a_detectable_policy_change(mutate, expe
     errors = prevention._validate_owner_recovery(policy, provenance.parse_binding(policy)[0] or binding)
 
     assert any(expect in item for item in errors), errors
+
+
+def _owner_renamed_policy(login: str) -> tuple[dict, provenance.WriterIdentityBinding]:
+    policy = json.loads((ROOT / "docs" / "CODE_WRITE_POLICY.json").read_text(encoding="utf-8"))
+    policy[provenance.BINDING_FIELD][provenance.OWNER_WRITER_FIELD]["login"] = login
+    binding, error = provenance.parse_binding(policy)
+    assert binding is not None, error
+    return policy, binding
+
+
+def test_naming_another_bound_writer_as_owner_does_not_make_it_the_owner(monkeypatch) -> None:
+    """``claude`` is authorization-bound, so only repository identity can refuse it."""
+    monkeypatch.setenv("GITHUB_REPOSITORY", "fafa33/Project-Hunter")
+    policy, binding = _owner_renamed_policy("claude")
+
+    assert binding.owner_recovery is not None and binding.owner_recovery.owner_login == "claude"
+    errors = prevention._validate_owner_recovery(policy, binding)
+
+    assert any("is not the repository owner 'fafa33'" in item for item in errors), errors
+
+
+def test_an_unknown_repository_owner_fails_closed(monkeypatch) -> None:
+    monkeypatch.setattr(provenance, "repository_owner", lambda **_kwargs: None)
+    policy, binding = _owner_renamed_policy("fafa33")
+
+    errors = prevention._validate_owner_recovery(policy, binding)
+
+    assert any("repository owner is unknown" in item for item in errors), errors
+
+
+def test_a_fork_clone_resolves_the_owner_of_the_repository_it_was_forked_from(monkeypatch, tmp_path) -> None:
+    """The paired positive: a contributor's fork as ``origin`` is not a false owner mismatch."""
+    monkeypatch.delenv("GITHUB_REPOSITORY", raising=False)
+    monkeypatch.setenv("GIT_CONFIG_GLOBAL", os.devnull)
+    monkeypatch.setenv("GIT_CONFIG_NOSYSTEM", "1")
+    subprocess.run(("git", "init", "-q", str(tmp_path)), check=True)
+    for remote, url in (
+        ("origin", "git@github.com:contributor/Project-Hunter.git"),
+        ("upstream", "https://github.com/fafa33/Project-Hunter.git"),
+    ):
+        subprocess.run(("git", "-C", str(tmp_path), "remote", "add", remote, url), check=True)
+
+    assert provenance.repository_owner(cwd=tmp_path) == "fafa33"
+    subprocess.run(("git", "-C", str(tmp_path), "remote", "remove", "upstream"), check=True)
+    assert provenance.repository_owner(cwd=tmp_path) == "contributor"
+
+
+def test_single_writer_enforcement_cannot_be_switched_off_in_policy() -> None:
+    """Disabling it would admit mixed ranges with no recovery boundary at all."""
+    policy = json.loads((ROOT / "docs" / "CODE_WRITE_POLICY.json").read_text(encoding="utf-8"))
+    policy[provenance.BINDING_FIELD]["require_single_writer_per_range"] = False
+
+    errors = prevention.validate_writer_identity_binding(policy)
+
+    assert any("require_single_writer_per_range must be true" in item for item in errors), errors
 
 
 def test_the_key_binding_cannot_be_switched_off_in_policy() -> None:
@@ -913,6 +1017,7 @@ def test_signing_keys_and_parents_are_read_for_real_signed_commits(monkeypatch, 
 
     assert [commit.sha for commit in commits] == [middle, head]
     assert all(commit.signing_key == fingerprint for commit in commits)
+    assert all(commit.signature_status in provenance.GOOD_SIGNATURE_STATUSES for commit in commits)
     assert commits[0].parents == base
     assert commits[1].parents == middle
 

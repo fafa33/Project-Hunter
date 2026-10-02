@@ -935,6 +935,15 @@ def validate_writer_identity_binding(policy: dict[str, Any]) -> list[str]:
         if not _is_non_empty_str(raw.get(field)):
             errors.append(f"{BINDING_FIELD} must declare {field}")
 
+    # The owner-recovery boundary is the only sanctioned way for a range to hold
+    # two writers; disabling single-writer enforcement would admit mixed ranges
+    # with no boundary at all while every recovery check below still passed.
+    if raw.get("require_single_writer_per_range") is not True or not binding.require_single_writer_per_range:
+        errors.append(
+            f"{BINDING_FIELD}.require_single_writer_per_range must be true; only a valid owner-recovery boundary "
+            "may admit a second writer epoch"
+        )
+
     enforcement = raw.get("enforcement")
     if not isinstance(enforcement, dict):
         errors.append(f"{BINDING_FIELD} must declare where the binding is enforced")
@@ -1037,6 +1046,17 @@ def _validate_owner_recovery(policy: dict[str, Any], binding: Any) -> list[str]:
         return [f"{owner_label}.login must name the repository owner"]
     if binding.identity_for(login) is None:
         errors.append(f"{owner_label}.login {login!r} is not an authorization-bound writer identity")
+    # Being a bound writer is necessary but not sufficient: every agent is one.
+    # Ownership is read from the repository's own identity, never from the
+    # policy text that names the owner, so naming another writer here fails.
+    actual_owner = provenance.repository_owner(cwd=ROOT)
+    if actual_owner is None:
+        errors.append(
+            f"{owner_label}.login cannot be checked: the repository owner is unknown (no GITHUB_REPOSITORY and "
+            "no GitHub upstream/origin remote)"
+        )
+    elif provenance.normalize_identity_value(actual_owner) != provenance.normalize_identity_value(login):
+        errors.append(f"{owner_label}.login {login!r} is not the repository owner {actual_owner!r}")
     if not _is_non_empty_str(owner.get("authority")):
         errors.append(f"{owner_label} must declare the owner authority it rests on")
     if not _is_non_empty_str(owner.get("evidence")):
