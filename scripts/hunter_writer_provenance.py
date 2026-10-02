@@ -52,6 +52,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import re
 import subprocess
 import sys
@@ -81,6 +82,16 @@ SSH_KEY_FINGERPRINT = re.compile(r"\ASHA256:[A-Za-z0-9+/]{43}\Z")
 GIT_FIELD_SEPARATOR = "\x1f"
 GIT_RECORD_SEPARATOR = "\x1e"
 GIT_LOG_FORMAT = GIT_FIELD_SEPARATOR.join(("%H", "%an", "%ae", "%cn", "%ce", "%P", "%GK")) + GIT_RECORD_SEPARATOR
+
+#: git populates ``%GK`` for an SSH signature only after running signature
+#: verification, and it refuses to verify at all unless
+#: ``gpg.ssh.allowedSignersFile`` names an existing file. Without that setting --
+#: the default on hosted runners and fresh clones -- every commit would read as
+#: unsigned. An empty allowed-signers file lets git check the signature against
+#: the key embedded in the commit (``%G?`` = ``U``) without trusting any local
+#: keyring, so the fingerprint is read identically everywhere. A signature that
+#: does not verify still yields no fingerprint and fails closed.
+GIT_SIGNATURE_READ_CONFIG = ("-c", f"gpg.ssh.allowedSignersFile={os.devnull}")
 
 
 def normalize_identity_value(value: str) -> str:
@@ -725,7 +736,9 @@ def read_range_commits(base: str, head: str, *, cwd: Path | None = None) -> tupl
     break record parsing.
     """
 
-    raw = _run_git("log", "--reverse", f"--format={GIT_LOG_FORMAT}", f"{base}..{head}", cwd=cwd)
+    raw = _run_git(
+        *GIT_SIGNATURE_READ_CONFIG, "log", "--reverse", f"--format={GIT_LOG_FORMAT}", f"{base}..{head}", cwd=cwd
+    )
     commits = parse_commit_records(raw)
     recovery = load_binding()[0]
     if recovery is None or recovery.owner_recovery is None or not commits:

@@ -21,6 +21,7 @@ blocks valid work is itself a defect.
 from __future__ import annotations
 
 import json
+import os
 from pathlib import Path
 from typing import Any
 
@@ -853,11 +854,17 @@ def test_the_recovery_trailer_is_read_from_git_and_not_from_the_message_body(tmp
     assert commits[0].parents == base and commits[1].parents == commits[0].sha
 
 
-def test_signing_keys_and_parents_are_read_for_real_signed_commits() -> None:
+def test_signing_keys_and_parents_are_read_for_real_signed_commits(monkeypatch) -> None:
     """The %GK wiring against real signed commits, not only synthetic records.
 
     The two commits below are the PR #535 tail that hosted governance rejected.
+    Global and system git config are excluded so the read runs exactly as on a
+    hosted runner, where no ``gpg.ssh.allowedSignersFile`` is configured: a
+    developer's own git config must not be what makes the fingerprint readable.
     """
+
+    monkeypatch.setenv("GIT_CONFIG_GLOBAL", os.devnull)
+    monkeypatch.setenv("GIT_CONFIG_NOSYSTEM", "1")
 
     base, head = "38a1d58ff91fed12284956f4bd04474b3578909a", "b7d9552429f97b8caba1d7267a41672385ff9fce"
 
