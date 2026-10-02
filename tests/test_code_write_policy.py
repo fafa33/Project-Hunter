@@ -99,10 +99,17 @@ def test_code_write_policy_declares_an_ordered_reviewer_pool_with_a_last_resort_
 def test_reviewer_requires_distinct_ack_and_review_budgets() -> None:
     policy = json.loads((ROOT / "docs" / "CODE_WRITE_POLICY.json").read_text(encoding="utf-8"))
     pool = policy["review_progression"]["review_authority"]["reviewer_pool"]
+    max_seconds = pool["timeout_policy"]["max_seconds"]
     for agent in (a for a in pool["agents"] if a.get("enabled")):
-        ack_limit = 300 if agent["trigger_method"].startswith("github-pr-comment:") else 90
+        # A comment-triggered reviewer's ack ceiling is the pool's own declared
+        # max_seconds: see `reviewer_chain_worst_case_seconds` and the
+        # docstring on this same check in `hunter_pre_ready_review._pool_problems`
+        # for why that -- rather than a second hardcoded number here -- is the
+        # single source both this test and the loader validate against.
+        ack_limit = max_seconds if agent["trigger_method"].startswith("github-pr-comment:") else 90
         assert 1 <= agent["ack_timeout_seconds"] <= ack_limit
         assert agent["review_timeout_seconds"] >= agent["ack_timeout_seconds"]
+        assert agent["review_timeout_seconds"] <= max_seconds
 
 
 def test_code_write_policy_guard_rejects_a_pool_without_a_strict_last_resort(monkeypatch, tmp_path) -> None:
@@ -313,12 +320,20 @@ def test_local_ollama_is_triage_only_and_disabled_without_health_admission() -> 
     assert by_id["codex"]["priority"] == 1
 
 
-def test_codex_hard_review_budget_is_capped_at_five_minutes() -> None:
+def test_codex_hard_review_budget_covers_its_observed_hosted_latency() -> None:
+    """PR #535 live evidence: a 5-minute budget silently failed
+
+    over Codex before its own normal ~20-30 minute hosted latency (PR #529
+    ~29 min, PR #530 ~21 min) could ever complete. The budget is still hard
+    bounded -- just no longer shorter than Codex's own real behaviour.
+    """
+
     policy = json.loads((ROOT / "docs" / "CODE_WRITE_POLICY.json").read_text(encoding="utf-8"))
     pool = policy["review_progression"]["review_authority"]["reviewer_pool"]
     codex = next(agent for agent in pool["agents"] if agent["id"] == "codex")
 
-    assert codex["review_timeout_seconds"] == 300
+    assert codex["review_timeout_seconds"] == pool["timeout_policy"]["max_seconds"]
     assert codex["ack_timeout_seconds"] == 30
+    assert codex["review_timeout_seconds"] >= 30 * 60
     assert codex["retryable"] is False
-    assert pool["timeout_policy"]["max_seconds"] == 300
+    assert pool["timeout_policy"]["bounded"] is True

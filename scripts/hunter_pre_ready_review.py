@@ -510,6 +510,11 @@ def _pool_problems(policy: Mapping[str, Any]) -> list[str]:
         if isinstance(retries, bool) or not isinstance(retries, int) or retries < 0:
             problems.append(f"{REVIEWER_POOL_FIELD} timeout_policy retries_per_agent must be a non-negative integer")
 
+    pool_max_seconds = timeout.get("max_seconds")
+    valid_pool_max_seconds = (
+        isinstance(pool_max_seconds, int) and not isinstance(pool_max_seconds, bool) and pool_max_seconds > 0
+    )
+
     agents = raw.get("agents")
     if not isinstance(agents, list) or not agents:
         problems.append(f"{REVIEWER_POOL_FIELD} agents must be a non-empty list")
@@ -563,7 +568,21 @@ def _pool_problems(policy: Mapping[str, Any]) -> list[str]:
         review_timeout = entry.get("review_timeout_seconds")
         if enabled is True:
             trigger_method = str(entry.get("trigger_method") or "")
-            ack_limit = 300 if trigger_method.startswith("github-pr-comment:") else 90
+            is_comment_trigger = trigger_method.startswith("github-pr-comment:")
+            # The comment-trigger ceiling is the pool's own declared max_seconds,
+            # never a second hardcoded number: a reviewer invoked by an authored
+            # PR comment (Codex) has no delivery signal distinct from its actual
+            # response, so its ack budget is bounded by the same cap that bounds
+            # its review budget, and raising one can never silently leave the
+            # other stuck at a stale, disconnected ceiling. Reviewers triggered
+            # synchronously (API calls, GitHub's review-request endpoint) get a
+            # real, separate delivery acknowledgement, so their ack ceiling stays
+            # a short, fixed budget unrelated to how long the review itself takes.
+            ack_limit = (
+                pool_max_seconds
+                if is_comment_trigger and valid_pool_max_seconds
+                else (300 if is_comment_trigger else 90)
+            )
             if isinstance(ack_timeout, bool) or not isinstance(ack_timeout, int) or not 1 <= ack_timeout <= ack_limit:
                 problems.append(
                     f"{REVIEWER_POOL_FIELD} enabled agent {agent_id!r} must declare ack_timeout_seconds in 1..{ack_limit}"
@@ -576,17 +595,15 @@ def _pool_problems(policy: Mapping[str, Any]) -> list[str]:
                 problems.append(
                     f"{REVIEWER_POOL_FIELD} agent {agent_id!r} review_timeout_seconds must be at least ack_timeout_seconds"
                 )
-        max_seconds = timeout.get("max_seconds")
         if (
             isinstance(review_timeout, int)
             and not isinstance(review_timeout, bool)
-            and isinstance(max_seconds, int)
-            and not isinstance(max_seconds, bool)
-            and review_timeout > max_seconds
+            and valid_pool_max_seconds
+            and review_timeout > pool_max_seconds
         ):
             problems.append(
                 f"{REVIEWER_POOL_FIELD} agent {agent_id!r} review_timeout_seconds cannot exceed the "
-                f"pool max_seconds ({max_seconds})"
+                f"pool max_seconds ({pool_max_seconds})"
             )
         problems.extend(_quality_gate_problems(entry, agent_id))
         if enabled is True and priority == 1:
@@ -656,6 +673,40 @@ def enabled_pool_reviewers(pool: Mapping[str, Any]) -> tuple[dict[str, Any], ...
 def authority_pool_reviewers(pool: Mapping[str, Any]) -> tuple[dict[str, Any], ...]:
     """Enabled reviewers eligible to establish or block review authority."""
     return tuple(agent for agent in enabled_pool_reviewers(pool) if agent.get("authority_eligible") is not False)
+
+
+#: Fixed, non-reviewer time this repository's trusted collector spends around
+#: the reviewer chain itself: checkout, script startup, and publishing its
+#: trusted receipt. Named once so every consumer of the derived chain budget
+#: below reserves the same margin instead of guessing its own.
+RESERVED_ORCHESTRATION_OVERHEAD_SECONDS = 120
+
+
+def reviewer_chain_worst_case_seconds(pool: Mapping[str, Any]) -> int:
+    """The worst-case wall-clock time the whole ordered reviewer chain can spend.
+
+    Each enabled agent's own ``review_timeout_seconds`` is already the true
+    upper bound the collector enforces for that agent (its acknowledgement
+    deadline can only ever be earlier or equal, never later -- see
+    ``hunter_reviewer_collector.collect_attempts``), so the worst case for the
+    whole chain is every enabled agent, in order, spending its full budget
+    across every attempt the pool grants it before the collector moves on.
+
+    This is the single canonical timing source a collector workflow's declared
+    lifetime and the trusted orchestrator's independent review-opportunity
+    budget both must derive from (or be validated against): raising or
+    lowering any one reviewer's configured budget in ``CODE_WRITE_POLICY.json``
+    changes this number, and both of those consumers change with it rather
+    than keeping their own disconnected, independently hand-set figure that
+    can silently drift out of sync with what the pool actually configures.
+    """
+
+    retries_per_agent = int(pool["timeout_policy"]["retries_per_agent"])
+    total = 0
+    for agent in enabled_pool_reviewers(pool):
+        attempts = 1 + (retries_per_agent if agent["retryable"] else 0)
+        total += attempts * int(agent["review_timeout_seconds"])
+    return total + RESERVED_ORCHESTRATION_OVERHEAD_SECONDS
 
 
 def _exhaustion_error(pool: Mapping[str, Any], authority: Mapping[str, Any], authority_type: str) -> str | None:

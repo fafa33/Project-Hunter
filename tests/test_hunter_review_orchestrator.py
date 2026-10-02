@@ -7,6 +7,7 @@ import subprocess
 import sys
 
 import hunter_github_transport as transport
+import hunter_pre_ready_review as pre_ready
 import hunter_review_orchestrator as orchestrator
 import pytest
 import yaml
@@ -106,6 +107,248 @@ def test_ready_review_request_dispatches_collector_once(monkeypatch):
     assert stored["dispatches"] == 1
 
 
+def _absent_cycle_with_recorded_dispatches(monkeypatch) -> dict:
+    """Stub an unrecorded exact head whose dispatches append real in-progress
+    collector runs to the run listing ``ensure_collector`` reads back."""
+
+    stored: dict = {"dispatches": 0}
+    runs: list[dict] = []
+
+    monkeypatch.setattr(orchestrator, "read_cycle", lambda *_args: ("absent", None, None))
+    monkeypatch.setattr(orchestrator, "reviewer_pool_config_digest", lambda: "d" * 64, raising=False)
+    monkeypatch.setattr(orchestrator, "current_run_id", lambda: 999, raising=False)
+    monkeypatch.setattr(orchestrator, "publish_cycle", lambda *_args, **_kwargs: None, raising=False)
+
+    def dispatch_collector(_repository, _token, pr_number, head_sha, generation_id=orchestrator.BASE_GENERATION_ID):
+        stored["dispatches"] += 1
+        runs.append(_collector_run("in_progress", pr_number=pr_number, head_sha=head_sha, run_id=stored["dispatches"]))
+
+    monkeypatch.setattr(orchestrator, "dispatch_collector", dispatch_collector, raising=False)
+
+    def request_json(_repository, _token, _method, path, _payload=None):
+        assert path.startswith(f"actions/workflows/{orchestrator.COLLECTOR_WORKFLOW}/runs")
+        return {"workflow_runs": runs}
+
+    monkeypatch.setattr(orchestrator, "request_json", request_json)
+
+    return stored
+
+
+def test_a_second_call_sees_the_correlated_collector_and_does_not_redispatch(monkeypatch):
+    """PR #535 live evidence (runs 36340127965 and 36340195915).
+
+    GitHub's combined-status read (what ``read_cycle`` uses) is not guaranteed
+    read-your-write consistent: a status one reconcile execution just posted
+    can still be reported "absent" to a later, near-simultaneous execution of
+    the same event. Both report "absent" on every call here, so only the
+    collector *run* listing (a separate, directly-queried endpoint) can tell the
+    second caller that this exact identity has already been dispatched.
+
+    Scope, deliberately narrow: these two calls are serial, so the first one's
+    dispatch is already visible to the second one's liveness read. This proves
+    the correlated-run case converges on one dispatch. It does NOT prove two
+    genuinely simultaneous reconciles cannot both dispatch -- see
+    ``test_two_genuinely_simultaneous_dispatches_can_both_miss_the_correlated_run``.
+    """
+
+    stored = _absent_cycle_with_recorded_dispatches(monkeypatch)
+
+    first = orchestrator.ensure_collector("owner/repo", "token", 472, HEAD)
+    second = orchestrator.ensure_collector("owner/repo", "token", 472, HEAD)
+
+    assert stored["dispatches"] == 1
+    assert first.state == "WAITING_FOR_REVIEWER"
+    assert second.state == "WAITING_FOR_REVIEWER"
+
+
+def test_two_genuinely_simultaneous_dispatches_can_both_miss_the_correlated_run(monkeypatch):
+    """Documents the residual window the previous test's name overclaimed.
+
+    Two reconciles that both read the cycle status as absent *and* both read
+    collector liveness before either has dispatched will each dispatch. Nothing
+    in the current design closes that window: GitHub's status API has no
+    compare-and-set, so publishing the durable record is not atomic with acting
+    on it. The bounded recovery path in ``collector_needs_dispatch`` is what
+    keeps the consequence bounded -- a redundant collector, never a false clear --
+    so this is recorded as a known limitation rather than asserted away.
+
+    Closing it needs an atomic claim (a lock/lease on the exact identity), which
+    is a trust-boundary change for the owner to authorize rather than something
+    to slip in while reconciling a conflict.
+    """
+
+    stored = _absent_cycle_with_recorded_dispatches(monkeypatch)
+    stored["reads"] = []
+
+    def collector_liveness(_repository, _token, _pr, _head, _generation_id=orchestrator.BASE_GENERATION_ID):
+        # Read liveness before honouring any dispatch, so neither call can see
+        # the other's run -- the true simultaneous case.
+        stored["reads"].append(stored["dispatches"])
+        return ("missing", 0)
+
+    monkeypatch.setattr(orchestrator, "collector_liveness", collector_liveness, raising=False)
+
+    first = orchestrator.ensure_collector("owner/repo", "token", 472, HEAD)
+    second = orchestrator.ensure_collector("owner/repo", "token", 472, HEAD)
+
+    # Both calls observed a missing correlated run: neither saw the other's.
+    assert stored["reads"] == [0, 1]
+    assert stored["dispatches"] == 2
+    # Both still publish the same durable, non-authoritative pending state.
+    assert first.state == "WAITING_FOR_REVIEWER"
+    assert second.state == "WAITING_FOR_REVIEWER"
+
+
+def _seconds_ago(seconds: int) -> str:
+    from datetime import UTC, datetime, timedelta
+
+    return (datetime.now(UTC) - timedelta(seconds=seconds)).strftime("%Y-%m-%dT%H:%M:%SZ")
+
+
+def _budget() -> int:
+    pool, error = pre_ready.load_reviewer_pool()
+    assert pool is not None and not error
+    return pre_ready.reviewer_chain_worst_case_seconds(pool)
+
+
+def test_an_active_correlated_collector_is_not_timed_out_on_the_nominal_deadline(monkeypatch):
+    """Queue delay must not finalize a collector that is genuinely running.
+
+    ``started_at`` is written before dispatch, so a cycle can pass the nominal
+    opportunity budget while its correlated collector is still queued or in
+    progress -- the collector's own job lifetime is counted from when it starts,
+    not from when it was requested. Publishing REVIEW_TIMED_OUT there ends the
+    opportunity while a live collector can still publish a competing result for
+    the same exact head.
+    """
+
+    budget = _budget()
+    cycle = make_cycle(trigger_id=123, started_at=_seconds_ago(budget + 60))
+    stored = _ensure_harness(monkeypatch, cycle, [_collector_run("queued")])
+
+    result = orchestrator.ensure_collector("owner/repo", "token", 472, HEAD)
+
+    assert result.state == "WAITING_FOR_REVIEWER"
+    assert result is not None
+    # Regression 3: the skipped path must publish nothing at all, so no
+    # competing terminal result can exist for this head and generation.
+    assert stored["published"] == []
+    assert stored["dispatches"] == 0
+
+
+def test_an_in_progress_correlated_collector_is_also_withheld_from_the_nominal_deadline(monkeypatch):
+    """Queued and in_progress are both ``active``; neither may be finalized early."""
+
+    budget = _budget()
+    cycle = make_cycle(trigger_id=123, started_at=_seconds_ago(budget + 60))
+    stored = _ensure_harness(monkeypatch, cycle, [_collector_run("in_progress")])
+
+    result = orchestrator.ensure_collector("owner/repo", "token", 472, HEAD)
+
+    assert result.state == "WAITING_FOR_REVIEWER"
+    assert stored["published"] == []
+    assert stored["dispatches"] == 0
+
+
+def test_a_dead_or_missing_collector_still_times_out_legitimately(monkeypatch):
+    """Regression 2: only a genuinely active collector buys the extra window."""
+
+    budget = _budget()
+    started = _seconds_ago(budget + 60)
+
+    dead = make_cycle(trigger_id=123, started_at=started)
+    stored = _ensure_harness(monkeypatch, dead, [_collector_run("completed", conclusion="failure")])
+    result = orchestrator.ensure_collector("owner/repo", "token", 472, HEAD)
+    assert result.state == "REVIEW_TIMED_OUT"
+    assert stored["published"][-1].state == "REVIEW_TIMED_OUT"
+
+    absent = make_cycle(trigger_id=123, started_at=started)
+    stored = _ensure_harness(monkeypatch, absent, [])
+    result = orchestrator.ensure_collector("owner/repo", "token", 472, HEAD)
+    assert result.state == "REVIEW_TIMED_OUT"
+    assert stored["published"][-1].state == "REVIEW_TIMED_OUT"
+
+
+def test_an_active_collector_cannot_hold_the_cycle_open_past_the_bounded_grace(monkeypatch):
+    """The extra window is bounded, so an active collector cannot wait forever.
+
+    Beyond twice the canonical budget the timeout is legitimate regardless of
+    liveness. That bound is evaluated before any liveness evidence is read, which
+    is what makes it hold even when that evidence cannot be read at all.
+    """
+
+    budget = _budget()
+    grace = budget * orchestrator.ACTIVE_COLLECTOR_GRACE_MULTIPLIER
+    cycle = make_cycle(trigger_id=123, started_at=_seconds_ago(grace + 60))
+    stored = _ensure_harness(monkeypatch, cycle, [_collector_run("in_progress")])
+
+    result = orchestrator.ensure_collector("owner/repo", "token", 472, HEAD)
+
+    assert result.state == "REVIEW_TIMED_OUT"
+    assert stored["published"][-1].state == "REVIEW_TIMED_OUT"
+    assert stored["dispatches"] == 0
+
+
+def test_unreadable_liveness_cannot_finalize_a_timeout_before_the_bounded_grace(monkeypatch):
+    """Unreadable evidence is not evidence that no collector is running.
+
+    It must not finalize early -- but the bound still applies, so this cannot
+    become a permanent wait either.
+    """
+
+    import hunter_github_transport as transport
+
+    budget = _budget()
+    cycle = make_cycle(trigger_id=123, started_at=_seconds_ago(budget + 60))
+    stored = _ensure_harness(monkeypatch, cycle, [])
+
+    def unavailable(*_args, **_kwargs):
+        raise transport.GitHubRequestError("rate limited", category="transient", status_code=429)
+
+    monkeypatch.setattr(orchestrator, "collector_liveness", unavailable, raising=False)
+
+    result = orchestrator.ensure_collector("owner/repo", "token", 472, HEAD)
+    assert result.state == "WAITING_FOR_REVIEWER"
+    assert stored["published"] == []
+
+    # ... and the same unreadable evidence past the bound still finalizes.
+    grace = budget * orchestrator.ACTIVE_COLLECTOR_GRACE_MULTIPLIER
+    stale = make_cycle(trigger_id=123, started_at=_seconds_ago(grace + 60))
+    stored = _ensure_harness(monkeypatch, stale, [])
+    monkeypatch.setattr(orchestrator, "collector_liveness", unavailable, raising=False)
+    result = orchestrator.ensure_collector("owner/repo", "token", 472, HEAD)
+    assert result.state == "REVIEW_TIMED_OUT"
+
+
+def test_the_timeout_bound_never_consults_another_head_or_generation(monkeypatch):
+    """Exact-head and generation binding must not be relaxed by the grace.
+
+    The liveness read is made for the recorded cycle's own identity, and the
+    published terminal cycle preserves that identity exactly.
+    """
+
+    seen: list[tuple] = []
+
+    def capture(repository, token, pr_number, head_sha, generation_id=orchestrator.BASE_GENERATION_ID):
+        seen.append((pr_number, head_sha, generation_id))
+        return "active", 1
+
+    budget = _budget()
+    cycle = make_cycle(trigger_id=123, started_at=_seconds_ago(budget + 60), generation_id="gen-7")
+    stored = _ensure_harness(monkeypatch, cycle, [_collector_run("in_progress")])
+    monkeypatch.setattr(orchestrator, "collector_liveness", capture, raising=False)
+
+    # The same generation must be presented, so the idempotent branch is taken
+    # rather than the remediation-admissibility branch.
+    result = orchestrator.ensure_collector("owner/repo", "token", 472, HEAD, "gen-7")
+
+    assert seen == [(472, HEAD, "gen-7")]
+    assert result.state == "WAITING_FOR_REVIEWER"
+    assert result.generation_id == "gen-7"
+    assert result.head_sha == HEAD
+    assert stored["published"] == []
+
+
 def test_review_opportunity_timeout_finalizes_pending_cycle_without_redispatch(monkeypatch):
     cycle = make_cycle(trigger_id=123, started_at="2020-01-01T00:00:00Z")
     stored = _ensure_harness(monkeypatch, cycle, [_collector_run("in_progress")])
@@ -125,11 +368,65 @@ def test_review_timeout_is_terminal_and_idempotent(monkeypatch):
     assert stored["published"] == []
 
 
-def test_collector_workflow_caps_whole_review_opportunity_at_fifteen_minutes():
+def test_collector_workflow_lifetime_covers_the_reviewer_chain_budget():
+    """PR #535 live evidence: the collector's declared lifetime must not silently
+
+    contradict the reviewer budgets it is supposed to run to completion. A
+    workflow ``timeout-minutes`` shorter than the worst case every enabled
+    reviewer can spend (as ``docs/CODE_WRITE_POLICY.json`` itself configures
+    it) cancels the job mid-invocation and turns a reviewer still within its
+    own configured budget into a false "unavailable". This is the single
+    coherence check both magic numbers -- the workflow's static YAML timeout
+    and the pool's per-agent budgets -- are validated against, rather than two
+    independently hand-set figures that can drift apart again.
+    """
+
     document = yaml.safe_load(
         pathlib.Path(REPOSITORY_ROOT, ".github/workflows/hunter-reviewer-collector.yml").read_text()
     )
-    assert document["jobs"]["collect"]["timeout-minutes"] == 15
+    workflow_seconds = int(document["jobs"]["collect"]["timeout-minutes"]) * 60
+
+    pool, error = pre_ready.load_reviewer_pool()
+    assert pool is not None and not error
+    required_seconds = pre_ready.reviewer_chain_worst_case_seconds(pool)
+
+    assert workflow_seconds >= required_seconds
+
+
+def test_independent_review_opportunity_matches_the_same_canonical_budget():
+    """The orchestrator's own pending-cycle timeout must derive from the same
+
+    source as the collector workflow's lifetime, not carry its own
+    disconnected constant that can silently fall out of step with it.
+    """
+
+    pool, error = pre_ready.load_reviewer_pool()
+    assert pool is not None and not error
+    assert orchestrator.independent_review_opportunity_seconds() == pre_ready.reviewer_chain_worst_case_seconds(pool)
+
+
+def test_the_derived_budget_is_still_readable_as_a_module_attribute():
+    """The budget is a derivation, but trusted default-branch readers still reach
+    it as a module attribute.
+
+    The trusted orchestrator replay harness imports this *candidate's* module
+    while its own scenario logic is still the default branch's version, and that
+    version reads the budget through `INDEPENDENT_REVIEW_OPPORTUNITY_SECONDS`.
+    Dropping the name broke the candidate-facing half of that harness before the
+    candidate can ever prove itself, which is the same bootstrap limitation the
+    Review Opportunity migration identity exists to work around. Both access forms
+    must therefore keep resolving, to the same derived value.
+    """
+
+    pool, error = pre_ready.load_reviewer_pool()
+    assert pool is not None and not error
+    derived = pre_ready.reviewer_chain_worst_case_seconds(pool)
+
+    assert orchestrator.INDEPENDENT_REVIEW_OPPORTUNITY_SECONDS == derived
+    assert orchestrator.independent_review_opportunity_seconds() == derived
+
+    with pytest.raises(AttributeError):
+        _unknown = orchestrator.NOT_A_REAL_ORCHESTRATOR_ATTRIBUTE
 
 
 def test_a_missing_run_id_refuses_before_any_collector_is_dispatched(monkeypatch):
@@ -147,6 +444,7 @@ def test_a_missing_run_id_refuses_before_any_collector_is_dispatched(monkeypatch
     monkeypatch.setattr(orchestrator, "reviewer_pool_config_digest", lambda: "d" * 64, raising=False)
     monkeypatch.setattr(orchestrator, "current_run_id", lambda: None, raising=False)
     monkeypatch.setattr(orchestrator, "publish_cycle", lambda *_args, cycle: stored.update(cycle=cycle), raising=False)
+    monkeypatch.setattr(orchestrator, "collector_liveness", lambda *_args: ("missing", 0), raising=False)
     monkeypatch.setattr(
         orchestrator,
         "dispatch_collector",
@@ -293,7 +591,13 @@ def test_absent_cycle_read_does_not_duplicate_an_already_active_correlated_colle
     result = orchestrator.ensure_collector("owner/repo", "token", 472, HEAD)
 
     assert dispatches == []
+    # A correlated collector run already active for this exact identity is
+    # authoritative even when the commit-status read raced and reported the
+    # cycle absent, so no second dispatch is issued -- but the durable cycle
+    # record is still published, because that record is what makes a dispatch
+    # that is already in flight recoverable rather than duplicable.
     assert result.trigger_id == 999
+    assert result.state == "WAITING_FOR_REVIEWER"
     assert published
 
 
@@ -339,6 +643,9 @@ def test_unreadable_collector_correlation_evidence_refuses_to_risk_a_duplicate_d
 
     monkeypatch.setattr(orchestrator, "collector_liveness", unavailable, raising=False)
 
+    # Unreadable correlation evidence is not evidence that no collector exists,
+    # so it must fail closed rather than authorise a dispatch it cannot rule out
+    # as a duplicate.
     with pytest.raises(RuntimeError, match="correlation evidence unavailable"):
         orchestrator.ensure_collector("owner/repo", "token", 472, HEAD)
 
@@ -554,6 +861,208 @@ def test_governance_review_workflow_keeps_only_read_access_to_actions():
     assert "python scripts/hunter_review_orchestrator.py" not in path.read_text(encoding="utf-8")
 
 
+def _pull_request_target_types(workflow_name):
+    document = yaml.safe_load(
+        pathlib.Path(REPOSITORY_ROOT, ".github/workflows", workflow_name).read_text(encoding="utf-8")
+    )
+    triggers = document.get("on", document.get(True))
+    return triggers, triggers.get("pull_request_target") or {}
+
+
+def test_reconcile_wakes_when_a_pr_becomes_ready_for_review():
+    """Issue #534: Draft -> Ready must promptly reach trusted reconciliation.
+
+    ``Hunter / Merge Readiness`` reacts to ``ready_for_review`` immediately
+    (see ``hunter-merge-readiness.yml``); this workflow -- the only one that
+    runs the privileged orchestrator -- must react to the same transition so
+    a Ready PR is never left waiting on the next unrelated event or the
+    30-minute schedule for its first orchestration cycle to exist.
+    ``pull_request_target`` (not ``pull_request``) is required here: it is
+    resolved from the base branch's copy of this file, so it is not
+    candidate-controlled -- already proven generically by
+    ``test_candidate_controlled_triggers_are_read_from_every_declaration_shape``
+    above for exactly this trigger shape.
+    """
+    path = pathlib.Path(REPOSITORY_ROOT, ".github/workflows/hunter-governance-reconcile.yml")
+    document = yaml.safe_load(path.read_text(encoding="utf-8"))
+
+    triggers = document.get("on", document.get(True))
+    pull_request_target = triggers.get("pull_request_target")
+    assert pull_request_target is not None, "reconcile has no pull_request_target trigger"
+    assert pull_request_target.get("branches") == ["main"]
+    assert "ready_for_review" in pull_request_target.get("types", [])
+    # Drafting a PR is a withdrawal of review, not a request for it, and the
+    # transition back to Ready is what carries the request; this trigger must
+    # never also wake on the transition that removes it.
+    assert "converted_to_draft" not in pull_request_target.get("types", [])
+
+    text = path.read_text(encoding="utf-8")
+    assert '"${event_name}" == "pull_request_target"' in text
+    checkout = document["jobs"]["reconcile"]["steps"][0]
+    assert checkout["with"]["ref"] == "main"
+
+
+def test_reconcile_wakes_when_a_pr_head_is_pushed():
+    """Issue #534 recurrence, PR #535 exact HEAD 51108333821ab42d1ab7aa0b812a72d890f73795.
+
+    ``synchronize`` is the lifecycle event that *changes a PR's exact HEAD*,
+    and Merge Readiness reacts to it immediately. Without the same trigger
+    here, a pushed head has no trusted event-driven path to the orchestrator
+    that must produce its exact-head cycle, and readiness correctly reports
+    MALFORMED_REVIEW: WAITING_FOR_REVIEWER against a prerequisite nobody was
+    asked to create. The `workflow_run` reconciliations that eventually ran
+    (36393517015, 36393716517) are recovery: they depend on an unrelated
+    workflow completing first, so they cannot be the primary mechanism.
+    """
+    _triggers_block, pull_request_target = _pull_request_target_types("hunter-governance-reconcile.yml")
+    assert pull_request_target.get("branches") == ["main"]
+    assert "synchronize" in pull_request_target.get("types", [])
+
+
+def test_reconcile_wakes_on_every_lifecycle_event_that_needs_or_moves_the_exact_head():
+    """DFF-045, generalised: the prerequisite must keep pace with the gate.
+
+    Whenever Merge Readiness reacts immediately to a transition that makes
+    review required or moves the exact HEAD it is judged against, the trusted
+    workflow that owns the orchestration prerequisite must react to the same
+    transition directly. This asserts the two triggers cannot drift apart
+    again for a third event variant.
+    """
+    _readiness_triggers, readiness = _pull_request_target_types("hunter-merge-readiness.yml")
+    _reconcile_triggers, reconcile = _pull_request_target_types("hunter-governance-reconcile.yml")
+
+    for event_type in ("ready_for_review", "synchronize"):
+        assert event_type in readiness.get("types", []), f"Merge Readiness no longer reacts to {event_type}"
+        assert event_type in reconcile.get(
+            "types", []
+        ), f"{event_type} wakes Merge Readiness but not the trusted orchestration prerequisite"
+    assert reconcile.get("branches") == readiness.get("branches") == ["main"]
+
+
+def test_a_pushed_head_reaches_orchestration_as_the_exact_current_head(monkeypatch):
+    """The target is trusted state, never the event payload or a stale head.
+
+    ``ensure_current`` re-derives the current HEAD from the pull-request API
+    on every call, so the reconcile step can pass only ``--pr`` and a pushed
+    head is still reconciled against the head GitHub reports -- including a
+    head pushed again between the event and the run.
+    """
+    pushed = "b" * 40
+    monkeypatch.setattr(
+        orchestrator,
+        "request_json",
+        lambda *_args: {"state": "open", "draft": False, "head": {"sha": pushed}},
+    )
+    monkeypatch.setattr(
+        orchestrator,
+        "review_request_state",
+        lambda *_args: orchestrator.ReviewRequestReadiness(True, "d" * 64, "", "success"),
+        raising=False,
+    )
+    monkeypatch.setattr(orchestrator, "current_remediation_generation", lambda *_args: orchestrator.BASE_GENERATION_ID)
+    targets = []
+    monkeypatch.setattr(
+        orchestrator,
+        "ensure_collector",
+        lambda _repo, _token, pr_number, head_sha, *args: targets.append((pr_number, head_sha)),
+        raising=False,
+    )
+
+    orchestrator.ensure_current("owner/repo", "token", 535)
+
+    assert targets == [(535, pushed)]
+
+    # The privileged step itself must not be able to name a head at all.
+    text = pathlib.Path(REPOSITORY_ROOT, ".github/workflows/hunter-governance-reconcile.yml").read_text(
+        encoding="utf-8"
+    )
+    assert re.search(
+        r"python scripts/hunter_review_orchestrator\.py ensure\s*\\\n\s*--pr \"\$\{pr_number\}\" \\\n\s*"
+        r"--repository \"\$\{GITHUB_REPOSITORY\}\"",
+        text,
+    ), "the ensure call must pass only the PR, so the orchestrator re-derives the exact head"
+    assert "--head" not in text
+
+
+def _assert_draft_pr_starts_no_review(monkeypatch, pr_number):
+    """A Draft PR short-circuits before the review-request lookup and before
+    any collector dispatch."""
+
+    monkeypatch.setattr(
+        orchestrator,
+        "request_json",
+        lambda *_args: {"state": "open", "draft": True, "head": {"sha": HEAD}},
+    )
+    prerequisite_calls = []
+    monkeypatch.setattr(
+        orchestrator,
+        "review_request_state",
+        lambda *_args: prerequisite_calls.append(True)
+        or orchestrator.ReviewRequestReadiness(True, "d" * 64, "", "success"),
+        raising=False,
+    )
+    dispatch_calls = []
+    monkeypatch.setattr(orchestrator, "ensure_collector", lambda *_args: dispatch_calls.append(True), raising=False)
+
+    assert orchestrator.ensure_current("owner/repo", "token", pr_number) is None
+    assert prerequisite_calls == []
+    assert dispatch_calls == []
+
+
+def test_a_pushed_head_on_a_draft_pr_dispatches_nothing(monkeypatch):
+    """``synchronize`` fires for Draft PRs; that must not start a review cycle.
+
+    Unlike ``ready_for_review``, which GitHub only fires on the transition out
+    of Draft, ``synchronize`` fires for every push to a Draft branch. The
+    trigger therefore cannot be the Draft guard: the guard is the orchestrator's
+    own draft short-circuit, which runs before the review-request lookup and
+    before any dispatch.
+    """
+    _assert_draft_pr_starts_no_review(monkeypatch, 535)
+
+
+def test_unrelated_pull_request_events_do_not_dispatch_reviewer_orchestration():
+    """The trigger set is exactly the review-relevant lifecycle events.
+
+    Waking privileged orchestration on events that cannot change a PR's exact
+    HEAD or its review-required state spends `actions: write` budget and can
+    mint cycles for PRs that have no review request to satisfy.
+    """
+    triggers, pull_request_target = _pull_request_target_types("hunter-governance-reconcile.yml")
+    assert set(pull_request_target.get("types", [])) == {"ready_for_review", "synchronize"}
+    for unrelated in ("closed", "reopened", "labeled", "unlabeled", "edited", "assigned", "converted_to_draft"):
+        assert unrelated not in pull_request_target.get("types", []), unrelated
+    # Nothing else may route an arbitrary pull request event into this job.
+    for other in ("pull_request", "issue_comment", "pull_request_review_thread", "check_run", "check_suite"):
+        assert other not in triggers, other
+
+
+def test_synchronize_reconciliation_never_executes_candidate_code():
+    """The new trigger must stay on the trusted default-branch path.
+
+    `pull_request_target` resolves this file from the base branch and the job
+    checks out `main` with `persist-credentials: false`, so the privileged
+    `actions: write` token is never used to run anything a PR controls.
+    """
+    document = yaml.safe_load(
+        pathlib.Path(REPOSITORY_ROOT, ".github/workflows/hunter-governance-reconcile.yml").read_text(encoding="utf-8")
+    )
+    assert "pull_request" not in _triggers(document)
+
+    steps = document["jobs"]["reconcile"]["steps"]
+    checkouts = [step for step in steps if str(step.get("uses", "")).startswith("actions/checkout")]
+    assert checkouts
+    for step in checkouts:
+        assert step["with"]["ref"] == "main"
+        assert step["with"]["persist-credentials"] is False
+
+    text = pathlib.Path(REPOSITORY_ROOT, ".github/workflows/hunter-governance-reconcile.yml").read_text(
+        encoding="utf-8"
+    )
+    assert "github.event.pull_request.head.sha" not in text
+    assert "actions/checkout@${{" not in text
+
+
 def test_orchestration_bootstraps_only_from_the_trusted_default_branch_checkout():
     text = pathlib.Path(REPOSITORY_ROOT, ".github/workflows/hunter-governance-reconcile.yml").read_text(
         encoding="utf-8"
@@ -664,8 +1173,24 @@ def test_current_pr_waits_for_trusted_review_prerequisites(monkeypatch):
     assert calls == []
 
 
-def _readiness_harness(monkeypatch, *, prerequisite_state, request_valid):
-    """Wire the exact-head prerequisites the reconcile transition reads."""
+def test_current_pr_never_dispatches_for_a_draft_pr(monkeypatch):
+    """Issue #534, requirement 5: a Draft PR must never start candidate review.
+
+    This is checked directly on the PR's own state rather than left to the
+    indirect fact that a Draft head typically has no pre-ready review request
+    yet: the draft check runs, and short-circuits, before that lookup.
+    """
+    _assert_draft_pr_starts_no_review(monkeypatch, 472)
+
+
+def _readiness_harness(monkeypatch, *, prerequisite_state, request_valid, request_state="present"):
+    """Wire the exact-head prerequisites the reconcile transition reads.
+
+    `prerequisite_state` is the trusted preflight/admission state, returned
+    rather than made unreachable: the orchestrator consults it for every pull
+    request outside the bounded Review Opportunity migration identity, so a
+    test that suppressed it would prove nothing about the real path.
+    """
 
     head = HEAD
     monkeypatch.setattr(
@@ -681,9 +1206,14 @@ def _readiness_harness(monkeypatch, *, prerequisite_state, request_valid):
     monkeypatch.setattr(
         governance, "read_trusted_upgrade_status", lambda *_args: (prerequisite_state, "prereq detail"), raising=False
     )
-    monkeypatch.setattr(
-        governance, "read_head_pre_ready_review", lambda *_args: ("present", document, None), raising=False
-    )
+    if request_state == "present":
+        monkeypatch.setattr(
+            governance, "read_head_pre_ready_review", lambda *_args: ("present", document, None), raising=False
+        )
+    else:
+        monkeypatch.setattr(
+            governance, "read_head_pre_ready_review", lambda *_args: (request_state, None, "absent"), raising=False
+        )
     monkeypatch.setattr(
         governance,
         "valid_current_review_request",
@@ -739,7 +1269,6 @@ def test_blocked_review_request_reports_the_reason_and_never_dispatches(monkeypa
     """PR #540: trusted preflight already passed but the exact-head pre-ready
     review request is not valid for this head. A reconcile must not report
     success here, and it must not spend reviewer capacity either."""
-
     _readiness_harness(monkeypatch, prerequisite_state="success", request_valid=False)
     stored = _collector_harness(monkeypatch)
 
@@ -775,13 +1304,13 @@ def test_new_head_starts_orchestration_once_after_its_prerequisite_completes(mon
     """
 
     stored = _collector_harness(monkeypatch)
-    # 1 + 2: same exact head, prerequisite incomplete -> no dispatch, no cycle.
-    _readiness_harness(monkeypatch, prerequisite_state="pending", request_valid=False)
+    # 1 + 2: same exact head, request not yet committed -> no dispatch, no cycle.
+    _readiness_harness(monkeypatch, prerequisite_state="pending", request_valid=False, request_state="absent")
     assert orchestrator.ensure_current("owner/repo", "token", 472) is None
     assert stored["dispatches"] == 0
     assert stored["cycle"] is None
 
-    # 3 + 4 + 5 + 6: prerequisite succeeded and the request now binds this head.
+    # 3 + 4 + 5 + 6: the request is now committed and binds this exact head.
     _readiness_harness(monkeypatch, prerequisite_state="success", request_valid=True)
     cycle = orchestrator.ensure_current("owner/repo", "token", 472)
 
@@ -801,7 +1330,7 @@ def test_incomplete_prerequisite_never_dispatches_and_stays_retryable(monkeypatc
     keep the benign pending exit so the ordinary dependency wait is not turned
     into a red reconcile."""
 
-    _readiness_harness(monkeypatch, prerequisite_state="pending", request_valid=False)
+    _readiness_harness(monkeypatch, prerequisite_state="pending", request_valid=False, request_state="absent")
     stored = _collector_harness(monkeypatch)
     monkeypatch.setattr(sys, "argv", ["orchestrator", "ensure", "--repository", "owner/repo", "--pr", "472"])
 

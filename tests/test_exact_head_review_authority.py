@@ -447,6 +447,82 @@ def test_authority_state_malformed_when_the_artifact_is_unreadable() -> None:
     assert verdict.state == "MALFORMED_REVIEW"
 
 
+def test_a_live_pending_orchestration_cycle_is_not_misclassified_as_malformed() -> None:
+    """Issue #534 root cause #2 (live PR #535 failure).
+
+    The shared verifier legitimately reports a third outcome, "pending", when a
+    review request is committed and bound to this exact head but no reviewer has
+    adopted it yet while a trusted exact-head orchestration cycle is genuinely
+    still WAITING_FOR_REVIEWER/REVIEW_IN_PROGRESS/FAILOVER_IN_PROGRESS. The
+    resolver only ever handled "success" explicitly and otherwise searched for a
+    REVIEW_AUTHORITY_STATES prefix; none of those states is ever the prefix of a
+    pending detail, so this ordinary wait silently became a hard MALFORMED_REVIEW
+    failure -- exactly what Hunter Merge Readiness reported live on PR #535 after
+    the missing ready_for_review trigger (the earlier #534 fix) started publishing
+    a real orchestration cycle.
+    """
+    verdict = readiness.resolve_review_authority(
+        ("pending", "WAITING_FOR_REVIEWER: no trusted exact-head orchestration cycle has been published")
+    )
+    # A live wait is a third outcome, not a hard failure. The tri-state landed on
+    # main (#541) is the authority here: a pending exact-head cycle is reported as
+    # PENDING_VERIFICATION so readiness blocks on the wait and resolves itself.
+    assert verdict.state != "MALFORMED_REVIEW"
+    assert verdict.state == readiness.PENDING_VERIFICATION
+
+
+def test_review_authority_state_waits_while_a_committed_review_request_is_unadopted(monkeypatch) -> None:
+    """End-to-end reproduction of the live PR #535 failure through review_authority_state.
+
+    A review-request document (produced by `prepare_request`, never `record`) is
+    committed and bound to this exact head; no reviewer has adopted it yet; the
+    trusted orchestration cycle is genuinely WAITING_FOR_REVIEWER. Before the fix,
+    Hunter Merge Readiness reported this as "failure" (MALFORMED_REVIEW), a state
+    that can never resolve on its own since no fix a contributor could push
+    changes it -- only a reviewer that the broken contract prevented from ever
+    being reachable as "pending" could. After the fix this must be "pending".
+    """
+    _use_pool(monkeypatch, _pool())
+    claims = review.build_claims(
+        issue="534",
+        base_ref="main",
+        base_sha=BASE,
+        changes=CANDIDATE_CHANGES,
+        acceptance_criteria=(),
+        defect_families=(),
+        findings=(),
+        adversarial_dimensions=tuple(review.REQUIRED_ADVERSARIAL_DIMENSIONS),
+    )
+    claims_id = review.review_id(claims)
+    document = {
+        "schema": review.REVIEW_SCHEMA,
+        "review_id": claims_id,
+        "claims": claims,
+        "review_request": {"schema": "hunter.review-request.v1", "claims_id": claims_id},
+    }
+    _install_governance(monkeypatch, document=document, state="present", comments=())
+    monkeypatch.setattr(readiness, "unresolved_review_threads", lambda _number: ())
+    monkeypatch.setattr(readiness, "changes_requested_reviewers", lambda _number: ())
+    monkeypatch.setattr(core, "check_reviewer_dispositions", lambda: (True, ""))
+    monkeypatch.setattr(
+        core,
+        "pending_review_authority_state",
+        lambda *_a: ("pending", "WAITING_FOR_REVIEWER: no trusted exact-head orchestration cycle has been published"),
+    )
+    monkeypatch.setattr(
+        core,
+        "review_orchestration_state",
+        lambda *_a: ("WAITING_FOR_REVIEWER", "no trusted exact-head orchestration cycle has been published"),
+    )
+    monkeypatch.setenv("GH_REPO", "owner/repo")
+    monkeypatch.setenv("GH_TOKEN", "dummy")
+
+    state, message = readiness.review_authority_state(HEAD, PR_NUMBER)
+
+    assert state == "pending"
+    assert "WAITING_FOR_REVIEWER" in message
+
+
 def test_authority_state_pool_not_exhausted_for_a_guard_that_skips_an_alternate() -> None:
     doc = _review_document(authority=_authority("opencode", attempts=[_attempt()]))
     guard = ("present", doc, None)
@@ -1478,6 +1554,64 @@ def test_review_request_is_content_bound_without_committed_authority(monkeypatch
         "claims_id": document["review_id"],
     }
     assert document["claims"]["review_target"] == [change.document() for change in CANDIDATE_CHANGES]
+
+
+def _request_judgement(*, families: tuple[str, ...] = ("DFF-010", "DFF-013")) -> dict[str, Any]:
+    return {
+        "acceptance_criteria": [
+            {"id": "AC-1", "criterion": "the gate blocks Ready", "verdict": "satisfied", "evidence": "this suite"}
+        ],
+        "adversarial_dimensions": list(review.REQUIRED_ADVERSARIAL_DIMENSIONS),
+        "defect_families": [{"family": name, "outcome": "clear", "evidence": "swept"} for name in families],
+        "findings": [],
+    }
+
+
+def test_a_foreign_review_request_document_is_rejected_for_a_different_candidate(monkeypatch) -> None:
+    """Issue #534, root cause 2, live: PR #535's exact failure.
+
+    A `.hunter/pre-ready-hostile-review.json` request left committed by an
+    unrelated, already-merged PR (base/content it does not describe) is found
+    at the current exact head -- the file's mere presence proves nothing;
+    content binding does. `hunter_review_orchestrator.ensure_current` reached
+    exactly this verdict for PR #535 and correctly did not dispatch a
+    collector cycle: this is the fail-closed behaviour proven here directly,
+    not a defect.
+    """
+    foreign_base = "9" * 40
+    foreign_changes = (_change("docs/unrelated-file.md", "8" * 40, "added"),)
+    monkeypatch.setattr(review, "local_changes", lambda *_a, **_k: foreign_changes)
+    foreign_document = review.prepare_request(
+        issue="532", base=foreign_base, head=HEAD, base_ref="main", judgement=_request_judgement(families=())
+    )
+
+    verdict = review.verify_review_request(
+        foreign_document, base_sha=BASE, changes=CANDIDATE_CHANGES, families=FAMILIES, head_sha=HEAD
+    )
+
+    assert verdict.ok is False
+    assert verdict.state == "stale"
+
+
+def test_a_freshly_prepared_review_request_bound_to_the_current_candidate_is_valid(monkeypatch) -> None:
+    """The paired positive and the fix: a request prepared for THIS candidate.
+
+    `hunter_pre_ready_review.py --request` -- run once by the contributor
+    before the PR reaches Ready -- produces exactly this document shape.
+    Once committed at the exact head, the same `verify_review_request` call
+    `valid_current_review_request` makes finds it valid, which is what lets
+    `ensure_current` proceed to `ensure_collector` instead of no-op'ing.
+    """
+    monkeypatch.setattr(review, "local_changes", lambda *_a, **_k: CANDIDATE_CHANGES)
+    document = review.prepare_request(
+        issue="534", base=BASE, head=HEAD, base_ref="main", judgement=_request_judgement()
+    )
+
+    verdict = review.verify_review_request(
+        document, base_sha=BASE, changes=CANDIDATE_CHANGES, families=FAMILIES, head_sha=HEAD
+    )
+
+    assert verdict.ok is True, verdict.reason
 
 
 def _fallback_pool(login: str = "fafa33") -> dict[str, Any]:

@@ -89,13 +89,15 @@ def scenario_a(candidate_root: Path, fixture: dict[str, Any]) -> dict[str, Any]:
     """A pending cycle always reaches a terminal state inside a bounded budget.
 
     The candidate's own contract for this (see
-    ``INDEPENDENT_REVIEW_OPPORTUNITY_SECONDS``) is that one global opportunity
+    ``independent_review_opportunity_seconds``) is that one global opportunity
     budget spans the whole reviewer chain, and that a completed or timed-out
-    opportunity must never leave the exact-head status pending forever. This
-    scenario validates that contract through the candidate's real
-    ``ensure_collector`` and asserts nothing about how the budget is *derived*,
-    because production is the authority on its own budget and does not promise
-    the candidate reviewer pool's chain length:
+    opportunity must never leave the exact-head status pending forever. That
+    budget is derived from the candidate's own trusted reviewer pool, so it is
+    read by calling the candidate's own derivation rather than by reading a
+    module-level constant. This scenario validates the contract through the
+    candidate's real ``ensure_collector`` and asserts nothing about how the
+    budget is *derived*, because production is the authority on its own budget
+    and does not promise the candidate reviewer pool's chain length:
 
     1. The published opportunity is a real bound: a strictly positive, finite
        integer, not an absent or open-ended one.
@@ -111,6 +113,15 @@ def scenario_a(candidate_root: Path, fixture: dict[str, Any]) -> dict[str, Any]:
     would only prove some threshold exists between them: a candidate whose real
     cutoff is 1.5x its declared budget would pass such a check while still
     leaving an exact head pending well past the bound it advertises.
+
+    The boundary is straddle-probed with a cycle whose correlated collector is
+    NOT active, because that is the case where the nominal budget alone governs.
+    A second, separate probe then covers the case production added for it:
+    ``started_at`` is written before dispatch, so queue delay is spent out of the
+    budget while the collector is still queued or in progress. Production must
+    not finalize such a cycle on the nominal deadline, and must still finalize it
+    once the grader-owned ``ACTIVE_COLLECTOR_CEILING_MULTIPLIER`` ceiling is
+    passed -- so the wait stays bounded rather than becoming an unbounded one.
     """
 
     orchestrator = _import_candidate(candidate_root, "hunter_review_orchestrator")
@@ -119,10 +130,10 @@ def scenario_a(candidate_root: Path, fixture: dict[str, Any]) -> dict[str, Any]:
     digest = fixture["config_digest"]
     run_id = int(fixture["run_id"])
 
-    budget = getattr(orchestrator, "INDEPENDENT_REVIEW_OPPORTUNITY_SECONDS", None)
+    budget = orchestrator.independent_review_opportunity_seconds()
     assert isinstance(budget, int) and not isinstance(budget, bool), (
         "the candidate must publish an integer review-opportunity budget "
-        f"(INDEPENDENT_REVIEW_OPPORTUNITY_SECONDS), got {budget!r}"
+        f"(independent_review_opportunity_seconds()), got {budget!r}"
     )
     assert budget > 0, f"the review-opportunity budget must be strictly positive, got {budget}s"
 
@@ -191,6 +202,30 @@ def scenario_a(candidate_root: Path, fixture: dict[str, Any]) -> dict[str, Any]:
     assert state["dispatches"] == 0, "a live cycle still inside the opportunity must not be re-dispatched"
     assert state["published"] == [], "a live cycle still inside the opportunity must not be republished"
 
+    # A correlated collector that is genuinely active must not be finalized on
+    # the nominal deadline: queue delay is spent out of the budget before the
+    # collector starts, and finalizing there would end the opportunity while a
+    # live collector can still publish a competing result for this exact head.
+    active_over_budget = _recorded(above_age)
+    orchestrator.read_cycle = lambda *_a: ("present", active_over_budget, None)
+    orchestrator.collector_liveness = lambda *_a: ("active", 1)
+    state["dispatches"] = 0
+    state["published"].clear()
+    deferred = orchestrator.ensure_collector("owner/repo", "token", pr_number, head)
+    assert deferred.state != "REVIEW_TIMED_OUT", (
+        f"a pending cycle {above_age}s old with a correlated collector still active must not be finalized as "
+        f"timed out on the nominal {budget}s budget -- it stayed on the nominal path instead -- because queue "
+        "and dispatch delay are spent out of that budget before the collector starts"
+    )
+    assert (
+        deferred.state == active_over_budget.state
+    ), f"an active correlated collector must leave the cycle in its existing state, got {deferred.state!r}"
+    assert state["published"] == [], (
+        "withholding a timeout must publish nothing at all, so no competing terminal result can exist "
+        f"for this head, published {[c.state for c in state['published']]}"
+    )
+    assert state["dispatches"] == 0, "an active correlated collector must not be re-dispatched"
+
     # A still-running correlated collector may hold the cycle open past the
     # nominal budget, but never without bound: the trusted grader -- not the
     # candidate -- owns the ceiling, so a wedged or perpetually active run
@@ -219,6 +254,7 @@ def scenario_a(candidate_root: Path, fixture: dict[str, Any]) -> dict[str, Any]:
         "above_boundary_seconds": above_age,
         "timed_out_state": timed_out.state,
         "in_opportunity_state": still_pending.state,
+        "active_deferred_state": deferred.state,
         "active_ceiling_seconds": ceiling_age,
         "active_ceiling_state": ceiling_timed_out.state,
     }
@@ -267,7 +303,7 @@ def scenario_b(candidate_root: Path, fixture: dict[str, Any]) -> dict[str, Any]:
 
     grace = int(orchestrator.COLLECTOR_LIVENESS_GRACE_SECONDS)
     max_dispatches = int(orchestrator.MAX_COLLECTOR_DISPATCHES)
-    opportunity = int(orchestrator.INDEPENDENT_REVIEW_OPPORTUNITY_SECONDS)
+    opportunity = int(orchestrator.independent_review_opportunity_seconds())
     assert max_dispatches >= 1, f"the collector dispatch budget must allow at least one dispatch, got {max_dispatches}"
     assert 0 < grace < opportunity, (
         f"the collector liveness grace ({grace}s) must be shorter than the review opportunity "

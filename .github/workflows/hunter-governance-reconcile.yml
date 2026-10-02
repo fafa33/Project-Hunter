@@ -9,6 +9,38 @@ name: Hunter Governance Review Reconcile
 # It has no `pull_request` trigger, so GitHub always runs the trusted
 # default-branch version of this file: a candidate cannot reach this permission
 # by editing a workflow on its own branch.
+#
+# Issue #534: Draft -> Ready for Review is a lifecycle transition that
+# `Hunter / Merge Readiness` reacts to immediately (it listens for
+# `ready_for_review`), but until this trigger existed, reconciliation here
+# only happened on the next push/review/workflow_run event or the 30-minute
+# schedule -- readiness could wake and report a missing orchestration cycle
+# before one had a chance to exist. `pull_request_target` is deliberately
+# used instead of `pull_request`: GitHub resolves a `pull_request_target`
+# workflow from the base branch's copy of the file, so this stays on the same
+# trusted-default-branch execution path as every other trigger above, and a
+# candidate branch cannot grant itself `actions: write` by editing this file.
+#
+# Issue #534 recurrence, same defect, new event variant: `synchronize` is the
+# other transition `Hunter / Merge Readiness` reacts to immediately, and it is
+# the one that changes a PR's exact HEAD. Observing live on PR #535 at exact
+# HEAD 51108333821ab42d1ab7aa0b812a72d890f73795: a push at 07:40:33Z woke
+# Merge Readiness, Trusted Preflight Upgrade and Governance Agent Preflight,
+# but this workflow had no direct `synchronize` trigger, so no trusted
+# event-driven path created the exact-head orchestration prerequisite for the
+# new HEAD. The only paths left were the `workflow_run` reconciliations that
+# depend on a *different* workflow completing first, and the 30-minute
+# schedule -- recovery fallbacks, not a primary mechanism, and Merge Readiness
+# had already correctly published MALFORMED_REVIEW: WAITING_FOR_REVIEWER.
+#
+# `synchronize` is the exact-HEAD-changing variant of the same wiring
+# asymmetry, so it belongs in the same trusted trigger. Draft PRs also fire
+# `synchronize` (unlike `ready_for_review`, which fires only on leaving Draft);
+# that is safe because the Draft short-circuit lives in the trusted orchestrator
+# itself (`hunter_review_orchestrator.ensure_current`), which returns before
+# any review-request lookup or dispatch. Exact-head binding is unaffected: the
+# step passes only `--pr`, and the orchestrator re-derives the current HEAD from
+# trusted GitHub state rather than from this event's payload.
 
 on:
   push:
@@ -32,6 +64,12 @@ on:
       - created
       - edited
       - deleted
+  pull_request_target:
+    branches:
+      - main
+    types:
+      - ready_for_review
+      - synchronize
   schedule:
     - cron: "*/30 * * * *"
   workflow_dispatch:
@@ -78,7 +116,7 @@ jobs:
           # multiplies API traffic and can exhaust the installation rate limit.
           # Scheduled/manual recovery remains the bounded full-sweep path.
           event_name="${{ github.event_name }}"
-          if [[ "${event_name}" == "pull_request_review" || "${event_name}" == "pull_request_review_comment" ]]; then
+          if [[ "${event_name}" == "pull_request_review" || "${event_name}" == "pull_request_review_comment" || "${event_name}" == "pull_request_target" ]]; then
             pr_numbers="${{ github.event.pull_request.number }}"
           elif [[ "${event_name}" == "workflow_run" && "${EVENT_WORKFLOW_RUN_NAME}" == "Hunter Governance Review" ]]; then
             # A PR synchronize event runs the read-only governance workflow first.

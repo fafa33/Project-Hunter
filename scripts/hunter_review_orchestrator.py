@@ -42,9 +42,18 @@ MAX_COLLECTOR_DISPATCHES = 3
 #: only once the cycle is older than this, so an ordinary listing lag cannot be
 #: mistaken for a dead collector and duplicate the dispatch.
 COLLECTOR_LIVENESS_GRACE_SECONDS = 180
-# One global opportunity budget across the whole reviewer chain. A completed or
-# timed-out opportunity must never leave the exact-head status pending forever.
-INDEPENDENT_REVIEW_OPPORTUNITY_SECONDS = 15 * 60
+#: A correlated collector that is genuinely queued or in progress must not be
+#: finalized as timed out merely because the nominal opportunity budget expired.
+#: That budget starts at dispatch, so GitHub's queue delay is spent out of it while
+#: the collector has not begun running, and the collector's own job lifetime
+#: (``timeout-minutes``) is counted from when it starts -- publishing
+#: REVIEW_TIMED_OUT in that window ends the opportunity while a live collector can
+#: still publish a competing result for the same exact head. The cycle is therefore
+#: given one further full budget window before a timeout becomes legitimate. That
+#: bound is derived from the same canonical reviewer-chain budget and is checked
+#: unconditionally, so the wait stays bounded at twice that budget whether the
+#: liveness evidence reads active, dead, or cannot be read at all.
+ACTIVE_COLLECTOR_GRACE_MULTIPLIER = 2
 TERMINAL_NONBLOCKING_STATES = frozenset({"REVIEW_TIMED_OUT", "REVIEWER_UNAVAILABLE", "POOL_EXHAUSTED"})
 PENDING_STATES = frozenset({"WAITING_FOR_REVIEWER", "REVIEW_IN_PROGRESS", "FAILOVER_IN_PROGRESS", "POOL_EXHAUSTED"})
 
@@ -651,6 +660,78 @@ def _older_than(started_at: str, seconds: int) -> bool:
     return (datetime.now(UTC) - started).total_seconds() >= seconds
 
 
+def _active_collector_still_running(repository: str, token: str, cycle: ReviewCycle, budget: int) -> bool:
+    """Whether a correlated collector may still legitimately be running.
+
+    ``started_at`` is written *before* the collector is dispatched, so the nominal
+    opportunity budget is already partly spent on GitHub's queue and dispatch delay
+    by the time the collector is running. Finalizing on that nominal deadline alone
+    would end the opportunity while a correlated collector is genuinely queued or
+    in progress, and that collector can later publish a competing result for the
+    same exact head. Its job lifetime (``timeout-minutes``) is counted from when it
+    starts, not from when it was requested.
+
+    Such a collector is therefore given one further full budget window
+    (``ACTIVE_COLLECTOR_GRACE_MULTIPLIER``). That bound is evaluated *before* any
+    liveness evidence is read, so it holds even when that evidence is unreadable:
+    the wait is bounded at twice the canonical budget, never open-ended, and an
+    eventually genuine timeout still happens.
+
+    Liveness is read only for this cycle's own exact (pull request, head,
+    generation), so exact-head and generation binding are neither relaxed nor
+    substituted. Unreadable evidence is not evidence that no collector is running,
+    so it defers rather than finalizing; the bound above is what keeps that
+    deferral from becoming a permanent wait.
+    """
+
+    if _older_than(cycle.started_at, budget * ACTIVE_COLLECTOR_GRACE_MULTIPLIER):
+        return False
+    try:
+        liveness, _count = collector_liveness(repository, token, cycle.pr_number, cycle.head_sha, cycle.generation_id)
+    except transport.GitHubRequestError as exc:
+        print(f"Collector liveness evidence unavailable; not finalizing a timeout: {exc}", file=sys.stderr)
+        return True
+    return liveness == "active"
+
+
+def independent_review_opportunity_seconds() -> int:
+    """One global opportunity budget across the whole reviewer chain.
+
+    A completed or timed-out opportunity must never leave the exact-head status
+    pending forever, but the budget itself must never be a second, disconnected
+    magic number either: it is derived from the same ``CODE_WRITE_POLICY.json``
+    reviewer pool that the collector workflow's own declared lifetime is
+    validated against (see
+    ``test_collector_workflow_lifetime_covers_the_reviewer_chain_budget``), so
+    raising or lowering any one reviewer's configured budget can never leave
+    this orchestrator-side timeout silently out of sync with what the pool
+    actually configures.
+    """
+
+    pool, error = pre_ready.load_reviewer_pool()
+    if pool is None or error:
+        raise RuntimeError(f"reviewer pool unavailable: {error}")
+    return pre_ready.reviewer_chain_worst_case_seconds(pool)
+
+
+def __getattr__(name: str) -> Any:
+    """Derive ``INDEPENDENT_REVIEW_OPPORTUNITY_SECONDS`` on demand.
+
+    The budget is a derivation, not a declared constant, but trusted
+    default-branch readers still reach it as a module attribute -- notably the
+    trusted orchestrator replay harness, which imports this *candidate's* module
+    and reads that name while its own scenario logic is still main's version.
+    Resolving it here rather than assigning it at import keeps every such reader
+    working across the cutover, keeps the value pool-derived instead of a second
+    hand-set number, and surfaces an unreadable reviewer pool at the point of use
+    instead of breaking module import for every other caller.
+    """
+
+    if name == "INDEPENDENT_REVIEW_OPPORTUNITY_SECONDS":
+        return independent_review_opportunity_seconds()
+    raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
+
+
 def collector_needs_dispatch(repository: str, token: str, cycle: ReviewCycle) -> bool:
     """Whether a pending cycle has no live collector and may be re-dispatched.
 
@@ -767,20 +848,32 @@ def ensure_collector(
             if existing.state in {"REVIEW_CLEAR", "FINDINGS_OPEN"} | TERMINAL_NONBLOCKING_STATES:
                 return existing
             if existing.state in PENDING_STATES and _older_than(
-                existing.started_at, INDEPENDENT_REVIEW_OPPORTUNITY_SECONDS
+                existing.started_at, independent_review_opportunity_seconds()
             ):
-                terminal = ReviewCycle(
-                    pr_number=existing.pr_number,
-                    head_sha=existing.head_sha,
-                    state="REVIEW_TIMED_OUT",
-                    provider_id=existing.provider_id,
-                    trigger_id=existing.trigger_id,
-                    started_at=existing.started_at,
-                    config_digest=existing.config_digest,
-                    generation_id=existing.generation_id,
-                )
-                publish_cycle(repository, token, head_sha, cycle=terminal)
-                return terminal
+                # A correlated collector that is genuinely queued or in progress is
+                # not finalized on the nominal deadline alone: that deadline is
+                # measured from before dispatch, so GitHub's queue delay would be
+                # spent out of it while the collector has not started running. In
+                # that case no terminal transition is published at all -- the durable
+                # pending record stands unchanged, so no competing terminal result
+                # can exist here -- and control deliberately falls through to the
+                # liveness/recovery branch below, which is unchanged.
+                if not _active_collector_still_running(
+                    repository, token, existing, independent_review_opportunity_seconds()
+                ):
+                    terminal = ReviewCycle(
+                        pr_number=existing.pr_number,
+                        head_sha=existing.head_sha,
+                        state="REVIEW_TIMED_OUT",
+                        provider_id=existing.provider_id,
+                        trigger_id=existing.trigger_id,
+                        started_at=existing.started_at,
+                        config_digest=existing.config_digest,
+                        generation_id=existing.generation_id,
+                    )
+                    publish_cycle(repository, token, head_sha, cycle=terminal)
+                    return terminal
+                return existing
             if existing.trigger_id is not None and not collector_needs_dispatch(repository, token, existing):
                 return existing
         elif not remediation_generation_admissible(repository, token, existing, generation_id):

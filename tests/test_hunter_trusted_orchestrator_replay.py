@@ -43,19 +43,23 @@ REPO_ROOT = Path(__file__).resolve().parents[1]
 #: loudly here instead of silently making a negative test vacuous.
 DROPS_OPPORTUNITY_TERMINALITY = (
     """            if existing.state in PENDING_STATES and _older_than(
-                existing.started_at, INDEPENDENT_REVIEW_OPPORTUNITY_SECONDS
+                existing.started_at, independent_review_opportunity_seconds()
             ):""",
     "            if False:",
 )
 
+#: The budget is derived from the candidate's own trusted reviewer pool rather
+#: than published as a module constant, so the mutation that makes it
+#: non-positive now targets the derivation's own return rather than a
+#: module-level assignment.
 MAKES_OPPORTUNITY_NON_POSITIVE = (
-    "INDEPENDENT_REVIEW_OPPORTUNITY_SECONDS = 15 * 60",
-    "INDEPENDENT_REVIEW_OPPORTUNITY_SECONDS = 0",
+    "    return pre_ready.reviewer_chain_worst_case_seconds(pool)",
+    "    return 0",
 )
 
 MAKES_OPPORTUNITY_UNCONDITIONAL = (
     """            if existing.state in PENDING_STATES and _older_than(
-                existing.started_at, INDEPENDENT_REVIEW_OPPORTUNITY_SECONDS
+                existing.started_at, independent_review_opportunity_seconds()
             ):""",
     "            if existing.state in PENDING_STATES:",
 )
@@ -78,37 +82,33 @@ DROPS_DISPATCH_BUDGET = ("    if count >= MAX_COLLECTOR_DISPATCHES:", "    if Fa
 #: candidate actually enforces. Sampling the two probes far apart only proves
 #: *some* cutoff sits between them, so a 1.5x threshold still passed.
 OPPORTUNITY_THRESHOLD_EXCEEDS_DECLARED = (
-    "                existing.started_at, INDEPENDENT_REVIEW_OPPORTUNITY_SECONDS",
-    "                existing.started_at, INDEPENDENT_REVIEW_OPPORTUNITY_SECONDS * 3 // 2",
+    "                existing.started_at, independent_review_opportunity_seconds()",
+    "                existing.started_at, independent_review_opportunity_seconds() * 3 // 2",
 )
 
-#: PR #535 / DFF-041: production that withholds the nominal timeout while the
-#: cycle's correlated collector is still running, bounded at twice the budget.
-#: Scenario A must not reject it: its straddle probes are about the nominal
-#: budget, not about finalizing a live collector out from under itself.
-WITHHOLDS_TIMEOUT_WHILE_COLLECTOR_ACTIVE = (
-    """            if existing.state in PENDING_STATES and _older_than(
-                existing.started_at, INDEPENDENT_REVIEW_OPPORTUNITY_SECONDS
-            ):""",
-    """            if (
-                existing.state in PENDING_STATES
-                and _older_than(existing.started_at, INDEPENDENT_REVIEW_OPPORTUNITY_SECONDS)
-                and (
-                    collector_liveness(repository, token, pr_number, head_sha, generation_id)[0] != "active"
-                    or _older_than(existing.started_at, INDEPENDENT_REVIEW_OPPORTUNITY_SECONDS * 2)
-                )
-            ):""",
+#: PR #535: production that finalizes a cycle on the nominal deadline even
+#: though its correlated collector is still running, so that live collector can
+#: later publish a competing terminal result for the same exact head.
+TIMES_OUT_AN_ACTIVE_COLLECTOR_ON_THE_NOMINAL_DEADLINE = (
+    '    return liveness == "active"\n',
+    "    return False\n",
 )
 
-#: Codex P1 on PR #552: the same deferral with no upper bound. A perpetually
-#: active or wedged collector would leave the exact head pending forever.
-WITHHOLDS_TIMEOUT_WHILE_COLLECTOR_ACTIVE_UNBOUNDED = (
-    WITHHOLDS_TIMEOUT_WHILE_COLLECTOR_ACTIVE[0],
-    """            if (
-                existing.state in PENDING_STATES
-                and _older_than(existing.started_at, INDEPENDENT_REVIEW_OPPORTUNITY_SECONDS)
-                and collector_liveness(repository, token, pr_number, head_sha, generation_id)[0] != "active"
-            ):""",
+#: Codex P1 on PR #552: the active-collector deferral with its bound removed. A
+#: perpetually active or wedged collector would leave the exact head pending
+#: forever.
+HOLDS_AN_ACTIVE_COLLECTOR_OPEN_WITHOUT_BOUND = (
+    """    if _older_than(cycle.started_at, budget * ACTIVE_COLLECTOR_GRACE_MULTIPLIER):
+        return False
+""",
+    "",
+)
+
+#: The same deferral, bounded only by a candidate-declared multiplier wider than
+#: the grader's own ceiling. The candidate cannot widen the trusted bound.
+WIDENS_ITS_OWN_ACTIVE_COLLECTOR_GRACE = (
+    "ACTIVE_COLLECTOR_GRACE_MULTIPLIER = 2\n",
+    "ACTIVE_COLLECTOR_GRACE_MULTIPLIER = 1000\n",
 )
 
 #: Codex P1 on PR #539: the recovery dispatch is real, but the durable cycle it
@@ -314,6 +314,10 @@ def test_scenario_a_passes_against_real_production(tmp_path):
     ), "the outside probe must sit immediately above the boundary"
     assert measurements["timed_out_state"] == "REVIEW_TIMED_OUT"
     assert measurements["in_opportunity_state"] != "REVIEW_TIMED_OUT"
+    # A still-running collector is held open just past the nominal budget, yet
+    # still finalized once the trusted ceiling is passed.
+    assert measurements["active_deferred_state"] != "REVIEW_TIMED_OUT"
+    assert measurements["active_ceiling_state"] == "REVIEW_TIMED_OUT"
 
 
 def test_scenario_a_fails_when_the_real_threshold_exceeds_the_declared_budget(tmp_path):
@@ -361,19 +365,15 @@ def test_scenario_a_fails_when_the_opportunity_is_ignored(tmp_path):
     assert "must not be timed out" in result["error"]
 
 
-def test_scenario_a_does_not_require_timing_out_an_active_correlated_collector(tmp_path):
-    """DFF-041 / PR #535: the straddle probes once stubbed the correlated
-    collector as still active, so a candidate that correctly withheld the
-    nominal timeout from a live collector was graded as a failure. The nominal
-    boundary must be judged with that collector already finished, while the
-    terminality regressions above stay rejected."""
+def test_scenario_a_fails_when_an_active_collector_is_timed_out_on_the_nominal_deadline(tmp_path):
+    """PR #535: a correlated collector that is still running must not be
+    finalized on the nominal budget, and withholding the timeout must publish
+    nothing, so no competing terminal result can exist for the exact head."""
 
-    root = _candidate_root(tmp_path, orchestrator_mutations=(WITHHOLDS_TIMEOUT_WHILE_COLLECTOR_ACTIVE,))
+    root = _candidate_root(tmp_path, orchestrator_mutations=(TIMES_OUT_AN_ACTIVE_COLLECTOR_ON_THE_NOMINAL_DEADLINE,))
     result = replay._run_scenario("A", root, _fixture_path(tmp_path), workspace_root=tmp_path)
-    assert result["outcome"] == "pass", result.get("error")
-    assert result["measurements"]["timed_out_state"] == "REVIEW_TIMED_OUT"
-    assert result["measurements"]["in_opportunity_state"] != "REVIEW_TIMED_OUT"
-    assert result["measurements"]["active_ceiling_state"] == "REVIEW_TIMED_OUT"
+    assert result["outcome"] == "fail"
+    assert "with a correlated collector still active must not be finalized as timed out" in result["error"]
 
 
 def test_scenario_a_fails_when_an_active_collector_holds_the_cycle_open_without_bound(tmp_path):
@@ -381,7 +381,17 @@ def test_scenario_a_fails_when_an_active_collector_holds_the_cycle_open_without_
     collector is only legitimate while it stays bounded. A candidate that never
     times out an active collector must be rejected by the trusted ceiling."""
 
-    root = _candidate_root(tmp_path, orchestrator_mutations=(WITHHOLDS_TIMEOUT_WHILE_COLLECTOR_ACTIVE_UNBOUNDED,))
+    root = _candidate_root(tmp_path, orchestrator_mutations=(HOLDS_AN_ACTIVE_COLLECTOR_OPEN_WITHOUT_BOUND,))
+    result = replay._run_scenario("A", root, _fixture_path(tmp_path), workspace_root=tmp_path)
+    assert result["outcome"] == "fail"
+    assert "an active collector can hold the exact head pending without bound" in result["error"]
+
+
+def test_scenario_a_fails_when_the_candidate_widens_its_own_active_collector_grace(tmp_path):
+    """The ceiling is the grader's, not the candidate's: declaring a wider grace
+    multiplier does not buy a longer wait past the trusted bound."""
+
+    root = _candidate_root(tmp_path, orchestrator_mutations=(WIDENS_ITS_OWN_ACTIVE_COLLECTOR_GRACE,))
     result = replay._run_scenario("A", root, _fixture_path(tmp_path), workspace_root=tmp_path)
     assert result["outcome"] == "fail"
     assert "an active collector can hold the exact head pending without bound" in result["error"]

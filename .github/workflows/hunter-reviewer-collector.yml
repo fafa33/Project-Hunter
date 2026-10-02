@@ -50,7 +50,17 @@ jobs:
     runs-on: ubuntu-latest
     # Global independent-review opportunity budget. Completion triggers trusted
     # reconcile, which finalizes timeout/unavailability without blocking.
-    timeout-minutes: 15
+    #
+    # PR #535 live evidence: this must never be shorter than the worst case every enabled
+    # reviewer in docs/CODE_WRITE_POLICY.json's reviewer_pool can spend before
+    # the collector moves on (each agent's review_timeout_seconds, summed in
+    # priority order) plus this job's own checkout/publish overhead --
+    # otherwise GitHub cancels the job mid-invocation and silently turns a
+    # reviewer that was still within its own configured budget into an
+    # incomplete run. `test_collector_workflow_lifetime_covers_the_reviewer_chain_budget`
+    # (tests/test_hunter_review_orchestrator.py) derives that minimum from the
+    # same pool and fails the moment this value stops covering it.
+    timeout-minutes: 47
     steps:
       - uses: actions/checkout@v7
         with:
