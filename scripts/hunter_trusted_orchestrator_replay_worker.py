@@ -139,7 +139,13 @@ def scenario_a(candidate_root: Path, fixture: dict[str, Any]) -> dict[str, Any]:
     orchestrator.current_run_id = lambda: run_id
     orchestrator.publish_cycle = lambda *_a, cycle: state["published"].append(cycle)
     orchestrator.dispatch_collector = lambda *_a: state.__setitem__("dispatches", state["dispatches"] + 1)
-    orchestrator.collector_liveness = lambda *_a: ("active", 1)
+    # The straddle probes are the nominal-boundary case, so the correlated
+    # collector has already completed and the declared budget alone decides the
+    # transition. Stubbing it "active" here would demand that a still-running
+    # collector be finalized on the nominal deadline, which is not part of this
+    # invariant and would leave that live collector free to publish a competing
+    # terminal result for the same exact head (DFF-041, PR #535).
+    orchestrator.collector_liveness = lambda *_a: ("completed", 1)
 
     def _recorded(age_seconds: int) -> Any:
         started = (datetime.now(UTC) - timedelta(seconds=age_seconds)).strftime("%Y-%m-%dT%H:%M:%SZ")
