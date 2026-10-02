@@ -452,7 +452,11 @@ def _trusted_base_repository(tmp_path: Path, base_keys: dict[str, list[str]] | N
     target.write_text(json.dumps(policy), encoding="utf-8")
     git("add", "-A")
     git("commit", "-q", "-S", "-m", "trusted base policy")
-    git("update-ref", "refs/remotes/origin/main", "HEAD")
+    # A real server: the trusted tip is what it advertises, not a local cache.
+    server = tmp_path / "server.git"
+    subprocess.run(("git", "init", "-q", "--bare", str(server)), check=True)
+    git("remote", "add", "origin", str(server))
+    git("push", "-q", "origin", "HEAD:refs/heads/main")
 
     candidate = json.loads(json.dumps(policy))
     candidate[provenance.BINDING_FIELD].setdefault(
@@ -553,13 +557,81 @@ def test_a_branch_forked_before_key_binding_meets_the_current_trusted_tip(tmp_pa
     target.write_text(json.dumps(policy), encoding="utf-8")
     git("add", "-A")
     git("commit", "-q", "-S", "-m", "main adopts signing-key bindings")
-    git("update-ref", "refs/remotes/origin/main", "HEAD")
+    git("push", "-q", "origin", "HEAD:refs/heads/main")
     git("checkout", "-q", candidate)
 
     problem = provenance.check_range(candidate, cwd=repo)
 
     assert problem is not None
     assert fingerprint in problem and "not bound" in problem
+
+
+def _git_in(repo: Path):
+    def git(*args: str) -> str:
+        return subprocess.run(("git", *args), cwd=repo, check=True, capture_output=True, text=True).stdout.strip()
+
+    return git
+
+
+def test_a_stale_cached_trusted_tip_fails_closed(tmp_path, _hosted_git) -> None:
+    """Codex/Copilot: main rotated the key on the server; this clone has not fetched.
+
+    The cached ``origin/main`` still holds the old policy that would bind the
+    candidate's key, so trusting the cache would pass locally what hosted
+    governance rejects.
+    """
+    repo, fingerprint = _trusted_base_repository(tmp_path, {"claude": ["FRESH"], "fafa33": [OWNER_KEY]})
+    git = _git_in(repo)
+    stale = git("rev-parse", "origin/main")
+    candidate = git("rev-parse", "HEAD")
+    git("checkout", "-q", "-b", "rotation", stale)
+    policy = json.loads((ROOT / "docs" / "CODE_WRITE_POLICY.json").read_text(encoding="utf-8"))
+    (repo / provenance.CODE_WRITE_POLICY_RELATIVE_PATH).write_text(json.dumps(policy), encoding="utf-8")
+    git("commit", "-q", "-a", "-S", "-m", "main rotates claude's key away from the candidate's")
+    git("push", "-q", "origin", "HEAD:refs/heads/main")
+    git("update-ref", "refs/remotes/origin/main", stale)  # this clone never fetched the rotation
+    git("checkout", "-q", candidate)
+
+    problem = provenance.check_range(candidate, cwd=repo)
+
+    assert problem is not None
+    assert "is not the server's current tip" in problem and "git fetch origin main" in problem
+    git("fetch", "-q", "origin")
+    fetched = provenance.check_range(candidate, cwd=repo)
+    assert fetched is not None and fingerprint in fetched, "after fetching, the rotated binding refuses the key"
+
+
+def test_an_unreachable_trusted_server_fails_closed(tmp_path, _hosted_git) -> None:
+    repo, _fingerprint = _trusted_base_repository(tmp_path, {"claude": ["FRESH"], "fafa33": [OWNER_KEY]})
+    _git_in(repo)("remote", "set-url", "origin", str(tmp_path / "gone.git"))
+
+    problem = provenance.check_range("HEAD", cwd=repo)
+
+    assert problem is not None and "freshness" in problem
+
+
+def test_a_fork_clone_reads_authority_from_upstream(tmp_path, _hosted_git) -> None:
+    """Codex P1: with ``origin`` as the contributor's fork, authority is ``upstream``.
+
+    The fork's ``main`` binds the candidate's key; canonical ``upstream/main``
+    does not. Reading the fork would admit what canonical governance rejects.
+    """
+    repo, fingerprint = _trusted_base_repository(tmp_path, {"claude": [CLAUDE_KEY], "fafa33": [OWNER_KEY]})
+    git = _git_in(repo)
+    git("remote", "rename", "origin", "upstream")
+    git("fetch", "-q", "upstream")
+    fork = tmp_path / "fork.git"
+    subprocess.run(("git", "init", "-q", "--bare", str(fork)), check=True)
+    git("remote", "add", "origin", str(fork))
+    git("push", "-q", "origin", "HEAD:refs/heads/main")  # the fork's main carries the candidate's own policy
+    git("commit", "-q", "--allow-empty", "-S", "-m", "further candidate work signed with the same key")
+
+    assert provenance.trusted_remote(cwd=repo) == "upstream"
+    problem = provenance.check_range("HEAD", cwd=repo)
+
+    assert problem is not None and fingerprint in problem
+    # Judged by the fork's policy instead, the same commit would be admitted.
+    assert provenance.check_range("HEAD", remote="origin", cwd=repo) is None
 
 
 def test_a_malformed_key_section_at_the_base_still_fails_closed() -> None:
@@ -2807,6 +2879,7 @@ def test_pre_push_fails_closed_when_the_fork_point_is_unavailable(monkeypatch) -
 
 def test_pre_push_fails_closed_without_repository_policy(monkeypatch) -> None:
     monkeypatch.setattr(provenance, "resolve_governed_base", lambda *_a, **_k: BASE)
+    monkeypatch.setattr(provenance, "resolve_trusted_tip", lambda *_a, **_k: BASE)
     monkeypatch.setattr(provenance, "load_trusted_binding", lambda *_a, **_k: (None, "policy is missing"))
 
     problem = provenance.check_range(HEAD)

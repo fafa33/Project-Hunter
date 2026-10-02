@@ -930,20 +930,49 @@ def resolve_governed_base(head: str, *, base_ref: str = "main", remote: str = "o
     )
 
 
-def resolve_trusted_tip(*, base_ref: str = "main", remote: str = "origin", cwd: Path | None = None) -> str:
-    """The current commit of the remote-tracking trusted branch."""
+def trusted_remote(*, cwd: Path | None = None) -> str:
+    """The remote holding the canonical repository: ``upstream`` in a fork clone, else ``origin``.
 
-    for candidate in (f"{remote}/{base_ref}", f"refs/remotes/{remote}/{base_ref}"):
-        try:
-            tip = _run_git("rev-parse", "--verify", "--quiet", f"{candidate}^{{commit}}", cwd=cwd).strip()
-        except GitEvidenceUnavailable:
-            continue
-        if tip:
-            return tip
-    raise GitEvidenceUnavailable(
-        f"the trusted {remote}/{base_ref} tip is unavailable; run `git fetch {remote} {base_ref}` "
-        "so the writer binding can be read from trusted authority"
-    )
+    The same preference as :func:`repository_owner` and the pre-push criteria
+    lookup, so a contributor's fork never stands in for canonical authority.
+    """
+
+    try:
+        _run_git("config", "--get", "remote.upstream.url", cwd=cwd)
+    except GitEvidenceUnavailable:
+        return "origin"
+    return "upstream"
+
+
+def resolve_trusted_tip(*, base_ref: str = "main", remote: str = "origin", cwd: Path | None = None) -> str:
+    """The trusted branch tip as the server advertises it right now.
+
+    The local remote-tracking ref is only a cache: after the trusted branch
+    rotates a key, a clone that has not fetched would read the superseded
+    policy. The server's advertised tip is the authority; the cached ref must
+    equal it, so the policy blob read is that exact commit. Anything else --
+    unreachable server, missing branch, stale cache -- fails closed.
+    """
+
+    try:
+        advertised = _run_git("ls-remote", "--exit-code", remote, f"refs/heads/{base_ref}", cwd=cwd).split()
+    except GitEvidenceUnavailable as exc:
+        raise GitEvidenceUnavailable(
+            f"the trusted {remote}/{base_ref} tip cannot be read from the server ({exc}), so its freshness "
+            "cannot be established"
+        ) from exc
+    tip = advertised[0].strip().lower() if advertised else ""
+    try:
+        cached = _run_git("rev-parse", "--verify", "--quiet", f"refs/remotes/{remote}/{base_ref}^{{commit}}", cwd=cwd)
+    except GitEvidenceUnavailable:
+        cached = ""
+    if not tip or cached.strip().lower() != tip:
+        raise GitEvidenceUnavailable(
+            f"the local {remote}/{base_ref} ({cached.strip()[:10] or 'missing'}) is not the server's current tip "
+            f"({tip[:10] or 'unknown'}); run `git fetch {remote} {base_ref}` so the writer binding is read from "
+            "current trusted authority"
+        )
+    return tip
 
 
 def load_trusted_binding(base: str, *, cwd: Path | None = None) -> tuple[WriterIdentityBinding | None, str]:
@@ -960,7 +989,7 @@ def load_trusted_binding(base: str, *, cwd: Path | None = None) -> tuple[WriterI
     return parse_binding(document, predates_key_binding=True)
 
 
-def check_range(head: str, *, base_ref: str = "main", remote: str = "origin", cwd: Path | None = None) -> str | None:
+def check_range(head: str, *, base_ref: str = "main", remote: str | None = None, cwd: Path | None = None) -> str | None:
     """Validate the governed range, returning an actionable diagnosis or ``None``.
 
     The range is judged by the binding at the current trusted base-branch tip,
@@ -971,9 +1000,10 @@ def check_range(head: str, *, base_ref: str = "main", remote: str = "origin", cw
     is merged.
     """
 
+    remote = remote or trusted_remote(cwd=cwd)
     try:
-        base = resolve_governed_base(head, base_ref=base_ref, remote=remote, cwd=cwd)
         trusted = resolve_trusted_tip(base_ref=base_ref, remote=remote, cwd=cwd)
+        base = resolve_governed_base(head, base_ref=base_ref, remote=remote, cwd=cwd)
     except GitEvidenceUnavailable as exc:
         return f"writer provenance evidence is unavailable ({exc})"
     # The fork point selects which commits are governed; the authority they
@@ -1059,7 +1089,11 @@ def parser() -> argparse.ArgumentParser:
     )
     result.add_argument("--check-range", metavar="HEAD", help="Verify every commit in the governed base..HEAD range.")
     result.add_argument("--base-ref", default="main", help="Trusted base branch name (default: main).")
-    result.add_argument("--remote", default="origin", help="Remote holding the trusted base branch (default: origin).")
+    result.add_argument(
+        "--remote",
+        default=None,
+        help="Remote holding the trusted base branch (default: upstream when configured, else origin).",
+    )
     return result
 
 
