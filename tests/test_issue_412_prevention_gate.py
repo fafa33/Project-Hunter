@@ -426,6 +426,91 @@ def test_a_key_outside_the_bound_set_is_refused_even_when_well_formed() -> None:
     assert unknown in verdict.reason
 
 
+def _trusted_base_repository(tmp_path: Path, base_keys: dict[str, list[str]] | None) -> tuple[Path, str]:
+    """A repo whose ``origin/main`` commits a policy, then a candidate that edits it.
+
+    The candidate commit claims Claude, is signed with a fresh key, and rebinds
+    ``claude`` to that key in its own copy of the policy. ``base_keys=None``
+    writes a base policy from before signing-key bindings existed.
+    """
+
+    repo, fingerprint, _base, _middle, _head = _signed_repository(tmp_path)
+
+    def git(*args: str) -> str:
+        return subprocess.run(("git", *args), cwd=repo, check=True, capture_output=True, text=True).stdout.strip()
+
+    policy = json.loads((ROOT / "docs" / "CODE_WRITE_POLICY.json").read_text(encoding="utf-8"))
+    binding = policy[provenance.BINDING_FIELD]
+    if base_keys is None:
+        binding.pop(provenance.SIGNING_KEY_BINDINGS_FIELD)
+    else:
+        binding[provenance.SIGNING_KEY_BINDINGS_FIELD]["bindings"] = {
+            login: [key.replace("FRESH", fingerprint) for key in keys] for login, keys in base_keys.items()
+        }
+    target = repo / provenance.CODE_WRITE_POLICY_RELATIVE_PATH
+    target.parent.mkdir(parents=True, exist_ok=True)
+    target.write_text(json.dumps(policy), encoding="utf-8")
+    git("add", "-A")
+    git("commit", "-q", "-S", "-m", "trusted base policy")
+    git("update-ref", "refs/remotes/origin/main", "HEAD")
+
+    candidate = json.loads(json.dumps(policy))
+    candidate[provenance.BINDING_FIELD].setdefault(
+        provenance.SIGNING_KEY_BINDINGS_FIELD,
+        json.loads((ROOT / "docs" / "CODE_WRITE_POLICY.json").read_text(encoding="utf-8"))[provenance.BINDING_FIELD][
+            provenance.SIGNING_KEY_BINDINGS_FIELD
+        ],
+    )["bindings"]["claude"] = [fingerprint]
+    target.write_text(json.dumps(candidate), encoding="utf-8")
+    git("add", "-A")
+    git("commit", "-q", "--allow-empty", "-S", "-m", "candidate rebinds claude to its own key")
+    return repo, fingerprint
+
+
+@pytest.fixture
+def _hosted_git(monkeypatch):
+    monkeypatch.setenv("GIT_CONFIG_GLOBAL", os.devnull)
+    monkeypatch.setenv("GIT_CONFIG_NOSYSTEM", "1")
+
+
+def test_a_candidate_cannot_bind_its_own_signing_key(tmp_path, _hosted_git, monkeypatch) -> None:
+    """Codex P1: the range is judged by the trusted base's bindings, not the candidate's edit."""
+    repo, fingerprint = _trusted_base_repository(tmp_path, {"claude": [CLAUDE_KEY], "fafa33": [OWNER_KEY]})
+    # As in a real pre-push, the checked-out policy file is the candidate's own.
+    monkeypatch.setattr(provenance, "CODE_WRITE_POLICY_PATH", repo / provenance.CODE_WRITE_POLICY_RELATIVE_PATH)
+
+    problem = provenance.check_range("HEAD", cwd=repo)
+
+    assert problem is not None
+    assert fingerprint in problem and "not bound" in problem
+
+
+def test_a_key_the_trusted_base_binds_is_admitted(tmp_path, _hosted_git) -> None:
+    """The paired positive: the same commits pass when the trusted base binds that key."""
+    repo, _fingerprint = _trusted_base_repository(tmp_path, {"claude": ["FRESH"], "fafa33": [OWNER_KEY]})
+
+    assert provenance.check_range("HEAD", cwd=repo) is None
+
+
+def test_a_base_that_predates_key_binding_is_judged_by_its_own_regime(tmp_path, _hosted_git) -> None:
+    """Bootstrap: an absent section at the base binds no keys; headers are still bound."""
+    repo, _fingerprint = _trusted_base_repository(tmp_path, None)
+
+    assert provenance.check_range("HEAD", cwd=repo) is None
+    binding, error = provenance.load_trusted_binding("origin/main", cwd=repo)
+    assert binding is not None, error
+    assert binding.require_key_bound_to_writer is False
+
+
+def test_a_malformed_key_section_at_the_base_still_fails_closed() -> None:
+    document = _policy()
+    document[provenance.BINDING_FIELD][provenance.SIGNING_KEY_BINDINGS_FIELD] = "not an object"
+
+    parsed, _error = provenance.parse_binding(document, predates_key_binding=True)
+
+    assert parsed is None
+
+
 def test_a_signing_key_bound_to_two_writers_fails_closed() -> None:
     """One key is one GitHub account; sharing it would let a commit claim either writer."""
     document = _policy()
@@ -2658,7 +2743,8 @@ def test_pre_push_fails_closed_when_the_fork_point_is_unavailable(monkeypatch) -
 
 
 def test_pre_push_fails_closed_without_repository_policy(monkeypatch) -> None:
-    monkeypatch.setattr(provenance, "load_binding", lambda *_a, **_k: (None, "policy is missing"))
+    monkeypatch.setattr(provenance, "resolve_governed_base", lambda *_a, **_k: BASE)
+    monkeypatch.setattr(provenance, "load_trusted_binding", lambda *_a, **_k: (None, "policy is missing"))
 
     problem = provenance.check_range(HEAD)
 

@@ -806,7 +806,11 @@
         "tests/test_issue_412_prevention_gate.py::test_a_departed_writer_commit_that_merges_in_after_the_takeover_is_refused",
         "tests/test_issue_412_prevention_gate.py::test_a_departed_writer_side_branch_off_the_fork_point_is_refused",
         "tests/test_issue_412_prevention_gate.py::test_a_boundary_pinned_outside_the_range_has_no_departed_epoch",
-        "tests/test_issue_412_prevention_gate.py::test_a_base_branch_merge_on_either_side_of_the_boundary_is_still_admitted"
+        "tests/test_issue_412_prevention_gate.py::test_a_base_branch_merge_on_either_side_of_the_boundary_is_still_admitted",
+        "tests/test_issue_412_prevention_gate.py::test_a_candidate_cannot_bind_its_own_signing_key",
+        "tests/test_issue_412_prevention_gate.py::test_a_key_the_trusted_base_binds_is_admitted",
+        "tests/test_issue_412_prevention_gate.py::test_a_base_that_predates_key_binding_is_judged_by_its_own_regime",
+        "tests/test_issue_412_prevention_gate.py::test_a_malformed_key_section_at_the_base_still_fails_closed"
       ],
       "lifecycle": "locally-enforced",
       "sources": [

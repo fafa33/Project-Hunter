@@ -326,11 +326,16 @@ def parse_owner_recovery(policy: Any) -> tuple[OwnerRecovery | None, str]:
     return OwnerRecovery(owner_login.strip(), trailer.strip(), schema.strip(), max_boundaries), ""
 
 
-def parse_binding(policy: Any) -> tuple[WriterIdentityBinding | None, str]:
+def parse_binding(policy: Any, *, predates_key_binding: bool = False) -> tuple[WriterIdentityBinding | None, str]:
     """Parse the writer identity binding, or explain why it is unusable.
 
     Never raises and never returns a partially trusted binding: any structural
     problem yields ``None``, so every caller fails closed on the same condition.
+
+    ``predates_key_binding`` is only for reading a trusted base whose policy was
+    written before signing-key bindings existed: an *absent* section then means
+    that regime binds no keys. A present but malformed section still fails
+    closed, and the canonical policy is still required to declare it.
     """
 
     if not isinstance(policy, dict):
@@ -355,9 +360,12 @@ def parse_binding(policy: Any) -> tuple[WriterIdentityBinding | None, str]:
     # loop so every identity inherits its own key set, and a binding naming a
     # login no identity binds is a structural error rather than a silently
     # ignored extra allowlist.
-    signing_keys, key_error = parse_signing_key_bindings(policy)
-    if signing_keys is None:
-        return None, key_error
+    if predates_key_binding and SIGNING_KEY_BINDINGS_FIELD not in binding:
+        signing_keys: dict[str, frozenset[str]] | None = {}
+    else:
+        signing_keys, key_error = parse_signing_key_bindings(policy)
+        if signing_keys is None:
+            return None, key_error
     require_key_binding = binding.get(SIGNING_KEY_BINDINGS_FIELD)
     require_key_binding = (
         require_key_binding.get("require_key_bound_to_resolved_writer") is True
@@ -818,7 +826,9 @@ def parse_commit_records(raw: str) -> tuple[CommitProvenance, ...]:
     return tuple(commits)
 
 
-def read_range_commits(base: str, head: str, *, cwd: Path | None = None) -> tuple[CommitProvenance, ...]:
+def read_range_commits(
+    base: str, head: str, *, cwd: Path | None = None, binding: WriterIdentityBinding | None = None
+) -> tuple[CommitProvenance, ...]:
     """Commit provenance for ``base..head``, oldest first.
 
     The owner-recovery declaration is read separately with git's own
@@ -831,7 +841,7 @@ def read_range_commits(base: str, head: str, *, cwd: Path | None = None) -> tupl
         *GIT_SIGNATURE_READ_CONFIG, "log", "--reverse", f"--format={GIT_LOG_FORMAT}", f"{base}..{head}", cwd=cwd
     )
     commits = parse_commit_records(raw)
-    recovery = load_binding()[0]
+    recovery = binding if binding is not None else load_binding()[0]
     if recovery is None or recovery.owner_recovery is None or not commits:
         return commits
     trailer = recovery.owner_recovery.trailer
@@ -912,15 +922,40 @@ def resolve_governed_base(head: str, *, base_ref: str = "main", remote: str = "o
     )
 
 
-def check_range(head: str, *, base_ref: str = "main", remote: str = "origin", cwd: Path | None = None) -> str | None:
-    """Validate the governed range, returning an actionable diagnosis or ``None``."""
+def load_trusted_binding(base: str, *, cwd: Path | None = None) -> tuple[WriterIdentityBinding | None, str]:
+    """The writer binding as committed at the trusted governed ``base``."""
 
-    binding, error = load_binding()
-    if binding is None:
-        return f"writer provenance is unknown ({error})"
+    try:
+        raw = _run_git("show", f"{base}:{CODE_WRITE_POLICY_RELATIVE_PATH}", cwd=cwd)
+    except GitEvidenceUnavailable as exc:
+        return None, f"{CODE_WRITE_POLICY_RELATIVE_PATH} is unreadable at the base ({exc})"
+    try:
+        document = json.loads(raw)
+    except json.JSONDecodeError as exc:
+        return None, f"{CODE_WRITE_POLICY_RELATIVE_PATH} is unreadable at the base ({exc})"
+    return parse_binding(document, predates_key_binding=True)
+
+
+def check_range(head: str, *, base_ref: str = "main", remote: str = "origin", cwd: Path | None = None) -> str | None:
+    """Validate the governed range, returning an actionable diagnosis or ``None``.
+
+    The range is judged by the binding at its trusted governed base, never by
+    the candidate's own policy file. A candidate that edits its identities or
+    signing-key fingerprints would otherwise authorize itself in the same push,
+    which hosted governance -- reading authority from the default branch --
+    then rejects. A policy change takes effect for ranges based on it, after it
+    is merged.
+    """
+
     try:
         base = resolve_governed_base(head, base_ref=base_ref, remote=remote, cwd=cwd)
-        commits = read_range_commits(base, head, cwd=cwd)
+    except GitEvidenceUnavailable as exc:
+        return f"writer provenance evidence is unavailable ({exc})"
+    binding, error = load_trusted_binding(base, cwd=cwd)
+    if binding is None:
+        return f"writer provenance is unknown at trusted base {base[:10]} ({error})"
+    try:
+        commits = read_range_commits(base, head, cwd=cwd, binding=binding)
     except GitEvidenceUnavailable as exc:
         return f"writer provenance evidence is unavailable ({exc})"
 
