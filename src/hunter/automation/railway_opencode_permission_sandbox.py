@@ -4,11 +4,15 @@ Railway containers are non-privileged, so bubblewrap cannot create the
 namespaces used by the default provider sandbox. This module accepts only the
 exact bwrap-shaped argv emitted by Hunter, maps the isolated workspace/home
 back to their trusted host paths, and executes OpenCode in pure mode with a
-strict inline permission policy. Shell, external-directory, web, task, skill,
-and question actions remain denied; only project read/edit/search/LSP actions
-are allowed. The shim verifies the minimum provider capability contract before
-execution and gives OpenCode a trusted runtime instruction making parent-owned
-exact-head validation explicit. Publication credentials stay outside the
+strict inline permission policy. External-directory, web, task, skill, and
+question actions remain denied; only project read/edit/search/LSP actions are
+allowed. The bash tool stays exposed for OpenCode free-tier classifier
+compatibility, but pure mode skips plugins, so it is neutralized below the
+permission engine: OpenCode resolves its shell from the inline ``shell`` config
+and ``SHELL``, and both name a trusted executable that refuses every command.
+The shim verifies the minimum provider capability contract before execution and
+gives OpenCode a trusted runtime instruction making parent-owned exact-head
+validation explicit. Publication credentials stay outside the
 provider process and the trusted parent still owns commit signing, push, and
 exact-head validation.
 """
@@ -48,18 +52,23 @@ _PERMISSION_CONFIG = {
         "glob": "allow",
         "grep": "allow",
         "lsp": "allow",
+        "bash": "allow",
     }
 }
 _REQUIRED_PROVIDER_CAPABILITIES = frozenset({"read", "edit", "glob", "grep"})
 #: Tools the resolved OpenCode agent must never offer the model. Proven against
 #: the pinned runtime's own resolution (``debug agent build``), not assumed from
-#: the permission configuration that is meant to produce it.
-_FORBIDDEN_PROVIDER_TOOLS = ("bash", "webfetch", "websearch", "task", "skill", "question")
+#: the permission configuration that is meant to produce it. ``bash`` is offered
+#: deliberately and neutralized by the denied shell instead.
+_FORBIDDEN_PROVIDER_TOOLS = ("webfetch", "websearch", "task", "skill", "question")
 _PINNED_OPENCODE_VERSION = "1.18.30"
 _PROVIDER_RUNTIME_INSTRUCTION_FILE = "hunter-provider-runtime.md"
+_PROVIDER_DENIED_SHELL_FILE = "hunter-denied-shell"
 _PROVIDER_COMPATIBILITY_PROMPT = "Reply with exactly HUNTER_PROVIDER_READY and do not use tools."
 _PROVIDER_COMPATIBILITY_SENTINEL = "HUNTER_PROVIDER_READY"
 _RATE_LIMIT_EXIT_CODE = 75
+_PROVIDER_DENIED_SHELL = "#!/bin/sh\necho 'Hunter governed runtime forbids shell execution' >&2\nexit 126\n"
+
 _PROVIDER_RUNTIME_INSTRUCTIONS = (
     "Operate only with the provider tools enabled by this governed runtime: "
     "read, edit, glob, grep, and lsp. "
@@ -171,8 +180,8 @@ def _validate_provider_capabilities() -> dict[str, str]:
         raise SandboxShimError(f"provider capability mismatch: missing {', '.join(missing)}")
     if normalized.get("external_directory") != "deny":
         raise SandboxShimError("provider capability contract must deny external_directory")
-    if normalized.get("bash", "deny") != "deny":
-        raise SandboxShimError("provider capability contract must deny bash")
+    if normalized.get("bash") != "allow":
+        raise SandboxShimError("provider compatibility contract must expose bash for the OpenCode free-tier classifier")
     return normalized
 
 
@@ -268,9 +277,19 @@ def _restricted_environment(credential_home: Path) -> dict[str, str]:
     opencode_config.mkdir(parents=True, exist_ok=True)
     instruction_path = (opencode_config / _PROVIDER_RUNTIME_INSTRUCTION_FILE).resolve()
     instruction_path.write_text(f"{_PROVIDER_RUNTIME_INSTRUCTIONS}\n", encoding="utf-8")
+    # The shell lives outside the workspace (external_directory is denied), is
+    # read-only, and is verified before use: OpenCode silently falls back to a
+    # real shell when the configured one is missing or not executable.
+    shell_path = (opencode_config / _PROVIDER_DENIED_SHELL_FILE).resolve()
+    shell_path.unlink(missing_ok=True)
+    shell_path.write_text(_PROVIDER_DENIED_SHELL, encoding="utf-8")
+    shell_path.chmod(0o555)
+    if not (shell_path.is_file() and os.access(shell_path, os.X_OK)):
+        raise SandboxShimError("provider denied shell is not executable")
     inline_config = {
         "permission": permission,
         "instructions": [str(instruction_path)],
+        "shell": str(shell_path),
     }
     env["HOME"] = str(credential_home)
     # OpenCode resolves its project directory from the inherited ``PWD`` rather
@@ -279,6 +298,7 @@ def _restricted_environment(credential_home: Path) -> dict[str, str]:
     # the directory each process actually runs in.
     env.pop("OLDPWD", None)
     env["PWD"] = str(credential_home)
+    env["SHELL"] = str(shell_path)
     env["XDG_CONFIG_HOME"] = str(config_home)
     env["OPENCODE_CONFIG_DIR"] = str(opencode_config)
     env["OPENCODE_CONFIG_CONTENT"] = json.dumps(inline_config, sort_keys=True, separators=(",", ":"))
