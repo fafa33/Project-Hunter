@@ -86,6 +86,31 @@ OPPORTUNITY_THRESHOLD_EXCEEDS_DECLARED = (
     "                existing.started_at, independent_review_opportunity_seconds() * 3 // 2",
 )
 
+#: PR #535: production that finalizes a cycle on the nominal deadline even
+#: though its correlated collector is still running, so that live collector can
+#: later publish a competing terminal result for the same exact head.
+TIMES_OUT_AN_ACTIVE_COLLECTOR_ON_THE_NOMINAL_DEADLINE = (
+    '    return liveness == "active"\n',
+    "    return False\n",
+)
+
+#: Codex P1 on PR #552: the active-collector deferral with its bound removed. A
+#: perpetually active or wedged collector would leave the exact head pending
+#: forever.
+HOLDS_AN_ACTIVE_COLLECTOR_OPEN_WITHOUT_BOUND = (
+    """    if _older_than(cycle.started_at, budget * ACTIVE_COLLECTOR_GRACE_MULTIPLIER):
+        return False
+""",
+    "",
+)
+
+#: The same deferral, bounded only by a candidate-declared multiplier wider than
+#: the grader's own ceiling. The candidate cannot widen the trusted bound.
+WIDENS_ITS_OWN_ACTIVE_COLLECTOR_GRACE = (
+    "ACTIVE_COLLECTOR_GRACE_MULTIPLIER = 2\n",
+    "ACTIVE_COLLECTOR_GRACE_MULTIPLIER = 1000\n",
+)
+
 #: Codex P1 on PR #539: the recovery dispatch is real, but the durable cycle it
 #: was dispatched for is never refreshed, so every later reconcile recovers the
 #: same exact head again off the original stale record. Written as a
@@ -289,6 +314,10 @@ def test_scenario_a_passes_against_real_production(tmp_path):
     ), "the outside probe must sit immediately above the boundary"
     assert measurements["timed_out_state"] == "REVIEW_TIMED_OUT"
     assert measurements["in_opportunity_state"] != "REVIEW_TIMED_OUT"
+    # A still-running collector is held open just past the nominal budget, yet
+    # still finalized once the trusted ceiling is passed.
+    assert measurements["active_deferred_state"] != "REVIEW_TIMED_OUT"
+    assert measurements["active_ceiling_state"] == "REVIEW_TIMED_OUT"
 
 
 def test_scenario_a_fails_when_the_real_threshold_exceeds_the_declared_budget(tmp_path):
@@ -334,6 +363,38 @@ def test_scenario_a_fails_when_the_opportunity_is_ignored(tmp_path):
     result = replay._run_scenario("A", root, _fixture_path(tmp_path), workspace_root=tmp_path)
     assert result["outcome"] == "fail"
     assert "must not be timed out" in result["error"]
+
+
+def test_scenario_a_fails_when_an_active_collector_is_timed_out_on_the_nominal_deadline(tmp_path):
+    """PR #535: a correlated collector that is still running must not be
+    finalized on the nominal budget, and withholding the timeout must publish
+    nothing, so no competing terminal result can exist for the exact head."""
+
+    root = _candidate_root(tmp_path, orchestrator_mutations=(TIMES_OUT_AN_ACTIVE_COLLECTOR_ON_THE_NOMINAL_DEADLINE,))
+    result = replay._run_scenario("A", root, _fixture_path(tmp_path), workspace_root=tmp_path)
+    assert result["outcome"] == "fail"
+    assert "with a correlated collector still active must not be finalized as timed out" in result["error"]
+
+
+def test_scenario_a_fails_when_an_active_collector_holds_the_cycle_open_without_bound(tmp_path):
+    """Codex P1 on PR #552: withholding the nominal timeout from a live
+    collector is only legitimate while it stays bounded. A candidate that never
+    times out an active collector must be rejected by the trusted ceiling."""
+
+    root = _candidate_root(tmp_path, orchestrator_mutations=(HOLDS_AN_ACTIVE_COLLECTOR_OPEN_WITHOUT_BOUND,))
+    result = replay._run_scenario("A", root, _fixture_path(tmp_path), workspace_root=tmp_path)
+    assert result["outcome"] == "fail"
+    assert "an active collector can hold the exact head pending without bound" in result["error"]
+
+
+def test_scenario_a_fails_when_the_candidate_widens_its_own_active_collector_grace(tmp_path):
+    """The ceiling is the grader's, not the candidate's: declaring a wider grace
+    multiplier does not buy a longer wait past the trusted bound."""
+
+    root = _candidate_root(tmp_path, orchestrator_mutations=(WIDENS_ITS_OWN_ACTIVE_COLLECTOR_GRACE,))
+    result = replay._run_scenario("A", root, _fixture_path(tmp_path), workspace_root=tmp_path)
+    assert result["outcome"] == "fail"
+    assert "an active collector can hold the exact head pending without bound" in result["error"]
 
 
 # --- Scenario B: bounded, idempotent exact-head collector dispatch ----------
