@@ -661,18 +661,28 @@ def _provision_authority_record(
     current_head = store.current_canonical_head_id(plan["family"], plan["scope"])
     payload = dict(plan["payload"])
     if current_head is not None:
+        current_record = resolve_canonical_head(
+            store,
+            family=plan["family"],
+            scope=plan["scope"],
+            cutoff=datetime.max.replace(tzinfo=UTC),
+        )
+        # A retry after a partially committed successor batch must distinguish
+        # a family already advanced by this revision from a family still at its
+        # predecessor. Reconstruct the already-published successor identity
+        # first; only append when the current head is genuinely the predecessor.
+        retry_payload = dict(payload)
+        predecessor = current_record.get("supersedes_record_id")
+        if predecessor is not None:
+            retry_payload["supersedes_record_id"] = predecessor
+        retry_plan = dict(plan)
+        retry_plan["payload"] = retry_payload
+        if current_head == _expected_authority_record_id(retry_plan):
+            return {"record_id": current_head, "status": "already-provisioned"}
         if allow_successor:
             payload["supersedes_record_id"] = current_head
-        else:
-            current_record = resolve_canonical_head(
-                store,
-                family=plan["family"],
-                scope=plan["scope"],
-                cutoff=datetime.max.replace(tzinfo=UTC),
-            )
-            predecessor = current_record.get("supersedes_record_id")
-            if predecessor is not None:
-                payload["supersedes_record_id"] = predecessor
+        elif predecessor is not None:
+            payload["supersedes_record_id"] = predecessor
     expected_plan = dict(plan)
     expected_plan["payload"] = payload
     expected_record_id = _expected_authority_record_id(expected_plan)
@@ -859,12 +869,65 @@ def _run(
         policy_options=policy_options,
         authorization_id=revision_authorization_id,
     )
+    # Bind every revision to one immutable, complete family plan before any
+    # provenance/authority publication.  Recovery may resume only that exact
+    # plan; changed retry inputs fail closed instead of mixing families.
+    immutable_plans = _family_plans(
+        document_id=document_id,
+        at=on_or_after,
+        rule_id=authorization_rule_id,
+        fact_options=fact_options,
+        policy_options=policy_options,
+        authorization_id=revision_authorization_id,
+    )
+    batch_payload = {
+        "document_id": document_id,
+        "authorization_id": authorization.authorization_id,
+        "as_of": _time_text(on_or_after),
+        "plans": immutable_plans,
+    }
+    batch_digest = hashlib.sha256(_canonical_json(batch_payload).encode("utf-8")).hexdigest()
+    # The database path is already the explicit operator-controlled persistence
+    # target used throughout this provisioning command (not SQL/URI content).
+    # URI parsing remains disabled, so the value cannot alter connection options.
+    with sqlite3.connect(database, uri=False) as connection:  # NOSONAR pythonsecurity:S8706
+        connection.execute(
+            "CREATE TABLE IF NOT EXISTS source_handling_issue_revision_batches ("
+            "document_id TEXT NOT NULL, authorization_id TEXT NOT NULL, as_of TEXT NOT NULL, "
+            "plan_sha256 TEXT NOT NULL, PRIMARY KEY(document_id, authorization_id))"
+        )
+        row = connection.execute(
+            "SELECT as_of, plan_sha256 FROM source_handling_issue_revision_batches "
+            "WHERE document_id = ? AND authorization_id = ?",
+            (document_id, authorization.authorization_id),
+        ).fetchone()
+        if row is None:
+            connection.execute(
+                "INSERT INTO source_handling_issue_revision_batches "
+                "(document_id, authorization_id, as_of, plan_sha256) VALUES (?, ?, ?, ?)",
+                (document_id, authorization.authorization_id, _time_text(on_or_after), batch_digest),
+            )
+            connection.commit()
+        elif row != (_time_text(on_or_after), batch_digest):
+            raise SourceHandlingBlockedError(
+                "the retry does not match the immutable Issue revision batch plan; refusing to replace provisioned authority state"
+            )
+
+    # A successor provenance head belongs to exactly one revision timestamp.
+    # This admits a provenance-only interrupted retry of that revision while
+    # rejecting replay of an older signed revision after a newer successor.
+    if current_provenance_is_successor and existing_known_at != on_or_after:
+        raise SourceHandlingBlockedError(
+            "the incoming Issue authorization does not match the current provenance revision"
+        )
+
+    authority_successor_allowed = newer_issue_revision or current_provenance_is_successor
     _check_authority_heads_exact(
         database=database,
         signing_key=signing_key,
         operator_root=operator_root,
         plans=preview_plans,
-        allow_successor=newer_issue_revision,
+        allow_successor=authority_successor_allowed,
     )
 
     for plan in provenance_plans:
@@ -907,7 +970,7 @@ def _run(
             operator_root=operator_root,
             at=authority_at,
             plan=plan,
-            allow_successor=newer_issue_revision,
+            allow_successor=authority_successor_allowed,
         )
     status = (
         "provisioned" if any(entry["status"] == "provisioned" for entry in records.values()) else "already-provisioned"

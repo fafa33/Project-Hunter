@@ -1171,6 +1171,33 @@ class GitHubBackend:
             or re.fullmatch(r"to use codex(?: here)?, create a codex account and connect to github\.?", normalized)
         )
 
+    def _exact_head_native_clear(self) -> bool:
+        """Whether authenticated Codex already cleared this exact HEAD.
+
+        A clear is bound to the commit it names, not to when it was written. The
+        trigger timestamp therefore cannot invalidate it: a review of this exact
+        HEAD that predates a later trigger (for example a remediation
+        generation's) still reviewed this immutable content. Only the clear
+        outcome is adopted regardless of ordering, and only as an authenticated
+        review object, the one form governance adopts. A review that carries
+        findings keeps requiring a response after the trigger, because
+        remediation owes a fresh review. Only the latest Codex review can be that
+        clear. HEAD mutation invalidates the clear:
+        the review's commit_id and its named reviewed commit then no longer
+        match the exact HEAD.
+        """
+
+        # Governance's own latest-review selection and adoption predicate, so a
+        # clear counts here only if it is the newest admissible Codex review and
+        # governance would adopt it. A malformed collection raises, as it does in
+        # governance, rather than being skipped.
+        reviews = _pages(self.repository, self.token, f"pulls/{self.pr}/reviews")
+        # The current collector invocation is the trusted provenance boundary;
+        # bind only while evaluating its own response, never as a global/manual
+        # dispatch-suppression shortcut.
+        bound = governance.bind_native_codex_reviews_to_claims(reviews, self.expected_head, self.claims_id)
+        return governance.latest_codex_review_is_exact_head_clear(bound, self.expected_head, self.claims_id)
+
     def response_state(self, agent: dict[str, Any], trigger: dict[str, Any]) -> str:
         if trigger.get("state") == "unavailable":
             return "unavailable"
@@ -1183,6 +1210,8 @@ class GitHubBackend:
             return str(result["verdict"])
         login = governance.reviewer_login(agent)
         created = str(trigger["created_at"])
+        if agent.get("id") == "codex" and self._exact_head_native_clear():
+            return "clear"
         matching_reviews = [
             item
             for item in _pages(self.repository, self.token, f"pulls/{self.pr}/reviews")
@@ -1252,7 +1281,7 @@ class GitHubBackend:
                 return False
             run = self._adopt_workflow_run(trigger)
             return run is not None and str(run.get("status") or "") in STARTED_RUN_STATES
-        if agent.get("id") == "codex":
+        if agent.get("id") == "codex" and trigger_scheme(agent) == "github-pr-comment":
             login = governance.reviewer_login(agent)
             created = str(trigger.get("created_at") or "")
             reviews = _pages(self.repository, self.token, f"pulls/{self.pr}/reviews")

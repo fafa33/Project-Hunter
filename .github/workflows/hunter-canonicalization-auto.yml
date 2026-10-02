@@ -9,8 +9,10 @@ on:
     types: [submitted, edited, dismissed]
   pull_request_review_comment:
     types: [created, edited, deleted]
-  pull_request_review_thread:
-    types: [resolved]
+  # GitHub Actions has no pull_request_review_thread trigger. Thread-resolution
+  # state is therefore reconciled on the supported review/comment events below
+  # and by explicit workflow_dispatch catch-up; never declare an unsupported
+  # event here because GitHub rejects the whole workflow before any job starts.
   workflow_dispatch:
     inputs:
       pr_number:
@@ -63,6 +65,14 @@ jobs:
       - name: Set up Python
         if: steps.engine.outputs.available == 'true'
         uses: actions/setup-python@v6
+        env:
+          # This job runs on a self-hosted macOS runner whose account is not
+          # `/Users/runner`. `cache: pip` resolves its cache directory from the
+          # runner account's home, so without an explicit portable path the step
+          # fails with `mkdir: /Users/runner: Permission denied` and canonicalization
+          # never runs. runner.temp is supplied by the runner and is portable
+          # across hosted and self-hosted images.
+          PIP_CACHE_DIR: ${{ runner.temp }}/pip-cache
         with:
           python-version: "3.11"
           cache: pip

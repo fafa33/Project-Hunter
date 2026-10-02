@@ -2,87 +2,45 @@
   "claims": {
     "acceptance_criteria": [
       {
-        "criterion": "Lean Governance: extend existing authorities (Merge Readiness, Governance Review, the pre-ready hostile review, the DPM/SPM context path) rather than introducing a parallel governance or orchestration framework.",
-        "evidence": "evaluate_completion_claim() wraps hunter_merge_readiness_v2.evaluate() unchanged rather than restating its decision logic; the canonicalization script reuses build_learning_ledger/materialize_learning_ledger from PR #528 unchanged with no new registry/persistence/replay semantics; EngineeringContextAuthority's existing schema (v1) is extended to v2 by adding one field rather than replaced. Where an existing mechanism already fully satisfied a criterion (SCOPE_MUTATION_REJECTED via hunter_pre_ready_review.py, validation-receipt reuse via hunter_validation_receipt.py), no new code was added for it -- see AC-6 and AC-3 evidence.",
+        "criterion": "review_authority in docs/CODE_WRITE_POLICY.json carries a coverage_scopes key, defaulting to [].",
+        "evidence": "docs/CODE_WRITE_POLICY.json declares review_progression.review_authority.coverage_scopes = []; load_coverage_scopes returns no scopes when the key is absent or empty, so the introducing pull request ships no authorization.",
         "id": "AC-1",
         "verdict": "satisfied"
       },
       {
-        "criterion": "No Repository Rediscovery reaches the machine-consumed agent execution path, not only human-facing documentation.",
-        "evidence": "EngineeringContextAuthority.compile() now returns an execution_discipline field carrying the no-rediscovery rule set, and ENGINEERING_IMPLEMENT_PROFILE.specification.trusted_system_constraints explicitly references it -- this is the actual SmartPromptMachine-compiled prompt text an engineering.implement agent receives, not only CLAUDE.md prose. Regression: tests/test_engineering_context_authority.py::test_compiled_context_carries_the_no_repository_rediscovery_execution_rule and tests/test_engineering_task_ingress.py's assertion that 'execution_discipline' is present in the compiled payload and referenced in the profile's own constraint text.",
+        "criterion": "A trusted loader reads it, failing closed on any malformed or ambiguous entry.",
+        "evidence": "load_coverage_scopes reads only the trusted CODE_WRITE_POLICY_PATH and returns an error for a non-list value, an unknown mode, a blank or non-string criterion, a missing owner field, or a duplicate Issue+mode entry; tests/test_scoped_acceptance_coverage.py asserts each case fails closed.",
         "id": "AC-2",
         "verdict": "satisfied"
       },
       {
-        "criterion": "Execution Economy: focused verification is used by default; full-repository validation runs only at the repository-defined stage or when concrete evidence requires it; unchanged exact-HEAD validation evidence is reused rather than rerun.",
-        "evidence": "This mission ran the full local pytest suite a bounded number of times (once per branch before push, as CLAUDE.md's push-boundary instruction requires), reusing ruff/black/mypy (fast, deterministic) for every incremental change instead of rerunning pytest per edit. The exact-HEAD validation-receipt-reuse mechanism itself (hunter_validation_receipt.py, hunter_pr_preflight.py --reuse-receipt) is untouched by this PR and remains covered by its own existing tests/test_validation_proof_reuse.py, including the RFD-416-001 regression for reuse being bound to the exact head.",
+        "criterion": "A review may declare a bounded_correction coverage scope; the trusted controller admits it only against an owner authorization naming the same Issue, mode, and a criteria subset.",
+        "evidence": "A candidate declares a document-level coverage_scope. _coverage_scope_error requires the claimed criteria to be the governing Issue's own normalized criteria, then requires a trusted authorization with the same Issue and mode; a claimed criterion outside the authorized set is refused as excess, never clamped. Only then is SCOPED_STATE returned.",
         "id": "AC-3",
         "verdict": "satisfied"
       },
       {
-        "criterion": "Bounded Independent Review: the review opportunity has a visible state and does not wait on any single provider indefinitely; explicit reviewer failure, quota exhaustion, or timeout is recorded and does not paralyze the candidate.",
-        "evidence": "Not implemented or modified by this PR's diff. hunter_reviewer_collector.py / hunter_review_orchestrator.py already implement bounded per-reviewer ack/review timeouts and WAITING_FOR_REVIEWER / REVIEW_IN_PROGRESS / FAILOVER_IN_PROGRESS / POOL_EXHAUSTED states (existing, tested by tests/test_hunter_reviewer_collector.py and tests/test_hunter_review_orchestrator.py, both untouched here). This PR did exercise that real mechanism operationally for its own review request (see AC-10/finding F-2), but added no new bounded-timeout machinery of its own.",
+        "criterion": "A valid bounded correction produces a scoped outcome that is never the verdict satisfying the Issue.",
+        "evidence": "ReviewVerdict.ok is False for the scoped state and the verdict text states it is not Issue completion and satisfies no remaining criterion. VALID_SCOPED_CORRECTION is an admission state only, and hunter_merge_readiness_v2.py records it alongside rather than as the valid review state.",
         "id": "AC-4",
-        "verdict": "not-applicable"
+        "verdict": "satisfied"
       },
       {
-        "criterion": "No false READY while the bounded independent-review opportunity is still pending: a candidate is not reported fully ready to merge while a legitimately requested review has not yet reached a terminal state.",
-        "evidence": "hunter_merge_readiness_v2.evaluate() -- the function that actually decides the GitHub-visible 'Hunter Merge Readiness' status humans merge against -- still deliberately does not gate success on review-authority state (unchanged by this PR, per DFF-026: external review is defense-in-depth, never a mandatory merge dependency). What this PR does add is a stricter, separate completion gate: evaluate_completion_claim()/decide_completion() now reject completion (not mergeability) while review_authority reports 'pending'. This closes the concern for 'should a worker consider this done', not for what GitHub's own merge-readiness check reports; the criterion as literally worded ('reported fully ready to merge') is about the latter and remains not-applicable to this diff. See finding F-1 (now resolved for the completion-gate reading) for the full history.",
+        "criterion": "With no declaration or no authorization, the full Issue criteria remain required.",
+        "evidence": "With no declared scope or no trusted authorization, _coverage_scope_error returns an incomplete problem and the document is measured against every criterion the Issue defines. Absence never grants the relaxation; tests cover self-declaration without authorization and a declaration with no trusted entry.",
         "id": "AC-5",
-        "verdict": "not-applicable"
+        "verdict": "satisfied"
       },
       {
-        "criterion": "A machine-consumable Execution Contract constrains agent execution: acceptance criteria and mission scope are immutable to the worker: an agent may not silently omit, defer, reinterpret, or narrow a criterion, and any scope expansion must be evidence-gated (state why current scope is insufficient, the exact additional scope, and its cost, before acting on it).",
-        "evidence": "The scope-immutability and evidence-gated-expansion rules are now explicit entries in EngineeringContextAuthority.EXECUTION_DISCIPLINE_RULES, reaching the same compiled context as AC-2. Separately, and already existing before this PR: hunter_pre_ready_review.py's verify_claims/verify_review_request already reject any review whose claims omit one of the governing Issue's acceptance criteria -- proven by the existing tests/test_issue_412_prevention_gate.py::test_a_review_omitting_all_but_one_criterion_is_refused (Issue #412) and test_a_review_covering_one_self_authored_criterion_is_refused. This review request document is itself bound by, and satisfies, that exact mechanism: it covers all 14 of this Issue's criteria (verified via parse_issue_acceptance_criteria against this Issue's real body).",
+        "criterion": "Exact head, exact content, applicable defect families, findings, regression evidence, and correction-commit range remain mandatory under a bounded scope.",
+        "evidence": "verify_claims runs the same sequence before and after the scope decision: exact review_target equality, review_target_digest, base_sha binding, applicable defect families from the trusted registry, resolved findings' regression test present in the change set, correction commits inside the candidate range, and exact-head authority. The bounded path relaxes only the criterion set; tests/test_scoped_acceptance_coverage.py re-proves each invariant under a declared scope.",
         "id": "AC-6",
         "verdict": "satisfied"
       },
       {
-        "criterion": "Prevention of Premature Agent Completion: an agent's own claim of completion, a final report, a passed local preflight, a pushed commit, or an opened pull request does not itself complete the mission.",
-        "evidence": "scripts/hunter_merge_readiness_v2.py::evaluate_completion_claim() has no `claimed_done` parameter at all -- completion cannot depend on self-report by construction, not merely by convention. Regression: tests/test_hunter_merge_readiness_v2.py::test_worker_says_done_while_required_checks_are_red_is_rejected, test_worker_says_done_while_pr_is_still_draft_is_rejected, test_worker_says_done_with_unresolved_validated_finding_is_rejected, test_completion_verdict_does_not_depend_on_a_self_reported_claim.",
+        "criterion": "This feature is inert for the pull request that introduces it.",
+        "evidence": "coverage_scopes ships empty and the trusted controller reads the default branch's policy. Verified against origin/main@1ce5e097 that trusted main has no load_coverage_scopes, no SCOPED_STATE and no coverage_scopes parameter on verify_claims, so this candidate is evaluated under full-Issue rules by code that predates the feature.",
         "id": "AC-7",
-        "verdict": "satisfied"
-      },
-      {
-        "criterion": "An independent Completion Gate evaluates completion against real, current, exact-HEAD evidence (required hosted checks green, governance/verification gates green, the bounded independent-review opportunity at a legitimate terminal state, no unresolved substantive finding), not against any agent's self-report.",
-        "evidence": "evaluate_completion_claim() re-derives its verdict from the same current-hosted-state evaluate() Merge Readiness uses (draft state, mergeability, unresolved review threads, changes requested, unresolved validated reviewer dispositions, candidate admission, required checks Quality Gates/dependency-review/CodeQL, shared-head attribution) every time it is called, AND -- following independent review confirming this gap (finding F-1) -- now additionally rejects while the independent-review opportunity has not reached a terminal state. decide_completion() (finding F-6) makes this a real, invokable production check against a live PR, not only unit-tested logic.",
-        "id": "AC-8",
-        "verdict": "satisfied"
-      },
-      {
-        "criterion": "Automatic finding-to-remediation orchestration: a validated finding is durably captured and cannot be silently dropped or falsely marked resolved by the remediation lifecycle.",
-        "evidence": "scripts/hunter_collect_learning_observations.py now ingests the complete authenticated authority-review history rather than only current-HEAD comments, preserves each original source head as source_event_head_sha, rejects untrusted reviewer identities, and accepts a terminal owner disposition only on the exact resolved thread. Confirmed findings require complete replayable evidence (fix SHA, canonical family, invariant, regression target) before canonical learning; unresolved/incomplete evidence remains durable neutral evidence and cannot be falsely canonicalized. .github/workflows/hunter-canonicalization-auto.yml captures this lifecycle automatically and preserves its artifact. Regressions: tests/test_hunter_knowledge_learning_workflow.py, including older-head catch-up, untrusted-review rejection, resolved structured disposition, and unresolved-thread rejection. scripts/hunter_canonicalization_candidate_pr.py also appends every authenticated github-review event to the existing docs/REVIEWER_FINDING_DISPOSITIONS.json as a stable RFD-AUTO-* entry with validation_state=unvalidated, on the same dedicated knowledge candidate branch/Draft PR. Therefore a finding is durably proposed even before enough evidence exists to classify or map it; duplicate events are byte-identical no-ops and cannot be silently omitted by HEAD movement. Regressions: test_github_review_finding_is_durably_captured_even_before_classification and test_duplicate_github_review_capture_is_idempotent.",
-        "id": "AC-9",
-        "verdict": "satisfied"
-      },
-      {
-        "criterion": "Automatic finding-to-canonical-knowledge lifecycle: a resolved finding that maps to an existing canonical defect family is automatically turned into a canonicalization candidate branch and Draft PR, without requiring the owner to run the canonicalization CLI by hand, and without ever writing directly to main or auto-merging.",
-        "evidence": ".github/workflows/hunter-canonicalization-auto.yml is the automatic trusted-default-branch trigger for pull_request_review / pull_request_review_comment events, with workflow_dispatch catch-up. It invokes scripts/hunter_collect_learning_observations.py and then the existing scripts/hunter_canonicalization_candidate_pr.py path on the self-hosted Mac. The GitHub token remains contents:read / pull-requests:read; the candidate push crosses the already-authorized local_git_push + .githooks/pre-push boundary, targets only canonicalization/defect-registry-auto, opens/updates a Draft PR, and never writes main or merges. A bootstrap guard refuses to execute candidate code until the engine is present on the trusted default branch; the local/manual PR #528 recovery path remains available.",
-        "id": "AC-10",
-        "verdict": "satisfied"
-      },
-      {
-        "criterion": "One controlled, real end-to-end proof of the automatic finding-to-canonicalization lifecycle exists, using a safe representative finding.",
-        "evidence": "tests/test_hunter_canonicalization_candidate_pr.py exercises the real mechanism end to end -- real git worktree creation, real commit, real push to a real (local, disposable) git remote, real idempotency and cross-finding accumulation behaviour -- using the DFF-008 family's real invariant text as the representative finding, with only the GitHub API (`gh`) calls stubbed. A live demonstration against the production fafa33/Project-Hunter registry was deliberately not forced: materialize_learning_ledger can only reinforce an existing DEFECT_REGISTRY.json family whose invariant deterministically matches the finding, and this session's own real accumulation-bug finding (see finding F-3) does not genuinely match DFF-008 or any of the branch/concurrency-adjacent families checked (DFF-012, DFF-016, DFF-017, DFF-021, DFF-022, DFF-024, DFF-025, DFF-026) -- minting a new family requires human/canonical approval this automation must not self-grant. See finding F-4.",
-        "id": "AC-11",
-        "verdict": "satisfied"
-      },
-      {
-        "criterion": "No repository-write authority is broadened, no new CODE_WRITE_POLICY.json grant is added, main is never written to directly, and no auto-merge exists anywhere in the new mechanism.",
-        "evidence": "git diff origin/main...HEAD does not touch docs/CODE_WRITE_POLICY.json. grep for the literal token \"merge\" across scripts/hunter_canonicalization_candidate_pr.py and scripts/hunter_merge_readiness_v2.py's new evaluate_completion_claim finds no merge command. tests/test_hunter_canonicalization_candidate_pr.py::test_propose_never_targets_main_for_write_operations asserts no git command in the whole propose() call sequence checks out or pushes main.",
-        "id": "AC-12",
-        "verdict": "satisfied"
-      },
-      {
-        "criterion": "No mandatory paid or external AI provider dependency is introduced anywhere in the new mechanism; the local/manual CLI recovery path from PR #528 remains fully supported.",
-        "evidence": "scripts/hunter_canonicalize_learning.py (PR #528's manual CLI) is untouched by this PR and remains the fully supported local/Mac fallback. scripts/hunter_canonicalization_candidate_pr.py takes no network/provider dependency beyond git and gh (the same tools any human contributor already uses); it composes build_learning_ledger/materialize_learning_ledger, neither of which contacts a provider.",
-        "id": "AC-13",
-        "verdict": "satisfied"
-      },
-      {
-        "criterion": "Human merge approval remains the final, sole authority to integrate into main; nothing in this mission marks a PR ready or merges it.",
-        "evidence": "Both PR #529 and PR #530 remain Draft throughout this mission. No `gh pr merge`, `gh pr ready`, or git merge-to-main command was run by any script or by this session. hunter_merge_readiness_v2.py's evaluate()/evaluate_completion_claim() are read-only decision functions; neither performs a write action.",
-        "id": "AC-14",
         "verdict": "satisfied"
       }
     ],
@@ -100,501 +58,190 @@
       "transaction-snapshot-consistency"
     ],
     "base_ref": "main",
-    "base_sha": "c25b48228f422a7a4e3e85112bd9ffdc216da849",
+    "base_sha": "1c0ec5f9ee791644a039e12351fdbced13f46954",
     "defect_families": [
       {
-        "evidence": "No time-based admission/ordering/cutoff decision is introduced; nothing samples a clock.",
-        "family": "DFF-001",
-        "outcome": "clear"
-      },
-      {
-        "evidence": "compute_plan() reads the supplied registry snapshot once into an isolated scratch copy before computing; materialize_learning_ledger's own atomic compare-and-swap (unchanged) is the only writer, so no decision spans two independently-taken views.",
-        "family": "DFF-002",
-        "outcome": "clear"
-      },
-      {
-        "evidence": "No caller-supplied identity can select or override a repository-assigned logical identity anywhere in this diff.",
-        "family": "DFF-003",
-        "outcome": "clear"
-      },
-      {
-        "evidence": "compute_plan()/propose() raise CanonicalizationCandidatePrError on any malformed or incomplete observation via build_learning_ledger's existing validation; nothing defaults absence to permission.",
-        "family": "DFF-004",
-        "outcome": "clear"
-      },
-      {
-        "evidence": "No persistence-restriction or metadata-nesting surface exists in this diff.",
-        "family": "DFF-005",
-        "outcome": "clear"
-      },
-      {
-        "evidence": "The accumulation-bug fix (finding F-3) is exactly a monotonicity/restart-stability fix: propose() now bases each run on the dedicated branch's own tip when it still carries unmerged content, and rebuilds fresh only once that tip is provably an ancestor of main, so repeated or restarted runs never regress or duplicate an already-accumulated candidate. Regression: test_propose_accumulates_a_second_finding_onto_an_unmerged_first_candidate, test_propose_rebuilds_fresh_once_dedicated_branch_is_stale, test_propose_second_run_with_identical_observations_is_idempotent_noop.",
-        "family": "DFF-006",
-        "outcome": "repaired"
-      },
-      {
-        "evidence": "No authorization-minting surface exists in this diff.",
+        "evidence": "A scope must match the trusted Issue and mode, is bound to the evaluated exact head from trusted evidence (hunter_pre_ready_review.py:1163), and any claimed criterion outside the authorized set is refused, so an authorization cannot be replayed onto a different Issue, mode, head, or wider criteria set.",
         "family": "DFF-007",
         "outcome": "clear"
       },
       {
-        "evidence": "No new evidence-forgery surface is introduced; the canonicalization script only ever writes docs/DEFECT_REGISTRY.json through the existing, unmodified, digest-bound materialize_learning_ledger.",
+        "evidence": "review_id and review_request.claims_id are SHA-256 over the canonical claims (hunter_pre_ready_review.py:233) and are recomputed by verify_claims, which rejects a hand-edited document as stale; observed live on this candidate. review_target_digest and base_sha give the same content and fork-point binding.",
         "family": "DFF-008",
         "outcome": "clear"
       },
       {
-        "evidence": "connector_write_ingress is not touched by this diff.",
+        "evidence": "No connector ingress path is added or modified. The new field is read from the trusted default-branch policy, so a candidate cannot supply the authorization it is measured against, and no ingress proof format is altered.",
         "family": "DFF-009",
         "outcome": "clear"
       },
       {
-        "evidence": "This session found and fixed exactly this defect class in its own commits: 58da9c6/76dbe2e were originally authored/committed as Claude <noreply@anthropic.com> but signed with a key GitHub recognizes only under the fafa33 identity, producing verification reason=unknown_key on GitHub (confirmed via gh api .../commits/<sha> before the fix). Corrected so every commit's author and committer both independently resolve to the bound Farhad5778/fafa33 identity; re-verified true via `git verify-commit` locally and `verified: true, reason: valid` from the GitHub commits API for every commit now in both PR #529 and PR #530's range.",
+        "evidence": "No author, committer or identity handling is introduced. Writer Provenance reports the governed range up to HEAD as authorization-bound, and every commit in the range carries the authorized Farhad5778 identity.",
         "family": "DFF-010",
-        "outcome": "repaired"
+        "outcome": "clear"
       },
       {
-        "evidence": "The amend/rebase operations used to fix DFF-010 replaced commits in place (git commit --amend --reset-author, git rebase) rather than stranding an intermediate commit; both branches' full histories were re-verified after the force-with-lease push (explicitly authorized) and every commit resolves to bound writer evidence.",
+        "evidence": "The candidate is a single signed commit over the fork point, so no intermediate commit exists to strand. The pre-ready artifact is regenerated from current content and is the final mutation of the candidate, so no per-commit rewind is required.",
         "family": "DFF-011",
         "outcome": "clear"
       },
       {
-        "evidence": "propose()'s staleness check (git merge-base --is-ancestor) is exactly this invariant applied to the dedicated canonicalization branch: a receipt/tip inherited unchanged from an already-merged state is never treated as current, live accumulation state.",
+        "evidence": "No authorization receipt is written or modified and the receipt path is untouched. The artifact is regenerated from the exact current base..HEAD content, and the pre-push hook blocks a dirty tree.",
         "family": "DFF-012",
         "outcome": "clear"
       },
       {
-        "evidence": "This review request document is itself the complete base->HEAD hostile review this family requires before candidate admission, produced and committed before requesting external review.",
+        "evidence": "The document is generated in --request mode and records no authority. verify_claims refuses any document carrying review_request as 'a review request is not completed exact-head review authority' (hunter_pre_ready_review.py:1218); admission still requires a completed exact-head review.",
         "family": "DFF-013",
         "outcome": "clear"
       },
       {
-        "evidence": "evaluate() (unchanged) already distinguishes a still-running check (status != completed -> pending) from an actual failure (conclusion in HARD_FAILURES -> failed). evaluate_completion_claim() collapses evaluate()'s three states (success/pending/failure) into a binary COMPLETION_ACCEPTED/COMPLETION_REJECTED for its own narrower question (should an agent report done), but preserves decision.reason verbatim in CompletionVerdict.reason so the pending-vs-failure distinction is not lost to an inspector -- it does not publish anything to the GitHub status API, so DFF-014's own publish()-level guarantee is unaffected. See non-blocking finding F-2 for the collapse itself.",
+        "evidence": "No hosted prerequisite or status mapping is added or modified; GITHUB_STATUS_MAP and canonical_status are untouched and an unrecognised status still fails closed.",
         "family": "DFF-014",
         "outcome": "clear"
       },
       {
-        "evidence": "This PR's own reporting distinguishes 'regression-tested' from 'prevented' throughout (see acceptance-criteria evidence above), and does not claim hosted-gate or merge-gate enforcement for anything only locally tested.",
+        "evidence": "docs/DEFECT_REGISTRY.json is untouched, so no family claims a prevention stage. The change adds regression tests rather than a prevention-stage claim.",
         "family": "DFF-015",
         "outcome": "clear"
       },
       {
-        "evidence": "hunter_validation_receipt.py is not modified by this diff.",
+        "evidence": "review_target must equal the trusted base..HEAD change set and review_target_digest must match, so a review cannot be reused across mutated content; verify_claims rejects a document describing different content.",
         "family": "DFF-016",
         "outcome": "clear"
       },
       {
-        "evidence": "SmartPromptMachine's own allocation/dispatch decision logic (smart_prompt_machine.py, smart_prompt_routing.py's compile_task) is unchanged; only ENGINEERING_IMPLEMENT_PROFILE's constraint prose and EngineeringContextAuthority's compiled payload gained one additional field each, verified by the full existing tests/test_engineering_task_ingress.py and tests/test_smart_prompt_machine_*.py suites passing unchanged (154 tests).",
-        "family": "DFF-018",
-        "outcome": "clear"
-      },
-      {
-        "evidence": "Issue-agent Railway bootstrap is not touched by this diff.",
+        "evidence": "Not applicable: no issuer composition, volume mount or runtime bootstrap path is added or modified. The change is confined to policy loading, verdict construction, admission and merge-readiness state sets.",
         "family": "DFF-019",
         "outcome": "clear"
       },
       {
-        "evidence": "Issue-agent live-instance ownership is not touched by this diff.",
+        "evidence": "No live instance, execution ledger or ownership identity is added or modified.",
         "family": "DFF-020",
         "outcome": "clear"
       },
       {
-        "evidence": "Issue-agent shutdown-drain handling is not touched by this diff.",
+        "evidence": "No worker, drain or shutdown handling is added or modified; the change has no runtime lifecycle surface.",
         "family": "DFF-021",
         "outcome": "clear"
       },
       {
-        "evidence": "hunter_merge_readiness_v2.py's existing review_authority_state()/evaluate() logic is byte-for-byte unchanged by this diff; evaluate_completion_claim() is a pure addition after the existing evaluate() function.",
+        "evidence": "hunter_merge_readiness_v2.py only adds VALID_SCOPED_CORRECTION to the three authority state sets beside the existing valid state; the required complete exact-head review and trusted PR evidence checks are unchanged, so readiness still fails closed without a current-head review.",
         "family": "DFF-022",
         "outcome": "clear"
       },
       {
-        "evidence": "Issue-agent execution-ledger ordering is not touched by this diff.",
+        "evidence": "No execution entry point or ledger claim is added or modified.",
         "family": "DFF-023",
         "outcome": "clear"
       },
       {
-        "evidence": "remediation_generation_admissible() is unchanged and still refuses a non-material generation, an active prior-generation collector, an already-started collector for the new generation, and any generation beyond MAX_REMEDIATION_GENERATIONS, leaving the review pending. The new INDEPENDENT_REVIEW_OPPORTUNITY_SECONDS branch in ensure_collector() finalizes only the cycle it was handed, reusing existing.generation_id and publishing REVIEW_TIMED_OUT without re-entering dispatch; REVIEW_TIMED_OUT, REVIEWER_UNAVAILABLE and POOL_EXHAUSTED were added to the same early-return set as REVIEW_CLEAR/FINDINGS_OPEN, so a finalized cycle can neither dispatch again nor buy another generation, and hunter-reviewer-collector.yml's job timeout moved 120->15 minutes to match the opportunity budget rather than to extend any reviewer invocation.",
+        "evidence": "No review generation, cycle or remediation transition is modified. The document is a request for external exact-head review and authority is adopted out of band, so accepting a review still requires no additional candidate commit.",
         "family": "DFF-024",
         "outcome": "clear"
       },
       {
-        "evidence": "No governance-authority-successor/cutover mechanism is touched by this diff.",
+        "evidence": "No authority cutover is performed. The reviewer pool, the Codex primary and the exhaustion rules are untouched, and coverage_scopes sits beside reviewer_pool without changing tiering.",
         "family": "DFF-025",
         "outcome": "clear"
       },
       {
-        "evidence": "evaluate_completion_claim() introduces no new dependency on external reviewer availability; it reuses evaluate(), which already treats external review as optional defense-in-depth, unchanged. The new review-pending rejection in evaluate_completion_claim() (finding F-1) is a stricter, separate completion question, not a merge-authority gate: it never blocks push, candidate admission, governance success, or evaluate()'s own merge-readiness decision, so no reviewer's absence can deadlock merge authority through it.",
+        "evidence": "A coverage scope is an owner authorization read from the default branch, not an external provider dependency. With no scope or no reviewer the strict full-Issue path stands, so provider absence cannot deadlock merge authority; the pre-push hook reports a missing external review as a non-blocking NOTE.",
         "family": "DFF-026",
         "outcome": "clear"
       },
       {
-        "evidence": "Each of the six workflows gates execution on the same condition it probes with. hunter-canonicalization-auto.yml's 'Detect trusted canonicalization engine' step tests for exactly the two scripts the job later runs (hunter_collect_learning_observations.py, hunter_canonicalization_candidate_pr.py) and every install, checkout, execute and push step is conditioned on that same output, so the local_git_push step is unreachable whenever the probe reports unavailable, and the unavailable case is surfaced as a named bootstrap message. The two replay workflows probe nothing and admit nothing conditionally: replay-validate runs its entrypoint unconditionally after actions/setup-python, and the privileged replay-publish half is checkout-free and runs only its own inline trusted logic. No in-job self-report stands in as security authority in any of the six.",
-        "family": "DFF-027",
-        "outcome": "clear"
-      },
-      {
-        "evidence": "No candidate-controlled content executes inside a credential-holding boundary. hunter-canonicalization-auto.yml runs only the trusted default-branch copies of its two entrypoints (the first checkout has no path:, so the workspace root is main; the reviewed PR is checked out separately into reviewed-pr/ with persist-credentials: false), and neither hunter_collect_learning_observations.py nor hunter_canonicalization_candidate_pr.py references HUNTER_REGRESSION_ROOT or reads that directory, so the candidate tree is inert data in the job that holds the publication SSH identity. replay-publish holds statuses: write but never checks out, clones, fetches, or executes repository content -- the three trusted files are fetched as inert .fetched text at ref=main and only hashed. replay-validate is the only job that executes candidate controller modules and runs them with GITHUB_TOKEN and GH_TOKEN explicitly blanked to \"\" under permissions contents: read.",
-        "family": "DFF-028",
-        "outcome": "clear"
-      },
-      {
-        "evidence": "hunter_canonicalization_candidate_pr.py pushes through the ordinary .githooks/pre-push safety boundary like any human contribution, then opens its Draft PR immediately after push rather than waiting for the hosted Pre-PR Preflight run to complete first -- unlike hunter_issue_agent_candidate_pr.py, which is itself only invoked by a workflow_run trigger after that hosted preflight already passed. This differs because the trust model differs: this script is run by the same identity that authored the content (no elevated-trust PR-opener certifying someone else's unverified candidate), so there is no privileged-attestation-before-proof gap of the kind this family targets. Flagged as a non-blocking design question rather than asserted definitively resolved -- see finding F-5.",
+        "evidence": "The candidate was pushed only through .githooks/pre-push, which ran the Architecture Index, Artifact, Defect Prevention, Ruff, Black and Mypy guards and the push-safety lane for this exact HEAD before the remote accepted it. No --no-verify was used and the change adds no draft-PR bypass.",
         "family": "DFF-029",
         "outcome": "clear"
       },
       {
-        "evidence": "scripts/hunter_canonicalization_candidate_pr.py and its test module both import and load cleanly (verified: full mypy run across 865 source files succeeds, and pytest collects and runs both new files without a loader error).",
+        "evidence": "The only tracked asset added is the coverage_scopes key inside the existing tracked docs/CODE_WRITE_POLICY.json, read by load_coverage_scopes at its declared path. The tracked path grammar is unchanged and the committed policy parses.",
         "family": "DFF-033",
         "outcome": "clear"
       },
       {
-        "evidence": "The change widens retryability only where GitHub explicitly reports rate-limit exhaustion: RATE_LIMIT_403_PATTERNS gates the new 403 case in both classify_http_error and classify_cli_failure, so an ordinary permission-denied 403 stays permanent. It adds no budget of any kind -- execute_with_retry still runs exactly policy.attempts iterations with deterministic backoff clamped to policy.max_delay_seconds, no attempt count or deadline is derived from a per-operation timeout, and exhaustion still raises GitHubUnavailable(what, attempts, last) which remains distinguishable from a permanent GitHubRequestError raised on the first non-retryable failure. tests/test_hunter_github_transport.py pins both directions: test_rate_limit_403_is_transient, test_permission_403_remains_permanent, test_cli_rate_limit_403_is_transient.",
-        "family": "DFF-034",
-        "outcome": "clear"
-      },
-      {
-        "evidence": "tests/test_hunter_canonicalization_candidate_pr.py's deterministic assertions run only against repository-owned/local state (a disposable local git remote in tmp_path); the only external-facing calls (`gh`) are stubbed in the test lane, never asserted against a live network response.",
+        "evidence": "The new tests assert only on repository-owned state: they construct claims and documents in-process and call verify_claims and verify_review_request directly. No test reads an Issue body, a remote API response or a live endpoint.",
         "family": "DFF-035",
         "outcome": "clear"
       },
       {
-        "evidence": "No workflow entrypoint gained an undeclared runtime dependency. Both replay entrypoints (hunter_trusted_orchestrator_replay.py and hunter_trusted_orchestrator_replay_worker.py) import only the standard library, so actions/setup-python alone provisions them and neither job needs a pip step. hunter-canonicalization-auto.yml provisions the engine it installs with 'python -m pip install --only-binary :all: -c requirements/ci-constraints.txt .' before running it, and an engine that is not on the trusted default branch is reported as a named bootstrap condition rather than surfacing as a runtime ImportError. The codeql bridge and governance reconcile changes use only the preinstalled gh CLI and stdlib hashing.",
-        "family": "DFF-036",
-        "outcome": "clear"
-      },
-      {
-        "evidence": "CompletionVerdict is a structured dataclass (accepted: bool, state: str, reason: str) consumers read directly, not prose an agent must parse; `state` is always exactly \"COMPLETION_ACCEPTED\" or \"COMPLETION_REJECTED\".",
+        "evidence": "Governance classification stays machine-readable: a valid bounded correction maps to the VALID_SCOPED_CORRECTION state string and verify_claims returns the SCOPED_STATE verdict token rather than prose deciding the outcome.",
         "family": "DFF-037",
         "outcome": "clear"
       },
       {
-        "evidence": "The only change to this file is three additive entries in connector_write_ingress.root_of_trust_paths (hunter_trusted_orchestrator_replay.py, hunter_trusted_orchestrator_replay_worker.py, hunter_trusted_orchestrator_replay_definition.json), which widens declared trust-root coverage rather than relaxing it; no path was removed and no grant was added. The capability is held loudly, not best-effort: hunter_connector_write_ingress.py and hunter_artifact_preflight.py refuse the run when governed trust-root content is unauthorized, and this branch's own pre-push Artifact Guard reported 'PASS: defect registry and changed governed artifacts' over exactly this change. Making the harness a declared trust-root path therefore makes its unauthorized modification fail closed rather than proceed unreported.",
+        "evidence": "load_coverage_scopes fails closed and returns an error for malformed, duplicate or unknown-mode entries, and the controller refuses when scope evidence is unavailable rather than continuing best-effort. A scoped verdict never silently degrades to a valid one.",
         "family": "DFF-038",
         "outcome": "clear"
       },
       {
-        "evidence": "The candidate-touching half is pull_request-triggered (never pull_request_target), declares permissions contents: read only, checks out with persist-credentials: false, and blanks GITHUB_TOKEN and GH_TOKEN to \"\" in both jobs. Candidate controller modules are executed only inside hunter_trusted_orchestrator_replay_worker.py, a credential-blanked subprocess; the second job re-checks-out the exact candidate independently and recomputes each scenario's module digest itself via verify_candidate_module_digests() rather than trusting job 1's receipt. The privileged half is workflow_run-triggered (GitHub runs the base repository's own copy), is checkout-free by construction, and independently re-derives trusted_harness_definition_digest, scenario_set_digest, input_fixture_digest and main's tip from read-only API reads at ref=main, comparing the receipt's scenario ids, invariant text, per-scenario outcome, timestamps and overall_result against that trusted definition and treating any missing artifact or field as failure. Publishing a status requires statuses: write in that trusted job, so no candidate test, receipt or self-report can substitute for the independent re-derivation.",
-        "family": "DFF-040",
+        "evidence": "No REST endpoint or repository-scoped request helper is added or modified; the change makes no network call.",
+        "family": "DFF-039",
         "outcome": "clear"
       },
       {
-        "evidence": "The grader is never sourced from the candidate. hunter_trusted_orchestrator_replay.py resolves WORKER_PATH and DEFINITION_PATH from ROOT = Path(__file__).resolve().parents[1] -- the trusted checkout that actions/checkout placed at the default branch -- and loads the scenario set, invariants and fixture from that trusted definition file at import time; _run_scenario() launches that same trusted worker with the candidate supplied only as a confined relative path (resolve_confined_existing refuses any path escaping the workspace root). The privileged publish job independently re-fetches all three grader files at ref=main and refuses a receipt whose trusted_harness_definition_digest, scenario_set_digest or trusted_harness_sha disagrees, so a candidate branch's own copy of the grader can never grade itself. While the grader is not yet on main those ref=main reads fail under 'set -euo pipefail' and the job fails closed; there is no fallback to candidate-supplied grader content.",
-        "family": "DFF-041",
+        "evidence": "coverage_scopes is read from the trusted default branch and the introducing candidate is judged by trusted main's copy, which has no scoped branch. Verified against origin/main@1ce5e097: no load_coverage_scopes, no SCOPED_STATE, no coverage_scopes parameter, so the new semantics cannot admit this candidate and no bootstrap exception is required.",
+        "family": "DFF-040",
         "outcome": "clear"
       }
     ],
     "findings": [
       {
-        "evidence": "AC-5/AC-8 (no false READY / no false completion while review is pending): independent review (chatgpt-codex-connector[bot]) confirmed this exact gap on this PR and treated it as P1, which is the signal to stop deferring it. evaluate_completion_claim() now additionally rejects while review_authority reports 'pending' (covers WAITING_FOR_REVIEWER/REVIEW_IN_PROGRESS/POOL_EXHAUSTED), without touching evaluate()'s own merge-readiness decision or its GitHub status output -- so 'currently mergeable' (unaffected, external review remains defense-in-depth per DFF-026) and 'genuinely done' (now stricter) stay correctly distinct.",
+        "evidence": "An earlier revision of this candidate's committed artifact carried another candidate's claims and a derived digest that no longer matched them. Hunter's own binding detected it independently: verify_claims rejects review_id/review_request.claims_id that do not recompute from the claims, and separately rejects a review_target and base_sha that are not this candidate's. The artifact has been regenerated through the canonical hunter_pre_ready_review --request path, so every derived field is Hunter-derived and the digest binding is a standing guard rather than a one-time fix.",
         "id": "F-1",
         "resolution": "resolved",
         "resolution_evidence": {
-          "correction": "be62241961d8d7222d6087060d5983e46afb0290",
-          "regression_test": "tests/test_hunter_merge_readiness_v2.py"
-        },
-        "severity": "blocking"
-      },
-      {
-        "evidence": "evaluate_completion_claim() collapses evaluate()'s pending/failure distinction into a single COMPLETION_REJECTED state (DFF-014 evidence above explains why this is safe for this function's specific purpose). A future caller that needs the pending-vs-failure distinction should read CompletionVerdict.reason or call evaluate() directly rather than assume evaluate_completion_claim()'s two-state model is exhaustive.",
-        "id": "F-2",
-        "resolution": "unresolved",
-        "severity": "non-blocking"
-      },
-      {
-        "evidence": "Real defect found via this session's own adversarial self-review, before hunter_canonicalization_candidate_pr.py was ever proposed: propose() originally rebuilt the dedicated branch unconditionally from main, so a second finding processed while a first finding's PR was still open would silently overwrite the first finding's proposal. Corrected to accumulate on the dedicated branch's own tip unless it is already an ancestor of main.",
-        "id": "F-3",
-        "resolution": "resolved",
-        "resolution_evidence": {
-          "correction": "6d14c86c19c0b7ce6c9f789f42be9cfb2aab2548",
-          "regression_test": "tests/test_hunter_canonicalization_candidate_pr.py"
-        },
-        "severity": "blocking"
-      },
-      {
-        "evidence": "AC-11's end-to-end proof runs in a controlled local test harness (a disposable local git remote), not against the production fafa33/Project-Hunter registry, because no currently-open, honestly-matching existing defect family was available to demonstrate against without fabricating or misclassifying evidence. This is disclosed explicitly rather than presented as a production demonstration.",
-        "id": "F-4",
-        "resolution": "unresolved",
-        "severity": "non-blocking"
-      },
-      {
-        "evidence": "hunter_canonicalization_candidate_pr.py opens its Draft PR immediately after push rather than waiting for hosted Pre-PR Preflight to complete first, unlike the trusted-candidate-PR-opener pattern in hunter_issue_agent_candidate_pr.py. See DFF-029 evidence for why the differing trust model makes this a design question rather than a violation; still recorded here for visibility.",
-        "id": "F-5",
-        "resolution": "unresolved",
-        "severity": "non-blocking"
-      },
-      {
-        "evidence": "Independent review (chatgpt-codex-connector[bot], P1) found evaluate_completion_claim() had no production caller -- only the unit tests exercised it, so it could not reject any real worker's completion claim; AC-7/AC-8 were convention, not enforcement. Fixed: hunter_merge_readiness_v2.py gains decide_completion(pr_number), building the same live GitHub observation decide() already uses, and `python scripts/hunter_merge_readiness_v2.py completion <pr>` is now a genuine invokable production path.",
-        "id": "F-6",
-        "resolution": "resolved",
-        "resolution_evidence": {
-          "correction": "be62241961d8d7222d6087060d5983e46afb0290",
-          "regression_test": "tests/test_hunter_merge_readiness_v2.py"
-        },
-        "severity": "blocking"
-      },
-      {
-        "evidence": "Independent review (chatgpt-codex-connector[bot], P1) found propose() could silently orphan the dedicated branch forever: if a prior run's push succeeded but its own `gh pr create` call then failed (a transient network blip, a crash), the branch carried real unmerged content with no PR, and every later run computing the identical already-applied observations would just report NO-OP without ever discovering the missing PR. Fixed: propose() now reconciles a real, unmerged, PR-less dedicated branch by opening the missing PR for it, with no new commit needed.",
-        "id": "F-7",
-        "resolution": "resolved",
-        "resolution_evidence": {
-          "correction": "be62241961d8d7222d6087060d5983e46afb0290",
-          "regression_test": "tests/test_hunter_canonicalization_candidate_pr.py"
-        },
-        "severity": "blocking"
-      },
-      {
-        "evidence": "Resolved by d861b7798ae0e1dc98b37667267ff2114108c063 plus bootstrap correction 929756ddfcee02cec6fe738b15ad8c3c2224d698: authenticated finding ingestion/catch-up is now automatic and the automatic canonicalization workflow calls the existing candidate-PR path without adding GitHub repository-write permission. The workflow uses the existing local_git_push authority on the self-hosted Mac and fails safely during pre-merge bootstrap rather than executing candidate code as trusted code.",
-        "id": "F-8",
-        "resolution": "resolved",
-        "resolution_evidence": {
-          "correction": "929756ddfcee02cec6fe738b15ad8c3c2224d698",
-          "regression_test": "tests/test_hunter_knowledge_learning_workflow.py"
+          "correction": "c4ef18eb965f4d4fda7fb3c16c1deba7dab99fff",
+          "regression_test": "tests/test_scoped_acceptance_coverage.py"
         },
         "severity": "non-blocking"
       }
     ],
-    "issue": "532",
+    "issue": "543",
     "review_target": [
       {
-        "blob_sha": "8cf12374ae583e8751b1da2bbe34c674ef874e86",
-        "path": ".github/workflows/hunter-canonicalization-auto.yml",
+        "blob_sha": "d53f7264bf427745673a8f99bb65825fe69bbf01",
+        "path": "tests/test_scoped_acceptance_coverage.py",
         "previous_path": "",
         "status": "added"
       },
       {
-        "blob_sha": "d9d5a5dc46d423f5e7d1ca5367ff505bdf64a10f",
-        "path": ".github/workflows/hunter-trusted-orchestrator-replay-publish.yml",
-        "previous_path": "",
-        "status": "added"
-      },
-      {
-        "blob_sha": "625a70c48a460aac4ac91b7ef1d52cad89335599",
-        "path": ".github/workflows/hunter-trusted-orchestrator-replay-validate.yml",
-        "previous_path": "",
-        "status": "added"
-      },
-      {
-        "blob_sha": "c2a9ee4eff7d86475e398c2c01757c2896246812",
-        "path": "scripts/hunter_canonicalization_candidate_pr.py",
-        "previous_path": "",
-        "status": "added"
-      },
-      {
-        "blob_sha": "06327de542a7ff906d3e72829f856707eab713cc",
-        "path": "scripts/hunter_trusted_orchestrator_replay.py",
-        "previous_path": "",
-        "status": "added"
-      },
-      {
-        "blob_sha": "57af00867a7c16a522101c93438bd07527053baf",
-        "path": "scripts/hunter_trusted_orchestrator_replay_definition.json",
-        "previous_path": "",
-        "status": "added"
-      },
-      {
-        "blob_sha": "21a743db407f5bdc189f4862ce5def9d0893d665",
-        "path": "scripts/hunter_trusted_orchestrator_replay_worker.py",
-        "previous_path": "",
-        "status": "added"
-      },
-      {
-        "blob_sha": "9af29a48c62b8030551ea0b3450cf0830717c987",
-        "path": "tests/test_hunter_canonicalization_candidate_pr.py",
-        "previous_path": "",
-        "status": "added"
-      },
-      {
-        "blob_sha": "bd98aa570bcac948e5e7ad7863dc9e87026ef4c4",
-        "path": "tests/test_hunter_trusted_orchestrator_replay.py",
-        "previous_path": "",
-        "status": "added"
-      },
-      {
-        "blob_sha": "a6a7f8b3540c93cd9f27db1e8ce861c1a391fedd",
-        "path": ".github/workflows/codeql-default-setup-bridge.yml",
-        "previous_path": "",
-        "status": "modified"
-      },
-      {
-        "blob_sha": "2fabf1df12602a0fcb271ce98a284b8deaa42742",
-        "path": ".github/workflows/hunter-governance-reconcile.yml",
-        "previous_path": "",
-        "status": "modified"
-      },
-      {
-        "blob_sha": "16827760fc704440511131d205a4224f4444eb02",
-        "path": ".github/workflows/hunter-reviewer-collector.yml",
-        "previous_path": "",
-        "status": "modified"
-      },
-      {
-        "blob_sha": "eea7b0ecf9e1faa84af8b838326f886ae87f0311",
-        "path": "docs/ARCHITECTURE_AUDITS/adpr-0012-source-handling-independent-audit.md",
-        "previous_path": "",
-        "status": "modified"
-      },
-      {
-        "blob_sha": "8e8828d100edaa67ca06f4f9b7760ff8d059a3a2",
+        "blob_sha": "c0b675293ad9caf0f3f1ef06c6842b9c22391a98",
         "path": "docs/CODE_WRITE_POLICY.json",
         "previous_path": "",
         "status": "modified"
       },
       {
-        "blob_sha": "9ee1c0f6c7f1747af4cbe3eb167aeec5841fd4a2",
-        "path": "docs/DEFECT_REGISTRY.json",
+        "blob_sha": "dedc783153d35deeefb4a26470778f9f8e6391bd",
+        "path": "scripts/hunter_governance_review_v2.py",
         "previous_path": "",
         "status": "modified"
       },
       {
-        "blob_sha": "98e897f5d6abd9d812f32617d6deb4d3779bae43",
-        "path": "scripts/hunter_collect_learning_observations.py",
-        "previous_path": "",
-        "status": "modified"
-      },
-      {
-        "blob_sha": "a1be408cdbbd042c446320ae24b0f7e87d9e6d2b",
-        "path": "scripts/hunter_github_transport.py",
-        "previous_path": "",
-        "status": "modified"
-      },
-      {
-        "blob_sha": "29fecb8542b7a3ee863fc9917ca6481c89f96632",
+        "blob_sha": "4129b08b3be009ba18c85cc2b9959d784a3a34db",
         "path": "scripts/hunter_merge_readiness_v2.py",
         "previous_path": "",
         "status": "modified"
       },
       {
-        "blob_sha": "77690b03a00d8de9f6ad027222074605cbf2635f",
-        "path": "scripts/hunter_review_orchestrator.py",
+        "blob_sha": "2b57eee47341a6a47a4e748be751f49a6132dcfc",
+        "path": "scripts/hunter_pre_ready_review.py",
         "previous_path": "",
         "status": "modified"
       },
       {
-        "blob_sha": "e261ebf0f79663a1d9fe723404ebe1f682f05cfe",
-        "path": "scripts/hunter_reviewer_collector.py",
-        "previous_path": "",
-        "status": "modified"
-      },
-      {
-        "blob_sha": "e9ace2ad2e1e5116296faf9e90b75b53738b5a9d",
-        "path": "src/hunter/evidence_intelligence/canonical_knowledge_integration.py",
-        "previous_path": "",
-        "status": "modified"
-      },
-      {
-        "blob_sha": "83ac7407632cfc4c7f7ee8c88b2f2dcd04abeacd",
-        "path": "src/hunter/evidence_intelligence/engineering_context_authority.py",
-        "previous_path": "",
-        "status": "modified"
-      },
-      {
-        "blob_sha": "57aebe1c19cde866dcf4a0e80b36d93f63889565",
-        "path": "src/hunter/evidence_intelligence/incremental_knowledge_learning.py",
-        "previous_path": "",
-        "status": "modified"
-      },
-      {
-        "blob_sha": "d8492e4fd23a5e5f6c7f80ec689d12c44cf1090c",
-        "path": "src/hunter/evidence_intelligence/knowledge_event_ingestion.py",
-        "previous_path": "",
-        "status": "modified"
-      },
-      {
-        "blob_sha": "8c93df8acb8e1874d32288b30e32c6ecabbbe7ae",
-        "path": "src/hunter/evidence_intelligence/smart_prompt_routing.py",
-        "previous_path": "",
-        "status": "modified"
-      },
-      {
-        "blob_sha": "36d949b5d2090e503526cada95177885c340ece3",
-        "path": "tests/test_canonical_knowledge_integration.py",
-        "previous_path": "",
-        "status": "modified"
-      },
-      {
-        "blob_sha": "30fb0ff0581edbf7f23384af2c255c7d696e5808",
-        "path": "tests/test_codeql_bridge_resilience.py",
-        "previous_path": "",
-        "status": "modified"
-      },
-      {
-        "blob_sha": "a186cb392086eacf1c5171fcd5f8c705d4c9e730",
-        "path": "tests/test_engineering_context_authority.py",
-        "previous_path": "",
-        "status": "modified"
-      },
-      {
-        "blob_sha": "b10fb766da40f53c7c059cc23ba5925909d23726",
-        "path": "tests/test_engineering_task_ingress.py",
-        "previous_path": "",
-        "status": "modified"
-      },
-      {
-        "blob_sha": "2d1f7b966fa372127f361477b21f41cdc26f836e",
+        "blob_sha": "cbff88a4ada3bf30f9c07a2ed1eb08e9c1e159c2",
         "path": "tests/test_exact_head_review_authority.py",
-        "previous_path": "",
-        "status": "modified"
-      },
-      {
-        "blob_sha": "a8a553d10351875d7381b1def0759946c7a6a0bf",
-        "path": "tests/test_hunter_artifact_preflight_scope.py",
-        "previous_path": "",
-        "status": "modified"
-      },
-      {
-        "blob_sha": "196419fff4b0f4c29aee9495ff98feada77e9a9f",
-        "path": "tests/test_hunter_github_transport.py",
-        "previous_path": "",
-        "status": "modified"
-      },
-      {
-        "blob_sha": "42c79071035e056383cf4221f056c6a6916493a1",
-        "path": "tests/test_hunter_governance_review_v2.py",
-        "previous_path": "",
-        "status": "modified"
-      },
-      {
-        "blob_sha": "3a7aa055fa93eae51cde0472998984a1054034f3",
-        "path": "tests/test_hunter_knowledge_learning_workflow.py",
-        "previous_path": "",
-        "status": "modified"
-      },
-      {
-        "blob_sha": "73ac3f6a6d29e959fe6591f29dbc1b61e3547a93",
-        "path": "tests/test_hunter_merge_readiness_v2.py",
-        "previous_path": "",
-        "status": "modified"
-      },
-      {
-        "blob_sha": "7f18f6e970a5c107f4ec838ffa1eeb17e38487df",
-        "path": "tests/test_hunter_review_orchestrator.py",
-        "previous_path": "",
-        "status": "modified"
-      },
-      {
-        "blob_sha": "b25e9d68b71a8dd98cfcc5c0eff2239c3fed1023",
-        "path": "tests/test_hunter_reviewer_collector.py",
-        "previous_path": "",
-        "status": "modified"
-      },
-      {
-        "blob_sha": "9ae2d3d6b38133010c668b5bb5fff3f172f2fdf0",
-        "path": "tests/test_knowledge_event_ingestion.py",
-        "previous_path": "",
-        "status": "modified"
-      },
-      {
-        "blob_sha": "f743b1c9041bb1c4036953885bce9e1cc7890f10",
-        "path": "tests/test_review_after_remediation_generation.py",
         "previous_path": "",
         "status": "modified"
       }
     ],
-    "review_target_digest": "c72a31fa3e2783d76894e7f0e189af51db63ac5344da2a9d36a525511c972609"
+    "review_target_digest": "12e7bd5f0ba4fe956b936e18dc557653babb512de5c09103c81d100f75d2f079"
   },
-  "review_id": "77f40c89f6ad74d9342729a17c7a9728bb918158c286eaab1677fdcae32afb92",
+  "review_id": "9f7bea93bfec5f63f91248b800931d717d8d4dd49dc642d943c89316c2f7e7d2",
   "review_request": {
-    "claims_id": "77f40c89f6ad74d9342729a17c7a9728bb918158c286eaab1677fdcae32afb92",
+    "claims_id": "9f7bea93bfec5f63f91248b800931d717d8d4dd49dc642d943c89316c2f7e7d2",
     "schema": "hunter.review-request.v1"
   },
   "schema": "hunter.pre-ready-hostile-review.v1"

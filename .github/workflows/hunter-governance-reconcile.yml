@@ -18,6 +18,7 @@ on:
     workflows:
       - Hunter / Pre-PR Preflight
       - Hunter / Trusted Preflight Upgrade
+      - Hunter Governance Review
       - Hunter Reviewer Collector
     types:
       - completed
@@ -66,6 +67,10 @@ jobs:
           GITHUB_REPOSITORY: ${{ github.repository }}
           GITHUB_RUN_ID: ${{ github.run_id }}
           GITHUB_SERVER_URL: ${{ github.server_url }}
+          EVENT_WORKFLOW_RUN_NAME: ${{ github.event.workflow_run.name }}
+          EVENT_WORKFLOW_RUN_TITLE: ${{ github.event.workflow_run.display_title }}
+          EVENT_WORKFLOW_RUN_HEAD_SHA: ${{ github.event.workflow_run.head_sha }}
+          EVENT_WORKFLOW_RUN_PR_NUMBER: ${{ github.event.workflow_run.pull_requests[0].number }}
         run: |
           set -euo pipefail
           # Event-driven reconciliation is deliberately scoped to the PR that
@@ -75,15 +80,32 @@ jobs:
           event_name="${{ github.event_name }}"
           if [[ "${event_name}" == "pull_request_review" || "${event_name}" == "pull_request_review_comment" ]]; then
             pr_numbers="${{ github.event.pull_request.number }}"
+          elif [[ "${event_name}" == "workflow_run" && "${EVENT_WORKFLOW_RUN_NAME}" == "Hunter Governance Review" ]]; then
+            # A PR synchronize event runs the read-only governance workflow first.
+            # Its workflow_run association carries the triggering PR number, while
+            # this trusted default-branch workflow owns actions:write and may
+            # safely hand pending exact-head review state to the orchestrator.
+            pr_numbers="${EVENT_WORKFLOW_RUN_PR_NUMBER}"
+          elif [[ "${event_name}" == "workflow_run" && "${EVENT_WORKFLOW_RUN_NAME}" == "Hunter Reviewer Collector" ]]; then
+            # The collector always runs from the trusted default branch, so its
+            # own workflow_run.head_sha is main's SHA, never the candidate's --
+            # searching open PRs by that SHA would find none and silently skip
+            # reconciling the PR this collector was actually dispatched for.
+            # The candidate PR is instead the one already-trusted identity this
+            # run itself carries: its own run-name, rendered by the collector
+            # workflow from the exact inputs it was dispatched with (never from
+            # this event, which cannot express them). A malformed or absent
+            # title yields no PR number, which the loop below already skips.
+            pr_numbers="$(printf '%s' "${EVENT_WORKFLOW_RUN_TITLE}" | grep -oE '^Hunter Reviewer Collector PR [0-9]+' | grep -oE '[0-9]+$' || true)"
           elif [[ "${event_name}" == "workflow_run" ]]; then
             pr_numbers="$(
               gh pr list \
                 --repo "${GITHUB_REPOSITORY}" \
                 --state open \
                 --base main \
-                --search "${{ github.event.workflow_run.head_sha }}" \
+                --search "${EVENT_WORKFLOW_RUN_HEAD_SHA}" \
                 --json number,headRefOid \
-                --jq '.[] | select(.headRefOid == "${{ github.event.workflow_run.head_sha }}") | .number'
+                --jq ".[] | select(.headRefOid == \"${EVENT_WORKFLOW_RUN_HEAD_SHA}\") | .number"
             )"
           else
             pr_numbers="$(

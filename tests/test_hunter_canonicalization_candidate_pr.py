@@ -591,3 +591,40 @@ def test_capture_reviewer_findings_never_promotes_validation_state() -> None:
     assert "classification" not in entry
     assert "resolution_state" not in entry
     assert "mapped_defect_id" not in entry
+
+
+def test_canonicalization_python_setup_is_portable_across_runner_accounts():
+    """The self-hosted macOS canonicalization job must not assume `/Users/runner`.
+
+    `actions/setup-python` with `cache: pip` resolves its cache directory from the
+    runner account's home. On a self-hosted macOS runner whose account is not
+    `runner`, that step failed with `mkdir: /Users/runner: Permission denied` and
+    canonicalization never ran. The step now pins the cache to `runner.temp`,
+    which every runner supplies, so no user-specific home is assumed.
+    """
+
+    import yaml
+
+    root = Path(__file__).resolve().parents[1]
+    path = root / ".github" / "workflows" / "hunter-canonicalization-auto.yml"
+    workflow = yaml.safe_load(path.read_text())
+    source = path.read_text()
+
+    setup = next(
+        step
+        for job in workflow["jobs"].values()
+        for step in job.get("steps", [])
+        if step.get("name") == "Set up Python"
+    )
+
+    assert (setup.get("with") or {}).get("cache") == "pip"
+    pip_cache = (setup.get("env") or {}).get("PIP_CACHE_DIR")
+    assert pip_cache, "the pip-caching step must pin a portable cache directory"
+    assert "${{ runner.temp }}" in pip_cache
+
+    # No absolute user-home path is assumed by any executable statement. Comments
+    # are excluded deliberately: this test guards the runner configuration, and the
+    # step's own comment names the failure it prevents.
+    executable = "\n".join(line for line in source.splitlines() if not line.lstrip().startswith("#"))
+    assert "/Users/" not in executable
+    assert "farhadafshari" not in executable

@@ -526,7 +526,7 @@ def _attempt(
     status: str = "exhausted",
     reason: str = "unavailable (rate-limited)",
     timeout_seconds: int = 300,
-    ack_timeout_seconds: int = 300,
+    ack_timeout_seconds: int = 30,
     review_timeout_seconds: int = 300,
     failure_class: str = "transient",
     attempt_count: int = 1,
@@ -566,7 +566,7 @@ def _pool(*, agents: tuple = (), last_resort: str = "hunter-guard", max_seconds:
         "enabled": True,
         "exact_head_support": True,
         "timeout_seconds": 300,
-        "ack_timeout_seconds": 300,
+        "ack_timeout_seconds": 30,
         "review_timeout_seconds": 300,
     }
     return {

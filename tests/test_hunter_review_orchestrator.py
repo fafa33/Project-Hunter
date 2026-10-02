@@ -1,7 +1,9 @@
 from __future__ import annotations
 
+import os
 import pathlib
 import re
+import subprocess
 import sys
 
 import hunter_github_transport as transport
@@ -47,18 +49,17 @@ def test_read_cycle_accepts_only_current_head_trusted_workflow_status(monkeypatc
     def request(_repository, _token, _method, path, _payload=None):
         if path == "pulls/472":
             return {"state": "open", "head": {"sha": HEAD}}
-        if path == f"commits/{HEAD}/status":
-            return {
-                "statuses": [
-                    {
-                        "context": "Hunter Review Orchestration / PR #472",
-                        "description": f"WAITING_FOR_REVIEWER|local|0|{'d' * 64}",
-                        "target_url": "https://github.com/owner/repo/actions/runs/123",
-                        "created_at": "2026-09-15T00:00:00Z",
-                        "creator": {"login": "github-actions[bot]"},
-                    }
-                ]
-            }
+        if path == f"commits/{HEAD}/statuses?per_page=100":
+            # The status LIST endpoint, which is the one that carries the publisher.
+            return [
+                {
+                    "context": "Hunter Review Orchestration / PR #472",
+                    "description": f"WAITING_FOR_REVIEWER|local|0|{'d' * 64}",
+                    "target_url": "https://github.com/owner/repo/actions/runs/123",
+                    "created_at": "2026-09-15T00:00:00Z",
+                    "creator": {"login": "github-actions[bot]"},
+                }
+            ]
         if path == "":
             return {"default_branch": "main"}
         if path == "actions/runs/123":
@@ -90,6 +91,7 @@ def test_ready_review_request_dispatches_collector_once(monkeypatch):
     monkeypatch.setattr(orchestrator, "reviewer_pool_config_digest", lambda: "d" * 64, raising=False)
     monkeypatch.setattr(orchestrator, "current_run_id", lambda: 123, raising=False)
     monkeypatch.setattr(orchestrator, "publish_cycle", lambda *_args, cycle: stored.update(cycle=cycle), raising=False)
+    monkeypatch.setattr(orchestrator, "collector_liveness", lambda *_args: ("missing", 0), raising=False)
     monkeypatch.setattr(
         orchestrator,
         "dispatch_collector",
@@ -265,6 +267,82 @@ def test_unreadable_collector_liveness_evidence_never_redispatches(monkeypatch):
     monkeypatch.setattr(orchestrator, "request_json", unavailable)
 
     assert orchestrator.collector_needs_dispatch("owner/repo", "token", cycle) is False
+
+
+# ---------------------------------------------------------------------------
+# Production defect: two reconciles landing close together each observed the
+# commit-status cycle as "absent" (a stale/racy read of that one idempotency
+# record) and each independently dispatched a collector for the same PR, exact
+# head, and generation. `ensure_collector` must suppress a duplicate dispatch
+# whenever a correlated collector run already exists, independent of whatever
+# `read_cycle` itself answered -- never relying on the commit-status cycle as
+# the only idempotency boundary.
+# ---------------------------------------------------------------------------
+
+
+def test_absent_cycle_read_does_not_duplicate_an_already_active_correlated_collector(monkeypatch):
+    monkeypatch.setattr(orchestrator, "read_cycle", lambda *_args: ("absent", None, None))
+    monkeypatch.setattr(orchestrator, "reviewer_pool_config_digest", lambda: "d" * 64, raising=False)
+    monkeypatch.setattr(orchestrator, "current_run_id", lambda: 999, raising=False)
+    published = []
+    monkeypatch.setattr(orchestrator, "publish_cycle", lambda *_args, cycle: published.append(cycle), raising=False)
+    dispatches = []
+    monkeypatch.setattr(orchestrator, "dispatch_collector", lambda *_args: dispatches.append(_args), raising=False)
+    monkeypatch.setattr(orchestrator, "collector_liveness", lambda *_args: ("active", 1), raising=False)
+
+    result = orchestrator.ensure_collector("owner/repo", "token", 472, HEAD)
+
+    assert dispatches == []
+    assert result.trigger_id == 999
+    assert published
+
+
+def test_absent_cycle_read_does_not_duplicate_an_already_successful_correlated_collector(monkeypatch):
+    monkeypatch.setattr(orchestrator, "read_cycle", lambda *_args: ("absent", None, None))
+    monkeypatch.setattr(orchestrator, "reviewer_pool_config_digest", lambda: "d" * 64, raising=False)
+    monkeypatch.setattr(orchestrator, "current_run_id", lambda: 999, raising=False)
+    monkeypatch.setattr(orchestrator, "publish_cycle", lambda *_args, cycle: None, raising=False)
+    dispatches = []
+    monkeypatch.setattr(orchestrator, "dispatch_collector", lambda *_args: dispatches.append(_args), raising=False)
+    monkeypatch.setattr(orchestrator, "collector_liveness", lambda *_args: ("completed", 1), raising=False)
+
+    orchestrator.ensure_collector("owner/repo", "token", 472, HEAD)
+
+    assert dispatches == []
+
+
+def test_absent_cycle_read_still_dispatches_when_no_correlated_collector_exists(monkeypatch):
+    """Bounded recovery for a genuinely missing/dead collector still works."""
+
+    monkeypatch.setattr(orchestrator, "read_cycle", lambda *_args: ("absent", None, None))
+    monkeypatch.setattr(orchestrator, "reviewer_pool_config_digest", lambda: "d" * 64, raising=False)
+    monkeypatch.setattr(orchestrator, "current_run_id", lambda: 999, raising=False)
+    monkeypatch.setattr(orchestrator, "publish_cycle", lambda *_args, cycle: None, raising=False)
+    dispatches = []
+    monkeypatch.setattr(orchestrator, "dispatch_collector", lambda *_args: dispatches.append(_args), raising=False)
+    monkeypatch.setattr(orchestrator, "collector_liveness", lambda *_args: ("missing", 0), raising=False)
+
+    orchestrator.ensure_collector("owner/repo", "token", 472, HEAD)
+
+    assert len(dispatches) == 1
+
+
+def test_unreadable_collector_correlation_evidence_refuses_to_risk_a_duplicate_dispatch(monkeypatch):
+    monkeypatch.setattr(orchestrator, "read_cycle", lambda *_args: ("absent", None, None))
+    monkeypatch.setattr(orchestrator, "reviewer_pool_config_digest", lambda: "d" * 64, raising=False)
+    monkeypatch.setattr(orchestrator, "current_run_id", lambda: 999, raising=False)
+    dispatches = []
+    monkeypatch.setattr(orchestrator, "dispatch_collector", lambda *_args: dispatches.append(_args), raising=False)
+
+    def unavailable(*_args, **_kwargs):
+        raise transport.GitHubRequestError("rate limited", category="transient", status_code=429)
+
+    monkeypatch.setattr(orchestrator, "collector_liveness", unavailable, raising=False)
+
+    with pytest.raises(RuntimeError, match="correlation evidence unavailable"):
+        orchestrator.ensure_collector("owner/repo", "token", 472, HEAD)
+
+    assert dispatches == []
 
 
 def test_collector_liveness_ignores_runs_for_another_candidate(monkeypatch):
@@ -626,6 +704,7 @@ def _collector_harness(monkeypatch):
     monkeypatch.setattr(orchestrator, "reviewer_pool_config_digest", lambda: "d" * 64, raising=False)
     monkeypatch.setattr(orchestrator, "current_run_id", lambda: 555, raising=False)
     monkeypatch.setattr(orchestrator, "publish_cycle", lambda *_args, cycle: stored.update(cycle=cycle), raising=False)
+    monkeypatch.setattr(orchestrator, "collector_liveness", lambda *_args: ("missing", 0), raising=False)
     monkeypatch.setattr(
         orchestrator,
         "dispatch_collector",
@@ -634,6 +713,26 @@ def _collector_harness(monkeypatch):
     )
     monkeypatch.setattr(orchestrator, "current_remediation_generation", lambda *_args: "gen-1", raising=False)
     return stored
+
+
+def test_an_exact_head_codex_clear_dispatches_no_redundant_collector(monkeypatch):
+    """An authenticated Codex clear of this exact head is already authority.
+
+    Reconcile must not post another bot ``@codex review`` for unchanged content,
+    and a head with no such clear still dispatches exactly once.
+    """
+
+    stored = _collector_harness(monkeypatch)
+    _readiness_harness(monkeypatch, prerequisite_state="success", request_valid=True)
+
+    monkeypatch.setattr(orchestrator, "exact_head_codex_clear_exists", lambda *_args: True)
+    assert orchestrator.ensure_current("owner/repo", "token", 472) is None
+    assert stored["dispatches"] == 0
+    assert stored["cycle"] is None
+
+    monkeypatch.setattr(orchestrator, "exact_head_codex_clear_exists", lambda *_args: False)
+    assert orchestrator.ensure_current("owner/repo", "token", 472) is not None
+    assert stored["dispatches"] == 1
 
 
 def test_blocked_review_request_reports_the_reason_and_never_dispatches(monkeypatch):
@@ -894,6 +993,95 @@ def test_reconcile_runs_when_reviewer_collector_completes():
     assert "Hunter Reviewer Collector" in text
 
 
+# ---------------------------------------------------------------------------
+# Production defect: a completed Hunter Reviewer Collector run always executes
+# from the trusted default branch, so its own workflow_run.head_sha is main's
+# SHA, never the candidate's. Reconcile's PR derivation must never search open
+# PRs by that head_sha for this specific trigger; the candidate PR/head is
+# instead the trusted identity the collector's own run-name already carries.
+# ---------------------------------------------------------------------------
+
+RECONCILE_WORKFLOW = REPOSITORY_ROOT / ".github" / "workflows" / "hunter-governance-reconcile.yml"
+COLLECTOR_WORKFLOW_FILE = REPOSITORY_ROOT / ".github" / "workflows" / "hunter-reviewer-collector.yml"
+_COLLECTOR_BRANCH_MARKER = (
+    'elif [[ "${event_name}" == "workflow_run" '
+    '&& "${EVENT_WORKFLOW_RUN_NAME}" == "Hunter Reviewer Collector" ]]; then'
+)
+
+
+def _reconcile_run_script() -> str:
+    document = yaml.safe_load(RECONCILE_WORKFLOW.read_text(encoding="utf-8"))
+    for step in document["jobs"]["reconcile"]["steps"]:
+        if step.get("name") == "Refresh lightweight governance status":
+            return str(step["run"])
+    raise AssertionError("reconcile governance-refresh step not found")
+
+
+def _collector_branch_body() -> str:
+    script = _reconcile_run_script()
+    assert _COLLECTOR_BRANCH_MARKER in script
+    return script.split(_COLLECTOR_BRANCH_MARKER, 1)[1].split("elif", 1)[0]
+
+
+def _extract_collector_pr_numbers(title: str) -> str:
+    """Run the exact committed shell text that derives pr_numbers for a
+    completed 'Hunter Reviewer Collector' run, against a real bash process --
+    exercising the real committed script rather than a reimplementation."""
+
+    completed = subprocess.run(
+        ["bash", "-c", f'set -euo pipefail\n{_collector_branch_body()}\nprintf "%s" "$pr_numbers"'],
+        env={"EVENT_WORKFLOW_RUN_TITLE": title, "PATH": os.environ.get("PATH", "/usr/bin:/bin")},
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+    return completed.stdout
+
+
+def test_collector_completion_pr_derivation_never_uses_workflow_run_head_sha():
+    """Defect B: main's own SHA must never be mistaken for the candidate HEAD."""
+
+    assert "EVENT_WORKFLOW_RUN_HEAD_SHA" not in _collector_branch_body()
+
+
+def test_collector_completion_pr_derivation_extracts_the_correlated_pr_number():
+    title = f"Hunter Reviewer Collector PR 541 HEAD {'e' * 40}"
+    assert _extract_collector_pr_numbers(title) == "541"
+
+
+def test_collector_completion_pr_derivation_extracts_the_pr_number_with_a_remediation_generation_suffix():
+    title = f"Hunter Reviewer Collector PR 541 HEAD {'e' * 40} GEN {'a' * 16}"
+    assert _extract_collector_pr_numbers(title) == "541"
+
+
+def test_collector_completion_pr_derivation_yields_nothing_for_malformed_or_foreign_titles():
+    """Malformed/mismatched run correlation must never select a PR or head."""
+
+    assert _extract_collector_pr_numbers("some unrelated bot posted this title") == ""
+    assert _extract_collector_pr_numbers("Hunter Reviewer CollectorPR541 HEAD deadbeef") == ""
+    assert _extract_collector_pr_numbers("Hunter Reviewer Collector PR HEAD " + "e" * 40) == ""
+
+
+def test_collector_workflow_publishes_completion_from_its_own_trusted_inputs():
+    """Completion must reconcile the exact PR/head the collector was dispatched
+    for, derived only from its own dispatch inputs -- never from workflow_run
+    metadata, and never re-guessed or parsed after the fact."""
+
+    document = yaml.safe_load(COLLECTOR_WORKFLOW_FILE.read_text(encoding="utf-8"))
+    assert document["permissions"]["statuses"] == "write"
+    steps = document["jobs"]["collect"]["steps"]
+    completion = next(step for step in steps if step.get("name") == "Publish collector completion")
+
+    assert completion.get("if") == "success()"
+    run = str(completion["run"])
+    assert "collector-complete" in run
+    assert '--pr "$PR_NUMBER"' in run
+    assert '--head "$CANDIDATE_HEAD"' in run
+    env = completion.get("env", {})
+    assert env.get("PR_NUMBER") == "${{ inputs.pr_number }}"
+    assert env.get("CANDIDATE_HEAD") == "${{ inputs.head_sha }}"
+
+
 def test_collector_completion_accepts_trusted_ancestor_of_current_main(monkeypatch):
     old_main = "b" * 40
     current_main = "c" * 40
@@ -978,6 +1166,7 @@ def test_dispatch_identity_and_timestamp_are_durable_before_dispatch(monkeypatch
     monkeypatch.setattr(orchestrator, "reviewer_pool_config_digest", lambda: "d" * 64)
     monkeypatch.setattr(orchestrator, "current_run_id", lambda: 777)
     monkeypatch.setattr(orchestrator, "publish_cycle", lambda *_args, cycle: published.append(cycle))
+    monkeypatch.setattr(orchestrator, "collector_liveness", lambda *_args: ("missing", 0))
 
     def accepted_then_process_dies(*_args):
         raise RuntimeError("post-acceptance transport loss")
@@ -991,3 +1180,188 @@ def test_dispatch_identity_and_timestamp_are_durable_before_dispatch(monkeypatch
     assert published[0].trigger_id == 777
     assert published[0].started_at
     assert orchestrator._older_than(published[0].started_at, orchestrator.COLLECTOR_LIVENESS_GRACE_SECONDS) is False
+
+
+# --- PR #547: a completed, exhausted reviewer chain must end the opportunity ---
+#
+# The exact-head cycle status this orchestrator publishes carries no `creator`
+# field in GitHub's combined-status response, so `_parse_cycle` rejected it,
+# `read_cycle` reported "absent", and Merge Readiness reported
+# WAITING_FOR_REVIEWER forever -- including after a collector completed with
+# Codex NO_ACK_TIMEOUT, Copilot REVIEW_TIMEOUT and Gemini/Groq
+# PROVIDER_UNAVAILABLE. An exhausted chain must terminate the opportunity.
+
+
+def _exhausted_cycle_status(creator, context, description):
+    status = {"context": context, "description": description, "created_at": "2026-09-30T10:39:31Z"}
+    if creator is not None:
+        status["creator"] = {"login": creator}
+    return status
+
+
+def test_exhausted_provider_chain_terminates_the_opportunity(monkeypatch):
+    """Codex NO_ACK_TIMEOUT -> Copilot REVIEW_TIMEOUT -> Gemini/Groq
+    PROVIDER_UNAVAILABLE -> collector complete -> reconcile must produce a
+    terminal state, never an indefinite WAITING_FOR_REVIEWER."""
+
+    stored = {"published": []}
+    monkeypatch.setattr(
+        orchestrator,
+        "read_cycle",
+        lambda *_args: (
+            "present",
+            orchestrator.ReviewCycle(
+                pr_number=472,
+                head_sha=HEAD,
+                state="WAITING_FOR_REVIEWER",
+                provider_id="",
+                trigger_id=36703742750,
+                started_at="2026-09-30T10:00:00Z",
+                config_digest=orchestrator.reviewer_pool_config_digest(),
+                generation_id="gen-1",
+            ),
+            None,
+        ),
+        raising=False,
+    )
+    monkeypatch.setattr(orchestrator, "collector_needs_dispatch", lambda *_args: False, raising=False)
+    monkeypatch.setattr(
+        orchestrator,
+        "publish_cycle",
+        lambda *_a, cycle: stored["published"].append(cycle),
+        raising=False,
+    )
+
+    cycle = orchestrator.ensure_collector("owner/repo", "token", 472, HEAD, "gen-1")
+
+    # The opportunity terminates, and it terminates as a non-blocking terminal
+    # state that grants no review authority.
+    assert cycle.state != "WAITING_FOR_REVIEWER"
+    assert cycle.state in orchestrator.TERMINAL_NONBLOCKING_STATES
+    assert stored["published"] and stored["published"][-1].state == cycle.state
+    # A terminal non-blocking state is published as a non-pending status.
+    assert cycle.state in orchestrator.TERMINAL_NONBLOCKING_STATES
+
+
+# --- Codex P1: a status with no reported creator is not, by itself, a binding.
+#
+# context, description and target_url are all caller-controlled. A publisher who
+# can post a status can cite an existing trusted default-branch run in target_url
+# and write any cycle state into the description. So `creator == null` may only
+# assert a non-authoritative pending state, and the run recorded in the payload
+# must be the very run target_url names.
+
+
+# --- Codex P1 4147741248: the publisher must be authenticated, strictly. -----
+#
+# The combined status endpoint reports `creator: null` for every status, including
+# trusted workflow posts, so a creator check read from it could never be satisfied.
+# That is what forced a creator-less fallback trusting a caller-controlled payload.
+# `read_cycle` now reads the status LIST endpoint, which carries the real
+# publisher, so the strict check stands alone and no derivation path exists.
+
+CYCLE_CTX = f"{orchestrator.CONTEXT_PREFIX}472"
+GEN = "e4a1e847caf03a75"
+RUN_ID = 36710945665
+RUN_URL = f"https://github.com/owner/repo/actions/runs/{RUN_ID}"
+TRUSTED = "github-actions[bot]"
+
+
+def _status(creator, description, target_url=RUN_URL, context=CYCLE_CTX):
+    status = {
+        "context": context,
+        "description": description,
+        "created_at": "2026-01-01T00:00:00Z",
+        "target_url": target_url,
+    }
+    if creator is not None:
+        status["creator"] = {"login": creator}
+    return status
+
+
+def _desc(state, provider="", trigger=RUN_ID, generation=GEN, digest=None):
+    return f"{state}|{provider}|{trigger}|{digest or ('d' * 64)}|{generation}"
+
+
+def test_combined_status_endpoint_exposes_no_creator():
+    """Regression guard: the combined endpoint reports creator=null even for a
+    status the list endpoint attributes to the trusted publisher. Proven live for
+    one identical status id on this repository."""
+
+    combined = {"context": CYCLE_CTX, "description": _desc("REVIEW_CLEAR"), "creator": None}
+    listed = {"context": CYCLE_CTX, "description": _desc("REVIEW_CLEAR"), "creator": {"login": TRUSTED}}
+
+    # The combined shape is exactly why the strict check could not be satisfied
+    # from that endpoint: it carries no publisher at all.
+    assert orchestrator._parse_cycle(combined, 472, HEAD) is None
+    # The same status read from the list endpoint is authenticated and accepted.
+    assert orchestrator._parse_cycle(listed, 472, HEAD) is not None
+
+
+def test_read_cycle_reads_the_status_list_endpoint():
+    """`read_cycle` must not use the combined endpoint for provenance."""
+
+    import inspect
+
+    source = inspect.getsource(orchestrator.read_cycle)
+    assert "commits/{head_sha}/statuses?per_page=100" in source
+    assert 'f"commits/{head_sha}/status"' not in source
+    # Only the list endpoint, so the publisher is actually populated.
+    assert source.count("commits/{head_sha}") == 1
+
+
+def test_trusted_creator_cycle_is_accepted():
+    parsed = orchestrator._parse_cycle(_status(TRUSTED, _desc("WAITING_FOR_REVIEWER")), 472, HEAD)
+    assert parsed is not None
+    assert parsed.state == "WAITING_FOR_REVIEWER"
+    assert parsed.trigger_id == RUN_ID
+
+
+def test_missing_creator_is_rejected():
+    assert orchestrator._parse_cycle(_status(None, _desc("WAITING_FOR_REVIEWER")), 472, HEAD) is None
+
+
+def test_wrong_creator_is_rejected():
+    assert orchestrator._parse_cycle(_status("attacker", _desc("WAITING_FOR_REVIEWER")), 472, HEAD) is None
+
+
+def test_forged_terminal_timeout_is_rejected_without_trusted_creator():
+    """A creator-less payload cannot terminate the opportunity any more: there is
+    no age-based or status-age authentication left to lean on."""
+
+    assert orchestrator._parse_cycle(_status(None, _desc("REVIEW_TIMED_OUT")), 472, HEAD) is None
+    assert orchestrator._parse_cycle(_status("attacker", _desc("REVIEW_TIMED_OUT")), 472, HEAD) is None
+
+
+def test_genuine_terminal_states_from_the_trusted_creator_are_accepted():
+    """An authenticated publisher may still assert the terminal outcomes, which is
+    what makes the bounded opportunity terminate instead of stalling."""
+
+    for state in ("REVIEW_TIMED_OUT", "POOL_EXHAUSTED", "REVIEWER_UNAVAILABLE"):
+        parsed = orchestrator._parse_cycle(_status(TRUSTED, _desc(state)), 472, HEAD)
+        assert parsed is not None, state
+        assert parsed.state == state
+
+
+def test_genuine_review_clear_and_findings_open_remain_accepted():
+    for state in ("REVIEW_CLEAR", "FINDINGS_OPEN"):
+        parsed = orchestrator._parse_cycle(_status(TRUSTED, _desc(state)), 472, HEAD)
+        assert parsed is not None, state
+        assert parsed.state == state
+
+
+def test_exact_head_and_generation_binding_are_unchanged():
+    """Every non-provenance binding still holds, authenticated creator or not."""
+
+    assert orchestrator._parse_cycle(_status(TRUSTED, _desc("REVIEW_CLEAR")), 473, HEAD) is None
+    assert (
+        orchestrator._parse_cycle(
+            _status(TRUSTED, _desc("REVIEW_CLEAR"), context=f"{orchestrator.CONTEXT_PREFIX}999"), 472, HEAD
+        )
+        is None
+    )
+    assert (
+        orchestrator._parse_cycle(_status(TRUSTED, _desc("REVIEW_CLEAR", generation="not-a-generation")), 472, HEAD)
+        is None
+    )
+    assert orchestrator._parse_cycle(_status(TRUSTED, _desc("REVIEW_CLEAR", digest="short")), 472, HEAD) is None
