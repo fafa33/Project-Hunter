@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import os
+import subprocess
 from pathlib import Path
 
 import pytest
@@ -200,12 +201,38 @@ def test_provider_capability_contract_keeps_shell_and_external_directory_denied(
     assert set(shim._REQUIRED_PROVIDER_CAPABILITIES) <= {
         name for name, decision in permission.items() if decision == "allow"
     }
-    plugin = credential_home / ".config" / "opencode" / "plugins" / shim._PROVIDER_GUARD_PLUGIN_FILE
-    assert plugin.is_file()
-    assert '"bash"' in plugin.read_text(encoding="utf-8")
-    assert "forbids tool" in plugin.read_text(encoding="utf-8")
     config = json.loads(env["OPENCODE_CONFIG_CONTENT"])
-    assert config["plugin"] == [plugin.resolve().as_uri()]
+    assert "plugin" not in config
+
+
+def test_the_provider_shell_refuses_every_command(tmp_path: Path) -> None:
+    credential_home = tmp_path / "credential-home"
+    credential_home.mkdir()
+    workspace = tmp_path / "repo"
+    workspace.mkdir()
+
+    env = shim._restricted_environment(credential_home)
+    shell = Path(json.loads(env["OPENCODE_CONFIG_CONTENT"])["shell"])
+
+    # OpenCode resolves the bash tool's shell from the inline config, then SHELL.
+    assert env["SHELL"] == str(shell)
+    assert shell.is_relative_to(credential_home.resolve())
+    assert not os.access(shell, os.W_OK)
+    # Invoked exactly as OpenCode invokes a non-bash/zsh shell: ``<shell> -c <command>``.
+    completed = subprocess.run(
+        [str(shell), "-c", 'touch "$PWD/executed"; echo ran'],
+        cwd=workspace,
+        env=env,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    assert completed.returncode == 126
+    assert "ran" not in completed.stdout
+    assert "forbids shell execution" in completed.stderr
+    assert not (workspace / "executed").exists()
+    # Rebuilding the environment over an existing attempt home still succeeds.
+    assert shim._restricted_environment(credential_home)["SHELL"] == str(shell)
 
 
 def test_main_fails_closed_before_provider_run_when_runtime_capability_is_missing(tmp_path: Path, monkeypatch) -> None:
@@ -319,12 +346,12 @@ def test_runtime_contract_matches_canonical_installer_pin() -> None:
 @pytest.mark.parametrize(
     "tools",
     [
-        {"read": True, "edit": True, "glob": True, "grep": True, "bash": True},
-        {"read": True, "edit": True, "glob": True, "grep": True, "bash": "true"},
-        {"read": True, "edit": True, "glob": True, "grep": True, "bash": False, "webfetch": True},
+        {"read": True, "edit": True, "glob": True, "grep": True, "websearch": True},
+        {"read": True, "edit": True, "glob": True, "grep": True, "skill": "true"},
+        {"read": True, "edit": True, "glob": True, "grep": True, "bash": True, "webfetch": True},
         {"read": True, "edit": True, "glob": True, "grep": True, "task": 1},
     ],
-    ids=["bash-enabled", "bash-truthy-string", "webfetch-enabled", "task-truthy-int"],
+    ids=["websearch-enabled", "skill-truthy-string", "webfetch-enabled", "task-truthy-int"],
 )
 def test_main_fails_closed_when_the_resolved_tool_set_offers_a_forbidden_tool(
     tmp_path: Path, monkeypatch, tools: dict
@@ -342,7 +369,7 @@ def test_the_pinned_runtime_resolution_of_the_hunter_contract_passes(monkeypatch
     resolved = {
         "invalid": False,
         "question": False,
-        "bash": False,
+        "bash": True,
         "read": True,
         "glob": True,
         "grep": True,
@@ -386,26 +413,11 @@ def test_every_opencode_process_runs_with_pwd_bound_to_its_own_directory(tmp_pat
     assert discovery[1] == seen[-1][1]
 
 
-def test_pure_mode_registers_guard_explicitly_and_actual_bash_attempt_is_guarded(tmp_path: Path) -> None:
-    credential_home = tmp_path / "credential-home"
-    credential_home.mkdir()
-    env = shim._restricted_environment(credential_home)
-    config = json.loads(env["OPENCODE_CONFIG_CONTENT"])
-    plugin_uri = config["plugin"][0]
-    assert plugin_uri.startswith("file://")
-    guard = Path(plugin_uri.removeprefix("file://")).read_text(encoding="utf-8")
-    # This is the hook invoked by OpenCode for a real model-issued bash tool call.
-    assert '"tool.execute.before"' in guard
-    assert "forbidden.has(input.tool)" in guard
-    assert 'throw new Error("Hunter governed runtime forbids tool: " + input.tool)' in guard
-    assert '"bash"' in guard
-
-
 @pytest.mark.skipif(
     not os.environ.get("HUNTER_TEST_OPENCODE_EXECUTABLE"),
     reason="the pinned OpenCode runtime is not available in this environment",
 )
-def test_a_workspace_agent_definition_that_enables_bash_is_refused_by_the_pinned_runtime(tmp_path: Path) -> None:
+def test_a_workspace_agent_definition_that_enables_webfetch_is_refused_by_the_pinned_runtime(tmp_path: Path) -> None:
     executable = os.environ["HUNTER_TEST_OPENCODE_EXECUTABLE"]
     credential_home = tmp_path / "credential-home"
     credential_home.mkdir()
@@ -413,16 +425,16 @@ def test_a_workspace_agent_definition_that_enables_bash_is_refused_by_the_pinned
     workspace.mkdir()
     env = shim._restricted_environment(credential_home)
 
-    # The Hunter contract resolves bash off, in the home and in a plain workspace.
+    # The Hunter contract resolves webfetch off, in the home and in a plain workspace.
     shim._validate_runtime_provider_capabilities(executable, env)
     shim._validate_runtime_provider_capabilities(executable, {**env, "PWD": str(workspace)})
 
-    # Project-local configuration in the workspace can turn bash back on for the
+    # Project-local configuration in the workspace can turn webfetch on for the
     # real run; resolving the tool set in the workspace is what catches it.
     (workspace / "opencode.json").write_text(
-        json.dumps({"agent": {"build": {"permission": {"bash": "allow"}, "tools": {"bash": True}}}}),
+        json.dumps({"agent": {"build": {"permission": {"webfetch": "allow"}, "tools": {"webfetch": True}}}}),
         encoding="utf-8",
     )
     shim._validate_runtime_provider_capabilities(executable, env)
-    with pytest.raises(shim.SandboxShimError, match="forbidden tools: bash"):
+    with pytest.raises(shim.SandboxShimError, match="forbidden tools: webfetch"):
         shim._validate_runtime_provider_capabilities(executable, {**env, "PWD": str(workspace)})

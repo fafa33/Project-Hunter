@@ -167,9 +167,9 @@ _PINNED = os.environ.get("HUNTER_TEST_OPENCODE_EXECUTABLE", "")
 
 
 @pytest.mark.skipif(not _PINNED, reason="the pinned OpenCode runtime is not available in this environment")
-@pytest.mark.parametrize(("bash_decision", "executed"), [("contract", False), ("allow", True)])
+@pytest.mark.parametrize(("shell", "executed"), [("contract", False), ("real-shell", True)])
 def test_the_pinned_runtime_rejects_a_real_shell_tool_call_under_the_hunter_contract(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, bash_decision: str, executed: bool
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, shell: str, executed: bool
 ) -> None:
     model = _ShellRequestingModel()
     try:
@@ -178,8 +178,11 @@ def test_the_pinned_runtime_rejects_a_real_shell_tool_call_under_the_hunter_cont
         workspace, credential_home = self_check._probe_workspace(root)
         env = shim._restricted_environment(credential_home)
         config = json.loads(env["OPENCODE_CONFIG_CONTENT"])
-        if bash_decision == "allow":
-            config["permission"]["bash"] = "allow"
+        # The free-tier contract exposes bash; only the denied shell stops it.
+        # The control swaps in a real shell to prove the probe detects execution.
+        assert config["permission"]["bash"] == "allow"
+        if shell == "real-shell":
+            config["shell"] = env["SHELL"] = "/bin/sh"
         config["provider"] = {
             "probe": {
                 "npm": "@ai-sdk/openai-compatible",
@@ -201,7 +204,16 @@ def test_the_pinned_runtime_rejects_a_real_shell_tool_call_under_the_hunter_cont
             capture_output=True,
         )
         offered = {tool["function"]["name"] for request in model.requests for tool in request.get("tools", [])}
-        assert ("bash" in offered) is executed
+        assert {"bash", "read", "edit", "glob", "grep"} <= offered
+        # The model's bash call reached the runtime and produced a tool result.
+        results = [
+            str(message.get("content"))
+            for request in model.requests
+            for message in request.get("messages", [])
+            if message.get("role") == "tool"
+        ]
+        assert results
+        assert any("forbids shell execution" in result for result in results) is not executed
         assert any(root.rglob(f"{self_check.PROBE_MARKER}-0123456789abcdef")) is executed
     finally:
         model.close()
