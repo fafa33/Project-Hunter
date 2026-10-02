@@ -595,7 +595,9 @@ def test_the_key_binding_cannot_be_switched_off_in_policy() -> None:
 # epochs, never arbitrary mixed writers.
 
 RECOVERY_SCHEMA = "hunter-writer-recovery-v1"
-BOUNDARY_PARENT = "1" * 40
+#: The boundary's exact parent: the last departed-writer commit. Fixtures form
+#: real commit graphs, because epochs are decided by ancestry, not log order.
+BOUNDARY_PARENT = "b" * 40
 AGENT_B = ("Agent B", "agent-b@example.invalid")
 AGENT_B_KEY = "SHA256:" + "C" * 43
 
@@ -855,13 +857,88 @@ def test_the_recovery_epoch_may_be_exactly_the_boundary_commit() -> None:
     assert verdict.writer_login == "fafa33"
 
 
+MAIN_SHA = "e" * 40  # a base-branch commit merged in: outside the governed range
+
+
+def test_a_departed_writer_commit_that_merges_in_after_the_takeover_is_refused() -> None:
+    """Codex P1: ``A -> C(claude)`` beside ``A -> B(owner boundary)``, then ``M(B, C)``.
+
+    ``git log --reverse`` can emit ``A, C, B, M`` when C is dated before B, so a
+    position-based split would count C as departed. C is not reachable from the
+    pinned parent A; it enters the history only after the takeover.
+    """
+
+    range_ = (
+        _claude("a" * 40, parents="9" * 40),
+        _claude("c" * 40, parents="a" * 40),
+        _owner("b" * 40, parents="a" * 40, recovery_declaration=_declaration(parent_sha="a" * 40)),
+        _owner("d" * 40, parents=f"{'b' * 40} {'c' * 40}"),
+    )
+
+    verdict = provenance.evaluate_range(_recovery_binding(), range_)
+
+    assert verdict.ok is False
+    assert "cccccccccc" in verdict.reason and "no epoch governs them" in verdict.reason
+
+
+def test_a_departed_writer_side_branch_off_the_fork_point_is_refused() -> None:
+    """Copilot: a side branch the pinned parent never reached is not the departed epoch."""
+
+    range_ = (
+        _claude("a" * 40, parents="9" * 40),
+        _claude("f" * 40, parents="9" * 40),
+        _owner("b" * 40, parents="a" * 40, recovery_declaration=_declaration(parent_sha="a" * 40)),
+        _owner("d" * 40, parents=f"{'b' * 40} {'f' * 40}"),
+    )
+
+    verdict = provenance.evaluate_range(_recovery_binding(), range_)
+
+    assert verdict.ok is False
+    assert "ffffffffff" in verdict.reason
+
+
+def test_a_boundary_pinned_outside_the_range_has_no_departed_epoch() -> None:
+    range_ = (
+        _claude("a" * 40, parents="9" * 40),
+        _owner("b" * 40, parents="9" * 40, recovery_declaration=_declaration(parent_sha="9" * 40)),
+    )
+
+    verdict = provenance.evaluate_range(_recovery_binding(), range_)
+
+    assert verdict.ok is False
+
+
+@pytest.mark.parametrize(
+    "range_",
+    [
+        (  # the owner merges the base branch in after taking over
+            _claude("a" * 40, parents="9" * 40),
+            _owner("b" * 40, parents="a" * 40, recovery_declaration=_declaration(parent_sha="a" * 40)),
+            _owner("d" * 40, parents=f"{'b' * 40} {MAIN_SHA}"),
+        ),
+        (  # the departed writer had merged the base branch in before departing
+            _claude("a" * 40, parents="9" * 40),
+            _claude("c" * 40, parents=f"{'a' * 40} {MAIN_SHA}"),
+            _owner("b" * 40, parents="c" * 40, recovery_declaration=_declaration(parent_sha="c" * 40)),
+        ),
+    ],
+    ids=("merge-after-takeover", "merge-before-departure"),
+)
+def test_a_base_branch_merge_on_either_side_of_the_boundary_is_still_admitted(range_) -> None:
+    """The paired positive: ancestry, not linearity, is what is required."""
+
+    verdict = provenance.evaluate_range(_recovery_binding(), range_)
+
+    assert verdict.ok is True, verdict.reason
+
+
 def test_more_than_one_boundary_in_a_range_is_refused() -> None:
     range_ = (
         _claude("a" * 40, parents="9" * 40),
         _owner(
             "b" * 40,
-            parents=BOUNDARY_PARENT,
-            recovery_declaration=_declaration(parent_sha=BOUNDARY_PARENT),
+            parents="a" * 40,
+            recovery_declaration=_declaration(parent_sha="a" * 40),
         ),
         _owner("c" * 40, parents="b" * 40, recovery_declaration=_declaration(parent_sha="b" * 40)),
     )
@@ -902,7 +979,7 @@ def test_more_than_one_boundary_in_a_range_is_refused() -> None:
 def test_a_malformed_declaration_fails_closed_rather_than_being_ignored(declaration) -> None:
     range_ = (
         _claude("a" * 40, parents="9" * 40),
-        _owner("b" * 40, parents=BOUNDARY_PARENT, recovery_declaration=declaration),
+        _owner("b" * 40, parents="a" * 40, recovery_declaration=declaration),
     )
 
     verdict = provenance.evaluate_range(_recovery_binding(), range_)

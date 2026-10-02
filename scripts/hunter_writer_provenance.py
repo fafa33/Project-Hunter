@@ -554,6 +554,36 @@ def parse_recovery_declaration(commit: CommitProvenance, recovery: OwnerRecovery
     return document, ""
 
 
+def _recovery_epochs(
+    resolved: tuple[tuple[CommitProvenance, WriterIdentity], ...], boundary: CommitProvenance
+) -> tuple[frozenset[str], frozenset[str]]:
+    """The in-range ancestry of the boundary's pinned parent, and the boundary's in-range descendants.
+
+    Built only from the ``%P`` parent links of the range's own commits. A parent
+    outside the range (the fork point, or a merged-in base commit) ends the walk.
+    """
+
+    parents = {commit.sha.lower(): [p.lower() for p in commit.parents.split()] for commit, _writer in resolved}
+
+    departed: set[str] = set()
+    pending = [boundary.first_parent.lower()]
+    while pending:
+        sha = pending.pop()
+        if sha in parents and sha not in departed:
+            departed.add(sha)
+            pending.extend(parents[sha])
+
+    recovery = {boundary.sha.lower()}
+    changed = True
+    while changed:
+        changed = False
+        for sha, links in parents.items():
+            if sha not in recovery and any(link in recovery for link in links):
+                recovery.add(sha)
+                changed = True
+    return frozenset(departed), frozenset(recovery - departed)
+
+
 def evaluate_owner_recovery(
     binding: WriterIdentityBinding,
     recovery: OwnerRecovery,
@@ -628,7 +658,31 @@ def evaluate_owner_recovery(
             "where there is no departed writer epoch to recover from",
         )
 
-    departed_writers = {writer.login for _commit, writer in resolved[:index]}
+    # The epochs are defined by ancestry, never by position. ``git log
+    # --reverse`` orders by date, so in a range with a merge a departed-writer
+    # side branch can sort before the boundary without being reachable from
+    # the pinned parent, and would otherwise be counted as "before" a takeover
+    # it actually entered after. The departed epoch is exactly the in-range
+    # ancestry of the pinned parent; the recovery epoch is exactly the boundary
+    # and its in-range descendants; every commit must belong to one of them.
+    departed_shas, recovery_shas = _recovery_epochs(resolved, boundary)
+    uncovered = [
+        commit.sha[:10] for commit, _writer in resolved if commit.sha.lower() not in departed_shas | recovery_shas
+    ]
+    if uncovered:
+        return ProvenanceVerdict(
+            False,
+            f"commit(s) {', '.join(uncovered)} are neither ancestors of the recovery boundary's pinned parent "
+            f"{boundary.first_parent[:10]} nor descendants of boundary {short}, so no epoch governs them",
+        )
+    if not departed_shas:
+        return ProvenanceVerdict(
+            False,
+            f"commit {short} pins parent {boundary.first_parent[:10]}, which is outside the governed range, so "
+            "there is no departed writer epoch to recover from",
+        )
+
+    departed_writers = {writer.login for commit, writer in resolved if commit.sha.lower() in departed_shas}
     if len(departed_writers) != 1:
         return ProvenanceVerdict(
             False,
@@ -643,7 +697,7 @@ def evaluate_owner_recovery(
             f"{actual_departed!r}",
         )
 
-    recovery_writers = {writer.login for _commit, writer in resolved[index:]}
+    recovery_writers = {writer.login for commit, writer in resolved if commit.sha.lower() in recovery_shas}
     if recovery_writers != {boundary_writer.login}:
         foreign = sorted(recovery_writers - {boundary_writer.login})
         return ProvenanceVerdict(
