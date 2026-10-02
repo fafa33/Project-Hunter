@@ -1987,6 +1987,8 @@ def test_trigger_creation_is_never_acknowledgement():
     if codex is None:
         pytest.skip("pool fixture does not declare codex")
     assert codex["ack_timeout_seconds"] <= codex["review_timeout_seconds"]
+
+
 # Collector run 36496500403 reviewed PR #541 and Gemini returned a substantive
 # no-finding review of it. The collector filed that review as
 # outcome=unavailable / reason_code=INVALID_REVIEW_RESULT, so the ordered pool
