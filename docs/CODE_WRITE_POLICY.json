@@ -201,6 +201,22 @@
         "evidence": "Every squash commit on the default branch through a61941ef carries this exact author identity and resolves to the repository owner login 'fafa33'."
       }
     ],
+    "signing_key_bindings": {
+      "purpose": "Bootstrap of the trusted-main authority for writer -> SSH signing key bindings (Issue #535 / PR #538). Each authorization-bound writer is bound to the exact SSH SHA-256 signing key fingerprints its commits may carry. This section is data only; enforcement of it is owned by PR #538 and reads it from the trusted base tip, never from a candidate.",
+      "bindings": {
+        "claude": [
+          "SHA256:32dP45eSMmVSt/G/CGvcxl/P+MO3Nwj9xeTh/GSA2wc"
+        ],
+        "fafa33": [
+          "SHA256:Yee9tbonym7Jvs2UbjpudVIRkv3aF1tcFlK240pXuBo"
+        ]
+      },
+      "binding_evidence": {
+        "claude": "Fingerprint computed from the SSH signature blob of commits 9c02a1e8c45b80943e9c459b85ddc9668c2ed692 and 51108333821ab42d1ab7aa0b812a72d890f73795 (PR #535), which the GitHub commits API reports as verified=true reason=valid with author and committer 'Claude'.",
+        "fafa33": "Fingerprint computed from the SSH signature blob of commits on PR #538 (for example 6aae5a1ec4eb7fbf7b3ee8f13e87457228e030e7), which the GitHub commits API reports as verified=true reason=valid for author and committer 'Farhad5778' resolving to login fafa33."
+      },
+      "fail_closed": "Explicit writer -> fingerprint only: no wildcard, no fallback, no first-binding acceptance. A fingerprint must be a full SSH SHA-256 fingerprint, may belong to exactly one writer, and a binding for a login that writer_identity_binding.identities does not bind is invalid. A key not listed here is unbound."
+    },
     "enforcement": {
       "local_pre_push": "scripts/hunter_pre_push.py validates every commit in the governed fork-point..HEAD range before any remote mutation and reports the exact mismatched provenance claim.",
       "pre_commit_discovery": "python scripts/hunter_writer_provenance.py --print-identity [--login <login>]",
