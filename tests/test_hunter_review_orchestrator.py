@@ -107,24 +107,11 @@ def test_ready_review_request_dispatches_collector_once(monkeypatch):
     assert stored["dispatches"] == 1
 
 
-def test_a_second_call_sees_the_correlated_collector_and_does_not_redispatch(monkeypatch):
-    """PR #535 live evidence (runs 36340127965 and 36340195915).
+def _absent_cycle_with_recorded_dispatches(monkeypatch) -> dict:
+    """Stub an unrecorded exact head whose dispatches append real in-progress
+    collector runs to the run listing ``ensure_collector`` reads back."""
 
-    GitHub's combined-status read (what ``read_cycle`` uses) is not guaranteed
-    read-your-write consistent: a status one reconcile execution just posted
-    can still be reported "absent" to a later, near-simultaneous execution of
-    the same event. Both report "absent" on every call here, so only the
-    collector *run* listing (a separate, directly-queried endpoint) can tell the
-    second caller that this exact identity has already been dispatched.
-
-    Scope, deliberately narrow: these two calls are serial, so the first one's
-    dispatch is already visible to the second one's liveness read. This proves
-    the correlated-run case converges on one dispatch. It does NOT prove two
-    genuinely simultaneous reconciles cannot both dispatch -- see
-    ``test_two_genuinely_simultaneous_dispatches_can_both_miss_the_correlated_run``.
-    """
-
-    stored = {"dispatches": 0}
+    stored: dict = {"dispatches": 0}
     runs: list[dict] = []
 
     monkeypatch.setattr(orchestrator, "read_cycle", lambda *_args: ("absent", None, None))
@@ -143,6 +130,28 @@ def test_a_second_call_sees_the_correlated_collector_and_does_not_redispatch(mon
         return {"workflow_runs": runs}
 
     monkeypatch.setattr(orchestrator, "request_json", request_json)
+
+    return stored
+
+
+def test_a_second_call_sees_the_correlated_collector_and_does_not_redispatch(monkeypatch):
+    """PR #535 live evidence (runs 36340127965 and 36340195915).
+
+    GitHub's combined-status read (what ``read_cycle`` uses) is not guaranteed
+    read-your-write consistent: a status one reconcile execution just posted
+    can still be reported "absent" to a later, near-simultaneous execution of
+    the same event. Both report "absent" on every call here, so only the
+    collector *run* listing (a separate, directly-queried endpoint) can tell the
+    second caller that this exact identity has already been dispatched.
+
+    Scope, deliberately narrow: these two calls are serial, so the first one's
+    dispatch is already visible to the second one's liveness read. This proves
+    the correlated-run case converges on one dispatch. It does NOT prove two
+    genuinely simultaneous reconciles cannot both dispatch -- see
+    ``test_two_genuinely_simultaneous_dispatches_can_both_miss_the_correlated_run``.
+    """
+
+    stored = _absent_cycle_with_recorded_dispatches(monkeypatch)
 
     first = orchestrator.ensure_collector("owner/repo", "token", 472, HEAD)
     second = orchestrator.ensure_collector("owner/repo", "token", 472, HEAD)
@@ -168,13 +177,8 @@ def test_two_genuinely_simultaneous_dispatches_can_both_miss_the_correlated_run(
     to slip in while reconciling a conflict.
     """
 
-    stored = {"dispatches": 0, "reads": []}
-    runs: list[dict] = []
-
-    monkeypatch.setattr(orchestrator, "read_cycle", lambda *_args: ("absent", None, None))
-    monkeypatch.setattr(orchestrator, "reviewer_pool_config_digest", lambda: "d" * 64, raising=False)
-    monkeypatch.setattr(orchestrator, "current_run_id", lambda: 999, raising=False)
-    monkeypatch.setattr(orchestrator, "publish_cycle", lambda *_args, **_kwargs: None, raising=False)
+    stored = _absent_cycle_with_recorded_dispatches(monkeypatch)
+    stored["reads"] = []
 
     def collector_liveness(_repository, _token, _pr, _head, _generation_id=orchestrator.BASE_GENERATION_ID):
         # Read liveness before honouring any dispatch, so neither call can see
@@ -183,18 +187,6 @@ def test_two_genuinely_simultaneous_dispatches_can_both_miss_the_correlated_run(
         return ("missing", 0)
 
     monkeypatch.setattr(orchestrator, "collector_liveness", collector_liveness, raising=False)
-
-    def dispatch_collector(_repository, _token, pr_number, head_sha, generation_id=orchestrator.BASE_GENERATION_ID):
-        stored["dispatches"] += 1
-        runs.append(_collector_run("in_progress", pr_number=pr_number, head_sha=head_sha, run_id=stored["dispatches"]))
-
-    monkeypatch.setattr(orchestrator, "dispatch_collector", dispatch_collector, raising=False)
-
-    def request_json(_repository, _token, _method, path, _payload=None):
-        assert path.startswith(f"actions/workflows/{orchestrator.COLLECTOR_WORKFLOW}/runs")
-        return {"workflow_runs": runs}
-
-    monkeypatch.setattr(orchestrator, "request_json", request_json)
 
     first = orchestrator.ensure_collector("owner/repo", "token", 472, HEAD)
     second = orchestrator.ensure_collector("owner/repo", "token", 472, HEAD)
@@ -992,15 +984,10 @@ def test_a_pushed_head_reaches_orchestration_as_the_exact_current_head(monkeypat
     assert "--head" not in text
 
 
-def test_a_pushed_head_on_a_draft_pr_dispatches_nothing(monkeypatch):
-    """``synchronize`` fires for Draft PRs; that must not start a review cycle.
+def _assert_draft_pr_starts_no_review(monkeypatch, pr_number):
+    """A Draft PR short-circuits before the review-request lookup and before
+    any collector dispatch."""
 
-    Unlike ``ready_for_review``, which GitHub only fires on the transition out
-    of Draft, ``synchronize`` fires for every push to a Draft branch. The
-    trigger therefore cannot be the Draft guard: the guard is the orchestrator's
-    own draft short-circuit, which runs before the review-request lookup and
-    before any dispatch.
-    """
     monkeypatch.setattr(
         orchestrator,
         "request_json",
@@ -1017,9 +1004,21 @@ def test_a_pushed_head_on_a_draft_pr_dispatches_nothing(monkeypatch):
     dispatch_calls = []
     monkeypatch.setattr(orchestrator, "ensure_collector", lambda *_args: dispatch_calls.append(True), raising=False)
 
-    assert orchestrator.ensure_current("owner/repo", "token", 535) is None
+    assert orchestrator.ensure_current("owner/repo", "token", pr_number) is None
     assert prerequisite_calls == []
     assert dispatch_calls == []
+
+
+def test_a_pushed_head_on_a_draft_pr_dispatches_nothing(monkeypatch):
+    """``synchronize`` fires for Draft PRs; that must not start a review cycle.
+
+    Unlike ``ready_for_review``, which GitHub only fires on the transition out
+    of Draft, ``synchronize`` fires for every push to a Draft branch. The
+    trigger therefore cannot be the Draft guard: the guard is the orchestrator's
+    own draft short-circuit, which runs before the review-request lookup and
+    before any dispatch.
+    """
+    _assert_draft_pr_starts_no_review(monkeypatch, 535)
 
 
 def test_unrelated_pull_request_events_do_not_dispatch_reviewer_orchestration():
@@ -1181,27 +1180,7 @@ def test_current_pr_never_dispatches_for_a_draft_pr(monkeypatch):
     indirect fact that a Draft head typically has no pre-ready review request
     yet: the draft check runs, and short-circuits, before that lookup.
     """
-    monkeypatch.setattr(
-        orchestrator,
-        "request_json",
-        lambda *_args: {"state": "open", "draft": True, "head": {"sha": HEAD}},
-    )
-    prerequisite_calls = []
-    monkeypatch.setattr(
-        orchestrator,
-        "review_request_state",
-        lambda *_args: prerequisite_calls.append(True)
-        or orchestrator.ReviewRequestReadiness(True, "d" * 64, "", "success"),
-        raising=False,
-    )
-    dispatch_calls = []
-    monkeypatch.setattr(orchestrator, "ensure_collector", lambda *_args: dispatch_calls.append(True), raising=False)
-
-    result = orchestrator.ensure_current("owner/repo", "token", 472)
-
-    assert result is None
-    assert prerequisite_calls == []
-    assert dispatch_calls == []
+    _assert_draft_pr_starts_no_review(monkeypatch, 472)
 
 
 def _readiness_harness(monkeypatch, *, prerequisite_state, request_valid, request_state="present"):
