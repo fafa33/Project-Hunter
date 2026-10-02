@@ -31,6 +31,8 @@ def _problems(binding: dict[str, Any]) -> list[str]:
     section = binding.get("signing_key_bindings")
     if not isinstance(section, dict) or not isinstance(section.get("bindings"), dict) or not section["bindings"]:
         return ["signing_key_bindings.bindings must be a non-empty object"]
+    if section.get("require_key_bound_to_resolved_writer") is not True:
+        return ["require_key_bound_to_resolved_writer must be true, or the bindings are never enforced"]
     logins = {identity["login"] for identity in binding["identities"]}
     problems: list[str] = []
     owner: dict[str, str] = {}
@@ -87,3 +89,18 @@ def test_well_formed_but_unknown_keys_are_not_the_governed_binding(mutate) -> No
     candidate = _mutated(mutate)
     assert _problems(candidate) == []
     assert candidate["signing_key_bindings"]["bindings"] != EXPECTED
+
+
+@pytest.mark.parametrize("value", [False, None, "true", 1])
+def test_bindings_without_the_enforcement_flag_are_rejected(value) -> None:
+    candidate = copy.deepcopy(_binding())
+    section = candidate["signing_key_bindings"]
+    if value is None:
+        section.pop("require_key_bound_to_resolved_writer")
+    else:
+        section["require_key_bound_to_resolved_writer"] = value
+    assert _problems(candidate) != []
+
+
+def test_the_trusted_binding_enables_enforcement() -> None:
+    assert _binding()["signing_key_bindings"]["require_key_bound_to_resolved_writer"] is True

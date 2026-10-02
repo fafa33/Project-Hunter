@@ -203,6 +203,7 @@
     ],
     "signing_key_bindings": {
       "purpose": "Bootstrap of the trusted-main authority for writer -> SSH signing key bindings (Issue #535 / PR #538). Each authorization-bound writer is bound to the exact SSH SHA-256 signing key fingerprints its commits may carry. This section is data only; enforcement of it is owned by PR #538 and reads it from the trusted base tip, never from a candidate.",
+      "require_key_bound_to_resolved_writer": true,
       "bindings": {
         "claude": [
           "SHA256:32dP45eSMmVSt/G/CGvcxl/P+MO3Nwj9xeTh/GSA2wc"
