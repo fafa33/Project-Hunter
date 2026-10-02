@@ -5,6 +5,7 @@ import ast
 import configparser
 import hashlib
 import importlib.util
+import inspect
 import json
 import os
 import re
@@ -1591,6 +1592,44 @@ def validate_review_after_remediation_boundary() -> list[str]:
     cycle = orchestration.ReviewCycle(1, head, "WAITING_FOR_REVIEWER", "", 1, "", "d" * 64, first)
     if orchestration.remediation_generation_admissible("owner/repo", "", cycle, first) is not False:
         errors.append("an unchanged remediation generation must never authorise another reviewer invocation")
+
+    # (4) Suppressing dispatch for an exact-head Codex clear must use governance's
+    # latest-review semantics. Governance keeps only the newest admissible review,
+    # so an older clear that a later finding supersedes must adopt nothing in any
+    # consumer, or dispatch is suppressed for evidence governance then refuses.
+    import hunter_governance_review_v2 as governance
+
+    clear_body = f"Codex Review: Didn't find any major issues.\n\n**Reviewed commit:** `{head[:10]}`"
+
+    def codex_review(review_id: int, when: str, body: str, state: str = "COMMENTED") -> dict[str, Any]:
+        return {
+            "id": review_id,
+            "user": {"login": governance.reviewer_login({"id": "codex"})},
+            "state": state,
+            "body": body,
+            "commit_id": head,
+            "submitted_at": when,
+            "trigger_claims_id": claims,
+        }
+
+    older = codex_review(1, "2026-09-30T09:00:00Z", clear_body)
+    finding = codex_review(2, "2026-09-30T10:00:00Z", "### Codex Review\n\nFound issues.\n\n**P1** unsafe bypass")
+    try:
+        if not governance.latest_codex_review_is_exact_head_clear([older], head, claims):
+            errors.append("a latest exact-head Codex clear must be adopted")
+        if governance.latest_codex_review_is_exact_head_clear([older, finding], head, claims):
+            errors.append("a Codex clear superseded by a later finding must not be adopted")
+        try:
+            governance.latest_codex_review_is_exact_head_clear([older, "malformed"], head, claims)
+            errors.append("a malformed review record must fail the collection closed")
+        except ValueError:
+            pass
+    except Exception as exc:
+        errors.append(f"latest Codex review selection failed: {type(exc).__name__}: {exc}")
+    for module in (orchestration, collector):
+        source = inspect.getsource(module)
+        if "latest_codex_review_is_exact_head_clear" not in source:
+            errors.append(f"{module.__name__} must use governance's latest Codex review selection")
 
     # The generation must be derived where the dispatch decision is made. A
     # derivation nothing consumes would leave the orchestrator dispatching the

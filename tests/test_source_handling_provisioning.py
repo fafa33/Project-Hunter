@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import argparse
+import dataclasses
 import hashlib
 import json
 import os
@@ -18,6 +19,7 @@ from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
 import hunter.evidence_intelligence.source_handling_provenance as provenance_module
 from hunter.automation.issue_agent_execution import IssueAgentAuthorization, issue_agent_document_id
 from hunter.evidence_intelligence.pre_model import resolve_pre_model_source_handling
+from hunter.evidence_intelligence.source_handling import SourceHandlingBlockedError
 from hunter.evidence_intelligence.source_handling_persistence import (
     SourceHandlingAuthorityService,
     SourceHandlingOperatorRoot,
@@ -92,6 +94,51 @@ def _authorization(
         authorization_label="hunter-agent-execute",
         issue_updated_at=updated_at,
         authorization_id=authorization_id,
+    )
+
+
+def _internal_options() -> tuple[provisioning._FactOptions, provisioning._PolicyOptions]:
+    defaults = provisioning._REPOSITORY_DEFAULTS
+    return (
+        provisioning._FactOptions(
+            sensitivity="INTERNAL",
+            operation_restrictions=(),
+            persistence_restriction="FULL_CONTENT_ALLOWED",
+            secret_presence=(),
+        ),
+        provisioning._PolicyOptions(
+            processing_decision=defaults["processing_decision"],
+            retention_decision=defaults["retention_decision"],
+            reconstruction_decision=defaults["reconstruction_decision"],
+            access_decision=defaults["access_decision"],
+            deletion_lifecycle_decision=defaults["deletion_lifecycle_decision"],
+            persist_disposition="ALLOW",
+            read_access_disposition="ALLOW",
+            reconstruct_disposition="ALLOW",
+            delete_or_expire_disposition="ALLOW",
+        ),
+    )
+
+
+def _run_revision(
+    database: Path,
+    key: bytes,
+    rule: Any,
+    auth: IssueAgentAuthorization,
+    fact: Any,
+    policy: Any,
+    *,
+    as_of: datetime | None = None,
+) -> dict[str, Any]:
+    return provisioning._run(
+        database=str(database),
+        signing_key=key,
+        rule=rule,
+        authorization=auth,
+        fact_options=fact,
+        policy_options=policy,
+        provenance_authority_identity=provisioning.AUTHORITY_COMPONENT_ID,
+        as_of=as_of,
     )
 
 
@@ -1317,3 +1364,232 @@ def test_policy_validator_rejects_non_string_values_with_governed_error(bad_valu
     }
     with pytest.raises(SourceHandlingBlockedError, match="durable lifecycle disposition is missing or invalid"):
         validate_policy_body(lifecycle)
+
+
+def test_completed_successor_rejects_stale_authorization_without_writes(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A stale signed revision cannot use an existing successor as recovery authority."""
+    database, key, _ = _prepare(tmp_path, monkeypatch)
+    rule = bootstrap._load_production_rule()
+    fact_options, policy_options = _internal_options()
+    v1_at = datetime.now(UTC)
+    v1 = _authorization(496, provisioning._time_text(v1_at), "auth-496-stale-v1")
+    provisioning._run(
+        database=str(database),
+        signing_key=key,
+        rule=rule,
+        authorization=v1,
+        fact_options=fact_options,
+        policy_options=policy_options,
+        provenance_authority_identity=provisioning.AUTHORITY_COMPONENT_ID,
+        as_of=v1_at,
+    )
+    v2_at = datetime.now(UTC)
+    v2 = _authorization(496, provisioning._time_text(v2_at), "auth-496-stale-v2")
+    provisioning._run(
+        database=str(database),
+        signing_key=key,
+        rule=rule,
+        authorization=v2,
+        fact_options=fact_options,
+        policy_options=policy_options,
+        provenance_authority_identity=provisioning.AUTHORITY_COMPONENT_ID,
+        as_of=None,
+    )
+    with sqlite3.connect(database) as connection:
+        before = connection.execute("SELECT COUNT(*) FROM source_handling_authority_records").fetchone()[0]
+    with pytest.raises(SourceHandlingBlockedError, match="immutable Issue revision batch plan"):
+        provisioning._run(
+            database=str(database),
+            signing_key=key,
+            rule=rule,
+            authorization=v1,
+            fact_options=fact_options,
+            policy_options=policy_options,
+            provenance_authority_identity=provisioning.AUTHORITY_COMPONENT_ID,
+            as_of=None,
+        )
+    with sqlite3.connect(database) as connection:
+        assert connection.execute("SELECT COUNT(*) FROM source_handling_authority_records").fetchone()[0] == before
+
+
+def test_provenance_only_successor_interruption_recovers(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    database, key, _ = _prepare(tmp_path, monkeypatch)
+    rule = bootstrap._load_production_rule()
+    fact, policy = _internal_options()
+    v1_at = datetime.now(UTC)
+    v1 = _authorization(496, provisioning._time_text(v1_at), "auth-496-prov-v1")
+    provisioning._run(
+        database=str(database),
+        signing_key=key,
+        rule=rule,
+        authorization=v1,
+        fact_options=fact,
+        policy_options=policy,
+        provenance_authority_identity=provisioning.AUTHORITY_COMPONENT_ID,
+        as_of=v1_at,
+    )
+    v2_at = datetime.now(UTC)
+    v2 = _authorization(496, provisioning._time_text(v2_at), "auth-496-prov-v2")
+    real = provisioning._provision_authority_record
+    monkeypatch.setattr(
+        provisioning,
+        "_provision_authority_record",
+        lambda **kwargs: (_ for _ in ()).throw(RuntimeError("stop-before-authority")),
+    )
+    with pytest.raises(RuntimeError, match="stop-before-authority"):
+        provisioning._run(
+            database=str(database),
+            signing_key=key,
+            rule=rule,
+            authorization=v2,
+            fact_options=fact,
+            policy_options=policy,
+            provenance_authority_identity=provisioning.AUTHORITY_COMPONENT_ID,
+            as_of=None,
+        )
+    monkeypatch.setattr(provisioning, "_provision_authority_record", real)
+    recovered = provisioning._run(
+        database=str(database),
+        signing_key=key,
+        rule=rule,
+        authorization=v2,
+        fact_options=fact,
+        policy_options=policy,
+        provenance_authority_identity=provisioning.AUTHORITY_COMPONENT_ID,
+        as_of=None,
+    )
+    assert recovered["status"] == "provisioned"
+
+
+def test_partial_successor_rejects_changed_retry_plan(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    database, key, _ = _prepare(tmp_path, monkeypatch)
+    rule = bootstrap._load_production_rule()
+    fact, policy = _internal_options()
+    v1_at = datetime.now(UTC)
+    v1 = _authorization(496, provisioning._time_text(v1_at), "auth-496-plan-v1")
+    provisioning._run(
+        database=str(database),
+        signing_key=key,
+        rule=rule,
+        authorization=v1,
+        fact_options=fact,
+        policy_options=policy,
+        provenance_authority_identity=provisioning.AUTHORITY_COMPONENT_ID,
+        as_of=v1_at,
+    )
+    v2_at = datetime.now(UTC)
+    v2 = _authorization(496, provisioning._time_text(v2_at), "auth-496-plan-v2")
+    real = provisioning._provision_authority_record
+    count = 0
+
+    def interrupt(**kwargs: Any) -> dict[str, Any]:
+        nonlocal count
+        if count == 2:
+            raise RuntimeError("partial")
+        result = real(**kwargs)
+        count += 1
+        return result
+
+    monkeypatch.setattr(provisioning, "_provision_authority_record", interrupt)
+    with pytest.raises(RuntimeError, match="partial"):
+        provisioning._run(
+            database=str(database),
+            signing_key=key,
+            rule=rule,
+            authorization=v2,
+            fact_options=fact,
+            policy_options=policy,
+            provenance_authority_identity=provisioning.AUTHORITY_COMPONENT_ID,
+            as_of=None,
+        )
+    monkeypatch.setattr(provisioning, "_provision_authority_record", real)
+    changed = dataclasses.replace(policy, persist_disposition="DENY")
+    with pytest.raises(SourceHandlingBlockedError, match="immutable Issue revision batch plan"):
+        provisioning._run(
+            database=str(database),
+            signing_key=key,
+            rule=rule,
+            authorization=v2,
+            fact_options=fact,
+            policy_options=changed,
+            provenance_authority_identity=provisioning.AUTHORITY_COMPONENT_ID,
+            as_of=None,
+        )
+
+
+def test_interrupted_newer_revision_authority_batch_recovers_idempotently(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A retry completes a successor revision after only part of its authority-family batch committed."""
+    database, key, _ = _prepare(tmp_path, monkeypatch)
+    rule = bootstrap._load_production_rule()
+    fact_options, policy_options = _internal_options()
+    first_updated = datetime.now(UTC)
+    first_auth = _authorization(496, provisioning._time_text(first_updated), "auth-496-v1")
+    assert (
+        provisioning._run(
+            database=str(database),
+            signing_key=key,
+            rule=rule,
+            authorization=first_auth,
+            fact_options=fact_options,
+            policy_options=policy_options,
+            provenance_authority_identity=provisioning.AUTHORITY_COMPONENT_ID,
+            as_of=first_updated,
+        )["status"]
+        == "provisioned"
+    )
+
+    second_updated = datetime.now(UTC)
+    second_auth = _authorization(496, provisioning._time_text(second_updated), "auth-496-v2")
+    real_provision = provisioning._provision_authority_record
+    committed = 0
+
+    def _interrupt_after_two(**kwargs: Any) -> dict[str, Any]:
+        nonlocal committed
+        if committed == 2:
+            raise RuntimeError("simulated authority batch interruption")
+        result = real_provision(**kwargs)
+        committed += 1
+        return result
+
+    monkeypatch.setattr(provisioning, "_provision_authority_record", _interrupt_after_two)
+    with pytest.raises(RuntimeError, match="simulated authority batch interruption"):
+        provisioning._run(
+            database=str(database),
+            signing_key=key,
+            rule=rule,
+            authorization=second_auth,
+            fact_options=fact_options,
+            policy_options=policy_options,
+            provenance_authority_identity=provisioning.AUTHORITY_COMPONENT_ID,
+            as_of=None,
+        )
+
+    monkeypatch.setattr(provisioning, "_provision_authority_record", real_provision)
+    recovered = provisioning._run(
+        database=str(database),
+        signing_key=key,
+        rule=rule,
+        authorization=second_auth,
+        fact_options=fact_options,
+        policy_options=policy_options,
+        provenance_authority_identity=provisioning.AUTHORITY_COMPONENT_ID,
+        as_of=None,
+    )
+    assert recovered["status"] == "provisioned"
+    assert all(entry["status"] in {"provisioned", "already-provisioned"} for entry in recovered["records"].values())
+    rerun = provisioning._run(
+        database=str(database),
+        signing_key=key,
+        rule=rule,
+        authorization=second_auth,
+        fact_options=fact_options,
+        policy_options=policy_options,
+        provenance_authority_identity=provisioning.AUTHORITY_COMPONENT_ID,
+        as_of=None,
+    )
+    assert rerun["status"] == "already-provisioned"
+    assert all(entry["status"] == "already-provisioned" for entry in rerun["records"].values())

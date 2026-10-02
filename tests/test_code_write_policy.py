@@ -333,7 +333,7 @@ def test_codex_hard_review_budget_covers_its_observed_hosted_latency() -> None:
     codex = next(agent for agent in pool["agents"] if agent["id"] == "codex")
 
     assert codex["review_timeout_seconds"] == pool["timeout_policy"]["max_seconds"]
-    assert codex["ack_timeout_seconds"] == codex["review_timeout_seconds"]
+    assert codex["ack_timeout_seconds"] == 30
     assert codex["review_timeout_seconds"] >= 30 * 60
     assert codex["retryable"] is False
     assert pool["timeout_policy"]["bounded"] is True

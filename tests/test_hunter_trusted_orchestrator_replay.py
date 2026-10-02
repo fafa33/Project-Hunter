@@ -43,19 +43,23 @@ REPO_ROOT = Path(__file__).resolve().parents[1]
 #: loudly here instead of silently making a negative test vacuous.
 DROPS_OPPORTUNITY_TERMINALITY = (
     """            if existing.state in PENDING_STATES and _older_than(
-                existing.started_at, INDEPENDENT_REVIEW_OPPORTUNITY_SECONDS
+                existing.started_at, independent_review_opportunity_seconds()
             ):""",
     "            if False:",
 )
 
+#: The budget is derived from the candidate's own trusted reviewer pool rather
+#: than published as a module constant, so the mutation that makes it
+#: non-positive now targets the derivation's own return rather than a
+#: module-level assignment.
 MAKES_OPPORTUNITY_NON_POSITIVE = (
-    "INDEPENDENT_REVIEW_OPPORTUNITY_SECONDS = 15 * 60",
-    "INDEPENDENT_REVIEW_OPPORTUNITY_SECONDS = 0",
+    "    return pre_ready.reviewer_chain_worst_case_seconds(pool)",
+    "    return 0",
 )
 
 MAKES_OPPORTUNITY_UNCONDITIONAL = (
     """            if existing.state in PENDING_STATES and _older_than(
-                existing.started_at, INDEPENDENT_REVIEW_OPPORTUNITY_SECONDS
+                existing.started_at, independent_review_opportunity_seconds()
             ):""",
     "            if existing.state in PENDING_STATES:",
 )
@@ -78,8 +82,8 @@ DROPS_DISPATCH_BUDGET = ("    if count >= MAX_COLLECTOR_DISPATCHES:", "    if Fa
 #: candidate actually enforces. Sampling the two probes far apart only proves
 #: *some* cutoff sits between them, so a 1.5x threshold still passed.
 OPPORTUNITY_THRESHOLD_EXCEEDS_DECLARED = (
-    "                existing.started_at, INDEPENDENT_REVIEW_OPPORTUNITY_SECONDS",
-    "                existing.started_at, INDEPENDENT_REVIEW_OPPORTUNITY_SECONDS * 3 // 2",
+    "                existing.started_at, independent_review_opportunity_seconds()",
+    "                existing.started_at, independent_review_opportunity_seconds() * 3 // 2",
 )
 
 #: Codex P1 on PR #539: the recovery dispatch is real, but the durable cycle it

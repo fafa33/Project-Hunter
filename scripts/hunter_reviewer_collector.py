@@ -51,6 +51,136 @@ TRIGGER_SCHEMES = frozenset({"api", "github-pr-comment", "github-review-request"
 #: interpolated into an Actions API route, so a separator or traversal segment
 #: would address a different resource entirely.
 WORKFLOW_FILE_PATTERN = re.compile(r"[A-Za-z0-9._-]+\.ya?ml")
+#: The defect terms a clear verdict has to deny. Denying the word "no" denies
+#: nothing: "no way to tell whether the gate holds" says nothing at all about
+#: defects, so a clear summary has to name what it found none of.
+DEFECT_TERMS = ("findings", "defects", "issues", "blockers")
+#: The closed qualifier vocabulary a denial may walk before its defect term.
+#: The production Gemini review of PR #541 -- "No security, correctness, or
+#: fail-closed defects identified." -- qualifies exactly these words, and the
+#: external reviewer's own prompt asks for exactly these terms. An open word run
+#: admitted a denial whose *subject* had changed, which is how contradictory
+#: summaries read as clean: "no review was performed and possible issues remain"
+#: walked "review was performed and possible" into the noun, and "no substantive
+#: non-blocking issues were found" walked a negation a leading-word lookahead
+#: could not see. Every word the run walks has to be a word that still denies
+#: defects, or the denial is about something else and clears nothing.
+CLEAR_DENIAL_QUALIFIERS = frozenset(
+    {
+        "additional",
+        "blocking",
+        "correctness",
+        "exact-head",
+        "fail-closed",
+        "governance",
+        "known",
+        "major",
+        "minor",
+        "new",
+        "outstanding",
+        "remaining",
+        "reproducible",
+        "security",
+        "substantive",
+        "unresolved",
+    }
+)
+#: Every word a denial run may consist of: the qualifiers, the conjunctions that
+#: chain them, and the other defect terms the run denies before the one it lands
+#: on ("no remaining substantive findings or issues"). Nothing else is
+#: admissible between "no" and the defect term.
+CLEAR_DENIAL_WORDS = CLEAR_DENIAL_QUALIFIERS | frozenset(DEFECT_TERMS) | {"and", "or"}
+#: A denial is "no", the words it walks, and the defect term it lands on. The
+#: run is captured so every word in it can be checked against
+#: ``CLEAR_DENIAL_WORDS`` rather than trusted to be a qualifier.
+CLEAR_DENIAL = re.compile(
+    r"\bno\s+(?P<qualifier>(?:[\w-]+(?:\s*(?:,|and|or)\s*|\s+))*[ \t]*)" r"(?:" + "|".join(DEFECT_TERMS) + r")\b"
+)
+#: Wording that reports the review itself did not happen or could not. A
+#: reviewer that performed no review has cleared nothing, so this is
+#: unavailability even when the sentence also says "no".
+REVIEW_NOT_PERFORMED = re.compile(
+    r"\bno\s+(?:substantive|adversarial|hostile|independent|meaningful|thorough|complete|full|formal|proper"
+    r"|conclusive|independent\s+hostile)?\s*reviews?\b"
+    r"|\breviews?\s+(?:was|were|is|are|has|have)?\s*not\s+(?:performed|conducted|completed|carried\s+out|done)\b"
+    r"|\b(?:did|do|does|could|couldn'?t|would|can|can'?t|unable\s+to|failed\s+to|never)\s+(?:\w+\s+){0,2}?reviews?\b"
+    r"|\bnot\s+reviewed\b"
+    r"|\breviews?\s+(?:skipped|unavailable|impossible|not\s+possible)\b"
+    r"|\bwithout\s+(?:a|an|any)?\s*reviews?\b"
+)
+#: Language that concedes the possibility of a defect instead of denying one.
+#: A review that leaves possible issues open has not cleared the candidate, and
+#: the hedge can sit outside the denial clause entirely ("no review was
+#: performed and possible issues remain"), so it is judged over the summary.
+CLEAR_HEDGE = re.compile(
+    r"\b(?:possible|possibly|potential|potentially|presumed|presumably|probable|probably"
+    r"|may|might|could|can|cannot|apparently|seemingly|arguably|perhaps|likely|unlikely"
+    r"|appears?|seems?|appeared|sounded|unclear|uncertain|uncertainty|unsure|doubt|doubts"
+    r"|unknown|unverified|unconfirmed|undetermined|indeterminate|suspect(?:ed|s)?"
+    r"|no\s+way\s+to|unable\s+to|not\s+able\s+to|couldn'?t\s+tell|can'?t\s+tell|insufficient)\b"
+)
+#: A denial that keeps, withholds, or disclaims a defect is not a denial of
+#: defects: "no non-blocking issues" and "no issues other than" both report
+#: defects while appearing to deny them.
+NEGATED_DEFECT = re.compile(
+    r"\bno\s+(?:not|non|never)\b"
+    r"|\b(?:not|non)[\s-]?(?:blocking|blockers?|critical|catastrophic|severe|fatal|serious|substantive"
+    r"|defects?|issues?|findings?|problems?|bugs?)\b"
+    r"|\b(?:nothing\s+but|other\s+than|except\s+for|aside\s+from|besides|excluding)\b"
+)
+#: A summary that discloses severity alongside its denial is not admissible as a
+#: clear result, whatever else it says. Unchanged from the guard that opened
+#: this path, and never relaxed by the denial rules below.
+DANGEROUS_SUMMARY = re.compile(
+    r"\b(?:critical|unsafe|vulnerabilit|exploit\w*|blocking (?:finding|defect|issue)|must fix)\b"
+)
+#: A denial clears only what it denies. Whatever the summary says outside its
+#: denials must not assert a defect or turn against the denial: "no blocking
+#: defects, but one issue remains" denies blockers and then discloses an issue,
+#: and "no security defects identified, but the implementation has a
+#: correctness issue" denies one class and reports another. Rather than
+#: enumerate such sentences, every denial span is removed and the residue is
+#: judged: any defect noun, failure word, or contrastive connective left over is
+#: a contradiction. Hyphen-aware boundaries keep compound qualifiers such as
+#: "fail-closed" from reading as an assertion of failure.
+DEFECT_ASSERTION = re.compile(
+    r"(?<![\w-])(?:findings?|defects?|issues?|blockers?|bugs?|problems?|flaws?|regressions?|concerns?"
+    r"|vulnerab\w*|broken|incorrect|wrong|fail(?:s|ed|ing|ures?)?)(?![\w-])"
+)
+CONTRADICTING_CONNECTIVE = re.compile(
+    r"(?<![\w-])(?:but|however|although|though|yet|nevertheless|nonetheless|still|whereas|while)(?![\w-])"
+)
+
+
+def clear_summary_denies_defects(summary: str) -> bool:
+    """Whether a clear summary unambiguously denies actual defects.
+
+    A clear verdict is review authority, so it has to be an unambiguous denial
+    of real findings, defects, issues, or blockers. Three things disqualify it.
+    A summary that reports no review, or hedges, contradicts a clear result
+    rather than supporting it. A denial whose walked words are not all defect
+    words is denying something else -- the subject moved ("no review was
+    performed and possible issues remain") or a negation was smuggled in past
+    the noun ("no substantive non-blocking issues were found"). And a summary
+    that discloses severity is unusable however it is phrased. Finally, nothing
+    outside the denials may assert a defect or contrast with them, so a denial
+    of one class cannot sit beside a disclosure of another. Every denial it
+    makes has to qualify, so one incoherent denial is enough to fail the whole
+    summary closed rather than be read past.
+    """
+
+    lower = summary.lower()
+    if DANGEROUS_SUMMARY.search(lower):
+        return False
+    if REVIEW_NOT_PERFORMED.search(lower) or CLEAR_HEDGE.search(lower) or NEGATED_DEFECT.search(lower):
+        return False
+    denials = list(CLEAR_DENIAL.finditer(lower))
+    if not denials or not all(
+        set(re.findall(r"[\w-]+", denial.group("qualifier"))) <= CLEAR_DENIAL_WORDS for denial in denials
+    ):
+        return False
+    residue = CLEAR_DENIAL.sub(" ", lower)
+    return not (DEFECT_ASSERTION.search(residue) or CONTRADICTING_CONNECTIVE.search(residue))
 
 
 def external_verdict(payload: dict[str, Any]) -> str:
@@ -82,18 +212,87 @@ def external_verdict(payload: dict[str, Any]) -> str:
     if verdict == "clear" and findings:
         return "blocking"
     if verdict == "clear":
-        lower = summary.lower()
-        safe_clear = re.search(
-            r"\bno (?:substantive |remaining )?(?:blocking )?(?:findings|defects|issues|blockers)\b", lower
-        ) or re.search(
-            r"\bfound no (?:substantive |remaining )?(?:blocking )?(?:findings|defects|issues|blockers)\b", lower
-        )
-        dangerous = re.search(
-            r"\b(?:critical|unsafe|vulnerabilit|blocking (?:finding|defect|issue)|must fix|exploit)\b", lower
-        )
-        if not safe_clear or dangerous:
+        if not clear_summary_denies_defects(summary):
             return "unavailable"
     return verdict
+
+
+#: A provider error body is read only far enough to recognise a small error
+#: envelope, and only its ``error`` fields are ever retained. The collector
+#: publishes this summary in a public review comment, so it must never carry a
+#: body, a request header, or anything credential-shaped the provider echoed.
+PROVIDER_ERROR_BODY_LIMIT = 4096
+PROVIDER_ERROR_DETAIL_LIMIT = 160
+PROVIDER_ERROR_SECRETS = re.compile(
+    r"(?i)\bbearer\s+\S+"
+    r"|\b(?:x-)?(?:api[-_]?key|authorization|access[-_]?token|token|secret)\b\s*[:=]\s*\S+"
+    r"|\b(?:gsk|xai|sk|ghp|github_pat)[-_][A-Za-z0-9_-]{6,}"
+    r"|\bAIza[A-Za-z0-9_-]{10,}"
+    r"|\b[A-Za-z0-9_-]{40,}\b"
+)
+#: Closed, ordered causes, most specific first. A status alone cannot separate an
+#: unusable key from a model this account may not call, a spent quota, and a
+#: request the provider refuses.
+PROVIDER_ERROR_CAUSES = (
+    (
+        "model_access",
+        r"model[_ ]?not[_ ]?found|model[_ ]?access"
+        r"|\bmodel\b\W+(?:\S+\W+){0,4}?(?:is\s+|are\s+)?(?:not\s+(?:found|available|supported|accessible|permitted"
+        r"|allowed|enabled)|does\s+not\s+exist|unavailable|decommissioned|deprecated)"
+        r"|(?:access|permission)\s+to\s+(?:the\s+|this\s+)?model\b",
+    ),
+    ("quota_or_account", "quota|rate_?limit|billing|credit|insufficient|usage|suspend|deactivat|account"),
+    ("authentication_or_permission", "auth|api[-_ ]?key|credential|unauthori|forbidden|permission|access|denied"),
+    ("malformed_request", "invalid|malformed|unsupported|validation|parameter|payload|too_?long|filter"),
+)
+
+
+def provider_http_error_summary(provider: str, exc: urllib.error.HTTPError, secret: str) -> str:
+    """Name the cause of a provider HTTP failure without echoing anything secret.
+
+    "groq HTTP 403" is indistinguishable between an unusable key, a model the
+    account may not use, an exhausted quota and a request Groq will not accept,
+    and the collector records permanent unavailability from it, so the cause has
+    to survive. Only a bounded slice of the error envelope is parsed, only its
+    known scalar fields are kept, and every fragment is redacted. Headers and the
+    reason phrase are never read: the API key and bearer token live there.
+    """
+
+    def detail(value: Any) -> str:
+        if not isinstance(value, (str, int)) or isinstance(value, bool):
+            return ""
+        text = " ".join(str(value).split()).replace(secret, "[redacted]")
+        text = PROVIDER_ERROR_SECRETS.sub("[redacted]", text)
+        return "".join(character for character in text if character.isprintable())[:PROVIDER_ERROR_DETAIL_LIMIT]
+
+    try:
+        envelope = json.loads(exc.read(PROVIDER_ERROR_BODY_LIMIT) or b"")
+    except Exception:
+        envelope = None
+    if not isinstance(envelope, dict):
+        return f"{provider} HTTP {exc.code}"
+    error = envelope.get("error")
+    fields = error if isinstance(error, dict) else envelope
+    # Evidence is weighed from most to least specific, and the first tier that
+    # names a cause decides it: the provider's own error ``code``, then the
+    # message, and only then the generic ``status``/``type`` class. A generic
+    # ``forbidden`` or ``invalid_request_error`` therefore never masks a
+    # specific ``model_not_found`` or "model is not available for this account".
+    code, status, kind = (detail(fields.get(name)) for name in ("code", "status", "type"))
+    message = detail(fields.get("message"))
+    parts = [code, status, kind]
+    cause = next(
+        (
+            name
+            for tier in ((code,), (message,), (status, kind))
+            for name, pattern in PROVIDER_ERROR_CAUSES
+            if any(re.search(pattern, evidence, re.I) for evidence in tier)
+        ),
+        "unspecified",
+    )
+    # A numeric provider code only repeats the status this summary already carries.
+    kept = " ".join(part for part in (*parts, message) if part and not part.isdigit())
+    return f"{provider} HTTP {exc.code} [{cause}]{f': {kept}' if kept else ''}"
 
 
 def configuration_digest(pool: dict[str, Any]) -> str:
@@ -699,8 +898,8 @@ class GitHubBackend:
             with urllib.request.urlopen(req, timeout=int(agent["review_timeout_seconds"])) as response:
                 raw = response.read(LIMIT + 1)
         except urllib.error.HTTPError as exc:
-            if exc.code in {401, 403, 408, 413, 429, 500, 502, 503, 504}:
-                return {"verdict": "unavailable", "summary": f"{provider} HTTP {exc.code}"}
+            if exc.code in {400, 401, 403, 408, 413, 429, 500, 502, 503, 504}:
+                return {"verdict": "unavailable", "summary": provider_http_error_summary(provider, exc, key)}
             raise
         except (TimeoutError, urllib.error.URLError):
             return {"verdict": "unavailable", "summary": f"{provider} transport unavailable"}
@@ -1022,6 +1221,33 @@ class GitHubBackend:
             return True
         return False
 
+    def _exact_head_native_clear(self) -> bool:
+        """Whether authenticated Codex already cleared this exact HEAD.
+
+        A clear is bound to the commit it names, not to when it was written. The
+        trigger timestamp therefore cannot invalidate it: a review of this exact
+        HEAD that predates a later trigger (for example a remediation
+        generation's) still reviewed this immutable content. Only the clear
+        outcome is adopted regardless of ordering, and only as an authenticated
+        review object, the one form governance adopts. A review that carries
+        findings keeps requiring a response after the trigger, because
+        remediation owes a fresh review. Only the latest Codex review can be that
+        clear. HEAD mutation invalidates the clear:
+        the review's commit_id and its named reviewed commit then no longer
+        match the exact HEAD.
+        """
+
+        # Governance's own latest-review selection and adoption predicate, so a
+        # clear counts here only if it is the newest admissible Codex review and
+        # governance would adopt it. A malformed collection raises, as it does in
+        # governance, rather than being skipped.
+        reviews = _pages(self.repository, self.token, f"pulls/{self.pr}/reviews")
+        # The current collector invocation is the trusted provenance boundary;
+        # bind only while evaluating its own response, never as a global/manual
+        # dispatch-suppression shortcut.
+        bound = governance.bind_native_codex_reviews_to_claims(reviews, self.expected_head, self.claims_id)
+        return governance.latest_codex_review_is_exact_head_clear(bound, self.expected_head, self.claims_id)
+
     def response_state(self, agent: dict[str, Any], trigger: dict[str, Any]) -> str:
         if trigger.get("state") == "unavailable":
             return "unavailable"
@@ -1034,6 +1260,8 @@ class GitHubBackend:
             return str(result["verdict"])
         login = governance.reviewer_login(agent)
         created = str(trigger["created_at"])
+        if agent.get("id") == "codex" and self._exact_head_native_clear():
+            return "clear"
         matching_reviews = [
             item
             for item in _pages(self.repository, self.token, f"pulls/{self.pr}/reviews")
@@ -1103,7 +1331,7 @@ class GitHubBackend:
                 return False
             run = self._adopt_workflow_run(trigger)
             return run is not None and str(run.get("status") or "") in STARTED_RUN_STATES
-        if agent.get("id") == "codex":
+        if agent.get("id") == "codex" and trigger_scheme(agent) == "github-pr-comment":
             login = governance.reviewer_login(agent)
             created = str(trigger.get("created_at") or "")
             reviews = _pages(self.repository, self.token, f"pulls/{self.pr}/reviews")

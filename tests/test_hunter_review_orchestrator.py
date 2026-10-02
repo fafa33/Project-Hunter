@@ -50,18 +50,17 @@ def test_read_cycle_accepts_only_current_head_trusted_workflow_status(monkeypatc
     def request(_repository, _token, _method, path, _payload=None):
         if path == "pulls/472":
             return {"state": "open", "head": {"sha": HEAD}}
-        if path == f"commits/{HEAD}/status":
-            return {
-                "statuses": [
-                    {
-                        "context": "Hunter Review Orchestration / PR #472",
-                        "description": f"WAITING_FOR_REVIEWER|local|0|{'d' * 64}",
-                        "target_url": "https://github.com/owner/repo/actions/runs/123",
-                        "created_at": "2026-09-15T00:00:00Z",
-                        "creator": {"login": "github-actions[bot]"},
-                    }
-                ]
-            }
+        if path == f"commits/{HEAD}/statuses?per_page=100":
+            # The status LIST endpoint, which is the one that carries the publisher.
+            return [
+                {
+                    "context": "Hunter Review Orchestration / PR #472",
+                    "description": f"WAITING_FOR_REVIEWER|local|0|{'d' * 64}",
+                    "target_url": "https://github.com/owner/repo/actions/runs/123",
+                    "created_at": "2026-09-15T00:00:00Z",
+                    "creator": {"login": "github-actions[bot]"},
+                }
+            ]
         if path == "":
             return {"default_branch": "main"}
         if path == "actions/runs/123":
@@ -368,11 +367,12 @@ def test_absent_cycle_read_does_not_duplicate_an_already_active_correlated_colle
     assert dispatches == []
     # A correlated collector run already active for this exact identity is
     # authoritative even when the commit-status read raced and reported the
-    # cycle absent. Converge on it without minting a second trigger identity and
-    # without publishing a competing cycle.
-    assert result.trigger_id is None
+    # cycle absent, so no second dispatch is issued -- but the durable cycle
+    # record is still published, because that record is what makes a dispatch
+    # that is already in flight recoverable rather than duplicable.
+    assert result.trigger_id == 999
     assert result.state == "WAITING_FOR_REVIEWER"
-    assert published == []
+    assert published
 
 
 def test_absent_cycle_read_does_not_duplicate_an_already_successful_correlated_collector(monkeypatch):
@@ -417,15 +417,13 @@ def test_unreadable_collector_correlation_evidence_refuses_to_risk_a_duplicate_d
 
     monkeypatch.setattr(orchestrator, "collector_liveness", unavailable, raising=False)
 
-    # Unreadable correlation evidence is not evidence that no collector exists.
-    # It must fail closed: stay pending and dispatch nothing, leaving the
-    # candidate for one more reconciliation pass rather than risking a
-    # duplicate dispatch for a run that may already be in flight.
-    result = orchestrator.ensure_collector("owner/repo", "token", 472, HEAD)
+    # Unreadable correlation evidence is not evidence that no collector exists,
+    # so it must fail closed rather than authorise a dispatch it cannot rule out
+    # as a duplicate.
+    with pytest.raises(RuntimeError, match="correlation evidence unavailable"):
+        orchestrator.ensure_collector("owner/repo", "token", 472, HEAD)
 
     assert dispatches == []
-    assert result.state == "WAITING_FOR_REVIEWER"
-    assert result.trigger_id is None
 
 
 def test_collector_liveness_ignores_runs_for_another_candidate(monkeypatch):
@@ -975,9 +973,10 @@ def test_current_pr_never_dispatches_for_a_draft_pr(monkeypatch):
 def _readiness_harness(monkeypatch, *, prerequisite_state, request_valid, request_state="present"):
     """Wire the exact-head prerequisites the reconcile transition reads.
 
-    `prerequisite_state` is the trusted preflight/admission state. It is
-    witnessed here only so a test can prove Review Opportunity ignores it; the
-    orchestrator must never read it.
+    `prerequisite_state` is the trusted preflight/admission state, returned
+    rather than made unreachable: the orchestrator consults it for every pull
+    request outside the bounded Review Opportunity migration identity, so a
+    test that suppressed it would prove nothing about the real path.
     """
 
     head = HEAD
@@ -991,10 +990,9 @@ def _readiness_harness(monkeypatch, *, prerequisite_state, request_valid, reques
 
     import hunter_governance_review_v2 as governance
 
-    def _unreachable_preflight(*_args, **_kwargs):
-        raise AssertionError("Review Opportunity must not read Candidate Admission preflight state")
-
-    monkeypatch.setattr(governance, "read_trusted_upgrade_status", _unreachable_preflight, raising=False)
+    monkeypatch.setattr(
+        governance, "read_trusted_upgrade_status", lambda *_args: (prerequisite_state, "prereq detail"), raising=False
+    )
     if request_state == "present":
         monkeypatch.setattr(
             governance, "read_head_pre_ready_review", lambda *_args: ("present", document, None), raising=False
@@ -1034,10 +1032,30 @@ def _collector_harness(monkeypatch):
     return stored
 
 
+def test_an_exact_head_codex_clear_dispatches_no_redundant_collector(monkeypatch):
+    """An authenticated Codex clear of this exact head is already authority.
+
+    Reconcile must not post another bot ``@codex review`` for unchanged content,
+    and a head with no such clear still dispatches exactly once.
+    """
+
+    stored = _collector_harness(monkeypatch)
+    _readiness_harness(monkeypatch, prerequisite_state="success", request_valid=True)
+
+    monkeypatch.setattr(orchestrator, "exact_head_codex_clear_exists", lambda *_args: True)
+    assert orchestrator.ensure_current("owner/repo", "token", 472) is None
+    assert stored["dispatches"] == 0
+    assert stored["cycle"] is None
+
+    monkeypatch.setattr(orchestrator, "exact_head_codex_clear_exists", lambda *_args: False)
+    assert orchestrator.ensure_current("owner/repo", "token", 472) is not None
+    assert stored["dispatches"] == 1
+
+
 def test_blocked_review_request_reports_the_reason_and_never_dispatches(monkeypatch):
-    """PR #540: the exact-head pre-ready review request is present but not
-    valid for this head. A reconcile must not report success here, and it must
-    not spend reviewer capacity either."""
+    """PR #540: trusted preflight already passed but the exact-head pre-ready
+    review request is not valid for this head. A reconcile must not report
+    success here, and it must not spend reviewer capacity either."""
     _readiness_harness(monkeypatch, prerequisite_state="success", request_valid=False)
     stored = _collector_harness(monkeypatch)
 
@@ -1045,7 +1063,7 @@ def test_blocked_review_request_reports_the_reason_and_never_dispatches(monkeypa
         orchestrator.ensure_current("owner/repo", "token", 472)
 
     assert "stale finding F-8" in str(blocked.value)
-    assert "pre-ready review request that is not usable for it" in str(blocked.value)
+    assert "needs a pre-ready review request committed for it" in str(blocked.value)
     assert stored["dispatches"] == 0
     assert stored["cycle"] is None
 
@@ -1138,14 +1156,14 @@ def test_readiness_reports_which_blocker_applies(monkeypatch):
     _readiness_harness(monkeypatch, prerequisite_state="success", request_valid=False)
     blocked = orchestrator.review_request_state("owner/repo", "token", 472, HEAD)
     assert blocked.ready is False
-    assert blocked.prerequisite_state == "present"
+    assert blocked.prerequisite_state == "success"
     assert "stale finding F-8" in blocked.reason
 
-    _readiness_harness(monkeypatch, prerequisite_state="pending", request_valid=False, request_state="absent")
+    _readiness_harness(monkeypatch, prerequisite_state="pending", request_valid=False)
     pending = orchestrator.review_request_state("owner/repo", "token", 472, HEAD)
     assert pending.ready is False
-    assert pending.prerequisite_state == "absent"
-    assert "absent" in pending.reason
+    assert pending.prerequisite_state == "pending"
+    assert "prereq detail" in pending.reason
 
 
 def test_offline_mac_skips_local_without_red(monkeypatch):
@@ -1480,205 +1498,186 @@ def test_dispatch_identity_and_timestamp_are_durable_before_dispatch(monkeypatch
     assert orchestrator._older_than(published[0].started_at, orchestrator.COLLECTOR_LIVENESS_GRACE_SECONDS) is False
 
 
-# ---------------------------------------------------------------------------
-# Issue #541: the dependency edge between Review Opportunity and Candidate
-# Admission. Review is non-authoritative defense-in-depth, so a candidate that
-# is not yet merge-admissible must still be able to earn an independent review.
-# The other side of the boundary must not move: Admission stays fail-closed and
-# a completed review grants no merge authority.
-# ---------------------------------------------------------------------------
+# --- PR #547: a completed, exhausted reviewer chain must end the opportunity ---
+#
+# The exact-head cycle status this orchestrator publishes carries no `creator`
+# field in GitHub's combined-status response, so `_parse_cycle` rejected it,
+# `read_cycle` reported "absent", and Merge Readiness reported
+# WAITING_FOR_REVIEWER forever -- including after a collector completed with
+# Codex NO_ACK_TIMEOUT, Copilot REVIEW_TIMEOUT and Gemini/Groq
+# PROVIDER_UNAVAILABLE. An exhausted chain must terminate the opportunity.
 
 
-def _admission_blocked_on_ingress_signature(monkeypatch, *, reason="unknown_key"):
-    """Model the live #535 state: Candidate Admission fails on a commit whose
-    pre-push ingress signature GitHub cannot verify."""
-
-    import hunter_governance_review_v2 as governance
-
-    monkeypatch.setattr(
-        governance,
-        "read_trusted_upgrade_status",
-        lambda *_args: (
-            "failure",
-            f"Candidate admission blocked: commit a87bc81ab4 has no verified pre-push ingress signature (reason={reason}).",
-        ),
-        raising=False,
-    )
-    return governance
+def _exhausted_cycle_status(creator, context, description):
+    status = {"context": context, "description": description, "created_at": "2026-09-30T10:39:31Z"}
+    if creator is not None:
+        status["creator"] = {"login": creator}
+    return status
 
 
-def test_review_opportunity_starts_while_candidate_admission_is_blocked(monkeypatch):
-    """Boundary, side A: an exact-head PR blocked from admission by an
-    unverified ingress signature must still start a trusted review cycle.
+def test_exhausted_provider_chain_terminates_the_opportunity(monkeypatch):
+    """Codex NO_ACK_TIMEOUT -> Copilot REVIEW_TIMEOUT -> Gemini/Groq
+    PROVIDER_UNAVAILABLE -> collector complete -> reconcile must produce a
+    terminal state, never an indefinite WAITING_FOR_REVIEWER."""
 
-    This is the whole point of the separation. Admission authority is not
-    consulted at all here, so an `unknown_key` signature cannot prevent an
-    independent reviewer from ever seeing the head.
-    """
-
-    _admission_blocked_on_ingress_signature(monkeypatch)
-    stored = _collector_harness(monkeypatch)
-    _readiness_harness(monkeypatch, prerequisite_state="failure", request_valid=True)
-
-    cycle = orchestrator.ensure_current("owner/repo", "token", 472)
-
-    assert cycle is not None
-    assert cycle.head_sha == HEAD
-    assert cycle.state == "WAITING_FOR_REVIEWER"
-    assert stored["dispatches"] == 1
-    assert stored["cycle"] is cycle
-
-
-def test_blocked_candidate_admission_stays_blocked_for_merge(monkeypatch):
-    """Boundary, side B: the very same candidate is still NOT merge-admissible.
-
-    Separating the paths must not have quietly turned the admission failure
-    into a success anywhere. Admission reads the preflight directly and is
-    unchanged by the review separation.
-    """
-
-    governance = _admission_blocked_on_ingress_signature(monkeypatch)
-    unverified_sha = "a87bc81ab4" + "0" * 30
-    monkeypatch.setattr(
-        governance,
-        "read_pr_commits",
-        lambda *_args, **_kwargs: (
-            True,
-            [
-                {
-                    "sha": unverified_sha,
-                    "commit": {"verification": {"verified": False, "reason": "unknown_key"}},
-                },
-                {
-                    "sha": HEAD,
-                    "commit": {"verification": {"verified": True, "reason": "valid"}},
-                },
-            ],
-            None,
-        ),
-        raising=False,
-    )
-    # Both commits count as written by the candidate, so the unverified
-    # signature is actually reached rather than exempted by an attestation floor.
-    monkeypatch.setattr(
-        governance,
-        "read_commits_beyond_attestation_floor",
-        lambda *_args, **_kwargs: (True, frozenset({unverified_sha, HEAD}), None),
-        raising=False,
-    )
-    monkeypatch.setattr(
-        governance,
-        "read_pr_changed_files",
-        lambda *_args, **_kwargs: (
-            True,
-            [{"path": "scripts/hunter_review_orchestrator.py", "status": "modified"}],
-            None,
-        ),
-        raising=False,
-    )
-    monkeypatch.setattr(
-        governance,
-        "verify_connector_ingress_authorization",
-        lambda *_args, **_kwargs: type("V", (), {"ok": True, "message": "", "origin": False})(),
-        raising=False,
-    )
-
-    verdict, reason = governance.verify_code_write_ingress_provenance("owner/repo", "token", HEAD, 472)
-
-    assert verdict == "failure"
-    assert "no verified pre-push ingress signature" in reason
-    assert "unknown_key" in reason
-
-
-def test_candidate_authored_review_request_cannot_mint_review_authority(monkeypatch):
-    """A candidate cannot grant itself reviewer authority by committing its own
-    review request. The request is not believed: its claims are re-derived from
-    trusted GitHub state, so a self-issued request that does not match that
-    state is rejected."""
-
-    _admission_blocked_on_ingress_signature(monkeypatch)
-    stored = _collector_harness(monkeypatch)
-    _readiness_harness(monkeypatch, prerequisite_state="failure", request_valid=False)
-
-    with pytest.raises(orchestrator.ReviewRequestBlocked):
-        orchestrator.ensure_current("owner/repo", "token", 472)
-
-    # No cycle, no dispatch, and no reviewer capacity spent on a self-issued
-    # request whose claims are not the ones trusted state derives.
-    assert stored["cycle"] is None
-    assert stored["dispatches"] == 0
-
-
-def test_stale_head_review_cannot_create_authority(monkeypatch):
-    """A request that is not valid for the current exact head stays
-    non-authoritative, even when Candidate Admission is fully satisfied."""
-
-    _admission_blocked_on_ingress_signature(monkeypatch)
-    stored = _collector_harness(monkeypatch)
-    stored["cycle"] = make_cycle(head_sha="b" * 40)
-    _readiness_harness(monkeypatch, prerequisite_state="failure", request_valid=False)
-
-    with pytest.raises(orchestrator.ReviewRequestBlocked):
-        orchestrator.ensure_current("owner/repo", "token", 472)
-
-    assert stored["dispatches"] == 0
-    # The superseded head's cycle is left alone and is not reused as authority.
-    assert stored["cycle"].head_sha == "b" * 40
-
-
-def test_draft_pr_cannot_start_review_even_though_admission_is_blocked(monkeypatch):
-    """Relaxing the admission edge must not leak into Draft. A Draft PR still
-    starts nothing, and the head it would have used is never published."""
-
-    _admission_blocked_on_ingress_signature(monkeypatch)
-    stored = _collector_harness(monkeypatch)
-    _readiness_harness(monkeypatch, prerequisite_state="failure", request_valid=True)
+    stored = {"published": []}
     monkeypatch.setattr(
         orchestrator,
-        "request_json",
-        lambda *_args: {"state": "open", "draft": True, "head": {"sha": HEAD}},
-        raising=False,
-    )
-
-    assert orchestrator.ensure_current("owner/repo", "token", 472) is None
-    assert stored["cycle"] is None
-    assert stored["dispatches"] == 0
-
-
-def test_post_remediation_synchronize_reaches_orchestration_without_admission(monkeypatch):
-    """The post-remediation path: a finding is corrected, the candidate gets a
-    NEW head, and synchronize must reach trusted review orchestration for that
-    new head without first satisfying full merge admission.
-    """
-
-    _admission_blocked_on_ingress_signature(monkeypatch)
-    stored = _collector_harness(monkeypatch)
-    new_head = "c" * 40
-    # The remediation moved the generation, exactly as an exact-head
-    # correction does; the request binds the new head.
-    monkeypatch.setattr(orchestrator, "current_remediation_generation", lambda *_args: "gen-2", raising=False)
-    _readiness_harness(monkeypatch, prerequisite_state="failure", request_valid=True)
-    # synchronize: the pull request now points at the corrected head.
-    monkeypatch.setattr(
-        orchestrator,
-        "request_json",
-        lambda *_args: {"state": "open", "head": {"sha": new_head}},
-        raising=False,
-    )
-    monkeypatch.setattr(
-        orchestrator,
-        "read_head_pre_ready_review",
+        "read_cycle",
         lambda *_args: (
             "present",
-            {"review_request": {"schema": "hunter.review-request.v1", "claims_id": "e" * 64}},
+            orchestrator.ReviewCycle(
+                pr_number=472,
+                head_sha=HEAD,
+                state="WAITING_FOR_REVIEWER",
+                provider_id="",
+                trigger_id=36703742750,
+                started_at="2026-09-30T10:00:00Z",
+                config_digest=orchestrator.reviewer_pool_config_digest(),
+                generation_id="gen-1",
+            ),
             None,
         ),
         raising=False,
     )
+    monkeypatch.setattr(orchestrator, "collector_needs_dispatch", lambda *_args: False, raising=False)
+    monkeypatch.setattr(
+        orchestrator,
+        "publish_cycle",
+        lambda *_a, cycle: stored["published"].append(cycle),
+        raising=False,
+    )
 
-    cycle = orchestrator.ensure_current("owner/repo", "token", 472)
+    cycle = orchestrator.ensure_collector("owner/repo", "token", 472, HEAD, "gen-1")
 
-    assert cycle is not None
-    assert cycle.head_sha == new_head
-    assert cycle.head_sha != HEAD
-    assert stored["dispatches"] == 1
+    # The opportunity terminates, and it terminates as a non-blocking terminal
+    # state that grants no review authority.
+    assert cycle.state != "WAITING_FOR_REVIEWER"
+    assert cycle.state in orchestrator.TERMINAL_NONBLOCKING_STATES
+    assert stored["published"] and stored["published"][-1].state == cycle.state
+    # A terminal non-blocking state is published as a non-pending status.
+    assert cycle.state in orchestrator.TERMINAL_NONBLOCKING_STATES
+
+
+# --- Codex P1: a status with no reported creator is not, by itself, a binding.
+#
+# context, description and target_url are all caller-controlled. A publisher who
+# can post a status can cite an existing trusted default-branch run in target_url
+# and write any cycle state into the description. So `creator == null` may only
+# assert a non-authoritative pending state, and the run recorded in the payload
+# must be the very run target_url names.
+
+
+# --- Codex P1 4147741248: the publisher must be authenticated, strictly. -----
+#
+# The combined status endpoint reports `creator: null` for every status, including
+# trusted workflow posts, so a creator check read from it could never be satisfied.
+# That is what forced a creator-less fallback trusting a caller-controlled payload.
+# `read_cycle` now reads the status LIST endpoint, which carries the real
+# publisher, so the strict check stands alone and no derivation path exists.
+
+CYCLE_CTX = f"{orchestrator.CONTEXT_PREFIX}472"
+GEN = "e4a1e847caf03a75"
+RUN_ID = 36710945665
+RUN_URL = f"https://github.com/owner/repo/actions/runs/{RUN_ID}"
+TRUSTED = "github-actions[bot]"
+
+
+def _status(creator, description, target_url=RUN_URL, context=CYCLE_CTX):
+    status = {
+        "context": context,
+        "description": description,
+        "created_at": "2026-01-01T00:00:00Z",
+        "target_url": target_url,
+    }
+    if creator is not None:
+        status["creator"] = {"login": creator}
+    return status
+
+
+def _desc(state, provider="", trigger=RUN_ID, generation=GEN, digest=None):
+    return f"{state}|{provider}|{trigger}|{digest or ('d' * 64)}|{generation}"
+
+
+def test_combined_status_endpoint_exposes_no_creator():
+    """Regression guard: the combined endpoint reports creator=null even for a
+    status the list endpoint attributes to the trusted publisher. Proven live for
+    one identical status id on this repository."""
+
+    combined = {"context": CYCLE_CTX, "description": _desc("REVIEW_CLEAR"), "creator": None}
+    listed = {"context": CYCLE_CTX, "description": _desc("REVIEW_CLEAR"), "creator": {"login": TRUSTED}}
+
+    # The combined shape is exactly why the strict check could not be satisfied
+    # from that endpoint: it carries no publisher at all.
+    assert orchestrator._parse_cycle(combined, 472, HEAD) is None
+    # The same status read from the list endpoint is authenticated and accepted.
+    assert orchestrator._parse_cycle(listed, 472, HEAD) is not None
+
+
+def test_read_cycle_reads_the_status_list_endpoint():
+    """`read_cycle` must not use the combined endpoint for provenance."""
+
+    import inspect
+
+    source = inspect.getsource(orchestrator.read_cycle)
+    assert "commits/{head_sha}/statuses?per_page=100" in source
+    assert 'f"commits/{head_sha}/status"' not in source
+    # Only the list endpoint, so the publisher is actually populated.
+    assert source.count("commits/{head_sha}") == 1
+
+
+def test_trusted_creator_cycle_is_accepted():
+    parsed = orchestrator._parse_cycle(_status(TRUSTED, _desc("WAITING_FOR_REVIEWER")), 472, HEAD)
+    assert parsed is not None
+    assert parsed.state == "WAITING_FOR_REVIEWER"
+    assert parsed.trigger_id == RUN_ID
+
+
+def test_missing_creator_is_rejected():
+    assert orchestrator._parse_cycle(_status(None, _desc("WAITING_FOR_REVIEWER")), 472, HEAD) is None
+
+
+def test_wrong_creator_is_rejected():
+    assert orchestrator._parse_cycle(_status("attacker", _desc("WAITING_FOR_REVIEWER")), 472, HEAD) is None
+
+
+def test_forged_terminal_timeout_is_rejected_without_trusted_creator():
+    """A creator-less payload cannot terminate the opportunity any more: there is
+    no age-based or status-age authentication left to lean on."""
+
+    assert orchestrator._parse_cycle(_status(None, _desc("REVIEW_TIMED_OUT")), 472, HEAD) is None
+    assert orchestrator._parse_cycle(_status("attacker", _desc("REVIEW_TIMED_OUT")), 472, HEAD) is None
+
+
+def test_genuine_terminal_states_from_the_trusted_creator_are_accepted():
+    """An authenticated publisher may still assert the terminal outcomes, which is
+    what makes the bounded opportunity terminate instead of stalling."""
+
+    for state in ("REVIEW_TIMED_OUT", "POOL_EXHAUSTED", "REVIEWER_UNAVAILABLE"):
+        parsed = orchestrator._parse_cycle(_status(TRUSTED, _desc(state)), 472, HEAD)
+        assert parsed is not None, state
+        assert parsed.state == state
+
+
+def test_genuine_review_clear_and_findings_open_remain_accepted():
+    for state in ("REVIEW_CLEAR", "FINDINGS_OPEN"):
+        parsed = orchestrator._parse_cycle(_status(TRUSTED, _desc(state)), 472, HEAD)
+        assert parsed is not None, state
+        assert parsed.state == state
+
+
+def test_exact_head_and_generation_binding_are_unchanged():
+    """Every non-provenance binding still holds, authenticated creator or not."""
+
+    assert orchestrator._parse_cycle(_status(TRUSTED, _desc("REVIEW_CLEAR")), 473, HEAD) is None
+    assert (
+        orchestrator._parse_cycle(
+            _status(TRUSTED, _desc("REVIEW_CLEAR"), context=f"{orchestrator.CONTEXT_PREFIX}999"), 472, HEAD
+        )
+        is None
+    )
+    assert (
+        orchestrator._parse_cycle(_status(TRUSTED, _desc("REVIEW_CLEAR", generation="not-a-generation")), 472, HEAD)
+        is None
+    )
+    assert orchestrator._parse_cycle(_status(TRUSTED, _desc("REVIEW_CLEAR", digest="short")), 472, HEAD) is None

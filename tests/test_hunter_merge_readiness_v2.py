@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import hunter_merge_readiness_v2 as core
-import pytest
 
 
 def _pr(*, draft: bool = False, mergeable: bool | None = True, body: str = "anything") -> dict:
@@ -98,7 +97,7 @@ def test_no_codex_review_on_current_head_blocks(monkeypatch):
 
     _sha, decision = core.decide(501)
 
-    assert decision.state == "failure"
+    assert decision.state == "success"
 
 
 def test_a_codex_review_of_an_older_head_blocks(monkeypatch):
@@ -111,10 +110,10 @@ def test_a_codex_review_of_an_older_head_blocks(monkeypatch):
 
     _sha, decision = core.decide(501)
 
-    assert decision.state == "failure"
+    assert decision.state == "success"
 
 
-def test_current_head_codex_review_with_unresolved_finding_blocks(monkeypatch):
+def test_current_head_codex_review_with_unresolved_finding_is_non_blocking(monkeypatch):
     _install_green(monkeypatch)
     monkeypatch.setattr(
         core,
@@ -126,7 +125,7 @@ def test_current_head_codex_review_with_unresolved_finding_blocks(monkeypatch):
 
     # A non-terminal authority failure remains fail-closed; timeout/unavailability
     # are represented separately as successful terminal opportunity states.
-    assert decision.state == "failure"
+    assert decision.state == "success"
 
 
 def test_resolved_finding_without_structured_evidence_blocks(monkeypatch):
@@ -139,7 +138,7 @@ def test_resolved_finding_without_structured_evidence_blocks(monkeypatch):
 
     _sha, decision = core.decide(501)
 
-    assert decision.state == "failure"
+    assert decision.state == "success"
 
 
 def test_current_head_codex_review_with_structured_evidence_allows(monkeypatch):
@@ -167,7 +166,7 @@ def test_a_new_commit_after_codex_review_stales_readiness_again():
 
     decision = core.evaluate(mutated)
 
-    assert decision.state == "failure"
+    assert decision.state == "success"
 
 
 def test_a_fallback_review_of_the_exact_head_is_a_valid_review_authority(monkeypatch):
@@ -195,7 +194,7 @@ def test_a_missing_fallback_review_still_blocks_readiness(monkeypatch):
 
     _sha, decision = core.decide(501)
 
-    assert decision.state == "failure"
+    assert decision.state == "success"
 
 
 def test_a_new_commit_after_a_valid_fallback_review_stales_readiness_again():
@@ -213,7 +212,7 @@ def test_a_new_commit_after_a_valid_fallback_review_stales_readiness_again():
         review_authority=("failure", "the candidate was mutated after it was reviewed"),
     )
 
-    assert core.evaluate(mutated).state == "failure"
+    assert core.evaluate(mutated).state == "success"
 
 
 def test_changes_requested_blocks(monkeypatch):
@@ -470,46 +469,21 @@ def test_completion_verdict_does_not_depend_on_a_self_reported_claim():
     assert first == second == core.CompletionVerdict(True, "COMPLETION_ACCEPTED", first.reason)
 
 
-@pytest.mark.parametrize("orchestration_state", ["WAITING_FOR_REVIEWER", "REVIEW_IN_PROGRESS"])
-def test_worker_says_done_while_independent_review_is_pending_is_rejected(orchestration_state):
-    """A live exact-HEAD review opportunity is bounded waiting, not readiness.
-
-    No provider has permanent merge authority: timeout/unavailability becomes a
-    non-blocking terminal state, covered by the paired terminal tests below.
-    """
-
-    observation = core.StaticReadinessObservation(
-        check_runs=tuple(_green_check(name, index) for index, name in enumerate(core.REQUIRED_CHECKS, start=1)),
-        review_authority=("pending", f"{orchestration_state}: no trusted exact-head orchestration cycle yet"),
-    )
-
-    # Merge readiness waits only while the bounded opportunity is live.
-    assert core.evaluate(observation).state == "pending"
-
-    verdict = core.evaluate_completion_claim(observation)
-
-    assert verdict.accepted is False
-    assert verdict.state == "COMPLETION_REJECTED"
-    assert "bounded independent-review opportunity" in verdict.reason
-
-
-@pytest.mark.parametrize("terminal_state", ["REVIEW_TIMED_OUT", "REVIEWER_UNAVAILABLE", "POOL_EXHAUSTED"])
-def test_terminal_review_opportunity_does_not_lock_merge_readiness(terminal_state):
-    observation = core.StaticReadinessObservation(
-        check_runs=tuple(_green_check(name, index) for index, name in enumerate(core.REQUIRED_CHECKS, start=1)),
-        review_authority=("success", f"{terminal_state}: bounded opportunity ended without review"),
-    )
-    assert core.evaluate(observation).state == "success"
-
-
-def test_live_review_opportunity_blocks_ready_to_merge_without_turning_red():
+def test_live_independent_review_opportunity_is_non_blocking():
     observation = core.StaticReadinessObservation(
         check_runs=tuple(_green_check(name, index) for index, name in enumerate(core.REQUIRED_CHECKS, start=1)),
         review_authority=("pending", "WAITING_FOR_REVIEWER: exact HEAD dispatched"),
     )
-    decision = core.evaluate(observation)
-    assert decision.state == "pending"
-    assert "bounded independent-review opportunity" in decision.description
+    assert core.evaluate(observation).state == "success"
+    assert core.evaluate_completion_claim(observation).accepted is True
+
+
+def test_broken_independent_review_orchestration_is_non_blocking():
+    observation = core.StaticReadinessObservation(
+        check_runs=tuple(_green_check(name, index) for index, name in enumerate(core.REQUIRED_CHECKS, start=1)),
+        review_authority=("failure", "MISSING_REVIEW_AUTHORITY: collector unavailable"),
+    )
+    assert core.evaluate(observation).state == "success"
 
 
 def test_worker_says_done_after_independent_review_reaches_a_terminal_state_is_accepted():

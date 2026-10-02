@@ -2,69 +2,45 @@
   "claims": {
     "acceptance_criteria": [
       {
-        "criterion": "Draft -> Ready for Review AND any exact-HEAD-changing lifecycle event Merge Readiness reacts to immediately (synchronize) must deterministically and promptly trigger the trusted default-branch reconciliation/orchestration path for that exact PR/HEAD, as a primary event-driven path rather than only as a schedule or unrelated workflow_run recovery.",
-        "evidence": "hunter-governance-reconcile.yml pull_request_target types are exactly [ready_for_review, synchronize], scoped to main and resolved from the base branch's copy of the file (non-candidate-controlled). ready_for_review: test_reconcile_wakes_when_a_pr_becomes_ready_for_review (retained, rewritten so its Draft guard now asserts the transition that actually withdraws review, converted_to_draft, is absent). synchronize (root cause 4, live PR #535 exact HEAD 51108333821ab42d1ab7aa0b812a72d890f73795): test_reconcile_wakes_when_a_pr_head_is_pushed, and test_reconcile_wakes_on_every_lifecycle_event_that_needs_or_moves_the_exact_head derives the requirement from hunter-merge-readiness.yml's own trigger set rather than restating a literal, so a third event variant cannot silently reintroduce the asymmetry. Both are mutation-checked: removing synchronize from the trigger fails 3 of them.",
+        "criterion": "review_authority in docs/CODE_WRITE_POLICY.json carries a coverage_scopes key, defaulting to [].",
+        "evidence": "docs/CODE_WRITE_POLICY.json declares review_progression.review_authority.coverage_scopes = []; load_coverage_scopes returns no scopes when the key is absent or empty, so the introducing pull request ships no authorization.",
         "id": "AC-1",
         "verdict": "satisfied"
       },
       {
-        "criterion": "Do not solve this by granting privileged actions:write to a candidate-controlled pull_request workflow; preserve the trusted-default-branch boundary.",
-        "evidence": "pull_request_target (never pull_request) is used; no permissions block changed. Proven generically by this repo's own pre-existing test_candidate_controlled_triggers_are_read_from_every_declaration_shape and test_no_pull_request_reachable_workflow_can_drive_other_workflows, both passing unchanged.",
+        "criterion": "A trusted loader reads it, failing closed on any malformed or ambiguous entry.",
+        "evidence": "load_coverage_scopes reads only the trusted CODE_WRITE_POLICY_PATH and returns an error for a non-list value, an unknown mode, a blank or non-string criterion, a missing owner field, or a duplicate Issue+mode entry; tests/test_scoped_acceptance_coverage.py asserts each case fails closed.",
         "id": "AC-2",
         "verdict": "satisfied"
       },
       {
-        "criterion": "Root cause completeness: live GitHub evidence (PR #535, trusted Reconcile run 36335901035) must be traced to its exact predicate, not assumed fixed by the trigger alone.",
-        "evidence": "Traced to hunter_review_orchestrator.ensure_current requiring a valid, content-bound .hunter/pre-ready-hostile-review.json review-request document that nothing was producing; confirmed via GitHub Contents API that PR #535's exact head carried an unrelated PR's stale leftover document.",
+        "criterion": "A review may declare a bounded_correction coverage scope; the trusted controller admits it only against an owner authorization naming the same Issue, mode, and a criteria subset.",
+        "evidence": "A candidate declares a document-level coverage_scope. _coverage_scope_error requires the claimed criteria to be the governing Issue's own normalized criteria, then requires a trusted authorization with the same Issue and mode; a claimed criterion outside the authorized set is refused as excess, never clamped. Only then is SCOPED_STATE returned.",
         "id": "AC-3",
         "verdict": "satisfied"
       },
       {
-        "criterion": "Do not turn missing evidence into success, do not bypass exact-head validation, do not fabricate a review on the candidate's own behalf.",
-        "evidence": "ensure_current's fail-closed no-op for 'no valid request' is left unchanged/unweakened; the fix commits an honest, content-bound request for this candidate's own real diff via the existing hunter_pre_ready_review.py --request mechanism, not by auto-generating claims inside the orchestrator.",
+        "criterion": "A valid bounded correction produces a scoped outcome that is never the verdict satisfying the Issue.",
+        "evidence": "ReviewVerdict.ok is False for the scoped state and the verdict text states it is not Issue completion and satisfies no remaining criterion. VALID_SCOPED_CORRECTION is an admission state only, and hunter_merge_readiness_v2.py records it alongside rather than as the valid review state.",
         "id": "AC-4",
         "verdict": "satisfied"
       },
       {
-        "criterion": "The live failure must become regression evidence, not a prose-only or grep-only proxy.",
-        "evidence": "test_a_foreign_review_request_document_is_rejected_for_a_different_candidate reproduces PR #535's exact failure shape behaviorally (a foreign document rejected by real content-binding code); test_a_freshly_prepared_review_request_bound_to_the_current_candidate_is_valid proves the fix mechanism.",
+        "criterion": "With no declaration or no authorization, the full Issue criteria remain required.",
+        "evidence": "With no declared scope or no trusted authorization, _coverage_scope_error returns an incomplete problem and the document is measured against every criterion the Issue defines. Absence never grants the relaxation; tests cover self-declaration without authorization and a declaration with no trusted entry.",
         "id": "AC-5",
         "verdict": "satisfied"
       },
       {
-        "criterion": "Update DFF-040 (or an existing applicable family) through the canonical defect-learning path rather than hand-editing a duplicate family.",
-        "evidence": "DFF-040 updated with root cause 2 and live evidence; additionally, while tracing this, an already-existing but overclaiming legacy entry (DFF-031) was found and corrected rather than left silently false, per this repository's own instruction to strengthen the earliest reliable reusable guard when a defect class recurs.",
+        "criterion": "Exact head, exact content, applicable defect families, findings, regression evidence, and correction-commit range remain mandatory under a bounded scope.",
+        "evidence": "verify_claims runs the same sequence before and after the scope decision: exact review_target equality, review_target_digest, base_sha binding, applicable defect families from the trusted registry, resolved findings' regression test present in the change set, correction commits inside the candidate range, and exact-head authority. The bounded path relaxes only the criterion set; tests/test_scoped_acceptance_coverage.py re-proves each invariant under a declared scope.",
         "id": "AC-6",
         "verdict": "satisfied"
       },
       {
-        "criterion": "Root cause completeness (round 2): live GitHub evidence that the missing-trigger fix alone still left PR #535 stuck (WAITING_FOR_REVIEWER despite a published orchestration cycle) must be traced to its exact predicate and fixed without bypassing exact-head validation, fabricating a review, or turning missing evidence into success.",
-        "evidence": "Traced live (PR #535 exact HEAD c05da168545c5fa95fe300706eccaac2228fc391) to hunter_merge_readiness_v2.resolve_review_authority never handling a legitimate status=='pending' verification result from hunter_governance_review_v2.verify_pre_ready_hostile_review; it silently defaulted to MALFORMED_REVIEW instead of falling through to the existing review_wait_state/orchestration-state pending path. Fixed by adding one explicit 'pending' branch that classifies it as MISSING_REVIEW_AUTHORITY (the same no-authority-yet outcome a missing document already produces); no trust boundary, exact-head binding, or orchestration path changed, and no review authority is fabricated -- the candidate still cannot merge until a reviewer actually completes one.",
+        "criterion": "This feature is inert for the pull request that introduces it.",
+        "evidence": "coverage_scopes ships empty and the trusted controller reads the default branch's policy. Verified against origin/main@1ce5e097 that trusted main has no load_coverage_scopes, no SCOPED_STATE and no coverage_scopes parameter on verify_claims, so this candidate is evaluated under full-Issue rules by code that predates the feature.",
         "id": "AC-7",
-        "verdict": "satisfied"
-      },
-      {
-        "criterion": "The Codex opportunity budget and collector/orchestrator lifetime must be internally consistent with Codex's actual observed hosted latency (~20-30 min), derived from one canonical source rather than duplicated independent magic numbers, while remaining finite and never weakening provider ordering, explicit-unavailability failover, or a substantive response's ability to prevent failover.",
-        "evidence": "docs/CODE_WRITE_POLICY.json raised codex ack_timeout_seconds/review_timeout_seconds and timeout_policy.max_seconds to 1800s (matching observed latency with headroom); hunter_pre_ready_review.reviewer_chain_worst_case_seconds(pool) is the one canonical derivation hunter_review_orchestrator.independent_review_opportunity_seconds() calls directly and the collector workflow's static timeout-minutes (47) is validated against by a new structural test, so none of the three can silently drift out of sync again. Explicit-unavailability failover (hunter_reviewer_collector._unavailable) and substantive-response-prevents-failover (response_state breaking the wait loop) are unchanged.",
-        "id": "AC-8",
-        "verdict": "satisfied"
-      },
-      {
-        "criterion": "For the identity (PR number, exact HEAD, remediation generation, reviewer-pool config identity), only one initial collector dispatch may be created; repeated/concurrent reconciliation must converge on the already-established cycle without weakening exact-head identity, collector liveness, or bounded recovery.",
-        "evidence": "ensure_collector now cross-checks the collector run listing (a separate, directly-queried endpoint from the combined-status read) before minting a fresh dispatch whenever no trusted cycle status is visible at all, converging on an already-live/dead/completed run instead of dispatching again; unreadable cross-check evidence fails closed to not dispatching. The pre-existing 'present'-cycle branch (COLLECTOR_LIVENESS_GRACE_SECONDS, MAX_COLLECTOR_DISPATCHES, collector_needs_dispatch) is completely unmodified, so bounded recovery of a genuinely dead dispatch is unaffected.",
-        "id": "AC-9",
-        "verdict": "satisfied"
-      },
-      {
-        "criterion": "Canonical prevention-knowledge growth (docs/DEFECT_REGISTRY.json) must not cause linear per-task engineering.implement prompt growth; the compiler must retrieve/deduplicate/compact/bound trusted prevention context by deterministic, offline, task-scoped relevance signals only (never caller-controlled task prose, never an external LLM/API call), and must fail closed rather than silently truncate when genuinely applicable knowledge cannot fit even fully compacted.",
-        "evidence": "EngineeringContextAuthority.compile(budget_bytes=...) implements applicability-preserving bounded rendering (full detail for exact-file matches, compact {id,title,prevention_boundary} for directory-root-only matches, explicit prevention.equivalence_class deduplication, tiered omission/downgrade, and a structured EngineeringContextAuthorityError when nothing fits). smart_prompt_routing.py reserves a fixed 40% share of the unchanged ENGINEERING_IMPLEMENT_MAX_SOURCE_BYTES for it. Measured against the real registry (40 families) for the exact scope every Issue Agent test shares: families blob 11,208 bytes (budget 13,107), estimated total preflight ~15,629 bytes, well under the unchanged 28,672-byte available budget.",
-        "id": "AC-10",
-        "verdict": "satisfied"
-      },
-      {
-        "criterion": "The synchronize fix must not weaken the trusted-default-branch boundary, exact-head binding, Draft short-circuiting, provenance, review authority, or retry policy, and must not broaden into unrelated reviewer architecture.",
-        "evidence": "Trusted boundary: the trigger stays pull_request_target (base-branch-resolved); the job still checks out 'ref: main' with 'persist-credentials: false' and the workflow's permissions block is unchanged (test_synchronize_reconciliation_never_executes_candidate_code, plus the untouched test_no_pull_request_reachable_workflow_can_drive_other_workflows and test_trusted_orchestration_runs_only_from_workflows_without_pull_request_triggers). Exact-head binding: the privileged step still passes only --pr and never a head, and ensure_current re-derives the current HEAD from the pull-request API on every call, so the new head is taken from trusted state rather than the event payload (test_a_pushed_head_reaches_orchestration_as_the_exact_current_head, which also asserts the workflow text contains neither 'github.event.pull_request.head.sha' nor '--head'). Draft: adding synchronize means the trigger is no longer itself the Draft guard (synchronize also fires on Draft pushes), so the guard is now proven behaviourally at the orchestrator's own short-circuit, which returns before the review-request lookup and before any dispatch (test_a_pushed_head_on_a_draft_pr_dispatches_nothing, plus the retained test_current_pr_never_dispatches_for_a_draft_pr; both mutation-checked to fail when the draft check is deleted). Scope: the only behaviour change is one added trigger type plus comments; scripts/hunter_review_orchestrator.py is byte-identical in this commit, no permissions block changed, no reviewer policy in docs/CODE_WRITE_POLICY.json changed, no provider retry added, and Merge Readiness's already-fixed pending-state classification is untouched. Unrelated events cannot dispatch: test_unrelated_pull_request_events_do_not_dispatch_reviewer_orchestration pins the trigger set to exactly {ready_for_review, synchronize} and asserts no pull_request/issue_comment/pull_request_review_thread/check_run/check_suite trigger exists on this workflow.",
-        "id": "AC-11",
         "verdict": "satisfied"
       }
     ],
@@ -82,319 +58,190 @@
       "transaction-snapshot-consistency"
     ],
     "base_ref": "main",
-    "base_sha": "bc9de0f8c49bcbe82567d60d1d41747922724a77",
+    "base_sha": "1c0ec5f9ee791644a039e12351fdbced13f46954",
     "defect_families": [
       {
-        "evidence": "No caller-supplied authorization/replay surface is touched by this diff.",
+        "evidence": "A scope must match the trusted Issue and mode, is bound to the evaluated exact head from trusted evidence (hunter_pre_ready_review.py:1163), and any claimed criterion outside the authorized set is refused, so an authorization cannot be replayed onto a different Issue, mode, head, or wider criteria set.",
         "family": "DFF-007",
         "outcome": "clear"
       },
       {
-        "evidence": "No history rewrite; every commit in this range is an ordinary forward commit (no amend/rebase/force-push).",
+        "evidence": "review_id and review_request.claims_id are SHA-256 over the canonical claims (hunter_pre_ready_review.py:233) and are recomputed by verify_claims, which rejects a hand-edited document as stale; observed live on this candidate. review_target_digest and base_sha give the same content and fork-point binding.",
         "family": "DFF-008",
         "outcome": "clear"
       },
       {
-        "evidence": "connector_write_ingress.py and its evidence lifecycle are not touched by this diff.",
+        "evidence": "No connector ingress path is added or modified. The new field is read from the trusted default-branch policy, so a candidate cannot supply the authorization it is measured against, and no ingress proof format is altered.",
         "family": "DFF-009",
         "outcome": "clear"
       },
       {
-        "evidence": "Every commit is authored and committed as the bound writer identity (Claude <noreply@anthropic.com>); no identity-binding logic is touched.",
+        "evidence": "No author, committer or identity handling is introduced. Writer Provenance reports the governed range up to HEAD as authorization-bound, and every commit in the range carries the authorized Farhad5778 identity.",
         "family": "DFF-010",
         "outcome": "clear"
       },
       {
-        "evidence": "Ordinary forward commits only; no intermediate commit is stranded by a rebase or force-push.",
+        "evidence": "The candidate is a single signed commit over the fork point, so no intermediate commit exists to strand. The pre-ready artifact is regenerated from current content and is the final mutation of the candidate, so no per-commit rewind is required.",
         "family": "DFF-011",
         "outcome": "clear"
       },
       {
-        "evidence": "No connector authorization receipt is touched by this diff.",
+        "evidence": "No authorization receipt is written or modified and the receipt path is untouched. The artifact is regenerated from the exact current base..HEAD content, and the pre-push hook blocks a dirty tree.",
         "family": "DFF-012",
         "outcome": "clear"
       },
       {
-        "evidence": "This diff does not touch verify_claims or its request-only-is-'missing' rule; test_a_review_request_cannot_be_verified_locally_as_a_completed_review is untouched and still passing. The diff's subject is wiring the trusted prerequisite's trigger to the second transition class, so the request document can be consumed for a pushed head as promptly as for a Ready PR.",
+        "evidence": "The document is generated in --request mode and records no authority. verify_claims refuses any document carrying review_request as 'a review request is not completed exact-head review authority' (hunter_pre_ready_review.py:1218); admission still requires a completed exact-head review.",
         "family": "DFF-013",
         "outcome": "clear"
       },
       {
-        "evidence": "ensure_current's clean None return for 'no valid request yet' is a legitimate no-op, not conflated with or reported as a failure; the reconcile workflow step still exits 0 correctly for this state, and this diff does not touch it. The DFF-014 clause that every trusted proof completion that can move admission from pending to eligible must wake the privileged orchestrator is satisfied in a stronger form here: the exact-head-changing event that invalidates the previous cycle (synchronize) now wakes the privileged orchestrator directly, rather than only after some other workflow completes (proven by test_reconcile_wakes_on_every_lifecycle_event_that_needs_or_moves_the_exact_head).",
+        "evidence": "No hosted prerequisite or status mapping is added or modified; GITHUB_STATUS_MAP and canonical_status are untouched and an unrecognised status still fails closed.",
         "family": "DFF-014",
         "outcome": "clear"
       },
       {
-        "evidence": "Directly repaired: DFF-031's own registry entry falsely claimed 'blocked at pre-push' for require_current_review_request_if_present, which has been an unconditional no-op since its introduction and had zero real test coverage (every reference stubbed it out). Corrected the entry's guard text and added real coverage of its actual no-op contract.",
+        "evidence": "docs/DEFECT_REGISTRY.json is untouched, so no family claims a prevention stage. The change adds regression tests rather than a prevention-stage claim.",
         "family": "DFF-015",
-        "outcome": "repaired"
+        "outcome": "clear"
       },
       {
-        "evidence": "hunter_validation_receipt.py and immutable build-identity reuse are not touched by this diff.",
+        "evidence": "review_target must equal the trusted base..HEAD change set and review_target_digest must match, so a review cannot be reused across mutated content; verify_claims rejects a document describing different content.",
         "family": "DFF-016",
         "outcome": "clear"
       },
       {
-        "evidence": "Issue-agent Railway runtime bootstrap is not touched by this diff.",
+        "evidence": "Not applicable: no issuer composition, volume mount or runtime bootstrap path is added or modified. The change is confined to policy loading, verdict construction, admission and merge-readiness state sets.",
         "family": "DFF-019",
         "outcome": "clear"
       },
       {
-        "evidence": "Issue-agent live-instance execution ownership is not touched by this diff.",
+        "evidence": "No live instance, execution ledger or ownership identity is added or modified.",
         "family": "DFF-020",
         "outcome": "clear"
       },
       {
-        "evidence": "Issue-agent shutdown-drain handling is not touched by this diff.",
+        "evidence": "No worker, drain or shutdown handling is added or modified; the change has no runtime lifecycle surface.",
         "family": "DFF-021",
         "outcome": "clear"
       },
       {
-        "evidence": "hunter_merge_readiness_v2.py's resolve_review_authority gains one explicit branch for a status=='pending' verification result (root cause 3, this diff); evaluate() and review_authority_state() themselves are unchanged, and the branch only widens which non-success statuses fall through to the caller's existing review_wait_state/orchestration-state pending path instead of hard-failing -- it narrows a false-failure surface, it does not weaken any admission/merge check. Proven unchanged by the full existing test_exact_head_review_authority.py suite (95/95 passing) plus two new regression tests for the exact live failure.",
+        "evidence": "hunter_merge_readiness_v2.py only adds VALID_SCOPED_CORRECTION to the three authority state sets beside the existing valid state; the required complete exact-head review and trusted PR evidence checks are unchanged, so readiness still fails closed without a current-head review.",
         "family": "DFF-022",
-        "outcome": "repaired"
+        "outcome": "clear"
       },
       {
-        "evidence": "Issue-agent execution-ledger preflight ordering is not touched by this diff.",
+        "evidence": "No execution entry point or ledger claim is added or modified.",
         "family": "DFF-023",
         "outcome": "clear"
       },
       {
-        "evidence": "scripts/hunter_review_orchestrator.py is byte-identical in this commit: current_remediation_generation, ensure_collector, the generation identity, collector_run_name and the dispatch budget are all untouched, and the full test_review_after_remediation_generation.py and tests/test_hunter_review_orchestrator.py suites pass unchanged. Adding a trigger that reaches the same ensure_current entry point cannot mint an extra generation, because the generation is derived from trusted review-thread state per (head, claims, resolved threads).",
+        "evidence": "No review generation, cycle or remediation transition is modified. The document is a request for external exact-head review and authority is adopted out of band, so accepting a review still requires no additional candidate commit.",
         "family": "DFF-024",
         "outcome": "clear"
       },
       {
-        "evidence": "Governance-authority cutover/dependency-cycle machinery is not touched by this diff.",
+        "evidence": "No authority cutover is performed. The reviewer pool, the Codex primary and the exhaustion rules are untouched, and coverage_scopes sits beside reviewer_pool without changing tiering.",
         "family": "DFF-025",
         "outcome": "clear"
       },
       {
-        "evidence": "require_current_review_request_if_present remains, by explicit design documented in its corrected docstring and locked down by a test, a no-op that never blocks a push regardless of reviewer/request availability. This diff makes the missing-request NOTE more likely to be actionable in practice (a pushed head now reconciles promptly) without changing that NOTE's non-blocking status.",
+        "evidence": "A coverage scope is an owner authorization read from the default branch, not an external provider dependency. With no scope or no reviewer the strict full-Issue path stands, so provider absence cannot deadlock merge authority; the pre-push hook reports a missing external review as a non-blocking NOTE.",
         "family": "DFF-026",
         "outcome": "clear"
       },
       {
-        "evidence": "Railway readiness-probe execution boundary is not touched by this diff.",
-        "family": "DFF-027",
-        "outcome": "clear"
-      },
-      {
-        "evidence": "Candidate-code publication-credential isolation is not touched by this diff.",
-        "family": "DFF-028",
-        "outcome": "clear"
-      },
-      {
-        "evidence": "Candidate preflight-before-publication ordering is not touched by this diff.",
+        "evidence": "The candidate was pushed only through .githooks/pre-push, which ran the Architecture Index, Artifact, Defect Prevention, Ruff, Black and Mypy guards and the push-safety lane for this exact HEAD before the remote accepted it. No --no-verify was used and the change adds no draft-PR bypass.",
         "family": "DFF-029",
         "outcome": "clear"
       },
       {
-        "evidence": "docs/DEFECT_REGISTRY.json is edited as ordinary well-formed JSON; `python scripts/hunter_defect_prevention_preflight.py` passes against it, confirming it remains loadable at its governed path and that DFF-045's declared regression_evidence entries all resolve.",
+        "evidence": "The only tracked asset added is the coverage_scopes key inside the existing tracked docs/CODE_WRITE_POLICY.json, read by load_coverage_scopes at its declared path. The tracked path grammar is unchanged and the committed policy parses.",
         "family": "DFF-033",
         "outcome": "clear"
       },
       {
-        "evidence": "New tests (test_missing_review_request_state_names_the_command_to_start_it, test_stale_review_request_state_does_not_carry_the_missing_only_hint, test_require_current_review_request_if_present_is_intentionally_a_no_op, and the two in test_exact_head_review_authority.py) mock only repository-owned functions (review.verify_local, review.local_changes) inside the deterministic test lane; none asserts against a live external precondition.",
+        "evidence": "The new tests assert only on repository-owned state: they construct claims and documents in-process and call verify_claims and verify_review_request directly. No test reads an Issue body, a remote API response or a live endpoint.",
         "family": "DFF-035",
         "outcome": "clear"
       },
       {
-        "evidence": "No new import or workflow-environment dependency is introduced by this diff.",
-        "family": "DFF-036",
-        "outcome": "clear"
-      },
-      {
-        "evidence": "review.ReviewVerdict remains the same structured dataclass (state, reason, ok) consumers already read directly; unchanged by this diff.",
+        "evidence": "Governance classification stays machine-readable: a valid bounded correction maps to the VALID_SCOPED_CORRECTION state string and verify_claims returns the SCOPED_STATE verdict token rather than prose deciding the outcome.",
         "family": "DFF-037",
         "outcome": "clear"
       },
       {
-        "evidence": "This diff's changes to docs/CODE_WRITE_POLICY.json are limited to the reviewer_pool's timeout_policy.max_seconds, the codex agent's ack/review timeout fields, and a documentary max_seconds_rationale field; no admission-capability degrade/best-effort/silent-continuation logic (hunter_candidate_admission.py, hunter-candidate-admission.yml) is touched by this diff.",
+        "evidence": "load_coverage_scopes fails closed and returns an error for malformed, duplicate or unknown-mode entries, and the controller refuses when scope evidence is unavailable rather than continuing best-effort. A scoped verdict never silently degrades to a valid one.",
         "family": "DFF-038",
         "outcome": "clear"
       },
       {
-        "evidence": "This diff's changes to .github/workflows/hunter-governance-reconcile.yml are exactly the trusted-controller surface DFF-040 covers. The candidate changes no executable trusted logic at all -- scripts/hunter_review_orchestrator.py is byte-identical -- only which lifecycle event enters the existing trusted path, and every new regression test runs entirely offline against repository-owned files and functions, with no live GitHub precondition and no privileged token. DFF-040's hosted replay harness therefore remains the mechanism for validating the candidate's own controller-logic content, and the trigger addition is a wiring fact the structural regressions prove directly.",
+        "evidence": "No REST endpoint or repository-scoped request helper is added or modified; the change makes no network call.",
+        "family": "DFF-039",
+        "outcome": "clear"
+      },
+      {
+        "evidence": "coverage_scopes is read from the trusted default branch and the introducing candidate is judged by trusted main's copy, which has no scoped branch. Verified against origin/main@1ce5e097: no load_coverage_scopes, no SCOPED_STATE, no coverage_scopes parameter, so the new semantics cannot admit this candidate and no bootstrap exception is required.",
         "family": "DFF-040",
         "outcome": "clear"
-      },
-      {
-        "evidence": "This diff does change DFF-041's own scope: scripts/hunter_trusted_orchestrator_replay_worker.py is rewritten (-317/+141). The DFF-041 bootstrap boundary is the defect class in which the trusted replay grader is executed from the default branch, so a candidate changing the grader cannot self-validate: its own hosted replay run keeps grading against the unfixed default-branch grader regardless of what this branch contains. The rewrite is the minimal standalone correction of the grader scenario logic (per DFF-041's prevention mechanism, corrected on its own and not bundled into the production-controller change that surfaced it), and this candidate's own replay result is therefore not treated as a merge blocker for that already-diagnosed class; it is evidence supporting the standalone grader fix instead.",
-        "family": "DFF-041",
-        "outcome": "repaired"
-      },
-      {
-        "evidence": "This diff is the correcting contribution for DFF-042 (reviewer-chain-timeout-not-derived-from-canonical-budget; renumbered from DFF-041 during reconciliation with main, which independently added its own DFF-041 for the trusted-grader self-update bootstrap boundary): hunter_pre_ready_review.reviewer_chain_worst_case_seconds(pool) is now the single canonical derivation the collector workflow's timeout-minutes and hunter_review_orchestrator.independent_review_opportunity_seconds() are both validated against/derived from, proven by test_collector_workflow_lifetime_covers_the_reviewer_chain_budget and test_independent_review_opportunity_matches_the_same_canonical_budget.",
-        "family": "DFF-042",
-        "outcome": "clear"
-      },
-      {
-        "evidence": "This diff is the correcting contribution for DFF-043 (exact-head-initial-dispatch-not-idempotent-under-stale-status-read; renumbered from DFF-042 during reconciliation with main): ensure_collector now cross-checks the collector run listing before minting a fresh dispatch whenever no trusted cycle status is visible, proven by test_two_racing_reconcile_calls_never_double_dispatch_when_the_status_read_lags; the pre-existing bounded dead-dispatch recovery path is unaffected, proven by the unchanged test_a_failed_collector_is_redispatched_rather_than_parking_the_cycle continuing to pass.",
-        "family": "DFF-043",
-        "outcome": "clear"
-      },
-      {
-        "evidence": "This diff is the correcting contribution for DFF-044 (canonical-knowledge-growth-causes-linear-per-task-prompt-growth; renumbered from DFF-043 during reconciliation with main): EngineeringContextAuthority.compile() now takes an explicit budget_bytes and bounds/deduplicates/compacts rendering by deterministic structural relevance rather than inlining every applicable family's full prose, proven by the 8 new regression tests in tests/test_engineering_context_authority.py (TEST1-6 per the owner's authorized mission), and by the 32 previously-failing tests/test_issue_agent_execution.py, tests/test_issue_agent_issuer.py, tests/test_issue_agent_provisioner.py tests now passing.",
-        "family": "DFF-044",
-        "outcome": "clear"
-      },
-      {
-        "evidence": "Root cause 4 (this diff, live PR #535 exact HEAD 51108333821ab42d1ab7aa0b812a72d890f73795): a pull_request_target synchronize at 07:40:33Z woke Merge Readiness, Trusted Preflight Upgrade and Governance Agent Preflight but not Hunter Governance Review Reconcile, the only workflow that runs the privileged hunter_review_orchestrator.py ensure, so no trusted exact-head orchestration cycle was published and Merge Readiness correctly reported MALFORMED_REVIEW: WAITING_FOR_REVIEWER. hunter-governance-reconcile.yml declared types: [ready_for_review] only, so Issue #534's earlier fix had covered one of the two transition classes this family binds and not the exact-HEAD-changing one. Corrected by adding synchronize to the same pull_request_target trigger and by making the regression derive the requirement from hunter-merge-readiness.yml's own trigger set (test_reconcile_wakes_on_every_lifecycle_event_that_needs_or_moves_the_exact_head) so the two cannot drift apart again for either class. DFF-045's invariant was widened in place, not duplicated, to bind both classes explicitly and to state that a schedule or an unrelated producer's workflow_run is a recovery fallback, never the primary mechanism. Adding synchronize moved the Draft guard rather than weakening it, so the previously structural Draft assertion was replaced with behavioural coverage of the orchestrator's own draft short-circuit.",
-        "family": "DFF-045",
-        "outcome": "repaired"
       }
     ],
     "findings": [
       {
-        "evidence": "DEFECT_REGISTRY.json's legacy DFF-031 entry claimed require_current_review_request_if_present 'blocked at pre-push' since PR #485, but that function has been an unconditional no-op since the exact commit that introduced it, with zero real test coverage (every reference stubbed it out) -- an overclaimed-prevention-state (DFF-015) instance discovered while investigating PR #535's live failure.",
+        "evidence": "An earlier revision of this candidate's committed artifact carried another candidate's claims and a derived digest that no longer matched them. Hunter's own binding detected it independently: verify_claims rejects review_id/review_request.claims_id that do not recompute from the claims, and separately rejects a review_target and base_sha that are not this candidate's. The artifact has been regenerated through the canonical hunter_pre_ready_review --request path, so every derived field is Hunter-derived and the digest binding is a standing guard rather than a one-time fix.",
         "id": "F-1",
         "resolution": "resolved",
         "resolution_evidence": {
-          "correction": "54ef6da3704dc6bd103251f0c92cce80d55f2dc2",
-          "regression_test": "tests/test_hunter_pre_push.py"
+          "correction": "c4ef18eb965f4d4fda7fb3c16c1deba7dab99fff",
+          "regression_test": "tests/test_scoped_acceptance_coverage.py"
         },
         "severity": "non-blocking"
-      },
-      {
-        "evidence": "Live PR #535 evidence (exact HEAD c05da168545c5fa95fe300706eccaac2228fc391): after root causes 1 and 2 were fixed, hunter_merge_readiness_v2.resolve_review_authority misclassified a live, legitimate 'pending' (WAITING_FOR_REVIEWER, orchestration cycle genuinely published) verification result as a hard MALFORMED_REVIEW failure, so Hunter Merge Readiness could never reach the pending state its own sibling review_wait_state mechanism exists to produce -- an unrecoverable false failure, since no contributor push can complete a review a reviewer was never actually dispatched to perform.",
-        "id": "F-2",
-        "resolution": "resolved",
-        "resolution_evidence": {
-          "correction": "5917bd93708fbb38b89a861f068313558ef5d376",
-          "regression_test": "tests/test_exact_head_review_authority.py"
-        },
-        "severity": "blocking"
-      },
-      {
-        "evidence": "Live PR #535 evidence (exact HEAD 0553514f411a9ef16053bce75678b5357c78d403): Hunter invoked Codex correctly via '@codex review', but treated the absence of a response after only ~300 seconds (codex's own ack_timeout_seconds/review_timeout_seconds, both capped at the pool's timeout_policy.max_seconds of 300) as sufficient to fail over through the reviewer pool, even though Codex's own normal hosted latency on this repository is ~20-30 minutes (PR #529 ~29min, PR #530 ~21min). Hunter failed over Codex -> Copilot -> Gemini -> Groq, where Gemini returned HTTP 503 and Groq HTTP 403.",
-        "id": "F-3",
-        "resolution": "resolved",
-        "resolution_evidence": {
-          "correction": "ced1051e469f54b4be1a482260470e47deac26f5",
-          "regression_test": "tests/test_hunter_review_orchestrator.py"
-        },
-        "severity": "blocking"
-      },
-      {
-        "evidence": "Live PR #535 evidence (same exact HEAD): at least two Hunter Reviewer Collector runs (36340127965 and 36340195915) were dispatched for the same exact-head cycle, and the trusted orchestration status was republished with different reconcile trigger IDs for the same exact-head waiting cycle, despite ensure_collector persisting a cycle status before every dispatch -- because GitHub's combined-status read is not guaranteed read-your-write consistent, so a second, closely-spaced reconcile execution can still observe 'absent' after an earlier one already dispatched.",
-        "id": "F-4",
-        "resolution": "resolved",
-        "resolution_evidence": {
-          "correction": "ced1051e469f54b4be1a482260470e47deac26f5",
-          "regression_test": "tests/test_hunter_review_orchestrator.py"
-        },
-        "severity": "blocking"
-      },
-      {
-        "evidence": "Live PR #535 evidence (exact HEAD 51108333821ab42d1ab7aa0b812a72d890f73795): the pull_request_target synchronize at 07:40:33Z triggered Hunter / Merge Readiness, Hunter / Trusted Preflight Upgrade and Hunter Governance Agent Preflight, but not Hunter Governance Review Reconcile and not Hunter Reviewer Collector for that exact HEAD. The only reconciliations that ran (36393517015, 36393716517) were workflow_run-triggered recoveries depending on other workflows' completions, and no trusted exact-head orchestration cycle was published for that HEAD, so Merge Readiness run 36393772215 correctly published MALFORMED_REVIEW: WAITING_FOR_REVIEWER. hunter-governance-reconcile.yml declared types: [ready_for_review] only, so Issue #534's earlier fix had covered one of the two transition classes that can invalidate the exact-head prerequisite and not the exact-HEAD-changing one. A secondary consequence of the same defect: because synchronize also fires on pushes to a Draft PR, once the trigger was added the trigger could no longer be the Draft guard, and the pre-existing structural regression had been asserting the defect itself ('synchronize' not in types).",
-        "id": "F-6",
-        "resolution": "resolved",
-        "resolution_evidence": {
-          "correction": "38a1d58ff91fed12284956f4bd04474b3578909a",
-          "regression_test": "tests/test_hunter_review_orchestrator.py"
-        },
-        "severity": "blocking"
       }
     ],
-    "issue": "534",
+    "issue": "543",
     "review_target": [
       {
-        "blob_sha": "f087803e410c3ab82e3b80d5597d8981bc4f31c6",
-        "path": ".github/workflows/hunter-governance-reconcile.yml",
+        "blob_sha": "d53f7264bf427745673a8f99bb65825fe69bbf01",
+        "path": "tests/test_scoped_acceptance_coverage.py",
         "previous_path": "",
-        "status": "modified"
+        "status": "added"
       },
       {
-        "blob_sha": "7561b9c4d886d54a189ac74ccfcb0cb89b4b15a3",
-        "path": ".github/workflows/hunter-reviewer-collector.yml",
-        "previous_path": "",
-        "status": "modified"
-      },
-      {
-        "blob_sha": "fb6d4f3a65c1ce8bed4d547e16237c37e25f7930",
+        "blob_sha": "c0b675293ad9caf0f3f1ef06c6842b9c22391a98",
         "path": "docs/CODE_WRITE_POLICY.json",
         "previous_path": "",
         "status": "modified"
       },
       {
-        "blob_sha": "19d3024f3685e8087314b24aa1e14f3d76e9ef06",
-        "path": "docs/DEFECT_REGISTRY.json",
+        "blob_sha": "dedc783153d35deeefb4a26470778f9f8e6391bd",
+        "path": "scripts/hunter_governance_review_v2.py",
         "previous_path": "",
         "status": "modified"
       },
       {
-        "blob_sha": "df74458309a62f6a82219c950710fc59a2633352",
-        "path": "scripts/hunter_pre_push.py",
+        "blob_sha": "4129b08b3be009ba18c85cc2b9959d784a3a34db",
+        "path": "scripts/hunter_merge_readiness_v2.py",
         "previous_path": "",
         "status": "modified"
       },
       {
-        "blob_sha": "4cb4e99b5d1271a422e69b81bb40804326eabb40",
+        "blob_sha": "2b57eee47341a6a47a4e748be751f49a6132dcfc",
         "path": "scripts/hunter_pre_ready_review.py",
         "previous_path": "",
         "status": "modified"
       },
       {
-        "blob_sha": "0e7dfedd387629b7e7977f75128ef27afbb0ba9f",
-        "path": "scripts/hunter_review_orchestrator.py",
-        "previous_path": "",
-        "status": "modified"
-      },
-      {
-        "blob_sha": "4b214288632282f48c8254dab7ca882744cd780a",
-        "path": "scripts/hunter_reviewer_collector.py",
-        "previous_path": "",
-        "status": "modified"
-      },
-      {
-        "blob_sha": "1d8d3cb0136f991737f322d7eedf993ca2aa42a2",
-        "path": "scripts/hunter_trusted_orchestrator_replay_worker.py",
-        "previous_path": "",
-        "status": "modified"
-      },
-      {
-        "blob_sha": "b9ac82235f1ba15971b539f315e62c7176fba702",
-        "path": "tests/test_code_write_policy.py",
-        "previous_path": "",
-        "status": "modified"
-      },
-      {
-        "blob_sha": "3f0367a7e9cf6a88a53e5bf501d8eb79c3fba0b6",
+        "blob_sha": "cbff88a4ada3bf30f9c07a2ed1eb08e9c1e159c2",
         "path": "tests/test_exact_head_review_authority.py",
-        "previous_path": "",
-        "status": "modified"
-      },
-      {
-        "blob_sha": "edcad7d726b8d26bd531af46a1c79b8f0fa144a9",
-        "path": "tests/test_hunter_pre_push.py",
-        "previous_path": "",
-        "status": "modified"
-      },
-      {
-        "blob_sha": "458b127b12b5dc068aa21e965775151877b1342d",
-        "path": "tests/test_hunter_review_orchestrator.py",
-        "previous_path": "",
-        "status": "modified"
-      },
-      {
-        "blob_sha": "b92b3b948fb556958f8e6f754e6199df60f02c93",
-        "path": "tests/test_hunter_reviewer_collector.py",
-        "previous_path": "",
-        "status": "modified"
-      },
-      {
-        "blob_sha": "433d28ba4438ac40543a5716851b8ba5a792972d",
-        "path": "tests/test_issue_412_prevention_gate.py",
         "previous_path": "",
         "status": "modified"
       }
     ],
-    "review_target_digest": "ddfdded80bd51eaa58bd0664bc4202aa3ad7bafee76b9b10d15a0014d00439f4"
+    "review_target_digest": "12e7bd5f0ba4fe956b936e18dc557653babb512de5c09103c81d100f75d2f079"
   },
-  "review_id": "3c30e4a8d708fef88307bfceeb9cfe132728f1278e9936f452511d46ea08d3f1",
+  "review_id": "9f7bea93bfec5f63f91248b800931d717d8d4dd49dc642d943c89316c2f7e7d2",
   "review_request": {
-    "claims_id": "3c30e4a8d708fef88307bfceeb9cfe132728f1278e9936f452511d46ea08d3f1",
+    "claims_id": "9f7bea93bfec5f63f91248b800931d717d8d4dd49dc642d943c89316c2f7e7d2",
     "schema": "hunter.review-request.v1"
   },
   "schema": "hunter.pre-ready-hostile-review.v1"
