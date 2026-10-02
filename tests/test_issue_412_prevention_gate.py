@@ -22,6 +22,7 @@ from __future__ import annotations
 
 import json
 import os
+import subprocess
 from pathlib import Path
 from typing import Any
 
@@ -854,10 +855,51 @@ def test_the_recovery_trailer_is_read_from_git_and_not_from_the_message_body(tmp
     assert commits[0].parents == base and commits[1].parents == commits[0].sha
 
 
-def test_signing_keys_and_parents_are_read_for_real_signed_commits(monkeypatch) -> None:
+def _signed_repository(tmp_path: Path) -> tuple[Path, str, str, str, str]:
+    """A throwaway repository whose last two commits carry a real SSH signature.
+
+    The commits reproduce the PR #535 tail: headers claim ``Claude`` while the
+    signature is made with another writer's key. A fresh key is generated per
+    test so no developer key, keyring, or historical object is required --
+    the PR #535 objects themselves are unreachable once that branch is gone.
+    Returns ``(repo, fingerprint, base, middle, head)``.
+    """
+
+    key = tmp_path / "signing_key"
+    subprocess.run(
+        ("ssh-keygen", "-q", "-t", "ed25519", "-N", "", "-C", "fixture", "-f", str(key)),
+        check=True,
+        capture_output=True,
+    )
+    listed = subprocess.run(
+        ("ssh-keygen", "-l", "-E", "sha256", "-f", f"{key}.pub"), check=True, capture_output=True, text=True
+    ).stdout
+    fingerprint = listed.split()[1]
+    repo = tmp_path / "repo"
+    repo.mkdir()
+
+    def git(*args: str) -> str:
+        return subprocess.run(("git", *args), cwd=repo, check=True, capture_output=True, text=True).stdout.strip()
+
+    git("init", "-q")
+    for name, value in (
+        ("user.name", "Claude"),
+        ("user.email", "noreply@anthropic.com"),
+        ("gpg.format", "ssh"),
+        ("user.signingkey", str(key)),
+    ):
+        git("config", name, value)
+    git("commit", "-q", "--allow-empty", "--no-gpg-sign", "-m", "base")
+    base = git("rev-parse", "HEAD")
+    git("commit", "-q", "--allow-empty", "-S", "-m", "first signed")
+    middle = git("rev-parse", "HEAD")
+    git("commit", "-q", "--allow-empty", "-S", "-m", "second signed")
+    return repo, fingerprint, base, middle, git("rev-parse", "HEAD")
+
+
+def test_signing_keys_and_parents_are_read_for_real_signed_commits(monkeypatch, tmp_path) -> None:
     """The %GK wiring against real signed commits, not only synthetic records.
 
-    The two commits below are the PR #535 tail that hosted governance rejected.
     Global and system git config are excluded so the read runs exactly as on a
     hosted runner, where no ``gpg.ssh.allowedSignersFile`` is configured: a
     developer's own git config must not be what makes the fingerprint readable.
@@ -865,18 +907,30 @@ def test_signing_keys_and_parents_are_read_for_real_signed_commits(monkeypatch) 
 
     monkeypatch.setenv("GIT_CONFIG_GLOBAL", os.devnull)
     monkeypatch.setenv("GIT_CONFIG_NOSYSTEM", "1")
+    repo, fingerprint, base, middle, head = _signed_repository(tmp_path)
 
-    base, head = "38a1d58ff91fed12284956f4bd04474b3578909a", "b7d9552429f97b8caba1d7267a41672385ff9fce"
+    commits = provenance.read_range_commits(base, head, cwd=repo)
 
-    commits = provenance.read_range_commits(f"{base}~1", head)
+    assert [commit.sha for commit in commits] == [middle, head]
+    assert all(commit.signing_key == fingerprint for commit in commits)
+    assert commits[0].parents == base
+    assert commits[1].parents == middle
 
-    assert len(commits) == 2
-    assert all(commit.signing_key == OWNER_KEY for commit in commits)
-    assert commits[0].parents == f"{base}~1".split("~")[0] or commits[0].parents
-    assert commits[1].parents == base
-    assert (
-        provenance.evaluate_range(provenance.load_binding()[0], commits).ok is False
-    ), "the PR #535 tail must remain refused after this fix"
+    def binding(**keys: list[str]) -> provenance.WriterIdentityBinding:
+        enforced = _policy()
+        section = enforced[provenance.BINDING_FIELD][provenance.SIGNING_KEY_BINDINGS_FIELD]
+        section["require_key_bound_to_resolved_writer"] = True
+        section["bindings"] = {"claude": [CLAUDE_KEY], "fafa33": [OWNER_KEY], **keys}
+        parsed, error = provenance.parse_binding(enforced)
+        assert parsed is not None, error
+        return parsed
+
+    # The PR #535 shape: claimed as Claude, signed with the owner's key.
+    refused = provenance.evaluate_range(binding(fafa33=[fingerprint]), commits)
+    assert refused.ok is False, "a Claude-claimed commit signed with the owner's key must be refused"
+    assert fingerprint in refused.reason
+    # Paired positive: the same commits pass once the key is bound to the writer they claim.
+    assert provenance.evaluate_range(binding(claude=[fingerprint]), commits).ok is True
 
 
 # --------------------------------------------------------------------------
