@@ -134,6 +134,22 @@ NEGATED_DEFECT = re.compile(
 DANGEROUS_SUMMARY = re.compile(
     r"\b(?:critical|unsafe|vulnerabilit|exploit\w*|blocking (?:finding|defect|issue)|must fix)\b"
 )
+#: A denial clears only what it denies. Whatever the summary says outside its
+#: denials must not assert a defect or turn against the denial: "no blocking
+#: defects, but one issue remains" denies blockers and then discloses an issue,
+#: and "no security defects identified, but the implementation has a
+#: correctness issue" denies one class and reports another. Rather than
+#: enumerate such sentences, every denial span is removed and the residue is
+#: judged: any defect noun, failure word, or contrastive connective left over is
+#: a contradiction. Hyphen-aware boundaries keep compound qualifiers such as
+#: "fail-closed" from reading as an assertion of failure.
+DEFECT_ASSERTION = re.compile(
+    r"(?<![\w-])(?:findings?|defects?|issues?|blockers?|bugs?|problems?|flaws?|regressions?|concerns?"
+    r"|vulnerab\w*|broken|incorrect|wrong|fail(?:s|ed|ing|ures?)?)(?![\w-])"
+)
+CONTRADICTING_CONNECTIVE = re.compile(
+    r"(?<![\w-])(?:but|however|although|though|yet|nevertheless|nonetheless|still|whereas|while)(?![\w-])"
+)
 
 
 def clear_summary_denies_defects(summary: str) -> bool:
@@ -146,7 +162,9 @@ def clear_summary_denies_defects(summary: str) -> bool:
     words is denying something else -- the subject moved ("no review was
     performed and possible issues remain") or a negation was smuggled in past
     the noun ("no substantive non-blocking issues were found"). And a summary
-    that discloses severity is unusable however it is phrased. Every denial it
+    that discloses severity is unusable however it is phrased. Finally, nothing
+    outside the denials may assert a defect or contrast with them, so a denial
+    of one class cannot sit beside a disclosure of another. Every denial it
     makes has to qualify, so one incoherent denial is enough to fail the whole
     summary closed rather than be read past.
     """
@@ -157,9 +175,12 @@ def clear_summary_denies_defects(summary: str) -> bool:
     if REVIEW_NOT_PERFORMED.search(lower) or CLEAR_HEDGE.search(lower) or NEGATED_DEFECT.search(lower):
         return False
     denials = list(CLEAR_DENIAL.finditer(lower))
-    return bool(denials) and all(
+    if not denials or not all(
         set(re.findall(r"[\w-]+", denial.group("qualifier"))) <= CLEAR_DENIAL_WORDS for denial in denials
-    )
+    ):
+        return False
+    residue = CLEAR_DENIAL.sub(" ", lower)
+    return not (DEFECT_ASSERTION.search(residue) or CONTRADICTING_CONNECTIVE.search(residue))
 
 
 def external_verdict(payload: dict[str, Any]) -> str:
@@ -213,7 +234,13 @@ PROVIDER_ERROR_SECRETS = re.compile(
 #: unusable key from a model this account may not call, a spent quota, and a
 #: request the provider refuses.
 PROVIDER_ERROR_CAUSES = (
-    ("model_access", "model"),
+    (
+        "model_access",
+        r"model[_ ]?not[_ ]?found|model[_ ]?access"
+        r"|\bmodel\b\W+(?:\S+\W+){0,4}?(?:is\s+|are\s+)?(?:not\s+(?:found|available|supported|accessible|permitted"
+        r"|allowed|enabled)|does\s+not\s+exist|unavailable|decommissioned|deprecated)"
+        r"|(?:access|permission)\s+to\s+(?:the\s+|this\s+)?model\b",
+    ),
     ("quota_or_account", "quota|rate_?limit|billing|credit|insufficient|usage|suspend|deactivat|account"),
     ("authentication_or_permission", "auth|api[-_ ]?key|credential|unauthori|forbidden|permission|access|denied"),
     ("malformed_request", "invalid|malformed|unsupported|validation|parameter|payload|too_?long|filter"),
@@ -246,16 +273,23 @@ def provider_http_error_summary(provider: str, exc: urllib.error.HTTPError, secr
         return f"{provider} HTTP {exc.code}"
     error = envelope.get("error")
     fields = error if isinstance(error, dict) else envelope
-    # The machine-readable fields outrank the free text, so a generic
-    # ``invalid_request_error`` never masks a specific ``model_not_found``.
-    parts = [detail(fields.get(name)) for name in ("code", "status", "type")]
+    # Evidence is weighed from most to least specific, and the first tier that
+    # names a cause decides it: the provider's own error ``code``, then the
+    # message, and only then the generic ``status``/``type`` class. A generic
+    # ``forbidden`` or ``invalid_request_error`` therefore never masks a
+    # specific ``model_not_found`` or "model is not available for this account".
+    code, status, kind = (detail(fields.get(name)) for name in ("code", "status", "type"))
     message = detail(fields.get("message"))
+    parts = [code, status, kind]
     cause = next(
-        (name for name, pattern in PROVIDER_ERROR_CAUSES if any(re.search(pattern, part, re.I) for part in parts)),
+        (
+            name
+            for tier in ((code,), (message,), (status, kind))
+            for name, pattern in PROVIDER_ERROR_CAUSES
+            if any(re.search(pattern, evidence, re.I) for evidence in tier)
+        ),
         "unspecified",
     )
-    if cause == "unspecified":
-        cause = next((name for name, pattern in PROVIDER_ERROR_CAUSES if re.search(pattern, message, re.I)), cause)
     # A numeric provider code only repeats the status this summary already carries.
     kept = " ".join(part for part in (*parts, message) if part and not part.isdigit())
     return f"{provider} HTTP {exc.code} [{cause}]{f': {kept}' if kept else ''}"
@@ -864,7 +898,7 @@ class GitHubBackend:
             with urllib.request.urlopen(req, timeout=int(agent["review_timeout_seconds"])) as response:
                 raw = response.read(LIMIT + 1)
         except urllib.error.HTTPError as exc:
-            if exc.code in {401, 403, 408, 413, 429, 500, 502, 503, 504}:
+            if exc.code in {400, 401, 403, 408, 413, 429, 500, 502, 503, 504}:
                 return {"verdict": "unavailable", "summary": provider_http_error_summary(provider, exc, key)}
             raise
         except (TimeoutError, urllib.error.URLError):
