@@ -79,6 +79,12 @@ def _import_candidate(candidate_root: Path, module_name: str) -> Any:
     return importlib.import_module(module_name)
 
 
+#: Trusted upper bound on how long a pending cycle may stay open while its
+#: correlated collector still reads active, as a multiple of the candidate's own
+#: declared opportunity. Owned by the grader so a candidate cannot widen it.
+ACTIVE_COLLECTOR_CEILING_MULTIPLIER = 2
+
+
 def scenario_a(candidate_root: Path, fixture: dict[str, Any]) -> dict[str, Any]:
     """A pending cycle always reaches a terminal state inside a bounded budget.
 
@@ -185,12 +191,36 @@ def scenario_a(candidate_root: Path, fixture: dict[str, Any]) -> dict[str, Any]:
     assert state["dispatches"] == 0, "a live cycle still inside the opportunity must not be re-dispatched"
     assert state["published"] == [], "a live cycle still inside the opportunity must not be republished"
 
+    # A still-running correlated collector may hold the cycle open past the
+    # nominal budget, but never without bound: the trusted grader -- not the
+    # candidate -- owns the ceiling, so a wedged or perpetually active run
+    # cannot leave the exact head pending forever.
+    ceiling_age = budget * ACTIVE_COLLECTOR_CEILING_MULTIPLIER + step
+    orchestrator.collector_liveness = lambda *_a: ("active", 1)
+    active_past_ceiling = _recorded(ceiling_age)
+    orchestrator.read_cycle = lambda *_a: ("present", active_past_ceiling, None)
+    state["dispatches"] = 0
+    state["published"].clear()
+    ceiling_timed_out = orchestrator.ensure_collector("owner/repo", "token", pr_number, head)
+    assert ceiling_timed_out.state == "REVIEW_TIMED_OUT", (
+        f"a pending cycle {ceiling_age}s old whose correlated collector still reads active must reach a terminal "
+        f"state within {ACTIVE_COLLECTOR_CEILING_MULTIPLIER}x its declared {budget}s opportunity; it stayed "
+        f"{ceiling_timed_out.state!r}, so an active collector can hold the exact head pending without bound"
+    )
+    assert state["dispatches"] == 0, "a timed-out opportunity must not dispatch a further collector"
+    assert [c.state for c in state["published"]] == ["REVIEW_TIMED_OUT"], (
+        "the ceiling timeout must publish exactly one terminal transition, "
+        f"published {[c.state for c in state['published']]}"
+    )
+
     return {
         "opportunity_seconds": budget,
         "below_boundary_seconds": below_age,
         "above_boundary_seconds": above_age,
         "timed_out_state": timed_out.state,
         "in_opportunity_state": still_pending.state,
+        "active_ceiling_seconds": ceiling_age,
+        "active_ceiling_state": ceiling_timed_out.state,
     }
 
 
