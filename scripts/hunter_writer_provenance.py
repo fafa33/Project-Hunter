@@ -429,6 +429,14 @@ def parse_binding(policy: Any, *, predates_key_binding: bool = False) -> tuple[W
         )
 
     owner_recovery, recovery_error = parse_owner_recovery(policy)
+    # Only an absent grant, or one explicitly switched off, means "no recovery".
+    # A grant that is declared but malformed is a broken privilege section and
+    # fails the whole binding closed rather than silently degrading.
+    recovery_section = binding.get(OWNER_RECOVERY_FIELD)
+    recovery_declared = OWNER_WRITER_FIELD in binding or OWNER_RECOVERY_FIELD in binding
+    recovery_disabled = isinstance(recovery_section, dict) and recovery_section.get("enabled") is False
+    if recovery_error and recovery_declared and not recovery_disabled:
+        return None, recovery_error
     return (
         WriterIdentityBinding(
             tuple(identities),
@@ -922,8 +930,24 @@ def resolve_governed_base(head: str, *, base_ref: str = "main", remote: str = "o
     )
 
 
+def resolve_trusted_tip(*, base_ref: str = "main", remote: str = "origin", cwd: Path | None = None) -> str:
+    """The current commit of the remote-tracking trusted branch."""
+
+    for candidate in (f"{remote}/{base_ref}", f"refs/remotes/{remote}/{base_ref}"):
+        try:
+            tip = _run_git("rev-parse", "--verify", "--quiet", f"{candidate}^{{commit}}", cwd=cwd).strip()
+        except GitEvidenceUnavailable:
+            continue
+        if tip:
+            return tip
+    raise GitEvidenceUnavailable(
+        f"the trusted {remote}/{base_ref} tip is unavailable; run `git fetch {remote} {base_ref}` "
+        "so the writer binding can be read from trusted authority"
+    )
+
+
 def load_trusted_binding(base: str, *, cwd: Path | None = None) -> tuple[WriterIdentityBinding | None, str]:
-    """The writer binding as committed at the trusted governed ``base``."""
+    """The writer binding as committed at the trusted commit ``base``."""
 
     try:
         raw = _run_git("show", f"{base}:{CODE_WRITE_POLICY_RELATIVE_PATH}", cwd=cwd)
@@ -939,8 +963,8 @@ def load_trusted_binding(base: str, *, cwd: Path | None = None) -> tuple[WriterI
 def check_range(head: str, *, base_ref: str = "main", remote: str = "origin", cwd: Path | None = None) -> str | None:
     """Validate the governed range, returning an actionable diagnosis or ``None``.
 
-    The range is judged by the binding at its trusted governed base, never by
-    the candidate's own policy file. A candidate that edits its identities or
+    The range is judged by the binding at the current trusted base-branch tip,
+    never by the candidate's own policy file. A candidate that edits its identities or
     signing-key fingerprints would otherwise authorize itself in the same push,
     which hosted governance -- reading authority from the default branch --
     then rejects. A policy change takes effect for ranges based on it, after it
@@ -949,11 +973,16 @@ def check_range(head: str, *, base_ref: str = "main", remote: str = "origin", cw
 
     try:
         base = resolve_governed_base(head, base_ref=base_ref, remote=remote, cwd=cwd)
+        trusted = resolve_trusted_tip(base_ref=base_ref, remote=remote, cwd=cwd)
     except GitEvidenceUnavailable as exc:
         return f"writer provenance evidence is unavailable ({exc})"
-    binding, error = load_trusted_binding(base, cwd=cwd)
+    # The fork point selects which commits are governed; the authority they
+    # are judged by is the trusted branch as it stands now. A branch forked
+    # before a key rotation must meet the current bindings, exactly as hosted
+    # governance -- which reads the checked-out default branch -- requires.
+    binding, error = load_trusted_binding(trusted, cwd=cwd)
     if binding is None:
-        return f"writer provenance is unknown at trusted base {base[:10]} ({error})"
+        return f"writer provenance is unknown at trusted {remote}/{base_ref} {trusted[:10]} ({error})"
     try:
         commits = read_range_commits(base, head, cwd=cwd, binding=binding)
     except GitEvidenceUnavailable as exc:

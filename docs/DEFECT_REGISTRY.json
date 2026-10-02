@@ -810,7 +810,10 @@
         "tests/test_issue_412_prevention_gate.py::test_a_candidate_cannot_bind_its_own_signing_key",
         "tests/test_issue_412_prevention_gate.py::test_a_key_the_trusted_base_binds_is_admitted",
         "tests/test_issue_412_prevention_gate.py::test_a_base_that_predates_key_binding_is_judged_by_its_own_regime",
-        "tests/test_issue_412_prevention_gate.py::test_a_malformed_key_section_at_the_base_still_fails_closed"
+        "tests/test_issue_412_prevention_gate.py::test_a_malformed_key_section_at_the_base_still_fails_closed",
+        "tests/test_issue_412_prevention_gate.py::test_a_declared_but_malformed_recovery_grant_fails_closed",
+        "tests/test_issue_412_prevention_gate.py::test_an_absent_or_disabled_recovery_grant_is_still_no_recovery",
+        "tests/test_issue_412_prevention_gate.py::test_a_branch_forked_before_key_binding_meets_the_current_trusted_tip"
       ],
       "lifecycle": "locally-enforced",
       "sources": [

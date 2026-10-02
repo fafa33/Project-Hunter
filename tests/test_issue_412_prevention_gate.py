@@ -502,6 +502,66 @@ def test_a_base_that_predates_key_binding_is_judged_by_its_own_regime(tmp_path, 
     assert binding.require_key_bound_to_writer is False
 
 
+@pytest.mark.parametrize(
+    "mutate",
+    [
+        lambda section: section.update(declaration_schema=""),
+        lambda section: section.update(declaration_trailer=""),
+        lambda section: section.pop("enabled"),
+    ],
+    ids=("bad-schema", "bad-trailer", "enabled-missing"),
+)
+def test_a_declared_but_malformed_recovery_grant_fails_closed(mutate) -> None:
+    """Copilot: a broken privilege section must not silently degrade to "no recovery"."""
+    policy = json.loads((ROOT / "docs" / "CODE_WRITE_POLICY.json").read_text(encoding="utf-8"))
+    mutate(policy[provenance.BINDING_FIELD][provenance.OWNER_RECOVERY_FIELD])
+
+    parsed, error = provenance.parse_binding(policy)
+
+    assert parsed is None
+    assert provenance.OWNER_RECOVERY_FIELD in error
+
+
+def test_an_absent_or_disabled_recovery_grant_is_still_no_recovery() -> None:
+    """The paired positive: no grant, or one switched off, grants nothing and parses."""
+    absent, error = provenance.parse_binding(_policy())
+    assert absent is not None and absent.owner_recovery is None, error
+
+    policy = json.loads((ROOT / "docs" / "CODE_WRITE_POLICY.json").read_text(encoding="utf-8"))
+    policy[provenance.BINDING_FIELD][provenance.OWNER_RECOVERY_FIELD]["enabled"] = False
+    disabled, error = provenance.parse_binding(policy)
+    assert disabled is not None and disabled.owner_recovery is None, error
+
+
+def test_a_branch_forked_before_key_binding_meets_the_current_trusted_tip(tmp_path, _hosted_git) -> None:
+    """Codex P1: authority is the current origin/main tip, not the historical fork point.
+
+    The candidate forks from a base whose policy predates key binding; main
+    then advances to a policy that binds Claude's real key. The candidate's
+    fresh key must be refused, as hosted governance would refuse it.
+    """
+    repo, fingerprint = _trusted_base_repository(tmp_path, None)
+
+    def git(*args: str) -> str:
+        return subprocess.run(("git", *args), cwd=repo, check=True, capture_output=True, text=True).stdout.strip()
+
+    old_base = git("rev-parse", "origin/main")
+    candidate = git("rev-parse", "HEAD")
+    git("checkout", "-q", "-b", "advanced-main", old_base)
+    policy = json.loads((ROOT / "docs" / "CODE_WRITE_POLICY.json").read_text(encoding="utf-8"))
+    target = repo / provenance.CODE_WRITE_POLICY_RELATIVE_PATH
+    target.write_text(json.dumps(policy), encoding="utf-8")
+    git("add", "-A")
+    git("commit", "-q", "-S", "-m", "main adopts signing-key bindings")
+    git("update-ref", "refs/remotes/origin/main", "HEAD")
+    git("checkout", "-q", candidate)
+
+    problem = provenance.check_range(candidate, cwd=repo)
+
+    assert problem is not None
+    assert fingerprint in problem and "not bound" in problem
+
+
 def test_a_malformed_key_section_at_the_base_still_fails_closed() -> None:
     document = _policy()
     document[provenance.BINDING_FIELD][provenance.SIGNING_KEY_BINDINGS_FIELD] = "not an object"
@@ -579,7 +639,7 @@ def test_the_repository_policy_bounds_recovery_to_the_repository_owner(monkeypat
     [
         (lambda section: section.update(max_boundaries_per_range=2), "exactly 1"),
         (lambda section: section.update(enabled=False), "is unusable or absent"),
-        (lambda section: section.update(declaration_trailer=""), "is unusable or absent"),
+        (lambda section: section.update(declaration_trailer=""), "declaration_trailer must be a non-empty string"),
         (lambda section: section["required_boundary_properties"].update(unknown_signing_key_refused=False), "true"),
         (lambda section: section["required_boundary_properties"].pop("previous_epoch_not_reattributed"), "missing"),
         (
@@ -595,7 +655,10 @@ def test_weakening_the_recovery_grant_is_a_detectable_policy_change(mutate, expe
     section = policy[provenance.BINDING_FIELD][provenance.OWNER_RECOVERY_FIELD]
     mutate(section)
 
-    errors = prevention._validate_owner_recovery(policy, provenance.parse_binding(policy)[0] or binding)
+    # A malformed grant now fails the parse itself; only a well-formed (or
+    # explicitly disabled) grant reaches the structural validator.
+    parsed, parse_error = provenance.parse_binding(policy)
+    errors = [parse_error] if parsed is None else prevention._validate_owner_recovery(policy, parsed)
 
     assert any(expect in item for item in errors), errors
 
