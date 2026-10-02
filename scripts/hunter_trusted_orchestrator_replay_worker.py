@@ -107,6 +107,15 @@ def scenario_a(candidate_root: Path, fixture: dict[str, Any]) -> dict[str, Any]:
     would only prove some threshold exists between them: a candidate whose real
     cutoff is 1.5x its declared budget would pass such a check while still
     leaving an exact head pending well past the bound it advertises.
+
+    The boundary is straddle-probed with a cycle whose correlated collector is
+    NOT active, because that is the case where the nominal budget alone governs.
+    A second, separate probe then covers the case production added for it:
+    ``started_at`` is written before dispatch, so queue delay is spent out of the
+    budget while the collector is still queued or in progress. Production must
+    not finalize such a cycle on the nominal deadline, and must still finalize it
+    once a bounded grace derived from the same budget is exhausted -- so the wait
+    stays bounded rather than becoming an unbounded or infinite one.
     """
 
     orchestrator = _import_candidate(candidate_root, "hunter_review_orchestrator")
@@ -141,7 +150,11 @@ def scenario_a(candidate_root: Path, fixture: dict[str, Any]) -> dict[str, Any]:
     orchestrator.current_run_id = lambda: run_id
     orchestrator.publish_cycle = lambda *_a, cycle: state["published"].append(cycle)
     orchestrator.dispatch_collector = lambda *_a: state.__setitem__("dispatches", state["dispatches"] + 1)
-    orchestrator.collector_liveness = lambda *_a: ("active", 1)
+    # The straddle probes are the nominal-boundary case: the correlated collector has
+    # already completed, so nothing is active and the declared budget alone decides
+    # the transition. "missing" would not do -- a finished-less run would instead be
+    # recovered by the liveness grace, which is a different contract entirely.
+    orchestrator.collector_liveness = lambda *_a: ("completed", 1)
 
     def _recorded(age_seconds: int) -> Any:
         started = (datetime.now(UTC) - timedelta(seconds=age_seconds)).strftime("%Y-%m-%dT%H:%M:%SZ")
@@ -181,12 +194,56 @@ def scenario_a(candidate_root: Path, fixture: dict[str, Any]) -> dict[str, Any]:
     assert state["dispatches"] == 0, "a live cycle still inside the opportunity must not be re-dispatched"
     assert state["published"] == [], "a live cycle still inside the opportunity must not be republished"
 
+    # A correlated collector that is genuinely active must not be finalized on
+    # the nominal deadline: queue delay is spent out of the budget before the
+    # collector starts, and finalizing there would end the opportunity while a
+    # live collector can still publish a competing result for this exact head.
+    active_over_budget = _recorded(above_age)
+    orchestrator.read_cycle = lambda *_a: ("present", active_over_budget, None)
+    orchestrator.collector_liveness = lambda *_a: ("active", 1)
+    state["dispatches"] = 0
+    state["published"].clear()
+    deferred = orchestrator.ensure_collector("owner/repo", "token", pr_number, head)
+    assert deferred.state != "REVIEW_TIMED_OUT", (
+        f"a pending cycle {above_age}s old with a correlated collector still active must not be finalized as "
+        f"timed out on the nominal {budget}s budget -- it stayed on the nominal path instead -- because queue "
+        "and dispatch delay are spent out of that budget before the collector starts"
+    )
+    assert (
+        deferred.state == active_over_budget.state
+    ), f"an active correlated collector must leave the cycle in its existing state, got {deferred.state!r}"
+    assert state["published"] == [], (
+        "withholding a timeout must publish nothing at all, so no competing terminal result can exist "
+        f"for this head, published {[c.state for c in state['published']]}"
+    )
+    assert state["dispatches"] == 0, "an active correlated collector must not be re-dispatched"
+
+    # ... and the wait must stay bounded: once a grace derived from the same
+    # canonical budget is exhausted, the timeout becomes legitimate again even
+    # though the collector still reads active. This is what makes the deferral
+    # above bounded rather than an infinite wait.
+    multiplier = int(getattr(orchestrator, "ACTIVE_COLLECTOR_GRACE_MULTIPLIER", 0))
+    assert multiplier >= 1, (
+        "the candidate must publish a bounded active-collector grace multiplier, got " f"{multiplier!r}"
+    )
+    stale_active = _recorded(budget * multiplier + step)
+    orchestrator.read_cycle = lambda *_a: ("present", stale_active, None)
+    state["dispatches"] = 0
+    state["published"].clear()
+    expired = orchestrator.ensure_collector("owner/repo", "token", pr_number, head)
+    assert expired.state == "REVIEW_TIMED_OUT", (
+        f"an active correlated collector must not hold the cycle open forever: past the bounded "
+        f"{budget * multiplier}s grace the timeout is legitimate, got {expired.state!r}"
+    )
+
     return {
         "opportunity_seconds": budget,
         "below_boundary_seconds": below_age,
         "above_boundary_seconds": above_age,
         "timed_out_state": timed_out.state,
         "in_opportunity_state": still_pending.state,
+        "active_deferred_state": deferred.state,
+        "active_expired_state": expired.state,
     }
 
 

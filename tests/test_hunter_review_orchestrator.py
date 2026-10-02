@@ -207,6 +207,156 @@ def test_two_genuinely_simultaneous_dispatches_can_both_miss_the_correlated_run(
     assert second.state == "WAITING_FOR_REVIEWER"
 
 
+def _seconds_ago(seconds: int) -> str:
+    from datetime import UTC, datetime, timedelta
+
+    return (datetime.now(UTC) - timedelta(seconds=seconds)).strftime("%Y-%m-%dT%H:%M:%SZ")
+
+
+def _budget() -> int:
+    pool, error = pre_ready.load_reviewer_pool()
+    assert pool is not None and not error
+    return pre_ready.reviewer_chain_worst_case_seconds(pool)
+
+
+def test_an_active_correlated_collector_is_not_timed_out_on_the_nominal_deadline(monkeypatch):
+    """Queue delay must not finalize a collector that is genuinely running.
+
+    ``started_at`` is written before dispatch, so a cycle can pass the nominal
+    opportunity budget while its correlated collector is still queued or in
+    progress -- the collector's own job lifetime is counted from when it starts,
+    not from when it was requested. Publishing REVIEW_TIMED_OUT there ends the
+    opportunity while a live collector can still publish a competing result for
+    the same exact head.
+    """
+
+    budget = _budget()
+    cycle = make_cycle(trigger_id=123, started_at=_seconds_ago(budget + 60))
+    stored = _ensure_harness(monkeypatch, cycle, [_collector_run("queued")])
+
+    result = orchestrator.ensure_collector("owner/repo", "token", 472, HEAD)
+
+    assert result.state == "WAITING_FOR_REVIEWER"
+    assert result is not None
+    # Regression 3: the skipped path must publish nothing at all, so no
+    # competing terminal result can exist for this head and generation.
+    assert stored["published"] == []
+    assert stored["dispatches"] == 0
+
+
+def test_an_in_progress_correlated_collector_is_also_withheld_from_the_nominal_deadline(monkeypatch):
+    """Queued and in_progress are both ``active``; neither may be finalized early."""
+
+    budget = _budget()
+    cycle = make_cycle(trigger_id=123, started_at=_seconds_ago(budget + 60))
+    stored = _ensure_harness(monkeypatch, cycle, [_collector_run("in_progress")])
+
+    result = orchestrator.ensure_collector("owner/repo", "token", 472, HEAD)
+
+    assert result.state == "WAITING_FOR_REVIEWER"
+    assert stored["published"] == []
+    assert stored["dispatches"] == 0
+
+
+def test_a_dead_or_missing_collector_still_times_out_legitimately(monkeypatch):
+    """Regression 2: only a genuinely active collector buys the extra window."""
+
+    budget = _budget()
+    started = _seconds_ago(budget + 60)
+
+    dead = make_cycle(trigger_id=123, started_at=started)
+    stored = _ensure_harness(monkeypatch, dead, [_collector_run("completed", conclusion="failure")])
+    result = orchestrator.ensure_collector("owner/repo", "token", 472, HEAD)
+    assert result.state == "REVIEW_TIMED_OUT"
+    assert stored["published"][-1].state == "REVIEW_TIMED_OUT"
+
+    absent = make_cycle(trigger_id=123, started_at=started)
+    stored = _ensure_harness(monkeypatch, absent, [])
+    result = orchestrator.ensure_collector("owner/repo", "token", 472, HEAD)
+    assert result.state == "REVIEW_TIMED_OUT"
+    assert stored["published"][-1].state == "REVIEW_TIMED_OUT"
+
+
+def test_an_active_collector_cannot_hold_the_cycle_open_past_the_bounded_grace(monkeypatch):
+    """The extra window is bounded, so an active collector cannot wait forever.
+
+    Beyond twice the canonical budget the timeout is legitimate regardless of
+    liveness. That bound is evaluated before any liveness evidence is read, which
+    is what makes it hold even when that evidence cannot be read at all.
+    """
+
+    budget = _budget()
+    grace = budget * orchestrator.ACTIVE_COLLECTOR_GRACE_MULTIPLIER
+    cycle = make_cycle(trigger_id=123, started_at=_seconds_ago(grace + 60))
+    stored = _ensure_harness(monkeypatch, cycle, [_collector_run("in_progress")])
+
+    result = orchestrator.ensure_collector("owner/repo", "token", 472, HEAD)
+
+    assert result.state == "REVIEW_TIMED_OUT"
+    assert stored["published"][-1].state == "REVIEW_TIMED_OUT"
+    assert stored["dispatches"] == 0
+
+
+def test_unreadable_liveness_cannot_finalize_a_timeout_before_the_bounded_grace(monkeypatch):
+    """Unreadable evidence is not evidence that no collector is running.
+
+    It must not finalize early -- but the bound still applies, so this cannot
+    become a permanent wait either.
+    """
+
+    import hunter_github_transport as transport
+
+    budget = _budget()
+    cycle = make_cycle(trigger_id=123, started_at=_seconds_ago(budget + 60))
+    stored = _ensure_harness(monkeypatch, cycle, [])
+
+    def unavailable(*_args, **_kwargs):
+        raise transport.GitHubRequestError("rate limited", category="transient", status_code=429)
+
+    monkeypatch.setattr(orchestrator, "collector_liveness", unavailable, raising=False)
+
+    result = orchestrator.ensure_collector("owner/repo", "token", 472, HEAD)
+    assert result.state == "WAITING_FOR_REVIEWER"
+    assert stored["published"] == []
+
+    # ... and the same unreadable evidence past the bound still finalizes.
+    grace = budget * orchestrator.ACTIVE_COLLECTOR_GRACE_MULTIPLIER
+    stale = make_cycle(trigger_id=123, started_at=_seconds_ago(grace + 60))
+    stored = _ensure_harness(monkeypatch, stale, [])
+    monkeypatch.setattr(orchestrator, "collector_liveness", unavailable, raising=False)
+    result = orchestrator.ensure_collector("owner/repo", "token", 472, HEAD)
+    assert result.state == "REVIEW_TIMED_OUT"
+
+
+def test_the_timeout_bound_never_consults_another_head_or_generation(monkeypatch):
+    """Exact-head and generation binding must not be relaxed by the grace.
+
+    The liveness read is made for the recorded cycle's own identity, and the
+    published terminal cycle preserves that identity exactly.
+    """
+
+    seen: list[tuple] = []
+
+    def capture(repository, token, pr_number, head_sha, generation_id=orchestrator.BASE_GENERATION_ID):
+        seen.append((pr_number, head_sha, generation_id))
+        return "active", 1
+
+    budget = _budget()
+    cycle = make_cycle(trigger_id=123, started_at=_seconds_ago(budget + 60), generation_id="gen-7")
+    stored = _ensure_harness(monkeypatch, cycle, [_collector_run("in_progress")])
+    monkeypatch.setattr(orchestrator, "collector_liveness", capture, raising=False)
+
+    # The same generation must be presented, so the idempotent branch is taken
+    # rather than the remediation-admissibility branch.
+    result = orchestrator.ensure_collector("owner/repo", "token", 472, HEAD, "gen-7")
+
+    assert seen == [(472, HEAD, "gen-7")]
+    assert result.state == "WAITING_FOR_REVIEWER"
+    assert result.generation_id == "gen-7"
+    assert result.head_sha == HEAD
+    assert stored["published"] == []
+
+
 def test_review_opportunity_timeout_finalizes_pending_cycle_without_redispatch(monkeypatch):
     cycle = make_cycle(trigger_id=123, started_at="2020-01-01T00:00:00Z")
     stored = _ensure_harness(monkeypatch, cycle, [_collector_run("in_progress")])
