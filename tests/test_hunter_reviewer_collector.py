@@ -1779,6 +1779,52 @@ def test_copilot_clean_exact_head_review_is_clear(monkeypatch):
     assert backend.response_state(agent, trigger) == "clear"
 
 
+PR553_COPILOT_OVERVIEW_BODY = (
+    "<!-- ccr-overview-v2 -->\n\n"
+    "## Copilot review overview\n\n"
+    "### 🔵 Needs a closer look\n\n"
+    "Root-of-trust signing-key changes require final human review.\n\n"
+    "**Review effort:** Lite  \n"
+    "**Findings:** None"
+)
+
+
+def _copilot_overview_state(monkeypatch, inline_comments):
+    backend = collector.GitHubBackend("owner/repo", "token", 480, HEAD, "d" * 64, 123, 1)
+    agent = {
+        "id": "copilot",
+        "trigger_method": "github-review-request:copilot-pull-request-reviewer[bot]",
+        "github_login": "copilot-pull-request-reviewer[bot]",
+    }
+    trigger = {"created_at": "2026-09-18T20:00:00Z", "collector_run_id": 123, "id": 9}
+    review = {
+        "id": 79,
+        "user": {"login": "copilot-pull-request-reviewer[bot]"},
+        "submitted_at": "2026-09-18T20:01:00Z",
+        "commit_id": HEAD,
+        "state": "COMMENTED",
+        "body": PR553_COPILOT_OVERVIEW_BODY,
+    }
+
+    def pages(_repo, _token, path):
+        if path.endswith("/reviews"):
+            return [review]
+        if "/reviews/79/comments" in path:
+            return inline_comments
+        return []
+
+    monkeypatch.setattr(collector, "_pages", pages)
+    return backend.response_state(agent, trigger)
+
+
+def test_copilot_overview_v2_findings_none_exact_head_is_not_blocking_findings(monkeypatch):
+    assert _copilot_overview_state(monkeypatch, []) == "clear"
+
+
+def test_copilot_overview_v2_with_inline_comment_remains_blocking(monkeypatch):
+    assert _copilot_overview_state(monkeypatch, [{"id": 1}]) == "blocking"
+
+
 def test_external_blocking_without_actionable_findings_is_unavailable():
     payload = {"verdict": "blocking", "summary": "Authority may be unsafe.", "findings": []}
     assert collector.external_verdict(payload) == "unavailable"
