@@ -206,6 +206,21 @@ class Edge:
             ).encode(),
         )
 
+    def ack(self, authorization_id: str, tree: str, result_sha256: str, **token: Any) -> tuple[int, dict[str, Any]]:
+        return self.post(
+            EXECUTION_RESULT_PATH,
+            json.dumps(
+                {
+                    "schema_version": EXECUTION_REQUEST_SCHEMA_VERSION,
+                    "authorization_id": authorization_id,
+                    "role": "validator",
+                    "oidc_token": _token(**token),
+                    "tree": tree,
+                    "result_sha256": result_sha256,
+                }
+            ).encode(),
+        )
+
 
 @pytest.fixture
 def edge() -> Any:
@@ -298,7 +313,12 @@ def test_label_acceptance_reaches_the_replacement_executor_through_spm_dpm(tmp_p
         target.branch,
     )
     assert receipt.result_sha256 == ack["result_sha256"]
-    assert hook.fetch(authorization_id, "publisher")[0] == 200
+    # Result acceptance is not validation: the publisher waits for the acknowledgement.
+    assert hook.fetch(authorization_id, "publisher")[0] == 403
+    assert hook.ack(authorization_id, "e" * 40, receipt.result_sha256)[0] == 200
+    status, published = hook.fetch(authorization_id, "publisher")
+    assert status == 200 and published["validated_tree"] == "e" * 40
+    assert published["validated_result_sha256"] == receipt.result_sha256
     # Every role operation is single-use: no second publication can be fetched.
     assert hook.fetch(authorization_id, "publisher")[0] == 409
 
@@ -1171,3 +1191,165 @@ def test_candidate_safety_never_needs_a_github_token_to_pass_the_push_lane(
     pre_push.report_pre_ready_review_state("c" * 40, updates)  # must not raise
     assert seen["criteria"] is None
     assert "does not block push" in capsys.readouterr().out
+
+
+# --- PR #558 Copilot: validator-before-publisher with a recorded, bound proof ---
+
+
+def _validated_execution(tmp_path: Path, edge: Any) -> tuple[Edge, Any, str, str]:
+    deployment = Deployment(tmp_path)
+    services = deployment.services(fallback=_runtime(deployment))
+    hook = edge(services)
+    authorization_id = _accepted(hook, _authorization_document())["authorization_id"]
+    signed = SignedIssueAgentAuthorization.from_json(_authorization_document())
+    assert hook.fetch(authorization_id, "executor")[0] == 200
+    status, ack = hook.result(authorization_id, _result(signed))
+    assert status == 200
+    return hook, services, authorization_id, ack["result_sha256"]
+
+
+def test_publisher_cannot_fetch_before_the_validator_acknowledges(tmp_path: Path, edge: Any) -> None:
+    hook, _services, authorization_id, digest = _validated_execution(tmp_path, edge)
+    # Directly after result acceptance (a miswired publisher job) ...
+    assert hook.fetch(authorization_id, "publisher")[0] == 403
+    # ... an acknowledgement without the validator's own fetch ...
+    assert hook.ack(authorization_id, "e" * 40, digest)[0] == 403
+    # ... and after the validator fetched but before it acknowledged.
+    assert hook.fetch(authorization_id, "validator")[0] == 200
+    assert hook.fetch(authorization_id, "publisher")[0] == 403
+    assert hook.ack(authorization_id, "e" * 40, digest)[0] == 200
+    assert hook.fetch(authorization_id, "publisher")[0] == 200
+
+
+@pytest.mark.parametrize(
+    "case",
+    ["wrong-digest", "other-run", "re-run-attempt", "malformed-tree", "uppercase-tree", "extra-field"],
+)
+def test_a_mismatched_or_foreign_validation_acknowledgement_fails_closed(tmp_path: Path, edge: Any, case: str) -> None:
+    hook, _services, authorization_id, digest = _validated_execution(tmp_path, edge)
+    assert hook.fetch(authorization_id, "validator")[0] == 200
+    if case == "wrong-digest":
+        assert hook.ack(authorization_id, "e" * 40, "0" * 64)[0] == 422
+        # A refused acknowledgement locks publication out for good.
+        assert hook.ack(authorization_id, "e" * 40, digest)[0] == 409
+        assert hook.fetch(authorization_id, "publisher")[0] == 422
+        return
+    if case == "other-run":
+        assert hook.ack(authorization_id, "e" * 40, digest, run_id="2002")[0] == 403
+    elif case == "re-run-attempt":
+        assert hook.ack(authorization_id, "e" * 40, digest, run_attempt="2")[0] == 403
+    elif case in ("malformed-tree", "uppercase-tree"):
+        assert hook.ack(authorization_id, "xyz" if case == "malformed-tree" else "E" * 40, digest)[0] == 400
+    else:
+        body = json.dumps(
+            {
+                "schema_version": EXECUTION_REQUEST_SCHEMA_VERSION,
+                "authorization_id": authorization_id,
+                "role": "validator",
+                "oidc_token": _token(),
+                "tree": "e" * 40,
+                "result_sha256": digest,
+                "published_head": "f" * 40,
+            }
+        ).encode()
+        assert hook.post(EXECUTION_RESULT_PATH, body)[0] == 400
+    # None of these recorded a proof: the publisher still cannot fetch.
+    assert hook.fetch(authorization_id, "publisher")[0] == 403
+
+
+def test_the_exact_validated_tree_is_released_once(tmp_path: Path, edge: Any) -> None:
+    hook, _services, authorization_id, digest = _validated_execution(tmp_path, edge)
+    assert hook.fetch(authorization_id, "validator")[0] == 200
+    assert hook.ack(authorization_id, "e" * 40, digest)[0] == 200
+    assert hook.ack(authorization_id, "e" * 40, digest)[0] == 409  # replayed acknowledgement
+    assert hook.ack(authorization_id, "d" * 40, digest)[0] == 409  # a different tree cannot overwrite it
+    status, published = hook.fetch(authorization_id, "publisher")
+    assert status == 200 and published["validated_tree"] == "e" * 40
+    assert hook.fetch(authorization_id, "publisher")[0] == 409
+    assert hook.ack(authorization_id, "e" * 40, digest)[0] == 409
+
+
+def _candidate_with(tree: Any, digest: str = "r" * 64) -> tuple[Any, Any, dict[str, Any]]:
+    class Receipt:
+        result_sha256 = "r" * 64
+
+    return object(), Receipt(), {"validated_tree": tree, "validated_result_sha256": digest}
+
+
+@pytest.mark.parametrize(
+    ("candidate", "code"),
+    [
+        (_candidate_with(None), "VALIDATION_ACK_MISSING"),
+        (_candidate_with("e" * 40, digest="0" * 64), "VALIDATION_ACK_MISBOUND"),
+        (_candidate_with("d" * 40), "SAFETY_TREE_MISMATCH"),
+    ],
+)
+def test_publisher_publishes_only_the_runtime_recorded_tree(
+    monkeypatch: pytest.MonkeyPatch, candidate: Any, code: str
+) -> None:
+    environ = {
+        driver.PUBLISHER_SIGNING_KEY_ENV: "k",
+        driver.PUBLISHER_PUSH_TOKEN_ENV: "t",
+        driver.PUBLISHER_WRITER_ENV: "fafa33",
+    }
+    monkeypatch.setattr(driver, "_verified_candidate", lambda *_a: candidate)
+    monkeypatch.setattr(driver, "publish_create_only", lambda *_a, **_k: pytest.fail("must not publish"))
+    with pytest.raises(driver.ExecutionJobError) as caught:
+        driver.run_publish("hunter-issue-agent-authorization:" + "a" * 64, Path("."), "e" * 40, environ)
+    assert caught.value.code == code
+
+
+def test_publisher_passes_the_recorded_tree_to_the_create_only_publisher(monkeypatch: pytest.MonkeyPatch) -> None:
+    environ = {
+        driver.PUBLISHER_SIGNING_KEY_ENV: "k",
+        driver.PUBLISHER_PUSH_TOKEN_ENV: "t",
+        driver.PUBLISHER_WRITER_ENV: "fafa33",
+    }
+    seen: dict[str, Any] = {}
+
+    class Publication:
+        branch, head_sha = "issue-423-x", "f" * 40
+
+    def publish(_repo: Any, **kwargs: Any) -> Any:
+        seen.update(kwargs)
+        return Publication()
+
+    monkeypatch.setattr(driver, "_verified_candidate", lambda *_a: _candidate_with("e" * 40))
+    monkeypatch.setattr(driver, "_configure_publication", lambda *_a, **_k: Path("key"))
+    monkeypatch.setattr(driver, "publish_create_only", publish)
+    assert driver.run_publish("hunter-issue-agent-authorization:" + "a" * 64, Path("."), "e" * 40, environ) == (
+        "issue-423-x",
+        "f" * 40,
+    )
+    assert seen["safety_tree"] == "e" * 40
+
+
+def test_validator_records_its_exact_tree_and_result_digest(monkeypatch: pytest.MonkeyPatch) -> None:
+    class Receipt:
+        result_sha256 = "r" * 64
+
+    posted: dict[str, Any] = {}
+    environ = {
+        "GITHUB_REPOSITORY": REPOSITORY,
+        driver.WEBHOOK_URL_ENV: "https://issuer.example/issue-agent/authorize",
+        driver.UNTRUSTED_USER_ENV: "hunter-untrusted",
+        driver.PUBLISHER_WRITER_ENV: "fafa33",
+    }
+    monkeypatch.setattr(driver, "require_isolation_user", lambda user: user)
+    monkeypatch.setattr(driver, "_verified_candidate", lambda *_a: (object(), Receipt(), {}))
+    monkeypatch.setattr(driver, "run_credential_free_candidate_safety", lambda *_a, **_k: "e" * 40)
+    monkeypatch.setattr(driver, "request_oidc_token", lambda *_a: "token")
+
+    def post(_base: str, path: str, payload: dict[str, Any]) -> dict[str, Any]:
+        posted.update(payload, path=path)
+        return {
+            "schema_version": "hunter-issue-agent-execution-validation-accepted-v1",
+            "authorization_id": payload["authorization_id"],
+            "tree": payload["tree"],
+            "result_sha256": payload["result_sha256"],
+        }
+
+    monkeypatch.setattr(driver, "post_execution", post)
+    assert driver.run_validate("hunter-issue-agent-authorization:" + "a" * 64, Path("."), environ) == "e" * 40
+    assert posted["path"] == EXECUTION_RESULT_PATH and posted["role"] == "validator"
+    assert (posted["tree"], posted["result_sha256"]) == ("e" * 40, "r" * 64)

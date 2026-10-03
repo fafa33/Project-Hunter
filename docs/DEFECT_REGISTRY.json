@@ -602,6 +602,26 @@
       "guard": "The acceptance is read with one extra byte and refused when it exceeds the bound; a refusal is reported by HTTP status only, plus the fixed-vocabulary pre-model reason code (#514) when the detail exactly matches that shape.",
       "test": "tests/test_issue_agent_trigger.py::test_http_error_semantic_rejection_reports_status_without_refusal_text",
       "status": "guarded"
+    },
+    {
+      "id": "PRH-075",
+      "class": "one-active-pr-check-not-atomic-with-creation",
+      "source": "PR #558 Copilot review, 2026-10-03 (head b5337d13, thread PRRT_kwDOTRDHr86oouCt): the Draft-PR decision listed open Issue Agent PRs and then POSTed /pulls; two authorized branches of one Issue in concurrent workflow_run executions (keyed by run id) could both see none and both create a PR.",
+      "classification": "systemic",
+      "guard_boundary": "Hunter / Issue Agent Candidate PR workflow and decision module",
+      "guard": "PR creation is serialized per Issue by a job-level concurrency group keyed on the Issue bound from the exact agent-branch shape (cancel-in-progress false), and converge_single_active_pr is the deterministic backstop: after a POST the run re-lists open agent PRs for the Issue and closes only the PR it just created when a lower-numbered one is open, so racing runs always converge on GitHub's lowest atomically assigned PR number.",
+      "test": "tests/test_issue_agent_candidate_pr.py::test_racing_authorizations_for_one_issue_leave_exactly_one_active_pr",
+      "status": "guarded"
+    },
+    {
+      "id": "PRH-076",
+      "class": "publication-without-runtime-recorded-validation-proof",
+      "source": "PR #558 Copilot review, 2026-10-03 (head b5337d13, thread PRRT_kwDOTRDHr86oouC9): after result acceptance the publisher could fetch the candidate without the validator role ever being consumed, and the safety_tree it published against was only a workflow output, not a validation proof recorded by the runtime.",
+      "classification": "systemic",
+      "guard_boundary": "GitHubHostedExecutionRuntime candidate release and publisher job",
+      "guard": "The credential-free validator records a single-use acknowledgement over the existing result route (role validator), bound to the same OIDC run, its own prior candidate fetch, the exact accepted result digest and the exact 40-hex tree; a mismatched acknowledgement locks publication out. The publisher fetch requires that recorded acknowledgement and returns the recorded tree and digest; the publisher publishes only that tree and refuses when the workflow output disagrees.",
+      "test": "tests/test_issue_agent_github_execution.py::test_publisher_cannot_fetch_before_the_validator_acknowledges",
+      "status": "guarded"
     }
   ],
   "families": [
@@ -1596,7 +1616,10 @@
         "tests/test_issue_agent_github_execution.py::test_executor_refuses_to_run_a_model_without_uid_isolation",
         "tests/test_issue_agent_github_execution.py::test_a_model_planted_git_directory_never_configures_or_runs_collection",
         "tests/test_issue_agent_replacement_executor.py::test_publisher_and_validator_reject_the_executor_model_credential_and_any_api_key",
-        "tests/test_issue_agent_github_execution.py::test_validator_refuses_the_executor_model_credential"
+        "tests/test_issue_agent_github_execution.py::test_validator_refuses_the_executor_model_credential",
+        "tests/test_issue_agent_github_execution.py::test_publisher_cannot_fetch_before_the_validator_acknowledges",
+        "tests/test_issue_agent_github_execution.py::test_a_mismatched_or_foreign_validation_acknowledgement_fails_closed",
+        "tests/test_issue_agent_github_execution.py::test_publisher_publishes_only_the_runtime_recorded_tree"
       ],
       "lifecycle": "regression-tested",
       "sources": [

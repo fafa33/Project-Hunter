@@ -230,6 +230,51 @@ def _authorized_signers() -> frozenset[str]:
     return frozenset(signers)
 
 
+def open_issue_agent_pulls(request_json: RequestJson, repository: str, token: str, issue_number: int) -> list[Any]:
+    """Every open Issue Agent pull request bound to ``issue_number`` in this repository."""
+    pulls = request_json(repository, token, "GET", "pulls?state=open&per_page=100", None)
+    if not isinstance(pulls, list) or len(pulls) >= 100:
+        # A possibly truncated listing is not evidence that no PR is open.
+        raise RuntimeError("the open pull request evidence is incomplete")
+    return [
+        pull
+        for pull in pulls
+        if isinstance(pull, Mapping)
+        and governed_issue_number(str((pull.get("head") or {}).get("ref") or "")) == issue_number
+        and _same_repository(str(((pull.get("head") or {}).get("repo") or {}).get("full_name") or ""), repository)
+    ]
+
+
+def converge_single_active_pr(
+    *,
+    request_json: RequestJson,
+    repository: str,
+    read_token: str,
+    write_token: str,
+    issue_number: int,
+    created_number: int,
+) -> int:
+    """Return the one Issue Agent PR that stays open for the Issue after a creation.
+
+    The check before ``POST /pulls`` cannot be atomic with it, so two serialized
+    runs are the primary guard and this is the deterministic backstop: GitHub
+    assigns PR numbers atomically and in order, so the lowest open number is the
+    unique winner. A run closes only the PR it just created, and only when a
+    lower-numbered one is open; every racing run reaches the same answer.
+    """
+    numbers = sorted(
+        int(pull["number"])
+        for pull in open_issue_agent_pulls(request_json, repository, read_token, issue_number)
+        if isinstance(pull.get("number"), int)
+    )
+    if created_number not in numbers:
+        raise RuntimeError(f"created pull request #{created_number} is not visible as open; cannot confirm uniqueness")
+    winner = numbers[0]
+    if winner != created_number:
+        request_json(repository, write_token, "PATCH", f"pulls/{created_number}", {"state": "closed"})
+    return winner
+
+
 def gather_evidence(
     *,
     repository: str,
@@ -255,17 +300,7 @@ def gather_evidence(
         if not _is_not_found(error):
             raise
         issue = None
-    pulls = request_json(repository, token, "GET", "pulls?state=open&per_page=100", None)
-    if not isinstance(pulls, list) or len(pulls) >= 100:
-        # A possibly truncated listing is not evidence that no PR is open.
-        raise RuntimeError("the open pull request evidence is incomplete")
-    pulls = [
-        pull
-        for pull in pulls
-        if isinstance(pull, Mapping)
-        and governed_issue_number(str((pull.get("head") or {}).get("ref") or "")) == issue_number
-        and _same_repository(str(((pull.get("head") or {}).get("repo") or {}).get("full_name") or ""), repository)
-    ]
+    pulls = open_issue_agent_pulls(request_json, repository, token, issue_number)
     compare = request_json(repository, token, "GET", f"compare/{BASE_BRANCH}...{head_sha}?per_page=250", None)
     commits = compare.get("commits") if isinstance(compare, Mapping) else None
     total = compare.get("total_commits") if isinstance(compare, Mapping) else None
@@ -325,7 +360,7 @@ def run(
     decision = decide_candidate_pr(evidence)
     if not decision.open:
         return 0, decision
-    request(
+    created = request(
         repository,
         pr_token,
         "POST",
@@ -339,6 +374,24 @@ def run(
             "maintainer_can_modify": False,
         },
     )
+    created_number = created.get("number") if isinstance(created, Mapping) else None
+    if not isinstance(created_number, int):
+        raise RuntimeError("pull request creation returned no exact PR number")
+    if decision.issue_number is None:
+        raise RuntimeError("an opened decision must bind its governing Issue")
+    winner = converge_single_active_pr(
+        request_json=request,
+        repository=repository,
+        read_token=read_token,
+        write_token=pr_token,
+        issue_number=decision.issue_number,
+        created_number=created_number,
+    )
+    if winner != created_number:
+        return 0, _refuse(
+            f"Issue Agent PR #{winner} is already open for this Issue; closed duplicate #{created_number}",
+            decision.issue_number,
+        )
     return 0, decision
 
 

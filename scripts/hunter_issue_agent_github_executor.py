@@ -53,6 +53,7 @@ from hunter.automation.issue_agent_github_execution import (
     EXECUTION_REQUEST_SCHEMA_VERSION,
     EXECUTION_RESULT_ACK_SCHEMA_VERSION,
     EXECUTION_RESULT_PATH,
+    EXECUTION_VALIDATION_ACK_SCHEMA_VERSION,
     ROLE_EXECUTOR,
     ROLE_PUBLISHER,
     ROLE_VALIDATOR,
@@ -388,7 +389,7 @@ def run_execute(authorization_id: str, environ: Mapping[str, str]) -> str:
 
 def _verified_candidate(
     authorization_id: str, environ: Mapping[str, str], role: str
-) -> tuple[ValidatedReplacementResult, Any]:
+) -> tuple[ValidatedReplacementResult, Any, dict[str, Any]]:
     candidate = _fetch(environ, authorization_id, role)
     if candidate.get("schema_version") != EXECUTION_CANDIDATE_SCHEMA_VERSION:
         raise ExecutionJobError("CANDIDATE_SCHEMA_MISMATCH")
@@ -413,7 +414,7 @@ def _verified_candidate(
         raise
     except Exception:  # noqa: BLE001 - the reason may quote candidate content
         raise ExecutionJobError("CANDIDATE_VERIFICATION_FAILED") from None
-    return validated, receipt
+    return validated, receipt, candidate
 
 
 def writer_identity(login: str) -> tuple[str, str]:
@@ -443,12 +444,35 @@ def run_validate(authorization_id: str, repo: Path, environ: Mapping[str, str]) 
         raise ExecutionJobError("VALIDATOR_HAS_MODEL_AUTHORITY")
     user = _isolation_user(environ)
     _bind_writer(_required(environ, PUBLISHER_WRITER_ENV))
-    validated, _receipt = _verified_candidate(authorization_id, environ, ROLE_VALIDATOR)
+    validated, receipt, _candidate = _verified_candidate(authorization_id, environ, ROLE_VALIDATOR)
     try:
-        return run_credential_free_candidate_safety(repo, validated=validated, isolation_user=user)
+        tree = run_credential_free_candidate_safety(repo, validated=validated, isolation_user=user)
     except ReplacementExecutorError:
         # The hook output is candidate-derived content and is never printed.
         raise ExecutionJobError("CANDIDATE_SAFETY_FAILED") from None
+    # Record the safety proof in the issuer runtime, bound to this run, the exact
+    # accepted result digest and the exact tree; the publisher can fetch only after it.
+    repository = _required(environ, "GITHUB_REPOSITORY")
+    ack = post_execution(
+        execution_base_url(environ),
+        EXECUTION_RESULT_PATH,
+        {
+            "schema_version": EXECUTION_REQUEST_SCHEMA_VERSION,
+            "authorization_id": authorization_id,
+            "role": ROLE_VALIDATOR,
+            "oidc_token": request_oidc_token(environ, oidc_audience(repository)),
+            "tree": tree,
+            "result_sha256": receipt.result_sha256,
+        },
+    )
+    if (
+        ack.get("schema_version") != EXECUTION_VALIDATION_ACK_SCHEMA_VERSION
+        or ack.get("authorization_id") != authorization_id
+        or ack.get("tree") != tree
+        or ack.get("result_sha256") != receipt.result_sha256
+    ):
+        raise ExecutionJobError("VALIDATION_NOT_ACKNOWLEDGED")
+    return tree
 
 
 def missing_publication_credentials(environ: Mapping[str, str]) -> list[str]:
@@ -493,7 +517,16 @@ def run_publish(authorization_id: str, repo: Path, safety_tree: str, environ: Ma
     if _SHA_RE.fullmatch(safety_tree) is None:
         raise ExecutionJobError("SAFETY_TREE_INVALID")
     _name, email = _bind_writer(environ[PUBLISHER_WRITER_ENV].strip())
-    validated, receipt = _verified_candidate(authorization_id, environ, ROLE_PUBLISHER)
+    validated, receipt, candidate = _verified_candidate(authorization_id, environ, ROLE_PUBLISHER)
+    # Publish only the tree the issuer recorded from the credential-free validator,
+    # for this exact result; the workflow output is a cross-check, never the proof.
+    recorded_tree = candidate.get("validated_tree")
+    if not isinstance(recorded_tree, str) or _SHA_RE.fullmatch(recorded_tree) is None:
+        raise ExecutionJobError("VALIDATION_ACK_MISSING")
+    if candidate.get("validated_result_sha256") != receipt.result_sha256:
+        raise ExecutionJobError("VALIDATION_ACK_MISBOUND")
+    if recorded_tree != safety_tree:
+        raise ExecutionJobError("SAFETY_TREE_MISMATCH")
     with tempfile.TemporaryDirectory(prefix="hunter-issue-agent-publisher-") as directory:
         key_path = _configure_publication(
             Path(directory),
@@ -506,7 +539,7 @@ def run_publish(authorization_id: str, repo: Path, safety_tree: str, environ: Ma
                 repo,
                 validated=validated,
                 verified_receipt=receipt,
-                safety_tree=safety_tree,
+                safety_tree=recorded_tree,
                 signing_key=str(key_path),
             )
         except ReplacementExecutorError as error:

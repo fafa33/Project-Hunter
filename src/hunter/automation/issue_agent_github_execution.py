@@ -78,6 +78,8 @@ EXECUTION_REQUEST_SCHEMA_VERSION = "hunter-issue-agent-execution-request-v1"
 EXECUTION_HANDOFF_SCHEMA_VERSION = "hunter-issue-agent-execution-handoff-v1"
 EXECUTION_CANDIDATE_SCHEMA_VERSION = "hunter-issue-agent-execution-candidate-v1"
 EXECUTION_RESULT_ACK_SCHEMA_VERSION = "hunter-issue-agent-execution-result-accepted-v1"
+EXECUTION_VALIDATION_ACK_SCHEMA_VERSION = "hunter-issue-agent-execution-validation-accepted-v1"
+_TREE_RE = re.compile(r"[0-9a-f]{40}")
 
 #: The validation-definition identity bound into every validation receipt.
 VALIDATION_DEFINITION = "hunter-issue-agent-replacement-validation:github-hosted-v1"
@@ -336,12 +338,22 @@ def _reject_duplicate_keys(pairs: list[tuple[str, Any]]) -> dict[str, Any]:
     return values
 
 
-def _parse_request(body: bytes, *, expected: set[str]) -> dict[str, Any]:
+def _decode_request(body: bytes) -> dict[str, Any]:
     try:
         decoded = json.loads(body.decode("utf-8"), object_pairs_hook=_reject_duplicate_keys)
     except (UnicodeDecodeError, ValueError):
         raise GitHubExecutionError("execution request must be canonical UTF-8 JSON") from None
-    if not isinstance(decoded, dict) or set(decoded) != expected:
+    if not isinstance(decoded, dict):
+        raise GitHubExecutionError("execution request schema mismatch")
+    return decoded
+
+
+def _parse_request(body: bytes, *, expected: set[str]) -> dict[str, Any]:
+    return _validated_request(_decode_request(body), expected=expected)
+
+
+def _validated_request(decoded: dict[str, Any], *, expected: set[str]) -> dict[str, Any]:
+    if set(decoded) != expected:
         raise GitHubExecutionError("execution request schema mismatch")
     if decoded["schema_version"] != EXECUTION_REQUEST_SCHEMA_VERSION:
         raise GitHubExecutionError("unknown execution request schema version")
@@ -364,6 +376,12 @@ class _Execution:
     handoff_delivered: bool = False
     result_document: str | None = None
     receipt: ReplacementValidationReceipt | None = None
+    #: VALIDATED: the credential-free validator's acknowledgement, bound to this
+    #: run, the exact accepted result digest and the exact candidate tree. Only a
+    #: recorded acknowledgement lets the publisher fetch; a mismatched one locks
+    #: publication out for good.
+    validated_tree: str | None = None
+    validation_refused: bool = False
     failure: BaseException | None = None
     done: threading.Event = field(default_factory=threading.Event)
 
@@ -519,9 +537,15 @@ class GitHubHostedExecutionRuntime:
                 execution.used_roles.add(role)
             elif execution.receipt is None or execution.result_document is None:
                 raise ExecutionNotFoundError("no validated result exists for this execution yet")
+            elif role == ROLE_PUBLISHER and execution.validation_refused:
+                raise ExecutionResultRejectedError("the candidate safety acknowledgement was refused")
+            elif role == ROLE_PUBLISHER and execution.validated_tree is None:
+                # Result acceptance is not validation: the publisher may fetch only
+                # after the credential-free validator recorded its acknowledgement.
+                raise ExecutionBindingError("publication requires the validator's recorded safety acknowledgement")
             else:
                 execution.used_roles.add(role)
-                return {
+                candidate = {
                     "schema_version": EXECUTION_CANDIDATE_SCHEMA_VERSION,
                     "authorization_id": execution.target.authorization_id,
                     "signed_authorization": execution.signed.to_json(),
@@ -529,6 +553,10 @@ class GitHubHostedExecutionRuntime:
                     "validation_receipt": execution.receipt.to_json(),
                     "validation_definition": VALIDATION_DEFINITION,
                 }
+                if role == ROLE_PUBLISHER:
+                    candidate["validated_tree"] = execution.validated_tree
+                    candidate["validated_result_sha256"] = execution.receipt.result_sha256
+                return candidate
         # HANDOFF_IN_FLIGHT: the executor role is consumed, but no result is
         # admissible until the prompt is resolved and the handoff is delivered.
         try:
@@ -556,8 +584,11 @@ class GitHubHostedExecutionRuntime:
         }
 
     def handle_result(self, body: bytes) -> dict[str, Any]:
-        request = _parse_request(
-            body, expected={"schema_version", "authorization_id", "role", "oidc_token", "result_document"}
+        decoded = _decode_request(body)
+        if decoded.get("role") == ROLE_VALIDATOR:
+            return self._handle_validation(decoded)
+        request = _validated_request(
+            decoded, expected={"schema_version", "authorization_id", "role", "oidc_token", "result_document"}
         )
         if request["role"] != ROLE_EXECUTOR:
             raise ExecutionBindingError("only the executor returns a result")
@@ -587,6 +618,35 @@ class GitHubHostedExecutionRuntime:
             "result_sha256": receipt.result_sha256,
         }
 
+    def _handle_validation(self, decoded: dict[str, Any]) -> dict[str, Any]:
+        """Record the credential-free validator's exact-tree safety acknowledgement (single use)."""
+        request = _validated_request(
+            decoded, expected={"schema_version", "authorization_id", "role", "oidc_token", "tree", "result_sha256"}
+        )
+        tree, digest = request["tree"], request["result_sha256"]
+        if not isinstance(tree, str) or _TREE_RE.fullmatch(tree) is None:
+            raise GitHubExecutionError("validation acknowledgement must name an exact candidate tree")
+        if not isinstance(digest, str):
+            raise GitHubExecutionError("validation acknowledgement must name the exact result digest")
+        with self._lock:
+            execution = self._bound(request, ROLE_VALIDATOR)
+            if execution.receipt is None or ROLE_VALIDATOR not in execution.used_roles:
+                raise ExecutionBindingError("a validation acknowledgement requires the validator's own candidate fetch")
+            if execution.validated_tree is not None or execution.validation_refused:
+                raise ExecutionReplayError("this execution already recorded its validation acknowledgement")
+            if ROLE_PUBLISHER in execution.used_roles:
+                raise ExecutionReplayError("the candidate was already released for publication")
+            if digest != execution.receipt.result_sha256:
+                execution.validation_refused = True
+                raise ExecutionResultRejectedError("validation acknowledgement does not bind the accepted result")
+            execution.validated_tree = tree
+        return {
+            "schema_version": EXECUTION_VALIDATION_ACK_SCHEMA_VERSION,
+            "authorization_id": execution.target.authorization_id,
+            "result_sha256": digest,
+            "tree": tree,
+        }
+
     def _fail(self, execution: _Execution, error: BaseException) -> None:
         with self._lock:
             self._fail_locked(execution, error)
@@ -606,6 +666,7 @@ __all__ = [
     "EXECUTION_REQUEST_SCHEMA_VERSION",
     "EXECUTION_RESULT_ACK_SCHEMA_VERSION",
     "EXECUTION_RESULT_PATH",
+    "EXECUTION_VALIDATION_ACK_SCHEMA_VERSION",
     "EXECUTION_ROLES",
     "EXECUTOR_PROVIDER",
     "GITHUB_OIDC_ISSUER",

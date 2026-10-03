@@ -306,6 +306,12 @@ owner applies hunter-agent-execute
   256 KiB, so an oversized prompt or result fails closed.
 - **One Issue, one active Draft PR.** The Draft-PR decision refuses when any Issue Agent
   pull request for the same Issue is open, across all of its authorization branches.
+  PR creation is serialized per Issue (job-level concurrency keyed on the Issue bound
+  from the agent-branch shape), and after a POST the run closes its own PR if a
+  lower-numbered agent PR for the Issue is open, so racing runs converge on one PR.
+- **Validated before published.** The validator records a single-use acknowledgement
+  (exact tree + accepted result digest, same OIDC run) through the result route; the
+  publisher can fetch only after it and publishes exactly the recorded tree.
 
 ### Operator prerequisites for the cutover
 
