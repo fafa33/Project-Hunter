@@ -1637,3 +1637,100 @@ def test_a_rejected_result_persists_and_logs_only_the_fixed_code(
         record.getMessage() + ("\n" + caplog.text if record.exc_info else "") for record in caplog.records
     )
     assert marker not in logged and marker not in caplog.text
+
+
+def _stage_non_utf8_path(workspace: Path, git_dir: Path) -> bytes:
+    """Stage a model-created file whose path is not UTF-8 (as a Linux model could)."""
+    env = {"GIT_CONFIG_GLOBAL": "/dev/null", "GIT_CONFIG_NOSYSTEM": "1", "PATH": "/usr/bin:/bin:/usr/local/bin"}
+    git = ("git", f"--git-dir={git_dir}", f"--work-tree={workspace}")
+    blob = subprocess.run(
+        (*git, "hash-object", "-w", "--stdin"), input=b"hostile\n", env=env, check=True, capture_output=True
+    ).stdout.strip()
+    raw_path = b"docs/SECRET-\xff\xfe-name.md"
+    subprocess.run(
+        (*git, "update-index", "--add", "--cacheinfo", b"100644," + blob + b"," + raw_path), env=env, check=True
+    )
+    # APFS refuses non-UTF-8 file names, so the entry stands in for the file a
+    # Linux model would create; skip-worktree keeps `git add --all` from treating
+    # the absent file as a deletion, exactly as a real file would survive it.
+    subprocess.run((*git, "update-index", "--skip-worktree", raw_path), env=env, check=True)
+    return raw_path
+
+
+def test_a_non_utf8_candidate_path_is_rejected_with_a_fixed_code(tmp_path: Path) -> None:
+    """Copilot r on collect_result: raw path bytes never escape as a UnicodeDecodeError."""
+    workspace, git_dir, base = _workspace(tmp_path)
+    _stage_non_utf8_path(workspace, git_dir)
+    with pytest.raises(driver.ExecutionJobError) as caught:
+        driver.collect_result(workspace, git_dir, authorization_id="a", branch="b", base_sha=base)
+    assert caught.value.code == "UNSUPPORTED_CANDIDATE_PATH" and caught.value.detail == ""
+    assert caught.value.__cause__ is None and caught.value.__suppress_context__
+
+
+def test_the_execute_job_reports_a_bounded_status_for_a_non_utf8_path(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: Any
+) -> None:
+    import hunter.automation.issue_agent_replacement_executor as core
+
+    workspace_holder: dict[str, Any] = {}
+    signed = SignedIssueAgentAuthorization.from_json(_authorization_document())
+    target = derive_execution_target(signed)
+    monkeypatch.setenv("GITHUB_REPOSITORY", REPOSITORY)
+    monkeypatch.setenv(driver.OPENCODE_EXECUTABLE_ENV, "/usr/local/bin/hunter-opencode")
+    monkeypatch.setenv(driver.UNTRUSTED_USER_ENV, "hunter-untrusted")
+    monkeypatch.setenv(driver.MODEL_API_KEY_ENV, "model-key")
+    monkeypatch.setenv(driver.MODEL_API_KEY_NAME_ENV, "GROQ_API_KEY")
+    for name in ("GITHUB_TOKEN", "GH_TOKEN"):
+        monkeypatch.delenv(name, raising=False)
+    monkeypatch.setattr(driver, "require_isolation_user", lambda user: user)
+    monkeypatch.setattr(core, "ISOLATION_ROOT", tmp_path)
+    monkeypatch.setattr(core, "run_privileged", lambda *_a, **_k: None)
+    monkeypatch.setattr(driver, "run_privileged", lambda *_a, **_k: None)
+    monkeypatch.setattr(
+        driver,
+        "_fetch",
+        lambda *_a: {
+            "schema_version": "hunter-issue-agent-execution-handoff-v1",
+            "repository": REPOSITORY,
+            "branch": target.branch,
+            "base_sha": target.base_sha,
+            "exact_prompt": "PROMPT",
+            "authorization_id": target.authorization_id,
+        },
+    )
+
+    def materialize(workspace: Path, git_dir: Path, **_k: Any) -> None:
+        built, built_git, base = _workspace(workspace.parent / "seed")
+        workspace_holder.update(workspace=built, git_dir=built_git, base=base)
+
+    class ModelExit:
+        returncode = 0
+
+    real_run = subprocess.run
+
+    def model_run(argv: Any, *a: Any, **k: Any) -> Any:
+        if "/usr/local/bin/hunter-opencode" not in argv:
+            return real_run(argv, *a, **k)
+        # The "model" creates a file whose path is not UTF-8.
+        _stage_non_utf8_path(workspace_holder["workspace"], workspace_holder["git_dir"])
+        return ModelExit()
+
+    real_collect = driver.collect_result
+    monkeypatch.setattr(driver, "materialize_base", materialize)
+    monkeypatch.setattr(driver.subprocess, "run", model_run)
+    monkeypatch.setattr(
+        driver,
+        "collect_result",
+        lambda *_a, **k: real_collect(
+            workspace_holder["workspace"], workspace_holder["git_dir"], authorization_id=k["authorization_id"],
+            branch=k["branch"], base_sha=workspace_holder["base"],
+        ),
+    )  # fmt: skip
+    monkeypatch.setattr(driver, "post_execution", lambda *_a: pytest.fail("no result may be posted"))
+    monkeypatch.setattr(driver, "request_oidc_token", lambda *_a: pytest.fail("no result token may be minted"))
+    assert driver.main(["execute", "--authorization-id", target.authorization_id]) == 2
+    captured = capsys.readouterr()
+    assert captured.err.strip() == "issue-agent execute: UNSUPPORTED_CANDIDATE_PATH"
+    assert captured.out == ""
+    for leak in ("Traceback", "SECRET", "�", "\\xff", "docs/"):
+        assert leak not in captured.err and leak not in captured.out

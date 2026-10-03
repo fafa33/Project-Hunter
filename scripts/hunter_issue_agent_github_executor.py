@@ -337,7 +337,12 @@ def collect_result(workspace: Path, git_dir: Path, *, authorization_id: str, bra
             # The result schema carries file content only; a deletion, type
             # change or anything else is not expressible and fails closed.
             raise ExecutionJobError("UNSUPPORTED_CANDIDATE_CHANGE", status.decode(errors="replace"))
-        path = raw_path.decode("utf-8")
+        try:
+            path = raw_path.decode("utf-8")
+        except UnicodeDecodeError:
+            # An unrepresentable path cannot be a closed-schema result entry; the
+            # raw hostile bytes are never echoed into logs or the job status.
+            raise ExecutionJobError("UNSUPPORTED_CANDIDATE_PATH") from None
         mode = _git(git_dir, workspace, "ls-files", "--stage", "--", path).decode().split(" ", 1)[0]
         if mode not in ("100644", "100755"):
             raise ExecutionJobError("UNSUPPORTED_CANDIDATE_MODE")

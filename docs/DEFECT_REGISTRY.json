@@ -672,6 +672,16 @@
       "guard": "A rejected result records only the fixed EXECUTOR_RESULT_REJECTED code with fixed text; the validation error is never interpolated into the exception, ledger message, log line or HTTP response.",
       "test": "tests/test_issue_agent_github_execution.py::test_a_rejected_result_persists_and_logs_only_the_fixed_code",
       "status": "guarded"
+    },
+    {
+      "id": "PRH-082",
+      "class": "hostile-path-bytes-escape-bounded-job-error",
+      "source": "PR #558 Copilot review, 2026-10-03 (head 2bcfc0c7, thread PRRT_kwDOTRDHr86orstM): collect_result decoded raw git diff -z path bytes as UTF-8 outside ExecutionJobError, so a model-created non-UTF-8 file name raised UnicodeDecodeError, printed a traceback and never produced the fixed job status.",
+      "classification": "systemic",
+      "guard_boundary": "GitHub-hosted executor result collection",
+      "guard": "A path that is not valid UTF-8 raises the fixed ExecutionJobError UNSUPPORTED_CANDIDATE_PATH with no detail and a suppressed cause, so the job exits with the bounded status and no raw path bytes or traceback reach the log; no result is posted and the issuer reaches its terminal EXECUTOR_RESULT_TIMEOUT.",
+      "test": "tests/test_issue_agent_github_execution.py::test_the_execute_job_reports_a_bounded_status_for_a_non_utf8_path",
+      "status": "guarded"
     }
   ],
   "families": [
