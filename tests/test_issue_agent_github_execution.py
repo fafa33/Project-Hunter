@@ -1515,3 +1515,125 @@ def test_validation_acknowledgement_echoes_no_request_value(tmp_path: Path, edge
     assert status == 200
     assert set(ack) == {"schema_version", "authorization_id", "result_sha256"}
     assert "e" * 40 not in json.dumps(ack)
+
+
+# --- PR #558 Copilot round 6: base on trusted main; fixed rejection detail ---
+
+
+def _remote_with_main_and_unrelated(tmp_path: Path) -> tuple[Path, str, str]:
+    """A bare 'GitHub' remote: main history, plus an unrelated public commit on another branch."""
+    remote, seed = tmp_path / "remote.git", tmp_path / "seed"
+    env = {"GIT_CONFIG_GLOBAL": "/dev/null", "GIT_CONFIG_NOSYSTEM": "1", "PATH": "/usr/bin:/bin:/usr/local/bin"}
+    env.update(GIT_AUTHOR_NAME="t", GIT_AUTHOR_EMAIL="t@e", GIT_COMMITTER_NAME="t", GIT_COMMITTER_EMAIL="t@e")
+
+    def git(cwd: Path, *args: str) -> str:
+        return subprocess.run(
+            ("git", *args), cwd=cwd, env=env, check=True, capture_output=True, text=True
+        ).stdout.strip()
+
+    subprocess.run(("git", "init", "-q", "--bare", str(remote)), env=env, check=True)
+    seed.mkdir()
+    git(seed, "init", "-q", "-b", "main")
+    (seed / "a.txt").write_text("a\n")
+    git(seed, "add", "a.txt")
+    git(seed, "commit", "-q", "-m", "ancestor")
+    ancestor = git(seed, "rev-parse", "HEAD")
+    (seed / "b.txt").write_text("b\n")
+    git(seed, "add", "b.txt")
+    git(seed, "commit", "-q", "-m", "main tip")
+    git(seed, "push", "-q", str(remote), "main")
+    git(seed, "checkout", "-q", "--orphan", "unrelated")
+    (seed / "x.txt").write_text("unrelated\n")
+    git(seed, "add", "x.txt")
+    git(seed, "commit", "-q", "-m", "unrelated public commit")
+    unrelated = git(seed, "rev-parse", "HEAD")
+    git(seed, "push", "-q", str(remote), "unrelated")
+    return remote, ancestor, unrelated
+
+
+def test_signed_base_must_be_an_ancestor_of_trusted_main(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """Copilot r on materialize_base: BASE_NOT_ON_MAIN before any workspace is materialized."""
+    remote, ancestor, unrelated = _remote_with_main_and_unrelated(tmp_path)
+    monkeypatch.setattr(driver, "canonical_remote_url", lambda _repository: str(remote))
+    workspace, git_dir = tmp_path / "ok" / "ws", tmp_path / "ok" / "base.git"
+    driver.materialize_base(workspace, git_dir, repository=REPOSITORY, base_sha=ancestor)
+    assert (workspace / "a.txt").read_text() == "a\n" and not (workspace / "b.txt").exists()
+    for index, base in enumerate((unrelated, "0" * 40)):
+        bad_ws, bad_git = tmp_path / f"bad{index}" / "ws", tmp_path / f"bad{index}" / "base.git"
+        with pytest.raises(driver.ExecutionJobError) as caught:
+            driver.materialize_base(bad_ws, bad_git, repository=REPOSITORY, base_sha=base)
+        assert caught.value.code == "BASE_NOT_ON_MAIN"
+        # Nothing was checked out from the rejected commit.
+        assert not any(bad_ws.iterdir())
+
+
+def test_a_base_not_on_main_never_runs_a_model_or_returns_a_result(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    import hunter.automation.issue_agent_replacement_executor as core
+
+    signed = SignedIssueAgentAuthorization.from_json(_authorization_document())
+    target = derive_execution_target(signed)
+    environ = {
+        "PATH": "/usr/bin",
+        "GITHUB_REPOSITORY": REPOSITORY,
+        driver.OPENCODE_EXECUTABLE_ENV: "/usr/local/bin/hunter-opencode",
+        driver.UNTRUSTED_USER_ENV: "hunter-untrusted",
+        driver.MODEL_API_KEY_ENV: "model-key",
+        driver.MODEL_API_KEY_NAME_ENV: "GROQ_API_KEY",
+    }
+    monkeypatch.setattr(driver, "require_isolation_user", lambda user: user)
+    monkeypatch.setattr(core, "ISOLATION_ROOT", tmp_path)
+    monkeypatch.setattr(core, "run_privileged", lambda *_a, **_k: None)
+    monkeypatch.setattr(driver, "run_privileged", lambda *_a, **_k: None)
+    monkeypatch.setattr(
+        driver,
+        "_fetch",
+        lambda *_a: {
+            "schema_version": "hunter-issue-agent-execution-handoff-v1",
+            "repository": REPOSITORY,
+            "branch": target.branch,
+            "base_sha": target.base_sha,
+            "exact_prompt": "PROMPT",
+            "authorization_id": target.authorization_id,
+        },
+    )
+
+    def not_on_main(*_a: Any, **_k: Any) -> None:
+        raise driver.ExecutionJobError("BASE_NOT_ON_MAIN")
+
+    monkeypatch.setattr(driver, "materialize_base", not_on_main)
+    monkeypatch.setattr(driver.subprocess, "run", lambda *_a, **_k: pytest.fail("no model may run"))
+    monkeypatch.setattr(driver, "post_execution", lambda *_a: pytest.fail("no result may be returned"))
+    monkeypatch.setattr(driver, "request_oidc_token", lambda *_a: pytest.fail("no result token may be minted"))
+    with pytest.raises(driver.ExecutionJobError) as caught:
+        driver.run_execute(target.authorization_id, environ)
+    assert caught.value.code == "BASE_NOT_ON_MAIN"
+
+
+def test_a_rejected_result_persists_and_logs_only_the_fixed_code(
+    tmp_path: Path, edge: Any, caplog: pytest.LogCaptureFixture
+) -> None:
+    """Copilot r on handle_result: hostile result text never reaches response, ledger or logs."""
+    import logging
+    import time
+
+    marker = "SECRET-HOSTILE-MARKER-7f3a"
+    deployment = Deployment(tmp_path)
+    services = deployment.services(fallback=_runtime(deployment))
+    hook = edge(services)
+    authorization_id = _accepted(hook, _authorization_document())["authorization_id"]
+    signed = SignedIssueAgentAuthorization.from_json(_authorization_document())
+    assert hook.fetch(authorization_id, "executor")[0] == 200
+    caplog.set_level(logging.DEBUG)
+    status, body = hook.result(authorization_id, _result(signed, path=f".github/{marker}/x.yml"))
+    assert status == 422
+    assert marker not in json.dumps(body) and body["error"] == "EXECUTOR_RESULT_REJECTED"
+    failed = _wait_for_ledger_state(services.ledger, authorization_id, "FAILED")
+    assert failed.failure_code == "EXECUTOR_RESULT_REJECTED"
+    assert marker not in (failed.failure_message or "") and ".github" not in (failed.failure_message or "")
+    time.sleep(0.2)  # let the background worker's exception logging land
+    logged = "\n".join(
+        record.getMessage() + ("\n" + caplog.text if record.exc_info else "") for record in caplog.records
+    )
+    assert marker not in logged and marker not in caplog.text

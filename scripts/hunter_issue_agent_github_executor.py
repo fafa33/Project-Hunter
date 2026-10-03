@@ -91,6 +91,7 @@ PUBLISHER_PUSH_TOKEN_ENV = "HUNTER_ISSUE_AGENT_PUBLISHER_PUSH_TOKEN"
 PUBLISHER_WRITER_ENV = "HUNTER_ISSUE_AGENT_PUBLISHER_WRITER"
 #: The dedicated unprivileged OS user that untrusted model and candidate code run as.
 UNTRUSTED_USER_ENV = "HUNTER_ISSUE_AGENT_UNTRUSTED_USER"
+_MAIN_TRACKING_REF = "refs/remotes/origin/main"
 CODE_WRITE_POLICY = Path(__file__).resolve().parents[1] / "docs" / "CODE_WRITE_POLICY.json"
 
 #: The issuer edge bounds bodies at 256 KiB; leave room for the OIDC token.
@@ -234,21 +235,52 @@ def _git(git_dir: Path, work_tree: Path, *args: str) -> bytes:
     return completed.stdout
 
 
+def canonical_remote_url(repository: str) -> str:
+    """The credential-free canonical GitHub remote derived from the signed repository."""
+    return f"https://github.com/{repository}.git"
+
+
+def _git_returncode(git_dir: Path, work_tree: Path, *args: str) -> int:
+    """Run trusted-metadata Git and return its exit status instead of raising."""
+    env = {
+        "PATH": os.environ.get("PATH", "/usr/bin:/bin"),
+        "HOME": str(git_dir),
+        "GIT_CONFIG_GLOBAL": os.devnull,
+        "GIT_CONFIG_NOSYSTEM": "1",
+        "GIT_TERMINAL_PROMPT": "0",
+    }
+    command = (
+        "git", f"--git-dir={git_dir}", f"--work-tree={work_tree}",
+        "-c", "core.hooksPath=/dev/null", "-c", "core.fsmonitor=false", *args,
+    )  # fmt: skip
+    return subprocess.run(command, cwd=work_tree, env=env, capture_output=True, check=False, timeout=300).returncode
+
+
 def materialize_base(workspace: Path, git_dir: Path, *, repository: str, base_sha: str) -> None:
-    """A credential-free workspace at exactly the signed base.
+    """A credential-free workspace at exactly the signed base, proven to be on trusted main.
 
     The Git metadata lives in ``git_dir`` outside the workspace, so nothing the
     model writes inside the workspace (including a planted ``.git``) can
     configure or execute anything when the trusted process collects the result.
+    As in the execution contract (failure state F5, ``BASE_NOT_ON_MAIN``), the
+    signed base must be a commit reachable from the canonical remote's ``main``
+    before anything is checked out, so no model ever runs on an unrelated commit.
     """
     if _SHA_RE.fullmatch(base_sha) is None or re.fullmatch(r"[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+", repository) is None:
         raise ExecutionJobError("HANDOFF_TARGET_INVALID")
     workspace.mkdir(parents=True)
     _git(git_dir, workspace, "init", "--quiet")
     git_dir.chmod(0o700)
-    url = f"https://github.com/{repository}.git"
-    _git(git_dir, workspace, "fetch", "--quiet", "--depth=1", "--no-tags", url, base_sha)
-    _git(git_dir, workspace, "checkout", "--quiet", "--detach", "FETCH_HEAD")
+    _git(git_dir, workspace, "remote", "add", "origin", canonical_remote_url(repository))
+    _git(git_dir, workspace, "fetch", "--quiet", "--no-tags", "origin", f"+refs/heads/main:{_MAIN_TRACKING_REF}")
+    if _git_returncode(git_dir, workspace, "cat-file", "-e", f"{base_sha}^{{commit}}") != 0:
+        raise ExecutionJobError("BASE_NOT_ON_MAIN")
+    ancestry = _git_returncode(git_dir, workspace, "merge-base", "--is-ancestor", base_sha, _MAIN_TRACKING_REF)
+    if ancestry == 1:
+        raise ExecutionJobError("BASE_NOT_ON_MAIN")
+    if ancestry != 0:
+        raise ExecutionJobError("WORKSPACE_GIT_FAILED", "merge-base")
+    _git(git_dir, workspace, "checkout", "--quiet", "--detach", base_sha)
     if _git(git_dir, workspace, "rev-parse", "HEAD").decode().strip() != base_sha:
         raise ExecutionJobError("WORKSPACE_NOT_AT_BASE")
 

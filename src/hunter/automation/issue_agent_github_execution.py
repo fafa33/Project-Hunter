@@ -606,9 +606,17 @@ class GitHubHostedExecutionRuntime:
                     document, signed_authorization=execution.signed, validation_definition=VALIDATION_DEFINITION
                 )
                 self._results.record_validated(receipt)
-            except ReplacementExecutorError as error:
-                self._fail_locked(execution, IssueAgentRemoteExecutionError("EXECUTOR_RESULT_REJECTED", str(error)))
-                raise ExecutionResultRejectedError(f"hostile result rejected: {error}") from None
+            except ReplacementExecutorError:
+                # The validation error quotes hostile result content (paths, field
+                # values), so it is never persisted, logged or returned: the ledger,
+                # the issuer log and the response carry only the fixed code.
+                self._fail_locked(
+                    execution,
+                    IssueAgentRemoteExecutionError(
+                        "EXECUTOR_RESULT_REJECTED", "hostile result failed closed-schema validation"
+                    ),
+                )
+                raise ExecutionResultRejectedError("EXECUTOR_RESULT_REJECTED") from None
             execution.result_document = document
             execution.receipt = receipt
             execution.done.set()

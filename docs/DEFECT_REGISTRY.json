@@ -652,6 +652,26 @@
       "guard": "The OIDC response is read with one extra byte and refused when it exceeds the bound; decode failures map to the fixed OIDC_UNAVAILABLE code.",
       "test": "tests/test_issue_agent_github_execution.py::test_oidc_token_response_bound_and_encoding_fail_closed",
       "status": "guarded"
+    },
+    {
+      "id": "PRH-080",
+      "class": "hosted-executor-base-not-proven-on-main",
+      "source": "PR #558 Copilot review, 2026-10-03 (head 03f3e4f3, thread PRRT_kwDOTRDHr86oqs8M): the GitHub-hosted executor fetched and checked out the signed base_sha without proving it is reachable from trusted main, although the execution contract defines non-main bases as BASE_NOT_ON_MAIN and the legacy workspace enforced it.",
+      "classification": "systemic",
+      "guard_boundary": "GitHub-hosted executor workspace materialization",
+      "guard": "materialize_base binds origin to the canonical remote derived from the signed repository, fetches trusted main into refs/remotes/origin/main, and raises BASE_NOT_ON_MAIN unless the signed base is a commit there and an ancestor of main, before checking anything out or running a model.",
+      "test": "tests/test_issue_agent_github_execution.py::test_signed_base_must_be_an_ancestor_of_trusted_main",
+      "status": "guarded"
+    },
+    {
+      "id": "PRH-081",
+      "class": "hostile-validation-error-persisted-and-logged",
+      "source": "PR #558 Copilot review, 2026-10-03 (head 03f3e4f3, thread PRRT_kwDOTRDHr86oqs8X): a rejected executor result's validation error text, which quotes hostile candidate paths, was embedded in IssueAgentRemoteExecutionError, persisted as the ledger failure message, logged by the issuer and returned in the response.",
+      "classification": "systemic",
+      "guard_boundary": "GitHubHostedExecutionRuntime result rejection",
+      "guard": "A rejected result records only the fixed EXECUTOR_RESULT_REJECTED code with fixed text; the validation error is never interpolated into the exception, ledger message, log line or HTTP response.",
+      "test": "tests/test_issue_agent_github_execution.py::test_a_rejected_result_persists_and_logs_only_the_fixed_code",
+      "status": "guarded"
     }
   ],
   "families": [
@@ -1598,7 +1618,9 @@
         "tests/test_issue_agent_github_execution.py::test_oidc_identity_must_be_the_trusted_trigger_run",
         "tests/test_issue_agent_github_execution.py::test_a_direct_workflow_token_without_job_workflow_ref_is_accepted",
         "tests/test_issue_agent_github_execution.py::test_a_present_job_workflow_ref_must_name_the_trusted_workflow",
-        "tests/test_issue_agent_github_execution.py::test_every_job_checkout_is_pinned_to_one_immutable_workflow_sha"
+        "tests/test_issue_agent_github_execution.py::test_every_job_checkout_is_pinned_to_one_immutable_workflow_sha",
+        "tests/test_issue_agent_github_execution.py::test_signed_base_must_be_an_ancestor_of_trusted_main",
+        "tests/test_issue_agent_github_execution.py::test_a_base_not_on_main_never_runs_a_model_or_returns_a_result"
       ],
       "lifecycle": "locally-enforced",
       "sources": [
