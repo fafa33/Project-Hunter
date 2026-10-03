@@ -21,6 +21,8 @@ blocks valid work is itself a defect.
 from __future__ import annotations
 
 import json
+import os
+import subprocess
 from pathlib import Path
 from typing import Any
 
@@ -82,6 +84,10 @@ def authenticated_review_observation(monkeypatch):
 # --------------------------------------------------------------------------
 
 
+CLAUDE_KEY = "SHA256:32dP45eSMmVSt/G/CGvcxl/P+MO3Nwj9xeTh/GSA2wc"
+OWNER_KEY = "SHA256:Yee9tbonym7Jvs2UbjpudVIRkv3aF1tcFlK240pXuBo"
+
+
 def _policy(**overrides) -> dict:
     binding = {
         "match": provenance.EXACT_MATCH_MODE,
@@ -103,6 +109,11 @@ def _policy(**overrides) -> dict:
                 "canonical_git_email": "34549283+fafa33@users.noreply.github.com",
             },
         ],
+        "signing_key_bindings": {
+            "purpose": "Bind the key that signed a commit to the writer that commit claims.",
+            "require_key_bound_to_resolved_writer": False,
+            "bindings": {"claude": [CLAUDE_KEY], "fafa33": [OWNER_KEY]},
+        },
     }
     binding.update(overrides)
     return {provenance.BINDING_FIELD: binding}
@@ -114,14 +125,40 @@ def _binding(**overrides) -> provenance.WriterIdentityBinding:
     return parsed
 
 
+def _key_enforced_binding(**overrides) -> provenance.WriterIdentityBinding:
+    document = _policy(**overrides)
+    section = document[provenance.BINDING_FIELD][provenance.SIGNING_KEY_BINDINGS_FIELD]
+    section["require_key_bound_to_resolved_writer"] = True
+    parsed, error = provenance.parse_binding(document)
+    assert parsed is not None, error
+    return parsed
+
+
 def _commit(
     sha: str = HEAD,
     *,
     author: tuple[str, str] = ("Claude", "noreply@anthropic.com"),
     committer: tuple[str, str] | None = None,
+    parents: str = "",
+    signing_key: str = "",
+    recovery_declaration: str = "",
+    signature_status: str | None = None,
 ) -> provenance.CommitProvenance:
+    """A synthetic commit record; a signed one defaults to a verified signature."""
     committer = committer if committer is not None else author
-    return provenance.CommitProvenance(sha, author[0], author[1], committer[0], committer[1])
+    if signature_status is None:
+        signature_status = "U" if signing_key else ""
+    return provenance.CommitProvenance(
+        sha,
+        author[0],
+        author[1],
+        committer[0],
+        committer[1],
+        parents=parents,
+        signing_key=signing_key,
+        recovery_declaration=recovery_declaration,
+        signature_status=signature_status,
+    )
 
 
 def test_agent_committer_with_a_correct_tree_is_rejected_before_any_push() -> None:
@@ -258,6 +295,49 @@ def test_unreadable_commit_metadata_fails_closed() -> None:
         provenance.parse_commit_records("deadbeef\x1fonly\x1fthree\x1e")
 
 
+_RECORD_FIELDS = (
+    "deadbeef",
+    "Claude",
+    "noreply@anthropic.com",
+    "Claude",
+    "noreply@anthropic.com",
+    "cafe",
+    CLAUDE_KEY,
+    "U",
+)
+
+
+def test_a_record_with_exactly_the_requested_fields_parses() -> None:
+    (commit,) = provenance.parse_commit_records("\x1f".join(_RECORD_FIELDS) + "\x1e")
+
+    assert (commit.parents, commit.signing_key, commit.signature_status) == ("cafe", CLAUDE_KEY, "U")
+
+
+@pytest.mark.parametrize(
+    "fields",
+    (
+        _RECORD_FIELDS[:5],  # the old identity-only shape: no key or status to bind
+        _RECORD_FIELDS[:7],  # key without its verification status
+        _RECORD_FIELDS + ("extra",),  # a split or drifted record
+    ),
+    ids=("five", "seven", "nine"),
+)
+def test_a_record_with_any_other_field_count_fails_closed(fields: tuple[str, ...]) -> None:
+    with pytest.raises(provenance.GitEvidenceUnavailable):
+        provenance.parse_commit_records("\x1f".join(fields) + "\x1e")
+
+
+@pytest.mark.parametrize("status", ("B", "X", "Y", "R", "E", "N", ""))
+def test_a_bound_key_on_a_signature_that_did_not_verify_binds_nothing(status: str) -> None:
+    """``%GK`` names a key; only ``%G?`` says the signature over this commit is good."""
+    verdict = provenance.evaluate_range(
+        _key_enforced_binding(), (_commit(signing_key=CLAUDE_KEY, signature_status=status),)
+    )
+
+    assert verdict.ok is False
+    assert "did not verify" in verdict.reason
+
+
 def test_the_repository_binding_names_the_identity_an_agent_must_configure() -> None:
     """The identity is discoverable from policy before the first commit exists."""
     binding, error = provenance.load_binding()
@@ -267,6 +347,1013 @@ def test_the_repository_binding_names_the_identity_an_agent_must_configure() -> 
     assert identity is not None
     assert identity.canonical_name and identity.canonical_email
     assert provenance.remediation(binding).count("scripts/hunter_writer_provenance.py") == 1
+
+
+# --------------------------------------------------------------------------
+# Signing-key identity binding (DFF-010, PR #535 follow-on)
+# --------------------------------------------------------------------------
+#
+# PR #535 was admitted locally and rejected by trusted hosted governance. Its
+# last two commits were authored and committed as `Claude
+# <noreply@anthropic.com>` but signed with the repository owner's SSH key, so
+# GitHub resolved the key against the claimed committer, found no registration
+# for `claude`, and reported `reason=unknown_key`. Local pre-push read only the
+# author/committer headers, which are caller-chosen strings, so the range
+# passed. The invariant was enforced as two halves at two boundaries and nothing
+# reconciled them.
+#
+# The reconciliation binds the key that actually signed the commit -- read from
+# the commit object itself via %GK -- to the writer its headers claim. That makes
+# the local verdict the same verdict the hosted authority reaches, and moves it
+# before publication instead of after it.
+
+OWNER = ("Farhad5778", "34549283+fafa33@users.noreply.github.com")
+
+
+def test_the_pr_535_identity_key_mismatch_is_refused_locally() -> None:
+    """The exact live defect: claude's identity, the owner's signing key."""
+
+    verdict = provenance.evaluate_range(
+        _key_enforced_binding(),
+        (_commit(sha="a" * 40, signing_key=OWNER_KEY),),
+    )
+
+    assert verdict.ok is False
+    assert "claude" in verdict.reason
+    assert OWNER_KEY in verdict.reason
+    assert "unknown_key" in verdict.reason
+
+
+def test_the_canonically_valid_equivalent_is_still_admitted() -> None:
+    """A guard that blocks valid work is itself a defect."""
+
+    verdict = provenance.evaluate_range(
+        _key_enforced_binding(),
+        (_commit(sha="a" * 40, signing_key=CLAUDE_KEY),),
+    )
+
+    assert verdict.ok is True
+
+
+def test_the_owner_key_may_not_stand_in_for_the_owner_under_a_split_identity() -> None:
+    """Signing with the owner's key does not make an agent's headers true."""
+
+    verdict = provenance.evaluate_range(
+        _key_enforced_binding(),
+        (_commit(sha="a" * 40, signing_key=OWNER_KEY, committer=OWNER),),
+    )
+
+    assert verdict.ok is False
+
+
+def test_an_unsigned_commit_is_refused_when_key_binding_is_required() -> None:
+    """No key means nothing binds the claimed identity, so it is not clean."""
+
+    verdict = provenance.evaluate_range(_key_enforced_binding(), (_commit(sha="a" * 40, signing_key=""),))
+
+    assert verdict.ok is False
+    assert "no readable SSH signing key" in verdict.reason
+
+
+def test_a_key_outside_the_bound_set_is_refused_even_when_well_formed() -> None:
+    """An unknown key fails closed rather than being treated as close enough."""
+
+    unknown = "SHA256:" + "A" * 43
+
+    verdict = provenance.evaluate_range(_key_enforced_binding(), (_commit(sha="a" * 40, signing_key=unknown),))
+
+    assert verdict.ok is False
+    assert unknown in verdict.reason
+
+
+def _trusted_base_repository(tmp_path: Path, base_keys: dict[str, list[str]] | None) -> tuple[Path, str]:
+    """A repo whose ``origin/main`` commits a policy, then a candidate that edits it.
+
+    The candidate commit claims Claude, is signed with a fresh key, and rebinds
+    ``claude`` to that key in its own copy of the policy. ``base_keys=None``
+    writes a base policy from before signing-key bindings existed.
+    """
+
+    repo, fingerprint, _base, _middle, _head = _signed_repository(tmp_path)
+
+    def git(*args: str) -> str:
+        return subprocess.run(("git", *args), cwd=repo, check=True, capture_output=True, text=True).stdout.strip()
+
+    policy = json.loads((ROOT / "docs" / "CODE_WRITE_POLICY.json").read_text(encoding="utf-8"))
+    binding = policy[provenance.BINDING_FIELD]
+    if base_keys is None:
+        binding.pop(provenance.SIGNING_KEY_BINDINGS_FIELD)
+    else:
+        binding[provenance.SIGNING_KEY_BINDINGS_FIELD]["bindings"] = {
+            login: [key.replace("FRESH", fingerprint) for key in keys] for login, keys in base_keys.items()
+        }
+    target = repo / provenance.CODE_WRITE_POLICY_RELATIVE_PATH
+    target.parent.mkdir(parents=True, exist_ok=True)
+    target.write_text(json.dumps(policy), encoding="utf-8")
+    git("add", "-A")
+    git("commit", "-q", "-S", "-m", "trusted base policy")
+    # A real server: the trusted tip is what it advertises, not a local cache.
+    server = tmp_path / "server.git"
+    subprocess.run(("git", "init", "-q", "--bare", str(server)), check=True)
+    git("remote", "add", "origin", str(server))
+    git("push", "-q", "origin", "HEAD:refs/heads/main")
+
+    candidate = json.loads(json.dumps(policy))
+    candidate[provenance.BINDING_FIELD].setdefault(
+        provenance.SIGNING_KEY_BINDINGS_FIELD,
+        json.loads((ROOT / "docs" / "CODE_WRITE_POLICY.json").read_text(encoding="utf-8"))[provenance.BINDING_FIELD][
+            provenance.SIGNING_KEY_BINDINGS_FIELD
+        ],
+    )["bindings"]["claude"] = [fingerprint]
+    target.write_text(json.dumps(candidate), encoding="utf-8")
+    git("add", "-A")
+    git("commit", "-q", "--allow-empty", "-S", "-m", "candidate rebinds claude to its own key")
+    return repo, fingerprint
+
+
+@pytest.fixture
+def _hosted_git(monkeypatch):
+    monkeypatch.setenv("GIT_CONFIG_GLOBAL", os.devnull)
+    monkeypatch.setenv("GIT_CONFIG_NOSYSTEM", "1")
+
+
+def test_a_candidate_cannot_bind_its_own_signing_key(tmp_path, _hosted_git, monkeypatch) -> None:
+    """Codex P1: the range is judged by the trusted base's bindings, not the candidate's edit."""
+    repo, fingerprint = _trusted_base_repository(tmp_path, {"claude": [CLAUDE_KEY], "fafa33": [OWNER_KEY]})
+    # As in a real pre-push, the checked-out policy file is the candidate's own.
+    monkeypatch.setattr(provenance, "CODE_WRITE_POLICY_PATH", repo / provenance.CODE_WRITE_POLICY_RELATIVE_PATH)
+
+    problem = provenance.check_range("HEAD", cwd=repo)
+
+    assert problem is not None
+    assert fingerprint in problem and "not bound" in problem
+
+
+def test_a_key_the_trusted_base_binds_is_admitted(tmp_path, _hosted_git) -> None:
+    """The paired positive: the same commits pass when the trusted base binds that key."""
+    repo, _fingerprint = _trusted_base_repository(tmp_path, {"claude": ["FRESH"], "fafa33": [OWNER_KEY]})
+
+    assert provenance.check_range("HEAD", cwd=repo) is None
+
+
+def test_a_base_that_predates_key_binding_is_judged_by_its_own_regime(tmp_path, _hosted_git) -> None:
+    """Bootstrap: an absent section at the base binds no keys; headers are still bound."""
+    repo, _fingerprint = _trusted_base_repository(tmp_path, None)
+
+    assert provenance.check_range("HEAD", cwd=repo) is None
+    binding, error = provenance.load_trusted_binding("origin/main", cwd=repo)
+    assert binding is not None, error
+    assert binding.require_key_bound_to_writer is False
+
+
+@pytest.mark.parametrize(
+    "mutate",
+    [
+        lambda section: section.update(declaration_schema=""),
+        lambda section: section.update(declaration_trailer=""),
+        lambda section: section.pop("enabled"),
+    ],
+    ids=("bad-schema", "bad-trailer", "enabled-missing"),
+)
+def test_a_declared_but_malformed_recovery_grant_fails_closed(mutate) -> None:
+    """Copilot: a broken privilege section must not silently degrade to "no recovery"."""
+    policy = json.loads((ROOT / "docs" / "CODE_WRITE_POLICY.json").read_text(encoding="utf-8"))
+    mutate(policy[provenance.BINDING_FIELD][provenance.OWNER_RECOVERY_FIELD])
+
+    parsed, error = provenance.parse_binding(policy)
+
+    assert parsed is None
+    assert provenance.OWNER_RECOVERY_FIELD in error
+
+
+def test_an_absent_or_disabled_recovery_grant_is_still_no_recovery() -> None:
+    """The paired positive: no grant, or one switched off, grants nothing and parses."""
+    absent, error = provenance.parse_binding(_policy())
+    assert absent is not None and absent.owner_recovery is None, error
+
+    policy = json.loads((ROOT / "docs" / "CODE_WRITE_POLICY.json").read_text(encoding="utf-8"))
+    policy[provenance.BINDING_FIELD][provenance.OWNER_RECOVERY_FIELD]["enabled"] = False
+    disabled, error = provenance.parse_binding(policy)
+    assert disabled is not None and disabled.owner_recovery is None, error
+
+
+def test_a_branch_forked_before_key_binding_meets_the_current_trusted_tip(tmp_path, _hosted_git) -> None:
+    """Codex P1: authority is the current origin/main tip, not the historical fork point.
+
+    The candidate forks from a base whose policy predates key binding; main
+    then advances to a policy that binds Claude's real key. The candidate's
+    fresh key must be refused, as hosted governance would refuse it.
+    """
+    repo, fingerprint = _trusted_base_repository(tmp_path, None)
+
+    def git(*args: str) -> str:
+        return subprocess.run(("git", *args), cwd=repo, check=True, capture_output=True, text=True).stdout.strip()
+
+    old_base = git("rev-parse", "origin/main")
+    candidate = git("rev-parse", "HEAD")
+    git("checkout", "-q", "-b", "advanced-main", old_base)
+    policy = json.loads((ROOT / "docs" / "CODE_WRITE_POLICY.json").read_text(encoding="utf-8"))
+    target = repo / provenance.CODE_WRITE_POLICY_RELATIVE_PATH
+    target.write_text(json.dumps(policy), encoding="utf-8")
+    git("add", "-A")
+    git("commit", "-q", "-S", "-m", "main adopts signing-key bindings")
+    git("push", "-q", "origin", "HEAD:refs/heads/main")
+    git("checkout", "-q", candidate)
+
+    problem = provenance.check_range(candidate, cwd=repo)
+
+    assert problem is not None
+    assert fingerprint in problem and "not bound" in problem
+
+
+def _git_in(repo: Path):
+    def git(*args: str) -> str:
+        return subprocess.run(("git", *args), cwd=repo, check=True, capture_output=True, text=True).stdout.strip()
+
+    return git
+
+
+def test_a_stale_cached_trusted_tip_fails_closed(tmp_path, _hosted_git) -> None:
+    """Codex/Copilot: main rotated the key on the server; this clone has not fetched.
+
+    The cached ``origin/main`` still holds the old policy that would bind the
+    candidate's key, so trusting the cache would pass locally what hosted
+    governance rejects.
+    """
+    repo, fingerprint = _trusted_base_repository(tmp_path, {"claude": ["FRESH"], "fafa33": [OWNER_KEY]})
+    git = _git_in(repo)
+    stale = git("rev-parse", "origin/main")
+    candidate = git("rev-parse", "HEAD")
+    git("checkout", "-q", "-b", "rotation", stale)
+    policy = json.loads((ROOT / "docs" / "CODE_WRITE_POLICY.json").read_text(encoding="utf-8"))
+    (repo / provenance.CODE_WRITE_POLICY_RELATIVE_PATH).write_text(json.dumps(policy), encoding="utf-8")
+    git("commit", "-q", "-a", "-S", "-m", "main rotates claude's key away from the candidate's")
+    git("push", "-q", "origin", "HEAD:refs/heads/main")
+    git("update-ref", "refs/remotes/origin/main", stale)  # this clone never fetched the rotation
+    git("checkout", "-q", candidate)
+
+    problem = provenance.check_range(candidate, cwd=repo)
+
+    assert problem is not None
+    assert "is not the server's current tip" in problem and "git fetch origin main" in problem
+    git("fetch", "-q", "origin")
+    fetched = provenance.check_range(candidate, cwd=repo)
+    assert fetched is not None and fingerprint in fetched, "after fetching, the rotated binding refuses the key"
+
+
+def test_an_unreachable_trusted_server_fails_closed(tmp_path, _hosted_git) -> None:
+    repo, _fingerprint = _trusted_base_repository(tmp_path, {"claude": ["FRESH"], "fafa33": [OWNER_KEY]})
+    _git_in(repo)("remote", "set-url", "origin", str(tmp_path / "gone.git"))
+
+    problem = provenance.check_range("HEAD", cwd=repo)
+
+    assert problem is not None and "freshness" in problem
+
+
+def test_a_fork_clone_reads_authority_from_upstream(tmp_path, _hosted_git) -> None:
+    """Codex P1: with ``origin`` as the contributor's fork, authority is ``upstream``.
+
+    The fork's ``main`` binds the candidate's key; canonical ``upstream/main``
+    does not. Reading the fork would admit what canonical governance rejects.
+    """
+    repo, fingerprint = _trusted_base_repository(tmp_path, {"claude": [CLAUDE_KEY], "fafa33": [OWNER_KEY]})
+    git = _git_in(repo)
+    git("remote", "rename", "origin", "upstream")
+    git("fetch", "-q", "upstream")
+    fork = tmp_path / "fork.git"
+    subprocess.run(("git", "init", "-q", "--bare", str(fork)), check=True)
+    git("remote", "add", "origin", str(fork))
+    git("push", "-q", "origin", "HEAD:refs/heads/main")  # the fork's main carries the candidate's own policy
+    git("commit", "-q", "--allow-empty", "-S", "-m", "further candidate work signed with the same key")
+
+    assert provenance.trusted_remote(cwd=repo) == "upstream"
+    problem = provenance.check_range("HEAD", cwd=repo)
+
+    assert problem is not None and fingerprint in problem
+    # Judged by the fork's policy instead, the same commit would be admitted.
+    assert provenance.check_range("HEAD", remote="origin", cwd=repo) is None
+
+
+def test_a_malformed_key_section_at_the_base_still_fails_closed() -> None:
+    document = _policy()
+    document[provenance.BINDING_FIELD][provenance.SIGNING_KEY_BINDINGS_FIELD] = "not an object"
+
+    parsed, _error = provenance.parse_binding(document, predates_key_binding=True)
+
+    assert parsed is None
+
+
+def test_a_signing_key_bound_to_two_writers_fails_closed() -> None:
+    """One key is one GitHub account; sharing it would let a commit claim either writer."""
+    document = _policy()
+    document[provenance.BINDING_FIELD][provenance.SIGNING_KEY_BINDINGS_FIELD]["bindings"] = {
+        "claude": [CLAUDE_KEY, OWNER_KEY],
+        "fafa33": [OWNER_KEY],
+    }
+
+    parsed, error = provenance.parse_binding(document)
+
+    assert parsed is None
+    assert "may identify only one writer" in error
+
+
+def test_a_malformed_fingerprint_in_policy_fails_closed() -> None:
+    """A truncated or wildcard binding would admit any key sharing a prefix."""
+
+    document = _policy()
+    document[provenance.BINDING_FIELD][provenance.SIGNING_KEY_BINDINGS_FIELD]["bindings"]["claude"] = ["SHA256:32dP45"]
+
+    parsed, error = provenance.parse_binding(document)
+
+    assert parsed is None
+    assert "fingerprint" in error
+
+
+def test_a_key_bound_to_a_login_no_identity_binds_fails_closed() -> None:
+    """A second, silent allowlist sitting beside the identity binding."""
+
+    document = _policy()
+    document[provenance.BINDING_FIELD][provenance.SIGNING_KEY_BINDINGS_FIELD]["bindings"]["intruder"] = [
+        "SHA256:" + "B" * 43
+    ]
+
+    parsed, error = provenance.parse_binding(document)
+
+    assert parsed is None
+    assert "intruder" in error
+
+
+def test_the_repository_policy_switches_key_binding_on_for_every_bound_writer() -> None:
+    """The real policy, not a fixture: every writer has exactly one bound key."""
+
+    binding, error = provenance.load_binding()
+
+    assert binding is not None, error
+    assert binding.require_key_bound_to_writer is True
+    assert binding.owner_recovery is not None
+    for identity in binding.identities:
+        assert identity.signing_keys, f"{identity.login} has no bound signing key"
+        assert all(provenance.SSH_KEY_FINGERPRINT.match(key) for key in identity.signing_keys)
+
+
+def test_the_repository_policy_bounds_recovery_to_the_repository_owner(monkeypatch) -> None:
+    """Recovery is a privilege grant, so its shape is checked, not just present."""
+
+    monkeypatch.setenv("GITHUB_REPOSITORY", "fafa33/Project-Hunter")
+    policy = json.loads((ROOT / "docs" / "CODE_WRITE_POLICY.json").read_text(encoding="utf-8"))
+    errors = prevention._validate_owner_recovery(policy, provenance.load_binding()[0])
+
+    assert errors == []
+
+
+@pytest.mark.parametrize(
+    ("mutate", "expect"),
+    [
+        (lambda section: section.update(max_boundaries_per_range=2), "exactly 1"),
+        (lambda section: section.update(enabled=False), "is unusable or absent"),
+        (lambda section: section.update(declaration_trailer=""), "declaration_trailer must be a non-empty string"),
+        (lambda section: section["required_boundary_properties"].update(unknown_signing_key_refused=False), "true"),
+        (lambda section: section["required_boundary_properties"].pop("previous_epoch_not_reattributed"), "missing"),
+        (
+            lambda section: section.update(forbidden=[f for f in section["forbidden"] if f != "agent_to_agent"]),
+            "agent_to_agent",
+        ),
+    ],
+)
+def test_weakening_the_recovery_grant_is_a_detectable_policy_change(mutate, expect) -> None:
+    policy = json.loads((ROOT / "docs" / "CODE_WRITE_POLICY.json").read_text(encoding="utf-8"))
+    binding, error = provenance.load_binding()
+    assert binding is not None, error
+    section = policy[provenance.BINDING_FIELD][provenance.OWNER_RECOVERY_FIELD]
+    mutate(section)
+
+    # A malformed grant now fails the parse itself; only a well-formed (or
+    # explicitly disabled) grant reaches the structural validator.
+    parsed, parse_error = provenance.parse_binding(policy)
+    errors = [parse_error] if parsed is None else prevention._validate_owner_recovery(policy, parsed)
+
+    assert any(expect in item for item in errors), errors
+
+
+def _owner_renamed_policy(login: str) -> tuple[dict, provenance.WriterIdentityBinding]:
+    policy = json.loads((ROOT / "docs" / "CODE_WRITE_POLICY.json").read_text(encoding="utf-8"))
+    policy[provenance.BINDING_FIELD][provenance.OWNER_WRITER_FIELD]["login"] = login
+    binding, error = provenance.parse_binding(policy)
+    assert binding is not None, error
+    return policy, binding
+
+
+def test_naming_another_bound_writer_as_owner_does_not_make_it_the_owner(monkeypatch) -> None:
+    """``claude`` is authorization-bound, so only repository identity can refuse it."""
+    monkeypatch.setenv("GITHUB_REPOSITORY", "fafa33/Project-Hunter")
+    policy, binding = _owner_renamed_policy("claude")
+
+    assert binding.owner_recovery is not None and binding.owner_recovery.owner_login == "claude"
+    errors = prevention._validate_owner_recovery(policy, binding)
+
+    assert any("is not the repository owner 'fafa33'" in item for item in errors), errors
+
+
+def test_an_unknown_repository_owner_fails_closed(monkeypatch) -> None:
+    monkeypatch.setattr(provenance, "repository_owner", lambda **_kwargs: None)
+    policy, binding = _owner_renamed_policy("fafa33")
+
+    errors = prevention._validate_owner_recovery(policy, binding)
+
+    assert any("repository owner is unknown" in item for item in errors), errors
+
+
+def test_a_fork_clone_resolves_the_owner_of_the_repository_it_was_forked_from(monkeypatch, tmp_path) -> None:
+    """The paired positive: a contributor's fork as ``origin`` is not a false owner mismatch."""
+    monkeypatch.delenv("GITHUB_REPOSITORY", raising=False)
+    monkeypatch.setenv("GIT_CONFIG_GLOBAL", os.devnull)
+    monkeypatch.setenv("GIT_CONFIG_NOSYSTEM", "1")
+    subprocess.run(("git", "init", "-q", str(tmp_path)), check=True)
+    for remote, url in (
+        ("origin", "git@github.com:contributor/Project-Hunter.git"),
+        ("upstream", "https://github.com/fafa33/Project-Hunter.git"),
+    ):
+        subprocess.run(("git", "-C", str(tmp_path), "remote", "add", remote, url), check=True)
+
+    assert provenance.repository_owner(cwd=tmp_path) == "fafa33"
+    subprocess.run(("git", "-C", str(tmp_path), "remote", "remove", "upstream"), check=True)
+    assert provenance.repository_owner(cwd=tmp_path) == "contributor"
+
+
+def test_single_writer_enforcement_cannot_be_switched_off_in_policy() -> None:
+    """Disabling it would admit mixed ranges with no recovery boundary at all."""
+    policy = json.loads((ROOT / "docs" / "CODE_WRITE_POLICY.json").read_text(encoding="utf-8"))
+    policy[provenance.BINDING_FIELD]["require_single_writer_per_range"] = False
+
+    errors = prevention.validate_writer_identity_binding(policy)
+
+    assert any("require_single_writer_per_range must be true" in item for item in errors), errors
+
+
+def test_the_key_binding_cannot_be_switched_off_in_policy() -> None:
+    policy = json.loads((ROOT / "docs" / "CODE_WRITE_POLICY.json").read_text(encoding="utf-8"))
+    policy[provenance.BINDING_FIELD][provenance.SIGNING_KEY_BINDINGS_FIELD][
+        "require_key_bound_to_resolved_writer"
+    ] = False
+    binding = provenance.parse_binding(policy)[0]
+
+    errors = prevention._validate_writer_signing_key_bindings(policy, binding)
+
+    assert any("must require the signing key to be bound" in item for item in errors), errors
+
+
+# --------------------------------------------------------------------------
+# Owner-authorized writer recovery (DFF-010, PR #535 follow-on)
+# --------------------------------------------------------------------------
+#
+# Recovery exists because the departing writer's signing capability became
+# unavailable while their commits must not be falsified. It is deliberately the
+# narrowest thing that solves that: only the repository owner may open a
+# boundary, only by signing it with their own already-registered key, and only
+# for a writer who was already authorization-bound before the boundary existed.
+# Each epoch either side is still single-writer, so this admits two single-writer
+# epochs, never arbitrary mixed writers.
+
+RECOVERY_SCHEMA = "hunter-writer-recovery-v1"
+#: The boundary's exact parent: the last departed-writer commit. Fixtures form
+#: real commit graphs, because epochs are decided by ancestry, not log order.
+BOUNDARY_PARENT = "b" * 40
+AGENT_B = ("Agent B", "agent-b@example.invalid")
+AGENT_B_KEY = "SHA256:" + "C" * 43
+
+
+def _recovery_policy(**recovery_overrides) -> dict:
+    recovery = {
+        "purpose": "test",
+        "enabled": True,
+        "declaration_trailer": "Hunter-Writer-Recovery",
+        "declaration_schema": RECOVERY_SCHEMA,
+        "required_claims": ["schema", "departed_writer", "recovery_writer", "parent_sha"],
+        "max_boundaries_per_range": 1,
+        "semantics": "test",
+        "why_not_generic_mixed_writers": "test",
+        "determinism": "test",
+        "fail_closed": "test",
+    }
+    recovery.update(recovery_overrides)
+    policy = _policy(
+        owner_writer={"login": "fafa33", "authority": "repository owner", "evidence": "test"},
+        owner_recovery=recovery,
+    )
+    # A second agent exists only so that agent-to-agent handover is representable
+    # at all. With a single agent in the policy, "one agent hands the range to
+    # another agent" has no in-policy instance to exercise, and the guard against
+    # it would go untested.
+    policy[provenance.BINDING_FIELD]["identities"].append(
+        {
+            "login": "agent-b",
+            "git_names": [AGENT_B[0]],
+            "git_emails": [AGENT_B[1]],
+            "canonical_git_name": AGENT_B[0],
+            "canonical_git_email": AGENT_B[1],
+        }
+    )
+    policy[provenance.BINDING_FIELD][provenance.SIGNING_KEY_BINDINGS_FIELD]["bindings"]["agent-b"] = [AGENT_B_KEY]
+    return policy
+
+
+def _recovery_binding(**recovery_overrides) -> provenance.WriterIdentityBinding:
+    document = _recovery_policy(**recovery_overrides)
+    document[provenance.BINDING_FIELD][provenance.SIGNING_KEY_BINDINGS_FIELD][
+        "require_key_bound_to_resolved_writer"
+    ] = True
+    parsed, error = provenance.parse_binding(document)
+    assert parsed is not None, error
+    return parsed
+
+
+def _declaration(
+    *,
+    departed_writer: str = "claude",
+    recovery_writer: str = "fafa33",
+    parent_sha: str = BOUNDARY_PARENT,
+    schema: str = RECOVERY_SCHEMA,
+) -> str:
+    return json.dumps(
+        {
+            "schema": schema,
+            "departed_writer": departed_writer,
+            "recovery_writer": recovery_writer,
+            "parent_sha": parent_sha,
+        }
+    )
+
+
+def _claude(sha: str, *, parents: str = "", key: str = CLAUDE_KEY, **kwargs) -> provenance.CommitProvenance:
+    return _commit(sha=sha, parents=parents, signing_key=key, **kwargs)
+
+
+def _owner(sha: str, *, parents: str = "", key: str = OWNER_KEY, **kwargs) -> provenance.CommitProvenance:
+    return _commit(sha=sha, author=OWNER, parents=parents, signing_key=key, **kwargs)
+
+
+def _agent_b(sha: str, *, parents: str = "", key: str = AGENT_B_KEY, **kwargs) -> provenance.CommitProvenance:
+    return _commit(sha=sha, author=AGENT_B, parents=parents, signing_key=key, **kwargs)
+
+
+def _recovered_range(**declaration_overrides) -> tuple[provenance.CommitProvenance, ...]:
+    """The canonically valid recovery: two claude commits, then the owner."""
+
+    return (
+        _claude("a" * 40, parents="9" * 40),
+        _claude("b" * 40, parents="a" * 40),
+        _owner(
+            "c" * 40,
+            parents=BOUNDARY_PARENT,
+            recovery_declaration=_declaration(**declaration_overrides),
+        ),
+    )
+
+
+def test_a_valid_owner_recovery_is_admitted() -> None:
+    """The paired admission: the fix must not block the recovery it exists for."""
+
+    verdict = provenance.evaluate_range(_recovery_binding(), _recovered_range())
+
+    assert verdict.ok is True, verdict.reason
+    assert "fafa33" in verdict.reason
+
+
+def test_recovery_is_permitted_only_when_policy_grants_it() -> None:
+    """Without the grant, a mixed range is still refused exactly as before."""
+
+    verdict = provenance.evaluate_range(_key_enforced_binding(), _recovered_range())
+
+    assert verdict.ok is False
+    assert "mixes authorization-bound writers" in verdict.reason
+
+
+def test_an_agent_may_not_hand_the_range_to_another_agent() -> None:
+    """agent_to_agent is the transition this must never permit.
+
+    A second agent identity exists so this is a real in-policy instance rather
+    than a shape the fixture cannot express. The boundary commit is the second
+    agent's own signed work, so it fails the owner-authority test before anything
+    else is considered.
+    """
+
+    range_ = (
+        _claude("a" * 40, parents="9" * 40),
+        _agent_b(
+            "b" * 40,
+            parents=BOUNDARY_PARENT,
+            recovery_declaration=_declaration(departed_writer="claude", recovery_writer="agent-b"),
+        ),
+        _agent_b("c" * 40, parents="b" * 40),
+    )
+
+    verdict = provenance.evaluate_range(_recovery_binding(), range_)
+
+    assert verdict.ok is False
+    assert "not the repository owner" in verdict.reason
+
+
+def test_only_the_repository_owner_may_name_itself_as_the_recovery_writer() -> None:
+    """An owner-signed boundary still cannot install a different agent as writer."""
+
+    range_ = (
+        _claude("a" * 40, parents="9" * 40),
+        _owner(
+            "b" * 40,
+            parents=BOUNDARY_PARENT,
+            recovery_declaration=_declaration(departed_writer="claude", recovery_writer="agent-b"),
+        ),
+        _agent_b("c" * 40, parents="b" * 40),
+    )
+
+    verdict = provenance.evaluate_range(_recovery_binding(), range_)
+
+    assert verdict.ok is False
+    assert "not the repository owner" in verdict.reason
+
+
+def test_an_agent_may_not_declare_a_recovery_to_the_owner_under_its_own_key() -> None:
+    """The boundary commit must be the owner's own signed work, not a request."""
+
+    range_ = (
+        _claude("a" * 40, parents="9" * 40),
+        _claude(
+            "b" * 40,
+            parents=BOUNDARY_PARENT,
+            recovery_declaration=_declaration(recovery_writer="fafa33"),
+        ),
+        _owner("c" * 40, parents="b" * 40),
+    )
+
+    verdict = provenance.evaluate_range(_recovery_binding(), range_)
+
+    assert verdict.ok is False
+    assert "not the repository owner" in verdict.reason
+
+
+def test_the_owner_may_not_recover_to_a_writer_that_is_not_authorized() -> None:
+    range_ = _recovered_range(recovery_writer="claude")
+
+    verdict = provenance.evaluate_range(_recovery_binding(), range_)
+
+    assert verdict.ok is False
+    assert "not the repository owner" in verdict.reason
+
+
+def test_a_departed_writer_that_was_never_authorized_is_refused() -> None:
+    """Recovery cannot introduce a writer; it can only replace one."""
+
+    range_ = _recovered_range(departed_writer="intruder")
+
+    verdict = provenance.evaluate_range(_recovery_binding(), range_)
+
+    assert verdict.ok is False
+    assert "not an authorization-bound writer" in verdict.reason
+
+
+def test_a_boundary_that_renames_the_departed_writer_is_refused() -> None:
+    """The declaration must describe the epoch it actually follows."""
+
+    range_ = _recovered_range(departed_writer="fafa33")
+
+    verdict = provenance.evaluate_range(_recovery_binding(), range_)
+
+    assert verdict.ok is False
+    assert "declares departed_writer" in verdict.reason
+
+
+def test_a_boundary_that_does_not_pin_its_exact_parent_is_refused() -> None:
+    """A stale or rewritten parent_sha would let a boundary be replayed."""
+
+    range_ = _recovered_range(parent_sha="2" * 40)
+
+    verdict = provenance.evaluate_range(_recovery_binding(), range_)
+
+    assert verdict.ok is False
+    assert "parent_sha" in verdict.reason
+
+
+def test_a_second_writer_after_the_takeover_is_refused() -> None:
+    """The recovery epoch is single-writer; recovery is not a reopening."""
+
+    range_ = _recovered_range() + (_claude("d" * 40, parents="c" * 40),)
+
+    verdict = provenance.evaluate_range(_recovery_binding(), range_)
+
+    assert verdict.ok is False
+    assert "only 'fafa33'" in verdict.reason
+
+
+def test_a_boundary_at_the_first_commit_has_no_departed_epoch_to_recover() -> None:
+    """A takeover cannot be the first thing in the range: nothing to recover from."""
+
+    range_ = (
+        _owner("c" * 40, parents=BOUNDARY_PARENT, recovery_declaration=_declaration()),
+        _agent_b("d" * 40, parents="c" * 40),
+    )
+
+    verdict = provenance.evaluate_range(_recovery_binding(), range_)
+
+    assert verdict.ok is False
+    assert "first position" in verdict.reason
+
+
+def test_the_recovery_epoch_may_be_exactly_the_boundary_commit() -> None:
+    """An owner who takes over and lands one further commit has recovered.
+
+    Requiring a second owner commit after the boundary would add nothing the
+    boundary does not already prove, so a trailing boundary is valid.
+    """
+
+    range_ = (
+        _claude("a" * 40, parents="9" * 40),
+        _claude("b" * 40, parents="a" * 40),
+        _owner("c" * 40, parents=BOUNDARY_PARENT, recovery_declaration=_declaration()),
+    )
+
+    verdict = provenance.evaluate_range(_recovery_binding(), range_)
+
+    assert verdict.ok is True, verdict.reason
+    assert verdict.writer_login == "fafa33"
+
+
+MAIN_SHA = "e" * 40  # a base-branch commit merged in: outside the governed range
+
+
+def test_a_departed_writer_commit_that_merges_in_after_the_takeover_is_refused() -> None:
+    """Codex P1: ``A -> C(claude)`` beside ``A -> B(owner boundary)``, then ``M(B, C)``.
+
+    ``git log --reverse`` can emit ``A, C, B, M`` when C is dated before B, so a
+    position-based split would count C as departed. C is not reachable from the
+    pinned parent A; it enters the history only after the takeover.
+    """
+
+    range_ = (
+        _claude("a" * 40, parents="9" * 40),
+        _claude("c" * 40, parents="a" * 40),
+        _owner("b" * 40, parents="a" * 40, recovery_declaration=_declaration(parent_sha="a" * 40)),
+        _owner("d" * 40, parents=f"{'b' * 40} {'c' * 40}"),
+    )
+
+    verdict = provenance.evaluate_range(_recovery_binding(), range_)
+
+    assert verdict.ok is False
+    assert "cccccccccc" in verdict.reason and "no epoch governs them" in verdict.reason
+
+
+def test_a_departed_writer_side_branch_off_the_fork_point_is_refused() -> None:
+    """Copilot: a side branch the pinned parent never reached is not the departed epoch."""
+
+    range_ = (
+        _claude("a" * 40, parents="9" * 40),
+        _claude("f" * 40, parents="9" * 40),
+        _owner("b" * 40, parents="a" * 40, recovery_declaration=_declaration(parent_sha="a" * 40)),
+        _owner("d" * 40, parents=f"{'b' * 40} {'f' * 40}"),
+    )
+
+    verdict = provenance.evaluate_range(_recovery_binding(), range_)
+
+    assert verdict.ok is False
+    assert "ffffffffff" in verdict.reason
+
+
+def test_a_boundary_pinned_outside_the_range_has_no_departed_epoch() -> None:
+    range_ = (
+        _claude("a" * 40, parents="9" * 40),
+        _owner("b" * 40, parents="9" * 40, recovery_declaration=_declaration(parent_sha="9" * 40)),
+    )
+
+    verdict = provenance.evaluate_range(_recovery_binding(), range_)
+
+    assert verdict.ok is False
+
+
+@pytest.mark.parametrize(
+    "range_",
+    [
+        (  # the owner merges the base branch in after taking over
+            _claude("a" * 40, parents="9" * 40),
+            _owner("b" * 40, parents="a" * 40, recovery_declaration=_declaration(parent_sha="a" * 40)),
+            _owner("d" * 40, parents=f"{'b' * 40} {MAIN_SHA}"),
+        ),
+        (  # the departed writer had merged the base branch in before departing
+            _claude("a" * 40, parents="9" * 40),
+            _claude("c" * 40, parents=f"{'a' * 40} {MAIN_SHA}"),
+            _owner("b" * 40, parents="c" * 40, recovery_declaration=_declaration(parent_sha="c" * 40)),
+        ),
+    ],
+    ids=("merge-after-takeover", "merge-before-departure"),
+)
+def test_a_base_branch_merge_on_either_side_of_the_boundary_is_still_admitted(range_) -> None:
+    """The paired positive: ancestry, not linearity, is what is required."""
+
+    verdict = provenance.evaluate_range(_recovery_binding(), range_)
+
+    assert verdict.ok is True, verdict.reason
+
+
+def test_more_than_one_boundary_in_a_range_is_refused() -> None:
+    range_ = (
+        _claude("a" * 40, parents="9" * 40),
+        _owner(
+            "b" * 40,
+            parents="a" * 40,
+            recovery_declaration=_declaration(parent_sha="a" * 40),
+        ),
+        _owner("c" * 40, parents="b" * 40, recovery_declaration=_declaration(parent_sha="b" * 40)),
+    )
+
+    verdict = provenance.evaluate_range(_recovery_binding(), range_)
+
+    assert verdict.ok is False
+    assert "boundaries" in verdict.reason
+
+
+@pytest.mark.parametrize(
+    "declaration",
+    [
+        "{not json",
+        json.dumps(
+            {"schema": "other", "departed_writer": "claude", "recovery_writer": "fafa33", "parent_sha": BOUNDARY_PARENT}
+        ),
+        json.dumps(
+            {
+                "schema": RECOVERY_SCHEMA,
+                "departed_writer": "claude",
+                "recovery_writer": "fafa33",
+                "parent_sha": BOUNDARY_PARENT,
+                "note": "smuggled claim",
+            }
+        ),
+        json.dumps({"schema": RECOVERY_SCHEMA, "departed_writer": "claude", "recovery_writer": "fafa33"}),
+        json.dumps(
+            {
+                "schema": RECOVERY_SCHEMA,
+                "departed_writer": "claude",
+                "recovery_writer": "fafa33",
+                "parent_sha": "not-a-sha",
+            }
+        ),
+    ],
+)
+def test_a_malformed_declaration_fails_closed_rather_than_being_ignored(declaration) -> None:
+    range_ = (
+        _claude("a" * 40, parents="9" * 40),
+        _owner("b" * 40, parents="a" * 40, recovery_declaration=declaration),
+    )
+
+    verdict = provenance.evaluate_range(_recovery_binding(), range_)
+
+    assert verdict.ok is False
+    assert verdict.reason
+
+
+def test_historical_attribution_before_the_boundary_is_not_reattributed() -> None:
+    """The prefix keeps reporting its own writer; recovery does not rewrite it."""
+
+    binding = _recovery_binding()
+
+    assert provenance.evaluate_range(binding, _recovered_range()[:2]).writer_login == "claude"
+    assert provenance.evaluate_range(binding, _recovered_range()[2:]).writer_login == "fafa33"
+
+
+def test_the_recovery_trailer_is_read_from_git_and_not_from_the_message_body(tmp_path) -> None:
+    """Only a real trailer grants; a commit body that merely mentions it does not.
+
+    Built in a throwaway repository so the check runs against git's own trailer
+    parser rather than against a hand-formatted string.
+    """
+
+    import subprocess
+
+    repo = tmp_path / "trailer-repo"
+    repo.mkdir()
+
+    def git(*args: str) -> None:
+        subprocess.run(("git", *args), cwd=str(repo), check=True, capture_output=True)
+
+    git("init", "--quiet", "--initial-branch=main")
+    git("config", "user.name", "Claude")
+    git("config", "user.email", "noreply@anthropic.com")
+    git("commit", "--quiet", "--allow-empty", "-m", "first")
+    base = subprocess.run(
+        ("git", "rev-parse", "HEAD"), cwd=str(repo), check=True, capture_output=True, text=True
+    ).stdout.strip()
+
+    body_only = json.dumps(
+        {
+            "schema": RECOVERY_SCHEMA,
+            "departed_writer": "claude",
+            "recovery_writer": "fafa33",
+            "parent_sha": base,
+        }
+    )
+    (repo / "body.txt").write_text(body_only, encoding="utf-8")
+    git("add", "body.txt")
+    git("commit", "--quiet", "-m", f"body only\n\n{body_only}")
+    (repo / "real.txt").write_text("x", encoding="utf-8")
+    git("add", "real.txt")
+    git("commit", "--quiet", "-m", f"real trailer\n\nHunter-Writer-Recovery: {body_only}")
+
+    commits = provenance.read_range_commits(base, "HEAD", cwd=repo)
+
+    assert [commit.sha for commit in commits] == [
+        subprocess.run(
+            ("git", "rev-parse", "HEAD~1"), cwd=str(repo), check=True, capture_output=True, text=True
+        ).stdout.strip(),
+        subprocess.run(
+            ("git", "rev-parse", "HEAD"), cwd=str(repo), check=True, capture_output=True, text=True
+        ).stdout.strip(),
+    ]
+    assert commits[0].recovery_declaration == "", "a commit body must not be read as a declaration"
+    assert json.loads(commits[1].recovery_declaration)["recovery_writer"] == "fafa33"
+    assert commits[0].parents == base and commits[1].parents == commits[0].sha
+
+
+def _signed_repository(tmp_path: Path) -> tuple[Path, str, str, str, str]:
+    """A throwaway repository whose last two commits carry a real SSH signature.
+
+    The commits reproduce the PR #535 tail: headers claim ``Claude`` while the
+    signature is made with another writer's key. A fresh key is generated per
+    test so no developer key, keyring, or historical object is required --
+    the PR #535 objects themselves are unreachable once that branch is gone.
+    Returns ``(repo, fingerprint, base, middle, head)``.
+    """
+
+    key = tmp_path / "signing_key"
+    subprocess.run(
+        ("ssh-keygen", "-q", "-t", "ed25519", "-N", "", "-C", "fixture", "-f", str(key)),
+        check=True,
+        capture_output=True,
+    )
+    listed = subprocess.run(
+        ("ssh-keygen", "-l", "-E", "sha256", "-f", f"{key}.pub"), check=True, capture_output=True, text=True
+    ).stdout
+    fingerprint = listed.split()[1]
+    repo = tmp_path / "repo"
+    repo.mkdir()
+
+    def git(*args: str) -> str:
+        return subprocess.run(("git", *args), cwd=repo, check=True, capture_output=True, text=True).stdout.strip()
+
+    git("init", "-q")
+    for name, value in (
+        ("user.name", "Claude"),
+        ("user.email", "noreply@anthropic.com"),
+        ("gpg.format", "ssh"),
+        ("user.signingkey", str(key)),
+    ):
+        git("config", name, value)
+    git("commit", "-q", "--allow-empty", "--no-gpg-sign", "-m", "base")
+    base = git("rev-parse", "HEAD")
+    git("commit", "-q", "--allow-empty", "-S", "-m", "first signed")
+    middle = git("rev-parse", "HEAD")
+    git("commit", "-q", "--allow-empty", "-S", "-m", "second signed", "-m", "Hunter-Writer-Recovery: fixture")
+    return repo, fingerprint, base, middle, git("rev-parse", "HEAD")
+
+
+@pytest.mark.parametrize("ambient", ("", "[log]\n\tshowSignature = true\n"), ids=("hosted", "show-signature"))
+def test_signing_keys_and_parents_are_read_for_real_signed_commits(monkeypatch, tmp_path, ambient: str) -> None:
+    """The %GK wiring against real signed commits, not only synthetic records.
+
+    System git config is excluded and the global config is either empty -- as on
+    a hosted runner, where no ``gpg.ssh.allowedSignersFile`` is configured -- or
+    a developer's ``log.showSignature``, which makes git print verification
+    diagnostics into stdout. Neither may change what is read.
+    """
+
+    global_config = tmp_path / "global.gitconfig"
+    global_config.write_text(ambient, encoding="utf-8")
+    monkeypatch.setenv("GIT_CONFIG_GLOBAL", str(global_config))
+    monkeypatch.setenv("GIT_CONFIG_NOSYSTEM", "1")
+    repo, fingerprint, base, middle, head = _signed_repository(tmp_path)
+
+    commits = provenance.read_range_commits(base, head, cwd=repo)
+
+    assert [commit.sha for commit in commits] == [middle, head]
+    assert all(commit.signing_key == fingerprint for commit in commits)
+    assert all(commit.signature_status in provenance.GOOD_SIGNATURE_STATUSES for commit in commits)
+    assert commits[0].parents == base
+    assert commits[1].parents == middle
+    # The trailer read must key on the same SHAs as the record read, or a valid
+    # recovery declaration would silently never attach.
+    assert (commits[0].recovery_declaration, commits[1].recovery_declaration) == ("", "fixture")
+
+    def binding(**keys: list[str]) -> provenance.WriterIdentityBinding:
+        enforced = _policy()
+        section = enforced[provenance.BINDING_FIELD][provenance.SIGNING_KEY_BINDINGS_FIELD]
+        section["require_key_bound_to_resolved_writer"] = True
+        section["bindings"] = {"claude": [CLAUDE_KEY], "fafa33": [OWNER_KEY], **keys}
+        parsed, error = provenance.parse_binding(enforced)
+        assert parsed is not None, error
+        return parsed
+
+    # The PR #535 shape: claimed as Claude, signed with the owner's key.
+    refused = provenance.evaluate_range(binding(fafa33=[fingerprint]), commits)
+    assert refused.ok is False, "a Claude-claimed commit signed with the owner's key must be refused"
+    assert fingerprint in refused.reason
+    # Paired positive: the same commits pass once the key is bound to the writer they claim.
+    assert provenance.evaluate_range(binding(claude=[fingerprint]), commits).ok is True
 
 
 # --------------------------------------------------------------------------
@@ -1791,7 +2878,9 @@ def test_pre_push_fails_closed_when_the_fork_point_is_unavailable(monkeypatch) -
 
 
 def test_pre_push_fails_closed_without_repository_policy(monkeypatch) -> None:
-    monkeypatch.setattr(provenance, "load_binding", lambda *_a, **_k: (None, "policy is missing"))
+    monkeypatch.setattr(provenance, "resolve_governed_base", lambda *_a, **_k: BASE)
+    monkeypatch.setattr(provenance, "resolve_trusted_tip", lambda *_a, **_k: BASE)
+    monkeypatch.setattr(provenance, "load_trusted_binding", lambda *_a, **_k: (None, "policy is missing"))
 
     problem = provenance.check_range(HEAD)
 

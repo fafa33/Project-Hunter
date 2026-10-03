@@ -749,7 +749,7 @@
     {
       "id": "DFF-010",
       "title": "writer-identity-not-authorization-bound",
-      "invariant": "Every commit in the governed range carries an author and a committer that each independently resolve to the same authorization-bound writer identity; agent attribution lives in trailers and never in identity.",
+      "invariant": "Every commit in the governed range carries an author and a committer that each independently resolve to the same authorization-bound writer identity, AND that identity is bound to the SSH signing key that actually signed the commit; agent attribution lives in trailers and never in identity. A range that resolves to more than one writer is refused unless the already-authorized repository owner opens exactly one explicit, key-bound, parent-pinned recovery boundary, so that every epoch on either side remains single-writer and no historical attribution is re-attributed.",
       "applicability": {
         "changed_paths": [
           "scripts/",
@@ -762,20 +762,69 @@
         "rationale": "Any change published through the repository-local push boundary is governed by the writer binding."
       },
       "prevention": {
-        "mechanism": "scripts/hunter_pre_push.py validates the governed fork-point..HEAD range against the canonical writer_identity_binding before any remote mutation, and names the exact mismatched provenance claim.",
+        "mechanism": "scripts/hunter_pre_push.py validates the governed fork-point..HEAD range against the canonical writer_identity_binding before any remote mutation, and names the exact mismatched provenance claim. The binding resolves each commit's identity and then binds the SSH signing key read from the commit object itself via git's %GK format to the writer that identity resolved to, so a commit whose author/committer headers name one account while carrying another account's key is refused locally instead of being published and then rejected by hosted governance as unknown_key. When a range resolves to more than one writer, the binding admits it only through a single Hunter-Writer-Recovery trailer authored, committed and signed by the repository owner, naming an already-authorized departed writer and the boundary commit's exact parent, with each epoch independently single-writer and the prefix never re-attributed.",
         "boundary": "local-pre-push",
-        "guard_reference": "scripts/hunter_writer_provenance.py::evaluate_commit"
+        "guard_reference": "scripts/hunter_writer_provenance.py::evaluate_commit",
+        "additional_guard_references": [
+          "scripts/hunter_writer_provenance.py::verify_signing_key_identity",
+          "scripts/hunter_writer_provenance.py::evaluate_owner_recovery",
+          "scripts/hunter_defect_prevention_preflight.py::_validate_writer_signing_key_bindings",
+          "scripts/hunter_defect_prevention_preflight.py::_validate_owner_recovery"
+        ]
       },
       "regression_evidence": [
         "tests/test_issue_412_prevention_gate.py::test_agent_committer_with_a_correct_tree_is_rejected_before_any_push",
         "tests/test_issue_412_prevention_gate.py::test_agent_attribution_trailer_cannot_rescue_an_unbound_identity",
-        "tests/test_issue_412_prevention_gate.py::test_author_and_committer_must_each_resolve_to_the_same_bound_writer"
+        "tests/test_issue_412_prevention_gate.py::test_author_and_committer_must_each_resolve_to_the_same_bound_writer",
+        "tests/test_issue_412_prevention_gate.py::test_the_pr_535_identity_key_mismatch_is_refused_locally",
+        "tests/test_issue_412_prevention_gate.py::test_the_canonically_valid_equivalent_is_still_admitted",
+        "tests/test_issue_412_prevention_gate.py::test_an_unsigned_commit_is_refused_when_key_binding_is_required",
+        "tests/test_issue_412_prevention_gate.py::test_a_key_outside_the_bound_set_is_refused_even_when_well_formed",
+        "tests/test_issue_412_prevention_gate.py::test_a_valid_owner_recovery_is_admitted",
+        "tests/test_issue_412_prevention_gate.py::test_recovery_is_permitted_only_when_policy_grants_it",
+        "tests/test_issue_412_prevention_gate.py::test_an_agent_may_not_hand_the_range_to_another_agent",
+        "tests/test_issue_412_prevention_gate.py::test_only_the_repository_owner_may_name_itself_as_the_recovery_writer",
+        "tests/test_issue_412_prevention_gate.py::test_a_departed_writer_that_was_never_authorized_is_refused",
+        "tests/test_issue_412_prevention_gate.py::test_a_boundary_that_does_not_pin_its_exact_parent_is_refused",
+        "tests/test_issue_412_prevention_gate.py::test_a_second_writer_after_the_takeover_is_refused",
+        "tests/test_issue_412_prevention_gate.py::test_a_boundary_at_the_first_commit_has_no_departed_epoch_to_recover",
+        "tests/test_issue_412_prevention_gate.py::test_the_recovery_epoch_may_be_exactly_the_boundary_commit",
+        "tests/test_issue_412_prevention_gate.py::test_more_than_one_boundary_in_a_range_is_refused",
+        "tests/test_issue_412_prevention_gate.py::test_historical_attribution_before_the_boundary_is_not_reattributed",
+        "tests/test_issue_412_prevention_gate.py::test_the_recovery_trailer_is_read_from_git_and_not_from_the_message_body",
+        "tests/test_issue_412_prevention_gate.py::test_signing_keys_and_parents_are_read_for_real_signed_commits",
+        "tests/test_issue_412_prevention_gate.py::test_weakening_the_recovery_grant_is_a_detectable_policy_change",
+        "tests/test_issue_412_prevention_gate.py::test_the_key_binding_cannot_be_switched_off_in_policy",
+        "tests/test_issue_412_prevention_gate.py::test_a_record_with_exactly_the_requested_fields_parses",
+        "tests/test_issue_412_prevention_gate.py::test_a_record_with_any_other_field_count_fails_closed",
+        "tests/test_issue_412_prevention_gate.py::test_a_bound_key_on_a_signature_that_did_not_verify_binds_nothing",
+        "tests/test_issue_412_prevention_gate.py::test_naming_another_bound_writer_as_owner_does_not_make_it_the_owner",
+        "tests/test_issue_412_prevention_gate.py::test_an_unknown_repository_owner_fails_closed",
+        "tests/test_issue_412_prevention_gate.py::test_a_fork_clone_resolves_the_owner_of_the_repository_it_was_forked_from",
+        "tests/test_issue_412_prevention_gate.py::test_single_writer_enforcement_cannot_be_switched_off_in_policy",
+        "tests/test_issue_412_prevention_gate.py::test_a_signing_key_bound_to_two_writers_fails_closed",
+        "tests/test_issue_412_prevention_gate.py::test_a_departed_writer_commit_that_merges_in_after_the_takeover_is_refused",
+        "tests/test_issue_412_prevention_gate.py::test_a_departed_writer_side_branch_off_the_fork_point_is_refused",
+        "tests/test_issue_412_prevention_gate.py::test_a_boundary_pinned_outside_the_range_has_no_departed_epoch",
+        "tests/test_issue_412_prevention_gate.py::test_a_base_branch_merge_on_either_side_of_the_boundary_is_still_admitted",
+        "tests/test_issue_412_prevention_gate.py::test_a_candidate_cannot_bind_its_own_signing_key",
+        "tests/test_issue_412_prevention_gate.py::test_a_key_the_trusted_base_binds_is_admitted",
+        "tests/test_issue_412_prevention_gate.py::test_a_base_that_predates_key_binding_is_judged_by_its_own_regime",
+        "tests/test_issue_412_prevention_gate.py::test_a_malformed_key_section_at_the_base_still_fails_closed",
+        "tests/test_issue_412_prevention_gate.py::test_a_declared_but_malformed_recovery_grant_fails_closed",
+        "tests/test_issue_412_prevention_gate.py::test_an_absent_or_disabled_recovery_grant_is_still_no_recovery",
+        "tests/test_issue_412_prevention_gate.py::test_a_branch_forked_before_key_binding_meets_the_current_trusted_tip",
+        "tests/test_issue_412_prevention_gate.py::test_a_stale_cached_trusted_tip_fails_closed",
+        "tests/test_issue_412_prevention_gate.py::test_an_unreachable_trusted_server_fails_closed",
+        "tests/test_issue_412_prevention_gate.py::test_a_fork_clone_reads_authority_from_upstream"
       ],
       "lifecycle": "locally-enforced",
       "sources": [
         "Issue #412",
-        "PR #411 governance-provenance trap"
-      ]
+        "PR #411 governance-provenance trap",
+        "PR #535 hosted unknown_key rejection of commits 38a1d58ff91fed12284956f4bd04474b3578909a and b7d9552429f97b8caba1d7267a41672385ff9fce"
+      ],
+      "corrected_lesson": "The original formulation of this family treated an identity binding as sufficient to establish authorship, because it validated only the author/committer headers. Those headers are caller-chosen strings, so the binding established a claim rather than a proof, and the repository enforced the same declared provenance invariant as two complementary halves at two boundaries -- header identity locally, and commit.verification at hosted governance -- without reconciling them. A candidate whose headers named one account and whose signature belonged to another therefore passed the local boundary and was rejected after publication. The corrected lesson is that an identity binding is not authorization until the identity is bound to the credential that signed the commit, and that a boundary which is claimed to enforce an invariant at one point must be read against the other points that enforce the same invariant. The recovery boundary added here follows from the same correction: permitting a two-writer range would otherwise have meant admitting exactly the kind of unverifiable attribution this family exists to prevent, so it is restricted to a single explicit, owner-signed, parent-pinned boundary with each epoch still single-writer."
     },
     {
       "id": "DFF-011",

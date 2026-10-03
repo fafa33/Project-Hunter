@@ -6,38 +6,58 @@ commits were created under an implementation agent's Git identity rather than
 the authorization-bound writer identity, and the mismatch was discovered only
 after a hosted push.
 
-Three provenance claims are deliberately kept separate here, because conflating
+Four provenance claims are deliberately kept separate here, because conflating
 them is the defect:
 
 ``commit identity``
     The ``author`` and ``committer`` headers of a commit object. Caller-chosen,
     so they are checked against a closed allowlist rather than trusted.
+``signing key identity``
+    The SSH signing key embedded in the commit's ``gpgsig`` header, read from
+    the commit object itself. Header identity alone is caller-chosen, so the key
+    that actually signed the commit is bound to the same writer. This is what
+    keeps the local boundary aligned with trusted hosted governance, which
+    resolves the signature rather than the headers.
 ``authenticated push actor``
     The GitHub account whose authenticated push published a commit. Not visible
     locally; it is verified by the trusted controller
     (``hunter_governance_review_v2``), never here.
 ``implementation attribution``
     Who or what wrote the change (a coding agent, a session URL). It lives in
-    commit *trailers* only. This module reads commit headers exclusively, so a
-    trailer can never establish, replace, or mutate the bound identity -- an
-    agent keeps its attribution while the commit is still recorded under the
-    authorization-bound writer.
+    commit *trailers* only, so an agent keeps its attribution while the commit is
+    still recorded under the authorization-bound writer. No trailer can
+    establish, replace or mutate a bound identity.
+
+Exactly one trailer is read, and only on a path of its own: the
+``Hunter-Writer-Recovery`` declaration, which is consulted after a commit's
+identity and signing key have already been resolved and bound. It is a
+*permission* to continue a range under a different writer, never evidence of
+who wrote anything, so reading it cannot make an unbound or mis-signed commit
+admissible. Any other trailer is never parsed.
 
 Matching is exact after Unicode/whitespace/case normalisation, never substring
 and never "one of author/committer matched, therefore allowed": the author and
-the committer are each resolved to a bound identity independently, and the whole
-governed range must resolve to one single writer. Missing policy, a malformed
-binding, an empty allowlist, or unreadable commit metadata all fail closed.
+the committer are each resolved to a bound identity independently, and each
+epoch of the governed range must resolve to one single writer. Missing policy, a
+malformed binding, an empty allowlist, or unreadable commit metadata all fail
+closed.
+
+A governed range that genuinely contains two authorized writers is neither
+silently allowed nor silently refused: it is a recovery case, and it is admitted
+only through an explicit, owner-signed recovery boundary that leaves every
+earlier commit attributed exactly as it already was.
 """
 
 from __future__ import annotations
 
 import argparse
 import json
+import os
+import re
 import subprocess
 import sys
 import unicodedata
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import Any
 
@@ -47,12 +67,48 @@ CODE_WRITE_POLICY_PATH = ROOT / CODE_WRITE_POLICY_RELATIVE_PATH
 BINDING_FIELD = "writer_identity_binding"
 EXACT_MATCH_MODE = "exact-normalized"
 
+SIGNING_KEY_BINDINGS_FIELD = "signing_key_bindings"
+OWNER_WRITER_FIELD = "owner_writer"
+OWNER_RECOVERY_FIELD = "owner_recovery"
+
+#: An SSH SHA-256 key fingerprint exactly as git prints it in ``%GK``.
+SSH_KEY_FINGERPRINT = re.compile(r"\ASHA256:[A-Za-z0-9+/]{43}\Z")
+
 #: One record per commit, as produced by ``git log`` with this format. The unit
-#: separator cannot appear in a name, an email, or a SHA, and the record
-#: separator cannot appear inside any of those fields either.
+#: separator cannot appear in a name, an email, a SHA, or a key fingerprint,
+#: and the record separator cannot appear inside any of those fields either.
+#: ``%P`` carries the parent list, ``%GK`` the SSH signing key fingerprint and
+#: ``%G?`` whether the signature over this commit verified, all read from the
+#: commit object rather than from anything the caller chose.
 GIT_FIELD_SEPARATOR = "\x1f"
 GIT_RECORD_SEPARATOR = "\x1e"
-GIT_LOG_FORMAT = GIT_FIELD_SEPARATOR.join(("%H", "%an", "%ae", "%cn", "%ce")) + GIT_RECORD_SEPARATOR
+GIT_LOG_FIELDS = ("%H", "%an", "%ae", "%cn", "%ce", "%P", "%GK", "%G?")
+GIT_LOG_FORMAT = GIT_FIELD_SEPARATOR.join(GIT_LOG_FIELDS) + GIT_RECORD_SEPARATOR
+
+#: ``%G?`` values for a signature that cryptographically verified. ``U`` (good,
+#: validity unknown) is what an empty allowed-signers file yields; ``G`` is
+#: accepted for a configured trust store. Every other status -- bad, expired,
+#: revoked, uncheckable, or absent -- binds nothing, whatever key it names.
+GOOD_SIGNATURE_STATUSES = frozenset({"G", "U"})
+
+#: git populates ``%GK`` for an SSH signature only after running signature
+#: verification, and it refuses to verify at all unless
+#: ``gpg.ssh.allowedSignersFile`` names an existing file. Without that setting --
+#: the default on hosted runners and fresh clones -- every commit would read as
+#: unsigned. An empty allowed-signers file lets git check the signature against
+#: the key embedded in the commit (``%G?`` = ``U``) without trusting any local
+#: keyring, so the fingerprint is read identically everywhere. A signature that
+#: does not verify still yields no fingerprint and fails closed.
+#:
+#: ``log.showSignature`` is forced off: when a user enables it, git prepends
+#: verification diagnostics to stdout ahead of the formatted record, corrupting
+#: the parsed SHAs. Every machine-readable ``git log`` here uses this config.
+GIT_SIGNATURE_READ_CONFIG = (
+    "-c",
+    f"gpg.ssh.allowedSignersFile={os.devnull}",
+    "-c",
+    "log.showSignature=false",
+)
 
 
 def normalize_identity_value(value: str) -> str:
@@ -76,6 +132,7 @@ class WriterIdentity:
     emails: frozenset[str]
     canonical_name: str
     canonical_email: str
+    signing_keys: frozenset[str] = frozenset()
 
     def matches(self, name: str, email: str) -> bool:
         """True only when BOTH fields are bound to this same identity.
@@ -89,11 +146,23 @@ class WriterIdentity:
 
 
 @dataclass(frozen=True)
+class OwnerRecovery:
+    """The explicit owner-authorized writer-recovery boundary."""
+
+    owner_login: str
+    trailer: str
+    schema: str
+    max_boundaries: int
+
+
+@dataclass(frozen=True)
 class WriterIdentityBinding:
     """The canonical, closed allowlist of authorization-bound writer identities."""
 
     identities: tuple[WriterIdentity, ...]
     require_single_writer_per_range: bool
+    require_key_bound_to_writer: bool = False
+    owner_recovery: OwnerRecovery | None = None
 
     def resolve(self, name: str, email: str) -> WriterIdentity | None:
         for identity in self.identities:
@@ -122,6 +191,14 @@ class CommitProvenance:
     author_email: str
     committer_name: str
     committer_email: str
+    parents: str = ""
+    signing_key: str = ""
+    recovery_declaration: str = ""
+    signature_status: str = ""
+
+    @property
+    def first_parent(self) -> str:
+        return self.parents.split(" ")[0].strip()
 
 
 @dataclass(frozen=True)
@@ -145,11 +222,120 @@ def _string_set(source: dict[str, Any], field: str) -> frozenset[str] | None:
     return frozenset(values)
 
 
-def parse_binding(policy: Any) -> tuple[WriterIdentityBinding | None, str]:
+def _fingerprint_set(entry: dict[str, Any], label: str) -> frozenset[str] | None:
+    raw = entry if isinstance(entry, list) else []
+    if not raw:
+        return None
+    values: set[str] = set()
+    for item in raw:
+        if not isinstance(item, str) or not SSH_KEY_FINGERPRINT.match(item.strip()):
+            return None
+        values.add(item.strip())
+    return frozenset(values)
+
+
+def parse_signing_key_bindings(policy: Any) -> tuple[dict[str, frozenset[str]] | None, str]:
+    """Parse writer -> signing-key fingerprint bindings.
+
+    Returns ``None`` on any structural problem, so every caller fails closed on
+    the same condition rather than silently treating a broken binding as "no
+    binding required".
+    """
+
+    if not isinstance(policy, dict):
+        return None, f"{CODE_WRITE_POLICY_RELATIVE_PATH} must be a JSON object"
+    scope = policy.get(BINDING_FIELD)
+    scope = scope if isinstance(scope, dict) else {}
+    section = scope.get(SIGNING_KEY_BINDINGS_FIELD)
+    if not isinstance(section, dict):
+        return None, f"{BINDING_FIELD}.{SIGNING_KEY_BINDINGS_FIELD} must be an object"
+    raw = section.get("bindings")
+    if not isinstance(raw, dict) or not raw:
+        return None, f"{BINDING_FIELD}.{SIGNING_KEY_BINDINGS_FIELD}.bindings must be a non-empty object"
+
+    bindings: dict[str, frozenset[str]] = {}
+    # A key identifies exactly one account on GitHub, which is how hosted
+    # governance resolves it. A fingerprint shared between two writers would let
+    # a commit claim either one and pass here while hosted governance rejects it
+    # as unknown_key -- the very local/hosted split this binding exists to close.
+    owners: dict[str, str] = {}
+    for login, value in raw.items():
+        if not isinstance(login, str) or not login.strip():
+            return None, f"{BINDING_FIELD}.{SIGNING_KEY_BINDINGS_FIELD}.bindings has an unnamed writer"
+        keys = _fingerprint_set(value, login)
+        if keys is None:
+            return None, (
+                f"{BINDING_FIELD}.{SIGNING_KEY_BINDINGS_FIELD}.bindings.{login} must be a non-empty array of "
+                "full SSH SHA-256 fingerprints"
+            )
+        if login.strip() in bindings:
+            return None, f"{BINDING_FIELD}.{SIGNING_KEY_BINDINGS_FIELD}.bindings names {login.strip()!r} twice"
+        for key in sorted(keys):
+            if key in owners:
+                return None, (
+                    f"{BINDING_FIELD}.{SIGNING_KEY_BINDINGS_FIELD}.bindings binds {key} to both "
+                    f"{owners[key]!r} and {login.strip()!r}; a signing key may identify only one writer"
+                )
+            owners[key] = login.strip()
+        bindings[login.strip()] = keys
+    return bindings, ""
+
+
+def parse_owner_recovery(policy: Any) -> tuple[OwnerRecovery | None, str]:
+    """Parse the owner-recovery boundary rule, or explain why it is unusable.
+
+    ``None`` with a reason means recovery is unavailable. Recovery is
+    unavailable in two distinct ways -- absent policy and broken policy -- and
+    both are handled by the caller as "no recovery may be granted", so a
+    malformed grant can never widen what a range is allowed to contain.
+    """
+
+    if not isinstance(policy, dict):
+        return None, f"{CODE_WRITE_POLICY_RELATIVE_PATH} must be a JSON object"
+    scope = policy.get(BINDING_FIELD)
+    scope = scope if isinstance(scope, dict) else {}
+    owner = scope.get(OWNER_WRITER_FIELD)
+    if not isinstance(owner, dict):
+        return None, f"{BINDING_FIELD}.{OWNER_WRITER_FIELD} must be an object"
+    owner_login = owner.get("login")
+    if not isinstance(owner_login, str) or not owner_login.strip():
+        return None, f"{BINDING_FIELD}.{OWNER_WRITER_FIELD}.login must name the repository owner"
+
+    section = scope.get(OWNER_RECOVERY_FIELD)
+    if not isinstance(section, dict):
+        return None, f"{BINDING_FIELD}.{OWNER_RECOVERY_FIELD} must be an object"
+    if section.get("enabled") is not True:
+        return None, f"{BINDING_FIELD}.{OWNER_RECOVERY_FIELD} is not enabled"
+
+    trailer = section.get("declaration_trailer")
+    if not isinstance(trailer, str) or not trailer.strip():
+        return None, f"{BINDING_FIELD}.{OWNER_RECOVERY_FIELD}.declaration_trailer must be a non-empty string"
+    schema = section.get("declaration_schema")
+    if not isinstance(schema, str) or not schema.strip():
+        return None, f"{BINDING_FIELD}.{OWNER_RECOVERY_FIELD}.declaration_schema must be a non-empty string"
+
+    max_boundaries = section.get("max_boundaries_per_range")
+    if not isinstance(max_boundaries, int) or isinstance(max_boundaries, bool) or max_boundaries < 1:
+        return None, f"{BINDING_FIELD}.{OWNER_RECOVERY_FIELD}.max_boundaries_per_range must be a positive integer"
+
+    required = section.get("required_claims")
+    expected = {"schema", "departed_writer", "recovery_writer", "parent_sha"}
+    if not isinstance(required, list) or {str(item) for item in required} != expected:
+        return None, f"{BINDING_FIELD}.{OWNER_RECOVERY_FIELD}.required_claims must declare exactly {sorted(expected)}"
+
+    return OwnerRecovery(owner_login.strip(), trailer.strip(), schema.strip(), max_boundaries), ""
+
+
+def parse_binding(policy: Any, *, predates_key_binding: bool = False) -> tuple[WriterIdentityBinding | None, str]:
     """Parse the writer identity binding, or explain why it is unusable.
 
     Never raises and never returns a partially trusted binding: any structural
     problem yields ``None``, so every caller fails closed on the same condition.
+
+    ``predates_key_binding`` is only for reading a trusted base whose policy was
+    written before signing-key bindings existed: an *absent* section then means
+    that regime binds no keys. A present but malformed section still fails
+    closed, and the canonical policy is still required to declare it.
     """
 
     if not isinstance(policy, dict):
@@ -168,6 +354,40 @@ def parse_binding(policy: Any) -> tuple[WriterIdentityBinding | None, str]:
     raw_identities = binding.get("identities")
     if not isinstance(raw_identities, list) or not raw_identities:
         return None, f"{BINDING_FIELD}.identities must be a non-empty array"
+
+    # The signing-key binding is what stops a caller-chosen author/committer
+    # header from standing in for a signature. It is parsed before the identity
+    # loop so every identity inherits its own key set, and a binding naming a
+    # login no identity binds is a structural error rather than a silently
+    # ignored extra allowlist.
+    if predates_key_binding and SIGNING_KEY_BINDINGS_FIELD not in binding:
+        signing_keys: dict[str, frozenset[str]] | None = {}
+    else:
+        signing_keys, key_error = parse_signing_key_bindings(policy)
+        if signing_keys is None:
+            return None, key_error
+    require_key_binding = binding.get(SIGNING_KEY_BINDINGS_FIELD)
+    require_key_binding = (
+        require_key_binding.get("require_key_bound_to_resolved_writer") is True
+        if isinstance(require_key_binding, dict)
+        else False
+    )
+    bound_logins = {
+        entry.get("login").strip()
+        for entry in raw_identities
+        if isinstance(entry, dict) and isinstance(entry.get("login"), str)
+    }
+    unbound_keys = sorted(login for login in signing_keys if login not in bound_logins)
+    if unbound_keys:
+        return None, (
+            f"{BINDING_FIELD}.{SIGNING_KEY_BINDINGS_FIELD} binds signing keys for logins no identity binds: "
+            + ", ".join(unbound_keys)
+        )
+    missing_keys = sorted(login for login in bound_logins if login not in signing_keys)
+    if require_key_binding and missing_keys:
+        return None, (
+            f"{BINDING_FIELD}.{SIGNING_KEY_BINDINGS_FIELD} binds no signing key for: " + ", ".join(missing_keys)
+        )
 
     identities: list[WriterIdentity] = []
     seen_logins: set[str] = set()
@@ -204,10 +424,28 @@ def parse_binding(policy: Any) -> tuple[WriterIdentityBinding | None, str]:
                 emails=emails,
                 canonical_name=canonical_name.strip(),
                 canonical_email=canonical_email.strip(),
+                signing_keys=signing_keys.get(login.strip(), frozenset()),
             )
         )
 
-    return WriterIdentityBinding(tuple(identities), single_writer), ""
+    owner_recovery, recovery_error = parse_owner_recovery(policy)
+    # Only an absent grant, or one explicitly switched off, means "no recovery".
+    # A grant that is declared but malformed is a broken privilege section and
+    # fails the whole binding closed rather than silently degrading.
+    recovery_section = binding.get(OWNER_RECOVERY_FIELD)
+    recovery_declared = OWNER_WRITER_FIELD in binding or OWNER_RECOVERY_FIELD in binding
+    recovery_disabled = isinstance(recovery_section, dict) and recovery_section.get("enabled") is False
+    if recovery_error and recovery_declared and not recovery_disabled:
+        return None, recovery_error
+    return (
+        WriterIdentityBinding(
+            tuple(identities),
+            single_writer,
+            require_key_bound_to_writer=require_key_binding,
+            owner_recovery=owner_recovery if recovery_error == "" else None,
+        ),
+        "",
+    )
 
 
 def load_binding(path: Path | None = None) -> tuple[WriterIdentityBinding | None, str]:
@@ -250,8 +488,252 @@ def evaluate_commit(binding: WriterIdentityBinding, commit: CommitProvenance) ->
     return ProvenanceVerdict(True, f"commit {short} is bound to writer {author.login!r}", author.login)
 
 
+def verify_signing_key_identity(
+    binding: WriterIdentityBinding, commit: CommitProvenance, writer: WriterIdentity
+) -> str | None:
+    """Bind the key that actually signed the commit to the writer it claims.
+
+    The author/committer headers are caller-chosen, so on their own they assert
+    an identity without proving it. ``%GK`` reads the SSH signing key embedded
+    in the commit's own ``gpgsig`` header, so it is commit evidence rather than
+    a claim, and it needs no keyring, no private key and no network.
+
+    A mismatch here is precisely what trusted hosted governance reports as
+    ``unknown_key``: GitHub resolves the signature against the *claimed*
+    committer and finds no key registered to that account. Checking it here
+    moves that verdict from after publication to before it.
+    """
+
+    if not binding.require_key_bound_to_writer:
+        return None
+    short = commit.sha[:10] or "(unknown)"
+    key = commit.signing_key.strip()
+    if not key:
+        return (
+            f"commit {short} claims writer {writer.login!r} but carries no readable SSH signing key, so nothing "
+            "binds the claimed identity to a signature"
+        )
+    status = commit.signature_status.strip()
+    if status not in GOOD_SIGNATURE_STATUSES:
+        return (
+            f"commit {short} claims writer {writer.login!r} but its signature by {key} did not verify "
+            f"(signature status {status or 'none'!r}), so the key binds nothing"
+        )
+    if not writer.signing_keys:
+        return f"commit {short} writer {writer.login!r} has no signing key bound in policy"
+    if key not in writer.signing_keys:
+        return (
+            f"commit {short} is claimed by writer {writer.login!r} but is signed with {key}, which is not bound "
+            f"to {writer.login!r}. This is the identity/key mismatch trusted hosted governance rejects as "
+            "unknown_key: re-sign the commit with a key registered to the identity it claims"
+        )
+    return None
+
+
+def parse_recovery_declaration(commit: CommitProvenance, recovery: OwnerRecovery) -> tuple[dict[str, Any] | None, str]:
+    """Parse the owner-recovery declaration carried by one commit, if any.
+
+    Returns ``(None, "")`` when the commit carries no declaration at all, and
+    ``(None, reason)`` when it carries one that cannot be trusted. The two are
+    different outcomes on purpose: an absent declaration is ordinary history,
+    while a malformed one is an attempted grant that fails closed.
+    """
+
+    raw = commit.recovery_declaration.strip()
+    if not raw:
+        return None, ""
+    short = commit.sha[:10] or "(unknown)"
+    try:
+        document = json.loads(raw)
+    except (TypeError, ValueError) as exc:
+        return None, f"commit {short} carries a malformed {recovery.trailer} declaration ({type(exc).__name__})"
+    if not isinstance(document, dict):
+        return None, f"commit {short} {recovery.trailer} declaration is not a JSON object"
+    expected = {"schema", "departed_writer", "recovery_writer", "parent_sha"}
+    if set(document) != expected:
+        return None, (
+            f"commit {short} {recovery.trailer} declaration must carry exactly {sorted(expected)}, "
+            f"not {sorted(document)}"
+        )
+    if document.get("schema") != recovery.schema:
+        return None, (
+            f"commit {short} {recovery.trailer} declaration schema {document.get('schema')!r} is not "
+            f"{recovery.schema!r}"
+        )
+    for claim in ("departed_writer", "recovery_writer"):
+        value = document.get(claim)
+        if not isinstance(value, str) or not value.strip():
+            return None, f"commit {short} {recovery.trailer} declaration has an empty {claim}"
+    parent = document.get("parent_sha")
+    if not isinstance(parent, str) or not re.fullmatch(r"[0-9a-f]{40}", parent.strip().lower()):
+        return None, f"commit {short} {recovery.trailer} declaration parent_sha is not a full commit SHA"
+    return document, ""
+
+
+def _recovery_epochs(
+    resolved: tuple[tuple[CommitProvenance, WriterIdentity], ...], boundary: CommitProvenance
+) -> tuple[frozenset[str], frozenset[str]]:
+    """The in-range ancestry of the boundary's pinned parent, and the boundary's in-range descendants.
+
+    Built only from the ``%P`` parent links of the range's own commits. A parent
+    outside the range (the fork point, or a merged-in base commit) ends the walk.
+    """
+
+    parents = {commit.sha.lower(): [p.lower() for p in commit.parents.split()] for commit, _writer in resolved}
+
+    departed: set[str] = set()
+    pending = [boundary.first_parent.lower()]
+    while pending:
+        sha = pending.pop()
+        if sha in parents and sha not in departed:
+            departed.add(sha)
+            pending.extend(parents[sha])
+
+    recovery = {boundary.sha.lower()}
+    changed = True
+    while changed:
+        changed = False
+        for sha, links in parents.items():
+            if sha not in recovery and any(link in recovery for link in links):
+                recovery.add(sha)
+                changed = True
+    return frozenset(departed), frozenset(recovery - departed)
+
+
+def evaluate_owner_recovery(
+    binding: WriterIdentityBinding,
+    recovery: OwnerRecovery,
+    resolved: tuple[tuple[CommitProvenance, WriterIdentity], ...],
+) -> ProvenanceVerdict:
+    """Admit a mixed range only through one explicit, owner-signed boundary.
+
+    Everything checked here is what separates this from simply permitting mixed
+    writers: the boundary is declared explicitly rather than inferred, it is
+    authored and signed by the owner rather than by any agent, the departed and
+    recovery writers were both already authorized before the boundary existed,
+    each epoch is independently single-writer, and the commits before the
+    boundary are evaluated exactly as they always were and never re-attributed.
+    """
+
+    declared: list[tuple[int, CommitProvenance, dict[str, Any]]] = []
+    for index, (commit, _writer) in enumerate(resolved):
+        declaration, error = parse_recovery_declaration(commit, recovery)
+        if error:
+            return ProvenanceVerdict(False, error)
+        if declaration is not None:
+            declared.append((index, commit, declaration))
+
+    if not declared:
+        writers = sorted({writer.login for _commit, writer in resolved})
+        return ProvenanceVerdict(
+            False,
+            f"governed range mixes authorization-bound writers: {', '.join(writers)}",
+        )
+    if len(declared) > recovery.max_boundaries:
+        return ProvenanceVerdict(
+            False,
+            f"governed range declares {len(declared)} writer-recovery boundaries; at most "
+            f"{recovery.max_boundaries} is permitted",
+        )
+
+    index, boundary, declaration = declared[0]
+    short = boundary.sha[:10] or "(unknown)"
+    _boundary_commit, boundary_writer = resolved[index]
+
+    if normalize_identity_value(boundary_writer.login) != normalize_identity_value(recovery.owner_login):
+        return ProvenanceVerdict(
+            False,
+            f"commit {short} declares a writer-recovery boundary but is bound to {boundary_writer.login!r}, not "
+            f"the repository owner {recovery.owner_login!r}",
+        )
+    departed = declaration["departed_writer"].strip()
+    recovery_writer = declaration["recovery_writer"].strip()
+    if normalize_identity_value(recovery_writer) != normalize_identity_value(recovery.owner_login):
+        return ProvenanceVerdict(
+            False,
+            f"commit {short} declares recovery_writer {recovery_writer!r}, which is not the repository owner "
+            f"{recovery.owner_login!r}",
+        )
+    if binding.identity_for(departed) is None:
+        return ProvenanceVerdict(
+            False,
+            f"commit {short} declares departed_writer {departed!r}, which is not an authorization-bound writer "
+            f"({', '.join(binding.logins)})",
+        )
+    if declaration["parent_sha"].strip().lower() != boundary.first_parent.lower():
+        return ProvenanceVerdict(
+            False,
+            f"commit {short} declares parent_sha {declaration['parent_sha'][:10]} but its exact parent is "
+            f"{boundary.first_parent[:10] or '(none)'}",
+        )
+
+    if index == 0:
+        return ProvenanceVerdict(
+            False,
+            f"commit {short} declares a writer-recovery boundary at the first position of the governed range, "
+            "where there is no departed writer epoch to recover from",
+        )
+
+    # The epochs are defined by ancestry, never by position. ``git log
+    # --reverse`` orders by date, so in a range with a merge a departed-writer
+    # side branch can sort before the boundary without being reachable from
+    # the pinned parent, and would otherwise be counted as "before" a takeover
+    # it actually entered after. The departed epoch is exactly the in-range
+    # ancestry of the pinned parent; the recovery epoch is exactly the boundary
+    # and its in-range descendants; every commit must belong to one of them.
+    departed_shas, recovery_shas = _recovery_epochs(resolved, boundary)
+    uncovered = [
+        commit.sha[:10] for commit, _writer in resolved if commit.sha.lower() not in departed_shas | recovery_shas
+    ]
+    if uncovered:
+        return ProvenanceVerdict(
+            False,
+            f"commit(s) {', '.join(uncovered)} are neither ancestors of the recovery boundary's pinned parent "
+            f"{boundary.first_parent[:10]} nor descendants of boundary {short}, so no epoch governs them",
+        )
+    if not departed_shas:
+        return ProvenanceVerdict(
+            False,
+            f"commit {short} pins parent {boundary.first_parent[:10]}, which is outside the governed range, so "
+            "there is no departed writer epoch to recover from",
+        )
+
+    departed_writers = {writer.login for commit, writer in resolved if commit.sha.lower() in departed_shas}
+    if len(departed_writers) != 1:
+        return ProvenanceVerdict(
+            False,
+            "the departed epoch before the recovery boundary must be single-writer, but it mixes: "
+            + ", ".join(sorted(departed_writers)),
+        )
+    actual_departed = next(iter(departed_writers))
+    if normalize_identity_value(actual_departed) != normalize_identity_value(departed):
+        return ProvenanceVerdict(
+            False,
+            f"commit {short} declares departed_writer {departed!r} but the epoch before it is written by "
+            f"{actual_departed!r}",
+        )
+
+    recovery_writers = {writer.login for commit, writer in resolved if commit.sha.lower() in recovery_shas}
+    if recovery_writers != {boundary_writer.login}:
+        foreign = sorted(recovery_writers - {boundary_writer.login})
+        return ProvenanceVerdict(
+            False,
+            f"the recovery epoch after the owner boundary must contain only {boundary_writer.login!r}, but it "
+            f"also carries: {', '.join(foreign)}",
+        )
+
+    return ProvenanceVerdict(
+        True,
+        f"{len(resolved)} commit(s) in the governed range are single-writer across an owner-authorized recovery "
+        f"boundary at {short}: epoch {actual_departed!r} ({index} commit(s)) then epoch "
+        f"{boundary_writer.login!r} ({len(resolved) - index} commit(s)). Historical attribution before the "
+        "boundary is unchanged.",
+        boundary_writer.login,
+    )
+
+
 def evaluate_range(binding: WriterIdentityBinding, commits: tuple[CommitProvenance, ...]) -> ProvenanceVerdict:
-    """Evaluate every commit in the governed range under one bound writer.
+    """Evaluate every commit in the governed range, one single-writer epoch at a time.
 
     An empty range is not silently admissible: a range that carries no commit
     evidence is exactly the state that cannot be checked, so it fails closed.
@@ -260,24 +742,42 @@ def evaluate_range(binding: WriterIdentityBinding, commits: tuple[CommitProvenan
     if not commits:
         return ProvenanceVerdict(False, "governed commit range carries no commit provenance evidence")
 
-    writers: set[str] = set()
+    resolved: list[tuple[CommitProvenance, WriterIdentity]] = []
     for commit in commits:
         verdict = evaluate_commit(binding, commit)
         if not verdict.ok:
             return verdict
-        writers.add(verdict.writer_login)
+        writer = binding.identity_for(verdict.writer_login)
+        if writer is None:
+            return ProvenanceVerdict(False, f"commit {verdict.reason} could not be resolved to a bound writer")
+        key_problem = verify_signing_key_identity(binding, commit, writer)
+        if key_problem is not None:
+            return ProvenanceVerdict(False, key_problem)
+        resolved.append((commit, writer))
 
-    if binding.require_single_writer_per_range and len(writers) > 1:
+    writers = {writer.login for _commit, writer in resolved}
+    if len(writers) <= 1:
+        writer = sorted(writers)[0]
+        return ProvenanceVerdict(
+            True,
+            f"{len(commits)} commit(s) in the governed range are bound to writer {writer!r}",
+            writer,
+        )
+
+    if not binding.require_single_writer_per_range:
+        writer = sorted(writers)[0]
+        return ProvenanceVerdict(
+            True,
+            f"{len(commits)} commit(s) in the governed range are bound to {len(writers)} writer(s) because "
+            f"{BINDING_FIELD}.require_single_writer_per_range is disabled",
+            writer,
+        )
+    if binding.owner_recovery is None:
         return ProvenanceVerdict(
             False,
             "governed range mixes authorization-bound writers: " + ", ".join(sorted(writers)),
         )
-    writer = sorted(writers)[0]
-    return ProvenanceVerdict(
-        True,
-        f"{len(commits)} commit(s) in the governed range are bound to writer {writer!r}",
-        writer,
-    )
+    return evaluate_owner_recovery(binding, binding.owner_recovery, tuple(resolved))
 
 
 # --- Git evidence -----------------------------------------------------------
@@ -304,8 +804,10 @@ def _run_git(*args: str, cwd: Path | None = None) -> str:
 def parse_commit_records(raw: str) -> tuple[CommitProvenance, ...]:
     """Parse ``git log`` output produced with :data:`GIT_LOG_FORMAT`.
 
-    A record that does not carry exactly the five expected fields is unreadable
-    commit metadata, which fails closed rather than being skipped.
+    Every record must carry exactly the fields :data:`GIT_LOG_FIELDS` requests.
+    The separators cannot occur in well-formed commit metadata, so any other
+    count means the record was split or the format drifted, and it fails closed
+    rather than being read with fields shifted or silently dropped.
     """
 
     commits: list[CommitProvenance] = []
@@ -314,9 +816,9 @@ def parse_commit_records(raw: str) -> tuple[CommitProvenance, ...]:
         if not stripped.strip():
             continue
         fields = stripped.split(GIT_FIELD_SEPARATOR)
-        if len(fields) != 5:
+        if len(fields) != len(GIT_LOG_FIELDS):
             raise GitEvidenceUnavailable("commit metadata could not be parsed into canonical provenance fields")
-        sha, author_name, author_email, committer_name, committer_email = fields
+        sha, author_name, author_email, committer_name, committer_email, parents, signing_key, status = fields
         commits.append(
             CommitProvenance(
                 sha=sha.strip(),
@@ -324,16 +826,82 @@ def parse_commit_records(raw: str) -> tuple[CommitProvenance, ...]:
                 author_email=author_email,
                 committer_name=committer_name,
                 committer_email=committer_email,
+                parents=parents.strip(),
+                signing_key=signing_key.strip(),
+                signature_status=status.strip(),
             )
         )
     return tuple(commits)
 
 
-def read_range_commits(base: str, head: str, *, cwd: Path | None = None) -> tuple[CommitProvenance, ...]:
-    """Commit provenance for ``base..head``, oldest first."""
+def read_range_commits(
+    base: str, head: str, *, cwd: Path | None = None, binding: WriterIdentityBinding | None = None
+) -> tuple[CommitProvenance, ...]:
+    """Commit provenance for ``base..head``, oldest first.
 
-    raw = _run_git("log", "--reverse", f"--format={GIT_LOG_FORMAT}", f"{base}..{head}", cwd=cwd)
-    return parse_commit_records(raw)
+    The owner-recovery declaration is read separately with git's own
+    ``%(trailers)`` pretty-format rather than by parsing the whole message, so
+    a commit body can neither be mistaken for a declaration nor accidentally
+    break record parsing.
+    """
+
+    raw = _run_git(
+        *GIT_SIGNATURE_READ_CONFIG, "log", "--reverse", f"--format={GIT_LOG_FORMAT}", f"{base}..{head}", cwd=cwd
+    )
+    commits = parse_commit_records(raw)
+    recovery = binding if binding is not None else load_binding()[0]
+    if recovery is None or recovery.owner_recovery is None or not commits:
+        return commits
+    trailer = recovery.owner_recovery.trailer
+    declarations = _run_git(
+        *GIT_SIGNATURE_READ_CONFIG,
+        "log",
+        "--reverse",
+        f"--format=%H{GIT_FIELD_SEPARATOR}%(trailers:key={trailer},valueonly,separator={GIT_FIELD_SEPARATOR})",
+        f"{base}..{head}",
+        cwd=cwd,
+    )
+    found: dict[str, str] = {}
+    for line in declarations.splitlines():
+        if GIT_FIELD_SEPARATOR not in line:
+            continue
+        sha, _, value = line.partition(GIT_FIELD_SEPARATOR)
+        if sha.strip() and value.strip():
+            found[sha.strip().lower()] = value.strip()
+    if not found:
+        return commits
+    return tuple(
+        commit if commit.sha.lower() not in found else replace(commit, recovery_declaration=found[commit.sha.lower()])
+        for commit in commits
+    )
+
+
+#: The ``owner/repo`` pair a GitHub https or ssh remote URL names.
+_REMOTE_OWNER_REPO = re.compile(r"github\.com[:/](?P<owner>[A-Za-z0-9_.-]+)/[A-Za-z0-9_.-]+?(?:\.git)?/?\Z")
+
+
+def repository_owner(*, cwd: Path | None = None) -> str | None:
+    """The owner of the canonical repository, from repository identity rather than policy.
+
+    The policy's own ``owner_writer`` is the claim being checked, so it cannot be
+    its own evidence. Hosted runs read the base repository GitHub names in
+    ``GITHUB_REPOSITORY``; a clone reads ``upstream`` before ``origin``, so a
+    fork resolves to the repository it was forked from. ``None`` when neither is
+    available, which the caller treats as unknown rather than as a match.
+    """
+
+    hosted = os.environ.get("GITHUB_REPOSITORY", "").strip()
+    if "/" in hosted:
+        return hosted.split("/", 1)[0] or None
+    for remote in ("upstream", "origin"):
+        try:
+            url = _run_git("config", "--get", f"remote.{remote}.url", cwd=cwd).strip()
+        except GitEvidenceUnavailable:
+            continue
+        match = _REMOTE_OWNER_REPO.search(url)
+        if match is not None:
+            return match.group("owner")
+    return None
 
 
 def resolve_governed_base(head: str, *, base_ref: str = "main", remote: str = "origin", cwd: Path | None = None) -> str:
@@ -362,15 +930,91 @@ def resolve_governed_base(head: str, *, base_ref: str = "main", remote: str = "o
     )
 
 
-def check_range(head: str, *, base_ref: str = "main", remote: str = "origin", cwd: Path | None = None) -> str | None:
-    """Validate the governed range, returning an actionable diagnosis or ``None``."""
+def trusted_remote(*, cwd: Path | None = None) -> str:
+    """The remote holding the canonical repository: ``upstream`` in a fork clone, else ``origin``.
 
-    binding, error = load_binding()
-    if binding is None:
-        return f"writer provenance is unknown ({error})"
+    The same preference as :func:`repository_owner` and the pre-push criteria
+    lookup, so a contributor's fork never stands in for canonical authority.
+    """
+
     try:
+        _run_git("config", "--get", "remote.upstream.url", cwd=cwd)
+    except GitEvidenceUnavailable:
+        return "origin"
+    return "upstream"
+
+
+def resolve_trusted_tip(*, base_ref: str = "main", remote: str = "origin", cwd: Path | None = None) -> str:
+    """The trusted branch tip as the server advertises it right now.
+
+    The local remote-tracking ref is only a cache: after the trusted branch
+    rotates a key, a clone that has not fetched would read the superseded
+    policy. The server's advertised tip is the authority; the cached ref must
+    equal it, so the policy blob read is that exact commit. Anything else --
+    unreachable server, missing branch, stale cache -- fails closed.
+    """
+
+    try:
+        advertised = _run_git("ls-remote", "--exit-code", remote, f"refs/heads/{base_ref}", cwd=cwd).split()
+    except GitEvidenceUnavailable as exc:
+        raise GitEvidenceUnavailable(
+            f"the trusted {remote}/{base_ref} tip cannot be read from the server ({exc}), so its freshness "
+            "cannot be established"
+        ) from exc
+    tip = advertised[0].strip().lower() if advertised else ""
+    try:
+        cached = _run_git("rev-parse", "--verify", "--quiet", f"refs/remotes/{remote}/{base_ref}^{{commit}}", cwd=cwd)
+    except GitEvidenceUnavailable:
+        cached = ""
+    if not tip or cached.strip().lower() != tip:
+        raise GitEvidenceUnavailable(
+            f"the local {remote}/{base_ref} ({cached.strip()[:10] or 'missing'}) is not the server's current tip "
+            f"({tip[:10] or 'unknown'}); run `git fetch {remote} {base_ref}` so the writer binding is read from "
+            "current trusted authority"
+        )
+    return tip
+
+
+def load_trusted_binding(base: str, *, cwd: Path | None = None) -> tuple[WriterIdentityBinding | None, str]:
+    """The writer binding as committed at the trusted commit ``base``."""
+
+    try:
+        raw = _run_git("show", f"{base}:{CODE_WRITE_POLICY_RELATIVE_PATH}", cwd=cwd)
+    except GitEvidenceUnavailable as exc:
+        return None, f"{CODE_WRITE_POLICY_RELATIVE_PATH} is unreadable at the base ({exc})"
+    try:
+        document = json.loads(raw)
+    except json.JSONDecodeError as exc:
+        return None, f"{CODE_WRITE_POLICY_RELATIVE_PATH} is unreadable at the base ({exc})"
+    return parse_binding(document, predates_key_binding=True)
+
+
+def check_range(head: str, *, base_ref: str = "main", remote: str | None = None, cwd: Path | None = None) -> str | None:
+    """Validate the governed range, returning an actionable diagnosis or ``None``.
+
+    The range is judged by the binding at the current trusted base-branch tip,
+    never by the candidate's own policy file. A candidate that edits its identities or
+    signing-key fingerprints would otherwise authorize itself in the same push,
+    which hosted governance -- reading authority from the default branch --
+    then rejects. A policy change takes effect for ranges based on it, after it
+    is merged.
+    """
+
+    remote = remote or trusted_remote(cwd=cwd)
+    try:
+        trusted = resolve_trusted_tip(base_ref=base_ref, remote=remote, cwd=cwd)
         base = resolve_governed_base(head, base_ref=base_ref, remote=remote, cwd=cwd)
-        commits = read_range_commits(base, head, cwd=cwd)
+    except GitEvidenceUnavailable as exc:
+        return f"writer provenance evidence is unavailable ({exc})"
+    # The fork point selects which commits are governed; the authority they
+    # are judged by is the trusted branch as it stands now. A branch forked
+    # before a key rotation must meet the current bindings, exactly as hosted
+    # governance -- which reads the checked-out default branch -- requires.
+    binding, error = load_trusted_binding(trusted, cwd=cwd)
+    if binding is None:
+        return f"writer provenance is unknown at trusted {remote}/{base_ref} {trusted[:10]} ({error})"
+    try:
+        commits = read_range_commits(base, head, cwd=cwd, binding=binding)
     except GitEvidenceUnavailable as exc:
         return f"writer provenance evidence is unavailable ({exc})"
 
@@ -445,7 +1089,11 @@ def parser() -> argparse.ArgumentParser:
     )
     result.add_argument("--check-range", metavar="HEAD", help="Verify every commit in the governed base..HEAD range.")
     result.add_argument("--base-ref", default="main", help="Trusted base branch name (default: main).")
-    result.add_argument("--remote", default="origin", help="Remote holding the trusted base branch (default: origin).")
+    result.add_argument(
+        "--remote",
+        default=None,
+        help="Remote holding the trusted base branch (default: upstream when configured, else origin).",
+    )
     return result
 
 
