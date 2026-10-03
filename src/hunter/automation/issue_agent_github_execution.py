@@ -640,11 +640,11 @@ class GitHubHostedExecutionRuntime:
                 execution.validation_refused = True
                 raise ExecutionResultRejectedError("validation acknowledgement does not bind the accepted result")
             execution.validated_tree = tree
+        # Echo no request-supplied value: only server-held identities are returned.
         return {
             "schema_version": EXECUTION_VALIDATION_ACK_SCHEMA_VERSION,
             "authorization_id": execution.target.authorization_id,
-            "result_sha256": digest,
-            "tree": tree,
+            "result_sha256": execution.receipt.result_sha256,
         }
 
     def _fail(self, execution: _Execution, error: BaseException) -> None:

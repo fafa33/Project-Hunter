@@ -622,6 +622,36 @@
       "guard": "The credential-free validator records a single-use acknowledgement over the existing result route (role validator), bound to the same OIDC run, its own prior candidate fetch, the exact accepted result digest and the exact 40-hex tree; a mismatched acknowledgement locks publication out. The publisher fetch requires that recorded acknowledgement and returns the recorded tree and digest; the publisher publishes only that tree and refuses when the workflow output disagrees.",
       "test": "tests/test_issue_agent_github_execution.py::test_publisher_cannot_fetch_before_the_validator_acknowledges",
       "status": "guarded"
+    },
+    {
+      "id": "PRH-077",
+      "class": "untrusted-secret-placed-in-process-argument-vector",
+      "source": "PR #558 Copilot review, 2026-10-03 (head ee74b21d, thread PRRT_kwDOTRDHr86oqMIp): isolated_command serialized every environment assignment, including the executor's model API key, into the sudo/env argument vector, exposing it in process command lines and sudo's logged command.",
+      "classification": "systemic",
+      "guard_boundary": "untrusted model launch across the isolation uid",
+      "guard": "isolated_secret_launch passes non-secret settings as env assignments and hands every secret over only through the sudo launcher's own environment with --preserve-env=<names>; it refuses any launch whose argument vector would contain a secret value, a secret that shadows PATH or a public variable, or an empty secret. The launcher environment is exactly PATH plus the named secrets.",
+      "test": "tests/test_issue_agent_github_execution.py::test_secret_reaches_the_real_child_environment_but_not_its_argv",
+      "status": "guarded"
+    },
+    {
+      "id": "PRH-078",
+      "class": "public-log-filter-is-syntactic-not-a-fixed-vocabulary",
+      "source": "PR #558 Copilot review, 2026-10-03 (head ee74b21d, thread PRRT_kwDOTRDHr86oqMIf): the trigger's refusal filter admitted any uppercase/underscore/colon code, so Issue-derived uppercase text shaped like a reason code could reach the public Actions log.",
+      "classification": "systemic",
+      "guard_boundary": "trusted trigger refusal reporting",
+      "guard": "Only codes in PUBLIC_PRE_MODEL_REASON_CODES, the exact set of literal PreModelInvariantError codes in the repository, are reported; the dynamic SOURCE_HANDLING:<message> form and everything else is status-only. A regression rescans the source so the allowlist cannot drift from the literal codes.",
+      "test": "tests/test_issue_agent_github_execution.py::test_issuer_refusal_codes_are_a_fixed_repository_vocabulary",
+      "status": "guarded"
+    },
+    {
+      "id": "PRH-079",
+      "class": "bounded-read-accepts-truncated-prefix",
+      "source": "PR #558 Copilot review, 2026-10-03 (head ee74b21d, thread PRRT_kwDOTRDHr86oqMIR): the executor's OIDC token response was read with a 64 KiB cap and no overflow check, so a valid JSON prefix followed by extra data could be truncated and accepted. Recurrence of the PRH-074 class on a second bounded read.",
+      "classification": "systemic",
+      "guard_boundary": "GitHub-hosted job transport reads",
+      "guard": "The OIDC response is read with one extra byte and refused when it exceeds the bound; decode failures map to the fixed OIDC_UNAVAILABLE code.",
+      "test": "tests/test_issue_agent_github_execution.py::test_oidc_token_response_bound_and_encoding_fail_closed",
+      "status": "guarded"
     }
   ],
   "families": [
@@ -1619,7 +1649,9 @@
         "tests/test_issue_agent_github_execution.py::test_validator_refuses_the_executor_model_credential",
         "tests/test_issue_agent_github_execution.py::test_publisher_cannot_fetch_before_the_validator_acknowledges",
         "tests/test_issue_agent_github_execution.py::test_a_mismatched_or_foreign_validation_acknowledgement_fails_closed",
-        "tests/test_issue_agent_github_execution.py::test_publisher_publishes_only_the_runtime_recorded_tree"
+        "tests/test_issue_agent_github_execution.py::test_publisher_publishes_only_the_runtime_recorded_tree",
+        "tests/test_issue_agent_github_execution.py::test_secret_launch_keeps_secret_values_out_of_every_argument_vector",
+        "tests/test_issue_agent_github_execution.py::test_secret_reaches_the_real_child_environment_but_not_its_argv"
       ],
       "lifecycle": "regression-tested",
       "sources": [

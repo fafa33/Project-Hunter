@@ -5,7 +5,6 @@ import hashlib
 import json
 import math
 import os
-import re
 import sys
 import time
 import urllib.error
@@ -375,15 +374,35 @@ def _post_authorization(
         raise _TransientDispatchError("issue-agent webhook dispatch failed (timeout or connection failure)") from None
 
 
-#: The only issuer refusal detail the public trigger log may carry: the
-#: fixed-vocabulary pre-model reason code (#514). Every other refusal text can
-#: quote Issue or execution content and is reported by HTTP status alone.
-_PUBLIC_REFUSAL_RE = re.compile(r"pre-model invariant rejected execution preparation: [A-Z][A-Z0-9_:]{0,120}")
+#: The only issuer refusal detail the public trigger log may carry: one of the
+#: repository's fixed literal pre-model reason codes (#514). This is an explicit
+#: vocabulary, never a pattern: any other code -- including the dynamic
+#: ``SOURCE_HANDLING:<message>`` form -- and every other refusal text can quote
+#: Issue or execution content and is reported by HTTP status alone.
+PUBLIC_PRE_MODEL_REASON_CODES: frozenset[str] = frozenset(
+    {
+        "CANDIDATE_SET_MISMATCH",
+        "CONTEXT_POLICY_ID_MISMATCH",
+        "HISTORICAL_REPOSITORY_SPAN_INVENTORY_UNSUPPORTED",
+        "POLICY_COVERAGE_MISMATCH",
+        "PROMPT_PREFLIGHT_SIZE_MISMATCH",
+        "REQUIRED_SPAN_NOT_IN_CANONICAL_INVENTORY",
+        "SOURCE_HANDLING:MODEL_PROCESSING_NOT_ALLOWED",
+        "SOURCE_HANDLING_AUTHORITY_REQUIRED",
+        "SOURCE_HANDLING_CUTOFF_MISMATCH",
+        "SOURCE_HANDLING_SCOPE_AMBIGUOUS",
+        "TARGET_DOCUMENT_MISMATCH",
+    }
+)
+_PRE_MODEL_REFUSAL_PREFIX = "pre-model invariant rejected execution preparation: "
 
 
 def _public_refusal_reason(detail: str) -> str:
     text = detail.strip()
-    return text if _PUBLIC_REFUSAL_RE.fullmatch(text) else ""
+    if not text.startswith(_PRE_MODEL_REFUSAL_PREFIX):
+        return ""
+    code = text[len(_PRE_MODEL_REFUSAL_PREFIX) :]
+    return text if code in PUBLIC_PRE_MODEL_REASON_CODES else ""
 
 
 def _retry_delay_seconds(

@@ -30,6 +30,7 @@ from __future__ import annotations
 import json
 import logging
 import threading
+from collections.abc import Mapping
 from http.server import BaseHTTPRequestHandler, HTTPServer
 from socketserver import ThreadingMixIn
 from typing import Any, Final
@@ -58,6 +59,16 @@ REQUEST_READ_TIMEOUT_SECONDS: Final[float] = 15.0
 def canonical_json(value: object) -> str:
     """Canonical JSON: sorted keys, compact separators, no ASCII escaping."""
     return json.dumps(value, sort_keys=True, separators=(",", ":"), ensure_ascii=False)
+
+
+#: JSON-equivalent escapes for the characters that let text become markup. The
+#: decoded value is unchanged; the bytes can never open an HTML element or entity.
+_MARKUP_ESCAPES = {ord("<"): "\\u003c", ord(">"): "\\u003e", ord("&"): "\\u0026"}
+
+
+def response_json_bytes(payload: Mapping[str, Any]) -> bytes:
+    """Canonical JSON response bytes with markup characters escaped."""
+    return canonical_json(dict(payload)).translate(_MARKUP_ESCAPES).encode("utf-8")
 
 
 def setup_logging(verbose: bool) -> None:
@@ -155,17 +166,18 @@ class IssueAgentEdgeRequestHandler(BaseHTTPRequestHandler):
             self._send_error(404, "Not Found")
 
     def _send_json(self, status: int, payload: dict[str, Any]) -> None:
-        self.send_response(status)
-        self.send_header("Content-Type", "application/json")
-        body = canonical_json(payload).encode("utf-8")
-        self.send_header("Content-Length", str(len(body)))
-        self.end_headers()
-        self.wfile.write(body)
+        self._send_body(status, response_json_bytes(payload))
 
     def _send_error(self, status: int, message: str) -> None:
+        self._send_body(status, response_json_bytes({"error": message, "schema_version": self.error_schema_version}))
+
+    def _send_body(self, status: int, body: bytes) -> None:
+        """Send one machine-to-machine JSON body that no browser can treat as markup."""
         self.send_response(status)
-        self.send_header("Content-Type", "application/json")
-        body = canonical_json({"error": message, "schema_version": self.error_schema_version}).encode("utf-8")
+        self.send_header("Content-Type", "application/json; charset=utf-8")
+        self.send_header("X-Content-Type-Options", "nosniff")
+        self.send_header("Content-Security-Policy", "default-src 'none'; frame-ancestors 'none'")
+        self.send_header("Cache-Control", "no-store")
         self.send_header("Content-Length", str(len(body)))
         self.end_headers()
         self.wfile.write(body)

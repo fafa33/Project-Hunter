@@ -32,10 +32,8 @@ on:
     types:
       - completed
 
-permissions:
-  contents: read
-  issues: read
-  pull-requests: read
+# Every job declares exactly the permissions it needs; nothing is granted here.
+permissions: {}
 
 concurrency:
   group: hunter-issue-agent-candidate-pr-${{ github.event.workflow_run.id }}
@@ -54,6 +52,7 @@ jobs:
     name: Bind the governing Issue
     runs-on: ubuntu-latest
     timeout-minutes: 2
+    permissions: {}
     outputs:
       issue: ${{ steps.bind.outputs.issue }}
     steps:
@@ -80,6 +79,11 @@ jobs:
     name: Open governed Issue Agent Draft PR
     runs-on: ubuntu-latest
     timeout-minutes: 5
+    # The workflow token can read only; the one write uses the dedicated token.
+    permissions:
+      contents: read
+      issues: read
+      pull-requests: read
 
     steps:
       - name: Checkout trusted default-branch controller

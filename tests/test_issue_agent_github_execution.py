@@ -700,10 +700,18 @@ def test_model_child_environment_is_an_allowlist(tmp_path: Path) -> None:
         driver.MODEL_API_KEY_ENV: "model-key",
         driver.MODEL_API_KEY_NAME_ENV: "GROQ_API_KEY",
     }
-    child = driver.model_environment(environ, workspace=tmp_path, home=tmp_path)
-    assert child["GROQ_API_KEY"] == "model-key"
-    assert not any(name.startswith(("ACTIONS_", "GITHUB_", "HUNTER_")) for name in child)
-    for bad in ("GITHUB_TOKEN", "ACTIONS_ID_TOKEN_REQUEST_TOKEN", "HUNTER_ISSUE_AGENT_PUBLISHER_PUSH_TOKEN", "x"):
+    public, secret = driver.model_environment(environ, workspace=tmp_path, home=tmp_path)
+    assert secret == {"GROQ_API_KEY": "model-key"}
+    assert "model-key" not in public.values()
+    assert not any(name.startswith(("ACTIONS_", "GITHUB_", "HUNTER_")) for name in {**public, **secret})
+    for bad in (
+        "GITHUB_TOKEN",
+        "ACTIONS_ID_TOKEN_REQUEST_TOKEN",
+        "HUNTER_ISSUE_AGENT_PUBLISHER_PUSH_TOKEN",
+        "x",
+        "PATH",
+        "SUDO_COMMAND",
+    ):
         with pytest.raises(driver.ExecutionJobError):
             driver.model_environment({**environ, driver.MODEL_API_KEY_NAME_ENV: bad}, workspace=tmp_path, home=tmp_path)
 
@@ -1054,13 +1062,17 @@ def test_model_runs_as_the_isolation_user_without_any_oidc_or_issuer_capability(
     model = [argv for argv, _ in launched if "/usr/local/bin/hunter-opencode" in argv]
     assert len(model) == 1
     argv = model[0]
-    # A different uid, a cleared environment, and only the model allowlist.
-    assert argv[:7] == ("sudo", "-n", "-u", "hunter-untrusted", "--", "/usr/bin/env", "-i")
+    # A different uid; the model key crosses by environment, never by argument.
+    assert argv[:6] == ("sudo", "-n", "--preserve-env=GROQ_API_KEY", "-u", "hunter-untrusted", "--")
+    assert argv[6] == "/usr/bin/env" and "-i" not in argv[:7]
     for every_argv, every_env in launched:
         flattened = " ".join(every_argv) + " " + " ".join(f"{k}={v}" for k, v in every_env.items())
         for value in secrets_.values():
             assert value not in flattened
-        assert set(every_env) <= {"PATH"}
+        assert "model-key" not in " ".join(every_argv)
+        assert set(every_env) <= {"PATH", "GROQ_API_KEY"}
+    model_launcher_env = next(env for a, env in launched if a == argv)
+    assert model_launcher_env == {"PATH": "/usr/sbin:/usr/bin:/sbin:/bin", "GROQ_API_KEY": "model-key"}
     # The workspace is handed to the isolation user before, and the user's
     # processes are killed before the trusted process mints its result token.
     assert any(event.startswith("chown -R hunter-untrusted") for event in events)
@@ -1353,3 +1365,153 @@ def test_validator_records_its_exact_tree_and_result_digest(monkeypatch: pytest.
     assert driver.run_validate("hunter-issue-agent-authorization:" + "a" * 64, Path("."), environ) == "e" * 40
     assert posted["path"] == EXECUTION_RESULT_PATH and posted["role"] == "validator"
     assert (posted["tree"], posted["result_sha256"]) == ("e" * 40, "r" * 64)
+
+
+# --- PR #558 Copilot round 5 + Sonar ---
+
+
+class _OidcResponse:
+    def __init__(self, body: bytes) -> None:
+        self._body = body
+
+    def __enter__(self) -> Any:
+        return self
+
+    def __exit__(self, *_a: Any) -> None:
+        return None
+
+    def read(self, limit: int = -1) -> bytes:
+        return self._body if limit < 0 else self._body[:limit]
+
+
+def _oidc_with(monkeypatch: pytest.MonkeyPatch, body: bytes) -> Any:
+    class Opener:
+        def open(self, request: Any, timeout: float) -> Any:
+            return _OidcResponse(body)
+
+    monkeypatch.setattr(driver, "_OPENER", Opener())
+    environ = {"ACTIONS_ID_TOKEN_REQUEST_URL": "https://oidc.example/t?x=1", "ACTIONS_ID_TOKEN_REQUEST_TOKEN": "b"}
+    return lambda: driver.request_oidc_token(environ, "aud")
+
+
+def test_oidc_token_response_bound_and_encoding_fail_closed(monkeypatch: pytest.MonkeyPatch) -> None:
+    valid = json.dumps({"value": "header.payload.signature"}).encode()
+    exact = valid + b" " * (driver.MAX_OIDC_RESPONSE_BYTES - len(valid))
+    assert _oidc_with(monkeypatch, exact)() == "header.payload.signature"
+    for body in (exact + b"x", valid + b" " * driver.MAX_OIDC_RESPONSE_BYTES, b'{"value":"\xff\xfe"}' + b"\xff"):
+        with pytest.raises(driver.ExecutionJobError) as caught:
+            _oidc_with(monkeypatch, body)()
+        assert caught.value.code == "OIDC_UNAVAILABLE"
+    with pytest.raises(driver.ExecutionJobError) as caught:
+        _oidc_with(monkeypatch, b"\xff\xfe\xfd")()
+    assert caught.value.code == "OIDC_UNAVAILABLE"
+
+
+def test_secret_launch_keeps_secret_values_out_of_every_argument_vector() -> None:
+    import hunter.automation.issue_agent_replacement_executor as core
+
+    public = {"PATH": "/opt/py/bin:/usr/bin", "HOME": "/tmp/h", "LANG": "C.UTF-8"}
+    command, launcher = core.isolated_secret_launch(
+        "hunter-untrusted", public, {"GROQ_API_KEY": "sk-secret-value"}, ("/usr/local/bin/hunter-opencode", "run", "p")
+    )
+    assert "sk-secret-value" not in " ".join(command)
+    assert command[:6] == ("sudo", "-n", "--preserve-env=GROQ_API_KEY", "-u", "hunter-untrusted", "--")
+    assert launcher == {"PATH": "/usr/sbin:/usr/bin:/sbin:/bin", "GROQ_API_KEY": "sk-secret-value"}
+    for bad_public, bad_secret in (
+        ({**public, "X": "sk-secret-value"}, {"GROQ_API_KEY": "sk-secret-value"}),  # leaks via a public value
+        (public, {"PATH": "x"}),  # shadows the launcher PATH
+        (public, {"HOME": "sk"}),  # shadows a public variable
+        (public, {}),  # nothing secret to hand over
+        (public, {"GROQ_API_KEY": ""}),
+        (public, {"BAD-NAME": "v"}),
+    ):
+        with pytest.raises(core.ReplacementExecutorError):
+            core.isolated_secret_launch("hunter-untrusted", bad_public, bad_secret, ("/bin/true",))
+
+
+def test_secret_reaches_the_real_child_environment_but_not_its_argv(tmp_path: Path) -> None:
+    """Process-boundary proof: run the exact launched command (minus only the uid switch)."""
+    import sys as _sys
+
+    import hunter.automation.issue_agent_replacement_executor as core
+
+    report = tmp_path / "report.json"
+    script = "import json,os,sys;" f"json.dump({{'argv':sys.argv,'env':dict(os.environ)}},open({str(report)!r},'w'))"
+    command, launcher = core.isolated_secret_launch(
+        "hunter-untrusted",
+        {"PATH": "/usr/bin:/bin", "HOME": str(tmp_path)},
+        {"GROQ_API_KEY": "sk-process-secret"},
+        (_sys.executable, "-c", script),
+    )
+    assert "sk-process-secret" not in " ".join(command)
+    # sudo --preserve-env forwards the named variable from its own environment;
+    # emulate exactly that hop, then exec the rest of the command unchanged.
+    forwarded = {"GROQ_API_KEY": launcher["GROQ_API_KEY"]}
+    subprocess.run(command[command.index("--") + 1 :], env=forwarded, check=True, timeout=30)
+    seen = json.loads(report.read_text())
+    assert seen["env"]["GROQ_API_KEY"] == "sk-process-secret"
+    assert all("sk-process-secret" not in part for part in seen["argv"])
+    assert seen["env"]["HOME"] == str(tmp_path)
+
+
+def test_issuer_refusal_codes_are_a_fixed_repository_vocabulary() -> None:
+    """Copilot: the public log allowlist is the exact set of literal pre-model codes."""
+    import re as _re
+
+    literals: set[str] = set()
+    for path in Path("src/hunter").rglob("*.py"):
+        literals |= set(_re.findall(r'PreModelInvariantError\("([A-Z0-9_:]+)"\)', path.read_text(encoding="utf-8")))
+    assert literals == set(trigger.PUBLIC_PRE_MODEL_REASON_CODES)
+    prefix = "pre-model invariant rejected execution preparation: "
+    for code in sorted(literals):
+        assert trigger._public_refusal_reason(prefix + code) == prefix + code
+    for leaky in (
+        prefix + "SECRET_ISSUE_TEXT",
+        prefix + "SOURCE_HANDLING:SENSITIVITY_IS_NOT_KNOWN",
+        prefix + "SOURCE_HANDLING:sensitivity is not known",
+        prefix + "TARGET_DOCUMENT_MISMATCH SECRET",
+        prefix,
+        "TARGET_DOCUMENT_MISMATCH",
+    ):
+        assert trigger._public_refusal_reason(leaky) == ""
+
+
+def test_edge_responses_cannot_be_read_as_markup() -> None:
+    """Sonar pythonsecurity:S5131: JSON bodies escape markup and forbid sniffing/rendering."""
+    import issue_agent_edge_transport as transport
+
+    body = transport.response_json_bytes({"value": "<script>alert(1)</script>&amp;"})
+    assert b"<" not in body and b">" not in body and b"&" not in body
+    assert json.loads(body) == {"value": "<script>alert(1)</script>&amp;"}
+
+    sent: list[tuple[str, str]] = []
+
+    class Handler(transport.IssueAgentEdgeRequestHandler):
+        def __init__(self) -> None:
+            import io
+
+            self.wfile = io.BytesIO()
+
+        def send_response(self, code: int, message: Any = None) -> None:
+            sent.append(("status", str(code)))
+
+        def send_header(self, keyword: str, value: str) -> None:
+            sent.append((keyword, value))
+
+        def end_headers(self) -> None:
+            return None
+
+    Handler()._send_error(400, "<img src=x onerror=alert(1)>")
+    headers = dict(sent)
+    assert headers["X-Content-Type-Options"] == "nosniff"
+    assert headers["Content-Type"] == "application/json; charset=utf-8"
+    assert "default-src 'none'" in headers["Content-Security-Policy"]
+
+
+def test_validation_acknowledgement_echoes_no_request_value(tmp_path: Path, edge: Any) -> None:
+    hook, _services, authorization_id, digest = _validated_execution(tmp_path, edge)
+    assert hook.fetch(authorization_id, "validator")[0] == 200
+    status, ack = hook.ack(authorization_id, "e" * 40, digest)
+    assert status == 200
+    assert set(ack) == {"schema_version", "authorization_id", "result_sha256"}
+    assert "e" * 40 not in json.dumps(ack)

@@ -425,6 +425,42 @@ def isolated_command(user: str, environment: Mapping[str, str], argv: Sequence[s
     return ("sudo", "-n", "-u", user, "--", "/usr/bin/env", "-i", *assignments, *argv)
 
 
+def isolated_secret_launch(
+    user: str,
+    environment: Mapping[str, str],
+    secret_environment: Mapping[str, str],
+    argv: Sequence[str],
+) -> tuple[tuple[str, ...], dict[str, str]]:
+    """``argv`` as ``user`` with secrets handed over by environment, never by argument.
+
+    Returns ``(command, launcher_environment)``. Non-secret settings are passed as
+    ``env`` assignments; every secret value travels only in the ``sudo`` launcher's
+    own environment and crosses the uid boundary through ``--preserve-env=<names>``,
+    so no secret value appears in any process argument vector or the command line
+    sudo logs. ``sudo``'s ``env_reset`` drops everything else from the launcher
+    environment, so the child receives only sudo's reset variables, the explicit
+    assignments, and the named secrets.
+    """
+    if not secret_environment:
+        raise ReplacementExecutorError("a secret launch requires at least one secret")
+    for key in (*environment, *secret_environment):
+        if _ENV_KEY_RE.fullmatch(key) is None:
+            raise ReplacementExecutorError("untrusted environment carries an invalid variable name")
+    if set(environment) & set(secret_environment) or "PATH" in secret_environment:
+        raise ReplacementExecutorError("a secret may not shadow a public launcher variable")
+    secrets = [value for value in secret_environment.values() if value]
+    if len(secrets) != len(secret_environment):
+        raise ReplacementExecutorError("a secret launch requires non-empty secret values")
+    assignments = tuple(f"{key}={environment[key]}" for key in sorted(environment))
+    command = (
+        "sudo", "-n", f"--preserve-env={','.join(sorted(secret_environment))}", "-u", user, "--",
+        "/usr/bin/env", *assignments, *argv,
+    )  # fmt: skip
+    if any(secret in part for secret in secrets for part in command):
+        raise ReplacementExecutorError("a secret value would appear in the launcher argument vector")
+    return command, {**SUDO_ENVIRONMENT, **secret_environment}
+
+
 def run_privileged(*args: str, allowed_returncodes: tuple[int, ...] = (0,)) -> None:
     """One non-interactive ``sudo`` operation with a secret-free launcher environment."""
     completed = subprocess.run(

@@ -247,7 +247,14 @@ def test_the_workflow_runs_the_trusted_module_only_after_a_green_push_preflight(
     triggers = workflow.get("on", workflow.get(True))
     assert triggers == {"workflow_run": {"workflows": ["Hunter / Pre-PR Preflight"], "types": ["completed"]}}
     # The workflow token can read only; the one write uses the dedicated token.
-    assert workflow["permissions"] == {"contents": "read", "issues": "read", "pull-requests": "read"}
+    # Sonar githubactions:S8264: nothing granted at workflow level; each job declares its own.
+    assert workflow["permissions"] == {}
+    assert workflow["jobs"]["bind-issue"]["permissions"] == {}
+    assert workflow["jobs"]["open-draft-pr"]["permissions"] == {
+        "contents": "read",
+        "issues": "read",
+        "pull-requests": "read",
+    }
 
     bind, job = workflow["jobs"]["bind-issue"], workflow["jobs"]["open-draft-pr"]
     condition = " ".join(bind["if"].split())

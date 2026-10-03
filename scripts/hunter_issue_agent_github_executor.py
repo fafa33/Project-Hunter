@@ -64,10 +64,9 @@ from hunter.automation.issue_agent_replacement_executor import (
     OIDC_REQUEST_ENV,
     PUBLICATION_CREDENTIAL_ENV,
     RESULT_SCHEMA_VERSION,
-    SUDO_ENVIRONMENT,
     ReplacementExecutorError,
     ValidatedReplacementResult,
-    isolated_command,
+    isolated_secret_launch,
     new_isolation_root,
     publication_credentials_present,
     publish_create_only,
@@ -97,10 +96,11 @@ CODE_WRITE_POLICY = Path(__file__).resolve().parents[1] / "docs" / "CODE_WRITE_P
 #: The issuer edge bounds bodies at 256 KiB; leave room for the OIDC token.
 MAX_RESULT_REQUEST_BYTES = 240 * 1024
 MAX_RESPONSE_BYTES = 256 * 1024
+MAX_OIDC_RESPONSE_BYTES = 64 * 1024
 MODEL_TIMEOUT_SECONDS = 45 * 60
 _AUTHORIZATION_ID_RE = re.compile(r"hunter-issue-agent-authorization:[0-9a-f]{64}")
 _SHA_RE = re.compile(r"[0-9a-f]{40}")
-_ENV_NAME_RE = re.compile(r"[A-Z][A-Z0-9_]{0,63}")
+_ENV_KEY_RE_NAME = re.compile(r"[A-Z][A-Z0-9_]{0,63}")
 
 
 class ExecutionJobError(RuntimeError):
@@ -156,8 +156,15 @@ def request_oidc_token(environ: Mapping[str, str], audience: str) -> str:
     )
     try:
         with _OPENER.open(request, timeout=30) as response:
-            payload = json.loads(response.read(64 * 1024).decode("utf-8"))
+            raw = response.read(MAX_OIDC_RESPONSE_BYTES + 1)
     except (urllib.error.URLError, OSError, ValueError):
+        raise ExecutionJobError("OIDC_UNAVAILABLE") from None
+    if len(raw) > MAX_OIDC_RESPONSE_BYTES:
+        # Never truncate an oversized token response to a parseable prefix.
+        raise ExecutionJobError("OIDC_UNAVAILABLE")
+    try:
+        payload = json.loads(raw.decode("utf-8"))
+    except (UnicodeDecodeError, ValueError):
         raise ExecutionJobError("OIDC_UNAVAILABLE") from None
     token = payload.get("value") if isinstance(payload, dict) else None
     if not isinstance(token, str) or not token:
@@ -253,17 +260,24 @@ def _isolation_user(environ: Mapping[str, str]) -> str:
         raise ExecutionJobError("UNTRUSTED_ISOLATION_UNAVAILABLE") from None
 
 
-def model_environment(environ: Mapping[str, str], *, workspace: Path, home: Path) -> dict[str, str]:
-    """The model child's whole environment: an allowlist, never the job environment."""
+def model_environment(
+    environ: Mapping[str, str], *, workspace: Path, home: Path
+) -> tuple[dict[str, str], dict[str, str]]:
+    """The model child's environment as ``(public, secret)``: an allowlist, never the job environment.
+
+    The secret half (the single model credential) is handed over by environment
+    only, never placed in an argument vector.
+    """
     key_name = _required(environ, MODEL_API_KEY_NAME_ENV)
     if (
-        _ENV_NAME_RE.fullmatch(key_name) is None
+        _ENV_KEY_RE_NAME.fullmatch(key_name) is None
         or key_name in PUBLICATION_CREDENTIAL_ENV
         or key_name in OIDC_REQUEST_ENV
-        or key_name.startswith(("GITHUB_", "ACTIONS_", "RUNNER_", "GIT_"))
+        or key_name.startswith(("GITHUB_", "ACTIONS_", "RUNNER_", "GIT_", "SUDO_"))
+        or key_name in {"PATH", "HOME", "PWD", "LANG"}
     ):
         raise ExecutionJobError("MODEL_KEY_NAME_INVALID", key_name)
-    return {
+    public = {
         "PATH": environ.get("PATH", "/usr/bin:/bin"),
         "LANG": "C.UTF-8",
         "HOME": str(home),
@@ -274,8 +288,8 @@ def model_environment(environ: Mapping[str, str], *, workspace: Path, home: Path
         "GIT_CONFIG_GLOBAL": os.devnull,
         "GIT_CONFIG_NOSYSTEM": "1",
         "GIT_TERMINAL_PROMPT": "0",
-        key_name: _required(environ, MODEL_API_KEY_ENV),
     }
+    return public, {key_name: _required(environ, MODEL_API_KEY_ENV)}
 
 
 def collect_result(workspace: Path, git_dir: Path, *, authorization_id: str, branch: str, base_sha: str) -> str:
@@ -346,11 +360,13 @@ def run_execute(authorization_id: str, environ: Mapping[str, str]) -> str:
         # the step's environment (OIDC request capability, issuer URL) or the
         # trusted Git metadata, and gets only the explicit model environment.
         run_privileged("chown", "-R", user, str(workspace), str(home))
+        public, secret = model_environment(environ, workspace=workspace, home=home)
+        command, launcher_environment = isolated_secret_launch(user, public, secret, argv)
         try:
             completed = subprocess.run(
-                isolated_command(user, model_environment(environ, workspace=workspace, home=home), argv),
+                command,
                 cwd=workspace,
-                env=dict(SUDO_ENVIRONMENT),
+                env=launcher_environment,
                 stdin=subprocess.DEVNULL,
                 stdout=subprocess.DEVNULL,
                 stderr=subprocess.DEVNULL,
@@ -468,7 +484,6 @@ def run_validate(authorization_id: str, repo: Path, environ: Mapping[str, str]) 
     if (
         ack.get("schema_version") != EXECUTION_VALIDATION_ACK_SCHEMA_VERSION
         or ack.get("authorization_id") != authorization_id
-        or ack.get("tree") != tree
         or ack.get("result_sha256") != receipt.result_sha256
     ):
         raise ExecutionJobError("VALIDATION_NOT_ACKNOWLEDGED")
