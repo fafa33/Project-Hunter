@@ -395,6 +395,9 @@ def _substantive_review_body(body: str) -> bool:
     return sum(not c.isspace() for c in stripped) >= 40
 
 
+OVERVIEW_V2_CLEAR_PROSE = ("Root-of-trust signing-key changes require final human review.",)
+
+
 def native_copilot_verdict(body: str, inline_comment_count: int = 0) -> str:
     """Parse authenticated Copilot review bodies fail-closed."""
     if inline_comment_count:
@@ -413,7 +416,26 @@ def native_copilot_verdict(body: str, inline_comment_count: int = 0) -> str:
         r"- \*\*Comments generated:\*\* 0 new\n"
         r"- \*\*Review effort level:\*\* (?:Lite|Standard|Deep)\n</details>)?"
     )
-    return "clear" if any(re.fullmatch(shape + metadata, normalized) for shape in verdict_shapes) else "unknown"
+    if any(re.fullmatch(shape + metadata, normalized) for shape in verdict_shapes):
+        return "clear"
+    # ccr-overview-v2: the whole body must be the structured overview with one of
+    # the canonical known-safe prose lines, a single explicit trailing
+    # "**Findings:** None", and the observed non-blocking heading ("Needs a
+    # closer look" is not itself a finding). Free-form prose cannot be validated
+    # semantically, so any prose not listed in OVERVIEW_V2_CLEAR_PROSE stays
+    # unknown (fails closed).
+    overview = (
+        r"<!-- ccr-overview-v2 -->\n+## Copilot review overview\n+### 🔵 Needs a closer look\n+(?:"
+        + "|".join(re.escape(prose) for prose in OVERVIEW_V2_CLEAR_PROSE)
+        + r")\n\n\*\*Review effort:\*\* (?:Lite|Standard|Deep)\n\*\*Findings:\*\* None"
+    )
+    if (
+        body.startswith("<!-- ccr-overview-v2 -->")
+        and len(re.findall(r"findings:", lower)) == 1
+        and re.fullmatch(overview, normalized)
+    ):
+        return "clear"
+    return "unknown"
 
 
 def native_codex_clear_review(body: str, head_sha: str) -> bool:
