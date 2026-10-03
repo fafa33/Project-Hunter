@@ -276,6 +276,18 @@ owner applies hunter-agent-execute
   request must come from the same run, and each role operation (executor fetch, result,
   validator fetch, publisher fetch) is single-use. Unknown, replayed, cross-run,
   re-run-attempt, misbound or out-of-scope requests fail closed.
+- **Untrusted-code uid boundary.** A same-user child can read every same-user
+  ancestor's `/proc/<pid>/environ`, and the runner injects the OIDC request
+  capability into every step, so hiding variables from a child is not a credential
+  boundary. The model and the candidate-controlled pre-push hook therefore run as the
+  dedicated non-root `hunter-untrusted` user created by the job, through
+  `sudo -n -u hunter-untrusted -- /usr/bin/env -i` with an explicit allowlist
+  environment, in directories that user owns. The job's own home is made private,
+  the user's processes are killed before the trusted process continues, and result
+  collection uses a trusted Git directory outside the model workspace. An executor
+  fetch consumes the role (in flight), but a result is admissible only after the
+  exact prompt was resolved and the handoff delivered. Malformed JWT `aud`/`nbf`
+  claims fail closed.
 - **Ledger.** The existing execution ledger is the only execution record. The hosted
   runtime is the existing fallback-runtime seam: the worker waits under the existing lease
   for one admissible result, records it in the #524 `ReplacementResultLedger`, and

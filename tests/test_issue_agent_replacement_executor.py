@@ -288,40 +288,97 @@ def test_publisher_rejects_receipt_for_different_result(monkeypatch, tmp_path):
         core.publish_create_only(tmp_path, validated=validated, verified_receipt=receipt, safety_tree=SAFETY_TREE)
 
 
-def test_pre_push_safety_scrubs_publication_and_model_authority(monkeypatch, tmp_path):
+def _capture_isolated_hook(monkeypatch, tmp_path):
+    """Run _run_pre_push_safety with git/sudo stubbed; return every subprocess call."""
     import hunter.automation.issue_agent_replacement_executor as core
 
-    signed = _signed()
-    validated = core.validate_replacement_result(_result(signed), signed_authorization=signed, rehearsal=False)
-    seen = {}
+    calls = []
 
     def fake_git(_repo, *args, **_kwargs):
-        if args[0] == "show":
-            return "#!/bin/sh\nexit 0\n"
-        return ""
+        return "#!/bin/sh\nexit 0\n" if args[0] == "show" else ""
 
     class Done:
         returncode = 0
         stdout = b""
         stderr = b""
 
-    def fake_run(*_args, **kwargs):
-        seen.update(kwargs["env"])
+    def fake_run(argv, **kwargs):
+        calls.append((tuple(argv), dict(kwargs.get("env") or {})))
         return Done()
 
     monkeypatch.setattr(core, "_git_plumbing", fake_git)
     monkeypatch.setattr(core.subprocess, "run", fake_run)
-    monkeypatch.setenv("HUNTER_AGENT_GITHUB_PUSH_TOKEN", "write")
-    monkeypatch.setenv("OPENAI_API_KEY", "model")
-    monkeypatch.setenv("ACTIONS_ID_TOKEN_REQUEST_TOKEN", "oidc")
-    monkeypatch.setenv("ACTIONS_ID_TOKEN_REQUEST_URL", "https://oidc.example")
+    monkeypatch.setattr(core, "require_isolation_user", lambda user: user)
+    monkeypatch.setattr(core, "ISOLATION_ROOT", tmp_path)
+    return core, calls
+
+
+#: Representative secrets of every class that must never reach candidate code.
+_FORBIDDEN_TO_CANDIDATE = {
+    "HUNTER_ISSUE_AGENT_WEBHOOK_URL": "https://issuer-secret.example/issue-agent/authorize",
+    "HUNTER_ISSUE_AGENT_AUTHORIZATION_VERIFYING_KEY": "verifying-key-secret",
+    "ACTIONS_ID_TOKEN_REQUEST_TOKEN": "oidc-request-secret",
+    "ACTIONS_ID_TOKEN_REQUEST_URL": "https://oidc-request-secret.example",
+    "HUNTER_ISSUE_AGENT_PUBLISHER_PUSH_TOKEN": "push-token-secret",
+    "HUNTER_ISSUE_AGENT_PUBLISHER_SIGNING_KEY": "signing-key-secret",
+    "HUNTER_ISSUE_AGENT_PR_TOKEN": "pr-token-secret",
+    "HUNTER_AGENT_GITHUB_PUSH_TOKEN": "legacy-push-secret",
+    "GROQ_API_KEY": "model-key-secret",
+    "HUNTER_ISSUE_AGENT_EXECUTOR_MODEL_API_KEY": "executor-model-secret",
+    "UNRELATED_FUTURE_SECRET": "unrelated-secret",
+}
+
+
+def test_candidate_pre_push_receives_only_an_explicit_allowlist_as_the_isolation_user(monkeypatch, tmp_path):
+    """Issue #557 / PR #558 review: issuer and every other secret is absent from candidate code."""
+    core, calls = _capture_isolated_hook(monkeypatch, tmp_path)
+    signed = _signed()
+    validated = core.validate_replacement_result(_result(signed), signed_authorization=signed, rehearsal=False)
+    for name, value in _FORBIDDEN_TO_CANDIDATE.items():
+        monkeypatch.setenv(name, value)
+    monkeypatch.setenv("PATH", "/opt/python/bin:/usr/bin")
+    for name in ("LANG", "LC_ALL", "TZ"):
+        monkeypatch.delenv(name, raising=False)
     core._run_pre_push_safety(
-        tmp_path, validated=validated, head="b" * 40, push_url="https://github.com/fafa33/Project-Hunter.git"
+        tmp_path,
+        validated=validated,
+        head="b" * 40,
+        push_url="https://github.com/fafa33/Project-Hunter.git",
+        isolation_user="hunter-untrusted",
     )
-    assert "HUNTER_AGENT_GITHUB_PUSH_TOKEN" not in seen
-    assert "OPENAI_API_KEY" not in seen
-    assert "ACTIONS_ID_TOKEN_REQUEST_TOKEN" not in seen and "ACTIONS_ID_TOKEN_REQUEST_URL" not in seen
-    assert seen["GIT_TERMINAL_PROMPT"] == "0"
+    hook = [argv for argv, _env in calls if any(part.endswith("/pre-push") for part in argv)]
+    assert len(hook) == 1
+    argv = hook[0]
+    assert argv[:7] == ("sudo", "-n", "-u", "hunter-untrusted", "--", "/usr/bin/env", "-i")
+    assignments = dict(part.split("=", 1) for part in argv[7:] if "=" in part and not part.startswith("/"))
+    assert set(assignments) == {
+        "PATH", "HOME", "PYTHONPATH", "GIT_CONFIG_GLOBAL", "GIT_CONFIG_NOSYSTEM", "GIT_TERMINAL_PROMPT",
+    }  # fmt: skip
+    assert assignments["PATH"] == "/opt/python/bin:/usr/bin"
+    # No secret value appears in any launched process's argv or environment.
+    for every_argv, every_env in calls:
+        flattened = " ".join(every_argv) + " " + " ".join(f"{k}={v}" for k, v in every_env.items())
+        for value in _FORBIDDEN_TO_CANDIDATE.values():
+            assert value not in flattened
+        assert set(every_env) <= {"PATH"}
+    # Leftover untrusted processes are killed and the untrusted clone removed.
+    assert any(argv[:4] == ("sudo", "-n", "pkill", "-KILL") for argv, _ in calls)
+
+
+def test_candidate_pre_push_refuses_without_a_distinct_isolation_user(monkeypatch, tmp_path):
+    import os
+    import pwd
+
+    import hunter.automation.issue_agent_replacement_executor as core
+
+    with pytest.raises(core.ReplacementExecutorError):
+        core.require_isolation_user("")
+    with pytest.raises(core.ReplacementExecutorError):
+        core.require_isolation_user("no-such-hunter-user-xyz")
+    with pytest.raises(core.ReplacementExecutorError, match="different non-root uid"):
+        core.require_isolation_user(pwd.getpwuid(os.getuid()).pw_name)
+    with pytest.raises(core.ReplacementExecutorError, match="different non-root uid"):
+        core.require_isolation_user("root")
 
 
 def test_publisher_remote_is_derived_from_signed_repository(monkeypatch, tmp_path):
@@ -392,13 +449,15 @@ def _signed_at(base_sha):
 def test_credential_free_safety_refuses_any_publication_credential(monkeypatch, tmp_path):
     import hunter.automation.issue_agent_replacement_executor as core
 
+    monkeypatch.setattr(core, "require_isolation_user", lambda user: user)
+
     signed = _signed()
     validated = core.validate_replacement_result(_result(signed), signed_authorization=signed, rehearsal=False)
     monkeypatch.setattr(core, "_git_plumbing", lambda *_a, **_k: pytest.fail("nothing may run"))
     for name in ("HUNTER_ISSUE_AGENT_PUBLISHER_PUSH_TOKEN", "HUNTER_ISSUE_AGENT_PUBLISHER_SIGNING_KEY", "GITHUB_TOKEN"):
         monkeypatch.setenv(name, "credential")
         with pytest.raises(core.ReplacementExecutorError, match="publication authority"):
-            core.run_credential_free_candidate_safety(tmp_path, validated=validated)
+            core.run_credential_free_candidate_safety(tmp_path, validated=validated, isolation_user="hunter-untrusted")
         monkeypatch.delenv(name)
 
 
@@ -414,11 +473,13 @@ def test_credential_free_safety_runs_hook_on_unsigned_exact_tree(monkeypatch, tm
     validated = core.validate_replacement_result(_result(signed), signed_authorization=signed, rehearsal=False)
     seen = {}
 
-    def fake_safety(root, *, validated, head, push_url):
-        seen.update(head=head, push_url=push_url)
+    def fake_safety(root, *, validated, head, push_url, isolation_user):
+        seen.update(head=head, push_url=push_url, user=isolation_user)
 
     monkeypatch.setattr(core, "_run_pre_push_safety", fake_safety)
-    tree = core.run_credential_free_candidate_safety(repo, validated=validated)
+    monkeypatch.setattr(core, "require_isolation_user", lambda user: user)
+    tree = core.run_credential_free_candidate_safety(repo, validated=validated, isolation_user="hunter-untrusted")
+    assert seen["user"] == "hunter-untrusted"
     show = lambda *a: subprocess.run(("git", *a), cwd=repo, capture_output=True, text=True).stdout  # noqa: E731
     assert show("rev-parse", f"{seen['head']}^{{tree}}").strip() == tree
     assert "gpgsig" not in show("cat-file", "commit", seen["head"])

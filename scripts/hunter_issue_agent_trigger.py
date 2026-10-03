@@ -476,7 +476,6 @@ def _parser() -> argparse.ArgumentParser:
     parser.add_argument("--provisioning-url", default=os.environ.get(PROVISIONING_URL_ENV))
     parser.add_argument("--webhook-timeout", default=os.environ.get(WEBHOOK_TIMEOUT_ENV))
     parser.add_argument("--authorization-out")
-    parser.add_argument("--execution-identity-out")
     parser.add_argument("--no-dispatch", action="store_true")
     return parser
 
@@ -508,12 +507,10 @@ def main(argv: list[str] | None = None) -> int:
             timeout = _webhook_timeout(arguments.webhook_timeout)
             provisioning_url = _required_text(PROVISIONING_URL_ENV, arguments.provisioning_url)
             acceptance = _provision_and_dispatch(provisioning_url, webhook_url, document, timeout=timeout)
-            identity = accepted_execution_identity(acceptance, authorization_id=authorization.authorization_id)
-            if arguments.execution_identity_out:
-                with Path(arguments.execution_identity_out).open("a", encoding="utf-8") as handle:
-                    handle.write(f"authorization_id={identity}\n")
+            accepted_execution_identity(acceptance, authorization_id=authorization.authorization_id)
         # Issue #557: the signed document carries Issue content classified
-        # INTERNAL, and Actions logs are public. Only the identity is printed.
+        # INTERNAL, and Actions logs are public. Only the issuer-accepted
+        # identity is printed; the workflow binds stdout as the job output.
         print(authorization.authorization_id)
         return 0
     except (IssueAgentTriggerError, OSError) as error:

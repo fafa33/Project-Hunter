@@ -201,6 +201,15 @@ def _rsa_key(jwk: Mapping[str, Any]) -> RSAPublicKey:
     return RSAPublicNumbers(e, n).public_key()
 
 
+def _audiences(value: object) -> tuple[str, ...]:
+    """RFC 7519 ``aud``: one string, or a non-empty array of only strings."""
+    if isinstance(value, str) and value:
+        return (value,)
+    if isinstance(value, list) and value and all(isinstance(item, str) and item for item in value):
+        return tuple(value)
+    raise ExecutionIdentityError("OIDC token audience claim is malformed")
+
+
 class GitHubActionsOidcVerifier:
     """Verify a GitHub Actions OIDC token as the trusted Issue trigger workflow.
 
@@ -273,19 +282,18 @@ class GitHubActionsOidcVerifier:
     def _check_claims(self, claims: Mapping[str, Any], *, now: datetime) -> GitHubOidcClaims:
         if claims.get("iss") != GITHUB_OIDC_ISSUER:
             raise ExecutionIdentityError("OIDC token issuer is not GitHub Actions")
-        audience = claims.get("aud")
-        audiences = audience if isinstance(audience, list) else [audience]
-        if oidc_audience(self._repository) not in audiences:
+        if oidc_audience(self._repository) not in _audiences(claims.get("aud")):
             raise ExecutionIdentityError("OIDC token audience is not this execution boundary")
         moment = int(now.timestamp())
         for name in ("exp", "iat"):
             if type(claims.get(name)) is not int:
                 raise ExecutionIdentityError(f"OIDC token {name} is missing")
+        # A present nbf must be well formed; a malformed one is never skipped.
+        if "nbf" in claims and type(claims["nbf"]) is not int:
+            raise ExecutionIdentityError("OIDC token nbf is malformed")
         if claims["exp"] <= moment - _LEEWAY_SECONDS:
             raise ExecutionIdentityError("OIDC token has expired")
-        if claims["iat"] > moment + _LEEWAY_SECONDS or (
-            type(claims.get("nbf")) is int and claims["nbf"] > moment + _LEEWAY_SECONDS
-        ):
+        if claims["iat"] > moment + _LEEWAY_SECONDS or claims.get("nbf", moment) > moment + _LEEWAY_SECONDS:
             raise ExecutionIdentityError("OIDC token is not yet valid")
         expected = {
             "repository": self._repository,
@@ -345,6 +353,9 @@ class _Execution:
     expires_at: float
     run: tuple[str, str] | None = None
     used_roles: set[str] = field(default_factory=set)
+    #: AUTHORIZED -> HANDOFF_IN_FLIGHT (executor role used) -> HANDOFF_DELIVERED
+    #: (prompt resolved) -> RESULT_ALLOWED. Only a delivered handoff admits a result.
+    handoff_delivered: bool = False
     result_document: str | None = None
     receipt: ReplacementValidationReceipt | None = None
     failure: BaseException | None = None
@@ -512,11 +523,17 @@ class GitHubHostedExecutionRuntime:
                     "validation_receipt": execution.receipt.to_json(),
                     "validation_definition": VALIDATION_DEFINITION,
                 }
+        # HANDOFF_IN_FLIGHT: the executor role is consumed, but no result is
+        # admissible until the prompt is resolved and the handoff is delivered.
         try:
             prompt = self._resolve_prompt(execution.handoff_document)
         except Exception as error:  # noqa: BLE001 - any unresolvable handoff is terminal
             self._fail(execution, error)
             raise ExecutionResultRejectedError("the signed handoff cannot release an exact prompt") from None
+        with self._lock:
+            if execution.failure is not None:
+                raise ExecutionReplayError("execution identity became terminal before handoff delivery")
+            execution.handoff_delivered = True
         scope = execution.signed.implementation_scope
         target = execution.target
         return {
@@ -543,8 +560,8 @@ class GitHubHostedExecutionRuntime:
             raise GitHubExecutionError("result_document must be the exact result JSON text")
         with self._lock:
             execution = self._bound(request, ROLE_EXECUTOR)
-            if ROLE_EXECUTOR not in execution.used_roles:
-                raise ExecutionBindingError("a result requires the executor's own handoff fetch first")
+            if not execution.handoff_delivered:
+                raise ExecutionBindingError("a result requires the executor's successfully delivered handoff first")
             if execution.receipt is not None:
                 raise ExecutionReplayError("this execution already returned its result")
             try:

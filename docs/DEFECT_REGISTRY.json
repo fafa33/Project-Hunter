@@ -460,7 +460,7 @@
       "classification": "systemic",
       "guard_boundary": "credential-isolated replacement publication",
       "guard": "The exact candidate commit is checked in a temporary credential-free worktree and must pass the trusted base pre-push hook before the publisher may create the authorization branch; publication/model credentials are scrubbed from that execution environment.",
-      "test": "tests/test_issue_agent_replacement_executor.py::test_pre_push_safety_scrubs_publication_and_model_authority",
+      "test": "tests/test_issue_agent_replacement_executor.py::test_candidate_pre_push_receives_only_an_explicit_allowlist_as_the_isolation_user",
       "status": "guarded"
     },
     {
@@ -531,6 +531,36 @@
       "guard_boundary": "credential-free candidate safety job versus credential-bearing publisher job",
       "guard": "Candidate pre-push safety runs only in run_credential_free_candidate_safety, which refuses any publication credential or model authority, builds an unsigned commit with the exact candidate tree, scrubs the OIDC request capability from the hook environment, and returns that tree. publish_create_only no longer runs any hook: it requires that exact safety tree and refuses to push a signed commit whose tree differs. The trigger workflow runs validation and publication as separate GitHub-hosted jobs, and the publisher job installs and runs nothing from the candidate.",
       "test": "tests/test_issue_agent_replacement_executor.py::test_publisher_refuses_a_tree_the_safety_boundary_did_not_prove",
+      "status": "guarded"
+    },
+    {
+      "id": "PRH-068",
+      "class": "untrusted-code-recovers-credentials-from-same-uid-trusted-processes",
+      "source": "PR #558 Copilot review, 2026-10-03 (discussion_r4171869242, discussion_r4171869279): the GitHub-hosted executor gave the model an allowlisted child environment and the validator scrubbed known secrets from the candidate pre-push environment, but both still ran as the runner user, so untrusted code could read the OIDC request capability and issuer-channel secrets from the step shell's and trusted parent's /proc/<pid>/environ. The executor also ran git as the runner user on the model-written workspace .git, which can execute configuration such as core.fsmonitor.",
+      "classification": "systemic",
+      "guard_boundary": "OS uid boundary between trusted job processes and untrusted model/candidate code",
+      "guard": "Untrusted code runs only through isolated_command as a dedicated non-root isolation user distinct from the runner uid (require_isolation_user), with /usr/bin/env -i and an explicit allowlist environment; the sudo launcher itself receives only PATH. The model workspace and candidate clone are owned by that user under a traversable private root, its processes are killed before the trusted process continues, and result collection uses a trusted Git directory outside the workspace with hooks and fsmonitor disabled. Hiding variables from a same-uid child is never treated as a credential boundary.",
+      "test": "tests/test_issue_agent_github_execution.py::test_model_runs_as_the_isolation_user_without_any_oidc_or_issuer_capability",
+      "status": "guarded"
+    },
+    {
+      "id": "PRH-069",
+      "class": "malformed-jwt-registered-claims-accepted",
+      "source": "PR #558 Copilot review, 2026-10-03 (discussion_r4171869255): the OIDC verifier accepted an aud array containing the expected audience alongside non-string members, and silently skipped a present but non-integer nbf.",
+      "classification": "systemic",
+      "guard_boundary": "GitHubActionsOidcVerifier claim validation",
+      "guard": "aud must be a non-empty string or a non-empty array of only non-empty strings that contains the expected audience; a present nbf must be an integer; every other form fails closed before any execution state is read.",
+      "test": "tests/test_issue_agent_github_execution.py::test_malformed_audience_claims_fail_closed",
+      "status": "guarded"
+    },
+    {
+      "id": "PRH-070",
+      "class": "result-admitted-before-handoff-delivery",
+      "source": "PR #558 Copilot review, 2026-10-03 (discussion_r4171869261): the executor role was marked used before prompt reconstruction finished outside the lock, so a concurrent result from the same OIDC-bound run could complete the execution even if the handoff was never delivered.",
+      "classification": "systemic",
+      "guard_boundary": "GitHubHostedExecutionRuntime execution state transitions",
+      "guard": "AUTHORIZED -> HANDOFF_IN_FLIGHT (executor role consumed) -> HANDOFF_DELIVERED (handoff_delivered set under the lock only after the prompt resolved and the execution is not terminal) -> RESULT_ALLOWED. handle_result requires handoff_delivered; a failed resolution is terminal and never result-eligible.",
+      "test": "tests/test_issue_agent_github_execution.py::test_no_result_is_accepted_while_the_handoff_is_in_flight",
       "status": "guarded"
     }
   ],
@@ -1496,7 +1526,7 @@
         "rationale": "These surfaces can validate or publish Issue Agent candidate output and therefore define the candidate-code/publication-credential privilege boundary."
       },
       "prevention": {
-        "mechanism": "The replacement-executor boundary accepts provider output only as a closed-schema hostile file-data result bound to the signed authorization, exact base, derived branch and canonical TaskScope. Exact prompt/evidence fields are structurally rejected. Rehearsal rejects every publication credential, publisher environments reject model/provider authority, and a validation receipt binds the exact result digest plus validation-definition identity before a separate publisher may consume it. Candidate content is data at this boundary and is never executed under publication authority. Issue #557 recurrence (PRH-067): the publisher itself had run the candidate's pre-push scripts. Candidate safety now runs only in run_credential_free_candidate_safety inside a separate credential-free GitHub-hosted job; publish_create_only runs no hook, requires the exact credential-free safety tree, and refuses a signed commit whose tree differs.",
+        "mechanism": "The replacement-executor boundary accepts provider output only as a closed-schema hostile file-data result bound to the signed authorization, exact base, derived branch and canonical TaskScope. Exact prompt/evidence fields are structurally rejected. Rehearsal rejects every publication credential, publisher environments reject model/provider authority, and a validation receipt binds the exact result digest plus validation-definition identity before a separate publisher may consume it. Candidate content is data at this boundary and is never executed under publication authority. Issue #557 recurrence (PRH-067): the publisher itself had run the candidate's pre-push scripts. Candidate safety now runs only in run_credential_free_candidate_safety inside a separate credential-free GitHub-hosted job; publish_create_only runs no hook, requires the exact credential-free safety tree, and refuses a signed commit whose tree differs. PR #558 review (PRH-068): candidate-controlled validation and the untrusted model now run as a dedicated non-root isolation user with an explicit allowlist environment, because a same-uid child can recover credentials from trusted ancestors' environments; trusted result collection never reads model-written Git configuration.",
         "boundary": "review",
         "guard_reference": "src/hunter/automation/issue_agent_replacement_executor.py::validate_replacement_result"
       },
@@ -1509,18 +1539,23 @@
         "tests/test_issue_agent_replacement_executor.py::test_validation_receipt_cannot_be_reused_after_definition_change",
         "tests/test_issue_agent_replacement_executor.py::test_rehearsal_result_can_never_reach_publisher",
         "tests/test_issue_agent_replacement_executor.py::test_publisher_uses_data_only_git_plumbing_and_create_only_lease",
-        "tests/test_issue_agent_replacement_executor.py::test_pre_push_safety_scrubs_publication_and_model_authority",
+        "tests/test_issue_agent_replacement_executor.py::test_candidate_pre_push_receives_only_an_explicit_allowlist_as_the_isolation_user",
         "tests/test_issue_agent_replacement_executor.py::test_credential_free_safety_refuses_any_publication_credential",
         "tests/test_issue_agent_replacement_executor.py::test_credential_free_safety_runs_hook_on_unsigned_exact_tree",
         "tests/test_issue_agent_replacement_executor.py::test_publisher_refuses_a_tree_the_safety_boundary_did_not_prove",
         "tests/test_issue_agent_github_execution.py::test_workflow_runs_each_trust_domain_in_its_own_job",
         "tests/test_issue_agent_github_execution.py::test_executor_refuses_publication_authority",
-        "tests/test_issue_agent_github_execution.py::test_publisher_refuses_model_authority"
+        "tests/test_issue_agent_github_execution.py::test_publisher_refuses_model_authority",
+        "tests/test_issue_agent_replacement_executor.py::test_candidate_pre_push_refuses_without_a_distinct_isolation_user",
+        "tests/test_issue_agent_github_execution.py::test_model_runs_as_the_isolation_user_without_any_oidc_or_issuer_capability",
+        "tests/test_issue_agent_github_execution.py::test_executor_refuses_to_run_a_model_without_uid_isolation",
+        "tests/test_issue_agent_github_execution.py::test_a_model_planted_git_directory_never_configures_or_runs_collection"
       ],
       "lifecycle": "regression-tested",
       "sources": [
         "Post-PR #519 publication-path inspection after Issue #520 canary, 2026-09-25",
-        "Issue #557 audit, 2026-10-03: the #524 publisher executed candidate-controlled pre-push scripts in the credential-bearing process (PRH-067)."
+        "Issue #557 audit, 2026-10-03: the #524 publisher executed candidate-controlled pre-push scripts in the credential-bearing process (PRH-067).",
+        "PR #558 Copilot review, 2026-10-03: environment hiding was not a credential boundary for same-uid untrusted code (PRH-068)."
       ]
     },
     {

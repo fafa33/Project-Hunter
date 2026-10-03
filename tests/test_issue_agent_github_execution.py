@@ -19,6 +19,7 @@ import base64
 import hashlib
 import http.client
 import json
+import re
 import subprocess
 import threading
 import urllib.error
@@ -586,14 +587,15 @@ def test_trigger_dispatches_only_the_opaque_identity(
         ).encode()
 
     monkeypatch.setattr(trigger, "_provision_and_dispatch", accept)
-    output = tmp_path / "github_output"
     argv = ["--event", str(event_path), "--repository", REPOSITORY, "--owner-login", OWNER]
-    assert trigger.main([*argv, "--execution-identity-out", str(output)]) == 0
+    assert trigger.main(argv) == 0
     authorization_id = json.loads(posted[0])["authorization"]["authorization_id"]
     out = capsys.readouterr().out
-    assert out.strip() == authorization_id
+    # stdout is exactly the identity the workflow binds; no path argument exists.
+    assert out == f"{authorization_id}\n"
     assert "SECRET-ISSUE-CONTENT" not in out
-    assert output.read_text() == f"authorization_id={authorization_id}\n"
+    with pytest.raises(SystemExit):
+        trigger.main([*argv, "--execution-identity-out", str(tmp_path / "x")])
 
     monkeypatch.setattr(trigger, "_provision_and_dispatch", lambda *_a, **_k: b'{"state":"FAILED"}')
     assert trigger.main(argv) == 2
@@ -607,8 +609,6 @@ def _jobs() -> dict[str, Any]:
 
 
 def _secrets(job: Any) -> set[str]:
-    import re
-
     return set(re.findall(r"secrets\.([A-Z0-9_]+)", json.dumps(job)))
 
 
@@ -633,6 +633,25 @@ def test_workflow_runs_each_trust_domain_in_its_own_job() -> None:
         "HUNTER_ISSUE_AGENT_PUBLISHER_PUSH_TOKEN",
     }
     text = WORKFLOW.read_text(encoding="utf-8")
+    workflow = yaml.safe_load(text)
+    # Sonar githubactions:S8264 -- no workflow-level grant; each job declares its own.
+    assert workflow["permissions"] == {}
+    assert jobs["authorize-and-dispatch"]["permissions"] == {"contents": "read", "issues": "read"}
+    for name in ("execute", "validate", "publish"):
+        installs = [step["run"] for step in jobs[name]["steps"] if "pip install" in str(step.get("run", ""))]
+        assert installs, name
+        for script in installs:
+            # Sonar githubactions:S8541/S8544 -- exact pins, wheels only, no local build.
+            assert "--only-binary=:all:" in script
+            command = re.search(r"pip install(?:[^\n]*\\\n)*[^\n]*", script)
+            assert command is not None
+            for requirement in re.findall(r'"([^"]+)"', command.group(0)):
+                assert re.fullmatch(r"[A-Za-z0-9_.-]+==[0-9][A-Za-z0-9_.]*", requirement), requirement
+            assert " ./engine" not in script and " -e " not in script and not script.rstrip().endswith(" .")
+    for name in ("execute", "validate"):
+        steps = json.dumps(jobs[name]["steps"])
+        assert "useradd --create-home --shell /usr/sbin/nologin hunter-untrusted" in steps
+        assert "HUNTER_ISSUE_AGENT_UNTRUSTED_USER" in steps
     assert "upload-artifact" not in text and "set -x" not in text and "github.token" not in text
     assert "GITHUB_TOKEN" not in text and "HUNTER_ISSUE_AGENT_PR_TOKEN" not in text
     for job in jobs.values():
@@ -726,31 +745,35 @@ def test_issuer_url_is_derived_from_the_existing_webhook_secret() -> None:
             driver.execution_base_url({driver.WEBHOOK_URL_ENV: bad})
 
 
-def _workspace(tmp_path: Path) -> tuple[Path, str]:
-    workspace = tmp_path / "ws"
+def _workspace(tmp_path: Path) -> tuple[Path, Path, str]:
+    """A workspace whose trusted Git metadata lives outside it, as the executor builds it."""
+    workspace, git_dir = tmp_path / "ws", tmp_path / "base.git"
     workspace.mkdir(parents=True)
     env = {"GIT_CONFIG_GLOBAL": "/dev/null", "GIT_CONFIG_NOSYSTEM": "1", "PATH": "/usr/bin:/bin:/usr/local/bin"}
     env.update(GIT_AUTHOR_NAME="t", GIT_AUTHOR_EMAIL="t@e", GIT_COMMITTER_NAME="t", GIT_COMMITTER_EMAIL="t@e")
-    for args in (("init", "-q"), ("commit", "-q", "--allow-empty", "-m", "base")):
-        subprocess.run(("git", *args), cwd=workspace, env=env, check=True)
+
+    def git(*args: str) -> str:
+        return subprocess.run(
+            ("git", f"--git-dir={git_dir}", f"--work-tree={workspace}", *args),
+            cwd=workspace, env=env, check=True, capture_output=True, text=True,
+        ).stdout.strip()  # fmt: skip
+
+    git("init", "-q")
     (workspace / "docs").mkdir()
     (workspace / "docs" / "old.md").write_text("old\n")
-    subprocess.run(("git", "add", "."), cwd=workspace, env=env, check=True)
-    subprocess.run(("git", "commit", "-q", "-m", "seed"), cwd=workspace, env=env, check=True)
-    base = subprocess.run(
-        ("git", "rev-parse", "HEAD"), cwd=workspace, env=env, check=True, capture_output=True, text=True
-    ).stdout.strip()
-    return workspace, base
+    git("add", ".")
+    git("commit", "-q", "-m", "seed")
+    return workspace, git_dir, git("rev-parse", "HEAD")
 
 
 def test_collected_result_is_the_closed_schema_document(tmp_path: Path) -> None:
-    workspace, base = _workspace(tmp_path)
+    workspace, git_dir, base = _workspace(tmp_path)
     (workspace / "docs" / "ISSUE_AGENT_CANARY.md").write_text("# canary\n")
     (workspace / "docs" / "old.md").write_text("new\n")
     signed = SignedIssueAgentAuthorization.from_json(_authorization_document())
     target = derive_execution_target(signed)
     document = driver.collect_result(
-        workspace, authorization_id=target.authorization_id, branch=target.branch, base_sha=base
+        workspace, git_dir, authorization_id=target.authorization_id, branch=target.branch, base_sha=base
     )
     payload = json.loads(document)
     assert set(payload) == {"schema_version", "authorization_id", "base_sha", "branch", "files"}
@@ -762,15 +785,31 @@ def test_collected_result_is_the_closed_schema_document(tmp_path: Path) -> None:
 
 
 def test_an_inexpressible_candidate_change_fails_closed(tmp_path: Path) -> None:
-    workspace, base = _workspace(tmp_path)
+    workspace, git_dir, base = _workspace(tmp_path)
     (workspace / "docs" / "old.md").unlink()
     with pytest.raises(driver.ExecutionJobError) as caught:
-        driver.collect_result(workspace, authorization_id="a", branch="b", base_sha=base)
+        driver.collect_result(workspace, git_dir, authorization_id="a", branch="b", base_sha=base)
     assert caught.value.code == "UNSUPPORTED_CANDIDATE_CHANGE"
-    workspace2, base2 = _workspace(tmp_path / "second")
+    workspace2, git_dir2, base2 = _workspace(tmp_path / "second")
     with pytest.raises(driver.ExecutionJobError) as caught:
-        driver.collect_result(workspace2, authorization_id="a", branch="b", base_sha=base2)
+        driver.collect_result(workspace2, git_dir2, authorization_id="a", branch="b", base_sha=base2)
     assert caught.value.code == "NO_CANDIDATE_CHANGE"
+
+
+def test_a_model_planted_git_directory_never_configures_or_runs_collection(tmp_path: Path) -> None:
+    """The trusted process (which holds the OIDC capability) runs no model-written Git config."""
+    workspace, git_dir, base = _workspace(tmp_path)
+    pwned = tmp_path / "PWNED"
+    planted = workspace / ".git"
+    (planted / "hooks").mkdir(parents=True)
+    (planted / "config").write_text(f"[core]\n\tfsmonitor = touch {pwned}\n\thooksPath = hooks\n")
+    hook = planted / "hooks" / "pre-commit"
+    hook.write_text(f"#!/bin/sh\ntouch {pwned}\n")
+    hook.chmod(0o755)
+    (workspace / "docs" / "ISSUE_AGENT_CANARY.md").write_text("# canary\n")
+    document = driver.collect_result(workspace, git_dir, authorization_id="a", branch="b", base_sha=base)
+    assert not pwned.exists()
+    assert [f["path"] for f in json.loads(document)["files"]] == ["docs/ISSUE_AGENT_CANARY.md"]
 
 
 def test_publisher_identity_is_bound_by_code_write_policy() -> None:
@@ -826,3 +865,201 @@ def test_dispatch_refuses_an_unadmitted_handoff_instead_of_executing(tmp_path: P
     assert _inner(_authorization_document()).authorization_id == signed.authorization.authorization_id
     with pytest.raises(Exception, match="not the admitted execution"):
         runtime.dispatch("{}", derive_execution_target(signed))
+
+
+# --- PR #558 review: OIDC audience/nbf, handoff state machine, model isolation ---
+
+
+@pytest.mark.parametrize(
+    "aud",
+    [
+        ["hunter-issue-agent-execution:fafa33/Project-Hunter", 7],
+        ["hunter-issue-agent-execution:fafa33/Project-Hunter", {"x": 1}],
+        ["hunter-issue-agent-execution:fafa33/Project-Hunter", None],
+        ["hunter-issue-agent-execution:fafa33/Project-Hunter", ""],
+        [],
+        {"aud": "hunter-issue-agent-execution:fafa33/Project-Hunter"},
+        12,
+        "",
+        True,
+    ],
+)
+def test_malformed_audience_claims_fail_closed(aud: Any) -> None:
+    with pytest.raises(ExecutionIdentityError, match="audience"):
+        _verifier().verify(_token(aud=aud), now=START)
+
+
+def test_audience_claim_absent_or_null_fails_closed() -> None:
+    claims = _claims()
+    claims.pop("aud")
+    header = _b64url(json.dumps({"alg": "RS256", "kid": "github-test"}).encode())
+    for body in (claims, {**claims, "aud": None}):
+        payload = _b64url(json.dumps(body).encode())
+        signature = OIDC_KEY.sign(f"{header}.{payload}".encode(), padding.PKCS1v15(), hashes.SHA256())
+        with pytest.raises(ExecutionIdentityError, match="audience"):
+            _verifier().verify(f"{header}.{payload}.{_b64url(signature)}", now=START)
+
+
+@pytest.mark.parametrize("nbf", ["0", 1.5, None, True, [1], {"t": 1}])
+def test_malformed_nbf_is_never_skipped(nbf: Any) -> None:
+    claims = _claims()
+    claims["nbf"] = nbf
+    header = _b64url(json.dumps({"alg": "RS256", "kid": "github-test"}).encode())
+    payload = _b64url(json.dumps(claims).encode())
+    signature = OIDC_KEY.sign(f"{header}.{payload}".encode(), padding.PKCS1v15(), hashes.SHA256())
+    with pytest.raises(ExecutionIdentityError, match="nbf"):
+        _verifier().verify(f"{header}.{payload}.{_b64url(signature)}", now=START)
+
+
+def test_well_formed_audiences_are_accepted() -> None:
+    expected = oidc_audience(REPOSITORY)
+    for aud in (expected, [expected], ["another-audience", expected]):
+        assert _verifier().verify(_token(aud=aud), now=START).run == ("1001", "1")
+
+
+def _blocking_runtime(deployment: Deployment, gate: threading.Event, entered: threading.Event, *, fail: bool):
+    configuration = deployment.configuration
+
+    def resolve(_handoff: str) -> str:
+        entered.set()
+        assert gate.wait(10)
+        if fail:
+            raise RuntimeError("prompt reconstruction failed")
+        return "exact prompt"
+
+    return GitHubHostedExecutionRuntime(
+        repository=configuration.repository,
+        owner_login=configuration.owner_login,
+        evidence_database=configuration.evidence_database,
+        oidc_verifier=_verifier(),
+        prompt_resolver=resolve,
+        clock=deployment.clock.now,
+        result_timeout_seconds=5.0,
+    )
+
+
+@pytest.mark.parametrize("fail", [True, False])
+def test_no_result_is_accepted_while_the_handoff_is_in_flight(tmp_path: Path, edge: Any, fail: bool) -> None:
+    """Exact race from the review: a result racing an unresolved prompt is refused."""
+    deployment = Deployment(tmp_path)
+    gate, entered = threading.Event(), threading.Event()
+    services = deployment.services(fallback=_blocking_runtime(deployment, gate, entered, fail=fail))
+    hook = edge(services)
+    authorization_id = _accepted(hook, _authorization_document())["authorization_id"]
+    signed = SignedIssueAgentAuthorization.from_json(_authorization_document())
+    fetched: dict[str, Any] = {}
+    fetcher = threading.Thread(target=lambda: fetched.update(r=hook.fetch(authorization_id, "executor")))
+    fetcher.start()
+    assert entered.wait(5)
+    # HANDOFF_IN_FLIGHT: the same OIDC-bound run races a result in.
+    assert hook.result(authorization_id, _result(signed))[0] == 403
+    assert services.ledger.entry(authorization_id).state == "DISPATCHED"
+    gate.set()
+    fetcher.join(10)
+    if fail:
+        assert fetched["r"][0] == 422
+        assert _wait_for_ledger_state(services.ledger, authorization_id, "FAILED").failure_code == "EXECUTION_ERROR"
+        # A failed resolution never becomes result-eligible.
+        assert hook.result(authorization_id, _result(signed))[0] == 409
+    else:
+        assert fetched["r"][0] == 200
+        assert hook.result(authorization_id, _result(signed))[0] == 200
+        assert _wait_for_ledger_state(services.ledger, authorization_id, "COMPLETED").provider == EXECUTOR_PROVIDER
+
+
+def test_model_runs_as_the_isolation_user_without_any_oidc_or_issuer_capability(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Review finding: the model must not be able to observe or recover OIDC minting capability."""
+    import hunter.automation.issue_agent_replacement_executor as core
+
+    secrets_ = {
+        "ACTIONS_ID_TOKEN_REQUEST_TOKEN": "oidc-request-secret",
+        "ACTIONS_ID_TOKEN_REQUEST_URL": "https://oidc-request-secret.example/token",
+        "HUNTER_ISSUE_AGENT_WEBHOOK_URL": "https://issuer-secret.example/issue-agent/authorize",
+    }
+    environ = {
+        **secrets_,
+        "PATH": "/usr/bin",
+        "GITHUB_REPOSITORY": REPOSITORY,
+        driver.OPENCODE_EXECUTABLE_ENV: "/usr/local/bin/hunter-opencode",
+        driver.UNTRUSTED_USER_ENV: "hunter-untrusted",
+        driver.MODEL_API_KEY_ENV: "model-key",
+        driver.MODEL_API_KEY_NAME_ENV: "GROQ_API_KEY",
+    }
+    signed = SignedIssueAgentAuthorization.from_json(_authorization_document())
+    target = derive_execution_target(signed)
+    launched: list[tuple[tuple[str, ...], dict[str, str]]] = []
+    events: list[str] = []
+
+    class Done:
+        returncode = 0
+
+    def fake_run(argv: Any, **kwargs: Any) -> Any:
+        launched.append((tuple(argv), dict(kwargs.get("env") or {})))
+        return Done()
+
+    monkeypatch.setattr(driver, "require_isolation_user", lambda user: user)
+    monkeypatch.setattr(core, "ISOLATION_ROOT", tmp_path)
+    monkeypatch.setattr(driver.subprocess, "run", fake_run)
+    monkeypatch.setattr(driver, "run_privileged", lambda *args, **_k: events.append(" ".join(args)))
+    monkeypatch.setattr(core, "run_privileged", lambda *args, **_k: events.append(" ".join(args)))
+    monkeypatch.setattr(
+        driver,
+        "_fetch",
+        lambda *_a: {
+            "schema_version": "hunter-issue-agent-execution-handoff-v1",
+            "repository": REPOSITORY,
+            "branch": target.branch,
+            "base_sha": target.base_sha,
+            "exact_prompt": "PROMPT",
+            "authorization_id": target.authorization_id,
+        },
+    )
+    monkeypatch.setattr(driver, "materialize_base", lambda workspace, git_dir, **_k: workspace.mkdir())
+    monkeypatch.setattr(driver, "collect_result", lambda *_a, **_k: "{}")
+
+    def mint(*_a: Any) -> str:
+        events.append("oidc")
+        return "token"
+
+    monkeypatch.setattr(driver, "request_oidc_token", mint)
+    monkeypatch.setattr(
+        driver,
+        "post_execution",
+        lambda *_a: {"schema_version": "hunter-issue-agent-execution-result-accepted-v1",
+                     "authorization_id": target.authorization_id, "result_sha256": "d"},
+    )  # fmt: skip
+    assert driver.run_execute(target.authorization_id, environ) == "d"
+    model = [argv for argv, _ in launched if "/usr/local/bin/hunter-opencode" in argv]
+    assert len(model) == 1
+    argv = model[0]
+    # A different uid, a cleared environment, and only the model allowlist.
+    assert argv[:7] == ("sudo", "-n", "-u", "hunter-untrusted", "--", "/usr/bin/env", "-i")
+    for every_argv, every_env in launched:
+        flattened = " ".join(every_argv) + " " + " ".join(f"{k}={v}" for k, v in every_env.items())
+        for value in secrets_.values():
+            assert value not in flattened
+        assert set(every_env) <= {"PATH"}
+    # The workspace is handed to the isolation user before, and the user's
+    # processes are killed before the trusted process mints its result token.
+    assert any(event.startswith("chown -R hunter-untrusted") for event in events)
+    assert events.index("pkill -KILL -u hunter-untrusted") < events.index("oidc")
+
+
+def test_executor_refuses_to_run_a_model_without_uid_isolation(monkeypatch: pytest.MonkeyPatch) -> None:
+    environ = {driver.OPENCODE_EXECUTABLE_ENV: "/usr/local/bin/hunter-opencode", driver.UNTRUSTED_USER_ENV: "root"}
+    monkeypatch.setattr(driver, "_fetch", lambda *_a: pytest.fail("no handoff may be fetched without isolation"))
+    for env in (environ, {**environ, driver.UNTRUSTED_USER_ENV: "no-such-hunter-user-xyz"}):
+        with pytest.raises(driver.ExecutionJobError) as caught:
+            driver.run_execute("hunter-issue-agent-authorization:" + "a" * 64, env)
+        assert caught.value.code == "UNTRUSTED_ISOLATION_UNAVAILABLE"
+
+
+def test_job_scripts_take_no_file_path_from_arguments(capsys: Any) -> None:
+    """Sonar pythonsecurity:S8707 -- no CLI argument selects a path that is written or read."""
+    for flag in ("--output", "--repository-checkout"):
+        with pytest.raises(SystemExit):
+            driver.main(["validate", "--authorization-id", "x", flag, "/tmp/x"])
+    assert driver.main(["validate", "--authorization-id", "not-an-identity"]) == 2
+    assert capsys.readouterr().out == ""

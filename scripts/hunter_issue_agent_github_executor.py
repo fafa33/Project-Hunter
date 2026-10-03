@@ -63,12 +63,19 @@ from hunter.automation.issue_agent_replacement_executor import (
     OIDC_REQUEST_ENV,
     PUBLICATION_CREDENTIAL_ENV,
     RESULT_SCHEMA_VERSION,
+    SUDO_ENVIRONMENT,
     ReplacementExecutorError,
     ValidatedReplacementResult,
+    isolated_command,
+    new_isolation_root,
     publication_credentials_present,
     publish_create_only,
     publisher_environment_is_safe,
+    remove_isolation_root,
+    require_isolation_user,
     run_credential_free_candidate_safety,
+    run_privileged,
+    stop_isolated_processes,
     validate_replacement_result,
     verify_validation_receipt,
 )
@@ -82,6 +89,8 @@ MODEL_API_KEY_NAME_ENV = "HUNTER_ISSUE_AGENT_EXECUTOR_MODEL_KEY_ENV"
 PUBLISHER_SIGNING_KEY_ENV = "HUNTER_ISSUE_AGENT_PUBLISHER_SIGNING_KEY"
 PUBLISHER_PUSH_TOKEN_ENV = "HUNTER_ISSUE_AGENT_PUBLISHER_PUSH_TOKEN"
 PUBLISHER_WRITER_ENV = "HUNTER_ISSUE_AGENT_PUBLISHER_WRITER"
+#: The dedicated unprivileged OS user that untrusted model and candidate code run as.
+UNTRUSTED_USER_ENV = "HUNTER_ISSUE_AGENT_UNTRUSTED_USER"
 CODE_WRITE_POLICY = Path(__file__).resolve().parents[1] / "docs" / "CODE_WRITE_POLICY.json"
 
 #: The issuer edge bounds bodies at 256 KiB; leave room for the OIDC token.
@@ -198,32 +207,49 @@ def _fetch(environ: Mapping[str, str], authorization_id: str, role: str) -> dict
     return response
 
 
-def _git(cwd: Path, *args: str, input_bytes: bytes | None = None) -> bytes:
+def _git(git_dir: Path, work_tree: Path, *args: str) -> bytes:
+    """Git against the trusted metadata directory only; nothing in the work tree configures it."""
     env = {
         "PATH": os.environ.get("PATH", "/usr/bin:/bin"),
-        "HOME": str(cwd),
+        "HOME": str(git_dir),
         "GIT_CONFIG_GLOBAL": os.devnull,
         "GIT_CONFIG_NOSYSTEM": "1",
         "GIT_TERMINAL_PROMPT": "0",
     }
-    completed = subprocess.run(
-        ("git", *args), cwd=cwd, env=env, input=input_bytes, capture_output=True, check=False, timeout=300
-    )
+    command = (
+        "git", f"--git-dir={git_dir}", f"--work-tree={work_tree}",
+        "-c", "core.hooksPath=/dev/null", "-c", "core.fsmonitor=false", *args,
+    )  # fmt: skip
+    completed = subprocess.run(command, cwd=work_tree, env=env, capture_output=True, check=False, timeout=300)
     if completed.returncode != 0:
         raise ExecutionJobError("WORKSPACE_GIT_FAILED", args[0])
     return completed.stdout
 
 
-def materialize_base(workspace: Path, *, repository: str, base_sha: str) -> None:
-    """A credential-free workspace at exactly the signed base."""
+def materialize_base(workspace: Path, git_dir: Path, *, repository: str, base_sha: str) -> None:
+    """A credential-free workspace at exactly the signed base.
+
+    The Git metadata lives in ``git_dir`` outside the workspace, so nothing the
+    model writes inside the workspace (including a planted ``.git``) can
+    configure or execute anything when the trusted process collects the result.
+    """
     if _SHA_RE.fullmatch(base_sha) is None or re.fullmatch(r"[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+", repository) is None:
         raise ExecutionJobError("HANDOFF_TARGET_INVALID")
     workspace.mkdir(parents=True)
-    _git(workspace, "init", "--quiet")
-    _git(workspace, "fetch", "--quiet", "--depth=1", "--no-tags", f"https://github.com/{repository}.git", base_sha)
-    _git(workspace, "checkout", "--quiet", "--detach", "FETCH_HEAD")
-    if _git(workspace, "rev-parse", "HEAD").decode().strip() != base_sha:
+    _git(git_dir, workspace, "init", "--quiet")
+    git_dir.chmod(0o700)
+    url = f"https://github.com/{repository}.git"
+    _git(git_dir, workspace, "fetch", "--quiet", "--depth=1", "--no-tags", url, base_sha)
+    _git(git_dir, workspace, "checkout", "--quiet", "--detach", "FETCH_HEAD")
+    if _git(git_dir, workspace, "rev-parse", "HEAD").decode().strip() != base_sha:
         raise ExecutionJobError("WORKSPACE_NOT_AT_BASE")
+
+
+def _isolation_user(environ: Mapping[str, str]) -> str:
+    try:
+        return require_isolation_user(_required(environ, UNTRUSTED_USER_ENV))
+    except ReplacementExecutorError:
+        raise ExecutionJobError("UNTRUSTED_ISOLATION_UNAVAILABLE") from None
 
 
 def model_environment(environ: Mapping[str, str], *, workspace: Path, home: Path) -> dict[str, str]:
@@ -251,10 +277,10 @@ def model_environment(environ: Mapping[str, str], *, workspace: Path, home: Path
     }
 
 
-def collect_result(workspace: Path, *, authorization_id: str, branch: str, base_sha: str) -> str:
+def collect_result(workspace: Path, git_dir: Path, *, authorization_id: str, branch: str, base_sha: str) -> str:
     """Turn the workspace change into the closed-schema hostile result document."""
-    _git(workspace, "add", "--all")
-    listing = _git(workspace, "diff", "--cached", "--no-renames", "--name-status", "-z", base_sha).split(b"\0")
+    _git(git_dir, workspace, "add", "--all")
+    listing = _git(git_dir, workspace, "diff", "--cached", "--no-renames", "--name-status", "-z", base_sha).split(b"\0")
     entries = [item for item in listing if item]
     if not entries:
         raise ExecutionJobError("NO_CANDIDATE_CHANGE")
@@ -265,10 +291,10 @@ def collect_result(workspace: Path, *, authorization_id: str, branch: str, base_
             # change or anything else is not expressible and fails closed.
             raise ExecutionJobError("UNSUPPORTED_CANDIDATE_CHANGE", status.decode(errors="replace"))
         path = raw_path.decode("utf-8")
-        mode = _git(workspace, "ls-files", "--stage", "--", path).decode().split(" ", 1)[0]
+        mode = _git(git_dir, workspace, "ls-files", "--stage", "--", path).decode().split(" ", 1)[0]
         if mode not in ("100644", "100755"):
             raise ExecutionJobError("UNSUPPORTED_CANDIDATE_MODE")
-        content = _git(workspace, "cat-file", "blob", f":{path}")
+        content = _git(git_dir, workspace, "cat-file", "blob", f":{path}")
         files.append(
             {
                 "path": path,
@@ -295,6 +321,7 @@ def run_execute(authorization_id: str, environ: Mapping[str, str]) -> str:
     if leaked:
         raise ExecutionJobError("EXECUTOR_HAS_PUBLICATION_AUTHORITY", ",".join(leaked))
     executable = _required(environ, OPENCODE_EXECUTABLE_ENV)
+    user = _isolation_user(environ)
     handoff = _fetch(environ, authorization_id, ROLE_EXECUTOR)
     if handoff.get("schema_version") != EXECUTION_HANDOFF_SCHEMA_VERSION:
         raise ExecutionJobError("HANDOFF_SCHEMA_MISMATCH")
@@ -304,22 +331,25 @@ def run_execute(authorization_id: str, environ: Mapping[str, str]) -> str:
     branch, base_sha = handoff.get("branch"), handoff.get("base_sha")
     if not isinstance(prompt, str) or not prompt or not isinstance(branch, str) or not isinstance(base_sha, str):
         raise ExecutionJobError("HANDOFF_INCOMPLETE")
-    with tempfile.TemporaryDirectory(prefix="hunter-issue-agent-executor-") as directory:
-        root = Path(directory)
-        workspace = root / "workspace"
-        home = root / "home"
+    root = new_isolation_root("hunter-issue-agent-executor-")
+    try:
+        workspace, git_dir, home = root / "workspace", root / "base.git", root / "home"
         home.mkdir(mode=0o700)
-        materialize_base(workspace, repository=str(handoff["repository"]), base_sha=base_sha)
+        materialize_base(workspace, git_dir, repository=str(handoff["repository"]), base_sha=base_sha)
         argv = [executable, "run"]
         model = environ.get(MODEL_ENV, "").strip()
         if model:
             argv.extend(("--model", model))
         argv.append(prompt)
+        # The model runs as the isolation user: it cannot read this process's or
+        # the step's environment (OIDC request capability, issuer URL) or the
+        # trusted Git metadata, and gets only the explicit model environment.
+        run_privileged("chown", "-R", user, str(workspace), str(home))
         try:
             completed = subprocess.run(
-                argv,
+                isolated_command(user, model_environment(environ, workspace=workspace, home=home), argv),
                 cwd=workspace,
-                env=model_environment(environ, workspace=workspace, home=home),
+                env=dict(SUDO_ENVIRONMENT),
                 stdin=subprocess.DEVNULL,
                 stdout=subprocess.DEVNULL,
                 stderr=subprocess.DEVNULL,
@@ -328,9 +358,16 @@ def run_execute(authorization_id: str, environ: Mapping[str, str]) -> str:
             )
         except subprocess.TimeoutExpired:
             raise ExecutionJobError("MODEL_TIMEOUT") from None
+        finally:
+            stop_isolated_processes(user)
         if completed.returncode != 0:
             raise ExecutionJobError("MODEL_FAILED", f"exit {completed.returncode}")
-        document = collect_result(workspace, authorization_id=authorization_id, branch=branch, base_sha=base_sha)
+        run_privileged("chown", "-R", f"{os.getuid()}:{os.getgid()}", str(workspace))
+        document = collect_result(
+            workspace, git_dir, authorization_id=authorization_id, branch=branch, base_sha=base_sha
+        )
+    finally:
+        remove_isolation_root(root, user)
     repository = _required(environ, "GITHUB_REPOSITORY")
     payload = {
         "schema_version": EXECUTION_REQUEST_SCHEMA_VERSION,
@@ -404,10 +441,11 @@ def run_validate(authorization_id: str, repo: Path, environ: Mapping[str, str]) 
         raise ExecutionJobError("VALIDATOR_HAS_PUBLICATION_AUTHORITY", ",".join(leaked))
     if not publisher_environment_is_safe(environ):
         raise ExecutionJobError("VALIDATOR_HAS_MODEL_AUTHORITY")
+    user = _isolation_user(environ)
     _bind_writer(_required(environ, PUBLISHER_WRITER_ENV))
     validated, _receipt = _verified_candidate(authorization_id, environ, ROLE_VALIDATOR)
     try:
-        return run_credential_free_candidate_safety(repo, validated=validated)
+        return run_credential_free_candidate_safety(repo, validated=validated, isolation_user=user)
     except ReplacementExecutorError:
         # The hook output is candidate-derived content and is never printed.
         raise ExecutionJobError("CANDIDATE_SAFETY_FAILED") from None
@@ -481,31 +519,31 @@ def _parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="hunter_issue_agent_github_executor")
     parser.add_argument("role", choices=("execute", "validate", "publish"))
     parser.add_argument("--authorization-id", required=True)
-    parser.add_argument("--repository-checkout", type=Path, default=Path.cwd())
     parser.add_argument("--safety-tree", default="")
-    parser.add_argument("--output")
     return parser
 
 
 def main(argv: list[str] | None = None) -> int:
+    """Run one job in the current trusted checkout.
+
+    No file path is taken from arguments. ``validate`` prints only the exact
+    candidate tree id on stdout so the workflow can bind it as a job output.
+    """
     arguments = _parser().parse_args(argv)
     try:
         if _AUTHORIZATION_ID_RE.fullmatch(arguments.authorization_id) is None:
             raise ExecutionJobError("AUTHORIZATION_ID_INVALID")
+        repo = Path.cwd()
         if arguments.role == "execute":
             digest = run_execute(arguments.authorization_id, os.environ)
-            print(f"issue-agent execute: RESULT_ACCEPTED result_sha256={digest}")
+            print(f"issue-agent execute: RESULT_ACCEPTED result_sha256={digest}", file=sys.stderr)
         elif arguments.role == "validate":
-            tree = run_validate(arguments.authorization_id, arguments.repository_checkout, os.environ)
-            if arguments.output:
-                with Path(arguments.output).open("a", encoding="utf-8") as handle:
-                    handle.write(f"tree={tree}\n")
-            print(f"issue-agent validate: CANDIDATE_SAFE tree={tree}")
+            tree = run_validate(arguments.authorization_id, repo, os.environ)
+            print(f"issue-agent validate: CANDIDATE_SAFE tree={tree}", file=sys.stderr)
+            print(tree)
         else:
-            branch, head = run_publish(
-                arguments.authorization_id, arguments.repository_checkout, arguments.safety_tree, os.environ
-            )
-            print(f"issue-agent publish: PUBLISHED branch={branch} head={head}")
+            branch, head = run_publish(arguments.authorization_id, repo, arguments.safety_tree, os.environ)
+            print(f"issue-agent publish: PUBLISHED branch={branch} head={head}", file=sys.stderr)
         return 0
     except ExecutionJobError as error:
         suffix = f" ({error.detail})" if error.detail else ""
