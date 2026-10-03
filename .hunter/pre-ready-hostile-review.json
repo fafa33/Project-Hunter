@@ -402,6 +402,16 @@
         "severity": "blocking"
       },
       {
+        "evidence": "Copilot PRRT_kwDOTRDHr86orstM (head 2bcfc0c7): non-UTF-8 candidate path raised UnicodeDecodeError outside the bounded job error.",
+        "id": "F-22",
+        "resolution": "resolved",
+        "resolution_evidence": {
+          "correction": "3409cf474bec6d7092165d6557d2ace50546ad9b",
+          "regression_test": "tests/test_issue_agent_github_execution.py"
+        },
+        "severity": "blocking"
+      },
+      {
         "evidence": "Copilot (head 3bbeeb02): claimed the isolated pre-push would always fail without a GitHub token. Not reproducible: the real trusted hook passed end to end with no token and a local-clone origin (exit 0); the token is reached only by the non-blocking review-state report, now pinned by a regression.",
         "id": "F-13",
         "resolution": "resolved",
@@ -410,6 +420,12 @@
           "regression_test": "tests/test_issue_agent_github_execution.py"
         },
         "severity": "non-blocking"
+      },
+      {
+        "evidence": "Codex P1 PRRT_kwDOTRDHr86orrq4 (head 2bcfc0c7): an accepted executor result completes the durable execution row before validation/publication, so an issuer restart loses the in-memory candidate and strands the consumed authorization as COMPLETED without a branch or PR. Resuming requires durable storage of the hostile result/signed authorization and reclaim of a lapsed lease, both outside the existing ledger contract (DFF-020, recover_expired_on_startup, 'a consumed authorization is never retried'); escalated for an owner decision.",
+        "id": "F-23",
+        "resolution": "unresolved",
+        "severity": "blocking"
       },
       {
         "evidence": "Copilot exact-head review 5399341885 overview prose mentions 'four unresolved moderate issues' but enumerates no finding, inline comment or location ('Findings: None'); nothing actionable was identified.",
@@ -421,7 +437,7 @@
     "issue": "557",
     "review_target": [
       {
-        "blob_sha": "d2c6d210272daf611e32332b126eb8dd15741184",
+        "blob_sha": "e23d37d121ceb36dc2eeadfc0d8990e83747dffb",
         "path": "scripts/hunter_issue_agent_github_executor.py",
         "previous_path": "",
         "status": "added"
@@ -433,7 +449,7 @@
         "status": "added"
       },
       {
-        "blob_sha": "df7d5857bbfd0d92bb7071b716318f24d91f4779",
+        "blob_sha": "13c9ce23ec7c193c7a7bf296fe9afa765220ed10",
         "path": "tests/test_issue_agent_github_execution.py",
         "previous_path": "",
         "status": "added"
@@ -451,7 +467,7 @@
         "status": "modified"
       },
       {
-        "blob_sha": "4a1af658e745503f32a7badd251f81c95dd88d1c",
+        "blob_sha": "a4990058ebe7a74efae7cda4f15a0bc31c3191da",
         "path": "docs/DEFECT_REGISTRY.json",
         "previous_path": "",
         "status": "modified"
@@ -541,11 +557,11 @@
         "status": "modified"
       }
     ],
-    "review_target_digest": "2b554d0f3a126efb7addda2906cbfe41abe9ceb0355e37faa648d69db5b25578"
+    "review_target_digest": "23130581f8ad080765685869d0fd13b7dd50068688cbd2f48d9b5f6f970cbf46"
   },
-  "review_id": "03655528251a2484769cd3de159cdc056e9cbc239355b333e71031ca3d4bef9f",
+  "review_id": "5d3c23853eeb0072a848d91b4cd49e34dd43adbfb102c82770ede10ee0c42f81",
   "review_request": {
-    "claims_id": "03655528251a2484769cd3de159cdc056e9cbc239355b333e71031ca3d4bef9f",
+    "claims_id": "5d3c23853eeb0072a848d91b4cd49e34dd43adbfb102c82770ede10ee0c42f81",
     "schema": "hunter.review-request.v1"
   },
   "schema": "hunter.pre-ready-hostile-review.v1"
