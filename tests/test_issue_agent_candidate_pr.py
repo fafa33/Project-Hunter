@@ -7,6 +7,7 @@ genuine candidate must never be refused.
 
 from __future__ import annotations
 
+import hashlib
 from dataclasses import replace
 from typing import Any
 
@@ -125,6 +126,7 @@ class FakeGitHub:
         self.calls: list[tuple[str, str, str, Any]] = []
         self.total_commits = total_commits
         self.issue_status = issue_status
+        self.open_pulls: list[dict[str, Any]] = []
 
     def __call__(self, repository: str, token: str, method: str, path: str, payload: Any = None) -> Any:
         self.calls.append((token, method, path, payload))
@@ -137,11 +139,13 @@ class FakeGitHub:
                 raise error
             return {"number": 423, "state": "open", "title": "Governed change"}
         if path.startswith("pulls?"):
-            return []
+            return list(self.open_pulls)
         if path.startswith("compare/"):
             commits = [_commit("a" * 40, BASE), _commit(HEAD, "a" * 40)]
             return {"commits": commits, "total_commits": self.total_commits or len(commits)}
         if method == "POST" and path == "pulls":
+            pull = {"number": 900, "head": {"ref": payload["head"], "repo": {"full_name": repository}}}
+            self.open_pulls.append(pull)
             return {"number": 900}
         raise AssertionError(f"unexpected request {method} {path}")
 
@@ -243,10 +247,17 @@ def test_the_workflow_runs_the_trusted_module_only_after_a_green_push_preflight(
     triggers = workflow.get("on", workflow.get(True))
     assert triggers == {"workflow_run": {"workflows": ["Hunter / Pre-PR Preflight"], "types": ["completed"]}}
     # The workflow token can read only; the one write uses the dedicated token.
-    assert workflow["permissions"] == {"contents": "read", "issues": "read", "pull-requests": "read"}
+    # Sonar githubactions:S8264: nothing granted at workflow level; each job declares its own.
+    assert workflow["permissions"] == {}
+    assert workflow["jobs"]["bind-issue"]["permissions"] == {}
+    assert workflow["jobs"]["open-draft-pr"]["permissions"] == {
+        "contents": "read",
+        "issues": "read",
+        "pull-requests": "read",
+    }
 
-    (job,) = workflow["jobs"].values()
-    condition = " ".join(job["if"].split())
+    bind, job = workflow["jobs"]["bind-issue"], workflow["jobs"]["open-draft-pr"]
+    condition = " ".join(bind["if"].split())
     assert "github.event.workflow_run.event == 'push'" in condition
     assert "github.event.workflow_run.conclusion == 'success'" in condition
     assert "github.event.workflow_run.head_repository.full_name == github.repository" in condition
@@ -261,7 +272,7 @@ def test_the_workflow_runs_the_trusted_module_only_after_a_green_push_preflight(
 
 
 def test_the_privileged_job_never_checks_out_or_executes_candidate_content() -> None:
-    (job,) = _workflow()["jobs"].values()
+    job = _workflow()["jobs"]["open-draft-pr"]
     checkout, python, step = job["steps"]
 
     # The only checkout is this workflow's own trusted default-branch commit:
@@ -326,3 +337,147 @@ def test_run_refuses_a_malformed_head_before_any_github_request(head_sha: str) -
     )
     assert (code, decision.open) == (2, False)
     assert github.calls == []
+
+
+# --- PR #558 Copilot: one Issue -> one active Draft PR under real concurrency ---
+
+
+class LinearizableGitHub:
+    """A thread-safe stand-in for GitHub: atomic, ordered PR numbers, consistent reads."""
+
+    def __init__(self, *, decision_barrier: Any = None) -> None:
+        import threading
+
+        self._lock = threading.Lock()
+        self._next = 100
+        self.open_pulls: dict[int, dict[str, Any]] = {}
+        self.posts: list[int] = []
+        self.closed: list[int] = []
+        self._barrier = decision_barrier
+        self._listed: set[int] = set()
+
+    @staticmethod
+    def head_for(branch: str) -> str:
+        return hashlib.sha1(branch.encode()).hexdigest()
+
+    def __call__(self, repository: str, token: str, method: str, path: str, payload: Any = None) -> Any:
+        import threading
+
+        if path.startswith("git/ref/heads/"):
+            return {"object": {"sha": self.head_for(path.rsplit("/", 1)[-1])}}
+        if path.startswith("issues/"):
+            return {"number": 423, "state": "open", "title": "Governed change"}
+        if path.startswith("compare/"):
+            head = path.split("...", 1)[1].split("?", 1)[0]
+            commits = [_commit("a" * 40, BASE), _commit(head, "a" * 40)]
+            return {"commits": commits, "total_commits": len(commits)}
+        if path.startswith("pulls?"):
+            ident = threading.get_ident()
+            first = ident not in self._listed
+            self._listed.add(ident)
+            with self._lock:
+                snapshot = list(self.open_pulls.values())
+            if first and self._barrier is not None:
+                # Force every racer past its pre-POST check before any POST lands.
+                self._barrier.wait(timeout=10)
+            return snapshot
+        if method == "POST" and path == "pulls":
+            with self._lock:
+                number = self._next
+                self._next += 1
+                self.open_pulls[number] = {
+                    "number": number,
+                    "head": {"ref": payload["head"], "repo": {"full_name": repository}},
+                }
+                self.posts.append(number)
+            return {"number": number}
+        if method == "PATCH" and path.startswith("pulls/"):
+            number = int(path.split("/", 1)[1])
+            assert token == "pr-token" and payload == {"state": "closed"}
+            with self._lock:
+                self.open_pulls.pop(number, None)
+                self.closed.append(number)
+            return {"number": number, "state": "closed"}
+        raise AssertionError(f"unexpected request {method} {path}")
+
+
+def _race(github: LinearizableGitHub, branches: list[str]) -> list[Any]:
+    import threading
+
+    results: list[Any] = [None] * len(branches)
+
+    def attempt(index: int, branch: str) -> None:
+        results[index] = candidate_pr.run(
+            repository="fafa33/Project-Hunter",
+            head_repository="fafa33/Project-Hunter",
+            branch=branch,
+            head_sha=LinearizableGitHub.head_for(branch),
+            environ=ENVIRON,
+            request_json=github,
+            authorized_signers=SIGNERS,
+        )
+
+    threads = [threading.Thread(target=attempt, args=(i, b)) for i, b in enumerate(branches)]
+    for thread in threads:
+        thread.start()
+    for thread in threads:
+        thread.join(20)
+    return results
+
+
+def _branches(count: int, salt: str = "") -> list[str]:
+    return [f"issue-423-{hashlib.sha1((salt + str(i)).encode()).hexdigest()[:16]}" for i in range(count)]
+
+
+def test_racing_authorizations_for_one_issue_leave_exactly_one_active_pr() -> None:
+    """The exact TOCTOU from review: both runs see no PR, both POST; one PR survives."""
+    import threading
+
+    branches = _branches(2)
+    github = LinearizableGitHub(decision_barrier=threading.Barrier(2))
+    results = _race(github, branches)
+    assert len(github.posts) == 2  # the race really happened
+    assert list(github.open_pulls) == [min(github.posts)]
+    assert github.closed == [max(github.posts)]
+    opened = [decision for _code, decision in results if decision.open]
+    refused = [decision for _code, decision in results if not decision.open]
+    assert len(opened) == 1 and len(refused) == 1
+    assert f"closed duplicate #{max(github.posts)}" in refused[0].reason
+
+
+def test_many_concurrent_authorizations_converge_on_the_lowest_pr_every_time() -> None:
+    import threading
+
+    for round_ in range(20):
+        branches = _branches(4, salt=str(round_))
+        github = LinearizableGitHub(decision_barrier=threading.Barrier(4) if round_ % 2 == 0 else None)
+        results = _race(github, branches)
+        assert len(github.open_pulls) == 1, (round_, github.open_pulls)
+        assert list(github.open_pulls) == [min(github.posts)]
+        assert sum(1 for _code, decision in results if decision.open) == 1
+        assert sorted(github.closed + list(github.open_pulls)) == sorted(github.posts)
+
+
+def test_a_serialized_second_authorization_never_posts() -> None:
+    first, second = _branches(2, salt="serial")
+    github = LinearizableGitHub()
+    _race(github, [first])
+    _race(github, [second])
+    assert len(github.posts) == 1 and not github.closed
+    assert list(github.open_pulls) == github.posts
+
+
+def test_candidate_pr_creation_is_serialized_per_issue() -> None:
+    workflow = _workflow()
+    bind, job = workflow["jobs"]["bind-issue"], workflow["jobs"]["open-draft-pr"]
+    assert job["needs"] == "bind-issue" and job["if"] == "needs.bind-issue.outputs.issue != ''"
+    assert job["concurrency"] == {
+        "group": "hunter-issue-agent-candidate-pr-issue-${{ needs.bind-issue.outputs.issue }}",
+        "cancel-in-progress": False,
+    }
+    script = bind["steps"][0]["run"]
+    # The workflow binds the Issue with exactly the trusted module's branch shape.
+    assert "^issue-([1-9][0-9]{0,9})-[0-9a-f]{16}$" in script
+    assert candidate_pr.AGENT_BRANCH_RE.pattern == "issue-([1-9][0-9]{0,9})-([0-9a-f]{16})"
+    assert "secrets." not in repr(bind) and "${{" not in script
+    assert not any(str(step.get("uses", "")).startswith("actions/checkout") for step in bind["steps"])

@@ -1332,8 +1332,9 @@ def test_issuer_edge_reuses_existing_authorities_only(tmp_path: Path, monkeypatc
         monkeypatch.setenv(name, value)
 
     services = issuer.compose_services(configuration)
-    assert isinstance(services.fallback, issuer.IssueAgentWorkspaceRuntime)
-    assert services.fallback.workspace_root == configuration.repository_checkout
+    # Issue #557: the retired Railway workspace runtime is no longer composed;
+    # execution is the GitHub-hosted runtime behind the same authorities.
+    assert isinstance(services.fallback, issuer.GitHubHostedExecutionRuntime)
     assert services.configuration is configuration
     assert services.repository is not None
     assert isinstance(services.ingress, GovernedEngineeringTaskIngress)

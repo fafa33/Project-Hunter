@@ -407,7 +407,7 @@ automatically after Source Handling performs its independent restrictive transie
 issuances require at operator as-of, and is exactly idempotent on re-runs. The CLI remains available for offline/operator workflows but is
 no longer part of the admission path.
 
-**f. Live execution is retired pending PR-B** — do **not** apply the `hunter-agent-execute` label to any Issue. The Railway issuer now returns HTTP 503 before authorization claim, handoff compilation, dispatch, execution-slot acquisition, or provider invocation. Provisioning may remain observable, but no live execution is admitted until the replacement executor is rehearsed and separately authorized.
+**f. Railway model execution stays retired; execution is GitHub-hosted (Issue #557)** — the issuer no longer composes the Railway provider pool. It admits an authorization only to the GitHub-hosted execution runtime: after claim, SPM/DPM compilation and durable handoff recording it ACKs with the opaque authorization identity, and the trusted trigger workflow's separate execute, validate and publish jobs use the GitHub-OIDC-authenticated `POST /issue-agent/execution/fetch` and `POST /issue-agent/execution/result` routes. The required GitHub secrets/variables are listed in `docs/ISSUE_AGENT_EXECUTION_CONTRACT.md` ("Operator prerequisites for the cutover"). Deploying this, and re-authorizing canary #520, remain separate owner decisions.
 
 #### Railway Configuration Reference
 

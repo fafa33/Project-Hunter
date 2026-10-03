@@ -1,13 +1,36 @@
 name: Hunter / Governed Issue Agent Trigger
 
+# Issue #557 production cutover. One owner label event drives one governed
+# execution through four separate GitHub-hosted jobs and trust domains:
+#
+#   authorize-and-dispatch  issuer signing key only. Signs the exact Issue
+#                           authorization, provisions Source Handling, and posts
+#                           it to the Railway authority, which claims it,
+#                           compiles it through SPM/DPM, durably records the
+#                           signed handoff, and answers with the opaque
+#                           authorization identity. Railway runs no model.
+#   execute                 model credential + OIDC only. Pulls the exact
+#                           handoff for that identity over GitHub OIDC, runs the
+#                           pinned OpenCode runtime at the exact signed base, and
+#                           returns the hostile closed-schema result.
+#   validate                no credential. Runs the trusted pre-push safety
+#                           boundary on the exact candidate tree; the only job
+#                           that executes candidate-controlled content.
+#   publish                 publication credentials only. Signs a commit bound
+#                           to the validated tree and pushes it create-only. The
+#                           Draft PR is opened only by Hunter / Issue Agent
+#                           Candidate PR after Hunter / Pre-PR Preflight passes.
+#
+# The repository is public: no job prints a prompt, handoff, result, patch or
+# issuer error text, and no job uploads an artifact.
+
 on:
   issues:
     types:
       - labeled
 
-permissions:
-  contents: read
-  issues: read
+# Every job declares exactly the permissions it needs; nothing is granted here.
+permissions: {}
 
 concurrency:
   group: hunter-issue-agent-${{ github.event.issue.number }}
@@ -25,12 +48,19 @@ jobs:
       }}
     runs-on: ubuntu-latest
     timeout-minutes: 25
+    permissions:
+      contents: read
+      issues: read
+    outputs:
+      authorization_id: ${{ steps.dispatch.outputs.authorization_id }}
 
     steps:
       - name: Checkout trusted trigger implementation
         uses: actions/checkout@v7
         with:
-          ref: ${{ github.event.repository.default_branch }}
+          # One immutable commit for every job: the exact workflow definition this
+          # run executes, so jobs cannot load diverging code if main advances.
+          ref: ${{ github.workflow_sha }}
           persist-credentials: false
 
       - name: Set up Python
@@ -52,6 +82,7 @@ jobs:
           python -m pip install --disable-pip-version-check "cryptography>=50.0.0,<51"
 
       - name: Authorize exact Issue event and dispatch to trusted issuer edge
+        id: dispatch
         env:
           # The trigger is executed directly from scripts/ but imports the repository-owned
           # hunter package from src/. Keep that import path explicit in the clean Actions checkout.
@@ -62,8 +93,170 @@ jobs:
           HUNTER_ISSUE_AGENT_AUTHORIZATION_SIGNING_KEY: ${{ secrets.HUNTER_ISSUE_AGENT_AUTHORIZATION_SIGNING_KEY }}
         run: |
           set -euo pipefail
-          python scripts/hunter_issue_agent_trigger.py \
+          authorization_id="$(python scripts/hunter_issue_agent_trigger.py \
             --event "${GITHUB_EVENT_PATH}" \
             --repository "${GITHUB_REPOSITORY}" \
             --owner-login "${GITHUB_REPOSITORY_OWNER}" \
-            --label hunter-agent-execute
+            --label hunter-agent-execute)"
+          [[ "${authorization_id}" =~ ^hunter-issue-agent-authorization:[0-9a-f]{64}$ ]]
+          echo "authorization_id=${authorization_id}" >> "${GITHUB_OUTPUT}"
+
+  execute:
+    name: Execute in credential-free GitHub-hosted workspace
+    needs: authorize-and-dispatch
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    permissions:
+      contents: read
+      id-token: write
+
+    steps:
+      - name: Checkout trusted default-branch executor
+        uses: actions/checkout@v7
+        with:
+          # One immutable commit for every job: the exact workflow definition this
+          # run executes, so jobs cannot load diverging code if main advances.
+          ref: ${{ github.workflow_sha }}
+          path: engine
+          persist-credentials: false
+
+      - name: Set up Python
+        uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6.3.0
+        with:
+          python-version: "3.11.13"
+
+      - name: Install exact pinned runtime wheels and OpenCode
+        env:
+          PIP_CONSTRAINT: engine/requirements/ci-constraints.txt
+        run: |
+          set -euo pipefail
+          python -m pip install --disable-pip-version-check --only-binary=:all: \
+            "cryptography==50.0.0" "PyYAML==6.0.3" "SQLAlchemy==2.0.51"
+          python engine/scripts/install_opencode_runtime.py --destination "${RUNNER_TEMP}/bin/opencode"
+          sudo install -m 0755 "${RUNNER_TEMP}/bin/opencode" /usr/local/bin/hunter-opencode
+
+      - name: Create the unprivileged untrusted-code user
+        run: |
+          set -euo pipefail
+          sudo useradd --create-home --shell /usr/sbin/nologin hunter-untrusted
+          chmod 700 "${HOME}"
+
+      - name: Execute the exact governed handoff
+        env:
+          PYTHONPATH: engine/src
+          AUTHORIZATION_ID: ${{ needs.authorize-and-dispatch.outputs.authorization_id }}
+          HUNTER_ISSUE_AGENT_UNTRUSTED_USER: hunter-untrusted
+          HUNTER_ISSUE_AGENT_EXECUTOR_OPENCODE: /usr/local/bin/hunter-opencode
+          HUNTER_ISSUE_AGENT_WEBHOOK_URL: ${{ secrets.HUNTER_ISSUE_AGENT_WEBHOOK_URL }}
+          HUNTER_ISSUE_AGENT_EXECUTOR_MODEL_API_KEY: ${{ secrets.HUNTER_ISSUE_AGENT_EXECUTOR_MODEL_API_KEY }}
+          HUNTER_ISSUE_AGENT_EXECUTOR_MODEL_KEY_ENV: ${{ vars.HUNTER_ISSUE_AGENT_EXECUTOR_MODEL_KEY_ENV }}
+          HUNTER_OPENCODE_MODEL: ${{ vars.HUNTER_OPENCODE_MODEL }}
+        run: |
+          set -euo pipefail
+          python engine/scripts/hunter_issue_agent_github_executor.py execute \
+            --authorization-id "${AUTHORIZATION_ID}"
+
+  validate:
+    name: Validate candidate safety without credentials
+    needs: [authorize-and-dispatch, execute]
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    permissions:
+      contents: read
+      id-token: write
+    outputs:
+      tree: ${{ steps.safety.outputs.tree }}
+
+    steps:
+      - name: Checkout trusted default-branch history
+        uses: actions/checkout@v7
+        with:
+          # One immutable commit for every job: the exact workflow definition this
+          # run executes, so jobs cannot load diverging code if main advances.
+          ref: ${{ github.workflow_sha }}
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Set up Python
+        uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6.3.0
+        with:
+          python-version: "3.11.13"
+
+      - name: Install exact pinned push-safety wheels
+        env:
+          PIP_CONSTRAINT: requirements/ci-constraints.txt
+        run: |
+          set -euo pipefail
+          python -m pip install --disable-pip-version-check --only-binary=:all: \
+            "cryptography==50.0.0" "PyYAML==6.0.3" "SQLAlchemy==2.0.51" \
+            "black==26.3.1" "mypy==1.20.2" "ruff==0.15.21" "types-PyYAML==6.0.12.20260518"
+
+      - name: Create the unprivileged untrusted-code user
+        run: |
+          set -euo pipefail
+          sudo useradd --create-home --shell /usr/sbin/nologin hunter-untrusted
+          chmod 700 "${HOME}"
+
+      - name: Run the trusted pre-push safety boundary on the exact candidate tree
+        id: safety
+        env:
+          PYTHONPATH: src
+          AUTHORIZATION_ID: ${{ needs.authorize-and-dispatch.outputs.authorization_id }}
+          HUNTER_ISSUE_AGENT_UNTRUSTED_USER: hunter-untrusted
+          HUNTER_ISSUE_AGENT_WEBHOOK_URL: ${{ secrets.HUNTER_ISSUE_AGENT_WEBHOOK_URL }}
+          HUNTER_ISSUE_AGENT_AUTHORIZATION_VERIFYING_KEY: ${{ secrets.HUNTER_ISSUE_AGENT_AUTHORIZATION_VERIFYING_KEY }}
+          HUNTER_ISSUE_AGENT_PUBLISHER_WRITER: ${{ vars.HUNTER_ISSUE_AGENT_PUBLISHER_WRITER }}
+        run: |
+          set -euo pipefail
+          tree="$(python scripts/hunter_issue_agent_github_executor.py validate \
+            --authorization-id "${AUTHORIZATION_ID}")"
+          [[ "${tree}" =~ ^[0-9a-f]{40}$ ]]
+          echo "tree=${tree}" >> "${GITHUB_OUTPUT}"
+
+  publish:
+    name: Publish create-only signed candidate branch
+    needs: [authorize-and-dispatch, validate]
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      contents: read
+      id-token: write
+
+    steps:
+      - name: Checkout trusted default-branch history
+        uses: actions/checkout@v7
+        with:
+          # One immutable commit for every job: the exact workflow definition this
+          # run executes, so jobs cannot load diverging code if main advances.
+          ref: ${{ github.workflow_sha }}
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Set up Python
+        uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6.3.0
+        with:
+          python-version: "3.11.13"
+
+      - name: Install exact pinned runtime wheels
+        env:
+          PIP_CONSTRAINT: requirements/ci-constraints.txt
+        run: |
+          set -euo pipefail
+          python -m pip install --disable-pip-version-check --only-binary=:all: \
+            "cryptography==50.0.0" "PyYAML==6.0.3" "SQLAlchemy==2.0.51"
+
+      - name: Publish the validated candidate create-only
+        env:
+          PYTHONPATH: src
+          AUTHORIZATION_ID: ${{ needs.authorize-and-dispatch.outputs.authorization_id }}
+          SAFETY_TREE: ${{ needs.validate.outputs.tree }}
+          HUNTER_ISSUE_AGENT_WEBHOOK_URL: ${{ secrets.HUNTER_ISSUE_AGENT_WEBHOOK_URL }}
+          HUNTER_ISSUE_AGENT_AUTHORIZATION_VERIFYING_KEY: ${{ secrets.HUNTER_ISSUE_AGENT_AUTHORIZATION_VERIFYING_KEY }}
+          HUNTER_ISSUE_AGENT_PUBLISHER_WRITER: ${{ vars.HUNTER_ISSUE_AGENT_PUBLISHER_WRITER }}
+          HUNTER_ISSUE_AGENT_PUBLISHER_SIGNING_KEY: ${{ secrets.HUNTER_ISSUE_AGENT_PUBLISHER_SIGNING_KEY }}
+          HUNTER_ISSUE_AGENT_PUBLISHER_PUSH_TOKEN: ${{ secrets.HUNTER_ISSUE_AGENT_PUBLISHER_PUSH_TOKEN }}
+        run: |
+          set -euo pipefail
+          python scripts/hunter_issue_agent_github_executor.py publish \
+            --authorization-id "${AUTHORIZATION_ID}" \
+            --safety-tree "${SAFETY_TREE}"
