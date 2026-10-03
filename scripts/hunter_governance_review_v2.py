@@ -426,6 +426,7 @@ def native_copilot_verdict(body: str, inline_comment_count: int = 0) -> str:
     )
     if (
         body.startswith("<!-- ccr-overview-v2 -->")
+        and "blocking" not in lower
         and len(re.findall(r"findings:", lower)) == 1
         and re.fullmatch(overview, normalized)
     ):

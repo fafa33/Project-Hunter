@@ -112,3 +112,13 @@ def test_overview_v2_unsupported_heading_with_findings_none_is_not_clear():
     for heading in ("🟣 Unknown status", "🟢 Approval recommended", "🔵 Needs a closer look extra", ""):
         body = PR553_OVERVIEW_BODY.replace("### 🔵 Needs a closer look", f"### {heading}")
         assert native_copilot_verdict(body) != "clear", heading
+
+
+def test_overview_v2_contradictory_blocking_prose_is_not_clear():
+    for prose in (
+        "No unresolved blocking issues remain, but a blocking issue remains in the parser.",
+        "There is a blocking problem. No unresolved blocking issues were identified elsewhere.",
+        "This change is Blocking.",
+    ):
+        body = PR553_OVERVIEW_BODY.replace("Root-of-trust signing-key changes require final human review.", prose)
+        assert native_copilot_verdict(body) != "clear", prose
