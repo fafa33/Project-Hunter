@@ -382,6 +382,26 @@
         "severity": "blocking"
       },
       {
+        "evidence": "Copilot PRRT_kwDOTRDHr86oqs8M (head 03f3e4f3): hosted executor checked out the signed base without proving it is on trusted main (BASE_NOT_ON_MAIN).",
+        "id": "F-20",
+        "resolution": "resolved",
+        "resolution_evidence": {
+          "correction": "9483a92bedc36572ba4381e362574e170add262c",
+          "regression_test": "tests/test_issue_agent_github_execution.py"
+        },
+        "severity": "blocking"
+      },
+      {
+        "evidence": "Copilot PRRT_kwDOTRDHr86oqs8X (head 03f3e4f3): hostile result validation text persisted to the ledger, logged and returned.",
+        "id": "F-21",
+        "resolution": "resolved",
+        "resolution_evidence": {
+          "correction": "9483a92bedc36572ba4381e362574e170add262c",
+          "regression_test": "tests/test_issue_agent_github_execution.py"
+        },
+        "severity": "blocking"
+      },
+      {
         "evidence": "Copilot (head 3bbeeb02): claimed the isolated pre-push would always fail without a GitHub token. Not reproducible: the real trusted hook passed end to end with no token and a local-clone origin (exit 0); the token is reached only by the non-blocking review-state report, now pinned by a regression.",
         "id": "F-13",
         "resolution": "resolved",
@@ -401,19 +421,19 @@
     "issue": "557",
     "review_target": [
       {
-        "blob_sha": "d84a341f5533d6fc5240f84ac21680651ec19a27",
+        "blob_sha": "d2c6d210272daf611e32332b126eb8dd15741184",
         "path": "scripts/hunter_issue_agent_github_executor.py",
         "previous_path": "",
         "status": "added"
       },
       {
-        "blob_sha": "53a80122f1b11654bad797dc944b812d7fcb5802",
+        "blob_sha": "4ae3e300d79013beb4dd54316c900d396782a407",
         "path": "src/hunter/automation/issue_agent_github_execution.py",
         "previous_path": "",
         "status": "added"
       },
       {
-        "blob_sha": "8fc3d2d37a5b504bfbab67fb59b8836507635823",
+        "blob_sha": "df7d5857bbfd0d92bb7071b716318f24d91f4779",
         "path": "tests/test_issue_agent_github_execution.py",
         "previous_path": "",
         "status": "added"
@@ -431,7 +451,7 @@
         "status": "modified"
       },
       {
-        "blob_sha": "d2755c2d865ec966e502bae38ec6ce2db6520639",
+        "blob_sha": "4a1af658e745503f32a7badd251f81c95dd88d1c",
         "path": "docs/DEFECT_REGISTRY.json",
         "previous_path": "",
         "status": "modified"
@@ -521,11 +541,11 @@
         "status": "modified"
       }
     ],
-    "review_target_digest": "631f03241cd15793a8b649b6ee7e4d1f346674b949c398601a41a99e1195b355"
+    "review_target_digest": "2b554d0f3a126efb7addda2906cbfe41abe9ceb0355e37faa648d69db5b25578"
   },
-  "review_id": "b9749c37fdc0eef3c81b2d9644d8d176ea9883b9182907ae4bffc696efd08b1a",
+  "review_id": "03655528251a2484769cd3de159cdc056e9cbc239355b333e71031ca3d4bef9f",
   "review_request": {
-    "claims_id": "b9749c37fdc0eef3c81b2d9644d8d176ea9883b9182907ae4bffc696efd08b1a",
+    "claims_id": "03655528251a2484769cd3de159cdc056e9cbc239355b333e71031ca3d4bef9f",
     "schema": "hunter.review-request.v1"
   },
   "schema": "hunter.pre-ready-hostile-review.v1"
