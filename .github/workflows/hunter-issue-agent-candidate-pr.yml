@@ -32,25 +32,58 @@ on:
     types:
       - completed
 
-permissions:
-  contents: read
-  issues: read
-  pull-requests: read
+# Every job declares exactly the permissions it needs; nothing is granted here.
+permissions: {}
 
 concurrency:
   group: hunter-issue-agent-candidate-pr-${{ github.event.workflow_run.id }}
   cancel-in-progress: false
 
 jobs:
-  open-draft-pr:
+  bind-issue:
+    # Issue #557 / PR #558: derive the governing Issue from the exact agent-branch
+    # shape (scripts/hunter_issue_agent_candidate_pr.py AGENT_BRANCH_RE) so PR
+    # creation can be serialized per Issue below. Data only; nothing is executed.
     if: >-
       github.event.workflow_run.event == 'push' &&
       github.event.workflow_run.conclusion == 'success' &&
       github.event.workflow_run.head_repository.full_name == github.repository &&
       startsWith(github.event.workflow_run.head_branch, 'issue-')
+    name: Bind the governing Issue
+    runs-on: ubuntu-latest
+    timeout-minutes: 2
+    permissions: {}
+    outputs:
+      issue: ${{ steps.bind.outputs.issue }}
+    steps:
+      - name: Derive the Issue from the agent branch shape
+        id: bind
+        env:
+          HEAD_BRANCH: ${{ github.event.workflow_run.head_branch }}
+        run: |
+          set -euo pipefail
+          if [[ "${HEAD_BRANCH}" =~ ^issue-([1-9][0-9]{0,9})-[0-9a-f]{16}$ ]]; then
+            echo "issue=${BASH_REMATCH[1]}" >> "${GITHUB_OUTPUT}"
+          fi
+
+  open-draft-pr:
+    needs: bind-issue
+    if: needs.bind-issue.outputs.issue != ''
+    # One Issue -> one active Draft PR: every candidate of the same Issue is
+    # serialized here, so the open-PR check and the POST never interleave across
+    # runs; hunter_issue_agent_candidate_pr.converge_single_active_pr is the
+    # deterministic backstop if they ever do.
+    concurrency:
+      group: hunter-issue-agent-candidate-pr-issue-${{ needs.bind-issue.outputs.issue }}
+      cancel-in-progress: false
     name: Open governed Issue Agent Draft PR
     runs-on: ubuntu-latest
     timeout-minutes: 5
+    # The workflow token can read only; the one write uses the dedicated token.
+    permissions:
+      contents: read
+      issues: read
+      pull-requests: read
 
     steps:
       - name: Checkout trusted default-branch controller

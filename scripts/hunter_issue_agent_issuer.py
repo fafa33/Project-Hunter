@@ -5,9 +5,12 @@ This is the deployable endpoint that consumes
 ``hunter-issue-agent-signed-authorization-v2`` from the GitHub trigger,
 verifies the authorization, invokes the production SmartPromptMachine
 composition root, persists the canonical build, issues the signed
-``PromptAutomationEnvelopeHandoff``, and forwards it unchanged into the
-governed fallback runtime, which executes it in an isolated per-authorization
-workspace on the branch and base derived from the signed authorization
+``PromptAutomationEnvelopeHandoff``, and admits it to the GitHub-hosted
+execution runtime (Issue #557). Railway runs no model: the trusted GitHub
+trigger workflow's executor fetches the exact handoff and returns its hostile
+closed-schema result over the two GitHub-OIDC-authenticated execution routes
+(``/issue-agent/execution/fetch`` and ``/issue-agent/execution/result``); the
+legacy Railway workspace runtime is no longer composed
 (``docs/ISSUE_AGENT_EXECUTION_CONTRACT.md``).
 
 Execution outcomes after the ACK are served read-only at
@@ -79,7 +82,14 @@ from hunter.automation.issue_agent_execution import (
     issue_agent_intake_reference,
     issue_agent_task_request,
 )
-from hunter.automation.issue_agent_workspace import IssueAgentWorkspaceRuntime
+from hunter.automation.issue_agent_github_execution import (
+    EXECUTION_FETCH_PATH,
+    EXECUTION_RESULT_PATH,
+    GitHubActionsOidcVerifier,
+    GitHubExecutionError,
+    GitHubHostedExecutionRuntime,
+    evidence_prompt_resolver,
+)
 from hunter.automation.n8n_handoff import serialize_prompt_automation_handoff
 from hunter.evidence_intelligence.engineering_task_ingress import GovernedEngineeringTaskIngress
 from hunter.evidence_intelligence.intake import EvidenceIntelligenceIntakeService
@@ -257,10 +267,22 @@ def compose_services(configuration: IssuerConfiguration) -> IssuerServices:
         routes=ISSUE_AGENT_ROUTE_REGISTRY,
         profiles=ISSUE_AGENT_PROFILE_REGISTRY,
     )
-    fallback = IssueAgentWorkspaceRuntime(
-        workspace_root=configuration.repository_checkout,
+    # Issue #557: execution happens in a GitHub-hosted job, never on Railway.
+    # The retired Railway workspace runtime is deliberately not composed here.
+    fallback = GitHubHostedExecutionRuntime(
         repository=configuration.repository,
-        environ=os.environ,
+        owner_login=configuration.owner_login,
+        evidence_database=configuration.evidence_database,
+        oidc_verifier=GitHubActionsOidcVerifier(
+            repository=configuration.repository,
+            owner_login=configuration.owner_login,
+        ),
+        prompt_resolver=evidence_prompt_resolver(
+            configuration.evidence_database,
+            prompt_verifier=configuration.prompt_verifier,
+            clock=configuration.clock.now,
+        ),
+        clock=configuration.clock.now,
     )
     return IssuerServices(
         configuration=configuration,
@@ -343,6 +365,10 @@ def prepare_authorization(
             target=target,
             dispatched_at=services.configuration.clock.now(),
         )
+        # Admitted only after SPM/DPM compiled and the exact handoff is durable,
+        # and before the ACK, so the executor can never outrun either.
+        if isinstance(services.fallback, GitHubHostedExecutionRuntime):
+            services.fallback.admit(signed, handoff_document)
     except BaseException as error:
         _record_failure(services, authorization, error)
         raise
@@ -383,7 +409,9 @@ def finish_prepared_authorization(
             authorization,
             completed_at=services.configuration.clock.now(),
             provider=receipt.provider,
-            head_after=receipt.head_after,
+            # The GitHub-hosted runtime publishes nothing from Railway, so it
+            # reports no head; the candidate head exists only on GitHub.
+            head_after=receipt.head_after or None,
         )
 
         return IssueAgentExecutionReceipt(
@@ -566,6 +594,37 @@ class _IssuerRequestHandler(IssueAgentEdgeRequestHandler):
             self._send_error(404, "Not Found")
             return
         self._send_json(200, status_payload(entry))
+
+    def do_POST(self) -> None:
+        """Route the two OIDC-authenticated execution operations, else admission."""
+        if self.path in (EXECUTION_FETCH_PATH, EXECUTION_RESULT_PATH):
+            self._handle_execution(self.path)
+            return
+        super().do_POST()
+
+    def _handle_execution(self, path: str) -> None:
+        """Serve one GitHub-hosted executor/validator/publisher request.
+
+        Only reachable when admission is enabled with the GitHub-hosted runtime;
+        the responses carry the exact prompt or hostile result and are never
+        logged here.
+        """
+        runtime = self.services.fallback if self.services is not None else None
+        if not self.execution_admission_enabled or not isinstance(runtime, GitHubHostedExecutionRuntime):
+            self._send_error(503, "Issue Agent execution backend is unavailable")
+            return
+        body = self._read_bounded_body()
+        if body is None:
+            return
+        try:
+            payload = runtime.handle_fetch(body) if path == EXECUTION_FETCH_PATH else runtime.handle_result(body)
+        except GitHubExecutionError as error:
+            self._send_error(error.status, str(error))
+            return
+        except Exception as error:  # noqa: BLE001
+            self._send_error(500, f"unexpected execution channel failure: {type(error).__name__}")
+            return
+        self._send_json(200, payload)
 
     def handle_authorization(self, signed: SignedIssueAgentAuthorization) -> None:
         """Admit one verified, durably prepared authorization.
@@ -810,7 +869,14 @@ def main(argv: list[str] | None = None) -> int:
         logger.error("service composition failed: %s", error)
         return 2
 
-    server = IssuerServer(arguments.host, arguments.port, services)
+    # Issue #557: admission is enabled only for the GitHub-hosted runtime. The
+    # retired Railway provider runtime has no admission path in production.
+    server = IssuerServer(
+        arguments.host,
+        arguments.port,
+        services,
+        execution_admission_enabled=isinstance(services.fallback, GitHubHostedExecutionRuntime),
+    )
 
     def _signal_handler(signum: int, frame: Any) -> None:
         logger.info("received signal %d, shutting down", signum)

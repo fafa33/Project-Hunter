@@ -2,69 +2,39 @@
   "claims": {
     "acceptance_criteria": [
       {
-        "criterion": "Draft -> Ready for Review AND any exact-HEAD-changing lifecycle event Merge Readiness reacts to immediately (synchronize) must deterministically and promptly trigger the trusted default-branch reconciliation/orchestration path for that exact PR/HEAD, as a primary event-driven path rather than only as a schedule or unrelated workflow_run recovery.",
-        "evidence": "hunter-governance-reconcile.yml pull_request_target types are exactly [ready_for_review, synchronize], scoped to main and resolved from the base branch's copy of the file (non-candidate-controlled). ready_for_review: test_reconcile_wakes_when_a_pr_becomes_ready_for_review (retained, rewritten so its Draft guard now asserts the transition that actually withdraws review, converted_to_draft, is absent). synchronize (root cause 4, live PR #535 exact HEAD 51108333821ab42d1ab7aa0b812a72d890f73795): test_reconcile_wakes_when_a_pr_head_is_pushed, and test_reconcile_wakes_on_every_lifecycle_event_that_needs_or_moves_the_exact_head derives the requirement from hunter-merge-readiness.yml's own trigger set rather than restating a literal, so a third event variant cannot silently reintroduce the asymmetry. Both are mutation-checked: removing synchronize from the trigger fails 3 of them.",
-        "id": "AC-1",
+        "criterion": "Trace and cutover: production hunter-agent-execute no longer relies on legacy Railway model execution and reaches the #524 replacement execution/publication boundary through the existing governed SPM/DPM path; rehearsal remains structurally non-publishing.",
+        "evidence": "compose_services builds only GitHubHostedExecutionRuntime and main enables admission only for it; the authorization is admitted after claim, GovernedEngineeringTaskIngress -> SmartPromptMachine (EngineeringContextAuthority/DPM) compilation and durable handoff recording. tests/test_issue_agent_github_execution.py::test_label_acceptance_reaches_the_replacement_executor_through_spm_dpm, ::test_production_composition_never_builds_the_legacy_railway_runtime, ::test_production_main_enables_admission_only_for_the_github_runtime. Rehearsal workflow unchanged.",
+        "id": "AC-A",
         "verdict": "satisfied"
       },
       {
-        "criterion": "Do not solve this by granting privileged actions:write to a candidate-controlled pull_request workflow; preserve the trusted-default-branch boundary.",
-        "evidence": "pull_request_target (never pull_request) is used; no permissions block changed. Proven generically by this repo's own pre-existing test_candidate_controlled_triggers_are_read_from_every_declaration_shape and test_no_pull_request_reachable_workflow_can_drive_other_workflows, both passing unchanged.",
-        "id": "AC-2",
+        "criterion": "Authority and credential isolation: provider has no repository-write/signing/publication authority, publisher has no model authority and runs no candidate code, signed authorization + exact base + TaskScope + result digest stay bound, publication is create-only and replay-safe.",
+        "evidence": "Separate execute/validate/publish jobs with per-job secrets; model and candidate pre-push run as non-root hunter-untrusted via sudo -n -u ... env -i allowlist; publish_create_only runs no hook and binds the signed commit to the credential-free safety tree. tests/test_issue_agent_github_execution.py::test_workflow_runs_each_trust_domain_in_its_own_job, ::test_model_runs_as_the_isolation_user_without_any_oidc_or_issuer_capability, tests/test_issue_agent_replacement_executor.py::test_candidate_pre_push_receives_only_an_explicit_allowlist_as_the_isolation_user, ::test_publisher_refuses_a_tree_the_safety_boundary_did_not_prove, ::test_publisher_refuses_existing_branch_before_building_commit.",
+        "id": "AC-B",
         "verdict": "satisfied"
       },
       {
-        "criterion": "Root cause completeness: live GitHub evidence (PR #535, trusted Reconcile run 36335901035) must be traced to its exact predicate, not assumed fixed by the trigger alone.",
-        "evidence": "Traced to hunter_review_orchestrator.ensure_current requiring a valid, content-bound .hunter/pre-ready-hostile-review.json review-request document that nothing was producing; confirmed via GitHub Contents API that PR #535's exact head carried an unrelated PR's stale leftover document.",
-        "id": "AC-3",
+        "criterion": "SPM/DPM proof: no implementation without valid SPM handoff; DPM/EngineeringContextAuthority consumed before implementation; provider-direct execution without signed handoff fails closed.",
+        "evidence": "tests/test_issue_agent_github_execution.py::test_an_invalid_spm_handoff_releases_no_prompt, ::test_no_implementation_without_the_admitted_signed_handoff, ::test_resolver_failure_is_terminal_and_never_executes, and the exact prompt asserted to carry ENGINEERING_CONTEXT_SCHEMA_VERSION in ::test_label_acceptance_reaches_the_replacement_executor_through_spm_dpm.",
+        "id": "AC-C",
         "verdict": "satisfied"
       },
       {
-        "criterion": "Do not turn missing evidence into success, do not bypass exact-head validation, do not fabricate a review on the candidate's own behalf.",
-        "evidence": "ensure_current's fail-closed no-op for 'no valid request' is left unchanged/unweakened; the fix commits an honest, content-bound request for this candidate's own real diff via the existing hunter_pre_ready_review.py --request mechanism, not by auto-generating claims inside the orchestrator.",
-        "id": "AC-4",
+        "criterion": "Trigger/retry semantics: owner-only label remains the authorization trigger; invalid events fail closed; retry/replay cannot create a second claim, branch or Draft PR; transport retry never changes signed bytes.",
+        "evidence": "Trigger authorization unchanged; OIDC binds repository/owner/actor/issues event/trusted workflow_ref/GitHub-hosted runner and the first executor run id+attempt; every role op single-use. tests/test_issue_agent_github_execution.py::test_execution_is_bound_to_one_run_and_every_role_is_single_use, ::test_a_replayed_authorization_is_never_admitted_twice, ::test_a_second_authorization_branch_cannot_open_a_second_pr_for_the_issue; existing tests/test_issue_agent_trigger.py transport retry tests pass.",
+        "id": "AC-D",
         "verdict": "satisfied"
       },
       {
-        "criterion": "The live failure must become regression evidence, not a prose-only or grep-only proxy.",
-        "evidence": "test_a_foreign_review_request_document_is_rejected_for_a_different_candidate reproduces PR #535's exact failure shape behaviorally (a foreign document rejected by real content-binding code); test_a_freshly_prepared_review_request_bound_to_the_current_candidate_is_valid proves the fix mechanism.",
-        "id": "AC-5",
-        "verdict": "satisfied"
+        "criterion": "Production canary #520 creates exactly one Draft PR through the cutover.",
+        "evidence": "Owner-gated post-merge/deploy step: Issue #557 requires #520 be re-authorized only after this PR merges and deploys; it is the completion evidence, not a property of this pre-merge candidate.",
+        "id": "AC-E",
+        "verdict": "not-applicable"
       },
       {
-        "criterion": "Update DFF-040 (or an existing applicable family) through the canonical defect-learning path rather than hand-editing a duplicate family.",
-        "evidence": "DFF-040 updated with root cause 2 and live evidence; additionally, while tracing this, an already-existing but overclaiming legacy entry (DFF-031) was found and corrected rather than left silently false, per this repository's own instruction to strengthen the earliest reliable reusable guard when a defect class recurs.",
-        "id": "AC-6",
-        "verdict": "satisfied"
-      },
-      {
-        "criterion": "Root cause completeness (round 2): live GitHub evidence that the missing-trigger fix alone still left PR #535 stuck (WAITING_FOR_REVIEWER despite a published orchestration cycle) must be traced to its exact predicate and fixed without bypassing exact-head validation, fabricating a review, or turning missing evidence into success.",
-        "evidence": "Traced live (PR #535 exact HEAD c05da168545c5fa95fe300706eccaac2228fc391) to hunter_merge_readiness_v2.resolve_review_authority never handling a legitimate status=='pending' verification result from hunter_governance_review_v2.verify_pre_ready_hostile_review; it silently defaulted to MALFORMED_REVIEW instead of falling through to the existing review_wait_state/orchestration-state pending path. Fixed by adding one explicit 'pending' branch that classifies it as MISSING_REVIEW_AUTHORITY (the same no-authority-yet outcome a missing document already produces); no trust boundary, exact-head binding, or orchestration path changed, and no review authority is fabricated -- the candidate still cannot merge until a reviewer actually completes one.",
-        "id": "AC-7",
-        "verdict": "satisfied"
-      },
-      {
-        "criterion": "The Codex opportunity budget and collector/orchestrator lifetime must be internally consistent with Codex's actual observed hosted latency (~20-30 min), derived from one canonical source rather than duplicated independent magic numbers, while remaining finite and never weakening provider ordering, explicit-unavailability failover, or a substantive response's ability to prevent failover.",
-        "evidence": "docs/CODE_WRITE_POLICY.json raised codex ack_timeout_seconds/review_timeout_seconds and timeout_policy.max_seconds to 1800s (matching observed latency with headroom); hunter_pre_ready_review.reviewer_chain_worst_case_seconds(pool) is the one canonical derivation hunter_review_orchestrator.independent_review_opportunity_seconds() calls directly and the collector workflow's static timeout-minutes (47) is validated against by a new structural test, so none of the three can silently drift out of sync again. Explicit-unavailability failover (hunter_reviewer_collector._unavailable) and substantive-response-prevents-failover (response_state breaking the wait loop) are unchanged.",
-        "id": "AC-8",
-        "verdict": "satisfied"
-      },
-      {
-        "criterion": "For the identity (PR number, exact HEAD, remediation generation, reviewer-pool config identity), only one initial collector dispatch may be created; repeated/concurrent reconciliation must converge on the already-established cycle without weakening exact-head identity, collector liveness, or bounded recovery.",
-        "evidence": "ensure_collector now cross-checks the collector run listing (a separate, directly-queried endpoint from the combined-status read) before minting a fresh dispatch whenever no trusted cycle status is visible at all, converging on an already-live/dead/completed run instead of dispatching again; unreadable cross-check evidence fails closed to not dispatching. The pre-existing 'present'-cycle branch (COLLECTOR_LIVENESS_GRACE_SECONDS, MAX_COLLECTOR_DISPATCHES, collector_needs_dispatch) is completely unmodified, so bounded recovery of a genuinely dead dispatch is unaffected.",
-        "id": "AC-9",
-        "verdict": "satisfied"
-      },
-      {
-        "criterion": "Canonical prevention-knowledge growth (docs/DEFECT_REGISTRY.json) must not cause linear per-task engineering.implement prompt growth; the compiler must retrieve/deduplicate/compact/bound trusted prevention context by deterministic, offline, task-scoped relevance signals only (never caller-controlled task prose, never an external LLM/API call), and must fail closed rather than silently truncate when genuinely applicable knowledge cannot fit even fully compacted.",
-        "evidence": "EngineeringContextAuthority.compile(budget_bytes=...) implements applicability-preserving bounded rendering (full detail for exact-file matches, compact {id,title,prevention_boundary} for directory-root-only matches, explicit prevention.equivalence_class deduplication, tiered omission/downgrade, and a structured EngineeringContextAuthorityError when nothing fits). smart_prompt_routing.py reserves a fixed 40% share of the unchanged ENGINEERING_IMPLEMENT_MAX_SOURCE_BYTES for it. Measured against the real registry (40 families) for the exact scope every Issue Agent test shares: families blob 11,208 bytes (budget 13,107), estimated total preflight ~15,629 bytes, well under the unchanged 28,672-byte available budget.",
-        "id": "AC-10",
-        "verdict": "satisfied"
-      },
-      {
-        "criterion": "The synchronize fix must not weaken the trusted-default-branch boundary, exact-head binding, Draft short-circuiting, provenance, review authority, or retry policy, and must not broaden into unrelated reviewer architecture.",
-        "evidence": "Trusted boundary: the trigger stays pull_request_target (base-branch-resolved); the job still checks out 'ref: main' with 'persist-credentials: false' and the workflow's permissions block is unchanged (test_synchronize_reconciliation_never_executes_candidate_code, plus the untouched test_no_pull_request_reachable_workflow_can_drive_other_workflows and test_trusted_orchestration_runs_only_from_workflows_without_pull_request_triggers). Exact-head binding: the privileged step still passes only --pr and never a head, and ensure_current re-derives the current HEAD from the pull-request API on every call, so the new head is taken from trusted state rather than the event payload (test_a_pushed_head_reaches_orchestration_as_the_exact_current_head, which also asserts the workflow text contains neither 'github.event.pull_request.head.sha' nor '--head'). Draft: adding synchronize means the trigger is no longer itself the Draft guard (synchronize also fires on Draft pushes), so the guard is now proven behaviourally at the orchestrator's own short-circuit, which returns before the review-request lookup and before any dispatch (test_a_pushed_head_on_a_draft_pr_dispatches_nothing, plus the retained test_current_pr_never_dispatches_for_a_draft_pr; both mutation-checked to fail when the draft check is deleted). Scope: the only behaviour change is one added trigger type plus comments; scripts/hunter_review_orchestrator.py is byte-identical in this commit, no permissions block changed, no reviewer policy in docs/CODE_WRITE_POLICY.json changed, no provider retry added, and Merge Readiness's already-fixed pending-state classification is untouched. Unrelated events cannot dispatch: test_unrelated_pull_request_events_do_not_dispatch_reviewer_orchestration pins the trigger set to exactly {ready_for_review, synchronize} and asserts no pull_request/issue_comment/pull_request_review_thread/check_run/check_suite trigger exists on this workflow.",
-        "id": "AC-11",
+        "criterion": "Regression / DPM learning: observed no-cutover failure reproduced; hostile tests for legacy execution, provider publication, credential co-residency, stale/replay, duplicate publication, candidate code under publisher credentials; defect linked to existing family.",
+        "evidence": "PRH-066..072 recorded under existing DFF-027/DFF-028 (no new family); regressions listed in those families' regression_evidence; Defect Prevention Guard and Artifact Guard pass at push.",
+        "id": "AC-F",
         "verdict": "satisfied"
       }
     ],
@@ -82,330 +52,516 @@
       "transaction-snapshot-consistency"
     ],
     "base_ref": "main",
-    "base_sha": "cc3de7f0faed8f39ba403fce67e51cd8fdcc16d0",
+    "base_sha": "32d72f14ebc6e5910196ccb436131f98c7044010",
     "defect_families": [
       {
-        "evidence": "No caller-supplied authorization/replay surface is touched by this diff.",
+        "evidence": "OIDC exp/iat/nbf are judged against the issuer's own clock (runtime clock), never a caller value; result timeout uses monotonic time.",
+        "family": "DFF-001",
+        "outcome": "clear"
+      },
+      {
+        "evidence": "Execution state transitions (run binding, role use, handoff_delivered, result acceptance) are read and written under one runtime lock; ledger writes keep the existing owner/lease predicates.",
+        "family": "DFF-002",
+        "outcome": "clear"
+      },
+      {
+        "evidence": "Branch, base and authorization identity derive only from the signed authorization (derive_execution_target); a result naming another authorization/base/branch is rejected (tests/test_issue_agent_github_execution.py::test_a_misbound_result_is_rejected_and_terminal).",
+        "family": "DFF-003",
+        "outcome": "clear"
+      },
+      {
+        "evidence": "Unknown request keys, roles, schemas, malformed OIDC claims (aud/nbf/job_workflow_ref) and missing configuration all fail closed (tests/test_issue_agent_github_execution.py::test_malformed_audience_claims_fail_closed, ::test_a_present_job_workflow_ref_must_name_the_trusted_workflow).",
+        "family": "DFF-004",
+        "outcome": "clear"
+      },
+      {
+        "evidence": "No new durable persistence of content: the hostile result and prompt are held only in issuer memory under the lease; ReplacementResultLedger stores digests only.",
+        "family": "DFF-005",
+        "outcome": "clear"
+      },
+      {
+        "evidence": "Issuer restart lapses the existing lease and fails the row closed (PROCESS_RESTART); hosted state is never reconstructed or replayed after restart.",
+        "family": "DFF-006",
+        "outcome": "clear"
+      },
+      {
+        "evidence": "Every role operation is single-use and bound to one workflow run id+attempt; replayed, cross-run and re-run requests are refused (tests/test_issue_agent_github_execution.py::test_execution_is_bound_to_one_run_and_every_role_is_single_use).",
         "family": "DFF-007",
         "outcome": "clear"
       },
       {
-        "evidence": "No history rewrite; every commit in this range is an ordinary forward commit (no amend/rebase/force-push).",
+        "evidence": "Validation receipts bind the exact result digest and validation definition; the publisher verifies them and the signed authorization before publishing.",
         "family": "DFF-008",
         "outcome": "clear"
       },
       {
-        "evidence": "connector_write_ingress.py and its evidence lifecycle are not touched by this diff.",
+        "evidence": "The executor authenticates with GitHub OIDC verified against GitHub's RS256 keys, not caller metadata (tests/test_issue_agent_github_execution.py::test_oidc_token_authenticity_and_time_fail_closed).",
         "family": "DFF-009",
         "outcome": "clear"
       },
       {
-        "evidence": "Every commit is authored and committed as the bound writer identity (Claude <noreply@anthropic.com>); no identity-binding logic is touched.",
+        "evidence": "All commits in this range are authored and committed as the bound writer Farhad5778 and SSH-signed; the publisher derives its Git identity from CODE_WRITE_POLICY writer_identity_binding.",
         "family": "DFF-010",
         "outcome": "clear"
       },
       {
-        "evidence": "Ordinary forward commits only; no intermediate commit is stranded by a rebase or force-push.",
+        "evidence": "Ordinary forward commits pushed through the pre-push boundary; no rewind or force-push used to manufacture evidence.",
         "family": "DFF-011",
         "outcome": "clear"
       },
       {
-        "evidence": "No connector authorization receipt is touched by this diff.",
+        "evidence": "This candidate writes no connector authorization receipt.",
         "family": "DFF-012",
         "outcome": "clear"
       },
       {
-        "evidence": "This diff does not touch verify_claims or its request-only-is-'missing' rule; test_a_review_request_cannot_be_verified_locally_as_a_completed_review is untouched and still passing. The diff's subject is wiring the trusted prerequisite's trigger to the second transition class, so the request document can be consumed for a pushed head as promptly as for a Ready PR.",
+        "evidence": "This document is the exact-head review request for the complete base->HEAD range; authority is supplied out of band by the trusted collector.",
         "family": "DFF-013",
         "outcome": "clear"
       },
       {
-        "evidence": "ensure_current's clean None return for 'no valid request yet' is a legitimate no-op, not conflated with or reported as a failure; the reconcile workflow step still exits 0 correctly for this state, and this diff does not touch it. The DFF-014 clause that every trusted proof completion that can move admission from pending to eligible must wake the privileged orchestrator is satisfied in a stronger form here: the exact-head-changing event that invalidates the previous cycle (synchronize) now wakes the privileged orchestrator directly, rather than only after some other workflow completes (proven by test_reconcile_wakes_on_every_lifecycle_event_that_needs_or_moves_the_exact_head).",
+        "evidence": "No change to pending/failure publication of hosted prerequisites.",
         "family": "DFF-014",
         "outcome": "clear"
       },
       {
-        "evidence": "Directly repaired: DFF-031's own registry entry falsely claimed 'blocked at pre-push' for require_current_review_request_if_present, which has been an unconditional no-op since its introduction and had zero real test coverage (every reference stubbed it out). Corrected the entry's guard text and added real coverage of its actual no-op contract.",
+        "evidence": "DFF-027/DFF-028 keep their lifecycle and machine bindings; only resolvable regression evidence was added, verified by the Defect Prevention Guard and tests/test_issue_412_prevention_gate.py.",
         "family": "DFF-015",
-        "outcome": "repaired"
+        "outcome": "clear"
       },
       {
-        "evidence": "hunter_validation_receipt.py and immutable build-identity reuse are not touched by this diff.",
+        "evidence": "No validation-proof reuse change; full pytest proof remains the hosted exact-head Pre-PR stage.",
         "family": "DFF-016",
         "outcome": "clear"
       },
       {
-        "evidence": "Issue-agent Railway runtime bootstrap is not touched by this diff.",
+        "evidence": "Railway startup bootstrap ordering unchanged; the issuer still composes only after bootstrap and key scrubbing.",
         "family": "DFF-019",
         "outcome": "clear"
       },
       {
-        "evidence": "Issue-agent live-instance execution ownership is not touched by this diff.",
+        "evidence": "Hosted runtime is the existing fallback seam under the existing owner/lease semantics; completion/failure use the claiming instance's ledger writes.",
         "family": "DFF-020",
         "outcome": "clear"
       },
       {
-        "evidence": "Issue-agent shutdown-drain handling is not touched by this diff.",
+        "evidence": "Accepted hosted executions run on the existing tracked non-daemon workers and reach a terminal ledger outcome (result, rejection or EXECUTOR_RESULT_TIMEOUT).",
         "family": "DFF-021",
         "outcome": "clear"
       },
       {
-        "evidence": "hunter_merge_readiness_v2.py's resolve_review_authority gains one explicit branch for a status=='pending' verification result (root cause 3, this diff); evaluate() and review_authority_state() themselves are unchanged, and the branch only widens which non-success statuses fall through to the caller's existing review_wait_state/orchestration-state pending path instead of hard-failing -- it narrows a false-failure surface, it does not weaken any admission/merge check. Proven unchanged by the full existing test_exact_head_review_authority.py suite (95/95 passing) plus two new regression tests for the exact live failure.",
+        "evidence": "Merge Readiness logic unchanged.",
         "family": "DFF-022",
-        "outcome": "repaired"
+        "outcome": "clear"
       },
       {
-        "evidence": "Issue-agent execution-ledger preflight ordering is not touched by this diff.",
+        "evidence": "prepare_authorization still runs Source Handling preflight before the ledger claim; admission to the hosted runtime happens only after claim, compile and record_dispatch.",
         "family": "DFF-023",
         "outcome": "clear"
       },
       {
-        "evidence": "scripts/hunter_review_orchestrator.py is byte-identical in this commit: current_remediation_generation, ensure_collector, the generation identity, collector_run_name and the dispatch budget are all untouched, and the full test_review_after_remediation_generation.py and tests/test_hunter_review_orchestrator.py suites pass unchanged. Adding a trigger that reaches the same ensure_current entry point cannot mint an extra generation, because the generation is derived from trusted review-thread state per (head, claims, resolved threads).",
-        "family": "DFF-024",
-        "outcome": "clear"
-      },
-      {
-        "evidence": "Governance-authority cutover/dependency-cycle machinery is not touched by this diff.",
+        "evidence": "No governance authority cutover change.",
         "family": "DFF-025",
         "outcome": "clear"
       },
       {
-        "evidence": "require_current_review_request_if_present remains, by explicit design documented in its corrected docstring and locked down by a test, a no-op that never blocks a push regardless of reviewer/request availability. This diff makes the missing-request NOTE more likely to be actionable in practice (a pushed head now reconciles promptly) without changing that NOTE's non-blocking status.",
-        "family": "DFF-026",
-        "outcome": "clear"
-      },
-      {
-        "evidence": "Railway readiness-probe execution boundary is not touched by this diff.",
+        "evidence": "Production composes only the GitHub-hosted runtime; runner trust is the GitHub-hosted platform asserted by the verified runner_environment claim; OIDC binding fixed for direct workflows (PRH-071) and job checkouts pinned to github.workflow_sha (PRH-072).",
         "family": "DFF-027",
-        "outcome": "clear"
+        "outcome": "repaired"
       },
       {
-        "evidence": "Candidate-code publication-credential isolation is not touched by this diff.",
+        "evidence": "Candidate pre-push runs only in the credential-free validate job as hunter-untrusted with an explicit allowlist; publisher runs no hook and binds to the safety tree; trusted collection never reads model-written Git config (PRH-067, PRH-068).",
         "family": "DFF-028",
-        "outcome": "clear"
+        "outcome": "repaired"
       },
       {
-        "evidence": "Candidate preflight-before-publication ordering is not touched by this diff.",
+        "evidence": "Candidate branch publication only enables hosted Pre-PR Preflight; the Draft PR is opened only by the existing Candidate PR workflow after it succeeds.",
         "family": "DFF-029",
         "outcome": "clear"
       },
       {
-        "evidence": "docs/DEFECT_REGISTRY.json is edited as ordinary well-formed JSON; `python scripts/hunter_defect_prevention_preflight.py` passes against it, confirming it remains loadable at its governed path and that DFF-045's declared regression_evidence entries all resolve.",
+        "evidence": "New tracked files use plain ASCII paths loadable by their consumers.",
         "family": "DFF-033",
         "outcome": "clear"
       },
       {
-        "evidence": "New tests (test_missing_review_request_state_names_the_command_to_start_it, test_stale_review_request_state_does_not_carry_the_missing_only_hint, test_require_current_review_request_if_present_is_intentionally_a_no_op, and the two in test_exact_head_review_authority.py) mock only repository-owned functions (review.verify_local, review.local_changes) inside the deterministic test lane; none asserts against a live external precondition.",
+        "evidence": "Executor issuer calls are single, bounded (120s) and never retried; the issuer waits under one explicit result timeout.",
+        "family": "DFF-034",
+        "outcome": "clear"
+      },
+      {
+        "evidence": "New tests assert only repository-owned state with local stand-ins for GitHub OIDC keys, the model and the git remote.",
         "family": "DFF-035",
         "outcome": "clear"
       },
       {
-        "evidence": "No new import or workflow-environment dependency is introduced by this diff.",
+        "evidence": "Each hosted job installs exactly the pinned wheels its entrypoint imports (cryptography, PyYAML, SQLAlchemy; plus push-safety tools for validate) after a missing-PyYAML import was reproduced in a clean environment; asserted by tests/test_issue_agent_github_execution.py::test_workflow_runs_each_trust_domain_in_its_own_job.",
         "family": "DFF-036",
-        "outcome": "clear"
-      },
-      {
-        "evidence": "review.ReviewVerdict remains the same structured dataclass (state, reason, ok) consumers already read directly; unchanged by this diff.",
-        "family": "DFF-037",
-        "outcome": "clear"
-      },
-      {
-        "evidence": "This diff's changes to docs/CODE_WRITE_POLICY.json are limited to the reviewer_pool's timeout_policy.max_seconds, the codex agent's ack/review timeout fields, and a documentary max_seconds_rationale field; no admission-capability degrade/best-effort/silent-continuation logic (hunter_candidate_admission.py, hunter-candidate-admission.yml) is touched by this diff.",
-        "family": "DFF-038",
-        "outcome": "clear"
-      },
-      {
-        "evidence": "This diff's changes to .github/workflows/hunter-governance-reconcile.yml are exactly the trusted-controller surface DFF-040 covers. The candidate changes no executable trusted logic at all -- scripts/hunter_review_orchestrator.py is byte-identical -- only which lifecycle event enters the existing trusted path, and every new regression test runs entirely offline against repository-owned files and functions, with no live GitHub precondition and no privileged token. DFF-040's hosted replay harness therefore remains the mechanism for validating the candidate's own controller-logic content, and the trigger addition is a wiring fact the structural regressions prove directly.",
-        "family": "DFF-040",
-        "outcome": "clear"
-      },
-      {
-        "evidence": "This diff does change DFF-041's own scope: scripts/hunter_trusted_orchestrator_replay_worker.py is rewritten (-317/+141). The DFF-041 bootstrap boundary is the defect class in which the trusted replay grader is executed from the default branch, so a candidate changing the grader cannot self-validate: its own hosted replay run keeps grading against the unfixed default-branch grader regardless of what this branch contains. The rewrite is the minimal standalone correction of the grader scenario logic (per DFF-041's prevention mechanism, corrected on its own and not bundled into the production-controller change that surfaced it), and this candidate's own replay result is therefore not treated as a merge blocker for that already-diagnosed class; it is evidence supporting the standalone grader fix instead.",
-        "family": "DFF-041",
         "outcome": "repaired"
       },
       {
-        "evidence": "This diff wires pull_request_target synchronize into hunter-governance-reconcile.yml, which is the only workflow that runs the privileged hunter_review_orchestrator.py ensure, and the bash router recognises that event the same way it already recognises pull_request_review and _comment. Proven by tests/test_hunter_review_orchestrator.py::test_reconcile_wakes_on_every_lifecycle_event_that_needs_or_moves_the_exact_head, ::test_reconcile_wakes_when_a_pr_head_is_pushed and ::test_unrelated_pull_request_events_do_not_dispatch_reviewer_orchestration, plus the trusted checkout of the reconcile workflow from the default branch. The governance status staying green therefore no longer terminates the lifecycle before a collector/reviewer opportunity is dispatched for the new exact HEAD. Bounded by tests/test_hunter_governance_review_v2.py::test_event_reconcile_scopes_to_triggering_pr_and_reserves_full_sweep_for_recovery, and by tests/test_hunter_review_orchestrator.py::test_synchronize_reconciliation_never_executes_candidate_code, which keeps the reconciliation on the non-candidate-reachable path.",
-        "family": "DFF-042",
-        "outcome": "clear"
-      },
-      {
-        "evidence": "This diff is the correcting contribution for DFF-043 (reviewer-chain-timeout-not-derived-from-canonical-budget; renumbered from DFF-041 during reconciliation with main, which independently added its own DFF-041 for the trusted-grader self-update bootstrap boundary): hunter_pre_ready_review.reviewer_chain_worst_case_seconds(pool) is now the single canonical derivation the collector workflow's timeout-minutes and hunter_review_orchestrator.independent_review_opportunity_seconds() are both validated against/derived from, proven by test_collector_workflow_lifetime_covers_the_reviewer_chain_budget and test_independent_review_opportunity_matches_the_same_canonical_budget.",
-        "family": "DFF-043",
-        "outcome": "clear"
-      },
-      {
-        "evidence": "This diff is the correcting contribution for DFF-044 (exact-head-initial-dispatch-not-idempotent-under-stale-status-read; renumbered from DFF-043 during reconciliation with main): ensure_collector now cross-checks the collector run listing before minting a fresh dispatch whenever no trusted cycle status is visible, proven by test_two_racing_reconcile_calls_never_double_dispatch_when_the_status_read_lags; the pre-existing bounded dead-dispatch recovery path is unaffected, proven by the unchanged test_a_failed_collector_is_redispatched_rather_than_parking_the_cycle continuing to pass.",
-        "family": "DFF-044",
-        "outcome": "clear"
-      },
-      {
-        "evidence": "This diff is the correcting contribution for DFF-045 (canonical-knowledge-growth-causes-linear-per-task-prompt-growth; renumbered from DFF-044 during reconciliation with main): EngineeringContextAuthority.compile() now takes an explicit budget_bytes and bounds/deduplicates/compacts rendering by deterministic structural relevance rather than inlining every applicable family's full prose, proven by the 8 new regression tests in tests/test_engineering_context_authority.py (TEST1-6 per the owner's authorized mission), and by the 32 previously-failing tests/test_issue_agent_execution.py, tests/test_issue_agent_issuer.py, tests/test_issue_agent_provisioner.py tests now passing.",
+        "evidence": "No Smart Prompt Machine or EngineeringContextAuthority change.",
         "family": "DFF-045",
         "outcome": "clear"
       },
       {
-        "evidence": "Root cause 4 (this diff, live PR #535 exact HEAD 51108333821ab42d1ab7aa0b812a72d890f73795): a pull_request_target synchronize at 07:40:33Z woke Merge Readiness, Trusted Preflight Upgrade and Governance Agent Preflight but not Hunter Governance Review Reconcile, the only workflow that runs the privileged hunter_review_orchestrator.py ensure, so no trusted exact-head orchestration cycle was published and Merge Readiness correctly reported MALFORMED_REVIEW: WAITING_FOR_REVIEWER. hunter-governance-reconcile.yml declared types: [ready_for_review] only, so Issue #534's earlier fix had covered one of the two transition classes this family binds and not the exact-HEAD-changing one. Corrected by adding synchronize to the same pull_request_target trigger and by making the regression derive the requirement from hunter-merge-readiness.yml's own trigger set (test_reconcile_wakes_on_every_lifecycle_event_that_needs_or_moves_the_exact_head) so the two cannot drift apart again for either class. DFF-045's invariant was widened in place, not duplicated, to bind both classes explicitly and to state that a schedule or an unrelated producer's workflow_run is a recovery fallback, never the primary mechanism. Adding synchronize moved the Draft guard rather than weakening it, so the previously structural Draft assertion was replaced with behavioural coverage of the orchestrator's own draft short-circuit.",
+        "evidence": "The hosted chain is event-driven within one workflow run (needs: authorize -> execute -> validate -> publish); the Draft PR remains created by the existing workflow_run on Pre-PR Preflight.",
         "family": "DFF-046",
-        "outcome": "repaired"
+        "outcome": "clear"
       }
     ],
     "findings": [
       {
-        "evidence": "DEFECT_REGISTRY.json's legacy DFF-031 entry claimed require_current_review_request_if_present 'blocked at pre-push' since PR #485, but that function has been an unconditional no-op since the exact commit that introduced it, with zero real test coverage (every reference stubbed it out) -- an overclaimed-prevention-state (DFF-015) instance discovered while investigating PR #535's live failure.",
+        "evidence": "Copilot r4171869242: untrusted model could recover OIDC request capability from same-uid parent environment.",
         "id": "F-1",
         "resolution": "resolved",
         "resolution_evidence": {
-          "correction": "54ef6da3704dc6bd103251f0c92cce80d55f2dc2",
-          "regression_test": "tests/test_hunter_pre_push.py"
+          "correction": "8173c283bcf5601d5cccac0ca4fb7a6f755fc04f",
+          "regression_test": "tests/test_issue_agent_github_execution.py"
+        },
+        "severity": "blocking"
+      },
+      {
+        "evidence": "Copilot r4171869255: malformed JWT aud arrays and non-integer nbf accepted.",
+        "id": "F-2",
+        "resolution": "resolved",
+        "resolution_evidence": {
+          "correction": "8173c283bcf5601d5cccac0ca4fb7a6f755fc04f",
+          "regression_test": "tests/test_issue_agent_github_execution.py"
+        },
+        "severity": "blocking"
+      },
+      {
+        "evidence": "Copilot r4171869261: result admissible before prompt resolution/handoff delivery.",
+        "id": "F-3",
+        "resolution": "resolved",
+        "resolution_evidence": {
+          "correction": "8173c283bcf5601d5cccac0ca4fb7a6f755fc04f",
+          "regression_test": "tests/test_issue_agent_github_execution.py"
+        },
+        "severity": "blocking"
+      },
+      {
+        "evidence": "Copilot r4171869279: candidate-controlled pre-push could read issuer-channel secrets.",
+        "id": "F-4",
+        "resolution": "resolved",
+        "resolution_evidence": {
+          "correction": "8173c283bcf5601d5cccac0ca4fb7a6f755fc04f",
+          "regression_test": "tests/test_issue_agent_replacement_executor.py"
+        },
+        "severity": "blocking"
+      },
+      {
+        "evidence": "Sonar S8264/S8541/S8544/S8707 on new code (security rating C).",
+        "id": "F-5",
+        "resolution": "resolved",
+        "resolution_evidence": {
+          "correction": "8173c283bcf5601d5cccac0ca4fb7a6f755fc04f",
+          "regression_test": "tests/test_issue_agent_github_execution.py"
+        },
+        "severity": "blocking"
+      },
+      {
+        "evidence": "Sonar python:S5443 hard-coded publicly writable directory.",
+        "id": "F-6",
+        "resolution": "resolved",
+        "resolution_evidence": {
+          "correction": "9373f2637c8cde56e9a3c138314f9d435ef5db58",
+          "regression_test": "tests/test_issue_agent_replacement_executor.py"
+        },
+        "severity": "blocking"
+      },
+      {
+        "evidence": "Codex P1 r4173192471: verifier required job_workflow_ref, absent for direct workflows.",
+        "id": "F-7",
+        "resolution": "resolved",
+        "resolution_evidence": {
+          "correction": "39608a14875e559e321c7bacc1d195ed1796f37c",
+          "regression_test": "tests/test_issue_agent_github_execution.py"
+        },
+        "severity": "blocking"
+      },
+      {
+        "evidence": "Codex P2 r4173192478: sequential job checkouts resolved a moving branch ref.",
+        "id": "F-8",
+        "resolution": "resolved",
+        "resolution_evidence": {
+          "correction": "39608a14875e559e321c7bacc1d195ed1796f37c",
+          "regression_test": "tests/test_issue_agent_github_execution.py"
+        },
+        "severity": "blocking"
+      },
+      {
+        "evidence": "Copilot (head 3bbeeb02): publisher/validator model-authority check missed HUNTER_ISSUE_AGENT_EXECUTOR_MODEL_API_KEY.",
+        "id": "F-10",
+        "resolution": "resolved",
+        "resolution_evidence": {
+          "correction": "bd0dfae95c9b499e7e86791890ba911a89c279cb",
+          "regression_test": "tests/test_issue_agent_replacement_executor.py"
+        },
+        "severity": "blocking"
+      },
+      {
+        "evidence": "Copilot (head 3bbeeb02): oversized issuer acceptance truncated to a parseable prefix instead of refused.",
+        "id": "F-11",
+        "resolution": "resolved",
+        "resolution_evidence": {
+          "correction": "bd0dfae95c9b499e7e86791890ba911a89c279cb",
+          "regression_test": "tests/test_issue_agent_trigger.py"
+        },
+        "severity": "blocking"
+      },
+      {
+        "evidence": "Copilot (head 3bbeeb02): non-2xx issuer refusal text printed to the public Actions log.",
+        "id": "F-12",
+        "resolution": "resolved",
+        "resolution_evidence": {
+          "correction": "bd0dfae95c9b499e7e86791890ba911a89c279cb",
+          "regression_test": "tests/test_issue_agent_trigger.py"
+        },
+        "severity": "blocking"
+      },
+      {
+        "evidence": "Copilot PRRT_kwDOTRDHr86oouCt (head b5337d13): one-active-PR check not atomic with POST /pulls; concurrent runs for one Issue could both create a PR.",
+        "id": "F-14",
+        "resolution": "resolved",
+        "resolution_evidence": {
+          "correction": "f8a5ac9088d29cb4b35a33de2e8b0feaea5e87f5",
+          "regression_test": "tests/test_issue_agent_candidate_pr.py"
+        },
+        "severity": "blocking"
+      },
+      {
+        "evidence": "Copilot PRRT_kwDOTRDHr86oouC9 (head b5337d13): publisher could fetch and publish after result acceptance without a runtime-recorded validation proof.",
+        "id": "F-15",
+        "resolution": "resolved",
+        "resolution_evidence": {
+          "correction": "f8a5ac9088d29cb4b35a33de2e8b0feaea5e87f5",
+          "regression_test": "tests/test_issue_agent_github_execution.py"
+        },
+        "severity": "blocking"
+      },
+      {
+        "evidence": "Copilot PRRT_kwDOTRDHr86oqMIR (head ee74b21d): OIDC token response truncated at 64 KiB instead of refused.",
+        "id": "F-16",
+        "resolution": "resolved",
+        "resolution_evidence": {
+          "correction": "81f4f4c482f6552ad47359e00c373f7ce9d63ba8",
+          "regression_test": "tests/test_issue_agent_github_execution.py"
+        },
+        "severity": "blocking"
+      },
+      {
+        "evidence": "Copilot PRRT_kwDOTRDHr86oqMIf (head ee74b21d): syntactic refusal filter let Issue-derived uppercase text reach the public log.",
+        "id": "F-17",
+        "resolution": "resolved",
+        "resolution_evidence": {
+          "correction": "81f4f4c482f6552ad47359e00c373f7ce9d63ba8",
+          "regression_test": "tests/test_issue_agent_github_execution.py"
+        },
+        "severity": "blocking"
+      },
+      {
+        "evidence": "Copilot PRRT_kwDOTRDHr86oqMIp (head ee74b21d): model API key serialized into the sudo/env argument vector.",
+        "id": "F-18",
+        "resolution": "resolved",
+        "resolution_evidence": {
+          "correction": "81f4f4c482f6552ad47359e00c373f7ce9d63ba8",
+          "regression_test": "tests/test_issue_agent_github_execution.py"
+        },
+        "severity": "blocking"
+      },
+      {
+        "evidence": "Sonar githubactions:S8264 x2 and pythonsecurity:S5131 on new code (security rating E).",
+        "id": "F-19",
+        "resolution": "resolved",
+        "resolution_evidence": {
+          "correction": "81f4f4c482f6552ad47359e00c373f7ce9d63ba8",
+          "regression_test": "tests/test_issue_agent_github_execution.py"
+        },
+        "severity": "blocking"
+      },
+      {
+        "evidence": "Copilot PRRT_kwDOTRDHr86oqs8M (head 03f3e4f3): hosted executor checked out the signed base without proving it is on trusted main (BASE_NOT_ON_MAIN).",
+        "id": "F-20",
+        "resolution": "resolved",
+        "resolution_evidence": {
+          "correction": "9483a92bedc36572ba4381e362574e170add262c",
+          "regression_test": "tests/test_issue_agent_github_execution.py"
+        },
+        "severity": "blocking"
+      },
+      {
+        "evidence": "Copilot PRRT_kwDOTRDHr86oqs8X (head 03f3e4f3): hostile result validation text persisted to the ledger, logged and returned.",
+        "id": "F-21",
+        "resolution": "resolved",
+        "resolution_evidence": {
+          "correction": "9483a92bedc36572ba4381e362574e170add262c",
+          "regression_test": "tests/test_issue_agent_github_execution.py"
+        },
+        "severity": "blocking"
+      },
+      {
+        "evidence": "Copilot PRRT_kwDOTRDHr86orstM (head 2bcfc0c7): non-UTF-8 candidate path raised UnicodeDecodeError outside the bounded job error.",
+        "id": "F-22",
+        "resolution": "resolved",
+        "resolution_evidence": {
+          "correction": "3409cf474bec6d7092165d6557d2ace50546ad9b",
+          "regression_test": "tests/test_issue_agent_github_execution.py"
+        },
+        "severity": "blocking"
+      },
+      {
+        "evidence": "Copilot (head 3bbeeb02): claimed the isolated pre-push would always fail without a GitHub token. Not reproducible: the real trusted hook passed end to end with no token and a local-clone origin (exit 0); the token is reached only by the non-blocking review-state report, now pinned by a regression.",
+        "id": "F-13",
+        "resolution": "resolved",
+        "resolution_evidence": {
+          "correction": "bd0dfae95c9b499e7e86791890ba911a89c279cb",
+          "regression_test": "tests/test_issue_agent_github_execution.py"
         },
         "severity": "non-blocking"
       },
       {
-        "evidence": "Live PR #535 evidence (exact HEAD c05da168545c5fa95fe300706eccaac2228fc391): after root causes 1 and 2 were fixed, hunter_merge_readiness_v2.resolve_review_authority misclassified a live, legitimate 'pending' (WAITING_FOR_REVIEWER, orchestration cycle genuinely published) verification result as a hard MALFORMED_REVIEW failure, so Hunter Merge Readiness could never reach the pending state its own sibling review_wait_state mechanism exists to produce -- an unrecoverable false failure, since no contributor push can complete a review a reviewer was never actually dispatched to perform.",
-        "id": "F-2",
-        "resolution": "resolved",
-        "resolution_evidence": {
-          "correction": "5917bd93708fbb38b89a861f068313558ef5d376",
-          "regression_test": "tests/test_exact_head_review_authority.py"
-        },
+        "evidence": "Codex P1 PRRT_kwDOTRDHr86orrq4 (head 2bcfc0c7): an accepted executor result completes the durable execution row before validation/publication, so an issuer restart loses the in-memory candidate and strands the consumed authorization as COMPLETED without a branch or PR. Resuming requires durable storage of the hostile result/signed authorization and reclaim of a lapsed lease, both outside the existing ledger contract (DFF-020, recover_expired_on_startup, 'a consumed authorization is never retried'); escalated for an owner decision.",
+        "id": "F-23",
+        "resolution": "unresolved",
         "severity": "blocking"
       },
       {
-        "evidence": "Live PR #535 evidence (exact HEAD 0553514f411a9ef16053bce75678b5357c78d403): Hunter invoked Codex correctly via '@codex review', but treated the absence of a response after only ~300 seconds (codex's own ack_timeout_seconds/review_timeout_seconds, both capped at the pool's timeout_policy.max_seconds of 300) as sufficient to fail over through the reviewer pool, even though Codex's own normal hosted latency on this repository is ~20-30 minutes (PR #529 ~29min, PR #530 ~21min). Hunter failed over Codex -> Copilot -> Gemini -> Groq, where Gemini returned HTTP 503 and Groq HTTP 403.",
-        "id": "F-3",
-        "resolution": "resolved",
-        "resolution_evidence": {
-          "correction": "ced1051e469f54b4be1a482260470e47deac26f5",
-          "regression_test": "tests/test_hunter_review_orchestrator.py"
-        },
-        "severity": "blocking"
-      },
-      {
-        "evidence": "Live PR #535 evidence (same exact HEAD): at least two Hunter Reviewer Collector runs (36340127965 and 36340195915) were dispatched for the same exact-head cycle, and the trusted orchestration status was republished with different reconcile trigger IDs for the same exact-head waiting cycle, despite ensure_collector persisting a cycle status before every dispatch -- because GitHub's combined-status read is not guaranteed read-your-write consistent, so a second, closely-spaced reconcile execution can still observe 'absent' after an earlier one already dispatched.",
-        "id": "F-4",
-        "resolution": "resolved",
-        "resolution_evidence": {
-          "correction": "ced1051e469f54b4be1a482260470e47deac26f5",
-          "regression_test": "tests/test_hunter_review_orchestrator.py"
-        },
-        "severity": "blocking"
-      },
-      {
-        "evidence": "Live PR #535 evidence (exact HEAD 51108333821ab42d1ab7aa0b812a72d890f73795): the pull_request_target synchronize at 07:40:33Z triggered Hunter / Merge Readiness, Hunter / Trusted Preflight Upgrade and Hunter Governance Agent Preflight, but not Hunter Governance Review Reconcile and not Hunter Reviewer Collector for that exact HEAD. The only reconciliations that ran (36393517015, 36393716517) were workflow_run-triggered recoveries depending on other workflows' completions, and no trusted exact-head orchestration cycle was published for that HEAD, so Merge Readiness run 36393772215 correctly published MALFORMED_REVIEW: WAITING_FOR_REVIEWER. hunter-governance-reconcile.yml declared types: [ready_for_review] only, so Issue #534's earlier fix had covered one of the two transition classes that can invalidate the exact-head prerequisite and not the exact-HEAD-changing one. A secondary consequence of the same defect: because synchronize also fires on pushes to a Draft PR, once the trigger was added the trigger could no longer be the Draft guard, and the pre-existing structural regression had been asserting the defect itself ('synchronize' not in types).",
-        "id": "F-6",
-        "resolution": "resolved",
-        "resolution_evidence": {
-          "correction": "38a1d58ff91fed12284956f4bd04474b3578909a",
-          "regression_test": "tests/test_hunter_review_orchestrator.py"
-        },
-        "severity": "blocking"
+        "evidence": "Copilot exact-head review 5399341885 overview prose mentions 'four unresolved moderate issues' but enumerates no finding, inline comment or location ('Findings: None'); nothing actionable was identified.",
+        "id": "F-9",
+        "resolution": "unresolved",
+        "severity": "non-blocking"
       }
     ],
-    "issue": "534",
+    "issue": "557",
     "review_target": [
       {
-        "blob_sha": "37ac35b4b46c8222015fd33b72b61ed3c797a757",
-        "path": ".github/workflows/hunter-governance-reconcile.yml",
+        "blob_sha": "e23d37d121ceb36dc2eeadfc0d8990e83747dffb",
+        "path": "scripts/hunter_issue_agent_github_executor.py",
+        "previous_path": "",
+        "status": "added"
+      },
+      {
+        "blob_sha": "4ae3e300d79013beb4dd54316c900d396782a407",
+        "path": "src/hunter/automation/issue_agent_github_execution.py",
+        "previous_path": "",
+        "status": "added"
+      },
+      {
+        "blob_sha": "13c9ce23ec7c193c7a7bf296fe9afa765220ed10",
+        "path": "tests/test_issue_agent_github_execution.py",
+        "previous_path": "",
+        "status": "added"
+      },
+      {
+        "blob_sha": "dd3b40f1517dba23f053bce89f70091ad1e23e86",
+        "path": ".github/workflows/hunter-issue-agent-candidate-pr.yml",
         "previous_path": "",
         "status": "modified"
       },
       {
-        "blob_sha": "7561b9c4d886d54a189ac74ccfcb0cb89b4b15a3",
-        "path": ".github/workflows/hunter-reviewer-collector.yml",
+        "blob_sha": "c5377d6a6e0bd7030bda371706feccadb61ed488",
+        "path": ".github/workflows/hunter-issue-agent-trigger.yml",
         "previous_path": "",
         "status": "modified"
       },
       {
-        "blob_sha": "5f285e1a15a01e42d409aaa4670519de0614d261",
-        "path": "docs/CODE_WRITE_POLICY.json",
-        "previous_path": "",
-        "status": "modified"
-      },
-      {
-        "blob_sha": "08a3543f927ff7015ab91ba9898112eb7b151441",
+        "blob_sha": "a4990058ebe7a74efae7cda4f15a0bc31c3191da",
         "path": "docs/DEFECT_REGISTRY.json",
         "previous_path": "",
         "status": "modified"
       },
       {
-        "blob_sha": "df74458309a62f6a82219c950710fc59a2633352",
-        "path": "scripts/hunter_pre_push.py",
+        "blob_sha": "db1c3ba37bf18edfd1b3815071b1a998933c0d34",
+        "path": "docs/ISSUE_AGENT_EXECUTION_CONTRACT.md",
         "previous_path": "",
         "status": "modified"
       },
       {
-        "blob_sha": "4718be185435ee6f806611d748b3c2205008cf80",
-        "path": "scripts/hunter_pre_ready_review.py",
+        "blob_sha": "a5011dc49417fdb60e255fe794b09495d9a9f5d5",
+        "path": "docs/ISSUE_AGENT_ISSUER_DEPLOYMENT.md",
         "previous_path": "",
         "status": "modified"
       },
       {
-        "blob_sha": "addd02b79653edea5b51b49ab5f3f95245c86adc",
-        "path": "scripts/hunter_review_orchestrator.py",
+        "blob_sha": "38224519bdcbac5529235be462dcf954366e8648",
+        "path": "scripts/hunter_issue_agent_candidate_pr.py",
         "previous_path": "",
         "status": "modified"
       },
       {
-        "blob_sha": "3a6c2383e9e84c379ef11a21984e05b4700e4022",
-        "path": "scripts/hunter_reviewer_collector.py",
+        "blob_sha": "3e3dac2fa02509a06b675bef2708a56b408ede4f",
+        "path": "scripts/hunter_issue_agent_ingress.py",
         "previous_path": "",
         "status": "modified"
       },
       {
-        "blob_sha": "b8927a1c6ab1416cfd61f80f7141a89cd6d652c1",
-        "path": "scripts/hunter_trusted_orchestrator_replay_worker.py",
+        "blob_sha": "29ca2ad3f780ce86ec2cdba587734a33f50e60ed",
+        "path": "scripts/hunter_issue_agent_issuer.py",
         "previous_path": "",
         "status": "modified"
       },
       {
-        "blob_sha": "12e05dc33e3b796b564234003ac27e8f72f021aa",
-        "path": "tests/test_code_write_policy.py",
+        "blob_sha": "b9b429ef4c545dd3467e5deb287501f421517790",
+        "path": "scripts/hunter_issue_agent_trigger.py",
         "previous_path": "",
         "status": "modified"
       },
       {
-        "blob_sha": "592503c41d71a3a46bcf934ba51f8e0f83905d5a",
-        "path": "tests/test_exact_head_review_authority.py",
+        "blob_sha": "4030bb1599e9cad830a1eef20199bf64e94421f2",
+        "path": "scripts/issue_agent_edge_transport.py",
         "previous_path": "",
         "status": "modified"
       },
       {
-        "blob_sha": "edcad7d726b8d26bd531af46a1c79b8f0fa144a9",
-        "path": "tests/test_hunter_pre_push.py",
+        "blob_sha": "2265ff229102cf3eaececd99652e591bd302128e",
+        "path": "src/hunter/automation/issue_agent_execution.py",
         "previous_path": "",
         "status": "modified"
       },
       {
-        "blob_sha": "c7a21f67e11548535c7b78fb77d1e3f69c63805e",
-        "path": "tests/test_hunter_review_orchestrator.py",
+        "blob_sha": "e9015eb17034c46c34c8edeb8bdd886a08dfc51f",
+        "path": "src/hunter/automation/issue_agent_replacement_executor.py",
         "previous_path": "",
         "status": "modified"
       },
       {
-        "blob_sha": "26afd17f475b23fead92372df852bf84625ed6cd",
-        "path": "tests/test_hunter_reviewer_collector.py",
+        "blob_sha": "f8b029725f6cbaa59c82f248908830a797c7e988",
+        "path": "tests/test_issue_agent_candidate_pr.py",
         "previous_path": "",
         "status": "modified"
       },
       {
-        "blob_sha": "6cdf2bb4b50c898a6c381c85b9c666e9dcd4713b",
-        "path": "tests/test_hunter_trusted_orchestrator_replay.py",
+        "blob_sha": "8e0f26fdff251e3ac0e78999fd84c666d6aceadc",
+        "path": "tests/test_issue_agent_candidate_topology.py",
         "previous_path": "",
         "status": "modified"
       },
       {
-        "blob_sha": "164c95cbe7110b440edf0f0898e0ad344fc9b4da",
-        "path": "tests/test_issue_412_prevention_gate.py",
+        "blob_sha": "29b137f4415c78fecf8032294c4fc1b3baff8fe5",
+        "path": "tests/test_issue_agent_issuer.py",
+        "previous_path": "",
+        "status": "modified"
+      },
+      {
+        "blob_sha": "c326d97e87ee940eeaab63a3366610f417cee629",
+        "path": "tests/test_issue_agent_replacement_executor.py",
+        "previous_path": "",
+        "status": "modified"
+      },
+      {
+        "blob_sha": "7cd641720fbd17479290e13c5cbddc24b9ea52a5",
+        "path": "tests/test_issue_agent_trigger.py",
         "previous_path": "",
         "status": "modified"
       }
     ],
-    "review_target_digest": "b415ad2ee4a7d41b81ef75ec77113c396d609d37906827ba07dacf0af6352c36"
+    "review_target_digest": "23130581f8ad080765685869d0fd13b7dd50068688cbd2f48d9b5f6f970cbf46"
   },
-  "review_id": "38f3a63e1172d0c267c4f4da9df75ba5ca93aa71ebdfcd9e52dffe60e2b8ebee",
+  "review_id": "5d3c23853eeb0072a848d91b4cd49e34dd43adbfb102c82770ede10ee0c42f81",
   "review_request": {
-    "claims_id": "38f3a63e1172d0c267c4f4da9df75ba5ca93aa71ebdfcd9e52dffe60e2b8ebee",
+    "claims_id": "5d3c23853eeb0072a848d91b4cd49e34dd43adbfb102c82770ede10ee0c42f81",
     "schema": "hunter.review-request.v1"
   },
   "schema": "hunter.pre-ready-hostile-review.v1"

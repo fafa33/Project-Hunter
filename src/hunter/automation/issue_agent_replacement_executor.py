@@ -6,11 +6,13 @@ import base64
 import hashlib
 import json
 import os
+import pwd
 import re
+import shutil
 import sqlite3
 import subprocess
 import tempfile
-from collections.abc import Mapping
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from pathlib import Path, PurePosixPath
 
@@ -133,30 +135,64 @@ def validate_replacement_result(
     )
 
 
-def publisher_environment_is_safe(environ: Mapping[str, str]) -> bool:
-    forbidden = (
-        "HUNTER_AGENT_CODEX_COMMAND",
-        "HUNTER_AGENT_CLAUDE_COMMAND",
-        "HUNTER_AGENT_FREEBUFF_COMMAND",
-        "HUNTER_AGENT_OPENCODE_COMMAND",
-        "HUNTER_AGENT_JULES_COMMAND",
-        "OPENAI_API_KEY",
-        "ANTHROPIC_API_KEY",
-        "GEMINI_API_KEY",
-        "GROQ_API_KEY",
+#: Named model/provider authorities, including the GitHub-hosted executor's own
+#: model credential (Issue #557).
+MODEL_AUTHORITY_ENV: tuple[str, ...] = (
+    "HUNTER_AGENT_CODEX_COMMAND",
+    "HUNTER_AGENT_CLAUDE_COMMAND",
+    "HUNTER_AGENT_FREEBUFF_COMMAND",
+    "HUNTER_AGENT_OPENCODE_COMMAND",
+    "HUNTER_AGENT_JULES_COMMAND",
+    "HUNTER_ISSUE_AGENT_EXECUTOR_MODEL_API_KEY",
+    "OPENAI_API_KEY",
+    "ANTHROPIC_API_KEY",
+    "GEMINI_API_KEY",
+    "GROQ_API_KEY",
+)
+
+
+def model_authority_present(environ: Mapping[str, str]) -> list[str]:
+    """Every configured model/provider authority: the named set plus any ``*_API_KEY``
+    or ``HUNTER_AGENT_*_COMMAND``, so a newly added provider credential is caught too."""
+    return sorted(
+        name
+        for name, value in environ.items()
+        if value.strip()
+        and (
+            name in MODEL_AUTHORITY_ENV
+            or name.endswith("_API_KEY")
+            or (name.startswith("HUNTER_AGENT_") and name.endswith("_COMMAND"))
+        )
     )
-    return not any(environ.get(x, "").strip() for x in forbidden)
+
+
+def publisher_environment_is_safe(environ: Mapping[str, str]) -> bool:
+    return not model_authority_present(environ)
+
+
+#: Every credential that can publish a candidate. None of them may exist in a
+#: boundary that runs a model or executes candidate-controlled content.
+PUBLICATION_CREDENTIAL_ENV: tuple[str, ...] = (
+    "HUNTER_AGENT_GITHUB_PUSH_TOKEN",
+    "HUNTER_ISSUE_AGENT_PR_TOKEN",
+    "HUNTER_ISSUE_AGENT_PUBLISHER_PUSH_TOKEN",
+    "HUNTER_ISSUE_AGENT_PUBLISHER_SIGNING_KEY",
+    "GITHUB_TOKEN",
+    "GH_TOKEN",
+    "SSH_AUTH_SOCK",
+)
+
+#: The GitHub Actions OIDC request capability. Candidate-controlled content
+#: never receives it, so it cannot mint an execution identity token.
+OIDC_REQUEST_ENV: tuple[str, ...] = ("ACTIONS_ID_TOKEN_REQUEST_TOKEN", "ACTIONS_ID_TOKEN_REQUEST_URL")
+
+
+def publication_credentials_present(environ: Mapping[str, str]) -> list[str]:
+    return [x for x in PUBLICATION_CREDENTIAL_ENV if environ.get(x, "").strip()]
 
 
 def assert_rehearsal_has_no_publication_authority(environ: Mapping[str, str]) -> None:
-    forbidden = (
-        "HUNTER_AGENT_GITHUB_PUSH_TOKEN",
-        "HUNTER_ISSUE_AGENT_PR_TOKEN",
-        "GITHUB_TOKEN",
-        "GH_TOKEN",
-        "SSH_AUTH_SOCK",
-    )
-    leaked = [x for x in forbidden if environ.get(x, "").strip()]
+    leaked = publication_credentials_present(environ)
     if leaked:
         raise ReplacementExecutorError("rehearsal environment contains publication authority: " + ", ".join(leaked))
 
@@ -262,14 +298,11 @@ def _git_plumbing(
     return completed.stdout.decode().strip()
 
 
-def build_signed_candidate_commit(
-    repo: str | Path,
-    *,
-    validated: ValidatedReplacementResult,
-    signing_key: str = "",
-) -> str:
-    """Build a signed candidate commit from hostile file data without checkout or hooks."""
-    root = Path(repo).resolve()
+_CANDIDATE_COMMIT_MESSAGE = "chore: apply governed Issue Agent replacement result"
+
+
+def _candidate_commit(root: Path, *, validated: ValidatedReplacementResult, sign: bool, signing_key: str) -> str:
+    """Construct the candidate commit from hostile file data by Git plumbing only."""
     if not root.is_dir():
         raise ReplacementExecutorError("publisher repository does not exist")
     if _git_plumbing(root, "cat-file", "-t", validated.base_sha) != "commit":
@@ -284,70 +317,263 @@ def build_signed_candidate_commit(
             blob = _git_plumbing(root, "hash-object", "-w", "--stdin", env=env, input_bytes=item.content)
             _git_plumbing(root, "update-index", "--add", "--cacheinfo", f"{item.mode},{blob},{item.path}", env=env)
         tree = _git_plumbing(root, "write-tree", env=env)
-        args = [
-            "commit-tree",
-            tree,
-            "-p",
-            validated.base_sha,
-            "-m",
-            "chore: apply governed Issue Agent replacement result",
-        ]
-        args.insert(1, f"-S{signing_key}" if signing_key else "-S")
+        args = ["commit-tree", tree, "-p", validated.base_sha, "-m", _CANDIDATE_COMMIT_MESSAGE]
+        if sign:
+            args.insert(1, f"-S{signing_key}" if signing_key else "-S")
         head = _git_plumbing(root, *args, env=env)
     if re.fullmatch(r"[0-9a-f]{40}", head) is None:
         raise ReplacementExecutorError("publisher produced an invalid commit id")
+    return head
+
+
+def candidate_tree(repo: str | Path, head: str) -> str:
+    tree = _git_plumbing(Path(repo).resolve(), "rev-parse", f"{head}^{{tree}}")
+    if re.fullmatch(r"[0-9a-f]{40}", tree) is None:
+        raise ReplacementExecutorError("candidate tree id is invalid")
+    return tree
+
+
+def build_signed_candidate_commit(
+    repo: str | Path,
+    *,
+    validated: ValidatedReplacementResult,
+    signing_key: str = "",
+) -> str:
+    """Build a signed candidate commit from hostile file data without checkout or hooks."""
+    root = Path(repo).resolve()
+    head = _candidate_commit(root, validated=validated, sign=True, signing_key=signing_key)
     _git_plumbing(root, "verify-commit", head)
     return head
 
 
-def _run_pre_push_safety(repo: Path, *, validated: ValidatedReplacementResult, head: str, push_url: str) -> None:
-    """Run the trusted pre-push hook against exact candidate content without publication authority."""
-    hook = _git_plumbing(repo, "show", f"{validated.base_sha}:.githooks/pre-push").encode()
-    with tempfile.TemporaryDirectory(prefix="hunter-replacement-pre-push-") as directory:
-        root = Path(directory)
-        worktree = root / "candidate"
-        hook_path = root / "pre-push"
-        hook_path.write_bytes(hook)
-        hook_path.chmod(0o700)
-        _git_plumbing(repo, "-c", "core.hooksPath=/dev/null", "worktree", "add", "--detach", str(worktree), head)
-        env = dict(os.environ)
-        for name in tuple(env):
-            if (
-                name
-                in {
-                    "HUNTER_AGENT_GITHUB_PUSH_TOKEN",
-                    "HUNTER_ISSUE_AGENT_PR_TOKEN",
-                    "GITHUB_TOKEN",
-                    "GH_TOKEN",
-                    "SSH_AUTH_SOCK",
-                }
-                or name.endswith("_API_KEY")
-                or (name.startswith("HUNTER_AGENT_") and name.endswith("_COMMAND"))
-                or name.startswith("GIT_")
-            ):
-                env.pop(name, None)
-        env["GIT_CONFIG_GLOBAL"] = os.devnull
-        env["GIT_CONFIG_NOSYSTEM"] = "1"
-        env["GIT_TERMINAL_PROMPT"] = "0"
-        line = f"refs/heads/{validated.branch} {head} refs/heads/{validated.branch} {'0' * 40}\n"
+def run_credential_free_candidate_safety(
+    repo: str | Path, *, validated: ValidatedReplacementResult, isolation_user: str
+) -> str:
+    """Run the trusted pre-push safety boundary on exact candidate content; return its tree.
+
+    Issue #557. The pre-push hook executes repository scripts from the candidate
+    worktree, so it is candidate-controlled code. It therefore runs only here,
+    in a boundary that holds no publication credential at all, against an
+    unsigned commit carrying the identical tree, and as the dedicated isolation
+    user with an explicit allowlist environment. The publisher later binds its
+    own signed commit to this exact tree and never runs the hook itself.
+    """
+    if validated.rehearsal:
+        raise ReplacementExecutorError("rehearsal result cannot reach candidate safety validation")
+    require_isolation_user(isolation_user)
+    leaked = publication_credentials_present(os.environ)
+    if leaked:
+        raise ReplacementExecutorError("candidate safety boundary contains publication authority: " + ", ".join(leaked))
+    if not publisher_environment_is_safe(os.environ):
+        raise ReplacementExecutorError("candidate safety boundary contains model authority")
+    if re.fullmatch(r"[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+", validated.repository) is None:
+        raise ReplacementExecutorError("signed repository identity is invalid")
+    root = Path(repo).resolve()
+    head = _candidate_commit(root, validated=validated, sign=False, signing_key="")
+    _run_pre_push_safety(
+        root,
+        validated=validated,
+        head=head,
+        push_url=f"https://github.com/{validated.repository}.git",
+        isolation_user=isolation_user,
+    )
+    return candidate_tree(root, head)
+
+
+#: Parent for untrusted-code directories. ``None`` uses the platform temporary
+#: directory; each root is created by ``mkdtemp`` (unpredictable name, owner-only)
+#: and only then opened to traversal (0711), never listing or writing by others.
+ISOLATION_ROOT: Path | None = None
+
+#: The only parent variables candidate-controlled code ever receives. This is an
+#: explicit allowlist, never a scrub of known secrets: anything not named here,
+#: including issuer, OIDC, model, signing, push and PR credentials, is absent.
+UNTRUSTED_ENV_ALLOWLIST: tuple[str, ...] = ("PATH", "LANG", "LC_ALL", "TZ")
+
+#: The whole environment of the ``sudo`` launcher process itself.
+SUDO_ENVIRONMENT: Mapping[str, str] = {"PATH": "/usr/sbin:/usr/bin:/sbin:/bin"}
+
+_USER_RE = re.compile(r"[a-z_][a-z0-9_-]{0,31}")
+_ENV_KEY_RE = re.compile(r"[A-Za-z_][A-Za-z0-9_]*")
+
+
+def require_isolation_user(user: object) -> str:
+    """The dedicated unprivileged OS user that untrusted code runs as (Issue #557).
+
+    A same-user child can read every same-user ancestor's ``/proc/<pid>/environ``,
+    so hiding variables from the child is not a credential boundary. Untrusted
+    model execution and candidate-controlled validation therefore run as a
+    different, non-root uid that cannot read the trusted process tree at all.
+    """
+    if not isinstance(user, str) or _USER_RE.fullmatch(user) is None:
+        raise ReplacementExecutorError("untrusted-code isolation user is not a valid user name")
+    try:
+        entry = pwd.getpwnam(user)
+    except KeyError:
+        raise ReplacementExecutorError("untrusted-code isolation user does not exist") from None
+    if entry.pw_uid in (0, os.getuid()):
+        raise ReplacementExecutorError("untrusted-code isolation user must be a different non-root uid")
+    return user
+
+
+def isolated_command(user: str, environment: Mapping[str, str], argv: Sequence[str]) -> tuple[str, ...]:
+    """``argv`` as ``user`` with exactly ``environment`` and nothing inherited."""
+    for key in environment:
+        if _ENV_KEY_RE.fullmatch(key) is None:
+            raise ReplacementExecutorError("untrusted environment carries an invalid variable name")
+    assignments = tuple(f"{key}={environment[key]}" for key in sorted(environment))
+    return ("sudo", "-n", "-u", user, "--", "/usr/bin/env", "-i", *assignments, *argv)
+
+
+def isolated_secret_launch(
+    user: str,
+    environment: Mapping[str, str],
+    secret_environment: Mapping[str, str],
+    argv: Sequence[str],
+) -> tuple[tuple[str, ...], dict[str, str]]:
+    """``argv`` as ``user`` with secrets handed over by environment, never by argument.
+
+    Returns ``(command, launcher_environment)``. Non-secret settings are passed as
+    ``env`` assignments; every secret value travels only in the ``sudo`` launcher's
+    own environment and crosses the uid boundary through ``--preserve-env=<names>``,
+    so no secret value appears in any process argument vector or the command line
+    sudo logs. ``sudo``'s ``env_reset`` drops everything else from the launcher
+    environment, so the child receives only sudo's reset variables, the explicit
+    assignments, and the named secrets.
+    """
+    if not secret_environment:
+        raise ReplacementExecutorError("a secret launch requires at least one secret")
+    for key in (*environment, *secret_environment):
+        if _ENV_KEY_RE.fullmatch(key) is None:
+            raise ReplacementExecutorError("untrusted environment carries an invalid variable name")
+    if set(environment) & set(secret_environment) or "PATH" in secret_environment:
+        raise ReplacementExecutorError("a secret may not shadow a public launcher variable")
+    secrets = [value for value in secret_environment.values() if value]
+    if len(secrets) != len(secret_environment):
+        raise ReplacementExecutorError("a secret launch requires non-empty secret values")
+    assignments = tuple(f"{key}={environment[key]}" for key in sorted(environment))
+    command = (
+        "sudo", "-n", f"--preserve-env={','.join(sorted(secret_environment))}", "-u", user, "--",
+        "/usr/bin/env", *assignments, *argv,
+    )  # fmt: skip
+    if any(secret in part for secret in secrets for part in command):
+        raise ReplacementExecutorError("a secret value would appear in the launcher argument vector")
+    return command, {**SUDO_ENVIRONMENT, **secret_environment}
+
+
+def run_privileged(*args: str, allowed_returncodes: tuple[int, ...] = (0,)) -> None:
+    """One non-interactive ``sudo`` operation with a secret-free launcher environment."""
+    completed = subprocess.run(
+        ("sudo", "-n", *args), env=dict(SUDO_ENVIRONMENT), capture_output=True, check=False, timeout=300
+    )
+    if completed.returncode not in allowed_returncodes:
+        raise ReplacementExecutorError(f"isolation operation failed: {args[0]}")
+
+
+def stop_isolated_processes(user: str) -> None:
+    """Kill everything the untrusted user left running (``pkill`` exits 1 when none)."""
+    run_privileged("pkill", "-KILL", "-u", user, allowed_returncodes=(0, 1))
+
+
+def new_isolation_root(prefix: str) -> Path:
+    """A private-but-traversable directory under which untrusted directories live."""
+    root = Path(tempfile.mkdtemp(prefix=prefix, dir=ISOLATION_ROOT))
+    root.chmod(0o711)
+    return root
+
+
+def remove_isolation_root(root: Path, user: str) -> None:
+    try:
+        stop_isolated_processes(user)
+    finally:
+        run_privileged("rm", "-rf", "--", str(root), allowed_returncodes=(0, 1))
+        shutil.rmtree(root, ignore_errors=True)
+
+
+def untrusted_environment(environ: Mapping[str, str], *, home: Path, pythonpath: Path) -> dict[str, str]:
+    """The explicit minimum environment for candidate-controlled validation."""
+    environment = {key: environ[key] for key in UNTRUSTED_ENV_ALLOWLIST if environ.get(key, "").strip()}
+    environment.update(
+        HOME=str(home),
+        PYTHONPATH=str(pythonpath),
+        GIT_CONFIG_GLOBAL=os.devnull,
+        GIT_CONFIG_NOSYSTEM="1",
+        GIT_TERMINAL_PROMPT="0",
+    )
+    return environment
+
+
+ISSUE_AGENT_BASE_BRANCH = "main"
+
+
+def _trusted_base_ref(repo: Path) -> str:
+    """The trusted repository's ref for the governed base branch, remote-tracking first."""
+    for candidate in (f"refs/remotes/origin/{ISSUE_AGENT_BASE_BRANCH}", f"refs/heads/{ISSUE_AGENT_BASE_BRANCH}"):
         try:
-            completed = subprocess.run(
+            _git_plumbing(repo, "rev-parse", "--verify", "--quiet", candidate)
+        except ReplacementExecutorError:
+            continue
+        return candidate
+    raise ReplacementExecutorError("trusted checkout has no governed base branch")
+
+
+def _run_pre_push_safety(
+    repo: Path, *, validated: ValidatedReplacementResult, head: str, push_url: str, isolation_user: str
+) -> None:
+    """Run the trusted pre-push hook on exact candidate content as the untrusted user.
+
+    The hook executes candidate-controlled repository scripts. It runs in a
+    standalone clone owned by the isolation user, with an explicit allowlist
+    environment, so no credential of the validating job -- in its own
+    environment or readable from any trusted process -- is available to it.
+    """
+    user = require_isolation_user(isolation_user)
+    hook = _git_plumbing(repo, "show", f"{validated.base_sha}:.githooks/pre-push").encode()
+    ref = f"refs/hunter/candidate-safety/{head}"
+    root = new_isolation_root("hunter-candidate-safety-")
+    candidate, home, hook_path = root / "candidate", root / "home", root / "pre-push"
+    try:
+        _git_plumbing(repo, "update-ref", ref, head)
+        _git_plumbing(
+            repo, "-c", "core.hooksPath=/dev/null", "clone", "--quiet", "--no-hardlinks", "--no-checkout",
+            str(repo), str(candidate),
+        )  # fmt: skip
+        _git_plumbing(candidate, "-c", "core.hooksPath=/dev/null", "fetch", "--quiet", "origin", ref)
+        # The trusted checkout is pinned to an exact SHA (detached), so the clone
+        # gets the governed base branch from its fetched remote-tracking ref.
+        _git_plumbing(
+            candidate, "-c", "core.hooksPath=/dev/null", "fetch", "--quiet", "origin",
+            f"+{_trusted_base_ref(repo)}:refs/remotes/origin/{ISSUE_AGENT_BASE_BRANCH}",
+        )  # fmt: skip
+        _git_plumbing(candidate, "-c", "core.hooksPath=/dev/null", "checkout", "--quiet", "--detach", head)
+        home.mkdir(mode=0o700)
+        hook_path.write_bytes(hook)
+        hook_path.chmod(0o755)
+        run_privileged("chown", "-R", user, str(candidate), str(home))
+        line = f"refs/heads/{validated.branch} {head} refs/heads/{validated.branch} {'0' * 40}\n"
+        completed = subprocess.run(
+            isolated_command(
+                user,
+                untrusted_environment(os.environ, home=home, pythonpath=candidate / "src"),
                 (str(hook_path), "origin", push_url),
-                cwd=worktree,
-                env=env,
-                input=line.encode(),
-                capture_output=True,
-                check=False,
-                timeout=900,
+            ),
+            cwd=candidate,
+            env=dict(SUDO_ENVIRONMENT),
+            input=line.encode(),
+            capture_output=True,
+            check=False,
+            timeout=900,
+        )
+        if completed.returncode != 0:
+            detail = (
+                completed.stderr.decode(errors="replace").strip() or completed.stdout.decode(errors="replace").strip()
             )
-            if completed.returncode != 0:
-                detail = (
-                    completed.stderr.decode(errors="replace").strip()
-                    or completed.stdout.decode(errors="replace").strip()
-                )
-                raise ReplacementExecutorError("candidate pre-push safety failed: " + (detail or "unknown failure"))
+            raise ReplacementExecutorError("candidate pre-push safety failed: " + (detail or "unknown failure"))
+    finally:
+        try:
+            remove_isolation_root(root, user)
         finally:
-            _git_plumbing(repo, "-c", "core.hooksPath=/dev/null", "worktree", "remove", "--force", str(worktree))
+            _git_plumbing(repo, "update-ref", "-d", ref)
 
 
 def publish_create_only(
@@ -355,9 +581,18 @@ def publish_create_only(
     *,
     validated: ValidatedReplacementResult,
     verified_receipt: ReplacementValidationReceipt,
+    safety_tree: str,
     signing_key: str = "",
 ) -> ReplacementPublication:
-    """Publish validated data under a create-only lease; never execute candidate content."""
+    """Publish validated data under a create-only lease; never execute candidate content.
+
+    ``safety_tree`` is the tree that ``run_credential_free_candidate_safety``
+    proved in its credential-free boundary. The publisher never runs the
+    candidate's pre-push scripts itself: it only refuses a signed commit whose
+    tree is not exactly that proven tree.
+    """
+    if re.fullmatch(r"[0-9a-f]{40}", safety_tree or "") is None:
+        raise ReplacementExecutorError("publication requires the exact credential-free safety tree")
     if validated.rehearsal:
         raise ReplacementExecutorError("rehearsal result cannot be published")
     if not publisher_environment_is_safe(os.environ):
@@ -378,7 +613,8 @@ def publish_create_only(
     if remote:
         raise ReplacementExecutorError("authorization branch already exists; create-only publication refused")
     head = build_signed_candidate_commit(root, validated=validated, signing_key=signing_key)
-    _run_pre_push_safety(root, validated=validated, head=head, push_url=push_url)
+    if candidate_tree(root, head) != safety_tree:
+        raise ReplacementExecutorError("signed candidate tree differs from the credential-free safety tree")
     _git_plumbing(
         root,
         "push",
