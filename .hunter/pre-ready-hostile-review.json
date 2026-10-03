@@ -292,6 +292,46 @@
         "severity": "blocking"
       },
       {
+        "evidence": "Copilot (head 3bbeeb02): publisher/validator model-authority check missed HUNTER_ISSUE_AGENT_EXECUTOR_MODEL_API_KEY.",
+        "id": "F-10",
+        "resolution": "resolved",
+        "resolution_evidence": {
+          "correction": "bd0dfae95c9b499e7e86791890ba911a89c279cb",
+          "regression_test": "tests/test_issue_agent_replacement_executor.py"
+        },
+        "severity": "blocking"
+      },
+      {
+        "evidence": "Copilot (head 3bbeeb02): oversized issuer acceptance truncated to a parseable prefix instead of refused.",
+        "id": "F-11",
+        "resolution": "resolved",
+        "resolution_evidence": {
+          "correction": "bd0dfae95c9b499e7e86791890ba911a89c279cb",
+          "regression_test": "tests/test_issue_agent_trigger.py"
+        },
+        "severity": "blocking"
+      },
+      {
+        "evidence": "Copilot (head 3bbeeb02): non-2xx issuer refusal text printed to the public Actions log.",
+        "id": "F-12",
+        "resolution": "resolved",
+        "resolution_evidence": {
+          "correction": "bd0dfae95c9b499e7e86791890ba911a89c279cb",
+          "regression_test": "tests/test_issue_agent_trigger.py"
+        },
+        "severity": "blocking"
+      },
+      {
+        "evidence": "Copilot (head 3bbeeb02): claimed the isolated pre-push would always fail without a GitHub token. Not reproducible: the real trusted hook passed end to end with no token and a local-clone origin (exit 0); the token is reached only by the non-blocking review-state report, now pinned by a regression.",
+        "id": "F-13",
+        "resolution": "resolved",
+        "resolution_evidence": {
+          "correction": "bd0dfae95c9b499e7e86791890ba911a89c279cb",
+          "regression_test": "tests/test_issue_agent_github_execution.py"
+        },
+        "severity": "non-blocking"
+      },
+      {
         "evidence": "Copilot exact-head review 5399341885 overview prose mentions 'four unresolved moderate issues' but enumerates no finding, inline comment or location ('Findings: None'); nothing actionable was identified.",
         "id": "F-9",
         "resolution": "unresolved",
@@ -313,7 +353,7 @@
         "status": "added"
       },
       {
-        "blob_sha": "f45d8d44de4f44498ec7f5cb9b965a3246f472f7",
+        "blob_sha": "c96bf5ad689336967d2c9e746559b842e5f3b038",
         "path": "tests/test_issue_agent_github_execution.py",
         "previous_path": "",
         "status": "added"
@@ -325,7 +365,7 @@
         "status": "modified"
       },
       {
-        "blob_sha": "961f8f2d453711bce0047c5c5f3292cb1caf8330",
+        "blob_sha": "439c7e79fe466f090f9fab410513dab25d9caf8a",
         "path": "docs/DEFECT_REGISTRY.json",
         "previous_path": "",
         "status": "modified"
@@ -361,7 +401,7 @@
         "status": "modified"
       },
       {
-        "blob_sha": "f92e5936e084aef47d0abe336fd6a05a4bcd55ff",
+        "blob_sha": "c95147946898ef4ef73b2bb0d066beaf25a5432c",
         "path": "scripts/hunter_issue_agent_trigger.py",
         "previous_path": "",
         "status": "modified"
@@ -379,7 +419,7 @@
         "status": "modified"
       },
       {
-        "blob_sha": "860cfed25bd0004e484cf97f47dd84569f51af82",
+        "blob_sha": "53f10dd676cabac35b5c6b9cfb6bfef76d40d3a1",
         "path": "src/hunter/automation/issue_agent_replacement_executor.py",
         "previous_path": "",
         "status": "modified"
@@ -397,23 +437,23 @@
         "status": "modified"
       },
       {
-        "blob_sha": "c038d2fd0a43868d42a2b58910ddc4096b2ab733",
+        "blob_sha": "c326d97e87ee940eeaab63a3366610f417cee629",
         "path": "tests/test_issue_agent_replacement_executor.py",
         "previous_path": "",
         "status": "modified"
       },
       {
-        "blob_sha": "38cfa3da50c9e74e4797cbc958fe2dd56f559791",
+        "blob_sha": "7cd641720fbd17479290e13c5cbddc24b9ea52a5",
         "path": "tests/test_issue_agent_trigger.py",
         "previous_path": "",
         "status": "modified"
       }
     ],
-    "review_target_digest": "ef95e146b1b6993926f7bff8d3714524a871110f4209e3fe5751ee8cb6123c4a"
+    "review_target_digest": "4955d78bd5538f198c5e476c4362425ed2a8d0e811f4aae3f5c3d84792580bc1"
   },
-  "review_id": "a44399f311852e69b90bea82c812a9255d4a2f1cc60ceff442f6d6bfa74617d2",
+  "review_id": "43404fe35b27e4138b82bd97c51cde2ec694e76e9c8835078859a7e072a1361d",
   "review_request": {
-    "claims_id": "a44399f311852e69b90bea82c812a9255d4a2f1cc60ceff442f6d6bfa74617d2",
+    "claims_id": "43404fe35b27e4138b82bd97c51cde2ec694e76e9c8835078859a7e072a1361d",
     "schema": "hunter.review-request.v1"
   },
   "schema": "hunter.pre-ready-hostile-review.v1"
