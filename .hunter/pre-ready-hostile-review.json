@@ -322,6 +322,26 @@
         "severity": "blocking"
       },
       {
+        "evidence": "Copilot PRRT_kwDOTRDHr86oouCt (head b5337d13): one-active-PR check not atomic with POST /pulls; concurrent runs for one Issue could both create a PR.",
+        "id": "F-14",
+        "resolution": "resolved",
+        "resolution_evidence": {
+          "correction": "f8a5ac9088d29cb4b35a33de2e8b0feaea5e87f5",
+          "regression_test": "tests/test_issue_agent_candidate_pr.py"
+        },
+        "severity": "blocking"
+      },
+      {
+        "evidence": "Copilot PRRT_kwDOTRDHr86oouC9 (head b5337d13): publisher could fetch and publish after result acceptance without a runtime-recorded validation proof.",
+        "id": "F-15",
+        "resolution": "resolved",
+        "resolution_evidence": {
+          "correction": "f8a5ac9088d29cb4b35a33de2e8b0feaea5e87f5",
+          "regression_test": "tests/test_issue_agent_github_execution.py"
+        },
+        "severity": "blocking"
+      },
+      {
         "evidence": "Copilot (head 3bbeeb02): claimed the isolated pre-push would always fail without a GitHub token. Not reproducible: the real trusted hook passed end to end with no token and a local-clone origin (exit 0); the token is reached only by the non-blocking review-state report, now pinned by a regression.",
         "id": "F-13",
         "resolution": "resolved",
@@ -341,22 +361,28 @@
     "issue": "557",
     "review_target": [
       {
-        "blob_sha": "9c65e25f06d9ebe7d33f3bb7ef768b8179caa279",
+        "blob_sha": "bee67259b9aa84b081e5419ccf963026b213b7b8",
         "path": "scripts/hunter_issue_agent_github_executor.py",
         "previous_path": "",
         "status": "added"
       },
       {
-        "blob_sha": "fcab68d1c5ab60f7281f0c7652511ee21fa5314c",
+        "blob_sha": "81d23861da34b861064fd92dd596feb4d8f72078",
         "path": "src/hunter/automation/issue_agent_github_execution.py",
         "previous_path": "",
         "status": "added"
       },
       {
-        "blob_sha": "c96bf5ad689336967d2c9e746559b842e5f3b038",
+        "blob_sha": "2712b0c47ea59cc81bf0755956216d6d3ecc2ceb",
         "path": "tests/test_issue_agent_github_execution.py",
         "previous_path": "",
         "status": "added"
+      },
+      {
+        "blob_sha": "1519750e7b1309c1af009f6bc22d032c61cd952e",
+        "path": ".github/workflows/hunter-issue-agent-candidate-pr.yml",
+        "previous_path": "",
+        "status": "modified"
       },
       {
         "blob_sha": "c5377d6a6e0bd7030bda371706feccadb61ed488",
@@ -365,13 +391,13 @@
         "status": "modified"
       },
       {
-        "blob_sha": "439c7e79fe466f090f9fab410513dab25d9caf8a",
+        "blob_sha": "493e6a43536a4bed36765818b5c58304e916c2a7",
         "path": "docs/DEFECT_REGISTRY.json",
         "previous_path": "",
         "status": "modified"
       },
       {
-        "blob_sha": "2a09dcdc96ad8757a83af491e3ea0e730b8e70d8",
+        "blob_sha": "db1c3ba37bf18edfd1b3815071b1a998933c0d34",
         "path": "docs/ISSUE_AGENT_EXECUTION_CONTRACT.md",
         "previous_path": "",
         "status": "modified"
@@ -383,7 +409,7 @@
         "status": "modified"
       },
       {
-        "blob_sha": "23ca3d7157689c521c049d101ed9a2b14392c068",
+        "blob_sha": "38224519bdcbac5529235be462dcf954366e8648",
         "path": "scripts/hunter_issue_agent_candidate_pr.py",
         "previous_path": "",
         "status": "modified"
@@ -425,6 +451,12 @@
         "status": "modified"
       },
       {
+        "blob_sha": "7ada97cd7352ded511ba134ff229a360075b43d9",
+        "path": "tests/test_issue_agent_candidate_pr.py",
+        "previous_path": "",
+        "status": "modified"
+      },
+      {
         "blob_sha": "8e0f26fdff251e3ac0e78999fd84c666d6aceadc",
         "path": "tests/test_issue_agent_candidate_topology.py",
         "previous_path": "",
@@ -449,11 +481,11 @@
         "status": "modified"
       }
     ],
-    "review_target_digest": "4955d78bd5538f198c5e476c4362425ed2a8d0e811f4aae3f5c3d84792580bc1"
+    "review_target_digest": "e7165f895533840fcdd1ac08ab396bda3a07a97cf66684c0c0d4db979821e1cc"
   },
-  "review_id": "43404fe35b27e4138b82bd97c51cde2ec694e76e9c8835078859a7e072a1361d",
+  "review_id": "8f036618afbbb13bb1c0ca7db830cf98c2dbabd1d1071ff556c46b70a5b3a374",
   "review_request": {
-    "claims_id": "43404fe35b27e4138b82bd97c51cde2ec694e76e9c8835078859a7e072a1361d",
+    "claims_id": "8f036618afbbb13bb1c0ca7db830cf98c2dbabd1d1071ff556c46b70a5b3a374",
     "schema": "hunter.review-request.v1"
   },
   "schema": "hunter.pre-ready-hostile-review.v1"
