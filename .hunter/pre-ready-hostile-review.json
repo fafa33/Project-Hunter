@@ -342,6 +342,46 @@
         "severity": "blocking"
       },
       {
+        "evidence": "Copilot PRRT_kwDOTRDHr86oqMIR (head ee74b21d): OIDC token response truncated at 64 KiB instead of refused.",
+        "id": "F-16",
+        "resolution": "resolved",
+        "resolution_evidence": {
+          "correction": "81f4f4c482f6552ad47359e00c373f7ce9d63ba8",
+          "regression_test": "tests/test_issue_agent_github_execution.py"
+        },
+        "severity": "blocking"
+      },
+      {
+        "evidence": "Copilot PRRT_kwDOTRDHr86oqMIf (head ee74b21d): syntactic refusal filter let Issue-derived uppercase text reach the public log.",
+        "id": "F-17",
+        "resolution": "resolved",
+        "resolution_evidence": {
+          "correction": "81f4f4c482f6552ad47359e00c373f7ce9d63ba8",
+          "regression_test": "tests/test_issue_agent_github_execution.py"
+        },
+        "severity": "blocking"
+      },
+      {
+        "evidence": "Copilot PRRT_kwDOTRDHr86oqMIp (head ee74b21d): model API key serialized into the sudo/env argument vector.",
+        "id": "F-18",
+        "resolution": "resolved",
+        "resolution_evidence": {
+          "correction": "81f4f4c482f6552ad47359e00c373f7ce9d63ba8",
+          "regression_test": "tests/test_issue_agent_github_execution.py"
+        },
+        "severity": "blocking"
+      },
+      {
+        "evidence": "Sonar githubactions:S8264 x2 and pythonsecurity:S5131 on new code (security rating E).",
+        "id": "F-19",
+        "resolution": "resolved",
+        "resolution_evidence": {
+          "correction": "81f4f4c482f6552ad47359e00c373f7ce9d63ba8",
+          "regression_test": "tests/test_issue_agent_github_execution.py"
+        },
+        "severity": "blocking"
+      },
+      {
         "evidence": "Copilot (head 3bbeeb02): claimed the isolated pre-push would always fail without a GitHub token. Not reproducible: the real trusted hook passed end to end with no token and a local-clone origin (exit 0); the token is reached only by the non-blocking review-state report, now pinned by a regression.",
         "id": "F-13",
         "resolution": "resolved",
@@ -361,25 +401,25 @@
     "issue": "557",
     "review_target": [
       {
-        "blob_sha": "bee67259b9aa84b081e5419ccf963026b213b7b8",
+        "blob_sha": "d84a341f5533d6fc5240f84ac21680651ec19a27",
         "path": "scripts/hunter_issue_agent_github_executor.py",
         "previous_path": "",
         "status": "added"
       },
       {
-        "blob_sha": "81d23861da34b861064fd92dd596feb4d8f72078",
+        "blob_sha": "53a80122f1b11654bad797dc944b812d7fcb5802",
         "path": "src/hunter/automation/issue_agent_github_execution.py",
         "previous_path": "",
         "status": "added"
       },
       {
-        "blob_sha": "2712b0c47ea59cc81bf0755956216d6d3ecc2ceb",
+        "blob_sha": "8fc3d2d37a5b504bfbab67fb59b8836507635823",
         "path": "tests/test_issue_agent_github_execution.py",
         "previous_path": "",
         "status": "added"
       },
       {
-        "blob_sha": "1519750e7b1309c1af009f6bc22d032c61cd952e",
+        "blob_sha": "dd3b40f1517dba23f053bce89f70091ad1e23e86",
         "path": ".github/workflows/hunter-issue-agent-candidate-pr.yml",
         "previous_path": "",
         "status": "modified"
@@ -391,7 +431,7 @@
         "status": "modified"
       },
       {
-        "blob_sha": "493e6a43536a4bed36765818b5c58304e916c2a7",
+        "blob_sha": "d2755c2d865ec966e502bae38ec6ce2db6520639",
         "path": "docs/DEFECT_REGISTRY.json",
         "previous_path": "",
         "status": "modified"
@@ -427,13 +467,13 @@
         "status": "modified"
       },
       {
-        "blob_sha": "c95147946898ef4ef73b2bb0d066beaf25a5432c",
+        "blob_sha": "b9b429ef4c545dd3467e5deb287501f421517790",
         "path": "scripts/hunter_issue_agent_trigger.py",
         "previous_path": "",
         "status": "modified"
       },
       {
-        "blob_sha": "b86d851b0f1c9454744c6b179dd0a47ad9185ef7",
+        "blob_sha": "4030bb1599e9cad830a1eef20199bf64e94421f2",
         "path": "scripts/issue_agent_edge_transport.py",
         "previous_path": "",
         "status": "modified"
@@ -445,13 +485,13 @@
         "status": "modified"
       },
       {
-        "blob_sha": "53f10dd676cabac35b5c6b9cfb6bfef76d40d3a1",
+        "blob_sha": "e9015eb17034c46c34c8edeb8bdd886a08dfc51f",
         "path": "src/hunter/automation/issue_agent_replacement_executor.py",
         "previous_path": "",
         "status": "modified"
       },
       {
-        "blob_sha": "7ada97cd7352ded511ba134ff229a360075b43d9",
+        "blob_sha": "f8b029725f6cbaa59c82f248908830a797c7e988",
         "path": "tests/test_issue_agent_candidate_pr.py",
         "previous_path": "",
         "status": "modified"
@@ -481,11 +521,11 @@
         "status": "modified"
       }
     ],
-    "review_target_digest": "e7165f895533840fcdd1ac08ab396bda3a07a97cf66684c0c0d4db979821e1cc"
+    "review_target_digest": "631f03241cd15793a8b649b6ee7e4d1f346674b949c398601a41a99e1195b355"
   },
-  "review_id": "8f036618afbbb13bb1c0ca7db830cf98c2dbabd1d1071ff556c46b70a5b3a374",
+  "review_id": "b9749c37fdc0eef3c81b2d9644d8d176ea9883b9182907ae4bffc696efd08b1a",
   "review_request": {
-    "claims_id": "8f036618afbbb13bb1c0ca7db830cf98c2dbabd1d1071ff556c46b70a5b3a374",
+    "claims_id": "b9749c37fdc0eef3c81b2d9644d8d176ea9883b9182907ae4bffc696efd08b1a",
     "schema": "hunter.review-request.v1"
   },
   "schema": "hunter.pre-ready-hostile-review.v1"
