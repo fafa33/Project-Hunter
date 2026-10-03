@@ -215,8 +215,9 @@ class GitHubActionsOidcVerifier:
 
     The token must be RS256-signed by GitHub's issuer key, carry this
     repository's audience, be time-valid, and name: this repository and owner,
-    the trusted trigger workflow on the default branch (directly, never via a
-    reusable workflow), an ``issues`` event triggered by the owner, and a
+    the trusted trigger workflow on the default branch (``workflow_ref``; a
+    present ``job_workflow_ref`` must name that same workflow, so a reusable
+    workflow is refused), an ``issues`` event triggered by the owner, and a
     GitHub-hosted runner. Anything else fails closed before any state is read.
     """
 
@@ -303,12 +304,17 @@ class GitHubActionsOidcVerifier:
             "ref_type": "branch",
             "event_name": "issues",
             "workflow_ref": self._workflow_ref,
-            "job_workflow_ref": self._workflow_ref,
             "runner_environment": "github-hosted",
         }
         for name, value in expected.items():
             if claims.get(name) != value:
                 raise ExecutionBindingError(f"OIDC token {name} is not the trusted execution identity")
+        # GitHub documents job_workflow_ref only for jobs running a reusable
+        # workflow; the trigger's jobs run directly, so workflow_ref above is the
+        # applicable binding. When the claim is present it must name the same
+        # trusted workflow, so a job inside any reusable workflow still fails closed.
+        if "job_workflow_ref" in claims and claims["job_workflow_ref"] != self._workflow_ref:
+            raise ExecutionBindingError("OIDC token job_workflow_ref is not the trusted execution identity")
         run_id, run_attempt = claims.get("run_id"), claims.get("run_attempt")
         if not isinstance(run_id, str) or not isinstance(run_attempt, str):
             raise ExecutionBindingError("OIDC token does not name an exact workflow run")

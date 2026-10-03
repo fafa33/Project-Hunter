@@ -288,6 +288,10 @@ owner applies hunter-agent-execute
   fetch consumes the role (in flight), but a result is admissible only after the
   exact prompt was resolved and the handoff delivered. Malformed JWT `aud`/`nbf`
   claims fail closed.
+- **One immutable implementation per run.** Every job checks out `${{ github.workflow_sha }}`,
+  so execute, validate and publish cannot load diverging code if `main` advances mid-run.
+  `job_workflow_ref` is optional (GitHub sets it only for reusable workflows); when present it
+  must equal the trusted `workflow_ref`.
 - **Ledger.** The existing execution ledger is the only execution record. The hosted
   runtime is the existing fallback-runtime seam: the worker waits under the existing lease
   for one admissible result, records it in the #524 `ReplacementResultLedger`, and

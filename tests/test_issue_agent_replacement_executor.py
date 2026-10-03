@@ -521,3 +521,54 @@ def test_isolation_root_is_unique_private_and_never_writable_by_others(monkeypat
         assert info.st_uid == os.getuid()
         assert stat.S_IMODE(info.st_mode) == 0o711
         assert not info.st_mode & (stat.S_IWGRP | stat.S_IWOTH | stat.S_IRGRP | stat.S_IROTH)
+
+
+def test_candidate_clone_of_a_pinned_detached_checkout_still_has_the_governed_base(monkeypatch, tmp_path):
+    """Codex P2 consequence: an exact-SHA (detached) trusted checkout has no local main."""
+    import subprocess
+
+    import hunter.automation.issue_agent_replacement_executor as core
+
+    repo, _first, ident = _git_repo_at_base(tmp_path)
+    env = {
+        "GIT_CONFIG_GLOBAL": "/dev/null",
+        "GIT_CONFIG_NOSYSTEM": "1",
+        "PATH": "/usr/bin:/bin:/usr/local/bin",
+        **ident,
+    }
+    git = lambda *a: subprocess.run(  # noqa: E731
+        ("git", *a), cwd=repo, env=env, check=True, capture_output=True, text=True
+    ).stdout.strip()
+    (repo / ".githooks").mkdir()
+    (repo / ".githooks" / "pre-push").write_text("#!/bin/sh\nexit 0\n")
+    git("add", ".githooks/pre-push")
+    git("commit", "-q", "-m", "trusted hook")
+    base = git("rev-parse", "HEAD")
+    # Shape of actions/checkout at an exact SHA with fetch-depth 0: detached HEAD,
+    # main only as a remote-tracking ref.
+    git("update-ref", "refs/remotes/origin/main", base)
+    git("checkout", "-q", "--detach", base)
+    for branch in git("for-each-ref", "--format=%(refname:short)", "refs/heads").split():
+        git("branch", "-q", "-D", branch)
+    (repo / "docs").mkdir()
+    (repo / "docs" / "x.md").write_text("candidate\n")
+    git("add", "docs/x.md")
+    head = git("commit-tree", git("write-tree"), "-p", base, "-m", "candidate")
+    git("reset", "-q", "--hard", base)
+    signed = _signed_at(base)
+    validated = core.validate_replacement_result(_result(signed), signed_authorization=signed, rehearsal=False)
+    report = tmp_path / "report"
+
+    def as_runner(_user, environment, argv):
+        script = f'git rev-parse HEAD origin/main > "{report}"'
+        return ("/usr/bin/env", "-i", *(f"{k}={v}" for k, v in environment.items()), "/bin/sh", "-c", script)
+
+    monkeypatch.setattr(core, "require_isolation_user", lambda user: user)
+    monkeypatch.setattr(core, "isolated_command", as_runner)
+    monkeypatch.setattr(core, "run_privileged", lambda *_a, **_k: None)
+    monkeypatch.setattr(core, "ISOLATION_ROOT", tmp_path)
+    core._run_pre_push_safety(
+        repo, validated=validated, head=head, push_url="https://github.com/x/y.git", isolation_user="u"
+    )
+    assert report.read_text().split() == [head, base]
+    assert git("for-each-ref", "refs/hunter") == ""

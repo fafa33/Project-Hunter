@@ -658,7 +658,7 @@ def test_workflow_runs_each_trust_domain_in_its_own_job() -> None:
         for step in job["steps"]:
             if str(step.get("uses", "")).startswith("actions/checkout"):
                 assert step["with"]["persist-credentials"] is False
-                assert step["with"]["ref"] == "${{ github.event.repository.default_branch }}"
+                assert step["with"]["ref"] == "${{ github.workflow_sha }}"
     # The publisher installs and runs nothing from the candidate.
     assert "pip install --disable-pip-version-check -e" not in json.dumps(jobs["publish"])
 
@@ -1063,3 +1063,48 @@ def test_job_scripts_take_no_file_path_from_arguments(capsys: Any) -> None:
             driver.main(["validate", "--authorization-id", "x", flag, "/tmp/x"])
     assert driver.main(["validate", "--authorization-id", "not-an-identity"]) == 2
     assert capsys.readouterr().out == ""
+
+
+# --- PR #558 Codex review: direct-workflow OIDC binding, pinned job checkouts ---
+
+
+def test_a_direct_workflow_token_without_job_workflow_ref_is_accepted() -> None:
+    """Codex P1: GitHub sets job_workflow_ref only for reusable workflows."""
+    claims = _verifier().verify(_token(job_workflow_ref=None), now=START)
+    assert claims.run == ("1001", "1")
+    assert _verifier().verify(_token(job_workflow_ref=WORKFLOW_REF), now=START).run == ("1001", "1")
+
+
+@pytest.mark.parametrize(
+    "job_workflow_ref",
+    [
+        "attacker/x/.github/workflows/reusable.yml@refs/heads/main",
+        f"{REPOSITORY}/.github/workflows/reusable.yml@refs/heads/main",
+        f"{REPOSITORY}/{TRIGGER_WORKFLOW_PATH}@refs/heads/other",
+        "",
+        7,
+        [WORKFLOW_REF],
+    ],
+)
+def test_a_present_job_workflow_ref_must_name_the_trusted_workflow(job_workflow_ref: Any) -> None:
+    with pytest.raises(ExecutionBindingError, match="job_workflow_ref"):
+        _verifier().verify(_token(job_workflow_ref=job_workflow_ref), now=START)
+
+
+def test_workflow_ref_remains_mandatory_without_job_workflow_ref() -> None:
+    for workflow_ref in (None, f"{REPOSITORY}/.github/workflows/other.yml@refs/heads/main"):
+        with pytest.raises(ExecutionBindingError, match="workflow_ref"):
+            _verifier().verify(_token(job_workflow_ref=None, workflow_ref=workflow_ref), now=START)
+
+
+def test_every_job_checkout_is_pinned_to_one_immutable_workflow_sha() -> None:
+    """Codex P2: execute/validate/publish cannot drift if main advances mid-run."""
+    refs = [
+        step["with"]["ref"]
+        for job in _jobs().values()
+        for step in job["steps"]
+        if str(step.get("uses", "")).startswith("actions/checkout")
+    ]
+    assert len(refs) == 4
+    assert set(refs) == {"${{ github.workflow_sha }}"}
+    assert "default_branch" not in WORKFLOW.read_text(encoding="utf-8")

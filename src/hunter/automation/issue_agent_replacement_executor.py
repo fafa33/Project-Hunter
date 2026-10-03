@@ -447,6 +447,20 @@ def untrusted_environment(environ: Mapping[str, str], *, home: Path, pythonpath:
     return environment
 
 
+ISSUE_AGENT_BASE_BRANCH = "main"
+
+
+def _trusted_base_ref(repo: Path) -> str:
+    """The trusted repository's ref for the governed base branch, remote-tracking first."""
+    for candidate in (f"refs/remotes/origin/{ISSUE_AGENT_BASE_BRANCH}", f"refs/heads/{ISSUE_AGENT_BASE_BRANCH}"):
+        try:
+            _git_plumbing(repo, "rev-parse", "--verify", "--quiet", candidate)
+        except ReplacementExecutorError:
+            continue
+        return candidate
+    raise ReplacementExecutorError("trusted checkout has no governed base branch")
+
+
 def _run_pre_push_safety(
     repo: Path, *, validated: ValidatedReplacementResult, head: str, push_url: str, isolation_user: str
 ) -> None:
@@ -469,6 +483,12 @@ def _run_pre_push_safety(
             str(repo), str(candidate),
         )  # fmt: skip
         _git_plumbing(candidate, "-c", "core.hooksPath=/dev/null", "fetch", "--quiet", "origin", ref)
+        # The trusted checkout is pinned to an exact SHA (detached), so the clone
+        # gets the governed base branch from its fetched remote-tracking ref.
+        _git_plumbing(
+            candidate, "-c", "core.hooksPath=/dev/null", "fetch", "--quiet", "origin",
+            f"+{_trusted_base_ref(repo)}:refs/remotes/origin/{ISSUE_AGENT_BASE_BRANCH}",
+        )  # fmt: skip
         _git_plumbing(candidate, "-c", "core.hooksPath=/dev/null", "checkout", "--quiet", "--detach", head)
         home.mkdir(mode=0o700)
         hook_path.write_bytes(hook)

@@ -562,6 +562,26 @@
       "guard": "AUTHORIZED -> HANDOFF_IN_FLIGHT (executor role consumed) -> HANDOFF_DELIVERED (handoff_delivered set under the lock only after the prompt resolved and the execution is not terminal) -> RESULT_ALLOWED. handle_result requires handoff_delivered; a failed resolution is terminal and never result-eligible.",
       "test": "tests/test_issue_agent_github_execution.py::test_no_result_is_accepted_while_the_handoff_is_in_flight",
       "status": "guarded"
+    },
+    {
+      "id": "PRH-071",
+      "class": "oidc-verifier-requires-claim-inapplicable-to-direct-workflows",
+      "source": "PR #558 Codex P1 review, 2026-10-03 (head 7da1de00): the verifier required job_workflow_ref, which GitHub sets only for jobs running a reusable workflow, so every token from the directly-run trigger jobs would have been refused and production could not pass its first fetch.",
+      "classification": "systemic",
+      "guard_boundary": "GitHubActionsOidcVerifier workflow identity binding",
+      "guard": "workflow_ref must name the trusted trigger workflow at refs/heads/main; job_workflow_ref is optional and, when present, must equal that same workflow_ref, so a reusable or foreign workflow, or a malformed value, still fails closed.",
+      "test": "tests/test_issue_agent_github_execution.py::test_a_direct_workflow_token_without_job_workflow_ref_is_accepted",
+      "status": "guarded"
+    },
+    {
+      "id": "PRH-072",
+      "class": "sequential-jobs-resolve-a-moving-branch-ref",
+      "source": "PR #558 Codex P2 review, 2026-10-03 (head 7da1de00): each job checked out the default branch by name, so if main advanced during the up-to-hour execute job, execute/validate/publish could run different implementations against single-use issuer roles.",
+      "classification": "systemic",
+      "guard_boundary": "trusted trigger workflow job checkouts",
+      "guard": "All four job checkouts use ref ${{ github.workflow_sha }}, the immutable commit of the workflow definition the run executes; the candidate safety clone takes the governed base branch from the trusted checkout's remote-tracking ref because an exact-SHA checkout is detached.",
+      "test": "tests/test_issue_agent_github_execution.py::test_every_job_checkout_is_pinned_to_one_immutable_workflow_sha",
+      "status": "guarded"
     }
   ],
   "families": [
@@ -1505,7 +1525,10 @@
         "tests/test_issue_agent_github_execution.py::test_production_composition_never_builds_the_legacy_railway_runtime",
         "tests/test_issue_agent_github_execution.py::test_production_main_enables_admission_only_for_the_github_runtime",
         "tests/test_issue_agent_github_execution.py::test_execution_routes_fail_closed_when_admission_is_retired",
-        "tests/test_issue_agent_github_execution.py::test_oidc_identity_must_be_the_trusted_trigger_run"
+        "tests/test_issue_agent_github_execution.py::test_oidc_identity_must_be_the_trusted_trigger_run",
+        "tests/test_issue_agent_github_execution.py::test_a_direct_workflow_token_without_job_workflow_ref_is_accepted",
+        "tests/test_issue_agent_github_execution.py::test_a_present_job_workflow_ref_must_name_the_trusted_workflow",
+        "tests/test_issue_agent_github_execution.py::test_every_job_checkout_is_pinned_to_one_immutable_workflow_sha"
       ],
       "lifecycle": "locally-enforced",
       "sources": [

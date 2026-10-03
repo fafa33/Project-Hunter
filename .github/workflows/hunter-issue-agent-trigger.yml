@@ -58,7 +58,9 @@ jobs:
       - name: Checkout trusted trigger implementation
         uses: actions/checkout@v7
         with:
-          ref: ${{ github.event.repository.default_branch }}
+          # One immutable commit for every job: the exact workflow definition this
+          # run executes, so jobs cannot load diverging code if main advances.
+          ref: ${{ github.workflow_sha }}
           persist-credentials: false
 
       - name: Set up Python
@@ -112,7 +114,9 @@ jobs:
       - name: Checkout trusted default-branch executor
         uses: actions/checkout@v7
         with:
-          ref: ${{ github.event.repository.default_branch }}
+          # One immutable commit for every job: the exact workflow definition this
+          # run executes, so jobs cannot load diverging code if main advances.
+          ref: ${{ github.workflow_sha }}
           path: engine
           persist-credentials: false
 
@@ -167,7 +171,9 @@ jobs:
       - name: Checkout trusted default-branch history
         uses: actions/checkout@v7
         with:
-          ref: ${{ github.event.repository.default_branch }}
+          # One immutable commit for every job: the exact workflow definition this
+          # run executes, so jobs cannot load diverging code if main advances.
+          ref: ${{ github.workflow_sha }}
           fetch-depth: 0
           persist-credentials: false
 
@@ -220,7 +226,9 @@ jobs:
       - name: Checkout trusted default-branch history
         uses: actions/checkout@v7
         with:
-          ref: ${{ github.event.repository.default_branch }}
+          # One immutable commit for every job: the exact workflow definition this
+          # run executes, so jobs cannot load diverging code if main advances.
+          ref: ${{ github.workflow_sha }}
           fetch-depth: 0
           persist-credentials: false
 
