@@ -122,3 +122,15 @@ def test_overview_v2_contradictory_blocking_prose_is_not_clear():
     ):
         body = PR553_OVERVIEW_BODY.replace("Root-of-trust signing-key changes require final human review.", prose)
         assert native_copilot_verdict(body) != "clear", prose
+
+
+def test_overview_v2_non_canonical_prose_is_not_clear_even_without_blocking_keyword():
+    for prose in (
+        "A critical security vulnerability must be fixed before merge.",
+        "An unresolved P1 issue remains.",
+        "Root-of-trust signing-key changes require final human review. An unresolved P1 issue remains.",
+        "root-of-trust signing-key changes require final human review.",
+        "",
+    ):
+        body = PR553_OVERVIEW_BODY.replace("Root-of-trust signing-key changes require final human review.", prose)
+        assert native_copilot_verdict(body) != "clear", prose
