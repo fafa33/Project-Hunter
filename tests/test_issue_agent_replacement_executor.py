@@ -504,3 +504,20 @@ def test_publisher_refuses_a_tree_the_safety_boundary_did_not_prove(monkeypatch,
     assert not any(call[0] == "push" for call in pushes)
     with pytest.raises(core.ReplacementExecutorError, match="exact credential-free safety tree"):
         core.publish_create_only(tmp_path, validated=validated, verified_receipt=receipt, safety_tree="")
+
+
+def test_isolation_root_is_unique_private_and_never_writable_by_others(monkeypatch, tmp_path):
+    """Sonar python:S5443 -- the untrusted root is a fresh mkdtemp directory, not a shared one."""
+    import os
+    import stat
+
+    import hunter.automation.issue_agent_replacement_executor as core
+
+    monkeypatch.setattr(core, "ISOLATION_ROOT", tmp_path)
+    first, second = core.new_isolation_root("hunter-test-"), core.new_isolation_root("hunter-test-")
+    assert first != second and first.parent == tmp_path
+    for root in (first, second):
+        info = root.stat()
+        assert info.st_uid == os.getuid()
+        assert stat.S_IMODE(info.st_mode) == 0o711
+        assert not info.st_mode & (stat.S_IWGRP | stat.S_IWOTH | stat.S_IRGRP | stat.S_IROTH)

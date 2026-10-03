@@ -360,8 +360,10 @@ def run_credential_free_candidate_safety(
     return candidate_tree(root, head)
 
 
-#: World-traversable parent for untrusted-code directories (GitHub-hosted Linux).
-ISOLATION_ROOT = Path("/tmp")
+#: Parent for untrusted-code directories. ``None`` uses the platform temporary
+#: directory; each root is created by ``mkdtemp`` (unpredictable name, owner-only)
+#: and only then opened to traversal (0711), never listing or writing by others.
+ISOLATION_ROOT: Path | None = None
 
 #: The only parent variables candidate-controlled code ever receives. This is an
 #: explicit allowlist, never a scrub of known secrets: anything not named here,
