@@ -416,10 +416,11 @@ def native_copilot_verdict(body: str, inline_comment_count: int = 0) -> str:
     if any(re.fullmatch(shape + metadata, normalized) for shape in verdict_shapes):
         return "clear"
     # ccr-overview-v2: the whole body must be the structured overview, its single
-    # Findings line must be the explicit trailing "None", and the heading text
-    # (e.g. "Needs a closer look") is not itself a finding.
+    # Findings line must be the explicit trailing "None", and only the observed
+    # non-blocking heading is supported ("Needs a closer look" is not itself a
+    # finding); any other heading stays unknown.
     overview = (
-        r"<!-- ccr-overview-v2 -->\n+## Copilot review overview\n+### [^\n]+\n+"
+        r"<!-- ccr-overview-v2 -->\n+## Copilot review overview\n+### 🔵 Needs a closer look\n+"
         r"(?:(?![#<*>`|-])[^\n]+\n)+\n"
         r"\*\*Review effort:\*\* (?:Lite|Standard|Deep)\n\*\*Findings:\*\* None"
     )

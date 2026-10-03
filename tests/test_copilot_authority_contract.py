@@ -106,3 +106,9 @@ def test_overview_v2_malformed_or_unknown_formats_are_not_clear():
     indented_marker = PR553_OVERVIEW_BODY.replace("<!-- ccr-overview-v2 -->", "    <!-- ccr-overview-v2 -->")
     for body in (no_marker, wrong_marker, no_findings, no_heading, indented_marker, "", "Findings: None"):
         assert native_copilot_verdict(body) != "clear", body
+
+
+def test_overview_v2_unsupported_heading_with_findings_none_is_not_clear():
+    for heading in ("🟣 Unknown status", "🟢 Approval recommended", "🔵 Needs a closer look extra", ""):
+        body = PR553_OVERVIEW_BODY.replace("### 🔵 Needs a closer look", f"### {heading}")
+        assert native_copilot_verdict(body) != "clear", heading
