@@ -413,7 +413,23 @@ def native_copilot_verdict(body: str, inline_comment_count: int = 0) -> str:
         r"- \*\*Comments generated:\*\* 0 new\n"
         r"- \*\*Review effort level:\*\* (?:Lite|Standard|Deep)\n</details>)?"
     )
-    return "clear" if any(re.fullmatch(shape + metadata, normalized) for shape in verdict_shapes) else "unknown"
+    if any(re.fullmatch(shape + metadata, normalized) for shape in verdict_shapes):
+        return "clear"
+    # ccr-overview-v2: the whole body must be the structured overview, its single
+    # Findings line must be the explicit trailing "None", and the heading text
+    # (e.g. "Needs a closer look") is not itself a finding.
+    overview = (
+        r"<!-- ccr-overview-v2 -->\n+## Copilot review overview\n+### [^\n]+\n+"
+        r"(?:(?![#<*>`|-])[^\n]+\n)+\n"
+        r"\*\*Review effort:\*\* (?:Lite|Standard|Deep)\n\*\*Findings:\*\* None"
+    )
+    if (
+        body.startswith("<!-- ccr-overview-v2 -->")
+        and len(re.findall(r"findings:", lower)) == 1
+        and re.fullmatch(overview, normalized)
+    ):
+        return "clear"
+    return "unknown"
 
 
 def native_codex_clear_review(body: str, head_sha: str) -> bool:
