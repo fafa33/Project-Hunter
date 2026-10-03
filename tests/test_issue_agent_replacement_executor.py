@@ -23,6 +23,8 @@ from hunter.automation.issue_agent_replacement_executor import (
 )
 from hunter.task_scope import TaskScopeContract
 
+SAFETY_TREE = "c" * 40
+
 
 def _signed():
     a = IssueAgentAuthorization(
@@ -194,7 +196,7 @@ def test_rehearsal_result_can_never_reach_publisher(monkeypatch, tmp_path):
         validated.authorization_id, validated.base_sha, validated.branch, "0" * 64, "v1"
     )
     with pytest.raises(core.ReplacementExecutorError, match="rehearsal result cannot be published"):
-        core.publish_create_only(tmp_path, validated=validated, verified_receipt=receipt)
+        core.publish_create_only(tmp_path, validated=validated, verified_receipt=receipt, safety_tree=SAFETY_TREE)
 
 
 def test_publisher_refuses_existing_branch_before_building_commit(monkeypatch, tmp_path):
@@ -215,7 +217,7 @@ def test_publisher_refuses_existing_branch_before_building_commit(monkeypatch, t
     monkeypatch.setattr(core, "_git_plumbing", fake_git)
     monkeypatch.setattr(core, "publisher_environment_is_safe", lambda _env: True)
     with pytest.raises(core.ReplacementExecutorError, match="already exists"):
-        core.publish_create_only(tmp_path, validated=validated, verified_receipt=receipt)
+        core.publish_create_only(tmp_path, validated=validated, verified_receipt=receipt, safety_tree=SAFETY_TREE)
     assert calls and calls[0][0] == "ls-remote"
     assert calls[0][1] == "https://github.com/fafa33/Project-Hunter.git"
 
@@ -230,14 +232,21 @@ def test_publisher_uses_data_only_git_plumbing_and_create_only_lease(monkeypatch
     calls = []
     monkeypatch.setattr(core, "publisher_environment_is_safe", lambda _env: True)
     monkeypatch.setattr(core, "build_signed_candidate_commit", lambda *_a, **_k: "b" * 40)
-    monkeypatch.setattr(core, "_run_pre_push_safety", lambda *_a, **_k: None)
+    monkeypatch.setattr(core, "candidate_tree", lambda *_a, **_k: SAFETY_TREE)
+
+    def candidate_code_must_not_run(*_a, **_k):
+        raise AssertionError("the publisher must never execute the candidate's pre-push scripts")
+
+    monkeypatch.setattr(core, "_run_pre_push_safety", candidate_code_must_not_run)
 
     def fake_git(_repo, *args, **_kwargs):
         calls.append(args)
         return ""
 
     monkeypatch.setattr(core, "_git_plumbing", fake_git)
-    publication = core.publish_create_only(tmp_path, validated=validated, verified_receipt=receipt)
+    publication = core.publish_create_only(
+        tmp_path, validated=validated, verified_receipt=receipt, safety_tree=SAFETY_TREE
+    )
     assert publication.head_sha == "b" * 40
     push = calls[-1]
     assert push[:3] == ("push", "--no-verify", f"--force-with-lease=refs/heads/{validated.branch}:")
@@ -276,7 +285,7 @@ def test_publisher_rejects_receipt_for_different_result(monkeypatch, tmp_path):
     )
     monkeypatch.setattr(core, "publisher_environment_is_safe", lambda _env: True)
     with pytest.raises(core.ReplacementExecutorError, match="does not bind"):
-        core.publish_create_only(tmp_path, validated=validated, verified_receipt=receipt)
+        core.publish_create_only(tmp_path, validated=validated, verified_receipt=receipt, safety_tree=SAFETY_TREE)
 
 
 def test_pre_push_safety_scrubs_publication_and_model_authority(monkeypatch, tmp_path):
@@ -304,11 +313,14 @@ def test_pre_push_safety_scrubs_publication_and_model_authority(monkeypatch, tmp
     monkeypatch.setattr(core.subprocess, "run", fake_run)
     monkeypatch.setenv("HUNTER_AGENT_GITHUB_PUSH_TOKEN", "write")
     monkeypatch.setenv("OPENAI_API_KEY", "model")
+    monkeypatch.setenv("ACTIONS_ID_TOKEN_REQUEST_TOKEN", "oidc")
+    monkeypatch.setenv("ACTIONS_ID_TOKEN_REQUEST_URL", "https://oidc.example")
     core._run_pre_push_safety(
         tmp_path, validated=validated, head="b" * 40, push_url="https://github.com/fafa33/Project-Hunter.git"
     )
     assert "HUNTER_AGENT_GITHUB_PUSH_TOKEN" not in seen
     assert "OPENAI_API_KEY" not in seen
+    assert "ACTIONS_ID_TOKEN_REQUEST_TOKEN" not in seen and "ACTIONS_ID_TOKEN_REQUEST_URL" not in seen
     assert seen["GIT_TERMINAL_PROMPT"] == "0"
 
 
@@ -322,13 +334,112 @@ def test_publisher_remote_is_derived_from_signed_repository(monkeypatch, tmp_pat
     seen = []
     monkeypatch.setattr(core, "publisher_environment_is_safe", lambda _env: True)
     monkeypatch.setattr(core, "build_signed_candidate_commit", lambda *_a, **_k: "b" * 40)
-    monkeypatch.setattr(core, "_run_pre_push_safety", lambda *_a, **_k: None)
+    monkeypatch.setattr(core, "candidate_tree", lambda *_a, **_k: SAFETY_TREE)
+
+    def candidate_code_must_not_run(*_a, **_k):
+        raise AssertionError("the publisher must never execute the candidate's pre-push scripts")
+
+    monkeypatch.setattr(core, "_run_pre_push_safety", candidate_code_must_not_run)
 
     def fake_git(_repo, *args, **_kwargs):
         seen.append(args)
         return ""
 
     monkeypatch.setattr(core, "_git_plumbing", fake_git)
-    core.publish_create_only(tmp_path, validated=validated, verified_receipt=receipt)
+    core.publish_create_only(tmp_path, validated=validated, verified_receipt=receipt, safety_tree=SAFETY_TREE)
     assert seen[0][1] == "https://github.com/fafa33/Project-Hunter.git"
     assert seen[-1][3] == "https://github.com/fafa33/Project-Hunter.git"
+
+
+# --- Issue #557: candidate safety moved out of the credential-bearing publisher ---
+
+
+def _git_repo_at_base(tmp_path):
+    import subprocess
+
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    env = {"GIT_CONFIG_GLOBAL": "/dev/null", "GIT_CONFIG_NOSYSTEM": "1", "PATH": "/usr/bin:/bin:/usr/local/bin"}
+    ident = {
+        "GIT_AUTHOR_NAME": "Farhad5778",
+        "GIT_AUTHOR_EMAIL": "34549283+fafa33@users.noreply.github.com",
+        "GIT_COMMITTER_NAME": "Farhad5778",
+        "GIT_COMMITTER_EMAIL": "34549283+fafa33@users.noreply.github.com",
+    }
+    run = lambda *a: subprocess.run(  # noqa: E731
+        ("git", *a), cwd=repo, env={**env, **ident}, check=True, capture_output=True, text=True
+    ).stdout.strip()
+    run("init", "-q")
+    (repo / "README.md").write_text("base\n", encoding="utf-8")
+    run("add", "README.md")
+    run("commit", "-q", "-m", "base")
+    return repo, run("rev-parse", "HEAD"), ident
+
+
+def _signed_at(base_sha):
+    s = _signed()
+    scope = TaskScopeContract(
+        task_id=s.authorization.authorization_id,
+        branch_pattern="issue-523-*",
+        base_ref="main",
+        base_sha=base_sha,
+        allowed_paths=("docs/",),
+        prohibited_paths=(),
+    )
+    return SignedIssueAgentAuthorization(s.authorization, scope, "00" * 64)
+
+
+def test_credential_free_safety_refuses_any_publication_credential(monkeypatch, tmp_path):
+    import hunter.automation.issue_agent_replacement_executor as core
+
+    signed = _signed()
+    validated = core.validate_replacement_result(_result(signed), signed_authorization=signed, rehearsal=False)
+    monkeypatch.setattr(core, "_git_plumbing", lambda *_a, **_k: pytest.fail("nothing may run"))
+    for name in ("HUNTER_ISSUE_AGENT_PUBLISHER_PUSH_TOKEN", "HUNTER_ISSUE_AGENT_PUBLISHER_SIGNING_KEY", "GITHUB_TOKEN"):
+        monkeypatch.setenv(name, "credential")
+        with pytest.raises(core.ReplacementExecutorError, match="publication authority"):
+            core.run_credential_free_candidate_safety(tmp_path, validated=validated)
+        monkeypatch.delenv(name)
+
+
+def test_credential_free_safety_runs_hook_on_unsigned_exact_tree(monkeypatch, tmp_path):
+    import subprocess
+
+    import hunter.automation.issue_agent_replacement_executor as core
+
+    repo, base, ident = _git_repo_at_base(tmp_path)
+    for key, value in ident.items():
+        monkeypatch.setenv(key, value)
+    signed = _signed_at(base)
+    validated = core.validate_replacement_result(_result(signed), signed_authorization=signed, rehearsal=False)
+    seen = {}
+
+    def fake_safety(root, *, validated, head, push_url):
+        seen.update(head=head, push_url=push_url)
+
+    monkeypatch.setattr(core, "_run_pre_push_safety", fake_safety)
+    tree = core.run_credential_free_candidate_safety(repo, validated=validated)
+    show = lambda *a: subprocess.run(("git", *a), cwd=repo, capture_output=True, text=True).stdout  # noqa: E731
+    assert show("rev-parse", f"{seen['head']}^{{tree}}").strip() == tree
+    assert "gpgsig" not in show("cat-file", "commit", seen["head"])
+    assert show("show", f"{tree}:docs/x.md") == "safe candidate\n"
+    assert seen["push_url"] == "https://github.com/fafa33/Project-Hunter.git"
+
+
+def test_publisher_refuses_a_tree_the_safety_boundary_did_not_prove(monkeypatch, tmp_path):
+    import hunter.automation.issue_agent_replacement_executor as core
+
+    signed = _signed()
+    doc = _result(signed)
+    validated = core.validate_replacement_result(doc, signed_authorization=signed, rehearsal=False)
+    receipt = core.validation_receipt(doc, signed_authorization=signed, validation_definition="v1")
+    pushes = []
+    monkeypatch.setattr(core, "publisher_environment_is_safe", lambda _env: True)
+    monkeypatch.setattr(core, "build_signed_candidate_commit", lambda *_a, **_k: "b" * 40)
+    monkeypatch.setattr(core, "candidate_tree", lambda *_a, **_k: "d" * 40)
+    monkeypatch.setattr(core, "_git_plumbing", lambda _r, *args, **_k: pushes.append(args) or "")
+    with pytest.raises(core.ReplacementExecutorError, match="differs from the credential-free safety tree"):
+        core.publish_create_only(tmp_path, validated=validated, verified_receipt=receipt, safety_tree=SAFETY_TREE)
+    assert not any(call[0] == "push" for call in pushes)
+    with pytest.raises(core.ReplacementExecutorError, match="exact credential-free safety tree"):
+        core.publish_create_only(tmp_path, validated=validated, verified_receipt=receipt, safety_tree="")

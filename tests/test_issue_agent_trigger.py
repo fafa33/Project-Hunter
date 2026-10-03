@@ -349,6 +349,9 @@ def test_post_authorization_passes_explicit_timeout_to_opener(monkeypatch) -> No
         def __exit__(self, exc_type, exc, tb):
             return False
 
+        def read(self, _limit: int = -1) -> bytes:
+            return b""
+
     class _Opener:
         def open(self, request, timeout):
             observed["request"] = request
@@ -380,6 +383,9 @@ def test_post_authorization_uses_runtime_aligned_default_timeout(monkeypatch) ->
 
         def __exit__(self, exc_type, exc, tb):
             return False
+
+        def read(self, _limit: int = -1) -> bytes:
+            return b""
 
     class _Opener:
         def open(self, request, timeout):

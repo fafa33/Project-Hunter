@@ -27,9 +27,11 @@ is implemented these tests fail as tests rather than as collection errors.
 
 from __future__ import annotations
 
+import dataclasses
 import fnmatch
 import importlib
 import json
+import os
 import subprocess
 import sys
 import time
@@ -65,6 +67,7 @@ from hunter.automation.issue_agent_execution import (
     SignedIssueAgentAuthorization,
     issue_agent_document_id,
 )
+from hunter.automation.issue_agent_workspace import IssueAgentWorkspaceRuntime
 
 CANONICAL_REMOTE = f"https://github.com/{REPOSITORY}.git"
 ISSUE_TEXT = "src/hunter/example.py::apply_fix must preserve the governed authority boundary."
@@ -301,7 +304,18 @@ class Topology:
             provenance_resolver=_provenance,
             clock=clock,
         )
-        self.services = issuer.compose_services(self.configuration)
+        # Issue #557: production no longer composes the retired Railway
+        # workspace runtime. This harness keeps proving its topology invariants
+        # by injecting it explicitly (DFF-027: test harnesses only).
+        composed = issuer.compose_services(self.configuration)
+        self.services = dataclasses.replace(
+            composed,
+            fallback=IssueAgentWorkspaceRuntime(
+                workspace_root=self.configuration.repository_checkout,
+                repository=self.configuration.repository,
+                environ=os.environ,
+            ),
+        )
         self.webhook = Webhook(self.services)
         self.ledger = IssueAgentExecutionLedger(self.database)
         self.authorization_id = _authorization_id(document)

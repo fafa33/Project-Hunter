@@ -512,6 +512,26 @@
       "guard": "A trusted validation harness must derive each scenario's assertions from an authoritative production contract or an already-observable production invariant, and must never require an API or an execution the production code does not implement. Scenario A asserted the candidate's review opportunity equals a reviewer-pool worst-case derivation, calling hunter_review_orchestrator.independent_review_opportunity_seconds and hunter_pre_ready_review.reviewer_chain_worst_case_seconds; neither symbol has ever existed on any commit, and production's own documented contract is only that one global opportunity budget (INDEPENDENT_REVIEW_OPPORTUNITY_SECONDS) must never leave an exact head pending forever. Scenario B pinned the combined-status read to permanently return absent and required exactly one dispatch, an execution production's own ensure_collector comment explicitly rules out ('the next reconciliation observes a dispatched cycle'); suppressing a duplicate under a read that never catches up would have required a new local durability authority, not a correction. The defect was invisible because tests/test_hunter_trusted_orchestrator_replay.py substituted purpose-built fixed/buggy modules for the code under test, so the suite exercised injected stand-ins rather than the real production shape and stayed green while the real replay failed on every candidate. The correction restates both scenarios as properties the production code already documents -- a positive finite budget that actually ends an over-budget cycle while leaving an in-budget one pending, and dispatch that is one for an unrecorded head, zero further once the recorded cycle is observed, one bounded liveness recovery, and none once the dispatch budget is spent -- and the harness tests now build candidates from this repository's real production modules, proving discrimination through narrowly named mutations of the real hunter_review_orchestrator.py (DROPS_OPPORTUNITY_TERMINALITY, MAKES_OPPORTUNITY_NON_POSITIVE, MAKES_OPPORTUNITY_UNCONDITIONAL, DROPS_COLLECTOR_IDEMPOTENCY_RECORD, DROPS_LIVENESS_RECOVERY, DROPS_DISPATCH_BUDGET) whose anchors must still exist, so a refactor fails loudly rather than making a negative test vacuous. A repair to a trusted harness is incomplete until its scenarios are replayed against at least one known-valid unchanged candidate and prove the harness does not reject that valid candidate for harness/production drift; PR #538 at a91cc8f9ac3f99d10588bb06973d9a403ccc7e16 was that candidate, and A/B/G all pass against it unchanged.",
       "test": "tests/test_hunter_trusted_orchestrator_replay.py::test_scenario_a_passes_against_real_production",
       "status": "guarded"
+    },
+    {
+      "id": "PRH-066",
+      "class": "production-trigger-never-cut-over-to-replacement-executor",
+      "source": "Issue #557, 2026-10-03: canary #520 was re-labeled hunter-agent-execute and no Draft PR appeared. The trusted trigger still posted only to the Railway issuer, which PR #522 retired to answer 503 before claim; the trigger treats 503 as transient, exhausts its retry budget and fails. PR #524 added the replacement result contract and publisher plus a non-publishing rehearsal, but nothing in production called publish_create_only, ReplacementResultLedger or produced a replacement result.",
+      "classification": "systemic",
+      "guard_boundary": "Railway issuer composition and admission; trusted trigger workflow job chain",
+      "guard": "compose_services builds only the GitHubHostedExecutionRuntime (the retired Railway workspace runtime is no longer composed) and main enables admission only for that runtime. Accepted authorizations are admitted after SPM/DPM compilation and durable handoff recording and before the ACK; the trigger passes only the issuer-accepted opaque identity to a GitHub-hosted executor job, whose OIDC-authenticated fetch/result operations are bound to the trusted trigger workflow run, followed by separate credential-free validation and credential-isolated create-only publication jobs.",
+      "test": "tests/test_issue_agent_github_execution.py::test_label_acceptance_reaches_the_replacement_executor_through_spm_dpm",
+      "status": "guarded"
+    },
+    {
+      "id": "PRH-067",
+      "class": "replacement-publisher-executes-candidate-pre-push-scripts-under-publication-credentials",
+      "source": "Issue #557 read-only audit, 2026-10-03: publish_create_only ran _run_pre_push_safety in the publisher process after building the signed commit and before pushing. The base hook bytes are trusted, but they exec a working-directory-relative scripts/hunter_pre_push.py from the candidate worktree, so candidate-controlled code ran on the same host and user as the signing key and push token; environment scrubbing did not separate filesystem, keyring or process access. DFF-028 was represented as regression-tested while this path existed.",
+      "classification": "systemic",
+      "guard_boundary": "credential-free candidate safety job versus credential-bearing publisher job",
+      "guard": "Candidate pre-push safety runs only in run_credential_free_candidate_safety, which refuses any publication credential or model authority, builds an unsigned commit with the exact candidate tree, scrubs the OIDC request capability from the hook environment, and returns that tree. publish_create_only no longer runs any hook: it requires that exact safety tree and refuses to push a signed commit whose tree differs. The trigger workflow runs validation and publication as separate GitHub-hosted jobs, and the publisher job installs and runs nothing from the candidate.",
+      "test": "tests/test_issue_agent_replacement_executor.py::test_publisher_refuses_a_tree_the_safety_boundary_did_not_prove",
+      "status": "guarded"
     }
   ],
   "families": [
@@ -1438,22 +1458,28 @@
           "src/hunter/automation/",
           ".github/workflows/",
           "scripts/railway_issuer_startup.py",
-          "scripts/hunter_issue_agent_issuer.py"
+          "scripts/hunter_issue_agent_issuer.py",
+          "scripts/hunter_issue_agent_github_executor.py"
         ],
         "rationale": "These surfaces select or admit the Issue Agent execution backend and can diverge between readiness and real execution."
       },
       "prevention": {
-        "mechanism": "Railway IssuerServer defaults execution admission to disabled and the authorization handler returns 503 before slot acquisition, ledger claim, handoff compilation, dispatch, or provider invocation. Only explicit test harnesses can exercise the retired legacy path.",
+        "mechanism": "Railway IssuerServer defaults execution admission to disabled and the authorization handler returns 503 before slot acquisition, ledger claim, handoff compilation, dispatch, or provider invocation. Issue #557: production composition builds only the GitHub-hosted execution runtime and enables admission only for it, so the retired Railway provider runtime has no production admission path; runner eligibility for model execution is the GitHub-hosted platform boundary asserted by the verified OIDC runner_environment claim, never an in-job probe. Only explicit test harnesses can exercise the retired legacy path.",
         "boundary": "local-pre-push",
         "guard_reference": "scripts/hunter_issue_agent_issuer.py::_IssuerRequestHandler::handle_authorization"
       },
       "regression_evidence": [
-        "tests/test_issue_agent_issuer.py::test_default_issuer_admission_fails_closed_before_claim_or_provider"
+        "tests/test_issue_agent_issuer.py::test_default_issuer_admission_fails_closed_before_claim_or_provider",
+        "tests/test_issue_agent_github_execution.py::test_production_composition_never_builds_the_legacy_railway_runtime",
+        "tests/test_issue_agent_github_execution.py::test_production_main_enables_admission_only_for_the_github_runtime",
+        "tests/test_issue_agent_github_execution.py::test_execution_routes_fail_closed_when_admission_is_retired",
+        "tests/test_issue_agent_github_execution.py::test_oidc_identity_must_be_the_trusted_trigger_run"
       ],
       "lifecycle": "locally-enforced",
       "sources": [
         "PR #519 startup self-check and Issue #520 production canary, 2026-09-25",
-        "PR #522 Codex P2, 2026-09-25: the runtime admission guard existed but its own issuer file was omitted from DFF-027 changed_paths, so applicability could fail to require the family when the guard itself changed."
+        "PR #522 Codex P2, 2026-09-25: the runtime admission guard existed but its own issuer file was omitted from DFF-027 changed_paths, so applicability could fail to require the family when the guard itself changed.",
+        "Issue #557 production cutover, 2026-10-03: label accepted but the trigger never reached the replacement executor (PRH-066)."
       ]
     },
     {
@@ -1464,12 +1490,13 @@
         "changed_paths": [
           "src/hunter/automation/",
           ".github/workflows/",
-          "scripts/hunter_issue_agent_candidate_pr.py"
+          "scripts/hunter_issue_agent_candidate_pr.py",
+          "scripts/hunter_issue_agent_github_executor.py"
         ],
         "rationale": "These surfaces can validate or publish Issue Agent candidate output and therefore define the candidate-code/publication-credential privilege boundary."
       },
       "prevention": {
-        "mechanism": "The replacement-executor boundary accepts provider output only as a closed-schema hostile file-data result bound to the signed authorization, exact base, derived branch and canonical TaskScope. Exact prompt/evidence fields are structurally rejected. Rehearsal rejects every publication credential, publisher environments reject model/provider authority, and a validation receipt binds the exact result digest plus validation-definition identity before a separate publisher may consume it. Candidate content is data at this boundary and is never executed under publication authority.",
+        "mechanism": "The replacement-executor boundary accepts provider output only as a closed-schema hostile file-data result bound to the signed authorization, exact base, derived branch and canonical TaskScope. Exact prompt/evidence fields are structurally rejected. Rehearsal rejects every publication credential, publisher environments reject model/provider authority, and a validation receipt binds the exact result digest plus validation-definition identity before a separate publisher may consume it. Candidate content is data at this boundary and is never executed under publication authority. Issue #557 recurrence (PRH-067): the publisher itself had run the candidate's pre-push scripts. Candidate safety now runs only in run_credential_free_candidate_safety inside a separate credential-free GitHub-hosted job; publish_create_only runs no hook, requires the exact credential-free safety tree, and refuses a signed commit whose tree differs.",
         "boundary": "review",
         "guard_reference": "src/hunter/automation/issue_agent_replacement_executor.py::validate_replacement_result"
       },
@@ -1482,11 +1509,18 @@
         "tests/test_issue_agent_replacement_executor.py::test_validation_receipt_cannot_be_reused_after_definition_change",
         "tests/test_issue_agent_replacement_executor.py::test_rehearsal_result_can_never_reach_publisher",
         "tests/test_issue_agent_replacement_executor.py::test_publisher_uses_data_only_git_plumbing_and_create_only_lease",
-        "tests/test_issue_agent_replacement_executor.py::test_pre_push_safety_scrubs_publication_and_model_authority"
+        "tests/test_issue_agent_replacement_executor.py::test_pre_push_safety_scrubs_publication_and_model_authority",
+        "tests/test_issue_agent_replacement_executor.py::test_credential_free_safety_refuses_any_publication_credential",
+        "tests/test_issue_agent_replacement_executor.py::test_credential_free_safety_runs_hook_on_unsigned_exact_tree",
+        "tests/test_issue_agent_replacement_executor.py::test_publisher_refuses_a_tree_the_safety_boundary_did_not_prove",
+        "tests/test_issue_agent_github_execution.py::test_workflow_runs_each_trust_domain_in_its_own_job",
+        "tests/test_issue_agent_github_execution.py::test_executor_refuses_publication_authority",
+        "tests/test_issue_agent_github_execution.py::test_publisher_refuses_model_authority"
       ],
       "lifecycle": "regression-tested",
       "sources": [
-        "Post-PR #519 publication-path inspection after Issue #520 canary, 2026-09-25"
+        "Post-PR #519 publication-path inspection after Issue #520 canary, 2026-09-25",
+        "Issue #557 audit, 2026-10-03: the #524 publisher executed candidate-controlled pre-push scripts in the credential-bearing process (PRH-067)."
       ]
     },
     {

@@ -97,6 +97,20 @@ class IssueAgentEdgeRequestHandler(BaseHTTPRequestHandler):
         oversized body, stale read, incomplete body) or when the bytes are not
         a canonical signed authorization.
         """
+        body = self._read_bounded_body()
+        if body is None:
+            return None
+        try:
+            return SignedIssueAgentAuthorization.from_json(body)
+        except IssueAgentIssuerError as error:
+            self._send_error(401, str(error))
+            return None
+        except IssueAgentAuthorizationError as error:
+            self._send_error(400, str(error))
+            return None
+
+    def _read_bounded_body(self) -> bytes | None:
+        """Read one bounded request body, or send the fixed refusal and return ``None``."""
         content_length = self.headers.get("Content-Length")
         if content_length is None:
             self._send_error(411, "Length Required")
@@ -121,15 +135,7 @@ class IssueAgentEdgeRequestHandler(BaseHTTPRequestHandler):
         if len(body) != length:
             self._send_error(400, "Incomplete request body")
             return None
-
-        try:
-            return SignedIssueAgentAuthorization.from_json(body)
-        except IssueAgentIssuerError as error:
-            self._send_error(401, str(error))
-            return None
-        except IssueAgentAuthorizationError as error:
-            self._send_error(400, str(error))
-            return None
+        return body
 
     def do_POST(self) -> None:
         """Handle one POST carrying a signed authorization."""

@@ -218,16 +218,19 @@ work does not rediscover the same boundary failures:
 - Repository visibility is public. Exact prompts, Evidence/Source Handling material,
   and candidate patch artifacts must therefore be classified for confidentiality
   before any design places them in Actions logs or publicly readable artifacts.
-- Railway remains a candidate authority/ledger/ingress boundary. Moving execution to
-  GitHub-hosted ephemeral jobs is a design direction under investigation, not yet an
-  implemented or accepted runtime claim.
-- Railway execution admission is mechanically retired: the issuer returns HTTP 503 before
-  authorization claim/dispatch for the entire provider pool. No Issue carrying the live
-  execution label is permitted until the replacement executor is rehearsed and separately
-  authorized. This prohibition is path-wide, not specific to Issue #520. Old consumed/failed authorizations are never replayed. Issue #520 is
-  only the canary to resume after the replacement path has rehearsal evidence.
+- Railway remains the authority/ledger/ingress boundary. Execution in GitHub-hosted
+  ephemeral jobs was accepted by the owner decision on Issue #557 and is implemented by
+  the production cutover below.
+- Railway model execution is mechanically retired: the issuer never composes the
+  Railway provider pool, and the default `IssuerServer` still returns HTTP 503 before
+  authorization claim/dispatch. Old consumed/failed authorizations are never replayed.
+  Issue #520's stale authorization/base must be refreshed through the owner label path
+  before it is used as the production canary.
 
-### Proposed replacement-executor invariants (UNIMPLEMENTED)
+### Replacement-executor invariants
+
+These were the proposed invariants; Issue #557 implements them as described in
+"Production cutover (Issue #557)".
 
 1. Agent/model execution and publication authority are separate trust domains. The
    agent receives no repository write/signing credential; its output is untrusted data.
@@ -243,9 +246,74 @@ work does not rediscover the same boundary failures:
    Exact validation rules will be derived from existing Task Scope authority rather
    than from a new hard-coded protected-path registry.
 
-### Open questions required before a GitHub executor is implemented
+### Production cutover (Issue #557)
 
-These are evidence requirements, not decisions:
+Owner decision: Issue #557 comment 5965652126. The production path is:
+
+```text
+owner applies hunter-agent-execute
+  -> trusted trigger job: sign exact authorization + TaskScope, provision Source Handling
+  -> Railway issuer: verify, claim, GovernedEngineeringTaskIngress -> SmartPromptMachine
+     (EngineeringContextAuthority/DPM) -> signed handoff recorded durably -> admitted to
+     GitHubHostedExecutionRuntime -> ACK carrying the opaque authorization identity
+  -> execute job (GitHub-hosted, model credential + OIDC only): OIDC fetch of the exact
+     handoff/prompt, OpenCode at the exact signed base, hostile closed-schema result
+     returned over OIDC; Railway validates it (validation_receipt) and completes the ledger
+  -> validate job (no credential): trusted pre-push safety on an unsigned commit with the
+     exact candidate tree (run_credential_free_candidate_safety)
+  -> publish job (publication credentials only): signed commit bound to that exact tree,
+     create-only push (publish_create_only); never runs candidate content
+  -> Hunter / Pre-PR Preflight -> Hunter / Issue Agent Candidate PR -> one Draft PR
+```
+
+- **Execution channel.** `POST /issue-agent/execution/fetch` and
+  `POST /issue-agent/execution/result` on the existing issuer (routed by the existing
+  ingress). The GitHub Actions OIDC token travels in the body and must be RS256-signed by
+  GitHub for audience `hunter-issue-agent-execution:<repository>`, and name this
+  repository and owner, the trusted trigger workflow at `refs/heads/main` (not a reusable
+  workflow), an owner-triggered `issues` event and a GitHub-hosted runner. The first
+  executor fetch binds the authorization to that exact run id and attempt; every later
+  request must come from the same run, and each role operation (executor fetch, result,
+  validator fetch, publisher fetch) is single-use. Unknown, replayed, cross-run,
+  re-run-attempt, misbound or out-of-scope requests fail closed.
+- **Ledger.** The existing execution ledger is the only execution record. The hosted
+  runtime is the existing fallback-runtime seam: the worker waits under the existing lease
+  for one admissible result, records it in the #524 `ReplacementResultLedger`, and
+  completes the row with provider `github-hosted-executor` and no head (publication
+  happens on GitHub). No result in time is `EXECUTOR_RESULT_TIMEOUT`; a rejected result is
+  `EXECUTOR_RESULT_REJECTED`. Execution state is held by the issuer instance only, so an
+  issuer restart lapses the lease and fails the row closed (`PROCESS_RESTART`).
+- **Confidentiality.** Event payloads, job outputs and logs carry only the opaque
+  authorization identity, digests, the candidate tree id and fixed status codes. The
+  trigger no longer prints the signed authorization. No job uploads an artifact, and
+  issuer refusal text is never printed by the jobs. Both issuer bodies are bounded at
+  256 KiB, so an oversized prompt or result fails closed.
+- **One Issue, one active Draft PR.** The Draft-PR decision refuses when any Issue Agent
+  pull request for the same Issue is open, across all of its authorization branches.
+
+### Operator prerequisites for the cutover
+
+These are owner/platform provisioning steps. Each job fails closed with a fixed
+`MISSING_CONFIGURATION` or `MISSING_PUBLICATION_CREDENTIAL` code naming what is absent:
+
+| Name | Kind | Job | Purpose |
+|---|---|---|---|
+| `HUNTER_ISSUE_AGENT_EXECUTOR_MODEL_API_KEY` | secret | execute | the single model/provider credential |
+| `HUNTER_ISSUE_AGENT_EXECUTOR_MODEL_KEY_ENV` | variable | execute | provider env-var name OpenCode reads (for example `GROQ_API_KEY`) |
+| `HUNTER_OPENCODE_MODEL` | variable | execute | optional OpenCode model id |
+| `HUNTER_ISSUE_AGENT_PUBLISHER_WRITER` | variable | validate, publish | an `authorized_signers` login bound in `writer_identity_binding` |
+| `HUNTER_ISSUE_AGENT_PUBLISHER_SIGNING_KEY` | secret | publish | SSH signing private key registered as a signing key on that writer's GitHub account |
+| `HUNTER_ISSUE_AGENT_PUBLISHER_PUSH_TOKEN` | secret | publish | dedicated `contents: write` token whose pushes trigger workflows (never `GITHUB_TOKEN`) |
+
+`HUNTER_ISSUE_AGENT_WEBHOOK_URL` and `HUNTER_ISSUE_AGENT_AUTHORIZATION_VERIFYING_KEY`
+are existing secrets; the execution channel is derived from the webhook URL. The legacy
+Railway provider variables (`HUNTER_AGENT_*_COMMAND`, `HUNTER_AGENT_GITHUB_PUSH_TOKEN`)
+are no longer used by the issuer and should be removed from the Railway service.
+
+### Open questions recorded before the GitHub executor (closed by Issue #557)
+
+These were evidence requirements, answered by the read-only audit and the owner
+decision on Issue #557:
 
 - Trace `authorize -> exact_prompt/handoff -> dispatch -> result -> ledger` and choose
   a result-return contract. GitHub OIDC push reporting and Railway pull observation

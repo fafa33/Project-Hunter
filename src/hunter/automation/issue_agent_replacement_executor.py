@@ -148,15 +148,29 @@ def publisher_environment_is_safe(environ: Mapping[str, str]) -> bool:
     return not any(environ.get(x, "").strip() for x in forbidden)
 
 
+#: Every credential that can publish a candidate. None of them may exist in a
+#: boundary that runs a model or executes candidate-controlled content.
+PUBLICATION_CREDENTIAL_ENV: tuple[str, ...] = (
+    "HUNTER_AGENT_GITHUB_PUSH_TOKEN",
+    "HUNTER_ISSUE_AGENT_PR_TOKEN",
+    "HUNTER_ISSUE_AGENT_PUBLISHER_PUSH_TOKEN",
+    "HUNTER_ISSUE_AGENT_PUBLISHER_SIGNING_KEY",
+    "GITHUB_TOKEN",
+    "GH_TOKEN",
+    "SSH_AUTH_SOCK",
+)
+
+#: The GitHub Actions OIDC request capability. Candidate-controlled content
+#: never receives it, so it cannot mint an execution identity token.
+OIDC_REQUEST_ENV: tuple[str, ...] = ("ACTIONS_ID_TOKEN_REQUEST_TOKEN", "ACTIONS_ID_TOKEN_REQUEST_URL")
+
+
+def publication_credentials_present(environ: Mapping[str, str]) -> list[str]:
+    return [x for x in PUBLICATION_CREDENTIAL_ENV if environ.get(x, "").strip()]
+
+
 def assert_rehearsal_has_no_publication_authority(environ: Mapping[str, str]) -> None:
-    forbidden = (
-        "HUNTER_AGENT_GITHUB_PUSH_TOKEN",
-        "HUNTER_ISSUE_AGENT_PR_TOKEN",
-        "GITHUB_TOKEN",
-        "GH_TOKEN",
-        "SSH_AUTH_SOCK",
-    )
-    leaked = [x for x in forbidden if environ.get(x, "").strip()]
+    leaked = publication_credentials_present(environ)
     if leaked:
         raise ReplacementExecutorError("rehearsal environment contains publication authority: " + ", ".join(leaked))
 
@@ -262,14 +276,11 @@ def _git_plumbing(
     return completed.stdout.decode().strip()
 
 
-def build_signed_candidate_commit(
-    repo: str | Path,
-    *,
-    validated: ValidatedReplacementResult,
-    signing_key: str = "",
-) -> str:
-    """Build a signed candidate commit from hostile file data without checkout or hooks."""
-    root = Path(repo).resolve()
+_CANDIDATE_COMMIT_MESSAGE = "chore: apply governed Issue Agent replacement result"
+
+
+def _candidate_commit(root: Path, *, validated: ValidatedReplacementResult, sign: bool, signing_key: str) -> str:
+    """Construct the candidate commit from hostile file data by Git plumbing only."""
     if not root.is_dir():
         raise ReplacementExecutorError("publisher repository does not exist")
     if _git_plumbing(root, "cat-file", "-t", validated.base_sha) != "commit":
@@ -284,20 +295,59 @@ def build_signed_candidate_commit(
             blob = _git_plumbing(root, "hash-object", "-w", "--stdin", env=env, input_bytes=item.content)
             _git_plumbing(root, "update-index", "--add", "--cacheinfo", f"{item.mode},{blob},{item.path}", env=env)
         tree = _git_plumbing(root, "write-tree", env=env)
-        args = [
-            "commit-tree",
-            tree,
-            "-p",
-            validated.base_sha,
-            "-m",
-            "chore: apply governed Issue Agent replacement result",
-        ]
-        args.insert(1, f"-S{signing_key}" if signing_key else "-S")
+        args = ["commit-tree", tree, "-p", validated.base_sha, "-m", _CANDIDATE_COMMIT_MESSAGE]
+        if sign:
+            args.insert(1, f"-S{signing_key}" if signing_key else "-S")
         head = _git_plumbing(root, *args, env=env)
     if re.fullmatch(r"[0-9a-f]{40}", head) is None:
         raise ReplacementExecutorError("publisher produced an invalid commit id")
+    return head
+
+
+def candidate_tree(repo: str | Path, head: str) -> str:
+    tree = _git_plumbing(Path(repo).resolve(), "rev-parse", f"{head}^{{tree}}")
+    if re.fullmatch(r"[0-9a-f]{40}", tree) is None:
+        raise ReplacementExecutorError("candidate tree id is invalid")
+    return tree
+
+
+def build_signed_candidate_commit(
+    repo: str | Path,
+    *,
+    validated: ValidatedReplacementResult,
+    signing_key: str = "",
+) -> str:
+    """Build a signed candidate commit from hostile file data without checkout or hooks."""
+    root = Path(repo).resolve()
+    head = _candidate_commit(root, validated=validated, sign=True, signing_key=signing_key)
     _git_plumbing(root, "verify-commit", head)
     return head
+
+
+def run_credential_free_candidate_safety(repo: str | Path, *, validated: ValidatedReplacementResult) -> str:
+    """Run the trusted pre-push safety boundary on exact candidate content; return its tree.
+
+    Issue #557. The pre-push hook executes repository scripts from the candidate
+    worktree, so it is candidate-controlled code. It therefore runs only here,
+    in a boundary that holds no publication credential at all, against an
+    unsigned commit carrying the identical tree. The publisher later binds its
+    own signed commit to this exact tree and never runs the hook itself.
+    """
+    if validated.rehearsal:
+        raise ReplacementExecutorError("rehearsal result cannot reach candidate safety validation")
+    leaked = publication_credentials_present(os.environ)
+    if leaked:
+        raise ReplacementExecutorError("candidate safety boundary contains publication authority: " + ", ".join(leaked))
+    if not publisher_environment_is_safe(os.environ):
+        raise ReplacementExecutorError("candidate safety boundary contains model authority")
+    if re.fullmatch(r"[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+", validated.repository) is None:
+        raise ReplacementExecutorError("signed repository identity is invalid")
+    root = Path(repo).resolve()
+    head = _candidate_commit(root, validated=validated, sign=False, signing_key="")
+    _run_pre_push_safety(
+        root, validated=validated, head=head, push_url=f"https://github.com/{validated.repository}.git"
+    )
+    return candidate_tree(root, head)
 
 
 def _run_pre_push_safety(repo: Path, *, validated: ValidatedReplacementResult, head: str, push_url: str) -> None:
@@ -313,14 +363,7 @@ def _run_pre_push_safety(repo: Path, *, validated: ValidatedReplacementResult, h
         env = dict(os.environ)
         for name in tuple(env):
             if (
-                name
-                in {
-                    "HUNTER_AGENT_GITHUB_PUSH_TOKEN",
-                    "HUNTER_ISSUE_AGENT_PR_TOKEN",
-                    "GITHUB_TOKEN",
-                    "GH_TOKEN",
-                    "SSH_AUTH_SOCK",
-                }
+                name in {*PUBLICATION_CREDENTIAL_ENV, *OIDC_REQUEST_ENV}
                 or name.endswith("_API_KEY")
                 or (name.startswith("HUNTER_AGENT_") and name.endswith("_COMMAND"))
                 or name.startswith("GIT_")
@@ -355,9 +398,18 @@ def publish_create_only(
     *,
     validated: ValidatedReplacementResult,
     verified_receipt: ReplacementValidationReceipt,
+    safety_tree: str,
     signing_key: str = "",
 ) -> ReplacementPublication:
-    """Publish validated data under a create-only lease; never execute candidate content."""
+    """Publish validated data under a create-only lease; never execute candidate content.
+
+    ``safety_tree`` is the tree that ``run_credential_free_candidate_safety``
+    proved in its credential-free boundary. The publisher never runs the
+    candidate's pre-push scripts itself: it only refuses a signed commit whose
+    tree is not exactly that proven tree.
+    """
+    if re.fullmatch(r"[0-9a-f]{40}", safety_tree or "") is None:
+        raise ReplacementExecutorError("publication requires the exact credential-free safety tree")
     if validated.rehearsal:
         raise ReplacementExecutorError("rehearsal result cannot be published")
     if not publisher_environment_is_safe(os.environ):
@@ -378,7 +430,8 @@ def publish_create_only(
     if remote:
         raise ReplacementExecutorError("authorization branch already exists; create-only publication refused")
     head = build_signed_candidate_commit(root, validated=validated, signing_key=signing_key)
-    _run_pre_push_safety(root, validated=validated, head=head, push_url=push_url)
+    if candidate_tree(root, head) != safety_tree:
+        raise ReplacementExecutorError("signed candidate tree differs from the credential-free safety tree")
     _git_plumbing(
         root,
         "push",

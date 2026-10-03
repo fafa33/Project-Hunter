@@ -267,10 +267,24 @@ class IssueAgentWorkspaceError(IssueAgentExecutionError):
 
 _WORKSPACE_FAILURE_CODES = frozenset({"BASE_NOT_ON_MAIN", "REMOTE_BRANCH_CONFLICT", "WORKSPACE_UNAVAILABLE"})
 
+_REMOTE_EXECUTION_FAILURE_CODES = frozenset({"EXECUTOR_RESULT_TIMEOUT", "EXECUTOR_RESULT_REJECTED"})
+
+
+class IssueAgentRemoteExecutionError(IssueAgentExecutionError):
+    """The GitHub-hosted executor returned no admissible result (Issue #557)."""
+
+    def __init__(self, reason_code: str, message: str) -> None:
+        if reason_code not in _REMOTE_EXECUTION_FAILURE_CODES:
+            raise ValueError(f"unknown remote execution failure code {reason_code!r}")
+        self.reason_code = reason_code
+        super().__init__(f"{reason_code}: {message}")
+
+
 #: The fixed, non-secret vocabulary a terminal ledger failure is classified by.
 ISSUE_AGENT_FAILURE_CODES = frozenset(
     {
         *_WORKSPACE_FAILURE_CODES,
+        *_REMOTE_EXECUTION_FAILURE_CODES,
         "ENVIRONMENT_UNSUITABLE",
         "PROVIDER_POOL_EXHAUSTED",
         "RUNTIME_FAILURE",
@@ -287,7 +301,7 @@ ISSUE_AGENT_FAILURE_CODES = frozenset(
 
 def issue_agent_failure_code(error: BaseException) -> str:
     """Classify one terminal execution failure into the fixed failure vocabulary."""
-    if isinstance(error, IssueAgentWorkspaceError):
+    if isinstance(error, (IssueAgentWorkspaceError, IssueAgentRemoteExecutionError)):
         return error.reason_code
     if isinstance(error, AgentEnvironmentUnsuitableError):
         return "ENVIRONMENT_UNSUITABLE"
@@ -1469,6 +1483,7 @@ __all__ = [
     "ISSUE_AGENT_BRANCH_DIGEST_LENGTH",
     "ISSUE_AGENT_FAILURE_CODES",
     "IssueAgentExecutionTarget",
+    "IssueAgentRemoteExecutionError",
     "IssueAgentRuntimeReceiptError",
     "IssueAgentWorkspaceError",
     "derive_execution_target",

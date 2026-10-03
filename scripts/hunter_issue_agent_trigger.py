@@ -324,8 +324,8 @@ def _post_authorization(
     document: str,
     *,
     timeout: float = DEFAULT_WEBHOOK_TIMEOUT_SECONDS,
-) -> None:
-    """POST one signed authorization document and enforce the response.
+) -> bytes:
+    """POST one signed authorization document, enforce the response, return its body.
 
     Non-2xx answers are classified, not collapsed: 502/503/504 raise
     ``_TransientDispatchError`` (safe to retry byte-identically), every other
@@ -348,6 +348,7 @@ def _post_authorization(
                 raise _RejectedDispatchError(
                     f"issue-agent webhook rejected the authorization with HTTP {response.status}"
                 )
+            return bytes(response.read(MAX_EVENT_BYTES))
     except urllib.error.HTTPError as error:
         if error.code in TRANSIENT_HTTP_STATUS_CODES:
             raise _TransientDispatchError(f"issue-agent webhook answered transient HTTP {error.code}") from None
@@ -387,7 +388,7 @@ def _post_with_transport_retry(
     attempts: int = DEFAULT_TRANSPORT_ATTEMPTS,
     base_delay_seconds: float = DEFAULT_TRANSPORT_BASE_DELAY_SECONDS,
     max_delay_seconds: float = DEFAULT_TRANSPORT_MAX_DELAY_SECONDS,
-) -> None:
+) -> bytes:
     """POST the one byte-identical document, retrying only transient failures.
 
     Issue #497. ``document`` is produced once and re-POSTed unchanged on every
@@ -400,8 +401,7 @@ def _post_with_transport_retry(
         raise IssueAgentTriggerError("transport retry attempts must be a positive integer")
     for attempt in range(1, attempts + 1):
         try:
-            _post_authorization(url, document, timeout=timeout)
-            return
+            return _post_authorization(url, document, timeout=timeout)
         except _TransientDispatchError as error:
             if attempt >= attempts:
                 raise _RetryBudgetExhaustedError(
@@ -419,6 +419,7 @@ def _post_with_transport_retry(
             _sleep(delay)
         except IssueAgentTriggerError:
             raise
+    raise IssueAgentTriggerError("transport retry loop ended without an outcome")
 
 
 def _provision_and_dispatch(
@@ -427,15 +428,42 @@ def _provision_and_dispatch(
     document: str,
     *,
     timeout: float = DEFAULT_WEBHOOK_TIMEOUT_SECONDS,
-) -> None:
+) -> bytes:
     """Provision the per-Issue Source Handling authority, then dispatch.
 
     Issue #497. Issuer dispatch must never occur unless trusted provisioning
     succeeded, so ``_post_with_transport_retry`` on the provisioning edge runs
     first and raises before the webhook is ever contacted if it fails closed.
+    Returns the issuer's acceptance body.
     """
     _post_with_transport_retry(provisioning_url, document, timeout=timeout)
-    _post_with_transport_retry(webhook_url, document, timeout=timeout)
+    return _post_with_transport_retry(webhook_url, document, timeout=timeout)
+
+
+ACCEPTED_SCHEMA_VERSION = "hunter-issue-agent-accepted-v1"
+
+
+def accepted_execution_identity(acceptance: bytes, *, authorization_id: str) -> str:
+    """The opaque execution identity the Railway issuer dispatched (Issue #557).
+
+    The issuer answers only after it claimed the authorization, compiled it
+    through SPM/DPM and durably recorded the exact handoff. The trusted
+    workflow's executor job receives nothing but this identity; it must equal
+    the identity of the exact document this trigger signed.
+    """
+    try:
+        payload = json.loads(acceptance.decode("utf-8"))
+    except (UnicodeDecodeError, ValueError):
+        raise IssueAgentTriggerError("issuer acceptance is not JSON") from None
+    if (
+        not isinstance(payload, dict)
+        or payload.get("schema_version") != ACCEPTED_SCHEMA_VERSION
+        or payload.get("state") != "DISPATCHED"
+    ):
+        raise IssueAgentTriggerError("issuer did not accept the authorization for execution")
+    if payload.get("authorization_id") != authorization_id:
+        raise IssueAgentTriggerError("issuer accepted a different authorization identity")
+    return authorization_id
 
 
 def _parser() -> argparse.ArgumentParser:
@@ -448,6 +476,7 @@ def _parser() -> argparse.ArgumentParser:
     parser.add_argument("--provisioning-url", default=os.environ.get(PROVISIONING_URL_ENV))
     parser.add_argument("--webhook-timeout", default=os.environ.get(WEBHOOK_TIMEOUT_ENV))
     parser.add_argument("--authorization-out")
+    parser.add_argument("--execution-identity-out")
     parser.add_argument("--no-dispatch", action="store_true")
     return parser
 
@@ -478,8 +507,14 @@ def main(argv: list[str] | None = None) -> int:
             webhook_url = _required_text("HUNTER_ISSUE_AGENT_WEBHOOK_URL", arguments.webhook_url)
             timeout = _webhook_timeout(arguments.webhook_timeout)
             provisioning_url = _required_text(PROVISIONING_URL_ENV, arguments.provisioning_url)
-            _provision_and_dispatch(provisioning_url, webhook_url, document, timeout=timeout)
-        print(document)
+            acceptance = _provision_and_dispatch(provisioning_url, webhook_url, document, timeout=timeout)
+            identity = accepted_execution_identity(acceptance, authorization_id=authorization.authorization_id)
+            if arguments.execution_identity_out:
+                with Path(arguments.execution_identity_out).open("a", encoding="utf-8") as handle:
+                    handle.write(f"authorization_id={identity}\n")
+        # Issue #557: the signed document carries Issue content classified
+        # INTERNAL, and Actions logs are public. Only the identity is printed.
+        print(authorization.authorization_id)
         return 0
     except (IssueAgentTriggerError, OSError) as error:
         print(f"issue-agent trigger rejected: {error}", file=sys.stderr)

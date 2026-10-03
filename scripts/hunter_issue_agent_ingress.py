@@ -12,8 +12,12 @@ was answered 404: the provisioner listened on a port nothing public routed to.
 This process owns ``$PORT`` and nothing else. It is a fixed route table, not a
 proxy:
 
--   exactly four routes are served: ``GET /healthz``,
-    ``POST /issue-agent/provision``, ``POST /issue-agent/authorize`` and the
+-   exactly six routes are served: ``GET /healthz``,
+    ``POST /issue-agent/provision``, ``POST /issue-agent/authorize``, the two
+    GitHub-OIDC-authenticated execution operations
+    ``POST /issue-agent/execution/fetch`` and
+    ``POST /issue-agent/execution/result`` (Issue #557; the OIDC token travels
+    in the body and is verified only by the issuer), and the
     read-only ``GET /issue-agent/status/<authorization_id>`` (the issuer's
     non-secret execution status, ``docs/ISSUE_AGENT_EXECUTION_CONTRACT.md``
     I7), whose identity must be the exact canonical digest form before
@@ -71,6 +75,9 @@ LOOPBACK_HOST: Final[str] = "127.0.0.1"
 HEALTH_PATH: Final[str] = "/healthz"
 PROVISION_PATH: Final[str] = "/issue-agent/provision"
 AUTHORIZE_PATH: Final[str] = "/issue-agent/authorize"
+#: Issue #557 execution operations, served by the issuer on these exact paths.
+EXECUTION_FETCH_PATH: Final[str] = "/issue-agent/execution/fetch"
+EXECUTION_RESULT_PATH: Final[str] = "/issue-agent/execution/result"
 #: The read-only execution status route, byte-exact canonical identities only.
 STATUS_PATH_PREFIX: Final[str] = "/issue-agent/status/hunter-issue-agent-authorization:"
 STATUS_PATH_RE: Final[re.Pattern[str]] = re.compile(
@@ -136,6 +143,8 @@ class IngressRoutes:
 
     provisioner: Upstream
     issuer: Upstream
+    execution_fetch: Upstream
+    execution_result: Upstream
 
     @classmethod
     def for_ports(cls, *, provisioner_port: int, issuer_port: int) -> IngressRoutes:
@@ -147,6 +156,8 @@ class IngressRoutes:
         return cls(
             provisioner=Upstream("provisioner", provisioner_port, PROVISION_PATH, PROVISIONER_SERVICE_NAME),
             issuer=Upstream("issuer", issuer_port, AUTHORIZE_PATH, ISSUER_SERVICE_NAME),
+            execution_fetch=Upstream("issuer", issuer_port, EXECUTION_FETCH_PATH, ISSUER_SERVICE_NAME),
+            execution_result=Upstream("issuer", issuer_port, EXECUTION_RESULT_PATH, ISSUER_SERVICE_NAME),
         )
 
     def post_route(self, path: str) -> Upstream | None:
@@ -155,6 +166,10 @@ class IngressRoutes:
             return self.provisioner
         if path == AUTHORIZE_PATH:
             return self.issuer
+        if path == EXECUTION_FETCH_PATH:
+            return self.execution_fetch
+        if path == EXECUTION_RESULT_PATH:
+            return self.execution_result
         return None
 
     def upstreams(self) -> tuple[Upstream, Upstream]:

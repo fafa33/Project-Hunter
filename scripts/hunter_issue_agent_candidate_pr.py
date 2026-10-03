@@ -161,7 +161,9 @@ def decide_candidate_pr(evidence: CandidateEvidence) -> CandidatePrDecision:
         return _refuse(f"governing Issue #{issue_number} is not open", issue_number)
 
     if evidence.open_pull_requests:
-        return _refuse("a pull request is already open for this branch", issue_number)
+        # Issue #557: one Issue -> at most one active Issue Agent Draft PR, across
+        # every authorization branch of that Issue, not only this branch.
+        return _refuse("an Issue Agent pull request is already open for this Issue", issue_number)
 
     commits = evidence.range_commits
     if not commits:
@@ -240,7 +242,6 @@ def gather_evidence(
     """Read the trusted evidence for one agent branch from GitHub."""
     issue_number = governed_issue_number(branch)
     assert issue_number is not None
-    owner = repository.split("/", 1)[0]
     try:
         ref = request_json(repository, token, "GET", f"git/ref/heads/{quote(branch, safe='')}", None)
         branch_head = str(((ref or {}).get("object") or {}).get("sha") or "")
@@ -254,9 +255,17 @@ def gather_evidence(
         if not _is_not_found(error):
             raise
         issue = None
-    pulls = request_json(
-        repository, token, "GET", f"pulls?state=open&head={quote(owner + ':' + branch, safe='')}&per_page=100", None
-    )
+    pulls = request_json(repository, token, "GET", "pulls?state=open&per_page=100", None)
+    if not isinstance(pulls, list) or len(pulls) >= 100:
+        # A possibly truncated listing is not evidence that no PR is open.
+        raise RuntimeError("the open pull request evidence is incomplete")
+    pulls = [
+        pull
+        for pull in pulls
+        if isinstance(pull, Mapping)
+        and governed_issue_number(str((pull.get("head") or {}).get("ref") or "")) == issue_number
+        and _same_repository(str(((pull.get("head") or {}).get("repo") or {}).get("full_name") or ""), repository)
+    ]
     compare = request_json(repository, token, "GET", f"compare/{BASE_BRANCH}...{head_sha}?per_page=250", None)
     commits = compare.get("commits") if isinstance(compare, Mapping) else None
     total = compare.get("total_commits") if isinstance(compare, Mapping) else None
