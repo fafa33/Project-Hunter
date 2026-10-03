@@ -582,6 +582,26 @@
       "guard": "All four job checkouts use ref ${{ github.workflow_sha }}, the immutable commit of the workflow definition the run executes; the candidate safety clone takes the governed base branch from the trusted checkout's remote-tracking ref because an exact-SHA checkout is detached.",
       "test": "tests/test_issue_agent_github_execution.py::test_every_job_checkout_is_pinned_to_one_immutable_workflow_sha",
       "status": "guarded"
+    },
+    {
+      "id": "PRH-073",
+      "class": "publisher-model-authority-guard-misses-new-provider-credential",
+      "source": "PR #558 Copilot review, 2026-10-03 (head 3bbeeb02): publisher_environment_is_safe enumerated legacy provider keys but not the cutover's own HUNTER_ISSUE_AGENT_EXECUTOR_MODEL_API_KEY, so the publisher/validator could proceed with model authority present.",
+      "classification": "systemic",
+      "guard_boundary": "publisher and credential-free validator model-authority check",
+      "guard": "model_authority_present treats the named provider set (now including HUNTER_ISSUE_AGENT_EXECUTOR_MODEL_API_KEY) plus any non-empty *_API_KEY or HUNTER_AGENT_*_COMMAND as model authority, so a newly added provider credential is refused without another enumeration change.",
+      "test": "tests/test_issue_agent_replacement_executor.py::test_publisher_and_validator_reject_the_executor_model_credential_and_any_api_key",
+      "status": "guarded"
+    },
+    {
+      "id": "PRH-074",
+      "class": "trigger-response-handling-truncates-or-leaks",
+      "source": "PR #558 Copilot review, 2026-10-03 (head 3bbeeb02): the trigger read the issuer acceptance with a capped read, so an oversized body was truncated to a parseable prefix instead of failing closed, and a non-2xx refusal's free-form error text was printed to the public Actions log.",
+      "classification": "systemic",
+      "guard_boundary": "trusted trigger issuer response handling",
+      "guard": "The acceptance is read with one extra byte and refused when it exceeds the bound; a refusal is reported by HTTP status only, plus the fixed-vocabulary pre-model reason code (#514) when the detail exactly matches that shape.",
+      "test": "tests/test_issue_agent_trigger.py::test_http_error_semantic_rejection_reports_status_without_refusal_text",
+      "status": "guarded"
     }
   ],
   "families": [
@@ -1574,7 +1594,9 @@
         "tests/test_issue_agent_replacement_executor.py::test_candidate_pre_push_refuses_without_a_distinct_isolation_user",
         "tests/test_issue_agent_github_execution.py::test_model_runs_as_the_isolation_user_without_any_oidc_or_issuer_capability",
         "tests/test_issue_agent_github_execution.py::test_executor_refuses_to_run_a_model_without_uid_isolation",
-        "tests/test_issue_agent_github_execution.py::test_a_model_planted_git_directory_never_configures_or_runs_collection"
+        "tests/test_issue_agent_github_execution.py::test_a_model_planted_git_directory_never_configures_or_runs_collection",
+        "tests/test_issue_agent_replacement_executor.py::test_publisher_and_validator_reject_the_executor_model_credential_and_any_api_key",
+        "tests/test_issue_agent_github_execution.py::test_validator_refuses_the_executor_model_credential"
       ],
       "lifecycle": "regression-tested",
       "sources": [

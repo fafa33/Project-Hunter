@@ -135,19 +135,39 @@ def validate_replacement_result(
     )
 
 
-def publisher_environment_is_safe(environ: Mapping[str, str]) -> bool:
-    forbidden = (
-        "HUNTER_AGENT_CODEX_COMMAND",
-        "HUNTER_AGENT_CLAUDE_COMMAND",
-        "HUNTER_AGENT_FREEBUFF_COMMAND",
-        "HUNTER_AGENT_OPENCODE_COMMAND",
-        "HUNTER_AGENT_JULES_COMMAND",
-        "OPENAI_API_KEY",
-        "ANTHROPIC_API_KEY",
-        "GEMINI_API_KEY",
-        "GROQ_API_KEY",
+#: Named model/provider authorities, including the GitHub-hosted executor's own
+#: model credential (Issue #557).
+MODEL_AUTHORITY_ENV: tuple[str, ...] = (
+    "HUNTER_AGENT_CODEX_COMMAND",
+    "HUNTER_AGENT_CLAUDE_COMMAND",
+    "HUNTER_AGENT_FREEBUFF_COMMAND",
+    "HUNTER_AGENT_OPENCODE_COMMAND",
+    "HUNTER_AGENT_JULES_COMMAND",
+    "HUNTER_ISSUE_AGENT_EXECUTOR_MODEL_API_KEY",
+    "OPENAI_API_KEY",
+    "ANTHROPIC_API_KEY",
+    "GEMINI_API_KEY",
+    "GROQ_API_KEY",
+)
+
+
+def model_authority_present(environ: Mapping[str, str]) -> list[str]:
+    """Every configured model/provider authority: the named set plus any ``*_API_KEY``
+    or ``HUNTER_AGENT_*_COMMAND``, so a newly added provider credential is caught too."""
+    return sorted(
+        name
+        for name, value in environ.items()
+        if value.strip()
+        and (
+            name in MODEL_AUTHORITY_ENV
+            or name.endswith("_API_KEY")
+            or (name.startswith("HUNTER_AGENT_") and name.endswith("_COMMAND"))
+        )
     )
-    return not any(environ.get(x, "").strip() for x in forbidden)
+
+
+def publisher_environment_is_safe(environ: Mapping[str, str]) -> bool:
+    return not model_authority_present(environ)
 
 
 #: Every credential that can publish a candidate. None of them may exist in a

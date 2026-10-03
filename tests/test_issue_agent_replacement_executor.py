@@ -572,3 +572,11 @@ def test_candidate_clone_of_a_pinned_detached_checkout_still_has_the_governed_ba
     )
     assert report.read_text().split() == [head, base]
     assert git("for-each-ref", "refs/hunter") == ""
+
+
+def test_publisher_and_validator_reject_the_executor_model_credential_and_any_api_key():
+    """PR #558 review: the cutover's own model credential is model authority too."""
+    for name in ("HUNTER_ISSUE_AGENT_EXECUTOR_MODEL_API_KEY", "MISTRAL_API_KEY", "HUNTER_AGENT_NEWPROVIDER_COMMAND"):
+        assert not publisher_environment_is_safe({name: "configured"})
+    assert publisher_environment_is_safe({"PATH": "/usr/bin", "HUNTER_ISSUE_AGENT_PUBLISHER_PUSH_TOKEN": "t"})
+    assert publisher_environment_is_safe({"HUNTER_ISSUE_AGENT_EXECUTOR_MODEL_API_KEY": "  "})

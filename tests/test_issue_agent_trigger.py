@@ -505,14 +505,70 @@ def test_gateway_transient_status_is_retried_byte_identically(monkeypatch, code:
     assert len(recorded) == 1
 
 
-def test_http_error_semantic_rejection_surfaces_bounded_upstream_error(monkeypatch) -> None:
+def _http_error_opener(status: int, error_text: str):
     class _HTTPErrorOpener:
         def open(self, request, timeout):
-            body = io.BytesIO(b'{"error":"canonical preparation failed","schema_version":"v1"}')
-            raise urllib.error.HTTPError("https://hook.example/dispatch", 500, "internal", {}, body)
+            body = io.BytesIO(json.dumps({"error": error_text, "schema_version": "v1"}).encode())
+            raise urllib.error.HTTPError("https://hook.example/dispatch", status, "refused", {}, body)
 
-    monkeypatch.setattr(trigger, "_OPENER", _HTTPErrorOpener())
-    with pytest.raises(trigger._RejectedDispatchError, match="canonical preparation failed"):
+    return _HTTPErrorOpener()
+
+
+def test_http_error_semantic_rejection_reports_status_without_refusal_text(monkeypatch) -> None:
+    """Issue #557 / PR #558: free-form issuer refusal text never reaches the public log."""
+    monkeypatch.setattr(trigger, "_OPENER", _http_error_opener(500, "canonical preparation failed: SECRET-ISSUE-TEXT"))
+    with pytest.raises(trigger._RejectedDispatchError) as caught:
+        trigger._post_authorization("https://hook.example/dispatch", "{}")
+    assert str(caught.value) == "issue-agent webhook rejected the authorization with HTTP 500"
+
+
+def test_http_error_keeps_only_the_fixed_pre_model_reason_code(monkeypatch) -> None:
+    """#514's diagnosability survives: the fixed-vocabulary reason code is still surfaced."""
+    reason = "pre-model invariant rejected execution preparation: SOURCE_HANDLING:MODEL_PROCESSING_NOT_ALLOWED"
+    monkeypatch.setattr(trigger, "_OPENER", _http_error_opener(422, reason))
+    with pytest.raises(trigger._RejectedDispatchError, match="HTTP 422: " + reason):
+        trigger._post_authorization("https://hook.example/dispatch", "{}")
+    for leaky in (
+        reason + " plus SECRET-ISSUE-TEXT",
+        "pre-model invariant rejected execution preparation: lowercase issue text",
+        "Issue body: SECRET-ISSUE-TEXT",
+    ):
+        monkeypatch.setattr(trigger, "_OPENER", _http_error_opener(422, leaky))
+        with pytest.raises(trigger._RejectedDispatchError) as caught:
+            trigger._post_authorization("https://hook.example/dispatch", "{}")
+        assert "SECRET" not in str(caught.value) and "issue text" not in str(caught.value)
+
+
+def test_oversized_acceptance_is_rejected_not_truncated(monkeypatch) -> None:
+    accepted = json.dumps({"state": "DISPATCHED"}).encode()
+
+    class _Response:
+        status = 200
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, exc_type, exc, tb):
+            return False
+
+        def __init__(self, body: bytes) -> None:
+            self._body = body
+
+        def read(self, limit: int = -1) -> bytes:
+            return self._body if limit < 0 else self._body[:limit]
+
+    class _Opener:
+        def __init__(self, body: bytes) -> None:
+            self._body = body
+
+        def open(self, request, timeout):
+            return _Response(self._body)
+
+    exact = accepted + b" " * (trigger.MAX_EVENT_BYTES - len(accepted))
+    monkeypatch.setattr(trigger, "_OPENER", _Opener(exact))
+    assert trigger._post_authorization("https://hook.example/dispatch", "{}") == exact
+    monkeypatch.setattr(trigger, "_OPENER", _Opener(exact + b"x"))
+    with pytest.raises(trigger._RejectedDispatchError, match="exceeds the response bound"):
         trigger._post_authorization("https://hook.example/dispatch", "{}")
 
 

@@ -1108,3 +1108,66 @@ def test_every_job_checkout_is_pinned_to_one_immutable_workflow_sha() -> None:
     assert len(refs) == 4
     assert set(refs) == {"${{ github.workflow_sha }}"}
     assert "default_branch" not in WORKFLOW.read_text(encoding="utf-8")
+
+
+def test_validator_refuses_the_executor_model_credential() -> None:
+    environ = {"HUNTER_ISSUE_AGENT_EXECUTOR_MODEL_API_KEY": "model"}
+    with pytest.raises(driver.ExecutionJobError) as caught:
+        driver.run_validate("hunter-issue-agent-authorization:" + "a" * 64, Path("."), environ)
+    assert caught.value.code == "VALIDATOR_HAS_MODEL_AUTHORITY"
+    with pytest.raises(driver.ExecutionJobError) as caught:
+        driver.run_publish(
+            "hunter-issue-agent-authorization:" + "a" * 64,
+            Path("."),
+            "c" * 40,
+            {
+                **environ,
+                driver.PUBLISHER_SIGNING_KEY_ENV: "k",
+                driver.PUBLISHER_PUSH_TOKEN_ENV: "t",
+                driver.PUBLISHER_WRITER_ENV: "fafa33",
+            },
+        )
+    assert caught.value.code == "PUBLISHER_HAS_MODEL_AUTHORITY"
+
+
+def test_candidate_safety_never_needs_a_github_token_to_pass_the_push_lane(
+    monkeypatch: pytest.MonkeyPatch, capsys: Any
+) -> None:
+    """PR #558 review (r on issue_agent_replacement_executor.py): the isolated hook gets no token.
+
+    The only token-dependent step of the candidate pre-push is the Issue-criteria
+    lookup, and it is reachable solely from the non-blocking review-state report,
+    which reports a NOTE and never fails the push. Verified end to end against
+    the real hook (no token, local-clone origin): exit 0 / CANDIDATE_SAFE.
+    """
+    import ast
+
+    import hunter_pre_push as pre_push
+
+    tree = ast.parse(Path("scripts/hunter_pre_push.py").read_text(encoding="utf-8"))
+    callers: dict[str, set[str]] = {}
+    for node in tree.body:
+        if isinstance(node, ast.FunctionDef):
+            for call in ast.walk(node):
+                if isinstance(call, ast.Call) and isinstance(call.func, ast.Name):
+                    callers.setdefault(call.func.id, set()).add(node.name)
+    assert callers["_github_access_token"] == {"_governing_issue_criteria"}
+    assert callers["_governing_issue_criteria"] == {"report_pre_ready_review_state"}
+    assert "report_pre_ready_review_state" in callers and callers["report_pre_ready_review_state"] == {
+        "enforce_pre_push"
+    }
+
+    monkeypatch.setattr(pre_push.provenance, "resolve_governed_base", lambda _head: "b" * 40)
+    monkeypatch.setattr(pre_push.review, "read_review_document", lambda: {"claims": {"issue": "520"}})
+    monkeypatch.setattr(pre_push, "_github_access_token", lambda: None)
+    seen: dict[str, Any] = {}
+
+    def verify_local(_base: str, _head: str, *, issue_criteria: Any) -> Any:
+        seen["criteria"] = issue_criteria
+        return pre_push.review.ReviewVerdict("incomplete", "criteria unavailable")
+
+    monkeypatch.setattr(pre_push.review, "verify_local", verify_local)
+    updates = [("refs/heads/x", "c" * 40, "refs/heads/issue-520-0b9f12bfbc89d564")]
+    pre_push.report_pre_ready_review_state("c" * 40, updates)  # must not raise
+    assert seen["criteria"] is None
+    assert "does not block push" in capsys.readouterr().out

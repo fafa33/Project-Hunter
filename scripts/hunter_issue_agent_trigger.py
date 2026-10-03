@@ -5,6 +5,7 @@ import hashlib
 import json
 import math
 import os
+import re
 import sys
 import time
 import urllib.error
@@ -348,7 +349,11 @@ def _post_authorization(
                 raise _RejectedDispatchError(
                     f"issue-agent webhook rejected the authorization with HTTP {response.status}"
                 )
-            return bytes(response.read(MAX_EVENT_BYTES))
+            body = bytes(response.read(MAX_EVENT_BYTES + 1))
+            if len(body) > MAX_EVENT_BYTES:
+                # Never truncate an oversized acceptance to a parseable prefix.
+                raise _RejectedDispatchError("issue-agent webhook acceptance exceeds the response bound")
+            return body
     except urllib.error.HTTPError as error:
         if error.code in TRANSIENT_HTTP_STATUS_CODES:
             raise _TransientDispatchError(f"issue-agent webhook answered transient HTTP {error.code}") from None
@@ -357,7 +362,7 @@ def _post_authorization(
             raw = error.read(MAX_EVENT_BYTES)
             payload = json.loads(raw.decode("utf-8"))
             if isinstance(payload, dict) and isinstance(payload.get("error"), str):
-                detail = payload["error"].strip()
+                detail = _public_refusal_reason(payload["error"])
         except (OSError, UnicodeDecodeError, ValueError):
             detail = ""
         suffix = f": {detail}" if detail else ""
@@ -368,6 +373,17 @@ def _post_authorization(
         raise _TransientDispatchError("issue-agent webhook dispatch failed (network error)") from None
     except (TimeoutError, OSError):
         raise _TransientDispatchError("issue-agent webhook dispatch failed (timeout or connection failure)") from None
+
+
+#: The only issuer refusal detail the public trigger log may carry: the
+#: fixed-vocabulary pre-model reason code (#514). Every other refusal text can
+#: quote Issue or execution content and is reported by HTTP status alone.
+_PUBLIC_REFUSAL_RE = re.compile(r"pre-model invariant rejected execution preparation: [A-Z][A-Z0-9_:]{0,120}")
+
+
+def _public_refusal_reason(detail: str) -> str:
+    text = detail.strip()
+    return text if _PUBLIC_REFUSAL_RE.fullmatch(text) else ""
 
 
 def _retry_delay_seconds(
