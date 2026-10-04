@@ -53,6 +53,23 @@ SOURCE_AT_BASE = "def guard(seen, value):\n    return value in seen\n"
 SOURCE_FIXED = (
     "def guard(seen, value):\n    if value in seen:\n        raise ValueError('duplicate')\n    return True\n"
 )
+OTHER_GUARD = "src/hunter/other.py"
+OTHER_TEST = "tests/test_other.py"
+OTHER_TEST_ID = f"{OTHER_TEST}::test_other_rejects_a_truncated_list"
+OTHER_AT_BASE = "def other(items, limit):\n    return items[:limit]\n"
+OTHER_FIXED = "def other(items, limit):\n    if len(items) > limit:\n        raise ValueError('truncated')\n    return list(items)\n"
+#: A second guard whose regression is red at the base, so a genuinely new family has its own RED->GREEN pair.
+OTHER_TEST_SOURCE = (
+    "from src.hunter import other\n"
+    "\n"
+    "\n"
+    "def test_other_rejects_a_truncated_list():\n"
+    "    try:\n"
+    "        other.other(['a', 'b'], 1)\n"
+    "    except ValueError:\n"
+    "        return\n"
+    "    raise AssertionError('the truncated list was not rejected')\n"
+)
 TEST_SOURCE = (
     "from src.hunter import guard\n"
     "\n"
@@ -123,6 +140,8 @@ def repos(tmp_path: Path) -> dict[str, Any]:
     (seed / "README.md").write_text("base\n")
     (seed / GUARD).write_text(SOURCE_AT_BASE)
     (seed / TEST).write_text(TEST_SOURCE)
+    (seed / OTHER_GUARD).write_text(OTHER_AT_BASE)
+    (seed / OTHER_TEST).write_text(OTHER_TEST_SOURCE)
     (seed / "pyproject.toml").write_text('[tool.pytest.ini_options]\ntestpaths = ["tests"]\n')
     (seed / "docs").mkdir()
     (seed / "docs" / "DEFECT_REGISTRY.json").write_text(_canonical(SEEDED_REGISTRY))
@@ -310,7 +329,14 @@ def _result_document(
     return bytes(state.canonical_json(document))
 
 
-def _seal_result(document: bytes, base_sha: str, task_scope: Mapping[str, Any], handoff_sha: str) -> bytes:
+def _seal_result(
+    document: bytes,
+    base_sha: str,
+    task_scope: Mapping[str, Any],
+    handoff_sha: str,
+    *,
+    authorization_id: str = REMEDIATION,
+) -> bytes:
     return seal(
         document,
         recipient=RESULT_KEY.public_key(),
@@ -318,11 +344,11 @@ def _seal_result(document: bytes, base_sha: str, task_scope: Mapping[str, Any], 
             payload_kind="result",
             repository_id=1,
             issue_number=ISSUE,
-            authorization_id=REMEDIATION,
+            authorization_id=authorization_id,
             base_sha=base_sha,
             task_scope_sha256=state.sha256_hex(state.canonical_json(dict(task_scope))),
             execution_id=state.execution_identity(
-                authorization_id=REMEDIATION, authorize_run_id=100, control_sha=CONTROL, handoff_sha256=handoff_sha
+                authorization_id=authorization_id, authorize_run_id=100, control_sha=CONTROL, handoff_sha256=handoff_sha
             ),
             handoff_sha256=handoff_sha,
             plaintext_sha256=state.sha256_hex(document),
@@ -331,10 +357,8 @@ def _seal_result(document: bytes, base_sha: str, task_scope: Mapping[str, Any], 
     )
 
 
-def remediating(
-    repos: dict[str, Any], *, ledger: Ledger | None = None, bound_head: str | None = None, attempt: int = 1
-) -> tuple[Ledger, bytes, str, dict[str, Any]]:
-    """A real COMPLETED parent whose branch is really published, then the bound remediation authorization."""
+def complete_parent_into(ledger: Ledger, repos: dict[str, Any]) -> str:
+    """Drive the parent authorization to COMPLETED, really publishing its branch; return the head."""
 
     parent_scope = {
         "task_id": PARENT,
@@ -344,7 +368,6 @@ def remediating(
         "allowed_paths": ["README.md"],
         "prohibited_paths": [],
     }
-    ledger = Ledger(repos) if ledger is None else ledger
     parent_handoff, parent_handoff_sha = _handoff(PARENT, parent_scope, repos["base"])
     ledger.write(
         PARENT,
@@ -448,22 +471,41 @@ def remediating(
         },
         "candidate-pr-record",
     )
+    return parent_unsigned
 
+
+def remediating(
+    repos: dict[str, Any],
+    *,
+    ledger: Ledger | None = None,
+    bound_head: str | None = None,
+    attempt: int = 1,
+    authorization_id: str = REMEDIATION,
+    finding_ids: Sequence[str] = (FINDING,),
+) -> tuple[Ledger, bytes, str, dict[str, Any]]:
+    """A real COMPLETED parent whose branch is really published, then the bound remediation authorization."""
+
+    parent = Ledger(repos) if ledger is None else ledger
+    parent_unsigned = (
+        complete_parent_into(parent, repos)
+        if ledger is None
+        else str(ledger.view.authorizations[PARENT].evidence[state.PUBLISHED]["head_sha"])
+    )
     head = parent_unsigned if bound_head is None else bound_head
     scope = {
-        "task_id": REMEDIATION,
+        "task_id": authorization_id,
         "branch_pattern": f"issue-{ISSUE}-*",
         "base_ref": "main",
         "base_sha": head,
         "allowed_paths": list(ALLOWED) + ["docs/"],
         "prohibited_paths": list(remediation.PROMOTION_PATHS),
     }
-    handoff, handoff_sha = _handoff(REMEDIATION, scope, head)
-    ledger.write(
-        REMEDIATION,
+    handoff, handoff_sha = _handoff(authorization_id, scope, head)
+    parent.write(
+        authorization_id,
         state.AUTHORIZED,
         _evidence(
-            REMEDIATION,
+            authorization_id,
             scope,
             head,
             handoff,
@@ -472,13 +514,13 @@ def remediating(
                 "parent_authorization_id": PARENT,
                 "pull_request_number": PULL_REQUEST,
                 "bound_head_sha": head,
-                "finding_ids": [FINDING],
+                "finding_ids": sorted(finding_ids),
                 "attempt": attempt,
             },
         ),
         "authorize",
     )
-    return ledger, handoff, handoff_sha, scope
+    return parent, handoff, handoff_sha, scope
 
 
 class RecordingIsolation:
@@ -524,10 +566,12 @@ def agent_script(*, with_test: bool = True, source: str = SOURCE_FIXED, extra: s
     return " && ".join(parts)
 
 
-def execute(repos: dict[str, Any], ledger: Ledger, handoff: bytes, script: str) -> roles.ExecutorOutcome:
+def execute(
+    repos: dict[str, Any], ledger: Ledger, handoff: bytes, script: str, *, authorization_id: str = REMEDIATION
+) -> roles.ExecutorOutcome:
     return roles.run_executor(
         issue=ISSUE,
-        authorization_id=REMEDIATION,
+        authorization_id=authorization_id,
         context=roles.RoleContext(100, 1),
         ledger=ledger.access,
         handoff_envelope=handoff,
@@ -545,9 +589,9 @@ def execute(repos: dict[str, Any], ledger: Ledger, handoff: bytes, script: str) 
     )
 
 
-def bind_result(ledger: Ledger, sealed: bytes) -> None:
+def bind_result(ledger: Ledger, sealed: bytes, *, authorization_id: str = REMEDIATION) -> None:
     ledger.write(
-        REMEDIATION,
+        authorization_id,
         state.RESULT_BOUND,
         {
             "result_artifact": _artifact(sealed, 22),
@@ -572,7 +616,9 @@ def local_promotion(
 ) -> Mapping[str, bytes]:
     """The one trusted promotion service: verified ledger provenance plus the reviewed-head registry."""
 
-    return remediation.promote(repo=repo, group=group, proposal=proposal, finding=_finding(finding_id))
+    return remediation.promote(
+        repo=repo, group=group, proposal=proposal, finding=_finding(finding_id or proposal["finding_id"])
+    )
 
 
 @pytest.fixture
@@ -612,9 +658,9 @@ def _canonical(document: object) -> str:
     return json.dumps(document, indent=2, ensure_ascii=False) + "\n"
 
 
-def validated_state(ledger: Ledger, receipt: Mapping[str, Any]) -> None:
+def validated_state(ledger: Ledger, receipt: Mapping[str, Any], *, authorization_id: str = REMEDIATION) -> None:
     ledger.write(
-        REMEDIATION,
+        authorization_id,
         state.VALIDATED,
         {
             "receipt_sha256": state.sha256_hex(state.canonical_json(dict(receipt))),
@@ -650,10 +696,11 @@ def validate(
     *,
     port: roles.RemediationPort | None,
     safety: Any = local_safety,
+    authorization_id: str = REMEDIATION,
 ) -> dict[str, Any]:
     return roles.run_validator(
         issue=ISSUE,
-        authorization_id=REMEDIATION,
+        authorization_id=authorization_id,
         repository=REPOSITORY,
         ledger=ledger.access,
         result_envelope=sealed,
@@ -678,10 +725,11 @@ def publish(
     derive: Any = local_promotion,
     gate: roles.IssueGate = OPEN,
     open_pr: bool = True,
+    authorization_id: str = REMEDIATION,
 ) -> core.ReplacementPublication:
     return roles.run_publisher(
         issue=ISSUE,
-        authorization_id=REMEDIATION,
+        authorization_id=authorization_id,
         repository=REPOSITORY,
         ledger=ledger.access,
         result_envelope=sealed,
@@ -769,14 +817,15 @@ def bound_result(
     files: Sequence[Mapping[str, Any]],
     proposal: Mapping[str, Any] | None = None,
     base_sha: str | None = None,
+    authorization_id: str = REMEDIATION,
 ) -> bytes:
     """The sealed result exactly as the executor would produce it, with the optional model proposal."""
 
     base = base_sha if base_sha is not None else str(scope["base_sha"])
-    document = _result_document(base, files, proposal)
-    handoff_sha = _handoff_sha(ledger, REMEDIATION)
-    sealed = _seal_result(document, base, scope, handoff_sha)
-    bind_result(ledger, sealed)
+    document = _result_document(base, files, proposal, authorization_id=authorization_id)
+    handoff_sha = _handoff_sha(ledger, authorization_id)
+    sealed = _seal_result(document, base, scope, handoff_sha, authorization_id=authorization_id)
+    bind_result(ledger, sealed, authorization_id=authorization_id)
     return sealed
 
 
@@ -794,11 +843,16 @@ def _handoff_sha(ledger: Ledger, authorization_id: str) -> str:
 
 
 def candidate_files(
-    *, source: str = SOURCE_FIXED, tests: str | None = TEST_SOURCE, extra: Sequence[str] = ()
+    *,
+    source: str = SOURCE_FIXED,
+    tests: str | None = TEST_SOURCE,
+    extra: Sequence[str] = (),
+    guard: str = GUARD,
+    test: str = TEST,
 ) -> list[Any]:
-    files: list[Any] = [_candidate(GUARD, source.encode())]
+    files: list[Any] = [_candidate(guard, source.encode())]
     if tests is not None:
-        files.append(_candidate(TEST, tests.encode()))
+        files.append(_candidate(test, tests.encode()))
     files.extend(_candidate(path, b"{}\n") for path in extra)
     return files
 
@@ -850,7 +904,7 @@ def test_the_red_run_sees_only_the_test_files_over_the_reviewed_head(repos: dict
         assert completed.returncode == expected, completed.stdout.decode()
 
 
-def _view(ledger: Ledger) -> state.AuthorizationView:
+def _view(ledger: Ledger, authorization_id: str = REMEDIATION) -> state.AuthorizationView:
     _commit, entries = ledger.access.store.read(ISSUE)
     view = state.verify_chain(
         [entry.record for entry in entries],
@@ -860,8 +914,8 @@ def _view(ledger: Ledger) -> state.AuthorizationView:
         provenance=trusted,
         indexes=[entry.index for entry in entries],
     )
-    assert view.active == REMEDIATION
-    return view.authorizations[REMEDIATION]
+    assert view.active == authorization_id
+    return view.authorizations[authorization_id]
 
 
 def _validated(ledger: Ledger, sealed: bytes, scope: Mapping[str, Any]) -> core.ValidatedReplacementResult:

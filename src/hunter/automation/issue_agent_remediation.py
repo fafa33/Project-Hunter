@@ -338,6 +338,28 @@ def _append_disposition(
 # --- S5b-4: the anchored proof and resolution records ------------------------------------------------------
 
 
+def remediation_writes(candidate: Any, *, authorization_id: str) -> list[knowledge.Write]:
+    """ADR 0039 L2: the bounded remediation request, one record per finding, written before the dispatch.
+
+    Written before the dispatch so a lost dispatch is resolved by read-back rather than by a second mint: the
+    insert-only ``(finding_id, attempt)`` key makes a duplicate delivery a no-op.
+    """
+
+    return [
+        knowledge.Write(
+            "remediation_requested",
+            {
+                "finding_id": item["finding_id"],
+                "attempt": attempt,
+                "pull_request_number": candidate.pull_request_number,
+                "bound_head_sha": candidate.bound_head_sha,
+                "authorization_id": authorization_id,
+            },
+        )
+        for item, attempt in zip(candidate.findings, candidate.attempts, strict=True)
+    ]
+
+
 def proof_writes(
     view: knowledge.KnowledgeView,
     *,
@@ -520,6 +542,7 @@ __all__ = [
     "proven_writes",
     "read_promotion_inputs",
     "remediation_authorization",
+    "remediation_writes",
     "remediation_group",
     "remediation_scope",
     "resolution_writes",

@@ -401,19 +401,7 @@ def cmd_remediate(configuration: control.Configuration, arguments: argparse.Name
             # second mint; the insert-only key makes a duplicate delivery a no-op.
             _, _, written = knowledge.append(
                 store,
-                [
-                    knowledge.Write(
-                        "remediation_requested",
-                        {
-                            "finding_id": item["finding_id"],
-                            "attempt": attempt,
-                            "pull_request_number": candidate.pull_request_number,
-                            "bound_head_sha": candidate.bound_head_sha,
-                            "authorization_id": authorization.authorization_id,
-                        },
-                    )
-                    for item, attempt in zip(candidate.findings, candidate.attempts, strict=True)
-                ],
+                remediation.remediation_writes(candidate, authorization_id=authorization.authorization_id),
                 trust=configuration.trust,
                 provenance=provenance,
                 signing_key=_ed25519(STATE_SIGNING_KEY_ENV),
