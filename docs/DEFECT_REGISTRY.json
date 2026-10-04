@@ -459,8 +459,8 @@
       "source": "PR #524 Codex P1, 2026-09-26",
       "classification": "systemic",
       "guard_boundary": "credential-isolated replacement publication",
-      "guard": "The exact candidate commit is checked in a temporary credential-free worktree and must pass the trusted base pre-push hook before the publisher may create the authorization branch; publication/model credentials are scrubbed from that execution environment.",
-      "test": "tests/test_issue_agent_replacement_executor.py::test_pre_push_safety_scrubs_publication_and_model_authority",
+      "guard": "The exact unsigned candidate commit must pass the trusted base pre-push hook in the credential-free validator stage before the publisher may create the authorization branch; the hook runs as the isolation uid with an explicit env -i allowlist, so no publication, model, issuer or unrelated secret reaches candidate code, and the publisher itself runs no hook (Issue #560 S4).",
+      "test": "tests/test_issue_agent_replacement_executor.py::test_candidate_pre_push_receives_only_an_explicit_allowlist_as_the_isolation_user",
       "status": "guarded"
     },
     {
@@ -1484,7 +1484,8 @@
         "tests/test_issue_agent_replacement_executor.py::test_validation_receipt_cannot_be_reused_after_definition_change",
         "tests/test_issue_agent_replacement_executor.py::test_rehearsal_result_can_never_reach_publisher",
         "tests/test_issue_agent_replacement_executor.py::test_publisher_uses_data_only_git_plumbing_and_create_only_lease",
-        "tests/test_issue_agent_replacement_executor.py::test_pre_push_safety_scrubs_publication_and_model_authority"
+        "tests/test_issue_agent_replacement_executor.py::test_candidate_pre_push_receives_only_an_explicit_allowlist_as_the_isolation_user",
+        "tests/test_issue_agent_roles.py::test_the_publisher_runs_no_hook"
       ],
       "lifecycle": "regression-tested",
       "sources": [
