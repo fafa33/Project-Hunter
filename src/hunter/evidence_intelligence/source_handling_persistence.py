@@ -58,6 +58,7 @@ from hunter.evidence_intelligence.source_handling import (
     validate_policy_body,
     verify_publication,
 )
+from hunter.evidence_intelligence.source_handling_commit_observer import notify_commit
 from hunter.execution import Clock, SystemClock
 
 SOURCE_HANDLING_FAMILIES = frozenset({"FACT", "POLICY", "FIELD_CATEGORY_REGISTRY", "AUTHORIZATION_RULE"})
@@ -745,6 +746,7 @@ class SourceHandlingAuthorityRepository:
                 operator_root=self._operator_root,
             )
             connection.commit()
+        notify_commit(self.path)
 
     @contextlib.contextmanager
     def _connect(
@@ -805,6 +807,7 @@ class SourceHandlingAuthorityRepository:
                 raise
             else:
                 connection.commit()
+        notify_commit(self.path)
 
 
 class SqliteSourceHandlingAuthorityReadView(SourceHandlingAuthorityReadView):

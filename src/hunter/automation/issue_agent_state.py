@@ -44,7 +44,6 @@ from cryptography.hazmat.primitives.serialization import Encoding, PublicFormat
 RECORD_SCHEMA_VERSION: Final = "hunter-issue-agent-execution-record-v1"
 INDEX_SCHEMA_VERSION: Final = "hunter-issue-agent-index-v1"
 STATE_SIGNATURE_DOMAIN: Final = "hunter-issue-agent-state-v1"
-_SIGNATURE_PREFIX: Final = (STATE_SIGNATURE_DOMAIN + "\x00").encode("utf-8")
 LEDGER_REF_PREFIX: Final = "refs/heads/hunter-state/v1/"
 MAX_RECORD_BYTES: Final = 64 * 1024
 _MAX_DEPTH: Final = 6
@@ -321,12 +320,24 @@ _RECORDED_BY = _object(
     {
         "workflow_path": _pattern(_WORKFLOW),
         "job": _pattern(_JOB),
-        "role": _enum({"authorize", "bind", "record-validation", "finalize", "reconcile", "candidate-pr-record"}),
+        "role": _enum(
+            {
+                "authorize",
+                "bind",
+                "record-validation",
+                "finalize",
+                "reconcile",
+                "candidate-pr-record",
+                "source-handling-bootstrap",
+            }
+        ),
         "run_id": POSITIVE,
         "run_attempt": POSITIVE,
         "head_sha": SHA40,
     }
 )
+#: Public alias: the closed ``recorded_by`` schema shared by every anchored ledger.
+RECORDED_BY_VALIDATOR: Final = _RECORDED_BY
 _SIGNATURE = _object(
     {
         "alg": _exact("ed25519"),
@@ -517,29 +528,44 @@ def _unsigned(record: Mapping[str, Any]) -> dict[str, Any]:
     return {key: value for key, value in record.items() if key != "signature"}
 
 
-def sign_record(unsigned: Mapping[str, Any], private_key: Ed25519PrivateKey) -> dict[str, Any]:
+def sign_record(
+    unsigned: Mapping[str, Any], private_key: Ed25519PrivateKey, *, domain: str = STATE_SIGNATURE_DOMAIN
+) -> dict[str, Any]:
     """Return the record with its K_STATE signature over the canonical unsigned bytes."""
 
     body = _unsigned(unsigned)
-    value = private_key.sign(_SIGNATURE_PREFIX + canonical_json(body)).hex()
+    value = private_key.sign(_signature_prefix(domain) + canonical_json(body)).hex()
     signature = {
         "alg": "ed25519",
         "key_id": public_key_id(private_key.public_key()),
-        "domain": STATE_SIGNATURE_DOMAIN,
+        "domain": domain,
         "value": value,
     }
     return {**body, "signature": signature}
 
 
-def verify_record_signature(record: Mapping[str, Any], pinned_keys: Mapping[str, Ed25519PublicKey]) -> None:
+def _signature_prefix(domain: str) -> bytes:
+    return (domain + "\x00").encode("utf-8")
+
+
+def verify_record_signature(
+    record: Mapping[str, Any],
+    pinned_keys: Mapping[str, Ed25519PublicKey],
+    *,
+    domain: str = STATE_SIGNATURE_DOMAIN,
+) -> None:
     signature = record.get("signature")
     if not isinstance(signature, dict):
         raise LedgerCorruptError("record is unsigned")
+    if signature.get("domain") != domain:
+        raise LedgerCorruptError("record is signed for another ledger domain")
     key = pinned_keys.get(str(signature.get("key_id")))
     if key is None:
         raise LedgerCorruptError("record signer key is not pinned")
     try:
-        key.verify(bytes.fromhex(str(signature.get("value"))), _SIGNATURE_PREFIX + canonical_json(_unsigned(record)))
+        key.verify(
+            bytes.fromhex(str(signature.get("value"))), _signature_prefix(domain) + canonical_json(_unsigned(record))
+        )
     except (InvalidSignature, ValueError):
         raise LedgerCorruptError("record signature does not verify") from None
 
@@ -865,64 +891,69 @@ class GitLedgerStore:
             raise LedgerError(f"git {args[0]} failed with exit status {completed.returncode}")
         return completed.stdout
 
-    def remote_head(self, issue_number: int) -> str | None:
-        output = self._git("ls-remote", self._remote, ledger_ref(issue_number)).decode().split()
+    def ref_head(self, ref: str) -> str | None:
+        output = self._git("ls-remote", self._remote, ref).decode().split()
         if not output:
             return None
         if _SHA40.fullmatch(output[0]) is None:
             raise LedgerError("remote returned a malformed head")
         return output[0]
 
-    def read(self, issue_number: int) -> tuple[str | None, list[LedgerEntry]]:
-        head = self.remote_head(issue_number)
+    def remote_head(self, issue_number: int) -> str | None:
+        return self.ref_head(ledger_ref(issue_number))
+
+    def read_files(self, ref: str, names: frozenset[str]) -> tuple[str | None, list[tuple[str, dict[str, bytes]]]]:
+        """Read a single first-parent ledger chain whose every commit tree is exactly ``names``."""
+
+        head = self.ref_head(ref)
         if head is None:
             return None, []
-        self._git("fetch", "--quiet", "--no-tags", self._remote, f"+{ledger_ref(issue_number)}:refs/ledger/read")
+        self._git("fetch", "--quiet", "--no-tags", self._remote, f"+{ref}:refs/ledger/read")
         if self._git("rev-parse", "refs/ledger/read").decode().strip() != head:
             raise LedgerError("ledger head moved during read; retry")
         commits = self._git("rev-list", "--reverse", "--first-parent", head).decode().split()
-        entries: list[LedgerEntry] = []
+        entries: list[tuple[str, dict[str, bytes]]] = []
         for position, commit in enumerate(commits):
             parents = self._git("rev-list", "--parents", "-n", "1", commit).decode().split()[1:]
             if len(parents) != (0 if position == 0 else 1) or (position and parents[0] != commits[position - 1]):
                 raise LedgerCorruptError("ledger commit lineage is not a single first-parent chain")
-            names = set(self._git("ls-tree", "--name-only", commit).decode().split())
-            if names != {"record.json", "index.json"}:
+            if set(self._git("ls-tree", "--name-only", commit).decode().split()) != set(names):
                 raise LedgerCorruptError("ledger commit tree differs from the closed layout")
-            try:
-                record = json.loads(self._git("cat-file", "blob", f"{commit}:record.json"))
-                index = json.loads(self._git("cat-file", "blob", f"{commit}:index.json"))
-            except (json.JSONDecodeError, UnicodeDecodeError):
-                raise LedgerCorruptError("ledger blob is not canonical JSON") from None
-            entries.append(LedgerEntry(commit, record, index))
+            entries.append((commit, {name: self._git("cat-file", "blob", f"{commit}:{name}") for name in names}))
         return head, entries
 
-    def append(
-        self, issue_number: int, expected_head: str | None, record: Mapping[str, Any], index: Mapping[str, Any]
-    ) -> str:
-        """Compare-and-swap one record. Returns the new head; raises ``LedgerConflictError`` if another writer won.
+    def read(self, issue_number: int) -> tuple[str | None, list[LedgerEntry]]:
+        head, raw = self.read_files(ledger_ref(issue_number), frozenset({"record.json", "index.json"}))
+        entries: list[LedgerEntry] = []
+        for commit, files in raw:
+            try:
+                entries.append(LedgerEntry(commit, json.loads(files["record.json"]), json.loads(files["index.json"])))
+            except (json.JSONDecodeError, UnicodeDecodeError):
+                raise LedgerCorruptError("ledger blob is not canonical JSON") from None
+        return head, entries
 
-        A push whose acknowledgement is lost is resolved by reading the ledger back: if the head is exactly
-        our commit the write succeeded, otherwise the CAS was lost (never retried blindly).
+    def append_files(
+        self, ref: str, expected_head: str | None, files: Mapping[str, bytes], *, message: str, timestamp: str
+    ) -> str:
+        """Compare-and-swap one commit holding exactly ``files``.
+
+        Returns the new head, or raises ``LedgerConflictError`` if another writer won. A push whose
+        acknowledgement is lost is resolved by reading the ledger back. If the head is exactly our commit
+        (or a byte-identical write already landed), the write succeeded; otherwise the CAS was lost and is
+        never retried blindly.
         """
 
-        record_blob = self._git("hash-object", "-w", "--stdin", stdin=canonical_json(record)).decode().strip()
-        index_blob = self._git("hash-object", "-w", "--stdin", stdin=canonical_json(index)).decode().strip()
-        tree = (
-            self._git(
-                "mktree",
-                stdin=f"100644 blob {index_blob}\tindex.json\n100644 blob {record_blob}\trecord.json\n".encode(),
-            )
-            .decode()
-            .strip()
-        )
+        entries = []
+        for name in sorted(files):
+            if "/" in name or "\t" in name or "\n" in name or not name:
+                raise LedgerError("ledger file names must be flat")
+            blob = self._git("hash-object", "-w", "--stdin", stdin=files[name]).decode().strip()
+            entries.append(f"100644 blob {blob}\t{name}\n")
+        tree = self._git("mktree", stdin="".join(entries).encode()).decode().strip()
         parents = [] if expected_head is None else ["-p", expected_head]
-        ref = ledger_ref(issue_number)
-        observed_head = self.remote_head(issue_number)
+        observed_head = self.ref_head(ref)
         if observed_head is not None:
             self._git("fetch", "--quiet", "--no-tags", self._remote, f"+{ref}:refs/ledger/base")
-        timestamp = str(record["recorded_at"])
-        message = f"{record['state']} {record['authorization_id']} {record['kind']} {record['record_seq']}"
         try:
             commit = (
                 self._git(
@@ -947,10 +978,22 @@ class GitLedgerStore:
             )
         except LedgerError:
             pass  # resolved by the read-back below
-        observed = self.remote_head(issue_number)
-        if observed == commit:
+        if self.ref_head(ref) == commit:
             return commit
         raise LedgerConflictError("another writer advanced the ledger; re-read and re-decide")
+
+    def append(
+        self, issue_number: int, expected_head: str | None, record: Mapping[str, Any], index: Mapping[str, Any]
+    ) -> str:
+        """Compare-and-swap one Issue ledger record (see ``append_files``)."""
+
+        return self.append_files(
+            ledger_ref(issue_number),
+            expected_head,
+            {"record.json": canonical_json(record), "index.json": canonical_json(index)},
+            message=f"{record['state']} {record['authorization_id']} {record['kind']} {record['record_seq']}",
+            timestamp=str(record["recorded_at"]),
+        )
 
 
 # --- advance: the single pure decision function (state machine spec section 6) --------------------------
