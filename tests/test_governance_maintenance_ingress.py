@@ -397,14 +397,35 @@ def test_the_derived_floor_reaches_the_push_boundary_and_its_dependencies() -> N
 def test_the_derived_floor_does_not_over_block_ordinary_scripts() -> None:
     """A guard that swept in ordinary code would be a false-positive merge blocker.
 
-    `acquire_sky_supply_basis` and `hunter_issue_agent_trigger` run from
-    workflows that mint no merge-gating signal, so they are ordinary code that a
-    future owner-authored scope may open -- not authority.
+    `acquire_sky_supply_basis` runs from a workflow that mints no merge-gating signal, so it stays ordinary
+    code a future owner-authored scope may open -- not authority.
+
+    `hunter_issue_agent_trigger` stopped being ordinary at ADR 0039 L7 (RD-6): the reconcile workflow's
+    `resolve-finding` job holds `pull-requests: write` so it can post one exact-head evidence reply and resolve
+    the exact review thread, and a workflow that writes to a pull request mints a merge-gating signal. The whole
+    Issue-agent authority closure therefore became floor, which is the anti-self-escalation property working as
+    designed rather than a widened grant.
     """
     required, _ = prevention._authority_closure()
 
     assert "scripts/acquire_sky_supply_basis.py" not in required
-    assert "scripts/hunter_issue_agent_trigger.py" not in required
+    assert "scripts/hunter_issue_agent_trigger.py" in required
+    assert "scripts/hunter_issue_agent_lifecycle.py" in required
+    assert "scripts/hunter_collect_learning_observations.py" in required
+
+
+def test_every_derived_authority_path_is_on_the_canonical_floor() -> None:
+    """The floor and the derivation must agree, or a capability could rewrite the gate that judges it."""
+
+    document = _document()
+    required, errors = prevention._authority_closure()
+
+    assert errors == []
+    floor = document["connector_write_ingress"]["root_of_trust_paths"]
+    uncovered = [
+        entry for entry in required if not any(ingress.path_matches_scope_entry(entry, item) for item in floor)
+    ]
+    assert uncovered == []
 
 
 def test_a_floor_that_drops_the_push_boundary_implementation_is_refused() -> None:
