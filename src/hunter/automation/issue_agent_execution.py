@@ -80,6 +80,7 @@ from hunter.automation.agent_fallback_runtime import (
     AgentFallbackRuntimeReceipt,
 )
 from hunter.automation.n8n_handoff import PromptAutomationHandoffError, serialize_prompt_automation_handoff
+from hunter.evidence_intelligence.engineering_context_authority import EngineeringContextAuthority
 from hunter.evidence_intelligence.engineering_task_ingress import GovernedEngineeringTaskIngress
 from hunter.evidence_intelligence.intake import (
     EvidenceIntakeReference,
@@ -1306,8 +1307,12 @@ def compose_governed_compilation(
     repository: EvidenceIntelligenceRepository,
     source_handling_resolver: ProductionSourceHandlingAuthorityResolver,
     clock: Clock,
+    engineering_context_authority: EngineeringContextAuthority | None = None,
 ) -> GovernedCompilation:
-    """Compose the existing authorities in their canonical order; the single definition of that order."""
+    """Compose the existing authorities in their canonical order; the single definition of that order.
+
+    ``engineering_context_authority`` carries the DPM knowledge overlay (ADR 0039 L2) into the SPM compile.
+    """
 
     boundary = IssueSourceTransientIntakeBoundary(
         intake=EvidenceIntelligenceIntakeService(repository),
@@ -1320,6 +1325,7 @@ def compose_governed_compilation(
         routes=ISSUE_AGENT_ROUTE_REGISTRY,
         source_handling_resolver=source_handling_resolver,
         clock=clock,
+        engineering_context_authority=engineering_context_authority,
     )
     ingress = GovernedEngineeringTaskIngress(
         machine=machine,

@@ -31,7 +31,7 @@ from __future__ import annotations
 import hashlib
 import json
 import sys
-from collections.abc import Callable, Sequence
+from collections.abc import Callable, Mapping, Sequence
 from dataclasses import asdict, dataclass, field
 from datetime import timedelta
 from pathlib import Path
@@ -128,6 +128,8 @@ class AuthorizeDependencies:
     active_lifecycles: Callable[[], int]
     compiler_identity_sha256: str
     admission_cap: int = DEFAULT_ADMISSION_CAP
+    #: Verified anchored-knowledge overlay (ADR 0039 L2): prevention knowledge reaches the task before its model.
+    knowledge_overlay: Sequence[Mapping[str, Any]] = ()
     clock: Clock = field(default_factory=SystemClock)
 
 
@@ -274,10 +276,12 @@ def prepare(
             ),
             provenance_resolver=dependencies.provenance_resolver,
         )
+        dpm = EngineeringContextAuthority(knowledge_overlay=dependencies.knowledge_overlay)
         composed = compose_governed_compilation(
             repository=EvidenceIntelligenceRepository(evidence),
             source_handling_resolver=resolver,
             clock=dependencies.clock,
+            engineering_context_authority=dpm,
         )
         reference = issue_agent_intake_reference(authorization)
         document_id = evidence_document_id(reference)
@@ -319,7 +323,7 @@ def prepare(
     handoff_sha256 = state.sha256_hex(bundle)
     prompt_sha256 = state.sha256_hex(artifact.content.encode("utf-8"))
     dpm_context_sha256 = state.sha256_hex(
-        EngineeringContextAuthority().canonical_json(ENGINEERING_IMPLEMENT_TASK_KEY, scope=scope).encode("utf-8")
+        dpm.canonical_json(ENGINEERING_IMPLEMENT_TASK_KEY, scope=scope).encode("utf-8")
     )
     task_scope = {
         "task_id": scope.task_id,

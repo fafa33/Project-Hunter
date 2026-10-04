@@ -179,6 +179,97 @@ def _active_issues(configuration: control.Configuration) -> list[int]:
     return sorted(issues)
 
 
+def _registry_applicability(checkout: Path) -> Callable[[str, str], bool | None]:
+    """``(family_id, path)`` against the pinned registry: applicable, inapplicable, or no such family."""
+
+    from hunter.evidence_intelligence.engineering_context_authority import _path_intersects
+
+    registry = json.loads((checkout / "docs" / "DEFECT_REGISTRY.json").read_text(encoding="utf-8"))
+    families = {
+        str(family.get("id")): [str(p) for p in (family.get("applicability") or {}).get("changed_paths") or []]
+        for family in registry.get("families", [])
+        if isinstance(family, dict)
+    }
+
+    def applicability(family_id: str, path: str) -> bool | None:
+        if family_id not in families:
+            return None
+        return any(_path_intersects(path, entry) for entry in families[family_id])
+
+    return applicability
+
+
+def _knowledge_view(configuration: control.Configuration, github: control.GitHubRest) -> Any:
+    from hunter.automation import issue_agent_knowledge as knowledge
+
+    control.require_anchor(github, configuration, knowledge.KNOWLEDGE_LEDGER_REF)
+    try:
+        _, view = knowledge.read(
+            _store(configuration, authenticated=False),
+            trust=configuration.trust,
+            provenance=control.run_provenance(github, configuration),
+        )
+    except state.LedgerCorruptError as error:
+        raise control.Frozen("STATE_CORRUPT", str(error)) from None
+    return view
+
+
+def cmd_knowledge_ingest(configuration: control.Configuration, arguments: argparse.Namespace) -> int:
+    """ADR 0039 L1/L3.1 fast path: record every trusted-reviewer finding once, with its deterministic mapping."""
+
+    import hunter_collect_learning_observations as collector
+
+    from hunter.automation import issue_agent_knowledge as knowledge
+
+    writer = _writer("knowledge-ingest", "knowledge-ingest", control.KNOWLEDGE_WORKFLOW)
+    github = _github(configuration)
+    token = _secret("GITHUB_TOKEN")
+    control.require_anchor(github, configuration, knowledge.KNOWLEDGE_LEDGER_REF)
+    if arguments.pr:
+        numbers = [arguments.pr]
+    else:
+        listing = control.definitive(github.get(f"/repos/{configuration.repository}/pulls?state=open&per_page=100"))
+        if not isinstance(listing, list):
+            raise control.FactsUnavailable("open pull requests are not observable")
+        numbers = sorted(int(pr["number"]) for pr in listing)
+    trusted = collector._trusted_reviewer_logins()
+    applicability = _registry_applicability(Path(arguments.checkout))
+    provenance = control.run_provenance(github, configuration)
+    store = _store(configuration, authenticated=True)
+    for number in numbers:
+        pull = control.definitive(github.get(f"/repos/{configuration.repository}/pulls/{number}"))
+        if not isinstance(pull, Mapping) or pull.get("state") != "open":
+            continue
+        head, base = str(pull["head"]["sha"]), str(pull["base"]["sha"])
+        observations = collector.collect(configuration.repository, token, number, head, base)
+        try:
+            _, view = knowledge.read(store, trust=configuration.trust, provenance=provenance)
+            writes, refusals = knowledge.ingestion_writes(
+                view,
+                observations,
+                repository_id=configuration.repository_id,
+                trusted_reviewers=trusted,
+                applicability=applicability,
+            )
+            _, _, written = knowledge.append(
+                store,
+                writes,
+                trust=configuration.trust,
+                provenance=provenance,
+                signing_key=_ed25519(STATE_SIGNING_KEY_ENV),
+                recorded_by=writer.recorded_by(),
+                recorded_at=_timestamp(),
+            )
+        except state.LedgerConflictError:
+            raise control.FactsUnavailable("the knowledge ledger moved; the next run re-ingests") from None
+        except state.LedgerCorruptError as error:
+            raise control.Frozen("STATE_CORRUPT", str(error)) from None
+        print(f"PR #{number} at {head[:12]}: {written} knowledge record(s), {len(refusals)} refused observation(s)")
+        for refusal in refusals:
+            print(f"  refused {refusal}")
+    return 0
+
+
 def cmd_resume_bind(configuration: control.Configuration, arguments: argparse.Namespace) -> int:
     control_sha = control.bind_resume(
         github=_github(configuration),
@@ -264,7 +355,14 @@ def _authorize_dependencies(configuration: control.Configuration, github: contro
         open_issue_agent_pull_request=open_pull_request,
         active_lifecycles=active_lifecycles,
         compiler_identity_sha256=authorize.compiler_identity(control_sha=control_sha, checkout=Path.cwd()),
+        knowledge_overlay=_knowledge_overlay(configuration, github),
     )
+
+
+def _knowledge_overlay(configuration: control.Configuration, github: control.GitHubRest) -> list[dict[str, Any]]:
+    from hunter.automation import issue_agent_knowledge as knowledge
+
+    return knowledge.overlay_families(_knowledge_view(configuration, github))
 
 
 def _authorize_context() -> Any:
@@ -617,6 +715,8 @@ def _parser() -> argparse.ArgumentParser:
         child.add_argument("--trusted-repo", required=True)
         child.add_argument("--out", required=True)
     publish.add_argument("--workroot", required=True)
+    ingest = add("knowledge-ingest", cmd_knowledge_ingest)
+    ingest.add_argument("--pr", type=int)
     gate = add("candidate-gate", cmd_candidate_gate)
     gate.add_argument("--branch", required=True)
     gate.add_argument("--head-sha", required=True)
@@ -634,7 +734,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         return EXIT_REFUSED
     except control.FactsUnavailable as error:
         print(f"issue-agent lifecycle no-op: {error}", file=sys.stderr)
-        return EXIT_NOOP if arguments.command in ("step",) else EXIT_REFUSED
+        return EXIT_NOOP if arguments.command in ("step", "knowledge-ingest") else EXIT_REFUSED
 
 
 if __name__ == "__main__":

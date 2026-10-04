@@ -373,6 +373,7 @@ _RECORDED_BY = _object(
                 "reconcile",
                 "candidate-pr-record",
                 "source-handling-bootstrap",
+                "knowledge-ingest",
             }
         ),
         "run_id": POSITIVE,

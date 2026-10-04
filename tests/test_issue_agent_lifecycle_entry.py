@@ -29,6 +29,7 @@ COMMANDS = {
         "--workroot", "w",
     ],  # fmt: skip
     "candidate-gate": ["--branch", "issue-1-" + "a" * 16, "--head-sha", "b" * 40],
+    "knowledge-ingest": ["--pr", "561"],
 }
 SECRETS = {
     "GITHUB_TOKEN": "ghs_runner_token_value",

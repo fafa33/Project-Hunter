@@ -24,6 +24,7 @@ GOVERNED = (
     "hunter-issue-agent-reconcile.yml",
     "hunter-issue-agent-candidate-pr.yml",
     "hunter-issue-agent-replacement-rehearsal.yml",
+    "hunter-issue-agent-knowledge.yml",
 )
 
 CONTROL, EXECUTOR = "hunter-issue-agent-control", "hunter-issue-agent-executor"
@@ -238,7 +239,7 @@ def test_content_processing_jobs_run_exactly_control_sha() -> None:
 
 
 def test_every_lifecycle_job_goes_through_the_fail_closed_entry_point() -> None:
-    for name in (LIFECYCLE, "hunter-issue-agent-reconcile.yml"):
+    for name in (LIFECYCLE, "hunter-issue-agent-reconcile.yml", "hunter-issue-agent-knowledge.yml"):
         for job_id, job in load(name)["jobs"].items():
             commands = [str(s["run"]) for s in steps(job) if "run" in s and "pip install" not in str(s["run"])]
             python = [c for c in commands if "python " in c]

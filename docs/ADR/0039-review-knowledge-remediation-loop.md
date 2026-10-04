@@ -185,5 +185,5 @@ Everything stays inert until S6 (`MISSING_CONFIGURATION`).
 
 ## Implementation Status
 
-Not implemented. Slices S5b-1…S5b-5 (Retirement Plan §5). S5 is complete only when the reconciliation §5
+S5b-1/2 implemented (knowledge ledger, idempotent ingestion with deterministic classification, DPM overlay into the authorize compile; `issue_agent_knowledge`, `knowledge-ingest`, `hunter-issue-agent-knowledge.yml`). S5b-3…S5b-5 pending. S5 is complete only when the reconciliation §5
 acceptance simulation passes.

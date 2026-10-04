@@ -1,0 +1,55 @@
+name: Hunter / Issue Agent Knowledge
+
+# ADR 0039 L1/L3.1: the fast path of the review -> knowledge -> prevention loop. Review events run the
+# existing read-only "Hunter Knowledge Learning" workflow on the PR's merge ref, where the main-only control
+# environment correctly refuses secrets. This workflow therefore runs on trusted main when that workflow
+# completes (and on a schedule, and by owner dispatch with no payload relay), reads the authenticated
+# reviewer threads for open PRs, and appends each new finding exactly once -- with its deterministic family
+# mapping when one exists -- to the anchored knowledge ledger that DPM overlays before any later task.
+# PR progress never waits on it (not a required check). Inert until S6 (MISSING_CONFIGURATION).
+
+on:
+  workflow_run:
+    workflows:
+      - Hunter Knowledge Learning
+    types:
+      - completed
+  schedule:
+    - cron: "7,37 * * * *"
+  workflow_dispatch:
+
+permissions: {}
+
+concurrency:
+  group: hunter-issue-agent-knowledge
+  cancel-in-progress: false
+  queue: max
+
+jobs:
+  knowledge-ingest:
+    name: knowledge-ingest
+    if: github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    environment: hunter-issue-agent-control
+    permissions:
+      contents: write
+      actions: read
+      pull-requests: read
+    steps:
+      - name: Checkout trusted main
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+      - name: Set up Python
+        uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6.3.0
+        with:
+          python-version: "3.11.13"
+      - name: Install pinned runtime
+        run: python -m pip install --disable-pip-version-check --only-binary ':all:' -c requirements/ci-constraints.txt .
+      - name: Ingest reviewer findings into the anchored knowledge ledger
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+          HUNTER_ISSUE_AGENT_STATE_SIGNING_KEY: ${{ secrets.HUNTER_ISSUE_AGENT_STATE_SIGNING_KEY }}
+        run: python scripts/hunter_issue_agent_lifecycle.py knowledge-ingest

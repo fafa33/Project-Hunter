@@ -50,6 +50,7 @@ TRUST_ROOTS_SCHEMA_VERSION: Final = "hunter-issue-agent-trust-roots-v1"
 LIFECYCLE_WORKFLOW: Final = ".github/workflows/hunter-issue-agent-trigger.yml"
 RECONCILE_WORKFLOW: Final = ".github/workflows/hunter-issue-agent-reconcile.yml"
 CANDIDATE_PR_WORKFLOW: Final = ".github/workflows/hunter-issue-agent-candidate-pr.yml"
+KNOWLEDGE_WORKFLOW: Final = ".github/workflows/hunter-issue-agent-knowledge.yml"
 PREFLIGHT_WORKFLOW_FILE: Final = "hunter-pre-pr-preflight.yml"
 
 
@@ -75,6 +76,10 @@ WRITERS: Final[Mapping[str, WriterWorkflow]] = {
         frozenset({"schedule", "workflow_dispatch"}), {"reconcile": frozenset({"reconcile"})}
     ),
     CANDIDATE_PR_WORKFLOW: WriterWorkflow(frozenset({"workflow_run"}), {"candidate-pr-record": frozenset({"record"})}),
+    KNOWLEDGE_WORKFLOW: WriterWorkflow(
+        frozenset({"workflow_run", "schedule", "workflow_dispatch"}),
+        {"knowledge-ingest": frozenset({"knowledge-ingest"})},
+    ),
 }
 
 #: The lifecycle job that owns each non-terminal stage (state machine spec section 4).
