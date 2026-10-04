@@ -231,7 +231,7 @@ def promotion_delta(repo: Path, *, base_sha: str, entries: Sequence[Mapping[str,
     """
 
     if not entries:
-        pass
+        raise PromotionRefused("a promotion delta must name at least one proven finding")
     if [item["finding_id"] for item in entries] != sorted({item["finding_id"] for item in entries}):
         raise PromotionRefused("the promotion entries are not unique and sorted by finding id")
     documents = read_promotion_inputs(repo, base_sha=base_sha)
