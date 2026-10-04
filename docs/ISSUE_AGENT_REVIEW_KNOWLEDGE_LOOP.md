@@ -1,6 +1,6 @@
 # Issue #560: reviewer → knowledge → prevention → remediation loop (reconciliation)
 
-**Status: reconciliation and proposal (2026-10-04). Not yet architecture.** It records the owner requirement
+**Status: reconciliation (2026-10-04); owner decisions RD-1…RD-6 taken the same day and recorded as [ADR 0039](ADR/0039-review-knowledge-remediation-loop.md) (accepted).** Decided: RD-1 hybrid deterministic-first with RED→GREEN proof; RD-2 anchored knowledge ledger; RD-3 promotion inside the remediation commit; RD-4/RD-5 Hunter-agent PRs only with fast-forward-from-bound-head publication; RD-6 reply and resolve only after exact-head proof. It records the owner requirement
 of 2026-10-04 against the canonical authorities that already exist, names the smallest missing pieces, and
 lists the owner decisions (RD-1…RD-6) that must be taken before any of those pieces is implemented. The
 decisions are needed because several pieces require an authority that ADR 0037, ADR 0038, `CODE_WRITE_POLICY`
