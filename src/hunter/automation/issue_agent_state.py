@@ -104,7 +104,15 @@ FAILURE_CODES: Final = frozenset(
 )
 FREEZE_CODES: Final = frozenset({"STATE_CORRUPT", "STATE_ROLLBACK_SUSPECTED", "ANCHOR_INTEGRITY_FAILED"})
 ADVISORY_CODES: Final = frozenset(
-    {"PROVIDER_UNAVAILABLE", "PROVIDER_QUOTA", "MODEL_TIMEOUT", "NO_CHANGES", "MISSING_CONFIGURATION"}
+    {
+        "PROVIDER_UNAVAILABLE",
+        "PROVIDER_QUOTA",
+        "MODEL_TIMEOUT",
+        "NO_CHANGES",
+        "MISSING_CONFIGURATION",
+        "SECRET_IN_RESULT",
+        "EXECUTOR_RESULT_REJECTED",
+    }
 )
 EXECUTOR_CONCLUSIONS: Final = frozenset({"success", "failure", "cancelled", "timed_out", "skipped"})
 
@@ -1052,6 +1060,8 @@ class Facts:
 
     stage_run_active: bool | _Unknown = UNKNOWN
     executor_conclusion: str | None | _Unknown = UNKNOWN
+    #: The executor job's own advisory output. Untrusted: it only selects among terminal failure codes.
+    executor_advisory_code: str | None = None
     result_artifacts: tuple[ArtifactFact, ...] | _Unknown = UNKNOWN
     receipt: Mapping[str, Any] | None | _Unknown = UNKNOWN
     remote_branch_head: str | None | _Unknown = UNKNOWN
@@ -1117,7 +1127,8 @@ def advance(view: AuthorizationView, facts: Facts) -> Decision:
             )
         if facts.executor_conclusion in (None, "skipped"):
             return Decision("fail", code="EXECUTION_NOT_STARTED")
-        return Decision("fail", code="EXECUTION_NOT_COMPLETED")
+        advisory = {"SECRET_IN_RESULT": "SECRET_IN_RESULT", "MODEL_TIMEOUT": "EXECUTOR_RESULT_TIMEOUT"}
+        return Decision("fail", code=advisory.get(str(facts.executor_advisory_code), "EXECUTION_NOT_COMPLETED"))
 
     if state == RESULT_BOUND:
         if facts.receipt is UNKNOWN:

@@ -35,7 +35,7 @@ accepted, BLK-1 closed). Execution follows the slice order and gates below.
 | `provision_source_handling_issue_authority.py`, `bootstrap_source_handling_authority.py` | ADAPT | backend moves to the ref store under the ADR 0036 amendment (OD-5) | S3 |
 | `validate_replacement_result`, `CandidateFile`, path helpers (#524) | RETAIN / ADAPT | bind to the state-record binding; harden the corpus | S4 |
 | `validation_receipt` / `verify_validation_receipt` | ADAPT | add `execution_id`, `ciphertext_sha256`, `tree_sha`, `unsigned_commit_sha`, `task_scope_sha256`, `toolchain_sha256` | S4 |
-| `build_signed_candidate_commit` | ADAPT | fixed dates and template, `publication_identity` trailer, SSH Ed25519, unsigned-commit equality | S4 |
+| `build_signed_candidate_commit` | ADAPT | fixed identity, dates and identifier-only template (`Hunter-Authorization`/`-Execution`/`-Result` trailers), SSH Ed25519, unsigned-commit equality | S4 |
 | `publish_create_only` | ADAPT | **remove the `_run_pre_push_safety` call (PRH-067, live on `main`)**; empty lease; lost-ACK identical-head success | S4 |
 | `_run_pre_push_safety` (main version) | DELETE (S4) | replaced by the credential-free validator stage | S4 |
 | `publisher_environment_is_safe`, `assert_rehearsal_has_no_publication_authority` | RETAIN | separation proofs | S4 |
