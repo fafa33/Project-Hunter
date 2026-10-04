@@ -14,7 +14,10 @@ on:
 permissions: {}
 
 concurrency:
-  group: hunter-issue-agent-reconcile
+  group: >-
+    ${{ github.job == 'resolve-finding'
+        && 'hunter-issue-agent-resolve-finding'
+        || 'hunter-issue-agent-reconcile' }}
   cancel-in-progress: false
   queue: max
 
@@ -78,3 +81,33 @@ jobs:
           HUNTER_ISSUE_AGENT_STATE_SIGNING_KEY: ${{ secrets.HUNTER_ISSUE_AGENT_STATE_SIGNING_KEY }}
           HUNTER_ISSUE_AGENT_AUTHORIZATION_SIGNING_KEY: ${{ secrets.HUNTER_ISSUE_AGENT_AUTHORIZATION_SIGNING_KEY }}
         run: python scripts/hunter_issue_agent_lifecycle.py remediate
+
+  resolve-finding:
+    name: resolve-finding
+    if: github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    environment: hunter-issue-agent-control
+    # ADR 0039 L7 (RD-6): pull-requests:write exists only to post one exact-head evidence reply and resolve the
+    # exact review thread after proof. This job has no workflow trigger, so it can never start or approve one.
+    permissions:
+      contents: write
+      actions: read
+      pull-requests: write
+    steps:
+      - name: Checkout trusted main
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+      - name: Set up Python
+        uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6.3.0
+        with:
+          python-version: "3.11.13"
+      - name: Install pinned runtime
+        run: python -m pip install --disable-pip-version-check --only-binary ':all:' -c requirements/ci-constraints.txt .
+      - name: Prove the exact head, answer and resolve the exact thread
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+          HUNTER_ISSUE_AGENT_STATE_SIGNING_KEY: ${{ secrets.HUNTER_ISSUE_AGENT_STATE_SIGNING_KEY }}
+        run: python scripts/hunter_issue_agent_lifecycle.py resolve-finding

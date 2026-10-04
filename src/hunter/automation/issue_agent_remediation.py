@@ -24,6 +24,7 @@ from typing import Any, Final
 
 from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
 
+from hunter.automation import issue_agent_knowledge as knowledge
 from hunter.automation import issue_agent_replacement_executor as core
 from hunter.automation.issue_agent_execution import (
     ISSUE_AGENT_AUTHORIZATION_IDENTITY_PREFIX,
@@ -334,6 +335,177 @@ def _append_disposition(
     )
 
 
+# --- S5b-4: the anchored proof and resolution records ------------------------------------------------------
+
+
+def proof_writes(
+    view: knowledge.KnowledgeView,
+    *,
+    authorization_id: str,
+    validation: Mapping[str, Any],
+) -> list[knowledge.Write]:
+    """ADR 0039 L2/L3.2: the permanent classification a RED->GREEN proof earned.
+
+    Written by the control job that recorded ``VALIDATED``, from the *ledger's* proof group, never from a model
+    field. Without a proven mapping there is no classification at all, so the fix still lands and the finding
+    stays known and unresolved. Both kinds are insert-only and unique per key, so a duplicate pass writes
+    nothing.
+    """
+
+    proof = validation.get("remediation")
+    if not isinstance(proof, Mapping):
+        return []
+    proven = list(proof["proven_finding_ids"])
+    disposition = proof.get("disposition")
+    tests = sorted(str(item) for item in proof["regression_tests"])
+    if not proven or disposition is None or any(identity not in view.findings for identity in proven):
+        return []
+    if "new_family" in disposition:
+        finding = view.findings[proven[0]]
+        proposal = disposition["new_family"]
+        candidate = knowledge.candidate_id(str(proposal["invariant"]), [finding.path])
+        return [
+            knowledge.Write(
+                "family_candidate",
+                {
+                    "candidate_id": candidate,
+                    "title": str(proposal["title"]),
+                    "invariant": str(proposal["invariant"]),
+                    "changed_paths": [finding.path],
+                    "source_finding_ids": sorted(proven),
+                    "regression_tests": tests,
+                },
+            ),
+            knowledge.Write(
+                "finding_classified",
+                {
+                    "finding_id": proven[0],
+                    "outcome": "candidate-new-family",
+                    "family_id": None,
+                    "candidate_id": candidate,
+                    "basis": "proven",
+                    "regression_tests": tests,
+                    "authorization_id": authorization_id,
+                },
+            ),
+        ]
+    return [
+        knowledge.Write(
+            "finding_classified",
+            {
+                "finding_id": proven[0],
+                "outcome": "matched",
+                "family_id": str(disposition["family_id"]),
+                "candidate_id": None,
+                "basis": "proven",
+                "regression_tests": tests,
+                "authorization_id": authorization_id,
+            },
+        )
+    ]
+
+
+def proven_family(view: knowledge.KnowledgeView, finding_id: str) -> str | None:
+    """The canonical family a proven finding was mapped to, from the verified knowledge view alone."""
+
+    item = view.findings.get(finding_id)
+    classification = None if item is None else item.classification
+    if classification is None or classification["basis"] != "proven":
+        return None
+    family = classification.get("family_id")
+    return None if family is None else str(family)
+
+
+def proven_writes(
+    view: knowledge.KnowledgeView,
+    finding_id: str,
+    *,
+    authorization_id: str,
+    remediated_head_sha: str,
+    receipt_sha256: str,
+    preflight_run_id: int,
+) -> list[knowledge.Write]:
+    """ADR 0039 L2/L7: the exact-head proof, plus a recurrence when the family was already proven.
+
+    Called only after the hosted Pre-PR Preflight has succeeded at exactly ``remediated_head_sha``, so the proof
+    is bound to a head that actually passed the repository's own gates rather than to an outdated one. A
+    finding whose proven classification names no family -- a brand-new family candidate -- earns no recurrence.
+    """
+
+    item = view.findings.get(finding_id)
+    if item is None or item.proven is not None:
+        return []  # already proven, or not ingested: the insert-only rule makes a repeat a no-op
+    if item.classifications.get("proven") is None:
+        return []  # no proven mapping: the fix landed, but the finding is still only fixed, not classified
+    writes = [
+        knowledge.Write(
+            "finding_proven",
+            {
+                "finding_id": finding_id,
+                "authorization_id": authorization_id,
+                "remediated_head_sha": remediated_head_sha,
+                "receipt_sha256": receipt_sha256,
+                "preflight_run_id": preflight_run_id,
+                "regression_tests": sorted(item.classifications["proven"]["regression_tests"]),
+            },
+        )
+    ]
+    family = proven_family(view, finding_id)
+    if family is not None and (family, finding_id) not in view.recurrences:
+        writes.append(knowledge.Write("recurrence", {"family_id": family, "finding_id": finding_id}))
+    return writes
+
+
+def resolution_writes(
+    view: knowledge.KnowledgeView,
+    finding_id: str,
+    *,
+    remediated_head_sha: str,
+    reply_comment_id: int,
+) -> list[knowledge.Write]:
+    """ADR 0039 L2/L7 (RD-6): the exact thread resolution, keyed by the finding and bound to the exact head.
+
+    Only reachable once ``finding_proven`` exists at that head, so the resolution record cannot be written
+    before the proof, and the reply comment id must already exist, so it cannot be written before the reply.
+    """
+
+    item = view.findings.get(finding_id)
+    if item is None or item.proven is None or item.proven["remediated_head_sha"] != remediated_head_sha:
+        return []
+    if item.resolved is not None or reply_comment_id < 1:
+        return []
+    return [
+        knowledge.Write(
+            "thread_resolved",
+            {
+                "finding_id": finding_id,
+                "remediated_head_sha": remediated_head_sha,
+                "reply_comment_id": reply_comment_id,
+            },
+        )
+    ]
+
+
+def evidence_reply(finding_id: str, *, remediated_head_sha: str, family: str, tests: Sequence[str]) -> str:
+    """The one evidence reply a control job may post (RD-6): identities and digests, never model prose.
+
+    It names the finding, the exact head it was proven at, the family it was proven against and the regression
+    tests that prove it, so a reviewer can verify every claim from the public anchors alone.
+    """
+
+    return "\n".join(
+        [
+            f"Hunter remediation proof for finding `{finding_id}`.",
+            "",
+            f"- remediated head: `{remediated_head_sha}`",
+            f"- proven family: `{family}`",
+            f"- regression evidence: {', '.join(f'`{item}`' for item in tests)}",
+            "- proof: the named regression fails on the reviewed head and passes on the full result "
+            "(ADR 0039 L3.2), and the promotion is in this same commit (ADR 0039 L6).",
+        ]
+    )
+
+
 __all__ = [
     "PROMOTION_PATHS",
     "PROMOTION_SERIALIZATION",
@@ -342,9 +514,14 @@ __all__ = [
     "next_family_id",
     "promote",
     "promotion_delta",
+    "evidence_reply",
+    "proof_writes",
+    "proven_family",
+    "proven_writes",
     "read_promotion_inputs",
     "remediation_authorization",
     "remediation_group",
     "remediation_scope",
+    "resolution_writes",
     "sign_remediation",
 ]

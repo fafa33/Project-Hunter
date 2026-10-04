@@ -203,9 +203,45 @@ def cmd_step(configuration: control.Configuration, arguments: argparse.Namespace
                 executor_advisory_code=arguments.advisory or None,
             )
             print(f"issue {issue}: {decision.action} {decision.target_state or decision.code or ''}".rstrip())
+            if decision.target_state == state.VALIDATED and job == "record-validation":
+                _record_proven_classification(configuration, github, writer, issue)
         except control.FactsUnavailable as error:
             print(f"issue {issue}: no-op ({error})")
     return 0
+
+
+def _record_proven_classification(
+    configuration: control.Configuration, github: control.GitHubRest, writer: control.Writer, issue: int
+) -> None:
+    """ADR 0039 L3.2/L2: make a proven mapping permanent knowledge, from the ledger's own proof group.
+
+    Only the classification is written here. The exact-head ``finding_proven`` proof and the thread resolution
+    belong to the reconcile job that can observe the hosted preflight and the re-review at that head, so a
+    classification can never imply that a thread was resolved.
+    """
+
+    store = _store(configuration, authenticated=True)
+    provenance = control.run_provenance(github, configuration)
+    _head, view = control.load_ledger(store, configuration, provenance, issue)
+    authorization = view.authorizations.get(view.active or "")
+    if authorization is None or state.VALIDATED not in authorization.evidence:
+        return
+    known = _knowledge_view(configuration, github)
+    writes = remediation.proof_writes(
+        known, authorization_id=authorization.authorization_id, validation=authorization.evidence[state.VALIDATED]
+    )
+    if not writes:
+        return
+    _, _, written = knowledge.append(
+        store,
+        writes,
+        trust=configuration.trust,
+        provenance=provenance,
+        signing_key=_ed25519(STATE_SIGNING_KEY_ENV),
+        recorded_by=writer.recorded_by(),
+        recorded_at=_timestamp(),
+    )
+    print(f"issue {issue}: {written} proven-classification knowledge record(s)")
 
 
 def _active_issues(configuration: control.Configuration) -> list[int]:
@@ -397,6 +433,84 @@ def cmd_remediate(configuration: control.Configuration, arguments: argparse.Name
         except control.FactsUnavailable as error:
             print(f"issue {issue}: no-op ({error})")
     return 0 if dispatched or arguments.issue else EXIT_NOOP
+
+
+def cmd_resolve(configuration: control.Configuration, arguments: argparse.Namespace) -> int:
+    """ADR 0039 L7 (RD-6): answer and resolve one exact review thread, only at an exactly proven head.
+
+    The owner label, the anchored proof, the successful exact-head hosted Pre-PR Preflight and a re-review at
+    that head are all required before anything is written. The only writes are one reply on the finding's own
+    thread, one ``resolveReviewThread`` on that thread, and the insert-only knowledge records -- never an edit,
+    a dismissal, an approval or a merge, and never a second pull request call.
+    """
+
+    writer = _writer("reconcile", "resolve", control.RECONCILE_WORKFLOW)
+    github = _github(configuration)
+    control.require_anchor(github, configuration, knowledge.KNOWLEDGE_LEDGER_REF)
+    provenance = control.run_provenance(github, configuration)
+    store = _store(configuration, authenticated=True)
+    known = _knowledge_view(configuration, github)
+    resolved = 0
+    for issue in ([arguments.issue] if arguments.issue else _active_issues(configuration)):
+        _head, state_view = control.load_ledger(store, configuration, provenance, issue)
+        for finding_id in sorted(known.findings):
+            try:
+                proof = control.exact_head_proof(github, configuration, known, state_view, finding_id)
+                if proof is None:
+                    continue
+                _head, after = knowledge.read(store, trust=configuration.trust, provenance=provenance)
+                written = knowledge.append(
+                    store,
+                    remediation.proven_writes(
+                        after,
+                        finding_id,
+                        authorization_id=proof.authorization_id,
+                        remediated_head_sha=proof.remediated_head_sha,
+                        receipt_sha256=proof.receipt_sha256,
+                        preflight_run_id=proof.preflight_run_id,
+                    ),
+                    trust=configuration.trust,
+                    provenance=provenance,
+                    signing_key=_ed25519(STATE_SIGNING_KEY_ENV),
+                    recorded_by=writer.recorded_by(),
+                    recorded_at=_timestamp(),
+                )[2]
+                comment_id = control.resolve_thread(
+                    github,
+                    configuration,
+                    proof,
+                    remediation.evidence_reply(
+                        finding_id,
+                        remediated_head_sha=proof.remediated_head_sha,
+                        family=proof.family_id or "a new family candidate",
+                        tests=proof.regression_tests,
+                    ),
+                )
+                if comment_id is None:
+                    print(f"issue {issue}: {finding_id[:12]} proven ({written} record(s)); the thread is not resolved")
+                    continue
+                _head, after = knowledge.read(store, trust=configuration.trust, provenance=provenance)
+                knowledge.append(
+                    store,
+                    remediation.resolution_writes(
+                        after,
+                        finding_id,
+                        remediated_head_sha=proof.remediated_head_sha,
+                        reply_comment_id=comment_id,
+                    ),
+                    trust=configuration.trust,
+                    provenance=provenance,
+                    signing_key=_ed25519(STATE_SIGNING_KEY_ENV),
+                    recorded_by=writer.recorded_by(),
+                    recorded_at=_timestamp(),
+                )
+                resolved += 1
+                print(f"issue {issue}: resolved {finding_id[:12]} at {proof.remediated_head_sha[:12]}")
+            except control.FactsUnavailable as error:
+                print(f"issue {issue}: no-op ({error})")
+            except state.LedgerConflictError:
+                print(f"issue {issue}: no-op (the knowledge ledger moved; the next pass re-decides)")
+    return 0 if resolved or arguments.issue else EXIT_NOOP
 
 
 def cmd_resume_bind(configuration: control.Configuration, arguments: argparse.Namespace) -> int:
@@ -866,6 +980,8 @@ def _parser() -> argparse.ArgumentParser:
     ingest.add_argument("--pr", type=int)
     remediate = add("remediate", cmd_remediate)
     remediate.add_argument("--issue", type=int)
+    resolve = add("resolve-finding", cmd_resolve)
+    resolve.add_argument("--issue", type=int)
     gate = add("candidate-gate", cmd_candidate_gate)
     gate.add_argument("--branch", required=True)
     gate.add_argument("--head-sha", required=True)
@@ -883,7 +999,11 @@ def main(argv: Sequence[str] | None = None) -> int:
         return EXIT_REFUSED
     except control.FactsUnavailable as error:
         print(f"issue-agent lifecycle no-op: {error}", file=sys.stderr)
-        return EXIT_NOOP if arguments.command in ("step", "knowledge-ingest", "remediate") else EXIT_REFUSED
+        return (
+            EXIT_NOOP
+            if arguments.command in ("step", "knowledge-ingest", "remediate", "resolve-finding")
+            else EXIT_REFUSED
+        )
 
 
 if __name__ == "__main__":

@@ -16,6 +16,7 @@ AUTH = "hunter-issue-agent-authorization:" + "a" * 64
 COMMANDS = {
     "authorize-prepare": ["--event", "event.json", "--out-dir", "out"],
     "remediate": ["--issue", "1"],
+    "resolve-finding": ["--issue", "1"],
     "authorize-commit": ["--out-dir", "out", "--artifact-id", "1"],
     "step": ["--role", "reconcile"],
     "resume-bind": ["--issue", "1", "--authorization-id", AUTH, "--stage", "validation", "--nonce", "f" * 64],

@@ -36,6 +36,7 @@ from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey,
 from cryptography.hazmat.primitives.asymmetric.x25519 import X25519PublicKey
 
 from hunter.automation import issue_agent_knowledge as knowledge
+from hunter.automation import issue_agent_remediation as remediation
 from hunter.automation import issue_agent_state as state
 from hunter.automation.issue_agent_roles import RECEIPT_SCHEMA_VERSION, WriterIdentity
 from hunter.automation.issue_agent_transport import (
@@ -261,6 +262,10 @@ class GitHub(Protocol):
 
     def dispatch(self, workflow_file: str, inputs: Mapping[str, str]) -> bool: ...
 
+    def reply(self, path: str, body: Mapping[str, Any]) -> Read: ...
+
+    def graphql(self, query: str, variables: Mapping[str, Any]) -> Read: ...
+
 
 def definitive(read: Read) -> Any:
     """``ok`` → the value, ``absent`` → ``None``; anything indefinite stops the step."""
@@ -357,6 +362,34 @@ class GitHubRest:
         url = f"{self.API}/repos/{self.repository}/actions/workflows/{workflow_file}/dispatches"
         status, _ = self._request("POST", url, body)
         return status == 204
+
+    def reply(self, path: str, body: Mapping[str, Any]) -> Read:
+        """Post one pull-request comment. The only write this control domain performs on a pull request."""
+
+        if not path.startswith("/repos/"):
+            raise ValueError("only repository-scoped writes are allowed")
+        status, payload = self._request("POST", self.API + path, json.dumps(dict(body), sort_keys=True).encode("utf-8"))
+        if status in (404, 410, 422):
+            return Read("absent")
+        if status not in (200, 201) or len(payload) > MAX_ARTIFACT_BYTES:
+            return Read("unknown")
+        try:
+            return Read("ok", json.loads(payload))
+        except ValueError:
+            return Read("unknown")
+
+    def graphql(self, query: str, variables: Mapping[str, Any]) -> Read:
+        """One GraphQL mutation or query. Used only for the exact-thread resolve (RD-6)."""
+
+        body = json.dumps({"query": query, "variables": dict(variables)}).encode("utf-8")
+        status, payload = self._request("POST", f"{self.API}/graphql", body)
+        if status != 200 or len(payload) > MAX_ARTIFACT_BYTES:
+            return Read("unknown")
+        try:
+            envelope = json.loads(payload)
+        except ValueError:
+            return Read("unknown")
+        return Read("ok", envelope.get("data")) if not envelope.get("errors") else Read("unknown")
 
 
 # --- provenance and anchor ------------------------------------------------------------------------------
@@ -539,14 +572,31 @@ def _receipt_matches(view: state.AuthorizationView, receipt: Mapping[str, Any]) 
         return False
     if receipt.get("verdict") == "REFUSED":
         return set(receipt) == {*_REFUSAL_FIELDS} and receipt.get("code") in state.VALIDATION_REFUSAL_CODES
-    return (
+    if not (
         receipt.get("verdict") == "PASS"
-        and set(receipt) == _RECEIPT_FIELDS
+        and set(receipt) == _RECEIPT_FIELDS | ({"remediation"} if "remediation" in bound else set())
         and receipt.get("result_sha256") == result["result_plaintext_sha256"]
         and receipt.get("base_sha") == bound["base_sha"]
         and receipt.get("task_scope_sha256") == bound["task_scope_sha256"]
         and all(_SHA40.fullmatch(str(receipt.get(f))) for f in ("tree_sha", "unsigned_commit_sha"))
         and all(_SHA64.fullmatch(str(receipt.get(f))) for f in ("validation_definition", "toolchain_sha256"))
+    ):
+        return False
+    if "remediation" not in bound:
+        return "remediation" not in receipt  # the Issue path can never carry a remediation proof
+    group = receipt.get("remediation")
+    if not isinstance(group, Mapping):
+        return False
+    proven = group.get("proven_finding_ids")
+    return (
+        group.get("bound_head_sha") == bound["base_sha"] == bound["remediation"]["bound_head_sha"]
+        and group.get("finding_ids") == bound["remediation"]["finding_ids"]
+        and isinstance(proven, list)
+        and set(proven) <= set(bound["remediation"]["finding_ids"])
+        and len(proven) == len(set(proven))
+        and group.get("regression_tests") == sorted(set(group.get("regression_tests") or []))
+        and _SHA64.fullmatch(str(group.get("promotion_sha256"))) is not None
+        and bool(proven) == (group.get("disposition") is not None)
     )
 
 
@@ -715,6 +765,200 @@ def dispatch_remediation(github: GitHub, candidate: RemediationCandidate, docume
         Path(LIFECYCLE_WORKFLOW).name,
         {REMEDIATION_DISPATCH_INPUT: base64.b64encode(document).decode("ascii")},
     )
+
+
+#: ADR 0039 L7 (RD-6): the one GraphQL mutation a control job may perform. It resolves exactly one thread, and
+#: the repository has no other review-mutation path, so a review can never be edited, dismissed or approved here.
+RESOLVE_THREAD_MUTATION: Final = """
+mutation ResolveHunterThread($threadId: ID!) {
+  resolveReviewThread(input: {threadId: $threadId}) { thread { id isResolved } }
+}
+"""
+
+#: ADR 0039 L7: the review threads of one pull request at its current head. The first comment's database id is
+#: the authenticated reviewer thread the finding was minted from, so nothing here trusts a stored node id.
+REVIEW_THREADS_QUERY: Final = """
+query HunterReviewThreads($owner: String!, $name: String!, $number: Int!) {
+  repository(owner: $owner, name: $name) {
+    pullRequest(number: $number) {
+      headRefOid
+      reviewThreads(first: 100) {
+        nodes {
+          id
+          isResolved
+          isOutdated
+          comments(first: 1) { nodes { databaseId path body } }
+        }
+      }
+    }
+  }
+}
+"""
+
+#: ADR 0039 L7 (RD-6): the one pull-request reply a control job may post, on the exact finding's thread.
+THREAD_REPLY_PATH: Final = "/repos/{repository}/pulls/{number}/comments/{comment_id}/replies"
+
+
+@dataclass(frozen=True, slots=True)
+class ReviewThread:
+    """One authenticated reviewer thread at the pull request's current head."""
+
+    node_id: str
+    resolved: bool
+    outdated: bool
+    comment_id: int
+    path: str
+    fingerprint: str | None
+
+
+def review_threads(github: GitHub, configuration: Configuration, number: int) -> tuple[str, tuple[ReviewThread, ...]]:
+    """``(head_sha, threads)`` for one pull request, read at its exact current head. Malformed is indefinite.
+
+    The head comes from the same query that reads the threads, so a thread can never be compared against a
+    head observed a moment later: both facts describe the same immutable commit.
+    """
+
+    owner, _, name = configuration.repository.partition("/")
+    payload = definitive(github.graphql(REVIEW_THREADS_QUERY, {"owner": owner, "name": name, "number": number}))
+    repository = payload.get("repository") if isinstance(payload, Mapping) else None
+    pull = repository.get("pullRequest") if isinstance(repository, Mapping) else None
+    head = str((pull or {}).get("headRefOid") or "")
+    if not isinstance(pull, Mapping) or _SHA40.fullmatch(head) is None:
+        raise FactsUnavailable("the pull request's review threads are not observable at its head")
+    threads: list[ReviewThread] = []
+    for node in (pull.get("reviewThreads") or {}).get("nodes") or []:
+        if not isinstance(node, Mapping):
+            continue
+        first = ((node.get("comments") or {}).get("nodes") or [{}])[0]
+        identity, comment, path = node.get("id"), first.get("databaseId"), str(first.get("path") or "")
+        if not isinstance(identity, str) or type(comment) is not int:
+            continue
+        try:
+            fingerprint = knowledge.fingerprint(path, knowledge.normalized_claim(str(first.get("body") or "")))
+        except knowledge.FindingRefused:
+            fingerprint = None  # a thread with no textual claim carries no finding to compare
+        threads.append(
+            ReviewThread(
+                identity,
+                node.get("isResolved") is True,
+                node.get("isOutdated") is True,
+                comment,
+                path,
+                fingerprint,
+            )
+        )
+    return head, tuple(threads)
+
+
+@dataclass(frozen=True, slots=True)
+class ResolutionProof:
+    """Everything ADR 0039 L7 requires before one exact review thread may be answered and resolved."""
+
+    finding_id: str
+    pull_request_number: int
+    thread: ReviewThread
+    remediated_head_sha: str
+    preflight_run_id: int
+    authorization_id: str
+    receipt_sha256: str
+    regression_tests: tuple[str, ...]
+    family_id: str | None
+
+
+def exact_head_proof(
+    github: GitHub,
+    configuration: Configuration,
+    known: knowledge.KnowledgeView,
+    ledger: state.LedgerView,
+    finding_id: str,
+) -> ResolutionProof | None:
+    """ADR 0039 L7 (RD-6): the proof that *this* head closed *this* finding, or ``None``.
+
+    Every condition is a definitive fact or a verified ledger fact, and any one of them failing yields ``None``:
+
+    1. the finding is proven-classified and still open in the verified knowledge ledger;
+    2. the pull request's own current head is the head that exactly one remediation authorization of this Issue
+       published for this finding -- so the proof cannot be about an outdated head;
+    3. the hosted Pre-PR Preflight succeeded at exactly that head;
+    4. the review cycle at exactly that head leaves no unresolved, current thread carrying this finding's
+       comment id or fingerprint -- so neither an outdated thread nor one someone else resolved is proof.
+
+    A brand-new family candidate has no family yet, so condition 1 fails and the thread is never resolved: the
+    finding stays known and unresolved until the registry promotion lands and a later cycle proves it.
+    """
+
+    item = known.findings.get(finding_id)
+    if item is None or not item.open or item.classifications.get("proven") is None:
+        return None
+    head, threads = review_threads(github, configuration, item.pull_request_number)
+    comment_id = int(item.ingested["provenance"]["comment_id"])
+    current = [thread for thread in threads if not thread.outdated]
+    if any(
+        not thread.resolved and (thread.comment_id == comment_id or thread.fingerprint == item.ingested["fingerprint"])
+        for thread in current
+    ):
+        return None  # the same claim is still open at this head: nothing resolves and readiness stays blocked
+    published = [
+        authorization
+        for authorization in ledger.authorizations.values()
+        if authorization.state == state.PUBLISHED
+        and authorization.evidence.get(state.PUBLISHED, {}).get("head_sha") == head
+        and (authorization.evidence.get(state.AUTHORIZED) or {}).get("remediation") is not None
+        and finding_id in authorization.evidence[state.AUTHORIZED]["remediation"]["finding_ids"]
+    ]
+    if len(published) != 1:
+        return None  # zero or ambiguous: never resolve against an authorization we cannot name uniquely
+    conclusion, preflight_run = _preflight(github, configuration, head)
+    if conclusion != "success" or preflight_run is None:
+        return None  # an outstanding or failed exact-head gate is not proof
+    # The thread this job answers and resolves is the finding's own authenticated thread, which after the fix
+    # is typically outdated because it was written against the previous head. Recurrence is judged only on the
+    # *current* threads above; the resolution acts on the original thread.
+    matched = [thread for thread in threads if thread.comment_id == comment_id]
+    if len(matched) != 1:
+        return None  # the exact authenticated thread is not observable: nothing is resolved by guesswork
+    thread = matched[0]
+    validation = published[0].evidence[state.VALIDATED]
+    return ResolutionProof(
+        finding_id,
+        item.pull_request_number,
+        thread,
+        head,
+        preflight_run,
+        published[0].authorization_id,
+        str(validation["receipt_sha256"]),
+        tuple(sorted(item.classifications["proven"]["regression_tests"])),
+        remediation.proven_family(known, finding_id),
+    )
+
+
+def resolve_thread(github: GitHub, configuration: Configuration, proof: ResolutionProof, body: str) -> int | None:
+    """Post the one evidence reply and resolve exactly that thread. Nothing else is ever written.
+
+    Returns the reply comment id, or ``None`` when either write was refused. A reply that landed but whose
+    resolve was refused is not a resolution: the finding stays open and the next pass re-observes the thread.
+    """
+
+    try:
+        posted = definitive(
+            github.reply(
+                THREAD_REPLY_PATH.format(
+                    repository=configuration.repository,
+                    number=proof.pull_request_number,
+                    comment_id=proof.thread.comment_id,
+                ),
+                {"body": body, "in_reply_to": proof.thread.comment_id},
+            )
+        )
+        if not isinstance(posted, Mapping) or type(posted.get("id")) is not int:
+            return None
+        resolved = definitive(github.graphql(RESOLVE_THREAD_MUTATION, {"threadId": proof.thread.node_id}))
+    except FactsUnavailable:
+        # An indefinite write is never reported as a resolution: the finding stays open and the next pass
+        # re-observes the thread, so an ambiguous or lost acknowledgement cannot look like success.
+        return None
+    thread = resolved.get("resolveReviewThread", {}).get("thread") if isinstance(resolved, Mapping) else None
+    return int(posted["id"]) if isinstance(thread, Mapping) and thread.get("isResolved") is True else None
 
 
 def _preflight(github: GitHub, configuration: Configuration, head_sha: str) -> tuple[str | None, int | None]:
@@ -978,7 +1222,7 @@ def _evidence(
     if target == state.VALIDATED:
         receipt = facts.receipt
         assert isinstance(receipt, Mapping) and observation.receipt_run_id is not None
-        return target, {
+        evidence = {
             "receipt_sha256": state.sha256_hex(state.canonical_json(receipt)),
             "result_sha256": receipt["result_sha256"],
             "tree_sha": receipt["tree_sha"],
@@ -988,6 +1232,11 @@ def _evidence(
             "validator_run_id": observation.receipt_run_id,
             "validation_attempts": _attempt(view, "validation"),
         }
+        if "remediation" in receipt:
+            # ADR 0039 L5/L6: the proof group reaches the anchored Issue ledger, so the publisher and every later
+            # reader bind the same proven findings, tests and promotion digest.
+            evidence["remediation"] = dict(receipt["remediation"])
+        return target, evidence
     if target == state.PUBLISHED:
         validated = view.evidence[state.VALIDATED]
         return target, {
@@ -1184,9 +1433,14 @@ __all__ = [
     "RemediationCandidate",
     "Writer",
     "WRITERS",
+    "ReviewThread",
+    "ResolutionProof",
     "bind_resume",
     "dispatch_remediation",
     "eligible_remediation",
+    "exact_head_proof",
+    "resolve_thread",
+    "review_threads",
     "load_configuration",
     "observe",
     "outcome_artifact_name",
