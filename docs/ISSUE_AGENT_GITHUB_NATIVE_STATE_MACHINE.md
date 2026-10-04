@@ -76,7 +76,7 @@ The signature covers the record without `signature`.
 | result | `result_plaintext_sha256` (as declared in the authenticated associated data; verified at T3), `executor_job_id`, `executor_conclusion`, `executor_advisory_code` |
 | validation | `receipt_sha256`, `result_sha256`, `tree_sha`, `unsigned_commit_sha`, `validation_definition`, `toolchain_sha256`, `verdict`, `validator_run_id`, `validation_attempts` |
 | publication | `writer_login`, `publication_identity`, `head_sha`, `commit_verified`, `publish_attempts` |
-| completion | `pull_request_number`, `pull_request_node_id`, `pull_request_head_sha`, `draft` = `true` |
+| completion | `pull_request_number`, `pull_request_node_id`, `pull_request_head_sha`, `draft` = `true`, `preflight_run_id`, `preflight_conclusion` = `success` |
 
 **Identity derivations** (ADR D6):
 
@@ -118,7 +118,7 @@ global freeze `ANCHOR_INTEGRITY_FAILED`.
 | AUTHORIZED | RESULT_BOUND | control:`bind`/reconcile | `result_artifact`, executor job id and conclusion |
 | RESULT_BOUND | VALIDATED | control:`record-validation`/reconcile | receipt fields |
 | VALIDATED | PUBLISHED | control:`finalize`/reconcile | `head_sha`, `publication_identity`, `commit_verified` = true |
-| PUBLISHED | COMPLETED | control:candidate-PR record step/reconcile | PR number, node id, head, `draft` |
+| PUBLISHED | COMPLETED | control:candidate-PR record step/reconcile | PR number, node id, head, `draft`, and the exact-head Pre-PR run id with conclusion `success` |
 | any non-terminal | FAILED | any control role | `failure.code` from §10 |
 
 **CAS.** The writer reads head `H0`, verifies the chain, decides, appends one commit with parent `H0`, and
@@ -296,6 +296,11 @@ re-dispatched.
   authorization_id, nonce)` (documented to create a run even with `GITHUB_TOKEN`) → the resume run CASes
   `bound_run_id` and must check out `control_sha` (else `CONTROL_SHA_NOT_ON_MAIN`).
 - **What may resume.** Validation and publication only. Resume runs execute `control_sha` code.
+- **A pending resume never stalls** (PR #561 review). If it is unbound and no run carries its nonce after
+  `RESUME_DISPATCH_GRACE_SECONDS` (600), the same nonce is re-dispatched. No attempt is consumed, and the
+  nonce CAS still admits one run. If its run concluded without the stage output (bound or unbound), a
+  `resume_abandoned` record clears it and **consumes** the attempt; the next decision is the next attempt or
+  the exhausted-cap failure.
 - **Writers.** Observation and terminal transitions may be written by newer trusted `main` code that supports
   the record's `schema_version` (ADR D1).
 - **Provenance cost.** Run provenance is verified once per record per job, using public run metadata (about
@@ -313,8 +318,9 @@ re-dispatched.
 | VALIDATED | foreign head | TF `REMOTE_BRANCH_CONFLICT` |
 | VALIDATED | absent, attempts < 3, unexpired, before deadline | publication resume |
 | VALIDATED | otherwise | TF `PUBLICATION_UNAVAILABLE` / `RESULT_TRANSPORT_EXPIRED` / `LIFECYCLE_DEADLINE_EXCEEDED` |
-| PUBLISHED | open Draft PR at head | T5 |
-| PUBLISHED | Pre-PR non-success at head | TF `CANDIDATE_PREFLIGHT_FAILED` |
+| PUBLISHED | Pre-PR non-success at head | TF `CANDIDATE_PREFLIGHT_FAILED` (checked first, even if a PR exists) |
+| PUBLISHED | open Draft PR at head **and** Pre-PR `success` at head | T5 |
+| PUBLISHED | open Draft PR, Pre-PR not concluded | no-op |
 | PUBLISHED | past deadline | TF `CANDIDATE_PREFLIGHT_TIMEOUT` |
 | any | verification fails | **freeze** `STATE_CORRUPT` (§7) |
 | any | anchor integrity fails | **global freeze** `ANCHOR_INTEGRITY_FAILED` (§7) |

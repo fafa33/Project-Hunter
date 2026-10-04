@@ -209,6 +209,8 @@ def full_chain(until: str = state.COMPLETED) -> Chain:
                 "pull_request_node_id": "PR_kwDO",
                 "pull_request_head_sha": "9a" * 20,
                 "draft": True,
+                "preflight_run_id": 77,
+                "preflight_conclusion": "success",
             },
             "candidate-pr-record",
         ),
@@ -287,6 +289,8 @@ def test_skipping_a_state_is_an_illegal_transition(until: str, target: str, role
             "pull_request_node_id": "PR_x",
             "pull_request_head_sha": "9a" * 20,
             "draft": True,
+            "preflight_run_id": 77,
+            "preflight_conclusion": "success",
         },
         state.VALIDATED: validated_evidence(),
     }[target]
@@ -300,9 +304,11 @@ def test_completed_requires_the_observed_draft_pr_at_the_published_head() -> Non
         "pull_request_node_id": "PR_x",
         "pull_request_head_sha": "1" * 40,
         "draft": True,
+        "preflight_run_id": 77,
+        "preflight_conclusion": "success",
     }
     reject(chain, chain.make("transition", state.COMPLETED, wrong_head, _by("candidate-pr-record")), "published head")
-    missing = {"pull_request_number": 561, "draft": True}
+    missing = {"pull_request_number": 561, "draft": True, "preflight_run_id": 77, "preflight_conclusion": "success"}
     reject(chain, chain.make("transition", state.COMPLETED, missing, _by("candidate-pr-record")), "schema")
 
 
@@ -774,6 +780,98 @@ def _art(artifact_id: int = 22, name: str = f"hunter-ia-result-{AUTH}", expired:
 def test_advance_decision_table(until: str, facts: Facts, expected: tuple[str, str | None, str | None]) -> None:
     decision = state.advance(_view(until), facts)
     assert (decision.action, decision.target_state, decision.code) == expected
+
+
+def test_completed_requires_a_successful_exact_head_preflight() -> None:
+    chain = full_chain(state.PUBLISHED)
+    failed = {
+        "pull_request_number": 561,
+        "pull_request_node_id": "PR_x",
+        "pull_request_head_sha": "9a" * 20,
+        "draft": True,
+        "preflight_run_id": 77,
+        "preflight_conclusion": "failure",
+    }
+    reject(chain, chain.make("transition", state.COMPLETED, failed, _by("candidate-pr-record")), "schema")
+    view = chain.view.authorizations[AUTH]
+    with_failed_preflight = Facts(**DONE, open_draft_pr={"number": 561}, preflight_conclusion="failure")
+    assert (state.advance(view, with_failed_preflight).action, state.advance(view, with_failed_preflight).code) == (
+        "fail",
+        "CANDIDATE_PREFLIGHT_FAILED",
+    )
+    pending_preflight = Facts(**DONE, open_draft_pr={"number": 561}, preflight_conclusion=None)
+    assert state.advance(view, pending_preflight).action == "noop"
+
+
+def _pending(chain: Chain, stage: str = "validation", dispatched_at: str = "2026-10-04T11:00:00Z") -> Chain:
+    current = chain.view.authorizations[AUTH].state
+    attempt = (chain.view.authorizations[AUTH].resume_attempts or {}).get(stage, 0) + 1
+    evidence = {"stage": stage, "nonce": f"{attempt}" * 64, "attempt": attempt, "dispatched_at": dispatched_at}
+    return chain.add(chain.make("resume_requested", current, evidence, _by("reconcile")))
+
+
+RESUMABLE = dict(
+    receipt=None,
+    result_artifacts=(ArtifactFact(22, "x", "sha256:" + "e" * 64, 1, False),),
+    remote_branch_head=None,
+    open_draft_pr=None,
+)
+
+
+@pytest.mark.parametrize(
+    ("status", "now", "expected"),
+    [
+        (UNKNOWN, "2026-10-04T12:00:00Z", "noop"),
+        ("active", "2026-10-04T12:00:00Z", "noop"),
+        (None, "2026-10-04T11:05:00Z", "noop"),  # within the dispatch grace
+        (None, "2026-10-04T12:00:00Z", "redispatch"),  # dispatch lost: same nonce, no attempt consumed
+        ("concluded", "2026-10-04T12:00:00Z", "abandon_resume"),  # run ended without output
+    ],
+)
+def test_a_pending_resume_never_stalls(status: Any, now: str, expected: str) -> None:
+    view = _pending(full_chain(state.RESULT_BOUND)).view.authorizations[AUTH]
+    facts = Facts(stage_run_active=False, now=now, resume_run_status=status, **RESUMABLE)
+    assert state.advance(view, facts).action == expected
+
+
+def test_an_abandoned_resume_consumes_its_attempt_and_the_cap_then_terminates() -> None:
+    chain = _pending(full_chain(state.RESULT_BOUND))
+    chain.add(
+        chain.make(
+            "resume_abandoned",
+            state.RESULT_BOUND,
+            {"nonce": "1" * 64, "reason": "run_concluded_without_output"},
+            _by("reconcile"),
+        )
+    )
+    view = chain.view.authorizations[AUTH]
+    assert view.pending_resume is None and view.resume_attempts == {"validation": 1}
+    decision = state.advance(view, Facts(stage_run_active=False, now="2026-10-04T12:00:00Z", **RESUMABLE))
+    assert (decision.action, decision.code) == ("fail", "VALIDATION_UNAVAILABLE")
+    publication = _pending(full_chain(state.VALIDATED), "publication")
+    publication.add(
+        publication.make(
+            "resume_abandoned",
+            state.VALIDATED,
+            {"nonce": "1" * 64, "reason": "run_concluded_without_output"},
+            _by("reconcile"),
+        )
+    )
+    next_attempt = state.advance(
+        publication.view.authorizations[AUTH], Facts(stage_run_active=False, now="2026-10-04T12:00:00Z", **RESUMABLE)
+    )
+    assert next_attempt.action == "resume"  # publication allows a second resume before its cap
+
+
+def test_an_abandonment_must_name_the_pending_nonce() -> None:
+    chain = _pending(full_chain(state.RESULT_BOUND))
+    wrong = chain.make(
+        "resume_abandoned",
+        state.RESULT_BOUND,
+        {"nonce": "9" * 64, "reason": "run_concluded_without_output"},
+        _by("reconcile"),
+    )
+    reject(chain, wrong, "pending nonce")
 
 
 def test_advance_caps_resumes_and_never_resumes_the_model() -> None:

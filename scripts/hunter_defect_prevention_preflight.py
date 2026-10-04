@@ -163,6 +163,24 @@ ISSUE_AGENT_PUBLISHER_OPERATION = {
 }
 #: ADR 0037 D6: the one permission the publisher token may carry; `workflows` must stay absent.
 ISSUE_AGENT_PUBLISHER_TOKEN = {"repository_scope": "this-repository", "contents": "write", "workflows": False}
+#: ADR 0037 D1/D6: the one canonical actor allowed to publish (the lifecycle workflow's publish job).
+ISSUE_AGENT_PUBLISHER_ACTOR = {
+    "workflow_path": ".github/workflows/hunter-issue-agent-trigger.yml",
+    "job": "publish",
+    "environment": "hunter-issue-agent-publisher",
+    "ref": "refs/heads/main",
+    "run_attempt": 1,
+}
+#: Owner decision OD-2a: the canonical verified signer of Issue-agent candidates.
+ISSUE_AGENT_PUBLISHER_WRITER = "fafa33"
+#: ADR 0037 D6 / state machine spec section 2: issue-<n>-<first 16 hex of the authorization identity>.
+ISSUE_AGENT_PUBLISHER_TARGET_REF = {
+    "prefix": "refs/heads/issue-",
+    "issue_binding": True,
+    "authorization_digest_hex_length": 16,
+}
+#: ADR 0037 D2a: the ruleset-anchored, forward-only ledger namespace.
+ISSUE_AGENT_STATE_LEDGER_PREFIX = "refs/heads/hunter-state/v1/"
 ISSUE_AGENT_STATE_LEDGER_OPERATION = {"fast_forward_append_only": True, "force": False, "delete": False}
 ISSUE_AGENT_STATE_LEDGER_ANCHOR_RULES = frozenset({"deletion", "non_fast_forward"})
 
@@ -917,15 +935,11 @@ def validate_issue_agent_code_write_paths(policy: dict[str, Any]) -> list[str]:
 
     if publisher.get("allowed") is not True:
         errors.append("issue_agent_publisher must be an explicitly allowed, narrowly scoped path")
-    actor = publisher.get("actor")
-    if (
-        not isinstance(actor, dict)
-        or actor.get("ref") != "refs/heads/main"
-        or not _exactly(actor.get("run_attempt"), 1)
-    ):
-        errors.append("issue_agent_publisher actor must be bound to refs/heads/main at run attempt 1")
-    elif not all(str(actor.get(key) or "").strip() for key in ("workflow_path", "job", "environment")):
-        errors.append("issue_agent_publisher actor must name its workflow, job and environment")
+    if not _exactly(publisher.get("actor"), ISSUE_AGENT_PUBLISHER_ACTOR):
+        errors.append(
+            "issue_agent_publisher actor must be exactly the lifecycle workflow publish job in the publisher "
+            "environment on refs/heads/main at run attempt 1"
+        )
 
     provenance_policy = policy.get("ingress_provenance") or {}
     signers = set(provenance_policy.get("authorized_signers") or [])
@@ -937,6 +951,8 @@ def validate_issue_agent_code_write_paths(policy: dict[str, Any]) -> list[str]:
     writer = publisher.get("writer_login")
     if writer not in signers or writer not in bound:
         errors.append("issue_agent_publisher writer must be an authorized signer with a bound writer identity")
+    elif writer != ISSUE_AGENT_PUBLISHER_WRITER:
+        errors.append("issue_agent_publisher writer must be the canonical OD-2a signer")
     signing = publisher.get("signing")
     if not _exactly(
         signing,
@@ -949,15 +965,10 @@ def validate_issue_agent_code_write_paths(policy: dict[str, Any]) -> list[str]:
     ):
         errors.append("issue_agent_publisher must sign with a verified signing-only SSH Ed25519 key")
 
-    target = publisher.get("target_ref")
-    if not isinstance(target, dict) or target.get("issue_binding") is not True:
-        errors.append("issue_agent_publisher target ref must bind the governing Issue")
-    else:
-        prefix = str(target.get("prefix") or "")
-        if not prefix.startswith("refs/heads/") or prefix.rstrip("/") in {"refs/heads", "refs/heads/main"}:
-            errors.append("issue_agent_publisher target ref must be a dedicated non-default branch namespace")
-        if not _exactly(target.get("authorization_digest_hex_length"), 16):
-            errors.append("issue_agent_publisher target ref must carry 16 hex of the authorization identity")
+    if not _exactly(publisher.get("target_ref"), ISSUE_AGENT_PUBLISHER_TARGET_REF):
+        errors.append(
+            "issue_agent_publisher target ref must be exactly refs/heads/issue-<issue>-<16 hex of the authorization>"
+        )
     if not _exactly(publisher.get("operation"), ISSUE_AGENT_PUBLISHER_OPERATION):
         errors.append("issue_agent_publisher must be create-only with no update, force, delete, tag or PR authority")
     if not _exactly(publisher.get("token"), ISSUE_AGENT_PUBLISHER_TOKEN):
@@ -996,18 +1007,8 @@ def validate_issue_agent_code_write_paths(policy: dict[str, Any]) -> list[str]:
         errors.append("issue_agent_state_ledger must be an allowed non-code ledger path")
     if ledger.get("admissible_as_candidate") is not False or ledger.get("source_paths") is not False:
         errors.append("issue_agent_state_ledger must never carry source paths or be admissible as a candidate")
-    ledger_prefix = str(ledger.get("target_ref_prefix") or "")
-    publisher_prefix = str((target or {}).get("prefix") or "") if isinstance(target, dict) else ""
-    if (
-        not ledger_prefix.startswith("refs/heads/")
-        or ledger_prefix.rstrip("/") in {"refs/heads", "refs/heads/main"}
-        or not ledger_prefix.endswith("/")
-        or (
-            publisher_prefix
-            and (ledger_prefix.startswith(publisher_prefix) or publisher_prefix.startswith(ledger_prefix))
-        )
-    ):
-        errors.append("issue_agent_state_ledger must own a dedicated branch namespace disjoint from candidates")
+    if not _exactly(ledger.get("target_ref_prefix"), ISSUE_AGENT_STATE_LEDGER_PREFIX):
+        errors.append("issue_agent_state_ledger must own exactly the anchored refs/heads/hunter-state/v1/ namespace")
     if not _exactly(ledger.get("operation"), ISSUE_AGENT_STATE_LEDGER_OPERATION):
         errors.append("issue_agent_state_ledger must be fast-forward append-only with no force or delete")
     anchor = ledger.get("anchor")

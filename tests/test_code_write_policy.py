@@ -375,6 +375,24 @@ def _drop(path: str):
 
 
 ISSUE_AGENT_WIDENINGS = {
+    "actor from another workflow": _set(
+        "issue_agent_publisher.actor.workflow_path", ".github/workflows/some-other-workflow.yml"
+    ),
+    "actor from another job": _set("issue_agent_publisher.actor.job", "execute"),
+    "actor in another environment": _set("issue_agent_publisher.actor.environment", "hunter-issue-agent-executor"),
+    "actor with an extra binding": _set("issue_agent_publisher.actor.repository", "someone/else"),
+    "actor missing its environment": _drop("issue_agent_publisher.actor.environment"),
+    "authorized signer that is not the OD-2a writer": _set("issue_agent_publisher.writer_login", "claude"),
+    "target prefix in another branch namespace": _set(
+        "issue_agent_publisher.target_ref.prefix", "refs/heads/candidate-"
+    ),
+    "target ref with an extra field": _set("issue_agent_publisher.target_ref.allow_existing", True),
+    "ledger in a different version namespace": _set(
+        "issue_agent_state_ledger.target_ref_prefix", "refs/heads/hunter-state/v2/"
+    ),
+    "ledger widened to all hunter-state branches": _set(
+        "issue_agent_state_ledger.target_ref_prefix", "refs/heads/hunter-state/"
+    ),
     "publisher disallowed": _set("issue_agent_publisher.allowed", False),
     "publisher acts from a non-main ref": _set("issue_agent_publisher.actor.ref", "refs/heads/feature"),
     "publisher acts on a re-run attempt": _set("issue_agent_publisher.actor.run_attempt", 2),

@@ -76,6 +76,8 @@ WRITER_ROLES: Final[Mapping[str, frozenset[str]]] = {
 RESUME_ROLES: Final = frozenset({"bind", "record-validation", "finalize", "reconcile"})
 #: Model-free stages that may resume, with their attempt caps. The model never resumes.
 RESUME_STAGES: Final[Mapping[str, tuple[str, int]]] = {"validation": (RESULT_BOUND, 2), "publication": (VALIDATED, 3)}
+#: An unbound resume whose dispatch produced no run within this grace is re-dispatched with the same nonce.
+RESUME_DISPATCH_GRACE_SECONDS: Final = 600
 
 FAILURE_CODES: Final = frozenset(
     {
@@ -420,6 +422,8 @@ EVIDENCE_SCHEMAS: Final[Mapping[str, Validator]] = {
             "pull_request_node_id": _pattern(_NODE_ID),
             "pull_request_head_sha": SHA40,
             "draft": _exact(True),
+            "preflight_run_id": POSITIVE,
+            "preflight_conclusion": _exact("success"),
         }
     ),
     FAILED: _object(
@@ -433,6 +437,7 @@ _RESUME_REQUESTED = _object(
     {"stage": _enum(RESUME_STAGES), "nonce": SHA64, "attempt": POSITIVE, "dispatched_at": TIMESTAMP}
 )
 _RESUME_BOUND = _object({"nonce": SHA64, "run_id": POSITIVE})
+_RESUME_ABANDONED = _object({"nonce": SHA64, "reason": _enum({"run_concluded_without_output"})})
 _INDEX = _object(
     {
         "schema_version": _exact(INDEX_SCHEMA_VERSION),
@@ -447,6 +452,7 @@ _INDEX = _object(
                     "stage": _enum(RESUME_STAGES),
                     "nonce": SHA64,
                     "attempt": POSITIVE,
+                    "dispatched_at": TIMESTAMP,
                     "bound_run_id": _optional(POSITIVE),
                 }
             )
@@ -455,7 +461,7 @@ _INDEX = _object(
 )
 _RECORD_BASE: Final[Mapping[str, Validator]] = {
     "schema_version": _exact(RECORD_SCHEMA_VERSION),
-    "kind": _enum({"transition", "resume_requested", "resume_bound"}),
+    "kind": _enum({"transition", "resume_requested", "resume_bound", "resume_abandoned"}),
     "record_seq": _int(0),
     "prev_record_sha256": _optional(SHA64),
     "recorded_at": TIMESTAMP,
@@ -490,8 +496,10 @@ def validate_record_schema(record: object) -> dict[str, Any]:
         EVIDENCE_SCHEMAS[state](evidence, f"record.evidence[{state}]")
     elif kind == "resume_requested":
         _RESUME_REQUESTED(evidence, "record.evidence[resume_requested]")
-    else:
+    elif kind == "resume_bound":
         _RESUME_BOUND(evidence, "record.evidence[resume_bound]")
+    else:
+        _RESUME_ABANDONED(evidence, "record.evidence[resume_abandoned]")
     return record
 
 
@@ -758,8 +766,14 @@ def apply_record(
                 "stage": stage,
                 "nonce": evidence["nonce"],
                 "attempt": evidence["attempt"],
+                "dispatched_at": evidence["dispatched_at"],
                 "bound_run_id": None,
             }
+        elif kind == "resume_abandoned":
+            pending = current.pending_resume
+            if pending is None or pending["nonce"] != evidence["nonce"]:
+                raise LedgerCorruptError("resume abandonment does not name the pending nonce")
+            current.pending_resume = None  # the attempt stays consumed; the next attempt needs a new nonce
         else:
             pending = current.pending_resume
             if pending is None or pending["nonce"] != evidence["nonce"] or pending["bound_run_id"] is not None:
@@ -979,12 +993,14 @@ class Facts:
     remote_head_conforms: bool | _Unknown = UNKNOWN
     open_draft_pr: Mapping[str, Any] | None | _Unknown = UNKNOWN
     preflight_conclusion: str | None | _Unknown = UNKNOWN
+    #: The workflow run carrying the pending resume nonce: ``None`` (no such run), "active" or "concluded".
+    resume_run_status: str | None | _Unknown = UNKNOWN
     now: str = "1970-01-01T00:00:00Z"
 
 
 @dataclass(frozen=True, slots=True)
 class Decision:
-    action: str  # "noop" | "transition" | "fail" | "resume" | "freeze"
+    action: str  # "noop" | "transition" | "fail" | "resume" | "redispatch" | "abandon_resume" | "freeze"
     target_state: str | None = None
     code: str | None = None
     stage: str | None = None
@@ -1056,13 +1072,13 @@ def advance(view: AuthorizationView, facts: Facts) -> Decision:
             return Decision("fail", code="LIFECYCLE_DEADLINE_EXCEEDED")
         return _resume_or_fail(view, "publication", facts, "PUBLICATION_UNAVAILABLE")
 
-    # PUBLISHED
+    # PUBLISHED: terminal success needs BOTH a definitive successful exact-head preflight and the Draft PR.
     if facts.open_draft_pr is UNKNOWN or facts.preflight_conclusion is UNKNOWN:
         return Decision("noop", reason="pull request or preflight facts unknown")
-    if facts.open_draft_pr is not None:
-        return Decision("transition", target_state=COMPLETED)
     if facts.preflight_conclusion not in (None, "success"):
         return Decision("fail", code="CANDIDATE_PREFLIGHT_FAILED")
+    if facts.open_draft_pr is not None and facts.preflight_conclusion == "success":
+        return Decision("transition", target_state=COMPLETED)
     if _deadline_passed(view.evidence[PUBLISHED]["deadline_completed_at"], facts.now):
         return Decision("fail", code="CANDIDATE_PREFLIGHT_TIMEOUT")
     return Decision("noop", reason="awaiting exact-head Pre-PR Preflight and Draft PR")
@@ -1076,8 +1092,19 @@ def _resume_or_fail(view: AuthorizationView, stage: str, facts: Facts, exhausted
     if not bound or bound[0].expired:
         return Decision("fail", code="RESULT_TRANSPORT_EXPIRED")
     _state, cap = RESUME_STAGES[stage]
-    if view.pending_resume is not None:
-        return Decision("noop", reason="a resume is already pending")
+    pending = view.pending_resume
+    if pending is not None:
+        status = facts.resume_run_status
+        if status is UNKNOWN or status == "active":
+            return Decision("noop", reason="pending resume run unknown or still active")
+        if status == "concluded":
+            return Decision("abandon_resume", stage=stage, reason="run_concluded_without_output")
+        if pending["bound_run_id"] is not None:
+            return Decision("noop", reason="bound resume run not observable yet")
+        elapsed = (_instant(facts.now) - _instant(pending["dispatched_at"])).total_seconds()
+        if elapsed < RESUME_DISPATCH_GRACE_SECONDS:
+            return Decision("noop", reason="resume dispatch within its grace period")
+        return Decision("redispatch", stage=stage, reason="dispatch produced no run; same nonce, no attempt consumed")
     attempts = (view.resume_attempts or {}).get(stage, 0)
     if attempts + 1 >= cap:
         return Decision("fail", code=exhausted_code)

@@ -140,4 +140,6 @@ The repository is public.
 
 ## Implementation Status
 
-None. Draft amendment only.
+The amendment is **accepted and binding** (2026-10-04, OD-5). Its runtime is not yet implemented: the
+anchored Source Handling store is delivered by ADR 0037 Slice 3b, and until then no production path persists
+Source Handling authority under this amendment.
