@@ -21,6 +21,93 @@
       "allowed_role": "read-review-metadata-only",
       "code_change_handoff": "clone-capable-writer",
       "conditional_exception": "connector_write_ingress"
+    },
+    "issue_agent_publisher": {
+      "allowed": true,
+      "governing_adr": "0037",
+      "purpose": "Create-only publication of exactly one deterministic, signed Issue-agent candidate commit built by trusted Git plumbing from validated data. Not a generic write path (Issue #560, owner decision OD-3).",
+      "actor": {
+        "workflow_path": ".github/workflows/hunter-issue-agent-trigger.yml",
+        "job": "publish",
+        "environment": "hunter-issue-agent-publisher",
+        "ref": "refs/heads/main",
+        "run_attempt": 1
+      },
+      "writer_login": "fafa33",
+      "signing": {
+        "format": "ssh",
+        "algorithm": "ed25519",
+        "key_kind": "signing-only",
+        "required_github_verification": "verified"
+      },
+      "target_ref": {
+        "prefix": "refs/heads/issue-",
+        "issue_binding": true,
+        "authorization_digest_hex_length": 16
+      },
+      "operation": {
+        "create_only": true,
+        "update": false,
+        "force": false,
+        "delete": false,
+        "tag": false,
+        "pull_request": false
+      },
+      "token": {
+        "repository_scope": "this-repository",
+        "contents": "write",
+        "workflows": false
+      },
+      "commit_shape": {
+        "count": 1,
+        "parent": "signed_base_sha",
+        "tree": "validated_tree_sha",
+        "non_signature_fields_equal": "unsigned_commit_sha",
+        "model_prose_in_metadata": false
+      },
+      "path_authority": "task_scope",
+      "required_boundary": {
+        "stage": "pre-push-safety",
+        "executor": "credential-free-validator",
+        "bound_to": "unsigned_commit_sha",
+        "code_identity": "control_sha"
+      },
+      "candidate_code_with_credentials": false,
+      "hooks_executed": false,
+      "downstream_unchanged": [
+        "Hunter / Pre-PR Preflight",
+        "Candidate Admission",
+        "Hunter Governance Review",
+        "Hunter Merge Readiness",
+        "owner merge approval"
+      ],
+      "fail_closed": "Any field outside this exact contract, an unverified signature or other signer, a non-create operation, a commit-shape mismatch, an out-of-TaskScope path, or a missing credential-free pre-push-safety receipt for unsigned_commit_sha refuses publication."
+    },
+    "issue_agent_state_ledger": {
+      "allowed": true,
+      "governing_adr": "0037/0038",
+      "classification": "non-code-ledger",
+      "purpose": "Append-only Issue-agent and Source Handling ledger records (K_STATE/K_SH-signed, non-secret). Never a candidate, never admissible, never merged.",
+      "target_ref_prefix": "refs/heads/hunter-state/v1/",
+      "operation": {
+        "fast_forward_append_only": true,
+        "force": false,
+        "delete": false
+      },
+      "anchor": {
+        "ruleset_rules": [
+          "deletion",
+          "non_fast_forward"
+        ],
+        "bypass_actors": []
+      },
+      "writer": {
+        "token": "GITHUB_TOKEN",
+        "role": "control",
+        "ref": "refs/heads/main"
+      },
+      "admissible_as_candidate": false,
+      "source_paths": false
     }
   },
   "review_progression": {

@@ -1488,7 +1488,8 @@
       ],
       "lifecycle": "regression-tested",
       "sources": [
-        "Post-PR #519 publication-path inspection after Issue #520 canary, 2026-09-25"
+        "Post-PR #519 publication-path inspection after Issue #520 canary, 2026-09-25",
+        "Recurrence carried forward from unmerged PR #558 (#558 record PRH-067) per Issue #560 owner decision B-6, 2026-10-03/04: on main, src/hunter/automation/issue_agent_replacement_executor.py::publish_create_only still runs _run_pre_push_safety, which executes a working-directory-relative candidate scripts/hunter_pre_push.py in the process holding the signing key and push token; environment scrubbing (the existing regression test) is not a credential boundary. No production caller exists. The correcting guard is ADR 0037 Slice 4 (publisher runs no hook and binds the validator's unsigned_commit_sha; CODE_WRITE_POLICY issue_agent_publisher.hooks_executed=false)."
       ]
     },
     {
@@ -1906,6 +1907,70 @@
         "Issue #534 root cause 2, live evidence: after the ready_for_review trigger was added and pushed (PR #535 exact HEAD 9c02a1e8c45b80943e9c459b85ddc9668c2ed692), a manually re-run trusted Hunter Governance Review Reconcile (run 36335901035, attempt 2, against trusted main HEAD 156ed2fad8638dabc9bd1c45a4efbfece2b2d69c) completed SUCCESS but still published no orchestration cycle and dispatched no collector run for PR #535. GitHub Contents API confirmed the cause: `.hunter/pre-ready-hostile-review.json` at that exact head was a leftover review-request document from an unrelated, already-merged candidate (Issue #532's content, base_sha c25b48228f422a7a4e3e85112bd9ffdc216da849, an entirely different review_target), so `hunter_governance_review_v2.valid_current_review_request` correctly found it stale/invalid for PR #535's actual content and `ensure_current` correctly no-op'd. No PR for #535 or #532 had ever committed a review-request document that actually described its own content.",
         "Issue #534 root cause 3, live evidence: after root causes 1 and 2 were fixed and pushed (PR #535 exact HEAD c05da168545c5fa95fe300706eccaac2228fc391), hosted `Hunter Governance Review Reconcile` run 36338855130 (workflow_run trigger, path .github/workflows/hunter-governance-reconcile.yml, head_branch main) completed SUCCESS and published commit status `Hunter Review Orchestration / PR #535` = pending, description `WAITING_FOR_REVIEWER||36338855130|<config-digest>|`, at 2026-09-27T17:58:22Z -- proving the orchestration cycle genuinely existed. Twenty-six seconds later, run 36338905562 (`Hunter Merge Readiness`) still published `Independent-review authority failed: MALFORMED_REVIEW: WAITING_FOR_REVIEWER: no trusted exact-head orchestration cycle has been published`, a hard `failure` state. Traced to `hunter_merge_readiness_v2.resolve_review_authority` never handling a `pending` verification status from `hunter_governance_review_v2.verify_pre_ready_hostile_review`.",
         "Issue #534 root cause 4, live evidence on PR #535 exact HEAD 51108333821ab42d1ab7aa0b812a72d890f73795: a pull_request_target `synchronize` at 2026-09-28T07:40:33Z triggered `Hunter / Merge Readiness`, `Hunter / Trusted Preflight Upgrade` and `Hunter Governance Agent Preflight` but not `Hunter Governance Review Reconcile`, the only workflow that runs the privileged `hunter_review_orchestrator.py ensure`, and not `Hunter Reviewer Collector` for that exact HEAD. The reconcile runs that did occur (36393517015, 36393716517) were `workflow_run`-triggered recoveries that depend on a different workflow completing first, and no trusted exact-head orchestration cycle was published for 51108333821ab42d1ab7aa0b812a72d890f73795; Merge Readiness run 36393772215 therefore correctly published `MALFORMED_REVIEW: WAITING_FOR_REVIEWER: no trusted exact-head orchestration cycle has been published`. Same defect as root cause 1 (missing trusted trigger) and root cause 3 (consumer not recognizing a legitimate producer state), on the second transition class this family binds."
+      ]
+    },
+    {
+      "id": "DFF-047",
+      "title": "untrusted-code-must-not-share-a-uid-with-credential-holding-processes",
+      "invariant": "Model or candidate code never runs as the same OS user as any process that holds or can mint a credential; an allowlisted or scrubbed child environment is not a credential boundary, because same-uid code can read every same-uid process's environment and memory.",
+      "applicability": {
+        "changed_paths": [
+          "src/hunter/automation/",
+          "scripts/hunter_issue_agent_trigger.py",
+          ".github/workflows/hunter-issue-agent-trigger.yml"
+        ],
+        "rationale": "These surfaces launch the Issue-agent model and candidate validation on GitHub-hosted runners beside trusted job processes."
+      },
+      "prevention": {
+        "mechanism": "Recorded finding only. A correcting contribution (ADR 0037 Slice 4) must launch model and candidate code only as a dedicated non-root isolation uid via sudo -n -u <uid> -- /usr/bin/env -i <allowlist>, deny that uid network during candidate validation, kill every uid process before trusted collection, and collect through a trusted git dir with hooks and fsmonitor disabled, before this family can advance. Issue #560 S0 proved the boundary live (sandbox run 37161092362).",
+        "boundary": "review"
+      },
+      "regression_evidence": [],
+      "lifecycle": "recorded",
+      "sources": [
+        "PR #558 Copilot review, 2026-10-03 (discussion_r4171869242, discussion_r4171869279); #558 record PRH-068, carried forward per Issue #560 B-6"
+      ]
+    },
+    {
+      "id": "DFF-048",
+      "title": "accepted-authorization-must-reach-the-canonical-executor",
+      "invariant": "An owner authorization the production trigger accepts reaches the single canonical governed execution path or fails closed with an attributable code; no production trigger dispatches to a retired, unreachable or parallel execution authority.",
+      "applicability": {
+        "changed_paths": [
+          ".github/workflows/hunter-issue-agent-trigger.yml",
+          "scripts/hunter_issue_agent_trigger.py"
+        ],
+        "rationale": "The trusted trigger and its workflow decide where an accepted owner authorization is dispatched."
+      },
+      "prevention": {
+        "mechanism": "Recorded finding only. A correcting contribution (ADR 0037 Slice 5) must run the lifecycle entirely in the GitHub-hosted job chain behind GovernedEngineeringTaskIngress, SmartPromptMachine and EngineeringContextAuthority, with a static workflow guard refusing any Railway or external dispatch client, before this family can advance; the #520 canary is its production evidence.",
+        "boundary": "review"
+      },
+      "regression_evidence": [],
+      "lifecycle": "recorded",
+      "sources": [
+        "Issue #557, 2026-10-03: canary #520 accepted, no Draft PR, the trigger posted only to the retired Railway issuer; #558 record PRH-066, carried forward re-scoped per Issue #560 B-6"
+      ]
+    },
+    {
+      "id": "DFF-049",
+      "title": "terminal-success-recorded-before-trusted-publication",
+      "invariant": "An execution is recorded successful only after trusted observation of its publication outcome (branch at the exact signed head and the single Draft PR); continuation state required to finish accepted work is never held only in process memory.",
+      "applicability": {
+        "changed_paths": [
+          "src/hunter/automation/",
+          "scripts/hunter_issue_agent_candidate_pr.py"
+        ],
+        "rationale": "These surfaces own the Issue-agent lifecycle ledger transitions and the Draft-PR observation that ends them."
+      },
+      "prevention": {
+        "mechanism": "Recorded finding only. A correcting contribution (ADR 0037 Slice 2) must make COMPLETED a legal transition only from PUBLISHED with observed Draft-PR evidence in the signed anchored ledger, with continuation derived from that ledger plus definitive GitHub facts, before this family can advance. The Issue #560 S0 prototype already rejects the RESULT_BOUND -> COMPLETED mutant.",
+        "boundary": "review"
+      },
+      "regression_evidence": [],
+      "lifecycle": "recorded",
+      "sources": [
+        "PR #558 Codex P1 review, 2026-10-03 ('Keep the execution pending until publication is recoverable'); one occurrence, recorded under Issue #560"
       ]
     }
   ]

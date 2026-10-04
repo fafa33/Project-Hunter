@@ -1,5 +1,11 @@
 # Governed GitHub Issue Agent Trigger
 
+> **Governing architecture (Issue #560, 2026-10-04).** [ADR 0037](ADR/0037-github-native-issue-agent-execution.md)
+> is accepted. The authorization half below (owner-only `hunter-agent-execute`, deterministic v1 payload,
+> issuer-signed v2 envelope, Issue text selects nothing) is reaffirmed. The dispatch half (POST to a provisioning
+> URL and a webhook issuer) is superseded: the lifecycle runs entirely in GitHub-hosted jobs with no external
+> endpoint, and a static guard refuses any Railway client (ADR 0037 D9, AT-42).
+
 Issue #390 adds the first repository-owned execution edge for GitHub Issues. It is intentionally narrower than the existing n8n fallback worker and must not be used to bypass Smart Prompt Machine authority.
 
 The edge has two halves. `scripts/hunter_issue_agent_trigger.py` runs inside GitHub Actions and only *authorizes*: it turns one exact `issues:labeled` event into a deterministic `hunter-issue-agent-authorization-v1` payload and wraps it in an issuer-signed `hunter-issue-agent-signed-authorization-v2` envelope. `hunter.automation.issue_agent_execution.GovernedIssueAgentExecutionService` is the production composition root that *consumes* that document behind the trusted issuer endpoint. Neither half can execute anything on its own.

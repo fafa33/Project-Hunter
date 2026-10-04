@@ -117,15 +117,6 @@ EXPECTED_STAGES = (
     "merge-enforced",
     "prevented",
 )
-REQUIRED_ENFORCEMENT_FIELDS = ("local", "hosted", "merge", "recurrence")
-ALLOWED_CODE_WRITE_PATHS = frozenset(
-    {
-        "local_git_push",
-        "github_contents_api",
-        "github_git_data_api",
-        "api_only_agents",
-    }
-)
 
 VALIDATED_CLASSIFICATIONS = frozenset(
     {
@@ -156,8 +147,24 @@ ALLOWED_CODE_WRITE_PATHS = frozenset(
         "github_contents_api",
         "github_git_data_api",
         "api_only_agents",
+        "issue_agent_publisher",
+        "issue_agent_state_ledger",
     }
 )
+VALIDATION_STAGE_CONTRACT_PATH = ROOT / "docs" / "VALIDATION_STAGE_CONTRACT.json"
+#: ADR 0037 D6 / Retirement Plan 2.4 (OD-3): the only operation the Issue-agent publisher may perform.
+ISSUE_AGENT_PUBLISHER_OPERATION = {
+    "create_only": True,
+    "update": False,
+    "force": False,
+    "delete": False,
+    "tag": False,
+    "pull_request": False,
+}
+#: ADR 0037 D6: the one permission the publisher token may carry; `workflows` must stay absent.
+ISSUE_AGENT_PUBLISHER_TOKEN = {"repository_scope": "this-repository", "contents": "write", "workflows": False}
+ISSUE_AGENT_STATE_LEDGER_OPERATION = {"fast_forward_append_only": True, "force": False, "delete": False}
+ISSUE_AGENT_STATE_LEDGER_ANCHOR_RULES = frozenset({"deletion", "non_fast_forward"})
 
 
 def _load_object(path: Path) -> dict[str, Any]:
@@ -872,6 +879,149 @@ def validate_code_write_policy() -> list[str]:
 
     errors.extend(validate_writer_identity_binding(policy))
     errors.extend(validate_connector_write_ingress(policy))
+    errors.extend(validate_issue_agent_code_write_paths(policy))
+    return errors
+
+
+def _validation_stage_ids() -> set[str]:
+    contract = _load_object(VALIDATION_STAGE_CONTRACT_PATH)
+    return {str(stage.get("id")) for stage in contract.get("stages") or [] if isinstance(stage, dict)}
+
+
+def _exactly(value: Any, expected: Any) -> bool:
+    """Structural equality that refuses JSON type coercion (``1``/``true``, ``0``/``false``)."""
+
+    if type(value) is not type(expected):
+        return False
+    if isinstance(expected, dict):
+        return set(value) == set(expected) and all(_exactly(value[key], expected[key]) for key in expected)
+    if isinstance(expected, list):
+        return len(value) == len(expected) and all(_exactly(a, b) for a, b in zip(value, expected, strict=True))
+    return bool(value == expected)
+
+
+def validate_issue_agent_code_write_paths(policy: dict[str, Any]) -> list[str]:
+    """Validate the ADR 0037 / OD-3 least-privilege Issue-agent publisher and state-ledger grants.
+
+    Both grants are closed, structured contracts. The guard compares meaning (exact operation and
+    permission sets, the bound signer, the owning validation stage, the ref namespaces), never prose, so
+    an equivalent spelling of a description cannot fail it and a widened grant cannot pass it.
+    """
+
+    errors: list[str] = []
+    paths = policy.get("code_write_paths") or {}
+    publisher = paths.get("issue_agent_publisher")
+    ledger = paths.get("issue_agent_state_ledger")
+    if not isinstance(publisher, dict) or not isinstance(ledger, dict):
+        return ["issue_agent_publisher and issue_agent_state_ledger must be objects"]
+
+    if publisher.get("allowed") is not True:
+        errors.append("issue_agent_publisher must be an explicitly allowed, narrowly scoped path")
+    actor = publisher.get("actor")
+    if (
+        not isinstance(actor, dict)
+        or actor.get("ref") != "refs/heads/main"
+        or not _exactly(actor.get("run_attempt"), 1)
+    ):
+        errors.append("issue_agent_publisher actor must be bound to refs/heads/main at run attempt 1")
+    elif not all(str(actor.get(key) or "").strip() for key in ("workflow_path", "job", "environment")):
+        errors.append("issue_agent_publisher actor must name its workflow, job and environment")
+
+    provenance_policy = policy.get("ingress_provenance") or {}
+    signers = set(provenance_policy.get("authorized_signers") or [])
+    bound = {
+        str(identity.get("login"))
+        for identity in (policy.get("writer_identity_binding") or {}).get("identities") or []
+        if isinstance(identity, dict)
+    }
+    writer = publisher.get("writer_login")
+    if writer not in signers or writer not in bound:
+        errors.append("issue_agent_publisher writer must be an authorized signer with a bound writer identity")
+    signing = publisher.get("signing")
+    if not _exactly(
+        signing,
+        {
+            "format": "ssh",
+            "algorithm": "ed25519",
+            "key_kind": "signing-only",
+            "required_github_verification": "verified",
+        },
+    ):
+        errors.append("issue_agent_publisher must sign with a verified signing-only SSH Ed25519 key")
+
+    target = publisher.get("target_ref")
+    if not isinstance(target, dict) or target.get("issue_binding") is not True:
+        errors.append("issue_agent_publisher target ref must bind the governing Issue")
+    else:
+        prefix = str(target.get("prefix") or "")
+        if not prefix.startswith("refs/heads/") or prefix.rstrip("/") in {"refs/heads", "refs/heads/main"}:
+            errors.append("issue_agent_publisher target ref must be a dedicated non-default branch namespace")
+        if not _exactly(target.get("authorization_digest_hex_length"), 16):
+            errors.append("issue_agent_publisher target ref must carry 16 hex of the authorization identity")
+    if not _exactly(publisher.get("operation"), ISSUE_AGENT_PUBLISHER_OPERATION):
+        errors.append("issue_agent_publisher must be create-only with no update, force, delete, tag or PR authority")
+    if not _exactly(publisher.get("token"), ISSUE_AGENT_PUBLISHER_TOKEN):
+        errors.append("issue_agent_publisher token must be contents:write on this repository with workflows absent")
+    shape = publisher.get("commit_shape")
+    if not _exactly(
+        shape,
+        {
+            "count": 1,
+            "parent": "signed_base_sha",
+            "tree": "validated_tree_sha",
+            "non_signature_fields_equal": "unsigned_commit_sha",
+            "model_prose_in_metadata": False,
+        },
+    ):
+        errors.append("issue_agent_publisher must publish exactly one commit bound to the validated unsigned commit")
+    if publisher.get("path_authority") != "task_scope":
+        errors.append("issue_agent_publisher path authority must be the canonical TaskScope, never a second list")
+    boundary = publisher.get("required_boundary")
+    if not isinstance(boundary, dict) or boundary.get("stage") not in _validation_stage_ids():
+        errors.append("issue_agent_publisher boundary must name a stage of the validation stage contract")
+    elif not _exactly(
+        boundary,
+        {
+            "stage": "pre-push-safety",
+            "executor": "credential-free-validator",
+            "bound_to": "unsigned_commit_sha",
+            "code_identity": "control_sha",
+        },
+    ):
+        errors.append("issue_agent_publisher pre-push-safety must run credential-free and bind unsigned_commit_sha")
+    if publisher.get("candidate_code_with_credentials") is not False or publisher.get("hooks_executed") is not False:
+        errors.append("issue_agent_publisher must never execute candidate code or hooks with credentials (DFF-028)")
+
+    if ledger.get("allowed") is not True or ledger.get("classification") != "non-code-ledger":
+        errors.append("issue_agent_state_ledger must be an allowed non-code ledger path")
+    if ledger.get("admissible_as_candidate") is not False or ledger.get("source_paths") is not False:
+        errors.append("issue_agent_state_ledger must never carry source paths or be admissible as a candidate")
+    ledger_prefix = str(ledger.get("target_ref_prefix") or "")
+    publisher_prefix = str((target or {}).get("prefix") or "") if isinstance(target, dict) else ""
+    if (
+        not ledger_prefix.startswith("refs/heads/")
+        or ledger_prefix.rstrip("/") in {"refs/heads", "refs/heads/main"}
+        or not ledger_prefix.endswith("/")
+        or (
+            publisher_prefix
+            and (ledger_prefix.startswith(publisher_prefix) or publisher_prefix.startswith(ledger_prefix))
+        )
+    ):
+        errors.append("issue_agent_state_ledger must own a dedicated branch namespace disjoint from candidates")
+    if not _exactly(ledger.get("operation"), ISSUE_AGENT_STATE_LEDGER_OPERATION):
+        errors.append("issue_agent_state_ledger must be fast-forward append-only with no force or delete")
+    anchor = ledger.get("anchor")
+    if (
+        not isinstance(anchor, dict)
+        or not isinstance(anchor.get("ruleset_rules"), list)
+        or len(anchor["ruleset_rules"]) != len(ISSUE_AGENT_STATE_LEDGER_ANCHOR_RULES)
+        or set(anchor["ruleset_rules"]) != ISSUE_AGENT_STATE_LEDGER_ANCHOR_RULES
+        or not _exactly(anchor.get("bypass_actors"), [])
+    ):
+        errors.append("issue_agent_state_ledger must be anchored by a no-bypass deletion+non_fast_forward ruleset")
+    writer_spec = ledger.get("writer")
+    if not _exactly(writer_spec, {"token": "GITHUB_TOKEN", "role": "control", "ref": "refs/heads/main"}):
+        errors.append("issue_agent_state_ledger writer must be the control role's GITHUB_TOKEN on main")
     return errors
 
 
