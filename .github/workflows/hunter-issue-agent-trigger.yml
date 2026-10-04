@@ -22,24 +22,33 @@ on:
     inputs:
       issue:
         description: Issue number of the pending resume
-        required: true
+        required: false
         type: string
       authorization_id:
         description: Authorization identity of the pending resume
-        required: true
+        required: false
         type: string
       stage:
         description: Resume stage (validation or publication)
-        required: true
+        required: false
         type: string
       nonce:
         description: Pending resume nonce recorded on the anchored ledger
-        required: true
+        required: false
+        type: string
+      remediation_authorization:
+        description: >-
+          ADR 0039 L4 remediation entry: the base64 K_AUTH-signed remediation authorization document minted by
+          the reconcile job. Public Issue claims, public reviewer claims and digests only; authorize refuses it
+          unless the issuer signature verifies. Leave empty for every other dispatch.
+        required: false
         type: string
 
 run-name: >-
   ${{ github.event_name == 'workflow_dispatch'
-      && format('Issue agent resume {0} {1}', inputs.stage, inputs.nonce)
+      && (inputs.remediation_authorization != ''
+          && format('Issue agent remediation')
+          || format('Issue agent resume {0} {1}', inputs.stage, inputs.nonce))
       || format('Issue agent #{0}', github.event.issue.number) }}
 
 permissions: {}
@@ -47,7 +56,9 @@ permissions: {}
 concurrency:
   group: >-
     ${{ github.event_name == 'workflow_dispatch'
-        && format('hunter-issue-agent-resume-{0}', inputs.issue)
+        && (inputs.remediation_authorization != ''
+            && format('hunter-issue-agent-remediation')
+            || format('hunter-issue-agent-resume-{0}', inputs.issue))
         || format('hunter-issue-agent-{0}', github.event.issue.number) }}
   cancel-in-progress: false
   queue: max
@@ -60,11 +71,16 @@ jobs:
   authorize:
     name: authorize
     if: >-
-      github.event_name == 'issues'
-      && github.event.label.name == 'hunter-agent-execute'
-      && github.actor == github.repository_owner
-      && !github.event.issue.pull_request
-      && github.event.issue.state == 'open'
+      (
+        github.event_name == 'issues'
+        && github.event.label.name == 'hunter-agent-execute'
+        && github.actor == github.repository_owner
+        && !github.event.issue.pull_request
+        && github.event.issue.state == 'open'
+      )
+      || (github.event_name == 'workflow_dispatch'
+          && inputs.remediation_authorization != ''
+          && github.actor == github.repository_owner)
       && github.ref == 'refs/heads/main'
     runs-on: ubuntu-latest
     timeout-minutes: 20
@@ -77,6 +93,7 @@ jobs:
       issue: ${{ steps.prepare.outputs.issue }}
       authorization_id: ${{ steps.prepare.outputs.authorization_id }}
       handoff_artifact_id: ${{ steps.upload.outputs.artifact-id }}
+      remediation: ${{ steps.document.outputs.remediation }}
     steps:
       - name: Checkout control_sha
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -89,6 +106,17 @@ jobs:
           python-version: "3.11.13"
       - name: Install pinned runtime
         run: python -m pip install --only-binary ':all:' -c requirements/ci-constraints.txt .
+      # ADR 0039 L4: a remediation dispatch carries the K_AUTH-signed document the reconcile job minted. It is
+      # decoded, never templated, and `authorize-prepare` refuses it unless the issuer signature verifies.
+      - name: Decode the bound remediation authorization document
+        id: document
+        if: github.event_name == 'workflow_dispatch' && inputs.remediation_authorization != ''
+        env:
+          REMEDIATION_AUTHORIZATION: ${{ inputs.remediation_authorization }}
+        run: |
+          set -euo pipefail
+          printf '%s' "$REMEDIATION_AUTHORIZATION" | base64 --decode > "$RUNNER_TEMP/remediation.json"
+          echo "remediation=true" >> "$GITHUB_OUTPUT"
       - name: Mint, verify, compile and seal (no durable write)
         id: prepare
         env:
@@ -97,9 +125,16 @@ jobs:
           HUNTER_ISSUE_AGENT_STATE_SIGNING_KEY: ${{ secrets.HUNTER_ISSUE_AGENT_STATE_SIGNING_KEY }}
           HUNTER_SOURCE_HANDLING_SIGNING_KEY: ${{ secrets.HUNTER_SOURCE_HANDLING_SIGNING_KEY }}
           HUNTER_PROMPT_AUTOMATION_SIGNING_KEY: ${{ secrets.HUNTER_PROMPT_AUTOMATION_SIGNING_KEY }}
-        run: >-
-          python scripts/hunter_issue_agent_lifecycle.py authorize-prepare
-          --event "$GITHUB_EVENT_PATH" --out-dir "$RUNNER_TEMP/authorize"
+          REMEDIATION_AUTHORIZATION: ${{ inputs.remediation_authorization }}
+        run: |
+          set -euo pipefail
+          if [ "$REMEDIATION_AUTHORIZATION" != "" ]; then
+            python scripts/hunter_issue_agent_lifecycle.py authorize-prepare
+              --document "$RUNNER_TEMP/remediation.json" --out-dir "$RUNNER_TEMP/authorize"
+          else
+            python scripts/hunter_issue_agent_lifecycle.py authorize-prepare
+              --event "$GITHUB_EVENT_PATH" --out-dir "$RUNNER_TEMP/authorize"
+          fi
       - name: Upload the sealed handoff
         id: upload
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
@@ -180,7 +215,11 @@ jobs:
   bind:
     name: bind
     needs: [authorize, execute]
-    if: always() && needs.authorize.result == 'success'
+    if: >-
+      always()
+      && (needs.authorize.result == 'success'
+          || (needs.authorize.result == 'skipped' && github.event_name == 'workflow_dispatch'
+              && inputs.remediation_authorization == ''))
     runs-on: ubuntu-latest
     timeout-minutes: 10
     environment: hunter-issue-agent-control
@@ -211,7 +250,11 @@ jobs:
 
   resume-bind:
     name: resume-bind
-    if: github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main'
+    if: >-
+      github.event_name == 'workflow_dispatch'
+      && inputs.remediation_authorization == ''
+      && inputs.stage != ''
+      && github.ref == 'refs/heads/main'
     runs-on: ubuntu-latest
     timeout-minutes: 10
     environment: hunter-issue-agent-control
@@ -250,7 +293,8 @@ jobs:
     needs: [authorize, bind, resume-bind]
     if: >-
       always() && (
-        (github.event_name == 'issues' && needs.bind.result == 'success')
+        ((github.event_name == 'issues' || needs.authorize.outputs.remediation == 'true')
+          && needs.bind.result == 'success')
         || (github.event_name == 'workflow_dispatch' && inputs.stage == 'validation'
             && needs.resume-bind.result == 'success')
       )
@@ -316,7 +360,9 @@ jobs:
   record-validation:
     name: record-validation
     needs: [authorize, validate, resume-bind]
-    if: always() && (needs.authorize.result == 'success' || needs.resume-bind.result == 'success')
+    if: >-
+      always()
+      && (needs.authorize.result == 'success' || needs.resume-bind.result == 'success')
     runs-on: ubuntu-latest
     timeout-minutes: 10
     environment: hunter-issue-agent-control
@@ -348,7 +394,8 @@ jobs:
     needs: [authorize, record-validation, resume-bind]
     if: >-
       always() && (
-        (github.event_name == 'issues' && needs.record-validation.result == 'success')
+        ((github.event_name == 'issues' || needs.authorize.outputs.remediation == 'true')
+          && needs.record-validation.result == 'success')
         || (github.event_name == 'workflow_dispatch' && inputs.stage == 'publication'
             && needs.resume-bind.result == 'success')
       )
@@ -413,7 +460,10 @@ jobs:
   finalize:
     name: finalize
     needs: [authorize, execute, bind, resume-bind, validate, record-validation, publish]
-    if: always() && (needs.authorize.result == 'success' || needs.resume-bind.result == 'success')
+    if: >-
+      always()
+      && (needs.authorize.result == 'success'
+          || (needs.resume-bind.result == 'success' && needs.authorize.result != 'failure'))
     runs-on: ubuntu-latest
     timeout-minutes: 10
     environment: hunter-issue-agent-control

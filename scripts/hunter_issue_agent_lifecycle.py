@@ -39,6 +39,8 @@ RESULT_KEY_ENV = "HUNTER_ISSUE_AGENT_RESULT_KEY"
 MODEL_KEY_ENV = "HUNTER_ISSUE_AGENT_EXECUTOR_MODEL_API_KEY"
 PUSH_TOKEN_ENV = "HUNTER_ISSUE_AGENT_PUBLISHER_PUSH_TOKEN"
 PUBLISHER_SIGNING_KEY_ENV = "HUNTER_ISSUE_AGENT_PUBLISHER_SIGNING_KEY"
+#: K_AUTH: the issuer key that mints both an Issue authorization and a remediation authorization (ADR 0039 L4).
+AUTHORIZATION_SIGNING_KEY_ENV = "HUNTER_ISSUE_AGENT_AUTHORIZATION_SIGNING_KEY"
 ISOLATION_USER = "hunter-untrusted"
 #: The trusted gate chain the validator runs at ``control_sha`` and the toolchain it runs on; their digests
 #: are recorded so a receipt can never be reused after either changes (VALIDATION_STAGE_CONTRACT).
@@ -313,6 +315,90 @@ def cmd_knowledge_ingest(configuration: control.Configuration, arguments: argpar
     return 0
 
 
+def cmd_remediate(configuration: control.Configuration, arguments: argparse.Namespace) -> int:
+    """ADR 0039 L4 (RD-4/RD-5): detect an eligible lifecycle PR and dispatch one bounded remediation.
+
+    At most one authorization is minted per Issue per pass, and it is minted from the *same* claims every time,
+    so a duplicate pass, a lost dispatch or a crash recomputes the identical identity and loses the claim in
+    ``authorize`` instead of starting a second lifecycle. Nothing here reads Issue text for scope or routing:
+    the findings come from the verified anchored knowledge ledger and the head from a GitHub observation.
+    """
+
+    writer = _writer("reconcile", "remediate", control.RECONCILE_WORKFLOW)
+    github = _github(configuration)
+    control.require_anchor(github, configuration, knowledge.KNOWLEDGE_LEDGER_REF)
+    provenance = control.run_provenance(github, configuration)
+    signing_key = _ed25519(AUTHORIZATION_SIGNING_KEY_ENV)
+    store = _store(configuration, authenticated=True)
+    dispatched = 0
+    for issue in ([arguments.issue] if arguments.issue else _active_issues(configuration)):
+        try:
+            _, ledger_view = control.load_ledger(store, configuration, provenance, issue)
+            candidate = control.eligible_remediation(
+                github, configuration, ledger_view, _knowledge_view(configuration, github), issue
+            )
+            if candidate is None:
+                print(f"issue {issue}: no eligible remediation")
+                continue
+            live = control.definitive(github.get(f"/repos/{configuration.repository}/issues/{issue}"))
+            if not isinstance(live, Mapping):
+                raise control.FactsUnavailable("the governing Issue is not observable")
+            parent = ledger_view.authorizations[candidate.parent_authorization_id]
+            group = remediation.remediation_group(
+                parent_authorization_id=candidate.parent_authorization_id,
+                issue_number=issue,
+                pull_request_number=candidate.pull_request_number,
+                bound_head_sha=candidate.bound_head_sha,
+                attempt=min(candidate.attempts),
+                findings=candidate.findings,
+            )
+            try:
+                authorization = remediation.remediation_authorization(
+                    live, repository=configuration.repository, owner_login=configuration.owner_login, remediation=group
+                )
+                scope = remediation.remediation_scope(authorization, parent.evidence[state.AUTHORIZED]["task_scope"])
+                document = remediation.sign_remediation(authorization, scope, signing_key=signing_key).to_json()
+            except remediation.RemediationRefused as refusal:
+                print(f"issue {issue}: refused {refusal}")
+                continue
+            # The request record is written before the dispatch, so a lost dispatch is a read-back, not a
+            # second mint; the insert-only key makes a duplicate delivery a no-op.
+            _, _, written = knowledge.append(
+                store,
+                [
+                    knowledge.Write(
+                        "remediation_requested",
+                        {
+                            "finding_id": item["finding_id"],
+                            "attempt": attempt,
+                            "pull_request_number": candidate.pull_request_number,
+                            "bound_head_sha": candidate.bound_head_sha,
+                            "authorization_id": authorization.authorization_id,
+                        },
+                    )
+                    for item, attempt in zip(candidate.findings, candidate.attempts, strict=True)
+                ],
+                trust=configuration.trust,
+                provenance=provenance,
+                signing_key=_ed25519(STATE_SIGNING_KEY_ENV),
+                recorded_by=writer.recorded_by(),
+                recorded_at=_timestamp(),
+            )
+            if not control.dispatch_remediation(github, candidate, document.encode()):
+                raise control.FactsUnavailable("the remediation dispatch was not accepted")
+            dispatched += 1
+            print(
+                f"issue {issue}: dispatched {authorization.authorization_id} for PR "
+                f"#{candidate.pull_request_number} at {candidate.bound_head_sha[:12]} "
+                f"({len(candidate.findings)} finding(s), {written} knowledge record(s))"
+            )
+        except state.LedgerConflictError:
+            print(f"issue {issue}: no-op (a ledger moved; the next pass re-decides)")
+        except control.FactsUnavailable as error:
+            print(f"issue {issue}: no-op ({error})")
+    return 0 if dispatched or arguments.issue else EXIT_NOOP
+
+
 def cmd_resume_bind(configuration: control.Configuration, arguments: argparse.Namespace) -> int:
     control_sha = control.bind_resume(
         github=_github(configuration),
@@ -428,13 +514,30 @@ def cmd_authorize_prepare(configuration: control.Configuration, arguments: argpa
     import hunter_issue_agent_trigger as trigger
 
     _run_context()
-    event = json.loads(Path(arguments.event).read_bytes())
-    authorization = trigger.authorize_event(
-        event, expected_repository=configuration.repository, owner_login=configuration.owner_login
-    )
-    document = trigger.sign_authorization(
-        authorization, signing_key=trigger.load_signing_key(_secret(trigger.SIGNING_KEY_ENV))
-    ).to_json()
+    if (arguments.event is None) == (arguments.document is None):
+        raise LifecycleRefused("MISSING_CONFIGURATION", "authorize-prepare takes exactly one authorization source")
+    if arguments.document is not None:
+        # ADR 0039 L4: the remediation document was already minted and signed by the reconcile job with K_AUTH.
+        # This job re-verifies that signature and never re-mints, so a dispatch can never be a second issuer.
+        from hunter.automation.issue_agent_execution import SignedIssueAgentAuthorization
+
+        document = Path(arguments.document).read_bytes()
+        try:
+            authorization = SignedIssueAgentAuthorization.from_json(document).authorization
+        except Exception:
+            raise LifecycleRefused("TRANSPORT_INTEGRITY_FAILED", "the remediation document does not parse") from None
+    else:
+        event = json.loads(Path(arguments.event).read_bytes())
+        authorization = trigger.authorize_event(
+            event, expected_repository=configuration.repository, owner_login=configuration.owner_login
+        )
+        document = (
+            trigger.sign_authorization(
+                authorization, signing_key=trigger.load_signing_key(_secret(trigger.SIGNING_KEY_ENV))
+            )
+            .to_json()
+            .encode("utf-8")
+        )
     _export_public_trust(configuration)
     github = _github(configuration)
     _require_anchors(configuration, github, authorization.issue_number)
@@ -724,7 +827,8 @@ def _parser() -> argparse.ArgumentParser:
         return child
 
     prepare = add("authorize-prepare", cmd_authorize_prepare)
-    prepare.add_argument("--event", required=True)
+    prepare.add_argument("--event")
+    prepare.add_argument("--document")
     prepare.add_argument("--out-dir", required=True)
     commit = add("authorize-commit", cmd_authorize_commit)
     commit.add_argument("--out-dir", required=True)
@@ -760,6 +864,8 @@ def _parser() -> argparse.ArgumentParser:
     publish.add_argument("--workroot", required=True)
     ingest = add("knowledge-ingest", cmd_knowledge_ingest)
     ingest.add_argument("--pr", type=int)
+    remediate = add("remediate", cmd_remediate)
+    remediate.add_argument("--issue", type=int)
     gate = add("candidate-gate", cmd_candidate_gate)
     gate.add_argument("--branch", required=True)
     gate.add_argument("--head-sha", required=True)
@@ -777,7 +883,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         return EXIT_REFUSED
     except control.FactsUnavailable as error:
         print(f"issue-agent lifecycle no-op: {error}", file=sys.stderr)
-        return EXIT_NOOP if arguments.command in ("step", "knowledge-ingest") else EXIT_REFUSED
+        return EXIT_NOOP if arguments.command in ("step", "knowledge-ingest", "remediate") else EXIT_REFUSED
 
 
 if __name__ == "__main__":

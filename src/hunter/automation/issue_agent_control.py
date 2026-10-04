@@ -16,6 +16,7 @@ entry point fails closed with ``MISSING_CONFIGURATION`` before any read or write
 
 from __future__ import annotations
 
+import base64
 import hashlib
 import io
 import json
@@ -34,6 +35,7 @@ from typing import Any, Final, Literal, Protocol
 from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey, Ed25519PublicKey
 from cryptography.hazmat.primitives.asymmetric.x25519 import X25519PublicKey
 
+from hunter.automation import issue_agent_knowledge as knowledge
 from hunter.automation import issue_agent_state as state
 from hunter.automation.issue_agent_roles import RECEIPT_SCHEMA_VERSION, WriterIdentity
 from hunter.automation.issue_agent_transport import (
@@ -73,7 +75,8 @@ WRITERS: Final[Mapping[str, WriterWorkflow]] = {
         },
     ),
     RECONCILE_WORKFLOW: WriterWorkflow(
-        frozenset({"schedule", "workflow_dispatch"}), {"reconcile": frozenset({"reconcile"})}
+        frozenset({"schedule", "workflow_dispatch"}),
+        {"reconcile": frozenset({"reconcile"}), "remediate": frozenset({"reconcile"})},
     ),
     CANDIDATE_PR_WORKFLOW: WriterWorkflow(frozenset({"workflow_run"}), {"candidate-pr-record": frozenset({"record"})}),
     KNOWLEDGE_WORKFLOW: WriterWorkflow(
@@ -83,6 +86,8 @@ WRITERS: Final[Mapping[str, WriterWorkflow]] = {
 }
 
 #: The lifecycle job that owns each non-terminal stage (state machine spec section 4).
+#: ADR 0039 L4: the bounded finding count one remediation authorization may carry.
+MAX_REMEDIATION_FINDINGS: Final = 16
 STAGE_JOBS: Final[Mapping[str, str]] = {
     state.AUTHORIZED: "execute",
     state.RESULT_BOUND: "validate",
@@ -600,6 +605,118 @@ def _pull_requests(github: GitHub, configuration: Configuration, branch: str) ->
     return [pr for pr in listing if isinstance(pr, Mapping) and (pr.get("head") or {}).get("ref") == branch]
 
 
+@dataclass(frozen=True, slots=True)
+class RemediationCandidate:
+    """One lifecycle-created pull request that ADR 0039 L4 accepts for finding-driven remediation.
+
+    ``bound_head_sha`` is the pull request's head *as observed now*: the fast-forward lease the remediation
+    authorization will be signed against. Nothing here is a belief about the future; every field is a GitHub
+    fact or a verified anchored-ledger fact.
+    """
+
+    pull_request_number: int
+    branch: str
+    bound_head_sha: str
+    parent_authorization_id: str
+    findings: tuple[Mapping[str, Any], ...]
+    attempts: tuple[int, ...]
+
+
+def eligible_remediation(
+    github: GitHub,
+    configuration: Configuration,
+    view: state.LedgerView,
+    known: knowledge.KnowledgeView,
+    issue: int,
+) -> RemediationCandidate | None:
+    """ADR 0039 L4 (RD-4/RD-5): the one eligible remediation for this Issue, or ``None``.
+
+    Every condition is a definitive observation or a verified ledger fact, and any missing, malformed or
+    indefinite one yields ``None`` rather than a guess. The owner's label is the standing consent, so it is
+    read by the caller from the live Issue; this function enforces the rest.
+    """
+
+    if view.active is not None:
+        return None  # a remediation is dispatched only when no authorization for this Issue is active
+    completed = {
+        authorization.binding("execution_branch"): authorization
+        for authorization in view.authorizations.values()
+        if authorization.state == state.COMPLETED
+    }
+    if not completed:
+        return None
+    prefix = f"issue-{issue}-"
+    listing = definitive(github.get(f"/repos/{configuration.repository}/pulls?state=open&per_page=100"))
+    if not isinstance(listing, list):
+        raise FactsUnavailable("open pull request listing missing")
+    branches = {
+        str((pull.get("head") or {}).get("ref")): pull
+        for pull in listing
+        if isinstance(pull, Mapping) and str((pull.get("head") or {}).get("ref") or "").startswith(prefix)
+    }
+    if len(branches) != 1:
+        return None  # zero, or an ambiguous pair: never guess which pull request to remediate
+    branch, pull = next(iter(branches.items()))
+    parent = completed.get(branch)
+    if parent is None:
+        return None  # not a lifecycle-created branch with a completed authorization behind it
+    head = (pull.get("head") or {}).get("sha")
+    number = pull.get("number")
+    if not isinstance(head, str) or _SHA40.fullmatch(head) is None or type(number) is not int:
+        return None
+    published = parent.evidence.get(state.PUBLISHED)
+    if published is None or published.get("head_sha") != head:
+        return None  # the branch moved since completion; the reviewed head is no longer the published one
+    if known.remediations_for_pr(number) >= knowledge.MAX_REMEDIATIONS_PER_PR:
+        return None  # the per-pull-request budget is exhausted; the finding stays known and unresolved
+    selected: list[Mapping[str, Any]] = []
+    attempts: list[int] = []
+    for identity, item in sorted(known.findings.items()):
+        if item.pull_request_number != number or not item.open or item.proven is not None:
+            continue
+        classification = item.classification
+        if classification is not None and classification["outcome"] == "ambiguous":
+            continue  # an ambiguous finding needs a human disposition, never a guessed family
+        if item.ingested["provenance"]["reviewed_head_sha"] != head:
+            continue  # ADR 0039 L4: only a finding observed at the pull request's current head
+        attempt = len(item.remediations) + 1
+        if attempt > knowledge.MAX_REMEDIATIONS_PER_FINDING:
+            continue  # the per-finding budget is exhausted
+        selected.append({"finding_id": identity, "path": item.path, "claim": item.ingested["claim"]})
+        attempts.append(attempt)
+    if not selected:
+        return None
+    return RemediationCandidate(
+        number,
+        branch,
+        head,
+        parent.authorization_id,
+        tuple(selected[:MAX_REMEDIATION_FINDINGS]),
+        tuple(attempts[:MAX_REMEDIATION_FINDINGS]),
+    )
+
+
+#: ADR 0039 L4: the only workflow input a remediation dispatch carries. It is the K_AUTH-signed authorization
+#: document itself -- public Issue claims, public reviewer claims and digests, never a prompt or a source byte
+#: -- and ``authorize`` refuses it unless the issuer signature verifies against the pinned public key.
+REMEDIATION_DISPATCH_INPUT: Final = "remediation_authorization"
+
+
+def dispatch_remediation(github: GitHub, candidate: RemediationCandidate, document: bytes) -> bool:
+    """Dispatch the lifecycle for one eligible remediation through the unchanged trigger workflow.
+
+    There is no second orchestrator: the very same jobs, environments and secrets run, and the very same
+    ``authorize`` composition verifies the signature and claims the authorization. A dispatch that is lost is
+    recovered by the next reconcile pass, which recomputes the identical authorization identity and loses the
+    CAS in ``authorize`` instead of minting a second one.
+    """
+
+    return github.dispatch(
+        Path(LIFECYCLE_WORKFLOW).name,
+        {REMEDIATION_DISPATCH_INPUT: base64.b64encode(document).decode("ascii")},
+    )
+
+
 def _preflight(github: GitHub, configuration: Configuration, head_sha: str) -> tuple[str | None, int | None]:
     query = urllib.parse.urlencode({"head_sha": head_sha, "event": "push", "per_page": 100})
     path = f"/repos/{configuration.repository}/actions/workflows/{PREFLIGHT_WORKFLOW_FILE}/runs?{query}"
@@ -1054,6 +1171,7 @@ def bind_resume(
 
 __all__ = [
     "COMPLETION_DEADLINE",
+    "MAX_REMEDIATION_FINDINGS",
     "Configuration",
     "ControlRefused",
     "SourceHandlingRoot",
@@ -1063,9 +1181,12 @@ __all__ = [
     "GitHubRest",
     "Observation",
     "Read",
+    "RemediationCandidate",
     "Writer",
     "WRITERS",
     "bind_resume",
+    "dispatch_remediation",
+    "eligible_remediation",
     "load_configuration",
     "observe",
     "outcome_artifact_name",
