@@ -69,7 +69,7 @@ from dataclasses import asdict, dataclass
 from datetime import UTC, datetime, timedelta
 from fnmatch import fnmatchcase
 from pathlib import Path
-from typing import Any, Protocol
+from typing import Any, Final, Protocol
 
 from cryptography.exceptions import InvalidSignature
 from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PublicKey
@@ -128,6 +128,10 @@ MAX_REMEDIATION_FINDINGS = 16
 _FINDING_ID_RE = re.compile(r"[0-9a-f]{64}")
 _FINDING_PATH_RE = re.compile(r"[A-Za-z0-9._@+/-]{1,512}")
 _FINDING_CLAIM_RE = re.compile(r"[\x20-\x7e]{1,280}")
+
+#: ADR 0039 L6 (RD-3): the canonical governed registry files that only trusted plumbing may change. A model
+#: result that names either path in a remediation is refused before it reaches the safety boundary.
+PROMOTION_PATHS: Final = ("docs/DEFECT_REGISTRY.json", "docs/REVIEWER_FINDING_DISPOSITIONS.json")
 
 #: Domain separator the issuer mixes into the signed message. It must match
 #: ``scripts/hunter_issue_agent_trigger.py`` exactly; the cross-binding test
@@ -1637,6 +1641,7 @@ __all__ = [
     "IssueAgentLedgerEntry",
     "IssueAgentReplayError",
     "OWNER_LOGIN_ENV",
+    "PROMOTION_PATHS",
     "REPOSITORY_CHECKOUT_ENV",
     "REPOSITORY_ENV",
     "SOURCE_HANDLING_GENESIS_RULE_SHA256_ENV",

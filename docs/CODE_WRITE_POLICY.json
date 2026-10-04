@@ -47,7 +47,7 @@
       },
       "operation": {
         "create_only": true,
-        "update": false,
+        "update": "fast-forward-from-bound-head",
         "force": false,
         "delete": false,
         "tag": false,

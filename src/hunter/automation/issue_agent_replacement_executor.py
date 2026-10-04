@@ -15,16 +15,29 @@ import tempfile
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from pathlib import Path, PurePosixPath
+from typing import Any, Final
 
-from hunter.automation.issue_agent_execution import SignedIssueAgentAuthorization, derive_execution_target
+from hunter.automation.issue_agent_execution import (
+    PROMOTION_PATHS,
+    SignedIssueAgentAuthorization,
+    derive_execution_target,
+)
 from hunter.task_scope import TaskScopeContract, path_matches_scope_entry
 
 RESULT_SCHEMA_VERSION = "hunter-issue-agent-replacement-result-v1"
 REHEARSAL_SCHEMA_VERSION = "hunter-issue-agent-replacement-rehearsal-v1"
 _SHA = re.compile(r"[0-9a-f]{64}")
+_TEST_ID = re.compile(r"tests/[A-Za-z0-9_./-]{1,200}\.py::[A-Za-z0-9_\[\]-]{1,200}")
+_FAMILY = re.compile(r"DFF-[0-9]{3}")
+_TITLE = re.compile(r"[a-z0-9][a-z0-9-]{2,99}")
+_TEXT = re.compile(r"[\x20-\x7e]{12,1000}")
 _MAX_RESULT_BYTES = 8 * 1024 * 1024
 _MAX_FILE_BYTES = 2 * 1024 * 1024
 _MAX_FILES = 256
+MAX_REGRESSION_TESTS = 32
+#: The interpreter that runs candidate regression tests in the isolation boundary. Pinned here so the proof
+#: names exactly one toolchain, and overridable only so a test can execute the same code path.
+REGRESSION_PYTHON: Final = "python3"
 
 
 class ReplacementExecutorError(RuntimeError):
@@ -48,6 +61,8 @@ class ValidatedReplacementResult:
     files: tuple[CandidateFile, ...]
     result_sha256: str
     rehearsal: bool
+    #: ADR 0039 L3.2: the result's optional, hostile defect-family proposal. Proven, never trusted.
+    remediation: dict[str, Any] | None = None
 
 
 def _canonical_path(value: object) -> str:
@@ -100,6 +115,56 @@ class ResultBinding:
     branch: str
     base_sha: str
     scope: TaskScopeContract
+    #: ADR 0039 L3.2/L6: the sorted finding ids this authorization remediates. Empty (the default) means the
+    #: authorization is not a remediation and the result must carry no ``remediation`` proposal at all.
+    remediation_finding_ids: tuple[str, ...] = ()
+
+
+def _decode_remediation(entry: object, paths: Sequence[str]) -> dict[str, Any]:
+    """The closed, bounded, printable-ASCII defect-family proposal of ADR 0039 L3.2.
+
+    Hostile data: the shape is bounded here, and nothing it says is believed until the RED->GREEN proof and the
+    trusted promotion derivation (L6) have both succeeded. A new-family invariant is prose, never a byte of the
+    confidential prompt, the source corpus or the evidence database.
+    """
+
+    if not isinstance(entry, Mapping) or set(entry) != {"finding_id", "disposition", "regression_tests"}:
+        raise ReplacementExecutorError("remediation proposal schema mismatch")
+    finding = entry["finding_id"]
+    if not isinstance(finding, str) or _SHA.fullmatch(finding) is None:
+        raise ReplacementExecutorError("remediation proposal names no finding")
+    disposition = entry["disposition"]
+    if not isinstance(disposition, Mapping):
+        raise ReplacementExecutorError("remediation disposition must be an object")
+    if set(disposition) == {"family_id"}:
+        family = disposition["family_id"]
+        if not isinstance(family, str) or _FAMILY.fullmatch(family) is None:
+            raise ReplacementExecutorError("remediation disposition names no canonical family")
+    elif set(disposition) == {"new_family"}:
+        proposal = disposition["new_family"]
+        if (
+            not isinstance(proposal, Mapping)
+            or set(proposal) != {"title", "invariant"}
+            or not isinstance(proposal["title"], str)
+            or _TITLE.fullmatch(proposal["title"]) is None
+            or not isinstance(proposal["invariant"], str)
+            or _TEXT.fullmatch(proposal["invariant"]) is None
+        ):
+            raise ReplacementExecutorError("a new-family proposal must carry a bounded title and invariant")
+    else:
+        raise ReplacementExecutorError("remediation disposition must be exactly one family_id or new_family")
+    tests = entry["regression_tests"]
+    if not isinstance(tests, list) or not 1 <= len(tests) <= MAX_REGRESSION_TESTS:
+        raise ReplacementExecutorError("a remediation proposal names one to thirty-two regression tests")
+    if any(not isinstance(item, str) or _TEST_ID.fullmatch(item) is None for item in tests):
+        raise ReplacementExecutorError("a named regression test is not a repository test id")
+    # RED runs the reviewed head plus the result's *test files only*, so every named test must ship in the result.
+    missing = sorted({item.split("::", 1)[0] for item in tests} - set(paths))
+    if missing:
+        raise ReplacementExecutorError(f"a named regression test is not in the result: {missing[0]}")
+    if tests != sorted(set(tests)):
+        raise ReplacementExecutorError("regression tests must be unique and sorted")
+    return {"finding_id": finding, "disposition": dict(disposition), "regression_tests": list(tests)}
 
 
 def validate_replacement_result(
@@ -131,8 +196,12 @@ def validate_bound_result(
         payload = json.loads(raw.decode("utf-8"))
     except (UnicodeDecodeError, ValueError):
         raise ReplacementExecutorError("replacement result must be UTF-8 JSON") from None
-    expected = {"schema_version", "authorization_id", "base_sha", "branch", "files"}
-    if not isinstance(payload, Mapping) or set(payload) != expected:
+    remediation = bool(binding.remediation_finding_ids)
+    # ADR 0039 L3.2: the defect-family proposal is *optional* and exists only on a remediation. Anything else
+    # in the document -- present or absent -- is refused, so a non-remediation can never smuggle one in.
+    required = {"schema_version", "authorization_id", "base_sha", "branch", "files"}
+    permitted = required | ({"remediation"} if remediation else set())
+    if not isinstance(payload, Mapping) or not required <= set(payload) <= permitted:
         raise ReplacementExecutorError("replacement result schema mismatch")
     if payload["schema_version"] != (REHEARSAL_SCHEMA_VERSION if rehearsal else RESULT_SCHEMA_VERSION):
         raise ReplacementExecutorError("replacement result has wrong execution class")
@@ -153,6 +222,17 @@ def validate_bound_result(
     for path in paths:
         if not _path_allowed(path, binding.scope):
             raise ReplacementExecutorError(f"candidate path is outside signed TaskScope: {path}")
+    proposal: dict[str, Any] | None = None
+    if remediation:
+        # ADR 0039 L6 (RD-3): the model can never write the canonical registry or finding-disposition files;
+        # only trusted plumbing adds them to the validated tree. Refuse before any safety boundary runs.
+        written = sorted(set(paths) & set(PROMOTION_PATHS))
+        if written:
+            raise ReplacementExecutorError(f"the model may not write the canonical promotion file {written[0]}")
+        if "remediation" in payload:
+            proposal = _decode_remediation(payload["remediation"], paths)
+            if proposal["finding_id"] not in binding.remediation_finding_ids:
+                raise ReplacementExecutorError("the remediation proposal names a finding outside this authorization")
     return ValidatedReplacementResult(
         binding.authorization_id,
         binding.repository,
@@ -161,7 +241,62 @@ def validate_bound_result(
         files,
         hashlib.sha256(raw).hexdigest(),
         rehearsal,
+        proposal,
     )
+
+
+def with_promotion(validated: ValidatedReplacementResult, delta: Mapping[str, bytes]) -> ValidatedReplacementResult:
+    """The L6 validated tree: the model result plus the deterministic promotion delta, by trusted plumbing.
+
+    Pure and total: the validator derives the delta and the publisher re-derives the identical bytes, so both
+    build byte-identical commits from the same result and the same promotion input. The delta may only name
+    ``PROMOTION_PATHS``, and it replaces (never merges with) any result file, which the contract already
+    refuses for a remediation.
+    """
+
+    if validated.rehearsal:
+        raise ReplacementExecutorError("rehearsal result cannot carry a promotion delta")
+    unauthorized = sorted(set(delta) - set(PROMOTION_PATHS))
+    if unauthorized:
+        raise ReplacementExecutorError(f"a promotion delta may only name {PROMOTION_PATHS}: {unauthorized[0]}")
+    if not delta:
+        return validated
+    added = tuple(
+        CandidateFile(
+            path,
+            content,
+            hashlib.sha256(content).hexdigest(),
+            _existing_mode(validated, path),
+        )
+        for path, content in sorted(delta.items())
+    )
+    kept = tuple(item for item in validated.files if item.path not in delta)
+    return ValidatedReplacementResult(
+        validated.authorization_id,
+        validated.repository,
+        validated.branch,
+        validated.base_sha,
+        kept + added,
+        validated.result_sha256,
+        validated.rehearsal,
+        validated.remediation,
+    )
+
+
+def _existing_mode(validated: ValidatedReplacementResult, path: str) -> str:
+    return next((item.mode for item in validated.files if item.path == path), "100644")
+
+
+def promotion_digest(delta: Mapping[str, bytes]) -> str:
+    """The digest the ledger records so the publisher can prove it re-derived the identical delta."""
+
+    return hashlib.sha256(
+        canonical_bytes({path: hashlib.sha256(content).hexdigest() for path, content in sorted(delta.items())})
+    ).hexdigest()
+
+
+def canonical_bytes(value: object) -> bytes:
+    return json.dumps(value, sort_keys=True, separators=(",", ":"), ensure_ascii=False).encode("utf-8")
 
 
 #: Named model/provider authorities, including the GitHub-hosted executor's own
@@ -328,6 +463,22 @@ def _git_plumbing(
 
 
 _CANDIDATE_COMMIT_MESSAGE = "chore: apply governed Issue Agent replacement result"
+
+
+def git_blob(repo: str | Path, revision_path: str) -> bytes:
+    """The raw bytes of ``<commit>:<path>`` by trusted Git plumbing; no hooks, no work tree, no stripping."""
+
+    completed = subprocess.run(
+        ("git", "show", revision_path),
+        cwd=Path(repo).resolve(),
+        env={**os.environ, "GIT_CONFIG_GLOBAL": os.devnull, "GIT_CONFIG_NOSYSTEM": "1"},
+        capture_output=True,
+        check=False,
+        timeout=120,
+    )
+    if completed.returncode != 0:
+        raise ReplacementExecutorError(f"trusted plumbing could not read {revision_path}")
+    return completed.stdout
 
 
 @dataclass(frozen=True, slots=True)
@@ -814,6 +965,172 @@ def publish_bound_create_only(
             raise PublicationRejectedError("the platform refused the create-only push") from None
         raise
     return ReplacementPublication(validated.branch, validated.base_sha, head)
+
+
+def _bind_publication(
+    root: Path,
+    *,
+    validated: ValidatedReplacementResult,
+    identity: CommitIdentity,
+    expected_unsigned_commit_sha: str,
+    expected_tree_sha: str,
+    signing_key: str,
+) -> str:
+    """Reproduce the validator's exact unsigned commit, then sign the identical tree. Runs no candidate content."""
+
+    unsigned = build_unsigned_candidate_commit(root, validated=validated, identity=identity)
+    if unsigned != expected_unsigned_commit_sha:
+        raise ReplacementExecutorError("publisher did not reproduce the validated unsigned commit")
+    head = _candidate_commit(root, validated=validated, sign=True, signing_key=signing_key, identity=identity)
+    if candidate_tree(root, head) != expected_tree_sha:
+        raise ReplacementExecutorError("signed candidate tree differs from the validated tree")
+    return head
+
+
+def _push_environment(push_config: Sequence[tuple[str, str]]) -> dict[str, Any]:
+    return {
+        **os.environ,
+        "GIT_CONFIG_GLOBAL": os.devnull,
+        "GIT_CONFIG_NOSYSTEM": "1",
+        "GIT_TERMINAL_PROMPT": "0",
+        **_config_environment([("core.hooksPath", os.devnull), *push_config]),
+    }
+
+
+def publish_bound_fast_forward(
+    repo: str | Path,
+    *,
+    validated: ValidatedReplacementResult,
+    identity: CommitIdentity,
+    expected_unsigned_commit_sha: str,
+    expected_tree_sha: str,
+    lease_sha: str,
+    signing_key: str,
+    push_url: str,
+    push_config: Sequence[tuple[str, str]] = (),
+) -> ReplacementPublication:
+    """ADR 0039 L7 (RD-5): fast-forward the branch from the exact bound head, under that head's exact lease.
+
+    The new commit's single parent is ``validated.base_sha`` (the remediated PR head, which the control job
+    observed and bound), so the remote fast-forwards and history is never rewritten.
+    ``--force-with-lease=<ref>:<sha>`` makes the update conditional on the branch still being at exactly
+    ``lease_sha``: a head that moved in the meantime is ``REMOTE_BRANCH_CONFLICT`` and nothing is overwritten.
+    A branch already at the identical signed head is a lost-acknowledgement success, resolved by read-back and
+    never by a silent re-attempt.
+    """
+
+    if validated.rehearsal:
+        raise ReplacementExecutorError("rehearsal result cannot be published")
+    if not publisher_environment_is_safe(os.environ):
+        raise ReplacementExecutorError("publisher environment contains model authority")
+    if re.fullmatch(r"[0-9a-f]{40}", lease_sha or "") is None:
+        raise ReplacementExecutorError("a fast-forward publication requires an exact lease commit")
+    if validated.base_sha != lease_sha:
+        raise ReplacementExecutorError("the lease must be the exact base the remediation commits onto")
+    root = Path(repo).resolve()
+    head = _bind_publication(
+        root,
+        validated=validated,
+        identity=identity,
+        expected_unsigned_commit_sha=expected_unsigned_commit_sha,
+        expected_tree_sha=expected_tree_sha,
+        signing_key=signing_key,
+    )
+    ref = f"refs/heads/{validated.branch}"
+    environment = _push_environment(push_config)
+    try:
+        _git_plumbing(root, "push", f"--force-with-lease={ref}:{lease_sha}", push_url, f"{head}:{ref}", env=environment)
+    except ReplacementExecutorError:
+        if _remote_head(root, push_url, ref, environment) == head:
+            return ReplacementPublication(validated.branch, validated.base_sha, head)  # lost acknowledgement
+        raise PublicationConflictError(
+            "the branch is no longer at the bound PR head; nothing was overwritten"
+        ) from None
+    return ReplacementPublication(validated.branch, validated.base_sha, head)
+
+
+# --- the ADR 0039 L3.2 RED->GREEN proof ------------------------------------------------------------------
+
+
+def _overlay_tree(repo: Path, base_sha: str, files: Sequence[CandidateFile]) -> str:
+    """The tree of ``base_sha`` with the given files applied, by trusted plumbing only (no checkout, no hooks)."""
+
+    with tempfile.TemporaryDirectory(prefix="hunter-red-green-index-") as directory:
+        env = {**os.environ, "GIT_INDEX_FILE": str(Path(directory) / "index")}
+        _git_plumbing(repo, "read-tree", base_sha, env=env)
+        for item in files:
+            blob = _git_plumbing(repo, "hash-object", "-w", "--stdin", env=env, input_bytes=item.content)
+            _git_plumbing(repo, "update-index", "--add", "--cacheinfo", f"{item.mode},{blob},{item.path}", env=env)
+        return _git_plumbing(repo, "write-tree", env=env)
+
+
+def _materialize_tree(repo: Path, tree: str, target: Path) -> None:
+    with tempfile.TemporaryDirectory(prefix="hunter-red-green-checkout-") as directory:
+        env = {**os.environ, "GIT_INDEX_FILE": str(Path(directory) / "index")}
+        _git_plumbing(repo, "read-tree", tree, env=env)
+        target.mkdir(parents=True)
+        _git_plumbing(repo, "checkout-index", "--all", "--force", f"--prefix={target}/", env=env)
+
+
+def red_green_regression_proof(
+    repo: str | Path,
+    *,
+    validated: ValidatedReplacementResult,
+    tests: Sequence[str],
+    isolation_user: str,
+    timeout: float = 900.0,
+) -> dict[str, Any]:
+    """ADR 0039 L3.2 (RD-1): the named tests **fail** on the reviewed head plus the result's test files only,
+    and **pass** on the full result.
+
+    Both runs execute candidate-controlled test code, so both run as the isolation uid in a standalone
+    directory owned by it, with the explicit allowlist environment and the validating job's network denial.
+    Anything other than RED-then-GREEN raises: without that pair of observations there is no classification.
+    """
+
+    user = require_isolation_user(isolation_user)
+    leaked = publication_credentials_present(os.environ)
+    if leaked:
+        raise ReplacementExecutorError("regression proof boundary contains publication authority: " + ", ".join(leaked))
+    if not publisher_environment_is_safe(os.environ):
+        raise ReplacementExecutorError("regression proof boundary contains model authority")
+    test_paths = {item.split("::", 1)[0] for item in tests}
+    red_files = tuple(item for item in validated.files if item.path in test_paths)
+    if {item.path for item in red_files} != test_paths:
+        raise ReplacementExecutorError("a named regression test file is not in the result")
+    root = Path(repo).resolve()
+    red_tree = _overlay_tree(root, validated.base_sha, red_files)
+    green_tree = _overlay_tree(root, validated.base_sha, validated.files)
+    if green_tree == red_tree:
+        raise ReplacementExecutorError("the regression proof is vacuous: the result adds no non-test change")
+    argv = (REGRESSION_PYTHON, "-m", "pytest", "-p", "no:cacheprovider", "--no-header", "-q", *tests)
+    sandbox_root = new_isolation_root("hunter-red-green-")
+    home = sandbox_root / "home"
+    outcomes: dict[str, int] = {}
+    try:
+        home.mkdir(mode=0o700)
+        for label, tree in (("red", red_tree), ("green", green_tree)):
+            sandbox = sandbox_root / label
+            _materialize_tree(root, tree, sandbox)
+            run_privileged("chown", "-R", user, str(sandbox), str(home))
+            completed = subprocess.run(
+                isolated_command(user, untrusted_environment(os.environ, home=home, pythonpath=sandbox / "src"), argv),
+                cwd=sandbox,
+                env=dict(SUDO_ENVIRONMENT),
+                capture_output=True,
+                check=False,
+                timeout=timeout,
+            )
+            outcomes[label] = completed.returncode
+            if label == "red" and completed.returncode == 0:
+                raise ReplacementExecutorError("the named regression test already passed on the reviewed head")
+            if label == "green" and completed.returncode != 0:
+                raise ReplacementExecutorError("the named regression test does not pass on the full result")
+    except subprocess.TimeoutExpired:
+        raise ReplacementExecutorError("the regression proof timed out; no classification") from None
+    finally:
+        remove_isolation_root(sandbox_root, user)
+    return {"regression_tests": list(tests), "red_exit": outcomes["red"], "green_exit": outcomes["green"]}
 
 
 class ReplacementResultLedger:

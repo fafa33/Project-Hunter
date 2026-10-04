@@ -12,6 +12,7 @@ import re
 import shlex
 import subprocess
 import tomllib
+from collections.abc import Mapping
 from importlib import metadata
 from pathlib import Path
 from typing import Any, Literal
@@ -155,7 +156,10 @@ VALIDATION_STAGE_CONTRACT_PATH = ROOT / "docs" / "VALIDATION_STAGE_CONTRACT.json
 #: ADR 0037 D6 / Retirement Plan 2.4 (OD-3): the only operation the Issue-agent publisher may perform.
 ISSUE_AGENT_PUBLISHER_OPERATION = {
     "create_only": True,
-    "update": False,
+    # ADR 0039 L7 (RD-5): a finding-driven remediation of the publisher's own PR branch fast-forwards that
+    # branch from the exact bound head under that head's exact `--force-with-lease`. Anything else -- a force,
+    # a delete, a tag, a PR write, or a different `update` spelling -- is refused.
+    "update": "fast-forward-from-bound-head",
     "force": False,
     "delete": False,
     "tag": False,
@@ -307,6 +311,25 @@ def _validate_reference_target(ref_str: str, *, role: ReferenceRole) -> str | No
     return None
 
 
+def _mapped_family_title_errors(
+    finding_id: Any, mapped_id: str, finding: Mapping[str, Any], registry_families: Mapping[str, Any]
+) -> list[str]:
+    """ADR 0039 L6 (RD-3): a disposition mapped to a canonical family must name that family's own title.
+
+    A promoted finding is written by trusted plumbing from the registry, so its class can be checked against
+    the registry rather than trusted. That closes the one field a machine-written disposition could otherwise
+    use to claim a different defect class than the one it was proven against.
+    """
+
+    family = registry_families.get(mapped_id)
+    if family is None:
+        return []
+    title = family.get("title")
+    if not _is_non_empty_str(title) or finding.get("mapped_defect_class") != title:
+        return [f"{finding_id}: mapped family {mapped_id} requires mapped_defect_class to be its canonical title"]
+    return []
+
+
 def validate_reviewer_finding_dispositions() -> list[str]:
     errors: list[str] = []
     if not REVIEWER_DISPOSITIONS_PATH.is_file():
@@ -326,6 +349,13 @@ def validate_reviewer_finding_dispositions() -> list[str]:
         for defect in registry.get("defects", [])
         if isinstance(defect, dict) and isinstance(defect.get("id"), str)
     }
+    # ADR 0039 L6 (RD-3): a proven remediation maps to a canonical *family* as readily as to a legacy defect.
+    registry_families = {
+        family["id"]: family
+        for family in registry.get("families", [])
+        if isinstance(family, dict) and isinstance(family.get("id"), str)
+    }
+    mapped_targets = {**registry_defects, **registry_families}
 
     lifecycle = _load_object(LIFECYCLE_PATH)
     explicit_enforcement = lifecycle.get("explicit_enforcement", {})
@@ -382,9 +412,10 @@ def validate_reviewer_finding_dispositions() -> list[str]:
         elif classification == "recurrence":
             if not _is_non_empty_str(mapped_id):
                 errors.append(f"{finding_id}: recurrence classification requires non-empty mapped_defect_id")
-            elif mapped_id not in registry_defects:
+            elif mapped_id not in mapped_targets:
                 errors.append(f"{finding_id}: mapped_defect_id {mapped_id!r} not found in DEFECT_REGISTRY.json")
             else:
+                errors.extend(_mapped_family_title_errors(finding_id, mapped_id, finding, registry_families))
                 enforcement_entry = explicit_enforcement.get(mapped_id, {})
                 stage = enforcement_entry.get("state") if isinstance(enforcement_entry, dict) else None
                 if stage in {"prevented", "merge-enforced"}:
@@ -408,8 +439,12 @@ def validate_reviewer_finding_dispositions() -> list[str]:
                         if test_err:
                             errors.append(f"{finding_id}: invalid test_reference {test_ref!r}: {test_err}")
         elif mapped_id is not None:
-            if not _is_non_empty_str(mapped_id) or mapped_id not in registry_defects:
+            # ADR 0039 L6: the promotion of a proven finding names its canonical family, so the mapped target
+            # may be a family; the record must then carry that family's own title, never a restated claim.
+            if not _is_non_empty_str(mapped_id) or mapped_id not in mapped_targets:
                 errors.append(f"{finding_id}: mapped_defect_id {mapped_id!r} not found in DEFECT_REGISTRY.json")
+            else:
+                errors.extend(_mapped_family_title_errors(finding_id, mapped_id, finding, registry_families))
 
         if res_state == "resolved":
             if classification in {"new_systemic_defect", "duplicate", "recurrence"}:
@@ -970,7 +1005,10 @@ def validate_issue_agent_code_write_paths(policy: dict[str, Any]) -> list[str]:
             "issue_agent_publisher target ref must be exactly refs/heads/issue-<issue>-<16 hex of the authorization>"
         )
     if not _exactly(publisher.get("operation"), ISSUE_AGENT_PUBLISHER_OPERATION):
-        errors.append("issue_agent_publisher must be create-only with no update, force, delete, tag or PR authority")
+        errors.append(
+            "issue_agent_publisher must be create-only, or a fast-forward update from the exact bound head, with "
+            "no force, delete, tag or PR authority"
+        )
     if not _exactly(publisher.get("token"), ISSUE_AGENT_PUBLISHER_TOKEN):
         errors.append("issue_agent_publisher token must be contents:write on this repository with workflows absent")
     shape = publisher.get("commit_shape")

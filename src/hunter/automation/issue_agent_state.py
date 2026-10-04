@@ -355,6 +355,28 @@ def handoff_artifact_name(authorization_id: str) -> str:
 TIMESTAMP = _pattern(_TIMESTAMP)
 POSITIVE = _int(1)
 
+#: ADR 0039: a proven classification names only repository test ids, canonical families and bounded, printable
+#: ASCII model prose. Nothing confidential (prompt, source corpus, evidence database) can pass these shapes.
+_TEST_ID = re.compile(r"tests/[A-Za-z0-9_./-]{1,200}\.py::[A-Za-z0-9_\[\]-]{1,200}")
+_PATH = re.compile(r"[A-Za-z0-9._@+/-]{1,512}")
+_FAMILY_ID = re.compile(r"DFF-[0-9]{3}")
+_FAMILY_TITLE = re.compile(r"[a-z0-9][a-z0-9-]{2,99}")
+_FAMILY_TEXT = re.compile(r"[\x20-\x7e]{12,1000}")
+
+
+def _disposition(value: object, where: str) -> None:
+    """ADR 0039 L3.2: exactly one of ``family_id`` or ``new_family`` -- never both, never neither."""
+
+    if not isinstance(value, dict) or set(value) not in ({"family_id"}, {"new_family"}):
+        raise LedgerSchemaError(f"{where}: disposition must be exactly one family_id or new_family")
+    if "family_id" in value:
+        _pattern(_FAMILY_ID)(value["family_id"], f"{where}.family_id")
+        return
+    _object({"title": _pattern(_FAMILY_TITLE), "invariant": _pattern(_FAMILY_TEXT)})(
+        value["new_family"], f"{where}.new_family"
+    )
+
+
 _ARTIFACT = _object(
     {
         "run_id": POSITIVE,
@@ -477,7 +499,22 @@ EVIDENCE_SCHEMAS: Final[Mapping[str, Validator]] = {
             "toolchain_sha256": SHA64,
             "validator_run_id": POSITIVE,
             "validation_attempts": POSITIVE,
-        }
+        },
+        optional={
+            # ADR 0039 L5/L6: the proven-mapping group of a finding-driven remediation. The ledger records the
+            # proof facts and the delta's digest; the publisher re-derives the delta from the same trusted
+            # inputs and must match that digest before it pushes anything.
+            "remediation": _object(
+                {
+                    "bound_head_sha": SHA40,
+                    "finding_ids": _list(SHA64, maximum=16),
+                    "proven_finding_ids": _list(SHA64, maximum=16),
+                    "regression_tests": _list(_pattern(_TEST_ID), maximum=32),
+                    "disposition": _optional(_disposition),
+                    "promotion_sha256": SHA64,
+                }
+            )
+        },
     ),
     PUBLISHED: _object(
         {

@@ -28,6 +28,8 @@ from cryptography.hazmat.primitives.asymmetric.x25519 import X25519PrivateKey
 
 from hunter.automation import issue_agent_authorize as authorize
 from hunter.automation import issue_agent_control as control
+from hunter.automation import issue_agent_knowledge as knowledge
+from hunter.automation import issue_agent_remediation as remediation
 from hunter.automation import issue_agent_roles as roles
 from hunter.automation import issue_agent_state as state
 
@@ -129,6 +131,51 @@ def _ledger_access(configuration: control.Configuration) -> roles.LedgerAccess:
     )
 
 
+def _finding_provenance(
+    configuration: control.Configuration, github: control.GitHubRest, finding_id: str
+) -> Mapping[str, Any] | None:
+    """The anchored, verified provenance of one ingested finding; ``None`` when the ledger does not hold it.
+
+    The provenance is public reviewer-thread metadata the knowledge ledger already stores, so the promotion
+    record carries provenance, not evidence bytes. A finding that is not in the verified ledger yields no
+    promotion at all: the fix still publishes and the finding stays unresolved.
+    """
+
+    findings = _knowledge_view(configuration, github).findings
+    item = findings.get(finding_id)
+    if item is None:
+        return None
+    provenance = item.ingested["provenance"]
+    return {
+        "finding_id": finding_id,
+        "path": item.path,
+        "pull_request_number": int(provenance["pull_request_number"]),
+        "reviewed_head_sha": str(provenance["reviewed_head_sha"]),
+        "reviewer": str(provenance["reviewer"]),
+        "comment_id": int(provenance["comment_id"]),
+    }
+
+
+def _promotion_port(configuration: control.Configuration, github: control.GitHubRest) -> roles.RemediationPort:
+    """ADR 0039 L6 (RD-3): the one trusted promotion service, used by the validator *and* the publisher.
+
+    Its only inputs are the validated result's proposal, the verified anchored finding provenance and the
+    canonical registry at the reviewed head, so both roles derive byte-identical promotion bytes or neither
+    does. A finding that is not in the verified ledger yields no promotion: the fix still publishes and the
+    finding stays known and unresolved.
+    """
+
+    def promote(
+        *, repo: Path, group: Mapping[str, Any], proposal: Mapping[str, Any], finding_id: str, **_rest: Any
+    ) -> Mapping[str, bytes]:
+        finding = _finding_provenance(configuration, github, finding_id)
+        if finding is None:
+            raise remediation.PromotionRefused("the proven finding is not in the verified knowledge ledger")
+        return remediation.promote(repo=repo, group=group, proposal=proposal, finding=finding)
+
+    return roles.RemediationPort(promote=promote)
+
+
 # --- control jobs ------------------------------------------------------------------------------------------
 
 
@@ -200,8 +247,6 @@ def _registry_applicability(checkout: Path) -> Callable[[str, str], bool | None]
 
 
 def _knowledge_view(configuration: control.Configuration, github: control.GitHubRest) -> Any:
-    from hunter.automation import issue_agent_knowledge as knowledge
-
     control.require_anchor(github, configuration, knowledge.KNOWLEDGE_LEDGER_REF)
     try:
         _, view = knowledge.read(
@@ -218,8 +263,6 @@ def cmd_knowledge_ingest(configuration: control.Configuration, arguments: argpar
     """ADR 0039 L1/L3.1 fast path: record every trusted-reviewer finding once, with its deterministic mapping."""
 
     import hunter_collect_learning_observations as collector
-
-    from hunter.automation import issue_agent_knowledge as knowledge
 
     writer = _writer("knowledge-ingest", "knowledge-ingest", control.KNOWLEDGE_WORKFLOW)
     github = _github(configuration)
@@ -360,8 +403,6 @@ def _authorize_dependencies(configuration: control.Configuration, github: contro
 
 
 def _knowledge_overlay(configuration: control.Configuration, github: control.GitHubRest) -> list[dict[str, Any]]:
-    from hunter.automation import issue_agent_knowledge as knowledge
-
     return knowledge.overlay_families(_knowledge_view(configuration, github))
 
 
@@ -552,6 +593,7 @@ def cmd_validate(configuration: control.Configuration, arguments: argparse.Names
             writer=configuration.writer,
             validation_definition=_digest_files(VALIDATION_DEFINITION_FILES),
             toolchain_sha256=_digest_files(TOOLCHAIN_FILES, extra=sys.version),
+            remediation=_promotion_port(configuration, _github(configuration, authenticated=False)),
         )
     except roles.RoleRefused as error:
         if error.code not in state.VALIDATION_REFUSAL_CODES:
@@ -612,6 +654,7 @@ def cmd_publish(configuration: control.Configuration, arguments: argparse.Namesp
             signing_key=str(signing_key),
             push_url=_remote(configuration),
             push_config=(("http.extraheader", header),),
+            derive_promotion=_promotion_port(configuration, _github(configuration, authenticated=False)).promote,
         )
     except roles.RoleRefused as error:
         if error.code not in state.PUBLICATION_REFUSAL_CODES:
