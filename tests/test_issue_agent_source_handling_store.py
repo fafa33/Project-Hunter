@@ -80,6 +80,11 @@ def _isolated_provenance_cache(monkeypatch: pytest.MonkeyPatch) -> None:
 
 @pytest.fixture
 def world(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> dict[str, Any]:
+    return build_world(tmp_path, monkeypatch)
+
+
+def build_world(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> dict[str, Any]:
+    """A bare remote plus a real ADR 0036 operator environment (shared with the authorize tests)."""
     remote = tmp_path / "remote.git"
     subprocess.run(["git", "init", "--quiet", "--bare", str(remote)], check=True)
     private_key = Ed25519PrivateKey.generate().private_bytes(

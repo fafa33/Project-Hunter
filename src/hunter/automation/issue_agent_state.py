@@ -210,9 +210,11 @@ def publication_identity(
 Validator = Callable[[object, str], None]
 
 _SHA40 = re.compile(r"[0-9a-f]{40}")
+#: The canonical Issue authorization identity (``issue_agent_execution.ISSUE_AGENT_AUTHORIZATION_IDENTITY_PREFIX``).
+AUTHORIZATION_ID_PATTERN: Final = re.compile(r"hunter-issue-agent-authorization:([0-9a-f]{64})")
 _SHA64 = re.compile(r"[0-9a-f]{64}")
 _SIG = re.compile(r"[0-9a-f]{128}")
-_TIMESTAMP = re.compile(r"\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z")
+_TIMESTAMP = re.compile(r"\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d{1,6})?Z")
 _LOGIN = re.compile(r"[A-Za-z0-9](?:[A-Za-z0-9-]{0,38})(?:\[bot\])?")
 _IDENT = re.compile(r"[A-Za-z0-9][A-Za-z0-9._:/#+@=-]{0,199}")
 _NODE_ID = re.compile(r"[A-Za-z0-9_=-]{1,128}")
@@ -303,6 +305,26 @@ def _object(spec: Mapping[str, Validator]) -> Validator:
 
 
 SHA40, SHA64 = _pattern(_SHA40), _pattern(_SHA64)
+AUTHORIZATION_ID = _pattern(AUTHORIZATION_ID_PATTERN)
+
+
+def authorization_digest(authorization_id: str) -> str:
+    """The 64-hex digest of a canonical authorization identity (artifact names cannot contain ``:``)."""
+
+    match = AUTHORIZATION_ID_PATTERN.fullmatch(authorization_id)
+    if match is None:
+        raise LedgerSchemaError("not a canonical authorization identity")
+    return match.group(1)
+
+
+def result_artifact_name(authorization_id: str) -> str:
+    return f"hunter-ia-result-{authorization_digest(authorization_id)}"
+
+
+def handoff_artifact_name(authorization_id: str) -> str:
+    return f"hunter-ia-handoff-{authorization_digest(authorization_id)}"
+
+
 TIMESTAMP = _pattern(_TIMESTAMP)
 POSITIVE = _int(1)
 
@@ -454,12 +476,12 @@ _INDEX = _object(
         "schema_version": _exact(INDEX_SCHEMA_VERSION),
         "repository_id": POSITIVE,
         "issue_number": POSITIVE,
-        "claimed_authorization_ids": _list(SHA64, maximum=10_000),
-        "active_authorization_id": _optional(SHA64),
+        "claimed_authorization_ids": _list(AUTHORIZATION_ID, maximum=10_000),
+        "active_authorization_id": _optional(AUTHORIZATION_ID),
         "pending_resume": _optional(
             _object(
                 {
-                    "authorization_id": SHA64,
+                    "authorization_id": AUTHORIZATION_ID,
                     "stage": _enum(RESUME_STAGES),
                     "nonce": SHA64,
                     "attempt": POSITIVE,
@@ -479,7 +501,7 @@ _RECORD_BASE: Final[Mapping[str, Validator]] = {
     "recorded_by": _RECORDED_BY,
     "repository_id": POSITIVE,
     "issue_number": POSITIVE,
-    "authorization_id": SHA64,
+    "authorization_id": AUTHORIZATION_ID,
     "state": _enum(STATES),
     "evidence": lambda _value, _where: None,  # validated per kind/state in validate_record_schema
     "signature": _SIGNATURE,
@@ -674,7 +696,7 @@ def empty_view(repository_id: int, issue_number: int) -> LedgerView:
 def _check_authorized_bindings(record: Mapping[str, Any]) -> None:
     evidence = record["evidence"]
     authorization_id = record["authorization_id"]
-    if evidence["execution_branch"] != f"issue-{record['issue_number']}-{authorization_id[:16]}":
+    if evidence["execution_branch"] != f"issue-{record['issue_number']}-{authorization_digest(authorization_id)[:16]}":
         raise LedgerCorruptError("execution branch is not derived from the Issue and authorization identity")
     if evidence["base_sha"] != evidence["task_scope"]["base_sha"]:
         raise LedgerCorruptError("bound base differs from the signed TaskScope base")
@@ -1052,7 +1074,9 @@ class Decision:
 
 
 def _instant(text: str) -> datetime:
-    return datetime.strptime(text, "%Y-%m-%dT%H:%M:%SZ").replace(tzinfo=UTC)
+    if _TIMESTAMP.fullmatch(text) is None:
+        raise LedgerSchemaError("malformed UTC timestamp")
+    return datetime.fromisoformat(text[:-1]).replace(tzinfo=UTC)
 
 
 def _deadline_passed(deadline: str, now: str) -> bool:
@@ -1082,7 +1106,7 @@ def advance(view: AuthorizationView, facts: Facts) -> Decision:
     if state == AUTHORIZED:
         if facts.result_artifacts is UNKNOWN or facts.executor_conclusion is UNKNOWN:
             return Decision("noop", reason="executor facts unknown")
-        artifacts = [a for a in facts.result_artifacts if a.name == f"hunter-ia-result-{view.authorization_id}"]
+        artifacts = [a for a in facts.result_artifacts if a.name == result_artifact_name(view.authorization_id)]
         if len(artifacts) > 1:
             return Decision("fail", code="TRANSPORT_INTEGRITY_FAILED", reason="duplicate result artifacts at bind")
         if len(artifacts) == 1:

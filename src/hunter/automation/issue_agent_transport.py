@@ -46,6 +46,7 @@ _SHA40 = re.compile(r"[0-9a-f]{40}")
 _SHA64 = re.compile(r"[0-9a-f]{64}")
 _HEX64 = re.compile(r"[0-9a-f]{64}")
 _HEX24 = re.compile(r"[0-9a-f]{24}")
+_AUTHORIZATION_ID = re.compile(r"hunter-issue-agent-authorization:[0-9a-f]{64}")
 
 
 class TransportIntegrityError(RuntimeError):
@@ -87,8 +88,9 @@ class TransportBinding:
                 raise TransportIntegrityError(f"{name} must be a positive integer")
         if _SHA40.fullmatch(self.base_sha) is None:
             raise TransportIntegrityError("base_sha must be an exact commit SHA")
+        if not isinstance(self.authorization_id, str) or _AUTHORIZATION_ID.fullmatch(self.authorization_id) is None:
+            raise TransportIntegrityError("authorization_id must be a canonical authorization identity")
         for name in (
-            "authorization_id",
             "task_scope_sha256",
             "execution_id",
             "handoff_sha256",

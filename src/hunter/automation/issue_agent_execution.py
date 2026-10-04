@@ -1268,6 +1268,67 @@ def _workspace_runtime(
     )
 
 
+def verify_signed_authorization(
+    signed: SignedIssueAgentAuthorization,
+    *,
+    issuer_verifier: IssueAgentAuthorizationVerifier,
+    repository: str,
+    owner_login: str,
+) -> IssueAgentAuthorization:
+    """The canonical trusted-origin and binding checks, shared by every execution entry point.
+
+    The issuer signature is verified first: the identity digest proves only that public claims are
+    self-consistent, and only the signature proves the owner's ``issues:labeled`` event.
+    """
+
+    issuer_verifier.verify(signed)
+    authorization = signed.authorization
+    if signed.implementation_scope.task_id != authorization.authorization_id:
+        raise IssueAgentAuthorizationError("implementation scope task_id must bind authorization identity")
+    if authorization.repository != repository:
+        raise IssueAgentAuthorizationError("authorization names a different repository than this deployment")
+    if authorization.authorized_by != owner_login:
+        raise IssueAgentAuthorizationError("only the configured repository owner may authorize execution")
+    return authorization
+
+
+@dataclass(frozen=True, slots=True)
+class GovernedCompilation:
+    """The canonical Issue-agent compilation path: ADR 0036 intake, SmartPromptMachine, ingress (ECA/DPM)."""
+
+    boundary: IssueSourceTransientIntakeBoundary
+    machine: SmartPromptMachine
+    ingress: GovernedEngineeringTaskIngress
+
+
+def compose_governed_compilation(
+    *,
+    repository: EvidenceIntelligenceRepository,
+    source_handling_resolver: ProductionSourceHandlingAuthorityResolver,
+    clock: Clock,
+) -> GovernedCompilation:
+    """Compose the existing authorities in their canonical order; the single definition of that order."""
+
+    boundary = IssueSourceTransientIntakeBoundary(
+        intake=EvidenceIntelligenceIntakeService(repository),
+        resolver=source_handling_resolver,
+        clock=clock,
+    )
+    machine = SmartPromptMachine(
+        repository=repository,
+        profiles=ISSUE_AGENT_PROFILE_REGISTRY,
+        routes=ISSUE_AGENT_ROUTE_REGISTRY,
+        source_handling_resolver=source_handling_resolver,
+        clock=clock,
+    )
+    ingress = GovernedEngineeringTaskIngress(
+        machine=machine,
+        routes=ISSUE_AGENT_ROUTE_REGISTRY,
+        profiles=ISSUE_AGENT_PROFILE_REGISTRY,
+    )
+    return GovernedCompilation(boundary, machine, ingress)
+
+
 class GovernedIssueAgentExecutionService:
     """The Issue #390 production composition root.
 
@@ -1325,23 +1386,10 @@ class GovernedIssueAgentExecutionService:
         self._verifier = verifier
         self._issuer_verifier = issuer_verifier
         self._clock = clock or SystemClock()
-        self._boundary = IssueSourceTransientIntakeBoundary(
-            intake=EvidenceIntelligenceIntakeService(repository),
-            resolver=source_handling_resolver,
-            clock=self._clock,
+        composed = compose_governed_compilation(
+            repository=repository, source_handling_resolver=source_handling_resolver, clock=self._clock
         )
-        self._machine = SmartPromptMachine(
-            repository=repository,
-            profiles=ISSUE_AGENT_PROFILE_REGISTRY,
-            routes=ISSUE_AGENT_ROUTE_REGISTRY,
-            source_handling_resolver=source_handling_resolver,
-            clock=self._clock,
-        )
-        self._ingress = GovernedEngineeringTaskIngress(
-            machine=self._machine,
-            routes=ISSUE_AGENT_ROUTE_REGISTRY,
-            profiles=ISSUE_AGENT_PROFILE_REGISTRY,
-        )
+        self._boundary, self._machine, self._ingress = composed.boundary, composed.machine, composed.ingress
 
     @classmethod
     def from_environment(
@@ -1383,19 +1431,13 @@ class GovernedIssueAgentExecutionService:
         an unsigned document has no execution path here at all.
         """
         signed = SignedIssueAgentAuthorization.from_json(document)
-        # Trusted origin first. The identity digest proves only that the claims
-        # are self-consistent, and every field it covers is public, so it is not
-        # evidence that the owner performed the `issues:labeled` event. Only the
-        # issuer signature proves that, and nothing durable or external happens
-        # until it verifies.
-        self._issuer_verifier.verify(signed)
-        authorization = signed.authorization
-        if signed.implementation_scope.task_id != authorization.authorization_id:
-            raise IssueAgentAuthorizationError("implementation scope task_id must bind authorization identity")
-        if authorization.repository != self._configuration.repository:
-            raise IssueAgentAuthorizationError("authorization names a different repository than this deployment")
-        if authorization.authorized_by != self._configuration.owner_login:
-            raise IssueAgentAuthorizationError("only the configured repository owner may authorize execution")
+        # Trusted origin first: nothing durable or external happens until the issuer signature verifies.
+        authorization = verify_signed_authorization(
+            signed,
+            issuer_verifier=self._issuer_verifier,
+            repository=self._configuration.repository,
+            owner_login=self._configuration.owner_login,
+        )
 
         # Deterministic mapping is pure and reaches nothing durable or external,
         # so it is done before ownership is taken. A document that could never
@@ -1462,6 +1504,9 @@ class GovernedIssueAgentExecutionService:
 
 
 __all__ = [
+    "GovernedCompilation",
+    "compose_governed_compilation",
+    "verify_signed_authorization",
     "EVIDENCE_DATABASE_ENV",
     "EXECUTION_BRANCH_ENV",
     "GovernedIssueAgentExecutionService",

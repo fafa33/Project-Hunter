@@ -28,7 +28,7 @@ KEY = Ed25519PrivateKey.generate()
 OTHER_KEY = Ed25519PrivateKey.generate()
 TRUST = TrustRoots(state_keys={state.public_key_id(KEY.public_key()): KEY.public_key()}, repository_id=1)
 REPO, ISSUE = 1, 520
-AUTH = "a" * 64
+AUTH = "hunter-issue-agent-authorization:" + "a" * 64
 CONTROL = "c" * 40
 BASE = "b" * 40
 HANDOFF = "d" * 64
@@ -81,7 +81,7 @@ def authorized_evidence(auth: str = AUTH, run_id: int = 100) -> dict[str, Any]:
             "prohibited_paths": [],
         },
         "task_scope_sha256": "6" * 64,
-        "execution_branch": f"issue-{ISSUE}-{auth[:16]}",
+        "execution_branch": f"issue-{ISSUE}-{state.authorization_digest(auth)[:16]}",
         "base_sha": BASE,
         "control_sha": CONTROL,
         "authorize_run_id": run_id,
@@ -323,7 +323,7 @@ def test_terminal_states_are_absorbing() -> None:
 
 def test_one_active_authorization_per_issue_and_no_authorization_replay() -> None:
     chain = full_chain(state.AUTHORIZED)
-    other = "b" * 64
+    other = "hunter-issue-agent-authorization:" + "b" * 64
     second = chain.make("transition", state.AUTHORIZED, authorized_evidence(other, 101), _by("authorize", 101), other)
     reject(chain, second, "second authorization")
     chain.transition(state.FAILED, {"code": "EXECUTION_NOT_STARTED", "failed_from_state": state.AUTHORIZED}, "bind")
@@ -660,7 +660,7 @@ def _view(until: str, **pending: Any) -> state.AuthorizationView:
     return view
 
 
-def _art(artifact_id: int = 22, name: str = f"hunter-ia-result-{AUTH}", expired: bool = False) -> ArtifactFact:
+def _art(artifact_id: int = 22, name: str = state.result_artifact_name(AUTH), expired: bool = False) -> ArtifactFact:
     return ArtifactFact(artifact_id, name, "sha256:" + "e" * 64, 100, expired)
 
 

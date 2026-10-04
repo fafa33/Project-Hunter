@@ -25,7 +25,7 @@ def binding(payload: bytes = PAYLOAD, kind: str = "result", **overrides: object)
         "payload_kind": kind,
         "repository_id": 1,
         "issue_number": 520,
-        "authorization_id": "a" * 64,
+        "authorization_id": "hunter-issue-agent-authorization:" + "a" * 64,
         "base_sha": "b" * 40,
         "task_scope_sha256": "c" * 64,
         "execution_id": "e" * 64,
@@ -58,7 +58,7 @@ def test_the_public_envelope_never_contains_the_plaintext() -> None:
 @pytest.mark.parametrize(
     ("field", "value"),
     [
-        ("authorization_id", "0" * 64),
+        ("authorization_id", "hunter-issue-agent-authorization:" + "0" * 64),
         ("issue_number", 521),
         ("repository_id", 2),
         ("base_sha", "0" * 40),
@@ -80,10 +80,14 @@ def test_a_handoff_cannot_be_opened_as_a_result_or_vice_versa() -> None:
 
 def test_rewriting_the_associated_data_breaks_authentication() -> None:
     document = json.loads(sealed())
-    document["aad"]["authorization_id"] = "0" * 64
+    document["aad"]["authorization_id"] = "hunter-issue-agent-authorization:" + "0" * 64
     forged = json.dumps(document).encode()
     with pytest.raises(TransportIntegrityError, match="authentication"):
-        transport.open_sealed(forged, recipient=RECIPIENT, expected=binding(authorization_id="0" * 64))
+        transport.open_sealed(
+            forged,
+            recipient=RECIPIENT,
+            expected=binding(authorization_id="hunter-issue-agent-authorization:" + "0" * 64),
+        )
 
 
 def test_corrupted_ciphertext_is_refused() -> None:
