@@ -45,6 +45,7 @@ from hunter.automation import issue_agent_state as state
 from hunter.automation.issue_agent_execution import (
     IssueAgentAuthorizationVerifier,
     IssueAgentExecutionConfiguration,
+    IssueAgentRemediationAuthorization,
     SignedIssueAgentAuthorization,
     build_production_source_handling_resolver,
     compose_governed_compilation,
@@ -248,7 +249,14 @@ def prepare(
         raise AuthorizeRefused("DUPLICATE_AUTHORIZATION", "this authorization identity was already claimed")
     if view.active is not None:
         raise AuthorizeRefused("ISSUE_EXECUTION_ACTIVE", "another authorization for this Issue is active")
-    if _definitive(lambda: dependencies.open_issue_agent_pull_request(issue), "ISSUE_HAS_ACTIVE_DRAFT_PR"):
+    remediation = authorization.remediation if isinstance(authorization, IssueAgentRemediationAuthorization) else None
+    if remediation is not None:
+        parent = view.authorizations.get(remediation["parent_authorization_id"])
+        # ADR 0039 L4: the open PR *is* the remediation's target, so ISSUE_HAS_ACTIVE_DRAFT_PR does not apply;
+        # the parent must be this Issue's completed authorization on exactly that branch.
+        if parent is None or parent.state != state.COMPLETED or parent.binding("execution_branch") != target.branch:
+            raise AuthorizeRefused("NOT_ELIGIBLE", "the remediation parent is not this Issue's completed authorization")
+    elif _definitive(lambda: dependencies.open_issue_agent_pull_request(issue), "ISSUE_HAS_ACTIVE_DRAFT_PR"):
         raise AuthorizeRefused("ISSUE_HAS_ACTIVE_DRAFT_PR", "an Issue-Agent pull request is open for this Issue")
     if _definitive(dependencies.active_lifecycles, "ADMISSION_CAP_REACHED") >= dependencies.admission_cap:
         raise AuthorizeRefused("ADMISSION_CAP_REACHED", "the concurrent lifecycle cap is reached")
@@ -410,6 +418,14 @@ def prepare(
             "reconstruction_reason": "NO_CONFIDENTIAL_DURABLE_STORE",
         },
     }
+    if remediation is not None:
+        unsigned_evidence["remediation"] = {
+            "parent_authorization_id": remediation["parent_authorization_id"],
+            "pull_request_number": remediation["pull_request_number"],
+            "bound_head_sha": remediation["bound_head_sha"],
+            "finding_ids": [item["finding_id"] for item in remediation["findings"]],
+            "attempt": remediation["attempt"],
+        }
     prepared = Prepared(
         issue_number=issue,
         authorization_id=authorization.authorization_id,

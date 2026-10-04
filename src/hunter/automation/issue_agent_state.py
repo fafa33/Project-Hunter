@@ -314,14 +314,19 @@ def _list(inner: Validator, *, maximum: int, unique: bool = True) -> Validator:
     return check
 
 
-def _object(spec: Mapping[str, Validator]) -> Validator:
+def _object(spec: Mapping[str, Validator], *, optional: Mapping[str, Validator] | None = None) -> Validator:
+    """A closed object. ``optional`` keys may be absent; when present they are validated like the rest."""
+
+    extra = dict(optional or {})
+
     def check(value: object, where: str) -> None:
         if not isinstance(value, dict):
             raise _fail(where, "must be an object")
-        if set(value) != set(spec):
+        if not set(spec) <= set(value) <= set(spec) | set(extra):
             raise _fail(where, "fields differ from the closed schema")
-        for key, validator in spec.items():
-            validator(value[key], f"{where}.{key}")
+        for key, validator in {**spec, **extra}.items():
+            if key in value:
+                validator(value[key], f"{where}.{key}")
 
     return check
 
@@ -439,7 +444,19 @@ EVIDENCE_SCHEMAS: Final[Mapping[str, Validator]] = {
                 }
             ),
             "handoff_artifact": _ARTIFACT,
-        }
+        },
+        optional={
+            # ADR 0039 L4: present only on a finding-driven remediation of the parent's open PR.
+            "remediation": _object(
+                {
+                    "parent_authorization_id": AUTHORIZATION_ID,
+                    "pull_request_number": POSITIVE,
+                    "bound_head_sha": SHA40,
+                    "finding_ids": _list(SHA64, maximum=16),
+                    "attempt": POSITIVE,
+                }
+            )
+        },
     ),
     RESULT_BOUND: _object(
         {
@@ -716,10 +733,23 @@ def empty_view(repository_id: int, issue_number: int) -> LedgerView:
     return LedgerView(repository_id, issue_number, {}, [], None, None, 0)
 
 
-def _check_authorized_bindings(record: Mapping[str, Any]) -> None:
+def _check_authorized_bindings(record: Mapping[str, Any], view: LedgerView | None = None) -> None:
     evidence = record["evidence"]
     authorization_id = record["authorization_id"]
-    if evidence["execution_branch"] != f"issue-{record['issue_number']}-{authorization_digest(authorization_id)[:16]}":
+    remediation = evidence.get("remediation")
+    if remediation is not None:
+        parent = None if view is None else view.authorizations.get(remediation["parent_authorization_id"])
+        if parent is None or parent.state != COMPLETED:
+            raise LedgerCorruptError("a remediation's parent is not a completed authorization of this Issue")
+        if evidence["execution_branch"] != parent.binding("execution_branch"):
+            raise LedgerCorruptError("a remediation runs only on its parent authorization's branch")
+        if evidence["base_sha"] != remediation["bound_head_sha"]:
+            raise LedgerCorruptError("a remediation's base is not the exact PR head it remediates")
+        if not remediation["finding_ids"] or remediation["finding_ids"] != sorted(remediation["finding_ids"]):
+            raise LedgerCorruptError("a remediation names its findings, sorted")
+    elif (
+        evidence["execution_branch"] != f"issue-{record['issue_number']}-{authorization_digest(authorization_id)[:16]}"
+    ):
         raise LedgerCorruptError("execution branch is not derived from the Issue and authorization identity")
     if evidence["base_sha"] != evidence["task_scope"]["base_sha"]:
         raise LedgerCorruptError("bound base differs from the signed TaskScope base")
@@ -802,7 +832,7 @@ def apply_record(
                 raise LedgerCorruptError("authorization replayed")
             if view.active is not None:
                 raise LedgerCorruptError("a second authorization became active for one Issue")
-            _check_authorized_bindings(record)
+            _check_authorized_bindings(record, view)
             current = AuthorizationView(authorization_id, state, [], {}, None, {})
             view.authorizations[authorization_id] = current
             view.claimed.append(authorization_id)

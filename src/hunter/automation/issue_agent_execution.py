@@ -122,6 +122,12 @@ ISSUE_AGENT_SIGNED_AUTHORIZATION_SCHEMA_VERSION = "hunter-issue-agent-signed-aut
 
 ISSUE_AGENT_AUTHORIZATION_LABEL = "hunter-agent-execute"
 ISSUE_AGENT_AUTHORIZATION_IDENTITY_PREFIX = "hunter-issue-agent-authorization"
+#: ADR 0039 L4: a finding-driven remediation of a Hunter-agent PR, minted by the control job (K_AUTH).
+ISSUE_AGENT_REMEDIATION_SCHEMA_VERSION = "hunter-issue-agent-remediation-authorization-v1"
+MAX_REMEDIATION_FINDINGS = 16
+_FINDING_ID_RE = re.compile(r"[0-9a-f]{64}")
+_FINDING_PATH_RE = re.compile(r"[A-Za-z0-9._@+/-]{1,512}")
+_FINDING_CLAIM_RE = re.compile(r"[\x20-\x7e]{1,280}")
 
 #: Domain separator the issuer mixes into the signed message. It must match
 #: ``scripts/hunter_issue_agent_trigger.py`` exactly; the cross-binding test
@@ -540,6 +546,8 @@ class IssueAgentAuthorization:
     @classmethod
     def _from_mapping(cls, decoded: dict[str, Any]) -> IssueAgentAuthorization:
         """Validate one exact-schema payload mapping or fail closed."""
+        if cls is IssueAgentAuthorization and decoded.get("schema_version") == ISSUE_AGENT_REMEDIATION_SCHEMA_VERSION:
+            return IssueAgentRemediationAuthorization._from_mapping(decoded)
         expected = {
             "repository",
             "issue_number",
@@ -552,15 +560,19 @@ class IssueAgentAuthorization:
             "authorization_id",
             "schema_version",
         }
+        remediation = cls is IssueAgentRemediationAuthorization
+        if remediation:
+            expected = expected | {"remediation"}
         if set(decoded) != expected:
             raise IssueAgentAuthorizationError("authorization document schema mismatch")
-        if decoded["schema_version"] != ISSUE_AGENT_AUTHORIZATION_SCHEMA_VERSION:
+        version = ISSUE_AGENT_REMEDIATION_SCHEMA_VERSION if remediation else ISSUE_AGENT_AUTHORIZATION_SCHEMA_VERSION
+        if decoded["schema_version"] != version:
             raise IssueAgentAuthorizationError("unknown authorization document schema version")
 
         number = decoded["issue_number"]
         if type(number) is not int or number <= 0:
             raise IssueAgentAuthorizationError("authorization issue_number must be a positive integer")
-        for name in expected - {"issue_number"}:
+        for name in expected - {"issue_number", "remediation"}:
             if not isinstance(decoded[name], str):
                 raise IssueAgentAuthorizationError(f"authorization {name} must be text")
         for name in ("repository", "issue_url", "issue_title", "authorized_by", "issue_updated_at", "authorization_id"):
@@ -573,6 +585,71 @@ class IssueAgentAuthorization:
         if authorization.authorization_id != authorization.derived_authorization_id:
             raise IssueAgentAuthorizationError("authorization identity does not bind the exact authorization claims")
         return authorization
+
+
+def validate_remediation_group(remediation: object, *, issue_number: int) -> dict[str, Any]:
+    """The closed ADR 0039 L4 remediation group, bound to its Issue and its parent authorization's branch."""
+
+    expected = {"parent_authorization_id", "pull_request_number", "branch", "bound_head_sha", "attempt", "findings"}
+    if not isinstance(remediation, dict) or set(remediation) != expected:
+        raise IssueAgentAuthorizationError("remediation group schema mismatch")
+    parent = remediation["parent_authorization_id"]
+    prefix, separator, digest = parent.partition(":") if isinstance(parent, str) else ("", "", "")
+    if (
+        prefix != ISSUE_AGENT_AUTHORIZATION_IDENTITY_PREFIX
+        or not separator
+        or not _AUTHORIZATION_DIGEST_RE.fullmatch(digest)
+    ):
+        raise IssueAgentAuthorizationError("remediation parent is not a canonical authorization identity")
+    if remediation["branch"] != f"issue-{issue_number}-{digest[:ISSUE_AGENT_BRANCH_DIGEST_LENGTH]}":
+        raise IssueAgentAuthorizationError("remediation branch is not the parent authorization's branch")
+    for name in ("pull_request_number", "attempt"):
+        if type(remediation[name]) is not int or remediation[name] < 1:
+            raise IssueAgentAuthorizationError(f"remediation {name} must be a positive integer")
+    if not isinstance(remediation["bound_head_sha"], str) or not _COMMIT_SHA_RE.fullmatch(
+        remediation["bound_head_sha"]
+    ):
+        raise IssueAgentAuthorizationError("remediation must bind the exact PR head")
+    findings = remediation["findings"]
+    if not isinstance(findings, list) or not 1 <= len(findings) <= MAX_REMEDIATION_FINDINGS:
+        raise IssueAgentAuthorizationError("a remediation names one to sixteen findings")
+    for item in findings:
+        if (
+            not isinstance(item, dict)
+            or set(item) != {"finding_id", "path", "claim"}
+            or not isinstance(item["finding_id"], str)
+            or not _FINDING_ID_RE.fullmatch(item["finding_id"])
+            or not isinstance(item["path"], str)
+            or not _FINDING_PATH_RE.fullmatch(item["path"])
+            or not isinstance(item["claim"], str)
+            or not _FINDING_CLAIM_RE.fullmatch(item["claim"])
+        ):
+            raise IssueAgentAuthorizationError("remediation finding is malformed")
+    identities = [item["finding_id"] for item in findings]
+    if identities != sorted(set(identities)):
+        raise IssueAgentAuthorizationError("remediation findings must be unique and sorted by finding id")
+    return remediation
+
+
+@dataclass(frozen=True, slots=True)
+class IssueAgentRemediationAuthorization(IssueAgentAuthorization):
+    """ADR 0039 L4: the live Issue claims plus one closed remediation group.
+
+    Its identity covers the remediation group, so a remediation is never the Issue's own authorization and a
+    different PR head, finding set or attempt is a different authorization. The Issue path's v1 payload, bytes
+    and identity are unchanged.
+    """
+
+    remediation: dict[str, Any] | None = None
+
+    def __post_init__(self) -> None:
+        if self.schema_version != ISSUE_AGENT_REMEDIATION_SCHEMA_VERSION:
+            raise IssueAgentAuthorizationError("a remediation authorization carries the remediation schema")
+        validate_remediation_group(self.remediation, issue_number=self.issue_number)
+
+    @property
+    def canonical_claims(self) -> dict[str, Any]:
+        return {**super(IssueAgentRemediationAuthorization, self).canonical_claims, "remediation": self.remediation}
 
 
 @dataclass(frozen=True, slots=True)
@@ -665,13 +742,19 @@ def issue_agent_task_text(authorization: IssueAgentAuthorization) -> str:
     carries no routing, provider, destination or merge coordinate, because no
     such coordinate is ever taken from Issue text.
     """
-    return _canonical_json(
-        {
-            "issue_body": strip_task_scope_block(authorization.issue_body),
-            "issue_title": authorization.issue_title,
-            "issue_url": authorization.issue_url,
-        }
-    )
+    text: dict[str, Any] = {
+        "issue_body": strip_task_scope_block(authorization.issue_body),
+        "issue_title": authorization.issue_title,
+        "issue_url": authorization.issue_url,
+    }
+    if isinstance(authorization, IssueAgentRemediationAuthorization):
+        assert authorization.remediation is not None
+        # ADR 0039 L4: a bounded remediation task -- the exact findings, never a repository rediscovery.
+        text["remediation_of_pull_request"] = authorization.remediation["pull_request_number"]
+        text["review_findings"] = [
+            {"path": item["path"], "claim": item["claim"]} for item in authorization.remediation["findings"]
+        ]
+    return _canonical_json(text)
 
 
 def issue_agent_intake_reference(authorization: IssueAgentAuthorization) -> EvidenceIntakeReference:
@@ -770,7 +853,13 @@ def derive_execution_target(signed: SignedIssueAgentAuthorization) -> IssueAgent
         raise IssueAgentAuthorizationError(
             f"signed implementation scope base_ref must be {ISSUE_AGENT_BASE_REF!r}, the only admitted base"
         )
-    branch = issue_agent_execution_branch(authorization)
+    if isinstance(authorization, IssueAgentRemediationAuthorization):
+        assert authorization.remediation is not None
+        branch = authorization.remediation["branch"]
+        if scope.base_sha != authorization.remediation["bound_head_sha"]:
+            raise IssueAgentAuthorizationError("a remediation's signed base must be the exact PR head it remediates")
+    else:
+        branch = issue_agent_execution_branch(authorization)
     if not fnmatchcase(branch, scope.branch_pattern):
         raise IssueAgentAuthorizationError(
             f"execution branch {branch!r} does not match the signed branch_pattern {scope.branch_pattern!r}"

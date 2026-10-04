@@ -361,3 +361,124 @@ def test_commit_refuses_when_only_the_issue_ledger_moved(
             state_store=store(world, "iso-c"),
             source_handling_store=store(world, "iso-c-sh"),
         )
+
+
+# --- ADR 0039 L4: finding-driven remediation through the same composition ------------------------------
+
+
+def _append(
+    world: dict[str, Any], prepared: authorize.Prepared, target: str, evidence: dict[str, Any], role: str
+) -> None:
+    reader = store(world, f"append-{target}")
+    head, entries = reader.read(520)
+    view = state.verify_chain(
+        [e.record for e in entries], repository_id=1, issue_number=520, trust=TRUST, provenance=trusted,
+        indexes=[e.index for e in entries],
+    )  # fmt: skip
+    record = state.sign_record(
+        {
+            "schema_version": state.RECORD_SCHEMA_VERSION,
+            "kind": "transition",
+            "record_seq": view.next_seq,
+            "prev_record_sha256": view.head_record_digest,
+            "recorded_at": "2026-10-04T12:00:00Z",
+            "recorded_by": {**context().recorded_by(), "job": role, "role": role},
+            "repository_id": 1,
+            "issue_number": 520,
+            "authorization_id": prepared.authorization_id,
+            "state": target,
+            "evidence": evidence,
+        },
+        STATE_KEY,
+    )
+    state.apply_record(view, record, trust=TRUST, provenance=trusted)
+    reader.append(520, head, record, view.index())
+
+
+def _complete(world: dict[str, Any], prepared: authorize.Prepared, published_head: str) -> None:
+    bound = prepared.unsigned_authorized
+    artifact = {"run_id": 100, "artifact_id": 22, "artifact_digest": "sha256:" + "e" * 64,
+                "ciphertext_sha256": "1" * 64, "aad_sha256": "2" * 64, "recipient_key_id": "3" * 64}  # fmt: skip
+    _append(world, prepared, state.RESULT_BOUND, {"result_artifact": artifact, "result_plaintext_sha256": "4" * 64,
+            "executor_job_id": 9, "executor_conclusion": "success", "executor_advisory_code": None}, "bind")  # fmt: skip
+    validated = {"receipt_sha256": "5" * 64, "result_sha256": "4" * 64, "tree_sha": "6" * 40,
+                 "unsigned_commit_sha": "7" * 40, "validation_definition": "8" * 64, "toolchain_sha256": "9" * 64,
+                 "validator_run_id": 100, "validation_attempts": 1}  # fmt: skip
+    _append(world, prepared, state.VALIDATED, validated, "record-validation")
+    identity = state.publication_identity(
+        repository_id=1, issue_number=520, authorization_id=prepared.authorization_id, base_sha=bound["base_sha"],
+        task_scope_sha256=bound["task_scope_sha256"], execution_id=bound["execution_id"], result_sha256="4" * 64,
+        tree_sha="6" * 40, unsigned_commit_sha="7" * 40, control_sha=bound["control_sha"], writer_login=OWNER,
+    )  # fmt: skip
+    _append(world, prepared, state.PUBLISHED, {"writer_login": OWNER, "publication_identity": identity,
+            "head_sha": published_head, "commit_verified": True, "publish_attempts": 1,
+            "deadline_completed_at": "2026-10-05T12:00:00Z"}, "finalize")  # fmt: skip
+    _append(world, prepared, state.COMPLETED, {"pull_request_number": 600, "pull_request_node_id": "PR_x",
+            "pull_request_head_sha": published_head, "draft": True, "preflight_run_id": 77,
+            "preflight_conclusion": "success"}, "reconcile")  # fmt: skip
+
+
+def _remediation_document(prepared: authorize.Prepared, bound_head: str, signing_key: Any = ISSUER_KEY) -> bytes:
+    from hunter.automation import issue_agent_remediation as remediation
+
+    issue = {
+        "number": 520, "state": "open", "html_url": f"https://github.com/{REPOSITORY}/issues/520", "title": "Canary",
+        "body": issue_body_with_scope("Create docs/ISSUE_AGENT_CANARY.md."), "updated_at": UPDATED_AT,
+        "labels": [{"name": ISSUE_AGENT_AUTHORIZATION_LABEL}],
+    }  # fmt: skip
+    group = remediation.remediation_group(
+        parent_authorization_id=prepared.authorization_id, issue_number=520, pull_request_number=600,
+        bound_head_sha=bound_head, attempt=1,
+        findings=[{"finding_id": "f" * 64, "path": "docs/ISSUE_AGENT_CANARY.md", "claim": "the canary must say canary."}],
+    )  # fmt: skip
+    authorization = remediation.remediation_authorization(
+        issue, repository=REPOSITORY, owner_login=OWNER, remediation=group
+    )
+    scope = remediation.remediation_scope(authorization, prepared.unsigned_authorized["task_scope"])
+    return remediation.sign_remediation(authorization, scope, signing_key=signing_key).to_json().encode()
+
+
+def test_a_finding_remediation_authorizes_on_the_completed_parents_open_pr(
+    world: dict[str, Any], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    bootstrap_ledger(world)
+    parent = _authorize_once(world, monkeypatch)
+    published = "a1" * 20
+    _complete(world, parent, published)
+    deps = dependencies(world, monkeypatch, open_issue_agent_pull_request=lambda _issue: True)  # the PR is open
+    (prepared, sealed), _ = run_prepare(
+        world, monkeypatch, "remediate", doc=_remediation_document(parent, published), deps=deps
+    )
+    evidence = prepared.unsigned_authorized
+    assert evidence["execution_branch"] == parent.unsigned_authorized["execution_branch"]
+    assert evidence["base_sha"] == published and evidence["task_scope"]["base_sha"] == published
+    assert evidence["remediation"] == {
+        "parent_authorization_id": parent.authorization_id, "pull_request_number": 600, "bound_head_sha": published,
+        "finding_ids": ["f" * 64], "attempt": 1,
+    }  # fmt: skip
+    bundle = json.loads(
+        transport.open_sealed(
+            sealed, recipient=RECIPIENT, expected=transport.TransportBinding(**prepared.handoff_binding)
+        )
+    )
+    assert "the canary must say canary." in bundle["prompt"], "the bounded task carries the finding"
+    authorize.commit(
+        prepared, uploaded=uploaded(prepared), dependencies=deps, context=context(),
+        state_store=store(world, "remediate-commit"), source_handling_store=store(world, "remediate-commit-sh"),
+    )  # fmt: skip
+    _, entries = store(world, "remediate-verify").read(520)
+    view = state.verify_chain(
+        [e.record for e in entries], repository_id=1, issue_number=520, trust=TRUST, provenance=trusted,
+        indexes=[e.index for e in entries],
+    )  # fmt: skip
+    assert view.active == prepared.authorization_id
+    assert view.authorizations[parent.authorization_id].state == state.COMPLETED
+
+
+def test_a_remediation_of_an_unfinished_parent_is_refused(
+    world: dict[str, Any], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    bootstrap_ledger(world)
+    parent = _authorize_once(world, monkeypatch)
+    with pytest.raises(authorize.AuthorizeRefused, match="ISSUE_EXECUTION_ACTIVE|NOT_ELIGIBLE"):
+        run_prepare(world, monkeypatch, "early", doc=_remediation_document(parent, "a1" * 20))
