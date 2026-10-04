@@ -1565,7 +1565,8 @@
       "regression_evidence": [],
       "lifecycle": "recorded",
       "sources": [
-        "scripts/hunter_issue_agent_trigger.py@9eda014 declares TRANSIENT_HTTP_STATUS_CODES = {502, 503, 504} (line 52) and DEFAULT_TRANSPORT_ATTEMPTS = 4 (line 54) with backoff min(base_delay * 2**(attempt-1), max_delay) (line 379), giving a 2s/4s/8s total budget, while .github/workflows/hunter-issue-agent-trigger.yml sets HUNTER_ISSUE_AGENT_WEBHOOK_TIMEOUT_SECONDS to 900. Observed: run 36186705581 'issue-agent trigger rejected: issue-agent webhook remained unavailable after 4 attempts: issue-agent webhook answered transient HTTP 503' (exit 2); the same _RetryBudgetExhaustedError signature in run 36173092199 (CI) and run 36173057865 (Hunter / Pre-PR Preflight). Workflow failure volume 2026-09: Governed Issue Agent Trigger 34, CI 44, Pre-PR Preflight 49. Unlanded fix tracked as OPEN Issue #457."
+        "scripts/hunter_issue_agent_trigger.py@9eda014 declares TRANSIENT_HTTP_STATUS_CODES = {502, 503, 504} (line 52) and DEFAULT_TRANSPORT_ATTEMPTS = 4 (line 54) with backoff min(base_delay * 2**(attempt-1), max_delay) (line 379), giving a 2s/4s/8s total budget, while .github/workflows/hunter-issue-agent-trigger.yml sets HUNTER_ISSUE_AGENT_WEBHOOK_TIMEOUT_SECONDS to 900. Observed: run 36186705581 'issue-agent trigger rejected: issue-agent webhook remained unavailable after 4 attempts: issue-agent webhook answered transient HTTP 503' (exit 2); the same _RetryBudgetExhaustedError signature in run 36173092199 (CI) and run 36173057865 (Hunter / Pre-PR Preflight). Workflow failure volume 2026-09: Governed Issue Agent Trigger 34, CI 44, Pre-PR Preflight 49. Unlanded fix tracked as OPEN Issue #457.",
+        "Issue #560 S5 (PR #561): the trigger's webhook/provisioning retry transport this family describes was removed (ADR 0037 D9); the trigger now only mints. The family stays recorded for any future long-running dispatch."
       ]
     },
     {
@@ -1923,13 +1924,19 @@
         "rationale": "These surfaces launch the Issue-agent model and candidate validation on GitHub-hosted runners beside trusted job processes."
       },
       "prevention": {
-        "mechanism": "Recorded finding only. A correcting contribution (ADR 0037 Slice 4) must launch model and candidate code only as a dedicated non-root isolation uid via sudo -n -u <uid> -- /usr/bin/env -i <allowlist>, deny that uid network during candidate validation, kill every uid process before trusted collection, and collect through a trusted git dir with hooks and fsmonitor disabled, before this family can advance. Issue #560 S0 proved the boundary live (sandbox run 37161092362).",
+        "mechanism": "ADR 0037 Slice 4 (Issue #560): model and candidate code run only as the dedicated non-root isolation uid through sudo -n -u <uid> -- /usr/bin/env (-i for secret-free launches; secrets only via --preserve-env in the launcher environment, never argv), every uid process is killed before trusted collection, collection goes through a trusted git dir with hooks and fsmonitor disabled, and the lifecycle validator job denies the uid network. Live S0 proof: sandbox run 37161092362.",
         "boundary": "review"
       },
-      "regression_evidence": [],
-      "lifecycle": "recorded",
+      "regression_evidence": [
+        "tests/test_issue_agent_roles.py::test_the_model_secret_crosses_the_uid_boundary_only_through_the_launcher_environment",
+        "tests/test_issue_agent_roles.py::test_a_secret_free_launch_inherits_nothing",
+        "tests/test_issue_agent_roles.py::test_isolation_hands_over_the_workspace_and_kills_every_leftover",
+        "tests/test_issue_agent_replacement_executor.py::test_candidate_pre_push_receives_only_an_explicit_allowlist_as_the_isolation_user"
+      ],
+      "lifecycle": "regression-tested",
       "sources": [
-        "PR #558 Copilot review, 2026-10-03 (discussion_r4171869242, discussion_r4171869279); #558 record PRH-068, carried forward per Issue #560 B-6"
+        "PR #558 Copilot review, 2026-10-03 (discussion_r4171869242, discussion_r4171869279); #558 record PRH-068, carried forward per Issue #560 B-6",
+        "Issue #560 S4/S5 (PR #561): corrected by issue_agent_roles.SudoIsolation and the lifecycle validator job; advanced to regression-tested."
       ]
     },
     {
@@ -1944,13 +1951,19 @@
         "rationale": "The trusted trigger and its workflow decide where an accepted owner authorization is dispatched."
       },
       "prevention": {
-        "mechanism": "Recorded finding only. A correcting contribution (ADR 0037 Slice 5) must run the lifecycle entirely in the GitHub-hosted job chain behind GovernedEngineeringTaskIngress, SmartPromptMachine and EngineeringContextAuthority, with a static workflow guard refusing any Railway or external dispatch client, before this family can advance; the #520 canary is its production evidence.",
+        "mechanism": "ADR 0037 Slice 5 (Issue #560): the lifecycle runs entirely in the GitHub-hosted job chain (.github/workflows/hunter-issue-agent-trigger.yml) through scripts/hunter_issue_agent_lifecycle.py and the canonical authorize composition; the trigger script has no network client; a static workflow guard refuses any Railway, webhook or n8n client; the retired parallel authorities refuse unconditionally (AT-46). Production evidence (#520 canary) is S7 and owner-gated.",
         "boundary": "review"
       },
-      "regression_evidence": [],
-      "lifecycle": "recorded",
+      "regression_evidence": [
+        "tests/test_issue_agent_workflows.py::test_no_retired_railway_webhook_or_n8n_client",
+        "tests/test_issue_agent_workflows.py::test_every_lifecycle_job_goes_through_the_fail_closed_entry_point",
+        "tests/test_issue_agent_trigger.py::test_the_trigger_has_no_network_client",
+        "tests/test_retired_issue_agent_authority.py::test_the_cli_refuses_the_retired_verbs"
+      ],
+      "lifecycle": "regression-tested",
       "sources": [
-        "Issue #557, 2026-10-03: canary #520 accepted, no Draft PR, the trigger posted only to the retired Railway issuer; #558 record PRH-066, carried forward re-scoped per Issue #560 B-6"
+        "Issue #557, 2026-10-03: canary #520 accepted, no Draft PR, the trigger posted only to the retired Railway issuer; #558 record PRH-066, carried forward re-scoped per Issue #560 B-6",
+        "Issue #560 S5 (PR #561): lifecycle workflow without a Railway client plus AT-42/AT-46 guards; advanced to regression-tested pending the S7 canary."
       ]
     },
     {
@@ -1965,13 +1978,18 @@
         "rationale": "These surfaces own the Issue-agent lifecycle ledger transitions and the Draft-PR observation that ends them."
       },
       "prevention": {
-        "mechanism": "Recorded finding only. A correcting contribution (ADR 0037 Slice 2) must make COMPLETED a legal transition only from PUBLISHED with observed Draft-PR evidence in the signed anchored ledger, with continuation derived from that ledger plus definitive GitHub facts, before this family can advance. The Issue #560 S0 prototype already rejects the RESULT_BOUND -> COMPLETED mutant.",
+        "mechanism": "ADR 0037 Slices 2 and 5 (Issue #560): COMPLETED is a legal transition only from PUBLISHED with an observed Draft PR at the published head and a successful exact-head Pre-PR Preflight in the signed anchored ledger; the control recorder derives continuation only from that ledger plus definitive GitHub facts.",
         "boundary": "review"
       },
-      "regression_evidence": [],
-      "lifecycle": "recorded",
+      "regression_evidence": [
+        "tests/test_issue_agent_state.py::test_completed_requires_the_observed_draft_pr_at_the_published_head",
+        "tests/test_issue_agent_state.py::test_completed_requires_a_successful_exact_head_preflight",
+        "tests/test_issue_agent_control.py::test_completed_requires_the_draft_pr_and_a_successful_exact_head_preflight"
+      ],
+      "lifecycle": "regression-tested",
       "sources": [
-        "PR #558 Codex P1 review, 2026-10-03 ('Keep the execution pending until publication is recoverable'); one occurrence, recorded under Issue #560"
+        "PR #558 Codex P1 review, 2026-10-03 ('Keep the execution pending until publication is recoverable'); one occurrence, recorded under Issue #560",
+        "Issue #560 S2/S5 (PR #561): corrected in issue_agent_state.advance and issue_agent_control.step; advanced to regression-tested."
       ]
     }
   ]

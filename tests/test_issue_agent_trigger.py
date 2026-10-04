@@ -8,6 +8,7 @@ import json
 import urllib.error
 import urllib.request
 import urllib.response
+from pathlib import Path
 from typing import Any
 
 import hunter_issue_agent_trigger as trigger
@@ -137,75 +138,12 @@ class _ScriptedHTTPSHandler(urllib.request.HTTPSHandler):
         return self._responses.pop(0)()
 
 
-def _install_opener(monkeypatch, responses: list) -> _ScriptedHTTPSHandler:
-    handler = _ScriptedHTTPSHandler(responses)
-    monkeypatch.setattr(trigger, "_OPENER", urllib.request.build_opener(trigger._RejectRedirects, handler))
-    return handler
-
-
 def _redirect(code: int):
     return lambda: _StubResponse(code, "Location: https://relay.example/collected\n", "https://hook.example/dispatch")
 
 
 def _ok():
     return lambda: _StubResponse(200, "\n", "https://hook.example/dispatch")
-
-
-@pytest.mark.parametrize("code", [301, 302, 303, 307, 308])
-def test_redirect_is_rejected_fail_closed(monkeypatch, code: int) -> None:
-    _install_opener(monkeypatch, [_redirect(code)])
-
-    with pytest.raises(IssueAgentTriggerError) as error:
-        trigger._post_authorization("https://hook.example/dispatch", "{}")
-
-    assert "redirect" in str(error.value)
-
-
-def test_redirect_followed_by_final_2xx_is_not_success(monkeypatch) -> None:
-    handler = _install_opener(monkeypatch, [_redirect(302), _ok()])
-
-    with pytest.raises(IssueAgentTriggerError):
-        trigger._post_authorization("https://hook.example/dispatch", "{}")
-
-    # The 2xx behind the redirect was never reached, so it cannot report success.
-    assert len(handler.requests) == 1
-
-
-def test_direct_2xx_post_still_succeeds(monkeypatch) -> None:
-    handler = _install_opener(monkeypatch, [_ok()])
-
-    trigger._post_authorization("https://hook.example/dispatch", '{"schema_version":"v1"}')
-
-    assert len(handler.requests) == 1
-    assert handler.requests[0].get_method() == "POST"
-    assert handler.requests[0].data == b'{"schema_version":"v1"}'
-
-
-def test_non_2xx_response_is_rejected(monkeypatch) -> None:
-    _install_opener(monkeypatch, [lambda: _StubResponse(500, "\n", "https://hook.example/dispatch")])
-
-    with pytest.raises(IssueAgentTriggerError):
-        trigger._post_authorization("https://hook.example/dispatch", "{}")
-
-
-@pytest.mark.parametrize(
-    "url",
-    [
-        "http://hook.example/dispatch",
-        "https://user:secret@hook.example/dispatch",
-        "https://hook.example/dispatch#fragment",
-        "https:///dispatch",
-        "not-a-url",
-    ],
-)
-def test_malformed_or_non_https_webhook_remains_fail_closed(monkeypatch, url: str) -> None:
-    handler = _install_opener(monkeypatch, [])
-
-    with pytest.raises(IssueAgentTriggerError) as error:
-        trigger._post_authorization(url, "{}")
-
-    assert "credential-free HTTPS URL" in str(error.value)
-    assert handler.requests == []
 
 
 # --- Trusted-origin issuer proof --------------------------------------------
@@ -273,14 +211,6 @@ def test_missing_or_malformed_issuer_signing_key_fails_closed(value: object) -> 
         load_signing_key(value)
 
 
-def test_issuer_key_is_never_accepted_from_the_command_line() -> None:
-    """The key is machine-only configuration, so no flag can carry it in the clear."""
-    parser = trigger._parser()
-    flags = {action.option_strings[0] for action in parser._actions if action.option_strings}
-    assert "--signing-key" not in flags
-    assert not any("key" in flag for flag in flags)
-
-
 def test_signed_message_is_domain_separated_by_the_envelope_schema() -> None:
     assert authorization_signing_message({}, {}).startswith(trigger.SIGNATURE_DOMAIN)
     assert trigger.SIGNATURE_DOMAIN == b"hunter-issue-agent-signed-authorization-v2:"
@@ -296,165 +226,7 @@ def test_v1_identity_derivation_is_unchanged_by_this_contribution() -> None:
     )
 
 
-def test_default_webhook_timeout_is_aligned_to_synchronous_runtime() -> None:
-    assert trigger.DEFAULT_WEBHOOK_TIMEOUT_SECONDS == 900.0
-    assert trigger.MAX_WEBHOOK_TIMEOUT_SECONDS == 1200.0
-
-
-@pytest.mark.parametrize(
-    ("raw", "expected"),
-    [
-        (None, 900.0),
-        ("1", 1.0),
-        ("120", 120.0),
-        ("900", 900.0),
-        ("1200", 1200.0),
-        ("  45.5  ", 45.5),
-    ],
-)
-def test_webhook_timeout_parses_valid_values(raw: object, expected: float) -> None:
-    assert trigger._webhook_timeout(raw) == expected
-
-
-@pytest.mark.parametrize(
-    "raw",
-    [
-        "",
-        "   ",
-        "0",
-        "-1",
-        "nan",
-        "NaN",
-        "inf",
-        "+inf",
-        "-inf",
-        "1200.1",
-        "not-a-number",
-    ],
-)
-def test_webhook_timeout_rejects_invalid_values_fail_closed(raw: object) -> None:
-    with pytest.raises(IssueAgentTriggerError, match=trigger.WEBHOOK_TIMEOUT_ENV):
-        trigger._webhook_timeout(raw)
-
-
-def test_post_authorization_passes_explicit_timeout_to_opener(monkeypatch) -> None:
-    observed: dict[str, object] = {}
-
-    class _Response:
-        status = 200
-
-        def __enter__(self):
-            return self
-
-        def __exit__(self, exc_type, exc, tb):
-            return False
-
-    class _Opener:
-        def open(self, request, timeout):
-            observed["request"] = request
-            observed["timeout"] = timeout
-            return _Response()
-
-    monkeypatch.setattr(trigger, "_OPENER", _Opener())
-
-    trigger._post_authorization(
-        "https://hook.example/dispatch",
-        '{"schema_version":"v1"}',
-        timeout=123.5,
-    )
-
-    assert observed["timeout"] == 123.5
-    request = observed["request"]
-    assert request.get_method() == "POST"
-    assert request.data == b'{"schema_version":"v1"}'
-
-
-def test_post_authorization_uses_runtime_aligned_default_timeout(monkeypatch) -> None:
-    observed: dict[str, object] = {}
-
-    class _Response:
-        status = 200
-
-        def __enter__(self):
-            return self
-
-        def __exit__(self, exc_type, exc, tb):
-            return False
-
-    class _Opener:
-        def open(self, request, timeout):
-            observed["timeout"] = timeout
-            return _Response()
-
-    monkeypatch.setattr(trigger, "_OPENER", _Opener())
-
-    trigger._post_authorization(
-        "https://hook.example/dispatch",
-        '{"schema_version":"v1"}',
-    )
-
-    assert observed["timeout"] == trigger.DEFAULT_WEBHOOK_TIMEOUT_SECONDS
-
-
-def test_parser_reads_webhook_timeout_from_environment(monkeypatch) -> None:
-    monkeypatch.setenv(trigger.WEBHOOK_TIMEOUT_ENV, "321")
-    parser = trigger._parser()
-    args = parser.parse_args(
-        [
-            "--event",
-            "event.json",
-            "--repository",
-            "fafa33/Project-Hunter",
-            "--owner-login",
-            "fafa33",
-        ]
-    )
-    assert args.webhook_timeout == "321"
-
-
-def test_main_rejects_invalid_webhook_timeout_before_dispatch(monkeypatch, tmp_path, capsys) -> None:
-    event = _event()
-    event_path = tmp_path / "event.json"
-    event_path.write_text(json.dumps(event), encoding="utf-8")
-
-    monkeypatch.setenv(trigger.SIGNING_KEY_ENV, ISSUER_KEY_HEX)
-    monkeypatch.setenv("HUNTER_ISSUE_AGENT_WEBHOOK_URL", "https://hook.example/dispatch")
-    monkeypatch.setenv(trigger.WEBHOOK_TIMEOUT_ENV, "nan")
-
-    called = False
-
-    def _unexpected_dispatch(*args, **kwargs):
-        nonlocal called
-        called = True
-        raise AssertionError("dispatch must not occur for invalid timeout")
-
-    monkeypatch.setattr(trigger, "_post_authorization", _unexpected_dispatch)
-
-    rc = trigger.main(
-        [
-            "--event",
-            str(event_path),
-            "--repository",
-            "fafa33/Project-Hunter",
-            "--owner-login",
-            "fafa33",
-        ]
-    )
-
-    assert rc == 2
-    assert called is False
-    captured = capsys.readouterr()
-    assert trigger.WEBHOOK_TIMEOUT_ENV in captured.err
-
-
 # --- Issue #497: bounded deterministic transport retry -----------------------
-
-
-def test_bounded_transport_retry_defaults() -> None:
-    assert trigger.DEFAULT_TRANSPORT_ATTEMPTS == 4
-    assert trigger.DEFAULT_TRANSPORT_BASE_DELAY_SECONDS == 2.0
-    assert trigger.DEFAULT_TRANSPORT_MAX_DELAY_SECONDS == 10.0
-    assert trigger.TRANSIENT_HTTP_STATUS_CODES == frozenset({502, 503, 504})
 
 
 def _contains_only(*values: float) -> list:
@@ -466,263 +238,12 @@ def _contains_only(*values: float) -> list:
     return [recorded, _recorded]
 
 
-def test_retry_delay_is_deterministic_bounded_exponential_backoff() -> None:
-    assert trigger._retry_delay_seconds(1, base_delay_seconds=2.0, max_delay_seconds=10.0) == 2.0
-    assert trigger._retry_delay_seconds(2, base_delay_seconds=2.0, max_delay_seconds=10.0) == 4.0
-    assert trigger._retry_delay_seconds(3, base_delay_seconds=2.0, max_delay_seconds=10.0) == 8.0
-    assert trigger._retry_delay_seconds(4, base_delay_seconds=2.0, max_delay_seconds=10.0) == 10.0
-    assert trigger._retry_delay_seconds(5, base_delay_seconds=2.0, max_delay_seconds=10.0) == 10.0
-
-
-@pytest.mark.parametrize("code", [502, 503, 504])
-def test_gateway_transient_status_is_retried_byte_identically(monkeypatch, code: int) -> None:
-    document = _signed(_event()).to_json()
-    handler = _install_opener(
-        monkeypatch,
-        [lambda: _StubResponse(code, "\n", "https://hook.example/dispatch"), _ok()],
-    )
-    recorded, sleep = _contains_only()
-    monkeypatch.setattr(trigger, "_sleep", sleep)
-
-    trigger._post_with_transport_retry(
-        "https://hook.example/dispatch",
-        document,
-        base_delay_seconds=0.0,
-        max_delay_seconds=0.0,
-    )
-
-    assert len(handler.requests) == 2
-    first = handler.requests[0].data
-    second = handler.requests[1].data
-    assert first == document.encode("utf-8")
-    assert second == first
-    assert len(recorded) == 1
-
-
-def test_http_error_semantic_rejection_surfaces_bounded_upstream_error(monkeypatch) -> None:
-    class _HTTPErrorOpener:
-        def open(self, request, timeout):
-            body = io.BytesIO(b'{"error":"canonical preparation failed","schema_version":"v1"}')
-            raise urllib.error.HTTPError("https://hook.example/dispatch", 500, "internal", {}, body)
-
-    monkeypatch.setattr(trigger, "_OPENER", _HTTPErrorOpener())
-    with pytest.raises(trigger._RejectedDispatchError, match="canonical preparation failed"):
-        trigger._post_authorization("https://hook.example/dispatch", "{}")
-
-
-def test_http_error_transient_status_maps_to_retry_signal(monkeypatch) -> None:
-    class _HTTPErrorOpener:
-        code = 503
-
-        def open(self, request, timeout):
-            raise urllib.error.HTTPError(
-                "https://hook.example/dispatch",
-                self.code,
-                "temporarily unavailable",
-                {},
-                None,
-            )
-
-    monkeypatch.setattr(trigger, "_OPENER", _HTTPErrorOpener())
-    with pytest.raises(trigger._TransientDispatchError):
-        trigger._post_authorization("https://hook.example/dispatch", "{}")
-
-
-@pytest.mark.parametrize("code", [400, 401, 403, 409, 422, 429, 500, 501])
-def test_semantic_and_server_rejections_are_never_retried(monkeypatch, code: int) -> None:
-    handler = _install_opener(monkeypatch, [lambda: _StubResponse(code, "\n", "https://hook.example/dispatch"), _ok()])
-    recorded, sleep = _contains_only()
-    monkeypatch.setattr(trigger, "_sleep", sleep)
-
-    with pytest.raises(trigger._RejectedDispatchError) as error:
-        trigger._post_with_transport_retry("https://hook.example/dispatch", "{}")
-
-    assert f"HTTP {code}" in str(error.value)
-    assert len(handler.requests) == 1
-    assert recorded == []
-
-
-def test_409_is_never_treated_as_durable_acceptance(monkeypatch) -> None:
-    handler = _install_opener(monkeypatch, [lambda: _StubResponse(409, "\n", "https://hook.example/dispatch"), _ok()])
-
-    with pytest.raises(trigger._RejectedDispatchError):
-        trigger._post_with_transport_retry("https://hook.example/dispatch", "{}", attempts=4)
-
-    assert len(handler.requests) == 1
-
-
-def test_retry_budget_exhaustion_fails_closed_with_deterministic_backoff(monkeypatch) -> None:
-    handler = _install_opener(
-        monkeypatch,
-        [lambda: _StubResponse(503, "\n", "https://hook.example/dispatch")] * 4,
-    )
-    recorded, sleep = _contains_only()
-    monkeypatch.setattr(trigger, "_sleep", sleep)
-
-    with pytest.raises(trigger._RetryBudgetExhaustedError):
-        trigger._post_with_transport_retry("https://hook.example/dispatch", "{}")
-
-    assert len(handler.requests) == 4
-    assert recorded == [2.0, 4.0, 8.0]
-
-
-def test_backoff_is_capped_at_the_maximum_delay(monkeypatch) -> None:
-    handler = _install_opener(
-        monkeypatch,
-        [lambda: _StubResponse(504, "\n", "https://hook.example/dispatch")] * 5,
-    )
-    recorded, sleep = _contains_only()
-    monkeypatch.setattr(trigger, "_sleep", sleep)
-
-    with pytest.raises(trigger._RetryBudgetExhaustedError):
-        trigger._post_with_transport_retry(
-            "https://hook.example/dispatch",
-            "{}",
-            attempts=5,
-            base_delay_seconds=4.0,
-            max_delay_seconds=10.0,
-        )
-
-    assert len(handler.requests) == 5
-    assert recorded == [4.0, 8.0, 10.0, 10.0]
-
-
 class _RaisingOpener:
     def __init__(self, exc: Exception) -> None:
         self._exc = exc
 
     def open(self, request, timeout):
         raise self._exc
-
-
-@pytest.mark.parametrize(
-    "exc",
-    [
-        urllib.error.URLError("network unreachable"),
-        ConnectionResetError("connection reset by peer"),
-        TimeoutError("timed out"),
-    ],
-)
-def test_network_level_failures_are_transient_and_retried(monkeypatch, exc: Exception) -> None:
-    class _RecoveringOpener:
-        def __init__(self) -> None:
-            self.calls = 0
-
-        def open(self, request, timeout):
-            self.calls += 1
-            if self.calls == 1:
-                raise exc
-            return _StubResponse(200, "\n", "https://hook.example/dispatch")
-
-    opener = _RecoveringOpener()
-    monkeypatch.setattr(trigger, "_OPENER", opener)
-    recorded, sleep = _contains_only()
-    monkeypatch.setattr(trigger, "_sleep", sleep)
-
-    trigger._post_with_transport_retry(
-        "https://hook.example/dispatch",
-        '{"schema_version":"v1"}',
-        base_delay_seconds=0.0,
-        max_delay_seconds=0.0,
-    )
-
-    assert opener.calls == 2
-    assert len(recorded) == 1
-
-
-def test_single_network_failure_is_classified_transient(monkeypatch) -> None:
-    monkeypatch.setattr(trigger, "_OPENER", _RaisingOpener(ConnectionResetError("reset")))
-    with pytest.raises(trigger._TransientDispatchError):
-        trigger._post_authorization("https://hook.example/dispatch", "{}")
-
-
-def test_provisioning_precedes_dispatch(monkeypatch) -> None:
-    calls: list[str] = []
-    monkeypatch.setattr(
-        trigger,
-        "_post_with_transport_retry",
-        lambda url, document, timeout=...: calls.append(url),
-    )
-
-    trigger._provision_and_dispatch(
-        "https://provision.example/issue-agent/provision",
-        "https://hook.example/dispatch",
-        "{}",
-    )
-
-    assert calls == [
-        "https://provision.example/issue-agent/provision",
-        "https://hook.example/dispatch",
-    ]
-
-
-def test_failed_provisioning_blocks_dispatch(monkeypatch) -> None:
-    calls: list[str] = []
-
-    def _dispatch(url: str, document: str, timeout: float = ...) -> None:
-        calls.append(url)
-        if url == "https://provision.example/issue-agent/provision":
-            raise trigger._RetryBudgetExhaustedError("provisioning edge unavailable")
-
-    monkeypatch.setattr(trigger, "_post_with_transport_retry", _dispatch)
-
-    with pytest.raises(trigger._RetryBudgetExhaustedError):
-        trigger._provision_and_dispatch(
-            "https://provision.example/issue-agent/provision",
-            "https://hook.example/dispatch",
-            "{}",
-        )
-
-    assert calls == ["https://provision.example/issue-agent/provision"]
-
-
-def test_main_fails_closed_when_provisioning_url_is_missing(monkeypatch, tmp_path, capsys) -> None:
-    event = _event()
-    event_path = tmp_path / "event.json"
-    event_path.write_text(json.dumps(event), encoding="utf-8")
-
-    monkeypatch.setenv(trigger.SIGNING_KEY_ENV, ISSUER_KEY_HEX)
-    monkeypatch.setenv("HUNTER_ISSUE_AGENT_WEBHOOK_URL", "https://hook.example/dispatch")
-    monkeypatch.delenv(trigger.PROVISIONING_URL_ENV, raising=False)
-
-    dispatched = False
-
-    def _unexpected(*args, **kwargs):
-        nonlocal dispatched
-        dispatched = True
-
-    monkeypatch.setattr(trigger, "_provision_and_dispatch", _unexpected)
-
-    rc = trigger.main(
-        [
-            "--event",
-            str(event_path),
-            "--repository",
-            "fafa33/Project-Hunter",
-            "--owner-login",
-            "fafa33",
-        ]
-    )
-
-    assert rc == 2
-    assert dispatched is False
-    assert trigger.PROVISIONING_URL_ENV in capsys.readouterr().err
-
-
-def test_parser_reads_provisioning_url_from_environment(monkeypatch) -> None:
-    monkeypatch.setenv(trigger.PROVISIONING_URL_ENV, "https://provision.example/issue-agent/provision")
-    parser = trigger._parser()
-    args = parser.parse_args(
-        [
-            "--event",
-            "event.json",
-            "--repository",
-            "fafa33/Project-Hunter",
-            "--owner-login",
-            "fafa33",
-        ]
-    )
-    assert args.provisioning_url == "https://provision.example/issue-agent/provision"
 
 
 def test_tampered_implementation_scope_breaks_issuer_signature() -> None:
@@ -750,3 +271,49 @@ def test_duplicate_scope_keys_fail_closed_before_signing() -> None:
     event["issue"]["body"] = body
     with pytest.raises(IssueAgentTriggerError, match="duplicate JSON keys"):
         _signed(event)
+
+
+def test_issuer_key_is_never_accepted_from_the_command_line() -> None:
+    """The key is machine-only configuration, so no flag can carry it in the clear."""
+    parser = trigger._parser()
+    flags = {action.option_strings[0] for action in parser._actions if action.option_strings}
+    assert "--signing-key" not in flags
+    assert not any("key" in flag for flag in flags)
+
+
+def test_the_trigger_has_no_network_client() -> None:
+    """AT-42 (ADR 0037 D9): minting only; the retired Railway issuer and provisioning edges are unreachable."""
+    import ast
+
+    source = Path(trigger.__file__).read_text(encoding="utf-8")
+    imported = {
+        alias.name.split(".")[0] if isinstance(node, ast.Import) else str(node.module).split(".")[0]
+        for node in ast.walk(ast.parse(source))
+        if isinstance(node, (ast.Import, ast.ImportFrom))
+        for alias in node.names
+    }
+    assert imported.isdisjoint({"urllib", "http", "requests", "httpx", "socket", "aiohttp"})
+    assert not hasattr(trigger, "_post_authorization") and not hasattr(trigger, "_provision_and_dispatch")
+
+
+def test_minting_writes_only_the_signed_document(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    event = tmp_path / "event.json"
+    event.write_text(json.dumps(_event()), encoding="utf-8")
+    out = tmp_path / "authorization.json"
+    monkeypatch.setenv(trigger.SIGNING_KEY_ENV, ISSUER_KEY_HEX)
+    assert (
+        trigger.main(
+            [
+                "--event",
+                str(event),
+                "--repository",
+                "fafa33/Project-Hunter",
+                "--owner-login",
+                "fafa33",
+                "--authorization-out",
+                str(out),
+            ]
+        )
+        == 0
+    )
+    assert json.loads(out.read_text())["schema_version"] == trigger.ENVELOPE_SCHEMA_VERSION

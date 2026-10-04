@@ -896,3 +896,33 @@ def test_unknown_facts_never_produce_a_transition() -> None:
     for until in (state.AUTHORIZED, state.RESULT_BOUND, state.VALIDATED, state.PUBLISHED):
         decision = state.advance(_view(until), Facts(stage_run_active=False))
         assert decision.action == "noop", (until, decision)
+
+
+@pytest.mark.parametrize("code", sorted(state.VALIDATION_REFUSAL_CODES))
+def test_a_trusted_validator_refusal_selects_its_terminal_code(code: str) -> None:
+    facts = Facts(**DONE, receipt={"verdict": "REFUSED", "code": code}, remote_branch_head=None, open_draft_pr=None)
+    decision = state.advance(_view(state.RESULT_BOUND), facts)
+    assert (decision.action, decision.code) == ("fail", code)
+
+
+@pytest.mark.parametrize("code", sorted(state.PUBLICATION_REFUSAL_CODES))
+def test_a_trusted_publisher_refusal_selects_its_terminal_code(code: str) -> None:
+    facts = Facts(**DONE, remote_branch_head=None, open_draft_pr=None, publication_refusal_code=code)
+    decision = state.advance(_view(state.VALIDATED), facts)
+    assert (decision.action, decision.code) == ("fail", code)
+
+
+@pytest.mark.parametrize(
+    ("until", "facts"),
+    [
+        # a publication-stage code smuggled through a validation receipt, and vice versa
+        (state.RESULT_BOUND, {"receipt": {"verdict": "REFUSED", "code": "OWNER_WITHDREW"}}),
+        (state.RESULT_BOUND, {"receipt": {"verdict": "REFUSED", "code": "COMPLETED"}}),
+        (state.RESULT_BOUND, {"receipt": {"verdict": "REFUSED"}}),
+        (state.VALIDATED, {"publication_refusal_code": "PRE_PUSH_SAFETY_FAILED"}),
+        (state.VALIDATED, {"publication_refusal_code": "STATE_CORRUPT"}),
+    ],
+)
+def test_a_refusal_outside_the_stage_vocabulary_is_never_a_terminal_code(until: str, facts: dict[str, Any]) -> None:
+    with pytest.raises(state.LedgerSchemaError):
+        state.advance(_view(until), Facts(**DONE, remote_branch_head=None, open_draft_pr=None, **facts))

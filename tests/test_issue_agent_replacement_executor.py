@@ -258,7 +258,7 @@ def test_rehearsal_workflow_has_no_publication_or_model_secret():
     from pathlib import Path
 
     text = Path(".github/workflows/hunter-issue-agent-replacement-rehearsal.yml").read_text(encoding="utf-8")
-    assert "permissions:\n  contents: read" in text
+    assert "permissions: {}" in text and "environment:" not in text
     assert "persist-credentials: false" in text
     for forbidden in (
         "HUNTER_AGENT_GITHUB_PUSH_TOKEN",

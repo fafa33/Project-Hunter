@@ -21,6 +21,13 @@ import pytest
 
 import hunter.automation.opencode_provider_runtime as runtime
 
+
+@pytest.fixture(autouse=True)
+def _retained_internals(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Exercise the retained-until-S8 internals; the production entry refuses (AT-46, test_retired_issue_agent_authority)."""
+    monkeypatch.setattr(runtime, "refuse_retired_authority", lambda _name: None)
+
+
 BRANCH = "issue-423-0123456789abcdef"
 
 

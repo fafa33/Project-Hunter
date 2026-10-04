@@ -1,10 +1,15 @@
 name: Hunter / Issue Agent Candidate PR
 
-# docs/ISSUE_AGENT_EXECUTION_CONTRACT.md I6. A governed Issue Agent execution
-# pushes its candidate to its own issue-<n>-<16 hex> branch; Railway never opens
-# a pull request. After Hunter / Pre-PR Preflight passes on that exact head, the
-# trusted default-branch decision module opens one Draft PR against main, which
-# then enters the existing Candidate Admission and governance chain unchanged.
+# docs/ISSUE_AGENT_EXECUTION_CONTRACT.md I6 and ADR 0037 T5. The isolated publisher
+# creates the issue-<n>-<16 hex> branch; it never opens a pull request. After
+# Hunter / Pre-PR Preflight concludes on that exact head:
+# - `gate` admits only the head the anchored ledger recorded as PUBLISHED for that
+#   branch (anything else -- including any legacy or foreign push -- opens nothing);
+# - `open-draft-pr` (preflight success only) opens or adopts the single Draft PR;
+# - `record` (control environment) runs the same `advance` and records COMPLETED
+#   (Draft PR + successful exact-head preflight) or CANDIDATE_PREFLIGHT_FAILED.
+# While config/issue_agent_trust_roots.json is unprovisioned the gate refuses
+# MISSING_CONFIGURATION and nothing is opened or recorded (S5 inert).
 #
 # Trust boundary. workflow_run runs with this repository's permissions and
 # secrets, so nothing from the candidate is ever executed here:
@@ -32,35 +37,63 @@ on:
     types:
       - completed
 
-permissions:
-  contents: read
-  issues: read
-  pull-requests: read
+permissions: {}
 
 concurrency:
-  group: hunter-issue-agent-candidate-pr-${{ github.event.workflow_run.id }}
+  group: hunter-issue-agent-candidate-pr-${{ github.event.workflow_run.head_branch }}
   cancel-in-progress: false
+  queue: max
 
 jobs:
-  open-draft-pr:
+  gate:
     if: >-
       github.event.workflow_run.event == 'push' &&
-      github.event.workflow_run.conclusion == 'success' &&
       github.event.workflow_run.head_repository.full_name == github.repository &&
       startsWith(github.event.workflow_run.head_branch, 'issue-')
+    name: gate
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions: {}
+    outputs:
+      issue: ${{ steps.gate.outputs.issue }}
+    steps:
+      - name: Checkout trusted default-branch controller
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Set up Python
+        uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6.3.0
+        with:
+          python-version: "3.11.13"
+      - name: Install pinned runtime
+        run: python -m pip install --disable-pip-version-check --only-binary ':all:' -c requirements/ci-constraints.txt .
+      - name: Require the ledger's PUBLISHED head for this branch
+        id: gate
+        env:
+          HEAD_BRANCH: ${{ github.event.workflow_run.head_branch }}
+          HEAD_SHA: ${{ github.event.workflow_run.head_sha }}
+        run: python scripts/hunter_issue_agent_lifecycle.py candidate-gate --branch "$HEAD_BRANCH" --head-sha "$HEAD_SHA"
+
+  open-draft-pr:
+    needs: gate
+    if: github.event.workflow_run.conclusion == 'success'
     name: Open governed Issue Agent Draft PR
     runs-on: ubuntu-latest
     timeout-minutes: 5
+    permissions:
+      contents: read
+      issues: read
+      pull-requests: read
 
     steps:
       - name: Checkout trusted default-branch controller
-        uses: actions/checkout@v7
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           path: engine
           persist-credentials: false
 
       - name: Set up Python
-        uses: actions/setup-python@v6
+        uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6.3.0
         with:
           python-version: "3.11.13"
 
@@ -80,3 +113,32 @@ jobs:
             --head-repository "${HEAD_REPOSITORY}" \
             --branch "${HEAD_BRANCH}" \
             --head-sha "${HEAD_SHA}"
+
+  record:
+    needs: [gate, open-draft-pr]
+    if: always() && needs.gate.result == 'success'
+    name: record
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    environment: hunter-issue-agent-control
+    permissions:
+      contents: write
+      actions: read
+      pull-requests: read
+    steps:
+      - name: Checkout trusted default-branch controller
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Set up Python
+        uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6.3.0
+        with:
+          python-version: "3.11.13"
+      - name: Install pinned runtime
+        run: python -m pip install --disable-pip-version-check --only-binary ':all:' -c requirements/ci-constraints.txt .
+      - name: Advance (T5 or CANDIDATE_PREFLIGHT_FAILED)
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+          HUNTER_ISSUE_AGENT_STATE_SIGNING_KEY: ${{ secrets.HUNTER_ISSUE_AGENT_STATE_SIGNING_KEY }}
+          ISSUE: ${{ needs.gate.outputs.issue }}
+        run: python scripts/hunter_issue_agent_lifecycle.py step --role candidate-pr-record --issue "$ISSUE"

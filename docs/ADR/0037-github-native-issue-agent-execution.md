@@ -306,7 +306,19 @@ variables.
 
 ## Implementation Status
 
-None. Architecture and Slice-0 sandbox evidence only.
+Implemented on PR #561 through **S5 (inert)**; S6 onward is owner-gated and not performed.
+
+- S1: contracts, `CODE_WRITE_POLICY` (`issue_agent_publisher`, `issue_agent_state_ledger`), defect registry.
+- S2: signed anchored state ledger (`issue_agent_state`), pure `advance`, resume nonce protocol.
+- S3a/S3b: sealed identity-bound transport; Source Handling on its anchored ledger (ADR 0038); the canonical
+  authorize composition (`issue_agent_authorize`).
+- S4: executor, validator and publisher role libraries (`issue_agent_roles`); create-only publication with no hook.
+- S5: control recorder (`issue_agent_control`: run provenance, anchor integrity, definitive facts, one record per
+  step), the lifecycle entry point (`scripts/hunter_issue_agent_lifecycle.py`), the lifecycle, reconcile,
+  candidate-PR and rehearsal workflows, the static workflow guard (AT-41/42/47), and the fail-closed guard on the
+  retired parallel authorities (AT-46). The repository-pinned `config/issue_agent_trust_roots.json` is
+  **unprovisioned**, so every lifecycle job refuses `MISSING_CONFIGURATION` before any secret, ledger or network
+  access: nothing can execute until S6.
 
 ## Sources consulted
 

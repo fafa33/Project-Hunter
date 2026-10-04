@@ -1,69 +1,441 @@
-name: Hunter / Governed Issue Agent Trigger
+name: Hunter / Issue Agent Lifecycle
+
+# ADR 0037 D1: the GitHub-native Issue-agent lifecycle -- one run, four isolated trust domains:
+#   control   (authorize, bind, record-validation, finalize, resume-bind): K_AUTH, K_SH, K_SPM, K_STATE
+#   executor  (execute): the model key and X_EXEC only; GITHUB_TOKEN {}
+#   validator (validate): X_RESULT only; GITHUB_TOKEN {} (actions: read for a resume's cross-run download)
+#   publisher (publish): the signing-only key and the create-only push token; never candidate code
+# There is no Railway, webhook or n8n client anywhere (D9, AT-42). Every job runs
+# scripts/hunter_issue_agent_lifecycle.py, which loads the repository-pinned trust roots first: while
+# config/issue_agent_trust_roots.json is unprovisioned, every job refuses MISSING_CONFIGURATION before it
+# touches a secret, the ledger or the network (S5 inert state; S6 provisions it).
+#
+# Rules (AT-41): no id-token, no cache, actions pinned by commit SHA, content-processing jobs check out the
+# bound control_sha (github.sha on a label run, the ledger-bound commit on a resume), every job refuses
+# run_attempt != 1, and per-Issue concurrency queues (queue: max) instead of cancelling.
 
 on:
   issues:
     types:
       - labeled
+  workflow_dispatch:
+    inputs:
+      issue:
+        description: Issue number of the pending resume
+        required: true
+        type: string
+      authorization_id:
+        description: Authorization identity of the pending resume
+        required: true
+        type: string
+      stage:
+        description: Resume stage (validation or publication)
+        required: true
+        type: string
+      nonce:
+        description: Pending resume nonce recorded on the anchored ledger
+        required: true
+        type: string
 
-permissions:
-  contents: read
-  issues: read
+run-name: >-
+  ${{ github.event_name == 'workflow_dispatch'
+      && format('Issue agent resume {0} {1}', inputs.stage, inputs.nonce)
+      || format('Issue agent #{0}', github.event.issue.number) }}
+
+permissions: {}
 
 concurrency:
-  group: hunter-issue-agent-${{ github.event.issue.number }}
+  group: >-
+    ${{ github.event_name == 'workflow_dispatch'
+        && format('hunter-issue-agent-resume-{0}', inputs.issue)
+        || format('hunter-issue-agent-{0}', github.event.issue.number) }}
   cancel-in-progress: false
+  queue: max
+
+env:
+  PIP_DISABLE_PIP_VERSION_CHECK: "1"
+  PYTHONDONTWRITEBYTECODE: "1"
 
 jobs:
-  authorize-and-dispatch:
-    name: Authorize and dispatch Issue execution
+  authorize:
+    name: authorize
     if: >-
-      ${{
-        github.event.label.name == 'hunter-agent-execute'
-        && github.actor == github.repository_owner
-        && !github.event.issue.pull_request
-        && github.event.issue.state == 'open'
-      }}
+      github.event_name == 'issues'
+      && github.event.label.name == 'hunter-agent-execute'
+      && github.actor == github.repository_owner
+      && !github.event.issue.pull_request
+      && github.event.issue.state == 'open'
+      && github.ref == 'refs/heads/main'
     runs-on: ubuntu-latest
-    timeout-minutes: 25
-
+    timeout-minutes: 20
+    environment: hunter-issue-agent-control
+    permissions:
+      contents: write
+      actions: read
+      pull-requests: read
+    outputs:
+      issue: ${{ steps.prepare.outputs.issue }}
+      authorization_id: ${{ steps.prepare.outputs.authorization_id }}
+      handoff_artifact_id: ${{ steps.upload.outputs.artifact-id }}
     steps:
-      - name: Checkout trusted trigger implementation
-        uses: actions/checkout@v7
+      - name: Checkout control_sha
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
-          ref: ${{ github.event.repository.default_branch }}
+          ref: ${{ github.sha }}
           persist-credentials: false
-
       - name: Set up Python
-        # Pinned to the immutable commit for the v6 release line (v6.3.0) rather
-        # than the floating v6 tag, which a tag move could repoint at any time.
         uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6.3.0
         with:
           python-version: "3.11.13"
-          cache: pip
-          cache-dependency-path: |
-            pyproject.toml
-            requirements/ci-constraints.txt
-
-      - name: Install pinned issuer signing dependency
+      - name: Install pinned runtime
+        run: python -m pip install --only-binary ':all:' -c requirements/ci-constraints.txt .
+      - name: Mint, verify, compile and seal (no durable write)
+        id: prepare
         env:
-          PIP_CONSTRAINT: requirements/ci-constraints.txt
-        run: |
-          set -euo pipefail
-          python -m pip install --disable-pip-version-check "cryptography>=50.0.0,<51"
-
-      - name: Authorize exact Issue event and dispatch to trusted issuer edge
-        env:
-          # The trigger is executed directly from scripts/ but imports the repository-owned
-          # hunter package from src/. Keep that import path explicit in the clean Actions checkout.
-          PYTHONPATH: src
-          HUNTER_ISSUE_AGENT_WEBHOOK_URL: ${{ secrets.HUNTER_ISSUE_AGENT_WEBHOOK_URL }}
-          HUNTER_ISSUE_AGENT_PROVISIONING_URL: ${{ secrets.HUNTER_ISSUE_AGENT_PROVISIONING_URL }}
-          HUNTER_ISSUE_AGENT_WEBHOOK_TIMEOUT_SECONDS: ${{ vars.HUNTER_ISSUE_AGENT_WEBHOOK_TIMEOUT_SECONDS || '900' }}
+          GITHUB_TOKEN: ${{ github.token }}
           HUNTER_ISSUE_AGENT_AUTHORIZATION_SIGNING_KEY: ${{ secrets.HUNTER_ISSUE_AGENT_AUTHORIZATION_SIGNING_KEY }}
+          HUNTER_ISSUE_AGENT_STATE_SIGNING_KEY: ${{ secrets.HUNTER_ISSUE_AGENT_STATE_SIGNING_KEY }}
+          HUNTER_SOURCE_HANDLING_SIGNING_KEY: ${{ secrets.HUNTER_SOURCE_HANDLING_SIGNING_KEY }}
+          HUNTER_PROMPT_AUTOMATION_SIGNING_KEY: ${{ secrets.HUNTER_PROMPT_AUTOMATION_SIGNING_KEY }}
+        run: >-
+          python scripts/hunter_issue_agent_lifecycle.py authorize-prepare
+          --event "$GITHUB_EVENT_PATH" --out-dir "$RUNNER_TEMP/authorize"
+      - name: Upload the sealed handoff
+        id: upload
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: ${{ steps.prepare.outputs.handoff_artifact }}
+          path: ${{ runner.temp }}/authorize/handoff.sealed
+          if-no-files-found: error
+          retention-days: 1
+      - name: Claim on the anchored ledger (AUTHORIZED)
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+          HUNTER_ISSUE_AGENT_STATE_SIGNING_KEY: ${{ secrets.HUNTER_ISSUE_AGENT_STATE_SIGNING_KEY }}
+          HUNTER_SOURCE_HANDLING_SIGNING_KEY: ${{ secrets.HUNTER_SOURCE_HANDLING_SIGNING_KEY }}
+          ARTIFACT_ID: ${{ steps.upload.outputs.artifact-id }}
+        run: >-
+          python scripts/hunter_issue_agent_lifecycle.py authorize-commit
+          --out-dir "$RUNNER_TEMP/authorize" --artifact-id "$ARTIFACT_ID"
+
+  execute:
+    name: execute
+    needs: authorize
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    environment: hunter-issue-agent-executor
+    permissions: {}
+    outputs:
+      advisory_code: ${{ steps.execute.outputs.advisory_code }}
+    steps:
+      - name: Checkout control_sha
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+      - name: Set up Python
+        uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6.3.0
+        with:
+          python-version: "3.11.13"
+      - name: Install pinned runtime and model client
         run: |
           set -euo pipefail
-          python scripts/hunter_issue_agent_trigger.py \
-            --event "${GITHUB_EVENT_PATH}" \
-            --repository "${GITHUB_REPOSITORY}" \
-            --owner-login "${GITHUB_REPOSITORY_OWNER}" \
-            --label hunter-agent-execute
+          python -m pip install --only-binary ':all:' -c requirements/ci-constraints.txt .
+          sudo python scripts/install_opencode_runtime.py --destination /opt/hunter/bin/opencode
+      - name: Create the isolation uid
+        run: |
+          set -euo pipefail
+          sudo useradd --create-home --shell /usr/sbin/nologin hunter-untrusted
+          sudo install -d -m 0711 /tmp/hunter-ia
+      - name: Download the bound handoff
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          artifact-ids: ${{ needs.authorize.outputs.handoff_artifact_id }}
+          path: ${{ runner.temp }}/handoff
+          digest-mismatch: error
+      - name: Run the model once through isolation and seal the result
+        id: execute
+        env:
+          HUNTER_ISSUE_AGENT_HANDOFF_KEY: ${{ secrets.HUNTER_ISSUE_AGENT_HANDOFF_KEY }}
+          HUNTER_ISSUE_AGENT_EXECUTOR_MODEL_API_KEY: ${{ secrets.HUNTER_ISSUE_AGENT_EXECUTOR_MODEL_API_KEY }}
+          ISSUE: ${{ needs.authorize.outputs.issue }}
+          AUTHORIZATION_ID: ${{ needs.authorize.outputs.authorization_id }}
+          MODEL: ${{ vars.HUNTER_ISSUE_AGENT_EXECUTOR_MODEL }}
+          MODEL_KEY_NAME: ${{ vars.HUNTER_ISSUE_AGENT_EXECUTOR_MODEL_KEY_NAME }}
+        run: >-
+          python scripts/hunter_issue_agent_lifecycle.py execute
+          --issue "$ISSUE" --authorization-id "$AUTHORIZATION_ID"
+          --handoff "$(find "$RUNNER_TEMP/handoff" -type f -name handoff.sealed)"
+          --out "$RUNNER_TEMP/result.sealed" --workroot /tmp/hunter-ia/execute
+          --model-key-name "$MODEL_KEY_NAME" --model-argv /opt/hunter/bin/opencode run --model "$MODEL"
+      - name: Upload the sealed result
+        if: steps.execute.outputs.sealed == 'true'
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: ${{ steps.execute.outputs.result_artifact }}
+          path: ${{ runner.temp }}/result.sealed
+          if-no-files-found: error
+          retention-days: 1
+
+  bind:
+    name: bind
+    needs: [authorize, execute]
+    if: always() && needs.authorize.result == 'success'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    environment: hunter-issue-agent-control
+    permissions:
+      contents: write
+      actions: read
+      pull-requests: read
+    steps:
+      - name: Checkout trusted main
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+      - name: Set up Python
+        uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6.3.0
+        with:
+          python-version: "3.11.13"
+      - name: Install pinned runtime
+        run: python -m pip install --only-binary ':all:' -c requirements/ci-constraints.txt .
+      - name: Advance (T2 or terminal failure)
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+          HUNTER_ISSUE_AGENT_STATE_SIGNING_KEY: ${{ secrets.HUNTER_ISSUE_AGENT_STATE_SIGNING_KEY }}
+          ISSUE: ${{ needs.authorize.outputs.issue }}
+          ADVISORY: ${{ needs.execute.outputs.advisory_code }}
+        run: >-
+          python scripts/hunter_issue_agent_lifecycle.py step --role bind --issue "$ISSUE" --advisory "$ADVISORY"
+
+  resume-bind:
+    name: resume-bind
+    if: github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    environment: hunter-issue-agent-control
+    permissions:
+      contents: write
+      actions: read
+    outputs:
+      control_sha: ${{ steps.bind.outputs.control_sha }}
+    steps:
+      - name: Checkout trusted main
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+      - name: Set up Python
+        uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6.3.0
+        with:
+          python-version: "3.11.13"
+      - name: Install pinned runtime
+        run: python -m pip install --only-binary ':all:' -c requirements/ci-constraints.txt .
+      - name: Claim the pending resume nonce by CAS
+        id: bind
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+          HUNTER_ISSUE_AGENT_STATE_SIGNING_KEY: ${{ secrets.HUNTER_ISSUE_AGENT_STATE_SIGNING_KEY }}
+          ISSUE: ${{ inputs.issue }}
+          AUTHORIZATION_ID: ${{ inputs.authorization_id }}
+          STAGE: ${{ inputs.stage }}
+          NONCE: ${{ inputs.nonce }}
+        run: >-
+          python scripts/hunter_issue_agent_lifecycle.py resume-bind
+          --issue "$ISSUE" --authorization-id "$AUTHORIZATION_ID" --stage "$STAGE" --nonce "$NONCE"
+
+  validate:
+    name: validate
+    needs: [authorize, bind, resume-bind]
+    if: >-
+      always() && (
+        (github.event_name == 'issues' && needs.bind.result == 'success')
+        || (github.event_name == 'workflow_dispatch' && inputs.stage == 'validation'
+            && needs.resume-bind.result == 'success')
+      )
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    environment: hunter-issue-agent-validator
+    permissions:
+      actions: read
+    outputs:
+      outcome: ${{ steps.bound.outputs.validation_outcome }}
+    env:
+      ISSUE: ${{ needs.authorize.outputs.issue || inputs.issue }}
+      AUTHORIZATION_ID: ${{ needs.authorize.outputs.authorization_id || inputs.authorization_id }}
+      CONTROL_SHA: ${{ needs.resume-bind.outputs.control_sha || github.sha }}
+    steps:
+      - name: Checkout control_sha
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ needs.resume-bind.outputs.control_sha || github.sha }}
+          persist-credentials: false
+          fetch-depth: 0
+      - name: Set up Python
+        uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6.3.0
+        with:
+          python-version: "3.11.13"
+      - name: Install pinned runtime and toolchain
+        run: python -m pip install --only-binary ':all:' -c requirements/ci-constraints.txt -e ".[dev]"
+      - name: Create the network-less isolation uid
+        run: |
+          set -euo pipefail
+          sudo useradd --create-home --shell /usr/sbin/nologin hunter-untrusted
+          sudo iptables -A OUTPUT -m owner --uid-owner hunter-untrusted -j REJECT
+          sudo ip6tables -A OUTPUT -m owner --uid-owner hunter-untrusted -j REJECT
+      - name: Read the bound result binding from the ledger
+        id: bound
+        run: >-
+          python scripts/hunter_issue_agent_lifecycle.py bound
+          --issue "$ISSUE" --authorization-id "$AUTHORIZATION_ID"
+      - name: Download the bound result
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          artifact-ids: ${{ steps.bound.outputs.result_artifact_id }}
+          run-id: ${{ steps.bound.outputs.result_run_id }}
+          github-token: ${{ github.token }}
+          path: ${{ runner.temp }}/result
+          digest-mismatch: error
+      - name: Validate the exact unsigned commit (credential-free)
+        env:
+          HUNTER_ISSUE_AGENT_RESULT_KEY: ${{ secrets.HUNTER_ISSUE_AGENT_RESULT_KEY }}
+        run: >-
+          python scripts/hunter_issue_agent_lifecycle.py validate
+          --issue "$ISSUE" --authorization-id "$AUTHORIZATION_ID"
+          --result "$(find "$RUNNER_TEMP/result" -type f -name result.sealed)"
+          --trusted-repo "$GITHUB_WORKSPACE" --out "$RUNNER_TEMP/receipt.json"
+      - name: Upload the digest-only receipt
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: ${{ steps.bound.outputs.validation_outcome }}
+          path: ${{ runner.temp }}/receipt.json
+          if-no-files-found: error
+          retention-days: 1
+
+  record-validation:
+    name: record-validation
+    needs: [authorize, validate, resume-bind]
+    if: always() && (needs.authorize.result == 'success' || needs.resume-bind.result == 'success')
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    environment: hunter-issue-agent-control
+    permissions:
+      contents: write
+      actions: write
+      pull-requests: read
+    steps:
+      - name: Checkout trusted main
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+      - name: Set up Python
+        uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6.3.0
+        with:
+          python-version: "3.11.13"
+      - name: Install pinned runtime
+        run: python -m pip install --only-binary ':all:' -c requirements/ci-constraints.txt .
+      - name: Advance (T3, a validation resume, or terminal failure)
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+          HUNTER_ISSUE_AGENT_STATE_SIGNING_KEY: ${{ secrets.HUNTER_ISSUE_AGENT_STATE_SIGNING_KEY }}
+          ISSUE: ${{ needs.authorize.outputs.issue || inputs.issue }}
+        run: python scripts/hunter_issue_agent_lifecycle.py step --role record-validation --issue "$ISSUE"
+
+  publish:
+    name: publish
+    needs: [authorize, record-validation, resume-bind]
+    if: >-
+      always() && (
+        (github.event_name == 'issues' && needs.record-validation.result == 'success')
+        || (github.event_name == 'workflow_dispatch' && inputs.stage == 'publication'
+            && needs.resume-bind.result == 'success')
+      )
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    environment: hunter-issue-agent-publisher
+    permissions:
+      contents: read
+      issues: read
+      pull-requests: read
+      actions: read
+    env:
+      ISSUE: ${{ needs.authorize.outputs.issue || inputs.issue }}
+      AUTHORIZATION_ID: ${{ needs.authorize.outputs.authorization_id || inputs.authorization_id }}
+    steps:
+      - name: Checkout control_sha
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ needs.resume-bind.outputs.control_sha || github.sha }}
+          persist-credentials: false
+          fetch-depth: 0
+      - name: Set up Python
+        uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6.3.0
+        with:
+          python-version: "3.11.13"
+      - name: Install pinned runtime
+        run: python -m pip install --only-binary ':all:' -c requirements/ci-constraints.txt .
+      - name: Read the bound result binding from the ledger
+        id: bound
+        run: >-
+          python scripts/hunter_issue_agent_lifecycle.py bound
+          --issue "$ISSUE" --authorization-id "$AUTHORIZATION_ID"
+      - name: Download the bound result
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          artifact-ids: ${{ steps.bound.outputs.result_artifact_id }}
+          run-id: ${{ steps.bound.outputs.result_run_id }}
+          github-token: ${{ github.token }}
+          path: ${{ runner.temp }}/result
+          digest-mismatch: error
+      - name: Create-only publication of exactly the validated commit (runs no candidate code)
+        id: publish
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+          HUNTER_ISSUE_AGENT_RESULT_KEY: ${{ secrets.HUNTER_ISSUE_AGENT_RESULT_KEY }}
+          HUNTER_ISSUE_AGENT_PUBLISHER_PUSH_TOKEN: ${{ secrets.HUNTER_ISSUE_AGENT_PUBLISHER_PUSH_TOKEN }}
+          HUNTER_ISSUE_AGENT_PUBLISHER_SIGNING_KEY: ${{ secrets.HUNTER_ISSUE_AGENT_PUBLISHER_SIGNING_KEY }}
+        run: >-
+          python scripts/hunter_issue_agent_lifecycle.py publish
+          --issue "$ISSUE" --authorization-id "$AUTHORIZATION_ID"
+          --result "$(find "$RUNNER_TEMP/result" -type f -name result.sealed)"
+          --trusted-repo "$GITHUB_WORKSPACE" --out "$RUNNER_TEMP/publication.json"
+          --workroot "$RUNNER_TEMP/publish"
+      - name: Upload a trusted refusal
+        if: steps.publish.outputs.refused == 'true'
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: ${{ steps.bound.outputs.publication_outcome }}
+          path: ${{ runner.temp }}/publication.json
+          retention-days: 1
+
+  finalize:
+    name: finalize
+    needs: [authorize, execute, bind, resume-bind, validate, record-validation, publish]
+    if: always() && (needs.authorize.result == 'success' || needs.resume-bind.result == 'success')
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    environment: hunter-issue-agent-control
+    permissions:
+      contents: write
+      actions: write
+      pull-requests: read
+    steps:
+      - name: Checkout trusted main
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+      - name: Set up Python
+        uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6.3.0
+        with:
+          python-version: "3.11.13"
+      - name: Install pinned runtime
+        run: python -m pip install --only-binary ':all:' -c requirements/ci-constraints.txt .
+      - name: Advance (T4, a publication resume, or terminal failure)
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+          HUNTER_ISSUE_AGENT_STATE_SIGNING_KEY: ${{ secrets.HUNTER_ISSUE_AGENT_STATE_SIGNING_KEY }}
+          ISSUE: ${{ needs.authorize.outputs.issue || inputs.issue }}
+        run: python scripts/hunter_issue_agent_lifecycle.py step --role finalize --issue "$ISSUE"

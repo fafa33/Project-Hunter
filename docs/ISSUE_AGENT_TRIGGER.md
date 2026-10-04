@@ -5,6 +5,12 @@
 > issuer-signed v2 envelope, Issue text selects nothing) is reaffirmed. The dispatch half (POST to a provisioning
 > URL and a webhook issuer) is superseded: the lifecycle runs entirely in GitHub-hosted jobs with no external
 > endpoint, and a static guard refuses any Railway client (ADR 0037 D9, AT-42).
+>
+> **S5 status.** `scripts/hunter_issue_agent_trigger.py` now only mints the signed authorization (no network
+> client); the `authorize` job of the lifecycle workflow verifies and claims it on the anchored ledger through
+> `scripts/hunter_issue_agent_lifecycle.py`. The "Dispatch boundary" section below is historical: the webhook
+> and provisioning transport it describes was removed, and the lifecycle refuses `MISSING_CONFIGURATION` until
+> the owner provisions S6.
 
 Issue #390 adds the first repository-owned execution edge for GitHub Issues. It is intentionally narrower than the existing n8n fallback worker and must not be used to bypass Smart Prompt Machine authority.
 

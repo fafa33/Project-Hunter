@@ -58,6 +58,7 @@ from test_issue_agent_issuer import (
     _public_key_bytes,
 )
 
+import hunter.automation.agent_fallback_runtime as fallback_runtime_module
 from hunter.automation.issue_agent_execution import (
     ISSUE_AGENT_AUTHORIZATION_LABEL,
     REPOSITORY_CHECKOUT_ENV,
@@ -70,6 +71,13 @@ CANONICAL_REMOTE = f"https://github.com/{REPOSITORY}.git"
 ISSUE_TEXT = "src/hunter/example.py::apply_fix must preserve the governed authority boundary."
 PROVIDERS = ("codex", "claude", "freebuff", "opencode", "jules")
 EXECUTION_TIMEOUT = 90.0
+
+
+@pytest.fixture(autouse=True)
+def _retained_internals(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Exercise the retained-until-S8 internals; the production entry refuses (AT-46, test_retired_issue_agent_authority)."""
+    monkeypatch.setattr(fallback_runtime_module, "refuse_retired_authority", lambda _name: None)
+
 
 _FAKE_PROVIDER = r"""
 import os

@@ -606,3 +606,76 @@ def test_the_credential_shape_scan_and_secret_scan_are_exact() -> None:
     document = state.canonical_json({"files": [{"content_b64": base64.b64encode(b"ordinary canary text").decode()}]})
     assert not roles.result_carries_secret(document, [SECRET])
     assert not roles.result_carries_credential_shape(document)
+
+
+# --- production isolation port (S0 A-6) --------------------------------------------------------------------
+
+
+class _Launch:
+    def __init__(self) -> None:
+        self.calls: list[tuple[tuple[str, ...], dict[str, Any]]] = []
+        self.returncode = 7
+
+    def __call__(self, argv: Sequence[str], **kwargs: Any) -> Any:
+        self.calls.append((tuple(argv), kwargs))
+        return subprocess.CompletedProcess(argv, self.returncode, b"", b"")
+
+
+@pytest.fixture
+def sudo(monkeypatch: pytest.MonkeyPatch) -> tuple[roles.SudoIsolation, _Launch]:
+    monkeypatch.setattr(core, "require_isolation_user", lambda user: user)
+    launch = _Launch()
+    monkeypatch.setattr(roles.subprocess, "run", launch)
+    monkeypatch.setattr(core.subprocess, "run", launch)
+    return roles.SudoIsolation("hunter-untrusted"), launch
+
+
+def test_the_model_secret_crosses_the_uid_boundary_only_through_the_launcher_environment(
+    sudo: tuple[roles.SudoIsolation, _Launch], tmp_path: Path
+) -> None:
+    isolation, launch = sudo
+    code = isolation.run(
+        ("opencode", "run", "--model", "m"),
+        cwd=tmp_path,
+        public_env={"LANG": "C.UTF-8"},
+        secret_env={"GROQ_API_KEY": SECRET},
+        stdin=b"prompt",
+        timeout=12.0,
+    )
+    assert code == 7
+    ((argv, kwargs),) = launch.calls
+    assert argv == (
+        "sudo", "-n", "--preserve-env=GROQ_API_KEY", "-u", "hunter-untrusted", "--", "/usr/bin/env",
+        "LANG=C.UTF-8", "opencode", "run", "--model", "m",
+    )  # fmt: skip
+    assert SECRET not in " ".join(argv)
+    assert kwargs["env"] == {**core.SUDO_ENVIRONMENT, "GROQ_API_KEY": SECRET}
+    assert kwargs["input"] == b"prompt" and kwargs["timeout"] == 12.0 and kwargs["cwd"] == tmp_path
+    assert kwargs["stdout"] is subprocess.DEVNULL and kwargs["stderr"] is subprocess.DEVNULL
+
+
+def test_a_secret_free_launch_inherits_nothing(sudo: tuple[roles.SudoIsolation, _Launch], tmp_path: Path) -> None:
+    isolation, launch = sudo
+    isolation.run(("true",), cwd=tmp_path, public_env={"LANG": "C"}, secret_env={}, stdin=b"", timeout=1.0)
+    ((argv, kwargs),) = launch.calls
+    assert argv == ("sudo", "-n", "-u", "hunter-untrusted", "--", "/usr/bin/env", "-i", "LANG=C", "true")
+    assert kwargs["env"] == dict(core.SUDO_ENVIRONMENT)
+
+
+def test_isolation_hands_over_the_workspace_and_kills_every_leftover(
+    sudo: tuple[roles.SudoIsolation, _Launch], tmp_path: Path
+) -> None:
+    isolation, launch = sudo
+    launch.returncode = 0
+    isolation.prepare(tmp_path / "workspace")
+    isolation.stop()
+    assert [argv for argv, _ in launch.calls] == [
+        ("sudo", "-n", "chown", "-R", "hunter-untrusted", str(tmp_path / "workspace")),
+        ("sudo", "-n", "pkill", "-KILL", "-u", "hunter-untrusted"),
+    ]
+
+
+@pytest.mark.parametrize("user", ["root", "Hunter Untrusted", "", "../x"])
+def test_isolation_refuses_root_or_an_invalid_user(user: str) -> None:
+    with pytest.raises(core.ReplacementExecutorError):
+        roles.SudoIsolation(user)

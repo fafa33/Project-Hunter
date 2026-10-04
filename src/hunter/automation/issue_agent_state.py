@@ -115,6 +115,20 @@ ADVISORY_CODES: Final = frozenset(
     }
 )
 EXECUTOR_CONCLUSIONS: Final = frozenset({"success", "failure", "cancelled", "timed_out", "skipped"})
+#: Terminal refusals the trusted validator step may report (SM T3 outcomes).
+VALIDATION_REFUSAL_CODES: Final = frozenset(
+    {"TRANSPORT_INTEGRITY_FAILED", "EXECUTOR_RESULT_REJECTED", "SECRET_IN_RESULT", "PRE_PUSH_SAFETY_FAILED"}
+)
+#: Terminal refusals the trusted publisher step may report (SM T4: live Issue gate, platform refusal, transport).
+PUBLICATION_REFUSAL_CODES: Final = frozenset(
+    {
+        "ISSUE_CLOSED",
+        "OWNER_WITHDREW",
+        "ISSUE_CHANGED_AFTER_AUTHORIZATION",
+        "PUBLICATION_REJECTED_BY_PLATFORM",
+        "TRANSPORT_INTEGRITY_FAILED",
+    }
+)
 
 
 class LedgerError(RuntimeError):
@@ -1070,6 +1084,8 @@ class Facts:
     preflight_conclusion: str | None | _Unknown = UNKNOWN
     #: The workflow run carrying the pending resume nonce: ``None`` (no such run), "active" or "concluded".
     resume_run_status: str | None | _Unknown = UNKNOWN
+    #: A terminal refusal the trusted publisher step reported for the current attempt (SM T4), if any.
+    publication_refusal_code: str | None = None
     now: str = "1970-01-01T00:00:00Z"
 
 
@@ -1134,6 +1150,8 @@ def advance(view: AuthorizationView, facts: Facts) -> Decision:
         if facts.receipt is UNKNOWN:
             return Decision("noop", reason="receipt unknown")
         if facts.receipt is not None:
+            if facts.receipt.get("verdict") == "REFUSED":
+                return Decision("fail", code=_terminal_refusal(facts.receipt.get("code"), VALIDATION_REFUSAL_CODES))
             return Decision("transition", target_state=VALIDATED)
         return _resume_or_fail(view, "validation", facts, "VALIDATION_UNAVAILABLE")
 
@@ -1146,6 +1164,8 @@ def advance(view: AuthorizationView, facts: Facts) -> Decision:
             if facts.remote_head_conforms:
                 return Decision("transition", target_state=PUBLISHED)
             return Decision("fail", code="REMOTE_BRANCH_CONFLICT")
+        if facts.publication_refusal_code is not None:
+            return Decision("fail", code=_terminal_refusal(facts.publication_refusal_code, PUBLICATION_REFUSAL_CODES))
         if _deadline_passed(view.binding("deadline_published_at"), facts.now):
             return Decision("fail", code="LIFECYCLE_DEADLINE_EXCEEDED")
         return _resume_or_fail(view, "publication", facts, "PUBLICATION_UNAVAILABLE")
@@ -1160,6 +1180,14 @@ def advance(view: AuthorizationView, facts: Facts) -> Decision:
     if _deadline_passed(view.evidence[PUBLISHED]["deadline_completed_at"], facts.now):
         return Decision("fail", code="CANDIDATE_PREFLIGHT_TIMEOUT")
     return Decision("noop", reason="awaiting exact-head Pre-PR Preflight and Draft PR")
+
+
+def _terminal_refusal(code: object, allowed: frozenset[str]) -> str:
+    """A trusted stage's refusal selects its terminal code only from that stage's closed set."""
+
+    if not isinstance(code, str) or code not in allowed:
+        raise LedgerSchemaError("stage refusal code is outside the stage's closed vocabulary")
+    return code
 
 
 def _resume_or_fail(view: AuthorizationView, stage: str, facts: Facts, exhausted_code: str) -> Decision:

@@ -17,6 +17,13 @@ from hunter.evidence_intelligence.smart_prompt_routing import (
     _issue_prompt_automation_envelope,
 )
 
+
+@pytest.fixture(autouse=True)
+def _retained_internals(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Exercise the retained-until-S8 internals; the production entry refuses (AT-46, test_retired_issue_agent_authority)."""
+    monkeypatch.setattr(runtime_module, "refuse_retired_authority", lambda _name: None)
+
+
 _SIGNING_KEY = "11" * 32
 _VERIFYING_KEY = "d04ab232742bb4ab3a1368bd4615e4e6d0224ab71a016baf8520a332c9778737"
 _REMOTE = "https://github.com/fafa33/Project-Hunter.git"

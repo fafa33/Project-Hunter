@@ -29,6 +29,7 @@ from hunter.automation.agent_fallback import (
     GovernedAgentFallbackDispatcher,
 )
 from hunter.automation.n8n_handoff import PromptAutomationHandoffError
+from hunter.automation.retired_issue_agent_authority import refuse_retired_authority
 from hunter.evidence_intelligence.smart_prompt_routing import PromptAutomationVerifier, PromptTaskAuthorityError
 
 PROVIDER_COMMAND_ENV = MappingProxyType(
@@ -404,6 +405,7 @@ class OperationalAgentFallbackRuntime:
         return outcome.returncode == 0 and not outcome.timed_out
 
     def dispatch(self, document: str | bytes) -> AgentFallbackRuntimeReceipt:
+        refuse_retired_authority("agent_fallback_runtime.OperationalAgentFallbackRuntime")
         dispatcher = GovernedAgentFallbackDispatcher(
             execute=self._execute,
             read_head=self._read_remote_head,
