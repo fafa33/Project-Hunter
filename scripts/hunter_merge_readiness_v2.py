@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import json
 import os
+import subprocess
 import sys
 from dataclasses import dataclass
 from functools import cached_property
@@ -664,7 +665,58 @@ def candidate_prs() -> tuple[int, ...]:
     return open_pull_requests()
 
 
+def owner_merge_guard(pr_number: int) -> CompletionVerdict:
+    """Fail closed unless the operator's intended local state is exactly the PR head.
+
+    Hosted readiness cannot observe unpushed local work.  This guard therefore sits
+    at the owner merge boundary: clean worktree, local HEAD, remote branch HEAD and
+    GitHub PR HEAD must all describe one immutable candidate.
+    """
+
+    def git(*args: str) -> str:
+        return subprocess.run(("git", *args), cwd=ROOT, check=True, text=True, capture_output=True).stdout.strip()
+
+    try:
+        if git("status", "--porcelain"):
+            return CompletionVerdict(False, "HEAD_DIVERGENCE", "worktree contains uncommitted intended changes")
+        local_head = git("rev-parse", "HEAD")
+        branch = git("branch", "--show-current")
+        if not branch:
+            return CompletionVerdict(False, "HEAD_DIVERGENCE", "detached HEAD has no merge-intent branch")
+        remote_rows = git("ls-remote", "--heads", "origin", f"refs/heads/{branch}").splitlines()
+        remote_head = remote_rows[0].split()[0] if remote_rows else ""
+    except (subprocess.CalledProcessError, IndexError) as exc:
+        return CompletionVerdict(False, "HEAD_DIVERGENCE", f"local/remote head evidence unavailable: {exc}")
+
+    pr = request_json("GET", f"pulls/{pr_number}")
+    if not isinstance(pr, dict) or pr.get("state") != "open":
+        return CompletionVerdict(False, "HEAD_DIVERGENCE", "target PR is not open")
+    pr_head = str((pr.get("head") or {}).get("sha") or "").strip()
+    if not remote_head or not pr_head or len({local_head, remote_head, pr_head}) != 1:
+        return CompletionVerdict(
+            False,
+            "HEAD_DIVERGENCE",
+            f"intended local HEAD, remote branch HEAD and PR HEAD are not identical ({local_head[:10]}, {remote_head[:10] or 'missing'}, {pr_head[:10] or 'missing'})",
+        )
+    readiness = decide_completion(pr_number)
+    if readiness is None or not readiness.accepted:
+        reason = "merge readiness is unavailable" if readiness is None else readiness.reason
+        return CompletionVerdict(False, "MERGE_NOT_READY", reason)
+    return CompletionVerdict(
+        True, "OWNER_MERGE_GUARD_ACCEPTED", f"exact intended head {local_head} is clean, pushed and merge-ready"
+    )
+
+
 def main() -> int:
+    if len(sys.argv) >= 3 and sys.argv[1] == "owner-merge-guard":
+        try:
+            verdict = owner_merge_guard(int(sys.argv[2]))
+        except (ValueError, transport.GitHubUnavailable) as exc:
+            print(f"HEAD_DIVERGENCE: {exc}", file=sys.stderr)
+            return 1
+        print(f"{verdict.state}: {verdict.reason}")
+        return 0 if verdict.accepted else 1
+
     if len(sys.argv) >= 3 and sys.argv[1] == "completion":
         try:
             pr_number = int(sys.argv[2])

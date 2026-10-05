@@ -556,3 +556,33 @@ def test_normal_decide_path_enforces_completion_gate(monkeypatch):
     assert head == "a" * 40
     assert decision.state == "pending"
     assert decision.description == "worker completion rejected"
+
+
+def test_owner_merge_guard_rejects_dirty_or_unpushed_intended_head(monkeypatch):
+    class Result:
+        def __init__(self, stdout):
+            self.stdout = stdout
+
+    outputs = iter(["", "b" * 40 + "\n", "topic\n", "a" * 40 + "\trefs/heads/topic\n"])
+    monkeypatch.setattr(core.subprocess, "run", lambda *args, **kwargs: Result(next(outputs)))
+    monkeypatch.setattr(core, "request_json", lambda *_args, **_kwargs: {"state": "open", "head": {"sha": "a" * 40}})
+    verdict = core.owner_merge_guard(562)
+    assert not verdict.accepted
+    assert verdict.state == "HEAD_DIVERGENCE"
+
+
+def test_owner_merge_guard_accepts_only_clean_identical_merge_ready_head(monkeypatch):
+    class Result:
+        def __init__(self, stdout):
+            self.stdout = stdout
+
+    head = "a" * 40
+    outputs = iter(["", head + "\n", "topic\n", head + "\trefs/heads/topic\n"])
+    monkeypatch.setattr(core.subprocess, "run", lambda *args, **kwargs: Result(next(outputs)))
+    monkeypatch.setattr(core, "request_json", lambda *_args, **_kwargs: {"state": "open", "head": {"sha": head}})
+    monkeypatch.setattr(
+        core, "decide_completion", lambda _number: core.CompletionVerdict(True, "COMPLETION_ACCEPTED", "ready")
+    )
+    verdict = core.owner_merge_guard(562)
+    assert verdict.accepted
+    assert verdict.state == "OWNER_MERGE_GUARD_ACCEPTED"

@@ -2022,6 +2022,30 @@
       "sources": [
         "PR #561 2026-10-04 (Issue #560 S5): requested_reviewers accepted for both review-request reviewers with no provider review, while ruleset 23493180 carried review_on_push: false."
       ]
+    },
+    {
+      "id": "DFF-051",
+      "title": "remote-green-masks-unpushed-intended-head",
+      "invariant": "Owner merge execution is permitted only when the operator worktree is clean and local HEAD, the remote branch HEAD, and the GitHub PR HEAD are the same immutable commit; hosted green status cannot authorize an older remote head while intended local changes remain unpushed.",
+      "applicability": {
+        "changed_paths": [
+          "scripts/hunter_merge_readiness_v2.py"
+        ],
+        "rationale": "Hosted readiness cannot observe local unpushed state; the owner merge boundary is the first authority that can bind local intent to the remote PR candidate."
+      },
+      "prevention": {
+        "mechanism": "The owner-merge-guard command fails closed with HEAD_DIVERGENCE unless the worktree is clean and local HEAD == origin branch HEAD == PR HEAD, then requires canonical completion readiness before accepting merge execution.",
+        "boundary": "merge-gate",
+        "guard_reference": "scripts/hunter_merge_readiness_v2.py::owner_merge_guard"
+      },
+      "regression_evidence": [
+        "tests/test_hunter_merge_readiness_v2.py::test_owner_merge_guard_rejects_dirty_or_unpushed_intended_head",
+        "tests/test_hunter_merge_readiness_v2.py::test_owner_merge_guard_accepts_only_clean_identical_merge_ready_head"
+      ],
+      "lifecycle": "merge-enforced",
+      "sources": [
+        "PR #562 operator audit 2026-10-06: GitHub showed the previously pushed head green while a corrective local commit had been blocked before push, creating a false-green risk if owner merge execution relied on hosted status alone."
+      ]
     }
   ]
 }
