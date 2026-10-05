@@ -147,8 +147,11 @@ approval.
 | **S5 workflows (inert)** | S4 | lifecycle, reconcile, candidate-PR and rehearsal workflows; **trigger without a Railway client**; **parallel-authority fail-closed guard**; environments not provisioned, so a label fails `MISSING_CONFIGURATION` before any write | AT-41, AT-42, AT-46, AT-47; push hook; hosted Pre-PR | merged; nothing can execute |
 | **S5b review-knowledge loop** (owner requirement 2026-10-04; [reconciliation](ISSUE_AGENT_REVIEW_KNOWLEDGE_LOOP.md)) | S5a; owner decisions RD-1…RD-6 | reviewer finding → knowledge → prevention → bounded remediation → exact-head proof → thread resolution → feedback, reusing the learning ledger, KnowledgeExtractionAuthority, DEFECT_REGISTRY/RFD, DPM and the S3–S5 lifecycle | the reconciliation §5 acceptance simulation (known + new family, restart between transitions, duplicate delivery, fresh task receives knowledge first); mutation run | **S5 is complete only when S5b is proven** |
 | **S6 provision and rehearse** | S5 including S5b; OD-6 done | owner: four environments (branch policy `main`); rotated K_SH/K_SPM; new K_STATE/X_EXEC/X_RESULT; signer per OD-2; SH root; **suspend Railway**; revoke the fallback token; disable n8n; non-publishing rehearsal | rehearsal reaches VALIDATED; AT-33 on real logs; AT-40 live | green; Railway suspended |
+
 | **S7 live + #520** | S6 | §7 | §7 evidence | one Draft PR, no relay |
 | **S8 retirement** | S7 proof | delete every S8 row; §6 inventory; AT-43; registry lifecycle; offline owner export of `/data` (never committed); owner deletes the Railway project and ends the subscription | AT-43; reference search shows only archive notes | owner confirms |
+
+S6 bootstraps the GitHub-native Source Handling root with the owner-dispatched `Hunter / Issue Agent Source Handling Bootstrap` workflow on `main` **only after Railway suspension is confirmed**, preserving ADR 0038 §7.3 no-dual-authority ordering. The control-domain job resumes any verified interrupted bootstrap prefix, captures only missing canonical transactions, publishes them to `refs/heads/hunter-state/v1/source-handling` under K_STATE, and requires the canonical bootstrap to be fully idempotent after replay before rehearsal proceeds. It never auto-bootstraps during authorization.
 
 ## 6. OD-6 trace (2026-10-04, read-only) and removal inventory (S8)
 

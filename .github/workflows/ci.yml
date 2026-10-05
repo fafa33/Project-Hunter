@@ -58,12 +58,8 @@ jobs:
       # identical suite establishes nothing. Anything else -- a divergent
       # integration tree, a missing or unsuccessful trusted run, unavailable
       # evidence -- falls back to the full lane below.
-      #
-      # Issue #561: an authoritative run that is still queued or in_progress has not yet
-      # produced a verdict, so it is waited on to a terminal conclusion rather than being
-      # timed out into a duplicate full run. The wait is bounded by the trusted workflow's
-      # own timeout; a failed, cancelled, mismatched or vanished run ends it immediately
-      # and falls back below.
+      # Reuse is one-shot and non-blocking: pending evidence falls through immediately to
+      # this job's own full lane. CI must never poll another workflow as a latency boundary.
       - name: Resolve exact-identity validation reuse
         id: validation-reuse
         env:

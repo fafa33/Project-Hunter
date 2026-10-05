@@ -27,22 +27,16 @@ missing or unsuccessful run, unavailable Git or API evidence, a tests-first-red
 head, a toolchain that does not match its pin, or a receipt that does not verify.
 Refusing reuse is always safe; it costs time, not proof.
 
-Waiting is bounded by the authoritative workflow's own timeout, never by a guess
-about how long it usually takes. Issue #561: the trusted ``Hunter / Pre-PR
-Preflight`` run was still ``in_progress`` when a fixed 420s budget expired, so the
-reuse decision was abandoned and this job ran the identical 6,140-test suite
-again. The authoritative run was about to succeed and the proof already existed;
-the fixed wait manufactured the duplication it was meant to avoid. The bound is
-therefore derived from ``timeout-minutes`` of the trusted workflow itself, plus
-margin, so the wait covers that run's entire legitimate lifetime while still
-ending.
+Reuse is deliberately non-blocking. A queued or in-progress trusted run is not proof yet,
+so CI immediately runs its own full lane instead of polling another workflow. This keeps
+validation reuse an optimization rather than a cross-workflow synchronization boundary;
+correctness never depends on timing, and PR latency cannot be held by another run.
 """
 
 from __future__ import annotations
 
 import argparse
 import os
-import time
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass
 from datetime import UTC, datetime
@@ -66,31 +60,11 @@ PRE_PR_WORKFLOW_PATH = ".github/workflows/hunter-pre-pr-preflight.yml"
 #: head carrying the marker can never authorize skipping the full lane.
 MODE_MARKER = ".hunter-preflight-mode"
 
-#: The trusted workflow's own ``timeout-minutes``. GitHub terminates a run that
-#: exceeds it, so a run still producing proof beyond this bound is already
-#: anomalous, and waiting longer only delays the full-lane fallback.
-PRE_PR_WORKFLOW_TIMEOUT_MINUTES = 30
-
-#: Slack above that bound: the transition to a terminal conclusion, one poll
-#: interval, and clock skew between this runner and the Actions API.
-REUSE_WAIT_MARGIN_SECONDS = 300.0
-
-#: The full lane this job falls back onto when reuse is refused, so the CI job
-#: timeout can be asserted to exceed wait + fallback rather than being an
-#: unrelated number that silently becomes the effective wait bound.
-FULL_LANE_FALLBACK_SECONDS = 900.0
-
-#: The bounded wait. Derived, never guessed: it is aligned above the trusted
-#: workflow's own timeout so a legitimately slow authoritative run is adopted
-#: rather than duplicated, and bounded so this job cannot hang.
-DEFAULT_WAIT_SECONDS = PRE_PR_WORKFLOW_TIMEOUT_MINUTES * 60 + REUSE_WAIT_MARGIN_SECONDS
-
-#: GitHub run statuses that are still legitimately moving toward a terminal
-#: conclusion, so the authoritative run is still worth waiting for. ``completed``
-#: is terminal; any other status is unreadable evidence and is not waited on.
-RUN_PENDING_STATUSES = frozenset({"queued", "in_progress", "requested", "waiting", "pending"})
-
+#: Reuse is a non-blocking optimization, never a synchronization boundary.
+#: A pending trusted run is not proof yet; CI validates independently immediately.
+#: This invariant prevents cross-workflow polling from becoming PR latency.
 PRODUCED_BY = "hunter-pre-pr-preflight"
+RUN_PENDING_STATUSES = frozenset({"queued", "in_progress", "requested", "waiting", "pending"})
 
 Fetch = Callable[[str, str, str], Any]
 
@@ -251,57 +225,6 @@ def decide_from_runs(runs: list[Any], evidence: CandidateEvidence, *, now: datet
     )
 
 
-def wait_for_authoritative_run(
-    root: Path,
-    *,
-    event_name: str,
-    head_sha: str,
-    repository: str,
-    token: str,
-    wait_seconds: float = DEFAULT_WAIT_SECONDS,
-    poll_seconds: float = 15.0,
-    now: datetime | None = None,
-    fetch: Fetch | None = None,
-    sleep: Callable[[float], None] = time.sleep,
-    monotonic: Callable[[], float] = time.monotonic,
-) -> ReuseDecision:
-    """Decide reuse, waiting out an authoritative run that is still legitimately running.
-
-    The invariant this encodes: a run that is ``queued`` or ``in_progress`` has not yet
-    produced a verdict, so it is not evidence that no reusable proof will exist. It is
-    waited on to a terminal conclusion rather than abandoned on a timer, because
-    abandoning it early is what makes this job re-run the identical full suite while
-    the authoritative run is about to succeed.
-
-    The wait stays bounded by ``wait_seconds``, which is derived from the trusted
-    workflow's own ``timeout-minutes``, so a legitimately slow run is adopted and a
-    wedged one still ends. Every other outcome -- a failed, cancelled, mismatched,
-    vanished or unreadable run, or unavailable API evidence -- is terminal and falls
-    back onto the full lane, which is always safe.
-    """
-    evidence, blocker = candidate_evidence(root, event_name=event_name, head_sha=head_sha)
-    if evidence is None:
-        return ReuseDecision(False, blocker)
-
-    deadline = monotonic() + max(0.0, wait_seconds)
-    while True:
-        try:
-            runs, problem = _authoritative_runs(repository, token, head_sha, fetch)
-        except Exception as exc:  # noqa: BLE001 - any failure here must fall back to full validation
-            return ReuseDecision(False, f"reuse evidence could not be established ({type(exc).__name__}: {exc})")
-        if runs is None:
-            return ReuseDecision(False, problem)
-        decision = decide_from_runs(runs, evidence, now=now)
-        if not decision.pending:
-            return decision
-        remaining = deadline - monotonic()
-        if remaining <= 0:
-            return ReuseDecision(False, f"{decision.reason}; bounded wait expired after {wait_seconds:g}s")
-        delay = min(max(0.1, poll_seconds), remaining)
-        print(f"[Hunter Validation Reuse] WAIT: {decision.reason}; polling again in {delay:g}s", flush=True)
-        sleep(delay)
-
-
 def resolve(
     root: Path,
     *,
@@ -344,20 +267,19 @@ def main(argv: Sequence[str] | None = None) -> int:
     parser.add_argument("--event-name", default=os.environ.get("GITHUB_EVENT_NAME", ""))
     parser.add_argument("--head-sha", default=os.environ.get("PR_HEAD_SHA", ""))
     parser.add_argument("--repository", default=os.environ.get("GH_REPO", ""))
-    parser.add_argument("--wait-seconds", type=float, default=DEFAULT_WAIT_SECONDS)
-    parser.add_argument("--poll-seconds", type=float, default=15.0)
     args = parser.parse_args(argv)
 
     token = os.environ.get("GITHUB_TOKEN") or os.environ.get("GH_TOKEN") or ""
-    decision = wait_for_authoritative_run(
-        ROOT,
-        event_name=args.event_name,
-        head_sha=args.head_sha,
-        repository=args.repository,
-        token=token,
-        wait_seconds=args.wait_seconds,
-        poll_seconds=args.poll_seconds,
-    )
+    try:
+        decision = resolve(
+            ROOT,
+            event_name=args.event_name,
+            head_sha=args.head_sha,
+            repository=args.repository,
+            token=token,
+        )
+    except Exception as exc:  # noqa: BLE001 - reuse is optional; full validation is the fail-closed path
+        decision = ReuseDecision(False, f"reuse resolution failed ({type(exc).__name__}: {exc})")
     _emit(decision)
     return 0
 

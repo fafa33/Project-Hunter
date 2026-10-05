@@ -472,169 +472,32 @@ def test_incomplete_run_cannot_authorize_reuse(tmp_path: Path, monkeypatch: pyte
     assert "is in_progress" in decision.reason
 
 
-class _Clock:
-    """A simulated clock so a 35-minute wait can be proven without spending 35 minutes."""
-
-    def __init__(self) -> None:
-        self.elapsed = 0.0
-        self.slept: list[float] = []
-
-    def monotonic(self) -> float:
-        return self.elapsed
-
-    def sleep(self, seconds: float) -> None:
-        self.slept.append(seconds)
-        self.elapsed += seconds
-
-
-def _wait(
-    tmp_path: Path,
-    runs: list[Any],
-    *,
-    clock: _Clock | None = None,
-    fetch: Any = None,
-    **overrides: Any,
-) -> tuple[reuse.ReuseDecision, _Clock]:
-    """Drive the real bounded wait over a scripted sequence of run records."""
-    clock = clock or _Clock()
-    if fetch is None:
-        payloads = iter([{"workflow_runs": list(runs)}])
-        fetch = lambda *_args, **_kwargs: next(payloads)  # noqa: E731
-    options: dict[str, Any] = {
-        "event_name": "pull_request",
-        "head_sha": HEAD,
-        "repository": "fafa33/Project-Hunter",
-        "token": "",
-        "now": NOW,
-        "wait_seconds": reuse.DEFAULT_WAIT_SECONDS,
-        "poll_seconds": 15.0,
-        "fetch": fetch,
-        "sleep": clock.sleep,
-        "monotonic": clock.monotonic,
-    }
-    options.update(overrides)
-    return reuse.wait_for_authoritative_run(tmp_path, **options), clock
-
-
-def _raising(error: Exception) -> Any:
-    def fetch(_repository: str, _token: str, _path: str) -> Any:
-        raise error
-
-    return fetch
-
-
-def _scripted(*payloads: Any) -> Any:
-    remaining = list(payloads)
-
-    def fetch(_repository: str, _token: str, _path: str) -> Any:
-        return remaining.pop(0) if len(remaining) > 1 else remaining[0]
-
-    return fetch
-
-
-def test_an_authoritative_run_still_running_past_the_old_fixed_wait_is_adopted_not_duplicated(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    """Issue #561, PR #561: the live failure mode, reproduced.
-
-    The trusted Pre-PR run was ``in_progress`` long past 420s -- the real run takes about
-    13.5 minutes -- when the fixed wait expired. The reuse decision was abandoned and CI ran
-    the identical 6,140-test suite again, while the authoritative run was about to succeed.
-    A run that has not reached a terminal conclusion has produced no verdict yet, so it must
-    be waited on to one instead of being timed out into a duplicate full lane.
-    """
-    _stub_identity(monkeypatch)
-    slow = 60  # ~900s of polling before the authoritative run finishes, well past 420s
-    fetch = _scripted(
-        *([{"workflow_runs": [_run(status="in_progress", conclusion=None)]}] * slow + [{"workflow_runs": [_run()]}])
-    )
-
-    decision, clock = _wait(tmp_path, [], fetch=fetch)
-
-    assert decision.reusable is True
-    assert clock.elapsed > 420.0, "the run was still legitimately running when the old fixed wait expired"
-    assert clock.elapsed <= reuse.DEFAULT_WAIT_SECONDS
-
-
-def test_a_failing_cancelled_stale_or_mismatched_authoritative_run_falls_back_to_the_full_lane(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    """Every terminal outcome other than success ends reuse immediately, without waiting."""
-    _stub_identity(monkeypatch)
-    cases = {
-        "failure": _run(conclusion="failure"),
-        "cancelled": _run(conclusion="cancelled"),
-        "timed_out": _run(conclusion="timed_out"),
-        "stale": _run(
-            updated_at=(NOW - timedelta(seconds=receipts.DEFAULT_MAX_AGE_SECONDS + 60))
-            .isoformat()
-            .replace("+00:00", "Z")
-        ),
-        "another_head": _run(head_sha=FOREIGN_HEAD),
-        "another_workflow": _run(path=".github/workflows/somebody-else.yml"),
-        "unreadable_status": _run(status="who_knows"),
-        "no_completion_time": _run(updated_at="", created_at=""),
-    }
-    for label, run in cases.items():
-        decision, clock = _wait(tmp_path, [], fetch=_scripted({"workflow_runs": [run]}))
-        assert decision.reusable is False, label
-        assert decision.pending is False, label
-        assert clock.slept == [], f"{label} must not be waited on"
-
-
-def test_unavailable_or_malformed_api_evidence_fails_closed_without_waiting(
+def test_pending_authoritative_run_falls_back_immediately_without_cross_workflow_wait(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     _stub_identity(monkeypatch)
-    payloads = [
-        {"workflow_runs": "not a list"},
-        [],
-        "not an object",
-        RuntimeError("api down"),
-    ]
-    for payload in payloads:
-        fetch = _raising(payload) if isinstance(payload, Exception) else _scripted(payload)
-        decision, clock = _wait(tmp_path, [], fetch=fetch)
-        assert decision.reusable is False
-        assert clock.slept == []
-
-
-def test_a_wedged_authoritative_run_still_ends_the_wait_and_runs_the_full_lane(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    """The wait is bounded, so this job cannot hang waiting for a run that never concludes."""
-    _stub_identity(monkeypatch)
-
-    decision, clock = _wait(
-        tmp_path,
-        [],
-        fetch=_scripted({"workflow_runs": [_run(status="in_progress", conclusion=None)]}),
-    )
-
+    decision = _resolve(tmp_path, [_run(status="in_progress", conclusion=None)])
     assert decision.reusable is False
-    assert "bounded wait expired" in decision.reason
-    assert clock.elapsed == reuse.DEFAULT_WAIT_SECONDS
+    assert decision.pending is True
+    assert "in_progress" in decision.reason
 
 
-def test_the_bounded_wait_is_derived_from_the_trusted_workflow_timeout_and_the_ci_job_outlives_it() -> None:
-    """The wait must cover that run's whole legitimate lifetime and the CI job must outlive it.
+def test_reuse_module_has_no_polling_or_sleep_boundary() -> None:
+    source = (ROOT / "scripts" / "hunter_validation_reuse.py").read_text(encoding="utf-8")
+    forbidden = ("time.sleep", "wait_for_authoritative_run", "--wait-seconds", "--poll-seconds")
+    assert all(
+        token not in source for token in forbidden
+    ), "validation reuse must remain a one-shot evidence lookup; never reintroduce cross-workflow waiting"
 
-    A 420s guess was shorter than the ~13.5m the authoritative run actually takes, and the
-    Quality Gates job timeout was an independent number that would have killed this job
-    mid-wait. Both are now pinned to the trusted workflow's own ``timeout-minutes``.
-    """
-    import yaml
 
-    pre_pr = yaml.safe_load((ROOT / PRE_PR_WORKFLOW).read_text(encoding="utf-8"))
-    ci = yaml.safe_load((ROOT / ".github" / "workflows" / "ci.yml").read_text(encoding="utf-8"))
-
-    assert next(iter(pre_pr["jobs"].values()))["timeout-minutes"] == reuse.PRE_PR_WORKFLOW_TIMEOUT_MINUTES
-    assert reuse.DEFAULT_WAIT_SECONDS > reuse.PRE_PR_WORKFLOW_TIMEOUT_MINUTES * 60
-    assert reuse.DEFAULT_WAIT_SECONDS == reuse.PRE_PR_WORKFLOW_TIMEOUT_MINUTES * 60 + reuse.REUSE_WAIT_MARGIN_SECONDS
-    quality_timeout = ci["jobs"]["quality"]["timeout-minutes"] * 60
-    assert quality_timeout > reuse.DEFAULT_WAIT_SECONDS
-    # The full-lane fallback has to fit inside the same job after the wait ends.
-    assert quality_timeout > reuse.DEFAULT_WAIT_SECONDS + reuse.FULL_LANE_FALLBACK_SECONDS
+def test_ci_quality_gate_does_not_budget_time_for_cross_workflow_waiting() -> None:
+    ci = _ci_workflow()
+    resolver = next(
+        step for step in ci["jobs"]["quality"]["steps"] if "hunter_validation_reuse.py" in str(step.get("run", ""))
+    )
+    run = str(resolver["run"])
+    assert "--wait-seconds" not in run
+    assert "--poll-seconds" not in run
 
 
 def test_latest_run_for_the_head_decides_rather_than_any_green_one(

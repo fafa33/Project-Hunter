@@ -14,6 +14,7 @@ import pytest
 ROOT = Path(__file__).resolve().parents[1]
 AUTH = "hunter-issue-agent-authorization:" + "a" * 64
 COMMANDS = {
+    "source-handling-bootstrap": [],
     "authorize-prepare": ["--event", "event.json", "--out-dir", "out"],
     "remediate": ["--issue", "1"],
     "resolve-finding": ["--issue", "1"],

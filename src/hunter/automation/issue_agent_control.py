@@ -54,6 +54,7 @@ LIFECYCLE_WORKFLOW: Final = ".github/workflows/hunter-issue-agent-trigger.yml"
 RECONCILE_WORKFLOW: Final = ".github/workflows/hunter-issue-agent-reconcile.yml"
 CANDIDATE_PR_WORKFLOW: Final = ".github/workflows/hunter-issue-agent-candidate-pr.yml"
 KNOWLEDGE_WORKFLOW: Final = ".github/workflows/hunter-issue-agent-knowledge.yml"
+SOURCE_HANDLING_BOOTSTRAP_WORKFLOW: Final = ".github/workflows/hunter-issue-agent-source-handling-bootstrap.yml"
 PREFLIGHT_WORKFLOW_FILE: Final = "hunter-pre-pr-preflight.yml"
 
 
@@ -83,6 +84,10 @@ WRITERS: Final[Mapping[str, WriterWorkflow]] = {
     KNOWLEDGE_WORKFLOW: WriterWorkflow(
         frozenset({"workflow_run", "schedule", "workflow_dispatch"}),
         {"knowledge-ingest": frozenset({"knowledge-ingest"})},
+    ),
+    SOURCE_HANDLING_BOOTSTRAP_WORKFLOW: WriterWorkflow(
+        frozenset({"workflow_dispatch"}),
+        {"source-handling-bootstrap": frozenset({"source-handling-bootstrap"})},
     ),
 }
 

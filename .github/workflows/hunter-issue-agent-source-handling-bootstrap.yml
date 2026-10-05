@@ -1,0 +1,39 @@
+name: Hunter / Issue Agent Source Handling Bootstrap
+
+on:
+  workflow_dispatch:
+
+permissions: {}
+
+concurrency:
+  group: hunter-issue-agent-source-handling-bootstrap
+  cancel-in-progress: false
+  queue: max
+
+jobs:
+  source-handling-bootstrap:
+    if: github.ref == 'refs/heads/main' && github.actor == github.repository_owner
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    environment: hunter-issue-agent-control
+    permissions:
+      contents: write
+      actions: read
+    steps:
+      - name: Checkout control_sha
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+      - name: Set up Python
+        uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6.3.0
+        with:
+          python-version: "3.11.13"
+      - name: Install pinned runtime
+        run: python -m pip install --only-binary ':all:' -c requirements/ci-constraints.txt .
+      - name: Bootstrap and verify anchored Source Handling ledger
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+          HUNTER_ISSUE_AGENT_STATE_SIGNING_KEY: ${{ secrets.HUNTER_ISSUE_AGENT_STATE_SIGNING_KEY }}
+          HUNTER_SOURCE_HANDLING_SIGNING_KEY: ${{ secrets.HUNTER_SOURCE_HANDLING_SIGNING_KEY }}
+        run: python scripts/hunter_issue_agent_lifecycle.py source-handling-bootstrap

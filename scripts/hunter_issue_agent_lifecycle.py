@@ -542,7 +542,9 @@ def _authorize_dependencies(configuration: control.Configuration, github: contro
     from hunter.automation.issue_agent_execution import IssueAgentAuthorizationVerifier
     from hunter.evidence_intelligence import source_handling_provenance
     from hunter.evidence_intelligence.smart_prompt_routing import PromptAutomationVerifier
-    from hunter.evidence_intelligence.source_handling_persistence import SourceHandlingOperatorRoot
+    from hunter.evidence_intelligence.source_handling_persistence import (
+        SourceHandlingOperatorRoot,
+    )
 
     def provision(signed: Any, database: Path) -> object:
         os.environ[source_handling_provenance.EVIDENCE_DATABASE_ENV] = str(database)
@@ -610,6 +612,98 @@ def _require_anchors(configuration: control.Configuration, github: control.GitHu
 
     control.require_anchor(github, configuration, state.ledger_ref(issue))
     control.require_anchor(github, configuration, SOURCE_HANDLING_LEDGER_REF)
+
+
+def cmd_source_handling_bootstrap(configuration: control.Configuration, _arguments: argparse.Namespace) -> int:
+    """One-shot S6 bootstrap of ADR 0038, recovering any valid interrupted prefix."""
+    import tempfile
+
+    import bootstrap_source_handling_authority as bootstrap
+
+    from hunter.automation import issue_agent_source_handling_store as sh
+    from hunter.evidence_intelligence.source_handling_persistence import (
+        SourceHandlingOperatorRoot,
+        SqliteSourceHandlingAuthorityReadView,
+    )
+    from hunter.evidence_intelligence.source_handling_provenance import production_provenance_resolver
+
+    _export_public_trust(configuration)
+    github = _github(configuration)
+    control.require_anchor(github, configuration, sh.SOURCE_HANDLING_LEDGER_REF)
+    store = _store(configuration, authenticated=True)
+    provenance = control.run_provenance(github, configuration)
+    operator_root = SourceHandlingOperatorRoot(
+        genesis_rule_sha256=configuration.source_handling.genesis_rule_sha256,
+        verification_key_sha256=configuration.source_handling.verification_key_sha256,
+    )
+    with tempfile.TemporaryDirectory(prefix="hunter-sh-bootstrap-") as root:
+        root = Path(root)
+        database = root / "evidence.sqlite"
+        head, entries = store.read_files(sh.SOURCE_HANDLING_LEDGER_REF, frozenset({"record.json", "delta.json"}))
+        if entries:
+            position = sh.materialize(
+                store,
+                database,
+                trust=configuration.trust,
+                provenance=provenance,
+                verification_public_key=bytes.fromhex(configuration.source_handling.verification_key),
+                operator_root=operator_root,
+            )
+        else:
+            position = sh.LedgerPosition()
+
+        # Run the canonical bootstrap against the verified prefix. If a previous run stopped after one
+        # transaction, capture emits only the missing canonical transactions; a complete ledger emits none.
+        outcome, transactions = sh.capture(database, lambda: bootstrap.bootstrap_authority(str(database)))
+        if outcome.get("status") not in {"bootstrapped", "already-provisioned"}:
+            raise LifecycleRefused("SOURCE_HANDLING_BLOCKED", "canonical bootstrap did not reach a complete state")
+        if (
+            outcome.get(bootstrap.VERIFICATION_KEY_ENV) != configuration.source_handling.verification_key
+            or outcome.get(bootstrap.VERIFICATION_KEY_SHA256_ENV)
+            != configuration.source_handling.verification_key_sha256
+            or outcome.get(bootstrap.GENESIS_RULE_SHA256_ENV) != configuration.source_handling.genesis_rule_sha256
+        ):
+            raise LifecycleRefused(
+                "SOURCE_HANDLING_BLOCKED", "bootstrap signing key or genesis does not match pinned trust roots"
+            )
+        writer = _writer(
+            "source-handling-bootstrap", "source-handling-bootstrap", control.SOURCE_HANDLING_BOOTSTRAP_WORKFLOW
+        )
+        if transactions:
+            position = sh.publish(
+                store,
+                position,
+                transactions,
+                signing_key=_ed25519(STATE_SIGNING_KEY_ENV),
+                recorded_by=writer.recorded_by(),
+                recorded_at=_timestamp(),
+                repository_id=configuration.repository_id,
+            )
+
+        replay = root / "replay.sqlite"
+        verified = sh.materialize(
+            store,
+            replay,
+            trust=configuration.trust,
+            provenance=provenance,
+            verification_public_key=bytes.fromhex(configuration.source_handling.verification_key),
+            operator_root=operator_root,
+        )
+        # Completeness is semantic, not merely "non-empty": the canonical bootstrap must now be idempotent.
+        check, remaining = sh.capture(replay, lambda: bootstrap.bootstrap_authority(str(replay)))
+        if check.get("status") != "already-provisioned" or remaining:
+            raise LifecycleRefused("SOURCE_HANDLING_BLOCKED", "anchored bootstrap is valid but incomplete")
+        # Force the canonical ADR 0036 read path to authenticate root/history signatures before success.
+        SqliteSourceHandlingAuthorityReadView(
+            replay,
+            verification_public_key=bytes.fromhex(configuration.source_handling.verification_key),
+            operator_root=operator_root,
+            provenance_resolver=production_provenance_resolver,
+        )
+        if verified.head != position.head or verified.snapshot_sha256 != position.snapshot_sha256:
+            raise LifecycleRefused("SOURCE_HANDLING_BLOCKED", "bootstrap replay does not match the published ledger")
+    print(f"source-handling bootstrap: complete and verified at {position.head}")
+    return 0
 
 
 def cmd_authorize_prepare(configuration: control.Configuration, arguments: argparse.Namespace) -> int:
@@ -928,6 +1022,7 @@ def _parser() -> argparse.ArgumentParser:
         child.set_defaults(handler=command)
         return child
 
+    add("source-handling-bootstrap", cmd_source_handling_bootstrap)
     prepare = add("authorize-prepare", cmd_authorize_prepare)
     prepare.add_argument("--event")
     prepare.add_argument("--document")
