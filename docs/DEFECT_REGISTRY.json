@@ -2010,7 +2010,8 @@
       "regression_evidence": [
         "tests/test_hunter_reviewer_collector.py::test_an_accepted_requested_reviewer_is_never_a_provider_execution_ack",
         "tests/test_hunter_reviewer_collector.py::test_copilot_is_config_blocked_immediately_when_review_on_push_is_false",
-        "tests/test_hunter_reviewer_collector.py::test_a_codex_quota_denial_is_read_as_unavailable_not_as_an_acknowledgement"
+        "tests/test_hunter_reviewer_collector.py::test_a_codex_quota_denial_is_read_as_unavailable_not_as_an_acknowledgement",
+        "tests/test_hunter_reviewer_collector.py::test_the_ruleset_list_summary_is_not_read_as_the_rule_and_the_detail_is"
       ],
       "lifecycle": "regression-tested",
       "sources": [

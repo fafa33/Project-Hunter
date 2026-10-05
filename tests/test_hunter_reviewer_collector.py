@@ -2650,24 +2650,24 @@ CODEX_REQUEST_AGENT = {
     "github_login": "chatgpt-codex-connector[bot]",
     "evidence_parser": "github-review-ack.v1",
 }
-REVIEW_ON_PUSH_RULESET = [
-    {
-        "id": 23493180,
-        "name": "Automatic Copilot code review",
-        "target": "branch",
-        "enforcement": "active",
-        "rules": [{"type": "copilot_code_review", "parameters": {"review_on_push": True}}],
-    }
-]
-REVIEW_ON_PUSH_OFF_RULESET = [
-    {
-        "id": 23493180,
-        "name": "Automatic Copilot code review",
-        "target": "branch",
-        "enforcement": "active",
-        "rules": [{"type": "copilot_code_review", "parameters": {"review_on_push": False}}],
-    }
-]
+#: The real `GET /rulesets` summary for PR #561's ruleset 23493180: GitHub does NOT include `rules` here.
+RULESET_SUMMARY = {
+    "id": 23493180,
+    "name": "Automatic Copilot code review",
+    "target": "branch",
+    "source_type": "Repository",
+    "source": "fafa33/Project-Hunter",
+    "enforcement": "active",
+}
+#: ...and the detail endpoint, which is where the rule and its parameters actually live.
+RULESET_DETAIL_ON = {
+    **RULESET_SUMMARY,
+    "rules": [{"type": "copilot_code_review", "parameters": {"review_on_push": True}}],
+}
+RULESET_DETAIL_OFF = {
+    **RULESET_SUMMARY,
+    "rules": [{"type": "copilot_code_review", "parameters": {"review_on_push": False}}],
+}
 
 
 def _request_pool(agent):
@@ -2681,16 +2681,19 @@ def _request_pool(agent):
 class _RequestBackend(collector.GitHubBackend):
     """The real GitHub backend with the clock pinned, so nothing is faked except the API facts."""
 
-    def __init__(self, rulesets, reviews=(), comments=(), *, rulesets_readable=True):
+    def __init__(self, rulesets, detail=None, reviews=(), comments=(), *, rulesets_readable=True, detail_readable=True):
         super().__init__("fafa33/Project-Hunter", "token", 561, HEAD, "d" * 64, 123, 1)
         self.clock = 0.0
         self.rulesets = list(rulesets)
+        self.detail = RULESET_DETAIL_ON if detail is None else detail
         self.reviews = list(reviews)
         self.comments = list(comments)
         self.rulesets_readable = rulesets_readable
+        self.detail_readable = detail_readable
         self.posted = []
         self.requested = []
         self.mutating_calls = []
+        self.detail_calls = []
 
     def now(self):
         return self.clock
@@ -2711,6 +2714,11 @@ class _RequestBackend(collector.GitHubBackend):
     def route(self, method, path):
         """Route only the endpoints this loop reads, so every request the code makes is visible."""
 
+        if path.startswith("rulesets/"):
+            self.detail_calls.append((method, path))
+            if not self.detail_readable:
+                raise RuntimeError("ruleset detail unreadable")
+            return self.detail
         if path.startswith("rulesets"):
             if not self.rulesets_readable:
                 raise RuntimeError("rulesets unreadable")
@@ -2728,8 +2736,12 @@ class _RequestBackend(collector.GitHubBackend):
         return {"number": 1}
 
 
-def _backend(monkeypatch, rulesets, reviews=(), comments=(), *, rulesets_readable=True):
-    backend = _RequestBackend(rulesets, reviews, comments, rulesets_readable=rulesets_readable)
+def _backend(
+    monkeypatch, rulesets, detail=None, reviews=(), comments=(), *, rulesets_readable=True, detail_readable=True
+):
+    backend = _RequestBackend(
+        rulesets, detail, reviews, comments, rulesets_readable=rulesets_readable, detail_readable=detail_readable
+    )
     monkeypatch.setattr(
         collector.governance,
         "request_json",
@@ -2741,7 +2753,7 @@ def _backend(monkeypatch, rulesets, reviews=(), comments=(), *, rulesets_readabl
 def test_an_accepted_requested_reviewer_is_never_a_provider_execution_ack(monkeypatch) -> None:
     """The PR #561 failure mode: the request POST was accepted and no provider review ever arrived."""
 
-    backend = _backend(monkeypatch, REVIEW_ON_PUSH_RULESET)
+    backend = _backend(monkeypatch, [RULESET_SUMMARY])
     attempts = collector.collect_attempts(_request_pool(COPILOT_AGENT), HEAD, backend)
     # The request really was sent and accepted, and that is all it proved.
     assert backend.requested == [("POST", "pulls/561/requested_reviewers")]
@@ -2753,7 +2765,7 @@ def test_an_accepted_requested_reviewer_is_never_a_provider_execution_ack(monkey
 def test_copilot_is_config_blocked_immediately_when_review_on_push_is_false(monkeypatch) -> None:
     """Ruleset 23493180 as it actually is on PR #561: the rule exists and does not review on push."""
 
-    backend = _backend(monkeypatch, REVIEW_ON_PUSH_OFF_RULESET)
+    backend = _backend(monkeypatch, [RULESET_SUMMARY], detail=RULESET_DETAIL_OFF)
     attempts = collector.collect_attempts(_request_pool(COPILOT_AGENT), HEAD, backend)
     assert backend.requested == []  # nothing would review the result, so nothing is requested
     assert [attempt["outcome"] for attempt in attempts] == ["unavailable"]
@@ -2762,34 +2774,109 @@ def test_copilot_is_config_blocked_immediately_when_review_on_push_is_false(monk
 
 
 @pytest.mark.parametrize(
-    ("rulesets", "reason"),
+    ("summaries", "detail", "reason"),
     [
-        ([], "NO_ACTIVE_COPILOT_CODE_REVIEW"),
-        ([{**REVIEW_ON_PUSH_RULESET[0], "enforcement": "disabled"}], "NO_ACTIVE_COPILOT_CODE_REVIEW"),
-        ([{**REVIEW_ON_PUSH_RULESET[0], "rules": [{"type": "required_signatures"}]}], "NO_ACTIVE_COPILOT_CODE_REVIEW"),
-        ([{**REVIEW_ON_PUSH_RULESET[0], "rules": "malformed"}], "RULESETS_MALFORMED"),
+        ([], RULESET_DETAIL_ON, "NO_ACTIVE_COPILOT_CODE_REVIEW"),
+        ([{**RULESET_SUMMARY, "enforcement": "disabled"}], RULESET_DETAIL_ON, "NO_ACTIVE_COPILOT_CODE_REVIEW"),
         (
-            [{**REVIEW_ON_PUSH_RULESET[0], "rules": [{"type": "copilot_code_review", "parameters": {}}]}],
+            [{**RULESET_SUMMARY, "id": 77}],
+            {**RULESET_DETAIL_ON, "rules": [{"type": "required_signatures"}]},
+            "NO_ACTIVE_COPILOT_CODE_REVIEW",
+        ),
+        ([{**RULESET_SUMMARY, "id": None}], RULESET_DETAIL_ON, "RULESETS_MALFORMED"),
+        ([{**RULESET_SUMMARY, "id": "23493180"}], RULESET_DETAIL_ON, "RULESETS_MALFORMED"),
+        ([42], RULESET_DETAIL_ON, "RULESETS_UNREADABLE"),
+        ([RULESET_SUMMARY], {**RULESET_DETAIL_ON, "rules": "malformed"}, "RULESETS_MALFORMED"),
+        ([RULESET_SUMMARY], {**RULESET_DETAIL_ON, "rules": [{"type": "copilot_code_review"}]}, "RULESETS_MALFORMED"),
+        (
+            [RULESET_SUMMARY],
+            {**RULESET_DETAIL_ON, "rules": [{"type": "copilot_code_review", "parameters": {}}]},
             "REVIEW_ON_PUSH_DISABLED",
         ),
-        ([{**REVIEW_ON_PUSH_RULESET[0], "rules": [{"type": "copilot_code_review"}]}], "RULESETS_MALFORMED"),
-        ([REVIEW_ON_PUSH_RULESET[0], REVIEW_ON_PUSH_RULESET[0]], "RULESETS_MALFORMED"),
-        ([42], "RULESETS_MALFORMED"),
+        (
+            [RULESET_SUMMARY],
+            {**RULESET_DETAIL_ON, "rules": [{"type": "copilot_code_review", "parameters": {"review_on_push": "true"}}]},
+            "REVIEW_ON_PUSH_DISABLED",
+        ),
+        ([RULESET_SUMMARY, {**RULESET_SUMMARY, "id": 23493181}], RULESET_DETAIL_ON, "RULESETS_MALFORMED"),
+        (
+            [{**RULESET_SUMMARY, "conditions": {"ref_name": {"include": ["~DEFAULT_BRANCH"], "exclude": []}}}],
+            RULESET_DETAIL_OFF,
+            "REVIEW_ON_PUSH_DISABLED",
+        ),
+        (
+            [{**RULESET_SUMMARY, "conditions": {"ref_name": {"include": ["main"], "exclude": ["main"]}}}],
+            RULESET_DETAIL_OFF,
+            "NO_ACTIVE_COPILOT_CODE_REVIEW",
+        ),
+        (
+            [{**RULESET_SUMMARY, "conditions": {"ref_name": {"exclude": []}}}],
+            RULESET_DETAIL_OFF,
+            "NO_ACTIVE_COPILOT_CODE_REVIEW",
+        ),
+        (
+            [{**RULESET_SUMMARY, "conditions": {"ref_name": {"include": ["main"], "exclude": ["main"]}}}],
+            RULESET_DETAIL_ON,
+            "NO_ACTIVE_COPILOT_CODE_REVIEW",
+        ),
+        ([{**RULESET_SUMMARY, "conditions": "malformed"}], RULESET_DETAIL_ON, "NO_ACTIVE_COPILOT_CODE_REVIEW"),
     ],
 )
-def test_a_missing_or_malformed_configuration_fails_closed(monkeypatch, rulesets, reason) -> None:
+def test_a_missing_or_malformed_configuration_fails_closed(monkeypatch, summaries, detail, reason) -> None:
     """Every unusable configuration is the same operational fact, so every one of them blocks immediately."""
 
-    backend = _backend(monkeypatch, rulesets)
+    backend = _backend(monkeypatch, summaries, detail=detail)
+    assert collector.automatic_push_review("fafa33/Project-Hunter", "token") == (False, reason)
     attempts = collector.collect_attempts(_request_pool(COPILOT_AGENT), HEAD, backend)
     assert backend.requested == []
     assert [attempt["outcome"] for attempt in attempts] == ["unavailable"]
     assert attempts[0]["reason_code"] == "PROVIDER_CONFIG_BLOCKED"
+    assert attempts[0]["config_reason"] == reason
     assert reason in collector.AUTOMATIC_PUSH_REVIEW_REASONS
 
 
+def test_the_ruleset_list_summary_is_not_read_as_the_rule_and_the_detail_is(monkeypatch) -> None:
+    """The contract GitHub actually implements: `GET /rulesets` carries no `rules`, the detail does.
+
+    A summary-only ruleset is not malformed and must not be blocked, which is the bug that
+    classified a healthy configuration as RULESETS_MALFORMED.
+    """
+
+    backend = _backend(monkeypatch, [RULESET_SUMMARY], detail=RULESET_DETAIL_ON)
+    assert collector.automatic_push_review("fafa33/Project-Hunter", "token") == (True, "REVIEW_ON_PUSH")
+    assert backend.detail_calls == [("GET", "rulesets/23493180")]
+    # The live false configuration, read from its detail, blocks truthfully.
+    live = _backend(monkeypatch, [RULESET_SUMMARY], detail=RULESET_DETAIL_OFF)
+    assert collector.automatic_push_review("fafa33/Project-Hunter", "token") == (False, "REVIEW_ON_PUSH_DISABLED")
+    assert live.detail_calls == [("GET", "rulesets/23493180")]
+
+
+def test_an_unreadable_ruleset_detail_fails_closed(monkeypatch) -> None:
+    """A candidate ruleset whose detail cannot be read must never be assumed healthy."""
+
+    backend = _backend(monkeypatch, [RULESET_SUMMARY], detail_readable=False)
+    assert collector.automatic_push_review("fafa33/Project-Hunter", "token") == (False, "RULESETS_UNREADABLE")
+    attempts = collector.collect_attempts(_request_pool(COPILOT_AGENT), HEAD, backend)
+    assert attempts[0]["reason_code"] == "PROVIDER_CONFIG_BLOCKED"
+    assert attempts[0]["config_reason"] == "RULESETS_UNREADABLE"
+
+
+def test_applicability_to_the_pull_request_base_branch_is_checked_not_assumed(monkeypatch) -> None:
+    """`review_on_push: true` on a ruleset that excludes the base branch is not an automatic review of this PR."""
+
+    covered = {**RULESET_SUMMARY, "conditions": {"ref_name": {"include": ["refs/heads/main"], "exclude": []}}}
+    assert collector.ruleset_applies_to_ref(covered, "main") is True
+    _backend(monkeypatch, [covered], detail=RULESET_DETAIL_ON)
+    assert collector.automatic_push_review("fafa33/Project-Hunter", "token") == (True, "REVIEW_ON_PUSH")
+    other = {**RULESET_SUMMARY, "conditions": {"ref_name": {"include": ["refs/heads/release"], "exclude": []}}}
+    assert collector.ruleset_applies_to_ref(other, "main") is False
+    assert collector.ruleset_applies_to_ref(RULESET_SUMMARY, "main") is True
+    _backend(monkeypatch, [other], detail=RULESET_DETAIL_ON)
+    assert collector.automatic_push_review("fafa33/Project-Hunter", "token") == (False, "NO_ACTIVE_COPILOT_CODE_REVIEW")
+
+
 def test_an_unreadable_configuration_fails_closed(monkeypatch) -> None:
-    backend = _backend(monkeypatch, REVIEW_ON_PUSH_RULESET, rulesets_readable=False)
+    backend = _backend(monkeypatch, [RULESET_SUMMARY], rulesets_readable=False)
     assert collector.automatic_push_review("fafa33/Project-Hunter", "token") == (False, "RULESETS_UNREADABLE")
     attempts = collector.collect_attempts(_request_pool(COPILOT_AGENT), HEAD, backend)
     assert attempts[0]["reason_code"] == "PROVIDER_CONFIG_BLOCKED"
@@ -2800,7 +2887,7 @@ def test_a_verified_push_review_configuration_and_an_exact_head_review_stay_vali
 
     backend = _backend(
         monkeypatch,
-        REVIEW_ON_PUSH_RULESET,
+        [RULESET_SUMMARY],
         reviews=[
             {
                 "id": 900,
@@ -2821,16 +2908,16 @@ def test_a_verified_push_review_configuration_and_an_exact_head_review_stay_vali
 def test_the_configuration_gate_never_mutates_a_ruleset(monkeypatch) -> None:
     """The gate is a reader. Enabling automatic review is the owner's action, outside this repository."""
 
-    backend = _backend(monkeypatch, REVIEW_ON_PUSH_OFF_RULESET)
+    backend = _backend(monkeypatch, [RULESET_SUMMARY], detail=RULESET_DETAIL_OFF)
     collector.collect_attempts(_request_pool(COPILOT_AGENT), HEAD, backend)
     assert [call for call in backend.mutating_calls if "ruleset" in call[1]] == []
-    assert backend.route("GET", "rulesets") == REVIEW_ON_PUSH_OFF_RULESET  # the ruleset is untouched
+    assert backend.route("GET", "rulesets") == [RULESET_SUMMARY]  # the ruleset is untouched
 
 
 def test_a_codex_request_with_no_provider_activity_is_never_an_ack(monkeypatch) -> None:
     """No proven public automatic re-review API exists for Codex, so a request alone cannot acknowledge."""
 
-    backend = _backend(monkeypatch, REVIEW_ON_PUSH_RULESET, comments=[{"user": {"login": "github-actions[bot]"}}])
+    backend = _backend(monkeypatch, [RULESET_SUMMARY], comments=[{"user": {"login": "github-actions[bot]"}}])
     trigger = {"id": 42, "created_at": "2026-10-04T12:00:00Z", "collector_run_id": 123}
     assert backend.acknowledged(dict(CODEX_REQUEST_AGENT), trigger) is False
 
@@ -2840,7 +2927,7 @@ def test_a_codex_comment_is_not_a_canonical_workaround(monkeypatch) -> None:
 
     backend = _backend(
         monkeypatch,
-        REVIEW_ON_PUSH_RULESET,
+        [RULESET_SUMMARY],
         comments=[{"user": {"login": "chatgpt-codex-connector[bot]"}, "created_at": "2026-10-04T12:01:00Z"}],
     )
     base_agent = dict(next(iter(POOL["agents"])))

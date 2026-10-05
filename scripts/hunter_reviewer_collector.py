@@ -53,6 +53,8 @@ TRIGGER_SCHEMES = frozenset({"api", "github-pr-comment", "github-review-request"
 #: review-request reviewers and produced no provider review at all, because ruleset
 #: 23493180 carries ``review_on_push: false``.
 COPILOT_CODE_REVIEW_RULE = "copilot_code_review"
+#: The ref an automatic push review must cover: the pull request's base branch.
+AUTOMATIC_PUSH_REVIEW_REF = "main"
 #: A request that GitHub accepts proves the request was recorded, never that any
 #: provider received, started or will ever answer it.
 AUTOMATIC_PUSH_REVIEW_REASONS = frozenset(
@@ -74,28 +76,96 @@ def depends_on_automatic_push_review(agent: Mapping[str, Any]) -> bool:
     return "copilot" in str(method_target(agent)).lower()
 
 
-def automatic_push_review(repository: str, token: str) -> tuple[bool, str]:
+def _covered_refs(patterns: list[Any], ref: str) -> set[str]:
+    """Ref names a ruleset pattern list covers.
+
+    GitHub accepts a base branch as ``main``, ``refs/heads/main`` or ``~DEFAULT_BRANCH``, so
+    ``main`` is treated as covered by any of those for this repository rather than by one
+    spelling only, which would report a healthy ruleset as inapplicable.
+    """
+
+    if "~DEFAULT_BRANCH" in patterns:
+        patterns = [*patterns, ref]
+    return {pattern for pattern in patterns if isinstance(pattern, str)} | {
+        pattern[len("refs/heads/") :]
+        for pattern in patterns
+        if isinstance(pattern, str) and pattern.startswith("refs/heads/")
+    }
+
+
+def ruleset_applies_to_ref(ruleset: Mapping[str, Any], ref: str) -> bool:
+    """Whether this ruleset actually covers ``ref``.
+
+    Applicability is never assumed. A repository ruleset may carry
+    ``conditions.ref_name`` include/exclude lists, so a rule that never names the pull
+    request's base branch is not applicable to it. Absent conditions mean the ruleset
+    covers the whole repository, which is the one case where inclusion is not something
+    that has to be proven.
+    """
+
+    conditions = ruleset.get("conditions")
+    if conditions is None:
+        return True
+    if not isinstance(conditions, Mapping):
+        return False
+    ref_name = conditions.get("ref_name")
+    if ref_name is None:
+        return True
+    if not isinstance(ref_name, Mapping):
+        return False
+    include, exclude = ref_name.get("include"), ref_name.get("exclude")
+    if include is None and exclude is None:
+        return True
+    if not isinstance(include, list) or not isinstance(exclude, list):
+        return False
+    if ref in _covered_refs(exclude, ref):
+        return False
+    # An exclude-only conditions block proves nothing about inclusion, so it does not apply.
+    return bool(include) and ref in _covered_refs(include, ref)
+
+
+def automatic_push_review(repository: str, token: str, *, ref: str = AUTOMATIC_PUSH_REVIEW_REF) -> tuple[bool, str]:
     """Read-only: will GitHub actually run the automatic Copilot review on the next push?
 
-    Reads the repository rulesets and reports whether exactly one *applicable, active*
-    ``copilot_code_review`` rule exists and its ``review_on_push`` parameter is exactly
-    ``true``. Missing, disabled, unreadable and malformed configurations all report
-    ``False`` with their own reason, because every one of them means the same thing
-    operationally: no automatic review will arrive. Nothing is ever mutated here; a
-    repository owner changes its rulesets, not this collector.
+    ``GET /repos/{owner}/{repo}/rulesets`` is a *summary* list: GitHub does not include each
+    ruleset's ``rules`` there, so a rule read from the list is not merely incomplete, it is absent.
+    This therefore uses the list only to identify candidate applicable active ruleset ids and reads
+    every candidate's own detail endpoint, which is where ``copilot_code_review.parameters`` really
+    lives. Reporting healthy rules as malformed would disable a reviewer that works.
+
+    ``review_on_push: true`` on exactly one applicable active candidate is required. Missing,
+    disabled, unreadable and malformed configurations all report ``False`` with their own reason,
+    because every one of them means the same thing operationally: no automatic review will arrive.
+    Nothing is ever mutated here; a repository owner changes its rulesets, not this collector.
     """
 
     try:
         rulesets = _pages(repository, token, "rulesets")
     except Exception:
         return False, "RULESETS_UNREADABLE"
-    applicable: list[Any] = []
+    candidates: list[int] = []
     for ruleset in rulesets:
         if not isinstance(ruleset, Mapping):
             return False, "RULESETS_MALFORMED"
         if ruleset.get("enforcement") != "active" or ruleset.get("target") not in ("branch", "pull_request"):
             continue
-        rules = ruleset.get("rules")
+        if not ruleset_applies_to_ref(ruleset, ref):
+            continue
+        identifier = ruleset.get("id")
+        if type(identifier) is not int or identifier < 1:
+            return False, "RULESETS_MALFORMED"
+        candidates.append(identifier)
+    if not candidates:
+        return False, "NO_ACTIVE_COPILOT_CODE_REVIEW"
+    applicable: list[Any] = []
+    for identifier in candidates:
+        try:
+            detail = governance.request_json(repository, token, "GET", f"rulesets/{identifier}")
+        except Exception:
+            return False, "RULESETS_UNREADABLE"
+        if not isinstance(detail, Mapping):
+            return False, "RULESETS_MALFORMED"
+        rules = detail.get("rules")
         if not isinstance(rules, list):
             return False, "RULESETS_MALFORMED"
         for rule in rules:
@@ -110,8 +180,7 @@ def automatic_push_review(repository: str, token: str) -> tuple[bool, str]:
     parameters = applicable[0].get("parameters")
     if not isinstance(parameters, Mapping):
         return False, "RULESETS_MALFORMED"
-    flag = parameters.get("review_on_push")
-    if flag is not True:
+    if parameters.get("review_on_push") is not True:
         return False, "REVIEW_ON_PUSH_DISABLED"
     return True, "REVIEW_ON_PUSH"
 
@@ -546,6 +615,7 @@ def collect_attempts(pool: dict[str, Any], head: str, backend: Backend) -> list[
                             }[state]
                         )
                     ),
+                    "config_reason": trigger.get("config_reason"),
                     **({k: trigger[k] for k in ("provider", "response_digest", "head_sha") if k in trigger}),
                 }
             )
