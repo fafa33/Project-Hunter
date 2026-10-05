@@ -542,7 +542,9 @@ def _authorize_dependencies(configuration: control.Configuration, github: contro
     from hunter.automation.issue_agent_execution import IssueAgentAuthorizationVerifier
     from hunter.evidence_intelligence import source_handling_provenance
     from hunter.evidence_intelligence.smart_prompt_routing import PromptAutomationVerifier
-    from hunter.evidence_intelligence.source_handling_persistence import SourceHandlingOperatorRoot
+    from hunter.evidence_intelligence.source_handling_persistence import (
+        SourceHandlingOperatorRoot,
+    )
 
     def provision(signed: Any, database: Path) -> object:
         os.environ[source_handling_provenance.EVIDENCE_DATABASE_ENV] = str(database)
@@ -619,7 +621,11 @@ def cmd_source_handling_bootstrap(configuration: control.Configuration, _argumen
     import bootstrap_source_handling_authority as bootstrap
 
     from hunter.automation import issue_agent_source_handling_store as sh
-    from hunter.evidence_intelligence.source_handling_persistence import SourceHandlingOperatorRoot
+    from hunter.evidence_intelligence.source_handling_persistence import (
+        SourceHandlingOperatorRoot,
+        SqliteSourceHandlingAuthorityReadView,
+    )
+    from hunter.evidence_intelligence.source_handling_provenance import production_provenance_resolver
 
     _export_public_trust(configuration)
     github = _github(configuration)
@@ -651,6 +657,15 @@ def cmd_source_handling_bootstrap(configuration: control.Configuration, _argumen
         outcome, transactions = sh.capture(database, lambda: bootstrap.bootstrap_authority(str(database)))
         if outcome.get("status") not in {"bootstrapped", "already-provisioned"}:
             raise LifecycleRefused("SOURCE_HANDLING_BLOCKED", "canonical bootstrap did not reach a complete state")
+        if (
+            outcome.get(bootstrap.VERIFICATION_KEY_ENV) != configuration.source_handling.verification_key
+            or outcome.get(bootstrap.VERIFICATION_KEY_SHA256_ENV)
+            != configuration.source_handling.verification_key_sha256
+            or outcome.get(bootstrap.GENESIS_RULE_SHA256_ENV) != configuration.source_handling.genesis_rule_sha256
+        ):
+            raise LifecycleRefused(
+                "SOURCE_HANDLING_BLOCKED", "bootstrap signing key or genesis does not match pinned trust roots"
+            )
         writer = _writer(
             "source-handling-bootstrap", "source-handling-bootstrap", control.SOURCE_HANDLING_BOOTSTRAP_WORKFLOW
         )
@@ -678,6 +693,13 @@ def cmd_source_handling_bootstrap(configuration: control.Configuration, _argumen
         check, remaining = sh.capture(replay, lambda: bootstrap.bootstrap_authority(str(replay)))
         if check.get("status") != "already-provisioned" or remaining:
             raise LifecycleRefused("SOURCE_HANDLING_BLOCKED", "anchored bootstrap is valid but incomplete")
+        # Force the canonical ADR 0036 read path to authenticate root/history signatures before success.
+        SqliteSourceHandlingAuthorityReadView(
+            replay,
+            verification_public_key=bytes.fromhex(configuration.source_handling.verification_key),
+            operator_root=operator_root,
+            provenance_resolver=production_provenance_resolver,
+        )
         if verified.head != position.head or verified.snapshot_sha256 != position.snapshot_sha256:
             raise LifecycleRefused("SOURCE_HANDLING_BLOCKED", "bootstrap replay does not match the published ledger")
     print(f"source-handling bootstrap: complete and verified at {position.head}")
