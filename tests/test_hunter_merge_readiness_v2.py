@@ -590,6 +590,7 @@ def test_owner_merge_guard_accepts_only_clean_identical_merge_ready_head(monkeyp
     )
     monkeypatch.setattr(core.subprocess, "run", lambda *args, **kwargs: Result(next(outputs)))
     monkeypatch.setattr(core, "request_json", lambda *_args, **_kwargs: {"state": "open", "head": {"sha": head}})
+    monkeypatch.setattr(core.transport, "request_rest_json", lambda **_kwargs: {"state": "open", "head": {"sha": head}})
     monkeypatch.setattr(
         core, "decide_completion", lambda _number: core.CompletionVerdict(True, "COMPLETION_ACCEPTED", "ready")
     )

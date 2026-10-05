@@ -689,15 +689,24 @@ def owner_merge_guard(pr_number: int) -> CompletionVerdict:
         return CompletionVerdict(False, "HEAD_DIVERGENCE", f"local/remote head evidence unavailable: {exc}")
 
     try:
-        pr_raw = subprocess.run(
-            ("gh", "api", f"repos/{REPO}/pulls/{pr_number}"),
+        auth_token = subprocess.run(
+            ("gh", "auth", "token"),
             cwd=ROOT,
             check=True,
             text=True,
             capture_output=True,
-        ).stdout
-        pr = json.loads(pr_raw)
-    except (subprocess.CalledProcessError, json.JSONDecodeError) as exc:
+        ).stdout.strip()
+        if not auth_token:
+            raise subprocess.CalledProcessError(1, ("gh", "auth", "token"))
+        pr = transport.request_rest_json(
+            url=f"https://api.github.com/repos/{REPO}/pulls/{pr_number:d}",
+            method="GET",
+            headers={},
+            data=None,
+            token=auth_token,
+            what="GET owner merge guard PR head",
+        )
+    except (subprocess.CalledProcessError, transport.GitHubRequestError) as exc:
         return CompletionVerdict(
             False, "HEAD_DIVERGENCE", f"PR head evidence unavailable through authenticated gh: {exc}"
         )
