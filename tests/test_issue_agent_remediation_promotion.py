@@ -7,6 +7,8 @@ that stop a partially computed promotion from being written into the governed re
 
 from __future__ import annotations
 
+import base64
+import hashlib
 import json
 import os
 import subprocess
@@ -40,6 +42,15 @@ REGISTRY: dict[str, Any] = {
     ],
 }
 DISPOSITIONS: dict[str, Any] = {"version": 1, "purpose": "canonical dispositions", "findings": []}
+
+
+def _file(path: str, content: bytes) -> dict[str, Any]:
+    return {
+        "path": path,
+        "content_b64": base64.b64encode(content).decode("ascii"),
+        "sha256": hashlib.sha256(content).hexdigest(),
+        "mode": "100644",
+    }
 
 
 def _canonical(document: object) -> str:
@@ -274,6 +285,132 @@ def test_a_registry_without_the_expected_shape_is_refused(repo: tuple[Path, str]
 
 
 # --- the provenance binding --------------------------------------------------------------------------------
+
+
+def test_the_result_contract_refuses_a_proposal_for_another_findings_authorization(
+    repo: tuple[Path, str],
+) -> None:
+    """ADR 0039 L4/L6: a remediation may only classify a finding this authorization actually remediates."""
+
+    from hunter.automation import issue_agent_replacement_executor as core
+    from hunter.task_scope import TaskScopeContract
+
+    scope = TaskScopeContract(
+        task_id="t", branch_pattern="issue-*", base_sha=repo[1], allowed_paths=("src/hunter/", "tests/")
+    )
+    document = json.dumps(
+        {
+            "schema_version": core.RESULT_SCHEMA_VERSION,
+            "authorization_id": "auth",
+            "base_sha": repo[1],
+            "branch": "issue-1-aaaaaaaaaaaaaaaa",
+            "files": [_file("tests/test_guard.py", b"def test_the_guard_holds():\n    pass\n")],
+            "remediation": {
+                "finding_id": FINDING,
+                "disposition": {"family_id": "DFF-001"},
+                "regression_tests": ["tests/test_guard.py::test_the_guard_holds"],
+            },
+        }
+    ).encode()
+    bound = core.ResultBinding("auth", "fafa33/Project-Hunter", "issue-1-aaaaaaaaaaaaaaaa", repo[1], scope, (FINDING,))
+    assert core.validate_bound_result(document, binding=bound, rehearsal=False).remediation is not None
+    with pytest.raises(core.ReplacementExecutorError, match="outside this authorization"):
+        core.validate_bound_result(
+            document,
+            binding=core.ResultBinding(
+                "auth", "fafa33/Project-Hunter", "issue-1-aaaaaaaaaaaaaaaa", repo[1], scope, ("0" * 64,)
+            ),
+            rehearsal=False,
+        )
+    # And an Issue-path authorization may never carry a proposal at all.
+    with pytest.raises(core.ReplacementExecutorError, match="schema mismatch"):
+        core.validate_bound_result(
+            document,
+            binding=core.ResultBinding("auth", "fafa33/Project-Hunter", "issue-1-aaaaaaaaaaaaaaaa", repo[1], scope, ()),
+            rehearsal=False,
+        )
+
+
+def test_the_model_may_not_write_the_promotion_files_even_when_the_scope_permits_them(
+    repo: tuple[Path, str],
+) -> None:
+    """ADR 0039 L6 (RD-3): the refusal is its own defence, not a side effect of the TaskScope prohibition.
+
+    A remediation scope that *allowed* the governed files would otherwise let the model write them, so the
+    contract refuses the promotion paths independently of whatever the scope says.
+    """
+
+    from hunter.automation import issue_agent_replacement_executor as core
+    from hunter.task_scope import TaskScopeContract
+
+    scope = TaskScopeContract(
+        task_id="t", branch_pattern="issue-*", base_sha=repo[1], allowed_paths=("src/hunter/", "docs/")
+    )
+    document = json.dumps(
+        {
+            "schema_version": core.RESULT_SCHEMA_VERSION,
+            "authorization_id": "auth",
+            "base_sha": repo[1],
+            "branch": "issue-1-aaaaaaaaaaaaaaaa",
+            "files": [_file("docs/DEFECT_REGISTRY.json", b'{"version": 1}\n')],
+        }
+    ).encode()
+    with pytest.raises(core.ReplacementExecutorError, match="may not write the canonical promotion file"):
+        core.validate_bound_result(
+            document,
+            binding=core.ResultBinding(
+                "auth", "fafa33/Project-Hunter", "issue-1-aaaaaaaaaaaaaaaa", repo[1], scope, (FINDING,)
+            ),
+            rehearsal=False,
+        )
+    # The Issue path is unaffected: the same file is ordinary there.
+    assert (
+        core.validate_bound_result(
+            document,
+            binding=core.ResultBinding("auth", "fafa33/Project-Hunter", "issue-1-aaaaaaaaaaaaaaaa", repo[1], scope, ()),
+            rehearsal=False,
+        )
+        .files[0]
+        .path
+        == "docs/DEFECT_REGISTRY.json"
+    )
+
+
+def test_a_fast_forward_lease_must_be_the_exact_base(repo: tuple[Path, str]) -> None:
+    """ADR 0039 L7 (RD-5): the lease is the remediated head, so a lease at anything else never pushes."""
+
+    from hunter.automation import issue_agent_replacement_executor as core
+    from hunter.task_scope import TaskScopeContract
+
+    scope = TaskScopeContract(task_id="t", branch_pattern="issue-*", base_sha=repo[1], allowed_paths=("src/hunter/",))
+    validated = core.validate_bound_result(
+        json.dumps(
+            {
+                "schema_version": core.RESULT_SCHEMA_VERSION,
+                "authorization_id": "auth",
+                "base_sha": repo[1],
+                "branch": "issue-1-aaaaaaaaaaaaaaaa",
+                "files": [_file("src/hunter/guard.py", b"VALUE = 2\n")],
+            }
+        ).encode(),
+        binding=core.ResultBinding("auth", "fafa33/Project-Hunter", "issue-1-aaaaaaaaaaaaaaaa", repo[1], scope, ()),
+        rehearsal=False,
+    )
+    identity = core.CommitIdentity("s", "s@s", "2026-10-04T12:00:00Z", "lease guard")
+    arguments = {
+        "validated": validated,
+        "identity": identity,
+        "expected_unsigned_commit_sha": core.build_unsigned_candidate_commit(
+            repo[0], validated=validated, identity=identity
+        ),
+        "expected_tree_sha": core.candidate_tree(repo[0], validated.base_sha),
+        "signing_key": "",
+        "push_url": str(repo[0]),
+    }
+    with pytest.raises(core.ReplacementExecutorError, match="exact lease commit"):
+        core.publish_bound_fast_forward(repo[0], lease_sha="short", **arguments)
+    with pytest.raises(core.ReplacementExecutorError, match="exact base"):
+        core.publish_bound_fast_forward(repo[0], lease_sha="9" * 40, **arguments)
 
 
 def test_promote_refuses_a_proposal_that_names_another_finding(repo: tuple[Path, str]) -> None:

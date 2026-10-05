@@ -1,6 +1,6 @@
 # Issue #560: reviewer → knowledge → prevention → remediation loop (reconciliation)
 
-**Status: reconciliation (2026-10-04); owner decisions RD-1…RD-6 taken the same day and recorded as [ADR 0039](ADR/0039-review-knowledge-remediation-loop.md) (accepted).** Decided: RD-1 hybrid deterministic-first with RED→GREEN proof; RD-2 anchored knowledge ledger; RD-3 promotion inside the remediation commit; RD-4/RD-5 Hunter-agent PRs only with fast-forward-from-bound-head publication; RD-6 reply and resolve only after exact-head proof. It records the owner requirement
+**Status: reconciliation (2026-10-04); owner decisions RD-1…RD-6 taken the same day and recorded as [ADR 0039](ADR/0039-review-knowledge-remediation-loop.md) (accepted). S5b-1…S5b-5 implemented; the §5 acceptance simulation passes, so S5 is complete and the loop is usable. S6 has not started and every lifecycle job still refuses `MISSING_CONFIGURATION`.** Verification is *focused*: the S5b suite (91 tests) and 22/22 mutants pass with Black, Ruff, mypy and the Defect Prevention Guard green. The full-repository `hunter_pr_preflight --mode normal` was stopped by the owner during the repository suite and is **not** claimed as a pass; the hosted exact-head Pre-PR Preflight remains the merge-readiness authority for this branch. Decided: RD-1 hybrid deterministic-first with RED→GREEN proof; RD-2 anchored knowledge ledger; RD-3 promotion inside the remediation commit; RD-4/RD-5 Hunter-agent PRs only with fast-forward-from-bound-head publication; RD-6 reply and resolve only after exact-head proof. It records the owner requirement
 of 2026-10-04 against the canonical authorities that already exist, names the smallest missing pieces, and
 lists the owner decisions (RD-1…RD-6) that must be taken before any of those pieces is implemented. The
 decisions are needed because several pieces require an authority that ADR 0037, ADR 0038, `CODE_WRITE_POLICY`
@@ -81,9 +81,9 @@ S5 is **not complete** until S5b is proven. S6 stays owner-gated.
 | **S5a** (done) | lifecycle, reconcile, candidate-PR and rehearsal workflows; AT-41/42/46/47 | — |
 | **S5b-1** | M8: harden the learning workflow; fingerprint and finding-record schema on the existing ledger, idempotent and restart-safe | none (local) |
 | **S5b-2** | M1 classifier and M2 knowledge store; DPM overlay | RD-1, RD-2 |
-| **S5b-3** | M4/M5 finding-triggered bounded remediation through the existing S3–S5 lifecycle | RD-4, RD-5 |
-| **S5b-4** | M3/M7 promotion and recurrence feedback; M6 exact-head thread resolution | RD-3, RD-6 |
-| **S5b-5** | §5 acceptance simulation; mutation proof | all |
+| **S5b-3** (done) | M4/M5 finding-triggered bounded remediation through the existing S3–S5 lifecycle, fast-forwarded from the exact bound head | RD-4, RD-5 |
+| **S5b-4** (done) | M3/M7 promotion and recurrence feedback; M6 exact-head thread resolution | RD-3, RD-6 |
+| **S5b-5** (done) | §5 acceptance simulation; mutation proof | all |
 
 ## 5. Acceptance simulation (binding)
 

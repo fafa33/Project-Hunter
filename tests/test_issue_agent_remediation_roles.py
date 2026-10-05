@@ -954,6 +954,31 @@ def test_a_result_that_does_not_fix_the_failure_is_never_a_proof(repos: dict[str
         validate(repos, ledger, sealed, port=roles.RemediationPort(promote=local_promotion))
 
 
+def test_a_regression_that_already_passes_is_never_a_red_proof(repos: dict[str, Any], unprivileged: Path) -> None:
+    """The RED half of ADR 0039 L3.2 observed directly: a test already green at the head proves nothing."""
+
+    ledger, scope, sealed = proven_ledger(
+        repos, files=candidate_files(tests=PASSING_TEST), proposal={**PROPOSAL, "regression_tests": [TEST_ID]}
+    )
+    validated = _validated(ledger, sealed, scope)
+    with pytest.raises(core.ReplacementExecutorError, match="already passed on the reviewed head"):
+        core.red_green_regression_proof(
+            repos["trusted"], validated=validated, tests=[TEST_ID], isolation_user="hunter-untrusted"
+        )
+
+
+def test_a_fix_that_leaves_the_regression_red_is_never_a_green_pass(repos: dict[str, Any], unprivileged: Path) -> None:
+    """The GREEN half of ADR 0039 L3.2 observed directly: a result that does not fix the failure fails."""
+
+    wrong = SOURCE_FIXED.replace("ValueError", "TypeError")
+    ledger, scope, sealed = proven_ledger(repos, files=candidate_files(source=wrong), proposal=PROPOSAL)
+    validated = _validated(ledger, sealed, scope)
+    with pytest.raises(core.ReplacementExecutorError, match="does not pass on the full result"):
+        core.red_green_regression_proof(
+            repos["trusted"], validated=validated, tests=[TEST_ID], isolation_user="hunter-untrusted"
+        )
+
+
 def test_a_remediation_result_may_not_write_the_canonical_promotion_files(
     repos: dict[str, Any], unprivileged: Path
 ) -> None:
@@ -987,12 +1012,13 @@ def test_a_remediation_validation_without_its_trusted_ports_fails_closed(
 # --- the L6 promotion and the exact-lease fast-forward (ADR 0039 L6/L7) ------------------------------------
 
 
+#: A regression that is already green at the reviewed head, so RED can never hold and no classification is earned.
 PASSING_TEST = (
     "from src.hunter import guard\n"
     "\n"
     "\n"
     "def test_guard_rejects_the_second_call():\n"
-    "    assert guard.guard({'a'}, 'a') is False\n"
+    "    assert guard.guard(set(), 'a') is False\n"
 )
 
 

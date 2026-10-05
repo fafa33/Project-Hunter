@@ -185,5 +185,29 @@ Everything stays inert until S6 (`MISSING_CONFIGURATION`).
 
 ## Implementation Status
 
-S5b-1/2 implemented (knowledge ledger, idempotent ingestion with deterministic classification, DPM overlay into the authorize compile; `issue_agent_knowledge`, `knowledge-ingest`, `hunter-issue-agent-knowledge.yml`). S5b-3…S5b-5 pending. S5 is complete only when the reconciliation §5
-acceptance simulation passes.
+**S5b-1…S5b-5 implemented (2026-10-04). S5 is complete: the §5 acceptance simulation passes.** S6 has not
+started; `config/issue_agent_trust_roots.json` remains unprovisioned, so every lifecycle job still refuses
+`MISSING_CONFIGURATION` before it touches a secret, a ledger or the network.
+
+| Slice | Delivered |
+|---|---|
+| S5b-1/2 | `issue_agent_knowledge` (insert-only anchored ledger), idempotent ingestion with deterministic first classification, the DPM overlay, `hunter-issue-agent-knowledge.yml` |
+| S5b-3 | the executor base is the exact bound PR head (`PR_HEAD_MOVED` otherwise); an optional bounded defect-family proposal in the result contract, with the canonical registry files refused; `red_green_regression_proof` (RED over the reviewed head plus the result's test files only, GREEN over the full result, both as the isolation uid with no credential); `remediation.promote`/`promotion_delta` as one deterministic deriver used by validator and publisher; `publish_bound_fast_forward` under `--force-with-lease=<ref>:<bound head>`; `CODE_WRITE_POLICY.issue_agent_publisher.operation.update = "fast-forward-from-bound-head"`; `control.eligible_remediation` + `dispatch_remediation` through the unchanged trigger workflow |
+| S5b-4 | the receipt's proof group carried into the anchored Issue ledger; `proof_writes` (permanent classification), `proven_writes` (`finding_proven` + `recurrence` at an exactly preflighted head), `resolution_writes` (`thread_resolved` only after the proof and the reply); `control.review_threads`, `exact_head_proof`, `resolve_thread` (one reply, one `resolveReviewThread`, nothing else) |
+| S5b-5 | the §5 acceptance simulation: one known-family and one genuinely new finding, each delivered twice, with a restart at every transition; fail-closed on a malformed, ambiguous, moved-head, preflight-less and recurring claim; prevention knowledge in a later task's DPM context before its model runs; 22 targeted mutants, all observed |
+
+**Verification actually performed.** The S5b suite is proven: `test_issue_agent_remediation_{roles,promotion,reconcile,resolution,acceptance}`
+— 91 passed — plus 22/22 mutants killed, and Black, Ruff, mypy and the Defect Prevention Guard green. The
+full-repository `hunter_pr_preflight --mode normal` run was **stopped by the owner** partway through the whole
+repository suite; it is **not** a pass and is not claimed as one. The hosted `Hunter / Pre-PR Preflight` on this
+branch is still the authority for the exact head, and merge readiness continues to require it.
+
+One governance consequence is recorded rather than hidden: the ADR 0039 L7 resolve job holds
+`pull-requests: write`, which makes the reconcile workflow merge-gating authority, so the Issue-agent authority
+closure is now part of the connector write-ingress root-of-trust floor. That narrows what that capability may
+modify; it grants nothing.
+
+A pre-existing, unrelated condition is recorded for the owner: `hunter_governance_preflight.py self-check` fails
+because `docs/DEVELOPMENT_GOVERNANCE.md`, `docs/AI_REVIEW_PROTOCOL.md` and `.github/pull_request_template.md`
+lack their canonical sentinels at this branch's head. None of those files is touched by ADR 0039, and the
+pre-push safety lane does not run that command.

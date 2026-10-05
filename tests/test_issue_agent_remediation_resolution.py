@@ -62,6 +62,7 @@ class World:
         self.resolved: list[str] = []
         self.graphql_fails = False
         self.post_fails = False
+        self.resolve_reports_resolved = True
 
     def thread(
         self,
@@ -110,7 +111,12 @@ class World:
                 return control.Read("unknown")
             self.resolved.append(str(variables["threadId"]))
             return control.Read(
-                "ok", {"resolveReviewThread": {"thread": {"id": variables["threadId"], "isResolved": True}}}
+                "ok",
+                {
+                    "resolveReviewThread": {
+                        "thread": {"id": variables["threadId"], "isResolved": self.resolve_reports_resolved}
+                    }
+                },
             )
         return control.Read(
             "ok", {"repository": {"pullRequest": {"headRefOid": self.head, "reviewThreads": {"nodes": self.threads}}}}
@@ -486,6 +492,42 @@ def test_a_repeated_pass_writes_no_second_proof(store: state.GitLedgerStore) -> 
     )
 
 
+def test_a_proof_is_impossible_without_a_proven_classification(store: state.GitLedgerStore) -> None:
+    """ADR 0039 L2/L3.2: a fixed-but-unclassified finding is a fix, not permanent knowledge."""
+
+    view = rr.ingested(store, {**rr.OBSERVATION, "reviewed_head_sha": HEAD, "path": GUARD})
+    identity = next(iter(view.findings))
+    assert view.findings[identity].classifications == {}  # unclassified: no tag, no matching fingerprint
+    assert (
+        remediation.proven_writes(
+            view,
+            identity,
+            authorization_id=REMEDIATION_AUTHORIZATION,
+            remediated_head_sha=REMEDIATED,
+            receipt_sha256=RECEIPT,
+            preflight_run_id=555,
+        )
+        == []
+    )
+    assert remediation.proven_family(view, identity) is None
+    assert view.findings[identity].proven is None
+
+
+def test_a_proof_for_an_uningested_finding_is_impossible(store: state.GitLedgerStore) -> None:
+    _identity, view = proven_view(store)
+    assert (
+        remediation.proven_writes(
+            view,
+            "0" * 64,
+            authorization_id=REMEDIATION_AUTHORIZATION,
+            remediated_head_sha=REMEDIATED,
+            receipt_sha256=RECEIPT,
+            preflight_run_id=555,
+        )
+        == []
+    )
+
+
 def test_a_resolution_is_impossible_before_the_proof(store: state.GitLedgerStore) -> None:
     identity, view = proven_view(store)
     assert remediation.resolution_writes(view, identity, remediated_head_sha=REMEDIATED, reply_comment_id=9001) == []
@@ -576,6 +618,17 @@ def test_the_evidence_reply_carries_only_identities_and_digests() -> None:
     body = remediation.evidence_reply(FINDING, remediated_head_sha=REMEDIATED, family=FAMILY, tests=[TEST])
     assert FINDING in body and REMEDIATED in body and FAMILY in body and TEST in body
     assert "reviewed head" in body and "ADR 0039" in body
+
+
+def test_a_definitively_unresolved_thread_is_not_a_resolution(world: World, store: state.GitLedgerStore) -> None:
+    """GitHub answering "not resolved" is a definitive negative, and the finding must stay open."""
+
+    identity, view = proven_view(store)
+    proof = proof_for(world, view, identity)
+    assert proof is not None
+    world.resolve_reports_resolved = False
+    assert control.resolve_thread(world, ct.CONFIG, proof, "evidence") is None
+    assert world.replies and world.resolved == [THREAD_NODE]
 
 
 def test_a_refused_resolve_is_not_a_resolution(world: World, store: state.GitLedgerStore) -> None:
