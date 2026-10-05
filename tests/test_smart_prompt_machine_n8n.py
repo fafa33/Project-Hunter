@@ -31,6 +31,13 @@ from hunter.evidence_intelligence.smart_prompt_transport import (
     PromptAutomationTransportError,
 )
 
+
+@pytest.fixture(autouse=True)
+def _retained_internals(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Exercise the retained-until-S8 internals; the production entry refuses (AT-46, test_retired_issue_agent_authority)."""
+    monkeypatch.setattr(n8n_module, "refuse_retired_authority", lambda _name: None)
+
+
 _SIGNING_KEY_ENV = "HUNTER_PROMPT_AUTOMATION_SIGNING_KEY"
 _SIGNING_KEY_HEX = "11" * 32
 _VERIFYING_KEY_ENV = "HUNTER_PROMPT_AUTOMATION_VERIFYING_KEY"

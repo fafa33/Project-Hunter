@@ -8,6 +8,7 @@ Issue/task prose when deciding which defect families apply.
 from __future__ import annotations
 
 import json
+from collections.abc import Mapping, Sequence
 from pathlib import Path
 from typing import Any
 
@@ -148,8 +149,22 @@ def _lifecycle_rank(lifecycle: str) -> int:
 class EngineeringContextAuthority:
     """Compile machine-owned prevention context for a governed engineering route."""
 
-    def __init__(self, *, registry_path: Path = DEFAULT_DEFECT_REGISTRY_PATH) -> None:
+    def __init__(
+        self,
+        *,
+        registry_path: Path = DEFAULT_DEFECT_REGISTRY_PATH,
+        knowledge_overlay: Sequence[Mapping[str, Any]] = (),
+    ) -> None:
+        """``knowledge_overlay``: registry-shaped entries from the verified anchored knowledge ledger (ADR 0039 L2).
+
+        They pass the same structural validation, path applicability and bounded selection as registry
+        families, so prevention knowledge from an unmerged PR reaches a task before its model runs.
+        """
         self._registry_path = Path(registry_path)
+        self._overlay = tuple(dict(entry) for entry in knowledge_overlay)
+        for entry in self._overlay:
+            if not str(entry.get("id", "")).startswith(("KC-", "KF-")):
+                raise EngineeringContextAuthorityError("knowledge overlay entries must use the KC-/KF- namespaces")
 
     def _families(self) -> list[dict[str, Any]]:
         try:
@@ -160,7 +175,7 @@ class EngineeringContextAuthority:
             raise EngineeringContextAuthorityError("defect registry families must be a list")
         families: list[dict[str, Any]] = []
         seen: set[str] = set()
-        for raw in payload["families"]:
+        for raw in [*payload["families"], *self._overlay]:
             if not isinstance(raw, dict):
                 raise EngineeringContextAuthorityError("defect family must be an object")
             identifier = _required_text("defect family id", raw.get("id"))

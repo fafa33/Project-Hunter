@@ -459,8 +459,8 @@
       "source": "PR #524 Codex P1, 2026-09-26",
       "classification": "systemic",
       "guard_boundary": "credential-isolated replacement publication",
-      "guard": "The exact candidate commit is checked in a temporary credential-free worktree and must pass the trusted base pre-push hook before the publisher may create the authorization branch; publication/model credentials are scrubbed from that execution environment.",
-      "test": "tests/test_issue_agent_replacement_executor.py::test_pre_push_safety_scrubs_publication_and_model_authority",
+      "guard": "The exact unsigned candidate commit must pass the trusted base pre-push hook in the credential-free validator stage before the publisher may create the authorization branch; the hook runs as the isolation uid with an explicit env -i allowlist, so no publication, model, issuer or unrelated secret reaches candidate code, and the publisher itself runs no hook (Issue #560 S4).",
+      "test": "tests/test_issue_agent_replacement_executor.py::test_candidate_pre_push_receives_only_an_explicit_allowlist_as_the_isolation_user",
       "status": "guarded"
     },
     {
@@ -972,7 +972,7 @@
     {
       "id": "DFF-016",
       "title": "validation-proof-reused-without-immutable-identity",
-      "invariant": "An expensive validation proof is reusable only for the exact immutable content, validation definition and toolchain it was produced under. A changed head, a foreign head, a changed validation definition, a changed toolchain, a stale, malformed, unsuccessful or unverifiable proof, and unavailable evidence all refuse reuse and run the full lane.",
+      "invariant": "An expensive validation proof is reusable only for the exact immutable content, validation definition and toolchain it was produced under. A changed head, a foreign head, a changed validation definition, a changed toolchain, a stale, malformed, unsuccessful or unverifiable proof, and unavailable evidence all refuse reuse and run the full lane. A run that has not yet reached a terminal conclusion is not in that set: it has produced no verdict either way, so reuse waits it out under a bound derived from that authoritative workflow's own timeout rather than timing it out into a duplicate full lane.",
       "applicability": {
         "changed_paths": [
           ".githooks/",
@@ -984,7 +984,7 @@
         "rationale": "The validation boundaries and the reuse authority are where a proof made for one candidate can be re-aimed at another, and where removing duplicate proof can quietly become removing proof. The historical evidence reconstruction module is named explicitly for the same reason: it caches an expensive per-PR disposition and reuses it, so it is a reuse authority, and its post-passes revisit only CONFIRMED findings -- a wrongly reused non-CONFIRMED disposition can never be rolled back. The file is named rather than its directory, so the family is required where proof reuse actually happens instead of across every unrelated module beside it."
       },
       "prevention": {
-        "mechanism": "One place decides reuse, from identities the verifier recomputes rather than accepts: the Git tree content identity, the validation-definition identity over the declared definition files and the gate chain, the measured toolchain, and the exact head. The head binding carries no default, so a caller cannot drop it by omitting a keyword -- the defect independent review found on PR #416, where the push boundary supplied it and the local reuse path did not, letting content identity alone decide on one of the two production paths. A receipt can therefore only narrow reuse, never widen it, and every non-matching branch falls back to executing the full lane.",
+        "mechanism": "One place decides reuse, from identities the verifier recomputes rather than accepts: the Git tree content identity, the validation-definition identity over the declared definition files and the gate chain, the measured toolchain, and the exact head. The head binding carries no default, so a caller cannot drop it by omitting a keyword -- the defect independent review found on PR #416, where the push boundary supplied it and the local reuse path did not, letting content identity alone decide on one of the two production paths. A receipt can therefore only narrow reuse, never widen it, and every non-matching branch falls back to executing the full lane. Issue #561 PR #561: a fixed 420s reuse wait expired while the trusted exact-head Pre-PR run was still in_progress -- that run takes about 13.5 minutes -- so the reuse decision was abandoned and CI re-ran the identical 6,140-test suite (754.94s) while the authoritative run was about to succeed. The bound is now derived from the trusted workflow's timeout-minutes plus margin, pending is restricted to statuses genuinely still moving so an unreadable status cannot be waited on indefinitely, the wait recomputes no Git identity evidence because the tree, definition and toolchain cannot change while it waits, and the Quality Gates job timeout is asserted to exceed wait + full-lane fallback so the runner cannot cancel the job mid-wait.",
         "boundary": "hosted-gate",
         "guard_reference": "scripts/hunter_validation_receipt.py::verify"
       },
@@ -1000,13 +1000,19 @@
         "tests/test_historical_evidence_reconstruction.py::test_changed_evidence_inputs_invalidate_the_reconstruction_cache",
         "tests/test_historical_evidence_reconstruction.py::test_changed_frozen_record_invalidates_the_reconstruction_cache",
         "tests/test_historical_evidence_reconstruction.py::test_record_without_a_digest_is_never_reused_from_cache",
-        "tests/test_historical_evidence_reconstruction.py::test_reconstruction_cache_records_every_input_it_is_keyed_on"
+        "tests/test_historical_evidence_reconstruction.py::test_reconstruction_cache_records_every_input_it_is_keyed_on",
+        "tests/test_validation_proof_reuse.py::test_an_authoritative_run_still_running_past_the_old_fixed_wait_is_adopted_not_duplicated",
+        "tests/test_validation_proof_reuse.py::test_a_failing_cancelled_stale_or_mismatched_authoritative_run_falls_back_to_the_full_lane",
+        "tests/test_validation_proof_reuse.py::test_unavailable_or_malformed_api_evidence_fails_closed_without_waiting",
+        "tests/test_validation_proof_reuse.py::test_a_wedged_authoritative_run_still_ends_the_wait_and_runs_the_full_lane",
+        "tests/test_validation_proof_reuse.py::test_the_bounded_wait_is_derived_from_the_trusted_workflow_timeout_and_the_ci_job_outlives_it"
       ],
       "lifecycle": "hosted-enforced",
       "sources": [
         "Issue #415",
         "PR #416 independent owner review on 2026-09-06",
-        "PR #526 Codex P1, 2026-09-26: the historical reconstruction resume path admitted a finalized per-PR disposition on the registry and rule digests alone, although the disposition was also decided from the owner login, the resolved integration-base commit, the invariant and recurrence verdicts, and the frozen record itself -- the same shape as the PR #416 defect, where one of two reuse paths bound fewer identities than the decision depended on. Corrected by binding every such input plus the frozen record digest, failing closed when that digest is absent."
+        "PR #526 Codex P1, 2026-09-26: the historical reconstruction resume path admitted a finalized per-PR disposition on the registry and rule digests alone, although the disposition was also decided from the owner login, the resolved integration-base commit, the invariant and recurrence verdicts, and the frozen record itself -- the same shape as the PR #416 defect, where one of two reuse paths bound fewer identities than the decision depended on. Corrected by binding every such input plus the frozen record digest, failing closed when that digest is absent.",
+        "PR #561 Codex audit 2026-10-05, Issue #560 S6 entry: the reuse decision was a function of a fixed wait rather than of the authoritative run's terminal state, so a legitimately slow trusted run was indistinguishable from a missing one and the job duplicated the full lane."
       ]
     },
     {
@@ -1484,11 +1490,13 @@
         "tests/test_issue_agent_replacement_executor.py::test_validation_receipt_cannot_be_reused_after_definition_change",
         "tests/test_issue_agent_replacement_executor.py::test_rehearsal_result_can_never_reach_publisher",
         "tests/test_issue_agent_replacement_executor.py::test_publisher_uses_data_only_git_plumbing_and_create_only_lease",
-        "tests/test_issue_agent_replacement_executor.py::test_pre_push_safety_scrubs_publication_and_model_authority"
+        "tests/test_issue_agent_replacement_executor.py::test_candidate_pre_push_receives_only_an_explicit_allowlist_as_the_isolation_user",
+        "tests/test_issue_agent_roles.py::test_the_publisher_runs_no_hook"
       ],
       "lifecycle": "regression-tested",
       "sources": [
-        "Post-PR #519 publication-path inspection after Issue #520 canary, 2026-09-25"
+        "Post-PR #519 publication-path inspection after Issue #520 canary, 2026-09-25",
+        "Recurrence carried forward from unmerged PR #558 (#558 record PRH-067) per Issue #560 owner decision B-6, 2026-10-03/04: on main, src/hunter/automation/issue_agent_replacement_executor.py::publish_create_only still runs _run_pre_push_safety, which executes a working-directory-relative candidate scripts/hunter_pre_push.py in the process holding the signing key and push token; environment scrubbing (the existing regression test) is not a credential boundary. No production caller exists. The correcting guard is ADR 0037 Slice 4 (publisher runs no hook and binds the validator's unsigned_commit_sha; CODE_WRITE_POLICY issue_agent_publisher.hooks_executed=false)."
       ]
     },
     {
@@ -1563,7 +1571,8 @@
       "regression_evidence": [],
       "lifecycle": "recorded",
       "sources": [
-        "scripts/hunter_issue_agent_trigger.py@9eda014 declares TRANSIENT_HTTP_STATUS_CODES = {502, 503, 504} (line 52) and DEFAULT_TRANSPORT_ATTEMPTS = 4 (line 54) with backoff min(base_delay * 2**(attempt-1), max_delay) (line 379), giving a 2s/4s/8s total budget, while .github/workflows/hunter-issue-agent-trigger.yml sets HUNTER_ISSUE_AGENT_WEBHOOK_TIMEOUT_SECONDS to 900. Observed: run 36186705581 'issue-agent trigger rejected: issue-agent webhook remained unavailable after 4 attempts: issue-agent webhook answered transient HTTP 503' (exit 2); the same _RetryBudgetExhaustedError signature in run 36173092199 (CI) and run 36173057865 (Hunter / Pre-PR Preflight). Workflow failure volume 2026-09: Governed Issue Agent Trigger 34, CI 44, Pre-PR Preflight 49. Unlanded fix tracked as OPEN Issue #457."
+        "scripts/hunter_issue_agent_trigger.py@9eda014 declares TRANSIENT_HTTP_STATUS_CODES = {502, 503, 504} (line 52) and DEFAULT_TRANSPORT_ATTEMPTS = 4 (line 54) with backoff min(base_delay * 2**(attempt-1), max_delay) (line 379), giving a 2s/4s/8s total budget, while .github/workflows/hunter-issue-agent-trigger.yml sets HUNTER_ISSUE_AGENT_WEBHOOK_TIMEOUT_SECONDS to 900. Observed: run 36186705581 'issue-agent trigger rejected: issue-agent webhook remained unavailable after 4 attempts: issue-agent webhook answered transient HTTP 503' (exit 2); the same _RetryBudgetExhaustedError signature in run 36173092199 (CI) and run 36173057865 (Hunter / Pre-PR Preflight). Workflow failure volume 2026-09: Governed Issue Agent Trigger 34, CI 44, Pre-PR Preflight 49. Unlanded fix tracked as OPEN Issue #457.",
+        "Issue #560 S5 (PR #561): the trigger's webhook/provisioning retry transport this family describes was removed (ADR 0037 D9); the trigger now only mints. The family stays recorded for any future long-running dispatch."
       ]
     },
     {
@@ -1906,6 +1915,113 @@
         "Issue #534 root cause 2, live evidence: after the ready_for_review trigger was added and pushed (PR #535 exact HEAD 9c02a1e8c45b80943e9c459b85ddc9668c2ed692), a manually re-run trusted Hunter Governance Review Reconcile (run 36335901035, attempt 2, against trusted main HEAD 156ed2fad8638dabc9bd1c45a4efbfece2b2d69c) completed SUCCESS but still published no orchestration cycle and dispatched no collector run for PR #535. GitHub Contents API confirmed the cause: `.hunter/pre-ready-hostile-review.json` at that exact head was a leftover review-request document from an unrelated, already-merged candidate (Issue #532's content, base_sha c25b48228f422a7a4e3e85112bd9ffdc216da849, an entirely different review_target), so `hunter_governance_review_v2.valid_current_review_request` correctly found it stale/invalid for PR #535's actual content and `ensure_current` correctly no-op'd. No PR for #535 or #532 had ever committed a review-request document that actually described its own content.",
         "Issue #534 root cause 3, live evidence: after root causes 1 and 2 were fixed and pushed (PR #535 exact HEAD c05da168545c5fa95fe300706eccaac2228fc391), hosted `Hunter Governance Review Reconcile` run 36338855130 (workflow_run trigger, path .github/workflows/hunter-governance-reconcile.yml, head_branch main) completed SUCCESS and published commit status `Hunter Review Orchestration / PR #535` = pending, description `WAITING_FOR_REVIEWER||36338855130|<config-digest>|`, at 2026-09-27T17:58:22Z -- proving the orchestration cycle genuinely existed. Twenty-six seconds later, run 36338905562 (`Hunter Merge Readiness`) still published `Independent-review authority failed: MALFORMED_REVIEW: WAITING_FOR_REVIEWER: no trusted exact-head orchestration cycle has been published`, a hard `failure` state. Traced to `hunter_merge_readiness_v2.resolve_review_authority` never handling a `pending` verification status from `hunter_governance_review_v2.verify_pre_ready_hostile_review`.",
         "Issue #534 root cause 4, live evidence on PR #535 exact HEAD 51108333821ab42d1ab7aa0b812a72d890f73795: a pull_request_target `synchronize` at 2026-09-28T07:40:33Z triggered `Hunter / Merge Readiness`, `Hunter / Trusted Preflight Upgrade` and `Hunter Governance Agent Preflight` but not `Hunter Governance Review Reconcile`, the only workflow that runs the privileged `hunter_review_orchestrator.py ensure`, and not `Hunter Reviewer Collector` for that exact HEAD. The reconcile runs that did occur (36393517015, 36393716517) were `workflow_run`-triggered recoveries that depend on a different workflow completing first, and no trusted exact-head orchestration cycle was published for 51108333821ab42d1ab7aa0b812a72d890f73795; Merge Readiness run 36393772215 therefore correctly published `MALFORMED_REVIEW: WAITING_FOR_REVIEWER: no trusted exact-head orchestration cycle has been published`. Same defect as root cause 1 (missing trusted trigger) and root cause 3 (consumer not recognizing a legitimate producer state), on the second transition class this family binds."
+      ]
+    },
+    {
+      "id": "DFF-047",
+      "title": "untrusted-code-must-not-share-a-uid-with-credential-holding-processes",
+      "invariant": "Model or candidate code never runs as the same OS user as any process that holds or can mint a credential; an allowlisted or scrubbed child environment is not a credential boundary, because same-uid code can read every same-uid process's environment and memory.",
+      "applicability": {
+        "changed_paths": [
+          "src/hunter/automation/",
+          "scripts/hunter_issue_agent_trigger.py",
+          ".github/workflows/hunter-issue-agent-trigger.yml"
+        ],
+        "rationale": "These surfaces launch the Issue-agent model and candidate validation on GitHub-hosted runners beside trusted job processes."
+      },
+      "prevention": {
+        "mechanism": "ADR 0037 Slice 4 (Issue #560): model and candidate code run only as the dedicated non-root isolation uid through sudo -n -u <uid> -- /usr/bin/env (-i for secret-free launches; secrets only via --preserve-env in the launcher environment, never argv), every uid process is killed before trusted collection, collection goes through a trusted git dir with hooks and fsmonitor disabled, and the lifecycle validator job denies the uid network. Live S0 proof: sandbox run 37161092362.",
+        "boundary": "review"
+      },
+      "regression_evidence": [
+        "tests/test_issue_agent_roles.py::test_the_model_secret_crosses_the_uid_boundary_only_through_the_launcher_environment",
+        "tests/test_issue_agent_roles.py::test_a_secret_free_launch_inherits_nothing",
+        "tests/test_issue_agent_roles.py::test_isolation_hands_over_the_workspace_and_kills_every_leftover",
+        "tests/test_issue_agent_replacement_executor.py::test_candidate_pre_push_receives_only_an_explicit_allowlist_as_the_isolation_user"
+      ],
+      "lifecycle": "regression-tested",
+      "sources": [
+        "PR #558 Copilot review, 2026-10-03 (discussion_r4171869242, discussion_r4171869279); #558 record PRH-068, carried forward per Issue #560 B-6",
+        "Issue #560 S4/S5 (PR #561): corrected by issue_agent_roles.SudoIsolation and the lifecycle validator job; advanced to regression-tested."
+      ]
+    },
+    {
+      "id": "DFF-048",
+      "title": "accepted-authorization-must-reach-the-canonical-executor",
+      "invariant": "An owner authorization the production trigger accepts reaches the single canonical governed execution path or fails closed with an attributable code; no production trigger dispatches to a retired, unreachable or parallel execution authority.",
+      "applicability": {
+        "changed_paths": [
+          ".github/workflows/hunter-issue-agent-trigger.yml",
+          "scripts/hunter_issue_agent_trigger.py"
+        ],
+        "rationale": "The trusted trigger and its workflow decide where an accepted owner authorization is dispatched."
+      },
+      "prevention": {
+        "mechanism": "ADR 0037 Slice 5 (Issue #560): the lifecycle runs entirely in the GitHub-hosted job chain (.github/workflows/hunter-issue-agent-trigger.yml) through scripts/hunter_issue_agent_lifecycle.py and the canonical authorize composition; the trigger script has no network client; a static workflow guard refuses any Railway, webhook or n8n client; the retired parallel authorities refuse unconditionally (AT-46). Production evidence (#520 canary) is S7 and owner-gated.",
+        "boundary": "review"
+      },
+      "regression_evidence": [
+        "tests/test_issue_agent_workflows.py::test_no_retired_railway_webhook_or_n8n_client",
+        "tests/test_issue_agent_workflows.py::test_every_lifecycle_job_goes_through_the_fail_closed_entry_point",
+        "tests/test_issue_agent_trigger.py::test_the_trigger_has_no_network_client",
+        "tests/test_retired_issue_agent_authority.py::test_the_cli_refuses_the_retired_verbs"
+      ],
+      "lifecycle": "regression-tested",
+      "sources": [
+        "Issue #557, 2026-10-03: canary #520 accepted, no Draft PR, the trigger posted only to the retired Railway issuer; #558 record PRH-066, carried forward re-scoped per Issue #560 B-6",
+        "Issue #560 S5 (PR #561): lifecycle workflow without a Railway client plus AT-42/AT-46 guards; advanced to regression-tested pending the S7 canary."
+      ]
+    },
+    {
+      "id": "DFF-049",
+      "title": "terminal-success-recorded-before-trusted-publication",
+      "invariant": "An execution is recorded successful only after trusted observation of its publication outcome (branch at the exact signed head and the single Draft PR); continuation state required to finish accepted work is never held only in process memory.",
+      "applicability": {
+        "changed_paths": [
+          "src/hunter/automation/",
+          "scripts/hunter_issue_agent_candidate_pr.py"
+        ],
+        "rationale": "These surfaces own the Issue-agent lifecycle ledger transitions and the Draft-PR observation that ends them."
+      },
+      "prevention": {
+        "mechanism": "ADR 0037 Slices 2 and 5 (Issue #560): COMPLETED is a legal transition only from PUBLISHED with an observed Draft PR at the published head and a successful exact-head Pre-PR Preflight in the signed anchored ledger; the control recorder derives continuation only from that ledger plus definitive GitHub facts.",
+        "boundary": "review"
+      },
+      "regression_evidence": [
+        "tests/test_issue_agent_state.py::test_completed_requires_the_observed_draft_pr_at_the_published_head",
+        "tests/test_issue_agent_state.py::test_completed_requires_a_successful_exact_head_preflight",
+        "tests/test_issue_agent_control.py::test_completed_requires_the_draft_pr_and_a_successful_exact_head_preflight"
+      ],
+      "lifecycle": "regression-tested",
+      "sources": [
+        "PR #558 Codex P1 review, 2026-10-03 ('Keep the execution pending until publication is recoverable'); one occurrence, recorded under Issue #560",
+        "Issue #560 S2/S5 (PR #561): corrected in issue_agent_state.advance and issue_agent_control.step; advanced to regression-tested."
+      ]
+    },
+    {
+      "id": "DFF-050",
+      "title": "accepted-review-request-read-as-provider-execution",
+      "invariant": "An accepted reviewer request is never treated as proof that a provider received or started a review: acknowledgement requires an authenticated provider execution signal, and a review that can only arrive from an automatic push review is attempted only after the read-only configuration that produces one is verified, so a disabled or unreadable configuration fails over truthfully instead of consuming a review budget.",
+      "applicability": {
+        "changed_paths": [
+          "scripts/hunter_reviewer_collector.py",
+          "scripts/hunter_review_orchestrator.py"
+        ],
+        "rationale": "These surfaces own reviewer trigger delivery, acknowledgement and the per-reviewer budgets that a false acknowledgement converts into a fabricated wait."
+      },
+      "prevention": {
+        "mechanism": "Issue #560 PR #561: the github-review-request scheme acknowledges only on an authenticated review object for the exact head, the copilot_code_review review_on_push configuration is verified read-only before any request is sent, and a codex comment is never a substitute for provider execution because no public automatic re-review API exists for it.",
+        "boundary": "review"
+      },
+      "regression_evidence": [
+        "tests/test_hunter_reviewer_collector.py::test_an_accepted_requested_reviewer_is_never_a_provider_execution_ack",
+        "tests/test_hunter_reviewer_collector.py::test_copilot_is_config_blocked_immediately_when_review_on_push_is_false",
+        "tests/test_hunter_reviewer_collector.py::test_a_codex_quota_denial_is_read_as_unavailable_not_as_an_acknowledgement",
+        "tests/test_hunter_reviewer_collector.py::test_the_ruleset_list_summary_is_not_read_as_the_rule_and_the_detail_is"
+      ],
+      "lifecycle": "regression-tested",
+      "sources": [
+        "PR #561 2026-10-04 (Issue #560 S5): requested_reviewers accepted for both review-request reviewers with no provider review, while ruleset 23493180 carried review_on_push: false."
       ]
     }
   ]

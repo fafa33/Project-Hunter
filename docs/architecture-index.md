@@ -124,7 +124,7 @@ The `Status` column below is the lifecycle status of the ADPR itself. The `Imple
 | Opportunity assessment and ranking | | | |
 | Historical validation and replay | | | |
 | Persistence and correction | | | |
-| Automation and operations | | | |
+| Automation and operations | none | [ADR 0037](ADR/0037-github-native-issue-agent-execution.md) (Accepted); [ADR 0038](ADR/0038-source-handling-github-native-authority-store.md) (Accepted, amends ADR 0036 §4/§9) | Issue #560: GitHub-native Issue Agent execution and Railway retirement. Revision 3 incorporates owner decisions B-1 to B-8 and OD-1 to OD-6 plus the Slice-0 sandbox evidence. Accepted 2026-10-04 (Issue #560 owner decision); all architecture blockers closed; runtime implementation proceeds by slices and is not yet complete. |
 | Governance | none | not applicable | [ADPR-0001](architecture-records/ADPR-0001-architecture-decision-preparation-framework.md) records the implemented preparation framework |
 
 ## Maintenance Rules

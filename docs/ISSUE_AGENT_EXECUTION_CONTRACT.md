@@ -1,5 +1,20 @@
 # Issue Agent Execution Contract
 
+> **Governing architecture (Issue #560, 2026-10-04).** [ADR 0037](ADR/0037-github-native-issue-agent-execution.md)
+> and [ADR 0038](ADR/0038-source-handling-github-native-authority-store.md) are accepted and supersede every
+> Railway-hosted part of this contract: the Railway runtime, issuer, ingress, provisioner, the SQLite execution
+> ledger with its lease semantics, the status endpoint, and the I7 Railway observability. The durable authority is
+> the signed, ruleset-anchored `hunter-state/**` ledger. The lifecycle is `AUTHORIZED -> RESULT_BOUND ->
+> VALIDATED -> PUBLISHED -> COMPLETED | FAILED`, with COMPLETED only after an observed Draft PR. Execution,
+> validation and publication are separated GitHub-hosted trust domains.
+>
+> Unchanged and reaffirmed: I1/I2 (target derived only from the signed authorization; immutable base), I5/I6
+> (signed clone-capable candidate; GitHub opens the Draft PR after Pre-PR Preflight), I8 (a self-probe is never
+> authority), and the TaskScope path authority.
+>
+> The sections below describe the Railway-era implementation. They remain as history until the ADR 0037
+> slices replace the runtime, and they create no authority that conflicts with ADR 0037.
+
 This document is the architecture and failure-state contract for the governed
 Issue Agent path, from an owner-signed Issue authorization to a Draft pull
 request that enters the existing Candidate Admission and governance chain. It

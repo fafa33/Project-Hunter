@@ -1435,9 +1435,16 @@ def test_no_auto_merge_path_exists_in_the_composition_root() -> None:
     lowered = source.lower()
     for token in ("merge_pull_request", "enable_pr_auto_merge", "auto_merge", "automerge", "/merge"):
         assert token not in lowered
-    workflow = Path(".github/workflows/hunter-issue-agent-trigger.yml").read_text(encoding="utf-8").lower()
-    for token in ("merge", "pull-requests: write", "contents: write"):
-        assert token not in workflow
+    import yaml
+
+    workflow = yaml.safe_load(Path(".github/workflows/hunter-issue-agent-trigger.yml").read_text(encoding="utf-8"))
+    for job in workflow["jobs"].values():
+        grants = job.get("permissions") or {}
+        assert grants.get("pull-requests") != "write"
+        # The only contents writer is the control domain, and it writes only the anchored state ledger.
+        if grants.get("contents") == "write":
+            assert job["environment"] == "hunter-issue-agent-control"
+        assert "merge" not in " ".join(str(step.get("run", "")) for step in job.get("steps") or []).lower()
 
 
 def test_no_comparative_valuation_or_issue_389_activation() -> None:
@@ -1767,10 +1774,16 @@ def test_the_workflow_pins_setup_python_to_an_immutable_commit() -> None:
     assert "secrets.HUNTER_ISSUE_AGENT_AUTHORIZATION_SIGNING_KEY" in workflow
 
 
-def test_the_workflow_exposes_repository_src_to_the_direct_trigger_script() -> None:
-    workflow = Path(".github/workflows/hunter-issue-agent-trigger.yml").read_text(encoding="utf-8")
-    assert "PYTHONPATH: src" in workflow
-    assert "python scripts/hunter_issue_agent_trigger.py" in workflow
+def test_the_workflow_provisions_the_package_before_the_lifecycle_entry_point() -> None:
+    """DFF-036: every job installs the pinned package before it runs the repository entry point."""
+    import yaml
+
+    workflow = yaml.safe_load(Path(".github/workflows/hunter-issue-agent-trigger.yml").read_text(encoding="utf-8"))
+    for job in workflow["jobs"].values():
+        commands = [str(step.get("run", "")) for step in job["steps"]]
+        install = next(i for i, c in enumerate(commands) if "-c requirements/ci-constraints.txt" in c)
+        entry = next(i for i, c in enumerate(commands) if "scripts/hunter_issue_agent_lifecycle.py" in c)
+        assert install < entry
 
 
 # --- Issue #439: rendered budget, not raw size, decides dispatchability --------

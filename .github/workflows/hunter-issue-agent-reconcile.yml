@@ -1,0 +1,113 @@
+name: Hunter / Issue Agent Reconcile
+
+# State machine spec section 6: the best-effort observer. It runs the same pure `advance` as every control
+# job over each Issue ledger and records at most one step per Issue: bind, validation, publication,
+# completion, a nonce-bound model-free resume, or a terminal failure. It never re-dispatches the model and
+# never relays a payload (an owner dispatch takes no input). An indefinite GitHub read is a no-op.
+# While config/issue_agent_trust_roots.json is unprovisioned it refuses MISSING_CONFIGURATION (S5 inert).
+
+on:
+  schedule:
+    - cron: "17,47 * * * *"
+  workflow_dispatch:
+
+permissions: {}
+
+concurrency:
+  group: >-
+    ${{ github.job == 'resolve-finding'
+        && 'hunter-issue-agent-resolve-finding'
+        || 'hunter-issue-agent-reconcile' }}
+  cancel-in-progress: false
+  queue: max
+
+jobs:
+  reconcile:
+    name: reconcile
+    if: github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    environment: hunter-issue-agent-control
+    permissions:
+      contents: write
+      actions: write
+      pull-requests: read
+    steps:
+      - name: Checkout trusted main
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+      - name: Set up Python
+        uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6.3.0
+        with:
+          python-version: "3.11.13"
+      - name: Install pinned runtime
+        run: python -m pip install --disable-pip-version-check --only-binary ':all:' -c requirements/ci-constraints.txt .
+      - name: Advance every Issue ledger once
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+          HUNTER_ISSUE_AGENT_STATE_SIGNING_KEY: ${{ secrets.HUNTER_ISSUE_AGENT_STATE_SIGNING_KEY }}
+        run: python scripts/hunter_issue_agent_lifecycle.py step --role reconcile
+
+  remediate:
+    name: remediate
+    if: github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    environment: hunter-issue-agent-control
+    permissions:
+      contents: write
+      actions: write
+      pull-requests: read
+    steps:
+      - name: Checkout trusted main
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+      - name: Set up Python
+        uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6.3.0
+        with:
+          python-version: "3.11.13"
+      - name: Install pinned runtime
+        run: python -m pip install --disable-pip-version-check --only-binary ':all:' -c requirements/ci-constraints.txt .
+      # ADR 0039 L4 (RD-4/RD-5): the owner's label on the governing Issue is the standing consent, so this job
+      # only detects an eligible lifecycle-created PR and mints the K_AUTH-signed remediation authorization. It
+      # runs the unchanged trigger workflow afterwards; there is no second orchestrator, model or publisher.
+      - name: Detect eligible findings and dispatch one bounded remediation per Issue
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+          HUNTER_ISSUE_AGENT_STATE_SIGNING_KEY: ${{ secrets.HUNTER_ISSUE_AGENT_STATE_SIGNING_KEY }}
+          HUNTER_ISSUE_AGENT_AUTHORIZATION_SIGNING_KEY: ${{ secrets.HUNTER_ISSUE_AGENT_AUTHORIZATION_SIGNING_KEY }}
+        run: python scripts/hunter_issue_agent_lifecycle.py remediate
+
+  resolve-finding:
+    name: resolve-finding
+    if: github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    environment: hunter-issue-agent-control
+    # ADR 0039 L7 (RD-6): pull-requests:write exists only to post one exact-head evidence reply and resolve the
+    # exact review thread after proof. This job has no workflow trigger, so it can never start or approve one.
+    permissions:
+      contents: write
+      actions: read
+      pull-requests: write
+    steps:
+      - name: Checkout trusted main
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+      - name: Set up Python
+        uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6.3.0
+        with:
+          python-version: "3.11.13"
+      - name: Install pinned runtime
+        run: python -m pip install --disable-pip-version-check --only-binary ':all:' -c requirements/ci-constraints.txt .
+      - name: Prove the exact head, answer and resolve the exact thread
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+          HUNTER_ISSUE_AGENT_STATE_SIGNING_KEY: ${{ secrets.HUNTER_ISSUE_AGENT_STATE_SIGNING_KEY }}
+        run: python scripts/hunter_issue_agent_lifecycle.py resolve-finding
