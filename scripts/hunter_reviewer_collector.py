@@ -47,6 +47,75 @@ STARTED_RUN_STATES = frozenset({"in_progress", "completed"})
 #: ``unsupported_pool_triggers`` -- because an unperformable trigger aborts the
 #: whole ordered collection before any later reviewer is attempted.
 TRIGGER_SCHEMES = frozenset({"api", "github-pr-comment", "github-review-request", "github-workflow"})
+#: Issue #560 PR #561 live proof. GitHub's automatic Copilot review is a *push*
+#: behaviour configured by a ``copilot_code_review`` ruleset, not a consequence of
+#: requesting a reviewer. On PR #561 ``requested_reviewers`` was accepted for both
+#: review-request reviewers and produced no provider review at all, because ruleset
+#: 23493180 carries ``review_on_push: false``.
+COPILOT_CODE_REVIEW_RULE = "copilot_code_review"
+#: A request that GitHub accepts proves the request was recorded, never that any
+#: provider received, started or will ever answer it.
+AUTOMATIC_PUSH_REVIEW_REASONS = frozenset(
+    {
+        "REVIEW_ON_PUSH",
+        "NO_ACTIVE_COPILOT_CODE_REVIEW",
+        "REVIEW_ON_PUSH_DISABLED",
+        "RULESETS_UNREADABLE",
+        "RULESETS_MALFORMED",
+    }
+)
+
+
+def depends_on_automatic_push_review(agent: Mapping[str, Any]) -> bool:
+    """Whether this review-request reviewer can only ever answer via a push-time automatic review."""
+
+    if trigger_scheme(agent) != "github-review-request":
+        return False
+    return "copilot" in str(method_target(agent)).lower()
+
+
+def automatic_push_review(repository: str, token: str) -> tuple[bool, str]:
+    """Read-only: will GitHub actually run the automatic Copilot review on the next push?
+
+    Reads the repository rulesets and reports whether exactly one *applicable, active*
+    ``copilot_code_review`` rule exists and its ``review_on_push`` parameter is exactly
+    ``true``. Missing, disabled, unreadable and malformed configurations all report
+    ``False`` with their own reason, because every one of them means the same thing
+    operationally: no automatic review will arrive. Nothing is ever mutated here; a
+    repository owner changes its rulesets, not this collector.
+    """
+
+    try:
+        rulesets = _pages(repository, token, "rulesets")
+    except Exception:
+        return False, "RULESETS_UNREADABLE"
+    applicable: list[Any] = []
+    for ruleset in rulesets:
+        if not isinstance(ruleset, Mapping):
+            return False, "RULESETS_MALFORMED"
+        if ruleset.get("enforcement") != "active" or ruleset.get("target") not in ("branch", "pull_request"):
+            continue
+        rules = ruleset.get("rules")
+        if not isinstance(rules, list):
+            return False, "RULESETS_MALFORMED"
+        for rule in rules:
+            if not isinstance(rule, Mapping):
+                return False, "RULESETS_MALFORMED"
+            if rule.get("type") == COPILOT_CODE_REVIEW_RULE:
+                applicable.append(rule)
+    if not applicable:
+        return False, "NO_ACTIVE_COPILOT_CODE_REVIEW"
+    if len(applicable) != 1:
+        return False, "RULESETS_MALFORMED"
+    parameters = applicable[0].get("parameters")
+    if not isinstance(parameters, Mapping):
+        return False, "RULESETS_MALFORMED"
+    flag = parameters.get("review_on_push")
+    if flag is not True:
+        return False, "REVIEW_ON_PUSH_DISABLED"
+    return True, "REVIEW_ON_PUSH"
+
+
 #: A workflow trigger names a workflow file, never a path: the value is
 #: interpolated into an Actions API route, so a separator or traversal segment
 #: would address a different resource entirely.
@@ -312,6 +381,12 @@ def trigger_scheme(agent: Mapping[str, Any]) -> str:
     return scheme if separator else ""
 
 
+def method_target(agent: Mapping[str, Any]) -> str:
+    """The ``target`` half of a reviewer's ``scheme:target`` trigger method."""
+
+    return str(agent.get("trigger_method") or "").split(":", 1)[1].strip() if trigger_scheme(agent) else ""
+
+
 def workflow_trigger_file(agent: Mapping[str, Any]) -> str:
     """The workflow file a ``github-workflow:`` reviewer dispatches."""
 
@@ -461,7 +536,11 @@ def collect_attempts(pool: dict[str, Any], head: str, backend: Backend) -> list[
                             else {
                                 "unacknowledged": "NO_ACK_TIMEOUT",
                                 "timed_out": "REVIEW_TIMEOUT",
-                                "unavailable": "PROVIDER_UNAVAILABLE",
+                                "unavailable": (
+                                    "PROVIDER_CONFIG_BLOCKED"
+                                    if trigger.get("config_blocked") is True
+                                    else "PROVIDER_UNAVAILABLE"
+                                ),
                                 "blocking": "BLOCKING_FINDINGS",
                                 "clear": "CLEAR",
                             }[state]
@@ -1086,6 +1165,21 @@ class GitHubBackend:
         ]
         return min(matches, key=lambda x: int(x.get("id") or 0), default=None)
 
+    def _blocked_trigger(self, agent: dict[str, Any], number: int, reason: str) -> dict[str, Any]:
+        """The recorded attempt for a reviewer whose automatic review cannot happen, with its reason."""
+
+        trigger = self._existing_trigger(agent, number) or self._post_comment(
+            trigger_body(
+                self.expected_head, self.claims_id, agent, self.run_id, self.run_attempt, number, self.generation_id
+            )
+        )
+        trigger["collector_run_id"] = self.run_id
+        trigger["state"] = "unavailable"
+        trigger["config_blocked"] = True
+        trigger["reason_code"] = "PROVIDER_CONFIG_BLOCKED"
+        trigger["config_reason"] = reason
+        return trigger
+
     def trigger(self, agent: dict[str, Any], number: int) -> dict[str, Any]:
         method = str(agent["trigger_method"])
         scheme = trigger_scheme(agent)
@@ -1093,6 +1187,18 @@ class GitHubBackend:
             raise ValueError("reviewer has no supported authenticated GitHub trigger")
         if scheme == "github-workflow":
             return self._dispatch_workflow_reviewer(agent, number)
+        if depends_on_automatic_push_review(agent):
+            # Issue #560 PR #561: before relying on an automatic push-time review, prove the
+            # configuration that produces one. A request GitHub accepts is not provider
+            # execution, so without a verified ``review_on_push`` there is nothing to wait for:
+            # fail over in this pass instead of parking the candidate for a whole review budget
+            # and then reporting a timeout as if a reviewer had declined. The gate precedes the
+            # existing-trigger adoption so an owner who fixes the ruleset is picked up on the next
+            # cycle, and it is read-only: the owner changes the ruleset, never this collector.
+            enabled, reason = automatic_push_review(self.repository, self.token)
+            if not enabled:
+                blocked = self._blocked_trigger(agent, number, reason)
+                return blocked
         existing = self._existing_trigger(agent, number)
         if existing is not None:
             m = re.search(r"Collector invocation: (\d+)/(\d+)/", str(existing.get("body") or ""))
@@ -1116,7 +1222,7 @@ class GitHubBackend:
                     self.expected_head, self.claims_id, agent, self.run_id, self.run_attempt, number, self.generation_id
                 )
             )
-            reviewer = method.split(":", 1)[1]
+            reviewer = method_target(agent)
             try:
                 governance.request_json(
                     self.repository,
@@ -1333,11 +1439,17 @@ class GitHubBackend:
         actually exposes, and it is deliberately not the same question as
         "has it answered?". A dispatched workflow is acknowledged only once a
         runner picked the run up, because a queued run is exactly the offline-Mac
-        case the short budget exists to fail over from. For the comment and API
-        schemes the invocation is delivered synchronously -- GitHub confirms the
-        trigger comment it created, and the provider call returns -- so delivery
-        is settled the moment the trigger exists, and the reviewer then gets its
-        full review budget rather than being abandoned for being slow.
+        case the short budget exists to fail over from.
+
+        Issue #560 PR #561: for ``github-review-request`` the acknowledged signal is an
+        authenticated *review object* by that reviewer for this exact head, and nothing
+        weaker. GitHub accepting ``requested_reviewers`` only records the request, and
+        this collector's own trigger comment proves nothing about the provider at all --
+        neither is provider execution, so neither may start the long review budget. A
+        reviewer with no automatic review path therefore fails over on the short
+        acknowledgement budget with the truth, instead of appearing to run for minutes.
+        For the synchronous ``api:`` scheme the provider call itself returns, so delivery
+        is settled the moment the trigger exists.
         """
 
         if trigger_scheme(agent) == "github-workflow":
@@ -1345,27 +1457,33 @@ class GitHubBackend:
                 return False
             run = self._adopt_workflow_run(trigger)
             return run is not None and str(run.get("status") or "") in STARTED_RUN_STATES
-        if agent.get("id") == "codex" and trigger_scheme(agent) == "github-pr-comment":
+        if trigger_scheme(agent) == "github-review-request":
+            if str(trigger.get("state") or "") == "unavailable":
+                return False
             login = governance.reviewer_login(agent)
             created = str(trigger.get("created_at") or "")
             reviews = _pages(self.repository, self.token, f"pulls/{self.pr}/reviews")
-            if any(
+            return any(
                 (item.get("user") or {}).get("login", "").lower() == login
                 and str(item.get("submitted_at") or "") >= created
                 and item.get("commit_id") == self.expected_head
                 for item in reviews
-            ):
-                return True
-            comments = _pages(self.repository, self.token, f"issues/{self.pr}/comments")
+            )
+        if agent.get("id") == "codex" and trigger_scheme(agent) == "github-pr-comment":
+            # No proven public automatic re-review API exists for Codex, and an ``@codex``
+            # comment is not one: a comment proves the collector wrote it, not that Codex
+            # received or started anything. Only a real exact-head review acknowledges, so an
+            # unprovable start fails over on the short budget rather than being faked.
+            login = governance.reviewer_login(agent)
+            created = str(trigger.get("created_at") or "")
+            reviews = _pages(self.repository, self.token, f"pulls/{self.pr}/reviews")
             return any(
                 (item.get("user") or {}).get("login", "").lower() == login
-                and str(item.get("created_at") or "") >= created
-                for item in comments
+                and str(item.get("submitted_at") or "") >= created
+                and item.get("commit_id") == self.expected_head
+                for item in reviews
             )
-        # Synchronous API calls and GitHub's requested-reviewer endpoint provide
-        # a delivery acknowledgement. That is intentionally distinct from the
-        # Codex comment trigger, where creating our own comment proves nothing
-        # about whether Codex received or started the review.
+        # A synchronous API call provides a real delivery acknowledgement.
         return type(trigger.get("id")) is int and int(trigger["id"]) > 0
 
 

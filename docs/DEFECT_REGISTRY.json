@@ -1991,6 +1991,31 @@
         "PR #558 Codex P1 review, 2026-10-03 ('Keep the execution pending until publication is recoverable'); one occurrence, recorded under Issue #560",
         "Issue #560 S2/S5 (PR #561): corrected in issue_agent_state.advance and issue_agent_control.step; advanced to regression-tested."
       ]
+    },
+    {
+      "id": "DFF-050",
+      "title": "accepted-review-request-read-as-provider-execution",
+      "invariant": "An accepted reviewer request is never treated as proof that a provider received or started a review: acknowledgement requires an authenticated provider execution signal, and a review that can only arrive from an automatic push review is attempted only after the read-only configuration that produces one is verified, so a disabled or unreadable configuration fails over truthfully instead of consuming a review budget.",
+      "applicability": {
+        "changed_paths": [
+          "scripts/hunter_reviewer_collector.py",
+          "scripts/hunter_review_orchestrator.py"
+        ],
+        "rationale": "These surfaces own reviewer trigger delivery, acknowledgement and the per-reviewer budgets that a false acknowledgement converts into a fabricated wait."
+      },
+      "prevention": {
+        "mechanism": "Issue #560 PR #561: the github-review-request scheme acknowledges only on an authenticated review object for the exact head, the copilot_code_review review_on_push configuration is verified read-only before any request is sent, and a codex comment is never a substitute for provider execution because no public automatic re-review API exists for it.",
+        "boundary": "review"
+      },
+      "regression_evidence": [
+        "tests/test_hunter_reviewer_collector.py::test_an_accepted_requested_reviewer_is_never_a_provider_execution_ack",
+        "tests/test_hunter_reviewer_collector.py::test_copilot_is_config_blocked_immediately_when_review_on_push_is_false",
+        "tests/test_hunter_reviewer_collector.py::test_a_codex_quota_denial_is_read_as_unavailable_not_as_an_acknowledgement"
+      ],
+      "lifecycle": "regression-tested",
+      "sources": [
+        "PR #561 2026-10-04 (Issue #560 S5): requested_reviewers accepted for both review-request reviewers with no provider review, while ruleset 23493180 carried review_on_push: false."
+      ]
     }
   ]
 }

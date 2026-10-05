@@ -711,7 +711,13 @@ def test_codex_trigger_creation_is_delivery_not_acknowledgement(monkeypatch):
     assert backend.acknowledged(agent, trigger) is False
 
 
-def test_codex_provider_response_is_real_acknowledgement(monkeypatch):
+def test_a_codex_quota_denial_is_read_as_unavailable_not_as_an_acknowledgement(monkeypatch):
+    """Issue #560 PR #561: a Codex comment is the provider writing, not proof it ever started.
+
+    There is no proven public automatic re-review API for Codex, so no comment may stand in for execution.
+    The denial is still recognised, and it is recognised as the truthful answer it is: unavailable.
+    """
+
     backend = collector.GitHubBackend("owner/repo", "token", 476, HEAD, "d" * 64, 123, 1)
     agent = POOL["agents"][0]
     trigger = {"id": 77, "created_at": "2026-09-22T09:52:53Z", "body": "@codex review", "collector_run_id": 123}
@@ -732,8 +738,36 @@ def test_codex_provider_response_is_real_acknowledgement(monkeypatch):
         ),
     )
 
-    assert backend.acknowledged(agent, trigger) is True
+    assert backend.acknowledged(agent, trigger) is False
     assert backend.response_state(agent, trigger) == "unavailable"
+
+
+def test_an_exact_head_codex_review_is_the_real_acknowledgement(monkeypatch):
+    """Only an authenticated review object for this exact head acknowledges the invocation."""
+
+    backend = collector.GitHubBackend("owner/repo", "token", 476, HEAD, "d" * 64, 123, 1)
+    agent = POOL["agents"][0]
+    trigger = {"id": 77, "created_at": "2026-09-22T09:52:53Z", "body": "@codex review", "collector_run_id": 123}
+    monkeypatch.setattr(
+        collector,
+        "_pages",
+        lambda _repo, _token, path, *_a, **_k: (
+            [
+                {
+                    "id": 91,
+                    "user": {"login": collector.governance.reviewer_login(agent)},
+                    "submitted_at": "2026-09-22T09:55:00Z",
+                    "commit_id": HEAD,
+                    "state": "COMMENTED",
+                    "body": "No blocking defects found.",
+                }
+            ]
+            if path.endswith("pulls/476/reviews")
+            else []
+        ),
+    )
+
+    assert backend.acknowledged(agent, trigger) is True
 
 
 def test_codex_trigger_is_reused_for_same_exact_head_claims(monkeypatch):
@@ -2583,3 +2617,233 @@ def test_groq_http_400_fails_over_to_the_next_reviewer_without_authority(monkeyp
     )
     assert groq_result["verdict"] == "unavailable"
     assert "[malformed_request]" in groq_result["summary"]
+
+
+# --- Issue #560 PR #561: a requested reviewer is not provider execution ---------------------------------
+#
+# Live proof on PR #561: `POST /requested_reviewers` was accepted for both review-request reviewers and
+# produced no provider review, because ruleset 23493180 carries `review_on_push: false`. Treating the
+# accepted request as an acknowledgement started a 300s (or 1800s) review budget for a review that was never
+# going to arrive, and then reported a timeout as though a reviewer had declined. These tests pin the truth
+# instead: the accepted request acknowledges nothing, and the configuration that would produce an automatic
+# review is verified read-only before any budget is spent waiting for one.
+
+COPILOT_AGENT = {
+    "id": "copilot",
+    "priority": 1,
+    "enabled": True,
+    "ack_timeout_seconds": 30,
+    "review_timeout_seconds": 300,
+    "retryable": False,
+    "trigger_method": "github-review-request:copilot-pull-request-reviewer[bot]",
+    "github_login": "copilot-pull-request-reviewer[bot]",
+    "evidence_parser": "github-review-ack.v1",
+}
+CODEX_REQUEST_AGENT = {
+    "id": "codex",
+    "priority": 2,
+    "enabled": True,
+    "ack_timeout_seconds": 30,
+    "review_timeout_seconds": 1800,
+    "retryable": False,
+    "trigger_method": "github-review-request:chatgpt-codex-connector[bot]",
+    "github_login": "chatgpt-codex-connector[bot]",
+    "evidence_parser": "github-review-ack.v1",
+}
+REVIEW_ON_PUSH_RULESET = [
+    {
+        "id": 23493180,
+        "name": "Automatic Copilot code review",
+        "target": "branch",
+        "enforcement": "active",
+        "rules": [{"type": "copilot_code_review", "parameters": {"review_on_push": True}}],
+    }
+]
+REVIEW_ON_PUSH_OFF_RULESET = [
+    {
+        "id": 23493180,
+        "name": "Automatic Copilot code review",
+        "target": "branch",
+        "enforcement": "active",
+        "rules": [{"type": "copilot_code_review", "parameters": {"review_on_push": False}}],
+    }
+]
+
+
+def _request_pool(agent):
+    return {
+        "last_resort": "opencode",
+        "timeout_policy": {"retries_per_agent": 0},
+        "agents": (agent,),
+    }
+
+
+class _RequestBackend(collector.GitHubBackend):
+    """The real GitHub backend with the clock pinned, so nothing is faked except the API facts."""
+
+    def __init__(self, rulesets, reviews=(), comments=(), *, rulesets_readable=True):
+        super().__init__("fafa33/Project-Hunter", "token", 561, HEAD, "d" * 64, 123, 1)
+        self.clock = 0.0
+        self.rulesets = list(rulesets)
+        self.reviews = list(reviews)
+        self.comments = list(comments)
+        self.rulesets_readable = rulesets_readable
+        self.posted = []
+        self.requested = []
+        self.mutating_calls = []
+
+    def now(self):
+        return self.clock
+
+    def sleep(self, seconds):
+        self.clock += max(0.0, float(seconds))
+
+    def head(self):
+        return HEAD
+
+    def _post_comment(self, body):
+        self.posted.append(body)
+        return {"id": 100 + len(self.posted), "created_at": "2026-10-04T12:00:00Z", "body": body}
+
+    def _existing_trigger(self, agent, number):
+        return None
+
+    def route(self, method, path):
+        """Route only the endpoints this loop reads, so every request the code makes is visible."""
+
+        if path.startswith("rulesets"):
+            if not self.rulesets_readable:
+                raise RuntimeError("rulesets unreadable")
+            return self.rulesets
+        if path.endswith("requested_reviewers"):
+            self.requested.append((method, path))
+            return {"number": 1}
+        if path.startswith("pulls/561/reviews"):
+            return self.reviews
+        if path.startswith("issues/561/comments"):
+            return self.comments
+        if path.startswith("pulls/561"):
+            return {"number": 561, "state": "open", "head": {"sha": HEAD}}
+        self.mutating_calls.append((method, path))
+        return {"number": 1}
+
+
+def _backend(monkeypatch, rulesets, reviews=(), comments=(), *, rulesets_readable=True):
+    backend = _RequestBackend(rulesets, reviews, comments, rulesets_readable=rulesets_readable)
+    monkeypatch.setattr(
+        collector.governance,
+        "request_json",
+        lambda _repository, _token, method, path, payload=None: backend.route(method, path),
+    )
+    return backend
+
+
+def test_an_accepted_requested_reviewer_is_never_a_provider_execution_ack(monkeypatch) -> None:
+    """The PR #561 failure mode: the request POST was accepted and no provider review ever arrived."""
+
+    backend = _backend(monkeypatch, REVIEW_ON_PUSH_RULESET)
+    attempts = collector.collect_attempts(_request_pool(COPILOT_AGENT), HEAD, backend)
+    # The request really was sent and accepted, and that is all it proved.
+    assert backend.requested == [("POST", "pulls/561/requested_reviewers")]
+    assert [attempt["outcome"] for attempt in attempts] == ["unacknowledged"]
+    assert attempts[0]["reason_code"] == "NO_ACK_TIMEOUT"
+    assert attempts[0]["elapsed_seconds"] == 30  # the short budget, not the 300s review budget
+
+
+def test_copilot_is_config_blocked_immediately_when_review_on_push_is_false(monkeypatch) -> None:
+    """Ruleset 23493180 as it actually is on PR #561: the rule exists and does not review on push."""
+
+    backend = _backend(monkeypatch, REVIEW_ON_PUSH_OFF_RULESET)
+    attempts = collector.collect_attempts(_request_pool(COPILOT_AGENT), HEAD, backend)
+    assert backend.requested == []  # nothing would review the result, so nothing is requested
+    assert [attempt["outcome"] for attempt in attempts] == ["unavailable"]
+    assert attempts[0]["reason_code"] == "PROVIDER_CONFIG_BLOCKED"
+    assert attempts[0]["elapsed_seconds"] == 0  # no fake 300s wait for a review that cannot happen
+
+
+@pytest.mark.parametrize(
+    ("rulesets", "reason"),
+    [
+        ([], "NO_ACTIVE_COPILOT_CODE_REVIEW"),
+        ([{**REVIEW_ON_PUSH_RULESET[0], "enforcement": "disabled"}], "NO_ACTIVE_COPILOT_CODE_REVIEW"),
+        ([{**REVIEW_ON_PUSH_RULESET[0], "rules": [{"type": "required_signatures"}]}], "NO_ACTIVE_COPILOT_CODE_REVIEW"),
+        ([{**REVIEW_ON_PUSH_RULESET[0], "rules": "malformed"}], "RULESETS_MALFORMED"),
+        (
+            [{**REVIEW_ON_PUSH_RULESET[0], "rules": [{"type": "copilot_code_review", "parameters": {}}]}],
+            "REVIEW_ON_PUSH_DISABLED",
+        ),
+        ([{**REVIEW_ON_PUSH_RULESET[0], "rules": [{"type": "copilot_code_review"}]}], "RULESETS_MALFORMED"),
+        ([REVIEW_ON_PUSH_RULESET[0], REVIEW_ON_PUSH_RULESET[0]], "RULESETS_MALFORMED"),
+        ([42], "RULESETS_MALFORMED"),
+    ],
+)
+def test_a_missing_or_malformed_configuration_fails_closed(monkeypatch, rulesets, reason) -> None:
+    """Every unusable configuration is the same operational fact, so every one of them blocks immediately."""
+
+    backend = _backend(monkeypatch, rulesets)
+    attempts = collector.collect_attempts(_request_pool(COPILOT_AGENT), HEAD, backend)
+    assert backend.requested == []
+    assert [attempt["outcome"] for attempt in attempts] == ["unavailable"]
+    assert attempts[0]["reason_code"] == "PROVIDER_CONFIG_BLOCKED"
+    assert reason in collector.AUTOMATIC_PUSH_REVIEW_REASONS
+
+
+def test_an_unreadable_configuration_fails_closed(monkeypatch) -> None:
+    backend = _backend(monkeypatch, REVIEW_ON_PUSH_RULESET, rulesets_readable=False)
+    assert collector.automatic_push_review("fafa33/Project-Hunter", "token") == (False, "RULESETS_UNREADABLE")
+    attempts = collector.collect_attempts(_request_pool(COPILOT_AGENT), HEAD, backend)
+    assert attempts[0]["reason_code"] == "PROVIDER_CONFIG_BLOCKED"
+
+
+def test_a_verified_push_review_configuration_and_an_exact_head_review_stay_valid(monkeypatch) -> None:
+    """The positive case is unchanged: review_on_push true, an exact-head review, a real clear."""
+
+    backend = _backend(
+        monkeypatch,
+        REVIEW_ON_PUSH_RULESET,
+        reviews=[
+            {
+                "id": 900,
+                "user": {"login": "copilot-pull-request-reviewer[bot]"},
+                "submitted_at": "2026-10-04T12:05:00Z",
+                "commit_id": HEAD,
+                "state": "APPROVED",
+                "body": "No blocking defects found.",
+            }
+        ],
+    )
+    attempts = collector.collect_attempts(_request_pool(COPILOT_AGENT), HEAD, backend)
+    assert backend.requested == [("POST", "pulls/561/requested_reviewers")]
+    assert [attempt["outcome"] for attempt in attempts] == ["clear"]
+    assert attempts[0]["reason_code"] == "CLEAR"
+
+
+def test_the_configuration_gate_never_mutates_a_ruleset(monkeypatch) -> None:
+    """The gate is a reader. Enabling automatic review is the owner's action, outside this repository."""
+
+    backend = _backend(monkeypatch, REVIEW_ON_PUSH_OFF_RULESET)
+    collector.collect_attempts(_request_pool(COPILOT_AGENT), HEAD, backend)
+    assert [call for call in backend.mutating_calls if "ruleset" in call[1]] == []
+    assert backend.route("GET", "rulesets") == REVIEW_ON_PUSH_OFF_RULESET  # the ruleset is untouched
+
+
+def test_a_codex_request_with_no_provider_activity_is_never_an_ack(monkeypatch) -> None:
+    """No proven public automatic re-review API exists for Codex, so a request alone cannot acknowledge."""
+
+    backend = _backend(monkeypatch, REVIEW_ON_PUSH_RULESET, comments=[{"user": {"login": "github-actions[bot]"}}])
+    trigger = {"id": 42, "created_at": "2026-10-04T12:00:00Z", "collector_run_id": 123}
+    assert backend.acknowledged(dict(CODEX_REQUEST_AGENT), trigger) is False
+
+
+def test_a_codex_comment_is_not_a_canonical_workaround(monkeypatch) -> None:
+    """An ``@codex`` comment is the collector's own writing; it never stands in for provider execution."""
+
+    backend = _backend(
+        monkeypatch,
+        REVIEW_ON_PUSH_RULESET,
+        comments=[{"user": {"login": "chatgpt-codex-connector[bot]"}, "created_at": "2026-10-04T12:01:00Z"}],
+    )
+    base_agent = dict(next(iter(POOL["agents"])))
+    comment_agent = {**base_agent, "id": "codex", "trigger_method": "github-pr-comment:@codex review"}
+    trigger = {"id": 42, "created_at": "2026-10-04T12:00:00Z", "collector_run_id": 123}
+    assert backend.acknowledged(comment_agent, trigger) is False
