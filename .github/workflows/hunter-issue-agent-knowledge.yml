@@ -28,7 +28,9 @@ concurrency:
 jobs:
   knowledge-ingest:
     name: knowledge-ingest
-    if: github.ref == 'refs/heads/main'
+    if: >-
+      github.ref == 'refs/heads/main' &&
+      (github.event_name != 'workflow_run' || github.event.workflow_run.head_repository.full_name == github.repository)
     runs-on: ubuntu-latest
     timeout-minutes: 15
     environment: hunter-issue-agent-control

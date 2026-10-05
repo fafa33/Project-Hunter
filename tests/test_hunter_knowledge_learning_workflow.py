@@ -172,6 +172,7 @@ def test_automatic_canonicalization_uses_existing_local_git_push_without_token_w
     assert "candidate code will not be executed" in text
     assert "actions/setup-python@v6" in text
     assert "pip install --only-binary" in text
+    assert "--no-binary cryptography" in text  # cryptography 50 has no Intel macOS wheel
     assert "steps.engine.outputs.available == 'true'" in text
     assert 'HEAD_SHA="$(gh pr view' in text
     assert "runs-on: [self-hosted, macOS]" in text

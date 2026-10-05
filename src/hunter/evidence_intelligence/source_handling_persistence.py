@@ -807,7 +807,7 @@ class SourceHandlingAuthorityRepository:
                 raise
             else:
                 connection.commit()
-        notify_commit(self.path)
+                notify_commit(self.path)
 
 
 class SqliteSourceHandlingAuthorityReadView(SourceHandlingAuthorityReadView):

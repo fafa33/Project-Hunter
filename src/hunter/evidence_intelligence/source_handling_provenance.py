@@ -407,9 +407,9 @@ class SourceHandlingProvenanceAuthorityRepository:
             raise
         else:
             connection.commit()
+            notify_commit(self.path)
         finally:
             connection.close()
-        notify_commit(self.path)
 
     def record_provenance(
         self,
