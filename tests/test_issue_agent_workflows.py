@@ -25,6 +25,7 @@ GOVERNED = (
     "hunter-issue-agent-candidate-pr.yml",
     "hunter-issue-agent-replacement-rehearsal.yml",
     "hunter-issue-agent-knowledge.yml",
+    "hunter-issue-agent-source-handling-bootstrap.yml",
 )
 
 CONTROL, EXECUTOR = "hunter-issue-agent-control", "hunter-issue-agent-executor"

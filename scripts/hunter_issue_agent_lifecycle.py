@@ -612,6 +612,72 @@ def _require_anchors(configuration: control.Configuration, github: control.GitHu
     control.require_anchor(github, configuration, SOURCE_HANDLING_LEDGER_REF)
 
 
+def cmd_source_handling_bootstrap(configuration: control.Configuration, _arguments: argparse.Namespace) -> int:
+    """One-shot S6 bootstrap of the ADR 0038 Source Handling ledger, then replay-verify it."""
+    import tempfile
+
+    import bootstrap_source_handling_authority as bootstrap
+
+    from hunter.automation import issue_agent_source_handling_store as sh
+    from hunter.evidence_intelligence.source_handling_persistence import SourceHandlingOperatorRoot
+
+    _export_public_trust(configuration)
+    github = _github(configuration)
+    control.require_anchor(github, configuration, sh.SOURCE_HANDLING_LEDGER_REF)
+    store = _store(configuration, authenticated=True)
+    head, entries = store.read_files(sh.SOURCE_HANDLING_LEDGER_REF, frozenset({"record.json", "delta.json"}))
+    if entries:
+        with tempfile.TemporaryDirectory(prefix="hunter-sh-verify-") as root:
+            database = Path(root) / "evidence.sqlite"
+            sh.materialize(
+                store,
+                database,
+                trust=configuration.trust,
+                provenance=control.run_provenance(github, configuration),
+                verification_public_key=bytes.fromhex(configuration.source_handling.verification_key),
+                operator_root=SourceHandlingOperatorRoot(
+                    genesis_rule_sha256=configuration.source_handling.genesis_rule_sha256,
+                    verification_key_sha256=configuration.source_handling.verification_key_sha256,
+                ),
+            )
+        print(f"source-handling bootstrap: already provisioned and verified at {head}")
+        return 0
+
+    with tempfile.TemporaryDirectory(prefix="hunter-sh-bootstrap-") as root:
+        database = Path(root) / "evidence.sqlite"
+        _, transactions = sh.capture(database, lambda: bootstrap.bootstrap_authority(str(database)))
+        if not transactions:
+            raise LifecycleRefused("SOURCE_HANDLING_BLOCKED", "canonical bootstrap produced no transactions")
+        writer = _writer(
+            "source-handling-bootstrap", "source-handling-bootstrap", control.SOURCE_HANDLING_BOOTSTRAP_WORKFLOW
+        )
+        position = sh.publish(
+            store,
+            sh.LedgerPosition(),
+            transactions,
+            signing_key=_ed25519(STATE_SIGNING_KEY_ENV),
+            recorded_by=writer.recorded_by(),
+            recorded_at=_timestamp(),
+            repository_id=configuration.repository_id,
+        )
+        replay = Path(root) / "replay.sqlite"
+        verified = sh.materialize(
+            store,
+            replay,
+            trust=configuration.trust,
+            provenance=control.run_provenance(github, configuration),
+            verification_public_key=bytes.fromhex(configuration.source_handling.verification_key),
+            operator_root=SourceHandlingOperatorRoot(
+                genesis_rule_sha256=configuration.source_handling.genesis_rule_sha256,
+                verification_key_sha256=configuration.source_handling.verification_key_sha256,
+            ),
+        )
+        if verified.head != position.head or verified.snapshot_sha256 != position.snapshot_sha256:
+            raise LifecycleRefused("SOURCE_HANDLING_BLOCKED", "bootstrap replay does not match the published ledger")
+    print(f"source-handling bootstrap: published and verified {position.next_seq} transaction(s)")
+    return 0
+
+
 def cmd_authorize_prepare(configuration: control.Configuration, arguments: argparse.Namespace) -> int:
     import hunter_issue_agent_trigger as trigger
 
@@ -928,6 +994,7 @@ def _parser() -> argparse.ArgumentParser:
         child.set_defaults(handler=command)
         return child
 
+    add("source-handling-bootstrap", cmd_source_handling_bootstrap)
     prepare = add("authorize-prepare", cmd_authorize_prepare)
     prepare.add_argument("--event")
     prepare.add_argument("--document")
