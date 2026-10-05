@@ -688,7 +688,19 @@ def owner_merge_guard(pr_number: int) -> CompletionVerdict:
     except (subprocess.CalledProcessError, IndexError) as exc:
         return CompletionVerdict(False, "HEAD_DIVERGENCE", f"local/remote head evidence unavailable: {exc}")
 
-    pr = request_json("GET", f"pulls/{pr_number}")
+    try:
+        pr_raw = subprocess.run(
+            ("gh", "api", f"repos/{REPO}/pulls/{pr_number}"),
+            cwd=ROOT,
+            check=True,
+            text=True,
+            capture_output=True,
+        ).stdout
+        pr = json.loads(pr_raw)
+    except (subprocess.CalledProcessError, json.JSONDecodeError) as exc:
+        return CompletionVerdict(
+            False, "HEAD_DIVERGENCE", f"PR head evidence unavailable through authenticated gh: {exc}"
+        )
     if not isinstance(pr, dict) or pr.get("state") != "open":
         return CompletionVerdict(False, "HEAD_DIVERGENCE", "target PR is not open")
     pr_head = str((pr.get("head") or {}).get("sha") or "").strip()

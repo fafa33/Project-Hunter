@@ -563,7 +563,15 @@ def test_owner_merge_guard_rejects_dirty_or_unpushed_intended_head(monkeypatch):
         def __init__(self, stdout):
             self.stdout = stdout
 
-    outputs = iter(["", "b" * 40 + "\n", "topic\n", "a" * 40 + "\trefs/heads/topic\n"])
+    outputs = iter(
+        [
+            "",
+            "b" * 40 + "\n",
+            "topic\n",
+            "a" * 40 + "\trefs/heads/topic\n",
+            '{"state":"open","head":{"sha":"' + "a" * 40 + '"}}',
+        ]
+    )
     monkeypatch.setattr(core.subprocess, "run", lambda *args, **kwargs: Result(next(outputs)))
     monkeypatch.setattr(core, "request_json", lambda *_args, **_kwargs: {"state": "open", "head": {"sha": "a" * 40}})
     verdict = core.owner_merge_guard(562)
@@ -577,7 +585,9 @@ def test_owner_merge_guard_accepts_only_clean_identical_merge_ready_head(monkeyp
             self.stdout = stdout
 
     head = "a" * 40
-    outputs = iter(["", head + "\n", "topic\n", head + "\trefs/heads/topic\n"])
+    outputs = iter(
+        ["", head + "\n", "topic\n", head + "\trefs/heads/topic\n", '{"state":"open","head":{"sha":"' + head + '"}}']
+    )
     monkeypatch.setattr(core.subprocess, "run", lambda *args, **kwargs: Result(next(outputs)))
     monkeypatch.setattr(core, "request_json", lambda *_args, **_kwargs: {"state": "open", "head": {"sha": head}})
     monkeypatch.setattr(
