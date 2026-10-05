@@ -972,7 +972,7 @@
     {
       "id": "DFF-016",
       "title": "validation-proof-reused-without-immutable-identity",
-      "invariant": "An expensive validation proof is reusable only for the exact immutable content, validation definition and toolchain it was produced under. A changed head, a foreign head, a changed validation definition, a changed toolchain, a stale, malformed, unsuccessful or unverifiable proof, and unavailable evidence all refuse reuse and run the full lane.",
+      "invariant": "An expensive validation proof is reusable only for the exact immutable content, validation definition and toolchain it was produced under. A changed head, a foreign head, a changed validation definition, a changed toolchain, a stale, malformed, unsuccessful or unverifiable proof, and unavailable evidence all refuse reuse and run the full lane. A run that has not yet reached a terminal conclusion is not in that set: it has produced no verdict either way, so reuse waits it out under a bound derived from that authoritative workflow's own timeout rather than timing it out into a duplicate full lane.",
       "applicability": {
         "changed_paths": [
           ".githooks/",
@@ -984,7 +984,7 @@
         "rationale": "The validation boundaries and the reuse authority are where a proof made for one candidate can be re-aimed at another, and where removing duplicate proof can quietly become removing proof. The historical evidence reconstruction module is named explicitly for the same reason: it caches an expensive per-PR disposition and reuses it, so it is a reuse authority, and its post-passes revisit only CONFIRMED findings -- a wrongly reused non-CONFIRMED disposition can never be rolled back. The file is named rather than its directory, so the family is required where proof reuse actually happens instead of across every unrelated module beside it."
       },
       "prevention": {
-        "mechanism": "One place decides reuse, from identities the verifier recomputes rather than accepts: the Git tree content identity, the validation-definition identity over the declared definition files and the gate chain, the measured toolchain, and the exact head. The head binding carries no default, so a caller cannot drop it by omitting a keyword -- the defect independent review found on PR #416, where the push boundary supplied it and the local reuse path did not, letting content identity alone decide on one of the two production paths. A receipt can therefore only narrow reuse, never widen it, and every non-matching branch falls back to executing the full lane.",
+        "mechanism": "One place decides reuse, from identities the verifier recomputes rather than accepts: the Git tree content identity, the validation-definition identity over the declared definition files and the gate chain, the measured toolchain, and the exact head. The head binding carries no default, so a caller cannot drop it by omitting a keyword -- the defect independent review found on PR #416, where the push boundary supplied it and the local reuse path did not, letting content identity alone decide on one of the two production paths. A receipt can therefore only narrow reuse, never widen it, and every non-matching branch falls back to executing the full lane. Issue #561 PR #561: a fixed 420s reuse wait expired while the trusted exact-head Pre-PR run was still in_progress -- that run takes about 13.5 minutes -- so the reuse decision was abandoned and CI re-ran the identical 6,140-test suite (754.94s) while the authoritative run was about to succeed. The bound is now derived from the trusted workflow's timeout-minutes plus margin, pending is restricted to statuses genuinely still moving so an unreadable status cannot be waited on indefinitely, the wait recomputes no Git identity evidence because the tree, definition and toolchain cannot change while it waits, and the Quality Gates job timeout is asserted to exceed wait + full-lane fallback so the runner cannot cancel the job mid-wait.",
         "boundary": "hosted-gate",
         "guard_reference": "scripts/hunter_validation_receipt.py::verify"
       },
@@ -1000,13 +1000,19 @@
         "tests/test_historical_evidence_reconstruction.py::test_changed_evidence_inputs_invalidate_the_reconstruction_cache",
         "tests/test_historical_evidence_reconstruction.py::test_changed_frozen_record_invalidates_the_reconstruction_cache",
         "tests/test_historical_evidence_reconstruction.py::test_record_without_a_digest_is_never_reused_from_cache",
-        "tests/test_historical_evidence_reconstruction.py::test_reconstruction_cache_records_every_input_it_is_keyed_on"
+        "tests/test_historical_evidence_reconstruction.py::test_reconstruction_cache_records_every_input_it_is_keyed_on",
+        "tests/test_validation_proof_reuse.py::test_an_authoritative_run_still_running_past_the_old_fixed_wait_is_adopted_not_duplicated",
+        "tests/test_validation_proof_reuse.py::test_a_failing_cancelled_stale_or_mismatched_authoritative_run_falls_back_to_the_full_lane",
+        "tests/test_validation_proof_reuse.py::test_unavailable_or_malformed_api_evidence_fails_closed_without_waiting",
+        "tests/test_validation_proof_reuse.py::test_a_wedged_authoritative_run_still_ends_the_wait_and_runs_the_full_lane",
+        "tests/test_validation_proof_reuse.py::test_the_bounded_wait_is_derived_from_the_trusted_workflow_timeout_and_the_ci_job_outlives_it"
       ],
       "lifecycle": "hosted-enforced",
       "sources": [
         "Issue #415",
         "PR #416 independent owner review on 2026-09-06",
-        "PR #526 Codex P1, 2026-09-26: the historical reconstruction resume path admitted a finalized per-PR disposition on the registry and rule digests alone, although the disposition was also decided from the owner login, the resolved integration-base commit, the invariant and recurrence verdicts, and the frozen record itself -- the same shape as the PR #416 defect, where one of two reuse paths bound fewer identities than the decision depended on. Corrected by binding every such input plus the frozen record digest, failing closed when that digest is absent."
+        "PR #526 Codex P1, 2026-09-26: the historical reconstruction resume path admitted a finalized per-PR disposition on the registry and rule digests alone, although the disposition was also decided from the owner login, the resolved integration-base commit, the invariant and recurrence verdicts, and the frozen record itself -- the same shape as the PR #416 defect, where one of two reuse paths bound fewer identities than the decision depended on. Corrected by binding every such input plus the frozen record digest, failing closed when that digest is absent.",
+        "PR #561 Codex audit 2026-10-05, Issue #560 S6 entry: the reuse decision was a function of a fixed wait rather than of the authoritative run's terminal state, so a legitimately slow trusted run was indistinguishable from a missing one and the job duplicated the full lane."
       ]
     },
     {
