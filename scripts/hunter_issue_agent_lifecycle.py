@@ -613,7 +613,7 @@ def _require_anchors(configuration: control.Configuration, github: control.GitHu
 
 
 def cmd_source_handling_bootstrap(configuration: control.Configuration, _arguments: argparse.Namespace) -> int:
-    """One-shot S6 bootstrap of the ADR 0038 Source Handling ledger, then replay-verify it."""
+    """One-shot S6 bootstrap of ADR 0038, recovering any valid interrupted prefix."""
     import tempfile
 
     import bootstrap_source_handling_authority as bootstrap
@@ -625,56 +625,62 @@ def cmd_source_handling_bootstrap(configuration: control.Configuration, _argumen
     github = _github(configuration)
     control.require_anchor(github, configuration, sh.SOURCE_HANDLING_LEDGER_REF)
     store = _store(configuration, authenticated=True)
-    head, entries = store.read_files(sh.SOURCE_HANDLING_LEDGER_REF, frozenset({"record.json", "delta.json"}))
-    if entries:
-        with tempfile.TemporaryDirectory(prefix="hunter-sh-verify-") as root:
-            database = Path(root) / "evidence.sqlite"
-            sh.materialize(
+    provenance = control.run_provenance(github, configuration)
+    operator_root = SourceHandlingOperatorRoot(
+        genesis_rule_sha256=configuration.source_handling.genesis_rule_sha256,
+        verification_key_sha256=configuration.source_handling.verification_key_sha256,
+    )
+    with tempfile.TemporaryDirectory(prefix="hunter-sh-bootstrap-") as root:
+        root = Path(root)
+        database = root / "evidence.sqlite"
+        head, entries = store.read_files(sh.SOURCE_HANDLING_LEDGER_REF, frozenset({"record.json", "delta.json"}))
+        if entries:
+            position = sh.materialize(
                 store,
                 database,
                 trust=configuration.trust,
-                provenance=control.run_provenance(github, configuration),
+                provenance=provenance,
                 verification_public_key=bytes.fromhex(configuration.source_handling.verification_key),
-                operator_root=SourceHandlingOperatorRoot(
-                    genesis_rule_sha256=configuration.source_handling.genesis_rule_sha256,
-                    verification_key_sha256=configuration.source_handling.verification_key_sha256,
-                ),
+                operator_root=operator_root,
             )
-        print(f"source-handling bootstrap: already provisioned and verified at {head}")
-        return 0
+        else:
+            position = sh.LedgerPosition()
 
-    with tempfile.TemporaryDirectory(prefix="hunter-sh-bootstrap-") as root:
-        database = Path(root) / "evidence.sqlite"
-        _, transactions = sh.capture(database, lambda: bootstrap.bootstrap_authority(str(database)))
-        if not transactions:
-            raise LifecycleRefused("SOURCE_HANDLING_BLOCKED", "canonical bootstrap produced no transactions")
+        # Run the canonical bootstrap against the verified prefix. If a previous run stopped after one
+        # transaction, capture emits only the missing canonical transactions; a complete ledger emits none.
+        outcome, transactions = sh.capture(database, lambda: bootstrap.bootstrap_authority(str(database)))
+        if outcome.get("status") not in {"bootstrapped", "already-provisioned"}:
+            raise LifecycleRefused("SOURCE_HANDLING_BLOCKED", "canonical bootstrap did not reach a complete state")
         writer = _writer(
             "source-handling-bootstrap", "source-handling-bootstrap", control.SOURCE_HANDLING_BOOTSTRAP_WORKFLOW
         )
-        position = sh.publish(
-            store,
-            sh.LedgerPosition(),
-            transactions,
-            signing_key=_ed25519(STATE_SIGNING_KEY_ENV),
-            recorded_by=writer.recorded_by(),
-            recorded_at=_timestamp(),
-            repository_id=configuration.repository_id,
-        )
-        replay = Path(root) / "replay.sqlite"
+        if transactions:
+            position = sh.publish(
+                store,
+                position,
+                transactions,
+                signing_key=_ed25519(STATE_SIGNING_KEY_ENV),
+                recorded_by=writer.recorded_by(),
+                recorded_at=_timestamp(),
+                repository_id=configuration.repository_id,
+            )
+
+        replay = root / "replay.sqlite"
         verified = sh.materialize(
             store,
             replay,
             trust=configuration.trust,
-            provenance=control.run_provenance(github, configuration),
+            provenance=provenance,
             verification_public_key=bytes.fromhex(configuration.source_handling.verification_key),
-            operator_root=SourceHandlingOperatorRoot(
-                genesis_rule_sha256=configuration.source_handling.genesis_rule_sha256,
-                verification_key_sha256=configuration.source_handling.verification_key_sha256,
-            ),
+            operator_root=operator_root,
         )
+        # Completeness is semantic, not merely "non-empty": the canonical bootstrap must now be idempotent.
+        check, remaining = sh.capture(replay, lambda: bootstrap.bootstrap_authority(str(replay)))
+        if check.get("status") != "already-provisioned" or remaining:
+            raise LifecycleRefused("SOURCE_HANDLING_BLOCKED", "anchored bootstrap is valid but incomplete")
         if verified.head != position.head or verified.snapshot_sha256 != position.snapshot_sha256:
             raise LifecycleRefused("SOURCE_HANDLING_BLOCKED", "bootstrap replay does not match the published ledger")
-    print(f"source-handling bootstrap: published and verified {position.next_seq} transaction(s)")
+    print(f"source-handling bootstrap: complete and verified at {position.head}")
     return 0
 
 
