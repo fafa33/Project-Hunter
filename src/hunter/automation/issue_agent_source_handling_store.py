@@ -362,9 +362,16 @@ def _apply(database: Path, current: Snapshot, delta: Mapping[str, list[Row]]) ->
                         [row[column] for column in spec.mutable] + [row[column] for column in spec.key],
                     )
         connection.commit()
-    except sqlite3.DatabaseError as error:
+    except sqlite3.OperationalError:
+        # A lock, full disk, or momentarily unopenable store is an operational/local
+        # replay failure, never ledger corruption. Re-raise unmodified so the lifecycle
+        # reports its sanitized re-dispatch refusal and no raw sqlite payload crosses a
+        # bounded-refusal boundary.
         connection.rollback()
-        raise SourceHandlingLedgerError(f"delta does not replay onto the verified history: {error}") from None
+        raise
+    except sqlite3.DatabaseError:
+        connection.rollback()
+        raise SourceHandlingLedgerError("delta does not replay onto the verified history") from None
     finally:
         connection.close()
     return snapshot(database)

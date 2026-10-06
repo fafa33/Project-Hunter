@@ -350,20 +350,35 @@ def test_propose_rebuilds_fresh_once_dedicated_branch_is_stale(origin_repo: Path
 
 
 def test_propose_records_canonicalized_commits_under_the_bound_writer_identity(
-    origin_repo: Path, tmp_path: Path
+    origin_repo: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     """Canonicalization commits must carry the authorization-bound writer
     identity from `docs/CODE_WRITE_POLICY.json`, never the runner's ambient
     git identity. The canonical pre-push hook refuses unbound identities
     (exactly what happened when a runner's environment resolved
     `user.email` to a personal address), so the recording step must pin the
-    bound identity itself and fail closed if it is not declared."""
+    bound identity itself and fail closed if it is not declared. Git reads
+    `GIT_AUTHOR_NAME`, `GIT_AUTHOR_EMAIL`, `GIT_COMMITTER_NAME` and
+    `GIT_COMMITTER_EMAIL` from the environment before any `-c user.*`
+    override, so even a hostile inherited environment must be sanitized or
+    the recorded author and committer end up unbound."""
 
     # Ambient runner config matches the broken local_git_push environment:
     # a plausible name paired with an unbound personal email.
     _git(["config", "user.name", "Farhad5778"], cwd=tmp_path / "seed")
     _git(["config", "user.email", "farhadafshari33@yahoo.com"], cwd=tmp_path / "seed")
     _git(["config", "commit.gpgsign", "false"], cwd=tmp_path / "seed")
+
+    # Hostile inherited identity environment: git would otherwise prefer
+    # these over both `-c user.name` and `-c user.email`.
+    for name, value in {
+        "GIT_AUTHOR_NAME": "GIT Hostile Author",
+        "GIT_AUTHOR_EMAIL": "git-hostile-author@example.invalid",
+        "GIT_COMMITTER_NAME": "GIT Hostile Committer",
+        "GIT_COMMITTER_EMAIL": "git-hostile-committer@example.invalid",
+        "EMAIL": "hostile-email@example.invalid",
+    }.items():
+        monkeypatch.setenv(name, value)
 
     recorder = RecordingRun()
     message = candidate_pr.propose(
@@ -377,13 +392,16 @@ def test_propose_records_canonicalized_commits_under_the_bound_writer_identity(
     )
     assert "OPENED" in message
 
-    assert any(
-        "-c" in call
-        and "user.name=Farhad5778" in call
-        and "user.email=34549283+fafa33@users.noreply.github.com" in call
-        for call in recorder.calls
-        if call[0] == "git" and "commit" in call
-    ), "the recording commit must pin the authorization-bound writer identity"
+    commit_calls = [call for call in recorder.calls if call[0] == "env" and "git" in call and "commit" in call]
+    assert commit_calls, "the recording commit must run under the `env` identity sanitizer"
+    pinned = next(
+        call
+        for call in commit_calls
+        if "user.name=Farhad5778" in call and "user.email=34549283+fafa33@users.noreply.github.com" in call
+    )
+    sanitized = " ".join(pinned)
+    for variable in ("GIT_AUTHOR_NAME", "GIT_AUTHOR_EMAIL", "GIT_COMMITTER_NAME", "GIT_COMMITTER_EMAIL", "EMAIL"):
+        assert f"-u {variable}" in sanitized, f"the recording commit must unset {variable}"
 
     head_sha = subprocess.run(
         ["git", "rev-parse", candidate_pr.DEDICATED_BRANCH],
@@ -406,6 +424,10 @@ def test_propose_records_canonicalized_commits_under_the_bound_writer_identity(
     assert identity == ["Farhad5778", "34549283+fafa33@users.noreply.github.com"] * 2
     assert "farhadafshari33@yahoo.com" not in identity
     assert "fixture@example.invalid" not in identity
+    assert "git-hostile-author@example.invalid" not in identity
+    assert "git-hostile-committer@example.invalid" not in identity
+    assert "GIT Hostile Author" not in identity
+    assert "GIT Hostile Committer" not in identity
 
 
 def test_propose_reconciles_an_orphaned_branch_left_by_a_failed_pr_create(origin_repo: Path, tmp_path: Path) -> None:

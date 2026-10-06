@@ -471,6 +471,17 @@ def propose(
             _run(
                 run,
                 [
+                    "env",
+                    "-u",
+                    "GIT_AUTHOR_NAME",
+                    "-u",
+                    "GIT_AUTHOR_EMAIL",
+                    "-u",
+                    "GIT_COMMITTER_NAME",
+                    "-u",
+                    "GIT_COMMITTER_EMAIL",
+                    "-u",
+                    "EMAIL",
                     "git",
                     "-C",
                     str(worktree),
