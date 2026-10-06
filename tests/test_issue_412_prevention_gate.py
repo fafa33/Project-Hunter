@@ -89,16 +89,21 @@ def _policy(**overrides) -> dict:
         "require_single_writer_per_range": True,
         "identities": [
             {
+                "principal_id": "writer:claude",
                 "login": "claude",
+                "aliases": ["claude"],
                 "git_names": ["Claude"],
                 "git_emails": ["noreply@anthropic.com"],
                 "canonical_git_name": "Claude",
                 "canonical_git_email": "noreply@anthropic.com",
             },
             {
+                "principal_id": "github-user:34549283",
                 "login": "fafa33",
+                "aliases": ["fafa33", "Farhad5778"],
+                "github_user_id": 34549283,
                 "git_names": ["Farhad5778"],
-                "git_emails": ["34549283+fafa33@users.noreply.github.com"],
+                "git_emails": ["34549283+fafa33@users.noreply.github.com", "farhadafshari33@yahoo.com"],
                 "canonical_git_name": "Farhad5778",
                 "canonical_git_email": "34549283+fafa33@users.noreply.github.com",
             },
@@ -122,6 +127,30 @@ def _commit(
 ) -> provenance.CommitProvenance:
     committer = committer if committer is not None else author
     return provenance.CommitProvenance(sha, author[0], author[1], committer[0], committer[1])
+
+
+def test_owner_aliases_resolve_to_one_canonical_principal() -> None:
+    binding = _binding()
+    owner = binding.identity_for("fafa33")
+    assert owner is not None
+    assert binding.identity_for("Farhad5778") is owner
+    assert binding.identity_for_github_user_id(34549283) is owner
+    for email in ("34549283+fafa33@users.noreply.github.com", "farhadafshari33@yahoo.com"):
+        verdict = provenance.evaluate_commit(binding, _commit(author=("Farhad5778", email)))
+        assert verdict.ok is True and verdict.writer_login == "fafa33"
+
+
+def test_unknown_owner_looking_email_is_not_inferred() -> None:
+    verdict = provenance.evaluate_commit(_binding(), _commit(author=("Farhad5778", "farhad5778@attacker.example")))
+    assert verdict.ok is False
+
+
+def test_duplicate_alias_across_principals_fails_closed() -> None:
+    policy = _policy()
+    policy[provenance.BINDING_FIELD]["identities"][0]["aliases"].append("Farhad5778")
+    parsed, error = provenance.parse_binding(policy)
+    assert parsed is None
+    assert "reuses alias" in error
 
 
 def test_agent_committer_with_a_correct_tree_is_rejected_before_any_push() -> None:
