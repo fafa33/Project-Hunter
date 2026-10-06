@@ -93,7 +93,7 @@ def test_the_pinned_s6_trust_roots_are_provisioned_and_complete() -> None:
     assert document["owner_login"] == "fafa33"
     assert document["anchor"] == {
         "ruleset_id": 24526712,
-        "updated_at": "2026-10-05T21:29:49.614+02:00",
+        "updated_at": "2026-10-05T19:29:49.614Z",
     }
     assert len(document["state_keys"]) == 1
     assert len(document["authorization_verifying_key"]) == 64
