@@ -2089,7 +2089,7 @@
       },
       "prevention": {
         "mechanism": "candidate_admission reads authoritative paginated GitHub reviewThreads before any protected-preflight success shortcut and returns BLOCKING_FINDINGS for unresolved threads or unavailable thread evidence.",
-        "boundary": "governance-admission",
+        "boundary": "merge-gate",
         "guard_reference": "scripts/hunter_governance_review_v2.py::candidate_admission"
       },
       "regression_evidence": [
