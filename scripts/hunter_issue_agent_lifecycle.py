@@ -665,12 +665,6 @@ def _source_handling_bootstrap(configuration: control.Configuration) -> int:
 
     _export_public_trust(configuration)
     github = _github(configuration)
-    try:
-        control.require_anchor(github, configuration, sh.SOURCE_HANDLING_LEDGER_REF)
-    except ValueError:
-        raise control.Frozen(
-            "ANCHOR_INTEGRITY_FAILED", "the bootstrap target ref is outside the anchored state namespace"
-        ) from None
 
     def canonical_bootstrap(target: Path) -> tuple[Any, list[Any]]:
         try:
@@ -679,6 +673,20 @@ def _source_handling_bootstrap(configuration: control.Configuration) -> int:
             raise LifecycleRefused("MISSING_CONFIGURATION", str(error)) from None
 
     store = _store(configuration, authenticated=True)
+    # Creation-aware S6 bootstrap: GitHub cannot return branch-applied rules for a ref that does not
+    # exist.  Existing refs always take the strict path.  A first creation may proceed only after the
+    # pinned namespace ruleset is verified and absence is observed through the authenticated store; the
+    # newly-created ref is then required to pass the normal strict branch-applied verification below.
+    bootstrap_head = store.ref_head(sh.SOURCE_HANDLING_LEDGER_REF)
+    try:
+        if bootstrap_head is None:
+            control.require_anchor_ruleset(github, configuration, sh.SOURCE_HANDLING_LEDGER_REF)
+        else:
+            control.require_anchor(github, configuration, sh.SOURCE_HANDLING_LEDGER_REF)
+    except ValueError:
+        raise control.Frozen(
+            "ANCHOR_INTEGRITY_FAILED", "the bootstrap target ref is outside the anchored state namespace"
+        ) from None
     provenance = control.run_provenance(github, configuration)
     operator_root = SourceHandlingOperatorRoot(
         genesis_rule_sha256=configuration.source_handling.genesis_rule_sha256,
@@ -737,6 +745,9 @@ def _source_handling_bootstrap(configuration: control.Configuration) -> int:
                 recorded_at=_timestamp(),
                 repository_id=configuration.repository_id,
             )
+            # The bootstrap permission ends at the first write.  From this point the ref exists and must
+            # be demonstrably protected by the pinned ruleset before any success can be reported.
+            control.require_anchor(github, configuration, sh.SOURCE_HANDLING_LEDGER_REF)
 
         replay = root / "replay.sqlite"
         verified = sh.materialize(

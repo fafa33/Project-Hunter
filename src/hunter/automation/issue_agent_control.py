@@ -435,6 +435,24 @@ def run_provenance(github: GitHub, configuration: Configuration) -> state.Proven
     return check
 
 
+def require_anchor_ruleset(github: GitHub, configuration: Configuration, ref: str) -> None:
+    """Verify the pinned namespace ruleset before the first creation of a ledger ref.
+
+    This deliberately does not assert branch-applied rules: GitHub cannot report those for a ref that does
+    not exist yet.  Callers must prove the ref is absent before creation and call ``require_anchor``
+    immediately after the first write.
+    """
+
+    if not ref.startswith(state.LEDGER_REF_PREFIX):
+        raise ValueError("the anchor covers only the state namespace")
+    repository = configuration.repository
+    ruleset = definitive(github.get(f"/repos/{repository}/rulesets/{configuration.anchor.ruleset_id}"))
+    try:
+        state.verify_anchor_ruleset(configuration.anchor, ruleset if isinstance(ruleset, Mapping) else None)
+    except state.AnchorIntegrityError as error:
+        raise Frozen("ANCHOR_INTEGRITY_FAILED", str(error)) from None
+
+
 def require_anchor(github: GitHub, configuration: Configuration, ref: str) -> None:
     """ADR 0037 D2a: authenticated reads of the pinned ruleset and of the rules applied to ``ref``."""
 

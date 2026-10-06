@@ -681,13 +681,12 @@ class AnchorPin:
     required_rules: frozenset[str] = frozenset({"deletion", "non_fast_forward"})
 
 
-def verify_anchor_integrity(
-    pin: AnchorPin, ruleset: Mapping[str, Any] | None, rules_for_branch: Sequence[Mapping[str, Any]]
-) -> None:
-    """Fail closed unless the anchor ruleset is provably intact for this branch.
+def verify_anchor_ruleset(pin: AnchorPin, ruleset: Mapping[str, Any] | None) -> None:
+    """Verify the pinned anchor itself without claiming that a not-yet-created branch is covered.
 
-    ``ruleset`` is an *authenticated* ``GET /repos/{r}/rulesets/{id}`` and ``rules_for_branch`` an
-    authenticated ``GET /repos/{r}/rules/branches/{branch}``. Anonymous reads were proven CDN-stale in S0.
+    This is only sufficient for the creation half of the S6 Source Handling bootstrap.  Every existing
+    ledger branch, and the newly-created branch immediately after its first CAS write, must still pass
+    :func:`verify_anchor_integrity`.
     """
 
     if ruleset is None or ruleset.get("id") != pin.ruleset_id:
@@ -712,6 +711,18 @@ def verify_anchor_integrity(
     declared = {str(rule.get("type")) for rule in ruleset.get("rules") or [] if isinstance(rule, dict)}
     if not pin.required_rules <= declared:
         raise AnchorIntegrityError("anchor ruleset rules weakened")
+
+
+def verify_anchor_integrity(
+    pin: AnchorPin, ruleset: Mapping[str, Any] | None, rules_for_branch: Sequence[Mapping[str, Any]]
+) -> None:
+    """Fail closed unless the anchor ruleset is provably intact for this branch.
+
+    ``ruleset`` is an *authenticated* ``GET /repos/{r}/rulesets/{id}`` and ``rules_for_branch`` an
+    authenticated ``GET /repos/{r}/rules/branches/{branch}``. Anonymous reads were proven CDN-stale in S0.
+    """
+
+    verify_anchor_ruleset(pin, ruleset)
     applied = {
         str(rule.get("type"))
         for rule in rules_for_branch
