@@ -10,7 +10,6 @@ asserts the boundary refuses it.
 
 from __future__ import annotations
 
-import json
 import subprocess
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
@@ -639,16 +638,40 @@ def test_reuse_marker_matches_the_canonical_preflight_mode_marker() -> None:
     assert reuse.MODE_MARKER == hunter_pre_push.MODE_MARKER.as_posix()
 
 
-def test_ci_workflow_guards_the_full_lane_on_the_reuse_decision() -> None:
-    """The reuse decision must actually gate the expensive step in CI."""
-    workflow = json.loads(json.dumps(_ci_workflow()))
-    steps = workflow["jobs"]["quality"]["steps"]
-    resolver = next(step for step in steps if "hunter_validation_reuse.py" in str(step.get("run", "")))
-    preflight_step = next(step for step in steps if "hunter_pr_preflight.py" in str(step.get("run", "")))
+def test_ci_quality_gate_is_proof_only_consumer_and_never_duplicates_full_lane() -> None:
+    workflow = _ci_workflow()
+    job = workflow["jobs"]["quality"]
+    steps = job["steps"]
+    runs = "\n".join(str(step.get("run", "")) for step in steps)
 
-    assert resolver["id"], "the reuse resolver step must expose an id for the guard to reference"
-    assert steps.index(resolver) < steps.index(preflight_step)
-    assert f"steps.{resolver['id']}.outputs.reusable" in preflight_step["if"]
+    assert "hunter_validation_reuse.py --require-proof" in runs
+    assert "hunter_pr_preflight.py" not in runs
+    assert "pytest" not in runs
+    assert job["timeout-minutes"] <= 10
+    assert "workflow_run" in str(job["if"])
+    assert "head_branch != 'main'" in str(job["if"])
+    trigger = workflow[True]
+    assert "pull_request" not in trigger
+    assert trigger["workflow_run"]["workflows"] == [reuse.PRE_PR_WORKFLOW_NAME]
+    assert trigger["workflow_run"]["types"] == ["completed"]
+
+
+def test_proof_only_consumer_fails_closed_without_starting_or_waiting_for_validation(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(reuse, "resolve", lambda *_args, **_kwargs: reuse.ReuseDecision(False, "proof pending", True))
+    assert (
+        reuse.main(["--require-proof", "--event-name", "pull_request", "--head-sha", "a" * 40, "--repository", "o/r"])
+        == 2
+    )
+
+
+def test_proof_only_consumer_accepts_completed_exact_head_proof(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(reuse, "resolve", lambda *_args, **_kwargs: reuse.ReuseDecision(True, "exact proof"))
+    assert (
+        reuse.main(["--require-proof", "--event-name", "pull_request", "--head-sha", "a" * 40, "--repository", "o/r"])
+        == 0
+    )
 
 
 def _ci_workflow() -> Any:

@@ -1,9 +1,11 @@
 name: CI
 
 on:
-  pull_request:
-    branches:
-      - main
+  workflow_run:
+    workflows:
+      - Hunter / Pre-PR Preflight
+    types:
+      - completed
   push:
     branches:
       - main
@@ -22,14 +24,15 @@ concurrency:
 jobs:
   quality:
     name: Quality Gates
+    if: >-
+      github.event_name == 'workflow_run' &&
+      github.event.workflow_run.event == 'push' &&
+      github.event.workflow_run.head_branch != 'main'
     runs-on: ubuntu-latest
-    # Issue #561: this job waits for the authoritative exact-head `Hunter / Pre-PR Preflight`
-    # run to reach a terminal conclusion before deciding reuse, and that wait is bounded by
-    # that workflow's own `timeout-minutes` plus margin. The bound here must therefore exceed
-    # wait + the full-lane fallback, or the runner cancels this job mid-wait and re-creates
-    # exactly the duplication the wait avoids. Pinned by a regression test rather than tuned
-    # by hand, so the two numbers cannot drift apart again.
-    timeout-minutes: 55
+    # Quality Gates is the cheap merge-authority consumer. The feature-branch
+    # Pre-PR workflow is the single full-suite producer for an immutable SHA.
+    # This job must never run a second full repository suite or poll that producer.
+    timeout-minutes: 10
 
     steps:
       - name: Checkout
@@ -53,29 +56,14 @@ jobs:
           set -euo pipefail
           python -m pip install --disable-pip-version-check -c requirements/ci-constraints.txt -e ".[dev]"
 
-      # Issue #415: when the tree GitHub would merge is byte-for-byte the tree the
-      # trusted exact-head branch preflight already validated, re-running the
-      # identical suite establishes nothing. Anything else -- a divergent
-      # integration tree, a missing or unsuccessful trusted run, unavailable
-      # evidence -- falls back to the full lane below.
-      # Reuse is one-shot and non-blocking: pending evidence falls through immediately to
-      # this job's own full lane. CI must never poll another workflow as a latency boundary.
-      - name: Resolve exact-identity validation reuse
-        id: validation-reuse
+      # One SHA -> one heavy validation. Pre-PR owns the full suite. Quality Gates
+      # consumes only a completed exact-identity proof; it never races the producer
+      # by starting another full suite. While the producer is active this check is
+      # expected to be non-terminal and governance remains fail-closed.
+      - name: Consume canonical exact-head validation proof
         env:
           GITHUB_TOKEN: ${{ github.token }}
           GH_REPO: ${{ github.repository }}
-          PR_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
-        run: python scripts/hunter_validation_reuse.py
-
-      - name: Run shared deterministic preflight
-        if: steps.validation-reuse.outputs.reusable != 'true'
-        env:
-          # Issue #415: the full repository suite is this pipeline's long pole,
-          # so the boundaries that own it run it in parallel. `loadfile` keeps
-          # every test in a file on one worker, so intra-file ordering and
-          # module-scoped state behave exactly as they do serially and only
-          # whole files run concurrently. Measured on 4 vCPU over 3,628 tests:
-          # 416s serial, 126s parallel.
-          PYTEST_ADDOPTS: -n auto --dist loadfile
-        run: python scripts/hunter_pr_preflight.py --mode normal
+          PR_HEAD_SHA: ${{ github.event.workflow_run.head_sha || github.sha }}
+          VALIDATION_EVENT_NAME: ${{ github.event_name == 'workflow_run' && 'pull_request' || github.event_name }}
+        run: python scripts/hunter_validation_reuse.py --require-proof --event-name "${VALIDATION_EVENT_NAME}"

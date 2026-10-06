@@ -267,6 +267,11 @@ def main(argv: Sequence[str] | None = None) -> int:
     parser.add_argument("--event-name", default=os.environ.get("GITHUB_EVENT_NAME", ""))
     parser.add_argument("--head-sha", default=os.environ.get("PR_HEAD_SHA", ""))
     parser.add_argument("--repository", default=os.environ.get("GH_REPO", ""))
+    parser.add_argument(
+        "--require-proof",
+        action="store_true",
+        help="Act as a proof-only consumer: return nonzero until exact-head proof exists; never run or wait for validation.",
+    )
     args = parser.parse_args(argv)
 
     token = os.environ.get("GITHUB_TOKEN") or os.environ.get("GH_TOKEN") or ""
@@ -281,6 +286,11 @@ def main(argv: Sequence[str] | None = None) -> int:
     except Exception as exc:  # noqa: BLE001 - reuse is optional; full validation is the fail-closed path
         decision = ReuseDecision(False, f"reuse resolution failed ({type(exc).__name__}: {exc})")
     _emit(decision)
+    if args.require_proof and not decision.reusable:
+        # Fail closed without duplicating the heavy lane. A push/synchronize event
+        # re-evaluates this cheap consumer on the next immutable candidate; merge
+        # authority remains blocked until canonical proof is observable.
+        return 2
     return 0
 
 
