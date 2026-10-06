@@ -2,26 +2,26 @@
   "claims": {
     "acceptance_criteria": [
       {
-        "criterion": "Railway is absent from the production dependency graph and the canonical path is GitHub-native, restart-safe, auditable, and has no external runtime SPOF.",
-        "evidence": "ADR 0037/0038/0039 and S1-S5 implementation on this candidate.",
+        "criterion": "The one-shot GitHub-native Source Handling bootstrap entrypoint is exercised end to end at the command boundary against a real anchored ledger, covering the first bootstrap, idempotent re-dispatch, tampered and foreign pre-existing ledgers, anchor weakening, trust-root and signing-key mismatches, re-run refusal, lost compare-and-swap, crash before and after a durable write with prefix recovery, single-ref write scope, and secret non-disclosure.",
+        "evidence": "tests/test_issue_agent_source_handling_bootstrap_entry.py (21 entrypoint tests driving scripts/hunter_issue_agent_lifecycle.py against a local bare remote and an authenticated GitHub read double).",
         "id": "AC-1",
         "verdict": "satisfied"
       },
       {
-        "criterion": "Credential isolation, signed exact bindings, durable restart-safe state, fail-closed recovery, and exactly-one Draft PR publication are preserved.",
-        "evidence": "Focused lifecycle/adversarial suites and S5 acceptance/mutation proofs on this candidate.",
+        "criterion": "Every refusal the bootstrap can raise is a bounded, documented machine-checked refusal or freeze code rather than an unhandled traceback, and failure leaves no out-of-scope durable write.",
+        "evidence": "scripts/hunter_issue_agent_lifecycle.py cmd_source_handling_bootstrap translation layer; the new suite was red on the untouched entrypoint (11 of 21) and is green after the fix; no Traceback in stdout or stderr for any refusal path.",
         "id": "AC-2",
         "verdict": "satisfied"
       },
       {
-        "criterion": "Reviewer findings flow into canonical knowledge/DPM and bounded remediation without human relay or duplicate authority.",
-        "evidence": "ADR 0039 L1-L7 implementation and S5b acceptance simulation.",
+        "criterion": "ADR 0038 Implementation Status and the ADR 0037 S6 status text describe the implementation that actually exists after PR #562 and PR #564, without claiming a dispatched bootstrap or a written state ref.",
+        "evidence": "docs/ADR/0038-source-handling-github-native-authority-store.md and docs/ADR/0037-github-native-issue-agent-execution.md edits in this range; Architecture Index Guard PASS.",
         "id": "AC-3",
         "verdict": "satisfied"
       },
       {
-        "criterion": "Current Sonar findings and Intel macOS automatic-canonicalization install failure are corrected without weakening trust boundaries.",
-        "evidence": "Fork-origin workflow_run guard, transaction cleanup-safe notifications, and cryptography-50 source-build exception only on the trusted self-hosted canonicalization lane; focused suite 176 passed.",
+        "criterion": "The range introduces no second Source Handling authority, ledger, SPM, DPM or publisher, changes no trust root or pinned authorization rule, dispatches no bootstrap, and writes no production state ref.",
+        "evidence": "Changed paths are limited to the lifecycle entrypoint, its new test file and two ADR implementation-status sections; config/issue_agent_trust_roots.json and the workflow are untouched; refs/heads/hunter-state/v1/source-handling remains absent on origin.",
         "id": "AC-4",
         "verdict": "satisfied"
       }
@@ -40,206 +40,91 @@
       "transaction-snapshot-consistency"
     ],
     "base_ref": "main",
-    "base_sha": "32d72f14ebc6e5910196ccb436131f98c7044010",
+    "base_sha": "ef0b2a4bf5a59be5ea17ebc5f80bebd71358f3d9",
     "defect_families": [
       {
-        "evidence": "Included in exact-candidate hostile-review scope; applicable by trusted registry path matching.",
-        "family": "DFF-001",
-        "outcome": "clear"
-      },
-      {
-        "evidence": "Included in exact-candidate hostile-review scope; applicable by trusted registry path matching.",
-        "family": "DFF-002",
-        "outcome": "clear"
-      },
-      {
-        "evidence": "Included in exact-candidate hostile-review scope; applicable by trusted registry path matching.",
-        "family": "DFF-003",
-        "outcome": "clear"
-      },
-      {
-        "evidence": "Included in exact-candidate hostile-review scope; applicable by trusted registry path matching.",
-        "family": "DFF-004",
-        "outcome": "clear"
-      },
-      {
-        "evidence": "Included in exact-candidate hostile-review scope; applicable by trusted registry path matching.",
-        "family": "DFF-005",
-        "outcome": "clear"
-      },
-      {
-        "evidence": "Included in exact-candidate hostile-review scope; applicable by trusted registry path matching.",
-        "family": "DFF-006",
-        "outcome": "clear"
-      },
-      {
-        "evidence": "Included in exact-candidate hostile-review scope; applicable by trusted registry path matching.",
+        "evidence": "Included in exact-candidate hostile-review scope; applicable by trusted registry path matching; no authorization-replay instance is introduced by this range.",
         "family": "DFF-007",
         "outcome": "clear"
       },
       {
-        "evidence": "Included in exact-candidate hostile-review scope; applicable by trusted registry path matching.",
+        "evidence": "Included in exact-candidate hostile-review scope; applicable by trusted registry path matching; no tamper or history-forgery instance is introduced by this range.",
         "family": "DFF-008",
         "outcome": "clear"
       },
       {
-        "evidence": "Included in exact-candidate hostile-review scope; applicable by trusted registry path matching.",
+        "evidence": "Included in exact-candidate hostile-review scope; applicable by trusted registry path matching; no connector-provenance instance is introduced by this range.",
         "family": "DFF-009",
         "outcome": "clear"
       },
       {
-        "evidence": "Included in exact-candidate hostile-review scope; applicable by trusted registry path matching.",
+        "evidence": "Included in exact-candidate hostile-review scope; applicable by trusted registry path matching; writer identity remains bound by the pinned trust roots.",
         "family": "DFF-010",
         "outcome": "clear"
       },
       {
-        "evidence": "Included in exact-candidate hostile-review scope; applicable by trusted registry path matching.",
+        "evidence": "Included in exact-candidate hostile-review scope; applicable by trusted registry path matching; interrupted-prefix recovery is covered by tests/test_issue_agent_source_handling_bootstrap_entry.py.",
         "family": "DFF-011",
         "outcome": "clear"
       },
       {
-        "evidence": "Included in exact-candidate hostile-review scope; applicable by trusted registry path matching.",
+        "evidence": "Included in exact-candidate hostile-review scope; applicable by trusted registry path matching; no receipt publication is added by this range.",
         "family": "DFF-012",
         "outcome": "clear"
       },
       {
-        "evidence": "Included in exact-candidate hostile-review scope; applicable by trusted registry path matching.",
+        "evidence": "Included in exact-candidate hostile-review scope; applicable by trusted registry path matching; this candidate stays Draft until the owner marks it Ready.",
         "family": "DFF-013",
         "outcome": "clear"
       },
       {
-        "evidence": "Included in exact-candidate hostile-review scope; applicable by trusted registry path matching.",
+        "evidence": "Included in exact-candidate hostile-review scope; applicable by trusted registry path matching; pending preflight and Draft states are reported as pending, never as failure.",
         "family": "DFF-014",
         "outcome": "clear"
       },
       {
-        "evidence": "Included in exact-candidate hostile-review scope; applicable by trusted registry path matching.",
+        "evidence": "Included in exact-candidate hostile-review scope; applicable by trusted registry path matching; no prevention or review state is over-claimed: the ADR edits record what has and has not been delivered.",
         "family": "DFF-015",
         "outcome": "clear"
       },
       {
-        "evidence": "Included in exact-candidate hostile-review scope; applicable by trusted registry path matching.",
+        "evidence": "Included in exact-candidate hostile-review scope; applicable by trusted registry path matching; no validation proof is minted or reused by this range.",
         "family": "DFF-016",
         "outcome": "clear"
       },
       {
-        "evidence": "Included in exact-candidate hostile-review scope; applicable by trusted registry path matching.",
-        "family": "DFF-017",
-        "outcome": "clear"
-      },
-      {
-        "evidence": "Included in exact-candidate hostile-review scope; applicable by trusted registry path matching.",
-        "family": "DFF-018",
-        "outcome": "clear"
-      },
-      {
-        "evidence": "Included in exact-candidate hostile-review scope; applicable by trusted registry path matching.",
+        "evidence": "Included in exact-candidate hostile-review scope; applicable by trusted registry path matching; no Railway runtime or volume behaviour is touched by this range.",
         "family": "DFF-019",
         "outcome": "clear"
       },
       {
-        "evidence": "Included in exact-candidate hostile-review scope; applicable by trusted registry path matching.",
+        "evidence": "Included in exact-candidate hostile-review scope; applicable by trusted registry path matching; no live-instance execution or ownership isolation boundary is changed.",
         "family": "DFF-020",
         "outcome": "clear"
       },
       {
-        "evidence": "Included in exact-candidate hostile-review scope; applicable by trusted registry path matching.",
+        "evidence": "Included in exact-candidate hostile-review scope; applicable by trusted registry path matching; no execution shutdown or drain path is changed.",
         "family": "DFF-021",
         "outcome": "clear"
       },
       {
-        "evidence": "Included in exact-candidate hostile-review scope; applicable by trusted registry path matching.",
-        "family": "DFF-022",
-        "outcome": "clear"
-      },
-      {
-        "evidence": "Included in exact-candidate hostile-review scope; applicable by trusted registry path matching.",
+        "evidence": "Included in exact-candidate hostile-review scope; applicable by trusted registry path matching; the bootstrap entrypoint still runs the canonical anchor, provenance and preflight checks before any ledger claim.",
         "family": "DFF-023",
         "outcome": "clear"
       },
       {
-        "evidence": "Included in exact-candidate hostile-review scope; applicable by trusted registry path matching.",
-        "family": "DFF-024",
-        "outcome": "clear"
-      },
-      {
-        "evidence": "Included in exact-candidate hostile-review scope; applicable by trusted registry path matching.",
-        "family": "DFF-025",
-        "outcome": "clear"
-      },
-      {
-        "evidence": "Included in exact-candidate hostile-review scope; applicable by trusted registry path matching.",
-        "family": "DFF-026",
-        "outcome": "clear"
-      },
-      {
-        "evidence": "Included in exact-candidate hostile-review scope; applicable by trusted registry path matching.",
-        "family": "DFF-027",
-        "outcome": "clear"
-      },
-      {
-        "evidence": "Included in exact-candidate hostile-review scope; applicable by trusted registry path matching.",
-        "family": "DFF-028",
-        "outcome": "clear"
-      },
-      {
-        "evidence": "Included in exact-candidate hostile-review scope; applicable by trusted registry path matching.",
+        "evidence": "Included in exact-candidate hostile-review scope; applicable by trusted registry path matching; canonical preflight remains the gate for publication and is untouched here.",
         "family": "DFF-029",
         "outcome": "clear"
       },
       {
-        "evidence": "Included in exact-candidate hostile-review scope; applicable by trusted registry path matching.",
+        "evidence": "Included in exact-candidate hostile-review scope; applicable by trusted registry path matching; no tracked governance asset is moved or renamed.",
         "family": "DFF-033",
         "outcome": "clear"
       },
       {
-        "evidence": "Included in exact-candidate hostile-review scope; applicable by trusted registry path matching.",
-        "family": "DFF-034",
-        "outcome": "clear"
-      },
-      {
-        "evidence": "Included in exact-candidate hostile-review scope; applicable by trusted registry path matching.",
+        "evidence": "Included in exact-candidate hostile-review scope; applicable by trusted registry path matching; the new suite drives real git, the real store and the real command rather than an external precondition.",
         "family": "DFF-035",
-        "outcome": "clear"
-      },
-      {
-        "evidence": "Included in exact-candidate hostile-review scope; applicable by trusted registry path matching.",
-        "family": "DFF-036",
-        "outcome": "clear"
-      },
-      {
-        "evidence": "Included in exact-candidate hostile-review scope; applicable by trusted registry path matching.",
-        "family": "DFF-038",
-        "outcome": "clear"
-      },
-      {
-        "evidence": "Included in exact-candidate hostile-review scope; applicable by trusted registry path matching.",
-        "family": "DFF-043",
-        "outcome": "clear"
-      },
-      {
-        "evidence": "Included in exact-candidate hostile-review scope; applicable by trusted registry path matching.",
-        "family": "DFF-045",
-        "outcome": "clear"
-      },
-      {
-        "evidence": "Included in exact-candidate hostile-review scope; applicable by trusted registry path matching.",
-        "family": "DFF-046",
-        "outcome": "clear"
-      },
-      {
-        "evidence": "Included in exact-candidate hostile-review scope; applicable by trusted registry path matching.",
-        "family": "DFF-047",
-        "outcome": "clear"
-      },
-      {
-        "evidence": "Included in exact-candidate hostile-review scope; applicable by trusted registry path matching.",
-        "family": "DFF-048",
-        "outcome": "clear"
-      },
-      {
-        "evidence": "Included in exact-candidate hostile-review scope; applicable by trusted registry path matching.",
-        "family": "DFF-049",
         "outcome": "clear"
       }
     ],
@@ -247,461 +132,35 @@
     "issue": "560",
     "review_target": [
       {
-        "blob_sha": "9c3178abbabcbebbe825e32ca9568c63aff89232",
-        "path": ".github/workflows/hunter-issue-agent-knowledge.yml",
+        "blob_sha": "4df705d4f5a667dd4817a7eb82be43d2ee48567b",
+        "path": "tests/test_issue_agent_source_handling_bootstrap_entry.py",
         "previous_path": "",
         "status": "added"
       },
       {
-        "blob_sha": "2d03728cdd9d9341b2190b5049b407e34b6f062c",
-        "path": ".github/workflows/hunter-issue-agent-reconcile.yml",
-        "previous_path": "",
-        "status": "added"
-      },
-      {
-        "blob_sha": "337175a91ce31ab6e2153bf363ed3e849f4dc45b",
-        "path": "config/issue_agent_trust_roots.json",
-        "previous_path": "",
-        "status": "added"
-      },
-      {
-        "blob_sha": "4ba3017d57b962c9531e04591be220d918dacbb2",
+        "blob_sha": "1ba07c477243513a95f9eb451d2a9dda95c1a11f",
         "path": "docs/ADR/0037-github-native-issue-agent-execution.md",
         "previous_path": "",
-        "status": "added"
+        "status": "modified"
       },
       {
-        "blob_sha": "1d27e46a24154b7d5c7f9f7638f7b18709633132",
+        "blob_sha": "5b3e0dfd9b47d34047cf780d35837c634f196144",
         "path": "docs/ADR/0038-source-handling-github-native-authority-store.md",
         "previous_path": "",
-        "status": "added"
+        "status": "modified"
       },
       {
-        "blob_sha": "b9386aeb6a4d963b568b34c2c8d8881ce88140c6",
-        "path": "docs/ADR/0039-review-knowledge-remediation-loop.md",
-        "previous_path": "",
-        "status": "added"
-      },
-      {
-        "blob_sha": "210797fa5f419a978a69baa8bf490794760824f8",
-        "path": "docs/ISSUE_AGENT_GITHUB_NATIVE_FMEA.md",
-        "previous_path": "",
-        "status": "added"
-      },
-      {
-        "blob_sha": "9fd34c01b5a882759412f4ce6edbf8dfc11dbcb7",
-        "path": "docs/ISSUE_AGENT_GITHUB_NATIVE_STATE_MACHINE.md",
-        "previous_path": "",
-        "status": "added"
-      },
-      {
-        "blob_sha": "8559a8de13896e9d969bdd872002179c47c1f0fd",
-        "path": "docs/ISSUE_AGENT_RAILWAY_RETIREMENT_PLAN.md",
-        "previous_path": "",
-        "status": "added"
-      },
-      {
-        "blob_sha": "79f0b67275f5c8242fcbf28ef52fce3c94f4f580",
-        "path": "docs/ISSUE_AGENT_REVIEW_KNOWLEDGE_LOOP.md",
-        "previous_path": "",
-        "status": "added"
-      },
-      {
-        "blob_sha": "358ebe80a4e0d4594c019066faf50ebd7408e4db",
+        "blob_sha": "d425416fde3442dadd9e020f48168df7cede2a21",
         "path": "scripts/hunter_issue_agent_lifecycle.py",
-        "previous_path": "",
-        "status": "added"
-      },
-      {
-        "blob_sha": "63e237f21e66926caa58af880eea8337244c1e0a",
-        "path": "src/hunter/automation/issue_agent_authorize.py",
-        "previous_path": "",
-        "status": "added"
-      },
-      {
-        "blob_sha": "0640d5fc740a3acb3d94e8ba062bcf34e2c07b96",
-        "path": "src/hunter/automation/issue_agent_control.py",
-        "previous_path": "",
-        "status": "added"
-      },
-      {
-        "blob_sha": "1d05bae4647866e04497d1cff8268de3e42e3782",
-        "path": "src/hunter/automation/issue_agent_knowledge.py",
-        "previous_path": "",
-        "status": "added"
-      },
-      {
-        "blob_sha": "185c19554a8dd8d61bec2a369ce96240e3d78900",
-        "path": "src/hunter/automation/issue_agent_remediation.py",
-        "previous_path": "",
-        "status": "added"
-      },
-      {
-        "blob_sha": "e722e75c9bea5858ec351859a3e289159cefd36f",
-        "path": "src/hunter/automation/issue_agent_roles.py",
-        "previous_path": "",
-        "status": "added"
-      },
-      {
-        "blob_sha": "0f65deca9e8d9700fa54a9d705d343e115af5d8a",
-        "path": "src/hunter/automation/issue_agent_source_handling_store.py",
-        "previous_path": "",
-        "status": "added"
-      },
-      {
-        "blob_sha": "a35f739ef68d7b1afe14e134a8fa77c4c2be65ab",
-        "path": "src/hunter/automation/issue_agent_state.py",
-        "previous_path": "",
-        "status": "added"
-      },
-      {
-        "blob_sha": "7f36231e13ee0fe1f6b2e3ec54a5a67eec5929e3",
-        "path": "src/hunter/automation/issue_agent_transport.py",
-        "previous_path": "",
-        "status": "added"
-      },
-      {
-        "blob_sha": "625710e5b7a1dd662c791ddbc9914b87523d9a57",
-        "path": "src/hunter/automation/retired_issue_agent_authority.py",
-        "previous_path": "",
-        "status": "added"
-      },
-      {
-        "blob_sha": "1870c36a83c1300fa16f67fe0e712bd252ee0ac6",
-        "path": "src/hunter/evidence_intelligence/source_handling_commit_observer.py",
-        "previous_path": "",
-        "status": "added"
-      },
-      {
-        "blob_sha": "782dbcdafbdccc772b010abf2264dd8798fb9a05",
-        "path": "tests/test_issue_agent_authorize.py",
-        "previous_path": "",
-        "status": "added"
-      },
-      {
-        "blob_sha": "a7b6d856cbc6b1cea3d7341f74544a0463320198",
-        "path": "tests/test_issue_agent_control.py",
-        "previous_path": "",
-        "status": "added"
-      },
-      {
-        "blob_sha": "ed3ba46869a3aa0451eb2322c4c29fa5044e8ded",
-        "path": "tests/test_issue_agent_knowledge.py",
-        "previous_path": "",
-        "status": "added"
-      },
-      {
-        "blob_sha": "d800b89d98c5a8f4f0ff870588175c98eb067287",
-        "path": "tests/test_issue_agent_lifecycle_entry.py",
-        "previous_path": "",
-        "status": "added"
-      },
-      {
-        "blob_sha": "ac606846be4fb68f0b0f575a26e0e818d345c90e",
-        "path": "tests/test_issue_agent_remediation.py",
-        "previous_path": "",
-        "status": "added"
-      },
-      {
-        "blob_sha": "bfb5418e1c0d9be4735fdaf943caaeeee598bcb3",
-        "path": "tests/test_issue_agent_remediation_acceptance.py",
-        "previous_path": "",
-        "status": "added"
-      },
-      {
-        "blob_sha": "87e73191faef4062cba1a28a8975b32c2b8957af",
-        "path": "tests/test_issue_agent_remediation_mutation.py",
-        "previous_path": "",
-        "status": "added"
-      },
-      {
-        "blob_sha": "6ae39313aadc939389c35eb732c87fa2fe34583c",
-        "path": "tests/test_issue_agent_remediation_promotion.py",
-        "previous_path": "",
-        "status": "added"
-      },
-      {
-        "blob_sha": "3c6c23190d5d5897d70a0edce1b211e39ee621ce",
-        "path": "tests/test_issue_agent_remediation_reconcile.py",
-        "previous_path": "",
-        "status": "added"
-      },
-      {
-        "blob_sha": "80fdb0df83fff3a48be2ba8aaff031c6e40d4cb5",
-        "path": "tests/test_issue_agent_remediation_resolution.py",
-        "previous_path": "",
-        "status": "added"
-      },
-      {
-        "blob_sha": "24c7698a6a5f45ae62b5b0bc2d5717d389d216af",
-        "path": "tests/test_issue_agent_remediation_roles.py",
-        "previous_path": "",
-        "status": "added"
-      },
-      {
-        "blob_sha": "462e6530fc54cb929eb87e6dcf8e58610b6b50a8",
-        "path": "tests/test_issue_agent_roles.py",
-        "previous_path": "",
-        "status": "added"
-      },
-      {
-        "blob_sha": "7dae4dfe907815e1b2a106a7b2769ff25e655881",
-        "path": "tests/test_issue_agent_source_handling_store.py",
-        "previous_path": "",
-        "status": "added"
-      },
-      {
-        "blob_sha": "797276fffe276b19d83c07fec28ff48f24025778",
-        "path": "tests/test_issue_agent_state.py",
-        "previous_path": "",
-        "status": "added"
-      },
-      {
-        "blob_sha": "070e87b836a4b4ea4b3df5f05991982a9f995933",
-        "path": "tests/test_issue_agent_transport.py",
-        "previous_path": "",
-        "status": "added"
-      },
-      {
-        "blob_sha": "05d34a500a069a31cfc27ffcfd04ea738554eb4e",
-        "path": "tests/test_issue_agent_workflows.py",
-        "previous_path": "",
-        "status": "added"
-      },
-      {
-        "blob_sha": "6c19fd063407d30b117526f548ee203573e32a7e",
-        "path": "tests/test_retired_issue_agent_authority.py",
-        "previous_path": "",
-        "status": "added"
-      },
-      {
-        "blob_sha": "ec302267ca630d2eb98bc05343b047dc6d6991c7",
-        "path": ".github/workflows/hunter-canonicalization-auto.yml",
-        "previous_path": "",
-        "status": "modified"
-      },
-      {
-        "blob_sha": "f4a6c40c77c676099e8048c8fcd81b3694fe4890",
-        "path": ".github/workflows/hunter-issue-agent-candidate-pr.yml",
-        "previous_path": "",
-        "status": "modified"
-      },
-      {
-        "blob_sha": "240c3ca4012ae46418e0fc4dbff6d45d01ccd8a7",
-        "path": ".github/workflows/hunter-issue-agent-replacement-rehearsal.yml",
-        "previous_path": "",
-        "status": "modified"
-      },
-      {
-        "blob_sha": "7986981f86fa91cece6e2b1724c0c2cc1f0b8fa2",
-        "path": ".github/workflows/hunter-issue-agent-trigger.yml",
-        "previous_path": "",
-        "status": "modified"
-      },
-      {
-        "blob_sha": "1e271ec5844612372b7d2594197969d39252b12a",
-        "path": "docs/ADR/README.md",
-        "previous_path": "",
-        "status": "modified"
-      },
-      {
-        "blob_sha": "4f7749c517e1d4a6fae0d9baf834d1ebcfa81649",
-        "path": "docs/CODE_WRITE_POLICY.json",
-        "previous_path": "",
-        "status": "modified"
-      },
-      {
-        "blob_sha": "f70a1c6485ca75c55590dc727edb65aa9ec927f7",
-        "path": "docs/DEFECT_REGISTRY.json",
-        "previous_path": "",
-        "status": "modified"
-      },
-      {
-        "blob_sha": "f1b84b6f98e2438e3b0842beee7d5b226638d0f4",
-        "path": "docs/ISSUE_AGENT_EXECUTION_CONTRACT.md",
-        "previous_path": "",
-        "status": "modified"
-      },
-      {
-        "blob_sha": "e5425d599cf62f6f566f0e23a6bf31fcae3c6479",
-        "path": "docs/ISSUE_AGENT_TRIGGER.md",
-        "previous_path": "",
-        "status": "modified"
-      },
-      {
-        "blob_sha": "40e7baeb1c7242efe38839bba2382e5b5b6bc874",
-        "path": "docs/architecture-index.md",
-        "previous_path": "",
-        "status": "modified"
-      },
-      {
-        "blob_sha": "14886c1f90aafcded58bdff7c9c2b081e0fd98f4",
-        "path": "docs/superpowers/specs/2026-09-23-automatic-knowledge-learning-design.md",
-        "previous_path": "",
-        "status": "modified"
-      },
-      {
-        "blob_sha": "c925b36513b337191c29233715acc717ce81294f",
-        "path": "scripts/hunter_defect_prevention_preflight.py",
-        "previous_path": "",
-        "status": "modified"
-      },
-      {
-        "blob_sha": "d8b8817df7994618cc9b5c587158cfe85ec80ac7",
-        "path": "scripts/hunter_issue_agent_trigger.py",
-        "previous_path": "",
-        "status": "modified"
-      },
-      {
-        "blob_sha": "c62cc3411819ed99b2bba4289e2c786160baf406",
-        "path": "src/hunter/__main__.py",
-        "previous_path": "",
-        "status": "modified"
-      },
-      {
-        "blob_sha": "9d2c18872754bf2ddb860fe9fefe93dd9e943248",
-        "path": "src/hunter/automation/agent_fallback_runtime.py",
-        "previous_path": "",
-        "status": "modified"
-      },
-      {
-        "blob_sha": "c51c201474df87e0fc05e12f2232df78524c6b11",
-        "path": "src/hunter/automation/issue_agent_execution.py",
-        "previous_path": "",
-        "status": "modified"
-      },
-      {
-        "blob_sha": "372cbb59765c2b3afa496cf2275cc953c9f6154a",
-        "path": "src/hunter/automation/issue_agent_replacement_executor.py",
-        "previous_path": "",
-        "status": "modified"
-      },
-      {
-        "blob_sha": "f7e1accf7110256f4f645823ffc6c1f7d741cbe0",
-        "path": "src/hunter/automation/n8n.py",
-        "previous_path": "",
-        "status": "modified"
-      },
-      {
-        "blob_sha": "9db8e29155f87fe8a2239faa82c7da2f1ad15ed7",
-        "path": "src/hunter/automation/n8n_canary.py",
-        "previous_path": "",
-        "status": "modified"
-      },
-      {
-        "blob_sha": "0a21384b167591cc2b8c0ef1da6cb1365f0aca6f",
-        "path": "src/hunter/automation/opencode_provider_runtime.py",
-        "previous_path": "",
-        "status": "modified"
-      },
-      {
-        "blob_sha": "dbbefa0d3633c11aa3f95ffbfdc8a66a3d2e23ab",
-        "path": "src/hunter/evidence_intelligence/engineering_context_authority.py",
-        "previous_path": "",
-        "status": "modified"
-      },
-      {
-        "blob_sha": "a6501f2af92c1f79307960b36854020b455e31ff",
-        "path": "src/hunter/evidence_intelligence/source_handling_persistence.py",
-        "previous_path": "",
-        "status": "modified"
-      },
-      {
-        "blob_sha": "4bbc133aa096fca0b2bbb91ab777e326cc654fe6",
-        "path": "src/hunter/evidence_intelligence/source_handling_provenance.py",
-        "previous_path": "",
-        "status": "modified"
-      },
-      {
-        "blob_sha": "f6b6a7d97578eb5567ab5ef5ad07eaf4f10a7ca2",
-        "path": "tests/test_agent_fallback_environment_authority.py",
-        "previous_path": "",
-        "status": "modified"
-      },
-      {
-        "blob_sha": "5fcdc5f189cb39f7bc660998cc185e999c76b636",
-        "path": "tests/test_agent_fallback_runtime.py",
-        "previous_path": "",
-        "status": "modified"
-      },
-      {
-        "blob_sha": "a5e60fcf917fc7d3424c6ec5f7f64ea5b8c1cbfd",
-        "path": "tests/test_code_write_policy.py",
-        "previous_path": "",
-        "status": "modified"
-      },
-      {
-        "blob_sha": "731e48f6441d3778878f147880ba7bb5e7da7f7f",
-        "path": "tests/test_governance_maintenance_ingress.py",
-        "previous_path": "",
-        "status": "modified"
-      },
-      {
-        "blob_sha": "b392bbd23efc79433e8da6c105f6c29978a37bf8",
-        "path": "tests/test_hunter_knowledge_learning_workflow.py",
-        "previous_path": "",
-        "status": "modified"
-      },
-      {
-        "blob_sha": "d2e1bd584823b42c444cebcbc46d271a2a681a95",
-        "path": "tests/test_issue_agent_candidate_pr.py",
-        "previous_path": "",
-        "status": "modified"
-      },
-      {
-        "blob_sha": "d0e8add30ef0257f4dbd223014cde56f54f9b77d",
-        "path": "tests/test_issue_agent_candidate_topology.py",
-        "previous_path": "",
-        "status": "modified"
-      },
-      {
-        "blob_sha": "2a6c915297c5e202b228dac5dca89dfa34e566c8",
-        "path": "tests/test_issue_agent_execution.py",
-        "previous_path": "",
-        "status": "modified"
-      },
-      {
-        "blob_sha": "f8de246d707cbc2845d6b5825b2c4cb2d8f6345e",
-        "path": "tests/test_issue_agent_provisioner.py",
-        "previous_path": "",
-        "status": "modified"
-      },
-      {
-        "blob_sha": "0f7b9e98e11ce9e9579a1a5aa0a21ae693ae7c82",
-        "path": "tests/test_issue_agent_replacement_executor.py",
-        "previous_path": "",
-        "status": "modified"
-      },
-      {
-        "blob_sha": "4c244288e0e9f3a1e268eb33af8b60af524bcfee",
-        "path": "tests/test_issue_agent_trigger.py",
-        "previous_path": "",
-        "status": "modified"
-      },
-      {
-        "blob_sha": "8274a8e4bb9204687dbf109187f9269fc1680d71",
-        "path": "tests/test_opencode_provider_publication.py",
-        "previous_path": "",
-        "status": "modified"
-      },
-      {
-        "blob_sha": "9667f97f88b9568ef231cdce21c8cb8f25d6b45d",
-        "path": "tests/test_smart_prompt_machine_n8n.py",
-        "previous_path": "",
-        "status": "modified"
-      },
-      {
-        "blob_sha": "92897207bebcdbc175614fda6069c240654326ad",
-        "path": "tests/test_smart_prompt_machine_n8n_handoff.py",
         "previous_path": "",
         "status": "modified"
       }
     ],
-    "review_target_digest": "65cc5d2b6ec9d37eaec2ab3bb924dce802dfcaeefad6ef3bd44d70b00888b951"
+    "review_target_digest": "8fbc8dae5e234b9417651d8efc4779f81477a11fb376f65698805abfa683ae8c"
   },
-  "review_id": "6344064f63ed9ab73f2a27a6c6b96a2dbfb51dfcee0db83bee9e637d7abbd9f9",
+  "review_id": "fdb62d01402ff8a34d22a30274707b1e8e2fc6e12664d424ac8b17973722614d",
   "review_request": {
-    "claims_id": "6344064f63ed9ab73f2a27a6c6b96a2dbfb51dfcee0db83bee9e637d7abbd9f9",
+    "claims_id": "fdb62d01402ff8a34d22a30274707b1e8e2fc6e12664d424ac8b17973722614d",
     "schema": "hunter.review-request.v1"
   },
   "schema": "hunter.pre-ready-hostile-review.v1"
