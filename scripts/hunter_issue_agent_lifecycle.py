@@ -703,11 +703,21 @@ def _source_handling_bootstrap(configuration: control.Configuration) -> int:
             "source-handling-bootstrap", "source-handling-bootstrap", control.SOURCE_HANDLING_BOOTSTRAP_WORKFLOW
         )
         if transactions:
+            signing_key = _ed25519(STATE_SIGNING_KEY_ENV)
+            if state.public_key_id(signing_key.public_key()) not in configuration.trust.state_keys:
+                # A syntactically valid key that the trust roots do not pin would sign and durably append an
+                # unrecoverable first record, and the later replay verification could only report STATE_CORRUPT
+                # after the write. Refuse before any durable write so the ref never appears.
+                raise LifecycleRefused(
+                    "MISSING_CONFIGURATION",
+                    f"{STATE_SIGNING_KEY_ENV} is not pinned by the trust roots; refusing to write an unusable "
+                    "ledger record",
+                )
             position = sh.publish(
                 store,
                 position,
                 transactions,
-                signing_key=_ed25519(STATE_SIGNING_KEY_ENV),
+                signing_key=signing_key,
                 recorded_by=writer.recorded_by(),
                 recorded_at=_timestamp(),
                 repository_id=configuration.repository_id,

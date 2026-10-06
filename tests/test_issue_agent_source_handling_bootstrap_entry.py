@@ -361,7 +361,25 @@ def test_a_state_signing_key_that_is_not_pinned_in_the_trust_roots_is_refused(
     monkeypatch.setenv(lifecycle.STATE_SIGNING_KEY_ENV, "42" * 32)
     code, out, err = dispatch(world, capsys)
     assert code == lifecycle.EXIT_REFUSED
-    assert "STATE_CORRUPT" in err and "Traceback" not in err
+    assert "MISSING_CONFIGURATION" in err and "pinned by the trust roots" in err and "Traceback" not in err
+    assert refs_of(world["remote"]) == {}
+
+
+def test_a_stalled_git_operation_is_a_bounded_refusal(
+    world: dict[str, Any], monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    real_run = subprocess.run
+
+    def stalled_git(command: list[str], *args: Any, **kwargs: Any) -> Any:
+        if "core.hooksPath=/dev/null" in command and "ls-remote" in command:
+            raise subprocess.TimeoutExpired(command, 120)
+        return real_run(command, *args, **kwargs)
+
+    monkeypatch.setattr(state.subprocess, "run", stalled_git)
+    code, out, err = dispatch(world, capsys)
+    assert code == lifecycle.EXIT_REFUSED
+    assert "re-dispatch the bootstrap" in err and "Traceback" not in err
+    assert refs_of(world["remote"]) == {}
 
 
 def test_a_workflow_re_run_is_refused_before_it_can_write(
