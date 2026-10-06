@@ -182,7 +182,7 @@
     "issue": "560",
     "review_target": [
       {
-        "blob_sha": "f538974a74ea0891507aa3a7cb125533376255ae",
+        "blob_sha": "79acc2d386a4237e8d523be209dd32e91716e708",
         "path": "tests/test_issue_agent_source_handling_bootstrap_entry.py",
         "previous_path": "",
         "status": "added"
@@ -218,11 +218,11 @@
         "status": "modified"
       }
     ],
-    "review_target_digest": "6cc0058726d8e311b91052a38c73e62b5081b40cec37397a4f25bcaf24c1177c"
+    "review_target_digest": "a0d519dd19799d51455e53b07cde74bef1aacbce60c4d895f9caad7c107e8ed7"
   },
-  "review_id": "dbb243bdce82be6c16638d46f45103a90d0776d15f9893aab756e64cb00fc629",
+  "review_id": "2c684569881eb943fa7146df724640a6e29aeaa69ef25002f1d236330894edfe",
   "review_request": {
-    "claims_id": "dbb243bdce82be6c16638d46f45103a90d0776d15f9893aab756e64cb00fc629",
+    "claims_id": "2c684569881eb943fa7146df724640a6e29aeaa69ef25002f1d236330894edfe",
     "schema": "hunter.review-request.v1"
   },
   "schema": "hunter.pre-ready-hostile-review.v1"
