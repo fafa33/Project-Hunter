@@ -56,20 +56,6 @@ TRUSTED_PARALLEL_LANE: tuple[str, ...] = ("-n", "auto", "--dist", "loadfile")
 #: distribution that will not import cannot register the options either.
 TRUSTED_PARALLEL_RUNNER_DISTRIBUTION = "pytest-xdist"
 TRUSTED_PARALLEL_RUNNER_PLUGIN = "xdist"
-#: Trusted, fail-closed focused pytest coverage. Only these exact non-runtime paths
-#: may replace the full suite, and the mapping itself lives on the trusted default
-#: branch. Any other changed path falls back to the complete suite.
-TRUSTED_FOCUSED_PYTEST_BY_PATH: dict[str, tuple[str, ...]] = {
-    ".hunter/pre-ready-hostile-review.json": ("tests/test_exact_head_review_authority.py",),
-    "config/issue_agent_trust_roots.json": (
-        "tests/test_issue_agent_lifecycle_entry.py",
-        "tests/test_issue_agent_source_handling_bootstrap_entry.py",
-    ),
-    "tests/test_issue_agent_lifecycle_entry.py": ("tests/test_issue_agent_lifecycle_entry.py",),
-    "tests/test_issue_agent_source_handling_bootstrap_entry.py": (
-        "tests/test_issue_agent_source_handling_bootstrap_entry.py",
-    ),
-}
 #: Where pytest reads a project's own ``addopts`` from. All four are checked:
 #: a rule that covered only ``pyproject.toml`` would be satisfied by moving the
 #: declaration one file sideways.
@@ -2216,35 +2202,7 @@ def verify_trusted_parallel_runner() -> int:
     return 0
 
 
-def trusted_candidate_pytest_targets(candidate_root: Path, base_sha: str | None) -> tuple[str, ...]:
-    """Return focused pytest targets only when the trusted mapping covers the whole diff.
-
-    Diff discovery is performed by the trusted controller against Git history.
-    Missing/malformed base evidence, an empty diff, or one unknown path fails safe
-    to the full suite represented by an empty tuple.
-    """
-    if not base_sha or len(base_sha) != 40 or any(ch not in "0123456789abcdefABCDEF" for ch in base_sha):
-        return ()
-    # Sonar S8705: base_sha cannot become an option or shell fragment: it is
-    # accepted only as exactly 40 hexadecimal characters above, and argv is
-    # executed without a shell. The PR event supplies it from the trusted
-    # pull_request_target controller.
-    completed = subprocess.run(  # NOSONAR
-        ("git", "diff", "--name-only", f"{base_sha}...HEAD"),
-        cwd=candidate_root,
-        check=False,
-        capture_output=True,
-        text=True,
-    )
-    if completed.returncode != 0:
-        return ()
-    changed = tuple(line.strip() for line in completed.stdout.splitlines() if line.strip())
-    if not changed or any(path not in TRUSTED_FOCUSED_PYTEST_BY_PATH for path in changed):
-        return ()
-    return tuple(dict.fromkeys(target for path in changed for target in TRUSTED_FOCUSED_PYTEST_BY_PATH[path]))
-
-
-def run_candidate_quality_gates(candidate_root: Path, *, base_sha: str | None = None) -> int:
+def run_candidate_quality_gates(candidate_root: Path) -> int:
     """Execute the candidate through an immutable trusted gate list.
 
     The candidate dispatcher is deliberately not used as proof authority. A PR may
@@ -2269,19 +2227,10 @@ def run_candidate_quality_gates(candidate_root: Path, *, base_sha: str | None = 
         )
         return 2
 
-    focused_pytest = trusted_candidate_pytest_targets(candidate_root, base_sha)
-    if focused_pytest:
-        print(
-            "[Trusted Candidate Gates] focused pytest scope selected by trusted controller: "
-            + " ".join(focused_pytest),
-            flush=True,
-        )
-
     for name, command in TRUSTED_CANDIDATE_QUALITY_GATES:
-        effective_command = command + focused_pytest if name == "Pytest" and focused_pytest else command
-        printable = " ".join(effective_command)
+        printable = " ".join(command)
         print(f"[Trusted Candidate Gates] {name}: {printable}", flush=True)
-        completed = subprocess.run(effective_command, cwd=candidate_root, env=env, check=False)
+        completed = subprocess.run(command, cwd=candidate_root, env=env, check=False)
         if completed.returncode != 0:
             print(
                 f"[Trusted Candidate Gates] FAIL: {name} exited {completed.returncode}",
@@ -2309,10 +2258,6 @@ def main() -> int:
         help="Execute every required candidate quality gate from the trusted controller.",
     )
     parser.add_argument(
-        "--candidate-base-sha",
-        help="Trusted PR base SHA used only to derive a fail-closed focused pytest scope.",
-    )
-    parser.add_argument(
         "--verify-parallel-runner",
         action="store_true",
         help=(
@@ -2335,7 +2280,7 @@ def main() -> int:
         return 0
 
     if args.run_candidate_gates:
-        return run_candidate_quality_gates(args.run_candidate_gates, base_sha=args.candidate_base_sha)
+        return run_candidate_quality_gates(args.run_candidate_gates)
 
     try:
         errors = validate_defect_prevention_lifecycle()
