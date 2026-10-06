@@ -3,13 +3,13 @@
     "acceptance_criteria": [
       {
         "criterion": "The one-shot GitHub-native Source Handling bootstrap entrypoint is exercised end to end at the command boundary against a real anchored ledger, covering the first bootstrap, idempotent re-dispatch, tampered and foreign pre-existing ledgers, anchor weakening, trust-root and signing-key mismatches, re-run refusal, lost compare-and-swap, crash before and after a durable write with prefix recovery, single-ref write scope, and secret non-disclosure.",
-        "evidence": "tests/test_issue_agent_source_handling_bootstrap_entry.py (21 entrypoint tests driving scripts/hunter_issue_agent_lifecycle.py against a local bare remote and an authenticated GitHub read double).",
+        "evidence": "tests/test_issue_agent_source_handling_bootstrap_entry.py (22 entrypoint tests driving scripts/hunter_issue_agent_lifecycle.py against a local bare remote and an authenticated GitHub read double).",
         "id": "AC-1",
         "verdict": "satisfied"
       },
       {
         "criterion": "Every refusal the bootstrap can raise is a bounded, documented machine-checked refusal or freeze code rather than an unhandled traceback, and failure leaves no out-of-scope durable write.",
-        "evidence": "scripts/hunter_issue_agent_lifecycle.py cmd_source_handling_bootstrap translation layer; the new suite was red on the untouched entrypoint (11 of 21) and is green after the fix; no Traceback in stdout or stderr for any refusal path.",
+        "evidence": "scripts/hunter_issue_agent_lifecycle.py cmd_source_handling_bootstrap translation layer and the store git normalization; the suite was red on the untouched entrypoint (11 of the first 21 tests) and is green after the fix; no Traceback in stdout or stderr for any refusal path.",
         "id": "AC-2",
         "verdict": "satisfied"
       },
@@ -21,7 +21,7 @@
       },
       {
         "criterion": "The range introduces no second Source Handling authority, ledger, SPM, DPM or publisher, changes no trust root or pinned authorization rule, dispatches no bootstrap, and writes no production state ref.",
-        "evidence": "Changed paths are limited to the lifecycle entrypoint, its new test file and two ADR implementation-status sections; config/issue_agent_trust_roots.json and the workflow are untouched; refs/heads/hunter-state/v1/source-handling remains absent on origin.",
+        "evidence": "Changed paths are limited to the lifecycle entrypoint, the ledger store git normalization, its test file and two ADR implementation-status sections; config/issue_agent_trust_roots.json and the workflow are untouched; refs/heads/hunter-state/v1/source-handling remains absent on origin.",
         "id": "AC-4",
         "verdict": "satisfied"
       }
@@ -42,6 +42,36 @@
     "base_ref": "main",
     "base_sha": "ef0b2a4bf5a59be5ea17ebc5f80bebd71358f3d9",
     "defect_families": [
+      {
+        "evidence": "Included in exact-candidate hostile-review scope; applicable by trusted registry path matching; no timestamp or ordering decision path is changed by this range.",
+        "family": "DFF-001",
+        "outcome": "clear"
+      },
+      {
+        "evidence": "Included in exact-candidate hostile-review scope; applicable by trusted registry path matching; the store still validates against one explicit snapshot and commits through CAS on the observed head.",
+        "family": "DFF-002",
+        "outcome": "clear"
+      },
+      {
+        "evidence": "Included in exact-candidate hostile-review scope; applicable by trusted registry path matching; no identity assignment or authorization path is changed by this range.",
+        "family": "DFF-003",
+        "outcome": "clear"
+      },
+      {
+        "evidence": "Included in exact-candidate hostile-review scope; applicable by trusted registry path matching; absent or unknown authority values still fail closed.",
+        "family": "DFF-004",
+        "outcome": "clear"
+      },
+      {
+        "evidence": "Included in exact-candidate hostile-review scope; applicable by trusted registry path matching; the store deliberately omits OS error text from LedgerError so the authentication header in argv can never leak into durable evidence.",
+        "family": "DFF-005",
+        "outcome": "clear"
+      },
+      {
+        "evidence": "Included in exact-candidate hostile-review scope; applicable by trusted registry path matching; no ordering guarantee is weakened and interrupted-prefix recovery remains monotonic.",
+        "family": "DFF-006",
+        "outcome": "clear"
+      },
       {
         "evidence": "Included in exact-candidate hostile-review scope; applicable by trusted registry path matching; no authorization-replay instance is introduced by this range.",
         "family": "DFF-007",
@@ -108,8 +138,18 @@
         "outcome": "clear"
       },
       {
-        "evidence": "Included in exact-candidate hostile-review scope; applicable by trusted registry path matching; the bootstrap entrypoint still runs the canonical anchor, provenance and preflight checks before any ledger claim.",
+        "evidence": "Included in exact-candidate hostile-review scope; applicable by trusted registry path matching; the bootstrap entrypoint still runs the canonical anchor, provenance and preflight checks before any ledger claim, and now validates the pinned state key before any write.",
         "family": "DFF-023",
+        "outcome": "clear"
+      },
+      {
+        "evidence": "Included in exact-candidate hostile-review scope; applicable by trusted registry path matching; no readiness or probe path is changed by this range.",
+        "family": "DFF-027",
+        "outcome": "clear"
+      },
+      {
+        "evidence": "Included in exact-candidate hostile-review scope; applicable by trusted registry path matching; no execution boundary or credential-holding path is changed by this range.",
+        "family": "DFF-028",
         "outcome": "clear"
       },
       {
@@ -126,13 +166,23 @@
         "evidence": "Included in exact-candidate hostile-review scope; applicable by trusted registry path matching; the new suite drives real git, the real store and the real command rather than an external precondition.",
         "family": "DFF-035",
         "outcome": "clear"
+      },
+      {
+        "evidence": "Included in exact-candidate hostile-review scope; applicable by trusted registry path matching; no uid or credential-boundary path is changed by this range.",
+        "family": "DFF-047",
+        "outcome": "clear"
+      },
+      {
+        "evidence": "Included in exact-candidate hostile-review scope; applicable by trusted registry path matching; no success-recording or publication path is changed by this range.",
+        "family": "DFF-049",
+        "outcome": "clear"
       }
     ],
     "findings": [],
     "issue": "560",
     "review_target": [
       {
-        "blob_sha": "4df705d4f5a667dd4817a7eb82be43d2ee48567b",
+        "blob_sha": "f538974a74ea0891507aa3a7cb125533376255ae",
         "path": "tests/test_issue_agent_source_handling_bootstrap_entry.py",
         "previous_path": "",
         "status": "added"
@@ -150,17 +200,23 @@
         "status": "modified"
       },
       {
-        "blob_sha": "d425416fde3442dadd9e020f48168df7cede2a21",
+        "blob_sha": "cf89a5c9fa3660c58e32a962e62310342964f2e2",
         "path": "scripts/hunter_issue_agent_lifecycle.py",
+        "previous_path": "",
+        "status": "modified"
+      },
+      {
+        "blob_sha": "a7e78f0901ba1161c84826a84c8ae70dfa463074",
+        "path": "src/hunter/automation/issue_agent_state.py",
         "previous_path": "",
         "status": "modified"
       }
     ],
-    "review_target_digest": "8fbc8dae5e234b9417651d8efc4779f81477a11fb376f65698805abfa683ae8c"
+    "review_target_digest": "9365047832f18e2440f0d8580a2df1aab399bdfc25698af8a77d22c6831cb9a0"
   },
-  "review_id": "fdb62d01402ff8a34d22a30274707b1e8e2fc6e12664d424ac8b17973722614d",
+  "review_id": "ede3053fbf51b6b8de0696f1686a9c7a4dff8c7ab5a6964707b3e23e466eda1a",
   "review_request": {
-    "claims_id": "fdb62d01402ff8a34d22a30274707b1e8e2fc6e12664d424ac8b17973722614d",
+    "claims_id": "ede3053fbf51b6b8de0696f1686a9c7a4dff8c7ab5a6964707b3e23e466eda1a",
     "schema": "hunter.review-request.v1"
   },
   "schema": "hunter.pre-ready-hostile-review.v1"
