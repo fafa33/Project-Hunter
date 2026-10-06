@@ -129,10 +129,10 @@ jobs:
         run: |
           set -euo pipefail
           if [ "$REMEDIATION_AUTHORIZATION" != "" ]; then
-            python scripts/hunter_issue_agent_lifecycle.py authorize-prepare
+            python scripts/hunter_issue_agent_lifecycle.py authorize-prepare \
               --document "$RUNNER_TEMP/remediation.json" --out-dir "$RUNNER_TEMP/authorize"
           else
-            python scripts/hunter_issue_agent_lifecycle.py authorize-prepare
+            python scripts/hunter_issue_agent_lifecycle.py authorize-prepare \
               --event "$GITHUB_EVENT_PATH" --out-dir "$RUNNER_TEMP/authorize"
           fi
       - name: Upload the sealed handoff
