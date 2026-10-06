@@ -1,0 +1,1 @@
+{"schema_version":"hunter-source-handling-delta-v1","tables":{"source_handling_operator_root":[{"genesis_rule_sha256":"41119071db0f5c2a2eacfe2848ab6696355195e1ac9c671ee33c4128793aa70a","schema_version":"source-handling-operator-root-v1","singleton_id":"SOURCE_HANDLING","verification_key_sha256":"875c7b8f081100bb1c336f1310f56d5d725e4097cac650a700e67d515dd84fea"}]}}
