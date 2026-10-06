@@ -21,7 +21,7 @@
       },
       {
         "criterion": "The range introduces no second Source Handling authority, ledger, SPM, DPM or publisher, changes no trust root or pinned authorization rule, dispatches no bootstrap, and writes no production state ref.",
-        "evidence": "Changed paths are limited to the lifecycle entrypoint, the ledger store git normalization, its test file and two ADR implementation-status sections; config/issue_agent_trust_roots.json and the workflow are untouched; refs/heads/hunter-state/v1/source-handling remains absent on origin.",
+        "evidence": "Changed paths are limited to the added entrypoint test suite, the lifecycle entrypoint translation layer, the ledger store git normalization, the canonicalization writer-identity pin and its test, the ADR 0038/0037 bodies and their index, and this generated artifact; config/issue_agent_trust_roots.json and the workflows are untouched, and refs/heads/hunter-state/v1/source-handling remains absent on origin.",
         "id": "AC-4",
         "verdict": "satisfied"
       }
@@ -232,9 +232,9 @@
     ],
     "review_target_digest": "a89768b9fdb7e7b24310d812c76df39c40c5c8f59b2b6fb6236674f183973394"
   },
-  "review_id": "4b181847bd4c115df907ba9af6d236f9b5303487858a3bed2aa0086e07b56fe5",
+  "review_id": "186e1d94514178090963400d240d93d986ab51873c5160154a8719c5a9f563ce",
   "review_request": {
-    "claims_id": "4b181847bd4c115df907ba9af6d236f9b5303487858a3bed2aa0086e07b56fe5",
+    "claims_id": "186e1d94514178090963400d240d93d986ab51873c5160154a8719c5a9f563ce",
     "schema": "hunter.review-request.v1"
   },
   "schema": "hunter.pre-ready-hostile-review.v1"
