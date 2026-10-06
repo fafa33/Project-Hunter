@@ -382,6 +382,24 @@ def test_a_stalled_git_operation_is_a_bounded_refusal(
     assert refs_of(world["remote"]) == {}
 
 
+def test_an_unexecutable_git_is_a_bounded_refusal_without_exposing_the_os_error_text(
+    world: dict[str, Any], monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    real_run = subprocess.run
+
+    def unavailable_git(command: list[str], *args: Any, **kwargs: Any) -> Any:
+        if "core.hooksPath=/dev/null" in command and "ls-remote" in command:
+            raise FileNotFoundError("auth-header-must-never-leak")
+        return real_run(command, *args, **kwargs)
+
+    monkeypatch.setattr(state.subprocess, "run", unavailable_git)
+    code, out, err = dispatch(world, capsys)
+    assert code == lifecycle.EXIT_REFUSED
+    assert "re-dispatch the bootstrap" in err and "Traceback" not in err
+    assert "auth-header-must-never-leak" not in err and "auth-header-must-never-leak" not in out
+    assert refs_of(world["remote"]) == {}
+
+
 def test_a_workflow_re_run_is_refused_before_it_can_write(
     world: dict[str, Any], monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
 ) -> None:
