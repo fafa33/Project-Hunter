@@ -3,13 +3,13 @@
     "acceptance_criteria": [
       {
         "criterion": "The one-shot GitHub-native Source Handling bootstrap entrypoint is exercised end to end at the command boundary against a real anchored ledger, covering the first bootstrap, idempotent re-dispatch, tampered and foreign pre-existing ledgers, anchor weakening, trust-root and signing-key mismatches, re-run refusal, lost compare-and-swap, crash before and after a durable write with prefix recovery, single-ref write scope, and secret non-disclosure.",
-        "evidence": "tests/test_issue_agent_source_handling_bootstrap_entry.py (25 entrypoint tests driving scripts/hunter_issue_agent_lifecycle.py against a local bare remote and an authenticated GitHub read double).",
+        "evidence": "tests/test_issue_agent_source_handling_bootstrap_entry.py (26 entrypoint tests driving scripts/hunter_issue_agent_lifecycle.py against a local bare remote and an authenticated GitHub read double; includes a replay-operational-failure redispatch-refusal regression and the same-family corruption freeze is pinned by existing tests).",
         "id": "AC-1",
         "verdict": "satisfied"
       },
       {
         "criterion": "Every refusal the bootstrap can raise is a bounded, documented machine-checked refusal or freeze code rather than an unhandled traceback, and failure leaves no out-of-scope durable write.",
-        "evidence": "scripts/hunter_issue_agent_lifecycle.py cmd_source_handling_bootstrap translation layer, the store git normalization, and the workspace/sqlite operational refusals; every refusal path is mutation-checked (RED without the fix, GREEN with it) and the focused S6 suite (197 tests, including 25 entrypoint tests) is green; no Traceback in stdout or stderr for any refusal path.",
+        "evidence": "scripts/hunter_issue_agent_lifecycle.py cmd_source_handling_bootstrap translation layer, the store git normalization, the workspace/sqlite operational refusals, and the `_apply` replay re-raise of sqlite3.OperationalError (raw, so the lifecycle reports its sanitized re-dispatch refusal) with the corruption message carrying no sqlite payload; every refusal path is mutation-checked (RED without the fix, GREEN with it) and the focused S6 suite (200 tests, including 26 entrypoint tests) is green; no Traceback in stdout or stderr for any refusal path.",
         "id": "AC-2",
         "verdict": "satisfied"
       },
@@ -21,7 +21,7 @@
       },
       {
         "criterion": "The range introduces no second Source Handling authority, ledger, SPM, DPM or publisher, changes no trust root or pinned authorization rule, dispatches no bootstrap, and writes no production state ref.",
-        "evidence": "Changed paths are limited to the added entrypoint test suite, the lifecycle entrypoint translation layer, the ledger store git normalization, the canonicalization writer-identity pin and its test, the ADR 0038/0037 bodies and their index, and this generated artifact; config/issue_agent_trust_roots.json and the workflows are untouched, and refs/heads/hunter-state/v1/source-handling remains absent on origin.",
+        "evidence": "Changed paths are limited to the added entrypoint test suite, the lifecycle entrypoint translation layer, the ledger store git normalization, the canonicalization writer-identity pin with its `env` identity sanitizer and adversarial regression, the `_apply` replay operational re-raise and its store/entry-level regressions, the ADR 0038/0037 bodies and their index, and this generated artifact; config/issue_agent_trust_roots.json and the workflows are untouched, and refs/heads/hunter-state/v1/source-handling remains absent on origin.",
         "id": "AC-4",
         "verdict": "satisfied"
       }
@@ -182,7 +182,7 @@
     "issue": "560",
     "review_target": [
       {
-        "blob_sha": "79cdef4ccdadaa28af265813ef58c382741dc387",
+        "blob_sha": "8da220d267435009368b020dff138b12b3173363",
         "path": "tests/test_issue_agent_source_handling_bootstrap_entry.py",
         "previous_path": "",
         "status": "added"
@@ -206,7 +206,7 @@
         "status": "modified"
       },
       {
-        "blob_sha": "bc955c5d6211eb168b53eff1f4713bd35734ca61",
+        "blob_sha": "2a745bc2e795e5ce4b2238659824e6a13b2f9818",
         "path": "scripts/hunter_canonicalization_candidate_pr.py",
         "previous_path": "",
         "status": "modified"
@@ -218,23 +218,35 @@
         "status": "modified"
       },
       {
+        "blob_sha": "94ad28477c5a545a54d8ec0bd9a7dca20775a06e",
+        "path": "src/hunter/automation/issue_agent_source_handling_store.py",
+        "previous_path": "",
+        "status": "modified"
+      },
+      {
         "blob_sha": "a7e78f0901ba1161c84826a84c8ae70dfa463074",
         "path": "src/hunter/automation/issue_agent_state.py",
         "previous_path": "",
         "status": "modified"
       },
       {
-        "blob_sha": "1393fd3fb873bf8db36dd89ce8712cba7da683d6",
+        "blob_sha": "51de2985efc9e94e3d798281cc6b9e160b575807",
         "path": "tests/test_hunter_canonicalization_candidate_pr.py",
+        "previous_path": "",
+        "status": "modified"
+      },
+      {
+        "blob_sha": "50d3fce3966f2e5518ef5e81b7c8cbef54c3a50a",
+        "path": "tests/test_issue_agent_source_handling_store.py",
         "previous_path": "",
         "status": "modified"
       }
     ],
-    "review_target_digest": "a89768b9fdb7e7b24310d812c76df39c40c5c8f59b2b6fb6236674f183973394"
+    "review_target_digest": "3643e8f7f975822089b8052b48b52c2962efb718f8e89c501e5e35f8ce44c6cf"
   },
-  "review_id": "186e1d94514178090963400d240d93d986ab51873c5160154a8719c5a9f563ce",
+  "review_id": "c8ae4341c49ccd53b6b02bd653555d768e432ea93844612c4854ac192746e73c",
   "review_request": {
-    "claims_id": "186e1d94514178090963400d240d93d986ab51873c5160154a8719c5a9f563ce",
+    "claims_id": "c8ae4341c49ccd53b6b02bd653555d768e432ea93844612c4854ac192746e73c",
     "schema": "hunter.review-request.v1"
   },
   "schema": "hunter.pre-ready-hostile-review.v1"
