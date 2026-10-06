@@ -2074,6 +2074,32 @@
       "sources": [
         "Issue #520 canary run 37507946220, 2026-10-06: authorize-prepare exited 2 with required --out-dir missing because the workflow wrapped after the subcommand without shell continuation; every downstream lifecycle job was skipped."
       ]
+    },
+    {
+      "id": "DFF-053",
+      "title": "trusted-preflight-success-masks-unresolved-review-threads",
+      "invariant": "Candidate admission and merge readiness must fail closed whenever any GitHub pull-request review thread is unresolved. A successful trusted exact-head/preflight proof cannot bypass this blocker; outdated is not resolved, and unavailable thread evidence cannot become green.",
+      "applicability": {
+        "changed_paths": [
+          "scripts/hunter_governance_review_v2.py",
+          "scripts/hunter_merge_readiness_v2.py",
+          ".github/workflows/hunter-governance-review.yml"
+        ],
+        "rationale": "Governance/admission status is authoritative for merge progression and must preserve live reviewer-finding lifecycle independently of trusted preflight success."
+      },
+      "prevention": {
+        "mechanism": "candidate_admission reads authoritative paginated GitHub reviewThreads before any protected-preflight success shortcut and returns BLOCKING_FINDINGS for unresolved threads or unavailable thread evidence.",
+        "boundary": "governance-admission",
+        "guard_reference": "scripts/hunter_governance_review_v2.py::candidate_admission"
+      },
+      "regression_evidence": [
+        "tests/test_hunter_governance_review_v2.py::test_candidate_admission_blocks_unresolved_threads_before_trusted_preflight_success",
+        "tests/test_hunter_governance_review_v2.py::test_candidate_admission_fails_closed_when_thread_evidence_is_unavailable"
+      ],
+      "lifecycle": "regression-tested",
+      "sources": [
+        "PR #569 live audit 2026-10-07: five Copilot review threads were isResolved=false while Hunter Governance Review was green; two threads were outdated but still unresolved, proving trusted-preflight success could mask live findings."
+      ]
     }
   ]
 }

@@ -10,6 +10,13 @@ on:
   schedule:
     - cron: "17,47 * * * *"
   workflow_dispatch:
+  # DFF-053: refresh finding lifecycle immediately when PR review state changes.
+  # pull_request_review is safe here: every job still executes only trusted main
+  # and resolve-finding proves exact-head evidence before mutating a thread.
+  pull_request_review:
+    types: [submitted, edited, dismissed]
+  pull_request:
+    types: [synchronize, ready_for_review, reopened]
 
 permissions: {}
 
@@ -24,7 +31,7 @@ concurrency:
 jobs:
   reconcile:
     name: reconcile
-    if: github.ref == 'refs/heads/main'
+    if: github.event_name != 'pull_request' || github.event.pull_request.base.ref == 'main'
     runs-on: ubuntu-latest
     timeout-minutes: 20
     environment: hunter-issue-agent-control
@@ -52,7 +59,7 @@ jobs:
 
   remediate:
     name: remediate
-    if: github.ref == 'refs/heads/main'
+    if: github.event_name != 'pull_request' || github.event.pull_request.base.ref == 'main'
     runs-on: ubuntu-latest
     timeout-minutes: 20
     environment: hunter-issue-agent-control
@@ -84,7 +91,7 @@ jobs:
 
   resolve-finding:
     name: resolve-finding
-    if: github.ref == 'refs/heads/main'
+    if: github.event_name != 'pull_request' || github.event.pull_request.base.ref == 'main'
     runs-on: ubuntu-latest
     timeout-minutes: 20
     environment: hunter-issue-agent-control
