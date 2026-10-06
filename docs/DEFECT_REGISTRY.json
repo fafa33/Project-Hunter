@@ -972,7 +972,7 @@
     {
       "id": "DFF-016",
       "title": "validation-proof-reused-without-immutable-identity",
-      "invariant": "An expensive validation proof is reusable only for the exact immutable content, validation definition and toolchain it was produced under. A changed head, foreign head, changed validation definition, changed toolchain, stale, malformed, unsuccessful, unverifiable, unavailable, or still-pending proof refuses reuse and runs the full lane immediately. Reuse is a one-shot evidence lookup and must never become a cross-workflow polling, sleep, or waiting boundary.",
+      "invariant": "An expensive validation proof is reusable only for the exact immutable content, validation definition and toolchain it was produced under. A changed head, foreign head, changed validation definition, changed toolchain, stale, malformed, unsuccessful, unverifiable or unavailable proof refuses reuse. For a pull-request SHA, exactly one hosted boundary owns the heavy full lane; consumers may only verify its completed exact-head proof and must never race it with another full suite or poll/sleep waiting for it.",
       "applicability": {
         "changed_paths": [
           ".githooks/",
@@ -984,7 +984,7 @@
         "rationale": "The validation boundaries and the reuse authority are where a proof made for one candidate can be re-aimed at another, and where removing duplicate proof can quietly become removing proof. The historical evidence reconstruction module is named explicitly for the same reason: it caches an expensive per-PR disposition and reuses it, so it is a reuse authority, and its post-passes revisit only CONFIRMED findings -- a wrongly reused non-CONFIRMED disposition can never be rolled back. The file is named rather than its directory, so the family is required where proof reuse actually happens instead of across every unrelated module beside it."
       },
       "prevention": {
-        "mechanism": "One place decides reuse from identities the verifier recomputes rather than accepts: Git tree content identity, validation-definition identity, measured toolchain, and exact head. A receipt can only narrow reuse, never widen it. Reuse is deliberately non-blocking: only an already-terminal successful exact-head proof may skip the full lane; queued or in-progress proof immediately falls through to independent full validation. Regression guards forbid reintroducing wait/poll CLI controls or sleep/polling code into the resolver, preventing another workflow from holding PR CI latency hostage.",
+        "mechanism": "One place decides proof validity from identities the verifier recomputes rather than accepts: Git tree content identity, validation-definition identity, measured toolchain, and exact head. Hunter / Pre-PR Preflight is the single heavy full-suite producer for a feature-branch SHA. PR-attached Quality Gates is deliberately cheap hygiene and never polls, consumes, or duplicates the heavy lane; merge authority continues to fail closed on the existing canonical required-check contract. Main keeps a separate post-integration full validation lane. Regression guards forbid duplicate feature-head full-lane execution and cross-workflow polling/sleep.",
         "boundary": "hosted-gate",
         "guard_reference": "scripts/hunter_validation_receipt.py::verify"
       },
@@ -1001,9 +1001,10 @@
         "tests/test_historical_evidence_reconstruction.py::test_changed_frozen_record_invalidates_the_reconstruction_cache",
         "tests/test_historical_evidence_reconstruction.py::test_record_without_a_digest_is_never_reused_from_cache",
         "tests/test_historical_evidence_reconstruction.py::test_reconstruction_cache_records_every_input_it_is_keyed_on",
-        "tests/test_validation_proof_reuse.py::test_pending_authoritative_run_falls_back_immediately_without_cross_workflow_wait",
         "tests/test_validation_proof_reuse.py::test_reuse_module_has_no_polling_or_sleep_boundary",
-        "tests/test_validation_proof_reuse.py::test_ci_quality_gate_does_not_budget_time_for_cross_workflow_waiting"
+        "tests/test_validation_proof_reuse.py::test_ci_quality_gate_is_pr_attached_and_never_duplicates_full_lane",
+        "tests/test_validation_proof_reuse.py::test_proof_only_consumer_fails_closed_without_starting_or_waiting_for_validation",
+        "tests/test_validation_proof_reuse.py::test_proof_only_consumer_accepts_completed_exact_head_proof"
       ],
       "lifecycle": "hosted-enforced",
       "sources": [
@@ -1011,7 +1012,8 @@
         "PR #416 independent owner review on 2026-09-06",
         "PR #526 Codex P1, 2026-09-26: the historical reconstruction resume path admitted a finalized per-PR disposition on the registry and rule digests alone, although the disposition was also decided from the owner login, the resolved integration-base commit, the invariant and recurrence verdicts, and the frozen record itself -- the same shape as the PR #416 defect, where one of two reuse paths bound fewer identities than the decision depended on. Corrected by binding every such input plus the frozen record digest, failing closed when that digest is absent.",
         "PR #561 Codex audit 2026-10-05, Issue #560 S6 entry: the reuse decision was a function of a fixed wait rather than of the authoritative run's terminal state, so a legitimately slow trusted run was indistinguishable from a missing one and the job duplicated the full lane.",
-        "PR #562 correction 2026-10-06: waiting for another workflow made reuse itself the PR latency boundary; reuse is now one-shot and pending evidence immediately falls through to full validation."
+        "PR #562 correction 2026-10-06: waiting for another workflow made reuse itself the PR latency boundary; reuse is now one-shot and pending evidence immediately falls through to full validation.",
+        "Issue #560 post-PR #562 latency correction 2026-10-06: a one-shot fallback still raced the canonical producer and duplicated the full suite. PR-attached Quality Gates is now proof-only while Pre-PR owns the feature-head full suite; main retains post-integration validation."
       ]
     },
     {

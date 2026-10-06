@@ -10,7 +10,6 @@ asserts the boundary refuses it.
 
 from __future__ import annotations
 
-import json
 import subprocess
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
@@ -490,14 +489,12 @@ def test_reuse_module_has_no_polling_or_sleep_boundary() -> None:
     ), "validation reuse must remain a one-shot evidence lookup; never reintroduce cross-workflow waiting"
 
 
-def test_ci_quality_gate_does_not_budget_time_for_cross_workflow_waiting() -> None:
+def test_ci_quality_gate_does_not_wait_for_cross_workflow_proof() -> None:
     ci = _ci_workflow()
-    resolver = next(
-        step for step in ci["jobs"]["quality"]["steps"] if "hunter_validation_reuse.py" in str(step.get("run", ""))
-    )
-    run = str(resolver["run"])
-    assert "--wait-seconds" not in run
-    assert "--poll-seconds" not in run
+    quality = ci["jobs"]["quality"]
+    runs = "\n".join(str(step.get("run", "")) for step in quality["steps"])
+    assert "hunter_validation_reuse.py" not in runs
+    assert quality["timeout-minutes"] <= 10
 
 
 def test_latest_run_for_the_head_decides_rather_than_any_green_one(
@@ -639,16 +636,43 @@ def test_reuse_marker_matches_the_canonical_preflight_mode_marker() -> None:
     assert reuse.MODE_MARKER == hunter_pre_push.MODE_MARKER.as_posix()
 
 
-def test_ci_workflow_guards_the_full_lane_on_the_reuse_decision() -> None:
-    """The reuse decision must actually gate the expensive step in CI."""
-    workflow = json.loads(json.dumps(_ci_workflow()))
-    steps = workflow["jobs"]["quality"]["steps"]
-    resolver = next(step for step in steps if "hunter_validation_reuse.py" in str(step.get("run", "")))
-    preflight_step = next(step for step in steps if "hunter_pr_preflight.py" in str(step.get("run", "")))
+def test_ci_quality_gate_is_pr_attached_and_never_duplicates_full_lane() -> None:
+    workflow = _ci_workflow()
+    job = workflow["jobs"]["quality"]
+    runs = "\n".join(str(step.get("run", "")) for step in job["steps"])
 
-    assert resolver["id"], "the reuse resolver step must expose an id for the guard to reference"
-    assert steps.index(resolver) < steps.index(preflight_step)
-    assert f"steps.{resolver['id']}.outputs.reusable" in preflight_step["if"]
+    assert "pull_request" in workflow[True]
+    assert "workflow_run" not in workflow[True]
+    assert "github.event_name == 'pull_request'" in str(job["if"])
+    assert "compileall" in runs
+    assert "hunter_pr_preflight.py" not in runs
+    assert "hunter_validation_reuse.py" not in runs
+    assert "pytest" not in runs
+    assert job["timeout-minutes"] <= 10
+    assert job["permissions"] == {"actions": "read", "contents": "read"}
+
+    main = workflow["jobs"]["main-validation"]
+    main_runs = "\n".join(str(step.get("run", "")) for step in main["steps"])
+    assert "github.event_name == 'push'" in str(main["if"])
+    assert "hunter_pr_preflight.py --mode normal" in main_runs
+
+
+def test_proof_only_consumer_fails_closed_without_starting_or_waiting_for_validation(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(reuse, "resolve", lambda *_args, **_kwargs: reuse.ReuseDecision(False, "proof pending", True))
+    assert (
+        reuse.main(["--require-proof", "--event-name", "pull_request", "--head-sha", "a" * 40, "--repository", "o/r"])
+        == 2
+    )
+
+
+def test_proof_only_consumer_accepts_completed_exact_head_proof(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(reuse, "resolve", lambda *_args, **_kwargs: reuse.ReuseDecision(True, "exact proof"))
+    assert (
+        reuse.main(["--require-proof", "--event-name", "pull_request", "--head-sha", "a" * 40, "--repository", "o/r"])
+        == 0
+    )
 
 
 def _ci_workflow() -> Any:
@@ -660,4 +684,5 @@ def _ci_workflow() -> Any:
 def test_ci_workflow_can_read_the_trusted_run_record() -> None:
     workflow = _ci_workflow()
 
-    assert workflow["permissions"]["actions"] == "read"
+    assert workflow["permissions"] == {}
+    assert workflow["jobs"]["quality"]["permissions"]["actions"] == "read"
