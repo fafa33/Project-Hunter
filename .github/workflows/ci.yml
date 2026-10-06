@@ -1,11 +1,9 @@
 name: CI
 
 on:
-  workflow_run:
-    workflows:
-      - Hunter / Pre-PR Preflight
-    types:
-      - completed
+  pull_request:
+    branches:
+      - main
   push:
     branches:
       - main
@@ -24,14 +22,10 @@ concurrency:
 jobs:
   quality:
     name: Quality Gates
-    if: >-
-      github.event_name == 'workflow_run' &&
-      github.event.workflow_run.event == 'push' &&
-      github.event.workflow_run.head_branch != 'main'
     runs-on: ubuntu-latest
-    # Quality Gates is the cheap merge-authority consumer. The feature-branch
-    # Pre-PR workflow is the single full-suite producer for an immutable SHA.
-    # This job must never run a second full repository suite or poll that producer.
+    if: github.event_name == 'pull_request'
+    # PR-attached required check. It never owns the feature-branch full suite;
+    # Hunter / Pre-PR Preflight is the single heavy producer for that SHA.
     timeout-minutes: 10
 
     steps:
@@ -56,14 +50,42 @@ jobs:
           set -euo pipefail
           python -m pip install --disable-pip-version-check -c requirements/ci-constraints.txt -e ".[dev]"
 
-      # One SHA -> one heavy validation. Pre-PR owns the full suite. Quality Gates
-      # consumes only a completed exact-identity proof; it never races the producer
-      # by starting another full suite. While the producer is active this check is
-      # expected to be non-terminal and governance remains fail-closed.
+      # Proof-only PR consumer. This remains attached to the candidate SHA, but
+      # never races the branch producer with a second full suite. If proof has
+      # not completed yet, the required check fails closed; the completed branch
+      # preflight is the canonical evidence consumed by merge readiness.
       - name: Consume canonical exact-head validation proof
         env:
           GITHUB_TOKEN: ${{ github.token }}
           GH_REPO: ${{ github.repository }}
-          PR_HEAD_SHA: ${{ github.event.workflow_run.head_sha || github.sha }}
-          VALIDATION_EVENT_NAME: ${{ github.event_name == 'workflow_run' && 'pull_request' || github.event_name }}
-        run: python scripts/hunter_validation_reuse.py --require-proof --event-name "${VALIDATION_EVENT_NAME}"
+          PR_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        run: python scripts/hunter_validation_reuse.py --require-proof
+
+  main-validation:
+    name: Main Validation
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+      - name: Set up Python
+        uses: actions/setup-python@v6
+        with:
+          python-version: "3.11.13"
+          cache: pip
+          cache-dependency-path: |
+            pyproject.toml
+            requirements/ci-constraints.txt
+      - name: Install project
+        env:
+          PIP_CONSTRAINT: requirements/ci-constraints.txt
+        run: |
+          set -euo pipefail
+          python -m pip install --disable-pip-version-check -c requirements/ci-constraints.txt -e ".[dev]"
+      - name: Validate integrated main tree
+        env:
+          PYTEST_ADDOPTS: -n auto --dist loadfile
+        run: python scripts/hunter_pr_preflight.py --mode normal

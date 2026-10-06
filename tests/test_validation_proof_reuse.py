@@ -638,22 +638,23 @@ def test_reuse_marker_matches_the_canonical_preflight_mode_marker() -> None:
     assert reuse.MODE_MARKER == hunter_pre_push.MODE_MARKER.as_posix()
 
 
-def test_ci_quality_gate_is_proof_only_consumer_and_never_duplicates_full_lane() -> None:
+def test_ci_quality_gate_is_pr_attached_proof_only_consumer_and_never_duplicates_full_lane() -> None:
     workflow = _ci_workflow()
     job = workflow["jobs"]["quality"]
-    steps = job["steps"]
-    runs = "\n".join(str(step.get("run", "")) for step in steps)
+    runs = "\n".join(str(step.get("run", "")) for step in job["steps"])
 
+    assert "pull_request" in workflow[True]
+    assert "workflow_run" not in workflow[True]
+    assert "github.event_name == 'pull_request'" in str(job["if"])
     assert "hunter_validation_reuse.py --require-proof" in runs
     assert "hunter_pr_preflight.py" not in runs
     assert "pytest" not in runs
     assert job["timeout-minutes"] <= 10
-    assert "workflow_run" in str(job["if"])
-    assert "head_branch != 'main'" in str(job["if"])
-    trigger = workflow[True]
-    assert "pull_request" not in trigger
-    assert trigger["workflow_run"]["workflows"] == [reuse.PRE_PR_WORKFLOW_NAME]
-    assert trigger["workflow_run"]["types"] == ["completed"]
+
+    main = workflow["jobs"]["main-validation"]
+    main_runs = "\n".join(str(step.get("run", "")) for step in main["steps"])
+    assert "github.event_name == 'push'" in str(main["if"])
+    assert "hunter_pr_preflight.py --mode normal" in main_runs
 
 
 def test_proof_only_consumer_fails_closed_without_starting_or_waiting_for_validation(

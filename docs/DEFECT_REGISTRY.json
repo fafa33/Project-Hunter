@@ -984,7 +984,7 @@
         "rationale": "The validation boundaries and the reuse authority are where a proof made for one candidate can be re-aimed at another, and where removing duplicate proof can quietly become removing proof. The historical evidence reconstruction module is named explicitly for the same reason: it caches an expensive per-PR disposition and reuses it, so it is a reuse authority, and its post-passes revisit only CONFIRMED findings -- a wrongly reused non-CONFIRMED disposition can never be rolled back. The file is named rather than its directory, so the family is required where proof reuse actually happens instead of across every unrelated module beside it."
       },
       "prevention": {
-        "mechanism": "One place decides proof validity from identities the verifier recomputes rather than accepts: Git tree content identity, validation-definition identity, measured toolchain, and exact head. Hunter / Pre-PR Preflight is the single heavy full-suite producer for a feature-branch SHA. Quality Gates is triggered only after that producer completes and is a proof-only consumer: it cannot invoke hunter_pr_preflight.py or pytest, and proof absence/failure fails closed. Regression guards forbid duplicate full-lane execution and cross-workflow polling/sleep.",
+        "mechanism": "One place decides proof validity from identities the verifier recomputes rather than accepts: Git tree content identity, validation-definition identity, measured toolchain, and exact head. Hunter / Pre-PR Preflight is the single heavy full-suite producer for a feature-branch SHA. The PR-attached Quality Gates job is proof-only and cannot invoke hunter_pr_preflight.py or pytest; it therefore remains an exact-head required check without duplicating the heavy lane. Main keeps a separate post-integration full validation lane. Regression guards forbid duplicate feature-head full-lane execution and cross-workflow polling/sleep.",
         "boundary": "hosted-gate",
         "guard_reference": "scripts/hunter_validation_receipt.py::verify"
       },
@@ -1002,7 +1002,7 @@
         "tests/test_historical_evidence_reconstruction.py::test_record_without_a_digest_is_never_reused_from_cache",
         "tests/test_historical_evidence_reconstruction.py::test_reconstruction_cache_records_every_input_it_is_keyed_on",
         "tests/test_validation_proof_reuse.py::test_reuse_module_has_no_polling_or_sleep_boundary",
-        "tests/test_validation_proof_reuse.py::test_ci_quality_gate_is_proof_only_consumer_and_never_duplicates_full_lane",
+        "tests/test_validation_proof_reuse.py::test_ci_quality_gate_is_pr_attached_proof_only_consumer_and_never_duplicates_full_lane",
         "tests/test_validation_proof_reuse.py::test_proof_only_consumer_fails_closed_without_starting_or_waiting_for_validation",
         "tests/test_validation_proof_reuse.py::test_proof_only_consumer_accepts_completed_exact_head_proof"
       ],
@@ -1013,7 +1013,7 @@
         "PR #526 Codex P1, 2026-09-26: the historical reconstruction resume path admitted a finalized per-PR disposition on the registry and rule digests alone, although the disposition was also decided from the owner login, the resolved integration-base commit, the invariant and recurrence verdicts, and the frozen record itself -- the same shape as the PR #416 defect, where one of two reuse paths bound fewer identities than the decision depended on. Corrected by binding every such input plus the frozen record digest, failing closed when that digest is absent.",
         "PR #561 Codex audit 2026-10-05, Issue #560 S6 entry: the reuse decision was a function of a fixed wait rather than of the authoritative run's terminal state, so a legitimately slow trusted run was indistinguishable from a missing one and the job duplicated the full lane.",
         "PR #562 correction 2026-10-06: waiting for another workflow made reuse itself the PR latency boundary; reuse is now one-shot and pending evidence immediately falls through to full validation.",
-        "Issue #560 post-PR #562 latency correction 2026-10-06: a one-shot fallback still raced the canonical producer and duplicated the full suite. Quality Gates now runs only after Pre-PR completion and consumes proof without executing the heavy lane."
+        "Issue #560 post-PR #562 latency correction 2026-10-06: a one-shot fallback still raced the canonical producer and duplicated the full suite. PR-attached Quality Gates is now proof-only while Pre-PR owns the feature-head full suite; main retains post-integration validation."
       ]
     },
     {
