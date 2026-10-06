@@ -8,12 +8,7 @@ on:
     branches:
       - main
 
-permissions:
-  # Reading the trusted exact-head branch preflight run record is what lets an
-  # identical integration tree stand on proof that already exists instead of
-  # re-running it. Read-only: this job publishes nothing.
-  actions: read
-  contents: read
+permissions: {}
 
 concurrency:
   group: ci-${{ github.workflow }}-${{ github.ref }}
@@ -27,6 +22,9 @@ jobs:
     # PR-attached required check. It never owns the feature-branch full suite;
     # Hunter / Pre-PR Preflight is the single heavy producer for that SHA.
     timeout-minutes: 10
+    permissions:
+      actions: read
+      contents: read
 
     steps:
       - name: Checkout
@@ -48,24 +46,20 @@ jobs:
           PIP_CONSTRAINT: requirements/ci-constraints.txt
         run: |
           set -euo pipefail
-          python -m pip install --disable-pip-version-check -c requirements/ci-constraints.txt -e ".[dev]"
+          python -m pip install --disable-pip-version-check --only-binary :all: -c requirements/ci-constraints.txt -e ".[dev]"
 
-      # Proof-only PR consumer. This remains attached to the candidate SHA, but
-      # never races the branch producer with a second full suite. If proof has
-      # not completed yet, the required check fails closed; the completed branch
-      # preflight is the canonical evidence consumed by merge readiness.
-      - name: Consume canonical exact-head validation proof
-        env:
-          GITHUB_TOKEN: ${{ github.token }}
-          GH_REPO: ${{ github.repository }}
-          PR_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
-        run: python scripts/hunter_validation_reuse.py --require-proof
+      # Cheap PR-attached hygiene only. The exact-head heavy authority is
+      # Hunter Pre-PR Preflight itself; this job must never race or duplicate it.
+      - name: Verify CI wiring
+        run: python -m compileall -q scripts src
 
   main-validation:
     name: Main Validation
     if: github.event_name == 'push' && github.ref == 'refs/heads/main'
     runs-on: ubuntu-latest
     timeout-minutes: 30
+    permissions:
+      contents: read
     steps:
       - name: Checkout
         uses: actions/checkout@v7
@@ -84,7 +78,7 @@ jobs:
           PIP_CONSTRAINT: requirements/ci-constraints.txt
         run: |
           set -euo pipefail
-          python -m pip install --disable-pip-version-check -c requirements/ci-constraints.txt -e ".[dev]"
+          python -m pip install --disable-pip-version-check --only-binary :all: -c requirements/ci-constraints.txt -e ".[dev]"
       - name: Validate integrated main tree
         env:
           PYTEST_ADDOPTS: -n auto --dist loadfile

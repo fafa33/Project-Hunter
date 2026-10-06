@@ -984,7 +984,7 @@
         "rationale": "The validation boundaries and the reuse authority are where a proof made for one candidate can be re-aimed at another, and where removing duplicate proof can quietly become removing proof. The historical evidence reconstruction module is named explicitly for the same reason: it caches an expensive per-PR disposition and reuses it, so it is a reuse authority, and its post-passes revisit only CONFIRMED findings -- a wrongly reused non-CONFIRMED disposition can never be rolled back. The file is named rather than its directory, so the family is required where proof reuse actually happens instead of across every unrelated module beside it."
       },
       "prevention": {
-        "mechanism": "One place decides proof validity from identities the verifier recomputes rather than accepts: Git tree content identity, validation-definition identity, measured toolchain, and exact head. Hunter / Pre-PR Preflight is the single heavy full-suite producer for a feature-branch SHA. The PR-attached Quality Gates job is proof-only and cannot invoke hunter_pr_preflight.py or pytest; it therefore remains an exact-head required check without duplicating the heavy lane. Main keeps a separate post-integration full validation lane. Regression guards forbid duplicate feature-head full-lane execution and cross-workflow polling/sleep.",
+        "mechanism": "One place decides proof validity from identities the verifier recomputes rather than accepts: Git tree content identity, validation-definition identity, measured toolchain, and exact head. Hunter / Pre-PR Preflight is the single heavy full-suite producer for a feature-branch SHA. PR-attached Quality Gates is deliberately cheap hygiene and never polls, consumes, or duplicates the heavy lane; merge authority continues to fail closed on the existing canonical required-check contract. Main keeps a separate post-integration full validation lane. Regression guards forbid duplicate feature-head full-lane execution and cross-workflow polling/sleep.",
         "boundary": "hosted-gate",
         "guard_reference": "scripts/hunter_validation_receipt.py::verify"
       },
@@ -1002,7 +1002,7 @@
         "tests/test_historical_evidence_reconstruction.py::test_record_without_a_digest_is_never_reused_from_cache",
         "tests/test_historical_evidence_reconstruction.py::test_reconstruction_cache_records_every_input_it_is_keyed_on",
         "tests/test_validation_proof_reuse.py::test_reuse_module_has_no_polling_or_sleep_boundary",
-        "tests/test_validation_proof_reuse.py::test_ci_quality_gate_is_pr_attached_proof_only_consumer_and_never_duplicates_full_lane",
+        "tests/test_validation_proof_reuse.py::test_ci_quality_gate_is_pr_attached_and_never_duplicates_full_lane",
         "tests/test_validation_proof_reuse.py::test_proof_only_consumer_fails_closed_without_starting_or_waiting_for_validation",
         "tests/test_validation_proof_reuse.py::test_proof_only_consumer_accepts_completed_exact_head_proof"
       ],

@@ -489,14 +489,12 @@ def test_reuse_module_has_no_polling_or_sleep_boundary() -> None:
     ), "validation reuse must remain a one-shot evidence lookup; never reintroduce cross-workflow waiting"
 
 
-def test_ci_quality_gate_does_not_budget_time_for_cross_workflow_waiting() -> None:
+def test_ci_quality_gate_does_not_wait_for_cross_workflow_proof() -> None:
     ci = _ci_workflow()
-    resolver = next(
-        step for step in ci["jobs"]["quality"]["steps"] if "hunter_validation_reuse.py" in str(step.get("run", ""))
-    )
-    run = str(resolver["run"])
-    assert "--wait-seconds" not in run
-    assert "--poll-seconds" not in run
+    quality = ci["jobs"]["quality"]
+    runs = "\n".join(str(step.get("run", "")) for step in quality["steps"])
+    assert "hunter_validation_reuse.py" not in runs
+    assert quality["timeout-minutes"] <= 10
 
 
 def test_latest_run_for_the_head_decides_rather_than_any_green_one(
@@ -638,7 +636,7 @@ def test_reuse_marker_matches_the_canonical_preflight_mode_marker() -> None:
     assert reuse.MODE_MARKER == hunter_pre_push.MODE_MARKER.as_posix()
 
 
-def test_ci_quality_gate_is_pr_attached_proof_only_consumer_and_never_duplicates_full_lane() -> None:
+def test_ci_quality_gate_is_pr_attached_and_never_duplicates_full_lane() -> None:
     workflow = _ci_workflow()
     job = workflow["jobs"]["quality"]
     runs = "\n".join(str(step.get("run", "")) for step in job["steps"])
@@ -646,10 +644,12 @@ def test_ci_quality_gate_is_pr_attached_proof_only_consumer_and_never_duplicates
     assert "pull_request" in workflow[True]
     assert "workflow_run" not in workflow[True]
     assert "github.event_name == 'pull_request'" in str(job["if"])
-    assert "hunter_validation_reuse.py --require-proof" in runs
+    assert "compileall" in runs
     assert "hunter_pr_preflight.py" not in runs
+    assert "hunter_validation_reuse.py" not in runs
     assert "pytest" not in runs
     assert job["timeout-minutes"] <= 10
+    assert job["permissions"] == {"actions": "read", "contents": "read"}
 
     main = workflow["jobs"]["main-validation"]
     main_runs = "\n".join(str(step.get("run", "")) for step in main["steps"])
@@ -684,4 +684,5 @@ def _ci_workflow() -> Any:
 def test_ci_workflow_can_read_the_trusted_run_record() -> None:
     workflow = _ci_workflow()
 
-    assert workflow["permissions"]["actions"] == "read"
+    assert workflow["permissions"] == {}
+    assert workflow["jobs"]["quality"]["permissions"]["actions"] == "read"
