@@ -10,7 +10,9 @@ writes nothing out of scope.
 from __future__ import annotations
 
 import json
+import sqlite3
 import subprocess
+import tempfile
 from pathlib import Path
 from typing import Any
 
@@ -397,6 +399,42 @@ def test_an_unexecutable_git_is_a_bounded_refusal_without_exposing_the_os_error_
     assert code == lifecycle.EXIT_REFUSED
     assert "re-dispatch the bootstrap" in err and "Traceback" not in err
     assert "auth-header-must-never-leak" not in err and "auth-header-must-never-leak" not in out
+    assert refs_of(world["remote"]) == {}
+
+
+def test_an_uncreatable_workspace_is_a_bounded_refusal(
+    world: dict[str, Any], monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    real_tempdir = tempfile.TemporaryDirectory
+
+    def unavailable(prefix: str | None = None, **kwargs: Any) -> Any:
+        if prefix == "hunter-sh-bootstrap-":
+            raise OSError("hunter-workspace-marker")
+        return real_tempdir(prefix=prefix, **kwargs)
+
+    monkeypatch.setattr(tempfile, "TemporaryDirectory", unavailable)
+    code, out, err = dispatch(world, capsys)
+    assert code == lifecycle.EXIT_REFUSED
+    assert "re-dispatch the bootstrap" in err and "Traceback" not in err
+    assert "hunter-workspace-marker" not in err and "hunter-workspace-marker" not in out
+    assert refs_of(world["remote"]) == {}
+
+
+def test_an_unopenable_workspace_database_is_a_bounded_refusal(
+    world: dict[str, Any], monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    real_connect = sh.sqlite3.connect
+
+    def unopenable(database: Any, *args: Any, **kwargs: Any) -> Any:
+        if "hunter-sh-bootstrap-" in str(database):
+            raise sqlite3.OperationalError("hunter-sqlite-marker")
+        return real_connect(database, *args, **kwargs)
+
+    monkeypatch.setattr(sh.sqlite3, "connect", unopenable)
+    code, out, err = dispatch(world, capsys)
+    assert code == lifecycle.EXIT_REFUSED
+    assert "re-dispatch the bootstrap" in err and "Traceback" not in err
+    assert "hunter-sqlite-marker" not in err and "hunter-sqlite-marker" not in out
     assert refs_of(world["remote"]) == {}
 
 

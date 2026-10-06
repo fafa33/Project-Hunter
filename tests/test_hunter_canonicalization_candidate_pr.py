@@ -349,6 +349,65 @@ def test_propose_rebuilds_fresh_once_dedicated_branch_is_stale(origin_repo: Path
     assert second_recorder.pr_create_calls == 1
 
 
+def test_propose_records_canonicalized_commits_under_the_bound_writer_identity(
+    origin_repo: Path, tmp_path: Path
+) -> None:
+    """Canonicalization commits must carry the authorization-bound writer
+    identity from `docs/CODE_WRITE_POLICY.json`, never the runner's ambient
+    git identity. The canonical pre-push hook refuses unbound identities
+    (exactly what happened when a runner's environment resolved
+    `user.email` to a personal address), so the recording step must pin the
+    bound identity itself and fail closed if it is not declared."""
+
+    # Ambient runner config matches the broken local_git_push environment:
+    # a plausible name paired with an unbound personal email.
+    _git(["config", "user.name", "Farhad5778"], cwd=tmp_path / "seed")
+    _git(["config", "user.email", "farhadafshari33@yahoo.com"], cwd=tmp_path / "seed")
+    _git(["config", "commit.gpgsign", "false"], cwd=tmp_path / "seed")
+
+    recorder = RecordingRun()
+    message = candidate_pr.propose(
+        pr=811,
+        head=HEAD,
+        base=BASE,
+        observations=[_observation(811)],
+        repo=str(origin_repo),
+        repo_root=tmp_path / "seed",
+        run=recorder,
+    )
+    assert "OPENED" in message
+
+    assert any(
+        "-c" in call
+        and "user.name=Farhad5778" in call
+        and "user.email=34549283+fafa33@users.noreply.github.com" in call
+        for call in recorder.calls
+        if call[0] == "git" and "commit" in call
+    ), "the recording commit must pin the authorization-bound writer identity"
+
+    head_sha = subprocess.run(
+        ["git", "rev-parse", candidate_pr.DEDICATED_BRANCH],
+        cwd=origin_repo,
+        check=True,
+        capture_output=True,
+        text=True,
+    ).stdout.strip()
+    identity = (
+        subprocess.run(
+            ["git", "show", "-s", "--format=%an%x00%ae%x00%cn%x00%ce", head_sha],
+            cwd=origin_repo,
+            check=True,
+            capture_output=True,
+            text=True,
+        )
+        .stdout.strip()
+        .split("\x00")
+    )
+    assert identity == ["Farhad5778", "34549283+fafa33@users.noreply.github.com"] * 2
+    assert "farhadafshari33@yahoo.com" not in identity
+    assert "fixture@example.invalid" not in identity
+
+
 def test_propose_reconciles_an_orphaned_branch_left_by_a_failed_pr_create(origin_repo: Path, tmp_path: Path) -> None:
     """Regression for Codex P1 (PR #530 review): if a prior run's push
     succeeded but its own `gh pr create` call then failed (a transient

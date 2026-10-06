@@ -16,6 +16,7 @@ import base64
 import hashlib
 import json
 import os
+import sqlite3
 import subprocess
 import sys
 from collections.abc import Callable, Mapping, Sequence
@@ -631,6 +632,20 @@ def cmd_source_handling_bootstrap(configuration: control.Configuration, _argumen
     except state.LedgerError:
         raise control.FactsUnavailable(
             "the Source Handling ledger could not be read or advanced; re-dispatch the bootstrap"
+        ) from None
+    except OSError:
+        # A local workspace creation/storage failure (for example a full or
+        # unavailable temporary filesystem) is operational, never a trust
+        # decision, so it becomes the same bounded re-dispatch refusal. The
+        # OS error payload is deliberately not carried.
+        raise control.FactsUnavailable(
+            "the Source Handling workspace could not be prepared; re-dispatch the bootstrap"
+        ) from None
+    except sqlite3.OperationalError:
+        # SQLite open/setup/replay storage failures are operational too and
+        # must not surface a raw traceback; the error payload is not carried.
+        raise control.FactsUnavailable(
+            "the Source Handling store could not be read or advanced; re-dispatch the bootstrap"
         ) from None
     except SourceHandlingBlockedError as error:
         raise LifecycleRefused("SOURCE_HANDLING_BLOCKED", str(error)) from None
