@@ -230,8 +230,10 @@ def test_first_bootstrap_refuses_if_post_creation_branch_rules_do_not_apply(
     code, _out, err = dispatch(world, capsys)
     assert code == 2
     assert "ANCHOR_INTEGRITY_FAILED: anchor ruleset does not cover this ledger branch" in err
-    # The first CAS can create the ref, but success is impossible until GitHub proves the anchor applies.
-    assert head_of(world["remote"], sh.SOURCE_HANDLING_LEDGER_REF) is not None
+    # The creation exception is exactly one CAS: later bootstrap transactions cannot land unprotected.
+    head, entries = ledger_files(world)
+    assert head is not None
+    assert len(entries) == 1
 
 
 def test_first_bootstrap_refuses_before_creation_if_pinned_ruleset_is_weakened(

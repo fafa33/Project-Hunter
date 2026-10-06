@@ -736,18 +736,29 @@ def _source_handling_bootstrap(configuration: control.Configuration) -> int:
                     f"{STATE_SIGNING_KEY_ENV} is not pinned by the trust roots; refusing to write an unusable "
                     "ledger record",
                 )
+            first, *remaining = transactions
             position = sh.publish(
                 store,
                 position,
-                transactions,
+                [first],
                 signing_key=signing_key,
                 recorded_by=writer.recorded_by(),
                 recorded_at=_timestamp(),
                 repository_id=configuration.repository_id,
             )
-            # The bootstrap permission ends at the first write.  From this point the ref exists and must
-            # be demonstrably protected by the pinned ruleset before any success can be reported.
+            # The creation exception is exactly one CAS.  The ref now exists, so branch-applied protection
+            # must be proven before any later bootstrap transaction can become durable.
             control.require_anchor(github, configuration, sh.SOURCE_HANDLING_LEDGER_REF)
+            if remaining:
+                position = sh.publish(
+                    store,
+                    position,
+                    remaining,
+                    signing_key=signing_key,
+                    recorded_by=writer.recorded_by(),
+                    recorded_at=_timestamp(),
+                    repository_id=configuration.repository_id,
+                )
 
         replay = root / "replay.sqlite"
         verified = sh.materialize(
