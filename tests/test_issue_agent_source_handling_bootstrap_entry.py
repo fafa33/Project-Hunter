@@ -21,6 +21,7 @@ import hunter_issue_agent_lifecycle as lifecycle
 import pytest
 from cryptography.hazmat.primitives import serialization
 from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
+from test_issue_agent_source_handling_store import _replay_fault_connect  # shared replay-fault helper
 
 from hunter.automation import issue_agent_control as control
 from hunter.automation import issue_agent_source_handling_store as sh
@@ -182,42 +183,6 @@ def ledger_files(world: dict[str, Any]) -> tuple[str | None, list[tuple[str, dic
     return store.read_files(sh.SOURCE_HANDLING_LEDGER_REF, frozenset({"record.json", "delta.json"}))
 
 
-def _replay_fault_connect(real_connect: Any, *, marker: str) -> Any:
-    """Wrap `sqlite3.connect` so the first `_apply` replay INSERT raises an
-    `sqlite3.OperationalError`. `_apply` opens a fresh connection and, before any
-    delta mutation, runs `PRAGMA foreign_keys = ON`, then `BEGIN IMMEDIATE`, then
-    the INSERTs for absent rows. In the materialize-first dispatch order the replay
-    connection is the first to reach that sequence, so the fault lands inside the
-    delta replay and never inside an earlier read or schema step."""
-
-    class _ReplayFault:
-        def __init__(self, real: sqlite3.Connection) -> None:
-            object.__setattr__(self, "_real", real)
-            object.__setattr__(self, "_locked", False)
-
-        def __getattr__(self, name: str) -> Any:
-            return getattr(self._real, name)
-
-        def __setattr__(self, name: str, value: Any) -> None:
-            if name.startswith("_"):
-                object.__setattr__(self, name, value)
-            else:
-                setattr(self._real, name, value)
-
-        def execute(self, sql: str, parameters: Any = (), *args: Any, **kwargs: Any) -> Any:
-            statement = str(sql).lstrip()
-            if statement.upper().startswith("BEGIN IMMEDIATE"):
-                object.__setattr__(self, "_locked", True)
-            elif self._locked and statement.upper().startswith("INSERT"):
-                raise sqlite3.OperationalError(marker)
-            return self._real.execute(sql, parameters, *args, **kwargs)
-
-    def faulted_connect(database: Any, *args: Any, **kwargs: Any) -> Any:
-        return _ReplayFault(real_connect(database, *args, **kwargs))
-
-    return faulted_connect
-
-
 @pytest.fixture
 def world(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> dict[str, Any]:
     return build(tmp_path, monkeypatch)
@@ -268,7 +233,11 @@ def test_a_replay_operational_failure_is_a_sanitized_redispatch_refusal(
     `test_a_ledger_binding_a_foreign_repository_is_refused` already pin."""
     assert dispatch(world, capsys)[0] == 0
     marker = "hunter-replay-lock-marker"
-    monkeypatch.setattr(sh.sqlite3, "connect", _replay_fault_connect(sh.sqlite3.connect, marker=marker))
+    monkeypatch.setattr(
+        sh.sqlite3,
+        "connect",
+        _replay_fault_connect(sh.sqlite3.connect, exception_type=sqlite3.OperationalError, marker=marker),
+    )
     before = refs_of(world["remote"])
     code, out, err = dispatch(world, capsys)
     assert code == lifecycle.EXIT_REFUSED
