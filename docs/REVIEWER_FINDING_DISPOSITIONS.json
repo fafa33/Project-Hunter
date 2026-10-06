@@ -79,6 +79,44 @@
       "permanent_disposition_evidence": "Confirmed on the reviewed head: hunter_pr_preflight._reuse_blocker() called receipts.reuse_blocker(root) without a head, reuse_blocker defaulted head_sha to None, and verify() skipped the head comparison entirely -- so a receipt recorded for commit A could be reused on a different commit B carrying the same tree, definition and toolchain. The push boundary passed the head and the local reuse path did not, and nothing detected the divergence. Repaired by removing the default: verify() now requires head_sha, so no caller can drop the binding by omitting a keyword, and reuse_blocker resolves the head from the repository when a caller has not already established one. The regression drives the production caller with two real commits that resolve to the same tree, and was confirmed to fail against the pre-fix code and pass against the repair.",
       "guard_reference": "scripts/hunter_validation_receipt.py::verify",
       "test_reference": "tests/test_validation_proof_reuse.py::test_a_receipt_for_one_commit_is_refused_on_another_commit_with_the_same_tree"
+    },
+    {
+      "id": "RFD-AUTO-568-review-comment-4200960779",
+      "source_provenance": {
+        "reviewer": "chatgpt-codex-connector[bot]",
+        "pr_number": 568,
+        "reference": "GitHub authority review event review-comment-4200960779; source_head=7d6e31cea9f02ebd2b09ec95ceb65f7dffba968a"
+      },
+      "finding_evidence": {
+        "message": "**<sub><sub>![P1 Badge](https://img.shields.io/badge/P1-orange?style=flat)</sub></sub>  Refresh the acceptance claims for the repin**\n\nWhen this exact-candidate request is used for hostile review, its target now includes `config/issue_agent_trust_roots.json`, but AC-4 still asserts that the range “changes no trust root” and that this config is untouched; the other evidence also describes the earlier bootstrap implementation range rather than this three-file rotation. This can mislead reviewers into clearing a security-sensitive trust-root change using stale evidence, so regenerate the acceptance claims around the governed repin before relying on this request.\n\nAGENTS.md reference: [AGENTS.md:L7-L7](https://github.com/fafa33/Project-Hunter/blob/7d6e31cea9f02ebd2b09ec95ceb65f7dffba968a/AGENTS.md#L7-L7)\n\nUseful? React with 👍 / 👎.",
+        "path": ".hunter/pre-ready-hostile-review.json",
+        "line": 188
+      },
+      "validation_state": "unvalidated"
+    },
+    {
+      "id": "RFD-AUTO-568-review-5434887819",
+      "source_provenance": {
+        "reviewer": "copilot-pull-request-reviewer[bot]",
+        "pr_number": 568,
+        "reference": "GitHub authority review event review-5434887819; source_head=2d02ce4d31fef12701a417fe9ea8dc62c2eb5513"
+      },
+      "finding_evidence": {
+        "message": "<!-- ccr-overview-v2 -->\n\n## Copilot review overview\n\n### 🟡 Changes recommended\n\nThe committed hostile-review artifact is stale and must be regenerated for the current change set.\n\n**Review effort:** Lite  \n**Findings:** 1 <picture><source media=\"(prefers-color-scheme: dark)\" srcset=\"https://github.githubassets.com/static/images/icons/copilot-code-review/medium-v2-dark.svg\"><source media=\"(prefers-color-scheme: light)\" srcset=\"https://github.githubassets.com/static/images/icons/copilot-code-review/medium-v2-light.svg\"><img src=\"https://github.githubassets.com/static/images/icons/copilot-code-review/medium-v2-light.png\" alt=\"Medium severity\" width=\"62\" height=\"18\" align=\"texttop\"></picture>\n\n<details open>\n<summary><strong>Open (1)</strong></summary>\n\n- <picture><source media=\"(prefers-color-scheme: dark)\" srcset=\"https://github.githubassets.com/static/images/icons/copilot-code-review/medium-v2-dark.svg\"><source media=\"(prefers-color-scheme: light)\" srcset=\"https://github.githubassets.com/static/images/icons/copilot-code-review/medium-v2-light.svg\"><img src=\"https://github.githubassets.com/static/images/icons/copilot-code-review/medium-v2-light.png\" alt=\"Medium severity\" width=\"62\" height=\"18\" align=\"texttop\"></picture> [Regenerate stale hostile-review evidence for the current change set](#discussion_r4200719092) · New\n</details>\n\n<details>\n<summary><strong>What changed in this PR</strong></summary>\n\nRepins S6’s trust root to the corrected ruleset revision while preserving identity `24526712`.\n\n**Changes:**\n- Updates the pinned anchor timestamp.\n- Synchronizes lifecycle and bootstrap regression fixtures.\n\n| File | Summary |\r\n|---|---|\r\n| `tests/​test_issue_agent_source_handling_bootstrap_entry.py` | Updates bootstrap anchor fixtures. |\r\n| `tests/​test_issue_agent_lifecycle_entry.py` | Updates lifecycle trust-root expectations. |\r\n| `config/​issue_agent_trust_roots.json` | Updates the pinned trust-root timestamp. |\n</details>\n\n---\n\n💡 <a href=\"/fafa33/Project-Hunter/new/main?filename=.github/skills/code-review/SKILL.md\" class=\"Link--inTextBlock\" target=\"_blank\" rel=\"noopener noreferrer\">Add a `code-review` agent skill</a> or configure MCP servers for context-aware, tailored reviews. <a href=\"https://docs.github.com/copilot/how-tos/use-copilot-agents/request-a-code-review/use-code-review?tool=webui#mcp-servers-and-agent-skills\" class=\"Link--inTextBlock\" target=\"_blank\" rel=\"noopener noreferrer\">Learn more in the docs.</a>"
+      },
+      "validation_state": "unvalidated"
+    },
+    {
+      "id": "RFD-AUTO-568-review-5435154371",
+      "source_provenance": {
+        "reviewer": "chatgpt-codex-connector[bot]",
+        "pr_number": 568,
+        "reference": "GitHub authority review event review-5435154371; source_head=7d6e31cea9f02ebd2b09ec95ceb65f7dffba968a"
+      },
+      "finding_evidence": {
+        "message": "### 💡 Codex Review\n\nHere are some automated review suggestions for this pull request.\n\n**Reviewed commit:** `7d6e31cea9`\n    \n\n<details> <summary>ℹ️ About Codex in GitHub</summary>\n<br/>\n\n[Your team has set up Codex to review pull requests in this repo](https://chatgpt.com/codex/cloud/settings/general). Reviews are triggered when you\n- Open a pull request for review\n- Mark a draft as ready\n- Comment \"@codex review\".\n\nIf Codex has suggestions, it will comment; otherwise it will react with 👍.\n\n\n\n\nCodex can also answer questions or update the PR. Try commenting \"@codex address that feedback\".\n            \n</details>"
+      },
+      "validation_state": "unvalidated"
     }
   ]
 }
