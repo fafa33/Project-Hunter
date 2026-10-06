@@ -182,7 +182,7 @@
     "issue": "560",
     "review_target": [
       {
-        "blob_sha": "79acc2d386a4237e8d523be209dd32e91716e708",
+        "blob_sha": "79cdef4ccdadaa28af265813ef58c382741dc387",
         "path": "tests/test_issue_agent_source_handling_bootstrap_entry.py",
         "previous_path": "",
         "status": "added"
@@ -206,7 +206,13 @@
         "status": "modified"
       },
       {
-        "blob_sha": "cf89a5c9fa3660c58e32a962e62310342964f2e2",
+        "blob_sha": "bc955c5d6211eb168b53eff1f4713bd35734ca61",
+        "path": "scripts/hunter_canonicalization_candidate_pr.py",
+        "previous_path": "",
+        "status": "modified"
+      },
+      {
+        "blob_sha": "dffe39081e118768914827e1413d0ddd8b9b7eeb",
         "path": "scripts/hunter_issue_agent_lifecycle.py",
         "previous_path": "",
         "status": "modified"
@@ -216,13 +222,19 @@
         "path": "src/hunter/automation/issue_agent_state.py",
         "previous_path": "",
         "status": "modified"
+      },
+      {
+        "blob_sha": "1393fd3fb873bf8db36dd89ce8712cba7da683d6",
+        "path": "tests/test_hunter_canonicalization_candidate_pr.py",
+        "previous_path": "",
+        "status": "modified"
       }
     ],
-    "review_target_digest": "a0d519dd19799d51455e53b07cde74bef1aacbce60c4d895f9caad7c107e8ed7"
+    "review_target_digest": "a89768b9fdb7e7b24310d812c76df39c40c5c8f59b2b6fb6236674f183973394"
   },
-  "review_id": "2c684569881eb943fa7146df724640a6e29aeaa69ef25002f1d236330894edfe",
+  "review_id": "f0ff3af38a4753ee7dcb6f18ffafa5435718524215f55c585d653c1ccd780cdc",
   "review_request": {
-    "claims_id": "2c684569881eb943fa7146df724640a6e29aeaa69ef25002f1d236330894edfe",
+    "claims_id": "f0ff3af38a4753ee7dcb6f18ffafa5435718524215f55c585d653c1ccd780cdc",
     "schema": "hunter.review-request.v1"
   },
   "schema": "hunter.pre-ready-hostile-review.v1"
