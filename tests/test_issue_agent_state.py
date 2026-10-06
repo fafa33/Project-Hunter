@@ -487,6 +487,17 @@ def test_an_intact_anchor_verifies() -> None:
     state.verify_anchor_integrity(PIN, OK_RULESET, OK_BRANCH_RULES)
 
 
+def test_anchor_timestamp_comparison_normalizes_equivalent_timezones() -> None:
+    offset_pin = AnchorPin(ruleset_id=24433842, updated_at="2026-10-04T01:15:23.241+02:00")
+    state.verify_anchor_integrity(offset_pin, OK_RULESET, OK_BRANCH_RULES)
+
+
+@pytest.mark.parametrize("updated_at", ["2026-10-03T23:15:23.241", "not-a-timestamp", None])
+def test_anchor_timestamp_without_a_valid_timezone_fails_closed(updated_at: object) -> None:
+    with pytest.raises(AnchorIntegrityError, match="modified since it was pinned"):
+        state.verify_anchor_integrity(PIN, {**OK_RULESET, "updated_at": updated_at}, OK_BRANCH_RULES)
+
+
 @pytest.mark.parametrize(
     ("ruleset", "branch_rules"),
     [

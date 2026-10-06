@@ -694,7 +694,20 @@ def verify_anchor_integrity(
         raise AnchorIntegrityError("anchor ruleset missing or replaced")
     if ruleset.get("enforcement") != "active":
         raise AnchorIntegrityError("anchor ruleset not active")
-    if ruleset.get("updated_at") != pin.updated_at:
+
+    def instant(value: object) -> datetime:
+        if not isinstance(value, str):
+            raise ValueError("timestamp is not a string")
+        parsed = datetime.fromisoformat(value.replace("Z", "+00:00"))
+        if parsed.tzinfo is None:
+            raise ValueError("timestamp has no timezone")
+        return parsed.astimezone(UTC)
+
+    try:
+        same_updated_at = instant(ruleset.get("updated_at")) == instant(pin.updated_at)
+    except (TypeError, ValueError):
+        same_updated_at = False
+    if not same_updated_at:
         raise AnchorIntegrityError("anchor ruleset modified since it was pinned")
     declared = {str(rule.get("type")) for rule in ruleset.get("rules") or [] if isinstance(rule, dict)}
     if not pin.required_rules <= declared:

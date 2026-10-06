@@ -1,4 +1,28 @@
 {
-  "provisioned": false,
-  "schema_version": "hunter-issue-agent-trust-roots-v1"
+  "schema_version": "hunter-issue-agent-trust-roots-v1",
+  "provisioned": true,
+  "repository": "fafa33/Project-Hunter",
+  "repository_id": 1292945327,
+  "owner_login": "fafa33",
+  "state_keys": [
+    "c131ed71438a5a6792f9210b9aa7744f429a93be5a59d188158b2765d61e1cb5"
+  ],
+  "anchor": {
+    "ruleset_id": 24526712,
+    "updated_at": "2026-10-05T19:29:49.614Z"
+  },
+  "handoff_recipient": "ca03f5c9d997b8b829a8f2692c38a7a6cbb189923c3c058726a258986f042d74",
+  "result_recipient": "2c1f6fa40c7390d6303b0b5fec3b0a7843a5a029f3490707ade5bdf56ff38756",
+  "writer": {
+    "login": "fafa33",
+    "name": "Farhad5778",
+    "email": "34549283+fafa33@users.noreply.github.com"
+  },
+  "authorization_verifying_key": "817c9612d91ef2f0f391c997e6243e2afb346eb0b03c3d4b68aac43a855936c0",
+  "prompt_verifying_key": "b56a357abed658aad18c63f9c35c72316949474bffd31a078df8d41a1f447bfd",
+  "source_handling": {
+    "verification_key": "e88ac630f9ffb37eb9d4f6f1fa3a730b3154e670e2299094982c85027872734c",
+    "verification_key_sha256": "875c7b8f081100bb1c336f1310f56d5d725e4097cac650a700e67d515dd84fea",
+    "genesis_rule_sha256": "41119071db0f5c2a2eacfe2848ab6696355195e1ac9c671ee33c4128793aa70a"
+  }
 }

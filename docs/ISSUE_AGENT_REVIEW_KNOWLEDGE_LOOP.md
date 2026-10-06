@@ -1,14 +1,13 @@
 # Issue #560: reviewer → knowledge → prevention → remediation loop (reconciliation)
 
-**Status: reconciliation (2026-10-04); owner decisions RD-1…RD-6 taken the same day and recorded as [ADR 0039](ADR/0039-review-knowledge-remediation-loop.md) (accepted). S5b-1…S5b-5 implemented; the §5 acceptance simulation passes, so S5 is complete and the loop is usable. S6 has not started and every lifecycle job still refuses `MISSING_CONFIGURATION`.** Verification is *focused*: the S5b suite (91 tests) and 22/22 mutants pass with Black, Ruff, mypy and the Defect Prevention Guard green. The full-repository `hunter_pr_preflight --mode normal` was stopped by the owner during the repository suite and is **not** claimed as a pass; the hosted exact-head Pre-PR Preflight remains the merge-readiness authority for this branch. Decided: RD-1 hybrid deterministic-first with RED→GREEN proof; RD-2 anchored knowledge ledger; RD-3 promotion inside the remediation commit; RD-4/RD-5 Hunter-agent PRs only with fast-forward-from-bound-head publication; RD-6 reply and resolve only after exact-head proof. It records the owner requirement
+**Status: reconciliation (2026-10-04); owner decisions RD-1…RD-6 taken the same day and recorded as [ADR 0039](ADR/0039-review-knowledge-remediation-loop.md) (accepted). S5b-1…S5b-5 implemented; the §5 acceptance simulation passes, so S5 is complete and the loop is usable. S6 trust-root provisioning has started on PR #564: the committed trust roots are provisioned and loadable. The isolated unprovisioned path still refuses `MISSING_CONFIGURATION`, and Source Handling bootstrap remains separately owner-gated.** Verification is *focused*: the S5b suite (91 tests) and 22/22 mutants pass with Black, Ruff, mypy and the Defect Prevention Guard green. The full-repository `hunter_pr_preflight --mode normal` was stopped by the owner during the repository suite and is **not** claimed as a pass; the hosted exact-head Pre-PR Preflight remains the merge-readiness authority for this branch. Decided: RD-1 hybrid deterministic-first with RED→GREEN proof; RD-2 anchored knowledge ledger; RD-3 promotion inside the remediation commit; RD-4/RD-5 Hunter-agent PRs only with fast-forward-from-bound-head publication; RD-6 reply and resolve only after exact-head proof. It records the owner requirement
 of 2026-10-04 against the canonical authorities that already exist, names the smallest missing pieces, and
 lists the owner decisions (RD-1…RD-6) that must be taken before any of those pieces is implemented. The
 decisions are needed because several pieces require an authority that ADR 0037, ADR 0038, `CODE_WRITE_POLICY`
 or the automatic-learning design currently withhold on purpose.
 
 **Binding acceptance criterion (owner, 2026-10-04).** #560 is not usable, and **S5 is not complete**, until the
-loop below runs automatically end to end and is proven by the acceptance simulation in §5. HARD STOP before S6
-still applies.
+loop below runs automatically end to end and is proven by the acceptance simulation in §5. The former HARD STOP before S6 is satisfied by the proven S5b acceptance loop; S6 remains owner-gated.
 
 ```text
 review finding → trusted ingestion/normalization → deterministic fingerprint/family classification
@@ -74,7 +73,7 @@ review finding → trusted ingestion/normalization → deterministic fingerprint
 
 ## 4. Proposed slice placement (after the decisions)
 
-S5 is **not complete** until S5b is proven. S6 stays owner-gated.
+S5 is **not complete** until S5b is proven. S6 is now in its owner-gated trust-root provisioning transition.
 
 | Slice | Deliverable | Depends on |
 |---|---|---|

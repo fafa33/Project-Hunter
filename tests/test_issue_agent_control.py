@@ -194,9 +194,12 @@ def executed(repos: dict[str, Any]) -> tuple[rt.Ledger, bytes]:
 # --- configuration (MISSING_CONFIGURATION is the inert S5 state) --------------------------------------
 
 
-def test_the_committed_trust_roots_are_unprovisioned_so_every_entry_fails_closed() -> None:
-    with pytest.raises(control.ControlRefused, match="MISSING_CONFIGURATION"):
-        control.load_configuration(Path(__file__).resolve().parents[1])
+def test_the_committed_s6_trust_roots_are_provisioned_and_loadable() -> None:
+    configuration = control.load_configuration(Path(__file__).resolve().parents[1])
+    assert configuration.repository == "fafa33/Project-Hunter"
+    assert configuration.repository_id == 1292945327
+    assert configuration.owner_login == "fafa33"
+    assert configuration.anchor.ruleset_id == 24526712
 
 
 def provisioned(**overrides: Any) -> dict[str, Any]:

@@ -306,7 +306,7 @@ variables.
 
 ## Implementation Status
 
-Implemented on PR #561 through **S5a (inert workflows)**; **S5 is not complete** until S5b (below) is proven. S6 onward is owner-gated and not performed.
+Implemented through **S5b** and now transitioning through **S6 trust-root provisioning** on PR #564. S6 is owner-gated; the repository-pinned public trust roots are provisioned, while Source Handling bootstrap remains separately gated and has not been dispatched.
 
 - S1: contracts, `CODE_WRITE_POLICY` (`issue_agent_publisher`, `issue_agent_state_ledger`), defect registry.
 - S2: signed anchored state ledger (`issue_agent_state`), pure `advance`, resume nonce protocol.
@@ -316,9 +316,9 @@ Implemented on PR #561 through **S5a (inert workflows)**; **S5 is not complete**
 - S5a: control recorder (`issue_agent_control`: run provenance, anchor integrity, definitive facts, one record per
   step), the lifecycle entry point (`scripts/hunter_issue_agent_lifecycle.py`), the lifecycle, reconcile,
   candidate-PR and rehearsal workflows, the static workflow guard (AT-41/42/47), and the fail-closed guard on the
-  retired parallel authorities (AT-46). The repository-pinned `config/issue_agent_trust_roots.json` is
-  **unprovisioned**, so every lifecycle job refuses `MISSING_CONFIGURATION` before any secret, ledger or network
-  access: nothing can execute until S6.
+  retired parallel authorities (AT-46). The repository-pinned `config/issue_agent_trust_roots.json` was intentionally
+  **unprovisioned** during S5a; PR #564 provisions those public trust roots for S6. The explicit unprovisioned
+  regression fixture remains fail-closed with `MISSING_CONFIGURATION`, while the committed S6 configuration is loadable.
 - S5b (owner requirement, 2026-10-04): the reviewer → knowledge → prevention → remediation loop is a binding
   acceptance criterion; S5 is not complete until it is proven. Reconciliation and the open owner decisions
   RD-1…RD-6: [ISSUE_AGENT_REVIEW_KNOWLEDGE_LOOP.md](../ISSUE_AGENT_REVIEW_KNOWLEDGE_LOOP.md).
