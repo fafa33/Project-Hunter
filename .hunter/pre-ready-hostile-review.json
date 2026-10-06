@@ -200,6 +200,12 @@
         "status": "modified"
       },
       {
+        "blob_sha": "a6d57a48daf87e09db6bb6c9670a1d7acf9c6db9",
+        "path": "docs/ADR/README.md",
+        "previous_path": "",
+        "status": "modified"
+      },
+      {
         "blob_sha": "cf89a5c9fa3660c58e32a962e62310342964f2e2",
         "path": "scripts/hunter_issue_agent_lifecycle.py",
         "previous_path": "",
@@ -212,11 +218,11 @@
         "status": "modified"
       }
     ],
-    "review_target_digest": "9365047832f18e2440f0d8580a2df1aab399bdfc25698af8a77d22c6831cb9a0"
+    "review_target_digest": "6cc0058726d8e311b91052a38c73e62b5081b40cec37397a4f25bcaf24c1177c"
   },
-  "review_id": "ede3053fbf51b6b8de0696f1686a9c7a4dff8c7ab5a6964707b3e23e466eda1a",
+  "review_id": "dbb243bdce82be6c16638d46f45103a90d0776d15f9893aab756e64cb00fc629",
   "review_request": {
-    "claims_id": "ede3053fbf51b6b8de0696f1686a9c7a4dff8c7ab5a6964707b3e23e466eda1a",
+    "claims_id": "dbb243bdce82be6c16638d46f45103a90d0776d15f9893aab756e64cb00fc629",
     "schema": "hunter.review-request.v1"
   },
   "schema": "hunter.pre-ready-hostile-review.v1"
