@@ -16,6 +16,7 @@ import base64
 import hashlib
 import json
 import os
+import sqlite3
 import subprocess
 import sys
 from collections.abc import Callable, Mapping, Sequence
@@ -615,7 +616,42 @@ def _require_anchors(configuration: control.Configuration, github: control.GitHu
 
 
 def cmd_source_handling_bootstrap(configuration: control.Configuration, _arguments: argparse.Namespace) -> int:
-    """One-shot S6 bootstrap of ADR 0038, recovering any valid interrupted prefix."""
+    """One-shot S6 bootstrap of ADR 0038, recovering any valid interrupted prefix.
+
+    Everything this job can observe outside the closed refusal vocabulary is translated here, so the
+    owner-dispatched run always ends in a bounded code and never in a traceback.
+    """
+    from hunter.evidence_intelligence.source_handling_persistence import SourceHandlingBlockedError
+
+    try:
+        return _source_handling_bootstrap(configuration)
+    except (control.ControlRefused, LifecycleRefused):
+        raise
+    except (state.LedgerCorruptError, state.LedgerSchemaError) as error:
+        raise control.Frozen("STATE_CORRUPT", str(error)) from None
+    except state.LedgerError:
+        raise control.FactsUnavailable(
+            "the Source Handling ledger could not be read or advanced; re-dispatch the bootstrap"
+        ) from None
+    except OSError:
+        # A local workspace creation/storage failure (for example a full or
+        # unavailable temporary filesystem) is operational, never a trust
+        # decision, so it becomes the same bounded re-dispatch refusal. The
+        # OS error payload is deliberately not carried.
+        raise control.FactsUnavailable(
+            "the Source Handling workspace could not be prepared; re-dispatch the bootstrap"
+        ) from None
+    except sqlite3.OperationalError:
+        # SQLite open/setup/replay storage failures are operational too and
+        # must not surface a raw traceback; the error payload is not carried.
+        raise control.FactsUnavailable(
+            "the Source Handling store could not be read or advanced; re-dispatch the bootstrap"
+        ) from None
+    except SourceHandlingBlockedError as error:
+        raise LifecycleRefused("SOURCE_HANDLING_BLOCKED", str(error)) from None
+
+
+def _source_handling_bootstrap(configuration: control.Configuration) -> int:
     import tempfile
 
     import bootstrap_source_handling_authority as bootstrap
@@ -629,7 +665,19 @@ def cmd_source_handling_bootstrap(configuration: control.Configuration, _argumen
 
     _export_public_trust(configuration)
     github = _github(configuration)
-    control.require_anchor(github, configuration, sh.SOURCE_HANDLING_LEDGER_REF)
+    try:
+        control.require_anchor(github, configuration, sh.SOURCE_HANDLING_LEDGER_REF)
+    except ValueError:
+        raise control.Frozen(
+            "ANCHOR_INTEGRITY_FAILED", "the bootstrap target ref is outside the anchored state namespace"
+        ) from None
+
+    def canonical_bootstrap(target: Path) -> tuple[Any, list[Any]]:
+        try:
+            return sh.capture(target, lambda: bootstrap.bootstrap_authority(str(target)))
+        except ValueError as error:
+            raise LifecycleRefused("MISSING_CONFIGURATION", str(error)) from None
+
     store = _store(configuration, authenticated=True)
     provenance = control.run_provenance(github, configuration)
     operator_root = SourceHandlingOperatorRoot(
@@ -654,7 +702,7 @@ def cmd_source_handling_bootstrap(configuration: control.Configuration, _argumen
 
         # Run the canonical bootstrap against the verified prefix. If a previous run stopped after one
         # transaction, capture emits only the missing canonical transactions; a complete ledger emits none.
-        outcome, transactions = sh.capture(database, lambda: bootstrap.bootstrap_authority(str(database)))
+        outcome, transactions = canonical_bootstrap(database)
         if outcome.get("status") not in {"bootstrapped", "already-provisioned"}:
             raise LifecycleRefused("SOURCE_HANDLING_BLOCKED", "canonical bootstrap did not reach a complete state")
         if (
@@ -670,11 +718,21 @@ def cmd_source_handling_bootstrap(configuration: control.Configuration, _argumen
             "source-handling-bootstrap", "source-handling-bootstrap", control.SOURCE_HANDLING_BOOTSTRAP_WORKFLOW
         )
         if transactions:
+            signing_key = _ed25519(STATE_SIGNING_KEY_ENV)
+            if state.public_key_id(signing_key.public_key()) not in configuration.trust.state_keys:
+                # A syntactically valid key that the trust roots do not pin would sign and durably append an
+                # unrecoverable first record, and the later replay verification could only report STATE_CORRUPT
+                # after the write. Refuse before any durable write so the ref never appears.
+                raise LifecycleRefused(
+                    "MISSING_CONFIGURATION",
+                    f"{STATE_SIGNING_KEY_ENV} is not pinned by the trust roots; refusing to write an unusable "
+                    "ledger record",
+                )
             position = sh.publish(
                 store,
                 position,
                 transactions,
-                signing_key=_ed25519(STATE_SIGNING_KEY_ENV),
+                signing_key=signing_key,
                 recorded_by=writer.recorded_by(),
                 recorded_at=_timestamp(),
                 repository_id=configuration.repository_id,
@@ -690,7 +748,7 @@ def cmd_source_handling_bootstrap(configuration: control.Configuration, _argumen
             operator_root=operator_root,
         )
         # Completeness is semantic, not merely "non-empty": the canonical bootstrap must now be idempotent.
-        check, remaining = sh.capture(replay, lambda: bootstrap.bootstrap_authority(str(replay)))
+        check, remaining = canonical_bootstrap(replay)
         if check.get("status") != "already-provisioned" or remaining:
             raise LifecycleRefused("SOURCE_HANDLING_BLOCKED", "anchored bootstrap is valid but incomplete")
         # Force the canonical ADR 0036 read path to authenticate root/history signatures before success.

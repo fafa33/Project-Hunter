@@ -749,7 +749,7 @@
     {
       "id": "DFF-010",
       "title": "writer-identity-not-authorization-bound",
-      "invariant": "Every commit in the governed range carries an author and a committer that each independently resolve to the same authorization-bound writer identity; agent attribution lives in trailers and never in identity.",
+      "invariant": "Every authorized human/writer is one canonical principal. Mutable GitHub login, Git name and explicitly policy-bound emails are aliases of that principal; author and committer independently resolve to the same principal. No consumer may invent its own owner-email equality rule.",
       "applicability": {
         "changed_paths": [
           "scripts/",
@@ -762,14 +762,17 @@
         "rationale": "Any change published through the repository-local push boundary is governed by the writer binding."
       },
       "prevention": {
-        "mechanism": "scripts/hunter_pre_push.py validates the governed fork-point..HEAD range against the canonical writer_identity_binding before any remote mutation, and names the exact mismatched provenance claim.",
+        "mechanism": "scripts/hunter_writer_provenance.py is the single canonical principal resolver consumed by pre-push and writer automation. Unknown, ambiguous, inferred, or cross-principal aliases fail closed.",
         "boundary": "local-pre-push",
         "guard_reference": "scripts/hunter_writer_provenance.py::evaluate_commit"
       },
       "regression_evidence": [
         "tests/test_issue_412_prevention_gate.py::test_agent_committer_with_a_correct_tree_is_rejected_before_any_push",
         "tests/test_issue_412_prevention_gate.py::test_agent_attribution_trailer_cannot_rescue_an_unbound_identity",
-        "tests/test_issue_412_prevention_gate.py::test_author_and_committer_must_each_resolve_to_the_same_bound_writer"
+        "tests/test_issue_412_prevention_gate.py::test_author_and_committer_must_each_resolve_to_the_same_bound_writer",
+        "tests/test_issue_412_prevention_gate.py::test_owner_aliases_resolve_to_one_canonical_principal",
+        "tests/test_issue_412_prevention_gate.py::test_unknown_owner_looking_email_is_not_inferred",
+        "tests/test_issue_412_prevention_gate.py::test_duplicate_alias_across_principals_fails_closed"
       ],
       "lifecycle": "locally-enforced",
       "sources": [

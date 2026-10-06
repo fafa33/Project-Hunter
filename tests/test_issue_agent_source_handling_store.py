@@ -5,6 +5,7 @@ from __future__ import annotations
 import copy
 import json
 import os
+import sqlite3
 import subprocess
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
@@ -155,6 +156,84 @@ def materialize(world: dict[str, Any], name: str, **overrides: Any) -> tuple[sh.
     options.update(overrides)
     position = sh.materialize(store(world, name), database, **options)
     return position, database
+
+
+def _replay_fault_connect(real_connect: Any, *, exception_type: type[sqlite3.Error], marker: str) -> Any:
+    """Wrap `sqlite3.connect` so the very first `_apply` replay INSERT raises.
+
+    `_apply` opens a fresh connection and, before any delta mutation, executes
+    `PRAGMA foreign_keys = ON`, then `BEGIN IMMEDIATE`, then the INSERTs for rows
+    that are not already present. Faulting the first connection that reaches that
+    exact sequence deterministically targets replay in the materialize-first call
+    order: `_create_schema` only runs the schema script and the authority writes in
+    `source_handling_persistence` run after materialize, never inside it.
+    """
+
+    class _ReplayFault:
+        def __init__(self, real: sqlite3.Connection) -> None:
+            object.__setattr__(self, "_real", real)
+            object.__setattr__(self, "_locked", False)
+
+        def __getattr__(self, name: str) -> Any:
+            return getattr(self._real, name)
+
+        def __setattr__(self, name: str, value: Any) -> None:
+            if name.startswith("_"):
+                object.__setattr__(self, name, value)
+            else:
+                setattr(self._real, name, value)
+
+        def execute(self, sql: str, parameters: Any = (), *args: Any, **kwargs: Any) -> Any:
+            statement = str(sql).lstrip()
+            if statement.upper().startswith("BEGIN IMMEDIATE"):
+                object.__setattr__(self, "_locked", True)
+            elif self._locked and statement.upper().startswith("INSERT"):
+                raise exception_type(marker)
+            return self._real.execute(sql, parameters, *args, **kwargs)
+
+    def faulted_connect(database: Any, *args: Any, **kwargs: Any) -> Any:
+        return _ReplayFault(real_connect(database, *args, **kwargs))
+
+    return faulted_connect
+
+
+def test_a_replay_sqlite_operational_failure_is_operational_not_corruption(
+    world: dict[str, Any], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """An `sqlite3.OperationalError` while replaying a verified delta (for example a
+    database lock or a full filesystem) must propagate as the operational error the
+    lifecycle turns into its sanitized re-dispatch refusal -- never be bagged as
+    `TAMPER_DETECTED` ledger corruption carrying the raw sqlite payload."""
+    bootstrap_ledger(world)
+    marker = "hunter-replay-lock-marker"
+    monkeypatch.setattr(
+        sh.sqlite3,
+        "connect",
+        _replay_fault_connect(sh.sqlite3.connect, exception_type=sqlite3.OperationalError, marker=marker),
+    )
+    with pytest.raises(sqlite3.OperationalError) as operational:
+        materialize(world, "victim")
+    assert str(operational.value) == marker
+    assert not isinstance(operational.value, state.LedgerCorruptError)
+
+
+def test_a_replay_database_failure_stays_bounded_corruption_without_the_payload(
+    world: dict[str, Any], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A non-operational replay `sqlite3.DatabaseError` is genuine ledger corruption and
+    keeps the `SourceHandlingLedgerError` semantics, but the fixed message must not
+    carry the raw sqlite payload across the bounded-corruption boundary."""
+    bootstrap_ledger(world)
+    marker = "hunter-integrity-marker"
+    monkeypatch.setattr(
+        sh.sqlite3,
+        "connect",
+        _replay_fault_connect(sh.sqlite3.connect, exception_type=sqlite3.IntegrityError, marker=marker),
+    )
+    with pytest.raises(sh.SourceHandlingLedgerError) as corruption:
+        materialize(world, "victim")
+    assert str(corruption.value) == "delta does not replay onto the verified history"
+    assert marker not in str(corruption.value)
 
 
 def signed_authorization(number: int = 497, body: str = "Provision authority automatically.") -> Any:

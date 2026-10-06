@@ -1009,9 +1009,18 @@ class GitLedgerStore:
             **(env or {}),
         }
         directory = None if cwd is None else (self._dir if cwd == "" else Path(cwd))
-        completed = subprocess.run(
-            command, cwd=directory, input=stdin, env=environment, capture_output=True, check=False, timeout=120
-        )
+        try:
+            completed = subprocess.run(
+                command, cwd=directory, input=stdin, env=environment, capture_output=True, check=False, timeout=120
+            )
+        except subprocess.TimeoutExpired:
+            # A stalled git must be the same ledger failure as a non-zero exit: only a non-zero status was
+            # wrapped before, so a hang or a missing git binary still escaped as an unhandled exception. The
+            # OS error text is deliberately not carried -- an execution error carries argv, and argv holds
+            # the authentication header.
+            raise LedgerError(f"git {args[0]} exceeded the execution timeout") from None
+        except OSError as error:
+            raise LedgerError(f"git {args[0]} could not be executed ({type(error).__name__})") from None
         if completed.returncode != 0:
             raise LedgerError(f"git {args[0]} failed with exit status {completed.returncode}")
         return completed.stdout

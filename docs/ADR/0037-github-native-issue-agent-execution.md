@@ -306,7 +306,10 @@ variables.
 
 ## Implementation Status
 
-Implemented through **S5b** and now transitioning through **S6 trust-root provisioning** on PR #564. S6 is owner-gated; the repository-pinned public trust roots are provisioned, while Source Handling bootstrap remains separately gated and has not been dispatched.
+Implemented through **S5b**. The S6 bootstrap runtime and the repository-pinned public trust roots are delivered
+(PR #562, PR #564), while S6 itself remains owner-gated and incomplete: the bootstrap has not been dispatched, so
+`refs/heads/hunter-state/v1/source-handling` does not exist yet, and Railway suspension, the control environments
+and the non-publishing rehearsal are still outstanding.
 
 - S1: contracts, `CODE_WRITE_POLICY` (`issue_agent_publisher`, `issue_agent_state_ledger`), defect registry.
 - S2: signed anchored state ledger (`issue_agent_state`), pure `advance`, resume nonce protocol.
@@ -322,6 +325,11 @@ Implemented through **S5b** and now transitioning through **S6 trust-root provis
 - S5b (owner requirement, 2026-10-04): the reviewer → knowledge → prevention → remediation loop is a binding
   acceptance criterion; S5 is not complete until it is proven. Reconciliation and the open owner decisions
   RD-1…RD-6: [ISSUE_AGENT_REVIEW_KNOWLEDGE_LOOP.md](../ISSUE_AGENT_REVIEW_KNOWLEDGE_LOOP.md).
+- S6 (in progress, owner-gated): the ADR 0038 anchored store, the `source-handling-bootstrap` entry point and its
+  owner-dispatched workflow (PR #562); the repository-pinned `config/issue_agent_trust_roots.json` (PR #564); and
+  entrypoint-level adversarial coverage asserting that every bootstrap outcome is a bounded refusal that writes only
+  `refs/heads/hunter-state/v1/source-handling`. Not yet done: the bootstrap dispatch itself (gated on ADR 0038
+  §7.3), Railway suspension, the control environments and the non-publishing rehearsal.
 
 ## Sources consulted
 

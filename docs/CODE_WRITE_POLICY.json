@@ -253,7 +253,7 @@
     "fail_closed": "Missing policy, empty allowlist, unavailable commit-range evidence, unsigned commit, unverified signature, or unauthorized signer all block candidate admission."
   },
   "writer_identity_binding": {
-    "purpose": "Canonical machine-readable mapping between an authorized writer and the exact Git author/committer identities its commits may carry. Issue #412: a correct change with an exact receipt was still permanently non-admissible because commits were recorded under an implementation agent's Git identity instead of the authorization-bound writer, and the mismatch surfaced only after a hosted push.",
+    "purpose": "Canonical mapping from one authorization principal to every explicitly bound representation that may identify it. Mutable aliases never create a second human identity.",
     "match": "exact-normalized",
     "match_semantics": "Both the name and the email are compared after Unicode NFKC normalisation, case folding and whitespace collapsing, then matched exactly against one identity's bound values. Substring, prefix, suffix and domain matching are all forbidden: they would let an unrelated account satisfy the binding.",
     "require_author_and_committer_independently": true,
@@ -272,7 +272,11 @@
         ],
         "canonical_git_name": "Claude",
         "canonical_git_email": "noreply@anthropic.com",
-        "evidence": "Commit ced6beaa5b4684380ee8c0ac81916e6a829eece7 (PR #410, merged as 0905c59) carries this exact author and committer identity and resolves to GitHub login 'claude', which ingress_provenance.authorized_signers already binds."
+        "evidence": "Commit ced6beaa5b4684380ee8c0ac81916e6a829eece7 (PR #410, merged as 0905c59) carries this exact author and committer identity and resolves to GitHub login 'claude', which ingress_provenance.authorized_signers already binds.",
+        "principal_id": "writer:claude",
+        "aliases": [
+          "claude"
+        ]
       },
       {
         "login": "fafa33",
@@ -281,11 +285,18 @@
           "Farhad5778"
         ],
         "git_emails": [
-          "34549283+fafa33@users.noreply.github.com"
+          "34549283+fafa33@users.noreply.github.com",
+          "farhadafshari33@yahoo.com"
         ],
         "canonical_git_name": "Farhad5778",
         "canonical_git_email": "34549283+fafa33@users.noreply.github.com",
-        "evidence": "Every squash commit on the default branch through a61941ef carries this exact author identity and resolves to the repository owner login 'fafa33'."
+        "evidence": "Repository owner principal github-user:34549283. Login fafa33, owner name Farhad5778, GitHub noreply email and explicitly owner-authorized personal email are aliases of this one principal.",
+        "principal_id": "github-user:34549283",
+        "github_user_id": 34549283,
+        "aliases": [
+          "fafa33",
+          "Farhad5778"
+        ]
       }
     ],
     "enforcement": {
@@ -294,7 +305,8 @@
       "governed_range": "merge-base(<remote>/<base_ref>, HEAD)..HEAD. History already on the base branch was admitted under the regime that applied to it and is not re-governed."
     },
     "provenance_claims_are_distinct": "Commit author/committer identity, authenticated push actor, and implementation attribution are three different claims and are never conflated. This binding governs commit identity only; the authenticated push actor is verified by the trusted controller from push-event workflow runs, and attribution lives in trailers.",
-    "fail_closed": "Missing policy, a missing or malformed writer_identity_binding, an empty identity list, an identity whose canonical values are not among its own bound values, unreadable commit metadata, an unavailable fork point, an unbound author, an unbound committer, an author and committer bound to different writers, and a range mixing bound writers all block the push."
+    "fail_closed": "Missing policy, a missing or malformed writer_identity_binding, an empty identity list, an identity whose canonical values are not among its own bound values, unreadable commit metadata, an unavailable fork point, an unbound author, an unbound committer, an author and committer bound to different writers, and a range mixing bound writers all block the push.",
+    "principal_semantics": "One human/authorized writer is one canonical principal. GitHub numeric user ID is the stable owner identifier when available; login, Git name and explicitly approved emails are aliases of that principal."
   },
   "connector_write_ingress": {
     "governing_issue": "403",

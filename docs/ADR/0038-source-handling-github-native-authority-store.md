@@ -140,6 +140,9 @@ The repository is public.
 
 ## Implementation Status
 
-The amendment is **accepted and binding** (2026-10-04, OD-5). Its runtime is not yet implemented: the
-anchored Source Handling store is delivered by ADR 0037 Slice 3b, and until then no production path persists
-Source Handling authority under this amendment.
+The amendment is **accepted and binding** (2026-10-04, OD-5). Its runtime is implemented: PR #562 delivered the
+anchored store (`issue_agent_source_handling_store`), the one-shot `source-handling-bootstrap` command in the
+lifecycle entry point, and the owner-dispatched `Hunter / Issue Agent Source Handling Bootstrap` workflow; PR #564
+provisioned the repository-pinned public trust roots. No production path has written
+`refs/heads/hunter-state/v1/source-handling` yet. The first anchored write is the owner-dispatched bootstrap, and
+§7.3 keeps it gated on the Railway service being suspended first.
