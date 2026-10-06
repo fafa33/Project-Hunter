@@ -2051,6 +2051,29 @@
       "sources": [
         "PR #562 operator audit 2026-10-06: GitHub showed the previously pushed head green while a corrective local commit had been blocked before push, creating a false-green risk if owner merge execution relied on hosted status alone."
       ]
+    },
+    {
+      "id": "DFF-052",
+      "title": "multiline-workflow-command-detaches-required-cli-arguments",
+      "invariant": "A GitHub Actions multiline shell invocation must preserve required CLI arguments in the same shell command. Any line wrap between an entrypoint/subcommand and its required arguments must use explicit shell continuation (or an equivalent single-command form), so YAML formatting cannot turn required arguments into a second command after the entrypoint has already failed.",
+      "applicability": {
+        "changed_paths": [
+          ".github/workflows/",
+          "tests/test_issue_agent_workflows.py"
+        ],
+        "rationale": "Workflow run blocks are executable shell; formatting changes can silently alter argv even when YAML parses and the Python CLI itself is correct."
+      },
+      "prevention": {
+        "mechanism": "The Issue-agent workflow keeps authorize-prepare line wraps explicitly continued, and a structural regression test inspects both remediation and ordinary authorize branches to require continuation plus --out-dir on the attached argument line.",
+        "boundary": "local-pre-push"
+      },
+      "regression_evidence": [
+        "tests/test_issue_agent_workflows.py::test_authorize_prepare_multiline_commands_preserve_cli_arguments"
+      ],
+      "lifecycle": "regression-tested",
+      "sources": [
+        "Issue #520 canary run 37507946220, 2026-10-06: authorize-prepare exited 2 with required --out-dir missing because the workflow wrapped after the subcommand without shell continuation; every downstream lifecycle job was skipped."
+      ]
     }
   ]
 }
