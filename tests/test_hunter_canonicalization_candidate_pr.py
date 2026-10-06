@@ -709,3 +709,21 @@ def test_canonicalization_python_setup_is_portable_across_runner_accounts():
     executable = "\n".join(line for line in source.splitlines() if not line.lstrip().startswith("#"))
     assert "/Users/" not in executable
     assert "farhadafshari" not in executable
+
+
+def test_canonicalization_provisions_pre_push_toolchain_from_setup_python():
+    """Canonicalization must not inherit broken tool shims from a self-hosted runner."""
+    import yaml
+
+    path = Path(__file__).resolve().parents[1] / ".github" / "workflows" / "hunter-canonicalization-auto.yml"
+    workflow = yaml.safe_load(path.read_text())
+    install = next(
+        step
+        for job in workflow["jobs"].values()
+        for step in job.get("steps", [])
+        if step.get("name") == "Install trusted canonicalization engine"
+    )
+    command = install.get("run") or ""
+    assert "'.[dev]'" in command
+    assert 'sysconfig.get_path("scripts")' in command
+    assert '>> "$GITHUB_PATH"' in command
