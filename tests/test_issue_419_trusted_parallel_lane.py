@@ -822,3 +822,48 @@ def test_the_governance_identity_predicate_still_matches_this_workflow() -> None
         {"queued", "in_progress", "waiting", "requested", "pending"}
     )
     assert governance.TRUSTED_PROOF_WAITING_DESCRIPTION == "Waiting for trusted exact-head preflight proof"
+
+
+def test_trusted_controller_focuses_known_non_runtime_diff(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    """A fully known diff may replace only pytest's full-suite selection."""
+    base = "a" * 40
+    changed = "\n".join(
+        (
+            ".hunter/pre-ready-hostile-review.json",
+            "config/issue_agent_trust_roots.json",
+            "tests/test_issue_agent_lifecycle_entry.py",
+            "tests/test_issue_agent_source_handling_bootstrap_entry.py",
+        )
+    )
+    monkeypatch.setattr(
+        prevention.subprocess,
+        "run",
+        lambda *args, **kwargs: SimpleNamespace(returncode=0, stdout=changed + "\n"),
+    )
+
+    assert prevention.trusted_candidate_pytest_targets(tmp_path, base) == (
+        "tests/test_exact_head_review_authority.py",
+        "tests/test_issue_agent_lifecycle_entry.py",
+        "tests/test_issue_agent_source_handling_bootstrap_entry.py",
+    )
+
+
+def test_trusted_controller_falls_back_to_full_suite_for_any_unknown_path(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """One unclassified path makes the whole candidate use the full suite."""
+    monkeypatch.setattr(
+        prevention.subprocess,
+        "run",
+        lambda *args, **kwargs: SimpleNamespace(
+            returncode=0,
+            stdout="config/issue_agent_trust_roots.json\nscripts/runtime.py\n",
+        ),
+    )
+
+    assert prevention.trusted_candidate_pytest_targets(tmp_path, "b" * 40) == ()
+
+
+def test_trusted_controller_falls_back_to_full_suite_without_trusted_base(tmp_path: Path) -> None:
+    assert prevention.trusted_candidate_pytest_targets(tmp_path, None) == ()
+    assert prevention.trusted_candidate_pytest_targets(tmp_path, "candidate-controlled") == ()

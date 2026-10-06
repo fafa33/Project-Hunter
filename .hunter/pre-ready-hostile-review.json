@@ -40,7 +40,7 @@
       "transaction-snapshot-consistency"
     ],
     "base_ref": "main",
-    "base_sha": "ef0b2a4bf5a59be5ea17ebc5f80bebd71358f3d9",
+    "base_sha": "0c0d478e0a7541bd4e6451d424a9382214801f1c",
     "defect_families": [
       {
         "evidence": "Included in exact-candidate hostile-review scope; applicable by trusted registry path matching; no timestamp or ordering decision path is changed by this range.",
@@ -180,73 +180,12 @@
     ],
     "findings": [],
     "issue": "560",
-    "review_target": [
-      {
-        "blob_sha": "7b78439039684c26bd3185cf78f46c1164155f0c",
-        "path": "tests/test_issue_agent_source_handling_bootstrap_entry.py",
-        "previous_path": "",
-        "status": "added"
-      },
-      {
-        "blob_sha": "1ba07c477243513a95f9eb451d2a9dda95c1a11f",
-        "path": "docs/ADR/0037-github-native-issue-agent-execution.md",
-        "previous_path": "",
-        "status": "modified"
-      },
-      {
-        "blob_sha": "5b3e0dfd9b47d34047cf780d35837c634f196144",
-        "path": "docs/ADR/0038-source-handling-github-native-authority-store.md",
-        "previous_path": "",
-        "status": "modified"
-      },
-      {
-        "blob_sha": "a6d57a48daf87e09db6bb6c9670a1d7acf9c6db9",
-        "path": "docs/ADR/README.md",
-        "previous_path": "",
-        "status": "modified"
-      },
-      {
-        "blob_sha": "2a745bc2e795e5ce4b2238659824e6a13b2f9818",
-        "path": "scripts/hunter_canonicalization_candidate_pr.py",
-        "previous_path": "",
-        "status": "modified"
-      },
-      {
-        "blob_sha": "dffe39081e118768914827e1413d0ddd8b9b7eeb",
-        "path": "scripts/hunter_issue_agent_lifecycle.py",
-        "previous_path": "",
-        "status": "modified"
-      },
-      {
-        "blob_sha": "94ad28477c5a545a54d8ec0bd9a7dca20775a06e",
-        "path": "src/hunter/automation/issue_agent_source_handling_store.py",
-        "previous_path": "",
-        "status": "modified"
-      },
-      {
-        "blob_sha": "a7e78f0901ba1161c84826a84c8ae70dfa463074",
-        "path": "src/hunter/automation/issue_agent_state.py",
-        "previous_path": "",
-        "status": "modified"
-      },
-      {
-        "blob_sha": "51de2985efc9e94e3d798281cc6b9e160b575807",
-        "path": "tests/test_hunter_canonicalization_candidate_pr.py",
-        "previous_path": "",
-        "status": "modified"
-      },
-      {
-        "blob_sha": "50d3fce3966f2e5518ef5e81b7c8cbef54c3a50a",
-        "path": "tests/test_issue_agent_source_handling_store.py",
-        "previous_path": "",
-        "status": "modified"
-      }
-    ],
-    "review_target_digest": "3b726bd752a00fd9cbd2b86e7b4fe053de587644ded10b0a6c13330d61816f99"
+    "review_target": [],
+    "review_target_digest": "4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945"
   },
-  "review_id": "65135893c0fe9fdad87c39762f8311c9ca96db486492bf2d4e39659bca1008a5",
+  "review_id": "500a8607c53cd478cabfde9e4e92929c1d12b3721ab977da8aa76fa121924806",
   "review_request": {
-    "claims_id": "65135893c0fe9fdad87c39762f8311c9ca96db486492bf2d4e39659bca1008a5",
+    "claims_id": "500a8607c53cd478cabfde9e4e92929c1d12b3721ab977da8aa76fa121924806",
     "schema": "hunter.review-request.v1"
   },
   "schema": "hunter.pre-ready-hostile-review.v1"

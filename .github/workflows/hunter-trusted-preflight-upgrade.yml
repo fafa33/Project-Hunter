@@ -92,14 +92,16 @@ jobs:
           # Issue #419: distribution only. `loadfile` keeps every test in a file
           # on one worker, so intra-file ordering and module-scoped state behave
           # exactly as they do serially and only whole files run concurrently.
-          # The gate commands are untouched, so the trusted proof selects exactly
-          # the tests the serial lane selected. The trusted controller refuses to
-          # run at all if this declaration is anything but the canonical
+          # Parallelism never changes selection. The trusted controller may separately
+          # narrow pytest only when its default-branch allowlist covers the entire
+          # exact-head diff; every unknown path fails safe to the full suite. It refuses
+          # to run at all if this declaration is anything but the canonical
           # distribution-only lane, or if this environment cannot honour it.
           PYTEST_ADDOPTS: -n auto --dist loadfile
         run: |
           set -euo pipefail
-          python scripts/hunter_defect_prevention_preflight.py --run-candidate-gates candidate
+          python scripts/hunter_defect_prevention_preflight.py --run-candidate-gates candidate \
+            --candidate-base-sha "${{ github.event.pull_request.base.sha }}"
 
   publish-proof:
     name: Publish Exact-Head Trusted Upgrade Proof
