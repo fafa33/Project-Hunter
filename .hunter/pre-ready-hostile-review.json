@@ -180,12 +180,31 @@
     ],
     "findings": [],
     "issue": "560",
-    "review_target": [],
-    "review_target_digest": "4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945"
+    "review_target": [
+      {
+        "blob_sha": "10c9624b3beaff0c61f33ca4776fc0ee6032cc95",
+        "path": ".github/workflows/hunter-trusted-preflight-upgrade.yml",
+        "previous_path": "",
+        "status": "modified"
+      },
+      {
+        "blob_sha": "a3f1dc718f2938a69a12202342913a40b15d5861",
+        "path": "scripts/hunter_defect_prevention_preflight.py",
+        "previous_path": "",
+        "status": "modified"
+      },
+      {
+        "blob_sha": "6667d28dd61d9343206d00502204dec3082b2411",
+        "path": "tests/test_issue_419_trusted_parallel_lane.py",
+        "previous_path": "",
+        "status": "modified"
+      }
+    ],
+    "review_target_digest": "cc1b7b732892eae70e7fccfe29cb904f556ccfa55ae6eaa51a75076123a65637"
   },
-  "review_id": "500a8607c53cd478cabfde9e4e92929c1d12b3721ab977da8aa76fa121924806",
+  "review_id": "fbde3c07b481141466e7590bae34253f0f604ce3c8b0d82584fdcb49f4d42cb9",
   "review_request": {
-    "claims_id": "500a8607c53cd478cabfde9e4e92929c1d12b3721ab977da8aa76fa121924806",
+    "claims_id": "fbde3c07b481141466e7590bae34253f0f604ce3c8b0d82584fdcb49f4d42cb9",
     "schema": "hunter.review-request.v1"
   },
   "schema": "hunter.pre-ready-hostile-review.v1"

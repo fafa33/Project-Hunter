@@ -2225,7 +2225,11 @@ def trusted_candidate_pytest_targets(candidate_root: Path, base_sha: str | None)
     """
     if not base_sha or len(base_sha) != 40 or any(ch not in "0123456789abcdefABCDEF" for ch in base_sha):
         return ()
-    completed = subprocess.run(
+    # Sonar S8705: base_sha cannot become an option or shell fragment: it is
+    # accepted only as exactly 40 hexadecimal characters above, and argv is
+    # executed without a shell. The PR event supplies it from the trusted
+    # pull_request_target controller.
+    completed = subprocess.run(  # NOSONAR
         ("git", "diff", "--name-only", f"{base_sha}...HEAD"),
         cwd=candidate_root,
         check=False,

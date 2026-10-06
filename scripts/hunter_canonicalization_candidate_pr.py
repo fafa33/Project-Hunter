@@ -339,6 +339,21 @@ def _open_candidate_pr(run: RunCommand, *, pr: int, extra_body: str) -> str:
     )
 
 
+def _source_pr_is_merged(run: RunCommand, pr: int) -> bool:
+    """Return true only after the source PR has actually merged.
+
+    Review events may collect evidence while work is still changing, but they
+    must never create follow-on work behind an open source PR.
+    """
+    output = _run(
+        run,
+        ["gh", "pr", "view", str(pr), "--json", "state,mergedAt", "--jq", '.state + " " + (.mergedAt // "")'],
+        what="check source PR lifecycle",
+    )
+    state, _, merged_at = output.strip().partition(" ")
+    return state == "MERGED" and bool(merged_at)
+
+
 def _existing_open_pr_number(run: RunCommand, branch: str) -> int | None:
     output = _run(
         run,
@@ -375,6 +390,13 @@ def propose(
     """
 
     root = str(repo_root) if repo_root is not None else "."
+
+    # Anti-PR-sprawl invariant: review activity on work that is still open may
+    # collect/upload evidence, but it must not create branches, commits, pushes,
+    # or follow-on PRs. Canonicalization is continuation work and starts only
+    # after the source PR has actually merged.
+    if not _source_pr_is_merged(run, pr):
+        return f"{_PREFIX} DEFERRED: source PR #{pr} is not merged; evidence only, no follow-on work created."
 
     with tempfile.TemporaryDirectory(prefix="hunter-canonicalization-worktree-") as scratch:
         worktree = Path(scratch) / "worktree"
@@ -424,6 +446,9 @@ def propose(
                 observations=observations,
                 origin_registry_bytes=registry_path.read_bytes(),
             )
+            # Raw review lifecycle evidence is preserved by the workflow artifact.
+            # It is not, by itself, justification for repository churn. A canonical
+            # PR requires at least one replayable proposal that changes the registry.
             if not plan.changed and not dispositions_changed:
                 # Codex P1 (PR #530): if a *prior* run's push succeeded but it
                 # then crashed, or its own `gh` call failed, before opening a
@@ -447,6 +472,9 @@ def propose(
                         )
                         return f"{_PREFIX} RECONCILED: opened the missing PR for already-pushed content: {create_output.strip()}"
                 return f"{_PREFIX} NO-OP: observations produced no registry change; nothing proposed."
+
+            if not plan.changed:
+                return f"{_PREFIX} NO-OP: no canonical proposal; lifecycle evidence remains in the workflow artifact."
 
             if plan.changed:
                 registry_path.write_bytes(plan.registry_bytes)
