@@ -62,6 +62,7 @@ class GitHubDouble:
             {"type": "deletion", "ruleset_id": RULESET_ID},
             {"type": "non_fast_forward", "ruleset_id": RULESET_ID},
         ]
+        self.branch_rule_reads = 0
         self.run: Any = {
             "id": RUN_ID,
             "run_attempt": 1,
@@ -77,6 +78,7 @@ class GitHubDouble:
         if "/rulesets/" in path:
             return control.Read("ok", self.ruleset)
         if "/rules/branches/" in path:
+            self.branch_rule_reads += 1
             return control.Read("ok", self.rules)
         if path.endswith("/attempts/1"):
             return control.Read("ok", self.run)
@@ -209,6 +211,40 @@ def test_a_valid_first_bootstrap_publishes_and_verifies_the_anchored_ledger(
     assert record["repository_id"] == REPOSITORY_ID
     assert record["record_seq"] == 0 and record["prev_record_sha256"] is None
     assert record["signature"]["domain"] == sh.SOURCE_HANDLING_LEDGER_DOMAIN
+
+
+def test_first_bootstrap_does_not_claim_branch_coverage_until_after_creation(
+    world: dict[str, Any], capsys: pytest.CaptureFixture[str]
+) -> None:
+    assert head_of(world["remote"], sh.SOURCE_HANDLING_LEDGER_REF) is None
+    code, _out, err = dispatch(world, capsys)
+    assert code == 0, err
+    assert world["github"].branch_rule_reads == 1
+    assert head_of(world["remote"], sh.SOURCE_HANDLING_LEDGER_REF) is not None
+
+
+def test_first_bootstrap_refuses_if_post_creation_branch_rules_do_not_apply(
+    world: dict[str, Any], capsys: pytest.CaptureFixture[str]
+) -> None:
+    world["github"].rules = []
+    code, _out, err = dispatch(world, capsys)
+    assert code == 2
+    assert "ANCHOR_INTEGRITY_FAILED: anchor ruleset does not cover this ledger branch" in err
+    # The creation exception is exactly one CAS: later bootstrap transactions cannot land unprotected.
+    head, entries = ledger_files(world)
+    assert head is not None
+    assert len(entries) == 1
+
+
+def test_first_bootstrap_refuses_before_creation_if_pinned_ruleset_is_weakened(
+    world: dict[str, Any], capsys: pytest.CaptureFixture[str]
+) -> None:
+    world["github"].ruleset["rules"] = [{"type": "deletion"}]
+    code, _out, err = dispatch(world, capsys)
+    assert code == 2
+    assert "ANCHOR_INTEGRITY_FAILED: anchor ruleset rules weakened" in err
+    assert world["github"].branch_rule_reads == 0
+    assert head_of(world["remote"], sh.SOURCE_HANDLING_LEDGER_REF) is None
 
 
 def test_a_second_dispatch_is_idempotent_and_writes_nothing(
