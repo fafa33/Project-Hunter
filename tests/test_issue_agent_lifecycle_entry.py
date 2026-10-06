@@ -56,20 +56,27 @@ def test_every_subcommand_has_a_refusal_case() -> None:
 
 
 @pytest.mark.parametrize("command", sorted(COMMANDS))
-def test_an_unprovisioned_repository_refuses_before_any_secret_network_or_subprocess(
-    command: str, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+def test_an_unprovisioned_repository_still_refuses_before_any_secret_network_or_subprocess(
+    command: str, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
 ) -> None:
+    checkout = tmp_path / "checkout"
+    config = checkout / "config"
+    config.mkdir(parents=True)
+    (config / "issue_agent_trust_roots.json").write_text(
+        json.dumps({"provisioned": False, "schema_version": "hunter-issue-agent-trust-roots-v1"}),
+        encoding="utf-8",
+    )
     for name, value in SECRETS.items():
         monkeypatch.setenv(name, value)
 
     def forbidden(*_args: Any, **_kwargs: Any) -> Any:
-        raise AssertionError("no network or subprocess may happen before the trust roots load")
+        raise AssertionError("no secret, network or subprocess may happen before the trust roots load")
 
     monkeypatch.setattr(urllib.request, "urlopen", forbidden)
     monkeypatch.setattr(urllib.request.OpenerDirector, "open", forbidden)
     monkeypatch.setattr(subprocess, "run", forbidden)
     monkeypatch.setattr(lifecycle, "_secret", forbidden)
-    assert lifecycle.main(["--checkout", str(ROOT), command, *COMMANDS[command]]) == lifecycle.EXIT_REFUSED
+    assert lifecycle.main(["--checkout", str(checkout), command, *COMMANDS[command]]) == lifecycle.EXIT_REFUSED
     err = capsys.readouterr().err
     assert "MISSING_CONFIGURATION" in err
     for value in SECRETS.values():
@@ -77,9 +84,26 @@ def test_an_unprovisioned_repository_refuses_before_any_secret_network_or_subpro
             assert value not in err
 
 
-def test_the_pinned_trust_roots_are_the_unprovisioned_document() -> None:
+def test_the_pinned_s6_trust_roots_are_provisioned_and_complete() -> None:
     document = json.loads((ROOT / "config" / "issue_agent_trust_roots.json").read_text(encoding="utf-8"))
-    assert document == {"provisioned": False, "schema_version": "hunter-issue-agent-trust-roots-v1"}
+    assert document["schema_version"] == "hunter-issue-agent-trust-roots-v1"
+    assert document["provisioned"] is True
+    assert document["repository"] == "fafa33/Project-Hunter"
+    assert document["repository_id"] == 1292945327
+    assert document["owner_login"] == "fafa33"
+    assert document["anchor"] == {
+        "ruleset_id": 24526712,
+        "updated_at": "2026-10-05T21:29:49.614+02:00",
+    }
+    assert len(document["state_keys"]) == 1
+    assert len(document["authorization_verifying_key"]) == 64
+    assert len(document["prompt_verifying_key"]) == 64
+    assert len(document["handoff_recipient"]) == 64
+    assert len(document["result_recipient"]) == 64
+    assert (
+        document["source_handling"]["genesis_rule_sha256"]
+        == "41119071db0f5c2a2eacfe2848ab6696355195e1ac9c671ee33c4128793aa70a"
+    )
 
 
 def test_a_workflow_rerun_is_refused(monkeypatch: pytest.MonkeyPatch) -> None:
