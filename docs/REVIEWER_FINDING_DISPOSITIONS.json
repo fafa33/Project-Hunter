@@ -117,6 +117,18 @@
         "message": "### 💡 Codex Review\n\nHere are some automated review suggestions for this pull request.\n\n**Reviewed commit:** `7d6e31cea9`\n    \n\n<details> <summary>ℹ️ About Codex in GitHub</summary>\n<br/>\n\n[Your team has set up Codex to review pull requests in this repo](https://chatgpt.com/codex/cloud/settings/general). Reviews are triggered when you\n- Open a pull request for review\n- Mark a draft as ready\n- Comment \"@codex review\".\n\nIf Codex has suggestions, it will comment; otherwise it will react with 👍.\n\n\n\n\nCodex can also answer questions or update the PR. Try commenting \"@codex address that feedback\".\n            \n</details>"
       },
       "validation_state": "unvalidated"
+    },
+    {
+      "id": "RFD-AUTO-570-review-5435190181",
+      "source_provenance": {
+        "reviewer": "copilot-pull-request-reviewer[bot]",
+        "pr_number": 570,
+        "reference": "GitHub authority review event review-5435190181; source_head=e1c6ef842d8ae743e4ca2bc7eddf75ffecbc8be6"
+      },
+      "finding_evidence": {
+        "message": "<!-- ccr-overview-v2 -->\n\n## Copilot review overview\n\n### 🟡 Changes recommended\n\nOmit or filter the two invalid top-level/no-finding review records.\n\n**Review effort:** Lite  \n**Findings:** 1 <picture><source media=\"(prefers-color-scheme: dark)\" srcset=\"https://github.githubassets.com/static/images/icons/copilot-code-review/medium-v2-dark.svg\"><source media=\"(prefers-color-scheme: light)\" srcset=\"https://github.githubassets.com/static/images/icons/copilot-code-review/medium-v2-light.svg\"><img src=\"https://github.githubassets.com/static/images/icons/copilot-code-review/medium-v2-light.png\" alt=\"Medium severity\" width=\"62\" height=\"18\" align=\"texttop\"></picture>\n\n<details open>\n<summary><strong>Open (1)</strong></summary>\n\n- <picture><source media=\"(prefers-color-scheme: dark)\" srcset=\"https://github.githubassets.com/static/images/icons/copilot-code-review/medium-v2-dark.svg\"><source media=\"(prefers-color-scheme: light)\" srcset=\"https://github.githubassets.com/static/images/icons/copilot-code-review/medium-v2-light.svg\"><img src=\"https://github.githubassets.com/static/images/icons/copilot-code-review/medium-v2-light.png\" alt=\"Medium severity\" width=\"62\" height=\"18\" align=\"texttop\"></picture> [Exclude no-finding review wrappers from durable finding records](#discussion_r4200993152) · New\n</details>\n\n<details>\n<summary><strong>What changed in this PR</strong></summary>\n\nAutomatically captures unvalidated review evidence from PR #568 in the reviewer-disposition registry.\n\n**Changes:**\n- Adds reviewer provenance and evidence.\n- Preserves findings as unvalidated.\n\n| File | Description |\r\n|---|---|\r\n| `docs/​REVIEWER_FINDING_DISPOSITIONS.json` | Adds PR #568 review evidence records. |\n</details>\n\n---\n\n💡 <a href=\"/fafa33/Project-Hunter/new/main?filename=.github/skills/code-review/SKILL.md\" class=\"Link--inTextBlock\" target=\"_blank\" rel=\"noopener noreferrer\">Add a `code-review` agent skill</a> or configure MCP servers for context-aware, tailored reviews. <a href=\"https://docs.github.com/copilot/how-tos/use-copilot-agents/request-a-code-review/use-code-review?tool=webui#mcp-servers-and-agent-skills\" class=\"Link--inTextBlock\" target=\"_blank\" rel=\"noopener noreferrer\">Learn more in the docs.</a>"
+      },
+      "validation_state": "unvalidated"
     }
   ]
 }
