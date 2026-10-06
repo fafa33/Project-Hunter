@@ -195,6 +195,13 @@ def test_every_checkout_drops_its_credentials(name: str) -> None:
                 assert (step.get("with") or {}).get("persist-credentials") is False
 
 
+def _authorize_prepare_invocations(run: str) -> list[str]:
+    return re.findall(
+        r"python scripts/hunter_issue_agent_lifecycle\.py authorize-prepare[ \t]*\\\n[ \t]+--(?:document|event)[^\n]+",
+        run,
+    )
+
+
 def test_authorize_prepare_multiline_commands_preserve_cli_arguments() -> None:
     """DFF-052: a wrapped shell command may not detach required CLI arguments."""
 
@@ -203,14 +210,17 @@ def test_authorize_prepare_multiline_commands_preserve_cli_arguments() -> None:
         for step in steps(load(LIFECYCLE)["jobs"]["authorize"])
         if step.get("name") == "Mint, verify, compile and seal (no durable write)"
     )
-    invocations = re.findall(
-        r"python scripts/hunter_issue_agent_lifecycle\.py authorize-prepare(?P<continuation>[^\n]*)\n(?P<args>\s+--(?:document|event)[^\n]+)",
-        run,
-    )
+    invocations = _authorize_prepare_invocations(run)
     assert len(invocations) == 2
-    for continuation, arguments in invocations:
-        assert continuation.rstrip().endswith("\\"), (continuation, arguments)
-        assert "--out-dir" in arguments
+    assert all("--out-dir" in invocation for invocation in invocations)
+
+
+def test_authorize_prepare_guard_rejects_comment_disguised_as_continuation() -> None:
+    hostile = (
+        "python scripts/hunter_issue_agent_lifecycle.py authorize-prepare # \\\n"
+        '  --event "$GITHUB_EVENT_PATH" --out-dir "$RUNNER_TEMP/authorize"'
+    )
+    assert _authorize_prepare_invocations(hostile) == []
 
 
 def test_each_lifecycle_job_runs_in_its_own_trust_domain() -> None:
