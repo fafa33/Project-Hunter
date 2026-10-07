@@ -39,10 +39,10 @@ jobs:
       - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6.3.0
         with:
           python-version: "3.11.13"
-      - name: Install pinned authorization verification dependency
+      - name: Install pinned rehearsal runtime dependencies
         env:
           PIP_CONSTRAINT: requirements/ci-constraints.txt
-        run: 'python -m pip install --disable-pip-version-check --only-binary=:all: "cryptography==50.0.0"'
+        run: python -m pip install --disable-pip-version-check --only-binary=:all: .
       - name: Validate structurally non-publishing rehearsal
         env:
           AUTHORIZATION_B64: ${{ inputs.authorization_b64 }}
