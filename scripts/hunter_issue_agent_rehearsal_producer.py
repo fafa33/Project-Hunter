@@ -13,7 +13,6 @@ from __future__ import annotations
 import argparse
 import base64
 import hashlib
-import json
 import os
 import re
 import sys
@@ -25,11 +24,16 @@ from cryptography.hazmat.primitives import serialization
 
 from hunter.automation.issue_agent_control import ControlRefused, load_configuration
 from hunter.automation.issue_agent_execution import (
-    ISSUE_AGENT_REHEARSAL_TITLE_PREFIX,
+    REHEARSAL_ISSUE_NUMBER,
+    REHEARSAL_RESULT_PATH,
+    REHEARSAL_TITLE,
+    REHEARSAL_UPDATED_AT,
     IssueAgentAuthorizationVerifier,
     IssueAgentExecutionError,
     SignedIssueAgentAuthorization,
     derive_execution_target,
+    rehearsal_issue_body,
+    require_canonical_rehearsal_identity,
 )
 from hunter.automation.issue_agent_replacement_executor import (
     REHEARSAL_SCHEMA_VERSION,
@@ -40,11 +44,6 @@ from hunter.automation.issue_agent_replacement_executor import (
     validate_replacement_result,
 )
 
-REHEARSAL_ISSUE_NUMBER = 560
-REHEARSAL_RESULT_PATH = "docs/rehearsal/hunter-s6-rehearsal.md"
-#: Fixed so the identity is a pure function of the exact ``main`` head it is bound to.
-REHEARSAL_UPDATED_AT = "2026-10-07T00:00:00Z"
-REHEARSAL_PROHIBITED_PATHS = (".github/", "scripts/", "src/", "config/", "docs/ADR/", "docs/DEFECT_REGISTRY.json")
 _SHA = re.compile(r"[0-9a-f]{40}")
 
 
@@ -61,17 +60,6 @@ def rehearsal_event(*, repository: str, owner_login: str, base_sha: str) -> dict
     """The bounded rehearsal identity as a canonical ``issues:labeled`` event for the existing authorizer."""
 
     _require(_SHA.fullmatch(base_sha) is not None, "base must be an exact lowercase commit SHA")
-    scope = {
-        "branch_pattern": f"issue-{REHEARSAL_ISSUE_NUMBER}-*",
-        "base_ref": "main",
-        "base_sha": base_sha,
-        "allowed_paths": [REHEARSAL_RESULT_PATH],
-        "prohibited_paths": list(REHEARSAL_PROHIBITED_PATHS),
-    }
-    body = (
-        "Non-publishing S6 rehearsal identity. Never executable: no model run, no branch, no pull request.\n"
-        f"<!-- hunter-task-scope-v1\n{json.dumps(scope, sort_keys=True, separators=(',', ':'))}\n-->"
-    )
     return {
         "action": "labeled",
         "repository": {"full_name": repository},
@@ -80,8 +68,8 @@ def rehearsal_event(*, repository: str, owner_login: str, base_sha: str) -> dict
         "issue": {
             "number": REHEARSAL_ISSUE_NUMBER,
             "html_url": f"https://github.com/{repository}/issues/{REHEARSAL_ISSUE_NUMBER}",
-            "title": ISSUE_AGENT_REHEARSAL_TITLE_PREFIX + "S6 non-publishing replacement rehearsal",
-            "body": body,
+            "title": REHEARSAL_TITLE,
+            "body": rehearsal_issue_body(base_sha),
             "state": "open",
             "updated_at": REHEARSAL_UPDATED_AT,
         },
@@ -166,6 +154,7 @@ def produce(environ: Mapping[str, str], *, checkout: Path) -> tuple[bytes, bytes
         environ={"HUNTER_ISSUE_AGENT_AUTHORIZATION_VERIFYING_KEY": configuration.authorization_verifying_key}
     ).verify(signed)
     result = rehearsal_result(signed)
+    require_canonical_rehearsal_identity(signed, owner_login=configuration.owner_login)
     validate_replacement_result(result, signed_authorization=signed, rehearsal=True)
     return document, result
 

@@ -17,10 +17,14 @@ from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
 
 from hunter.automation.issue_agent_control import ControlRefused
 from hunter.automation.issue_agent_execution import (
+    REHEARSAL_PROHIBITED_PATHS,
+    REHEARSAL_RESULT_PATH,
+    REHEARSAL_TITLE,
     IssueAgentAuthorizationError,
     IssueAgentAuthorizationVerifier,
     IssueAgentIssuerError,
     SignedIssueAgentAuthorization,
+    require_canonical_rehearsal_identity,
     verify_signed_authorization,
 )
 from hunter.automation.issue_agent_replacement_executor import (
@@ -71,10 +75,10 @@ def test_pair_is_canonical_signed_bound_and_validates_as_rehearsal(checkout) -> 
         environ={"HUNTER_ISSUE_AGENT_AUTHORIZATION_VERIFYING_KEY": PUBLIC}
     ).verify(signed)
     assert signed.implementation_scope.base_sha == head
-    assert signed.implementation_scope.allowed_paths == (producer.REHEARSAL_RESULT_PATH,)
+    assert signed.implementation_scope.allowed_paths == (REHEARSAL_RESULT_PATH,)
     validated = validate_replacement_result(result, signed_authorization=signed, rehearsal=True)
     assert validated.rehearsal is True and validated.branch.startswith("issue-560-")
-    assert [f.path for f in validated.files] == [producer.REHEARSAL_RESULT_PATH]
+    assert [f.path for f in validated.files] == [REHEARSAL_RESULT_PATH]
     assert KEY_HEX.encode() not in document + result
 
 
@@ -229,3 +233,72 @@ def test_producer_workflow_isolates_k_auth_and_has_no_publication_or_model_autho
         assert forbidden not in structure
     assert "github.ref == 'refs/heads/main'" in mint["if"] and "github.repository_owner" in mint["if"]
     assert rehearse["uses"] == "./.github/workflows/hunter-issue-agent-replacement-rehearsal.yml"
+
+
+def _signed_variant(mutate_event) -> SignedIssueAgentAuthorization:
+    """A genuinely K_AUTH-signed authorization (valid signature) over a deviating identity."""
+    event = producer.rehearsal_event(repository="fafa33/Project-Hunter", owner_login="fafa33", base_sha="a" * 40)
+    mutate_event(event)
+    authorization = trigger.authorize_event(event, expected_repository="fafa33/Project-Hunter", owner_login="fafa33")
+    return SignedIssueAgentAuthorization.from_json(trigger.sign_authorization(authorization, signing_key=KEY).to_json())
+
+
+def _body(base: str = "a" * 40, **scope_override) -> str:
+    scope = {
+        "branch_pattern": "issue-560-*",
+        "base_ref": "main",
+        "base_sha": base,
+        "allowed_paths": [REHEARSAL_RESULT_PATH],
+        "prohibited_paths": list(REHEARSAL_PROHIBITED_PATHS),
+    }
+    scope.update(scope_override)
+    return "Non-publishing S6 rehearsal identity.\n<!-- hunter-task-scope-v1\n" + json.dumps(scope) + "\n-->"
+
+
+@pytest.mark.parametrize(
+    "mutate",
+    [
+        lambda e: e["issue"].update(number=561, html_url="https://github.com/fafa33/Project-Hunter/issues/561"),
+        lambda e: e["issue"].update(title=REHEARSAL_TITLE + " (other)"),
+        lambda e: e["issue"].update(updated_at="2030-01-01T00:00:00Z"),
+        lambda e: e["issue"].update(body=_body(branch_pattern="issue-*")),
+        lambda e: e["issue"].update(body=_body(allowed_paths=["src/", REHEARSAL_RESULT_PATH])),
+        lambda e: e["issue"].update(body=_body(prohibited_paths=[])),
+        lambda e: e["issue"].update(body=_body(base_sha="b" * 40)),  # still valid shape, not canonical text
+    ],
+)
+def test_prefixed_but_noncanonical_signed_identity_is_not_a_rehearsal(mutate) -> None:
+    signed = _signed_variant(mutate)
+    assert signed.authorization.issue_title.startswith("hunter-s6-rehearsal: ")
+    with pytest.raises(IssueAgentAuthorizationError, match="canonical S6 rehearsal identity"):
+        require_canonical_rehearsal_identity(signed, owner_login="fafa33")
+
+
+def test_canonical_identity_is_accepted_and_owner_bound() -> None:
+    signed = _signed_variant(lambda e: None)
+    require_canonical_rehearsal_identity(signed, owner_login="fafa33")
+    with pytest.raises(IssueAgentAuthorizationError):
+        require_canonical_rehearsal_identity(signed, owner_login="mallory")
+
+
+def test_rehearsal_cli_rejects_prefixed_noncanonical_identity(checkout, tmp_path, monkeypatch) -> None:
+    path, head = checkout
+    signed = _signed_variant(lambda e: e["issue"].update(title=REHEARSAL_TITLE + " x"))
+    (tmp_path / "a.json").write_text(signed.to_json(), encoding="utf-8")
+    (tmp_path / "r.json").write_bytes(b"{}")
+    monkeypatch.setattr(
+        "sys.argv",
+        [
+            "x",
+            "--authorization",
+            str(tmp_path / "a.json"),
+            "--result",
+            str(tmp_path / "r.json"),
+            "--trust-roots-checkout",
+            str(path),
+        ],
+    )
+    for name in ("GITHUB_TOKEN", "GH_TOKEN", "HUNTER_ISSUE_AGENT_AUTHORIZATION_VERIFYING_KEY"):
+        monkeypatch.delenv(name, raising=False)
+    with pytest.raises(IssueAgentAuthorizationError, match="canonical S6 rehearsal identity"):
+        rehearsal.main()

@@ -8,11 +8,11 @@ from pathlib import Path
 
 from hunter.automation.issue_agent_control import load_configuration
 from hunter.automation.issue_agent_execution import (
-    ISSUE_AGENT_REHEARSAL_TITLE_PREFIX,
     ISSUE_AGENT_VERIFYING_KEY_ENV,
     IssueAgentAuthorizationError,
     IssueAgentAuthorizationVerifier,
     SignedIssueAgentAuthorization,
+    require_canonical_rehearsal_identity,
 )
 from hunter.automation.issue_agent_replacement_executor import (
     assert_rehearsal_has_no_publication_authority,
@@ -43,8 +43,7 @@ def main() -> int:
     assert_rehearsal_has_no_publication_authority(os.environ)
     signed = SignedIssueAgentAuthorization.from_json(args.authorization.read_bytes())
     pinned_verifier(args.trust_roots_checkout, os.environ).verify(signed)
-    if not signed.authorization.issue_title.startswith(ISSUE_AGENT_REHEARSAL_TITLE_PREFIX):
-        raise IssueAgentAuthorizationError("only the bounded S6 rehearsal identity may be rehearsed")
+    require_canonical_rehearsal_identity(signed, owner_login=load_configuration(args.trust_roots_checkout).owner_login)
     validate_replacement_result(args.result.read_bytes(), signed_authorization=signed, rehearsal=True)
     print("replacement rehearsal validated; publication authority absent")
     return 0

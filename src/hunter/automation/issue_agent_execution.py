@@ -126,6 +126,12 @@ ISSUE_AGENT_AUTHORIZATION_IDENTITY_PREFIX = "hunter-issue-agent-authorization"
 #: non-publishing rehearsal identity. It is valid only to the rehearsal validator and is refused by every
 #: executable entry point (``verify_signed_authorization``), so it can never be replayed into a live lifecycle.
 ISSUE_AGENT_REHEARSAL_TITLE_PREFIX = "hunter-s6-rehearsal: "
+REHEARSAL_ISSUE_NUMBER = 560
+REHEARSAL_RESULT_PATH = "docs/rehearsal/hunter-s6-rehearsal.md"
+#: Fixed so the identity is a pure function of the exact ``main`` head it is bound to.
+REHEARSAL_UPDATED_AT = "2026-10-07T00:00:00Z"
+REHEARSAL_TITLE = ISSUE_AGENT_REHEARSAL_TITLE_PREFIX + "S6 non-publishing replacement rehearsal"
+REHEARSAL_PROHIBITED_PATHS = (".github/", "scripts/", "src/", "config/", "docs/ADR/", "docs/DEFECT_REGISTRY.json")
 #: ADR 0039 L4: a finding-driven remediation of a Hunter-agent PR, minted by the control job (K_AUTH).
 ISSUE_AGENT_REMEDIATION_SCHEMA_VERSION = "hunter-issue-agent-remediation-authorization-v1"
 MAX_REMEDIATION_FINDINGS = 16
@@ -1364,6 +1370,47 @@ def _workspace_runtime(
         repository=configuration.repository,
         environ=environ,
     )
+
+
+def rehearsal_issue_body(base_sha: str) -> str:
+    """The one canonical body (and task-scope block) of the S6 rehearsal identity for an exact base."""
+    scope = {
+        "branch_pattern": f"issue-{REHEARSAL_ISSUE_NUMBER}-*",
+        "base_ref": ISSUE_AGENT_BASE_REF,
+        "base_sha": base_sha,
+        "allowed_paths": [REHEARSAL_RESULT_PATH],
+        "prohibited_paths": list(REHEARSAL_PROHIBITED_PATHS),
+    }
+    return (
+        "Non-publishing S6 rehearsal identity. Never executable: no model run, no branch, no pull request.\n"
+        f"<!-- hunter-task-scope-v1\n{json.dumps(scope, sort_keys=True, separators=(',', ':'))}\n-->"
+    )
+
+
+def require_canonical_rehearsal_identity(signed: SignedIssueAgentAuthorization, *, owner_login: str) -> None:
+    """Refuse anything but the complete canonical S6 rehearsal identity for the signed base.
+
+    The producer builds from the same constants, so a K_AUTH-signed document that merely shares the title
+    prefix (another Issue, branch pattern, allowed path, body or timestamp) is not a rehearsal identity.
+    """
+    authorization, scope = signed.authorization, signed.implementation_scope
+    expected = (
+        authorization.issue_number == REHEARSAL_ISSUE_NUMBER
+        and authorization.issue_url == f"https://github.com/{authorization.repository}/issues/{REHEARSAL_ISSUE_NUMBER}"
+        and authorization.issue_title == REHEARSAL_TITLE
+        and authorization.issue_body == rehearsal_issue_body(scope.base_sha)
+        and authorization.issue_updated_at == REHEARSAL_UPDATED_AT
+        and authorization.authorized_by == owner_login
+        and authorization.authorization_label == ISSUE_AGENT_AUTHORIZATION_LABEL
+        and type(authorization) is IssueAgentAuthorization
+        and scope.branch_pattern == f"issue-{REHEARSAL_ISSUE_NUMBER}-*"
+        and scope.base_ref == ISSUE_AGENT_BASE_REF
+        and _COMMIT_SHA_RE.fullmatch(scope.base_sha) is not None
+        and scope.allowed_paths == (REHEARSAL_RESULT_PATH,)
+        and scope.prohibited_paths == REHEARSAL_PROHIBITED_PATHS
+    )
+    if not expected:
+        raise IssueAgentAuthorizationError("not the canonical S6 rehearsal identity")
 
 
 def verify_signed_authorization(
