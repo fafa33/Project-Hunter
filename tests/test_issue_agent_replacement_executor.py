@@ -271,7 +271,13 @@ def test_rehearsal_workflow_has_no_publication_or_model_secret():
         assert forbidden not in text
     assert "HUNTER_ISSUE_AGENT_AUTHORIZATION_VERIFYING_KEY" in text
     assert "requirements/ci-constraints.txt" in text
-    assert '--only-binary=:all: "cryptography==50.0.0"' in text
+    assert "python -m pip install --disable-pip-version-check --only-binary=:all: ." in text
+    # The rehearsal imports the project runtime; keep its declared dependencies
+    # provisioned canonically rather than maintaining a cryptography-only subset.
+    project = Path("pyproject.toml").read_text(encoding="utf-8")
+    assert '"cryptography>=50.0.0,<51"' in project
+    assert '"pyyaml>=6.0,<7"' in project
+    assert '"sqlalchemy>=2.0,<3"' in project
 
 
 def test_publisher_rejects_receipt_for_different_result(monkeypatch, tmp_path):
