@@ -10,11 +10,6 @@ on:
   schedule:
     - cron: "17,47 * * * *"
   workflow_dispatch:
-  # DFF-053: refresh finding lifecycle immediately when PR review state changes.
-  # pull_request_review is safe here: every job still executes only trusted main
-  # and resolve-finding proves exact-head evidence before mutating a thread.
-  pull_request_target:
-    types: [synchronize, ready_for_review, reopened]
 
 permissions: {}
 
@@ -91,13 +86,12 @@ jobs:
     name: resolve-finding
     if: >-
       github.event_name == 'schedule' ||
-      github.event_name == 'workflow_dispatch' ||
-      (github.event_name == 'pull_request_target' && github.event.pull_request.base.ref == 'main')
+      github.event_name == 'workflow_dispatch'
     runs-on: ubuntu-latest
     timeout-minutes: 20
     environment: hunter-issue-agent-control
     # ADR 0039 L7 (RD-6): pull-requests:write exists only to post one exact-head evidence reply and resolve the
-    # exact review thread after proof. This job has no workflow trigger, so it can never start or approve one.
+    # exact review thread after proof. Execution is restricted to trusted scheduled/manual recovery.
     permissions:
       contents: write
       actions: read

@@ -401,7 +401,7 @@ def test_resolve_finding_is_event_driven_for_pr_review_lifecycle() -> None:
     assert isinstance(triggers, dict)
     assert "pull_request_review" not in triggers
     assert "pull_request_review_comment" not in triggers
-    assert set(triggers["pull_request_target"]["types"]) >= {"synchronize", "ready_for_review", "reopened"}
+    assert "pull_request_target" not in triggers
     job = document["jobs"]["resolve-finding"]
     assert job["name"] == "resolve-finding"
     assert job["permissions"]["pull-requests"] == "write"
