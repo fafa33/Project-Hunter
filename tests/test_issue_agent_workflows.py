@@ -397,7 +397,8 @@ def test_a_cancelling_or_dropping_concurrency_is_refused(concurrency: object) ->
 def test_resolve_finding_is_event_driven_for_pr_review_lifecycle() -> None:
     """DFF-053: review findings must refresh the visible resolve-finding gate without waiting for cron/manual dispatch."""
     document = load("hunter-issue-agent-reconcile.yml")
-    triggers = document.get(True) or document.get("on")
+    triggers = document.get("on")
+    assert isinstance(triggers, dict)
     assert set(triggers["pull_request_review"]["types"]) >= {"submitted", "edited", "dismissed"}
     assert set(triggers["pull_request"]["types"]) >= {"synchronize", "ready_for_review", "reopened"}
     job = document["jobs"]["resolve-finding"]
