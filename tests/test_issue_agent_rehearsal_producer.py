@@ -231,7 +231,13 @@ def test_producer_workflow_isolates_k_auth_and_has_no_publication_or_model_autho
     structure = json.dumps(workflow)  # comments are prose, not behaviour
     for forbidden in ("PUSH_TOKEN", "PR_TOKEN", "MODEL_API_KEY", "publish", "opencode", "create-pull"):
         assert forbidden not in structure
-    assert "github.ref == 'refs/heads/main'" in mint["if"] and "github.repository_owner" in mint["if"]
+    # An invalid dispatch fails loudly instead of skipping the producer (a skipped run is not evidence).
+    guard = workflow["jobs"]["guard"]
+    assert "if" not in mint and "if" not in rehearse and "if" not in guard
+    assert mint["needs"] == "guard" and rehearse["needs"] == "mint"
+    assert "environment" not in guard and guard["permissions"] == {} and "secrets." not in json.dumps(guard)
+    script = guard["steps"][0]["run"]
+    assert '"$REF" != "refs/heads/main"' in script and '"$ACTOR" != "$OWNER"' in script and "exit 1" in script
     assert rehearse["uses"] == "./.github/workflows/hunter-issue-agent-replacement-rehearsal.yml"
 
 

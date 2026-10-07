@@ -21,9 +21,29 @@ env:
   PYTHONDONTWRITEBYTECODE: "1"
 
 jobs:
+  # An invalid dispatch must FAIL, never skip: a skipped run is indistinguishable from a quiet success and
+  # would be unreliable S6 evidence. The guard holds no environment and no secret.
+  guard:
+    name: guard
+    runs-on: ubuntu-latest
+    timeout-minutes: 2
+    permissions: {}
+    steps:
+      - name: Refuse any dispatch that is not the owner on main
+        env:
+          ACTOR: ${{ github.actor }}
+          OWNER: ${{ github.repository_owner }}
+          REF: ${{ github.ref }}
+        run: |
+          set -euo pipefail
+          if [ "$ACTOR" != "$OWNER" ] || [ "$REF" != "refs/heads/main" ]; then
+            echo "::error::the S6 rehearsal producer is dispatched by the repository owner on main only"
+            exit 1
+          fi
+
   mint:
     name: mint
-    if: github.actor == github.repository_owner && github.ref == 'refs/heads/main'
+    needs: guard
     runs-on: ubuntu-latest
     timeout-minutes: 10
     environment: hunter-issue-agent-control
