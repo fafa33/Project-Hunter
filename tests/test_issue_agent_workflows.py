@@ -399,8 +399,8 @@ def test_resolve_finding_is_event_driven_for_pr_review_lifecycle() -> None:
     document = load("hunter-issue-agent-reconcile.yml")
     triggers = next((value for key, value in document.items() if key is True or key == "on"), None)
     assert isinstance(triggers, dict)
-    assert set(triggers["pull_request_review"]["types"]) >= {"submitted", "edited", "dismissed"}
-    assert set(triggers["pull_request_review_comment"]["types"]) >= {"created", "edited", "deleted"}
+    assert "pull_request_review" not in triggers
+    assert "pull_request_review_comment" not in triggers
     assert set(triggers["pull_request_target"]["types"]) >= {"synchronize", "ready_for_review", "reopened"}
     job = document["jobs"]["resolve-finding"]
     assert job["name"] == "resolve-finding"

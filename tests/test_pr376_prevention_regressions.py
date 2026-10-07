@@ -158,6 +158,7 @@ def test_protected_preflight_requires_exact_head_pr_bound_status(monkeypatch) ->
     # The Issue #412 pre-ready hostile review gate is a separate admission
     # prerequisite with its own regressions; stubbing it keeps this test on the
     # protected-preflight contract it was written for.
+    monkeypatch.setattr(governance, "read_unresolved_review_threads", lambda *_args: ((), None))
     monkeypatch.setattr(governance, "verify_pre_ready_hostile_review", lambda *_args: ("success", "reviewed"))
     state, _description = governance.candidate_admission("fafa33/Project-Hunter", "token", HEAD_A, pr_number=376)
 
