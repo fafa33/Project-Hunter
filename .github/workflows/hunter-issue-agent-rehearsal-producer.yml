@@ -1,0 +1,61 @@
+name: Hunter / Issue Agent Rehearsal Producer
+
+# ADR 0037 S6 (Issue #560): the canonical owner-controlled producer of the matching signed rehearsal
+# authorization + non-publishing result pair. `mint` is the only job that sees K_AUTH, runs in the control
+# trust domain on exact main, and emits public documents only. `rehearse` is the existing structurally
+# non-publishing validator (no environment, no secret, contents: read). No model, no publisher credential,
+# no branch, no pull request.
+
+on:
+  workflow_dispatch:
+
+permissions: {}
+
+concurrency:
+  group: hunter-issue-agent-rehearsal-producer
+  cancel-in-progress: false
+  queue: max
+
+env:
+  PIP_DISABLE_PIP_VERSION_CHECK: "1"
+  PYTHONDONTWRITEBYTECODE: "1"
+
+jobs:
+  mint:
+    name: mint
+    if: github.actor == github.repository_owner && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    environment: hunter-issue-agent-control
+    permissions:
+      contents: read
+    outputs:
+      authorization_b64: ${{ steps.mint.outputs.authorization_b64 }}
+      result_b64: ${{ steps.mint.outputs.result_b64 }}
+    steps:
+      - name: Checkout control_sha
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+      - name: Set up Python
+        uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6.3.0
+        with:
+          python-version: "3.11.13"
+      - name: Install pinned runtime
+        run: python -m pip install --only-binary ':all:' -c requirements/ci-constraints.txt .
+      - name: Mint and verify the rehearsal pair (no model, no publication)
+        id: mint
+        env:
+          HUNTER_ISSUE_AGENT_AUTHORIZATION_SIGNING_KEY: ${{ secrets.HUNTER_ISSUE_AGENT_AUTHORIZATION_SIGNING_KEY }}
+        run: python scripts/hunter_issue_agent_rehearsal_producer.py --out-dir "$RUNNER_TEMP/rehearsal"
+
+  rehearse:
+    name: rehearse
+    needs: mint
+    permissions:
+      contents: read
+    uses: ./.github/workflows/hunter-issue-agent-replacement-rehearsal.yml
+    with:
+      authorization_b64: ${{ needs.mint.outputs.authorization_b64 }}
+      result_b64: ${{ needs.mint.outputs.result_b64 }}

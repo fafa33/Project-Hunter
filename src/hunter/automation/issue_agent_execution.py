@@ -122,6 +122,10 @@ ISSUE_AGENT_SIGNED_AUTHORIZATION_SCHEMA_VERSION = "hunter-issue-agent-signed-aut
 
 ISSUE_AGENT_AUTHORIZATION_LABEL = "hunter-agent-execute"
 ISSUE_AGENT_AUTHORIZATION_IDENTITY_PREFIX = "hunter-issue-agent-authorization"
+#: ADR 0037 S6: a K_AUTH-signed authorization whose Issue title starts with this prefix is the bounded,
+#: non-publishing rehearsal identity. It is valid only to the rehearsal validator and is refused by every
+#: executable entry point (``verify_signed_authorization``), so it can never be replayed into a live lifecycle.
+ISSUE_AGENT_REHEARSAL_TITLE_PREFIX = "hunter-s6-rehearsal: "
 #: ADR 0039 L4: a finding-driven remediation of a Hunter-agent PR, minted by the control job (K_AUTH).
 ISSUE_AGENT_REMEDIATION_SCHEMA_VERSION = "hunter-issue-agent-remediation-authorization-v1"
 MAX_REMEDIATION_FINDINGS = 16
@@ -1377,6 +1381,8 @@ def verify_signed_authorization(
 
     issuer_verifier.verify(signed)
     authorization = signed.authorization
+    if authorization.issue_title.startswith(ISSUE_AGENT_REHEARSAL_TITLE_PREFIX):
+        raise IssueAgentAuthorizationError("a rehearsal authorization is never executable")
     if signed.implementation_scope.task_id != authorization.authorization_id:
         raise IssueAgentAuthorizationError("implementation scope task_id must bind authorization identity")
     if authorization.repository != repository:
