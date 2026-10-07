@@ -392,3 +392,17 @@ def test_prose_mentioning_the_retirement_is_not_a_client() -> None:
 )
 def test_a_cancelling_or_dropping_concurrency_is_refused(concurrency: object) -> None:
     assert not queued_concurrency({"concurrency": concurrency})
+
+
+def test_resolve_finding_is_event_driven_for_pr_review_lifecycle() -> None:
+    """DFF-053: review findings must refresh the visible resolve-finding gate without waiting for cron/manual dispatch."""
+    document = load("hunter-issue-agent-reconcile.yml")
+    triggers = next((value for key, value in document.items() if key is True or key == "on"), None)
+    assert isinstance(triggers, dict)
+    assert "pull_request_review" not in triggers
+    assert "pull_request_review_comment" not in triggers
+    assert "pull_request_target" not in triggers
+    job = document["jobs"]["resolve-finding"]
+    assert job["name"] == "resolve-finding"
+    assert job["permissions"]["pull-requests"] == "write"
+    assert "scripts/hunter_issue_agent_lifecycle.py resolve-finding" in str(job["steps"])

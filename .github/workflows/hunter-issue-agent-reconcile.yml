@@ -24,7 +24,7 @@ concurrency:
 jobs:
   reconcile:
     name: reconcile
-    if: github.ref == 'refs/heads/main'
+    if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
     runs-on: ubuntu-latest
     timeout-minutes: 20
     environment: hunter-issue-agent-control
@@ -36,7 +36,7 @@ jobs:
       - name: Checkout trusted main
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
-          ref: ${{ github.sha }}
+          ref: ${{ github.event.repository.default_branch }}
           persist-credentials: false
       - name: Set up Python
         uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6.3.0
@@ -52,7 +52,7 @@ jobs:
 
   remediate:
     name: remediate
-    if: github.ref == 'refs/heads/main'
+    if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
     runs-on: ubuntu-latest
     timeout-minutes: 20
     environment: hunter-issue-agent-control
@@ -64,7 +64,7 @@ jobs:
       - name: Checkout trusted main
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
-          ref: ${{ github.sha }}
+          ref: ${{ github.event.repository.default_branch }}
           persist-credentials: false
       - name: Set up Python
         uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6.3.0
@@ -84,12 +84,14 @@ jobs:
 
   resolve-finding:
     name: resolve-finding
-    if: github.ref == 'refs/heads/main'
+    if: >-
+      github.event_name == 'schedule' ||
+      github.event_name == 'workflow_dispatch'
     runs-on: ubuntu-latest
     timeout-minutes: 20
     environment: hunter-issue-agent-control
     # ADR 0039 L7 (RD-6): pull-requests:write exists only to post one exact-head evidence reply and resolve the
-    # exact review thread after proof. This job has no workflow trigger, so it can never start or approve one.
+    # exact review thread after proof. Execution is restricted to trusted scheduled/manual recovery.
     permissions:
       contents: write
       actions: read
@@ -98,7 +100,7 @@ jobs:
       - name: Checkout trusted main
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
-          ref: ${{ github.sha }}
+          ref: ${{ github.event.repository.default_branch }}
           persist-credentials: false
       - name: Set up Python
         uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6.3.0

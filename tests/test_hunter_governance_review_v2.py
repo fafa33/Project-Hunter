@@ -150,6 +150,7 @@ def test_protected_preflight_ordinary_candidate_cannot_self_authorize(monkeypatc
         lambda *_args: ("success", "ingress provenance verified"),
     )
     monkeypatch.setattr(core, "verify_pre_ready_hostile_review", lambda *_args: ("success", "reviewed"))
+    monkeypatch.setattr(core, "read_unresolved_review_threads", lambda *_args: ((), None))
     monkeypatch.setattr(
         core,
         "read_trusted_upgrade_status",
@@ -348,7 +349,40 @@ def _admission(monkeypatch, commits: list[dict], *, hosted_ci: bool = False, pol
     # (tests/test_issue_412_prevention_gate.py). Stubbing it keeps these fixtures
     # on the signature/branch-preflight contract they were written for.
     monkeypatch.setattr(core, "verify_pre_ready_hostile_review", lambda *_args: ("success", "reviewed"))
+    monkeypatch.setattr(core, "read_unresolved_review_threads", lambda *_args: ((), None))
     return core.candidate_admission("fafa33/Project-Hunter", "token", HEAD, 501)
+
+
+def test_candidate_admission_blocks_unresolved_threads_before_trusted_preflight_success(monkeypatch) -> None:
+    """DFF-053: a green trusted proof cannot mask a live GitHub review finding."""
+    monkeypatch.setattr(
+        core, "read_pr_changed_paths", lambda *_args: (True, ("scripts/hunter_defect_prevention_preflight.py",), None)
+    )
+    monkeypatch.setattr(core, "read_head_preflight_mode", lambda *_args: ("normal", None))
+    monkeypatch.setattr(core, "verify_code_write_ingress_provenance", lambda *_args: ("success", "trusted ingress"))
+    monkeypatch.setattr(core, "read_unresolved_review_threads", lambda *_args: (("THREAD_OPEN",), None))
+    monkeypatch.setattr(core, "verify_pre_ready_hostile_review", lambda *_args: ("success", "reviewed"))
+    monkeypatch.setattr(core, "read_trusted_upgrade_status", lambda *_args: ("success", "trusted proof passed"))
+
+    state, description = core.candidate_admission("fafa33/Project-Hunter", "token", HEAD, 569)
+
+    assert state == "failure"
+    assert description == "BLOCKING_FINDINGS: 1 unresolved review thread(s) remain"
+
+
+def test_candidate_admission_fails_closed_when_thread_evidence_is_unavailable(monkeypatch) -> None:
+    """DFF-053: inability to prove zero unresolved threads cannot become green."""
+    monkeypatch.setattr(
+        core, "read_pr_changed_paths", lambda *_args: (True, ("scripts/hunter_defect_prevention_preflight.py",), None)
+    )
+    monkeypatch.setattr(core, "read_head_preflight_mode", lambda *_args: ("normal", None))
+    monkeypatch.setattr(core, "verify_code_write_ingress_provenance", lambda *_args: ("success", "trusted ingress"))
+    monkeypatch.setattr(core, "read_unresolved_review_threads", lambda *_args: ((), "review threads unavailable"))
+
+    state, description = core.candidate_admission("fafa33/Project-Hunter", "token", HEAD, 569)
+
+    assert state == "failure"
+    assert description == "BLOCKING_FINDINGS: review threads unavailable"
 
 
 def test_custom_identity_api_only_write_is_rejected(monkeypatch) -> None:

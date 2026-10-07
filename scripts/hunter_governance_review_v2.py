@@ -2437,6 +2437,19 @@ def candidate_admission(repository: str, token: str, head_sha: str, pr_number: i
     if ingress_state != "success":
         return ingress_state, ingress_message
 
+    # DFF-053: unresolved GitHub review threads are authoritative blocking
+    # findings regardless of whether the candidate uses the protected trusted
+    # preflight path. This check must happen before the protected-preflight
+    # success shortcut below; otherwise a green exact-head proof can mask live
+    # reviewer findings. Outdated is not resolved -- GitHub's isResolved bit is
+    # the lifecycle authority. Evidence unavailability also fails closed.
+    if pr_number is not None:
+        unresolved_threads, thread_error = read_unresolved_review_threads(repository, token, pr_number)
+        if thread_error:
+            return "failure", f"BLOCKING_FINDINGS: {thread_error}"
+        if unresolved_threads:
+            return "failure", f"BLOCKING_FINDINGS: {len(unresolved_threads)} unresolved review thread(s) remain"
+
     # External LLM review is optional defense-in-depth. Candidate admission is
     # governed by deterministic exact-head provenance/preflight evidence. Review
     # findings remain blockers through canonical dispositions/threads, but

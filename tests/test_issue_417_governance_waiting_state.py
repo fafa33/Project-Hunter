@@ -113,6 +113,7 @@ def test_waiting_propagates_through_candidate_admission_as_pending(monkeypatch: 
     monkeypatch.setattr(core, "read_pr_changed_paths", lambda *_a: (True, ["scripts/hunter_pr_preflight.py"], ""))
     monkeypatch.setattr(core, "read_head_preflight_mode", lambda *_a: ("normal", None))
     monkeypatch.setattr(core, "verify_code_write_ingress_provenance", lambda *_a: ("success", "ingress ok"))
+    monkeypatch.setattr(core, "read_unresolved_review_threads", lambda *_a: ((), None))
     monkeypatch.setattr(core, "verify_pre_ready_hostile_review", lambda *_a: ("success", "reviewed"))
     monkeypatch.setattr(
         core,

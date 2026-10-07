@@ -5,6 +5,11 @@ name: Hunter Automatic Canonicalization
 # already-authorized local_git_push path on the owner's Mac, so this workflow
 # grants no new GitHub repository-write authority.
 on:
+  # Review events preserve lifecycle evidence immediately, but the writer is
+  # hard-gated on the source PR being merged. The closed event supplies the
+  # deterministic continuation point without spawning follow-on PRs mid-work.
+  pull_request:
+    types: [closed]
   pull_request_review:
     types: [submitted, edited, dismissed]
   pull_request_review_comment:

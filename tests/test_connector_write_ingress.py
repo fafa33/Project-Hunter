@@ -774,6 +774,7 @@ def _admission(
     # prerequisite with its own regression suite
     # (tests/test_issue_412_prevention_gate.py). Stubbing it keeps this harness
     # on the ingress contract it was written for.
+    monkeypatch.setattr(core, "read_unresolved_review_threads", lambda *_args: ((), None))
     monkeypatch.setattr(core, "verify_pre_ready_hostile_review", lambda *_args: ("success", "reviewed"))
     return core.candidate_admission("fafa33/Project-Hunter", "token", HEAD, 501)
 
