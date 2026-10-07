@@ -474,6 +474,22 @@ def propose(
                 return f"{_PREFIX} NO-OP: observations produced no registry change; nothing proposed."
 
             if not plan.changed:
+                # Preserve the same crash-recovery guarantee even when this run
+                # captured only raw lifecycle evidence. A disposition delta is
+                # intentionally not committed, but it must not suppress recovery
+                # of a previously pushed canonical branch that still lacks a PR.
+                if previous_sha is not None and not _is_ancestor(run, root, previous_sha, main_sha):
+                    if _existing_open_pr_number(run, DEDICATED_BRANCH) is None:
+                        create_output = _open_candidate_pr(
+                            run,
+                            pr=pr,
+                            extra_body=(
+                                "Reconciled: this branch already carried canonical content from a prior "
+                                "run that pushed but never opened a PR. Raw lifecycle evidence from this "
+                                "run remains workflow-only; no new commit was made.\n"
+                            ),
+                        )
+                        return f"{_PREFIX} RECONCILED: opened the missing PR for already-pushed content: {create_output.strip()}"
                 return f"{_PREFIX} NO-OP: no canonical proposal; lifecycle evidence remains in the workflow artifact."
 
             if plan.changed:
