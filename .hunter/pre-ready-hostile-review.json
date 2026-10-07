@@ -2,24 +2,10 @@
   "claims": {
     "acceptance_criteria": [
       {
-        "criterion": "The S6 Source Handling anchor pin matches the live governed ruleset after the approved ruleset correction.",
-        "evidence": "config/issue_agent_trust_roots.json pins ruleset 24526712 at 2026-10-06T20:52:31.773Z; live ruleset enforcement is active with deletion and non_fast_forward rules.",
-        "id": "AC-1"
-      },
-      {
-        "criterion": "Bootstrap refusal tests bind the corrected anchor timestamp and still fail closed on anchor weakening or later ruleset modification.",
-        "evidence": "tests/test_issue_agent_lifecycle_entry.py and tests/test_issue_agent_source_handling_bootstrap_entry.py update only the expected governed ruleset timestamp; focused suite passes 46 tests.",
-        "id": "AC-2"
-      },
-      {
-        "criterion": "The repin changes no Source Handling authority implementation, signer identity, workflow, secret boundary, or publication path.",
-        "evidence": "The candidate changes only config/issue_agent_trust_roots.json and the two anchor-bound test fixtures, plus the self-binding hostile-review request artifact.",
-        "id": "AC-3"
-      },
-      {
-        "criterion": "The candidate is a bounded S6 repin required to unblock the owner-dispatched Source Handling bootstrap against the already-corrected live ruleset.",
-        "evidence": "The live bootstrap on main refused ANCHOR_INTEGRITY_FAILED because main still pins the pre-correction ruleset timestamp; this candidate updates that exact pin and matching regression fixtures.",
-        "id": "AC-4"
+        "criterion": "The S6 rehearsal validator installs the complete constraint-pinned, wheel-only project runtime required by hunter.automation while retaining the non-publishing credential boundary.",
+        "evidence": "The workflow installs the project with requirements/ci-constraints.txt and the focused workflow contract test asserts that exact install; the live failure was ModuleNotFoundError: yaml after guard and mint succeeded.",
+        "id": "AC-1",
+        "verdict": "satisfied"
       }
     ],
     "adversarial_dimensions": [
@@ -36,140 +22,140 @@
       "transaction-snapshot-consistency"
     ],
     "base_ref": "main",
-    "base_sha": "a127775918e004965e3c23d8f17e826d5c8672ac",
+    "base_sha": "2a69c95ef9dca48bae7fb624ae83ca6bbabfb49f",
     "defect_families": [
       {
-        "evidence": "Included in exact-candidate hostile-review scope; applicable by trusted registry path matching; no timestamp or ordering decision path is changed by this range.",
+        "evidence": "Checked against the bounded S6 rehearsal runtime-dependency correction; no recurrence of this family is introduced by the two-file candidate.",
         "family": "DFF-001",
         "outcome": "clear"
       },
       {
-        "evidence": "Included in exact-candidate hostile-review scope; applicable by trusted registry path matching; the store still validates against one explicit snapshot and commits through CAS on the observed head.",
+        "evidence": "Checked against the bounded S6 rehearsal runtime-dependency correction; no recurrence of this family is introduced by the two-file candidate.",
         "family": "DFF-002",
         "outcome": "clear"
       },
       {
-        "evidence": "Included in exact-candidate hostile-review scope; applicable by trusted registry path matching; no identity assignment or authorization path is changed by this range.",
+        "evidence": "Checked against the bounded S6 rehearsal runtime-dependency correction; no recurrence of this family is introduced by the two-file candidate.",
         "family": "DFF-003",
         "outcome": "clear"
       },
       {
-        "evidence": "Included in exact-candidate hostile-review scope; applicable by trusted registry path matching; absent or unknown authority values still fail closed.",
+        "evidence": "Checked against the bounded S6 rehearsal runtime-dependency correction; no recurrence of this family is introduced by the two-file candidate.",
         "family": "DFF-004",
         "outcome": "clear"
       },
       {
-        "evidence": "Included in exact-candidate hostile-review scope; applicable by trusted registry path matching; the store deliberately omits OS error text from LedgerError so the authentication header in argv can never leak into durable evidence.",
+        "evidence": "Checked against the bounded S6 rehearsal runtime-dependency correction; no recurrence of this family is introduced by the two-file candidate.",
         "family": "DFF-005",
         "outcome": "clear"
       },
       {
-        "evidence": "Included in exact-candidate hostile-review scope; applicable by trusted registry path matching; no ordering guarantee is weakened and interrupted-prefix recovery remains monotonic.",
+        "evidence": "Checked against the bounded S6 rehearsal runtime-dependency correction; no recurrence of this family is introduced by the two-file candidate.",
         "family": "DFF-006",
         "outcome": "clear"
       },
       {
-        "evidence": "Included in exact-candidate hostile-review scope; applicable by trusted registry path matching; no authorization-replay instance is introduced by this range.",
+        "evidence": "Checked against the bounded S6 rehearsal runtime-dependency correction; no recurrence of this family is introduced by the two-file candidate.",
         "family": "DFF-007",
         "outcome": "clear"
       },
       {
-        "evidence": "Included in exact-candidate hostile-review scope; applicable by trusted registry path matching; no tamper or history-forgery instance is introduced by this range.",
+        "evidence": "Checked against the bounded S6 rehearsal runtime-dependency correction; no recurrence of this family is introduced by the two-file candidate.",
         "family": "DFF-008",
         "outcome": "clear"
       },
       {
-        "evidence": "Included in exact-candidate hostile-review scope; applicable by trusted registry path matching; no connector-provenance instance is introduced by this range.",
+        "evidence": "Checked against the bounded S6 rehearsal runtime-dependency correction; no recurrence of this family is introduced by the two-file candidate.",
         "family": "DFF-009",
         "outcome": "clear"
       },
       {
-        "evidence": "Included in exact-candidate hostile-review scope; applicable by trusted registry path matching; writer identity remains bound by the pinned trust roots.",
+        "evidence": "Checked against the bounded S6 rehearsal runtime-dependency correction; no recurrence of this family is introduced by the two-file candidate.",
         "family": "DFF-010",
         "outcome": "clear"
       },
       {
-        "evidence": "Included in exact-candidate hostile-review scope; applicable by trusted registry path matching; interrupted-prefix recovery is covered by tests/test_issue_agent_source_handling_bootstrap_entry.py.",
+        "evidence": "Checked against the bounded S6 rehearsal runtime-dependency correction; no recurrence of this family is introduced by the two-file candidate.",
         "family": "DFF-011",
         "outcome": "clear"
       },
       {
-        "evidence": "Included in exact-candidate hostile-review scope; applicable by trusted registry path matching; no receipt publication is added by this range.",
+        "evidence": "Checked against the bounded S6 rehearsal runtime-dependency correction; no recurrence of this family is introduced by the two-file candidate.",
         "family": "DFF-012",
         "outcome": "clear"
       },
       {
-        "evidence": "Included in exact-candidate hostile-review scope; applicable by trusted registry path matching; this candidate stays Draft until the owner marks it Ready.",
+        "evidence": "Checked against the bounded S6 rehearsal runtime-dependency correction; no recurrence of this family is introduced by the two-file candidate.",
         "family": "DFF-013",
         "outcome": "clear"
       },
       {
-        "evidence": "Included in exact-candidate hostile-review scope; applicable by trusted registry path matching; pending preflight and Draft states are reported as pending, never as failure.",
+        "evidence": "Checked against the bounded S6 rehearsal runtime-dependency correction; no recurrence of this family is introduced by the two-file candidate.",
         "family": "DFF-014",
         "outcome": "clear"
       },
       {
-        "evidence": "Included in exact-candidate hostile-review scope; applicable by trusted registry path matching; no prevention or review state is over-claimed: the ADR edits record what has and has not been delivered.",
+        "evidence": "Checked against the bounded S6 rehearsal runtime-dependency correction; no recurrence of this family is introduced by the two-file candidate.",
         "family": "DFF-015",
         "outcome": "clear"
       },
       {
-        "evidence": "Included in exact-candidate hostile-review scope; applicable by trusted registry path matching; no validation proof is minted or reused by this range.",
+        "evidence": "Checked against the bounded S6 rehearsal runtime-dependency correction; no recurrence of this family is introduced by the two-file candidate.",
         "family": "DFF-016",
         "outcome": "clear"
       },
       {
-        "evidence": "Included in exact-candidate hostile-review scope; applicable by trusted registry path matching; no Railway runtime or volume behaviour is touched by this range.",
+        "evidence": "Checked against the bounded S6 rehearsal runtime-dependency correction; no recurrence of this family is introduced by the two-file candidate.",
         "family": "DFF-019",
         "outcome": "clear"
       },
       {
-        "evidence": "Included in exact-candidate hostile-review scope; applicable by trusted registry path matching; no live-instance execution or ownership isolation boundary is changed.",
+        "evidence": "Checked against the bounded S6 rehearsal runtime-dependency correction; no recurrence of this family is introduced by the two-file candidate.",
         "family": "DFF-020",
         "outcome": "clear"
       },
       {
-        "evidence": "Included in exact-candidate hostile-review scope; applicable by trusted registry path matching; no execution shutdown or drain path is changed.",
+        "evidence": "Checked against the bounded S6 rehearsal runtime-dependency correction; no recurrence of this family is introduced by the two-file candidate.",
         "family": "DFF-021",
         "outcome": "clear"
       },
       {
-        "evidence": "Included in exact-candidate hostile-review scope; applicable by trusted registry path matching; the bootstrap entrypoint still runs the canonical anchor, provenance and preflight checks before any ledger claim, and now validates the pinned state key before any write.",
+        "evidence": "Checked against the bounded S6 rehearsal runtime-dependency correction; no recurrence of this family is introduced by the two-file candidate.",
         "family": "DFF-023",
         "outcome": "clear"
       },
       {
-        "evidence": "Included in exact-candidate hostile-review scope; applicable by trusted registry path matching; no readiness or probe path is changed by this range.",
+        "evidence": "Checked against the bounded S6 rehearsal runtime-dependency correction; no recurrence of this family is introduced by the two-file candidate.",
         "family": "DFF-027",
         "outcome": "clear"
       },
       {
-        "evidence": "Included in exact-candidate hostile-review scope; applicable by trusted registry path matching; no execution boundary or credential-holding path is changed by this range.",
+        "evidence": "Checked against the bounded S6 rehearsal runtime-dependency correction; no recurrence of this family is introduced by the two-file candidate.",
         "family": "DFF-028",
         "outcome": "clear"
       },
       {
-        "evidence": "Included in exact-candidate hostile-review scope; applicable by trusted registry path matching; canonical preflight remains the gate for publication and is untouched here.",
+        "evidence": "Checked against the bounded S6 rehearsal runtime-dependency correction; no recurrence of this family is introduced by the two-file candidate.",
         "family": "DFF-029",
         "outcome": "clear"
       },
       {
-        "evidence": "Included in exact-candidate hostile-review scope; applicable by trusted registry path matching; no tracked governance asset is moved or renamed.",
+        "evidence": "Checked against the bounded S6 rehearsal runtime-dependency correction; no recurrence of this family is introduced by the two-file candidate.",
         "family": "DFF-033",
         "outcome": "clear"
       },
       {
-        "evidence": "Included in exact-candidate hostile-review scope; applicable by trusted registry path matching; the new suite drives real git, the real store and the real command rather than an external precondition.",
+        "evidence": "Checked against the bounded S6 rehearsal runtime-dependency correction; no recurrence of this family is introduced by the two-file candidate.",
         "family": "DFF-035",
         "outcome": "clear"
       },
       {
-        "evidence": "Included in exact-candidate hostile-review scope; applicable by trusted registry path matching; no uid or credential-boundary path is changed by this range.",
+        "evidence": "Checked against the bounded S6 rehearsal runtime-dependency correction; no recurrence of this family is introduced by the two-file candidate.",
         "family": "DFF-047",
         "outcome": "clear"
       },
       {
-        "evidence": "Included in exact-candidate hostile-review scope; applicable by trusted registry path matching; no success-recording or publication path is changed by this range.",
+        "evidence": "Checked against the bounded S6 rehearsal runtime-dependency correction; no recurrence of this family is introduced by the two-file candidate.",
         "family": "DFF-049",
         "outcome": "clear"
       }
@@ -178,29 +164,23 @@
     "issue": "560",
     "review_target": [
       {
-        "blob_sha": "2f7c3d9c50b9bccdb86c43c5224ca03a846686f8",
-        "path": "config/issue_agent_trust_roots.json",
+        "blob_sha": "1309ceabef95c5ec5a43689fb71cd5bb94e8780f",
+        "path": ".github/workflows/hunter-issue-agent-replacement-rehearsal.yml",
         "previous_path": "",
         "status": "modified"
       },
       {
-        "blob_sha": "552ceaf71ced93ca51f53e63b060a9b5d86168b0",
-        "path": "tests/test_issue_agent_lifecycle_entry.py",
-        "previous_path": "",
-        "status": "modified"
-      },
-      {
-        "blob_sha": "0bbccd9236540d781b32a7b30f3844bbf8d38080",
-        "path": "tests/test_issue_agent_source_handling_bootstrap_entry.py",
+        "blob_sha": "7bfe85bbf73f608910690062ebe982c41e42eac9",
+        "path": "tests/test_issue_agent_replacement_executor.py",
         "previous_path": "",
         "status": "modified"
       }
     ],
-    "review_target_digest": "777ebe25321fd95f5e0d236c3519f4a1f1cf8650ec0f976558bd2b631fd79da9"
+    "review_target_digest": "ac4878330830c8f259b1f3c999ed8c06485cddfdf97cab69e14b8d528e9dbd08"
   },
-  "review_id": "bd718a299113fea570ce0bd506e918078ae57caa9bfd737661aa1411970cdecf",
+  "review_id": "354099ee9e7d837421b2d66bfa14a8f470746ce5c70ad995dfe90781434b55e9",
   "review_request": {
-    "claims_id": "bd718a299113fea570ce0bd506e918078ae57caa9bfd737661aa1411970cdecf",
+    "claims_id": "354099ee9e7d837421b2d66bfa14a8f470746ce5c70ad995dfe90781434b55e9",
     "schema": "hunter.review-request.v1"
   },
   "schema": "hunter.pre-ready-hostile-review.v1"

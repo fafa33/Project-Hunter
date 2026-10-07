@@ -39,10 +39,10 @@ jobs:
       - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6.3.0
         with:
           python-version: "3.11.13"
-      - name: Install pinned authorization verification dependency
-        env:
-          PIP_CONSTRAINT: requirements/ci-constraints.txt
-        run: 'python -m pip install --disable-pip-version-check --only-binary=:all: "cryptography==50.0.0"'
+      # The validator imports hunter.automation, whose package initializer needs the full pinned runtime (not only
+      # cryptography). Same constraint-pinned, wheel-only install the lifecycle jobs use; this job holds no secret.
+      - name: Install pinned runtime
+        run: python -m pip install --disable-pip-version-check --only-binary ':all:' -c requirements/ci-constraints.txt .
       - name: Validate structurally non-publishing rehearsal
         env:
           AUTHORIZATION_B64: ${{ inputs.authorization_b64 }}

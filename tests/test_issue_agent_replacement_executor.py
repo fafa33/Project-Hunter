@@ -270,8 +270,12 @@ def test_rehearsal_workflow_has_no_publication_or_model_secret():
     ):
         assert forbidden not in text
     assert "HUNTER_ISSUE_AGENT_AUTHORIZATION_VERIFYING_KEY" in text
-    assert "requirements/ci-constraints.txt" in text
-    assert '--only-binary=:all: "cryptography==50.0.0"' in text
+    # The validator imports hunter.automation (package initializer needs the full pinned runtime): the install must
+    # be the constraint-pinned, wheel-only project install, never an unpinned or partial one.
+    assert (
+        "python -m pip install --disable-pip-version-check --only-binary ':all:' -c requirements/ci-constraints.txt ."
+        in text
+    )
 
 
 def test_publisher_rejects_receipt_for_different_result(monkeypatch, tmp_path):
