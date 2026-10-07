@@ -824,7 +824,7 @@
         "status": "added"
       },
       {
-        "blob_sha": "c796130c383df3f503fad67ca8aff99c7ff06612",
+        "blob_sha": "ea27fecf681f4a54f28b4b7a7bc2a7171f256eac",
         "path": "scripts/hunter_canonicalization_candidate_pr.py",
         "previous_path": "",
         "status": "added"
@@ -2768,11 +2768,11 @@
         "status": "modified"
       }
     ],
-    "review_target_digest": "2501612fb481e2fe2d35d357e30340dcccbc0889932c29f59a06a8dd92c03c3c"
+    "review_target_digest": "2496b31c48edf38cdfd1e8369722b1ef12acea75fbbb37871d183427a9081680"
   },
-  "review_id": "6289431a41e48655d54287884e649dfcf2a9a15f529ce9eee5ce3ace0a79090c",
+  "review_id": "5bce0f91588693491c85da8482f8ac8400c4543b9350c4e97169a294d5ff8346",
   "review_request": {
-    "claims_id": "6289431a41e48655d54287884e649dfcf2a9a15f529ce9eee5ce3ace0a79090c",
+    "claims_id": "5bce0f91588693491c85da8482f8ac8400c4543b9350c4e97169a294d5ff8346",
     "schema": "hunter.review-request.v1"
   },
   "schema": "hunter.pre-ready-hostile-review.v1"
