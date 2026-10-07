@@ -24,6 +24,7 @@ GOVERNED = (
     "hunter-issue-agent-reconcile.yml",
     "hunter-issue-agent-candidate-pr.yml",
     "hunter-issue-agent-replacement-rehearsal.yml",
+    "hunter-issue-agent-rehearsal-producer.yml",
     "hunter-issue-agent-knowledge.yml",
     "hunter-issue-agent-source-handling-bootstrap.yml",
 )

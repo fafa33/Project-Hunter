@@ -1,5 +1,15 @@
 name: Hunter / Issue Agent Replacement Rehearsal
 on:
+  # workflow_call: the S6 rehearsal producer hands its verified pair to this job; the validator stays a separate,
+  # credential-free trust domain from the control job that holds K_AUTH.
+  workflow_call:
+    inputs:
+      authorization_b64:
+        required: true
+        type: string
+      result_b64:
+        required: true
+        type: string
   workflow_dispatch:
     inputs:
       authorization_b64:
