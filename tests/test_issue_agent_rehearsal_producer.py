@@ -80,7 +80,9 @@ def test_pair_is_canonical_signed_bound_and_validates_as_rehearsal(checkout) -> 
 
 def test_repeated_dispatch_is_byte_identical(checkout) -> None:
     path, head = checkout
-    assert producer.produce(_env(head), checkout=path) == producer.produce(_env(head), checkout=path)
+    first = producer.produce(_env(head), checkout=path)
+    second = producer.produce(_env(head), checkout=path)
+    assert first == second
 
 
 def test_cli_writes_pair_and_never_prints_key(checkout, tmp_path, monkeypatch, capsys) -> None:
@@ -121,6 +123,19 @@ def test_producer_fails_closed(checkout, override) -> None:
     with pytest.raises(Exception) as caught:
         producer.produce(_env(head, **override), checkout=path)
     assert KEY_HEX not in str(caught.value)
+
+
+def test_head_is_read_from_metadata_for_branch_detached_packed_and_hostile_heads(checkout) -> None:
+    path, head = checkout
+    assert producer._git_head(path) == head  # symbolic ref
+    _git(path, "checkout", "-q", "--detach")
+    assert producer._git_head(path) == head  # detached, as actions/checkout leaves it
+    _git(path, "checkout", "-q", "-B", "main")
+    _git(path, "pack-refs", "--all")
+    assert producer._git_head(path) == head  # packed ref
+    (path / ".git" / "HEAD").write_text("ref: ../../etc/passwd\n", encoding="utf-8")
+    assert producer._git_head(path) == ""
+    assert producer._git_head(path / "missing") == ""
 
 
 def test_unprovisioned_trust_roots_fail_closed(tmp_path) -> None:

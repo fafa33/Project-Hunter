@@ -16,7 +16,6 @@ import hashlib
 import json
 import os
 import re
-import subprocess
 import sys
 from collections.abc import Mapping
 from pathlib import Path
@@ -116,10 +115,26 @@ def rehearsal_result(signed: SignedIssueAgentAuthorization) -> bytes:
 
 
 def _git_head(checkout: Path) -> str:
-    completed = subprocess.run(
-        ["git", "-C", str(checkout), "rev-parse", "HEAD"], capture_output=True, text=True, check=False
-    )
-    return completed.stdout.strip() if completed.returncode == 0 else ""
+    """The checked-out commit, read from the repository metadata without spawning a process."""
+
+    git_dir = checkout / ".git"
+    try:
+        head = (git_dir / "HEAD").read_text(encoding="utf-8").strip()
+        if not head.startswith("ref: "):
+            return head
+        reference = head[len("ref: ") :]
+        if not reference.startswith("refs/") or ".." in reference:
+            return ""
+        try:
+            return (git_dir / reference).read_text(encoding="utf-8").strip()
+        except FileNotFoundError:
+            for line in (git_dir / "packed-refs").read_text(encoding="utf-8").splitlines():
+                value, _, name = line.partition(" ")
+                if name == reference:
+                    return value
+    except OSError:
+        pass
+    return ""
 
 
 def produce(environ: Mapping[str, str], *, checkout: Path) -> tuple[bytes, bytes]:
