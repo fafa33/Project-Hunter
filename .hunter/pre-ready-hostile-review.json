@@ -40,7 +40,7 @@
       "transaction-snapshot-consistency"
     ],
     "base_ref": "main",
-    "base_sha": "0c0d478e0a7541bd4e6451d424a9382214801f1c",
+    "base_sha": "4c12fee5e188140e411cdef5b6073af9eddd371d",
     "defect_families": [
       {
         "evidence": "Included in exact-candidate hostile-review scope; applicable by trusted registry path matching; no timestamp or ordering decision path is changed by this range.",
@@ -182,29 +182,2597 @@
     "issue": "560",
     "review_target": [
       {
-        "blob_sha": "10c9624b3beaff0c61f33ca4776fc0ee6032cc95",
+        "blob_sha": "97d8461e24e3764165683210e88f71ea2bc500a7",
+        "path": ".githooks/pre-push",
+        "previous_path": "",
+        "status": "added"
+      },
+      {
+        "blob_sha": "27d32b184bf3c81a7fc25744c618017c3fed088e",
+        "path": ".github/copilot-instructions.md",
+        "previous_path": "",
+        "status": "added"
+      },
+      {
+        "blob_sha": "a6a7f8b3540c93cd9f27db1e8ce861c1a391fedd",
+        "path": ".github/workflows/codeql-default-setup-bridge.yml",
+        "previous_path": "",
+        "status": "added"
+      },
+      {
+        "blob_sha": "496ef81870e05a05855a69b49f8e02623b9b67b8",
+        "path": ".github/workflows/hunter-candidate-admission.yml",
+        "previous_path": "",
+        "status": "added"
+      },
+      {
+        "blob_sha": "4ab745ea69e9603a9fa03a8c3dfca49cd55c3d31",
+        "path": ".github/workflows/hunter-canonicalization-auto.yml",
+        "previous_path": "",
+        "status": "added"
+      },
+      {
+        "blob_sha": "d04aa1c652090c7931d9bc34e0dce69f42e0d95e",
+        "path": ".github/workflows/hunter-governance-preflight.yml",
+        "previous_path": "",
+        "status": "added"
+      },
+      {
+        "blob_sha": "37ac35b4b46c8222015fd33b72b61ed3c797a757",
+        "path": ".github/workflows/hunter-governance-reconcile.yml",
+        "previous_path": "",
+        "status": "added"
+      },
+      {
+        "blob_sha": "da4625f5599c784e2043b26ffd38892a1f9b58d1",
+        "path": ".github/workflows/hunter-governance-review.yml",
+        "previous_path": "",
+        "status": "added"
+      },
+      {
+        "blob_sha": "0395eaee650595038324ff8f5a6ec66be9cace36",
+        "path": ".github/workflows/hunter-governance-shadow.yml",
+        "previous_path": "",
+        "status": "added"
+      },
+      {
+        "blob_sha": "f4a6c40c77c676099e8048c8fcd81b3694fe4890",
+        "path": ".github/workflows/hunter-issue-agent-candidate-pr.yml",
+        "previous_path": "",
+        "status": "added"
+      },
+      {
+        "blob_sha": "38dd88cf53745c47edf8b1a108cec8fe1a5c7cde",
+        "path": ".github/workflows/hunter-issue-agent-issuer-deploy.yml",
+        "previous_path": "",
+        "status": "added"
+      },
+      {
+        "blob_sha": "9c3178abbabcbebbe825e32ca9568c63aff89232",
+        "path": ".github/workflows/hunter-issue-agent-knowledge.yml",
+        "previous_path": "",
+        "status": "added"
+      },
+      {
+        "blob_sha": "08dcb1a1395520f9088848ccde2f30749c651ecb",
+        "path": ".github/workflows/hunter-issue-agent-reconcile.yml",
+        "previous_path": "",
+        "status": "added"
+      },
+      {
+        "blob_sha": "240c3ca4012ae46418e0fc4dbff6d45d01ccd8a7",
+        "path": ".github/workflows/hunter-issue-agent-replacement-rehearsal.yml",
+        "previous_path": "",
+        "status": "added"
+      },
+      {
+        "blob_sha": "24907cdf99891263f02b006a787420b3fd566126",
+        "path": ".github/workflows/hunter-issue-agent-source-handling-bootstrap.yml",
+        "previous_path": "",
+        "status": "added"
+      },
+      {
+        "blob_sha": "33dfb7e54751849376ec36957861d740de550c38",
+        "path": ".github/workflows/hunter-issue-agent-trigger.yml",
+        "previous_path": "",
+        "status": "added"
+      },
+      {
+        "blob_sha": "3aa2e7aead5ee7d4680328efcb67ef5b370415ec",
+        "path": ".github/workflows/hunter-knowledge-learning.yml",
+        "previous_path": "",
+        "status": "added"
+      },
+      {
+        "blob_sha": "7ff4bf912fea9b1d877654610fed944e7f607ed0",
+        "path": ".github/workflows/hunter-local-reviewer.yml",
+        "previous_path": "",
+        "status": "added"
+      },
+      {
+        "blob_sha": "d4fcd3976611134f8769210cd0f86f3e4a7b34f1",
+        "path": ".github/workflows/hunter-merge-readiness.yml",
+        "previous_path": "",
+        "status": "added"
+      },
+      {
+        "blob_sha": "c281f3385232c831b7be2b855c344d77d4b526ba",
+        "path": ".github/workflows/hunter-pre-pr-preflight.yml",
+        "previous_path": "",
+        "status": "added"
+      },
+      {
+        "blob_sha": "7561b9c4d886d54a189ac74ccfcb0cb89b4b15a3",
+        "path": ".github/workflows/hunter-reviewer-collector.yml",
+        "previous_path": "",
+        "status": "added"
+      },
+      {
+        "blob_sha": "d9d5a5dc46d423f5e7d1ca5367ff505bdf64a10f",
+        "path": ".github/workflows/hunter-trusted-orchestrator-replay-publish.yml",
+        "previous_path": "",
+        "status": "added"
+      },
+      {
+        "blob_sha": "625a70c48a460aac4ac91b7ef1d52cad89335599",
+        "path": ".github/workflows/hunter-trusted-orchestrator-replay-validate.yml",
+        "previous_path": "",
+        "status": "added"
+      },
+      {
+        "blob_sha": "023ef2a33b192ec96090479a888872ecdf80161b",
         "path": ".github/workflows/hunter-trusted-preflight-upgrade.yml",
         "previous_path": "",
-        "status": "modified"
+        "status": "added"
       },
       {
-        "blob_sha": "a3f1dc718f2938a69a12202342913a40b15d5861",
+        "blob_sha": "fa2b73827b2c13a5064e67c3be0f68304cd76cd4",
+        "path": "AGENTS.md",
+        "previous_path": "",
+        "status": "added"
+      },
+      {
+        "blob_sha": "5cdbaf683e7dd09ce0d44a33dcc6d936a6f57625",
+        "path": "config/issue_agent_trust_roots.json",
+        "previous_path": "",
+        "status": "added"
+      },
+      {
+        "blob_sha": "d3b72cb7ff56685f452142eecaa2b56c9b5da564",
+        "path": "config/source_handling/authorization_rule_v1.json",
+        "previous_path": "",
+        "status": "added"
+      },
+      {
+        "blob_sha": "4ba51542477615b48bc09db331a9032fb5a839e6",
+        "path": "configs/governance_cutover_shadow.json",
+        "previous_path": "",
+        "status": "added"
+      },
+      {
+        "blob_sha": "7891aff882550308f5a1fd52eba383159d4feb0c",
+        "path": "configs/governance_cutover_target.json",
+        "previous_path": "",
+        "status": "added"
+      },
+      {
+        "blob_sha": "14d1a57fcc27cb6671fb28ee7cc3caff09d24c2b",
+        "path": "data/full_history_defect_scan/full_history_coverage_manifest.json",
+        "previous_path": "",
+        "status": "added"
+      },
+      {
+        "blob_sha": "4d6e5d140f1c6998cd08ac2927b06a9ec2fc0142",
+        "path": "data/full_history_defect_scan/historical_closure_manifest.json",
+        "previous_path": "",
+        "status": "added"
+      },
+      {
+        "blob_sha": "03c4164df85ebf737f7c25b0405094f8fe1e2214",
+        "path": "data/full_history_defect_scan/reconstruction/invariant_verdicts.json",
+        "previous_path": "",
+        "status": "added"
+      },
+      {
+        "blob_sha": "d0f96d89ad76d0ced6445255e206ce02cba62b70",
+        "path": "data/full_history_defect_scan/reconstruction/recurrence_verdicts.json",
+        "previous_path": "",
+        "status": "added"
+      },
+      {
+        "blob_sha": "749d0da8373a65581f2a08ab44b135ab3679e613",
+        "path": "docs/ADR/0029-hunter-development-methodology.md",
+        "previous_path": "",
+        "status": "added"
+      },
+      {
+        "blob_sha": "276104db5d8272821f0518b988b14b64c50832dd",
+        "path": "docs/ADR/0030-hunter-intelligence-evolution.md",
+        "previous_path": "",
+        "status": "added"
+      },
+      {
+        "blob_sha": "dd5b2aa90f9bd297dfdf2b331ee93499822f0007",
+        "path": "docs/ADR/0031-ai-context-prompt-intelligence-foundation.md",
+        "previous_path": "",
+        "status": "added"
+      },
+      {
+        "blob_sha": "5fcb686d75d5b309be576ad03787a341eac05278",
+        "path": "docs/ADR/0032-project-agnostic-prompt-intelligence-core.md",
+        "previous_path": "",
+        "status": "added"
+      },
+      {
+        "blob_sha": "2045a93adaa9406efa38008b7f38ee9604a8a1f9",
+        "path": "docs/ADR/0033-source-handling-classification-authority.md",
+        "previous_path": "",
+        "status": "added"
+      },
+      {
+        "blob_sha": "7cc53d6a58078f73ad2770c54b0641c8233acfe8",
+        "path": "docs/ADR/0034-evidence-intelligence-model-adapter-provider-attempt-boundary.md",
+        "previous_path": "",
+        "status": "added"
+      },
+      {
+        "blob_sha": "d2b83819218bf873b405040c86d493855cbac47a",
+        "path": "docs/ADR/0035-evidence-intelligence-response-validator-boundary.md",
+        "previous_path": "",
+        "status": "added"
+      },
+      {
+        "blob_sha": "32fb738c365f41bbc8ec516dbdbd3b32811cc15a",
+        "path": "docs/ADR/0036-source-handling-design-implementation-contract.md",
+        "previous_path": "",
+        "status": "added"
+      },
+      {
+        "blob_sha": "1ba07c477243513a95f9eb451d2a9dda95c1a11f",
+        "path": "docs/ADR/0037-github-native-issue-agent-execution.md",
+        "previous_path": "",
+        "status": "added"
+      },
+      {
+        "blob_sha": "5b3e0dfd9b47d34047cf780d35837c634f196144",
+        "path": "docs/ADR/0038-source-handling-github-native-authority-store.md",
+        "previous_path": "",
+        "status": "added"
+      },
+      {
+        "blob_sha": "b9386aeb6a4d963b568b34c2c8d8881ce88140c6",
+        "path": "docs/ADR/0039-review-knowledge-remediation-loop.md",
+        "previous_path": "",
+        "status": "added"
+      },
+      {
+        "blob_sha": "59251f0c8c1ddde0f236fc6749220301cf6d0ed6",
+        "path": "docs/AGENT_WORKFLOW_STATE_ENFORCEMENT.md",
+        "previous_path": "",
+        "status": "added"
+      },
+      {
+        "blob_sha": "61f55309212064253f9af5dec31dd0a98320356a",
+        "path": "docs/AI_DEVELOPMENT_PLAYBOOK.md",
+        "previous_path": "",
+        "status": "added"
+      },
+      {
+        "blob_sha": "fc61d6a517cc324e13467f65e9750a85d72ef676",
+        "path": "docs/AI_OPERATING_SYSTEM.md",
+        "previous_path": "",
+        "status": "added"
+      },
+      {
+        "blob_sha": "978cf8c4b3e0cd35ee4957d37ad2eb54ceddaed2",
+        "path": "docs/ARCHITECTURE_AUDITS/adpr-0009-model-adapter-independent-audit.md",
+        "previous_path": "",
+        "status": "added"
+      },
+      {
+        "blob_sha": "36afd7676296faa8e5be9c94b16f1cdf429925d4",
+        "path": "docs/ARCHITECTURE_AUDITS/adpr-0010-response-validator-independent-audit.md",
+        "previous_path": "",
+        "status": "added"
+      },
+      {
+        "blob_sha": "5998f471ce564b321f32bb75a15d940f01f5dc13",
+        "path": "docs/ARCHITECTURE_AUDITS/adpr-0010-response-validator-targeted-reaudit.md",
+        "previous_path": "",
+        "status": "added"
+      },
+      {
+        "blob_sha": "eea7b0ecf9e1faa84af8b838326f886ae87f0311",
+        "path": "docs/ARCHITECTURE_AUDITS/adpr-0012-source-handling-independent-audit.md",
+        "previous_path": "",
+        "status": "added"
+      },
+      {
+        "blob_sha": "41ba5df06e7277204ef86761d49ae493f2e92e86",
+        "path": "docs/ARCHITECTURE_AUDITS/adpr-0012-source-handling-targeted-reaudit.md",
+        "previous_path": "",
+        "status": "added"
+      },
+      {
+        "blob_sha": "e5c144e9022368f4b2f71721c7fb56928c913f13",
+        "path": "docs/ARCHITECTURE_AUDITS/issue-197-evidence-assembly-production-constructibility.md",
+        "previous_path": "",
+        "status": "added"
+      },
+      {
+        "blob_sha": "2bf9abad6c43caa481939aca4b2904ae2db35555",
+        "path": "docs/CODE_WRITE_POLICY.json",
+        "previous_path": "",
+        "status": "added"
+      },
+      {
+        "blob_sha": "67ba2a87109d75e5660bc77ece55803d2cdf4096",
+        "path": "docs/CONNECTOR_WRITE_INGRESS.md",
+        "previous_path": "",
+        "status": "added"
+      },
+      {
+        "blob_sha": "a3575d49f5282938108aca08bdaf4589c0ee6e1c",
+        "path": "docs/DEFECT_PREVENTION_LIFECYCLE.json",
+        "previous_path": "",
+        "status": "added"
+      },
+      {
+        "blob_sha": "c0f5bbdab5e99d3ce693eb7549c9f7136b56e4d6",
+        "path": "docs/DEFECT_REGISTRY.json",
+        "previous_path": "",
+        "status": "added"
+      },
+      {
+        "blob_sha": "f5ace1f03675de24db2c48b54c1d950d6659cd19",
+        "path": "docs/GOVERNANCE_ENFORCEMENT.md",
+        "previous_path": "",
+        "status": "added"
+      },
+      {
+        "blob_sha": "22b54641850ff9d222494c520d2d67fe86259ddc",
+        "path": "docs/GOVERNANCE_MAINTENANCE.md",
+        "previous_path": "",
+        "status": "added"
+      },
+      {
+        "blob_sha": "3b7518a7e78cb0a2eb25b309b0ff58ba5d36f4e3",
+        "path": "docs/GOVERNANCE_PRODUCTION_CUTOVER.md",
+        "previous_path": "",
+        "status": "added"
+      },
+      {
+        "blob_sha": "66444b3bb189bec9c4e4d5c8b7c7daf98b875216",
+        "path": "docs/HISTORICAL_DEFECT_BACKFILL.json",
+        "previous_path": "",
+        "status": "added"
+      },
+      {
+        "blob_sha": "399b8ec8b0deef693584de274a8ed2fb187ae4b9",
+        "path": "docs/HUNTER_GOVERNANCE_REVIEW.md",
+        "previous_path": "",
+        "status": "added"
+      },
+      {
+        "blob_sha": "8c4387212cf7386ceb82d7ac14162dd451b5b9a4",
+        "path": "docs/HUNTER_MERGE_READINESS_CONTROLLER.md",
+        "previous_path": "",
+        "status": "added"
+      },
+      {
+        "blob_sha": "660b562612a0a03bf591fc5bc5eaef918e82aedd",
+        "path": "docs/IMPLEMENTATION_REPORTS/adr-0034-phase-a-model-adapter-durable-attempt-foundation.md",
+        "previous_path": "",
+        "status": "added"
+      },
+      {
+        "blob_sha": "917ed6df661ab1f3a707f6c8bea97128dbb906b1",
+        "path": "docs/IMPLEMENTATION_REPORTS/adr-0034-phase-b-provider-transport-outcome-response-capture.md",
+        "previous_path": "",
+        "status": "added"
+      },
+      {
+        "blob_sha": "f1b84b6f98e2438e3b0842beee7d5b226638d0f4",
+        "path": "docs/ISSUE_AGENT_EXECUTION_CONTRACT.md",
+        "previous_path": "",
+        "status": "added"
+      },
+      {
+        "blob_sha": "210797fa5f419a978a69baa8bf490794760824f8",
+        "path": "docs/ISSUE_AGENT_GITHUB_NATIVE_FMEA.md",
+        "previous_path": "",
+        "status": "added"
+      },
+      {
+        "blob_sha": "9fd34c01b5a882759412f4ce6edbf8dfc11dbcb7",
+        "path": "docs/ISSUE_AGENT_GITHUB_NATIVE_STATE_MACHINE.md",
+        "previous_path": "",
+        "status": "added"
+      },
+      {
+        "blob_sha": "04014566bc2fe2e7b3ba505f03b2f57511203792",
+        "path": "docs/ISSUE_AGENT_ISSUER_DEPLOYMENT.md",
+        "previous_path": "",
+        "status": "added"
+      },
+      {
+        "blob_sha": "8c8d19b27ad5069981d905184a697cef5b7f5a62",
+        "path": "docs/ISSUE_AGENT_POST_519_FINDINGS.md",
+        "previous_path": "",
+        "status": "added"
+      },
+      {
+        "blob_sha": "106ddf43505eadc3c64ba08b14f40b7f76fd9581",
+        "path": "docs/ISSUE_AGENT_RAILWAY_RETIREMENT_PLAN.md",
+        "previous_path": "",
+        "status": "added"
+      },
+      {
+        "blob_sha": "4e699b9b40ce40205d8938cb3998dd1abf12f819",
+        "path": "docs/ISSUE_AGENT_REVIEW_KNOWLEDGE_LOOP.md",
+        "previous_path": "",
+        "status": "added"
+      },
+      {
+        "blob_sha": "e5425d599cf62f6f566f0e23a6bf31fcae3c6479",
+        "path": "docs/ISSUE_AGENT_TRIGGER.md",
+        "previous_path": "",
+        "status": "added"
+      },
+      {
+        "blob_sha": "c8021ce2ecf155b387f3f62d2957997982bcda75",
+        "path": "docs/N8N_AGENT_AUTOMATION.md",
+        "previous_path": "",
+        "status": "added"
+      },
+      {
+        "blob_sha": "b37efdf98ca5f9febb36a028491909f504065492",
+        "path": "docs/PR_204_BODY.md",
+        "previous_path": "",
+        "status": "added"
+      },
+      {
+        "blob_sha": "45138ce782ab519fdc44cba7deec12677f955376",
+        "path": "docs/REVIEWER_FINDING_DISPOSITIONS.json",
+        "previous_path": "",
+        "status": "added"
+      },
+      {
+        "blob_sha": "2ad1582884c0235ecc187c7ae68b08b86b1408fa",
+        "path": "docs/SMART_PROMPT_MACHINE_N8N.md",
+        "previous_path": "",
+        "status": "added"
+      },
+      {
+        "blob_sha": "14a1c474a45317de8f3eac5489f6f475c007039a",
+        "path": "docs/SOURCE_HANDLING_AUTHORITY_DESIGN_CONTRACT.md",
+        "previous_path": "",
+        "status": "added"
+      },
+      {
+        "blob_sha": "8b8dc47d458f39de0dd28d1bcafdaf8dcf8acfe9",
+        "path": "docs/VALIDATION_STAGE_CONTRACT.json",
+        "previous_path": "",
+        "status": "added"
+      },
+      {
+        "blob_sha": "3586fe5d5e3685b2ccc1d2b89d9e5c975f024c9b",
+        "path": "docs/VALIDATION_STAGE_CONTRACT.md",
+        "previous_path": "",
+        "status": "added"
+      },
+      {
+        "blob_sha": "3df88c49b44edfbeb28d401cb510306caca50bf6",
+        "path": "docs/architecture-records/ADPR-0006-ai-context-prompt-intelligence-foundation.md",
+        "previous_path": "",
+        "status": "added"
+      },
+      {
+        "blob_sha": "b0d2c2edaaa7d5af04276078bc2b9806e878ab62",
+        "path": "docs/architecture-records/ADPR-0007-project-agnostic-prompt-intelligence-core.md",
+        "previous_path": "",
+        "status": "added"
+      },
+      {
+        "blob_sha": "6e3389bd5fffd757603aa6f20b502cb5a7ec5726",
+        "path": "docs/architecture-records/ADPR-0008-source-handling-classification-authority.md",
+        "previous_path": "",
+        "status": "added"
+      },
+      {
+        "blob_sha": "c655be2cf5cf1136bae2680b46277461e28db1c5",
+        "path": "docs/architecture-records/ADPR-0009-evidence-intelligence-model-adapter.md",
+        "previous_path": "",
+        "status": "added"
+      },
+      {
+        "blob_sha": "fcc385d710eb0c7ba7a2203a9c4aced66b47aa50",
+        "path": "docs/architecture-records/ADPR-0010-evidence-intelligence-response-validator.md",
+        "previous_path": "",
+        "status": "added"
+      },
+      {
+        "blob_sha": "210406761ab55479e66f10cbaaaea1a1f7f17ab3",
+        "path": "docs/architecture-records/ADPR-0011-adr-0035-transient-handoff-isolation-reservation.md",
+        "previous_path": "",
+        "status": "added"
+      },
+      {
+        "blob_sha": "5d05d6025785c92af55693fe0372558dc85fb7fd",
+        "path": "docs/architecture-records/ADPR-0012-source-handling-design-implementation-contract.md",
+        "previous_path": "",
+        "status": "added"
+      },
+      {
+        "blob_sha": "d6880b330b7d63cd815751cc63d7eb0584951957",
+        "path": "docs/architecture-reviews/ADR-0032-independent-architecture-review.md",
+        "previous_path": "",
+        "status": "added"
+      },
+      {
+        "blob_sha": "0f7a77c7f838bc27a0c2618a0bd1c508eb5ebfc6",
+        "path": "docs/implementation-notes/issue-340-phase-c-terminal-persistence.md",
+        "previous_path": "",
+        "status": "added"
+      },
+      {
+        "blob_sha": "9a3f520341ff0154b7e82cb3241e624f784256c6",
+        "path": "docs/operations/hunter-local-reviewer.md",
+        "previous_path": "",
+        "status": "added"
+      },
+      {
+        "blob_sha": "4a46cff0daf0423cbd31782a8821573b71228146",
+        "path": "docs/superpowers/plans/2026-09-12-quality-gate-zero-recurrence.md",
+        "previous_path": "",
+        "status": "added"
+      },
+      {
+        "blob_sha": "e6a84561c1f15cf7676f9e46fde6f76cd6f8de3a",
+        "path": "docs/superpowers/plans/2026-09-15-resilient-reviewer-orchestration.md",
+        "previous_path": "",
+        "status": "added"
+      },
+      {
+        "blob_sha": "e97ea51fa3ce375fca52ced7423cf6e489137109",
+        "path": "docs/superpowers/plans/2026-09-17-review-orchestration-fast-failover.md",
+        "previous_path": "",
+        "status": "added"
+      },
+      {
+        "blob_sha": "705acaecce33550d1cc2cfd82cc024353dfd72ae",
+        "path": "docs/superpowers/specs/2026-09-12-quality-gate-zero-recurrence-design.md",
+        "previous_path": "",
+        "status": "added"
+      },
+      {
+        "blob_sha": "22bdf500888227246f9bd6b922432497255e9f3a",
+        "path": "docs/superpowers/specs/2026-09-15-reviewer-orchestration-design.md",
+        "previous_path": "",
+        "status": "added"
+      },
+      {
+        "blob_sha": "932f1ad65cc1b4ee32c312825a1720d7334e27ca",
+        "path": "docs/superpowers/specs/2026-09-17-review-orchestration-fast-failover-design.md",
+        "previous_path": "",
+        "status": "added"
+      },
+      {
+        "blob_sha": "14886c1f90aafcded58bdff7c9c2b081e0fd98f4",
+        "path": "docs/superpowers/specs/2026-09-23-automatic-knowledge-learning-design.md",
+        "previous_path": "",
+        "status": "added"
+      },
+      {
+        "blob_sha": "f5242d63a26883fab78f191ab8784dacf9cd81d5",
+        "path": "docs/superpowers/specs/2026-09-23-dpm-smart-prompt-runtime-design.md",
+        "previous_path": "",
+        "status": "added"
+      },
+      {
+        "blob_sha": "f26f4c1c67f1f387659c11ad6926fb71b40abbd3",
+        "path": "docs/superpowers/specs/2026-09-23-event-ingestion-canonical-integration-design.md",
+        "previous_path": "",
+        "status": "added"
+      },
+      {
+        "blob_sha": "e167cdbc439171f6b2264b125136441850751893",
+        "path": "docs/superpowers/specs/2026-09-23-live-dpm-knowledge-feedback-loop-design.md",
+        "previous_path": "",
+        "status": "added"
+      },
+      {
+        "blob_sha": "4dd3fd10d63a25e62f7dd33b255ebdec39d767e3",
+        "path": "docs/superpowers/specs/2026-09-24-governed-implementation-scope-design.md",
+        "previous_path": "",
+        "status": "added"
+      },
+      {
+        "blob_sha": "2a2fb1025f158d5fa72ca05623369ac00d6e7170",
+        "path": "railway.toml",
+        "previous_path": "",
+        "status": "added"
+      },
+      {
+        "blob_sha": "47d8f317e35fdea459c71d07cc596666024b5ea0",
+        "path": "scripts/bootstrap_hunter_review_runner.sh",
+        "previous_path": "",
+        "status": "added"
+      },
+      {
+        "blob_sha": "4a7ff853985f8207ea3f363e63f45680a4c867df",
+        "path": "scripts/bootstrap_source_handling_authority.py",
+        "previous_path": "",
+        "status": "added"
+      },
+      {
+        "blob_sha": "2ff28cf74aac56ce1f201781877e9e11e311a209",
+        "path": "scripts/hunter_architecture_index_preflight.py",
+        "previous_path": "",
+        "status": "added"
+      },
+      {
+        "blob_sha": "08326593a5c8c143a5734bc08ef4691d132368e2",
+        "path": "scripts/hunter_artifact_preflight.py",
+        "previous_path": "",
+        "status": "added"
+      },
+      {
+        "blob_sha": "f0334bdedf66c0bde6f55e1cddece78ea3a1f3e3",
+        "path": "scripts/hunter_candidate_admission.py",
+        "previous_path": "",
+        "status": "added"
+      },
+      {
+        "blob_sha": "c796130c383df3f503fad67ca8aff99c7ff06612",
+        "path": "scripts/hunter_canonicalization_candidate_pr.py",
+        "previous_path": "",
+        "status": "added"
+      },
+      {
+        "blob_sha": "c3da676fa4b1ccd34655f7d9aea1cc4282c037dd",
+        "path": "scripts/hunter_canonicalize_learning.py",
+        "previous_path": "",
+        "status": "added"
+      },
+      {
+        "blob_sha": "98e897f5d6abd9d812f32617d6deb4d3779bae43",
+        "path": "scripts/hunter_collect_learning_observations.py",
+        "previous_path": "",
+        "status": "added"
+      },
+      {
+        "blob_sha": "2c8d29dfc1f462c8c8cfd0741a626db1ad66dad3",
+        "path": "scripts/hunter_collect_sonar_observations.py",
+        "previous_path": "",
+        "status": "added"
+      },
+      {
+        "blob_sha": "1a395fac7b762ab131ac943592385f714b7fe4bb",
+        "path": "scripts/hunter_connector_write_ingress.py",
+        "previous_path": "",
+        "status": "added"
+      },
+      {
+        "blob_sha": "3b261993934e1d7b0399ced478db7a272862a33e",
+        "path": "scripts/hunter_controller_admission.py",
+        "previous_path": "",
+        "status": "added"
+      },
+      {
+        "blob_sha": "c925b36513b337191c29233715acc717ce81294f",
         "path": "scripts/hunter_defect_prevention_preflight.py",
+        "previous_path": "",
+        "status": "added"
+      },
+      {
+        "blob_sha": "25610a8d1cad65c0c745fa41b5231855da4ecff4",
+        "path": "scripts/hunter_full_history_defect_scan.py",
+        "previous_path": "",
+        "status": "added"
+      },
+      {
+        "blob_sha": "a1be408cdbbd042c446320ae24b0f7e87d9e6d2b",
+        "path": "scripts/hunter_github_transport.py",
+        "previous_path": "",
+        "status": "added"
+      },
+      {
+        "blob_sha": "193492700876a942318a89d2c019390d2e10591d",
+        "path": "scripts/hunter_governance_cutover_preflight.py",
+        "previous_path": "",
+        "status": "added"
+      },
+      {
+        "blob_sha": "d839f2752062be0c3dec2ce2058975fbdc5aca7e",
+        "path": "scripts/hunter_governance_preflight.py",
+        "previous_path": "",
+        "status": "added"
+      },
+      {
+        "blob_sha": "5f32aea694c0866449af4190d2b476e012383ea4",
+        "path": "scripts/hunter_governance_review/__init__.py",
+        "previous_path": "",
+        "status": "added"
+      },
+      {
+        "blob_sha": "3b30d80b6f2b1ef700c47921e061c65b4e9c55f9",
+        "path": "scripts/hunter_governance_review/__main__.py",
+        "previous_path": "",
+        "status": "added"
+      },
+      {
+        "blob_sha": "567e49e84294562a5ec21ac6e76820fbfcad572c",
+        "path": "scripts/hunter_governance_review/bootstrap_external_review_469.py",
+        "previous_path": "",
+        "status": "added"
+      },
+      {
+        "blob_sha": "a4b7b2164e2f5d73a43de3714558c67a8e678bda",
+        "path": "scripts/hunter_governance_review/context.py",
+        "previous_path": "",
+        "status": "added"
+      },
+      {
+        "blob_sha": "a27f2ab7897ef20ff73b9b607fd983f3832c2366",
+        "path": "scripts/hunter_governance_review/contracts.py",
+        "previous_path": "",
+        "status": "added"
+      },
+      {
+        "blob_sha": "20d70e3de4dd5d0e2cc6b55df2e8aebedb2f3eaf",
+        "path": "scripts/hunter_governance_review/decision.py",
+        "previous_path": "",
+        "status": "added"
+      },
+      {
+        "blob_sha": "b8ae56cdfa549e7ce15d3b74232ba8788206dd9b",
+        "path": "scripts/hunter_governance_review/deterministic.py",
+        "previous_path": "",
+        "status": "added"
+      },
+      {
+        "blob_sha": "d8e7e6dd4a752c7fb96b5f8076d1a013b703b4cb",
+        "path": "scripts/hunter_governance_review/github_api.py",
+        "previous_path": "",
+        "status": "added"
+      },
+      {
+        "blob_sha": "57cf0ee5821a88ebbe32a76f68d684db4d77517c",
+        "path": "scripts/hunter_governance_review_v2.py",
+        "previous_path": "",
+        "status": "added"
+      },
+      {
+        "blob_sha": "6b4a91f720faceabfe07ea4d50bd8a75c9ece8ae",
+        "path": "scripts/hunter_governance_revision.py",
+        "previous_path": "",
+        "status": "added"
+      },
+      {
+        "blob_sha": "c5600c1eedf8eaa53654eb022451442731dd7705",
+        "path": "scripts/hunter_governance_shadow.py",
+        "previous_path": "",
+        "status": "added"
+      },
+      {
+        "blob_sha": "f36aa7de9e4df1479a46289bba1a1879311b0e7c",
+        "path": "scripts/hunter_incremental_knowledge.py",
+        "previous_path": "",
+        "status": "added"
+      },
+      {
+        "blob_sha": "c2da5346ce683f144e4a072749f354d68f4890a0",
+        "path": "scripts/hunter_integrate_learning_ledger.py",
+        "previous_path": "",
+        "status": "added"
+      },
+      {
+        "blob_sha": "edd55ef0bd0e23e33481ea8df5cf8c7efe4fddd6",
+        "path": "scripts/hunter_issue_agent_candidate_pr.py",
+        "previous_path": "",
+        "status": "added"
+      },
+      {
+        "blob_sha": "6f2f8b5a28cc41eb03311a876908e750157ec577",
+        "path": "scripts/hunter_issue_agent_ingress.py",
+        "previous_path": "",
+        "status": "added"
+      },
+      {
+        "blob_sha": "13733d4ee318bd40c08a4eee59915c9fb4835759",
+        "path": "scripts/hunter_issue_agent_issuer.py",
+        "previous_path": "",
+        "status": "added"
+      },
+      {
+        "blob_sha": "a8ce10c140aa24ebe1e8473a667407124326358f",
+        "path": "scripts/hunter_issue_agent_lifecycle.py",
+        "previous_path": "",
+        "status": "added"
+      },
+      {
+        "blob_sha": "4cbc526e9be2a57355b1a695eb6e5ec5bbfd08d7",
+        "path": "scripts/hunter_issue_agent_provisioner.py",
+        "previous_path": "",
+        "status": "added"
+      },
+      {
+        "blob_sha": "11c82d08ce21f349d49920e21b654fa2405678ad",
+        "path": "scripts/hunter_issue_agent_replacement_rehearsal.py",
+        "previous_path": "",
+        "status": "added"
+      },
+      {
+        "blob_sha": "d8b8817df7994618cc9b5c587158cfe85ec80ac7",
+        "path": "scripts/hunter_issue_agent_trigger.py",
+        "previous_path": "",
+        "status": "added"
+      },
+      {
+        "blob_sha": "75232672a25b945d39160e66222df00b1ac25630",
+        "path": "scripts/hunter_knowledge_extraction.py",
+        "previous_path": "",
+        "status": "added"
+      },
+      {
+        "blob_sha": "f1ab74db362ef18118e06c00cc9ada5201b467b4",
+        "path": "scripts/hunter_local_reviewer.py",
+        "previous_path": "",
+        "status": "added"
+      },
+      {
+        "blob_sha": "2d2549ee81c8282aa98ab032e92cf707e972df18",
+        "path": "scripts/hunter_materialize_learning_candidate.py",
+        "previous_path": "",
+        "status": "added"
+      },
+      {
+        "blob_sha": "2329b5de9ff9b5cf462a1835713f39e1a078e545",
+        "path": "scripts/hunter_merge_readiness.py",
+        "previous_path": "",
+        "status": "added"
+      },
+      {
+        "blob_sha": "22e5cf26057d4f5fcf2d2c8a692bdeef57c8e870",
+        "path": "scripts/hunter_merge_readiness_v2.py",
+        "previous_path": "",
+        "status": "added"
+      },
+      {
+        "blob_sha": "83a2108d059e8b7783621a31d810834ac2e56163",
+        "path": "scripts/hunter_pr_preflight.py",
+        "previous_path": "",
+        "status": "added"
+      },
+      {
+        "blob_sha": "df74458309a62f6a82219c950710fc59a2633352",
+        "path": "scripts/hunter_pre_push.py",
+        "previous_path": "",
+        "status": "added"
+      },
+      {
+        "blob_sha": "4718be185435ee6f806611d748b3c2205008cf80",
+        "path": "scripts/hunter_pre_ready_review.py",
+        "previous_path": "",
+        "status": "added"
+      },
+      {
+        "blob_sha": "18bb066919a85fce439d8afa5ea817449cf8135e",
+        "path": "scripts/hunter_review_orchestrator.py",
+        "previous_path": "",
+        "status": "added"
+      },
+      {
+        "blob_sha": "6e0e96a3405e660e5f2372ac545d5aef003353ca",
+        "path": "scripts/hunter_reviewer_benchmark.py",
+        "previous_path": "",
+        "status": "added"
+      },
+      {
+        "blob_sha": "447c96167082af6f5c4dad74ad7bfeb45f072e2b",
+        "path": "scripts/hunter_reviewer_collector.py",
+        "previous_path": "",
+        "status": "added"
+      },
+      {
+        "blob_sha": "06327de542a7ff906d3e72829f856707eab713cc",
+        "path": "scripts/hunter_trusted_orchestrator_replay.py",
+        "previous_path": "",
+        "status": "added"
+      },
+      {
+        "blob_sha": "9806666902ecf96b947e9254383cbfb2300c841d",
+        "path": "scripts/hunter_trusted_orchestrator_replay_definition.json",
+        "previous_path": "",
+        "status": "added"
+      },
+      {
+        "blob_sha": "9db78a42423cb39249028887aef01baf2f37ab80",
+        "path": "scripts/hunter_trusted_orchestrator_replay_worker.py",
+        "previous_path": "",
+        "status": "added"
+      },
+      {
+        "blob_sha": "5627039d54475b39e18c092e3b004f73118de01b",
+        "path": "scripts/hunter_validation_receipt.py",
+        "previous_path": "",
+        "status": "added"
+      },
+      {
+        "blob_sha": "54b22a50a3a8e94c25a63c79cf7beba430d79150",
+        "path": "scripts/hunter_validation_reuse.py",
+        "previous_path": "",
+        "status": "added"
+      },
+      {
+        "blob_sha": "6d95dcc6d1c1c0d83a33c4e399da78820f995717",
+        "path": "scripts/hunter_workflow_state.py",
+        "previous_path": "",
+        "status": "added"
+      },
+      {
+        "blob_sha": "dba79f0954fb2f6288ad732b56c6b557c426ab59",
+        "path": "scripts/hunter_writer_provenance.py",
+        "previous_path": "",
+        "status": "added"
+      },
+      {
+        "blob_sha": "99df57e377f72dfe1c24c25fa0c82c564deb8874",
+        "path": "scripts/install_hunter_git_hooks.py",
+        "previous_path": "",
+        "status": "added"
+      },
+      {
+        "blob_sha": "fd4eb29c9d6ec9b77255df012eefaa3a4bd34418",
+        "path": "scripts/install_opencode_runtime.py",
+        "previous_path": "",
+        "status": "added"
+      },
+      {
+        "blob_sha": "4c7be01f9209826b75773fa7be0d590609cba716",
+        "path": "scripts/issue_agent_edge_transport.py",
+        "previous_path": "",
+        "status": "added"
+      },
+      {
+        "blob_sha": "5d0894197e87e05d683fb9d2a21b496c54086e74",
+        "path": "scripts/provision_source_handling_issue_authority.py",
+        "previous_path": "",
+        "status": "added"
+      },
+      {
+        "blob_sha": "b5c0838c68986cb263ff8792a678ebd150e1ad7a",
+        "path": "scripts/railway_issuer_startup.py",
+        "previous_path": "",
+        "status": "added"
+      },
+      {
+        "blob_sha": "42a04c9494738c6e3b11deae7031e9fb62aedd42",
+        "path": "scripts/railway_provisioner_startup.py",
+        "previous_path": "",
+        "status": "added"
+      },
+      {
+        "blob_sha": "2e1dc2083756bb8b072bedf807d5c34bebaa3458",
+        "path": "scripts/railway_startup.py",
+        "previous_path": "",
+        "status": "added"
+      },
+      {
+        "blob_sha": "1a7e60f89ebc98f535ed1a5b7a3f74cb02ec7a44",
+        "path": "src/hunter/automation/agent_fallback.py",
+        "previous_path": "",
+        "status": "added"
+      },
+      {
+        "blob_sha": "9d2c18872754bf2ddb860fe9fefe93dd9e943248",
+        "path": "src/hunter/automation/agent_fallback_runtime.py",
+        "previous_path": "",
+        "status": "added"
+      },
+      {
+        "blob_sha": "c739a83e2f43fcbe395031b2dfcea9800aef4f9f",
+        "path": "src/hunter/automation/agent_targeted_validation.py",
+        "previous_path": "",
+        "status": "added"
+      },
+      {
+        "blob_sha": "0ecfecedaaed8450ff410dcf1fbe1df3f1b187bf",
+        "path": "src/hunter/automation/environment_capabilities.py",
+        "previous_path": "",
+        "status": "added"
+      },
+      {
+        "blob_sha": "63e237f21e66926caa58af880eea8337244c1e0a",
+        "path": "src/hunter/automation/issue_agent_authorize.py",
+        "previous_path": "",
+        "status": "added"
+      },
+      {
+        "blob_sha": "7c184dd1cd7d49a1a8beb65a3518eddf62b7cb67",
+        "path": "src/hunter/automation/issue_agent_control.py",
+        "previous_path": "",
+        "status": "added"
+      },
+      {
+        "blob_sha": "c51c201474df87e0fc05e12f2232df78524c6b11",
+        "path": "src/hunter/automation/issue_agent_execution.py",
+        "previous_path": "",
+        "status": "added"
+      },
+      {
+        "blob_sha": "1d05bae4647866e04497d1cff8268de3e42e3782",
+        "path": "src/hunter/automation/issue_agent_knowledge.py",
+        "previous_path": "",
+        "status": "added"
+      },
+      {
+        "blob_sha": "185c19554a8dd8d61bec2a369ce96240e3d78900",
+        "path": "src/hunter/automation/issue_agent_remediation.py",
+        "previous_path": "",
+        "status": "added"
+      },
+      {
+        "blob_sha": "372cbb59765c2b3afa496cf2275cc953c9f6154a",
+        "path": "src/hunter/automation/issue_agent_replacement_executor.py",
+        "previous_path": "",
+        "status": "added"
+      },
+      {
+        "blob_sha": "e722e75c9bea5858ec351859a3e289159cefd36f",
+        "path": "src/hunter/automation/issue_agent_roles.py",
+        "previous_path": "",
+        "status": "added"
+      },
+      {
+        "blob_sha": "94ad28477c5a545a54d8ec0bd9a7dca20775a06e",
+        "path": "src/hunter/automation/issue_agent_source_handling_store.py",
+        "previous_path": "",
+        "status": "added"
+      },
+      {
+        "blob_sha": "ad6b813bdf20eea42e54894bd9cfa699b03ccae3",
+        "path": "src/hunter/automation/issue_agent_state.py",
+        "previous_path": "",
+        "status": "added"
+      },
+      {
+        "blob_sha": "7f36231e13ee0fe1f6b2e3ec54a5a67eec5929e3",
+        "path": "src/hunter/automation/issue_agent_transport.py",
+        "previous_path": "",
+        "status": "added"
+      },
+      {
+        "blob_sha": "25202104510d233ead37c536f8bf50515317ce8a",
+        "path": "src/hunter/automation/issue_agent_workspace.py",
+        "previous_path": "",
+        "status": "added"
+      },
+      {
+        "blob_sha": "f7e1accf7110256f4f645823ffc6c1f7d741cbe0",
+        "path": "src/hunter/automation/n8n.py",
+        "previous_path": "",
+        "status": "added"
+      },
+      {
+        "blob_sha": "9db8e29155f87fe8a2239faa82c7da2f1ad15ed7",
+        "path": "src/hunter/automation/n8n_canary.py",
+        "previous_path": "",
+        "status": "added"
+      },
+      {
+        "blob_sha": "c9ea111e72ab6213f97485093db15549e21bcc49",
+        "path": "src/hunter/automation/n8n_handoff.py",
+        "previous_path": "",
+        "status": "added"
+      },
+      {
+        "blob_sha": "0a21384b167591cc2b8c0ef1da6cb1365f0aca6f",
+        "path": "src/hunter/automation/opencode_provider_runtime.py",
+        "previous_path": "",
+        "status": "added"
+      },
+      {
+        "blob_sha": "04e74e58fbfd3ce60fd1d87afb3b3f89fc63fd8c",
+        "path": "src/hunter/automation/opencode_provider_self_check.py",
+        "previous_path": "",
+        "status": "added"
+      },
+      {
+        "blob_sha": "4b7bfd7d41a4ab4e225ec18facadc6b3ac1ade89",
+        "path": "src/hunter/automation/railway_opencode_permission_sandbox.py",
+        "previous_path": "",
+        "status": "added"
+      },
+      {
+        "blob_sha": "625710e5b7a1dd662c791ddbc9914b87523d9a57",
+        "path": "src/hunter/automation/retired_issue_agent_authority.py",
+        "previous_path": "",
+        "status": "added"
+      },
+      {
+        "blob_sha": "2b9f8c6e02a83704ff741f74fd2c94c1fadf118d",
+        "path": "src/hunter/evidence_assembly/command.py",
+        "previous_path": "",
+        "status": "added"
+      },
+      {
+        "blob_sha": "ec9c64782924e9347832de8eba2c74b0a74f5c22",
+        "path": "src/hunter/evidence_assembly/composition.py",
+        "previous_path": "",
+        "status": "added"
+      },
+      {
+        "blob_sha": "c17f4cc70c45fae4911e013d8a301870e420fd3a",
+        "path": "src/hunter/evidence_assembly/semantics.py",
+        "previous_path": "",
+        "status": "added"
+      },
+      {
+        "blob_sha": "e9ace2ad2e1e5116296faf9e90b75b53738b5a9d",
+        "path": "src/hunter/evidence_intelligence/canonical_knowledge_integration.py",
+        "previous_path": "",
+        "status": "added"
+      },
+      {
+        "blob_sha": "8c636246478f2f334a92e954cc73d2dab8a7a3af",
+        "path": "src/hunter/evidence_intelligence/controlled_learning_integration.py",
+        "previous_path": "",
+        "status": "added"
+      },
+      {
+        "blob_sha": "dbbefa0d3633c11aa3f95ffbfdc8a66a3d2e23ab",
+        "path": "src/hunter/evidence_intelligence/engineering_context_authority.py",
+        "previous_path": "",
+        "status": "added"
+      },
+      {
+        "blob_sha": "3baebc4f016e30b0397cef85ce7f9700e09fc753",
+        "path": "src/hunter/evidence_intelligence/engineering_task_ingress.py",
+        "previous_path": "",
+        "status": "added"
+      },
+      {
+        "blob_sha": "e074b44ebf2bd981ad8eb39cba2e1a535c02fa8b",
+        "path": "src/hunter/evidence_intelligence/full_history_defect_scan.py",
+        "previous_path": "",
+        "status": "added"
+      },
+      {
+        "blob_sha": "6c6dbe90613863decb01ba8793b77eaaafb3f315",
+        "path": "src/hunter/evidence_intelligence/historical_evidence_adjudication.py",
+        "previous_path": "",
+        "status": "added"
+      },
+      {
+        "blob_sha": "3533723c95d0fddd4724c69e7cb43a54ea125d48",
+        "path": "src/hunter/evidence_intelligence/historical_evidence_reconstruction.py",
+        "previous_path": "",
+        "status": "added"
+      },
+      {
+        "blob_sha": "57aebe1c19cde866dcf4a0e80b36d93f63889565",
+        "path": "src/hunter/evidence_intelligence/incremental_knowledge_learning.py",
+        "previous_path": "",
+        "status": "added"
+      },
+      {
+        "blob_sha": "d8492e4fd23a5e5f6c7f80ec689d12c44cf1090c",
+        "path": "src/hunter/evidence_intelligence/knowledge_event_ingestion.py",
+        "previous_path": "",
+        "status": "added"
+      },
+      {
+        "blob_sha": "70f44c2f21c2512a74440c7b3843e7ba5d944d42",
+        "path": "src/hunter/evidence_intelligence/knowledge_extraction_authority.py",
+        "previous_path": "",
+        "status": "added"
+      },
+      {
+        "blob_sha": "482b8a42099da489b39d23c7094a06463d946b18",
+        "path": "src/hunter/evidence_intelligence/model_adapter.py",
+        "previous_path": "",
+        "status": "added"
+      },
+      {
+        "blob_sha": "1959e2e7516aba06bd358b0502f25fd6a1697cc1",
+        "path": "src/hunter/evidence_intelligence/model_adapter_persistence.py",
+        "previous_path": "",
+        "status": "added"
+      },
+      {
+        "blob_sha": "382d9076fa1fe7b036d148dffc1157584f02e3fb",
+        "path": "src/hunter/evidence_intelligence/model_adapter_transport.py",
+        "previous_path": "",
+        "status": "added"
+      },
+      {
+        "blob_sha": "1869b49e1defc843693f4ca75c64e937780a28f2",
+        "path": "src/hunter/evidence_intelligence/pre_model.py",
+        "previous_path": "",
+        "status": "added"
+      },
+      {
+        "blob_sha": "3572743d66a2cf669d0876d769442543519e9c88",
+        "path": "src/hunter/evidence_intelligence/pre_model_orchestration.py",
+        "previous_path": "",
+        "status": "added"
+      },
+      {
+        "blob_sha": "ee13d35d23e6c9c00af921e852f717b815ef14e0",
+        "path": "src/hunter/evidence_intelligence/pre_model_persistence.py",
+        "previous_path": "",
+        "status": "added"
+      },
+      {
+        "blob_sha": "d0ba4cc539319faa12369fce14372785de8b0359",
+        "path": "src/hunter/evidence_intelligence/pre_model_repository.py",
+        "previous_path": "",
+        "status": "added"
+      },
+      {
+        "blob_sha": "ce87dfdc79fc8361c84c2817e5e9cab59ee4c828",
+        "path": "src/hunter/evidence_intelligence/response_validator.py",
+        "previous_path": "",
+        "status": "added"
+      },
+      {
+        "blob_sha": "7e6b96d1f335ea05344bc0da4c7266eeb5ab3db8",
+        "path": "src/hunter/evidence_intelligence/response_validator_corrections.py",
+        "previous_path": "",
+        "status": "added"
+      },
+      {
+        "blob_sha": "c1ad29f2a47787e6a0584ddd3e9a3dd26e818ca2",
+        "path": "src/hunter/evidence_intelligence/response_validator_persistence.py",
+        "previous_path": "",
+        "status": "added"
+      },
+      {
+        "blob_sha": "9f3d6e89deb29ae7a160bfdb7e7e382ae9a5bca2",
+        "path": "src/hunter/evidence_intelligence/response_validator_terminal_persistence.py",
+        "previous_path": "",
+        "status": "added"
+      },
+      {
+        "blob_sha": "8fd3700f550428e180e7c6c371c7fb846eb346b4",
+        "path": "src/hunter/evidence_intelligence/semantic_invariant_extraction.py",
+        "previous_path": "",
+        "status": "added"
+      },
+      {
+        "blob_sha": "bdcaa6847966729257accfcf1cc9a74e62975746",
+        "path": "src/hunter/evidence_intelligence/smart_prompt_machine.py",
+        "previous_path": "",
+        "status": "added"
+      },
+      {
+        "blob_sha": "8c93df8acb8e1874d32288b30e32c6ecabbbe7ae",
+        "path": "src/hunter/evidence_intelligence/smart_prompt_routing.py",
+        "previous_path": "",
+        "status": "added"
+      },
+      {
+        "blob_sha": "ba2418ee49e69db788f19ca2b18f3f99704be201",
+        "path": "src/hunter/evidence_intelligence/smart_prompt_transport.py",
+        "previous_path": "",
+        "status": "added"
+      },
+      {
+        "blob_sha": "8d5777a9421f330cfde04e757be196d7f0613bd2",
+        "path": "src/hunter/evidence_intelligence/source_handling.py",
+        "previous_path": "",
+        "status": "added"
+      },
+      {
+        "blob_sha": "1870c36a83c1300fa16f67fe0e712bd252ee0ac6",
+        "path": "src/hunter/evidence_intelligence/source_handling_commit_observer.py",
+        "previous_path": "",
+        "status": "added"
+      },
+      {
+        "blob_sha": "a6501f2af92c1f79307960b36854020b455e31ff",
+        "path": "src/hunter/evidence_intelligence/source_handling_persistence.py",
+        "previous_path": "",
+        "status": "added"
+      },
+      {
+        "blob_sha": "4bbc133aa096fca0b2bbb91ab777e326cc654fe6",
+        "path": "src/hunter/evidence_intelligence/source_handling_provenance.py",
+        "previous_path": "",
+        "status": "added"
+      },
+      {
+        "blob_sha": "e57d4b64773013b292aae7ec9aef55ac0b7d5b5f",
+        "path": "src/hunter/evidence_intelligence/transient_worker.py",
+        "previous_path": "",
+        "status": "added"
+      },
+      {
+        "blob_sha": "771dd464a2a94daf7ad1eb5ff7019e0d0c9f8584",
+        "path": "src/hunter/evidence_semantic_inputs/__init__.py",
+        "previous_path": "",
+        "status": "added"
+      },
+      {
+        "blob_sha": "46c508bd013b79631542b6c392eab85d3c88de2a",
+        "path": "src/hunter/governance_cutover/__init__.py",
+        "previous_path": "",
+        "status": "added"
+      },
+      {
+        "blob_sha": "34eaef69dedb82466e7844d7d74928d971eda42a",
+        "path": "src/hunter/governance_cutover/adapters.py",
+        "previous_path": "",
+        "status": "added"
+      },
+      {
+        "blob_sha": "c18839ca490894dfd5a4ef37b953070e6e979b7f",
+        "path": "src/hunter/governance_cutover/authority.py",
+        "previous_path": "",
+        "status": "added"
+      },
+      {
+        "blob_sha": "4df9d63f3de549be1b195446d2c77b92185f8cd8",
+        "path": "src/hunter/governance_cutover/shadow.py",
+        "previous_path": "",
+        "status": "added"
+      },
+      {
+        "blob_sha": "b2438bca331992ffbb368f2a0b95c290589db647",
+        "path": "src/hunter/task_scope.py",
+        "previous_path": "",
+        "status": "added"
+      },
+      {
+        "blob_sha": "c326b7142c4c115fe0c3773c2ab4321336f4244d",
+        "path": "tests/evidence_pre_model_source_handling_fixture.py",
+        "previous_path": "",
+        "status": "added"
+      },
+      {
+        "blob_sha": "9d6cc0fbff096bd5435d6cba950387b160a907b7",
+        "path": "tests/fixtures/coderabbit_exact_pair_review.json",
+        "previous_path": "",
+        "status": "added"
+      },
+      {
+        "blob_sha": "ba942a869a5723f09a55d028ecd25f33170e74da",
+        "path": "tests/fixtures/evidence_intelligence/pre_f9_build_record_v1.json",
+        "previous_path": "",
+        "status": "added"
+      },
+      {
+        "blob_sha": "2318d5aa6c509c347789f09ba3848a0621f5177f",
+        "path": "tests/fixtures/governance/issue_276_preflight.json",
+        "previous_path": "",
+        "status": "added"
+      },
+      {
+        "blob_sha": "d5f379c44e8e4f76a2b5156a38ec670df8185e22",
+        "path": "tests/fixtures/governance_cutover/accepted_phase4_contract.json",
+        "previous_path": "",
+        "status": "added"
+      },
+      {
+        "blob_sha": "7f1ede16bb6870ab187d5607489b67bfa0df7252",
+        "path": "tests/fixtures/reviewer_benchmark_cases.json",
+        "previous_path": "",
+        "status": "added"
+      },
+      {
+        "blob_sha": "d3b72cb7ff56685f452142eecaa2b56c9b5da564",
+        "path": "tests/fixtures/source_handling/authorization_rule_v1.json",
+        "previous_path": "",
+        "status": "added"
+      },
+      {
+        "blob_sha": "eb66bc06d5833d131f52f1a73ae9aa79b87bbf9d",
+        "path": "tests/hunter_readiness_harness.py",
+        "previous_path": "",
+        "status": "added"
+      },
+      {
+        "blob_sha": "f712bf2152f7d5f08562599398dd44365e5a39ff",
+        "path": "tests/issue_agent_wire.py",
+        "previous_path": "",
+        "status": "added"
+      },
+      {
+        "blob_sha": "468334d5b1fd7ba52cc1ef3c6b7d2914254b0f99",
+        "path": "tests/model_adapter_fixture.py",
+        "previous_path": "",
+        "status": "added"
+      },
+      {
+        "blob_sha": "a954c5cffc9946ab407c0f6e6517949c1d1d1b4a",
+        "path": "tests/response_validator_phase_b_fixture.py",
+        "previous_path": "",
+        "status": "added"
+      },
+      {
+        "blob_sha": "be15ffb5ba072f417c5210b2bfa8dd60840627c6",
+        "path": "tests/source_handling_runtime_harness.py",
+        "previous_path": "",
+        "status": "added"
+      },
+      {
+        "blob_sha": "4abf3f8f2dabd4b921411f64f0fc4545e817315b",
+        "path": "tests/test_agent_fallback_dispatcher.py",
+        "previous_path": "",
+        "status": "added"
+      },
+      {
+        "blob_sha": "f6b6a7d97578eb5567ab5ef5ad07eaf4f10a7ca2",
+        "path": "tests/test_agent_fallback_environment_authority.py",
+        "previous_path": "",
+        "status": "added"
+      },
+      {
+        "blob_sha": "5fcdc5f189cb39f7bc660998cc185e999c76b636",
+        "path": "tests/test_agent_fallback_runtime.py",
+        "previous_path": "",
+        "status": "added"
+      },
+      {
+        "blob_sha": "c80e5e4f14a620168a3bf799ae6e0b5a2470c2b9",
+        "path": "tests/test_agent_targeted_validation.py",
+        "previous_path": "",
+        "status": "added"
+      },
+      {
+        "blob_sha": "36d949b5d2090e503526cada95177885c340ece3",
+        "path": "tests/test_canonical_knowledge_integration.py",
+        "previous_path": "",
+        "status": "added"
+      },
+      {
+        "blob_sha": "4f15ad56d90139e379981df2ce131dcd67e11279",
+        "path": "tests/test_canonicalize_learning_cli.py",
+        "previous_path": "",
+        "status": "added"
+      },
+      {
+        "blob_sha": "a5e60fcf917fc7d3424c6ec5f7f64ea5b8c1cbfd",
+        "path": "tests/test_code_write_policy.py",
+        "previous_path": "",
+        "status": "added"
+      },
+      {
+        "blob_sha": "30fb0ff0581edbf7f23384af2c255c7d696e5808",
+        "path": "tests/test_codeql_bridge_resilience.py",
+        "previous_path": "",
+        "status": "added"
+      },
+      {
+        "blob_sha": "ae890daca542bd0a069780c0e2a8170a0d47a546",
+        "path": "tests/test_connector_admission_channel.py",
+        "previous_path": "",
+        "status": "added"
+      },
+      {
+        "blob_sha": "79fd69b0b556b95e57b14917a55743ded8757bd3",
+        "path": "tests/test_connector_write_ingress.py",
+        "previous_path": "",
+        "status": "added"
+      },
+      {
+        "blob_sha": "6af5d9e35cbab38cdfb5a9c59130f7611ebdd78e",
+        "path": "tests/test_controlled_learning_integration.py",
+        "previous_path": "",
+        "status": "added"
+      },
+      {
+        "blob_sha": "d556178c7fdf484553c01a5b19556dda807341a9",
+        "path": "tests/test_copilot_authority_contract.py",
+        "previous_path": "",
+        "status": "added"
+      },
+      {
+        "blob_sha": "a186cb392086eacf1c5171fcd5f8c705d4c9e730",
+        "path": "tests/test_engineering_context_authority.py",
+        "previous_path": "",
+        "status": "added"
+      },
+      {
+        "blob_sha": "b10fb766da40f53c7c059cc23ba5925909d23726",
+        "path": "tests/test_engineering_task_ingress.py",
+        "previous_path": "",
+        "status": "added"
+      },
+      {
+        "blob_sha": "c4b580ff212c272a7d2a8319e5012993541ee7d2",
+        "path": "tests/test_evidence_assembly_authority_v1.py",
+        "previous_path": "",
+        "status": "added"
+      },
+      {
+        "blob_sha": "5301862801780f64bd2c7104416fd060fdf4ebc4",
+        "path": "tests/test_evidence_assembly_production_constructibility.py",
+        "previous_path": "",
+        "status": "added"
+      },
+      {
+        "blob_sha": "e157a287919950dbadb54a8fe548f7d0d2eafba9",
+        "path": "tests/test_evidence_assembly_production_key_contract.py",
+        "previous_path": "",
+        "status": "added"
+      },
+      {
+        "blob_sha": "2e96b06738538aa67736154e0e23dd65233b0b26",
+        "path": "tests/test_evidence_assembly_status_read_only_regression.py",
+        "previous_path": "",
+        "status": "added"
+      },
+      {
+        "blob_sha": "c0e14049d8d711b6f320077c2bedd3bd458cc648",
+        "path": "tests/test_evidence_intelligence_pre_model.py",
+        "previous_path": "",
+        "status": "added"
+      },
+      {
+        "blob_sha": "3800f5938adab0ae8f1374dd1a9ef2b6f06bdfae",
+        "path": "tests/test_evidence_intelligence_pre_model_orchestration.py",
+        "previous_path": "",
+        "status": "added"
+      },
+      {
+        "blob_sha": "15568ac0f3a9b3c65aebe0b339c2122860cb930e",
+        "path": "tests/test_evidence_intelligence_pre_model_persistence.py",
+        "previous_path": "",
+        "status": "added"
+      },
+      {
+        "blob_sha": "6aaf0b0bce31f505618a90b0cb1aac0e3ad37daa",
+        "path": "tests/test_evidence_intelligence_pre_model_repository.py",
+        "previous_path": "",
+        "status": "added"
+      },
+      {
+        "blob_sha": "de98a6a97a84a18acd971aa1885d76d9d418474c",
+        "path": "tests/test_evidence_intelligence_source_handling_f9_contract.py",
+        "previous_path": "",
+        "status": "added"
+      },
+      {
+        "blob_sha": "4b78b14737e11d0f7728e16301fa74b9ec3723b6",
+        "path": "tests/test_evidence_semantics_authority.py",
+        "previous_path": "",
+        "status": "added"
+      },
+      {
+        "blob_sha": "8a556271bc36925f876022463eedcfbf5f74b6d3",
+        "path": "tests/test_evidence_shape_registry_authority.py",
+        "previous_path": "",
+        "status": "added"
+      },
+      {
+        "blob_sha": "7d789f4e2d88bf97025d783dd8f93718a079d761",
+        "path": "tests/test_exact_head_codex_clear_adoption.py",
+        "previous_path": "",
+        "status": "added"
+      },
+      {
+        "blob_sha": "592503c41d71a3a46bcf934ba51f8e0f83905d5a",
+        "path": "tests/test_exact_head_review_authority.py",
+        "previous_path": "",
+        "status": "added"
+      },
+      {
+        "blob_sha": "d1bfc9969ab39ae88925c573a2c7ba0b4850a702",
+        "path": "tests/test_full_history_defect_scan.py",
+        "previous_path": "",
+        "status": "added"
+      },
+      {
+        "blob_sha": "a8ddca283b8655718de2fb038f95bd070d87471d",
+        "path": "tests/test_governance_cutover_adapters.py",
+        "previous_path": "",
+        "status": "added"
+      },
+      {
+        "blob_sha": "fcf1454be71cdd7119ee377714e00de4665ea14d",
+        "path": "tests/test_governance_cutover_authority.py",
+        "previous_path": "",
+        "status": "added"
+      },
+      {
+        "blob_sha": "682cb9969f9b37e5910fefe3eae307cd6b628ecd",
+        "path": "tests/test_governance_cutover_lab_parity.py",
+        "previous_path": "",
+        "status": "added"
+      },
+      {
+        "blob_sha": "35bb5447e45415353abf0a5d3e8c63f9b7013894",
+        "path": "tests/test_governance_cutover_preflight.py",
+        "previous_path": "",
+        "status": "added"
+      },
+      {
+        "blob_sha": "b38d8b791d205d6fd8cc932568b7cfee38d74268",
+        "path": "tests/test_governance_cutover_shadow.py",
+        "previous_path": "",
+        "status": "added"
+      },
+      {
+        "blob_sha": "88d910c5b94b389fa0e17f20ed932295f0c3ca52",
+        "path": "tests/test_governance_cutover_shadow_config.py",
+        "previous_path": "",
+        "status": "added"
+      },
+      {
+        "blob_sha": "ea713d22e6eb03181802c9d2b65aa123952f3621",
+        "path": "tests/test_governance_gate_consolidation.py",
+        "previous_path": "",
+        "status": "added"
+      },
+      {
+        "blob_sha": "ef027a56b0518266309926410435910c165c361a",
+        "path": "tests/test_governance_maintenance_ingress.py",
+        "previous_path": "",
+        "status": "added"
+      },
+      {
+        "blob_sha": "6adf347135d28ba12b16046da8de1f61b3d6674a",
+        "path": "tests/test_historical_defect_backfill.py",
+        "previous_path": "",
+        "status": "added"
+      },
+      {
+        "blob_sha": "bf7be0ed635e5fb40d044d1945e35fcd0b7e6a3f",
+        "path": "tests/test_historical_evidence_adjudication.py",
+        "previous_path": "",
+        "status": "added"
+      },
+      {
+        "blob_sha": "8352d625bfa79fad5713f6211a176b86d5a29c0f",
+        "path": "tests/test_historical_evidence_reconstruction.py",
+        "previous_path": "",
+        "status": "added"
+      },
+      {
+        "blob_sha": "d66a35e1fc916942c0c9e95eeb4a72c820978367",
+        "path": "tests/test_hunter_architecture_index_preflight.py",
+        "previous_path": "",
+        "status": "added"
+      },
+      {
+        "blob_sha": "7c7b2e26206f5c7ff217ad177737628e17d45423",
+        "path": "tests/test_hunter_artifact_preflight.py",
+        "previous_path": "",
+        "status": "added"
+      },
+      {
+        "blob_sha": "0c9e3578f20ba83ac3a9282c858b438fc907523c",
+        "path": "tests/test_hunter_artifact_preflight_adr_baseline.py",
+        "previous_path": "",
+        "status": "added"
+      },
+      {
+        "blob_sha": "a20fca9cdb82c493c530055476ff8af7bd8a57f8",
+        "path": "tests/test_hunter_artifact_preflight_cardinality.py",
+        "previous_path": "",
+        "status": "added"
+      },
+      {
+        "blob_sha": "d162c3b3c09537943bfaaf7350ea657315a733a5",
+        "path": "tests/test_hunter_artifact_preflight_fences.py",
+        "previous_path": "",
+        "status": "added"
+      },
+      {
+        "blob_sha": "52d01610650c097a131ba02afede1558ba972e06",
+        "path": "tests/test_hunter_artifact_preflight_html_blocks.py",
+        "previous_path": "",
+        "status": "added"
+      },
+      {
+        "blob_sha": "a8a553d10351875d7381b1def0759946c7a6a0bf",
+        "path": "tests/test_hunter_artifact_preflight_scope.py",
+        "previous_path": "",
+        "status": "added"
+      },
+      {
+        "blob_sha": "803632d560d530a9622f32ca6bf9d1631e44bfb1",
+        "path": "tests/test_hunter_artifact_preflight_semantics.py",
+        "previous_path": "",
+        "status": "added"
+      },
+      {
+        "blob_sha": "7596523e7ce4309a68bd7f0a87afc4d6332f12c7",
+        "path": "tests/test_hunter_candidate_admission.py",
+        "previous_path": "",
+        "status": "added"
+      },
+      {
+        "blob_sha": "719a3fc2e667e0b7fbfa188bc1d579433d1c6fcf",
+        "path": "tests/test_hunter_canonicalization_candidate_pr.py",
+        "previous_path": "",
+        "status": "added"
+      },
+      {
+        "blob_sha": "7cf7e6ca43a53b95eae367297dbd0160ecf0d5df",
+        "path": "tests/test_hunter_controller_admission.py",
+        "previous_path": "",
+        "status": "added"
+      },
+      {
+        "blob_sha": "3d8db50e7fb981f295d139756ee5b272f0e619ad",
+        "path": "tests/test_hunter_defect_prevention_preflight.py",
+        "previous_path": "",
+        "status": "added"
+      },
+      {
+        "blob_sha": "196419fff4b0f4c29aee9495ff98feada77e9a9f",
+        "path": "tests/test_hunter_github_transport.py",
+        "previous_path": "",
+        "status": "added"
+      },
+      {
+        "blob_sha": "2961853f1f223beeb718757c7d566f2fd7ae4ea4",
+        "path": "tests/test_hunter_governance_cleanup.py",
+        "previous_path": "",
+        "status": "added"
+      },
+      {
+        "blob_sha": "46a3d4b60885e06a56666530ff25a192538dad95",
+        "path": "tests/test_hunter_governance_context.py",
+        "previous_path": "",
+        "status": "added"
+      },
+      {
+        "blob_sha": "a1ca46a0f67a22e6557f5d167a38315d4f2de7ed",
+        "path": "tests/test_hunter_governance_dependency_identity.py",
+        "previous_path": "",
+        "status": "added"
+      },
+      {
+        "blob_sha": "ac27c929ff709449f338781368ba52a16927901c",
+        "path": "tests/test_hunter_governance_finding_classification.py",
+        "previous_path": "",
+        "status": "added"
+      },
+      {
+        "blob_sha": "5a7daf36ddc582bfb1f8cf624307afd8948223d2",
+        "path": "tests/test_hunter_governance_no_llm_dependency.py",
+        "previous_path": "",
+        "status": "added"
+      },
+      {
+        "blob_sha": "fd8c91c649ebd73af9140beebe7c64707cd3e194",
+        "path": "tests/test_hunter_governance_review.py",
+        "previous_path": "",
+        "status": "added"
+      },
+      {
+        "blob_sha": "e4aad94d72188a253ebbf0a3aa40d55d3763241d",
+        "path": "tests/test_hunter_governance_review_bootstrap.py",
+        "previous_path": "",
+        "status": "added"
+      },
+      {
+        "blob_sha": "d1ae1f947131304932fc12254a3cb545e2335991",
+        "path": "tests/test_hunter_governance_review_v2.py",
+        "previous_path": "",
+        "status": "added"
+      },
+      {
+        "blob_sha": "b0bb81d754524af70f7887885df2689e8b65ecb8",
+        "path": "tests/test_hunter_governance_revision.py",
+        "previous_path": "",
+        "status": "added"
+      },
+      {
+        "blob_sha": "2830a95359ab3ac3681881b253d1dffc281664e0",
+        "path": "tests/test_hunter_governance_shadow.py",
+        "previous_path": "",
+        "status": "added"
+      },
+      {
+        "blob_sha": "b392bbd23efc79433e8da6c105f6c29978a37bf8",
+        "path": "tests/test_hunter_knowledge_learning_workflow.py",
+        "previous_path": "",
+        "status": "added"
+      },
+      {
+        "blob_sha": "7235b9df56a353fdcabfb2b14a90f5060c1fc0a0",
+        "path": "tests/test_hunter_local_reviewer.py",
+        "previous_path": "",
+        "status": "added"
+      },
+      {
+        "blob_sha": "e59ae8726ba9452bf74026b23f4eb7e0807026c9",
+        "path": "tests/test_hunter_local_reviewer_bootstrap.py",
+        "previous_path": "",
+        "status": "added"
+      },
+      {
+        "blob_sha": "41b58369c40a4e9492d49e2b1e1f255c904ef6bd",
+        "path": "tests/test_hunter_merge_readiness.py",
+        "previous_path": "",
+        "status": "added"
+      },
+      {
+        "blob_sha": "ba99f1b70437752802fc1fec8a505f9189d9bdd4",
+        "path": "tests/test_hunter_merge_readiness_bot_comment_policy.py",
+        "previous_path": "",
+        "status": "added"
+      },
+      {
+        "blob_sha": "25a9ed239039226b52e0da46b80a1cb23ecb1746",
+        "path": "tests/test_hunter_merge_readiness_convergence.py",
+        "previous_path": "",
+        "status": "added"
+      },
+      {
+        "blob_sha": "0c61c8b210106510180022fc5dd78df3274fe022",
+        "path": "tests/test_hunter_merge_readiness_event_time.py",
+        "previous_path": "",
+        "status": "added"
+      },
+      {
+        "blob_sha": "7f820324ea6bfb3d5c1f9728f1915e96ff55369c",
+        "path": "tests/test_hunter_merge_readiness_singleton_association.py",
+        "previous_path": "",
+        "status": "added"
+      },
+      {
+        "blob_sha": "56084d8fe6fdd08f7e152f348bbb8d3a6fe61579",
+        "path": "tests/test_hunter_merge_readiness_v2.py",
+        "previous_path": "",
+        "status": "added"
+      },
+      {
+        "blob_sha": "1dd779dc29bfb5f964d0b8985122771936720dc6",
+        "path": "tests/test_hunter_pr_preflight.py",
+        "previous_path": "",
+        "status": "added"
+      },
+      {
+        "blob_sha": "edcad7d726b8d26bd531af46a1c79b8f0fa144a9",
+        "path": "tests/test_hunter_pre_push.py",
+        "previous_path": "",
+        "status": "added"
+      },
+      {
+        "blob_sha": "7a29765c5d2390ae7c2b60a0012cf2973394c052",
+        "path": "tests/test_hunter_review_orchestrator.py",
+        "previous_path": "",
+        "status": "added"
+      },
+      {
+        "blob_sha": "4d05b9e73d4f3dee12b059f3c1a23714846a6932",
+        "path": "tests/test_hunter_reviewer_benchmark.py",
+        "previous_path": "",
+        "status": "added"
+      },
+      {
+        "blob_sha": "6c3e3706debfbca485ec34937b96e7e1f72c186b",
+        "path": "tests/test_hunter_reviewer_collector.py",
+        "previous_path": "",
+        "status": "added"
+      },
+      {
+        "blob_sha": "f3b79b5d2616c2b1ed83179224ddf846049da9a3",
+        "path": "tests/test_hunter_reviewer_disposition.py",
+        "previous_path": "",
+        "status": "added"
+      },
+      {
+        "blob_sha": "e93214ba02f88c12155f26308301a136c3d27a8c",
+        "path": "tests/test_hunter_trusted_orchestrator_replay.py",
+        "previous_path": "",
+        "status": "added"
+      },
+      {
+        "blob_sha": "661884dcac64c640f204e99e1bfbbe323332e0be",
+        "path": "tests/test_hunter_workflow_state.py",
+        "previous_path": "",
+        "status": "added"
+      },
+      {
+        "blob_sha": "443c8911fce3b09f1d03341591fbfceee7dc7bb1",
+        "path": "tests/test_incremental_knowledge_cli.py",
+        "previous_path": "",
+        "status": "added"
+      },
+      {
+        "blob_sha": "9839fa2ae57d587a994e04a0b39654c37fb94176",
+        "path": "tests/test_incremental_knowledge_learning.py",
+        "previous_path": "",
+        "status": "added"
+      },
+      {
+        "blob_sha": "bc9a47af6f752e94f7cc98c2e11dd1a1fc9fa5de",
+        "path": "tests/test_install_opencode_runtime.py",
+        "previous_path": "",
+        "status": "added"
+      },
+      {
+        "blob_sha": "638bcd6d77ebf8711a174af19bce64c2e225d74c",
+        "path": "tests/test_issue_412_prevention_gate.py",
+        "previous_path": "",
+        "status": "added"
+      },
+      {
+        "blob_sha": "692974fa7e691fb8f68dd1f21270e4f030add22a",
+        "path": "tests/test_issue_417_governance_waiting_state.py",
+        "previous_path": "",
+        "status": "added"
+      },
+      {
+        "blob_sha": "596eb7f3c16213be9523585e1fd841389925b6bb",
+        "path": "tests/test_issue_419_trusted_parallel_lane.py",
+        "previous_path": "",
+        "status": "added"
+      },
+      {
+        "blob_sha": "3e8a807f0997aea25935f5e1058a50be2d01b477",
+        "path": "tests/test_issue_496_prevention_loop_binding.py",
+        "previous_path": "",
+        "status": "added"
+      },
+      {
+        "blob_sha": "48e2d844b28407d0eb0611cf9478b66567e57c73",
+        "path": "tests/test_issue_541_review_opportunity_cutover.py",
+        "previous_path": "",
+        "status": "added"
+      },
+      {
+        "blob_sha": "782dbcdafbdccc772b010abf2264dd8798fb9a05",
+        "path": "tests/test_issue_agent_authorize.py",
+        "previous_path": "",
+        "status": "added"
+      },
+      {
+        "blob_sha": "d2e1bd584823b42c444cebcbc46d271a2a681a95",
+        "path": "tests/test_issue_agent_candidate_pr.py",
+        "previous_path": "",
+        "status": "added"
+      },
+      {
+        "blob_sha": "d0e8add30ef0257f4dbd223014cde56f54f9b77d",
+        "path": "tests/test_issue_agent_candidate_topology.py",
+        "previous_path": "",
+        "status": "added"
+      },
+      {
+        "blob_sha": "af43608a057a86e7de86bd43d2eae0eafd2e6a1d",
+        "path": "tests/test_issue_agent_control.py",
+        "previous_path": "",
+        "status": "added"
+      },
+      {
+        "blob_sha": "2a6c915297c5e202b228dac5dca89dfa34e566c8",
+        "path": "tests/test_issue_agent_execution.py",
+        "previous_path": "",
+        "status": "added"
+      },
+      {
+        "blob_sha": "a64cb04e591063f6ba75a51982550e273508deb2",
+        "path": "tests/test_issue_agent_ingress.py",
+        "previous_path": "",
+        "status": "added"
+      },
+      {
+        "blob_sha": "21e062691a75d68eb650a8b6c533fc42c6802524",
+        "path": "tests/test_issue_agent_issuer.py",
+        "previous_path": "",
+        "status": "added"
+      },
+      {
+        "blob_sha": "ed3ba46869a3aa0451eb2322c4c29fa5044e8ded",
+        "path": "tests/test_issue_agent_knowledge.py",
+        "previous_path": "",
+        "status": "added"
+      },
+      {
+        "blob_sha": "1f3aa573a67e9d76c1c70eccc9d7ab5aad54cb32",
+        "path": "tests/test_issue_agent_lifecycle_entry.py",
+        "previous_path": "",
+        "status": "added"
+      },
+      {
+        "blob_sha": "f8de246d707cbc2845d6b5825b2c4cb2d8f6345e",
+        "path": "tests/test_issue_agent_provisioner.py",
+        "previous_path": "",
+        "status": "added"
+      },
+      {
+        "blob_sha": "ac606846be4fb68f0b0f575a26e0e818d345c90e",
+        "path": "tests/test_issue_agent_remediation.py",
+        "previous_path": "",
+        "status": "added"
+      },
+      {
+        "blob_sha": "bfb5418e1c0d9be4735fdaf943caaeeee598bcb3",
+        "path": "tests/test_issue_agent_remediation_acceptance.py",
+        "previous_path": "",
+        "status": "added"
+      },
+      {
+        "blob_sha": "87e73191faef4062cba1a28a8975b32c2b8957af",
+        "path": "tests/test_issue_agent_remediation_mutation.py",
+        "previous_path": "",
+        "status": "added"
+      },
+      {
+        "blob_sha": "6ae39313aadc939389c35eb732c87fa2fe34583c",
+        "path": "tests/test_issue_agent_remediation_promotion.py",
+        "previous_path": "",
+        "status": "added"
+      },
+      {
+        "blob_sha": "3c6c23190d5d5897d70a0edce1b211e39ee621ce",
+        "path": "tests/test_issue_agent_remediation_reconcile.py",
+        "previous_path": "",
+        "status": "added"
+      },
+      {
+        "blob_sha": "80fdb0df83fff3a48be2ba8aaff031c6e40d4cb5",
+        "path": "tests/test_issue_agent_remediation_resolution.py",
+        "previous_path": "",
+        "status": "added"
+      },
+      {
+        "blob_sha": "24c7698a6a5f45ae62b5b0bc2d5717d389d216af",
+        "path": "tests/test_issue_agent_remediation_roles.py",
+        "previous_path": "",
+        "status": "added"
+      },
+      {
+        "blob_sha": "0f7b9e98e11ce9e9579a1a5aa0a21ae693ae7c82",
+        "path": "tests/test_issue_agent_replacement_executor.py",
+        "previous_path": "",
+        "status": "added"
+      },
+      {
+        "blob_sha": "462e6530fc54cb929eb87e6dcf8e58610b6b50a8",
+        "path": "tests/test_issue_agent_roles.py",
+        "previous_path": "",
+        "status": "added"
+      },
+      {
+        "blob_sha": "68dcfcf18b3db83bb0d78069021d68b45b53105f",
+        "path": "tests/test_issue_agent_source_handling_bootstrap_entry.py",
+        "previous_path": "",
+        "status": "added"
+      },
+      {
+        "blob_sha": "50d3fce3966f2e5518ef5e81b7c8cbef54c3a50a",
+        "path": "tests/test_issue_agent_source_handling_store.py",
+        "previous_path": "",
+        "status": "added"
+      },
+      {
+        "blob_sha": "7c4c3fc043878d7633de83c839d13cc1ace82314",
+        "path": "tests/test_issue_agent_state.py",
+        "previous_path": "",
+        "status": "added"
+      },
+      {
+        "blob_sha": "070e87b836a4b4ea4b3df5f05991982a9f995933",
+        "path": "tests/test_issue_agent_transport.py",
+        "previous_path": "",
+        "status": "added"
+      },
+      {
+        "blob_sha": "4c244288e0e9f3a1e268eb33af8b60af524bcfee",
+        "path": "tests/test_issue_agent_trigger.py",
+        "previous_path": "",
+        "status": "added"
+      },
+      {
+        "blob_sha": "c50ad64a7147cb7719cb997e4c859c8c18aa5765",
+        "path": "tests/test_issue_agent_workflows.py",
+        "previous_path": "",
+        "status": "added"
+      },
+      {
+        "blob_sha": "9ae2d3d6b38133010c668b5bb5fff3f172f2fdf0",
+        "path": "tests/test_knowledge_event_ingestion.py",
+        "previous_path": "",
+        "status": "added"
+      },
+      {
+        "blob_sha": "9f309cd4a7ee67af16af5678df97e2b1892cfa09",
+        "path": "tests/test_knowledge_extraction_authority.py",
+        "previous_path": "",
+        "status": "added"
+      },
+      {
+        "blob_sha": "6b667c97e6df90d7fcdb0a3b2470ea3f6d9820fc",
+        "path": "tests/test_model_adapter_phase_a.py",
+        "previous_path": "",
+        "status": "added"
+      },
+      {
+        "blob_sha": "2a8a39ed7c86c44bba5077372ba74dec1710dc14",
+        "path": "tests/test_model_adapter_phase_b.py",
+        "previous_path": "",
+        "status": "added"
+      },
+      {
+        "blob_sha": "8274a8e4bb9204687dbf109187f9269fc1680d71",
+        "path": "tests/test_opencode_provider_publication.py",
+        "previous_path": "",
+        "status": "added"
+      },
+      {
+        "blob_sha": "1f91523a8cf8b04c21cdc707c8af9ce0a07a661d",
+        "path": "tests/test_opencode_provider_runtime_sandbox.py",
+        "previous_path": "",
+        "status": "added"
+      },
+      {
+        "blob_sha": "0f138e6738e23c37cf0ef13cf86cdc79487737ef",
+        "path": "tests/test_opencode_provider_self_check.py",
+        "previous_path": "",
+        "status": "added"
+      },
+      {
+        "blob_sha": "8e823436f70ca0f5076464c3ff9fbcf1dbe799b6",
+        "path": "tests/test_pr376_prevention_regressions.py",
+        "previous_path": "",
+        "status": "added"
+      },
+      {
+        "blob_sha": "149d35309e2bcf022bbbb27ec0601cfd15e607c8",
+        "path": "tests/test_pr473_trusted_bridge_bootstrap.py",
+        "previous_path": "",
+        "status": "added"
+      },
+      {
+        "blob_sha": "c8c22c3ef47186c2e72a9edfb618fec57bee12ce",
+        "path": "tests/test_railway_issuer_startup.py",
+        "previous_path": "",
+        "status": "added"
+      },
+      {
+        "blob_sha": "8d18caf7bc42659b2da8ff23962d1a37ee7a38c5",
+        "path": "tests/test_railway_opencode_permission_sandbox.py",
+        "previous_path": "",
+        "status": "added"
+      },
+      {
+        "blob_sha": "7912d63b6cfe7f32450a4959505c140cf978768e",
+        "path": "tests/test_railway_opencode_sandbox_selection.py",
+        "previous_path": "",
+        "status": "added"
+      },
+      {
+        "blob_sha": "b2cccba2ceb1f6b3836116db984aa469e1d56796",
+        "path": "tests/test_recent_preflight_defect_registry.py",
+        "previous_path": "",
+        "status": "added"
+      },
+      {
+        "blob_sha": "08d3190a89e7f80d2d584ec2c779c65d0d037a35",
+        "path": "tests/test_response_validator_phase_a.py",
+        "previous_path": "",
+        "status": "added"
+      },
+      {
+        "blob_sha": "9e26bb2af1f0006d95249e4de68dedb9f8f28d72",
+        "path": "tests/test_response_validator_phase_b.py",
+        "previous_path": "",
+        "status": "added"
+      },
+      {
+        "blob_sha": "972fc420064fb78c36a8e202a5895c4a60b309e6",
+        "path": "tests/test_response_validator_phase_c.py",
+        "previous_path": "",
+        "status": "added"
+      },
+      {
+        "blob_sha": "8b4fd6fe38f368342951221a223aa2a18d0dec99",
+        "path": "tests/test_response_validator_phase_d.py",
+        "previous_path": "",
+        "status": "added"
+      },
+      {
+        "blob_sha": "6c19fd063407d30b117526f548ee203573e32a7e",
+        "path": "tests/test_retired_issue_agent_authority.py",
+        "previous_path": "",
+        "status": "added"
+      },
+      {
+        "blob_sha": "f743b1c9041bb1c4036953885bce9e1cc7890f10",
+        "path": "tests/test_review_after_remediation_generation.py",
+        "previous_path": "",
+        "status": "added"
+      },
+      {
+        "blob_sha": "d53f7264bf427745673a8f99bb65825fe69bbf01",
+        "path": "tests/test_scoped_acceptance_coverage.py",
+        "previous_path": "",
+        "status": "added"
+      },
+      {
+        "blob_sha": "ade8b5a61941d613fee398c8daa7801fdb362151",
+        "path": "tests/test_smart_prompt_machine_engineering_fix.py",
+        "previous_path": "",
+        "status": "added"
+      },
+      {
+        "blob_sha": "9667f97f88b9568ef231cdce21c8cb8f25d6b45d",
+        "path": "tests/test_smart_prompt_machine_n8n.py",
+        "previous_path": "",
+        "status": "added"
+      },
+      {
+        "blob_sha": "92897207bebcdbc175614fda6069c240654326ad",
+        "path": "tests/test_smart_prompt_machine_n8n_handoff.py",
+        "previous_path": "",
+        "status": "added"
+      },
+      {
+        "blob_sha": "ce3d134edf0f5e164ed0778219f9c575f1557939",
+        "path": "tests/test_smart_prompt_machine_n8n_review_regressions.py",
+        "previous_path": "",
+        "status": "added"
+      },
+      {
+        "blob_sha": "46a604176b854ac9a8b88f9bd60179a5c186cc2e",
+        "path": "tests/test_smart_prompt_machine_phase_a.py",
+        "previous_path": "",
+        "status": "added"
+      },
+      {
+        "blob_sha": "9b6b42ffab9be9936e983f5cf415b1b82dbf44d8",
+        "path": "tests/test_smart_prompt_machine_phase_a_integration.py",
+        "previous_path": "",
+        "status": "added"
+      },
+      {
+        "blob_sha": "9d7369769b96bbafc87f8ce67577580e5e2e6f92",
+        "path": "tests/test_smart_prompt_machine_phase_b.py",
+        "previous_path": "",
+        "status": "added"
+      },
+      {
+        "blob_sha": "a36d6bd754499314de654ce9c30b37ff54ab06c8",
+        "path": "tests/test_smart_prompt_machine_phase_b_route_identity.py",
+        "previous_path": "",
+        "status": "added"
+      },
+      {
+        "blob_sha": "ba1c1aacac38735ffed8298ff5eec67b11642d20",
+        "path": "tests/test_smart_prompt_machine_phase_c.py",
+        "previous_path": "",
+        "status": "added"
+      },
+      {
+        "blob_sha": "efc177ac1b0f0aeb65bcbf90ed800a165aec4b63",
+        "path": "tests/test_smart_prompt_machine_review_regressions.py",
+        "previous_path": "",
+        "status": "added"
+      },
+      {
+        "blob_sha": "b213864014ef4e6bb8b570838a9d9fcfae722f01",
+        "path": "tests/test_sonar_learning_observations.py",
+        "previous_path": "",
+        "status": "added"
+      },
+      {
+        "blob_sha": "aa6005043e4ecb5d634e9b0cfbcf02275ac7d447",
+        "path": "tests/test_source_handling_authority_contract.py",
+        "previous_path": "",
+        "status": "added"
+      },
+      {
+        "blob_sha": "af47c6686ab67bbb81b68b60e0a56a2f1eb62446",
+        "path": "tests/test_source_handling_authority_enforcement.py",
+        "previous_path": "",
+        "status": "added"
+      },
+      {
+        "blob_sha": "94bf881d3b22e4b89a6cd85895c6d34c62ab0e55",
+        "path": "tests/test_source_handling_bootstrap.py",
+        "previous_path": "",
+        "status": "added"
+      },
+      {
+        "blob_sha": "154f2e98629f7ef59523b704d83dca6e9bcd7dd8",
+        "path": "tests/test_source_handling_canonical_seam_regressions.py",
+        "previous_path": "",
+        "status": "added"
+      },
+      {
+        "blob_sha": "4d276ec3cfb1b4ea5a62cb25bb852d72180121af",
+        "path": "tests/test_source_handling_final_review_regressions.py",
+        "previous_path": "",
+        "status": "added"
+      },
+      {
+        "blob_sha": "665f56b4a44b87a40a8bcdcae2a2711f40e1e169",
+        "path": "tests/test_source_handling_production_runtime.py",
+        "previous_path": "",
+        "status": "added"
+      },
+      {
+        "blob_sha": "4b9edeea25d5b82b0bb2af5cf4f593dc0624a467",
+        "path": "tests/test_source_handling_provenance.py",
+        "previous_path": "",
+        "status": "added"
+      },
+      {
+        "blob_sha": "8d077eaa6ac20d28e6b19c4e61c724ca503f7dfc",
+        "path": "tests/test_source_handling_provisioning.py",
+        "previous_path": "",
+        "status": "added"
+      },
+      {
+        "blob_sha": "57095cd45b2270d7cb99d3976cf410e94d9a43c4",
+        "path": "tests/test_source_handling_review_regressions.py",
+        "previous_path": "",
+        "status": "added"
+      },
+      {
+        "blob_sha": "aad0a737e5985c76925eb1a4abf4967a4b5d4a09",
+        "path": "tests/test_sources_have_no_unreachable_statements.py",
+        "previous_path": "",
+        "status": "added"
+      },
+      {
+        "blob_sha": "f46bd36945246311baec8ac1dcc319cb8d0fb581",
+        "path": "tests/test_validation_proof_reuse.py",
+        "previous_path": "",
+        "status": "added"
+      },
+      {
+        "blob_sha": "1aae51f4ab6bc4c076100fd194f24244121b3728",
+        "path": "tests/test_validation_stage_contract.py",
+        "previous_path": "",
+        "status": "added"
+      },
+      {
+        "blob_sha": "2ebb45747dd86dddb8ac05e11d836f3291aca5b6",
+        "path": ".github/instructions/project-hunter.instructions.md",
         "previous_path": "",
         "status": "modified"
       },
       {
-        "blob_sha": "6667d28dd61d9343206d00502204dec3082b2411",
-        "path": "tests/test_issue_419_trusted_parallel_lane.py",
+        "blob_sha": "33c7e88f12e2ff104f2ce509d66dea71419ed9c1",
+        "path": ".github/pull_request_template.md",
+        "previous_path": "",
+        "status": "modified"
+      },
+      {
+        "blob_sha": "1bc8d2819bd98dcba3c597b48f20890e2c98d44d",
+        "path": ".github/workflows/acquire-sky-supply-basis.yml",
+        "previous_path": "",
+        "status": "modified"
+      },
+      {
+        "blob_sha": "d3d22647f6780e046c384531da68a7672c618b3e",
+        "path": ".github/workflows/ci.yml",
+        "previous_path": "",
+        "status": "modified"
+      },
+      {
+        "blob_sha": "69036718a5891c72ae272574b85b512bea83db0b",
+        "path": ".github/workflows/dependency-review.yml",
+        "previous_path": "",
+        "status": "modified"
+      },
+      {
+        "blob_sha": "b153af0a87bd5440f42aaa063ef68cf59b13d55f",
+        "path": ".gitignore",
+        "previous_path": "",
+        "status": "modified"
+      },
+      {
+        "blob_sha": "ad329fd6366be99640eb101038e0a32ca99487a1",
+        "path": "AGENT_RULES.md",
+        "previous_path": "",
+        "status": "modified"
+      },
+      {
+        "blob_sha": "da2ed0bb34bac08e5124cfc0cfe1d24e5adbf8d4",
+        "path": "CHANGELOG.md",
+        "previous_path": "",
+        "status": "modified"
+      },
+      {
+        "blob_sha": "f6a8d665d5a46c913360d7f4c743e29a29a10812",
+        "path": "CLAUDE.md",
+        "previous_path": "",
+        "status": "modified"
+      },
+      {
+        "blob_sha": "cf8c9d8e1abbdb90f7f9796efc33bcd5d7df8a8d",
+        "path": "README.md",
+        "previous_path": "",
+        "status": "modified"
+      },
+      {
+        "blob_sha": "aad6b2c24c30f4440ed83cd475ecfb6fae1f7dfc",
+        "path": "docs/ADR/0028-evidence-assembly-supporting-authorities.md",
+        "previous_path": "",
+        "status": "modified"
+      },
+      {
+        "blob_sha": "a6d57a48daf87e09db6bb6c9670a1d7acf9c6db9",
+        "path": "docs/ADR/README.md",
+        "previous_path": "",
+        "status": "modified"
+      },
+      {
+        "blob_sha": "5125a36d767096c3b36e515cfee6d4869d55f004",
+        "path": "docs/AI_REVIEW_PROTOCOL.md",
+        "previous_path": "",
+        "status": "modified"
+      },
+      {
+        "blob_sha": "69aa61a90dce1faa673321268ce8890b31bc378d",
+        "path": "docs/CI.md",
+        "previous_path": "",
+        "status": "modified"
+      },
+      {
+        "blob_sha": "3f510f446466b71bb691f9d35b4e2ff1c4a831ab",
+        "path": "docs/DEVELOPMENT_GOVERNANCE.md",
+        "previous_path": "",
+        "status": "modified"
+      },
+      {
+        "blob_sha": "a702ceca42183936c7f72084b771e8d686abdfd2",
+        "path": "docs/HUNTER_IMPLEMENTATION_CONTRACT.md",
+        "previous_path": "",
+        "status": "modified"
+      },
+      {
+        "blob_sha": "c554e6d85d63e408ecf3a0b97090d9f723ec7a35",
+        "path": "docs/MERGE_READINESS_GATE.md",
+        "previous_path": "",
+        "status": "modified"
+      },
+      {
+        "blob_sha": "40e7baeb1c7242efe38839bba2382e5b5b6bc874",
+        "path": "docs/architecture-index.md",
+        "previous_path": "",
+        "status": "modified"
+      },
+      {
+        "blob_sha": "22360afeffb37c0c04e609f7a99b292befced420",
+        "path": "pyproject.toml",
+        "previous_path": "",
+        "status": "modified"
+      },
+      {
+        "blob_sha": "0cc787d87dda614f274e26b0f9f71b712be07732",
+        "path": "requirements/ci-constraints.txt",
+        "previous_path": "",
+        "status": "modified"
+      },
+      {
+        "blob_sha": "c62cc3411819ed99b2bba4289e2c786160baf406",
+        "path": "src/hunter/__main__.py",
+        "previous_path": "",
+        "status": "modified"
+      },
+      {
+        "blob_sha": "49a4ab4aa6740267ad37924bc388190ac23be324",
+        "path": "src/hunter/automation/__init__.py",
+        "previous_path": "",
+        "status": "modified"
+      },
+      {
+        "blob_sha": "9a112101eee796a2b940e3ac2aa1d05e8de203a9",
+        "path": "src/hunter/committee/engine.py",
+        "previous_path": "",
+        "status": "modified"
+      },
+      {
+        "blob_sha": "8710224915e7c9e20eebf3167b6bc0c35c1fc33c",
+        "path": "src/hunter/evidence_assembly/__init__.py",
+        "previous_path": "",
+        "status": "modified"
+      },
+      {
+        "blob_sha": "a15c9a9bd369505105fabc866618fbf2811475e8",
+        "path": "src/hunter/evidence_assembly/models.py",
+        "previous_path": "",
+        "status": "modified"
+      },
+      {
+        "blob_sha": "b86363b4dddfd3543d974f82d1f39ca1200f9af5",
+        "path": "src/hunter/evidence_assembly/registry.py",
+        "previous_path": "",
+        "status": "modified"
+      },
+      {
+        "blob_sha": "68500a539fe80021034a18db64a4896668bd099f",
+        "path": "src/hunter/evidence_assembly/service.py",
+        "previous_path": "",
+        "status": "modified"
+      },
+      {
+        "blob_sha": "9ca997bab9b0baa62dc3f2020a7bb89bc402541e",
+        "path": "src/hunter/evidence_intelligence/__init__.py",
+        "previous_path": "",
+        "status": "modified"
+      },
+      {
+        "blob_sha": "8b1b829857361818e45d51e42ea30740323b557a",
+        "path": "src/hunter/evidence_intelligence/intake.py",
+        "previous_path": "",
+        "status": "modified"
+      },
+      {
+        "blob_sha": "335717374e792e88604471c2a21bda12acad89a6",
+        "path": "src/hunter/evidence_intelligence/models.py",
+        "previous_path": "",
+        "status": "modified"
+      },
+      {
+        "blob_sha": "e2875a357f2f3eabfd19c01aedae5e6b1e7442dd",
+        "path": "src/hunter/valuation_methodology/__init__.py",
+        "previous_path": "",
+        "status": "modified"
+      },
+      {
+        "blob_sha": "3530a4f49398a117e5814e47bd9912297e104624",
+        "path": "src/hunter/valuation_methodology/models.py",
+        "previous_path": "",
+        "status": "modified"
+      },
+      {
+        "blob_sha": "ec08cb59e816c991d567b4caea0cba252c7e89a8",
+        "path": "src/hunter/valuation_methodology/repository.py",
+        "previous_path": "",
+        "status": "modified"
+      },
+      {
+        "blob_sha": "b2a91ca24c8513e311b68b5c8110afe19d593939",
+        "path": "src/hunter/valuation_methodology/service.py",
+        "previous_path": "",
+        "status": "modified"
+      },
+      {
+        "blob_sha": "55596ffbb4ef4420de8afd86a9df04864b4b2a1e",
+        "path": "tests/conftest.py",
+        "previous_path": "",
+        "status": "modified"
+      },
+      {
+        "blob_sha": "8787f38749e2bfcbe5583aa550856ba1f29b4cdf",
+        "path": "tests/test_canonical_evidence_assembly.py",
+        "previous_path": "",
+        "status": "modified"
+      },
+      {
+        "blob_sha": "a7c84203a1c23736272e151e4c86aa01fcb5bbca",
+        "path": "tests/test_macro_acquisition.py",
+        "previous_path": "",
+        "status": "modified"
+      },
+      {
+        "blob_sha": "759fe0056905f19db97310fb45a4c64b12ef11fe",
+        "path": "tests/test_valuation_family_integration.py",
+        "previous_path": "",
+        "status": "modified"
+      },
+      {
+        "blob_sha": "5f6b394d72f380568ac4148bd4aca7987a0f5ae7",
+        "path": "tests/test_valuation_methodology_v1.py",
+        "previous_path": "",
+        "status": "modified"
+      },
+      {
+        "blob_sha": "4f3c2fd998510bc1efe096bbbe226d8385c93780",
+        "path": "tests/test_whale_acquisition.py",
         "previous_path": "",
         "status": "modified"
       }
     ],
-    "review_target_digest": "cc1b7b732892eae70e7fccfe29cb904f556ccfa55ae6eaa51a75076123a65637"
+    "review_target_digest": "2501612fb481e2fe2d35d357e30340dcccbc0889932c29f59a06a8dd92c03c3c"
   },
-  "review_id": "fbde3c07b481141466e7590bae34253f0f604ce3c8b0d82584fdcb49f4d42cb9",
+  "review_id": "6289431a41e48655d54287884e649dfcf2a9a15f529ce9eee5ce3ace0a79090c",
   "review_request": {
-    "claims_id": "fbde3c07b481141466e7590bae34253f0f604ce3c8b0d82584fdcb49f4d42cb9",
+    "claims_id": "6289431a41e48655d54287884e649dfcf2a9a15f529ce9eee5ce3ace0a79090c",
     "schema": "hunter.review-request.v1"
   },
   "schema": "hunter.pre-ready-hostile-review.v1"
