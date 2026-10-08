@@ -76,6 +76,11 @@ LIFECYCLE_PUBLISH_DEADLINE: Final = timedelta(hours=6)
 DEFAULT_ADMISSION_CAP: Final = 2
 
 
+def _engineering_context_refusal(error: EngineeringContextAuthorityError) -> AuthorizeRefused:
+    """Expose only authority-owned machine codes, never untrusted exception prose."""
+    return AuthorizeRefused("COMPILATION_REFUSED", f"EngineeringContextAuthorityError/{error.reason_code}")
+
+
 class AuthorizeRefused(RuntimeError):
     """A pre-authorization refusal. Nothing durable was written (state machine spec section 5)."""
 
@@ -307,24 +312,9 @@ def prepare(
     except AuthorizeRefused:
         raise
     except EngineeringContextAuthorityError as error:
-        # Only expose a bounded, allowlisted diagnostic. Registry/overlay data
-        # must never be echoed verbatim into public Actions logs.
-        detail = str(error)
-        if "exceeds its" in detail and "byte budget" in detail:
-            reason = "PREVENTION_CONTEXT_BUDGET_EXCEEDED"
-        elif "duplicate defect family" in detail:
-            reason = "DUPLICATE_DEFECT_FAMILY"
-        elif "knowledge overlay entries" in detail:
-            reason = "INVALID_KNOWLEDGE_OVERLAY_NAMESPACE"
-        elif "defect registry" in detail:
-            reason = "DEFECT_REGISTRY_INVALID"
-        elif "no applicable defect families" in detail:
-            reason = "NO_APPLICABLE_DEFECT_FAMILIES"
-        elif "scope contract" in detail:
-            reason = "INVALID_SCOPE_CONTRACT"
-        else:
-            reason = "INVALID_ENGINEERING_CONTEXT_RECORD"
-        raise AuthorizeRefused("COMPILATION_REFUSED", f"EngineeringContextAuthorityError/{reason}") from None
+        # The authority owns the machine code; never parse attacker-controlled
+        # identifiers or echo the raw exception to public Actions logs.
+        raise _engineering_context_refusal(error) from None
     except state.LedgerError:
         raise
     except Exception as error:
