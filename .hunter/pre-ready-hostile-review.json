@@ -2,9 +2,15 @@
   "claims": {
     "acceptance_criteria": [
       {
-        "criterion": "The S6 rehearsal validator installs the complete constraint-pinned, wheel-only project runtime required by hunter.automation while retaining the non-publishing credential boundary.",
-        "evidence": "The workflow installs the project with requirements/ci-constraints.txt and the focused workflow contract test asserts that exact install; the live failure was ModuleNotFoundError: yaml after guard and mint succeeded.",
+        "criterion": "For this corrective PR only: authorize-prepare must pass the authorization document to authorize.prepare as the bytes it already is, for both the label-event and remediation paths.",
+        "evidence": "UNVERIFIED AUTHOR CLAIM: scripts/hunter_issue_agent_lifecycle.py no longer calls document.encode(); tests/test_issue_agent_lifecycle_authorize_prepare.py runs the real cmd_authorize_prepare body for both sources and failed with AttributeError before the fix (hosted runs 37660344935 and 37660702621 show the same failure).",
         "id": "AC-1",
+        "verdict": "satisfied"
+      },
+      {
+        "criterion": "For this corrective PR only: the execute subcommand must forward the model command after --model-argv unchanged and must not let argparse abbreviate or reinterpret its options.",
+        "evidence": "UNVERIFIED AUTHOR CLAIM: parse_arguments splits argv at the first --model-argv; tests/test_issue_agent_lifecycle_cli_contract.py parses every real lifecycle invocation in the five workflows and failed (10 failures) before the fix. This does not claim Issue #574 is complete: no hosted run past authorize is proven.",
+        "id": "AC-2",
         "verdict": "satisfied"
       }
     ],
@@ -22,165 +28,127 @@
       "transaction-snapshot-consistency"
     ],
     "base_ref": "main",
-    "base_sha": "2a69c95ef9dca48bae7fb624ae83ca6bbabfb49f",
+    "base_sha": "0a0923bb3ef98c83498feba227b6a83fa053e798",
     "defect_families": [
       {
-        "evidence": "Checked against the bounded S6 rehearsal runtime-dependency correction; no recurrence of this family is introduced by the two-file candidate.",
-        "family": "DFF-001",
-        "outcome": "clear"
-      },
-      {
-        "evidence": "Checked against the bounded S6 rehearsal runtime-dependency correction; no recurrence of this family is introduced by the two-file candidate.",
-        "family": "DFF-002",
-        "outcome": "clear"
-      },
-      {
-        "evidence": "Checked against the bounded S6 rehearsal runtime-dependency correction; no recurrence of this family is introduced by the two-file candidate.",
-        "family": "DFF-003",
-        "outcome": "clear"
-      },
-      {
-        "evidence": "Checked against the bounded S6 rehearsal runtime-dependency correction; no recurrence of this family is introduced by the two-file candidate.",
-        "family": "DFF-004",
-        "outcome": "clear"
-      },
-      {
-        "evidence": "Checked against the bounded S6 rehearsal runtime-dependency correction; no recurrence of this family is introduced by the two-file candidate.",
-        "family": "DFF-005",
-        "outcome": "clear"
-      },
-      {
-        "evidence": "Checked against the bounded S6 rehearsal runtime-dependency correction; no recurrence of this family is introduced by the two-file candidate.",
-        "family": "DFF-006",
-        "outcome": "clear"
-      },
-      {
-        "evidence": "Checked against the bounded S6 rehearsal runtime-dependency correction; no recurrence of this family is introduced by the two-file candidate.",
+        "evidence": "UNVERIFIED AUTHOR CLAIM: no authorization is minted or replayed differently. F1 passes the already-signed document bytes to authorize.prepare unchanged; the authorize_prepare tests assert the bytes are not re-encoded and that exactly one authorization source is accepted.",
         "family": "DFF-007",
         "outcome": "clear"
       },
       {
-        "evidence": "Checked against the bounded S6 rehearsal runtime-dependency correction; no recurrence of this family is introduced by the two-file candidate.",
+        "evidence": "UNVERIFIED AUTHOR CLAIM: no evidence artifact or digest is added. Remediation bytes are asserted unchanged in transit and the sealed prompt digest is asserted equal to sha256(prompt).",
         "family": "DFF-008",
         "outcome": "clear"
       },
       {
-        "evidence": "Checked against the bounded S6 rehearsal runtime-dependency correction; no recurrence of this family is introduced by the two-file candidate.",
+        "evidence": "UNVERIFIED AUTHOR CLAIM: no write channel, provenance or writer authentication is touched; the diff is one lifecycle script plus three test files.",
         "family": "DFF-009",
         "outcome": "clear"
       },
       {
-        "evidence": "Checked against the bounded S6 rehearsal runtime-dependency correction; no recurrence of this family is introduced by the two-file candidate.",
+        "evidence": "UNVERIFIED AUTHOR CLAIM: no writer or principal resolution is touched. All four commits are authored and committed by the policy-authorized signer claude and GitHub reports each verified/valid (checked via the public commits API).",
         "family": "DFF-010",
         "outcome": "clear"
       },
       {
-        "evidence": "Checked against the bounded S6 rehearsal runtime-dependency correction; no recurrence of this family is introduced by the two-file candidate.",
+        "evidence": "UNVERIFIED AUTHOR CLAIM: the candidate is a linear four-commit range on main@0a0923b; every commit is signed by an authorized signer; no rewind or force-push was used.",
         "family": "DFF-011",
         "outcome": "clear"
       },
       {
-        "evidence": "Checked against the bounded S6 rehearsal runtime-dependency correction; no recurrence of this family is introduced by the two-file candidate.",
+        "evidence": "UNVERIFIED AUTHOR CLAIM: no connector receipt is written or consumed; the push went through .githooks/pre-push. No evidence path is renamed or inherited.",
         "family": "DFF-012",
         "outcome": "clear"
       },
       {
-        "evidence": "Checked against the bounded S6 rehearsal runtime-dependency correction; no recurrence of this family is introduced by the two-file candidate.",
+        "evidence": "UNVERIFIED AUTHOR CLAIM: this document is only the author's content-bound claim set. It carries no authority; exact-head review authority must come from the authenticated external reviewer. At draft time Codex had published only a status comment (Completed, commit 43537b0) with no review body, and Copilot's one review was on b78cae8.",
         "family": "DFF-013",
         "outcome": "clear"
       },
       {
-        "evidence": "Checked against the bounded S6 rehearsal runtime-dependency correction; no recurrence of this family is introduced by the two-file candidate.",
+        "evidence": "UNVERIFIED AUTHOR CLAIM: no hosted prerequisite state is reported; no workflow, controller or status publication is touched.",
         "family": "DFF-014",
         "outcome": "clear"
       },
       {
-        "evidence": "Checked against the bounded S6 rehearsal runtime-dependency correction; no recurrence of this family is introduced by the two-file candidate.",
+        "evidence": "UNVERIFIED AUTHOR CLAIM: no defect family is promoted and no prevention stage is claimed. The enforcement-test docstring was narrowed in 43537b0 to what its two tests prove, and it says model compliance is not proven.",
         "family": "DFF-015",
         "outcome": "clear"
       },
       {
-        "evidence": "Checked against the bounded S6 rehearsal runtime-dependency correction; no recurrence of this family is introduced by the two-file candidate.",
+        "evidence": "UNVERIFIED AUTHOR CLAIM: no validation proof is stored or reused. The hosted Hunter / Pre-PR Preflight ran separately on b78cae8 and on 43537b0.",
         "family": "DFF-016",
         "outcome": "clear"
       },
       {
-        "evidence": "Checked against the bounded S6 rehearsal runtime-dependency correction; no recurrence of this family is introduced by the two-file candidate.",
+        "evidence": "UNVERIFIED AUTHOR CLAIM: no issuer, volume or bootstrap code is touched.",
         "family": "DFF-019",
         "outcome": "clear"
       },
       {
-        "evidence": "Checked against the bounded S6 rehearsal runtime-dependency correction; no recurrence of this family is introduced by the two-file candidate.",
+        "evidence": "UNVERIFIED AUTHOR CLAIM: no execution-ledger ownership or lease code is touched.",
         "family": "DFF-020",
         "outcome": "clear"
       },
       {
-        "evidence": "Checked against the bounded S6 rehearsal runtime-dependency correction; no recurrence of this family is introduced by the two-file candidate.",
+        "evidence": "UNVERIFIED AUTHOR CLAIM: no worker, shutdown or drain code is touched.",
         "family": "DFF-021",
         "outcome": "clear"
       },
       {
-        "evidence": "Checked against the bounded S6 rehearsal runtime-dependency correction; no recurrence of this family is introduced by the two-file candidate.",
+        "evidence": "UNVERIFIED AUTHOR CLAIM: ordering is unchanged. authorize.prepare still validates Source Handling before any claim; F1 only stops re-encoding the document passed into it.",
         "family": "DFF-023",
         "outcome": "clear"
       },
       {
-        "evidence": "Checked against the bounded S6 rehearsal runtime-dependency correction; no recurrence of this family is introduced by the two-file candidate.",
-        "family": "DFF-027",
-        "outcome": "clear"
-      },
-      {
-        "evidence": "Checked against the bounded S6 rehearsal runtime-dependency correction; no recurrence of this family is introduced by the two-file candidate.",
-        "family": "DFF-028",
-        "outcome": "clear"
-      },
-      {
-        "evidence": "Checked against the bounded S6 rehearsal runtime-dependency correction; no recurrence of this family is introduced by the two-file candidate.",
+        "evidence": "UNVERIFIED AUTHOR CLAIM: the change adds no publication path and was pushed through .githooks/pre-push. The full pytest proof ran once in the hosted Pre-PR Preflight. The Draft PR was opened by hand before that run finished; the Issue Agent candidate-PR opener was neither bypassed nor modified.",
         "family": "DFF-029",
         "outcome": "clear"
       },
       {
-        "evidence": "Checked against the bounded S6 rehearsal runtime-dependency correction; no recurrence of this family is introduced by the two-file candidate.",
+        "evidence": "UNVERIFIED AUTHOR CLAIM: all four changed files are ordinary tracked paths that the interpreter and pytest load; the new tests are collected and pass.",
         "family": "DFF-033",
         "outcome": "clear"
       },
       {
-        "evidence": "Checked against the bounded S6 rehearsal runtime-dependency correction; no recurrence of this family is introduced by the two-file candidate.",
+        "evidence": "UNVERIFIED AUTHOR CLAIM: the new tests read only tracked workflow files and in-process fixtures; no network or Issue-body call is made in the deterministic lane.",
         "family": "DFF-035",
-        "outcome": "clear"
-      },
-      {
-        "evidence": "Checked against the bounded S6 rehearsal runtime-dependency correction; no recurrence of this family is introduced by the two-file candidate.",
-        "family": "DFF-047",
-        "outcome": "clear"
-      },
-      {
-        "evidence": "Checked against the bounded S6 rehearsal runtime-dependency correction; no recurrence of this family is introduced by the two-file candidate.",
-        "family": "DFF-049",
         "outcome": "clear"
       }
     ],
     "findings": [],
-    "issue": "560",
+    "issue": "574",
     "review_target": [
       {
-        "blob_sha": "1309ceabef95c5ec5a43689fb71cd5bb94e8780f",
-        "path": ".github/workflows/hunter-issue-agent-replacement-rehearsal.yml",
+        "blob_sha": "7b64696ad4b93d59a653eca364d5f7565ba3652c",
+        "path": "tests/test_issue_agent_intelligence_enforcement.py",
         "previous_path": "",
-        "status": "modified"
+        "status": "added"
       },
       {
-        "blob_sha": "7bfe85bbf73f608910690062ebe982c41e42eac9",
-        "path": "tests/test_issue_agent_replacement_executor.py",
+        "blob_sha": "0e4985043fb512594f071ff1c7c5282aa0893387",
+        "path": "tests/test_issue_agent_lifecycle_authorize_prepare.py",
+        "previous_path": "",
+        "status": "added"
+      },
+      {
+        "blob_sha": "1d5a840a921e9c7fd9c772529c616a3099de6ba9",
+        "path": "tests/test_issue_agent_lifecycle_cli_contract.py",
+        "previous_path": "",
+        "status": "added"
+      },
+      {
+        "blob_sha": "965d206c4feb7cb905fb64212a988702e001fc1a",
+        "path": "scripts/hunter_issue_agent_lifecycle.py",
         "previous_path": "",
         "status": "modified"
       }
     ],
-    "review_target_digest": "ac4878330830c8f259b1f3c999ed8c06485cddfdf97cab69e14b8d528e9dbd08"
+    "review_target_digest": "47f436846d64538ac6d96763b85fdab62fb8a151442e62e7190f6a0dfd42620e"
   },
-  "review_id": "354099ee9e7d837421b2d66bfa14a8f470746ce5c70ad995dfe90781434b55e9",
+  "review_id": "c0bdb6b357b7cd0e3f842f77c3b5a3d8fce6d517cb4970988a077b41390a5ad9",
   "review_request": {
-    "claims_id": "354099ee9e7d837421b2d66bfa14a8f470746ce5c70ad995dfe90781434b55e9",
+    "claims_id": "c0bdb6b357b7cd0e3f842f77c3b5a3d8fce6d517cb4970988a077b41390a5ad9",
     "schema": "hunter.review-request.v1"
   },
   "schema": "hunter.pre-ready-hostile-review.v1"
