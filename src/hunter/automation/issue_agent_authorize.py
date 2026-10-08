@@ -59,6 +59,7 @@ from hunter.automation.n8n_handoff import serialize_prompt_automation_handoff
 from hunter.evidence_intelligence.engineering_context_authority import (
     ENGINEERING_IMPLEMENT_TASK_KEY,
     EngineeringContextAuthority,
+    EngineeringContextAuthorityError,
 )
 from hunter.evidence_intelligence.intake import evidence_document_id
 from hunter.evidence_intelligence.repository import EvidenceIntelligenceRepository
@@ -305,6 +306,25 @@ def prepare(
         compiled = composed.ingress.compile(request, implementation_scope=scope)
     except AuthorizeRefused:
         raise
+    except EngineeringContextAuthorityError as error:
+        # Only expose a bounded, allowlisted diagnostic. Registry/overlay data
+        # must never be echoed verbatim into public Actions logs.
+        detail = str(error)
+        if "exceeds its" in detail and "byte budget" in detail:
+            reason = "PREVENTION_CONTEXT_BUDGET_EXCEEDED"
+        elif "duplicate defect family" in detail:
+            reason = "DUPLICATE_DEFECT_FAMILY"
+        elif "knowledge overlay entries" in detail:
+            reason = "INVALID_KNOWLEDGE_OVERLAY_NAMESPACE"
+        elif "defect registry" in detail:
+            reason = "DEFECT_REGISTRY_INVALID"
+        elif "no applicable defect families" in detail:
+            reason = "NO_APPLICABLE_DEFECT_FAMILIES"
+        elif "scope contract" in detail:
+            reason = "INVALID_SCOPE_CONTRACT"
+        else:
+            reason = "INVALID_ENGINEERING_CONTEXT_RECORD"
+        raise AuthorizeRefused("COMPILATION_REFUSED", f"EngineeringContextAuthorityError/{reason}") from None
     except state.LedgerError:
         raise
     except Exception as error:
