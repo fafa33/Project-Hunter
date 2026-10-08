@@ -984,7 +984,8 @@ def read_collector_receipt(path: Path) -> tuple[Any, str]:
     """The collector's own receipt from its working directory, bounded; ``(None, reason)`` when unusable."""
 
     try:
-        if not path.is_file() or path.stat().st_size > COLLECTOR_RESULTS_MAX_BYTES:
+        # Never follow a symlink: the collector owns this fixed-name artifact.
+        if path.is_symlink() or not path.is_file() or path.stat().st_size > COLLECTOR_RESULTS_MAX_BYTES:
             return None, f"{path} is missing or too large"
         return json.loads(path.read_text(encoding="utf-8")), ""
     except (OSError, ValueError) as exc:
@@ -1398,11 +1399,6 @@ def parser() -> argparse.ArgumentParser:
     complete.add_argument("--pr", type=int, required=True)
     complete.add_argument("--head", required=True)
     complete.add_argument("--run-id", type=int, required=True)
-    complete.add_argument(
-        "--results",
-        default=COLLECTOR_RESULTS_FILE,
-        help="The collector's own receipt, read from its working directory to end an exhausted pool.",
-    )
     return result
 
 
@@ -1416,7 +1412,7 @@ def main() -> int:
             # leaves the cycle open for the reconcile backstop rather than failing a collector that did its job.
             try:
                 outcome = finalize_exhausted_pool(
-                    args.repository, token, args.pr, args.head, args.run_id, Path(args.results)
+                    args.repository, token, args.pr, args.head, args.run_id, Path(COLLECTOR_RESULTS_FILE)
                 )
             except Exception as exc:
                 outcome = f"SKIPPED: finalization raised {type(exc).__name__}: {exc}"

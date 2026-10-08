@@ -462,4 +462,37 @@ def test_collector_complete_defaults_to_the_receipt_the_collector_step_writes():
     arguments = orchestrator.parser().parse_args(
         ["collector-complete", "--repository", REPOSITORY, "--pr", "1", "--head", HEAD, "--run-id", "2"]
     )
-    assert arguments.results == orchestrator.COLLECTOR_RESULTS_FILE
+    assert not hasattr(arguments, "results")  # no caller-controlled receipt path
+
+
+def test_collector_completion_refuses_caller_supplied_receipt_path(tmp_path):
+    """Untrusted CLI arguments must never select an arbitrary file to read."""
+    import pytest
+
+    with pytest.raises(SystemExit) as error:
+        orchestrator.parser().parse_args(
+            [
+                "collector-complete",
+                "--repository",
+                REPOSITORY,
+                "--pr",
+                "1",
+                "--head",
+                HEAD,
+                "--run-id",
+                "2",
+                "--results",
+                str(tmp_path / "outside.json"),
+            ]
+        )
+    assert error.value.code == 2
+
+
+def test_collector_receipt_rejects_symlink_outside_working_directory(tmp_path):
+    outside = tmp_path / "secret.json"
+    outside.write_text('{"secret": true}', encoding="utf-8")
+    symlink = tmp_path / orchestrator.COLLECTOR_RESULTS_FILE
+    symlink.symlink_to(outside)
+    receipt, reason = orchestrator.read_collector_receipt(symlink)
+    assert receipt is None
+    assert "missing or too large" in reason
