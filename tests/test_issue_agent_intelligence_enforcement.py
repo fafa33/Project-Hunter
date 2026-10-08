@@ -1,10 +1,13 @@
-"""What the Issue Agent path technically enforces about Hunter's knowledge, SPM and DPM before a model runs (Issue #574).
+"""What the Issue Agent path binds into the model prompt about Hunter's knowledge, SPM and DPM (Issue #574).
 
-These tests drive the *real* ``authorize.prepare`` composition (Source Handling, SPM, DPM, signed handoff) and the real
-executor/validator/publisher role checks. They prove what a hash or signature can prove: which knowledge and which
-prevention families are bound into the exact prompt the model is given, that the prompt/handoff is tamper-evident, and
-that nothing the model returns can widen its authority. They do NOT prove that the model followed the prompt; that
-needs behavioural evidence (the validator's checks on the result, reviewer findings, the hosted canary).
+These two tests drive the *real* ``authorize.prepare`` composition (Source Handling, SPM, DPM, signed handoff). They
+prove only what a hash can prove at that step: that the registry's defect-prevention families and an anchored
+knowledge-overlay family are named in the exact prompt the model is given, and that the overlay changes the bound
+``prompt_sha256`` and ``dpm_context_sha256`` that the ledger records.
+
+They do NOT exercise the executor, validator or publisher role checks, and they do NOT prove that the model followed
+the prompt. Those boundaries are covered by their own test modules and, for model behaviour, only by the validator's
+checks on the result, reviewer findings and the hosted canary.
 """
 
 # ruff: noqa: F811
