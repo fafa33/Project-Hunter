@@ -114,6 +114,7 @@ def dependencies(
         open_issue_agent_pull_request=lambda _issue: False,
         active_lifecycles=lambda: 0,
         compiler_identity_sha256=authorize.compiler_identity(control_sha=CONTROL, checkout=ROOT),
+        repository_checkout=ROOT,
     )
     options.update(overrides)
     return authorize.AuthorizeDependencies(**options)
@@ -503,3 +504,30 @@ def test_authorize_diagnostic_is_stable_and_never_leaks_raw_authority_detail(rea
     refusal = authorize._engineering_context_refusal(error)
     assert str(refusal) == f"COMPILATION_REFUSED: EngineeringContextAuthorityError/{expected}"
     assert private_detail not in str(refusal)
+
+
+def test_prepare_reads_configured_checkout_registry_not_ambient_cwd(
+    world: dict[str, Any], monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    bootstrap_ledger(world)
+    checkout = tmp_path / "trusted-control"
+    registry = checkout / "docs" / "DEFECT_REGISTRY.json"
+    registry.parent.mkdir(parents=True)
+    registry.write_bytes((ROOT / "docs" / "DEFECT_REGISTRY.json").read_bytes())
+    ambient = tmp_path / "untrusted-ambient"
+    ambient.mkdir()
+    monkeypatch.chdir(ambient)
+    deps = dependencies(world, monkeypatch, repository_checkout=checkout)
+    (prepared, _sealed), _deps = run_prepare(world, monkeypatch, "trusted-registry", deps=deps)
+    assert prepared.issue_number == 520
+
+
+def test_prepare_missing_configured_checkout_registry_fails_closed(
+    world: dict[str, Any], monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    bootstrap_ledger(world)
+    checkout = tmp_path / "missing-registry"
+    checkout.mkdir()
+    deps = dependencies(world, monkeypatch, repository_checkout=checkout)
+    with pytest.raises(authorize.AuthorizeRefused, match="EngineeringContextAuthorityError/DEFECT_REGISTRY_INVALID"):
+        run_prepare(world, monkeypatch, "missing-registry", deps=deps)

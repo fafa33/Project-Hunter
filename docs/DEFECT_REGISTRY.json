@@ -512,6 +512,16 @@
       "guard": "A trusted validation harness must derive each scenario's assertions from an authoritative production contract or an already-observable production invariant, and must never require an API or an execution the production code does not implement. Scenario A asserted the candidate's review opportunity equals a reviewer-pool worst-case derivation, calling hunter_review_orchestrator.independent_review_opportunity_seconds and hunter_pre_ready_review.reviewer_chain_worst_case_seconds; neither symbol has ever existed on any commit, and production's own documented contract is only that one global opportunity budget (INDEPENDENT_REVIEW_OPPORTUNITY_SECONDS) must never leave an exact head pending forever. Scenario B pinned the combined-status read to permanently return absent and required exactly one dispatch, an execution production's own ensure_collector comment explicitly rules out ('the next reconciliation observes a dispatched cycle'); suppressing a duplicate under a read that never catches up would have required a new local durability authority, not a correction. The defect was invisible because tests/test_hunter_trusted_orchestrator_replay.py substituted purpose-built fixed/buggy modules for the code under test, so the suite exercised injected stand-ins rather than the real production shape and stayed green while the real replay failed on every candidate. The correction restates both scenarios as properties the production code already documents -- a positive finite budget that actually ends an over-budget cycle while leaving an in-budget one pending, and dispatch that is one for an unrecorded head, zero further once the recorded cycle is observed, one bounded liveness recovery, and none once the dispatch budget is spent -- and the harness tests now build candidates from this repository's real production modules, proving discrimination through narrowly named mutations of the real hunter_review_orchestrator.py (DROPS_OPPORTUNITY_TERMINALITY, MAKES_OPPORTUNITY_NON_POSITIVE, MAKES_OPPORTUNITY_UNCONDITIONAL, DROPS_COLLECTOR_IDEMPOTENCY_RECORD, DROPS_LIVENESS_RECOVERY, DROPS_DISPATCH_BUDGET) whose anchors must still exist, so a refactor fails loudly rather than making a negative test vacuous. A repair to a trusted harness is incomplete until its scenarios are replayed against at least one known-valid unchanged candidate and prove the harness does not reject that valid candidate for harness/production drift; PR #538 at a91cc8f9ac3f99d10588bb06973d9a403ccc7e16 was that candidate, and A/B/G all pass against it unchanged.",
       "test": "tests/test_hunter_trusted_orchestrator_replay.py::test_scenario_a_passes_against_real_production",
       "status": "guarded"
+    },
+    {
+      "id": "PRH-066",
+      "class": "hosted-dpm-registry-checkout-authority-drift",
+      "source": "PR #579 Codex review 4222875872 and Copilot reviews 4222896715, 4222896794 (2026-10-08)",
+      "classification": "systemic",
+      "guard_boundary": "Issue Agent authorize DPM registry and compiler identity must bind to configured trusted checkout, with production-path regression",
+      "guard": "The authorization dependency carries the configured control checkout; DPM registry and compiler identity use that same checkout, never the installed module root or ambient process CWD. Regression executes authorize.prepare against a distinct configured checkout and verifies missing registry refuses authorization.",
+      "test": "tests/test_issue_agent_authorize.py::test_prepare_reads_configured_checkout_registry_not_ambient_cwd",
+      "status": "guarded"
     }
   ],
   "families": [
@@ -2103,6 +2113,32 @@
       "lifecycle": "regression-tested",
       "sources": [
         "PR #569 live audit 2026-10-07: five Copilot review threads were isResolved=false while Hunter Governance Review was green; two threads were outdated but still unresolved, proving trusted-preflight success could mask live findings."
+      ]
+    },
+    {
+      "id": "DFF-054",
+      "title": "hosted-authorize-dpm-registry-checkout-authority-drift",
+      "invariant": "The hosted and CLI Issue Agent authorization must compile DPM prevention knowledge from the exact trusted configured control checkout used to load configuration and calculate compiler identity. Never infer this authority from Python site-packages or ambient cwd. Missing trusted registry must fail closed; a unit test of EngineeringContextAuthority alone is not sufficient evidence of the production wiring.",
+      "applicability": {
+        "changed_paths": [
+          "src/hunter/automation/issue_agent_authorize.py",
+          "scripts/hunter_issue_agent_lifecycle.py",
+          "src/hunter/evidence_intelligence/engineering_context_authority.py",
+          "tests/test_issue_agent_authorize.py"
+        ],
+        "rationale": "Changes to hosted authorization or DPM binding can silently load stale/candidate-controlled prevention context or block all Issue Agent canaries."
+      },
+      "prevention": {
+        "mechanism": "Explicit repository_checkout authorization dependency shared by DPM and compiler identity, verified through real authorize.prepare tests with distinct trusted and ambient roots and missing-registry fail-closed coverage.",
+        "boundary": "local-pre-push"
+      },
+      "regression_evidence": [
+        "tests/test_issue_agent_authorize.py::test_prepare_reads_configured_checkout_registry_not_ambient_cwd",
+        "tests/test_issue_agent_authorize.py::test_prepare_missing_configured_checkout_registry_fails_closed"
+      ],
+      "lifecycle": "regression-tested",
+      "sources": [
+        "PR #579 Codex thread 4222875872 and Copilot threads 4222896715, 4222896794, 2026-10-08; Issue #574 hosted canary run 37819851226: EngineeringContextAuthorityError/DEFECT_REGISTRY_INVALID."
       ]
     }
   ]

@@ -407,3 +407,17 @@ def test_resolve_finding_is_event_driven_for_pr_review_lifecycle() -> None:
     assert job["name"] == "resolve-finding"
     assert job["permissions"]["pull-requests"] == "write"
     assert "scripts/hunter_issue_agent_lifecycle.py resolve-finding" in str(job["steps"])
+
+
+def test_resolve_finding_immediately_dispatches_merge_readiness() -> None:
+    """Thread resolution must refresh its PR without waiting for the scheduled sweep."""
+    from pathlib import Path
+
+    root = Path(__file__).resolve().parents[1]
+    lifecycle = (root / "scripts/hunter_issue_agent_lifecycle.py").read_text()
+    resolve_body = lifecycle.split("def cmd_resolve(", 1)[1].split("\ndef cmd_resume_bind(", 1)[0]
+    assert 'github.dispatch("hunter-merge-readiness.yml", {"pr_number": str(pr_number)})' in resolve_body
+    assert "resolved_proofs.append(proof)" in resolve_body
+    workflow = (root / ".github/workflows/hunter-issue-agent-reconcile.yml").read_text()
+    resolve_job = workflow.split("  resolve-finding:", 1)[1].split("    steps:", 1)[0]
+    assert "actions: write" in resolve_job

@@ -440,6 +440,7 @@ def cmd_resolve(configuration: control.Configuration, arguments: argparse.Namesp
     store = _store(configuration, authenticated=True)
     known = _knowledge_view(configuration, github)
     resolved = 0
+    resolved_proofs: list[control.ResolutionProof] = []
     for issue in ([arguments.issue] if arguments.issue else _active_issues(configuration)):
         _head, state_view = control.load_ledger(store, configuration, provenance, issue)
         for finding_id in sorted(known.findings):
@@ -494,11 +495,22 @@ def cmd_resolve(configuration: control.Configuration, arguments: argparse.Namesp
                     recorded_at=_timestamp(),
                 )
                 resolved += 1
+                resolved_proofs.append(proof)
                 print(f"issue {issue}: resolved {finding_id[:12]} at {proof.remediated_head_sha[:12]}")
             except control.FactsUnavailable as error:
                 print(f"issue {issue}: no-op ({error})")
             except state.LedgerConflictError:
                 print(f"issue {issue}: no-op (the knowledge ledger moved; the next pass re-decides)")
+    if resolved:
+        # GitHub does not emit a workflow event when a review thread is resolved.
+        # Dispatch the existing current-state gate immediately after confirmed writes.
+        # A failed dispatch is visible and retriable by the existing scheduled sweep.
+        affected_prs = sorted({proof.pull_request_number for proof in resolved_proofs})
+        for pr_number in affected_prs:
+            if not github.dispatch("hunter-merge-readiness.yml", {"pr_number": str(pr_number)}):
+                raise control.FactsUnavailable(
+                    f"merge readiness refresh dispatch failed for PR #{pr_number}; scheduled recovery remains"
+                )
     return 0 if resolved or arguments.issue else EXIT_NOOP
 
 
@@ -537,7 +549,9 @@ def _export_public_trust(configuration: control.Configuration) -> None:
     os.environ.update(environment)
 
 
-def _authorize_dependencies(configuration: control.Configuration, github: control.GitHubRest) -> Any:
+def _authorize_dependencies(
+    configuration: control.Configuration, github: control.GitHubRest, *, repository_checkout: Path | None = None
+) -> Any:
     import hunter_issue_agent_provisioner as provisioner
 
     from hunter.automation.issue_agent_execution import IssueAgentAuthorizationVerifier
@@ -588,7 +602,10 @@ def _authorize_dependencies(configuration: control.Configuration, github: contro
         handoff_recipient=configuration.handoff_recipient,
         open_issue_agent_pull_request=open_pull_request,
         active_lifecycles=active_lifecycles,
-        compiler_identity_sha256=authorize.compiler_identity(control_sha=control_sha, checkout=Path.cwd()),
+        compiler_identity_sha256=authorize.compiler_identity(
+            control_sha=control_sha, checkout=repository_checkout or Path.cwd()
+        ),
+        repository_checkout=repository_checkout or Path.cwd(),
         knowledge_overlay=_knowledge_overlay(configuration, github),
     )
 
@@ -822,7 +839,11 @@ def cmd_authorize_prepare(configuration: control.Configuration, arguments: argpa
     context = _authorize_context()
     prepared, sealed = authorize.prepare(
         document,
-        dependencies=_authorize_dependencies(configuration, github),
+        dependencies=_authorize_dependencies(
+            configuration,
+            github,
+            repository_checkout=Path(getattr(arguments, "checkout", None) or Path.cwd()).resolve(),
+        ),
         context=context,
         state_store=_store(configuration, authenticated=True),
         source_handling_store=_store(configuration, authenticated=True),
