@@ -821,7 +821,7 @@ def cmd_authorize_prepare(configuration: control.Configuration, arguments: argpa
     out.mkdir(parents=True, exist_ok=True)
     context = _authorize_context()
     prepared, sealed = authorize.prepare(
-        document.encode(),
+        document,
         dependencies=_authorize_dependencies(configuration, github),
         context=context,
         state_store=_store(configuration, authenticated=True),
