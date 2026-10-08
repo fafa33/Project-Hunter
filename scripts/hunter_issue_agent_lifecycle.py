@@ -909,6 +909,49 @@ def cmd_bound(configuration: control.Configuration, arguments: argparse.Namespac
     return 0
 
 
+MODEL_TAIL_OPTION = "--model-argv"
+
+
+def _model_command(tail: Sequence[str]) -> tuple[str, ...]:
+    """The model command exactly as given after ``--model-argv``.
+
+    One leading ``--`` is the conventional end-of-options separator and is not part of the command; every other word,
+    including later ``--`` and options such as ``--model``, is forwarded unchanged.
+    """
+
+    command = tuple(tail[1:] if tail[:1] == ["--"] else tail)
+    if not command or not command[0].strip():
+        raise LifecycleRefused("MISSING_CONFIGURATION", "execute requires a model command after --model-argv")
+    return command
+
+
+def parse_arguments(argv: Sequence[str] | None = None) -> argparse.Namespace:
+    """Parse the lifecycle command line; the model command after ``--model-argv`` never reaches argparse.
+
+    The first ``--model-argv`` word splits the line: the head is parsed as lifecycle options, the tail is the downstream
+    model command, forwarded verbatim. Argparse therefore cannot reinterpret or abbreviate the tail's own options, and
+    ``--model-argv`` is accepted for ``execute`` only. A missing or empty tail is refused.
+    """
+
+    words = list(sys.argv[1:] if argv is None else argv)
+    tail: list[str] | None = None
+    if MODEL_TAIL_OPTION in words:
+        boundary = words.index(MODEL_TAIL_OPTION)
+        words, tail = words[:boundary], words[boundary + 1 :]
+    parser = _parser()
+    arguments = parser.parse_args(words)
+    if arguments.command == "execute":
+        if tail is None:
+            parser.error(f"execute requires {MODEL_TAIL_OPTION} COMMAND [ARGS...]")
+        try:
+            arguments.model_argv = _model_command(tail)
+        except LifecycleRefused as refusal:
+            parser.error(str(refusal))
+    elif tail is not None:
+        parser.error(f"{MODEL_TAIL_OPTION} is valid only for execute")
+    return arguments
+
+
 def cmd_execute(configuration: control.Configuration, arguments: argparse.Namespace) -> int:
     from hunter.evidence_intelligence.smart_prompt_routing import PromptAutomationVerifier
 
@@ -1093,12 +1136,14 @@ Command = Callable[[control.Configuration, argparse.Namespace], int]
 
 
 def _parser() -> argparse.ArgumentParser:
-    parser = argparse.ArgumentParser(prog="hunter_issue_agent_lifecycle")
+    # No option abbreviation anywhere: a lifecycle option is only ever its full name, so a token meant for the model
+    # command can never be mistaken for (or silently resolved to) one of ours.
+    parser = argparse.ArgumentParser(prog="hunter_issue_agent_lifecycle", allow_abbrev=False)
     parser.add_argument("--checkout", default=".")
     sub = parser.add_subparsers(dest="command", required=True)
 
     def add(name: str, command: Command) -> argparse.ArgumentParser:
-        child = sub.add_parser(name)
+        child = sub.add_parser(name, allow_abbrev=False)
         child.set_defaults(handler=command)
         return child
 
@@ -1133,7 +1178,9 @@ def _parser() -> argparse.ArgumentParser:
     execute.add_argument("--out", required=True)
     execute.add_argument("--workroot", required=True)
     execute.add_argument("--model-key-name", required=True)
-    execute.add_argument("--model-argv", nargs="+", required=True)
+    # `--model-argv <command> [args...]` is not an argparse option: it is the tail boundary handled by
+    # `parse_arguments`, so the model command's own options never reach the lifecycle parser.
+    execute.epilog = "The model command follows --model-argv and must be the last words: --model-argv COMMAND [ARGS...]"
     for child in (validate, publish):
         child.add_argument("--result", required=True)
         child.add_argument("--trusted-repo", required=True)
@@ -1152,7 +1199,7 @@ def _parser() -> argparse.ArgumentParser:
 
 
 def main(argv: Sequence[str] | None = None) -> int:
-    arguments = _parser().parse_args(argv)
+    arguments = parse_arguments(argv)
     try:
         # First, before any secret, ledger or network access: an unprovisioned repository refuses here.
         configuration = control.load_configuration(Path(arguments.checkout))
