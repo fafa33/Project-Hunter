@@ -2757,9 +2757,36 @@ def test_an_accepted_requested_reviewer_is_never_a_provider_execution_ack(monkey
     attempts = collector.collect_attempts(_request_pool(COPILOT_AGENT), HEAD, backend)
     # The request really was sent and accepted, and that is all it proved.
     assert backend.requested == [("POST", "pulls/561/requested_reviewers")]
-    assert [attempt["outcome"] for attempt in attempts] == ["unacknowledged"]
-    assert attempts[0]["reason_code"] == "NO_ACK_TIMEOUT"
-    assert attempts[0]["elapsed_seconds"] == 30  # the short budget, not the 300s review budget
+    assert [attempt["outcome"] for attempt in attempts] == ["timed_out"]
+    assert attempts[0]["reason_code"] == "REVIEW_TIMEOUT"
+    assert attempts[0]["elapsed_seconds"] == 300  # no start ACK exists; allow the full review window
+
+
+def test_native_codex_request_waits_full_review_budget_without_fabricated_ack():
+    """A standard GitHub review request has no start ACK; 30 seconds is not a review timeout."""
+
+    class DelayedReview(Backend):
+        def acknowledged(self, agent, trigger):
+            raise AssertionError("native GitHub review requests cannot prove provider-start ACK")
+
+        def response_state(self, agent, trigger):
+            return "clear" if self.clock >= 1740 else "waiting"
+
+    agent = {**POOL["agents"][0], "trigger_method": "github-review-request:chatgpt-codex-connector[bot]", "review_timeout_seconds": 1800}
+    backend = DelayedReview()
+    records = collector.collect_attempts({"timeout_policy": {"retries_per_agent": 0}, "agents": (agent,)}, HEAD, backend)
+    assert records[0]["outcome"] == "clear"
+    assert records[0]["elapsed_seconds"] == 1740
+    assert records[0]["ack_elapsed_seconds"] == 1740  # observation time, not a claimed ACK
+
+
+def test_native_codex_request_silence_uses_review_timeout_not_ack_timeout():
+    agent = {**POOL["agents"][0], "trigger_method": "github-review-request:chatgpt-codex-connector[bot]", "review_timeout_seconds": 1800}
+    backend = Backend()
+    records = collector.collect_attempts({"timeout_policy": {"retries_per_agent": 0}, "agents": (agent,)}, HEAD, backend)
+    assert records[0]["outcome"] == "timed_out"
+    assert records[0]["elapsed_seconds"] == 1800
+    assert records[0]["reason_code"] == "REVIEW_TIMEOUT"
 
 
 def test_copilot_is_config_blocked_immediately_when_review_on_push_is_false(monkeypatch) -> None:
