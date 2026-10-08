@@ -55,6 +55,26 @@ COLLECTOR_LIVENESS_GRACE_SECONDS = 180
 #: liveness evidence reads active, dead, or cannot be read at all.
 ACTIVE_COLLECTOR_GRACE_MULTIPLIER = 2
 TERMINAL_NONBLOCKING_STATES = frozenset({"REVIEW_TIMED_OUT", "REVIEWER_UNAVAILABLE", "POOL_EXHAUSTED"})
+#: Issue #574 / PR #576: the only terminal state a *collector* run may publish, from its own `collector-complete` step.
+#: Every other cycle state is only believed when a governance/reconcile run published it (``TRUSTED_WORKFLOWS``).
+COLLECTOR_PUBLISHABLE_STATES = frozenset({"REVIEWER_UNAVAILABLE"})
+#: Cycle states in which the exact-head opportunity is still open and may be finalized by the collector.
+OPEN_CYCLE_STATES = frozenset({"WAITING_FOR_REVIEWER", "REVIEW_IN_PROGRESS", "FAILOVER_IN_PROGRESS"})
+#: Identity of the collector receipt this module reads. Kept equal to ``hunter_reviewer_collector.SCHEMA`` by a test; it
+#: cannot be imported here because the collector imports this module.
+COLLECTOR_RESULTS_SCHEMA = "hunter.reviewer-collection.v1"
+COLLECTOR_RESULTS_FILE = "reviewer-results.json"
+COLLECTOR_RESULTS_MAX_BYTES = 1_048_576
+#: Outcomes of an invocation that gave no review: the only ones that can exhaust a reviewer.
+EXHAUSTED_OUTCOMES = frozenset({"timed_out", "unavailable", "unacknowledged"})
+_RECORD_POOL_FIELDS = (
+    "priority",
+    "ack_timeout_seconds",
+    "review_timeout_seconds",
+    "trigger_method",
+    "evidence_parser",
+    "retryable",
+)
 PENDING_STATES = frozenset({"WAITING_FOR_REVIEWER", "REVIEW_IN_PROGRESS", "FAILOVER_IN_PROGRESS", "POOL_EXHAUSTED"})
 
 #: Issue #461 / PR #473: an exact-head cycle whose reviewers were all exhausted
@@ -481,7 +501,13 @@ def read_cycle(
             continue
         if str(run.get("head_branch") or "") != default_branch:
             continue
-        if str(run.get("path") or "") not in TRUSTED_WORKFLOWS:
+        run_path = str(run.get("path") or "")
+        collector_terminal = (
+            run_path == COLLECTOR_WORKFLOW_PATH
+            and cycle.state in COLLECTOR_PUBLISHABLE_STATES
+            and str(run.get("event") or "") == "workflow_dispatch"
+        )
+        if run_path not in TRUSTED_WORKFLOWS and not collector_terminal:
             continue
         return "present", cycle, None
     return "absent", None, None
@@ -835,6 +861,209 @@ def publish_cycle(
     )
 
 
+class PoolExhaustion(NamedTuple):
+    """Whether one collector receipt proves every enabled authority reviewer gave no review."""
+
+    exhausted: bool
+    reason: str
+
+
+def _record_problem(record: Any, agent: dict[str, Any], number: int) -> str | None:
+    """Why one recorded invocation cannot be believed, or ``None``; mirrors the collector's own receipt checks."""
+
+    if not isinstance(record, dict):
+        return "an invocation record is not an object"
+    if record.get("agent_id") != agent["id"] or record.get("attempt_number") != number:
+        return "invocation records are out of order or do not match the enabled reviewer pool"
+    if any(record.get(name) != agent[name] for name in _RECORD_POOL_FIELDS):
+        return f"{agent['id']} record disagrees with the configured pool"
+    outcome = record.get("outcome")
+    elapsed = record.get("elapsed_seconds")
+    trigger_id = record.get("trigger_id")
+    if (
+        type(record.get("priority")) is not int
+        or type(record.get("ack_timeout_seconds")) is not int
+        or type(record.get("review_timeout_seconds")) is not int
+        or type(record.get("retryable")) is not bool
+        or type(record.get("attempt_number")) is not int
+        or type(trigger_id) is not int
+        or trigger_id < 0
+        or type(elapsed) not in (int, float)
+        or not 0 <= elapsed < 7200
+    ):
+        return f"{agent['id']} record has malformed identity or timing fields"
+    if outcome == "timed_out" and elapsed < agent["review_timeout_seconds"]:
+        return f"{agent['id']} reported a timeout before its review budget elapsed"
+    if outcome == "unacknowledged" and elapsed < agent["ack_timeout_seconds"]:
+        return f"{agent['id']} reported no acknowledgement before its acknowledgement budget elapsed"
+    return None
+
+
+def pool_exhaustion(
+    receipt: Any,
+    *,
+    repository: str,
+    pr_number: int,
+    head_sha: str,
+    run_id: int,
+    claims_id: str,
+    generation_id: str,
+    pool: dict[str, Any],
+) -> PoolExhaustion:
+    """Decide, from the collector's own receipt, whether the opportunity ended with no review at all.
+
+    The receipt is evidence about *this* collector run and nothing else, so every identity it carries must equal what
+    the trusted caller derived independently: pull request, full head, run, claims, generation and pool configuration.
+    A result that is missing, malformed, partial, stale or mixed is never exhaustion. A substantive ``clear`` or
+    ``blocking`` verdict from an authority-eligible reviewer is never converted into unavailability: it stays with the
+    existing authenticated-review path.
+    """
+
+    # Imported here: the collector imports this module at import time.
+    import hunter_reviewer_collector as collector
+
+    if not isinstance(receipt, dict):
+        return PoolExhaustion(False, "collector receipt is not an object")
+    expected = {
+        "schema": COLLECTOR_RESULTS_SCHEMA,
+        "repository": repository,
+        "pr_number": pr_number,
+        "head_sha": head_sha,
+        "run_id": run_id,
+        "claims_id": claims_id,
+        "remediation_generation_id": generation_id,
+        "configuration_digest": collector.configuration_digest(pool),
+    }
+    for name, value in expected.items():
+        if receipt.get(name) != value or type(receipt.get(name)) is not type(value):
+            return PoolExhaustion(False, f"collector receipt {name} does not match the trusted identity")
+    if type(receipt.get("run_attempt")) is not int or receipt["run_attempt"] < 1:
+        return PoolExhaustion(False, "collector receipt run_attempt is malformed")
+    records = receipt.get("attempts")
+    if not isinstance(records, list):
+        return PoolExhaustion(False, "collector attempts are missing")
+
+    agents = sorted(pre_ready.enabled_pool_reviewers(pool), key=lambda agent: agent["priority"])
+    if not any(agent.get("authority_eligible") is not False for agent in agents):
+        return PoolExhaustion(False, "the pool has no authority-eligible reviewer to exhaust")
+    retries = pool["timeout_policy"]["retries_per_agent"]
+    seen: set[tuple[str, int]] = set()
+    offset = 0
+    for agent in agents:
+        eligible = agent.get("authority_eligible") is not False
+        budget = 1 + (retries if agent["retryable"] else 0)
+        for number in range(1, budget + 1):
+            if offset >= len(records):
+                return PoolExhaustion(False, f"{agent['id']} was skipped or not fully attempted")
+            record = records[offset]
+            offset += 1
+            problem = _record_problem(record, agent, number)
+            if problem is not None:
+                return PoolExhaustion(False, problem)
+            identity = (agent["id"], record["trigger_id"])
+            if identity in seen:
+                return PoolExhaustion(False, "duplicate invocation identity")
+            seen.add(identity)
+            outcome = record["outcome"]
+            if outcome in {"clear", "blocking"}:
+                if eligible:
+                    return PoolExhaustion(False, f"{agent['id']} gave a substantive {outcome} verdict")
+                break
+            if outcome not in EXHAUSTED_OUTCOMES:
+                return PoolExhaustion(False, f"{agent['id']} recorded unsupported outcome {outcome!r}")
+            if outcome != "timed_out":
+                break
+            if number == budget:
+                break
+    if offset != len(records):
+        return PoolExhaustion(False, "collector receipt carries extra or mixed invocation records")
+    return PoolExhaustion(True, "every enabled authority reviewer recorded no review")
+
+
+def read_collector_receipt(path: Path) -> tuple[Any, str]:
+    """The collector's own receipt from its working directory, bounded; ``(None, reason)`` when unusable."""
+
+    try:
+        if not path.is_file() or path.stat().st_size > COLLECTOR_RESULTS_MAX_BYTES:
+            return None, f"{path} is missing or too large"
+        return json.loads(path.read_text(encoding="utf-8")), ""
+    except (OSError, ValueError) as exc:
+        return None, f"{path} is unreadable: {type(exc).__name__}"
+
+
+def finalize_exhausted_pool(
+    repository: str, token: str, pr_number: int, head_sha: str, run_id: int, results_path: Path
+) -> str:
+    """Publish ``REVIEWER_UNAVAILABLE`` for an exact head whose collector proved no reviewer gave a review.
+
+    Runs inside the trusted collector's own ``collector-complete`` step, so it does not depend on any later wake-up:
+    the ``workflow_run`` edge from a dispatched collector to reconcile was never delivered in 17 of 17 recorded
+    completions. It only ever *ends* an open opportunity as a non-blocking, authority-free state. It never dispatches,
+    never mints review authority and never touches a cycle that is already terminal, superseded, for another
+    generation, or published under another pool configuration. Returns a short, stable outcome label.
+    """
+
+    if not re.fullmatch("[0-9a-f]{40}", head_sha):
+        return "SKIPPED: exact head is not a full SHA"
+    if current_run_id() != run_id:
+        return "SKIPPED: the completing run is not this process's run"
+    receipt, unreadable = read_collector_receipt(results_path)
+    if receipt is None:
+        return f"SKIPPED: {unreadable}"
+    readiness = review_request_state(repository, token, pr_number, head_sha)
+    if not readiness.ready:
+        return f"SKIPPED: review request not usable ({readiness.reason})"
+    generation = current_remediation_generation(repository, token, pr_number, head_sha, readiness.claims_id)
+    pool, pool_error = pre_ready.load_reviewer_pool()
+    if pool is None or pool_error:
+        return f"SKIPPED: reviewer pool unavailable ({pool_error})"
+    digest = reviewer_pool_config_digest()
+    verdict = pool_exhaustion(
+        receipt,
+        repository=repository,
+        pr_number=pr_number,
+        head_sha=head_sha,
+        run_id=run_id,
+        claims_id=readiness.claims_id,
+        generation_id=generation,
+        pool=pool,
+    )
+    if not verdict.exhausted:
+        return f"SKIPPED: {verdict.reason}"
+
+    def open_cycle() -> ReviewCycle | None:
+        state, cycle, _error = read_cycle(repository, token, pr_number, head_sha)
+        if state != "present" or cycle is None:
+            return None
+        if cycle.config_digest != digest or cycle.generation_id != generation or cycle.state not in OPEN_CYCLE_STATES:
+            return None
+        return cycle
+
+    if open_cycle() is None:
+        return "SKIPPED: no open cycle for this exact head, generation and pool configuration"
+    # Re-read immediately before publishing: a concurrent reconcile may have just ended the same opportunity, and the
+    # terminal states are all non-blocking, so the only thing to avoid is overwriting a state that is no longer open.
+    cycle = open_cycle()
+    if cycle is None:
+        return "SKIPPED: the cycle ended concurrently"
+    publish_cycle(
+        repository,
+        token,
+        head_sha,
+        cycle=ReviewCycle(
+            pr_number=cycle.pr_number,
+            head_sha=cycle.head_sha,
+            state="REVIEWER_UNAVAILABLE",
+            provider_id=cycle.provider_id,
+            trigger_id=cycle.trigger_id,
+            started_at=cycle.started_at,
+            config_digest=cycle.config_digest,
+            generation_id=cycle.generation_id,
+        ),
+    )
+    return "PUBLISHED: REVIEWER_UNAVAILABLE"
+
+
 def ensure_collector(
     repository: str, token: str, pr_number: int, head_sha: str, generation_id: str = BASE_GENERATION_ID
 ) -> ReviewCycle:
@@ -1169,6 +1398,11 @@ def parser() -> argparse.ArgumentParser:
     complete.add_argument("--pr", type=int, required=True)
     complete.add_argument("--head", required=True)
     complete.add_argument("--run-id", type=int, required=True)
+    complete.add_argument(
+        "--results",
+        default=COLLECTOR_RESULTS_FILE,
+        help="The collector's own receipt, read from its working directory to end an exhausted pool.",
+    )
     return result
 
 
@@ -1178,6 +1412,15 @@ def main() -> int:
     try:
         if args.command == "collector-complete":
             publish_collector_completion(args.repository, token, args.pr, args.head, args.run_id)
+            # Best effort and fail closed: the completion marker above is already durable, and an unusable receipt
+            # leaves the cycle open for the reconcile backstop rather than failing a collector that did its job.
+            try:
+                outcome = finalize_exhausted_pool(
+                    args.repository, token, args.pr, args.head, args.run_id, Path(args.results)
+                )
+            except Exception as exc:
+                outcome = f"SKIPPED: finalization raised {type(exc).__name__}: {exc}"
+            print(f"Collector finalization: {outcome}")
         else:
             ensure_current(args.repository, token, args.pr)
         return 0

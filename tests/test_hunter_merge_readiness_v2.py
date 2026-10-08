@@ -597,3 +597,57 @@ def test_owner_merge_guard_accepts_only_clean_identical_merge_ready_head(monkeyp
     verdict = core.owner_merge_guard(562)
     assert verdict.accepted
     assert verdict.state == "OWNER_MERGE_GUARD_ACCEPTED"
+
+
+def _success_description(authority: tuple[str, str]) -> str:
+    runs = tuple(_green_check(name, index) for index, name in enumerate(core.REQUIRED_CHECKS, start=1))
+    decision = core.evaluate(core.StaticReadinessObservation(check_runs=runs, review_authority=authority))
+    assert decision.state == "success"
+    assert len(decision.description) <= 140
+    return decision.description
+
+
+def test_success_description_names_a_completed_independent_review():
+    description = _success_description(("success", "VALID_AGENT_REVIEW: codex cleared the exact head"))
+    assert "independent review completed (VALID_AGENT_REVIEW)" in description
+    assert "terminal" not in description
+
+
+def test_success_description_says_terminal_only_for_policy_exhaustion():
+    for state in sorted(core.TERMINAL_NONBLOCKING_REVIEW_STATES):
+        description = _success_description(("success", f"{state}: independent-review opportunity ended"))
+        assert f"exhausted under policy ({state})" in description
+        assert "none completed" in description
+
+
+def test_success_description_does_not_claim_a_review_that_was_never_requested():
+    for authority in (
+        ("pending", "MISSING_REVIEW_AUTHORITY: no usable pre-ready review request"),
+        ("failure", "MALFORMED_REVIEW: verifier did not establish authority"),
+        ("success", ""),
+    ):
+        description = _success_description(authority)
+        assert "not requested or not established" in description
+        assert "completed" not in description
+        assert "terminal" not in description
+
+
+def test_success_description_reports_a_pending_independent_review_as_pending():
+    description = _success_description(("pending", "WAITING_FOR_REVIEWER: no trusted exact-head cycle published"))
+    assert "independent review pending (WAITING_FOR_REVIEWER)" in description
+    assert "completed" not in description
+
+
+def test_review_disposition_wording_does_not_change_readiness_predicates():
+    runs = tuple(_green_check(name, index) for index, name in enumerate(core.REQUIRED_CHECKS, start=1))
+    states = {
+        core.evaluate(core.StaticReadinessObservation(check_runs=runs, review_authority=authority)).state
+        for authority in (
+            ("success", "VALID_AGENT_REVIEW: x"),
+            ("success", "POOL_EXHAUSTED: x"),
+            ("pending", "WAITING_FOR_REVIEWER: x"),
+            ("pending", "MISSING_REVIEW_AUTHORITY: x"),
+            ("failure", "MALFORMED_REVIEW: x"),
+        )
+    }
+    assert states == {"success"}

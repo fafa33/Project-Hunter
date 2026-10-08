@@ -91,6 +91,38 @@ class ReviewAuthorityVerdict:
 PENDING_VERIFICATION = "PENDING_VERIFICATION"
 
 
+#: GitHub truncates a status description at 140 characters, so every phrase below is short and the composed success
+#: description is asserted to fit.
+_COMPLETED_REVIEW_STATES = ("VALID_AGENT_REVIEW", "VALID_LAST_RESORT_GUARD", "VALID_SCOPED_CORRECTION")
+_PENDING_REVIEW_STATES = (*sorted(NON_RED_REVIEW_STATES), PENDING_VERIFICATION)
+
+
+def review_disposition_phrase(authority_state: str, authority_detail: str) -> str:
+    """What the independent-review lane actually did, for the success description only.
+
+    Readiness never gates on this (orchestration is advisory); the description just must not claim more than the
+    observed state. "Terminal" is said only for a completed review or an exhaustion recorded under the approved policy.
+    """
+
+    detail = authority_detail.strip()
+
+    def token_of(candidates: tuple[str, ...]) -> str | None:
+        return next((name for name in candidates if detail.startswith(name)), None)
+
+    if authority_state == "success":
+        completed = token_of(_COMPLETED_REVIEW_STATES)
+        if completed is not None:
+            return f"independent review completed ({completed})"
+        exhausted = token_of(tuple(sorted(TERMINAL_NONBLOCKING_REVIEW_STATES)))
+        if exhausted is not None:
+            return f"review exhausted under policy ({exhausted}), none completed"
+    if authority_state == "pending":
+        pending = token_of(tuple(_PENDING_REVIEW_STATES))
+        if pending is not None:
+            return f"independent review pending ({pending})"
+    return "independent review not requested or not established"
+
+
 def resolve_review_authority(verification: tuple[str, str]) -> ReviewAuthorityVerdict:
     """Classify the shared verifier's result; raw comments cannot establish authority."""
     status, detail = verification
@@ -513,7 +545,9 @@ def evaluate(observation: ReadinessObservation) -> Decision:
 
     return Decision(
         "success",
-        "Ready to merge: deterministic code/security/governance checks pass and the bounded independent-review opportunity is terminal.",
+        "Ready to merge: deterministic code/security/governance checks pass; "
+        + review_disposition_phrase(_authority_state, _authority_detail)
+        + ".",
     )
 
 
