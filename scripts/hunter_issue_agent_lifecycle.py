@@ -440,6 +440,7 @@ def cmd_resolve(configuration: control.Configuration, arguments: argparse.Namesp
     store = _store(configuration, authenticated=True)
     known = _knowledge_view(configuration, github)
     resolved = 0
+    resolved_proofs: list[control.ResolutionProof] = []
     for issue in ([arguments.issue] if arguments.issue else _active_issues(configuration)):
         _head, state_view = control.load_ledger(store, configuration, provenance, issue)
         for finding_id in sorted(known.findings):
@@ -494,11 +495,22 @@ def cmd_resolve(configuration: control.Configuration, arguments: argparse.Namesp
                     recorded_at=_timestamp(),
                 )
                 resolved += 1
+                resolved_proofs.append(proof)
                 print(f"issue {issue}: resolved {finding_id[:12]} at {proof.remediated_head_sha[:12]}")
             except control.FactsUnavailable as error:
                 print(f"issue {issue}: no-op ({error})")
             except state.LedgerConflictError:
                 print(f"issue {issue}: no-op (the knowledge ledger moved; the next pass re-decides)")
+    if resolved:
+        # GitHub does not emit a workflow event when a review thread is resolved.
+        # Dispatch the existing current-state gate immediately after confirmed writes.
+        # A failed dispatch is visible and retriable by the existing scheduled sweep.
+        affected_prs = sorted({proof.pull_request_number for proof in resolved_proofs})
+        for pr_number in affected_prs:
+            if not github.dispatch("hunter-merge-readiness.yml", {"pr_number": str(pr_number)}):
+                raise control.FactsUnavailable(
+                    f"merge readiness refresh dispatch failed for PR #{pr_number}; scheduled recovery remains"
+                )
     return 0 if resolved or arguments.issue else EXIT_NOOP
 
 
@@ -828,7 +840,9 @@ def cmd_authorize_prepare(configuration: control.Configuration, arguments: argpa
     prepared, sealed = authorize.prepare(
         document,
         dependencies=_authorize_dependencies(
-            configuration, github, repository_checkout=Path(arguments.checkout).resolve()
+            configuration,
+            github,
+            repository_checkout=Path(getattr(arguments, "checkout", None) or Path.cwd()).resolve(),
         ),
         context=context,
         state_store=_store(configuration, authenticated=True),

@@ -91,10 +91,10 @@ jobs:
     timeout-minutes: 20
     environment: hunter-issue-agent-control
     # ADR 0039 L7 (RD-6): pull-requests:write exists only to post one exact-head evidence reply and resolve the
-    # exact review thread after proof. Execution is restricted to trusted scheduled/manual recovery.
+    # exact review thread after proof; actions:write dispatches the existing merge-readiness controller.
     permissions:
       contents: write
-      actions: read
+      actions: write
       pull-requests: write
     steps:
       - name: Checkout trusted main

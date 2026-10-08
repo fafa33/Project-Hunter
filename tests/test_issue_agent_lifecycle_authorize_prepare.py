@@ -100,7 +100,7 @@ class _Harness:
         monkeypatch.setattr(lifecycle, "_export_public_trust", lambda _configuration: None)
         monkeypatch.setattr(lifecycle, "_github", lambda _configuration, **_kw: object())
         monkeypatch.setattr(lifecycle, "_require_anchors", lambda _c, _g, issue: self.anchored.append(issue))
-        monkeypatch.setattr(lifecycle, "_authorize_dependencies", lambda _c, _g: object())
+        monkeypatch.setattr(lifecycle, "_authorize_dependencies", lambda _c, _g, **_kw: object())
         monkeypatch.setattr(lifecycle, "_store", lambda _c, **_kw: object())
         monkeypatch.setattr(lifecycle.authorize, "prepare", self._prepare)
         self.configuration = SimpleNamespace(repository=REPOSITORY, owner_login=OWNER)
