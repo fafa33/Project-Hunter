@@ -241,6 +241,12 @@
         "status": "added"
       },
       {
+        "blob_sha": "937feeccc76b2c853cb724dfbd40ed0f324e595e",
+        "path": ".github/workflows/hunter-merge-readiness.yml",
+        "previous_path": "",
+        "status": "modified"
+      },
+      {
         "blob_sha": "dc5cf741135c0c8145f9ec20a2d5bf814f432b1a",
         "path": ".github/workflows/hunter-trusted-preflight-upgrade.yml",
         "previous_path": "",
@@ -277,6 +283,12 @@
         "status": "modified"
       },
       {
+        "blob_sha": "7001bb4bbc51f68968893adba817aeb055447929",
+        "path": "tests/test_hunter_merge_readiness_v2.py",
+        "previous_path": "",
+        "status": "modified"
+      },
+      {
         "blob_sha": "fa2290428d54e09d2a18ca6ff5c4a64de5303477",
         "path": "tests/test_issue_419_trusted_parallel_lane.py",
         "previous_path": "",
@@ -289,11 +301,11 @@
         "status": "modified"
       }
     ],
-    "review_target_digest": "899cebb3bd8fd8c1494e3cb2eafeb57e108280e15f008e225b1ac265eba88d96"
+    "review_target_digest": "a94d1c9a62a7afcbee2cd4d0310bf60eb515f9c40f910fcb51feba51916600e8"
   },
-  "review_id": "1eabef6425ef33039d83d2d101edb62dc99c37b954829dbae3d4930ca5c68910",
+  "review_id": "63b67f2a980fcf23a7d6b2160daec91efdcb39929015cb45355c7bafd26a9c84",
   "review_request": {
-    "claims_id": "1eabef6425ef33039d83d2d101edb62dc99c37b954829dbae3d4930ca5c68910",
+    "claims_id": "63b67f2a980fcf23a7d6b2160daec91efdcb39929015cb45355c7bafd26a9c84",
     "schema": "hunter.review-request.v1"
   },
   "schema": "hunter.pre-ready-hostile-review.v1"
