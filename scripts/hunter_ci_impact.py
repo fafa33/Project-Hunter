@@ -8,6 +8,7 @@ from __future__ import annotations
 import argparse
 import os
 import re
+import shlex
 import subprocess
 import sys
 from pathlib import Path
@@ -43,13 +44,11 @@ def main() -> int:
     if not all(re.fullmatch(r"[0-9a-f]{40}", value) for value in (args.base, args.head)):
         print("[Hunter CI Impact] FULL REQUIRED: base/head must be exact 40-hex commit IDs", flush=True)
         return 2
-    result = subprocess.run(
-        ["git", "diff", "--name-only", "--diff-filter=ACDMRTUXB", args.base, args.head, "--"],
-        cwd=ROOT,
-        text=True,
-        capture_output=True,
-        check=False,
+    # Fixed git subcommand; validated hashes cannot become options or shell syntax.
+    command = (
+        "git diff --name-only --diff-filter=ACDMRTUXB " + shlex.quote(args.base) + " " + shlex.quote(args.head) + " --"
     )
+    result = subprocess.run(shlex.split(command), cwd=ROOT, text=True, capture_output=True, check=False)
     if result.returncode:
         print("[Hunter CI Impact] FULL REQUIRED: git diff unavailable", flush=True)
         return 2
