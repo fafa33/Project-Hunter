@@ -542,6 +542,16 @@
       "guard": "Fail closed on non-object or missing/blank filename entries in GitHub PR file pages, rather than silently skipping entries.",
       "test": "tests/test_preflight_reuse_decision.py::test_malformed_pr_file_listing_refuses_reuse",
       "status": "guarded"
+    },
+    {
+      "id": "PRH-069",
+      "class": "candidate-build-backend-omitted-from-trusted-validation-definition",
+      "source": "PR #582 Codex review finding (2026-10-09)",
+      "classification": "systemic",
+      "guard_boundary": "Hosted candidate-controlled bootstrap or build backend cannot authorize skipping independent trusted validation",
+      "guard": "Prefix-aware protected-path classification covers build_backend/, requirements/, local composite actions and nested pytest conftest.py; changes force fresh trusted full gates.",
+      "test": "tests/test_preflight_reuse_decision.py::test_candidate_controlled_bootstrap_forces_trusted_full_gates",
+      "status": "guarded"
     }
   ],
   "families": [

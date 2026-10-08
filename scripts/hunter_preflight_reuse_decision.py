@@ -62,6 +62,23 @@ TRUSTED_DEFINITION_PATHS = frozenset(governance.PREFLIGHT_OWNED_PATHS) | frozens
 )
 
 
+TRUSTED_DEFINITION_PREFIXES = (
+    "build_backend/",
+    "requirements/",
+    ".github/actions/",
+)
+
+
+def is_trusted_definition_path(path: str) -> bool:
+    """Fail closed for candidate-controlled build/bootstrap and validation definitions."""
+    return (
+        path in TRUSTED_DEFINITION_PATHS
+        or any(path.startswith(prefix) for prefix in TRUSTED_DEFINITION_PREFIXES)
+        or path == "conftest.py"
+        or path.endswith("/conftest.py")
+    )
+
+
 def emit(reusable: bool, reason: str) -> None:
     print(f"[Preflight Reuse Decision] {'REUSE' if reusable else 'RUN-FRESH'}: {reason}")
     output = os.environ.get("GITHUB_OUTPUT")
@@ -96,7 +113,7 @@ def decide(
     if not ok or changed_paths is None:
         return False, f"changed-file evidence is unavailable ({error or 'no evidence'})"
 
-    touched = sorted(path for path in changed_paths if path in TRUSTED_DEFINITION_PATHS)
+    touched = sorted(path for path in changed_paths if is_trusted_definition_path(path))
     if touched:
         return False, f"candidate changes trusted validation definition paths: {', '.join(touched)}"
 
