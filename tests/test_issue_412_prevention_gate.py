@@ -242,6 +242,25 @@ def test_a_range_mixing_bound_writers_is_refused() -> None:
     assert "mixes authorization-bound writers" in verdict.reason
 
 
+def test_mixed_independently_authorized_writers_are_admitted_only_when_policy_allows() -> None:
+    commits = (
+        _commit(ANCESTOR, author=("Claude", "noreply@anthropic.com")),
+        _commit(HEAD, author=("Farhad5778", "34549283+fafa33@users.noreply.github.com")),
+    )
+    verdict = provenance.evaluate_range(_binding(require_single_writer_per_range=False), commits)
+    assert verdict.ok is True
+    assert verdict.writer_login == ""  # no false single-writer claim
+    assert "claude" in verdict.reason and "fafa33" in verdict.reason
+    unbound = _commit(HEAD, author=("untrusted", "untrusted@example.invalid"))
+    assert provenance.evaluate_range(_binding(require_single_writer_per_range=False), (commits[0], unbound)).ok is False
+    split = _commit(
+        HEAD,
+        author=("Claude", "noreply@anthropic.com"),
+        committer=("Farhad5778", "34549283+fafa33@users.noreply.github.com"),
+    )
+    assert provenance.evaluate_range(_binding(require_single_writer_per_range=False), (commits[0], split)).ok is False
+
+
 def test_a_multi_commit_range_under_one_writer_is_admitted() -> None:
     verdict = provenance.evaluate_range(_binding(), (_commit(ANCESTOR), _commit(HEAD)))
 

@@ -253,12 +253,12 @@
     "fail_closed": "Missing policy, empty allowlist, unavailable commit-range evidence, unsigned commit, unverified signature, or unauthorized signer all block candidate admission."
   },
   "writer_identity_binding": {
-    "purpose": "Canonical mapping from one authorization principal to every explicitly bound representation that may identify it. Mutable aliases never create a second human identity.",
+    "purpose": "Canonical mapping of each authorized writer to explicitly bound identities. Multiple independently authorized writers may contribute distinct commits in one governed range; each commit still requires its own author and committer to resolve to the same approved principal.",
     "match": "exact-normalized",
     "match_semantics": "Both the name and the email are compared after Unicode NFKC normalisation, case folding and whitespace collapsing, then matched exactly against one identity's bound values. Substring, prefix, suffix and domain matching are all forbidden: they would let an unrelated account satisfy the binding.",
     "require_author_and_committer_independently": true,
     "independence_semantics": "The author headers and the committer headers are each resolved to a bound identity on their own, and the two must resolve to the same writer. One field matching never authorizes the other, and a bound name paired with an unbound email is not a partial match another identity can complete.",
-    "require_single_writer_per_range": true,
+    "require_single_writer_per_range": false,
     "attribution_semantics": "Implementation-agent attribution (for example a Co-Authored-By or session trailer) is carried in commit trailers only. Identity is read exclusively from the author and committer headers, so a trailer can never establish, replace or mutate the authorization-bound writer identity, and an agent keeps its attribution while the commit is recorded under the bound writer.",
     "identities": [
       {
@@ -305,7 +305,7 @@
       "governed_range": "merge-base(<remote>/<base_ref>, HEAD)..HEAD. History already on the base branch was admitted under the regime that applied to it and is not re-governed."
     },
     "provenance_claims_are_distinct": "Commit author/committer identity, authenticated push actor, and implementation attribution are three different claims and are never conflated. This binding governs commit identity only; the authenticated push actor is verified by the trusted controller from push-event workflow runs, and attribution lives in trailers.",
-    "fail_closed": "Missing policy, a missing or malformed writer_identity_binding, an empty identity list, an identity whose canonical values are not among its own bound values, unreadable commit metadata, an unavailable fork point, an unbound author, an unbound committer, an author and committer bound to different writers, and a range mixing bound writers all block the push.",
+    "fail_closed": "Missing policy, a missing or malformed writer_identity_binding, an empty identity list, an identity whose canonical values are not among its own bound values, unreadable commit metadata, an unavailable fork point, an unbound author, an unbound committer, and an author and committer bound to different writers all block the push. Distinct commits from independently authorized writers may coexist when require_single_writer_per_range is false.",
     "principal_semantics": "One human/authorized writer is one canonical principal. GitHub numeric user ID is the stable owner identifier when available; login, Git name and explicitly approved emails are aliases of that principal."
   },
   "connector_write_ingress": {
