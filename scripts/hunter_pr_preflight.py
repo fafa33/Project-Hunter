@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import argparse
 import subprocess
+import time
 from collections.abc import Sequence
 from pathlib import Path
 
@@ -37,14 +38,20 @@ QUALITY_GATES = NORMAL_QUALITY_GATES
 
 def run_quality_gates(gates: Sequence[tuple[str, Sequence[str]]] = QUALITY_GATES) -> int:
     """Run deterministic quality gates in order, failing fast."""
+    lane_start = time.monotonic()
     for name, command in gates:
+        gate_start = time.monotonic()
         printable = " ".join(command)
         print(f"[Hunter Pre-PR] {name}: {printable}", flush=True)
         completed = subprocess.run(tuple(command), check=False)
+        elapsed = time.monotonic() - gate_start
+        print(f"[Hunter Pre-PR] TIMING: {name} {elapsed:.2f}s", flush=True)
         if completed.returncode != 0:
+            print(f"[Hunter Pre-PR] TIMING: lane {time.monotonic() - lane_start:.2f}s", flush=True)
             print(f"[Hunter Pre-PR] FAIL: {name} exited {completed.returncode}", flush=True)
             return completed.returncode
         print(f"[Hunter Pre-PR] PASS: {name}", flush=True)
+    print(f"[Hunter Pre-PR] TIMING: lane {time.monotonic() - lane_start:.2f}s", flush=True)
     return 0
 
 
