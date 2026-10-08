@@ -2772,18 +2772,30 @@ def test_native_codex_request_waits_full_review_budget_without_fabricated_ack():
         def response_state(self, agent, trigger):
             return "clear" if self.clock >= 1740 else "waiting"
 
-    agent = {**POOL["agents"][0], "trigger_method": "github-review-request:chatgpt-codex-connector[bot]", "review_timeout_seconds": 1800}
+    agent = {
+        **POOL["agents"][0],
+        "trigger_method": "github-review-request:chatgpt-codex-connector[bot]",
+        "review_timeout_seconds": 1800,
+    }
     backend = DelayedReview()
-    records = collector.collect_attempts({"timeout_policy": {"retries_per_agent": 0}, "agents": (agent,)}, HEAD, backend)
+    records = collector.collect_attempts(
+        {"timeout_policy": {"retries_per_agent": 0}, "agents": (agent,)}, HEAD, backend
+    )
     assert records[0]["outcome"] == "clear"
     assert records[0]["elapsed_seconds"] == 1740
     assert records[0]["ack_elapsed_seconds"] == 1740  # observation time, not a claimed ACK
 
 
 def test_native_codex_request_silence_uses_review_timeout_not_ack_timeout():
-    agent = {**POOL["agents"][0], "trigger_method": "github-review-request:chatgpt-codex-connector[bot]", "review_timeout_seconds": 1800}
+    agent = {
+        **POOL["agents"][0],
+        "trigger_method": "github-review-request:chatgpt-codex-connector[bot]",
+        "review_timeout_seconds": 1800,
+    }
     backend = Backend()
-    records = collector.collect_attempts({"timeout_policy": {"retries_per_agent": 0}, "agents": (agent,)}, HEAD, backend)
+    records = collector.collect_attempts(
+        {"timeout_policy": {"retries_per_agent": 0}, "agents": (agent,)}, HEAD, backend
+    )
     assert records[0]["outcome"] == "timed_out"
     assert records[0]["elapsed_seconds"] == 1800
     assert records[0]["reason_code"] == "REVIEW_TIMEOUT"
