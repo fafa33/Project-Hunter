@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import argparse
 import os
+import re
 import subprocess
 import sys
 from pathlib import Path
@@ -39,6 +40,9 @@ def main() -> int:
     parser.add_argument("--head", required=True)
     parser.add_argument("--run-focused", action="store_true")
     args = parser.parse_args()
+    if not all(re.fullmatch(r"[0-9a-f]{40}", value) for value in (args.base, args.head)):
+        print("[Hunter CI Impact] FULL REQUIRED: base/head must be exact 40-hex commit IDs", flush=True)
+        return 2
     result = subprocess.run(
         ["git", "diff", "--name-only", "--diff-filter=ACDMRTUXB", args.base, args.head, "--"],
         cwd=ROOT,

@@ -40,7 +40,7 @@ def test_cli_focused_executes_and_propagates_failure(monkeypatch, tmp_path):
     (tmp_path / "tests").mkdir()
     (tmp_path / "tests" / "test_example.py").write_text("def test_example(): pass\n")
     monkeypatch.setattr(impact, "ROOT", tmp_path)
-    monkeypatch.setattr(sys, "argv", ["impact", "--base", "base", "--head", "head", "--run-focused"])
+    monkeypatch.setattr(sys, "argv", ["impact", "--base", "a" * 40, "--head", "b" * 40, "--run-focused"])
     monkeypatch.setenv("PYTEST_ADDOPTS", "-n auto")
     calls = []
 
@@ -64,7 +64,7 @@ def test_cli_diff_failure_fails_closed(monkeypatch, tmp_path):
     import hunter_ci_impact as impact
 
     monkeypatch.setattr(impact, "ROOT", tmp_path)
-    monkeypatch.setattr(sys, "argv", ["impact", "--base", "base", "--head", "head", "--run-focused"])
+    monkeypatch.setattr(sys, "argv", ["impact", "--base", "a" * 40, "--head", "b" * 40, "--run-focused"])
     calls = []
 
     def fake_run(command, **kwargs):
@@ -83,7 +83,7 @@ def test_cli_full_required_never_runs_focused(monkeypatch, tmp_path):
     import hunter_ci_impact as impact
 
     monkeypatch.setattr(impact, "ROOT", tmp_path)
-    monkeypatch.setattr(sys, "argv", ["impact", "--base", "base", "--head", "head", "--run-focused"])
+    monkeypatch.setattr(sys, "argv", ["impact", "--base", "a" * 40, "--head", "b" * 40, "--run-focused"])
     calls = []
 
     def fake_run(command, **kwargs):
@@ -93,3 +93,12 @@ def test_cli_full_required_never_runs_focused(monkeypatch, tmp_path):
     monkeypatch.setattr(impact.subprocess, "run", fake_run)
     assert impact.main() == 0
     assert len(calls) == 1
+
+
+def test_cli_rejects_untrusted_git_revision_arguments(monkeypatch):
+    import sys
+
+    import hunter_ci_impact as impact
+
+    monkeypatch.setattr(sys, "argv", ["impact", "--base", "HEAD~1", "--head", "b" * 40])
+    assert impact.main() == 2
