@@ -2,22 +2,40 @@
   "claims": {
     "acceptance_criteria": [
       {
-        "criterion": "This corrective PR must expose bounded stable engineering-context failure categories without exposing untrusted registry, overlay, or exception content.",
-        "evidence": "AUTHOR CLAIM: EngineeringContextAuthorityError.reason_code is assigned by the authority, and authorize converts it to a bounded refusal; six focused diagnostic tests passed.",
+        "criterion": "Measure per-stage and end-to-end P50/P95 durations and exact-head proof provenance.",
+        "evidence": "AUTHOR CLAIM: Stage timing instrumentation exists; end-to-end P50/P95 hosted evidence remains pending.",
         "id": "AC-1",
-        "verdict": "satisfied"
+        "verdict": "not-applicable"
       },
       {
-        "criterion": "Diagnostic classification must not rely on substrings in attacker-controlled exception messages or change the fail-closed authorization decision.",
-        "evidence": "AUTHOR CLAIM: structured reason_code replaces text matching; existing authorize failure handling remains fail-closed, and focused tests cover collision-like raw details.",
+        "criterion": "Build trusted, deterministic, fail-closed impact classification from base/head diff, dependencies, test selectors and DPM coverage. Unknown/high-risk/cross-cutting changes force full validation.",
+        "evidence": "AUTHOR CLAIM: Trusted definition path detection and malformed evidence fail closed; broader impact classification remains pending.",
         "id": "AC-2",
+        "verdict": "not-applicable"
+      },
+      {
+        "criterion": "Fast gates and impacted regression suite on routine pushes; mandatory full-suite at policy/release/main boundaries and scheduled comprehensive runs.",
+        "evidence": "AUTHOR CLAIM: Full-suite retained; routine focused-lane scheduling remains pending.",
+        "id": "AC-3",
+        "verdict": "not-applicable"
+      },
+      {
+        "criterion": "Reuse full-suite proof only with verified immutable same-head, same-policy, same-environment receipts. Do not accept a focused run as full proof; keep trusted controller/publisher separate from untrusted candidate code.",
+        "evidence": "AUTHOR CLAIM: Exact-head hosted proof adjudication implemented in trusted controller with PR head checks and fail-closed fallback; 108 focused tests passed.",
+        "id": "AC-4",
         "verdict": "satisfied"
       },
       {
-        "criterion": "This diagnostic-only PR must not claim to complete Issue #574 hosted canary or introduce a new publication, orchestration, or merge authority.",
-        "evidence": "AUTHOR CLAIM: candidate diff is restricted to existing authority/authorize modules and focused tests; no workflows, publisher, secrets, or trust roots changed.",
-        "id": "AC-3",
-        "verdict": "satisfied"
+        "criterion": "Eliminate duplicate expensive executions when exact-head full proof already exists, without breaking trusted preflight upgrade/candidate admission.",
+        "evidence": "AUTHOR CLAIM: Proof reuse exists when completed before adjudication; overlapping pending runs still execute twice; timing coordination remains pending.",
+        "id": "AC-5",
+        "verdict": "not-applicable"
+      },
+      {
+        "criterion": "Add unit, integration and hosted canary proof showing normal/uncertain/changed-test/security cases and before/after times.",
+        "evidence": "AUTHOR CLAIM: Focused tests passed; hosted before/after performance canary remains pending.",
+        "id": "AC-6",
+        "verdict": "not-applicable"
       }
     ],
     "adversarial_dimensions": [
@@ -34,191 +52,248 @@
       "transaction-snapshot-consistency"
     ],
     "base_ref": "main",
-    "base_sha": "bdb893d7253979a75e6d80197efdb07eb76c38ce",
+    "base_sha": "207e28b8074dc3c783529da215d78a54b6d4d78d",
     "defect_families": [
       {
-        "evidence": "AUTHOR CLAIM: this scoped diagnostic-only diff does not alter trust roots, publisher, review governance or the protected execution boundaries; hosted checks and independent review remain required.",
+        "evidence": "AUTHOR CLAIM: reviewed applicability to PR #582 trusted preflight changes; independent reviewer must verify safeguards and missing coverage.",
         "family": "DFF-007",
         "outcome": "clear"
       },
       {
-        "evidence": "AUTHOR CLAIM: this scoped diagnostic-only diff does not alter trust roots, publisher, review governance or the protected execution boundaries; hosted checks and independent review remain required.",
+        "evidence": "AUTHOR CLAIM: reviewed applicability to PR #582 trusted preflight changes; independent reviewer must verify safeguards and missing coverage.",
         "family": "DFF-008",
         "outcome": "clear"
       },
       {
-        "evidence": "AUTHOR CLAIM: this scoped diagnostic-only diff does not alter trust roots, publisher, review governance or the protected execution boundaries; hosted checks and independent review remain required.",
+        "evidence": "AUTHOR CLAIM: reviewed applicability to PR #582 trusted preflight changes; independent reviewer must verify safeguards and missing coverage.",
         "family": "DFF-009",
         "outcome": "clear"
       },
       {
-        "evidence": "AUTHOR CLAIM: this scoped diagnostic-only diff does not alter trust roots, publisher, review governance or the protected execution boundaries; hosted checks and independent review remain required.",
+        "evidence": "AUTHOR CLAIM: reviewed applicability to PR #582 trusted preflight changes; independent reviewer must verify safeguards and missing coverage.",
         "family": "DFF-010",
         "outcome": "clear"
       },
       {
-        "evidence": "AUTHOR CLAIM: this scoped diagnostic-only diff does not alter trust roots, publisher, review governance or the protected execution boundaries; hosted checks and independent review remain required.",
+        "evidence": "AUTHOR CLAIM: reviewed applicability to PR #582 trusted preflight changes; independent reviewer must verify safeguards and missing coverage.",
         "family": "DFF-011",
         "outcome": "clear"
       },
       {
-        "evidence": "AUTHOR CLAIM: this scoped diagnostic-only diff does not alter trust roots, publisher, review governance or the protected execution boundaries; hosted checks and independent review remain required.",
+        "evidence": "AUTHOR CLAIM: reviewed applicability to PR #582 trusted preflight changes; independent reviewer must verify safeguards and missing coverage.",
         "family": "DFF-012",
         "outcome": "clear"
       },
       {
-        "evidence": "AUTHOR CLAIM: this scoped diagnostic-only diff does not alter trust roots, publisher, review governance or the protected execution boundaries; hosted checks and independent review remain required.",
+        "evidence": "AUTHOR CLAIM: reviewed applicability to PR #582 trusted preflight changes; independent reviewer must verify safeguards and missing coverage.",
         "family": "DFF-013",
         "outcome": "clear"
       },
       {
-        "evidence": "AUTHOR CLAIM: this scoped diagnostic-only diff does not alter trust roots, publisher, review governance or the protected execution boundaries; hosted checks and independent review remain required.",
+        "evidence": "AUTHOR CLAIM: reviewed applicability to PR #582 trusted preflight changes; independent reviewer must verify safeguards and missing coverage.",
         "family": "DFF-014",
         "outcome": "clear"
       },
       {
-        "evidence": "AUTHOR CLAIM: this scoped diagnostic-only diff does not alter trust roots, publisher, review governance or the protected execution boundaries; hosted checks and independent review remain required.",
+        "evidence": "AUTHOR CLAIM: reviewed applicability to PR #582 trusted preflight changes; independent reviewer must verify safeguards and missing coverage.",
         "family": "DFF-015",
         "outcome": "clear"
       },
       {
-        "evidence": "AUTHOR CLAIM: this scoped diagnostic-only diff does not alter trust roots, publisher, review governance or the protected execution boundaries; hosted checks and independent review remain required.",
+        "evidence": "AUTHOR CLAIM: reviewed applicability to PR #582 trusted preflight changes; independent reviewer must verify safeguards and missing coverage.",
         "family": "DFF-016",
         "outcome": "clear"
       },
       {
-        "evidence": "AUTHOR CLAIM: this scoped diagnostic-only diff does not alter trust roots, publisher, review governance or the protected execution boundaries; hosted checks and independent review remain required.",
+        "evidence": "AUTHOR CLAIM: reviewed applicability to PR #582 trusted preflight changes; independent reviewer must verify safeguards and missing coverage.",
+        "family": "DFF-017",
+        "outcome": "clear"
+      },
+      {
+        "evidence": "AUTHOR CLAIM: reviewed applicability to PR #582 trusted preflight changes; independent reviewer must verify safeguards and missing coverage.",
         "family": "DFF-019",
         "outcome": "clear"
       },
       {
-        "evidence": "AUTHOR CLAIM: this scoped diagnostic-only diff does not alter trust roots, publisher, review governance or the protected execution boundaries; hosted checks and independent review remain required.",
+        "evidence": "AUTHOR CLAIM: reviewed applicability to PR #582 trusted preflight changes; independent reviewer must verify safeguards and missing coverage.",
         "family": "DFF-020",
         "outcome": "clear"
       },
       {
-        "evidence": "AUTHOR CLAIM: this scoped diagnostic-only diff does not alter trust roots, publisher, review governance or the protected execution boundaries; hosted checks and independent review remain required.",
+        "evidence": "AUTHOR CLAIM: reviewed applicability to PR #582 trusted preflight changes; independent reviewer must verify safeguards and missing coverage.",
         "family": "DFF-021",
         "outcome": "clear"
       },
       {
-        "evidence": "AUTHOR CLAIM: this scoped diagnostic-only diff does not alter trust roots, publisher, review governance or the protected execution boundaries; hosted checks and independent review remain required.",
+        "evidence": "AUTHOR CLAIM: reviewed applicability to PR #582 trusted preflight changes; independent reviewer must verify safeguards and missing coverage.",
         "family": "DFF-022",
         "outcome": "clear"
       },
       {
-        "evidence": "AUTHOR CLAIM: this scoped diagnostic-only diff does not alter trust roots, publisher, review governance or the protected execution boundaries; hosted checks and independent review remain required.",
+        "evidence": "AUTHOR CLAIM: reviewed applicability to PR #582 trusted preflight changes; independent reviewer must verify safeguards and missing coverage.",
         "family": "DFF-023",
         "outcome": "clear"
       },
       {
-        "evidence": "AUTHOR CLAIM: this scoped diagnostic-only diff does not alter trust roots, publisher, review governance or the protected execution boundaries; hosted checks and independent review remain required.",
+        "evidence": "AUTHOR CLAIM: reviewed applicability to PR #582 trusted preflight changes; independent reviewer must verify safeguards and missing coverage.",
         "family": "DFF-024",
         "outcome": "clear"
       },
       {
-        "evidence": "AUTHOR CLAIM: this scoped diagnostic-only diff does not alter trust roots, publisher, review governance or the protected execution boundaries; hosted checks and independent review remain required.",
+        "evidence": "AUTHOR CLAIM: reviewed applicability to PR #582 trusted preflight changes; independent reviewer must verify safeguards and missing coverage.",
         "family": "DFF-025",
         "outcome": "clear"
       },
       {
-        "evidence": "AUTHOR CLAIM: this scoped diagnostic-only diff does not alter trust roots, publisher, review governance or the protected execution boundaries; hosted checks and independent review remain required.",
+        "evidence": "AUTHOR CLAIM: reviewed applicability to PR #582 trusted preflight changes; independent reviewer must verify safeguards and missing coverage.",
         "family": "DFF-026",
         "outcome": "clear"
       },
       {
-        "evidence": "AUTHOR CLAIM: this scoped diagnostic-only diff does not alter trust roots, publisher, review governance or the protected execution boundaries; hosted checks and independent review remain required.",
+        "evidence": "AUTHOR CLAIM: reviewed applicability to PR #582 trusted preflight changes; independent reviewer must verify safeguards and missing coverage.",
+        "family": "DFF-027",
+        "outcome": "clear"
+      },
+      {
+        "evidence": "AUTHOR CLAIM: reviewed applicability to PR #582 trusted preflight changes; independent reviewer must verify safeguards and missing coverage.",
+        "family": "DFF-028",
+        "outcome": "clear"
+      },
+      {
+        "evidence": "AUTHOR CLAIM: reviewed applicability to PR #582 trusted preflight changes; independent reviewer must verify safeguards and missing coverage.",
         "family": "DFF-029",
         "outcome": "clear"
       },
       {
-        "evidence": "AUTHOR CLAIM: this scoped diagnostic-only diff does not alter trust roots, publisher, review governance or the protected execution boundaries; hosted checks and independent review remain required.",
+        "evidence": "AUTHOR CLAIM: reviewed applicability to PR #582 trusted preflight changes; independent reviewer must verify safeguards and missing coverage.",
         "family": "DFF-033",
         "outcome": "clear"
       },
       {
-        "evidence": "AUTHOR CLAIM: this scoped diagnostic-only diff does not alter trust roots, publisher, review governance or the protected execution boundaries; hosted checks and independent review remain required.",
+        "evidence": "AUTHOR CLAIM: reviewed applicability to PR #582 trusted preflight changes; independent reviewer must verify safeguards and missing coverage.",
         "family": "DFF-035",
         "outcome": "clear"
       },
       {
-        "evidence": "AUTHOR CLAIM: this scoped diagnostic-only diff does not alter trust roots, publisher, review governance or the protected execution boundaries; hosted checks and independent review remain required.",
+        "evidence": "AUTHOR CLAIM: reviewed applicability to PR #582 trusted preflight changes; independent reviewer must verify safeguards and missing coverage.",
+        "family": "DFF-036",
+        "outcome": "clear"
+      },
+      {
+        "evidence": "AUTHOR CLAIM: reviewed applicability to PR #582 trusted preflight changes; independent reviewer must verify safeguards and missing coverage.",
         "family": "DFF-037",
         "outcome": "clear"
       },
       {
-        "evidence": "AUTHOR CLAIM: this scoped diagnostic-only diff does not alter trust roots, publisher, review governance or the protected execution boundaries; hosted checks and independent review remain required.",
+        "evidence": "AUTHOR CLAIM: reviewed applicability to PR #582 trusted preflight changes; independent reviewer must verify safeguards and missing coverage.",
+        "family": "DFF-038",
+        "outcome": "clear"
+      },
+      {
+        "evidence": "AUTHOR CLAIM: reviewed applicability to PR #582 trusted preflight changes; independent reviewer must verify safeguards and missing coverage.",
+        "family": "DFF-039",
+        "outcome": "clear"
+      },
+      {
+        "evidence": "AUTHOR CLAIM: reviewed applicability to PR #582 trusted preflight changes; independent reviewer must verify safeguards and missing coverage.",
         "family": "DFF-040",
         "outcome": "clear"
       },
       {
-        "evidence": "AUTHOR CLAIM: this scoped diagnostic-only diff does not alter trust roots, publisher, review governance or the protected execution boundaries; hosted checks and independent review remain required.",
-        "family": "DFF-042",
-        "outcome": "clear"
-      },
-      {
-        "evidence": "AUTHOR CLAIM: this scoped diagnostic-only diff does not alter trust roots, publisher, review governance or the protected execution boundaries; hosted checks and independent review remain required.",
+        "evidence": "AUTHOR CLAIM: reviewed applicability to PR #582 trusted preflight changes; independent reviewer must verify safeguards and missing coverage.",
         "family": "DFF-043",
         "outcome": "clear"
       },
       {
-        "evidence": "AUTHOR CLAIM: this scoped diagnostic-only diff does not alter trust roots, publisher, review governance or the protected execution boundaries; hosted checks and independent review remain required.",
-        "family": "DFF-044",
-        "outcome": "clear"
-      },
-      {
-        "evidence": "AUTHOR CLAIM: this scoped diagnostic-only diff does not alter trust roots, publisher, review governance or the protected execution boundaries; hosted checks and independent review remain required.",
+        "evidence": "AUTHOR CLAIM: reviewed applicability to PR #582 trusted preflight changes; independent reviewer must verify safeguards and missing coverage.",
         "family": "DFF-045",
         "outcome": "clear"
       },
       {
-        "evidence": "AUTHOR CLAIM: this scoped diagnostic-only diff does not alter trust roots, publisher, review governance or the protected execution boundaries; hosted checks and independent review remain required.",
+        "evidence": "AUTHOR CLAIM: reviewed applicability to PR #582 trusted preflight changes; independent reviewer must verify safeguards and missing coverage.",
         "family": "DFF-046",
         "outcome": "clear"
       },
       {
-        "evidence": "AUTHOR CLAIM: this scoped diagnostic-only diff does not alter trust roots, publisher, review governance or the protected execution boundaries; hosted checks and independent review remain required.",
-        "family": "DFF-050",
+        "evidence": "AUTHOR CLAIM: reviewed applicability to PR #582 trusted preflight changes; independent reviewer must verify safeguards and missing coverage.",
+        "family": "DFF-052",
         "outcome": "clear"
       },
       {
-        "evidence": "AUTHOR CLAIM: this scoped diagnostic-only diff does not alter trust roots, publisher, review governance or the protected execution boundaries; hosted checks and independent review remain required.",
-        "family": "DFF-051",
-        "outcome": "clear"
-      },
-      {
-        "evidence": "AUTHOR CLAIM: this scoped diagnostic-only diff does not alter trust roots, publisher, review governance or the protected execution boundaries; hosted checks and independent review remain required.",
+        "evidence": "AUTHOR CLAIM: reviewed applicability to PR #582 trusted preflight changes; independent reviewer must verify safeguards and missing coverage.",
         "family": "DFF-053",
         "outcome": "clear"
       }
     ],
     "findings": [],
-    "issue": "574",
+    "issue": "580",
     "review_target": [
       {
-        "blob_sha": "b37db22f7e93d5810250816f36bda346e938b98c",
-        "path": "src/hunter/automation/issue_agent_authorize.py",
+        "blob_sha": "ed54f3013a93a1e67991afda9abfffd7420df83d",
+        "path": "scripts/hunter_preflight_reuse_decision.py",
+        "previous_path": "",
+        "status": "added"
+      },
+      {
+        "blob_sha": "db041fefa99e94ee1f27ddee760ecbbca018a257",
+        "path": "tests/test_preflight_reuse_decision.py",
+        "previous_path": "",
+        "status": "added"
+      },
+      {
+        "blob_sha": "dc5cf741135c0c8145f9ec20a2d5bf814f432b1a",
+        "path": ".github/workflows/hunter-trusted-preflight-upgrade.yml",
         "previous_path": "",
         "status": "modified"
       },
       {
-        "blob_sha": "0ed91505adf423dda79d95fe43693ac72e5ccf68",
-        "path": "src/hunter/evidence_intelligence/engineering_context_authority.py",
+        "blob_sha": "ac1199c590e506447e476b90a21ca4c572099df9",
+        "path": "docs/CODE_WRITE_POLICY.json",
         "previous_path": "",
         "status": "modified"
       },
       {
-        "blob_sha": "5fc04b0e37d0b69792f6b778b7770cda1b11374f",
-        "path": "tests/test_issue_agent_authorize.py",
+        "blob_sha": "80c8370dd710fe00c024f268904f64f43425de93",
+        "path": "docs/DEFECT_REGISTRY.json",
+        "previous_path": "",
+        "status": "modified"
+      },
+      {
+        "blob_sha": "325e58ca870dc5a298979d3a94826a4911828f6d",
+        "path": "docs/VALIDATION_STAGE_CONTRACT.json",
+        "previous_path": "",
+        "status": "modified"
+      },
+      {
+        "blob_sha": "830e8d02cbc22f953413c3a6af7ceb98b3338a94",
+        "path": "docs/VALIDATION_STAGE_CONTRACT.md",
+        "previous_path": "",
+        "status": "modified"
+      },
+      {
+        "blob_sha": "e2661f068a58f70331f3324b9f31a87ac173d40f",
+        "path": "scripts/hunter_governance_review_v2.py",
+        "previous_path": "",
+        "status": "modified"
+      },
+      {
+        "blob_sha": "fa2290428d54e09d2a18ca6ff5c4a64de5303477",
+        "path": "tests/test_issue_419_trusted_parallel_lane.py",
+        "previous_path": "",
+        "status": "modified"
+      },
+      {
+        "blob_sha": "1ea36b3c3e2bed754f7d04e0eb353ad066c99c91",
+        "path": "tests/test_validation_stage_contract.py",
         "previous_path": "",
         "status": "modified"
       }
     ],
-    "review_target_digest": "0b298f91ac9ec94598f6e759a3390a03c4429e55d3165499c168ca776c644886"
+    "review_target_digest": "db18cdf3232f9c31618a90e36d06141b9d6c6e864fb9fe6720f36fc38a35d170"
   },
-  "review_id": "6b5103735753c4da30162c9dad8ffc8ac88c7af17cff6ed66878b8491daa3d03",
+  "review_id": "d71ba2ae9b76afaab7ba5586760dcc96f2e6efd6895d20709451a657c5990c90",
   "review_request": {
-    "claims_id": "6b5103735753c4da30162c9dad8ffc8ac88c7af17cff6ed66878b8491daa3d03",
+    "claims_id": "d71ba2ae9b76afaab7ba5586760dcc96f2e6efd6895d20709451a657c5990c90",
     "schema": "hunter.review-request.v1"
   },
   "schema": "hunter.pre-ready-hostile-review.v1"
