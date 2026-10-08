@@ -110,6 +110,7 @@ def run_preflight(*, mode: str = NORMAL_MODE, reuse_receipt: bool = False, recor
         return result
 
     if mode == TESTS_FIRST_RED_MODE:
+        red_lane_start = time.monotonic()
         hygiene_result = run_quality_gates(TESTS_FIRST_HYGIENE_GATES)
         if hygiene_result != 0:
             return hygiene_result
@@ -117,7 +118,10 @@ def run_preflight(*, mode: str = NORMAL_MODE, reuse_receipt: bool = False, recor
         name, command = PYTEST_GATE
         printable = " ".join(command)
         print(f"[Hunter Pre-PR] {name} (expected RED): {printable}", flush=True)
+        pytest_start = time.monotonic()
         completed = subprocess.run(tuple(command), check=False)
+        print(f"[Hunter Pre-PR] TIMING: Pytest (expected RED) {time.monotonic() - pytest_start:.2f}s", flush=True)
+        print(f"[Hunter Pre-PR] TIMING: tests-first-red lane {time.monotonic() - red_lane_start:.2f}s", flush=True)
         if completed.returncode == 0:
             print(
                 "[Hunter Pre-PR] FAIL: tests-first-red was declared but Pytest is green; "
