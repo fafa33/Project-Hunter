@@ -6,7 +6,9 @@ This is a fast-fail optimization only: it never replaces required full-suite pro
 from __future__ import annotations
 
 import argparse
+import os
 import subprocess
+import sys
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -35,6 +37,7 @@ def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("--base", required=True)
     parser.add_argument("--head", required=True)
+    parser.add_argument("--run-focused", action="store_true")
     args = parser.parse_args()
     result = subprocess.run(
         ["git", "diff", "--name-only", "--diff-filter=ACMRT", args.base, args.head, "--"],
@@ -51,6 +54,11 @@ def main() -> int:
     print(f"[Hunter CI Impact] {'FULL REQUIRED' if full else 'FOCUSED FIRST'}: {reason}", flush=True)
     if tests:
         print("[Hunter CI Impact] selected: " + " ".join(tests), flush=True)
+        if args.run_focused and not full:
+            env = dict(os.environ)
+            env.pop("PYTEST_ADDOPTS", None)
+            completed = subprocess.run([sys.executable, "-m", "pytest", "-q", *tests], cwd=ROOT, env=env, check=False)
+            return completed.returncode
     return 0
 
 
