@@ -91,6 +91,10 @@ DEFAULT_PREVENTION_CONTEXT_MAX_BYTES = 12_000
 class EngineeringContextAuthorityError(RuntimeError):
     """Raised when canonical engineering context cannot be proven safely."""
 
+    def __init__(self, message: str, *, reason_code: str = "INVALID_ENGINEERING_CONTEXT_RECORD") -> None:
+        super().__init__(message)
+        self.reason_code = reason_code
+
 
 def _required_text(name: str, value: object) -> str:
     if not isinstance(value, str) or not value.strip():
@@ -164,15 +168,22 @@ class EngineeringContextAuthority:
         self._overlay = tuple(dict(entry) for entry in knowledge_overlay)
         for entry in self._overlay:
             if not str(entry.get("id", "")).startswith(("KC-", "KF-")):
-                raise EngineeringContextAuthorityError("knowledge overlay entries must use the KC-/KF- namespaces")
+                raise EngineeringContextAuthorityError(
+                    "knowledge overlay entries must use the KC-/KF- namespaces",
+                    reason_code="INVALID_KNOWLEDGE_OVERLAY_NAMESPACE",
+                )
 
     def _families(self) -> list[dict[str, Any]]:
         try:
             payload = json.loads(self._registry_path.read_text(encoding="utf-8"))
         except (OSError, json.JSONDecodeError) as error:
-            raise EngineeringContextAuthorityError("defect registry is unavailable or malformed") from error
+            raise EngineeringContextAuthorityError(
+                "defect registry is unavailable or malformed", reason_code="DEFECT_REGISTRY_INVALID"
+            ) from error
         if not isinstance(payload, dict) or not isinstance(payload.get("families"), list):
-            raise EngineeringContextAuthorityError("defect registry families must be a list")
+            raise EngineeringContextAuthorityError(
+                "defect registry families must be a list", reason_code="DEFECT_REGISTRY_INVALID"
+            )
         families: list[dict[str, Any]] = []
         seen: set[str] = set()
         for raw in [*payload["families"], *self._overlay]:
@@ -180,7 +191,9 @@ class EngineeringContextAuthority:
                 raise EngineeringContextAuthorityError("defect family must be an object")
             identifier = _required_text("defect family id", raw.get("id"))
             if identifier in seen:
-                raise EngineeringContextAuthorityError(f"duplicate defect family: {identifier}")
+                raise EngineeringContextAuthorityError(
+                    f"duplicate defect family: {identifier}", reason_code="DUPLICATE_DEFECT_FAMILY"
+                )
             seen.add(identifier)
             applicability = raw.get("applicability")
             if not isinstance(applicability, dict):
@@ -228,9 +241,11 @@ class EngineeringContextAuthority:
             )
         incomplete = scope.incompleteness()
         if incomplete:
-            raise EngineeringContextAuthorityError(incomplete)
+            raise EngineeringContextAuthorityError(incomplete, reason_code="INVALID_SCOPE_CONTRACT")
         if len(scope.base_sha) != 40 or any(c not in "0123456789abcdef" for c in scope.base_sha):
-            raise EngineeringContextAuthorityError("scope contract base_sha must be an exact lowercase commit SHA")
+            raise EngineeringContextAuthorityError(
+                "scope contract base_sha must be an exact lowercase commit SHA", reason_code="INVALID_SCOPE_CONTRACT"
+            )
         if isinstance(budget_bytes, bool) or not isinstance(budget_bytes, int) or budget_bytes <= 0:
             raise EngineeringContextAuthorityError("prevention context budget_bytes must be a positive integer")
 
@@ -280,7 +295,10 @@ class EngineeringContextAuthority:
                 }
             )
         if not candidates:
-            raise EngineeringContextAuthorityError("no applicable defect families for engineering implementation route")
+            raise EngineeringContextAuthorityError(
+                "no applicable defect families for engineering implementation route",
+                reason_code="NO_APPLICABLE_DEFECT_FAMILIES",
+            )
 
         # Deduplication: within a group of families the registry explicitly
         # declares equivalent (same non-empty prevention.equivalence_class),
@@ -375,7 +393,8 @@ class EngineeringContextAuthority:
             raise EngineeringContextAuthorityError(
                 "governed prevention context for "
                 f"{task_key} exceeds its {budget_bytes}-byte budget by {overflow} bytes even after full "
-                "compaction; largest remaining contributors: " + ", ".join(str(entry["id"]) for entry in largest)
+                "compaction; largest remaining contributors: " + ", ".join(str(entry["id"]) for entry in largest),
+                reason_code="PREVENTION_CONTEXT_BUDGET_EXCEEDED",
             )
         result: dict[str, object] = {
             "schema_version": ENGINEERING_CONTEXT_SCHEMA_VERSION,

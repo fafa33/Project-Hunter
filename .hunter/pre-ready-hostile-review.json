@@ -2,27 +2,21 @@
   "claims": {
     "acceptance_criteria": [
       {
-        "criterion": "For this corrective PR only: authorize-prepare must pass the authorization document to authorize.prepare as the bytes it already is, for both the label-event and remediation paths.",
-        "evidence": "UNVERIFIED AUTHOR CLAIM: scripts/hunter_issue_agent_lifecycle.py no longer calls document.encode(); tests/test_issue_agent_lifecycle_authorize_prepare.py runs the real cmd_authorize_prepare body for both sources and failed with AttributeError before the fix.",
+        "criterion": "This corrective PR must expose bounded stable engineering-context failure categories without exposing untrusted registry, overlay, or exception content.",
+        "evidence": "AUTHOR CLAIM: EngineeringContextAuthorityError.reason_code is assigned by the authority, and authorize converts it to a bounded refusal; six focused diagnostic tests passed.",
         "id": "AC-1",
         "verdict": "satisfied"
       },
       {
-        "criterion": "For this corrective PR only: the execute subcommand must forward the model command after --model-argv unchanged and must not let argparse abbreviate or reinterpret its options.",
-        "evidence": "UNVERIFIED AUTHOR CLAIM: parse_arguments splits argv at the first --model-argv; tests/test_issue_agent_lifecycle_cli_contract.py parses every real lifecycle invocation in the five workflows and failed before the fix. This does not claim Issue #574 is complete: no hosted run past authorize is proven.",
+        "criterion": "Diagnostic classification must not rely on substrings in attacker-controlled exception messages or change the fail-closed authorization decision.",
+        "evidence": "AUTHOR CLAIM: structured reason_code replaces text matching; existing authorize failure handling remains fail-closed, and focused tests cover collision-like raw details.",
         "id": "AC-2",
         "verdict": "satisfied"
       },
       {
-        "criterion": "For this corrective PR only: collector-complete must end an exhausted reviewer pool as a non-blocking, authority-free REVIEWER_UNAVAILABLE state only when the receipt exactly matches the trusted PR, head, run, claims, generation and pool configuration, and must leave clear/blocking verdicts and malformed, partial, stale or mixed receipts alone.",
-        "evidence": "UNVERIFIED AUTHOR CLAIM: tests/test_review_orchestrator_collector_finalization.py (64 tests) covers matching, malformed, partial, stale-generation, changed-head, duplicate, concurrent and terminal-state cases. It is validated by unit tests only; its live effect begins after merge.",
+        "criterion": "This diagnostic-only PR must not claim to complete Issue #574 hosted canary or introduce a new publication, orchestration, or merge authority.",
+        "evidence": "AUTHOR CLAIM: candidate diff is restricted to existing authority/authorize modules and focused tests; no workflows, publisher, secrets, or trust roots changed.",
         "id": "AC-3",
-        "verdict": "satisfied"
-      },
-      {
-        "criterion": "For this corrective PR only: the Merge Readiness success description must not claim the independent-review opportunity is terminal unless a review completed or the opportunity was exhausted under the approved policy, without changing any readiness predicate.",
-        "evidence": "UNVERIFIED AUTHOR CLAIM: review_disposition_phrase derives the wording from the observed review-authority state; tests in tests/test_hunter_merge_readiness_v2.py cover completed, exhausted, pending and not-requested, assert the 140-character status limit, and assert the decision state is identical across all of them.",
-        "id": "AC-4",
         "verdict": "satisfied"
       }
     ],
@@ -40,160 +34,160 @@
       "transaction-snapshot-consistency"
     ],
     "base_ref": "main",
-    "base_sha": "0a0923bb3ef98c83498feba227b6a83fa053e798",
+    "base_sha": "bdb893d7253979a75e6d80197efdb07eb76c38ce",
     "defect_families": [
       {
-        "evidence": "UNVERIFIED AUTHOR CLAIM: No authorization is minted or replayed differently. F1 passes the already-signed authorization bytes to authorize.prepare unchanged; the authorize_prepare tests assert the bytes are not re-encoded and exactly one authorization source is accepted. The collector change signs nothing.",
+        "evidence": "AUTHOR CLAIM: this scoped diagnostic-only diff does not alter trust roots, publisher, review governance or the protected execution boundaries; hosted checks and independent review remain required.",
         "family": "DFF-007",
         "outcome": "clear"
       },
       {
-        "evidence": "UNVERIFIED AUTHOR CLAIM: No evidence artifact or digest is introduced. The collector finalization verifies the receipt's pr, full head, run, claims, generation and pool-configuration digest against trusted values before believing any field (tests: stale/mixed/malformed identity cases).",
+        "evidence": "AUTHOR CLAIM: this scoped diagnostic-only diff does not alter trust roots, publisher, review governance or the protected execution boundaries; hosted checks and independent review remain required.",
         "family": "DFF-008",
         "outcome": "clear"
       },
       {
-        "evidence": "UNVERIFIED AUTHOR CLAIM: No write channel or writer authentication changes. The one new publisher is the trusted default-branch collector run already holding statuses:write; read_cycle believes its status only for REVIEWER_UNAVAILABLE, from a workflow_dispatch run on the default branch, by github-actions[bot].",
+        "evidence": "AUTHOR CLAIM: this scoped diagnostic-only diff does not alter trust roots, publisher, review governance or the protected execution boundaries; hosted checks and independent review remain required.",
         "family": "DFF-009",
         "outcome": "clear"
       },
       {
-        "evidence": "UNVERIFIED AUTHOR CLAIM: No writer or principal resolution is touched. Every commit in the range is authored and committed by the policy-authorized signer claude and was reported verified/valid by GitHub when checked.",
+        "evidence": "AUTHOR CLAIM: this scoped diagnostic-only diff does not alter trust roots, publisher, review governance or the protected execution boundaries; hosted checks and independent review remain required.",
         "family": "DFF-010",
         "outcome": "clear"
       },
       {
-        "evidence": "UNVERIFIED AUTHOR CLAIM: The candidate is a linear range of signed commits on main@0a0923b; no rewind, amend of pushed history or force-push is used.",
+        "evidence": "AUTHOR CLAIM: this scoped diagnostic-only diff does not alter trust roots, publisher, review governance or the protected execution boundaries; hosted checks and independent review remain required.",
         "family": "DFF-011",
         "outcome": "clear"
       },
       {
-        "evidence": "UNVERIFIED AUTHOR CLAIM: No connector receipt is written, consumed or renamed. The review request is regenerated by the existing tool as the last content-binding step and the push goes through .githooks/pre-push.",
+        "evidence": "AUTHOR CLAIM: this scoped diagnostic-only diff does not alter trust roots, publisher, review governance or the protected execution boundaries; hosted checks and independent review remain required.",
         "family": "DFF-012",
         "outcome": "clear"
       },
       {
-        "evidence": "UNVERIFIED AUTHOR CLAIM: This document is only the author's content-bound claim set, generated by hunter_pre_ready_review.py --request. It carries no authority. Exact-head authority must come from an authenticated reviewer through the collector; on the previous head no reviewer produced any, and that is recorded as reviewer unavailability, not as a clear.",
+        "evidence": "AUTHOR CLAIM: this scoped diagnostic-only diff does not alter trust roots, publisher, review governance or the protected execution boundaries; hosted checks and independent review remain required.",
         "family": "DFF-013",
         "outcome": "clear"
       },
       {
-        "evidence": "UNVERIFIED AUTHOR CLAIM: A still-running prerequisite is not reported as failure by this change. Finalization is skipped (not failed) when the request, cycle or receipt is not yet usable, and Merge Readiness predicates are untouched.",
+        "evidence": "AUTHOR CLAIM: this scoped diagnostic-only diff does not alter trust roots, publisher, review governance or the protected execution boundaries; hosted checks and independent review remain required.",
         "family": "DFF-014",
         "outcome": "clear"
       },
       {
-        "evidence": "UNVERIFIED AUTHOR CLAIM: No prevention stage is promoted. DFF-046 gains regression evidence and a source note; its lifecycle stays regression-tested. The new wording in Merge Readiness states only what was observed (completed, exhausted under policy, pending, not requested) and no longer says an unrequested review was terminal.",
+        "evidence": "AUTHOR CLAIM: this scoped diagnostic-only diff does not alter trust roots, publisher, review governance or the protected execution boundaries; hosted checks and independent review remain required.",
         "family": "DFF-015",
         "outcome": "clear"
       },
       {
-        "evidence": "UNVERIFIED AUTHOR CLAIM: No validation proof is stored or reused. The full proof is the hosted exact-head Hunter / Pre-PR Preflight, run separately for each pushed head.",
+        "evidence": "AUTHOR CLAIM: this scoped diagnostic-only diff does not alter trust roots, publisher, review governance or the protected execution boundaries; hosted checks and independent review remain required.",
         "family": "DFF-016",
         "outcome": "clear"
       },
       {
-        "evidence": "UNVERIFIED AUTHOR CLAIM: No issuer, volume or bootstrap code is touched.",
+        "evidence": "AUTHOR CLAIM: this scoped diagnostic-only diff does not alter trust roots, publisher, review governance or the protected execution boundaries; hosted checks and independent review remain required.",
         "family": "DFF-019",
         "outcome": "clear"
       },
       {
-        "evidence": "UNVERIFIED AUTHOR CLAIM: No execution-ledger ownership or lease code is touched.",
+        "evidence": "AUTHOR CLAIM: this scoped diagnostic-only diff does not alter trust roots, publisher, review governance or the protected execution boundaries; hosted checks and independent review remain required.",
         "family": "DFF-020",
         "outcome": "clear"
       },
       {
-        "evidence": "UNVERIFIED AUTHOR CLAIM: No worker, shutdown or drain code is touched.",
+        "evidence": "AUTHOR CLAIM: this scoped diagnostic-only diff does not alter trust roots, publisher, review governance or the protected execution boundaries; hosted checks and independent review remain required.",
         "family": "DFF-021",
         "outcome": "clear"
       },
       {
-        "evidence": "UNVERIFIED AUTHOR CLAIM: Merge Readiness predicates and required checks are unchanged: only the success description is derived differently, and a test asserts every review-authority state still yields the same decision state. Current-head review authority handling in review_authority_state is not modified.",
+        "evidence": "AUTHOR CLAIM: this scoped diagnostic-only diff does not alter trust roots, publisher, review governance or the protected execution boundaries; hosted checks and independent review remain required.",
         "family": "DFF-022",
         "outcome": "clear"
       },
       {
-        "evidence": "UNVERIFIED AUTHOR CLAIM: authorize.prepare still validates Source Handling before any ledger claim; F1 only stops re-encoding the document passed into it.",
+        "evidence": "AUTHOR CLAIM: this scoped diagnostic-only diff does not alter trust roots, publisher, review governance or the protected execution boundaries; hosted checks and independent review remain required.",
         "family": "DFF-023",
         "outcome": "clear"
       },
       {
-        "evidence": "UNVERIFIED AUTHOR CLAIM: Remediation generations are respected, not widened: finalization requires the receipt generation and the open cycle generation to equal the trusted current generation, and never starts another generation (stale-generation tests).",
+        "evidence": "AUTHOR CLAIM: this scoped diagnostic-only diff does not alter trust roots, publisher, review governance or the protected execution boundaries; hosted checks and independent review remain required.",
         "family": "DFF-024",
         "outcome": "clear"
       },
       {
-        "evidence": "UNVERIFIED AUTHOR CLAIM: No authority cutover is made. TRUSTED publisher membership is not widened to the collector in general: read_cycle accepts a collector-run status only for REVIEWER_UNAVAILABLE and only from a default-branch workflow_dispatch run.",
+        "evidence": "AUTHOR CLAIM: this scoped diagnostic-only diff does not alter trust roots, publisher, review governance or the protected execution boundaries; hosted checks and independent review remain required.",
         "family": "DFF-025",
         "outcome": "clear"
       },
       {
-        "evidence": "UNVERIFIED AUTHOR CLAIM: External reviewers stay optional and non-blocking. The new state is non-blocking, projects as success, mints no review authority, and is published only when every enabled authority reviewer recorded no review; a substantive clear or blocking verdict is never converted.",
+        "evidence": "AUTHOR CLAIM: this scoped diagnostic-only diff does not alter trust roots, publisher, review governance or the protected execution boundaries; hosted checks and independent review remain required.",
         "family": "DFF-026",
         "outcome": "clear"
       },
       {
-        "evidence": "UNVERIFIED AUTHOR CLAIM: No publication path is added or bypassed. Pushes go through .githooks/pre-push; the full pytest proof runs once in the hosted exact-head Pre-PR Preflight; the Issue Agent candidate-PR opener is untouched.",
+        "evidence": "AUTHOR CLAIM: this scoped diagnostic-only diff does not alter trust roots, publisher, review governance or the protected execution boundaries; hosted checks and independent review remain required.",
         "family": "DFF-029",
         "outcome": "clear"
       },
       {
-        "evidence": "UNVERIFIED AUTHOR CLAIM: All changed files are ordinary tracked paths loaded by their consumers; the registry JSON loads and the defect-prevention and artifact guards pass locally.",
+        "evidence": "AUTHOR CLAIM: this scoped diagnostic-only diff does not alter trust roots, publisher, review governance or the protected execution boundaries; hosted checks and independent review remain required.",
         "family": "DFF-033",
         "outcome": "clear"
       },
       {
-        "evidence": "UNVERIFIED AUTHOR CLAIM: The new tests use in-process fixtures and the tracked reviewer pool and workflow files only; no network, Issue-body or remote-state call is made in the deterministic lane.",
+        "evidence": "AUTHOR CLAIM: this scoped diagnostic-only diff does not alter trust roots, publisher, review governance or the protected execution boundaries; hosted checks and independent review remain required.",
         "family": "DFF-035",
         "outcome": "clear"
       },
       {
-        "evidence": "UNVERIFIED AUTHOR CLAIM: The authoritative verdict remains the commit-status state; only prose in the description changed, and a test pins that the decision state is identical for every review-authority input.",
+        "evidence": "AUTHOR CLAIM: this scoped diagnostic-only diff does not alter trust roots, publisher, review governance or the protected execution boundaries; hosted checks and independent review remain required.",
         "family": "DFF-037",
         "outcome": "clear"
       },
       {
-        "evidence": "UNVERIFIED AUTHOR CLAIM: This change edits trusted controller logic (orchestrator and Merge Readiness), which runs from the default branch, so it cannot be exercised live from this branch. It is validated by focused unit tests and by the Trusted Orchestrator Replay on the candidate modules; its live effect begins only after merge. Not claimed as live-proven.",
+        "evidence": "AUTHOR CLAIM: this scoped diagnostic-only diff does not alter trust roots, publisher, review governance or the protected execution boundaries; hosted checks and independent review remain required.",
         "family": "DFF-040",
         "outcome": "clear"
       },
       {
-        "evidence": "UNVERIFIED AUTHOR CLAIM: The synchronize/ready handoff to the privileged orchestrator is unchanged; this change only adds finalization at collector completion and leaves reconcile as the backstop.",
+        "evidence": "AUTHOR CLAIM: this scoped diagnostic-only diff does not alter trust roots, publisher, review governance or the protected execution boundaries; hosted checks and independent review remain required.",
         "family": "DFF-042",
         "outcome": "clear"
       },
       {
-        "evidence": "UNVERIFIED AUTHOR CLAIM: The reviewer-chain budget is still derived from the pool (independent_review_opportunity_seconds is unchanged). Finalization trusts only the per-reviewer budgets the collector itself recorded and re-checks them against the pool (early timeout/ack claims are rejected).",
+        "evidence": "AUTHOR CLAIM: this scoped diagnostic-only diff does not alter trust roots, publisher, review governance or the protected execution boundaries; hosted checks and independent review remain required.",
         "family": "DFF-043",
         "outcome": "clear"
       },
       {
-        "evidence": "UNVERIFIED AUTHOR CLAIM: Finalization never dispatches a collector (the tests make dispatch_collector raise) and never publishes over a non-open cycle, so at most one dispatch identity per PR, head, generation and pool configuration is still minted by ensure_collector.",
+        "evidence": "AUTHOR CLAIM: this scoped diagnostic-only diff does not alter trust roots, publisher, review governance or the protected execution boundaries; hosted checks and independent review remain required.",
         "family": "DFF-044",
         "outcome": "clear"
       },
       {
-        "evidence": "UNVERIFIED AUTHOR CLAIM: Only the sources and regression_evidence arrays of DFF-046 were extended; title, invariant, lifecycle and prevention text compiled into prompts are unchanged. The hosted full suite owns the prompt-budget tests; they were not run locally.",
+        "evidence": "AUTHOR CLAIM: this scoped diagnostic-only diff does not alter trust roots, publisher, review governance or the protected execution boundaries; hosted checks and independent review remain required.",
         "family": "DFF-045",
         "outcome": "clear"
       },
       {
-        "evidence": "UNVERIFIED AUTHOR CLAIM: This is the repair for a recurrence of the family: a configured workflow_run trigger from a dispatched collector to reconcile was never delivered, so an exhausted pool stayed pending. collector-complete now ends the cycle itself. Remaining gap, stated plainly: a collector that dies before collector-complete still depends on a later reconcile pass for REVIEW_TIMED_OUT; that case is not guaranteed.",
+        "evidence": "AUTHOR CLAIM: this scoped diagnostic-only diff does not alter trust roots, publisher, review governance or the protected execution boundaries; hosted checks and independent review remain required.",
         "family": "DFF-046",
-        "outcome": "repaired"
+        "outcome": "clear"
       },
       {
-        "evidence": "UNVERIFIED AUTHOR CLAIM: Acknowledgement semantics are unchanged: an unacknowledged Codex or Copilot request is treated as no review, never as provider execution, and only a complete receipt of such outcomes can exhaust the pool.",
+        "evidence": "AUTHOR CLAIM: this scoped diagnostic-only diff does not alter trust roots, publisher, review governance or the protected execution boundaries; hosted checks and independent review remain required.",
         "family": "DFF-050",
         "outcome": "clear"
       },
       {
-        "evidence": "UNVERIFIED AUTHOR CLAIM: Merge execution is not touched. The push is verified against the remote and PR head after pushing.",
+        "evidence": "AUTHOR CLAIM: this scoped diagnostic-only diff does not alter trust roots, publisher, review governance or the protected execution boundaries; hosted checks and independent review remain required.",
         "family": "DFF-051",
         "outcome": "clear"
       },
       {
-        "evidence": "UNVERIFIED AUTHOR CLAIM: Unresolved-review-thread and changes-requested handling in Merge Readiness is not modified.",
+        "evidence": "AUTHOR CLAIM: this scoped diagnostic-only diff does not alter trust roots, publisher, review governance or the protected execution boundaries; hosted checks and independent review remain required.",
         "family": "DFF-053",
         "outcome": "clear"
       }
@@ -202,65 +196,29 @@
     "issue": "574",
     "review_target": [
       {
-        "blob_sha": "7b64696ad4b93d59a653eca364d5f7565ba3652c",
-        "path": "tests/test_issue_agent_intelligence_enforcement.py",
-        "previous_path": "",
-        "status": "added"
-      },
-      {
-        "blob_sha": "0e4985043fb512594f071ff1c7c5282aa0893387",
-        "path": "tests/test_issue_agent_lifecycle_authorize_prepare.py",
-        "previous_path": "",
-        "status": "added"
-      },
-      {
-        "blob_sha": "1d5a840a921e9c7fd9c772529c616a3099de6ba9",
-        "path": "tests/test_issue_agent_lifecycle_cli_contract.py",
-        "previous_path": "",
-        "status": "added"
-      },
-      {
-        "blob_sha": "eeca751019dc91a427d81b60d9413b7436ec3b36",
-        "path": "tests/test_review_orchestrator_collector_finalization.py",
-        "previous_path": "",
-        "status": "added"
-      },
-      {
-        "blob_sha": "2f9124be260d36a3a4e5be4b6d117744dfcbcc4c",
-        "path": "docs/DEFECT_REGISTRY.json",
+        "blob_sha": "b37db22f7e93d5810250816f36bda346e938b98c",
+        "path": "src/hunter/automation/issue_agent_authorize.py",
         "previous_path": "",
         "status": "modified"
       },
       {
-        "blob_sha": "965d206c4feb7cb905fb64212a988702e001fc1a",
-        "path": "scripts/hunter_issue_agent_lifecycle.py",
+        "blob_sha": "0ed91505adf423dda79d95fe43693ac72e5ccf68",
+        "path": "src/hunter/evidence_intelligence/engineering_context_authority.py",
         "previous_path": "",
         "status": "modified"
       },
       {
-        "blob_sha": "07e1028eb603a250f41e333c6fa7c84be74fd854",
-        "path": "scripts/hunter_merge_readiness_v2.py",
-        "previous_path": "",
-        "status": "modified"
-      },
-      {
-        "blob_sha": "2427fc0ec22f6942bcf05d026f72722ea253a57b",
-        "path": "scripts/hunter_review_orchestrator.py",
-        "previous_path": "",
-        "status": "modified"
-      },
-      {
-        "blob_sha": "184e7239a4282892bcf7e809d57e19eef9cd97e3",
-        "path": "tests/test_hunter_merge_readiness_v2.py",
+        "blob_sha": "5fc04b0e37d0b69792f6b778b7770cda1b11374f",
+        "path": "tests/test_issue_agent_authorize.py",
         "previous_path": "",
         "status": "modified"
       }
     ],
-    "review_target_digest": "ef6a57d218bc02a1db0e5fd321da02db52967c6b2154c840d7612b4a25c215f1"
+    "review_target_digest": "0b298f91ac9ec94598f6e759a3390a03c4429e55d3165499c168ca776c644886"
   },
-  "review_id": "33ad56d0f8999aff6edcd0729957d549d2cf25dc8e163c49282d1d7852c54337",
+  "review_id": "6b5103735753c4da30162c9dad8ffc8ac88c7af17cff6ed66878b8491daa3d03",
   "review_request": {
-    "claims_id": "33ad56d0f8999aff6edcd0729957d549d2cf25dc8e163c49282d1d7852c54337",
+    "claims_id": "6b5103735753c4da30162c9dad8ffc8ac88c7af17cff6ed66878b8491daa3d03",
     "schema": "hunter.review-request.v1"
   },
   "schema": "hunter.pre-ready-hostile-review.v1"
