@@ -83,6 +83,13 @@ def decide(
 ) -> tuple[bool, str]:
     """Whether the trusted candidate lane may stand on the hosted exact-head proof."""
     try:
+        current = governance.request_json(repository, token, "GET", f"pulls/{pr_number}")
+        if (
+            not isinstance(current, dict)
+            or not isinstance(current.get("head"), dict)
+            or current["head"].get("sha") != head_sha
+        ):
+            return False, "PR current head differs from event exact head"
         ok, changed_paths, error = governance.read_pr_changed_paths(repository, token, pr_number)
     except Exception as exc:  # noqa: BLE001 - any failure must run the full trusted gates
         return False, f"changed-file evidence is unavailable ({type(exc).__name__}: {exc})"
@@ -101,6 +108,17 @@ def decide(
         token=token,
         fetch=fetch,
     )
+    if decision.reusable:
+        try:
+            latest = governance.request_json(repository, token, "GET", f"pulls/{pr_number}")
+            if (
+                not isinstance(latest, dict)
+                or not isinstance(latest.get("head"), dict)
+                or latest["head"].get("sha") != head_sha
+            ):
+                return False, "PR head changed during proof adjudication"
+        except Exception as exc:  # noqa: BLE001 - fail closed
+            return False, f"PR head recheck unavailable ({type(exc).__name__}: {exc})"
     return decision.reusable, decision.reason
 
 

@@ -25,6 +25,13 @@ import pytest
 import yaml
 
 ROOT = Path(__file__).resolve().parents[1]
+
+
+@pytest.fixture(autouse=True)
+def _current_pr_head(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(decision.governance, "request_json", lambda *_a, **_k: {"head": {"sha": HEAD}})
+
+
 HEAD = "a" * 40
 PR = 580
 REPO = "fafa33/Project-Hunter"
@@ -212,3 +219,33 @@ def test_the_candidate_executing_step_never_inherits_the_reuse_token() -> None:
     assert env.get("GH_TOKEN") == ""
     decision_step = next(step for step in steps if step.get("id") == "reuse-decision")
     assert (decision_step.get("env") or {}).get("GITHUB_TOKEN") == "${{ github.token }}"
+
+
+def test_changed_pr_head_refuses_reuse(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    monkeypatch.setattr(decision.governance, "request_json", lambda *_a, **_k: {"head": {"sha": "b" * 40}})
+    _failing_resolve_spy(monkeypatch)
+    allowed, reason = decision.decide(tmp_path, head_sha=HEAD, repository=REPO, pr_number=PR, token="token")
+    assert not allowed
+    assert "head" in reason
+
+
+def test_head_changes_during_adjudication_refuses_reuse(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    seen = iter((HEAD, "b" * 40))
+    monkeypatch.setattr(decision.governance, "request_json", lambda *_a, **_k: {"head": {"sha": next(seen)}})
+    monkeypatch.setattr(decision.governance, "read_pr_changed_paths", _no_changes)
+    _resolve_spy(monkeypatch, reuse.ReuseDecision(True, "hosted proof"))
+    allowed, reason = decision.decide(tmp_path, head_sha=HEAD, repository=REPO, pr_number=PR, token="token")
+    assert not allowed
+    assert "changed" in reason
+
+
+def test_malformed_pr_file_listing_refuses_reuse(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    original = decision.governance.read_pr_changed_paths
+    monkeypatch.setattr(
+        decision.governance, "request_json", lambda *_a, **_k: [{"status": "modified"}, {"filename": "tests/test_x.py"}]
+    )
+    monkeypatch.setattr(decision.governance, "read_pr_changed_paths", original)
+    ok, files, error = decision.governance.read_pr_changed_files(REPO, "token", PR)
+    assert not ok
+    assert files == ()
+    assert "malformed" in (error or "")
