@@ -134,6 +134,7 @@ class AuthorizeDependencies:
     #: Definitive count of active lifecycles across Issues; raises on an indefinite observation.
     active_lifecycles: Callable[[], int]
     compiler_identity_sha256: str
+    repository_checkout: Path = field(default_factory=Path.cwd)
     admission_cap: int = DEFAULT_ADMISSION_CAP
     #: Verified anchored-knowledge overlay (ADR 0039 L2): prevention knowledge reaches the task before its model.
     knowledge_overlay: Sequence[Mapping[str, Any]] = ()
@@ -290,12 +291,10 @@ def prepare(
             ),
             provenance_resolver=dependencies.provenance_resolver,
         )
-        # The hosted lifecycle installs the package non-editably.  Module-relative
-        # defaults then point into site-packages, not the checked-out repository.
-        # The workflow executes from the trusted checkout root; bind DPM to its
-        # canonical registry there and retain fail-closed registry validation.
+        # Bind DPM to the explicitly configured control checkout, never the
+        # ambient working directory or the installed package location.
         dpm = EngineeringContextAuthority(
-            registry_path=Path.cwd() / "docs" / "DEFECT_REGISTRY.json",
+            registry_path=dependencies.repository_checkout / "docs" / "DEFECT_REGISTRY.json",
             knowledge_overlay=dependencies.knowledge_overlay,
         )
         composed = compose_governed_compilation(

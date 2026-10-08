@@ -537,7 +537,9 @@ def _export_public_trust(configuration: control.Configuration) -> None:
     os.environ.update(environment)
 
 
-def _authorize_dependencies(configuration: control.Configuration, github: control.GitHubRest) -> Any:
+def _authorize_dependencies(
+    configuration: control.Configuration, github: control.GitHubRest, *, repository_checkout: Path | None = None
+) -> Any:
     import hunter_issue_agent_provisioner as provisioner
 
     from hunter.automation.issue_agent_execution import IssueAgentAuthorizationVerifier
@@ -588,7 +590,10 @@ def _authorize_dependencies(configuration: control.Configuration, github: contro
         handoff_recipient=configuration.handoff_recipient,
         open_issue_agent_pull_request=open_pull_request,
         active_lifecycles=active_lifecycles,
-        compiler_identity_sha256=authorize.compiler_identity(control_sha=control_sha, checkout=Path.cwd()),
+        compiler_identity_sha256=authorize.compiler_identity(
+            control_sha=control_sha, checkout=repository_checkout or Path.cwd()
+        ),
+        repository_checkout=repository_checkout or Path.cwd(),
         knowledge_overlay=_knowledge_overlay(configuration, github),
     )
 
@@ -822,7 +827,9 @@ def cmd_authorize_prepare(configuration: control.Configuration, arguments: argpa
     context = _authorize_context()
     prepared, sealed = authorize.prepare(
         document,
-        dependencies=_authorize_dependencies(configuration, github),
+        dependencies=_authorize_dependencies(
+            configuration, github, repository_checkout=Path(arguments.checkout).resolve()
+        ),
         context=context,
         state_store=_store(configuration, authenticated=True),
         source_handling_store=_store(configuration, authenticated=True),
