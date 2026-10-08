@@ -290,7 +290,14 @@ def prepare(
             ),
             provenance_resolver=dependencies.provenance_resolver,
         )
-        dpm = EngineeringContextAuthority(knowledge_overlay=dependencies.knowledge_overlay)
+        # The hosted lifecycle installs the package non-editably.  Module-relative
+        # defaults then point into site-packages, not the checked-out repository.
+        # The workflow executes from the trusted checkout root; bind DPM to its
+        # canonical registry there and retain fail-closed registry validation.
+        dpm = EngineeringContextAuthority(
+            registry_path=Path.cwd() / "docs" / "DEFECT_REGISTRY.json",
+            knowledge_overlay=dependencies.knowledge_overlay,
+        )
         composed = compose_governed_compilation(
             repository=EvidenceIntelligenceRepository(evidence),
             source_handling_resolver=resolver,
