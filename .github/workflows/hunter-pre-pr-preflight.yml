@@ -55,6 +55,15 @@ jobs:
           echo "mode=${PREFLIGHT_MODE}" >> "${GITHUB_OUTPUT}"
           echo "Selected preflight mode: ${PREFLIGHT_MODE}"
 
+      - name: Fail fast on mapped changed-file regressions
+        if: ${{ steps.preflight-mode.outputs.mode == 'normal' }}
+        env:
+          HEAD_SHA: ${{ github.sha }}
+        run: |
+          set -euo pipefail
+          BASE_SHA="$(git merge-base "${HEAD_SHA}" origin/main)"
+          python scripts/hunter_ci_impact.py --base "${BASE_SHA}" --head "${HEAD_SHA}" --run-focused
+
       - name: Run shared deterministic preflight
         env:
           PREFLIGHT_MODE: ${{ steps.preflight-mode.outputs.mode }}
