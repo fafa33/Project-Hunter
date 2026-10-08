@@ -40,7 +40,7 @@ def main() -> int:
     parser.add_argument("--run-focused", action="store_true")
     args = parser.parse_args()
     result = subprocess.run(
-        ["git", "diff", "--name-only", "--diff-filter=ACMRT", args.base, args.head, "--"],
+        ["git", "diff", "--name-only", "--diff-filter=ACDMRTUXB", args.base, args.head, "--"],
         cwd=ROOT,
         text=True,
         capture_output=True,

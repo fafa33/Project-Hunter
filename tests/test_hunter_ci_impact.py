@@ -21,3 +21,11 @@ def test_workflow_requires_full():
 
 def test_empty_diff_requires_full():
     assert select_tests([], set())[0]
+
+
+def test_deleted_test_requires_full():
+    assert select_tests(["tests/test_removed.py"], set())[0]
+
+
+def test_dependency_change_requires_full():
+    assert select_tests(["requirements/ci-constraints.txt"], set())[0]
