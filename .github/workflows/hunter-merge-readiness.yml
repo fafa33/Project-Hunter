@@ -17,11 +17,9 @@ on:
       - synchronize
       - ready_for_review
       - converted_to_draft
-  pull_request_review:
-    types:
-      - submitted
-      - edited
-      - dismissed
+  # Bot-authored review events can be held by GitHub before jobs start.
+  # Trusted pull_request_target, workflow_run and scheduled reconciliation
+  # retain authoritative current-state review checks without manual approval.
   pull_request_review_comment:
     types:
       - created
