@@ -1707,7 +1707,8 @@ def _trusted_collector_fixture(run, *, first_run=None):
     return request, cycle, [first_run, run] if first_run is not None else [run]
 
 
-def test_trusted_collector_completion_publishes_valid_exact_cycle(monkeypatch):
+@pytest.mark.parametrize("capability,accepted", [("a", True), ("b", False)])
+def test_trusted_collector_completion_dispatch_capability(monkeypatch, capability, accepted):
     run = {
         "id": 777,
         "path": orchestrator.COLLECTOR_WORKFLOW_PATH,
@@ -1725,32 +1726,11 @@ def test_trusted_collector_completion_publishes_valid_exact_cycle(monkeypatch):
     monkeypatch.setattr(orchestrator, "read_cycle", lambda *_: ("present", cycle, None))
     monkeypatch.setattr(orchestrator, "collector_runs", lambda *_: runs)
     monkeypatch.setattr(orchestrator, "publish_collector_completion", lambda *args: published.append(args))
-    assert orchestrator.publish_trusted_collector_completion("owner/repo", "token", 777, "a" * 64).startswith(
-        "PUBLISHED:"
-    )
-    assert published == [("owner/repo", "token", 472, HEAD, 777)]
-
-
-def test_trusted_collector_rejects_wrong_dispatch_capability(monkeypatch):
-    run = {
-        "id": 777,
-        "path": orchestrator.COLLECTOR_WORKFLOW_PATH,
-        "event": "workflow_dispatch",
-        "head_branch": "main",
-        "head_sha": HEAD,
-        "status": "completed",
-        "conclusion": "success",
-        "display_title": f"Hunter Reviewer Collector PR 472 HEAD {HEAD}",
-        "created_at": "2026-10-09T19:01:00Z",
-    }
-    request, cycle, runs = _trusted_collector_fixture(run)
-    published = []
-    monkeypatch.setattr(orchestrator, "request_json", request)
-    monkeypatch.setattr(orchestrator, "read_cycle", lambda *_: ("present", cycle, None))
-    monkeypatch.setattr(orchestrator, "collector_runs", lambda *_: runs)
-    monkeypatch.setattr(orchestrator, "publish_collector_completion", lambda *args: published.append(args))
-    assert "SKIPPED" in orchestrator.publish_trusted_collector_completion("owner/repo", "token", 777, "b" * 64)
-    assert not published
+    result = orchestrator.publish_trusted_collector_completion("owner/repo", "token", 777, capability * 64)
+    assert result.startswith("PUBLISHED:") if accepted else "SKIPPED" in result
+    assert bool(published) == accepted
+    if accepted:
+        assert published == [("owner/repo", "token", 472, HEAD, 777)]
 
 
 def test_trusted_completion_rejects_replayed_proof_on_another_run(monkeypatch):
