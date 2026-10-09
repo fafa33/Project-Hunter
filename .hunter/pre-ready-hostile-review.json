@@ -53,7 +53,23 @@
     ],
     "base_ref": "main",
     "base_sha": "d1130e539592a8e1fa2b2c5b220a2ce3b1ab4914",
-    "defect_families": [],
+    "defect_families": [
+      {
+        "evidence": "AUTHOR CLAIM: exact-head orchestration and recovery applicability reviewed; independent reviewer must verify relevant invariants and regression coverage.",
+        "family": "DFF-42",
+        "outcome": "clear"
+      },
+      {
+        "evidence": "AUTHOR CLAIM: exact-head orchestration and recovery applicability reviewed; independent reviewer must verify relevant invariants and regression coverage.",
+        "family": "DFF-43",
+        "outcome": "clear"
+      },
+      {
+        "evidence": "AUTHOR CLAIM: exact-head orchestration and recovery applicability reviewed; independent reviewer must verify relevant invariants and regression coverage.",
+        "family": "DFF-44",
+        "outcome": "clear"
+      }
+    ],
     "findings": [],
     "issue": "583",
     "review_target": [
@@ -72,9 +88,9 @@
     ],
     "review_target_digest": "575a24304e975f0b2f0343949aea9de74170c36fb356ac7fb746029408e94adc"
   },
-  "review_id": "2c84730eb66dba86650c1a493bca3470aad2ccb553ae844c7531c08642344667",
+  "review_id": "a9ed2aeb84a3e75a2f0b164aa57c0150baa92ad466e0125db4c5716599f3d98d",
   "review_request": {
-    "claims_id": "2c84730eb66dba86650c1a493bca3470aad2ccb553ae844c7531c08642344667",
+    "claims_id": "a9ed2aeb84a3e75a2f0b164aa57c0150baa92ad466e0125db4c5716599f3d98d",
     "schema": "hunter.review-request.v1"
   },
   "schema": "hunter.pre-ready-hostile-review.v1"

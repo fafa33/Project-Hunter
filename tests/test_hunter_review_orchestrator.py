@@ -1920,6 +1920,31 @@ def test_recently_completed_collector_preserves_status_propagation_grace(monkeyp
     assert stored["published"] == []
 
 
+def test_completed_collector_grace_boundary_at_179_and_180_seconds(monkeypatch):
+    from datetime import UTC, datetime, timedelta
+
+    fixed_now = datetime(2026, 10, 9, 12, 0, tzinfo=UTC)
+    real_datetime = orchestrator.datetime
+
+    class FixedDatetime:
+        @staticmethod
+        def now(tz):
+            return fixed_now
+
+        @staticmethod
+        def fromisoformat(value):
+            return real_datetime.fromisoformat(value)
+
+    monkeypatch.setattr(orchestrator, "datetime", FixedDatetime)
+    for age, expected in ((179, "WAITING_FOR_REVIEWER"), (180, "REVIEW_TIMED_OUT")):
+        cycle = make_cycle(trigger_id=123, started_at="2026-10-09T11:58:00Z")
+        run = _collector_run("completed", "success")
+        run["updated_at"] = (fixed_now - timedelta(seconds=age)).isoformat()
+        stored = _ensure_harness(monkeypatch, cycle, [run])
+        assert orchestrator.ensure_collector("owner/repo", "token", 472, HEAD).state == expected
+        assert bool(stored["published"]) == (age == 180)
+
+
 def test_completed_collector_with_active_retry_never_settles_early(monkeypatch):
     cycle = make_cycle(trigger_id=123, started_at=_five_minutes_ago())
     completed = _collector_run("completed", "success")
