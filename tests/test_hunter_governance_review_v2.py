@@ -235,23 +235,18 @@ def test_reconcile_continues_after_one_pr_failure_and_drops_checkout_credentials
         end = workflow.index(f"  {next_name}:", start)
         return workflow[start:end]
 
-    workflow_run = trigger_block("workflow_run", "pull_request_review")
-    review = trigger_block("pull_request_review", "pull_request_review_comment")
-    review_comment = trigger_block("pull_request_review_comment", "schedule")
-
+    workflow_run = trigger_block("workflow_run", "pull_request_target")
     assert "- Hunter / Pre-PR Preflight" in workflow_run
     assert "- Hunter Reviewer Collector" in workflow_run
     assert "- completed" in workflow_run
-    assert "- submitted" in review
-    assert "- edited" in review
-    assert "- dismissed" in review
-    assert "- created" in review_comment
-    assert "- edited" in review_comment
-    assert "- deleted" in review_comment
-    # Review-state changes must reconcile immediately; the scheduled sweep is
-    # recovery only and must not be the normal authority-refresh path.
-    assert workflow.index("pull_request_review:") < workflow.index("schedule:")
-    assert workflow.index("pull_request_review_comment:") < workflow.index("schedule:")
+    # Approval-held review events must not reappear on the privileged gate.
+    assert "  pull_request_review:" not in workflow
+    assert "  pull_request_review_comment:" not in workflow
+    assert "  pull_request_target:" in workflow
+    assert 'cron: "*/5 * * * *"' in workflow
+    # Human review changes converge on the bounded trusted sweep, not on an
+    # approval-held event; the previous immediate-review assertion was stale.
+
 
 
 ANCESTOR = "d" * 40
