@@ -57,8 +57,8 @@ jobs:
             echo "number=${EVENT_PR}" >> "$GITHUB_OUTPUT"
           else
             # Catch up one bounded PR per run, rotating across open PRs.
-            hour="$(date -u +%s)"
-            number="$(gh pr list --repo "$REPOSITORY" --state open --base main --limit 100 --json number --jq "sort_by(.number) | if length == 0 then empty else .[(($hour / 3600) % length)].number end")"
+            hour="$(( $(date -u +%s) / 3600 ))"
+            number="$(gh pr list --repo "$REPOSITORY" --state open --base main --limit 100 --json number --jq "sort_by(.number) | if length == 0 then empty else .[($hour % length)].number end")"
             echo "number=${number}" >> "$GITHUB_OUTPUT"
           fi
       - name: Build exact-head learning artifact

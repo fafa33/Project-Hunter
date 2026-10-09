@@ -1755,6 +1755,8 @@ def test_exhausted_provider_chain_terminates_the_opportunity(monkeypatch):
         raising=False,
     )
     monkeypatch.setattr(orchestrator, "collector_needs_dispatch", lambda *_args: False, raising=False)
+    # This exhausted-chain fixture has no correlated successful collector run.
+    monkeypatch.setattr(orchestrator, "collector_runs", lambda *_args: [], raising=False)
     monkeypatch.setattr(
         orchestrator,
         "publish_cycle",
@@ -1914,6 +1916,19 @@ def test_recently_completed_collector_preserves_status_propagation_grace(monkeyp
     cycle = make_cycle(trigger_id=123, started_at=_five_minutes_ago())
     run = _collector_run("completed", "success")
     run["updated_at"] = datetime.now(UTC).isoformat()
+    stored = _ensure_harness(monkeypatch, cycle, [run])
+    result = orchestrator.ensure_collector("owner/repo", "token", 472, HEAD)
+    assert result.state == "WAITING_FOR_REVIEWER"
+    assert stored["published"] == []
+
+
+def test_completed_collector_grace_survives_expired_independent_budget(monkeypatch):
+    from datetime import UTC, datetime, timedelta
+
+    budget = orchestrator.independent_review_opportunity_seconds()
+    cycle = make_cycle(trigger_id=123, started_at=_seconds_ago(budget + 60))
+    run = _collector_run("completed", "success")
+    run["updated_at"] = (datetime.now(UTC) - timedelta(seconds=30)).isoformat()
     stored = _ensure_harness(monkeypatch, cycle, [run])
     result = orchestrator.ensure_collector("owner/repo", "token", 472, HEAD)
     assert result.state == "WAITING_FOR_REVIEWER"

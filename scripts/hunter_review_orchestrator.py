@@ -1154,6 +1154,17 @@ def ensure_collector(
                 if not _active_collector_still_running(
                     repository, token, existing, independent_review_opportunity_seconds()
                 ):
+                    # A completed successful run still owns its status-publication
+                    # grace, even after the independent opportunity budget expires.
+                    # Do not let the age-based fallback bypass that grace.
+                    if existing.trigger_id is not None:
+                        try:
+                            runs = collector_runs(repository, token, existing.pr_number, existing.head_sha, existing.generation_id)
+                            successful = [run for run in runs if run.get("status") == "completed" and run.get("conclusion") == "success"]
+                            if successful and not completed_collector_settled(repository, token, existing):
+                                return existing
+                        except (transport.GitHubRequestError, ValueError):
+                            return existing
                     terminal = ReviewCycle(
                         pr_number=existing.pr_number,
                         head_sha=existing.head_sha,
