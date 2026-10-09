@@ -448,14 +448,12 @@ def test_reconcile_published_states_are_still_believed(monkeypatch):
 # --- The wiring that makes the finalization run ---------------------------------------------------------------------
 
 
-def test_the_collector_workflow_runs_collector_complete_in_its_own_working_directory():
+def test_collector_workflow_does_not_publish_privileged_completion():
     document = yaml.safe_load((ROOT / ".github/workflows/hunter-reviewer-collector.yml").read_text(encoding="utf-8"))
     steps = document["jobs"]["collect"]["steps"]
-    output = next(step for step in steps if "hunter_reviewer_collector.py" in str(step.get("run", "")))
-    complete = next(step for step in steps if "collector-complete" in str(step.get("run", "")))
-    assert steps.index(output) < steps.index(complete)
-    assert f"--output {orchestrator.COLLECTOR_RESULTS_FILE}" in " ".join(str(output["run"]).split())
-    assert complete["if"] == "success()"
+    assert any("hunter_reviewer_collector.py" in str(step.get("run", "")) for step in steps)
+    assert all("collector-complete" not in str(step.get("run", "")) for step in steps)
+    assert document["permissions"].get("statuses") != "write"
 
 
 def test_collector_complete_defaults_to_the_receipt_the_collector_step_writes():

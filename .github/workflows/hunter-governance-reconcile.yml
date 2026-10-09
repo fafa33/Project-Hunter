@@ -67,7 +67,6 @@ on:
       - synchronize
   schedule:
     - cron: "*/5 * * * *"
-  workflow_dispatch:
 
 permissions:
   actions: write
@@ -94,6 +93,16 @@ jobs:
           fetch-depth: 1
           persist-credentials: false
 
+      - name: Publish trusted collector completion
+        if: github.event_name == 'workflow_run' && github.event.workflow_run.name == 'Hunter Reviewer Collector' && github.event.workflow_run.conclusion == 'success'
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+          GITHUB_REPOSITORY: ${{ github.repository }}
+          COLLECTOR_RUN_ID: ${{ github.event.workflow_run.id }}
+        run: >-
+          python scripts/hunter_review_orchestrator.py trusted-collector-complete
+          --repository "$GITHUB_REPOSITORY" --run-id "$COLLECTOR_RUN_ID"
+
       - name: Refresh lightweight governance status
         env:
           GITHUB_TOKEN: ${{ github.token }}
@@ -109,7 +118,7 @@ jobs:
           # Event-driven reconciliation is deliberately scoped to the PR that
           # caused the event. Sweeping every open PR for each review/check event
           # multiplies API traffic and can exhaust the installation rate limit.
-          # Scheduled/manual recovery remains the bounded full-sweep path.
+          # Scheduled recovery remains the bounded full-sweep path.
           event_name="${{ github.event_name }}"
           if [[ "${event_name}" == "pull_request_target" ]]; then
             pr_numbers="${{ github.event.pull_request.number }}"

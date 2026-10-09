@@ -1595,24 +1595,65 @@ def test_collector_completion_pr_derivation_yields_nothing_for_malformed_or_fore
     assert _extract_collector_pr_numbers("Hunter Reviewer Collector PR HEAD " + "e" * 40) == ""
 
 
-def test_collector_workflow_publishes_completion_from_its_own_trusted_inputs():
-    """Completion must reconcile the exact PR/head the collector was dispatched
-    for, derived only from its own dispatch inputs -- never from workflow_run
-    metadata, and never re-guessed or parsed after the fact."""
-
+def test_collector_completion_is_published_only_by_trusted_reconcile():
     document = yaml.safe_load(COLLECTOR_WORKFLOW_FILE.read_text(encoding="utf-8"))
-    assert document["permissions"]["statuses"] == "write"
-    steps = document["jobs"]["collect"]["steps"]
-    completion = next(step for step in steps if step.get("name") == "Publish collector completion")
+    assert document["permissions"].get("statuses") != "write"
+    assert all(step.get("name") != "Publish collector completion" for step in document["jobs"]["collect"]["steps"])
+    trusted = yaml.safe_load(
+        (REPOSITORY_ROOT / ".github/workflows/hunter-governance-reconcile.yml").read_text(encoding="utf-8")
+    )
+    assert "workflow_dispatch" not in _triggers(trusted)
+    steps = trusted["jobs"]["reconcile"]["steps"]
+    publisher = next(step for step in steps if step.get("name") == "Publish trusted collector completion")
+    assert "trusted-collector-complete" in str(publisher["run"])
+    assert "github.event.workflow_run.id" in str(publisher["env"])
 
-    assert completion.get("if") == "success()"
-    run = str(completion["run"])
-    assert "collector-complete" in run
-    assert '--pr "$PR_NUMBER"' in run
-    assert '--head "$CANDIDATE_HEAD"' in run
-    env = completion.get("env", {})
-    assert env.get("PR_NUMBER") == "${{ inputs.pr_number }}"
-    assert env.get("CANDIDATE_HEAD") == "${{ inputs.head_sha }}"
+
+@pytest.mark.parametrize(
+    "override", ["wrong_branch", "wrong_path", "failed", "wrong_event", "wrong_title", "wrong_head"]
+)
+def test_trusted_collector_completion_rejects_untrusted_run(monkeypatch, override):
+    run = {
+        "id": 777,
+        "path": orchestrator.COLLECTOR_WORKFLOW_PATH,
+        "event": "workflow_dispatch",
+        "head_branch": "main",
+        "status": "completed",
+        "conclusion": "success",
+        "display_title": f"Hunter Reviewer Collector PR 472 HEAD {HEAD}",
+    }
+    pr = {"state": "open", "head": {"sha": HEAD}}
+    if override == "wrong_branch":
+        run["head_branch"] = "candidate"
+    elif override == "wrong_path":
+        run["path"] = ".github/workflows/evil.yml"
+    elif override == "failed":
+        run["conclusion"] = "failure"
+    elif override == "wrong_event":
+        run["event"] = "pull_request"
+    elif override == "wrong_title":
+        run["display_title"] = "spoofed"
+    elif override == "wrong_head":
+        pr["head"]["sha"] = "f" * 40
+    published = []
+
+    def request(_repository, _token, _method, path, _payload=None):
+        if path == "actions/runs/777":
+            return run
+        if path == "":
+            return {"default_branch": "main"}
+        if path == "pulls/472":
+            return pr
+        raise AssertionError(path)
+
+    monkeypatch.setattr(orchestrator, "request_json", request)
+    monkeypatch.setattr(orchestrator, "publish_collector_completion", lambda *args: published.append(args))
+    if override == "wrong_head":
+        assert "SKIPPED" in orchestrator.publish_trusted_collector_completion("owner/repo", "token", 777)
+    else:
+        with pytest.raises(ValueError):
+            orchestrator.publish_trusted_collector_completion("owner/repo", "token", 777)
+    assert not published
 
 
 def test_collector_completion_accepts_trusted_ancestor_of_current_main(monkeypatch):
@@ -2088,29 +2129,8 @@ def _candidate_status_publishers(document):
 
 
 def test_candidate_workflows_cannot_publish_protected_commit_statuses():
-    # Existing dispatch-only privileged publishers are explicit, bounded legacy
-    # exceptions pending trusted-dispatch migration. Never exempt their PR/push
-    # triggers or grant any new workflow the same status-writing capability.
-    legacy_dispatch = {
-        "hunter-governance-reconcile.yml",
-        "hunter-merge-readiness.yml",
-        "hunter-reviewer-collector.yml",
-    }
-    unsafe = []
-    for path, document in _workflow_documents():
-        grants = _candidate_status_publishers(document)
-        if not grants:
-            continue
-        triggers = _triggers(document)
-        if path.name in legacy_dispatch:
-            assert "workflow_dispatch" in triggers, path.name
-            assert "pull_request" not in triggers, path.name
-            push = document.get("on", document.get(True))
-            push = push.get("push") if isinstance(push, dict) else None
-            assert "push" not in triggers or (isinstance(push, dict) and push.get("branches") == ["main"]), path.name
-            continue
-        unsafe.append((path.name, grants))
-    assert unsafe == []
+    unsafe = [(path.name, _candidate_status_publishers(document)) for path, document in _workflow_documents()]
+    assert [(name, grants) for name, grants in unsafe if grants] == []
 
 
 @pytest.mark.parametrize(

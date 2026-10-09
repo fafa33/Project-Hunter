@@ -529,6 +529,42 @@ def publish_collector_completion(repository: str, token: str, pr_number: int, he
     )
 
 
+def publish_trusted_collector_completion(repository: str, token: str, run_id: int) -> str:
+    """Only a trusted default-branch reconcile may attest a finished collector.
+
+    Never trust candidate-supplied PR/head, workflow titles without API provenance,
+    or a dispatch run on a non-default branch.
+    """
+    run = request_json(repository, token, "GET", f"actions/runs/{run_id}")
+    if not isinstance(run, dict):
+        raise ValueError("collector run is unavailable")
+    info = request_json(repository, token, "GET", "")
+    branch = str((info or {}).get("default_branch") or "main")
+    if not (
+        run.get("id") == run_id
+        and run.get("path") == COLLECTOR_WORKFLOW_PATH
+        and run.get("event") == "workflow_dispatch"
+        and run.get("head_branch") == branch
+        and run.get("status") == "completed"
+        and run.get("conclusion") == "success"
+    ):
+        raise ValueError("collector run lacks trusted successful default-branch provenance")
+    title = str(run.get("display_title") or "")
+    match = re.fullmatch(r"Hunter Reviewer Collector PR ([1-9][0-9]*) HEAD ([0-9a-f]{40})(?: GEN [^\s]+)?", title)
+    if match is None:
+        raise ValueError("collector run title lacks exact PR/head identity")
+    pr_number, head_sha = int(match.group(1)), match.group(2)
+    pr = request_json(repository, token, "GET", f"pulls/{pr_number}")
+    if (
+        not isinstance(pr, dict)
+        or pr.get("state") != "open"
+        or str((pr.get("head") or {}).get("sha") or "") != head_sha
+    ):
+        return "SKIPPED: collector candidate head superseded"
+    publish_collector_completion(repository, token, pr_number, head_sha, run_id)
+    return f"PUBLISHED: collector completion PR #{pr_number} at {head_sha[:12]}"
+
+
 def read_collector_completion(
     repository: str, token: str, pr_number: int, head_sha: str
 ) -> tuple[str, int | None, str | None]:
@@ -1484,6 +1520,9 @@ def parser() -> argparse.ArgumentParser:
     complete.add_argument("--pr", type=int, required=True)
     complete.add_argument("--head", required=True)
     complete.add_argument("--run-id", type=int, required=True)
+    trusted = sub.add_parser("trusted-collector-complete")
+    trusted.add_argument("--repository", required=True)
+    trusted.add_argument("--run-id", type=int, required=True)
     return result
 
 
@@ -1491,7 +1530,9 @@ def main() -> int:
     args = parser().parse_args()
     token = os.environ.get("GITHUB_TOKEN") or os.environ.get("GH_TOKEN") or ""
     try:
-        if args.command == "collector-complete":
+        if args.command == "trusted-collector-complete":
+            print(publish_trusted_collector_completion(args.repository, token, args.run_id))
+        elif args.command == "collector-complete":
             publish_collector_completion(args.repository, token, args.pr, args.head, args.run_id)
             # Best effort and fail closed: the completion marker above is already durable, and an unusable receipt
             # leaves the cycle open for the reconcile backstop rather than failing a collector that did its job.

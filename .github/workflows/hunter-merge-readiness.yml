@@ -32,12 +32,6 @@ on:
       - completed
   schedule:
     - cron: "*/5 * * * *"
-  workflow_dispatch:
-    inputs:
-      pr_number:
-        description: "Pull request number to reconcile"
-        required: true
-        type: number
 
 permissions:
   actions: read
@@ -51,7 +45,6 @@ concurrency:
     hunter-merge-readiness-${{
       github.event.pull_request.number
       || github.event.workflow_run.pull_requests[0].number
-      || github.event.inputs.pr_number
       || (github.event_name == 'schedule' && 'sweep')
       || 'sweep'
     }}
