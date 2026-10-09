@@ -74,25 +74,25 @@
     "issue": "583",
     "review_target": [
       {
-        "blob_sha": "be9615e25c8d5c8d705861322418738bb93179f0",
+        "blob_sha": "ae7d02e5ec2fa86b43378487d727640aa887689c",
         "path": ".github/workflows/hunter-canonicalization-auto.yml",
         "previous_path": "",
         "status": "modified"
       },
       {
-        "blob_sha": "7b983e243882da524aa0ce4fe9f6f1f963f5865f",
+        "blob_sha": "b92fadda7698a7764e300ad11a199c21fa417665",
         "path": ".github/workflows/hunter-governance-reconcile.yml",
         "previous_path": "",
         "status": "modified"
       },
       {
-        "blob_sha": "fe9d9d698a8015b26c151f276315bc6c0e2e2edd",
+        "blob_sha": "3abfb170d4500c234e864875380dc27a9b5e87e8",
         "path": ".github/workflows/hunter-knowledge-learning.yml",
         "previous_path": "",
         "status": "modified"
       },
       {
-        "blob_sha": "da50032b3fdeeadb2ccba370518fc5a5de9bc894",
+        "blob_sha": "bee342c12b5065d4ba4d623a53e2cc5b7d467de0",
         "path": ".github/workflows/hunter-merge-readiness.yml",
         "previous_path": "",
         "status": "modified"
@@ -104,7 +104,7 @@
         "status": "modified"
       },
       {
-        "blob_sha": "5ba88172da09f8ff624127c47601cff07d17897f",
+        "blob_sha": "2c4089d75ff67e5d07a4bde9d53ad4e969f4c044",
         "path": "tests/test_hunter_knowledge_learning_workflow.py",
         "previous_path": "",
         "status": "modified"
@@ -116,11 +116,11 @@
         "status": "modified"
       }
     ],
-    "review_target_digest": "3a17a56a1324c374f3f04fa9145c8b253d419e6d12010cc030c69adc07e34263"
+    "review_target_digest": "6472e313768c7f663ec41fd45b7ce5a23f00fbc6fda38ee2b5560f1482b91b91"
   },
-  "review_id": "05563e85653060245f4d7cd9e1fb1aa9eb50c4db6baa5df7d117a40a7c239346",
+  "review_id": "5f517af02d6febf9c039c99ff736cdd37f3b0e2c4df8a98135a02d6d5262da9b",
   "review_request": {
-    "claims_id": "05563e85653060245f4d7cd9e1fb1aa9eb50c4db6baa5df7d117a40a7c239346",
+    "claims_id": "5f517af02d6febf9c039c99ff736cdd37f3b0e2c4df8a98135a02d6d5262da9b",
     "schema": "hunter.review-request.v1"
   },
   "schema": "hunter.pre-ready-hostile-review.v1"

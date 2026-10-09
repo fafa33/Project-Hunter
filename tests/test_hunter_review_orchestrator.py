@@ -1922,6 +1922,20 @@ def test_recently_completed_collector_preserves_status_propagation_grace(monkeyp
     assert stored["published"] == []
 
 
+def test_stale_success_with_active_retry_cannot_outlive_bounded_ceiling(monkeypatch):
+    from datetime import UTC, datetime, timedelta
+
+    budget = orchestrator.independent_review_opportunity_seconds()
+    ceiling = budget * orchestrator.ACTIVE_COLLECTOR_GRACE_MULTIPLIER
+    cycle = make_cycle(trigger_id=123, started_at=_seconds_ago(ceiling + 60))
+    success = _collector_run("completed", "success")
+    success["updated_at"] = (datetime.now(UTC) - timedelta(seconds=ceiling)).isoformat()
+    stored = _ensure_harness(monkeypatch, cycle, [success, _collector_run("in_progress")])
+    result = orchestrator.ensure_collector("owner/repo", "token", 472, HEAD)
+    assert result.state == "REVIEW_TIMED_OUT"
+    assert [item.state for item in stored["published"]] == ["REVIEW_TIMED_OUT"]
+
+
 def test_completed_collector_grace_survives_expired_independent_budget(monkeypatch):
     from datetime import UTC, datetime, timedelta
 
