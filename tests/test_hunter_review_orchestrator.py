@@ -5,6 +5,7 @@ import pathlib
 import re
 import subprocess
 import sys
+from dataclasses import replace
 
 import hunter_github_transport as transport
 import hunter_pre_ready_review as pre_ready
@@ -1951,4 +1952,25 @@ def test_malformed_latest_success_timestamp_fails_closed(monkeypatch):
     new["updated_at"] = "not-a-date"
     stored = _ensure_harness(monkeypatch, cycle, [old, new])
     assert orchestrator.ensure_collector("owner/repo", "token", 472, HEAD).state == "WAITING_FOR_REVIEWER"
+    assert stored["published"] == []
+
+
+def test_completed_collector_rejects_naive_timestamps(monkeypatch):
+    cycle = make_cycle(trigger_id=123, started_at=_five_minutes_ago())
+    run = _collector_run("completed", "success")
+    run["updated_at"] = "2020-01-01T00:00:00"
+    stored = _ensure_harness(monkeypatch, cycle, [run])
+    assert orchestrator.ensure_collector("owner/repo", "token", 472, HEAD).state == "WAITING_FOR_REVIEWER"
+    assert stored["published"] == []
+
+
+def test_completed_collector_does_not_overwrite_concurrent_terminal(monkeypatch):
+    cycle = make_cycle(trigger_id=123, started_at=_five_minutes_ago())
+    run = _collector_run("completed", "success")
+    run["updated_at"] = "2020-01-01T00:00:00Z"
+    stored = _ensure_harness(monkeypatch, cycle, [run])
+    terminal = replace(cycle, state="REVIEWER_UNAVAILABLE")
+    reads = iter([cycle, terminal])
+    monkeypatch.setattr(orchestrator, "read_cycle", lambda *_args: ("present", next(reads), None))
+    assert orchestrator.ensure_collector("owner/repo", "token", 472, HEAD).state == "REVIEWER_UNAVAILABLE"
     assert stored["published"] == []

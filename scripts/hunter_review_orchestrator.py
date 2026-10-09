@@ -739,8 +739,11 @@ def completed_collector_settled(repository: str, token: str, cycle: ReviewCycle)
     if any(not isinstance(value, str) or not value for value in timestamps):
         return False
     try:
-        newest = max(datetime.fromisoformat(value.replace("Z", "+00:00")) for value in timestamps)
-    except ValueError:
+        parsed = [datetime.fromisoformat(value.replace("Z", "+00:00")) for value in timestamps]
+        if any(value.tzinfo is None or value.utcoffset() is None for value in parsed):
+            return False
+        newest = max(parsed)
+    except (ValueError, TypeError, OverflowError):
         return False
     return _older_than(newest.isoformat(), COLLECTOR_LIVENESS_GRACE_SECONDS)
 
@@ -1111,6 +1114,12 @@ def ensure_collector(
                 except (transport.GitHubRequestError, ValueError):
                     settled = False
                 if settled:
+                    # Collector completion may have published a terminal state meanwhile.
+                    state_now, cycle_now, _ = read_cycle(repository, token, pr_number, head_sha)
+                    if state_now != "present" or cycle_now is None:
+                        return existing
+                    if cycle_now != existing or cycle_now.state not in OPEN_CYCLE_STATES:
+                        return cycle_now
                     terminal = ReviewCycle(
                         pr_number=existing.pr_number,
                         head_sha=existing.head_sha,
