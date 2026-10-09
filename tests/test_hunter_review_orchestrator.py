@@ -700,13 +700,20 @@ def test_dispatch_collector_sends_only_exact_identity(monkeypatch):
 
     orchestrator.dispatch_collector("owner/repo", "token", 472, HEAD)
 
-    assert seen == [
-        (
-            "POST",
-            "actions/workflows/hunter-reviewer-collector.yml/dispatches",
-            {"ref": "main", "inputs": {"pr_number": "472", "head_sha": HEAD, "generation_id": ""}},
-        )
-    ]
+    assert len(seen) == 2
+    method, path, status = seen[0]
+    assert method == "POST" and path == f"statuses/{HEAD}"
+    assert status["context"] == "Hunter Collector Dispatch Proof / PR #472"
+    method, path, dispatch = seen[1]
+    assert method == "POST" and path == "actions/workflows/hunter-reviewer-collector.yml/dispatches"
+    assert dispatch["ref"] == "main"
+    assert dispatch["inputs"]["pr_number"] == "472"
+    assert dispatch["inputs"]["head_sha"] == HEAD
+    assert dispatch["inputs"]["generation_id"] == ""
+    assert (
+        status["description"]
+        == "|" + orchestrator.hashlib.sha256(dispatch["inputs"]["dispatch_proof"].encode()).hexdigest()
+    )
 
 
 def _workflow_documents():
@@ -1654,6 +1661,109 @@ def test_trusted_collector_completion_rejects_untrusted_run(monkeypatch, overrid
         with pytest.raises(ValueError):
             orchestrator.publish_trusted_collector_completion("owner/repo", "token", 777)
     assert not published
+
+
+def test_trusted_collector_completion_publishes_valid_exact_cycle(monkeypatch):
+    run = {
+        "id": 777,
+        "path": orchestrator.COLLECTOR_WORKFLOW_PATH,
+        "event": "workflow_dispatch",
+        "head_branch": "main",
+        "status": "completed",
+        "conclusion": "success",
+        "display_title": f"Hunter Reviewer Collector PR 472 HEAD {HEAD}",
+    }
+    origin = {
+        "id": 123,
+        "head_branch": "main",
+        "path": ".github/workflows/hunter-governance-reconcile.yml",
+        "event": "pull_request_target",
+    }
+    cycle = orchestrator.ReviewCycle(
+        pr_number=472,
+        head_sha=HEAD,
+        state="WAITING_FOR_REVIEWER",
+        provider_id="",
+        trigger_id=123,
+        started_at="2026-10-09T19:00:00Z",
+        config_digest="digest",
+        generation_id=orchestrator.BASE_GENERATION_ID,
+    )
+
+    def request(_repository, _token, _method, path, _payload=None):
+        return {
+            "actions/runs/777": run,
+            "actions/runs/123": origin,
+            "": {"default_branch": "main"},
+            "pulls/472": {"state": "open", "head": {"sha": HEAD}},
+            f"commits/{HEAD}/statuses?per_page=100": [
+                {
+                    "context": "Hunter Collector Dispatch Proof / PR #472",
+                    "description": "|" + orchestrator.hashlib.sha256(("a" * 64).encode()).hexdigest(),
+                    "creator": {"login": "github-actions[bot]"},
+                    "target_url": "https://github.com/owner/repo/actions/runs/123",
+                }
+            ],
+        }[path]
+
+    published = []
+    monkeypatch.setattr(orchestrator, "request_json", request)
+    monkeypatch.setattr(orchestrator, "read_cycle", lambda *_: ("present", cycle, None))
+    monkeypatch.setattr(orchestrator, "publish_collector_completion", lambda *args: published.append(args))
+    assert orchestrator.publish_trusted_collector_completion("owner/repo", "token", 777, "a" * 64).startswith(
+        "PUBLISHED:"
+    )
+    assert published == [("owner/repo", "token", 472, HEAD, 777)]
+
+
+def test_trusted_collector_rejects_wrong_dispatch_capability(monkeypatch):
+    run = {
+        "id": 777,
+        "path": orchestrator.COLLECTOR_WORKFLOW_PATH,
+        "event": "workflow_dispatch",
+        "head_branch": "main",
+        "status": "completed",
+        "conclusion": "success",
+        "display_title": f"Hunter Reviewer Collector PR 472 HEAD {HEAD}",
+    }
+    cycle = orchestrator.ReviewCycle(
+        pr_number=472,
+        head_sha=HEAD,
+        state="WAITING_FOR_REVIEWER",
+        provider_id="",
+        trigger_id=123,
+        started_at="2026-10-09T19:00:00Z",
+        config_digest="digest",
+        generation_id=orchestrator.BASE_GENERATION_ID,
+    )
+
+    def request(_repo, _token, _method, path, _payload=None):
+        return {
+            "actions/runs/777": run,
+            "actions/runs/123": {
+                "id": 123,
+                "head_branch": "main",
+                "path": ".github/workflows/hunter-governance-reconcile.yml",
+                "event": "schedule",
+            },
+            "": {"default_branch": "main"},
+            "pulls/472": {"state": "open", "head": {"sha": HEAD}},
+            f"commits/{HEAD}/statuses?per_page=100": [
+                {
+                    "context": "Hunter Collector Dispatch Proof / PR #472",
+                    "description": "|" + orchestrator.hashlib.sha256(("a" * 64).encode()).hexdigest(),
+                    "creator": {"login": "github-actions[bot]"},
+                    "target_url": "https://github.com/owner/repo/actions/runs/123",
+                }
+            ],
+        }[path]
+
+    published = []
+    monkeypatch.setattr(orchestrator, "request_json", request)
+    monkeypatch.setattr(orchestrator, "read_cycle", lambda *_: ("present", cycle, None))
+    monkeypatch.setattr(orchestrator, "publish_collector_completion", lambda *args: published.append(args))
+    assert "SKIPPED" in orchestrator.publish_trusted_collector_completion("owner/repo", "token", 777, "b" * 64)
+    assert published == []
 
 
 def test_collector_completion_accepts_trusted_ancestor_of_current_main(monkeypatch):

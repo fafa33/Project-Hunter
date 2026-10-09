@@ -7,6 +7,7 @@ import hashlib
 import json
 import os
 import re
+import secrets
 import sys
 from collections.abc import Iterable
 from dataclasses import dataclass
@@ -25,6 +26,7 @@ TRUSTED_STATUS_CREATOR = "github-actions[bot]"
 ROOT = Path(__file__).resolve().parents[1]
 POLICY_PATH = ROOT / "docs" / "CODE_WRITE_POLICY.json"
 COLLECTOR_WORKFLOW = "hunter-reviewer-collector.yml"
+DISPATCH_PROOF_CONTEXT_PREFIX = "Hunter Collector Dispatch Proof / PR #"
 TRUSTED_WORKFLOWS = frozenset(
     {
         ".github/workflows/hunter-governance-review.yml",
@@ -529,7 +531,7 @@ def publish_collector_completion(repository: str, token: str, pr_number: int, he
     )
 
 
-def publish_trusted_collector_completion(repository: str, token: str, run_id: int) -> str:
+def publish_trusted_collector_completion(repository: str, token: str, run_id: int, proof: str = "") -> str:
     """Only a trusted default-branch reconcile may attest a finished collector.
 
     Never trust candidate-supplied PR/head, workflow titles without API provenance,
@@ -550,7 +552,7 @@ def publish_trusted_collector_completion(repository: str, token: str, run_id: in
     ):
         raise ValueError("collector run lacks trusted successful default-branch provenance")
     title = str(run.get("display_title") or "")
-    match = re.fullmatch(r"Hunter Reviewer Collector PR ([1-9][0-9]*) HEAD ([0-9a-f]{40})(?: GEN [^\s]+)?", title)
+    match = re.fullmatch(r"Hunter Reviewer Collector PR ([1-9][0-9]*) HEAD ([0-9a-f]{40})(?: GEN ([^\s]+))?", title)
     if match is None:
         raise ValueError("collector run title lacks exact PR/head identity")
     pr_number, head_sha = int(match.group(1)), match.group(2)
@@ -561,6 +563,40 @@ def publish_trusted_collector_completion(repository: str, token: str, run_id: in
         or str((pr.get("head") or {}).get("sha") or "") != head_sha
     ):
         return "SKIPPED: collector candidate head superseded"
+    # The collector run's title is only a correlation hint, never dispatch
+    # authority. The trusted orchestrator must have committed an exact-cycle
+    # WAITING status before dispatch, identifying its own trusted run.
+    state, cycle, _error = read_cycle(repository, token, pr_number, head_sha)
+    if state != "present" or cycle is None or cycle.state not in OPEN_CYCLE_STATES:
+        return "SKIPPED: no authorized open collector cycle"
+    if cycle.generation_id != (match.group(3) or BASE_GENERATION_ID):
+        return "SKIPPED: collector generation differs from authorized cycle"
+    if cycle.trigger_id is None or cycle.trigger_id == run_id:
+        return "SKIPPED: trusted orchestrator dispatch identity unavailable"
+    origin = request_json(repository, token, "GET", f"actions/runs/{cycle.trigger_id}")
+    if not isinstance(origin, dict) or not (
+        origin.get("id") == cycle.trigger_id
+        and origin.get("head_branch") == branch
+        and origin.get("path") == ".github/workflows/hunter-governance-reconcile.yml"
+        and origin.get("event") in {"push", "workflow_run", "pull_request_target", "schedule"}
+    ):
+        return "SKIPPED: dispatch origin is not trusted governance reconciliation"
+    if not re.fullmatch(r"[0-9a-f]{64}", proof):
+        return "SKIPPED: missing collector dispatch capability"
+    statuses = request_json(repository, token, "GET", f"commits/{head_sha}/statuses?per_page=100")
+    expected_context = f"{DISPATCH_PROOF_CONTEXT_PREFIX}{pr_number}"
+    expected_description = f"{cycle.generation_id}|{hashlib.sha256(proof.encode()).hexdigest()}"
+    authorized = any(
+        isinstance(status, dict)
+        and status.get("context") == expected_context
+        and status.get("description") == expected_description
+        and str((status.get("creator") or {}).get("login") or "") == TRUSTED_STATUS_CREATOR
+        and _run_id(str(status.get("target_url") or "")) == cycle.trigger_id
+        for status in statuses
+        if isinstance(statuses, list)
+    )
+    if not authorized:
+        return "SKIPPED: no trusted exact-cycle dispatch capability"
     publish_collector_completion(repository, token, pr_number, head_sha, run_id)
     return f"PUBLISHED: collector completion PR #{pr_number} at {head_sha[:12]}"
 
@@ -626,6 +662,19 @@ def current_run_id() -> int | None:
 def dispatch_collector(
     repository: str, token: str, pr_number: int, head_sha: str, generation_id: str = BASE_GENERATION_ID
 ) -> None:
+    nonce = secrets.token_hex(32)
+    request_json(
+        repository,
+        token,
+        "POST",
+        f"statuses/{head_sha}",
+        {
+            "state": "pending",
+            "context": f"{DISPATCH_PROOF_CONTEXT_PREFIX}{pr_number}",
+            "description": f"{generation_id}|{hashlib.sha256(nonce.encode()).hexdigest()}",
+            "target_url": f"https://github.com/{repository}/actions/runs/{current_run_id()}",
+        },
+    )
     request_json(
         repository,
         token,
@@ -633,7 +682,12 @@ def dispatch_collector(
         f"actions/workflows/{COLLECTOR_WORKFLOW}/dispatches",
         {
             "ref": "main",
-            "inputs": {"pr_number": str(pr_number), "head_sha": head_sha, "generation_id": generation_id},
+            "inputs": {
+                "pr_number": str(pr_number),
+                "head_sha": head_sha,
+                "generation_id": generation_id,
+                "dispatch_proof": nonce,
+            },
         },
     )
 
@@ -1057,7 +1111,14 @@ def read_collector_receipt(path: Path) -> tuple[Any, str]:
 
 
 def finalize_exhausted_pool(
-    repository: str, token: str, pr_number: int, head_sha: str, run_id: int, results_path: Path
+    repository: str,
+    token: str,
+    pr_number: int,
+    head_sha: str,
+    run_id: int,
+    results_path: Path,
+    *,
+    trusted_completion: bool = False,
 ) -> str:
     """Publish ``REVIEWER_UNAVAILABLE`` for an exact head whose collector proved no reviewer gave a review.
 
@@ -1070,7 +1131,7 @@ def finalize_exhausted_pool(
 
     if not re.fullmatch("[0-9a-f]{40}", head_sha):
         return "SKIPPED: exact head is not a full SHA"
-    if current_run_id() != run_id:
+    if not trusted_completion and current_run_id() != run_id:
         return "SKIPPED: the completing run is not this process's run"
     receipt, unreadable = read_collector_receipt(results_path)
     if receipt is None:
@@ -1523,6 +1584,8 @@ def parser() -> argparse.ArgumentParser:
     trusted = sub.add_parser("trusted-collector-complete")
     trusted.add_argument("--repository", required=True)
     trusted.add_argument("--run-id", type=int, required=True)
+    trusted.add_argument("--receipt", type=Path)
+    trusted.add_argument("--proof", type=Path)
     return result
 
 
@@ -1531,7 +1594,27 @@ def main() -> int:
     token = os.environ.get("GITHUB_TOKEN") or os.environ.get("GH_TOKEN") or ""
     try:
         if args.command == "trusted-collector-complete":
-            print(publish_trusted_collector_completion(args.repository, token, args.run_id))
+            proof = args.proof.read_text(encoding="utf-8").strip() if args.proof is not None else ""
+            outcome = publish_trusted_collector_completion(args.repository, token, args.run_id, proof)
+            print(outcome)
+            if outcome.startswith("PUBLISHED:") and args.receipt is not None:
+                run = request_json(args.repository, token, "GET", f"actions/runs/{args.run_id}")
+                match = re.fullmatch(
+                    r"Hunter Reviewer Collector PR ([1-9][0-9]*) HEAD ([0-9a-f]{40})(?: GEN ([^\s]+))?",
+                    str(run.get("display_title") or ""),
+                )
+                if match is not None:
+                    print(
+                        finalize_exhausted_pool(
+                            args.repository,
+                            token,
+                            int(match.group(1)),
+                            match.group(2),
+                            args.run_id,
+                            args.receipt,
+                            trusted_completion=True,
+                        )
+                    )
         elif args.command == "collector-complete":
             publish_collector_completion(args.repository, token, args.pr, args.head, args.run_id)
             # Best effort and fail closed: the completion marker above is already durable, and an unusable receipt

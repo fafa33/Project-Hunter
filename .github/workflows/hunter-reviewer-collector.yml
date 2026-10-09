@@ -15,6 +15,10 @@ on:
         description: Exact 40-character candidate HEAD
         required: true
         type: string
+      dispatch_proof:
+        description: Opaque per-dispatch capability issued by trusted orchestrator
+        required: true
+        type: string
       generation_id:
         description: >-
           Remediation generation of this exact head, or empty for the candidate's
@@ -78,9 +82,15 @@ jobs:
           --pr "$PR_NUMBER" --head "$CANDIDATE_HEAD"
           --generation "$REMEDIATION_GENERATION"
           --output reviewer-results.json
+      - name: Save opaque dispatch capability for trusted completion
+        env:
+          DISPATCH_PROOF: ${{ inputs.dispatch_proof }}
+        run: printf '%s' "$DISPATCH_PROOF" > collector-dispatch-proof.txt
       - uses: actions/upload-artifact@v4
         with:
           name: hunter-reviewer-results-${{ inputs.head_sha }}-${{ github.run_attempt }}
-          path: reviewer-results.json
+          path: |
+            reviewer-results.json
+            collector-dispatch-proof.txt
           if-no-files-found: error
           retention-days: 30

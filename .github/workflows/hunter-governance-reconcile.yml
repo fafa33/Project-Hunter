@@ -97,11 +97,23 @@ jobs:
         if: github.event_name == 'workflow_run' && github.event.workflow_run.name == 'Hunter Reviewer Collector' && github.event.workflow_run.conclusion == 'success'
         env:
           GITHUB_TOKEN: ${{ github.token }}
+          GH_TOKEN: ${{ github.token }}
           GITHUB_REPOSITORY: ${{ github.repository }}
           COLLECTOR_RUN_ID: ${{ github.event.workflow_run.id }}
-        run: >-
-          python scripts/hunter_review_orchestrator.py trusted-collector-complete
-          --repository "$GITHUB_REPOSITORY" --run-id "$COLLECTOR_RUN_ID"
+        run: |
+          set -euo pipefail
+          mkdir -p "$RUNNER_TEMP/collector-receipt"
+          # The artifact belongs to this exact authenticated run; its content
+          # is validated by the trusted finalizer against PR/head/generation.
+          gh run download "$COLLECTOR_RUN_ID" --repo "$GITHUB_REPOSITORY" \
+            --pattern 'hunter-reviewer-results-*' --dir "$RUNNER_TEMP/collector-receipt"
+          receipt="$(find "$RUNNER_TEMP/collector-receipt" -type f -name reviewer-results.json | head -n 1)"
+          test -n "$receipt"
+          proof="$(find "$RUNNER_TEMP/collector-receipt" -type f -name collector-dispatch-proof.txt | head -n 1)"
+          test -n "$proof"
+          python scripts/hunter_review_orchestrator.py trusted-collector-complete \
+            --repository "$GITHUB_REPOSITORY" --run-id "$COLLECTOR_RUN_ID" \
+            --receipt "$receipt" --proof "$proof"
 
       - name: Refresh lightweight governance status
         env:
