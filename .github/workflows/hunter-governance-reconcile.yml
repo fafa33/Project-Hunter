@@ -54,9 +54,11 @@ on:
       - Hunter Reviewer Collector
     types:
       - completed
-  # Bot-authored review events can be held by GitHub before jobs start.
-  # Trusted pull_request_target, workflow_run and scheduled reconciliation
-  # retain authoritative current-state review checks without manual approval.
+  # Bot-authored review events are approval-held by GitHub. The trusted
+  # 5-minute sweep is the bounded review-state-change reconciliation path,
+  # including human submitted/edited/dismissed reviews and inline comments;
+  # no review webhook may run a privileged workflow directly. Trusted
+  # pull_request_target and workflow_run remain event-driven for head changes.
   pull_request_target:
     branches:
       - main
@@ -64,7 +66,7 @@ on:
       - ready_for_review
       - synchronize
   schedule:
-    - cron: "*/30 * * * *"
+    - cron: "*/5 * * * *"
   workflow_dispatch:
 
 permissions:
@@ -109,7 +111,7 @@ jobs:
           # multiplies API traffic and can exhaust the installation rate limit.
           # Scheduled/manual recovery remains the bounded full-sweep path.
           event_name="${{ github.event_name }}"
-          if [[ "${event_name}" == "pull_request_review" || "${event_name}" == "pull_request_review_comment" || "${event_name}" == "pull_request_target" ]]; then
+          if [[ "${event_name}" == "pull_request_target" ]]; then
             pr_numbers="${{ github.event.pull_request.number }}"
           elif [[ "${event_name}" == "workflow_run" && "${EVENT_WORKFLOW_RUN_NAME}" == "Hunter Governance Review" ]]; then
             # A PR synchronize event runs the read-only governance workflow first.
