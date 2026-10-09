@@ -74,23 +74,53 @@
     "issue": "583",
     "review_target": [
       {
-        "blob_sha": "94d27eb152f6e1edc3a1e2ad3585a6b50d8f42fc",
+        "blob_sha": "01cbbbfd0cc4c95e58b07824682982e11ee4698d",
+        "path": ".github/workflows/hunter-canonicalization-auto.yml",
+        "previous_path": "",
+        "status": "modified"
+      },
+      {
+        "blob_sha": "d2cea5fb09e932401b7776af809b22aa5f1d6b8d",
+        "path": ".github/workflows/hunter-governance-reconcile.yml",
+        "previous_path": "",
+        "status": "modified"
+      },
+      {
+        "blob_sha": "46e962bb86f58e783c20ae25860c2299aaf4e262",
+        "path": ".github/workflows/hunter-knowledge-learning.yml",
+        "previous_path": "",
+        "status": "modified"
+      },
+      {
+        "blob_sha": "8cc8e2157fccfe66645bb6a041b2f1bfdc25df71",
+        "path": ".github/workflows/hunter-merge-readiness.yml",
+        "previous_path": "",
+        "status": "modified"
+      },
+      {
+        "blob_sha": "c2e91a62c559724aef1a690f7c84981a3e667a37",
         "path": "scripts/hunter_review_orchestrator.py",
         "previous_path": "",
         "status": "modified"
       },
       {
-        "blob_sha": "5f6ff43172033c860baca7e58b1c85925d64eaf7",
+        "blob_sha": "da559511849aa49068cd44d9ffc1858e82e1468d",
+        "path": "tests/test_hunter_knowledge_learning_workflow.py",
+        "previous_path": "",
+        "status": "modified"
+      },
+      {
+        "blob_sha": "387d7edff5a1b3d0e3c0bc9589b8c144b3af4257",
         "path": "tests/test_hunter_review_orchestrator.py",
         "previous_path": "",
         "status": "modified"
       }
     ],
-    "review_target_digest": "575a24304e975f0b2f0343949aea9de74170c36fb356ac7fb746029408e94adc"
+    "review_target_digest": "45f58100576f511dfe8bbf17deb0e1a01236fbbd397978ee23fbc238a83a8554"
   },
-  "review_id": "a9ed2aeb84a3e75a2f0b164aa57c0150baa92ad466e0125db4c5716599f3d98d",
+  "review_id": "4f7bc8056c7de42141f148deb46fd319d585ff84e8763dfac7f591c6897a7b9f",
   "review_request": {
-    "claims_id": "a9ed2aeb84a3e75a2f0b164aa57c0150baa92ad466e0125db4c5716599f3d98d",
+    "claims_id": "4f7bc8056c7de42141f148deb46fd319d585ff84e8763dfac7f591c6897a7b9f",
     "schema": "hunter.review-request.v1"
   },
   "schema": "hunter.pre-ready-hostile-review.v1"
