@@ -2337,7 +2337,10 @@ def test_scheduled_trusted_collector_recovery_uses_exact_attempt_artifacts():
     )
     assert "github.event_name == 'schedule'" in step["if"]
     script = step["run"]
-    assert "status=completed&per_page=30" in script
+    assert "status=completed&per_page=100" in script
+    assert "gh api --paginate" in script
+    assert "collector_run_id=$run_id" in script
+    assert "grep -qE" in script
     assert "run_attempt" in script
     assert "hunter-reviewer-results-*-${attempt}" in script
     assert "hunter-dispatch-proof-*-${attempt}" in script

@@ -102,16 +102,35 @@ jobs:
           COLLECTOR_RUN_ID: ${{ github.event.workflow_run.id }}
         run: |
           set -euo pipefail
-          # Scheduled retry recovers completed runs when workflow_run was lost.
-          # Bounded scan: the publisher independently validates run, nonce,
-          # candidate HEAD, attempt-specific artifacts and dispatch identity.
+          # Paginate all retained successful collector runs. Do not silently
+          # drop older runs after the first page, and skip runs whose trusted
+          # completion status already exists before downloading artifacts.
           if [[ "${{ github.event_name }}" == "schedule" ]]; then
-            mapfile -t run_ids < <(gh api "repos/$GITHUB_REPOSITORY/actions/workflows/hunter-reviewer-collector.yml/runs?status=completed&per_page=30" --jq '.workflow_runs[] | select(.conclusion == "success") | .id')
+            mapfile -t candidates < <(
+              gh api --paginate "repos/$GITHUB_REPOSITORY/actions/workflows/hunter-reviewer-collector.yml/runs?status=completed&per_page=100" \
+                --jq '.workflow_runs[] | select(.conclusion == "success") | [.id, .display_title] | @tsv'
+            )
           else
-            run_ids=("$COLLECTOR_RUN_ID")
+            candidates=("$COLLECTOR_RUN_ID")
           fi
-          for run_id in "${run_ids[@]}"; do
+          for candidate in "${candidates[@]}"; do
+            run_id="${candidate%%$'\t'*}"
             [[ "$run_id" =~ ^[0-9]+$ ]] || continue
+            if [[ "${{ github.event_name }}" == "schedule" ]]; then
+              title="${candidate#*$'\t'}"
+              if [[ "$title" =~ ^Hunter\ Reviewer\ Collector\ PR\ ([1-9][0-9]*)\ HEAD\ ([0-9a-f]{40})(\ GEN\ .*)?$ ]]; then
+                pr="${BASH_REMATCH[1]}"
+                head="${BASH_REMATCH[2]}"
+              else
+                continue
+              fi
+              # Skip already-published trusted completions without artifact I/O.
+              # A status is a hint only: the publisher still authenticates proof.
+              if gh api "repos/$GITHUB_REPOSITORY/commits/$head/statuses?per_page=100" \
+                --jq ".[] | select(.context == \"Hunter Reviewer Collector / PR #$pr\" and .state == \"success\" and .description == \"collector_run_id=$run_id\") | .id" 2>/dev/null | grep -qE '^[0-9]+$'; then
+                continue
+              fi
+            fi
             attempt="$(gh api "repos/$GITHUB_REPOSITORY/actions/runs/$run_id" --jq '.run_attempt' 2>/dev/null)" || continue
             [[ "$attempt" =~ ^[1-9][0-9]*$ ]] || continue
             receipt="$RUNNER_TEMP/collector-receipt"
