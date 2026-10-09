@@ -2,40 +2,40 @@
   "claims": {
     "acceptance_criteria": [
       {
-        "criterion": "Measure per-stage and end-to-end P50/P95 durations and exact-head proof provenance.",
-        "evidence": "AUTHOR CLAIM: Stage timing instrumentation exists; end-to-end P50/P95 hosted evidence remains pending.",
+        "criterion": "Single trusted 1800-second exact-head advisory deadline",
+        "evidence": "AUTHOR CLAIM: shared deadline not implemented in this PR.",
         "id": "AC-1",
         "verdict": "not-applicable"
       },
       {
-        "criterion": "Build trusted, deterministic, fail-closed impact classification from base/head diff, dependencies, test selectors and DPM coverage. Unknown/high-risk/cross-cutting changes force full validation.",
-        "evidence": "AUTHOR CLAIM: Trusted definition path detection and malformed evidence fail closed; broader impact classification remains pending.",
+        "criterion": "Collector dispatch budgets, cancellation, and late-writer safety",
+        "evidence": "AUTHOR CLAIM: comprehensive cancellation and CAS not implemented.",
         "id": "AC-2",
         "verdict": "not-applicable"
       },
       {
-        "criterion": "Fast gates and impacted regression suite on routine pushes; mandatory full-suite at policy/release/main boundaries and scheduled comprehensive runs.",
-        "evidence": "AUTHOR CLAIM: Full-suite retained; routine focused-lane scheduling remains pending.",
+        "criterion": "Publish honest nonblocking REVIEW_TIMED_OUT at deadline",
+        "evidence": "AUTHOR CLAIM: completed correlated successful collector settles stale pending to REVIEW_TIMED_OUT; independent verification required.",
         "id": "AC-3",
-        "verdict": "not-applicable"
-      },
-      {
-        "criterion": "Reuse full-suite proof only with verified immutable same-head, same-policy, same-environment receipts. Do not accept a focused run as full proof; keep trusted controller/publisher separate from untrusted candidate code.",
-        "evidence": "AUTHOR CLAIM: Exact-head hosted proof adjudication implemented in trusted controller with PR head checks and fail-closed fallback; 108 focused tests passed.",
-        "id": "AC-4",
         "verdict": "satisfied"
       },
       {
-        "criterion": "Eliminate duplicate expensive executions when exact-head full proof already exists, without breaking trusted preflight upgrade/candidate admission.",
-        "evidence": "AUTHOR CLAIM: Proof reuse exists when completed before adjudication; overlapping pending runs still execute twice; timing coordination remains pending.",
+        "criterion": "Immediate reconciliation and idempotent exact-head generation semantics",
+        "evidence": "AUTHOR CLAIM: re-read before publication added, atomic CAS and complete event integration not established.",
+        "id": "AC-4",
+        "verdict": "not-applicable"
+      },
+      {
+        "criterion": "Focused boundary, collector, late evidence, and hosted canary tests",
+        "evidence": "AUTHOR CLAIM: 107 focused tests passed; complete deadline boundary and hosted canary not yet demonstrated.",
         "id": "AC-5",
         "verdict": "not-applicable"
       },
       {
-        "criterion": "Add unit, integration and hosted canary proof showing normal/uncertain/changed-test/security cases and before/after times.",
-        "evidence": "AUTHOR CLAIM: Focused tests passed; hosted before/after performance canary remains pending.",
+        "criterion": "Preserve owner merge approval and independent advisory reviews",
+        "evidence": "AUTHOR CLAIM: no merge action or required gate weakening in this change; independent reviewer must verify.",
         "id": "AC-6",
-        "verdict": "not-applicable"
+        "verdict": "satisfied"
       }
     ],
     "adversarial_dimensions": [
@@ -52,260 +52,87 @@
       "transaction-snapshot-consistency"
     ],
     "base_ref": "main",
-    "base_sha": "207e28b8074dc3c783529da215d78a54b6d4d78d",
+    "base_sha": "d1130e539592a8e1fa2b2c5b220a2ce3b1ab4914",
     "defect_families": [
       {
-        "evidence": "AUTHOR CLAIM: reviewed applicability to PR #582 trusted preflight changes; independent reviewer must verify safeguards and missing coverage.",
-        "family": "DFF-007",
+        "evidence": "AUTHOR CLAIM: exact-head orchestration and recovery applicability reviewed; independent reviewer must verify relevant invariants and regression coverage.",
+        "family": "DFF-42",
         "outcome": "clear"
       },
       {
-        "evidence": "AUTHOR CLAIM: reviewed applicability to PR #582 trusted preflight changes; independent reviewer must verify safeguards and missing coverage.",
-        "family": "DFF-008",
+        "evidence": "AUTHOR CLAIM: exact-head orchestration and recovery applicability reviewed; independent reviewer must verify relevant invariants and regression coverage.",
+        "family": "DFF-43",
         "outcome": "clear"
       },
       {
-        "evidence": "AUTHOR CLAIM: reviewed applicability to PR #582 trusted preflight changes; independent reviewer must verify safeguards and missing coverage.",
-        "family": "DFF-009",
-        "outcome": "clear"
-      },
-      {
-        "evidence": "AUTHOR CLAIM: reviewed applicability to PR #582 trusted preflight changes; independent reviewer must verify safeguards and missing coverage.",
-        "family": "DFF-010",
-        "outcome": "clear"
-      },
-      {
-        "evidence": "AUTHOR CLAIM: reviewed applicability to PR #582 trusted preflight changes; independent reviewer must verify safeguards and missing coverage.",
-        "family": "DFF-011",
-        "outcome": "clear"
-      },
-      {
-        "evidence": "AUTHOR CLAIM: reviewed applicability to PR #582 trusted preflight changes; independent reviewer must verify safeguards and missing coverage.",
-        "family": "DFF-012",
-        "outcome": "clear"
-      },
-      {
-        "evidence": "AUTHOR CLAIM: reviewed applicability to PR #582 trusted preflight changes; independent reviewer must verify safeguards and missing coverage.",
-        "family": "DFF-013",
-        "outcome": "clear"
-      },
-      {
-        "evidence": "AUTHOR CLAIM: reviewed applicability to PR #582 trusted preflight changes; independent reviewer must verify safeguards and missing coverage.",
-        "family": "DFF-014",
-        "outcome": "clear"
-      },
-      {
-        "evidence": "AUTHOR CLAIM: reviewed applicability to PR #582 trusted preflight changes; independent reviewer must verify safeguards and missing coverage.",
-        "family": "DFF-015",
-        "outcome": "clear"
-      },
-      {
-        "evidence": "AUTHOR CLAIM: reviewed applicability to PR #582 trusted preflight changes; independent reviewer must verify safeguards and missing coverage.",
-        "family": "DFF-016",
-        "outcome": "clear"
-      },
-      {
-        "evidence": "AUTHOR CLAIM: reviewed applicability to PR #582 trusted preflight changes; independent reviewer must verify safeguards and missing coverage.",
-        "family": "DFF-017",
-        "outcome": "clear"
-      },
-      {
-        "evidence": "AUTHOR CLAIM: reviewed applicability to PR #582 trusted preflight changes; independent reviewer must verify safeguards and missing coverage.",
-        "family": "DFF-019",
-        "outcome": "clear"
-      },
-      {
-        "evidence": "AUTHOR CLAIM: reviewed applicability to PR #582 trusted preflight changes; independent reviewer must verify safeguards and missing coverage.",
-        "family": "DFF-020",
-        "outcome": "clear"
-      },
-      {
-        "evidence": "AUTHOR CLAIM: reviewed applicability to PR #582 trusted preflight changes; independent reviewer must verify safeguards and missing coverage.",
-        "family": "DFF-021",
-        "outcome": "clear"
-      },
-      {
-        "evidence": "AUTHOR CLAIM: reviewed applicability to PR #582 trusted preflight changes; independent reviewer must verify safeguards and missing coverage.",
-        "family": "DFF-022",
-        "outcome": "clear"
-      },
-      {
-        "evidence": "AUTHOR CLAIM: reviewed applicability to PR #582 trusted preflight changes; independent reviewer must verify safeguards and missing coverage.",
-        "family": "DFF-023",
-        "outcome": "clear"
-      },
-      {
-        "evidence": "AUTHOR CLAIM: reviewed applicability to PR #582 trusted preflight changes; independent reviewer must verify safeguards and missing coverage.",
-        "family": "DFF-024",
-        "outcome": "clear"
-      },
-      {
-        "evidence": "AUTHOR CLAIM: reviewed applicability to PR #582 trusted preflight changes; independent reviewer must verify safeguards and missing coverage.",
-        "family": "DFF-025",
-        "outcome": "clear"
-      },
-      {
-        "evidence": "AUTHOR CLAIM: reviewed applicability to PR #582 trusted preflight changes; independent reviewer must verify safeguards and missing coverage.",
-        "family": "DFF-026",
-        "outcome": "clear"
-      },
-      {
-        "evidence": "AUTHOR CLAIM: reviewed applicability to PR #582 trusted preflight changes; independent reviewer must verify safeguards and missing coverage.",
-        "family": "DFF-027",
-        "outcome": "clear"
-      },
-      {
-        "evidence": "AUTHOR CLAIM: reviewed applicability to PR #582 trusted preflight changes; independent reviewer must verify safeguards and missing coverage.",
-        "family": "DFF-028",
-        "outcome": "clear"
-      },
-      {
-        "evidence": "AUTHOR CLAIM: reviewed applicability to PR #582 trusted preflight changes; independent reviewer must verify safeguards and missing coverage.",
-        "family": "DFF-029",
-        "outcome": "clear"
-      },
-      {
-        "evidence": "AUTHOR CLAIM: reviewed applicability to PR #582 trusted preflight changes; independent reviewer must verify safeguards and missing coverage.",
-        "family": "DFF-033",
-        "outcome": "clear"
-      },
-      {
-        "evidence": "AUTHOR CLAIM: reviewed applicability to PR #582 trusted preflight changes; independent reviewer must verify safeguards and missing coverage.",
-        "family": "DFF-035",
-        "outcome": "clear"
-      },
-      {
-        "evidence": "AUTHOR CLAIM: reviewed applicability to PR #582 trusted preflight changes; independent reviewer must verify safeguards and missing coverage.",
-        "family": "DFF-036",
-        "outcome": "clear"
-      },
-      {
-        "evidence": "AUTHOR CLAIM: reviewed applicability to PR #582 trusted preflight changes; independent reviewer must verify safeguards and missing coverage.",
-        "family": "DFF-037",
-        "outcome": "clear"
-      },
-      {
-        "evidence": "AUTHOR CLAIM: reviewed applicability to PR #582 trusted preflight changes; independent reviewer must verify safeguards and missing coverage.",
-        "family": "DFF-038",
-        "outcome": "clear"
-      },
-      {
-        "evidence": "AUTHOR CLAIM: reviewed applicability to PR #582 trusted preflight changes; independent reviewer must verify safeguards and missing coverage.",
-        "family": "DFF-039",
-        "outcome": "clear"
-      },
-      {
-        "evidence": "AUTHOR CLAIM: reviewed applicability to PR #582 trusted preflight changes; independent reviewer must verify safeguards and missing coverage.",
-        "family": "DFF-040",
-        "outcome": "clear"
-      },
-      {
-        "evidence": "AUTHOR CLAIM: reviewed applicability to PR #582 trusted preflight changes; independent reviewer must verify safeguards and missing coverage.",
-        "family": "DFF-043",
-        "outcome": "clear"
-      },
-      {
-        "evidence": "AUTHOR CLAIM: reviewed applicability to PR #582 trusted preflight changes; independent reviewer must verify safeguards and missing coverage.",
-        "family": "DFF-045",
-        "outcome": "clear"
-      },
-      {
-        "evidence": "AUTHOR CLAIM: reviewed applicability to PR #582 trusted preflight changes; independent reviewer must verify safeguards and missing coverage.",
-        "family": "DFF-046",
-        "outcome": "clear"
-      },
-      {
-        "evidence": "AUTHOR CLAIM: reviewed applicability to PR #582 trusted preflight changes; independent reviewer must verify safeguards and missing coverage.",
-        "family": "DFF-052",
-        "outcome": "clear"
-      },
-      {
-        "evidence": "AUTHOR CLAIM: reviewed applicability to PR #582 trusted preflight changes; independent reviewer must verify safeguards and missing coverage.",
-        "family": "DFF-053",
+        "evidence": "AUTHOR CLAIM: exact-head orchestration and recovery applicability reviewed; independent reviewer must verify relevant invariants and regression coverage.",
+        "family": "DFF-44",
         "outcome": "clear"
       }
     ],
     "findings": [],
-    "issue": "580",
+    "issue": "583",
     "review_target": [
       {
-        "blob_sha": "20782b9d95a04b85ad1f3b83a7a8ed8eaf666229",
-        "path": "scripts/hunter_preflight_reuse_decision.py",
+        "blob_sha": "e37e2eb3b0d8480126031c41f4564392abf447e9",
+        "path": ".github/workflows/hunter-canonicalization-auto.yml",
         "previous_path": "",
-        "status": "added"
+        "status": "modified"
       },
       {
-        "blob_sha": "fcedd3342fa2cc0b33abe94604a06401f5a4c0a4",
-        "path": "tests/test_preflight_reuse_decision.py",
+        "blob_sha": "886a003a67a2d4526bf9009330a3ddc8b3bb86d8",
+        "path": ".github/workflows/hunter-governance-reconcile.yml",
         "previous_path": "",
-        "status": "added"
+        "status": "modified"
       },
       {
-        "blob_sha": "937feeccc76b2c853cb724dfbd40ed0f324e595e",
+        "blob_sha": "67cfdc29b24815ffb6d58379aa5afdc1b347bcfc",
+        "path": ".github/workflows/hunter-knowledge-learning.yml",
+        "previous_path": "",
+        "status": "modified"
+      },
+      {
+        "blob_sha": "bee342c12b5065d4ba4d623a53e2cc5b7d467de0",
         "path": ".github/workflows/hunter-merge-readiness.yml",
         "previous_path": "",
         "status": "modified"
       },
       {
-        "blob_sha": "dc5cf741135c0c8145f9ec20a2d5bf814f432b1a",
-        "path": ".github/workflows/hunter-trusted-preflight-upgrade.yml",
+        "blob_sha": "d6caaac491ac8b52edd8de8fb80a893ed10c9d39",
+        "path": "scripts/hunter_review_orchestrator.py",
         "previous_path": "",
         "status": "modified"
       },
       {
-        "blob_sha": "ac1199c590e506447e476b90a21ca4c572099df9",
-        "path": "docs/CODE_WRITE_POLICY.json",
+        "blob_sha": "7638f7de183472ce5e8b6b1f25a4aeade0da9de2",
+        "path": "tests/test_hunter_governance_review_v2.py",
         "previous_path": "",
         "status": "modified"
       },
       {
-        "blob_sha": "37323654c8c7ec58e4213219107b3de2c2b313ba",
-        "path": "docs/DEFECT_REGISTRY.json",
+        "blob_sha": "74e54adbc95a0c672220079e4dffe07e5a7e8abb",
+        "path": "tests/test_hunter_governance_revision.py",
         "previous_path": "",
         "status": "modified"
       },
       {
-        "blob_sha": "325e58ca870dc5a298979d3a94826a4911828f6d",
-        "path": "docs/VALIDATION_STAGE_CONTRACT.json",
+        "blob_sha": "05ef48c710a79fdcb7370e56e53a1f50faf66a7f",
+        "path": "tests/test_hunter_knowledge_learning_workflow.py",
         "previous_path": "",
         "status": "modified"
       },
       {
-        "blob_sha": "830e8d02cbc22f953413c3a6af7ceb98b3338a94",
-        "path": "docs/VALIDATION_STAGE_CONTRACT.md",
-        "previous_path": "",
-        "status": "modified"
-      },
-      {
-        "blob_sha": "e2661f068a58f70331f3324b9f31a87ac173d40f",
-        "path": "scripts/hunter_governance_review_v2.py",
-        "previous_path": "",
-        "status": "modified"
-      },
-      {
-        "blob_sha": "7001bb4bbc51f68968893adba817aeb055447929",
-        "path": "tests/test_hunter_merge_readiness_v2.py",
-        "previous_path": "",
-        "status": "modified"
-      },
-      {
-        "blob_sha": "fa2290428d54e09d2a18ca6ff5c4a64de5303477",
-        "path": "tests/test_issue_419_trusted_parallel_lane.py",
-        "previous_path": "",
-        "status": "modified"
-      },
-      {
-        "blob_sha": "1ea36b3c3e2bed754f7d04e0eb353ad066c99c91",
-        "path": "tests/test_validation_stage_contract.py",
+        "blob_sha": "2c06d860a3767ec8c2645fd87c13f17e858bc279",
+        "path": "tests/test_hunter_review_orchestrator.py",
         "previous_path": "",
         "status": "modified"
       }
     ],
-    "review_target_digest": "a94d1c9a62a7afcbee2cd4d0310bf60eb515f9c40f910fcb51feba51916600e8"
+    "review_target_digest": "09503465702032f6cb5b260aad20b6f966acae14eba25aac3b08354971291a1f"
   },
-  "review_id": "63b67f2a980fcf23a7d6b2160daec91efdcb39929015cb45355c7bafd26a9c84",
+  "review_id": "fbe48775f55a45f496e38ea5ce408551b34b46a107339b6c1d1c2b2da2465628",
   "review_request": {
-    "claims_id": "63b67f2a980fcf23a7d6b2160daec91efdcb39929015cb45355c7bafd26a9c84",
+    "claims_id": "fbe48775f55a45f496e38ea5ce408551b34b46a107339b6c1d1c2b2da2465628",
     "schema": "hunter.review-request.v1"
   },
   "schema": "hunter.pre-ready-hostile-review.v1"

@@ -5,6 +5,7 @@ import pathlib
 import re
 import subprocess
 import sys
+from dataclasses import replace
 
 import hunter_github_transport as transport
 import hunter_pre_ready_review as pre_ready
@@ -1754,6 +1755,8 @@ def test_exhausted_provider_chain_terminates_the_opportunity(monkeypatch):
         raising=False,
     )
     monkeypatch.setattr(orchestrator, "collector_needs_dispatch", lambda *_args: False, raising=False)
+    # This exhausted-chain fixture has no correlated successful collector run.
+    monkeypatch.setattr(orchestrator, "collector_runs", lambda *_args: [], raising=False)
     monkeypatch.setattr(
         orchestrator,
         "publish_cycle",
@@ -1894,3 +1897,156 @@ def test_exact_head_and_generation_binding_are_unchanged():
         is None
     )
     assert orchestrator._parse_cycle(_status(TRUSTED, _desc("REVIEW_CLEAR", digest="short")), 472, HEAD) is None
+
+
+def test_completed_collector_settles_stale_pending_without_waiting_for_full_chain(monkeypatch):
+    cycle = make_cycle(trigger_id=123, started_at=_five_minutes_ago())
+    run = _collector_run("completed", "success")
+    run["updated_at"] = "2020-01-01T00:00:00Z"
+    stored = _ensure_harness(monkeypatch, cycle, [run])
+    result = orchestrator.ensure_collector("owner/repo", "token", 472, HEAD)
+    assert result.state == "REVIEW_TIMED_OUT"
+    assert stored["dispatches"] == 0
+    assert stored["published"][-1].head_sha == HEAD
+
+
+def test_recently_completed_collector_preserves_status_propagation_grace(monkeypatch):
+    from datetime import UTC, datetime
+
+    cycle = make_cycle(trigger_id=123, started_at=_five_minutes_ago())
+    run = _collector_run("completed", "success")
+    run["updated_at"] = datetime.now(UTC).isoformat()
+    stored = _ensure_harness(monkeypatch, cycle, [run])
+    result = orchestrator.ensure_collector("owner/repo", "token", 472, HEAD)
+    assert result.state == "WAITING_FOR_REVIEWER"
+    assert stored["published"] == []
+
+
+def test_stale_success_with_active_retry_cannot_outlive_bounded_ceiling(monkeypatch):
+    from datetime import UTC, datetime, timedelta
+
+    budget = orchestrator.independent_review_opportunity_seconds()
+    ceiling = budget * orchestrator.ACTIVE_COLLECTOR_GRACE_MULTIPLIER
+    cycle = make_cycle(trigger_id=123, started_at=_seconds_ago(ceiling + 60))
+    success = _collector_run("completed", "success")
+    success["updated_at"] = (datetime.now(UTC) - timedelta(seconds=ceiling)).isoformat()
+    stored = _ensure_harness(monkeypatch, cycle, [success, _collector_run("in_progress")])
+    result = orchestrator.ensure_collector("owner/repo", "token", 472, HEAD)
+    assert result.state == "REVIEW_TIMED_OUT"
+    assert [item.state for item in stored["published"]] == ["REVIEW_TIMED_OUT"]
+
+
+def test_completed_collector_grace_survives_expired_independent_budget(monkeypatch):
+    from datetime import UTC, datetime, timedelta
+
+    budget = orchestrator.independent_review_opportunity_seconds()
+    cycle = make_cycle(trigger_id=123, started_at=_seconds_ago(budget + 60))
+    run = _collector_run("completed", "success")
+    run["updated_at"] = (datetime.now(UTC) - timedelta(seconds=30)).isoformat()
+    stored = _ensure_harness(monkeypatch, cycle, [run])
+    result = orchestrator.ensure_collector("owner/repo", "token", 472, HEAD)
+    assert result.state == "WAITING_FOR_REVIEWER"
+    assert stored["published"] == []
+
+
+def test_completed_collector_grace_boundary_at_179_and_180_seconds(monkeypatch):
+    from datetime import UTC, datetime, timedelta
+
+    fixed_now = datetime(2026, 10, 9, 12, 0, tzinfo=UTC)
+    real_datetime = orchestrator.datetime
+
+    class FixedDatetime:
+        @staticmethod
+        def now(tz):
+            return fixed_now
+
+        @staticmethod
+        def fromisoformat(value):
+            return real_datetime.fromisoformat(value)
+
+    monkeypatch.setattr(orchestrator, "datetime", FixedDatetime)
+    for age, expected in ((179, "WAITING_FOR_REVIEWER"), (180, "REVIEW_TIMED_OUT")):
+        cycle = make_cycle(trigger_id=123, started_at="2026-10-09T11:58:00Z")
+        run = _collector_run("completed", "success")
+        run["updated_at"] = (fixed_now - timedelta(seconds=age)).isoformat()
+        stored = _ensure_harness(monkeypatch, cycle, [run])
+        assert orchestrator.ensure_collector("owner/repo", "token", 472, HEAD).state == expected
+        assert bool(stored["published"]) == (age == 180)
+
+
+def test_completed_collector_with_active_retry_never_settles_early(monkeypatch):
+    cycle = make_cycle(trigger_id=123, started_at=_five_minutes_ago())
+    completed = _collector_run("completed", "success")
+    completed["updated_at"] = "2020-01-01T00:00:00Z"
+    active = _collector_run("in_progress", run_id=2)
+    stored = _ensure_harness(monkeypatch, cycle, [completed, active])
+    result = orchestrator.ensure_collector("owner/repo", "token", 472, HEAD)
+    assert result.state == "WAITING_FOR_REVIEWER"
+    assert stored["published"] == []
+
+
+def test_newer_successful_collector_prevents_premature_settlement(monkeypatch):
+    from datetime import UTC, datetime
+
+    cycle = make_cycle(trigger_id=123, started_at=_five_minutes_ago())
+    old = _collector_run("completed", "success", run_id=1)
+    old["updated_at"] = "2020-01-01T00:00:00Z"
+    new = _collector_run("completed", "success", run_id=2)
+    new["updated_at"] = datetime.now(UTC).isoformat()
+    stored = _ensure_harness(monkeypatch, cycle, [old, new])
+    assert orchestrator.ensure_collector("owner/repo", "token", 472, HEAD).state == "WAITING_FOR_REVIEWER"
+    assert stored["published"] == []
+
+
+def test_malformed_latest_success_timestamp_fails_closed(monkeypatch):
+    cycle = make_cycle(trigger_id=123, started_at=_five_minutes_ago())
+    old = _collector_run("completed", "success", run_id=1)
+    old["updated_at"] = "2020-01-01T00:00:00Z"
+    new = _collector_run("completed", "success", run_id=2)
+    new["updated_at"] = "not-a-date"
+    stored = _ensure_harness(monkeypatch, cycle, [old, new])
+    assert orchestrator.ensure_collector("owner/repo", "token", 472, HEAD).state == "WAITING_FOR_REVIEWER"
+    assert stored["published"] == []
+
+
+def test_completed_collector_rejects_naive_timestamps(monkeypatch):
+    cycle = make_cycle(trigger_id=123, started_at=_five_minutes_ago())
+    run = _collector_run("completed", "success")
+    run["updated_at"] = "2020-01-01T00:00:00"
+    stored = _ensure_harness(monkeypatch, cycle, [run])
+    assert orchestrator.ensure_collector("owner/repo", "token", 472, HEAD).state == "WAITING_FOR_REVIEWER"
+    assert stored["published"] == []
+
+
+def test_completed_collector_does_not_overwrite_concurrent_terminal(monkeypatch):
+    cycle = make_cycle(trigger_id=123, started_at=_five_minutes_ago())
+    run = _collector_run("completed", "success")
+    run["updated_at"] = "2020-01-01T00:00:00Z"
+    stored = _ensure_harness(monkeypatch, cycle, [run])
+    terminal = replace(cycle, state="REVIEWER_UNAVAILABLE")
+    reads = iter([cycle, terminal])
+    monkeypatch.setattr(orchestrator, "read_cycle", lambda *_args: ("present", next(reads), None))
+    assert orchestrator.ensure_collector("owner/repo", "token", 472, HEAD).state == "REVIEWER_UNAVAILABLE"
+    assert stored["published"] == []
+
+
+def test_duplicate_collector_appearing_at_terminal_boundary_blocks_timeout(monkeypatch):
+    cycle = make_cycle(trigger_id=123, started_at=_five_minutes_ago())
+    successful = _collector_run("completed", "success")
+    successful["updated_at"] = "2020-01-01T00:00:00Z"
+    runs = [successful]
+    stored = _ensure_harness(monkeypatch, cycle, runs)
+    original_read = orchestrator.read_cycle
+    reads = 0
+
+    def racing_read(*args):
+        nonlocal reads
+        reads += 1
+        if reads == 2:
+            runs.append(_collector_run("in_progress", run_id=2))
+        return original_read(*args)
+
+    monkeypatch.setattr(orchestrator, "read_cycle", racing_read)
+    result = orchestrator.ensure_collector("owner/repo", "token", 472, HEAD)
+    assert result.state == "WAITING_FOR_REVIEWER"
+    assert stored["published"] == []
