@@ -1159,8 +1159,14 @@ def ensure_collector(
                     # Do not let the age-based fallback bypass that grace.
                     if existing.trigger_id is not None:
                         try:
-                            runs = collector_runs(repository, token, existing.pr_number, existing.head_sha, existing.generation_id)
-                            successful = [run for run in runs if run.get("status") == "completed" and run.get("conclusion") == "success"]
+                            runs = collector_runs(
+                                repository, token, existing.pr_number, existing.head_sha, existing.generation_id
+                            )
+                            successful = [
+                                run
+                                for run in runs
+                                if run.get("status") == "completed" and run.get("conclusion") == "success"
+                            ]
                             if successful and not completed_collector_settled(repository, token, existing):
                                 return existing
                         except (transport.GitHubRequestError, ValueError):
