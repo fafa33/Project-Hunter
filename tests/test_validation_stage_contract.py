@@ -35,6 +35,7 @@ PIPELINE_ORDER = (
     "focused-development-verification",
     "pre-push-safety",
     "hosted-full-exact-head-proof",
+    "trusted-preflight-upgrade-lane",
     "candidate-admission",
     "pull-request-integration-compatibility",
     "merge-readiness",

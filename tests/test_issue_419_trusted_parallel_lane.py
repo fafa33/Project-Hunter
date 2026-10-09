@@ -683,7 +683,11 @@ def test_the_trusted_workflow_still_binds_the_exact_candidate_head() -> None:
     assert TRUSTED_WORKFLOW.relative_to(ROOT).as_posix() == governance.TRUSTED_UPGRADE_WORKFLOW_PATH
     assert list(_workflow()[True]["pull_request_target"]["branches"]) == ["main"]
     assert _workflow()["jobs"]["publish-proof"]["permissions"]["statuses"] == "write"
-    assert _workflow()["jobs"]["validate-candidate"]["permissions"] == {"contents": "read"}
+    assert _workflow()["jobs"]["validate-candidate"]["permissions"] == {
+        "actions": "read",
+        "contents": "read",
+        "pull-requests": "read",
+    }
 
 
 @pytest.mark.parametrize(

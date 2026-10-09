@@ -380,6 +380,8 @@
       "scripts/hunter_pre_push.py",
       "scripts/hunter_validation_receipt.py",
       "scripts/hunter_validation_reuse.py",
+      "scripts/hunter_ci_impact.py",
+      "scripts/hunter_preflight_reuse_decision.py",
       "scripts/install_hunter_git_hooks.py",
       "pyproject.toml",
       "requirements/",

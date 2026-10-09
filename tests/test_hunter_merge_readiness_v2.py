@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from pathlib import Path
+
 import hunter_merge_readiness_v2 as core
 
 
@@ -651,3 +653,24 @@ def test_review_disposition_wording_does_not_change_readiness_predicates():
         )
     }
     assert states == {"success"}
+
+
+def test_merge_readiness_reconciles_both_exact_head_preflight_completions(monkeypatch):
+    import yaml
+
+    workflow = yaml.safe_load(
+        (Path(__file__).resolve().parents[1] / ".github/workflows/hunter-merge-readiness.yml").read_text()
+    )
+    triggers = workflow.get("on", workflow.get(True))
+    completed = triggers["workflow_run"]["workflows"]
+    assert "Hunter / Pre-PR Preflight" in completed
+    assert "Hunter / Trusted Preflight Upgrade" in completed
+    assert "|| 'sweep'" in workflow["concurrency"]["group"]
+    for name in ("Hunter / Pre-PR Preflight", "Hunter / Trusted Preflight Upgrade"):
+        monkeypatch.setattr(
+            core,
+            "event_payload",
+            lambda name=name: {"workflow_run": {"name": name, "head_sha": "e" * 40, "pull_requests": []}},
+        )
+        monkeypatch.setattr(core, "open_prs_for_head", lambda _sha: (582,))
+        assert core.candidate_prs() == (582,)

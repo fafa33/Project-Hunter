@@ -223,8 +223,12 @@ def read_pr_changed_files(
             if not isinstance(payload, list):
                 return False, (), "pull request file listing payload is not a list"
             for item in payload:
-                if not isinstance(item, dict) or not item.get("filename"):
-                    continue
+                if (
+                    not isinstance(item, dict)
+                    or not isinstance(item.get("filename"), str)
+                    or not item["filename"].strip()
+                ):
+                    return False, (), "malformed pull request file entry"
                 filename = str(item.get("filename") or "").strip()
                 status = str(item.get("status") or "").strip().lower()
                 previous = str(item.get("previous_filename") or "").strip()

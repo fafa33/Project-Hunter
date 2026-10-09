@@ -57,6 +57,7 @@ sequenceDiagram
 | `focused-development-verification` | implementation agent | never |
 | `pre-push-safety` | `.githooks/pre-push` → `scripts/hunter_pre_push.py` | never |
 | `hosted-full-exact-head-proof` | `Hunter / Pre-PR Preflight` | always |
+| `trusted-preflight-upgrade-lane` | `Hunter / Trusted Preflight Upgrade` | only when the candidate changes a trusted validation-definition path |
 | `candidate-admission` | `scripts/hunter_candidate_admission.py` | never |
 | `pull-request-integration-compatibility` | `CI / Quality Gates` | only when the integration tree differs |
 | `merge-readiness` | `Hunter Merge Readiness` | never |
@@ -65,6 +66,14 @@ sequenceDiagram
 Exactly one stage may declare `always`. That is what makes "the authoritative
 full exact-head proof" a single, identifiable thing rather than a description
 several boundaries each partially satisfy.
+
+`trusted-preflight-upgrade-lane` exists to verify candidates that change a
+trusted validation-definition path — edits the hosted push proof cannot
+self-attest. Its gate-structure checks run on every candidate from trusted
+default-branch code. Its full suite runs only when the candidate changed such a
+path; a candidate that changed none of them reuses the authoritative hosted
+exact-head proof for the same immutable head, and any evidence failure runs the
+full trusted gates.
 
 ## Why the full suite left pre-push
 

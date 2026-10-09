@@ -522,6 +522,36 @@
       "guard": "The authorization dependency carries the configured control checkout; DPM registry and compiler identity use that same checkout, never the installed module root or ambient process CWD. Regression executes authorize.prepare against a distinct configured checkout and verifies missing registry refuses authorization.",
       "test": "tests/test_issue_agent_authorize.py::test_prepare_reads_configured_checkout_registry_not_ambient_cwd",
       "status": "guarded"
+    },
+    {
+      "id": "PRH-067",
+      "class": "mutable-pr-head-file-list-used-for-immutable-event-head",
+      "source": "PR #582 Copilot review comment 4224886962 (2026-10-08)",
+      "classification": "systemic",
+      "guard_boundary": "Exact-head trusted preflight proof decision must not classify current PR diff for an older event head",
+      "guard": "Before and after classification and hosted proof adjudication, verify current PR head equals event exact-head SHA; otherwise refuse reuse and execute trusted full gates.",
+      "test": "tests/test_preflight_reuse_decision.py::test_changed_pr_head_refuses_reuse; tests/test_preflight_reuse_decision.py::test_head_changes_during_adjudication_refuses_reuse",
+      "status": "guarded"
+    },
+    {
+      "id": "PRH-068",
+      "class": "malformed-pr-files-page-silently-drops-protected-path",
+      "source": "PR #582 Copilot review comment 4224887008 (2026-10-08)",
+      "classification": "systemic",
+      "guard_boundary": "PR changed-file evidence must be complete before security-sensitive reuse classification",
+      "guard": "Fail closed on non-object or missing/blank filename entries in GitHub PR file pages, rather than silently skipping entries.",
+      "test": "tests/test_preflight_reuse_decision.py::test_malformed_pr_file_listing_refuses_reuse",
+      "status": "guarded"
+    },
+    {
+      "id": "PRH-069",
+      "class": "candidate-build-backend-omitted-from-trusted-validation-definition",
+      "source": "PR #582 Codex review finding (2026-10-09)",
+      "classification": "systemic",
+      "guard_boundary": "Hosted candidate-controlled bootstrap or build backend cannot authorize skipping independent trusted validation",
+      "guard": "Prefix-aware protected-path classification covers build_backend/, requirements/, local composite actions and nested pytest conftest.py; changes force fresh trusted full gates.",
+      "test": "tests/test_preflight_reuse_decision.py::test_candidate_controlled_bootstrap_forces_trusted_full_gates",
+      "status": "guarded"
     }
   ],
   "families": [
