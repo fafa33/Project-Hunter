@@ -66,7 +66,7 @@ def test_governance_review_bootstrap_stays_on_trusted_default_branch() -> None:
     assert "persist-credentials: false" in text
     assert "${GITHUB_WORKSPACE}/engine/scripts/hunter_governance_review/" in text
     # Privileged reviewer orchestration is not reachable from this
-    # `pull_request`-triggered workflow; it runs from the reconcile workflow,
+    # trusted `pull_request_target` workflow; it runs from the reconcile workflow,
     # whose file GitHub always takes from the trusted default branch.
     assert "python scripts/hunter_review_orchestrator.py" not in text
     reconcile = (ROOT / ".github/workflows/hunter-governance-reconcile.yml").read_text(encoding="utf-8")

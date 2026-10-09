@@ -856,7 +856,8 @@ def test_governance_review_workflow_keeps_only_read_access_to_actions():
 
     path = pathlib.Path(REPOSITORY_ROOT, ".github/workflows/hunter-governance-review.yml")
     document = yaml.safe_load(path.read_text(encoding="utf-8"))
-    assert "pull_request" in _triggers(document)
+    assert "pull_request" not in _triggers(document)
+    assert "pull_request_target" in _triggers(document)
     blocks = _permission_blocks(document)
     assert blocks and all(str(block.get("actions", "read")).strip() == "read" for block in blocks)
     assert "python scripts/hunter_review_orchestrator.py" not in path.read_text(encoding="utf-8")
@@ -2050,3 +2051,40 @@ def test_duplicate_collector_appearing_at_terminal_boundary_blocks_timeout(monke
     result = orchestrator.ensure_collector("owner/repo", "token", 472, HEAD)
     assert result.state == "WAITING_FOR_REVIEWER"
     assert stored["published"] == []
+
+
+def _candidate_status_publishers(document):
+    """Candidate-owned workflow definitions must never receive status/check write authority."""
+    if not isinstance(document, dict) or "pull_request" not in _triggers(document):
+        return []
+    blocks = [document.get("permissions")]
+    jobs = document.get("jobs")
+    if isinstance(jobs, dict):
+        blocks.extend(job.get("permissions") for job in jobs.values() if isinstance(job, dict))
+    unsafe = []
+    for block in blocks:
+        if isinstance(block, str) and block.strip() == "write-all":
+            unsafe.append("write-all")
+        elif isinstance(block, dict):
+            unsafe.extend(key for key in ("statuses", "checks") if str(block.get(key, "")).strip() in WORKFLOW_DRIVING)
+    return unsafe
+
+
+def test_candidate_workflows_cannot_publish_protected_commit_statuses():
+    unsafe = [(path.name, _candidate_status_publishers(document)) for path, document in _workflow_documents()]
+    assert [(name, grants) for name, grants in unsafe if grants] == []
+
+
+@pytest.mark.parametrize("trigger", ["on: pull_request", "on: [push, pull_request]", '"on": {pull_request: null}'])
+@pytest.mark.parametrize(
+    "grant", ["permissions: {statuses: write}", "permissions: {checks: write}", "permissions: write-all"]
+)
+def test_candidate_status_spoofing_mutation_is_rejected(trigger, grant):
+    assert _candidate_status_publishers(yaml.safe_load(f"{trigger}\n{grant}\n"))
+
+
+def test_job_override_cannot_publish_protected_status():
+    document = yaml.safe_load(
+        "on: pull_request\npermissions: {statuses: read}\njobs:\n  spoof:\n    permissions: {statuses: write}\n"
+    )
+    assert _candidate_status_publishers(document) == ["statuses"]
