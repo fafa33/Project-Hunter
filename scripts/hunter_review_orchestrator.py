@@ -720,6 +720,23 @@ def _active_collector_still_running(repository: str, token: str, cycle: ReviewCy
     return liveness == "active"
 
 
+def completed_collector_settled(repository: str, token: str, cycle: ReviewCycle) -> bool:
+    """A successful exact-cycle collector finished, but its status publisher was lost.
+
+    Give GitHub status propagation three minutes. Never infer review success:
+    this only terminates the optional opportunity, while admission still needs
+    its separately authenticated exact-head review evidence.
+    """
+    runs = collector_runs(repository, token, cycle.pr_number, cycle.head_sha, cycle.generation_id)
+    if any(str(run.get("status") or "") in ACTIVE_RUN_STATES for run in runs):
+        return False
+    successful = [run for run in runs if run.get("status") == "completed" and run.get("conclusion") == "success"]
+    return bool(successful) and any(
+        isinstance(run.get("updated_at"), str) and _older_than(run["updated_at"], COLLECTOR_LIVENESS_GRACE_SECONDS)
+        for run in successful
+    )
+
+
 def independent_review_opportunity_seconds() -> int:
     """One global opportunity budget across the whole reviewer chain.
 
@@ -1077,6 +1094,27 @@ def ensure_collector(
             # resolved-finding set, so nothing here may invoke them a second time.
             if existing.state in {"REVIEW_CLEAR", "FINDINGS_OPEN"} | TERMINAL_NONBLOCKING_STATES:
                 return existing
+            # A completed successful collector must not leave an optional status
+            # pending for the full reviewer-chain budget when its publisher failed.
+            # Fail closed on unreadable run evidence, and never claim review clear.
+            if existing.state in PENDING_STATES and existing.trigger_id is not None:
+                try:
+                    settled = completed_collector_settled(repository, token, existing)
+                except (transport.GitHubRequestError, ValueError):
+                    settled = False
+                if settled:
+                    terminal = ReviewCycle(
+                        pr_number=existing.pr_number,
+                        head_sha=existing.head_sha,
+                        state="REVIEW_TIMED_OUT",
+                        provider_id=existing.provider_id,
+                        trigger_id=existing.trigger_id,
+                        started_at=existing.started_at,
+                        config_digest=existing.config_digest,
+                        generation_id=existing.generation_id,
+                    )
+                    publish_cycle(repository, token, head_sha, cycle=terminal)
+                    return terminal
             if existing.state in PENDING_STATES and _older_than(
                 existing.started_at, independent_review_opportunity_seconds()
             ):

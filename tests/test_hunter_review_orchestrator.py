@@ -1894,3 +1894,37 @@ def test_exact_head_and_generation_binding_are_unchanged():
         is None
     )
     assert orchestrator._parse_cycle(_status(TRUSTED, _desc("REVIEW_CLEAR", digest="short")), 472, HEAD) is None
+
+
+def test_completed_collector_settles_stale_pending_without_waiting_for_full_chain(monkeypatch):
+    cycle = make_cycle(trigger_id=123, started_at=_five_minutes_ago())
+    run = _collector_run("completed", "success")
+    run["updated_at"] = "2020-01-01T00:00:00Z"
+    stored = _ensure_harness(monkeypatch, cycle, [run])
+    result = orchestrator.ensure_collector("owner/repo", "token", 472, HEAD)
+    assert result.state == "REVIEW_TIMED_OUT"
+    assert stored["dispatches"] == 0
+    assert stored["published"][-1].head_sha == HEAD
+
+
+def test_recently_completed_collector_preserves_status_propagation_grace(monkeypatch):
+    from datetime import UTC, datetime
+
+    cycle = make_cycle(trigger_id=123, started_at=_five_minutes_ago())
+    run = _collector_run("completed", "success")
+    run["updated_at"] = datetime.now(UTC).isoformat()
+    stored = _ensure_harness(monkeypatch, cycle, [run])
+    result = orchestrator.ensure_collector("owner/repo", "token", 472, HEAD)
+    assert result.state == "WAITING_FOR_REVIEWER"
+    assert stored["published"] == []
+
+
+def test_completed_collector_with_active_retry_never_settles_early(monkeypatch):
+    cycle = make_cycle(trigger_id=123, started_at=_five_minutes_ago())
+    completed = _collector_run("completed", "success")
+    completed["updated_at"] = "2020-01-01T00:00:00Z"
+    active = _collector_run("in_progress", run_id=2)
+    stored = _ensure_harness(monkeypatch, cycle, [completed, active])
+    result = orchestrator.ensure_collector("owner/repo", "token", 472, HEAD)
+    assert result.state == "WAITING_FOR_REVIEWER"
+    assert stored["published"] == []
