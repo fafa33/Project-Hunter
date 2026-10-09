@@ -444,3 +444,12 @@ def test_deleted_owner_disposition_reply_is_not_revived_as_active_disposition(tm
     assert finding["claimed_family_id"] is None
     assert finding["invariant"] is None
     assert finding["fix_reference"] is None
+
+
+def test_scheduled_learning_rotates_over_paginated_open_pr_set():
+    from pathlib import Path
+
+    workflow = (Path(__file__).resolve().parents[1] / ".github/workflows/hunter-knowledge-learning.yml").read_text()
+    assert 'gh api --paginate "repos/${REPOSITORY}/pulls?state=open&base=main&per_page=100"' in workflow
+    assert "gh pr list --repo" not in workflow
+    assert "hour % ${#open_prs[@]}" in workflow

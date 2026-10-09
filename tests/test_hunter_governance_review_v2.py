@@ -216,7 +216,7 @@ def test_event_reconcile_scopes_to_triggering_pr_and_reserves_full_sweep_for_rec
         'elif [[ "${event_name}" == "workflow_run" '
         '&& "${EVENT_WORKFLOW_RUN_NAME}" == "Hunter Reviewer Collector" ]]; then'
     ) in workflow
-    assert 'else\n            pr_numbers="$(' in workflow
+    assert "gh api --paginate" in workflow
 
 
 def test_reconcile_continues_after_one_pr_failure_and_drops_checkout_credentials():
@@ -729,3 +729,11 @@ def test_connector_github_unavailable_is_pending_not_semantic_failure(monkeypatc
     state, description = core.verify_code_write_ingress_provenance("fafa33/Project-Hunter", "token", HEAD, 501)
     assert state == "pending"
     assert "temporarily unavailable" in description
+
+
+def test_scheduled_governance_sweeps_all_open_pr_pages():
+    from pathlib import Path
+
+    workflow = (Path(__file__).resolve().parents[1] / ".github/workflows/hunter-governance-reconcile.yml").read_text()
+    assert "gh api --paginate" in workflow
+    assert "repos/${GITHUB_REPOSITORY}/pulls?state=open&base=main&per_page=100" in workflow

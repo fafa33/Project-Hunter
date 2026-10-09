@@ -49,9 +49,18 @@ jobs:
           if [[ -n "${EVENT_PR}" ]]; then
             echo "number=${EVENT_PR}" >> "$GITHUB_OUTPUT"
           else
-            # Catch up one bounded PR per run, rotating across open PRs.
+            # Rotate one PR per run across ALL open main PRs. The REST API
+            # pagination is required: --limit 100 silently starves later PRs.
+            open_pr_numbers="$(gh api --paginate "repos/${REPOSITORY}/pulls?state=open&base=main&per_page=100" --jq '.[].number' | sort -n)"
+            open_prs=()
+            if [[ -n "${open_pr_numbers}" ]]; then
+              mapfile -t open_prs <<< "${open_pr_numbers}"
+            fi
             hour="$(( $(date -u +%s) / 3600 ))"
-            number="$(gh pr list --repo "$REPOSITORY" --state open --base main --limit 100 --json number --jq "sort_by(.number) | if length == 0 then empty else .[($hour % length)].number end")"
+            number=""
+            if (( ${#open_prs[@]} > 0 )); then
+              number="${open_prs[$((hour % ${#open_prs[@]}))]}"
+            fi
             echo "number=${number}" >> "$GITHUB_OUTPUT"
           fi
       - name: Build exact-head learning artifact

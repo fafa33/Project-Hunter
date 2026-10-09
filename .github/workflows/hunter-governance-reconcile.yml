@@ -141,12 +141,11 @@ jobs:
                 --jq ".[] | select(.headRefOid == \"${EVENT_WORKFLOW_RUN_HEAD_SHA}\") | .number"
             )"
           else
+            # Paginate the complete trusted open-PR set. The default gh pr
+            # list limit silently skips later PRs during scheduled recovery.
             pr_numbers="$(
-              gh pr list \
-                --repo "${GITHUB_REPOSITORY}" \
-                --state open \
-                --base main \
-                --json number \
+              gh api --paginate \
+                "repos/${GITHUB_REPOSITORY}/pulls?state=open&base=main&per_page=100" \
                 --jq '.[].number'
             )"
           fi

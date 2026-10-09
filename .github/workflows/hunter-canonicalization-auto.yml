@@ -5,18 +5,13 @@ name: Hunter Automatic Canonicalization
 # already-authorized local_git_push path on the owner's Mac, so this workflow
 # grants no new GitHub repository-write authority.
 on:
-  # Review events preserve lifecycle evidence immediately, but the writer is
-  # hard-gated on the source PR being merged. The closed event supplies the
-  # deterministic continuation point without spawning follow-on PRs mid-work.
+  # The merged/closed event is the authoritative writer continuation.
+  # workflow_dispatch is the explicit recovery path for an authorized PR.
+  # Review and comment events are intentionally not triggers: bot-authored
+  # events are approval-held and unmerged PRs cannot enter the writer path.
+  # GitHub Actions provides no review-thread-resolution event.
   pull_request:
     types: [closed]
-  # GitHub holds Copilot-authored review events for manual approval.
-  # The merged/closed path remains the authoritative writer; comments and
-  # dispatch provide catch-up without requiring review-triggered jobs.
-  # GitHub Actions has no pull_request_review_thread trigger. Thread-resolution
-  # state is therefore reconciled on the supported review/comment events below
-  # and by explicit workflow_dispatch catch-up; never declare an unsupported
-  # event here because GitHub rejects the whole workflow before any job starts.
   workflow_dispatch:
     inputs:
       pr_number:
