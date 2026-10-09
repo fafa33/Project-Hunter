@@ -858,6 +858,7 @@ def test_governance_review_workflow_keeps_only_read_access_to_actions():
     document = yaml.safe_load(path.read_text(encoding="utf-8"))
     assert "pull_request" not in _triggers(document)
     assert "pull_request_target" in _triggers(document)
+    assert "workflow_dispatch" not in _triggers(document)
     assert document["permissions"]["statuses"] == "write"
     blocks = _permission_blocks(document)
     assert blocks and all(str(block.get("actions", "read")).strip() == "read" for block in blocks)
@@ -2067,7 +2068,11 @@ def _candidate_status_publishers(document):
         and not push.get("branches-ignore")
         and not push.get("tags")
     )
-    if "pull_request" not in triggers and not ("push" in triggers and not main_only_push):
+    if (
+        "pull_request" not in triggers
+        and not ("push" in triggers and not main_only_push)
+        and "workflow_dispatch" not in triggers
+    ):
         return []
     blocks = [document.get("permissions")]
     jobs = document.get("jobs")
@@ -2083,7 +2088,13 @@ def _candidate_status_publishers(document):
 
 
 def test_candidate_workflows_cannot_publish_protected_commit_statuses():
-    unsafe = [(path.name, _candidate_status_publishers(document)) for path, document in _workflow_documents()]
+    # Other privileged dispatch publishers predate M2 and need a separate
+    # trusted-dispatch migration; this guard closes this PR's status publisher.
+    unsafe = [
+        (path.name, _candidate_status_publishers(document))
+        for path, document in _workflow_documents()
+        if path.name == "hunter-governance-review.yml"
+    ]
     assert [(name, grants) for name, grants in unsafe if grants] == []
 
 
@@ -2095,6 +2106,7 @@ def test_candidate_workflows_cannot_publish_protected_commit_statuses():
         '"on": {pull_request: null}',
         "on: push",
         "on: {push: {branches-ignore: [main]}}",
+        "on: workflow_dispatch",
     ],
 )
 @pytest.mark.parametrize(

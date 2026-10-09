@@ -60,7 +60,7 @@ def test_governance_review_bootstrap_stays_on_trusted_default_branch() -> None:
     text = path.read_text(encoding="utf-8")
     assert "github.event.pull_request.number" in text
     assert "github.event.workflow_run.pull_requests[0].number" in text
-    assert "github.event.inputs.pr_number" in text
+    assert "workflow_dispatch:" not in text
     assert "283" not in text
     assert "ref: ${{ github.event.repository.default_branch }}" in text
     assert "persist-credentials: false" in text
