@@ -56,6 +56,12 @@
         "status": "modified"
       },
       {
+        "blob_sha": "98432652da92d5ac62daf1b57203e271138c896a",
+        "path": "docs/HUNTER_GOVERNANCE_REVIEW.md",
+        "previous_path": "",
+        "status": "modified"
+      },
+      {
         "blob_sha": "dbcd26fc8d1124014d82bc705e8efaa970f14458",
         "path": "tests/test_hunter_governance_cleanup.py",
         "previous_path": "",
@@ -68,11 +74,11 @@
         "status": "modified"
       }
     ],
-    "review_target_digest": "3c86735f9438b91669a7be27bc0a354a45098c50db660659489660e2f59bbe8a"
+    "review_target_digest": "5466447036d1316acd02fdab230ad90606729517fed5b8a94df29f57d447b18d"
   },
-  "review_id": "433a22fe360811ed696e4ab10070944f64175dfc9b09803336be142481208905",
+  "review_id": "75f5562b604c851c81540cdf90cf4c07824b70785abf4f7433078756591660be",
   "review_request": {
-    "claims_id": "433a22fe360811ed696e4ab10070944f64175dfc9b09803336be142481208905",
+    "claims_id": "75f5562b604c851c81540cdf90cf4c07824b70785abf4f7433078756591660be",
     "schema": "hunter.review-request.v1"
   },
   "schema": "hunter.pre-ready-hostile-review.v1"
