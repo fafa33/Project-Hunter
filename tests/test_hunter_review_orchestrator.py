@@ -2088,14 +2088,29 @@ def _candidate_status_publishers(document):
 
 
 def test_candidate_workflows_cannot_publish_protected_commit_statuses():
-    # Other privileged dispatch publishers predate M2 and need a separate
-    # trusted-dispatch migration; this guard closes this PR's status publisher.
-    unsafe = [
-        (path.name, _candidate_status_publishers(document))
-        for path, document in _workflow_documents()
-        if path.name == "hunter-governance-review.yml"
-    ]
-    assert [(name, grants) for name, grants in unsafe if grants] == []
+    # Existing dispatch-only privileged publishers are explicit, bounded legacy
+    # exceptions pending trusted-dispatch migration. Never exempt their PR/push
+    # triggers or grant any new workflow the same status-writing capability.
+    legacy_dispatch = {
+        "hunter-governance-reconcile.yml",
+        "hunter-merge-readiness.yml",
+        "hunter-reviewer-collector.yml",
+    }
+    unsafe = []
+    for path, document in _workflow_documents():
+        grants = _candidate_status_publishers(document)
+        if not grants:
+            continue
+        triggers = _triggers(document)
+        if path.name in legacy_dispatch:
+            assert "workflow_dispatch" in triggers, path.name
+            assert "pull_request" not in triggers, path.name
+            push = document.get("on", document.get(True))
+            push = push.get("push") if isinstance(push, dict) else None
+            assert "push" not in triggers or (isinstance(push, dict) and push.get("branches") == ["main"]), path.name
+            continue
+        unsafe.append((path.name, grants))
+    assert unsafe == []
 
 
 @pytest.mark.parametrize(
