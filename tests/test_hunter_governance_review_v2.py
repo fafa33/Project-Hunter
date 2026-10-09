@@ -216,7 +216,7 @@ def test_event_reconcile_scopes_to_triggering_pr_and_reserves_full_sweep_for_rec
         'elif [[ "${event_name}" == "workflow_run" '
         '&& "${EVENT_WORKFLOW_RUN_NAME}" == "Hunter Reviewer Collector" ]]; then'
     ) in workflow
-    assert 'else\n            pr_numbers="$(' in workflow
+    assert "gh api --paginate" in workflow
 
 
 def test_reconcile_continues_after_one_pr_failure_and_drops_checkout_credentials():
@@ -235,23 +235,17 @@ def test_reconcile_continues_after_one_pr_failure_and_drops_checkout_credentials
         end = workflow.index(f"  {next_name}:", start)
         return workflow[start:end]
 
-    workflow_run = trigger_block("workflow_run", "pull_request_review")
-    review = trigger_block("pull_request_review", "pull_request_review_comment")
-    review_comment = trigger_block("pull_request_review_comment", "schedule")
-
+    workflow_run = trigger_block("workflow_run", "pull_request_target")
     assert "- Hunter / Pre-PR Preflight" in workflow_run
     assert "- Hunter Reviewer Collector" in workflow_run
     assert "- completed" in workflow_run
-    assert "- submitted" in review
-    assert "- edited" in review
-    assert "- dismissed" in review
-    assert "- created" in review_comment
-    assert "- edited" in review_comment
-    assert "- deleted" in review_comment
-    # Review-state changes must reconcile immediately; the scheduled sweep is
-    # recovery only and must not be the normal authority-refresh path.
-    assert workflow.index("pull_request_review:") < workflow.index("schedule:")
-    assert workflow.index("pull_request_review_comment:") < workflow.index("schedule:")
+    # Approval-held review events must not reappear on the privileged gate.
+    assert "  pull_request_review:" not in workflow
+    assert "  pull_request_review_comment:" not in workflow
+    assert "  pull_request_target:" in workflow
+    assert 'cron: "*/5 * * * *"' in workflow
+    # Human review changes converge on the bounded trusted sweep, not on an
+    # approval-held event; the previous immediate-review assertion was stale.
 
 
 ANCESTOR = "d" * 40
@@ -735,3 +729,11 @@ def test_connector_github_unavailable_is_pending_not_semantic_failure(monkeypatc
     state, description = core.verify_code_write_ingress_provenance("fafa33/Project-Hunter", "token", HEAD, 501)
     assert state == "pending"
     assert "temporarily unavailable" in description
+
+
+def test_scheduled_governance_sweeps_all_open_pr_pages():
+    from pathlib import Path
+
+    workflow = (Path(__file__).resolve().parents[1] / ".github/workflows/hunter-governance-reconcile.yml").read_text()
+    assert "gh api --paginate" in workflow
+    assert "repos/${GITHUB_REPOSITORY}/pulls?state=open&base=main&per_page=100" in workflow

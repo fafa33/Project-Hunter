@@ -69,7 +69,9 @@ def test_learning_workflow_never_uses_pull_request_target():
     assert "pull_request_target:" not in text
     assert "pull_request_target:" not in text
     assert "pull_request:\n" not in text
-    assert "pull_request_review:" in text
+    assert "pull_request_review:" not in text
+    assert "schedule:" in text
+    assert "pull_request_review_comment:" not in text
 
 
 def test_bootstrap_never_executes_candidate_learning_code():
@@ -183,8 +185,8 @@ def test_automatic_canonicalization_uses_existing_local_git_push_without_token_w
     # GitHub Actions does not support pull_request_review_thread as an `on:` event.
     # Declaring it invalidates the workflow before any job can be created.
     assert "pull_request_review_thread:" not in text
-    assert "pull_request_review:" in text
-    assert "pull_request_review_comment:" in text
+    assert "pull_request_review:" not in text
+    assert "pull_request_review_comment:" not in text
     assert "workflow_dispatch:" in text
     assert "path: reviewed-pr" in text
     assert "HUNTER_REGRESSION_ROOT: ${{ github.workspace }}/reviewed-pr" in text
@@ -442,3 +444,12 @@ def test_deleted_owner_disposition_reply_is_not_revived_as_active_disposition(tm
     assert finding["claimed_family_id"] is None
     assert finding["invariant"] is None
     assert finding["fix_reference"] is None
+
+
+def test_scheduled_learning_rotates_over_paginated_open_pr_set():
+    from pathlib import Path
+
+    workflow = (Path(__file__).resolve().parents[1] / ".github/workflows/hunter-knowledge-learning.yml").read_text()
+    assert 'gh api --paginate "repos/${REPOSITORY}/pulls?state=open&base=main&per_page=100"' in workflow
+    assert "gh pr list --repo" not in workflow
+    assert "hour % ${#open_prs[@]}" in workflow

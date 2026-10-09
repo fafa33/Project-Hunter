@@ -720,6 +720,34 @@ def _active_collector_still_running(repository: str, token: str, cycle: ReviewCy
     return liveness == "active"
 
 
+def completed_collector_settled(repository: str, token: str, cycle: ReviewCycle) -> bool:
+    """A successful exact-cycle collector finished, but its status publisher was lost.
+
+    Give GitHub status propagation three minutes. Never infer review success:
+    this only terminates the optional opportunity, while admission still needs
+    its separately authenticated exact-head review evidence.
+    """
+    runs = collector_runs(repository, token, cycle.pr_number, cycle.head_sha, cycle.generation_id)
+    if any(str(run.get("status") or "") in ACTIVE_RUN_STATES for run in runs):
+        return False
+    successful = [run for run in runs if run.get("status") == "completed" and run.get("conclusion") == "success"]
+    if not successful:
+        return False
+    # A previous successful attempt cannot close the propagation window for a
+    # newer successful attempt. Missing timestamps are unknown, not stale.
+    timestamps = [run.get("updated_at") for run in successful]
+    if any(not isinstance(value, str) or not value for value in timestamps):
+        return False
+    try:
+        parsed = [datetime.fromisoformat(value.replace("Z", "+00:00")) for value in timestamps]
+        if any(value.tzinfo is None or value.utcoffset() is None for value in parsed):
+            return False
+        newest = max(parsed)
+    except (ValueError, TypeError, OverflowError):
+        return False
+    return _older_than(newest.isoformat(), COLLECTOR_LIVENESS_GRACE_SECONDS)
+
+
 def independent_review_opportunity_seconds() -> int:
     """One global opportunity budget across the whole reviewer chain.
 
@@ -1077,6 +1105,41 @@ def ensure_collector(
             # resolved-finding set, so nothing here may invoke them a second time.
             if existing.state in {"REVIEW_CLEAR", "FINDINGS_OPEN"} | TERMINAL_NONBLOCKING_STATES:
                 return existing
+            # A completed successful collector must not leave an optional status
+            # pending for the full reviewer-chain budget when its publisher failed.
+            # Fail closed on unreadable run evidence, and never claim review clear.
+            if existing.state in PENDING_STATES and existing.trigger_id is not None:
+                try:
+                    settled = completed_collector_settled(repository, token, existing)
+                except (transport.GitHubRequestError, ValueError):
+                    settled = False
+                if settled:
+                    # Collector completion may have published a terminal state meanwhile.
+                    state_now, cycle_now, _ = read_cycle(repository, token, pr_number, head_sha)
+                    if state_now != "present" or cycle_now is None:
+                        return existing
+                    if cycle_now != existing or cycle_now.state not in OPEN_CYCLE_STATES:
+                        return cycle_now
+                    # Revalidate correlated runs at the publication boundary. A
+                    # duplicate dispatch may become visible after the first read.
+                    # Unreadable evidence must never authorize a timeout.
+                    try:
+                        if not completed_collector_settled(repository, token, cycle_now):
+                            return cycle_now
+                    except (transport.GitHubRequestError, ValueError):
+                        return cycle_now
+                    terminal = ReviewCycle(
+                        pr_number=existing.pr_number,
+                        head_sha=existing.head_sha,
+                        state="REVIEW_TIMED_OUT",
+                        provider_id=existing.provider_id,
+                        trigger_id=existing.trigger_id,
+                        started_at=existing.started_at,
+                        config_digest=existing.config_digest,
+                        generation_id=existing.generation_id,
+                    )
+                    publish_cycle(repository, token, head_sha, cycle=terminal)
+                    return terminal
             if existing.state in PENDING_STATES and _older_than(
                 existing.started_at, independent_review_opportunity_seconds()
             ):
@@ -1091,6 +1154,28 @@ def ensure_collector(
                 if not _active_collector_still_running(
                     repository, token, existing, independent_review_opportunity_seconds()
                 ):
+                    # A successful run owns its publication grace only within
+                    # the same bounded active-collector ceiling. Otherwise a
+                    # stale success plus a wedged retry could wait forever.
+                    budget = independent_review_opportunity_seconds()
+                    within_ceiling = not _older_than(existing.started_at, budget * ACTIVE_COLLECTOR_GRACE_MULTIPLIER)
+                    if within_ceiling and existing.trigger_id is not None:
+                        try:
+                            runs = collector_runs(
+                                repository, token, existing.pr_number, existing.head_sha, existing.generation_id
+                            )
+                            successful = [
+                                run
+                                for run in runs
+                                if run.get("status") == "completed" and run.get("conclusion") == "success"
+                            ]
+                            if successful and not completed_collector_settled(repository, token, existing):
+                                return existing
+                        except (transport.GitHubRequestError, ValueError):
+                            # Run-list lookup is not a status-publishing authority.
+                            # The bounded optional timeout must remain live even
+                            # when GitHub's run-list API is unavailable.
+                            pass
                     terminal = ReviewCycle(
                         pr_number=existing.pr_number,
                         head_sha=existing.head_sha,
