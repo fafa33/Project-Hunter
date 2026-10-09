@@ -1584,8 +1584,6 @@ def parser() -> argparse.ArgumentParser:
     trusted = sub.add_parser("trusted-collector-complete")
     trusted.add_argument("--repository", required=True)
     trusted.add_argument("--run-id", type=int, required=True)
-    trusted.add_argument("--receipt", type=Path)
-    trusted.add_argument("--proof", type=Path)
     return result
 
 
@@ -1594,10 +1592,15 @@ def main() -> int:
     token = os.environ.get("GITHUB_TOKEN") or os.environ.get("GH_TOKEN") or ""
     try:
         if args.command == "trusted-collector-complete":
-            proof = args.proof.read_text(encoding="utf-8").strip() if args.proof is not None else ""
+            # The trusted workflow fixes the artifact directory. No CLI path
+            # can select an arbitrary file to read under a privileged token.
+            receipt_dir = Path(os.environ["RUNNER_TEMP"]) / "collector-receipt"
+            receipt = receipt_dir / "reviewer-results.json"
+            proof_path = receipt_dir / "collector-dispatch-proof.txt"
+            proof = proof_path.read_text(encoding="utf-8").strip()
             outcome = publish_trusted_collector_completion(args.repository, token, args.run_id, proof)
             print(outcome)
-            if outcome.startswith("PUBLISHED:") and args.receipt is not None:
+            if outcome.startswith("PUBLISHED:"):
                 run = request_json(args.repository, token, "GET", f"actions/runs/{args.run_id}")
                 match = re.fullmatch(
                     r"Hunter Reviewer Collector PR ([1-9][0-9]*) HEAD ([0-9a-f]{40})(?: GEN ([^\s]+))?",
@@ -1611,7 +1614,7 @@ def main() -> int:
                             int(match.group(1)),
                             match.group(2),
                             args.run_id,
-                            args.receipt,
+                            receipt,
                             trusted_completion=True,
                         )
                     )

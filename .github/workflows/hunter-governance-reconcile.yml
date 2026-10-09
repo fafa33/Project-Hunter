@@ -107,13 +107,10 @@ jobs:
           # is validated by the trusted finalizer against PR/head/generation.
           gh run download "$COLLECTOR_RUN_ID" --repo "$GITHUB_REPOSITORY" \
             --pattern 'hunter-reviewer-results-*' --dir "$RUNNER_TEMP/collector-receipt"
-          receipt="$(find "$RUNNER_TEMP/collector-receipt" -type f -name reviewer-results.json | head -n 1)"
-          test -n "$receipt"
-          proof="$(find "$RUNNER_TEMP/collector-receipt" -type f -name collector-dispatch-proof.txt | head -n 1)"
-          test -n "$proof"
+          test -f "$RUNNER_TEMP/collector-receipt/reviewer-results.json"
+          test -f "$RUNNER_TEMP/collector-receipt/collector-dispatch-proof.txt"
           python scripts/hunter_review_orchestrator.py trusted-collector-complete \
-            --repository "$GITHUB_REPOSITORY" --run-id "$COLLECTOR_RUN_ID" \
-            --receipt "$receipt" --proof "$proof"
+            --repository "$GITHUB_REPOSITORY" --run-id "$COLLECTOR_RUN_ID"
 
       - name: Refresh lightweight governance status
         env:
