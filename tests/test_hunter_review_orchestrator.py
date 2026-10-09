@@ -1999,3 +1999,25 @@ def test_completed_collector_does_not_overwrite_concurrent_terminal(monkeypatch)
     monkeypatch.setattr(orchestrator, "read_cycle", lambda *_args: ("present", next(reads), None))
     assert orchestrator.ensure_collector("owner/repo", "token", 472, HEAD).state == "REVIEWER_UNAVAILABLE"
     assert stored["published"] == []
+
+
+def test_duplicate_collector_appearing_at_terminal_boundary_blocks_timeout(monkeypatch):
+    cycle = make_cycle(trigger_id=123, started_at=_five_minutes_ago())
+    successful = _collector_run("completed", "success")
+    successful["updated_at"] = "2020-01-01T00:00:00Z"
+    runs = [successful]
+    stored = _ensure_harness(monkeypatch, cycle, runs)
+    original_read = orchestrator.read_cycle
+    reads = 0
+
+    def racing_read(*args):
+        nonlocal reads
+        reads += 1
+        if reads == 2:
+            runs.append(_collector_run("in_progress", run_id=2))
+        return original_read(*args)
+
+    monkeypatch.setattr(orchestrator, "read_cycle", racing_read)
+    result = orchestrator.ensure_collector("owner/repo", "token", 472, HEAD)
+    assert result.state == "WAITING_FOR_REVIEWER"
+    assert stored["published"] == []

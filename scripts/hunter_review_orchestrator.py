@@ -1120,6 +1120,14 @@ def ensure_collector(
                         return existing
                     if cycle_now != existing or cycle_now.state not in OPEN_CYCLE_STATES:
                         return cycle_now
+                    # Revalidate correlated runs at the publication boundary. A
+                    # duplicate dispatch may become visible after the first read.
+                    # Unreadable evidence must never authorize a timeout.
+                    try:
+                        if not completed_collector_settled(repository, token, cycle_now):
+                            return cycle_now
+                    except (transport.GitHubRequestError, ValueError):
+                        return cycle_now
                     terminal = ReviewCycle(
                         pr_number=existing.pr_number,
                         head_sha=existing.head_sha,
