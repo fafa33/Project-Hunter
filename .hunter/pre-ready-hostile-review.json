@@ -50,8 +50,26 @@
     "issue": "591",
     "review_target": [
       {
+        "blob_sha": "9cc607e54a8311256abd8bd5df55739bd56d0a0b",
+        "path": ".github/workflows/hunter-governance-reconcile.yml",
+        "previous_path": "",
+        "status": "modified"
+      },
+      {
         "blob_sha": "95efc84021c5f07b60286dc484665b86cdf18048",
         "path": ".github/workflows/hunter-governance-review.yml",
+        "previous_path": "",
+        "status": "modified"
+      },
+      {
+        "blob_sha": "a26c3d6a55ccfb612bb107b46ce6c83a1624c696",
+        "path": ".github/workflows/hunter-merge-readiness.yml",
+        "previous_path": "",
+        "status": "modified"
+      },
+      {
+        "blob_sha": "a99cec701f2da498f5da0a03004741874c6c1892",
+        "path": ".github/workflows/hunter-reviewer-collector.yml",
         "previous_path": "",
         "status": "modified"
       },
@@ -62,23 +80,47 @@
         "status": "modified"
       },
       {
+        "blob_sha": "41c66b58f630245e639f7729e63f44796119e78a",
+        "path": "scripts/hunter_issue_agent_lifecycle.py",
+        "previous_path": "",
+        "status": "modified"
+      },
+      {
+        "blob_sha": "8e9691050b8e01308056f53da367c7351bf029da",
+        "path": "scripts/hunter_review_orchestrator.py",
+        "previous_path": "",
+        "status": "modified"
+      },
+      {
         "blob_sha": "dbcd26fc8d1124014d82bc705e8efaa970f14458",
         "path": "tests/test_hunter_governance_cleanup.py",
         "previous_path": "",
         "status": "modified"
       },
       {
-        "blob_sha": "205d31cf2c9f1d5ee1d8d9b4e4a78b37db8260a8",
+        "blob_sha": "96f69c38ce95f3c36cdaaad458a5a665d1277d0e",
         "path": "tests/test_hunter_review_orchestrator.py",
+        "previous_path": "",
+        "status": "modified"
+      },
+      {
+        "blob_sha": "57420014c932056c8babc281d29217927086a96f",
+        "path": "tests/test_issue_agent_workflows.py",
+        "previous_path": "",
+        "status": "modified"
+      },
+      {
+        "blob_sha": "543dcc6427ab2455636e49cb5f4e1a5cb7d7cc97",
+        "path": "tests/test_review_orchestrator_collector_finalization.py",
         "previous_path": "",
         "status": "modified"
       }
     ],
-    "review_target_digest": "5466447036d1316acd02fdab230ad90606729517fed5b8a94df29f57d447b18d"
+    "review_target_digest": "b920cf5e11abb231eca1de264be6e39b73942067d45574bb7206880c8ab407ea"
   },
-  "review_id": "75f5562b604c851c81540cdf90cf4c07824b70785abf4f7433078756591660be",
+  "review_id": "7a1c6fd3c8476977e0bc5279cf7e54a5776308dc205a8bdb87492232bc11689e",
   "review_request": {
-    "claims_id": "75f5562b604c851c81540cdf90cf4c07824b70785abf4f7433078756591660be",
+    "claims_id": "7a1c6fd3c8476977e0bc5279cf7e54a5776308dc205a8bdb87492232bc11689e",
     "schema": "hunter.review-request.v1"
   },
   "schema": "hunter.pre-ready-hostile-review.v1"
