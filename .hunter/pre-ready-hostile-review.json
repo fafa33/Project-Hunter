@@ -74,19 +74,19 @@
     "issue": "583",
     "review_target": [
       {
-        "blob_sha": "ae7d02e5ec2fa86b43378487d727640aa887689c",
+        "blob_sha": "e37e2eb3b0d8480126031c41f4564392abf447e9",
         "path": ".github/workflows/hunter-canonicalization-auto.yml",
         "previous_path": "",
         "status": "modified"
       },
       {
-        "blob_sha": "97abe7de7b303944908bdf482b50d5362426e0ba",
+        "blob_sha": "886a003a67a2d4526bf9009330a3ddc8b3bb86d8",
         "path": ".github/workflows/hunter-governance-reconcile.yml",
         "previous_path": "",
         "status": "modified"
       },
       {
-        "blob_sha": "3abfb170d4500c234e864875380dc27a9b5e87e8",
+        "blob_sha": "67cfdc29b24815ffb6d58379aa5afdc1b347bcfc",
         "path": ".github/workflows/hunter-knowledge-learning.yml",
         "previous_path": "",
         "status": "modified"
@@ -104,7 +104,7 @@
         "status": "modified"
       },
       {
-        "blob_sha": "839bb4d267ed776e2f4a20b2bf9a2adf18a40723",
+        "blob_sha": "7638f7de183472ce5e8b6b1f25a4aeade0da9de2",
         "path": "tests/test_hunter_governance_review_v2.py",
         "previous_path": "",
         "status": "modified"
@@ -116,7 +116,7 @@
         "status": "modified"
       },
       {
-        "blob_sha": "2c4089d75ff67e5d07a4bde9d53ad4e969f4c044",
+        "blob_sha": "05ef48c710a79fdcb7370e56e53a1f50faf66a7f",
         "path": "tests/test_hunter_knowledge_learning_workflow.py",
         "previous_path": "",
         "status": "modified"
@@ -128,11 +128,11 @@
         "status": "modified"
       }
     ],
-    "review_target_digest": "1156b464798f394647188ec19078e97b4422549c091e454c38a00dc3cf3a1680"
+    "review_target_digest": "09503465702032f6cb5b260aad20b6f966acae14eba25aac3b08354971291a1f"
   },
-  "review_id": "06d9389aa0191c9e03e303eb594eacfbd5ff2d069e81a0eab6c1ef723abb4e7f",
+  "review_id": "fbe48775f55a45f496e38ea5ce408551b34b46a107339b6c1d1c2b2da2465628",
   "review_request": {
-    "claims_id": "06d9389aa0191c9e03e303eb594eacfbd5ff2d069e81a0eab6c1ef723abb4e7f",
+    "claims_id": "fbe48775f55a45f496e38ea5ce408551b34b46a107339b6c1d1c2b2da2465628",
     "schema": "hunter.review-request.v1"
   },
   "schema": "hunter.pre-ready-hostile-review.v1"
