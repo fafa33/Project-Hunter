@@ -248,7 +248,6 @@ def test_reconcile_continues_after_one_pr_failure_and_drops_checkout_credentials
     # approval-held event; the previous immediate-review assertion was stale.
 
 
-
 ANCESTOR = "d" * 40
 FLOOR = "e" * 40
 SUCCESSFUL_RUN = {
