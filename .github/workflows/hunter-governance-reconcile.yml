@@ -94,7 +94,7 @@ jobs:
           persist-credentials: false
 
       - name: Publish trusted collector completion
-        if: github.event_name == 'workflow_run' && github.event.workflow_run.name == 'Hunter Reviewer Collector' && github.event.workflow_run.conclusion == 'success'
+        if: github.event_name == 'schedule' || (github.event_name == 'workflow_run' && github.event.workflow_run.name == 'Hunter Reviewer Collector' && github.event.workflow_run.conclusion == 'success')
         env:
           GITHUB_TOKEN: ${{ github.token }}
           GH_TOKEN: ${{ github.token }}
@@ -102,29 +102,37 @@ jobs:
           COLLECTOR_RUN_ID: ${{ github.event.workflow_run.id }}
         run: |
           set -euo pipefail
-          mkdir -p "$RUNNER_TEMP/collector-receipt"
-          # The artifact belongs to this exact authenticated run; its content
-          # is validated by the trusted finalizer against PR/head/generation.
-          attempt="${{ github.event.workflow_run.run_attempt }}"
-          # Exact attempt only: never mix artifacts across workflow reruns.
-          gh run download "$COLLECTOR_RUN_ID" --repo "$GITHUB_REPOSITORY" \
-            --pattern "hunter-reviewer-results-*-${attempt}" \
-            --dir "$RUNNER_TEMP/collector-receipt/results" || exit 0
-          gh run download "$COLLECTOR_RUN_ID" --repo "$GITHUB_REPOSITORY" \
-            --pattern "hunter-dispatch-proof-*-${attempt}" \
-            --dir "$RUNNER_TEMP/collector-receipt/proof" || exit 0
-          # A single matching artifact is extracted directly into --dir.
-          test "$(find "$RUNNER_TEMP/collector-receipt/results" -type f | wc -l | tr -d ' ')" = 1 || exit 0
-          test "$(find "$RUNNER_TEMP/collector-receipt/proof" -type f | wc -l | tr -d ' ')" = 1 || exit 0
-          mv "$RUNNER_TEMP/collector-receipt/results/reviewer-results.json" \
-            "$RUNNER_TEMP/collector-receipt/reviewer-results.json" || exit 0
-          mv "$RUNNER_TEMP/collector-receipt/proof/collector-dispatch-proof.txt" \
-            "$RUNNER_TEMP/collector-receipt/collector-dispatch-proof.txt" || exit 0
-          test -f "$RUNNER_TEMP/collector-receipt/reviewer-results.json" || exit 0
-          test -f "$RUNNER_TEMP/collector-receipt/collector-dispatch-proof.txt" || exit 0
-          python scripts/hunter_review_orchestrator.py trusted-collector-complete \
-            --repository "$GITHUB_REPOSITORY" --run-id "$COLLECTOR_RUN_ID" || \
-            echo 'Collector completion unavailable; continue trusted governance refresh'
+          # Scheduled retry recovers completed runs when workflow_run was lost.
+          # Bounded scan: the publisher independently validates run, nonce,
+          # candidate HEAD, attempt-specific artifacts and dispatch identity.
+          if [[ "${{ github.event_name }}" == "schedule" ]]; then
+            mapfile -t run_ids < <(gh api "repos/$GITHUB_REPOSITORY/actions/workflows/hunter-reviewer-collector.yml/runs?status=completed&per_page=30" --jq '.workflow_runs[] | select(.conclusion == "success") | .id')
+          else
+            run_ids=("$COLLECTOR_RUN_ID")
+          fi
+          for run_id in "${run_ids[@]}"; do
+            [[ "$run_id" =~ ^[0-9]+$ ]] || continue
+            attempt="$(gh api "repos/$GITHUB_REPOSITORY/actions/runs/$run_id" --jq '.run_attempt' 2>/dev/null)" || continue
+            [[ "$attempt" =~ ^[1-9][0-9]*$ ]] || continue
+            receipt="$RUNNER_TEMP/collector-receipt"
+            rm -rf "$receipt"
+            mkdir -p "$receipt/results" "$receipt/proof"
+            # A single matched artifact is extracted directly under --dir.
+            gh run download "$run_id" --repo "$GITHUB_REPOSITORY" \
+              --pattern "hunter-reviewer-results-*-${attempt}" \
+              --dir "$receipt/results" >/dev/null 2>&1 || continue
+            gh run download "$run_id" --repo "$GITHUB_REPOSITORY" \
+              --pattern "hunter-dispatch-proof-*-${attempt}" \
+              --dir "$receipt/proof" >/dev/null 2>&1 || continue
+            [[ "$(find "$receipt/results" -type f | wc -l | tr -d ' ')" == 1 ]] || continue
+            [[ "$(find "$receipt/proof" -type f | wc -l | tr -d ' ')" == 1 ]] || continue
+            [[ -f "$receipt/results/reviewer-results.json" && -f "$receipt/proof/collector-dispatch-proof.txt" ]] || continue
+            mv "$receipt/results/reviewer-results.json" "$receipt/reviewer-results.json"
+            mv "$receipt/proof/collector-dispatch-proof.txt" "$receipt/collector-dispatch-proof.txt"
+            python scripts/hunter_review_orchestrator.py trusted-collector-complete \
+              --repository "$GITHUB_REPOSITORY" --run-id "$run_id" || \
+              echo "Collector completion unavailable for run $run_id; continue"
+          done
 
       - name: Refresh lightweight governance status
         env:

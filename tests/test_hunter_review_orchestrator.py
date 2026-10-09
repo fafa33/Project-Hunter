@@ -724,6 +724,8 @@ def _workflow_documents():
 
 def _permission_blocks(document):
     blocks = [document.get("permissions")]
+    if blocks[0] is None:
+        return ["missing-workflow-permissions"]
     jobs = document.get("jobs")
     if isinstance(jobs, dict):
         blocks.extend(job.get("permissions") for job in jobs.values() if isinstance(job, dict))
@@ -743,6 +745,8 @@ def _actions_levels(document):
     a guard that the longer one fails.
     """
     blocks = [document.get("permissions")]
+    if blocks[0] is None:
+        return ["missing-workflow-permissions"]
     jobs = document.get("jobs")
     if isinstance(jobs, dict):
         blocks.extend(job.get("permissions") for job in jobs.values() if isinstance(job, dict))
@@ -2250,12 +2254,14 @@ def _candidate_status_publishers(document):
         and not push.get("tags")
     )
     if (
-        "pull_request" not in triggers
+        not ({"pull_request", "pull_request_review", "pull_request_review_comment"} & set(triggers))
         and not ("push" in triggers and not main_only_push)
         and "workflow_dispatch" not in triggers
     ):
         return []
     blocks = [document.get("permissions")]
+    if blocks[0] is None:
+        return ["missing-workflow-permissions"]
     jobs = document.get("jobs")
     if isinstance(jobs, dict):
         blocks.extend(job.get("permissions") for job in jobs.values() if isinstance(job, dict))
@@ -2277,6 +2283,8 @@ def test_candidate_workflows_cannot_publish_protected_commit_statuses():
     "trigger",
     [
         "on: pull_request",
+        "on: pull_request_review",
+        "on: pull_request_review_comment",
         "on: [push, pull_request]",
         '"on": {pull_request: null}',
         "on: push",
@@ -2299,6 +2307,41 @@ def test_job_override_cannot_publish_protected_status(scope):
     assert _candidate_status_publishers(document) == [scope]
 
 
+def test_job_write_all_cannot_publish_protected_status():
+    document = yaml.safe_load(
+        "on: pull_request\npermissions: {contents: read}\njobs:\n  spoof:\n    permissions: write-all\n"
+    )
+    assert _candidate_status_publishers(document) == ["write-all"]
+
+
+def test_candidate_missing_explicit_permission_baseline_is_rejected():
+    document = yaml.safe_load("on: pull_request\njobs:\n  build:\n    runs-on: ubuntu-latest\n")
+    assert _candidate_status_publishers(document) == ["missing-workflow-permissions"]
+
+
 def test_main_only_push_is_trusted():
     document = yaml.safe_load("on: {push: {branches: [main]}}\npermissions: {statuses: write}\n")
     assert _candidate_status_publishers(document) == []
+
+
+def test_scheduled_trusted_collector_recovery_uses_exact_attempt_artifacts():
+    from pathlib import Path
+
+    workflow = yaml.safe_load(
+        (Path(__file__).resolve().parents[1] / ".github/workflows/hunter-governance-reconcile.yml").read_text()
+    )
+    step = next(
+        item
+        for item in workflow["jobs"]["reconcile"]["steps"]
+        if item.get("name") == "Publish trusted collector completion"
+    )
+    assert "github.event_name == 'schedule'" in step["if"]
+    script = step["run"]
+    assert "status=completed&per_page=30" in script
+    assert "run_attempt" in script
+    assert "hunter-reviewer-results-*-${attempt}" in script
+    assert "hunter-dispatch-proof-*-${attempt}" in script
+    assert "trusted-collector-complete" in script
+    assert 'rm -rf "$receipt"' in script
+    assert 'find "$receipt/results" -type f' in script
+    assert 'find "$receipt/proof" -type f' in script
