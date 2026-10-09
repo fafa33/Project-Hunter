@@ -80,7 +80,7 @@
         "status": "modified"
       },
       {
-        "blob_sha": "b92fadda7698a7764e300ad11a199c21fa417665",
+        "blob_sha": "97abe7de7b303944908bdf482b50d5362426e0ba",
         "path": ".github/workflows/hunter-governance-reconcile.yml",
         "previous_path": "",
         "status": "modified"
@@ -104,6 +104,18 @@
         "status": "modified"
       },
       {
+        "blob_sha": "dcbbed2ec39c4c372b3b9c69d333f3080bf7c938",
+        "path": "tests/test_hunter_governance_review_v2.py",
+        "previous_path": "",
+        "status": "modified"
+      },
+      {
+        "blob_sha": "74e54adbc95a0c672220079e4dffe07e5a7e8abb",
+        "path": "tests/test_hunter_governance_revision.py",
+        "previous_path": "",
+        "status": "modified"
+      },
+      {
         "blob_sha": "2c4089d75ff67e5d07a4bde9d53ad4e969f4c044",
         "path": "tests/test_hunter_knowledge_learning_workflow.py",
         "previous_path": "",
@@ -116,11 +128,11 @@
         "status": "modified"
       }
     ],
-    "review_target_digest": "b84f5ea0413ccf8e322e63d59cc85c7a91378f7c5e157007a04ee39de2982507"
+    "review_target_digest": "4e023a5d5c4568644a5fcc98d4b75547b4ea4375cf03913fa0258883917c0ebc"
   },
-  "review_id": "8e2e5ed3d8e1b07c77faa367565d881abca36591c4c9d16ccca1c8f298f330c0",
+  "review_id": "0bb48b32584ddb0b341bdaaf3584d58f6f205c07afeea992e4a2601a75f0490c",
   "review_request": {
-    "claims_id": "8e2e5ed3d8e1b07c77faa367565d881abca36591c4c9d16ccca1c8f298f330c0",
+    "claims_id": "0bb48b32584ddb0b341bdaaf3584d58f6f205c07afeea992e4a2601a75f0490c",
     "schema": "hunter.review-request.v1"
   },
   "schema": "hunter.pre-ready-hostile-review.v1"
