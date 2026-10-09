@@ -731,10 +731,18 @@ def completed_collector_settled(repository: str, token: str, cycle: ReviewCycle)
     if any(str(run.get("status") or "") in ACTIVE_RUN_STATES for run in runs):
         return False
     successful = [run for run in runs if run.get("status") == "completed" and run.get("conclusion") == "success"]
-    return bool(successful) and any(
-        isinstance(run.get("updated_at"), str) and _older_than(run["updated_at"], COLLECTOR_LIVENESS_GRACE_SECONDS)
-        for run in successful
-    )
+    if not successful:
+        return False
+    # A previous successful attempt cannot close the propagation window for a
+    # newer successful attempt. Missing timestamps are unknown, not stale.
+    timestamps = [run.get("updated_at") for run in successful]
+    if any(not isinstance(value, str) or not value for value in timestamps):
+        return False
+    try:
+        newest = max(datetime.fromisoformat(value.replace("Z", "+00:00")) for value in timestamps)
+    except ValueError:
+        return False
+    return _older_than(newest.isoformat(), COLLECTOR_LIVENESS_GRACE_SECONDS)
 
 
 def independent_review_opportunity_seconds() -> int:
