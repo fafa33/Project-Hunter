@@ -113,9 +113,12 @@ jobs:
           gh run download "$COLLECTOR_RUN_ID" --repo "$GITHUB_REPOSITORY" \
             --pattern "hunter-dispatch-proof-*-${attempt}" \
             --dir "$RUNNER_TEMP/collector-receipt/proof" || exit 0
-          mv "$RUNNER_TEMP/collector-receipt/results/"*/reviewer-results.json \
+          # A single matching artifact is extracted directly into --dir.
+          test "$(find "$RUNNER_TEMP/collector-receipt/results" -type f | wc -l | tr -d ' ')" = 1 || exit 0
+          test "$(find "$RUNNER_TEMP/collector-receipt/proof" -type f | wc -l | tr -d ' ')" = 1 || exit 0
+          mv "$RUNNER_TEMP/collector-receipt/results/reviewer-results.json" \
             "$RUNNER_TEMP/collector-receipt/reviewer-results.json" || exit 0
-          mv "$RUNNER_TEMP/collector-receipt/proof/"*/collector-dispatch-proof.txt \
+          mv "$RUNNER_TEMP/collector-receipt/proof/collector-dispatch-proof.txt" \
             "$RUNNER_TEMP/collector-receipt/collector-dispatch-proof.txt" || exit 0
           test -f "$RUNNER_TEMP/collector-receipt/reviewer-results.json" || exit 0
           test -f "$RUNNER_TEMP/collector-receipt/collector-dispatch-proof.txt" || exit 0
