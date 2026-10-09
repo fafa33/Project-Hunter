@@ -69,7 +69,9 @@ def test_learning_workflow_never_uses_pull_request_target():
     assert "pull_request_target:" not in text
     assert "pull_request_target:" not in text
     assert "pull_request:\n" not in text
-    assert "pull_request_review:" in text
+    assert "pull_request_review:" not in text
+    assert "schedule:" in text
+    assert "pull_request_review_comment:" in text
 
 
 def test_bootstrap_never_executes_candidate_learning_code():
@@ -183,7 +185,7 @@ def test_automatic_canonicalization_uses_existing_local_git_push_without_token_w
     # GitHub Actions does not support pull_request_review_thread as an `on:` event.
     # Declaring it invalidates the workflow before any job can be created.
     assert "pull_request_review_thread:" not in text
-    assert "pull_request_review:" in text
+    assert "pull_request_review:" not in text
     assert "pull_request_review_comment:" in text
     assert "workflow_dispatch:" in text
     assert "path: reviewed-pr" in text

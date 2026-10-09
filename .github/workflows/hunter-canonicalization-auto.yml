@@ -10,8 +10,9 @@ on:
   # deterministic continuation point without spawning follow-on PRs mid-work.
   pull_request:
     types: [closed]
-  pull_request_review:
-    types: [submitted, edited, dismissed]
+  # GitHub holds Copilot-authored review events for manual approval.
+  # The merged/closed path remains the authoritative writer; comments and
+  # dispatch provide catch-up without requiring review-triggered jobs.
   pull_request_review_comment:
     types: [created, edited, deleted]
   # GitHub Actions has no pull_request_review_thread trigger. Thread-resolution
