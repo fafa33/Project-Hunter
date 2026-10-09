@@ -89,8 +89,12 @@ jobs:
       - uses: actions/upload-artifact@v4
         with:
           name: hunter-reviewer-results-${{ inputs.head_sha }}-${{ github.run_attempt }}
-          path: |
-            reviewer-results.json
-            collector-dispatch-proof.txt
+          path: reviewer-results.json
+          if-no-files-found: error
+          retention-days: 30
+      - uses: actions/upload-artifact@v4
+        with:
+          name: hunter-dispatch-proof-${{ inputs.head_sha }}-${{ github.run_attempt }}
+          path: collector-dispatch-proof.txt
           if-no-files-found: error
           retention-days: 30

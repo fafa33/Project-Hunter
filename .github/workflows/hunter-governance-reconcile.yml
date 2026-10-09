@@ -105,12 +105,23 @@ jobs:
           mkdir -p "$RUNNER_TEMP/collector-receipt"
           # The artifact belongs to this exact authenticated run; its content
           # is validated by the trusted finalizer against PR/head/generation.
+          attempt="${{ github.event.workflow_run.run_attempt }}"
+          # Exact attempt only: never mix artifacts across workflow reruns.
           gh run download "$COLLECTOR_RUN_ID" --repo "$GITHUB_REPOSITORY" \
-            --pattern 'hunter-reviewer-results-*' --dir "$RUNNER_TEMP/collector-receipt"
-          test -f "$RUNNER_TEMP/collector-receipt/reviewer-results.json"
-          test -f "$RUNNER_TEMP/collector-receipt/collector-dispatch-proof.txt"
+            --pattern "hunter-reviewer-results-*-${attempt}" \
+            --dir "$RUNNER_TEMP/collector-receipt/results" || exit 0
+          gh run download "$COLLECTOR_RUN_ID" --repo "$GITHUB_REPOSITORY" \
+            --pattern "hunter-dispatch-proof-*-${attempt}" \
+            --dir "$RUNNER_TEMP/collector-receipt/proof" || exit 0
+          mv "$RUNNER_TEMP/collector-receipt/results/"*/reviewer-results.json \
+            "$RUNNER_TEMP/collector-receipt/reviewer-results.json" || exit 0
+          mv "$RUNNER_TEMP/collector-receipt/proof/"*/collector-dispatch-proof.txt \
+            "$RUNNER_TEMP/collector-receipt/collector-dispatch-proof.txt" || exit 0
+          test -f "$RUNNER_TEMP/collector-receipt/reviewer-results.json" || exit 0
+          test -f "$RUNNER_TEMP/collector-receipt/collector-dispatch-proof.txt" || exit 0
           python scripts/hunter_review_orchestrator.py trusted-collector-complete \
-            --repository "$GITHUB_REPOSITORY" --run-id "$COLLECTOR_RUN_ID"
+            --repository "$GITHUB_REPOSITORY" --run-id "$COLLECTOR_RUN_ID" || \
+            echo 'Collector completion unavailable; continue trusted governance refresh'
 
       - name: Refresh lightweight governance status
         env:

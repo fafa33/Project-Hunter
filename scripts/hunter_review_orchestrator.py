@@ -551,6 +551,16 @@ def publish_trusted_collector_completion(repository: str, token: str, run_id: in
         and run.get("conclusion") == "success"
     ):
         raise ValueError("collector run lacks trusted successful default-branch provenance")
+    # A default-branch name alone is not provenance after a force push.
+    revision = str(run.get("head_sha") or "")
+    tip = request_json(repository, token, "GET", f"commits/{branch}")
+    tip_sha = str((tip or {}).get("sha") or "")
+    if not re.fullmatch(r"[0-9a-f]{40}", revision) or not re.fullmatch(r"[0-9a-f]{40}", tip_sha):
+        return "SKIPPED: trusted default-branch revision unavailable"
+    if revision != tip_sha:
+        comparison = request_json(repository, token, "GET", f"compare/{revision}...{tip_sha}")
+        if not isinstance(comparison, dict) or comparison.get("status") not in {"ahead", "identical"}:
+            return "SKIPPED: collector revision is no longer on trusted main"
     title = str(run.get("display_title") or "")
     match = re.fullmatch(r"Hunter Reviewer Collector PR ([1-9][0-9]*) HEAD ([0-9a-f]{40})(?: GEN ([^\s]+))?", title)
     if match is None:
@@ -597,6 +607,25 @@ def publish_trusted_collector_completion(repository: str, token: str, run_id: in
     )
     if not authorized:
         return "SKIPPED: no trusted exact-cycle dispatch capability"
+    # A nonce is readable from a completed run's artifact. It must not authorize
+    # a *different* run: the first run created after issuance for this exact
+    # cycle is the sole claimant; subsequent manual dispatches cannot replay it.
+    proof_statuses = [
+        status
+        for status in statuses
+        if isinstance(status, dict)
+        and status.get("context") == expected_context
+        and status.get("description") == expected_description
+        and _run_id(str(status.get("target_url") or "")) == cycle.trigger_id
+    ]
+    issued_at = str(proof_statuses[0].get("created_at") or "") if len(proof_statuses) == 1 else ""
+    created_at = str(run.get("created_at") or "")
+    if not issued_at or not created_at or created_at < issued_at:
+        return "SKIPPED: collector run predates unique dispatch proof"
+    runs = collector_runs(repository, token, pr_number, head_sha, cycle.generation_id)
+    claimants = [candidate for candidate in runs if str(candidate.get("created_at") or "") >= issued_at]
+    if not claimants or min(int(candidate.get("id") or 0) for candidate in claimants) != run_id:
+        return "SKIPPED: collector dispatch capability already belongs to another run"
     publish_collector_completion(repository, token, pr_number, head_sha, run_id)
     return f"PUBLISHED: collector completion PR #{pr_number} at {head_sha[:12]}"
 
@@ -1119,6 +1148,7 @@ def finalize_exhausted_pool(
     results_path: Path,
     *,
     trusted_completion: bool = False,
+    expected_attempt: int | None = None,
 ) -> str:
     """Publish ``REVIEWER_UNAVAILABLE`` for an exact head whose collector proved no reviewer gave a review.
 
@@ -1136,6 +1166,8 @@ def finalize_exhausted_pool(
     receipt, unreadable = read_collector_receipt(results_path)
     if receipt is None:
         return f"SKIPPED: {unreadable}"
+    if expected_attempt is not None and receipt.get("run_attempt") != expected_attempt:
+        return "SKIPPED: receipt does not match completed run attempt"
     readiness = review_request_state(repository, token, pr_number, head_sha)
     if not readiness.ready:
         return f"SKIPPED: review request not usable ({readiness.reason})"
@@ -1616,6 +1648,7 @@ def main() -> int:
                             args.run_id,
                             receipt,
                             trusted_completion=True,
+                            expected_attempt=int(run["run_attempt"]),
                         )
                     )
         elif args.command == "collector-complete":
