@@ -13,13 +13,6 @@ on:
   # GitHub holds Copilot-authored review events for manual approval.
   # The merged/closed path remains the authoritative writer; comments and
   # dispatch provide catch-up without requiring review-triggered jobs.
-  pull_request_review:
-    types:
-      - submitted
-      - edited
-      - dismissed
-  pull_request_review_comment:
-    types: [created, edited, deleted]
   # GitHub Actions has no pull_request_review_thread trigger. Thread-resolution
   # state is therefore reconciled on the supported review/comment events below
   # and by explicit workflow_dispatch catch-up; never declare an unsupported
