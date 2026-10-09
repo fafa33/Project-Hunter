@@ -50,7 +50,7 @@
     "issue": "591",
     "review_target": [
       {
-        "blob_sha": "42f69f8eae1ba3a1ee790042c169785d009efeb2",
+        "blob_sha": "8430ed2115c22d0b961a208ddf1aca0060d6fe8a",
         "path": ".github/workflows/hunter-governance-reconcile.yml",
         "previous_path": "",
         "status": "modified"
@@ -116,11 +116,11 @@
         "status": "modified"
       }
     ],
-    "review_target_digest": "94dd2ac92cc13164690c1d0e77d63b478ac374eefbef823aefc751a7e2dd9195"
+    "review_target_digest": "05ea602a1288377ebc93fb175f7c57366043ff5132f409ca05cee88c03ac06e0"
   },
-  "review_id": "8564f470788f3ecfea8a6baa1c87e2a2896a0b33d2587c757611d62ddd407828",
+  "review_id": "30d443caa10554e5b318260f6043d4df1ba5b24527f28b7e11f41b136547bfde",
   "review_request": {
-    "claims_id": "8564f470788f3ecfea8a6baa1c87e2a2896a0b33d2587c757611d62ddd407828",
+    "claims_id": "30d443caa10554e5b318260f6043d4df1ba5b24527f28b7e11f41b136547bfde",
     "schema": "hunter.review-request.v1"
   },
   "schema": "hunter.pre-ready-hostile-review.v1"
