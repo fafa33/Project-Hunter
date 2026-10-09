@@ -50,7 +50,7 @@
     "issue": "591",
     "review_target": [
       {
-        "blob_sha": "8823fdc6161a15d4b6674989f62d00fb801022ae",
+        "blob_sha": "d4ffe9edd9bdad0c758c6394bba56a6e54df4abc",
         "path": ".github/workflows/hunter-governance-reconcile.yml",
         "previous_path": "",
         "status": "modified"
@@ -86,7 +86,7 @@
         "status": "modified"
       },
       {
-        "blob_sha": "c9a54f43a66d224e6825fd66f7c4ef0732c6250c",
+        "blob_sha": "0eef2e4634943bf25971f17f755e264481fe5109",
         "path": "scripts/hunter_review_orchestrator.py",
         "previous_path": "",
         "status": "modified"
@@ -116,11 +116,11 @@
         "status": "modified"
       }
     ],
-    "review_target_digest": "644027c65d1a295c192af17896669af09dd217fb8c30455e0b93744f610221af"
+    "review_target_digest": "ba6600b1ac745b6bc344cd211429ece5851a09de730faa8c294ba4e0bd33a435"
   },
-  "review_id": "6713c638221ac9b9f7fa8dec7bcb021cfb1b7e709e2a366691e7b0bde133aa4b",
+  "review_id": "60029f3198127ff0bb2bdd2a63ca1e23ef5aa19a854a62d9b6f7bb8e6a8ed220",
   "review_request": {
-    "claims_id": "6713c638221ac9b9f7fa8dec7bcb021cfb1b7e709e2a366691e7b0bde133aa4b",
+    "claims_id": "60029f3198127ff0bb2bdd2a63ca1e23ef5aa19a854a62d9b6f7bb8e6a8ed220",
     "schema": "hunter.review-request.v1"
   },
   "schema": "hunter.pre-ready-hostile-review.v1"
