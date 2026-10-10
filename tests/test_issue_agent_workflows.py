@@ -421,4 +421,4 @@ def test_resolve_finding_uses_trusted_scheduled_readiness() -> None:
     assert "resolved_proofs.append(proof)" in resolve_body
     workflow = (root / ".github/workflows/hunter-issue-agent-reconcile.yml").read_text()
     resolve_job = workflow.split("  resolve-finding:", 1)[1].split("    steps:", 1)[0]
-    assert "actions: write" in resolve_job
+    assert "actions: write" not in resolve_job
