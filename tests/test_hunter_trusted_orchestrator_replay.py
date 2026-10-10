@@ -179,11 +179,11 @@ _DATETIME_IMPORT_WITH_TIMEDELTA = (
 RECOVERY_REFRESH_PRESERVES_STALE_STARTED_AT = (
     _DATETIME_IMPORT_WITH_TIMEDELTA,
     (
-        """        started_at=datetime.now(UTC).strftime("%Y-%m-%dT%H:%M:%SZ"),""",
-        """        started_at=(
+        """        trigger_id=run_id,
+        started_at=datetime.now(UTC).strftime("%Y-%m-%dT%H:%M:%SZ"),""",
+        """        trigger_id=run_id,
+        started_at=(
             datetime.now(UTC) - timedelta(seconds=COLLECTOR_LIVENESS_GRACE_SECONDS + 60)
-            if existing is not None
-            else datetime.now(UTC)
         ).strftime("%Y-%m-%dT%H:%M:%SZ"),""",
     ),
 )
