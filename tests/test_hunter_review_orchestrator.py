@@ -2416,3 +2416,12 @@ def test_untrusted_earlier_claimant_cannot_block_valid_collector(monkeypatch, ov
     result = orchestrator.publish_trusted_collector_completion("owner/repo", "token", 778, "a" * 64)
     assert result.startswith("PUBLISHED:")
     assert len(published) == 1
+
+
+def test_scheduled_recovery_status_search_does_not_short_circuit_paginated_api():
+    """PRH-112: grep -q can SIGPIPE the producer under pipefail."""
+    from pathlib import Path
+    workflow = (Path(__file__).resolve().parents[1] / ".github/workflows/hunter-governance-reconcile.yml").read_text()
+    assert 'gh api --paginate "repos/$GITHUB_REPOSITORY/commits/$head/statuses?per_page=100"' in workflow
+    assert "| grep -qE '^[0-9]+$'" not in workflow
+    assert "| grep -E '^[0-9]+$' | wc -l" in workflow

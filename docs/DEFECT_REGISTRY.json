@@ -559,8 +559,8 @@
       "source": "PR #592 Copilot review discussion 4233807168",
       "classification": "systemic",
       "guard_boundary": "Governance workflow / collector dispatch, provenance, recovery, and review lifecycle",
-      "guard": "Review finding recorded; verify actual code remediation and recurrence prevention independently. Registration is not proof of prevention.",
-      "test": "tests/test_hunter_review_orchestrator.py",
+      "guard": "Finding recorded; candidate regression mapping is not independently verified as prevention.",
+      "test": "tests/test_hunter_review_orchestrator.py::test_candidate_workflows_cannot_publish_protected_commit_statuses",
       "status": "guarded"
     },
     {
@@ -569,8 +569,8 @@
       "source": "PR #592 Copilot review discussion 4233807230",
       "classification": "systemic",
       "guard_boundary": "Governance workflow / collector dispatch, provenance, recovery, and review lifecycle",
-      "guard": "Review finding recorded; verify actual code remediation and recurrence prevention independently. Registration is not proof of prevention.",
-      "test": "tests/test_hunter_review_orchestrator.py",
+      "guard": "Finding recorded; candidate regression mapping is not independently verified as prevention.",
+      "test": "tests/test_hunter_review_orchestrator.py::test_candidate_status_spoofing_mutation_is_rejected",
       "status": "guarded"
     },
     {
@@ -579,8 +579,8 @@
       "source": "PR #592 Copilot review discussion 4233807293",
       "classification": "systemic",
       "guard_boundary": "Governance workflow / collector dispatch, provenance, recovery, and review lifecycle",
-      "guard": "Review finding recorded; verify actual code remediation and recurrence prevention independently. Registration is not proof of prevention.",
-      "test": "tests/test_hunter_review_orchestrator.py",
+      "guard": "Finding recorded; candidate regression mapping is not independently verified as prevention.",
+      "test": "tests/test_hunter_review_orchestrator.py::test_job_override_cannot_publish_protected_status",
       "status": "guarded"
     },
     {
@@ -589,8 +589,8 @@
       "source": "PR #592 Copilot review discussion 4233960002",
       "classification": "systemic",
       "guard_boundary": "Governance workflow / collector dispatch, provenance, recovery, and review lifecycle",
-      "guard": "Review finding recorded; verify actual code remediation and recurrence prevention independently. Registration is not proof of prevention.",
-      "test": "tests/test_hunter_review_orchestrator.py",
+      "guard": "Finding recorded; candidate regression mapping is not independently verified as prevention.",
+      "test": "tests/test_hunter_review_orchestrator.py::test_candidate_workflows_cannot_publish_protected_commit_statuses",
       "status": "guarded"
     },
     {
@@ -599,8 +599,8 @@
       "source": "PR #592 Copilot review discussion 4234032807",
       "classification": "systemic",
       "guard_boundary": "Governance workflow / collector dispatch, provenance, recovery, and review lifecycle",
-      "guard": "Review finding recorded; verify actual code remediation and recurrence prevention independently. Registration is not proof of prevention.",
-      "test": "tests/test_hunter_review_orchestrator.py",
+      "guard": "Finding recorded; candidate regression mapping is not independently verified as prevention.",
+      "test": "tests/test_hunter_review_orchestrator.py::test_candidate_status_spoofing_mutation_is_rejected",
       "status": "guarded"
     },
     {
@@ -609,8 +609,8 @@
       "source": "PR #592 Copilot review (Previously missed summary)",
       "classification": "systemic",
       "guard_boundary": "Governance workflow / collector dispatch, provenance, recovery, and review lifecycle",
-      "guard": "Review finding recorded; verify actual code remediation and recurrence prevention independently. Registration is not proof of prevention.",
-      "test": "tests/test_hunter_review_orchestrator.py",
+      "guard": "Finding recorded; candidate regression mapping is not independently verified as prevention.",
+      "test": "tests/test_hunter_review_orchestrator.py::test_orchestration_bootstraps_only_from_the_trusted_default_branch_checkout",
       "status": "guarded"
     },
     {
@@ -619,8 +619,8 @@
       "source": "PR #592 Copilot review (Previously missed summary)",
       "classification": "systemic",
       "guard_boundary": "Governance workflow / collector dispatch, provenance, recovery, and review lifecycle",
-      "guard": "Review finding recorded; verify actual code remediation and recurrence prevention independently. Registration is not proof of prevention.",
-      "test": "tests/test_hunter_review_orchestrator.py",
+      "guard": "Finding recorded; candidate regression mapping is not independently verified as prevention.",
+      "test": "tests/test_hunter_review_orchestrator.py::test_job_write_all_cannot_publish_protected_status",
       "status": "guarded"
     },
     {
@@ -629,8 +629,8 @@
       "source": "PR #592 Copilot review discussion 4234363783",
       "classification": "systemic",
       "guard_boundary": "Governance workflow / collector dispatch, provenance, recovery, and review lifecycle",
-      "guard": "Review finding recorded; verify actual code remediation and recurrence prevention independently. Registration is not proof of prevention.",
-      "test": "tests/test_hunter_review_orchestrator.py",
+      "guard": "Finding recorded; candidate regression mapping is not independently verified as prevention.",
+      "test": "UNVERIFIED: targeted regression required",
       "status": "guarded"
     },
     {
@@ -639,8 +639,8 @@
       "source": "PR #592 Copilot review (Previously missed summary)",
       "classification": "systemic",
       "guard_boundary": "Governance workflow / collector dispatch, provenance, recovery, and review lifecycle",
-      "guard": "Review finding recorded; verify actual code remediation and recurrence prevention independently. Registration is not proof of prevention.",
-      "test": "tests/test_hunter_review_orchestrator.py",
+      "guard": "Finding recorded; candidate regression mapping is not independently verified as prevention.",
+      "test": "tests/test_hunter_review_orchestrator.py::test_candidate_status_spoofing_mutation_is_rejected",
       "status": "guarded"
     },
     {
@@ -649,8 +649,8 @@
       "source": "PR #592 Copilot review discussion 4234652657",
       "classification": "systemic",
       "guard_boundary": "Governance workflow / collector dispatch, provenance, recovery, and review lifecycle",
-      "guard": "Review finding recorded; verify actual code remediation and recurrence prevention independently. Registration is not proof of prevention.",
-      "test": "tests/test_hunter_review_orchestrator.py",
+      "guard": "Finding recorded; candidate regression mapping is not independently verified as prevention.",
+      "test": "UNVERIFIED: targeted regression required",
       "status": "guarded"
     },
     {
@@ -659,8 +659,8 @@
       "source": "PR #592 Copilot review (Previously missed summary)",
       "classification": "systemic",
       "guard_boundary": "Governance workflow / collector dispatch, provenance, recovery, and review lifecycle",
-      "guard": "Review finding recorded; verify actual code remediation and recurrence prevention independently. Registration is not proof of prevention.",
-      "test": "tests/test_hunter_review_orchestrator.py",
+      "guard": "Finding recorded; candidate regression mapping is not independently verified as prevention.",
+      "test": "tests/test_hunter_review_orchestrator.py::test_job_write_all_cannot_publish_protected_status",
       "status": "guarded"
     },
     {
@@ -669,8 +669,8 @@
       "source": "PR #592 Copilot review discussion 4234905391",
       "classification": "systemic",
       "guard_boundary": "Governance workflow / collector dispatch, provenance, recovery, and review lifecycle",
-      "guard": "Review finding recorded; verify actual code remediation and recurrence prevention independently. Registration is not proof of prevention.",
-      "test": "tests/test_hunter_review_orchestrator.py",
+      "guard": "Finding recorded; candidate regression mapping is not independently verified as prevention.",
+      "test": "tests/test_hunter_review_orchestrator.py::test_trusted_collector_completion_dispatch_capability",
       "status": "guarded"
     },
     {
@@ -679,8 +679,8 @@
       "source": "PR #592 Copilot review discussion 4234905426",
       "classification": "systemic",
       "guard_boundary": "Governance workflow / collector dispatch, provenance, recovery, and review lifecycle",
-      "guard": "Review finding recorded; verify actual code remediation and recurrence prevention independently. Registration is not proof of prevention.",
-      "test": "tests/test_hunter_review_orchestrator.py",
+      "guard": "Finding recorded; candidate regression mapping is not independently verified as prevention.",
+      "test": "tests/test_hunter_review_orchestrator.py::test_collector_completion_is_published_only_by_trusted_reconcile",
       "status": "guarded"
     },
     {
@@ -689,8 +689,8 @@
       "source": "PR #592 Copilot review discussion 4234905466",
       "classification": "systemic",
       "guard_boundary": "Governance workflow / collector dispatch, provenance, recovery, and review lifecycle",
-      "guard": "Review finding recorded; verify actual code remediation and recurrence prevention independently. Registration is not proof of prevention.",
-      "test": "tests/test_hunter_review_orchestrator.py",
+      "guard": "Finding recorded; candidate regression mapping is not independently verified as prevention.",
+      "test": "tests/test_hunter_review_orchestrator.py::test_trusted_collector_completion_dispatch_capability",
       "status": "guarded"
     },
     {
@@ -699,8 +699,8 @@
       "source": "PR #592 Copilot review discussion 4235043019",
       "classification": "systemic",
       "guard_boundary": "Governance workflow / collector dispatch, provenance, recovery, and review lifecycle",
-      "guard": "Review finding recorded; verify actual code remediation and recurrence prevention independently. Registration is not proof of prevention.",
-      "test": "tests/test_hunter_review_orchestrator.py",
+      "guard": "Finding recorded; candidate regression mapping is not independently verified as prevention.",
+      "test": "tests/test_hunter_review_orchestrator.py::test_trusted_collector_completion_rejects_untrusted_run",
       "status": "guarded"
     },
     {
@@ -709,8 +709,8 @@
       "source": "PR #592 Copilot review discussion 4235043076",
       "classification": "systemic",
       "guard_boundary": "Governance workflow / collector dispatch, provenance, recovery, and review lifecycle",
-      "guard": "Review finding recorded; verify actual code remediation and recurrence prevention independently. Registration is not proof of prevention.",
-      "test": "tests/test_hunter_review_orchestrator.py",
+      "guard": "Finding recorded; candidate regression mapping is not independently verified as prevention.",
+      "test": "tests/test_hunter_review_orchestrator.py::test_trusted_completion_rejects_replayed_proof_on_another_run",
       "status": "guarded"
     },
     {
@@ -719,8 +719,8 @@
       "source": "PR #592 Copilot review discussion 4235043131",
       "classification": "systemic",
       "guard_boundary": "Governance workflow / collector dispatch, provenance, recovery, and review lifecycle",
-      "guard": "Review finding recorded; verify actual code remediation and recurrence prevention independently. Registration is not proof of prevention.",
-      "test": "tests/test_hunter_review_orchestrator.py",
+      "guard": "Finding recorded; candidate regression mapping is not independently verified as prevention.",
+      "test": "UNVERIFIED: targeted regression required",
       "status": "guarded"
     },
     {
@@ -729,8 +729,8 @@
       "source": "PR #592 Copilot review discussion 4235043166",
       "classification": "systemic",
       "guard_boundary": "Governance workflow / collector dispatch, provenance, recovery, and review lifecycle",
-      "guard": "Review finding recorded; verify actual code remediation and recurrence prevention independently. Registration is not proof of prevention.",
-      "test": "tests/test_hunter_review_orchestrator.py",
+      "guard": "Finding recorded; candidate regression mapping is not independently verified as prevention.",
+      "test": "tests/test_hunter_review_orchestrator.py::test_scheduled_trusted_collector_recovery_uses_exact_attempt_artifacts",
       "status": "guarded"
     },
     {
@@ -739,8 +739,8 @@
       "source": "PR #592 Copilot review discussion 4235043218",
       "classification": "systemic",
       "guard_boundary": "Governance workflow / collector dispatch, provenance, recovery, and review lifecycle",
-      "guard": "Review finding recorded; verify actual code remediation and recurrence prevention independently. Registration is not proof of prevention.",
-      "test": "tests/test_hunter_review_orchestrator.py",
+      "guard": "Finding recorded; candidate regression mapping is not independently verified as prevention.",
+      "test": "UNVERIFIED: targeted regression required",
       "status": "guarded"
     },
     {
@@ -749,8 +749,8 @@
       "source": "PR #592 Copilot review discussion 4235096376",
       "classification": "systemic",
       "guard_boundary": "Governance workflow / collector dispatch, provenance, recovery, and review lifecycle",
-      "guard": "Review finding recorded; verify actual code remediation and recurrence prevention independently. Registration is not proof of prevention.",
-      "test": "tests/test_hunter_review_orchestrator.py",
+      "guard": "Finding recorded; candidate regression mapping is not independently verified as prevention.",
+      "test": "tests/test_hunter_review_orchestrator.py::test_scheduled_trusted_collector_recovery_uses_exact_attempt_artifacts",
       "status": "guarded"
     },
     {
@@ -759,8 +759,8 @@
       "source": "PR #592 Copilot review (Previously missed summary)",
       "classification": "systemic",
       "guard_boundary": "Governance workflow / collector dispatch, provenance, recovery, and review lifecycle",
-      "guard": "Review finding recorded; verify actual code remediation and recurrence prevention independently. Registration is not proof of prevention.",
-      "test": "tests/test_hunter_review_orchestrator.py",
+      "guard": "Finding recorded; candidate regression mapping is not independently verified as prevention.",
+      "test": "tests/test_hunter_review_orchestrator.py::test_job_write_all_cannot_publish_protected_status",
       "status": "guarded"
     },
     {
@@ -769,8 +769,8 @@
       "source": "PR #592 Copilot review (Previously missed summary)",
       "classification": "systemic",
       "guard_boundary": "Governance workflow / collector dispatch, provenance, recovery, and review lifecycle",
-      "guard": "Review finding recorded; verify actual code remediation and recurrence prevention independently. Registration is not proof of prevention.",
-      "test": "tests/test_hunter_review_orchestrator.py",
+      "guard": "Finding recorded; candidate regression mapping is not independently verified as prevention.",
+      "test": "UNVERIFIED: targeted regression required",
       "status": "guarded"
     },
     {
@@ -779,8 +779,8 @@
       "source": "PR #592 Copilot review (Previously missed summary)",
       "classification": "systemic",
       "guard_boundary": "Governance workflow / collector dispatch, provenance, recovery, and review lifecycle",
-      "guard": "Review finding recorded; verify actual code remediation and recurrence prevention independently. Registration is not proof of prevention.",
-      "test": "tests/test_hunter_review_orchestrator.py",
+      "guard": "Finding recorded; candidate regression mapping is not independently verified as prevention.",
+      "test": "UNVERIFIED: targeted regression required",
       "status": "guarded"
     },
     {
@@ -789,8 +789,8 @@
       "source": "PR #592 Copilot review (Previously missed summary)",
       "classification": "systemic",
       "guard_boundary": "Governance workflow / collector dispatch, provenance, recovery, and review lifecycle",
-      "guard": "Review finding recorded; verify actual code remediation and recurrence prevention independently. Registration is not proof of prevention.",
-      "test": "tests/test_hunter_review_orchestrator.py",
+      "guard": "Finding recorded; candidate regression mapping is not independently verified as prevention.",
+      "test": "UNVERIFIED: targeted regression required",
       "status": "guarded"
     },
     {
@@ -799,8 +799,8 @@
       "source": "PR #592 Copilot review discussion 4235231779",
       "classification": "systemic",
       "guard_boundary": "Governance workflow / collector dispatch, provenance, recovery, and review lifecycle",
-      "guard": "Review finding recorded; verify actual code remediation and recurrence prevention independently. Registration is not proof of prevention.",
-      "test": "tests/test_hunter_review_orchestrator.py",
+      "guard": "Finding recorded; candidate regression mapping is not independently verified as prevention.",
+      "test": "UNVERIFIED: targeted regression required",
       "status": "guarded"
     },
     {
@@ -809,8 +809,8 @@
       "source": "PR #592 Copilot review (Previously missed summary)",
       "classification": "systemic",
       "guard_boundary": "Governance workflow / collector dispatch, provenance, recovery, and review lifecycle",
-      "guard": "Review finding recorded; verify actual code remediation and recurrence prevention independently. Registration is not proof of prevention.",
-      "test": "tests/test_hunter_review_orchestrator.py",
+      "guard": "Finding recorded; candidate regression mapping is not independently verified as prevention.",
+      "test": "tests/test_hunter_review_orchestrator.py::test_scheduled_trusted_collector_recovery_uses_exact_attempt_artifacts",
       "status": "guarded"
     },
     {
@@ -819,8 +819,8 @@
       "source": "PR #592 Copilot review (Previously missed summary)",
       "classification": "systemic",
       "guard_boundary": "Governance workflow / collector dispatch, provenance, recovery, and review lifecycle",
-      "guard": "Review finding recorded; verify actual code remediation and recurrence prevention independently. Registration is not proof of prevention.",
-      "test": "tests/test_hunter_review_orchestrator.py",
+      "guard": "Finding recorded; candidate regression mapping is not independently verified as prevention.",
+      "test": "tests/test_hunter_review_orchestrator.py::test_job_write_all_cannot_publish_protected_status",
       "status": "guarded"
     },
     {
@@ -829,8 +829,8 @@
       "source": "PR #592 Copilot review (Previously missed summary)",
       "classification": "systemic",
       "guard_boundary": "Governance workflow / collector dispatch, provenance, recovery, and review lifecycle",
-      "guard": "Review finding recorded; verify actual code remediation and recurrence prevention independently. Registration is not proof of prevention.",
-      "test": "tests/test_hunter_review_orchestrator.py",
+      "guard": "Finding recorded; candidate regression mapping is not independently verified as prevention.",
+      "test": "UNVERIFIED: targeted regression required",
       "status": "guarded"
     },
     {
@@ -839,8 +839,8 @@
       "source": "PR #592 Copilot review (Previously missed summary)",
       "classification": "systemic",
       "guard_boundary": "Governance workflow / collector dispatch, provenance, recovery, and review lifecycle",
-      "guard": "Review finding recorded; verify actual code remediation and recurrence prevention independently. Registration is not proof of prevention.",
-      "test": "tests/test_hunter_review_orchestrator.py",
+      "guard": "Finding recorded; candidate regression mapping is not independently verified as prevention.",
+      "test": "tests/test_hunter_review_orchestrator.py::test_a_live_or_successful_collector_is_never_duplicated",
       "status": "guarded"
     },
     {
@@ -849,8 +849,8 @@
       "source": "PR #592 Copilot review (Previously missed summary)",
       "classification": "systemic",
       "guard_boundary": "Governance workflow / collector dispatch, provenance, recovery, and review lifecycle",
-      "guard": "Review finding recorded; verify actual code remediation and recurrence prevention independently. Registration is not proof of prevention.",
-      "test": "tests/test_hunter_review_orchestrator.py",
+      "guard": "Finding recorded; candidate regression mapping is not independently verified as prevention.",
+      "test": "tests/test_hunter_review_orchestrator.py::test_scheduled_trusted_collector_recovery_uses_exact_attempt_artifacts",
       "status": "guarded"
     },
     {
@@ -859,8 +859,8 @@
       "source": "PR #592 Copilot review (Previously missed summary)",
       "classification": "systemic",
       "guard_boundary": "Governance workflow / collector dispatch, provenance, recovery, and review lifecycle",
-      "guard": "Review finding recorded; verify actual code remediation and recurrence prevention independently. Registration is not proof of prevention.",
-      "test": "tests/test_hunter_review_orchestrator.py",
+      "guard": "Finding recorded; candidate regression mapping is not independently verified as prevention.",
+      "test": "tests/test_hunter_review_orchestrator.py::test_candidate_status_spoofing_mutation_is_rejected",
       "status": "guarded"
     },
     {
@@ -869,8 +869,8 @@
       "source": "PR #592 Copilot review (Previously missed summary)",
       "classification": "systemic",
       "guard_boundary": "Governance workflow / collector dispatch, provenance, recovery, and review lifecycle",
-      "guard": "Review finding recorded; verify actual code remediation and recurrence prevention independently. Registration is not proof of prevention.",
-      "test": "tests/test_hunter_review_orchestrator.py",
+      "guard": "Finding recorded; candidate regression mapping is not independently verified as prevention.",
+      "test": "tests/test_hunter_review_orchestrator.py::test_candidate_missing_explicit_permission_baseline_is_rejected",
       "status": "guarded"
     },
     {
@@ -879,8 +879,8 @@
       "source": "PR #592 Copilot review discussion 4235462212",
       "classification": "systemic",
       "guard_boundary": "Governance workflow / collector dispatch, provenance, recovery, and review lifecycle",
-      "guard": "Review finding recorded; verify actual code remediation and recurrence prevention independently. Registration is not proof of prevention.",
-      "test": "tests/test_hunter_review_orchestrator.py",
+      "guard": "Finding recorded; candidate regression mapping is not independently verified as prevention.",
+      "test": "tests/test_hunter_review_orchestrator.py::test_scheduled_trusted_collector_recovery_uses_exact_attempt_artifacts",
       "status": "guarded"
     },
     {
@@ -889,8 +889,8 @@
       "source": "PR #592 Copilot review (Previously missed summary)",
       "classification": "systemic",
       "guard_boundary": "Governance workflow / collector dispatch, provenance, recovery, and review lifecycle",
-      "guard": "Review finding recorded; verify actual code remediation and recurrence prevention independently. Registration is not proof of prevention.",
-      "test": "tests/test_hunter_review_orchestrator.py",
+      "guard": "Finding recorded; candidate regression mapping is not independently verified as prevention.",
+      "test": "UNVERIFIED: targeted regression required",
       "status": "guarded"
     },
     {
@@ -899,8 +899,8 @@
       "source": "PR #592 Copilot review (Previously missed summary)",
       "classification": "systemic",
       "guard_boundary": "Governance workflow / collector dispatch, provenance, recovery, and review lifecycle",
-      "guard": "Review finding recorded; verify actual code remediation and recurrence prevention independently. Registration is not proof of prevention.",
-      "test": "tests/test_hunter_review_orchestrator.py",
+      "guard": "Finding recorded; candidate regression mapping is not independently verified as prevention.",
+      "test": "tests/test_hunter_review_orchestrator.py::test_dispatch_identity_and_timestamp_are_durable_before_dispatch",
       "status": "guarded"
     },
     {
@@ -909,8 +909,8 @@
       "source": "PR #592 Copilot review discussion 4235504961",
       "classification": "systemic",
       "guard_boundary": "Governance workflow / collector dispatch, provenance, recovery, and review lifecycle",
-      "guard": "Review finding recorded; verify actual code remediation and recurrence prevention independently. Registration is not proof of prevention.",
-      "test": "tests/test_hunter_review_orchestrator.py",
+      "guard": "Finding recorded; candidate regression mapping is not independently verified as prevention.",
+      "test": "tests/test_hunter_review_orchestrator.py::test_trusted_completion_rejects_replayed_proof_on_another_run",
       "status": "guarded"
     },
     {
@@ -919,8 +919,8 @@
       "source": "PR #592 Copilot review discussion 4235504987",
       "classification": "systemic",
       "guard_boundary": "Governance workflow / collector dispatch, provenance, recovery, and review lifecycle",
-      "guard": "Review finding recorded; verify actual code remediation and recurrence prevention independently. Registration is not proof of prevention.",
-      "test": "tests/test_hunter_review_orchestrator.py",
+      "guard": "Finding recorded; candidate regression mapping is not independently verified as prevention.",
+      "test": "tests/test_hunter_review_orchestrator.py::test_scheduled_trusted_collector_recovery_uses_exact_attempt_artifacts",
       "status": "guarded"
     },
     {
@@ -929,8 +929,8 @@
       "source": "PR #592 Copilot review discussion 4235505006",
       "classification": "systemic",
       "guard_boundary": "Governance workflow / collector dispatch, provenance, recovery, and review lifecycle",
-      "guard": "Review finding recorded; verify actual code remediation and recurrence prevention independently. Registration is not proof of prevention.",
-      "test": "tests/test_hunter_review_orchestrator.py",
+      "guard": "Finding recorded; candidate regression mapping is not independently verified as prevention.",
+      "test": "tests/test_hunter_review_orchestrator.py::test_read_collector_completion_rejects_untrusted_or_wrong_head_run",
       "status": "guarded"
     },
     {
@@ -939,8 +939,8 @@
       "source": "PR #592 Copilot review (Previously missed summary)",
       "classification": "systemic",
       "guard_boundary": "Governance workflow / collector dispatch, provenance, recovery, and review lifecycle",
-      "guard": "Review finding recorded; verify actual code remediation and recurrence prevention independently. Registration is not proof of prevention.",
-      "test": "tests/test_hunter_review_orchestrator.py",
+      "guard": "Finding recorded; candidate regression mapping is not independently verified as prevention.",
+      "test": "tests/test_hunter_review_orchestrator.py::test_trusted_collector_completion_dispatch_capability",
       "status": "guarded"
     },
     {
@@ -949,8 +949,8 @@
       "source": "PR #592 Copilot review (Previously missed summary)",
       "classification": "systemic",
       "guard_boundary": "Governance workflow / collector dispatch, provenance, recovery, and review lifecycle",
-      "guard": "Review finding recorded; verify actual code remediation and recurrence prevention independently. Registration is not proof of prevention.",
-      "test": "tests/test_hunter_review_orchestrator.py",
+      "guard": "Finding recorded; candidate regression mapping is not independently verified as prevention.",
+      "test": "tests/test_hunter_review_orchestrator.py::test_commit_status_pagination_keeps_old_trusted_dispatch_proof",
       "status": "guarded"
     },
     {
@@ -959,8 +959,8 @@
       "source": "PR #592 Copilot review (Previously missed summary)",
       "classification": "systemic",
       "guard_boundary": "Governance workflow / collector dispatch, provenance, recovery, and review lifecycle",
-      "guard": "Review finding recorded; verify actual code remediation and recurrence prevention independently. Registration is not proof of prevention.",
-      "test": "tests/test_hunter_review_orchestrator.py",
+      "guard": "Finding recorded; candidate regression mapping is not independently verified as prevention.",
+      "test": "tests/test_hunter_review_orchestrator.py::test_scheduled_trusted_collector_recovery_uses_exact_attempt_artifacts",
       "status": "guarded"
     },
     {
@@ -969,8 +969,8 @@
       "source": "PR #592 Copilot review (Previously missed summary)",
       "classification": "systemic",
       "guard_boundary": "Governance workflow / collector dispatch, provenance, recovery, and review lifecycle",
-      "guard": "Review finding recorded; verify actual code remediation and recurrence prevention independently. Registration is not proof of prevention.",
-      "test": "tests/test_hunter_review_orchestrator.py",
+      "guard": "Finding recorded; candidate regression mapping is not independently verified as prevention.",
+      "test": "tests/test_hunter_review_orchestrator.py::test_untrusted_earlier_claimant_cannot_block_valid_collector",
       "status": "guarded"
     },
     {
@@ -979,8 +979,8 @@
       "source": "PR #592 Copilot review (Previously missed summary)",
       "classification": "systemic",
       "guard_boundary": "Governance workflow / collector dispatch, provenance, recovery, and review lifecycle",
-      "guard": "Review finding recorded; verify actual code remediation and recurrence prevention independently. Registration is not proof of prevention.",
-      "test": "tests/test_hunter_review_orchestrator.py",
+      "guard": "Finding recorded; candidate regression mapping is not independently verified as prevention.",
+      "test": "tests/test_hunter_review_orchestrator.py::test_scheduled_recovery_status_search_does_not_short_circuit_paginated_api",
       "status": "guarded"
     }
   ],
