@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from typing import Any
 
-from hatchling import build as _hatchling_build
+from hatchling import build as _hatchling_build  # type: ignore[import-not-found]
 
 build_sdist = _hatchling_build.build_sdist
 build_wheel = _hatchling_build.build_wheel
