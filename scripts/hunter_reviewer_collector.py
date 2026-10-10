@@ -641,7 +641,7 @@ def valid_run(run: dict[str, Any], run_id: int, branch: str, revision: str) -> b
         and governance._is_commit_sha(str(run.get("head_sha") or ""))
         and run.get("head_sha") == revision
         and run.get("path") == WORKFLOW
-        and run.get("event") in {"workflow_dispatch", "pull_request_target"}
+        and run.get("event") in {"workflow_dispatch", "repository_dispatch", "pull_request_target"}
         and run.get("status") == "completed"
         and run.get("conclusion") == "success"
     )

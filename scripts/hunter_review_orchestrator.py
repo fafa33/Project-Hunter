@@ -523,7 +523,7 @@ def read_cycle(
         collector_terminal = (
             run_path == COLLECTOR_WORKFLOW_PATH
             and cycle.state in COLLECTOR_PUBLISHABLE_STATES
-            and str(run.get("event") or "") == "workflow_dispatch"
+            and str(run.get("event") or "") in {"workflow_dispatch", "repository_dispatch"}
         )
         if run_path not in TRUSTED_WORKFLOWS and not collector_terminal:
             continue
@@ -604,7 +604,7 @@ def publish_trusted_collector_completion(repository: str, token: str, run_id: in
         origin.get("id") == cycle.trigger_id
         and origin.get("head_branch") == branch
         and origin.get("path") == ".github/workflows/hunter-governance-reconcile.yml"
-        and origin.get("event") in {"push", "workflow_run", "pull_request_target", "schedule"}
+        and origin.get("event") in {"push", "workflow_run", "pull_request_target", "schedule", "repository_dispatch"}
     ):
         return "SKIPPED: dispatch origin is not trusted governance reconciliation"
     if not re.fullmatch(r"[0-9a-f]{64}", proof):

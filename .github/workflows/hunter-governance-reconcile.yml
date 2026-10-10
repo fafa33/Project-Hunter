@@ -100,7 +100,7 @@ jobs:
           persist-credentials: false
 
       - name: Publish trusted collector completion
-        if: github.event_name == 'schedule' || (github.event_name == 'workflow_run' && github.event.workflow_run.name == 'Hunter Reviewer Collector' && github.event.workflow_run.conclusion == 'success')
+        if: github.event_name == 'schedule' || github.event_name == 'repository_dispatch' || (github.event_name == 'workflow_run' && github.event.workflow_run.name == 'Hunter Reviewer Collector' && github.event.workflow_run.conclusion == 'success')
         env:
           GITHUB_TOKEN: ${{ github.token }}
           GH_TOKEN: ${{ github.token }}
@@ -110,12 +110,12 @@ jobs:
           set -euo pipefail
           # Bound collector recovery I/O so the mandatory governance refresh
           # is never held behind an unbounded run-history enumeration.
-          if [[ "${{ github.event_name }}" == "schedule" ]]; then
+          if [[ "${{ github.event_name }}" == "schedule" || "${{ github.event_name }}" == "repository_dispatch" ]]; then
             # Bounded network scan: never enumerate all retained run history
             # before the mandatory governance refresh. Rotate the starting
             # page across sweeps so old valid runs cannot starve forever.
             recovery_deadline=$((SECONDS + 90))
-            page=$(( ( $(date -u +%s) / 300 ) % 100 + 1 ))
+            page=1 # Always examine the populated first page; avoid empty-page starvation
             candidates=()
             scanned_pages=0
             while (( SECONDS < recovery_deadline && scanned_pages < 3 )); do
@@ -136,12 +136,12 @@ jobs:
           recovery_deadline=${recovery_deadline:-$((SECONDS + 90))}
           recovered=0
           for candidate in "${candidates[@]}"; do
-            if [[ "${{ github.event_name }}" == "schedule" ]]; then
+            if [[ "${{ github.event_name }}" == "schedule" || "${{ github.event_name }}" == "repository_dispatch" ]]; then
               (( SECONDS < recovery_deadline && recovered < 5 )) || break
             fi
             run_id="${candidate%%$'\t'*}"
             [[ "$run_id" =~ ^[0-9]+$ ]] || continue
-            if [[ "${{ github.event_name }}" == "schedule" ]]; then
+            if [[ "${{ github.event_name }}" == "schedule" || "${{ github.event_name }}" == "repository_dispatch" ]]; then
               title="${candidate#*$'\t'}"
               if [[ "$title" =~ ^Hunter\ Reviewer\ Collector\ PR\ ([1-9][0-9]*)\ HEAD\ ([0-9a-f]{40})(\ GEN\ .*)?$ ]]; then
                 pr="${BASH_REMATCH[1]}"

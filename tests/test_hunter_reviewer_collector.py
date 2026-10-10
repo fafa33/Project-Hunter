@@ -572,7 +572,10 @@ def test_pull_request_target_collector_run_is_trusted_on_default_branch():
 def test_dispatch_only_artifact_name_uses_exact_input_head():
     workflow = (collector.review.ROOT / collector.WORKFLOW).read_text()
     assert "pull_request_target:" not in workflow
-    assert "name: hunter-reviewer-results-${{ inputs.head_sha }}-${{ github.run_attempt }}" in workflow
+    assert (
+        "name: hunter-reviewer-results-${{ github.event.client_payload.head_sha }}-${{ github.run_attempt }}"
+        in workflow
+    )
 
 
 def test_substantive_not_available_phrase_is_not_unavailability():
