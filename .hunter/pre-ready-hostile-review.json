@@ -92,7 +92,7 @@
         "status": "modified"
       },
       {
-        "blob_sha": "f3327ec5c08c1853a899aa05aa0ed18ae9c23582",
+        "blob_sha": "37fe6b0340784dc5dec5b4841896a220bf6ff34e",
         "path": ".github/workflows/hunter-reviewer-collector.yml",
         "previous_path": "",
         "status": "modified"
@@ -100,6 +100,12 @@
       {
         "blob_sha": "e0908c1a1c3e7593af0dcaed7204d1afd3c0acdb",
         "path": ".github/workflows/hunter-trusted-orchestrator-replay-validate.yml",
+        "previous_path": "",
+        "status": "modified"
+      },
+      {
+        "blob_sha": "50b92e43fb55b6647e16fe9d1b7230774de47ca2",
+        "path": "build_backend/project_hunter_build.py",
         "previous_path": "",
         "status": "modified"
       },
@@ -128,7 +134,7 @@
         "status": "modified"
       },
       {
-        "blob_sha": "498418eb66de3093c88815b770f6ca33697bded5",
+        "blob_sha": "2e8fa6fcb567bb626145aff7dc657dfe8ed5ec30",
         "path": "scripts/hunter_defect_prevention_preflight.py",
         "previous_path": "",
         "status": "modified"
@@ -146,8 +152,32 @@
         "status": "modified"
       },
       {
-        "blob_sha": "131b259d3936ce13009d46f577c9c1c35a01ea08",
+        "blob_sha": "d2b08e9b8d7b43f13cf8709885e19604b83d90f3",
         "path": "scripts/hunter_reviewer_collector.py",
+        "previous_path": "",
+        "status": "modified"
+      },
+      {
+        "blob_sha": "a556cb9167cb5aa10251f8cff5059ae2ca09cab7",
+        "path": "src/hunter/automation/issue_agent_replacement_executor.py",
+        "previous_path": "",
+        "status": "modified"
+      },
+      {
+        "blob_sha": "4b3159beef677e944afea4235f3011acd6be4f2c",
+        "path": "src/hunter/evidence_intelligence/source_handling_persistence.py",
+        "previous_path": "",
+        "status": "modified"
+      },
+      {
+        "blob_sha": "88b694f4ea1fd0bc1868791e03f426964d2f9b66",
+        "path": "src/hunter/persistence/sql/repositories/base.py",
+        "previous_path": "",
+        "status": "modified"
+      },
+      {
+        "blob_sha": "e39d353880bfa8e18fe98d0a9fafffb4669e738f",
+        "path": "src/hunter/persistence/sql/session.py",
         "previous_path": "",
         "status": "modified"
       },
@@ -176,17 +206,29 @@
         "status": "modified"
       },
       {
+        "blob_sha": "6cd1a4f4732d3621c62b110181fe3a29d79fdc47",
+        "path": "tests/test_review_after_remediation_generation.py",
+        "previous_path": "",
+        "status": "modified"
+      },
+      {
         "blob_sha": "097ad852505d187b2d1ee7f1451538a697c8218a",
         "path": "tests/test_review_orchestrator_collector_finalization.py",
         "previous_path": "",
         "status": "modified"
+      },
+      {
+        "blob_sha": "3a58b9206fdef1d6d014d9815d38d4e696017454",
+        "path": "tests/test_source_handling_production_runtime.py",
+        "previous_path": "",
+        "status": "modified"
       }
     ],
-    "review_target_digest": "4d19a8f955a3ab3f3aab60ce6023dcc1223d08d6e87fbe7ecfaa30d6850e5ca8"
+    "review_target_digest": "37a1f55fdfb89e5d4925d25045e2e2332c37d2b5e7be06acd48b7193ce85b122"
   },
-  "review_id": "972267f71749f312d6fa5794af09731c922939fe139e57eb461f2aa2456d0ff5",
+  "review_id": "a8e18c24c9421713c882840dd19aa398d0163622dd63365524b1a2f5a7c23b7c",
   "review_request": {
-    "claims_id": "972267f71749f312d6fa5794af09731c922939fe139e57eb461f2aa2456d0ff5",
+    "claims_id": "a8e18c24c9421713c882840dd19aa398d0163622dd63365524b1a2f5a7c23b7c",
     "schema": "hunter.review-request.v1"
   },
   "schema": "hunter.pre-ready-hostile-review.v1"

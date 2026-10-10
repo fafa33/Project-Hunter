@@ -700,6 +700,7 @@ def test_dispatch_collector_sends_only_exact_identity(monkeypatch):
         "request_json",
         lambda repository, token, method, path, payload=None: seen.append((method, path, payload)),
     )
+    monkeypatch.setenv("GITHUB_RUN_ID", "123")
 
     orchestrator.dispatch_collector("owner/repo", "token", 472, HEAD)
 

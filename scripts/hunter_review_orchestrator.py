@@ -612,14 +612,18 @@ def publish_trusted_collector_completion(repository: str, token: str, run_id: in
     statuses = _all_commit_statuses(repository, token, head_sha)
     expected_context = f"{DISPATCH_PROOF_CONTEXT_PREFIX}{pr_number}"
     expected_description = f"{cycle.generation_id}|{hashlib.sha256(proof.encode()).hexdigest()}"
-    authorized = any(
-        isinstance(status, dict)
-        and status.get("context") == expected_context
-        and status.get("description") == expected_description
-        and str((status.get("creator") or {}).get("login") or "") == TRUSTED_STATUS_CREATOR
-        and _run_id(str(status.get("target_url") or "")) == cycle.trigger_id
-        for status in statuses
+    authorized = (
+        any(
+            isinstance(status, dict)
+            and status.get("context") == expected_context
+            and status.get("description") == expected_description
+            and str((status.get("creator") or {}).get("login") or "") == TRUSTED_STATUS_CREATOR
+            and _run_id(str(status.get("target_url") or "")) == cycle.trigger_id
+            for status in statuses
+            if isinstance(statuses, list)
+        )
         if isinstance(statuses, list)
+        else False
     )
     if not authorized:
         return "SKIPPED: no trusted exact-cycle dispatch capability"
@@ -645,9 +649,15 @@ def publish_trusted_collector_completion(repository: str, token: str, run_id: in
     return f"PUBLISHED: collector completion PR #{pr_number} at {head_sha[:12]}"
 
 
-def collector_claim_ref(pr_number: int, head_sha: str, generation: str, proof: str) -> str:
-    """One immutable ref per authorized cycle/capability, not per contender."""
-    digest = hashlib.sha256(f"{pr_number}:{head_sha}:{generation}:{proof}".encode()).hexdigest()
+def collector_claim_ref(pr_number: int, head_sha: str, generation: str) -> str:
+    """One immutable ref per authorized cycle, not per contender or proof.
+
+    The proof is validated separately via the dispatch proof status. The claim
+    ref arbitrates which collector run owns the cycle; including the proof
+    would allow multiple proofs for the same cycle to create distinct claims,
+    bypassing the single-run-per-cycle guarantee.
+    """
+    digest = hashlib.sha256(f"{pr_number}:{head_sha}:{generation}".encode()).hexdigest()
     return f"tags/hunter-collector-claim/{digest}"
 
 
@@ -655,10 +665,9 @@ def read_atomic_collector_owner(
     repository: str, token: str, pr_number: int, head_sha: str, generation: str, proof: str
 ) -> int | None:
     """Read the winning annotated tag; never infer ownership from run titles."""
+    claim_ref = collector_claim_ref(pr_number, head_sha, generation)
     try:
-        ref = request_json(
-            repository, token, "GET", f"git/ref/{collector_claim_ref(pr_number, head_sha, generation, proof)}"
-        )
+        ref = request_json(repository, token, "GET", f"git/ref/{claim_ref}")
     except transport.GitHubRequestError as exc:
         if exc.status_code == 404 and exc.category == "permanent":
             return None
@@ -669,9 +678,7 @@ def read_atomic_collector_owner(
     if obj.get("type") != "tag" or not re.fullmatch(r"[0-9a-f]{40}", str(obj.get("sha") or "")):
         return None
     tag = request_json(repository, token, "GET", f"git/tags/{obj['sha']}")
-    if not isinstance(tag, dict) or tag.get("tag") != collector_claim_ref(
-        pr_number, head_sha, generation, proof
-    ).removeprefix("tags/"):
+    if not isinstance(tag, dict) or tag.get("tag") != claim_ref.removeprefix("tags/"):
         return None
     message = str(tag.get("message") or "")
     match = re.fullmatch(r"hunter-collector-run-id=([1-9][0-9]*)", message.strip())
@@ -766,15 +773,18 @@ def reviewer_pool_config_digest() -> str:
     return hashlib.sha256(encoded).hexdigest()
 
 
-def current_run_id() -> int | None:
+def current_run_id() -> int:
     raw = os.environ.get("GITHUB_RUN_ID") or ""
-    return int(raw) if raw.isdigit() and int(raw) > 0 else None
+    if not raw.isdigit() or int(raw) <= 0:
+        raise ValueError("GITHUB_RUN_ID is not available or invalid")
+    return int(raw)
 
 
 def dispatch_collector(
     repository: str, token: str, pr_number: int, head_sha: str, generation_id: str = BASE_GENERATION_ID
 ) -> None:
     nonce = secrets.token_hex(32)
+    run_id = current_run_id()
     request_json(
         repository,
         token,
@@ -784,7 +794,7 @@ def dispatch_collector(
             "state": "pending",
             "context": f"{DISPATCH_PROOF_CONTEXT_PREFIX}{pr_number}",
             "description": f"{generation_id}|{hashlib.sha256(nonce.encode()).hexdigest()}",
-            "target_url": f"{os.environ.get('GITHUB_SERVER_URL') or 'https://github.com'}/{repository}/actions/runs/{current_run_id()}",
+            "target_url": f"{os.environ.get('GITHUB_SERVER_URL') or 'https://github.com'}/{repository}/actions/runs/{run_id}",
         },
     )
     request_json(
