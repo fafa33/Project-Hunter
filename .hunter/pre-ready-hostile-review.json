@@ -56,7 +56,7 @@
         "status": "added"
       },
       {
-        "blob_sha": "15e4bdc0ec5974b508397457a7fbf54618314c60",
+        "blob_sha": "537b1a955611cb94c5d51d09919a5494c202a814",
         "path": ".github/workflows/hunter-governance-reconcile.yml",
         "previous_path": "",
         "status": "modified"
@@ -86,7 +86,7 @@
         "status": "modified"
       },
       {
-        "blob_sha": "0130be4641a2809c096fd7e71c1f1d418595f432",
+        "blob_sha": "9245270cf99ce261890b7d314cd86bd890b784b1",
         "path": ".github/workflows/hunter-reviewer-collector.yml",
         "previous_path": "",
         "status": "modified"
@@ -122,13 +122,19 @@
         "status": "modified"
       },
       {
+        "blob_sha": "745b595bc4a1074b180180a994c98e5cac750514",
+        "path": "scripts/hunter_defect_prevention_preflight.py",
+        "previous_path": "",
+        "status": "modified"
+      },
+      {
         "blob_sha": "41c66b58f630245e639f7729e63f44796119e78a",
         "path": "scripts/hunter_issue_agent_lifecycle.py",
         "previous_path": "",
         "status": "modified"
       },
       {
-        "blob_sha": "413d7d435e345a4cd88b9e33667522483430d17a",
+        "blob_sha": "253e2345386ef29c10bf769fbd7e10216f205c44",
         "path": "scripts/hunter_review_orchestrator.py",
         "previous_path": "",
         "status": "modified"
@@ -140,7 +146,7 @@
         "status": "modified"
       },
       {
-        "blob_sha": "b904623c3804f38a42be75dbd4bcd1645bcb1fd7",
+        "blob_sha": "da0aa8a4358e9400e9a1f353f5d5cfe81fd77192",
         "path": "tests/test_hunter_review_orchestrator.py",
         "previous_path": "",
         "status": "modified"
@@ -158,11 +164,11 @@
         "status": "modified"
       }
     ],
-    "review_target_digest": "8f91700011f28ff6bd9f662b5ca1a095d6f29d64346c536e83aadfa57d549482"
+    "review_target_digest": "1a02b9c3b852d9bdeda39f2407952403a7a434c0ec63cc7cee00a024e4ecd20f"
   },
-  "review_id": "2d02b440e40fb891f17408138c26739f0d10b9ac48024c9bc487dfa85d80bd98",
+  "review_id": "4d7494e3d8d1ffaeb5d337315cfb7e15603e147805f1dc6b7784f498176b99b5",
   "review_request": {
-    "claims_id": "2d02b440e40fb891f17408138c26739f0d10b9ac48024c9bc487dfa85d80bd98",
+    "claims_id": "4d7494e3d8d1ffaeb5d337315cfb7e15603e147805f1dc6b7784f498176b99b5",
     "schema": "hunter.review-request.v1"
   },
   "schema": "hunter.pre-ready-hostile-review.v1"
