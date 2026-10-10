@@ -15,7 +15,6 @@ GEN = orchestrator.BASE_GENERATION_ID
     "attack",
     [
         "wrong-proof",
-        "replayed-proof",
         "wrong-origin",
         "candidate-origin",
         "wrong-generation",
@@ -33,6 +32,7 @@ def test_adversarial_dispatch_rejected_before_reviewer_work(monkeypatch, attack)
         "path": collector.WORKFLOW,
         "head_branch": "main",
         "created_at": "2026-10-10T10:01:00Z",
+        "head_sha": "d" * 40,
     }
     origin = {
         "id": 123,
@@ -68,7 +68,12 @@ def test_adversarial_dispatch_rejected_before_reviewer_work(monkeypatch, attack)
         run["event"] = "workflow_dispatch"
     if attack == "wrong-path":
         run["path"] = ".github/workflows/evil.yml"
-    responses = {"actions/runs/778": run, "actions/runs/123": origin, "": {"default_branch": "main"}}
+    responses = {
+        "actions/runs/778": run,
+        "actions/runs/123": origin,
+        "": {"default_branch": "main"},
+        "commits/main": {"sha": "d" * 40},
+    }
     monkeypatch.setattr(orchestrator, "request_json", lambda _r, _t, _m, path: responses[path])
     monkeypatch.setattr(
         orchestrator,
@@ -97,6 +102,7 @@ def test_authorized_dispatch_is_accepted(monkeypatch):
         "path": collector.WORKFLOW,
         "head_branch": "main",
         "created_at": "2026-10-10T10:01:00Z",
+        "head_sha": "d" * 40,
     }
     origin = {
         "id": 123,
@@ -112,18 +118,31 @@ def test_authorized_dispatch_is_accepted(monkeypatch):
         "target_url": "https://github.com/owner/repo/actions/runs/123",
         "created_at": "2026-10-10T10:00:00Z",
     }
-    responses = {"actions/runs/778": run, "actions/runs/123": origin, "": {"default_branch": "main"}}
+    responses = {
+        "actions/runs/778": run,
+        "actions/runs/123": origin,
+        "": {"default_branch": "main"},
+        "commits/main": {"sha": "d" * 40},
+    }
     monkeypatch.setattr(orchestrator, "request_json", lambda _r, _t, _m, path: responses[path])
     monkeypatch.setattr(orchestrator, "read_cycle", lambda *_: ("present", cycle, None))
     monkeypatch.setattr(orchestrator, "unique_collector_claimant", lambda *_: 778)
-    monkeypatch.setattr(orchestrator, "read_atomic_collector_owner", lambda *_: 778)
     monkeypatch.setattr(
         orchestrator,
-        "request_json",
-        lambda _r, _t, _m, path, payload=None: (
-            {"sha": "a" * 40} if path == "git/tags" else ({} if path == "git/refs" else responses[path])
-        ),
+        "read_atomic_collector_owner",
+        lambda *_: None if not getattr(orchestrator, "_claim_created", False) else 778,
     )
+    monkeypatch.setattr(orchestrator, "_claim_created", False, raising=False)
+
+    def authorized_request(_r, _t, _m, path, payload=None):
+        if path == "git/tags":
+            return {"sha": "a" * 40}
+        if path == "git/refs":
+            monkeypatch.setattr(orchestrator, "_claim_created", True)
+            return {}
+        return responses[path]
+
+    monkeypatch.setattr(orchestrator, "request_json", authorized_request)
     monkeypatch.setattr(orchestrator, "_all_commit_statuses", lambda *_: [status])
     collector.verify_trusted_dispatch_before_work("owner/repo", "token", 472, HEAD, GEN, PROOF, 778)
 
@@ -141,6 +160,7 @@ def test_competing_dispatch_claimants_fail_closed(monkeypatch):
                     "event": "repository_dispatch",
                     "display_title": title,
                     "created_at": "2026-10-10T10:01:00Z",
+                    "head_sha": "d" * 40,
                 }
                 for number in (778, 779)
             ]

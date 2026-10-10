@@ -1985,6 +1985,15 @@ def verify_trusted_dispatch_before_work(
         and run.get("head_branch") == branch
     ):
         raise ValueError("collector run is not trusted default-branch repository dispatch")
+    revision = str(run.get("head_sha") or "")
+    tip = orchestration.request_json(repository, token, "GET", f"commits/{branch}")
+    tip_sha = str((tip or {}).get("sha") or "")
+    if not re.fullmatch(r"[0-9a-f]{40}", revision) or not re.fullmatch(r"[0-9a-f]{40}", tip_sha):
+        raise ValueError("collector trusted revision unavailable")
+    if revision != tip_sha:
+        comparison = orchestration.request_json(repository, token, "GET", f"compare/{revision}...{tip_sha}")
+        if not isinstance(comparison, dict) or comparison.get("status") not in {"ahead", "identical"}:
+            raise ValueError("collector revision is no longer on trusted default branch")
     state, cycle, _ = orchestration.read_cycle(repository, token, pr_number, head_sha)
     if state != "present" or cycle is None or cycle.state not in orchestration.OPEN_CYCLE_STATES:
         raise ValueError("collector dispatch lacks authorized open cycle")
@@ -2009,26 +2018,26 @@ def verify_trusted_dispatch_before_work(
     ]
     if len(matches) != 1:
         raise ValueError("collector dispatch proof is not uniquely authorized")
-    # A completed cycle's capability cannot be replayed by a later run.
-    completions = [
-        status
-        for status in orchestration._all_commit_statuses(repository, token, head_sha)
-        if status.get("context") == f"{orchestration.COLLECTOR_CONTEXT_PREFIX}{pr_number}"
-        and status.get("state") == "success"
-        and (status.get("creator") or {}).get("login") == orchestration.TRUSTED_STATUS_CREATOR
-    ]
-    if completions:
-        raise ValueError("collector dispatch capability has already been consumed")
+    # Older remediation generations have independent capabilities. Never
+    # reject this generation merely because the previous one completed.
     issued_at = str(matches[0].get("created_at") or "")
     if not issued_at or str(run.get("created_at") or "") < issued_at:
         raise ValueError("collector dispatch run predates trusted capability")
-    claimant = orchestration.unique_collector_claimant(
-        repository, token, orchestration.collector_run_name(pr_number, head_sha, generation), issued_at
-    )
-    if claimant != run_id:
-        raise ValueError("collector dispatch claimant is ambiguous or belongs to another run")
-    # GitHub's create-ref operation is atomic: only one contender can create
-    # this exact ref. The annotated tag binds that single winner to run_id.
+    # The create-only Git ref is the arbitration authority, not workflow titles.
+    # A matching existing owner can only retry after its earlier attempt ended.
+    owner = orchestration.read_atomic_collector_owner(repository, token, pr_number, head_sha, generation, proof)
+    if owner is not None:
+        if owner != run_id:
+            raise ValueError("collector dispatch proof already owned by another run")
+        if int(run.get("run_attempt") or 1) <= 1:
+            raise ValueError("collector claim already consumed by this attempt")
+        attempts = orchestration.request_json(repository, token, "GET", f"actions/runs/{run_id}/attempts")
+        if not isinstance(attempts, dict) or not isinstance(attempts.get("workflow_runs"), list):
+            raise ValueError("collector retry history unavailable")
+        prior = [a for a in attempts["workflow_runs"] if a.get("run_attempt") == int(run["run_attempt"]) - 1]
+        if len(prior) != 1 or prior[0].get("status") != "completed" or prior[0].get("conclusion") == "success":
+            raise ValueError("collector previous attempt is not safely retryable")
+        return
     tag_name = orchestration.collector_claim_ref(pr_number, head_sha, generation, proof).removeprefix("tags/")
     tag = orchestration.request_json(
         repository,

@@ -1775,6 +1775,7 @@ def test_trusted_completion_rejects_replayed_proof_on_another_run(monkeypatch):
     monkeypatch.setattr(orchestrator, "read_cycle", lambda *_: ("present", cycle, None))
     monkeypatch.setattr(orchestrator, "collector_runs", lambda *_: runs)
     monkeypatch.setattr(orchestrator, "publish_collector_completion", lambda *args: published.append(args))
+    monkeypatch.setattr(orchestrator, "read_atomic_collector_owner", lambda *_: 777)
     assert "SKIPPED" in orchestrator.publish_trusted_collector_completion("owner/repo", "token", 778, "a" * 64)
     assert not published
 
