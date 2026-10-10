@@ -584,9 +584,69 @@ def _scenario_child(conn: Connection, scenario_id: str, candidate_root_str: str,
 
     try:
         conn.send({"stage": "started"})
-        measurements = SCENARIOS[scenario_id](Path(candidate_root_str), fixture)
-        safe_measurements = json.loads(json.dumps(measurements, ensure_ascii=False))
-        conn.send({"stage": "done", "measurements": safe_measurements})
+        # Mock GitHub API calls in the child process with appropriate mock data
+        # to avoid real network requests while allowing candidate logic to work.
+        from unittest.mock import patch
+
+        import hunter_github_transport as transport
+
+        def _mock_request_rest_json(url, method, headers, data, token, what):
+            if "/statuses/" in url and method == "POST":
+                return {"id": 12345, "url": "https://api.github.com/repos/test/statuses/12345"}
+            if "/statuses/" in url and method == "GET":
+                return []
+            if "/dispatches" in url and method == "POST":
+                return {}
+            if "/actions/runs/" in url:
+                return {"id": 123, "head_sha": "a" * 40, "status": "completed", "conclusion": "success"}
+            if "/commits/" in url and "/statuses" in url:
+                return []
+            if "/compare/" in url:
+                return {"status": "identical"}
+            if "/git/ref/" in url:
+                return {"object": {"type": "tag", "sha": "a" * 40}}
+            if "/git/tags/" in url:
+                return {"tag": "test-tag", "message": "hunter-collector-run-id=123"}
+            if "/git/tags" in url and method == "POST":
+                return {"sha": "a" * 40}
+            if "/git/refs" in url and method == "POST":
+                return {}
+            if "/actions/runs/" in url and "/attempts" in url:
+                return {"workflow_runs": []}
+            if "/actions/workflows/" in url and "/runs" in url:
+                return {"workflow_runs": []}
+            if "/pulls/" in url:
+                return {"state": "open", "head": {"sha": "a" * 40}}
+            if "/repos/" in url and "/actions/workflows/" in url:
+                return {"id": 123, "path": ".github/workflows/test.yml"}
+            return {}
+
+        def mock_request_graphql_json(query, variables, token, what):
+            review_threads = {"nodes": [], "pageInfo": {"hasNextPage": False}}
+            pull_request = {"reviewThreads": review_threads}
+            repository = {"pullRequest": pull_request}
+            data = {"repository": repository}
+            return {"data": data}
+
+        def mock_rest_json(url, method, headers, data, token, what):
+            return _mock_request_rest_json(url, method, headers, data, token, what)
+
+        def mock_graphql_json(query, variables, token, what):
+            review_threads = {"nodes": [], "pageInfo": {"hasNextPage": False}}
+            pull_request = {"reviewThreads": review_threads}
+            repository = {"pullRequest": pull_request}
+            data = {"repository": repository}
+            return {"data": data}
+
+        with (
+            patch.object(transport, "request_rest_json", _mock_request_rest_json),
+            patch.object(transport, "request_graphql_json", mock_request_graphql_json),
+            patch.object(transport, "rest_json", mock_rest_json),
+            patch.object(transport, "graphql_json", mock_graphql_json),
+        ):
+            measurements = SCENARIOS[scenario_id](Path(candidate_root_str), fixture)
+            safe_measurements = json.loads(json.dumps(measurements, ensure_ascii=False))
+            conn.send({"stage": "done", "measurements": safe_measurements})
     except (
         BaseException
     ) as exc:  # noqa: BLE001 - every candidate-triggered failure must be reported, never crash silently
