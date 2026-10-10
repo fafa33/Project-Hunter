@@ -136,7 +136,7 @@ jobs:
               [[ "$current" == $'open\t'"$head" ]] || continue
               # Skip already-published trusted completions without artifact I/O.
               # A status is a hint only: the publisher still authenticates proof.
-              if gh api "repos/$GITHUB_REPOSITORY/commits/$head/statuses?per_page=100" \
+              if gh api --paginate "repos/$GITHUB_REPOSITORY/commits/$head/statuses?per_page=100" \
                 --jq ".[] | select(.context == \"Hunter Reviewer Collector / PR #$pr\" and .state == \"success\" and .description == \"collector_run_id=$run_id\" and .creator.login == \"github-actions[bot]\") | .id" 2>/dev/null | grep -qE '^[0-9]+$'; then
                 continue
               fi

@@ -1750,6 +1750,9 @@ def test_trusted_completion_rejects_replayed_proof_on_another_run(monkeypatch):
         "id": 777,
         "created_at": "2026-10-09T19:01:00Z",
         "display_title": f"Hunter Reviewer Collector PR 472 HEAD {HEAD}",
+        "head_branch": "main",
+        "status": "completed",
+        "conclusion": "success",
     }
     replay = dict(
         original,
@@ -2383,3 +2386,33 @@ def test_commit_status_pagination_keeps_old_trusted_dispatch_proof(monkeypatch):
     assert len(statuses) == 101
     assert proof in statuses
     assert len(calls) == 2
+
+
+@pytest.mark.parametrize(
+    "override",
+    [
+        {"head_branch": "attacker"},
+        {"status": "completed", "conclusion": "failure"},
+    ],
+)
+def test_untrusted_earlier_claimant_cannot_block_valid_collector(monkeypatch, override):
+    valid = {
+        "id": 778,
+        "created_at": "2026-10-09T19:02:00Z",
+        "display_title": f"Hunter Reviewer Collector PR 472 HEAD {HEAD}",
+        "path": orchestrator.COLLECTOR_WORKFLOW_PATH,
+        "event": "workflow_dispatch",
+        "head_branch": "main",
+        "head_sha": HEAD,
+        "status": "completed",
+        "conclusion": "success",
+    }
+    earlier = dict(valid, id=777, created_at="2026-10-09T19:01:00Z", **override)
+    request, cycle, _runs = _trusted_collector_fixture(valid, first_run=earlier)
+    published = []
+    monkeypatch.setattr(orchestrator, "request_json", request)
+    monkeypatch.setattr(orchestrator, "read_cycle", lambda *_: ("present", cycle, None))
+    monkeypatch.setattr(orchestrator, "publish_collector_completion", lambda *args: published.append(args))
+    result = orchestrator.publish_trusted_collector_completion("owner/repo", "token", 778, "a" * 64)
+    assert result.startswith("PUBLISHED:")
+    assert len(published) == 1

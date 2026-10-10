@@ -659,6 +659,9 @@ def publish_trusted_collector_completion(repository: str, token: str, run_id: in
                 isinstance(candidate, dict)
                 and candidate.get("path") == COLLECTOR_WORKFLOW_PATH
                 and _run_title(candidate) == collector_run_name(pr_number, head_sha, cycle.generation_id)
+                and candidate.get("head_branch") == branch
+                and candidate.get("status") == "completed"
+                and candidate.get("conclusion") == "success"
                 and str(candidate.get("created_at") or "") >= issued_at
             ):
                 candidate_id = int(candidate.get("id") or 0)
