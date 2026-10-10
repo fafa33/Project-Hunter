@@ -43,6 +43,12 @@ name: Hunter Governance Review Reconcile
 # trusted GitHub state rather than from this event's payload.
 
 on:
+  # repository_dispatch runs the default-branch workflow definition, unlike
+  # workflow_dispatch with a caller-selected candidate ref. API-authenticated
+  # owner/operator recovery does not execute candidate-authored workflow code.
+  repository_dispatch:
+    types:
+      - hunter-trusted-recovery
   push:
     branches:
       - main

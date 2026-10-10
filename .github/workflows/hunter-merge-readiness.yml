@@ -8,6 +8,12 @@ name: Hunter / Merge Readiness
 # - failed or incomplete exact-head code/security checks
 
 on:
+  # repository_dispatch runs the default-branch workflow definition, unlike
+  # workflow_dispatch with a caller-selected candidate ref. API-authenticated
+  # owner/operator recovery does not execute candidate-authored workflow code.
+  repository_dispatch:
+    types:
+      - hunter-trusted-recovery
   pull_request_target:
     branches:
       - main

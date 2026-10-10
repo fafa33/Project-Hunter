@@ -2479,3 +2479,15 @@ def test_scheduled_collector_recovery_bounds_history_fetch_before_processing():
         'gh api --paginate "repos/$GITHUB_REPOSITORY/actions/workflows/hunter-reviewer-collector.yml/runs'
         not in recovery
     )
+
+
+def test_privileged_recovery_uses_default_branch_dispatch_not_candidate_ref():
+    from pathlib import Path
+
+    workflows = Path(__file__).resolve().parents[1] / ".github/workflows"
+    for name in ("hunter-governance-reconcile.yml", "hunter-merge-readiness.yml"):
+        source = (workflows / name).read_text()
+        triggers = source.split("on:\n", 1)[1].split("\npermissions:", 1)[0]
+        assert "repository_dispatch:" in triggers
+        assert "hunter-trusted-recovery" in triggers
+        assert "workflow_dispatch:" not in triggers
