@@ -56,7 +56,7 @@
         "status": "added"
       },
       {
-        "blob_sha": "be27578fc5ae6b337aa4a8cd890ca1c1c6508400",
+        "blob_sha": "15e4bdc0ec5974b508397457a7fbf54618314c60",
         "path": ".github/workflows/hunter-governance-reconcile.yml",
         "previous_path": "",
         "status": "modified"
@@ -80,7 +80,7 @@
         "status": "modified"
       },
       {
-        "blob_sha": "a26c3d6a55ccfb612bb107b46ce6c83a1624c696",
+        "blob_sha": "fcae7f9b268f719d58c276ff1e29059175f892a5",
         "path": ".github/workflows/hunter-merge-readiness.yml",
         "previous_path": "",
         "status": "modified"
@@ -94,6 +94,12 @@
       {
         "blob_sha": "e0908c1a1c3e7593af0dcaed7204d1afd3c0acdb",
         "path": ".github/workflows/hunter-trusted-orchestrator-replay-validate.yml",
+        "previous_path": "",
+        "status": "modified"
+      },
+      {
+        "blob_sha": "ce572ed94dbe6f4a77dd275a84eac04b73ac6258",
+        "path": "docs/ARCHITECTURE_AUDITS/HUNTER_FAST_MERGE_M1.md",
         "previous_path": "",
         "status": "modified"
       },
@@ -134,7 +140,7 @@
         "status": "modified"
       },
       {
-        "blob_sha": "5003e73c708496cc1a39ae020596b2f76b32e5f2",
+        "blob_sha": "b904623c3804f38a42be75dbd4bcd1645bcb1fd7",
         "path": "tests/test_hunter_review_orchestrator.py",
         "previous_path": "",
         "status": "modified"
@@ -152,11 +158,11 @@
         "status": "modified"
       }
     ],
-    "review_target_digest": "cedb8725d3154549a170d2b70c45087474ac6791891d2b0dba0bbc1e4025dce9"
+    "review_target_digest": "8f91700011f28ff6bd9f662b5ca1a095d6f29d64346c536e83aadfa57d549482"
   },
-  "review_id": "1faf3712826c60ef42219c649e1e4597a5c3c0ad1121108ad5e05942289e61c5",
+  "review_id": "2d02b440e40fb891f17408138c26739f0d10b9ac48024c9bc487dfa85d80bd98",
   "review_request": {
-    "claims_id": "1faf3712826c60ef42219c649e1e4597a5c3c0ad1121108ad5e05942289e61c5",
+    "claims_id": "2d02b440e40fb891f17408138c26739f0d10b9ac48024c9bc487dfa85d80bd98",
     "schema": "hunter.review-request.v1"
   },
   "schema": "hunter.pre-ready-hostile-review.v1"
