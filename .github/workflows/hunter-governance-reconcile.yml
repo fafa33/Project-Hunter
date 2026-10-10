@@ -113,7 +113,14 @@ jobs:
           else
             candidates=("$COLLECTOR_RUN_ID")
           fi
+          # Reserve time for the mandatory governance refresh. Recovery is
+          # opportunistic; each schedule retries the remaining candidates.
+          recovery_deadline=$((SECONDS + 90))
+          recovered=0
           for candidate in "${candidates[@]}"; do
+            if [[ "${{ github.event_name }}" == "schedule" ]]; then
+              (( SECONDS < recovery_deadline && recovered < 5 )) || break
+            fi
             run_id="${candidate%%$'\t'*}"
             [[ "$run_id" =~ ^[0-9]+$ ]] || continue
             if [[ "${{ github.event_name }}" == "schedule" ]]; then
@@ -124,13 +131,17 @@ jobs:
               else
                 continue
               fi
+              # Only active current-head PRs may consume recovery budget.
+              current="$(gh api "repos/$GITHUB_REPOSITORY/pulls/$pr" --jq '[.state, .head.sha] | @tsv' 2>/dev/null)" || continue
+              [[ "$current" == $'open\t'"$head" ]] || continue
               # Skip already-published trusted completions without artifact I/O.
               # A status is a hint only: the publisher still authenticates proof.
               if gh api "repos/$GITHUB_REPOSITORY/commits/$head/statuses?per_page=100" \
-                --jq ".[] | select(.context == \"Hunter Reviewer Collector / PR #$pr\" and .state == \"success\" and .description == \"collector_run_id=$run_id\") | .id" 2>/dev/null | grep -qE '^[0-9]+$'; then
+                --jq ".[] | select(.context == \"Hunter Reviewer Collector / PR #$pr\" and .state == \"success\" and .description == \"collector_run_id=$run_id\" and .creator.login == \"github-actions[bot]\") | .id" 2>/dev/null | grep -qE '^[0-9]+$'; then
                 continue
               fi
             fi
+            ((recovered+=1))
             attempt="$(gh api "repos/$GITHUB_REPOSITORY/actions/runs/$run_id" --jq '.run_attempt' 2>/dev/null)" || continue
             [[ "$attempt" =~ ^[1-9][0-9]*$ ]] || continue
             receipt="$RUNNER_TEMP/collector-receipt"

@@ -1705,10 +1705,18 @@ def _trusted_collector_fixture(run, *, first_run=None):
         f"commits/{HEAD}/statuses?per_page=100": [status],
     }
 
+    runs = [first_run, run] if first_run is not None else [run]
+    for item in runs:
+        item.setdefault("path", orchestrator.COLLECTOR_WORKFLOW_PATH)
+
     def request(_repo, _token, _method, path, _payload=None):
+        if path == (
+            f"actions/workflows/{orchestrator.COLLECTOR_WORKFLOW}/runs?" "event=workflow_dispatch&per_page=100&page=1"
+        ):
+            return {"workflow_runs": runs}
         return responses[path]
 
-    return request, cycle, [first_run, run] if first_run is not None else [run]
+    return request, cycle, runs
 
 
 @pytest.mark.parametrize("capability,accepted", [("a", True), ("b", False)])
@@ -2341,6 +2349,10 @@ def test_scheduled_trusted_collector_recovery_uses_exact_attempt_artifacts():
     assert "gh api --paginate" in script
     assert "collector_run_id=$run_id" in script
     assert "grep -qE" in script
+    assert "recovery_deadline" in script
+    assert "recovered < 5" in script
+    assert "pulls/$pr" in script
+    assert "creator.login" in script and "github-actions[bot]" in script
     assert "run_attempt" in script
     assert "hunter-reviewer-results-*-${attempt}" in script
     assert "hunter-dispatch-proof-*-${attempt}" in script

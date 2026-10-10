@@ -617,14 +617,41 @@ def publish_trusted_collector_completion(repository: str, token: str, run_id: in
         and status.get("context") == expected_context
         and status.get("description") == expected_description
         and _run_id(str(status.get("target_url") or "")) == cycle.trigger_id
+        and str((status.get("creator") or {}).get("login") or "") == TRUSTED_STATUS_CREATOR
     ]
     issued_at = str(proof_statuses[0].get("created_at") or "") if len(proof_statuses) == 1 else ""
     created_at = str(run.get("created_at") or "")
     if not issued_at or not created_at or created_at < issued_at:
         return "SKIPPED: collector run predates unique dispatch proof"
-    runs = collector_runs(repository, token, pr_number, head_sha, cycle.generation_id)
-    claimants = [candidate for candidate in runs if str(candidate.get("created_at") or "") >= issued_at]
-    if not claimants or min(int(candidate.get("id") or 0) for candidate in claimants) != run_id:
+    # Query oldest-first across the complete retained history, not the
+    # newest 50; a replay must never become the first claimant by aging out
+    # the actual dispatch. Fail closed when the API cannot establish history.
+    earliest = None
+    page = 1
+    while True:
+        payload = request_json(
+            repository,
+            token,
+            "GET",
+            f"actions/workflows/{COLLECTOR_WORKFLOW}/runs?event=workflow_dispatch&per_page=100&page={page}",
+        )
+        if not isinstance(payload, dict) or not isinstance(payload.get("workflow_runs"), list):
+            return "SKIPPED: collector claimant history unavailable"
+        batch = payload["workflow_runs"]
+        for candidate in batch:
+            if (
+                isinstance(candidate, dict)
+                and candidate.get("path") == COLLECTOR_WORKFLOW_PATH
+                and _run_title(candidate) == collector_run_name(pr_number, head_sha, cycle.generation_id)
+                and str(candidate.get("created_at") or "") >= issued_at
+            ):
+                candidate_id = int(candidate.get("id") or 0)
+                if candidate_id > 0:
+                    earliest = candidate_id if earliest is None else min(earliest, candidate_id)
+        if len(batch) < 100:
+            break
+        page += 1
+    if earliest != run_id:
         return "SKIPPED: collector dispatch capability already belongs to another run"
     publish_collector_completion(repository, token, pr_number, head_sha, run_id)
     return f"PUBLISHED: collector completion PR #{pr_number} at {head_sha[:12]}"
