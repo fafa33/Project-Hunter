@@ -53,6 +53,7 @@ jobs:
           PR_NUMBER: ${{ github.event.client_payload.pr_number }}
           CANDIDATE_HEAD: ${{ github.event.client_payload.head_sha }}
           REMEDIATION_GENERATION: ${{ github.event.client_payload.generation_id }}
+          COLLECTOR_DISPATCH_PROOF: ${{ github.event.client_payload.dispatch_proof }}
         run: >-
           python scripts/hunter_reviewer_collector.py
           --pr "$PR_NUMBER" --head "$CANDIDATE_HEAD"

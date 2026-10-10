@@ -1963,6 +1963,67 @@ def load_exhaustion(
     return evidence
 
 
+def verify_trusted_dispatch_before_work(
+    repository: str,
+    token: str,
+    pr_number: int,
+    head_sha: str,
+    generation: str,
+    proof: str,
+    run_id: int,
+) -> None:
+    """Fail closed before any reviewer invocation or privileged side effect."""
+    if not re.fullmatch(r"[0-9a-f]{64}", proof):
+        raise ValueError("missing trusted collector dispatch capability")
+    run = orchestration.request_json(repository, token, "GET", f"actions/runs/{run_id}")
+    repo = orchestration.request_json(repository, token, "GET", "")
+    branch = str((repo or {}).get("default_branch") or "main")
+    if not isinstance(run, dict) or not (
+        run.get("id") == run_id
+        and run.get("event") == "repository_dispatch"
+        and run.get("path") == WORKFLOW
+        and run.get("head_branch") == branch
+    ):
+        raise ValueError("collector run is not trusted default-branch repository dispatch")
+    state, cycle, _ = orchestration.read_cycle(repository, token, pr_number, head_sha)
+    if state != "present" or cycle is None or cycle.state not in orchestration.OPEN_CYCLE_STATES:
+        raise ValueError("collector dispatch lacks authorized open cycle")
+    if cycle.generation_id != generation or not cycle.trigger_id or cycle.trigger_id == run_id:
+        raise ValueError("collector dispatch generation or origin mismatch")
+    origin = orchestration.request_json(repository, token, "GET", f"actions/runs/{cycle.trigger_id}")
+    if not isinstance(origin, dict) or not (
+        origin.get("id") == cycle.trigger_id
+        and origin.get("head_branch") == branch
+        and origin.get("path") == ".github/workflows/hunter-governance-reconcile.yml"
+        and origin.get("event") in {"push", "workflow_run", "pull_request_target", "schedule", "repository_dispatch"}
+    ):
+        raise ValueError("collector dispatch origin is not trusted governance")
+    description = f"{generation}|{hashlib.sha256(proof.encode()).hexdigest()}"
+    matches = [
+        status
+        for status in orchestration._all_commit_statuses(repository, token, head_sha)
+        if status.get("context") == f"{orchestration.DISPATCH_PROOF_CONTEXT_PREFIX}{pr_number}"
+        and status.get("description") == description
+        and (status.get("creator") or {}).get("login") == orchestration.TRUSTED_STATUS_CREATOR
+        and orchestration._run_id(str(status.get("target_url") or "")) == cycle.trigger_id
+    ]
+    if len(matches) != 1:
+        raise ValueError("collector dispatch proof is not uniquely authorized")
+    # A completed cycle's capability cannot be replayed by a later run.
+    completions = [
+        status
+        for status in orchestration._all_commit_statuses(repository, token, head_sha)
+        if status.get("context") == f"{orchestration.COLLECTOR_CONTEXT_PREFIX}{pr_number}"
+        and status.get("state") == "success"
+        and (status.get("creator") or {}).get("login") == orchestration.TRUSTED_STATUS_CREATOR
+    ]
+    if completions:
+        raise ValueError("collector dispatch capability has already been consumed")
+    issued_at = str(matches[0].get("created_at") or "")
+    if not issued_at or str(run.get("created_at") or "") < issued_at:
+        raise ValueError("collector dispatch run predates trusted capability")
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--pr", type=int, required=True)
@@ -1983,6 +2044,15 @@ def main() -> int:
         raise ValueError("remediation generation identity is malformed")
     repository, token = os.environ["GITHUB_REPOSITORY"], os.environ["GITHUB_TOKEN"]
     run_id, run_attempt = int(os.environ["GITHUB_RUN_ID"]), int(os.environ["GITHUB_RUN_ATTEMPT"])
+    verify_trusted_dispatch_before_work(
+        repository,
+        token,
+        args.pr,
+        args.head,
+        declared_generation,
+        os.environ.get("COLLECTOR_DISPATCH_PROOF", ""),
+        run_id,
+    )
     pool, error = review.load_reviewer_pool()
     if pool is None or error:
         raise ValueError(error)
