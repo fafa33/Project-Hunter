@@ -115,5 +115,28 @@ def test_authorized_dispatch_is_accepted(monkeypatch):
     responses = {"actions/runs/778": run, "actions/runs/123": origin, "": {"default_branch": "main"}}
     monkeypatch.setattr(orchestrator, "request_json", lambda _r, _t, _m, path: responses[path])
     monkeypatch.setattr(orchestrator, "read_cycle", lambda *_: ("present", cycle, None))
+    monkeypatch.setattr(orchestrator, "unique_collector_claimant", lambda *_: 778)
     monkeypatch.setattr(orchestrator, "_all_commit_statuses", lambda *_: [status])
     collector.verify_trusted_dispatch_before_work("owner/repo", "token", 472, HEAD, GEN, PROOF, 778)
+
+
+def test_competing_dispatch_claimants_fail_closed(monkeypatch):
+    title = orchestrator.collector_run_name(472, HEAD, GEN)
+
+    def request(_repo, _token, _method, path):
+        assert "event=repository_dispatch" in path
+        return {
+            "workflow_runs": [
+                {
+                    "id": number,
+                    "path": orchestrator.COLLECTOR_WORKFLOW_PATH,
+                    "event": "repository_dispatch",
+                    "display_title": title,
+                    "created_at": "2026-10-10T10:01:00Z",
+                }
+                for number in (778, 779)
+            ]
+        }
+
+    monkeypatch.setattr(orchestrator, "request_json", request)
+    assert orchestrator.unique_collector_claimant("owner/repo", "token", title, "2026-10-10T10:00:00Z") is None

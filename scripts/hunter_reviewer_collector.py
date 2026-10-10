@@ -2022,6 +2022,11 @@ def verify_trusted_dispatch_before_work(
     issued_at = str(matches[0].get("created_at") or "")
     if not issued_at or str(run.get("created_at") or "") < issued_at:
         raise ValueError("collector dispatch run predates trusted capability")
+    claimant = orchestration.unique_collector_claimant(
+        repository, token, orchestration.collector_run_name(pr_number, head_sha, generation), issued_at
+    )
+    if claimant != run_id:
+        raise ValueError("collector dispatch claimant is ambiguous or belongs to another run")
 
 
 def main() -> int:

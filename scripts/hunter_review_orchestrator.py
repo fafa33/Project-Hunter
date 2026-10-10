@@ -642,7 +642,7 @@ def publish_trusted_collector_completion(repository: str, token: str, run_id: in
     # Query oldest-first across the complete retained history, not the
     # newest 50; a replay must never become the first claimant by aging out
     # the actual dispatch. Fail closed when the API cannot establish history.
-    earliest = None
+    claimant_ids: set[int] = set()
     page = 1
     while True:
         payload = request_json(
@@ -666,14 +666,49 @@ def publish_trusted_collector_completion(repository: str, token: str, run_id: in
             ):
                 candidate_id = int(candidate.get("id") or 0)
                 if candidate_id > 0:
-                    earliest = candidate_id if earliest is None else min(earliest, candidate_id)
+                    claimant_ids.add(candidate_id)
         if len(batch) < 100:
             break
         page += 1
-    if earliest != run_id:
-        return "SKIPPED: collector dispatch capability already belongs to another run"
+    if claimant_ids != {run_id}:
+        return "SKIPPED: collector dispatch capability has ambiguous or competing claimants"
     publish_collector_completion(repository, token, pr_number, head_sha, run_id)
     return f"PUBLISHED: collector completion PR #{pr_number} at {head_sha[:12]}"
+
+
+def unique_collector_claimant(repository: str, token: str, title: str, issued_at: str) -> int | None:
+    """Fail closed unless exactly one run claims this issuance across all pages.
+
+    Run titles are not authority: callers must independently validate the
+    dispatch capability and origin. Ambiguity denies both runs, not a race win.
+    """
+    claimant_ids: set[int] = set()
+    page = 1
+    while True:
+        payload = request_json(
+            repository,
+            token,
+            "GET",
+            f"actions/workflows/{COLLECTOR_WORKFLOW}/runs?event=repository_dispatch&per_page=100&page={page}",
+        )
+        if not isinstance(payload, dict) or not isinstance(payload.get("workflow_runs"), list):
+            raise ValueError("collector claimant history unavailable")
+        batch = payload["workflow_runs"]
+        for candidate in batch:
+            if (
+                isinstance(candidate, dict)
+                and candidate.get("path") == COLLECTOR_WORKFLOW_PATH
+                and _run_title(candidate) == title
+                and candidate.get("event") == "repository_dispatch"
+                and str(candidate.get("created_at") or "") >= issued_at
+            ):
+                candidate_id = int(candidate.get("id") or 0)
+                if candidate_id > 0:
+                    claimant_ids.add(candidate_id)
+        if len(batch) < 100:
+            break
+        page += 1
+    return next(iter(claimant_ids)) if len(claimant_ids) == 1 else None
 
 
 def read_collector_completion(
