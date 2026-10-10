@@ -86,8 +86,12 @@ class FakeOrchestration:
         self.runs.append(_run("in_progress", generation_id=generation_id, pr_number=pr_number, head_sha=head_sha))
 
     def _request_json(self, _repository, _token, _method, path, _payload=None):
-        assert path.startswith(f"actions/workflows/{orchestrator.COLLECTOR_WORKFLOW}/runs")
-        return {"workflow_runs": self.runs}
+        if path.startswith(f"actions/workflows/{orchestrator.COLLECTOR_WORKFLOW}/runs"):
+            return {"workflow_runs": self.runs}
+        if path.startswith("commits/") and "/statuses" in path:
+            # _all_commit_statuses called by _find_dispatch_proof_status
+            return []
+        raise AssertionError(f"unexpected path: {path}")
 
 
 def _thread(thread_id, comment_id, resolved=True, created_at="2026-09-18T01:35:24Z"):

@@ -2053,7 +2053,7 @@ def verify_trusted_dispatch_before_work(
         if len(prior) != 1 or prior[0].get("status") != "completed" or prior[0].get("conclusion") == "success":
             raise ValueError("collector previous attempt is not safely retryable")
         return
-    tag_name = orchestration.collector_claim_ref(pr_number, head_sha, generation).removeprefix("tags/")
+    tag_name = orchestration.collector_claim_ref(pr_number, head_sha, generation, proof).removeprefix("tags/")
     tag = orchestration.request_json(
         repository,
         token,

@@ -100,6 +100,7 @@ def test_ready_review_request_dispatches_collector_once(monkeypatch):
         lambda *_args: stored.update(dispatches=stored["dispatches"] + 1),
         raising=False,
     )
+    monkeypatch.setattr(orchestrator, "request_json", lambda *_args, **_kwargs: [], raising=False)
 
     first = orchestrator.ensure_collector("owner/repo", "token", 472, HEAD)
     second = orchestrator.ensure_collector("owner/repo", "token", 472, HEAD)
@@ -127,8 +128,11 @@ def _absent_cycle_with_recorded_dispatches(monkeypatch) -> dict:
     monkeypatch.setattr(orchestrator, "dispatch_collector", dispatch_collector, raising=False)
 
     def request_json(_repository, _token, _method, path, _payload=None):
-        assert path.startswith(f"actions/workflows/{orchestrator.COLLECTOR_WORKFLOW}/runs")
-        return {"workflow_runs": runs}
+        if path.startswith(f"actions/workflows/{orchestrator.COLLECTOR_WORKFLOW}/runs"):
+            return {"workflow_runs": runs}
+        if path.startswith("commits/") and "/statuses" in path:
+            return []
+        raise AssertionError(f"unexpected path: {path}")
 
     monkeypatch.setattr(orchestrator, "request_json", request_json)
 
@@ -478,9 +482,11 @@ def _ensure_harness(monkeypatch, cycle, runs):
     )
 
     def request_json(_repository, _token, _method, path, _payload=None):
-        if not path.startswith(f"actions/workflows/{orchestrator.COLLECTOR_WORKFLOW}/runs"):
-            pytest.fail(f"unexpected request {path}")
-        return {"workflow_runs": runs}
+        if path.startswith(f"actions/workflows/{orchestrator.COLLECTOR_WORKFLOW}/runs"):
+            return {"workflow_runs": runs}
+        if path.startswith("commits/") and "/statuses" in path:
+            return []
+        pytest.fail(f"unexpected request {path}")
 
     monkeypatch.setattr(orchestrator, "request_json", request_json)
     return stored
@@ -583,6 +589,7 @@ def test_absent_cycle_read_does_not_duplicate_an_already_active_correlated_colle
     monkeypatch.setattr(orchestrator, "read_cycle", lambda *_args: ("absent", None, None))
     monkeypatch.setattr(orchestrator, "reviewer_pool_config_digest", lambda: "d" * 64, raising=False)
     monkeypatch.setattr(orchestrator, "current_run_id", lambda: 999, raising=False)
+    monkeypatch.setattr(orchestrator, "request_json", lambda *_args, **_kwargs: [], raising=False)
     published = []
     monkeypatch.setattr(orchestrator, "publish_cycle", lambda *_args, cycle: published.append(cycle), raising=False)
     dispatches = []
@@ -606,6 +613,7 @@ def test_absent_cycle_read_does_not_duplicate_an_already_successful_correlated_c
     monkeypatch.setattr(orchestrator, "read_cycle", lambda *_args: ("absent", None, None))
     monkeypatch.setattr(orchestrator, "reviewer_pool_config_digest", lambda: "d" * 64, raising=False)
     monkeypatch.setattr(orchestrator, "current_run_id", lambda: 999, raising=False)
+    monkeypatch.setattr(orchestrator, "request_json", lambda *_args, **_kwargs: [], raising=False)
     monkeypatch.setattr(orchestrator, "publish_cycle", lambda *_args, cycle: None, raising=False)
     dispatches = []
     monkeypatch.setattr(orchestrator, "dispatch_collector", lambda *_args: dispatches.append(_args), raising=False)
@@ -622,6 +630,7 @@ def test_absent_cycle_read_still_dispatches_when_no_correlated_collector_exists(
     monkeypatch.setattr(orchestrator, "read_cycle", lambda *_args: ("absent", None, None))
     monkeypatch.setattr(orchestrator, "reviewer_pool_config_digest", lambda: "d" * 64, raising=False)
     monkeypatch.setattr(orchestrator, "current_run_id", lambda: 999, raising=False)
+    monkeypatch.setattr(orchestrator, "request_json", lambda *_args, **_kwargs: [], raising=False)
     monkeypatch.setattr(orchestrator, "publish_cycle", lambda *_args, cycle: None, raising=False)
     dispatches = []
     monkeypatch.setattr(orchestrator, "dispatch_collector", lambda *_args: dispatches.append(_args), raising=False)
@@ -1252,6 +1261,7 @@ def _collector_harness(monkeypatch):
     )
     monkeypatch.setattr(orchestrator, "reviewer_pool_config_digest", lambda: "d" * 64, raising=False)
     monkeypatch.setattr(orchestrator, "current_run_id", lambda: 555, raising=False)
+    monkeypatch.setattr(orchestrator, "_all_commit_statuses", lambda *_args, **_kwargs: [], raising=False)
     monkeypatch.setattr(orchestrator, "publish_cycle", lambda *_args, cycle: stored.update(cycle=cycle), raising=False)
     monkeypatch.setattr(orchestrator, "collector_liveness", lambda *_args: ("missing", 0), raising=False)
     monkeypatch.setattr(
@@ -1900,6 +1910,7 @@ def test_dispatch_identity_and_timestamp_are_durable_before_dispatch(monkeypatch
     monkeypatch.setattr(orchestrator, "read_cycle", lambda *_args: ("absent", None, None))
     monkeypatch.setattr(orchestrator, "reviewer_pool_config_digest", lambda: "d" * 64)
     monkeypatch.setattr(orchestrator, "current_run_id", lambda: 777)
+    monkeypatch.setattr(orchestrator, "_all_commit_statuses", lambda *_args, **_kwargs: [], raising=False)
     monkeypatch.setattr(orchestrator, "publish_cycle", lambda *_args, cycle: published.append(cycle))
     monkeypatch.setattr(orchestrator, "collector_liveness", lambda *_args: ("missing", 0))
 

@@ -166,17 +166,17 @@ def test_competing_dispatch_claimants_fail_closed(monkeypatch):
 def test_atomic_ref_race_has_exactly_one_winner():
     """Simulate GitHub's create-only refs under simultaneous contender writes.
 
-    The claim ref is now per-cycle (pr/head/generation), not per-proof.
-    Different proofs for the same cycle now produce the same claim ref,
-    ensuring only one collector run can claim ownership of the cycle.
+    The claim ref is per-dispatch (pr/head/generation/proof). Same proof = same
+    dispatch = same claim ref. Different proofs = different dispatches = different claim refs.
     """
     from concurrent.futures import ThreadPoolExecutor
     from threading import Barrier, Lock
 
-    ref = orchestrator.collector_claim_ref(472, HEAD, GEN)
-    assert ref == orchestrator.collector_claim_ref(472, HEAD, GEN)
-    assert ref != orchestrator.collector_claim_ref(472, "b" * 40, GEN)
-    assert ref != orchestrator.collector_claim_ref(472, HEAD, "other" * 16)
+    ref = orchestrator.collector_claim_ref(472, HEAD, GEN, PROOF)
+    assert ref == orchestrator.collector_claim_ref(472, HEAD, GEN, PROOF)
+    assert ref != orchestrator.collector_claim_ref(472, "b" * 40, GEN, PROOF)
+    assert ref != orchestrator.collector_claim_ref(472, HEAD, "other" * 16, PROOF)
+    assert ref != orchestrator.collector_claim_ref(472, HEAD, GEN, "c" * 64)
     barrier = Barrier(2)
     lock = Lock()
     refs = {}
@@ -196,7 +196,7 @@ def test_atomic_ref_race_has_exactly_one_winner():
 
 
 def test_atomic_owner_tag_rejects_wrong_run(monkeypatch):
-    name = orchestrator.collector_claim_ref(472, HEAD, GEN).removeprefix("tags/")
+    name = orchestrator.collector_claim_ref(472, HEAD, GEN, PROOF).removeprefix("tags/")
 
     def request(_repo, _token, _method, path):
         if path.startswith("git/ref/"):

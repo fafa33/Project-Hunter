@@ -1139,9 +1139,11 @@ class ReplacementResultLedger:
     def __init__(self, database: str | Path) -> None:
         self._database = Path(database)
         with sqlite3.connect(self._database) as db:
-            db.execute("""CREATE TABLE IF NOT EXISTS issue_agent_replacement_results (
+            db.execute(
+                """CREATE TABLE IF NOT EXISTS issue_agent_replacement_results (
                 authorization_id TEXT PRIMARY KEY, result_sha256 TEXT NOT NULL,
-                validation_definition TEXT NOT NULL, published_head TEXT)""")
+                validation_definition TEXT NOT NULL, published_head TEXT)"""
+            )
 
     def record_validated(self, receipt: ReplacementValidationReceipt) -> None:
         with sqlite3.connect(self._database) as db:

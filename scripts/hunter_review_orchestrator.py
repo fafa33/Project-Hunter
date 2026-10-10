@@ -649,15 +649,17 @@ def publish_trusted_collector_completion(repository: str, token: str, run_id: in
     return f"PUBLISHED: collector completion PR #{pr_number} at {head_sha[:12]}"
 
 
-def collector_claim_ref(pr_number: int, head_sha: str, generation: str) -> str:
-    """One immutable ref per authorized cycle, not per contender or proof.
+def collector_claim_ref(pr_number: int, head_sha: str, generation: str, proof: str) -> str:
+    """One immutable ref per authorized dispatch, not per cycle.
 
-    The proof is validated separately via the dispatch proof status. The claim
-    ref arbitrates which collector run owns the cycle; including the proof
-    would allow multiple proofs for the same cycle to create distinct claims,
-    bypassing the single-run-per-cycle guarantee.
+    Each dispatch gets a unique proof, and the claim ref is bound to that
+    proof. This ensures:
+    - Each dispatch gets its own atomic claim
+    - Retries of the same dispatch (same proof) use the same claim ref
+    - Different dispatches (different proofs) for the same cycle get different claim refs
+    - A failed dispatch's claim can be retried by a new run with the same proof
     """
-    digest = hashlib.sha256(f"{pr_number}:{head_sha}:{generation}".encode()).hexdigest()
+    digest = hashlib.sha256(f"{pr_number}:{head_sha}:{generation}:{proof}".encode()).hexdigest()
     return f"tags/hunter-collector-claim/{digest}"
 
 
@@ -665,7 +667,7 @@ def read_atomic_collector_owner(
     repository: str, token: str, pr_number: int, head_sha: str, generation: str, proof: str
 ) -> int | None:
     """Read the winning annotated tag; never infer ownership from run titles."""
-    claim_ref = collector_claim_ref(pr_number, head_sha, generation)
+    claim_ref = collector_claim_ref(pr_number, head_sha, generation, proof)
     try:
         ref = request_json(repository, token, "GET", f"git/ref/{claim_ref}")
     except transport.GitHubRequestError as exc:
@@ -683,6 +685,34 @@ def read_atomic_collector_owner(
     message = str(tag.get("message") or "")
     match = re.fullmatch(r"hunter-collector-run-id=([1-9][0-9]*)", message.strip())
     return int(match.group(1)) if match else None
+
+
+def _find_dispatch_proof_status(
+    repository: str, token: str, pr_number: int, head_sha: str, generation_id: str
+) -> dict[str, Any] | None:
+    """Find an existing dispatch proof status for the exact cycle.
+
+    Returns the status if a dispatch proof was already issued for this
+    PR/head/generation by the trusted orchestrator, None otherwise.
+    """
+    statuses = _all_commit_statuses(repository, token, head_sha)
+    if not isinstance(statuses, list):
+        return None
+    context = f"{DISPATCH_PROOF_CONTEXT_PREFIX}{pr_number}"
+    for status in statuses:
+        if not isinstance(status, dict):
+            continue
+        if status.get("context") != context:
+            continue
+        if str((status.get("creator") or {}).get("login") or "") != TRUSTED_STATUS_CREATOR:
+            continue
+        description = str(status.get("description") or "")
+        # Description format: "generation_id|proof_hash"
+        if not description.startswith(f"{generation_id}|"):
+            continue
+        # Valid dispatch proof status found
+        return status
+    return None
 
 
 def unique_collector_claimant(repository: str, token: str, title: str, issued_at: str) -> int | None:
@@ -1437,6 +1467,29 @@ def ensure_collector(
             f"collector correlation evidence unavailable for PR #{pr_number} at {head_sha[:10]}; "
             f"refusing to risk a duplicate dispatch: {exc}"
         ) from exc
+
+    # Prevent duplicate dispatches by checking for an existing dispatch proof
+    # status for this exact cycle. The dispatch proof status is the authoritative
+    # record that a dispatch was issued for this PR/head/generation. If one
+    # already exists, another reconcile must not issue a second dispatch.
+    existing_proof = _find_dispatch_proof_status(repository, token, pr_number, head_sha, generation_id)
+    if existing_proof is not None:
+        # A dispatch was already issued for this cycle. Update the cycle's
+        # trigger_id to the existing dispatch's run ID if it differs, and return
+        # the existing cycle state.
+        existing_trigger_id = _run_id(str(existing_proof.get("target_url") or ""))
+        cycle = ReviewCycle(
+            pr_number=pr_number,
+            head_sha=head_sha,
+            state="WAITING_FOR_REVIEWER",
+            provider_id="",
+            trigger_id=existing_trigger_id or run_id,
+            started_at=datetime.now(UTC).strftime("%Y-%m-%dT%H:%M:%SZ"),
+            config_digest=digest,
+            generation_id=generation_id,
+        )
+        publish_cycle(repository, token, head_sha, cycle=cycle)
+        return cycle
 
     # Persist the dispatch identity and liveness timestamp *before* dispatch.
     # This status is the durable idempotency record: if GitHub accepts the
