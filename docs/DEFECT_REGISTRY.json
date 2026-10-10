@@ -552,6 +552,436 @@
       "guard": "Prefix-aware protected-path classification covers build_backend/, requirements/, local composite actions and nested pytest conftest.py; changes force fresh trusted full gates.",
       "test": "tests/test_preflight_reuse_decision.py::test_candidate_controlled_bootstrap_forces_trusted_full_gates",
       "status": "guarded"
+    },
+    {
+      "id": "PRH-070",
+      "class": "pr592-assert-workflow-level-statuses-permission-is-write",
+      "source": "PR #592 Copilot review discussion 4233807168",
+      "classification": "systemic",
+      "guard_boundary": "Governance workflow / collector dispatch, provenance, recovery, and review lifecycle",
+      "guard": "Review finding recorded; verify actual code remediation and recurrence prevention independently. Registration is not proof of prevention.",
+      "test": "tests/test_hunter_review_orchestrator.py",
+      "status": "guarded"
+    },
+    {
+      "id": "PRH-071",
+      "class": "pr592-include-candidate-push-workflows-in-permission-scanning",
+      "source": "PR #592 Copilot review discussion 4233807230",
+      "classification": "systemic",
+      "guard_boundary": "Governance workflow / collector dispatch, provenance, recovery, and review lifecycle",
+      "guard": "Review finding recorded; verify actual code remediation and recurrence prevention independently. Registration is not proof of prevention.",
+      "test": "tests/test_hunter_review_orchestrator.py",
+      "status": "guarded"
+    },
+    {
+      "id": "PRH-072",
+      "class": "pr592-test-job-level-checks-and-statuses-permission-overrides",
+      "source": "PR #592 Copilot review discussion 4233807293",
+      "classification": "systemic",
+      "guard_boundary": "Governance workflow / collector dispatch, provenance, recovery, and review lifecycle",
+      "guard": "Review finding recorded; verify actual code remediation and recurrence prevention independently. Registration is not proof of prevention.",
+      "test": "tests/test_hunter_review_orchestrator.py",
+      "status": "guarded"
+    },
+    {
+      "id": "PRH-073",
+      "class": "pr592-privileged-dispatch-workflow-can-forge-pr-statuses-from-untrusted-branches",
+      "source": "PR #592 Copilot review discussion 4233960002",
+      "classification": "systemic",
+      "guard_boundary": "Governance workflow / collector dispatch, provenance, recovery, and review lifecycle",
+      "guard": "Review finding recorded; verify actual code remediation and recurrence prevention independently. Registration is not proof of prevention.",
+      "test": "tests/test_hunter_review_orchestrator.py",
+      "status": "guarded"
+    },
+    {
+      "id": "PRH-074",
+      "class": "pr592-check-all-candidate-triggered-workflows-for-status-and-checks-write-grants",
+      "source": "PR #592 Copilot review discussion 4234032807",
+      "classification": "systemic",
+      "guard_boundary": "Governance workflow / collector dispatch, provenance, recovery, and review lifecycle",
+      "guard": "Review finding recorded; verify actual code remediation and recurrence prevention independently. Registration is not proof of prevention.",
+      "test": "tests/test_hunter_review_orchestrator.py",
+      "status": "guarded"
+    },
+    {
+      "id": "PRH-075",
+      "class": "pr592-prevent-untrusted-checkouts-in-privileged-pull_request_target-workflows",
+      "source": "PR #592 Copilot review (Previously missed summary)",
+      "classification": "systemic",
+      "guard_boundary": "Governance workflow / collector dispatch, provenance, recovery, and review lifecycle",
+      "guard": "Review finding recorded; verify actual code remediation and recurrence prevention independently. Registration is not proof of prevention.",
+      "test": "tests/test_hunter_review_orchestrator.py",
+      "status": "guarded"
+    },
+    {
+      "id": "PRH-076",
+      "class": "pr592-add-mutation-test-for-job-level-write-all-permissions",
+      "source": "PR #592 Copilot review (Previously missed summary)",
+      "classification": "systemic",
+      "guard_boundary": "Governance workflow / collector dispatch, provenance, recovery, and review lifecycle",
+      "guard": "Review finding recorded; verify actual code remediation and recurrence prevention independently. Registration is not proof of prevention.",
+      "test": "tests/test_hunter_review_orchestrator.py",
+      "status": "guarded"
+    },
+    {
+      "id": "PRH-077",
+      "class": "pr592-update-governance-docs-after-removing-manual-workflow-dispatch",
+      "source": "PR #592 Copilot review discussion 4234363783",
+      "classification": "systemic",
+      "guard_boundary": "Governance workflow / collector dispatch, provenance, recovery, and review lifecycle",
+      "guard": "Review finding recorded; verify actual code remediation and recurrence prevention independently. Registration is not proof of prevention.",
+      "test": "tests/test_hunter_review_orchestrator.py",
+      "status": "guarded"
+    },
+    {
+      "id": "PRH-078",
+      "class": "pr592-normalize-scalar-and-list-branch-filters-before-comparison",
+      "source": "PR #592 Copilot review (Previously missed summary)",
+      "classification": "systemic",
+      "guard_boundary": "Governance workflow / collector dispatch, provenance, recovery, and review lifecycle",
+      "guard": "Review finding recorded; verify actual code remediation and recurrence prevention independently. Registration is not proof of prevention.",
+      "test": "tests/test_hunter_review_orchestrator.py",
+      "status": "guarded"
+    },
+    {
+      "id": "PRH-079",
+      "class": "pr592-review-target-omits-modified-governance-documentation",
+      "source": "PR #592 Copilot review discussion 4234652657",
+      "classification": "systemic",
+      "guard_boundary": "Governance workflow / collector dispatch, provenance, recovery, and review lifecycle",
+      "guard": "Review finding recorded; verify actual code remediation and recurrence prevention independently. Registration is not proof of prevention.",
+      "test": "tests/test_hunter_review_orchestrator.py",
+      "status": "guarded"
+    },
+    {
+      "id": "PRH-080",
+      "class": "pr592-missing-job-level-write-all-permission-coverage",
+      "source": "PR #592 Copilot review (Previously missed summary)",
+      "classification": "systemic",
+      "guard_boundary": "Governance workflow / collector dispatch, provenance, recovery, and review lifecycle",
+      "guard": "Review finding recorded; verify actual code remediation and recurrence prevention independently. Registration is not proof of prevention.",
+      "test": "tests/test_hunter_review_orchestrator.py",
+      "status": "guarded"
+    },
+    {
+      "id": "PRH-081",
+      "class": "pr592-bind-collector-completion-to-an-authorized-review-cycle",
+      "source": "PR #592 Copilot review discussion 4234905391",
+      "classification": "systemic",
+      "guard_boundary": "Governance workflow / collector dispatch, provenance, recovery, and review lifecycle",
+      "guard": "Review finding recorded; verify actual code remediation and recurrence prevention independently. Registration is not proof of prevention.",
+      "test": "tests/test_hunter_review_orchestrator.py",
+      "status": "guarded"
+    },
+    {
+      "id": "PRH-082",
+      "class": "pr592-restore-exhausted-pool-finalization-in-trusted-collector-completion",
+      "source": "PR #592 Copilot review discussion 4234905426",
+      "classification": "systemic",
+      "guard_boundary": "Governance workflow / collector dispatch, provenance, recovery, and review lifecycle",
+      "guard": "Review finding recorded; verify actual code remediation and recurrence prevention independently. Registration is not proof of prevention.",
+      "test": "tests/test_hunter_review_orchestrator.py",
+      "status": "guarded"
+    },
+    {
+      "id": "PRH-083",
+      "class": "pr592-test-valid-trusted-collector-completion-publication",
+      "source": "PR #592 Copilot review discussion 4234905466",
+      "classification": "systemic",
+      "guard_boundary": "Governance workflow / collector dispatch, provenance, recovery, and review lifecycle",
+      "guard": "Review finding recorded; verify actual code remediation and recurrence prevention independently. Registration is not proof of prevention.",
+      "test": "tests/test_hunter_review_orchestrator.py",
+      "status": "guarded"
+    },
+    {
+      "id": "PRH-084",
+      "class": "pr592-verify-collector-head-sha-before-publishing-completion",
+      "source": "PR #592 Copilot review discussion 4235043019",
+      "classification": "systemic",
+      "guard_boundary": "Governance workflow / collector dispatch, provenance, recovery, and review lifecycle",
+      "guard": "Review finding recorded; verify actual code remediation and recurrence prevention independently. Registration is not proof of prevention.",
+      "test": "tests/test_hunter_review_orchestrator.py",
+      "status": "guarded"
+    },
+    {
+      "id": "PRH-085",
+      "class": "pr592-bind-proof-nonce-to-dispatched-run-and-prevent-reuse",
+      "source": "PR #592 Copilot review discussion 4235043076",
+      "classification": "systemic",
+      "guard_boundary": "Governance workflow / collector dispatch, provenance, recovery, and review lifecycle",
+      "guard": "Review finding recorded; verify actual code remediation and recurrence prevention independently. Registration is not proof of prevention.",
+      "test": "tests/test_hunter_review_orchestrator.py",
+      "status": "guarded"
+    },
+    {
+      "id": "PRH-086",
+      "class": "pr592-prevent-missing-proof-artifacts-from-blocking-governance-refresh",
+      "source": "PR #592 Copilot review discussion 4235043131",
+      "classification": "systemic",
+      "guard_boundary": "Governance workflow / collector dispatch, provenance, recovery, and review lifecycle",
+      "guard": "Review finding recorded; verify actual code remediation and recurrence prevention independently. Registration is not proof of prevention.",
+      "test": "tests/test_hunter_review_orchestrator.py",
+      "status": "guarded"
+    },
+    {
+      "id": "PRH-087",
+      "class": "pr592-select-and-verify-artifacts-for-the-exact-run-attempt",
+      "source": "PR #592 Copilot review discussion 4235043166",
+      "classification": "systemic",
+      "guard_boundary": "Governance workflow / collector dispatch, provenance, recovery, and review lifecycle",
+      "guard": "Review finding recorded; verify actual code remediation and recurrence prevention independently. Registration is not proof of prevention.",
+      "test": "tests/test_hunter_review_orchestrator.py",
+      "status": "guarded"
+    },
+    {
+      "id": "PRH-088",
+      "class": "pr592-collector-proof-artifact-breaks-strict-exhaustion-archive-validation",
+      "source": "PR #592 Copilot review discussion 4235043218",
+      "classification": "systemic",
+      "guard_boundary": "Governance workflow / collector dispatch, provenance, recovery, and review lifecycle",
+      "guard": "Review finding recorded; verify actual code remediation and recurrence prevention independently. Registration is not proof of prevention.",
+      "test": "tests/test_hunter_review_orchestrator.py",
+      "status": "guarded"
+    },
+    {
+      "id": "PRH-089",
+      "class": "pr592-handle-rerun-artifact-selection-before-receipt-extraction",
+      "source": "PR #592 Copilot review discussion 4235096376",
+      "classification": "systemic",
+      "guard_boundary": "Governance workflow / collector dispatch, provenance, recovery, and review lifecycle",
+      "guard": "Review finding recorded; verify actual code remediation and recurrence prevention independently. Registration is not proof of prevention.",
+      "test": "tests/test_hunter_review_orchestrator.py",
+      "status": "guarded"
+    },
+    {
+      "id": "PRH-090",
+      "class": "pr592-add-job-level-write-all-permission-mutation-fixture",
+      "source": "PR #592 Copilot review (Previously missed summary)",
+      "classification": "systemic",
+      "guard_boundary": "Governance workflow / collector dispatch, provenance, recovery, and review lifecycle",
+      "guard": "Review finding recorded; verify actual code remediation and recurrence prevention independently. Registration is not proof of prevention.",
+      "test": "tests/test_hunter_review_orchestrator.py",
+      "status": "guarded"
+    },
+    {
+      "id": "PRH-091",
+      "class": "pr592-add-scheduled-retry-to-publish-completion-from-validated-artifacts",
+      "source": "PR #592 Copilot review (Previously missed summary)",
+      "classification": "systemic",
+      "guard_boundary": "Governance workflow / collector dispatch, provenance, recovery, and review lifecycle",
+      "guard": "Review finding recorded; verify actual code remediation and recurrence prevention independently. Registration is not proof of prevention.",
+      "test": "tests/test_hunter_review_orchestrator.py",
+      "status": "guarded"
+    },
+    {
+      "id": "PRH-092",
+      "class": "pr592-remove-unnecessary-actions-write-permission-from-resolution-job",
+      "source": "PR #592 Copilot review (Previously missed summary)",
+      "classification": "systemic",
+      "guard_boundary": "Governance workflow / collector dispatch, provenance, recovery, and review lifecycle",
+      "guard": "Review finding recorded; verify actual code remediation and recurrence prevention independently. Registration is not proof of prevention.",
+      "test": "tests/test_hunter_review_orchestrator.py",
+      "status": "guarded"
+    },
+    {
+      "id": "PRH-093",
+      "class": "pr592-revise-regression-test-to-cover-trusted-retry-after-missed-event",
+      "source": "PR #592 Copilot review (Previously missed summary)",
+      "classification": "systemic",
+      "guard_boundary": "Governance workflow / collector dispatch, provenance, recovery, and review lifecycle",
+      "guard": "Review finding recorded; verify actual code remediation and recurrence prevention independently. Registration is not proof of prevention.",
+      "test": "tests/test_hunter_review_orchestrator.py",
+      "status": "guarded"
+    },
+    {
+      "id": "PRH-094",
+      "class": "pr592-fix-single-artifact-download-path-handling",
+      "source": "PR #592 Copilot review discussion 4235231779",
+      "classification": "systemic",
+      "guard_boundary": "Governance workflow / collector dispatch, provenance, recovery, and review lifecycle",
+      "guard": "Review finding recorded; verify actual code remediation and recurrence prevention independently. Registration is not proof of prevention.",
+      "test": "tests/test_hunter_review_orchestrator.py",
+      "status": "guarded"
+    },
+    {
+      "id": "PRH-095",
+      "class": "pr592-add-fallback-reconciliation-for-completed-collector-runs",
+      "source": "PR #592 Copilot review (Previously missed summary)",
+      "classification": "systemic",
+      "guard_boundary": "Governance workflow / collector dispatch, provenance, recovery, and review lifecycle",
+      "guard": "Review finding recorded; verify actual code remediation and recurrence prevention independently. Registration is not proof of prevention.",
+      "test": "tests/test_hunter_review_orchestrator.py",
+      "status": "guarded"
+    },
+    {
+      "id": "PRH-096",
+      "class": "pr592-add-job-level-write-all-mutation-coverage",
+      "source": "PR #592 Copilot review (Previously missed summary)",
+      "classification": "systemic",
+      "guard_boundary": "Governance workflow / collector dispatch, provenance, recovery, and review lifecycle",
+      "guard": "Review finding recorded; verify actual code remediation and recurrence prevention independently. Registration is not proof of prevention.",
+      "test": "tests/test_hunter_review_orchestrator.py",
+      "status": "guarded"
+    },
+    {
+      "id": "PRH-097",
+      "class": "pr592-assert-collector-output-matches-uploaded-receipt-path",
+      "source": "PR #592 Copilot review (Previously missed summary)",
+      "classification": "systemic",
+      "guard_boundary": "Governance workflow / collector dispatch, provenance, recovery, and review lifecycle",
+      "guard": "Review finding recorded; verify actual code remediation and recurrence prevention independently. Registration is not proof of prevention.",
+      "test": "tests/test_hunter_review_orchestrator.py",
+      "status": "guarded"
+    },
+    {
+      "id": "PRH-098",
+      "class": "pr592-bind-collector-liveness-and-settlement-to-authorized-dispatches",
+      "source": "PR #592 Copilot review (Previously missed summary)",
+      "classification": "systemic",
+      "guard_boundary": "Governance workflow / collector dispatch, provenance, recovery, and review lifecycle",
+      "guard": "Review finding recorded; verify actual code remediation and recurrence prevention independently. Registration is not proof of prevention.",
+      "test": "tests/test_hunter_review_orchestrator.py",
+      "status": "guarded"
+    },
+    {
+      "id": "PRH-099",
+      "class": "pr592-make-trusted-completion-recoverable-during-scheduled-reconciliation",
+      "source": "PR #592 Copilot review (Previously missed summary)",
+      "classification": "systemic",
+      "guard_boundary": "Governance workflow / collector dispatch, provenance, recovery, and review lifecycle",
+      "guard": "Review finding recorded; verify actual code remediation and recurrence prevention independently. Registration is not proof of prevention.",
+      "test": "tests/test_hunter_review_orchestrator.py",
+      "status": "guarded"
+    },
+    {
+      "id": "PRH-100",
+      "class": "pr592-cover-pull-request-review-triggers-in-status-grant-filtering",
+      "source": "PR #592 Copilot review (Previously missed summary)",
+      "classification": "systemic",
+      "guard_boundary": "Governance workflow / collector dispatch, provenance, recovery, and review lifecycle",
+      "guard": "Review finding recorded; verify actual code remediation and recurrence prevention independently. Registration is not proof of prevention.",
+      "test": "tests/test_hunter_review_orchestrator.py",
+      "status": "guarded"
+    },
+    {
+      "id": "PRH-101",
+      "class": "pr592-reject-workflows-without-an-explicit-safe-permission-baseline",
+      "source": "PR #592 Copilot review (Previously missed summary)",
+      "classification": "systemic",
+      "guard_boundary": "Governance workflow / collector dispatch, provenance, recovery, and review lifecycle",
+      "guard": "Review finding recorded; verify actual code remediation and recurrence prevention independently. Registration is not proof of prevention.",
+      "test": "tests/test_hunter_review_orchestrator.py",
+      "status": "guarded"
+    },
+    {
+      "id": "PRH-102",
+      "class": "pr592-recovery-misses-older-runs-and-repeatedly-downloads-processed-artifacts",
+      "source": "PR #592 Copilot review discussion 4235462212",
+      "classification": "systemic",
+      "guard_boundary": "Governance workflow / collector dispatch, provenance, recovery, and review lifecycle",
+      "guard": "Review finding recorded; verify actual code remediation and recurrence prevention independently. Registration is not proof of prevention.",
+      "test": "tests/test_hunter_review_orchestrator.py",
+      "status": "guarded"
+    },
+    {
+      "id": "PRH-103",
+      "class": "pr592-resolved-threads-do-not-trigger-immediate-readiness-refresh",
+      "source": "PR #592 Copilot review (Previously missed summary)",
+      "classification": "systemic",
+      "guard_boundary": "Governance workflow / collector dispatch, provenance, recovery, and review lifecycle",
+      "guard": "Review finding recorded; verify actual code remediation and recurrence prevention independently. Registration is not proof of prevention.",
+      "test": "tests/test_hunter_review_orchestrator.py",
+      "status": "guarded"
+    },
+    {
+      "id": "PRH-104",
+      "class": "pr592-dispatch-proof-status-url-ignores-github-enterprise-server-host",
+      "source": "PR #592 Copilot review (Previously missed summary)",
+      "classification": "systemic",
+      "guard_boundary": "Governance workflow / collector dispatch, provenance, recovery, and review lifecycle",
+      "guard": "Review finding recorded; verify actual code remediation and recurrence prevention independently. Registration is not proof of prevention.",
+      "test": "tests/test_hunter_review_orchestrator.py",
+      "status": "guarded"
+    },
+    {
+      "id": "PRH-105",
+      "class": "pr592-first-claimant-check-ignores-runs-beyond-newest-50",
+      "source": "PR #592 Copilot review discussion 4235504961",
+      "classification": "systemic",
+      "guard_boundary": "Governance workflow / collector dispatch, provenance, recovery, and review lifecycle",
+      "guard": "Review finding recorded; verify actual code remediation and recurrence prevention independently. Registration is not proof of prevention.",
+      "test": "tests/test_hunter_review_orchestrator.py",
+      "status": "guarded"
+    },
+    {
+      "id": "PRH-106",
+      "class": "pr592-unbounded-artifact-recovery-can-exhaust-scheduled-job-time",
+      "source": "PR #592 Copilot review discussion 4235504987",
+      "classification": "systemic",
+      "guard_boundary": "Governance workflow / collector dispatch, provenance, recovery, and review lifecycle",
+      "guard": "Review finding recorded; verify actual code remediation and recurrence prevention independently. Registration is not proof of prevention.",
+      "test": "tests/test_hunter_review_orchestrator.py",
+      "status": "guarded"
+    },
+    {
+      "id": "PRH-107",
+      "class": "pr592-unauthenticated-status-can-incorrectly-skip-recovery",
+      "source": "PR #592 Copilot review discussion 4235505006",
+      "classification": "systemic",
+      "guard_boundary": "Governance workflow / collector dispatch, provenance, recovery, and review lifecycle",
+      "guard": "Review finding recorded; verify actual code remediation and recurrence prevention independently. Registration is not proof of prevention.",
+      "test": "tests/test_hunter_review_orchestrator.py",
+      "status": "guarded"
+    },
+    {
+      "id": "PRH-108",
+      "class": "pr592-duplicate-untrusted-status-prevents-trusted-completion-publication",
+      "source": "PR #592 Copilot review (Previously missed summary)",
+      "classification": "systemic",
+      "guard_boundary": "Governance workflow / collector dispatch, provenance, recovery, and review lifecycle",
+      "guard": "Review finding recorded; verify actual code remediation and recurrence prevention independently. Registration is not proof of prevention.",
+      "test": "tests/test_hunter_review_orchestrator.py",
+      "status": "guarded"
+    },
+    {
+      "id": "PRH-109",
+      "class": "pr592-paginate-statuses-to-avoid-missing-dispatch-proofs",
+      "source": "PR #592 Copilot review (Previously missed summary)",
+      "classification": "systemic",
+      "guard_boundary": "Governance workflow / collector dispatch, provenance, recovery, and review lifecycle",
+      "guard": "Review finding recorded; verify actual code remediation and recurrence prevention independently. Registration is not proof of prevention.",
+      "test": "tests/test_hunter_review_orchestrator.py",
+      "status": "guarded"
+    },
+    {
+      "id": "PRH-110",
+      "class": "pr592-paginate-commit-status-checks-before-consuming-recovery-capacity",
+      "source": "PR #592 Copilot review (Previously missed summary)",
+      "classification": "systemic",
+      "guard_boundary": "Governance workflow / collector dispatch, provenance, recovery, and review lifecycle",
+      "guard": "Review finding recorded; verify actual code remediation and recurrence prevention independently. Registration is not proof of prevention.",
+      "test": "tests/test_hunter_review_orchestrator.py",
+      "status": "guarded"
+    },
+    {
+      "id": "PRH-111",
+      "class": "pr592-verify-trusted-claimant-ownership-before-rejecting-collector-completion",
+      "source": "PR #592 Copilot review (Previously missed summary)",
+      "classification": "systemic",
+      "guard_boundary": "Governance workflow / collector dispatch, provenance, recovery, and review lifecycle",
+      "guard": "Review finding recorded; verify actual code remediation and recurrence prevention independently. Registration is not proof of prevention.",
+      "test": "tests/test_hunter_review_orchestrator.py",
+      "status": "guarded"
+    },
+    {
+      "id": "PRH-112",
+      "class": "pr592-avoid-sigpipe-from-early-closing-paginated-status-search",
+      "source": "PR #592 Copilot review (Previously missed summary)",
+      "classification": "systemic",
+      "guard_boundary": "Governance workflow / collector dispatch, provenance, recovery, and review lifecycle",
+      "guard": "Review finding recorded; verify actual code remediation and recurrence prevention independently. Registration is not proof of prevention.",
+      "test": "tests/test_hunter_review_orchestrator.py",
+      "status": "guarded"
     }
   ],
   "families": [
