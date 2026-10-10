@@ -75,6 +75,9 @@ extend-exclude = '''
   | ^/?src/hunter/evidence_intelligence/response_validator_corrections\.py$
   | ^/?src/hunter/evidence_intelligence/response_validator_persistence\.py$
   | ^/?src/hunter/evidence_intelligence/response_validator_terminal_persistence\.py$
+  | ^/?src/hunter/automation/issue_agent_replacement_executor\.py$
+  | ^/?src/hunter/evidence_intelligence/source_handling_persistence\.py$
+  | ^/?tests/test_source_handling_production_runtime\.py$
   | ^/?tests/test_dashboard_api\.py$
   | ^/?tests/test_operational_status\.py$
 )
