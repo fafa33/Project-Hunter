@@ -1845,10 +1845,14 @@ def validate_review_after_remediation_boundary() -> list[str]:
     except (OSError, yaml.YAMLError) as exc:
         return [*errors, f"reviewer collector workflow is unreadable: {type(exc).__name__}: {exc}"]
     triggers = definition.get(True) if isinstance(definition, dict) else None
-    dispatch = (triggers or {}).get("repository_dispatch") or {}
-    dispatch_types = dispatch.get("types") or []
-    if "hunter-reviewer-collect" not in dispatch_types or "workflow_dispatch" in (triggers or {}):
-        errors.append("privileged reviewer collector must use default-branch repository_dispatch only")
+    # YAML 1.1 parses the top-level "on" key as True. Never accept additional
+    # candidate-controlled events, including a bare push or workflow_dispatch.
+    if not isinstance(triggers, dict) or set(triggers) != {"repository_dispatch"}:
+        errors.append("privileged reviewer collector must have exactly the trusted repository_dispatch trigger")
+    else:
+        dispatch = triggers["repository_dispatch"]
+        if not isinstance(dispatch, dict) or dispatch.get("types") != ["hunter-reviewer-collect"]:
+            errors.append("privileged reviewer collector must declare the exact trusted dispatch event list")
     if "github.event.client_payload.generation_id" not in workflow.read_text(encoding="utf-8"):
         errors.append("the reviewer collector workflow must accept the remediation generation it is dispatched for")
     steps = [
