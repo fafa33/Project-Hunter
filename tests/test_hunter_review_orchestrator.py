@@ -2463,3 +2463,19 @@ def test_missing_workflow_permission_baseline_is_detected_in_action_guard():
 
     document = yaml.safe_load("on: pull_request\njobs: {build: {runs-on: ubuntu-latest}}\n")
     assert "missing-workflow-permissions" in list(_actions_levels(document))
+
+
+def test_scheduled_collector_recovery_bounds_history_fetch_before_processing():
+    """An unbounded --paginate prefetch must never precede the recovery deadline."""
+    from pathlib import Path
+
+    workflow = (Path(__file__).resolve().parents[1] / ".github/workflows/hunter-governance-reconcile.yml").read_text()
+    recovery = workflow.split("- name: Recover trusted collector completion", 1)[-1]
+    assert "timeout 12s gh api" in recovery
+    assert "scanned_pages < 3" in recovery
+    assert "SECONDS < recovery_deadline" in recovery
+    assert "mapfile -t candidates" not in recovery
+    assert (
+        'gh api --paginate "repos/$GITHUB_REPOSITORY/actions/workflows/hunter-reviewer-collector.yml/runs'
+        not in recovery
+    )

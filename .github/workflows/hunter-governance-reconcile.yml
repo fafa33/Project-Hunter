@@ -102,20 +102,32 @@ jobs:
           COLLECTOR_RUN_ID: ${{ github.event.workflow_run.id }}
         run: |
           set -euo pipefail
-          # Paginate all retained successful collector runs. Do not silently
-          # drop older runs after the first page, and skip runs whose trusted
-          # completion status already exists before downloading artifacts.
+          # Bound collector recovery I/O so the mandatory governance refresh
+          # is never held behind an unbounded run-history enumeration.
           if [[ "${{ github.event_name }}" == "schedule" ]]; then
-            mapfile -t candidates < <(
-              gh api --paginate "repos/$GITHUB_REPOSITORY/actions/workflows/hunter-reviewer-collector.yml/runs?status=completed&per_page=100" \
-                --jq '.workflow_runs[] | select(.conclusion == "success") | [.id, .display_title] | @tsv'
-            )
+            # Bounded network scan: never enumerate all retained run history
+            # before the mandatory governance refresh. Rotate the starting
+            # page across sweeps so old valid runs cannot starve forever.
+            recovery_deadline=$((SECONDS + 90))
+            page=$(( ( $(date -u +%s) / 300 ) % 100 + 1 ))
+            candidates=()
+            scanned_pages=0
+            while (( SECONDS < recovery_deadline && scanned_pages < 3 )); do
+              batch="$(timeout 12s gh api "repos/$GITHUB_REPOSITORY/actions/workflows/hunter-reviewer-collector.yml/runs?status=completed&per_page=100&page=$page" --jq '.workflow_runs[] | select(.conclusion == "success") | [.id, .display_title] | @tsv' 2>/dev/null)" || break
+              [[ -n "$batch" ]] || break
+              while IFS= read -r line; do
+                [[ -n "$line" ]] && candidates+=("$line")
+              done <<< "$batch"
+              ((scanned_pages+=1))
+              ((page+=1))
+              ((page<=100)) || page=1
+            done
           else
             candidates=("$COLLECTOR_RUN_ID")
           fi
           # Reserve time for the mandatory governance refresh. Recovery is
           # opportunistic; each schedule retries the remaining candidates.
-          recovery_deadline=$((SECONDS + 90))
+          recovery_deadline=${recovery_deadline:-$((SECONDS + 90))}
           recovered=0
           for candidate in "${candidates[@]}"; do
             if [[ "${{ github.event_name }}" == "schedule" ]]; then
@@ -141,7 +153,6 @@ jobs:
                 continue
               fi
             fi
-            ((recovered+=1))
             attempt="$(gh api "repos/$GITHUB_REPOSITORY/actions/runs/$run_id" --jq '.run_attempt' 2>/dev/null)" || continue
             [[ "$attempt" =~ ^[1-9][0-9]*$ ]] || continue
             receipt="$RUNNER_TEMP/collector-receipt"
@@ -159,6 +170,7 @@ jobs:
             [[ -f "$receipt/results/reviewer-results.json" && -f "$receipt/proof/collector-dispatch-proof.txt" ]] || continue
             mv "$receipt/results/reviewer-results.json" "$receipt/reviewer-results.json"
             mv "$receipt/proof/collector-dispatch-proof.txt" "$receipt/collector-dispatch-proof.txt"
+            ((recovered+=1))
             python scripts/hunter_review_orchestrator.py trusted-collector-complete \
               --repository "$GITHUB_REPOSITORY" --run-id "$run_id" || \
               echo "Collector completion unavailable for run $run_id; continue"
