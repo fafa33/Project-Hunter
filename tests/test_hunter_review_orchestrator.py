@@ -2354,13 +2354,11 @@ def test_scheduled_trusted_collector_recovery_uses_exact_attempt_artifacts():
     assert "github.event_name == 'schedule'" in step["if"]
     script = step["run"]
     assert "status=completed&per_page=100" in script
-    assert "gh api --paginate" in script
-    assert "collector_run_id=$run_id" in script
-    assert "grep -qE" in script
+    assert "collector_run_id=$run_id" not in script
+    assert "commits/$head/statuses" not in script
     assert "recovery_deadline" in script
     assert "recovered < 5" in script
     assert "pulls/$pr" in script
-    assert "creator.login" in script and "github-actions[bot]" in script
     assert "run_attempt" in script
     assert "hunter-reviewer-results-*-${attempt}" in script
     assert "hunter-dispatch-proof-*-${attempt}" in script
@@ -2424,28 +2422,22 @@ def test_untrusted_earlier_claimant_cannot_block_valid_collector(monkeypatch, ov
     assert len(published) == 1
 
 
-def test_scheduled_recovery_status_search_does_not_short_circuit_paginated_api():
-    """PRH-112: grep -q can SIGPIPE the producer under pipefail."""
+def test_scheduled_recovery_never_skips_receipts_on_status_alone():
+    """PR592: a public success status cannot bypass proof validation."""
     from pathlib import Path
 
     workflow = (Path(__file__).resolve().parents[1] / ".github/workflows/hunter-governance-reconcile.yml").read_text()
-    assert 'gh api --paginate "repos/$GITHUB_REPOSITORY/commits/$head/statuses?per_page=100"' in workflow
+    assert "commits/$head/statuses?per_page=100" not in workflow
+    assert 'gh run download "$run_id"' in workflow
+    assert "trusted-collector-complete" in workflow
+
+
+def test_prh112_regression_no_status_skip_pipeline_to_sigpipe():
+    from pathlib import Path
+
+    workflow = (Path(__file__).resolve().parents[1] / ".github/workflows/hunter-governance-reconcile.yml").read_text()
     assert "| grep -qE '^[0-9]+$'" not in workflow
-    assert "| grep -E '^[0-9]+$' | wc -l" in workflow
-
-
-def test_prh112_regression_rejects_original_sigpipe_mutation():
-    """Prove that restoring the original early-closing grep fails the guard."""
-    from pathlib import Path
-
-    workflow = (Path(__file__).resolve().parents[1] / ".github/workflows/hunter-governance-reconcile.yml").read_text()
-    safe = "| grep -E '^[0-9]+$' | wc -l | grep -qE '^[[:space:]]*[1-9][0-9]*$'"
-    unsafe = "| grep -qE '^[0-9]+$'"
-    assert safe in workflow
-    mutated = workflow.replace(safe, unsafe, 1)
-    assert mutated != workflow
-    assert safe not in mutated
-    assert unsafe in mutated
+    assert "commits/$head/statuses?per_page=100" not in workflow
 
 
 def test_pr592_defect_registry_never_claims_unverified_findings_prevented():
