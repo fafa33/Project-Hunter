@@ -655,9 +655,14 @@ def read_atomic_collector_owner(
     repository: str, token: str, pr_number: int, head_sha: str, generation: str, proof: str
 ) -> int | None:
     """Read the winning annotated tag; never infer ownership from run titles."""
-    ref = request_json(
-        repository, token, "GET", f"git/ref/{collector_claim_ref(pr_number, head_sha, generation, proof)}"
-    )
+    try:
+        ref = request_json(
+            repository, token, "GET", f"git/ref/{collector_claim_ref(pr_number, head_sha, generation, proof)}"
+        )
+    except transport.GitHubRequestError as exc:
+        if exc.status_code == 404 and exc.category == "permanent":
+            return None
+        raise
     if not isinstance(ref, dict) or not isinstance(ref.get("object"), dict):
         return None
     obj = ref["object"]

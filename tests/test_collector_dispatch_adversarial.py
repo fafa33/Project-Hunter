@@ -2,6 +2,7 @@
 
 import hashlib
 
+import hunter_github_transport as transport
 import hunter_review_orchestrator as orchestrator
 import hunter_reviewer_collector as collector
 import pytest
@@ -15,6 +16,7 @@ GEN = orchestrator.BASE_GENERATION_ID
     "attack",
     [
         "wrong-proof",
+        "replayed-proof",
         "wrong-origin",
         "candidate-origin",
         "wrong-generation",
@@ -48,12 +50,6 @@ def test_adversarial_dispatch_rejected_before_reviewer_work(monkeypatch, attack)
         "target_url": "https://github.com/owner/repo/actions/runs/123",
         "created_at": "2026-10-10T10:00:00Z",
     }
-    if attack == "replayed-proof":
-        completed = {
-            "context": f"{orchestrator.COLLECTOR_CONTEXT_PREFIX}472",
-            "state": "success",
-            "creator": {"login": orchestrator.TRUSTED_STATUS_CREATOR},
-        }
     if attack == "wrong-origin":
         origin["path"] = ".github/workflows/candidate.yml"
     if attack == "candidate-origin":
@@ -81,13 +77,10 @@ def test_adversarial_dispatch_rejected_before_reviewer_work(monkeypatch, attack)
         lambda *_: ("absent", None, None) if attack == "missing-cycle" else ("present", cycle, None),
     )
     monkeypatch.setattr(
-        orchestrator,
-        "_all_commit_statuses",
-        lambda *_: (
-            [status, status]
-            if attack == "duplicate-status"
-            else ([status, completed] if attack == "replayed-proof" else [status])
-        ),
+        orchestrator, "_all_commit_statuses", lambda *_: [status, status] if attack == "duplicate-status" else [status]
+    )
+    monkeypatch.setattr(
+        orchestrator, "read_atomic_collector_owner", lambda *_: 777 if attack == "replayed-proof" else None
     )
     with pytest.raises(ValueError):
         collector.verify_trusted_dispatch_before_work(
@@ -209,3 +202,21 @@ def test_atomic_owner_tag_rejects_wrong_run(monkeypatch):
     monkeypatch.setattr(orchestrator, "request_json", request)
     assert orchestrator.read_atomic_collector_owner("owner/repo", "token", 472, HEAD, GEN, PROOF) == 778
     assert orchestrator.read_atomic_collector_owner("owner/repo", "token", 472, HEAD, GEN, PROOF) != 779
+
+
+def test_missing_atomic_claim_404_is_unowned(monkeypatch):
+    def missing(*_):
+        raise transport.GitHubRequestError("not found", category="permanent", status_code=404)
+
+    monkeypatch.setattr(orchestrator, "request_json", missing)
+    assert orchestrator.read_atomic_collector_owner("owner/repo", "token", 472, HEAD, GEN, PROOF) is None
+
+
+@pytest.mark.parametrize("status,category", [(403, "permanent"), (500, "transient"), (404, "node-resolution")])
+def test_atomic_claim_api_failures_are_not_unowned(monkeypatch, status, category):
+    def unavailable(*_):
+        raise transport.GitHubRequestError("unavailable", category=category, status_code=status)
+
+    monkeypatch.setattr(orchestrator, "request_json", unavailable)
+    with pytest.raises(transport.GitHubRequestError):
+        orchestrator.read_atomic_collector_owner("owner/repo", "token", 472, HEAD, GEN, PROOF)
