@@ -50,6 +50,12 @@
     "issue": "591",
     "review_target": [
       {
+        "blob_sha": "4eb05d247860e91ec835883053506a61f7242c42",
+        "path": "docs/PR592_COPILOT_FINDING_LEDGER.json",
+        "previous_path": "",
+        "status": "added"
+      },
+      {
         "blob_sha": "6f733a521f47200f349745d5288360247ed85cb9",
         "path": ".github/workflows/hunter-governance-reconcile.yml",
         "previous_path": "",
@@ -82,6 +88,12 @@
       {
         "blob_sha": "e0908c1a1c3e7593af0dcaed7204d1afd3c0acdb",
         "path": ".github/workflows/hunter-trusted-orchestrator-replay-validate.yml",
+        "previous_path": "",
+        "status": "modified"
+      },
+      {
+        "blob_sha": "59a5ca3bb8eed8471e830b946d6667617d400da9",
+        "path": "docs/DEFECT_REGISTRY.json",
         "previous_path": "",
         "status": "modified"
       },
@@ -128,11 +140,11 @@
         "status": "modified"
       }
     ],
-    "review_target_digest": "6b0f358fc1ba56c9cdaf5f1de70463034e8c761fe4dbb273e7705d6351a5899c"
+    "review_target_digest": "f99161c3ab39fb198d80ea3eab0b721c24f81d2d955ee196f07968283b10aac6"
   },
-  "review_id": "4ebde67ad3467d16066e1dd1965bb244e342dbed2e479e11393dc8adc8183b06",
+  "review_id": "2d1a81306744d02b0af4bb8e98ed3e20dbcabd1c2fc7aeab3ee48ed5646c2d91",
   "review_request": {
-    "claims_id": "4ebde67ad3467d16066e1dd1965bb244e342dbed2e479e11393dc8adc8183b06",
+    "claims_id": "2d1a81306744d02b0af4bb8e98ed3e20dbcabd1c2fc7aeab3ee48ed5646c2d91",
     "schema": "hunter.review-request.v1"
   },
   "schema": "hunter.pre-ready-hostile-review.v1"
