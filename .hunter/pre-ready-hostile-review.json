@@ -98,6 +98,12 @@
         "status": "modified"
       },
       {
+        "blob_sha": "8b47386a50c3f621991857b9d5638297435ede27",
+        "path": "docs/DEFECT_PREVENTION_LIFECYCLE.json",
+        "previous_path": "",
+        "status": "modified"
+      },
+      {
         "blob_sha": "951d09dcc106d3db7fe04dd7340f11ec7c6b7b24",
         "path": "docs/DEFECT_REGISTRY.json",
         "previous_path": "",
@@ -146,11 +152,11 @@
         "status": "modified"
       }
     ],
-    "review_target_digest": "002cd1724ed636800fb2b22c299d2b894e45cc5a95aef7a5d4bc2ffb94290b9f"
+    "review_target_digest": "c3847e2e3204ea33fa832fef7b8514a02659dc0e75906981834b06a221c8f7ae"
   },
-  "review_id": "2e0891f45166706d08d366517b3360561223df66441b41520ad23d79837341ac",
+  "review_id": "02cf969c9cfc31a23c637612668ad80f4e6a3c502d3add0914816318943c34cb",
   "review_request": {
-    "claims_id": "2e0891f45166706d08d366517b3360561223df66441b41520ad23d79837341ac",
+    "claims_id": "02cf969c9cfc31a23c637612668ad80f4e6a3c502d3add0914816318943c34cb",
     "schema": "hunter.review-request.v1"
   },
   "schema": "hunter.pre-ready-hostile-review.v1"
