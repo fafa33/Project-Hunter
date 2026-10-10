@@ -86,8 +86,12 @@ class FakeOrchestration:
         self.runs.append(_run("in_progress", generation_id=generation_id, pr_number=pr_number, head_sha=head_sha))
 
     def _request_json(self, _repository, _token, _method, path, _payload=None):
-        assert path.startswith(f"actions/workflows/{orchestrator.COLLECTOR_WORKFLOW}/runs")
-        return {"workflow_runs": self.runs}
+        if path.startswith(f"actions/workflows/{orchestrator.COLLECTOR_WORKFLOW}/runs"):
+            return {"workflow_runs": self.runs}
+        if path.startswith("commits/") and "/statuses" in path:
+            # _all_commit_statuses called by _find_dispatch_proof_status
+            return []
+        raise AssertionError(f"unexpected path: {path}")
 
 
 def _thread(thread_id, comment_id, resolved=True, created_at="2026-09-18T01:35:24Z"):
@@ -443,6 +447,7 @@ def _collector_main(monkeypatch, tmp_path, dispatched, derived):
     monkeypatch.setattr(collector, "collect_attempts", lambda *_a: [])
     monkeypatch.setattr(collector.GitHubBackend, "head", lambda _self: HEAD)
     monkeypatch.setattr(collector, "configuration_digest", lambda _pool: "c" * 64)
+    monkeypatch.setattr(collector, "verify_trusted_dispatch_before_work", lambda *a, **k: None)
     monkeypatch.setenv("GITHUB_REPOSITORY", "owner/repo")
     monkeypatch.setenv("GITHUB_TOKEN", "token")
     monkeypatch.setenv("GITHUB_RUN_ID", "123")
@@ -596,8 +601,10 @@ def test_the_guard_fails_when_the_workflow_stops_forwarding_the_generation(guard
 
     errors = guard.validate_review_after_remediation_boundary()
 
-    assert any("must accept the remediation generation" in message for message in errors)
-    assert any("must forward the remediation generation" in message for message in errors)
+    assert any(
+        "must forward the remediation generation" in message and "github.event.client_payload.generation_id" in message
+        for message in errors
+    )
 
 
 def test_the_guard_fails_when_the_orchestrator_stops_deriving_the_generation(guard, monkeypatch, tmp_path):

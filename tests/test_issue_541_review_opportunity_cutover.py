@@ -134,6 +134,7 @@ def _collector(monkeypatch):
         collector_liveness=lambda *_a: ("missing", 0),
         dispatch_collector=lambda *_a: stored.update(dispatches=stored["dispatches"] + 1),
         current_remediation_generation=lambda *_a: "gen-1",
+        _all_commit_statuses=lambda *_args, **_kwargs: [],
     )
     return stored
 

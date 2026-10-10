@@ -3,16 +3,15 @@ name: Hunter Governance Review
 # Current-state governance status. Success is published only when mergeability
 # and exact-head candidate admission are both proven by the trusted controller.
 #
-# This workflow is reachable from `pull_request`, where GitHub runs the candidate's
-# own version of this file. Nothing here may therefore hold a permission that can
-# drive other workflows: a write-level actions permission would let a candidate-authored step
-# dispatch, re-run or cancel trusted workflows with the repository token.
+# This workflow publishes commit statuses, so its definition MUST come from
+# the trusted base branch. A pull_request trigger would execute candidate-authored
+# steps with statuses:write and permit forged merge readiness.
 # Privileged reviewer orchestration lives in Hunter Governance Review Reconcile,
 # which has no `pull_request` trigger and always executes the trusted
 # default-branch version of its own file.
 
 on:
-  pull_request:
+  pull_request_target:
     branches:
       - main
     types:
@@ -24,12 +23,6 @@ on:
       - Hunter / Trusted Preflight Upgrade
     types:
       - completed
-  workflow_dispatch:
-    inputs:
-      pr_number:
-        description: "Pull request number to review"
-        required: true
-        type: string
 
 permissions:
   # Read-only Actions access: the controller reads collector runs and artifacts
@@ -45,7 +38,6 @@ concurrency:
     hunter-governance-review-${{
       github.event.pull_request.number
       || github.event.workflow_run.pull_requests[0].number
-      || github.event.inputs.pr_number
       || github.run_id
     }}
   cancel-in-progress: false
@@ -77,7 +69,6 @@ jobs:
             ${{
               github.event.pull_request.number
               || github.event.workflow_run.pull_requests[0].number
-              || github.event.inputs.pr_number
             }}
           GITHUB_RUN_ID: ${{ github.run_id }}
           GITHUB_SERVER_URL: ${{ github.server_url }}

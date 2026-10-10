@@ -52,3 +52,20 @@ The live `.github/workflows/hunter-governance-review.yml` is triggered by `pull_
 ## Delivery order and stop rule
 
 M1 inventory/contract (#589) → M2 pre-push evidence gate → M3 trusted proof deduplication → M4 live decision authority → M5 event ingestion/wakeup → M6 bounded CI → M7 shadow rollout and cutover. Each milestone is an issue-bound, focused signed PR with its own verification and owner approval. **Do not add these changes to PR #584.** If a milestone exposes an unresolved safety dependency, stop and record its evidence rather than weakening an existing gate.
+
+## M2 trusted operator recovery (candidate change; not yet deployed)
+
+Both Governance Reconcile and Merge Readiness accept `repository_dispatch`
+with event type `hunter-trusted-recovery`. GitHub evaluates this event against
+the default-branch workflow definition; there is no caller-selectable workflow
+ref. An authorized operator can wake both controllers using a credential with
+repository dispatch permission:
+
+```sh
+gh api -X POST repos/fafa33/Project-Hunter/dispatches -f event_type=hunter-trusted-recovery
+```
+
+This is a full current-state refresh, not permission to merge or to run a
+candidate branch with a privileged token. Keep the five-minute schedule as
+a fallback. The previous `workflow_dispatch` on-demand path is intentionally
+not restored because a caller-selected candidate ref is not a trust boundary.

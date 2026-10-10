@@ -60,13 +60,13 @@ def test_governance_review_bootstrap_stays_on_trusted_default_branch() -> None:
     text = path.read_text(encoding="utf-8")
     assert "github.event.pull_request.number" in text
     assert "github.event.workflow_run.pull_requests[0].number" in text
-    assert "github.event.inputs.pr_number" in text
+    assert "workflow_dispatch:" not in text
     assert "283" not in text
     assert "ref: ${{ github.event.repository.default_branch }}" in text
     assert "persist-credentials: false" in text
     assert "${GITHUB_WORKSPACE}/engine/scripts/hunter_governance_review/" in text
     # Privileged reviewer orchestration is not reachable from this
-    # `pull_request`-triggered workflow; it runs from the reconcile workflow,
+    # trusted `pull_request_target` workflow; it runs from the reconcile workflow,
     # whose file GitHub always takes from the trusted default branch.
     assert "python scripts/hunter_review_orchestrator.py" not in text
     reconcile = (ROOT / ".github/workflows/hunter-governance-reconcile.yml").read_text(encoding="utf-8")

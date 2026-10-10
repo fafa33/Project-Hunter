@@ -641,7 +641,7 @@ def valid_run(run: dict[str, Any], run_id: int, branch: str, revision: str) -> b
         and governance._is_commit_sha(str(run.get("head_sha") or ""))
         and run.get("head_sha") == revision
         and run.get("path") == WORKFLOW
-        and run.get("event") in {"workflow_dispatch", "pull_request_target"}
+        and run.get("event") in {"workflow_dispatch", "repository_dispatch", "pull_request_target"}
         and run.get("status") == "completed"
         and run.get("conclusion") == "success"
     )
@@ -1963,6 +1963,123 @@ def load_exhaustion(
     return evidence
 
 
+def verify_trusted_dispatch_before_work(
+    repository: str,
+    token: str,
+    pr_number: int,
+    head_sha: str,
+    generation: str,
+    proof: str,
+    run_id: int,
+    *,
+    event: str = "repository_dispatch",
+) -> None:
+    """Fail closed before any reviewer invocation or privileged side effect.
+
+    The collector is invoked from two trusted entry points:
+    - `repository_dispatch`: must present an orchestrator-issued, exact-cycle dispatch
+      capability (single-use, bound to this run). This is the privileged path.
+    - `pull_request_target`: GitHub resolves the workflow from the base branch, so
+      the definition is trusted and no dispatch capability is required.
+
+    Any other event identity fails closed.
+    """
+    if event == "pull_request_target":
+        return
+    if event != "repository_dispatch":
+        raise ValueError("collector invoked from an untrusted event")
+    if not re.fullmatch(r"[0-9a-f]{64}", proof):
+        raise ValueError("missing trusted collector dispatch capability")
+    run = orchestration.request_json(repository, token, "GET", f"actions/runs/{run_id}")
+    repo = orchestration.request_json(repository, token, "GET", "")
+    branch = str((repo or {}).get("default_branch") or "main")
+    if not isinstance(run, dict) or not (
+        run.get("id") == run_id
+        and run.get("event") == "repository_dispatch"
+        and run.get("path") == WORKFLOW
+        and run.get("head_branch") == branch
+    ):
+        raise ValueError("collector run is not trusted default-branch repository dispatch")
+    revision = str(run.get("head_sha") or "")
+    tip = orchestration.request_json(repository, token, "GET", f"commits/{branch}")
+    tip_sha = str((tip or {}).get("sha") or "")
+    if not re.fullmatch(r"[0-9a-f]{40}", revision) or not re.fullmatch(r"[0-9a-f]{40}", tip_sha):
+        raise ValueError("collector trusted revision unavailable")
+    if revision != tip_sha:
+        comparison = orchestration.request_json(repository, token, "GET", f"compare/{revision}...{tip_sha}")
+        if not isinstance(comparison, dict) or comparison.get("status") not in {"ahead", "identical"}:
+            raise ValueError("collector revision is no longer on trusted default branch")
+    state, cycle, _ = orchestration.read_cycle(repository, token, pr_number, head_sha)
+    if state != "present" or cycle is None or cycle.state not in orchestration.OPEN_CYCLE_STATES:
+        raise ValueError("collector dispatch lacks authorized open cycle")
+    if cycle.generation_id != generation or not cycle.trigger_id or cycle.trigger_id == run_id:
+        raise ValueError("collector dispatch generation or origin mismatch")
+    origin = orchestration.request_json(repository, token, "GET", f"actions/runs/{cycle.trigger_id}")
+    if not isinstance(origin, dict) or not (
+        origin.get("id") == cycle.trigger_id
+        and origin.get("head_branch") == branch
+        and origin.get("path") == ".github/workflows/hunter-governance-reconcile.yml"
+        and origin.get("event") in {"push", "workflow_run", "pull_request_target", "schedule", "repository_dispatch"}
+    ):
+        raise ValueError("collector dispatch origin is not trusted governance")
+    description = f"{generation}|{hashlib.sha256(proof.encode()).hexdigest()}"
+    matches = [
+        status
+        for status in orchestration._all_commit_statuses(repository, token, head_sha)
+        if status.get("context") == f"{orchestration.DISPATCH_PROOF_CONTEXT_PREFIX}{pr_number}"
+        and status.get("description") == description
+        and (status.get("creator") or {}).get("login") == orchestration.TRUSTED_STATUS_CREATOR
+        and orchestration._run_id(str(status.get("target_url") or "")) == cycle.trigger_id
+    ]
+    if len(matches) != 1:
+        raise ValueError("collector dispatch proof is not uniquely authorized")
+    # Older remediation generations have independent capabilities. Never
+    # reject this generation merely because the previous one completed.
+    issued_at = str(matches[0].get("created_at") or "")
+    if not issued_at or str(run.get("created_at") or "") < issued_at:
+        raise ValueError("collector dispatch run predates trusted capability")
+    # The create-only Git ref is the arbitration authority, not workflow titles.
+    # A matching existing owner can only retry after its earlier attempt ended.
+    owner = orchestration.read_atomic_collector_owner(repository, token, pr_number, head_sha, generation, proof)
+    if owner is not None:
+        if owner != run_id:
+            raise ValueError("collector dispatch proof already owned by another run")
+        if int(run.get("run_attempt") or 1) <= 1:
+            raise ValueError("collector claim already consumed by this attempt")
+        attempts = orchestration.request_json(repository, token, "GET", f"actions/runs/{run_id}/attempts")
+        if not isinstance(attempts, dict) or not isinstance(attempts.get("workflow_runs"), list):
+            raise ValueError("collector retry history unavailable")
+        prior = [a for a in attempts["workflow_runs"] if a.get("run_attempt") == int(run["run_attempt"]) - 1]
+        if len(prior) != 1 or prior[0].get("status") != "completed" or prior[0].get("conclusion") == "success":
+            raise ValueError("collector previous attempt is not safely retryable")
+        return
+    tag_name = orchestration.collector_claim_ref(pr_number, head_sha, generation, proof).removeprefix("tags/")
+    tag = orchestration.request_json(
+        repository,
+        token,
+        "POST",
+        "git/tags",
+        {
+            "tag": tag_name,
+            "message": f"hunter-collector-run-id={run_id}",
+            "object": str(run.get("head_sha") or ""),
+            "type": "commit",
+            "tagger": {
+                "name": "Hunter Collector",
+                "email": "hunter-collector@users.noreply.github.com",
+                "date": str(run.get("created_at") or ""),
+            },
+        },
+    )
+    if not isinstance(tag, dict) or not re.fullmatch(r"[0-9a-f]{40}", str(tag.get("sha") or "")):
+        raise ValueError("collector atomic ownership tag unavailable")
+    orchestration.request_json(
+        repository, token, "POST", "git/refs", {"ref": f"refs/tags/{tag_name}", "sha": tag["sha"]}
+    )
+    if orchestration.read_atomic_collector_owner(repository, token, pr_number, head_sha, generation, proof) != run_id:
+        raise ValueError("collector atomic owner does not match this run")
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--pr", type=int, required=True)
@@ -1983,6 +2100,17 @@ def main() -> int:
         raise ValueError("remediation generation identity is malformed")
     repository, token = os.environ["GITHUB_REPOSITORY"], os.environ["GITHUB_TOKEN"]
     run_id, run_attempt = int(os.environ["GITHUB_RUN_ID"]), int(os.environ["GITHUB_RUN_ATTEMPT"])
+    event = os.environ.get("GITHUB_EVENT_NAME", "")
+    verify_trusted_dispatch_before_work(
+        repository,
+        token,
+        args.pr,
+        args.head,
+        declared_generation,
+        os.environ.get("COLLECTOR_DISPATCH_PROOF", ""),
+        run_id,
+        event=event,
+    )
     pool, error = review.load_reviewer_pool()
     if pool is None or error:
         raise ValueError(error)

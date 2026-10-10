@@ -16,7 +16,7 @@ The trusted workflow checks out the repository default branch and runs that cont
 
 ## Current decision
 
-Before publishing any status, the controller verifies that the open pull request targets `main`. A manually dispatched run for a PR targeting another base branch is ignored and publishes no governance status.
+Before publishing any status, the controller verifies that the open pull request targets `main`. The workflow runs only for pull requests targeting `main`; manual dispatch of this status-writing workflow is disabled.
 
 For an open PR targeting `main`:
 
@@ -42,7 +42,7 @@ Code quality, dependency security, CodeQL, unresolved review feedback, `CHANGES_
 
 ## Triggers
 
-The primary workflow runs on PR open/reopen/synchronize and may be dispatched manually. Reconciliation refreshes open PRs after `main` changes and periodically as a recovery path.
+The primary workflow runs via trusted `pull_request_target` on PR open/reopen/synchronize. It has no manual-dispatch entry point. Trusted reconciliation refreshes open PRs after `main` changes and periodically as a recovery path; use its scheduled recovery instead of dispatching the primary workflow.
 
 ## Security boundary
 

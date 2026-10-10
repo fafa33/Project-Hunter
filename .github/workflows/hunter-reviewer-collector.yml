@@ -1,47 +1,26 @@
 name: Hunter Reviewer Collector
 
 run-name: >-
-  Hunter Reviewer Collector PR ${{ inputs.pr_number }} HEAD ${{ inputs.head_sha }}${{
-  inputs.generation_id && format(' GEN {0}', inputs.generation_id) || '' }}
+  Hunter Reviewer Collector PR ${{ github.event.client_payload.pr_number }} HEAD ${{ github.event.client_payload.head_sha }}${{
+  github.event.client_payload.generation_id && format(' GEN {0}', github.event.client_payload.generation_id) || '' }}
 
+# This privileged workflow is loaded from default branch only.
+# Candidate-selected workflow_dispatch refs are forbidden.
 on:
-  workflow_dispatch:
-    inputs:
-      pr_number:
-        description: Pull request to review
-        required: true
-        type: string
-      head_sha:
-        description: Exact 40-character candidate HEAD
-        required: true
-        type: string
-      generation_id:
-        description: >-
-          Remediation generation of this exact head, or empty for the candidate's
-          first cycle. The collector re-derives it from trusted review-thread
-          state and fails closed on disagreement, so this input correlates the
-          run; it never authorises one.
-        required: false
-        default: ""
-        type: string
+  repository_dispatch:
+    types: [hunter-reviewer-collect]
 
-# `actions: write` is what lets this collector dispatch a reviewer that runs as
-# its own workflow. The collector is dispatch-only: the trusted default-branch
-# orchestrator is the single entry point, so PR lifecycle events cannot race or
-# duplicate the exact-head collector cycle. `statuses: write` is what lets this
-# run publish its own completion directly onto the candidate's exact head (see
-# "Publish collector completion" below): this run's own workflow_run event
-# always reports main's SHA, never the candidate's, so the candidate/head this
-# collector was dispatched for must be recorded as evidence this run itself
-# writes, not derived later from an event that cannot carry it.
+# The collector may dispatch reviewer workflows but must never publish trusted
+# completion statuses on a candidate head. It uploads the result receipt and
+# dispatch proof; the trusted default-branch reconcile workflow verifies the
+# run, attempt and evidence before publishing completion.
 permissions:
-  contents: read
+  contents: write # required for atomic create-only claim tag
   actions: write
   pull-requests: write
-  statuses: write
 
 concurrency:
-  group: hunter-reviewer-collector-${{ inputs.pr_number }}
+  group: hunter-reviewer-collector-${{ github.event.client_payload.pr_number }}
   cancel-in-progress: false
 
 jobs:
@@ -71,33 +50,29 @@ jobs:
           GITHUB_TOKEN: ${{ github.token }}
           GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
           GROQ_API_KEY: ${{ secrets.GROQ_API_KEY }}
-          PR_NUMBER: ${{ inputs.pr_number }}
-          CANDIDATE_HEAD: ${{ inputs.head_sha }}
-          REMEDIATION_GENERATION: ${{ inputs.generation_id }}
+          GITHUB_EVENT_NAME: ${{ github.event_name }}
+          PR_NUMBER: ${{ github.event.client_payload.pr_number }}
+          CANDIDATE_HEAD: ${{ github.event.client_payload.head_sha }}
+          REMEDIATION_GENERATION: ${{ github.event.client_payload.generation_id }}
+          COLLECTOR_DISPATCH_PROOF: ${{ github.event.client_payload.dispatch_proof }}
         run: >-
           python scripts/hunter_reviewer_collector.py
           --pr "$PR_NUMBER" --head "$CANDIDATE_HEAD"
           --generation "$REMEDIATION_GENERATION"
           --output reviewer-results.json
+      - name: Save opaque dispatch capability for trusted completion
+        env:
+          DISPATCH_PROOF: ${{ github.event.client_payload.dispatch_proof }}
+        run: printf '%s' "$DISPATCH_PROOF" > collector-dispatch-proof.txt
       - uses: actions/upload-artifact@v4
         with:
-          name: hunter-reviewer-results-${{ inputs.head_sha }}-${{ github.run_attempt }}
+          name: hunter-reviewer-results-${{ github.event.client_payload.head_sha }}-${{ github.run_attempt }}
           path: reviewer-results.json
           if-no-files-found: error
           retention-days: 30
-      - name: Publish collector completion
-        # This run always executes from the trusted default branch, so its own
-        # workflow_run.head_sha is main's, never the candidate's: reconcile
-        # cannot correlate a completed run back to this PR/head from the event
-        # alone. Publishing completion here, directly from the inputs this run
-        # was actually dispatched with, is the trusted, already-correlated
-        # identity -- never derived or re-guessed later.
-        if: success()
-        env:
-          GITHUB_TOKEN: ${{ github.token }}
-          PR_NUMBER: ${{ inputs.pr_number }}
-          CANDIDATE_HEAD: ${{ inputs.head_sha }}
-        run: >-
-          python scripts/hunter_review_orchestrator.py collector-complete
-          --repository "${{ github.repository }}"
-          --pr "$PR_NUMBER" --head "$CANDIDATE_HEAD" --run-id "${{ github.run_id }}"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: hunter-dispatch-proof-${{ github.event.client_payload.head_sha }}-${{ github.run_attempt }}
+          path: collector-dispatch-proof.txt
+          if-no-files-found: error
+          retention-days: 30

@@ -1,0 +1,399 @@
+{
+  "version": 1,
+  "source_pr": 592,
+  "source_issue": 591,
+  "captured_findings": 43,
+  "prevention_status": "One targeted regression mutation checked; remaining findings require individually demonstrated negative mutation and root-cause review. Passing existing tests alone is not proof of prevention.",
+  "findings": [
+    {
+      "id": "PRH-070",
+      "title": "Assert workflow-level statuses permission is write",
+      "discussion_id": "4233807168",
+      "status": "candidate-regression-linked",
+      "root_cause": "Review description documents the failure mode; root-cause classification requires verification against the relevant implementation and regression.",
+      "regression_evidence": "tests/test_hunter_review_orchestrator.py::test_candidate_workflows_cannot_publish_protected_commit_statuses",
+      "verification": "Existing regression target executed in focused suite; negative mutation per finding not yet demonstrated."
+    },
+    {
+      "id": "PRH-071",
+      "title": "Include candidate push workflows in permission scanning",
+      "discussion_id": "4233807230",
+      "status": "candidate-regression-linked",
+      "root_cause": "Review description documents the failure mode; root-cause classification requires verification against the relevant implementation and regression.",
+      "regression_evidence": "tests/test_hunter_review_orchestrator.py::test_candidate_status_spoofing_mutation_is_rejected",
+      "verification": "Existing regression target executed in focused suite; negative mutation per finding not yet demonstrated."
+    },
+    {
+      "id": "PRH-072",
+      "title": "Test job-level checks and statuses permission overrides",
+      "discussion_id": "4233807293",
+      "status": "candidate-regression-linked",
+      "root_cause": "Review description documents the failure mode; root-cause classification requires verification against the relevant implementation and regression.",
+      "regression_evidence": "tests/test_hunter_review_orchestrator.py::test_job_override_cannot_publish_protected_status",
+      "verification": "Existing regression target executed in focused suite; negative mutation per finding not yet demonstrated."
+    },
+    {
+      "id": "PRH-073",
+      "title": "Privileged dispatch workflow can forge PR statuses from untrusted branches",
+      "discussion_id": "4233960002",
+      "status": "candidate-regression-linked",
+      "root_cause": "Review description documents the failure mode; root-cause classification requires verification against the relevant implementation and regression.",
+      "regression_evidence": "tests/test_hunter_review_orchestrator.py::test_candidate_workflows_cannot_publish_protected_commit_statuses",
+      "verification": "Existing regression target executed in focused suite; negative mutation per finding not yet demonstrated."
+    },
+    {
+      "id": "PRH-074",
+      "title": "Check all candidate-triggered workflows for status and checks write grants",
+      "discussion_id": "4234032807",
+      "status": "candidate-regression-linked",
+      "root_cause": "Review description documents the failure mode; root-cause classification requires verification against the relevant implementation and regression.",
+      "regression_evidence": "tests/test_hunter_review_orchestrator.py::test_candidate_status_spoofing_mutation_is_rejected",
+      "verification": "Existing regression target executed in focused suite; negative mutation per finding not yet demonstrated."
+    },
+    {
+      "id": "PRH-075",
+      "title": "Prevent untrusted checkouts in privileged pull_request_target workflows",
+      "discussion_id": null,
+      "status": "candidate-regression-linked",
+      "root_cause": "Review description documents the failure mode; root-cause classification requires verification against the relevant implementation and regression.",
+      "regression_evidence": "tests/test_hunter_review_orchestrator.py::test_orchestration_bootstraps_only_from_the_trusted_default_branch_checkout",
+      "verification": "Existing regression target executed in focused suite; negative mutation per finding not yet demonstrated."
+    },
+    {
+      "id": "PRH-076",
+      "title": "Add mutation test for job-level write-all permissions",
+      "discussion_id": null,
+      "status": "candidate-regression-linked",
+      "root_cause": "Review description documents the failure mode; root-cause classification requires verification against the relevant implementation and regression.",
+      "regression_evidence": "tests/test_hunter_review_orchestrator.py::test_job_write_all_cannot_publish_protected_status",
+      "verification": "Existing regression target executed in focused suite; negative mutation per finding not yet demonstrated."
+    },
+    {
+      "id": "PRH-077",
+      "title": "Update governance docs after removing manual workflow dispatch",
+      "discussion_id": "4234363783",
+      "status": "recorded-needs-regression",
+      "root_cause": "Review description documents the failure mode; root-cause classification requires verification against the relevant implementation and regression.",
+      "regression_evidence": null,
+      "verification": "No independently verified targeted regression yet."
+    },
+    {
+      "id": "PRH-078",
+      "title": "Normalize scalar and list branch filters before comparison",
+      "discussion_id": null,
+      "status": "candidate-regression-linked",
+      "root_cause": "Review description documents the failure mode; root-cause classification requires verification against the relevant implementation and regression.",
+      "regression_evidence": "tests/test_hunter_review_orchestrator.py::test_candidate_status_spoofing_mutation_is_rejected",
+      "verification": "Existing regression target executed in focused suite; negative mutation per finding not yet demonstrated."
+    },
+    {
+      "id": "PRH-079",
+      "title": "Review target omits modified governance documentation",
+      "discussion_id": "4234652657",
+      "status": "recorded-needs-regression",
+      "root_cause": "Review description documents the failure mode; root-cause classification requires verification against the relevant implementation and regression.",
+      "regression_evidence": null,
+      "verification": "No independently verified targeted regression yet."
+    },
+    {
+      "id": "PRH-080",
+      "title": "Missing job-level write-all permission coverage",
+      "discussion_id": null,
+      "status": "candidate-regression-linked",
+      "root_cause": "Review description documents the failure mode; root-cause classification requires verification against the relevant implementation and regression.",
+      "regression_evidence": "tests/test_hunter_review_orchestrator.py::test_job_write_all_cannot_publish_protected_status",
+      "verification": "Existing regression target executed in focused suite; negative mutation per finding not yet demonstrated."
+    },
+    {
+      "id": "PRH-081",
+      "title": "Bind collector completion to an authorized review cycle",
+      "discussion_id": "4234905391",
+      "status": "candidate-regression-linked",
+      "root_cause": "Review description documents the failure mode; root-cause classification requires verification against the relevant implementation and regression.",
+      "regression_evidence": "tests/test_hunter_review_orchestrator.py::test_trusted_collector_completion_dispatch_capability",
+      "verification": "Existing regression target executed in focused suite; negative mutation per finding not yet demonstrated."
+    },
+    {
+      "id": "PRH-082",
+      "title": "Restore exhausted-pool finalization in trusted collector completion",
+      "discussion_id": "4234905426",
+      "status": "candidate-regression-linked",
+      "root_cause": "Review description documents the failure mode; root-cause classification requires verification against the relevant implementation and regression.",
+      "regression_evidence": "tests/test_hunter_review_orchestrator.py::test_collector_completion_is_published_only_by_trusted_reconcile",
+      "verification": "Existing regression target executed in focused suite; negative mutation per finding not yet demonstrated."
+    },
+    {
+      "id": "PRH-083",
+      "title": "Test valid trusted collector completion publication",
+      "discussion_id": "4234905466",
+      "status": "candidate-regression-linked",
+      "root_cause": "Review description documents the failure mode; root-cause classification requires verification against the relevant implementation and regression.",
+      "regression_evidence": "tests/test_hunter_review_orchestrator.py::test_trusted_collector_completion_dispatch_capability",
+      "verification": "Existing regression target executed in focused suite; negative mutation per finding not yet demonstrated."
+    },
+    {
+      "id": "PRH-084",
+      "title": "Verify collector head SHA before publishing completion",
+      "discussion_id": "4235043019",
+      "status": "candidate-regression-linked",
+      "root_cause": "Review description documents the failure mode; root-cause classification requires verification against the relevant implementation and regression.",
+      "regression_evidence": "tests/test_hunter_review_orchestrator.py::test_trusted_collector_completion_rejects_untrusted_run",
+      "verification": "Existing regression target executed in focused suite; negative mutation per finding not yet demonstrated."
+    },
+    {
+      "id": "PRH-085",
+      "title": "Bind proof nonce to dispatched run and prevent reuse",
+      "discussion_id": "4235043076",
+      "status": "candidate-regression-linked",
+      "root_cause": "Review description documents the failure mode; root-cause classification requires verification against the relevant implementation and regression.",
+      "regression_evidence": "tests/test_hunter_review_orchestrator.py::test_trusted_completion_rejects_replayed_proof_on_another_run",
+      "verification": "Existing regression target executed in focused suite; negative mutation per finding not yet demonstrated."
+    },
+    {
+      "id": "PRH-086",
+      "title": "Prevent missing proof artifacts from blocking governance refresh",
+      "discussion_id": "4235043131",
+      "status": "recorded-needs-regression",
+      "root_cause": "Review description documents the failure mode; root-cause classification requires verification against the relevant implementation and regression.",
+      "regression_evidence": null,
+      "verification": "No independently verified targeted regression yet."
+    },
+    {
+      "id": "PRH-087",
+      "title": "Select and verify artifacts for the exact run attempt",
+      "discussion_id": "4235043166",
+      "status": "candidate-regression-linked",
+      "root_cause": "Review description documents the failure mode; root-cause classification requires verification against the relevant implementation and regression.",
+      "regression_evidence": "tests/test_hunter_review_orchestrator.py::test_scheduled_trusted_collector_recovery_uses_exact_attempt_artifacts",
+      "verification": "Existing regression target executed in focused suite; negative mutation per finding not yet demonstrated."
+    },
+    {
+      "id": "PRH-088",
+      "title": "Collector proof artifact breaks strict exhaustion archive validation",
+      "discussion_id": "4235043218",
+      "status": "recorded-needs-regression",
+      "root_cause": "Review description documents the failure mode; root-cause classification requires verification against the relevant implementation and regression.",
+      "regression_evidence": null,
+      "verification": "No independently verified targeted regression yet."
+    },
+    {
+      "id": "PRH-089",
+      "title": "Handle rerun artifact selection before receipt extraction",
+      "discussion_id": "4235096376",
+      "status": "candidate-regression-linked",
+      "root_cause": "Review description documents the failure mode; root-cause classification requires verification against the relevant implementation and regression.",
+      "regression_evidence": "tests/test_hunter_review_orchestrator.py::test_scheduled_trusted_collector_recovery_uses_exact_attempt_artifacts",
+      "verification": "Existing regression target executed in focused suite; negative mutation per finding not yet demonstrated."
+    },
+    {
+      "id": "PRH-090",
+      "title": "Add job-level write-all permission mutation fixture",
+      "discussion_id": null,
+      "status": "candidate-regression-linked",
+      "root_cause": "Review description documents the failure mode; root-cause classification requires verification against the relevant implementation and regression.",
+      "regression_evidence": "tests/test_hunter_review_orchestrator.py::test_job_write_all_cannot_publish_protected_status",
+      "verification": "Existing regression target executed in focused suite; negative mutation per finding not yet demonstrated."
+    },
+    {
+      "id": "PRH-091",
+      "title": "Add scheduled retry to publish completion from validated artifacts",
+      "discussion_id": null,
+      "status": "recorded-needs-regression",
+      "root_cause": "Review description documents the failure mode; root-cause classification requires verification against the relevant implementation and regression.",
+      "regression_evidence": null,
+      "verification": "No independently verified targeted regression yet."
+    },
+    {
+      "id": "PRH-092",
+      "title": "Remove unnecessary actions write permission from resolution job",
+      "discussion_id": null,
+      "status": "recorded-needs-regression",
+      "root_cause": "Review description documents the failure mode; root-cause classification requires verification against the relevant implementation and regression.",
+      "regression_evidence": null,
+      "verification": "No independently verified targeted regression yet."
+    },
+    {
+      "id": "PRH-093",
+      "title": "Revise regression test to cover trusted retry after missed event",
+      "discussion_id": null,
+      "status": "recorded-needs-regression",
+      "root_cause": "Review description documents the failure mode; root-cause classification requires verification against the relevant implementation and regression.",
+      "regression_evidence": null,
+      "verification": "No independently verified targeted regression yet."
+    },
+    {
+      "id": "PRH-094",
+      "title": "Fix single-artifact download path handling",
+      "discussion_id": "4235231779",
+      "status": "recorded-needs-regression",
+      "root_cause": "Review description documents the failure mode; root-cause classification requires verification against the relevant implementation and regression.",
+      "regression_evidence": null,
+      "verification": "No independently verified targeted regression yet."
+    },
+    {
+      "id": "PRH-095",
+      "title": "Add fallback reconciliation for completed collector runs",
+      "discussion_id": null,
+      "status": "candidate-regression-linked",
+      "root_cause": "Review description documents the failure mode; root-cause classification requires verification against the relevant implementation and regression.",
+      "regression_evidence": "tests/test_hunter_review_orchestrator.py::test_scheduled_trusted_collector_recovery_uses_exact_attempt_artifacts",
+      "verification": "Existing regression target executed in focused suite; negative mutation per finding not yet demonstrated."
+    },
+    {
+      "id": "PRH-096",
+      "title": "Add job-level write-all mutation coverage",
+      "discussion_id": null,
+      "status": "candidate-regression-linked",
+      "root_cause": "Review description documents the failure mode; root-cause classification requires verification against the relevant implementation and regression.",
+      "regression_evidence": "tests/test_hunter_review_orchestrator.py::test_job_write_all_cannot_publish_protected_status",
+      "verification": "Existing regression target executed in focused suite; negative mutation per finding not yet demonstrated."
+    },
+    {
+      "id": "PRH-097",
+      "title": "Assert collector output matches uploaded receipt path",
+      "discussion_id": null,
+      "status": "recorded-needs-regression",
+      "root_cause": "Review description documents the failure mode; root-cause classification requires verification against the relevant implementation and regression.",
+      "regression_evidence": null,
+      "verification": "No independently verified targeted regression yet."
+    },
+    {
+      "id": "PRH-098",
+      "title": "Bind collector liveness and settlement to authorized dispatches",
+      "discussion_id": null,
+      "status": "candidate-regression-linked",
+      "root_cause": "Review description documents the failure mode; root-cause classification requires verification against the relevant implementation and regression.",
+      "regression_evidence": "tests/test_hunter_review_orchestrator.py::test_a_live_or_successful_collector_is_never_duplicated",
+      "verification": "Existing regression target executed in focused suite; negative mutation per finding not yet demonstrated."
+    },
+    {
+      "id": "PRH-099",
+      "title": "Make trusted completion recoverable during scheduled reconciliation",
+      "discussion_id": null,
+      "status": "candidate-regression-linked",
+      "root_cause": "Review description documents the failure mode; root-cause classification requires verification against the relevant implementation and regression.",
+      "regression_evidence": "tests/test_hunter_review_orchestrator.py::test_scheduled_trusted_collector_recovery_uses_exact_attempt_artifacts",
+      "verification": "Existing regression target executed in focused suite; negative mutation per finding not yet demonstrated."
+    },
+    {
+      "id": "PRH-100",
+      "title": "Cover pull request review triggers in status grant filtering",
+      "discussion_id": null,
+      "status": "candidate-regression-linked",
+      "root_cause": "Review description documents the failure mode; root-cause classification requires verification against the relevant implementation and regression.",
+      "regression_evidence": "tests/test_hunter_review_orchestrator.py::test_candidate_status_spoofing_mutation_is_rejected",
+      "verification": "Existing regression target executed in focused suite; negative mutation per finding not yet demonstrated."
+    },
+    {
+      "id": "PRH-101",
+      "title": "Reject workflows without an explicit safe permission baseline",
+      "discussion_id": null,
+      "status": "candidate-regression-linked",
+      "root_cause": "Review description documents the failure mode; root-cause classification requires verification against the relevant implementation and regression.",
+      "regression_evidence": "tests/test_hunter_review_orchestrator.py::test_candidate_missing_explicit_permission_baseline_is_rejected",
+      "verification": "Existing regression target executed in focused suite; negative mutation per finding not yet demonstrated."
+    },
+    {
+      "id": "PRH-102",
+      "title": "Recovery misses older runs and repeatedly downloads processed artifacts",
+      "discussion_id": "4235462212",
+      "status": "candidate-regression-linked",
+      "root_cause": "Review description documents the failure mode; root-cause classification requires verification against the relevant implementation and regression.",
+      "regression_evidence": "tests/test_hunter_review_orchestrator.py::test_scheduled_trusted_collector_recovery_uses_exact_attempt_artifacts",
+      "verification": "Existing regression target executed in focused suite; negative mutation per finding not yet demonstrated."
+    },
+    {
+      "id": "PRH-103",
+      "title": "Resolved threads do not trigger immediate readiness refresh",
+      "discussion_id": null,
+      "status": "recorded-needs-regression",
+      "root_cause": "Review description documents the failure mode; root-cause classification requires verification against the relevant implementation and regression.",
+      "regression_evidence": null,
+      "verification": "No independently verified targeted regression yet."
+    },
+    {
+      "id": "PRH-104",
+      "title": "Dispatch-proof status URL ignores GitHub Enterprise server host",
+      "discussion_id": null,
+      "status": "candidate-regression-linked",
+      "root_cause": "Review description documents the failure mode; root-cause classification requires verification against the relevant implementation and regression.",
+      "regression_evidence": "tests/test_hunter_review_orchestrator.py::test_dispatch_identity_and_timestamp_are_durable_before_dispatch",
+      "verification": "Existing regression target executed in focused suite; negative mutation per finding not yet demonstrated."
+    },
+    {
+      "id": "PRH-105",
+      "title": "First-claimant check ignores runs beyond newest 50",
+      "discussion_id": "4235504961",
+      "status": "candidate-regression-linked",
+      "root_cause": "Review description documents the failure mode; root-cause classification requires verification against the relevant implementation and regression.",
+      "regression_evidence": "tests/test_hunter_review_orchestrator.py::test_trusted_completion_rejects_replayed_proof_on_another_run",
+      "verification": "Existing regression target executed in focused suite; negative mutation per finding not yet demonstrated."
+    },
+    {
+      "id": "PRH-106",
+      "title": "Unbounded artifact recovery can exhaust scheduled job time",
+      "discussion_id": "4235504987",
+      "status": "candidate-regression-linked",
+      "root_cause": "Review description documents the failure mode; root-cause classification requires verification against the relevant implementation and regression.",
+      "regression_evidence": "tests/test_hunter_review_orchestrator.py::test_scheduled_trusted_collector_recovery_uses_exact_attempt_artifacts",
+      "verification": "Existing regression target executed in focused suite; negative mutation per finding not yet demonstrated."
+    },
+    {
+      "id": "PRH-107",
+      "title": "Unauthenticated status can incorrectly skip recovery",
+      "discussion_id": "4235505006",
+      "status": "candidate-regression-linked",
+      "root_cause": "Review description documents the failure mode; root-cause classification requires verification against the relevant implementation and regression.",
+      "regression_evidence": "tests/test_hunter_review_orchestrator.py::test_read_collector_completion_rejects_untrusted_or_wrong_head_run",
+      "verification": "Existing regression target executed in focused suite; negative mutation per finding not yet demonstrated."
+    },
+    {
+      "id": "PRH-108",
+      "title": "Duplicate untrusted status prevents trusted completion publication",
+      "discussion_id": null,
+      "status": "candidate-regression-linked",
+      "root_cause": "Review description documents the failure mode; root-cause classification requires verification against the relevant implementation and regression.",
+      "regression_evidence": "tests/test_hunter_review_orchestrator.py::test_trusted_collector_completion_dispatch_capability",
+      "verification": "Existing regression target executed in focused suite; negative mutation per finding not yet demonstrated."
+    },
+    {
+      "id": "PRH-109",
+      "title": "Paginate statuses to avoid missing dispatch proofs",
+      "discussion_id": null,
+      "status": "candidate-regression-linked",
+      "root_cause": "Review description documents the failure mode; root-cause classification requires verification against the relevant implementation and regression.",
+      "regression_evidence": "tests/test_hunter_review_orchestrator.py::test_commit_status_pagination_keeps_old_trusted_dispatch_proof",
+      "verification": "Existing regression target executed in focused suite; negative mutation per finding not yet demonstrated."
+    },
+    {
+      "id": "PRH-110",
+      "title": "Paginate commit status checks before consuming recovery capacity",
+      "discussion_id": null,
+      "status": "candidate-regression-linked",
+      "root_cause": "Review description documents the failure mode; root-cause classification requires verification against the relevant implementation and regression.",
+      "regression_evidence": "tests/test_hunter_review_orchestrator.py::test_scheduled_trusted_collector_recovery_uses_exact_attempt_artifacts",
+      "verification": "Existing regression target executed in focused suite; negative mutation per finding not yet demonstrated."
+    },
+    {
+      "id": "PRH-111",
+      "title": "Verify trusted claimant ownership before rejecting collector completion",
+      "discussion_id": null,
+      "status": "candidate-regression-linked",
+      "root_cause": "Review description documents the failure mode; root-cause classification requires verification against the relevant implementation and regression.",
+      "regression_evidence": "tests/test_hunter_review_orchestrator.py::test_untrusted_earlier_claimant_cannot_block_valid_collector",
+      "verification": "Existing regression target executed in focused suite; negative mutation per finding not yet demonstrated."
+    },
+    {
+      "id": "PRH-112",
+      "title": "Avoid SIGPIPE from early-closing paginated status search",
+      "discussion_id": null,
+      "status": "regression-tested",
+      "root_cause": "grep -q closes its upstream pipe after the first match; with pipefail, paginated gh api may terminate via SIGPIPE and the recovery check can falsely report no completion.",
+      "regression_evidence": "tests/test_hunter_review_orchestrator.py::test_scheduled_recovery_status_search_does_not_short_circuit_paginated_api",
+      "verification": "Regression asserts current pipeline consumes the full status stream and rejects the earlier grep -q form; mutation test checks rejection."
+    }
+  ],
+  "regression_links": 33,
+  "unverified": 42,
+  "verified_regressions": 1
+}

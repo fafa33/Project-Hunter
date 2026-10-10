@@ -7,6 +7,7 @@ import hashlib
 import json
 import os
 import re
+import secrets
 import sys
 from collections.abc import Iterable
 from dataclasses import dataclass
@@ -25,6 +26,7 @@ TRUSTED_STATUS_CREATOR = "github-actions[bot]"
 ROOT = Path(__file__).resolve().parents[1]
 POLICY_PATH = ROOT / "docs" / "CODE_WRITE_POLICY.json"
 COLLECTOR_WORKFLOW = "hunter-reviewer-collector.yml"
+DISPATCH_PROOF_CONTEXT_PREFIX = "Hunter Collector Dispatch Proof / PR #"
 TRUSTED_WORKFLOWS = frozenset(
     {
         ".github/workflows/hunter-governance-review.yml",
@@ -403,6 +405,22 @@ def request_json(
     )
 
 
+def _all_commit_statuses(repository: str, token: str, head_sha: str) -> list[dict[str, Any]]:
+    """Read the full creator-bearing status history; never lose old proofs."""
+    base = f"commits/{head_sha}/statuses?per_page=100"
+    page = 1
+    collected: list[dict[str, Any]] = []
+    while True:
+        path = base if page == 1 else f"{base}&page={page}"
+        batch = request_json(repository, token, "GET", path)
+        if not isinstance(batch, list):
+            raise ValueError("commit status history unavailable")
+        collected.extend(status for status in batch if isinstance(status, dict))
+        if len(batch) < 100:
+            return collected
+        page += 1
+
+
 def _run_id(target_url: str) -> int | None:
     path = urlparse(target_url).path.rstrip("/").split("/")
     if len(path) < 3 or path[-2] != "runs" or not path[-1].isdigit():
@@ -483,7 +501,7 @@ def read_cycle(
     # check in `_parse_cycle` stand on its own. Only the latest statuses are
     # listed, and the context, description, digest, generation and cited run are
     # all still re-verified below and in `_parse_cycle`.
-    listed = request_json(repository, token, "GET", f"commits/{head_sha}/statuses?per_page=100")
+    listed = _all_commit_statuses(repository, token, head_sha)
     statuses = listed if isinstance(listed, list) else []
     repository_info = request_json(repository, token, "GET", "")
     default_branch = str((repository_info or {}).get("default_branch") or "main")
@@ -505,7 +523,7 @@ def read_cycle(
         collector_terminal = (
             run_path == COLLECTOR_WORKFLOW_PATH
             and cycle.state in COLLECTOR_PUBLISHABLE_STATES
-            and str(run.get("event") or "") == "workflow_dispatch"
+            and str(run.get("event") or "") in {"workflow_dispatch", "repository_dispatch"}
         )
         if run_path not in TRUSTED_WORKFLOWS and not collector_terminal:
             continue
@@ -529,11 +547,214 @@ def publish_collector_completion(repository: str, token: str, pr_number: int, he
     )
 
 
+def publish_trusted_collector_completion(repository: str, token: str, run_id: int, proof: str = "") -> str:
+    """Only a trusted default-branch reconcile may attest a finished collector.
+
+    Never trust candidate-supplied PR/head, workflow titles without API provenance,
+    or a dispatch run on a non-default branch.
+    """
+    run = request_json(repository, token, "GET", f"actions/runs/{run_id}")
+    if not isinstance(run, dict):
+        raise ValueError("collector run is unavailable")
+    info = request_json(repository, token, "GET", "")
+    branch = str((info or {}).get("default_branch") or "main")
+    if not (
+        run.get("id") == run_id
+        and run.get("path") == COLLECTOR_WORKFLOW_PATH
+        and run.get("event") == "repository_dispatch"
+        and run.get("head_branch") == branch
+        and run.get("status") == "completed"
+        and run.get("conclusion") == "success"
+    ):
+        raise ValueError("collector run lacks trusted successful default-branch provenance")
+    # A default-branch name alone is not provenance after a force push.
+    revision = str(run.get("head_sha") or "")
+    tip = request_json(repository, token, "GET", f"commits/{branch}")
+    tip_sha = str((tip or {}).get("sha") or "")
+    if not re.fullmatch(r"[0-9a-f]{40}", revision) or not re.fullmatch(r"[0-9a-f]{40}", tip_sha):
+        return "SKIPPED: trusted default-branch revision unavailable"
+    if revision != tip_sha:
+        comparison = request_json(repository, token, "GET", f"compare/{revision}...{tip_sha}")
+        if not isinstance(comparison, dict) or comparison.get("status") not in {"ahead", "identical"}:
+            return "SKIPPED: collector revision is no longer on trusted main"
+    title = str(run.get("display_title") or "")
+    match = re.fullmatch(r"Hunter Reviewer Collector PR ([1-9][0-9]*) HEAD ([0-9a-f]{40})(?: GEN ([^\s]+))?", title)
+    if match is None:
+        raise ValueError("collector run title lacks exact PR/head identity")
+    pr_number, head_sha = int(match.group(1)), match.group(2)
+    pr = request_json(repository, token, "GET", f"pulls/{pr_number}")
+    if (
+        not isinstance(pr, dict)
+        or pr.get("state") != "open"
+        or str((pr.get("head") or {}).get("sha") or "") != head_sha
+    ):
+        return "SKIPPED: collector candidate head superseded"
+    # The collector run's title is only a correlation hint, never dispatch
+    # authority. The trusted orchestrator must have committed an exact-cycle
+    # WAITING status before dispatch, identifying its own trusted run.
+    state, cycle, _error = read_cycle(repository, token, pr_number, head_sha)
+    if state != "present" or cycle is None or cycle.state not in OPEN_CYCLE_STATES:
+        return "SKIPPED: no authorized open collector cycle"
+    if cycle.generation_id != (match.group(3) or BASE_GENERATION_ID):
+        return "SKIPPED: collector generation differs from authorized cycle"
+    if cycle.trigger_id is None or cycle.trigger_id == run_id:
+        return "SKIPPED: trusted orchestrator dispatch identity unavailable"
+    origin = request_json(repository, token, "GET", f"actions/runs/{cycle.trigger_id}")
+    if not isinstance(origin, dict) or not (
+        origin.get("id") == cycle.trigger_id
+        and origin.get("head_branch") == branch
+        and origin.get("path") == ".github/workflows/hunter-governance-reconcile.yml"
+        and origin.get("event") in {"push", "workflow_run", "pull_request_target", "schedule", "repository_dispatch"}
+    ):
+        return "SKIPPED: dispatch origin is not trusted governance reconciliation"
+    if not re.fullmatch(r"[0-9a-f]{64}", proof):
+        return "SKIPPED: missing collector dispatch capability"
+    statuses = _all_commit_statuses(repository, token, head_sha)
+    expected_context = f"{DISPATCH_PROOF_CONTEXT_PREFIX}{pr_number}"
+    expected_description = f"{cycle.generation_id}|{hashlib.sha256(proof.encode()).hexdigest()}"
+    authorized = (
+        any(
+            isinstance(status, dict)
+            and status.get("context") == expected_context
+            and status.get("description") == expected_description
+            and str((status.get("creator") or {}).get("login") or "") == TRUSTED_STATUS_CREATOR
+            and _run_id(str(status.get("target_url") or "")) == cycle.trigger_id
+            for status in statuses
+            if isinstance(statuses, list)
+        )
+        if isinstance(statuses, list)
+        else False
+    )
+    if not authorized:
+        return "SKIPPED: no trusted exact-cycle dispatch capability"
+    # A nonce is readable from a completed run's artifact. It must not authorize
+    # a *different* run: the first run created after issuance for this exact
+    # cycle is the sole claimant; subsequent manual dispatches cannot replay it.
+    proof_statuses = [
+        status
+        for status in statuses
+        if isinstance(status, dict)
+        and status.get("context") == expected_context
+        and status.get("description") == expected_description
+        and _run_id(str(status.get("target_url") or "")) == cycle.trigger_id
+        and str((status.get("creator") or {}).get("login") or "") == TRUSTED_STATUS_CREATOR
+    ]
+    issued_at = str(proof_statuses[0].get("created_at") or "") if len(proof_statuses) == 1 else ""
+    created_at = str(run.get("created_at") or "")
+    if not issued_at or not created_at or created_at < issued_at:
+        return "SKIPPED: collector run predates unique dispatch proof"
+    if read_atomic_collector_owner(repository, token, pr_number, head_sha, cycle.generation_id, proof) != run_id:
+        return "SKIPPED: collector run does not own the atomic dispatch claim"
+    publish_collector_completion(repository, token, pr_number, head_sha, run_id)
+    return f"PUBLISHED: collector completion PR #{pr_number} at {head_sha[:12]}"
+
+
+def collector_claim_ref(pr_number: int, head_sha: str, generation: str, proof: str) -> str:
+    """One immutable ref per authorized dispatch, not per cycle.
+
+    Each dispatch gets a unique proof, and the claim ref is bound to that
+    proof. This ensures:
+    - Each dispatch gets its own atomic claim
+    - Retries of the same dispatch (same proof) use the same claim ref
+    - Different dispatches (different proofs) for the same cycle get different claim refs
+    - A failed dispatch's claim can be retried by a new run with the same proof
+    """
+    digest = hashlib.sha256(f"{pr_number}:{head_sha}:{generation}:{proof}".encode()).hexdigest()
+    return f"tags/hunter-collector-claim/{digest}"
+
+
+def read_atomic_collector_owner(
+    repository: str, token: str, pr_number: int, head_sha: str, generation: str, proof: str
+) -> int | None:
+    """Read the winning annotated tag; never infer ownership from run titles."""
+    claim_ref = collector_claim_ref(pr_number, head_sha, generation, proof)
+    try:
+        ref = request_json(repository, token, "GET", f"git/ref/{claim_ref}")
+    except transport.GitHubRequestError as exc:
+        if exc.status_code == 404 and exc.category == "permanent":
+            return None
+        raise
+    if not isinstance(ref, dict) or not isinstance(ref.get("object"), dict):
+        return None
+    obj = ref["object"]
+    if obj.get("type") != "tag" or not re.fullmatch(r"[0-9a-f]{40}", str(obj.get("sha") or "")):
+        return None
+    tag = request_json(repository, token, "GET", f"git/tags/{obj['sha']}")
+    if not isinstance(tag, dict) or tag.get("tag") != claim_ref.removeprefix("tags/"):
+        return None
+    message = str(tag.get("message") or "")
+    match = re.fullmatch(r"hunter-collector-run-id=([1-9][0-9]*)", message.strip())
+    return int(match.group(1)) if match else None
+
+
+def _find_dispatch_proof_status(
+    repository: str, token: str, pr_number: int, head_sha: str, generation_id: str
+) -> dict[str, Any] | None:
+    """Find an existing dispatch proof status for the exact cycle.
+
+    Returns the status if a dispatch proof was already issued for this
+    PR/head/generation by the trusted orchestrator, None otherwise.
+    """
+    statuses = _all_commit_statuses(repository, token, head_sha)
+    if not isinstance(statuses, list):
+        return None
+    context = f"{DISPATCH_PROOF_CONTEXT_PREFIX}{pr_number}"
+    for status in statuses:
+        if not isinstance(status, dict):
+            continue
+        if status.get("context") != context:
+            continue
+        if str((status.get("creator") or {}).get("login") or "") != TRUSTED_STATUS_CREATOR:
+            continue
+        description = str(status.get("description") or "")
+        # Description format: "generation_id|proof_hash"
+        if not description.startswith(f"{generation_id}|"):
+            continue
+        # Valid dispatch proof status found
+        return status
+    return None
+
+
+def unique_collector_claimant(repository: str, token: str, title: str, issued_at: str) -> int | None:
+    """Fail closed unless exactly one run claims this issuance across all pages.
+
+    Run titles are not authority: callers must independently validate the
+    dispatch capability and origin. Ambiguity denies both runs, not a race win.
+    """
+    claimant_ids: set[int] = set()
+    page = 1
+    while True:
+        payload = request_json(
+            repository,
+            token,
+            "GET",
+            f"actions/workflows/{COLLECTOR_WORKFLOW}/runs?event=repository_dispatch&per_page=100&page={page}",
+        )
+        if not isinstance(payload, dict) or not isinstance(payload.get("workflow_runs"), list):
+            raise ValueError("collector claimant history unavailable")
+        batch = payload["workflow_runs"]
+        for candidate in batch:
+            if (
+                isinstance(candidate, dict)
+                and candidate.get("path") == COLLECTOR_WORKFLOW_PATH
+                and _run_title(candidate) == title
+                and candidate.get("event") == "repository_dispatch"
+                and str(candidate.get("created_at") or "") >= issued_at
+            ):
+                candidate_id = int(candidate.get("id") or 0)
+                if candidate_id > 0:
+                    claimant_ids.add(candidate_id)
+        if len(batch) < 100:
+            break
+        page += 1
+    return next(iter(claimant_ids)) if len(claimant_ids) == 1 else None
+
+
 def read_collector_completion(
     repository: str, token: str, pr_number: int, head_sha: str
 ) -> tuple[str, int | None, str | None]:
     try:
-        statuses = request_json(repository, token, "GET", f"commits/{head_sha}/statuses?per_page=100")
+        statuses = _all_commit_statuses(repository, token, head_sha)
         if not isinstance(statuses, list):
             return "absent", None, "collector status payload is malformed"
         repository_info = request_json(repository, token, "GET", "")
@@ -565,7 +786,7 @@ def read_collector_completion(
                 and run.get("head_branch") == default_branch
                 and revision_trusted
                 and run.get("path") == COLLECTOR_WORKFLOW_PATH
-                and run.get("event") == "workflow_dispatch"
+                and run.get("event") == "repository_dispatch"
                 and run.get("status") == "completed"
                 and run.get("conclusion") == "success"
             ):
@@ -582,22 +803,43 @@ def reviewer_pool_config_digest() -> str:
     return hashlib.sha256(encoded).hexdigest()
 
 
-def current_run_id() -> int | None:
+def current_run_id() -> int:
     raw = os.environ.get("GITHUB_RUN_ID") or ""
-    return int(raw) if raw.isdigit() and int(raw) > 0 else None
+    if not raw.isdigit() or int(raw) <= 0:
+        raise ValueError("GITHUB_RUN_ID is not available or invalid")
+    return int(raw)
 
 
 def dispatch_collector(
     repository: str, token: str, pr_number: int, head_sha: str, generation_id: str = BASE_GENERATION_ID
 ) -> None:
+    nonce = secrets.token_hex(32)
+    run_id = current_run_id()
     request_json(
         repository,
         token,
         "POST",
-        f"actions/workflows/{COLLECTOR_WORKFLOW}/dispatches",
+        f"statuses/{head_sha}",
         {
-            "ref": "main",
-            "inputs": {"pr_number": str(pr_number), "head_sha": head_sha, "generation_id": generation_id},
+            "state": "pending",
+            "context": f"{DISPATCH_PROOF_CONTEXT_PREFIX}{pr_number}",
+            "description": f"{generation_id}|{hashlib.sha256(nonce.encode()).hexdigest()}",
+            "target_url": f"{os.environ.get('GITHUB_SERVER_URL') or 'https://github.com'}/{repository}/actions/runs/{run_id}",
+        },
+    )
+    request_json(
+        repository,
+        token,
+        "POST",
+        "dispatches",
+        {
+            "event_type": "hunter-reviewer-collect",
+            "client_payload": {
+                "pr_number": str(pr_number),
+                "head_sha": head_sha,
+                "generation_id": generation_id,
+                "dispatch_proof": nonce,
+            },
         },
     )
 
@@ -620,7 +862,7 @@ def collector_run_name(pr_number: int, head_sha: str, generation_id: str = BASE_
 
 def _collector_workflow_runs(repository: str, token: str) -> list[dict[str, Any]]:
     payload = request_json(
-        repository, token, "GET", f"actions/workflows/{COLLECTOR_WORKFLOW}/runs?event=workflow_dispatch&per_page=50"
+        repository, token, "GET", f"actions/workflows/{COLLECTOR_WORKFLOW}/runs?event=repository_dispatch&per_page=50"
     )
     runs = payload.get("workflow_runs", []) if isinstance(payload, dict) else []
     return [run for run in runs if isinstance(run, dict) and str(run.get("path") or "") == COLLECTOR_WORKFLOW_PATH]
@@ -1021,11 +1263,20 @@ def read_collector_receipt(path: Path) -> tuple[Any, str]:
 
 
 def finalize_exhausted_pool(
-    repository: str, token: str, pr_number: int, head_sha: str, run_id: int, results_path: Path
+    repository: str,
+    token: str,
+    pr_number: int,
+    head_sha: str,
+    run_id: int,
+    results_path: Path,
+    *,
+    trusted_completion: bool = False,
+    expected_attempt: int | None = None,
 ) -> str:
     """Publish ``REVIEWER_UNAVAILABLE`` for an exact head whose collector proved no reviewer gave a review.
 
-    Runs inside the trusted collector's own ``collector-complete`` step, so it does not depend on any later wake-up:
+    Runs through trusted default-branch reconcile after validating collector run identity,
+    exact attempt, dispatch proof and receipt; it does not depend on a later wake-up:
     the ``workflow_run`` edge from a dispatched collector to reconcile was never delivered in 17 of 17 recorded
     completions. It only ever *ends* an open opportunity as a non-blocking, authority-free state. It never dispatches,
     never mints review authority and never touches a cycle that is already terminal, superseded, for another
@@ -1034,11 +1285,13 @@ def finalize_exhausted_pool(
 
     if not re.fullmatch("[0-9a-f]{40}", head_sha):
         return "SKIPPED: exact head is not a full SHA"
-    if current_run_id() != run_id:
+    if not trusted_completion and current_run_id() != run_id:
         return "SKIPPED: the completing run is not this process's run"
     receipt, unreadable = read_collector_receipt(results_path)
     if receipt is None:
         return f"SKIPPED: {unreadable}"
+    if expected_attempt is not None and receipt.get("run_attempt") != expected_attempt:
+        return "SKIPPED: receipt does not match completed run attempt"
     readiness = review_request_state(repository, token, pr_number, head_sha)
     if not readiness.ready:
         return f"SKIPPED: review request not usable ({readiness.reason})"
@@ -1214,6 +1467,29 @@ def ensure_collector(
             f"collector correlation evidence unavailable for PR #{pr_number} at {head_sha[:10]}; "
             f"refusing to risk a duplicate dispatch: {exc}"
         ) from exc
+
+    # Prevent duplicate dispatches by checking for an existing dispatch proof
+    # status for this exact cycle. The dispatch proof status is the authoritative
+    # record that a dispatch was issued for this PR/head/generation. If one
+    # already exists, another reconcile must not issue a second dispatch.
+    existing_proof = _find_dispatch_proof_status(repository, token, pr_number, head_sha, generation_id)
+    if existing_proof is not None:
+        # A dispatch was already issued for this cycle. Update the cycle's
+        # trigger_id to the existing dispatch's run ID if it differs, and return
+        # the existing cycle state.
+        existing_trigger_id = _run_id(str(existing_proof.get("target_url") or ""))
+        cycle = ReviewCycle(
+            pr_number=pr_number,
+            head_sha=head_sha,
+            state="WAITING_FOR_REVIEWER",
+            provider_id="",
+            trigger_id=existing_trigger_id or run_id,
+            started_at=datetime.now(UTC).strftime("%Y-%m-%dT%H:%M:%SZ"),
+            config_digest=digest,
+            generation_id=generation_id,
+        )
+        publish_cycle(repository, token, head_sha, cycle=cycle)
+        return cycle
 
     # Persist the dispatch identity and liveness timestamp *before* dispatch.
     # This status is the durable idempotency record: if GitHub accepts the
@@ -1484,6 +1760,9 @@ def parser() -> argparse.ArgumentParser:
     complete.add_argument("--pr", type=int, required=True)
     complete.add_argument("--head", required=True)
     complete.add_argument("--run-id", type=int, required=True)
+    trusted = sub.add_parser("trusted-collector-complete")
+    trusted.add_argument("--repository", required=True)
+    trusted.add_argument("--run-id", type=int, required=True)
     return result
 
 
@@ -1491,7 +1770,35 @@ def main() -> int:
     args = parser().parse_args()
     token = os.environ.get("GITHUB_TOKEN") or os.environ.get("GH_TOKEN") or ""
     try:
-        if args.command == "collector-complete":
+        if args.command == "trusted-collector-complete":
+            # The trusted workflow fixes the artifact directory. No CLI path
+            # can select an arbitrary file to read under a privileged token.
+            receipt_dir = Path(os.environ["RUNNER_TEMP"]) / "collector-receipt"
+            receipt = receipt_dir / "reviewer-results.json"
+            proof_path = receipt_dir / "collector-dispatch-proof.txt"
+            proof = proof_path.read_text(encoding="utf-8").strip()
+            outcome = publish_trusted_collector_completion(args.repository, token, args.run_id, proof)
+            print(outcome)
+            if outcome.startswith("PUBLISHED:"):
+                run = request_json(args.repository, token, "GET", f"actions/runs/{args.run_id}")
+                match = re.fullmatch(
+                    r"Hunter Reviewer Collector PR ([1-9][0-9]*) HEAD ([0-9a-f]{40})(?: GEN ([^\s]+))?",
+                    str(run.get("display_title") or ""),
+                )
+                if match is not None:
+                    print(
+                        finalize_exhausted_pool(
+                            args.repository,
+                            token,
+                            int(match.group(1)),
+                            match.group(2),
+                            args.run_id,
+                            receipt,
+                            trusted_completion=True,
+                            expected_attempt=int(run["run_attempt"]),
+                        )
+                    )
+        elif args.command == "collector-complete":
             publish_collector_completion(args.repository, token, args.pr, args.head, args.run_id)
             # Best effort and fail closed: the completion marker above is already durable, and an unusable receipt
             # leaves the cycle open for the reconcile backstop rather than failing a collector that did its job.

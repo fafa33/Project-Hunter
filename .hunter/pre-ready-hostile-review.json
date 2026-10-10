@@ -2,39 +2,15 @@
   "claims": {
     "acceptance_criteria": [
       {
-        "criterion": "Single trusted 1800-second exact-head advisory deadline",
-        "evidence": "AUTHOR CLAIM: shared deadline not implemented in this PR.",
-        "id": "AC-1",
+        "criterion": "Build focused, fail-closed pre-push validation that detects stale/omitted changed-file review_target evidence, workflow trigger contract regressions, and SPM/DPM selector failures before publication.",
+        "evidence": "AUTHOR CLAIM: overall M2 acceptance remains incomplete; existing patch closes candidate-controlled status publication and adds structural regression tests. Independent reviewer must evaluate scope.",
+        "id": "M2-1",
         "verdict": "not-applicable"
       },
       {
-        "criterion": "Collector dispatch budgets, cancellation, and late-writer safety",
-        "evidence": "AUTHOR CLAIM: comprehensive cancellation and CAS not implemented.",
-        "id": "AC-2",
-        "verdict": "not-applicable"
-      },
-      {
-        "criterion": "Publish honest nonblocking REVIEW_TIMED_OUT at deadline",
-        "evidence": "AUTHOR CLAIM: completed correlated successful collector settles stale pending to REVIEW_TIMED_OUT; independent verification required.",
-        "id": "AC-3",
-        "verdict": "satisfied"
-      },
-      {
-        "criterion": "Immediate reconciliation and idempotent exact-head generation semantics",
-        "evidence": "AUTHOR CLAIM: re-read before publication added, atomic CAS and complete event integration not established.",
-        "id": "AC-4",
-        "verdict": "not-applicable"
-      },
-      {
-        "criterion": "Focused boundary, collector, late evidence, and hosted canary tests",
-        "evidence": "AUTHOR CLAIM: 107 focused tests passed; complete deadline boundary and hosted canary not yet demonstrated.",
-        "id": "AC-5",
-        "verdict": "not-applicable"
-      },
-      {
-        "criterion": "Preserve owner merge approval and independent advisory reviews",
-        "evidence": "AUTHOR CLAIM: no merge action or required gate weakening in this change; independent reviewer must verify.",
-        "id": "AC-6",
+        "criterion": "Prevent candidate-controlled workflow status publication",
+        "evidence": "AUTHOR CLAIM: .github/workflows/hunter-governance-review.yml moved to pull_request_target and removed workflow_dispatch; tests/test_hunter_review_orchestrator.py covers candidate push, PR, dispatch and job grants. Independent review required.",
+        "id": "M2-2",
         "verdict": "satisfied"
       }
     ],
@@ -52,87 +28,207 @@
       "transaction-snapshot-consistency"
     ],
     "base_ref": "main",
-    "base_sha": "d1130e539592a8e1fa2b2c5b220a2ce3b1ab4914",
+    "base_sha": "dd01add9f856525151c2084532969c9402d95f81",
     "defect_families": [
       {
-        "evidence": "AUTHOR CLAIM: exact-head orchestration and recovery applicability reviewed; independent reviewer must verify relevant invariants and regression coverage.",
+        "evidence": "AUTHOR CLAIM ONLY: mapped historical family requires independent verification against this exact M2 change set.",
         "family": "DFF-42",
         "outcome": "clear"
       },
       {
-        "evidence": "AUTHOR CLAIM: exact-head orchestration and recovery applicability reviewed; independent reviewer must verify relevant invariants and regression coverage.",
+        "evidence": "AUTHOR CLAIM ONLY: mapped historical family requires independent verification against this exact M2 change set.",
         "family": "DFF-43",
         "outcome": "clear"
       },
       {
-        "evidence": "AUTHOR CLAIM: exact-head orchestration and recovery applicability reviewed; independent reviewer must verify relevant invariants and regression coverage.",
+        "evidence": "AUTHOR CLAIM ONLY: mapped historical family requires independent verification against this exact M2 change set.",
         "family": "DFF-44",
         "outcome": "clear"
       }
     ],
     "findings": [],
-    "issue": "583",
+    "issue": "591",
     "review_target": [
       {
-        "blob_sha": "e37e2eb3b0d8480126031c41f4564392abf447e9",
-        "path": ".github/workflows/hunter-canonicalization-auto.yml",
+        "blob_sha": "7f5cd4f4433e9d56c6598422c82b6168ae373f95",
+        "path": "docs/PR592_COPILOT_FINDING_LEDGER.json",
         "previous_path": "",
-        "status": "modified"
+        "status": "added"
       },
       {
-        "blob_sha": "886a003a67a2d4526bf9009330a3ddc8b3bb86d8",
+        "blob_sha": "85a5273bd13bfd319c1d0f3a1df04f1bc2fe2c68",
+        "path": "tests/test_collector_dispatch_adversarial.py",
+        "previous_path": "",
+        "status": "added"
+      },
+      {
+        "blob_sha": "8f8631c962e3b9f0ad09917973a11d36dfa86c3c",
         "path": ".github/workflows/hunter-governance-reconcile.yml",
         "previous_path": "",
         "status": "modified"
       },
       {
-        "blob_sha": "67cfdc29b24815ffb6d58379aa5afdc1b347bcfc",
-        "path": ".github/workflows/hunter-knowledge-learning.yml",
+        "blob_sha": "95efc84021c5f07b60286dc484665b86cdf18048",
+        "path": ".github/workflows/hunter-governance-review.yml",
         "previous_path": "",
         "status": "modified"
       },
       {
-        "blob_sha": "bee342c12b5065d4ba4d623a53e2cc5b7d467de0",
+        "blob_sha": "7617b9d6fc1b3579122dcac451d362d5cfff4047",
+        "path": ".github/workflows/hunter-issue-agent-issuer-deploy.yml",
+        "previous_path": "",
+        "status": "modified"
+      },
+      {
+        "blob_sha": "e6d308fb3612cb1d46bd75b234f96c9f20fb18da",
+        "path": ".github/workflows/hunter-issue-agent-reconcile.yml",
+        "previous_path": "",
+        "status": "modified"
+      },
+      {
+        "blob_sha": "fcae7f9b268f719d58c276ff1e29059175f892a5",
         "path": ".github/workflows/hunter-merge-readiness.yml",
         "previous_path": "",
         "status": "modified"
       },
       {
-        "blob_sha": "d6caaac491ac8b52edd8de8fb80a893ed10c9d39",
+        "blob_sha": "37fe6b0340784dc5dec5b4841896a220bf6ff34e",
+        "path": ".github/workflows/hunter-reviewer-collector.yml",
+        "previous_path": "",
+        "status": "modified"
+      },
+      {
+        "blob_sha": "e0908c1a1c3e7593af0dcaed7204d1afd3c0acdb",
+        "path": ".github/workflows/hunter-trusted-orchestrator-replay-validate.yml",
+        "previous_path": "",
+        "status": "modified"
+      },
+      {
+        "blob_sha": "50b92e43fb55b6647e16fe9d1b7230774de47ca2",
+        "path": "build_backend/project_hunter_build.py",
+        "previous_path": "",
+        "status": "modified"
+      },
+      {
+        "blob_sha": "ce572ed94dbe6f4a77dd275a84eac04b73ac6258",
+        "path": "docs/ARCHITECTURE_AUDITS/HUNTER_FAST_MERGE_M1.md",
+        "previous_path": "",
+        "status": "modified"
+      },
+      {
+        "blob_sha": "8b47386a50c3f621991857b9d5638297435ede27",
+        "path": "docs/DEFECT_PREVENTION_LIFECYCLE.json",
+        "previous_path": "",
+        "status": "modified"
+      },
+      {
+        "blob_sha": "951d09dcc106d3db7fe04dd7340f11ec7c6b7b24",
+        "path": "docs/DEFECT_REGISTRY.json",
+        "previous_path": "",
+        "status": "modified"
+      },
+      {
+        "blob_sha": "98432652da92d5ac62daf1b57203e271138c896a",
+        "path": "docs/HUNTER_GOVERNANCE_REVIEW.md",
+        "previous_path": "",
+        "status": "modified"
+      },
+      {
+        "blob_sha": "2e8fa6fcb567bb626145aff7dc657dfe8ed5ec30",
+        "path": "scripts/hunter_defect_prevention_preflight.py",
+        "previous_path": "",
+        "status": "modified"
+      },
+      {
+        "blob_sha": "41c66b58f630245e639f7729e63f44796119e78a",
+        "path": "scripts/hunter_issue_agent_lifecycle.py",
+        "previous_path": "",
+        "status": "modified"
+      },
+      {
+        "blob_sha": "d33e5bec892cb3ab91bcabb8d8c21ea68de940b6",
         "path": "scripts/hunter_review_orchestrator.py",
         "previous_path": "",
         "status": "modified"
       },
       {
-        "blob_sha": "7638f7de183472ce5e8b6b1f25a4aeade0da9de2",
-        "path": "tests/test_hunter_governance_review_v2.py",
+        "blob_sha": "d2b08e9b8d7b43f13cf8709885e19604b83d90f3",
+        "path": "scripts/hunter_reviewer_collector.py",
         "previous_path": "",
         "status": "modified"
       },
       {
-        "blob_sha": "74e54adbc95a0c672220079e4dffe07e5a7e8abb",
-        "path": "tests/test_hunter_governance_revision.py",
+        "blob_sha": "a556cb9167cb5aa10251f8cff5059ae2ca09cab7",
+        "path": "src/hunter/automation/issue_agent_replacement_executor.py",
         "previous_path": "",
         "status": "modified"
       },
       {
-        "blob_sha": "05ef48c710a79fdcb7370e56e53a1f50faf66a7f",
-        "path": "tests/test_hunter_knowledge_learning_workflow.py",
+        "blob_sha": "4b3159beef677e944afea4235f3011acd6be4f2c",
+        "path": "src/hunter/evidence_intelligence/source_handling_persistence.py",
         "previous_path": "",
         "status": "modified"
       },
       {
-        "blob_sha": "2c06d860a3767ec8c2645fd87c13f17e858bc279",
+        "blob_sha": "88b694f4ea1fd0bc1868791e03f426964d2f9b66",
+        "path": "src/hunter/persistence/sql/repositories/base.py",
+        "previous_path": "",
+        "status": "modified"
+      },
+      {
+        "blob_sha": "e39d353880bfa8e18fe98d0a9fafffb4669e738f",
+        "path": "src/hunter/persistence/sql/session.py",
+        "previous_path": "",
+        "status": "modified"
+      },
+      {
+        "blob_sha": "dbcd26fc8d1124014d82bc705e8efaa970f14458",
+        "path": "tests/test_hunter_governance_cleanup.py",
+        "previous_path": "",
+        "status": "modified"
+      },
+      {
+        "blob_sha": "6ea90931dba023a8e566c0ad41a8925b78f65a21",
         "path": "tests/test_hunter_review_orchestrator.py",
+        "previous_path": "",
+        "status": "modified"
+      },
+      {
+        "blob_sha": "180e45a23e0f8025a92c47734b9e8ae252309d80",
+        "path": "tests/test_hunter_reviewer_collector.py",
+        "previous_path": "",
+        "status": "modified"
+      },
+      {
+        "blob_sha": "fc2c4497b59f9ab0c8221135c542fd1f5fb8abae",
+        "path": "tests/test_issue_agent_workflows.py",
+        "previous_path": "",
+        "status": "modified"
+      },
+      {
+        "blob_sha": "6cd1a4f4732d3621c62b110181fe3a29d79fdc47",
+        "path": "tests/test_review_after_remediation_generation.py",
+        "previous_path": "",
+        "status": "modified"
+      },
+      {
+        "blob_sha": "097ad852505d187b2d1ee7f1451538a697c8218a",
+        "path": "tests/test_review_orchestrator_collector_finalization.py",
+        "previous_path": "",
+        "status": "modified"
+      },
+      {
+        "blob_sha": "3a58b9206fdef1d6d014d9815d38d4e696017454",
+        "path": "tests/test_source_handling_production_runtime.py",
         "previous_path": "",
         "status": "modified"
       }
     ],
-    "review_target_digest": "09503465702032f6cb5b260aad20b6f966acae14eba25aac3b08354971291a1f"
+    "review_target_digest": "37a1f55fdfb89e5d4925d25045e2e2332c37d2b5e7be06acd48b7193ce85b122"
   },
-  "review_id": "fbe48775f55a45f496e38ea5ce408551b34b46a107339b6c1d1c2b2da2465628",
+  "review_id": "a8e18c24c9421713c882840dd19aa398d0163622dd63365524b1a2f5a7c23b7c",
   "review_request": {
-    "claims_id": "fbe48775f55a45f496e38ea5ce408551b34b46a107339b6c1d1c2b2da2465628",
+    "claims_id": "a8e18c24c9421713c882840dd19aa398d0163622dd63365524b1a2f5a7c23b7c",
     "schema": "hunter.review-request.v1"
   },
   "schema": "hunter.pre-ready-hostile-review.v1"

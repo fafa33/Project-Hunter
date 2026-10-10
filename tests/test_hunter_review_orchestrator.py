@@ -100,6 +100,7 @@ def test_ready_review_request_dispatches_collector_once(monkeypatch):
         lambda *_args: stored.update(dispatches=stored["dispatches"] + 1),
         raising=False,
     )
+    monkeypatch.setattr(orchestrator, "request_json", lambda *_args, **_kwargs: [], raising=False)
 
     first = orchestrator.ensure_collector("owner/repo", "token", 472, HEAD)
     second = orchestrator.ensure_collector("owner/repo", "token", 472, HEAD)
@@ -127,8 +128,11 @@ def _absent_cycle_with_recorded_dispatches(monkeypatch) -> dict:
     monkeypatch.setattr(orchestrator, "dispatch_collector", dispatch_collector, raising=False)
 
     def request_json(_repository, _token, _method, path, _payload=None):
-        assert path.startswith(f"actions/workflows/{orchestrator.COLLECTOR_WORKFLOW}/runs")
-        return {"workflow_runs": runs}
+        if path.startswith(f"actions/workflows/{orchestrator.COLLECTOR_WORKFLOW}/runs"):
+            return {"workflow_runs": runs}
+        if path.startswith("commits/") and "/statuses" in path:
+            return []
+        raise AssertionError(f"unexpected path: {path}")
 
     monkeypatch.setattr(orchestrator, "request_json", request_json)
 
@@ -478,9 +482,11 @@ def _ensure_harness(monkeypatch, cycle, runs):
     )
 
     def request_json(_repository, _token, _method, path, _payload=None):
-        if not path.startswith(f"actions/workflows/{orchestrator.COLLECTOR_WORKFLOW}/runs"):
-            pytest.fail(f"unexpected request {path}")
-        return {"workflow_runs": runs}
+        if path.startswith(f"actions/workflows/{orchestrator.COLLECTOR_WORKFLOW}/runs"):
+            return {"workflow_runs": runs}
+        if path.startswith("commits/") and "/statuses" in path:
+            return []
+        pytest.fail(f"unexpected request {path}")
 
     monkeypatch.setattr(orchestrator, "request_json", request_json)
     return stored
@@ -583,6 +589,7 @@ def test_absent_cycle_read_does_not_duplicate_an_already_active_correlated_colle
     monkeypatch.setattr(orchestrator, "read_cycle", lambda *_args: ("absent", None, None))
     monkeypatch.setattr(orchestrator, "reviewer_pool_config_digest", lambda: "d" * 64, raising=False)
     monkeypatch.setattr(orchestrator, "current_run_id", lambda: 999, raising=False)
+    monkeypatch.setattr(orchestrator, "request_json", lambda *_args, **_kwargs: [], raising=False)
     published = []
     monkeypatch.setattr(orchestrator, "publish_cycle", lambda *_args, cycle: published.append(cycle), raising=False)
     dispatches = []
@@ -606,6 +613,7 @@ def test_absent_cycle_read_does_not_duplicate_an_already_successful_correlated_c
     monkeypatch.setattr(orchestrator, "read_cycle", lambda *_args: ("absent", None, None))
     monkeypatch.setattr(orchestrator, "reviewer_pool_config_digest", lambda: "d" * 64, raising=False)
     monkeypatch.setattr(orchestrator, "current_run_id", lambda: 999, raising=False)
+    monkeypatch.setattr(orchestrator, "request_json", lambda *_args, **_kwargs: [], raising=False)
     monkeypatch.setattr(orchestrator, "publish_cycle", lambda *_args, cycle: None, raising=False)
     dispatches = []
     monkeypatch.setattr(orchestrator, "dispatch_collector", lambda *_args: dispatches.append(_args), raising=False)
@@ -622,6 +630,7 @@ def test_absent_cycle_read_still_dispatches_when_no_correlated_collector_exists(
     monkeypatch.setattr(orchestrator, "read_cycle", lambda *_args: ("absent", None, None))
     monkeypatch.setattr(orchestrator, "reviewer_pool_config_digest", lambda: "d" * 64, raising=False)
     monkeypatch.setattr(orchestrator, "current_run_id", lambda: 999, raising=False)
+    monkeypatch.setattr(orchestrator, "request_json", lambda *_args, **_kwargs: [], raising=False)
     monkeypatch.setattr(orchestrator, "publish_cycle", lambda *_args, cycle: None, raising=False)
     dispatches = []
     monkeypatch.setattr(orchestrator, "dispatch_collector", lambda *_args: dispatches.append(_args), raising=False)
@@ -676,9 +685,12 @@ def _render_run_name(template: str, generation_id: str) -> str:
 
     suffix = f" GEN {generation_id}" if generation_id else ""
     return (
-        template.replace("${{ inputs.pr_number }}", "472")
-        .replace("${{ inputs.head_sha }}", HEAD)
-        .replace("${{ inputs.generation_id && format(' GEN {0}', inputs.generation_id) || '' }}", suffix)
+        template.replace("${{ github.event.client_payload.pr_number }}", "472")
+        .replace("${{ github.event.client_payload.head_sha }}", HEAD)
+        .replace(
+            "${{ github.event.client_payload.generation_id && format(' GEN {0}', github.event.client_payload.generation_id) || '' }}",
+            suffix,
+        )
     )
 
 
@@ -697,16 +709,24 @@ def test_dispatch_collector_sends_only_exact_identity(monkeypatch):
         "request_json",
         lambda repository, token, method, path, payload=None: seen.append((method, path, payload)),
     )
+    monkeypatch.setenv("GITHUB_RUN_ID", "123")
 
     orchestrator.dispatch_collector("owner/repo", "token", 472, HEAD)
 
-    assert seen == [
-        (
-            "POST",
-            "actions/workflows/hunter-reviewer-collector.yml/dispatches",
-            {"ref": "main", "inputs": {"pr_number": "472", "head_sha": HEAD, "generation_id": ""}},
-        )
-    ]
+    assert len(seen) == 2
+    method, path, status = seen[0]
+    assert method == "POST" and path == f"statuses/{HEAD}"
+    assert status["context"] == "Hunter Collector Dispatch Proof / PR #472"
+    method, path, dispatch = seen[1]
+    assert method == "POST" and path == "dispatches"
+    assert dispatch["event_type"] == "hunter-reviewer-collect"
+    assert dispatch["client_payload"]["pr_number"] == "472"
+    assert dispatch["client_payload"]["head_sha"] == HEAD
+    assert dispatch["client_payload"]["generation_id"] == ""
+    assert (
+        status["description"]
+        == "|" + orchestrator.hashlib.sha256(dispatch["client_payload"]["dispatch_proof"].encode()).hexdigest()
+    )
 
 
 def _workflow_documents():
@@ -717,6 +737,8 @@ def _workflow_documents():
 
 def _permission_blocks(document):
     blocks = [document.get("permissions")]
+    if blocks[0] is None:
+        return ["missing-workflow-permissions"]
     jobs = document.get("jobs")
     if isinstance(jobs, dict):
         blocks.extend(job.get("permissions") for job in jobs.values() if isinstance(job, dict))
@@ -736,6 +758,8 @@ def _actions_levels(document):
     a guard that the longer one fails.
     """
     blocks = [document.get("permissions")]
+    if blocks[0] is None:
+        yield "missing-workflow-permissions"
     jobs = document.get("jobs")
     if isinstance(jobs, dict):
         blocks.extend(job.get("permissions") for job in jobs.values() if isinstance(job, dict))
@@ -769,7 +793,7 @@ def test_no_pull_request_reachable_workflow_can_drive_other_workflows():
         for path, document in _workflow_documents()
         if isinstance(document, dict)
         and "pull_request" in _triggers(document)
-        and any(level in WORKFLOW_DRIVING for level in _actions_levels(document))
+        and any(level in WORKFLOW_DRIVING | {"missing-workflow-permissions"} for level in _actions_levels(document))
     ]
     assert privileged == []
 
@@ -801,7 +825,7 @@ def test_candidate_controlled_triggers_are_read_from_every_declaration_shape(sou
         ({"actions": " write "}, ["write"]),
         ({"contents": "read"}, []),
         ({}, []),
-        (None, []),
+        (None, ["missing-workflow-permissions"]),
         # Blanket declarations grant every scope, `actions` included.
         ("write-all", ["write"]),
         ("read-all", ["read"]),
@@ -856,7 +880,10 @@ def test_governance_review_workflow_keeps_only_read_access_to_actions():
 
     path = pathlib.Path(REPOSITORY_ROOT, ".github/workflows/hunter-governance-review.yml")
     document = yaml.safe_load(path.read_text(encoding="utf-8"))
-    assert "pull_request" in _triggers(document)
+    assert "pull_request" not in _triggers(document)
+    assert "pull_request_target" in _triggers(document)
+    assert "workflow_dispatch" not in _triggers(document)
+    assert document["permissions"]["statuses"] == "write"
     blocks = _permission_blocks(document)
     assert blocks and all(str(block.get("actions", "read")).strip() == "read" for block in blocks)
     assert "python scripts/hunter_review_orchestrator.py" not in path.read_text(encoding="utf-8")
@@ -1234,6 +1261,7 @@ def _collector_harness(monkeypatch):
     )
     monkeypatch.setattr(orchestrator, "reviewer_pool_config_digest", lambda: "d" * 64, raising=False)
     monkeypatch.setattr(orchestrator, "current_run_id", lambda: 555, raising=False)
+    monkeypatch.setattr(orchestrator, "_all_commit_statuses", lambda *_args, **_kwargs: [], raising=False)
     monkeypatch.setattr(orchestrator, "publish_cycle", lambda *_args, cycle: stored.update(cycle=cycle), raising=False)
     monkeypatch.setattr(orchestrator, "collector_liveness", lambda *_args: ("missing", 0), raising=False)
     monkeypatch.setattr(
@@ -1502,7 +1530,7 @@ def test_read_collector_completion_rejects_untrusted_or_wrong_head_run(monkeypat
                 "head_branch": "main",
                 "head_sha": "b" * 40,
                 "path": ".github/workflows/hunter-reviewer-collector.yml",
-                "event": "workflow_dispatch",
+                "event": "repository_dispatch",
                 "status": "completed",
                 "conclusion": "success",
             }
@@ -1592,24 +1620,211 @@ def test_collector_completion_pr_derivation_yields_nothing_for_malformed_or_fore
     assert _extract_collector_pr_numbers("Hunter Reviewer Collector PR HEAD " + "e" * 40) == ""
 
 
-def test_collector_workflow_publishes_completion_from_its_own_trusted_inputs():
-    """Completion must reconcile the exact PR/head the collector was dispatched
-    for, derived only from its own dispatch inputs -- never from workflow_run
-    metadata, and never re-guessed or parsed after the fact."""
-
+def test_collector_completion_is_published_only_by_trusted_reconcile():
     document = yaml.safe_load(COLLECTOR_WORKFLOW_FILE.read_text(encoding="utf-8"))
-    assert document["permissions"]["statuses"] == "write"
-    steps = document["jobs"]["collect"]["steps"]
-    completion = next(step for step in steps if step.get("name") == "Publish collector completion")
+    assert document["permissions"].get("statuses") != "write"
+    assert all(step.get("name") != "Publish collector completion" for step in document["jobs"]["collect"]["steps"])
+    trusted = yaml.safe_load(
+        (REPOSITORY_ROOT / ".github/workflows/hunter-governance-reconcile.yml").read_text(encoding="utf-8")
+    )
+    assert "workflow_dispatch" not in _triggers(trusted)
+    steps = trusted["jobs"]["reconcile"]["steps"]
+    publisher = next(step for step in steps if step.get("name") == "Publish trusted collector completion")
+    assert "trusted-collector-complete" in str(publisher["run"])
+    assert "github.event.workflow_run.id" in str(publisher["env"])
 
-    assert completion.get("if") == "success()"
-    run = str(completion["run"])
-    assert "collector-complete" in run
-    assert '--pr "$PR_NUMBER"' in run
-    assert '--head "$CANDIDATE_HEAD"' in run
-    env = completion.get("env", {})
-    assert env.get("PR_NUMBER") == "${{ inputs.pr_number }}"
-    assert env.get("CANDIDATE_HEAD") == "${{ inputs.head_sha }}"
+
+@pytest.mark.parametrize(
+    "override", ["wrong_branch", "wrong_path", "failed", "wrong_event", "wrong_title", "wrong_head"]
+)
+def test_trusted_collector_completion_rejects_untrusted_run(monkeypatch, override):
+    run = {
+        "id": 777,
+        "path": orchestrator.COLLECTOR_WORKFLOW_PATH,
+        "event": "repository_dispatch",
+        "head_branch": "main",
+        "status": "completed",
+        "conclusion": "success",
+        "display_title": f"Hunter Reviewer Collector PR 472 HEAD {HEAD}",
+        "head_sha": HEAD,
+        "created_at": "2026-10-09T19:01:00Z",
+    }
+    pr = {"state": "open", "head": {"sha": HEAD}}
+    if override == "wrong_branch":
+        run["head_branch"] = "candidate"
+    elif override == "wrong_path":
+        run["path"] = ".github/workflows/evil.yml"
+    elif override == "failed":
+        run["conclusion"] = "failure"
+    elif override == "wrong_event":
+        run["event"] = "pull_request"
+    elif override == "wrong_title":
+        run["display_title"] = "spoofed"
+    elif override == "wrong_head":
+        pr["head"]["sha"] = "f" * 40
+    published = []
+
+    def request(_repository, _token, _method, path, _payload=None):
+        if path == "actions/runs/777":
+            return run
+        if path == "":
+            return {"default_branch": "main"}
+        if path == "commits/main":
+            return {"sha": HEAD}
+        if path == "pulls/472":
+            return pr
+        raise AssertionError(path)
+
+    monkeypatch.setattr(orchestrator, "request_json", request)
+    monkeypatch.setattr(orchestrator, "publish_collector_completion", lambda *args: published.append(args))
+    if override == "wrong_head":
+        assert "SKIPPED" in orchestrator.publish_trusted_collector_completion("owner/repo", "token", 777)
+    else:
+        with pytest.raises(ValueError):
+            orchestrator.publish_trusted_collector_completion("owner/repo", "token", 777)
+    assert not published
+
+
+def _trusted_collector_fixture(run, *, first_run=None):
+    """Shared trusted API responses for positive and adversarial dispatch tests."""
+    origin = {
+        "id": 123,
+        "head_branch": "main",
+        "path": ".github/workflows/hunter-governance-reconcile.yml",
+        "event": "schedule",
+    }
+    status = {
+        "context": "Hunter Collector Dispatch Proof / PR #472",
+        "description": "|" + orchestrator.hashlib.sha256(("a" * 64).encode()).hexdigest(),
+        "creator": {"login": "github-actions[bot]"},
+        "target_url": "https://github.com/owner/repo/actions/runs/123",
+        "created_at": "2026-10-09T19:00:00Z",
+    }
+    cycle = orchestrator.ReviewCycle(
+        472,
+        HEAD,
+        "WAITING_FOR_REVIEWER",
+        "",
+        123,
+        "2026-10-09T19:00:00Z",
+        "digest",
+        orchestrator.BASE_GENERATION_ID,
+    )
+    responses = {
+        f"actions/runs/{run['id']}": run,
+        "actions/runs/123": origin,
+        "": {"default_branch": "main"},
+        "commits/main": {"sha": HEAD},
+        "pulls/472": {"state": "open", "head": {"sha": HEAD}},
+        f"commits/{HEAD}/statuses?per_page=100": [status],
+    }
+
+    runs = [first_run, run] if first_run is not None else [run]
+    for item in runs:
+        item.setdefault("path", orchestrator.COLLECTOR_WORKFLOW_PATH)
+
+    def request(_repo, _token, _method, path, _payload=None):
+        if path == (
+            f"actions/workflows/{orchestrator.COLLECTOR_WORKFLOW}/runs?" "event=repository_dispatch&per_page=100&page=1"
+        ):
+            return {"workflow_runs": runs}
+        return responses[path]
+
+    return request, cycle, runs
+
+
+@pytest.mark.parametrize("capability,accepted", [("a", True), ("b", False)])
+def test_trusted_collector_completion_dispatch_capability(monkeypatch, capability, accepted):
+    run = {
+        "id": 777,
+        "path": orchestrator.COLLECTOR_WORKFLOW_PATH,
+        "event": "repository_dispatch",
+        "head_branch": "main",
+        "head_sha": HEAD,
+        "status": "completed",
+        "conclusion": "success",
+        "display_title": f"Hunter Reviewer Collector PR 472 HEAD {HEAD}",
+        "created_at": "2026-10-09T19:01:00Z",
+    }
+    request, cycle, runs = _trusted_collector_fixture(run)
+    published = []
+    monkeypatch.setattr(orchestrator, "request_json", request)
+    monkeypatch.setattr(orchestrator, "read_cycle", lambda *_: ("present", cycle, None))
+    monkeypatch.setattr(orchestrator, "collector_runs", lambda *_: runs)
+    monkeypatch.setattr(orchestrator, "publish_collector_completion", lambda *args: published.append(args))
+    monkeypatch.setattr(orchestrator, "read_atomic_collector_owner", lambda *_: 777)
+    result = orchestrator.publish_trusted_collector_completion("owner/repo", "token", 777, capability * 64)
+    assert result.startswith("PUBLISHED:") if accepted else "SKIPPED" in result
+    assert bool(published) == accepted
+    if accepted:
+        assert published == [("owner/repo", "token", 472, HEAD, 777)]
+
+
+def test_trusted_completion_rejects_replayed_proof_on_another_run(monkeypatch):
+    original = {
+        "id": 777,
+        "created_at": "2026-10-09T19:01:00Z",
+        "display_title": f"Hunter Reviewer Collector PR 472 HEAD {HEAD}",
+        "head_branch": "main",
+        "status": "completed",
+        "conclusion": "success",
+    }
+    replay = dict(
+        original,
+        id=778,
+        created_at="2026-10-09T19:02:00Z",
+        path=orchestrator.COLLECTOR_WORKFLOW_PATH,
+        event="repository_dispatch",
+        head_branch="main",
+        head_sha=HEAD,
+        status="completed",
+        conclusion="success",
+    )
+    request, cycle, runs = _trusted_collector_fixture(replay, first_run=original)
+    published = []
+    monkeypatch.setattr(orchestrator, "request_json", request)
+    monkeypatch.setattr(orchestrator, "read_cycle", lambda *_: ("present", cycle, None))
+    monkeypatch.setattr(orchestrator, "collector_runs", lambda *_: runs)
+    monkeypatch.setattr(orchestrator, "publish_collector_completion", lambda *args: published.append(args))
+    monkeypatch.setattr(orchestrator, "read_atomic_collector_owner", lambda *_: 777)
+    assert "SKIPPED" in orchestrator.publish_trusted_collector_completion("owner/repo", "token", 778, "a" * 64)
+    assert not published
+
+
+def test_trusted_completion_rejects_unreachable_main_revision(monkeypatch):
+    run = {
+        "id": 777,
+        "path": orchestrator.COLLECTOR_WORKFLOW_PATH,
+        "event": "repository_dispatch",
+        "head_branch": "main",
+        "head_sha": "b" * 40,
+        "status": "completed",
+        "conclusion": "success",
+    }
+
+    def request(_repo, _token, _method, path, _payload=None):
+        return {
+            "actions/runs/777": run,
+            "": {"default_branch": "main"},
+            "commits/main": {"sha": "c" * 40},
+            "compare/" + "b" * 40 + "..." + "c" * 40: {"status": "diverged"},
+        }[path]
+
+    monkeypatch.setattr(orchestrator, "request_json", request)
+    assert "SKIPPED" in orchestrator.publish_trusted_collector_completion("owner/repo", "token", 777)
+
+
+def test_collector_artifacts_keep_receipt_and_proof_separate():
+    workflow = yaml.safe_load(COLLECTOR_WORKFLOW_FILE.read_text(encoding="utf-8"))
+    uploads = [
+        step["with"]
+        for step in workflow["jobs"]["collect"]["steps"]
+        if step.get("uses", "").startswith("actions/upload-artifact@")
+    ]
+    assert len(uploads) == 2
+    assert any(item["path"] == "reviewer-results.json" for item in uploads)
+    assert any(item["path"] == "collector-dispatch-proof.txt" for item in uploads)
+    assert all("github.run_attempt" in item["name"] for item in uploads)
 
 
 def test_collector_completion_accepts_trusted_ancestor_of_current_main(monkeypatch):
@@ -1636,7 +1851,7 @@ def test_collector_completion_accepts_trusted_ancestor_of_current_main(monkeypat
                 "head_branch": "main",
                 "head_sha": old_main,
                 "path": ".github/workflows/hunter-reviewer-collector.yml",
-                "event": "workflow_dispatch",
+                "event": "repository_dispatch",
                 "status": "completed",
                 "conclusion": "success",
             }
@@ -1695,6 +1910,7 @@ def test_dispatch_identity_and_timestamp_are_durable_before_dispatch(monkeypatch
     monkeypatch.setattr(orchestrator, "read_cycle", lambda *_args: ("absent", None, None))
     monkeypatch.setattr(orchestrator, "reviewer_pool_config_digest", lambda: "d" * 64)
     monkeypatch.setattr(orchestrator, "current_run_id", lambda: 777)
+    monkeypatch.setattr(orchestrator, "_all_commit_statuses", lambda *_args, **_kwargs: [], raising=False)
     monkeypatch.setattr(orchestrator, "publish_cycle", lambda *_args, cycle: published.append(cycle))
     monkeypatch.setattr(orchestrator, "collector_liveness", lambda *_args: ("missing", 0))
 
@@ -1836,10 +2052,10 @@ def test_read_cycle_reads_the_status_list_endpoint():
     import inspect
 
     source = inspect.getsource(orchestrator.read_cycle)
-    assert "commits/{head_sha}/statuses?per_page=100" in source
+    assert "_all_commit_statuses(repository, token, head_sha)" in source
     assert 'f"commits/{head_sha}/status"' not in source
     # Only the list endpoint, so the publisher is actually populated.
-    assert source.count("commits/{head_sha}") == 1
+    assert "commits/{head_sha}/statuses?per_page=100" in inspect.getsource(orchestrator._all_commit_statuses)
 
 
 def test_trusted_creator_cycle_is_accepted():
@@ -2050,3 +2266,254 @@ def test_duplicate_collector_appearing_at_terminal_boundary_blocks_timeout(monke
     result = orchestrator.ensure_collector("owner/repo", "token", 472, HEAD)
     assert result.state == "WAITING_FOR_REVIEWER"
     assert stored["published"] == []
+
+
+def _candidate_status_publishers(document):
+    """Candidate-owned workflow definitions must never receive status/check write authority."""
+    if not isinstance(document, dict):
+        return []
+    triggers = _triggers(document)
+    push = document.get("on", document.get(True))
+    push = push.get("push") if isinstance(push, dict) else None
+    main_only_push = (
+        isinstance(push, dict)
+        and push.get("branches") == ["main"]
+        and not push.get("branches-ignore")
+        and not push.get("tags")
+    )
+    if (
+        not ({"pull_request", "pull_request_review", "pull_request_review_comment"} & set(triggers))
+        and not ("push" in triggers and not main_only_push)
+        and "workflow_dispatch" not in triggers
+    ):
+        return []
+    blocks = [document.get("permissions")]
+    if blocks[0] is None:
+        return ["missing-workflow-permissions"]
+    jobs = document.get("jobs")
+    if isinstance(jobs, dict):
+        blocks.extend(job.get("permissions") for job in jobs.values() if isinstance(job, dict))
+    unsafe = []
+    for block in blocks:
+        if isinstance(block, str) and block.strip() == "write-all":
+            unsafe.append("write-all")
+        elif isinstance(block, dict):
+            unsafe.extend(key for key in ("statuses", "checks") if str(block.get(key, "")).strip() in WORKFLOW_DRIVING)
+    return unsafe
+
+
+def test_candidate_workflows_cannot_publish_protected_commit_statuses():
+    unsafe = [(path.name, _candidate_status_publishers(document)) for path, document in _workflow_documents()]
+    assert [(name, grants) for name, grants in unsafe if grants] == []
+
+
+@pytest.mark.parametrize(
+    "trigger",
+    [
+        "on: pull_request",
+        "on: pull_request_review",
+        "on: pull_request_review_comment",
+        "on: [push, pull_request]",
+        '"on": {pull_request: null}',
+        "on: push",
+        "on: {push: {branches-ignore: [main]}}",
+        "on: workflow_dispatch",
+    ],
+)
+@pytest.mark.parametrize(
+    "grant", ["permissions: {statuses: write}", "permissions: {checks: write}", "permissions: write-all"]
+)
+def test_candidate_status_spoofing_mutation_is_rejected(trigger, grant):
+    assert _candidate_status_publishers(yaml.safe_load(f"{trigger}\n{grant}\n"))
+
+
+@pytest.mark.parametrize("scope", ["statuses", "checks"])
+def test_job_override_cannot_publish_protected_status(scope):
+    document = yaml.safe_load(
+        f"on: pull_request\npermissions: {{{scope}: read}}\njobs:\n  spoof:\n    permissions: {{{scope}: write}}\n"
+    )
+    assert _candidate_status_publishers(document) == [scope]
+
+
+def test_job_write_all_cannot_publish_protected_status():
+    document = yaml.safe_load(
+        "on: pull_request\npermissions: {contents: read}\njobs:\n  spoof:\n    permissions: write-all\n"
+    )
+    assert _candidate_status_publishers(document) == ["write-all"]
+
+
+def test_candidate_missing_explicit_permission_baseline_is_rejected():
+    document = yaml.safe_load("on: pull_request\njobs:\n  build:\n    runs-on: ubuntu-latest\n")
+    assert _candidate_status_publishers(document) == ["missing-workflow-permissions"]
+
+
+def test_main_only_push_is_trusted():
+    document = yaml.safe_load("on: {push: {branches: [main]}}\npermissions: {statuses: write}\n")
+    assert _candidate_status_publishers(document) == []
+
+
+def test_scheduled_trusted_collector_recovery_uses_exact_attempt_artifacts():
+    from pathlib import Path
+
+    workflow = yaml.safe_load(
+        (Path(__file__).resolve().parents[1] / ".github/workflows/hunter-governance-reconcile.yml").read_text()
+    )
+    step = next(
+        item
+        for item in workflow["jobs"]["reconcile"]["steps"]
+        if item.get("name") == "Publish trusted collector completion"
+    )
+    assert "github.event_name == 'schedule'" in step["if"]
+    script = step["run"]
+    assert "status=completed&per_page=100" in script
+    assert "collector_run_id=$run_id" not in script
+    assert "commits/$head/statuses" not in script
+    assert "recovery_deadline" in script
+    assert "recovered < 5" in script
+    assert "pulls/$pr" in script
+    assert "run_attempt" in script
+    assert "hunter-reviewer-results-*-${attempt}" in script
+    assert "hunter-dispatch-proof-*-${attempt}" in script
+    assert "trusted-collector-complete" in script
+    assert 'rm -rf "$receipt"' in script
+    assert 'find "$receipt/results" -type f' in script
+    assert 'find "$receipt/proof" -type f' in script
+
+
+def test_commit_status_pagination_keeps_old_trusted_dispatch_proof(monkeypatch):
+    calls = []
+    proof = {
+        "context": "Hunter Collector Dispatch Proof / PR #472",
+        "creator": {"login": "github-actions[bot]"},
+        "id": 7,
+    }
+
+    def request(_repo, _token, _method, path, _payload=None):
+        calls.append(path)
+        if path.endswith("page=100"):
+            return [{"id": n} for n in range(100)]
+        if path.endswith("page=2"):
+            return [proof]
+        raise AssertionError(path)
+
+    monkeypatch.setattr(orchestrator, "request_json", request)
+    statuses = orchestrator._all_commit_statuses("owner/repo", "token", HEAD)
+    assert len(statuses) == 101
+    assert proof in statuses
+    assert len(calls) == 2
+
+
+@pytest.mark.parametrize(
+    "override",
+    [
+        {"head_branch": "attacker"},
+        {"status": "completed", "conclusion": "failure"},
+    ],
+)
+def test_untrusted_earlier_claimant_cannot_block_valid_collector(monkeypatch, override):
+    valid = {
+        "id": 778,
+        "created_at": "2026-10-09T19:02:00Z",
+        "display_title": f"Hunter Reviewer Collector PR 472 HEAD {HEAD}",
+        "path": orchestrator.COLLECTOR_WORKFLOW_PATH,
+        "event": "repository_dispatch",
+        "head_branch": "main",
+        "head_sha": HEAD,
+        "status": "completed",
+        "conclusion": "success",
+    }
+    earlier = dict(valid, id=777, created_at="2026-10-09T19:01:00Z", **override)
+    request, cycle, _runs = _trusted_collector_fixture(valid, first_run=earlier)
+    published = []
+    monkeypatch.setattr(orchestrator, "request_json", request)
+    monkeypatch.setattr(orchestrator, "read_cycle", lambda *_: ("present", cycle, None))
+    monkeypatch.setattr(orchestrator, "publish_collector_completion", lambda *args: published.append(args))
+    monkeypatch.setattr(orchestrator, "read_atomic_collector_owner", lambda *_: 778)
+    result = orchestrator.publish_trusted_collector_completion("owner/repo", "token", 778, "a" * 64)
+    assert result.startswith("PUBLISHED:")
+    assert len(published) == 1
+
+
+def test_scheduled_recovery_never_skips_receipts_on_status_alone():
+    """PR592: a public success status cannot bypass proof validation."""
+    from pathlib import Path
+
+    workflow = (Path(__file__).resolve().parents[1] / ".github/workflows/hunter-governance-reconcile.yml").read_text()
+    assert "commits/$head/statuses?per_page=100" not in workflow
+    assert 'gh run download "$run_id"' in workflow
+    assert "trusted-collector-complete" in workflow
+
+
+def test_prh112_regression_no_status_skip_pipeline_to_sigpipe():
+    from pathlib import Path
+
+    workflow = (Path(__file__).resolve().parents[1] / ".github/workflows/hunter-governance-reconcile.yml").read_text()
+    assert "| grep -qE '^[0-9]+$'" not in workflow
+    assert "commits/$head/statuses?per_page=100" not in workflow
+
+
+def test_pr592_defect_registry_never_claims_unverified_findings_prevented():
+    """The learning ledger must not silently promote historical review titles."""
+    import json
+    from pathlib import Path
+
+    root = Path(__file__).resolve().parents[1]
+    ledger = json.loads((root / "docs/PR592_COPILOT_FINDING_LEDGER.json").read_text())
+    registry = json.loads((root / "docs/DEFECT_REGISTRY.json").read_text())
+    by_id = {entry["id"]: entry for entry in registry["defects"]}
+    assert len(ledger["findings"]) == ledger["captured_findings"] == 43
+    for finding in ledger["findings"]:
+        assert finding["id"] in by_id
+        assert finding["status"] != "prevented"
+        assert finding.get("verification")
+
+
+def test_missing_workflow_permission_baseline_is_detected_in_action_guard():
+    import yaml
+
+    document = yaml.safe_load("on: pull_request\njobs: {build: {runs-on: ubuntu-latest}}\n")
+    assert "missing-workflow-permissions" in list(_actions_levels(document))
+
+
+def test_scheduled_collector_recovery_bounds_history_fetch_before_processing():
+    """An unbounded --paginate prefetch must never precede the recovery deadline."""
+    from pathlib import Path
+
+    workflow = (Path(__file__).resolve().parents[1] / ".github/workflows/hunter-governance-reconcile.yml").read_text()
+    recovery = workflow.split("- name: Recover trusted collector completion", 1)[-1]
+    assert "timeout 12s gh api" in recovery
+    assert "scanned_pages < 3" in recovery
+    assert "SECONDS < recovery_deadline" in recovery
+    assert "mapfile -t candidates" not in recovery
+    assert (
+        'gh api --paginate "repos/$GITHUB_REPOSITORY/actions/workflows/hunter-reviewer-collector.yml/runs'
+        not in recovery
+    )
+
+
+def test_privileged_recovery_uses_default_branch_dispatch_not_candidate_ref():
+    from pathlib import Path
+
+    workflows = Path(__file__).resolve().parents[1] / ".github/workflows"
+    for name in ("hunter-governance-reconcile.yml", "hunter-merge-readiness.yml"):
+        source = (workflows / name).read_text()
+        triggers = source.split("on:\n", 1)[1].split("\npermissions:", 1)[0]
+        assert "repository_dispatch:" in triggers
+        assert "hunter-trusted-recovery" in triggers
+        assert "workflow_dispatch:" not in triggers
+
+
+def test_privileged_collector_never_loads_candidate_selected_workflow():
+    from pathlib import Path
+
+    root = Path(__file__).resolve().parents[1]
+    source = (root / ".github/workflows/hunter-reviewer-collector.yml").read_text()
+    triggers = source.split("on:\n", 1)[1].split("\npermissions:", 1)[0]
+    assert "repository_dispatch:" in triggers
+    assert "hunter-reviewer-collect" in triggers
+    assert "workflow_dispatch:" not in triggers
+    assert "pull_request:" not in triggers
+    assert "pull_request_target:" not in triggers
+    orchestrator_source = (root / "scripts/hunter_review_orchestrator.py").read_text()
+    assert '"event_type": "hunter-reviewer-collect"' in orchestrator_source
+    assert '"client_payload": {' in orchestrator_source
