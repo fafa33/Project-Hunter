@@ -116,6 +116,14 @@ def test_authorized_dispatch_is_accepted(monkeypatch):
     monkeypatch.setattr(orchestrator, "request_json", lambda _r, _t, _m, path: responses[path])
     monkeypatch.setattr(orchestrator, "read_cycle", lambda *_: ("present", cycle, None))
     monkeypatch.setattr(orchestrator, "unique_collector_claimant", lambda *_: 778)
+    monkeypatch.setattr(orchestrator, "read_atomic_collector_owner", lambda *_: 778)
+    monkeypatch.setattr(
+        orchestrator,
+        "request_json",
+        lambda _r, _t, _m, path, payload=None: (
+            {"sha": "a" * 40} if path == "git/tags" else ({} if path == "git/refs" else responses[path])
+        ),
+    )
     monkeypatch.setattr(orchestrator, "_all_commit_statuses", lambda *_: [status])
     collector.verify_trusted_dispatch_before_work("owner/repo", "token", 472, HEAD, GEN, PROOF, 778)
 
@@ -140,3 +148,44 @@ def test_competing_dispatch_claimants_fail_closed(monkeypatch):
 
     monkeypatch.setattr(orchestrator, "request_json", request)
     assert orchestrator.unique_collector_claimant("owner/repo", "token", title, "2026-10-10T10:00:00Z") is None
+
+
+def test_atomic_ref_race_has_exactly_one_winner():
+    """Simulate GitHub's create-only refs under simultaneous contender writes."""
+    from concurrent.futures import ThreadPoolExecutor
+    from threading import Barrier, Lock
+
+    ref = orchestrator.collector_claim_ref(472, HEAD, GEN, PROOF)
+    assert ref == orchestrator.collector_claim_ref(472, HEAD, GEN, PROOF)
+    assert ref != orchestrator.collector_claim_ref(472, HEAD, GEN, "c" * 64)
+    barrier = Barrier(2)
+    lock = Lock()
+    refs = {}
+
+    def contender(run_id):
+        barrier.wait()
+        with lock:
+            if ref in refs:
+                return False
+            refs[ref] = run_id
+            return True
+
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        outcomes = list(pool.map(contender, (778, 779)))
+    assert outcomes.count(True) == 1
+    assert len(refs) == 1
+
+
+def test_atomic_owner_tag_rejects_wrong_run(monkeypatch):
+    name = orchestrator.collector_claim_ref(472, HEAD, GEN, PROOF).removeprefix("tags/")
+
+    def request(_repo, _token, _method, path):
+        if path.startswith("git/ref/"):
+            return {"object": {"type": "tag", "sha": "a" * 40}}
+        if path.startswith("git/tags/"):
+            return {"tag": name, "message": "hunter-collector-run-id=778"}
+        raise AssertionError(path)
+
+    monkeypatch.setattr(orchestrator, "request_json", request)
+    assert orchestrator.read_atomic_collector_owner("owner/repo", "token", 472, HEAD, GEN, PROOF) == 778
+    assert orchestrator.read_atomic_collector_owner("owner/repo", "token", 472, HEAD, GEN, PROOF) != 779

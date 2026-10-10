@@ -1741,6 +1741,7 @@ def test_trusted_collector_completion_dispatch_capability(monkeypatch, capabilit
     monkeypatch.setattr(orchestrator, "read_cycle", lambda *_: ("present", cycle, None))
     monkeypatch.setattr(orchestrator, "collector_runs", lambda *_: runs)
     monkeypatch.setattr(orchestrator, "publish_collector_completion", lambda *args: published.append(args))
+    monkeypatch.setattr(orchestrator, "read_atomic_collector_owner", lambda *_: 777)
     result = orchestrator.publish_trusted_collector_completion("owner/repo", "token", 777, capability * 64)
     assert result.startswith("PUBLISHED:") if accepted else "SKIPPED" in result
     assert bool(published) == accepted
@@ -2416,6 +2417,7 @@ def test_untrusted_earlier_claimant_cannot_block_valid_collector(monkeypatch, ov
     monkeypatch.setattr(orchestrator, "request_json", request)
     monkeypatch.setattr(orchestrator, "read_cycle", lambda *_: ("present", cycle, None))
     monkeypatch.setattr(orchestrator, "publish_collector_completion", lambda *args: published.append(args))
+    monkeypatch.setattr(orchestrator, "read_atomic_collector_owner", lambda *_: 778)
     result = orchestrator.publish_trusted_collector_completion("owner/repo", "token", 778, "a" * 64)
     assert result.startswith("PUBLISHED:")
     assert len(published) == 1

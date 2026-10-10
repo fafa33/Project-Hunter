@@ -2027,6 +2027,33 @@ def verify_trusted_dispatch_before_work(
     )
     if claimant != run_id:
         raise ValueError("collector dispatch claimant is ambiguous or belongs to another run")
+    # GitHub's create-ref operation is atomic: only one contender can create
+    # this exact ref. The annotated tag binds that single winner to run_id.
+    tag_name = orchestration.collector_claim_ref(pr_number, head_sha, generation, proof).removeprefix("tags/")
+    tag = orchestration.request_json(
+        repository,
+        token,
+        "POST",
+        "git/tags",
+        {
+            "tag": tag_name,
+            "message": f"hunter-collector-run-id={run_id}",
+            "object": str(run.get("head_sha") or ""),
+            "type": "commit",
+            "tagger": {
+                "name": "Hunter Collector",
+                "email": "hunter-collector@users.noreply.github.com",
+                "date": str(run.get("created_at") or ""),
+            },
+        },
+    )
+    if not isinstance(tag, dict) or not re.fullmatch(r"[0-9a-f]{40}", str(tag.get("sha") or "")):
+        raise ValueError("collector atomic ownership tag unavailable")
+    orchestration.request_json(
+        repository, token, "POST", "git/refs", {"ref": f"refs/tags/{tag_name}", "sha": tag["sha"]}
+    )
+    if orchestration.read_atomic_collector_owner(repository, token, pr_number, head_sha, generation, proof) != run_id:
+        raise ValueError("collector atomic owner does not match this run")
 
 
 def main() -> int:

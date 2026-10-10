@@ -15,7 +15,7 @@ on:
 # dispatch proof; the trusted default-branch reconcile workflow verifies the
 # run, attempt and evidence before publishing completion.
 permissions:
-  contents: read
+  contents: write # required for atomic create-only claim tag
   actions: write
   pull-requests: write
 

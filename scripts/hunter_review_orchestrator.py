@@ -672,8 +672,38 @@ def publish_trusted_collector_completion(repository: str, token: str, run_id: in
         page += 1
     if claimant_ids != {run_id}:
         return "SKIPPED: collector dispatch capability has ambiguous or competing claimants"
+    if read_atomic_collector_owner(repository, token, pr_number, head_sha, cycle.generation_id, proof) != run_id:
+        return "SKIPPED: collector run does not own the atomic dispatch claim"
     publish_collector_completion(repository, token, pr_number, head_sha, run_id)
     return f"PUBLISHED: collector completion PR #{pr_number} at {head_sha[:12]}"
+
+
+def collector_claim_ref(pr_number: int, head_sha: str, generation: str, proof: str) -> str:
+    """One immutable ref per authorized cycle/capability, not per contender."""
+    digest = hashlib.sha256(f"{pr_number}:{head_sha}:{generation}:{proof}".encode()).hexdigest()
+    return f"tags/hunter-collector-claim/{digest}"
+
+
+def read_atomic_collector_owner(
+    repository: str, token: str, pr_number: int, head_sha: str, generation: str, proof: str
+) -> int | None:
+    """Read the winning annotated tag; never infer ownership from run titles."""
+    ref = request_json(
+        repository, token, "GET", f"git/ref/{collector_claim_ref(pr_number, head_sha, generation, proof)}"
+    )
+    if not isinstance(ref, dict) or not isinstance(ref.get("object"), dict):
+        return None
+    obj = ref["object"]
+    if obj.get("type") != "tag" or not re.fullmatch(r"[0-9a-f]{40}", str(obj.get("sha") or "")):
+        return None
+    tag = request_json(repository, token, "GET", f"git/tags/{obj['sha']}")
+    if not isinstance(tag, dict) or tag.get("tag") != collector_claim_ref(
+        pr_number, head_sha, generation, proof
+    ).removeprefix("tags/"):
+        return None
+    message = str(tag.get("message") or "")
+    match = re.fullmatch(r"hunter-collector-run-id=([1-9][0-9]*)", message.strip())
+    return int(match.group(1)) if match else None
 
 
 def unique_collector_claimant(repository: str, token: str, title: str, issued_at: str) -> int | None:
