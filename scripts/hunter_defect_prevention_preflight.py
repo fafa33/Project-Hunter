@@ -1845,8 +1845,11 @@ def validate_review_after_remediation_boundary() -> list[str]:
     except (OSError, yaml.YAMLError) as exc:
         return [*errors, f"reviewer collector workflow is unreadable: {type(exc).__name__}: {exc}"]
     triggers = definition.get(True) if isinstance(definition, dict) else None
-    inputs = ((triggers or {}).get("workflow_dispatch") or {}).get("inputs") or {}
-    if "generation_id" not in inputs:
+    dispatch = (triggers or {}).get("repository_dispatch") or {}
+    dispatch_types = dispatch.get("types") or []
+    if "hunter-reviewer-collect" not in dispatch_types or (triggers or {}).get("workflow_dispatch"):
+        errors.append("privileged reviewer collector must use default-branch repository_dispatch only")
+    if "github.event.client_payload.generation_id" not in workflow.read_text(encoding="utf-8"):
         errors.append("the reviewer collector workflow must accept the remediation generation it is dispatched for")
     steps = [
         step

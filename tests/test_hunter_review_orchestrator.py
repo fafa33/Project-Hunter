@@ -676,9 +676,12 @@ def _render_run_name(template: str, generation_id: str) -> str:
 
     suffix = f" GEN {generation_id}" if generation_id else ""
     return (
-        template.replace("${{ inputs.pr_number }}", "472")
-        .replace("${{ inputs.head_sha }}", HEAD)
-        .replace("${{ inputs.generation_id && format(' GEN {0}', inputs.generation_id) || '' }}", suffix)
+        template.replace("${{ github.event.client_payload.pr_number }}", "472")
+        .replace("${{ github.event.client_payload.head_sha }}", HEAD)
+        .replace(
+            "${{ github.event.client_payload.generation_id && format(' GEN {0}', github.event.client_payload.generation_id) || '' }}",
+            suffix,
+        )
     )
 
 
@@ -705,14 +708,14 @@ def test_dispatch_collector_sends_only_exact_identity(monkeypatch):
     assert method == "POST" and path == f"statuses/{HEAD}"
     assert status["context"] == "Hunter Collector Dispatch Proof / PR #472"
     method, path, dispatch = seen[1]
-    assert method == "POST" and path == "actions/workflows/hunter-reviewer-collector.yml/dispatches"
-    assert dispatch["ref"] == "main"
-    assert dispatch["inputs"]["pr_number"] == "472"
-    assert dispatch["inputs"]["head_sha"] == HEAD
-    assert dispatch["inputs"]["generation_id"] == ""
+    assert method == "POST" and path == "dispatches"
+    assert dispatch["event_type"] == "hunter-reviewer-collect"
+    assert dispatch["client_payload"]["pr_number"] == "472"
+    assert dispatch["client_payload"]["head_sha"] == HEAD
+    assert dispatch["client_payload"]["generation_id"] == ""
     assert (
         status["description"]
-        == "|" + orchestrator.hashlib.sha256(dispatch["inputs"]["dispatch_proof"].encode()).hexdigest()
+        == "|" + orchestrator.hashlib.sha256(dispatch["client_payload"]["dispatch_proof"].encode()).hexdigest()
     )
 
 
@@ -1516,7 +1519,7 @@ def test_read_collector_completion_rejects_untrusted_or_wrong_head_run(monkeypat
                 "head_branch": "main",
                 "head_sha": "b" * 40,
                 "path": ".github/workflows/hunter-reviewer-collector.yml",
-                "event": "workflow_dispatch",
+                "event": "repository_dispatch",
                 "status": "completed",
                 "conclusion": "success",
             }
@@ -1627,7 +1630,7 @@ def test_trusted_collector_completion_rejects_untrusted_run(monkeypatch, overrid
     run = {
         "id": 777,
         "path": orchestrator.COLLECTOR_WORKFLOW_PATH,
-        "event": "workflow_dispatch",
+        "event": "repository_dispatch",
         "head_branch": "main",
         "status": "completed",
         "conclusion": "success",
@@ -1711,7 +1714,7 @@ def _trusted_collector_fixture(run, *, first_run=None):
 
     def request(_repo, _token, _method, path, _payload=None):
         if path == (
-            f"actions/workflows/{orchestrator.COLLECTOR_WORKFLOW}/runs?" "event=workflow_dispatch&per_page=100&page=1"
+            f"actions/workflows/{orchestrator.COLLECTOR_WORKFLOW}/runs?" "event=repository_dispatch&per_page=100&page=1"
         ):
             return {"workflow_runs": runs}
         return responses[path]
@@ -1724,7 +1727,7 @@ def test_trusted_collector_completion_dispatch_capability(monkeypatch, capabilit
     run = {
         "id": 777,
         "path": orchestrator.COLLECTOR_WORKFLOW_PATH,
-        "event": "workflow_dispatch",
+        "event": "repository_dispatch",
         "head_branch": "main",
         "head_sha": HEAD,
         "status": "completed",
@@ -1759,7 +1762,7 @@ def test_trusted_completion_rejects_replayed_proof_on_another_run(monkeypatch):
         id=778,
         created_at="2026-10-09T19:02:00Z",
         path=orchestrator.COLLECTOR_WORKFLOW_PATH,
-        event="workflow_dispatch",
+        event="repository_dispatch",
         head_branch="main",
         head_sha=HEAD,
         status="completed",
@@ -1779,7 +1782,7 @@ def test_trusted_completion_rejects_unreachable_main_revision(monkeypatch):
     run = {
         "id": 777,
         "path": orchestrator.COLLECTOR_WORKFLOW_PATH,
-        "event": "workflow_dispatch",
+        "event": "repository_dispatch",
         "head_branch": "main",
         "head_sha": "b" * 40,
         "status": "completed",
@@ -1835,7 +1838,7 @@ def test_collector_completion_accepts_trusted_ancestor_of_current_main(monkeypat
                 "head_branch": "main",
                 "head_sha": old_main,
                 "path": ".github/workflows/hunter-reviewer-collector.yml",
-                "event": "workflow_dispatch",
+                "event": "repository_dispatch",
                 "status": "completed",
                 "conclusion": "success",
             }
@@ -2401,7 +2404,7 @@ def test_untrusted_earlier_claimant_cannot_block_valid_collector(monkeypatch, ov
         "created_at": "2026-10-09T19:02:00Z",
         "display_title": f"Hunter Reviewer Collector PR 472 HEAD {HEAD}",
         "path": orchestrator.COLLECTOR_WORKFLOW_PATH,
-        "event": "workflow_dispatch",
+        "event": "repository_dispatch",
         "head_branch": "main",
         "head_sha": HEAD,
         "status": "completed",
@@ -2491,3 +2494,19 @@ def test_privileged_recovery_uses_default_branch_dispatch_not_candidate_ref():
         assert "repository_dispatch:" in triggers
         assert "hunter-trusted-recovery" in triggers
         assert "workflow_dispatch:" not in triggers
+
+
+def test_privileged_collector_never_loads_candidate_selected_workflow():
+    from pathlib import Path
+
+    root = Path(__file__).resolve().parents[1]
+    source = (root / ".github/workflows/hunter-reviewer-collector.yml").read_text()
+    triggers = source.split("on:\n", 1)[1].split("\npermissions:", 1)[0]
+    assert "repository_dispatch:" in triggers
+    assert "hunter-reviewer-collect" in triggers
+    assert "workflow_dispatch:" not in triggers
+    assert "pull_request:" not in triggers
+    assert "pull_request_target:" not in triggers
+    orchestrator_source = (root / "scripts/hunter_review_orchestrator.py").read_text()
+    assert '"event_type": "hunter-reviewer-collect"' in orchestrator_source
+    assert '"client_payload": {' in orchestrator_source

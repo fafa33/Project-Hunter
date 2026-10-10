@@ -561,7 +561,7 @@ def publish_trusted_collector_completion(repository: str, token: str, run_id: in
     if not (
         run.get("id") == run_id
         and run.get("path") == COLLECTOR_WORKFLOW_PATH
-        and run.get("event") == "workflow_dispatch"
+        and run.get("event") == "repository_dispatch"
         and run.get("head_branch") == branch
         and run.get("status") == "completed"
         and run.get("conclusion") == "success"
@@ -649,7 +649,7 @@ def publish_trusted_collector_completion(repository: str, token: str, run_id: in
             repository,
             token,
             "GET",
-            f"actions/workflows/{COLLECTOR_WORKFLOW}/runs?event=workflow_dispatch&per_page=100&page={page}",
+            f"actions/workflows/{COLLECTOR_WORKFLOW}/runs?event=repository_dispatch&per_page=100&page={page}",
         )
         if not isinstance(payload, dict) or not isinstance(payload.get("workflow_runs"), list):
             return "SKIPPED: collector claimant history unavailable"
@@ -712,7 +712,7 @@ def read_collector_completion(
                 and run.get("head_branch") == default_branch
                 and revision_trusted
                 and run.get("path") == COLLECTOR_WORKFLOW_PATH
-                and run.get("event") == "workflow_dispatch"
+                and run.get("event") == "repository_dispatch"
                 and run.get("status") == "completed"
                 and run.get("conclusion") == "success"
             ):
@@ -754,10 +754,10 @@ def dispatch_collector(
         repository,
         token,
         "POST",
-        f"actions/workflows/{COLLECTOR_WORKFLOW}/dispatches",
+        "dispatches",
         {
-            "ref": "main",
-            "inputs": {
+            "event_type": "hunter-reviewer-collect",
+            "client_payload": {
                 "pr_number": str(pr_number),
                 "head_sha": head_sha,
                 "generation_id": generation_id,
@@ -785,7 +785,7 @@ def collector_run_name(pr_number: int, head_sha: str, generation_id: str = BASE_
 
 def _collector_workflow_runs(repository: str, token: str) -> list[dict[str, Any]]:
     payload = request_json(
-        repository, token, "GET", f"actions/workflows/{COLLECTOR_WORKFLOW}/runs?event=workflow_dispatch&per_page=50"
+        repository, token, "GET", f"actions/workflows/{COLLECTOR_WORKFLOW}/runs?event=repository_dispatch&per_page=50"
     )
     runs = payload.get("workflow_runs", []) if isinstance(payload, dict) else []
     return [run for run in runs if isinstance(run, dict) and str(run.get("path") or "") == COLLECTOR_WORKFLOW_PATH]

@@ -77,7 +77,7 @@ on:
 permissions:
   actions: write
   checks: read
-  contents: read
+  contents: write # Required to issue trusted repository_dispatch from default branch
   pull-requests: read
   statuses: write
 
