@@ -50,6 +50,7 @@ jobs:
           GITHUB_TOKEN: ${{ github.token }}
           GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
           GROQ_API_KEY: ${{ secrets.GROQ_API_KEY }}
+          GITHUB_EVENT_NAME: ${{ github.event_name }}
           PR_NUMBER: ${{ github.event.client_payload.pr_number }}
           CANDIDATE_HEAD: ${{ github.event.client_payload.head_sha }}
           REMEDIATION_GENERATION: ${{ github.event.client_payload.generation_id }}

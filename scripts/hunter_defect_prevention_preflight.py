@@ -1853,8 +1853,12 @@ def validate_review_after_remediation_boundary() -> list[str]:
         dispatch = triggers["repository_dispatch"]
         if not isinstance(dispatch, dict) or dispatch.get("types") != ["hunter-reviewer-collect"]:
             errors.append("privileged reviewer collector must declare the exact trusted dispatch event list")
-    if "github.event.client_payload.generation_id" not in workflow.read_text(encoding="utf-8"):
-        errors.append("the reviewer collector workflow must accept the remediation generation it is dispatched for")
+
+    # Find the step that runs the collector script and verify it binds
+    # --generation to github.event.client_payload.generation_id.
+    # A loose text search is insufficient; the expression must appear in the
+    # same step that invokes the collector, either directly in the run command
+    # or via an env var defined in that step.
     steps = [
         step
         for job in (definition.get("jobs") or {}).values()
@@ -1862,8 +1866,26 @@ def validate_review_after_remediation_boundary() -> list[str]:
         for step in (job.get("steps") or [])
         if isinstance(step, dict)
     ]
-    if not any("--generation" in str(step.get("run") or "") for step in steps):
-        errors.append("the reviewer collector workflow must forward the remediation generation to the collector")
+    collector_steps = [step for step in steps if "hunter_reviewer_collector.py" in str(step.get("run") or "")]
+    if not collector_steps:
+        errors.append("reviewer collector workflow must contain a step that runs hunter_reviewer_collector.py")
+    else:
+        step = collector_steps[0]
+        run_cmd = str(step.get("run") or "")
+        env = step.get("env") or {}
+        # Check if --generation is passed with the generation_id expression
+        # either directly or via an env var that maps to it.
+        has_direct = "--generation" in run_cmd and "${{ github.event.client_payload.generation_id }}" in run_cmd
+        has_via_env = False
+        for var, val in env.items():
+            if var in run_cmd and str(val).strip() == "${{ github.event.client_payload.generation_id }}":
+                has_via_env = True
+                break
+        if not (has_direct or has_via_env):
+            errors.append(
+                "the reviewer collector workflow must forward the remediation generation "
+                "to the collector via --generation with github.event.client_payload.generation_id"
+            )
     return errors
 
 

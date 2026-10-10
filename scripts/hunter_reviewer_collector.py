@@ -1971,8 +1971,23 @@ def verify_trusted_dispatch_before_work(
     generation: str,
     proof: str,
     run_id: int,
+    *,
+    event: str = "repository_dispatch",
 ) -> None:
-    """Fail closed before any reviewer invocation or privileged side effect."""
+    """Fail closed before any reviewer invocation or privileged side effect.
+
+    The collector is invoked from two trusted entry points:
+    - `repository_dispatch`: must present an orchestrator-issued, exact-cycle dispatch
+      capability (single-use, bound to this run). This is the privileged path.
+    - `pull_request_target`: GitHub resolves the workflow from the base branch, so
+      the definition is trusted and no dispatch capability is required.
+
+    Any other event identity fails closed.
+    """
+    if event == "pull_request_target":
+        return
+    if event != "repository_dispatch":
+        raise ValueError("collector invoked from an untrusted event")
     if not re.fullmatch(r"[0-9a-f]{64}", proof):
         raise ValueError("missing trusted collector dispatch capability")
     run = orchestration.request_json(repository, token, "GET", f"actions/runs/{run_id}")
@@ -2085,6 +2100,7 @@ def main() -> int:
         raise ValueError("remediation generation identity is malformed")
     repository, token = os.environ["GITHUB_REPOSITORY"], os.environ["GITHUB_TOKEN"]
     run_id, run_attempt = int(os.environ["GITHUB_RUN_ID"]), int(os.environ["GITHUB_RUN_ATTEMPT"])
+    event = os.environ.get("GITHUB_EVENT_NAME", "")
     verify_trusted_dispatch_before_work(
         repository,
         token,
@@ -2093,6 +2109,7 @@ def main() -> int:
         declared_generation,
         os.environ.get("COLLECTOR_DISPATCH_PROOF", ""),
         run_id,
+        event=event,
     )
     pool, error = review.load_reviewer_pool()
     if pool is None or error:
