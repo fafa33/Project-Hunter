@@ -10,8 +10,7 @@
     "prevented"
   ],
   "legacy_status_semantics": {
-    "guarded": "detected",
-    "recorded": "recorded"
+    "guarded": "detected"
   },
   "rule": "A legacy guarded defect is detection-only unless explicit enforcement evidence upgrades it. Prevented requires local, hosted, and merge enforcement and recurrence escalation. A repository ruleset must mechanically require the canonical merge statuses before merge-enforced or prevented may be claimed.",
   "family_lifecycle_semantics": {

@@ -561,7 +561,7 @@
       "guard_boundary": "Governance workflow / collector dispatch, provenance, recovery, and review lifecycle",
       "guard": "Finding recorded; candidate regression mapping is not independently verified as prevention.",
       "test": "tests/test_hunter_review_orchestrator.py::test_candidate_workflows_cannot_publish_protected_commit_statuses",
-      "status": "recorded"
+      "status": "open"
     },
     {
       "id": "PRH-071",
@@ -571,7 +571,7 @@
       "guard_boundary": "Governance workflow / collector dispatch, provenance, recovery, and review lifecycle",
       "guard": "Finding recorded; candidate regression mapping is not independently verified as prevention.",
       "test": "tests/test_hunter_review_orchestrator.py::test_candidate_status_spoofing_mutation_is_rejected",
-      "status": "recorded"
+      "status": "open"
     },
     {
       "id": "PRH-072",
@@ -581,7 +581,7 @@
       "guard_boundary": "Governance workflow / collector dispatch, provenance, recovery, and review lifecycle",
       "guard": "Finding recorded; candidate regression mapping is not independently verified as prevention.",
       "test": "tests/test_hunter_review_orchestrator.py::test_job_override_cannot_publish_protected_status",
-      "status": "recorded"
+      "status": "open"
     },
     {
       "id": "PRH-073",
@@ -591,7 +591,7 @@
       "guard_boundary": "Governance workflow / collector dispatch, provenance, recovery, and review lifecycle",
       "guard": "Finding recorded; candidate regression mapping is not independently verified as prevention.",
       "test": "tests/test_hunter_review_orchestrator.py::test_candidate_workflows_cannot_publish_protected_commit_statuses",
-      "status": "recorded"
+      "status": "open"
     },
     {
       "id": "PRH-074",
@@ -601,7 +601,7 @@
       "guard_boundary": "Governance workflow / collector dispatch, provenance, recovery, and review lifecycle",
       "guard": "Finding recorded; candidate regression mapping is not independently verified as prevention.",
       "test": "tests/test_hunter_review_orchestrator.py::test_candidate_status_spoofing_mutation_is_rejected",
-      "status": "recorded"
+      "status": "open"
     },
     {
       "id": "PRH-075",
@@ -611,7 +611,7 @@
       "guard_boundary": "Governance workflow / collector dispatch, provenance, recovery, and review lifecycle",
       "guard": "Finding recorded; candidate regression mapping is not independently verified as prevention.",
       "test": "tests/test_hunter_review_orchestrator.py::test_orchestration_bootstraps_only_from_the_trusted_default_branch_checkout",
-      "status": "recorded"
+      "status": "open"
     },
     {
       "id": "PRH-076",
@@ -621,7 +621,7 @@
       "guard_boundary": "Governance workflow / collector dispatch, provenance, recovery, and review lifecycle",
       "guard": "Finding recorded; candidate regression mapping is not independently verified as prevention.",
       "test": "tests/test_hunter_review_orchestrator.py::test_job_write_all_cannot_publish_protected_status",
-      "status": "recorded"
+      "status": "open"
     },
     {
       "id": "PRH-077",
@@ -631,7 +631,7 @@
       "guard_boundary": "Governance workflow / collector dispatch, provenance, recovery, and review lifecycle",
       "guard": "Finding recorded; candidate regression mapping is not independently verified as prevention.",
       "test": "UNVERIFIED: targeted regression required",
-      "status": "recorded"
+      "status": "open"
     },
     {
       "id": "PRH-078",
@@ -641,7 +641,7 @@
       "guard_boundary": "Governance workflow / collector dispatch, provenance, recovery, and review lifecycle",
       "guard": "Finding recorded; candidate regression mapping is not independently verified as prevention.",
       "test": "tests/test_hunter_review_orchestrator.py::test_candidate_status_spoofing_mutation_is_rejected",
-      "status": "recorded"
+      "status": "open"
     },
     {
       "id": "PRH-079",
@@ -651,7 +651,7 @@
       "guard_boundary": "Governance workflow / collector dispatch, provenance, recovery, and review lifecycle",
       "guard": "Finding recorded; candidate regression mapping is not independently verified as prevention.",
       "test": "UNVERIFIED: targeted regression required",
-      "status": "recorded"
+      "status": "open"
     },
     {
       "id": "PRH-080",
@@ -661,7 +661,7 @@
       "guard_boundary": "Governance workflow / collector dispatch, provenance, recovery, and review lifecycle",
       "guard": "Finding recorded; candidate regression mapping is not independently verified as prevention.",
       "test": "tests/test_hunter_review_orchestrator.py::test_job_write_all_cannot_publish_protected_status",
-      "status": "recorded"
+      "status": "open"
     },
     {
       "id": "PRH-081",
@@ -671,7 +671,7 @@
       "guard_boundary": "Governance workflow / collector dispatch, provenance, recovery, and review lifecycle",
       "guard": "Finding recorded; candidate regression mapping is not independently verified as prevention.",
       "test": "tests/test_hunter_review_orchestrator.py::test_trusted_collector_completion_dispatch_capability",
-      "status": "recorded"
+      "status": "open"
     },
     {
       "id": "PRH-082",
@@ -681,7 +681,7 @@
       "guard_boundary": "Governance workflow / collector dispatch, provenance, recovery, and review lifecycle",
       "guard": "Finding recorded; candidate regression mapping is not independently verified as prevention.",
       "test": "tests/test_hunter_review_orchestrator.py::test_collector_completion_is_published_only_by_trusted_reconcile",
-      "status": "recorded"
+      "status": "open"
     },
     {
       "id": "PRH-083",
@@ -691,7 +691,7 @@
       "guard_boundary": "Governance workflow / collector dispatch, provenance, recovery, and review lifecycle",
       "guard": "Finding recorded; candidate regression mapping is not independently verified as prevention.",
       "test": "tests/test_hunter_review_orchestrator.py::test_trusted_collector_completion_dispatch_capability",
-      "status": "recorded"
+      "status": "open"
     },
     {
       "id": "PRH-084",
@@ -701,7 +701,7 @@
       "guard_boundary": "Governance workflow / collector dispatch, provenance, recovery, and review lifecycle",
       "guard": "Finding recorded; candidate regression mapping is not independently verified as prevention.",
       "test": "tests/test_hunter_review_orchestrator.py::test_trusted_collector_completion_rejects_untrusted_run",
-      "status": "recorded"
+      "status": "open"
     },
     {
       "id": "PRH-085",
@@ -711,7 +711,7 @@
       "guard_boundary": "Governance workflow / collector dispatch, provenance, recovery, and review lifecycle",
       "guard": "Finding recorded; candidate regression mapping is not independently verified as prevention.",
       "test": "tests/test_hunter_review_orchestrator.py::test_trusted_completion_rejects_replayed_proof_on_another_run",
-      "status": "recorded"
+      "status": "open"
     },
     {
       "id": "PRH-086",
@@ -721,7 +721,7 @@
       "guard_boundary": "Governance workflow / collector dispatch, provenance, recovery, and review lifecycle",
       "guard": "Finding recorded; candidate regression mapping is not independently verified as prevention.",
       "test": "UNVERIFIED: targeted regression required",
-      "status": "recorded"
+      "status": "open"
     },
     {
       "id": "PRH-087",
@@ -731,7 +731,7 @@
       "guard_boundary": "Governance workflow / collector dispatch, provenance, recovery, and review lifecycle",
       "guard": "Finding recorded; candidate regression mapping is not independently verified as prevention.",
       "test": "tests/test_hunter_review_orchestrator.py::test_scheduled_trusted_collector_recovery_uses_exact_attempt_artifacts",
-      "status": "recorded"
+      "status": "open"
     },
     {
       "id": "PRH-088",
@@ -741,7 +741,7 @@
       "guard_boundary": "Governance workflow / collector dispatch, provenance, recovery, and review lifecycle",
       "guard": "Finding recorded; candidate regression mapping is not independently verified as prevention.",
       "test": "UNVERIFIED: targeted regression required",
-      "status": "recorded"
+      "status": "open"
     },
     {
       "id": "PRH-089",
@@ -751,7 +751,7 @@
       "guard_boundary": "Governance workflow / collector dispatch, provenance, recovery, and review lifecycle",
       "guard": "Finding recorded; candidate regression mapping is not independently verified as prevention.",
       "test": "tests/test_hunter_review_orchestrator.py::test_scheduled_trusted_collector_recovery_uses_exact_attempt_artifacts",
-      "status": "recorded"
+      "status": "open"
     },
     {
       "id": "PRH-090",
@@ -761,7 +761,7 @@
       "guard_boundary": "Governance workflow / collector dispatch, provenance, recovery, and review lifecycle",
       "guard": "Finding recorded; candidate regression mapping is not independently verified as prevention.",
       "test": "tests/test_hunter_review_orchestrator.py::test_job_write_all_cannot_publish_protected_status",
-      "status": "recorded"
+      "status": "open"
     },
     {
       "id": "PRH-091",
@@ -771,7 +771,7 @@
       "guard_boundary": "Governance workflow / collector dispatch, provenance, recovery, and review lifecycle",
       "guard": "Finding recorded; candidate regression mapping is not independently verified as prevention.",
       "test": "UNVERIFIED: targeted regression required",
-      "status": "recorded"
+      "status": "open"
     },
     {
       "id": "PRH-092",
@@ -781,7 +781,7 @@
       "guard_boundary": "Governance workflow / collector dispatch, provenance, recovery, and review lifecycle",
       "guard": "Finding recorded; candidate regression mapping is not independently verified as prevention.",
       "test": "UNVERIFIED: targeted regression required",
-      "status": "recorded"
+      "status": "open"
     },
     {
       "id": "PRH-093",
@@ -791,7 +791,7 @@
       "guard_boundary": "Governance workflow / collector dispatch, provenance, recovery, and review lifecycle",
       "guard": "Finding recorded; candidate regression mapping is not independently verified as prevention.",
       "test": "UNVERIFIED: targeted regression required",
-      "status": "recorded"
+      "status": "open"
     },
     {
       "id": "PRH-094",
@@ -801,7 +801,7 @@
       "guard_boundary": "Governance workflow / collector dispatch, provenance, recovery, and review lifecycle",
       "guard": "Finding recorded; candidate regression mapping is not independently verified as prevention.",
       "test": "UNVERIFIED: targeted regression required",
-      "status": "recorded"
+      "status": "open"
     },
     {
       "id": "PRH-095",
@@ -811,7 +811,7 @@
       "guard_boundary": "Governance workflow / collector dispatch, provenance, recovery, and review lifecycle",
       "guard": "Finding recorded; candidate regression mapping is not independently verified as prevention.",
       "test": "tests/test_hunter_review_orchestrator.py::test_scheduled_trusted_collector_recovery_uses_exact_attempt_artifacts",
-      "status": "recorded"
+      "status": "open"
     },
     {
       "id": "PRH-096",
@@ -821,7 +821,7 @@
       "guard_boundary": "Governance workflow / collector dispatch, provenance, recovery, and review lifecycle",
       "guard": "Finding recorded; candidate regression mapping is not independently verified as prevention.",
       "test": "tests/test_hunter_review_orchestrator.py::test_job_write_all_cannot_publish_protected_status",
-      "status": "recorded"
+      "status": "open"
     },
     {
       "id": "PRH-097",
@@ -831,7 +831,7 @@
       "guard_boundary": "Governance workflow / collector dispatch, provenance, recovery, and review lifecycle",
       "guard": "Finding recorded; candidate regression mapping is not independently verified as prevention.",
       "test": "UNVERIFIED: targeted regression required",
-      "status": "recorded"
+      "status": "open"
     },
     {
       "id": "PRH-098",
@@ -841,7 +841,7 @@
       "guard_boundary": "Governance workflow / collector dispatch, provenance, recovery, and review lifecycle",
       "guard": "Finding recorded; candidate regression mapping is not independently verified as prevention.",
       "test": "tests/test_hunter_review_orchestrator.py::test_a_live_or_successful_collector_is_never_duplicated",
-      "status": "recorded"
+      "status": "open"
     },
     {
       "id": "PRH-099",
@@ -851,7 +851,7 @@
       "guard_boundary": "Governance workflow / collector dispatch, provenance, recovery, and review lifecycle",
       "guard": "Finding recorded; candidate regression mapping is not independently verified as prevention.",
       "test": "tests/test_hunter_review_orchestrator.py::test_scheduled_trusted_collector_recovery_uses_exact_attempt_artifacts",
-      "status": "recorded"
+      "status": "open"
     },
     {
       "id": "PRH-100",
@@ -861,7 +861,7 @@
       "guard_boundary": "Governance workflow / collector dispatch, provenance, recovery, and review lifecycle",
       "guard": "Finding recorded; candidate regression mapping is not independently verified as prevention.",
       "test": "tests/test_hunter_review_orchestrator.py::test_candidate_status_spoofing_mutation_is_rejected",
-      "status": "recorded"
+      "status": "open"
     },
     {
       "id": "PRH-101",
@@ -871,7 +871,7 @@
       "guard_boundary": "Governance workflow / collector dispatch, provenance, recovery, and review lifecycle",
       "guard": "Finding recorded; candidate regression mapping is not independently verified as prevention.",
       "test": "tests/test_hunter_review_orchestrator.py::test_candidate_missing_explicit_permission_baseline_is_rejected",
-      "status": "recorded"
+      "status": "open"
     },
     {
       "id": "PRH-102",
@@ -881,7 +881,7 @@
       "guard_boundary": "Governance workflow / collector dispatch, provenance, recovery, and review lifecycle",
       "guard": "Finding recorded; candidate regression mapping is not independently verified as prevention.",
       "test": "tests/test_hunter_review_orchestrator.py::test_scheduled_trusted_collector_recovery_uses_exact_attempt_artifacts",
-      "status": "recorded"
+      "status": "open"
     },
     {
       "id": "PRH-103",
@@ -891,7 +891,7 @@
       "guard_boundary": "Governance workflow / collector dispatch, provenance, recovery, and review lifecycle",
       "guard": "Finding recorded; candidate regression mapping is not independently verified as prevention.",
       "test": "UNVERIFIED: targeted regression required",
-      "status": "recorded"
+      "status": "open"
     },
     {
       "id": "PRH-104",
@@ -901,7 +901,7 @@
       "guard_boundary": "Governance workflow / collector dispatch, provenance, recovery, and review lifecycle",
       "guard": "Finding recorded; candidate regression mapping is not independently verified as prevention.",
       "test": "tests/test_hunter_review_orchestrator.py::test_dispatch_identity_and_timestamp_are_durable_before_dispatch",
-      "status": "recorded"
+      "status": "open"
     },
     {
       "id": "PRH-105",
@@ -911,7 +911,7 @@
       "guard_boundary": "Governance workflow / collector dispatch, provenance, recovery, and review lifecycle",
       "guard": "Finding recorded; candidate regression mapping is not independently verified as prevention.",
       "test": "tests/test_hunter_review_orchestrator.py::test_trusted_completion_rejects_replayed_proof_on_another_run",
-      "status": "recorded"
+      "status": "open"
     },
     {
       "id": "PRH-106",
@@ -921,7 +921,7 @@
       "guard_boundary": "Governance workflow / collector dispatch, provenance, recovery, and review lifecycle",
       "guard": "Finding recorded; candidate regression mapping is not independently verified as prevention.",
       "test": "tests/test_hunter_review_orchestrator.py::test_scheduled_trusted_collector_recovery_uses_exact_attempt_artifacts",
-      "status": "recorded"
+      "status": "open"
     },
     {
       "id": "PRH-107",
@@ -931,7 +931,7 @@
       "guard_boundary": "Governance workflow / collector dispatch, provenance, recovery, and review lifecycle",
       "guard": "Finding recorded; candidate regression mapping is not independently verified as prevention.",
       "test": "tests/test_hunter_review_orchestrator.py::test_read_collector_completion_rejects_untrusted_or_wrong_head_run",
-      "status": "recorded"
+      "status": "open"
     },
     {
       "id": "PRH-108",
@@ -941,7 +941,7 @@
       "guard_boundary": "Governance workflow / collector dispatch, provenance, recovery, and review lifecycle",
       "guard": "Finding recorded; candidate regression mapping is not independently verified as prevention.",
       "test": "tests/test_hunter_review_orchestrator.py::test_trusted_collector_completion_dispatch_capability",
-      "status": "recorded"
+      "status": "open"
     },
     {
       "id": "PRH-109",
@@ -951,7 +951,7 @@
       "guard_boundary": "Governance workflow / collector dispatch, provenance, recovery, and review lifecycle",
       "guard": "Finding recorded; candidate regression mapping is not independently verified as prevention.",
       "test": "tests/test_hunter_review_orchestrator.py::test_commit_status_pagination_keeps_old_trusted_dispatch_proof",
-      "status": "recorded"
+      "status": "open"
     },
     {
       "id": "PRH-110",
@@ -961,7 +961,7 @@
       "guard_boundary": "Governance workflow / collector dispatch, provenance, recovery, and review lifecycle",
       "guard": "Finding recorded; candidate regression mapping is not independently verified as prevention.",
       "test": "tests/test_hunter_review_orchestrator.py::test_scheduled_trusted_collector_recovery_uses_exact_attempt_artifacts",
-      "status": "recorded"
+      "status": "open"
     },
     {
       "id": "PRH-111",
@@ -971,7 +971,7 @@
       "guard_boundary": "Governance workflow / collector dispatch, provenance, recovery, and review lifecycle",
       "guard": "Finding recorded; candidate regression mapping is not independently verified as prevention.",
       "test": "tests/test_hunter_review_orchestrator.py::test_untrusted_earlier_claimant_cannot_block_valid_collector",
-      "status": "recorded"
+      "status": "open"
     },
     {
       "id": "PRH-112",
@@ -981,7 +981,7 @@
       "guard_boundary": "Governance workflow / collector dispatch, provenance, recovery, and review lifecycle",
       "guard": "Consume the entire paginated status stream before evaluating whether a trusted completion exists; reject early-closing grep -q in the pipeline.",
       "test": "tests/test_hunter_review_orchestrator.py::test_scheduled_recovery_status_search_does_not_short_circuit_paginated_api",
-      "status": "recorded"
+      "status": "open"
     }
   ],
   "families": [
