@@ -405,6 +405,22 @@ def request_json(
     )
 
 
+def _all_commit_statuses(repository: str, token: str, head_sha: str) -> list[dict[str, Any]]:
+    """Read the full creator-bearing status history; never lose old proofs."""
+    base = f"commits/{head_sha}/statuses?per_page=100"
+    page = 1
+    collected: list[dict[str, Any]] = []
+    while True:
+        path = base if page == 1 else f"{base}&page={page}"
+        batch = request_json(repository, token, "GET", path)
+        if not isinstance(batch, list):
+            raise ValueError("commit status history unavailable")
+        collected.extend(status for status in batch if isinstance(status, dict))
+        if len(batch) < 100:
+            return collected
+        page += 1
+
+
 def _run_id(target_url: str) -> int | None:
     path = urlparse(target_url).path.rstrip("/").split("/")
     if len(path) < 3 or path[-2] != "runs" or not path[-1].isdigit():
@@ -485,7 +501,7 @@ def read_cycle(
     # check in `_parse_cycle` stand on its own. Only the latest statuses are
     # listed, and the context, description, digest, generation and cited run are
     # all still re-verified below and in `_parse_cycle`.
-    listed = request_json(repository, token, "GET", f"commits/{head_sha}/statuses?per_page=100")
+    listed = _all_commit_statuses(repository, token, head_sha)
     statuses = listed if isinstance(listed, list) else []
     repository_info = request_json(repository, token, "GET", "")
     default_branch = str((repository_info or {}).get("default_branch") or "main")
@@ -593,7 +609,7 @@ def publish_trusted_collector_completion(repository: str, token: str, run_id: in
         return "SKIPPED: dispatch origin is not trusted governance reconciliation"
     if not re.fullmatch(r"[0-9a-f]{64}", proof):
         return "SKIPPED: missing collector dispatch capability"
-    statuses = request_json(repository, token, "GET", f"commits/{head_sha}/statuses?per_page=100")
+    statuses = _all_commit_statuses(repository, token, head_sha)
     expected_context = f"{DISPATCH_PROOF_CONTEXT_PREFIX}{pr_number}"
     expected_description = f"{cycle.generation_id}|{hashlib.sha256(proof.encode()).hexdigest()}"
     authorized = any(
@@ -661,7 +677,7 @@ def read_collector_completion(
     repository: str, token: str, pr_number: int, head_sha: str
 ) -> tuple[str, int | None, str | None]:
     try:
-        statuses = request_json(repository, token, "GET", f"commits/{head_sha}/statuses?per_page=100")
+        statuses = _all_commit_statuses(repository, token, head_sha)
         if not isinstance(statuses, list):
             return "absent", None, "collector status payload is malformed"
         repository_info = request_json(repository, token, "GET", "")

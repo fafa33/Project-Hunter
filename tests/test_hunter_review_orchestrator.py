@@ -2032,10 +2032,10 @@ def test_read_cycle_reads_the_status_list_endpoint():
     import inspect
 
     source = inspect.getsource(orchestrator.read_cycle)
-    assert "commits/{head_sha}/statuses?per_page=100" in source
+    assert "_all_commit_statuses(repository, token, head_sha)" in source
     assert 'f"commits/{head_sha}/status"' not in source
     # Only the list endpoint, so the publisher is actually populated.
-    assert source.count("commits/{head_sha}") == 1
+    assert "commits/{head_sha}/statuses?per_page=100" in inspect.getsource(orchestrator._all_commit_statuses)
 
 
 def test_trusted_creator_cycle_is_accepted():
@@ -2360,3 +2360,26 @@ def test_scheduled_trusted_collector_recovery_uses_exact_attempt_artifacts():
     assert 'rm -rf "$receipt"' in script
     assert 'find "$receipt/results" -type f' in script
     assert 'find "$receipt/proof" -type f' in script
+
+
+def test_commit_status_pagination_keeps_old_trusted_dispatch_proof(monkeypatch):
+    calls = []
+    proof = {
+        "context": "Hunter Collector Dispatch Proof / PR #472",
+        "creator": {"login": "github-actions[bot]"},
+        "id": 7,
+    }
+
+    def request(_repo, _token, _method, path, _payload=None):
+        calls.append(path)
+        if path.endswith("page=100"):
+            return [{"id": n} for n in range(100)]
+        if path.endswith("page=2"):
+            return [proof]
+        raise AssertionError(path)
+
+    monkeypatch.setattr(orchestrator, "request_json", request)
+    statuses = orchestrator._all_commit_statuses("owner/repo", "token", HEAD)
+    assert len(statuses) == 101
+    assert proof in statuses
+    assert len(calls) == 2
