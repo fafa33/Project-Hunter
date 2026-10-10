@@ -979,7 +979,7 @@
       "source": "PR #592 Copilot review (Previously missed summary)",
       "classification": "systemic",
       "guard_boundary": "Governance workflow / collector dispatch, provenance, recovery, and review lifecycle",
-      "guard": "Finding recorded; candidate regression mapping is not independently verified as prevention.",
+      "guard": "Consume the entire paginated status stream before evaluating whether a trusted completion exists; reject early-closing grep -q in the pipeline.",
       "test": "tests/test_hunter_review_orchestrator.py::test_scheduled_recovery_status_search_does_not_short_circuit_paginated_api",
       "status": "guarded"
     }

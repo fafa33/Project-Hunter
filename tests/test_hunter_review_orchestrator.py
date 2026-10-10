@@ -2426,3 +2426,33 @@ def test_scheduled_recovery_status_search_does_not_short_circuit_paginated_api()
     assert 'gh api --paginate "repos/$GITHUB_REPOSITORY/commits/$head/statuses?per_page=100"' in workflow
     assert "| grep -qE '^[0-9]+$'" not in workflow
     assert "| grep -E '^[0-9]+$' | wc -l" in workflow
+
+
+def test_prh112_regression_rejects_original_sigpipe_mutation():
+    """Prove that restoring the original early-closing grep fails the guard."""
+    from pathlib import Path
+
+    workflow = (Path(__file__).resolve().parents[1] / ".github/workflows/hunter-governance-reconcile.yml").read_text()
+    safe = "| grep -E '^[0-9]+$' | wc -l | grep -qE '^[[:space:]]*[1-9][0-9]*$'"
+    unsafe = "| grep -qE '^[0-9]+$'"
+    assert safe in workflow
+    mutated = workflow.replace(safe, unsafe, 1)
+    assert mutated != workflow
+    assert safe not in mutated
+    assert unsafe in mutated
+
+
+def test_pr592_defect_registry_never_claims_unverified_findings_prevented():
+    """The learning ledger must not silently promote historical review titles."""
+    import json
+    from pathlib import Path
+
+    root = Path(__file__).resolve().parents[1]
+    ledger = json.loads((root / "docs/PR592_COPILOT_FINDING_LEDGER.json").read_text())
+    registry = json.loads((root / "docs/DEFECT_REGISTRY.json").read_text())
+    by_id = {entry["id"]: entry for entry in registry["defects"]}
+    assert len(ledger["findings"]) == ledger["captured_findings"] == 43
+    for finding in ledger["findings"]:
+        assert finding["id"] in by_id
+        assert finding["status"] != "prevented"
+        assert finding.get("verification")
