@@ -747,7 +747,7 @@ def dispatch_collector(
             "state": "pending",
             "context": f"{DISPATCH_PROOF_CONTEXT_PREFIX}{pr_number}",
             "description": f"{generation_id}|{hashlib.sha256(nonce.encode()).hexdigest()}",
-            "target_url": f"https://github.com/{repository}/actions/runs/{current_run_id()}",
+            "target_url": f"{os.environ.get('GITHUB_SERVER_URL') or 'https://github.com'}/{repository}/actions/runs/{current_run_id()}",
         },
     )
     request_json(
@@ -1198,7 +1198,8 @@ def finalize_exhausted_pool(
 ) -> str:
     """Publish ``REVIEWER_UNAVAILABLE`` for an exact head whose collector proved no reviewer gave a review.
 
-    Runs inside the trusted collector's own ``collector-complete`` step, so it does not depend on any later wake-up:
+    Runs through trusted default-branch reconcile after validating collector run identity,
+    exact attempt, dispatch proof and receipt; it does not depend on a later wake-up:
     the ``workflow_run`` edge from a dispatched collector to reconcile was never delivered in 17 of 17 recorded
     completions. It only ever *ends* an open opportunity as a non-blocking, authority-free state. It never dispatches,
     never mints review authority and never touches a cycle that is already terminal, superseded, for another

@@ -746,7 +746,7 @@ def _actions_levels(document):
     """
     blocks = [document.get("permissions")]
     if blocks[0] is None:
-        return ["missing-workflow-permissions"]
+        yield "missing-workflow-permissions"
     jobs = document.get("jobs")
     if isinstance(jobs, dict):
         blocks.extend(job.get("permissions") for job in jobs.values() if isinstance(job, dict))
@@ -780,7 +780,7 @@ def test_no_pull_request_reachable_workflow_can_drive_other_workflows():
         for path, document in _workflow_documents()
         if isinstance(document, dict)
         and "pull_request" in _triggers(document)
-        and any(level in WORKFLOW_DRIVING for level in _actions_levels(document))
+        and any(level in WORKFLOW_DRIVING | {"missing-workflow-permissions"} for level in _actions_levels(document))
     ]
     assert privileged == []
 
@@ -812,7 +812,7 @@ def test_candidate_controlled_triggers_are_read_from_every_declaration_shape(sou
         ({"actions": " write "}, ["write"]),
         ({"contents": "read"}, []),
         ({}, []),
-        (None, []),
+        (None, ["missing-workflow-permissions"]),
         # Blanket declarations grant every scope, `actions` included.
         ("write-all", ["write"]),
         ("read-all", ["read"]),
@@ -2456,3 +2456,10 @@ def test_pr592_defect_registry_never_claims_unverified_findings_prevented():
         assert finding["id"] in by_id
         assert finding["status"] != "prevented"
         assert finding.get("verification")
+
+
+def test_missing_workflow_permission_baseline_is_detected_in_action_guard():
+    import yaml
+
+    document = yaml.safe_load("on: pull_request\njobs: {build: {runs-on: ubuntu-latest}}\n")
+    assert "missing-workflow-permissions" in list(_actions_levels(document))

@@ -29,15 +29,10 @@ on:
         default: ""
         type: string
 
-# `actions: write` is what lets this collector dispatch a reviewer that runs as
-# its own workflow. The collector is dispatch-only: the trusted default-branch
-# orchestrator is the single entry point, so PR lifecycle events cannot race or
-# duplicate the exact-head collector cycle. `statuses: write` is what lets this
-# run publish its own completion directly onto the candidate's exact head (see
-# "Publish collector completion" below): this run's own workflow_run event
-# always reports main's SHA, never the candidate's, so the candidate/head this
-# collector was dispatched for must be recorded as evidence this run itself
-# writes, not derived later from an event that cannot carry it.
+# The collector may dispatch reviewer workflows but must never publish trusted
+# completion statuses on a candidate head. It uploads the result receipt and
+# dispatch proof; the trusted default-branch reconcile workflow verifies the
+# run, attempt and evidence before publishing completion.
 permissions:
   contents: read
   actions: write
