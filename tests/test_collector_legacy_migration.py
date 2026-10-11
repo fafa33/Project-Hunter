@@ -193,3 +193,11 @@ def test_legacy_and_new_collectors_share_one_reviewer_invocation_identity():
     other_generation = collector.GitHubBackend(REPO, "", PR, HEAD, claims, 222, 2, "0" * 15 + "1")
     assert legacy.invocation_marker(agent, 1) != other_generation.invocation_marker(agent, 1)
     assert collector.invocation_key(HEAD, claims, "codex", 1) == collector.invocation_key(HEAD, claims, "codex", 1, GEN)
+
+
+@pytest.mark.parametrize("status", sorted(orchestrator.ACTIVE_RUN_STATES))
+def test_every_active_run_state_counts_as_a_live_legacy_collector(env, status):
+    github, local = env
+    add_legacy(github, status=status)
+    reconcile(github, local, 101)
+    assert not github.dispatches and github.owner_epochs() == []

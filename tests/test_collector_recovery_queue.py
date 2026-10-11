@@ -237,3 +237,46 @@ def test_a_replaced_owners_run_is_not_published_by_recovery(env):
     outcome = orchestrator.publish_trusted_collector_completion(REPO, "token", run, proof)
     assert outcome.startswith("SKIPPED")
     assert not [s for s in github.statuses if s["context"].startswith(orchestrator.COLLECTOR_CONTEXT_PREFIX)]
+
+
+def test_open_prs_beyond_the_first_window_are_reached_by_rotation(env):
+    github, local = env
+    far = 700  # PR numbers sort ascending, so this one sits on page 7: outside the first 5-page window
+    run, _ = stage(github, local, far, orchestrator_run=101)
+    for number in range(1, 650):
+        github.open_prs[number] = head_for(number)
+    assert sweep(rotation=0) == []  # window 0 (pages 1-5) never sees it
+    assert sweep(rotation=1) == [run]  # window 1 (pages 6-10) does
+    assert sweep(rotation=2) == []  # a window past the end wraps to the first one, still bounded
+    assert orchestrator.list_open_pull_requests(REPO, "token", 7)  # far past the end wraps, never empty
+
+
+def test_a_pr_retargeted_away_from_main_is_not_a_recovery_candidate_or_published(env):
+    github, local = env
+    run, proof = stage(github, local, 472, orchestrator_run=101)
+    github.pr_bases[472] = "release"
+    assert sweep() == []
+    outcome = orchestrator.publish_trusted_collector_completion(REPO, "token", run, proof)
+    assert outcome.startswith("SKIPPED") and "base branch" in outcome
+    assert not [s for s in github.statuses if s["context"].startswith(orchestrator.COLLECTOR_CONTEXT_PREFIX)]
+
+
+def test_unusable_receipt_never_receives_a_trusted_completion(env, monkeypatch, tmp_path, capsys):
+    github, local = env
+    run, proof = stage(github, local, 472, orchestrator_run=101)
+    github.runs[run]["run_attempt"] = 1
+    receipt_dir = tmp_path / "collector-receipt"
+    receipt_dir.mkdir()
+    (receipt_dir / "collector-dispatch-proof.txt").write_text(proof)
+    monkeypatch.setenv("RUNNER_TEMP", str(tmp_path))
+    monkeypatch.setattr("sys.argv", ["x", "trusted-collector-complete", "--repository", REPO, "--run-id", str(run)])
+    for body in (None, "{not json", '{"run_attempt": 9}'):
+        if body is not None:
+            (receipt_dir / "reviewer-results.json").write_text(body)
+        assert orchestrator.main() == 0
+        assert "receipt unusable" in capsys.readouterr().out
+        assert sweep() == [run]  # still outstanding: retried by the next sweep
+    (receipt_dir / "reviewer-results.json").write_text('{"run_attempt": 1}')
+    orchestrator.main()
+    assert "PUBLISHED" in capsys.readouterr().out
+    assert sweep() == []

@@ -595,6 +595,8 @@ def publish_trusted_collector_completion(repository: str, token: str, run_id: in
         or str((pr.get("head") or {}).get("sha") or "") != head_sha
     ):
         return "SKIPPED: collector candidate head superseded"
+    if str((pr.get("base") or {}).get("ref") or "") != branch:
+        return "SKIPPED: collector candidate no longer targets the governed base branch"
     # The collector run's title is only a correlation hint, never dispatch
     # authority. The trusted orchestrator must have committed an exact-cycle
     # WAITING status before dispatch, identifying its own trusted run.
@@ -993,6 +995,7 @@ def collector_run_is_current(repository: str, token: str, pr_number: int, head_s
 #: stops being outstanding. Each sweep is bounded by time and by ``limit`` and the
 #: start of the scan rotates with time, so every outstanding run is reached.
 RECOVERY_PULL_REQUEST_MAX_PAGES = 5
+RECOVERY_PULL_REQUEST_WINDOWS = 20
 RECOVERY_DEFAULT_LIMIT = 5
 RECOVERY_DEFAULT_BUDGET_SECONDS = 60
 
@@ -1004,32 +1007,46 @@ class OutstandingCollectorRun(NamedTuple):
     title: str
 
 
-def list_open_pull_requests(repository: str, token: str) -> list[tuple[int, str]]:
-    """Open pull requests as (number, head) sorted by number; page 1 must be readable.
+def list_open_pull_requests(repository: str, token: str, rotation: int = 0) -> list[tuple[int, str]]:
+    """Open pull requests into the default branch as (number, head), sorted by number.
 
-    A later page that fails ends the listing early (the caller still gets a
-    consistent prefix and the next sweep retries); an unreadable first page raises.
+    Only RECOVERY_PULL_REQUEST_MAX_PAGES pages are read per sweep, so the window of
+    pages advances with ``rotation``; a window past the end wraps to the first one.
+    The window's first page must be readable; a later page that fails ends the
+    listing early (the next sweep retries it). Pull requests targeting another base
+    are never recovery candidates, matching the governed sweep.
     """
+    info = request_json(repository, token, "GET", "")
+    branch = str((info or {}).get("default_branch") or "main")
+    window = rotation % RECOVERY_PULL_REQUEST_WINDOWS
     found: dict[int, str] = {}
-    for page in range(1, RECOVERY_PULL_REQUEST_MAX_PAGES + 1):
-        try:
-            batch = request_json(repository, token, "GET", f"pulls?state=open&per_page=100&page={page}")
-        except transport.GitHubRequestError:
-            if page == 1:
-                raise
-            print(f"Open pull request page {page} unavailable; sweeping the pages read so far.", file=sys.stderr)
+    while True:
+        first = window * RECOVERY_PULL_REQUEST_MAX_PAGES + 1
+        window_empty = False
+        for page in range(first, first + RECOVERY_PULL_REQUEST_MAX_PAGES):
+            try:
+                batch = request_json(repository, token, "GET", f"pulls?state=open&per_page=100&page={page}")
+            except transport.GitHubRequestError:
+                if page == first:
+                    raise
+                print(f"Open pull request page {page} unavailable; sweeping the pages read so far.", file=sys.stderr)
+                break
+            if not isinstance(batch, list):
+                if page == first:
+                    raise ValueError("open pull request listing unavailable")
+                break
+            window_empty = window_empty or (page == first and not batch)
+            for item in batch:
+                head = str(((item or {}).get("head") or {}).get("sha") or "")
+                base = str(((item or {}).get("base") or {}).get("ref") or "")
+                number = (item or {}).get("number")
+                if isinstance(number, int) and base == branch and re.fullmatch(r"[0-9a-f]{40}", head):
+                    found[number] = head
+            if len(batch) < 100:
+                break
+        if not (window_empty and window > 0):
             break
-        if not isinstance(batch, list):
-            if page == 1:
-                raise ValueError("open pull request listing unavailable")
-            break
-        for item in batch:
-            head = str(((item or {}).get("head") or {}).get("sha") or "")
-            number = (item or {}).get("number")
-            if isinstance(number, int) and re.fullmatch(r"[0-9a-f]{40}", head):
-                found[number] = head
-        if len(batch) < 100:
-            break
+        window = 0  # past the last populated page: start over from the newest window
     return sorted(found.items())
 
 
@@ -1047,7 +1064,7 @@ def outstanding_collector_runs(
     or expired runs are skipped. Nothing here publishes: the caller still runs the
     exact-head, run-attempt, proof and epoch validation before any publication.
     """
-    pulls = list_open_pull_requests(repository, token)
+    pulls = list_open_pull_requests(repository, token, rotation)
     if pulls:
         start = rotation % len(pulls)
         pulls = pulls[start:] + pulls[:start]
@@ -1307,7 +1324,7 @@ def _active_legacy_collector_runs(repository: str, token: str) -> list[dict[str,
     info = request_json(repository, token, "GET", "")
     branch = str((info or {}).get("default_branch") or "main")
     runs: list[dict[str, Any]] = []
-    for status in ("in_progress", "queued"):
+    for status in sorted(ACTIVE_RUN_STATES):
         payload = request_json(
             repository,
             token,
@@ -2270,27 +2287,40 @@ def main() -> int:
             receipt = receipt_dir / "reviewer-results.json"
             proof_path = receipt_dir / "collector-dispatch-proof.txt"
             proof = proof_path.read_text(encoding="utf-8").strip()
+            run = request_json(args.repository, token, "GET", f"actions/runs/{args.run_id}")
+            # An unusable receipt must never sit under a trusted success marker: validate
+            # it, and that it belongs to the completed attempt, before publishing.
+            parsed, unreadable = read_collector_receipt(receipt)
+            if parsed is None or parsed.get("run_attempt") != run.get("run_attempt"):
+                print(f"SKIPPED: collector receipt unusable ({unreadable or 'attempt mismatch'})")
+                return 0
             outcome = publish_trusted_collector_completion(args.repository, token, args.run_id, proof)
             print(outcome)
             if outcome.startswith("PUBLISHED:"):
-                run = request_json(args.repository, token, "GET", f"actions/runs/{args.run_id}")
                 match = re.fullmatch(
                     r"Hunter Reviewer Collector PR ([1-9][0-9]*) HEAD ([0-9a-f]{40})(?: GEN ([^\s]+))?",
                     str(run.get("display_title") or ""),
                 )
                 if match is not None:
-                    print(
-                        finalize_exhausted_pool(
-                            args.repository,
-                            token,
-                            int(match.group(1)),
-                            match.group(2),
-                            args.run_id,
-                            receipt,
-                            trusted_completion=True,
-                            expected_attempt=int(run["run_attempt"]),
-                        )
-                    )
+                    for tries in range(3, 0, -1):  # transient API failures must not lose the terminal state
+                        try:
+                            print(
+                                finalize_exhausted_pool(
+                                    args.repository,
+                                    token,
+                                    int(match.group(1)),
+                                    match.group(2),
+                                    args.run_id,
+                                    receipt,
+                                    trusted_completion=True,
+                                    expected_attempt=int(run["run_attempt"]),
+                                )
+                            )
+                            break
+                        except transport.GitHubRequestError:
+                            if tries == 1:
+                                raise
+                            time.sleep(2)
         elif args.command == "collector-complete":
             publish_collector_completion(args.repository, token, args.pr, args.head, args.run_id)
             # Best effort and fail closed: the completion marker above is already durable, and an unusable receipt

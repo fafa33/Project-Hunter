@@ -48,6 +48,7 @@ class FakeGitHub:
         self.cycle: Any = None  # the most recently published cycle
         self.cycles: dict[tuple[int, str], Any] = {}
         self.open_prs: dict[int, str] = {472: "a" * 40}
+        self.pr_bases: dict[int, str] = {}
         self.cycle_publications = 0
         self.next_run = 5000
         self.fail: dict[str, Any] = {}
@@ -212,11 +213,16 @@ class FakeGitHub:
             size, page = int(query.get("per_page", 30)), int(query.get("page", 1))
             ordered = sorted(self.open_prs.items())
             return [
-                {"number": number, "head": {"sha": head}} for number, head in ordered[(page - 1) * size : page * size]
+                {"number": number, "head": {"sha": head}, "base": {"ref": self.pr_bases.get(number, "main")}}
+                for number, head in ordered[(page - 1) * size : page * size]
             ]
         if method == "GET" and path.startswith("pulls/"):
             number = int(path.split("/")[1])
-            return {"state": "open", "head": {"sha": self.open_prs.get(number, "a" * 40)}}
+            return {
+                "state": "open",
+                "head": {"sha": self.open_prs.get(number, "a" * 40)},
+                "base": {"ref": self.pr_bases.get(number, "main")},
+            }
         raise AssertionError(f"unmodelled GitHub call: {method} {path}")
 
     # -- cycle store (the status codec is not under test here) ---------------
