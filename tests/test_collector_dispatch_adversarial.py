@@ -625,3 +625,30 @@ def test_recovery_fails_closed_when_run_history_cannot_be_exhausted(env, monkeyp
     with pytest.raises(ValueError):
         reconcile(github, local, 102)
     assert github.owner_epochs() == [0] and len(github.dispatches) == 1
+
+
+def test_exact_cycle_liveness_is_not_hidden_behind_other_prs_newer_runs(env):
+    """Copilot: a single 50-run page made an older exact-head run read as missing."""
+    github, local = env
+    reconcile(github, local, 101)
+    run, _, _ = capability(github)
+    _flood_with_other_prs_runs(github, 120)
+    assert orchestrator.collector_liveness(REPO, "token", PR, HEAD, GEN)[0] == "active"
+    github.finish(run, "success")
+    assert orchestrator.collector_liveness(REPO, "token", PR, HEAD, GEN)[0] == "completed"
+
+
+def test_commit_status_history_is_bounded_and_fails_closed(env, monkeypatch):
+    github, _ = env
+    original = github._dispatch
+
+    def endless_full_pages(method, path, payload):
+        if method == "GET" and path.startswith(f"commits/{HEAD}/statuses"):
+            return [{"context": "x", "state": "success"}] * 100
+        return original(method, path, payload)
+
+    monkeypatch.setattr(github, "_dispatch", endless_full_pages)
+    monkeypatch.setattr(orchestrator, "COMMIT_STATUS_MAX_PAGES", 3)
+    with pytest.raises(ValueError, match="bounded"):
+        orchestrator._all_commit_statuses(REPO, "token", HEAD)
+    assert sum(1 for method, path in github.calls if "/statuses" in path) == 3

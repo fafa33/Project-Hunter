@@ -405,12 +405,17 @@ def request_json(
     )
 
 
+#: Commit-status history is read in full, but within a bound: GitHub caps statuses
+#: per context, so this is generous. Exceeding it is unavailable evidence and fails
+#: closed rather than letting one head exhaust a governance job's API/time budget.
+COMMIT_STATUS_MAX_PAGES = 20
+
+
 def _all_commit_statuses(repository: str, token: str, head_sha: str) -> list[dict[str, Any]]:
     """Read the full creator-bearing status history; never lose old proofs."""
     base = f"commits/{head_sha}/statuses?per_page=100"
-    page = 1
     collected: list[dict[str, Any]] = []
-    while True:
+    for page in range(1, COMMIT_STATUS_MAX_PAGES + 1):
         path = base if page == 1 else f"{base}&page={page}"
         batch = request_json(repository, token, "GET", path)
         if not isinstance(batch, list):
@@ -418,7 +423,7 @@ def _all_commit_statuses(repository: str, token: str, head_sha: str) -> list[dic
         collected.extend(status for status in batch if isinstance(status, dict))
         if len(batch) < 100:
             return collected
-        page += 1
+    raise ValueError("commit status history exceeds the bounded inspection window")
 
 
 def _run_id(target_url: str) -> int | None:
@@ -1122,12 +1127,30 @@ def collector_run_name(pr_number: int, head_sha: str, generation_id: str = BASE_
     return name if generation_id == BASE_GENERATION_ID else f"{name}{GENERATION_RUN_NAME_SEPARATOR}{generation_id}"
 
 
+#: Exact-cycle decisions (liveness, settlement, remediation-generation budget) read
+#: the shared collector run history newest-first. A single 50-run page hid an older
+#: exact-head run behind unrelated PRs' newer runs, so the listing is paged. A short
+#: page ends it, so a small history costs one request; the page bound only limits
+#: how far back an unusually busy repository is read.
+COLLECTOR_HISTORY_PAGE_SIZE = 100
+COLLECTOR_HISTORY_MAX_PAGES = 5
+
+
 def _collector_workflow_runs(repository: str, token: str) -> list[dict[str, Any]]:
-    payload = request_json(
-        repository, token, "GET", f"actions/workflows/{COLLECTOR_WORKFLOW}/runs?event=repository_dispatch&per_page=50"
-    )
-    runs = payload.get("workflow_runs", []) if isinstance(payload, dict) else []
-    return [run for run in runs if isinstance(run, dict) and str(run.get("path") or "") == COLLECTOR_WORKFLOW_PATH]
+    collected: list[dict[str, Any]] = []
+    for page in range(1, COLLECTOR_HISTORY_MAX_PAGES + 1):
+        payload = request_json(
+            repository,
+            token,
+            "GET",
+            f"actions/workflows/{COLLECTOR_WORKFLOW}/runs?event=repository_dispatch"
+            f"&per_page={COLLECTOR_HISTORY_PAGE_SIZE}&page={page}",
+        )
+        batch = payload.get("workflow_runs", []) if isinstance(payload, dict) else []
+        collected.extend(run for run in batch if isinstance(run, dict))
+        if len(batch) < COLLECTOR_HISTORY_PAGE_SIZE:
+            break
+    return [run for run in collected if str(run.get("path") or "") == COLLECTOR_WORKFLOW_PATH]
 
 
 def _run_title(run: dict[str, Any]) -> str:
