@@ -308,3 +308,26 @@ def test_unreadable_completion_history_is_unavailable_evidence_not_absence(env, 
     assert not [s for s in github.statuses if s["context"].startswith(orchestrator.COLLECTOR_CONTEXT_PREFIX)]
     monkeypatch.setattr(orchestrator, "read_collector_completion", real)  # evidence readable again: it publishes
     assert orchestrator.publish_trusted_collector_completion(REPO, "token", run, proof).startswith("PUBLISHED")
+
+
+def test_a_publisher_that_dies_after_claiming_does_not_strand_the_completion(env, monkeypatch):
+    """The claim makes publication single-writer, so a crash between claim and status must be recoverable."""
+    github, local = env
+    run, proof = stage(github, local, 472, orchestrator_run=101)
+    real = orchestrator.publish_collector_completion
+
+    def dies(*args, **kwargs):
+        raise transport.GitHubRequestError("status write failed", category="transient", status_code=502)
+
+    monkeypatch.setattr(orchestrator, "publish_collector_completion", dies)
+    with pytest.raises(transport.GitHubRequestError):
+        orchestrator.publish_trusted_collector_completion(REPO, "token", run, proof)
+    monkeypatch.setattr(orchestrator, "publish_collector_completion", real)
+    # Inside the grace window another sweep must not publish (the first publisher may still be writing)...
+    assert orchestrator.publish_trusted_collector_completion(REPO, "token", run, proof).startswith("SKIPPED")
+    assert not [s for s in github.statuses if s["context"].startswith(orchestrator.COLLECTOR_CONTEXT_PREFIX)]
+    # ...but once the claim is stale and no status exists, the run is not stranded forever.
+    github.age_completion_claims(orchestrator.COMPLETION_CLAIM_STALE_SECONDS + 60)
+    assert orchestrator.publish_trusted_collector_completion(REPO, "token", run, proof).startswith("PUBLISHED")
+    assert orchestrator.read_collector_completion(REPO, "token", 472, head_for(472)) == ("present", run, None)
+    assert sweep() == []

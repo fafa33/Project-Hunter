@@ -92,6 +92,17 @@ class FakeGitHub:
         if self.cycle is not None:
             self.cycle = replace(self.cycle, started_at=old)
 
+    def age_completion_claims(self, seconds: int = 3600) -> None:
+        """Make every completion claim look ``seconds`` old."""
+        from datetime import UTC, datetime, timedelta
+
+        old = (datetime.now(UTC) - timedelta(seconds=seconds)).strftime("%Y-%m-%dT%H:%M:%SZ")
+        for tag in self.tags.values():
+            record = json.loads(tag["message"])
+            if record.get("kind") == "completion":
+                record["claimed_at"] = old
+                tag["message"] = json.dumps(record, sort_keys=True, separators=(",", ":"))
+
     def owner_epochs(self) -> list[int]:
         return sorted(
             json.loads(self.tags[sha]["message"])["epoch"]

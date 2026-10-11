@@ -45,6 +45,8 @@ MAX_COLLECTOR_DISPATCHES = 3
 #: only once the cycle is older than this, so an ordinary listing lag cannot be
 #: mistaken for a dead collector and duplicate the dispatch.
 COLLECTOR_LIVENESS_GRACE_SECONDS = 180
+#: A completion publisher that claimed the run but never wrote the status is taken over after this long.
+COMPLETION_CLAIM_STALE_SECONDS = 120
 #: A correlated collector that is genuinely queued or in progress must not be
 #: finalized as timed out merely because the nominal opportunity budget expired.
 #: That budget starts at dispatch, so GitHub's queue delay is spent out of it while
@@ -649,10 +651,20 @@ def publish_trusted_collector_completion(repository: str, token: str, run_id: in
         "head": head_sha,
         "generation": cycle.generation_id,
         "run_id": run_id,
+        "claimed_at": datetime.now(UTC).strftime("%Y-%m-%dT%H:%M:%SZ"),
         "start": secrets.token_hex(16),
     }
     if not _create_claim(repository, token, completion_ref, record):
-        return "SKIPPED: collector completion publication already claimed"
+        # The claim makes publication single-writer, but a publisher that died between the claim
+        # and the status write must not strand the run forever (and hold a recovery slot). The
+        # status carries one identity, so a takeover after the grace window is harmless.
+        held = _read_claim(repository, token, completion_ref)
+        claimed_at = str((held or {}).get("claimed_at") or "")
+        if held is None or not _older_than(claimed_at, COMPLETION_CLAIM_STALE_SECONDS):
+            return "SKIPPED: collector completion publication already claimed"
+        published, published_run, read_error = read_collector_completion(repository, token, pr_number, head_sha)
+        if read_error or published != "absent":
+            return "SKIPPED: collector completion publication already claimed"
     publish_collector_completion(repository, token, pr_number, head_sha, run_id)
     return f"PUBLISHED: collector completion PR #{pr_number} at {head_sha[:12]}"
 
