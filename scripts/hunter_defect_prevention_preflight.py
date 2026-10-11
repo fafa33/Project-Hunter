@@ -1709,13 +1709,14 @@ def _collector_invocation_arguments(command: list[str]) -> list[str] | None:
     if not tokens:
         return None
     executable = tokens[0].rsplit("/", 1)[-1]
-    if executable == "hunter_reviewer_collector.py":
+    trusted_script = "scripts/hunter_reviewer_collector.py"
+    if tokens[0] == trusted_script:
         return tokens[1:]
     if _PYTHON_EXECUTABLE.fullmatch(executable):
         for index, token in enumerate(tokens[1:], start=1):
             if token.startswith("-"):
                 continue
-            if token.rsplit("/", 1)[-1] == "hunter_reviewer_collector.py":
+            if token == trusted_script:
                 return tokens[index + 1 :]
             return None
     return None

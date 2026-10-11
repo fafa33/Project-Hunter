@@ -679,6 +679,10 @@ def test_generation_binding_accepts_every_equivalent_valid_form(guard, run, env)
         # every invocation must be bound, not just the first
         (f'{_COLLECT} --generation "{_GEN}"; {_COLLECT}', {}),
         (f'{_COLLECT}; {_COLLECT} --generation "{_GEN}"', {}),
+        # Wrong-path script with a trusted-looking basename must never satisfy the guard.
+        (f'python /tmp/hunter_reviewer_collector.py --generation "{_GEN}"', {}),
+        (f'python ../scripts/hunter_reviewer_collector.py --generation "{_GEN}"', {}),
+        (f'/tmp/hunter_reviewer_collector.py --generation "{_GEN}"', {}),
         # not the collector at all, or unparsable shell
         (f'echo --generation "{_GEN}"', {}),
         (f'{_COLLECT} --generation "{_GEN}', {}),
