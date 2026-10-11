@@ -61,7 +61,9 @@ on:
     types:
       - completed
   # Bot-authored review events are approval-held by GitHub. The trusted
-  # 5-minute sweep is the bounded review-state-change reconciliation path,
+  # scheduled sweep (nominally every 5 minutes; GitHub may delay scheduled runs, so
+  # it is a recovery path and not a freshness guarantee) is the review-state-change
+  # reconciliation path,
   # including human submitted/edited/dismissed reviews and inline comments;
   # no review webhook may run a privileged workflow directly. Trusted
   # pull_request_target and workflow_run remain event-driven for head changes.
@@ -109,31 +111,26 @@ jobs:
         run: |
           set -euo pipefail
           # Bound collector recovery I/O so the mandatory governance refresh
-          # is never held behind an unbounded run-history enumeration.
+          # is never held behind an unbounded enumeration. The recovery queue is
+          # derived from durable GitHub state (open PR -> current cycle -> newest
+          # epoch's run claim -> completed run without a published completion), so
+          # it does not depend on run-history position: an outstanding run is
+          # reachable however many unrelated collector runs have finished since,
+          # and a processed run leaves the queue by itself. Each sweep is bounded
+          # by time and count, and its start rotates with time so every outstanding
+          # run is eventually reached. Nothing is published here: each candidate is
+          # still validated (exact head, run attempt, proof, epoch) before publication.
+          candidates=()
           if [[ "${{ github.event_name }}" == "schedule" || "${{ github.event_name }}" == "repository_dispatch" ]]; then
-            # Bounded network scan: never enumerate all retained run history
-            # before the mandatory governance refresh. Rotate the starting
-            # page across sweeps so old valid runs cannot starve forever.
-            recovery_deadline=$((SECONDS + 90))
-            page=1 # Always examine the populated first page; avoid empty-page starvation
-            candidates=()
-            scanned_pages=0
-            while (( SECONDS < recovery_deadline && scanned_pages < 3 )); do
-              batch="$(timeout 12s gh api "repos/$GITHUB_REPOSITORY/actions/workflows/hunter-reviewer-collector.yml/runs?status=completed&per_page=100&page=$page" --jq '.workflow_runs[] | select(.conclusion == "success") | [.id, .display_title] | @tsv' 2>/dev/null)" || break
-              [[ -n "$batch" ]] || break
-              while IFS= read -r line; do
-                [[ -n "$line" ]] && candidates+=("$line")
-              done <<< "$batch"
-              ((scanned_pages+=1))
-              ((page+=1))
-              ((page<=100)) || page=1
-            done
+            mapfile -t candidates < <(timeout 75s python scripts/hunter_review_orchestrator.py outstanding-collector-runs \
+              --repository "$GITHUB_REPOSITORY" --limit 5 --budget-seconds 60 2>/dev/null || true)
           else
             candidates=("$COLLECTOR_RUN_ID")
           fi
           # Reserve time for the mandatory governance refresh. Recovery is
-          # opportunistic; each schedule retries the remaining candidates.
-          recovery_deadline=${recovery_deadline:-$((SECONDS + 90))}
+          # opportunistic; each schedule retries the remaining candidates. The
+          # processing budget starts after the (separately bounded) listing.
+          recovery_deadline=$((SECONDS + 90))
           recovered=0
           for candidate in "${candidates[@]}"; do
             if [[ "${{ github.event_name }}" == "schedule" || "${{ github.event_name }}" == "repository_dispatch" ]]; then

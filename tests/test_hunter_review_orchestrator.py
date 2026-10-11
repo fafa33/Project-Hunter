@@ -131,7 +131,11 @@ def _absent_cycle_with_recorded_dispatches(monkeypatch) -> dict:
 
     def request_json(_repository, _token, _method, path, _payload=None):
         if path.startswith(f"actions/workflows/{orchestrator.COLLECTOR_WORKFLOW}/runs"):
+            if "event=workflow_dispatch" in path:  # pre-migration collectors: none draining
+                return {"workflow_runs": []}
             return {"workflow_runs": runs}
+        if path == "":
+            return {"default_branch": "main"}
         if path.startswith("commits/") and "/statuses" in path:
             return []
         raise AssertionError(f"unexpected path: {path}")
@@ -480,7 +484,11 @@ def _ensure_harness(monkeypatch, cycle, runs):
 
     def request_json(_repository, _token, _method, path, _payload=None):
         if path.startswith(f"actions/workflows/{orchestrator.COLLECTOR_WORKFLOW}/runs"):
+            if "event=workflow_dispatch" in path:  # pre-migration collectors: none draining
+                return {"workflow_runs": []}
             return {"workflow_runs": runs}
+        if path == "":
+            return {"default_branch": "main"}
         if path.startswith("commits/") and "/statuses" in path:
             return []
         pytest.fail(f"unexpected request {path}")
@@ -2256,7 +2264,9 @@ def test_scheduled_trusted_collector_recovery_uses_exact_attempt_artifacts():
     )
     assert "github.event_name == 'schedule'" in step["if"]
     script = step["run"]
-    assert "status=completed&per_page=100" in script
+    # The queue is derived from durable state, never from a run-history scan.
+    assert "outstanding-collector-runs" in script
+    assert "status=completed&per_page=100" not in script
     assert "collector_run_id=$run_id" not in script
     assert "commits/$head/statuses" not in script
     assert "recovery_deadline" in script
@@ -2335,20 +2345,24 @@ def test_missing_workflow_permission_baseline_is_detected_in_action_guard():
     assert "missing-workflow-permissions" in list(_actions_levels(document))
 
 
-def test_scheduled_collector_recovery_bounds_history_fetch_before_processing():
-    """An unbounded --paginate prefetch must never precede the recovery deadline."""
+def test_scheduled_collector_recovery_is_bounded_and_not_a_history_scan():
+    """The recovery queue is bounded by time and count and is not a fixed run-history window."""
     from pathlib import Path
 
     workflow = (Path(__file__).resolve().parents[1] / ".github/workflows/hunter-governance-reconcile.yml").read_text()
-    recovery = workflow.split("- name: Recover trusted collector completion", 1)[-1]
-    assert "timeout 12s gh api" in recovery
-    assert "scanned_pages < 3" in recovery
+    recovery = workflow.split("- name: Publish trusted collector completion", 1)[-1].split(
+        "- name: Refresh lightweight governance status", 1
+    )[0]
+    # Bounded: the listing has its own wall-clock and count limits, and processing has a deadline.
+    assert "timeout 75s python scripts/hunter_review_orchestrator.py outstanding-collector-runs" in recovery
+    assert "--limit 5" in recovery and "--budget-seconds 60" in recovery
     assert "SECONDS < recovery_deadline" in recovery
-    assert "mapfile -t candidates" not in recovery
-    assert (
-        'gh api --paginate "repos/$GITHUB_REPOSITORY/actions/workflows/hunter-reviewer-collector.yml/runs'
-        not in recovery
-    )
+    # Not a window over the newest runs: no workflow-run listing, page counter or paginate prefetch.
+    assert "actions/workflows/hunter-reviewer-collector.yml/runs" not in recovery
+    assert "scanned_pages" not in recovery
+    assert "--paginate" not in recovery
+    # Every candidate still passes the same validation before anything is published.
+    assert "pulls/$pr" in recovery and "run_attempt" in recovery and "trusted-collector-complete" in recovery
 
 
 def test_privileged_recovery_uses_default_branch_dispatch_not_candidate_ref():

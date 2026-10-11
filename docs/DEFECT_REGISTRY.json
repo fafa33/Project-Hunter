@@ -992,6 +992,16 @@
       "guard": "One create-only owner ref per (PR, exact head, generation, recovery epoch) independent of the dispatch nonce; a new epoch only on Actions-API evidence that the owner run ended without a valid collector result (never timeout alone), bounded by MAX_COLLECTOR_DISPATCHES; collector start and trusted completion both require the newest epoch, the matching proof status and the run-attempt claim; the run-attempts endpoint is addressed per attempt. Exercised through the real election against a create-only ref model, not a helper.",
       "test": "tests/test_collector_dispatch_adversarial.py::test_simultaneous_reconciles_with_different_nonces_authorize_exactly_one_dispatch",
       "status": "open"
+    },
+    {
+      "id": "PRH-114",
+      "class": "pr592-missed-completion-recovery-reads-a-fixed-run-history-window-so-older-outstanding-runs-starve",
+      "source": "PR #592 Copilot review, owner decision to fix",
+      "classification": "systemic",
+      "guard_boundary": "Governance workflow / collector dispatch, provenance, recovery, and review lifecycle",
+      "guard": "The recovery work queue is derived from durable GitHub state (open PR -> current cycle -> newest epoch's run claim -> completed run whose completion is not published), never from a position in run history, so it cannot be starved by unrelated runs; each sweep is bounded by time and count with a time-rotated start. Publication is idempotent and epoch-fenced at production and consumption. A bounded drain keeps pre-migration workflow_dispatch collectors as liveness evidence only.",
+      "test": "tests/test_collector_recovery_queue.py::test_run_behind_more_than_300_completed_runs_is_still_found",
+      "status": "open"
     }
   ],
   "families": [

@@ -9,6 +9,7 @@ import os
 import re
 import secrets
 import sys
+import time
 from collections.abc import Iterable
 from dataclasses import dataclass
 from datetime import UTC, datetime
@@ -629,6 +630,10 @@ def publish_trusted_collector_completion(repository: str, token: str, run_id: in
         return "SKIPPED: collector authority could not be re-verified at publication"
     if not recheck or recheck[-1] != owner:
         return "SKIPPED: collector owner was replaced before publication"
+    # Idempotent: a concurrent or earlier sweep may already have published this run.
+    published, published_run, _why = read_collector_completion(repository, token, pr_number, head_sha)
+    if published == "present" and published_run == run_id:
+        return "SKIPPED: collector completion already published"
     publish_collector_completion(repository, token, pr_number, head_sha, run_id)
     return f"PUBLISHED: collector completion PR #{pr_number} at {head_sha[:12]}"
 
@@ -813,7 +818,11 @@ def collector_runs_since(
     a truncated listing must never read as "the owner's run does not exist".
     """
     expected = collector_run_name(pr_number, head_sha, generation)
-    found: list[dict[str, Any]] = []
+    # A legacy collector still draining counts as active, so recovery cannot replace
+    # an owner while one may be running; it ends by itself within the drain bound.
+    found: list[dict[str, Any]] = [
+        run for run in _active_legacy_collector_runs(repository, token) if _run_title(run) == expected
+    ]
     for page in range(1, RECOVERY_RUN_HISTORY_MAX_PAGES + 1):
         payload = request_json(
             repository,
@@ -973,6 +982,115 @@ def collector_run_is_current(repository: str, token: str, pr_number: int, head_s
         if claim is not None and claim.get("kind") == "run" and claim.get("run_id") == run_id:
             return owner == chain[-1]
     return False
+
+
+#: Missed-completion recovery works from durable state, not from run-history
+#: position. The queue is: open pull requests -> their current cycle -> the newest
+#: epoch's run claim -> a completed successful run whose completion is not yet
+#: published. All of it lives in GitHub (owner/run-claim refs and statuses), so it
+#: survives across scheduled runs without an in-memory cursor or a new write path,
+#: cannot be starved by how many unrelated runs exist, and a processed run simply
+#: stops being outstanding. Each sweep is bounded by time and by ``limit`` and the
+#: start of the scan rotates with time, so every outstanding run is reached.
+RECOVERY_PULL_REQUEST_MAX_PAGES = 5
+RECOVERY_DEFAULT_LIMIT = 5
+RECOVERY_DEFAULT_BUDGET_SECONDS = 60
+
+
+class OutstandingCollectorRun(NamedTuple):
+    pr_number: int
+    head_sha: str
+    run_id: int
+    title: str
+
+
+def list_open_pull_requests(repository: str, token: str) -> list[tuple[int, str]]:
+    """Open pull requests as (number, head) sorted by number; page 1 must be readable.
+
+    A later page that fails ends the listing early (the caller still gets a
+    consistent prefix and the next sweep retries); an unreadable first page raises.
+    """
+    found: dict[int, str] = {}
+    for page in range(1, RECOVERY_PULL_REQUEST_MAX_PAGES + 1):
+        try:
+            batch = request_json(repository, token, "GET", f"pulls?state=open&per_page=100&page={page}")
+        except transport.GitHubRequestError:
+            if page == 1:
+                raise
+            print(f"Open pull request page {page} unavailable; sweeping the pages read so far.", file=sys.stderr)
+            break
+        if not isinstance(batch, list):
+            if page == 1:
+                raise ValueError("open pull request listing unavailable")
+            break
+        for item in batch:
+            head = str(((item or {}).get("head") or {}).get("sha") or "")
+            number = (item or {}).get("number")
+            if isinstance(number, int) and re.fullmatch(r"[0-9a-f]{40}", head):
+                found[number] = head
+        if len(batch) < 100:
+            break
+    return sorted(found.items())
+
+
+def outstanding_collector_runs(
+    repository: str,
+    token: str,
+    *,
+    limit: int = RECOVERY_DEFAULT_LIMIT,
+    budget_seconds: float = RECOVERY_DEFAULT_BUDGET_SECONDS,
+    rotation: int = 0,
+) -> list[OutstandingCollectorRun]:
+    """Completed collector runs whose trusted completion has not been published.
+
+    Per-PR evidence failures are isolated (that PR is retried next sweep); deleted
+    or expired runs are skipped. Nothing here publishes: the caller still runs the
+    exact-head, run-attempt, proof and epoch validation before any publication.
+    """
+    pulls = list_open_pull_requests(repository, token)
+    if pulls:
+        start = rotation % len(pulls)
+        pulls = pulls[start:] + pulls[:start]
+    deadline = time.monotonic() + budget_seconds
+    outstanding: list[OutstandingCollectorRun] = []
+    for pr_number, head_sha in pulls:
+        if time.monotonic() >= deadline or len(outstanding) >= limit:
+            break
+        try:
+            state, cycle, _error = read_cycle(repository, token, pr_number, head_sha)
+            if state != "present" or cycle is None or cycle.state not in OPEN_CYCLE_STATES:
+                continue
+            chain = read_owner_chain(repository, token, pr_number, head_sha, cycle.generation_id)
+            if not chain:
+                continue
+            claim: dict[str, Any] | None = None
+            for attempt in range(MAX_COLLECTOR_DISPATCHES, 0, -1):
+                claim = _read_claim(
+                    repository,
+                    token,
+                    collector_run_claim_ref(pr_number, head_sha, cycle.generation_id, chain[-1].epoch, attempt),
+                )
+                if claim is not None and claim.get("kind") == "run":
+                    break
+                claim = None
+            run_id = claim.get("run_id") if claim else None
+            if not isinstance(run_id, int) or run_id <= 0:
+                continue
+            try:
+                run = request_json(repository, token, "GET", f"actions/runs/{run_id}")
+            except transport.GitHubRequestError as exc:
+                if exc.status_code == 404 and exc.category == "permanent":
+                    continue  # deleted or expired: nothing left to publish
+                raise
+            if not isinstance(run, dict) or run.get("status") != "completed" or run.get("conclusion") != "success":
+                continue
+            published, published_run, _why = read_collector_completion(repository, token, pr_number, head_sha)
+            if published == "present" and published_run == run_id:
+                continue
+            outstanding.append(OutstandingCollectorRun(pr_number, head_sha, run_id, _run_title(run)))
+        except (transport.GitHubRequestError, ValueError) as exc:
+            print(f"Recovery evidence unavailable for PR #{pr_number}: {exc}", file=sys.stderr)
+    return outstanding[:limit]
 
 
 def claim_collector_run(
@@ -1166,6 +1284,49 @@ COLLECTOR_HISTORY_PAGE_SIZE = 100
 COLLECTOR_HISTORY_MAX_PAGES = 5
 
 
+#: A pre-migration collector (``workflow_dispatch``) can only exist if the old
+#: orchestrator dispatched it before this one took over, and GitHub ends any job
+#: after its timeout. A legacy run still reporting active after this long is stale
+#: and ignored, so an untrusted or wedged legacy run can never block dispatch or
+#: recovery for longer than this bound.
+LEGACY_COLLECTOR_DRAIN_SECONDS = 3600
+
+
+def _active_legacy_collector_runs(repository: str, token: str) -> list[dict[str, Any]]:
+    """Pre-migration collectors that may still be executing, within the drain bound.
+
+    They are liveness evidence only: they hold no ownership claim, so they can never
+    publish a completion under the new contract (completion requires a
+    ``repository_dispatch`` run holding the current epoch's claim). Counting them as
+    live keeps a new owner from being elected while one is still running; reviewer
+    invocations are keyed by head, claims and generation and exclude the run, so even
+    a duplicate adopts the existing trigger rather than invoking a reviewer twice.
+    Only runs of the trusted default-branch definition count, and only while recent;
+    an unreadable listing raises rather than being read as "none".
+    """
+    info = request_json(repository, token, "GET", "")
+    branch = str((info or {}).get("default_branch") or "main")
+    runs: list[dict[str, Any]] = []
+    for status in ("in_progress", "queued"):
+        payload = request_json(
+            repository,
+            token,
+            "GET",
+            f"actions/workflows/{COLLECTOR_WORKFLOW}/runs?event=workflow_dispatch&status={status}&per_page=100",
+        )
+        for run in payload.get("workflow_runs", []) if isinstance(payload, dict) else []:
+            if (
+                isinstance(run, dict)
+                and run.get("event") == "workflow_dispatch"
+                and str(run.get("path") or "") == COLLECTOR_WORKFLOW_PATH
+                and run.get("head_branch") == branch
+                and str(run.get("status") or "") in ACTIVE_RUN_STATES
+                and not _older_than(str(run.get("created_at") or ""), LEGACY_COLLECTOR_DRAIN_SECONDS)
+            ):
+                runs.append(run)
+    return runs
+
+
 def _collector_workflow_runs(repository: str, token: str) -> list[dict[str, Any]]:
     collected: list[dict[str, Any]] = []
     for page in range(1, COLLECTOR_HISTORY_MAX_PAGES + 1):
@@ -1180,6 +1341,7 @@ def _collector_workflow_runs(repository: str, token: str) -> list[dict[str, Any]
         collected.extend(run for run in batch if isinstance(run, dict))
         if len(batch) < COLLECTOR_HISTORY_PAGE_SIZE:
             break
+    collected.extend(_active_legacy_collector_runs(repository, token))
     return [run for run in collected if str(run.get("path") or "") == COLLECTOR_WORKFLOW_PATH]
 
 
@@ -1602,14 +1764,17 @@ def finalize_exhausted_pool(
         return "SKIPPED: exact head is not a full SHA"
     if not trusted_completion and current_run_id() != run_id:
         return "SKIPPED: the completing run is not this process's run"
-    if trusted_completion:
-        # Exhausted-pool finalization is completion evidence too: a run fenced by a
-        # newer epoch must not end the opportunity.
+
+    def still_current() -> bool:
+        """Exhausted-pool finalization is completion evidence too: a run fenced by a
+        newer epoch must not end the opportunity. Re-asked at each step that matters."""
+        if not trusted_completion:
+            return True
         finished = request_json(repository, token, "GET", f"actions/runs/{run_id}")
-        if not isinstance(finished, dict) or not collector_run_is_current(
-            repository, token, pr_number, head_sha, finished
-        ):
-            return "SKIPPED: collector run is fenced by a newer owner"
+        return isinstance(finished, dict) and collector_run_is_current(repository, token, pr_number, head_sha, finished)
+
+    if not still_current():
+        return "SKIPPED: collector run is fenced by a newer owner"
     receipt, unreadable = read_collector_receipt(results_path)
     if receipt is None:
         return f"SKIPPED: {unreadable}"
@@ -1651,6 +1816,10 @@ def finalize_exhausted_pool(
     cycle = open_cycle()
     if cycle is None:
         return "SKIPPED: the cycle ended concurrently"
+    # The receipt and review-state reads above take time: ask the fence again at the
+    # last moment before the terminal state is written.
+    if not still_current():
+        return "SKIPPED: collector run was fenced by a newer owner before publication"
     publish_cycle(
         repository,
         token,
@@ -1666,6 +1835,12 @@ def finalize_exhausted_pool(
             generation_id=cycle.generation_id,
         ),
     )
+    # A status write cannot be made atomic with the fence, so close the remaining gap
+    # by compensation: if a newer owner took over while the terminal state was being
+    # written, put the open cycle back so the newer collector's opportunity is not ended.
+    if not still_current():
+        publish_cycle(repository, token, head_sha, cycle=cycle)
+        return "SKIPPED: collector run was fenced during publication; the open cycle was restored"
     return "PUBLISHED: REVIEWER_UNAVAILABLE"
 
 
@@ -2063,6 +2238,10 @@ def parser() -> argparse.ArgumentParser:
     complete.add_argument("--pr", type=int, required=True)
     complete.add_argument("--head", required=True)
     complete.add_argument("--run-id", type=int, required=True)
+    recover = sub.add_parser("outstanding-collector-runs")
+    recover.add_argument("--repository", required=True)
+    recover.add_argument("--limit", type=int, default=RECOVERY_DEFAULT_LIMIT)
+    recover.add_argument("--budget-seconds", type=float, default=RECOVERY_DEFAULT_BUDGET_SECONDS)
     trusted = sub.add_parser("trusted-collector-complete")
     trusted.add_argument("--repository", required=True)
     trusted.add_argument("--run-id", type=int, required=True)
@@ -2073,7 +2252,18 @@ def main() -> int:
     args = parser().parse_args()
     token = os.environ.get("GITHUB_TOKEN") or os.environ.get("GH_TOKEN") or ""
     try:
-        if args.command == "trusted-collector-complete":
+        if args.command == "outstanding-collector-runs":
+            # One "<run id><TAB><title>" line per outstanding run; the trusted workflow
+            # validates and publishes. Time-bucketed rotation spreads sweeps over the queue.
+            for item in outstanding_collector_runs(
+                args.repository,
+                token,
+                limit=args.limit,
+                budget_seconds=args.budget_seconds,
+                rotation=int(time.time() // 300),
+            ):
+                print(f"{item.run_id}\t{item.title}")
+        elif args.command == "trusted-collector-complete":
             # The trusted workflow fixes the artifact directory. No CLI path
             # can select an arbitrary file to read under a privileged token.
             receipt_dir = Path(os.environ["RUNNER_TEMP"]) / "collector-receipt"

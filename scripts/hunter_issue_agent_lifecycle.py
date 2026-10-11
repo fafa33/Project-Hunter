@@ -502,9 +502,12 @@ def cmd_resolve(configuration: control.Configuration, arguments: argparse.Namesp
             except state.LedgerConflictError:
                 print(f"issue {issue}: no-op (the knowledge ledger moved; the next pass re-decides)")
     if resolved:
-        # A thread resolution does not wake a privileged workflow. The trusted
-        # scheduled merge-readiness sweep is the bounded recovery mechanism;
-        # never dispatch a candidate-selectable status-writing workflow.
+        # A thread resolution does not wake a privileged workflow. The readiness
+        # status refreshes on the event-driven workflow_run chain while checks run,
+        # and otherwise on the trusted scheduled sweep (best-effort; GitHub may
+        # delay it). An operator can force a trusted refresh with a
+        # `hunter-trusted-recovery` repository_dispatch. This job deliberately holds
+        # no `actions: write` and never dispatches a status-writing workflow.
         print("merge readiness refresh deferred to trusted scheduled sweep")
     return 0 if resolved or arguments.issue else EXIT_NOOP
 

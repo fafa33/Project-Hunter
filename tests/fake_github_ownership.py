@@ -45,12 +45,15 @@ class FakeGitHub:
         self.runs: dict[int, dict[str, Any]] = {}
         self.attempts: dict[tuple[int, int], dict[str, Any]] = {}
         self.dispatches: list[dict[str, Any]] = []
-        self.cycle: Any = None
+        self.cycle: Any = None  # the most recently published cycle
+        self.cycles: dict[tuple[int, str], Any] = {}
+        self.open_prs: dict[int, str] = {472: "a" * 40}
         self.cycle_publications = 0
         self.next_run = 5000
         self.fail: dict[str, Any] = {}
         self.calls: list[tuple[str, str]] = []
         self.ref_gate: threading.Barrier | None = None
+        self.completion_gate: threading.Barrier | None = None
         self.clock = 0
 
     # -- test controls -------------------------------------------------------
@@ -84,6 +87,7 @@ class FakeGitHub:
             if record.get("kind") == "owner":
                 record["claimed_at"] = old
                 tag["message"] = json.dumps(record, sort_keys=True, separators=(",", ":"))
+        self.cycles = {key: replace(cycle, started_at=old) for key, cycle in self.cycles.items()}
         if self.cycle is not None:
             self.cycle = replace(self.cycle, started_at=old)
 
@@ -121,6 +125,9 @@ class FakeGitHub:
         if method == "POST" and path == "git/refs":
             if self.ref_gate is not None:
                 self.ref_gate.wait(timeout=5)
+        if method == "POST" and path.startswith("statuses/") and (payload or {}).get("state") == "success":
+            if self.completion_gate is not None:  # a completion (not a pending dispatch proof) is being written
+                self.completion_gate.wait(timeout=5)
         with self.lock:
             return self._dispatch(method, path, payload)
 
@@ -187,6 +194,10 @@ class FakeGitHub:
             query = dict(part.split("=") for part in path.split("?", 1)[1].split("&"))
             size, page = int(query.get("per_page", 30)), int(query.get("page", 1))
             ordered = sorted(self.collector_runs(), key=lambda r: (r["created_at"], r["id"]), reverse=True)
+            if "event" in query:
+                ordered = [r for r in ordered if r["event"] == query["event"]]
+            if "status" in query:
+                ordered = [r for r in ordered if r["status"] == query["status"]]
             return {"workflow_runs": ordered[(page - 1) * size : page * size]}
         if method == "GET" and "/attempts/" in path:
             parts = path.split("/")
@@ -196,19 +207,34 @@ class FakeGitHub:
             if run_id not in self.runs:
                 raise transport.GitHubRequestError("not found", category="permanent", status_code=404)
             return dict(self.runs[run_id])
+        if method == "GET" and path.startswith("pulls?"):
+            query = dict(part.split("=") for part in path.split("?", 1)[1].split("&"))
+            size, page = int(query.get("per_page", 30)), int(query.get("page", 1))
+            ordered = sorted(self.open_prs.items())
+            return [
+                {"number": number, "head": {"sha": head}} for number, head in ordered[(page - 1) * size : page * size]
+            ]
         if method == "GET" and path.startswith("pulls/"):
-            return {"state": "open", "head": {"sha": "a" * 40}}
+            number = int(path.split("/")[1])
+            return {"state": "open", "head": {"sha": self.open_prs.get(number, "a" * 40)}}
         raise AssertionError(f"unmodelled GitHub call: {method} {path}")
 
     # -- cycle store (the status codec is not under test here) ---------------
-    def read_cycle(self, *_args: Any) -> tuple[str, Any, None]:
+    def read_cycle(self, *args: Any) -> tuple[str, Any, None]:
         with self.lock:
-            return ("present", self.cycle, None) if self.cycle is not None else ("absent", None, None)
+            key = (args[2], args[3]) if len(args) >= 4 else None
+            cycle = self.cycles.get(key) if key is not None else self.cycle
+            return ("present", cycle, None) if cycle is not None else ("absent", None, None)
 
-    def publish_cycle(self, _repo: str, _token: str, _head: str, *, cycle: Any) -> None:
+    def publish_cycle(self, _repo: str, _token: str, head: str, *, cycle: Any) -> None:
         with self.lock:
             self.cycle = cycle
+            self.cycles[(cycle.pr_number, head)] = cycle
             self.cycle_publications += 1
+
+    def delete_run(self, run_id: int) -> None:
+        with self.lock:
+            del self.runs[run_id]
 
 
 def install(monkeypatch: Any, fake: FakeGitHub, run_ids: threading.local | None = None) -> threading.local:

@@ -10,13 +10,13 @@ Status: **proposed contract, not deployed**. Owner issue: #588; scoped delivery:
 | Published merge readiness | `.github/workflows/hunter-merge-readiness.yml` → trusted default-branch checkout → `bootstrap_external_review_469.py readiness` → `hunter_merge_readiness_v2.main()` | Derived status only, not permission to merge; event, workflow-run, schedule and manual wakeups |
 | Candidate admission | `scripts/hunter_governance_review_v2.py`, `read_trusted_upgrade_status` | Verified ingress signatures plus hosted exact-head proof while connector ingress is active; fail closed |
 | Canonical preflight | `.github/workflows/hunter-pre-pr-preflight.yml` and trusted preflight-upgrade workflow | Expensive proof bound to immutable head, not a PR branch name |
-| Independent reviewer | `.github/workflows/hunter-reviewer-collector.yml` is **workflow_dispatch-only**; trusted orchestration dispatches it. `.github/workflows/hunter-governance-reconcile.yml` wakes on `push` to main, `pull_request_target` (`ready_for_review`, `synchronize`), selected `workflow_run` completions, 5-minute cron and manual dispatch | Evidence and actionable findings, not an unbounded availability dependency; bot review-event approval holds were mitigated in #584 by removing direct review triggers |
+| Independent reviewer | `.github/workflows/hunter-reviewer-collector.yml` is **repository_dispatch-only** (`hunter-reviewer-collect`, default-branch definition; the former `workflow_dispatch` is removed); trusted orchestration dispatches it after electing a create-only owner. `.github/workflows/hunter-governance-reconcile.yml` wakes on `push` to main, `pull_request_target` (`ready_for_review`, `synchronize`), selected `workflow_run` completions, 5-minute cron and the trusted `repository_dispatch` recovery event | Evidence and actionable findings, not an unbounded availability dependency; bot review-event approval holds were mitigated in #584 by removing direct review triggers |
 | Final authorization | Repository owner | No automated merge without explicit approval |
 
 ## Active wakeup and status mapping (baseline; not a proposed implementation)
 
 - **Merge Readiness wakeups:** `pull_request_target` (`opened`, `reopened`, `synchronize`, `ready_for_review`, `converted_to_draft`); `workflow_run` completion for CI, Dependency review, Governance Reconcile, Pre-PR Preflight, Trusted Preflight Upgrade and CodeQL bridge; every 5 minutes; `workflow_dispatch` with PR number. **Direct review-event triggers were removed in #584** to avoid approval-held bot runs; the cron is a recovery path, not a freshness guarantee.
-- **Governance Reconcile wakeups:** main push, selected `workflow_run` completions (Pre-PR Preflight, Trusted Preflight Upgrade, Governance Review, Reviewer Collector), `pull_request_target` (`ready_for_review`, `synchronize`), 5-minute schedule and manual dispatch. It can dispatch privileged orchestration; reviewer collector itself has only `workflow_dispatch`.
+- **Governance Reconcile wakeups:** main push, selected `workflow_run` completions (Pre-PR Preflight, Trusted Preflight Upgrade, Governance Review, Reviewer Collector), `pull_request_target` (`ready_for_review`, `synchronize`), 5-minute schedule and the trusted `repository_dispatch` recovery event. It can dispatch privileged orchestration; the reviewer collector itself has only `repository_dispatch`.
 - **Actual readiness status contract:** `hunter_merge_readiness_v2.Decision.state` is GitHub commit-status `success`, `failure` or `pending` in context `Hunter Merge Readiness`. `READY` maps to `success` only after exact-head safety prerequisites pass; `BLOCKED` maps to `failure` for verified safety defects; `WAITING` maps to `pending` for explicitly in-flight prerequisites and those transport/read exceptions that the active resolver treats as pending. For normal return paths, `hunter_governance_review_v2.candidate_admission` classifies malformed or absent admission evidence as `failure` (or an explicitly in-flight prerequisite as `pending`). **Current exception:** `hunter_merge_readiness_v2.candidate_admission_state` catches arbitrary exceptions from that call and returns `pending` with an evidence-unavailable diagnostic; this is fail-closed for READY but not a terminal `failure`. Do not treat the current exception mapping as a guaranteed bounded outage policy; changing it requires M2–M7 tests. Any alternative outage policy belongs to a separately tested M2–M7 change, not this baseline. `TIMED_OUT` is **not** a fourth GitHub status: a timed-out required safety proof must produce `failure` with a bounded diagnostic, while external reviewer `REVIEW_TIMED_OUT` is advisory and may still yield `success` when all deterministic safety checks pass. The owner merge guard revalidates live state; no published status alone grants owner authorization.
 - **M5 migration caveat:** the baseline above documents the post-#584 `main` trigger contract at `bd4cafb`. Before implementing M5, re-read current `main` and write regression tests against its live triggers, not a historical pre-#584 snapshot.
 
@@ -67,5 +67,15 @@ gh api -X POST repos/fafa33/Project-Hunter/dispatches -f event_type=hunter-trust
 
 This is a full current-state refresh, not permission to merge or to run a
 candidate branch with a privileged token. Keep the five-minute schedule as
-a fallback. The previous `workflow_dispatch` on-demand path is intentionally
+a fallback.
+
+**Accepted refresh latency (owner decision, #592 review).** Resolving a review
+thread does not grant any workflow extra privilege to wake a controller. The
+readiness status refreshes (a) within seconds to a minute while checks are running,
+through the `workflow_run` chain from CI, Governance Reconcile and the preflights;
+(b) otherwise on the scheduled sweep, which is best-effort: on this repository
+scheduled Merge Readiness runs were observed several hours apart (Oct 2026), so the
+documented `*/5` is nominal; and (c) immediately on demand through the
+`hunter-trusted-recovery` dispatch above. The lower-privilege design is kept on
+purpose; `resolve-finding` holds no `actions: write` and does not dispatch. The previous `workflow_dispatch` on-demand path is intentionally
 not restored because a caller-selected candidate ref is not a trust boundary.

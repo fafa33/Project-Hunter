@@ -730,3 +730,72 @@ def test_unreadable_epoch_evidence_rejects_the_completion_status(env):
     github.fail["GET git/ref/*"] = transport.GitHubRequestError("down", category="transient", status_code=500)
     state, accepted, error = orchestrator.read_collector_completion(REPO, "token", PR, HEAD)
     assert (state, accepted) == ("absent", None) and error
+
+
+def _exhausted_pool_setup(github, local, monkeypatch):
+    """Everything finalize_exhausted_pool needs except the fence, which is the real one."""
+    reconcile(github, local, 101)
+    run, proof, epoch = capability(github)
+    start_collector(github, run, proof, epoch)
+    github.finish(101, "success")
+    github.finish(run, "success")
+    open_cycle = github.cycle
+    monkeypatch.setattr(orchestrator, "read_collector_receipt", lambda _p: ({"run_attempt": 1}, ""))
+    monkeypatch.setattr(
+        orchestrator, "review_request_state", lambda *_a: orchestrator.ReviewRequestReadiness(True, "c" * 64, "", "ok")
+    )
+    monkeypatch.setattr(orchestrator, "current_remediation_generation", lambda *_a: GEN)
+    monkeypatch.setattr(orchestrator.pre_ready, "load_reviewer_pool", lambda: ({"agents": []}, ""))
+    monkeypatch.setattr(orchestrator, "pool_exhaustion", lambda *_a, **_k: orchestrator.PoolExhaustion(True, ""))
+    return run, open_cycle
+
+
+def test_exhausted_pool_terminal_state_is_not_written_when_fenced_in_the_final_window(env, monkeypatch):
+    """Copilot: the fence was asked before the receipt/review-state reads, not at publication."""
+    github, local = env
+    run, open_cycle = _exhausted_pool_setup(github, local, monkeypatch)
+    real_read = orchestrator.read_cycle
+    reads = {"n": 0}
+
+    def replacement_lands_on_the_second_cycle_read(*args):
+        reads["n"] += 1
+        if reads["n"] == 2:  # between the two open_cycle() reads, i.e. just before publishing
+            _replacement_lands(github)
+        return real_read(*args)
+
+    monkeypatch.setattr(orchestrator, "read_cycle", replacement_lands_on_the_second_cycle_read)
+    before = github.cycle_publications
+    outcome = orchestrator.finalize_exhausted_pool(
+        REPO, "token", PR, HEAD, run, pathlib_missing(), trusted_completion=True, expected_attempt=1
+    )
+    assert outcome == "SKIPPED: collector run was fenced by a newer owner before publication"
+    assert github.cycle_publications == before and github.cycle.state == open_cycle.state
+
+
+def test_exhausted_pool_terminal_state_is_undone_when_fenced_during_publication(env, monkeypatch):
+    github, local = env
+    run, open_cycle = _exhausted_pool_setup(github, local, monkeypatch)
+    real_publish = orchestrator.publish_cycle
+    landed = {"done": False}
+
+    def replacement_lands_while_publishing(repository, token, head, *, cycle):
+        real_publish(repository, token, head, cycle=cycle)
+        if cycle.state == "REVIEWER_UNAVAILABLE" and not landed["done"]:
+            landed["done"] = True
+            _replacement_lands(github)
+
+    monkeypatch.setattr(orchestrator, "publish_cycle", replacement_lands_while_publishing)
+    outcome = orchestrator.finalize_exhausted_pool(
+        REPO, "token", PR, HEAD, run, pathlib_missing(), trusted_completion=True, expected_attempt=1
+    )
+    assert outcome == "SKIPPED: collector run was fenced during publication; the open cycle was restored"
+    assert github.cycle.state == open_cycle.state != "REVIEWER_UNAVAILABLE"
+
+
+def test_exhausted_pool_is_published_when_the_run_stays_current(env, monkeypatch):
+    github, local = env
+    run, _ = _exhausted_pool_setup(github, local, monkeypatch)
+    outcome = orchestrator.finalize_exhausted_pool(
+        REPO, "token", PR, HEAD, run, pathlib_missing(), trusted_completion=True, expected_attempt=1
+    )
+    assert outcome == "PUBLISHED: REVIEWER_UNAVAILABLE" and github.cycle.state == "REVIEWER_UNAVAILABLE"
