@@ -816,3 +816,50 @@ def test_a_non_mapping_step_env_is_treated_as_empty_not_a_crash(guard):
             if "hunter_reviewer_collector.py" in str(step.get("run", "")):
                 step["env"] = ["G=main"]
     assert guard.validate_collector_workflow_definition(definition)
+
+
+def _collector_job(definition):
+    return next(
+        job
+        for job in definition["jobs"].values()
+        if any("hunter_reviewer_collector" in str(s.get("run")) for s in job["steps"])
+    )
+
+
+def test_an_indirect_collector_invocation_in_another_step_is_held_to_the_contract(guard):
+    """Copilot: a second step reaching the script through an env variable was never checked."""
+    import copy
+
+    definition = _real_collector_definition()
+    job = _collector_job(definition)
+    job["steps"].append(
+        {
+            "name": "indirect",
+            "env": {"SCRIPT": "scripts/hunter_reviewer_collector.py"},
+            "run": 'python "$SCRIPT" --pr 1 --head abc --generation main',
+        }
+    )
+    assert guard.validate_collector_workflow_definition(definition)
+    # the same indirection as the only collector step cannot satisfy the guard either
+    sole = copy.deepcopy(_real_collector_definition())
+    sole_job = _collector_job(sole)
+    for step in sole_job["steps"]:
+        if "hunter_reviewer_collector" in str(step.get("run")):
+            step["env"] = {**(step.get("env") or {}), "SCRIPT": "scripts/hunter_reviewer_collector.py"}
+            step["run"] = (
+                'python "$SCRIPT" --pr 1 --head abc --generation "${{ github.event.client_payload.generation_id }}"'
+            )
+    assert guard.validate_collector_workflow_definition(sole)
+
+
+def test_defaults_only_matter_where_they_reach_the_collector_step(guard):
+    """Copilot: another job's defaults are unrelated; the workflow's and the collector job's are not."""
+    definition = _real_collector_definition()
+    definition["jobs"]["unrelated"] = {"runs-on": "ubuntu-latest", "defaults": {"run": {"shell": "bash"}}, "steps": []}
+    assert guard.validate_collector_workflow_definition(definition) == []
+    own = _real_collector_definition()
+    _collector_job(own)["defaults"] = {"run": {"working-directory": "/tmp"}}
+    assert guard.validate_collector_workflow_definition(own)
+    workflow_wide = _real_collector_definition()
+    workflow_wide["defaults"] = {"run": {"shell": "bash"}}
+    assert guard.validate_collector_workflow_definition(workflow_wide)

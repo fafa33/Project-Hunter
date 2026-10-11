@@ -1960,14 +1960,22 @@ def validate_collector_workflow_definition(definition: Any) -> list[str]:
     jobs = definition.get("jobs")
     if not isinstance(jobs, dict):
         return [*errors, "reviewer collector workflow must declare its jobs as a mapping"]
-    steps = [
-        step
+    placed = [
+        (job, step)
         for job in jobs.values()
         if isinstance(job, dict) and isinstance(job.get("steps"), list)
         for step in job["steps"]
         if isinstance(step, dict)
     ]
-    collector_steps = [step for step in steps if "hunter_reviewer_collector" in str(step.get("run") or "")]
+    # A step references the collector when the name appears anywhere it can reach the shell: the
+    # command, its environment, or its inputs. An indirect reference (``env: SCRIPT=...`` with
+    # ``python "$SCRIPT"``) is therefore held to the same contract, and cannot satisfy it because the
+    # contract needs the literal trusted script in the command itself.
+    collector_steps = [
+        (job, step)
+        for job, step in placed
+        if "hunter_reviewer_collector" in " ".join(str(step.get(field) or "") for field in ("run", "env", "with"))
+    ]
     if not collector_steps:
         errors.append("reviewer collector workflow must contain a step that runs hunter_reviewer_collector.py")
     else:
@@ -1975,12 +1983,11 @@ def validate_collector_workflow_definition(definition: Any) -> list[str]:
         # that actually reaches ``--generation`` must be the dispatched one. The
         # command is tokenised so a variable that is merely mentioned elsewhere
         # in the script, or a flag belonging to another command, cannot satisfy it.
-        for step in collector_steps:
+        for job, step in collector_steps:
             env = step.get("env")
-            if "shell" in step or any(
-                isinstance(scope, dict) and isinstance(scope.get("defaults"), dict)
-                for scope in (definition, *jobs.values())
-            ):
+            # Defaults reach the step from the workflow and from its own job only; another job's
+            # defaults cannot change how this step runs.
+            if "shell" in step or any(isinstance(scope.get("defaults"), dict) for scope in (definition, job)):
                 errors.append("the reviewer collector step must run under the default shell")
                 continue
             if not _collector_generation_is_bound(str(step.get("run") or ""), env if isinstance(env, dict) else {}):
