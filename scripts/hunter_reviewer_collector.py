@@ -1963,6 +1963,10 @@ def load_exhaustion(
     return evidence
 
 
+BIND_ATTEMPTS = 6
+BIND_INTERVAL_SECONDS = 5
+
+
 def verify_trusted_dispatch_before_work(
     repository: str,
     token: str,
@@ -2049,6 +2053,17 @@ def verify_trusted_dispatch_before_work(
     if not issued_at or str(run.get("created_at") or "") < issued_at:
         raise ValueError("collector dispatch run predates trusted capability")
     attempt = int(run.get("run_attempt") or 1)
+    # Bind the capability to the run GitHub created for the dispatch before it can
+    # be consumed. Binding is deterministic and create-only, so a competing run that
+    # copied the payload settles on the earlier run and is rejected here. The wait
+    # is bounded and an unavailable binding fails closed.
+    for remaining in range(BIND_ATTEMPTS, 0, -1):
+        if orchestration.bind_dispatched_run(repository, token, pr_number, head_sha, generation, holder) is not None:
+            break
+        if remaining > 1:
+            time.sleep(BIND_INTERVAL_SECONDS)
+    else:
+        raise ValueError("collector run could not be bound to the dispatched capability")
     orchestration.claim_collector_run(
         repository, token, pr_number, head_sha, generation, holder.epoch, digest, run_id, attempt
     )

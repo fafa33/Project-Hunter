@@ -135,7 +135,9 @@ class FakeGitHub:
                         error = error[1]
                     raise error
         if method == "POST" and path == "git/refs":
-            if self.ref_gate is not None:
+            if self.ref_gate is not None and str((payload or {}).get("ref", "")).startswith(
+                f"refs/{orchestrator.OWNER_REF_PREFIX}"
+            ):
                 self.ref_gate.wait(timeout=5)
         if method == "POST" and path.startswith("statuses/") and (payload or {}).get("state") == "success":
             if self.completion_gate is not None:  # a completion (not a pending dispatch proof) is being written

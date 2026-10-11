@@ -688,6 +688,7 @@ def publish_trusted_collector_completion(repository: str, token: str, run_id: in
 
 OWNER_REF_PREFIX = "tags/hunter-collector-owner"
 RUN_CLAIM_REF_PREFIX = "tags/hunter-collector-run"
+RUN_BIND_REF_PREFIX = "tags/hunter-collector-bind"
 CLAIM_RECORD_VERSION = 1
 
 
@@ -721,6 +722,11 @@ def collector_owner_ref(pr_number: int, head_sha: str, generation: str, epoch: i
 def collector_run_claim_ref(pr_number: int, head_sha: str, generation: str, epoch: int, attempt: int) -> str:
     """The create-only claim of one (epoch, run attempt); a replayed capability collides here."""
     return f"{RUN_CLAIM_REF_PREFIX}/{_claim_digest(pr_number, head_sha, generation, epoch)}-a{attempt}"
+
+
+def collector_run_bind_ref(pr_number: int, head_sha: str, generation: str, epoch: int) -> str:
+    """The create-only binding of one epoch's capability to the one run it may start."""
+    return f"{RUN_BIND_REF_PREFIX}/{_claim_digest(pr_number, head_sha, generation, epoch)}"
 
 
 def collector_completion_claim_ref(pr_number: int, head_sha: str, generation: str, run_id: int) -> str:
@@ -978,6 +984,7 @@ def require_current_collector_authority(
     ]
     if len(matches) != 1:
         raise CollectorAuthorityError("no unique trusted proof for the elected epoch")
+    verify_bound_run(repository, token, pr_number, head_sha, cycle.generation_id, holder, run_id)
     claim = _read_claim(
         repository, token, collector_run_claim_ref(pr_number, head_sha, cycle.generation_id, holder.epoch, attempt)
     )
@@ -1147,6 +1154,89 @@ def outstanding_collector_runs(
     return outstanding[:limit]
 
 
+def bind_dispatched_run(
+    repository: str, token: str, pr_number: int, head_sha: str, generation: str, owner: CollectorOwner
+) -> dict[str, Any] | None:
+    """Bind the epoch's single-use capability to the run GitHub created for it.
+
+    The identity is the Actions run ID reported by the Actions API, never a value
+    the caller of ``repository_dispatch`` supplies. A capability can only reach a
+    run through a dispatch issued after the owner claim, so the run created for the
+    orchestrator's own dispatch is the earliest eligible run of this exact cycle
+    (same workflow path, ``repository_dispatch`` event, default branch, PR/head/
+    generation, created at or after the claim). A thief needs the capability first,
+    so any run carrying a copied payload is strictly later and loses. The choice is a
+    deterministic function of GitHub state recorded in a create-only ref, so every
+    trusted caller (the dispatching orchestrator or the collector itself) settles on
+    the same run. Returns the record, or ``None`` while no eligible run is listed.
+    Runs already bound to an earlier epoch are never eligible.
+    """
+    ref = collector_run_bind_ref(pr_number, head_sha, generation, owner.epoch)
+    held = _read_claim(repository, token, ref)
+    if held is not None:
+        return held
+    info = request_json(repository, token, "GET", "")
+    branch = str((info or {}).get("default_branch") or "main")
+    earlier: set[int] = set()
+    for epoch in range(owner.epoch):
+        record = _read_claim(repository, token, collector_run_bind_ref(pr_number, head_sha, generation, epoch))
+        if record is not None and isinstance(record.get("run_id"), int):
+            earlier.add(record["run_id"])
+    eligible = [
+        run
+        for run in collector_runs_since(repository, token, pr_number, head_sha, generation, owner.claimed_at)
+        if run.get("path") == COLLECTOR_WORKFLOW_PATH
+        and run.get("event") == "repository_dispatch"
+        and run.get("head_branch") == branch
+        and isinstance(run.get("id"), int)
+        and run["id"] not in earlier
+        and str(run.get("created_at") or "") >= owner.claimed_at
+    ]
+    if not eligible:
+        return None
+    record = {
+        "v": CLAIM_RECORD_VERSION,
+        "kind": "bind",
+        "pr": pr_number,
+        "head": head_sha,
+        "generation": generation,
+        "epoch": owner.epoch,
+        "run_id": min(run["id"] for run in eligible),
+        "orchestrator_run": owner.orchestrator_run_id,
+        "nonce_sha256": owner.nonce_sha256,
+    }
+    _create_claim(repository, token, ref, record)
+    held = _read_claim(repository, token, ref)
+    if held is None:
+        raise ValueError("collector run binding could not be confirmed")
+    return held
+
+
+def verify_bound_run(
+    repository: str,
+    token: str,
+    pr_number: int,
+    head_sha: str,
+    generation: str,
+    owner: CollectorOwner,
+    run_id: int,
+) -> None:
+    """Raise unless the epoch's capability is bound to exactly ``run_id``."""
+    record = _read_claim(repository, token, collector_run_bind_ref(pr_number, head_sha, generation, owner.epoch))
+    if (
+        record is None
+        or record.get("kind") != "bind"
+        or record.get("pr") != pr_number
+        or record.get("head") != head_sha
+        or record.get("generation") != generation
+        or record.get("epoch") != owner.epoch
+        or record.get("nonce_sha256") != owner.nonce_sha256
+        or record.get("orchestrator_run") != owner.orchestrator_run_id
+        or record.get("run_id") != run_id
+    ):
+        raise CollectorAuthorityError("capability is not bound to this run")
+
+
 def claim_collector_run(
     repository: str,
     token: str,
@@ -1166,6 +1256,13 @@ def claim_collector_run(
     """
     if not 1 <= attempt <= MAX_COLLECTOR_DISPATCHES:
         raise CollectorAuthorityError("collector attempt outside the bounded budget")
+    # The capability is consumed only by the run GitHub bound it to; a competing
+    # run that holds the same payload or proof never reaches the single-use claim.
+    chain = read_owner_chain(repository, token, pr_number, head_sha, generation)
+    owner = next((o for o in chain if o.epoch == epoch), None)
+    if owner is None or owner.nonce_sha256 != nonce_sha256:
+        raise CollectorAuthorityError("capability does not belong to the elected epoch")
+    verify_bound_run(repository, token, pr_number, head_sha, generation, owner, run_id)
     if attempt > 1:
         previous = _read_claim(
             repository, token, collector_run_claim_ref(pr_number, head_sha, generation, epoch, attempt - 1)
@@ -1316,6 +1413,12 @@ def dispatch_collector(
             },
         },
     )
+    # Best effort: the collector binds itself deterministically if this does not
+    # land (crash or listing lag), and an unbound capability is never consumable.
+    try:
+        bind_dispatched_run(repository, token, pr_number, head_sha, generation_id, current[-1])
+    except (transport.GitHubRequestError, ValueError) as exc:
+        print(f"Collector run binding deferred for PR #{pr_number}: {exc}", file=sys.stderr)
 
 
 def collector_run_name(pr_number: int, head_sha: str, generation_id: str = BASE_GENERATION_ID) -> str:

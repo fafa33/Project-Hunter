@@ -293,7 +293,7 @@ def test_replayed_proof_on_another_run_is_rejected(env):
     # An attacker with dispatch rights replays the readable capability.
     github.dispatches.append(github.dispatches[0])
     github.runs[9001] = {**github.runs[run], "id": 9001, "run_attempt": 1}
-    with pytest.raises(ValueError, match="already consumed"):
+    with pytest.raises(ValueError, match="not bound to this run|already consumed"):
         start_collector(github, 9001, proof, epoch)
     # The same run attempt cannot start twice either.
     with pytest.raises(ValueError):
