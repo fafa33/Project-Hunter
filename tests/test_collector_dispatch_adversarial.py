@@ -229,9 +229,24 @@ def test_two_simultaneous_recovery_contenders_elect_exactly_one_replacement(env,
     recover_ready(github)
     github.add_orchestrator_run(102)
     github.add_orchestrator_run(103)
-    # Synchronize before the competing owner writes, not at the writes themselves:
-    # a legitimate loser may observe the winner and never attempt POST git/refs.
-    # A barrier on POST incorrectly requires both contenders to write and flakes.
+    # Start both contenders from the same pre-publication observation. A contender that is
+    # scheduled after the other has already published its fresh WAITING cycle correctly sees a
+    # live cycle and returns without electing, so a barrier placed later would never fill.
+    # Each thread's first cycle read (the first thing ensure_collector does) waits for the other.
+    start_gate = threading.Barrier(2, timeout=30)
+    first_read = threading.local()
+    real_read_cycle = orchestrator.read_cycle
+
+    def read_cycle_once_both_have_started(*args, **kwargs):
+        result = real_read_cycle(*args, **kwargs)
+        if not getattr(first_read, "done", False):
+            first_read.done = True
+            start_gate.wait()
+        return result
+
+    monkeypatch.setattr(orchestrator, "read_cycle", read_cycle_once_both_have_started)
+    # Then hold both at the election so neither writes the competing owner ref first. This is
+    # not a barrier on the writes: a legitimate loser may observe the winner and never POST.
     gate = threading.Barrier(2, timeout=30)
     original_owner_failed = orchestrator.owner_attempt_failed
 
