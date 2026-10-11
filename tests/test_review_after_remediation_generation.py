@@ -640,6 +640,10 @@ _COLLECT = "python scripts/hunter_reviewer_collector.py --pr 1 --head abc"
         (f'{_COLLECT} --generation "$REMEDIATION_GENERATION"', {"REMEDIATION_GENERATION": _GEN}),
         (f"{_COLLECT} --generation ${{REMEDIATION_GENERATION}}", {"REMEDIATION_GENERATION": f" {_GEN} "}),
         (f'{_COLLECT}\n  --generation "$G"\n  --output out.json', {"G": _GEN}),
+        # unrelated assignments and a differently named variable do not disturb the binding
+        (f'OTHER=1 {_COLLECT} --generation "$G"', {"G": _GEN}),
+        (f'X=1; {_COLLECT} --generation "$G"; unset X', {"G": _GEN}),
+        (f'export PYTHONPATH=src; {_COLLECT} --generation "$G"', {"G": _GEN}),
     ],
 )
 def test_generation_binding_accepts_every_equivalent_valid_form(guard, run, env):
@@ -683,6 +687,13 @@ def test_generation_binding_accepts_every_equivalent_valid_form(guard, run, env)
         (f'python /tmp/hunter_reviewer_collector.py --generation "{_GEN}"', {}),
         (f'python ../scripts/hunter_reviewer_collector.py --generation "{_GEN}"', {}),
         (f'/tmp/hunter_reviewer_collector.py --generation "{_GEN}"', {}),
+        # Copilot: a variable-bound generation must not be rebound or discarded before the collector runs
+        (f'G=main; {_COLLECT} --generation "$G"', {"G": _GEN}),
+        (f'export G=main\n{_COLLECT} --generation "$G"', {"G": _GEN}),
+        (f'G=main {_COLLECT} --generation "$G"', {"G": _GEN}),
+        (f'unset G; {_COLLECT} --generation "$G"', {"G": _GEN}),
+        (f'read G; {_COLLECT} --generation "$G"', {"G": _GEN}),
+        (f'eval G=main; {_COLLECT} --generation "$G"', {"G": _GEN}),
         # not the collector at all, or unparsable shell
         (f'echo --generation "{_GEN}"', {}),
         (f'{_COLLECT} --generation "{_GEN}', {}),

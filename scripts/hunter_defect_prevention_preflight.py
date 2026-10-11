@@ -1751,7 +1751,31 @@ def _collector_generation_is_bound(run_cmd: str, env: Any) -> bool:
     ]
     if not invocations:
         return False
-    return all(_generation_argument_is_bound(arguments, placeholder, env) for arguments in invocations)
+    if not all(_generation_argument_is_bound(arguments, placeholder, env) for arguments in invocations):
+        return False
+    # A variable-bound generation is only as trustworthy as the variable: no command in the
+    # script may rebind it (an assignment, even as an env prefix or after ``export``) or
+    # discard it (``unset``/``read``) before the collector runs.
+    for name in {_generation_variable_name(arguments) for arguments in invocations} - {None}:
+        for command in commands:
+            if any(token.startswith(f"{name}=") for token in command):
+                return False
+            if command and command[0] in {"unset", "read", "eval"} and name in command[1:]:
+                return False
+    return True
+
+
+def _generation_variable_name(arguments: list[str]) -> str | None:
+    for index, token in enumerate(arguments):
+        value = (
+            arguments[index + 1]
+            if token == "--generation" and index + 1 < len(arguments)
+            else token.partition("=")[2] if token.startswith("--generation=") else None
+        )
+        if value is not None:
+            match = re.fullmatch(r"\$(?:\{([A-Za-z_][A-Za-z0-9_]*)\}|([A-Za-z_][A-Za-z0-9_]*))", value)
+            return (match.group(1) or match.group(2)) if match else None
+    return None
 
 
 def _generation_argument_is_bound(arguments: list[str], placeholder: str, env: Any) -> bool:

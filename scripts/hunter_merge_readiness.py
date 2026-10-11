@@ -991,7 +991,9 @@ def candidate_pull_requests(name: str, event: dict[str, Any]) -> list[int]:
             )
         return recovered
 
-    if name == "schedule":
+    if name in {"schedule", "repository_dispatch"}:
+        # repository_dispatch (hunter-trusted-recovery) carries no pull request: it is the
+        # trusted on-demand form of the scheduled full sweep.
         return sorted(int(pr["number"]) for pr in open_pull_requests())
 
     if name == "workflow_dispatch":
