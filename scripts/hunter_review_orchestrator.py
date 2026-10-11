@@ -633,7 +633,10 @@ def publish_trusted_collector_completion(repository: str, token: str, run_id: in
     if not recheck or recheck[-1] != owner:
         return "SKIPPED: collector owner was replaced before publication"
     # Idempotent: a concurrent or earlier sweep may already have published this run.
-    published, published_run, _why = read_collector_completion(repository, token, pr_number, head_sha)
+    published, published_run, read_error = read_collector_completion(repository, token, pr_number, head_sha)
+    if read_error:
+        # An unreadable history is unavailable evidence, not absence: retry on the next sweep.
+        return "SKIPPED: collector completion evidence unavailable"
     if published == "present" and published_run == run_id:
         return "SKIPPED: collector completion already published"
     publish_collector_completion(repository, token, pr_number, head_sha, run_id)

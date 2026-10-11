@@ -494,3 +494,14 @@ def test_collector_receipt_rejects_symlink_outside_working_directory(tmp_path):
     receipt, reason = orchestrator.read_collector_receipt(symlink)
     assert receipt is None
     assert "missing or too large" in reason
+
+
+def test_the_collector_invocation_writes_the_receipt_path_that_is_uploaded_and_read_by_recovery():
+    document = yaml.safe_load((ROOT / ".github/workflows/hunter-reviewer-collector.yml").read_text(encoding="utf-8"))
+    steps = document["jobs"]["collect"]["steps"]
+    invocations = [s for s in steps if "scripts/hunter_reviewer_collector.py" in str(s.get("run", ""))]
+    assert len(invocations) == 1
+    tokens = str(invocations[0]["run"]).replace("\\\n", " ").split()
+    assert tokens[tokens.index("--output") + 1] == "reviewer-results.json"
+    uploads = [s for s in steps if str(s.get("uses", "")).startswith("actions/upload-artifact")]
+    assert any(s["with"].get("path") == "reviewer-results.json" for s in uploads)

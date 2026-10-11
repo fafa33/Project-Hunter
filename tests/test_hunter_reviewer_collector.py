@@ -2976,3 +2976,22 @@ def test_a_codex_comment_is_not_a_canonical_workaround(monkeypatch) -> None:
     comment_agent = {**base_agent, "id": "codex", "trigger_method": "github-pr-comment:@codex review"}
     trigger = {"id": 42, "created_at": "2026-10-04T12:00:00Z", "collector_run_id": 123}
     assert backend.acknowledged(comment_agent, trigger) is False
+
+
+def test_repository_dispatch_provenance_is_accepted_and_unrelated_events_are_rejected():
+    run = {
+        "id": 123,
+        "run_attempt": 1,
+        "head_sha": "c" * 40,
+        "head_branch": "main",
+        "path": ".github/workflows/hunter-reviewer-collector.yml",
+        "event": "repository_dispatch",
+        "status": "completed",
+        "conclusion": "success",
+    }
+    assert collector.valid_run(run, 123, "main", "c" * 40)
+    for event in ("push", "schedule", "workflow_run", "pull_request", "issue_comment", ""):
+        assert not collector.valid_run({**run, "event": event}, 123, "main", "c" * 40), event
+    # Still bound to the exact run, default-branch name, workflow and success.
+    assert not collector.valid_run({**run, "conclusion": "failure"}, 123, "main", "c" * 40)
+    assert not collector.valid_run({**run, "head_branch": "candidate"}, 123, "main", "c" * 40)

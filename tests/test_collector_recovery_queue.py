@@ -283,3 +283,19 @@ def test_unusable_receipt_never_receives_a_trusted_completion(env, monkeypatch, 
     orchestrator.main()
     assert "PUBLISHED" in capsys.readouterr().out
     assert sweep() == []
+
+
+def test_unreadable_completion_history_is_unavailable_evidence_not_absence(env, monkeypatch):
+    github, local = env
+    run, proof = stage(github, local, 472, orchestrator_run=101)
+    real = orchestrator.read_collector_completion
+    monkeypatch.setattr(
+        orchestrator,
+        "read_collector_completion",
+        lambda *a, **k: ("absent", None, "collector completion evidence unavailable: HTTP 502"),
+    )
+    outcome = orchestrator.publish_trusted_collector_completion(REPO, "token", run, proof)
+    assert outcome.startswith("SKIPPED") and "unavailable" in outcome
+    assert not [s for s in github.statuses if s["context"].startswith(orchestrator.COLLECTOR_CONTEXT_PREFIX)]
+    monkeypatch.setattr(orchestrator, "read_collector_completion", real)  # evidence readable again: it publishes
+    assert orchestrator.publish_trusted_collector_completion(REPO, "token", run, proof).startswith("PUBLISHED")
