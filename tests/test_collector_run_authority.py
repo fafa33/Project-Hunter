@@ -241,6 +241,25 @@ def test_a_spoofed_success_cannot_suppress_legitimate_recovery(env):
     assert github.owner_epochs() == [0, 1] and len(github.dispatches) == 2
 
 
+def test_an_active_lookalike_delays_recovery_only_until_it_ends(env):
+    """A live run is not yet known to be a decoy (it may be the real collector between start and
+    binding), so it holds the epoch while it is active. That hold is bounded by the collector job's
+    own timeout, and a decoy that ends without holding the epoch's claim never spends an epoch."""
+    github, local = env
+    reconcile(github, local, 101)
+    real, _p, _e = cap(github)
+    github.finish(101, "success")
+    github.finish(real, "failure")
+    decoy = thief(github, real)
+    github.runs[decoy]["status"], github.runs[decoy]["conclusion"] = "in_progress", None
+    recover_ready(github)
+    reconcile(github, local, 102)
+    assert github.owner_epochs() == [0] and len(github.dispatches) == 1  # held while the decoy is live
+    github.finish(decoy, "failure")  # the gate refuses it and it ends
+    reconcile(github, local, 103)
+    assert github.owner_epochs() == [0, 1] and len(github.dispatches) == 2
+
+
 def test_an_authorized_success_still_prevents_unsafe_re_election(env):
     github, local = env
     authorized(github, local)
