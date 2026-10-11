@@ -109,19 +109,28 @@ def test_progress_is_durable_fair_and_a_processed_run_leaves_the_queue(env):
     assert set(sweep()) == set(runs.values()) - {run}
 
 
-def test_concurrent_sweeps_publish_one_authoritative_completion(env):
+def test_concurrent_sweeps_publish_one_authoritative_completion(env, monkeypatch):
     github, local = env
     run, proof = stage(github, local, 472, orchestrator_run=101)
-    github.completion_gate = threading.Barrier(2)  # both sweeps pass the pre-check before either writes
-    with ThreadPoolExecutor(max_workers=2) as pool:
+    gate = threading.Barrier(2, timeout=30)
+    original_read = orchestrator.read_collector_completion
+
+    def synchronized_precheck(*args):
+        result = original_read(*args)
+        if result[0] == "absent":
+            gate.wait()
+        return result
+
+    with monkeypatch.context() as race, ThreadPoolExecutor(max_workers=2) as pool:
+        race.setattr(orchestrator, "read_collector_completion", synchronized_precheck)
         outcomes = list(
             pool.map(lambda _i: orchestrator.publish_trusted_collector_completion(REPO, "token", run, proof), range(2))
         )
-    github.completion_gate = None
     completions = [s for s in github.statuses if s["context"].startswith(orchestrator.COLLECTOR_CONTEXT_PREFIX)]
     # Both sweeps raced past the pre-check, but the evidence is one identity and one consumer result.
     assert all(o.startswith(("PUBLISHED", "SKIPPED")) for o in outcomes)
-    assert {s["description"] for s in completions} == {f"collector_run_id={run}"}
+    assert len(completions) == 1
+    assert completions[0]["description"] == f"collector_run_id={run}"
     assert orchestrator.read_collector_completion(REPO, "token", 472, head_for(472)) == ("present", run, None)
     # Any later sweep publishes nothing.
     again = orchestrator.publish_trusted_collector_completion(REPO, "token", run, proof)

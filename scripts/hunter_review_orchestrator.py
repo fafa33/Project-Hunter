@@ -639,6 +639,20 @@ def publish_trusted_collector_completion(repository: str, token: str, run_id: in
         return "SKIPPED: collector completion evidence unavailable"
     if published == "present" and published_run == run_id:
         return "SKIPPED: collector completion already published"
+    if published != "absent":
+        return "SKIPPED: collector completion evidence unavailable"
+    completion_ref = collector_completion_claim_ref(pr_number, head_sha, cycle.generation_id, run_id)
+    record = {
+        "v": CLAIM_RECORD_VERSION,
+        "kind": "completion",
+        "pr": pr_number,
+        "head": head_sha,
+        "generation": cycle.generation_id,
+        "run_id": run_id,
+        "start": secrets.token_hex(16),
+    }
+    if not _create_claim(repository, token, completion_ref, record):
+        return "SKIPPED: collector completion publication already claimed"
     publish_collector_completion(repository, token, pr_number, head_sha, run_id)
     return f"PUBLISHED: collector completion PR #{pr_number} at {head_sha[:12]}"
 
@@ -695,6 +709,12 @@ def collector_owner_ref(pr_number: int, head_sha: str, generation: str, epoch: i
 def collector_run_claim_ref(pr_number: int, head_sha: str, generation: str, epoch: int, attempt: int) -> str:
     """The create-only claim of one (epoch, run attempt); a replayed capability collides here."""
     return f"{RUN_CLAIM_REF_PREFIX}/{_claim_digest(pr_number, head_sha, generation, epoch)}-a{attempt}"
+
+
+def collector_completion_claim_ref(pr_number: int, head_sha: str, generation: str, run_id: int) -> str:
+    """One immutable completion publisher per exact candidate, generation and run."""
+    digest = hashlib.sha256(f"{pr_number}:{head_sha}:{generation}:{run_id}:completion".encode()).hexdigest()
+    return f"tags/hunter-collector-completion/{digest}"
 
 
 def _read_claim(repository: str, token: str, ref: str) -> dict[str, Any] | None:
