@@ -213,8 +213,8 @@ class FakeGitHub:
             size, page = int(query.get("per_page", 30)), int(query.get("page", 1))
             ordered = sorted(self.open_prs.items())
             return [
-                {"number": number, "head": {"sha": head}, "base": {"ref": self.pr_bases.get(number, "main")}}
-                for number, head in ordered[(page - 1) * size : page * size]
+                {"number": num, "head": {"sha": head}, "base": {"ref": self.pr_bases.get(num, "main")}}
+                for num, head in ordered[(page - 1) * size : page * size]
             ]
         if method == "GET" and path.startswith("pulls/"):
             number = int(path.split("/")[1])
