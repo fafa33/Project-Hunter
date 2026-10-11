@@ -721,6 +721,7 @@ def test_completion_status_is_consumed_only_for_the_current_epoch(env):
     start_collector(github, run, proof, epoch)
     github.finish(101, "success")
     github.finish(run, "success")
+    orchestrator.record_completion(REPO, "token", PR, HEAD, GEN, run, 1)
     orchestrator.publish_collector_completion(REPO, "token", PR, HEAD, run)
     assert orchestrator.read_collector_completion(REPO, "token", PR, HEAD) == ("present", run, None)
     _replacement_lands(github)  # lands after the status was written

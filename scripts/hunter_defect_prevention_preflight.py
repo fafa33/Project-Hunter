@@ -1687,150 +1687,90 @@ REVIEWER_COLLECTOR_WORKFLOW = ".github/workflows/hunter-reviewer-collector.yml"
 
 
 _COLLECTOR_GENERATION_EXPRESSION = "${{ github.event.client_payload.generation_id }}"
-_SHELL_CONTROL_TOKENS = frozenset({";", "&&", "||", "|", "&", "(", ")", ";;"})
+#: The collector step's ``run`` is held to a restricted invocation contract instead of
+#: being parsed as shell. It must be one simple command on one line, made only of
+#: plain words and quoted variable expansions, so no newline, ``;``, ``&&``/``||``,
+#: pipe, redirection, subshell, command substitution, backslash continuation,
+#: comment, glob or single-quoted text can hide a second (unbound) invocation. Anything
+#: outside the contract is rejected (fail closed), however harmless it would be.
+_COLLECTOR_SCRIPT = "scripts/hunter_reviewer_collector.py"
+_PYTHON_EXECUTABLE = re.compile(r"python(?:[0-9]+(?:\.[0-9]+)*)?")
+_CONTRACT_CHARACTERS = re.compile(r'[A-Za-z0-9_./:=+@,"${} \t-]*')
+_PLAIN_WORD = re.compile(r"[A-Za-z0-9_./:=+@,-]+")
+_VARIABLE = re.compile(r'"\$(?:\{([A-Za-z_][A-Za-z0-9_]*)\}|([A-Za-z_][A-Za-z0-9_]*))"')
+_GENERATION_PLACEHOLDER = "__HUNTER_GENERATION_EXPRESSION__"
 
 
-_PYTHON_EXECUTABLE = re.compile(r"python[0-9.]*")
-_ENV_ASSIGNMENT = re.compile(r"[A-Za-z_][A-Za-z0-9_]*=.*")
+def _contract_word(token: str) -> tuple[str, str | None] | None:
+    """Classify one blank-separated word as ``("plain", None)``, ``("var", name)`` (a
+    double-quoted ``"$NAME"``/``"${NAME}"``), ``("expr", None)`` (the double-quoted
+    generation expression) or ``None`` (outside the contract)."""
 
-
-def _collector_invocation_arguments(command: list[str]) -> list[str] | None:
-    """Arguments of a *real* collector invocation, else ``None``.
-
-    Only a simple command whose executable is the collector script itself, or a
-    python interpreter whose script operand is the collector, counts. A token that
-    merely ends in the filename (an ``echo`` operand, a comment-like decoy) is not
-    an invocation.
-    """
-
-    tokens = list(command)
-    while tokens and _ENV_ASSIGNMENT.fullmatch(tokens[0]):
-        tokens.pop(0)
-    if not tokens:
-        return None
-    executable = tokens[0].rsplit("/", 1)[-1]
-    trusted_script = "scripts/hunter_reviewer_collector.py"
-    if tokens[0] == trusted_script:
-        return tokens[1:]
-    if _PYTHON_EXECUTABLE.fullmatch(executable):
-        for index, token in enumerate(tokens[1:], start=1):
-            if token.startswith("-"):
-                continue
-            if token == trusted_script:
-                return tokens[index + 1 :]
-            return None
+    if token == f'"{_GENERATION_PLACEHOLDER}"':
+        return "expr", None
+    if '"' not in token and "$" not in token and _PLAIN_WORD.fullmatch(token):
+        return "plain", None
+    match = _VARIABLE.fullmatch(token)  # only a double-quoted expansion: no word splitting or globbing
+    if match:
+        return "var", match.group(1) or match.group(2)
     return None
-
-
-def _newlines_as_command_separators(script: str) -> str:
-    """Make every unquoted newline an explicit ``;`` so shlex cannot fold two lines into one command.
-
-    A backslash-newline is a line continuation and is joined; a newline inside single or double
-    quotes is literal text and is kept.
-    """
-
-    out: list[str] = []
-    quote = ""
-    index = 0
-    while index < len(script):
-        char = script[index]
-        if char == "\\" and quote != "'" and index + 1 < len(script):
-            nxt = script[index + 1]
-            if nxt == "\n":
-                index += 2  # line continuation
-                continue
-            out.append(char + nxt)
-            index += 2
-            continue
-        if quote:
-            if char == quote:
-                quote = ""
-        elif char in "'\"":
-            quote = char
-        elif char == "\n":
-            out.append(" ; ")
-            index += 1
-            continue
-        out.append(char)
-        index += 1
-    return "".join(out)
 
 
 def _collector_generation_is_bound(run_cmd: str, env: Any) -> bool:
-    """Whether every collector invocation in ``run_cmd`` receives the dispatched generation.
+    """Whether the step's ``run`` is exactly one collector invocation bound to the generation.
 
-    The script is split into simple commands; each real collector invocation must
-    carry exactly one ``--generation`` flag whose value is the payload expression
-    or an environment variable bound to that expression. At least one real
-    invocation must exist, so a decoy mention of the filename cannot satisfy it.
+    No shell grammar is interpreted: the script must satisfy a restricted contract
+    (see ``_CONTRACT_CHARACTERS``) so that splitting on blanks provably yields the
+    words of a single simple command. That command must be the trusted collector
+    (``scripts/hunter_reviewer_collector.py`` directly or as a python script operand),
+    must carry exactly one ``--generation`` whose value is the dispatched payload
+    expression or a variable this step's ``env`` binds to it, and every other
+    expansion must also be a step ``env`` variable. Because it is one simple command
+    with no assignment words, nothing in the script can rebind the variable.
     """
 
-    placeholder = "__HUNTER_GENERATION_EXPRESSION__"
-    try:
-        lexer = shlex.shlex(
-            _newlines_as_command_separators(run_cmd).replace(_COLLECTOR_GENERATION_EXPRESSION, placeholder),
-            posix=True,
-            punctuation_chars=True,
-        )
-        lexer.whitespace_split = True
-        tokens = list(lexer)
-    except ValueError:
+    if not isinstance(run_cmd, str) or not isinstance(env, dict):
         return False
-    commands: list[list[str]] = [[]]
-    for token in tokens:
-        if token in _SHELL_CONTROL_TOKENS:
-            commands.append([])
-        else:
-            commands[-1].append(token)
-    invocations = [
-        arguments for command in commands if (arguments := _collector_invocation_arguments(command)) is not None
-    ]
-    if not invocations:
+    script = run_cmd.strip().replace(_COLLECTOR_GENERATION_EXPRESSION, _GENERATION_PLACEHOLDER)
+    if not script or "\n" in script or "\r" in script or not _CONTRACT_CHARACTERS.fullmatch(script):
         return False
-    if not all(_generation_argument_is_bound(arguments, placeholder, env) for arguments in invocations):
+    if "${{" in script or "}}" in script:  # any other expression is outside the contract
         return False
-    # A variable-bound generation is only as trustworthy as the variable: no command in the
-    # script may rebind it (an assignment, even as an env prefix or after ``export``) or
-    # discard it (``unset``/``read``) before the collector runs.
-    for name in {_generation_variable_name(arguments) for arguments in invocations} - {None}:
-        for command in commands:
-            if any(token.startswith((f"{name}=", f"{name}+=")) for token in command):
-                return False
-            if command and command[0] in {"unset", "read", "eval"} and name in command[1:]:
-                return False
-    return True
-
-
-def _generation_variable_name(arguments: list[str]) -> str | None:
-    for index, token in enumerate(arguments):
-        value = (
-            arguments[index + 1]
-            if token == "--generation" and index + 1 < len(arguments)
-            else token.partition("=")[2] if token.startswith("--generation=") else None
-        )
-        if value is not None:
-            match = re.fullmatch(r"\$(?:\{([A-Za-z_][A-Za-z0-9_]*)\}|([A-Za-z_][A-Za-z0-9_]*))", value)
-            return (match.group(1) or match.group(2)) if match else None
-    return None
-
-
-def _generation_argument_is_bound(arguments: list[str], placeholder: str, env: Any) -> bool:
-    values: list[str] = []
-    for index, token in enumerate(arguments):
-        if token == "--generation":
-            values.append(arguments[index + 1] if index + 1 < len(arguments) else "")
-        elif token.startswith("--generation="):
-            values.append(token.partition("=")[2])
-    if len(values) != 1:
+    words = script.split()
+    kinds = [_contract_word(word) for word in words]
+    if any(kind is None for kind in kinds):
         return False
-    value = values[0]
-    if value == placeholder:
-        return True
-    match = re.fullmatch(r"\$(?:\{([A-Za-z_][A-Za-z0-9_]*)\}|([A-Za-z_][A-Za-z0-9_]*))", value)
-    if match is None or not isinstance(env, dict):
+    if words[0] == _COLLECTOR_SCRIPT:
+        arguments, argument_kinds = words[1:], kinds[1:]
+    elif (
+        len(words) >= 2
+        and kinds[0] == ("plain", None)
+        and _PYTHON_EXECUTABLE.fullmatch(words[0])
+        and words[1] == _COLLECTOR_SCRIPT
+    ):
+        arguments, argument_kinds = words[2:], kinds[2:]
+    else:
         return False
-    name = match.group(1) or match.group(2)
-    return str(env.get(name, "")).strip() == _COLLECTOR_GENERATION_EXPRESSION
+    if any(word.endswith(_COLLECTOR_SCRIPT.rsplit("/", 1)[-1]) for word in arguments):
+        return False  # a second mention of the collector is never part of the contract
+    generation_values: list[tuple[str, str | None] | None] = []
+    for index, word in enumerate(arguments):
+        if word == "--generation":
+            generation_values.append(argument_kinds[index + 1] if index + 1 < len(arguments) else None)
+        elif word.startswith("--generation"):
+            return False  # ``--generation=...`` and similar spellings are outside the contract
+    if len(generation_values) != 1 or generation_values[0] is None:
+        return False
+    kind, name = generation_values[0]
+    if kind == "expr":
+        pass
+    elif kind == "var":
+        if str(env.get(name, "")).strip() != _COLLECTOR_GENERATION_EXPRESSION:
+            return False
+    else:
+        return False
+    # Every expansion must come from this step's own env, never from the runner environment.
+    return all(kind_name[0] != "var" or kind_name[1] in env for kind_name in argument_kinds if kind_name)
 
 
 def validate_review_after_remediation_boundary() -> list[str]:
@@ -2027,7 +1967,7 @@ def validate_collector_workflow_definition(definition: Any) -> list[str]:
         for step in job["steps"]
         if isinstance(step, dict)
     ]
-    collector_steps = [step for step in steps if "hunter_reviewer_collector.py" in str(step.get("run") or "")]
+    collector_steps = [step for step in steps if "hunter_reviewer_collector" in str(step.get("run") or "")]
     if not collector_steps:
         errors.append("reviewer collector workflow must contain a step that runs hunter_reviewer_collector.py")
     else:
@@ -2037,6 +1977,12 @@ def validate_collector_workflow_definition(definition: Any) -> list[str]:
         # in the script, or a flag belonging to another command, cannot satisfy it.
         for step in collector_steps:
             env = step.get("env")
+            if "shell" in step or any(
+                isinstance(scope, dict) and isinstance(scope.get("defaults"), dict)
+                for scope in (definition, *jobs.values())
+            ):
+                errors.append("the reviewer collector step must run under the default shell")
+                continue
             if not _collector_generation_is_bound(str(step.get("run") or ""), env if isinstance(env, dict) else {}):
                 errors.append(
                     "the reviewer collector workflow must forward the remediation generation "

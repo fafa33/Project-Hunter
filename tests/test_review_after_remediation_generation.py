@@ -644,82 +644,110 @@ _GEN = "${{ github.event.client_payload.generation_id }}"
 _COLLECT = "python scripts/hunter_reviewer_collector.py --pr 1 --head abc"
 
 
+_REAL = (
+    'python scripts/hunter_reviewer_collector.py --pr "$PR_NUMBER" --head "$CANDIDATE_HEAD" '
+    '--generation "$REMEDIATION_GENERATION" --output reviewer-results.json'
+)
+_REAL_ENV = {"PR_NUMBER": "x", "CANDIDATE_HEAD": "y", "REMEDIATION_GENERATION": _GEN}
+
+
+# The collector step is held to a restricted invocation contract rather than parsed as
+# shell: one simple command on one line, plain words and double-quoted expansions only.
 @pytest.mark.parametrize(
     "run,env",
     [
+        (_REAL, _REAL_ENV),
+        (f"  {_REAL}  ", _REAL_ENV),  # surrounding whitespace
+        (_REAL.replace(" ", "\t"), _REAL_ENV),  # blanks may be tabs
+        (_REAL.replace(" ", "   "), _REAL_ENV),
         (f'{_COLLECT} --generation "{_GEN}"', {}),
-        (f"{_COLLECT} --generation={_GEN}", {}),
         (f'{_COLLECT} --generation "$REMEDIATION_GENERATION"', {"REMEDIATION_GENERATION": _GEN}),
-        (f"{_COLLECT} --generation ${{REMEDIATION_GENERATION}}", {"REMEDIATION_GENERATION": f" {_GEN} "}),
-        (f'{_COLLECT} \\\n  --generation "$G" \\\n  --output out.json', {"G": _GEN}),
-        # a newline between two commands is a command boundary; a quoted newline is literal text
-        (f'{_COLLECT} --generation "$G"\necho done', {"G": _GEN}),
-        (f'{_COLLECT} --generation "$G" --title "a\nb"', {"G": _GEN}),
-        # unrelated assignments and a differently named variable do not disturb the binding
-        (f'OTHER=1 {_COLLECT} --generation "$G"', {"G": _GEN}),
-        (f'X=1; {_COLLECT} --generation "$G"; unset X', {"G": _GEN}),
-        (f'export PYTHONPATH=src; {_COLLECT} --generation "$G"', {"G": _GEN}),
+        (f'{_COLLECT} --generation "${{REMEDIATION_GENERATION}}"', {"REMEDIATION_GENERATION": f" {_GEN} "}),
+        (f'python3 scripts/hunter_reviewer_collector.py --generation "{_GEN}"', {}),
+        (f'python3.12 scripts/hunter_reviewer_collector.py --generation "{_GEN}"', {}),
+        (f'scripts/hunter_reviewer_collector.py --generation "{_GEN}"', {}),
     ],
 )
-def test_generation_binding_accepts_every_equivalent_valid_form(guard, run, env):
+def test_generation_binding_accepts_the_supported_invocation_contract(guard, run, env):
     assert guard._collector_generation_is_bound(run, env) is True
 
 
+def test_the_real_collector_workflow_satisfies_the_contract(guard):
+    definition = _real_collector_definition()
+    steps = [
+        step for step in definition["jobs"]["collect"]["steps"] if "hunter_reviewer_collector" in str(step.get("run"))
+    ]
+    assert len(steps) == 1
+    assert guard._collector_generation_is_bound(steps[0]["run"], steps[0]["env"]) is True
+
+
+_BOUND = f'{_COLLECT} --generation "$G"'
+_UNBOUND = _COLLECT
+
+
 @pytest.mark.parametrize(
     "run,env",
     [
-        # a generation-mapped variable is merely mentioned; --generation gets another value
-        (f'{_COLLECT} --generation "$OTHER"; echo "$G"', {"G": _GEN, "OTHER": "x"}),
-        (f'{_COLLECT} --generation "$OTHER" && echo "$G"', {"G": _GEN, "OTHER": "x"}),
-        # the flag belongs to a different command in the same script
-        (f'echo --generation "{_GEN}"; {_COLLECT}', {}),
-        (f'{_COLLECT}; other --generation "{_GEN}"', {}),
-        # variable bound to something else, or unbound
+        # Copilot rP8tY: a newline separates commands; a bound invocation must not cover an unbound one
+        (f"{_BOUND}\n{_UNBOUND}", {"G": _GEN}),
+        (f"{_UNBOUND}\n{_BOUND}", {"G": _GEN}),
+        (f"{_BOUND}\n{_BOUND}", {"G": _GEN}),
+        (f"{_BOUND}\r\n{_UNBOUND}", {"G": _GEN}),
+        (f"{_BOUND}\necho done", {"G": _GEN}),
+        (f'{_UNBOUND}\n  --generation "$G"', {"G": _GEN}),
+        # semicolons, chaining, pipes, background, redirection
+        (f"{_BOUND}; {_UNBOUND}", {"G": _GEN}),
+        (f"{_BOUND} && {_UNBOUND}", {"G": _GEN}),
+        (f"{_BOUND} || {_UNBOUND}", {"G": _GEN}),
+        (f"{_BOUND} | {_UNBOUND}", {"G": _GEN}),
+        (f"{_BOUND} & {_UNBOUND}", {"G": _GEN}),
+        (f"{_BOUND} > out.json", {"G": _GEN}),
+        # backslash-newline continuation and escaped delimiters
+        (f'{_COLLECT} \\\n  --generation "$G"', {"G": _GEN}),
+        (f"{_BOUND} \\; {_UNBOUND}", {"G": _GEN}),
+        # quoted delimiters and quoted text
+        (f'{_BOUND} --title "a;b"', {"G": _GEN}),
+        (f'{_BOUND} --title "a\nb"', {"G": _GEN}),
+        (f"{_BOUND} --title 'x'", {"G": _GEN}),
+        # command substitution, subshell, grouping, eval
+        (f'{_COLLECT} --generation "$(echo main)"', {}),
+        (f"{_COLLECT} --generation `echo main`", {}),
+        (f"({_UNBOUND}) ; {_BOUND}", {"G": _GEN}),
+        (f"{{ {_UNBOUND}; }}", {}),
+        (f'eval "{_UNBOUND}"', {}),
+        (f'bash -c "{_UNBOUND}"', {}),
+        # comments and whitespace tricks
+        (f'{_COLLECT} # --generation "{_GEN}"', {}),
+        (f"{_BOUND} #\n{_UNBOUND}", {"G": _GEN}),
+        # assignments, exports and rebinding are outside the contract
+        (f"G=main {_BOUND}", {"G": _GEN}),
+        (f"OTHER=1 {_BOUND}", {"G": _GEN}),
+        (f"export PYTHONPATH=src; {_BOUND}", {"G": _GEN}),
+        (f"G+=main; {_BOUND}", {"G": _GEN}),
+        # a generation-mapped variable merely mentioned; the flag gets another value
+        (f'{_COLLECT} --generation "$OTHER" "$G"', {"G": _GEN, "OTHER": "x"}),
+        # variable bound to something else, unbound, or not from this step's env
         (f'{_COLLECT} --generation "$G"', {"G": "main"}),
         (f'{_COLLECT} --generation "$G"', {}),
-        # missing, empty, duplicated, or only a comment
-        (_COLLECT, {}),
-        (f"{_COLLECT} --generation", {}),
+        (f'{_COLLECT} --generation "$G" --pr "$UNDECLARED"', {"G": _GEN}),
+        # unquoted expansions (word splitting / globbing) and other spellings
+        (f"{_COLLECT} --generation $G", {"G": _GEN}),
+        (f"{_COLLECT} --generation {_GEN}", {}),
+        (f'{_COLLECT} --generation="{_GEN}"', {}),
         (f'{_COLLECT} --generation "{_GEN}" --generation main', {}),
-        (f'{_COLLECT} # --generation "{_GEN}"', {}),
-        # Copilot: a decoy token ending in the filename must not be taken for the invocation
-        (f'echo hunter_reviewer_collector.py --generation "{_GEN}"; {_COLLECT}', {}),
-        (
-            f'echo hunter_reviewer_collector.py --generation "{_GEN}"; python scripts/hunter_reviewer_collector.py --pr 1',
-            {},
-        ),
-        (f'cat scripts/hunter_reviewer_collector.py --generation "{_GEN}"', {}),
-        (f'python -c "print(1)" hunter_reviewer_collector.py --generation "{_GEN}"', {}),
-        # Copilot: printed or wrapped command text is not an executed collector invocation
-        ('echo python scripts/hunter_reviewer_collector.py --generation "$G"', {"G": _GEN}),
-        ('printf %s python scripts/hunter_reviewer_collector.py --generation "$G"', {"G": _GEN}),
-        ('bash -c "python scripts/hunter_reviewer_collector.py --generation \\"$G\\""', {"G": _GEN}),
-        ('if false; then python scripts/hunter_reviewer_collector.py --generation "$G"; fi', {"G": _GEN}),
-        # Copilot: shlex drops newlines, but a newline separates commands in the workflow shell
-        (f'{_COLLECT} --generation "$G"\n{_COLLECT}', {"G": _GEN}),
-        (f'{_COLLECT}\n{_COLLECT} --generation "$G"', {"G": _GEN}),
-        (f'{_COLLECT}\n  --generation "$G"', {"G": _GEN}),
-        # every invocation must be bound, not just the first
-        (f'{_COLLECT} --generation "{_GEN}"; {_COLLECT}', {}),
-        (f'{_COLLECT}; {_COLLECT} --generation "{_GEN}"', {}),
-        # Wrong-path script with a trusted-looking basename must never satisfy the guard.
+        (f"{_COLLECT} --generation", {}),
+        (_COLLECT, {}),
+        (f'{_COLLECT} --generation "{_GEN}" --x "${{{{ github.event.client_payload.head_sha }}}}"', {}),
+        # the executable must be the trusted collector itself
+        (f'echo python scripts/hunter_reviewer_collector.py --generation "{_GEN}"', {}),
         (f'python /tmp/hunter_reviewer_collector.py --generation "{_GEN}"', {}),
         (f'python ../scripts/hunter_reviewer_collector.py --generation "{_GEN}"', {}),
-        (f'/tmp/hunter_reviewer_collector.py --generation "{_GEN}"', {}),
-        # Copilot: a variable-bound generation must not be rebound or discarded before the collector runs
-        (f'G=main; {_COLLECT} --generation "$G"', {"G": _GEN}),
-        (f'export G=main\n{_COLLECT} --generation "$G"', {"G": _GEN}),
-        (f'G=main {_COLLECT} --generation "$G"', {"G": _GEN}),
-        (f'unset G; {_COLLECT} --generation "$G"', {"G": _GEN}),
-        (f'read G; {_COLLECT} --generation "$G"', {"G": _GEN}),
-        (f'eval G=main; {_COLLECT} --generation "$G"', {"G": _GEN}),
-        # Copilot: Bash append assignment also changes the value the collector receives
-        (f'G+=main; {_COLLECT} --generation "$G"', {"G": _GEN}),
-        (f'export G+=main\n{_COLLECT} --generation "$G"', {"G": _GEN}),
-        (f'G+=main {_COLLECT} --generation "$G"', {"G": _GEN}),
-        # not the collector at all, or unparsable shell
-        (f'echo --generation "{_GEN}"', {}),
+        (f'python -u scripts/hunter_reviewer_collector.py --generation "{_GEN}"', {}),
+        (f'python scripts/hunter_reviewer_collector.py scripts/hunter_reviewer_collector.py --generation "{_GEN}"', {}),
+        (f'python -c "print(1)" hunter_reviewer_collector.py --generation "{_GEN}"', {}),
+        # unterminated quoting and an empty script
         (f'{_COLLECT} --generation "{_GEN}', {}),
+        ("", {}),
     ],
 )
 def test_generation_binding_rejects_representation_traps(guard, run, env):

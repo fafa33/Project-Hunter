@@ -1728,38 +1728,24 @@ def load_exhaustion(
         if bundle.namelist() != ["reviewer-results.json"] or bundle.getinfo("reviewer-results.json").file_size > LIMIT:
             raise ValueError("malformed collector archive")
         receipt = json.loads(bundle.read("reviewer-results.json"))
-    expected = {
-        "schema": SCHEMA,
-        "repository": repository,
-        "pr_number": pr,
-        "head_sha": head,
-        "run_id": run_id,
-        "run_attempt": run["run_attempt"],
-        "configuration_digest": configuration_digest(pool),
-    }
-    if not isinstance(receipt, dict) or any(receipt.get(k) != v for k, v in expected.items()):
-        raise ValueError("collector identity/configuration mismatch")
-    if (
-        type(receipt.get("pr_number")) is not int
-        or type(receipt.get("run_id")) is not int
-        or type(receipt.get("run_attempt")) is not int
-    ):
-        raise ValueError("collector numeric identity fields must be integers")
-    if not re.fullmatch("[0-9a-f]{64}", str(receipt.get("claims_id") or "")):
-        raise ValueError("collector claims digest is malformed")
-    receipt_generation = receipt.get("remediation_generation_id", BASE_GENERATION)
-    if not isinstance(receipt_generation, str) or (
-        receipt_generation != BASE_GENERATION and not orchestration.GENERATION_ID_PATTERN.fullmatch(receipt_generation)
-    ):
-        raise ValueError("collector remediation generation is malformed")
-    # Exhaustion is generation-scoped evidence, not a permanent property of the
-    # head: once the blocking findings of that generation were resolved, every
-    # reviewer it recorded as exhausted is owed another invocation, so reusing
-    # the receipt would authorise a lower-priority reviewer over one that has not
-    # actually been asked about the remediated state.
+    # The one canonical receipt contract, shared with the trusted completion publisher
+    # and the exhausted-pool finalizer, then this loader's own pool-specific checks.
     title_generation = orchestration._COLLECTOR_RUN_TITLE.fullmatch(orchestration._run_title(run))
-    if title_generation is None or (title_generation.group(3) or BASE_GENERATION) != receipt_generation:
-        raise ValueError("collector receipt generation differs from the authorized run's generation")
+    run_generation = (title_generation.group(3) if title_generation else None) or BASE_GENERATION
+    problem = orchestration.collector_receipt_problem(
+        receipt,
+        repository=repository,
+        pr_number=pr,
+        head_sha=head,
+        run_id=run_id,
+        run_attempt=run["run_attempt"],
+        generation_id=run_generation,
+    )
+    if problem:
+        raise ValueError(f"collector identity/configuration mismatch: {problem}")
+    if receipt.get("configuration_digest") != configuration_digest(pool):
+        raise ValueError("collector identity/configuration mismatch")
+    receipt_generation = receipt["remediation_generation_id"]
     if receipt_generation != orchestration.current_remediation_generation(
         repository, token, pr, head, receipt["claims_id"]
     ):
@@ -1972,7 +1958,8 @@ def load_exhaustion(
     return evidence
 
 
-BIND_ATTEMPTS = 6
+#: Bounded wait for earlier lookalike runs to prove possession or end (about three minutes).
+BIND_ATTEMPTS = 36
 BIND_INTERVAL_SECONDS = 5
 
 
@@ -2057,12 +2044,15 @@ def verify_trusted_dispatch_before_work(
     if not issued_at or str(run.get("created_at") or "") < issued_at:
         raise ValueError("collector dispatch run predates trusted capability")
     attempt = int(run.get("run_attempt") or 1)
-    # Bind the capability to the run GitHub created for the dispatch before it can
-    # be consumed. Binding is deterministic and create-only, so a competing run that
-    # copied the payload settles on the earlier run and is rejected here. The wait
-    # is bounded and an unavailable binding fails closed.
+    # Bind the capability to the earliest run that proves it holds it before it can
+    # be consumed. A lookalike without the capability cannot win or block it, and a
+    # later run that copied the payload loses to the genuine one. The wait is bounded
+    # and an unavailable binding fails closed.
     for remaining in range(BIND_ATTEMPTS, 0, -1):
-        if orchestration.bind_dispatched_run(repository, token, pr_number, head_sha, generation, holder) is not None:
+        bound = orchestration.bind_dispatched_run(
+            repository, token, pr_number, head_sha, generation, holder, run_id=run_id, nonce=proof
+        )
+        if bound is not None:
             break
         if remaining > 1:
             time.sleep(BIND_INTERVAL_SECONDS)
@@ -2144,6 +2134,18 @@ def main() -> int:
         "configuration_digest": configuration_digest(pool),
         "attempts": attempts,
     }
+    # The producer holds itself to the same canonical contract every consumer applies.
+    problem = orchestration.collector_receipt_problem(
+        receipt,
+        repository=repository,
+        pr_number=args.pr,
+        head_sha=args.head,
+        run_id=run_id,
+        run_attempt=run_attempt,
+        generation_id=generation,
+    )
+    if problem:
+        raise ValueError(f"collector refuses to publish an unusable receipt: {problem}")
     args.output.write_text(json.dumps(receipt, indent=2) + "\n")
     return 0
 

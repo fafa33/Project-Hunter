@@ -164,6 +164,13 @@ class FakeGitHub:
                 raise transport.GitHubRequestError("Reference already exists", category="permanent", status_code=422)
             self.refs[ref] = payload["sha"]
             return {}
+        if method == "GET" and path.startswith("git/matching-refs/"):
+            prefix = path.removeprefix("git/matching-refs/")
+            return [
+                {"ref": f"refs/{ref}", "object": {"type": "tag", "sha": sha}}
+                for ref, sha in sorted(self.refs.items())
+                if ref.startswith(prefix)
+            ]
         if method == "GET" and path.startswith("git/ref/"):
             ref = path.removeprefix("git/ref/")
             if ref not in self.refs:

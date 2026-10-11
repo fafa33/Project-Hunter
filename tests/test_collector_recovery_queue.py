@@ -107,6 +107,10 @@ def test_progress_is_durable_fair_and_a_processed_run_leaves_the_queue(env):
     done_pr = 475
     run, proof = staged[done_pr]
     assert orchestrator.publish_trusted_collector_completion(REPO, "token", run, proof).startswith("PUBLISHED")
+    # A published completion stays queued until its finalization reached a definitive outcome...
+    assert run in sweep()
+    orchestrator.mark_completion_finalized(REPO, "token", done_pr, head_for(done_pr), GEN, run, "SKIPPED: done")
+    # ...and then leaves the queue durably.
     assert set(sweep()) == set(runs.values()) - {run}
 
 
@@ -317,6 +321,7 @@ def test_unusable_receipt_never_receives_a_trusted_completion(env, monkeypatch, 
         assert "receipt unusable" in capsys.readouterr().out
         assert sweep() == [run]  # still outstanding: retried by the next sweep
     (receipt_dir / "reviewer-results.json").write_text(json.dumps(whole))
+    monkeypatch.setattr(orchestrator, "finalize_exhausted_pool", lambda *_a, **_k: "SKIPPED: pool not exhausted")
     orchestrator.main()
     assert "PUBLISHED" in capsys.readouterr().out
     assert sweep() == []
@@ -358,6 +363,7 @@ def test_a_publisher_that_dies_after_claiming_does_not_strand_the_completion(env
     github.age_completion_claims(orchestrator.COMPLETION_CLAIM_STALE_SECONDS + 60)
     assert orchestrator.publish_trusted_collector_completion(REPO, "token", run, proof).startswith("PUBLISHED")
     assert orchestrator.read_collector_completion(REPO, "token", 472, head_for(472)) == ("present", run, None)
+    orchestrator.mark_completion_finalized(REPO, "token", 472, head_for(472), GEN, run, "SKIPPED: done")
     assert sweep() == []
 
 

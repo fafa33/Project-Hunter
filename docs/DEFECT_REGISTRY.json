@@ -1002,6 +1002,46 @@
       "guard": "The recovery work queue is derived from durable GitHub state (open PR -> current cycle -> newest epoch's run claim -> completed run whose completion is not published), never from a position in run history, so it cannot be starved by unrelated runs; each sweep is bounded by time and count with a time-rotated start. Publication is idempotent and epoch-fenced at production and consumption. A bounded drain keeps pre-migration workflow_dispatch collectors as liveness evidence only.",
       "test": "tests/test_collector_recovery_queue.py::test_run_behind_more_than_300_completed_runs_is_still_found",
       "status": "open"
+    },
+    {
+      "id": "PRH-115",
+      "class": "pr592-completion-status-write-is-not-atomic-with-its-claim-so-a-stalled-publisher-can-duplicate",
+      "source": "PR #592 Copilot review discussion 4242397311 (thread rPh_l)",
+      "classification": "systemic",
+      "guard_boundary": "Governance workflow / collector dispatch, provenance, recovery, and review lifecycle",
+      "guard": "The logical completion is one immutable create-only completion record per exact cycle (PR, head, generation), written by the claim winner after its fence; consumers accept a completion only for the run that record names, so a duplicate, late, replayed or conflicting status row cannot change the accepted identity or recovery eligibility. Physical status writes stay single-writer through the bounded claim chain; after the chain is exhausted the record is re-projected so recovery is bounded and eventual. Physical exactly-once status creation is not claimed.",
+      "test": "tests/test_collector_completion_takeover.py::test_a_stalled_publisher_and_a_takeover_yield_one_canonical_completion",
+      "status": "open"
+    },
+    {
+      "id": "PRH-116",
+      "class": "pr592-earliest-listed-lookalike-run-wins-the-collector-binding-and-failed-lookalikes-spend-recovery-epochs",
+      "source": "PR #592 Copilot review discussion 4242397335 (thread rPh_w)",
+      "classification": "systemic",
+      "guard_boundary": "Governance workflow / collector dispatch, provenance, recovery, and review lifecycle",
+      "guard": "The capability is bound to the earliest eligible run that publishes an HMAC possession record keyed by the dispatch nonce, under a ref name containing the MAC; runs created before the epoch's trusted proof status are never contenders, and an earlier run without possession is waited for (bounded) or skipped once ended. Only a run holding the epoch's binding and run claim is evidence that an attempt failed, and the dispatch budget counts elected epochs, not listed runs. Residual: a party holding contents:write can still create refs directly; closing that needs a binding key unavailable to candidate code (owner setting).",
+      "test": "tests/test_collector_run_binding.py::test_a_decoy_that_arrives_before_the_legitimate_run_cannot_win_the_binding",
+      "status": "open"
+    },
+    {
+      "id": "PRH-117",
+      "class": "pr592-collector-generation-guard-parses-shell-and-loses-newline-command-boundaries",
+      "source": "PR #592 Copilot review discussion 4242569894 (thread rP8tY)",
+      "classification": "systemic",
+      "guard_boundary": "Defect prevention preflight / workflow guard",
+      "guard": "The collector step is held to a restricted invocation contract instead of being parsed as shell: one simple command on one line of plain words and double-quoted step-env expansions, the trusted collector as executable, exactly one --generation bound to the dispatched payload expression, default shell only. Newlines, separators, chaining, continuation, substitution, subshells, comments, quoting tricks and assignments all fail closed.",
+      "test": "tests/test_review_after_remediation_generation.py::test_generation_binding_rejects_representation_traps",
+      "status": "open"
+    },
+    {
+      "id": "PRH-118",
+      "class": "pr592-trusted-completion-published-for-a-receipt-validated-only-by-run-attempt",
+      "source": "PR #592 Copilot review discussion 4242569925 (thread rP8tr)",
+      "classification": "systemic",
+      "guard_boundary": "Governance workflow / collector dispatch, provenance, recovery, and review lifecycle",
+      "guard": "One canonical receipt contract (collector_receipt_problem: schema, exact repository/PR/head/run/attempt/generation, claims and configuration digests, attempt records) is applied by the collector before writing, by the trusted completion path before any success is written, by the exhausted-pool finalizer and by the governance exhaustion loader. A recorded completion stays in the recovery queue until finalization reaches a definitive outcome, so unusable or temporarily unavailable evidence never suppresses recovery.",
+      "test": "tests/test_collector_receipt_contract.py::test_no_trusted_completion_for_an_unusable_receipt_and_recovery_continues",
+      "status": "open"
     }
   ],
   "families": [

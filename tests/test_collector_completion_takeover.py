@@ -19,6 +19,7 @@ from test_collector_recovery_queue import head_for, stage
 
 REPO = fake_gh.REPO
 PR = 472
+GEN = orchestrator.BASE_GENERATION_ID
 STALE = orchestrator.COMPLETION_CLAIM_STALE_SECONDS + 60
 
 
@@ -122,7 +123,13 @@ def test_fresh_claim_is_never_taken_over(env):
     assert len(claim_refs(github)) == 1
 
 
-def test_repeated_publisher_crashes_never_duplicate_and_are_bounded(env, monkeypatch):
+def test_repeated_publisher_crashes_are_bounded_and_recover_to_exactly_one_identity(env, monkeypatch):
+    """Every claim crashes after the record and before its status write.
+
+    The claim chain is bounded, and the record already fixes the cycle's identity,
+    so after the last takeover the record is re-projected rather than deadlocking:
+    recovery is bounded and eventual, and consumers see exactly one completion.
+    """
     github, local = env
     run, proof = stage(github, local, PR, orchestrator_run=101)
     with monkeypatch.context() as m:
@@ -132,11 +139,13 @@ def test_repeated_publisher_crashes_never_duplicate_and_are_bounded(env, monkeyp
             github.age_completion_claims(STALE)
     assert not completions(github)
     assert len(claim_refs(github)) == orchestrator.COMPLETION_MAX_TAKEOVERS + 1
-    # Exhausted: fail closed, no further claim and no status, however many sweeps retry.
+    assert orchestrator.read_completion_record(REPO, "token", PR, head_for(PR), GEN)["run_id"] == run
+    assert publish(run, proof).startswith("PUBLISHED")  # bounded eventual recovery
     for _ in range(3):
-        assert "exhausted" in publish(run, proof)
-    assert not completions(github)
-    assert len(claim_refs(github)) == orchestrator.COMPLETION_MAX_TAKEOVERS + 1
+        assert publish(run, proof).startswith("SKIPPED")
+    assert len(completions(github)) == 1
+    assert orchestrator.read_collector_completion(REPO, "token", PR, head_for(PR)) == ("present", run, None)
+    assert len(claim_refs(github)) == orchestrator.COMPLETION_MAX_TAKEOVERS + 1  # no claim beyond the bound
 
 
 def test_repeated_crashes_then_a_surviving_publisher_publishes_once(env, monkeypatch):
@@ -178,10 +187,10 @@ def test_takeover_requires_the_completion_to_be_absent(env):
     github, local = env
     run, proof = stage(github, local, PR, orchestrator_run=101)
     args = (REPO, "token", PR, head_for(PR), orchestrator.BASE_GENERATION_ID, run)
-    assert orchestrator.claim_completion_publication(*args)[0] is None
-    orchestrator.publish_collector_completion(REPO, "token", PR, head_for(PR), run)  # the "dead" one did publish
+    assert publish(run, proof).startswith("PUBLISHED")  # the original did publish (record and status)
     github.age_completion_claims(STALE)
-    assert orchestrator.claim_completion_publication(*args)[0].startswith("SKIPPED")
+    refusal, _claim = orchestrator.claim_completion_publication(*args)
+    assert refusal is not None and refusal.startswith("SKIPPED")
     assert len(claim_refs(github)) == 1
 
 
@@ -270,3 +279,126 @@ def test_documented_limitation_a_pause_between_fence_and_write_can_duplicate_an_
     assert len(statuses) == 2  # the residual is real: pinned, not hidden
     assert len({(s["context"], s["description"], s["target_url"]) for s in statuses}) == 1
     assert orchestrator.read_collector_completion(REPO, "token", PR, head_for(PR)) == ("present", run, None)
+
+
+# --- Copilot rPh_l: one canonical completion under adversarial scheduling -------------------
+def records(github):
+    return [ref for ref in github.refs if ref.startswith("tags/hunter-collector-completed/")]
+
+
+def _stall_then_takeover(github, run, proof, *, first_publisher_resumes_first):
+    """Publisher A passes its fence and stalls before its status POST; B takes over."""
+    real_write = orchestrator.publish_collector_completion
+    state = {"stalled": False}
+
+    def write(*args, **kwargs):
+        if not state["stalled"]:
+            state["stalled"] = True
+            if first_publisher_resumes_first:
+                real_write(*args, **kwargs)  # A resumes and writes first...
+                github.age_completion_claims(STALE)
+                assert publish(run, proof).startswith("SKIPPED")  # ...so B sees it published
+                return None
+            github.age_completion_claims(STALE)
+            assert publish(run, proof).startswith("PUBLISHED")  # B takes over and publishes first
+        return real_write(*args, **kwargs)  # A resumes
+
+    return write
+
+
+@pytest.mark.parametrize("a_first", [False, True])
+def test_a_stalled_publisher_and_a_takeover_yield_one_canonical_completion(env, monkeypatch, a_first):
+    github, local = env
+    run, proof = stage(github, local, PR, orchestrator_run=101)
+    monkeypatch.setattr(
+        orchestrator,
+        "publish_collector_completion",
+        _stall_then_takeover(github, run, proof, first_publisher_resumes_first=a_first),
+    )
+    publish(run, proof)
+    statuses = completions(github)
+    assert 1 <= len(statuses) <= 2  # a physical duplicate is possible; it is never a second identity
+    assert len({(s["context"], s["state"], s["description"], s["target_url"]) for s in statuses}) == 1
+    assert len(records(github)) == 1
+    assert orchestrator.read_collector_completion(REPO, "token", PR, head_for(PR)) == ("present", run, None)
+
+
+@pytest.mark.parametrize("needle", ["POST git/tags", "POST git/refs"])
+def test_a_crash_before_or_while_claiming_leaves_publication_recoverable(env, needle):
+    github, local = env
+    run, proof = stage(github, local, PR, orchestrator_run=101)
+    github.fail[needle] = ("once", fake_gh.Crash())
+    with pytest.raises(fake_gh.Crash):
+        publish(run, proof)
+    github.age_completion_claims(STALE)
+    assert publish(run, proof).startswith("PUBLISHED")
+    assert len(completions(github)) == 1 and len(records(github)) == 1
+
+
+def test_a_crash_after_claiming_but_before_the_record_is_recovered_by_takeover(env, monkeypatch):
+    github, local = env
+    run, proof = stage(github, local, PR, orchestrator_run=101)
+    with monkeypatch.context() as m:
+        m.setattr(orchestrator, "record_completion", lambda *_a, **_k: (_ for _ in ()).throw(fake_gh.Crash()))
+        with pytest.raises(fake_gh.Crash):
+            publish(run, proof)
+    assert len(claim_refs(github)) == 1 and not records(github)
+    assert publish(run, proof).startswith("SKIPPED")  # inside the grace the holder may still be writing
+    github.age_completion_claims(STALE)
+    assert publish(run, proof).startswith("PUBLISHED")
+    assert len(completions(github)) == 1 and len(records(github)) == 1
+
+
+def test_a_retry_after_an_ambiguous_status_failure_does_not_duplicate(env, monkeypatch):
+    github, local = env
+    run, proof = stage(github, local, PR, orchestrator_run=101)
+    real_write = orchestrator.publish_collector_completion
+
+    def written_then_lost(*args, **kwargs):
+        real_write(*args, **kwargs)  # GitHub applied the write...
+        raise transport.GitHubRequestError("reset", category="transport")  # ...but the reply was lost
+
+    with monkeypatch.context() as m:
+        m.setattr(orchestrator, "publish_collector_completion", written_then_lost)
+        with pytest.raises(transport.GitHubRequestError):
+            publish(run, proof)
+    github.age_completion_claims(STALE)
+    assert publish(run, proof) == "SKIPPED: collector completion already published"
+    assert len(completions(github)) == 1
+
+
+def test_stale_replayed_or_conflicting_statuses_never_change_the_accepted_completion(env):
+    github, local = env
+    run, proof = stage(github, local, PR, orchestrator_run=101)
+    assert publish(run, proof).startswith("PUBLISHED")
+    head = head_for(PR)
+    # A status naming another run (forged, replayed from elsewhere, or a lookalike) and a
+    # replayed copy of the accepted one: neither changes what consumers accept.
+    orchestrator.publish_collector_completion(REPO, "token", PR, head, run + 1)
+    orchestrator.publish_collector_completion(REPO, "token", PR, head, run)
+    assert orchestrator.read_collector_completion(REPO, "token", PR, head) == ("present", run, None)
+    assert len(records(github)) == 1
+
+
+def test_a_status_without_the_canonical_record_does_not_suppress_recovery(env):
+    from test_collector_recovery_queue import sweep
+
+    github, local = env
+    run, proof = stage(github, local, PR, orchestrator_run=101)
+    head = head_for(PR)
+    orchestrator.publish_collector_completion(REPO, "token", PR, head, run)  # a status with no record
+    assert orchestrator.read_collector_completion(REPO, "token", PR, head) == ("absent", None, None)
+    assert sweep() == [run], "an unrecorded status must not remove the run from recovery"
+    assert publish(run, proof).startswith("PUBLISHED")
+    assert len(records(github)) == 1
+    assert orchestrator.read_collector_completion(REPO, "token", PR, head) == ("present", run, None)
+
+
+def test_a_record_for_one_run_is_the_only_completion_of_the_cycle(env):
+    github, local = env
+    run, proof = stage(github, local, PR, orchestrator_run=101)
+    head = head_for(PR)
+    orchestrator.record_completion(REPO, "token", PR, head, GEN, run + 7, 1)  # a different run won the record
+    assert publish(run, proof) == "SKIPPED: this cycle's completion is already recorded for another run"
+    assert not completions(github)
+    assert orchestrator.record_completion(REPO, "token", PR, head, GEN, run, 1)["run_id"] == run + 7  # immutable

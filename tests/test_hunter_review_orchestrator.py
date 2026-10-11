@@ -483,10 +483,16 @@ def test_a_missing_run_id_refuses_before_any_collector_is_dispatched(monkeypatch
     assert stored["cycle"] is None
 
 
-def _ensure_harness(monkeypatch, cycle, runs):
-    """Drive ensure_collector against a recorded cycle and a collector run listing."""
+def _ensure_harness(monkeypatch, cycle, runs, epochs=1):
+    """Drive ensure_collector against a recorded cycle and a collector run listing.
+
+    ``epochs`` is how many owner epochs were already elected: the dispatch budget is
+    counted from those authoritative records, never from listed runs.
+    """
 
     stored = {"dispatches": 0, "published": []}
+    owner = orchestrator.CollectorOwner(0, 1, "0" * 64, "2026-01-01T00:00:00Z")
+    monkeypatch.setattr(orchestrator, "read_owner_chain", lambda *_args: [owner] * epochs)
     monkeypatch.setattr(orchestrator, "read_cycle", lambda *_args: ("present", cycle, None))
     monkeypatch.setattr(orchestrator, "reviewer_pool_config_digest", lambda: "d" * 64, raising=False)
     monkeypatch.setattr(orchestrator, "current_run_id", lambda: 999, raising=False)
@@ -567,12 +573,22 @@ def test_redispatch_stops_at_the_bounded_budget(monkeypatch):
         _collector_run("completed", "failure", run_id=index)
         for index in range(1, orchestrator.MAX_COLLECTOR_DISPATCHES + 1)
     ]
-    stored = _ensure_harness(monkeypatch, cycle, runs)
+    stored = _ensure_harness(monkeypatch, cycle, runs, epochs=orchestrator.MAX_COLLECTOR_DISPATCHES)
 
     result = orchestrator.ensure_collector("owner/repo", "token", 472, HEAD)
 
     assert stored["dispatches"] == 0
     assert result == cycle
+
+
+def test_lookalike_runs_never_spend_the_dispatch_budget(monkeypatch):
+    cycle = make_cycle(trigger_id=123, started_at=_five_minutes_ago())
+    runs = [_collector_run("completed", "failure", run_id=index) for index in range(1, 20)]  # a stream of decoys
+    stored = _ensure_harness(monkeypatch, cycle, runs, epochs=1)
+
+    orchestrator.ensure_collector("owner/repo", "token", 472, HEAD)
+
+    assert stored["dispatches"] == 1  # one elected epoch: the budget is not spent by listed runs
 
 
 def test_a_freshly_dispatched_cycle_is_not_redispatched_before_runs_are_listed(monkeypatch):
@@ -1815,6 +1831,13 @@ def test_collector_completion_accepts_trusted_ancestor_of_current_main(monkeypat
     assert orchestrator.read_collector_completion("owner/repo", "token", 472, HEAD) == ("absent", None, None)
     # Ancestry itself is accepted once the run is current (epoch evidence is covered elsewhere).
     monkeypatch.setattr(orchestrator, "collector_run_is_current", lambda *_a, **_k: True)
+    # ...and a status alone, with no canonical completion record, is not a completion either.
+    assert orchestrator.read_collector_completion("owner/repo", "token", 472, HEAD) == ("absent", None, None)
+    monkeypatch.setattr(
+        orchestrator,
+        "read_completion_record",
+        lambda *_a, **_k: {"kind": "completed", "run_id": 777, "run_attempt": 1},
+    )
     state, run_id, reason = orchestrator.read_collector_completion("owner/repo", "token", 472, HEAD)
 
     assert reason is None

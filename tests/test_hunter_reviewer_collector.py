@@ -172,6 +172,7 @@ def _install_receipt(
         "run_id": 123,
         "run_attempt": 1,
         "claims_id": "d" * 64,
+        "remediation_generation_id": generation_id,
         "configuration_digest": collector.configuration_digest(pool),
         "attempts": records,
     }
@@ -941,6 +942,7 @@ def test_groq_authority_verifies_prior_api_exhaustion_from_trusted_collector(mon
         "run_id": 123,
         "run_attempt": 1,
         "claims_id": "d" * 64,
+        "remediation_generation_id": collector.BASE_GENERATION,
         "configuration_digest": collector.configuration_digest(pool),
         "attempts": [
             {
@@ -1550,6 +1552,7 @@ def _triage_receipt(monkeypatch, *, local_outcome="clear", local_run_id=7001, lo
         "run_id": 123,
         "run_attempt": 1,
         "claims_id": "d" * 64,
+        "remediation_generation_id": collector.BASE_GENERATION,
         "configuration_digest": collector.configuration_digest(pool),
         "attempts": records,
     }

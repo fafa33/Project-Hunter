@@ -4,13 +4,14 @@ from __future__ import annotations
 
 import argparse
 import hashlib
+import hmac
 import json
 import os
 import re
 import secrets
 import sys
 import time
-from collections.abc import Iterable
+from collections.abc import Iterable, Iterator
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
@@ -668,6 +669,87 @@ def publish_collector_completion(repository: str, token: str, pr_number: int, he
     )
 
 
+def collector_completion_record_ref(pr_number: int, head_sha: str, generation: str) -> str:
+    """The one create-only completion record of an exact cycle (PR, head, generation)."""
+    digest = hashlib.sha256(f"{pr_number}:{head_sha}:{generation}:completed".encode()).hexdigest()
+    return f"tags/hunter-collector-completed/{digest}"
+
+
+def collector_finalized_ref(pr_number: int, head_sha: str, generation: str, run_id: int) -> str:
+    """Create-only marker that a recorded completion's finalization reached a definitive outcome."""
+    digest = hashlib.sha256(f"{pr_number}:{head_sha}:{generation}:{run_id}:finalized".encode()).hexdigest()
+    return f"tags/hunter-collector-finalized/{digest}"
+
+
+def read_completion_record(
+    repository: str, token: str, pr_number: int, head_sha: str, generation: str
+) -> dict[str, Any] | None:
+    """The cycle's canonical completion record, ``None`` when none exists; malformed raises."""
+    record = _read_claim(repository, token, collector_completion_record_ref(pr_number, head_sha, generation))
+    if record is None:
+        return None
+    if not (
+        record.get("kind") == "completed"
+        and record.get("pr") == pr_number
+        and record.get("head") == head_sha
+        and record.get("generation") == generation
+        and type(record.get("run_id")) is int
+        and record["run_id"] > 0
+        and type(record.get("run_attempt")) is int
+        and record["run_attempt"] >= 1
+    ):
+        raise ValueError("collector completion record does not match its cycle identity")
+    return record
+
+
+def record_completion(
+    repository: str, token: str, pr_number: int, head_sha: str, generation: str, run_id: int, run_attempt: int
+) -> dict[str, Any]:
+    """Create the cycle's completion record (single winner) and return whichever record holds."""
+    if type(run_attempt) is not int or run_attempt < 1:
+        raise ValueError("completed run attempt is malformed")
+    _create_claim(
+        repository,
+        token,
+        collector_completion_record_ref(pr_number, head_sha, generation),
+        {
+            "v": CLAIM_RECORD_VERSION,
+            "kind": "completed",
+            "pr": pr_number,
+            "head": head_sha,
+            "generation": generation,
+            "run_id": run_id,
+            "run_attempt": run_attempt,
+        },
+    )
+    held = read_completion_record(repository, token, pr_number, head_sha, generation)
+    if held is None:
+        raise ValueError("collector completion record could not be confirmed")
+    return held
+
+
+def completion_finalized(
+    repository: str, token: str, pr_number: int, head_sha: str, generation: str, run_id: int
+) -> bool:
+    record = _read_claim(repository, token, collector_finalized_ref(pr_number, head_sha, generation, run_id))
+    if record is None:
+        return False
+    if record.get("kind") != "finalized" or record.get("run_id") != run_id:
+        raise ValueError("collector finalization marker does not match its run")
+    return True
+
+
+def mark_completion_finalized(
+    repository: str, token: str, pr_number: int, head_sha: str, generation: str, run_id: int, outcome: str
+) -> None:
+    _create_claim(
+        repository,
+        token,
+        collector_finalized_ref(pr_number, head_sha, generation, run_id),
+        {"v": CLAIM_RECORD_VERSION, "kind": "finalized", "run_id": run_id, "outcome": outcome[:200]},
+    )
+
+
 def publish_trusted_collector_completion(repository: str, token: str, run_id: int, proof: str = "") -> str:
     """Only a trusted default-branch reconcile may attest a finished collector.
 
@@ -741,7 +823,15 @@ def publish_trusted_collector_completion(repository: str, token: str, run_id: in
         return "SKIPPED: collector authority could not be re-verified at publication"
     if not recheck or recheck[-1] != owner:
         return "SKIPPED: collector owner was replaced before publication"
-    # Idempotent: a concurrent or earlier sweep may already have published this run.
+    # The logical completion is the cycle's immutable, create-only completion record,
+    # not the status row. Once a record names a run, that run is the cycle's only
+    # accepted completion: a late, duplicate or replayed status can never change it.
+    try:
+        record = read_completion_record(repository, token, pr_number, head_sha, cycle.generation_id)
+    except (transport.GitHubRequestError, ValueError):
+        return "SKIPPED: collector completion record unavailable"
+    if record is not None and record["run_id"] != run_id:
+        return "SKIPPED: this cycle's completion is already recorded for another run"
     published, published_run, read_error = read_collector_completion(repository, token, pr_number, head_sha)
     if read_error:
         # An unreadable history is unavailable evidence, not absence: retry on the next sweep.
@@ -750,6 +840,8 @@ def publish_trusted_collector_completion(repository: str, token: str, run_id: in
         return "SKIPPED: collector completion already published"
     if published != "absent":
         return "SKIPPED: collector completion evidence unavailable"
+    # Physical writes stay single-writer through the claim chain, so duplicates arise
+    # only from a publisher that stalls between its fence and its write.
     try:
         refusal, claim = claim_completion_publication(
             repository, token, pr_number, head_sha, cycle.generation_id, run_id
@@ -758,14 +850,37 @@ def publish_trusted_collector_completion(repository: str, token: str, run_id: in
         # Unreadable or ambiguous claim evidence is never ownership.
         return "SKIPPED: collector completion claim evidence unavailable"
     if refusal is not None or claim is None:
-        return refusal or "SKIPPED: collector completion publication already claimed"
-    # Fence immediately before the status write: a publisher superseded by a
-    # takeover (or whose claim can no longer be confirmed) writes nothing.
-    try:
-        if not completion_claim_is_current(repository, token, pr_number, head_sha, cycle.generation_id, run_id, claim):
-            return "SKIPPED: collector completion claim was superseded before publication"
-    except (transport.GitHubRequestError, ValueError):
-        return "SKIPPED: collector completion claim evidence unavailable"
+        refusal = refusal or "SKIPPED: collector completion publication already claimed"
+        # Every takeover crashed after the record was written. The record already fixes
+        # the identity, so re-projecting it cannot change the outcome; doing so keeps
+        # recovery bounded instead of deadlocking on an exhausted claim chain.
+        if not (record is not None and "takeovers exhausted" in refusal):
+            return refusal
+    else:
+        # Fence immediately before the record and status writes: a publisher superseded
+        # by a takeover (or whose claim can no longer be confirmed) writes nothing.
+        try:
+            if not completion_claim_is_current(
+                repository, token, pr_number, head_sha, cycle.generation_id, run_id, claim
+            ):
+                return "SKIPPED: collector completion claim was superseded before publication"
+            if record is None:
+                record = record_completion(
+                    repository,
+                    token,
+                    pr_number,
+                    head_sha,
+                    cycle.generation_id,
+                    run_id,
+                    int(run.get("run_attempt") or 0),
+                )
+        except (transport.GitHubRequestError, ValueError):
+            return "SKIPPED: collector completion record unavailable"
+        if record["run_id"] != run_id:
+            return "SKIPPED: this cycle's completion is already recorded for another run"
+    # The record names this run. The status is its idempotent projection: every write
+    # carries the identical identity, so a duplicate (a stalled publisher resuming after
+    # a takeover) or a re-projection after a crash cannot change what consumers accept.
     publish_collector_completion(repository, token, pr_number, head_sha, run_id)
     return f"PUBLISHED: collector completion PR #{pr_number} at {head_sha[:12]}"
 
@@ -990,6 +1105,33 @@ def collector_runs_since(
     raise ValueError("collector run history exceeds the bounded recovery window")
 
 
+def _run_claimed_for_owner(
+    repository: str,
+    token: str,
+    pr_number: int,
+    head_sha: str,
+    generation: str,
+    owner: CollectorOwner,
+    run: dict[str, Any],
+) -> bool:
+    attempt = run.get("run_attempt")
+    if type(attempt) is not int or attempt < 1:
+        return False
+    try:
+        verify_bound_run(repository, token, pr_number, head_sha, generation, owner, run["id"])
+    except CollectorAuthorityError:
+        return False
+    claim = _read_claim(
+        repository, token, collector_run_claim_ref(pr_number, head_sha, generation, owner.epoch, attempt)
+    )
+    return (
+        claim is not None
+        and claim.get("kind") == "run"
+        and claim.get("run_id") == run["id"]
+        and claim.get("nonce_sha256") == owner.nonce_sha256
+    )
+
+
 def _run_holds_owner_authority(
     repository: str,
     token: str,
@@ -1039,8 +1181,16 @@ def owner_attempt_failed(
                 repository, token, pr_number, head_sha, generation, owner, run
             ):
                 return False
-    if since:
-        return True
+    # Only a run that passed the start gate (bound to and holding this epoch's run
+    # claim) proves the epoch's attempt failed. A lookalike that failed its gate is not
+    # evidence, so decoys cannot accelerate recovery or consume epochs; without a
+    # claimed run the owner is replaced only after the liveness grace.
+    for run in since:
+        if run.get("status") == "completed" and run.get("conclusion") != "success":
+            if type(run.get("id")) is int and _run_claimed_for_owner(
+                repository, token, pr_number, head_sha, generation, owner, run
+            ):
+                return True
     return _older_than(owner.claimed_at, COLLECTOR_LIVENESS_GRACE_SECONDS)
 
 
@@ -1127,17 +1277,7 @@ def verify_owner_run_authority(
     ``CollectorAuthorityError`` when the run is not authorized and any other error
     when the evidence cannot be read; neither is ever authority.
     """
-    description = _proof_description_for_digest(generation, owner.epoch, owner.nonce_sha256)
-    matches = [
-        status
-        for status in _all_commit_statuses(repository, token, head_sha)
-        if status.get("context") == f"{DISPATCH_PROOF_CONTEXT_PREFIX}{pr_number}"
-        and status.get("description") == description
-        and str((status.get("creator") or {}).get("login") or "") == TRUSTED_STATUS_CREATOR
-        and _run_id(str(status.get("target_url") or "")) == owner.orchestrator_run_id
-    ]
-    if len(matches) != 1:
-        raise CollectorAuthorityError("no unique trusted proof for the elected epoch")
+    trusted_proof_status(repository, token, pr_number, head_sha, generation, owner)
     verify_bound_run(repository, token, pr_number, head_sha, generation, owner, run_id)
     claim = _read_claim(
         repository, token, collector_run_claim_ref(pr_number, head_sha, generation, owner.epoch, attempt)
@@ -1357,34 +1497,144 @@ def outstanding_collector_runs(
             if read_error:
                 continue  # unavailable evidence is retried next sweep and must not take a batch slot
             if published == "present" and published_run == run_id:
-                continue
+                # Published completions stay queued until their finalization reached a
+                # definitive outcome, so a transient finalization failure is retried.
+                if completion_finalized(repository, token, pr_number, head_sha, cycle.generation_id, run_id):
+                    continue
+            elif published == "present":
+                continue  # the cycle's completion is recorded for another run
             outstanding.append(OutstandingCollectorRun(pr_number, head_sha, run_id, _run_title(run)))
         except (transport.GitHubRequestError, ValueError) as exc:
             print(f"Recovery evidence unavailable for PR #{pr_number}: {exc}", file=sys.stderr)
     return outstanding[:limit]
 
 
-def bind_dispatched_run(
-    repository: str, token: str, pr_number: int, head_sha: str, generation: str, owner: CollectorOwner
-) -> dict[str, Any] | None:
-    """Bind the epoch's single-use capability to the run GitHub created for it.
+POSSESSION_REF_PREFIX = "tags/hunter-collector-possession"
 
-    The identity is the Actions run ID reported by the Actions API, never a value
-    the caller of ``repository_dispatch`` supplies. A capability can only reach a
-    run through a dispatch issued after the owner claim, so the run created for the
-    orchestrator's own dispatch is the earliest eligible run of this exact cycle
-    (same workflow path, ``repository_dispatch`` event, default branch, PR/head/
-    generation, created at or after the claim). A thief needs the capability first,
-    so any run carrying a copied payload is strictly later and loses. The choice is a
-    deterministic function of GitHub state recorded in a create-only ref, so every
-    trusted caller (the dispatching orchestrator or the collector itself) settles on
-    the same run. Returns the record, or ``None`` while no eligible run is listed.
-    Runs already bound to an earlier epoch are never eligible.
+
+def _possession_mac(
+    nonce: str, repository: str, pr_number: int, head_sha: str, generation: str, epoch: int, run_id: int
+) -> str:
+    message = f"{repository}:{pr_number}:{head_sha}:{generation}:{epoch}:{run_id}".encode()
+    return hmac.new(nonce.encode(), message, hashlib.sha256).hexdigest()
+
+
+def _possession_prefix(pr_number: int, head_sha: str, generation: str, epoch: int, run_id: int) -> str:
+    return f"{POSSESSION_REF_PREFIX}/{_claim_digest(pr_number, head_sha, generation, epoch)}-r{run_id}-"
+
+
+def publish_possession(
+    repository: str,
+    token: str,
+    pr_number: int,
+    head_sha: str,
+    generation: str,
+    owner: CollectorOwner,
+    run_id: int,
+    nonce: str,
+) -> None:
+    """Record that ``run_id`` holds the epoch's capability, without revealing it.
+
+    The record is an HMAC keyed by the dispatch nonce, so only a holder of the
+    capability can produce a valid one, and the MAC is part of the ref name, so a
+    party without the capability can neither forge nor pre-occupy it.
     """
+    mac = _possession_mac(nonce, repository, pr_number, head_sha, generation, owner.epoch, run_id)
+    _create_claim(
+        repository,
+        token,
+        _possession_prefix(pr_number, head_sha, generation, owner.epoch, run_id) + mac[:16],
+        {"v": CLAIM_RECORD_VERSION, "kind": "possession", "epoch": owner.epoch, "run_id": run_id, "mac": mac},
+    )
+
+
+def run_holds_possession(
+    repository: str,
+    token: str,
+    pr_number: int,
+    head_sha: str,
+    generation: str,
+    owner: CollectorOwner,
+    run_id: int,
+    nonce: str,
+) -> bool:
+    """Whether ``run_id`` published a valid possession record for this epoch; unreadable raises."""
+    expected = _possession_mac(nonce, repository, pr_number, head_sha, generation, owner.epoch, run_id)
+    prefix = _possession_prefix(pr_number, head_sha, generation, owner.epoch, run_id)
+    listed = request_json(repository, token, "GET", f"git/matching-refs/{prefix}")
+    if not isinstance(listed, list):
+        raise ValueError("possession evidence is unavailable")
+    for item in listed:
+        ref = str((item or {}).get("ref") or "").removeprefix("refs/")
+        if not ref.startswith(prefix):
+            continue
+        record = _read_claim(repository, token, ref)
+        mac = (record or {}).get("mac")
+        if (
+            isinstance(mac, str)
+            and (record or {}).get("kind") == "possession"
+            and (record or {}).get("run_id") == run_id
+            and ref == prefix + mac[:16]
+            and hmac.compare_digest(mac, expected)
+        ):
+            return True
+    return False
+
+
+def trusted_proof_status(
+    repository: str, token: str, pr_number: int, head_sha: str, generation: str, owner: CollectorOwner
+) -> dict[str, Any]:
+    """The unique trusted dispatch-proof status of ``owner``'s epoch, or raise."""
+    description = _proof_description_for_digest(generation, owner.epoch, owner.nonce_sha256)
+    matches = [
+        status
+        for status in _all_commit_statuses(repository, token, head_sha)
+        if status.get("context") == f"{DISPATCH_PROOF_CONTEXT_PREFIX}{pr_number}"
+        and status.get("description") == description
+        and str((status.get("creator") or {}).get("login") or "") == TRUSTED_STATUS_CREATOR
+        and _run_id(str(status.get("target_url") or "")) == owner.orchestrator_run_id
+    ]
+    if len(matches) != 1:
+        raise CollectorAuthorityError("no unique trusted proof for the elected epoch")
+    return matches[0]
+
+
+def bind_dispatched_run(
+    repository: str,
+    token: str,
+    pr_number: int,
+    head_sha: str,
+    generation: str,
+    owner: CollectorOwner,
+    *,
+    run_id: int,
+    nonce: str,
+) -> dict[str, Any] | None:
+    """Bind the epoch's single-use capability to the run that actually holds it.
+
+    Called only by a collector run, which holds the dispatch nonce. The run first
+    publishes an unforgeable possession record (an HMAC keyed by the nonce, whose
+    MAC is part of the ref name). The capability belongs to the *earliest* eligible
+    run that holds it: a run created before the epoch's trusted proof status cannot
+    hold the nonce at all, so it is never considered, and a later run that copied
+    the nonce from the dispatch payload is strictly later than the genuine run. A
+    lookalike without the capability (any title, workflow, time or listing position)
+    therefore neither wins nor blocks the binding; while an earlier run that might
+    still hold the capability has not finished, this returns ``None`` and the caller
+    waits. Returns the binding record; an earlier holder raises.
+    """
+    if hashlib.sha256(nonce.encode()).hexdigest() != owner.nonce_sha256:
+        raise CollectorAuthorityError("capability does not belong to the elected epoch")
     ref = collector_run_bind_ref(pr_number, head_sha, generation, owner.epoch)
     held = _read_claim(repository, token, ref)
     if held is not None:
         return held
+    issued_at = str(
+        trusted_proof_status(repository, token, pr_number, head_sha, generation, owner).get("created_at") or ""
+    )
+    if not issued_at:
+        raise ValueError("trusted proof issuance time is unavailable")
+    publish_possession(repository, token, pr_number, head_sha, generation, owner, run_id, nonce)
     info = request_json(repository, token, "GET", "")
     branch = str((info or {}).get("default_branch") or "main")
     earlier: set[int] = set()
@@ -1392,18 +1642,25 @@ def bind_dispatched_run(
         record = _read_claim(repository, token, collector_run_bind_ref(pr_number, head_sha, generation, epoch))
         if record is not None and isinstance(record.get("run_id"), int):
             earlier.add(record["run_id"])
-    eligible = [
-        run
-        for run in collector_runs_since(repository, token, pr_number, head_sha, generation, owner.claimed_at)
-        if run.get("path") == COLLECTOR_WORKFLOW_PATH
-        and run.get("event") == "repository_dispatch"
-        and run.get("head_branch") == branch
-        and isinstance(run.get("id"), int)
-        and run["id"] not in earlier
-        and str(run.get("created_at") or "") >= owner.claimed_at
-    ]
-    if not eligible:
-        return None
+    contenders = sorted(
+        (
+            run
+            for run in collector_runs_since(repository, token, pr_number, head_sha, generation, issued_at)
+            if run.get("path") == COLLECTOR_WORKFLOW_PATH
+            and run.get("event") == "repository_dispatch"
+            and run.get("head_branch") == branch
+            and type(run.get("id")) is int
+            and run["id"] < run_id
+            and run["id"] not in earlier
+            and str(run.get("created_at") or "") >= issued_at
+        ),
+        key=lambda run: run["id"],
+    )
+    for run in contenders:
+        if run_holds_possession(repository, token, pr_number, head_sha, generation, owner, run["id"], nonce):
+            raise CollectorAuthorityError("an earlier run holds the epoch's capability")
+        if run.get("status") != "completed":
+            return None  # it may still prove possession: wait for it to prove or to end
     record = {
         "v": CLAIM_RECORD_VERSION,
         "kind": "bind",
@@ -1411,9 +1668,10 @@ def bind_dispatched_run(
         "head": head_sha,
         "generation": generation,
         "epoch": owner.epoch,
-        "run_id": min(run["id"] for run in eligible),
+        "run_id": run_id,
         "orchestrator_run": owner.orchestrator_run_id,
         "nonce_sha256": owner.nonce_sha256,
+        "mac": _possession_mac(nonce, repository, pr_number, head_sha, generation, owner.epoch, run_id),
     }
     _create_claim(repository, token, ref, record)
     held = _read_claim(repository, token, ref)
@@ -1529,7 +1787,12 @@ def read_collector_completion(
             if not description.startswith("collector_run_id=") or not description.split("=", 1)[1].isdigit():
                 continue
             run_id = int(description.split("=", 1)[1])
-            run = request_json(repository, token, "GET", f"actions/runs/{run_id}")
+            try:
+                run = request_json(repository, token, "GET", f"actions/runs/{run_id}")
+            except transport.GitHubRequestError as exc:
+                if exc.status_code == 404 and exc.category == "permanent":
+                    continue  # a status citing a run that does not exist is not evidence
+                raise
             if not isinstance(run, dict):
                 continue
             run_revision = str(run.get("head_sha") or "")
@@ -1552,8 +1815,16 @@ def read_collector_completion(
                 and run.get("conclusion") == "success"
                 and collector_run_is_current(repository, token, pr_number, head_sha, run)
             ):
-                candidates.append(run_id)
-        return ("present", max(candidates), None) if candidates else ("absent", None, None)
+                # Only the run the cycle's canonical completion record names is a
+                # completion; any other status row (late, replayed, forged) is not.
+                title = _COLLECTOR_RUN_TITLE.fullmatch(_run_title(run))
+                generation = (title.group(3) if title else None) or BASE_GENERATION_ID
+                record = read_completion_record(repository, token, pr_number, head_sha, generation)
+                if record is not None and record["run_id"] == run_id:
+                    candidates.append(run_id)
+        if len(set(candidates)) > 1:
+            return "absent", None, "conflicting canonical collector completions"
+        return ("present", candidates[0], None) if candidates else ("absent", None, None)
     except Exception as exc:
         return "absent", None, f"collector completion evidence unavailable: {type(exc).__name__}: {exc}"
 
@@ -1623,12 +1894,6 @@ def dispatch_collector(
             },
         },
     )
-    # Best effort: the collector binds itself deterministically if this does not
-    # land (crash or listing lag), and an unbound capability is never consumable.
-    try:
-        bind_dispatched_run(repository, token, pr_number, head_sha, generation_id, current[-1])
-    except (transport.GitHubRequestError, ValueError) as exc:
-        print(f"Collector run binding deferred for PR #{pr_number}: {exc}", file=sys.stderr)
 
 
 def collector_run_name(pr_number: int, head_sha: str, generation_id: str = BASE_GENERATION_ID) -> str:
@@ -1925,6 +2190,15 @@ def collector_needs_dispatch(repository: str, token: str, cycle: ReviewCycle) ->
         # Unreadable liveness evidence is not evidence of a dead collector.
         print(f"Collector liveness evidence unavailable; not re-dispatching: {exc}", file=sys.stderr)
         return False
+    # The budget is the number of elected epochs (authoritative, create-only owner
+    # refs), never the number of listed runs: lookalike runs carrying the cycle's
+    # title must not be able to spend it. When the epoch records cannot be read, the
+    # listed-run count is the fallback; it can only stop dispatching early (fail
+    # closed), never allow more than the election's own epoch bound permits.
+    try:
+        count = len(read_owner_chain(repository, token, cycle.pr_number, cycle.head_sha, cycle.generation_id))
+    except transport.GitHubRequestError as exc:
+        print(f"Collector epoch evidence unavailable; budgeting by listed runs: {exc}", file=sys.stderr)
     if liveness in {"active", "completed"}:
         return False
     if count >= MAX_COLLECTOR_DISPATCHES:
@@ -2065,8 +2339,16 @@ def pool_exhaustion(
     # Imported here: the collector imports this module at import time.
     import hunter_reviewer_collector as collector
 
-    if not isinstance(receipt, dict):
-        return PoolExhaustion(False, "collector receipt is not an object")
+    problem = collector_receipt_problem(
+        receipt,
+        repository=repository,
+        pr_number=pr_number,
+        head_sha=head_sha,
+        run_id=run_id,
+        generation_id=generation_id,
+    )
+    if problem:
+        return PoolExhaustion(False, f"collector {problem}")
     expected = {
         "schema": COLLECTOR_RESULTS_SCHEMA,
         "repository": repository,
@@ -2136,37 +2418,118 @@ def read_collector_receipt(path: Path) -> tuple[Any, str]:
 
 
 def collector_receipt_problem(
-    receipt: Any, *, repository: str, pr_number: int, head_sha: str, run_id: int, run_attempt: Any
+    receipt: Any,
+    *,
+    repository: str,
+    pr_number: int,
+    head_sha: str,
+    run_id: int,
+    run_attempt: Any = None,
+    generation_id: str | None = None,
 ) -> str:
-    """Why ``receipt`` may not sit under a trusted completion marker, or ``""`` when it may.
+    """The one canonical receipt contract: why ``receipt`` is unusable, or ``""``.
 
-    The marker removes a run from recovery, so the receipt must at least be this run's own
-    well-formed record: schema, the identity derivable from the run itself, the completed
-    attempt, and the shape of the remaining fields. Whether it proves pool exhaustion is
-    ``pool_exhaustion``'s separate question, asked against the live review state.
+    Shared by the trusted completion publisher (before any success is written), the
+    exhausted-pool finalizer and the governance exhaustion loader, so producer and
+    consumers can never disagree on what a usable receipt is. It checks the schema,
+    the exact identity (repository, PR, head, run, attempt, remediation generation)
+    and the shape of every remaining field. Whether the receipt proves pool
+    exhaustion against the live review state is ``pool_exhaustion``'s question.
     """
 
     if not isinstance(receipt, dict):
         return "receipt is not an object"
-    expected = {
+    expected: dict[str, Any] = {
         "schema": COLLECTOR_RESULTS_SCHEMA,
         "repository": repository,
         "pr_number": pr_number,
         "head_sha": head_sha,
         "run_id": run_id,
-        "run_attempt": run_attempt,
     }
+    if run_attempt is not None:
+        expected["run_attempt"] = run_attempt
     for name, value in expected.items():
         if receipt.get(name) != value or type(receipt.get(name)) is not type(value):
             return f"receipt {name} does not match the completed run"
-    if not isinstance(receipt.get("attempts"), list):
-        return "receipt attempts are missing"
+    if type(receipt.get("run_attempt")) is not int or receipt["run_attempt"] < 1:
+        return "receipt run_attempt is malformed"
     for name in ("claims_id", "configuration_digest"):
-        if not isinstance(receipt.get(name), str) or not receipt[name]:
-            return f"receipt {name} is missing"
-    if not isinstance(receipt.get("remediation_generation_id"), str):  # the base generation is ""
-        return "receipt remediation_generation_id is missing"
+        if not isinstance(receipt.get(name), str) or not re.fullmatch(r"[0-9a-f]{64}", receipt[name]):
+            return f"receipt {name} is missing or malformed"
+    generation = receipt.get("remediation_generation_id")
+    if not isinstance(generation, str) or (
+        generation != BASE_GENERATION_ID and not GENERATION_ID_PATTERN.fullmatch(generation)
+    ):
+        return "receipt remediation_generation_id is missing or malformed"
+    if generation_id is not None and generation != generation_id:
+        return "receipt remediation_generation_id does not match the completed run"
+    attempts = receipt.get("attempts")
+    if not isinstance(attempts, list) or not all(isinstance(item, dict) for item in attempts):
+        return "receipt attempts are missing or malformed"
     return ""
+
+
+#: Finalization outcomes that may change on a later sweep: the run stays queued.
+FINALIZATION_RETRYABLE_OUTCOMES = (
+    "SKIPPED: review request not usable",
+    "SKIPPED: reviewer pool unavailable",
+)
+
+
+def complete_trusted_collector_run(
+    repository: str, token: str, run_id: int, receipt_path: Path, proof: str
+) -> Iterator[str]:
+    """Validate, record, publish and finalize one completed collector run, yielding outcome lines.
+
+    The receipt is held to the canonical contract *before* any trusted success is
+    written. Finalization runs whenever this run's completion is recorded and not yet
+    finalized (including on a later sweep after a crash or a transient failure), and
+    only a definitive outcome marks it finalized, so terminal work is never lost.
+    """
+    run = request_json(repository, token, "GET", f"actions/runs/{run_id}")
+    if not isinstance(run, dict):
+        yield "SKIPPED: collector run is unavailable"
+        return
+    title = _COLLECTOR_RUN_TITLE.fullmatch(_run_title(run))
+    if title is None:
+        yield "SKIPPED: collector receipt unusable (run title is not a collector cycle)"
+        return
+    pr_number, head_sha, generation = int(title.group(1)), title.group(2), title.group(3) or BASE_GENERATION_ID
+    parsed, unreadable = read_collector_receipt(receipt_path)
+    problem = unreadable or collector_receipt_problem(
+        parsed,
+        repository=repository,
+        pr_number=pr_number,
+        head_sha=head_sha,
+        run_id=run_id,
+        run_attempt=run.get("run_attempt"),
+        generation_id=generation,
+    )
+    if problem:
+        yield f"SKIPPED: collector receipt unusable ({problem})"
+        return
+    outcome = publish_trusted_collector_completion(repository, token, run_id, proof)
+    yield outcome
+    if not (outcome.startswith("PUBLISHED:") or outcome == "SKIPPED: collector completion already published"):
+        return
+    if completion_finalized(repository, token, pr_number, head_sha, generation, run_id):
+        return
+    finalized = finalize_exhausted_pool(
+        repository,
+        token,
+        pr_number,
+        head_sha,
+        run_id,
+        receipt_path,
+        trusted_completion=True,
+        expected_attempt=int(run["run_attempt"]),
+    )
+    yield finalized
+    # Only a definitive outcome is recorded; an exception propagates and the run stays
+    # queued, so the next sweep retries finalization. Outcomes that depend on evidence
+    # that may still become available are not definitive either.
+    if not finalized.startswith(FINALIZATION_RETRYABLE_OUTCOMES) and "unavailable" not in finalized:
+        mark_completion_finalized(repository, token, pr_number, head_sha, generation, run_id, finalized)
 
 
 def finalize_exhausted_pool(
@@ -2698,56 +3061,15 @@ def main() -> int:
             receipt = receipt_dir / "reviewer-results.json"
             proof_path = receipt_dir / "collector-dispatch-proof.txt"
             proof = proof_path.read_text(encoding="utf-8").strip()
-            run = request_json(args.repository, token, "GET", f"actions/runs/{args.run_id}")
-            # An unusable receipt must never sit under a trusted success marker: validate
-            # it, and that it belongs to the completed attempt, before publishing.
-            parsed, unreadable = read_collector_receipt(receipt)
-            title = re.fullmatch(
-                r"Hunter Reviewer Collector PR ([1-9][0-9]*) HEAD ([0-9a-f]{40})(?: GEN ([^\s]+))?",
-                str(run.get("display_title") or ""),
-            )
-            problem = unreadable or (
-                "run title is not a collector cycle"
-                if title is None
-                else collector_receipt_problem(
-                    parsed,
-                    repository=args.repository,
-                    pr_number=int(title.group(1)),
-                    head_sha=title.group(2),
-                    run_id=args.run_id,
-                    run_attempt=run.get("run_attempt"),
-                )
-            )
-            if problem:
-                print(f"SKIPPED: collector receipt unusable ({problem})")
-                return 0
-            outcome = publish_trusted_collector_completion(args.repository, token, args.run_id, proof)
-            print(outcome)
-            if outcome.startswith("PUBLISHED:"):
-                match = re.fullmatch(
-                    r"Hunter Reviewer Collector PR ([1-9][0-9]*) HEAD ([0-9a-f]{40})(?: GEN ([^\s]+))?",
-                    str(run.get("display_title") or ""),
-                )
-                if match is not None:
-                    for tries in range(3, 0, -1):  # transient API failures must not lose the terminal state
-                        try:
-                            print(
-                                finalize_exhausted_pool(
-                                    args.repository,
-                                    token,
-                                    int(match.group(1)),
-                                    match.group(2),
-                                    args.run_id,
-                                    receipt,
-                                    trusted_completion=True,
-                                    expected_attempt=int(run["run_attempt"]),
-                                )
-                            )
-                            break
-                        except transport.GitHubRequestError:
-                            if tries == 1:
-                                raise
-                            time.sleep(2)
+            for tries in range(3, 0, -1):  # transient API failures are retried; the queue retries the rest
+                try:
+                    for line in complete_trusted_collector_run(args.repository, token, args.run_id, receipt, proof):
+                        print(line)
+                    break
+                except transport.GitHubRequestError:
+                    if tries == 1:
+                        raise
+                    time.sleep(2)
         elif args.command == "collector-complete":
             publish_collector_completion(args.repository, token, args.pr, args.head, args.run_id)
             # Best effort and fail closed: the completion marker above is already durable, and an unusable receipt
