@@ -160,11 +160,19 @@ jobs:
             receipt="$RUNNER_TEMP/collector-receipt"
             rm -rf "$receipt"
             mkdir -p "$receipt/results" "$receipt/proof"
+            # Bound every artifact download by the time left before the mandatory
+            # governance refresh, so a stalled download cannot hold that refresh.
+            budget=$((recovery_deadline - SECONDS))
+            (( budget > 0 )) || break
+            dl_limit=$(( budget < 30 ? budget : 30 ))
             # A single matched artifact is extracted directly under --dir.
-            gh run download "$run_id" --repo "$GITHUB_REPOSITORY" \
+            timeout "${dl_limit}s" gh run download "$run_id" --repo "$GITHUB_REPOSITORY" \
               --pattern "hunter-reviewer-results-*-${attempt}" \
               --dir "$receipt/results" >/dev/null 2>&1 || continue
-            gh run download "$run_id" --repo "$GITHUB_REPOSITORY" \
+            budget=$((recovery_deadline - SECONDS))
+            (( budget > 0 )) || break
+            dl_limit=$(( budget < 30 ? budget : 30 ))
+            timeout "${dl_limit}s" gh run download "$run_id" --repo "$GITHUB_REPOSITORY" \
               --pattern "hunter-dispatch-proof-*-${attempt}" \
               --dir "$receipt/proof" >/dev/null 2>&1 || continue
             [[ "$(find "$receipt/results" -type f | wc -l | tr -d ' ')" == 1 ]] || continue

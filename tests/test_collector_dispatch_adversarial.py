@@ -652,3 +652,16 @@ def test_commit_status_history_is_bounded_and_fails_closed(env, monkeypatch):
     with pytest.raises(ValueError, match="bounded"):
         orchestrator._all_commit_statuses(REPO, "token", HEAD)
     assert sum(1 for method, path in github.calls if "/statuses" in path) == 3
+
+
+def test_reconcile_bounds_each_artifact_download_by_the_remaining_recovery_deadline():
+    """Copilot: a stalled `gh run download` must not hold the mandatory governance refresh."""
+    import pathlib
+
+    text = (
+        pathlib.Path(__file__).resolve().parents[1] / ".github/workflows/hunter-governance-reconcile.yml"
+    ).read_text()
+    downloads = [line for line in text.splitlines() if "gh run download" in line]
+    assert len(downloads) == 2
+    assert all(line.strip().startswith('timeout "${dl_limit}s" gh run download') for line in downloads)
+    assert "budget=$((recovery_deadline - SECONDS))" in text
