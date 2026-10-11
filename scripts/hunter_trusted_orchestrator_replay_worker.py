@@ -92,6 +92,7 @@ def _stub_winning_election(orchestrator: Any, run_id: int) -> None:
     orchestrator.elect_collector_owner = lambda *_a: SimpleNamespace(
         won=True, epoch=0, nonce="0" * 64, owner_run_id=run_id
     )
+    orchestrator.latest_collector_owner = lambda *_a: None
 
 
 #: Trusted upper bound on how long a pending cycle may stay open while its

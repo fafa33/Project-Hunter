@@ -149,3 +149,4 @@ def winning_election(monkeypatch: pytest.MonkeyPatch) -> None:
         "elect_collector_owner",
         lambda *_args: orchestrator.CollectorElection(True, 0, "0" * 64, 1),
     )
+    monkeypatch.setattr(orchestrator, "latest_collector_owner", lambda *_args: None)

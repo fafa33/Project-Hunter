@@ -790,6 +790,13 @@ def read_owner_chain(
     return chain
 
 
+def latest_collector_owner(
+    repository: str, token: str, pr_number: int, head_sha: str, generation: str
+) -> CollectorOwner | None:
+    chain = read_owner_chain(repository, token, pr_number, head_sha, generation)
+    return chain[-1] if chain else None
+
+
 def owner_attempt_failed(
     repository: str, token: str, pr_number: int, head_sha: str, generation: str, owner: CollectorOwner
 ) -> bool:
@@ -1695,7 +1702,27 @@ def ensure_collector(
     # record nor dispatch; it reports the authoritative cycle instead. Unreadable
     # ownership evidence raises: it never authorises a dispatch.
     election: CollectorElection | None = None
-    if liveness not in {"active", "completed"}:
+    if liveness in {"active", "completed"}:
+        # A collector already exists. When ownership was elected, the owner ref is
+        # the only authority: a non-owner must not republish the cycle with its own
+        # trigger, which would make the status disagree with the owner and fence the
+        # live collector out. (No owner ref means a pre-contract dispatch.)
+        owner = latest_collector_owner(repository, token, pr_number, head_sha, generation_id)
+        if owner is not None:
+            state_now, cycle_now, _error = read_cycle(repository, token, pr_number, head_sha)
+            if state_now == "present" and cycle_now is not None:
+                return cycle_now
+            return ReviewCycle(
+                pr_number=pr_number,
+                head_sha=head_sha,
+                state="WAITING_FOR_REVIEWER",
+                provider_id="",
+                trigger_id=owner.orchestrator_run_id,
+                started_at=datetime.now(UTC).strftime("%Y-%m-%dT%H:%M:%SZ"),
+                config_digest=digest,
+                generation_id=generation_id,
+            )
+    else:
         election = elect_collector_owner(repository, token, pr_number, head_sha, generation_id, run_id)
         if not election.won:
             state_now, cycle_now, _error = read_cycle(repository, token, pr_number, head_sha)

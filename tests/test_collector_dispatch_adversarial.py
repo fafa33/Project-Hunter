@@ -483,3 +483,71 @@ def test_untrusted_lookalike_run_neither_starts_nor_blocks_the_legitimate_collec
     github.finish(101, "success")
     github.finish(run, "success")
     assert orchestrator.publish_trusted_collector_completion(REPO, "token", run, proof).startswith("PUBLISHED")
+
+
+def test_stale_status_read_never_lets_a_non_owner_republish_the_cycle(env, monkeypatch):
+    """A second reconcile that sees the live collector but a stale (absent) status
+    read must not overwrite the cycle's trigger with its own run: the owner ref is
+    the single authority and the start gate and completion both compare against it."""
+    github, local = env
+    reconcile(github, local, 101)
+    run, proof, epoch = capability(github)
+    publications = github.cycle_publications
+    with monkeypatch.context() as stale:
+        stale.setattr(orchestrator, "read_cycle", lambda *_a: ("absent", None, None))  # stale status read
+        reconcile(github, local, 102)
+    assert github.cycle_publications == publications
+    assert github.cycle.trigger_id == 101
+    start_collector(github, run, proof, epoch)
+    github.finish(101, "success")
+    github.finish(run, "success")
+    assert orchestrator.publish_trusted_collector_completion(REPO, "token", run, proof).startswith("PUBLISHED")
+
+
+def _finished_current_owner(github, local):
+    reconcile(github, local, 101)
+    run, proof, epoch = capability(github)
+    start_collector(github, run, proof, epoch)
+    github.finish(101, "success")
+    github.finish(run, "success")
+    return run, proof
+
+
+def test_completion_for_another_head_or_generation_is_never_published(env):
+    github, local = env
+    run, proof = _finished_current_owner(github, local)
+    title = github.runs[run]["display_title"]
+    github.runs[run]["display_title"] = title.replace(HEAD, "b" * 40)  # cross-head
+    assert orchestrator.publish_trusted_collector_completion(REPO, "token", run, proof).startswith("SKIPPED")
+    github.runs[run]["display_title"] = title + " GEN other-generation"  # cross-generation
+    assert orchestrator.publish_trusted_collector_completion(REPO, "token", run, proof).startswith("SKIPPED")
+    assert not [s for s in github.statuses if "Proof" not in s["context"]]
+
+
+@pytest.mark.parametrize("needle", ["GET git/ref/*", "GET git/tags/*", "GET actions/runs/101"])
+def test_completion_fails_closed_when_authority_is_unreadable(env, needle):
+    github, local = env
+    run, proof = _finished_current_owner(github, local)
+    github.fail[needle] = transport.GitHubRequestError("down", category="transient", status_code=500)
+    with pytest.raises((transport.GitHubRequestError, ValueError)):
+        orchestrator.publish_trusted_collector_completion(REPO, "token", run, proof)
+    assert not [s for s in github.statuses if "Proof" not in s["context"]]
+
+
+def test_collector_workflow_binds_the_elected_capability_and_has_no_status_grant():
+    import pathlib
+
+    import yaml
+
+    path = pathlib.Path(__file__).resolve().parents[1] / ".github/workflows/hunter-reviewer-collector.yml"
+    workflow = yaml.safe_load(path.read_text(encoding="utf-8"))
+    assert set(workflow[True]) == {"repository_dispatch"}
+    permissions = workflow["permissions"]
+    assert "statuses" not in permissions and "checks" not in permissions
+    assert permissions["contents"] == "write"  # create-only claim refs
+    env = {}
+    for job in workflow["jobs"].values():
+        for step in job["steps"]:
+            env.update(step.get("env") or {})
+    assert env["COLLECTOR_DISPATCH_PROOF"] == "${{ github.event.client_payload.dispatch_proof }}"
+    assert env["COLLECTOR_RECOVERY_EPOCH"] == "${{ github.event.client_payload.recovery_epoch }}"
