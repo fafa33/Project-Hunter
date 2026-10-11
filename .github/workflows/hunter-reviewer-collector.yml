@@ -18,6 +18,9 @@ permissions:
   contents: write # required for atomic create-only claim tag
   actions: write
   pull-requests: write
+  # Read-only: the pre-work gate reads the trusted dispatch-proof status history.
+  # Never `write`: this collector must not be able to mint trusted statuses.
+  statuses: read
 
 concurrency:
   group: hunter-reviewer-collector-${{ github.event.client_payload.pr_number }}

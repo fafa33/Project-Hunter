@@ -620,3 +620,47 @@ def test_the_guard_fails_when_the_orchestrator_stops_deriving_the_generation(gua
     errors = guard.validate_review_after_remediation_boundary()
 
     assert any("must derive the remediation generation" in message for message in errors)
+
+
+_GEN = "${{ github.event.client_payload.generation_id }}"
+_COLLECT = "python scripts/hunter_reviewer_collector.py --pr 1 --head abc"
+
+
+@pytest.mark.parametrize(
+    "run,env",
+    [
+        (f'{_COLLECT} --generation "{_GEN}"', {}),
+        (f"{_COLLECT} --generation={_GEN}", {}),
+        (f'{_COLLECT} --generation "$REMEDIATION_GENERATION"', {"REMEDIATION_GENERATION": _GEN}),
+        (f"{_COLLECT} --generation ${{REMEDIATION_GENERATION}}", {"REMEDIATION_GENERATION": f" {_GEN} "}),
+        (f'{_COLLECT}\n  --generation "$G"\n  --output out.json', {"G": _GEN}),
+    ],
+)
+def test_generation_binding_accepts_every_equivalent_valid_form(guard, run, env):
+    assert guard._collector_generation_is_bound(run, env) is True
+
+
+@pytest.mark.parametrize(
+    "run,env",
+    [
+        # a generation-mapped variable is merely mentioned; --generation gets another value
+        (f'{_COLLECT} --generation "$OTHER"; echo "$G"', {"G": _GEN, "OTHER": "x"}),
+        (f'{_COLLECT} --generation "$OTHER" && echo "$G"', {"G": _GEN, "OTHER": "x"}),
+        # the flag belongs to a different command in the same script
+        (f'echo --generation "{_GEN}"; {_COLLECT}', {}),
+        (f'{_COLLECT}; other --generation "{_GEN}"', {}),
+        # variable bound to something else, or unbound
+        (f'{_COLLECT} --generation "$G"', {"G": "main"}),
+        (f'{_COLLECT} --generation "$G"', {}),
+        # missing, empty, duplicated, or only a comment
+        (_COLLECT, {}),
+        (f"{_COLLECT} --generation", {}),
+        (f'{_COLLECT} --generation "{_GEN}" --generation main', {}),
+        (f'{_COLLECT} # --generation "{_GEN}"', {}),
+        # not the collector at all, or unparsable shell
+        (f'echo --generation "{_GEN}"', {}),
+        (f'{_COLLECT} --generation "{_GEN}', {}),
+    ],
+)
+def test_generation_binding_rejects_representation_traps(guard, run, env):
+    assert guard._collector_generation_is_bound(run, env) is False

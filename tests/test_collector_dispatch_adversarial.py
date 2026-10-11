@@ -570,7 +570,8 @@ def test_collector_workflow_binds_the_elected_capability_and_has_no_status_grant
     workflow = yaml.safe_load(path.read_text(encoding="utf-8"))
     assert set(workflow[True]) == {"repository_dispatch"}
     permissions = workflow["permissions"]
-    assert "statuses" not in permissions and "checks" not in permissions
+    assert permissions.get("statuses") == "read"  # the pre-work gate reads proof statuses; never write
+    assert "checks" not in permissions
     assert permissions["contents"] == "write"  # create-only claim refs
     env = {}
     for job in workflow["jobs"].values():

@@ -1686,6 +1686,50 @@ def validate_recurring_defect_families(registry: dict[str, Any], lifecycle: dict
 REVIEWER_COLLECTOR_WORKFLOW = ".github/workflows/hunter-reviewer-collector.yml"
 
 
+_COLLECTOR_GENERATION_EXPRESSION = "${{ github.event.client_payload.generation_id }}"
+_SHELL_CONTROL_TOKENS = frozenset({";", "&&", "||", "|", "&", "(", ")", ";;"})
+
+
+def _collector_generation_is_bound(run_cmd: str, env: Any) -> bool:
+    """Whether this collector command's ``--generation`` receives the dispatched generation.
+
+    Exactly one ``--generation`` flag must belong to the collector invocation
+    itself (not another command in the script), and its value must be the
+    payload expression or an environment variable bound to that expression.
+    """
+
+    placeholder = "__HUNTER_GENERATION_EXPRESSION__"
+    try:
+        lexer = shlex.shlex(
+            run_cmd.replace(_COLLECTOR_GENERATION_EXPRESSION, placeholder), posix=True, punctuation_chars=True
+        )
+        lexer.whitespace_split = True
+        tokens = list(lexer)
+    except ValueError:
+        return False
+    start = next((i for i, token in enumerate(tokens) if token.endswith("hunter_reviewer_collector.py")), None)
+    if start is None:
+        return False
+    end = next((i for i in range(start + 1, len(tokens)) if tokens[i] in _SHELL_CONTROL_TOKENS), len(tokens))
+    values: list[str] = []
+    arguments = tokens[start + 1 : end]
+    for index, token in enumerate(arguments):
+        if token == "--generation":
+            values.append(arguments[index + 1] if index + 1 < len(arguments) else "")
+        elif token.startswith("--generation="):
+            values.append(token.partition("=")[2])
+    if len(values) != 1:
+        return False
+    value = values[0]
+    if value == placeholder:
+        return True
+    match = re.fullmatch(r"\$(?:\{([A-Za-z_][A-Za-z0-9_]*)\}|([A-Za-z_][A-Za-z0-9_]*))", value)
+    if match is None or not isinstance(env, dict):
+        return False
+    name = match.group(1) or match.group(2)
+    return str(env.get(name, "")).strip() == _COLLECTOR_GENERATION_EXPRESSION
+
+
 def validate_review_after_remediation_boundary() -> list[str]:
     """DFF-024: a remediated exact head must still be able to be reviewed again.
 
@@ -1870,24 +1914,12 @@ def validate_review_after_remediation_boundary() -> list[str]:
     if not collector_steps:
         errors.append("reviewer collector workflow must contain a step that runs hunter_reviewer_collector.py")
     else:
-        # Check all collector invocation steps; each must forward the generation.
+        # Every collector invocation must forward the generation, and the value
+        # that actually reaches ``--generation`` must be the dispatched one. The
+        # command is tokenised so a variable that is merely mentioned elsewhere
+        # in the script, or a flag belonging to another command, cannot satisfy it.
         for step in collector_steps:
-            run_cmd = str(step.get("run") or "")
-            env = step.get("env") or {}
-            # Check if --generation is passed with the generation_id expression
-            # either directly or via an env var that maps to it.
-            # Variable reference must be exact: ${VAR} or $VAR in the command.
-            has_direct = "--generation" in run_cmd and "${{ github.event.client_payload.generation_id }}" in run_cmd
-            has_via_env = False
-            for var, val in env.items():
-                val_str = str(val).strip()
-                if val_str == "${{ github.event.client_payload.generation_id }}":
-                    # Check for exact variable reference in command: ${VAR} or $VAR
-                    var_ref_patterns = [f"${{{var}}}", f"${var}"]
-                    if any(pattern in run_cmd for pattern in var_ref_patterns):
-                        has_via_env = True
-                        break
-            if not (has_direct or has_via_env):
+            if not _collector_generation_is_bound(str(step.get("run") or ""), step.get("env") or {}):
                 errors.append(
                     "the reviewer collector workflow must forward the remediation generation "
                     "to the collector via --generation with github.event.client_payload.generation_id"
