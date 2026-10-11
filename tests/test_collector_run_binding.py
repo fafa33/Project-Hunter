@@ -308,3 +308,24 @@ def test_unauthenticated_decoys_cannot_consume_recovery_epochs(env):
     github.age_claims(orchestrator.COLLECTOR_LIVENESS_GRACE_SECONDS + 600)
     reconcile(github, local, 105)
     assert github.owner_epochs() == [0, 1]
+
+
+def test_documented_limitation_a_leaked_nonce_lets_a_tag_writer_deny_service_but_never_authorize(env):
+    """The dispatch nonce is not secret: it is in the collector step env (public run
+    logs) and in the public dispatch-proof artifact. An actor who also holds
+    contents:write can then forge a valid possession record for a lookalike that was
+    dispatched between proof issuance and the genuine run. This pins the residual:
+    the genuine run is refused and nothing is consumed (denial of service), and the
+    lookalike still gains no authority. Closing it needs an arbitration key that
+    candidate code cannot read (an owner setting), not more code here.
+    """
+    github, local = env
+    (decoy,) = dispatch_with_decoys_first(github, local, status="in_progress")
+    run, proof, epoch = genuine(github)
+    owner = orchestrator.read_owner_chain(REPO, "token", PR, HEAD, GEN)[0]
+    orchestrator.publish_possession(REPO, "token", PR, HEAD, GEN, owner, decoy, proof)  # nonce read from public logs
+    with pytest.raises(ValueError, match="earlier run holds"):
+        start(github, run, proof, epoch)
+    assert not binds(github) and not run_claims(github)
+    with pytest.raises(orchestrator.CollectorAuthorityError):
+        orchestrator.collector_run_authority(REPO, "token", dict(github.runs[decoy]))
