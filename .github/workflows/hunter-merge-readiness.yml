@@ -58,6 +58,9 @@ concurrency:
 
 jobs:
   controller:
+    # Only a repository-owner-authored recovery dispatch may wake the privileged
+    # full sweep. PR workflow GITHUB_TOKEN events are never operator authority.
+    if: github.event_name != 'repository_dispatch' || github.event.sender.login == github.repository_owner
     name: Hunter Merge Readiness Controller
     runs-on: ubuntu-latest
     timeout-minutes: 10

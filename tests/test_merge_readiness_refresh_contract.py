@@ -51,3 +51,12 @@ def test_the_latency_is_documented_as_best_effort_not_as_five_minutes():
     assert "Accepted refresh latency" in audit and "hunter-trusted-recovery" in audit
     reconcile = (WORKFLOWS / "hunter-governance-reconcile.yml").read_text(encoding="utf-8")
     assert "not a freshness guarantee" in reconcile
+
+
+def test_privileged_recovery_wakeup_requires_repository_owner_sender():
+    for name, job in (("hunter-merge-readiness.yml", "controller"), ("hunter-governance-reconcile.yml", "reconcile")):
+        workflow = load(name)
+        condition = workflow["jobs"][job]["if"]
+        assert "github.event_name != 'repository_dispatch'" in condition, name
+        assert "github.event.sender.login == github.repository_owner" in condition, name
+        assert triggers(workflow)["schedule"] == [{"cron": "*/5 * * * *"}], name
