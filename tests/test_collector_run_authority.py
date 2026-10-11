@@ -335,3 +335,15 @@ def test_a_run_authorized_for_one_pull_request_is_not_trusted_for_another(env, m
     monkeypatch.setattr(collector, "GitHubBackend", lambda *_a: type("B", (), {"head": lambda self: HEAD})())
     assert governance.trusted_collector_run(REPO, "token", trigger, PR) is True
     assert governance.trusted_collector_run(REPO, "token", trigger, PR + 1) is False
+
+
+def test_liveness_and_settlement_evidence_keeps_only_authorized_successes(env):
+    """The status-only stub in the settling tests is a convenience; the real filter drops lookalikes."""
+    github, local = env
+    run, _proof, _epoch = authorized(github, local)
+    lookalike = thief(github, run)
+    runs = [dict(github.runs[run]), dict(github.runs[lookalike])]
+
+    kept = orchestrator.authorized_collector_successes(REPO, "token", PR, HEAD, GEN, runs)
+    assert [item["id"] for item in kept] == [run]
+    assert orchestrator.authorized_collector_successes(REPO, "token", PR, HEAD, GEN, runs[1:]) == []
