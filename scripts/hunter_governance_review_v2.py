@@ -725,12 +725,20 @@ def trusted_collector_run(repository: str, token: str, trigger: dict[str, Any]) 
             return False
         branch = str(repo.get("default_branch") or "")
         revision = str(run.get("head_sha") or "")
-        return (
+        if not (
             run.get("path") == WORKFLOW
             and run.get("run_attempt") == attempt
             and valid_run(run, run_id, branch, revision)
             and _run_on_default_branch_history(repository, token, branch, revision)
-        )
+        ):
+            return False
+        # The same canonical authority check as the collector's receipt loader: the
+        # run must hold the current epoch's binding and atomic run claim for this
+        # attempt. Unreadable or missing evidence is refused.
+        import hunter_review_orchestrator as orchestration
+
+        orchestration.collector_run_authority(repository, token, run, head_sha=str(trigger.get("head_sha") or ""))
+        return True
     except Exception:
         return False
 

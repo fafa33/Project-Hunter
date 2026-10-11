@@ -24,6 +24,14 @@ def _no_resolved_blocking_threads(monkeypatch):
     """
 
     monkeypatch.setattr(collector.orchestration, "blocking_reviewer_threads", lambda *_a, **_k: ())
+    # The run-authority check (owner epoch, binding, run claim) needs real GitHub
+    # state and is exercised by tests/test_collector_run_authority.py; these cases
+    # are about the receipt contents, so they assume an authorized run.
+    monkeypatch.setattr(
+        collector.orchestration,
+        "collector_run_authority",
+        lambda *_a, **_k: collector.orchestration.CollectorOwner(0, 1, "0" * 64, ""),
+    )
 
 
 POOL = {
@@ -128,7 +136,8 @@ def test_trusted_run_must_execute_default_branch_revision():
         "head_sha": "c" * 40,
         "head_branch": "main",
         "path": ".github/workflows/hunter-reviewer-collector.yml",
-        "event": "workflow_dispatch",
+        "event": "repository_dispatch",
+        "display_title": f"Hunter Reviewer Collector PR 472 HEAD {HEAD}",
         "status": "completed",
         "conclusion": "success",
     }
@@ -185,7 +194,8 @@ def _install_receipt(
                 "head_sha": "c" * 40,
                 "head_branch": "main",
                 "path": collector.WORKFLOW,
-                "event": "workflow_dispatch",
+                "event": "repository_dispatch",
+                "display_title": collector.orchestration.collector_run_name(472, HEAD, generation_id),
                 "status": "completed",
                 "conclusion": "success",
             }
@@ -555,18 +565,20 @@ def test_explicit_unavailability_is_valid_exhaustion_without_waiting_full_timeou
     assert result["reviewer_attempts"][0]["attempt_count"] == 1
 
 
-def test_pull_request_target_collector_run_is_trusted_on_default_branch():
+@pytest.mark.parametrize("event", ["pull_request_target", "workflow_dispatch"])
+def test_legacy_collector_runs_are_not_current_authority_after_migration(event):
     run = {
         "id": 123,
         "run_attempt": 1,
         "head_branch": "main",
         "head_sha": "b" * 40,
         "path": collector.WORKFLOW,
-        "event": "pull_request_target",
+        "event": event,
         "status": "completed",
         "conclusion": "success",
     }
-    assert collector.valid_run(run, 123, "main", "b" * 40)
+    assert not collector.valid_run(run, 123, "main", "b" * 40)
+    assert collector.valid_run({**run, "event": "repository_dispatch"}, 123, "main", "b" * 40)
 
 
 def test_dispatch_only_artifact_name_uses_exact_input_head():
@@ -981,7 +993,8 @@ def test_groq_authority_verifies_prior_api_exhaustion_from_trusted_collector(mon
                 "head_sha": "c" * 40,
                 "head_branch": "main",
                 "path": collector.WORKFLOW,
-                "event": "pull_request_target",
+                "event": "repository_dispatch",
+                "display_title": f"Hunter Reviewer Collector PR 472 HEAD {HEAD}",
                 "status": "completed",
                 "conclusion": "success",
             }
@@ -1559,7 +1572,8 @@ def _triage_receipt(monkeypatch, *, local_outcome="clear", local_run_id=7001, lo
                 "head_sha": "c" * 40,
                 "head_branch": "main",
                 "path": collector.WORKFLOW,
-                "event": "workflow_dispatch",
+                "event": "repository_dispatch",
+                "display_title": f"Hunter Reviewer Collector PR 472 HEAD {HEAD}",
                 "status": "completed",
                 "conclusion": "success",
             }
@@ -2986,6 +3000,7 @@ def test_repository_dispatch_provenance_is_accepted_and_unrelated_events_are_rej
         "head_branch": "main",
         "path": ".github/workflows/hunter-reviewer-collector.yml",
         "event": "repository_dispatch",
+        "display_title": f"Hunter Reviewer Collector PR 472 HEAD {HEAD}",
         "status": "completed",
         "conclusion": "success",
     }

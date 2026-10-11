@@ -17,6 +17,24 @@ HEAD = "a" * 40
 REPOSITORY_ROOT = pathlib.Path(orchestrator.__file__).resolve().parents[1]
 
 
+@pytest.fixture(autouse=True)
+def _runs_are_authorized_unless_a_test_says_otherwise(monkeypatch):
+    """These cases describe settling, liveness and finalization of a completed run.
+
+    Whether a successful run holds the current epoch's authority needs real owner,
+    binding and run-claim state and is covered by tests/test_collector_run_authority.py,
+    so here a completed successful run stands in for an authorized one.
+    """
+
+    monkeypatch.setattr(
+        orchestrator,
+        "authorized_collector_successes",
+        lambda _r, _t, _p, _h, _g, runs: [
+            run for run in runs if run.get("status") == "completed" and run.get("conclusion") == "success"
+        ],
+    )
+
+
 def _five_minutes_ago():
     from datetime import UTC, datetime, timedelta
 
@@ -1775,7 +1793,7 @@ def test_collector_completion_accepts_trusted_ancestor_of_current_main(monkeypat
             return {"default_branch": "main"}
         if path == "commits/main":
             return {"sha": current_main}
-        if path.startswith("git/ref/"):  # no owner refs: a cycle that predates ownership election
+        if path.startswith("git/ref/"):  # no owner refs: such a run carries no authority (see below)
             raise transport.GitHubRequestError("not found", category="permanent", status_code=404)
         if path == "actions/runs/777":
             return {
@@ -1793,6 +1811,10 @@ def test_collector_completion_accepts_trusted_ancestor_of_current_main(monkeypat
         raise AssertionError(path)
 
     monkeypatch.setattr(orchestrator, "request_json", request)
+    # Without an elected owner there is no legacy fallback: the completion is not accepted.
+    assert orchestrator.read_collector_completion("owner/repo", "token", 472, HEAD) == ("absent", None, None)
+    # Ancestry itself is accepted once the run is current (epoch evidence is covered elsewhere).
+    monkeypatch.setattr(orchestrator, "collector_run_is_current", lambda *_a, **_k: True)
     state, run_id, reason = orchestrator.read_collector_completion("owner/repo", "token", 472, HEAD)
 
     assert reason is None

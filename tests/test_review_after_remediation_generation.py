@@ -26,6 +26,24 @@ GENERATION = "0123456789abcdef"
 OTHER_GENERATION = "fedcba9876543210"
 
 
+@pytest.fixture(autouse=True)
+def _runs_are_authorized_unless_a_test_says_otherwise(monkeypatch):
+    """These cases describe settling, liveness and finalization of a completed run.
+
+    Whether a successful run holds the current epoch's authority needs real owner,
+    binding and run-claim state and is covered by tests/test_collector_run_authority.py,
+    so here a completed successful run stands in for an authorized one.
+    """
+
+    monkeypatch.setattr(
+        orchestrator,
+        "authorized_collector_successes",
+        lambda _r, _t, _p, _h, _g, runs: [
+            run for run in runs if run.get("status") == "completed" and run.get("conclusion") == "success"
+        ],
+    )
+
+
 def make_cycle(**overrides):
     values = {
         "pr_number": 472,

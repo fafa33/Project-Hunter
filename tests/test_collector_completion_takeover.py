@@ -227,3 +227,46 @@ def test_a_claim_for_another_run_is_ambiguous_and_fails_closed(env):
     github.age_completion_claims(STALE)
     assert publish(run, proof).startswith("SKIPPED")
     assert not completions(github)
+
+
+def test_a_publisher_whose_lease_expired_before_the_write_writes_nothing(env, monkeypatch):
+    github, local = env
+    run, proof = stage(github, local, PR, orchestrator_run=101)
+    real_fence = orchestrator.completion_claim_is_current
+
+    def paused_past_the_lease(*args, **kwargs):
+        github.age_completion_claims(orchestrator.COMPLETION_PUBLISH_LEASE_SECONDS + 5)  # a pause before the check
+        return real_fence(*args, **kwargs)
+
+    monkeypatch.setattr(orchestrator, "completion_claim_is_current", paused_past_the_lease)
+    assert publish(run, proof).startswith("SKIPPED")
+    assert not completions(github)
+    assert orchestrator.COMPLETION_PUBLISH_LEASE_SECONDS < orchestrator.COMPLETION_CLAIM_STALE_SECONDS
+
+
+def test_documented_limitation_a_pause_between_fence_and_write_can_duplicate_an_identical_status(env, monkeypatch):
+    """GitHub statuses have no conditional create, so this window is narrowed, not closed.
+
+    The paused publisher passes its fence, stalls past the staleness bound, a takeover
+    publishes, and the original then writes. The result is two statuses with the
+    identical identity; readers see one completion for one run, so authority is
+    unchanged. This test pins that the residual is exactly that and nothing more.
+    """
+    github, local = env
+    run, proof = stage(github, local, PR, orchestrator_run=101)
+    real_write = orchestrator.publish_collector_completion
+    state = {"nested": False}
+
+    def stall_then_write(*args, **kwargs):
+        if not state["nested"]:
+            state["nested"] = True
+            github.age_completion_claims(STALE)  # the original stalls past the staleness bound
+            assert publish(run, proof).startswith("PUBLISHED")  # a takeover publishes meanwhile
+        return real_write(*args, **kwargs)  # ...then the stalled original resumes and writes
+
+    monkeypatch.setattr(orchestrator, "publish_collector_completion", stall_then_write)
+    publish(run, proof)
+    statuses = completions(github)
+    assert len(statuses) == 2  # the residual is real: pinned, not hidden
+    assert len({(s["context"], s["description"], s["target_url"]) for s in statuses}) == 1
+    assert orchestrator.read_collector_completion(REPO, "token", PR, head_for(PR)) == ("present", run, None)

@@ -49,6 +49,11 @@ COLLECTOR_LIVENESS_GRACE_SECONDS = 180
 COMPLETION_CLAIM_STALE_SECONDS = 120
 #: Bounded recovery of a publisher that died after claiming; beyond it the run stays unpublished.
 COMPLETION_MAX_TAKEOVERS = 3
+#: A publisher may write its status only within this lease after claiming. It is half the
+#: staleness bound, so a takeover cannot begin until the lease has expired by the same margin.
+COMPLETION_PUBLISH_LEASE_SECONDS = COMPLETION_CLAIM_STALE_SECONDS // 2
+RECONCILE_WORKFLOW_PATH = ".github/workflows/hunter-governance-reconcile.yml"
+TRUSTED_ORIGIN_EVENTS = frozenset({"push", "workflow_run", "pull_request_target", "schedule", "repository_dispatch"})
 #: A correlated collector that is genuinely queued or in progress must not be
 #: finalized as timed out merely because the nominal opportunity budget expired.
 #: That budget starts at dispatch, so GitHub's queue delay is spent out of it while
@@ -628,14 +633,26 @@ def claim_completion_publication(
 def completion_claim_is_current(
     repository: str, token: str, pr_number: int, head_sha: str, generation: str, run_id: int, claim: dict[str, Any]
 ) -> bool:
-    """True only while ``claim`` is still the newest claim of the chain."""
+    """True only while ``claim`` is the newest claim of the chain and its lease is unexpired.
+
+    The lease bounds how long a publisher may sit between this check and its status
+    write before it must give up: a takeover cannot start until the (longer)
+    staleness bound passes, so only a pause longer than the margin between the two
+    can still overlap. GitHub commit statuses have no conditional create, so that
+    residual overlap is narrowed here but cannot be eliminated; a duplicate carries
+    the identical identity (context and ``collector_run_id``) and is idempotent.
+    """
     takeover = int(claim.get("takeover", 0))
     if takeover < COMPLETION_MAX_TAKEOVERS:
         newer = _read_completion_claim(repository, token, pr_number, head_sha, generation, run_id, takeover + 1)
         if newer is not None:
             return False
     held = _read_completion_claim(repository, token, pr_number, head_sha, generation, run_id, takeover)
-    return held is not None and held.get("start") == claim.get("start")
+    return (
+        held is not None
+        and held.get("start") == claim.get("start")
+        and not _older_than(str(held["claimed_at"]), COMPLETION_PUBLISH_LEASE_SECONDS)
+    )
 
 
 def publish_collector_completion(repository: str, token: str, pr_number: int, head_sha: str, run_id: int) -> None:
@@ -715,16 +732,10 @@ def publish_trusted_collector_completion(repository: str, token: str, run_id: in
     except CollectorAuthorityError as exc:
         return f"SKIPPED: {exc}"
     # The dispatching run is named by the owner ref, never by the cycle status.
-    if owner.orchestrator_run_id == run_id:
-        return "SKIPPED: trusted orchestrator dispatch identity unavailable"
-    origin = request_json(repository, token, "GET", f"actions/runs/{owner.orchestrator_run_id}")
-    if not isinstance(origin, dict) or not (
-        origin.get("id") == owner.orchestrator_run_id
-        and origin.get("head_branch") == branch
-        and origin.get("path") == ".github/workflows/hunter-governance-reconcile.yml"
-        and origin.get("event") in {"push", "workflow_run", "pull_request_target", "schedule", "repository_dispatch"}
-    ):
-        return "SKIPPED: dispatch origin is not trusted governance reconciliation"
+    try:
+        verify_trusted_origin(repository, token, owner, run_id)
+    except CollectorAuthorityError as exc:
+        return f"SKIPPED: {exc}"
     # Revalidate at the publication boundary: a recovery that fenced this owner
     # after the first check must win over a late publication.
     try:
@@ -982,6 +993,26 @@ def collector_runs_since(
     raise ValueError("collector run history exceeds the bounded recovery window")
 
 
+def _run_holds_owner_authority(
+    repository: str,
+    token: str,
+    pr_number: int,
+    head_sha: str,
+    generation: str,
+    owner: CollectorOwner,
+    run: dict[str, Any],
+) -> bool:
+    attempt = run.get("run_attempt")
+    if type(attempt) is not int or attempt < 1 or run.get("event") != "repository_dispatch":
+        return False
+    try:
+        verify_owner_run_authority(repository, token, pr_number, head_sha, generation, owner, run["id"], attempt)
+        verify_trusted_origin(repository, token, owner, run["id"])
+    except CollectorAuthorityError:
+        return False
+    return True
+
+
 def owner_attempt_failed(
     repository: str, token: str, pr_number: int, head_sha: str, generation: str, owner: CollectorOwner
 ) -> bool:
@@ -1002,8 +1033,15 @@ def owner_attempt_failed(
     since = collector_runs_since(repository, token, pr_number, head_sha, generation, owner.claimed_at)
     if any(str(run.get("status") or "") in ACTIVE_RUN_STATES for run in since):
         return False
-    if any(run.get("status") == "completed" and run.get("conclusion") == "success" for run in since):
-        return False
+    # A success counts only if that exact run holds this epoch's authority; a
+    # lookalike (same title, workflow and time) cannot suppress recovery. An
+    # unreadable authority record raises, so it is never read as "no success".
+    for run in since:
+        if run.get("status") == "completed" and run.get("conclusion") == "success":
+            if type(run.get("id")) is int and _run_holds_owner_authority(
+                repository, token, pr_number, head_sha, generation, owner, run
+            ):
+                return False
     if since:
         return True
     return _older_than(owner.claimed_at, COLLECTOR_LIVENESS_GRACE_SECONDS)
@@ -1040,8 +1078,12 @@ def elect_collector_owner(
     return CollectorElection(False, epoch, "", winner[epoch].orchestrator_run_id if len(winner) > epoch else None)
 
 
+def _proof_description_for_digest(generation: str, epoch: int, nonce_sha256: str) -> str:
+    return f"{generation}|{epoch}|{nonce_sha256}"
+
+
 def dispatch_proof_description(generation: str, epoch: int, nonce: str) -> str:
-    return f"{generation}|{epoch}|{hashlib.sha256(nonce.encode()).hexdigest()}"
+    return _proof_description_for_digest(generation, epoch, hashlib.sha256(nonce.encode()).hexdigest())
 
 
 def require_current_collector_authority(
@@ -1066,30 +1108,108 @@ def require_current_collector_authority(
     holder = next((owner for owner in chain if owner.nonce_sha256 == digest), None)
     if holder is None or chain[-1] != holder:
         raise CollectorAuthorityError("capability is not the current epoch's owner")
-    description = dispatch_proof_description(cycle.generation_id, holder.epoch, proof)
+    verify_owner_run_authority(repository, token, pr_number, head_sha, cycle.generation_id, holder, run_id, attempt)
+    return holder
+
+
+def verify_owner_run_authority(
+    repository: str,
+    token: str,
+    pr_number: int,
+    head_sha: str,
+    generation: str,
+    owner: CollectorOwner,
+    run_id: int,
+    attempt: int,
+) -> None:
+    """The one canonical check that ``run_id``/``attempt`` holds ``owner``'s epoch.
+
+    Requires the unique trusted dispatch proof of exactly this epoch and
+    orchestrator run, the GitHub-created run binding, and the atomic run claim of
+    this attempt carrying the epoch's capability digest. Raises
+    ``CollectorAuthorityError`` when the run is not authorized and any other error
+    when the evidence cannot be read; neither is ever authority.
+    """
+    description = _proof_description_for_digest(generation, owner.epoch, owner.nonce_sha256)
     matches = [
         status
         for status in _all_commit_statuses(repository, token, head_sha)
         if status.get("context") == f"{DISPATCH_PROOF_CONTEXT_PREFIX}{pr_number}"
         and status.get("description") == description
         and str((status.get("creator") or {}).get("login") or "") == TRUSTED_STATUS_CREATOR
-        and _run_id(str(status.get("target_url") or "")) == holder.orchestrator_run_id
+        and _run_id(str(status.get("target_url") or "")) == owner.orchestrator_run_id
     ]
     if len(matches) != 1:
         raise CollectorAuthorityError("no unique trusted proof for the elected epoch")
-    verify_bound_run(repository, token, pr_number, head_sha, cycle.generation_id, holder, run_id)
+    verify_bound_run(repository, token, pr_number, head_sha, generation, owner, run_id)
     claim = _read_claim(
-        repository, token, collector_run_claim_ref(pr_number, head_sha, cycle.generation_id, holder.epoch, attempt)
+        repository, token, collector_run_claim_ref(pr_number, head_sha, generation, owner.epoch, attempt)
     )
     if (
         claim is None
         or claim.get("kind") != "run"
         or claim.get("run_id") != run_id
         or claim.get("attempt") != attempt
-        or claim.get("nonce_sha256") != digest
+        or claim.get("nonce_sha256") != owner.nonce_sha256
     ):
         raise CollectorAuthorityError("run attempt does not hold the epoch's run claim")
-    return holder
+
+
+def verify_trusted_origin(repository: str, token: str, owner: CollectorOwner, collector_run_id: int) -> None:
+    """The dispatching run named by the owner ref must be trusted governance reconcile."""
+    info = request_json(repository, token, "GET", "")
+    branch = str((info or {}).get("default_branch") or "main")
+    if owner.orchestrator_run_id == collector_run_id:
+        raise CollectorAuthorityError("trusted orchestrator dispatch identity unavailable")
+    origin = request_json(repository, token, "GET", f"actions/runs/{owner.orchestrator_run_id}")
+    if not isinstance(origin, dict) or not (
+        origin.get("id") == owner.orchestrator_run_id
+        and origin.get("head_branch") == branch
+        and origin.get("path") == RECONCILE_WORKFLOW_PATH
+        and origin.get("event") in TRUSTED_ORIGIN_EVENTS
+    ):
+        raise CollectorAuthorityError("dispatch origin is not trusted governance reconciliation")
+
+
+def collector_run_authority(
+    repository: str,
+    token: str,
+    run: dict[str, Any],
+    *,
+    pr_number: int | None = None,
+    head_sha: str | None = None,
+    generation: str | None = None,
+) -> CollectorOwner:
+    """Authority of one collector run as reviewer or exhaustion evidence, or raise.
+
+    A legacy ``workflow_dispatch``/``pull_request_target`` run, a run on a cycle
+    with no elected owner, a run of a superseded epoch, an unbound run, a run
+    without its atomic run claim for the exact attempt, a run of another PR, head
+    or generation, and unreadable evidence are all refused: there is no legacy
+    fallback here. The caller must check this before consuming any receipt.
+    """
+    if run.get("event") != "repository_dispatch" or run.get("path") != COLLECTOR_WORKFLOW_PATH:
+        raise CollectorAuthorityError("collector run is not a repository_dispatch run of the collector workflow")
+    run_id, attempt = run.get("id"), run.get("run_attempt")
+    if type(run_id) is not int or type(attempt) is not int or attempt < 1:
+        raise CollectorAuthorityError("collector run identity is malformed")
+    match = _COLLECTOR_RUN_TITLE.fullmatch(_run_title(run))
+    if match is None:
+        raise CollectorAuthorityError("collector run title lacks exact PR/head identity")
+    run_pr, run_head, run_generation = int(match.group(1)), match.group(2), match.group(3) or BASE_GENERATION_ID
+    if (
+        (pr_number is not None and run_pr != pr_number)
+        or (head_sha is not None and run_head != head_sha)
+        or (generation is not None and run_generation != generation)
+    ):
+        raise CollectorAuthorityError("collector run belongs to another PR, head or generation")
+    chain = read_owner_chain(repository, token, run_pr, run_head, run_generation)
+    if not chain:
+        raise CollectorAuthorityError("no elected owner: an unowned run carries no authority")
+    owner = chain[-1]
+    verify_owner_run_authority(repository, token, run_pr, run_head, run_generation, owner, run_id, attempt)
+    verify_trusted_origin(repository, token, owner, run_id)
+    return owner
 
 
 _COLLECTOR_RUN_TITLE = re.compile(r"Hunter Reviewer Collector PR ([1-9][0-9]*) HEAD ([0-9a-f]{40})(?: GEN ([^\s]+))?")
@@ -1101,8 +1221,8 @@ def collector_run_is_current(repository: str, token: str, pr_number: int, head_s
     Completion evidence is consumed here as well as produced, so a run that a later
     epoch fenced after its status was written is not accepted. The run's epoch is
     found through the create-only run claim it holds (run id and attempt), never
-    through its title or a status. No owner refs at all means the cycle predates
-    ownership election, which has nothing to fence. Unreadable evidence raises.
+    through its title or a status. A cycle with no owner refs has no authority to
+    fence and accepts nothing: there is no legacy fallback. Unreadable evidence raises.
     """
     match = _COLLECTOR_RUN_TITLE.fullmatch(_run_title(run))
     if match is None or int(match.group(1)) != pr_number or match.group(2) != head_sha:
@@ -1110,7 +1230,7 @@ def collector_run_is_current(repository: str, token: str, pr_number: int, head_s
     generation = match.group(3) or BASE_GENERATION_ID
     chain = read_owner_chain(repository, token, pr_number, head_sha, generation)
     if not chain:
-        return True
+        return False
     attempt, run_id = int(run.get("run_attempt") or 0), run.get("id")
     for owner in chain:
         claim = _read_claim(
@@ -1635,6 +1755,29 @@ def remediation_generations_used(repository: str, token: str, pr_number: int, he
     return used
 
 
+def authorized_collector_successes(
+    repository: str, token: str, pr_number: int, head_sha: str, generation: str, runs: list[dict[str, Any]]
+) -> list[dict[str, Any]]:
+    """The completed-successful ``runs`` that hold the current epoch's authority.
+
+    A lookalike success (same title, workflow and time) is dropped, and a cycle
+    with no elected owner has none: there is no legacy fallback. Unreadable
+    authority evidence raises, so it is never read as "no success".
+    """
+    successful = [run for run in runs if run.get("status") == "completed" and run.get("conclusion") == "success"]
+    if not successful:
+        return []
+    chain = read_owner_chain(repository, token, pr_number, head_sha, generation)
+    if not chain:
+        return []
+    return [
+        run
+        for run in successful
+        if type(run.get("id")) is int
+        and _run_holds_owner_authority(repository, token, pr_number, head_sha, generation, chain[-1], run)
+    ]
+
+
 def collector_liveness(
     repository: str, token: str, pr_number: int, head_sha: str, generation_id: str = BASE_GENERATION_ID
 ) -> tuple[str, int]:
@@ -1642,11 +1785,10 @@ def collector_liveness(
 
     runs = collector_runs(repository, token, pr_number, head_sha, generation_id)
     for run in runs:
-        status = str(run.get("status") or "")
-        if status in ACTIVE_RUN_STATES:
+        if str(run.get("status") or "") in ACTIVE_RUN_STATES:
             return "active", len(runs)
-        if status == "completed" and str(run.get("conclusion") or "") == "success":
-            return "completed", len(runs)
+    if authorized_collector_successes(repository, token, pr_number, head_sha, generation_id, runs):
+        return "completed", len(runs)
     return ("dead" if runs else "missing"), len(runs)
 
 
@@ -1704,7 +1846,9 @@ def completed_collector_settled(repository: str, token: str, cycle: ReviewCycle)
     runs = collector_runs(repository, token, cycle.pr_number, cycle.head_sha, cycle.generation_id)
     if any(str(run.get("status") or "") in ACTIVE_RUN_STATES for run in runs):
         return False
-    successful = [run for run in runs if run.get("status") == "completed" and run.get("conclusion") == "success"]
+    successful = authorized_collector_successes(
+        repository, token, cycle.pr_number, cycle.head_sha, cycle.generation_id, runs
+    )
     if not successful:
         return False
     # A previous successful attempt cannot close the propagation window for a
@@ -2170,11 +2314,9 @@ def ensure_collector(
                             runs = collector_runs(
                                 repository, token, existing.pr_number, existing.head_sha, existing.generation_id
                             )
-                            successful = [
-                                run
-                                for run in runs
-                                if run.get("status") == "completed" and run.get("conclusion") == "success"
-                            ]
+                            successful = authorized_collector_successes(
+                                repository, token, existing.pr_number, existing.head_sha, existing.generation_id, runs
+                            )
                             if successful and not completed_collector_settled(repository, token, existing):
                                 return existing
                         except (transport.GitHubRequestError, ValueError):

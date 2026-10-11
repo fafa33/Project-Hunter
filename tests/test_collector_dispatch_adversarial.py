@@ -396,7 +396,8 @@ def test_malformed_claim_is_not_treated_as_unowned(env):
 def test_successful_completion_blocks_recovery(env):
     github, local = env
     reconcile(github, local, 101)
-    run, _, _ = capability(github)
+    run, proof, epoch = capability(github)
+    start_collector(github, run, proof, epoch)  # a success counts only if it passed the start gate
     github.finish(101, "success")
     github.finish(run, "success")
     recover_ready(github)
@@ -627,7 +628,8 @@ def test_recovery_evidence_is_not_truncated_by_run_history_pagination(env, outco
     hid the owner's own run and recovery could replace a valid (successful) owner."""
     github, local = env
     reconcile(github, local, 101)
-    run, _, _ = capability(github)
+    run, proof, epoch = capability(github)
+    start_collector(github, run, proof, epoch)  # a success counts only if it passed the start gate
     github.finish(101, "success")
     github.finish(run, outcome)
     _flood_with_other_prs_runs(github, 120)
@@ -657,7 +659,8 @@ def test_exact_cycle_liveness_is_not_hidden_behind_other_prs_newer_runs(env):
     """Copilot: a single 50-run page made an older exact-head run read as missing."""
     github, local = env
     reconcile(github, local, 101)
-    run, _, _ = capability(github)
+    run, proof, epoch = capability(github)
+    start_collector(github, run, proof, epoch)
     _flood_with_other_prs_runs(github, 120)
     assert orchestrator.collector_liveness(REPO, "token", PR, HEAD, GEN)[0] == "active"
     github.finish(run, "success")

@@ -641,7 +641,9 @@ def valid_run(run: dict[str, Any], run_id: int, branch: str, revision: str) -> b
         and governance._is_commit_sha(str(run.get("head_sha") or ""))
         and run.get("head_sha") == revision
         and run.get("path") == WORKFLOW
-        and run.get("event") in {"workflow_dispatch", "repository_dispatch", "pull_request_target"}
+        # Legacy workflow_dispatch/pull_request_target runs carry no owner, binding or
+        # run claim and are never reviewer or exhaustion authority after migration.
+        and run.get("event") == "repository_dispatch"
         and run.get("status") == "completed"
         and run.get("conclusion") == "success"
     )
@@ -1706,6 +1708,10 @@ def load_exhaustion(
         raise ValueError("collector did not execute the trusted default-branch revision")
     if not _run_on_default_branch_history(repository, token, branch, revision):
         raise ValueError("collector run is no longer on trusted default-branch history")
+    # Authority is established before the artifact is downloaded or the receipt read:
+    # current owner epoch, GitHub-created run binding, atomic run claim for this
+    # attempt, trusted origin, and the exact PR and head. Anything else raises.
+    orchestration.collector_run_authority(repository, token, run, pr_number=pr, head_sha=head)
     name = f'hunter-reviewer-results-{head}-{run["run_attempt"]}'
     artifacts = [
         a for a in _pages(repository, token, f"actions/runs/{run_id}/artifacts", "artifacts") if a.get("name") == name
@@ -1751,6 +1757,9 @@ def load_exhaustion(
     # reviewer it recorded as exhausted is owed another invocation, so reusing
     # the receipt would authorise a lower-priority reviewer over one that has not
     # actually been asked about the remediated state.
+    title_generation = orchestration._COLLECTOR_RUN_TITLE.fullmatch(orchestration._run_title(run))
+    if title_generation is None or (title_generation.group(3) or BASE_GENERATION) != receipt_generation:
+        raise ValueError("collector receipt generation differs from the authorized run's generation")
     if receipt_generation != orchestration.current_remediation_generation(
         repository, token, pr, head, receipt["claims_id"]
     ):
