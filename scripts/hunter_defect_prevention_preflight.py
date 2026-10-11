@@ -1722,6 +1722,40 @@ def _collector_invocation_arguments(command: list[str]) -> list[str] | None:
     return None
 
 
+def _newlines_as_command_separators(script: str) -> str:
+    """Make every unquoted newline an explicit ``;`` so shlex cannot fold two lines into one command.
+
+    A backslash-newline is a line continuation and is joined; a newline inside single or double
+    quotes is literal text and is kept.
+    """
+
+    out: list[str] = []
+    quote = ""
+    index = 0
+    while index < len(script):
+        char = script[index]
+        if char == "\\" and quote != "'" and index + 1 < len(script):
+            nxt = script[index + 1]
+            if nxt == "\n":
+                index += 2  # line continuation
+                continue
+            out.append(char + nxt)
+            index += 2
+            continue
+        if quote:
+            if char == quote:
+                quote = ""
+        elif char in "'\"":
+            quote = char
+        elif char == "\n":
+            out.append(" ; ")
+            index += 1
+            continue
+        out.append(char)
+        index += 1
+    return "".join(out)
+
+
 def _collector_generation_is_bound(run_cmd: str, env: Any) -> bool:
     """Whether every collector invocation in ``run_cmd`` receives the dispatched generation.
 
@@ -1734,7 +1768,9 @@ def _collector_generation_is_bound(run_cmd: str, env: Any) -> bool:
     placeholder = "__HUNTER_GENERATION_EXPRESSION__"
     try:
         lexer = shlex.shlex(
-            run_cmd.replace(_COLLECTOR_GENERATION_EXPRESSION, placeholder), posix=True, punctuation_chars=True
+            _newlines_as_command_separators(run_cmd).replace(_COLLECTOR_GENERATION_EXPRESSION, placeholder),
+            posix=True,
+            punctuation_chars=True,
         )
         lexer.whitespace_split = True
         tokens = list(lexer)

@@ -7,6 +7,7 @@ in-memory carry-over, so progress that survives across calls is durable by
 construction.
 """
 
+import json
 import threading
 from concurrent.futures import ThreadPoolExecutor
 
@@ -282,13 +283,40 @@ def test_unusable_receipt_never_receives_a_trusted_completion(env, monkeypatch, 
     (receipt_dir / "collector-dispatch-proof.txt").write_text(proof)
     monkeypatch.setenv("RUNNER_TEMP", str(tmp_path))
     monkeypatch.setattr("sys.argv", ["x", "trusted-collector-complete", "--repository", REPO, "--run-id", str(run)])
-    for body in (None, "{not json", '{"run_attempt": 9}'):
+    title = github.runs[run]["display_title"]
+    head = title.split(" HEAD ")[1].split(" ")[0]
+    whole = {
+        "schema": orchestrator.COLLECTOR_RESULTS_SCHEMA,
+        "repository": REPO,
+        "pr_number": 472,
+        "head_sha": head,
+        "run_id": run,
+        "run_attempt": 1,
+        "claims_id": "c" * 64,
+        "remediation_generation_id": orchestrator.BASE_GENERATION_ID,
+        "configuration_digest": "d" * 64,
+        "attempts": [],
+    }
+    wrong_identity = {**whole, "head_sha": "f" * 40}
+    no_attempts = {key: value for key, value in whole.items() if key != "attempts"}
+    bodies = [
+        None,
+        "{not json",
+        '{"run_attempt": 9}',
+        # a valid JSON object with the right attempt but no identity or schema is not a receipt
+        '{"run_attempt": 1}',
+        json.dumps(wrong_identity),
+        json.dumps(no_attempts),
+        json.dumps({**whole, "run_attempt": 2}),
+        json.dumps({**whole, "claims_id": ""}),
+    ]
+    for body in bodies:
         if body is not None:
             (receipt_dir / "reviewer-results.json").write_text(body)
         assert orchestrator.main() == 0
         assert "receipt unusable" in capsys.readouterr().out
         assert sweep() == [run]  # still outstanding: retried by the next sweep
-    (receipt_dir / "reviewer-results.json").write_text('{"run_attempt": 1}')
+    (receipt_dir / "reviewer-results.json").write_text(json.dumps(whole))
     orchestrator.main()
     assert "PUBLISHED" in capsys.readouterr().out
     assert sweep() == []

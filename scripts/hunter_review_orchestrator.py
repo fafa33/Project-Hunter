@@ -2135,6 +2135,40 @@ def read_collector_receipt(path: Path) -> tuple[Any, str]:
         return None, f"{path} is unreadable: {type(exc).__name__}"
 
 
+def collector_receipt_problem(
+    receipt: Any, *, repository: str, pr_number: int, head_sha: str, run_id: int, run_attempt: Any
+) -> str:
+    """Why ``receipt`` may not sit under a trusted completion marker, or ``""`` when it may.
+
+    The marker removes a run from recovery, so the receipt must at least be this run's own
+    well-formed record: schema, the identity derivable from the run itself, the completed
+    attempt, and the shape of the remaining fields. Whether it proves pool exhaustion is
+    ``pool_exhaustion``'s separate question, asked against the live review state.
+    """
+
+    if not isinstance(receipt, dict):
+        return "receipt is not an object"
+    expected = {
+        "schema": COLLECTOR_RESULTS_SCHEMA,
+        "repository": repository,
+        "pr_number": pr_number,
+        "head_sha": head_sha,
+        "run_id": run_id,
+        "run_attempt": run_attempt,
+    }
+    for name, value in expected.items():
+        if receipt.get(name) != value or type(receipt.get(name)) is not type(value):
+            return f"receipt {name} does not match the completed run"
+    if not isinstance(receipt.get("attempts"), list):
+        return "receipt attempts are missing"
+    for name in ("claims_id", "configuration_digest"):
+        if not isinstance(receipt.get(name), str) or not receipt[name]:
+            return f"receipt {name} is missing"
+    if not isinstance(receipt.get("remediation_generation_id"), str):  # the base generation is ""
+        return "receipt remediation_generation_id is missing"
+    return ""
+
+
 def finalize_exhausted_pool(
     repository: str,
     token: str,
@@ -2668,8 +2702,24 @@ def main() -> int:
             # An unusable receipt must never sit under a trusted success marker: validate
             # it, and that it belongs to the completed attempt, before publishing.
             parsed, unreadable = read_collector_receipt(receipt)
-            if parsed is None or parsed.get("run_attempt") != run.get("run_attempt"):
-                print(f"SKIPPED: collector receipt unusable ({unreadable or 'attempt mismatch'})")
+            title = re.fullmatch(
+                r"Hunter Reviewer Collector PR ([1-9][0-9]*) HEAD ([0-9a-f]{40})(?: GEN ([^\s]+))?",
+                str(run.get("display_title") or ""),
+            )
+            problem = unreadable or (
+                "run title is not a collector cycle"
+                if title is None
+                else collector_receipt_problem(
+                    parsed,
+                    repository=args.repository,
+                    pr_number=int(title.group(1)),
+                    head_sha=title.group(2),
+                    run_id=args.run_id,
+                    run_attempt=run.get("run_attempt"),
+                )
+            )
+            if problem:
+                print(f"SKIPPED: collector receipt unusable ({problem})")
                 return 0
             outcome = publish_trusted_collector_completion(args.repository, token, args.run_id, proof)
             print(outcome)

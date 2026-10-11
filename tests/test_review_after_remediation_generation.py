@@ -651,7 +651,10 @@ _COLLECT = "python scripts/hunter_reviewer_collector.py --pr 1 --head abc"
         (f"{_COLLECT} --generation={_GEN}", {}),
         (f'{_COLLECT} --generation "$REMEDIATION_GENERATION"', {"REMEDIATION_GENERATION": _GEN}),
         (f"{_COLLECT} --generation ${{REMEDIATION_GENERATION}}", {"REMEDIATION_GENERATION": f" {_GEN} "}),
-        (f'{_COLLECT}\n  --generation "$G"\n  --output out.json', {"G": _GEN}),
+        (f'{_COLLECT} \\\n  --generation "$G" \\\n  --output out.json', {"G": _GEN}),
+        # a newline between two commands is a command boundary; a quoted newline is literal text
+        (f'{_COLLECT} --generation "$G"\necho done', {"G": _GEN}),
+        (f'{_COLLECT} --generation "$G" --title "a\nb"', {"G": _GEN}),
         # unrelated assignments and a differently named variable do not disturb the binding
         (f'OTHER=1 {_COLLECT} --generation "$G"', {"G": _GEN}),
         (f'X=1; {_COLLECT} --generation "$G"; unset X', {"G": _GEN}),
@@ -692,6 +695,10 @@ def test_generation_binding_accepts_every_equivalent_valid_form(guard, run, env)
         ('printf %s python scripts/hunter_reviewer_collector.py --generation "$G"', {"G": _GEN}),
         ('bash -c "python scripts/hunter_reviewer_collector.py --generation \\"$G\\""', {"G": _GEN}),
         ('if false; then python scripts/hunter_reviewer_collector.py --generation "$G"; fi', {"G": _GEN}),
+        # Copilot: shlex drops newlines, but a newline separates commands in the workflow shell
+        (f'{_COLLECT} --generation "$G"\n{_COLLECT}', {"G": _GEN}),
+        (f'{_COLLECT}\n{_COLLECT} --generation "$G"', {"G": _GEN}),
+        (f'{_COLLECT}\n  --generation "$G"', {"G": _GEN}),
         # every invocation must be bound, not just the first
         (f'{_COLLECT} --generation "{_GEN}"; {_COLLECT}', {}),
         (f'{_COLLECT}; {_COLLECT} --generation "{_GEN}"', {}),
