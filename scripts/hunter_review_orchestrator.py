@@ -1136,7 +1136,9 @@ def outstanding_collector_runs(
                 raise
             if not isinstance(run, dict) or run.get("status") != "completed" or run.get("conclusion") != "success":
                 continue
-            published, published_run, _why = read_collector_completion(repository, token, pr_number, head_sha)
+            published, published_run, read_error = read_collector_completion(repository, token, pr_number, head_sha)
+            if read_error:
+                continue  # unavailable evidence is retried next sweep and must not take a batch slot
             if published == "present" and published_run == run_id:
                 continue
             outstanding.append(OutstandingCollectorRun(pr_number, head_sha, run_id, _run_title(run)))

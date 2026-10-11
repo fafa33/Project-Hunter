@@ -331,3 +331,22 @@ def test_a_publisher_that_dies_after_claiming_does_not_strand_the_completion(env
     assert orchestrator.publish_trusted_collector_completion(REPO, "token", run, proof).startswith("PUBLISHED")
     assert orchestrator.read_collector_completion(REPO, "token", 472, head_for(472)) == ("present", run, None)
     assert sweep() == []
+
+
+def test_a_run_whose_completion_evidence_is_unreadable_does_not_consume_a_batch_slot(env, monkeypatch):
+    github, local = env
+    runs = {pr: stage(github, local, pr, orchestrator_run=100 + pr)[0] for pr in range(472, 478)}
+    real = orchestrator.read_collector_completion
+    unreadable = {472, 473, 474}  # as many unreadable runs as the batch limit would let them crowd out the rest
+
+    def flaky(repository, token, pr, head):
+        if pr in unreadable:
+            return "absent", None, "collector completion evidence unavailable: HTTP 502"
+        return real(repository, token, pr, head)
+
+    monkeypatch.setattr(orchestrator, "read_collector_completion", flaky)
+    batch = sweep(limit=3)
+    # Unreadable evidence is retried on a later sweep and never takes a slot from readable work.
+    assert sorted(batch) == sorted(runs[pr] for pr in (475, 476, 477))
+    unreadable.clear()
+    assert sorted(sweep(limit=10)) == sorted(runs.values())
