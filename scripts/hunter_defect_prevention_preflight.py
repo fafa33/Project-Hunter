@@ -1758,7 +1758,7 @@ def _collector_generation_is_bound(run_cmd: str, env: Any) -> bool:
     # discard it (``unset``/``read``) before the collector runs.
     for name in {_generation_variable_name(arguments) for arguments in invocations} - {None}:
         for command in commands:
-            if any(token.startswith(f"{name}=") for token in command):
+            if any(token.startswith((f"{name}=", f"{name}+=")) for token in command):
                 return False
             if command and command[0] in {"unset", "read", "eval"} and name in command[1:]:
                 return False
@@ -1955,9 +1955,20 @@ def validate_review_after_remediation_boundary() -> list[str]:
         definition = yaml.safe_load(workflow.read_text(encoding="utf-8"))
     except (OSError, yaml.YAMLError) as exc:
         return [*errors, f"reviewer collector workflow is unreadable: {type(exc).__name__}: {exc}"]
-    triggers = definition.get(True) if isinstance(definition, dict) else None
-    # YAML 1.1 parses the top-level "on" key as True. Never accept additional
-    # candidate-controlled events, including a bare push or workflow_dispatch.
+    return [*errors, *validate_collector_workflow_definition(definition)]
+
+
+def validate_collector_workflow_definition(definition: Any) -> list[str]:
+    """Guard errors for a parsed reviewer-collector workflow; never raises on malformed input."""
+
+    errors: list[str] = []
+    if not isinstance(definition, dict):
+        return ["reviewer collector workflow must be a YAML mapping"]
+    # YAML 1.1 parses an unquoted top-level ``on`` key as True and a quoted "on" as the string.
+    # Both spell the same trigger; a workflow declaring the two differently is ambiguous.
+    declared = [definition[key] for key in (True, "on") if key in definition]
+    triggers = declared[0] if len(declared) == 1 or (len(declared) == 2 and declared[0] == declared[1]) else None
+    # Never accept additional candidate-controlled events, including a bare push or workflow_dispatch.
     if not isinstance(triggers, dict) or set(triggers) != {"repository_dispatch"}:
         errors.append("privileged reviewer collector must have exactly the trusted repository_dispatch trigger")
     else:
@@ -1970,11 +1981,14 @@ def validate_review_after_remediation_boundary() -> list[str]:
     # A loose text search is insufficient; the expression must appear in the
     # same step that invokes the collector, either directly in the run command
     # or via an env var defined in that step.
+    jobs = definition.get("jobs")
+    if not isinstance(jobs, dict):
+        return [*errors, "reviewer collector workflow must declare its jobs as a mapping"]
     steps = [
         step
-        for job in (definition.get("jobs") or {}).values()
-        if isinstance(job, dict)
-        for step in (job.get("steps") or [])
+        for job in jobs.values()
+        if isinstance(job, dict) and isinstance(job.get("steps"), list)
+        for step in job["steps"]
         if isinstance(step, dict)
     ]
     collector_steps = [step for step in steps if "hunter_reviewer_collector.py" in str(step.get("run") or "")]
@@ -1986,7 +2000,8 @@ def validate_review_after_remediation_boundary() -> list[str]:
         # command is tokenised so a variable that is merely mentioned elsewhere
         # in the script, or a flag belonging to another command, cannot satisfy it.
         for step in collector_steps:
-            if not _collector_generation_is_bound(str(step.get("run") or ""), step.get("env") or {}):
+            env = step.get("env")
+            if not _collector_generation_is_bound(str(step.get("run") or ""), env if isinstance(env, dict) else {}):
                 errors.append(
                     "the reviewer collector workflow must forward the remediation generation "
                     "to the collector via --generation with github.event.client_payload.generation_id"

@@ -694,6 +694,10 @@ def test_generation_binding_accepts_every_equivalent_valid_form(guard, run, env)
         (f'unset G; {_COLLECT} --generation "$G"', {"G": _GEN}),
         (f'read G; {_COLLECT} --generation "$G"', {"G": _GEN}),
         (f'eval G=main; {_COLLECT} --generation "$G"', {"G": _GEN}),
+        # Copilot: Bash append assignment also changes the value the collector receives
+        (f'G+=main; {_COLLECT} --generation "$G"', {"G": _GEN}),
+        (f'export G+=main\n{_COLLECT} --generation "$G"', {"G": _GEN}),
+        (f'G+=main {_COLLECT} --generation "$G"', {"G": _GEN}),
         # not the collector at all, or unparsable shell
         (f'echo --generation "{_GEN}"', {}),
         (f'{_COLLECT} --generation "{_GEN}', {}),
@@ -701,3 +705,67 @@ def test_generation_binding_accepts_every_equivalent_valid_form(guard, run, env)
 )
 def test_generation_binding_rejects_representation_traps(guard, run, env):
     assert guard._collector_generation_is_bound(run, env) is False
+
+
+# --- the parsed-workflow guard: trigger-key spellings and malformed documents ---------------------------------------
+
+
+def _real_collector_definition():
+    import yaml
+
+    return yaml.safe_load((guard_module_root() / ".github/workflows/hunter-reviewer-collector.yml").read_text("utf-8"))
+
+
+def guard_module_root():
+    from pathlib import Path
+
+    return Path(__file__).resolve().parents[1]
+
+
+def test_the_real_collector_workflow_passes_the_definition_guard(guard):
+    assert guard.validate_collector_workflow_definition(_real_collector_definition()) == []
+
+
+def test_quoted_and_unquoted_on_keys_are_the_same_trigger(guard):
+    definition = _real_collector_definition()
+    assert True in definition  # PyYAML spells the unquoted key as a boolean
+    quoted = {("on" if key is True else key): value for key, value in definition.items()}
+    assert guard.validate_collector_workflow_definition(quoted) == []
+    # Both spellings declaring the same trigger are one declaration; conflicting ones are ambiguous.
+    both_same = {**definition, "on": definition[True]}
+    assert guard.validate_collector_workflow_definition(both_same) == []
+    both_conflicting = {**definition, "on": {"push": None}}
+    assert guard.validate_collector_workflow_definition(both_conflicting)
+    # An extra candidate-controlled event is still rejected under either spelling.
+    for key in (True, "on"):
+        widened = {k: v for k, v in definition.items() if k is not True}
+        widened[key] = {**definition[True], "push": {"branches": ["**"]}}
+        assert guard.validate_collector_workflow_definition(widened), key
+
+
+@pytest.mark.parametrize(
+    "malformed",
+    [
+        None,
+        [],
+        "not a mapping",
+        {"jobs": []},
+        {"jobs": "x"},
+        {True: {"repository_dispatch": {"types": ["hunter-reviewer-collect"]}}, "jobs": []},
+        {True: {"repository_dispatch": {"types": ["hunter-reviewer-collect"]}}, "jobs": {"a": []}},
+        {True: {"repository_dispatch": {"types": ["hunter-reviewer-collect"]}}, "jobs": {"a": {"steps": "run"}}},
+        {True: {"repository_dispatch": {"types": ["hunter-reviewer-collect"]}}, "jobs": {"a": {"steps": [None, 3]}}},
+    ],
+)
+def test_malformed_collector_workflows_produce_guard_errors_not_exceptions(guard, malformed):
+    errors = guard.validate_collector_workflow_definition(malformed)
+    assert errors and all(isinstance(message, str) for message in errors)
+
+
+def test_a_non_mapping_step_env_is_treated_as_empty_not_a_crash(guard):
+    definition = _real_collector_definition()
+    for job in definition["jobs"].values():
+        for step in job["steps"]:
+            if "hunter_reviewer_collector.py" in str(step.get("run", "")):
+                step["env"] = ["G=main"]
+    assert guard.validate_collector_workflow_definition(definition)
