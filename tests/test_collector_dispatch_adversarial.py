@@ -551,3 +551,49 @@ def test_collector_workflow_binds_the_elected_capability_and_has_no_status_grant
             env.update(step.get("env") or {})
     assert env["COLLECTOR_DISPATCH_PROOF"] == "${{ github.event.client_payload.dispatch_proof }}"
     assert env["COLLECTOR_RECOVERY_EPOCH"] == "${{ github.event.client_payload.recovery_epoch }}"
+
+
+def _flood_with_other_prs_runs(github, count):
+    """Newer collector runs for other PRs push this cycle's runs off page 1."""
+    for index in range(count):
+        github.next_run += 1
+        github.runs[github.next_run] = {
+            **github.collector_runs()[0],
+            "id": github.next_run,
+            "status": "completed",
+            "conclusion": "success",
+            "created_at": "2099-01-01T00:00:00Z",
+            "display_title": orchestrator.collector_run_name(900 + index, "c" * 40, GEN),
+        }
+
+
+@pytest.mark.parametrize("outcome", ["success", "failure"])
+def test_recovery_evidence_is_not_truncated_by_run_history_pagination(env, outcome):
+    """Codex P1: only the newest 50 workflow runs were read, so a busy repository
+    hid the owner's own run and recovery could replace a valid (successful) owner."""
+    github, local = env
+    reconcile(github, local, 101)
+    run, _, _ = capability(github)
+    github.finish(101, "success")
+    github.finish(run, outcome)
+    _flood_with_other_prs_runs(github, 120)
+    recover_ready(github)
+    reconcile(github, local, 102)
+    if outcome == "success":
+        assert github.owner_epochs() == [0] and len(github.dispatches) == 1
+    else:
+        assert github.owner_epochs() == [0, 1] and len(github.dispatches) == 2
+
+
+def test_recovery_fails_closed_when_run_history_cannot_be_exhausted(env, monkeypatch):
+    github, local = env
+    reconcile(github, local, 101)
+    run, _, _ = capability(github)
+    github.finish(101, "success")
+    github.finish(run, "failure")
+    _flood_with_other_prs_runs(github, 120)
+    recover_ready(github)
+    monkeypatch.setattr(orchestrator, "RECOVERY_RUN_HISTORY_MAX_PAGES", 1)
+    with pytest.raises(ValueError):
+        reconcile(github, local, 102)
+    assert github.owner_epochs() == [0] and len(github.dispatches) == 1

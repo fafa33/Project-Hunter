@@ -797,6 +797,47 @@ def latest_collector_owner(
     return chain[-1] if chain else None
 
 
+#: Recovery reads run history newest-first until it passes the owner's claim. The
+#: bound keeps it finite; hitting it is unavailable evidence (fail closed), never
+#: "no run found".
+RECOVERY_RUN_HISTORY_PAGE_SIZE = 100
+RECOVERY_RUN_HISTORY_MAX_PAGES = 10
+
+
+def collector_runs_since(
+    repository: str, token: str, pr_number: int, head_sha: str, generation: str, since: str
+) -> list[dict[str, Any]]:
+    """Every collector run of this exact cycle created at or after ``since``.
+
+    The shared workflow history is paged newest-first until a run older than
+    ``since`` proves nothing relevant remains. Running out of pages first raises:
+    a truncated listing must never read as "the owner's run does not exist".
+    """
+    expected = collector_run_name(pr_number, head_sha, generation)
+    found: list[dict[str, Any]] = []
+    for page in range(1, RECOVERY_RUN_HISTORY_MAX_PAGES + 1):
+        payload = request_json(
+            repository,
+            token,
+            "GET",
+            f"actions/workflows/{COLLECTOR_WORKFLOW}/runs?event=repository_dispatch"
+            f"&per_page={RECOVERY_RUN_HISTORY_PAGE_SIZE}&page={page}",
+        )
+        batch = payload.get("workflow_runs") if isinstance(payload, dict) else None
+        if not isinstance(batch, list):
+            raise ValueError("collector run history unavailable")
+        runs = [run for run in batch if isinstance(run, dict)]
+        found.extend(
+            run for run in runs if str(run.get("path") or "") == COLLECTOR_WORKFLOW_PATH and _run_title(run) == expected
+        )
+        oldest = min((str(run.get("created_at") or "") for run in runs), default="")
+        if len(batch) < RECOVERY_RUN_HISTORY_PAGE_SIZE or (oldest and oldest < since):
+            return [
+                run for run in found if str(run.get("created_at") or "") >= since or run.get("status") != "completed"
+            ]
+    raise ValueError("collector run history exceeds the bounded recovery window")
+
+
 def owner_attempt_failed(
     repository: str, token: str, pr_number: int, head_sha: str, generation: str, owner: CollectorOwner
 ) -> bool:
@@ -814,10 +855,9 @@ def owner_attempt_failed(
         raise ValueError("collector owner run evidence unavailable")
     if owner_run.get("status") != "completed":
         return False
-    runs = collector_runs(repository, token, pr_number, head_sha, generation)
-    if any(str(run.get("status") or "") in ACTIVE_RUN_STATES for run in runs):
+    since = collector_runs_since(repository, token, pr_number, head_sha, generation, owner.claimed_at)
+    if any(str(run.get("status") or "") in ACTIVE_RUN_STATES for run in since):
         return False
-    since = [run for run in runs if str(run.get("created_at") or "") >= owner.claimed_at]
     if any(run.get("status") == "completed" and run.get("conclusion") == "success" for run in since):
         return False
     if since:

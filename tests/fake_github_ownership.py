@@ -26,6 +26,12 @@ TIP = "d" * 40
 RECONCILE_PATH = ".github/workflows/hunter-governance-reconcile.yml"
 
 
+def _now() -> str:
+    from datetime import UTC, datetime
+
+    return datetime.now(UTC).strftime("%Y-%m-%dT%H:%M:%SZ")
+
+
 class Crash(BaseException):
     """A process death: nothing after the raising call executes."""
 
@@ -144,7 +150,7 @@ class FakeGitHub:
                 {
                     **payload,
                     "creator": {"login": orchestrator.TRUSTED_STATUS_CREATOR},
-                    "created_at": "2026-10-10T10:00:00Z",
+                    "created_at": _now(),
                 }
             )
             return {}
@@ -163,7 +169,7 @@ class FakeGitHub:
                 "head_sha": TIP,
                 "status": "in_progress",
                 "conclusion": None,
-                "created_at": "2026-10-10T10:00:01Z",
+                "created_at": _now(),
                 "run_attempt": 1,
                 "display_title": orchestrator.collector_run_name(
                     int(client["pr_number"]), client["head_sha"], client["generation_id"]
@@ -171,7 +177,10 @@ class FakeGitHub:
             }
             return {}
         if method == "GET" and path.startswith("actions/workflows/"):
-            return {"workflow_runs": list(reversed(self.collector_runs()))}
+            query = dict(part.split("=") for part in path.split("?", 1)[1].split("&"))
+            size, page = int(query.get("per_page", 30)), int(query.get("page", 1))
+            ordered = sorted(self.collector_runs(), key=lambda r: (r["created_at"], r["id"]), reverse=True)
+            return {"workflow_runs": ordered[(page - 1) * size : page * size]}
         if method == "GET" and "/attempts/" in path:
             parts = path.split("/")
             return self.attempts[(int(parts[-3]), int(parts[-1]))]
