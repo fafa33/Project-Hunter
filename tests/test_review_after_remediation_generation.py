@@ -665,6 +665,11 @@ def test_generation_binding_accepts_every_equivalent_valid_form(guard, run, env)
         ),
         (f'cat scripts/hunter_reviewer_collector.py --generation "{_GEN}"', {}),
         (f'python -c "print(1)" hunter_reviewer_collector.py --generation "{_GEN}"', {}),
+        # Copilot: printed or wrapped command text is not an executed collector invocation
+        ('echo python scripts/hunter_reviewer_collector.py --generation "$G"', {"G": _GEN}),
+        ('printf %s python scripts/hunter_reviewer_collector.py --generation "$G"', {"G": _GEN}),
+        ('bash -c "python scripts/hunter_reviewer_collector.py --generation \\"$G\\""', {"G": _GEN}),
+        ('if false; then python scripts/hunter_reviewer_collector.py --generation "$G"; fi', {"G": _GEN}),
         # every invocation must be bound, not just the first
         (f'{_COLLECT} --generation "{_GEN}"; {_COLLECT}', {}),
         (f'{_COLLECT}; {_COLLECT} --generation "{_GEN}"', {}),
