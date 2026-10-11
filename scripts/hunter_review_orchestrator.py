@@ -1189,8 +1189,13 @@ def read_collector_completion(
             if not isinstance(run, dict):
                 continue
             run_revision = str(run.get("head_sha") or "")
-            revision_trusted = run_revision == trusted_revision
-            if run_revision and trusted_revision and not revision_trusted:
+            # A missing or malformed revision is never proof of trusted ancestry.
+            if not (
+                re.fullmatch(r"[0-9a-fA-F]{40}", run_revision) and re.fullmatch(r"[0-9a-fA-F]{40}", trusted_revision)
+            ):
+                continue
+            revision_trusted = run_revision.lower() == trusted_revision.lower()
+            if not revision_trusted:
                 comparison = request_json(repository, token, "GET", f"compare/{run_revision}...{trusted_revision}")
                 revision_trusted = isinstance(comparison, dict) and comparison.get("status") in {"ahead", "identical"}
             if (

@@ -1547,6 +1547,40 @@ def test_read_collector_completion_rejects_untrusted_or_wrong_head_run(monkeypat
     assert reason is None
 
 
+@pytest.mark.parametrize(
+    "run_sha,main_sha", [("", ""), ("bad", "bad"), ("b" * 40, ""), ("", "c" * 40), ("g" * 40, "g" * 40)]
+)
+def test_collector_completion_rejects_missing_or_malformed_revision(monkeypatch, run_sha, main_sha):
+    def request(_repository, _token, _method, path, _payload=None):
+        if path == f"commits/{HEAD}/statuses?per_page=100":
+            return [
+                {
+                    "state": "success",
+                    "context": "Hunter Reviewer Collector / PR #472",
+                    "description": "collector_run_id=777",
+                    "creator": {"login": "github-actions[bot]"},
+                }
+            ]
+        if path == "":
+            return {"default_branch": "main"}
+        if path == "commits/main":
+            return {"sha": main_sha}
+        if path == "actions/runs/777":
+            return {
+                "id": 777,
+                "head_branch": "main",
+                "head_sha": run_sha,
+                "path": ".github/workflows/hunter-reviewer-collector.yml",
+                "event": "repository_dispatch",
+                "status": "completed",
+                "conclusion": "success",
+            }
+        raise AssertionError(f"unexpected trusted lookup: {path}")
+
+    monkeypatch.setattr(orchestrator, "request_json", request)
+    assert orchestrator.read_collector_completion("owner/repo", "token", 472, HEAD) == ("absent", None, None)
+
+
 def test_reconcile_runs_when_reviewer_collector_completes():
     root = orchestrator.__file__ and orchestrator.__file__.rsplit("/scripts/", 1)[0]
     text = open(f"{root}/.github/workflows/hunter-governance-reconcile.yml", encoding="utf-8").read()

@@ -229,7 +229,18 @@ def test_two_simultaneous_recovery_contenders_elect_exactly_one_replacement(env,
     recover_ready(github)
     github.add_orchestrator_run(102)
     github.add_orchestrator_run(103)
-    github.ref_gate = threading.Barrier(2)
+    # Synchronize before the competing owner writes, not at the writes themselves:
+    # a legitimate loser may observe the winner and never attempt POST git/refs.
+    # A barrier on POST incorrectly requires both contenders to write and flakes.
+    gate = threading.Barrier(2, timeout=30)
+    original_owner_failed = orchestrator.owner_attempt_failed
+
+    def concurrent_recovery(*args):
+        failed = original_owner_failed(*args)
+        gate.wait()
+        return failed
+
+    monkeypatch.setattr(orchestrator, "owner_attempt_failed", concurrent_recovery)
 
     def contender(run_id):
         local.run_id = run_id
