@@ -597,16 +597,6 @@ def publish_trusted_collector_completion(repository: str, token: str, run_id: in
         return "SKIPPED: no authorized open collector cycle"
     if cycle.generation_id != (match.group(3) or BASE_GENERATION_ID):
         return "SKIPPED: collector generation differs from authorized cycle"
-    if cycle.trigger_id is None or cycle.trigger_id == run_id:
-        return "SKIPPED: trusted orchestrator dispatch identity unavailable"
-    origin = request_json(repository, token, "GET", f"actions/runs/{cycle.trigger_id}")
-    if not isinstance(origin, dict) or not (
-        origin.get("id") == cycle.trigger_id
-        and origin.get("head_branch") == branch
-        and origin.get("path") == ".github/workflows/hunter-governance-reconcile.yml"
-        and origin.get("event") in {"push", "workflow_run", "pull_request_target", "schedule", "repository_dispatch"}
-    ):
-        return "SKIPPED: dispatch origin is not trusted governance reconciliation"
     if not re.fullmatch(r"[0-9a-f]{64}", proof):
         return "SKIPPED: missing collector dispatch capability"
     try:
@@ -615,6 +605,17 @@ def publish_trusted_collector_completion(repository: str, token: str, run_id: in
         )
     except CollectorAuthorityError as exc:
         return f"SKIPPED: {exc}"
+    # The dispatching run is named by the owner ref, never by the cycle status.
+    if owner.orchestrator_run_id == run_id:
+        return "SKIPPED: trusted orchestrator dispatch identity unavailable"
+    origin = request_json(repository, token, "GET", f"actions/runs/{owner.orchestrator_run_id}")
+    if not isinstance(origin, dict) or not (
+        origin.get("id") == owner.orchestrator_run_id
+        and origin.get("head_branch") == branch
+        and origin.get("path") == ".github/workflows/hunter-governance-reconcile.yml"
+        and origin.get("event") in {"push", "workflow_run", "pull_request_target", "schedule", "repository_dispatch"}
+    ):
+        return "SKIPPED: dispatch origin is not trusted governance reconciliation"
     # Revalidate at the publication boundary: a recovery that fenced this owner
     # after the first check must win over a late publication.
     try:
@@ -790,13 +791,6 @@ def read_owner_chain(
     return chain
 
 
-def latest_collector_owner(
-    repository: str, token: str, pr_number: int, head_sha: str, generation: str
-) -> CollectorOwner | None:
-    chain = read_owner_chain(repository, token, pr_number, head_sha, generation)
-    return chain[-1] if chain else None
-
-
 #: Recovery reads run history newest-first until it passes the owner's claim. The
 #: bound keeps it finite; hitting it is unavailable evidence (fail closed), never
 #: "no run found".
@@ -922,8 +916,6 @@ def require_current_collector_authority(
     holder = next((owner for owner in chain if owner.nonce_sha256 == digest), None)
     if holder is None or chain[-1] != holder:
         raise CollectorAuthorityError("capability is not the current epoch's owner")
-    if cycle.trigger_id != holder.orchestrator_run_id:
-        raise CollectorAuthorityError("cycle trigger disagrees with the elected owner")
     description = dispatch_proof_description(cycle.generation_id, holder.epoch, proof)
     matches = [
         status
@@ -1067,19 +1059,18 @@ def dispatch_collector(
     pr_number: int,
     head_sha: str,
     generation_id: str = BASE_GENERATION_ID,
-    election: CollectorElection | None = None,
 ) -> None:
-    """Issue the one dispatch of an elected epoch; a non-owner never dispatches.
+    """Elect the single dispatcher of the current epoch, then dispatch once.
 
-    Ownership is verified here, immediately before the proof and the dispatch are
-    published, so no caller can dispatch without holding the create-only claim.
-    A failed or ambiguous API call raises and is never retried in-process: the
-    claim stays held by this run, and only a later run may replace it, and only
-    on authoritative evidence that this attempt ended without a valid result.
+    Every caller goes through the create-only election here, so no path can
+    dispatch without holding the owner ref and a loser neither publishes a proof
+    nor dispatches. A failed or ambiguous API call raises and is never retried
+    in-process: the claim stays held by this run, and only a later run may
+    replace it, and only on authoritative evidence that this attempt ended
+    without a valid result. Unreadable ownership evidence raises.
     """
     run_id = current_run_id()
-    if election is None:
-        election = elect_collector_owner(repository, token, pr_number, head_sha, generation_id, run_id)
+    election = elect_collector_owner(repository, token, pr_number, head_sha, generation_id, run_id)
     if not election.won or not election.nonce or election.owner_run_id != run_id:
         return
     current = read_owner_chain(repository, token, pr_number, head_sha, generation_id)
@@ -1737,52 +1728,17 @@ def ensure_collector(
             f"refusing to risk a duplicate dispatch: {exc}"
         ) from exc
 
-    # Exactly one contender per (PR, head, generation, epoch) wins this create-only
-    # election, whatever nonce it holds. A loser must neither publish a competing
-    # record nor dispatch; it reports the authoritative cycle instead. Unreadable
-    # ownership evidence raises: it never authorises a dispatch.
-    election: CollectorElection | None = None
-    if liveness in {"active", "completed"}:
-        # A collector already exists. When ownership was elected, the owner ref is
-        # the only authority: a non-owner must not republish the cycle with its own
-        # trigger, which would make the status disagree with the owner and fence the
-        # live collector out. (No owner ref means a pre-contract dispatch.)
-        owner = latest_collector_owner(repository, token, pr_number, head_sha, generation_id)
-        if owner is not None:
-            state_now, cycle_now, _error = read_cycle(repository, token, pr_number, head_sha)
-            if state_now == "present" and cycle_now is not None:
-                return cycle_now
-            return ReviewCycle(
-                pr_number=pr_number,
-                head_sha=head_sha,
-                state="WAITING_FOR_REVIEWER",
-                provider_id="",
-                trigger_id=owner.orchestrator_run_id,
-                started_at=datetime.now(UTC).strftime("%Y-%m-%dT%H:%M:%SZ"),
-                config_digest=digest,
-                generation_id=generation_id,
-            )
-    else:
-        election = elect_collector_owner(repository, token, pr_number, head_sha, generation_id, run_id)
-        if not election.won:
-            state_now, cycle_now, _error = read_cycle(repository, token, pr_number, head_sha)
-            if state_now == "present" and cycle_now is not None:
-                return cycle_now
-            return ReviewCycle(
-                pr_number=pr_number,
-                head_sha=head_sha,
-                state="WAITING_FOR_REVIEWER",
-                provider_id="",
-                trigger_id=election.owner_run_id,
-                started_at=datetime.now(UTC).strftime("%Y-%m-%dT%H:%M:%SZ"),
-                config_digest=digest,
-                generation_id=generation_id,
-            )
-
-    # Persist the dispatch identity and liveness timestamp *before* dispatch, as
-    # the elected owner only. If this process dies after the claim, the next
-    # reconciliation finds this owner's ended run and no collector, and elects a
-    # replacement epoch; a timeout alone never does.
+    # Persist the dispatch identity and liveness timestamp *before* dispatch.
+    # This status is the durable idempotency record: if GitHub accepts the
+    # workflow dispatch and this process dies immediately afterwards, the next
+    # reconciliation observes a dispatched cycle and checks correlated collector
+    # runs instead of blindly issuing a duplicate dispatch. If dispatch itself
+    # never produces a run, the bounded liveness grace permits one recovery.
+    #
+    # The cycle status is correlation data only. Which run may dispatch, start
+    # and publish for this cycle is decided solely by the create-only owner ref
+    # elected inside ``dispatch_collector``; nothing reads this record's
+    # ``trigger_id`` as ownership.
     cycle = ReviewCycle(
         pr_number=pr_number,
         head_sha=head_sha,
@@ -1794,8 +1750,8 @@ def ensure_collector(
         generation_id=generation_id,
     )
     publish_cycle(repository, token, head_sha, cycle=cycle)
-    if election is not None:
-        dispatch_collector(repository, token, pr_number, head_sha, generation_id, election)
+    if liveness not in {"active", "completed"}:
+        dispatch_collector(repository, token, pr_number, head_sha, generation_id)
     return cycle
 
 

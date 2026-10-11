@@ -42,7 +42,6 @@ import traceback
 from datetime import UTC, datetime, timedelta
 from multiprocessing.connection import Connection
 from pathlib import Path
-from types import SimpleNamespace
 from typing import Any
 
 #: The exact candidate files each scenario reads or imports. Recorded so the
@@ -78,21 +77,6 @@ def _import_candidate(candidate_root: Path, module_name: str) -> Any:
     if scripts_dir not in sys.path:
         sys.path.insert(0, scripts_dir)
     return importlib.import_module(module_name)
-
-
-def _stub_winning_election(orchestrator: Any, run_id: int) -> None:
-    """Scenario replays measure dispatch *gating*, not GitHub's ref arbitration.
-
-    Candidate ownership election is proven by the adversarial election tests
-    against a stateful create-only ref model. Here every contender is stipulated
-    the winner so a scenario counts only the dispatches the gating permits. A
-    candidate that predates ownership election simply never calls the stub.
-    """
-
-    orchestrator.elect_collector_owner = lambda *_a: SimpleNamespace(
-        won=True, epoch=0, nonce="0" * 64, owner_run_id=run_id
-    )
-    orchestrator.latest_collector_owner = lambda *_a: None
 
 
 #: Trusted upper bound on how long a pending cycle may stay open while its
@@ -172,7 +156,6 @@ def scenario_a(candidate_root: Path, fixture: dict[str, Any]) -> dict[str, Any]:
     orchestrator.current_run_id = lambda: run_id
     orchestrator.publish_cycle = lambda *_a, cycle: state["published"].append(cycle)
     orchestrator.dispatch_collector = lambda *_a: state.__setitem__("dispatches", state["dispatches"] + 1)
-    _stub_winning_election(orchestrator, run_id)
     # The straddle probes are the nominal-boundary case, so the correlated
     # collector has already completed and the declared budget alone decides the
     # transition. Stubbing it "active" here would demand that a still-running
@@ -349,7 +332,6 @@ def scenario_b(candidate_root: Path, fixture: dict[str, Any]) -> dict[str, Any]:
             state["runs"].append(head)
 
     orchestrator.dispatch_collector = fake_dispatch_collector
-    _stub_winning_election(orchestrator, run_id)
 
     #: Real liveness evidence, derived from the runs this scenario's own
     #: dispatch hook created. Nothing here is substituted for the durable

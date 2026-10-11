@@ -15,8 +15,6 @@ import sys
 import hunter_review_orchestrator as orchestrator
 import pytest
 
-pytestmark = pytest.mark.usefixtures("winning_election")
-
 HEAD = "a" * 40
 MIGRATION_REPOSITORY = "fafa33/Project-Hunter"
 MIGRATION_PR = 535

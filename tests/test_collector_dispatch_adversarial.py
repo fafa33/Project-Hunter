@@ -61,10 +61,16 @@ def test_simultaneous_reconciles_with_different_nonces_authorize_exactly_one_dis
     github.add_orchestrator_run(101)
     github.add_orchestrator_run(102)
     github.ref_gate = threading.Barrier(2)  # both contenders reach the ref write together
+    # GitHub's combined-status read is not read-your-write consistent (PR #535): both
+    # contenders see no cycle, so the status cannot arbitrate -- only the ref can.
     nonces = iter(["1" * 64, "2" * 64])
     nonce_lock = threading.Lock()
 
-    def distinct_nonce(_n):
+    real_token_hex = orchestrator.secrets.token_hex
+
+    def distinct_nonce(nbytes):
+        if nbytes != 32:  # only the dispatch capability is forced distinct
+            return real_token_hex(nbytes)
         with nonce_lock:
             return next(nonces)
 
@@ -74,18 +80,25 @@ def test_simultaneous_reconciles_with_different_nonces_authorize_exactly_one_dis
         local.run_id = run_id
         return orchestrator.ensure_collector(REPO, "token", PR, HEAD, GEN)
 
-    with ThreadPoolExecutor(max_workers=2) as pool:
+    with monkeypatch.context() as stale, ThreadPoolExecutor(max_workers=2) as pool:
+        stale.setattr(orchestrator, "read_cycle", lambda *_a: ("absent", None, None))
         results = list(pool.map(contender, (101, 102)))
+    github.ref_gate = None
 
     assert len(github.dispatches) == 1
     assert len(github.proofs()) == 1
     assert github.owner_epochs() == [0]
     assert len(github.collector_runs()) == 1
-    # The loser published no independent record: the one cycle is the winner's.
-    winner = github.cycle.trigger_id
-    assert winner in {101, 102}
-    assert {r.trigger_id for r in results if r is not None} <= {winner}
-    assert github.cycle_publications == 1
+    # The cycle status is correlation data, so a loser may have written it last.
+    # Authority is the owner ref alone: the single winner's collector still starts
+    # and is published, whichever contender's status record happens to be newest.
+    winner = github.owner_run_ids()[0]
+    assert winner in {101, 102} and all(r is not None for r in results)
+    run, proof, epoch = capability(github)
+    start_collector(github, run, proof, epoch)
+    github.finish(winner, "success")
+    github.finish(run, "success")
+    assert orchestrator.publish_trusted_collector_completion(REPO, "token", run, proof).startswith("PUBLISHED")
 
 
 def test_same_contender_reconciling_twice_never_dispatches_twice(env):
@@ -108,6 +121,7 @@ def test_winner_crash_before_proof_publication_is_recovered_once(env):
     reconcile(github, local, 102)
     assert not github.dispatches
     github.finish(101)  # process death observed by the Actions API
+    recover_ready(github)
     reconcile(github, local, 102)
     assert github.owner_epochs() == [0, 1]
     assert len(github.dispatches) == 1
@@ -164,6 +178,7 @@ def test_ambiguous_dispatch_that_was_lost_is_replaced_only_after_owner_ends(env)
     reconcile(github, local, 102)
     assert not github.dispatches  # owner 101 not yet proven ended
     github.finish(101)
+    recover_ready(github)
     reconcile(github, local, 102)
     assert len(github.dispatches) == 1 and github.owner_epochs() == [0, 1]
 
@@ -485,23 +500,35 @@ def test_untrusted_lookalike_run_neither_starts_nor_blocks_the_legitimate_collec
     assert orchestrator.publish_trusted_collector_completion(REPO, "token", run, proof).startswith("PUBLISHED")
 
 
-def test_stale_status_read_never_lets_a_non_owner_republish_the_cycle(env, monkeypatch):
-    """A second reconcile that sees the live collector but a stale (absent) status
-    read must not overwrite the cycle's trigger with its own run: the owner ref is
-    the single authority and the start gate and completion both compare against it."""
+def test_cycle_status_written_by_a_non_owner_never_changes_authority(env, monkeypatch):
+    """A reconcile working from a stale (absent) status read republishes the cycle
+    with its own run as trigger. The status is correlation data only: the live
+    owner's collector still starts and its completion is still published, and the
+    non-owner dispatches nothing."""
     github, local = env
     reconcile(github, local, 101)
     run, proof, epoch = capability(github)
-    publications = github.cycle_publications
     with monkeypatch.context() as stale:
-        stale.setattr(orchestrator, "read_cycle", lambda *_a: ("absent", None, None))  # stale status read
+        stale.setattr(orchestrator, "read_cycle", lambda *_a: ("absent", None, None))
         reconcile(github, local, 102)
-    assert github.cycle_publications == publications
-    assert github.cycle.trigger_id == 101
-    start_collector(github, run, proof, epoch)
+    assert github.cycle.trigger_id == 102  # status now names the non-owner...
+    assert len(github.dispatches) == 1 and github.owner_epochs() == [0]
+    start_collector(github, run, proof, epoch)  # ...but authority is the owner ref
     github.finish(101, "success")
     github.finish(run, "success")
     assert orchestrator.publish_trusted_collector_completion(REPO, "token", run, proof).startswith("PUBLISHED")
+
+
+def test_collector_whose_owner_run_is_not_trusted_governance_is_rejected(env):
+    github, local = env
+    reconcile(github, local, 101)
+    run, proof, epoch = capability(github)
+    github.runs[101]["path"] = ".github/workflows/candidate.yml"
+    with pytest.raises(ValueError):
+        start_collector(github, run, proof, epoch)
+    github.finish(101, "success")
+    github.finish(run, "success")
+    assert orchestrator.publish_trusted_collector_completion(REPO, "token", run, proof).startswith("SKIPPED")
 
 
 def _finished_current_owner(github, local):

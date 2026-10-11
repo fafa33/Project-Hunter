@@ -2013,16 +2013,8 @@ def verify_trusted_dispatch_before_work(
     state, cycle, _ = orchestration.read_cycle(repository, token, pr_number, head_sha)
     if state != "present" or cycle is None or cycle.state not in orchestration.OPEN_CYCLE_STATES:
         raise ValueError("collector dispatch lacks authorized open cycle")
-    if cycle.generation_id != generation or not cycle.trigger_id or cycle.trigger_id == run_id:
-        raise ValueError("collector dispatch generation or origin mismatch")
-    origin = orchestration.request_json(repository, token, "GET", f"actions/runs/{cycle.trigger_id}")
-    if not isinstance(origin, dict) or not (
-        origin.get("id") == cycle.trigger_id
-        and origin.get("head_branch") == branch
-        and origin.get("path") == ".github/workflows/hunter-governance-reconcile.yml"
-        and origin.get("event") in {"push", "workflow_run", "pull_request_target", "schedule", "repository_dispatch"}
-    ):
-        raise ValueError("collector dispatch origin is not trusted governance")
+    if cycle.generation_id != generation:
+        raise ValueError("collector dispatch generation mismatch")
     # Ownership is arbitrated only by the create-only owner ref of the elected
     # epoch. The run must hold the newest epoch's capability; a replaced owner, a
     # replayed capability and a cross-generation capability all fail here, before
@@ -2032,8 +2024,16 @@ def verify_trusted_dispatch_before_work(
     holder = next((owner for owner in chain if owner.nonce_sha256 == digest), None)
     if holder is None or chain[-1] != holder or str(holder.epoch) != epoch:
         raise ValueError("collector capability is not the current elected epoch")
-    if cycle.trigger_id != holder.orchestrator_run_id:
-        raise ValueError("collector cycle trigger disagrees with the elected owner")
+    if holder.orchestrator_run_id == run_id:
+        raise ValueError("collector run cannot be its own dispatching orchestrator")
+    origin = orchestration.request_json(repository, token, "GET", f"actions/runs/{holder.orchestrator_run_id}")
+    if not isinstance(origin, dict) or not (
+        origin.get("id") == holder.orchestrator_run_id
+        and origin.get("head_branch") == branch
+        and origin.get("path") == ".github/workflows/hunter-governance-reconcile.yml"
+        and origin.get("event") in {"push", "workflow_run", "pull_request_target", "schedule", "repository_dispatch"}
+    ):
+        raise ValueError("collector dispatch origin is not trusted governance")
     description = orchestration.dispatch_proof_description(generation, holder.epoch, proof)
     matches = [
         status

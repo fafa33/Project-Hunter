@@ -25,8 +25,6 @@ CLAIMS = "d" * 64
 GENERATION = "0123456789abcdef"
 OTHER_GENERATION = "fedcba9876543210"
 
-pytestmark = pytest.mark.usefixtures("winning_election")
-
 
 def make_cycle(**overrides):
     values = {

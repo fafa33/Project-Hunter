@@ -16,11 +16,6 @@ import yaml
 HEAD = "a" * 40
 REPOSITORY_ROOT = pathlib.Path(orchestrator.__file__).resolve().parents[1]
 
-pytestmark = pytest.mark.usefixtures("winning_election")
-
-# The real election, captured before the gating-suite stub is applied.
-_REAL_ELECTION = orchestrator.elect_collector_owner
-
 
 def _five_minutes_ago():
     from datetime import UTC, datetime, timedelta
@@ -188,7 +183,6 @@ def test_two_genuinely_simultaneous_reconciles_elect_one_dispatcher(monkeypatch)
 
     github = fake_gh.FakeGitHub()
     local = fake_gh.install(monkeypatch, github)
-    monkeypatch.setattr(orchestrator, "elect_collector_owner", _REAL_ELECTION)
     github.add_orchestrator_run(101)
     github.add_orchestrator_run(102)
     github.ref_gate = threading.Barrier(2)
@@ -198,6 +192,8 @@ def test_two_genuinely_simultaneous_reconciles_elect_one_dispatcher(monkeypatch)
         local.run_id = run_id
         return orchestrator.ensure_collector("owner/repo", "token", 472, HEAD)
 
+    # Neither contender can see the other's cycle status (stale combined-status read).
+    monkeypatch.setattr(orchestrator, "read_cycle", lambda *_a: ("absent", None, None))
     with ThreadPoolExecutor(max_workers=2) as pool:
         list(pool.map(contender, (101, 102)))
 
@@ -709,7 +705,6 @@ def test_dispatch_collector_sends_only_exact_identity(monkeypatch):
 
     github = fake_gh.FakeGitHub()
     github.add_orchestrator_run(123)
-    monkeypatch.setattr(orchestrator, "elect_collector_owner", _REAL_ELECTION)
     monkeypatch.setattr(orchestrator, "request_json", github.request_json)
     monkeypatch.setenv("GITHUB_RUN_ID", "123")
 

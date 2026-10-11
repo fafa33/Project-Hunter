@@ -94,6 +94,13 @@ class FakeGitHub:
             if ref.startswith(orchestrator.OWNER_REF_PREFIX)
         )
 
+    def owner_run_ids(self) -> list[int]:
+        return [
+            json.loads(self.tags[sha]["message"])["orchestrator_run"]
+            for ref, sha in sorted(self.refs.items())
+            if ref.startswith(orchestrator.OWNER_REF_PREFIX)
+        ]
+
     def proofs(self) -> list[dict[str, Any]]:
         return [s for s in self.statuses if s["context"].startswith(orchestrator.DISPATCH_PROOF_CONTEXT_PREFIX)]
 
