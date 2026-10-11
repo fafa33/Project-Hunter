@@ -91,7 +91,10 @@ def test_progress_is_durable_fair_and_a_processed_run_leaves_the_queue(env):
     staged = {pr: stage(github, local, pr, orchestrator_run=100 + pr) for pr in range(472, 479)}
     runs = {pr: run for pr, (run, _) in staged.items()}
     # Fresh calls, no carried state: the same durable state gives the same answer.
-    assert sweep(limit=2, rotation=0) == sweep(limit=2, rotation=0)
+    first_sweep = sweep(limit=2, rotation=0)
+    second_sweep = sweep(limit=2, rotation=0)
+    assert second_sweep == first_sweep
+    assert first_sweep  # non-vacuous: there is real outstanding work to repeat
     # Bounded per sweep, yet rotation reaches every outstanding run.
     seen = set()
     for rotation in range(len(runs)):
