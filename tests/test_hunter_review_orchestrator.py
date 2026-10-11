@@ -1733,9 +1733,12 @@ def test_collector_completion_accepts_trusted_ancestor_of_current_main(monkeypat
             return {"default_branch": "main"}
         if path == "commits/main":
             return {"sha": current_main}
+        if path.startswith("git/ref/"):  # no owner refs: a cycle that predates ownership election
+            raise transport.GitHubRequestError("not found", category="permanent", status_code=404)
         if path == "actions/runs/777":
             return {
                 "id": 777,
+                "display_title": f"Hunter Reviewer Collector PR 472 HEAD {HEAD}",
                 "head_branch": "main",
                 "head_sha": old_main,
                 "path": ".github/workflows/hunter-reviewer-collector.yml",

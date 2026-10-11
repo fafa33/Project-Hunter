@@ -665,3 +665,68 @@ def test_reconcile_bounds_each_artifact_download_by_the_remaining_recovery_deadl
     assert len(downloads) == 2
     assert all(line.strip().startswith('timeout "${dl_limit}s" gh run download') for line in downloads)
     assert "budget=$((recovery_deadline - SECONDS))" in text
+
+
+def _replacement_lands(github, epoch=1):
+    """A recovery claims the next epoch after the producer's last owner check."""
+    record = {
+        "v": 1,
+        "kind": "owner",
+        "pr": PR,
+        "head": HEAD,
+        "generation": GEN,
+        "epoch": epoch,
+        "orchestrator_run": 102,
+        "nonce_sha256": "9" * 64,
+        "claimed_at": "2026-10-10T10:00:05Z",
+    }
+    orchestrator._create_claim(REPO, "token", orchestrator.collector_owner_ref(PR, HEAD, GEN, epoch), record)
+
+
+def test_completion_status_is_consumed_only_for_the_current_epoch(env):
+    """Copilot (high): a status written for a run that a newer epoch then fenced must
+    not be accepted when consumed, so the producer's last check need not be airtight."""
+    github, local = env
+    reconcile(github, local, 101)
+    run, proof, epoch = capability(github)
+    start_collector(github, run, proof, epoch)
+    github.finish(101, "success")
+    github.finish(run, "success")
+    orchestrator.publish_collector_completion(REPO, "token", PR, HEAD, run)
+    assert orchestrator.read_collector_completion(REPO, "token", PR, HEAD) == ("present", run, None)
+    _replacement_lands(github)  # lands after the status was written
+    state, accepted, error = orchestrator.read_collector_completion(REPO, "token", PR, HEAD)
+    assert (state, accepted) == ("absent", None)
+
+
+def test_exhausted_pool_finalization_is_fenced_by_a_newer_epoch(env):
+    github, local = env
+    reconcile(github, local, 101)
+    run, proof, epoch = capability(github)
+    start_collector(github, run, proof, epoch)
+    github.finish(101, "success")
+    github.finish(run, "success")
+    _replacement_lands(github)
+    outcome = orchestrator.finalize_exhausted_pool(
+        REPO, "token", PR, HEAD, run, pathlib_missing(), trusted_completion=True, expected_attempt=1
+    )
+    assert outcome == "SKIPPED: collector run is fenced by a newer owner"
+
+
+def pathlib_missing():
+    import pathlib
+
+    return pathlib.Path("/nonexistent/reviewer-results.json")
+
+
+def test_unreadable_epoch_evidence_rejects_the_completion_status(env):
+    github, local = env
+    reconcile(github, local, 101)
+    run, proof, epoch = capability(github)
+    start_collector(github, run, proof, epoch)
+    github.finish(101, "success")
+    github.finish(run, "success")
+    orchestrator.publish_collector_completion(REPO, "token", PR, HEAD, run)
+    github.fail["GET git/ref/*"] = transport.GitHubRequestError("down", category="transient", status_code=500)
+    state, accepted, error = orchestrator.read_collector_completion(REPO, "token", PR, HEAD)
+    assert (state, accepted) == ("absent", None) and error

@@ -946,6 +946,35 @@ def require_current_collector_authority(
     return holder
 
 
+_COLLECTOR_RUN_TITLE = re.compile(r"Hunter Reviewer Collector PR ([1-9][0-9]*) HEAD ([0-9a-f]{40})(?: GEN ([^\s]+))?")
+
+
+def collector_run_is_current(repository: str, token: str, pr_number: int, head_sha: str, run: dict[str, Any]) -> bool:
+    """Whether ``run`` still belongs to the newest elected epoch of its cycle.
+
+    Completion evidence is consumed here as well as produced, so a run that a later
+    epoch fenced after its status was written is not accepted. The run's epoch is
+    found through the create-only run claim it holds (run id and attempt), never
+    through its title or a status. No owner refs at all means the cycle predates
+    ownership election, which has nothing to fence. Unreadable evidence raises.
+    """
+    match = _COLLECTOR_RUN_TITLE.fullmatch(_run_title(run))
+    if match is None or int(match.group(1)) != pr_number or match.group(2) != head_sha:
+        return False
+    generation = match.group(3) or BASE_GENERATION_ID
+    chain = read_owner_chain(repository, token, pr_number, head_sha, generation)
+    if not chain:
+        return True
+    attempt, run_id = int(run.get("run_attempt") or 0), run.get("id")
+    for owner in chain:
+        claim = _read_claim(
+            repository, token, collector_run_claim_ref(pr_number, head_sha, generation, owner.epoch, attempt)
+        )
+        if claim is not None and claim.get("kind") == "run" and claim.get("run_id") == run_id:
+            return owner == chain[-1]
+    return False
+
+
 def claim_collector_run(
     repository: str,
     token: str,
@@ -1037,6 +1066,7 @@ def read_collector_completion(
                 and run.get("event") == "repository_dispatch"
                 and run.get("status") == "completed"
                 and run.get("conclusion") == "success"
+                and collector_run_is_current(repository, token, pr_number, head_sha, run)
             ):
                 candidates.append(run_id)
         return ("present", max(candidates), None) if candidates else ("absent", None, None)
@@ -1572,6 +1602,14 @@ def finalize_exhausted_pool(
         return "SKIPPED: exact head is not a full SHA"
     if not trusted_completion and current_run_id() != run_id:
         return "SKIPPED: the completing run is not this process's run"
+    if trusted_completion:
+        # Exhausted-pool finalization is completion evidence too: a run fenced by a
+        # newer epoch must not end the opportunity.
+        finished = request_json(repository, token, "GET", f"actions/runs/{run_id}")
+        if not isinstance(finished, dict) or not collector_run_is_current(
+            repository, token, pr_number, head_sha, finished
+        ):
+            return "SKIPPED: collector run is fenced by a newer owner"
     receipt, unreadable = read_collector_receipt(results_path)
     if receipt is None:
         return f"SKIPPED: {unreadable}"
