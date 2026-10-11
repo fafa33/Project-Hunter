@@ -211,10 +211,10 @@ class FakeGitHub:
         if method == "GET" and path.startswith("pulls?"):
             query = dict(part.split("=") for part in path.split("?", 1)[1].split("&"))
             size, page = int(query.get("per_page", 30)), int(query.get("page", 1))
-            ordered = sorted(self.open_prs.items())
+            listed = sorted(self.open_prs.items())
             return [
                 {"number": num, "head": {"sha": head}, "base": {"ref": self.pr_bases.get(num, "main")}}
-                for num, head in ordered[(page - 1) * size : page * size]
+                for num, head in listed[(page - 1) * size : page * size]
             ]
         if method == "GET" and path.startswith("pulls/"):
             number = int(path.split("/")[1])
