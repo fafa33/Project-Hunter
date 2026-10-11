@@ -47,6 +47,8 @@ MAX_COLLECTOR_DISPATCHES = 3
 COLLECTOR_LIVENESS_GRACE_SECONDS = 180
 #: A completion publisher that claimed the run but never wrote the status is taken over after this long.
 COMPLETION_CLAIM_STALE_SECONDS = 120
+#: Bounded recovery of a publisher that died after claiming; beyond it the run stays unpublished.
+COMPLETION_MAX_TAKEOVERS = 3
 #: A correlated collector that is genuinely queued or in progress must not be
 #: finalized as timed out merely because the nominal opportunity budget expired.
 #: That budget starts at dispatch, so GitHub's queue delay is spent out of it while
@@ -539,6 +541,103 @@ def read_cycle(
     return "absent", None, None
 
 
+def collector_completion_takeover_ref(
+    pr_number: int, head_sha: str, generation: str, run_id: int, takeover: int
+) -> str:
+    """Create-only claim of the ``takeover``-th recovery of a stale completion claim.
+
+    Takeover 0 is the original first-publication claim; its name is unchanged.
+    """
+    if takeover == 0:
+        return collector_completion_claim_ref(pr_number, head_sha, generation, run_id)
+    digest = hashlib.sha256(f"{pr_number}:{head_sha}:{generation}:{run_id}:completion".encode()).hexdigest()
+    return f"tags/hunter-collector-completion/{digest}-t{takeover}"
+
+
+def _completion_record(pr_number: int, head_sha: str, generation: str, run_id: int, takeover: int) -> dict[str, Any]:
+    return {
+        "v": CLAIM_RECORD_VERSION,
+        "kind": "completion",
+        "pr": pr_number,
+        "head": head_sha,
+        "generation": generation,
+        "run_id": run_id,
+        "takeover": takeover,
+        "claimed_at": datetime.now(UTC).strftime("%Y-%m-%dT%H:%M:%SZ"),
+        "start": secrets.token_hex(16),
+    }
+
+
+def _read_completion_claim(
+    repository: str, token: str, pr_number: int, head_sha: str, generation: str, run_id: int, takeover: int
+) -> dict[str, Any] | None:
+    record = _read_claim(
+        repository, token, collector_completion_takeover_ref(pr_number, head_sha, generation, run_id, takeover)
+    )
+    if record is None:
+        return None
+    if (
+        record.get("kind") != "completion"
+        or record.get("pr") != pr_number
+        or record.get("head") != head_sha
+        or record.get("generation") != generation
+        or record.get("run_id") != run_id
+        or record.get("takeover", 0) != takeover
+        or not isinstance(record.get("start"), str)
+        or not isinstance(record.get("claimed_at"), str)
+    ):
+        raise ValueError("collector completion claim does not match its identity")
+    return record
+
+
+def claim_completion_publication(
+    repository: str, token: str, pr_number: int, head_sha: str, generation: str, run_id: int
+) -> tuple[str | None, dict[str, Any] | None]:
+    """Acquire the single right to publish one run's completion status.
+
+    The first publisher wins the original create-only claim. If its holder dies,
+    the claim goes stale after ``COMPLETION_CLAIM_STALE_SECONDS`` and may be
+    taken over -- but only through the *next* create-only claim in a bounded
+    chain, never by acting on the stale record itself, so any number of
+    simultaneous recoverers produce exactly one winner. A takeover also requires
+    the previous claim to be stale and the completion status to still be absent.
+    A claim with an unparseable time is never stale. Past the last takeover the
+    run is left unpublished (fail closed) rather than risk a duplicate.
+    Returns ``(refusal, None)`` or ``(None, winning_record)``; evidence errors raise.
+    """
+    for takeover in range(COMPLETION_MAX_TAKEOVERS + 1):
+        record = _completion_record(pr_number, head_sha, generation, run_id, takeover)
+        ref = collector_completion_takeover_ref(pr_number, head_sha, generation, run_id, takeover)
+        if takeover > 0:
+            previous = _read_completion_claim(repository, token, pr_number, head_sha, generation, run_id, takeover - 1)
+            if previous is None or not _older_than(str(previous["claimed_at"]), COMPLETION_CLAIM_STALE_SECONDS):
+                return "SKIPPED: collector completion publication already claimed", None
+            published, _published_run, read_error = read_collector_completion(repository, token, pr_number, head_sha)
+            if read_error or published != "absent":
+                return "SKIPPED: collector completion publication already claimed", None
+        if _create_claim(repository, token, ref, record):
+            return None, record
+        held = _read_completion_claim(repository, token, pr_number, head_sha, generation, run_id, takeover)
+        if held is None:
+            raise ValueError("collector completion claim could not be confirmed")
+        if not _older_than(str(held["claimed_at"]), COMPLETION_CLAIM_STALE_SECONDS):
+            return "SKIPPED: collector completion publication already claimed", None
+    return "SKIPPED: collector completion claim takeovers exhausted", None
+
+
+def completion_claim_is_current(
+    repository: str, token: str, pr_number: int, head_sha: str, generation: str, run_id: int, claim: dict[str, Any]
+) -> bool:
+    """True only while ``claim`` is still the newest claim of the chain."""
+    takeover = int(claim.get("takeover", 0))
+    if takeover < COMPLETION_MAX_TAKEOVERS:
+        newer = _read_completion_claim(repository, token, pr_number, head_sha, generation, run_id, takeover + 1)
+        if newer is not None:
+            return False
+    held = _read_completion_claim(repository, token, pr_number, head_sha, generation, run_id, takeover)
+    return held is not None and held.get("start") == claim.get("start")
+
+
 def publish_collector_completion(repository: str, token: str, pr_number: int, head_sha: str, run_id: int) -> None:
     server = os.environ.get("GITHUB_SERVER_URL") or "https://github.com"
     request_json(
@@ -643,28 +742,22 @@ def publish_trusted_collector_completion(repository: str, token: str, run_id: in
         return "SKIPPED: collector completion already published"
     if published != "absent":
         return "SKIPPED: collector completion evidence unavailable"
-    completion_ref = collector_completion_claim_ref(pr_number, head_sha, cycle.generation_id, run_id)
-    record = {
-        "v": CLAIM_RECORD_VERSION,
-        "kind": "completion",
-        "pr": pr_number,
-        "head": head_sha,
-        "generation": cycle.generation_id,
-        "run_id": run_id,
-        "claimed_at": datetime.now(UTC).strftime("%Y-%m-%dT%H:%M:%SZ"),
-        "start": secrets.token_hex(16),
-    }
-    if not _create_claim(repository, token, completion_ref, record):
-        # The claim makes publication single-writer, but a publisher that died between the claim
-        # and the status write must not strand the run forever (and hold a recovery slot). The
-        # status carries one identity, so a takeover after the grace window is harmless.
-        held = _read_claim(repository, token, completion_ref)
-        claimed_at = str((held or {}).get("claimed_at") or "")
-        if held is None or not _older_than(claimed_at, COMPLETION_CLAIM_STALE_SECONDS):
-            return "SKIPPED: collector completion publication already claimed"
-        published, published_run, read_error = read_collector_completion(repository, token, pr_number, head_sha)
-        if read_error or published != "absent":
-            return "SKIPPED: collector completion publication already claimed"
+    try:
+        refusal, claim = claim_completion_publication(
+            repository, token, pr_number, head_sha, cycle.generation_id, run_id
+        )
+    except (transport.GitHubRequestError, ValueError):
+        # Unreadable or ambiguous claim evidence is never ownership.
+        return "SKIPPED: collector completion claim evidence unavailable"
+    if refusal is not None or claim is None:
+        return refusal or "SKIPPED: collector completion publication already claimed"
+    # Fence immediately before the status write: a publisher superseded by a
+    # takeover (or whose claim can no longer be confirmed) writes nothing.
+    try:
+        if not completion_claim_is_current(repository, token, pr_number, head_sha, cycle.generation_id, run_id, claim):
+            return "SKIPPED: collector completion claim was superseded before publication"
+    except (transport.GitHubRequestError, ValueError):
+        return "SKIPPED: collector completion claim evidence unavailable"
     publish_collector_completion(repository, token, pr_number, head_sha, run_id)
     return f"PUBLISHED: collector completion PR #{pr_number} at {head_sha[:12]}"
 
