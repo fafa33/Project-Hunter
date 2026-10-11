@@ -710,7 +710,7 @@ def reviewer_identity_map(pool: dict[str, Any]) -> dict[str, str]:
     return identities
 
 
-def trusted_collector_run(repository: str, token: str, trigger: dict[str, Any]) -> bool:
+def trusted_collector_run(repository: str, token: str, trigger: dict[str, Any], pr_number: int) -> bool:
     """Require reviewer trigger identity to originate from Hunter's trusted collector workflow."""
     from hunter_reviewer_collector import WORKFLOW, _run_on_default_branch_history, valid_run
 
@@ -737,7 +737,14 @@ def trusted_collector_run(repository: str, token: str, trigger: dict[str, Any]) 
         # attempt. Unreadable or missing evidence is refused.
         import hunter_review_orchestrator as orchestration
 
-        orchestration.collector_run_authority(repository, token, run, head_sha=str(trigger.get("head_sha") or ""))
+        orchestration.collector_run_authority(
+            repository,
+            token,
+            run,
+            pr_number=pr_number,
+            head_sha=str(trigger.get("head_sha") or ""),
+            generation=str(trigger.get("remediation_generation_id") or orchestration.BASE_GENERATION_ID),
+        )
         return True
     except Exception:
         return False
@@ -835,7 +842,7 @@ def read_pr_pool_review_comments(
                     trigger.get(k) != result.get(k)
                     for k in ("head_sha", "claims_id", "reviewer_agent", "collector_run_id")
                 )
-                or not trusted_collector_run(repository, token, trigger)
+                or not trusted_collector_run(repository, token, trigger, pr_number)
             ):
                 continue
             trusted_results[
@@ -864,7 +871,7 @@ def read_pr_pool_review_comments(
             if (
                 trigger is not None
                 and trigger.get("reviewer_agent") == "codex"
-                and trusted_collector_run(repository, token, trigger)
+                and trusted_collector_run(repository, token, trigger, pr_number)
             ):
                 native_triggers.append((str(comment.get("created_at") or ""), trigger))
         for review_item in reviews:

@@ -2404,7 +2404,7 @@
         "tests/test_exact_head_review_authority.py::test_review_authority_state_waits_while_a_committed_review_request_is_unadopted",
         "tests/test_review_orchestrator_collector_finalization.py::test_collector_completion_without_any_wake_up_ends_the_open_cycle",
         "tests/test_review_orchestrator_collector_finalization.py::test_the_collector_workflow_runs_collector_complete_in_its_own_working_directory",
-        "tests/test_review_orchestrator_collector_finalization.py::test_a_collector_run_may_assert_only_the_unavailable_terminal_state"
+        "tests/test_review_orchestrator_collector_finalization.py::test_a_status_citing_a_collector_run_is_never_a_terminal_state"
       ],
       "lifecycle": "regression-tested",
       "sources": [

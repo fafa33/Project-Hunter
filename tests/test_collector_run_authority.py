@@ -99,7 +99,7 @@ def consumers(github, monkeypatch, run_id, *, head=HEAD):
         "collector_run_attempt": github.runs[run_id]["run_attempt"],
         "head_sha": head,
     }
-    results["trusted_collector_run"] = governance.trusted_collector_run(REPO, "token", trigger)
+    results["trusted_collector_run"] = governance.trusted_collector_run(REPO, "token", trigger, PR)
     return results
 
 
@@ -221,7 +221,7 @@ def test_unavailable_authority_evidence_fails_closed(env, monkeypatch, needle):
     with pytest.raises((transport.GitHubRequestError, orchestrator.CollectorAuthorityError, ValueError)):
         authority(github, run)
     trigger = {"collector_run_id": run, "collector_run_attempt": 1, "head_sha": HEAD}
-    assert governance.trusted_collector_run(REPO, "token", trigger) is False
+    assert governance.trusted_collector_run(REPO, "token", trigger, PR) is False
 
 
 # --- recovery (owner_attempt_failed) -------------------------------------------------
@@ -320,3 +320,18 @@ def test_concurrent_recovery_elects_exactly_one_owner_despite_a_spoofed_success(
         list(pool.map(contender, (102, 103)))
     assert github.owner_epochs() == [0, 1]
     assert len(github.dispatches) == 2
+
+
+def test_a_run_authorized_for_one_pull_request_is_not_trusted_for_another(env, monkeypatch):
+    """The reader binds the run to the exact PR it is consumed for, not only to the head."""
+    github, local = env
+    run, _proof, _epoch = authorized(github, local)
+    trigger = {
+        "collector_run_id": run,
+        "collector_run_attempt": github.runs[run]["run_attempt"],
+        "head_sha": HEAD,
+        "remediation_generation_id": GEN,
+    }
+    monkeypatch.setattr(collector, "GitHubBackend", lambda *_a: type("B", (), {"head": lambda self: HEAD})())
+    assert governance.trusted_collector_run(REPO, "token", trigger, PR) is True
+    assert governance.trusted_collector_run(REPO, "token", trigger, PR + 1) is False

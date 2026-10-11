@@ -1990,16 +1990,11 @@ def verify_trusted_dispatch_before_work(
 ) -> None:
     """Fail closed before any reviewer invocation or privileged side effect.
 
-    The collector is invoked from two trusted entry points:
-    - `repository_dispatch`: must present an orchestrator-issued, exact-cycle dispatch
-      capability (single-use, bound to this run). This is the privileged path.
-    - `pull_request_target`: GitHub resolves the workflow from the base branch, so
-      the definition is trusted and no dispatch capability is required.
-
-    Any other event identity fails closed.
+    The collector has exactly one entry point, `repository_dispatch`, and it must present an
+    orchestrator-issued, exact-cycle dispatch capability (single-use, bound to this run).
+    Every other event identity -- including the retired `pull_request_target` and
+    `workflow_dispatch` entry points -- fails closed.
     """
-    if event == "pull_request_target":
-        return
     if event != "repository_dispatch":
         raise ValueError("collector invoked from an untrusted event")
     if not re.fullmatch(r"[0-9a-f]{64}", proof):

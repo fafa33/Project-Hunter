@@ -406,13 +406,32 @@ def _status_world(
     monkeypatch.setattr(orchestrator, "request_json", fake)
 
 
-def test_a_collector_run_may_assert_only_the_unavailable_terminal_state(monkeypatch):
-    _status_world(monkeypatch, state="REVIEWER_UNAVAILABLE", run_path=orchestrator.COLLECTOR_WORKFLOW_PATH)
-    state, cycle, _ = orchestrator.read_cycle(REPOSITORY, "token", PR, HEAD)
-    assert state == "present" and cycle is not None and cycle.state == "REVIEWER_UNAVAILABLE"
+def test_a_status_citing_a_collector_run_is_never_a_terminal_state(monkeypatch):
+    """The collector holds no status write under the current contract, and a pre-migration run that
+    still carries the old grant has no owner, binding or claim: neither can end a cycle."""
+
+    for event in ("workflow_dispatch", "repository_dispatch"):
+        _status_world(
+            monkeypatch,
+            state="REVIEWER_UNAVAILABLE",
+            run_path=orchestrator.COLLECTOR_WORKFLOW_PATH,
+            event=event,
+        )
+        assert orchestrator.read_cycle(REPOSITORY, "token", PR, HEAD)[0] == "absent", event
     for forbidden in ("REVIEW_CLEAR", "FINDINGS_OPEN", "REVIEW_TIMED_OUT", "WAITING_FOR_REVIEWER"):
         _status_world(monkeypatch, state=forbidden, run_path=orchestrator.COLLECTOR_WORKFLOW_PATH)
         assert orchestrator.read_cycle(REPOSITORY, "token", PR, HEAD)[0] == "absent"
+
+
+def test_the_trusted_reconcile_workflow_may_still_publish_the_unavailable_terminal_state(monkeypatch):
+    _status_world(
+        monkeypatch,
+        state="REVIEWER_UNAVAILABLE",
+        run_path=".github/workflows/hunter-governance-reconcile.yml",
+        event="workflow_run",
+    )
+    state, cycle, _ = orchestrator.read_cycle(REPOSITORY, "token", PR, HEAD)
+    assert state == "present" and cycle is not None and cycle.state == "REVIEWER_UNAVAILABLE"
 
 
 def test_a_collector_status_needs_a_dispatched_default_branch_run_and_the_trusted_creator(monkeypatch):

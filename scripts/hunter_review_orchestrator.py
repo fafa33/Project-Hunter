@@ -69,7 +69,6 @@ ACTIVE_COLLECTOR_GRACE_MULTIPLIER = 2
 TERMINAL_NONBLOCKING_STATES = frozenset({"REVIEW_TIMED_OUT", "REVIEWER_UNAVAILABLE", "POOL_EXHAUSTED"})
 #: Issue #574 / PR #576: the only terminal state a *collector* run may publish, from its own `collector-complete` step.
 #: Every other cycle state is only believed when a governance/reconcile run published it (``TRUSTED_WORKFLOWS``).
-COLLECTOR_PUBLISHABLE_STATES = frozenset({"REVIEWER_UNAVAILABLE"})
 #: Cycle states in which the exact-head opportunity is still open and may be finalized by the collector.
 OPEN_CYCLE_STATES = frozenset({"WAITING_FOR_REVIEWER", "REVIEW_IN_PROGRESS", "FAILOVER_IN_PROGRESS"})
 #: Identity of the collector receipt this module reads. Kept equal to ``hunter_reviewer_collector.SCHEMA`` by a test; it
@@ -534,13 +533,11 @@ def read_cycle(
             continue
         if str(run.get("head_branch") or "") != default_branch:
             continue
-        run_path = str(run.get("path") or "")
-        collector_terminal = (
-            run_path == COLLECTOR_WORKFLOW_PATH
-            and cycle.state in COLLECTOR_PUBLISHABLE_STATES
-            and str(run.get("event") or "") in {"workflow_dispatch", "repository_dispatch"}
-        )
-        if run_path not in TRUSTED_WORKFLOWS and not collector_terminal:
+        # A terminal state is believed only when a trusted governance workflow cites itself. A
+        # collector run never publishes one under the current contract (it holds no status write),
+        # so a status citing a collector run -- including an in-flight pre-migration run that
+        # still carries the old grant -- carries no owner, binding or claim and is not authority.
+        if str(run.get("path") or "") not in TRUSTED_WORKFLOWS:
             continue
         return "present", cycle, None
     return "absent", None, None
