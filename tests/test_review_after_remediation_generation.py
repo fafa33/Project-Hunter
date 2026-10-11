@@ -657,6 +657,17 @@ def test_generation_binding_accepts_every_equivalent_valid_form(guard, run, env)
         (f"{_COLLECT} --generation", {}),
         (f'{_COLLECT} --generation "{_GEN}" --generation main', {}),
         (f'{_COLLECT} # --generation "{_GEN}"', {}),
+        # Copilot: a decoy token ending in the filename must not be taken for the invocation
+        (f'echo hunter_reviewer_collector.py --generation "{_GEN}"; {_COLLECT}', {}),
+        (
+            f'echo hunter_reviewer_collector.py --generation "{_GEN}"; python scripts/hunter_reviewer_collector.py --pr 1',
+            {},
+        ),
+        (f'cat scripts/hunter_reviewer_collector.py --generation "{_GEN}"', {}),
+        (f'python -c "print(1)" hunter_reviewer_collector.py --generation "{_GEN}"', {}),
+        # every invocation must be bound, not just the first
+        (f'{_COLLECT} --generation "{_GEN}"; {_COLLECT}', {}),
+        (f'{_COLLECT}; {_COLLECT} --generation "{_GEN}"', {}),
         # not the collector at all, or unparsable shell
         (f'echo --generation "{_GEN}"', {}),
         (f'{_COLLECT} --generation "{_GEN}', {}),

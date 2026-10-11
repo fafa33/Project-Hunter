@@ -1690,12 +1690,44 @@ _COLLECTOR_GENERATION_EXPRESSION = "${{ github.event.client_payload.generation_i
 _SHELL_CONTROL_TOKENS = frozenset({";", "&&", "||", "|", "&", "(", ")", ";;"})
 
 
-def _collector_generation_is_bound(run_cmd: str, env: Any) -> bool:
-    """Whether this collector command's ``--generation`` receives the dispatched generation.
+_PYTHON_EXECUTABLE = re.compile(r"python[0-9.]*")
+_ENV_ASSIGNMENT = re.compile(r"[A-Za-z_][A-Za-z0-9_]*=.*")
 
-    Exactly one ``--generation`` flag must belong to the collector invocation
-    itself (not another command in the script), and its value must be the
-    payload expression or an environment variable bound to that expression.
+
+def _collector_invocation_arguments(command: list[str]) -> list[str] | None:
+    """Arguments of a *real* collector invocation, else ``None``.
+
+    Only a simple command whose executable is the collector script itself, or a
+    python interpreter whose script operand is the collector, counts. A token that
+    merely ends in the filename (an ``echo`` operand, a comment-like decoy) is not
+    an invocation.
+    """
+
+    tokens = list(command)
+    while tokens and _ENV_ASSIGNMENT.fullmatch(tokens[0]):
+        tokens.pop(0)
+    if not tokens:
+        return None
+    executable = tokens[0].rsplit("/", 1)[-1]
+    if executable == "hunter_reviewer_collector.py":
+        return tokens[1:]
+    if _PYTHON_EXECUTABLE.fullmatch(executable):
+        for index, token in enumerate(tokens[1:], start=1):
+            if token.startswith("-"):
+                continue
+            if token.rsplit("/", 1)[-1] == "hunter_reviewer_collector.py":
+                return tokens[index + 1 :]
+            return None
+    return None
+
+
+def _collector_generation_is_bound(run_cmd: str, env: Any) -> bool:
+    """Whether every collector invocation in ``run_cmd`` receives the dispatched generation.
+
+    The script is split into simple commands; each real collector invocation must
+    carry exactly one ``--generation`` flag whose value is the payload expression
+    or an environment variable bound to that expression. At least one real
+    invocation must exist, so a decoy mention of the filename cannot satisfy it.
     """
 
     placeholder = "__HUNTER_GENERATION_EXPRESSION__"
@@ -1707,12 +1739,22 @@ def _collector_generation_is_bound(run_cmd: str, env: Any) -> bool:
         tokens = list(lexer)
     except ValueError:
         return False
-    start = next((i for i, token in enumerate(tokens) if token.endswith("hunter_reviewer_collector.py")), None)
-    if start is None:
+    commands: list[list[str]] = [[]]
+    for token in tokens:
+        if token in _SHELL_CONTROL_TOKENS:
+            commands.append([])
+        else:
+            commands[-1].append(token)
+    invocations = [
+        arguments for command in commands if (arguments := _collector_invocation_arguments(command)) is not None
+    ]
+    if not invocations:
         return False
-    end = next((i for i in range(start + 1, len(tokens)) if tokens[i] in _SHELL_CONTROL_TOKENS), len(tokens))
+    return all(_generation_argument_is_bound(arguments, placeholder, env) for arguments in invocations)
+
+
+def _generation_argument_is_bound(arguments: list[str], placeholder: str, env: Any) -> bool:
     values: list[str] = []
-    arguments = tokens[start + 1 : end]
     for index, token in enumerate(arguments):
         if token == "--generation":
             values.append(arguments[index + 1] if index + 1 < len(arguments) else "")
