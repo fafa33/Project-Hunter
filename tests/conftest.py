@@ -132,3 +132,20 @@ def _legacy_issue_407_receipt_assertion_is_scoped(
         return original_exists(path)
 
     monkeypatch.setattr(Path, "exists", _exists)
+
+
+@pytest.fixture
+def winning_election(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Stipulate the create-only owner election for dispatch-*gating* unit tests.
+
+    Election atomicity is proven against a stateful create-only ref model in
+    ``test_collector_dispatch_adversarial.py``; suites that only measure whether a
+    dispatch is permitted use this so they need no ref API model.
+    """
+    import hunter_review_orchestrator as orchestrator
+
+    monkeypatch.setattr(
+        orchestrator,
+        "elect_collector_owner",
+        lambda *_args: orchestrator.CollectorElection(True, 0, "0" * 64, 1),
+    )

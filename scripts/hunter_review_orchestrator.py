@@ -609,145 +609,349 @@ def publish_trusted_collector_completion(repository: str, token: str, run_id: in
         return "SKIPPED: dispatch origin is not trusted governance reconciliation"
     if not re.fullmatch(r"[0-9a-f]{64}", proof):
         return "SKIPPED: missing collector dispatch capability"
-    statuses = _all_commit_statuses(repository, token, head_sha)
-    expected_context = f"{DISPATCH_PROOF_CONTEXT_PREFIX}{pr_number}"
-    expected_description = f"{cycle.generation_id}|{hashlib.sha256(proof.encode()).hexdigest()}"
-    authorized = (
-        any(
-            isinstance(status, dict)
-            and status.get("context") == expected_context
-            and status.get("description") == expected_description
-            and str((status.get("creator") or {}).get("login") or "") == TRUSTED_STATUS_CREATOR
-            and _run_id(str(status.get("target_url") or "")) == cycle.trigger_id
-            for status in statuses
-            if isinstance(statuses, list)
+    try:
+        owner = require_current_collector_authority(
+            repository, token, pr_number, head_sha, cycle, proof, run_id, int(run.get("run_attempt") or 0)
         )
-        if isinstance(statuses, list)
-        else False
-    )
-    if not authorized:
-        return "SKIPPED: no trusted exact-cycle dispatch capability"
-    # A nonce is readable from a completed run's artifact. It must not authorize
-    # a *different* run: the first run created after issuance for this exact
-    # cycle is the sole claimant; subsequent manual dispatches cannot replay it.
-    proof_statuses = [
-        status
-        for status in statuses
-        if isinstance(status, dict)
-        and status.get("context") == expected_context
-        and status.get("description") == expected_description
-        and _run_id(str(status.get("target_url") or "")) == cycle.trigger_id
-        and str((status.get("creator") or {}).get("login") or "") == TRUSTED_STATUS_CREATOR
-    ]
-    issued_at = str(proof_statuses[0].get("created_at") or "") if len(proof_statuses) == 1 else ""
-    created_at = str(run.get("created_at") or "")
-    if not issued_at or not created_at or created_at < issued_at:
-        return "SKIPPED: collector run predates unique dispatch proof"
-    if read_atomic_collector_owner(repository, token, pr_number, head_sha, cycle.generation_id, proof) != run_id:
-        return "SKIPPED: collector run does not own the atomic dispatch claim"
+    except CollectorAuthorityError as exc:
+        return f"SKIPPED: {exc}"
+    # Revalidate at the publication boundary: a recovery that fenced this owner
+    # after the first check must win over a late publication.
+    try:
+        recheck = read_owner_chain(repository, token, pr_number, head_sha, cycle.generation_id)
+    except (transport.GitHubRequestError, ValueError):
+        return "SKIPPED: collector authority could not be re-verified at publication"
+    if not recheck or recheck[-1] != owner:
+        return "SKIPPED: collector owner was replaced before publication"
     publish_collector_completion(repository, token, pr_number, head_sha, run_id)
     return f"PUBLISHED: collector completion PR #{pr_number} at {head_sha[:12]}"
 
 
-def collector_claim_ref(pr_number: int, head_sha: str, generation: str, proof: str) -> str:
-    """One immutable ref per authorized dispatch, not per cycle.
+# --- Atomic collector ownership ------------------------------------------------
+#
+# Authority model (single canonical source): for one cycle identity
+# (repository, PR, exact HEAD, generation) there is a bounded, monotonic sequence
+# of recovery epochs. Each epoch has exactly one owner, elected by GitHub's
+# create-only ref primitive (``POST git/refs`` fails with 422 when the ref
+# exists). The ref name is derived from the identity and epoch only -- never from
+# a dispatch nonce -- so contenders with different nonces collide on the same
+# ref and exactly one wins. Commit statuses and workflow titles are correlation
+# data only; they are never an ownership record.
+#
+# The highest claimed epoch is the only current one. A later epoch fences every
+# earlier owner and every collector run issued under it. A new epoch is only
+# claimed on authoritative evidence that the previous attempt ended without a
+# valid result (never on a timeout alone), and never beyond
+# ``MAX_COLLECTOR_DISPATCHES`` epochs.
 
-    Each dispatch gets a unique proof, and the claim ref is bound to that
-    proof. This ensures:
-    - Each dispatch gets its own atomic claim
-    - Retries of the same dispatch (same proof) use the same claim ref
-    - Different dispatches (different proofs) for the same cycle get different claim refs
-    - A failed dispatch's claim can be retried by a new run with the same proof
+OWNER_REF_PREFIX = "tags/hunter-collector-owner"
+RUN_CLAIM_REF_PREFIX = "tags/hunter-collector-run"
+CLAIM_RECORD_VERSION = 1
+
+
+class CollectorAuthorityError(ValueError):
+    """The presented collector authority is not the current elected one."""
+
+
+class CollectorElection(NamedTuple):
+    won: bool
+    epoch: int
+    nonce: str
+    owner_run_id: int | None
+
+
+class CollectorOwner(NamedTuple):
+    epoch: int
+    orchestrator_run_id: int
+    nonce_sha256: str
+    claimed_at: str
+
+
+def _claim_digest(pr_number: int, head_sha: str, generation: str, epoch: int) -> str:
+    return hashlib.sha256(f"{pr_number}:{head_sha}:{generation}:{epoch}".encode()).hexdigest()
+
+
+def collector_owner_ref(pr_number: int, head_sha: str, generation: str, epoch: int) -> str:
+    """The create-only owner ref of one epoch; the dispatch nonce is not part of it."""
+    return f"{OWNER_REF_PREFIX}/{_claim_digest(pr_number, head_sha, generation, epoch)}"
+
+
+def collector_run_claim_ref(pr_number: int, head_sha: str, generation: str, epoch: int, attempt: int) -> str:
+    """The create-only claim of one (epoch, run attempt); a replayed capability collides here."""
+    return f"{RUN_CLAIM_REF_PREFIX}/{_claim_digest(pr_number, head_sha, generation, epoch)}-a{attempt}"
+
+
+def _read_claim(repository: str, token: str, ref: str) -> dict[str, Any] | None:
+    """Return the immutable claim record, ``None`` only when the ref truly is absent.
+
+    Any other failure -- API errors, malformed objects, a record published under
+    another name -- raises: an unreadable claim is never an unowned one.
     """
-    digest = hashlib.sha256(f"{pr_number}:{head_sha}:{generation}:{proof}".encode()).hexdigest()
-    return f"tags/hunter-collector-claim/{digest}"
-
-
-def read_atomic_collector_owner(
-    repository: str, token: str, pr_number: int, head_sha: str, generation: str, proof: str
-) -> int | None:
-    """Read the winning annotated tag; never infer ownership from run titles."""
-    claim_ref = collector_claim_ref(pr_number, head_sha, generation, proof)
     try:
-        ref = request_json(repository, token, "GET", f"git/ref/{claim_ref}")
+        found = request_json(repository, token, "GET", f"git/ref/{ref}")
     except transport.GitHubRequestError as exc:
         if exc.status_code == 404 and exc.category == "permanent":
             return None
         raise
-    if not isinstance(ref, dict) or not isinstance(ref.get("object"), dict):
-        return None
-    obj = ref["object"]
-    if obj.get("type") != "tag" or not re.fullmatch(r"[0-9a-f]{40}", str(obj.get("sha") or "")):
-        return None
+    obj = found.get("object") if isinstance(found, dict) else None
+    if not isinstance(obj, dict) or obj.get("type") != "tag" or not re.fullmatch(r"[0-9a-f]{40}", str(obj.get("sha"))):
+        raise ValueError("collector claim ref is malformed")
     tag = request_json(repository, token, "GET", f"git/tags/{obj['sha']}")
-    if not isinstance(tag, dict) or tag.get("tag") != claim_ref.removeprefix("tags/"):
-        return None
-    message = str(tag.get("message") or "")
-    match = re.fullmatch(r"hunter-collector-run-id=([1-9][0-9]*)", message.strip())
-    return int(match.group(1)) if match else None
+    if not isinstance(tag, dict) or tag.get("tag") != ref.removeprefix("tags/"):
+        raise ValueError("collector claim tag does not belong to its ref")
+    try:
+        record = json.loads(str(tag.get("message") or ""))
+    except ValueError as exc:
+        raise ValueError("collector claim record is malformed") from exc
+    if not isinstance(record, dict) or record.get("v") != CLAIM_RECORD_VERSION:
+        raise ValueError("collector claim record is malformed")
+    return record
 
 
-def _find_dispatch_proof_status(
-    repository: str, token: str, pr_number: int, head_sha: str, generation_id: str
-) -> dict[str, Any] | None:
-    """Find an existing dispatch proof status for the exact cycle.
+def _create_claim(repository: str, token: str, ref: str, record: dict[str, Any]) -> bool:
+    """Atomically create ``ref``; True only when this caller's record is the winner.
 
-    Returns the status if a dispatch proof was already issued for this
-    PR/head/generation by the trusted orchestrator, None otherwise.
+    The tag object is only a payload; the create-only ref is the arbitration. An
+    ambiguous failure of the ref write is resolved by reading the ref back, and
+    stays fail-closed (raises) when the read-back is also unavailable.
     """
-    statuses = _all_commit_statuses(repository, token, head_sha)
-    if not isinstance(statuses, list):
-        return None
-    context = f"{DISPATCH_PROOF_CONTEXT_PREFIX}{pr_number}"
-    for status in statuses:
-        if not isinstance(status, dict):
-            continue
-        if status.get("context") != context:
-            continue
-        if str((status.get("creator") or {}).get("login") or "") != TRUSTED_STATUS_CREATOR:
-            continue
-        description = str(status.get("description") or "")
-        # Description format: "generation_id|proof_hash"
-        if not description.startswith(f"{generation_id}|"):
-            continue
-        # Valid dispatch proof status found
-        return status
-    return None
+    info = request_json(repository, token, "GET", "")
+    branch = str((info or {}).get("default_branch") or "main")
+    tip = request_json(repository, token, "GET", f"commits/{branch}")
+    anchor = str((tip or {}).get("sha") or "")
+    if not re.fullmatch(r"[0-9a-f]{40}", anchor):
+        raise ValueError("collector claim anchor unavailable")
+    tag = request_json(
+        repository,
+        token,
+        "POST",
+        "git/tags",
+        {
+            "tag": ref.removeprefix("tags/"),
+            "message": json.dumps(record, sort_keys=True, separators=(",", ":")),
+            "object": anchor,
+            "type": "commit",
+            "tagger": {
+                "name": "Hunter Collector",
+                "email": "hunter-collector@users.noreply.github.com",
+                "date": datetime.now(UTC).strftime("%Y-%m-%dT%H:%M:%SZ"),
+            },
+        },
+    )
+    if not isinstance(tag, dict) or not re.fullmatch(r"[0-9a-f]{40}", str(tag.get("sha") or "")):
+        raise ValueError("collector claim tag unavailable")
+    try:
+        request_json(repository, token, "POST", "git/refs", {"ref": f"refs/{ref}", "sha": tag["sha"]})
+    except transport.GitHubRequestError as exc:
+        # 422 is "already exists"; transport-level failures are ambiguous. Both
+        # are settled by the read-back below. Anything else is a hard failure.
+        if exc.status_code != 422 and exc.category not in {"transient", "transport", "unavailable"}:
+            raise
+    held = _read_claim(repository, token, ref)
+    if held is None:
+        raise ValueError("collector claim could not be confirmed")
+    return held == record
 
 
-def unique_collector_claimant(repository: str, token: str, title: str, issued_at: str) -> int | None:
-    """Fail closed unless exactly one run claims this issuance across all pages.
+def _owner_from_record(
+    record: dict[str, Any], pr_number: int, head_sha: str, generation: str, epoch: int
+) -> CollectorOwner:
+    run_id, nonce_hash, claimed_at = (
+        record.get("orchestrator_run"),
+        record.get("nonce_sha256"),
+        record.get("claimed_at"),
+    )
+    if not (
+        record.get("kind") == "owner"
+        and record.get("pr") == pr_number
+        and record.get("head") == head_sha
+        and record.get("generation") == generation
+        and record.get("epoch") == epoch
+        and isinstance(run_id, int)
+        and run_id > 0
+        and isinstance(nonce_hash, str)
+        and re.fullmatch(r"[0-9a-f]{64}", nonce_hash)
+        and isinstance(claimed_at, str)
+    ):
+        raise ValueError("collector owner record does not match its cycle identity")
+    return CollectorOwner(epoch, run_id, nonce_hash, claimed_at)
 
-    Run titles are not authority: callers must independently validate the
-    dispatch capability and origin. Ambiguity denies both runs, not a race win.
-    """
-    claimant_ids: set[int] = set()
-    page = 1
-    while True:
-        payload = request_json(
-            repository,
-            token,
-            "GET",
-            f"actions/workflows/{COLLECTOR_WORKFLOW}/runs?event=repository_dispatch&per_page=100&page={page}",
-        )
-        if not isinstance(payload, dict) or not isinstance(payload.get("workflow_runs"), list):
-            raise ValueError("collector claimant history unavailable")
-        batch = payload["workflow_runs"]
-        for candidate in batch:
-            if (
-                isinstance(candidate, dict)
-                and candidate.get("path") == COLLECTOR_WORKFLOW_PATH
-                and _run_title(candidate) == title
-                and candidate.get("event") == "repository_dispatch"
-                and str(candidate.get("created_at") or "") >= issued_at
-            ):
-                candidate_id = int(candidate.get("id") or 0)
-                if candidate_id > 0:
-                    claimant_ids.add(candidate_id)
-        if len(batch) < 100:
+
+def read_owner_chain(
+    repository: str, token: str, pr_number: int, head_sha: str, generation: str
+) -> list[CollectorOwner]:
+    """Owners of every claimed epoch in order; raises when any claim is unreadable."""
+    chain: list[CollectorOwner] = []
+    for epoch in range(MAX_COLLECTOR_DISPATCHES):
+        record = _read_claim(repository, token, collector_owner_ref(pr_number, head_sha, generation, epoch))
+        if record is None:
             break
-        page += 1
-    return next(iter(claimant_ids)) if len(claimant_ids) == 1 else None
+        chain.append(_owner_from_record(record, pr_number, head_sha, generation, epoch))
+    return chain
+
+
+def owner_attempt_failed(
+    repository: str, token: str, pr_number: int, head_sha: str, generation: str, owner: CollectorOwner
+) -> bool:
+    """Authoritative evidence that an epoch ended without a valid result.
+
+    Elapsed time is never sufficient. The owning orchestrator run must be
+    ``completed`` per the Actions API (a live owner cannot be replaced), no
+    collector run may be live or successful, and either a collector run of this
+    epoch has ended unsuccessfully or -- after the run-listing grace -- the owner
+    ended without producing any collector run (crash before or after the proof,
+    or a lost dispatch). Unreadable evidence raises and is never recovery.
+    """
+    owner_run = request_json(repository, token, "GET", f"actions/runs/{owner.orchestrator_run_id}")
+    if not isinstance(owner_run, dict) or owner_run.get("id") != owner.orchestrator_run_id:
+        raise ValueError("collector owner run evidence unavailable")
+    if owner_run.get("status") != "completed":
+        return False
+    runs = collector_runs(repository, token, pr_number, head_sha, generation)
+    if any(str(run.get("status") or "") in ACTIVE_RUN_STATES for run in runs):
+        return False
+    since = [run for run in runs if str(run.get("created_at") or "") >= owner.claimed_at]
+    if any(run.get("status") == "completed" and run.get("conclusion") == "success" for run in since):
+        return False
+    if since:
+        return True
+    return _older_than(owner.claimed_at, COLLECTOR_LIVENESS_GRACE_SECONDS)
+
+
+def elect_collector_owner(
+    repository: str, token: str, pr_number: int, head_sha: str, generation: str, run_id: int
+) -> CollectorElection:
+    """Elect the single dispatcher of the current epoch; losers must not act."""
+    nonce = secrets.token_hex(32)
+    chain = read_owner_chain(repository, token, pr_number, head_sha, generation)
+    epoch = 0
+    if chain:
+        latest = chain[-1]
+        if latest.orchestrator_run_id == run_id or len(chain) >= MAX_COLLECTOR_DISPATCHES:
+            return CollectorElection(False, latest.epoch, "", latest.orchestrator_run_id)
+        if not owner_attempt_failed(repository, token, pr_number, head_sha, generation, latest):
+            return CollectorElection(False, latest.epoch, "", latest.orchestrator_run_id)
+        epoch = latest.epoch + 1
+    record = {
+        "v": CLAIM_RECORD_VERSION,
+        "kind": "owner",
+        "pr": pr_number,
+        "head": head_sha,
+        "generation": generation,
+        "epoch": epoch,
+        "orchestrator_run": run_id,
+        "nonce_sha256": hashlib.sha256(nonce.encode()).hexdigest(),
+        "claimed_at": datetime.now(UTC).strftime("%Y-%m-%dT%H:%M:%SZ"),
+    }
+    if _create_claim(repository, token, collector_owner_ref(pr_number, head_sha, generation, epoch), record):
+        return CollectorElection(True, epoch, nonce, run_id)
+    winner = read_owner_chain(repository, token, pr_number, head_sha, generation)
+    return CollectorElection(False, epoch, "", winner[epoch].orchestrator_run_id if len(winner) > epoch else None)
+
+
+def dispatch_proof_description(generation: str, epoch: int, nonce: str) -> str:
+    return f"{generation}|{epoch}|{hashlib.sha256(nonce.encode()).hexdigest()}"
+
+
+def require_current_collector_authority(
+    repository: str,
+    token: str,
+    pr_number: int,
+    head_sha: str,
+    cycle: ReviewCycle,
+    proof: str,
+    run_id: int,
+    attempt: int,
+) -> CollectorOwner:
+    """Verify, without side effects, that this run attempt holds the current epoch.
+
+    The nonce selects an epoch only through the owner record; the epoch must also
+    be the newest one, the recorded orchestrator must be the cycle's trigger, the
+    trusted proof status must name that exact epoch and orchestrator run, and the
+    run claim for this attempt must be this run's.
+    """
+    chain = read_owner_chain(repository, token, pr_number, head_sha, cycle.generation_id)
+    digest = hashlib.sha256(proof.encode()).hexdigest()
+    holder = next((owner for owner in chain if owner.nonce_sha256 == digest), None)
+    if holder is None or chain[-1] != holder:
+        raise CollectorAuthorityError("capability is not the current epoch's owner")
+    if cycle.trigger_id != holder.orchestrator_run_id:
+        raise CollectorAuthorityError("cycle trigger disagrees with the elected owner")
+    description = dispatch_proof_description(cycle.generation_id, holder.epoch, proof)
+    matches = [
+        status
+        for status in _all_commit_statuses(repository, token, head_sha)
+        if status.get("context") == f"{DISPATCH_PROOF_CONTEXT_PREFIX}{pr_number}"
+        and status.get("description") == description
+        and str((status.get("creator") or {}).get("login") or "") == TRUSTED_STATUS_CREATOR
+        and _run_id(str(status.get("target_url") or "")) == holder.orchestrator_run_id
+    ]
+    if len(matches) != 1:
+        raise CollectorAuthorityError("no unique trusted proof for the elected epoch")
+    claim = _read_claim(
+        repository, token, collector_run_claim_ref(pr_number, head_sha, cycle.generation_id, holder.epoch, attempt)
+    )
+    if (
+        claim is None
+        or claim.get("kind") != "run"
+        or claim.get("run_id") != run_id
+        or claim.get("attempt") != attempt
+        or claim.get("nonce_sha256") != digest
+    ):
+        raise CollectorAuthorityError("run attempt does not hold the epoch's run claim")
+    return holder
+
+
+def claim_collector_run(
+    repository: str,
+    token: str,
+    pr_number: int,
+    head_sha: str,
+    generation: str,
+    epoch: int,
+    nonce_sha256: str,
+    run_id: int,
+    attempt: int,
+) -> None:
+    """Consume the epoch's capability for exactly this run attempt, or raise.
+
+    Attempt 1 collides with any earlier consumer, so a replayed capability on
+    another run fails. A rerun attempt N>1 is accepted only for the run that
+    consumed N-1, and only when GitHub reports attempt N-1 ended unsuccessfully.
+    """
+    if not 1 <= attempt <= MAX_COLLECTOR_DISPATCHES:
+        raise CollectorAuthorityError("collector attempt outside the bounded budget")
+    if attempt > 1:
+        previous = _read_claim(
+            repository, token, collector_run_claim_ref(pr_number, head_sha, generation, epoch, attempt - 1)
+        )
+        if previous is None or previous.get("run_id") != run_id or previous.get("nonce_sha256") != nonce_sha256:
+            raise CollectorAuthorityError("rerun does not continue this capability's previous attempt")
+        prior = request_json(repository, token, "GET", f"actions/runs/{run_id}/attempts/{attempt - 1}")
+        if (
+            not isinstance(prior, dict)
+            or prior.get("run_attempt") != attempt - 1
+            or prior.get("status") != "completed"
+            or prior.get("conclusion") == "success"
+        ):
+            raise CollectorAuthorityError("previous attempt is not proven failed")
+    record = {
+        "v": CLAIM_RECORD_VERSION,
+        "kind": "run",
+        "pr": pr_number,
+        "head": head_sha,
+        "generation": generation,
+        "epoch": epoch,
+        "run_id": run_id,
+        "attempt": attempt,
+        "nonce_sha256": nonce_sha256,
+        # Unique per start so that a second start of the same attempt is a
+        # loser too: a capability is consumed once, not once per run id.
+        "start": secrets.token_hex(16),
+    }
+    ref = collector_run_claim_ref(pr_number, head_sha, generation, epoch, attempt)
+    if not _create_claim(repository, token, ref, record):
+        raise CollectorAuthorityError("capability already consumed by another run")
 
 
 def read_collector_completion(
@@ -811,10 +1015,29 @@ def current_run_id() -> int:
 
 
 def dispatch_collector(
-    repository: str, token: str, pr_number: int, head_sha: str, generation_id: str = BASE_GENERATION_ID
+    repository: str,
+    token: str,
+    pr_number: int,
+    head_sha: str,
+    generation_id: str = BASE_GENERATION_ID,
+    election: CollectorElection | None = None,
 ) -> None:
-    nonce = secrets.token_hex(32)
+    """Issue the one dispatch of an elected epoch; a non-owner never dispatches.
+
+    Ownership is verified here, immediately before the proof and the dispatch are
+    published, so no caller can dispatch without holding the create-only claim.
+    A failed or ambiguous API call raises and is never retried in-process: the
+    claim stays held by this run, and only a later run may replace it, and only
+    on authoritative evidence that this attempt ended without a valid result.
+    """
     run_id = current_run_id()
+    if election is None:
+        election = elect_collector_owner(repository, token, pr_number, head_sha, generation_id, run_id)
+    if not election.won or not election.nonce or election.owner_run_id != run_id:
+        return
+    current = read_owner_chain(repository, token, pr_number, head_sha, generation_id)
+    if not current or current[-1].epoch != election.epoch or current[-1].orchestrator_run_id != run_id:
+        raise RuntimeError("collector ownership was lost before dispatch")
     request_json(
         repository,
         token,
@@ -823,7 +1046,7 @@ def dispatch_collector(
         {
             "state": "pending",
             "context": f"{DISPATCH_PROOF_CONTEXT_PREFIX}{pr_number}",
-            "description": f"{generation_id}|{hashlib.sha256(nonce.encode()).hexdigest()}",
+            "description": dispatch_proof_description(generation_id, election.epoch, election.nonce),
             "target_url": f"{os.environ.get('GITHUB_SERVER_URL') or 'https://github.com'}/{repository}/actions/runs/{run_id}",
         },
     )
@@ -838,7 +1061,8 @@ def dispatch_collector(
                 "pr_number": str(pr_number),
                 "head_sha": head_sha,
                 "generation_id": generation_id,
-                "dispatch_proof": nonce,
+                "dispatch_proof": election.nonce,
+                "recovery_epoch": str(election.epoch),
             },
         },
     )
@@ -1448,8 +1672,6 @@ def ensure_collector(
             return existing
 
     run_id = current_run_id()
-    if run_id is None:
-        raise RuntimeError("trusted orchestration requires GITHUB_RUN_ID")
 
     # The branch above is not the only idempotency boundary: it only fires when
     # `read_cycle` itself reports "present" with a matching digest. A stale,
@@ -1468,35 +1690,32 @@ def ensure_collector(
             f"refusing to risk a duplicate dispatch: {exc}"
         ) from exc
 
-    # Prevent duplicate dispatches by checking for an existing dispatch proof
-    # status for this exact cycle. The dispatch proof status is the authoritative
-    # record that a dispatch was issued for this PR/head/generation. If one
-    # already exists, another reconcile must not issue a second dispatch.
-    existing_proof = _find_dispatch_proof_status(repository, token, pr_number, head_sha, generation_id)
-    if existing_proof is not None:
-        # A dispatch was already issued for this cycle. Update the cycle's
-        # trigger_id to the existing dispatch's run ID if it differs, and return
-        # the existing cycle state.
-        existing_trigger_id = _run_id(str(existing_proof.get("target_url") or ""))
-        cycle = ReviewCycle(
-            pr_number=pr_number,
-            head_sha=head_sha,
-            state="WAITING_FOR_REVIEWER",
-            provider_id="",
-            trigger_id=existing_trigger_id or run_id,
-            started_at=datetime.now(UTC).strftime("%Y-%m-%dT%H:%M:%SZ"),
-            config_digest=digest,
-            generation_id=generation_id,
-        )
-        publish_cycle(repository, token, head_sha, cycle=cycle)
-        return cycle
+    # Exactly one contender per (PR, head, generation, epoch) wins this create-only
+    # election, whatever nonce it holds. A loser must neither publish a competing
+    # record nor dispatch; it reports the authoritative cycle instead. Unreadable
+    # ownership evidence raises: it never authorises a dispatch.
+    election: CollectorElection | None = None
+    if liveness not in {"active", "completed"}:
+        election = elect_collector_owner(repository, token, pr_number, head_sha, generation_id, run_id)
+        if not election.won:
+            state_now, cycle_now, _error = read_cycle(repository, token, pr_number, head_sha)
+            if state_now == "present" and cycle_now is not None:
+                return cycle_now
+            return ReviewCycle(
+                pr_number=pr_number,
+                head_sha=head_sha,
+                state="WAITING_FOR_REVIEWER",
+                provider_id="",
+                trigger_id=election.owner_run_id,
+                started_at=datetime.now(UTC).strftime("%Y-%m-%dT%H:%M:%SZ"),
+                config_digest=digest,
+                generation_id=generation_id,
+            )
 
-    # Persist the dispatch identity and liveness timestamp *before* dispatch.
-    # This status is the durable idempotency record: if GitHub accepts the
-    # workflow dispatch and this process dies immediately afterwards, the next
-    # reconciliation observes a dispatched cycle and checks correlated collector
-    # runs instead of blindly issuing a duplicate dispatch. If dispatch itself
-    # never produces a run, the bounded liveness grace permits one recovery.
+    # Persist the dispatch identity and liveness timestamp *before* dispatch, as
+    # the elected owner only. If this process dies after the claim, the next
+    # reconciliation finds this owner's ended run and no collector, and elects a
+    # replacement epoch; a timeout alone never does.
     cycle = ReviewCycle(
         pr_number=pr_number,
         head_sha=head_sha,
@@ -1508,8 +1727,8 @@ def ensure_collector(
         generation_id=generation_id,
     )
     publish_cycle(repository, token, head_sha, cycle=cycle)
-    if liveness not in {"active", "completed"}:
-        dispatch_collector(repository, token, pr_number, head_sha, generation_id)
+    if election is not None:
+        dispatch_collector(repository, token, pr_number, head_sha, generation_id, election)
     return cycle
 
 

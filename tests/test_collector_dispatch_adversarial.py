@@ -1,228 +1,485 @@
-"""Adversarial authorization checks before privileged collector work."""
+"""Adversarial ownership, recovery and fencing tests for the review collector.
 
-import hashlib
+These drive the real election (``ensure_collector`` -> ``elect_collector_owner`` ->
+``dispatch_collector``), the real collector start gate and the real trusted
+completion boundary against a stateful GitHub model whose ``git/refs`` creation is
+create-only and atomic. Nothing here substitutes a helper for the election.
+"""
 
+import threading
+from concurrent.futures import ThreadPoolExecutor
+
+import fake_github_ownership as fake_gh
 import hunter_github_transport as transport
 import hunter_review_orchestrator as orchestrator
 import hunter_reviewer_collector as collector
 import pytest
 
 HEAD = "a" * 40
-PROOF = "b" * 64
+PR = 472
 GEN = orchestrator.BASE_GENERATION_ID
+REPO = fake_gh.REPO
 
 
-@pytest.mark.parametrize(
-    "attack",
-    [
-        "wrong-proof",
-        "replayed-proof",
-        "wrong-origin",
-        "candidate-origin",
-        "wrong-generation",
-        "old-run",
-        "missing-cycle",
-        "wrong-event",
-        "wrong-path",
-        "duplicate-status",
-    ],
-)
-def test_adversarial_dispatch_rejected_before_reviewer_work(monkeypatch, attack):
-    run = {
-        "id": 778,
-        "event": "repository_dispatch",
-        "path": collector.WORKFLOW,
-        "head_branch": "main",
-        "created_at": "2026-10-10T10:01:00Z",
-        "head_sha": "d" * 40,
-    }
-    origin = {
-        "id": 123,
-        "event": "schedule",
-        "head_branch": "main",
-        "path": ".github/workflows/hunter-governance-reconcile.yml",
-    }
-    cycle = orchestrator.ReviewCycle(472, HEAD, "WAITING_FOR_REVIEWER", "", 123, "2026-10-10T10:00:00Z", "digest", GEN)
-    status = {
-        "context": f"{orchestrator.DISPATCH_PROOF_CONTEXT_PREFIX}472",
-        "description": f"{GEN}|{hashlib.sha256(PROOF.encode()).hexdigest()}",
-        "creator": {"login": orchestrator.TRUSTED_STATUS_CREATOR},
-        "target_url": "https://github.com/owner/repo/actions/runs/123",
-        "created_at": "2026-10-10T10:00:00Z",
-    }
-    if attack == "wrong-origin":
-        origin["path"] = ".github/workflows/candidate.yml"
-    if attack == "candidate-origin":
-        origin["head_branch"] = "candidate"
-    if attack == "wrong-generation":
-        cycle = orchestrator.ReviewCycle(
-            472, HEAD, "WAITING_FOR_REVIEWER", "", 123, "2026-10-10T10:00:00Z", "digest", "other"
-        )
-    if attack == "old-run":
-        run["created_at"] = "2026-10-10T09:59:00Z"
-    if attack == "wrong-event":
-        run["event"] = "workflow_dispatch"
-    if attack == "wrong-path":
-        run["path"] = ".github/workflows/evil.yml"
-    responses = {
-        "actions/runs/778": run,
-        "actions/runs/123": origin,
-        "": {"default_branch": "main"},
-        "commits/main": {"sha": "d" * 40},
-    }
-    monkeypatch.setattr(orchestrator, "request_json", lambda _r, _t, _m, path: responses[path])
-    monkeypatch.setattr(
-        orchestrator,
-        "read_cycle",
-        lambda *_: ("absent", None, None) if attack == "missing-cycle" else ("present", cycle, None),
-    )
-    monkeypatch.setattr(
-        orchestrator, "_all_commit_statuses", lambda *_: [status, status] if attack == "duplicate-status" else [status]
-    )
-    monkeypatch.setattr(
-        orchestrator, "read_atomic_collector_owner", lambda *_: 777 if attack == "replayed-proof" else None
-    )
-    with pytest.raises(ValueError):
-        collector.verify_trusted_dispatch_before_work(
-            "owner/repo", "token", 472, HEAD, GEN, "c" * 64 if attack == "wrong-proof" else PROOF, 778
-        )
+@pytest.fixture
+def env(monkeypatch):
+    github = fake_gh.FakeGitHub()
+    local = fake_gh.install(monkeypatch, github)
+    return github, local
 
 
-def test_authorized_dispatch_is_accepted(monkeypatch):
-    run = {
-        "id": 778,
-        "event": "repository_dispatch",
-        "path": collector.WORKFLOW,
-        "head_branch": "main",
-        "created_at": "2026-10-10T10:01:00Z",
-        "head_sha": "d" * 40,
-    }
-    origin = {
-        "id": 123,
-        "event": "schedule",
-        "head_branch": "main",
-        "path": ".github/workflows/hunter-governance-reconcile.yml",
-    }
-    cycle = orchestrator.ReviewCycle(472, HEAD, "WAITING_FOR_REVIEWER", "", 123, "2026-10-10T10:00:00Z", "digest", GEN)
-    status = {
-        "context": f"{orchestrator.DISPATCH_PROOF_CONTEXT_PREFIX}472",
-        "description": f"{GEN}|{hashlib.sha256(PROOF.encode()).hexdigest()}",
-        "creator": {"login": orchestrator.TRUSTED_STATUS_CREATOR},
-        "target_url": "https://github.com/owner/repo/actions/runs/123",
-        "created_at": "2026-10-10T10:00:00Z",
-    }
-    responses = {
-        "actions/runs/778": run,
-        "actions/runs/123": origin,
-        "": {"default_branch": "main"},
-        "commits/main": {"sha": "d" * 40},
-    }
-    monkeypatch.setattr(orchestrator, "request_json", lambda _r, _t, _m, path: responses[path])
-    monkeypatch.setattr(orchestrator, "read_cycle", lambda *_: ("present", cycle, None))
-    monkeypatch.setattr(orchestrator, "unique_collector_claimant", lambda *_: 778)
-    monkeypatch.setattr(
-        orchestrator,
-        "read_atomic_collector_owner",
-        lambda *_: None if not getattr(orchestrator, "_claim_created", False) else 778,
-    )
-    monkeypatch.setattr(orchestrator, "_claim_created", False, raising=False)
-
-    def authorized_request(_r, _t, _m, path, payload=None):
-        if path == "git/tags":
-            return {"sha": "a" * 40}
-        if path == "git/refs":
-            monkeypatch.setattr(orchestrator, "_claim_created", True)
-            return {}
-        return responses[path]
-
-    monkeypatch.setattr(orchestrator, "request_json", authorized_request)
-    monkeypatch.setattr(orchestrator, "_all_commit_statuses", lambda *_: [status])
-    collector.verify_trusted_dispatch_before_work("owner/repo", "token", 472, HEAD, GEN, PROOF, 778)
+def reconcile(github, local, run_id, *, register=True):
+    if register and run_id not in github.runs:
+        github.add_orchestrator_run(run_id)
+    local.run_id = run_id
+    return orchestrator.ensure_collector(REPO, "token", PR, HEAD, GEN)
 
 
-def test_competing_dispatch_claimants_fail_closed(monkeypatch):
-    title = orchestrator.collector_run_name(472, HEAD, GEN)
-
-    def request(_repo, _token, _method, path):
-        assert "event=repository_dispatch" in path
-        return {
-            "workflow_runs": [
-                {
-                    "id": number,
-                    "path": orchestrator.COLLECTOR_WORKFLOW_PATH,
-                    "event": "repository_dispatch",
-                    "display_title": title,
-                    "created_at": "2026-10-10T10:01:00Z",
-                    "head_sha": "d" * 40,
-                }
-                for number in (778, 779)
-            ]
-        }
-
-    monkeypatch.setattr(orchestrator, "request_json", request)
-    assert orchestrator.unique_collector_claimant("owner/repo", "token", title, "2026-10-10T10:00:00Z") is None
+def capability(github, index=-1):
+    payload = github.dispatches[index]["client_payload"]
+    run_id = [r for r in github.collector_runs()][index]["id"]
+    return run_id, payload["dispatch_proof"], payload["recovery_epoch"]
 
 
-def test_atomic_ref_race_has_exactly_one_winner():
-    """Simulate GitHub's create-only refs under simultaneous contender writes.
+def start_collector(github, run_id, proof, epoch, attempt=1):
+    github.runs[run_id]["run_attempt"] = attempt
+    collector.verify_trusted_dispatch_before_work(REPO, "token", PR, HEAD, GEN, proof, run_id, epoch=epoch)
 
-    The claim ref is per-dispatch (pr/head/generation/proof). Same proof = same
-    dispatch = same claim ref. Different proofs = different dispatches = different claim refs.
-    """
-    from concurrent.futures import ThreadPoolExecutor
-    from threading import Barrier, Lock
 
-    ref = orchestrator.collector_claim_ref(472, HEAD, GEN, PROOF)
-    assert ref == orchestrator.collector_claim_ref(472, HEAD, GEN, PROOF)
-    assert ref != orchestrator.collector_claim_ref(472, "b" * 40, GEN, PROOF)
-    assert ref != orchestrator.collector_claim_ref(472, HEAD, "other" * 16, PROOF)
-    assert ref != orchestrator.collector_claim_ref(472, HEAD, GEN, "c" * 64)
-    barrier = Barrier(2)
-    lock = Lock()
-    refs = {}
+def fail_collector(github, run_id):
+    github.finish(run_id, "failure")
+
+
+def recover_ready(github):
+    """Age the claim and the pending cycle past the liveness grace."""
+    github.age_claims(orchestrator.COLLECTOR_LIVENESS_GRACE_SECONDS + 600)
+
+
+# 1 ---------------------------------------------------------------------------
+def test_simultaneous_reconciles_with_different_nonces_authorize_exactly_one_dispatch(env, monkeypatch):
+    github, local = env
+    github.add_orchestrator_run(101)
+    github.add_orchestrator_run(102)
+    github.ref_gate = threading.Barrier(2)  # both contenders reach the ref write together
+    nonces = iter(["1" * 64, "2" * 64])
+    nonce_lock = threading.Lock()
+
+    def distinct_nonce(_n):
+        with nonce_lock:
+            return next(nonces)
+
+    monkeypatch.setattr(orchestrator.secrets, "token_hex", distinct_nonce)
 
     def contender(run_id):
-        barrier.wait()
-        with lock:
-            if ref in refs:
-                return False
-            refs[ref] = run_id
-            return True
+        local.run_id = run_id
+        return orchestrator.ensure_collector(REPO, "token", PR, HEAD, GEN)
 
     with ThreadPoolExecutor(max_workers=2) as pool:
-        outcomes = list(pool.map(contender, (778, 779)))
-    assert outcomes.count(True) == 1
-    assert len(refs) == 1
+        results = list(pool.map(contender, (101, 102)))
+
+    assert len(github.dispatches) == 1
+    assert len(github.proofs()) == 1
+    assert github.owner_epochs() == [0]
+    assert len(github.collector_runs()) == 1
+    # The loser published no independent record: the one cycle is the winner's.
+    winner = github.cycle.trigger_id
+    assert winner in {101, 102}
+    assert {r.trigger_id for r in results if r is not None} <= {winner}
+    assert github.cycle_publications == 1
 
 
-def test_atomic_owner_tag_rejects_wrong_run(monkeypatch):
-    name = orchestrator.collector_claim_ref(472, HEAD, GEN, PROOF).removeprefix("tags/")
-
-    def request(_repo, _token, _method, path):
-        if path.startswith("git/ref/"):
-            return {"object": {"type": "tag", "sha": "a" * 40}}
-        if path.startswith("git/tags/"):
-            return {"tag": name, "message": "hunter-collector-run-id=778"}
-        raise AssertionError(path)
-
-    monkeypatch.setattr(orchestrator, "request_json", request)
-    assert orchestrator.read_atomic_collector_owner("owner/repo", "token", 472, HEAD, GEN, PROOF) == 778
-    assert orchestrator.read_atomic_collector_owner("owner/repo", "token", 472, HEAD, GEN, PROOF) != 779
+def test_same_contender_reconciling_twice_never_dispatches_twice(env):
+    github, local = env
+    reconcile(github, local, 101)
+    reconcile(github, local, 101)
+    assert len(github.dispatches) == 1
 
 
-def test_missing_atomic_claim_404_is_unowned(monkeypatch):
-    def missing(*_):
-        raise transport.GitHubRequestError("not found", category="permanent", status_code=404)
+# 2 ---------------------------------------------------------------------------
+def test_winner_crash_before_proof_publication_is_recovered_once(env):
+    github, local = env
+    github.fail["POST statuses/" + HEAD] = fake_gh.Crash()
+    with pytest.raises(fake_gh.Crash):
+        reconcile(github, local, 101)
+    assert github.owner_epochs() == [0] and not github.proofs() and not github.dispatches
+    github.fail.clear()
+    # The owner is still alive: no replacement, however old the claim looks.
+    recover_ready(github)
+    reconcile(github, local, 102)
+    assert not github.dispatches
+    github.finish(101)  # process death observed by the Actions API
+    reconcile(github, local, 102)
+    assert github.owner_epochs() == [0, 1]
+    assert len(github.dispatches) == 1
+    assert github.dispatches[0]["client_payload"]["recovery_epoch"] == "1"
 
-    monkeypatch.setattr(orchestrator, "request_json", missing)
-    assert orchestrator.read_atomic_collector_owner("owner/repo", "token", 472, HEAD, GEN, PROOF) is None
+
+# 3 ---------------------------------------------------------------------------
+def test_winner_crash_after_proof_before_dispatch_is_recovered_once(env):
+    github, local = env
+    github.fail["POST dispatches"] = fake_gh.Crash()
+    with pytest.raises(fake_gh.Crash):
+        reconcile(github, local, 101)
+    assert len(github.proofs()) == 1 and not github.dispatches
+    github.fail.clear()
+    github.finish(101)
+    recover_ready(github)
+    reconcile(github, local, 102)
+    assert github.owner_epochs() == [0, 1]
+    assert len(github.dispatches) == 1
+    # The dead epoch's proof stays on the head but is fenced: it names epoch 0.
+    assert len(github.proofs()) == 2
 
 
-@pytest.mark.parametrize("status,category", [(403, "permanent"), (500, "transient"), (404, "node-resolution")])
-def test_atomic_claim_api_failures_are_not_unowned(monkeypatch, status, category):
-    def unavailable(*_):
-        raise transport.GitHubRequestError("unavailable", category=category, status_code=status)
+# 4 ---------------------------------------------------------------------------
+def test_ambiguous_dispatch_failure_neither_retries_nor_deadlocks(env):
+    github, local = env
+    original = github._dispatch
 
-    monkeypatch.setattr(orchestrator, "request_json", unavailable)
+    def accepted_then_timeout(method, path, payload):
+        result = original(method, path, payload)
+        if method == "POST" and path == "dispatches":
+            raise transport.GitHubRequestError("timed out after accept", category="transport")
+        return result
+
+    github._dispatch = accepted_then_timeout
     with pytest.raises(transport.GitHubRequestError):
-        orchestrator.read_atomic_collector_owner("owner/repo", "token", 472, HEAD, GEN, PROOF)
+        reconcile(github, local, 101)
+    github._dispatch = original
+    assert len(github.dispatches) == 1
+    github.finish(101)
+    recover_ready(github)
+    # GitHub did accept it: a live collector exists, so nothing else may start.
+    reconcile(github, local, 102)
+    assert len(github.dispatches) == 1 and github.owner_epochs() == [0]
+
+
+def test_ambiguous_dispatch_that_was_lost_is_replaced_only_after_owner_ends(env):
+    github, local = env
+    github.fail["POST dispatches"] = transport.GitHubRequestError("500", category="transient", status_code=500)
+    with pytest.raises(transport.GitHubRequestError):
+        reconcile(github, local, 101)
+    github.fail.clear()
+    recover_ready(github)
+    reconcile(github, local, 102)
+    assert not github.dispatches  # owner 101 not yet proven ended
+    github.finish(101)
+    reconcile(github, local, 102)
+    assert len(github.dispatches) == 1 and github.owner_epochs() == [0, 1]
+
+
+# 5 ---------------------------------------------------------------------------
+def test_live_owner_with_a_running_collector_cannot_be_replaced(env):
+    github, local = env
+    reconcile(github, local, 101)
+    github.finish(101, "success")
+    recover_ready(github)  # old, but its collector is still running
+    reconcile(github, local, 102)
+    assert len(github.dispatches) == 1 and github.owner_epochs() == [0]
+
+
+def test_timeout_alone_never_replaces_a_live_owner_run(env):
+    github, local = env
+    github.fail["POST dispatches"] = fake_gh.Crash()
+    with pytest.raises(fake_gh.Crash):
+        reconcile(github, local, 101)
+    github.fail.clear()
+    recover_ready(github)
+    reconcile(github, local, 102)
+    assert github.owner_epochs() == [0] and not github.dispatches
+
+
+# 6 ---------------------------------------------------------------------------
+def test_proven_failed_owner_is_replaced_exactly_once(env):
+    github, local = env
+    reconcile(github, local, 101)
+    first_run, _, _ = capability(github)
+    github.finish(101, "success")
+    fail_collector(github, first_run)
+    recover_ready(github)
+    reconcile(github, local, 102)
+    reconcile(github, local, 102)
+    reconcile(github, local, 103)
+    assert github.owner_epochs() == [0, 1]
+    assert len(github.dispatches) == 2
+
+
+# 7 ---------------------------------------------------------------------------
+def test_two_simultaneous_recovery_contenders_elect_exactly_one_replacement(env, monkeypatch):
+    github, local = env
+    reconcile(github, local, 101)
+    run, _, _ = capability(github)
+    github.finish(101, "success")
+    fail_collector(github, run)
+    recover_ready(github)
+    github.add_orchestrator_run(102)
+    github.add_orchestrator_run(103)
+    github.ref_gate = threading.Barrier(2)
+
+    def contender(run_id):
+        local.run_id = run_id
+        return orchestrator.ensure_collector(REPO, "token", PR, HEAD, GEN)
+
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        list(pool.map(contender, (102, 103)))
+
+    assert github.owner_epochs() == [0, 1]
+    assert len(github.dispatches) == 2
+    assert github.dispatches[1]["client_payload"]["recovery_epoch"] == "1"
+    assert len(github.proofs()) == 2
+
+
+# 8 ---------------------------------------------------------------------------
+def test_old_owner_resuming_after_replacement_is_rejected_at_start_and_publication(env):
+    github, local = env
+    reconcile(github, local, 101)
+    old_run, old_proof, old_epoch = capability(github)
+    start_collector(github, old_run, old_proof, old_epoch)  # it did start once
+    github.finish(101, "success")
+    recover_ready(github)
+    fail_collector(github, old_run)
+    reconcile(github, local, 102)
+    new_run, new_proof, new_epoch = capability(github)
+    assert new_epoch == "1"
+
+    # The stale run is re-run after the replacement: fenced before any work.
+    github.attempts[(old_run, 1)] = {"run_attempt": 1, "status": "completed", "conclusion": "failure"}
+    with pytest.raises(ValueError):
+        start_collector(github, old_run, old_proof, old_epoch, attempt=2)
+
+    # Even a stale success cannot be published once its epoch is replaced.
+    github.runs[old_run]["status"] = "completed"
+    github.runs[old_run]["conclusion"] = "success"
+    outcome = orchestrator.publish_trusted_collector_completion(REPO, "token", old_run, old_proof)
+    assert outcome.startswith("SKIPPED")
+    assert not [s for s in github.statuses if "Collector" in s["context"] and "Proof" not in s["context"]]
+
+    # The replacement is the sole valid owner.
+    start_collector(github, new_run, new_proof, new_epoch)
+
+
+# 9 ---------------------------------------------------------------------------
+def test_replayed_proof_on_another_run_is_rejected(env):
+    github, local = env
+    reconcile(github, local, 101)
+    run, proof, epoch = capability(github)
+    start_collector(github, run, proof, epoch)
+    # An attacker with dispatch rights replays the readable capability.
+    github.dispatches.append(github.dispatches[0])
+    github.runs[9001] = {**github.runs[run], "id": 9001, "run_attempt": 1}
+    with pytest.raises(ValueError, match="already consumed"):
+        start_collector(github, 9001, proof, epoch)
+    # The same run attempt cannot start twice either.
+    with pytest.raises(ValueError):
+        start_collector(github, run, proof, epoch)
+
+
+def test_rerun_of_a_failed_attempt_uses_the_attempt_endpoint_and_is_bounded(env):
+    github, local = env
+    reconcile(github, local, 101)
+    run, proof, epoch = capability(github)
+    start_collector(github, run, proof, epoch, attempt=1)
+    # Attempt 1 has not ended unsuccessfully yet: no attempt 2.
+    github.attempts[(run, 1)] = {"run_attempt": 1, "status": "in_progress", "conclusion": None}
+    with pytest.raises(ValueError):
+        start_collector(github, run, proof, epoch, attempt=2)
+    github.attempts[(run, 1)] = {"run_attempt": 1, "status": "completed", "conclusion": "failure"}
+    start_collector(github, run, proof, epoch, attempt=2)
+    assert ("GET", f"actions/runs/{run}/attempts/1") in github.calls
+    assert not any(path.endswith("/attempts") for _, path in github.calls)
+    github.attempts[(run, 2)] = {"run_attempt": 2, "status": "completed", "conclusion": "failure"}
+    start_collector(github, run, proof, epoch, attempt=3)
+    github.attempts[(run, 3)] = {"run_attempt": 3, "status": "completed", "conclusion": "failure"}
+    with pytest.raises(ValueError):
+        start_collector(github, run, proof, epoch, attempt=4)
+
+
+def test_cross_generation_and_cross_head_capabilities_are_rejected(env):
+    github, local = env
+    reconcile(github, local, 101)
+    run, proof, epoch = capability(github)
+    with pytest.raises(ValueError):
+        collector.verify_trusted_dispatch_before_work(REPO, "token", PR, HEAD, "other-gen", proof, run, epoch=epoch)
+    with pytest.raises(ValueError):
+        collector.verify_trusted_dispatch_before_work(REPO, "token", PR, "b" * 40, GEN, proof, run, epoch=epoch)
+    with pytest.raises(ValueError):
+        collector.verify_trusted_dispatch_before_work(REPO, "token", PR, HEAD, GEN, "c" * 64, run, epoch=epoch)
+    with pytest.raises(ValueError):
+        collector.verify_trusted_dispatch_before_work(REPO, "token", PR, HEAD, GEN, proof, run, epoch="1")
+
+
+# 10 --------------------------------------------------------------------------
+@pytest.mark.parametrize(
+    "needle",
+    ["GET git/ref/*", "POST git/refs", "POST git/tags", "GET commits/main", "POST statuses/*", "POST dispatches"],
+)
+@pytest.mark.parametrize("status,category", [(500, "transient"), (403, "permanent"), (None, "transport")])
+def test_unavailable_github_evidence_fails_closed(env, needle, status, category):
+    github, local = env
+    github.fail[needle] = transport.GitHubRequestError("down", category=category, status_code=status)
+    with pytest.raises((transport.GitHubRequestError, ValueError, RuntimeError)):
+        reconcile(github, local, 101)
+    # Nothing is dispatched on unverifiable evidence; only a dispatch API failure
+    # can follow a successful (single) election.
+    assert len(github.dispatches) == 0
+    assert len(github.owner_epochs()) <= 1
+
+
+def test_unreadable_owner_run_evidence_never_authorizes_recovery(env):
+    github, local = env
+    reconcile(github, local, 101)
+    run, _, _ = capability(github)
+    github.finish(101, "success")
+    fail_collector(github, run)
+    recover_ready(github)
+    github.fail["GET actions/runs/101"] = transport.GitHubRequestError("500", category="transient", status_code=500)
+    with pytest.raises(transport.GitHubRequestError):
+        reconcile(github, local, 102)
+    assert github.owner_epochs() == [0] and len(github.dispatches) == 1
+
+
+def test_malformed_claim_is_not_treated_as_unowned(env):
+    github, local = env
+    reconcile(github, local, 101)
+    fail_collector(github, capability(github)[0])
+    github.finish(101)
+    recover_ready(github)
+    ref = next(iter(github.refs))
+    github.tags[github.refs[ref]]["message"] = "not-json"
+    with pytest.raises(ValueError):
+        reconcile(github, local, 102)
+    assert len(github.dispatches) == 1
+
+
+# 11 --------------------------------------------------------------------------
+def test_successful_completion_blocks_recovery(env):
+    github, local = env
+    reconcile(github, local, 101)
+    run, _, _ = capability(github)
+    github.finish(101, "success")
+    github.finish(run, "success")
+    recover_ready(github)
+    reconcile(github, local, 102)
+    assert github.owner_epochs() == [0] and len(github.dispatches) == 1
+
+
+def test_recovery_between_success_check_and_publication_fences_the_publication(env, monkeypatch):
+    github, local = env
+    reconcile(github, local, 101)
+    run, proof, epoch = capability(github)
+    start_collector(github, run, proof, epoch)
+    github.finish(101, "success")
+    github.finish(run, "success")
+    real_read = orchestrator.read_owner_chain
+    calls = {"n": 0}
+
+    def replaced_after_first_check(*args):
+        chain = real_read(*args)
+        calls["n"] += 1
+        if calls["n"] == 1:
+            # A recovery lands right after the first authority check.
+            record = {
+                "v": 1,
+                "kind": "owner",
+                "pr": PR,
+                "head": HEAD,
+                "generation": GEN,
+                "epoch": 1,
+                "orchestrator_run": 102,
+                "nonce_sha256": "9" * 64,
+                "claimed_at": "2026-10-10T10:00:05Z",
+            }
+            orchestrator._create_claim(REPO, "token", orchestrator.collector_owner_ref(PR, HEAD, GEN, 1), record)
+        return chain
+
+    monkeypatch.setattr(orchestrator, "read_owner_chain", replaced_after_first_check)
+    outcome = orchestrator.publish_trusted_collector_completion(REPO, "token", run, proof)
+    assert outcome.startswith("SKIPPED")
+    assert not [s for s in github.statuses if "Collector" in s["context"] and "Proof" not in s["context"]]
+
+
+def test_valid_current_owner_completion_is_published(env):
+    github, local = env
+    reconcile(github, local, 101)
+    run, proof, epoch = capability(github)
+    start_collector(github, run, proof, epoch)
+    github.finish(101, "success")
+    github.finish(run, "success")
+    outcome = orchestrator.publish_trusted_collector_completion(REPO, "token", run, proof)
+    assert outcome.startswith("PUBLISHED")
+
+
+def test_completion_without_a_run_claim_is_rejected(env):
+    github, local = env
+    reconcile(github, local, 101)
+    run, proof, _ = capability(github)
+    github.finish(101, "success")
+    github.finish(run, "success")  # never passed the start gate: no run claim
+    outcome = orchestrator.publish_trusted_collector_completion(REPO, "token", run, proof)
+    assert outcome.startswith("SKIPPED")
+
+
+# 12 --------------------------------------------------------------------------
+def test_recovery_is_bounded_and_never_loops_dispatching(env):
+    github, local = env
+    for round_number in range(1, 12):
+        orchestrator_run = 100 + round_number
+        reconcile(github, local, orchestrator_run)
+        for run in github.collector_runs():
+            if run["status"] != "completed":
+                fail_collector(github, run["id"])
+        github.finish(orchestrator_run, "success")
+        recover_ready(github)
+    assert len(github.dispatches) == orchestrator.MAX_COLLECTOR_DISPATCHES
+    assert github.owner_epochs() == list(range(orchestrator.MAX_COLLECTOR_DISPATCHES))
+    assert len(github.proofs()) == orchestrator.MAX_COLLECTOR_DISPATCHES
+
+
+# Authority shape -----------------------------------------------------------------
+def test_owner_ref_is_independent_of_the_dispatch_nonce():
+    ref = orchestrator.collector_owner_ref(PR, HEAD, GEN, 0)
+    assert ref == orchestrator.collector_owner_ref(PR, HEAD, GEN, 0)
+    assert ref != orchestrator.collector_owner_ref(PR, HEAD, GEN, 1)
+    assert ref != orchestrator.collector_owner_ref(PR, "b" * 40, GEN, 0)
+    assert ref != orchestrator.collector_owner_ref(PR, HEAD, "other" * 12, 0)
+    assert ref != orchestrator.collector_owner_ref(PR + 1, HEAD, GEN, 0)
+
+
+def test_status_without_an_owner_claim_is_not_ownership(env):
+    """A forged trusted-looking status alone cannot authorize a collector."""
+    github, local = env
+    reconcile(github, local, 101)
+    run, proof, epoch = capability(github)
+    github.refs.clear()
+    with pytest.raises(ValueError):
+        start_collector(github, run, proof, epoch)
+
+
+def test_completion_with_a_wrong_capability_is_skipped(env):
+    github, local = env
+    reconcile(github, local, 101)
+    run, proof, epoch = capability(github)
+    start_collector(github, run, proof, epoch)
+    github.finish(101, "success")
+    github.finish(run, "success")
+    assert orchestrator.publish_trusted_collector_completion(REPO, "token", run, "c" * 64).startswith("SKIPPED")
+    assert orchestrator.publish_trusted_collector_completion(REPO, "token", run, "").startswith("SKIPPED")
+
+
+@pytest.mark.parametrize("override", [{"head_branch": "attacker"}, {"conclusion": "failure"}, {}])
+def test_untrusted_lookalike_run_neither_starts_nor_blocks_the_legitimate_collector(env, override):
+    github, local = env
+    reconcile(github, local, 101)
+    run, proof, epoch = capability(github)
+    lookalike = {**github.runs[run], "id": 7777, "created_at": "2026-10-10T10:00:00Z", **override}
+    lookalike["status"] = "completed"
+    github.runs[7777] = lookalike
+    with pytest.raises(ValueError):
+        start_collector(github, 7777, "e" * 64, epoch)
+    if override.get("head_branch"):
+        with pytest.raises(ValueError):
+            start_collector(github, 7777, proof, epoch)
+    start_collector(github, run, proof, epoch)
+    github.finish(101, "success")
+    github.finish(run, "success")
+    assert orchestrator.publish_trusted_collector_completion(REPO, "token", run, proof).startswith("PUBLISHED")

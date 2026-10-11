@@ -25,6 +25,8 @@ CLAIMS = "d" * 64
 GENERATION = "0123456789abcdef"
 OTHER_GENERATION = "fedcba9876543210"
 
+pytestmark = pytest.mark.usefixtures("winning_election")
+
 
 def make_cycle(**overrides):
     values = {
@@ -81,7 +83,9 @@ class FakeOrchestration:
     def _publish_cycle(self, *_args, cycle):
         self.cycle = cycle
 
-    def _dispatch(self, _repository, _token, pr_number, head_sha, generation_id=orchestrator.BASE_GENERATION_ID):
+    def _dispatch(
+        self, _repository, _token, pr_number, head_sha, generation_id=orchestrator.BASE_GENERATION_ID, _election=None
+    ):
         self.dispatches.append(generation_id)
         self.runs.append(_run("in_progress", generation_id=generation_id, pr_number=pr_number, head_sha=head_sha))
 

@@ -670,7 +670,7 @@
       "classification": "systemic",
       "guard_boundary": "Governance workflow / collector dispatch, provenance, recovery, and review lifecycle",
       "guard": "Finding recorded; candidate regression mapping is not independently verified as prevention.",
-      "test": "tests/test_hunter_review_orchestrator.py::test_trusted_collector_completion_dispatch_capability",
+      "test": "tests/test_collector_dispatch_adversarial.py::test_completion_with_a_wrong_capability_is_skipped",
       "status": "open"
     },
     {
@@ -690,7 +690,7 @@
       "classification": "systemic",
       "guard_boundary": "Governance workflow / collector dispatch, provenance, recovery, and review lifecycle",
       "guard": "Finding recorded; candidate regression mapping is not independently verified as prevention.",
-      "test": "tests/test_hunter_review_orchestrator.py::test_trusted_collector_completion_dispatch_capability",
+      "test": "tests/test_collector_dispatch_adversarial.py::test_completion_with_a_wrong_capability_is_skipped",
       "status": "open"
     },
     {
@@ -710,7 +710,7 @@
       "classification": "systemic",
       "guard_boundary": "Governance workflow / collector dispatch, provenance, recovery, and review lifecycle",
       "guard": "Finding recorded; candidate regression mapping is not independently verified as prevention.",
-      "test": "tests/test_hunter_review_orchestrator.py::test_trusted_completion_rejects_replayed_proof_on_another_run",
+      "test": "tests/test_collector_dispatch_adversarial.py::test_replayed_proof_on_another_run_is_rejected",
       "status": "open"
     },
     {
@@ -910,7 +910,7 @@
       "classification": "systemic",
       "guard_boundary": "Governance workflow / collector dispatch, provenance, recovery, and review lifecycle",
       "guard": "Finding recorded; candidate regression mapping is not independently verified as prevention.",
-      "test": "tests/test_hunter_review_orchestrator.py::test_trusted_completion_rejects_replayed_proof_on_another_run",
+      "test": "tests/test_collector_dispatch_adversarial.py::test_replayed_proof_on_another_run_is_rejected",
       "status": "open"
     },
     {
@@ -940,7 +940,7 @@
       "classification": "systemic",
       "guard_boundary": "Governance workflow / collector dispatch, provenance, recovery, and review lifecycle",
       "guard": "Finding recorded; candidate regression mapping is not independently verified as prevention.",
-      "test": "tests/test_hunter_review_orchestrator.py::test_trusted_collector_completion_dispatch_capability",
+      "test": "tests/test_collector_dispatch_adversarial.py::test_completion_with_a_wrong_capability_is_skipped",
       "status": "open"
     },
     {
@@ -970,7 +970,7 @@
       "classification": "systemic",
       "guard_boundary": "Governance workflow / collector dispatch, provenance, recovery, and review lifecycle",
       "guard": "Finding recorded; candidate regression mapping is not independently verified as prevention.",
-      "test": "tests/test_hunter_review_orchestrator.py::test_untrusted_earlier_claimant_cannot_block_valid_collector",
+      "test": "tests/test_collector_dispatch_adversarial.py::test_untrusted_lookalike_run_neither_starts_nor_blocks_the_legitimate_collector",
       "status": "open"
     },
     {
@@ -980,7 +980,17 @@
       "classification": "systemic",
       "guard_boundary": "Governance workflow / collector dispatch, provenance, recovery, and review lifecycle",
       "guard": "Consume the entire paginated status stream before evaluating whether a trusted completion exists; reject early-closing grep -q in the pipeline.",
-      "test": "tests/test_hunter_review_orchestrator.py::test_scheduled_recovery_status_search_does_not_short_circuit_paginated_api",
+      "test": "tests/test_hunter_review_orchestrator.py::test_prh112_regression_no_status_skip_pipeline_to_sigpipe",
+      "status": "open"
+    },
+    {
+      "id": "PRH-113",
+      "class": "pr592-collector-ownership-keyed-by-dispatch-nonce-allows-multiple-owners-and-immutable-claims-deadlock-recovery",
+      "source": "PR #592 atomic ownership, recovery and fencing contract",
+      "classification": "systemic",
+      "guard_boundary": "Governance workflow / collector dispatch, provenance, recovery, and review lifecycle",
+      "guard": "One create-only owner ref per (PR, exact head, generation, recovery epoch) independent of the dispatch nonce; a new epoch only on Actions-API evidence that the owner run ended without a valid collector result (never timeout alone), bounded by MAX_COLLECTOR_DISPATCHES; collector start and trusted completion both require the newest epoch, the matching proof status and the run-attempt claim; the run-attempts endpoint is addressed per attempt. Exercised through the real election against a create-only ref model, not a helper.",
+      "test": "tests/test_collector_dispatch_adversarial.py::test_simultaneous_reconciles_with_different_nonces_authorize_exactly_one_dispatch",
       "status": "open"
     }
   ],
@@ -2304,12 +2314,12 @@
         "rationale": "hunter_review_orchestrator.ensure_collector is the sole trusted mint point for a collector dispatch, and hunter-governance-reconcile.yml is the only workflow that invokes it. Near-simultaneous or closely-spaced reconcile executions -- triggered by distinct events (a review, a review comment, a workflow_run completion, ready_for_review, the schedule) that this same workflow already reacts to -- are exactly the condition under which two calls can each observe a stale 'absent' status read for the same exact-head identity."
       },
       "prevention": {
-        "mechanism": "ensure_collector now cross-checks the collector run listing (collector_liveness) before minting a fresh dispatch whenever no trusted cycle status is visible at all for the requested identity (read_cycle reports anything other than a matching 'present'), converging on an already-live, dead, or completed run for that exact (pr, head, generation) identity instead of dispatching again. Unreadable liveness evidence fails closed to not dispatching, exactly as the existing collector_needs_dispatch and remediation_generation_admissible checks already fail closed on their own unreadable evidence. The pre-existing, unmodified 'present' branch -- COLLECTOR_LIVENESS_GRACE_SECONDS, MAX_COLLECTOR_DISPATCHES, collector_needs_dispatch -- continues to govern bounded recovery of a genuinely dead dispatch unaffected by this check.",
+        "mechanism": "ensure_collector now cross-checks the collector run listing (collector_liveness) before minting a fresh dispatch whenever no trusted cycle status is visible at all for the requested identity (read_cycle reports anything other than a matching 'present'), converging on an already-live, dead, or completed run for that exact (pr, head, generation) identity instead of dispatching again. Unreadable liveness evidence fails closed to not dispatching, exactly as the existing collector_needs_dispatch and remediation_generation_admissible checks already fail closed on their own unreadable evidence. The pre-existing, unmodified 'present' branch -- COLLECTOR_LIVENESS_GRACE_SECONDS, MAX_COLLECTOR_DISPATCHES, collector_needs_dispatch -- continues to govern bounded recovery of a genuinely dead dispatch unaffected by this check. The residual simultaneous-read window this left open is closed by PRH-113: dispatch requires winning a create-only owner ref per (PR, head, generation, epoch), so a stale liveness read no longer decides who dispatches.",
         "boundary": "review"
       },
       "regression_evidence": [
         "tests/test_hunter_review_orchestrator.py::test_a_second_call_sees_the_correlated_collector_and_does_not_redispatch",
-        "tests/test_hunter_review_orchestrator.py::test_two_genuinely_simultaneous_dispatches_can_both_miss_the_correlated_run",
+        "tests/test_hunter_review_orchestrator.py::test_two_genuinely_simultaneous_reconciles_elect_one_dispatcher",
         "tests/test_hunter_review_orchestrator.py::test_a_failed_collector_is_redispatched_rather_than_parking_the_cycle",
         "tests/test_hunter_review_orchestrator.py::test_ready_review_request_dispatches_collector_once"
       ],

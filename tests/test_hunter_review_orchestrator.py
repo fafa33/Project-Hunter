@@ -16,6 +16,11 @@ import yaml
 HEAD = "a" * 40
 REPOSITORY_ROOT = pathlib.Path(orchestrator.__file__).resolve().parents[1]
 
+pytestmark = pytest.mark.usefixtures("winning_election")
+
+# The real election, captured before the gating-suite stub is applied.
+_REAL_ELECTION = orchestrator.elect_collector_owner
+
 
 def _five_minutes_ago():
     from datetime import UTC, datetime, timedelta
@@ -121,7 +126,9 @@ def _absent_cycle_with_recorded_dispatches(monkeypatch) -> dict:
     monkeypatch.setattr(orchestrator, "current_run_id", lambda: 999, raising=False)
     monkeypatch.setattr(orchestrator, "publish_cycle", lambda *_args, **_kwargs: None, raising=False)
 
-    def dispatch_collector(_repository, _token, pr_number, head_sha, generation_id=orchestrator.BASE_GENERATION_ID):
+    def dispatch_collector(
+        _repository, _token, pr_number, head_sha, generation_id=orchestrator.BASE_GENERATION_ID, _election=None
+    ):
         stored["dispatches"] += 1
         runs.append(_collector_run("in_progress", pr_number=pr_number, head_sha=head_sha, run_id=stored["dispatches"]))
 
@@ -166,42 +173,36 @@ def test_a_second_call_sees_the_correlated_collector_and_does_not_redispatch(mon
     assert second.state == "WAITING_FOR_REVIEWER"
 
 
-def test_two_genuinely_simultaneous_dispatches_can_both_miss_the_correlated_run(monkeypatch):
-    """Documents the residual window the previous test's name overclaimed.
+def test_two_genuinely_simultaneous_reconciles_elect_one_dispatcher(monkeypatch):
+    """Both contenders read "no collector run" before either dispatches.
 
-    Two reconciles that both read the cycle status as absent *and* both read
-    collector liveness before either has dispatched will each dispatch. Nothing
-    in the current design closes that window: GitHub's status API has no
-    compare-and-set, so publishing the durable record is not atomic with acting
-    on it. The bounded recovery path in ``collector_needs_dispatch`` is what
-    keeps the consequence bounded -- a redundant collector, never a false clear --
-    so this is recorded as a known limitation rather than asserted away.
-
-    Closing it needs an atomic claim (a lock/lease on the exact identity), which
-    is a trust-boundary change for the owner to authorize rather than something
-    to slip in while reconciling a conflict.
+    This used to document an open window (two dispatches). The create-only owner
+    election closes it: the stale liveness read no longer decides anything, so
+    exactly one contender dispatches and the other publishes and dispatches
+    nothing. Driven through the real election against a create-only ref model.
     """
+    import threading
+    from concurrent.futures import ThreadPoolExecutor
 
-    stored = _absent_cycle_with_recorded_dispatches(monkeypatch)
-    stored["reads"] = []
+    import fake_github_ownership as fake_gh
 
-    def collector_liveness(_repository, _token, _pr, _head, _generation_id=orchestrator.BASE_GENERATION_ID):
-        # Read liveness before honouring any dispatch, so neither call can see
-        # the other's run -- the true simultaneous case.
-        stored["reads"].append(stored["dispatches"])
-        return ("missing", 0)
+    github = fake_gh.FakeGitHub()
+    local = fake_gh.install(monkeypatch, github)
+    monkeypatch.setattr(orchestrator, "elect_collector_owner", _REAL_ELECTION)
+    github.add_orchestrator_run(101)
+    github.add_orchestrator_run(102)
+    github.ref_gate = threading.Barrier(2)
+    monkeypatch.setattr(orchestrator, "collector_liveness", lambda *_a: ("missing", 0))
 
-    monkeypatch.setattr(orchestrator, "collector_liveness", collector_liveness, raising=False)
+    def contender(run_id):
+        local.run_id = run_id
+        return orchestrator.ensure_collector("owner/repo", "token", 472, HEAD)
 
-    first = orchestrator.ensure_collector("owner/repo", "token", 472, HEAD)
-    second = orchestrator.ensure_collector("owner/repo", "token", 472, HEAD)
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        list(pool.map(contender, (101, 102)))
 
-    # Both calls observed a missing correlated run: neither saw the other's.
-    assert stored["reads"] == [0, 1]
-    assert stored["dispatches"] == 2
-    # Both still publish the same durable, non-authoritative pending state.
-    assert first.state == "WAITING_FOR_REVIEWER"
-    assert second.state == "WAITING_FOR_REVIEWER"
+    assert len(github.dispatches) == 1
+    assert github.owner_epochs() == [0]
 
 
 def _seconds_ago(seconds: int) -> str:
@@ -447,7 +448,7 @@ def test_a_missing_run_id_refuses_before_any_collector_is_dispatched(monkeypatch
     stored = {"cycle": None, "dispatches": 0}
     monkeypatch.setattr(orchestrator, "read_cycle", lambda *_args: ("absent", None, None))
     monkeypatch.setattr(orchestrator, "reviewer_pool_config_digest", lambda: "d" * 64, raising=False)
-    monkeypatch.setattr(orchestrator, "current_run_id", lambda: None, raising=False)
+    monkeypatch.delenv("GITHUB_RUN_ID", raising=False)
     monkeypatch.setattr(orchestrator, "publish_cycle", lambda *_args, cycle: stored.update(cycle=cycle), raising=False)
     monkeypatch.setattr(orchestrator, "collector_liveness", lambda *_args: ("missing", 0), raising=False)
     monkeypatch.setattr(
@@ -457,7 +458,7 @@ def test_a_missing_run_id_refuses_before_any_collector_is_dispatched(monkeypatch
         raising=False,
     )
 
-    with pytest.raises(RuntimeError, match="GITHUB_RUN_ID"):
+    with pytest.raises(ValueError, match="GITHUB_RUN_ID"):
         orchestrator.ensure_collector("owner/repo", "token", 472, HEAD)
 
     assert stored["dispatches"] == 0
@@ -703,30 +704,28 @@ def test_collector_workflow_renders_the_correlated_run_name():
 
 
 def test_dispatch_collector_sends_only_exact_identity(monkeypatch):
-    seen = []
-    monkeypatch.setattr(
-        orchestrator,
-        "request_json",
-        lambda repository, token, method, path, payload=None: seen.append((method, path, payload)),
-    )
+    """The elected owner's proof and dispatch carry exactly the cycle identity and epoch."""
+    import fake_github_ownership as fake_gh
+
+    github = fake_gh.FakeGitHub()
+    github.add_orchestrator_run(123)
+    monkeypatch.setattr(orchestrator, "elect_collector_owner", _REAL_ELECTION)
+    monkeypatch.setattr(orchestrator, "request_json", github.request_json)
     monkeypatch.setenv("GITHUB_RUN_ID", "123")
 
     orchestrator.dispatch_collector("owner/repo", "token", 472, HEAD)
 
-    assert len(seen) == 2
-    method, path, status = seen[0]
-    assert method == "POST" and path == f"statuses/{HEAD}"
+    assert len(github.dispatches) == 1 and len(github.proofs()) == 1
+    status, dispatch = github.proofs()[0], github.dispatches[0]
     assert status["context"] == "Hunter Collector Dispatch Proof / PR #472"
-    method, path, dispatch = seen[1]
-    assert method == "POST" and path == "dispatches"
     assert dispatch["event_type"] == "hunter-reviewer-collect"
-    assert dispatch["client_payload"]["pr_number"] == "472"
-    assert dispatch["client_payload"]["head_sha"] == HEAD
-    assert dispatch["client_payload"]["generation_id"] == ""
-    assert (
-        status["description"]
-        == "|" + orchestrator.hashlib.sha256(dispatch["client_payload"]["dispatch_proof"].encode()).hexdigest()
-    )
+    payload = dispatch["client_payload"]
+    assert payload["pr_number"] == "472" and payload["head_sha"] == HEAD
+    assert payload["generation_id"] == "" and payload["recovery_epoch"] == "0"
+    assert status["description"] == orchestrator.dispatch_proof_description("", 0, payload["dispatch_proof"])
+    # A second direct call by the same run holds the claim already and sends nothing.
+    orchestrator.dispatch_collector("owner/repo", "token", 472, HEAD)
+    assert len(github.dispatches) == 1
 
 
 def _workflow_documents():
@@ -1685,112 +1684,6 @@ def test_trusted_collector_completion_rejects_untrusted_run(monkeypatch, overrid
     assert not published
 
 
-def _trusted_collector_fixture(run, *, first_run=None):
-    """Shared trusted API responses for positive and adversarial dispatch tests."""
-    origin = {
-        "id": 123,
-        "head_branch": "main",
-        "path": ".github/workflows/hunter-governance-reconcile.yml",
-        "event": "schedule",
-    }
-    status = {
-        "context": "Hunter Collector Dispatch Proof / PR #472",
-        "description": "|" + orchestrator.hashlib.sha256(("a" * 64).encode()).hexdigest(),
-        "creator": {"login": "github-actions[bot]"},
-        "target_url": "https://github.com/owner/repo/actions/runs/123",
-        "created_at": "2026-10-09T19:00:00Z",
-    }
-    cycle = orchestrator.ReviewCycle(
-        472,
-        HEAD,
-        "WAITING_FOR_REVIEWER",
-        "",
-        123,
-        "2026-10-09T19:00:00Z",
-        "digest",
-        orchestrator.BASE_GENERATION_ID,
-    )
-    responses = {
-        f"actions/runs/{run['id']}": run,
-        "actions/runs/123": origin,
-        "": {"default_branch": "main"},
-        "commits/main": {"sha": HEAD},
-        "pulls/472": {"state": "open", "head": {"sha": HEAD}},
-        f"commits/{HEAD}/statuses?per_page=100": [status],
-    }
-
-    runs = [first_run, run] if first_run is not None else [run]
-    for item in runs:
-        item.setdefault("path", orchestrator.COLLECTOR_WORKFLOW_PATH)
-
-    def request(_repo, _token, _method, path, _payload=None):
-        if path == (
-            f"actions/workflows/{orchestrator.COLLECTOR_WORKFLOW}/runs?" "event=repository_dispatch&per_page=100&page=1"
-        ):
-            return {"workflow_runs": runs}
-        return responses[path]
-
-    return request, cycle, runs
-
-
-@pytest.mark.parametrize("capability,accepted", [("a", True), ("b", False)])
-def test_trusted_collector_completion_dispatch_capability(monkeypatch, capability, accepted):
-    run = {
-        "id": 777,
-        "path": orchestrator.COLLECTOR_WORKFLOW_PATH,
-        "event": "repository_dispatch",
-        "head_branch": "main",
-        "head_sha": HEAD,
-        "status": "completed",
-        "conclusion": "success",
-        "display_title": f"Hunter Reviewer Collector PR 472 HEAD {HEAD}",
-        "created_at": "2026-10-09T19:01:00Z",
-    }
-    request, cycle, runs = _trusted_collector_fixture(run)
-    published = []
-    monkeypatch.setattr(orchestrator, "request_json", request)
-    monkeypatch.setattr(orchestrator, "read_cycle", lambda *_: ("present", cycle, None))
-    monkeypatch.setattr(orchestrator, "collector_runs", lambda *_: runs)
-    monkeypatch.setattr(orchestrator, "publish_collector_completion", lambda *args: published.append(args))
-    monkeypatch.setattr(orchestrator, "read_atomic_collector_owner", lambda *_: 777)
-    result = orchestrator.publish_trusted_collector_completion("owner/repo", "token", 777, capability * 64)
-    assert result.startswith("PUBLISHED:") if accepted else "SKIPPED" in result
-    assert bool(published) == accepted
-    if accepted:
-        assert published == [("owner/repo", "token", 472, HEAD, 777)]
-
-
-def test_trusted_completion_rejects_replayed_proof_on_another_run(monkeypatch):
-    original = {
-        "id": 777,
-        "created_at": "2026-10-09T19:01:00Z",
-        "display_title": f"Hunter Reviewer Collector PR 472 HEAD {HEAD}",
-        "head_branch": "main",
-        "status": "completed",
-        "conclusion": "success",
-    }
-    replay = dict(
-        original,
-        id=778,
-        created_at="2026-10-09T19:02:00Z",
-        path=orchestrator.COLLECTOR_WORKFLOW_PATH,
-        event="repository_dispatch",
-        head_branch="main",
-        head_sha=HEAD,
-        status="completed",
-        conclusion="success",
-    )
-    request, cycle, runs = _trusted_collector_fixture(replay, first_run=original)
-    published = []
-    monkeypatch.setattr(orchestrator, "request_json", request)
-    monkeypatch.setattr(orchestrator, "read_cycle", lambda *_: ("present", cycle, None))
-    monkeypatch.setattr(orchestrator, "collector_runs", lambda *_: runs)
-    monkeypatch.setattr(orchestrator, "publish_collector_completion", lambda *args: published.append(args))
-    monkeypatch.setattr(orchestrator, "read_atomic_collector_owner", lambda *_: 777)
-    assert "SKIPPED" in orchestrator.publish_trusted_collector_completion("owner/repo", "token", 778, "a" * 64)
-    assert not published
-
-
 def test_trusted_completion_rejects_unreachable_main_revision(monkeypatch):
     run = {
         "id": 777,
@@ -2401,37 +2294,6 @@ def test_commit_status_pagination_keeps_old_trusted_dispatch_proof(monkeypatch):
     assert len(statuses) == 101
     assert proof in statuses
     assert len(calls) == 2
-
-
-@pytest.mark.parametrize(
-    "override",
-    [
-        {"head_branch": "attacker"},
-        {"status": "completed", "conclusion": "failure"},
-    ],
-)
-def test_untrusted_earlier_claimant_cannot_block_valid_collector(monkeypatch, override):
-    valid = {
-        "id": 778,
-        "created_at": "2026-10-09T19:02:00Z",
-        "display_title": f"Hunter Reviewer Collector PR 472 HEAD {HEAD}",
-        "path": orchestrator.COLLECTOR_WORKFLOW_PATH,
-        "event": "repository_dispatch",
-        "head_branch": "main",
-        "head_sha": HEAD,
-        "status": "completed",
-        "conclusion": "success",
-    }
-    earlier = dict(valid, id=777, created_at="2026-10-09T19:01:00Z", **override)
-    request, cycle, _runs = _trusted_collector_fixture(valid, first_run=earlier)
-    published = []
-    monkeypatch.setattr(orchestrator, "request_json", request)
-    monkeypatch.setattr(orchestrator, "read_cycle", lambda *_: ("present", cycle, None))
-    monkeypatch.setattr(orchestrator, "publish_collector_completion", lambda *args: published.append(args))
-    monkeypatch.setattr(orchestrator, "read_atomic_collector_owner", lambda *_: 778)
-    result = orchestrator.publish_trusted_collector_completion("owner/repo", "token", 778, "a" * 64)
-    assert result.startswith("PUBLISHED:")
-    assert len(published) == 1
 
 
 def test_scheduled_recovery_never_skips_receipts_on_status_alone():

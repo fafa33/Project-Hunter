@@ -133,13 +133,13 @@ _RECOVERY_FLAG_SET = (
 )
 _RECOVERY_PUBLISH_SKIPPED = (
     """    publish_cycle(repository, token, head_sha, cycle=cycle)
-    if liveness not in {"active", "completed"}:
-        dispatch_collector(repository, token, pr_number, head_sha, generation_id)
+    if election is not None:
+        dispatch_collector(repository, token, pr_number, head_sha, generation_id, election)
     return cycle""",
     """    if not _recovering:
         publish_cycle(repository, token, head_sha, cycle=cycle)
-    if liveness not in {"active", "completed"}:
-        dispatch_collector(repository, token, pr_number, head_sha, generation_id)
+    if election is not None:
+        dispatch_collector(repository, token, pr_number, head_sha, generation_id, election)
     return cycle""",
 )
 RECOVERY_DISPATCHES_WITHOUT_REFRESHING_RECORD = (
@@ -184,6 +184,8 @@ RECOVERY_REFRESH_PRESERVES_STALE_STARTED_AT = (
         """        trigger_id=run_id,
         started_at=(
             datetime.now(UTC) - timedelta(seconds=COLLECTOR_LIVENESS_GRACE_SECONDS + 60)
+            if existing is not None
+            else datetime.now(UTC)
         ).strftime("%Y-%m-%dT%H:%M:%SZ"),""",
     ),
 )
