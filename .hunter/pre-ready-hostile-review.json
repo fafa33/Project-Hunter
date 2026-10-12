@@ -3,37 +3,37 @@
     "acceptance_criteria": [
       {
         "criterion": "Trusted v1/v2 contract selection and downgrade prevention",
-        "evidence": "Candidate contract is independently classified; v1 downgrade and receipt relabel adversarial tests committed.",
+        "evidence": "Contract classification and floor read candidate files only through worker.resolve_candidate_file (symlink/escape rejected before classify/compare/import/hash); v2 candidate fixture exercises v1/v2 selection, downgrade and relabel rejection.",
         "id": "AC-1",
         "verdict": "satisfied"
       },
       {
         "criterion": "Isolated candidate execution and fail-closed receipt verification",
-        "evidence": "Candidate scenarios execute in isolated workers; receipt version, digest, exact-head and trusted harness identity are validated.",
+        "evidence": "Digest covers the full candidate input closure (transitive imports + docs/CODE_WRITE_POLICY.json) via one shared definition used by run and verify jobs; symlink, missing, unparseable and mutated dependencies fail closed.",
         "id": "AC-2",
         "verdict": "satisfied"
       },
       {
         "criterion": "Preserve legacy v1 terminality, bounded collector recovery and idempotence",
-        "evidence": "v1 behavioral grace-boundary, dispatch-budget and active-collector-ceiling probes committed; Copilot finding addressed at 11cea57.",
+        "evidence": "v1 scenario A drives the real ensure_collector through a stale-cycle sequence (idempotence, bounded redispatch, refresh, terminal timeout, active ceiling) with mutation tests.",
         "id": "AC-3",
         "verdict": "satisfied"
       },
       {
         "criterion": "Preserve v2 publisher and receipt provenance rules",
-        "evidence": "Trusted publisher fixture uses real governance workflow; v2 publisher and receipt identity checks retained.",
+        "evidence": "v2 scenario A verifies the budget is pool-derived by mutating the pool, rejects forged/missing creators and malformed descriptions through real read_cycle/_parse_cycle; v2 scenarios run in the normal suite.",
         "id": "AC-4",
         "verdict": "satisfied"
       },
       {
         "criterion": "Deterministic regression and repository governance gates",
-        "evidence": "79 passed and 8 skipped on previous full replay suite; current post-fix full suite must be independently checked; pre-push guards passed at 11cea57.",
+        "evidence": "tests/test_hunter_trusted_orchestrator_replay.py: 131 passed, 0 skipped on the remediation tree; Ruff, Black, Mypy, Architecture, Artifact and Defect Prevention checks pass; exact-head hosted preflight still required.",
         "id": "AC-5",
         "verdict": "satisfied"
       },
       {
         "criterion": "Owner-controlled rollout without bypass or merge",
-        "evidence": "PR remains Draft, no merge performed, no security gate disabled.",
+        "evidence": "Owner-signed commit; PR remains Draft; no merge; no gate disabled; no independent clearance claimed by this author request.",
         "id": "AC-6",
         "verdict": "satisfied"
       }
@@ -236,13 +236,13 @@
         "status": "modified"
       },
       {
-        "blob_sha": "9d2df6e299cd9db0760b07300020180cee772c43",
+        "blob_sha": "5205defaddda93153584f02d5cacdc19e9c5b53c",
         "path": "docs/DEFECT_REGISTRY.json",
         "previous_path": "",
         "status": "modified"
       },
       {
-        "blob_sha": "84f045357272b90df4443778efe29c41fc88a89d",
+        "blob_sha": "493c9d6a3603de0c1b15dff21cfc296b78450685",
         "path": "scripts/hunter_trusted_orchestrator_replay.py",
         "previous_path": "",
         "status": "modified"
@@ -254,7 +254,7 @@
         "status": "modified"
       },
       {
-        "blob_sha": "90179588041aeecc8de4de23b9e2b35d58a402d7",
+        "blob_sha": "ec14a635fcad6514d8fdc2b9ad4247ab0eec69be",
         "path": "scripts/hunter_trusted_orchestrator_replay_worker.py",
         "previous_path": "",
         "status": "modified"
@@ -272,17 +272,17 @@
         "status": "modified"
       },
       {
-        "blob_sha": "15232b692211d32eef96bf3d4d83b414f50081c4",
+        "blob_sha": "4751eb3ddd45152d66f6b6a7580052afda4e9fa0",
         "path": "tests/test_hunter_trusted_orchestrator_replay.py",
         "previous_path": "",
         "status": "modified"
       }
     ],
-    "review_target_digest": "4841e041d05de3cb310f78766079d32b8eff5e48723567fb570c009f96dcb84a"
+    "review_target_digest": "4eefdca25de774d66946a83d2a7ff3967baec5cd75077c02ca0aec0aa287b9db"
   },
-  "review_id": "f409eb6ba389e25b37506937a105ca759d5d35cf9d35ee919ceb80c0d3c8e5af",
+  "review_id": "c6689300e1916bb70f50531a3b6fc802a52b8038863005c13902ff63b9ecbc16",
   "review_request": {
-    "claims_id": "f409eb6ba389e25b37506937a105ca759d5d35cf9d35ee919ceb80c0d3c8e5af",
+    "claims_id": "c6689300e1916bb70f50531a3b6fc802a52b8038863005c13902ff63b9ecbc16",
     "schema": "hunter.review-request.v1"
   },
   "schema": "hunter.pre-ready-hostile-review.v1"
