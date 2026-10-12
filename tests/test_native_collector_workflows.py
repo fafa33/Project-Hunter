@@ -201,6 +201,9 @@ COLLECTOR_MUTATIONS = {
     ),
     "unpinned checkout action": lambda d: d["jobs"]["collect"]["steps"].append({"uses": "actions/checkout@main"}),
     "downgraded checkout major": lambda d: d["jobs"]["collect"]["steps"][0].update(uses="actions/checkout@v1"),
+    "checkout of another repository": lambda d: collector_checkout(d).update(repository="attacker/repo"),
+    "checkout with a token": lambda d: collector_checkout(d).update(token="${{ secrets.GROQ_API_KEY }}"),
+    "checkout to a path": lambda d: collector_checkout(d).update(path="engine"),
     "second upload": lambda d: d["jobs"]["collect"]["steps"].append(
         {"uses": "actions/upload-artifact@v4", "with": {"name": "other", "path": "."}}
     ),
@@ -337,6 +340,8 @@ PUBLISHER_MUTATIONS = {
     "reusable workflow job": lambda d: d["jobs"].update(extra={"uses": "./.github/workflows/other.yml"}),
     "stepless job": lambda d: d["jobs"].update(extra={"runs-on": "ubuntu-latest"}),
     "downgraded checkout major": lambda d: d["jobs"]["publish"]["steps"][0].update(uses="actions/checkout@v1"),
+    "checkout of another repository": lambda d: publisher_checkout(d).update(repository="attacker/repo"),
+    "checkout with a token": lambda d: publisher_checkout(d).update(token="${{ secrets.GROQ_API_KEY }}"),
     "lookalike checkout action": lambda d: d["jobs"]["publish"]["steps"].append(
         {"uses": "actions/checkout-evil@v1", "with": {"ref": "main", "persist-credentials": False}}
     ),

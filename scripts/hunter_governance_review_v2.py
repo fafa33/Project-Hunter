@@ -710,13 +710,27 @@ def reviewer_identity_map(pool: dict[str, Any]) -> dict[str, str]:
     return identities
 
 
-def trusted_collector_run(repository: str, token: str, trigger: dict[str, Any], pr_number: int) -> bool:
+def trusted_collector_run(
+    repository: str,
+    token: str,
+    trigger: dict[str, Any],
+    pr_number: int,
+    *,
+    trigger_comment_id: int | None = None,
+    response_digest: str | None = None,
+) -> bool:
     """Require reviewer trigger identity to originate from Hunter's trusted collector workflow.
 
     The actual run is re-read from GitHub (collector workflow, ``pull_request_target`` event,
     default branch, completed and successful) and its integrity-checked receipt must name this
     exact pull request, head, claims and remediation generation. A run title, a dispatch payload
     or an artifact alone never qualifies. Anything unreadable or inconsistent is refused.
+
+    A comment posted as ``github-actions[bot]`` is not evidence by itself: a candidate-authored
+    workflow with ``pull-requests: write`` can post as that account. When ``trigger_comment_id`` is
+    given, the trigger must therefore also be one the verified receipt recorded for that reviewer
+    (same comment id and attempt number), and when ``response_digest`` is given that attempt must have
+    recorded exactly that digest as a clear result. Forged comments cannot satisfy a real run's receipt.
     """
     from hunter_reviewer_collector import verified_collector_receipt
 
@@ -736,6 +750,22 @@ def trusted_collector_run(repository: str, token: str, trigger: dict[str, Any], 
 
         if receipt.get("configuration_digest") != configuration_digest(pool):
             return False
+        if trigger_comment_id is not None:
+            recorded = [
+                item
+                for item in receipt.get("attempts") or []
+                if isinstance(item, dict)
+                and item.get("agent_id") == trigger.get("reviewer_agent")
+                and item.get("trigger_id") == trigger_comment_id
+                and item.get("attempt_number") == trigger.get("attempt_number")
+                and item.get("collector_run_id") == run_id
+            ]
+            if len(recorded) != 1:
+                return False
+            if response_digest is not None and (
+                recorded[0].get("response_digest") != response_digest or recorded[0].get("outcome") != "clear"
+            ):
+                return False
         return (
             run.get("run_attempt") == attempt
             and receipt.get("claims_id") == trigger.get("claims_id")
@@ -837,7 +867,14 @@ def read_pr_pool_review_comments(
                     trigger.get(k) != result.get(k)
                     for k in ("head_sha", "claims_id", "reviewer_agent", "collector_run_id")
                 )
-                or not trusted_collector_run(repository, token, trigger, pr_number)
+                or not trusted_collector_run(
+                    repository,
+                    token,
+                    trigger,
+                    pr_number,
+                    trigger_comment_id=int(result["trigger_id"]),
+                    response_digest=str(result["response_digest"]),
+                )
             ):
                 continue
             trusted_results[
@@ -866,7 +903,9 @@ def read_pr_pool_review_comments(
             if (
                 trigger is not None
                 and trigger.get("reviewer_agent") == "codex"
-                and trusted_collector_run(repository, token, trigger, pr_number)
+                and trusted_collector_run(
+                    repository, token, trigger, pr_number, trigger_comment_id=int(comment.get("id") or 0)
+                )
             ):
                 native_triggers.append((str(comment.get("created_at") or ""), trigger))
         for review_item in reviews:

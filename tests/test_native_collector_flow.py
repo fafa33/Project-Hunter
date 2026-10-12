@@ -504,6 +504,50 @@ def test_governance_refuses_a_trigger_that_does_not_match_the_verified_receipt(g
     assert governance.trusted_collector_run(REPOSITORY, "token", trigger(**overrides), pr) is False
 
 
+def _recorded(**overrides):
+    record = {
+        "agent_id": "codex",
+        "trigger_id": 55,
+        "attempt_number": 1,
+        "collector_run_id": COLLECTOR_RUN,
+        "outcome": "clear",
+        "response_digest": "f" * 64,
+    }
+    record.update(overrides)
+    return record
+
+
+def _bound(github, *, attempts, comment_id=55, digest="f" * 64, **trigger_overrides):
+    github.add_receipt(receipt_for(attempts=attempts))
+    claimed = trigger(reviewer_agent="codex", attempt_number=1, **trigger_overrides)
+    return governance.trusted_collector_run(
+        REPOSITORY, "token", claimed, PR, trigger_comment_id=comment_id, response_digest=digest
+    )
+
+
+def test_a_trigger_and_result_comment_must_match_an_attempt_the_verified_receipt_recorded(github):
+    assert _bound(github, attempts=[_recorded()]) is True
+
+
+@pytest.mark.parametrize(
+    ("attempts", "kwargs"),
+    [
+        ([], {}),  # a bot-authored comment for a real run that recorded no such attempt
+        ([_recorded(trigger_id=56)], {}),  # another comment id
+        ([_recorded(agent_id="gemini")], {}),  # another reviewer
+        ([_recorded(attempt_number=2)], {}),  # another attempt
+        ([_recorded(collector_run_id=COLLECTOR_RUN + 1)], {}),  # recorded by another run
+        ([_recorded(response_digest="0" * 64)], {}),  # forged result digest
+        ([_recorded(outcome="blocking")], {}),  # the real attempt was not a clear
+        ([_recorded(), _recorded()], {}),  # ambiguous
+        ([_recorded()], {"digest": "0" * 64}),  # forged result comment for a real attempt
+    ],
+    ids=["none", "comment", "agent", "attempt", "run", "digest", "outcome", "duplicate", "forged-result"],
+)
+def test_forged_bot_comments_never_match_a_genuine_runs_receipt(github, attempts, kwargs):
+    assert _bound(github, attempts=attempts, **kwargs) is False
+
+
 def test_governance_refuses_a_receipt_produced_under_another_reviewer_pool_configuration(github):
     github.add_receipt(receipt_for(configuration_digest="e" * 64))
     assert governance.trusted_collector_run(REPOSITORY, "token", trigger(), PR) is False

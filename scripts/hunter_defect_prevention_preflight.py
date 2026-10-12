@@ -1720,6 +1720,9 @@ _UPLOAD_ARTIFACT = re.compile(r"actions/upload-artifact@v[0-9]+")
 _RECEIPT_ARTIFACT_NAME = "hunter-reviewer-results-${{ github.event.pull_request.head.sha }}-${{ github.run_attempt }}"
 _RECEIPT_PATH = "reviewer-results.json"
 _UPLOAD_OPTIONS = frozenset({"name", "path", "if-no-files-found", "retention-days"})
+#: A checkout may name only its ref and credential handling: ``repository``, ``token``, ``path`` and the like
+#: would let the privileged job run code from somewhere other than this repository's default branch.
+_CHECKOUT_OPTIONS = frozenset({"ref", "persist-credentials"})
 _CHECKOUT_ACTION = re.compile(r"actions/checkout@(?:v7(?:\.[0-9]+)*|[0-9a-f]{40})")
 _PUBLISHER_PERMISSIONS = {
     "actions": "read",
@@ -1948,6 +1951,8 @@ def _checkout_errors(steps: list[tuple[dict[str, Any], dict[str, Any]]], label: 
             errors.append(f"{label} must check out only the trusted default-branch revision, never candidate content")
         if options.get("persist-credentials") is not False:
             errors.append(f"{label} checkout must not persist credentials")
+        if set(options) - _CHECKOUT_OPTIONS:
+            errors.append(f"{label} checkout must use this repository with only a ref and persist-credentials")
     return errors
 
 
