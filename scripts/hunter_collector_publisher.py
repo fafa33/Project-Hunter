@@ -51,6 +51,10 @@ def publish(repository: str, token: str, run_id: int) -> tuple[str, int | None]:
         raise ValueError("pull request state is unavailable")
     if pr.get("state") != "open" or (pr.get("base") or {}).get("ref") != branch:
         return "SKIPPED: pull request is not open against the default branch", None
+    if bool(pr.get("draft")):
+        # A result collected before the pull request went back to Draft must not become the cycle for
+        # the later ready_for_review: that transition has to obtain a fresh review.
+        return "SKIPPED: the pull request is a draft", None
     if (pr.get("head") or {}).get("sha") != head:
         return "SKIPPED: the collected head is no longer the pull-request head", None
     readiness = orchestration.review_request_state(repository, token, pr_number, head)

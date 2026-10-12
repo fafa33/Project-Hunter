@@ -332,9 +332,10 @@ def test_a_status_the_collector_posted_for_itself_is_not_a_published_result(gith
     ("mutate", "expected"),
     [
         (lambda g: g.prs[PR].update(state="closed"), "SKIPPED: pull request is not open"),
+        (lambda g: g.prs[PR].update(draft=True), "SKIPPED: the pull request is a draft"),
         (lambda g: g.prs[PR].update(head={"sha": OTHER_HEAD}), "SKIPPED: the collected head is no longer"),
     ],
-    ids=["closed", "stale-head"],
+    ids=["closed", "draft", "stale-head"],
 )
 def test_a_result_for_a_pull_request_that_moved_on_is_not_published(github, mutate, expected):
     github.add_receipt(exhausted_receipt())
