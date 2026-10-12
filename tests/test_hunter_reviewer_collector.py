@@ -591,7 +591,8 @@ def test_native_artifact_name_uses_the_exact_event_head():
     workflow = (collector.review.ROOT / collector.WORKFLOW).read_text()
     assert "client_payload" not in workflow
     assert (
-        "name: hunter-reviewer-results-${{ github.event.pull_request.head.sha }}-${{ github.run_attempt }}" in workflow
+        "name: hunter-reviewer-results-${{ github.event_name == 'pull_request_target' && github.event.pull_request.head.sha || steps.context.outputs.head_sha }}-${{ github.run_attempt }}"
+        in workflow
     )
 
 
@@ -627,7 +628,8 @@ def test_collector_workflow_exposes_only_server_reviewer_secrets():
     import yaml
 
     workflow = yaml.safe_load((collector.review.ROOT / collector.WORKFLOW).read_text())
-    env = workflow["jobs"]["collect"]["steps"][1]["env"]
+    collect_step = next(step for step in workflow["jobs"]["collect"]["steps"] if "GEMINI_API_KEY" in str(step.get("env", {})))
+    env = collect_step["env"]
     assert env["GEMINI_API_KEY"] == "${{ secrets.GEMINI_API_KEY }}"
     assert env["GROQ_API_KEY"] == "${{ secrets.GROQ_API_KEY }}"
 

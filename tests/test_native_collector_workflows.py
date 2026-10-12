@@ -54,12 +54,18 @@ def test_the_real_collector_and_publisher_satisfy_their_guards():
     assert guard.validate_review_after_remediation_boundary() == []
 
 
-def test_the_collector_is_entered_only_through_the_native_pull_request_target_event():
+def test_the_collector_is_entered_only_through_the_native_pull_request_target_event_and_pre_pr_preflight():
     document = collector()
-    assert set(triggers(document)) == {"pull_request_target"}
-    options = triggers(document)["pull_request_target"]
-    assert options["branches"] == ["main"]
-    assert set(options["types"]) == {"opened", "reopened", "synchronize", "ready_for_review"}
+    trigger_keys = set(triggers(document))
+    # The collector is entered through pull_request_target (native event) and
+    # workflow_run on completion of the exact-head Pre-PR Preflight (retry trigger)
+    assert trigger_keys == {"pull_request_target", "workflow_run"}
+    pr_options = triggers(document)["pull_request_target"]
+    assert pr_options["branches"] == ["main"]
+    assert set(pr_options["types"]) == {"opened", "reopened", "synchronize", "ready_for_review"}
+    wf_options = triggers(document)["workflow_run"]
+    assert wf_options["workflows"] == ["Hunter / Pre-PR Preflight"]
+    assert wf_options["types"] == ["completed"]
 
 
 def test_the_collector_holds_no_status_or_contents_write_and_certifies_nothing():
@@ -111,16 +117,33 @@ def test_the_publisher_holds_the_only_status_write_and_no_actions_or_contents_wr
 
 
 def test_no_review_workflow_takes_identity_from_a_payload_a_title_or_the_triggering_run_description():
-    for name in ("hunter-reviewer-collector.yml", "hunter-collector-publisher.yml"):
-        text = (WORKFLOWS / name).read_text(encoding="utf-8")
-        for forbidden in (
-            "client_payload",
-            "display_title",
-            "workflow_run.head_sha",
-            "workflow_run.head_branch",
-            "workflow_run.pull_requests",
-        ):
-            assert forbidden not in text, (name, forbidden)
+    # The publisher must never take identity from workflow_run payload
+    publisher_text = (WORKFLOWS / "hunter-collector-publisher.yml").read_text(encoding="utf-8")
+    for forbidden in (
+        "client_payload",
+        "display_title",
+        "workflow_run.head_sha",
+        "workflow_run.head_branch",
+        "workflow_run.pull_requests",
+    ):
+        assert forbidden not in publisher_text, ("hunter-collector-publisher.yml", forbidden)
+
+    # The collector uses workflow_run.pull_requests in its context resolution step
+    # to extract the PR number and head SHA from the triggering Pre-PR Preflight run,
+    # but then re-verifies them against the API. This is the only allowed usage.
+    collector_text = (WORKFLOWS / "hunter-reviewer-collector.yml").read_text(encoding="utf-8")
+    for forbidden in (
+        "client_payload",
+        "display_title",
+        "workflow_run.head_sha",
+        "workflow_run.head_branch",
+    ):
+        assert forbidden not in collector_text, ("hunter-reviewer-collector.yml", forbidden)
+    # workflow_run.pull_requests is allowed in the collector's context resolution step
+    # and in the run-name expression (to display the PR number)
+    # Verify it's used only in these expected places
+    assert collector_text.count("workflow_run.pull_requests") == 2
+    assert "Resolve exact-head PR context for workflow_run trigger" in collector_text
 
 
 def test_the_retired_workflows_and_wakeups_are_gone():
@@ -414,3 +437,15 @@ def test_the_dispatch_path_cannot_come_back_through_the_orchestrator_module():
         "collector_run_name",
     ):
         assert not hasattr(orchestration, retired), retired
+
+
+def test_collector_identity_guard_rejects_payload_injection_despite_named_context_step():
+    definition = collector()
+    collector_step(definition)["env"]["ATTACK"] = "${{ github.event.client_payload.pr_number }}"
+    assert any("client_payload" in issue for issue in guard.validate_collector_workflow_definition(definition))
+
+
+def test_collector_identity_guard_rejects_run_pr_hint_in_executable_environment():
+    definition = collector()
+    collector_step(definition)["env"]["ATTACK"] = "${{ github.event.workflow_run.pull_requests[0].number }}"
+    assert any("executable configuration" in issue for issue in guard.validate_collector_workflow_definition(definition))

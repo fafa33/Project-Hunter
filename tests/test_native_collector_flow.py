@@ -5,6 +5,10 @@ result becomes a Hunter result only through the trusted publisher after the actu
 integrity-checked receipt and the current pull request have all been verified. A forged run title,
 an untrusted dispatch, a stale head, a replayed or partial receipt, a duplicate or re-run event, or
 unavailable evidence never produces a result: the cycle stays pending (fail closed).
+
+The collector also wakes on successful completion of the exact-head Pre-PR Preflight
+(``workflow_run`` trigger). This second trigger verifies the Pre-PR Preflight run identity
+(push event, exact head, successful conclusion) and re-reads the pull request state from the API.
 """
 
 from __future__ import annotations
@@ -28,6 +32,7 @@ from native_github_fake import (
 )
 
 OTHER_HEAD = "b" * 40
+PRE_PR_RUN = 999999  # distinct from COLLECTOR_RUN
 
 
 @pytest.fixture
@@ -41,6 +46,12 @@ def start(**overrides):
     arguments = {"event": "pull_request_target"}
     arguments.update(overrides)
     return collector.verify_native_start(REPOSITORY, "token", PR, HEAD, COLLECTOR_RUN, **arguments)
+
+
+def start_workflow_run(**overrides):
+    arguments = {"event": "workflow_run"}
+    arguments.update(overrides)
+    return collector.verify_native_start(REPOSITORY, "token", PR, HEAD, PRE_PR_RUN, **arguments)
 
 
 def exhausted_receipt(**overrides):
@@ -185,6 +196,228 @@ def test_trigger_comments_for_another_head_claims_or_author_spend_no_budget(gith
     monkeypatch.setattr(orchestration, "current_remediation_generation", lambda *_a: "0000000000000009")
     assert collector.remediation_generations_used(REPOSITORY, "token", PR, HEAD, CLAIMS) == set()
     assert start().proceed
+
+
+# --- start gate: workflow_run trigger from Pre-PR Preflight completion ----------------------------------------
+
+
+def test_a_workflow_run_trigger_from_pre_pr_preflight_may_collect(github):
+    """A successful Pre-PR Preflight push run for the exact head allows collection."""
+    github.runs[PRE_PR_RUN] = {
+        "id": PRE_PR_RUN,
+        "name": "Hunter / Pre-PR Preflight",
+        "path": ".github/workflows/hunter-pre-pr-preflight.yml",
+        "event": "push",
+        "head_sha": HEAD,
+        "conclusion": "success",
+        "status": "completed",
+        "pull_requests": [{"number": PR, "head": {"sha": HEAD}}],
+    }
+    decision = start_workflow_run()
+    assert decision.proceed and decision.claims_id == CLAIMS and decision.generation == orchestration.BASE_GENERATION_ID
+
+
+@pytest.mark.parametrize(
+    "mutate",
+    [
+        lambda g: g.runs[PRE_PR_RUN].update(event="repository_dispatch"),
+        lambda g: g.runs[PRE_PR_RUN].update(event="workflow_dispatch"),
+        lambda g: g.runs[PRE_PR_RUN].update(event="pull_request_target"),
+        lambda g: g.runs[PRE_PR_RUN].update(path=".github/workflows/ci.yml"),
+        lambda g: g.runs[PRE_PR_RUN].update(name="Hunter / Other Workflow"),
+        lambda g: g.runs[PRE_PR_RUN].update(head_sha=OTHER_HEAD),
+        lambda g: g.runs[PRE_PR_RUN].update(conclusion="failure"),
+        lambda g: g.runs[PRE_PR_RUN].update(conclusion="cancelled"),
+        lambda g: g.runs[PRE_PR_RUN].update(conclusion="timed_out"),
+        lambda g: g.runs[PRE_PR_RUN].update(status="in_progress", conclusion=None),
+        lambda g: g.runs[PRE_PR_RUN].update(pull_requests=[]),
+        lambda g: g.runs[PRE_PR_RUN].update(pull_requests=[{"number": PR + 1, "head": {"sha": HEAD}}]),
+        lambda g: g.runs[PRE_PR_RUN].update(pull_requests=[{"number": PR, "head": {"sha": OTHER_HEAD}}]),
+        lambda g: g.runs[PRE_PR_RUN].update(id=PRE_PR_RUN + 1),
+    ],
+    ids=[
+        "repository-dispatch",
+        "workflow-dispatch",
+        "pull-request-target",
+        "other-workflow-path",
+        "other-workflow-name",
+        "other-head",
+        "failed",
+        "cancelled",
+        "timed-out",
+        "still-running",
+        "no-pr",
+        "other-pr",
+        "other-head-on-pr",
+        "other-run-id",
+    ],
+)
+def test_a_workflow_run_that_is_not_a_successful_pre_pr_preflight_push_run_never_collects(github, mutate):
+    github.runs[PRE_PR_RUN] = {
+        "id": PRE_PR_RUN,
+        "name": "Hunter / Pre-PR Preflight",
+        "path": ".github/workflows/hunter-pre-pr-preflight.yml",
+        "event": "push",
+        "head_sha": HEAD,
+        "conclusion": "success",
+        "status": "completed",
+        "pull_requests": [{"number": PR, "head": {"sha": HEAD}}],
+    }
+    mutate(github)
+    with pytest.raises(ValueError):
+        start_workflow_run()
+
+
+@pytest.mark.parametrize(
+    ("mutate", "reason"),
+    [
+        (lambda g: g.prs[PR].update(state="closed"), "not open"),
+        (lambda g: g.prs[PR].update(draft=True), "draft"),
+        (lambda g: g.prs[PR].update(base={"ref": "release"}), "default branch"),
+        (lambda g: g.prs[PR].update(head={"sha": OTHER_HEAD}), "no longer the pull-request head"),
+    ],
+    ids=["closed", "draft", "retargeted", "stale-head"],
+)
+def test_a_workflow_run_trigger_skips_when_the_pr_moved_on(github, mutate, reason):
+    github.runs[PRE_PR_RUN] = {
+        "id": PRE_PR_RUN,
+        "name": "Hunter / Pre-PR Preflight",
+        "path": ".github/workflows/hunter-pre-pr-preflight.yml",
+        "event": "push",
+        "head_sha": HEAD,
+        "conclusion": "success",
+        "status": "completed",
+        "pull_requests": [{"number": PR, "head": {"sha": HEAD}}],
+    }
+    mutate(github)
+    decision = start_workflow_run()
+    assert not decision.proceed and reason in decision.reason
+
+
+def test_unreadable_pull_request_state_fails_closed_for_workflow_run_trigger(github):
+    github.runs[PRE_PR_RUN] = {
+        "id": PRE_PR_RUN,
+        "name": "Hunter / Pre-PR Preflight",
+        "path": ".github/workflows/hunter-pre-pr-preflight.yml",
+        "event": "push",
+        "head_sha": HEAD,
+        "conclusion": "success",
+        "status": "completed",
+        "pull_requests": [{"number": PR, "head": {"sha": HEAD}}],
+    }
+    github.unavailable.add(f"pulls/{PR}")
+    with pytest.raises(Exception, match="unavailable"):
+        start_workflow_run()
+
+
+def test_an_unready_prerequisite_is_a_quiet_retryable_skip_for_workflow_run_trigger(github, monkeypatch):
+    github.runs[PRE_PR_RUN] = {
+        "id": PRE_PR_RUN,
+        "name": "Hunter / Pre-PR Preflight",
+        "path": ".github/workflows/hunter-pre-pr-preflight.yml",
+        "event": "push",
+        "head_sha": HEAD,
+        "conclusion": "success",
+        "status": "completed",
+        "pull_requests": [{"number": PR, "head": {"sha": HEAD}}],
+    }
+    github.allow_review_request(monkeypatch, ready=False, state="pending", reason="preflight still running")
+    decision = start_workflow_run()
+    assert not decision.proceed and "not usable" in decision.reason
+
+
+@pytest.mark.parametrize("state", ["success", "present", "invalid"])
+def test_a_request_that_can_never_resolve_itself_is_reported_for_workflow_run_trigger(github, monkeypatch, state):
+    github.runs[PRE_PR_RUN] = {
+        "id": PRE_PR_RUN,
+        "name": "Hunter / Pre-PR Preflight",
+        "path": ".github/workflows/hunter-pre-pr-preflight.yml",
+        "event": "push",
+        "head_sha": HEAD,
+        "conclusion": "success",
+        "status": "completed",
+        "pull_requests": [{"number": PR, "head": {"sha": HEAD}}],
+    }
+    github.allow_review_request(monkeypatch, ready=False, state=state, reason="request is not valid for this head")
+    with pytest.raises(orchestration.ReviewRequestBlocked):
+        start_workflow_run()
+
+
+@pytest.mark.parametrize("state", ["absent", "unavailable"])
+def test_an_absent_or_unreadable_request_stays_retryable_for_workflow_run_trigger(github, monkeypatch, state):
+    github.runs[PRE_PR_RUN] = {
+        "id": PRE_PR_RUN,
+        "name": "Hunter / Pre-PR Preflight",
+        "path": ".github/workflows/hunter-pre-pr-preflight.yml",
+        "event": "push",
+        "head_sha": HEAD,
+        "conclusion": "success",
+        "status": "completed",
+        "pull_requests": [{"number": PR, "head": {"sha": HEAD}}],
+    }
+    github.allow_review_request(monkeypatch, ready=False, state=state, reason="nothing committed yet")
+    assert not start_workflow_run().proceed
+
+
+def test_an_authenticated_exact_head_codex_clear_needs_no_collection_for_workflow_run_trigger(github, monkeypatch):
+    github.runs[PRE_PR_RUN] = {
+        "id": PRE_PR_RUN,
+        "name": "Hunter / Pre-PR Preflight",
+        "path": ".github/workflows/hunter-pre-pr-preflight.yml",
+        "event": "push",
+        "head_sha": HEAD,
+        "conclusion": "success",
+        "status": "completed",
+        "pull_requests": [{"number": PR, "head": {"sha": HEAD}}],
+    }
+    monkeypatch.setattr(orchestration, "exact_head_codex_clear_exists", lambda *_a: True)
+    assert not start_workflow_run().proceed
+
+
+def test_a_terminal_cycle_for_this_head_and_generation_is_not_collected_again_for_workflow_run_trigger(github):
+    github.runs[PRE_PR_RUN] = {
+        "id": PRE_PR_RUN,
+        "name": "Hunter / Pre-PR Preflight",
+        "path": ".github/workflows/hunter-pre-pr-preflight.yml",
+        "event": "push",
+        "head_sha": HEAD,
+        "conclusion": "success",
+        "status": "completed",
+        "pull_requests": [{"number": PR, "head": {"sha": HEAD}}],
+    }
+    github.add_cycle_status(state="REVIEWER_UNAVAILABLE")
+    decision = start_workflow_run()
+    assert not decision.proceed and "already REVIEWER_UNAVAILABLE" in decision.reason
+
+
+def test_an_open_cycle_does_not_block_a_manual_rerun_for_workflow_run_trigger(github):
+    github.runs[PRE_PR_RUN] = {
+        "id": PRE_PR_RUN,
+        "name": "Hunter / Pre-PR Preflight",
+        "path": ".github/workflows/hunter-pre-pr-preflight.yml",
+        "event": "push",
+        "head_sha": HEAD,
+        "conclusion": "success",
+        "status": "completed",
+        "pull_requests": [{"number": PR, "head": {"sha": HEAD}}],
+    }
+    github.add_cycle_status(state="WAITING_FOR_REVIEWER")
+    assert start_workflow_run().proceed
+
+
+def test_a_terminal_cycle_published_by_the_collector_run_is_not_believed_for_workflow_run_trigger(github):
+    github.runs[PRE_PR_RUN] = {
+        "id": PRE_PR_RUN,
+        "name": "Hunter / Pre-PR Preflight",
+        "path": ".github/workflows/hunter-pre-pr-preflight.yml",
+        "event": "push",
+        "head_sha": HEAD,
+        "conclusion": "success",
+        "status": "completed",
+        "pull_requests": [{"number": PR, "head": {"sha": HEAD}}],
+    }
+    github.add_cycle_status(state="REVIEWER_UNAVAILABLE", run_id=COLLECTOR_RUN)
+    assert start_workflow_run().proceed
 
 
 # --- run and receipt verification: nothing is trusted alone --------------------------------------------------
@@ -574,3 +807,18 @@ def test_governance_refuses_a_trigger_from_a_failed_dispatched_or_unreceipted_ru
     github.runs[COLLECTOR_RUN]["event"] = "pull_request_target"
     github.unavailable.add(f"actions/runs/{COLLECTOR_RUN}")
     assert governance.trusted_collector_run(REPOSITORY, "token", trigger(), PR) is False
+
+
+def test_candidate_controlled_preflight_success_cannot_bypass_trusted_prerequisite(github, monkeypatch):
+    # Even a perfectly matching, successful candidate push is only a wake-up hint.
+    github.runs[PRE_PR_RUN] = {
+        "id": PRE_PR_RUN, "name": "Hunter / Pre-PR Preflight",
+        "path": ".github/workflows/hunter-pre-pr-preflight.yml",
+        "event": "push", "head_sha": HEAD, "conclusion": "success",
+        "status": "completed",
+        "pull_requests": [{"number": PR, "head": {"sha": HEAD}}],
+    }
+    github.allow_review_request(monkeypatch, ready=False, state="pending", reason="trusted prerequisite not verified")
+    decision = start_workflow_run()
+    assert not decision.proceed
+    assert "trusted prerequisite" in decision.reason

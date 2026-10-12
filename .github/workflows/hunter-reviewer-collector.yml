@@ -2,12 +2,15 @@ name: Hunter Reviewer Collector
 
 # Display only: nothing parses this title. Identity is the pull_request_target event GitHub
 # delivered, re-verified against fresh API state, and the receipt this run uploads.
-run-name: Hunter Reviewer Collector PR ${{ github.event.pull_request.number }}
+run-name: >-
+  Hunter Reviewer Collector PR
+  ${{ github.event_name == 'pull_request_target' && github.event.pull_request.number
+      || github.event.workflow_run.pull_requests[0].number }}
 
-# Least privilege, by design. This workflow is resolved from the default branch (pull_request_target)
-# and checks out only default-branch code, never the candidate. It invokes the configured reviewers
-# and uploads a receipt. It holds NO status write and no contents write: it cannot certify its own
-# evidence and cannot create refs or tags. The small trusted publisher
+# Least privilege, by design. This workflow is resolved from the default branch (pull_request_target
+# and workflow_run) and checks out only default-branch code, never the candidate. It invokes the
+# configured reviewers and uploads a receipt. It holds NO status write and no contents write: it
+# cannot certify its own evidence and cannot create refs or tags. The small trusted publisher
 # (hunter-collector-publisher.yml) verifies this run, its receipt and the current pull request
 # before it publishes anything.
 #
@@ -23,6 +26,11 @@ on:
       - reopened
       - synchronize
       - ready_for_review
+  workflow_run:
+    workflows:
+      - Hunter / Pre-PR Preflight
+    types:
+      - completed
 
 permissions:
   contents: read
@@ -32,14 +40,23 @@ permissions:
 
 concurrency:
   # A newer event for the same pull request supersedes an older run natively.
-  group: hunter-reviewer-collector-${{ github.event.pull_request.number }}
+  group: >-
+    hunter-reviewer-collector-
+    ${{ github.event_name == 'pull_request_target'
+        && github.event.pull_request.number
+        || github.event.workflow_run.pull_requests[0].number }}
   cancel-in-progress: true
 
 jobs:
   collect:
     if: >-
-      github.event.pull_request.draft == false
-      && github.ref == format('refs/heads/{0}', github.event.repository.default_branch)
+      (github.event_name == 'pull_request_target'
+        && github.event.pull_request.draft == false
+        && github.ref == format('refs/heads/{0}', github.event.repository.default_branch))
+      || (github.event_name == 'workflow_run'
+        && github.event.workflow_run.conclusion == 'success'
+        && github.event.workflow_run.event == 'push'
+        && github.event.workflow_run.workflow_name == 'Hunter / Pre-PR Preflight')
     runs-on: ubuntu-latest
     # Global independent-review opportunity budget.
     #
@@ -56,21 +73,39 @@ jobs:
     steps:
       # No explicit ref: for pull_request_target the default checkout is the base branch (never the
       # pull request head), which is exactly the trusted code this job must run.
+      # For workflow_run the default checkout is also the default branch.
       - uses: actions/checkout@v7
         with:
           persist-credentials: false
+      - name: Resolve exact-head PR context for workflow_run trigger
+        if: github.event_name == 'workflow_run'
+        id: context
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          RUN_ID: ${{ github.event.workflow_run.id }}
+        run: |
+          set -euo pipefail
+          pr_number="$(gh api "repos/${GH_REPO}/actions/runs/${RUN_ID}" --jq '.pull_requests[0].number // empty')"
+          head_sha="$(gh api "repos/${GH_REPO}/actions/runs/${RUN_ID}" --jq '.head_sha')"
+          if [ -z "$pr_number" ] || [ -z "$head_sha" ]; then
+            echo "no associated pull request or head SHA found for triggering run ${RUN_ID}" >&2
+            exit 1
+          fi
+          echo "pr_number=$pr_number" >> "$GITHUB_OUTPUT"
+          echo "head_sha=$head_sha" >> "$GITHUB_OUTPUT"
       - name: Collect actual configured reviewer invocations
         env:
           GITHUB_TOKEN: ${{ github.token }}
           GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
           GROQ_API_KEY: ${{ secrets.GROQ_API_KEY }}
           GITHUB_EVENT_NAME: ${{ github.event_name }}
-          PR_NUMBER: ${{ github.event.pull_request.number }}
-          CANDIDATE_HEAD: ${{ github.event.pull_request.head.sha }}
+          PR_NUMBER: ${{ github.event_name == 'pull_request_target' && github.event.pull_request.number || steps.context.outputs.pr_number }}
+          CANDIDATE_HEAD: ${{ github.event_name == 'pull_request_target' && github.event.pull_request.head.sha || steps.context.outputs.head_sha }}
         run: python scripts/hunter_reviewer_collector.py --pr "$PR_NUMBER" --head "$CANDIDATE_HEAD" --output reviewer-results.json
       - uses: actions/upload-artifact@v4
         with:
-          name: hunter-reviewer-results-${{ github.event.pull_request.head.sha }}-${{ github.run_attempt }}
+          name: hunter-reviewer-results-${{ github.event_name == 'pull_request_target' && github.event.pull_request.head.sha || steps.context.outputs.head_sha }}-${{ github.run_attempt }}
           path: reviewer-results.json
           # A deliberate skip (draft, superseded head, unusable review request) writes no receipt.
           if-no-files-found: ignore

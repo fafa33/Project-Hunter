@@ -2066,13 +2066,26 @@ def verify_native_start(
 ) -> StartDecision:
     """Decide, from fresh GitHub state, whether this run may invoke reviewers for this head.
 
-    The pull request and head come from the ``pull_request_target`` event GitHub itself delivered;
-    nothing else is accepted. Every condition is then re-read from the API. A condition that is
-    simply not met returns a skip (no receipt, so the cycle stays pending); evidence that cannot
-    be read raises, which also leaves no receipt. Both fail closed.
+    For pull_request_target: the pull request and head come from the event GitHub itself delivered;
+    nothing else is accepted. Every condition is then re-read from the API.
+
+    For workflow_run: the triggering run must be a completed, successful "Hunter / Pre-PR Preflight"
+    push run for the exact same head. The pull request is then re-read from the API to verify
+    it is still open, targets the default branch, and is at the same head.
+
+    In both cases, a condition that is simply not met returns a skip (no receipt, so the cycle
+    stays pending); evidence that cannot be read raises, which also leaves no receipt. Both fail closed.
     """
-    if event != "pull_request_target":
-        raise ValueError("collector invoked from an untrusted event")
+    if event == "pull_request_target":
+        return _verify_pull_request_target_start(repository, token, pr_number, head_sha, run_id)
+    if event == "workflow_run":
+        return _verify_workflow_run_start(repository, token, pr_number, head_sha, run_id)
+    raise ValueError("collector invoked from an untrusted event")
+
+
+def _verify_pull_request_target_start(
+    repository: str, token: str, pr_number: int, head_sha: str, run_id: int
+) -> StartDecision:
     repo = orchestration.request_json(repository, token, "GET", "")
     branch = str((repo or {}).get("default_branch") or "")
     run = orchestration.request_json(repository, token, "GET", f"actions/runs/{run_id}")
@@ -2089,6 +2102,56 @@ def verify_native_start(
         )
     ):
         raise ValueError("collector run is not the pull_request_target run for this pull request and head")
+    return _verify_pr_state_and_readiness(repository, token, pr_number, head_sha, branch)
+
+
+def _verify_workflow_run_start(
+    repository: str, token: str, pr_number: int, head_sha: str, run_id: int
+) -> StartDecision:
+    """Validate an untrusted wake-up hint, never a review authorization.
+
+    A candidate-controlled push workflow can report success. That success only
+    wakes this trusted collector; _verify_pr_state_and_readiness must independently
+    obtain exact-head trusted prerequisite authority from the GitHub API.
+    """
+    run = orchestration.request_json(repository, token, "GET", f"actions/runs/{run_id}")
+    if (
+        not isinstance(run, dict)
+        or run.get("id") != run_id
+        or run.get("event") != "push"
+        or str(run.get("name") or "") != "Hunter / Pre-PR Preflight"
+        or str(run.get("path") or "") != ".github/workflows/hunter-pre-pr-preflight.yml"
+        or str(run.get("head_sha") or "").strip().lower() != head_sha.strip().lower()
+        or run.get("conclusion") != "success"
+        or run.get("status") != "completed"
+        or not _run_has_pr_with_head(run, pr_number, head_sha)
+    ):
+        raise ValueError("collector run is not a successful Pre-PR Preflight push run for this pull request and head")
+
+    repo = orchestration.request_json(repository, token, "GET", "")
+    branch = str((repo or {}).get("default_branch") or "")
+    if not branch:
+        raise ValueError("default branch is unavailable")
+    return _verify_pr_state_and_readiness(repository, token, pr_number, head_sha, branch)
+
+
+def _run_has_pr_with_head(run: dict[str, Any], pr_number: int, head_sha: str) -> bool:
+    """Whether the run's pull_requests array contains this PR with this head SHA."""
+    pull_requests = run.get("pull_requests")
+    if not isinstance(pull_requests, list):
+        return False
+    for pr in pull_requests:
+        if isinstance(pr, dict):
+            num = pr.get("number")
+            head = (pr.get("head") or {}).get("sha")
+            if num == pr_number and str(head or "").strip().lower() == head_sha.strip().lower():
+                return True
+    return False
+
+
+def _verify_pr_state_and_readiness(
+    repository: str, token: str, pr_number: int, head_sha: str, branch: str
+) -> StartDecision:
     pr = orchestration.request_json(repository, token, "GET", f"pulls/{pr_number}")
     if not isinstance(pr, dict):
         raise ValueError("pull request state is unavailable")
