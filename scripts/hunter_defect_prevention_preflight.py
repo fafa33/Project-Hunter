@@ -1933,7 +1933,9 @@ def validate_review_after_remediation_boundary() -> list[str]:
 def _workflow_triggers(definition: dict[str, Any]) -> Any:
     """The ``on`` mapping; YAML 1.1 spells an unquoted ``on`` as ``True``, and the two spellings must agree."""
 
-    declared = [definition[key] for key in (True, "on") if key in definition]
+    declared = [definition["on"]] if "on" in definition else []
+    if True in definition:
+        declared.append(definition.get(True))
     return declared[0] if len(declared) == 1 or (len(declared) == 2 and declared[0] == declared[1]) else None
 
 
