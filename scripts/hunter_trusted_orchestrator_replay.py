@@ -134,6 +134,24 @@ def detect_contract_version(candidate_root: Path) -> str:
     raise ValueError("candidate orchestrator has no complete trusted contract marker set")
 
 
+def enforce_trusted_contract_floor(candidate_root: Path, trusted_root: Path) -> str:
+    """Fail closed on candidate-selected downgrades relative to trusted main.
+
+    While trusted main is v1, only an unchanged v1 orchestrator can use the
+    legacy suite. Any changed orchestrator must satisfy v2. Once main is v2,
+    every candidate must remain v2. Both roots are read as inert source.
+    """
+    trusted_version = detect_contract_version(trusted_root)
+    candidate_version = detect_contract_version(candidate_root)
+    if candidate_version == "v1":
+        if trusted_version != "v1":
+            raise ValueError("candidate attempts v2-to-v1 trusted contract downgrade")
+        relative = Path("scripts/hunter_review_orchestrator.py")
+        if (candidate_root / relative).read_bytes() != (trusted_root / relative).read_bytes():
+            raise ValueError("modified candidate cannot select weaker v1 trusted contract")
+    return candidate_version
+
+
 def get_contract_definition(contract_version: str) -> dict[str, Any]:
     """Get the scenario set definition for a contract version."""
     if contract_version not in CONTRACT_VERSIONS:
@@ -456,6 +474,15 @@ def verify_candidate_module_digests(receipt: Any, candidate_root: Path) -> list[
     if contract_version not in ("v1", "v2"):
         return [f"receipt has invalid or missing contract_version: {contract_version!r}"]
 
+    # The unprivileged digest verifier must bind the receipt's declared
+    # contract to the actual candidate source, not just the file digests.
+    try:
+        actual_contract = detect_contract_version(candidate_root)
+    except (OSError, SyntaxError, ValueError) as exc:
+        return [f"candidate contract could not be independently classified: {exc}"]
+    if contract_version != actual_contract:
+        return [f"receipt contract_version {contract_version!r} differs from candidate {actual_contract!r}"]
+
     import hunter_trusted_orchestrator_replay_worker as worker
 
     errors: list[str] = []
@@ -606,6 +633,7 @@ def _cmd_run(args: argparse.Namespace) -> int:
     workspace_root = resolve_workspace_root(args.workspace_root)
     candidate_root = resolve_candidate_root(workspace_root, args.candidate_root)
     out_path = resolve_confined_output(workspace_root, args.out, label="--out")
+    enforce_trusted_contract_floor(candidate_root, ROOT)
     receipt = build_receipt(
         candidate_root=candidate_root,
         pr_number=identity.pr_number,
@@ -642,7 +670,11 @@ def _cmd_verify_digests(args: argparse.Namespace) -> int:
     except (OSError, ValueError) as exc:
         out_path.write_text(json.dumps({"errors": [f"candidate root is invalid: {exc}"]}), encoding="utf-8")
         return 1
-    errors = verify_candidate_module_digests(receipt, candidate_root)
+    try:
+        enforce_trusted_contract_floor(candidate_root, ROOT)
+        errors = verify_candidate_module_digests(receipt, candidate_root)
+    except (OSError, SyntaxError, ValueError) as exc:
+        errors = [f"trusted contract floor violation: {exc}"]
     out_path.write_text(json.dumps({"errors": errors}, indent=2), encoding="utf-8")
     if errors:
         for error in errors:

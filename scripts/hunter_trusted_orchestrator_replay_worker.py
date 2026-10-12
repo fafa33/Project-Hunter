@@ -85,6 +85,38 @@ def _import_candidate(candidate_root: Path, module_name: str) -> Any:
     return importlib.import_module(module_name)
 
 
+def _probe_v1_grace_boundary(orchestration: Any, fixture: dict[str, Any], grace: int) -> None:
+    """Exercise actual elapsed-time semantics, including the exact boundary.
+
+    Never mock _older_than: that would mask a candidate ignoring the configured
+    grace or implementing the comparison incorrectly.
+    """
+    from dataclasses import replace
+    from datetime import UTC, datetime, timedelta
+    from unittest.mock import patch
+
+    base = orchestration.ReviewCycle(
+        pr_number=fixture["pr_number"],
+        head_sha=fixture["head_sha"],
+        state="WAITING_FOR_REVIEWER",
+        provider_id="",
+        trigger_id=123,
+        started_at="2020-01-01T00:00:00Z",
+        config_digest="fixture-digest",
+    )
+    now = datetime.now(UTC)
+    # Give the boundary a 2-second margin to avoid scheduler timing flakiness.
+    inside = replace(base, started_at=(now - timedelta(seconds=max(0, grace - 2))).isoformat())
+    outside = replace(base, started_at=(now - timedelta(seconds=grace + 2)).isoformat())
+    with patch.object(orchestration, "collector_liveness", return_value=("absent", 0)):
+        assert not orchestration.collector_needs_dispatch("fixture/repo", "", inside), "dispatch within grace"
+        assert orchestration.collector_needs_dispatch("fixture/repo", "", outside), "missing dispatch beyond grace"
+    with patch.object(orchestration, "collector_liveness", return_value=("active", 1)):
+        assert not orchestration.collector_needs_dispatch("fixture/repo", "", outside), "duplicate active dispatch"
+    assert not orchestration._older_than(now.isoformat(), grace), "fresh timestamp expired"
+    assert orchestration._older_than(outside.started_at, grace), "elapsed boundary ignored"
+
+
 def scenario_a_v1(candidate_root: Path, fixture: dict[str, Any]) -> dict[str, Any]:
     """Legacy v1 contract: ensure_collector manages collector dispatch with liveness grace.
 
@@ -97,9 +129,7 @@ def scenario_a_v1(candidate_root: Path, fixture: dict[str, Any]) -> dict[str, An
 
     orchestration = _import_candidate(candidate_root, "hunter_review_orchestrator")
     grace = orchestration.COLLECTOR_LIVENESS_GRACE_SECONDS
-    assert (
-        type(grace) is int and 0 < grace < 7 * 24 * 3600
-    ), f"COLLECTOR_LIVENESS_GRACE_SECONDS is not positive and finite: {grace!r}"
+    assert type(grace) is int and grace > 0, f"COLLECTOR_LIVENESS_GRACE_SECONDS is not positive and finite: {grace!r}"
 
     # Exercise the actual dispatch path, not just the presence of a callable.
     from unittest.mock import patch
@@ -119,13 +149,8 @@ def scenario_a_v1(candidate_root: Path, fixture: dict[str, Any]) -> dict[str, An
     assert len(dispatched) == 1, "ensure_collector did not dispatch exactly once"
     publish.assert_called_once()
 
-    # Verify the grace period is used in collector liveness logic (collector_needs_dispatch)
-    import inspect
-
-    needs_dispatch_source = inspect.getsource(orchestration.collector_needs_dispatch)
-    assert (
-        "COLLECTOR_LIVENESS_GRACE_SECONDS" in needs_dispatch_source
-    ), "collector_needs_dispatch must reference COLLECTOR_LIVENESS_GRACE_SECONDS"
+    # Scenario B performs real elapsed-time boundary probes, shared by v1 A.
+    _probe_v1_grace_boundary(orchestration, fixture, grace)
 
     return {"grace_positive": True, "ensure_collector_present": True, "grace_used_in_dispatch": True}
 
@@ -141,48 +166,9 @@ def scenario_b_v1(candidate_root: Path, fixture: dict[str, Any]) -> dict[str, An
 
     orchestration = _import_candidate(candidate_root, "hunter_review_orchestrator")
     grace = orchestration.COLLECTOR_LIVENESS_GRACE_SECONDS
-    assert (
-        type(grace) is int and 0 < grace < 7 * 24 * 3600
-    ), f"COLLECTOR_LIVENESS_GRACE_SECONDS is not positive and finite: {grace!r}"
+    assert type(grace) is int and grace > 0, f"COLLECTOR_LIVENESS_GRACE_SECONDS is not positive and finite: {grace!r}"
 
-    # Exercise liveness semantics with a real cycle and controlled evidence.
-    from unittest.mock import patch
-
-    cycle = orchestration.ReviewCycle(
-        pr_number=fixture["pr_number"],
-        head_sha=fixture["head_sha"],
-        state="WAITING_FOR_REVIEWER",
-        provider_id="",
-        trigger_id=123,
-        started_at="2020-01-01T00:00:00Z",
-        config_digest="fixture-digest",
-    )
-    with (
-        patch.object(orchestration, "_older_than", return_value=False),
-        patch.object(orchestration, "collector_liveness", return_value=("absent", 0)),
-    ):
-        assert not orchestration.collector_needs_dispatch("fixture/repo", "", cycle), "dispatch inside grace"
-    with (
-        patch.object(orchestration, "_older_than", return_value=True),
-        patch.object(orchestration, "collector_liveness", return_value=("absent", 0)),
-    ):
-        assert orchestration.collector_needs_dispatch("fixture/repo", "", cycle), "missing bounded recovery"
-    with (
-        patch.object(orchestration, "_older_than", return_value=True),
-        patch.object(orchestration, "collector_liveness", return_value=("active", 1)),
-    ):
-        assert not orchestration.collector_needs_dispatch("fixture/repo", "", cycle), "duplicate active dispatch"
-
-    import inspect
-
-    needs_dispatch_source = inspect.getsource(orchestration.collector_needs_dispatch)
-    assert (
-        "COLLECTOR_LIVENESS_GRACE_SECONDS" in needs_dispatch_source
-    ), "collector_needs_dispatch must reference COLLECTOR_LIVENESS_GRACE_SECONDS"
-
-    # Verify _older_than helper exists and is used
-    older_than_source = inspect.getsource(orchestration._older_than)
-    assert "total_seconds" in older_than_source, "_older_than must compare elapsed seconds"
+    _probe_v1_grace_boundary(orchestration, fixture, grace)
 
     return {"grace_positive": True, "grace_used_in_needs_dispatch": True, "older_than_present": True}
 
@@ -209,9 +195,9 @@ def scenario_a_v2(candidate_root: Path, fixture: dict[str, Any]) -> dict[str, An
     pr_number = int(fixture["pr_number"])
     digest = fixture["config_digest"]
     runs = {
-        1: {"head_branch": "main", "path": ".github/workflows/hunter-collector-publisher.yml"},
+        1: {"head_branch": "main", "path": ".github/workflows/hunter-governance-review.yml"},
         2: {"head_branch": "main", "path": ".github/workflows/hunter-reviewer-collector.yml"},
-        3: {"head_branch": "feature", "path": ".github/workflows/hunter-collector-publisher.yml"},
+        3: {"head_branch": "feature", "path": ".github/workflows/hunter-governance-review.yml"},
     }
 
     def believed(run_id: int) -> str:

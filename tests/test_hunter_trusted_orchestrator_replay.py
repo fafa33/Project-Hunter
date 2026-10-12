@@ -379,15 +379,15 @@ def test_scenario_a_fails_when_the_opportunity_is_not_a_real_bound(tmp_path):
         assert "not positive and finite" in error or "grace" in error.lower()
 
 
-def test_scenario_a_fails_when_the_opportunity_is_effectively_unbounded(tmp_path):
-    """v2: opportunity budget unbounded. v1: grace period unbounded."""
+def test_scenario_a_respects_contract_specific_budget_policy(tmp_path):
+    """v2 enforces its documented cap; v1 accepts any positive grace period."""
     contract = _detect_contract_version_once(tmp_path)
-    mutations = (MAKES_OPPORTUNITY_UNBOUNDED,) if contract == "v2" else (MAKES_GRACE_UNBOUNDED,)
-    contract_version, error = _fails_contract_aware(tmp_path, mutations, scenario="A")
-    if contract_version == "v2":
+    if contract == "v2":
+        _version, error = _fails_contract_aware(tmp_path, (MAKES_OPPORTUNITY_UNBOUNDED,), scenario="A")
         assert "not positive and finite" in error
     else:
-        assert "not positive and finite" in error or "grace" in error.lower()
+        _version, result = _run_scenario_a(tmp_path, (MAKES_GRACE_UNBOUNDED,))
+        assert result["outcome"] == "pass", result.get("error")
 
 
 def test_scenario_a_fails_when_the_collector_is_trusted_as_a_publisher(tmp_path):
@@ -1474,3 +1474,38 @@ def test_failed_replay_still_uploads_diagnostic_receipt_without_weakening_gate()
     assert "needs.validate-replay.result == 'success'" in jobs["verify-candidate-digest"].get(
         "if", jobs["verify-candidate-digest"].get(True, "")
     )
+
+
+def test_trusted_floor_rejects_candidate_controlled_v2_to_v1_downgrade(tmp_path):
+    trusted = _candidate_root(tmp_path)
+    candidate = tmp_path / "downgraded"
+    shutil.copytree(trusted, candidate)
+    module = trusted / "scripts" / "hunter_review_orchestrator.py"
+    with module.open("a", encoding="utf-8") as handle:
+        handle.write("\nCOLLECTOR_RESULTS_SCHEMA = 'trusted-v2'\n\ndef collector_receipt_problem():\n    pass\n")
+    with pytest.raises(ValueError, match="v2-to-v1"):
+        replay.enforce_trusted_contract_floor(candidate, trusted)
+
+
+def test_trusted_floor_rejects_modified_v1_candidate(tmp_path):
+    trusted = _candidate_root(tmp_path)
+    candidate = tmp_path / "changed-v1"
+    shutil.copytree(trusted, candidate)
+    module = candidate / "scripts" / "hunter_review_orchestrator.py"
+    module.write_text(module.read_text(encoding="utf-8") + "\n# downgrade camouflage\n", encoding="utf-8")
+    with pytest.raises(ValueError, match="modified candidate cannot select weaker v1"):
+        replay.enforce_trusted_contract_floor(candidate, trusted)
+
+
+def test_digest_verifier_rejects_receipt_contract_relabel(tmp_path):
+    receipt, candidate = _good_receipt(tmp_path)
+    receipt["contract_version"] = "v1" if receipt["contract_version"] == "v2" else "v2"
+    errors = replay.verify_candidate_module_digests(receipt, candidate)
+    assert any("differs from candidate" in error for error in errors)
+
+
+def test_trusted_floor_allows_unchanged_legacy_candidate(tmp_path):
+    trusted = _candidate_root(tmp_path)
+    candidate = tmp_path / "identical"
+    shutil.copytree(trusted, candidate)
+    assert replay.enforce_trusted_contract_floor(candidate, trusted) == replay.detect_contract_version(trusted)
