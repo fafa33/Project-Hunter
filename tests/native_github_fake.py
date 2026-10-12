@@ -182,6 +182,7 @@ class NativeFake:
             lambda _repository, _token, artifact_id: self.archives[artifact_id],
         )
         monkeypatch.setattr(orchestration, "reviewer_pool_config_digest", lambda: DIGEST)
+        monkeypatch.setattr(collector, "configuration_digest", lambda _pool: DIGEST)
         monkeypatch.setattr(orchestration, "blocking_reviewer_threads", lambda *_a, **_k: ())
         monkeypatch.setenv("GITHUB_RUN_ID", str(PUBLISHER_RUN))
         return self

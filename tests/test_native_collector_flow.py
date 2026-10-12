@@ -504,6 +504,22 @@ def test_governance_refuses_a_trigger_that_does_not_match_the_verified_receipt(g
     assert governance.trusted_collector_run(REPOSITORY, "token", trigger(**overrides), pr) is False
 
 
+def test_governance_refuses_a_receipt_produced_under_another_reviewer_pool_configuration(github):
+    github.add_receipt(receipt_for(configuration_digest="e" * 64))
+    assert governance.trusted_collector_run(REPOSITORY, "token", trigger(), PR) is False
+
+
+def test_the_expected_attempt_is_bound_to_the_run_record_the_receipt_is_selected_from(github):
+    """A rerun completing between reads cannot let an older attempt's event verify the newer attempt's receipt."""
+    github.runs[COLLECTOR_RUN]["run_attempt"] = 2
+    github.add_receipt(receipt_for(attempt=2))
+    with pytest.raises(collector.SupersededAttempt):
+        collector.verified_collector_receipt(REPOSITORY, "token", COLLECTOR_RUN, run_attempt=1)
+    assert (
+        collector.verified_collector_receipt(REPOSITORY, "token", COLLECTOR_RUN, run_attempt=2)[0]["run_attempt"] == 2
+    )
+
+
 def test_governance_refuses_a_trigger_from_a_failed_dispatched_or_unreceipted_run(github):
     assert governance.trusted_collector_run(REPOSITORY, "token", trigger(), PR) is False  # no receipt
     github.add_receipt(receipt_for())

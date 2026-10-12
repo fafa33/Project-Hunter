@@ -727,6 +727,15 @@ def trusted_collector_run(repository: str, token: str, trigger: dict[str, Any], 
         return False
     try:
         run, receipt = verified_collector_receipt(repository, token, run_id, pr_number, head)
+        pool, pool_error = pre_ready.load_reviewer_pool()
+        if pool is None or pool_error:
+            return False
+        # A receipt produced under another reviewer pool configuration is not authority now, exactly as
+        # the exhaustion path already refuses it.
+        from hunter_reviewer_collector import configuration_digest
+
+        if receipt.get("configuration_digest") != configuration_digest(pool):
+            return False
         return (
             run.get("run_attempt") == attempt
             and receipt.get("claims_id") == trigger.get("claims_id")

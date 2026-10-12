@@ -201,6 +201,14 @@ COLLECTOR_MUTATIONS = {
     ),
     "unpinned checkout action": lambda d: d["jobs"]["collect"]["steps"].append({"uses": "actions/checkout@main"}),
     "downgraded checkout major": lambda d: d["jobs"]["collect"]["steps"][0].update(uses="actions/checkout@v1"),
+    "second upload": lambda d: d["jobs"]["collect"]["steps"].append(
+        {"uses": "actions/upload-artifact@v4", "with": {"name": "other", "path": "."}}
+    ),
+    "upload of a workspace path": lambda d: upload_options(d).update(path="."),
+    "upload under another name": lambda d: upload_options(d).update(name="receipt"),
+    "upload with an extra option": lambda d: upload_options(d).update(**{"include-hidden-files": True}),
+    "upload that errors on a missing file": lambda d: upload_options(d).update(**{"if-no-files-found": "warn"}),
+    "no upload": lambda d: d["jobs"]["collect"]["steps"].pop(),
     "empty permissions": lambda d: d.update(permissions={}),
     "downgraded dispatch grant": lambda d: d["permissions"].update({"actions": "read"}),
     "downgraded comment grant": lambda d: d["permissions"].update({"pull-requests": "read"}),
@@ -209,6 +217,13 @@ COLLECTOR_MUTATIONS = {
         {"env": {"S": "scripts/hunter_reviewer_collector.py"}, "run": 'python "$S" --pr 1 --head x'}
     ),
 }
+
+
+def upload_options(document: dict) -> dict:
+    step = next(
+        s for s in document["jobs"]["collect"]["steps"] if str(s.get("uses", "")).startswith("actions/upload-artifact")
+    )
+    return step["with"]
 
 
 def collector_checkout(document: dict) -> dict:

@@ -36,15 +36,14 @@ def publish(repository: str, token: str, run_id: int, run_attempt: int | None = 
     The pull request is returned only once the run, receipt and pull-request identity have all been
     verified, so a caller may refresh that pull request's governance status from it.
     """
-    if run_attempt is not None:
-        # The completion event names one attempt. A rerun is a new attempt of the same run id, and the
-        # run record always shows the latest one: an event for an older attempt must not publish (or
-        # lose) the newer attempt's result, which its own completion event handles.
-        current = orchestration.request_json(repository, token, "GET", f"actions/runs/{run_id}")
-        if not isinstance(current, dict) or current.get("run_attempt") != run_attempt:
-            return "SKIPPED: this completion event is for a superseded run attempt", None
     try:
-        run, receipt = collector.verified_collector_receipt(repository, token, run_id)
+        # The completion event names one attempt. A rerun is a new attempt of the same run id and the
+        # run record always shows the latest one, so the expected attempt is bound inside the
+        # verification itself: an event for an older attempt can neither publish nor lose the newer
+        # attempt's result, which its own completion event handles.
+        run, receipt = collector.verified_collector_receipt(repository, token, run_id, run_attempt=run_attempt)
+    except collector.SupersededAttempt:
+        return "SKIPPED: this completion event is for a superseded run attempt", None
     except collector.NoCollectorReceipt:
         # A deliberate collector skip (draft, superseded head, unusable request) writes no receipt.
         # Nothing is published and the cycle stays pending, exactly as for any missing result; the run

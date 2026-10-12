@@ -1930,7 +1930,11 @@ def load_exhaustion(
 RECEIPT_ARTIFACT_PREFIX = "hunter-reviewer-results-"
 
 
-def verified_collector_run(repository: str, token: str, run_id: int) -> dict[str, Any]:
+class SupersededAttempt(ValueError):
+    """The run has moved on to a later attempt than the one the caller was told about."""
+
+
+def verified_collector_run(repository: str, token: str, run_id: int, run_attempt: int | None = None) -> dict[str, Any]:
     """The actual completed, successful collector run, or raise.
 
     Identity comes from GitHub's own run record, never from a run title, a dispatch payload or an
@@ -1944,6 +1948,10 @@ def verified_collector_run(repository: str, token: str, run_id: int) -> dict[str
     revision = str(run.get("head_sha") or "") if isinstance(run, dict) else ""
     if not isinstance(run, dict) or not valid_run(run, run_id, revision):
         raise ValueError("run is not a completed, successful pull_request_target collector run")
+    if run_attempt is not None and run["run_attempt"] != run_attempt:
+        # Bound on the very record the receipt is then selected from, so a rerun completing in
+        # between cannot let an older attempt's event verify the newer attempt's receipt.
+        raise SupersededAttempt("the collector run is no longer at the attempt this event describes")
     return run
 
 
@@ -1984,7 +1992,12 @@ def read_run_receipt(repository: str, token: str, run: dict[str, Any], *, head: 
 
 
 def verified_collector_receipt(
-    repository: str, token: str, run_id: int, pr_number: int | None = None, head: str | None = None
+    repository: str,
+    token: str,
+    run_id: int,
+    pr_number: int | None = None,
+    head: str | None = None,
+    run_attempt: int | None = None,
 ) -> tuple[dict[str, Any], dict[str, Any]]:
     """The verified run and its receipt, bound to one pull request and head.
 
@@ -1993,7 +2006,7 @@ def verified_collector_receipt(
     them with fresh pull-request state: this function proves which run produced which receipt,
     not that the head is still current.
     """
-    run = verified_collector_run(repository, token, run_id)
+    run = verified_collector_run(repository, token, run_id, run_attempt)
     found_head, receipt = read_run_receipt(repository, token, run, head=head)
     pr = receipt.get("pr_number") if pr_number is None and isinstance(receipt, dict) else pr_number
     if type(pr) is not int or pr <= 0:

@@ -1717,6 +1717,9 @@ _UPLOAD_ARTIFACT = re.compile(r"actions/upload-artifact@v[0-9]+")
 #: The required checkout major (``tests/test_hunter_pr_preflight.py::REQUIRED_ACTION_MAJORS``), or an immutable
 #: commit pin. A parsed definition carries no YAML comments, so the release a pin names is verified by that
 #: repository-wide test; here a downgraded major or a lookalike action is what must not pass.
+_RECEIPT_ARTIFACT_NAME = "hunter-reviewer-results-${{ github.event.pull_request.head.sha }}-${{ github.run_attempt }}"
+_RECEIPT_PATH = "reviewer-results.json"
+_UPLOAD_OPTIONS = frozenset({"name", "path", "if-no-files-found", "retention-days"})
 _CHECKOUT_ACTION = re.compile(r"actions/checkout@(?:v7(?:\.[0-9]+)*|[0-9a-f]{40})")
 _PUBLISHER_PERMISSIONS = {
     "actions": "read",
@@ -2032,6 +2035,23 @@ def _unexpected_step_errors(
     return errors
 
 
+def _upload_errors(steps: list[tuple[dict[str, Any], dict[str, Any]]], label: str) -> list[str]:
+    """Exactly one receipt upload with its fixed name and path; the publisher needs a unique artifact."""
+
+    uploads = [step for _job, step in steps if _UPLOAD_ARTIFACT.fullmatch(str(step.get("uses") or ""))]
+    if len(uploads) != 1:
+        return [f"{label} must upload exactly one receipt artifact"]
+    options = uploads[0].get("with") if isinstance(uploads[0].get("with"), dict) else {}
+    errors: list[str] = []
+    if str(options.get("name", "")).strip() != _RECEIPT_ARTIFACT_NAME or str(options.get("path", "")).strip() != (
+        _RECEIPT_PATH
+    ):
+        errors.append(f"{label} must upload only its fixed receipt artifact name and path")
+    if set(options) - _UPLOAD_OPTIONS or options.get("if-no-files-found", "ignore") != "ignore":
+        errors.append(f"{label} receipt upload must not use unexpected options")
+    return errors
+
+
 def validate_collector_workflow_definition(definition: Any) -> list[str]:
     """Guard errors for the parsed reviewer-collector workflow; never raises on malformed input.
 
@@ -2076,6 +2096,7 @@ def validate_collector_workflow_definition(definition: Any) -> list[str]:
     steps = _workflow_steps(jobs)
     errors.extend(_checkout_errors(steps, label))
     errors.extend(_stepless_job_errors(jobs, label))
+    errors.extend(_upload_errors(steps, label))
     errors.extend(_required_permission_errors(definition, jobs, _COLLECTOR_PERMISSIONS, label))
     errors.extend(
         _unexpected_step_errors(steps, label, ((_COLLECTOR_SCRIPT, _COLLECTOR_ARGUMENTS),), allow_upload=True)
