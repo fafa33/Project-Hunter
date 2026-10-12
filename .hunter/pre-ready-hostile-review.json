@@ -242,7 +242,13 @@
         "status": "modified"
       },
       {
-        "blob_sha": "9573ed30be651e65ab666a9ad192043a87c6c348",
+        "blob_sha": "43207351e7e4cc397ca2957e2b4663d0536f38d8",
+        "path": "scripts/hunter_review_orchestrator.py",
+        "previous_path": "",
+        "status": "modified"
+      },
+      {
+        "blob_sha": "372df9b69bf420905f0f07a2bb108b076a60b1bd",
         "path": "scripts/hunter_trusted_orchestrator_replay.py",
         "previous_path": "",
         "status": "modified"
@@ -254,7 +260,7 @@
         "status": "modified"
       },
       {
-        "blob_sha": "816fdce30c07dad742c9bdae246f0a78eec605b7",
+        "blob_sha": "2cd02dd89081e670dcdb4321a7494527339ce8f3",
         "path": "scripts/hunter_trusted_orchestrator_replay_worker.py",
         "previous_path": "",
         "status": "modified"
@@ -272,17 +278,23 @@
         "status": "modified"
       },
       {
-        "blob_sha": "ec43dc39763224e305e8762af6b814c580d82d89",
+        "blob_sha": "c4c126e315034532987244e1b797dde05090ddc1",
+        "path": "tests/test_hunter_review_orchestrator.py",
+        "previous_path": "",
+        "status": "modified"
+      },
+      {
+        "blob_sha": "432e3e000ab610bd2f4d3c6df719aa3bda66882f",
         "path": "tests/test_hunter_trusted_orchestrator_replay.py",
         "previous_path": "",
         "status": "modified"
       }
     ],
-    "review_target_digest": "a1bfcf0180509e28ea3ec0c75ddbedbf48cbfdca2cdbd17445163f798cb9c104"
+    "review_target_digest": "d8cdbc60836b5f1f821af450483df3e064f1ef9b78f642486711b46a8274cd96"
   },
-  "review_id": "23f35390ecc32617d18d6d568258c3a7252ce64f8e18a8b1761ae03f1e7c3e0a",
+  "review_id": "6216a80808fdc02106b4669b2f3f949aec86d12f6d4232108e7449c3d0c38ddb",
   "review_request": {
-    "claims_id": "23f35390ecc32617d18d6d568258c3a7252ce64f8e18a8b1761ae03f1e7c3e0a",
+    "claims_id": "6216a80808fdc02106b4669b2f3f949aec86d12f6d4232108e7449c3d0c38ddb",
     "schema": "hunter.review-request.v1"
   },
   "schema": "hunter.pre-ready-hostile-review.v1"
