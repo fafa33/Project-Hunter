@@ -80,7 +80,8 @@ def test_the_collector_runs_only_default_branch_code():
     checkouts = [s for s in steps if str(s.get("uses", "")).startswith("actions/checkout")]
     assert checkouts
     for step in checkouts:
-        assert step["with"]["ref"] == "${{ github.sha }}"
+        # No explicit ref: pull_request_target checks out the base branch, never the pull request head.
+        assert "ref" not in step["with"]
         assert step["with"]["persist-credentials"] is False
     text = (WORKFLOWS / "hunter-reviewer-collector.yml").read_text(encoding="utf-8")
     assert "pull_request.head.ref" not in text and "head.repo" not in text
@@ -93,6 +94,13 @@ def test_the_publisher_is_entered_only_by_a_successful_collector_run_and_takes_o
     assert "workflow_run.conclusion == 'success'" in condition
     assert "workflow_run.event == 'pull_request_target'" in condition
     assert publisher_step(document)["env"]["COLLECTOR_RUN_ID"] == "${{ github.event.workflow_run.id }}"
+
+
+def test_the_publisher_checks_out_the_default_branch_by_default_not_by_expression():
+    checkout = next(
+        s for s in publisher()["jobs"]["publish"]["steps"] if str(s.get("uses", "")).startswith("actions/checkout")
+    )
+    assert "ref" not in checkout["with"] and checkout["with"]["persist-credentials"] is False
 
 
 def test_the_publisher_holds_the_only_status_write_and_no_actions_or_contents_write():
@@ -171,7 +179,7 @@ COLLECTOR_MUTATIONS = {
     "unapproved event type": lambda d: triggers(d)["pull_request_target"]["types"].append("labeled"),
     "checkout of the pr head": lambda d: collector_checkout(d).update(ref="${{ github.event.pull_request.head.sha }}"),
     "checkout of the merge ref": lambda d: collector_checkout(d).update(ref="refs/pull/1/merge"),
-    "checkout without ref": lambda d: collector_checkout(d).pop("ref"),
+    "checkout with an empty ref": lambda d: collector_checkout(d).update(ref=""),
     "persisted credentials": lambda d: collector_checkout(d).update({"persist-credentials": True}),
     "pr number from a payload": lambda d: collector_step(d)["env"].update(
         PR_NUMBER="${{ github.event.client_payload.pr }}"
@@ -249,6 +257,7 @@ def test_the_guard_rejects_each_collector_contract_violation(name):
         lambda d: collector_step(d).update(name="renamed step"),
         lambda d: d["jobs"]["collect"]["steps"][0].update(uses="actions/checkout@" + "a" * 40),
         lambda d: d["jobs"]["collect"]["steps"][0].update(uses="actions/checkout@v7.1.0"),
+        lambda d: collector_checkout(d).update(ref="${{ github.sha }}"),
         lambda d: d["jobs"]["collect"].update(permissions=dict(d["permissions"])),
         lambda d: d["jobs"]["collect"]["steps"][-1].update(name="Upload receipt"),
         lambda d: collector_step(d).update(run=collector_step(d)["run"].replace("python ", "python3 ")),

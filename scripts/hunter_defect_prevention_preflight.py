@@ -1947,7 +1947,10 @@ def _checkout_errors(steps: list[tuple[dict[str, Any], dict[str, Any]]], label: 
         errors.append(f"{label} must check out the trusted default-branch code")
     for step in checkouts:
         options = step.get("with") if isinstance(step.get("with"), dict) else {}
-        if str(options.get("ref") or "").strip() not in _TRUSTED_CHECKOUT_REFS:
+        # An omitted ref is the trusted default for these triggers: pull_request_target checks out the base
+        # branch and workflow_run the default branch, never the pull request head (their triggers are
+        # pinned by the same guards).
+        if "ref" in options and str(options.get("ref") or "").strip() not in _TRUSTED_CHECKOUT_REFS:
             errors.append(f"{label} must check out only the trusted default-branch revision, never candidate content")
         if options.get("persist-credentials") is not False:
             errors.append(f"{label} checkout must not persist credentials")

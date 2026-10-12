@@ -54,9 +54,10 @@ jobs:
     # same pool and fails the moment this value stops covering it.
     timeout-minutes: 47
     steps:
+      # No explicit ref: for pull_request_target the default checkout is the base branch (never the
+      # pull request head), which is exactly the trusted code this job must run.
       - uses: actions/checkout@v7
         with:
-          ref: ${{ github.sha }}
           persist-credentials: false
       - name: Collect actual configured reviewer invocations
         env:
