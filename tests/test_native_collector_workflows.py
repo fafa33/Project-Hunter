@@ -448,4 +448,6 @@ def test_collector_identity_guard_rejects_payload_injection_despite_named_contex
 def test_collector_identity_guard_rejects_run_pr_hint_in_executable_environment():
     definition = collector()
     collector_step(definition)["env"]["ATTACK"] = "${{ github.event.workflow_run.pull_requests[0].number }}"
-    assert any("executable configuration" in issue for issue in guard.validate_collector_workflow_definition(definition))
+    assert any(
+        "executable configuration" in issue for issue in guard.validate_collector_workflow_definition(definition)
+    )

@@ -812,9 +812,12 @@ def test_governance_refuses_a_trigger_from_a_failed_dispatched_or_unreceipted_ru
 def test_candidate_controlled_preflight_success_cannot_bypass_trusted_prerequisite(github, monkeypatch):
     # Even a perfectly matching, successful candidate push is only a wake-up hint.
     github.runs[PRE_PR_RUN] = {
-        "id": PRE_PR_RUN, "name": "Hunter / Pre-PR Preflight",
+        "id": PRE_PR_RUN,
+        "name": "Hunter / Pre-PR Preflight",
         "path": ".github/workflows/hunter-pre-pr-preflight.yml",
-        "event": "push", "head_sha": HEAD, "conclusion": "success",
+        "event": "push",
+        "head_sha": HEAD,
+        "conclusion": "success",
         "status": "completed",
         "pull_requests": [{"number": PR, "head": {"sha": HEAD}}],
     }

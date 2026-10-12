@@ -628,7 +628,9 @@ def test_collector_workflow_exposes_only_server_reviewer_secrets():
     import yaml
 
     workflow = yaml.safe_load((collector.review.ROOT / collector.WORKFLOW).read_text())
-    collect_step = next(step for step in workflow["jobs"]["collect"]["steps"] if "GEMINI_API_KEY" in str(step.get("env", {})))
+    collect_step = next(
+        step for step in workflow["jobs"]["collect"]["steps"] if "GEMINI_API_KEY" in str(step.get("env", {}))
+    )
     env = collect_step["env"]
     assert env["GEMINI_API_KEY"] == "${{ secrets.GEMINI_API_KEY }}"
     assert env["GROQ_API_KEY"] == "${{ secrets.GROQ_API_KEY }}"
