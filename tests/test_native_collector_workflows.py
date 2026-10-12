@@ -54,7 +54,7 @@ def test_the_real_collector_and_publisher_satisfy_their_guards():
     assert guard.validate_review_after_remediation_boundary() == []
 
 
-def test_the_collector_is_entered_only_through_the_native_pull_request_target_event_and_pre_pr_preflight():
+def test_the_collector_is_entered_only_through_the_native_pull_request_target_event():
     document = collector()
     trigger_keys = set(triggers(document))
     # The collector is entered through pull_request_target (native event) and
