@@ -542,9 +542,10 @@ def scenario_a_v2(candidate_root: Path, fixture: dict[str, Any]) -> dict[str, An
     * ``independent_review_opportunity_seconds`` is one strictly positive, finite budget that is
       *derived from the candidate's own reviewer pool* (verified by mutating the pool, not by range); and
     * ``read_cycle`` believes a published cycle only when it was created by the trusted status
-      publisher AND the run it cites is a trusted-publisher run on the default branch. A status from
-      another creator or with no creator, a status citing the (status-less) collector run, or a run
-      off the default branch, is never a cycle, so neither the collector, a forger, nor elapsed time
+      publisher AND the run it cites executes the trusted base workflow, bound to the exact PR
+      for target events. A status from another creator or with no creator, a status citing the
+      (status-less) collector run, or a run without trusted base provenance is never a cycle,
+      so neither the collector, a forger, nor elapsed time
       can complete one. Malformed descriptions are never a cycle either.
     """
 
@@ -555,7 +556,7 @@ def scenario_a_v2(candidate_root: Path, fixture: dict[str, Any]) -> dict[str, An
     pr_number = int(fixture["pr_number"])
     digest = fixture["config_digest"]
     trusted_sha = "e" * 40
-    runs = {
+    runs: dict[int, dict[str, Any]] = {
         1: {"head_branch": "main", "head_sha": trusted_sha, "path": ".github/workflows/hunter-governance-review.yml"},
         2: {"head_branch": "main", "head_sha": trusted_sha, "path": ".github/workflows/hunter-reviewer-collector.yml"},
         3: {
@@ -565,6 +566,20 @@ def scenario_a_v2(candidate_root: Path, fixture: dict[str, Any]) -> dict[str, An
         },
         4: {"head_branch": "main", "head_sha": "f" * 40, "path": ".github/workflows/hunter-governance-review.yml"},
     }
+    target_pr = {
+        "number": pr_number,
+        "head": {"sha": head, "ref": "feature", "repo": {"id": 1}},
+        "base": {"sha": trusted_sha, "ref": "main", "repo": {"id": 2}},
+    }
+    runs[5] = {
+        "event": "pull_request_target",
+        "head_branch": "feature",
+        "head_sha": head,
+        "path": ".github/workflows/hunter-governance-review.yml",
+        "pull_requests": [target_pr],
+    }
+    runs[6] = {**runs[5], "event": "pull_request"}
+    runs[7] = {**runs[5], "head_sha": "f" * 40}
     trusted_creator = {"login": getattr(orchestration, "TRUSTED_STATUS_CREATOR", "github-actions[bot]")}
     trusted, omitted = object(), object()
 
@@ -584,7 +599,7 @@ def scenario_a_v2(candidate_root: Path, fixture: dict[str, Any]) -> dict[str, An
 
         def request_json(_repository: str, _token: str, _method: str, path: str, payload: Any = None) -> Any:
             if path == f"pulls/{pr_number}":
-                return {"state": "open", "head": {"sha": head}}
+                return {"state": "open", "head": target_pr["head"], "base": target_pr["base"]}
             if path.startswith(f"commits/{head}/statuses"):
                 return [status]
             if path == "":
@@ -603,6 +618,9 @@ def scenario_a_v2(candidate_root: Path, fixture: dict[str, Any]) -> dict[str, An
         return found
 
     publisher, collector, off_branch = believed(1), believed(2), believed(3)
+    assert believed(5) == "present", "a bound pull_request_target publisher must be believed"
+    assert believed(6) == "absent", "a candidate pull_request workflow must never authenticate a cycle"
+    assert believed(7) == "absent", "a target event from a different head must never authenticate a cycle"
     wrong_head = believed(4)
     assert wrong_head == "absent", "a trusted workflow run from an unrelated commit must never authenticate a cycle"
     assert publisher == "present", f"a trusted publisher cycle must be believed, got {publisher!r}"

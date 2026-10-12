@@ -14,7 +14,7 @@
       "scenario_set_id": "hunter-orchestrator-replay-v2",
       "required_scenario_ids": ["A", "B", "G"],
       "scenario_invariants": {
-        "A": "The published review opportunity is a strictly positive, finite budget derived from the candidate's own reviewer pool, and a published cycle is believed only when the run it cites is a trusted-publisher run on the default branch: a status citing the status-less collector run, or a run off the default branch, is never a cycle, so neither the collector nor elapsed time can complete one.",
+        "A": "The published review opportunity is a strictly positive, finite budget derived from the candidate's own reviewer pool, and a published cycle is believed only when the run it cites is a trusted-publisher run executing from default-branch history, with exact PR/head/repository binding for pull_request_target events: a status citing the status-less collector run, a candidate pull_request run, or a run without trusted base provenance is never a cycle, so neither the collector nor elapsed time can complete one.",
         "B": "A collector receipt is usable only for the exact run, attempt, pull request, head and remediation generation it names: a well-formed receipt is accepted, and a receipt for another pull request, head, run, attempt or generation, a missing or malformed identity digest, a malformed attempt list, the minimal object and a non-object are all refused, so replayed, rerun or duplicate events cannot turn one run's receipt into another's result.",
         "G": "A WAITING_FOR_REVIEWER exact-head cycle classifies to pending end-to-end through the real resolution path for absent and in-progress cycle evidence, and malformed cycle evidence fails closed rather than classifying as pending."
       }
