@@ -116,49 +116,59 @@ def read_candidate_text(candidate_root: Path, relative: str) -> str:
     return resolve_candidate_file(candidate_root, relative).read_text(encoding="utf-8")
 
 
-def _local_imports(source: str) -> set[str]:
-    """Top-level module names imported anywhere in ``source`` (including nested imports)."""
+def _candidate_module_path(candidate_root: Path, module: str) -> str | None:
+    parts = module.split(".")
+    if not parts or not all(part.isidentifier() for part in parts):
+        raise ValueError(f"invalid candidate import: {module!r}")
+    for prefix in ("scripts", "src"):
+        base = Path(prefix).joinpath(*parts)
+        for relative in (str(base) + ".py", str(base / "__init__.py")):
+            if os.path.lexists(candidate_root / relative):
+                return relative
+    return None
 
-    names: set[str] = set()
+
+def _local_imports(source: str, relative: str) -> set[str]:
+    imports: set[str] = set()
+    path = Path(relative)
+    package = list(path.parent.parts[1:])
     for node in ast.walk(ast.parse(source)):
         if isinstance(node, ast.Import):
-            names.update(alias.name.split(".")[0] for alias in node.names)
-        elif isinstance(node, ast.ImportFrom) and node.level == 0 and node.module:
-            names.add(node.module.split(".")[0])
-    return names
+            imports.update(alias.name for alias in node.names)
+        elif isinstance(node, ast.ImportFrom):
+            if node.level:
+                if node.level > len(package) + 1:
+                    raise ValueError(f"relative import escapes candidate package in {relative}")
+                parent = package[: len(package) - node.level + 1]
+                target = ".".join(parent + (node.module.split(".") if node.module else []))
+            else:
+                target = node.module or ""
+            if target:
+                imports.add(target)
+                imports.update(target + "." + alias.name for alias in node.names if alias.name != "*")
+    return imports
 
 
 def candidate_input_closure(candidate_root: Path, scenario_id: str, contract_version: str) -> tuple[str, ...]:
-    """Every candidate file a scenario's behavior can depend on, sorted.
-
-    The transitive closure of candidate ``scripts/<module>.py`` files imported
-    (statically, at any nesting depth) from the scenario's root modules, plus
-    the declared configuration files. A visited set makes the walk terminate on
-    import cycles. A name that resolves to a candidate file entry (even a
-    dangling symlink) is included and therefore validated; any entry that is a
-    symlink, escapes the root, or is missing/unparseable raises (including a
-    dependency the candidate omitted but the trusted checkout also provides), so a hostile
-    or broken dependency can never be silently dropped from the digest.
-    """
-
     pending = list(CANDIDATE_MODULE_FILES[(contract_version, scenario_id)])
     closure: set[str] = set()
     while pending:
         relative = pending.pop()
         if relative in closure:
             continue
-        text = read_candidate_text(candidate_root, relative)
+        source = read_candidate_text(candidate_root, relative)
         closure.add(relative)
-        for name in _local_imports(text):
-            sibling = f"scripts/{name}.py"
-            if sibling in closure:
-                continue
-            if os.path.lexists(candidate_root / sibling):
-                pending.append(sibling)
-            elif (TRUSTED_SCRIPTS_DIR / f"{name}.py").exists():
-                # The worker's sys.path still reaches the trusted scripts: a dependency the
-                # candidate omitted would silently resolve to trusted code instead of failing.
-                raise ValueError(f"candidate is missing local dependency {sibling!r} imported by {relative!r}")
+        for name in _local_imports(source, relative):
+            parts = name.split(".")
+            for length in range(1, len(parts) + 1):
+                prefix = ".".join(parts[:length])
+                dependency = _candidate_module_path(candidate_root, prefix)
+                if dependency and dependency not in closure:
+                    pending.append(dependency)
+                elif not dependency:
+                    for trusted_base in (TRUSTED_SCRIPTS_DIR, TRUSTED_SCRIPTS_DIR.parent / "src"):
+                        if trusted_base.joinpath(*parts[:length]).with_suffix(".py").exists():
+                            raise ValueError(f"candidate missing local dependency {prefix!r} from {relative!r}")
     for relative in CANDIDATE_CONFIG_FILES:
         resolve_candidate_file(candidate_root, relative)
         closure.add(relative)

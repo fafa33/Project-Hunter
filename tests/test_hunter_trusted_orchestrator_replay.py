@@ -1658,7 +1658,7 @@ def test_trusted_floor_rejects_modified_v1_candidate(tmp_path):
     shutil.copytree(trusted, candidate)
     module = candidate / "scripts" / "hunter_review_orchestrator.py"
     module.write_text(module.read_text(encoding="utf-8") + "\n# downgrade camouflage\n", encoding="utf-8")
-    with pytest.raises(ValueError, match="modified candidate cannot select weaker v1"):
+    with pytest.raises(ValueError, match="modified candidate dependency cannot select weaker v1"):
         replay.enforce_trusted_contract_floor(candidate, trusted)
 
 
@@ -1926,3 +1926,33 @@ assert parse(f"REVIEWER_UNAVAILABLE||5|{digest}", creator="mallory") is None
         [sys.executable, "-I", str(script), str(root / "scripts")], capture_output=True, text=True, check=False
     )
     assert completed.returncode == 0, completed.stderr
+
+
+def test_v1_floor_rejects_changed_transitive_dependency(tmp_path):
+    trusted = _candidate_root(tmp_path)
+    candidate = tmp_path / "changed-helper"
+    shutil.copytree(trusted, candidate)
+    helper = candidate / "scripts/hunter_pre_ready_review.py"
+    helper.write_text(helper.read_text(encoding="utf-8") + "\n# malicious drift\n", encoding="utf-8")
+    with pytest.raises(ValueError, match="modified candidate dependency"):
+        replay.enforce_trusted_contract_floor(candidate, trusted)
+
+
+def test_package_and_relative_imports_are_in_digest_closure(tmp_path):
+    root = _candidate_root(tmp_path)
+    worker = worker_module()
+    helper = root / "scripts/hunter_review_orchestrator.py"
+    helper.write_text(
+        helper.read_text(encoding="utf-8") + "\nfrom hunter.task_scope import TaskScopeContract\n", encoding="utf-8"
+    )
+    (root / "src/hunter").mkdir(parents=True, exist_ok=True)
+    (root / "src/hunter/__init__.py").write_text("", encoding="utf-8")
+    (root / "src/hunter/task_scope.py").write_text("from . import helper\n", encoding="utf-8")
+    (root / "src/hunter/helper.py").write_text("VALUE = 1\n", encoding="utf-8")
+    closure = worker.candidate_input_closure(root, "A", "v1")
+    assert "src/hunter/task_scope.py" in closure
+    assert "src/hunter/helper.py" in closure
+    assert "src/hunter/__init__.py" in closure
+    before = worker.candidate_module_digest(root, "A", "v1")
+    (root / "src/hunter/helper.py").write_text("VALUE = 2\n", encoding="utf-8")
+    assert before != worker.candidate_module_digest(root, "A", "v1")

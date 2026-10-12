@@ -151,9 +151,17 @@ def enforce_trusted_contract_floor(candidate_root: Path, trusted_root: Path) -> 
     if candidate_version == "v1":
         if trusted_version != "v1":
             raise ValueError("candidate attempts v2-to-v1 trusted contract downgrade")
-        candidate_file = worker.resolve_candidate_file(candidate_root, ORCHESTRATOR_RELATIVE_PATH)
-        if candidate_file.read_bytes() != (trusted_root / ORCHESTRATOR_RELATIVE_PATH).read_bytes():
-            raise ValueError("modified candidate cannot select weaker v1 trusted contract")
+        for scenario_id in get_required_scenario_ids("v1"):
+            candidate_files = worker.candidate_input_closure(candidate_root, scenario_id, "v1")
+            trusted_files = worker.candidate_input_closure(trusted_root, scenario_id, "v1")
+            if candidate_files != trusted_files:
+                raise ValueError("modified candidate dependency closure cannot select weaker v1 trusted contract")
+            for relative in candidate_files:
+                if (
+                    worker.resolve_candidate_file(candidate_root, relative).read_bytes()
+                    != worker.resolve_candidate_file(trusted_root, relative).read_bytes()
+                ):
+                    raise ValueError("modified candidate dependency cannot select weaker v1 trusted contract")
     return candidate_version
 
 
