@@ -50,7 +50,7 @@
     "issue": "591",
     "review_target": [
       {
-        "blob_sha": "31178ee63feb614b9cfa6e740846ce16c389405c",
+        "blob_sha": "9f646783fa3210dd5b069c3f465c0d7e48034a8e",
         "path": ".github/workflows/hunter-collector-publisher.yml",
         "previous_path": "",
         "status": "added"
@@ -86,13 +86,13 @@
         "status": "added"
       },
       {
-        "blob_sha": "493ed52134b8735be5d4c1450cf7a387a6f274fd",
+        "blob_sha": "5788e5000e71381a5d04a9fe0db23c09fb0a49a6",
         "path": "tests/test_native_collector_workflows.py",
         "previous_path": "",
         "status": "added"
       },
       {
-        "blob_sha": "cd8c8e347f271038611e2929959e0f0ff008c201",
+        "blob_sha": "a07f415270715385449e831dd859b7a316f784f2",
         "path": ".github/workflows/hunter-governance-review.yml",
         "previous_path": "",
         "status": "modified"
@@ -116,7 +116,7 @@
         "status": "modified"
       },
       {
-        "blob_sha": "c676fa3cfe7487a3013f2f72c60c8f8c07553ba9",
+        "blob_sha": "1e4c5abd6117372aad321b8b41b1f1aa185bb753",
         "path": ".github/workflows/hunter-reviewer-collector.yml",
         "previous_path": "",
         "status": "modified"
@@ -140,7 +140,7 @@
         "status": "modified"
       },
       {
-        "blob_sha": "a4b77255775f0d5bdb1fb612a6af2417bd2ee69d",
+        "blob_sha": "5d809954c3d76e95dab1a37fc58dafcbb69472ef",
         "path": "docs/ARCHITECTURE_AUDITS/HUNTER_FAST_MERGE_M1.md",
         "previous_path": "",
         "status": "modified"
@@ -164,7 +164,7 @@
         "status": "modified"
       },
       {
-        "blob_sha": "98432652da92d5ac62daf1b57203e271138c896a",
+        "blob_sha": "0352db21c165f499d257d0d09a4531498c10fd05",
         "path": "docs/HUNTER_GOVERNANCE_REVIEW.md",
         "previous_path": "",
         "status": "modified"
@@ -182,7 +182,7 @@
         "status": "modified"
       },
       {
-        "blob_sha": "2b2b1e830b351275b3ec013b254cce73c44f82ea",
+        "blob_sha": "f0766d6bc05260046b416ba77880ce322ba3e96d",
         "path": "scripts/hunter_defect_prevention_preflight.py",
         "previous_path": "",
         "status": "modified"
@@ -362,11 +362,11 @@
         "status": "removed"
       }
     ],
-    "review_target_digest": "5d8e15e40010a5a00988be327b2138e1de019f099b3bbf18c0bbcc0beab15447"
+    "review_target_digest": "bc4175db051d1e60f40a7b65719a779abea44f7aac1f1ebaf5fce744e6df91e7"
   },
-  "review_id": "7f8fc39482ecea8e3023f21dc3992be5541630ef810c74f8973475a7bbcd59d0",
+  "review_id": "868b85c4e149912dfff4cc0b98959c2bcc14abeace8af8fd3876070a925577fb",
   "review_request": {
-    "claims_id": "7f8fc39482ecea8e3023f21dc3992be5541630ef810c74f8973475a7bbcd59d0",
+    "claims_id": "868b85c4e149912dfff4cc0b98959c2bcc14abeace8af8fd3876070a925577fb",
     "schema": "hunter.review-request.v1"
   },
   "schema": "hunter.pre-ready-hostile-review.v1"
