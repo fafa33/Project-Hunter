@@ -42,7 +42,7 @@ Code quality, dependency security, CodeQL, unresolved review feedback, `CHANGES_
 
 ## Triggers
 
-The primary workflow runs via trusted `pull_request_target` on PR open/reopen/synchronize. It has no manual-dispatch entry point. Trusted reconciliation refreshes open PRs after `main` changes and periodically as a recovery path; use its scheduled recovery instead of dispatching the primary workflow.
+The primary workflow runs via trusted `pull_request_target` on PR open/reopen/synchronize/ready/draft, on completion of the exact-head preflight proofs (`workflow_run`), and on every push to `main`, which re-evaluates every open pull request against the new base (a push-to-`main` run always executes the pushed trusted definition). It has no manual-dispatch entry point and no schedule; there is no separate reconciliation workflow. Recovery from a missed or failed run is GitHub\'s own "Re-run all jobs" or a new push.
 
 ## Security boundary
 
