@@ -1,55 +1,64 @@
 name: Hunter Reviewer Collector
 
+# Display only: nothing parses this title. Identity is the pull_request_target event GitHub
+# delivered, re-verified against fresh API state, and the receipt this run uploads.
 run-name: >-
-  Hunter Reviewer Collector PR ${{ inputs.pr_number }} HEAD ${{ inputs.head_sha }}${{
-  inputs.generation_id && format(' GEN {0}', inputs.generation_id) || '' }}
+  Hunter Reviewer Collector PR
+  ${{ github.event_name == 'pull_request_target' && github.event.pull_request.number
+      || github.event.workflow_run.pull_requests[0].number }}
 
+# Least privilege, by design. This workflow is resolved from the default branch (pull_request_target
+# and workflow_run) and checks out only default-branch code, never the candidate. It invokes the
+# configured reviewers and uploads a receipt. It holds NO status write and no contents write: it
+# cannot certify its own evidence and cannot create refs or tags. The small trusted publisher
+# (hunter-collector-publisher.yml) verifies this run, its receipt and the current pull request
+# before it publishes anything.
+#
+# Recovery of a lost, cancelled or timed-out run is GitHub's own "Re-run all jobs" on this run (or a
+# new push). A missing result is simply pending: it fails closed, and nothing polls or fabricates
+# a completion.
 on:
-  workflow_dispatch:
-    inputs:
-      pr_number:
-        description: Pull request to review
-        required: true
-        type: string
-      head_sha:
-        description: Exact 40-character candidate HEAD
-        required: true
-        type: string
-      generation_id:
-        description: >-
-          Remediation generation of this exact head, or empty for the candidate's
-          first cycle. The collector re-derives it from trusted review-thread
-          state and fails closed on disagreement, so this input correlates the
-          run; it never authorises one.
-        required: false
-        default: ""
-        type: string
+  pull_request_target:
+    branches:
+      - main
+    types:
+      - opened
+      - reopened
+      - synchronize
+      - ready_for_review
+  workflow_run:
+    workflows:
+      - Hunter / Pre-PR Preflight
+    types:
+      - completed
 
-# `actions: write` is what lets this collector dispatch a reviewer that runs as
-# its own workflow. The collector is dispatch-only: the trusted default-branch
-# orchestrator is the single entry point, so PR lifecycle events cannot race or
-# duplicate the exact-head collector cycle. `statuses: write` is what lets this
-# run publish its own completion directly onto the candidate's exact head (see
-# "Publish collector completion" below): this run's own workflow_run event
-# always reports main's SHA, never the candidate's, so the candidate/head this
-# collector was dispatched for must be recorded as evidence this run itself
-# writes, not derived later from an event that cannot carry it.
 permissions:
   contents: read
-  actions: write
-  pull-requests: write
-  statuses: write
+  actions: write # dispatch the configured workflow reviewers
+  pull-requests: write # reviewer trigger comments
+  statuses: read # read the trusted prerequisite status; never write
 
 concurrency:
-  group: hunter-reviewer-collector-${{ inputs.pr_number }}
-  cancel-in-progress: false
+  # A newer event for the same pull request supersedes an older run natively.
+  group: >-
+    hunter-reviewer-collector-
+    ${{ github.event_name == 'pull_request_target'
+        && github.event.pull_request.number
+        || github.event.workflow_run.pull_requests[0].number }}
+  cancel-in-progress: true
 
 jobs:
   collect:
-    if: github.ref == format('refs/heads/{0}', github.event.repository.default_branch)
+    if: >-
+      (github.event_name == 'pull_request_target'
+        && github.event.pull_request.draft == false
+        && github.ref == format('refs/heads/{0}', github.event.repository.default_branch))
+      || (github.event_name == 'workflow_run'
+        && github.event.workflow_run.conclusion == 'success'
+        && github.event.workflow_run.event == 'push'
+        && github.event.workflow_run.workflow_name == 'Hunter / Pre-PR Preflight')
     runs-on: ubuntu-latest
-    # Global independent-review opportunity budget. Completion triggers trusted
-    # reconcile, which finalizes timeout/unavailability without blocking.
+    # Global independent-review opportunity budget.
     #
     # PR #535 live evidence: this must never be shorter than the worst case every enabled
     # reviewer in docs/CODE_WRITE_POLICY.json's reviewer_pool can spend before
@@ -62,42 +71,42 @@ jobs:
     # same pool and fails the moment this value stops covering it.
     timeout-minutes: 47
     steps:
+      # No explicit ref: for pull_request_target the default checkout is the base branch (never the
+      # pull request head), which is exactly the trusted code this job must run.
+      # For workflow_run the default checkout is also the default branch.
       - uses: actions/checkout@v7
         with:
-          ref: ${{ github.sha }}
           persist-credentials: false
+      - name: Resolve exact-head PR context for workflow_run trigger
+        if: github.event_name == 'workflow_run'
+        id: context
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          RUN_ID: ${{ github.event.workflow_run.id }}
+        run: |
+          set -euo pipefail
+          pr_number="$(gh api "repos/${GH_REPO}/actions/runs/${RUN_ID}" --jq '.pull_requests[0].number // empty')"
+          head_sha="$(gh api "repos/${GH_REPO}/actions/runs/${RUN_ID}" --jq '.head_sha')"
+          if [ -z "$pr_number" ] || [ -z "$head_sha" ]; then
+            echo "no associated pull request or head SHA found for triggering run ${RUN_ID}" >&2
+            exit 1
+          fi
+          echo "pr_number=$pr_number" >> "$GITHUB_OUTPUT"
+          echo "head_sha=$head_sha" >> "$GITHUB_OUTPUT"
       - name: Collect actual configured reviewer invocations
         env:
           GITHUB_TOKEN: ${{ github.token }}
           GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
           GROQ_API_KEY: ${{ secrets.GROQ_API_KEY }}
-          PR_NUMBER: ${{ inputs.pr_number }}
-          CANDIDATE_HEAD: ${{ inputs.head_sha }}
-          REMEDIATION_GENERATION: ${{ inputs.generation_id }}
-        run: >-
-          python scripts/hunter_reviewer_collector.py
-          --pr "$PR_NUMBER" --head "$CANDIDATE_HEAD"
-          --generation "$REMEDIATION_GENERATION"
-          --output reviewer-results.json
+          GITHUB_EVENT_NAME: ${{ github.event_name }}
+          PR_NUMBER: ${{ github.event_name == 'pull_request_target' && github.event.pull_request.number || steps.context.outputs.pr_number }}
+          CANDIDATE_HEAD: ${{ github.event_name == 'pull_request_target' && github.event.pull_request.head.sha || steps.context.outputs.head_sha }}
+        run: python scripts/hunter_reviewer_collector.py --pr "$PR_NUMBER" --head "$CANDIDATE_HEAD" --output reviewer-results.json
       - uses: actions/upload-artifact@v4
         with:
-          name: hunter-reviewer-results-${{ inputs.head_sha }}-${{ github.run_attempt }}
+          name: hunter-reviewer-results-${{ github.event_name == 'pull_request_target' && github.event.pull_request.head.sha || steps.context.outputs.head_sha }}-${{ github.run_attempt }}
           path: reviewer-results.json
-          if-no-files-found: error
+          # A deliberate skip (draft, superseded head, unusable review request) writes no receipt.
+          if-no-files-found: ignore
           retention-days: 30
-      - name: Publish collector completion
-        # This run always executes from the trusted default branch, so its own
-        # workflow_run.head_sha is main's, never the candidate's: reconcile
-        # cannot correlate a completed run back to this PR/head from the event
-        # alone. Publishing completion here, directly from the inputs this run
-        # was actually dispatched with, is the trusted, already-correlated
-        # identity -- never derived or re-guessed later.
-        if: success()
-        env:
-          GITHUB_TOKEN: ${{ github.token }}
-          PR_NUMBER: ${{ inputs.pr_number }}
-          CANDIDATE_HEAD: ${{ inputs.head_sha }}
-        run: >-
-          python scripts/hunter_review_orchestrator.py collector-complete
-          --repository "${{ github.repository }}"
-          --pr "$PR_NUMBER" --head "$CANDIDATE_HEAD" --run-id "${{ github.run_id }}"

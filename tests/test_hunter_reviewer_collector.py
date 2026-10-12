@@ -121,21 +121,22 @@ def test_evidence_transport_failure_is_not_reviewer_exhaustion():
         collector.collect_attempts(pool, HEAD, backend)
 
 
-def test_trusted_run_must_execute_default_branch_revision():
+def test_trusted_run_must_be_the_pull_request_target_run_for_the_exact_head():
     run = {
         "id": 123,
         "run_attempt": 1,
         "head_sha": "c" * 40,
         "head_branch": "main",
         "path": ".github/workflows/hunter-reviewer-collector.yml",
-        "event": "workflow_dispatch",
+        "event": "pull_request_target",
         "status": "completed",
         "conclusion": "success",
     }
-    assert collector.valid_run(run, 123, "main", "c" * 40)
-    assert not collector.valid_run({**run, "head_branch": "candidate"}, 123, "main", "c" * 40)
-    assert not collector.valid_run({**run, "head_sha": "not-a-sha"}, 123, "main", "not-a-sha")
-    assert not collector.valid_run({**run, "path": ".github/workflows/untrusted.yml"}, 123, "main", "c" * 40)
+    assert collector.valid_run(run, 123, "c" * 40)
+    # The run record carries the pull request's source branch for this event; it is not an identity.
+    assert collector.valid_run({**run, "head_branch": "issue-branch"}, 123, "c" * 40)
+    assert not collector.valid_run({**run, "head_sha": "not-a-sha"}, 123, "not-a-sha")
+    assert not collector.valid_run({**run, "path": ".github/workflows/untrusted.yml"}, 123, "c" * 40)
 
 
 def _install_receipt(
@@ -163,6 +164,7 @@ def _install_receipt(
         "run_id": 123,
         "run_attempt": 1,
         "claims_id": "d" * 64,
+        "remediation_generation_id": generation_id,
         "configuration_digest": collector.configuration_digest(pool),
         "attempts": records,
     }
@@ -182,15 +184,17 @@ def _install_receipt(
             return {
                 "id": 123,
                 "run_attempt": 1,
-                "head_sha": "c" * 40,
-                "head_branch": "main",
+                # A pull_request_target run records the pull request's source branch and head.
+                "head_sha": HEAD,
+                "head_branch": "issue-branch",
+                "pull_requests": [{"number": 469}],
                 "path": collector.WORKFLOW,
-                "event": "workflow_dispatch",
+                "event": "pull_request_target",
                 "status": "completed",
                 "conclusion": "success",
             }
-        if path.startswith("compare/"):
-            return {"status": "ahead"}
+        if path == "pulls/469":
+            return {"state": "open", "base": {"ref": "main"}, "head": {"sha": HEAD}}
         if path.startswith("actions/runs/123/artifacts?"):
             return {
                 "artifacts": [
@@ -293,18 +297,30 @@ def test_main_branch_advance_does_not_invalidate_trusted_collector_receipt(monke
     assert result["reviewer_attempts"][0]["attempt_count"] == 1
 
 
-def test_collector_run_off_current_default_branch_history_fails_closed(monkeypatch):
+@pytest.mark.parametrize(
+    ("path", "payload", "message"),
+    [
+        ("pulls/469", {"state": "open", "base": {"ref": "release"}, "head": {"sha": HEAD}}, "default branch"),
+        ("actions/runs/123", None, "associate this collector run"),
+    ],
+    ids=["retargeted-pull-request", "run-not-associated-with-the-pull-request"],
+)
+def test_collector_run_for_a_pull_request_not_on_the_default_branch_fails_closed(monkeypatch, path, payload, message):
+    """A pull_request_target run proves its head, not its code: the PR must still target the default branch."""
     pool = _install_receipt(monkeypatch)
 
     original = collector.governance.request_json
 
-    def request(repository, token, method, path):
-        if path.startswith("compare/"):
-            return {"status": "diverged"}
-        return original(repository, token, method, path)
+    def request(repository, token, method, request_path):
+        if request_path == path and payload is not None:
+            return payload
+        value = original(repository, token, method, request_path)
+        if request_path == path and isinstance(value, dict):
+            return {**value, "pull_requests": []}
+        return value
 
     monkeypatch.setattr(collector.governance, "request_json", request)
-    with pytest.raises(ValueError, match="default-branch history"):
+    with pytest.raises(ValueError, match=message):
         collector.load_exhaustion("owner/repo", "token", 469, HEAD, pool, 123, "alternate")
 
 
@@ -555,24 +571,29 @@ def test_explicit_unavailability_is_valid_exhaustion_without_waiting_full_timeou
     assert result["reviewer_attempts"][0]["attempt_count"] == 1
 
 
-def test_pull_request_target_collector_run_is_trusted_on_default_branch():
+@pytest.mark.parametrize("event", ["repository_dispatch", "workflow_dispatch"])
+def test_retired_collector_entry_points_are_never_current_authority(event):
     run = {
         "id": 123,
         "run_attempt": 1,
         "head_branch": "main",
         "head_sha": "b" * 40,
         "path": collector.WORKFLOW,
-        "event": "pull_request_target",
+        "event": event,
         "status": "completed",
         "conclusion": "success",
     }
-    assert collector.valid_run(run, 123, "main", "b" * 40)
+    assert not collector.valid_run(run, 123, "b" * 40)
+    assert collector.valid_run({**run, "event": "pull_request_target"}, 123, "b" * 40)
 
 
-def test_dispatch_only_artifact_name_uses_exact_input_head():
+def test_native_artifact_name_uses_the_exact_event_head():
     workflow = (collector.review.ROOT / collector.WORKFLOW).read_text()
-    assert "pull_request_target:" not in workflow
-    assert "name: hunter-reviewer-results-${{ inputs.head_sha }}-${{ github.run_attempt }}" in workflow
+    assert "client_payload" not in workflow
+    assert (
+        "name: hunter-reviewer-results-${{ github.event_name == 'pull_request_target' && github.event.pull_request.head.sha || steps.context.outputs.head_sha }}-${{ github.run_attempt }}"
+        in workflow
+    )
 
 
 def test_substantive_not_available_phrase_is_not_unavailability():
@@ -607,7 +628,10 @@ def test_collector_workflow_exposes_only_server_reviewer_secrets():
     import yaml
 
     workflow = yaml.safe_load((collector.review.ROOT / collector.WORKFLOW).read_text())
-    env = workflow["jobs"]["collect"]["steps"][1]["env"]
+    collect_step = next(
+        step for step in workflow["jobs"]["collect"]["steps"] if "GEMINI_API_KEY" in str(step.get("env", {}))
+    )
+    env = collect_step["env"]
     assert env["GEMINI_API_KEY"] == "${{ secrets.GEMINI_API_KEY }}"
     assert env["GROQ_API_KEY"] == "${{ secrets.GROQ_API_KEY }}"
 
@@ -926,6 +950,7 @@ def test_groq_authority_verifies_prior_api_exhaustion_from_trusted_collector(mon
         "run_id": 123,
         "run_attempt": 1,
         "claims_id": "d" * 64,
+        "remediation_generation_id": collector.BASE_GENERATION,
         "configuration_digest": collector.configuration_digest(pool),
         "attempts": [
             {
@@ -975,13 +1000,16 @@ def test_groq_authority_verifies_prior_api_exhaustion_from_trusted_collector(mon
             return {
                 "id": 123,
                 "run_attempt": 1,
-                "head_sha": "c" * 40,
-                "head_branch": "main",
+                "head_sha": HEAD,
+                "head_branch": "issue-branch",
+                "pull_requests": [{"number": 469}],
                 "path": collector.WORKFLOW,
                 "event": "pull_request_target",
                 "status": "completed",
                 "conclusion": "success",
             }
+        if path == "pulls/469":
+            return {"state": "open", "base": {"ref": "main"}, "head": {"sha": HEAD}}
         if path.startswith("compare/"):
             return {"status": "ahead"}
         if path.startswith("actions/runs/123/artifacts?"):
@@ -1534,6 +1562,7 @@ def _triage_receipt(monkeypatch, *, local_outcome="clear", local_run_id=7001, lo
         "run_id": 123,
         "run_attempt": 1,
         "claims_id": "d" * 64,
+        "remediation_generation_id": collector.BASE_GENERATION,
         "configuration_digest": collector.configuration_digest(pool),
         "attempts": records,
     }
@@ -1553,13 +1582,16 @@ def _triage_receipt(monkeypatch, *, local_outcome="clear", local_run_id=7001, lo
             return {
                 "id": 123,
                 "run_attempt": 1,
-                "head_sha": "c" * 40,
-                "head_branch": "main",
+                "head_sha": HEAD,
+                "head_branch": "issue-branch",
+                "pull_requests": [{"number": 469}],
                 "path": collector.WORKFLOW,
-                "event": "workflow_dispatch",
+                "event": "pull_request_target",
                 "status": "completed",
                 "conclusion": "success",
             }
+        if path == "pulls/469":
+            return {"state": "open", "base": {"ref": "main"}, "head": {"sha": HEAD}}
         if path.startswith("actions/runs/") and path[len("actions/runs/") :].isdigit():
             other = int(path[len("actions/runs/") :])
             if other == local_run_id:
@@ -2973,3 +3005,30 @@ def test_a_codex_comment_is_not_a_canonical_workaround(monkeypatch) -> None:
     comment_agent = {**base_agent, "id": "codex", "trigger_method": "github-pr-comment:@codex review"}
     trigger = {"id": 42, "created_at": "2026-10-04T12:00:00Z", "collector_run_id": 123}
     assert backend.acknowledged(comment_agent, trigger) is False
+
+
+def test_only_the_native_pull_request_target_event_is_collector_provenance():
+    run = {
+        "id": 123,
+        "run_attempt": 1,
+        "head_sha": "c" * 40,
+        "head_branch": "main",
+        "path": ".github/workflows/hunter-reviewer-collector.yml",
+        "event": "pull_request_target",
+        "status": "completed",
+        "conclusion": "success",
+    }
+    assert collector.valid_run(run, 123, "c" * 40)
+    for event in (
+        "push",
+        "schedule",
+        "workflow_run",
+        "pull_request",
+        "issue_comment",
+        "repository_dispatch",
+        "workflow_dispatch",
+        "",
+    ):
+        assert not collector.valid_run({**run, "event": event}, 123, "c" * 40), event
+    # Still bound to the exact run, workflow and success.
+    assert not collector.valid_run({**run, "conclusion": "failure"}, 123, "c" * 40)

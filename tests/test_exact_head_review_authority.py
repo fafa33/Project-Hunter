@@ -1230,7 +1230,6 @@ def test_every_hosted_review_consumer_can_read_collector_and_guard_evidence():
     expected = {
         "hunter-candidate-admission.yml": {"actions": "read", "checks": "read"},
         "hunter-governance-review.yml": {"actions": "read", "checks": "read"},
-        "hunter-governance-reconcile.yml": {"actions": "write", "checks": "read"},
         "hunter-merge-readiness.yml": {"actions": "read", "checks": "read"},
     }
     for filename, permissions in expected.items():
@@ -1931,7 +1930,7 @@ def test_trusted_collector_trigger_rejects_unrelated_actions_bot_run(monkeypatch
             }
         ),
     )
-    assert not core.trusted_collector_run("repo", "token", trigger)
+    assert not core.trusted_collector_run("repo", "token", trigger, 1)
 
 
 def test_merge_readiness_waits_while_bounded_review_opportunity_is_live() -> None:

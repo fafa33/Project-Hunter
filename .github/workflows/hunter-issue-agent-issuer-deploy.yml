@@ -17,6 +17,9 @@ on:
           - production
           - staging
 
+permissions:
+  contents: read
+
 concurrency:
   group: hunter-issue-agent-issuer-${{ github.event.inputs.environment }}
   cancel-in-progress: false

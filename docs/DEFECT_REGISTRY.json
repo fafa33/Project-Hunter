@@ -390,7 +390,7 @@
       "classification": "systemic",
       "guard_boundary": "trusted exact-head review orchestration and reviewer invocation identity",
       "guard": "Every reviewer invocation was keyed by exact head and claims digest alone, and the collector run that correlates those invocations was named the same way, so a cycle whose reviewers had all been exhausted or timed out was terminal for that immutable head: the collector read as already completed, the reviewer trigger comment read as already posted, and remediating the blocking findings the cycle itself produced could buy no further review. The repair is a remediation generation: a digest over the exact head, the claims digest and the full set of resolved blocking review threads, where a blocking thread counts only when an authenticated reviewer app that is neither Hunter's own automation nor the pull-request author opened it. It is derived from trusted GitHub review-thread state by the trusted default-branch orchestrator and re-derived independently by the trusted collector, which fails closed when the generation it was dispatched for is not the one the evidence supports, so neither candidate prose nor a dispatch input can mint one. The generation enters the collector run name, the reviewer invocation key, the reviewer trigger body and the collector receipt, so a new generation buys exactly one new invocation per reviewer while an unchanged generation stays idempotent; an exhaustion receipt from a superseded generation is refused rather than replayed. The transition is bounded on every side: the previous generation's collector must be finished, a collector must not already exist for this generation, and one exact head may spend at most MAX_REMEDIATION_GENERATIONS generations before the candidate stays pending. Exact-head and claims binding, authenticated reviewer identity, fail-closed pending semantics and human merge approval are unchanged.",
-      "test": "tests/test_review_after_remediation_generation.py::test_exhausted_cycle_redispatches_exactly_once_after_blockers_are_resolved",
+      "test": "tests/test_native_collector_flow.py::test_a_receipt_for_other_claims_or_a_stale_generation_publishes_nothing",
       "status": "guarded"
     },
     {
@@ -552,6 +552,496 @@
       "guard": "Prefix-aware protected-path classification covers build_backend/, requirements/, local composite actions and nested pytest conftest.py; changes force fresh trusted full gates.",
       "test": "tests/test_preflight_reuse_decision.py::test_candidate_controlled_bootstrap_forces_trusted_full_gates",
       "status": "guarded"
+    },
+    {
+      "id": "PRH-070",
+      "class": "pr592-assert-workflow-level-statuses-permission-is-write",
+      "source": "PR #592 Copilot review discussion 4233807168",
+      "classification": "systemic",
+      "guard_boundary": "Governance workflow / collector dispatch, provenance, recovery, and review lifecycle",
+      "guard": "Finding recorded; candidate regression mapping is not independently verified as prevention.",
+      "test": "tests/test_hunter_review_orchestrator.py::test_candidate_workflows_cannot_publish_protected_commit_statuses",
+      "status": "open"
+    },
+    {
+      "id": "PRH-071",
+      "class": "pr592-include-candidate-push-workflows-in-permission-scanning",
+      "source": "PR #592 Copilot review discussion 4233807230",
+      "classification": "systemic",
+      "guard_boundary": "Governance workflow / collector dispatch, provenance, recovery, and review lifecycle",
+      "guard": "Finding recorded; candidate regression mapping is not independently verified as prevention.",
+      "test": "tests/test_hunter_review_orchestrator.py::test_candidate_status_spoofing_mutation_is_rejected",
+      "status": "open"
+    },
+    {
+      "id": "PRH-072",
+      "class": "pr592-test-job-level-checks-and-statuses-permission-overrides",
+      "source": "PR #592 Copilot review discussion 4233807293",
+      "classification": "systemic",
+      "guard_boundary": "Governance workflow / collector dispatch, provenance, recovery, and review lifecycle",
+      "guard": "Finding recorded; candidate regression mapping is not independently verified as prevention.",
+      "test": "tests/test_hunter_review_orchestrator.py::test_job_override_cannot_publish_protected_status",
+      "status": "open"
+    },
+    {
+      "id": "PRH-073",
+      "class": "pr592-privileged-dispatch-workflow-can-forge-pr-statuses-from-untrusted-branches",
+      "source": "PR #592 Copilot review discussion 4233960002",
+      "classification": "systemic",
+      "guard_boundary": "Governance workflow / collector dispatch, provenance, recovery, and review lifecycle",
+      "guard": "Finding recorded; candidate regression mapping is not independently verified as prevention.",
+      "test": "tests/test_hunter_review_orchestrator.py::test_candidate_workflows_cannot_publish_protected_commit_statuses",
+      "status": "open"
+    },
+    {
+      "id": "PRH-074",
+      "class": "pr592-check-all-candidate-triggered-workflows-for-status-and-checks-write-grants",
+      "source": "PR #592 Copilot review discussion 4234032807",
+      "classification": "systemic",
+      "guard_boundary": "Governance workflow / collector dispatch, provenance, recovery, and review lifecycle",
+      "guard": "Finding recorded; candidate regression mapping is not independently verified as prevention.",
+      "test": "tests/test_hunter_review_orchestrator.py::test_candidate_status_spoofing_mutation_is_rejected",
+      "status": "open"
+    },
+    {
+      "id": "PRH-075",
+      "class": "pr592-prevent-untrusted-checkouts-in-privileged-pull_request_target-workflows",
+      "source": "PR #592 Copilot review (Previously missed summary)",
+      "classification": "systemic",
+      "guard_boundary": "Governance workflow / collector dispatch, provenance, recovery, and review lifecycle",
+      "guard": "Finding recorded; candidate regression mapping is not independently verified as prevention.",
+      "test": "tests/test_native_collector_workflows.py::test_the_collector_runs_only_default_branch_code",
+      "status": "open"
+    },
+    {
+      "id": "PRH-076",
+      "class": "pr592-add-mutation-test-for-job-level-write-all-permissions",
+      "source": "PR #592 Copilot review (Previously missed summary)",
+      "classification": "systemic",
+      "guard_boundary": "Governance workflow / collector dispatch, provenance, recovery, and review lifecycle",
+      "guard": "Finding recorded; candidate regression mapping is not independently verified as prevention.",
+      "test": "tests/test_hunter_review_orchestrator.py::test_job_write_all_cannot_publish_protected_status",
+      "status": "open"
+    },
+    {
+      "id": "PRH-077",
+      "class": "pr592-update-governance-docs-after-removing-manual-workflow-dispatch",
+      "source": "PR #592 Copilot review discussion 4234363783",
+      "classification": "systemic",
+      "guard_boundary": "Governance workflow / collector dispatch, provenance, recovery, and review lifecycle",
+      "guard": "Finding recorded; candidate regression mapping is not independently verified as prevention.",
+      "test": "UNVERIFIED: targeted regression required",
+      "status": "open"
+    },
+    {
+      "id": "PRH-078",
+      "class": "pr592-normalize-scalar-and-list-branch-filters-before-comparison",
+      "source": "PR #592 Copilot review (Previously missed summary)",
+      "classification": "systemic",
+      "guard_boundary": "Governance workflow / collector dispatch, provenance, recovery, and review lifecycle",
+      "guard": "Finding recorded; candidate regression mapping is not independently verified as prevention.",
+      "test": "tests/test_hunter_review_orchestrator.py::test_candidate_status_spoofing_mutation_is_rejected",
+      "status": "open"
+    },
+    {
+      "id": "PRH-079",
+      "class": "pr592-review-target-omits-modified-governance-documentation",
+      "source": "PR #592 Copilot review discussion 4234652657",
+      "classification": "systemic",
+      "guard_boundary": "Governance workflow / collector dispatch, provenance, recovery, and review lifecycle",
+      "guard": "Finding recorded; candidate regression mapping is not independently verified as prevention.",
+      "test": "UNVERIFIED: targeted regression required",
+      "status": "open"
+    },
+    {
+      "id": "PRH-080",
+      "class": "pr592-missing-job-level-write-all-permission-coverage",
+      "source": "PR #592 Copilot review (Previously missed summary)",
+      "classification": "systemic",
+      "guard_boundary": "Governance workflow / collector dispatch, provenance, recovery, and review lifecycle",
+      "guard": "Finding recorded; candidate regression mapping is not independently verified as prevention.",
+      "test": "tests/test_hunter_review_orchestrator.py::test_job_write_all_cannot_publish_protected_status",
+      "status": "open"
+    },
+    {
+      "id": "PRH-081",
+      "class": "pr592-bind-collector-completion-to-an-authorized-review-cycle",
+      "source": "PR #592 Copilot review discussion 4234905391",
+      "classification": "systemic",
+      "guard_boundary": "Governance workflow / collector dispatch, provenance, recovery, and review lifecycle",
+      "guard": "Finding recorded; candidate regression mapping is not independently verified as prevention.",
+      "test": "tests/test_native_collector_flow.py::test_an_untrusted_event_never_collects",
+      "status": "open"
+    },
+    {
+      "id": "PRH-082",
+      "class": "pr592-restore-exhausted-pool-finalization-in-trusted-collector-completion",
+      "source": "PR #592 Copilot review discussion 4234905426",
+      "classification": "systemic",
+      "guard_boundary": "Governance workflow / collector dispatch, provenance, recovery, and review lifecycle",
+      "guard": "Finding recorded; candidate regression mapping is not independently verified as prevention.",
+      "test": "tests/test_native_collector_workflows.py::test_the_publisher_holds_the_only_status_write_and_no_actions_or_contents_write",
+      "status": "open"
+    },
+    {
+      "id": "PRH-083",
+      "class": "pr592-test-valid-trusted-collector-completion-publication",
+      "source": "PR #592 Copilot review discussion 4234905466",
+      "classification": "systemic",
+      "guard_boundary": "Governance workflow / collector dispatch, provenance, recovery, and review lifecycle",
+      "guard": "Finding recorded; candidate regression mapping is not independently verified as prevention.",
+      "test": "tests/test_native_collector_flow.py::test_an_untrusted_event_never_collects",
+      "status": "open"
+    },
+    {
+      "id": "PRH-084",
+      "class": "pr592-verify-collector-head-sha-before-publishing-completion",
+      "source": "PR #592 Copilot review discussion 4235043019",
+      "classification": "systemic",
+      "guard_boundary": "Governance workflow / collector dispatch, provenance, recovery, and review lifecycle",
+      "guard": "Finding recorded; candidate regression mapping is not independently verified as prevention.",
+      "test": "tests/test_native_collector_flow.py::test_only_a_completed_successful_trusted_collector_run_is_verified",
+      "status": "open"
+    },
+    {
+      "id": "PRH-085",
+      "class": "pr592-bind-proof-nonce-to-dispatched-run-and-prevent-reuse",
+      "source": "PR #592 Copilot review discussion 4235043076",
+      "classification": "systemic",
+      "guard_boundary": "Governance workflow / collector dispatch, provenance, recovery, and review lifecycle",
+      "guard": "Finding recorded; candidate regression mapping is not independently verified as prevention.",
+      "test": "tests/test_native_collector_flow.py::test_a_receipt_that_disagrees_with_the_run_that_produced_it_is_refused",
+      "status": "open"
+    },
+    {
+      "id": "PRH-086",
+      "class": "pr592-prevent-missing-proof-artifacts-from-blocking-governance-refresh",
+      "source": "PR #592 Copilot review discussion 4235043131",
+      "classification": "systemic",
+      "guard_boundary": "Governance workflow / collector dispatch, provenance, recovery, and review lifecycle",
+      "guard": "Finding recorded; candidate regression mapping is not independently verified as prevention.",
+      "test": "UNVERIFIED: targeted regression required",
+      "status": "open"
+    },
+    {
+      "id": "PRH-087",
+      "class": "pr592-select-and-verify-artifacts-for-the-exact-run-attempt",
+      "source": "PR #592 Copilot review discussion 4235043166",
+      "classification": "systemic",
+      "guard_boundary": "Governance workflow / collector dispatch, provenance, recovery, and review lifecycle",
+      "guard": "Finding recorded; candidate regression mapping is not independently verified as prevention.",
+      "test": "tests/test_native_collector_flow.py::test_a_rerun_attempt_is_verified_against_its_own_attempt_and_artifact",
+      "status": "open"
+    },
+    {
+      "id": "PRH-088",
+      "class": "pr592-collector-proof-artifact-breaks-strict-exhaustion-archive-validation",
+      "source": "PR #592 Copilot review discussion 4235043218",
+      "classification": "systemic",
+      "guard_boundary": "Governance workflow / collector dispatch, provenance, recovery, and review lifecycle",
+      "guard": "Finding recorded; candidate regression mapping is not independently verified as prevention.",
+      "test": "UNVERIFIED: targeted regression required",
+      "status": "open"
+    },
+    {
+      "id": "PRH-089",
+      "class": "pr592-handle-rerun-artifact-selection-before-receipt-extraction",
+      "source": "PR #592 Copilot review discussion 4235096376",
+      "classification": "systemic",
+      "guard_boundary": "Governance workflow / collector dispatch, provenance, recovery, and review lifecycle",
+      "guard": "Finding recorded; candidate regression mapping is not independently verified as prevention.",
+      "test": "tests/test_native_collector_flow.py::test_a_rerun_attempt_is_verified_against_its_own_attempt_and_artifact",
+      "status": "open"
+    },
+    {
+      "id": "PRH-090",
+      "class": "pr592-add-job-level-write-all-permission-mutation-fixture",
+      "source": "PR #592 Copilot review (Previously missed summary)",
+      "classification": "systemic",
+      "guard_boundary": "Governance workflow / collector dispatch, provenance, recovery, and review lifecycle",
+      "guard": "Finding recorded; candidate regression mapping is not independently verified as prevention.",
+      "test": "tests/test_hunter_review_orchestrator.py::test_job_write_all_cannot_publish_protected_status",
+      "status": "open"
+    },
+    {
+      "id": "PRH-091",
+      "class": "pr592-add-scheduled-retry-to-publish-completion-from-validated-artifacts",
+      "source": "PR #592 Copilot review (Previously missed summary)",
+      "classification": "systemic",
+      "guard_boundary": "Governance workflow / collector dispatch, provenance, recovery, and review lifecycle",
+      "guard": "Finding recorded; candidate regression mapping is not independently verified as prevention.",
+      "test": "UNVERIFIED: targeted regression required",
+      "status": "open"
+    },
+    {
+      "id": "PRH-092",
+      "class": "pr592-remove-unnecessary-actions-write-permission-from-resolution-job",
+      "source": "PR #592 Copilot review (Previously missed summary)",
+      "classification": "systemic",
+      "guard_boundary": "Governance workflow / collector dispatch, provenance, recovery, and review lifecycle",
+      "guard": "Finding recorded; candidate regression mapping is not independently verified as prevention.",
+      "test": "UNVERIFIED: targeted regression required",
+      "status": "open"
+    },
+    {
+      "id": "PRH-093",
+      "class": "pr592-revise-regression-test-to-cover-trusted-retry-after-missed-event",
+      "source": "PR #592 Copilot review (Previously missed summary)",
+      "classification": "systemic",
+      "guard_boundary": "Governance workflow / collector dispatch, provenance, recovery, and review lifecycle",
+      "guard": "Finding recorded; candidate regression mapping is not independently verified as prevention.",
+      "test": "UNVERIFIED: targeted regression required",
+      "status": "open"
+    },
+    {
+      "id": "PRH-094",
+      "class": "pr592-fix-single-artifact-download-path-handling",
+      "source": "PR #592 Copilot review discussion 4235231779",
+      "classification": "systemic",
+      "guard_boundary": "Governance workflow / collector dispatch, provenance, recovery, and review lifecycle",
+      "guard": "Finding recorded; candidate regression mapping is not independently verified as prevention.",
+      "test": "UNVERIFIED: targeted regression required",
+      "status": "open"
+    },
+    {
+      "id": "PRH-095",
+      "class": "pr592-add-fallback-reconciliation-for-completed-collector-runs",
+      "source": "PR #592 Copilot review (Previously missed summary)",
+      "classification": "systemic",
+      "guard_boundary": "Governance workflow / collector dispatch, provenance, recovery, and review lifecycle",
+      "guard": "Finding recorded; candidate regression mapping is not independently verified as prevention.",
+      "test": "tests/test_native_collector_flow.py::test_a_rerun_attempt_is_verified_against_its_own_attempt_and_artifact",
+      "status": "open"
+    },
+    {
+      "id": "PRH-096",
+      "class": "pr592-add-job-level-write-all-mutation-coverage",
+      "source": "PR #592 Copilot review (Previously missed summary)",
+      "classification": "systemic",
+      "guard_boundary": "Governance workflow / collector dispatch, provenance, recovery, and review lifecycle",
+      "guard": "Finding recorded; candidate regression mapping is not independently verified as prevention.",
+      "test": "tests/test_hunter_review_orchestrator.py::test_job_write_all_cannot_publish_protected_status",
+      "status": "open"
+    },
+    {
+      "id": "PRH-097",
+      "class": "pr592-assert-collector-output-matches-uploaded-receipt-path",
+      "source": "PR #592 Copilot review (Previously missed summary)",
+      "classification": "systemic",
+      "guard_boundary": "Governance workflow / collector dispatch, provenance, recovery, and review lifecycle",
+      "guard": "Finding recorded; candidate regression mapping is not independently verified as prevention.",
+      "test": "UNVERIFIED: targeted regression required",
+      "status": "open"
+    },
+    {
+      "id": "PRH-098",
+      "class": "pr592-bind-collector-liveness-and-settlement-to-authorized-dispatches",
+      "source": "PR #592 Copilot review (Previously missed summary)",
+      "classification": "systemic",
+      "guard_boundary": "Governance workflow / collector dispatch, provenance, recovery, and review lifecycle",
+      "guard": "Finding recorded; candidate regression mapping is not independently verified as prevention.",
+      "test": "tests/test_native_collector_flow.py::test_a_duplicate_or_re_delivered_event_publishes_nothing_more",
+      "status": "open"
+    },
+    {
+      "id": "PRH-099",
+      "class": "pr592-make-trusted-completion-recoverable-during-scheduled-reconciliation",
+      "source": "PR #592 Copilot review (Previously missed summary)",
+      "classification": "systemic",
+      "guard_boundary": "Governance workflow / collector dispatch, provenance, recovery, and review lifecycle",
+      "guard": "Finding recorded; candidate regression mapping is not independently verified as prevention.",
+      "test": "tests/test_native_collector_flow.py::test_a_rerun_attempt_is_verified_against_its_own_attempt_and_artifact",
+      "status": "open"
+    },
+    {
+      "id": "PRH-100",
+      "class": "pr592-cover-pull-request-review-triggers-in-status-grant-filtering",
+      "source": "PR #592 Copilot review (Previously missed summary)",
+      "classification": "systemic",
+      "guard_boundary": "Governance workflow / collector dispatch, provenance, recovery, and review lifecycle",
+      "guard": "Finding recorded; candidate regression mapping is not independently verified as prevention.",
+      "test": "tests/test_hunter_review_orchestrator.py::test_candidate_status_spoofing_mutation_is_rejected",
+      "status": "open"
+    },
+    {
+      "id": "PRH-101",
+      "class": "pr592-reject-workflows-without-an-explicit-safe-permission-baseline",
+      "source": "PR #592 Copilot review (Previously missed summary)",
+      "classification": "systemic",
+      "guard_boundary": "Governance workflow / collector dispatch, provenance, recovery, and review lifecycle",
+      "guard": "Finding recorded; candidate regression mapping is not independently verified as prevention.",
+      "test": "tests/test_hunter_review_orchestrator.py::test_candidate_missing_explicit_permission_baseline_is_rejected",
+      "status": "open"
+    },
+    {
+      "id": "PRH-102",
+      "class": "pr592-recovery-misses-older-runs-and-repeatedly-downloads-processed-artifacts",
+      "source": "PR #592 Copilot review discussion 4235462212",
+      "classification": "systemic",
+      "guard_boundary": "Governance workflow / collector dispatch, provenance, recovery, and review lifecycle",
+      "guard": "Finding recorded; candidate regression mapping is not independently verified as prevention.",
+      "test": "tests/test_native_collector_flow.py::test_a_rerun_attempt_is_verified_against_its_own_attempt_and_artifact",
+      "status": "open"
+    },
+    {
+      "id": "PRH-103",
+      "class": "pr592-resolved-threads-do-not-trigger-immediate-readiness-refresh",
+      "source": "PR #592 Copilot review (Previously missed summary)",
+      "classification": "systemic",
+      "guard_boundary": "Governance workflow / collector dispatch, provenance, recovery, and review lifecycle",
+      "guard": "Finding recorded; candidate regression mapping is not independently verified as prevention.",
+      "test": "UNVERIFIED: targeted regression required",
+      "status": "open"
+    },
+    {
+      "id": "PRH-104",
+      "class": "pr592-dispatch-proof-status-url-ignores-github-enterprise-server-host",
+      "source": "PR #592 Copilot review (Previously missed summary)",
+      "classification": "systemic",
+      "guard_boundary": "Governance workflow / collector dispatch, provenance, recovery, and review lifecycle",
+      "guard": "Finding recorded; candidate regression mapping is not independently verified as prevention.",
+      "test": "tests/test_native_collector_flow.py::test_a_terminal_cycle_for_this_head_and_generation_is_not_collected_again",
+      "status": "open"
+    },
+    {
+      "id": "PRH-105",
+      "class": "pr592-first-claimant-check-ignores-runs-beyond-newest-50",
+      "source": "PR #592 Copilot review discussion 4235504961",
+      "classification": "systemic",
+      "guard_boundary": "Governance workflow / collector dispatch, provenance, recovery, and review lifecycle",
+      "guard": "Finding recorded; candidate regression mapping is not independently verified as prevention.",
+      "test": "tests/test_native_collector_flow.py::test_a_receipt_that_disagrees_with_the_run_that_produced_it_is_refused",
+      "status": "open"
+    },
+    {
+      "id": "PRH-106",
+      "class": "pr592-unbounded-artifact-recovery-can-exhaust-scheduled-job-time",
+      "source": "PR #592 Copilot review discussion 4235504987",
+      "classification": "systemic",
+      "guard_boundary": "Governance workflow / collector dispatch, provenance, recovery, and review lifecycle",
+      "guard": "Finding recorded; candidate regression mapping is not independently verified as prevention.",
+      "test": "tests/test_native_collector_flow.py::test_a_rerun_attempt_is_verified_against_its_own_attempt_and_artifact",
+      "status": "open"
+    },
+    {
+      "id": "PRH-107",
+      "class": "pr592-unauthenticated-status-can-incorrectly-skip-recovery",
+      "source": "PR #592 Copilot review discussion 4235505006",
+      "classification": "systemic",
+      "guard_boundary": "Governance workflow / collector dispatch, provenance, recovery, and review lifecycle",
+      "guard": "Finding recorded; candidate regression mapping is not independently verified as prevention.",
+      "test": "tests/test_native_collector_flow.py::test_only_a_completed_successful_trusted_collector_run_is_verified",
+      "status": "open"
+    },
+    {
+      "id": "PRH-108",
+      "class": "pr592-duplicate-untrusted-status-prevents-trusted-completion-publication",
+      "source": "PR #592 Copilot review (Previously missed summary)",
+      "classification": "systemic",
+      "guard_boundary": "Governance workflow / collector dispatch, provenance, recovery, and review lifecycle",
+      "guard": "Finding recorded; candidate regression mapping is not independently verified as prevention.",
+      "test": "tests/test_native_collector_flow.py::test_an_untrusted_event_never_collects",
+      "status": "open"
+    },
+    {
+      "id": "PRH-109",
+      "class": "pr592-paginate-statuses-to-avoid-missing-dispatch-proofs",
+      "source": "PR #592 Copilot review (Previously missed summary)",
+      "classification": "systemic",
+      "guard_boundary": "Governance workflow / collector dispatch, provenance, recovery, and review lifecycle",
+      "guard": "Finding recorded; candidate regression mapping is not independently verified as prevention.",
+      "test": "tests/test_hunter_review_orchestrator.py::test_commit_status_pagination_keeps_old_trusted_dispatch_proof",
+      "status": "open"
+    },
+    {
+      "id": "PRH-110",
+      "class": "pr592-paginate-commit-status-checks-before-consuming-recovery-capacity",
+      "source": "PR #592 Copilot review (Previously missed summary)",
+      "classification": "systemic",
+      "guard_boundary": "Governance workflow / collector dispatch, provenance, recovery, and review lifecycle",
+      "guard": "Finding recorded; candidate regression mapping is not independently verified as prevention.",
+      "test": "tests/test_native_collector_flow.py::test_a_rerun_attempt_is_verified_against_its_own_attempt_and_artifact",
+      "status": "open"
+    },
+    {
+      "id": "PRH-111",
+      "class": "pr592-verify-trusted-claimant-ownership-before-rejecting-collector-completion",
+      "source": "PR #592 Copilot review (Previously missed summary)",
+      "classification": "systemic",
+      "guard_boundary": "Governance workflow / collector dispatch, provenance, recovery, and review lifecycle",
+      "guard": "Finding recorded; candidate regression mapping is not independently verified as prevention.",
+      "test": "tests/test_native_collector_flow.py::test_a_run_that_is_not_the_trusted_default_branch_collector_never_collects",
+      "status": "open"
+    },
+    {
+      "id": "PRH-112",
+      "class": "pr592-avoid-sigpipe-from-early-closing-paginated-status-search",
+      "source": "PR #592 Copilot review (Previously missed summary)",
+      "classification": "systemic",
+      "guard_boundary": "Governance workflow / collector dispatch, provenance, recovery, and review lifecycle",
+      "guard": "Consume the entire paginated status stream before evaluating whether a trusted completion exists; reject early-closing grep -q in the pipeline.",
+      "test": "tests/test_native_collector_workflows.py::test_governance_review_re_evaluates_on_exact_head_proofs_resolving_the_pr_from_fresh_state",
+      "status": "open"
+    },
+    {
+      "id": "PRH-113",
+      "class": "pr592-collector-ownership-keyed-by-dispatch-nonce-allows-multiple-owners-and-immutable-claims-deadlock-recovery",
+      "source": "PR #592 atomic ownership, recovery and fencing contract",
+      "classification": "systemic",
+      "guard_boundary": "Governance workflow / collector dispatch, provenance, recovery, and review lifecycle",
+      "guard": "One create-only owner ref per (PR, exact head, generation, recovery epoch) independent of the dispatch nonce; a new epoch only on Actions-API evidence that the owner run ended without a valid collector result (never timeout alone), bounded by MAX_COLLECTOR_DISPATCHES; collector start and trusted completion both require the newest epoch, the matching proof status and the run-attempt claim; the run-attempts endpoint is addressed per attempt. Exercised through the real election against a create-only ref model, not a helper. [#592: the mechanism described above was eliminated by the native pull_request_target collector and verified publisher; the class stays covered by the mapped native test.]",
+      "test": "tests/test_native_collector_flow.py::test_a_duplicate_or_re_delivered_event_publishes_nothing_more",
+      "status": "open"
+    },
+    {
+      "id": "PRH-114",
+      "class": "pr592-missed-completion-recovery-reads-a-fixed-run-history-window-so-older-outstanding-runs-starve",
+      "source": "PR #592 Copilot review, owner decision to fix",
+      "classification": "systemic",
+      "guard_boundary": "Governance workflow / collector dispatch, provenance, recovery, and review lifecycle",
+      "guard": "The recovery work queue is derived from durable GitHub state (open PR -> current cycle -> newest epoch's run claim -> completed run whose completion is not published), never from a position in run history, so it cannot be starved by unrelated runs; each sweep is bounded by time and count with a time-rotated start. Publication is idempotent and epoch-fenced at production and consumption. A bounded drain keeps pre-migration workflow_dispatch collectors as liveness evidence only. [#592: the mechanism described above was eliminated by the native pull_request_target collector and verified publisher; the class stays covered by the mapped native test.]",
+      "test": "tests/test_native_collector_flow.py::test_a_verified_run_yields_its_own_receipt_and_identity",
+      "status": "open"
+    },
+    {
+      "id": "PRH-115",
+      "class": "pr592-completion-status-write-is-not-atomic-with-its-claim-so-a-stalled-publisher-can-duplicate",
+      "source": "PR #592 Copilot review discussion 4242397311 (thread rPh_l)",
+      "classification": "systemic",
+      "guard_boundary": "Governance workflow / collector dispatch, provenance, recovery, and review lifecycle",
+      "guard": "The logical completion is one immutable create-only completion record per exact cycle (PR, head, generation), written by the claim winner after its fence; consumers accept a completion only for the run that record names, so a duplicate, late, replayed or conflicting status row cannot change the accepted identity or recovery eligibility. Physical status writes stay single-writer through the bounded claim chain; after the chain is exhausted the record is re-projected so recovery is bounded and eventual. Physical exactly-once status creation is not claimed. [#592: the mechanism described above was eliminated by the native pull_request_target collector and verified publisher; the class stays covered by the mapped native test.]",
+      "test": "tests/test_native_collector_flow.py::test_a_duplicate_or_re_delivered_event_publishes_nothing_more",
+      "status": "open"
+    },
+    {
+      "id": "PRH-116",
+      "class": "pr592-earliest-listed-lookalike-run-wins-the-collector-binding-and-failed-lookalikes-spend-recovery-epochs",
+      "source": "PR #592 Copilot review discussion 4242397335 (thread rPh_w)",
+      "classification": "systemic",
+      "guard_boundary": "Governance workflow / collector dispatch, provenance, recovery, and review lifecycle",
+      "guard": "The capability is bound to the earliest eligible run that publishes an HMAC possession record keyed by the dispatch nonce, under a ref name containing the MAC. Runs created before the epoch's trusted proof status are never contenders, a later run holding a copied nonce always loses to the genuine earlier run, only a run holding the epoch's binding and run claim is evidence that an attempt failed, and the dispatch budget counts elected epochs, not listed runs. NOT a complete guard: the nonce is not secret (it is in the collector step env shown in public run logs and in the public collector-dispatch-proof artifact), so an actor with contents:write can forge a valid possession record for a lookalike dispatched between proof issuance and the genuine run, or create the predictable bind/run-claim refs directly, and deny service. Closing it needs an arbitration key unavailable to candidate code, e.g. a secret in an Actions environment restricted to main (owner setting). [#592: the mechanism described above was eliminated by the native pull_request_target collector and verified publisher; the class stays covered by the mapped native test.]",
+      "test": "tests/test_native_collector_flow.py::test_a_forged_run_title_confers_no_identity",
+      "status": "open"
+    },
+    {
+      "id": "PRH-117",
+      "class": "pr592-collector-generation-guard-parses-shell-and-loses-newline-command-boundaries",
+      "source": "PR #592 Copilot review discussion 4242569894 (thread rP8tY)",
+      "classification": "systemic",
+      "guard_boundary": "Defect prevention preflight / workflow guard",
+      "guard": "The collector step is held to a restricted invocation contract instead of being parsed as shell: one simple command on one line of plain words and double-quoted step-env expansions, the trusted collector as executable, exactly one --generation bound to the dispatched payload expression, default shell only. Newlines, separators, chaining, continuation, substitution, subshells, comments, quoting tricks and assignments all fail closed.",
+      "test": "tests/test_native_collector_workflows.py::test_the_guard_rejects_each_collector_contract_violation",
+      "status": "open"
+    },
+    {
+      "id": "PRH-118",
+      "class": "pr592-trusted-completion-published-for-a-receipt-validated-only-by-run-attempt",
+      "source": "PR #592 Copilot review discussion 4242569925 (thread rP8tr)",
+      "classification": "systemic",
+      "guard_boundary": "Governance workflow / collector dispatch, provenance, recovery, and review lifecycle",
+      "guard": "One canonical receipt contract (collector_receipt_problem: schema, exact repository/PR/head/run/attempt/generation, claims and configuration digests, attempt records) is applied by the collector before writing, by the trusted completion path before any success is written, by the exhausted-pool finalizer and by the governance exhaustion loader. A recorded completion stays in the recovery queue until finalization reaches a definitive outcome, so unusable or temporarily unavailable evidence never suppresses recovery. [#592: the mechanism described above was eliminated by the native pull_request_target collector and verified publisher; the class stays covered by the mapped native test.]",
+      "test": "tests/test_native_collector_flow.py::test_a_partial_receipt_is_incomplete_evidence_and_publishes_nothing",
+      "status": "open"
     }
   ],
   "families": [
@@ -1305,7 +1795,7 @@
         "tests/test_hunter_reviewer_collector.py::test_collector_workflow_can_write_pr_conversation_triggers",
         "tests/test_hunter_reviewer_collector.py::test_reused_api_invocation_recovers_persisted_result",
         "tests/test_hunter_reviewer_collector.py::test_main_branch_advance_does_not_invalidate_trusted_collector_receipt",
-        "tests/test_hunter_reviewer_collector.py::test_collector_run_off_current_default_branch_history_fails_closed",
+        "tests/test_hunter_reviewer_collector.py::test_collector_run_for_a_pull_request_not_on_the_default_branch_fails_closed",
         "tests/test_hunter_reviewer_collector.py::test_groq_authority_verifies_prior_api_exhaustion_from_trusted_collector",
         "tests/test_exact_head_review_authority.py::test_review_fetch_rejects_authenticated_native_codex_clear_issue_comment",
         "tests/test_exact_head_review_authority.py::test_github_actions_ack_without_matching_result_cannot_create_api_review_authority",
@@ -1401,14 +1891,13 @@
         "guard_reference": "scripts/hunter_defect_prevention_preflight.py::validate_review_after_remediation_boundary"
       },
       "regression_evidence": [
-        "tests/test_review_after_remediation_generation.py::test_exhausted_cycle_redispatches_exactly_once_after_blockers_are_resolved",
-        "tests/test_review_after_remediation_generation.py::test_reconciling_the_same_generation_again_never_redispatches",
         "tests/test_review_after_remediation_generation.py::test_candidate_authored_evidence_cannot_mint_a_remediation_generation",
-        "tests/test_review_after_remediation_generation.py::test_remediation_stays_inside_a_bounded_generation_budget",
-        "tests/test_review_after_remediation_generation.py::test_a_dispatched_generation_trusted_state_does_not_derive_fails_closed",
         "tests/test_hunter_reviewer_collector.py::test_exhaustion_receipt_from_a_prior_remediation_generation_is_not_reusable",
         "tests/test_exact_head_codex_clear_adoption.py::test_old_clear_then_newer_finding_is_not_clear",
-        "tests/test_exact_head_codex_clear_adoption.py::test_a_malformed_review_record_fails_closed_everywhere"
+        "tests/test_exact_head_codex_clear_adoption.py::test_a_malformed_review_record_fails_closed_everywhere",
+        "tests/test_native_collector_flow.py::test_the_generation_budget_counts_distinct_generations_from_head_keyed_trigger_comments",
+        "tests/test_native_collector_flow.py::test_trigger_comments_for_another_head_claims_or_author_spend_no_budget",
+        "tests/test_native_collector_flow.py::test_a_receipt_for_other_claims_or_a_stale_generation_publishes_nothing"
       ],
       "sources": [
         "Issue #461 (2026-09-18): PR #473 remediated both authenticated Codex P1 findings (threads r4042982311 and r4042982318) and resolved every review thread, yet stayed permanently MISSING_REVIEW_AUTHORITY because the exact-head collector run 35348625886 had already completed with Codex timed out, Gemini 503 and Groq 403, and no identity existed that could ask any of them again"
@@ -1769,13 +2258,11 @@
       },
       "regression_evidence": [
         "tests/test_hunter_trusted_orchestrator_replay.py::test_scenario_a_passes_against_real_production",
-        "tests/test_hunter_trusted_orchestrator_replay.py::test_scenario_a_fails_when_a_pending_cycle_can_stay_pending_forever",
         "tests/test_hunter_trusted_orchestrator_replay.py::test_scenario_a_fails_when_the_opportunity_is_not_a_real_bound",
-        "tests/test_hunter_trusted_orchestrator_replay.py::test_scenario_a_fails_when_the_opportunity_is_ignored",
         "tests/test_hunter_trusted_orchestrator_replay.py::test_scenario_b_passes_against_real_production",
-        "tests/test_hunter_trusted_orchestrator_replay.py::test_scenario_b_fails_when_a_recorded_cycle_is_dispatched_again",
-        "tests/test_hunter_trusted_orchestrator_replay.py::test_scenario_b_fails_without_bounded_liveness_recovery",
-        "tests/test_hunter_trusted_orchestrator_replay.py::test_scenario_b_fails_when_dispatch_is_unbounded"
+        "tests/test_hunter_trusted_orchestrator_replay.py::test_scenario_a_fails_when_the_collector_is_trusted_as_a_publisher",
+        "tests/test_hunter_trusted_orchestrator_replay.py::test_scenario_a_fails_when_a_run_off_the_default_branch_can_vouch_for_a_cycle",
+        "tests/test_hunter_trusted_orchestrator_replay.py::test_scenario_b_fails_when_a_receipt_is_usable_beyond_the_run_it_names"
       ],
       "lifecycle": "regression-tested",
       "sources": [
@@ -1820,12 +2307,14 @@
         "rationale": "These surfaces detect pending review state and perform the trusted actions:write handoff/dispatch."
       },
       "prevention": {
-        "mechanism": "Hunter Governance Review completion is a workflow_run trigger for Hunter Governance Review Reconcile. Reconcile derives the PR from the trusted workflow_run pull-request association and invokes the default-branch orchestrator, preserving the security boundary that forbids actions:write on the candidate-reachable pull_request workflow.",
+        "mechanism": "Native GitHub event path (#592): the exact-head reviewer collector is started by GitHub's own pull_request_target event, so a pending governance state no longer needs a privileged handoff and no workflow holds actions:write for orchestration. The collector re-verifies the pull request, head, default-branch run and review-request readiness from fresh API state before collecting; a missing or failed result leaves the cycle pending (fail closed) and recovery is GitHub's native re-run.",
         "boundary": "review",
-        "guard_reference": "scripts/hunter_review_orchestrator.py::ensure_current"
+        "guard_reference": "scripts/hunter_reviewer_collector.py::verify_native_start"
       },
       "regression_evidence": [
-        "tests/test_hunter_governance_review_v2.py::test_event_reconcile_scopes_to_triggering_pr_and_reserves_full_sweep_for_recovery"
+        "tests/test_native_collector_workflows.py::test_the_collector_is_entered_only_through_the_native_pull_request_target_event",
+        "tests/test_native_collector_workflows.py::test_the_collector_holds_no_status_or_contents_write_and_certifies_nothing",
+        "tests/test_native_collector_flow.py::test_a_clean_native_event_may_collect_for_its_exact_head"
       ],
       "lifecycle": "regression-tested",
       "sources": [
@@ -1874,14 +2363,13 @@
         "rationale": "hunter_review_orchestrator.ensure_collector is the sole trusted mint point for a collector dispatch, and hunter-governance-reconcile.yml is the only workflow that invokes it. Near-simultaneous or closely-spaced reconcile executions -- triggered by distinct events (a review, a review comment, a workflow_run completion, ready_for_review, the schedule) that this same workflow already reacts to -- are exactly the condition under which two calls can each observe a stale 'absent' status read for the same exact-head identity."
       },
       "prevention": {
-        "mechanism": "ensure_collector now cross-checks the collector run listing (collector_liveness) before minting a fresh dispatch whenever no trusted cycle status is visible at all for the requested identity (read_cycle reports anything other than a matching 'present'), converging on an already-live, dead, or completed run for that exact (pr, head, generation) identity instead of dispatching again. Unreadable liveness evidence fails closed to not dispatching, exactly as the existing collector_needs_dispatch and remediation_generation_admissible checks already fail closed on their own unreadable evidence. The pre-existing, unmodified 'present' branch -- COLLECTOR_LIVENESS_GRACE_SECONDS, MAX_COLLECTOR_DISPATCHES, collector_needs_dispatch -- continues to govern bounded recovery of a genuinely dead dispatch unaffected by this check.",
+        "mechanism": "Native GitHub event path (#592): initial dispatch no longer exists. The collector is started by the pull_request_target event; a newer event supersedes an older run through a per-PR concurrency group, the start gate refuses a head/generation whose cycle is already terminal, and the trusted publisher publishes the terminal result at most once per head and generation (a duplicate or re-delivered event is a no-op). No read-your-write status inference decides whether a reviewer is invoked.",
         "boundary": "review"
       },
       "regression_evidence": [
-        "tests/test_hunter_review_orchestrator.py::test_a_second_call_sees_the_correlated_collector_and_does_not_redispatch",
-        "tests/test_hunter_review_orchestrator.py::test_two_genuinely_simultaneous_dispatches_can_both_miss_the_correlated_run",
-        "tests/test_hunter_review_orchestrator.py::test_a_failed_collector_is_redispatched_rather_than_parking_the_cycle",
-        "tests/test_hunter_review_orchestrator.py::test_ready_review_request_dispatches_collector_once"
+        "tests/test_native_collector_flow.py::test_a_terminal_cycle_for_this_head_and_generation_is_not_collected_again",
+        "tests/test_native_collector_flow.py::test_a_duplicate_or_re_delivered_event_publishes_nothing_more",
+        "tests/test_native_collector_workflows.py::test_a_newer_event_supersedes_an_older_collector_run_natively"
       ],
       "lifecycle": "regression-tested",
       "sources": [
@@ -1933,28 +2421,22 @@
         "rationale": "This is a wiring property between a repository's governance workflows and the trusted scripts they run: which lifecycle events each workflow's `on:` block reacts to, whether the code that reacts to an event is actually capable of producing what a downstream consumer requires, and whether that consumer recognizes every state its producer can legitimately report. A gap can be introduced or reintroduced by editing workflow trigger configuration, by editing what a triggered script actually does on that event, by a comment asserting a producer responsibility that no code fulfills, or by a consumer-side classifier (such as Hunter Merge Readiness's review-authority resolver) that only enumerates terminal states and silently defaults an unrecognized in-progress state to failure."
       },
       "prevention": {
-        "mechanism": "Structural regression tests assert that the trusted workflow driving privileged reviewer orchestration (hunter-governance-reconcile.yml) has an event-driven trigger for the Draft to Ready for Review transition -- the same transition hunter-merge-readiness.yml already reacts to immediately -- so readiness evaluation can never wake before its prerequisite orchestration cycle has a chance to exist. The trigger is `pull_request_target`, not `pull_request`: GitHub resolves a `pull_request_target` workflow from the base branch's copy of the file, so it stays on the trusted-default-branch execution path already proven non-candidate-controlled by the existing `test_candidate_controlled_triggers_are_read_from_every_declaration_shape` guard. A second regression asserts the orchestrator itself never dispatches review for a Draft PR. Root cause 2 (live, PR #535): the trigger alone was not sufficient. `ensure_current` requires an exact-head-bound `.hunter/pre-ready-hostile-review.json` review-request document (content-bound via `hunter_pre_ready_review.verify_review_request`) before it will call `ensure_collector`; nothing in this repository auto-generates or regenerates that document -- it is committed by the contributor via `hunter_pre_ready_review.py --request`, a step `hunter_pre_push.py`'s own docstring falsely claimed happened 'opportunistically' via trusted orchestration. Corrected: the docstring now states the true producer/consumer contract, and the push-time NOTE for exactly the `missing` verdict state names the command to run, so the signal is actionable instead of a dismissible NOTE. Root cause 3 (live, PR #535, same exact HEAD c05da168545c5fa95fe300706eccaac2228fc391): after root causes 1 and 2 were both fixed, `hunter-governance-reconcile.yml` correctly ran on `ready_for_review`, correctly found a valid review-request document, and correctly published a `Hunter Review Orchestration / PR #535` commit status reporting the legitimate WAITING_FOR_REVIEWER cycle state -- but Hunter Merge Readiness still reported hard `failure`. `hunter_governance_review_v2.verify_pre_ready_hostile_review` legitimately returns a third status, `pending`, via `pending_review_authority_state` (an unadopted-but-orchestrated review request is neither success nor a terminal failure). `hunter_merge_readiness_v2.resolve_review_authority`, the sole classifier of that verifier's result, only ever branched on `status == \"success\"`; any other status -- including this legitimate `pending` -- fell into a loop that searches `detail` for a REVIEW_AUTHORITY_STATES prefix, none of which a pending WAITING_FOR_REVIEWER/REVIEW_IN_PROGRESS/FAILOVER_IN_PROGRESS detail ever contains, so it silently defaulted to a hard MALFORMED_REVIEW failure -- masking the exact live-progress state the sibling `review_wait_state`/`NON_RED_REVIEW_STATES` mechanism a few lines later in the same caller exists specifically to project as pending, and pre-empting that mechanism from ever running. Corrected: `resolve_review_authority` now classifies a `pending` status as `MISSING_REVIEW_AUTHORITY`, the same no-authority-yet outcome a missing document already produces, letting the caller's existing orchestration-state fallback correctly project it to pending instead of failure. Root cause 4 (live, PR #535 exact HEAD 51108333821ab42d1ab7aa0b812a72d890f73795): the fix above only covered one of the two transition classes this family binds. `synchronize` is the exact-HEAD-changing transition Merge Readiness also reacts to immediately, and hunter-governance-reconcile.yml still declared `types: [ready_for_review]` only, so a pushed head had no trusted event-driven path to the orchestrator that must produce its exact-head cycle. A push at 2026-09-28T07:40:33Z woke Merge Readiness, Trusted Preflight Upgrade and Governance Agent Preflight but not reconcile; the only reconciliations that did run (36393517015, 36393716517) came from `workflow_run` completions of other workflows and the 30-minute schedule -- recovery, not a primary mechanism -- and Merge Readiness run 36393772215 correctly published MALFORMED_REVIEW: WAITING_FOR_REVIEWER: no trusted exact-head orchestration cycle has been published. Corrected: `synchronize` was added to the same `pull_request_target` trigger, and the regression now asserts the producer/consumer trigger sets cannot drift apart again for either class. Adding `synchronize` does not weaken the boundary, and the Draft guard had to move with it: unlike `ready_for_review` (which GitHub fires only on leaving Draft), `synchronize` also fires for pushes to a Draft branch, so the trigger is no longer itself the Draft guard. The guard is the trusted orchestrator's own draft short-circuit in `ensure_current`, which returns before the review-request lookup and before any dispatch, and both Draft regressions now cover it. Exact-head binding is untouched: the privileged step passes only `--pr`, and the orchestrator re-derives the current HEAD from the pull-request API on every call, so a pushed head is reconciled against what GitHub reports rather than against the event payload or a head the workflow chose.",
+        "mechanism": "Native GitHub event path (#592): the collector and Governance Review are both wired to pull_request_target, so Draft->Ready and head-push transitions wake them directly from the trusted default-branch definition; the draft state, retargeting and stale heads are refused by the collector start gate, and completion of the exact-head proofs re-evaluates governance from fresh state. Structural tests assert the trigger wiring and that no candidate-controlled trigger or payload can supply identity.",
         "boundary": "review",
         "guard_reference": "scripts/hunter_merge_readiness_v2.py::resolve_review_authority"
       },
       "regression_evidence": [
-        "tests/test_hunter_review_orchestrator.py::test_reconcile_wakes_when_a_pr_becomes_ready_for_review",
-        "tests/test_hunter_review_orchestrator.py::test_reconcile_wakes_when_a_pr_head_is_pushed",
-        "tests/test_hunter_review_orchestrator.py::test_reconcile_wakes_on_every_lifecycle_event_that_needs_or_moves_the_exact_head",
-        "tests/test_hunter_review_orchestrator.py::test_a_pushed_head_reaches_orchestration_as_the_exact_current_head",
-        "tests/test_hunter_review_orchestrator.py::test_a_pushed_head_on_a_draft_pr_dispatches_nothing",
-        "tests/test_hunter_review_orchestrator.py::test_unrelated_pull_request_events_do_not_dispatch_reviewer_orchestration",
-        "tests/test_hunter_review_orchestrator.py::test_synchronize_reconciliation_never_executes_candidate_code",
-        "tests/test_hunter_review_orchestrator.py::test_current_pr_never_dispatches_for_a_draft_pr",
+        "tests/test_native_collector_workflows.py::test_governance_review_re_evaluates_on_exact_head_proofs_resolving_the_pr_from_fresh_state",
+        "tests/test_native_collector_workflows.py::test_the_collector_runs_only_default_branch_code",
+        "tests/test_native_collector_flow.py::test_a_pull_request_that_moved_on_is_skipped_without_a_receipt",
         "tests/test_exact_head_review_authority.py::test_a_foreign_review_request_document_is_rejected_for_a_different_candidate",
         "tests/test_exact_head_review_authority.py::test_a_freshly_prepared_review_request_bound_to_the_current_candidate_is_valid",
         "tests/test_issue_412_prevention_gate.py::test_missing_review_request_state_names_the_command_to_start_it",
         "tests/test_issue_412_prevention_gate.py::test_stale_review_request_state_does_not_carry_the_missing_only_hint",
         "tests/test_exact_head_review_authority.py::test_a_live_pending_orchestration_cycle_is_not_misclassified_as_malformed",
         "tests/test_exact_head_review_authority.py::test_review_authority_state_waits_while_a_committed_review_request_is_unadopted",
-        "tests/test_review_orchestrator_collector_finalization.py::test_collector_completion_without_any_wake_up_ends_the_open_cycle",
         "tests/test_review_orchestrator_collector_finalization.py::test_the_collector_workflow_runs_collector_complete_in_its_own_working_directory",
-        "tests/test_review_orchestrator_collector_finalization.py::test_a_collector_run_may_assert_only_the_unavailable_terminal_state"
+        "tests/test_review_orchestrator_collector_finalization.py::test_a_status_citing_a_collector_run_is_never_a_terminal_state"
       ],
       "lifecycle": "regression-tested",
       "sources": [

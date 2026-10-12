@@ -502,15 +502,13 @@ def cmd_resolve(configuration: control.Configuration, arguments: argparse.Namesp
             except state.LedgerConflictError:
                 print(f"issue {issue}: no-op (the knowledge ledger moved; the next pass re-decides)")
     if resolved:
-        # GitHub does not emit a workflow event when a review thread is resolved.
-        # Dispatch the existing current-state gate immediately after confirmed writes.
-        # A failed dispatch is visible and retriable by the existing scheduled sweep.
-        affected_prs = sorted({proof.pull_request_number for proof in resolved_proofs})
-        for pr_number in affected_prs:
-            if not github.dispatch("hunter-merge-readiness.yml", {"pr_number": str(pr_number)}):
-                raise control.FactsUnavailable(
-                    f"merge readiness refresh dispatch failed for PR #{pr_number}; scheduled recovery remains"
-                )
+        # A thread resolution does not wake a privileged workflow. The readiness
+        # status refreshes on the event-driven workflow_run chain while checks run,
+        # and otherwise on the trusted scheduled sweep (best-effort; GitHub may
+        # delay it). An operator can force a refresh with GitHub's own "Re-run all jobs"
+        # on a Merge Readiness run. This job deliberately holds no `actions: write` and
+        # never dispatches a status-writing workflow.
+        print("merge readiness refresh deferred to trusted scheduled sweep")
     return 0 if resolved or arguments.issue else EXIT_NOOP
 
 

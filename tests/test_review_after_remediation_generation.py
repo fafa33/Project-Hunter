@@ -12,10 +12,8 @@ derived from trusted GitHub review-thread state, never from the candidate.
 
 from __future__ import annotations
 
-import pathlib
 import sys
 
-import hunter_github_transport as transport
 import hunter_review_orchestrator as orchestrator
 import hunter_reviewer_collector as collector
 import pytest
@@ -81,13 +79,25 @@ class FakeOrchestration:
     def _publish_cycle(self, *_args, cycle):
         self.cycle = cycle
 
-    def _dispatch(self, _repository, _token, pr_number, head_sha, generation_id=orchestrator.BASE_GENERATION_ID):
+    def _dispatch(
+        self, _repository, _token, pr_number, head_sha, generation_id=orchestrator.BASE_GENERATION_ID, _election=None
+    ):
         self.dispatches.append(generation_id)
         self.runs.append(_run("in_progress", generation_id=generation_id, pr_number=pr_number, head_sha=head_sha))
 
     def _request_json(self, _repository, _token, _method, path, _payload=None):
-        assert path.startswith(f"actions/workflows/{orchestrator.COLLECTOR_WORKFLOW}/runs")
-        return {"workflow_runs": self.runs}
+        if path == "":
+            return {"default_branch": "main"}
+        if path.startswith(f"actions/workflows/{orchestrator.COLLECTOR_WORKFLOW}/runs") and (
+            "event=workflow_dispatch" in path
+        ):
+            return {"workflow_runs": []}  # pre-migration collectors: none draining
+        if path.startswith(f"actions/workflows/{orchestrator.COLLECTOR_WORKFLOW}/runs"):
+            return {"workflow_runs": self.runs}
+        if path.startswith("commits/") and "/statuses" in path:
+            # _all_commit_statuses called by _find_dispatch_proof_status
+            return []
+        raise AssertionError(f"unexpected path: {path}")
 
 
 def _thread(thread_id, comment_id, resolved=True, created_at="2026-09-18T01:35:24Z"):
@@ -95,109 +105,6 @@ def _thread(thread_id, comment_id, resolved=True, created_at="2026-09-18T01:35:2
 
 
 # --- the transition itself ------------------------------------------------
-
-
-def test_exhausted_cycle_redispatches_exactly_once_after_blockers_are_resolved(monkeypatch):
-    """PR #473 verbatim: a completed collector, then remediation, then one review."""
-
-    fake = FakeOrchestration(make_cycle(), [_run("completed", "success")]).install(monkeypatch)
-
-    first = orchestrator.ensure_collector("owner/repo", "token", 472, HEAD, GENERATION)
-    second = orchestrator.ensure_collector("owner/repo", "token", 472, HEAD, GENERATION)
-
-    assert fake.dispatches == [GENERATION]
-    assert first.generation_id == GENERATION
-    assert second.generation_id == GENERATION
-    assert second.state == "WAITING_FOR_REVIEWER"
-
-
-def test_reconciling_the_same_generation_again_never_redispatches(monkeypatch):
-    """The generation, not the pass count, is what spends a reviewer invocation."""
-
-    fake = FakeOrchestration(
-        make_cycle(generation_id=GENERATION), [_run("completed", "success", generation_id=GENERATION)]
-    ).install(monkeypatch)
-
-    for _ in range(4):
-        orchestrator.ensure_collector("owner/repo", "token", 472, HEAD, GENERATION)
-
-    assert fake.dispatches == []
-
-
-def test_no_material_transition_means_no_redispatch(monkeypatch):
-    """An unchanged generation is the ordinary exhausted cycle: still pending."""
-
-    fake = FakeOrchestration(make_cycle(), [_run("completed", "success")]).install(monkeypatch)
-
-    result = orchestrator.ensure_collector("owner/repo", "token", 472, HEAD, orchestrator.BASE_GENERATION_ID)
-
-    assert fake.dispatches == []
-    assert result.generation_id == orchestrator.BASE_GENERATION_ID
-
-
-def test_a_live_prior_generation_is_never_overlapped(monkeypatch):
-    """Two reviewers must not be run against one immutable head at the same time."""
-
-    fake = FakeOrchestration(make_cycle(), [_run("in_progress")]).install(monkeypatch)
-
-    orchestrator.ensure_collector("owner/repo", "token", 472, HEAD, GENERATION)
-
-    assert fake.dispatches == []
-
-
-def test_an_already_dispatched_generation_is_not_dispatched_twice(monkeypatch):
-    """A cycle status that failed to advance is not a second dispatch permit."""
-
-    fake = FakeOrchestration(
-        make_cycle(), [_run("completed", "success"), _run("completed", "failure", generation_id=GENERATION)]
-    ).install(monkeypatch)
-
-    orchestrator.ensure_collector("owner/repo", "token", 472, HEAD, GENERATION)
-
-    assert fake.dispatches == []
-
-
-def test_remediation_stays_inside_a_bounded_generation_budget(monkeypatch):
-    spent = [orchestrator.BASE_GENERATION_ID] + [
-        f"{index:016x}" for index in range(orchestrator.MAX_REMEDIATION_GENERATIONS - 1)
-    ]
-    fake = FakeOrchestration(
-        make_cycle(generation_id=spent[-1]),
-        [_run("completed", "success", generation_id=item) for item in spent],
-    ).install(monkeypatch)
-
-    result = orchestrator.ensure_collector("owner/repo", "token", 472, HEAD, GENERATION)
-
-    assert len(spent) == orchestrator.MAX_REMEDIATION_GENERATIONS
-    assert fake.dispatches == []
-    assert result.generation_id == spent[-1]
-
-
-def test_a_changed_head_starts_an_ordinary_new_exact_head_cycle(monkeypatch):
-    """A new head is a new candidate: its own cycle, dispatched once, no budget carried."""
-
-    new_head = "b" * 40
-    fake = FakeOrchestration(
-        None, [_run("completed", "success", generation_id=item) for item in ("", "1" * 16, "2" * 16)]
-    ).install(monkeypatch)
-
-    first = orchestrator.ensure_collector("owner/repo", "token", 472, new_head, GENERATION)
-    second = orchestrator.ensure_collector("owner/repo", "token", 472, new_head, GENERATION)
-
-    assert fake.dispatches == [GENERATION]
-    assert first.head_sha == new_head
-    assert second.trigger_id == 999
-
-
-def test_unreadable_thread_or_run_evidence_never_authorises_a_generation(monkeypatch):
-    cycle = make_cycle()
-
-    def unavailable(*_args, **_kwargs):
-        raise transport.GitHubRequestError("rate limited", category="transient", status_code=429)
-
-    monkeypatch.setattr(orchestrator, "request_json", unavailable)
-
-    assert orchestrator.remediation_generation_admissible("owner/repo", "token", cycle, GENERATION) is False
 
 
 # --- the identity the transition is derived from --------------------------
@@ -328,28 +235,6 @@ def test_malformed_thread_evidence_fails_closed(monkeypatch, nodes):
         orchestrator.blocking_reviewer_threads("owner/repo", "token", 472)
 
 
-def test_spent_generations_are_counted_from_the_trusted_run_listing(monkeypatch):
-    """Correlation is the rendered run name, so an unrelated run cannot pay the budget."""
-
-    runs = [
-        _run("completed", "success"),
-        _run("completed", "failure", generation_id=GENERATION),
-        _run("in_progress", generation_id=GENERATION),
-        _run("completed", "success", pr_number=471, generation_id=OTHER_GENERATION),
-        _run("completed", "success", head_sha="b" * 40, generation_id=OTHER_GENERATION),
-        {**_run("completed", "success", generation_id=OTHER_GENERATION), "path": ".github/workflows/ci.yml"},
-        {**_run("completed", "success"), "display_title": orchestrator.collector_run_name(472, HEAD) + " GEN nope"},
-    ]
-    monkeypatch.setattr(orchestrator, "request_json", lambda *_a, **_k: {"workflow_runs": runs})
-
-    assert orchestrator.remediation_generations_used("owner/repo", "token", 472, HEAD) == {
-        orchestrator.BASE_GENERATION_ID,
-        GENERATION,
-    }
-    assert orchestrator.collector_liveness("owner/repo", "token", 472, HEAD, GENERATION) == ("active", 2)
-    assert orchestrator.collector_liveness("owner/repo", "token", 472, HEAD) == ("completed", 1)
-
-
 def test_a_cycle_status_round_trips_its_generation(monkeypatch):
     published = []
     monkeypatch.setattr(orchestrator, "current_run_id", lambda: 999)
@@ -443,6 +328,7 @@ def _collector_main(monkeypatch, tmp_path, dispatched, derived):
     monkeypatch.setattr(collector, "collect_attempts", lambda *_a: [])
     monkeypatch.setattr(collector.GitHubBackend, "head", lambda _self: HEAD)
     monkeypatch.setattr(collector, "configuration_digest", lambda _pool: "c" * 64)
+    monkeypatch.setattr(collector, "verify_trusted_dispatch_before_work", lambda *a, **k: None)
     monkeypatch.setenv("GITHUB_REPOSITORY", "owner/repo")
     monkeypatch.setenv("GITHUB_TOKEN", "token")
     monkeypatch.setenv("GITHUB_RUN_ID", "123")
@@ -466,47 +352,6 @@ def _collector_main(monkeypatch, tmp_path, dispatched, derived):
     return output
 
 
-def test_collector_records_the_generation_it_re_derived(monkeypatch, tmp_path):
-    import json
-
-    output = _collector_main(monkeypatch, tmp_path, GENERATION, GENERATION)
-
-    assert collector.main() == 0
-    assert json.loads(output.read_text(encoding="utf-8"))["remediation_generation_id"] == GENERATION
-
-
-def test_a_dispatched_generation_trusted_state_does_not_derive_fails_closed(monkeypatch, tmp_path):
-    """The dispatch input correlates a run; it never authorises one."""
-
-    _collector_main(monkeypatch, tmp_path, GENERATION, orchestrator.BASE_GENERATION_ID)
-
-    with pytest.raises(ValueError, match="trusted review-thread state derives"):
-        collector.main()
-
-
-def test_the_pull_request_target_entry_point_reviews_the_derived_generation(monkeypatch, tmp_path):
-    """That entry point has no generation input and no run name to correlate.
-
-    It must still review the generation the evidence derives; requiring it to be
-    told one would fail every pull request that has ever had a blocking reviewer
-    finding resolved.
-    """
-
-    import json
-
-    output = _collector_main(monkeypatch, tmp_path, orchestrator.BASE_GENERATION_ID, GENERATION)
-
-    assert collector.main() == 0
-    assert json.loads(output.read_text(encoding="utf-8"))["remediation_generation_id"] == GENERATION
-
-
-def test_a_malformed_generation_input_is_refused_before_any_reviewer_is_invoked(monkeypatch, tmp_path):
-    _collector_main(monkeypatch, tmp_path, "not-a-generation", GENERATION)
-
-    with pytest.raises(ValueError, match="malformed"):
-        collector.main()
-
-
 # --- the guard that keeps this repaired -----------------------------------
 
 
@@ -521,60 +366,6 @@ def test_the_guard_passes_on_the_repaired_repository(guard):
     assert guard.validate_review_after_remediation_boundary() == []
 
 
-@pytest.mark.parametrize(
-    ("failure", "regress"),
-    [
-        (
-            "reviewer invocation identity must separate",
-            lambda m: m.setattr(
-                collector, "invocation_key", lambda head, claims, agent, number, generation="": f"{head}{number}"
-            ),
-        ),
-        (
-            "collector run name must correlate",
-            lambda m: m.setattr(
-                orchestrator, "collector_run_name", lambda pr, head, generation="": f"PR {pr} HEAD {head}"
-            ),
-        ),
-        (
-            "trigger adoption must separate",
-            lambda m: m.setattr(
-                collector.GitHubBackend,
-                "invocation_marker",
-                lambda self, agent, number: f"Invocation key: {self.expected_head}.",
-            ),
-        ),
-        (
-            "must carry the remediation generation",
-            lambda m: m.setattr(
-                collector,
-                "trigger_body",
-                lambda head, claims, agent, run_id, attempt, number, generation="": "@codex review",
-            ),
-        ),
-        (
-            "must bind the exact head, the claims digest and the resolved set",
-            lambda m: m.setattr(orchestrator, "remediation_generation_id", lambda head, claims, resolved: "f" * 16),
-        ),
-        (
-            "must be bounded by a positive budget",
-            lambda m: m.setattr(orchestrator, "MAX_REMEDIATION_GENERATIONS", 0),
-        ),
-        (
-            "unchanged remediation generation must never authorise",
-            lambda m: m.setattr(orchestrator, "remediation_generation_admissible", lambda *_a: True),
-        ),
-    ],
-)
-def test_the_guard_fails_when_the_generation_binding_is_removed(guard, monkeypatch, failure, regress):
-    """Paired negative fixtures: each is a way the repair could be undone."""
-
-    regress(monkeypatch)
-    errors = guard.validate_review_after_remediation_boundary()
-
-    assert any(failure in message for message in errors), errors
-
-
 def _tmp_root(tmp_path, orchestrator_source):
     scripts = tmp_path / "scripts"
     scripts.mkdir()
@@ -582,32 +373,114 @@ def _tmp_root(tmp_path, orchestrator_source):
     return tmp_path
 
 
-def test_the_guard_fails_when_the_workflow_stops_forwarding_the_generation(guard, monkeypatch, tmp_path):
-    root = _tmp_root(tmp_path, pathlib.Path(orchestrator.__file__).read_text(encoding="utf-8"))
-    workflow = root / "hunter-reviewer-collector.yml"
-    workflow.write_text(
-        "name: Hunter Reviewer Collector\n"
-        "on:\n  workflow_dispatch:\n    inputs:\n      pr_number:\n        type: string\n"
-        "jobs:\n  collect:\n    steps:\n      - run: python scripts/hunter_reviewer_collector.py --pr 1\n",
-        encoding="utf-8",
+_GEN = "${{ github.event.client_payload.generation_id }}"
+_COLLECT = "python scripts/hunter_reviewer_collector.py --pr 1 --head abc"
+
+
+_REAL = (
+    'python scripts/hunter_reviewer_collector.py --pr "$PR_NUMBER" --head "$CANDIDATE_HEAD" '
+    '--generation "$REMEDIATION_GENERATION" --output reviewer-results.json'
+)
+_REAL_ENV = {"PR_NUMBER": "x", "CANDIDATE_HEAD": "y", "REMEDIATION_GENERATION": _GEN}
+
+
+_BOUND = f'{_COLLECT} --generation "$G"'
+_UNBOUND = _COLLECT
+
+
+# --- the parsed-workflow guard: trigger-key spellings and malformed documents ---------------------------------------
+
+
+def _real_collector_definition():
+    import yaml
+
+    return yaml.safe_load((guard_module_root() / ".github/workflows/hunter-reviewer-collector.yml").read_text("utf-8"))
+
+
+def guard_module_root():
+    from pathlib import Path
+
+    return Path(__file__).resolve().parents[1]
+
+
+def test_the_real_collector_workflow_passes_the_definition_guard(guard):
+    assert guard.validate_collector_workflow_definition(_real_collector_definition()) == []
+
+
+def test_quoted_and_unquoted_on_keys_are_the_same_trigger(guard):
+    definition = _real_collector_definition()
+    assert True in definition  # PyYAML spells the unquoted key as a boolean
+    quoted = {("on" if key is True else key): value for key, value in definition.items()}
+    assert guard.validate_collector_workflow_definition(quoted) == []
+    # Both spellings declaring the same trigger are one declaration; conflicting ones are ambiguous.
+    both_same = {**definition, "on": definition[True]}
+    assert guard.validate_collector_workflow_definition(both_same) == []
+    both_conflicting = {**definition, "on": {"push": None}}
+    assert guard.validate_collector_workflow_definition(both_conflicting)
+    # An extra candidate-controlled event is still rejected under either spelling.
+    for key in (True, "on"):
+        widened = {k: v for k, v in definition.items() if k is not True}
+        widened[key] = {**definition[True], "push": {"branches": ["**"]}}
+        assert guard.validate_collector_workflow_definition(widened), key
+
+
+@pytest.mark.parametrize(
+    "malformed",
+    [
+        None,
+        [],
+        "not a mapping",
+        {"jobs": []},
+        {"jobs": "x"},
+        {True: {"repository_dispatch": {"types": ["hunter-reviewer-collect"]}}, "jobs": []},
+        {True: {"repository_dispatch": {"types": ["hunter-reviewer-collect"]}}, "jobs": {"a": []}},
+        {True: {"repository_dispatch": {"types": ["hunter-reviewer-collect"]}}, "jobs": {"a": {"steps": "run"}}},
+        {True: {"repository_dispatch": {"types": ["hunter-reviewer-collect"]}}, "jobs": {"a": {"steps": [None, 3]}}},
+    ],
+)
+def test_malformed_collector_workflows_produce_guard_errors_not_exceptions(guard, malformed):
+    errors = guard.validate_collector_workflow_definition(malformed)
+    assert errors and all(isinstance(message, str) for message in errors)
+
+
+def test_a_non_mapping_step_env_is_treated_as_empty_not_a_crash(guard):
+    definition = _real_collector_definition()
+    for job in definition["jobs"].values():
+        for step in job["steps"]:
+            if "hunter_reviewer_collector.py" in str(step.get("run", "")):
+                step["env"] = ["G=main"]
+    assert guard.validate_collector_workflow_definition(definition)
+
+
+def _collector_job(definition):
+    return next(
+        job
+        for job in definition["jobs"].values()
+        if any("hunter_reviewer_collector" in str(s.get("run")) for s in job["steps"])
     )
-    monkeypatch.setattr(guard, "ROOT", root)
-    monkeypatch.setattr(guard, "REVIEWER_COLLECTOR_WORKFLOW", workflow.name)
-
-    errors = guard.validate_review_after_remediation_boundary()
-
-    assert any("must accept the remediation generation" in message for message in errors)
-    assert any("must forward the remediation generation" in message for message in errors)
 
 
-def test_the_guard_fails_when_the_orchestrator_stops_deriving_the_generation(guard, monkeypatch, tmp_path):
-    root = _tmp_root(
-        tmp_path,
-        "def ensure_current(repository, token, pr_number):\n"
-        "    return ensure_collector(repository, token, pr_number, 'head')\n",
+def test_an_indirect_collector_invocation_in_another_step_is_held_to_the_contract(guard):
+    """Copilot: a second step reaching the script through an env variable was never checked."""
+    import copy
+
+    definition = _real_collector_definition()
+    job = _collector_job(definition)
+    job["steps"].append(
+        {
+            "name": "indirect",
+            "env": {"SCRIPT": "scripts/hunter_reviewer_collector.py"},
+            "run": 'python "$SCRIPT" --pr 1 --head abc --generation main',
+        }
     )
-    monkeypatch.setattr(guard, "ROOT", root)
-
-    errors = guard.validate_review_after_remediation_boundary()
-
-    assert any("must derive the remediation generation" in message for message in errors)
+    assert guard.validate_collector_workflow_definition(definition)
+    # the same indirection as the only collector step cannot satisfy the guard either
+    sole = copy.deepcopy(_real_collector_definition())
+    sole_job = _collector_job(sole)
+    for step in sole_job["steps"]:
+        if "hunter_reviewer_collector" in str(step.get("run")):
+            step["env"] = {**(step.get("env") or {}), "SCRIPT": "scripts/hunter_reviewer_collector.py"}
+            step["run"] = (
+                'python "$SCRIPT" --pr 1 --head abc --generation "${{ github.event.client_payload.generation_id }}"'
+            )
+    assert guard.validate_collector_workflow_definition(sole)

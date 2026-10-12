@@ -3,7 +3,7 @@ from __future__ import annotations
 from datetime import UTC, datetime
 from typing import Generic, TypeVar
 
-from sqlalchemy import select
+from sqlalchemy import and_, select
 from sqlalchemy.orm import Session
 
 from hunter.execution.hashing import stable_digest
@@ -104,8 +104,10 @@ class SQLRecordRepository(Repository[RecordT], Generic[RecordT]):
     def _all_records(self) -> list[RecordT]:
         models = self._session.scalars(
             select(PersistenceRecordModel).where(
-                PersistenceRecordModel.record_type == self.record_type,
-                PersistenceRecordModel.deleted_at.is_(None),
+                and_(
+                    PersistenceRecordModel.record_type == self.record_type,
+                    PersistenceRecordModel.deleted_at.is_(None),
+                )
             )
         ).all()
         return [self._to_record(model) for model in models]

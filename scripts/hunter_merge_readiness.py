@@ -991,7 +991,9 @@ def candidate_pull_requests(name: str, event: dict[str, Any]) -> list[int]:
             )
         return recovered
 
-    if name == "schedule":
+    if name in {"schedule", "repository_dispatch"}:
+        # The scheduled full sweep. (`repository_dispatch` carries no pull request either; the
+        # trusted recovery dispatch is retired, so only the schedule reaches this today.)
         return sorted(int(pr["number"]) for pr in open_pull_requests())
 
     if name == "workflow_dispatch":
