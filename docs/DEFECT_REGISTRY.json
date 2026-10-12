@@ -1769,7 +1769,7 @@
       },
       "regression_evidence": [
         "tests/test_hunter_trusted_orchestrator_replay.py::test_scenario_a_passes_against_real_production",
-        "tests/test_hunter_trusted_orchestrator_replay.py::test_scenario_a_fails_when_the_opportunity_is_effectively_unbounded",
+        "tests/test_hunter_trusted_orchestrator_replay.py::test_scenario_a_respects_contract_specific_budget_policy",
         "tests/test_hunter_trusted_orchestrator_replay.py::test_scenario_a_fails_when_the_opportunity_is_not_a_real_bound",
         "tests/test_hunter_trusted_orchestrator_replay.py::test_scenario_a_fails_when_the_collector_is_trusted_as_a_publisher",
         "tests/test_hunter_trusted_orchestrator_replay.py::test_scenario_b_passes_against_real_production",
