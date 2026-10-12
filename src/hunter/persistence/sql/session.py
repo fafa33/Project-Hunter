@@ -15,7 +15,7 @@ class SessionFactory:
     def create(self) -> Session:
         return self._maker()
 
-    def scoped(self) -> scoped_session[Session]:
+    def scoped(self) -> scoped_session:
         return scoped_session(self._maker)
 
 
