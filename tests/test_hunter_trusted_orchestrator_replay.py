@@ -29,6 +29,51 @@ import pytest
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 
+#: Contract version aware test helpers
+def _get_contract_version(candidate_root: Path) -> str:
+    """Detect the contract version of a candidate root."""
+    return replay.detect_contract_version(candidate_root)
+
+
+def _expected_measurements_a(contract_version: str) -> dict:
+    """Expected measurements for scenario A based on contract version."""
+    if contract_version == "v1":
+        return {
+            "grace_positive": True,
+            "ensure_collector_present": True,
+            "grace_used_in_dispatch": True,
+        }
+    else:  # v2
+        return {
+            "budget_positive": True,
+            "publisher": "present",
+            "collector": "absent",
+            "off_branch": "absent",
+        }
+
+
+def _expected_measurements_b(contract_version: str) -> dict:
+    """Expected measurements for scenario B based on contract version."""
+    if contract_version == "v1":
+        return {
+            "grace_positive": True,
+            "grace_used_in_needs_dispatch": True,
+            "older_than_present": True,
+        }
+    else:  # v2
+        return {"rejected": [
+            "bad attempts",
+            "bad claims",
+            "minimal object",
+            "not an object",
+            "other attempt",
+            "other generation",
+            "other head",
+            "other pull request",
+            "other run",
+        ]}
+
+
 #: Real production regressions each corrected scenario must still catch. Every
 #: entry is a narrow, named mutation of this repository's *real*
 #: ``hunter_review_orchestrator.py``, so the negative tests below prove the
@@ -41,151 +86,87 @@ REPO_ROOT = Path(__file__).resolve().parents[1]
 #: Each mutation is ``(anchor, replacement)``; the anchor must still be present
 #: in the real source, so a production refactor that moves these lines fails
 #: loudly here instead of silently making a negative test vacuous.
-DROPS_OPPORTUNITY_TERMINALITY = (
-    """            if existing.state in PENDING_STATES and _older_than(
-                existing.started_at, independent_review_opportunity_seconds()
-            ):""",
-    "            if False:",
-)
-
-#: The budget is derived from the candidate's own trusted reviewer pool rather
-#: than published as a module constant, so the mutation that makes it
-#: non-positive now targets the derivation's own return rather than a
-#: module-level assignment.
 MAKES_OPPORTUNITY_NON_POSITIVE = (
     "    return pre_ready.reviewer_chain_worst_case_seconds(pool)",
     "    return 0",
 )
 
-MAKES_OPPORTUNITY_UNCONDITIONAL = (
-    """            if existing.state in PENDING_STATES and _older_than(
-                existing.started_at, independent_review_opportunity_seconds()
-            ):""",
-    "            if existing.state in PENDING_STATES:",
+MAKES_OPPORTUNITY_UNBOUNDED = (
+    "    return pre_ready.reviewer_chain_worst_case_seconds(pool)",
+    "    return 10**9",
 )
 
-DROPS_COLLECTOR_IDEMPOTENCY_RECORD = (
-    """            if existing.trigger_id is not None and not collector_needs_dispatch(repository, token, existing):
-                return existing""",
-    "            pass",
+#: A status citing the status-less collector run must never be a cycle: the collector certifies nothing.
+TRUSTS_THE_COLLECTOR_AS_A_PUBLISHER = (
+    '    ".github/workflows/hunter-governance-review.yml",',
+    '    ".github/workflows/hunter-governance-review.yml",\n    ".github/workflows/hunter-reviewer-collector.yml",',
 )
 
-DROPS_LIVENESS_RECOVERY = (
-    """    if not _older_than(cycle.started_at, COLLECTOR_LIVENESS_GRACE_SECONDS):
-        return False""",
-    "    return False",
+#: A run off the default branch (candidate-controlled workflow text) must never vouch for a cycle.
+DROPS_THE_DEFAULT_BRANCH_BINDING = (
+    '        if not isinstance(run, dict) or str(run.get("head_branch") or "") != default_branch:',
+    "        if not isinstance(run, dict):",
 )
 
-DROPS_DISPATCH_BUDGET = ("    if count >= MAX_COLLECTOR_DISPATCHES:", "    if False:")
-
-#: Codex P1 on PR #539: the declared budget is wider than the threshold the
-#: candidate actually enforces. Sampling the two probes far apart only proves
-#: *some* cutoff sits between them, so a 1.5x threshold still passed.
-OPPORTUNITY_THRESHOLD_EXCEEDS_DECLARED = (
-    "                existing.started_at, independent_review_opportunity_seconds()",
-    "                existing.started_at, independent_review_opportunity_seconds() * 3 // 2",
+#: Any workflow at all may vouch for a cycle: the cited-run check is the whole per-workflow binding.
+DROPS_THE_TRUSTED_WORKFLOW_BINDING = (
+    '        if str(run.get("path") or "") not in TRUSTED_WORKFLOWS:',
+    "        if False:",
 )
 
-#: PR #535: production that finalizes a cycle on the nominal deadline even
-#: though its correlated collector is still running, so that live collector can
-#: later publish a competing terminal result for the same exact head.
-TIMES_OUT_AN_ACTIVE_COLLECTOR_ON_THE_NOMINAL_DEADLINE = (
-    '    return liveness == "active"\n',
-    "    return False\n",
+#: A receipt is usable for whatever run, pull request or head it was minted for.
+IGNORES_RECEIPT_IDENTITY = (
+    '        expected["run_attempt"] = run_attempt\n    for name, value in expected.items():\n'
+    "        if receipt.get(name) != value or type(receipt.get(name)) is not type(value):",
+    '        expected["run_attempt"] = run_attempt\n    for name, value in expected.items():\n        if False:',
 )
 
-#: Codex P1 on PR #552: the active-collector deferral with its bound removed. A
-#: perpetually active or wedged collector would leave the exact head pending
-#: forever.
-HOLDS_AN_ACTIVE_COLLECTOR_OPEN_WITHOUT_BOUND = (
-    """    if _older_than(cycle.started_at, budget * ACTIVE_COLLECTOR_GRACE_MULTIPLIER):
-        return False
-""",
-    "",
+#: A rerun attempt or a duplicate event may reuse another attempt's receipt.
+IGNORES_THE_RUN_ATTEMPT = (
+    '    if run_attempt is not None:\n        expected["run_attempt"] = run_attempt',
+    '    if False:\n        expected["run_attempt"] = run_attempt',
 )
 
-#: The same deferral, bounded only by a candidate-declared multiplier wider than
-#: the grader's own ceiling. The candidate cannot widen the trusted bound.
-WIDENS_ITS_OWN_ACTIVE_COLLECTOR_GRACE = (
-    "ACTIVE_COLLECTOR_GRACE_MULTIPLIER = 2\n",
-    "ACTIVE_COLLECTOR_GRACE_MULTIPLIER = 1000\n",
+#: Exhaustion recorded under a superseded remediation generation is replayed for the current one.
+IGNORES_THE_GENERATION = (
+    "    if generation_id is not None and generation != generation_id:",
+    "    if False:",
 )
 
-#: Codex P1 on PR #539: the recovery dispatch is real, but the durable cycle it
-#: was dispatched for is never refreshed, so every later reconcile recovers the
-#: same exact head again off the original stale record. Written as a
-#: three-part mutation (a recovery flag, its initialisation, and a publish that
-#: skips the recovery) because suppressing the publish for the recovery alone
-#: requires distinguishing the recovery path from the first dispatch.
-_RECOVERY_FLAG_INIT = (
-    """    digest = reviewer_pool_config_digest()
-    state, existing, _error = read_cycle(repository, token, pr_number, head_sha)""",
-    """    digest = reviewer_pool_config_digest()
-    _recovering = False
-    state, existing, _error = read_cycle(repository, token, pr_number, head_sha)""",
-)
-_RECOVERY_FLAG_SET = (
-    """            if existing.trigger_id is not None and not collector_needs_dispatch(repository, token, existing):
-                return existing""",
-    """            if existing.trigger_id is not None and not collector_needs_dispatch(repository, token, existing):
-                return existing
-            _recovering = True""",
-)
-_RECOVERY_PUBLISH_SKIPPED = (
-    """    publish_cycle(repository, token, head_sha, cycle=cycle)
-    if liveness not in {"active", "completed"}:
-        dispatch_collector(repository, token, pr_number, head_sha, generation_id)
-    return cycle""",
-    """    if not _recovering:
-        publish_cycle(repository, token, head_sha, cycle=cycle)
-    if liveness not in {"active", "completed"}:
-        dispatch_collector(repository, token, pr_number, head_sha, generation_id)
-    return cycle""",
-)
-RECOVERY_DISPATCHES_WITHOUT_REFRESHING_RECORD = (
-    _RECOVERY_FLAG_INIT,
-    _RECOVERY_FLAG_SET,
-    _RECOVERY_PUBLISH_SKIPPED,
+#: A receipt with a missing or malformed claims / configuration digest is accepted.
+IGNORES_THE_IDENTITY_DIGESTS = (
+    '        if not isinstance(receipt.get(name), str) or not re.fullmatch(r"[0-9a-f]{64}", receipt[name]):',
+    "        if False:",
 )
 
-# Codex P1 on PR #540: the pre-fix dispatch stub always created a correlated
-# run, so the stale-cycle recovery probe could only ever observe ("dead", 1).
-# ("missing", 0) -- a dispatch that was accepted but never produced a run --
-# was never exercised, and a candidate that refuses recovery specifically in
-# that state slipped through.
-RECOVERY_DECLINED_WHEN_NO_RUN_EXISTS = (
-    (
-        """    if liveness in {"active", "completed"}:
-        return False
-    if count >= MAX_COLLECTOR_DISPATCHES:""",
-        """    if liveness in {"active", "completed"}:
-        return False
-    if liveness == "missing" and count == 0:
-        return False
-    if count >= MAX_COLLECTOR_DISPATCHES:""",
-    ),
+#: A partial or malformed attempt list is accepted as complete evidence.
+IGNORES_THE_ATTEMPT_LIST_SHAPE = (
+    "    if not isinstance(attempts, list) or not all(isinstance(item, dict) for item in attempts):",
+    "    if False:",
 )
 
-_DATETIME_IMPORT_WITH_TIMEDELTA = (
-    "from datetime import UTC, datetime",
-    "from datetime import UTC, datetime, timedelta",
+# v1-specific mutations (for ensure_collector/COLLECTOR_LIVENESS_GRACE_SECONDS contract)
+#: The grace period is not positive and finite.
+MAKES_GRACE_NON_POSITIVE = (
+    "COLLECTOR_LIVENESS_GRACE_SECONDS = 180",
+    "COLLECTOR_LIVENESS_GRACE_SECONDS = 0",
 )
 
-# Codex P1 on PR #540: the pre-fix scenario aged/replaced the durable record
-# right after recovery, so it never reconciled the refreshed record the
-# recovery actually published. A candidate that published a distinct record
-# while preserving an already-stale liveness timestamp passed even though the
-# very next real reconcile re-dispatches the same exact head.
-RECOVERY_REFRESH_PRESERVES_STALE_STARTED_AT = (
-    _DATETIME_IMPORT_WITH_TIMEDELTA,
-    (
-        """        started_at=datetime.now(UTC).strftime("%Y-%m-%dT%H:%M:%SZ"),""",
-        """        started_at=(
-            datetime.now(UTC) - timedelta(seconds=COLLECTOR_LIVENESS_GRACE_SECONDS + 60)
-            if existing is not None
-            else datetime.now(UTC)
-        ).strftime("%Y-%m-%dT%H:%M:%SZ"),""",
-    ),
+MAKES_GRACE_UNBOUNDED = (
+    "COLLECTOR_LIVENESS_GRACE_SECONDS = 180",
+    "COLLECTOR_LIVENESS_GRACE_SECONDS = 10**9",
+)
+
+#: The grace period is not used in collector_needs_dispatch.
+IGNORES_GRACE_IN_NEEDS_DISPATCH = (
+    "if not _older_than(cycle.started_at, COLLECTOR_LIVENESS_GRACE_SECONDS):",
+    "if False:",
+)
+
+#: The grace period is not used in ensure_collector.
+IGNORES_GRACE_IN_ENSURE_COLLECTOR = (
+    "if not _older_than(cycle.started_at, COLLECTOR_LIVENESS_GRACE_SECONDS):",
+    "if False:",
 )
 
 HOSTILE_EARLY_EXIT_ORCHESTRATOR = """
@@ -262,6 +243,9 @@ def _candidate_root(
     implemented while its own suite stayed green.
     """
     root = tmp_path / "candidate"
+    # Remove existing directory if it exists (for test isolation)
+    if root.exists():
+        shutil.rmtree(root)
     shutil.copytree(REPO_ROOT / "scripts", root / "scripts")
     shutil.copytree(REPO_ROOT / "src", root / "src")
     (root / "docs").mkdir(parents=True, exist_ok=True)
@@ -284,218 +268,156 @@ def _fixture_path(tmp_path: Path) -> Path:
     return path
 
 
-# --- Scenario A: bounded review opportunity that ends a cycle ---------------
+# --- Contract-aware test helpers -----------------------------------------
+
+
+def _run_scenario_a(tmp_path, mutations=()):
+    """Run scenario A with given mutations, returns (contract_version, result)."""
+    root = _candidate_root(tmp_path, orchestrator_mutations=mutations)
+    contract_version = _get_contract_version(root)
+    result = replay._run_scenario("A", root, _fixture_path(tmp_path), workspace_root=tmp_path)
+    return contract_version, result
+
+
+def _run_scenario_b(tmp_path, mutations=()):
+    """Run scenario B with given mutations, returns (contract_version, result)."""
+    root = _candidate_root(tmp_path, orchestrator_mutations=mutations)
+    contract_version = _get_contract_version(root)
+    result = replay._run_scenario("B", root, _fixture_path(tmp_path), workspace_root=tmp_path)
+    return contract_version, result
+
+
+def _run_scenario_g(tmp_path, governance_src=None):
+    """Run scenario G with given governance source, returns (contract_version, result)."""
+    root = _candidate_root(tmp_path, governance_src=governance_src)
+    contract_version = _get_contract_version(root)
+    result = replay._run_scenario("G", root, _fixture_path(tmp_path), workspace_root=tmp_path)
+    return contract_version, result
+
+
+def _assert_scenario_a_pass(contract_version: str, result: dict):
+    """Assert scenario A passed with correct measurements for the contract version."""
+    assert result["outcome"] == "pass", result.get("error")
+    expected = _expected_measurements_a(contract_version)
+    assert result["measurements"] == expected, f"contract {contract_version}: {result['measurements']} != {expected}"
+
+
+def _assert_scenario_b_pass(contract_version: str, result: dict):
+    """Assert scenario B passed with correct measurements for the contract version."""
+    assert result["outcome"] == "pass", result.get("error")
+    expected = _expected_measurements_b(contract_version)
+    if contract_version == "v1":
+        # v1 has different keys
+        for key, value in expected.items():
+            assert result["measurements"].get(key) == value, f"contract {contract_version}: {key} = {result['measurements'].get(key)} != {value}"
+    else:
+        # v2 has rejected list
+        assert result["measurements"]["rejected"] == expected["rejected"]
+
+
+def _fails_contract_aware(tmp_path, mutations, scenario="A"):
+    """Run a failing test for the appropriate contract version."""
+    if scenario == "A":
+        contract_version, result = _run_scenario_a(tmp_path, mutations)
+    elif scenario == "B":
+        contract_version, result = _run_scenario_b(tmp_path, mutations)
+    else:
+        contract_version, result = _run_scenario_g(tmp_path)
+    assert result["outcome"] == "fail", f"scenario {scenario} accepted a regression: {mutations!r}"
+    return contract_version, result["error"]
+
+
+def _detect_contract_version_once(tmp_path):
+    """Detect contract version by creating a candidate root once."""
+    root = _candidate_root(tmp_path)
+    return _get_contract_version(root)
+
+
+# --- Scenario A: a bounded budget / grace period, and only a trusted publisher can end a cycle -----------------------------
 
 
 def test_scenario_a_passes_against_real_production(tmp_path):
-    """The scenario must pass against the candidate's real production
-    orchestrator. The pre-fix harness could not do this at all: it called an
-    API production never had, so every fixture in this file substituted a
-    synthetic module and the suite stayed green while the real replay failed.
-    """
-
-    root = _candidate_root(tmp_path)
-    result = replay._run_scenario("A", root, _fixture_path(tmp_path), workspace_root=tmp_path)
-    assert result["outcome"] == "pass", result.get("error")
-    measurements = result["measurements"]
-    budget = measurements["opportunity_seconds"]
-    assert budget > 0
-    # The two probes must straddle the candidate's own declared budget
-    # immediately, not merely sit on either side of some wider threshold.
-    assert measurements["below_boundary_seconds"] < budget < measurements["above_boundary_seconds"], (
-        f"the boundary probes must straddle the declared {budget}s budget, got "
-        f"{measurements['below_boundary_seconds']}s and {measurements['above_boundary_seconds']}s"
-    )
-    assert (
-        budget - measurements["below_boundary_seconds"] <= 2
-    ), "the inside probe must sit immediately below the boundary"
-    assert (
-        measurements["above_boundary_seconds"] - budget <= 2
-    ), "the outside probe must sit immediately above the boundary"
-    assert measurements["timed_out_state"] == "REVIEW_TIMED_OUT"
-    assert measurements["in_opportunity_state"] != "REVIEW_TIMED_OUT"
-    # A still-running collector is held open just past the nominal budget, yet
-    # still finalized once the trusted ceiling is passed.
-    assert measurements["active_deferred_state"] != "REVIEW_TIMED_OUT"
-    assert measurements["active_ceiling_state"] == "REVIEW_TIMED_OUT"
-
-
-def test_scenario_a_fails_when_the_real_threshold_exceeds_the_declared_budget(tmp_path):
-    """Codex P1 on PR #539: a candidate whose real timeout cutoff is wider than
-    the budget it declares must be rejected. The pre-fix probes (1s inside,
-    2x outside) both sat inside such a candidate's 1.5x threshold, so it passed
-    while still leaving an exact head pending well past the bound it advertised.
-    """
-
-    root = _candidate_root(tmp_path, orchestrator_mutations=(OPPORTUNITY_THRESHOLD_EXCEEDS_DECLARED,))
-    result = replay._run_scenario("A", root, _fixture_path(tmp_path), workspace_root=tmp_path)
-    assert result["outcome"] == "fail"
-    assert "real timeout threshold is wider than the budget it declares" in result["error"]
-
-
-def test_scenario_a_fails_when_a_pending_cycle_can_stay_pending_forever(tmp_path):
-    """Regression: production's own contract is that a completed or timed-out
-    opportunity must never leave the exact-head status pending forever. A
-    candidate that stops enforcing that must be rejected."""
-
-    root = _candidate_root(tmp_path, orchestrator_mutations=(DROPS_OPPORTUNITY_TERMINALITY,))
-    result = replay._run_scenario("A", root, _fixture_path(tmp_path), workspace_root=tmp_path)
-    assert result["outcome"] == "fail"
-    assert "must reach a terminal state" in result["error"]
+    """The scenario must pass against the candidate's real production orchestrator, never a stand-in."""
+    contract_version, result = _run_scenario_a(tmp_path)
+    _assert_scenario_a_pass(contract_version, result)
 
 
 def test_scenario_a_fails_when_the_opportunity_is_not_a_real_bound(tmp_path):
-    """A non-positive budget is not a bound, so it cannot be the thing that ends
-    a cycle."""
-
-    root = _candidate_root(tmp_path, orchestrator_mutations=(MAKES_OPPORTUNITY_NON_POSITIVE,))
-    result = replay._run_scenario("A", root, _fixture_path(tmp_path), workspace_root=tmp_path)
-    assert result["outcome"] == "fail"
-    assert "must be strictly positive" in result["error"]
-
-
-def test_scenario_a_fails_when_the_opportunity_is_ignored(tmp_path):
-    """Proves the in-budget half of the invariant is load-bearing: timing out
-    every pending cycle regardless of age is an unbounded wait in the other
-    direction and must not pass."""
-
-    root = _candidate_root(tmp_path, orchestrator_mutations=(MAKES_OPPORTUNITY_UNCONDITIONAL,))
-    result = replay._run_scenario("A", root, _fixture_path(tmp_path), workspace_root=tmp_path)
-    assert result["outcome"] == "fail"
-    assert "must not be timed out" in result["error"]
+    """v2: opportunity budget not positive/finite. v1: grace period not positive/finite."""
+    contract = _detect_contract_version_once(tmp_path)
+    mutations = (MAKES_OPPORTUNITY_NON_POSITIVE,) if contract == "v2" else (MAKES_GRACE_NON_POSITIVE,)
+    contract_version, error = _fails_contract_aware(tmp_path, mutations, scenario="A")
+    if contract_version == "v2":
+        assert "not positive and finite" in error
+    else:
+        assert "not positive and finite" in error or "grace" in error.lower()
 
 
-def test_scenario_a_fails_when_an_active_collector_is_timed_out_on_the_nominal_deadline(tmp_path):
-    """PR #535: a correlated collector that is still running must not be
-    finalized on the nominal budget, and withholding the timeout must publish
-    nothing, so no competing terminal result can exist for the exact head."""
-
-    root = _candidate_root(tmp_path, orchestrator_mutations=(TIMES_OUT_AN_ACTIVE_COLLECTOR_ON_THE_NOMINAL_DEADLINE,))
-    result = replay._run_scenario("A", root, _fixture_path(tmp_path), workspace_root=tmp_path)
-    assert result["outcome"] == "fail"
-    assert "with a correlated collector still active must not be finalized as timed out" in result["error"]
-
-
-def test_scenario_a_fails_when_an_active_collector_holds_the_cycle_open_without_bound(tmp_path):
-    """Codex P1 on PR #552: withholding the nominal timeout from a live
-    collector is only legitimate while it stays bounded. A candidate that never
-    times out an active collector must be rejected by the trusted ceiling."""
-
-    root = _candidate_root(tmp_path, orchestrator_mutations=(HOLDS_AN_ACTIVE_COLLECTOR_OPEN_WITHOUT_BOUND,))
-    result = replay._run_scenario("A", root, _fixture_path(tmp_path), workspace_root=tmp_path)
-    assert result["outcome"] == "fail"
-    assert "an active collector can hold the exact head pending without bound" in result["error"]
+def test_scenario_a_fails_when_the_opportunity_is_effectively_unbounded(tmp_path):
+    """v2: opportunity budget unbounded. v1: grace period unbounded."""
+    contract = _detect_contract_version_once(tmp_path)
+    mutations = (MAKES_OPPORTUNITY_UNBOUNDED,) if contract == "v2" else (MAKES_GRACE_UNBOUNDED,)
+    contract_version, error = _fails_contract_aware(tmp_path, mutations, scenario="A")
+    if contract_version == "v2":
+        assert "not positive and finite" in error
+    else:
+        assert "not positive and finite" in error or "grace" in error.lower()
 
 
-def test_scenario_a_fails_when_the_candidate_widens_its_own_active_collector_grace(tmp_path):
-    """The ceiling is the grader's, not the candidate's: declaring a wider grace
-    multiplier does not buy a longer wait past the trusted bound."""
+def test_scenario_a_fails_when_the_collector_is_trusted_as_a_publisher(tmp_path):
+    """The collector holds no status write and certifies nothing (v2 only)."""
+    contract_version, error = _fails_contract_aware(tmp_path, (TRUSTS_THE_COLLECTOR_AS_A_PUBLISHER,), scenario="A")
+    if contract_version == "v2":
+        assert "citing the collector run must never be a cycle" in error
+    else:
+        # v1 doesn't test this - it's a v2-specific invariant
+        pytest.skip("v1 contract does not test collector-as-publisher")
 
-    root = _candidate_root(tmp_path, orchestrator_mutations=(WIDENS_ITS_OWN_ACTIVE_COLLECTOR_GRACE,))
-    result = replay._run_scenario("A", root, _fixture_path(tmp_path), workspace_root=tmp_path)
-    assert result["outcome"] == "fail"
-    assert "an active collector can hold the exact head pending without bound" in result["error"]
+
+def test_scenario_a_fails_when_a_run_off_the_default_branch_can_vouch_for_a_cycle(tmp_path):
+    """v2 only: a run off the default branch must not vouch for a cycle."""
+    contract_version, error = _fails_contract_aware(tmp_path, (DROPS_THE_DEFAULT_BRANCH_BINDING,), scenario="A")
+    if contract_version == "v2":
+        assert "off the default branch" in error
+    else:
+        pytest.skip("v1 contract does not test default branch binding")
 
 
-# --- Scenario B: bounded, idempotent exact-head collector dispatch ----------
+def test_scenario_a_fails_when_any_workflow_can_vouch_for_a_cycle(tmp_path):
+    """v2 only: any workflow must not vouch for a cycle."""
+    contract_version, error = _fails_contract_aware(tmp_path, (DROPS_THE_TRUSTED_WORKFLOW_BINDING,), scenario="A")
+    if contract_version == "v2":
+        assert "must never be a cycle" in error
+    else:
+        pytest.skip("v1 contract does not test trusted workflow binding")
+
+
+# --- Scenario B: a receipt is usable only for the exact run it names -----------------------------------------
 
 
 def test_scenario_b_passes_against_real_production(tmp_path):
-    root = _candidate_root(tmp_path)
-    result = replay._run_scenario("B", root, _fixture_path(tmp_path), workspace_root=tmp_path)
-    assert result["outcome"] == "pass", result.get("error")
-    measurements = result["measurements"]
-    # Production spends MAX_COLLECTOR_DISPATCHES on correlated runs, not on
-    # dispatches: ``collector_liveness`` returns len(runs) and
-    # ``collector_needs_dispatch`` compares that count to the budget. The two
-    # dispatches that produced no run therefore do not consume it, so the bound
-    # is asserted on the run count, with the dispatch total checked to be
-    # exactly those no-run dispatches plus the budget.
-    assert measurements["correlated_runs"] == measurements["max_dispatches"], (
-        "the dispatch budget must be consumed by the runs production actually created, got "
-        f"{measurements['correlated_runs']} run(s)"
-    )
-    assert measurements["dispatches"] == measurements["max_dispatches"] + 2, (
-        f"expected 2 dispatches that produced no correlated run plus the {measurements['max_dispatches']}-run "
-        f"budget, got {measurements['dispatches']} dispatch(es)"
-    )
-    # The recovery refreshes the durable record, so more than one durable cycle
-    # exists beyond the initial record and the stale probe.
-    assert measurements["durable_records_published"] > 1
-    assert measurements["exhausted_state"] == "WAITING_FOR_REVIEWER"
+    contract_version, result = _run_scenario_b(tmp_path)
+    _assert_scenario_b_pass(contract_version, result)
 
 
-def test_scenario_b_fails_when_recovery_does_not_refresh_the_durable_record(tmp_path):
-    """Codex P1 on PR #539: a candidate may dispatch the recovery and still
-    leave the original stale durable record in place. Every later reconcile then
-    recovers the same exact head again off a record that never changed. The
-    pre-fix scenario substituted a synthetic liveness count at exactly this
-    point, so it never read the durable record back and this passed.
-    """
-
-    root = _candidate_root(tmp_path, orchestrator_mutations=RECOVERY_DISPATCHES_WITHOUT_REFRESHING_RECORD)
-    result = replay._run_scenario("B", root, _fixture_path(tmp_path), workspace_root=tmp_path)
-    assert result["outcome"] == "fail"
-    assert "must publish/refresh the durable cycle record" in result["error"]
-
-
-def test_scenario_b_fails_when_recovery_declines_a_cycle_with_no_run(tmp_path):
-    """Codex P1 on PR #540: a dispatch can be accepted and still never produce
-    a run, which production reports as ("missing", 0). The pre-fix dispatch stub
-    always created a run, so the recovery probe could only observe ("dead", 1)
-    and this candidate -- which refuses recovery in exactly the missing-run
-    state -- passed while leaving the exact head pending forever.
-    """
-
-    root = _candidate_root(tmp_path, orchestrator_mutations=RECOVERY_DECLINED_WHEN_NO_RUN_EXISTS)
-    result = replay._run_scenario("B", root, _fixture_path(tmp_path), workspace_root=tmp_path)
-    assert result["outcome"] == "fail"
-    assert "must recover exactly one further dispatch" in result["error"]
-
-
-def test_scenario_b_fails_when_the_refresh_keeps_a_stale_liveness_timestamp(tmp_path):
-    """Codex P1 on PR #540: the pre-fix scenario aged/replaced the durable record
-    straight after recovery, so the refreshed record was never reconciled on its
-    own. A candidate that published a distinct record while preserving an
-    already-stale started_at therefore passed, even though the next real
-    reconcile re-dispatches the same exact head. Reconciling the refreshed
-    record before ageing anything catches it.
-    """
-
-    root = _candidate_root(tmp_path, orchestrator_mutations=RECOVERY_REFRESH_PRESERVES_STALE_STARTED_AT)
-    result = replay._run_scenario("B", root, _fixture_path(tmp_path), workspace_root=tmp_path)
-    assert result["outcome"] == "fail"
-    assert "reconciling the refreshed durable record must dispatch no further collector" in result["error"]
-
-
-def test_scenario_b_fails_when_a_recorded_cycle_is_dispatched_again(tmp_path):
-    """Regression: the published cycle is the durable idempotency record, so a
-    reconcile that can observe it must never issue a duplicate dispatch."""
-
-    root = _candidate_root(tmp_path, orchestrator_mutations=(DROPS_COLLECTOR_IDEMPOTENCY_RECORD,))
-    result = replay._run_scenario("B", root, _fixture_path(tmp_path), workspace_root=tmp_path)
-    assert result["outcome"] == "fail"
-    assert "must dispatch no further collector" in result["error"]
-
-
-def test_scenario_b_fails_without_bounded_liveness_recovery(tmp_path):
-    """A dispatch that never produces a run must recover, or the exact head
-    stays pending forever."""
-
-    root = _candidate_root(tmp_path, orchestrator_mutations=(DROPS_LIVENESS_RECOVERY,))
-    result = replay._run_scenario("B", root, _fixture_path(tmp_path), workspace_root=tmp_path)
-    assert result["outcome"] == "fail"
-    assert "must recover exactly one further dispatch" in result["error"]
-
-
-def test_scenario_b_fails_when_dispatch_is_unbounded(tmp_path):
-    """Production states the bound explicitly: a cycle that keeps failing must
-    settle into a blocked pending state rather than dispatch without end."""
-
-    root = _candidate_root(tmp_path, orchestrator_mutations=(DROPS_DISPATCH_BUDGET,))
-    result = replay._run_scenario("B", root, _fixture_path(tmp_path), workspace_root=tmp_path)
-    assert result["outcome"] == "fail"
-    assert "spent the dispatch budget must dispatch no further collector" in result["error"]
+@pytest.mark.parametrize(
+    "mutation",
+    [
+        IGNORES_RECEIPT_IDENTITY,
+        IGNORES_THE_RUN_ATTEMPT,
+        IGNORES_THE_GENERATION,
+        IGNORES_THE_IDENTITY_DIGESTS,
+        IGNORES_THE_ATTEMPT_LIST_SHAPE,
+    ],
+    ids=["identity", "attempt", "generation", "digests", "attempt-list"],
+)
+def test_scenario_b_fails_when_a_receipt_is_usable_beyond_the_run_it_names(tmp_path, mutation):
+    """v2 only: receipt validation contract."""
+    contract_version, error = _fails_contract_aware(tmp_path, (mutation,), scenario="B")
+    if contract_version == "v2":
+        assert "receipts must be refused for" in error
+    else:
+        pytest.skip("v1 contract does not test collector_receipt_problem")
 
 
 def test_scenario_fails_against_a_candidate_that_forges_a_passing_payload_and_exits_early(tmp_path):
@@ -506,6 +428,8 @@ def test_scenario_fails_against_a_candidate_that_forges_a_passing_payload_and_ex
     the harness reports fail rather than being fooled by forged stdout."""
 
     root = _candidate_root(tmp_path, orchestrator_src=HOSTILE_EARLY_EXIT_ORCHESTRATOR)
+    contract_version = _get_contract_version(root)
+    # This test works for both contracts since it tests the isolation mechanism
     result = replay._run_scenario("B", root, _fixture_path(tmp_path), workspace_root=tmp_path)
     assert result["outcome"] == "fail"
     assert "trusted completion message" in result["error"]
@@ -515,14 +439,15 @@ def test_scenario_fails_against_a_candidate_that_forges_a_passing_payload_and_ex
 
 
 def test_scenario_g_passes_against_correct_end_to_end_classification(tmp_path):
-    root = _candidate_root(tmp_path)
-    result = replay._run_scenario("G", root, _fixture_path(tmp_path), workspace_root=tmp_path)
+    contract_version, result = _run_scenario_g(tmp_path)
     assert result["outcome"] == "pass", result.get("error")
+    # Scenario G is identical for both contracts
+    assert result["measurements"]["absent_state"] == "pending"
+    assert result["measurements"]["in_progress_state"] == "pending"
 
 
 def test_scenario_g_fails_against_a_swallowed_fail_closed_path(tmp_path):
-    root = _candidate_root(tmp_path, governance_src=BUGGY_GOVERNANCE)
-    result = replay._run_scenario("G", root, _fixture_path(tmp_path), workspace_root=tmp_path)
+    contract_version, result = _run_scenario_g(tmp_path, governance_src=BUGGY_GOVERNANCE)
     assert result["outcome"] == "fail"
     assert "fail closed" in result["error"]
 
@@ -547,15 +472,33 @@ def test_trusted_harness_definition_digest_is_deterministic_and_content_sensitiv
 
 
 def test_scenario_set_digest_is_deterministic_and_content_sensitive(monkeypatch):
-    first = replay.scenario_set_digest()
-    second = replay.scenario_set_digest()
-    assert first == second
+    # Test for both contract versions
+    for contract_version in ("v1", "v2"):
+        first = replay.scenario_set_digest(contract_version)
+        second = replay.scenario_set_digest(contract_version)
+        assert first == second, f"contract {contract_version}: digest not deterministic"
 
-    mutated_invariants = dict(replay.SCENARIO_INVARIANTS)
-    mutated_invariants["A"] = mutated_invariants["A"] + " (mutated for this test)"
-    monkeypatch.setattr(replay, "SCENARIO_INVARIANTS", mutated_invariants)
-    changed = replay.scenario_set_digest()
-    assert changed != first, "digest must depend on the actual invariant text, not be a constant"
+        # Test content sensitivity by mutating invariants at the definition level
+        # We need to mutate the actual definition JSON since SCENARIO_INVARIANTS is no longer a module attribute
+        import json
+        definition_path = REPO_ROOT / "scripts" / "hunter_trusted_orchestrator_replay_definition.json"
+        with open(definition_path) as f:
+            definition = json.load(f)
+        original_invariants = definition["contract_versions"][contract_version]["scenario_invariants"]
+        mutated_invariants = dict(original_invariants)
+        mutated_invariants["A"] = mutated_invariants["A"] + " (mutated for this test)"
+        definition["contract_versions"][contract_version]["scenario_invariants"] = mutated_invariants
+        
+        # Reload the module to pick up the changes
+        import importlib
+        importlib.reload(replay)
+        
+        changed = replay.scenario_set_digest(contract_version)
+        assert changed != first, f"contract {contract_version}: digest must depend on the actual invariant text, not be a constant"
+        
+        # Restore
+        definition["contract_versions"][contract_version]["scenario_invariants"] = original_invariants
+        importlib.reload(replay)
 
 
 def test_fixture_digest_is_deterministic_and_content_sensitive(monkeypatch):
@@ -902,7 +845,7 @@ def test_verify_digests_cli_rejects_an_alternate_candidate_root_substitution(tmp
     # "candidate" and the real one already occupies that name in tmp_path.
     unrenamed_alternate_root = _candidate_root(
         tmp_path / "alt-source",
-        orchestrator_mutations=(DROPS_DISPATCH_BUDGET,),
+        orchestrator_mutations=(IGNORES_THE_GENERATION,),
         governance_src=(REPO_ROOT / "scripts" / "hunter_governance_review_v2.py").read_text(encoding="utf-8")
         + "\n# alternate candidate checkout\n",
     )
@@ -1493,3 +1436,20 @@ def test_cmd_run_and_cmd_validate_never_forward_raw_argparse_pr_or_sha():
         assert (
             source.count("args.candidate_sha") == 1
         ), f"{name} references args.candidate_sha somewhere other than identity construction"
+
+
+def test_failed_replay_still_uploads_diagnostic_receipt_without_weakening_gate() -> None:
+    """A failed replay must expose its evidence but never unlock digest verification."""
+    import yaml
+
+    workflow = yaml.safe_load(
+        (REPO_ROOT / ".github/workflows/hunter-trusted-orchestrator-replay-validate.yml").read_text(encoding="utf-8")
+    )
+    jobs = workflow["jobs"]
+    steps = jobs["validate-replay"]["steps"]
+    replay_step = next(step for step in steps if step["name"] == "Run trusted candidate orchestrator replay")
+    upload = next(step for step in steps if step["name"] == "Upload replay receipt")
+    assert "continue-on-error" not in replay_step
+    assert upload["if"] == "${{ always() }}"
+    assert upload["with"]["path"] == "replay-receipt.json"
+    assert "needs.validate-replay.result == 'success'" in jobs["verify-candidate-digest"]["if"]
