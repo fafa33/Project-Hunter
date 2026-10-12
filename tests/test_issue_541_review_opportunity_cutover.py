@@ -10,10 +10,10 @@ These tests cover the changed trusted boundary only.
 
 from __future__ import annotations
 
-import sys
-
 import hunter_review_orchestrator as orchestrator
+import hunter_reviewer_collector as collector
 import pytest
+from native_github_fake import COLLECTOR_RUN, NativeFake
 
 HEAD = "a" * 40
 MIGRATION_REPOSITORY = "fafa33/Project-Hunter"
@@ -90,20 +90,43 @@ def _request_valid_for_this_head(monkeypatch, *, valid=True, state="present"):
     return document
 
 
+_GITHUB: dict[str, NativeFake] = {}
+
+
 def _open_pr(monkeypatch, head=HEAD, draft=False):
-    monkeypatch.setattr(
-        orchestrator,
-        "request_json",
-        lambda *_args: {"state": "open", "draft": draft, "head": {"sha": head}},
-        raising=False,
+    """Serve an open pull request at ``head`` from the in-memory native GitHub."""
+
+    fake = NativeFake().install(monkeypatch)
+    for number in (MIGRATION_PR, ORDINARY_PR):
+        fake.prs[number] = {"state": "open", "draft": draft, "base": {"ref": "main"}, "head": {"sha": head}}
+    _GITHUB["fake"] = fake
+
+
+def _ensure(repository, pr_number):
+    """The native start gate: ``None`` when this event may not collect, else the decision."""
+
+    decision = collector.verify_native_start(
+        repository,
+        "token",
+        pr_number,
+        _GITHUB["fake"].prs[pr_number]["head"]["sha"],
+        COLLECTOR_RUN,
+        event="pull_request_target",
     )
+    if not decision.proceed:
+        return None
+    _STARTED["count"] += 1
+    return decision
+
+
+_STARTED = {"count": 0}
 
 
 def _dispatched_nothing(stored):
     """No cycle published and no reviewer capacity spent on this head."""
 
-    assert stored["cycle"] is None
-    assert stored["dispatches"] == 0
+    assert stored["started"] == 0
+    assert _GITHUB["fake"].posted == []
     return True
 
 
@@ -121,22 +144,17 @@ def _blocked_migration_candidate(monkeypatch, *, request_state="present", valid=
 
 
 def _collector(monkeypatch):
-    """Arm the collector boundary so any dispatch is observable."""
+    """Count the events allowed to start collection (any start is observable)."""
 
-    stored = {"cycle": None, "dispatches": 0}
-    _stub(
-        monkeypatch,
-        orchestrator,
-        read_cycle=lambda *_a: ("present", stored["cycle"], None) if stored["cycle"] else ("absent", None, None),
-        reviewer_pool_config_digest=lambda: "d" * 64,
-        current_run_id=lambda: 555,
-        publish_cycle=lambda *_a, cycle: stored.update(cycle=cycle),
-        collector_liveness=lambda *_a: ("missing", 0),
-        dispatch_collector=lambda *_a: stored.update(dispatches=stored["dispatches"] + 1),
-        current_remediation_generation=lambda *_a: "gen-1",
-        _all_commit_statuses=lambda *_args, **_kwargs: [],
-    )
-    return stored
+    _STARTED["count"] = 0
+    return _Stored()
+
+
+class _Stored(dict):
+    def __getitem__(self, key):
+        if key == "started":
+            return _STARTED["count"]
+        return super().__getitem__(key)
 
 
 # --- 1. the migration identity does get Review Opportunity -------------------
@@ -166,12 +184,11 @@ def test_valid_request_starts_exactly_one_cycle(monkeypatch, repository, pr_numb
         _request_valid_for_this_head(monkeypatch)
         stored = _collector(monkeypatch)
 
-    cycle = orchestrator.ensure_current(repository, "token", pr_number)
+    decision = _ensure(repository, pr_number)
 
-    assert cycle is not None
-    assert cycle.head_sha == HEAD
-    assert cycle.state == "WAITING_FOR_REVIEWER"
-    assert stored["dispatches"] == 1
+    assert decision is not None and decision.proceed
+    assert decision.claims_id == "c" * 64
+    assert stored["started"] == 1
 
 
 # --- 2/3. and it stays blocked for admission and merge ----------------------
@@ -289,8 +306,8 @@ def test_no_environment_or_injected_claim_can_activate_the_cutover(monkeypatch, 
     assert orchestrator._review_opportunity_migration(MIGRATION_REPOSITORY, 999) is False
     # And the ordinary path still requires the preflight under the same sweep.
     stored = _blocked_migration_candidate(monkeypatch)
-    assert orchestrator.ensure_current(ORDINARY_REPOSITORY, "token", ORDINARY_PR) is None
-    assert stored["dispatches"] == 0
+    assert _ensure(ORDINARY_REPOSITORY, ORDINARY_PR) is None
+    assert stored["started"] == 0
 
 
 # --- 6/7/8. evidence and exact-head binding --------------------------------
@@ -318,7 +335,7 @@ def test_unusable_request_creates_no_authority(monkeypatch, request_state, valid
     stored = _blocked_migration_candidate(monkeypatch, **kwargs)
 
     with pytest.raises(orchestrator.ReviewRequestBlocked):
-        orchestrator.ensure_current(MIGRATION_REPOSITORY, "token", MIGRATION_PR)
+        _ensure(MIGRATION_REPOSITORY, MIGRATION_PR)
 
     assert _dispatched_nothing(stored)
 
@@ -328,22 +345,11 @@ def test_stale_head_review_evidence_remains_invalid(monkeypatch):
     still refused, even for the migration identity."""
 
     stored = _blocked_migration_candidate(monkeypatch, head="d" * 40, valid=False)
-    stored["cycle"] = orchestrator.ReviewCycle(
-        pr_number=MIGRATION_PR,
-        head_sha="b" * 40,
-        state="WAITING_FOR_REVIEWER",
-        provider_id="copilot",
-        started_at=_ago_minutes(5),
-        trigger_id=1,
-        config_digest="d" * 64,
-        generation_id="gen-0",
-    )
 
     with pytest.raises(orchestrator.ReviewRequestBlocked):
-        orchestrator.ensure_current(MIGRATION_REPOSITORY, "token", MIGRATION_PR)
+        _ensure(MIGRATION_REPOSITORY, MIGRATION_PR)
 
-    assert stored["dispatches"] == 0
-    assert stored["cycle"].head_sha == "b" * 40
+    assert stored["started"] == 0
 
 
 def test_exact_head_binding_remains_mandatory(monkeypatch):
@@ -355,10 +361,14 @@ def test_exact_head_binding_remains_mandatory(monkeypatch):
     _request_valid_for_this_head(monkeypatch)
     _collector(monkeypatch)
 
-    cycle = orchestrator.ensure_current(MIGRATION_REPOSITORY, "token", MIGRATION_PR)
+    decision = _ensure(MIGRATION_REPOSITORY, MIGRATION_PR)
 
-    assert cycle.head_sha == new_head
-    assert cycle.head_sha != HEAD
+    assert decision is not None and decision.proceed
+    # The event head must equal the pull request's current head; a stale event head is refused.
+    stale = collector.verify_native_start(
+        MIGRATION_REPOSITORY, "token", MIGRATION_PR, HEAD, COLLECTOR_RUN, event="pull_request_target"
+    )
+    assert not stale.proceed
 
 
 # --- 9. draft stays safe ----------------------------------------------------
@@ -372,7 +382,7 @@ def test_ordinary_pr_still_requires_the_trusted_preflight(monkeypatch):
 
     stored = _blocked_migration_candidate(monkeypatch)
 
-    assert orchestrator.ensure_current(ORDINARY_REPOSITORY, "token", ORDINARY_PR) is None
+    assert _ensure(ORDINARY_REPOSITORY, ORDINARY_PR) is None
     assert _dispatched_nothing(stored)
 
     readiness = orchestrator.review_request_state(ORDINARY_REPOSITORY, "token", ORDINARY_PR, HEAD)
@@ -428,7 +438,7 @@ def test_migration_grants_nothing_where_it_must_not(monkeypatch, draft, drop_ide
     if drop_identity:
         monkeypatch.setattr(orchestrator, "REVIEW_OPPORTUNITY_MIGRATION_IDENTITIES", frozenset(), raising=False)
 
-    assert orchestrator.ensure_current(MIGRATION_REPOSITORY, "token", MIGRATION_PR) is None, why
+    assert _ensure(MIGRATION_REPOSITORY, MIGRATION_PR) is None, why
     assert _dispatched_nothing(stored)
 
 
@@ -450,13 +460,8 @@ def test_absent_or_unavailable_migration_request_stays_retryable(monkeypatch, re
 
     stored = _blocked_migration_candidate(monkeypatch, request_state=request_state)
 
-    assert orchestrator.ensure_current(MIGRATION_REPOSITORY, "token", MIGRATION_PR) is None
+    assert _ensure(MIGRATION_REPOSITORY, MIGRATION_PR) is None
     assert _dispatched_nothing(stored)
-    # A retryable wait must not be reported as a red reconcile.
-    monkeypatch.setattr(
-        sys, "argv", ["orchestrator", "ensure", "--repository", MIGRATION_REPOSITORY, "--pr", str(MIGRATION_PR)]
-    )
-    assert orchestrator.main() == 0
 
 
 def test_terminal_request_states_exclude_the_retryable_ones():

@@ -19,7 +19,7 @@ import urllib.request
 import zipfile
 from collections.abc import Mapping
 from pathlib import Path
-from typing import Any, Protocol
+from typing import Any, NamedTuple, Protocol
 
 import hunter_governance_review_v2 as governance
 import hunter_pre_ready_review as review
@@ -641,9 +641,9 @@ def valid_run(run: dict[str, Any], run_id: int, branch: str, revision: str) -> b
         and governance._is_commit_sha(str(run.get("head_sha") or ""))
         and run.get("head_sha") == revision
         and run.get("path") == WORKFLOW
-        # Legacy workflow_dispatch/pull_request_target runs carry no owner, binding or
-        # run claim and are never reviewer or exhaustion authority after migration.
-        and run.get("event") == "repository_dispatch"
+        # The only entry point: GitHub's own pull_request_target event, resolved from the
+        # default branch. A dispatched, manual or scheduled run is never reviewer authority.
+        and run.get("event") == "pull_request_target"
         and run.get("status") == "completed"
         and run.get("conclusion") == "success"
     )
@@ -1700,49 +1700,10 @@ def load_exhaustion(
     backend = GitHubBackend(repository, token, pr, head, "", run_id, 1)
     if backend.head() != head:
         raise ValueError("collector receipt does not match the current pull-request HEAD")
-    repo = governance.request_json(repository, token, "GET", "")
-    branch = repo["default_branch"]
-    run = governance.request_json(repository, token, "GET", f"actions/runs/{run_id}")
-    revision = str(run.get("head_sha") or "") if isinstance(run, dict) else ""
-    if not isinstance(run, dict) or not valid_run(run, run_id, branch, revision):
-        raise ValueError("collector did not execute the trusted default-branch revision")
-    if not _run_on_default_branch_history(repository, token, branch, revision):
-        raise ValueError("collector run is no longer on trusted default-branch history")
-    # Authority is established before the artifact is downloaded or the receipt read:
-    # current owner epoch, GitHub-created run binding, atomic run claim for this
-    # attempt, trusted origin, and the exact PR and head. Anything else raises.
-    orchestration.collector_run_authority(repository, token, run, pr_number=pr, head_sha=head)
-    name = f'hunter-reviewer-results-{head}-{run["run_attempt"]}'
-    artifacts = [
-        a for a in _pages(repository, token, f"actions/runs/{run_id}/artifacts", "artifacts") if a.get("name") == name
-    ]
-    if len(artifacts) != 1 or artifacts[0].get("expired") is not False:
-        raise ValueError("unique immutable collector artifact is unavailable")
-    artifact = artifacts[0]
-    if (artifact.get("workflow_run") or {}).get("id") != run_id:
-        raise ValueError("artifact belongs to another run")
-    archive = download_artifact(repository, token, int(artifact["id"]))
-    if artifact.get("digest") != "sha256:" + hashlib.sha256(archive).hexdigest():
-        raise ValueError("collector artifact digest mismatch")
-    with zipfile.ZipFile(io.BytesIO(archive)) as bundle:
-        if bundle.namelist() != ["reviewer-results.json"] or bundle.getinfo("reviewer-results.json").file_size > LIMIT:
-            raise ValueError("malformed collector archive")
-        receipt = json.loads(bundle.read("reviewer-results.json"))
-    # The one canonical receipt contract, shared with the trusted completion publisher
-    # and the exhausted-pool finalizer, then this loader's own pool-specific checks.
-    title_generation = orchestration._COLLECTOR_RUN_TITLE.fullmatch(orchestration._run_title(run))
-    run_generation = (title_generation.group(3) if title_generation else None) or BASE_GENERATION
-    problem = orchestration.collector_receipt_problem(
-        receipt,
-        repository=repository,
-        pr_number=pr,
-        head_sha=head,
-        run_id=run_id,
-        run_attempt=run["run_attempt"],
-        generation_id=run_generation,
-    )
-    if problem:
-        raise ValueError(f"collector identity/configuration mismatch: {problem}")
+    # The actual run, its integrity-checked receipt and the receipt's own identity, together
+    # with the fresh pull-request head just read above. No title, payload or artifact alone.
+    run, receipt = verified_collector_receipt(repository, token, run_id, pr, head)
+    branch = governance.request_json(repository, token, "GET", "")["default_branch"]
     if receipt.get("configuration_digest") != configuration_digest(pool):
         raise ValueError("collector identity/configuration mismatch")
     receipt_generation = receipt["remediation_generation_id"]
@@ -1958,166 +1919,212 @@ def load_exhaustion(
     return evidence
 
 
-#: Bounded wait for earlier lookalike runs to prove possession or end (about three minutes).
-BIND_ATTEMPTS = 36
-BIND_INTERVAL_SECONDS = 5
+RECEIPT_ARTIFACT_PREFIX = "hunter-reviewer-results-"
 
 
-def verify_trusted_dispatch_before_work(
-    repository: str,
-    token: str,
-    pr_number: int,
-    head_sha: str,
-    generation: str,
-    proof: str,
-    run_id: int,
-    *,
-    event: str = "repository_dispatch",
-    epoch: str = "0",
-) -> None:
-    """Fail closed before any reviewer invocation or privileged side effect.
+def verified_collector_run(repository: str, token: str, run_id: int) -> dict[str, Any]:
+    """The actual completed, successful collector run on the trusted default branch, or raise.
 
-    The collector has exactly one entry point, `repository_dispatch`, and it must present an
-    orchestrator-issued, exact-cycle dispatch capability (single-use, bound to this run).
-    Every other event identity -- including the retired `pull_request_target` and
-    `workflow_dispatch` entry points -- fails closed.
+    Identity comes from GitHub's own run record, never from a run title, a dispatch payload or an
+    artifact: the workflow file, the ``pull_request_target`` event, the default branch, the exact
+    revision and its place in default-branch history are all re-read from the API.
     """
-    if event != "repository_dispatch":
-        raise ValueError("collector invoked from an untrusted event")
-    if not re.fullmatch(r"[0-9a-f]{64}", proof):
-        raise ValueError("missing trusted collector dispatch capability")
-    run = orchestration.request_json(repository, token, "GET", f"actions/runs/{run_id}")
-    repo = orchestration.request_json(repository, token, "GET", "")
-    branch = str((repo or {}).get("default_branch") or "main")
-    if not isinstance(run, dict) or not (
-        run.get("id") == run_id
-        and run.get("event") == "repository_dispatch"
-        and run.get("path") == WORKFLOW
-        and run.get("head_branch") == branch
-    ):
-        raise ValueError("collector run is not trusted default-branch repository dispatch")
-    revision = str(run.get("head_sha") or "")
-    tip = orchestration.request_json(repository, token, "GET", f"commits/{branch}")
-    tip_sha = str((tip or {}).get("sha") or "")
-    if not re.fullmatch(r"[0-9a-f]{40}", revision) or not re.fullmatch(r"[0-9a-f]{40}", tip_sha):
-        raise ValueError("collector trusted revision unavailable")
-    if revision != tip_sha:
-        comparison = orchestration.request_json(repository, token, "GET", f"compare/{revision}...{tip_sha}")
-        if not isinstance(comparison, dict) or comparison.get("status") not in {"ahead", "identical"}:
-            raise ValueError("collector revision is no longer on trusted default branch")
-    state, cycle, _ = orchestration.read_cycle(repository, token, pr_number, head_sha)
-    if state != "present" or cycle is None or cycle.state not in orchestration.OPEN_CYCLE_STATES:
-        raise ValueError("collector dispatch lacks authorized open cycle")
-    if cycle.generation_id != generation:
-        raise ValueError("collector dispatch generation mismatch")
-    # Ownership is arbitrated only by the create-only owner ref of the elected
-    # epoch. The run must hold the newest epoch's capability; a replaced owner, a
-    # replayed capability and a cross-generation capability all fail here, before
-    # any reviewer is invoked.
-    digest = hashlib.sha256(proof.encode()).hexdigest()
-    chain = orchestration.read_owner_chain(repository, token, pr_number, head_sha, generation)
-    holder = next((owner for owner in chain if owner.nonce_sha256 == digest), None)
-    if holder is None or chain[-1] != holder or str(holder.epoch) != epoch:
-        raise ValueError("collector capability is not the current elected epoch")
-    if holder.orchestrator_run_id == run_id:
-        raise ValueError("collector run cannot be its own dispatching orchestrator")
-    origin = orchestration.request_json(repository, token, "GET", f"actions/runs/{holder.orchestrator_run_id}")
-    if not isinstance(origin, dict) or not (
-        origin.get("id") == holder.orchestrator_run_id
-        and origin.get("head_branch") == branch
-        and origin.get("path") == ".github/workflows/hunter-governance-reconcile.yml"
-        and origin.get("event") in {"push", "workflow_run", "pull_request_target", "schedule", "repository_dispatch"}
-    ):
-        raise ValueError("collector dispatch origin is not trusted governance")
-    description = orchestration.dispatch_proof_description(generation, holder.epoch, proof)
-    matches = [
-        status
-        for status in orchestration._all_commit_statuses(repository, token, head_sha)
-        if status.get("context") == f"{orchestration.DISPATCH_PROOF_CONTEXT_PREFIX}{pr_number}"
-        and status.get("description") == description
-        and (status.get("creator") or {}).get("login") == orchestration.TRUSTED_STATUS_CREATOR
-        and orchestration._run_id(str(status.get("target_url") or "")) == holder.orchestrator_run_id
+    if type(run_id) is not int or run_id <= 0:
+        raise ValueError("a trusted collector run id is required")
+    repo = governance.request_json(repository, token, "GET", "")
+    branch = str(repo.get("default_branch") or "") if isinstance(repo, dict) else ""
+    run = governance.request_json(repository, token, "GET", f"actions/runs/{run_id}")
+    revision = str(run.get("head_sha") or "") if isinstance(run, dict) else ""
+    if not branch or not isinstance(run, dict) or not valid_run(run, run_id, branch, revision):
+        raise ValueError("collector did not execute the trusted default-branch revision")
+    if not _run_on_default_branch_history(repository, token, branch, revision):
+        raise ValueError("collector run is no longer on trusted default-branch history")
+    return run
+
+
+def read_run_receipt(repository: str, token: str, run: dict[str, Any], *, head: str | None = None) -> tuple[str, Any]:
+    """The integrity-checked receipt artifact of one verified run, with the head its name carries.
+
+    The artifact is addressed by its run and attempt, must be unique and unexpired, must belong to
+    that run, and its immutable GitHub digest is re-derived from the downloaded bytes.
+    """
+    run_id, attempt = run["id"], run["run_attempt"]
+    pattern = re.compile(RECEIPT_ARTIFACT_PREFIX + "(" + (re.escape(head) if head else "[0-9a-f]{40}") + f")-{attempt}")
+    artifacts = [
+        a
+        for a in _pages(repository, token, f"actions/runs/{run_id}/artifacts", "artifacts")
+        if pattern.fullmatch(str(a.get("name") or ""))
     ]
-    if len(matches) != 1:
-        raise ValueError("collector dispatch proof is not uniquely authorized")
-    issued_at = str(matches[0].get("created_at") or "")
-    if not issued_at or str(run.get("created_at") or "") < issued_at:
-        raise ValueError("collector dispatch run predates trusted capability")
-    attempt = int(run.get("run_attempt") or 1)
-    # Bind the capability to the earliest run that proves it holds it before it can
-    # be consumed. A lookalike without the capability cannot win or block it, and a
-    # later run that copied the payload loses to the genuine one. The wait is bounded
-    # and an unavailable binding fails closed.
-    for remaining in range(BIND_ATTEMPTS, 0, -1):
-        bound = orchestration.bind_dispatched_run(
-            repository, token, pr_number, head_sha, generation, holder, run_id=run_id, nonce=proof
-        )
-        if bound is not None:
-            break
-        if remaining > 1:
-            time.sleep(BIND_INTERVAL_SECONDS)
-    else:
-        raise ValueError("collector run could not be bound to the dispatched capability")
-    orchestration.claim_collector_run(
-        repository, token, pr_number, head_sha, generation, holder.epoch, digest, run_id, attempt
+    if len(artifacts) != 1 or artifacts[0].get("expired") is not False:
+        raise ValueError("unique immutable collector artifact is unavailable")
+    artifact = artifacts[0]
+    if (artifact.get("workflow_run") or {}).get("id") != run_id:
+        raise ValueError("artifact belongs to another run")
+    archive = download_artifact(repository, token, int(artifact["id"]))
+    if artifact.get("digest") != "sha256:" + hashlib.sha256(archive).hexdigest():
+        raise ValueError("collector artifact digest mismatch")
+    with zipfile.ZipFile(io.BytesIO(archive)) as bundle:
+        if bundle.namelist() != ["reviewer-results.json"] or bundle.getinfo("reviewer-results.json").file_size > LIMIT:
+            raise ValueError("malformed collector archive")
+        receipt = json.loads(bundle.read("reviewer-results.json"))
+    match = pattern.fullmatch(str(artifact["name"]))
+    assert match is not None  # the artifact was selected by this very pattern
+    return match.group(1), receipt
+
+
+def verified_collector_receipt(
+    repository: str, token: str, run_id: int, pr_number: int | None = None, head: str | None = None
+) -> tuple[dict[str, Any], dict[str, Any]]:
+    """The verified run and its receipt, bound to one pull request and head.
+
+    The pull request and head are the receipt's own, written by trusted code from the native event;
+    when the caller already knows them they must match. The caller is responsible for comparing
+    them with fresh pull-request state: this function proves which run produced which receipt,
+    not that the head is still current.
+    """
+    run = verified_collector_run(repository, token, run_id)
+    found_head, receipt = read_run_receipt(repository, token, run, head=head)
+    pr = receipt.get("pr_number") if pr_number is None and isinstance(receipt, dict) else pr_number
+    if type(pr) is not int or pr <= 0:
+        raise ValueError("collector receipt carries no pull request identity")
+    problem = orchestration.collector_receipt_problem(
+        receipt,
+        repository=repository,
+        pr_number=pr,
+        head_sha=found_head,
+        run_id=run_id,
+        run_attempt=run["run_attempt"],
     )
-    # Re-verify after consuming the capability: a recovery elected meanwhile fences us.
-    if orchestration.read_owner_chain(repository, token, pr_number, head_sha, generation)[-1:] != [holder]:
-        raise ValueError("collector owner was replaced before reviewer work")
+    if problem:
+        raise ValueError(f"collector identity/configuration mismatch: {problem}")
+    return run, receipt
+
+
+def remediation_generations_used(repository: str, token: str, pr_number: int, head: str, claims_id: str) -> set[str]:
+    """Every remediation generation this exact head and claims has already spent reviewer invocations on.
+
+    Read from Hunter's own reviewer trigger comments (head-keyed, authored by the automation
+    account), never from run titles or run listings. A forged comment can only spend budget, which
+    stalls review for that head; it can never grant a review, so this is a brake and not authority.
+    """
+    used: set[str] = set()
+    for item in _pages(repository, token, f"issues/{pr_number}/comments"):
+        if str((item.get("user") or {}).get("login") or "") != orchestration.HUNTER_AUTOMATION_LOGIN:
+            continue
+        body = str(item.get("body") or "")
+        trigger = parse_api_trigger(body) or parse_native_trigger(body)
+        if trigger is None or trigger.get("head_sha") != head or trigger.get("claims_id") != claims_id:
+            continue
+        used.add(str(trigger.get("remediation_generation_id") or BASE_GENERATION))
+    return used
+
+
+class StartDecision(NamedTuple):
+    """Whether a collector run may do reviewer work, and the exact cycle it works for."""
+
+    proceed: bool
+    reason: str = ""
+    claims_id: str = ""
+    generation: str = BASE_GENERATION
+
+
+def verify_native_start(
+    repository: str, token: str, pr_number: int, head_sha: str, run_id: int, *, event: str
+) -> StartDecision:
+    """Decide, from fresh GitHub state, whether this run may invoke reviewers for this head.
+
+    The pull request and head come from the ``pull_request_target`` event GitHub itself delivered;
+    nothing else is accepted. Every condition is then re-read from the API. A condition that is
+    simply not met returns a skip (no receipt, so the cycle stays pending); evidence that cannot
+    be read raises, which also leaves no receipt. Both fail closed.
+    """
+    if event != "pull_request_target":
+        raise ValueError("collector invoked from an untrusted event")
+    repo = orchestration.request_json(repository, token, "GET", "")
+    branch = str((repo or {}).get("default_branch") or "")
+    run = orchestration.request_json(repository, token, "GET", f"actions/runs/{run_id}")
+    if (
+        not branch
+        or not isinstance(run, dict)
+        or not (
+            run.get("id") == run_id
+            and run.get("event") == "pull_request_target"
+            and run.get("path") == WORKFLOW
+            and run.get("head_branch") == branch
+        )
+    ):
+        raise ValueError("collector run is not a trusted default-branch pull_request_target run")
+    revision = str(run.get("head_sha") or "")
+    if not re.fullmatch(r"[0-9a-f]{40}", revision) or not _run_on_default_branch_history(
+        repository, token, branch, revision
+    ):
+        raise ValueError("collector revision is not on trusted default-branch history")
+    pr = orchestration.request_json(repository, token, "GET", f"pulls/{pr_number}")
+    if not isinstance(pr, dict):
+        raise ValueError("pull request state is unavailable")
+    if pr.get("state") != "open":
+        return StartDecision(False, "pull request is not open")
+    if bool(pr.get("draft")):
+        return StartDecision(False, "pull request is a draft")
+    if (pr.get("base") or {}).get("ref") != branch:
+        return StartDecision(False, "pull request does not target the default branch")
+    if (pr.get("head") or {}).get("sha") != head_sha:
+        return StartDecision(False, "event head is no longer the pull-request head")
+    readiness = orchestration.review_request_state(repository, token, pr_number, head_sha)
+    if not readiness.ready:
+        # A prerequisite that is still pending retries on its own (the next event re-enters here).
+        # One that already succeeded, or a committed request that is present-but-unusable, can never
+        # resolve itself for this immutable head, so it must not vanish into a green skipped run:
+        # it is reported, which turns this run red and visible. Absent or unreadable evidence stays
+        # a quiet, retryable skip.
+        if readiness.prerequisite_state == "success" or readiness.prerequisite_state in (
+            orchestration.TERMINAL_REQUEST_STATES
+        ):
+            raise orchestration.ReviewRequestBlocked(
+                f"exact-head review collection cannot start for PR #{pr_number} at {head_sha[:10]}: "
+                f"{readiness.reason}. This head needs a usable pre-ready review request committed for it."
+            )
+        return StartDecision(False, f"review request is not usable: {readiness.reason}")
+    claims_id = readiness.claims_id
+    if orchestration.exact_head_codex_clear_exists(repository, token, pr_number, head_sha, claims_id):
+        return StartDecision(False, "an authenticated exact-head Codex clear already exists")
+    generation = orchestration.current_remediation_generation(repository, token, pr_number, head_sha, claims_id)
+    used = remediation_generations_used(repository, token, pr_number, head_sha, claims_id)
+    if generation not in used and len(used) >= orchestration.MAX_REMEDIATION_GENERATIONS:
+        return StartDecision(False, "remediation generation budget is exhausted for this head")
+    state, cycle, _error = orchestration.read_cycle(repository, token, pr_number, head_sha)
+    if (
+        state == "present"
+        and cycle is not None
+        and cycle.config_digest == orchestration.reviewer_pool_config_digest()
+        and cycle.generation_id == generation
+        and cycle.state not in orchestration.OPEN_CYCLE_STATES
+    ):
+        return StartDecision(False, f"the cycle for this head and generation is already {cycle.state}")
+    return StartDecision(True, "", claims_id, generation)
 
 
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--pr", type=int, required=True)
     parser.add_argument("--head", required=True)
-    parser.add_argument(
-        "--generation",
-        default=BASE_GENERATION,
-        help="Remediation generation this run was dispatched for; empty to use whatever the evidence derives.",
-    )
     parser.add_argument("--output", type=Path, required=True)
     args = parser.parse_args()
     if not re.fullmatch("[0-9a-f]{40}", args.head):
         raise ValueError("exact HEAD is required")
-    declared_generation = str(args.generation or BASE_GENERATION).strip()
-    if declared_generation != BASE_GENERATION and not orchestration.GENERATION_ID_PATTERN.fullmatch(
-        declared_generation
-    ):
-        raise ValueError("remediation generation identity is malformed")
     repository, token = os.environ["GITHUB_REPOSITORY"], os.environ["GITHUB_TOKEN"]
     run_id, run_attempt = int(os.environ["GITHUB_RUN_ID"]), int(os.environ["GITHUB_RUN_ATTEMPT"])
-    event = os.environ.get("GITHUB_EVENT_NAME", "")
-    verify_trusted_dispatch_before_work(
-        repository,
-        token,
-        args.pr,
-        args.head,
-        declared_generation,
-        os.environ.get("COLLECTOR_DISPATCH_PROOF", ""),
-        run_id,
-        event=event,
-        epoch=os.environ.get("COLLECTOR_RECOVERY_EPOCH", ""),
+    decision = verify_native_start(
+        repository, token, args.pr, args.head, run_id, event=os.environ.get("GITHUB_EVENT_NAME", "")
     )
+    if not decision.proceed:
+        # Not an error and not a result: no receipt is written, so the cycle stays pending.
+        print(f"::notice::Collector skipped for PR #{args.pr} at {args.head[:10]}: {decision.reason}")
+        return 0
     pool, error = review.load_reviewer_pool()
     if pool is None or error:
         raise ValueError(error)
-    state, document, error = governance.read_head_pre_ready_review(repository, token, args.head)
-    if state != "present" or not isinstance(document, dict):
-        raise ValueError(f"review request unavailable: {error}")
-    claims_id = review.review_id(document["claims"])
-    if document.get("review_request") != {"schema": "hunter.review-request.v1", "claims_id": claims_id}:
-        raise ValueError("an explicit current review request is required")
-    # The dispatched generation correlates the run; it never authorises it. This
-    # trusted default-branch collector derives the generation itself from the
-    # authenticated review-thread state, so the generation a reviewer invocation
-    # is spent against is always the evidence's and never the dispatcher's. An
-    # input is therefore only ever checked *against* that derivation: a
-    # generation the evidence does not support fails closed instead of being
-    # used. The pull-request-target entry point supplies none at all -- it has no
-    # run name to correlate -- and reviews the generation the evidence derives.
-    generation = orchestration.current_remediation_generation(repository, token, args.pr, args.head, claims_id)
-    if declared_generation and declared_generation != generation:
-        raise ValueError("dispatched remediation generation is not the one trusted review-thread state derives")
+    claims_id, generation = decision.claims_id, decision.generation
     backend = GitHubBackend(repository, token, args.pr, args.head, claims_id, run_id, run_attempt, generation)
     attempts = collect_attempts(pool, args.head, backend)
     if backend.head() != args.head:

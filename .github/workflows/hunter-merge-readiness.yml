@@ -8,12 +8,8 @@ name: Hunter / Merge Readiness
 # - failed or incomplete exact-head code/security checks
 
 on:
-  # repository_dispatch runs the default-branch workflow definition, unlike
-  # workflow_dispatch with a caller-selected candidate ref. API-authenticated
-  # owner/operator recovery does not execute candidate-authored workflow code.
-  repository_dispatch:
-    types:
-      - hunter-trusted-recovery
+  # No repository_dispatch recovery wake: GitHub's own "Re-run all jobs" on a run of this
+  # workflow is the manual recovery path, and it re-resolves the default-branch definition.
   pull_request_target:
     branches:
       - main
@@ -30,7 +26,7 @@ on:
     workflows:
       - CI
       - Dependency review
-      - Hunter Governance Review Reconcile
+      - Hunter Collector Result Publisher
       - Hunter / Pre-PR Preflight
       - Hunter / Trusted Preflight Upgrade
       - CodeQL default setup bridge
@@ -58,9 +54,6 @@ concurrency:
 
 jobs:
   controller:
-    # Only a repository-owner-authored recovery dispatch may wake the privileged
-    # full sweep. PR workflow GITHUB_TOKEN events are never operator authority.
-    if: github.event_name != 'repository_dispatch' || github.event.sender.login == github.repository_owner
     name: Hunter Merge Readiness Controller
     runs-on: ubuntu-latest
     timeout-minutes: 10

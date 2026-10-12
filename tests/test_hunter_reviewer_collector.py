@@ -24,14 +24,6 @@ def _no_resolved_blocking_threads(monkeypatch):
     """
 
     monkeypatch.setattr(collector.orchestration, "blocking_reviewer_threads", lambda *_a, **_k: ())
-    # The run-authority check (owner epoch, binding, run claim) needs real GitHub
-    # state and is exercised by tests/test_collector_run_authority.py; these cases
-    # are about the receipt contents, so they assume an authorized run.
-    monkeypatch.setattr(
-        collector.orchestration,
-        "collector_run_authority",
-        lambda *_a, **_k: collector.orchestration.CollectorOwner(0, 1, "0" * 64, ""),
-    )
 
 
 POOL = {
@@ -136,8 +128,7 @@ def test_trusted_run_must_execute_default_branch_revision():
         "head_sha": "c" * 40,
         "head_branch": "main",
         "path": ".github/workflows/hunter-reviewer-collector.yml",
-        "event": "repository_dispatch",
-        "display_title": f"Hunter Reviewer Collector PR 472 HEAD {HEAD}",
+        "event": "pull_request_target",
         "status": "completed",
         "conclusion": "success",
     }
@@ -195,8 +186,7 @@ def _install_receipt(
                 "head_sha": "c" * 40,
                 "head_branch": "main",
                 "path": collector.WORKFLOW,
-                "event": "repository_dispatch",
-                "display_title": collector.orchestration.collector_run_name(472, HEAD, generation_id),
+                "event": "pull_request_target",
                 "status": "completed",
                 "conclusion": "success",
             }
@@ -566,8 +556,8 @@ def test_explicit_unavailability_is_valid_exhaustion_without_waiting_full_timeou
     assert result["reviewer_attempts"][0]["attempt_count"] == 1
 
 
-@pytest.mark.parametrize("event", ["pull_request_target", "workflow_dispatch"])
-def test_legacy_collector_runs_are_not_current_authority_after_migration(event):
+@pytest.mark.parametrize("event", ["repository_dispatch", "workflow_dispatch"])
+def test_retired_collector_entry_points_are_never_current_authority(event):
     run = {
         "id": 123,
         "run_attempt": 1,
@@ -579,15 +569,14 @@ def test_legacy_collector_runs_are_not_current_authority_after_migration(event):
         "conclusion": "success",
     }
     assert not collector.valid_run(run, 123, "main", "b" * 40)
-    assert collector.valid_run({**run, "event": "repository_dispatch"}, 123, "main", "b" * 40)
+    assert collector.valid_run({**run, "event": "pull_request_target"}, 123, "main", "b" * 40)
 
 
-def test_dispatch_only_artifact_name_uses_exact_input_head():
+def test_native_artifact_name_uses_the_exact_event_head():
     workflow = (collector.review.ROOT / collector.WORKFLOW).read_text()
-    assert "pull_request_target:" not in workflow
+    assert "client_payload" not in workflow
     assert (
-        "name: hunter-reviewer-results-${{ github.event.client_payload.head_sha }}-${{ github.run_attempt }}"
-        in workflow
+        "name: hunter-reviewer-results-${{ github.event.pull_request.head.sha }}-${{ github.run_attempt }}" in workflow
     )
 
 
@@ -995,8 +984,7 @@ def test_groq_authority_verifies_prior_api_exhaustion_from_trusted_collector(mon
                 "head_sha": "c" * 40,
                 "head_branch": "main",
                 "path": collector.WORKFLOW,
-                "event": "repository_dispatch",
-                "display_title": f"Hunter Reviewer Collector PR 472 HEAD {HEAD}",
+                "event": "pull_request_target",
                 "status": "completed",
                 "conclusion": "success",
             }
@@ -1575,8 +1563,7 @@ def _triage_receipt(monkeypatch, *, local_outcome="clear", local_run_id=7001, lo
                 "head_sha": "c" * 40,
                 "head_branch": "main",
                 "path": collector.WORKFLOW,
-                "event": "repository_dispatch",
-                "display_title": f"Hunter Reviewer Collector PR 472 HEAD {HEAD}",
+                "event": "pull_request_target",
                 "status": "completed",
                 "conclusion": "success",
             }
@@ -2995,20 +2982,28 @@ def test_a_codex_comment_is_not_a_canonical_workaround(monkeypatch) -> None:
     assert backend.acknowledged(comment_agent, trigger) is False
 
 
-def test_repository_dispatch_provenance_is_accepted_and_unrelated_events_are_rejected():
+def test_only_the_native_pull_request_target_event_is_collector_provenance():
     run = {
         "id": 123,
         "run_attempt": 1,
         "head_sha": "c" * 40,
         "head_branch": "main",
         "path": ".github/workflows/hunter-reviewer-collector.yml",
-        "event": "repository_dispatch",
-        "display_title": f"Hunter Reviewer Collector PR 472 HEAD {HEAD}",
+        "event": "pull_request_target",
         "status": "completed",
         "conclusion": "success",
     }
     assert collector.valid_run(run, 123, "main", "c" * 40)
-    for event in ("push", "schedule", "workflow_run", "pull_request", "issue_comment", ""):
+    for event in (
+        "push",
+        "schedule",
+        "workflow_run",
+        "pull_request",
+        "issue_comment",
+        "repository_dispatch",
+        "workflow_dispatch",
+        "",
+    ):
         assert not collector.valid_run({**run, "event": event}, 123, "main", "c" * 40), event
     # Still bound to the exact run, default-branch name, workflow and success.
     assert not collector.valid_run({**run, "conclusion": "failure"}, 123, "main", "c" * 40)

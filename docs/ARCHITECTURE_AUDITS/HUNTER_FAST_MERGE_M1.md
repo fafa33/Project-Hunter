@@ -10,13 +10,13 @@ Status: **proposed contract, not deployed**. Owner issue: #588; scoped delivery:
 | Published merge readiness | `.github/workflows/hunter-merge-readiness.yml` → trusted default-branch checkout → `bootstrap_external_review_469.py readiness` → `hunter_merge_readiness_v2.main()` | Derived status only, not permission to merge; event, workflow-run, schedule and manual wakeups |
 | Candidate admission | `scripts/hunter_governance_review_v2.py`, `read_trusted_upgrade_status` | Verified ingress signatures plus hosted exact-head proof while connector ingress is active; fail closed |
 | Canonical preflight | `.github/workflows/hunter-pre-pr-preflight.yml` and trusted preflight-upgrade workflow | Expensive proof bound to immutable head, not a PR branch name |
-| Independent reviewer | `.github/workflows/hunter-reviewer-collector.yml` is **repository_dispatch-only** (`hunter-reviewer-collect`, default-branch definition; the former `workflow_dispatch` is removed); trusted orchestration dispatches it after electing a create-only owner. `.github/workflows/hunter-governance-reconcile.yml` wakes on `push` to main, `pull_request_target` (`ready_for_review`, `synchronize`), selected `workflow_run` completions, 5-minute cron and the trusted `repository_dispatch` recovery event | Evidence and actionable findings, not an unbounded availability dependency; bot review-event approval holds were mitigated in #584 by removing direct review triggers |
+| Independent reviewer | `.github/workflows/hunter-reviewer-collector.yml` runs on `pull_request_target` (GitHub's own event is the identity; the default-branch definition always runs) with no status or contents write. `.github/workflows/hunter-collector-publisher.yml` (`workflow_run`) is the one small trusted publisher: it re-reads the actual run, its integrity-checked receipt and the current pull request before publishing the single non-blocking terminal state. The former elected-owner / lease / dispatch machinery and `hunter-governance-reconcile.yml` are removed | Evidence and actionable findings, not an unbounded availability dependency; bot review-event approval holds were mitigated in #584 by removing direct review triggers |
 | Final authorization | Repository owner | No automated merge without explicit approval |
 
 ## Active wakeup and status mapping (baseline; not a proposed implementation)
 
-- **Merge Readiness wakeups:** `pull_request_target` (`opened`, `reopened`, `synchronize`, `ready_for_review`, `converted_to_draft`); `workflow_run` completion for CI, Dependency review, Governance Reconcile, Pre-PR Preflight, Trusted Preflight Upgrade and CodeQL bridge; every 5 minutes; `workflow_dispatch` with PR number. **Direct review-event triggers were removed in #584** to avoid approval-held bot runs; the cron is a recovery path, not a freshness guarantee.
-- **Governance Reconcile wakeups:** main push, selected `workflow_run` completions (Pre-PR Preflight, Trusted Preflight Upgrade, Governance Review, Reviewer Collector), `pull_request_target` (`ready_for_review`, `synchronize`), 5-minute schedule and the trusted `repository_dispatch` recovery event. It can dispatch privileged orchestration; the reviewer collector itself has only `repository_dispatch`.
+- **Merge Readiness wakeups:** `pull_request_target` (`opened`, `reopened`, `synchronize`, `ready_for_review`, `converted_to_draft`); `workflow_run` completion for CI, Dependency review, the Collector Result Publisher, Pre-PR Preflight, Trusted Preflight Upgrade and CodeQL bridge; every 5 minutes (retained only until the owner applies the native ruleset cutover); no `workflow_dispatch` and no `repository_dispatch`. **Direct review-event triggers were removed in #584** to avoid approval-held bot runs; the cron is a recovery path, not a freshness guarantee.
+- **Governance Reconcile:** removed (#592). Its responsibilities were eliminated rather than moved: reviewer collection starts from the native `pull_request_target` event, a missing result is a pending (absent) cycle, and no workflow holds `actions: write` for orchestration.
 - **Actual readiness status contract:** `hunter_merge_readiness_v2.Decision.state` is GitHub commit-status `success`, `failure` or `pending` in context `Hunter Merge Readiness`. `READY` maps to `success` only after exact-head safety prerequisites pass; `BLOCKED` maps to `failure` for verified safety defects; `WAITING` maps to `pending` for explicitly in-flight prerequisites and those transport/read exceptions that the active resolver treats as pending. For normal return paths, `hunter_governance_review_v2.candidate_admission` classifies malformed or absent admission evidence as `failure` (or an explicitly in-flight prerequisite as `pending`). **Current exception:** `hunter_merge_readiness_v2.candidate_admission_state` catches arbitrary exceptions from that call and returns `pending` with an evidence-unavailable diagnostic; this is fail-closed for READY but not a terminal `failure`. Do not treat the current exception mapping as a guaranteed bounded outage policy; changing it requires M2–M7 tests. Any alternative outage policy belongs to a separately tested M2–M7 change, not this baseline. `TIMED_OUT` is **not** a fourth GitHub status: a timed-out required safety proof must produce `failure` with a bounded diagnostic, while external reviewer `REVIEW_TIMED_OUT` is advisory and may still yield `success` when all deterministic safety checks pass. The owner merge guard revalidates live state; no published status alone grants owner authorization.
 - **M5 migration caveat:** the baseline above documents the post-#584 `main` trigger contract at `bd4cafb`. Before implementing M5, re-read current `main` and write regression tests against its live triggers, not a historical pre-#584 snapshot.
 
@@ -53,29 +53,15 @@ The live `.github/workflows/hunter-governance-review.yml` is triggered by `pull_
 
 M1 inventory/contract (#589) → M2 pre-push evidence gate → M3 trusted proof deduplication → M4 live decision authority → M5 event ingestion/wakeup → M6 bounded CI → M7 shadow rollout and cutover. Each milestone is an issue-bound, focused signed PR with its own verification and owner approval. **Do not add these changes to PR #584.** If a milestone exposes an unresolved safety dependency, stop and record its evidence rather than weakening an existing gate.
 
-## M2 trusted operator recovery (candidate change; not yet deployed)
+## Native recovery (#592; replaces the M2 operator-dispatch recovery)
 
-Both Governance Reconcile and Merge Readiness accept `repository_dispatch`
-with event type `hunter-trusted-recovery`. GitHub evaluates this event against
-the default-branch workflow definition; there is no caller-selectable workflow
-ref. An authorized operator can wake both controllers using a credential with
-repository dispatch permission:
+There is no `hunter-trusted-recovery` dispatch, no five-minute reconcile and no synthesized completion.
 
-```sh
-gh api -X POST repos/fafa33/Project-Hunter/dispatches -f event_type=hunter-trusted-recovery
-```
+- **Missing or failed collector result fails closed.** If the collector run fails, is cancelled, times out or its runner is lost, no receipt is published, no cycle status is written and the exact-head review stays pending. `if: always()` is deliberately *not* relied on: it does not survive cancellation, runner loss or every timeout condition.
+- **Recovery is GitHub-native.** Use "Re-run all jobs" on the failed `Hunter Reviewer Collector` run (it re-resolves the default-branch definition and re-verifies the pull request head from fresh API state), or push a new commit. A rerun is a new attempt of the same run; its receipt is bound to the attempt number, so a stale or duplicated attempt can never satisfy another attempt.
+- **Accepted behavioural change:** a collector whose runner is lost no longer synthesizes `REVIEW_TIMED_OUT`; the cycle stays pending until a person re-runs it. This is an explicit availability trade for removing polling and ownership machinery.
+- **Remaining refresh latency.** Merge Readiness refreshes on `pull_request_target` and `workflow_run` completions; the scheduled sweep is retained as a fallback only until the owner applies the required-check ruleset change recorded in `configs/governance_cutover_target.json`. Resolving a review thread grants no workflow extra privilege.
 
-This is a full current-state refresh, not permission to merge or to run a
-candidate branch with a privileged token. Keep the five-minute schedule as
-a fallback.
+### Native enforcement status and required owner settings
 
-**Accepted refresh latency (owner decision, #592 review).** Resolving a review
-thread does not grant any workflow extra privilege to wake a controller. The
-readiness status refreshes (a) within seconds to a minute while checks are running,
-through the `workflow_run` chain from CI, Governance Reconcile and the preflights;
-(b) otherwise on the scheduled sweep, which is best-effort: on this repository
-scheduled Merge Readiness runs were observed several hours apart (Oct 2026), so the
-documented `*/5` is nominal; and (c) immediately on demand through the
-`hunter-trusted-recovery` dispatch above. The lower-privilege design is kept on
-purpose; `resolve-finding` holds no `actions: write` and does not dispatch. The previous `workflow_dispatch` on-demand path is intentionally
-not restored because a caller-selected candidate ref is not a trust boundary.
+Enforced natively today (ruleset "Protect main"): required `Quality Gates`, `dependency-review`, `CodeQL` and review-thread resolution. The following need **owner-only ruleset changes** (the available token is read-only; they were not performed): require the `Hunter Merge Readiness` and `Hunter Governance Review` checks, and require an approving review from a code owner for `.github/workflows/**` and the root-of-trust paths. Until then `Hunter Merge Readiness` is *not* deleted: it remains the controller for conditions GitHub cannot express (exact-head Hunter review authority, owner-approval binding). A generic GitHub approval is not treated as the owner's approval, and nothing here authorizes a merge.

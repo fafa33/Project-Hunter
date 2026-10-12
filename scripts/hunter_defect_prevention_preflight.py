@@ -1684,93 +1684,43 @@ def validate_recurring_defect_families(registry: dict[str, Any], lifecycle: dict
 
 
 REVIEWER_COLLECTOR_WORKFLOW = ".github/workflows/hunter-reviewer-collector.yml"
+COLLECTOR_PUBLISHER_WORKFLOW = ".github/workflows/hunter-collector-publisher.yml"
 
-
-_COLLECTOR_GENERATION_EXPRESSION = "${{ github.event.client_payload.generation_id }}"
-#: The collector step's ``run`` is held to a restricted invocation contract instead of
-#: being parsed as shell. It must be one simple command on one line, made only of
-#: plain words and quoted variable expansions, so no newline, ``;``, ``&&``/``||``,
-#: pipe, redirection, subshell, command substitution, backslash continuation,
-#: comment, glob or single-quoted text can hide a second (unbound) invocation. Anything
-#: outside the contract is rejected (fail closed), however harmless it would be.
-_COLLECTOR_SCRIPT = "scripts/hunter_reviewer_collector.py"
+#: The reviewer collector is held to a fixed, least-privilege contract rather than parsed as shell.
+#: Its identity is GitHub's own ``pull_request_target`` event; it can never hold a status or contents
+#: write; it checks out only default-branch code; and its step is one fixed command whose arguments
+#: are the native event's pull request and head. A dispatch payload or a run title is never an input.
 _PYTHON_EXECUTABLE = re.compile(r"python(?:[0-9]+(?:\.[0-9]+)*)?")
-_CONTRACT_CHARACTERS = re.compile(r'[A-Za-z0-9_./:=+@,"${} \t-]*')
-_PLAIN_WORD = re.compile(r"[A-Za-z0-9_./:=+@,-]+")
-_VARIABLE = re.compile(r'"\$(?:\{([A-Za-z_][A-Za-z0-9_]*)\}|([A-Za-z_][A-Za-z0-9_]*))"')
-_GENERATION_PLACEHOLDER = "__HUNTER_GENERATION_EXPRESSION__"
-
-
-def _contract_word(token: str) -> tuple[str, str | None] | None:
-    """Classify one blank-separated word as ``("plain", None)``, ``("var", name)`` (a
-    double-quoted ``"$NAME"``/``"${NAME}"``), ``("expr", None)`` (the double-quoted
-    generation expression) or ``None`` (outside the contract)."""
-
-    if token == f'"{_GENERATION_PLACEHOLDER}"':
-        return "expr", None
-    if '"' not in token and "$" not in token and _PLAIN_WORD.fullmatch(token):
-        return "plain", None
-    match = _VARIABLE.fullmatch(token)  # only a double-quoted expansion: no word splitting or globbing
-    if match:
-        return "var", match.group(1) or match.group(2)
-    return None
-
-
-def _collector_generation_is_bound(run_cmd: str, env: Any) -> bool:
-    """Whether the step's ``run`` is exactly one collector invocation bound to the generation.
-
-    No shell grammar is interpreted: the script must satisfy a restricted contract
-    (see ``_CONTRACT_CHARACTERS``) so that splitting on blanks provably yields the
-    words of a single simple command. That command must be the trusted collector
-    (``scripts/hunter_reviewer_collector.py`` directly or as a python script operand),
-    must carry exactly one ``--generation`` whose value is the dispatched payload
-    expression or a variable this step's ``env`` binds to it, and every other
-    expansion must also be a step ``env`` variable. Because it is one simple command
-    with no assignment words, nothing in the script can rebind the variable.
-    """
-
-    if not isinstance(run_cmd, str) or not isinstance(env, dict):
-        return False
-    script = run_cmd.strip().replace(_COLLECTOR_GENERATION_EXPRESSION, _GENERATION_PLACEHOLDER)
-    if not script or "\n" in script or "\r" in script or not _CONTRACT_CHARACTERS.fullmatch(script):
-        return False
-    if "${{" in script or "}}" in script:  # any other expression is outside the contract
-        return False
-    words = script.split()
-    kinds = [_contract_word(word) for word in words]
-    if any(kind is None for kind in kinds):
-        return False
-    if words[0] == _COLLECTOR_SCRIPT:
-        arguments, argument_kinds = words[1:], kinds[1:]
-    elif (
-        len(words) >= 2
-        and kinds[0] == ("plain", None)
-        and _PYTHON_EXECUTABLE.fullmatch(words[0])
-        and words[1] == _COLLECTOR_SCRIPT
-    ):
-        arguments, argument_kinds = words[2:], kinds[2:]
-    else:
-        return False
-    if any(word.endswith(_COLLECTOR_SCRIPT.rsplit("/", 1)[-1]) for word in arguments):
-        return False  # a second mention of the collector is never part of the contract
-    generation_values: list[tuple[str, str | None] | None] = []
-    for index, word in enumerate(arguments):
-        if word == "--generation":
-            generation_values.append(argument_kinds[index + 1] if index + 1 < len(arguments) else None)
-        elif word.startswith("--generation"):
-            return False  # ``--generation=...`` and similar spellings are outside the contract
-    if len(generation_values) != 1 or generation_values[0] is None:
-        return False
-    kind, name = generation_values[0]
-    if kind == "expr":
-        pass
-    elif kind == "var":
-        if str(env.get(name, "")).strip() != _COLLECTOR_GENERATION_EXPRESSION:
-            return False
-    else:
-        return False
-    # Every expansion must come from this step's own env, never from the runner environment.
-    return all(kind_name[0] != "var" or kind_name[1] in env for kind_name in argument_kinds if kind_name)
+_COLLECTOR_SCRIPT = "scripts/hunter_reviewer_collector.py"
+_COLLECTOR_ARGUMENTS = ("--pr", '"$PR_NUMBER"', "--head", '"$CANDIDATE_HEAD"', "--output", "reviewer-results.json")
+_COLLECTOR_ENV = {
+    "PR_NUMBER": "${{ github.event.pull_request.number }}",
+    "CANDIDATE_HEAD": "${{ github.event.pull_request.head.sha }}",
+}
+_COLLECTOR_EVENT_TYPES = frozenset({"opened", "reopened", "synchronize", "ready_for_review"})
+_COLLECTOR_PERMISSIONS = {"contents": "read", "actions": "write", "pull-requests": "write", "statuses": "read"}
+_PUBLISHER_SCRIPT = "scripts/hunter_collector_publisher.py"
+_PUBLISHER_ARGUMENTS = ("--repository", '"$GITHUB_REPOSITORY"', "--run-id", '"$COLLECTOR_RUN_ID"')
+_PUBLISHER_RUN_ID = "${{ github.event.workflow_run.id }}"
+_PUBLISHER_PERMISSIONS = {
+    "actions": "read",
+    "checks": "read",
+    "contents": "read",
+    "pull-requests": "read",
+    "statuses": "write",
+}
+_TRUSTED_CHECKOUT_REFS = frozenset({"${{ github.sha }}", "${{ github.event.repository.default_branch }}"})
+#: Identity sources that must never reach either workflow: a dispatch payload, a run title, or the
+#: workflow_run payload's own description of the triggering run (the publisher re-reads the run).
+_UNTRUSTED_IDENTITY = (
+    "client_payload",
+    "display_title",
+    "workflow_run.head_sha",
+    "workflow_run.head_branch",
+    "workflow_run.head_repository",
+    "workflow_run.pull_requests",
+)
+_PERMISSION_LEVEL = {"none": 0, "read": 1, "write": 2}
 
 
 def validate_review_after_remediation_boundary() -> list[str]:
@@ -1814,9 +1764,6 @@ def validate_review_after_remediation_boundary() -> list[str]:
         head, claims, "codex", 1, first
     ):
         errors.append("a reviewer invocation identity must be stable within one remediation generation")
-    names = {orchestration.collector_run_name(1, head, item) for item in (base, first, second)}
-    if len(names) != 3 or orchestration.collector_run_name(1, head, base) != orchestration.collector_run_name(1, head):
-        errors.append("the collector run name must correlate one run per remediation generation")
 
     # A separated identity function is not enough: the seam that actually adopts
     # an already-posted reviewer trigger has to consume it, or a superseded
@@ -1865,9 +1812,6 @@ def validate_review_after_remediation_boundary() -> list[str]:
         orchestration.MAX_REMEDIATION_GENERATIONS < 1
     ):
         errors.append("remediation generations must be bounded by a positive budget")
-    cycle = orchestration.ReviewCycle(1, head, "WAITING_FOR_REVIEWER", "", 1, "", "d" * 64, first)
-    if orchestration.remediation_generation_admissible("owner/repo", "", cycle, first) is not False:
-        errors.append("an unchanged remediation generation must never authorise another reviewer invocation")
 
     # (4) Suppressing dispatch for an exact-head Codex clear must use governance's
     # latest-review semantics. Governance keeps only the newest admissible review,
@@ -1907,94 +1851,234 @@ def validate_review_after_remediation_boundary() -> list[str]:
         if "latest_codex_review_is_exact_head_clear" not in source:
             errors.append(f"{module.__name__} must use governance's latest Codex review selection")
 
-    # The generation must be derived where the dispatch decision is made. A
-    # derivation nothing consumes would leave the orchestrator dispatching the
-    # base generation forever, with every identity above still perfectly correct.
+    # The generation must be derived where the collection decision is made. A derivation nothing
+    # consumes would leave the collector reviewing the base generation forever, with every identity
+    # above still perfectly correct.
     try:
-        tree = ast.parse((ROOT / "scripts/hunter_review_orchestrator.py").read_text(encoding="utf-8"))
+        tree = ast.parse((ROOT / "scripts/hunter_reviewer_collector.py").read_text(encoding="utf-8"))
     except (OSError, SyntaxError) as exc:
-        return [*errors, f"trusted review orchestrator source is unreadable: {type(exc).__name__}: {exc}"]
-    ensure_current = next(
-        (n for n in tree.body if isinstance(n, ast.FunctionDef) and n.name == "ensure_current"),
+        return [*errors, f"trusted reviewer collector source is unreadable: {type(exc).__name__}: {exc}"]
+    start_gate = next(
+        (n for n in tree.body if isinstance(n, ast.FunctionDef) and n.name == "verify_native_start"),
         None,
     )
-    if ensure_current is None or not any(
+    if start_gate is None or not any(
         isinstance(node, ast.Call)
-        and isinstance(node.func, ast.Name)
-        and node.func.id == "current_remediation_generation"
-        for node in ast.walk(ensure_current)
+        and isinstance(node.func, ast.Attribute)
+        and node.func.attr == "current_remediation_generation"
+        for node in ast.walk(start_gate)
     ):
-        errors.append("the trusted orchestrator must derive the remediation generation where it decides to dispatch")
+        errors.append("the trusted collector must derive the remediation generation where it decides to collect")
 
-    workflow = ROOT / REVIEWER_COLLECTOR_WORKFLOW
-    try:
-        definition = yaml.safe_load(workflow.read_text(encoding="utf-8"))
-    except (OSError, yaml.YAMLError) as exc:
-        return [*errors, f"reviewer collector workflow is unreadable: {type(exc).__name__}: {exc}"]
-    return [*errors, *validate_collector_workflow_definition(definition)]
+    for path, validate in (
+        (ROOT / REVIEWER_COLLECTOR_WORKFLOW, validate_collector_workflow_definition),
+        (ROOT / COLLECTOR_PUBLISHER_WORKFLOW, validate_collector_publisher_definition),
+    ):
+        try:
+            definition = yaml.safe_load(path.read_text(encoding="utf-8"))
+        except (OSError, yaml.YAMLError) as exc:
+            return [*errors, f"{path.name} is unreadable: {type(exc).__name__}: {exc}"]
+        errors.extend(validate(definition))
+    return errors
 
 
-def validate_collector_workflow_definition(definition: Any) -> list[str]:
-    """Guard errors for a parsed reviewer-collector workflow; never raises on malformed input."""
+def _workflow_triggers(definition: dict[str, Any]) -> Any:
+    """The ``on`` mapping; YAML 1.1 spells an unquoted ``on`` as ``True``, and the two spellings must agree."""
 
-    errors: list[str] = []
-    if not isinstance(definition, dict):
-        return ["reviewer collector workflow must be a YAML mapping"]
-    # YAML 1.1 parses an unquoted top-level ``on`` key as True and a quoted "on" as the string.
-    # Both spell the same trigger; a workflow declaring the two differently is ambiguous.
     declared = [definition[key] for key in (True, "on") if key in definition]
-    triggers = declared[0] if len(declared) == 1 or (len(declared) == 2 and declared[0] == declared[1]) else None
-    # Never accept additional candidate-controlled events, including a bare push or workflow_dispatch.
-    if not isinstance(triggers, dict) or set(triggers) != {"repository_dispatch"}:
-        errors.append("privileged reviewer collector must have exactly the trusted repository_dispatch trigger")
-    else:
-        dispatch = triggers["repository_dispatch"]
-        if not isinstance(dispatch, dict) or dispatch.get("types") != ["hunter-reviewer-collect"]:
-            errors.append("privileged reviewer collector must declare the exact trusted dispatch event list")
+    return declared[0] if len(declared) == 1 or (len(declared) == 2 and declared[0] == declared[1]) else None
 
-    # Find the step that runs the collector script and verify it binds
-    # --generation to github.event.client_payload.generation_id.
-    # A loose text search is insufficient; the expression must appear in the
-    # same step that invokes the collector, either directly in the run command
-    # or via an env var defined in that step.
-    jobs = definition.get("jobs")
-    if not isinstance(jobs, dict):
-        return [*errors, "reviewer collector workflow must declare its jobs as a mapping"]
-    placed = [
+
+def _workflow_steps(jobs: dict[str, Any]) -> list[tuple[dict[str, Any], dict[str, Any]]]:
+    return [
         (job, step)
         for job in jobs.values()
         if isinstance(job, dict) and isinstance(job.get("steps"), list)
         for step in job["steps"]
         if isinstance(step, dict)
     ]
-    # A step references the collector when the name appears anywhere it can reach the shell: the
-    # command, its environment, or its inputs. An indirect reference (``env: SCRIPT=...`` with
-    # ``python "$SCRIPT"``) is therefore held to the same contract, and cannot satisfy it because the
-    # contract needs the literal trusted script in the command itself.
+
+
+def _permission_errors(scopes: list[Any], allowed: dict[str, str], label: str) -> list[str]:
+    """Every permission mapping in ``scopes`` must stay at or below ``allowed``; anything else fails closed."""
+
+    errors: list[str] = []
+    for scope in scopes:
+        if scope is None:
+            continue
+        if not isinstance(scope, dict):
+            errors.append(f"{label} permissions must be an explicit mapping, never a blanket grant")
+            continue
+        for name, level in scope.items():
+            ceiling = _PERMISSION_LEVEL.get(allowed.get(str(name), "none"), 0)
+            if _PERMISSION_LEVEL.get(str(level), 3) > ceiling:
+                errors.append(f"{label} must not hold {name}: {level}")
+    return errors
+
+
+def _checkout_errors(steps: list[tuple[dict[str, Any], dict[str, Any]]], label: str) -> list[str]:
+    """Checkouts must pin trusted default-branch code and persist no credentials."""
+
+    errors: list[str] = []
+    checkouts = [step for _job, step in steps if str(step.get("uses") or "").startswith("actions/checkout")]
+    if not checkouts:
+        errors.append(f"{label} must check out the trusted default-branch code")
+    for step in checkouts:
+        options = step.get("with") if isinstance(step.get("with"), dict) else {}
+        if str(options.get("ref") or "").strip() not in _TRUSTED_CHECKOUT_REFS:
+            errors.append(f"{label} must check out only the trusted default-branch revision, never candidate content")
+        if options.get("persist-credentials") is not False:
+            errors.append(f"{label} checkout must not persist credentials")
+    return errors
+
+
+def _one_command(run: Any, script: str, arguments: tuple[str, ...]) -> bool:
+    """Whether ``run`` is exactly one fixed command: ``[python] script arguments`` on a single line."""
+
+    if not isinstance(run, str):
+        return False
+    text = run.strip()
+    if not text or "\n" in text or "\r" in text:
+        return False
+    words = text.split()
+    if words and words[0] == script:
+        words = words[1:]
+    elif len(words) >= 2 and _PYTHON_EXECUTABLE.fullmatch(words[0]) and words[1] == script:
+        words = words[2:]
+    else:
+        return False
+    return tuple(words) == arguments
+
+
+def _untrusted_identity_errors(definition: Any, label: str) -> list[str]:
+    text = yaml.safe_dump(definition, sort_keys=True)
+    return [f"{label} must not take identity from {name}" for name in _UNTRUSTED_IDENTITY if name in text]
+
+
+def validate_collector_workflow_definition(definition: Any) -> list[str]:
+    """Guard errors for the parsed reviewer-collector workflow; never raises on malformed input.
+
+    The collector is the least-privileged half of the native model: it is entered only through
+    GitHub's ``pull_request_target`` event, holds no status or contents write, checks out only
+    default-branch code and runs one fixed command on the event's own pull request and head.
+    """
+
+    label = "the reviewer collector"
+    if not isinstance(definition, dict):
+        return ["reviewer collector workflow must be a YAML mapping"]
+    errors: list[str] = []
+    triggers = _workflow_triggers(definition)
+    if not isinstance(triggers, dict) or set(triggers) != {"pull_request_target"}:
+        errors.append("the reviewer collector must have exactly the GitHub-native pull_request_target trigger")
+    else:
+        options = triggers["pull_request_target"]
+        types = options.get("types") if isinstance(options, dict) else None
+        if (
+            not isinstance(options, dict)
+            or options.get("branches") != ["main"]
+            or not isinstance(types, list)
+            or not types
+            or not set(types) <= _COLLECTOR_EVENT_TYPES
+        ):
+            errors.append("the reviewer collector must declare main-only branches and only its approved event types")
+    jobs = definition.get("jobs")
+    if not isinstance(jobs, dict):
+        return [*errors, "reviewer collector workflow must declare its jobs as a mapping"]
+    errors.extend(
+        _permission_errors(
+            [
+                definition.get("permissions"),
+                *[job.get("permissions") for job in jobs.values() if isinstance(job, dict)],
+            ],
+            _COLLECTOR_PERMISSIONS,
+            label,
+        )
+    )
+    if not isinstance(definition.get("permissions"), dict):
+        errors.append(f"{label} must declare its permissions explicitly")
+    steps = _workflow_steps(jobs)
+    errors.extend(_checkout_errors(steps, label))
+    errors.extend(_untrusted_identity_errors(definition, label))
     collector_steps = [
-        (job, step)
-        for job, step in placed
+        step
+        for _job, step in steps
         if "hunter_reviewer_collector" in " ".join(str(step.get(field) or "") for field in ("run", "env", "with"))
     ]
-    if not collector_steps:
-        errors.append("reviewer collector workflow must contain a step that runs hunter_reviewer_collector.py")
+    if len(collector_steps) != 1:
+        errors.append("the reviewer collector must have exactly one step that references hunter_reviewer_collector.py")
     else:
-        # Every collector invocation must forward the generation, and the value
-        # that actually reaches ``--generation`` must be the dispatched one. The
-        # command is tokenised so a variable that is merely mentioned elsewhere
-        # in the script, or a flag belonging to another command, cannot satisfy it.
-        for job, step in collector_steps:
-            env = step.get("env")
-            # Defaults reach the step from the workflow and from its own job only; another job's
-            # defaults cannot change how this step runs.
-            if "shell" in step or any(isinstance(scope.get("defaults"), dict) for scope in (definition, job)):
-                errors.append("the reviewer collector step must run under the default shell")
-                continue
-            if not _collector_generation_is_bound(str(step.get("run") or ""), env if isinstance(env, dict) else {}):
-                errors.append(
-                    "the reviewer collector workflow must forward the remediation generation "
-                    "to the collector via --generation with github.event.client_payload.generation_id"
-                )
+        step = collector_steps[0]
+        env = step.get("env") if isinstance(step.get("env"), dict) else {}
+        if "shell" in step or any(
+            isinstance(scope.get("defaults"), dict)
+            for _job, scope in [(None, definition), *[(None, job) for job in jobs.values() if isinstance(job, dict)]]
+        ):
+            errors.append("the reviewer collector step must run under the default shell")
+        if any(str(env.get(name, "")).strip() != value for name, value in _COLLECTOR_ENV.items()):
+            errors.append("the reviewer collector must take its pull request and head only from the native event")
+        if not _one_command(step.get("run"), _COLLECTOR_SCRIPT, _COLLECTOR_ARGUMENTS):
+            errors.append(
+                "the reviewer collector step must be exactly one fixed collector command on the event identity"
+            )
+    return errors
+
+
+def validate_collector_publisher_definition(definition: Any) -> list[str]:
+    """Guard errors for the parsed trusted result-publisher workflow; never raises on malformed input.
+
+    The publisher is the one place a collector result becomes a Hunter result. It is entered only by
+    ``workflow_run`` of the collector, runs only default-branch code, and takes only the triggering
+    run's id from the event: the run, receipt and pull request are all re-read and verified.
+    """
+
+    label = "the collector result publisher"
+    if not isinstance(definition, dict):
+        return ["collector result publisher workflow must be a YAML mapping"]
+    errors: list[str] = []
+    triggers = _workflow_triggers(definition)
+    expected = {"workflows": ["Hunter Reviewer Collector"], "types": ["completed"]}
+    if not isinstance(triggers, dict) or set(triggers) != {"workflow_run"} or triggers["workflow_run"] != expected:
+        errors.append("the collector result publisher must trigger only on completion of the reviewer collector")
+    jobs = definition.get("jobs")
+    if not isinstance(jobs, dict):
+        return [*errors, "collector result publisher workflow must declare its jobs as a mapping"]
+    errors.extend(
+        _permission_errors(
+            [
+                definition.get("permissions"),
+                *[job.get("permissions") for job in jobs.values() if isinstance(job, dict)],
+            ],
+            _PUBLISHER_PERMISSIONS,
+            label,
+        )
+    )
+    if not isinstance(definition.get("permissions"), dict):
+        errors.append(f"{label} must declare its permissions explicitly")
+    steps = _workflow_steps(jobs)
+    errors.extend(_checkout_errors(steps, label))
+    errors.extend(_untrusted_identity_errors(definition, label))
+    for job in jobs.values():
+        condition = " ".join(str(job.get("if") or "").split()) if isinstance(job, dict) else ""
+        if (
+            "workflow_run.conclusion == 'success'" not in condition
+            or "workflow_run.event == 'pull_request_target'" not in condition
+        ):
+            errors.append(
+                "the collector result publisher must run only for a successful pull_request_target collector run"
+            )
+    publishers = [
+        step
+        for _job, step in steps
+        if "hunter_collector_publisher" in " ".join(str(step.get(f) or "") for f in ("run", "env", "with"))
+    ]
+    if len(publishers) != 1:
+        errors.append("the collector result publisher must have exactly one publishing step")
+    else:
+        env = publishers[0].get("env") if isinstance(publishers[0].get("env"), dict) else {}
+        if str(env.get("COLLECTOR_RUN_ID", "")).strip() != _PUBLISHER_RUN_ID:
+            errors.append("the collector result publisher must take only the triggering run id from the event")
+        if not _one_command(publishers[0].get("run"), _PUBLISHER_SCRIPT, _PUBLISHER_ARGUMENTS):
+            errors.append("the collector result publisher step must be exactly one fixed publisher command")
     return errors
 
 

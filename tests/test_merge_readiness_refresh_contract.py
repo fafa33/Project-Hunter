@@ -20,12 +20,14 @@ def triggers(document):
     return document.get(True) or document.get("on")  # YAML 1.1 reads the bare key `on` as True
 
 
-def test_both_controllers_have_the_scheduled_sweep_and_the_trusted_recovery_wakeup():
-    for name in ("hunter-merge-readiness.yml", "hunter-governance-reconcile.yml"):
-        on = triggers(load(name))
-        assert on["schedule"] == [{"cron": "*/5 * * * *"}], name
-        assert on["repository_dispatch"]["types"] == ["hunter-trusted-recovery"], name
-        assert "workflow_dispatch" not in on, name  # a caller-selected ref is not a trust boundary
+def test_merge_readiness_has_native_wakeups_and_no_dispatch_recovery():
+    on = triggers(load("hunter-merge-readiness.yml"))
+    assert "pull_request_target" in on and "workflow_run" in on
+    assert "Hunter Collector Result Publisher" in on["workflow_run"]["workflows"]
+    assert on["schedule"] == [{"cron": "*/5 * * * *"}]
+    # Recovery is GitHub's own "Re-run all jobs": no dispatch event, no caller-selected ref.
+    assert "repository_dispatch" not in on and "workflow_dispatch" not in on
+    assert not (WORKFLOWS / "hunter-governance-reconcile.yml").exists()
 
 
 def test_merge_readiness_controller_holds_no_write_access_beyond_its_status():
@@ -45,18 +47,16 @@ def test_resolving_a_finding_neither_dispatches_nor_gains_actions_write():
     assert "merge readiness refresh deferred to trusted scheduled sweep" in code
 
 
-def test_the_latency_is_documented_as_best_effort_not_as_five_minutes():
+def test_the_latency_and_recovery_are_documented_as_best_effort_native_rerun():
     audit = (ROOT / "docs/ARCHITECTURE_AUDITS/HUNTER_FAST_MERGE_M1.md").read_text(encoding="utf-8")
     assert "not a freshness guarantee" in audit
-    assert "Accepted refresh latency" in audit and "hunter-trusted-recovery" in audit
-    reconcile = (WORKFLOWS / "hunter-governance-reconcile.yml").read_text(encoding="utf-8")
-    assert "not a freshness guarantee" in reconcile
+    assert "Re-run all jobs" in audit and "fails closed" in audit
+    assert "hunter-trusted-recovery" in audit  # named only as removed
+    assert "owner-only ruleset changes" in audit
 
 
-def test_privileged_recovery_wakeup_requires_repository_owner_sender():
-    for name, job in (("hunter-merge-readiness.yml", "controller"), ("hunter-governance-reconcile.yml", "reconcile")):
-        workflow = load(name)
-        condition = workflow["jobs"][job]["if"]
-        assert "github.event_name != 'repository_dispatch'" in condition, name
-        assert "github.event.sender.login == github.repository_owner" in condition, name
-        assert triggers(workflow)["schedule"] == [{"cron": "*/5 * * * *"}], name
+def test_no_privileged_workflow_accepts_a_dispatch_payload_or_runs_on_a_dispatch_event():
+    for path in sorted(WORKFLOWS.glob("hunter-*.yml")):
+        on = triggers(yaml.safe_load(path.read_text(encoding="utf-8"))) or {}
+        if path.name in {"hunter-merge-readiness.yml", "hunter-governance-review.yml", "hunter-reviewer-collector.yml"}:
+            assert "repository_dispatch" not in on and "workflow_dispatch" not in on, path.name

@@ -50,6 +50,20 @@ Current `CHANGES_REQUESTED` and unresolved substantive inline findings block. No
 
 If the governing Issue genuinely requires live acquisition, migration, persistence/replay, or other operational behavior, that requirement must actually be satisfied before human merge approval. No particular PR-body formatting is required to prove it.
 
+## Native enforcement and the retained controller (#592)
+
+Native GitHub enforcement (ruleset "Protect main") currently covers the required `Quality Gates`, `dependency-review` and `CodeQL` checks and review-thread resolution. `Hunter Merge Readiness` is **not** removed yet: it still aggregates conditions GitHub cannot express (exact-head Hunter review authority and candidate admission, owner-approval binding). It is retired only after the owner applies and verifies the ruleset changes below; until then nothing in this change weakens the merge contract.
+
+Owner-only ruleset settings still required (not performed from automation; the available token is read-only):
+
+1. require the `Hunter Merge Readiness` and `Hunter Governance Review` status checks;
+2. require an approving review from a code owner for `.github/workflows/**` and the root-of-trust paths in `docs/CODE_WRITE_POLICY.json`;
+3. keep review-thread resolution required.
+
+A generic GitHub approval is not treated as the repository owner's approval, and a published status is never merge authority. The one reviewer-result publisher is `Hunter Collector Result Publisher`; the collector certifies nothing and a missing result stays pending (fail closed). Recovery is GitHub's native "Re-run all jobs" or a new push (see `docs/ARCHITECTURE_AUDITS/HUNTER_FAST_MERGE_M1.md`).
+
+Known legacy decisions: the retained five-minute schedule is a recovery path, not a freshness guarantee; the tracked `hunter-governance-shadow` workflow keeps comparing old and new decisions without being a gate, and any disagreement it reports is treated as a defect to explain, not as authority.
+
 ## Final rule
 
 Do not merge until all required checks on the final code head are green and no real blocker remains. Automation reports readiness; a human performs the merge.

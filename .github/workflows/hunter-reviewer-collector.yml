@@ -1,37 +1,47 @@
 name: Hunter Reviewer Collector
 
-run-name: >-
-  Hunter Reviewer Collector PR ${{ github.event.client_payload.pr_number }} HEAD ${{ github.event.client_payload.head_sha }}${{
-  github.event.client_payload.generation_id && format(' GEN {0}', github.event.client_payload.generation_id) || '' }}
+# Display only: nothing parses this title. Identity is the pull_request_target event GitHub
+# delivered, re-verified against fresh API state, and the receipt this run uploads.
+run-name: Hunter Reviewer Collector PR ${{ github.event.pull_request.number }}
 
-# This privileged workflow is loaded from default branch only.
-# Candidate-selected workflow_dispatch refs are forbidden.
+# Least privilege, by design. This workflow is resolved from the default branch (pull_request_target)
+# and checks out only default-branch code, never the candidate. It invokes the configured reviewers
+# and uploads a receipt. It holds NO status write and no contents write: it cannot certify its own
+# evidence and cannot create refs or tags. The small trusted publisher
+# (hunter-collector-publisher.yml) verifies this run, its receipt and the current pull request
+# before it publishes anything.
+#
+# Recovery of a lost, cancelled or timed-out run is GitHub's own "Re-run all jobs" on this run (or a
+# new push). A missing result is simply pending: it fails closed, and nothing polls or fabricates
+# a completion.
 on:
-  repository_dispatch:
-    types: [hunter-reviewer-collect]
+  pull_request_target:
+    branches:
+      - main
+    types:
+      - opened
+      - reopened
+      - synchronize
+      - ready_for_review
 
-# The collector may dispatch reviewer workflows but must never publish trusted
-# completion statuses on a candidate head. It uploads the result receipt and
-# dispatch proof; the trusted default-branch reconcile workflow verifies the
-# run, attempt and evidence before publishing completion.
 permissions:
-  contents: write # required for atomic create-only claim tag
-  actions: write
-  pull-requests: write
-  # Read-only: the pre-work gate reads the trusted dispatch-proof status history.
-  # Never `write`: this collector must not be able to mint trusted statuses.
-  statuses: read
+  contents: read
+  actions: write # dispatch the configured workflow reviewers
+  pull-requests: write # reviewer trigger comments
+  statuses: read # read the trusted prerequisite status; never write
 
 concurrency:
-  group: hunter-reviewer-collector-${{ github.event.client_payload.pr_number }}
-  cancel-in-progress: false
+  # A newer event for the same pull request supersedes an older run natively.
+  group: hunter-reviewer-collector-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
 
 jobs:
   collect:
-    if: github.ref == format('refs/heads/{0}', github.event.repository.default_branch)
+    if: >-
+      github.event.pull_request.draft == false
+      && github.ref == format('refs/heads/{0}', github.event.repository.default_branch)
     runs-on: ubuntu-latest
-    # Global independent-review opportunity budget. Completion triggers trusted
-    # reconcile, which finalizes timeout/unavailability without blocking.
+    # Global independent-review opportunity budget.
     #
     # PR #535 live evidence: this must never be shorter than the worst case every enabled
     # reviewer in docs/CODE_WRITE_POLICY.json's reviewer_pool can spend before
@@ -54,29 +64,13 @@ jobs:
           GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
           GROQ_API_KEY: ${{ secrets.GROQ_API_KEY }}
           GITHUB_EVENT_NAME: ${{ github.event_name }}
-          PR_NUMBER: ${{ github.event.client_payload.pr_number }}
-          CANDIDATE_HEAD: ${{ github.event.client_payload.head_sha }}
-          REMEDIATION_GENERATION: ${{ github.event.client_payload.generation_id }}
-          COLLECTOR_DISPATCH_PROOF: ${{ github.event.client_payload.dispatch_proof }}
-          COLLECTOR_RECOVERY_EPOCH: ${{ github.event.client_payload.recovery_epoch }}
-        run: >-
-          python scripts/hunter_reviewer_collector.py
-          --pr "$PR_NUMBER" --head "$CANDIDATE_HEAD"
-          --generation "$REMEDIATION_GENERATION"
-          --output reviewer-results.json
-      - name: Save opaque dispatch capability for trusted completion
-        env:
-          DISPATCH_PROOF: ${{ github.event.client_payload.dispatch_proof }}
-        run: printf '%s' "$DISPATCH_PROOF" > collector-dispatch-proof.txt
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+          CANDIDATE_HEAD: ${{ github.event.pull_request.head.sha }}
+        run: python scripts/hunter_reviewer_collector.py --pr "$PR_NUMBER" --head "$CANDIDATE_HEAD" --output reviewer-results.json
       - uses: actions/upload-artifact@v4
         with:
-          name: hunter-reviewer-results-${{ github.event.client_payload.head_sha }}-${{ github.run_attempt }}
+          name: hunter-reviewer-results-${{ github.event.pull_request.head.sha }}-${{ github.run_attempt }}
           path: reviewer-results.json
-          if-no-files-found: error
-          retention-days: 30
-      - uses: actions/upload-artifact@v4
-        with:
-          name: hunter-dispatch-proof-${{ github.event.client_payload.head_sha }}-${{ github.run_attempt }}
-          path: collector-dispatch-proof.txt
-          if-no-files-found: error
+          # A deliberate skip (draft, superseded head, unusable review request) writes no receipt.
+          if-no-files-found: ignore
           retention-days: 30

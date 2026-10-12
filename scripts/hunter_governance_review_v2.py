@@ -711,41 +711,27 @@ def reviewer_identity_map(pool: dict[str, Any]) -> dict[str, str]:
 
 
 def trusted_collector_run(repository: str, token: str, trigger: dict[str, Any], pr_number: int) -> bool:
-    """Require reviewer trigger identity to originate from Hunter's trusted collector workflow."""
-    from hunter_reviewer_collector import WORKFLOW, _run_on_default_branch_history, valid_run
+    """Require reviewer trigger identity to originate from Hunter's trusted collector workflow.
+
+    The actual run is re-read from GitHub (collector workflow, ``pull_request_target`` event,
+    default branch, completed and successful) and its integrity-checked receipt must name this
+    exact pull request, head, claims and remediation generation. A run title, a dispatch payload
+    or an artifact alone never qualifies. Anything unreadable or inconsistent is refused.
+    """
+    from hunter_reviewer_collector import verified_collector_receipt
 
     run_id = trigger.get("collector_run_id")
     attempt = trigger.get("collector_run_attempt")
-    if type(run_id) is not int or type(attempt) is not int:
+    head = str(trigger.get("head_sha") or "")
+    if type(run_id) is not int or type(attempt) is not int or not _is_commit_sha(head):
         return False
     try:
-        repo = request_json(repository, token, "GET", "")
-        run = request_json(repository, token, "GET", f"actions/runs/{run_id}")
-        if not isinstance(repo, dict) or not isinstance(run, dict):
-            return False
-        branch = str(repo.get("default_branch") or "")
-        revision = str(run.get("head_sha") or "")
-        if not (
-            run.get("path") == WORKFLOW
-            and run.get("run_attempt") == attempt
-            and valid_run(run, run_id, branch, revision)
-            and _run_on_default_branch_history(repository, token, branch, revision)
-        ):
-            return False
-        # The same canonical authority check as the collector's receipt loader: the
-        # run must hold the current epoch's binding and atomic run claim for this
-        # attempt. Unreadable or missing evidence is refused.
-        import hunter_review_orchestrator as orchestration
-
-        orchestration.collector_run_authority(
-            repository,
-            token,
-            run,
-            pr_number=pr_number,
-            head_sha=str(trigger.get("head_sha") or ""),
-            generation=str(trigger.get("remediation_generation_id") or orchestration.BASE_GENERATION_ID),
+        run, receipt = verified_collector_receipt(repository, token, run_id, pr_number, head)
+        return (
+            run.get("run_attempt") == attempt
+            and receipt.get("claims_id") == trigger.get("claims_id")
+            and receipt.get("remediation_generation_id") == str(trigger.get("remediation_generation_id") or "")
         )
-        return True
     except Exception:
         return False
 

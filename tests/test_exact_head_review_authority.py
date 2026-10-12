@@ -1230,7 +1230,6 @@ def test_every_hosted_review_consumer_can_read_collector_and_guard_evidence():
     expected = {
         "hunter-candidate-admission.yml": {"actions": "read", "checks": "read"},
         "hunter-governance-review.yml": {"actions": "read", "checks": "read"},
-        "hunter-governance-reconcile.yml": {"actions": "write", "checks": "read"},
         "hunter-merge-readiness.yml": {"actions": "read", "checks": "read"},
     }
     for filename, permissions in expected.items():
