@@ -176,10 +176,35 @@ def candidate_input_closure(candidate_root: Path, scenario_id: str, contract_ver
 
 
 def candidate_module_digest(candidate_root: Path, scenario_id: str, contract_version: str) -> str:
-    payload = {
-        relative: read_candidate_text(candidate_root, relative)
-        for relative in candidate_input_closure(candidate_root, scenario_id, contract_version)
-    }
+    """Bind all candidate-controlled files, including dynamic imports and data reads.
+
+    A static import walk is not a complete execution dependency closure: Python
+    permits importlib calls and arbitrary file reads. In addition to requiring
+    all known controller modules and configs, hash the entire candidate tree,
+    not just AST-detected imports. Ephemeral Git/bytecode caches are explicitly
+    excluded; they cannot be imported as source or treated as governed input.
+    In hosted replay, candidate execution is also under a non-owner account
+    so the candidate cannot rewrite the tree between hashing and execution.
+    """
+    declared = candidate_input_closure(candidate_root, scenario_id, contract_version)
+    excluded = {".git", "__pycache__", ".pytest_cache", ".mypy_cache", ".ruff_cache", ".venv"}
+    root = candidate_root.resolve(strict=True)
+    payload: dict[str, str] = {}
+    for current, dirs, files in os.walk(root, followlinks=False):
+        current_path = Path(current)
+        dirs[:] = sorted(name for name in dirs if name not in excluded)
+        for name in dirs:
+            if (current_path / name).is_symlink():
+                raise ValueError(f"candidate directory is a symlink: {current_path / name}")
+        for name in sorted(files):
+            if name in {".DS_Store"} or name.endswith((".pyc", ".pyo")):
+                continue
+            absolute = current_path / name
+            relative = absolute.relative_to(root).as_posix()
+            safe = resolve_candidate_file(root, relative)
+            payload[relative] = hashlib.sha256(safe.read_bytes()).hexdigest()
+    if not set(declared) <= payload.keys():
+        raise ValueError("declared replay dependencies missing from complete candidate tree")
     encoded = json.dumps(payload, sort_keys=True, separators=(",", ":"), ensure_ascii=False).encode("utf-8")
     return hashlib.sha256(encoded).hexdigest()
 
@@ -643,6 +668,7 @@ def scenario_b_v2(candidate_root: Path, fixture: dict[str, Any]) -> dict[str, An
             pr_number=pr_number,
             head_sha=head,
             run_id=run_id,
+            run_attempt=1,
             claims_id="c" * 64,
             generation_id="",
             pool={},

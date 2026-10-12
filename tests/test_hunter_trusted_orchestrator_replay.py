@@ -1986,3 +1986,33 @@ def test_v2_scenario_rejects_removed_trusted_run_revision_binding(tmp_path):
     version, error = _fails_contract_aware(tmp_path, (mutation,), scenario="A", v2=True)
     assert version == "v2"
     assert "unrelated commit" in error
+
+
+def test_digest_binds_dynamic_candidate_import_and_direct_file_read(tmp_path):
+    root = _candidate_root(tmp_path, v2=True)
+    from hunter_trusted_orchestrator_replay_worker import candidate_module_digest
+
+    script = root / "scripts/hunter_review_orchestrator.py"
+    script.write_text(
+        script.read_text(encoding="utf-8") + "\nimport importlib\nimportlib.import_module('dynamic_probe')\n",
+        encoding="utf-8",
+    )
+    dynamic = root / "scripts/dynamic_probe.py"
+    dynamic.write_text("VALUE = 1\n", encoding="utf-8")
+    direct_file = root / "custom-runtime-settings.json"
+    direct_file.write_text('{"mode":"safe"}', encoding="utf-8")
+    first = candidate_module_digest(root, "A", "v2")
+    dynamic.write_text("VALUE = 2\n", encoding="utf-8")
+    assert candidate_module_digest(root, "A", "v2") != first
+    second = candidate_module_digest(root, "A", "v2")
+    direct_file.write_text('{"mode":"unsafe"}', encoding="utf-8")
+    assert candidate_module_digest(root, "A", "v2") != second
+
+
+def test_digest_refuses_untrusted_symlink_in_dynamic_candidate_input(tmp_path):
+    root = _candidate_root(tmp_path, v2=True)
+    from hunter_trusted_orchestrator_replay_worker import candidate_module_digest
+
+    (root / "dynamic-external.json").symlink_to(REPO_ROOT / "docs/CODE_WRITE_POLICY.json")
+    with pytest.raises(ValueError, match="symlink"):
+        candidate_module_digest(root, "A", "v2")

@@ -948,6 +948,7 @@ def pool_exhaustion(
     pr_number: int,
     head_sha: str,
     run_id: int,
+    run_attempt: int,
     claims_id: str,
     generation_id: str,
     pool: dict[str, Any],
@@ -970,6 +971,7 @@ def pool_exhaustion(
         pr_number=pr_number,
         head_sha=head_sha,
         run_id=run_id,
+        run_attempt=run_attempt,
         generation_id=generation_id,
     )
     if problem:
@@ -1060,6 +1062,12 @@ def finalize_exhausted_pool(
         return "SKIPPED: exact head is not a full SHA"
     if current_run_id() != run_id:
         return "SKIPPED: the completing run is not this process's run"
+    # Only the runner's authenticated environment can supply the current
+    # attempt. Never infer it from the untrusted collector receipt itself.
+    raw_attempt = os.environ.get("GITHUB_RUN_ATTEMPT", "")
+    if not re.fullmatch(r"[1-9][0-9]*", raw_attempt):
+        return "SKIPPED: trusted run attempt is unavailable or malformed"
+    run_attempt = int(raw_attempt)
     receipt, unreadable = read_collector_receipt(results_path)
     if receipt is None:
         return f"SKIPPED: {unreadable}"
@@ -1077,6 +1085,7 @@ def finalize_exhausted_pool(
         pr_number=pr_number,
         head_sha=head_sha,
         run_id=run_id,
+        run_attempt=run_attempt,
         claims_id=readiness.claims_id,
         generation_id=generation,
         pool=pool,

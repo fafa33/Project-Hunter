@@ -92,6 +92,7 @@ def verdict(receipt: Any, **overrides: Any) -> orchestrator.PoolExhaustion:
         "pr_number": PR,
         "head_sha": HEAD,
         "run_id": RUN_ID,
+        "run_attempt": 1,
         "claims_id": CLAIMS,
         "generation_id": GENERATION,
         "pool": _pool(),
@@ -222,6 +223,7 @@ class Harness:
         self.dispatches = 0
         self.reads = 0
         self.cycles = cycles if cycles is not None else [self.open_cycle()]
+        monkeypatch.setenv("GITHUB_RUN_ATTEMPT", "1")
         self.path = tmp_path / "reviewer-results.json"
         self.path.write_text(json.dumps(make_receipt() if receipt is None else receipt), encoding="utf-8")
         monkeypatch.setattr(orchestrator, "current_run_id", lambda: RUN_ID)
@@ -390,7 +392,8 @@ def _status_world(
         "created_at": "2026-10-08T10:44:50Z",
         "target_url": f"https://github.com/{REPOSITORY}/actions/runs/{RUN_ID}",
     }
-    run = {"head_branch": "main", "path": run_path, "event": event}
+    trusted_main_sha = "d" * 40
+    run = {"head_branch": "main", "head_sha": trusted_main_sha, "path": run_path, "event": event}
 
     def fake(repository, token, method, path, payload=None):
         if path == f"pulls/{PR}":
@@ -399,6 +402,8 @@ def _status_world(
             return [status]
         if path == "":
             return {"default_branch": "main"}
+        if path == "commits/main":
+            return {"sha": trusted_main_sha}
         if path == f"actions/runs/{RUN_ID}":
             return run
         raise AssertionError(path)
@@ -496,3 +501,18 @@ def test_collector_receipt_rejects_symlink_outside_working_directory(tmp_path):
     receipt, reason = orchestrator.read_collector_receipt(symlink)
     assert receipt is None
     assert "missing or too large" in reason
+
+
+def test_exhaustion_rejects_receipt_from_another_run_attempt():
+    assert verdict(make_receipt(run_attempt=1), run_attempt=2).exhausted is False
+    assert verdict(make_receipt(run_attempt=2), run_attempt=2).exhausted is True
+
+
+def test_collector_finalization_requires_trusted_attempt_environment(monkeypatch, tmp_path):
+    harness = Harness(monkeypatch, tmp_path)
+    monkeypatch.delenv("GITHUB_RUN_ATTEMPT")
+    assert "trusted run attempt" in harness.run()
+    assert harness.published == []
+    monkeypatch.setenv("GITHUB_RUN_ATTEMPT", "2")
+    assert "run_attempt" in harness.run()
+    assert harness.published == []

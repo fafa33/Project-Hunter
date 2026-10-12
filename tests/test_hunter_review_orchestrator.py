@@ -2063,6 +2063,7 @@ def test_pool_exhaustion_uses_native_receipt_validator(monkeypatch):
         pr_number=472,
         head_sha=HEAD,
         run_id=123,
+        run_attempt=1,
         claims_id="d" * 64,
         generation_id="",
         pool={},
