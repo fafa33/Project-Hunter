@@ -259,6 +259,9 @@ def _candidate_root(
     _write(orchestrator_path, source)
     if governance_src is not None:
         _write(root / "scripts" / "hunter_governance_review_v2.py", governance_src)
+    # Isolated candidate must have its own Git identity: never borrow the host HEAD.
+    subprocess.run(["git", "init", "-q", str(root)], check=True, capture_output=True)
+    subprocess.run(["git", "-C", str(root), "-c", "user.name=Replay Fixture", "-c", "user.email=replay@example.invalid", "-c", "commit.gpgsign=false", "commit", "--allow-empty", "-qm", "fixture"], check=True, capture_output=True)
     return root
 
 
@@ -366,6 +369,8 @@ def test_scenario_a_fails_when_the_opportunity_is_effectively_unbounded(tmp_path
 
 def test_scenario_a_fails_when_the_collector_is_trusted_as_a_publisher(tmp_path):
     """The collector holds no status write and certifies nothing (v2 only)."""
+    if _detect_contract_version_once(tmp_path) == "v1":
+        pytest.skip("v2-only publisher invariant")
     contract_version, error = _fails_contract_aware(tmp_path, (TRUSTS_THE_COLLECTOR_AS_A_PUBLISHER,), scenario="A")
     if contract_version == "v2":
         assert "citing the collector run must never be a cycle" in error
@@ -376,6 +381,8 @@ def test_scenario_a_fails_when_the_collector_is_trusted_as_a_publisher(tmp_path)
 
 def test_scenario_a_fails_when_a_run_off_the_default_branch_can_vouch_for_a_cycle(tmp_path):
     """v2 only: a run off the default branch must not vouch for a cycle."""
+    if _detect_contract_version_once(tmp_path) == "v1":
+        pytest.skip("v2-only branch invariant")
     contract_version, error = _fails_contract_aware(tmp_path, (DROPS_THE_DEFAULT_BRANCH_BINDING,), scenario="A")
     if contract_version == "v2":
         assert "off the default branch" in error
@@ -385,6 +392,8 @@ def test_scenario_a_fails_when_a_run_off_the_default_branch_can_vouch_for_a_cycl
 
 def test_scenario_a_fails_when_any_workflow_can_vouch_for_a_cycle(tmp_path):
     """v2 only: any workflow must not vouch for a cycle."""
+    if _detect_contract_version_once(tmp_path) == "v1":
+        pytest.skip("v2-only workflow invariant")
     contract_version, error = _fails_contract_aware(tmp_path, (DROPS_THE_TRUSTED_WORKFLOW_BINDING,), scenario="A")
     if contract_version == "v2":
         assert "must never be a cycle" in error
@@ -413,6 +422,8 @@ def test_scenario_b_passes_against_real_production(tmp_path):
 )
 def test_scenario_b_fails_when_a_receipt_is_usable_beyond_the_run_it_names(tmp_path, mutation):
     """v2 only: receipt validation contract."""
+    if _detect_contract_version_once(tmp_path) == "v1":
+        pytest.skip("v2-only receipt invariant")
     contract_version, error = _fails_contract_aware(tmp_path, (mutation,), scenario="B")
     if contract_version == "v2":
         assert "receipts must be refused for" in error
@@ -428,7 +439,6 @@ def test_scenario_fails_against_a_candidate_that_forges_a_passing_payload_and_ex
     the harness reports fail rather than being fooled by forged stdout."""
 
     root = _candidate_root(tmp_path, orchestrator_src=HOSTILE_EARLY_EXIT_ORCHESTRATOR)
-    contract_version = _get_contract_version(root)
     # This test works for both contracts since it tests the isolation mechanism
     result = replay._run_scenario("B", root, _fixture_path(tmp_path), workspace_root=tmp_path)
     assert result["outcome"] == "fail"
@@ -478,27 +488,13 @@ def test_scenario_set_digest_is_deterministic_and_content_sensitive(monkeypatch)
         second = replay.scenario_set_digest(contract_version)
         assert first == second, f"contract {contract_version}: digest not deterministic"
 
-        # Test content sensitivity by mutating invariants at the definition level
-        # We need to mutate the actual definition JSON since SCENARIO_INVARIANTS is no longer a module attribute
-        import json
-        definition_path = REPO_ROOT / "scripts" / "hunter_trusted_orchestrator_replay_definition.json"
-        with open(definition_path) as f:
-            definition = json.load(f)
-        original_invariants = definition["contract_versions"][contract_version]["scenario_invariants"]
-        mutated_invariants = dict(original_invariants)
-        mutated_invariants["A"] = mutated_invariants["A"] + " (mutated for this test)"
-        definition["contract_versions"][contract_version]["scenario_invariants"] = mutated_invariants
-        
-        # Reload the module to pick up the changes
-        import importlib
-        importlib.reload(replay)
-        
-        changed = replay.scenario_set_digest(contract_version)
-        assert changed != first, f"contract {contract_version}: digest must depend on the actual invariant text, not be a constant"
-        
-        # Restore
-        definition["contract_versions"][contract_version]["scenario_invariants"] = original_invariants
-        importlib.reload(replay)
+        # Mutate the actual in-memory trusted definition; never edit a tracked file.
+        original = replay.CONTRACT_VERSIONS[contract_version]["scenario_invariants"]
+        modified = dict(original)
+        modified["A"] += " (mutation probe)"
+        monkeypatch.setitem(replay.CONTRACT_VERSIONS[contract_version], "scenario_invariants", modified)
+        assert replay.scenario_set_digest(contract_version) != first
+        monkeypatch.setitem(replay.CONTRACT_VERSIONS[contract_version], "scenario_invariants", original)
 
 
 def test_fixture_digest_is_deterministic_and_content_sensitive(monkeypatch):
@@ -845,7 +841,6 @@ def test_verify_digests_cli_rejects_an_alternate_candidate_root_substitution(tmp
     # "candidate" and the real one already occupies that name in tmp_path.
     unrenamed_alternate_root = _candidate_root(
         tmp_path / "alt-source",
-        orchestrator_mutations=(IGNORES_THE_GENERATION,),
         governance_src=(REPO_ROOT / "scripts" / "hunter_governance_review_v2.py").read_text(encoding="utf-8")
         + "\n# alternate candidate checkout\n",
     )
@@ -1450,6 +1445,6 @@ def test_failed_replay_still_uploads_diagnostic_receipt_without_weakening_gate()
     replay_step = next(step for step in steps if step["name"] == "Run trusted candidate orchestrator replay")
     upload = next(step for step in steps if step["name"] == "Upload replay receipt")
     assert "continue-on-error" not in replay_step
-    assert upload["if"] == "${{ always() }}"
+    assert upload.get("if", upload.get(True)) == "${{ always() }}"
     assert upload["with"]["path"] == "replay-receipt.json"
-    assert "needs.validate-replay.result == 'success'" in jobs["verify-candidate-digest"]["if"]
+    assert "needs.validate-replay.result == 'success'" in jobs["verify-candidate-digest"].get("if", jobs["verify-candidate-digest"].get(True, ""))

@@ -197,9 +197,15 @@ jobs:
 
           definition = json.loads(definition_text)
           schema = definition["schema"]
-          scenario_set_id = definition["scenario_set_id"]
-          required_scenario_ids = tuple(definition["required_scenario_ids"])
-          scenario_invariants = definition["scenario_invariants"]
+          # Select only a trusted, predefined contract; receipt cannot supply invariants.
+          contract_version = receipt.get("contract_version") if isinstance(receipt, dict) else None
+          contracts = definition["contract_versions"]
+          contract = contracts.get(contract_version) if isinstance(contract_version, str) else None
+          if contract is None:
+              contract = {"scenario_set_id": "", "required_scenario_ids": [], "scenario_invariants": {}}
+          scenario_set_id = contract["scenario_set_id"]
+          required_scenario_ids = tuple(contract["required_scenario_ids"])
+          scenario_invariants = contract["scenario_invariants"]
           fixture = definition["fixture"]
           max_scenario_seconds = definition["max_scenario_seconds"]
 
@@ -218,6 +224,8 @@ jobs:
           else:
               if receipt.get("schema") != schema:
                   errors.append(f"receipt schema {receipt.get('schema')!r} != {schema!r}")
+              if contract_version not in contracts:
+                  errors.append("receipt contract_version must identify a trusted contract")
               if receipt.get("candidate_pr") != pr_number:
                   errors.append(f"receipt candidate_pr {receipt.get('candidate_pr')!r} != trusted PR #{pr_number}")
               if receipt.get("candidate_sha") != candidate_sha:

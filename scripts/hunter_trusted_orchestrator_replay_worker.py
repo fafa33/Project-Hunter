@@ -43,7 +43,6 @@ from multiprocessing.connection import Connection
 from pathlib import Path
 from typing import Any
 
-
 #: Contract version identifiers bound to explicit, immutable authority markers.
 #: v1 = legacy collector orchestration (ensure_collector, COLLECTOR_LIVENESS_GRACE_SECONDS)
 #: v2 = native collector receipt validation (collector_receipt_problem, COLLECTOR_RESULTS_SCHEMA)
