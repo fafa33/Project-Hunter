@@ -76,15 +76,17 @@ jobs:
           GITHUB_SERVER_URL: ${{ github.server_url }}
         run: |
           set -euo pipefail
-          if [[ -z "${PR_NUMBER}" && -n "${EVENT_HEAD_SHA}" ]]; then
-            # GitHub did not associate the completed run with a pull request: find the open
-            # pull request that currently has this exact head commit.
-            # `read` takes the first match without a pipe into `head`, which dies on SIGPIPE
-            # under `set -o pipefail` (PRH-112).
-            read -r PR_NUMBER < <(gh api --paginate "repos/${GH_REPO}/pulls?state=open&base=main&per_page=100" \
-              --jq ".[] | select(.head.sha == \"${EVENT_HEAD_SHA}\") | .number") || PR_NUMBER=""
+          PR_NUMBERS="${PR_NUMBER}"
+          if [[ -z "${PR_NUMBERS}" && -n "${EVENT_HEAD_SHA}" ]]; then
+            # GitHub did not associate the completed run with a pull request: find every open
+            # pull request that currently has this exact head commit. Pull requests can share a
+            # commit, and each has its own mergeability, findings and admission state, so each is
+            # evaluated independently rather than taking the first match. Captured without a pipe
+            # into `head` (SIGPIPE under `set -o pipefail`, PRH-112); a failed listing fails the job.
+            PR_NUMBERS="$(gh api --paginate "repos/${GH_REPO}/pulls?state=open&base=main&per_page=100" \
+              --jq ".[] | select(.head.sha == \"${EVENT_HEAD_SHA}\") | .number")"
           fi
-          if [[ -z "${PR_NUMBER}" ]]; then
+          if [[ -z "${PR_NUMBERS}" ]]; then
             echo "::notice::No open pull request has this head commit; nothing to evaluate."
             exit 0
           fi
@@ -98,6 +100,10 @@ jobs:
           # python "${GITHUB_WORKSPACE}/engine/scripts/hunter_governance_review_v2.py"
           B=boot
           BRIDGE="${GITHUB_WORKSPACE}/engine/scripts/hunter_governance_review/${B}strap_external_review_469.py"
-          python "${BRIDGE}" governance \
-            --pr "${PR_NUMBER}" \
-            --repository "${GH_REPO}"
+          failures=0
+          for number in ${PR_NUMBERS}; do
+            if ! python "${BRIDGE}" governance --pr "${number}" --repository "${GH_REPO}"; then
+              failures=1
+            fi
+          done
+          exit "${failures}"

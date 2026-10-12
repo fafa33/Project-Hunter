@@ -142,6 +142,9 @@ def test_governance_review_re_evaluates_on_exact_head_proofs_resolving_the_pr_fr
     step = next(s for s in document["jobs"]["governance-review"]["steps"] if s.get("name", "").startswith("Publish"))
     assert "head.sha ==" in step["run"]  # resolved by exact head commit from fresh API state
     assert "| head" not in step["run"]  # PRH-112: a pipe into `head` under pipefail dies on SIGPIPE
+    # Pull requests can share a head commit: every match is evaluated, never just the first.
+    assert "for number in ${PR_NUMBERS}" in step["run"] and "read -r PR_NUMBER" not in step["run"]
+    assert 'exit "${failures}"' in step["run"]
 
 
 # --- the guard rejects every mutation of the collector contract ---------------------------------------------
@@ -309,6 +312,9 @@ PUBLISHER_MUTATIONS = {
     "extra command": lambda d: publisher_step(d).update(run=publisher_step(d)["run"] + " ; curl evil"),
     "second command on a new line": lambda d: publisher_step(d).update(run=publisher_step(d)["run"] + "\ncurl evil"),
     "second publishing step": lambda d: d["jobs"]["publish"]["steps"].append(copy.deepcopy(publisher_step(d))),
+    "run attempt from a payload": lambda d: publisher_step(d)["env"].update(
+        COLLECTOR_RUN_ATTEMPT="${{ github.event.client_payload.attempt }}"
+    ),
     "unrelated status-writing step": lambda d: d["jobs"]["publish"]["steps"].append(
         {"run": 'gh api -X POST "repos/$GITHUB_REPOSITORY/statuses/$SHA" -f state=success'}
     ),

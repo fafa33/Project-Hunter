@@ -389,6 +389,18 @@ def test_a_missing_or_unverifiable_result_fails_closed_and_publishes_nothing(git
     assert github.posted == []
 
 
+def test_a_completion_event_for_a_superseded_attempt_publishes_nothing(github):
+    """A rerun is a new attempt of the same run id; the older attempt's event must not publish the newer result."""
+    github.runs[COLLECTOR_RUN]["run_attempt"] = 2
+    github.add_receipt(exhausted_receipt(run_attempt=2))
+    outcome, pr = publisher.publish(REPOSITORY, "token", COLLECTOR_RUN, 1)
+    assert outcome.startswith("SKIPPED: this completion event is for a superseded run attempt") and pr is None
+    assert github.posted == []
+    # The event for the current attempt publishes it.
+    outcome, _pr = publisher.publish(REPOSITORY, "token", COLLECTOR_RUN, 2)
+    assert outcome.startswith("PUBLISHED")
+
+
 def test_a_verified_run_with_no_receipt_is_a_quiet_skip_that_publishes_nothing(github):
     """A deliberate collector skip writes no receipt: the publisher run stays green and the cycle pending."""
     outcome, pr = publish_run()

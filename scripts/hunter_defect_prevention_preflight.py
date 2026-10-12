@@ -1700,8 +1700,16 @@ _COLLECTOR_ENV = {
 _COLLECTOR_EVENT_TYPES = frozenset({"opened", "reopened", "synchronize", "ready_for_review"})
 _COLLECTOR_PERMISSIONS = {"contents": "read", "actions": "write", "pull-requests": "write", "statuses": "read"}
 _PUBLISHER_SCRIPT = "scripts/hunter_collector_publisher.py"
-_PUBLISHER_ARGUMENTS = ("--repository", '"$GITHUB_REPOSITORY"', "--run-id", '"$COLLECTOR_RUN_ID"')
+_PUBLISHER_ARGUMENTS = (
+    "--repository",
+    '"$GITHUB_REPOSITORY"',
+    "--run-id",
+    '"$COLLECTOR_RUN_ID"',
+    "--run-attempt",
+    '"$COLLECTOR_RUN_ATTEMPT"',
+)
 _PUBLISHER_RUN_ID = "${{ github.event.workflow_run.id }}"
+_PUBLISHER_RUN_ATTEMPT = "${{ github.event.workflow_run.run_attempt }}"
 _GOVERNANCE_REFRESH_SCRIPT = "scripts/hunter_governance_review/bootstrap_external_review_469.py"
 _GOVERNANCE_REFRESH_ARGUMENTS = ("governance", "--pr", '"$VERIFIED_PR_NUMBER"', "--repository", '"$GITHUB_REPOSITORY"')
 _GOVERNANCE_REFRESH_PR = "${{ steps.publish.outputs.pr_number }}"
@@ -2166,8 +2174,13 @@ def validate_collector_publisher_definition(definition: Any) -> list[str]:
         errors.append("the collector result publisher must have exactly one publishing step")
     else:
         env = publishers[0].get("env") if isinstance(publishers[0].get("env"), dict) else {}
-        if str(env.get("COLLECTOR_RUN_ID", "")).strip() != _PUBLISHER_RUN_ID:
-            errors.append("the collector result publisher must take only the triggering run id from the event")
+        if (
+            str(env.get("COLLECTOR_RUN_ID", "")).strip() != _PUBLISHER_RUN_ID
+            or str(env.get("COLLECTOR_RUN_ATTEMPT", "")).strip() != _PUBLISHER_RUN_ATTEMPT
+        ):
+            errors.append(
+                "the collector result publisher must take only the triggering run id and attempt from the event"
+            )
         if not _one_command(publishers[0].get("run"), _PUBLISHER_SCRIPT, _PUBLISHER_ARGUMENTS):
             errors.append("the collector result publisher step must be exactly one fixed publisher command")
     return errors

@@ -26,7 +26,7 @@ permissions:
   statuses: write # publish the verified result and the governance status
 
 concurrency:
-  group: hunter-collector-publisher-${{ github.event.workflow_run.id }}
+  group: hunter-collector-publisher-${{ github.event.workflow_run.id }}-${{ github.event.workflow_run.run_attempt }}
   cancel-in-progress: false
 
 jobs:
@@ -51,7 +51,8 @@ jobs:
           GITHUB_REPOSITORY: ${{ github.repository }}
           GITHUB_SERVER_URL: ${{ github.server_url }}
           COLLECTOR_RUN_ID: ${{ github.event.workflow_run.id }}
-        run: python scripts/hunter_collector_publisher.py --repository "$GITHUB_REPOSITORY" --run-id "$COLLECTOR_RUN_ID"
+          COLLECTOR_RUN_ATTEMPT: ${{ github.event.workflow_run.run_attempt }}
+        run: python scripts/hunter_collector_publisher.py --repository "$GITHUB_REPOSITORY" --run-id "$COLLECTOR_RUN_ID" --run-attempt "$COLLECTOR_RUN_ATTEMPT"
 
       - name: Refresh governance status for the verified pull request
         if: steps.publish.outputs.pr_number != ''

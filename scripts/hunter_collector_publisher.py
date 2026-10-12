@@ -30,12 +30,19 @@ import hunter_review_orchestrator as orchestration
 import hunter_reviewer_collector as collector
 
 
-def publish(repository: str, token: str, run_id: int) -> tuple[str, int | None]:
+def publish(repository: str, token: str, run_id: int, run_attempt: int | None = None) -> tuple[str, int | None]:
     """Verify one collector run and publish its result; returns ``(outcome, pull request or None)``.
 
     The pull request is returned only once the run, receipt and pull-request identity have all been
     verified, so a caller may refresh that pull request's governance status from it.
     """
+    if run_attempt is not None:
+        # The completion event names one attempt. A rerun is a new attempt of the same run id, and the
+        # run record always shows the latest one: an event for an older attempt must not publish (or
+        # lose) the newer attempt's result, which its own completion event handles.
+        current = orchestration.request_json(repository, token, "GET", f"actions/runs/{run_id}")
+        if not isinstance(current, dict) or current.get("run_attempt") != run_attempt:
+            return "SKIPPED: this completion event is for a superseded run attempt", None
     try:
         run, receipt = collector.verified_collector_receipt(repository, token, run_id)
     except collector.NoCollectorReceipt:
@@ -110,9 +117,10 @@ def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--repository", required=True)
     parser.add_argument("--run-id", type=int, required=True)
+    parser.add_argument("--run-attempt", type=int, required=True)
     args = parser.parse_args()
     token = os.environ.get("GITHUB_TOKEN") or os.environ.get("GH_TOKEN") or ""
-    outcome, pr_number = publish(args.repository, token, args.run_id)
+    outcome, pr_number = publish(args.repository, token, args.run_id, args.run_attempt)
     print(outcome)
     output = os.environ.get("GITHUB_OUTPUT")
     if output and pr_number is not None:
