@@ -15,7 +15,7 @@ import tomllib
 from collections.abc import Mapping
 from importlib import metadata
 from pathlib import Path
-from typing import Any, Literal
+from typing import Any, Literal, cast
 
 import hunter_connector_write_ingress as ingress
 import hunter_pre_ready_review as pre_ready
@@ -1935,7 +1935,7 @@ def _workflow_triggers(definition: dict[str, Any]) -> Any:
 
     declared = [definition["on"]] if "on" in definition else []
     if True in definition:
-        declared.append(definition.get(True))
+        declared.append(cast(dict[Any, Any], definition)[True])
     return declared[0] if len(declared) == 1 or (len(declared) == 2 and declared[0] == declared[1]) else None
 
 
