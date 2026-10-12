@@ -134,10 +134,11 @@ def scenario_a_v1(candidate_root: Path, fixture: dict[str, Any]) -> dict[str, An
 
     # Verify the grace period is used in collector liveness logic (collector_needs_dispatch)
     import inspect
+
     needs_dispatch_source = inspect.getsource(orchestration.collector_needs_dispatch)
-    assert "COLLECTOR_LIVENESS_GRACE_SECONDS" in needs_dispatch_source, (
-        "collector_needs_dispatch must reference COLLECTOR_LIVENESS_GRACE_SECONDS"
-    )
+    assert (
+        "COLLECTOR_LIVENESS_GRACE_SECONDS" in needs_dispatch_source
+    ), "collector_needs_dispatch must reference COLLECTOR_LIVENESS_GRACE_SECONDS"
 
     return {"grace_positive": True, "ensure_collector_present": True, "grace_used_in_dispatch": True}
 
@@ -159,10 +160,11 @@ def scenario_b_v1(candidate_root: Path, fixture: dict[str, Any]) -> dict[str, An
 
     # Verify collector_needs_dispatch uses the grace period
     import inspect
+
     needs_dispatch_source = inspect.getsource(orchestration.collector_needs_dispatch)
-    assert "COLLECTOR_LIVENESS_GRACE_SECONDS" in needs_dispatch_source, (
-        "collector_needs_dispatch must reference COLLECTOR_LIVENESS_GRACE_SECONDS"
-    )
+    assert (
+        "COLLECTOR_LIVENESS_GRACE_SECONDS" in needs_dispatch_source
+    ), "collector_needs_dispatch must reference COLLECTOR_LIVENESS_GRACE_SECONDS"
 
     # Verify _older_than helper exists and is used
     older_than_source = inspect.getsource(orchestration._older_than)
@@ -347,7 +349,9 @@ SCENARIOS: dict[tuple[str, str], Any] = {
 SCENARIO_CHILD_TIMEOUT_SECONDS = 60
 
 
-def _scenario_child(conn: Connection, contract_version: str, scenario_id: str, candidate_root_str: str, fixture: dict[str, Any]) -> None:
+def _scenario_child(
+    conn: Connection, contract_version: str, scenario_id: str, candidate_root_str: str, fixture: dict[str, Any]
+) -> None:
     """Runs in a freshly spawned child process whose only channel back to the
     caller is this pipe -- never stdout, which candidate top-level import
     code can also write to, and never the process exit code, which
@@ -405,7 +409,9 @@ def _scenario_child(conn: Connection, contract_version: str, scenario_id: str, c
         conn.close()
 
 
-def _run_scenario_isolated(contract_version: str, scenario_id: str, candidate_root: Path, fixture: dict[str, Any]) -> dict[str, Any]:
+def _run_scenario_isolated(
+    contract_version: str, scenario_id: str, candidate_root: Path, fixture: dict[str, Any]
+) -> dict[str, Any]:
     """Runs one scenario in a child process and trusts only the exact ordered
     pair of pipe messages ``_scenario_child`` can produce -- never the
     child's stdout, and never its exit code, either of which candidate
@@ -526,7 +532,9 @@ def main() -> int:
     # Validate scenario_id is valid for this contract version
     if (contract_version, scenario_id) not in SCENARIOS:
         valid_scenarios = [sid for (cv, sid) in SCENARIOS if cv == contract_version]
-        raise ValueError(f"scenario {scenario_id!r} not valid for contract {contract_version}; valid: {valid_scenarios}")
+        raise ValueError(
+            f"scenario {scenario_id!r} not valid for contract {contract_version}; valid: {valid_scenarios}"
+        )
 
     result: dict[str, Any] = {"scenario_id": scenario_id, "contract_version": contract_version}
     result.update(_run_scenario_isolated(contract_version, scenario_id, candidate_root, fixture))

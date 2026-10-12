@@ -165,10 +165,12 @@ def trusted_harness_definition_digest() -> str:
 
 
 def scenario_set_digest(contract_version: str) -> str:
-    return _digest({
-        "scenario_set_id": get_scenario_set_id(contract_version),
-        "invariants": get_scenario_invariants(contract_version)
-    })
+    return _digest(
+        {
+            "scenario_set_id": get_scenario_set_id(contract_version),
+            "invariants": get_scenario_invariants(contract_version),
+        }
+    )
 
 
 def fixture_digest() -> str:
@@ -330,7 +332,12 @@ def resolve_candidate_root(workspace_root: Path, raw: str) -> Path:
 
 
 def _run_scenario(
-    scenario_id: str, candidate_root: Path, fixture_path: Path, *, workspace_root: Path, contract_version: str | None = None
+    scenario_id: str,
+    candidate_root: Path,
+    fixture_path: Path,
+    *,
+    workspace_root: Path,
+    contract_version: str | None = None,
 ) -> dict[str, Any]:
     if contract_version is None:
         contract_version = detect_contract_version(candidate_root)
@@ -387,7 +394,9 @@ def build_receipt(*, candidate_root: Path, pr_number: int, candidate_sha: str, w
     try:
         required_scenario_ids = get_required_scenario_ids(contract_version)
         scenario_results = [
-            _run_scenario(sid, candidate_root, fixture_path, workspace_root=workspace_root, contract_version=contract_version)
+            _run_scenario(
+                sid, candidate_root, fixture_path, workspace_root=workspace_root, contract_version=contract_version
+            )
             for sid in required_scenario_ids
         ]
     finally:

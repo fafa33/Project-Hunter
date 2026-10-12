@@ -29,6 +29,7 @@ import pytest
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 
+
 #: Contract version aware test helpers
 def _get_contract_version(candidate_root: Path) -> str:
     """Detect the contract version of a candidate root."""
@@ -61,17 +62,19 @@ def _expected_measurements_b(contract_version: str) -> dict:
             "older_than_present": True,
         }
     else:  # v2
-        return {"rejected": [
-            "bad attempts",
-            "bad claims",
-            "minimal object",
-            "not an object",
-            "other attempt",
-            "other generation",
-            "other head",
-            "other pull request",
-            "other run",
-        ]}
+        return {
+            "rejected": [
+                "bad attempts",
+                "bad claims",
+                "minimal object",
+                "not an object",
+                "other attempt",
+                "other generation",
+                "other head",
+                "other pull request",
+                "other run",
+            ]
+        }
 
 
 #: Real production regressions each corrected scenario must still catch. Every
@@ -261,7 +264,25 @@ def _candidate_root(
         _write(root / "scripts" / "hunter_governance_review_v2.py", governance_src)
     # Isolated candidate must have its own Git identity: never borrow the host HEAD.
     subprocess.run(["git", "init", "-q", str(root)], check=True, capture_output=True)
-    subprocess.run(["git", "-C", str(root), "-c", "user.name=Replay Fixture", "-c", "user.email=replay@example.invalid", "-c", "commit.gpgsign=false", "commit", "--allow-empty", "-qm", "fixture"], check=True, capture_output=True)
+    subprocess.run(
+        [
+            "git",
+            "-C",
+            str(root),
+            "-c",
+            "user.name=Replay Fixture",
+            "-c",
+            "user.email=replay@example.invalid",
+            "-c",
+            "commit.gpgsign=false",
+            "commit",
+            "--allow-empty",
+            "-qm",
+            "fixture",
+        ],
+        check=True,
+        capture_output=True,
+    )
     return root
 
 
@@ -312,7 +333,9 @@ def _assert_scenario_b_pass(contract_version: str, result: dict):
     if contract_version == "v1":
         # v1 has different keys
         for key, value in expected.items():
-            assert result["measurements"].get(key) == value, f"contract {contract_version}: {key} = {result['measurements'].get(key)} != {value}"
+            assert (
+                result["measurements"].get(key) == value
+            ), f"contract {contract_version}: {key} = {result['measurements'].get(key)} != {value}"
     else:
         # v2 has rejected list
         assert result["measurements"]["rejected"] == expected["rejected"]
@@ -1447,4 +1470,6 @@ def test_failed_replay_still_uploads_diagnostic_receipt_without_weakening_gate()
     assert "continue-on-error" not in replay_step
     assert upload.get("if", upload.get(True)) == "${{ always() }}"
     assert upload["with"]["path"] == "replay-receipt.json"
-    assert "needs.validate-replay.result == 'success'" in jobs["verify-candidate-digest"].get("if", jobs["verify-candidate-digest"].get(True, ""))
+    assert "needs.validate-replay.result == 'success'" in jobs["verify-candidate-digest"].get(
+        "if", jobs["verify-candidate-digest"].get(True, "")
+    )
