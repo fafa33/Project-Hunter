@@ -242,7 +242,7 @@
         "status": "modified"
       },
       {
-        "blob_sha": "43207351e7e4cc397ca2957e2b4663d0536f38d8",
+        "blob_sha": "5653e3f2d9deecb0b4063837ba0e12d60218d20b",
         "path": "scripts/hunter_review_orchestrator.py",
         "previous_path": "",
         "status": "modified"
@@ -260,7 +260,7 @@
         "status": "modified"
       },
       {
-        "blob_sha": "2cd02dd89081e670dcdb4321a7494527339ce8f3",
+        "blob_sha": "e3b155cb06a00a46804ee84ecf41805dd47c5c88",
         "path": "scripts/hunter_trusted_orchestrator_replay_worker.py",
         "previous_path": "",
         "status": "modified"
@@ -278,23 +278,29 @@
         "status": "modified"
       },
       {
-        "blob_sha": "c4c126e315034532987244e1b797dde05090ddc1",
+        "blob_sha": "e87c64526ff6c9e170786b02bba51112f021055b",
         "path": "tests/test_hunter_review_orchestrator.py",
         "previous_path": "",
         "status": "modified"
       },
       {
-        "blob_sha": "432e3e000ab610bd2f4d3c6df719aa3bda66882f",
+        "blob_sha": "a075556a70d9394da9e7921dc0b40c682d53649a",
         "path": "tests/test_hunter_trusted_orchestrator_replay.py",
+        "previous_path": "",
+        "status": "modified"
+      },
+      {
+        "blob_sha": "74ed10dcf513053ea9495b1075cc837f18230670",
+        "path": "tests/test_review_orchestrator_collector_finalization.py",
         "previous_path": "",
         "status": "modified"
       }
     ],
-    "review_target_digest": "d8cdbc60836b5f1f821af450483df3e064f1ef9b78f642486711b46a8274cd96"
+    "review_target_digest": "bcb1a1c659a79194027a1020d64d184c941fef709738ac261e7dba09b3acedb1"
   },
-  "review_id": "6216a80808fdc02106b4669b2f3f949aec86d12f6d4232108e7449c3d0c38ddb",
+  "review_id": "b264e22c0232fff8f28e5b8bf3dd82e8f9340c15c6746c1e598b1ea7a202f352",
   "review_request": {
-    "claims_id": "6216a80808fdc02106b4669b2f3f949aec86d12f6d4232108e7449c3d0c38ddb",
+    "claims_id": "b264e22c0232fff8f28e5b8bf3dd82e8f9340c15c6746c1e598b1ea7a202f352",
     "schema": "hunter.review-request.v1"
   },
   "schema": "hunter.pre-ready-hostile-review.v1"
