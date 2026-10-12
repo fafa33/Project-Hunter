@@ -116,6 +116,32 @@ def _probe_v1_grace_boundary(orchestration: Any, fixture: dict[str, Any], grace:
     assert not orchestration._older_than(now.isoformat(), grace), "fresh timestamp expired"
     assert orchestration._older_than(outside.started_at, grace), "elapsed boundary ignored"
 
+    # A dead collector may recover only within the finite dispatch budget.
+    budget = orchestration.MAX_COLLECTOR_DISPATCHES
+    assert type(budget) is int and budget > 0, "invalid collector dispatch budget"
+    with patch.object(orchestration, "collector_liveness", return_value=("absent", budget)):
+        assert not orchestration.collector_needs_dispatch("fixture/repo", "", outside), "unbounded redispatch"
+    with patch.object(orchestration, "collector_liveness", return_value=("completed", 1)):
+        assert not orchestration.collector_needs_dispatch(
+            "fixture/repo", "", outside
+        ), "completed collector redispatched"
+
+    # Active collector protection expires at a bounded ceiling, even when
+    # the collector continues to report active or its evidence is unreadable.
+    opportunity = orchestration.independent_review_opportunity_seconds()
+    multiplier = orchestration.ACTIVE_COLLECTOR_GRACE_MULTIPLIER
+    assert type(opportunity) is int and opportunity > 0
+    assert type(multiplier) is int and multiplier > 1
+    active_inside = replace(base, started_at=(now - timedelta(seconds=opportunity * multiplier - 2)).isoformat())
+    active_outside = replace(base, started_at=(now - timedelta(seconds=opportunity * multiplier + 2)).isoformat())
+    with patch.object(orchestration, "collector_liveness", return_value=("active", 1)):
+        assert orchestration._active_collector_still_running(
+            "fixture/repo", "", active_inside, opportunity
+        ), "live collector finalized early"
+        assert not orchestration._active_collector_still_running(
+            "fixture/repo", "", active_outside, opportunity
+        ), "active collector bound ignored"
+
 
 def scenario_a_v1(candidate_root: Path, fixture: dict[str, Any]) -> dict[str, Any]:
     """Legacy v1 contract: ensure_collector manages collector dispatch with liveness grace.

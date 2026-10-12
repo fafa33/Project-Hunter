@@ -5,8 +5,8 @@
       "scenario_set_id": "hunter-orchestrator-replay-v1",
       "required_scenario_ids": ["A", "B", "G"],
       "scenario_invariants": {
-        "A": "The legacy orchestrator's ensure_collector function manages collector dispatch for pending cycles, and COLLECTOR_LIVENESS_GRACE_SECONDS is a strictly positive, finite grace period before liveness is judged, so an ordinary listing lag cannot be mistaken for a dead collector and duplicate the dispatch.",
-        "B": "The legacy orchestrator's collector_needs_dispatch uses COLLECTOR_LIVENESS_GRACE_SECONDS to bound re-dispatch: a collector run that has been accepted but not yet listed must not trigger a re-dispatch, and the _older_than helper correctly compares elapsed time against the grace period.",
+        "A": "The legacy orchestrator's ensure_collector function manages collector dispatch for pending cycles, and COLLECTOR_LIVENESS_GRACE_SECONDS is a strictly positive, finite grace period before liveness is judged, so an ordinary listing lag cannot be mistaken for a dead collector and duplicate the dispatch. Recovery must remain idempotent and must not exceed the collector dispatch budget; an active collector is protected only within the finite active-collector ceiling.",
+        "B": "The legacy orchestrator's collector_needs_dispatch uses COLLECTOR_LIVENESS_GRACE_SECONDS to bound re-dispatch: a collector run that has been accepted but not yet listed must not trigger a re-dispatch, and the _older_than helper correctly compares elapsed time against the grace period. Completed collectors never redispatch, absent collectors recover only below the dispatch budget, and active collector protection terminates at a finite ceiling.",
         "G": "A WAITING_FOR_REVIEWER exact-head cycle classifies to pending end-to-end through the real resolution path for absent and in-progress cycle evidence, and malformed cycle evidence fails closed rather than classifying as pending."
       }
     },
