@@ -1769,13 +1769,13 @@
       },
       "regression_evidence": [
         "tests/test_hunter_trusted_orchestrator_replay.py::test_scenario_a_passes_against_real_production",
-        "tests/test_hunter_trusted_orchestrator_replay.py::test_scenario_a_fails_when_a_pending_cycle_can_stay_pending_forever",
+        "tests/test_hunter_trusted_orchestrator_replay.py::test_scenario_a_fails_when_the_opportunity_is_effectively_unbounded",
         "tests/test_hunter_trusted_orchestrator_replay.py::test_scenario_a_fails_when_the_opportunity_is_not_a_real_bound",
-        "tests/test_hunter_trusted_orchestrator_replay.py::test_scenario_a_fails_when_the_opportunity_is_ignored",
+        "tests/test_hunter_trusted_orchestrator_replay.py::test_scenario_a_fails_when_the_collector_is_trusted_as_a_publisher",
         "tests/test_hunter_trusted_orchestrator_replay.py::test_scenario_b_passes_against_real_production",
-        "tests/test_hunter_trusted_orchestrator_replay.py::test_scenario_b_fails_when_a_recorded_cycle_is_dispatched_again",
-        "tests/test_hunter_trusted_orchestrator_replay.py::test_scenario_b_fails_without_bounded_liveness_recovery",
-        "tests/test_hunter_trusted_orchestrator_replay.py::test_scenario_b_fails_when_dispatch_is_unbounded"
+        "tests/test_hunter_trusted_orchestrator_replay.py::test_scenario_b_fails_when_a_receipt_is_usable_beyond_the_run_it_names",
+        "tests/test_hunter_trusted_orchestrator_replay.py::test_scenario_g_fails_against_a_swallowed_fail_closed_path",
+        "tests/test_hunter_trusted_orchestrator_replay.py::test_scenario_fails_against_a_candidate_that_forges_a_passing_payload_and_exits_early"
       ],
       "lifecycle": "regression-tested",
       "sources": [
