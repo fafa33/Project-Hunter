@@ -9,7 +9,7 @@
       },
       {
         "criterion": "Prevent candidate-controlled workflow status publication",
-        "evidence": "AUTHOR CLAIM: .github/workflows/hunter-governance-review.yml moved to pull_request_target and removed workflow_dispatch; tests/test_hunter_review_orchestrator.py covers candidate push, PR, dispatch and job grants. Independent review required.",
+        "evidence": "AUTHOR CLAIM: reviewer collection is started by GitHub's native pull_request_target event and publishes only through a small trusted workflow_run publisher that re-verifies the run, receipt and pull request; the collector holds no status or contents write; Hunter Governance Review stays pull_request_target; workflow guards and tests (tests/test_native_collector_flow.py, tests/test_native_collector_workflows.py) cover the contract. Independent review required.",
         "id": "M2-2",
         "verdict": "satisfied"
       }
@@ -50,25 +50,49 @@
     "issue": "591",
     "review_target": [
       {
+        "blob_sha": "31178ee63feb614b9cfa6e740846ce16c389405c",
+        "path": ".github/workflows/hunter-collector-publisher.yml",
+        "previous_path": "",
+        "status": "added"
+      },
+      {
         "blob_sha": "7f5cd4f4433e9d56c6598422c82b6168ae373f95",
         "path": "docs/PR592_COPILOT_FINDING_LEDGER.json",
         "previous_path": "",
         "status": "added"
       },
       {
-        "blob_sha": "85a5273bd13bfd319c1d0f3a1df04f1bc2fe2c68",
-        "path": "tests/test_collector_dispatch_adversarial.py",
+        "blob_sha": "be286281db71284d3008d68b521caa9f22657519",
+        "path": "scripts/hunter_collector_publisher.py",
         "previous_path": "",
         "status": "added"
       },
       {
-        "blob_sha": "8f8631c962e3b9f0ad09917973a11d36dfa86c3c",
-        "path": ".github/workflows/hunter-governance-reconcile.yml",
+        "blob_sha": "d7ce81247a65e4e9012ddbe44d43d0e738153414",
+        "path": "tests/native_github_fake.py",
         "previous_path": "",
-        "status": "modified"
+        "status": "added"
       },
       {
-        "blob_sha": "95efc84021c5f07b60286dc484665b86cdf18048",
+        "blob_sha": "1eb6ea1df983dd066b3df38af2786f77512e9a8e",
+        "path": "tests/test_merge_readiness_refresh_contract.py",
+        "previous_path": "",
+        "status": "added"
+      },
+      {
+        "blob_sha": "eee3ebc1a57e7aa513aa97da4d7389d40df79f65",
+        "path": "tests/test_native_collector_flow.py",
+        "previous_path": "",
+        "status": "added"
+      },
+      {
+        "blob_sha": "493ed52134b8735be5d4c1450cf7a387a6f274fd",
+        "path": "tests/test_native_collector_workflows.py",
+        "previous_path": "",
+        "status": "added"
+      },
+      {
+        "blob_sha": "cd8c8e347f271038611e2929959e0f0ff008c201",
         "path": ".github/workflows/hunter-governance-review.yml",
         "previous_path": "",
         "status": "modified"
@@ -86,13 +110,13 @@
         "status": "modified"
       },
       {
-        "blob_sha": "fcae7f9b268f719d58c276ff1e29059175f892a5",
+        "blob_sha": "0d66b170acfc1d9d6f75f3cbc40e3dcb6c64b0ac",
         "path": ".github/workflows/hunter-merge-readiness.yml",
         "previous_path": "",
         "status": "modified"
       },
       {
-        "blob_sha": "37fe6b0340784dc5dec5b4841896a220bf6ff34e",
+        "blob_sha": "c676fa3cfe7487a3013f2f72c60c8f8c07553ba9",
         "path": ".github/workflows/hunter-reviewer-collector.yml",
         "previous_path": "",
         "status": "modified"
@@ -110,8 +134,20 @@
         "status": "modified"
       },
       {
-        "blob_sha": "ce572ed94dbe6f4a77dd275a84eac04b73ac6258",
+        "blob_sha": "92c4dfbfd06ba2870e7e437e9351127446bd3642",
+        "path": "configs/governance_cutover_target.json",
+        "previous_path": "",
+        "status": "modified"
+      },
+      {
+        "blob_sha": "a4b77255775f0d5bdb1fb612a6af2417bd2ee69d",
         "path": "docs/ARCHITECTURE_AUDITS/HUNTER_FAST_MERGE_M1.md",
+        "previous_path": "",
+        "status": "modified"
+      },
+      {
+        "blob_sha": "2ff67bb67badcc0e17ce10adde0708324cd51733",
+        "path": "docs/CODE_WRITE_POLICY.json",
         "previous_path": "",
         "status": "modified"
       },
@@ -122,7 +158,7 @@
         "status": "modified"
       },
       {
-        "blob_sha": "951d09dcc106d3db7fe04dd7340f11ec7c6b7b24",
+        "blob_sha": "9479ccd2af948306a37251f48c581eff7a10836c",
         "path": "docs/DEFECT_REGISTRY.json",
         "previous_path": "",
         "status": "modified"
@@ -134,26 +170,80 @@
         "status": "modified"
       },
       {
-        "blob_sha": "2e8fa6fcb567bb626145aff7dc657dfe8ed5ec30",
+        "blob_sha": "6d523611643f9f1a781d109f8d8b2a5a18441132",
+        "path": "docs/MERGE_READINESS_GATE.md",
+        "previous_path": "",
+        "status": "modified"
+      },
+      {
+        "blob_sha": "d94206d7a1109b059b709769bf33e6b6f7b8b68a",
+        "path": "pyproject.toml",
+        "previous_path": "",
+        "status": "modified"
+      },
+      {
+        "blob_sha": "2b2b1e830b351275b3ec013b254cce73c44f82ea",
         "path": "scripts/hunter_defect_prevention_preflight.py",
         "previous_path": "",
         "status": "modified"
       },
       {
-        "blob_sha": "41c66b58f630245e639f7729e63f44796119e78a",
+        "blob_sha": "f4bbd45b481aaf5a72bb4d332188733a53b448d3",
+        "path": "scripts/hunter_governance_review_v2.py",
+        "previous_path": "",
+        "status": "modified"
+      },
+      {
+        "blob_sha": "a6d6c2c6d7ccd24dbd047f90a84707ee6a254b96",
         "path": "scripts/hunter_issue_agent_lifecycle.py",
         "previous_path": "",
         "status": "modified"
       },
       {
-        "blob_sha": "d33e5bec892cb3ab91bcabb8d8c21ea68de940b6",
+        "blob_sha": "7ed0010f877c19ffc9659bbde34d3a75fd04dc77",
+        "path": "scripts/hunter_merge_readiness.py",
+        "previous_path": "",
+        "status": "modified"
+      },
+      {
+        "blob_sha": "d87a55d5e542c48b654df6c8780bcd7d98a399a0",
+        "path": "scripts/hunter_merge_readiness_v2.py",
+        "previous_path": "",
+        "status": "modified"
+      },
+      {
+        "blob_sha": "031b8ec4dafa04a0778f6fbbc64ea6184912f0a2",
+        "path": "scripts/hunter_pre_push.py",
+        "previous_path": "",
+        "status": "modified"
+      },
+      {
+        "blob_sha": "d37b197d2abbd2934d17137a2a9b6eb214829382",
         "path": "scripts/hunter_review_orchestrator.py",
         "previous_path": "",
         "status": "modified"
       },
       {
-        "blob_sha": "d2b08e9b8d7b43f13cf8709885e19604b83d90f3",
+        "blob_sha": "4e28fa0b437ff4aec7edbff6c93007644b99be02",
         "path": "scripts/hunter_reviewer_collector.py",
+        "previous_path": "",
+        "status": "modified"
+      },
+      {
+        "blob_sha": "771f7d1d4d6273928383901b4d27a521673a3b79",
+        "path": "scripts/hunter_trusted_orchestrator_replay.py",
+        "previous_path": "",
+        "status": "modified"
+      },
+      {
+        "blob_sha": "f1f7d009f21f4f9f293c6ff2850d924fc80e85fd",
+        "path": "scripts/hunter_trusted_orchestrator_replay_definition.json",
+        "previous_path": "",
+        "status": "modified"
+      },
+      {
+        "blob_sha": "30dbdb6fa56d265f9307f9411d097c0b18f403e1",
+        "path": "scripts/hunter_trusted_orchestrator_replay_worker.py",
         "previous_path": "",
         "status": "modified"
       },
@@ -182,20 +272,62 @@
         "status": "modified"
       },
       {
-        "blob_sha": "dbcd26fc8d1124014d82bc705e8efaa970f14458",
+        "blob_sha": "5b5048601d05d3df7c06ae66ddabbd20cf867892",
+        "path": "tests/test_exact_head_review_authority.py",
+        "previous_path": "",
+        "status": "modified"
+      },
+      {
+        "blob_sha": "fdd1b087ea23df322f72a5e810e6581ec6fe696a",
         "path": "tests/test_hunter_governance_cleanup.py",
         "previous_path": "",
         "status": "modified"
       },
       {
-        "blob_sha": "6ea90931dba023a8e566c0ad41a8925b78f65a21",
+        "blob_sha": "cce2a06b1c87cecfb3334cdcc8f69fb4118aac7a",
+        "path": "tests/test_hunter_governance_review_v2.py",
+        "previous_path": "",
+        "status": "modified"
+      },
+      {
+        "blob_sha": "c9ad6b13510cdc181c0249e4f7533aaec7994746",
+        "path": "tests/test_hunter_governance_revision.py",
+        "previous_path": "",
+        "status": "modified"
+      },
+      {
+        "blob_sha": "47059b48d69109b5fd680e20aa7f06c72dbdb2cd",
+        "path": "tests/test_hunter_merge_readiness_convergence.py",
+        "previous_path": "",
+        "status": "modified"
+      },
+      {
+        "blob_sha": "6d2df008bd45289ce79ec0e3fad0d9c2150de4d5",
+        "path": "tests/test_hunter_merge_readiness_v2.py",
+        "previous_path": "",
+        "status": "modified"
+      },
+      {
+        "blob_sha": "39afc309eaa42f1d97fc1fdfe195c9de4a2d17da",
         "path": "tests/test_hunter_review_orchestrator.py",
         "previous_path": "",
         "status": "modified"
       },
       {
-        "blob_sha": "180e45a23e0f8025a92c47734b9e8ae252309d80",
+        "blob_sha": "abd963a08647f772222e50de9428e0285d7a3230",
         "path": "tests/test_hunter_reviewer_collector.py",
+        "previous_path": "",
+        "status": "modified"
+      },
+      {
+        "blob_sha": "52fc0de2f3379159f72fe4df653aec251662cc32",
+        "path": "tests/test_hunter_trusted_orchestrator_replay.py",
+        "previous_path": "",
+        "status": "modified"
+      },
+      {
+        "blob_sha": "35271d7062a38aa5fb04cb3faf2d8c9970c73efc",
+        "path": "tests/test_issue_541_review_opportunity_cutover.py",
         "previous_path": "",
         "status": "modified"
       },
@@ -206,13 +338,13 @@
         "status": "modified"
       },
       {
-        "blob_sha": "6cd1a4f4732d3621c62b110181fe3a29d79fdc47",
+        "blob_sha": "8dbbc84377fcef2b4e9454481049b755395bfcd9",
         "path": "tests/test_review_after_remediation_generation.py",
         "previous_path": "",
         "status": "modified"
       },
       {
-        "blob_sha": "097ad852505d187b2d1ee7f1451538a697c8218a",
+        "blob_sha": "98bb44b23e081b73362a377b16bd3fe8919669f7",
         "path": "tests/test_review_orchestrator_collector_finalization.py",
         "previous_path": "",
         "status": "modified"
@@ -222,13 +354,19 @@
         "path": "tests/test_source_handling_production_runtime.py",
         "previous_path": "",
         "status": "modified"
+      },
+      {
+        "blob_sha": "",
+        "path": ".github/workflows/hunter-governance-reconcile.yml",
+        "previous_path": "",
+        "status": "removed"
       }
     ],
-    "review_target_digest": "37a1f55fdfb89e5d4925d25045e2e2332c37d2b5e7be06acd48b7193ce85b122"
+    "review_target_digest": "5d8e15e40010a5a00988be327b2138e1de019f099b3bbf18c0bbcc0beab15447"
   },
-  "review_id": "a8e18c24c9421713c882840dd19aa398d0163622dd63365524b1a2f5a7c23b7c",
+  "review_id": "7f8fc39482ecea8e3023f21dc3992be5541630ef810c74f8973475a7bbcd59d0",
   "review_request": {
-    "claims_id": "a8e18c24c9421713c882840dd19aa398d0163622dd63365524b1a2f5a7c23b7c",
+    "claims_id": "7f8fc39482ecea8e3023f21dc3992be5541630ef810c74f8973475a7bbcd59d0",
     "schema": "hunter.review-request.v1"
   },
   "schema": "hunter.pre-ready-hostile-review.v1"
