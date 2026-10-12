@@ -140,6 +140,16 @@ def test_merge_readiness_stays_until_native_enforcement_is_verified_but_loses_it
     assert "Hunter Governance Review Reconcile" not in triggers(document)["workflow_run"]["workflows"]
 
 
+def test_governance_review_re_evaluates_every_open_pull_request_when_main_changes_and_only_then():
+    document = load("hunter-governance-review.yml")
+    # A push trigger is acceptable here only because it is pinned to main, whose pushed definition is trusted.
+    assert triggers(document)["push"] == {"branches": ["main"]}
+    step = next(s for s in document["jobs"]["governance-review"]["steps"] if s.get("name", "").startswith("Publish"))
+    assert step["env"]["EVENT_NAME"] == "${{ github.event_name }}"
+    assert 'if [[ "${EVENT_NAME}" == "push" ]]' in step["run"] and "state=open&base=main" in step["run"]
+    assert "schedule" not in triggers(document) and "workflow_dispatch" not in triggers(document)
+
+
 def test_governance_review_re_evaluates_on_exact_head_proofs_resolving_the_pr_from_fresh_state():
     document = load("hunter-governance-review.yml")
     assert set(triggers(document)["workflow_run"]["workflows"]) == {
