@@ -1554,10 +1554,6 @@ def main() -> int:
         return 1
 
 
-if __name__ == "__main__":
-    raise SystemExit(main())
-
-
 def collector_receipt_problem(
     receipt, *, repository, pr_number, head_sha, run_id, run_attempt=None, generation_id=None
 ):
@@ -1585,3 +1581,7 @@ def collector_receipt_problem(
     if not isinstance(attempts, list) or not all(isinstance(item, dict) for item in attempts):
         return "receipt attempts are malformed"
     return ""
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

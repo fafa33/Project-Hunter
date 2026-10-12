@@ -2016,3 +2016,35 @@ def test_digest_refuses_untrusted_symlink_in_dynamic_candidate_input(tmp_path):
     (root / "dynamic-external.json").symlink_to(REPO_ROOT / "docs/CODE_WRITE_POLICY.json")
     with pytest.raises(ValueError, match="symlink"):
         candidate_module_digest(root, "A", "v2")
+
+
+def test_candidate_venv_helper_cannot_escape_complete_digest(tmp_path):
+    root = _candidate_root(tmp_path, v2=True)
+    worker = worker_module()
+    helper = root / ".venv" / "candidate_helper.py"
+    helper.parent.mkdir(exist_ok=True)
+    helper.write_text("VALUE = 1\n", encoding="utf-8")
+    before = worker.candidate_module_digest(root, "A", "v2")
+    helper.write_text("VALUE = 2\n", encoding="utf-8")
+    assert worker.candidate_module_digest(root, "A", "v2") != before
+
+
+def test_tracked_candidate_file_in_excluded_cache_fails_closed(tmp_path):
+    root = _candidate_root(tmp_path, v2=True)
+    worker = worker_module()
+    hidden = root / ".pytest_cache" / "payload.py"
+    hidden.parent.mkdir(exist_ok=True)
+    hidden.write_text("CODE = 'unverified'\n", encoding="utf-8")
+    subprocess.run(["git", "-C", str(root), "add", "-f", ".pytest_cache/payload.py"], check=True)
+    with pytest.raises(ValueError, match="tracked candidate input"):
+        worker.candidate_module_digest(root, "A", "v2")
+
+
+def test_collector_receipt_validator_defined_before_cli_execution():
+    import ast
+
+    source = (REPO_ROOT / "scripts/hunter_review_orchestrator.py").read_text(encoding="utf-8")
+    tree = ast.parse(source)
+    validator = next(n for n in tree.body if isinstance(n, ast.FunctionDef) and n.name == "collector_receipt_problem")
+    cli_guard = next(n for n in tree.body if isinstance(n, ast.If) and "__main__" in ast.unparse(n.test))
+    assert validator.lineno < cli_guard.lineno

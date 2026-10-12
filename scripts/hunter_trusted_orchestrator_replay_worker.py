@@ -181,14 +181,29 @@ def candidate_module_digest(candidate_root: Path, scenario_id: str, contract_ver
     A static import walk is not a complete execution dependency closure: Python
     permits importlib calls and arbitrary file reads. In addition to requiring
     all known controller modules and configs, hash the entire candidate tree,
-    not just AST-detected imports. Ephemeral Git/bytecode caches are explicitly
-    excluded; they cannot be imported as source or treated as governed input.
+    not just AST-detected imports. Ephemeral Git/bytecode caches are ignored
+    only if they are absent from the candidate's tracked Git tree; otherwise
+    replay fails closed instead of allowing unbound candidate-readable input.
     In hosted replay, candidate execution is also under a non-owner account
     so the candidate cannot rewrite the tree between hashing and execution.
     """
     declared = candidate_input_closure(candidate_root, scenario_id, contract_version)
-    excluded = {".git", "__pycache__", ".pytest_cache", ".mypy_cache", ".ruff_cache", ".venv"}
+    excluded = {".git", "__pycache__", ".pytest_cache", ".mypy_cache", ".ruff_cache"}
     root = candidate_root.resolve(strict=True)
+    import subprocess
+
+    tracked = subprocess.run(
+        ["git", "-C", str(root), "ls-files", "-z", "--cached"],
+        check=True,
+        capture_output=True,
+        timeout=15,
+    ).stdout.split(b"\0")
+    for encoded in tracked:
+        if not encoded:
+            continue
+        relative = encoded.decode("utf-8", errors="strict")
+        if any(component in excluded for component in Path(relative).parts):
+            raise ValueError(f"tracked candidate input is in an excluded cache or Git path: {relative}")
     payload: dict[str, str] = {}
     for current, dirs, files in os.walk(root, followlinks=False):
         current_path = Path(current)
