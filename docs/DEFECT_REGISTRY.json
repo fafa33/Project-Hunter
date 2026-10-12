@@ -474,7 +474,7 @@
             "guard_boundary": "reviewer-pool admission and trusted health gating",
             "guard": "Trusted replay harness with fail-closed contract version detection; no production authority resolver consults replay status.",
             "source": "PR #592 migration: v2 native collector replaces v1 legacy collector orchestration",
-            "status": "regression-tested",
+            "status": "guarded",
             "test": "tests/test_hunter_trusted_orchestrator_replay.py::test_scenario_a_passes_against_real_production"
         },
         {
