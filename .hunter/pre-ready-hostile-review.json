@@ -2,38 +2,38 @@
   "claims": {
     "acceptance_criteria": [
       {
-        "criterion": "Single trusted 1800-second exact-head advisory deadline",
-        "evidence": "AUTHOR CLAIM: shared deadline not implemented in this PR.",
+        "criterion": "Trusted v1/v2 contract selection and downgrade prevention",
+        "evidence": "Candidate contract is independently classified; v1 downgrade and receipt relabel adversarial tests committed.",
         "id": "AC-1",
-        "verdict": "not-applicable"
+        "verdict": "satisfied"
       },
       {
-        "criterion": "Collector dispatch budgets, cancellation, and late-writer safety",
-        "evidence": "AUTHOR CLAIM: comprehensive cancellation and CAS not implemented.",
+        "criterion": "Isolated candidate execution and fail-closed receipt verification",
+        "evidence": "Candidate scenarios execute in isolated workers; receipt version, digest, exact-head and trusted harness identity are validated.",
         "id": "AC-2",
-        "verdict": "not-applicable"
+        "verdict": "satisfied"
       },
       {
-        "criterion": "Publish honest nonblocking REVIEW_TIMED_OUT at deadline",
-        "evidence": "AUTHOR CLAIM: completed correlated successful collector settles stale pending to REVIEW_TIMED_OUT; independent verification required.",
+        "criterion": "Preserve legacy v1 terminality, bounded collector recovery and idempotence",
+        "evidence": "v1 behavioral grace-boundary, dispatch-budget and active-collector-ceiling probes committed; Copilot finding addressed at 11cea57.",
         "id": "AC-3",
         "verdict": "satisfied"
       },
       {
-        "criterion": "Immediate reconciliation and idempotent exact-head generation semantics",
-        "evidence": "AUTHOR CLAIM: re-read before publication added, atomic CAS and complete event integration not established.",
+        "criterion": "Preserve v2 publisher and receipt provenance rules",
+        "evidence": "Trusted publisher fixture uses real governance workflow; v2 publisher and receipt identity checks retained.",
         "id": "AC-4",
-        "verdict": "not-applicable"
+        "verdict": "satisfied"
       },
       {
-        "criterion": "Focused boundary, collector, late evidence, and hosted canary tests",
-        "evidence": "AUTHOR CLAIM: 107 focused tests passed; complete deadline boundary and hosted canary not yet demonstrated.",
+        "criterion": "Deterministic regression and repository governance gates",
+        "evidence": "79 passed and 8 skipped on previous full replay suite; current post-fix full suite must be independently checked; pre-push guards passed at 11cea57.",
         "id": "AC-5",
-        "verdict": "not-applicable"
+        "verdict": "satisfied"
       },
       {
-        "criterion": "Preserve owner merge approval and independent advisory reviews",
-        "evidence": "AUTHOR CLAIM: no merge action or required gate weakening in this change; independent reviewer must verify.",
+        "criterion": "Owner-controlled rollout without bypass or merge",
+        "evidence": "PR remains Draft, no merge performed, no security gate disabled.",
         "id": "AC-6",
         "verdict": "satisfied"
       }
@@ -52,87 +52,237 @@
       "transaction-snapshot-consistency"
     ],
     "base_ref": "main",
-    "base_sha": "d1130e539592a8e1fa2b2c5b220a2ce3b1ab4914",
+    "base_sha": "dd01add9f856525151c2084532969c9402d95f81",
     "defect_families": [
       {
-        "evidence": "AUTHOR CLAIM: exact-head orchestration and recovery applicability reviewed; independent reviewer must verify relevant invariants and regression coverage.",
-        "family": "DFF-42",
+        "evidence": "AUTHOR REVIEW REQUEST: applicable family requires independent exact-head adversarial verification against its registry invariant; no independent clearance claimed.",
+        "family": "DFF-001",
         "outcome": "clear"
       },
       {
-        "evidence": "AUTHOR CLAIM: exact-head orchestration and recovery applicability reviewed; independent reviewer must verify relevant invariants and regression coverage.",
-        "family": "DFF-43",
+        "evidence": "AUTHOR REVIEW REQUEST: applicable family requires independent exact-head adversarial verification against its registry invariant; no independent clearance claimed.",
+        "family": "DFF-002",
         "outcome": "clear"
       },
       {
-        "evidence": "AUTHOR CLAIM: exact-head orchestration and recovery applicability reviewed; independent reviewer must verify relevant invariants and regression coverage.",
-        "family": "DFF-44",
+        "evidence": "AUTHOR REVIEW REQUEST: applicable family requires independent exact-head adversarial verification against its registry invariant; no independent clearance claimed.",
+        "family": "DFF-003",
+        "outcome": "clear"
+      },
+      {
+        "evidence": "AUTHOR REVIEW REQUEST: applicable family requires independent exact-head adversarial verification against its registry invariant; no independent clearance claimed.",
+        "family": "DFF-004",
+        "outcome": "clear"
+      },
+      {
+        "evidence": "AUTHOR REVIEW REQUEST: applicable family requires independent exact-head adversarial verification against its registry invariant; no independent clearance claimed.",
+        "family": "DFF-005",
+        "outcome": "clear"
+      },
+      {
+        "evidence": "AUTHOR REVIEW REQUEST: applicable family requires independent exact-head adversarial verification against its registry invariant; no independent clearance claimed.",
+        "family": "DFF-006",
+        "outcome": "clear"
+      },
+      {
+        "evidence": "AUTHOR REVIEW REQUEST: applicable family requires independent exact-head adversarial verification against its registry invariant; no independent clearance claimed.",
+        "family": "DFF-007",
+        "outcome": "clear"
+      },
+      {
+        "evidence": "AUTHOR REVIEW REQUEST: applicable family requires independent exact-head adversarial verification against its registry invariant; no independent clearance claimed.",
+        "family": "DFF-008",
+        "outcome": "clear"
+      },
+      {
+        "evidence": "AUTHOR REVIEW REQUEST: applicable family requires independent exact-head adversarial verification against its registry invariant; no independent clearance claimed.",
+        "family": "DFF-009",
+        "outcome": "clear"
+      },
+      {
+        "evidence": "AUTHOR REVIEW REQUEST: applicable family requires independent exact-head adversarial verification against its registry invariant; no independent clearance claimed.",
+        "family": "DFF-010",
+        "outcome": "clear"
+      },
+      {
+        "evidence": "AUTHOR REVIEW REQUEST: applicable family requires independent exact-head adversarial verification against its registry invariant; no independent clearance claimed.",
+        "family": "DFF-011",
+        "outcome": "clear"
+      },
+      {
+        "evidence": "AUTHOR REVIEW REQUEST: applicable family requires independent exact-head adversarial verification against its registry invariant; no independent clearance claimed.",
+        "family": "DFF-012",
+        "outcome": "clear"
+      },
+      {
+        "evidence": "AUTHOR REVIEW REQUEST: applicable family requires independent exact-head adversarial verification against its registry invariant; no independent clearance claimed.",
+        "family": "DFF-013",
+        "outcome": "clear"
+      },
+      {
+        "evidence": "AUTHOR REVIEW REQUEST: applicable family requires independent exact-head adversarial verification against its registry invariant; no independent clearance claimed.",
+        "family": "DFF-014",
+        "outcome": "clear"
+      },
+      {
+        "evidence": "AUTHOR REVIEW REQUEST: applicable family requires independent exact-head adversarial verification against its registry invariant; no independent clearance claimed.",
+        "family": "DFF-015",
+        "outcome": "clear"
+      },
+      {
+        "evidence": "AUTHOR REVIEW REQUEST: applicable family requires independent exact-head adversarial verification against its registry invariant; no independent clearance claimed.",
+        "family": "DFF-016",
+        "outcome": "clear"
+      },
+      {
+        "evidence": "AUTHOR REVIEW REQUEST: applicable family requires independent exact-head adversarial verification against its registry invariant; no independent clearance claimed.",
+        "family": "DFF-019",
+        "outcome": "clear"
+      },
+      {
+        "evidence": "AUTHOR REVIEW REQUEST: applicable family requires independent exact-head adversarial verification against its registry invariant; no independent clearance claimed.",
+        "family": "DFF-020",
+        "outcome": "clear"
+      },
+      {
+        "evidence": "AUTHOR REVIEW REQUEST: applicable family requires independent exact-head adversarial verification against its registry invariant; no independent clearance claimed.",
+        "family": "DFF-021",
+        "outcome": "clear"
+      },
+      {
+        "evidence": "AUTHOR REVIEW REQUEST: applicable family requires independent exact-head adversarial verification against its registry invariant; no independent clearance claimed.",
+        "family": "DFF-022",
+        "outcome": "clear"
+      },
+      {
+        "evidence": "AUTHOR REVIEW REQUEST: applicable family requires independent exact-head adversarial verification against its registry invariant; no independent clearance claimed.",
+        "family": "DFF-023",
+        "outcome": "clear"
+      },
+      {
+        "evidence": "AUTHOR REVIEW REQUEST: applicable family requires independent exact-head adversarial verification against its registry invariant; no independent clearance claimed.",
+        "family": "DFF-025",
+        "outcome": "clear"
+      },
+      {
+        "evidence": "AUTHOR REVIEW REQUEST: applicable family requires independent exact-head adversarial verification against its registry invariant; no independent clearance claimed.",
+        "family": "DFF-027",
+        "outcome": "clear"
+      },
+      {
+        "evidence": "AUTHOR REVIEW REQUEST: applicable family requires independent exact-head adversarial verification against its registry invariant; no independent clearance claimed.",
+        "family": "DFF-028",
+        "outcome": "clear"
+      },
+      {
+        "evidence": "AUTHOR REVIEW REQUEST: applicable family requires independent exact-head adversarial verification against its registry invariant; no independent clearance claimed.",
+        "family": "DFF-029",
+        "outcome": "clear"
+      },
+      {
+        "evidence": "AUTHOR REVIEW REQUEST: applicable family requires independent exact-head adversarial verification against its registry invariant; no independent clearance claimed.",
+        "family": "DFF-033",
+        "outcome": "clear"
+      },
+      {
+        "evidence": "AUTHOR REVIEW REQUEST: applicable family requires independent exact-head adversarial verification against its registry invariant; no independent clearance claimed.",
+        "family": "DFF-035",
+        "outcome": "clear"
+      },
+      {
+        "evidence": "AUTHOR REVIEW REQUEST: applicable family requires independent exact-head adversarial verification against its registry invariant; no independent clearance claimed.",
+        "family": "DFF-036",
+        "outcome": "clear"
+      },
+      {
+        "evidence": "AUTHOR REVIEW REQUEST: applicable family requires independent exact-head adversarial verification against its registry invariant; no independent clearance claimed.",
+        "family": "DFF-040",
+        "outcome": "clear"
+      },
+      {
+        "evidence": "AUTHOR REVIEW REQUEST: applicable family requires independent exact-head adversarial verification against its registry invariant; no independent clearance claimed.",
+        "family": "DFF-041",
+        "outcome": "clear"
+      },
+      {
+        "evidence": "AUTHOR REVIEW REQUEST: applicable family requires independent exact-head adversarial verification against its registry invariant; no independent clearance claimed.",
+        "family": "DFF-045",
+        "outcome": "clear"
+      },
+      {
+        "evidence": "AUTHOR REVIEW REQUEST: applicable family requires independent exact-head adversarial verification against its registry invariant; no independent clearance claimed.",
+        "family": "DFF-046",
+        "outcome": "clear"
+      },
+      {
+        "evidence": "AUTHOR REVIEW REQUEST: applicable family requires independent exact-head adversarial verification against its registry invariant; no independent clearance claimed.",
+        "family": "DFF-052",
         "outcome": "clear"
       }
     ],
     "findings": [],
-    "issue": "583",
+    "issue": "594",
     "review_target": [
       {
-        "blob_sha": "e37e2eb3b0d8480126031c41f4564392abf447e9",
-        "path": ".github/workflows/hunter-canonicalization-auto.yml",
+        "blob_sha": "3118a222dd62a813f17c381c84fed645b2949a23",
+        "path": ".github/workflows/hunter-trusted-orchestrator-replay-publish.yml",
         "previous_path": "",
         "status": "modified"
       },
       {
-        "blob_sha": "886a003a67a2d4526bf9009330a3ddc8b3bb86d8",
-        "path": ".github/workflows/hunter-governance-reconcile.yml",
+        "blob_sha": "ae3be86ed7777dc49d802a1ad368e8e56b67e73f",
+        "path": ".github/workflows/hunter-trusted-orchestrator-replay-validate.yml",
         "previous_path": "",
         "status": "modified"
       },
       {
-        "blob_sha": "67cfdc29b24815ffb6d58379aa5afdc1b347bcfc",
-        "path": ".github/workflows/hunter-knowledge-learning.yml",
+        "blob_sha": "9d2df6e299cd9db0760b07300020180cee772c43",
+        "path": "docs/DEFECT_REGISTRY.json",
         "previous_path": "",
         "status": "modified"
       },
       {
-        "blob_sha": "bee342c12b5065d4ba4d623a53e2cc5b7d467de0",
-        "path": ".github/workflows/hunter-merge-readiness.yml",
+        "blob_sha": "84f045357272b90df4443778efe29c41fc88a89d",
+        "path": "scripts/hunter_trusted_orchestrator_replay.py",
         "previous_path": "",
         "status": "modified"
       },
       {
-        "blob_sha": "d6caaac491ac8b52edd8de8fb80a893ed10c9d39",
-        "path": "scripts/hunter_review_orchestrator.py",
+        "blob_sha": "0eecf96125aa2c6ac8d8b4562189f7fd515cba6c",
+        "path": "scripts/hunter_trusted_orchestrator_replay_definition.json",
         "previous_path": "",
         "status": "modified"
       },
       {
-        "blob_sha": "7638f7de183472ce5e8b6b1f25a4aeade0da9de2",
-        "path": "tests/test_hunter_governance_review_v2.py",
+        "blob_sha": "90179588041aeecc8de4de23b9e2b35d58a402d7",
+        "path": "scripts/hunter_trusted_orchestrator_replay_worker.py",
         "previous_path": "",
         "status": "modified"
       },
       {
-        "blob_sha": "74e54adbc95a0c672220079e4dffe07e5a7e8abb",
-        "path": "tests/test_hunter_governance_revision.py",
+        "blob_sha": "126186dd33531caa3b4a787048347295944f0732",
+        "path": "src/hunter/persistence/sql/repositories/base.py",
         "previous_path": "",
         "status": "modified"
       },
       {
-        "blob_sha": "05ef48c710a79fdcb7370e56e53a1f50faf66a7f",
-        "path": "tests/test_hunter_knowledge_learning_workflow.py",
+        "blob_sha": "7f523f9ecaa04820c698beacb557ba95f17f21a0",
+        "path": "src/hunter/persistence/sql/session.py",
         "previous_path": "",
         "status": "modified"
       },
       {
-        "blob_sha": "2c06d860a3767ec8c2645fd87c13f17e858bc279",
-        "path": "tests/test_hunter_review_orchestrator.py",
+        "blob_sha": "15232b692211d32eef96bf3d4d83b414f50081c4",
+        "path": "tests/test_hunter_trusted_orchestrator_replay.py",
         "previous_path": "",
         "status": "modified"
       }
     ],
-    "review_target_digest": "09503465702032f6cb5b260aad20b6f966acae14eba25aac3b08354971291a1f"
+    "review_target_digest": "4841e041d05de3cb310f78766079d32b8eff5e48723567fb570c009f96dcb84a"
   },
-  "review_id": "fbe48775f55a45f496e38ea5ce408551b34b46a107339b6c1d1c2b2da2465628",
+  "review_id": "f409eb6ba389e25b37506937a105ca759d5d35cf9d35ee919ceb80c0d3c8e5af",
   "review_request": {
-    "claims_id": "fbe48775f55a45f496e38ea5ce408551b34b46a107339b6c1d1c2b2da2465628",
+    "claims_id": "f409eb6ba389e25b37506937a105ca759d5d35cf9d35ee919ceb80c0d3c8e5af",
     "schema": "hunter.review-request.v1"
   },
   "schema": "hunter.pre-ready-hostile-review.v1"
