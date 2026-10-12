@@ -76,6 +76,8 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
+import hunter_trusted_orchestrator_replay_worker as worker
+
 ROOT = Path(__file__).resolve().parents[1]
 WORKER_PATH = ROOT / "scripts" / "hunter_trusted_orchestrator_replay_worker.py"
 DEFINITION_PATH = ROOT / "scripts" / "hunter_trusted_orchestrator_replay_definition.json"
@@ -95,6 +97,7 @@ TRUSTED_DEFINITION_FILES: tuple[str, ...] = (
 
 _DEFINITION: dict[str, Any] = json.loads(DEFINITION_PATH.read_text(encoding="utf-8"))
 RECEIPT_SCHEMA = _DEFINITION["schema"]
+ORCHESTRATOR_RELATIVE_PATH = "scripts/hunter_review_orchestrator.py"
 CONTRACT_VERSIONS: dict[str, dict[str, Any]] = _DEFINITION["contract_versions"]
 #: Fixed, deterministic, offline scenario input. Part of the trusted
 #: definition: a candidate cannot supply its own fixture, and no field here
@@ -114,7 +117,9 @@ def detect_contract_version(candidate_root: Path) -> str:
     The migrated v2 implementation deliberately retains the legacy v1 API;
     a complete v2 marker set therefore takes precedence over v1.
     """
-    source = (candidate_root / "scripts" / "hunter_review_orchestrator.py").read_text(encoding="utf-8")
+    # Confinement first: a candidate-committed symlink to the trusted checkout
+    # must be rejected here, never followed and classified as the trusted file.
+    source = worker.read_candidate_text(candidate_root, ORCHESTRATOR_RELATIVE_PATH)
     tree = ast.parse(source)
     names = set()
     for node in tree.body:
@@ -146,8 +151,8 @@ def enforce_trusted_contract_floor(candidate_root: Path, trusted_root: Path) -> 
     if candidate_version == "v1":
         if trusted_version != "v1":
             raise ValueError("candidate attempts v2-to-v1 trusted contract downgrade")
-        relative = Path("scripts/hunter_review_orchestrator.py")
-        if (candidate_root / relative).read_bytes() != (trusted_root / relative).read_bytes():
+        candidate_file = worker.resolve_candidate_file(candidate_root, ORCHESTRATOR_RELATIVE_PATH)
+        if candidate_file.read_bytes() != (trusted_root / ORCHESTRATOR_RELATIVE_PATH).read_bytes():
             raise ValueError("modified candidate cannot select weaker v1 trusted contract")
     return candidate_version
 
@@ -483,8 +488,6 @@ def verify_candidate_module_digests(receipt: Any, candidate_root: Path) -> list[
     if contract_version != actual_contract:
         return [f"receipt contract_version {contract_version!r} differs from candidate {actual_contract!r}"]
 
-    import hunter_trusted_orchestrator_replay_worker as worker
-
     errors: list[str] = []
     required_scenario_ids = get_required_scenario_ids(contract_version)
     for scenario_id in required_scenario_ids:
@@ -493,8 +496,8 @@ def verify_candidate_module_digests(receipt: Any, candidate_root: Path) -> list[
             continue
         try:
             expected_module_digest = worker.candidate_module_digest(candidate_root, scenario_id, contract_version)
-        except OSError as exc:
-            errors.append(f"scenario {scenario_id} candidate module files could not be read for verification: {exc}")
+        except (OSError, ValueError, SyntaxError) as exc:
+            errors.append(f"scenario {scenario_id} candidate input files could not be safely verified: {exc}")
             continue
         if entry.get("candidate_module_digest") != expected_module_digest:
             errors.append(

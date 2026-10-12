@@ -32,6 +32,7 @@ harness/production drift rather than for a real regression.
 from __future__ import annotations
 
 import argparse
+import ast
 import hashlib
 import importlib
 import json
@@ -43,11 +44,13 @@ from multiprocessing.connection import Connection
 from pathlib import Path
 from typing import Any
 
-#: The exact candidate files each scenario reads or imports. Recorded so the
-#: digest a scenario reports is provably scoped to the modules it actually
-#: touched, and so the trusted validator can recompute the identical digest
-#: from its own, independent candidate checkout.
-#: Keys are (contract_version, scenario_id) tuples.
+#: The candidate *root* modules each scenario imports. The files whose content
+#: a scenario's result depends on are the transitive local-import closure of
+#: these roots plus ``CANDIDATE_CONFIG_FILES`` (see ``candidate_input_closure``),
+#: never only the roots: a candidate-controlled helper such as
+#: ``hunter_pre_ready_review.py`` or ``docs/CODE_WRITE_POLICY.json`` changes what
+#: ``independent_review_opportunity_seconds()`` returns without touching the
+#: orchestrator itself. Keys are (contract_version, scenario_id) tuples.
 CANDIDATE_MODULE_FILES: dict[tuple[str, str], tuple[str, ...]] = {
     ("v1", "A"): ("scripts/hunter_review_orchestrator.py",),
     ("v1", "B"): ("scripts/hunter_review_orchestrator.py",),
@@ -63,6 +66,14 @@ CANDIDATE_MODULE_FILES: dict[tuple[str, str], tuple[str, ...]] = {
     ),
 }
 
+#: Candidate configuration the imported modules read at call time. They are
+#: behavioral inputs (the reviewer pool and its timeouts live here), so they are
+#: part of every scenario's digest and must exist inside the candidate root.
+CANDIDATE_CONFIG_FILES: tuple[str, ...] = ("docs/CODE_WRITE_POLICY.json",)
+
+#: The trusted checkout's scripts directory, which this worker's own import path also reaches.
+TRUSTED_SCRIPTS_DIR = Path(__file__).resolve().parent
+
 
 #: The state production records for a cycle still awaiting its collector. Read
 #: from the candidate module rather than hardcoded, so a canonically valid
@@ -70,10 +81,95 @@ CANDIDATE_MODULE_FILES: dict[tuple[str, str], tuple[str, ...]] = {
 WAITING_FOR_REVIEWER_STATE = "WAITING_FOR_REVIEWER"
 
 
+def resolve_candidate_file(candidate_root: Path, relative: str) -> Path:
+    """Resolve one candidate-relative file, failing closed on any escape.
+
+    The candidate checkout is untrusted: it can commit a symlink in place of a
+    module (or of one of its parent directories) pointing at the trusted
+    checkout, so that reading, classifying, importing or hashing it silently
+    follows the link into trusted code. Every component below ``candidate_root``
+    is therefore required to be a real (non-symlink) entry, and the fully
+    resolved path must still lie beneath the resolved ``candidate_root``. This
+    runs before any classification, comparison, import or hashing.
+    """
+
+    relative_path = Path(relative)
+    if relative_path.is_absolute() or ".." in relative_path.parts or not relative_path.parts:
+        raise ValueError(f"candidate path {relative!r} must be a non-empty relative path without '..'")
+    root = candidate_root.resolve(strict=True)
+    current = root
+    for part in relative_path.parts:
+        current = current / part
+        if current.is_symlink():
+            raise ValueError(f"candidate path {relative!r} traverses a symlink at {part!r}; symlinks are rejected")
+    resolved = current.resolve(strict=True)
+    try:
+        resolved.relative_to(root)
+    except ValueError:
+        raise ValueError(f"candidate path {relative!r} resolves outside the candidate root") from None
+    if not resolved.is_file():
+        raise ValueError(f"candidate path {relative!r} is not a regular file")
+    return resolved
+
+
+def read_candidate_text(candidate_root: Path, relative: str) -> str:
+    return resolve_candidate_file(candidate_root, relative).read_text(encoding="utf-8")
+
+
+def _local_imports(source: str) -> set[str]:
+    """Top-level module names imported anywhere in ``source`` (including nested imports)."""
+
+    names: set[str] = set()
+    for node in ast.walk(ast.parse(source)):
+        if isinstance(node, ast.Import):
+            names.update(alias.name.split(".")[0] for alias in node.names)
+        elif isinstance(node, ast.ImportFrom) and node.level == 0 and node.module:
+            names.add(node.module.split(".")[0])
+    return names
+
+
+def candidate_input_closure(candidate_root: Path, scenario_id: str, contract_version: str) -> tuple[str, ...]:
+    """Every candidate file a scenario's behavior can depend on, sorted.
+
+    The transitive closure of candidate ``scripts/<module>.py`` files imported
+    (statically, at any nesting depth) from the scenario's root modules, plus
+    the declared configuration files. A visited set makes the walk terminate on
+    import cycles. A name that resolves to a candidate file entry (even a
+    dangling symlink) is included and therefore validated; any entry that is a
+    symlink, escapes the root, or is missing/unparseable raises (including a
+    dependency the candidate omitted but the trusted checkout also provides), so a hostile
+    or broken dependency can never be silently dropped from the digest.
+    """
+
+    pending = list(CANDIDATE_MODULE_FILES[(contract_version, scenario_id)])
+    closure: set[str] = set()
+    while pending:
+        relative = pending.pop()
+        if relative in closure:
+            continue
+        text = read_candidate_text(candidate_root, relative)
+        closure.add(relative)
+        for name in _local_imports(text):
+            sibling = f"scripts/{name}.py"
+            if sibling in closure:
+                continue
+            if os.path.lexists(candidate_root / sibling):
+                pending.append(sibling)
+            elif (TRUSTED_SCRIPTS_DIR / f"{name}.py").exists():
+                # The worker's sys.path still reaches the trusted scripts: a dependency the
+                # candidate omitted would silently resolve to trusted code instead of failing.
+                raise ValueError(f"candidate is missing local dependency {sibling!r} imported by {relative!r}")
+    for relative in CANDIDATE_CONFIG_FILES:
+        resolve_candidate_file(candidate_root, relative)
+        closure.add(relative)
+    return tuple(sorted(closure))
+
+
 def candidate_module_digest(candidate_root: Path, scenario_id: str, contract_version: str) -> str:
-    payload = {}
-    for relative in CANDIDATE_MODULE_FILES[(contract_version, scenario_id)]:
-        payload[relative] = (candidate_root / relative).read_text(encoding="utf-8")
+    payload = {
+        relative: read_candidate_text(candidate_root, relative)
+        for relative in candidate_input_closure(candidate_root, scenario_id, contract_version)
+    }
     encoded = json.dumps(payload, sort_keys=True, separators=(",", ":"), ensure_ascii=False).encode("utf-8")
     return hashlib.sha256(encoded).hexdigest()
 
@@ -82,7 +178,11 @@ def _import_candidate(candidate_root: Path, module_name: str) -> Any:
     scripts_dir = str((candidate_root / "scripts").resolve())
     if scripts_dir not in sys.path:
         sys.path.insert(0, scripts_dir)
-    return importlib.import_module(module_name)
+    module = importlib.import_module(module_name)
+    expected = resolve_candidate_file(candidate_root, f"scripts/{module_name}.py")
+    if Path(str(getattr(module, "__file__", ""))).resolve() != expected:
+        raise ImportError(f"{module_name} did not load from the candidate checkout at {expected}")
+    return module
 
 
 def _probe_v1_grace_boundary(orchestration: Any, fixture: dict[str, Any], grace: int) -> None:
@@ -143,42 +243,176 @@ def _probe_v1_grace_boundary(orchestration: Any, fixture: dict[str, Any], grace:
         ), "active collector bound ignored"
 
 
+def _probe_v1_ensure_collector_recovery(orchestration: Any, fixture: dict[str, Any], grace: int) -> dict[str, Any]:
+    """Drive the real ``ensure_collector`` through a stale-cycle sequence.
+
+    Only the GitHub boundary is replaced, with one small stateful fake (the
+    recorded cycle, the collector run list, and a dispatch counter); every
+    decision under test -- idempotence inside the grace, bounded re-dispatch,
+    the refreshed cycle, the terminal timeout and the active-collector ceiling
+    -- is made by the candidate's own ``ensure_collector``,
+    ``collector_needs_dispatch``, ``collector_liveness`` outcome handling and
+    ``_older_than``. Timestamps are derived from the wall clock at fixed offsets
+    far larger than scheduling jitter, so the sequence is deterministic.
+    """
+    from dataclasses import replace
+    from datetime import UTC, datetime, timedelta
+    from unittest.mock import patch
+
+    head = fixture["head_sha"]
+    pr_number = fixture["pr_number"]
+    budget = orchestration.MAX_COLLECTOR_DISPATCHES
+    opportunity = orchestration.independent_review_opportunity_seconds()
+    multiplier = orchestration.ACTIVE_COLLECTOR_GRACE_MULTIPLIER
+    assert type(budget) is int and budget > 0, "invalid collector dispatch budget"
+    assert type(opportunity) is int and opportunity > 0 and type(multiplier) is int and multiplier > 1
+
+    fake: dict[str, Any] = {"cycle": None, "runs": 0, "dispatches": 0, "published": [], "liveness": None}
+
+    def iso(age_seconds: int) -> str:
+        return (datetime.now(UTC) - timedelta(seconds=age_seconds)).strftime("%Y-%m-%dT%H:%M:%SZ")
+
+    def fake_read_cycle(*_args: Any) -> tuple[str, Any, Any]:
+        return ("present", fake["cycle"], None) if fake["cycle"] is not None else ("absent", None, None)
+
+    def fake_publish_cycle(_repository: str, _token: str, _head: str, *, cycle: Any) -> None:
+        fake["cycle"] = cycle
+        fake["published"].append(cycle.state)
+
+    def fake_dispatch(*_args: Any) -> None:
+        fake["dispatches"] += 1
+        fake["runs"] += 1
+
+    def fake_liveness(*_args: Any) -> tuple[str, int]:
+        if fake["liveness"] is not None:
+            return fake["liveness"], fake["runs"]
+        return ("dead" if fake["runs"] else "missing"), fake["runs"]
+
+    def ensure() -> Any:
+        return orchestration.ensure_collector("fixture/repo", "", pr_number, head)
+
+    def age_cycle(age_seconds: int) -> None:
+        fake["cycle"] = replace(fake["cycle"], started_at=iso(age_seconds))
+
+    def reset() -> None:
+        fake.update(cycle=None, runs=0, dispatches=0, published=[], liveness=None)
+
+    with (
+        patch.object(orchestration, "reviewer_pool_config_digest", return_value="fixture-digest"),
+        patch.object(orchestration, "read_cycle", side_effect=fake_read_cycle),
+        patch.object(orchestration, "publish_cycle", side_effect=fake_publish_cycle),
+        patch.object(orchestration, "dispatch_collector", side_effect=fake_dispatch),
+        patch.object(orchestration, "collector_liveness", side_effect=fake_liveness),
+        patch.object(orchestration, "collector_runs", return_value=[]),
+        patch.object(orchestration, "current_run_id", return_value=123),
+    ):
+        # 1. A fresh head records a pending cycle and dispatches exactly once.
+        first = ensure()
+        assert first.state == WAITING_FOR_REVIEWER_STATE and first.head_sha == head
+        assert fake["dispatches"] == 1 and fake["published"] == [WAITING_FOR_REVIEWER_STATE], "fresh dispatch"
+
+        # 2. Re-entry inside the grace is idempotent: no duplicate dispatch or publication.
+        assert ensure() == first and fake["dispatches"] == 1 and len(fake["published"]) == 1, "grace not idempotent"
+
+        # 3. A stale cycle whose collector died is refreshed and re-dispatched, but only
+        #    within the finite dispatch budget and never twice for the same stale record.
+        #    Recovery is reachable only while the grace still fits inside the opportunity
+        #    budget; a grace at or beyond it means the cycle times out before it can ever
+        #    be judged dead, so no recovery is expected (and none may happen) in that case.
+        recoverable = grace + 60 < opportunity
+        for _round in range(budget + 3 if recoverable else 0):
+            age_cycle(grace + 30)
+            before = (fake["dispatches"], len(fake["published"]))
+            recovered = ensure()
+            if fake["dispatches"] > before[0]:
+                assert fake["dispatches"] == before[0] + 1, "recovery dispatched more than once"
+                assert len(fake["published"]) == before[1] + 1, "recovery did not refresh the cycle"
+                assert recovered.state == WAITING_FOR_REVIEWER_STATE
+                assert not orchestration._older_than(recovered.started_at, grace), "stale cycle was not refreshed"
+                refreshed = (fake["dispatches"], len(fake["published"]))
+                assert (
+                    ensure() == recovered and (fake["dispatches"], len(fake["published"])) == refreshed
+                ), "refreshed cycle re-dispatched inside the grace"
+        if recoverable:
+            assert fake["dispatches"] == budget, f"dispatch budget not honoured: {fake['dispatches']} != {budget}"
+            exhausted = (fake["dispatches"], len(fake["published"]))
+            age_cycle(grace + 30)
+            stale = fake["cycle"]
+            assert (
+                ensure() == stale and (fake["dispatches"], len(fake["published"])) == exhausted
+            ), "unbounded redispatch"
+        else:
+            assert fake["dispatches"] == 1, "recovery dispatched although the grace outlives the opportunity"
+
+        # 4. Past the opportunity budget with no live collector the cycle ends exactly once.
+        reset()
+        fake["cycle"] = orchestration.ReviewCycle(
+            pr_number=pr_number,
+            head_sha=head,
+            state=WAITING_FOR_REVIEWER_STATE,
+            provider_id="",
+            trigger_id=123,
+            started_at=iso(opportunity + 60),
+            config_digest="fixture-digest",
+        )
+        fake["runs"] = budget
+        timed_out = ensure()
+        assert timed_out.state == "REVIEW_TIMED_OUT", f"stale cycle never reached the terminal timeout: {timed_out}"
+        assert fake["published"] == ["REVIEW_TIMED_OUT"] and fake["dispatches"] == 0
+        assert ensure() == timed_out and fake["published"] == ["REVIEW_TIMED_OUT"], "terminal state not idempotent"
+        assert fake["dispatches"] == 0, "terminal head was re-dispatched"
+
+        # 5. A live collector defers the timeout, but only up to the finite ceiling.
+        reset()
+        fake["liveness"] = "active"
+        fake["runs"] = 1
+        fake["cycle"] = orchestration.ReviewCycle(
+            pr_number=pr_number,
+            head_sha=head,
+            state=WAITING_FOR_REVIEWER_STATE,
+            provider_id="",
+            trigger_id=123,
+            started_at=iso(opportunity + 60),
+            config_digest="fixture-digest",
+        )
+        deferred = ensure()
+        assert deferred.state == WAITING_FOR_REVIEWER_STATE and not fake["published"], "live collector finalized early"
+        assert fake["dispatches"] == 0, "duplicate dispatch beside a live collector"
+        age_cycle(opportunity * multiplier + 60)
+        ceiling = ensure()
+        assert ceiling.state == "REVIEW_TIMED_OUT", "active collector protection is not bounded"
+
+    return {"recovery_dispatches": budget if recoverable else 0, "terminal_timeout": True, "active_ceiling": True}
+
+
 def scenario_a_v1(candidate_root: Path, fixture: dict[str, Any]) -> dict[str, Any]:
     """Legacy v1 contract: ensure_collector manages collector dispatch with liveness grace.
 
-    Two properties of the legacy model, both read through the candidate's real functions:
+    Properties of the legacy model, all read through the candidate's real functions:
 
-    * ``ensure_collector`` dispatches a collector run for a pending cycle and returns the cycle.
     * ``COLLECTOR_LIVENESS_GRACE_SECONDS`` is a positive, finite grace period before liveness
       is judged, so an ordinary listing lag cannot be mistaken for a dead collector.
+    * ``ensure_collector``, driven end to end through a stale-cycle sequence against a fake
+      GitHub boundary, dispatches idempotently, recovers a dead collector within the finite
+      dispatch budget, refreshes the cycle, and reaches a terminal timeout.
     """
 
     orchestration = _import_candidate(candidate_root, "hunter_review_orchestrator")
     grace = orchestration.COLLECTOR_LIVENESS_GRACE_SECONDS
     assert type(grace) is int and grace > 0, f"COLLECTOR_LIVENESS_GRACE_SECONDS is not positive and finite: {grace!r}"
 
-    # Exercise the actual dispatch path, not just the presence of a callable.
-    from unittest.mock import patch
-
-    head = fixture["head_sha"]
-    dispatched = []
-    with (
-        patch.object(orchestration, "reviewer_pool_config_digest", return_value="fixture-digest"),
-        patch.object(orchestration, "read_cycle", return_value=("absent", None, None)),
-        patch.object(orchestration, "current_run_id", return_value=123),
-        patch.object(orchestration, "collector_liveness", return_value=("absent", 0)),
-        patch.object(orchestration, "publish_cycle") as publish,
-        patch.object(orchestration, "dispatch_collector", side_effect=lambda *args: dispatched.append(args)),
-    ):
-        cycle = orchestration.ensure_collector("fixture/repo", "", fixture["pr_number"], head)
-    assert cycle.state == "WAITING_FOR_REVIEWER" and cycle.head_sha == head
-    assert len(dispatched) == 1, "ensure_collector did not dispatch exactly once"
-    publish.assert_called_once()
-
+    recovery = _probe_v1_ensure_collector_recovery(orchestration, fixture, grace)
     # Scenario B performs real elapsed-time boundary probes, shared by v1 A.
     _probe_v1_grace_boundary(orchestration, fixture, grace)
 
-    return {"grace_positive": True, "ensure_collector_present": True, "grace_used_in_dispatch": True}
+    return {
+        "grace_positive": True,
+        "ensure_collector_present": True,
+        "grace_used_in_dispatch": True,
+        "recovery_dispatches": recovery["recovery_dispatches"],
+        "terminal_timeout": recovery["terminal_timeout"],
+        "active_ceiling": recovery["active_ceiling"],
+    }
 
 
 def scenario_b_v1(candidate_root: Path, fixture: dict[str, Any]) -> dict[str, Any]:
@@ -199,23 +433,68 @@ def scenario_b_v1(candidate_root: Path, fixture: dict[str, Any]) -> dict[str, An
     return {"grace_positive": True, "grace_used_in_needs_dispatch": True, "older_than_present": True}
 
 
-def scenario_a_v2(candidate_root: Path, fixture: dict[str, Any]) -> dict[str, Any]:
-    """The review opportunity is a bounded budget, and nothing but a trusted publisher can end a cycle.
+def _probe_v2_budget_is_pool_derived(orchestration: Any, candidate_root: Path) -> int:
+    """Prove the exported budget is *derived from the candidate's reviewer pool*.
 
-    Two properties of the native model, both read through the candidate's real functions:
-
-    * ``independent_review_opportunity_seconds`` is one strictly positive, finite budget derived by the
-      candidate from its own reviewer pool (the collector job lifetime is validated against it); and
-    * ``read_cycle`` believes a published cycle only when the run it cites is a trusted-publisher run on
-      the default branch. A status citing the (status-less) collector run, or a run off the default
-      branch, is never a cycle, so neither the collector nor elapsed time can complete one.
+    A range check cannot tell a pool-derived budget from ``return 3600``. Instead
+    the candidate's own pool loader is swapped for a mutated copy of the real
+    pool and the exported budget must follow it exactly, equal to the
+    candidate's canonical ``reviewer_chain_worst_case_seconds`` of that pool; a
+    hard-coded or disconnected budget does not move. An unreadable or malformed
+    pool must make the budget raise (fail closed) rather than return a number.
     """
+    from copy import deepcopy
+    from unittest.mock import patch
 
-    orchestration = _import_candidate(candidate_root, "hunter_review_orchestrator")
+    pre_ready = _import_candidate(candidate_root, "hunter_pre_ready_review")
+    pool, error = pre_ready.load_reviewer_pool()
+    assert pool is not None and not error, f"candidate reviewer pool is unreadable: {error!r}"
+    canonical = pre_ready.reviewer_chain_worst_case_seconds(pool)
+
     budget = orchestration.independent_review_opportunity_seconds()
     assert (
         type(budget) is int and 0 < budget < 7 * 24 * 3600
     ), f"opportunity budget is not positive and finite: {budget!r}"
+    assert budget == canonical, f"opportunity budget {budget} is not derived from the reviewer pool ({canonical})"
+
+    mutated = deepcopy(pool)
+    enabled = pre_ready.enabled_pool_reviewers(mutated)
+    assert enabled, "candidate reviewer pool has no enabled reviewer"
+    enabled[0]["review_timeout_seconds"] = int(enabled[0]["review_timeout_seconds"]) + 600
+    expected_mutated = pre_ready.reviewer_chain_worst_case_seconds(mutated)
+    assert expected_mutated != canonical, "reviewer pool timeout does not influence the canonical chain budget"
+    with patch.object(pre_ready, "load_reviewer_pool", return_value=(mutated, "")):
+        followed = orchestration.independent_review_opportunity_seconds()
+    assert followed == expected_mutated, "opportunity budget ignores the reviewer pool configuration (hard-coded?)"
+
+    for malformed in (({}, ""), (None, "pool missing"), ({"agents": "x", "timeout_policy": []}, "")):
+        with patch.object(pre_ready, "load_reviewer_pool", return_value=malformed):
+            try:
+                value = orchestration.independent_review_opportunity_seconds()
+            except Exception:  # noqa: BLE001 - any raise is the fail-closed outcome being asserted
+                continue
+        raise AssertionError(
+            f"malformed reviewer pool {malformed!r} produced budget {value!r} instead of failing closed"
+        )
+    return budget
+
+
+def scenario_a_v2(candidate_root: Path, fixture: dict[str, Any]) -> dict[str, Any]:
+    """The review opportunity is a bounded budget, and nothing but a trusted publisher can end a cycle.
+
+    Properties of the native model, all read through the candidate's real functions:
+
+    * ``independent_review_opportunity_seconds`` is one strictly positive, finite budget that is
+      *derived from the candidate's own reviewer pool* (verified by mutating the pool, not by range); and
+    * ``read_cycle`` believes a published cycle only when it was created by the trusted status
+      publisher AND the run it cites is a trusted-publisher run on the default branch. A status from
+      another creator or with no creator, a status citing the (status-less) collector run, or a run
+      off the default branch, is never a cycle, so neither the collector, a forger, nor elapsed time
+      can complete one. Malformed descriptions are never a cycle either.
+    """
+
+    orchestration = _import_candidate(candidate_root, "hunter_review_orchestrator")
+    _probe_v2_budget_is_pool_derived(orchestration, candidate_root)
 
     head = fixture["head_sha"]
     pr_number = int(fixture["pr_number"])
@@ -225,15 +504,22 @@ def scenario_a_v2(candidate_root: Path, fixture: dict[str, Any]) -> dict[str, An
         2: {"head_branch": "main", "path": ".github/workflows/hunter-reviewer-collector.yml"},
         3: {"head_branch": "feature", "path": ".github/workflows/hunter-governance-review.yml"},
     }
+    trusted_creator = {"login": getattr(orchestration, "TRUSTED_STATUS_CREATOR", "github-actions[bot]")}
+    trusted, omitted = object(), object()
 
-    def believed(run_id: int) -> str:
-        status = {
-            "creator": {"login": "github-actions[bot]"},
+    def believed(run_id: int, *, creator: Any = trusted, description: str | None = None) -> str:
+        status: dict[str, Any] = {
             "context": f"{orchestration.CONTEXT_PREFIX}{pr_number}",
-            "description": f"REVIEWER_UNAVAILABLE||{run_id}|{digest}|",
+            # Canonical four-field description (state|provider|trigger|digest): the shape the
+            # candidate's own _parse_cycle documents as the base-generation cycle.
+            "description": description if description is not None else f"REVIEWER_UNAVAILABLE||{run_id}|{digest}",
             "target_url": f"https://github.com/owner/repo/actions/runs/{run_id}",
             "created_at": "2026-01-01T00:00:00Z",
         }
+        if creator is trusted:
+            status["creator"] = trusted_creator
+        elif creator is not omitted:
+            status["creator"] = creator
 
         def request_json(_repository: str, _token: str, _method: str, path: str, payload: Any = None) -> Any:
             if path == f"pulls/{pr_number}":
@@ -255,7 +541,30 @@ def scenario_a_v2(candidate_root: Path, fixture: dict[str, Any]) -> dict[str, An
     assert publisher == "present", f"a trusted publisher cycle must be believed, got {publisher!r}"
     assert collector == "absent", "a status citing the collector run must never be a cycle"
     assert off_branch == "absent", "a status citing a run off the default branch must never be a cycle"
-    return {"budget_positive": True, "publisher": publisher, "collector": collector, "off_branch": off_branch}
+
+    forged = believed(1, creator={"login": "mallory"})
+    assert forged == "absent", "a status from an untrusted creator must never be a cycle"
+    no_creator = believed(1, creator=omitted)
+    assert no_creator == "absent", "a status with no creator must never be a cycle"
+    assert believed(1, creator=None) == "absent", "a status with a null creator must never be a cycle"
+    empty_creator = believed(1, creator={})
+    assert empty_creator == "absent", "a status with an empty creator must never be a cycle"
+
+    for label, description in (
+        ("trailing delimiter with a malformed generation", f"REVIEWER_UNAVAILABLE||1|{digest}|not a generation!"),
+        ("extra field", f"REVIEWER_UNAVAILABLE||1|{digest}||extra"),
+        ("short digest", "REVIEWER_UNAVAILABLE||1|abc"),
+        ("empty", ""),
+    ):
+        assert believed(1, description=description) == "absent", f"malformed description must be refused: {label}"
+    return {
+        "budget_positive": True,
+        "publisher": publisher,
+        "collector": collector,
+        "off_branch": off_branch,
+        "forged_creator": forged,
+        "no_creator": no_creator,
+    }
 
 
 def scenario_b_v2(candidate_root: Path, fixture: dict[str, Any]) -> dict[str, Any]:
@@ -562,14 +871,17 @@ def main() -> int:
             f"scenario {scenario_id!r} not valid for contract {contract_version}; valid: {valid_scenarios}"
         )
 
-    result: dict[str, Any] = {"scenario_id": scenario_id, "contract_version": contract_version}
-    result.update(_run_scenario_isolated(contract_version, scenario_id, candidate_root, fixture))
     # Computed here, in this process, which never imports candidate code
-    # itself -- the scenario ran in a separate spawned child (see
+    # itself -- the scenario runs in a separate spawned child (see
     # _run_scenario_isolated) -- and never accepted from anything that child
-    # reported, so a forged claim in its (untrusted) pipe messages cannot
-    # substitute a fake digest for the real one.
+    # reports, so a forged claim in its (untrusted) pipe messages cannot
+    # substitute a fake digest for the real one. It is also computed *first*:
+    # resolving the complete candidate input closure rejects a symlinked or
+    # escaping candidate file (see resolve_candidate_file) before any candidate
+    # module is imported, so a substituted trusted-checkout file is never run.
+    result: dict[str, Any] = {"scenario_id": scenario_id, "contract_version": contract_version}
     result["candidate_module_digest"] = candidate_module_digest(candidate_root, scenario_id, contract_version)
+    result.update(_run_scenario_isolated(contract_version, scenario_id, candidate_root, fixture))
     print(json.dumps(result, sort_keys=True, separators=(",", ":"), ensure_ascii=False))
     return 0
 
