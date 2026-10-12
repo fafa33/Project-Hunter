@@ -32,6 +32,7 @@ harness/production drift rather than for a real regression.
 from __future__ import annotations
 
 import argparse
+import ast
 import hashlib
 import importlib
 import json
@@ -52,22 +53,29 @@ CONTRACT_V2_MARKERS = ("collector_receipt_problem", "COLLECTOR_RESULTS_SCHEMA")
 
 
 def detect_contract_version(candidate_root: Path) -> str:
-    """Detect which orchestrator contract the candidate implements.
+    """Classify inert candidate source, never importing untrusted code.
 
-    Returns "v1" or "v2". Raises ValueError if neither or both contracts'
-    markers are present -- fail closed on ambiguous or unknown versions.
+    The migrated v2 implementation deliberately retains the legacy v1 API;
+    a complete v2 marker set therefore takes precedence over v1.
     """
-    orchestration = _import_candidate(candidate_root, "hunter_review_orchestrator")
-    has_v1 = all(hasattr(orchestration, marker) for marker in CONTRACT_V1_MARKERS)
-    has_v2 = all(hasattr(orchestration, marker) for marker in CONTRACT_V2_MARKERS)
-    if has_v1 and not has_v2:
-        return "v1"
-    if has_v2 and not has_v1:
+    source = (candidate_root / "scripts" / "hunter_review_orchestrator.py").read_text(encoding="utf-8")
+    tree = ast.parse(source)
+    names = set()
+    for node in tree.body:
+        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)):
+            names.add(node.name)
+        elif isinstance(node, (ast.Assign, ast.AnnAssign)):
+            targets = node.targets if isinstance(node, ast.Assign) else [node.target]
+            for target in targets:
+                if isinstance(target, ast.Name):
+                    names.add(target.id)
+    has_v1 = {"ensure_collector", "COLLECTOR_LIVENESS_GRACE_SECONDS"} <= names
+    has_v2 = {"collector_receipt_problem", "COLLECTOR_RESULTS_SCHEMA"} <= names
+    if has_v2:
         return "v2"
-    raise ValueError(
-        f"candidate orchestrator has ambiguous or unknown contract markers: "
-        f"v1={has_v1}, v2={has_v2}; must have exactly one complete contract"
-    )
+    if has_v1:
+        return "v1"
+    raise ValueError("candidate orchestrator has no complete trusted contract marker set")
 
 
 #: The exact candidate files each scenario reads or imports. Recorded so the
@@ -128,9 +136,23 @@ def scenario_a_v1(candidate_root: Path, fixture: dict[str, Any]) -> dict[str, An
         type(grace) is int and 0 < grace < 7 * 24 * 3600
     ), f"COLLECTOR_LIVENESS_GRACE_SECONDS is not positive and finite: {grace!r}"
 
-    # Verify ensure_collector exists and is callable
-    assert hasattr(orchestration, "ensure_collector"), "ensure_collector missing from v1 contract"
-    assert callable(orchestration.ensure_collector), "ensure_collector is not callable"
+    # Exercise the actual dispatch path, not just the presence of a callable.
+    from unittest.mock import patch
+
+    head = fixture["head_sha"]
+    dispatched = []
+    with (
+        patch.object(orchestration, "reviewer_pool_config_digest", return_value="fixture-digest"),
+        patch.object(orchestration, "read_cycle", return_value=("absent", None, None)),
+        patch.object(orchestration, "current_run_id", return_value=123),
+        patch.object(orchestration, "collector_liveness", return_value=("absent", 0)),
+        patch.object(orchestration, "publish_cycle") as publish,
+        patch.object(orchestration, "dispatch_collector", side_effect=lambda *args: dispatched.append(args)),
+    ):
+        cycle = orchestration.ensure_collector("fixture/repo", "", fixture["pr_number"], head)
+    assert cycle.state == "WAITING_FOR_REVIEWER" and cycle.head_sha == head
+    assert len(dispatched) == 1, "ensure_collector did not dispatch exactly once"
+    publish.assert_called_once()
 
     # Verify the grace period is used in collector liveness logic (collector_needs_dispatch)
     import inspect
@@ -158,7 +180,34 @@ def scenario_b_v1(candidate_root: Path, fixture: dict[str, Any]) -> dict[str, An
         type(grace) is int and 0 < grace < 7 * 24 * 3600
     ), f"COLLECTOR_LIVENESS_GRACE_SECONDS is not positive and finite: {grace!r}"
 
-    # Verify collector_needs_dispatch uses the grace period
+    # Exercise liveness semantics with a real cycle and controlled evidence.
+    from unittest.mock import patch
+
+    cycle = orchestration.ReviewCycle(
+        pr_number=fixture["pr_number"],
+        head_sha=fixture["head_sha"],
+        state="WAITING_FOR_REVIEWER",
+        provider_id="",
+        trigger_id=123,
+        started_at="2020-01-01T00:00:00Z",
+        config_digest="fixture-digest",
+    )
+    with (
+        patch.object(orchestration, "_older_than", return_value=False),
+        patch.object(orchestration, "collector_liveness", return_value=("absent", 0)),
+    ):
+        assert not orchestration.collector_needs_dispatch("fixture/repo", "", cycle), "dispatch inside grace"
+    with (
+        patch.object(orchestration, "_older_than", return_value=True),
+        patch.object(orchestration, "collector_liveness", return_value=("absent", 0)),
+    ):
+        assert orchestration.collector_needs_dispatch("fixture/repo", "", cycle), "missing bounded recovery"
+    with (
+        patch.object(orchestration, "_older_than", return_value=True),
+        patch.object(orchestration, "collector_liveness", return_value=("active", 1)),
+    ):
+        assert not orchestration.collector_needs_dispatch("fixture/repo", "", cycle), "duplicate active dispatch"
+
     import inspect
 
     needs_dispatch_source = inspect.getsource(orchestration.collector_needs_dispatch)

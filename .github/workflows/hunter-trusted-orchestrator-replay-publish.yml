@@ -224,7 +224,7 @@ jobs:
           else:
               if receipt.get("schema") != schema:
                   errors.append(f"receipt schema {receipt.get('schema')!r} != {schema!r}")
-              if contract_version not in contracts:
+              if not isinstance(contract_version, str) or contract_version not in contracts:
                   errors.append("receipt contract_version must identify a trusted contract")
               if receipt.get("candidate_pr") != pr_number:
                   errors.append(f"receipt candidate_pr {receipt.get('candidate_pr')!r} != trusted PR #{pr_number}")

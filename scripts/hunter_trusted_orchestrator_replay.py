@@ -65,8 +65,8 @@ a claim that replay success is equivalent to that live evidence.
 from __future__ import annotations
 
 import argparse
+import ast
 import hashlib
-import importlib
 import json
 import re
 import subprocess
@@ -108,31 +108,30 @@ MAX_SCENARIO_SECONDS = _DEFINITION["max_scenario_seconds"]
 WORKER_TIMEOUT_SECONDS = 120
 
 
-def _import_candidate_orchestrator(candidate_root: Path) -> Any:
-    """Import the candidate's orchestrator module for contract detection."""
-    scripts_dir = str((candidate_root / "scripts").resolve())
-    if scripts_dir not in sys.path:
-        sys.path.insert(0, scripts_dir)
-    return importlib.import_module("hunter_review_orchestrator")
-
-
 def detect_contract_version(candidate_root: Path) -> str:
-    """Detect which orchestrator contract the candidate implements.
+    """Classify inert candidate source, never importing untrusted code.
 
-    Returns "v1" or "v2". Raises ValueError if neither or both contracts'
-    markers are present -- fail closed on ambiguous or unknown versions.
+    The migrated v2 implementation deliberately retains the legacy v1 API;
+    a complete v2 marker set therefore takes precedence over v1.
     """
-    orchestration = _import_candidate_orchestrator(candidate_root)
-    has_v1 = all(hasattr(orchestration, marker) for marker in ("ensure_collector", "COLLECTOR_LIVENESS_GRACE_SECONDS"))
-    has_v2 = all(hasattr(orchestration, marker) for marker in ("collector_receipt_problem", "COLLECTOR_RESULTS_SCHEMA"))
-    if has_v1 and not has_v2:
-        return "v1"
-    if has_v2 and not has_v1:
+    source = (candidate_root / "scripts" / "hunter_review_orchestrator.py").read_text(encoding="utf-8")
+    tree = ast.parse(source)
+    names = set()
+    for node in tree.body:
+        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)):
+            names.add(node.name)
+        elif isinstance(node, (ast.Assign, ast.AnnAssign)):
+            targets = node.targets if isinstance(node, ast.Assign) else [node.target]
+            for target in targets:
+                if isinstance(target, ast.Name):
+                    names.add(target.id)
+    has_v1 = {"ensure_collector", "COLLECTOR_LIVENESS_GRACE_SECONDS"} <= names
+    has_v2 = {"collector_receipt_problem", "COLLECTOR_RESULTS_SCHEMA"} <= names
+    if has_v2:
         return "v2"
-    raise ValueError(
-        f"candidate orchestrator has ambiguous or unknown contract markers: "
-        f"v1={has_v1}, v2={has_v2}; must have exactly one complete contract"
-    )
+    if has_v1:
+        return "v1"
+    raise ValueError("candidate orchestrator has no complete trusted contract marker set")
 
 
 def get_contract_definition(contract_version: str) -> dict[str, Any]:
