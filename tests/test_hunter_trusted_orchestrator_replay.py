@@ -418,9 +418,9 @@ def _detect_contract_version_once(tmp_path):
 # --- Scenario A: a bounded budget / grace period, and only a trusted publisher can end a cycle -----------------------------
 
 
-def test_v2_candidate_fixture_is_classified_as_v2_and_repository_is_still_v1(tmp_path):
+def test_v2_candidate_fixture_is_classified_as_v2_and_legacy_fixture_remains_v1(tmp_path):
     """Both contracts are exercised by the normal suite: nothing below is skipped for lack of a v2 candidate."""
-    assert replay.detect_contract_version(REPO_ROOT) == "v1"
+    assert replay.detect_contract_version(REPO_ROOT) == "v2"
     assert replay.detect_contract_version(_candidate_root(tmp_path / "v1")) == "v1"
     assert replay.detect_contract_version(_candidate_root(tmp_path / "v2", v2=True)) == "v2"
 
@@ -704,7 +704,7 @@ def test_candidate_digest_verification_alone_catches_a_forged_digest(tmp_path):
 
 
 def test_verify_digests_and_validate_cli_round_trip_through_two_unprivileged_steps(tmp_path):
-    receipt, root = _good_receipt(tmp_path)
+    receipt, root = _good_receipt(tmp_path, v2=True)
     receipt_path = tmp_path / "receipt.json"
     receipt_path.write_text(json.dumps(receipt), encoding="utf-8")
     digest_check_path = tmp_path / "digest-check.json"
@@ -1541,7 +1541,7 @@ def test_parse_trusted_replay_identity_rejects_out_of_domain_pr(bad_pr):
 
 
 def test_run_cli_persists_only_the_normalized_identity_values(tmp_path):
-    root = _candidate_root(tmp_path)
+    root = _candidate_root(tmp_path, v2=True)
     out_path = tmp_path / "receipt.json"
 
     run = subprocess.run(
