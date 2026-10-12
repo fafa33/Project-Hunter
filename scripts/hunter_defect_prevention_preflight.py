@@ -1727,7 +1727,9 @@ _UPLOAD_ARTIFACT = re.compile(r"actions/upload-artifact@v[0-9]+")
 #: commit pin. A parsed definition carries no YAML comments, so the release a pin names is verified by that
 #: repository-wide test; here a downgraded major or a lookalike action is what must not pass.
 # The artifact name uses a conditional expression for both pull_request_target and workflow_run events
-_RECEIPT_ARTIFACT_NAME_PULL_REQUEST = "hunter-reviewer-results-${{ github.event.pull_request.head.sha }}-${{ github.run_attempt }}"
+_RECEIPT_ARTIFACT_NAME_PULL_REQUEST = (
+    "hunter-reviewer-results-${{ github.event.pull_request.head.sha }}-${{ github.run_attempt }}"
+)
 _RECEIPT_ARTIFACT_NAME_WORKFLOW_RUN = "hunter-reviewer-results-${{ github.event_name == 'pull_request_target' && github.event.pull_request.head.sha || steps.context.outputs.head_sha }}-${{ github.run_attempt }}"
 _RECEIPT_PATH = "reviewer-results.json"
 _UPLOAD_OPTIONS = frozenset({"name", "path", "if-no-files-found", "retention-days"})
@@ -2004,7 +2006,11 @@ def _one_command(run: Any, script: str, arguments: tuple[str, ...]) -> bool:
 def _untrusted_identity_errors(definition: Any, label: str) -> list[str]:
     """Reject untrusted identity everywhere except the collector-only PR hint."""
     text = yaml.safe_dump(definition, sort_keys=True)
-    errors = [f"{label} must not take identity from {name}" for name in _UNTRUSTED_IDENTITY if name != "workflow_run.pull_requests" and name in text]
+    errors = [
+        f"{label} must not take identity from {name}"
+        for name in _UNTRUSTED_IDENTITY
+        if name != "workflow_run.pull_requests" and name in text
+    ]
     if "workflow_run.pull_requests" in text:
         if label != "the reviewer collector" or not isinstance(definition, dict):
             errors.append(f"{label} must not take identity from workflow_run.pull_requests")
@@ -2122,7 +2128,9 @@ def validate_collector_workflow_definition(definition: Any) -> list[str]:
         # Allow both pull_request_target (native event) and workflow_run (Pre-PR Preflight completion)
         allowed_trigger_keys = {"pull_request_target", "workflow_run"}
         if not trigger_keys <= allowed_trigger_keys or "pull_request_target" not in trigger_keys:
-            errors.append("the reviewer collector must have the GitHub-native pull_request_target trigger and may also have workflow_run on Pre-PR Preflight completion")
+            errors.append(
+                "the reviewer collector must have the GitHub-native pull_request_target trigger and may also have workflow_run on Pre-PR Preflight completion"
+            )
         if "pull_request_target" in triggers:
             options = triggers["pull_request_target"]
             types = options.get("types") if isinstance(options, dict) else None
@@ -2133,7 +2141,9 @@ def validate_collector_workflow_definition(definition: Any) -> list[str]:
                 or not types
                 or not set(types) <= _COLLECTOR_EVENT_TYPES
             ):
-                errors.append("the reviewer collector must declare main-only branches and only its approved event types for pull_request_target")
+                errors.append(
+                    "the reviewer collector must declare main-only branches and only its approved event types for pull_request_target"
+                )
         if "workflow_run" in triggers:
             options = triggers["workflow_run"]
             if (
@@ -2141,7 +2151,9 @@ def validate_collector_workflow_definition(definition: Any) -> list[str]:
                 or options.get("workflows") != ["Hunter / Pre-PR Preflight"]
                 or options.get("types") != ["completed"]
             ):
-                errors.append("the reviewer collector workflow_run trigger must target only Hunter / Pre-PR Preflight on completion")
+                errors.append(
+                    "the reviewer collector workflow_run trigger must target only Hunter / Pre-PR Preflight on completion"
+                )
     jobs = definition.get("jobs")
     if not isinstance(jobs, dict):
         return [*errors, "reviewer collector workflow must declare its jobs as a mapping"]
@@ -2193,7 +2205,9 @@ def validate_collector_workflow_definition(definition: Any) -> list[str]:
             str(env.get(name, "")).strip() == value for name, value in _COLLECTOR_ENV_WORKFLOW_RUN.items()
         )
         if not env_ok:
-            errors.append("the reviewer collector must take its pull request and head only from the native event or the verified workflow_run context")
+            errors.append(
+                "the reviewer collector must take its pull request and head only from the native event or the verified workflow_run context"
+            )
         if not _one_command(step.get("run"), _COLLECTOR_SCRIPT, _COLLECTOR_ARGUMENTS):
             errors.append(
                 "the reviewer collector step must be exactly one fixed collector command on the event identity"
