@@ -184,6 +184,17 @@ COLLECTOR_MUTATIONS = {
     ),
     "custom shell": lambda d: collector_step(d).update(shell="bash {0}"),
     "workflow defaults": lambda d: d.update(defaults={"run": {"shell": "bash"}}),
+    "unrelated privileged command step": lambda d: d["jobs"]["collect"]["steps"].append(
+        {"run": 'gh workflow run other.yml --ref "$GITHUB_REF"'}
+    ),
+    "unrelated action step": lambda d: d["jobs"]["collect"]["steps"].append({"uses": "someone/else@v1"}),
+    "action step that also runs": lambda d: d["jobs"]["collect"]["steps"].append(
+        {"uses": "actions/checkout@v7", "run": "curl evil"}
+    ),
+    "empty permissions": lambda d: d.update(permissions={}),
+    "downgraded dispatch grant": lambda d: d["permissions"].update({"actions": "read"}),
+    "downgraded comment grant": lambda d: d["permissions"].update({"pull-requests": "read"}),
+    "job override drops the grants": lambda d: d["jobs"]["collect"].update(permissions={"contents": "read"}),
     "indirect second invocation": lambda d: d["jobs"]["collect"]["steps"].append(
         {"env": {"S": "scripts/hunter_reviewer_collector.py"}, "run": 'python "$S" --pr 1 --head x'}
     ),
@@ -208,6 +219,8 @@ def test_the_guard_rejects_each_collector_contract_violation(name):
         lambda d: d["jobs"]["collect"].update({"timeout-minutes": 60}),
         lambda d: d.update(**{"run-name": "anything"}),
         lambda d: collector_step(d).update(name="renamed step"),
+        lambda d: d["jobs"]["collect"].update(permissions=dict(d["permissions"])),
+        lambda d: d["jobs"]["collect"]["steps"][-1].update(name="Upload receipt"),
         lambda d: collector_step(d).update(run=collector_step(d)["run"].replace("python ", "python3 ")),
         lambda d: collector_step(d).update(run="  " + collector_step(d)["run"] + "  "),
         lambda d: collector_step(d)["env"].update(EXTRA_SECRET="${{ secrets.GROQ_API_KEY }}"),
@@ -244,6 +257,10 @@ def publisher_checkout(document: dict) -> dict:
         s for s in document["jobs"]["publish"]["steps"] if str(s.get("uses", "")).startswith("actions/checkout")
     )
     return step["with"]
+
+
+def refresh_step(document: dict) -> dict:
+    return next(s for s in document["jobs"]["publish"]["steps"] if "bootstrap_external_review_469" in str(s.get("run")))
 
 
 PUBLISHER_MUTATIONS = {
@@ -283,6 +300,17 @@ PUBLISHER_MUTATIONS = {
     "extra command": lambda d: publisher_step(d).update(run=publisher_step(d)["run"] + " ; curl evil"),
     "second command on a new line": lambda d: publisher_step(d).update(run=publisher_step(d)["run"] + "\ncurl evil"),
     "second publishing step": lambda d: d["jobs"]["publish"]["steps"].append(copy.deepcopy(publisher_step(d))),
+    "unrelated status-writing step": lambda d: d["jobs"]["publish"]["steps"].append(
+        {"run": 'gh api -X POST "repos/$GITHUB_REPOSITORY/statuses/$SHA" -f state=success'}
+    ),
+    "unrelated action step": lambda d: d["jobs"]["publish"]["steps"].append({"uses": "someone/else@v1"}),
+    "empty permissions": lambda d: d.update(permissions={}),
+    "downgraded status grant": lambda d: d["permissions"].update({"statuses": "read"}),
+    "job override drops the status grant": lambda d: d["jobs"]["publish"].update(permissions={"contents": "read"}),
+    "refresh of an unverified pull request": lambda d: refresh_step(d)["env"].update(
+        VERIFIED_PR_NUMBER="${{ github.event.workflow_run.pull_requests[0].number }}"
+    ),
+    "refresh with another command": lambda d: refresh_step(d).update(run=refresh_step(d)["run"] + " ; curl evil"),
 }
 
 
@@ -296,6 +324,9 @@ def test_the_guard_rejects_each_publisher_contract_violation(name):
     [
         lambda d: d["jobs"]["publish"].update({"timeout-minutes": 20}),
         lambda d: publisher_step(d).update(name="renamed"),
+        lambda d: refresh_step(d).update(name="renamed refresh"),
+        lambda d: refresh_step(d).pop("if"),
+        lambda d: d["jobs"]["publish"].update(permissions=dict(d["permissions"])),
         lambda d: d["jobs"]["publish"].update(
             {
                 "if": " github.event.workflow_run.event == 'pull_request_target'\n && github.event.workflow_run.conclusion == 'success' "

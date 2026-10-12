@@ -1942,6 +1942,10 @@ def verified_collector_run(repository: str, token: str, run_id: int) -> dict[str
     return run
 
 
+class NoCollectorReceipt(ValueError):
+    """A verified collector run uploaded no receipt (a deliberate skip, or nothing was collected)."""
+
+
 def read_run_receipt(repository: str, token: str, run: dict[str, Any], *, head: str | None = None) -> tuple[str, Any]:
     """The integrity-checked receipt artifact of one verified run, with the head its name carries.
 
@@ -1955,6 +1959,8 @@ def read_run_receipt(repository: str, token: str, run: dict[str, Any], *, head: 
         for a in _pages(repository, token, f"actions/runs/{run_id}/artifacts", "artifacts")
         if pattern.fullmatch(str(a.get("name") or ""))
     ]
+    if not artifacts:
+        raise NoCollectorReceipt("the collector run uploaded no receipt")
     if len(artifacts) != 1 or artifacts[0].get("expired") is not False:
         raise ValueError("unique immutable collector artifact is unavailable")
     artifact = artifacts[0]

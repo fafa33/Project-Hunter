@@ -36,7 +36,13 @@ def publish(repository: str, token: str, run_id: int) -> tuple[str, int | None]:
     The pull request is returned only once the run, receipt and pull-request identity have all been
     verified, so a caller may refresh that pull request's governance status from it.
     """
-    run, receipt = collector.verified_collector_receipt(repository, token, run_id)
+    try:
+        run, receipt = collector.verified_collector_receipt(repository, token, run_id)
+    except collector.NoCollectorReceipt:
+        # A deliberate collector skip (draft, superseded head, unusable request) writes no receipt.
+        # Nothing is published and the cycle stays pending, exactly as for any missing result; the run
+        # is not turned red for a skip that was never expected to produce one.
+        return "SKIPPED: the collector run left no receipt; the cycle stays pending", None
     pr_number, head = int(receipt["pr_number"]), str(receipt["head_sha"])
     repo = orchestration.request_json(repository, token, "GET", "")
     branch = str((repo or {}).get("default_branch") or "")

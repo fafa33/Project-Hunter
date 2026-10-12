@@ -372,16 +372,30 @@ def test_a_partial_receipt_is_incomplete_evidence_and_publishes_nothing(github):
         lambda g: g.runs[COLLECTOR_RUN].update(conclusion="failure"),
         lambda g: g.runs[COLLECTOR_RUN].update(conclusion="cancelled"),
         lambda g: g.runs[COLLECTOR_RUN].update(event="repository_dispatch"),
-        lambda g: g.artifacts.clear(),
         lambda g: g.unavailable.add(f"actions/runs/{COLLECTOR_RUN}/artifacts"),
         lambda g: g.unavailable.add(f"pulls/{PR}"),
     ],
-    ids=["failed", "cancelled", "dispatched", "no-receipt", "artifacts-unavailable", "pr-unavailable"],
+    ids=["failed", "cancelled", "dispatched", "artifacts-unavailable", "pr-unavailable"],
 )
 def test_a_missing_or_unverifiable_result_fails_closed_and_publishes_nothing(github, mutate):
     github.add_receipt(exhausted_receipt())
     mutate(github)
     with pytest.raises((ValueError, RuntimeError, OSError, orchestration.ReviewRequestBlocked, KeyError)):
+        publish_run()
+    assert github.posted == []
+
+
+def test_a_verified_run_with_no_receipt_is_a_quiet_skip_that_publishes_nothing(github):
+    """A deliberate collector skip writes no receipt: the publisher run stays green and the cycle pending."""
+    outcome, pr = publish_run()
+    assert outcome.startswith("SKIPPED: the collector run left no receipt") and pr is None
+    assert github.posted == []
+
+
+def test_an_unreadable_or_duplicated_receipt_is_still_a_hard_failure(github):
+    github.add_receipt(exhausted_receipt())
+    github.add_receipt(exhausted_receipt())
+    with pytest.raises(ValueError, match="unique immutable"):
         publish_run()
     assert github.posted == []
 

@@ -1702,6 +1702,10 @@ _COLLECTOR_PERMISSIONS = {"contents": "read", "actions": "write", "pull-requests
 _PUBLISHER_SCRIPT = "scripts/hunter_collector_publisher.py"
 _PUBLISHER_ARGUMENTS = ("--repository", '"$GITHUB_REPOSITORY"', "--run-id", '"$COLLECTOR_RUN_ID"')
 _PUBLISHER_RUN_ID = "${{ github.event.workflow_run.id }}"
+_GOVERNANCE_REFRESH_SCRIPT = "scripts/hunter_governance_review/bootstrap_external_review_469.py"
+_GOVERNANCE_REFRESH_ARGUMENTS = ("governance", "--pr", '"$VERIFIED_PR_NUMBER"', "--repository", '"$GITHUB_REPOSITORY"')
+_GOVERNANCE_REFRESH_PR = "${{ steps.publish.outputs.pr_number }}"
+_UPLOAD_ARTIFACT = re.compile(r"actions/upload-artifact@v[0-9]+")
 _PUBLISHER_PERMISSIONS = {
     "actions": "read",
     "checks": "read",
@@ -1955,6 +1959,57 @@ def _untrusted_identity_errors(definition: Any, label: str) -> list[str]:
     return [f"{label} must not take identity from {name}" for name in _UNTRUSTED_IDENTITY if name in text]
 
 
+def _required_permission_errors(
+    definition: dict[str, Any], jobs: dict[str, Any], required: dict[str, str], label: str
+) -> list[str]:
+    """Each executing job must still hold the grants it needs; a downgrade silently disables the workflow.
+
+    ``_permission_errors`` only bounds grants from above. Without this floor, ``permissions: {}`` or a
+    read-only job override passes the ceiling while GitHub denies the dispatch, comment or status write
+    the workflow exists to perform.
+    """
+
+    errors: list[str] = []
+    for name, job in jobs.items():
+        if not isinstance(job, dict):
+            continue
+        effective = job["permissions"] if "permissions" in job else definition.get("permissions")
+        if not isinstance(effective, dict):
+            errors.append(f"{label} job {name} must resolve to an explicit permissions mapping")
+            continue
+        for permission, level in required.items():
+            if _PERMISSION_LEVEL.get(str(effective.get(permission, "none")), -1) < _PERMISSION_LEVEL[level]:
+                errors.append(f"{label} job {name} must hold {permission}: {level}")
+    return errors
+
+
+def _unexpected_step_errors(
+    steps: list[tuple[dict[str, Any], dict[str, Any]]],
+    label: str,
+    commands: tuple[tuple[str, tuple[str, ...]], ...],
+    *,
+    allow_upload: bool = False,
+) -> list[str]:
+    """Every executable step must be the checkout, an approved artifact upload or one approved fixed command.
+
+    The workflow's token and secrets reach every step of the job, so a guard that inspects only the step
+    that names the script would let an added step dispatch workflows, comment or write statuses unseen.
+    """
+
+    errors: list[str] = []
+    for _job, step in steps:
+        uses = str(step.get("uses") or "")
+        if uses:
+            allowed = uses.startswith("actions/checkout") or (allow_upload and _UPLOAD_ARTIFACT.fullmatch(uses))
+            if not allowed or "run" in step:
+                errors.append(f"{label} must not run the unexpected action step {uses!r}")
+            continue
+        run = step.get("run")
+        if not any(_one_command(run, script, arguments) for script, arguments in commands):
+            errors.append(f"{label} must not run any command other than its fixed ones")
+    return errors
+
+
 def validate_collector_workflow_definition(definition: Any) -> list[str]:
     """Guard errors for the parsed reviewer-collector workflow; never raises on malformed input.
 
@@ -1998,6 +2053,10 @@ def validate_collector_workflow_definition(definition: Any) -> list[str]:
         errors.append(f"{label} must declare its permissions explicitly")
     steps = _workflow_steps(jobs)
     errors.extend(_checkout_errors(steps, label))
+    errors.extend(_required_permission_errors(definition, jobs, _COLLECTOR_PERMISSIONS, label))
+    errors.extend(
+        _unexpected_step_errors(steps, label, ((_COLLECTOR_SCRIPT, _COLLECTOR_ARGUMENTS),), allow_upload=True)
+    )
     errors.extend(_untrusted_identity_errors(definition, label))
     collector_steps = [
         step
@@ -2056,6 +2115,22 @@ def validate_collector_publisher_definition(definition: Any) -> list[str]:
         errors.append(f"{label} must declare its permissions explicitly")
     steps = _workflow_steps(jobs)
     errors.extend(_checkout_errors(steps, label))
+    errors.extend(_required_permission_errors(definition, jobs, _PUBLISHER_PERMISSIONS, label))
+    errors.extend(
+        _unexpected_step_errors(
+            steps,
+            label,
+            (
+                (_PUBLISHER_SCRIPT, _PUBLISHER_ARGUMENTS),
+                (_GOVERNANCE_REFRESH_SCRIPT, _GOVERNANCE_REFRESH_ARGUMENTS),
+            ),
+        )
+    )
+    for _job, step in steps:
+        if _GOVERNANCE_REFRESH_SCRIPT in str(step.get("run") or ""):
+            env = step.get("env") if isinstance(step.get("env"), dict) else {}
+            if str(env.get("VERIFIED_PR_NUMBER", "")).strip() != _GOVERNANCE_REFRESH_PR:
+                errors.append(f"{label} must refresh governance only for the pull request its publisher verified")
     errors.extend(_untrusted_identity_errors(definition, label))
     for job in jobs.values():
         condition = " ".join(str(job.get("if") or "").split()) if isinstance(job, dict) else ""
