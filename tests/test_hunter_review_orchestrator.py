@@ -1,8 +1,6 @@
 from __future__ import annotations
 
-import os
 import pathlib
-import subprocess
 
 import hunter_github_transport as transport
 import hunter_pre_ready_review as pre_ready
@@ -412,31 +410,6 @@ def _pull_request_target_types(workflow_name):
     return triggers, triggers.get("pull_request_target") or {}
 
 
-def _assert_draft_pr_starts_no_review(monkeypatch, pr_number):
-    """A Draft PR short-circuits before the review-request lookup and before
-    any collector dispatch."""
-
-    monkeypatch.setattr(
-        orchestrator,
-        "request_json",
-        lambda *_args: {"state": "open", "draft": True, "head": {"sha": HEAD}},
-    )
-    prerequisite_calls = []
-    monkeypatch.setattr(
-        orchestrator,
-        "review_request_state",
-        lambda *_args: prerequisite_calls.append(True)
-        or orchestrator.ReviewRequestReadiness(True, "d" * 64, "", "success"),
-        raising=False,
-    )
-    dispatch_calls = []
-    monkeypatch.setattr(orchestrator, "ensure_collector", lambda *_args: dispatch_calls.append(True), raising=False)
-
-    assert orchestrator.ensure_current("owner/repo", "token", pr_number) is None
-    assert prerequisite_calls == []
-    assert dispatch_calls == []
-
-
 def test_default_branch_without_orchestrator_publishes_bootstrap_pending_without_dispatching_authority():
     """A bootstrap PR cannot invoke a controller that trusted main does not contain.
 
@@ -673,51 +646,6 @@ def test_online_mac_that_never_starts_does_not_stall_pr():
     assert decision.state == "FAILOVER_IN_PROGRESS"
     assert decision.reason == "unresponsive"
     assert decision.next_provider == "codex"
-
-
-# ---------------------------------------------------------------------------
-# Production defect: a completed Hunter Reviewer Collector run always executes
-# from the trusted default branch, so its own workflow_run.head_sha is main's
-# SHA, never the candidate's. Reconcile's PR derivation must never search open
-# PRs by that head_sha for this specific trigger; the candidate PR/head is
-# instead the trusted identity the collector's own run-name already carries.
-# ---------------------------------------------------------------------------
-
-RECONCILE_WORKFLOW = REPOSITORY_ROOT / ".github" / "workflows" / "hunter-governance-reconcile.yml"
-COLLECTOR_WORKFLOW_FILE = REPOSITORY_ROOT / ".github" / "workflows" / "hunter-reviewer-collector.yml"
-_COLLECTOR_BRANCH_MARKER = (
-    'elif [[ "${event_name}" == "workflow_run" '
-    '&& "${EVENT_WORKFLOW_RUN_NAME}" == "Hunter Reviewer Collector" ]]; then'
-)
-
-
-def _reconcile_run_script() -> str:
-    document = yaml.safe_load(RECONCILE_WORKFLOW.read_text(encoding="utf-8"))
-    for step in document["jobs"]["reconcile"]["steps"]:
-        if step.get("name") == "Refresh lightweight governance status":
-            return str(step["run"])
-    raise AssertionError("reconcile governance-refresh step not found")
-
-
-def _collector_branch_body() -> str:
-    script = _reconcile_run_script()
-    assert _COLLECTOR_BRANCH_MARKER in script
-    return script.split(_COLLECTOR_BRANCH_MARKER, 1)[1].split("elif", 1)[0]
-
-
-def _extract_collector_pr_numbers(title: str) -> str:
-    """Run the exact committed shell text that derives pr_numbers for a
-    completed 'Hunter Reviewer Collector' run, against a real bash process --
-    exercising the real committed script rather than a reimplementation."""
-
-    completed = subprocess.run(
-        ["bash", "-c", f'set -euo pipefail\n{_collector_branch_body()}\nprintf "%s" "$pr_numbers"'],
-        env={"EVENT_WORKFLOW_RUN_TITLE": title, "PATH": os.environ.get("PATH", "/usr/bin:/bin")},
-        check=True,
-        capture_output=True,
-        text=True,
-    )
-    return completed.stdout
 
 
 def test_remediation_generation_accepts_only_configured_authority_bots(monkeypatch):

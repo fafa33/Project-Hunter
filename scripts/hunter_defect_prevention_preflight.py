@@ -1706,6 +1706,7 @@ _GOVERNANCE_REFRESH_SCRIPT = "scripts/hunter_governance_review/bootstrap_externa
 _GOVERNANCE_REFRESH_ARGUMENTS = ("governance", "--pr", '"$VERIFIED_PR_NUMBER"', "--repository", '"$GITHUB_REPOSITORY"')
 _GOVERNANCE_REFRESH_PR = "${{ steps.publish.outputs.pr_number }}"
 _UPLOAD_ARTIFACT = re.compile(r"actions/upload-artifact@v[0-9]+")
+_CHECKOUT_ACTION = re.compile(r"actions/checkout@v[0-9]+")
 _PUBLISHER_PERMISSIONS = {
     "actions": "read",
     "checks": "read",
@@ -1924,7 +1925,7 @@ def _checkout_errors(steps: list[tuple[dict[str, Any], dict[str, Any]]], label: 
     """Checkouts must pin trusted default-branch code and persist no credentials."""
 
     errors: list[str] = []
-    checkouts = [step for _job, step in steps if str(step.get("uses") or "").startswith("actions/checkout")]
+    checkouts = [step for _job, step in steps if _CHECKOUT_ACTION.fullmatch(str(step.get("uses") or ""))]
     if not checkouts:
         errors.append(f"{label} must check out the trusted default-branch code")
     for step in checkouts:
@@ -1957,6 +1958,16 @@ def _one_command(run: Any, script: str, arguments: tuple[str, ...]) -> bool:
 def _untrusted_identity_errors(definition: Any, label: str) -> list[str]:
     text = yaml.safe_dump(definition, sort_keys=True)
     return [f"{label} must not take identity from {name}" for name in _UNTRUSTED_IDENTITY if name in text]
+
+
+def _stepless_job_errors(jobs: dict[str, Any], label: str) -> list[str]:
+    """Every job must run an inspectable ``steps`` list: a reusable-workflow job would inherit the token unseen."""
+
+    return [
+        f"{label} job {name} must declare plain steps, never a reusable workflow or an empty job"
+        for name, job in jobs.items()
+        if not isinstance(job, dict) or "uses" in job or not isinstance(job.get("steps"), list) or not job["steps"]
+    ]
 
 
 def _required_permission_errors(
@@ -2000,7 +2011,7 @@ def _unexpected_step_errors(
     for _job, step in steps:
         uses = str(step.get("uses") or "")
         if uses:
-            allowed = uses.startswith("actions/checkout") or (allow_upload and _UPLOAD_ARTIFACT.fullmatch(uses))
+            allowed = _CHECKOUT_ACTION.fullmatch(uses) or (allow_upload and _UPLOAD_ARTIFACT.fullmatch(uses))
             if not allowed or "run" in step:
                 errors.append(f"{label} must not run the unexpected action step {uses!r}")
             continue
@@ -2053,6 +2064,7 @@ def validate_collector_workflow_definition(definition: Any) -> list[str]:
         errors.append(f"{label} must declare its permissions explicitly")
     steps = _workflow_steps(jobs)
     errors.extend(_checkout_errors(steps, label))
+    errors.extend(_stepless_job_errors(jobs, label))
     errors.extend(_required_permission_errors(definition, jobs, _COLLECTOR_PERMISSIONS, label))
     errors.extend(
         _unexpected_step_errors(steps, label, ((_COLLECTOR_SCRIPT, _COLLECTOR_ARGUMENTS),), allow_upload=True)
@@ -2115,6 +2127,7 @@ def validate_collector_publisher_definition(definition: Any) -> list[str]:
         errors.append(f"{label} must declare its permissions explicitly")
     steps = _workflow_steps(jobs)
     errors.extend(_checkout_errors(steps, label))
+    errors.extend(_stepless_job_errors(jobs, label))
     errors.extend(_required_permission_errors(definition, jobs, _PUBLISHER_PERMISSIONS, label))
     errors.extend(
         _unexpected_step_errors(

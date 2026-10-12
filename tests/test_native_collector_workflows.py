@@ -191,6 +191,12 @@ COLLECTOR_MUTATIONS = {
     "action step that also runs": lambda d: d["jobs"]["collect"]["steps"].append(
         {"uses": "actions/checkout@v7", "run": "curl evil"}
     ),
+    "reusable workflow job": lambda d: d["jobs"].update(extra={"uses": "./.github/workflows/other.yml"}),
+    "stepless job": lambda d: d["jobs"].update(extra={"runs-on": "ubuntu-latest"}),
+    "lookalike checkout action": lambda d: d["jobs"]["collect"]["steps"].append(
+        {"uses": "actions/checkout-evil@v1", "with": {"ref": "main", "persist-credentials": False}}
+    ),
+    "unpinned checkout action": lambda d: d["jobs"]["collect"]["steps"].append({"uses": "actions/checkout@main"}),
     "empty permissions": lambda d: d.update(permissions={}),
     "downgraded dispatch grant": lambda d: d["permissions"].update({"actions": "read"}),
     "downgraded comment grant": lambda d: d["permissions"].update({"pull-requests": "read"}),
@@ -304,6 +310,11 @@ PUBLISHER_MUTATIONS = {
         {"run": 'gh api -X POST "repos/$GITHUB_REPOSITORY/statuses/$SHA" -f state=success'}
     ),
     "unrelated action step": lambda d: d["jobs"]["publish"]["steps"].append({"uses": "someone/else@v1"}),
+    "reusable workflow job": lambda d: d["jobs"].update(extra={"uses": "./.github/workflows/other.yml"}),
+    "stepless job": lambda d: d["jobs"].update(extra={"runs-on": "ubuntu-latest"}),
+    "lookalike checkout action": lambda d: d["jobs"]["publish"]["steps"].append(
+        {"uses": "actions/checkout-evil@v1", "with": {"ref": "main", "persist-credentials": False}}
+    ),
     "empty permissions": lambda d: d.update(permissions={}),
     "downgraded status grant": lambda d: d["permissions"].update({"statuses": "read"}),
     "job override drops the status grant": lambda d: d["jobs"]["publish"].update(permissions={"contents": "read"}),
