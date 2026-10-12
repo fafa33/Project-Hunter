@@ -102,7 +102,9 @@ jobs:
             --candidate-sha "$CANDIDATE_SHA" \
             --out replay-receipt.json
 
+      # Preserve failed scenario evidence without changing the replay job conclusion.
       - name: Upload replay receipt
+        if: ${{ always() }}
         uses: actions/upload-artifact@v4
         with:
           name: replay-receipt

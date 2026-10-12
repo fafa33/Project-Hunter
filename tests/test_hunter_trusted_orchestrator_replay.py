@@ -1264,3 +1264,20 @@ def test_cmd_run_and_cmd_validate_never_forward_raw_argparse_pr_or_sha():
         assert (
             source.count("args.candidate_sha") == 1
         ), f"{name} references args.candidate_sha somewhere other than identity construction"
+
+
+def test_failed_replay_still_uploads_diagnostic_receipt_without_weakening_gate() -> None:
+    """A failed replay must expose its evidence but never unlock digest verification."""
+    import yaml
+
+    workflow = yaml.safe_load(
+        (REPO_ROOT / ".github/workflows/hunter-trusted-orchestrator-replay-validate.yml").read_text(encoding="utf-8")
+    )
+    jobs = workflow["jobs"]
+    steps = jobs["validate-replay"]["steps"]
+    replay_step = next(step for step in steps if step["name"] == "Run trusted candidate orchestrator replay")
+    upload = next(step for step in steps if step["name"] == "Upload replay receipt")
+    assert "continue-on-error" not in replay_step
+    assert upload["if"] == "${{ always() }}"
+    assert upload["with"]["path"] == "replay-receipt.json"
+    assert "needs.validate-replay.result == 'success'" in jobs["verify-candidate-digest"]["if"]
