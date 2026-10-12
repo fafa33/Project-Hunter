@@ -297,6 +297,7 @@ def _candidate_root(
     is what previously let the harness assert an invariant production never
     implemented while its own suite stayed green.
     """
+    tmp_path.mkdir(parents=True, exist_ok=True)
     root = tmp_path / "candidate"
     # Remove existing directory if it exists (for test isolation)
     if root.exists():
