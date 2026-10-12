@@ -64,10 +64,13 @@ def test_read_cycle_accepts_only_current_head_trusted_workflow_status(monkeypatc
             ]
         if path == "":
             return {"default_branch": "main"}
+        if path == "commits/main":
+            return {"sha": "e" * 40}
         if path == "actions/runs/123":
             return {
                 "id": 123,
                 "head_branch": "main",
+                "head_sha": "e" * 40,
                 "path": ".github/workflows/hunter-governance-review.yml",
             }
         raise AssertionError(path)
@@ -2050,3 +2053,19 @@ def test_duplicate_collector_appearing_at_terminal_boundary_blocks_timeout(monke
     result = orchestrator.ensure_collector("owner/repo", "token", 472, HEAD)
     assert result.state == "WAITING_FOR_REVIEWER"
     assert stored["published"] == []
+
+
+def test_pool_exhaustion_uses_native_receipt_validator(monkeypatch):
+    monkeypatch.setattr(orchestrator, "collector_receipt_problem", lambda *_a, **_k: "reject from native validator")
+    result = orchestrator.pool_exhaustion(
+        {},
+        repository="owner/repo",
+        pr_number=472,
+        head_sha=HEAD,
+        run_id=123,
+        claims_id="d" * 64,
+        generation_id="",
+        pool={},
+    )
+    assert result.exhausted is False
+    assert "reject from native validator" in result.reason

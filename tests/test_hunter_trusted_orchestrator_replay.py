@@ -197,42 +197,7 @@ NEVER_RECOVERS_A_STALE_CYCLE = (
     "    return False",
 )
 
-#: Minimal, contract-faithful v2 surface layered on the real orchestrator. The repository's
-#: trusted orchestrator is still the v1 contract (it has no receipt API yet), so this appended
-#: block is what makes a genuine v2 candidate exist for the replay to classify and execute.
-V2_RECEIPT_CONTRACT = """
-
-COLLECTOR_RESULTS_SCHEMA = "hunter.collector-results.v1"
-
-
-def collector_receipt_problem(
-    receipt, *, repository, pr_number, head_sha, run_id, run_attempt=None, generation_id=None
-):
-    if not isinstance(receipt, dict):
-        return "receipt is not an object"
-    expected = {
-        "schema": COLLECTOR_RESULTS_SCHEMA,
-        "repository": repository,
-        "pr_number": pr_number,
-        "head_sha": head_sha,
-        "run_id": run_id,
-    }
-    if run_attempt is not None:
-        expected["run_attempt"] = run_attempt
-    for name, value in expected.items():
-        if receipt.get(name) != value or type(receipt.get(name)) is not type(value):
-            return f"receipt {name} does not match the run it was minted for"
-    for name in ("claims_id", "configuration_digest"):
-        if not isinstance(receipt.get(name), str) or not re.fullmatch(r"[0-9a-f]{64}", receipt[name]):
-            return f"receipt {name} is missing or malformed"
-    generation = receipt.get("remediation_generation_id", "")
-    if generation_id is not None and generation != generation_id:
-        return "receipt belongs to another remediation generation"
-    attempts = receipt.get("attempts")
-    if not isinstance(attempts, list) or not all(isinstance(item, dict) for item in attempts):
-        return "receipt attempts are malformed"
-    return ""
-"""
+# v2 fixtures use the actual candidate production receipt validator, never a test-supplied implementation.
 
 # v1-specific mutations (for ensure_collector/COLLECTOR_LIVENESS_GRACE_SECONDS contract)
 #: The grace period is not positive and finite.
@@ -343,8 +308,10 @@ def _candidate_root(
 
     orchestrator_path = root / "scripts" / "hunter_review_orchestrator.py"
     source = orchestrator_path.read_text(encoding="utf-8") if orchestrator_src is None else orchestrator_src
-    if v2:
-        source += V2_RECEIPT_CONTRACT
+    if not v2:
+        # Emulate trusted main's legacy v1 surface from the production module;
+        # v2 fixtures must retain the unmodified, real production receipt API.
+        source = source.split("\n\ndef collector_receipt_problem(", 1)[0]
     for anchor, replacement in orchestrator_mutations:
         assert anchor in source, f"mutation anchor missing from candidate orchestrator: {anchor!r}"
         source = source.replace(anchor, replacement, 1)
@@ -1958,3 +1925,64 @@ def test_package_and_relative_imports_are_in_digest_closure(tmp_path):
     before = worker.candidate_module_digest(root, "A", "v1")
     (root / "src/hunter/helper.py").write_text("VALUE = 2\n", encoding="utf-8")
     assert before != worker.candidate_module_digest(root, "A", "v1")
+
+
+def test_hosted_replay_runs_candidate_worker_as_nonowner(tmp_path, monkeypatch):
+    """Hosted candidate code cannot mutate and restore the runner-owned digest inputs."""
+    import subprocess
+
+    workspace = tmp_path.resolve()
+    monkeypatch.setenv("GITHUB_ACTIONS", "true")
+    monkeypatch.setenv("GITHUB_WORKSPACE", str(workspace))
+    calls = []
+
+    def fake_run(command, **kwargs):
+        calls.append(command)
+        return subprocess.CompletedProcess(command, 0, stdout='{"outcome":"pass","measurements":{}}', stderr="")
+
+    monkeypatch.setattr(replay.subprocess, "run", fake_run)
+    replay._run_scenario(
+        "A", workspace / "candidate", workspace / "fixture.json", workspace_root=workspace, contract_version="v2"
+    )
+    assert calls[0][:5] == ["sudo", "-n", "-u", "nobody", "--"]
+    # A failed privilege-drop is a worker failure, not a privileged fallback.
+    assert calls[0][5] == __import__("sys").executable
+
+
+def test_hosted_worker_does_not_apply_to_unrelated_test_fixture(tmp_path, monkeypatch):
+    import subprocess
+
+    monkeypatch.setenv("GITHUB_ACTIONS", "true")
+    monkeypatch.setenv("GITHUB_WORKSPACE", str(tmp_path / "actual-ci-root"))
+    calls = []
+
+    def fake_run(command, **kwargs):
+        calls.append(command)
+        return subprocess.CompletedProcess(command, 0, stdout='{"outcome":"pass","measurements":{}}', stderr="")
+
+    monkeypatch.setattr(replay.subprocess, "run", fake_run)
+    replay._run_scenario(
+        "A", tmp_path / "candidate", tmp_path / "fixture.json", workspace_root=tmp_path, contract_version="v2"
+    )
+    assert calls[0][0] == __import__("sys").executable
+
+
+def test_v2_receipt_validation_is_native_production_and_reaches_finalization(tmp_path):
+    import inspect
+
+    import hunter_review_orchestrator as production
+
+    root = _candidate_root(tmp_path, v2=True)
+    actual_source = (root / "scripts/hunter_review_orchestrator.py").read_text(encoding="utf-8")
+    assert actual_source == (REPO_ROOT / "scripts/hunter_review_orchestrator.py").read_text(encoding="utf-8")
+    assert "collector_receipt_problem(" in inspect.getsource(production.pool_exhaustion)
+
+
+def test_v2_scenario_rejects_removed_trusted_run_revision_binding(tmp_path):
+    mutation = (
+        '            if not isinstance(comparison, dict) or comparison.get("status") not in {"ahead", "identical"}:',
+        "            if False:",
+    )
+    version, error = _fails_contract_aware(tmp_path, (mutation,), scenario="A", v2=True)
+    assert version == "v2"
+    assert "unrelated commit" in error

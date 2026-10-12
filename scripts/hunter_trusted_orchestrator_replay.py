@@ -375,8 +375,24 @@ def _run_scenario(
     if scenario_id not in required_scenario_ids:
         raise ValueError(f"scenario_id {scenario_id!r} is not one of the canonical {required_scenario_ids}")
     started = datetime.now(UTC)
+    # On hosted Linux, every candidate-touching worker runs as an OS identity
+    # that does not own the checkout. The runner-owned tree is writable by the
+    # trusted parent but cannot be changed (or restored after a mutation) by
+    # candidate module code. This closes the digest-before-execution TOCTOU.
+    # Never silently fall back to the privileged runner account on hosted CI.
+    import os
+
+    hosted_workspace = os.environ.get("GITHUB_WORKSPACE", "")
+    hosted_candidate = (
+        os.environ.get("GITHUB_ACTIONS") == "true"
+        and bool(hosted_workspace)
+        and workspace_root == Path(hosted_workspace).resolve()
+        and candidate_root == workspace_root / "candidate"
+    )
+    worker_prefix = ["sudo", "-n", "-u", "nobody", "--"] if hosted_candidate else []
     process = subprocess.run(
-        [
+        worker_prefix
+        + [
             sys.executable,
             str(WORKER_PATH),
             "--workspace-root",

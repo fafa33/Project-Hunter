@@ -501,6 +501,20 @@ def read_cycle(
             continue
         if str(run.get("head_branch") or "") != default_branch:
             continue
+        # A run from the default branch is not automatically a trusted run:
+        # it must also belong to the current default-branch history. Workflow
+        # runs target main's own SHA, not the candidate PR SHA.
+        run_revision = str(run.get("head_sha") or "")
+        if not re.fullmatch(r"[0-9a-f]{40}", run_revision):
+            continue
+        trusted_tip = request_json(repository, token, "GET", f"commits/{default_branch}")
+        trusted_revision = str((trusted_tip or {}).get("sha") or "")
+        if not re.fullmatch(r"[0-9a-f]{40}", trusted_revision):
+            continue
+        if run_revision != trusted_revision:
+            comparison = request_json(repository, token, "GET", f"compare/{run_revision}...{trusted_revision}")
+            if not isinstance(comparison, dict) or comparison.get("status") not in {"ahead", "identical"}:
+                continue
         run_path = str(run.get("path") or "")
         collector_terminal = (
             run_path == COLLECTOR_WORKFLOW_PATH
@@ -950,6 +964,16 @@ def pool_exhaustion(
     # Imported here: the collector imports this module at import time.
     import hunter_reviewer_collector as collector
 
+    problem = collector_receipt_problem(
+        receipt,
+        repository=repository,
+        pr_number=pr_number,
+        head_sha=head_sha,
+        run_id=run_id,
+        generation_id=generation_id,
+    )
+    if problem:
+        return PoolExhaustion(False, problem)
     if not isinstance(receipt, dict):
         return PoolExhaustion(False, "collector receipt is not an object")
     expected = {
@@ -1523,3 +1547,32 @@ def main() -> int:
 
 if __name__ == "__main__":
     raise SystemExit(main())
+
+
+def collector_receipt_problem(
+    receipt, *, repository, pr_number, head_sha, run_id, run_attempt=None, generation_id=None
+):
+    if not isinstance(receipt, dict):
+        return "receipt is not an object"
+    expected = {
+        "schema": COLLECTOR_RESULTS_SCHEMA,
+        "repository": repository,
+        "pr_number": pr_number,
+        "head_sha": head_sha,
+        "run_id": run_id,
+    }
+    if run_attempt is not None:
+        expected["run_attempt"] = run_attempt
+    for name, value in expected.items():
+        if receipt.get(name) != value or type(receipt.get(name)) is not type(value):
+            return f"receipt {name} does not match the run it was minted for"
+    for name in ("claims_id", "configuration_digest"):
+        if not isinstance(receipt.get(name), str) or not re.fullmatch(r"[0-9a-f]{64}", receipt[name]):
+            return f"receipt {name} is missing or malformed"
+    generation = receipt.get("remediation_generation_id", "")
+    if generation_id is not None and generation != generation_id:
+        return "receipt belongs to another remediation generation"
+    attempts = receipt.get("attempts")
+    if not isinstance(attempts, list) or not all(isinstance(item, dict) for item in attempts):
+        return "receipt attempts are malformed"
+    return ""

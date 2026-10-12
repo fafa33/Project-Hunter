@@ -509,10 +509,16 @@ def scenario_a_v2(candidate_root: Path, fixture: dict[str, Any]) -> dict[str, An
     head = fixture["head_sha"]
     pr_number = int(fixture["pr_number"])
     digest = fixture["config_digest"]
+    trusted_sha = "e" * 40
     runs = {
-        1: {"head_branch": "main", "path": ".github/workflows/hunter-governance-review.yml"},
-        2: {"head_branch": "main", "path": ".github/workflows/hunter-reviewer-collector.yml"},
-        3: {"head_branch": "feature", "path": ".github/workflows/hunter-governance-review.yml"},
+        1: {"head_branch": "main", "head_sha": trusted_sha, "path": ".github/workflows/hunter-governance-review.yml"},
+        2: {"head_branch": "main", "head_sha": trusted_sha, "path": ".github/workflows/hunter-reviewer-collector.yml"},
+        3: {
+            "head_branch": "feature",
+            "head_sha": trusted_sha,
+            "path": ".github/workflows/hunter-governance-review.yml",
+        },
+        4: {"head_branch": "main", "head_sha": "f" * 40, "path": ".github/workflows/hunter-governance-review.yml"},
     }
     trusted_creator = {"login": getattr(orchestration, "TRUSTED_STATUS_CREATOR", "github-actions[bot]")}
     trusted, omitted = object(), object()
@@ -538,6 +544,10 @@ def scenario_a_v2(candidate_root: Path, fixture: dict[str, Any]) -> dict[str, An
                 return [status]
             if path == "":
                 return {"default_branch": "main"}
+            if path == "commits/main":
+                return {"sha": trusted_sha}
+            if path == f"compare/{'f' * 40}...{trusted_sha}":
+                return {"status": "diverged"}
             if path == f"actions/runs/{run_id}":
                 return runs[run_id]
             raise AssertionError(f"unexpected request {path!r}")
@@ -548,6 +558,8 @@ def scenario_a_v2(candidate_root: Path, fixture: dict[str, Any]) -> dict[str, An
         return found
 
     publisher, collector, off_branch = believed(1), believed(2), believed(3)
+    wrong_head = believed(4)
+    assert wrong_head == "absent", "a trusted workflow run from an unrelated commit must never authenticate a cycle"
     assert publisher == "present", f"a trusted publisher cycle must be believed, got {publisher!r}"
     assert collector == "absent", "a status citing the collector run must never be a cycle"
     assert off_branch == "absent", "a status citing a run off the default branch must never be a cycle"
@@ -617,6 +629,28 @@ def scenario_b_v2(candidate_root: Path, fixture: dict[str, Any]) -> dict[str, An
         return orchestration.collector_receipt_problem(candidate, **arguments)
 
     assert problem(receipt) == "", "a well-formed receipt for its own run must be usable"
+    # A synthetic validator that is never called by the production collector
+    # finalization path is not a v2 contract. Exercise the real call site and
+    # prove the candidate cannot finalize a receipt rejected by that validator.
+    from unittest.mock import patch
+
+    with patch.object(
+        orchestration, "collector_receipt_problem", return_value="rejected by native validator"
+    ) as validator:
+        decision = orchestration.pool_exhaustion(
+            receipt,
+            repository="owner/repo",
+            pr_number=pr_number,
+            head_sha=head,
+            run_id=run_id,
+            claims_id="c" * 64,
+            generation_id="",
+            pool={},
+        )
+    assert validator.called, "production finalization does not consult the native receipt validator"
+    assert (
+        decision.exhausted is False and "rejected by native validator" in decision.reason
+    ), "production finalization can ignore a failed native receipt validation"
     rejected = {
         "other pull request": problem(receipt, pr_number=pr_number + 1),
         "other head": problem(receipt, head_sha="a" * 40),
