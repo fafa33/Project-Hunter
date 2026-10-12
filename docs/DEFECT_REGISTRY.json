@@ -468,7 +468,14 @@
             "lifecycle": "regression-tested",
             "sources": [
                 "PR #535 live CI on branch issue-534-ready-review-orchestration, 2026-09: fixes to hunter_review_orchestrator.py's exact-head collector dispatch and reviewer-opportunity timing could not be exercised by the PR's own live CI runs, because hunter-governance-review.yml / hunter-governance-reconcile.yml / hunter-reviewer-collector.yml execute only from the trusted default branch, which does not yet contain the candidate's unmerged controller-logic change -- confirmed via git diff main HEAD -- scripts/hunter_merge_readiness_v2.py showing the relevant fix code exists only on the candidate branch. Resolved by the Trusted Candidate Orchestrator Replay Harness in this contribution."
-            ]
+            ],
+            "class": "trusted-controller-bootstrap-deadlock",
+            "classification": "systemic",
+            "guard_boundary": "reviewer-pool admission and trusted health gating",
+            "guard": "Trusted replay harness with fail-closed contract version detection; no production authority resolver consults replay status.",
+            "source": "PR #592 migration: v2 native collector replaces v1 legacy collector orchestration",
+            "status": "regression-tested",
+            "test": "tests/test_hunter_trusted_orchestrator_replay.py::test_scenario_a_passes_against_real_production"
         },
         {
             "id": "PRH-058",
