@@ -99,6 +99,8 @@ def _open_pr(monkeypatch, head=HEAD, draft=False):
     fake = NativeFake().install(monkeypatch)
     for number in (MIGRATION_PR, ORDINARY_PR):
         fake.prs[number] = {"state": "open", "draft": draft, "base": {"ref": "main"}, "head": {"sha": head}}
+    fake.runs[COLLECTOR_RUN]["head_sha"] = head
+    fake.runs[COLLECTOR_RUN]["pull_requests"] = [{"number": MIGRATION_PR}, {"number": ORDINARY_PR}]
     _GITHUB["fake"] = fake
 
 
@@ -365,10 +367,10 @@ def test_exact_head_binding_remains_mandatory(monkeypatch):
 
     assert decision is not None and decision.proceed
     # The event head must equal the pull request's current head; a stale event head is refused.
-    stale = collector.verify_native_start(
-        MIGRATION_REPOSITORY, "token", MIGRATION_PR, HEAD, COLLECTOR_RUN, event="pull_request_target"
-    )
-    assert not stale.proceed
+    with pytest.raises(ValueError):  # the run executed for another head: nothing is collected
+        collector.verify_native_start(
+            MIGRATION_REPOSITORY, "token", MIGRATION_PR, HEAD, COLLECTOR_RUN, event="pull_request_target"
+        )
 
 
 # --- 9. draft stays safe ----------------------------------------------------

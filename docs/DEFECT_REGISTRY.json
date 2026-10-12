@@ -1795,7 +1795,7 @@
         "tests/test_hunter_reviewer_collector.py::test_collector_workflow_can_write_pr_conversation_triggers",
         "tests/test_hunter_reviewer_collector.py::test_reused_api_invocation_recovers_persisted_result",
         "tests/test_hunter_reviewer_collector.py::test_main_branch_advance_does_not_invalidate_trusted_collector_receipt",
-        "tests/test_hunter_reviewer_collector.py::test_collector_run_off_current_default_branch_history_fails_closed",
+        "tests/test_hunter_reviewer_collector.py::test_collector_run_for_a_pull_request_not_on_the_default_branch_fails_closed",
         "tests/test_hunter_reviewer_collector.py::test_groq_authority_verifies_prior_api_exhaustion_from_trusted_collector",
         "tests/test_exact_head_review_authority.py::test_review_fetch_rejects_authenticated_native_codex_clear_issue_comment",
         "tests/test_exact_head_review_authority.py::test_github_actions_ack_without_matching_result_cannot_create_api_review_authority",

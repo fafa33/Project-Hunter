@@ -1706,7 +1706,10 @@ _GOVERNANCE_REFRESH_SCRIPT = "scripts/hunter_governance_review/bootstrap_externa
 _GOVERNANCE_REFRESH_ARGUMENTS = ("governance", "--pr", '"$VERIFIED_PR_NUMBER"', "--repository", '"$GITHUB_REPOSITORY"')
 _GOVERNANCE_REFRESH_PR = "${{ steps.publish.outputs.pr_number }}"
 _UPLOAD_ARTIFACT = re.compile(r"actions/upload-artifact@v[0-9]+")
-_CHECKOUT_ACTION = re.compile(r"actions/checkout@v[0-9]+")
+#: The required checkout major (``tests/test_hunter_pr_preflight.py::REQUIRED_ACTION_MAJORS``), or an immutable
+#: commit pin. A parsed definition carries no YAML comments, so the release a pin names is verified by that
+#: repository-wide test; here a downgraded major or a lookalike action is what must not pass.
+_CHECKOUT_ACTION = re.compile(r"actions/checkout@(?:v7(?:\.[0-9]+)*|[0-9a-f]{40})")
 _PUBLISHER_PERMISSIONS = {
     "actions": "read",
     "checks": "read",

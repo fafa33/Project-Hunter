@@ -63,7 +63,17 @@ class NativeFake:
         self.archives: dict[int, bytes] = {}
         self.posted: list[tuple[str, dict[str, Any]]] = []
         self.unavailable: set[str] = set()
-        self.add_run(COLLECTOR_RUN, path=COLLECTOR_PATH, event="pull_request_target", conclusion="success")
+        # For pull_request_target GitHub records the pull request's *source* branch and head commit.
+        self.add_run(
+            COLLECTOR_RUN,
+            path=COLLECTOR_PATH,
+            event="pull_request_target",
+            conclusion="success",
+            head_branch="issue-branch",
+            head_sha=HEAD,
+            pull_requests=[{"number": PR}],
+        )
+        # A workflow_run event runs on the default branch and records its tip.
         self.add_run(PUBLISHER_RUN, path=PUBLISHER_PATH, event="workflow_run", conclusion="success")
 
     # -- fixtures ---------------------------------------------------------------------------

@@ -632,31 +632,39 @@ def collect_attempts(pool: dict[str, Any], head: str, backend: Backend) -> list[
     return records
 
 
-def valid_run(run: dict[str, Any], run_id: int, branch: str, revision: str) -> bool:
+def valid_run(run: dict[str, Any], run_id: int, revision: str) -> bool:
+    """Whether ``run`` is a completed, successful run of the collector workflow's own event.
+
+    For a ``pull_request_target`` run, GitHub's run record carries the pull request's *source* branch
+    and head commit (``head_branch`` / ``head_sha``); only the workflow definition and the code the
+    workflow checks out come from the base branch. The run therefore proves *which head* it ran for,
+    not which code it ran: that trust comes from the event itself, which always resolves the workflow
+    from the base branch, and from the caller re-checking that the pull request still targets the
+    default branch.
+    """
     return (
         run.get("id") == run_id
         and type(run.get("run_attempt")) is int
         and run["run_attempt"] >= 1
-        and run.get("head_branch") == branch
         and governance._is_commit_sha(str(run.get("head_sha") or ""))
         and run.get("head_sha") == revision
         and run.get("path") == WORKFLOW
-        # The only entry point: GitHub's own pull_request_target event, resolved from the
-        # default branch. A dispatched, manual or scheduled run is never reviewer authority.
+        # The only entry point: GitHub's own pull_request_target event. A dispatched, manual or
+        # scheduled run is never reviewer authority.
         and run.get("event") == "pull_request_target"
         and run.get("status") == "completed"
         and run.get("conclusion") == "success"
     )
 
 
-def _run_on_default_branch_history(repository: str, token: str, branch: str, revision: str) -> bool:
-    tip = governance.request_json(repository, token, "GET", f"commits/{branch}")
-    if not isinstance(tip, dict) or not governance._is_commit_sha(str(tip.get("sha") or "")):
-        raise ValueError("trusted default-branch tip is unavailable")
-    payload = governance.request_json(repository, token, "GET", f"compare/{revision}...{tip['sha']}")
-    if not isinstance(payload, dict):
-        raise ValueError("default-branch ancestry comparison payload is malformed")
-    return str(payload.get("status") or "") in {"ahead", "identical"}
+def _run_pull_request_numbers(run: dict[str, Any]) -> set[int]:
+    """Pull request numbers GitHub itself associates with ``run`` (objects or bare numbers)."""
+    numbers: set[int] = set()
+    for item in run.get("pull_requests") or []:
+        number = item.get("number") if isinstance(item, dict) else item
+        if type(number) is int:
+            numbers.add(number)
+    return numbers
 
 
 def _pages(repository: str, token: str, path: str, key: str | None = None) -> list[dict[str, Any]]:
@@ -1923,22 +1931,19 @@ RECEIPT_ARTIFACT_PREFIX = "hunter-reviewer-results-"
 
 
 def verified_collector_run(repository: str, token: str, run_id: int) -> dict[str, Any]:
-    """The actual completed, successful collector run on the trusted default branch, or raise.
+    """The actual completed, successful collector run, or raise.
 
     Identity comes from GitHub's own run record, never from a run title, a dispatch payload or an
-    artifact: the workflow file, the ``pull_request_target`` event, the default branch, the exact
-    revision and its place in default-branch history are all re-read from the API.
+    artifact: the workflow file, the ``pull_request_target`` event, the run attempt and the head the
+    run executed for are re-read from the API. Which pull request that head belongs to, and that it
+    targets the default branch, is bound by :func:`verified_collector_receipt`.
     """
     if type(run_id) is not int or run_id <= 0:
         raise ValueError("a trusted collector run id is required")
-    repo = governance.request_json(repository, token, "GET", "")
-    branch = str(repo.get("default_branch") or "") if isinstance(repo, dict) else ""
     run = governance.request_json(repository, token, "GET", f"actions/runs/{run_id}")
     revision = str(run.get("head_sha") or "") if isinstance(run, dict) else ""
-    if not branch or not isinstance(run, dict) or not valid_run(run, run_id, branch, revision):
-        raise ValueError("collector did not execute the trusted default-branch revision")
-    if not _run_on_default_branch_history(repository, token, branch, revision):
-        raise ValueError("collector run is no longer on trusted default-branch history")
+    if not isinstance(run, dict) or not valid_run(run, run_id, revision):
+        raise ValueError("run is not a completed, successful pull_request_target collector run")
     return run
 
 
@@ -2003,6 +2008,15 @@ def verified_collector_receipt(
     )
     if problem:
         raise ValueError(f"collector identity/configuration mismatch: {problem}")
+    if found_head != run.get("head_sha"):
+        raise ValueError("collector receipt head is not the head the run executed for")
+    if pr not in _run_pull_request_numbers(run):
+        raise ValueError("GitHub does not associate this collector run with the receipt's pull request")
+    repo = governance.request_json(repository, token, "GET", "")
+    branch = str(repo.get("default_branch") or "") if isinstance(repo, dict) else ""
+    pull = governance.request_json(repository, token, "GET", f"pulls/{pr}")
+    if not branch or not isinstance(pull, dict) or (pull.get("base") or {}).get("ref") != branch:
+        raise ValueError("the pull request does not target the trusted default branch")
     return run, receipt
 
 
@@ -2056,15 +2070,12 @@ def verify_native_start(
             run.get("id") == run_id
             and run.get("event") == "pull_request_target"
             and run.get("path") == WORKFLOW
-            and run.get("head_branch") == branch
+            # The run record carries the pull request's source head for this event.
+            and run.get("head_sha") == head_sha
+            and pr_number in _run_pull_request_numbers(run)
         )
     ):
-        raise ValueError("collector run is not a trusted default-branch pull_request_target run")
-    revision = str(run.get("head_sha") or "")
-    if not re.fullmatch(r"[0-9a-f]{40}", revision) or not _run_on_default_branch_history(
-        repository, token, branch, revision
-    ):
-        raise ValueError("collector revision is not on trusted default-branch history")
+        raise ValueError("collector run is not the pull_request_target run for this pull request and head")
     pr = orchestration.request_json(repository, token, "GET", f"pulls/{pr_number}")
     if not isinstance(pr, dict):
         raise ValueError("pull request state is unavailable")

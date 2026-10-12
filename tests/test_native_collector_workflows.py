@@ -197,6 +197,7 @@ COLLECTOR_MUTATIONS = {
         {"uses": "actions/checkout-evil@v1", "with": {"ref": "main", "persist-credentials": False}}
     ),
     "unpinned checkout action": lambda d: d["jobs"]["collect"]["steps"].append({"uses": "actions/checkout@main"}),
+    "downgraded checkout major": lambda d: d["jobs"]["collect"]["steps"][0].update(uses="actions/checkout@v1"),
     "empty permissions": lambda d: d.update(permissions={}),
     "downgraded dispatch grant": lambda d: d["permissions"].update({"actions": "read"}),
     "downgraded comment grant": lambda d: d["permissions"].update({"pull-requests": "read"}),
@@ -225,6 +226,8 @@ def test_the_guard_rejects_each_collector_contract_violation(name):
         lambda d: d["jobs"]["collect"].update({"timeout-minutes": 60}),
         lambda d: d.update(**{"run-name": "anything"}),
         lambda d: collector_step(d).update(name="renamed step"),
+        lambda d: d["jobs"]["collect"]["steps"][0].update(uses="actions/checkout@" + "a" * 40),
+        lambda d: d["jobs"]["collect"]["steps"][0].update(uses="actions/checkout@v7.1.0"),
         lambda d: d["jobs"]["collect"].update(permissions=dict(d["permissions"])),
         lambda d: d["jobs"]["collect"]["steps"][-1].update(name="Upload receipt"),
         lambda d: collector_step(d).update(run=collector_step(d)["run"].replace("python ", "python3 ")),
@@ -312,6 +315,7 @@ PUBLISHER_MUTATIONS = {
     "unrelated action step": lambda d: d["jobs"]["publish"]["steps"].append({"uses": "someone/else@v1"}),
     "reusable workflow job": lambda d: d["jobs"].update(extra={"uses": "./.github/workflows/other.yml"}),
     "stepless job": lambda d: d["jobs"].update(extra={"runs-on": "ubuntu-latest"}),
+    "downgraded checkout major": lambda d: d["jobs"]["publish"]["steps"][0].update(uses="actions/checkout@v1"),
     "lookalike checkout action": lambda d: d["jobs"]["publish"]["steps"].append(
         {"uses": "actions/checkout-evil@v1", "with": {"ref": "main", "persist-credentials": False}}
     ),

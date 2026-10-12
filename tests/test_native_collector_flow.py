@@ -80,14 +80,15 @@ def test_an_untrusted_event_never_collects(github, event):
         lambda g: g.runs[COLLECTOR_RUN].update(event="repository_dispatch"),
         lambda g: g.runs[COLLECTOR_RUN].update(event="workflow_dispatch"),
         lambda g: g.runs[COLLECTOR_RUN].update(path=".github/workflows/ci.yml"),
-        lambda g: g.runs[COLLECTOR_RUN].update(head_branch="candidate"),
+        lambda g: g.runs[COLLECTOR_RUN].update(head_sha=OTHER_HEAD),
         lambda g: g.runs[COLLECTOR_RUN].update(id=COLLECTOR_RUN + 1),
         lambda g: g.runs[COLLECTOR_RUN].update(head_sha="not-a-sha"),
-        lambda g: setattr(g, "compare_status", "diverged"),
+        lambda g: g.runs[COLLECTOR_RUN].update(pull_requests=[]),
+        lambda g: g.runs[COLLECTOR_RUN].update(pull_requests=[{"number": PR + 1}]),
     ],
-    ids=["dispatch", "manual", "other-workflow", "candidate-branch", "other-run", "bad-revision", "off-history"],
+    ids=["dispatch", "manual", "other-workflow", "other-head", "other-run", "bad-revision", "no-pr", "other-pr"],
 )
-def test_a_run_that_is_not_the_trusted_default_branch_collector_never_collects(github, mutate):
+def test_a_run_that_is_not_this_prs_pull_request_target_collector_run_never_collects(github, mutate):
     mutate(github)
     with pytest.raises(ValueError):
         start()
@@ -195,23 +196,25 @@ def test_trigger_comments_for_another_head_claims_or_author_spend_no_budget(gith
         lambda g: g.runs[COLLECTOR_RUN].update(event="repository_dispatch"),
         lambda g: g.runs[COLLECTOR_RUN].update(event="workflow_dispatch"),
         lambda g: g.runs[COLLECTOR_RUN].update(path=".github/workflows/ci.yml"),
-        lambda g: g.runs[COLLECTOR_RUN].update(head_branch="candidate"),
+        lambda g: g.runs[COLLECTOR_RUN].update(head_sha=OTHER_HEAD),
         lambda g: g.runs[COLLECTOR_RUN].update(conclusion="failure"),
         lambda g: g.runs[COLLECTOR_RUN].update(conclusion="cancelled"),
         lambda g: g.runs[COLLECTOR_RUN].update(conclusion="timed_out"),
         lambda g: g.runs[COLLECTOR_RUN].update(status="in_progress", conclusion=None),
-        lambda g: setattr(g, "compare_status", "behind"),
+        lambda g: g.runs[COLLECTOR_RUN].update(pull_requests=[]),
+        lambda g: g.prs[PR].update(base={"ref": "release"}),
     ],
     ids=[
         "dispatch",
         "manual",
         "other-workflow",
-        "candidate-branch",
+        "other-head",
         "failed",
         "cancelled",
         "timed-out",
         "still-running",
-        "off-history",
+        "no-pr",
+        "retargeted",
     ],
 )
 def test_only_a_completed_successful_trusted_collector_run_is_verified(github, mutate):
@@ -329,10 +332,9 @@ def test_a_status_the_collector_posted_for_itself_is_not_a_published_result(gith
     ("mutate", "expected"),
     [
         (lambda g: g.prs[PR].update(state="closed"), "SKIPPED: pull request is not open"),
-        (lambda g: g.prs[PR].update(base={"ref": "release"}), "SKIPPED: pull request is not open"),
         (lambda g: g.prs[PR].update(head={"sha": OTHER_HEAD}), "SKIPPED: the collected head is no longer"),
     ],
-    ids=["closed", "retargeted", "stale-head"],
+    ids=["closed", "stale-head"],
 )
 def test_a_result_for_a_pull_request_that_moved_on_is_not_published(github, mutate, expected):
     github.add_receipt(exhausted_receipt())
@@ -374,8 +376,9 @@ def test_a_partial_receipt_is_incomplete_evidence_and_publishes_nothing(github):
         lambda g: g.runs[COLLECTOR_RUN].update(event="repository_dispatch"),
         lambda g: g.unavailable.add(f"actions/runs/{COLLECTOR_RUN}/artifacts"),
         lambda g: g.unavailable.add(f"pulls/{PR}"),
+        lambda g: g.prs[PR].update(base={"ref": "release"}),
     ],
-    ids=["failed", "cancelled", "dispatched", "artifacts-unavailable", "pr-unavailable"],
+    ids=["failed", "cancelled", "dispatched", "artifacts-unavailable", "pr-unavailable", "retargeted"],
 )
 def test_a_missing_or_unverifiable_result_fails_closed_and_publishes_nothing(github, mutate):
     github.add_receipt(exhausted_receipt())

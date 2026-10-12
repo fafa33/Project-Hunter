@@ -5,8 +5,8 @@ publisher is the only thing that turns a collector run into a Hunter-specific re
 none of: a dispatch payload, a run title, or an artifact on its own. For one ``workflow_run`` event
 it re-reads from GitHub
 
-* the actual run (collector workflow, ``pull_request_target`` event, default branch, completed and
-  successful, revision on default-branch history),
+* the actual run (collector workflow, ``pull_request_target`` event, completed and
+  successful, the head it executed for, associated with the pull request),
 * that run's own integrity-checked receipt and the receipt's identity contract, and
 * the current pull-request state (open, targets the default branch, still at the receipt's head,
   same claims, same remediation generation),
