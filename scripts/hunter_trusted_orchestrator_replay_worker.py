@@ -32,7 +32,6 @@ harness/production drift rather than for a real regression.
 from __future__ import annotations
 
 import argparse
-import ast
 import hashlib
 import importlib
 import json
@@ -43,40 +42,6 @@ import traceback
 from multiprocessing.connection import Connection
 from pathlib import Path
 from typing import Any
-
-#: Contract version identifiers bound to explicit, immutable authority markers.
-#: v1 = legacy collector orchestration (ensure_collector, COLLECTOR_LIVENESS_GRACE_SECONDS)
-#: v2 = native collector receipt validation (collector_receipt_problem, COLLECTOR_RESULTS_SCHEMA)
-#: Detection is fail-closed: a candidate must have exactly one contract's markers.
-CONTRACT_V1_MARKERS = ("ensure_collector", "COLLECTOR_LIVENESS_GRACE_SECONDS")
-CONTRACT_V2_MARKERS = ("collector_receipt_problem", "COLLECTOR_RESULTS_SCHEMA")
-
-
-def detect_contract_version(candidate_root: Path) -> str:
-    """Classify inert candidate source, never importing untrusted code.
-
-    The migrated v2 implementation deliberately retains the legacy v1 API;
-    a complete v2 marker set therefore takes precedence over v1.
-    """
-    source = (candidate_root / "scripts" / "hunter_review_orchestrator.py").read_text(encoding="utf-8")
-    tree = ast.parse(source)
-    names = set()
-    for node in tree.body:
-        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)):
-            names.add(node.name)
-        elif isinstance(node, (ast.Assign, ast.AnnAssign)):
-            targets = node.targets if isinstance(node, ast.Assign) else [node.target]
-            for target in targets:
-                if isinstance(target, ast.Name):
-                    names.add(target.id)
-    has_v1 = {"ensure_collector", "COLLECTOR_LIVENESS_GRACE_SECONDS"} <= names
-    has_v2 = {"collector_receipt_problem", "COLLECTOR_RESULTS_SCHEMA"} <= names
-    if has_v2:
-        return "v2"
-    if has_v1:
-        return "v1"
-    raise ValueError("candidate orchestrator has no complete trusted contract marker set")
-
 
 #: The exact candidate files each scenario reads or imports. Recorded so the
 #: digest a scenario reports is provably scoped to the modules it actually

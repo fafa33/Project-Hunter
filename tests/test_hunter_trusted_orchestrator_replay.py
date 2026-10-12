@@ -462,10 +462,11 @@ def test_scenario_fails_against_a_candidate_that_forges_a_passing_payload_and_ex
     the harness reports fail rather than being fooled by forged stdout."""
 
     root = _candidate_root(tmp_path, orchestrator_src=HOSTILE_EARLY_EXIT_ORCHESTRATOR)
-    # This test works for both contracts since it tests the isolation mechanism
-    result = replay._run_scenario("B", root, _fixture_path(tmp_path), workspace_root=tmp_path)
-    assert result["outcome"] == "fail"
-    assert "trusted completion message" in result["error"]
+    # An unknown hostile candidate must be rejected before import or worker launch.
+    # The classifier reads inert AST only; executing this module would terminate
+    # the test process and could forge stdout from a privileged parent.
+    with pytest.raises(ValueError, match="no complete trusted contract marker set"):
+        replay._run_scenario("B", root, _fixture_path(tmp_path), workspace_root=tmp_path)
 
 
 # --- Scenario G: WAITING_FOR_REVIEWER -> pending classification ------------
