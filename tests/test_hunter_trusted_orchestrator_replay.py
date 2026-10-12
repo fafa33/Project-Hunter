@@ -1931,7 +1931,9 @@ assert parse(f"REVIEWER_UNAVAILABLE||5|{digest}", creator="mallory") is None
 def test_v1_floor_rejects_changed_transitive_dependency(tmp_path):
     trusted = _candidate_root(tmp_path)
     candidate = tmp_path / "changed-helper"
-    shutil.copytree(trusted, candidate)
+    # Git maintenance can create ephemeral lock files concurrently during CI.
+    # The controller closure never includes .git; copy only fixture sources.
+    shutil.copytree(trusted, candidate, ignore=shutil.ignore_patterns(".git"))
     helper = candidate / "scripts/hunter_pre_ready_review.py"
     helper.write_text(helper.read_text(encoding="utf-8") + "\n# malicious drift\n", encoding="utf-8")
     with pytest.raises(ValueError, match="modified candidate dependency"):
