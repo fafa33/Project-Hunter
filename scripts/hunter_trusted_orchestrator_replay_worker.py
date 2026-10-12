@@ -202,8 +202,12 @@ def candidate_module_digest(candidate_root: Path, scenario_id: str, contract_ver
         if not encoded:
             continue
         relative = encoded.decode("utf-8", errors="strict")
-        if any(component in excluded for component in Path(relative).parts):
-            raise ValueError(f"tracked candidate input is in an excluded cache or Git path: {relative}")
+        if (
+            any(component in excluded for component in Path(relative).parts)
+            or relative.endswith((".pyc", ".pyo"))
+            or Path(relative).name == ".DS_Store"
+        ):
+            raise ValueError(f"tracked candidate input is excluded from digest: {relative}")
     payload: dict[str, str] = {}
     for current, dirs, files in os.walk(root, followlinks=False):
         current_path = Path(current)
@@ -279,9 +283,10 @@ def _probe_v1_grace_boundary(orchestration: Any, fixture: dict[str, Any], grace:
     # Active collector protection expires at a bounded ceiling, even when
     # the collector continues to report active or its evidence is unreadable.
     opportunity = orchestration.independent_review_opportunity_seconds()
-    multiplier = orchestration.ACTIVE_COLLECTOR_GRACE_MULTIPLIER
+    # Trusted harness ceiling: never derive the boundary from candidate code.
+    multiplier = 2
     assert type(opportunity) is int and opportunity > 0
-    assert type(multiplier) is int and multiplier > 1
+    assert orchestration.ACTIVE_COLLECTOR_GRACE_MULTIPLIER == multiplier
     active_inside = replace(base, started_at=(now - timedelta(seconds=opportunity * multiplier - 2)).isoformat())
     active_outside = replace(base, started_at=(now - timedelta(seconds=opportunity * multiplier + 2)).isoformat())
     with patch.object(orchestration, "collector_liveness", return_value=("active", 1)):

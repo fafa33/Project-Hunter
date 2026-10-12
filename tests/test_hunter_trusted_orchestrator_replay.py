@@ -1612,7 +1612,7 @@ def test_failed_replay_still_uploads_diagnostic_receipt_without_weakening_gate()
 def test_trusted_floor_rejects_candidate_controlled_v2_to_v1_downgrade(tmp_path):
     trusted = _candidate_root(tmp_path)
     candidate = tmp_path / "downgraded"
-    shutil.copytree(trusted, candidate)
+    shutil.copytree(trusted, candidate, ignore=shutil.ignore_patterns(".git"))
     module = trusted / "scripts" / "hunter_review_orchestrator.py"
     with module.open("a", encoding="utf-8") as handle:
         handle.write("\nCOLLECTOR_RESULTS_SCHEMA = 'trusted-v2'\n\ndef collector_receipt_problem():\n    pass\n")
@@ -1623,7 +1623,7 @@ def test_trusted_floor_rejects_candidate_controlled_v2_to_v1_downgrade(tmp_path)
 def test_trusted_floor_rejects_modified_v1_candidate(tmp_path):
     trusted = _candidate_root(tmp_path)
     candidate = tmp_path / "changed-v1"
-    shutil.copytree(trusted, candidate)
+    shutil.copytree(trusted, candidate, ignore=shutil.ignore_patterns(".git"))
     module = candidate / "scripts" / "hunter_review_orchestrator.py"
     module.write_text(module.read_text(encoding="utf-8") + "\n# downgrade camouflage\n", encoding="utf-8")
     with pytest.raises(ValueError, match="modified candidate dependency cannot select weaker v1"):
@@ -1640,7 +1640,7 @@ def test_digest_verifier_rejects_receipt_contract_relabel(tmp_path):
 def test_trusted_floor_allows_unchanged_legacy_candidate(tmp_path):
     trusted = _candidate_root(tmp_path)
     candidate = tmp_path / "identical"
-    shutil.copytree(trusted, candidate)
+    shutil.copytree(trusted, candidate, ignore=shutil.ignore_patterns(".git"))
     assert replay.enforce_trusted_contract_floor(candidate, trusted) == replay.detect_contract_version(trusted)
 
 
@@ -2049,3 +2049,26 @@ def test_collector_receipt_validator_defined_before_cli_execution():
     validator = next(n for n in tree.body if isinstance(n, ast.FunctionDef) and n.name == "collector_receipt_problem")
     cli_guard = next(n for n in tree.body if isinstance(n, ast.If) and "__main__" in ast.unparse(n.test))
     assert validator.lineno < cli_guard.lineno
+
+
+def test_tracked_bytecode_cannot_escape_candidate_digest(tmp_path):
+    root = _candidate_root(tmp_path, v2=True)
+    worker = worker_module()
+    bytecode = root / "scripts" / "sourceless_payload.pyc"
+    bytecode.write_bytes(b"candidate executable bytecode")
+    subprocess.run(["git", "-C", str(root), "add", "-f", "scripts/sourceless_payload.pyc"], check=True)
+    with pytest.raises(ValueError, match="tracked candidate input is excluded"):
+        worker.candidate_module_digest(root, "A", "v2")
+
+
+def test_v1_probe_refuses_candidate_extended_active_collector_ceiling(tmp_path):
+    root = _candidate_root(tmp_path)
+    source = root / "scripts" / "hunter_review_orchestrator.py"
+    original = source.read_text(encoding="utf-8")
+    assert "ACTIVE_COLLECTOR_GRACE_MULTIPLIER = 2" in original
+    source.write_text(
+        original.replace("ACTIVE_COLLECTOR_GRACE_MULTIPLIER = 2", "ACTIVE_COLLECTOR_GRACE_MULTIPLIER = 20", 1),
+        encoding="utf-8",
+    )
+    result = replay._run_scenario("A", root, _fixture_path(tmp_path), workspace_root=tmp_path)
+    assert result["outcome"] == "fail"
