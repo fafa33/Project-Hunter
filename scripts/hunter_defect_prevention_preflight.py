@@ -469,6 +469,20 @@ def validate_reviewer_finding_dispositions() -> list[str]:
                     problem = _validate_reference_target(str(reference), role=role)
                     if problem:
                         errors.append(f"{finding_id}: invalid {field} {reference!r}: {problem}")
+            # Fast local validation; hosted lane executes the bounded proof.
+            if finding_id not in {"RFD-372-001", "RFD-372-002", "RFD-372-003", "RFD-372-004", "RFD-416-001"}:
+                proof = finding.get("executable_proof")
+                if not isinstance(proof, dict):
+                    errors.append(f"{finding_id}: missing executable_proof for hosted RED/GREEN replay")
+                else:
+                    if not isinstance(proof.get("vulnerable_sha"), str) or not re.fullmatch(
+                        r"[0-9a-f]{40}", proof["vulnerable_sha"]
+                    ):
+                        errors.append(f"{finding_id}: executable_proof requires immutable vulnerable_sha")
+                    if proof.get("green_test") != proof.get("red_test") or not _is_non_empty_str(proof.get("red_test")):
+                        errors.append(f"{finding_id}: executable_proof requires matching RED/GREEN pytest selectors")
+                    if not isinstance(proof.get("adversarial_tests"), list) or not proof["adversarial_tests"]:
+                        errors.append(f"{finding_id}: executable_proof requires adversarial_tests")
             if classification == "new_systemic_defect" and finding_id != "RFD-416-001":
                 if not _is_non_empty_str(mapped_id) or mapped_id not in mapped_targets:
                     errors.append(f"{finding_id}: new systemic finding requires a registered defect/family mapping")

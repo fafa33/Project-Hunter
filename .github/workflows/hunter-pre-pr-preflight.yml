@@ -55,6 +55,10 @@ jobs:
           echo "mode=${PREFLIGHT_MODE}" >> "${GITHUB_OUTPUT}"
           echo "Selected preflight mode: ${PREFLIGHT_MODE}"
 
+      - name: Verify bounded reviewer RED GREEN and adversarial proofs
+        if: ${{ steps.preflight-mode.outputs.mode == 'normal' }}
+        run: python scripts/hunter_finding_proof.py
+
       - name: Fail fast on mapped changed-file regressions
         if: ${{ steps.preflight-mode.outputs.mode == 'normal' }}
         env:
