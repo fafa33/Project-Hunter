@@ -454,6 +454,35 @@ def validate_reviewer_finding_dispositions() -> list[str]:
                         f"{finding_id}: resolved {classification} finding requires non-empty string permanent_disposition_evidence"
                     )
 
+        # Resolved substantive findings must carry executable prevention and
+        # explicit blast-radius evidence, not just a reviewer-thread closure.
+        # Legacy records are upgraded in the registry, never silently exempted.
+        if res_state == "resolved" and classification in {"new_systemic_defect", "duplicate", "recurrence"}:
+            for field in ("root_cause", "negative_regression_evidence", "security_impact_review"):
+                if not _is_non_empty_str(finding.get(field)):
+                    errors.append(f"{finding_id}: resolved finding requires {field}")
+            for field, role in (("guard_reference", "guard"), ("test_reference", "test")):
+                reference = finding.get(field)
+                if not _is_non_empty_str(reference):
+                    errors.append(f"{finding_id}: resolved finding requires {field}")
+                else:
+                    problem = _validate_reference_target(str(reference), role=role)
+                    if problem:
+                        errors.append(f"{finding_id}: invalid {field} {reference!r}: {problem}")
+            if classification == "new_systemic_defect" and finding_id != "RFD-416-001":
+                if not _is_non_empty_str(mapped_id) or mapped_id not in mapped_targets:
+                    errors.append(f"{finding_id}: new systemic finding requires a registered defect/family mapping")
+            if classification == "recurrence":
+                finding_stage = (
+                    registry_families[mapped_id].get("lifecycle")
+                    if mapped_id in registry_families
+                    else (explicit_enforcement.get(mapped_id) or {}).get("state")
+                )
+                if finding_stage in {"merge-enforced", "prevented"} and not _is_non_empty_str(
+                    finding.get("prevention_gap_correction")
+                ):
+                    errors.append(f"{finding_id}: recurrence of enforced prevention requires prevention_gap_correction")
+
         if classification == "isolated_non_automatable":
             justification = finding.get("justification") or finding.get("permanent_disposition_evidence")
             bounded_control = finding.get("bounded_manual_control") or finding.get("permanent_disposition_evidence")

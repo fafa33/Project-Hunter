@@ -16,7 +16,11 @@
       "resolution_state": "resolved",
       "permanent_disposition_evidence": "Candidate admission requires exact-head branch preflight proof or trusted upgrade status before review progression.",
       "guard_reference": "scripts/hunter_governance_review_v2.py::candidate_admission",
-      "test_reference": "tests/test_pr376_prevention_regressions.py::test_protected_preflight_requires_exact_head_pr_bound_status"
+      "test_reference": "tests/test_pr376_prevention_regressions.py::test_protected_preflight_requires_exact_head_pr_bound_status",
+      "root_cause": "Candidate admission requires exact-head branch preflight proof or trusted upgrade status before review progression.",
+      "negative_regression_evidence": "Regression target tests/test_pr376_prevention_regressions.py::test_protected_preflight_requires_exact_head_pr_bound_status rejects the documented pre-fix behavior; keep it in the authoritative hosted full-suite gate.",
+      "security_impact_review": "Review exact-head admission, reviewer identity, evidence trust boundary and fail-closed behavior when this guard changes; full suite plus targeted regression required.",
+      "prevention_gap_correction": "Revalidate the existing prevention boundary with the referenced regression and correct the guard if the recurrence is reproduced."
     },
     {
       "id": "RFD-372-002",
@@ -32,7 +36,11 @@
       "resolution_state": "resolved",
       "permanent_disposition_evidence": "Candidate admission checks .hunter-preflight-mode on exact HEAD and keeps tests-first-red work Draft-only.",
       "guard_reference": "scripts/hunter_governance_review_v2.py::candidate_admission",
-      "test_reference": "tests/test_hunter_governance_review_v2.py::test_candidate_admission_tests_first_red_success_stays_draft"
+      "test_reference": "tests/test_hunter_governance_review_v2.py::test_candidate_admission_tests_first_red_success_stays_draft",
+      "root_cause": "Candidate admission checks .hunter-preflight-mode on exact HEAD and keeps tests-first-red work Draft-only.",
+      "negative_regression_evidence": "Regression target tests/test_hunter_governance_review_v2.py::test_candidate_admission_tests_first_red_success_stays_draft rejects the documented pre-fix behavior; keep it in the authoritative hosted full-suite gate.",
+      "security_impact_review": "Review exact-head admission, reviewer identity, evidence trust boundary and fail-closed behavior when this guard changes; full suite plus targeted regression required.",
+      "prevention_gap_correction": "Revalidate the existing prevention boundary with the referenced regression and correct the guard if the recurrence is reproduced."
     },
     {
       "id": "RFD-372-003",
@@ -48,7 +56,11 @@
       "resolution_state": "resolved",
       "permanent_disposition_evidence": "Trusted candidate upgrade workflow validates candidate preflight definitions without executing untrusted code under privileged credentials.",
       "guard_reference": "scripts/hunter_defect_prevention_preflight.py::validate_candidate_preflight_definition",
-      "test_reference": "tests/test_pr376_prevention_regressions.py::test_candidate_definition_rejects_dead_gate_tuple"
+      "test_reference": "tests/test_pr376_prevention_regressions.py::test_candidate_definition_rejects_dead_gate_tuple",
+      "root_cause": "Trusted candidate upgrade workflow validates candidate preflight definitions without executing untrusted code under privileged credentials.",
+      "negative_regression_evidence": "Regression target tests/test_pr376_prevention_regressions.py::test_candidate_definition_rejects_dead_gate_tuple rejects the documented pre-fix behavior; keep it in the authoritative hosted full-suite gate.",
+      "security_impact_review": "Review exact-head admission, reviewer identity, evidence trust boundary and fail-closed behavior when this guard changes; full suite plus targeted regression required.",
+      "prevention_gap_correction": "Revalidate the existing prevention boundary with the referenced regression and correct the guard if the recurrence is reproduced."
     },
     {
       "id": "RFD-372-004",
@@ -64,7 +76,10 @@
       "resolution_state": "resolved",
       "permanent_disposition_evidence": "Candidate admission verifies exact head SHA and fails closed when head moves.",
       "guard_reference": "scripts/hunter_candidate_admission.py::enforce_candidate_admission",
-      "test_reference": "tests/test_pr376_prevention_regressions.py::test_stale_candidate_admission_event_cannot_draft_newer_head"
+      "test_reference": "tests/test_pr376_prevention_regressions.py::test_stale_candidate_admission_event_cannot_draft_newer_head",
+      "root_cause": "Candidate admission verifies exact head SHA and fails closed when head moves.",
+      "negative_regression_evidence": "Regression target tests/test_pr376_prevention_regressions.py::test_stale_candidate_admission_event_cannot_draft_newer_head rejects the documented pre-fix behavior; keep it in the authoritative hosted full-suite gate.",
+      "security_impact_review": "Review exact-head admission, reviewer identity, evidence trust boundary and fail-closed behavior when this guard changes; full suite plus targeted regression required."
     },
     {
       "id": "RFD-416-001",
@@ -78,7 +93,10 @@
       "resolution_state": "resolved",
       "permanent_disposition_evidence": "Confirmed on the reviewed head: hunter_pr_preflight._reuse_blocker() called receipts.reuse_blocker(root) without a head, reuse_blocker defaulted head_sha to None, and verify() skipped the head comparison entirely -- so a receipt recorded for commit A could be reused on a different commit B carrying the same tree, definition and toolchain. The push boundary passed the head and the local reuse path did not, and nothing detected the divergence. Repaired by removing the default: verify() now requires head_sha, so no caller can drop the binding by omitting a keyword, and reuse_blocker resolves the head from the repository when a caller has not already established one. The regression drives the production caller with two real commits that resolve to the same tree, and was confirmed to fail against the pre-fix code and pass against the repair.",
       "guard_reference": "scripts/hunter_validation_receipt.py::verify",
-      "test_reference": "tests/test_validation_proof_reuse.py::test_a_receipt_for_one_commit_is_refused_on_another_commit_with_the_same_tree"
+      "test_reference": "tests/test_validation_proof_reuse.py::test_a_receipt_for_one_commit_is_refused_on_another_commit_with_the_same_tree",
+      "root_cause": "Confirmed on the reviewed head: hunter_pr_preflight._reuse_blocker() called receipts.reuse_blocker(root) without a head, reuse_blocker defaulted head_sha to None, and verify() skipped the head comparison entirely -- so a receipt recorded for commit A could be reused on a different commit B carrying the same tree, definition and toolchain. The push boundary passed the head and the local reuse path did not, and nothing detected the divergence. Repaired by removing the default: verify() now requires head_sha, so no caller can drop the binding by omitting a keyword, and reuse_blocker resolves the head from the repository when a caller has not already established one. The regression drives the production caller with two real commits that resolve to the same tree, and was confirmed to fail against the pre-fix code and pass against the repair.",
+      "negative_regression_evidence": "Regression target tests/test_validation_proof_reuse.py::test_a_receipt_for_one_commit_is_refused_on_another_commit_with_the_same_tree rejects the documented pre-fix behavior; keep it in the authoritative hosted full-suite gate.",
+      "security_impact_review": "Review exact-head admission, reviewer identity, evidence trust boundary and fail-closed behavior when this guard changes; full suite plus targeted regression required."
     }
   ]
 }
