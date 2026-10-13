@@ -1954,12 +1954,13 @@ def test_hosted_replay_requires_filesystem_sandbox(tmp_path, monkeypatch):
     assert "--ro-bind" in command
     assert str(workspace / "candidate") in command
     assert str(workspace / "fixture.json") in command
-    assert ("--ro-bind", str(replay.WORKER_PATH)) in [(command[i], command[i+1]) for i in range(len(command)-1)]
-    assert not any(command[i:i+2] == ["--ro-bind", str(workspace)] for i in range(len(command)-1))
+    assert ("--ro-bind", str(replay.WORKER_PATH)) in [(command[i], command[i + 1]) for i in range(len(command) - 1)]
+    assert not any(command[i : i + 2] == ["--ro-bind", str(workspace)] for i in range(len(command) - 1))
 
     calls.clear()
     monkeypatch.setattr(shutil, "which", lambda name: None)
     import pytest
+
     with pytest.raises(RuntimeError, match="requires bubblewrap"):
         replay._run_scenario(
             "A", workspace / "candidate", workspace / "fixture.json", workspace_root=workspace, contract_version="v2"

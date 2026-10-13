@@ -409,18 +409,55 @@ def _run_scenario(
             parents = list(reversed(interpreter_root.parents))
             interpreter_mount = [entry for parent in parents if parent != Path("/") for entry in ("--dir", str(parent))]
             interpreter_mount.extend(("--ro-bind", str(interpreter_root), str(interpreter_root)))
-        workspace_dirs = [entry for parent in reversed(workspace_root.parents) if parent != Path("/") for entry in ("--dir", str(parent))]
+        workspace_dirs = [
+            entry
+            for parent in reversed(workspace_root.parents)
+            if parent != Path("/")
+            for entry in ("--dir", str(parent))
+        ]
         worker_prefix = [
-            "bwrap", "--die-with-parent", "--unshare-all",
-            "--ro-bind", "/usr", "/usr", "--ro-bind-try", "/bin", "/bin",
-            "--ro-bind-try", "/lib", "/lib", "--ro-bind-try", "/lib64", "/lib64",
-            "--ro-bind", "/etc", "/etc", *interpreter_mount, "--proc", "/proc",
-            "--dev", "/dev", "--tmpfs", "/tmp", *workspace_dirs,
-            "--dir", str(workspace_root), "--dir", str(workspace_root / "scripts"),
-            "--ro-bind", str(candidate_root), str(candidate_root),
-            "--ro-bind", str(WORKER_PATH), str(WORKER_PATH),
-            "--ro-bind", str(fixture_path), str(fixture_path),
-            "--chdir", str(candidate_root), "--",
+            "bwrap",
+            "--die-with-parent",
+            "--unshare-all",
+            "--ro-bind",
+            "/usr",
+            "/usr",
+            "--ro-bind-try",
+            "/bin",
+            "/bin",
+            "--ro-bind-try",
+            "/lib",
+            "/lib",
+            "--ro-bind-try",
+            "/lib64",
+            "/lib64",
+            "--ro-bind",
+            "/etc",
+            "/etc",
+            *interpreter_mount,
+            "--proc",
+            "/proc",
+            "--dev",
+            "/dev",
+            "--tmpfs",
+            "/tmp",
+            *workspace_dirs,
+            "--dir",
+            str(workspace_root),
+            "--dir",
+            str(workspace_root / "scripts"),
+            "--ro-bind",
+            str(candidate_root),
+            str(candidate_root),
+            "--ro-bind",
+            str(WORKER_PATH),
+            str(WORKER_PATH),
+            "--ro-bind",
+            str(fixture_path),
+            str(fixture_path),
+            "--chdir",
+            str(candidate_root),
+            "--",
         ]
     process = subprocess.run(
         worker_prefix
