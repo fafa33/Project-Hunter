@@ -1768,14 +1768,27 @@
         "guard_reference": "scripts/hunter_trusted_orchestrator_replay.py::validate_receipt"
       },
       "regression_evidence": [
+        "tests/test_hunter_review_orchestrator.py::test_read_cycle_binds_pull_request_target_provenance",
         "tests/test_hunter_trusted_orchestrator_replay.py::test_scenario_a_passes_against_real_production",
-        "tests/test_hunter_trusted_orchestrator_replay.py::test_scenario_a_fails_when_a_pending_cycle_can_stay_pending_forever",
-        "tests/test_hunter_trusted_orchestrator_replay.py::test_scenario_a_fails_when_the_opportunity_is_not_a_real_bound",
-        "tests/test_hunter_trusted_orchestrator_replay.py::test_scenario_a_fails_when_the_opportunity_is_ignored",
+        "tests/test_hunter_trusted_orchestrator_replay.py::test_scenario_a_v1_accepts_any_positive_grace_period",
+        "tests/test_hunter_trusted_orchestrator_replay.py::test_scenario_a_v2_fails_when_the_budget_is_not_derived_from_the_reviewer_pool",
+        "tests/test_hunter_trusted_orchestrator_replay.py::test_scenario_a_v2_fails_when_a_cycle_can_be_vouched_for_by_the_wrong_party",
         "tests/test_hunter_trusted_orchestrator_replay.py::test_scenario_b_passes_against_real_production",
-        "tests/test_hunter_trusted_orchestrator_replay.py::test_scenario_b_fails_when_a_recorded_cycle_is_dispatched_again",
-        "tests/test_hunter_trusted_orchestrator_replay.py::test_scenario_b_fails_without_bounded_liveness_recovery",
-        "tests/test_hunter_trusted_orchestrator_replay.py::test_scenario_b_fails_when_dispatch_is_unbounded"
+        "tests/test_hunter_trusted_orchestrator_replay.py::test_scenario_b_v2_fails_when_a_receipt_is_usable_beyond_the_run_it_names",
+        "tests/test_hunter_trusted_orchestrator_replay.py::test_scenario_g_fails_against_a_swallowed_fail_closed_path",
+        "tests/test_hunter_trusted_orchestrator_replay.py::test_scenario_a_v1_fails_when_ensure_collector_recovery_is_not_bounded_and_terminal",
+        "tests/test_hunter_trusted_orchestrator_replay.py::test_scenario_a_v2_fails_when_a_hardcoded_budget_happens_to_equal_the_current_pool_value",
+        "tests/test_hunter_trusted_orchestrator_replay.py::test_symlinked_candidate_orchestrator_is_rejected_before_classification",
+        "tests/test_hunter_trusted_orchestrator_replay.py::test_trusted_floor_rejects_a_symlink_that_would_compare_equal_to_the_trusted_orchestrator",
+        "tests/test_hunter_trusted_orchestrator_replay.py::test_independent_digest_verifier_cannot_approve_a_symlink_substitution",
+        "tests/test_hunter_trusted_orchestrator_replay.py::test_symlinked_candidate_is_never_imported_by_the_worker",
+        "tests/test_hunter_trusted_orchestrator_replay.py::test_symlinked_candidate_dependency_and_config_are_rejected",
+        "tests/test_hunter_trusted_orchestrator_replay.py::test_digest_closure_includes_transitive_dependencies_and_configuration",
+        "tests/test_hunter_trusted_orchestrator_replay.py::test_mutating_any_candidate_dependency_changes_the_digest",
+        "tests/test_hunter_trusted_orchestrator_replay.py::test_independent_verifier_rejects_a_dependency_changed_after_the_receipt",
+        "tests/test_hunter_trusted_orchestrator_replay.py::test_missing_dependency_files_fail_closed",
+        "tests/test_hunter_trusted_orchestrator_replay.py::test_v2_receipt_round_trips_through_trusted_and_digest_validation",
+        "tests/test_hunter_trusted_orchestrator_replay.py::test_scenario_fails_against_a_candidate_that_forges_a_passing_payload_and_exits_early"
       ],
       "lifecycle": "regression-tested",
       "sources": [

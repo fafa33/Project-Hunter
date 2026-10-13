@@ -429,8 +429,8 @@ def _parse_cycle(status: dict[str, Any], pr_number: int, head_sha: str) -> Revie
     # gone. See `read_cycle` for the live evidence.
     #
     # `read_cycle` remains the outer bound: it independently re-fetches the run
-    # the status cites and requires it to be on the default branch and to come from
-    # a trusted governance workflow.
+    # the status cites and requires a trusted governance workflow executing from
+    # default-branch history, with exact PR binding for pull_request_target.
     if str((status.get("creator") or {}).get("login") or "") != TRUSTED_STATUS_CREATOR:
         return None
     if str(status.get("context") or "") != f"{CONTEXT_PREFIX}{pr_number}":
@@ -458,6 +458,43 @@ def _parse_cycle(status: dict[str, Any], pr_number: int, head_sha: str) -> Revie
         config_digest=parts[3],
         generation_id=parts[4],
     )
+
+
+def _target_run_base_revision(
+    run: dict[str, Any], pr: dict[str, Any], pr_number: int, head_sha: str, default_branch: str
+) -> str:
+    """Bind a base-executed target event to its exact PR before checking base history."""
+    head = pr.get("head") or {}
+    base = pr.get("base") or {}
+    if (
+        run.get("head_sha") != head_sha
+        or not head.get("ref")
+        or run.get("head_branch") != head.get("ref")
+        or base.get("ref") != default_branch
+    ):
+        return ""
+    associations = run.get("pull_requests")
+    if not isinstance(associations, list) or len(associations) != 1:
+        return ""
+    associated = associations[0]
+    if not isinstance(associated, dict) or associated.get("number") != pr_number:
+        return ""
+    for name, expected in (("head", head), ("base", base)):
+        actual = associated.get(name)
+        if not isinstance(actual, dict) or actual.get("ref") != expected.get("ref"):
+            return ""
+        actual_repo = actual.get("repo")
+        expected_repo = expected.get("repo")
+        if (
+            not isinstance(actual_repo, dict)
+            or not isinstance(expected_repo, dict)
+            or not expected_repo.get("id")
+            or actual_repo.get("id") != expected_repo.get("id")
+        ):
+            return ""
+    if associated["head"].get("sha") != head_sha:
+        return ""
+    return str(associated["base"].get("sha") or "")
 
 
 def read_cycle(
@@ -499,8 +536,29 @@ def read_cycle(
         run = request_json(repository, token, "GET", f"actions/runs/{run_id}")
         if not isinstance(run, dict):
             continue
-        if str(run.get("head_branch") or "") != default_branch:
+        event = str(run.get("event") or "")
+        if event == "pull_request":
+            continue  # The candidate can supply this workflow definition.
+        if event == "pull_request_target":
+            # API run metadata names the PR source, while GitHub executes the
+            # base workflow. Authenticate the association and check BASE history.
+            if str(run.get("path") or "") not in TRUSTED_WORKFLOWS:
+                continue
+            run_revision = _target_run_base_revision(run, pr, pr_number, head_sha, default_branch)
+        else:
+            if str(run.get("head_branch") or "") != default_branch:
+                continue
+            run_revision = str(run.get("head_sha") or "")
+        if not re.fullmatch(r"[0-9a-f]{40}", run_revision):
             continue
+        trusted_tip = request_json(repository, token, "GET", f"commits/{default_branch}")
+        trusted_revision = str((trusted_tip or {}).get("sha") or "")
+        if not re.fullmatch(r"[0-9a-f]{40}", trusted_revision):
+            continue
+        if run_revision != trusted_revision:
+            comparison = request_json(repository, token, "GET", f"compare/{run_revision}...{trusted_revision}")
+            if not isinstance(comparison, dict) or comparison.get("status") not in {"ahead", "identical"}:
+                continue
         run_path = str(run.get("path") or "")
         collector_terminal = (
             run_path == COLLECTOR_WORKFLOW_PATH
@@ -934,6 +992,7 @@ def pool_exhaustion(
     pr_number: int,
     head_sha: str,
     run_id: int,
+    run_attempt: int,
     claims_id: str,
     generation_id: str,
     pool: dict[str, Any],
@@ -950,6 +1009,17 @@ def pool_exhaustion(
     # Imported here: the collector imports this module at import time.
     import hunter_reviewer_collector as collector
 
+    problem = collector_receipt_problem(
+        receipt,
+        repository=repository,
+        pr_number=pr_number,
+        head_sha=head_sha,
+        run_id=run_id,
+        run_attempt=run_attempt,
+        generation_id=generation_id,
+    )
+    if problem:
+        return PoolExhaustion(False, problem)
     if not isinstance(receipt, dict):
         return PoolExhaustion(False, "collector receipt is not an object")
     expected = {
@@ -1036,6 +1106,12 @@ def finalize_exhausted_pool(
         return "SKIPPED: exact head is not a full SHA"
     if current_run_id() != run_id:
         return "SKIPPED: the completing run is not this process's run"
+    # Only the runner's authenticated environment can supply the current
+    # attempt. Never infer it from the untrusted collector receipt itself.
+    raw_attempt = os.environ.get("GITHUB_RUN_ATTEMPT", "")
+    if not re.fullmatch(r"[1-9][0-9]*", raw_attempt):
+        return "SKIPPED: trusted run attempt is unavailable or malformed"
+    run_attempt = int(raw_attempt)
     receipt, unreadable = read_collector_receipt(results_path)
     if receipt is None:
         return f"SKIPPED: {unreadable}"
@@ -1053,6 +1129,7 @@ def finalize_exhausted_pool(
         pr_number=pr_number,
         head_sha=head_sha,
         run_id=run_id,
+        run_attempt=run_attempt,
         claims_id=readiness.claims_id,
         generation_id=generation,
         pool=pool,
@@ -1519,6 +1596,35 @@ def main() -> int:
     except Exception as exc:
         print(f"Review orchestration failed: {type(exc).__name__}: {exc}", file=sys.stderr)
         return 1
+
+
+def collector_receipt_problem(
+    receipt, *, repository, pr_number, head_sha, run_id, run_attempt=None, generation_id=None
+):
+    if not isinstance(receipt, dict):
+        return "receipt is not an object"
+    expected = {
+        "schema": COLLECTOR_RESULTS_SCHEMA,
+        "repository": repository,
+        "pr_number": pr_number,
+        "head_sha": head_sha,
+        "run_id": run_id,
+    }
+    if run_attempt is not None:
+        expected["run_attempt"] = run_attempt
+    for name, value in expected.items():
+        if receipt.get(name) != value or type(receipt.get(name)) is not type(value):
+            return f"receipt {name} does not match the run it was minted for"
+    for name in ("claims_id", "configuration_digest"):
+        if not isinstance(receipt.get(name), str) or not re.fullmatch(r"[0-9a-f]{64}", receipt[name]):
+            return f"receipt {name} is missing or malformed"
+    generation = receipt.get("remediation_generation_id", "")
+    if generation_id is not None and generation != generation_id:
+        return "receipt belongs to another remediation generation"
+    attempts = receipt.get("attempts")
+    if not isinstance(attempts, list) or not all(isinstance(item, dict) for item in attempts):
+        return "receipt attempts are malformed"
+    return ""
 
 
 if __name__ == "__main__":

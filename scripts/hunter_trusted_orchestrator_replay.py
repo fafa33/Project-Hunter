@@ -22,12 +22,28 @@ trusting either job's own account of what it did.
 
 What a green replay proves, and what it does not
 -------------------------------------------------
-PROVEN by a passing replay:
-  * The candidate's ``independent_review_opportunity_seconds`` is derived from,
-    and covers, its own real reviewer-pool configuration (scenario A).
-  * The candidate's ``ensure_collector`` dispatches an exact-head collector at
-    most once under a modeled read-your-write-stale reconcile race, and
-    recovers cleanly once the read catches up (scenario B).
+PROVEN by a passing replay (v2 contract):
+  * The candidate's ``independent_review_opportunity_seconds`` is a positive,
+    finite budget derived from its own reviewer pool, and a published cycle is
+    believed only when the run it cites is a trusted-publisher run on the
+    default branch -- the status-less collector run and runs off the default
+    branch can never complete a cycle (scenario A).
+  * The candidate's canonical ``collector_receipt_problem`` contract accepts a
+    well-formed receipt for its own run and refuses every receipt for another
+    pull request, head, run, attempt or generation, and every partial one
+    (scenario B).
+  * The candidate's real WAITING_FOR_REVIEWER -> pending classification path,
+    end to end from ``pending_review_authority_state`` through
+    ``review_orchestration_state``, resolves correctly for absent, in-progress
+    and malformed cycle evidence (scenario G).
+
+PROVEN by a passing replay (v1 contract):
+  * The candidate's legacy ``ensure_collector`` function manages collector
+    dispatch for pending cycles, and ``COLLECTOR_LIVENESS_GRACE_SECONDS`` is a
+    strictly positive, finite grace period before liveness is judged (scenario A).
+  * The candidate's ``collector_needs_dispatch`` uses ``COLLECTOR_LIVENESS_GRACE_SECONDS``
+    to bound re-dispatch, and the ``_older_than`` helper correctly compares
+    elapsed time against the grace period (scenario B).
   * The candidate's real WAITING_FOR_REVIEWER -> pending classification path,
     end to end from ``pending_review_authority_state`` through
     ``review_orchestration_state``, resolves correctly for absent, in-progress
@@ -49,6 +65,7 @@ a claim that replay success is equivalent to that live evidence.
 from __future__ import annotations
 
 import argparse
+import ast
 import hashlib
 import json
 import re
@@ -58,6 +75,8 @@ from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
+
+import hunter_trusted_orchestrator_replay_worker as worker
 
 ROOT = Path(__file__).resolve().parents[1]
 WORKER_PATH = ROOT / "scripts" / "hunter_trusted_orchestrator_replay_worker.py"
@@ -78,9 +97,8 @@ TRUSTED_DEFINITION_FILES: tuple[str, ...] = (
 
 _DEFINITION: dict[str, Any] = json.loads(DEFINITION_PATH.read_text(encoding="utf-8"))
 RECEIPT_SCHEMA = _DEFINITION["schema"]
-SCENARIO_SET_ID = _DEFINITION["scenario_set_id"]
-REQUIRED_SCENARIO_IDS: tuple[str, ...] = tuple(_DEFINITION["required_scenario_ids"])
-SCENARIO_INVARIANTS: dict[str, str] = _DEFINITION["scenario_invariants"]
+ORCHESTRATOR_RELATIVE_PATH = "scripts/hunter_review_orchestrator.py"
+CONTRACT_VERSIONS: dict[str, dict[str, Any]] = _DEFINITION["contract_versions"]
 #: Fixed, deterministic, offline scenario input. Part of the trusted
 #: definition: a candidate cannot supply its own fixture, and no field here
 #: depends on wall-clock time, network state, or repository content outside
@@ -93,6 +111,79 @@ MAX_SCENARIO_SECONDS = _DEFINITION["max_scenario_seconds"]
 WORKER_TIMEOUT_SECONDS = 120
 
 
+def detect_contract_version(candidate_root: Path) -> str:
+    """Classify inert candidate source, never importing untrusted code.
+
+    The migrated v2 implementation deliberately retains the legacy v1 API;
+    a complete v2 marker set therefore takes precedence over v1.
+    """
+    # Confinement first: a candidate-committed symlink to the trusted checkout
+    # must be rejected here, never followed and classified as the trusted file.
+    source = worker.read_candidate_text(candidate_root, ORCHESTRATOR_RELATIVE_PATH)
+    tree = ast.parse(source)
+    names = set()
+    for node in tree.body:
+        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)):
+            names.add(node.name)
+        elif isinstance(node, (ast.Assign, ast.AnnAssign)):
+            targets = node.targets if isinstance(node, ast.Assign) else [node.target]
+            for target in targets:
+                if isinstance(target, ast.Name):
+                    names.add(target.id)
+    has_v1 = {"ensure_collector", "COLLECTOR_LIVENESS_GRACE_SECONDS"} <= names
+    has_v2 = {"collector_receipt_problem", "COLLECTOR_RESULTS_SCHEMA"} <= names
+    if has_v2:
+        return "v2"
+    if has_v1:
+        return "v1"
+    raise ValueError("candidate orchestrator has no complete trusted contract marker set")
+
+
+def enforce_trusted_contract_floor(candidate_root: Path, trusted_root: Path) -> str:
+    """Fail closed on candidate-selected downgrades relative to trusted main.
+
+    While trusted main is v1, only an unchanged v1 orchestrator can use the
+    legacy suite. Any changed orchestrator must satisfy v2. Once main is v2,
+    every candidate must remain v2. Both roots are read as inert source.
+    """
+    trusted_version = detect_contract_version(trusted_root)
+    candidate_version = detect_contract_version(candidate_root)
+    if candidate_version == "v1":
+        if trusted_version != "v1":
+            raise ValueError("candidate attempts v2-to-v1 trusted contract downgrade")
+        for scenario_id in get_required_scenario_ids("v1"):
+            candidate_files = worker.candidate_input_closure(candidate_root, scenario_id, "v1")
+            trusted_files = worker.candidate_input_closure(trusted_root, scenario_id, "v1")
+            if candidate_files != trusted_files:
+                raise ValueError("modified candidate dependency closure cannot select weaker v1 trusted contract")
+            for relative in candidate_files:
+                if (
+                    worker.resolve_candidate_file(candidate_root, relative).read_bytes()
+                    != worker.resolve_candidate_file(trusted_root, relative).read_bytes()
+                ):
+                    raise ValueError("modified candidate dependency cannot select weaker v1 trusted contract")
+    return candidate_version
+
+
+def get_contract_definition(contract_version: str) -> dict[str, Any]:
+    """Get the scenario set definition for a contract version."""
+    if contract_version not in CONTRACT_VERSIONS:
+        raise ValueError(f"unknown contract version: {contract_version!r}")
+    return CONTRACT_VERSIONS[contract_version]
+
+
+def get_required_scenario_ids(contract_version: str) -> tuple[str, ...]:
+    return tuple(get_contract_definition(contract_version)["required_scenario_ids"])
+
+
+def get_scenario_invariants(contract_version: str) -> dict[str, str]:
+    return get_contract_definition(contract_version)["scenario_invariants"]
+
+
+def get_scenario_set_id(contract_version: str) -> str:
+    return get_contract_definition(contract_version)["scenario_set_id"]
+
+
 def _digest(payload: Any) -> str:
     encoded = json.dumps(payload, sort_keys=True, separators=(",", ":"), ensure_ascii=False).encode("utf-8")
     return hashlib.sha256(encoded).hexdigest()
@@ -103,8 +194,13 @@ def trusted_harness_definition_digest() -> str:
     return _digest(payload)
 
 
-def scenario_set_digest() -> str:
-    return _digest({"scenario_set_id": SCENARIO_SET_ID, "invariants": SCENARIO_INVARIANTS})
+def scenario_set_digest(contract_version: str) -> str:
+    return _digest(
+        {
+            "scenario_set_id": get_scenario_set_id(contract_version),
+            "invariants": get_scenario_invariants(contract_version),
+        }
+    )
 
 
 def fixture_digest() -> str:
@@ -266,19 +362,119 @@ def resolve_candidate_root(workspace_root: Path, raw: str) -> Path:
 
 
 def _run_scenario(
-    scenario_id: str, candidate_root: Path, fixture_path: Path, *, workspace_root: Path
+    scenario_id: str,
+    candidate_root: Path,
+    fixture_path: Path,
+    *,
+    workspace_root: Path,
+    contract_version: str | None = None,
 ) -> dict[str, Any]:
-    if scenario_id not in REQUIRED_SCENARIO_IDS:
-        raise ValueError(f"scenario_id {scenario_id!r} is not one of the canonical {REQUIRED_SCENARIO_IDS}")
+    if contract_version is None:
+        contract_version = detect_contract_version(candidate_root)
+    required_scenario_ids = get_required_scenario_ids(contract_version)
+    if scenario_id not in required_scenario_ids:
+        raise ValueError(f"scenario_id {scenario_id!r} is not one of the canonical {required_scenario_ids}")
     started = datetime.now(UTC)
+    # On hosted Linux, every candidate-touching worker runs as an OS identity
+    # that does not own the checkout. The runner-owned tree is writable by the
+    # trusted parent but cannot be changed (or restored after a mutation) by
+    # candidate module code. This closes the digest-before-execution TOCTOU.
+    # Never silently fall back to the privileged runner account on hosted CI.
+    import os
+
+    hosted_workspace = os.environ.get("GITHUB_WORKSPACE", "")
+    hosted_candidate = (
+        os.environ.get("GITHUB_ACTIONS") == "true"
+        and bool(hosted_workspace)
+        and workspace_root == Path(hosted_workspace).resolve()
+        and candidate_root == workspace_root / "candidate"
+    )
+    # A separate Unix user prevents writes, but does not prevent a hostile
+    # candidate from reading the trusted sibling checkout. Hide it at the
+    # mount namespace boundary before importing any candidate code.
+    worker_prefix = []
+    if hosted_candidate:
+        import shutil
+
+        if not shutil.which("bwrap"):
+            raise RuntimeError("trusted replay requires bubblewrap filesystem isolation")
+        # actions/setup-python installs Python outside /usr on hosted runners.
+        # Expose only the interpreter installation, never the whole /opt tree.
+        interpreter_root = Path(sys.executable).resolve().parent.parent
+        if not interpreter_root.is_dir():
+            raise RuntimeError("trusted replay Python installation is unavailable")
+        interpreter_mount = []
+        if not interpreter_root.is_relative_to(Path("/usr")):
+            # Bubblewrap requires the destination's parent directories to exist.
+            parents = list(reversed(interpreter_root.parents))
+            interpreter_mount = [entry for parent in parents if parent != Path("/") for entry in ("--dir", str(parent))]
+            interpreter_mount.extend(("--ro-bind", str(interpreter_root), str(interpreter_root)))
+        workspace_dirs = [
+            entry
+            for parent in reversed(workspace_root.parents)
+            if parent != Path("/")
+            for entry in ("--dir", str(parent))
+        ]
+        worker_prefix = [
+            "bwrap",
+            "--die-with-parent",
+            "--unshare-all",
+            "--ro-bind",
+            "/usr",
+            "/usr",
+            "--ro-bind-try",
+            "/bin",
+            "/bin",
+            "--ro-bind-try",
+            "/lib",
+            "/lib",
+            "--ro-bind-try",
+            "/lib64",
+            "/lib64",
+            "--ro-bind",
+            "/etc",
+            "/etc",
+            *interpreter_mount,
+            "--proc",
+            "/proc",
+            "--dev",
+            "/dev",
+            # Private mount namespace plus explicit owner-only permissions:
+            # candidate code cannot share temporary files with host users.
+            "--tmpfs",
+            "/tmp",
+            "--chmod",
+            "0700",
+            "/tmp",
+            *workspace_dirs,
+            "--dir",
+            str(workspace_root),
+            "--dir",
+            str(workspace_root / "scripts"),
+            "--ro-bind",
+            str(candidate_root),
+            str(candidate_root),
+            "--ro-bind",
+            str(WORKER_PATH),
+            str(WORKER_PATH),
+            "--ro-bind",
+            str(fixture_path),
+            str(fixture_path),
+            "--chdir",
+            str(candidate_root),
+            "--",
+        ]
     process = subprocess.run(
-        [
+        worker_prefix
+        + [
             sys.executable,
             str(WORKER_PATH),
             "--workspace-root",
             str(workspace_root),
             "--candidate-root",
             str(candidate_root.relative_to(workspace_root)),
+            "--contract-version",
+            contract_version,
             "--scenario",
             scenario_id,
             "--fixture",
@@ -295,7 +491,7 @@ def _run_scenario(
     if process.returncode != 0 or not lines:
         return {
             "scenario_id": scenario_id,
-            "invariant": SCENARIO_INVARIANTS[scenario_id],
+            "invariant": get_scenario_invariants(contract_version)[scenario_id],
             "outcome": "fail",
             "measurements": {},
             "error": f"worker exited {process.returncode}: {process.stderr.strip()[-2000:]}",
@@ -304,19 +500,24 @@ def _run_scenario(
             "finished_at": finished.strftime("%Y-%m-%dT%H:%M:%S.%fZ"),
         }
     payload = json.loads(lines[-1])
-    payload["invariant"] = SCENARIO_INVARIANTS[scenario_id]
+    payload["invariant"] = get_scenario_invariants(contract_version)[scenario_id]
     payload["started_at"] = started.strftime("%Y-%m-%dT%H:%M:%S.%fZ")
     payload["finished_at"] = finished.strftime("%Y-%m-%dT%H:%M:%S.%fZ")
     return payload
 
 
 def build_receipt(*, candidate_root: Path, pr_number: int, candidate_sha: str, workspace_root: Path) -> dict[str, Any]:
+    # Detect contract version first
+    contract_version = detect_contract_version(candidate_root)
     fixture_path = candidate_root.parent / ".hunter-orchestrator-replay-fixture.json"
     fixture_path.write_text(json.dumps(FIXTURE, sort_keys=True), encoding="utf-8")
     try:
+        required_scenario_ids = get_required_scenario_ids(contract_version)
         scenario_results = [
-            _run_scenario(sid, candidate_root, fixture_path, workspace_root=workspace_root)
-            for sid in REQUIRED_SCENARIO_IDS
+            _run_scenario(
+                sid, candidate_root, fixture_path, workspace_root=workspace_root, contract_version=contract_version
+            )
+            for sid in required_scenario_ids
         ]
     finally:
         fixture_path.unlink(missing_ok=True)
@@ -324,12 +525,13 @@ def build_receipt(*, candidate_root: Path, pr_number: int, candidate_sha: str, w
     overall = "pass" if all(result["outcome"] == "pass" for result in scenario_results) else "fail"
     return {
         "schema": RECEIPT_SCHEMA,
+        "contract_version": contract_version,
         "candidate_pr": pr_number,
         "candidate_sha": candidate_sha,
         "trusted_harness_sha": _trusted_harness_sha(),
         "trusted_harness_definition_digest": trusted_harness_definition_digest(),
-        "scenario_set_id": SCENARIO_SET_ID,
-        "scenario_set_digest": scenario_set_digest(),
+        "scenario_set_id": get_scenario_set_id(contract_version),
+        "scenario_set_digest": scenario_set_digest(contract_version),
         "input_fixture_digest": fixture_digest(),
         "scenario_results": scenario_results,
         "overall_result": overall,
@@ -370,17 +572,30 @@ def verify_candidate_module_digests(receipt: Any, candidate_root: Path) -> list[
         return ["receipt scenario_results must be a list"]
     by_id = _index_scenario_results(results)
 
-    import hunter_trusted_orchestrator_replay_worker as worker
+    # Get contract version from receipt
+    contract_version = receipt.get("contract_version")
+    if contract_version not in ("v1", "v2"):
+        return [f"receipt has invalid or missing contract_version: {contract_version!r}"]
+
+    # The unprivileged digest verifier must bind the receipt's declared
+    # contract to the actual candidate source, not just the file digests.
+    try:
+        actual_contract = detect_contract_version(candidate_root)
+    except (OSError, SyntaxError, ValueError) as exc:
+        return [f"candidate contract could not be independently classified: {exc}"]
+    if contract_version != actual_contract:
+        return [f"receipt contract_version {contract_version!r} differs from candidate {actual_contract!r}"]
 
     errors: list[str] = []
-    for scenario_id in REQUIRED_SCENARIO_IDS:
+    required_scenario_ids = get_required_scenario_ids(contract_version)
+    for scenario_id in required_scenario_ids:
         entry = by_id.get(scenario_id)
         if entry is None:
             continue
         try:
-            expected_module_digest = worker.candidate_module_digest(candidate_root, scenario_id)
-        except OSError as exc:
-            errors.append(f"scenario {scenario_id} candidate module files could not be read for verification: {exc}")
+            expected_module_digest = worker.candidate_module_digest(candidate_root, scenario_id, contract_version)
+        except (OSError, ValueError, SyntaxError) as exc:
+            errors.append(f"scenario {scenario_id} candidate input files could not be safely verified: {exc}")
             continue
         if entry.get("candidate_module_digest") != expected_module_digest:
             errors.append(
@@ -411,13 +626,19 @@ def validate_receipt_trusted_fields(
     # 1. schema
     if receipt.get("schema") != RECEIPT_SCHEMA:
         errors.append(f"receipt schema {receipt.get('schema')!r} != {RECEIPT_SCHEMA!r}")
-    # 2. candidate_pr bound to the trusted event's own PR number, never the receipt's say-so alone
+    # 2. contract_version must be present and valid
+    contract_version = receipt.get("contract_version")
+    if contract_version not in ("v1", "v2"):
+        errors.append(f"receipt contract_version {contract_version!r} must be 'v1' or 'v2'")
+        # Cannot continue validation without knowing contract version
+        return errors
+    # 3. candidate_pr bound to the trusted event's own PR number, never the receipt's say-so alone
     if receipt.get("candidate_pr") != pr_number:
         errors.append(f"receipt candidate_pr {receipt.get('candidate_pr')!r} != trusted PR #{pr_number}")
-    # 3. candidate_sha bound to the trusted event's own head sha
+    # 4. candidate_sha bound to the trusted event's own head sha
     if receipt.get("candidate_sha") != candidate_sha:
         errors.append(f"receipt candidate_sha {receipt.get('candidate_sha')!r} != trusted head {candidate_sha!r}")
-    # 4. trusted_harness_sha must equal this job's own trusted checkout HEAD
+    # 5. trusted_harness_sha must equal this job's own trusted checkout HEAD
     try:
         expected_harness_sha = _trusted_harness_sha()
     except Exception as exc:  # noqa: BLE001
@@ -427,15 +648,15 @@ def validate_receipt_trusted_fields(
             f"receipt trusted_harness_sha {receipt.get('trusted_harness_sha')!r} != "
             f"this job's own trusted checkout {expected_harness_sha!r}"
         )
-    # 5. trusted_harness_definition_digest recomputed from this job's own trusted files
+    # 6. trusted_harness_definition_digest recomputed from this job's own trusted files
     expected_definition_digest = trusted_harness_definition_digest()
     if receipt.get("trusted_harness_definition_digest") != expected_definition_digest:
         errors.append("receipt trusted_harness_definition_digest does not match the trusted harness definition")
-    # 6. scenario_set_digest recomputed from the trusted canonical invariants, never from the receipt
-    expected_scenario_digest = scenario_set_digest()
+    # 7. scenario_set_digest recomputed from the trusted canonical invariants for this contract version
+    expected_scenario_digest = scenario_set_digest(contract_version)
     if receipt.get("scenario_set_digest") != expected_scenario_digest:
         errors.append("receipt scenario_set_digest does not match the trusted canonical scenario definitions")
-    # 7. input_fixture_digest recomputed from the trusted fixed fixture
+    # 8. input_fixture_digest recomputed from the trusted fixed fixture
     expected_fixture_digest = fixture_digest()
     if receipt.get("input_fixture_digest") != expected_fixture_digest:
         errors.append("receipt input_fixture_digest does not match the trusted fixed fixture")
@@ -445,23 +666,24 @@ def validate_receipt_trusted_fields(
         return errors + ["receipt scenario_results must be a list"]
 
     by_id = _index_scenario_results(results)
-    # 8. exactly the required scenario ids, no substitution and no omission
-    if set(by_id) != set(REQUIRED_SCENARIO_IDS):
+    # 9. exactly the required scenario ids for this contract version, no substitution and no omission
+    required_scenario_ids = get_required_scenario_ids(contract_version)
+    if set(by_id) != set(required_scenario_ids):
         errors.append(
-            f"receipt scenario_results must cover exactly {sorted(REQUIRED_SCENARIO_IDS)}, found {sorted(by_id)}"
+            f"receipt scenario_results must cover exactly {sorted(required_scenario_ids)}, found {sorted(by_id)}"
         )
 
-    for scenario_id in REQUIRED_SCENARIO_IDS:
+    for scenario_id in required_scenario_ids:
         entry = by_id.get(scenario_id)
         if entry is None:
             continue
-        # 9. invariant text must match the trusted canonical wording verbatim
-        if entry.get("invariant") != SCENARIO_INVARIANTS[scenario_id]:
+        # 10. invariant text must match the trusted canonical wording verbatim for this contract version
+        if entry.get("invariant") != get_scenario_invariants(contract_version)[scenario_id]:
             errors.append(f"scenario {scenario_id} invariant text does not match the trusted canonical invariant")
-        # 10. outcome must actually be pass
+        # 11. outcome must actually be pass
         if entry.get("outcome") != "pass":
             errors.append(f"scenario {scenario_id} outcome is {entry.get('outcome')!r}, not 'pass'")
-        # 11. timestamps must be present, parseable, non-reversed and boundedly short
+        # 12. timestamps must be present, parseable, non-reversed and boundedly short
         started = _parse_timestamp(entry.get("started_at"))
         finished = _parse_timestamp(entry.get("finished_at"))
         if started is None or finished is None:
@@ -471,8 +693,8 @@ def validate_receipt_trusted_fields(
         elif (finished - started).total_seconds() > MAX_SCENARIO_SECONDS:
             errors.append(f"scenario {scenario_id} duration exceeds the {MAX_SCENARIO_SECONDS}s sanity ceiling")
 
-    # 12. overall_result must be internally consistent with the individual scenario outcomes
-    all_pass = bool(by_id) and all(by_id.get(sid, {}).get("outcome") == "pass" for sid in REQUIRED_SCENARIO_IDS)
+    # 13. overall_result must be internally consistent with the individual scenario outcomes
+    all_pass = bool(by_id) and all(by_id.get(sid, {}).get("outcome") == "pass" for sid in required_scenario_ids)
     expected_overall = "pass" if all_pass else "fail"
     if receipt.get("overall_result") != expected_overall:
         errors.append(
@@ -512,6 +734,7 @@ def _cmd_run(args: argparse.Namespace) -> int:
     workspace_root = resolve_workspace_root(args.workspace_root)
     candidate_root = resolve_candidate_root(workspace_root, args.candidate_root)
     out_path = resolve_confined_output(workspace_root, args.out, label="--out")
+    enforce_trusted_contract_floor(candidate_root, ROOT)
     receipt = build_receipt(
         candidate_root=candidate_root,
         pr_number=identity.pr_number,
@@ -548,7 +771,11 @@ def _cmd_verify_digests(args: argparse.Namespace) -> int:
     except (OSError, ValueError) as exc:
         out_path.write_text(json.dumps({"errors": [f"candidate root is invalid: {exc}"]}), encoding="utf-8")
         return 1
-    errors = verify_candidate_module_digests(receipt, candidate_root)
+    try:
+        enforce_trusted_contract_floor(candidate_root, ROOT)
+        errors = verify_candidate_module_digests(receipt, candidate_root)
+    except (OSError, SyntaxError, ValueError) as exc:
+        errors = [f"trusted contract floor violation: {exc}"]
     out_path.write_text(json.dumps({"errors": errors}, indent=2), encoding="utf-8")
     if errors:
         for error in errors:

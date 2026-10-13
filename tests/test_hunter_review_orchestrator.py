@@ -64,10 +64,13 @@ def test_read_cycle_accepts_only_current_head_trusted_workflow_status(monkeypatc
             ]
         if path == "":
             return {"default_branch": "main"}
+        if path == "commits/main":
+            return {"sha": "e" * 40}
         if path == "actions/runs/123":
             return {
                 "id": 123,
                 "head_branch": "main",
+                "head_sha": "e" * 40,
                 "path": ".github/workflows/hunter-governance-review.yml",
             }
         raise AssertionError(path)
@@ -2050,3 +2053,108 @@ def test_duplicate_collector_appearing_at_terminal_boundary_blocks_timeout(monke
     result = orchestrator.ensure_collector("owner/repo", "token", 472, HEAD)
     assert result.state == "WAITING_FOR_REVIEWER"
     assert stored["published"] == []
+
+
+def test_pool_exhaustion_uses_native_receipt_validator(monkeypatch):
+    monkeypatch.setattr(orchestrator, "collector_receipt_problem", lambda *_a, **_k: "reject from native validator")
+    result = orchestrator.pool_exhaustion(
+        {},
+        repository="owner/repo",
+        pr_number=472,
+        head_sha=HEAD,
+        run_id=123,
+        run_attempt=1,
+        claims_id="d" * 64,
+        generation_id="",
+        pool={},
+    )
+    assert result.exhausted is False
+    assert "reject from native validator" in result.reason
+
+
+@pytest.mark.parametrize(
+    ("case", "expected"),
+    [
+        ("valid", "present"),
+        ("historical_base", "present"),
+        ("candidate_event", "absent"),
+        ("candidate_event_on_main", "absent"),
+        ("wrong_head", "absent"),
+        ("wrong_branch", "absent"),
+        ("wrong_pr", "absent"),
+        ("wrong_base", "absent"),
+        ("foreign_base_repo", "absent"),
+        ("foreign_head_repo", "absent"),
+        ("wrong_bound_head", "absent"),
+        ("missing_pr", "absent"),
+        ("diverged_base", "absent"),
+    ],
+)
+def test_read_cycle_binds_pull_request_target_provenance(monkeypatch, case, expected):
+    base_sha = "e" * 40
+    association = {
+        "number": 472,
+        "head": {"sha": HEAD, "ref": "feature", "repo": {"id": 1}},
+        "base": {"sha": base_sha, "ref": "main", "repo": {"id": 2}},
+    }
+    run = {
+        "id": 123,
+        "event": "pull_request_target",
+        "head_branch": "feature",
+        "head_sha": HEAD,
+        "path": ".github/workflows/hunter-governance-review.yml",
+        "pull_requests": [association],
+    }
+    if case.startswith("candidate_event"):
+        run["event"] = "pull_request"
+    if case == "candidate_event_on_main":
+        run.update(head_branch="main", head_sha=base_sha)
+    if case == "wrong_head":
+        run["head_sha"] = "b" * 40
+    if case == "wrong_branch":
+        run["head_branch"] = "other"
+    if case == "wrong_pr":
+        association["number"] = 473
+    if case == "wrong_base":
+        association["base"]["ref"] = "other"
+    if case == "foreign_base_repo":
+        association["base"]["repo"]["id"] = 3
+    if case == "foreign_head_repo":
+        association["head"]["repo"]["id"] = 3
+    if case == "wrong_bound_head":
+        association["head"]["sha"] = "b" * 40
+    if case == "missing_pr":
+        run["pull_requests"] = []
+    if case in {"historical_base", "diverged_base"}:
+        association["base"]["sha"] = "c" * 40
+
+    def request(_repository, _token, _method, path, _payload=None):
+        if path == "pulls/472":
+            return {
+                "state": "open",
+                "head": {"sha": HEAD, "ref": "feature", "repo": {"id": 1}},
+                "base": {"ref": "main", "repo": {"id": 2}},
+            }
+        if path == f"commits/{HEAD}/statuses?per_page=100":
+            return [
+                {
+                    "context": "Hunter Review Orchestration / PR #472",
+                    "description": f"WAITING_FOR_REVIEWER|local|0|{'d' * 64}",
+                    "target_url": "https://github.com/owner/repo/actions/runs/123",
+                    "creator": {"login": "github-actions[bot]"},
+                }
+            ]
+        if path == "":
+            return {"default_branch": "main", "id": 2}
+        if path == "commits/main":
+            return {"sha": base_sha}
+        if path == f"compare/{'c' * 40}...{base_sha}":
+            return {"status": "ahead" if case == "historical_base" else "diverged"}
+        if path == "actions/runs/123":
+            return run
+        raise AssertionError(path)
+
+    monkeypatch.setattr(orchestrator, "request_json", request)
+    state, cycle, _ = orchestrator.read_cycle("owner/repo", "token", 472, HEAD)
+    assert state == expected
+    assert (cycle is not None) == (expected == "present")
