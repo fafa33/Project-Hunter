@@ -439,7 +439,12 @@ def _run_scenario(
             "/proc",
             "--dev",
             "/dev",
+            # Private mount namespace plus explicit owner-only permissions:
+            # candidate code cannot share temporary files with host users.
             "--tmpfs",
+            "/tmp",
+            "--chmod",
+            "0700",
             "/tmp",
             *workspace_dirs,
             "--dir",
