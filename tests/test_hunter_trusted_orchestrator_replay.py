@@ -1930,8 +1930,8 @@ def test_package_and_relative_imports_are_in_digest_closure(tmp_path):
 
 def test_hosted_replay_requires_filesystem_sandbox(tmp_path, monkeypatch):
     """Hosted replay must hide the trusted checkout, not merely drop write privileges."""
-    import subprocess
     import shutil
+    import subprocess
 
     workspace = tmp_path.resolve()
     monkeypatch.setenv("GITHUB_ACTIONS", "true")
@@ -1950,6 +1950,7 @@ def test_hosted_replay_requires_filesystem_sandbox(tmp_path, monkeypatch):
     command = calls[0]
     assert command[0] == "bwrap"
     assert "--unshare-all" in command
+    assert "--share-net" not in command
     assert "--ro-bind" in command
     assert str(workspace / "candidate") in command
     assert str(workspace / "fixture.json") in command

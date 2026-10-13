@@ -398,13 +398,25 @@ def _run_scenario(
 
         if not shutil.which("bwrap"):
             raise RuntimeError("trusted replay requires bubblewrap filesystem isolation")
+        # actions/setup-python installs Python outside /usr on hosted runners.
+        # Expose only the interpreter installation, never the whole /opt tree.
+        interpreter_root = Path(sys.executable).resolve().parent.parent
+        if not interpreter_root.is_dir():
+            raise RuntimeError("trusted replay Python installation is unavailable")
+        interpreter_mount = []
+        if not interpreter_root.is_relative_to(Path("/usr")):
+            # Bubblewrap requires the destination's parent directories to exist.
+            parents = list(reversed(interpreter_root.parents))
+            interpreter_mount = [entry for parent in parents if parent != Path("/") for entry in ("--dir", str(parent))]
+            interpreter_mount.extend(("--ro-bind", str(interpreter_root), str(interpreter_root)))
+        workspace_dirs = [entry for parent in reversed(workspace_root.parents) if parent != Path("/") for entry in ("--dir", str(parent))]
         worker_prefix = [
-            "bwrap", "--die-with-parent", "--unshare-all", "--share-net",
+            "bwrap", "--die-with-parent", "--unshare-all",
             "--ro-bind", "/usr", "/usr", "--ro-bind-try", "/bin", "/bin",
             "--ro-bind-try", "/lib", "/lib", "--ro-bind-try", "/lib64", "/lib64",
-            "--ro-bind", "/etc", "/etc", "--proc", "/proc",
-            "--dev", "/dev", "--tmpfs", "/tmp",
-            "--dir", str(workspace_root),
+            "--ro-bind", "/etc", "/etc", *interpreter_mount, "--proc", "/proc",
+            "--dev", "/dev", "--tmpfs", "/tmp", *workspace_dirs,
+            "--dir", str(workspace_root), "--dir", str(workspace_root / "scripts"),
             "--ro-bind", str(candidate_root), str(candidate_root),
             "--ro-bind", str(WORKER_PATH), str(WORKER_PATH),
             "--ro-bind", str(fixture_path), str(fixture_path),

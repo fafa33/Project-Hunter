@@ -58,7 +58,7 @@ concurrency:
 jobs:
   validate-replay:
     name: Trusted Candidate Orchestrator Replay
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 15
     permissions:
       contents: read
@@ -83,6 +83,51 @@ jobs:
         uses: actions/setup-python@v6
         with:
           python-version: "3.11.13"
+
+      - name: Install required filesystem sandbox
+        run: |
+          set -euo pipefail
+          sudo apt-get update -qq
+          sudo apt-get install -y bubblewrap apparmor-profiles apparmor-utils
+          command -v bwrap
+          # First probe as the unprivileged runner. Avoid profile collisions.
+          probe() {
+            bwrap --die-with-parent --unshare-all \
+              --ro-bind /usr /usr --ro-bind-try /bin /bin \
+              --ro-bind-try /lib /lib --ro-bind-try /lib64 /lib64 \
+              --ro-bind /etc /etc --proc /proc --dev /dev \
+              --tmpfs /tmp -- /usr/bin/true
+          }
+          if ! probe; then
+            # Ubuntu 24.04 AppArmor restricts unprivileged user namespaces.
+            # Never disable global protection or enable sandbox networking.
+            if sudo aa-status | grep -Eiq 'bwrap|bubblewrap'; then
+              echo 'Existing bwrap AppArmor profile: refusing conflicting install' >&2
+              exit 1
+            fi
+            profile=/usr/share/apparmor/extra-profiles/bwrap-userns-restrict
+            test -f "$profile"
+            sudo install -m 0644 "$profile" /etc/apparmor.d/bwrap-userns-restrict
+            sudo apparmor_parser -r /etc/apparmor.d/bwrap-userns-restrict
+            probe
+          fi
+
+      # Unprivileged candidate-only smoke: produces NO authoritative status.
+      # The independent publisher must still validate the trusted receipts.
+      - name: Exercise candidate sandbox implementation on hosted Linux
+        env:
+          GITHUB_TOKEN: ""
+          GH_TOKEN: ""
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+          CANDIDATE_SHA: ${{ github.event.pull_request.head.sha }}
+        run: |
+          set -euo pipefail
+          python candidate/scripts/hunter_trusted_orchestrator_replay.py run \
+            --workspace-root "$GITHUB_WORKSPACE" \
+            --candidate-root candidate \
+            --pr "$PR_NUMBER" \
+            --candidate-sha "$CANDIDATE_SHA" \
+            --out candidate-sandbox-smoke.json
 
       - name: Run trusted candidate orchestrator replay
         env:
@@ -111,7 +156,7 @@ jobs:
     name: Independently Verify Candidate Module Digests
     needs: validate-replay
     if: ${{ always() && !cancelled() && needs.validate-replay.result == 'success' }}
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 10
     # No write permission of any kind -- this job touches candidate content
     # a second time, independently of job 1, and must never also be able to
