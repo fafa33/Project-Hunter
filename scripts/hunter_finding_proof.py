@@ -57,6 +57,8 @@ def validate_proof(finding: dict, *, root: Path = ROOT) -> list[str]:
         errors.append(f"{ident}: provide 1-6 specific adversarial pytest selectors")
     if errors:
         return errors
+    assert isinstance(sha, str) and isinstance(red, str) and isinstance(green, str)
+    assert isinstance(adversarial, list)
     # Reject malicious pytest argument injection and filesystem escape.
     for selector in [red, *adversarial]:
         path = selector.split("::", 1)[0]
