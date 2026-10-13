@@ -1180,10 +1180,11 @@ def test_publish_workflow_contains_no_git_clone_fetch_or_checkout_commands():
 
 
 def test_publish_workflow_executes_no_repository_script():
-    text = _publish_workflow_text()
-    # The only `python` invocations left are `python - <<'PY' ... PY`
-    # heredocs running this file's own inline, non-repository script text --
-    # never `python scripts/...` (a repository-hosted script path).
+    doc = _publish_workflow_doc()
+    steps = doc["jobs"]["publish-proof"]["steps"]
+    text = "\n".join(step.get("run", "") for step in steps)
+    # Only the credential-free trusted-replay job runs the base-controlled
+    # repository scripts. The status writer must remain checkout-free.
     assert "python scripts/" not in text
     assert re.search(r"^\s*python - <<'PY'\s*$", text, re.MULTILINE)
 
@@ -1222,7 +1223,7 @@ def test_publish_workflow_pr_head_binding_remains_fail_closed():
     context_step = next(s for s in steps if s.get("id") == "context")
     assert context_step["env"]["RUN_ID"] == "${{ github.event.workflow_run.id }}"
     assert "pull_requests[0].number" in context_step["run"]
-    assert 'test "$head_sha" = "$run_sha"' in context_step["run"]
+    assert 'if [ "$head_sha" != "$run_sha" ]' in context_step["run"]
     assert "exit 1" in context_step["run"]
 
 
@@ -1518,5 +1519,26 @@ def test_trusted_replay_workflows_separate_candidate_and_publisher_permissions()
                 assert step["with"]["persist-credentials"] is False
     publisher = publish["jobs"]["publish-proof"]
     assert publisher["permissions"]["statuses"] == "write"
+    assert publisher["permissions"]["pull-requests"] == "read"
     assert all("actions/checkout" not in step.get("uses", "") for step in publisher["steps"])
-    assert 'test "$head_sha" = "$run_sha"' in publisher["steps"][0]["run"]
+    assert 'if [ "$head_sha" != "$run_sha" ]' in publisher["steps"][0]["run"]
+
+
+def test_replay_publisher_uses_only_base_controlled_evidence():
+    doc = _publish_workflow_doc()
+    jobs = doc["jobs"]
+    trusted = jobs["trusted-replay"]
+    publisher = jobs["publish-proof"]
+    assert trusted["permissions"].get("statuses") is None
+    assert trusted["permissions"].get("contents") == "read"
+    assert publisher["needs"] == "trusted-replay"
+    assert any("scripts/hunter_trusted_orchestrator_replay.py run" in step.get("run", "") for step in trusted["steps"])
+    assert any(
+        "scripts/hunter_trusted_orchestrator_replay.py verify-digests" in step.get("run", "")
+        for step in trusted["steps"]
+    )
+    downloads = [step for step in publisher["steps"] if "download-artifact" in step.get("uses", "")]
+    assert len(downloads) == 1
+    assert downloads[0]["with"]["name"] == "base-controlled-replay-evidence"
+    assert "run-id" not in downloads[0]["with"]
+    assert not any("actions/checkout" in step.get("uses", "") for step in publisher["steps"])

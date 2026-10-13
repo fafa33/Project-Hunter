@@ -552,6 +552,46 @@
       "guard": "Prefix-aware protected-path classification covers build_backend/, requirements/, local composite actions and nested pytest conftest.py; changes force fresh trusted full gates.",
       "test": "tests/test_preflight_reuse_decision.py::test_candidate_controlled_bootstrap_forces_trusted_full_gates",
       "status": "guarded"
+    },
+    {
+      "id": "PRH-070",
+      "class": "publisher-missing-pull-request-read-permission",
+      "source": "PR #596 Copilot review, 2026-10-13",
+      "classification": "systemic",
+      "guard_boundary": "trusted replay publisher / exact-head proof",
+      "guard": "Publisher API PR lookup requires explicit pull-requests: read; structural permission regression.",
+      "test": "tests/test_hunter_trusted_orchestrator_replay.py",
+      "status": "identified"
+    },
+    {
+      "id": "PRH-071",
+      "class": "workflow-run-merge-sha-mistaken-for-pr-head",
+      "source": "PR #596 Copilot review, 2026-10-13",
+      "classification": "systemic",
+      "guard_boundary": "trusted replay publisher / exact-head proof",
+      "guard": "For pull_request-triggered workflow_run, run head_sha may be a synthetic merge commit; compare associated pull_requests head SHA to current PR HEAD.",
+      "test": "tests/test_hunter_trusted_orchestrator_replay.py",
+      "status": "identified"
+    },
+    {
+      "id": "PRH-072",
+      "class": "bash-errexit-and-list-mismatch-bypass",
+      "source": "PR #596 Copilot review, 2026-10-13",
+      "classification": "systemic",
+      "guard_boundary": "trusted replay publisher / exact-head proof",
+      "guard": "Bash set -e does not fail closed on a failed command in an AND list; explicit mismatch branch must exit nonzero.",
+      "test": "tests/test_hunter_trusted_orchestrator_replay.py",
+      "status": "identified"
+    },
+    {
+      "id": "PRH-073",
+      "class": "untrusted-digest-artifact-forges-trusted-proof",
+      "source": "PR #596 Copilot review, 2026-10-13",
+      "classification": "systemic",
+      "guard_boundary": "trusted replay publisher / exact-head proof",
+      "guard": "A candidate-controlled pull_request workflow can forge both replay receipt and digest-check JSON. Privileged publisher must not accept candidate-origin artifact assertions as independent proof; only trusted base-controlled execution/attestation can authorize success.",
+      "test": "tests/test_hunter_trusted_orchestrator_replay.py (regression required before guarded status)",
+      "status": "identified"
     }
   ],
   "families": [

@@ -57,7 +57,72 @@ on:
       - completed
 
 jobs:
+  trusted-replay:
+    name: Base-controlled replay proof
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      contents: read
+      actions: read
+      pull-requests: read
+    outputs:
+      head_sha: ${{ steps.context.outputs.head_sha }}
+      pr_number: ${{ steps.context.outputs.pr_number }}
+    steps:
+      - name: Resolve triggering PR exact head
+        id: context
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          RUN_ID: ${{ github.event.workflow_run.id }}
+        run: |
+          set -euo pipefail
+          pr_number="$(gh api "repos/${GH_REPO}/actions/runs/${RUN_ID}" --jq '.pull_requests[0].number // empty')"
+          [ -n "$pr_number" ] || exit 1
+          head_sha="$(gh api "repos/${GH_REPO}/pulls/${pr_number}" --jq '.head.sha')"
+          run_sha="$(gh api "repos/${GH_REPO}/actions/runs/${RUN_ID}" --jq '.pull_requests[0].head.sha // empty')"
+          if [ "$head_sha" != "$run_sha" ] || [ "${#head_sha}" -ne 40 ]; then
+            echo 'stale or mismatched candidate head' >&2
+            exit 1
+          fi
+          echo "head_sha=$head_sha" >> "$GITHUB_OUTPUT"
+          echo "pr_number=$pr_number" >> "$GITHUB_OUTPUT"
+      - name: Checkout base-controlled harness
+        uses: actions/checkout@v7
+        with:
+          ref: ${{ github.event.repository.default_branch }}
+          persist-credentials: false
+      - name: Checkout candidate in unprivileged job
+        uses: actions/checkout@v7
+        with:
+          ref: ${{ steps.context.outputs.head_sha }}
+          path: candidate
+          persist-credentials: false
+      - name: Set up Python
+        uses: actions/setup-python@v6
+        with:
+          python-version: "3.11.13"
+      - name: Run trusted replay and independently verify candidate digests
+        env:
+          GITHUB_TOKEN: ""
+          GH_TOKEN: ""
+          PR_NUMBER: ${{ steps.context.outputs.pr_number }}
+          CANDIDATE_SHA: ${{ steps.context.outputs.head_sha }}
+        run: |
+          set -euo pipefail
+          python scripts/hunter_trusted_orchestrator_replay.py run --workspace-root "$GITHUB_WORKSPACE" --candidate-root candidate --pr "$PR_NUMBER" --candidate-sha "$CANDIDATE_SHA" --out replay-receipt.json
+          python scripts/hunter_trusted_orchestrator_replay.py verify-digests --workspace-root "$GITHUB_WORKSPACE" --receipt replay-receipt.json --candidate-root candidate --out digest-check.json
+      - name: Upload trusted-run evidence
+        uses: actions/upload-artifact@v4
+        with:
+          name: base-controlled-replay-evidence
+          path: |
+            replay-receipt.json
+            digest-check.json
+          retention-days: 14
+
   publish-proof:
+    needs: trusted-replay
     name: Publish Exact-Head Trusted Replay Proof
     runs-on: ubuntu-latest
     timeout-minutes: 5
@@ -67,6 +132,7 @@ jobs:
     permissions:
       contents: read
       actions: read
+      pull-requests: read
       statuses: write
 
     steps:
@@ -85,8 +151,11 @@ jobs:
           fi
           # Fail closed unless this run belongs to the same current PR HEAD.
           head_sha="$(gh api "repos/${GH_REPO}/pulls/${pr_number}" --jq .head.sha)"
-          run_sha="$(gh api "repos/${GH_REPO}/actions/runs/${RUN_ID}" --jq .head_sha)"
-          test "$head_sha" = "$run_sha" && test "${#head_sha}" -eq 40
+          run_sha="$(gh api "repos/${GH_REPO}/actions/runs/${RUN_ID}" --jq ".pull_requests[0].head.sha // empty")"
+          if [ "$head_sha" != "$run_sha" ] || [ "${#head_sha}" -ne 40 ]; then
+            echo "triggering PR head differs from current PR head" >&2
+            exit 1
+          fi
           echo "head_sha=$head_sha" >> "$GITHUB_OUTPUT"
           echo "pr_number=$pr_number" >> "$GITHUB_OUTPUT"
 
@@ -95,25 +164,11 @@ jobs:
         with:
           python-version: "3.11.13"
 
-      - name: Download replay receipt
-        if: ${{ github.event.workflow_run.conclusion == 'success' }}
+      - name: Download evidence from base-controlled job in this run
         uses: actions/download-artifact@v4
         with:
-          name: replay-receipt
+          name: base-controlled-replay-evidence
           path: .
-          github-token: ${{ github.token }}
-          run-id: ${{ github.event.workflow_run.id }}
-        continue-on-error: true
-
-      - name: Download digest verification result
-        if: ${{ always() }}
-        uses: actions/download-artifact@v4
-        with:
-          name: digest-check
-          path: .
-          github-token: ${{ github.token }}
-          run-id: ${{ github.event.workflow_run.id }}
-        continue-on-error: true
 
       - name: Fetch trusted definition files as inert data (no checkout, never executed)
         env:
