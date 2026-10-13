@@ -1928,9 +1928,10 @@ def test_package_and_relative_imports_are_in_digest_closure(tmp_path):
     assert before != worker.candidate_module_digest(root, "A", "v1")
 
 
-def test_hosted_replay_runs_candidate_worker_as_nonowner(tmp_path, monkeypatch):
-    """Hosted candidate code cannot mutate and restore the runner-owned digest inputs."""
+def test_hosted_replay_requires_filesystem_sandbox(tmp_path, monkeypatch):
+    """Hosted replay must hide the trusted checkout, not merely drop write privileges."""
     import subprocess
+    import shutil
 
     workspace = tmp_path.resolve()
     monkeypatch.setenv("GITHUB_ACTIONS", "true")
@@ -1942,12 +1943,27 @@ def test_hosted_replay_runs_candidate_worker_as_nonowner(tmp_path, monkeypatch):
         return subprocess.CompletedProcess(command, 0, stdout='{"outcome":"pass","measurements":{}}', stderr="")
 
     monkeypatch.setattr(replay.subprocess, "run", fake_run)
+    monkeypatch.setattr(shutil, "which", lambda name: "/usr/bin/bwrap" if name == "bwrap" else None)
     replay._run_scenario(
         "A", workspace / "candidate", workspace / "fixture.json", workspace_root=workspace, contract_version="v2"
     )
-    assert calls[0][:5] == ["sudo", "-n", "-u", "nobody", "--"]
-    # A failed privilege-drop is a worker failure, not a privileged fallback.
-    assert calls[0][5] == __import__("sys").executable
+    command = calls[0]
+    assert command[0] == "bwrap"
+    assert "--unshare-all" in command
+    assert "--ro-bind" in command
+    assert str(workspace / "candidate") in command
+    assert str(workspace / "fixture.json") in command
+    assert ("--ro-bind", str(replay.WORKER_PATH)) in [(command[i], command[i+1]) for i in range(len(command)-1)]
+    assert not any(command[i:i+2] == ["--ro-bind", str(workspace)] for i in range(len(command)-1))
+
+    calls.clear()
+    monkeypatch.setattr(shutil, "which", lambda name: None)
+    import pytest
+    with pytest.raises(RuntimeError, match="requires bubblewrap"):
+        replay._run_scenario(
+            "A", workspace / "candidate", workspace / "fixture.json", workspace_root=workspace, contract_version="v2"
+        )
+    assert not calls
 
 
 def test_hosted_worker_does_not_apply_to_unrelated_test_fixture(tmp_path, monkeypatch):

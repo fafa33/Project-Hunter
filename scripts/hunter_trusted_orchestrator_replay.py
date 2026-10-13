@@ -389,7 +389,27 @@ def _run_scenario(
         and workspace_root == Path(hosted_workspace).resolve()
         and candidate_root == workspace_root / "candidate"
     )
-    worker_prefix = ["sudo", "-n", "-u", "nobody", "--"] if hosted_candidate else []
+    # A separate Unix user prevents writes, but does not prevent a hostile
+    # candidate from reading the trusted sibling checkout. Hide it at the
+    # mount namespace boundary before importing any candidate code.
+    worker_prefix = []
+    if hosted_candidate:
+        import shutil
+
+        if not shutil.which("bwrap"):
+            raise RuntimeError("trusted replay requires bubblewrap filesystem isolation")
+        worker_prefix = [
+            "bwrap", "--die-with-parent", "--unshare-all", "--share-net",
+            "--ro-bind", "/usr", "/usr", "--ro-bind-try", "/bin", "/bin",
+            "--ro-bind-try", "/lib", "/lib", "--ro-bind-try", "/lib64", "/lib64",
+            "--ro-bind", "/etc", "/etc", "--proc", "/proc",
+            "--dev", "/dev", "--tmpfs", "/tmp",
+            "--dir", str(workspace_root),
+            "--ro-bind", str(candidate_root), str(candidate_root),
+            "--ro-bind", str(WORKER_PATH), str(WORKER_PATH),
+            "--ro-bind", str(fixture_path), str(fixture_path),
+            "--chdir", str(candidate_root), "--",
+        ]
     process = subprocess.run(
         worker_prefix
         + [
