@@ -1258,6 +1258,8 @@ def _run_inline_validate_script(
     env.update(
         {
             "WORKFLOW_CONCLUSION": conclusion,
+            "REPLAY_JOB_RESULT": "success",
+            "DIGEST_JOB_RESULT": "success",
             "PR_NUMBER": str(pr_number),
             "CANDIDATE_SHA": candidate_sha,
             "GITHUB_OUTPUT": str(github_output),
@@ -1527,18 +1529,82 @@ def test_trusted_replay_workflows_separate_candidate_and_publisher_permissions()
 def test_replay_publisher_uses_only_base_controlled_evidence():
     doc = _publish_workflow_doc()
     jobs = doc["jobs"]
-    trusted = jobs["trusted-replay"]
+    replay = jobs["trusted-replay"]
+    digest = jobs["trusted-digest"]
     publisher = jobs["publish-proof"]
-    assert trusted["permissions"].get("statuses") is None
-    assert trusted["permissions"].get("contents") == "read"
-    assert publisher["needs"] == "trusted-replay"
-    assert any("scripts/hunter_trusted_orchestrator_replay.py run" in step.get("run", "") for step in trusted["steps"])
+    assert replay["permissions"] == {"contents": "read", "actions": "read", "pull-requests": "read"}
+    assert digest["permissions"] == {"contents": "read"}
+    assert digest["needs"] == "trusted-replay"
+    assert "needs.trusted-replay.result == 'success'" in digest["if"]
+    assert publisher["needs"] == ["trusted-replay", "trusted-digest"]
+    assert "always()" in publisher["if"]
+    assert any("scripts/hunter_trusted_orchestrator_replay.py run" in step.get("run", "") for step in replay["steps"])
+    assert not any("verify-digests" in step.get("run", "") for step in replay["steps"])
     assert any(
         "scripts/hunter_trusted_orchestrator_replay.py verify-digests" in step.get("run", "")
-        for step in trusted["steps"]
+        for step in digest["steps"]
+    )
+    assert not any(
+        "scripts/hunter_trusted_orchestrator_replay.py run" in step.get("run", "") for step in digest["steps"]
+    )
+    assert all(
+        "persist-credentials" in step.get("with", {}) and step["with"]["persist-credentials"] is False
+        for job in (replay, digest)
+        for step in job["steps"]
+        if "actions/checkout" in step.get("uses", "")
     )
     downloads = [step for step in publisher["steps"] if "download-artifact" in step.get("uses", "")]
-    assert len(downloads) == 1
-    assert downloads[0]["with"]["name"] == "base-controlled-replay-evidence"
-    assert "run-id" not in downloads[0]["with"]
+    assert len(downloads) == 2
+    assert {step["with"]["name"] for step in downloads} == {
+        "base-controlled-replay-receipt",
+        "base-controlled-digest-check",
+    }
+    assert all("run-id" not in step["with"] and step["continue-on-error"] is True for step in downloads)
     assert not any("actions/checkout" in step.get("uses", "") for step in publisher["steps"])
+    validator = next(step for step in publisher["steps"] if step.get("id") == "validate_receipt")
+    assert 'os.environ["REPLAY_JOB_RESULT"] != "success"' in validator["run"]
+    assert 'os.environ["DIGEST_JOB_RESULT"] != "success"' in validator["run"]
+
+
+def test_inline_validator_fails_closed_on_failed_replay_job_even_with_forged_green_artifacts(tmp_path):
+    receipt, _ = _good_receipt(tmp_path)
+    (tmp_path / "replay-receipt.json").write_text(json.dumps(receipt), encoding="utf-8")
+    (tmp_path / "digest-check.json").write_text(json.dumps({"errors": []}), encoding="utf-8")
+    _write_trusted_fetched_files(tmp_path)
+    script = _extract_inline_validate_script()
+    import os as _os
+
+    for failed_job in ("REPLAY_JOB_RESULT", "DIGEST_JOB_RESULT"):
+        work = tmp_path / failed_job
+        work.mkdir()
+        for name in (
+            "replay-receipt.json",
+            "digest-check.json",
+            "trusted-controller.fetched",
+            "trusted-worker.fetched",
+            "trusted-definition.fetched",
+            "trusted-main-sha.fetched",
+        ):
+            (work / name).write_bytes((tmp_path / name).read_bytes())
+        output = work / "output.txt"
+        env = dict(
+            _os.environ,
+            WORKFLOW_CONCLUSION="success",
+            REPLAY_JOB_RESULT="success",
+            DIGEST_JOB_RESULT="success",
+            PR_NUMBER="535",
+            CANDIDATE_SHA="a" * 40,
+            GITHUB_OUTPUT=str(output),
+        )
+        env[failed_job] = "failure"
+        result = subprocess.run([sys.executable, "-c", script], cwd=work, env=env, capture_output=True, text=True)
+        assert result.returncode == 0, result.stderr
+        assert "result=failure" in output.read_text()
+
+
+def test_replay_failure_cannot_skip_status_publication():
+    jobs = _publish_workflow_doc()["jobs"]
+    assert "always()" in jobs["publish-proof"]["if"]
+    assert "!cancelled()" in jobs["publish-proof"]["if"]
+    assert jobs["publish-proof"]["permissions"]["statuses"] == "write"
+    assert all("statuses" not in jobs[name]["permissions"] for name in ("trusted-replay", "trusted-digest"))

@@ -592,6 +592,26 @@
       "guard": "A candidate-controlled pull_request workflow can forge both replay receipt and digest-check JSON. Privileged publisher must not accept candidate-origin artifact assertions as independent proof; only trusted base-controlled execution/attestation can authorize success.",
       "test": "tests/test_hunter_trusted_orchestrator_replay.py (regression required before guarded status)",
       "status": "open"
+    },
+    {
+      "id": "PRH-074",
+      "class": "candidate-mutation-of-shared-trusted-verifier",
+      "source": "PR #596 Copilot review, 2026-10-13",
+      "classification": "systemic",
+      "guard_boundary": "trusted replay publisher / exact-head proof",
+      "test": "tests/test_hunter_trusted_orchestrator_replay.py (adversarial regression)",
+      "status": "open",
+      "guard": "Candidate replay execution can modify a shared workspace before digest verification; trusted replay and digest recomputation must run in isolated jobs with independent checkouts and read-only tokens."
+    },
+    {
+      "id": "PRH-075",
+      "class": "skipped-publisher-on-replay-failure",
+      "source": "PR #596 Copilot review, 2026-10-13",
+      "classification": "systemic",
+      "guard_boundary": "trusted replay publisher / exact-head proof",
+      "test": "tests/test_hunter_trusted_orchestrator_replay.py (adversarial regression)",
+      "status": "open",
+      "guard": "A failed dependency skips publisher under implicit success() and leaves PR status pending; publisher must run always (unless cancelled), tolerate missing evidence, and emit failure."
     }
   ],
   "families": [

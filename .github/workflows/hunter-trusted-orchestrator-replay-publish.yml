@@ -102,7 +102,7 @@ jobs:
         uses: actions/setup-python@v6
         with:
           python-version: "3.11.13"
-      - name: Run trusted replay and independently verify candidate digests
+      - name: Run trusted replay without publishing authority
         env:
           GITHUB_TOKEN: ""
           GH_TOKEN: ""
@@ -111,18 +111,63 @@ jobs:
         run: |
           set -euo pipefail
           python scripts/hunter_trusted_orchestrator_replay.py run --workspace-root "$GITHUB_WORKSPACE" --candidate-root candidate --pr "$PR_NUMBER" --candidate-sha "$CANDIDATE_SHA" --out replay-receipt.json
-          python scripts/hunter_trusted_orchestrator_replay.py verify-digests --workspace-root "$GITHUB_WORKSPACE" --receipt replay-receipt.json --candidate-root candidate --out digest-check.json
-      - name: Upload trusted-run evidence
+      - name: Upload replay evidence even on replay failure
+        if: ${{ always() }}
         uses: actions/upload-artifact@v4
         with:
-          name: base-controlled-replay-evidence
-          path: |
-            replay-receipt.json
-            digest-check.json
+          name: base-controlled-replay-receipt
+          path: replay-receipt.json
+          if-no-files-found: ignore
+          retention-days: 14
+
+  trusted-digest:
+    name: Independently recompute candidate digests
+    needs: trusted-replay
+    if: ${{ always() && needs.trusted-replay.result == 'success' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout base-controlled verifier
+        uses: actions/checkout@v7
+        with:
+          ref: ${{ github.event.repository.default_branch }}
+          persist-credentials: false
+      - name: Checkout exact candidate in independent workspace
+        uses: actions/checkout@v7
+        with:
+          ref: ${{ needs.trusted-replay.outputs.head_sha }}
+          path: candidate
+          persist-credentials: false
+      - name: Set up Python
+        uses: actions/setup-python@v6
+        with:
+          python-version: "3.11.13"
+      - name: Download replay receipt from trusted replay job
+        uses: actions/download-artifact@v4
+        with:
+          name: base-controlled-replay-receipt
+          path: .
+      - name: Independently verify candidate digests
+        env:
+          GITHUB_TOKEN: ""
+          GH_TOKEN: ""
+        run: |
+          set -euo pipefail
+          python scripts/hunter_trusted_orchestrator_replay.py verify-digests --workspace-root "$GITHUB_WORKSPACE" --receipt replay-receipt.json --candidate-root candidate --out digest-check.json
+      - name: Upload independently computed digest result
+        if: ${{ always() }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: base-controlled-digest-check
+          path: digest-check.json
+          if-no-files-found: ignore
           retention-days: 14
 
   publish-proof:
-    needs: trusted-replay
+    needs: [trusted-replay, trusted-digest]
+    if: ${{ always() && !cancelled() }}
     name: Publish Exact-Head Trusted Replay Proof
     runs-on: ubuntu-latest
     timeout-minutes: 5
@@ -164,10 +209,20 @@ jobs:
         with:
           python-version: "3.11.13"
 
-      - name: Download evidence from base-controlled job in this run
+      - name: Download replay evidence from this run
+        id: download_replay
+        continue-on-error: true
         uses: actions/download-artifact@v4
         with:
-          name: base-controlled-replay-evidence
+          name: base-controlled-replay-receipt
+          path: .
+
+      - name: Download independent digest evidence from this run
+        id: download_digest
+        continue-on-error: true
+        uses: actions/download-artifact@v4
+        with:
+          name: base-controlled-digest-check
           path: .
 
       - name: Fetch trusted definition files as inert data (no checkout, never executed)
@@ -201,6 +256,8 @@ jobs:
           GITHUB_TOKEN: ""
           GH_TOKEN: ""
           WORKFLOW_CONCLUSION: ${{ github.event.workflow_run.conclusion }}
+          REPLAY_JOB_RESULT: ${{ needs.trusted-replay.result }}
+          DIGEST_JOB_RESULT: ${{ needs.trusted-digest.result }}
           PR_NUMBER: ${{ steps.context.outputs.pr_number }}
           CANDIDATE_SHA: ${{ steps.context.outputs.head_sha }}
         run: |
@@ -232,7 +289,7 @@ jobs:
           pr_number = int(os.environ["PR_NUMBER"])
           candidate_sha = os.environ["CANDIDATE_SHA"]
 
-          if conclusion != "success" or not os.path.isfile("replay-receipt.json") or not os.path.isfile(
+          if (conclusion != "success" or os.environ["REPLAY_JOB_RESULT"] != "success" or os.environ["DIGEST_JOB_RESULT"] != "success") or not os.path.isfile("replay-receipt.json") or not os.path.isfile(
               "digest-check.json"
           ):
               print("validate workflow did not produce complete evidence; treating replay as failed", file=sys.stderr)
