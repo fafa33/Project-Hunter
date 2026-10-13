@@ -83,6 +83,11 @@ jobs:
             echo "no associated pull request found for triggering run ${RUN_ID}" >&2
             exit 1
           fi
+          # Fail closed unless this run belongs to the same current PR HEAD.
+          head_sha="$(gh api "repos/${GH_REPO}/pulls/${pr_number}" --jq .head.sha)"
+          run_sha="$(gh api "repos/${GH_REPO}/actions/runs/${RUN_ID}" --jq .head_sha)"
+          test "$head_sha" = "$run_sha" && test "${#head_sha}" -eq 40
+          echo "head_sha=$head_sha" >> "$GITHUB_OUTPUT"
           echo "pr_number=$pr_number" >> "$GITHUB_OUTPUT"
 
       - name: Set up Python
@@ -142,7 +147,7 @@ jobs:
           GH_TOKEN: ""
           WORKFLOW_CONCLUSION: ${{ github.event.workflow_run.conclusion }}
           PR_NUMBER: ${{ steps.context.outputs.pr_number }}
-          CANDIDATE_SHA: ${{ github.event.workflow_run.head_sha }}
+          CANDIDATE_SHA: ${{ steps.context.outputs.head_sha }}
         run: |
           set -euo pipefail
           python - <<'PY'
@@ -293,7 +298,7 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ github.token }}
           GH_REPO: ${{ github.repository }}
-          HEAD_SHA: ${{ github.event.workflow_run.head_sha }}
+          HEAD_SHA: ${{ steps.context.outputs.head_sha }}
           PR_NUMBER: ${{ steps.context.outputs.pr_number }}
           VALIDATION_RESULT: ${{ steps.validate_receipt.outputs.result }}
           RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}

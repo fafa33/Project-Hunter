@@ -1222,6 +1222,7 @@ def test_publish_workflow_pr_head_binding_remains_fail_closed():
     context_step = next(s for s in steps if s.get("id") == "context")
     assert context_step["env"]["RUN_ID"] == "${{ github.event.workflow_run.id }}"
     assert "pull_requests[0].number" in context_step["run"]
+    assert 'test "$head_sha" = "$run_sha"' in context_step["run"]
     assert "exit 1" in context_step["run"]
 
 
@@ -1493,3 +1494,29 @@ def test_cmd_run_and_cmd_validate_never_forward_raw_argparse_pr_or_sha():
         assert (
             source.count("args.candidate_sha") == 1
         ), f"{name} references args.candidate_sha somewhere other than identity construction"
+
+
+def test_trusted_replay_workflows_separate_candidate_and_publisher_permissions():
+    import yaml
+
+    root = Path(__file__).resolve().parents[1] / ".github" / "workflows"
+    validate = yaml.safe_load((root / "hunter-trusted-orchestrator-replay-validate.yml").read_text())
+    publish = yaml.safe_load((root / "hunter-trusted-orchestrator-replay-publish.yml").read_text())
+    assert (
+        "pull_request_target:"
+        not in (root / "hunter-trusted-orchestrator-replay-validate.yml").read_text().split("jobs:", 1)[0]
+    )
+    assert (
+        "pull_request:" in (root / "hunter-trusted-orchestrator-replay-validate.yml").read_text().split("jobs:", 1)[0]
+    )
+    assert "workflow_run:" in (root / "hunter-trusted-orchestrator-replay-publish.yml").read_text().split("jobs:", 1)[0]
+    for job in validate["jobs"].values():
+        assert job["permissions"] == {"contents": "read"}
+        assert not any("statuses" in str(step) for step in job["steps"])
+        for step in job["steps"]:
+            if "uses" in step and "actions/checkout" in step["uses"]:
+                assert step["with"]["persist-credentials"] is False
+    publisher = publish["jobs"]["publish-proof"]
+    assert publisher["permissions"]["statuses"] == "write"
+    assert all("actions/checkout" not in step.get("uses", "") for step in publisher["steps"])
+    assert 'test "$head_sha" = "$run_sha"' in publisher["steps"][0]["run"]
