@@ -561,7 +561,7 @@
       "guard_boundary": "trusted replay publisher / exact-head proof",
       "guard": "Publisher API PR lookup requires explicit pull-requests: read; structural permission regression.",
       "test": "tests/test_hunter_trusted_orchestrator_replay.py",
-      "status": "identified"
+      "status": "open"
     },
     {
       "id": "PRH-071",
@@ -571,7 +571,7 @@
       "guard_boundary": "trusted replay publisher / exact-head proof",
       "guard": "For pull_request-triggered workflow_run, run head_sha may be a synthetic merge commit; compare associated pull_requests head SHA to current PR HEAD.",
       "test": "tests/test_hunter_trusted_orchestrator_replay.py",
-      "status": "identified"
+      "status": "open"
     },
     {
       "id": "PRH-072",
@@ -581,7 +581,7 @@
       "guard_boundary": "trusted replay publisher / exact-head proof",
       "guard": "Bash set -e does not fail closed on a failed command in an AND list; explicit mismatch branch must exit nonzero.",
       "test": "tests/test_hunter_trusted_orchestrator_replay.py",
-      "status": "identified"
+      "status": "open"
     },
     {
       "id": "PRH-073",
@@ -591,7 +591,7 @@
       "guard_boundary": "trusted replay publisher / exact-head proof",
       "guard": "A candidate-controlled pull_request workflow can forge both replay receipt and digest-check JSON. Privileged publisher must not accept candidate-origin artifact assertions as independent proof; only trusted base-controlled execution/attestation can authorize success.",
       "test": "tests/test_hunter_trusted_orchestrator_replay.py (regression required before guarded status)",
-      "status": "identified"
+      "status": "open"
     }
   ],
   "families": [
