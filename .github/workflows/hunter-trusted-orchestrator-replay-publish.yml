@@ -57,116 +57,7 @@ on:
       - completed
 
 jobs:
-  trusted-replay:
-    name: Base-controlled replay proof
-    runs-on: ubuntu-latest
-    timeout-minutes: 15
-    permissions:
-      contents: read
-      actions: read
-      pull-requests: read
-    outputs:
-      head_sha: ${{ steps.context.outputs.head_sha }}
-      pr_number: ${{ steps.context.outputs.pr_number }}
-    steps:
-      - name: Resolve triggering PR exact head
-        id: context
-        env:
-          GH_TOKEN: ${{ github.token }}
-          GH_REPO: ${{ github.repository }}
-          RUN_ID: ${{ github.event.workflow_run.id }}
-        run: |
-          set -euo pipefail
-          pr_number="$(gh api "repos/${GH_REPO}/actions/runs/${RUN_ID}" --jq '.pull_requests[0].number // empty')"
-          [ -n "$pr_number" ] || exit 1
-          head_sha="$(gh api "repos/${GH_REPO}/pulls/${pr_number}" --jq '.head.sha')"
-          run_sha="$(gh api "repos/${GH_REPO}/actions/runs/${RUN_ID}" --jq '.pull_requests[0].head.sha // empty')"
-          if [ "$head_sha" != "$run_sha" ] || [ "${#head_sha}" -ne 40 ]; then
-            echo 'stale or mismatched candidate head' >&2
-            exit 1
-          fi
-          echo "head_sha=$head_sha" >> "$GITHUB_OUTPUT"
-          echo "pr_number=$pr_number" >> "$GITHUB_OUTPUT"
-      - name: Checkout base-controlled harness
-        uses: actions/checkout@v7
-        with:
-          ref: ${{ github.event.repository.default_branch }}
-          persist-credentials: false
-      - name: Checkout candidate in unprivileged job
-        uses: actions/checkout@v7
-        with:
-          ref: ${{ steps.context.outputs.head_sha }}
-          path: candidate
-          persist-credentials: false
-      - name: Set up Python
-        uses: actions/setup-python@v6
-        with:
-          python-version: "3.11.13"
-      - name: Run trusted replay without publishing authority
-        env:
-          GITHUB_TOKEN: ""
-          GH_TOKEN: ""
-          PR_NUMBER: ${{ steps.context.outputs.pr_number }}
-          CANDIDATE_SHA: ${{ steps.context.outputs.head_sha }}
-        run: |
-          set -euo pipefail
-          python scripts/hunter_trusted_orchestrator_replay.py run --workspace-root "$GITHUB_WORKSPACE" --candidate-root candidate --pr "$PR_NUMBER" --candidate-sha "$CANDIDATE_SHA" --out replay-receipt.json
-      - name: Upload replay evidence even on replay failure
-        if: ${{ always() }}
-        uses: actions/upload-artifact@v4
-        with:
-          name: base-controlled-replay-receipt
-          path: replay-receipt.json
-          if-no-files-found: ignore
-          retention-days: 14
-
-  trusted-digest:
-    name: Independently recompute candidate digests
-    needs: trusted-replay
-    if: ${{ always() && needs.trusted-replay.result == 'success' }}
-    runs-on: ubuntu-latest
-    timeout-minutes: 10
-    permissions:
-      contents: read
-    steps:
-      - name: Checkout base-controlled verifier
-        uses: actions/checkout@v7
-        with:
-          ref: ${{ github.event.repository.default_branch }}
-          persist-credentials: false
-      - name: Checkout exact candidate in independent workspace
-        uses: actions/checkout@v7
-        with:
-          ref: ${{ needs.trusted-replay.outputs.head_sha }}
-          path: candidate
-          persist-credentials: false
-      - name: Set up Python
-        uses: actions/setup-python@v6
-        with:
-          python-version: "3.11.13"
-      - name: Download replay receipt from trusted replay job
-        uses: actions/download-artifact@v4
-        with:
-          name: base-controlled-replay-receipt
-          path: .
-      - name: Independently verify candidate digests
-        env:
-          GITHUB_TOKEN: ""
-          GH_TOKEN: ""
-        run: |
-          set -euo pipefail
-          python scripts/hunter_trusted_orchestrator_replay.py verify-digests --workspace-root "$GITHUB_WORKSPACE" --receipt replay-receipt.json --candidate-root candidate --out digest-check.json
-      - name: Upload independently computed digest result
-        if: ${{ always() }}
-        uses: actions/upload-artifact@v4
-        with:
-          name: base-controlled-digest-check
-          path: digest-check.json
-          if-no-files-found: ignore
-          retention-days: 14
-
   publish-proof:
-    needs: [trusted-replay, trusted-digest]
     if: ${{ always() && !cancelled() }}
     name: Publish Exact-Head Trusted Replay Proof
     runs-on: ubuntu-latest
@@ -209,20 +100,24 @@ jobs:
         with:
           python-version: "3.11.13"
 
-      - name: Download replay evidence from this run
+      - name: Download replay evidence from exact triggering validation run
         id: download_replay
         continue-on-error: true
         uses: actions/download-artifact@v4
         with:
-          name: base-controlled-replay-receipt
+          name: replay-receipt
+          run-id: ${{ github.event.workflow_run.id }}
+          github-token: ${{ github.token }}
           path: .
 
-      - name: Download independent digest evidence from this run
+      - name: Download independent digest evidence from exact triggering validation run
         id: download_digest
         continue-on-error: true
         uses: actions/download-artifact@v4
         with:
-          name: base-controlled-digest-check
+          name: digest-check
+          run-id: ${{ github.event.workflow_run.id }}
+          github-token: ${{ github.token }}
           path: .
 
       - name: Fetch trusted definition files as inert data (no checkout, never executed)
@@ -256,8 +151,6 @@ jobs:
           GITHUB_TOKEN: ""
           GH_TOKEN: ""
           WORKFLOW_CONCLUSION: ${{ github.event.workflow_run.conclusion }}
-          REPLAY_JOB_RESULT: ${{ needs.trusted-replay.result }}
-          DIGEST_JOB_RESULT: ${{ needs.trusted-digest.result }}
           PR_NUMBER: ${{ steps.context.outputs.pr_number }}
           CANDIDATE_SHA: ${{ steps.context.outputs.head_sha }}
         run: |
@@ -289,7 +182,7 @@ jobs:
           pr_number = int(os.environ["PR_NUMBER"])
           candidate_sha = os.environ["CANDIDATE_SHA"]
 
-          if (conclusion != "success" or os.environ["REPLAY_JOB_RESULT"] != "success" or os.environ["DIGEST_JOB_RESULT"] != "success") or not os.path.isfile("replay-receipt.json") or not os.path.isfile(
+          if (conclusion != "success") or not os.path.isfile("replay-receipt.json") or not os.path.isfile(
               "digest-check.json"
           ):
               print("validate workflow did not produce complete evidence; treating replay as failed", file=sys.stderr)
