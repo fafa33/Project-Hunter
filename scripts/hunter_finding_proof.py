@@ -52,6 +52,8 @@ def validate_proof(finding: dict, *, root: Path = ROOT) -> list[str]:
         not isinstance(adversarial, list)
         or not adversarial
         or len(adversarial) > 6
+        or len(set(adversarial)) != len(adversarial)
+        or red in adversarial
         or any(not isinstance(x, str) or not x.startswith("tests/") or "::test_" not in x for x in adversarial)
     ):
         errors.append(f"{ident}: provide 1-6 specific adversarial pytest selectors")
@@ -80,7 +82,17 @@ def validate_proof(finding: dict, *, root: Path = ROOT) -> list[str]:
 
             test_file = red.split("::", 1)[0]
             destination = baseline / "repo" / test_file
+            # Never follow a baseline-controlled symlink, including parent components.
+            baseline_root = baseline / "repo"
+            if any(
+                part.is_symlink()
+                for part in [destination, *destination.parents]
+                if part == baseline_root or baseline_root in part.parents
+            ):
+                return [f"{ident}: baseline test destination contains a symlink"]
             destination.parent.mkdir(parents=True, exist_ok=True)
+            if not destination.resolve().is_relative_to(baseline_root.resolve()):
+                return [f"{ident}: baseline test destination escapes worktree"]
             shutil.copy2(root / test_file, destination)
             red_result = run([sys.executable, "-m", "pytest", "-q", "--tb=short", red], cwd=baseline / "repo")
             if red_result.returncode == 0:

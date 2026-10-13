@@ -54,3 +54,11 @@ def test_unavailable_baseline_fails_closed(tmp_path: Path):
 def test_legacy_ids_are_pinned_not_all_findings_exempt():
     assert proof.validate_proof(finding(id="RFD-372-001", executable_proof=None)) == []
     assert proof.validate_proof(finding(id="RFD-999-001", executable_proof=None))
+
+
+def test_adversarial_selector_must_be_distinct_and_unique():
+    bad = finding()
+    bad["executable_proof"]["adversarial_tests"] = ["tests/test_example.py::test_regression"]
+    assert "adversarial" in str(proof.validate_proof(bad))
+    bad["executable_proof"]["adversarial_tests"] = ["tests/test_example.py::test_adversarial"] * 2
+    assert "adversarial" in str(proof.validate_proof(bad))
