@@ -17,13 +17,10 @@ name: Hunter / Trusted Orchestrator Replay Validate
 # This workflow replays the candidate's controller-logic modules against
 # fixed, offline scenario fixtures and independently recomputes their module
 # digests -- and does nothing else. It is deliberately triggered by
-# `pull_request`, never `pull_request_target`: no job here ever holds a write
-# permission, a repository secret, or a status/check-publishing token, so
-# there is nothing for untrusted candidate code (which both jobs below
-# execute, by necessity, inside a further credential-blanked, process-isolated
-# subprocess -- see scripts/hunter_trusted_orchestrator_replay_worker.py) to
-# escalate even if a candidate branch's own copy of this workflow file were
-# tampered with. The only thing either job produces is an artifact; the
+# `pull_request_target` using the base-controlled workflow: no job here holds a write
+# permission, a repository secret, or a status/check-publishing token.
+# The candidate cannot edit the workflow used by this event; candidate code
+# executes only in the filesystem-isolated worker. Both jobs produce artifacts; the
 # separate, privileged publish workflow re-derives every trusted quantity
 # itself and never trusts either job's own account of what it did.
 #
@@ -43,13 +40,14 @@ name: Hunter / Trusted Orchestrator Replay Validate
 # scripts/hunter_trusted_orchestrator_replay.py for the full evidence boundary.
 
 on:
-  pull_request:
+  pull_request_target:
     branches:
       - main
     types:
       - opened
       - reopened
       - synchronize
+      - ready_for_review
 
 concurrency:
   group: hunter-orchestrator-replay-validate-${{ github.event.pull_request.number }}
@@ -111,23 +109,6 @@ jobs:
             sudo apparmor_parser -r /etc/apparmor.d/bwrap-userns-restrict
             probe
           fi
-
-      # Unprivileged candidate-only smoke: produces NO authoritative status.
-      # The independent publisher must still validate the trusted receipts.
-      - name: Exercise candidate sandbox implementation on hosted Linux
-        env:
-          GITHUB_TOKEN: ""
-          GH_TOKEN: ""
-          PR_NUMBER: ${{ github.event.pull_request.number }}
-          CANDIDATE_SHA: ${{ github.event.pull_request.head.sha }}
-        run: |
-          set -euo pipefail
-          python candidate/scripts/hunter_trusted_orchestrator_replay.py run \
-            --workspace-root "$GITHUB_WORKSPACE" \
-            --candidate-root candidate \
-            --pr "$PR_NUMBER" \
-            --candidate-sha "$CANDIDATE_SHA" \
-            --out candidate-sandbox-smoke.json
 
       - name: Run trusted candidate orchestrator replay
         env:

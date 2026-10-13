@@ -580,7 +580,7 @@ def scenario_a_v2(candidate_root: Path, fixture: dict[str, Any]) -> dict[str, An
     }
     runs[6] = {**runs[5], "event": "pull_request"}
     runs[7] = {**runs[5], "head_sha": "f" * 40}
-    trusted_creator = {"login": getattr(orchestration, "TRUSTED_STATUS_CREATOR", "github-actions[bot]")}
+    trusted_creator = {"login": "github-actions[bot]"}
     trusted, omitted = object(), object()
 
     def believed(run_id: int, *, creator: Any = trusted, description: str | None = None) -> str:
