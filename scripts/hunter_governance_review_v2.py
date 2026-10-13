@@ -73,6 +73,7 @@ PREFLIGHT_OWNED_PATHS = frozenset(
         ".githooks/pre-push",
         ".github/workflows/hunter-pre-pr-preflight.yml",
         "scripts/hunter_pr_preflight.py",
+        "scripts/hunter_finding_proof.py",
         "scripts/hunter_architecture_index_preflight.py",
         "scripts/hunter_artifact_preflight.py",
         "scripts/hunter_defect_prevention_preflight.py",

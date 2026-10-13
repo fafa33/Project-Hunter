@@ -444,7 +444,11 @@ def _candidate_tree(tmp_path: Path) -> Path:
     (root / ".github" / "workflows").mkdir(parents=True)
     (root / "scripts").mkdir()
     (root / ".github" / "workflows" / "hunter-pre-pr-preflight.yml").write_text(
-        "run: python scripts/hunter_pr_preflight.py --mode normal\n", encoding="utf-8"
+        "- name: Verify bounded reviewer RED GREEN and adversarial proofs\n"
+        "  if: ${{ steps.preflight-mode.outputs.mode == 'normal' }}\n"
+        "  run: python scripts/hunter_finding_proof.py\n"
+        "run: python scripts/hunter_pr_preflight.py --mode normal\n",
+        encoding="utf-8",
     )
     (root / "scripts" / "hunter_pr_preflight.py").write_text(
         f"NORMAL_QUALITY_GATES = {prevention.TRUSTED_CANDIDATE_QUALITY_GATES!r}\n"

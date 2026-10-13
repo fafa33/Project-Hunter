@@ -2140,6 +2140,12 @@ def validate_candidate_preflight_definition(candidate_root: Path) -> list[str]:
         errors.append(f"candidate preflight workflow missing: {workflow_path}")
     else:
         content = workflow_path.read_text(encoding="utf-8")
+        # The reviewer proof gate must not be removed or made conditional by a candidate.
+        proof_step = "- name: Verify bounded reviewer RED GREEN and adversarial proofs"
+        if proof_step not in content or "run: python scripts/hunter_finding_proof.py" not in content:
+            errors.append("candidate preflight workflow omits mandatory reviewer RED/GREEN proof gate")
+        if "if: ${{ steps.preflight-mode.outputs.mode == 'normal' }}" not in content:
+            errors.append("candidate preflight workflow must bind reviewer proof to normal preflight mode")
         if "python scripts/hunter_pr_preflight.py" not in content:
             errors.append("candidate preflight workflow does not invoke scripts/hunter_pr_preflight.py")
         elif _workflow_has_unconditional_exit_before_preflight(content):
