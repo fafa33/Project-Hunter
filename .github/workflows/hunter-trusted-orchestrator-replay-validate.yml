@@ -84,6 +84,15 @@ jobs:
         with:
           python-version: "3.11.13"
 
+      - name: Provision and verify trusted network namespace
+        run: |
+          set -euo pipefail
+          sudo apt-get update -qq
+          sudo apt-get install -y bubblewrap
+          test -x /usr/bin/bwrap
+          /usr/bin/bwrap --die-with-parent --unshare-net --ro-bind / / --dev-bind /dev /dev --proc /proc -- \
+            python -c 'import socket; s=socket.socket(); s.settimeout(1); exec("try:\n s.connect((\"1.1.1.1\", 443))\nexcept OSError:\n pass\nelse:\n raise SystemExit(1)")'
+
       - name: Run trusted candidate orchestrator replay
         env:
           GITHUB_TOKEN: ""
@@ -92,7 +101,13 @@ jobs:
           CANDIDATE_SHA: ${{ github.event.pull_request.head.sha }}
         run: |
           set -euo pipefail
-          python scripts/hunter_trusted_orchestrator_replay.py run \
+          # The trusted controller is checked out from main; isolate its entire execution here,
+          # so this protection is effective before the candidate helper changes are merged.
+          # The existing harness creates and unlinks its fixture in the workspace.
+          # Keep that writable; the sandbox enforces network denial, not file immutability.
+          /usr/bin/bwrap --die-with-parent --unshare-net --ro-bind / / --dev-bind /dev /dev --proc /proc --tmpfs /tmp \
+            --bind "$GITHUB_WORKSPACE" "$GITHUB_WORKSPACE" -- \
+            python scripts/hunter_trusted_orchestrator_replay.py run \
             --workspace-root "$GITHUB_WORKSPACE" \
             --candidate-root candidate \
             --pr "$PR_NUMBER" \

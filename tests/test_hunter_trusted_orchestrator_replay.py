@@ -1627,3 +1627,20 @@ def test_publisher_latest_run_lookup_is_paginated_and_bounded_to_the_pr_branch()
     context = next(s for s in doc["jobs"]["publish-proof"]["steps"] if s.get("id") == "context")["run"]
     assert "--paginate" in context
     assert '-f branch="$head_ref"' in context and ".head.ref" in context
+
+
+def test_hosted_replay_fails_closed_without_network_namespace(monkeypatch):
+    monkeypatch.setenv("HUNTER_REPLAY_REQUIRE_NETNS", "1")
+    monkeypatch.setattr(replay.Path, "is_file", lambda self: False if str(self) == "/usr/bin/bwrap" else True)
+    with pytest.raises(RuntimeError, match="requires executable /usr/bin/bwrap"):
+        replay._network_isolated_worker_command([sys.executable, "-c", "pass"])
+
+
+def test_hosted_replay_uses_fixed_network_namespace_binary(monkeypatch):
+    monkeypatch.setenv("HUNTER_REPLAY_REQUIRE_NETNS", "1")
+    monkeypatch.setattr(replay.Path, "is_file", lambda self: True)
+    monkeypatch.setattr(replay.os, "access", lambda *_args: True)
+    command = replay._network_isolated_worker_command([sys.executable, "-c", "pass"])
+    assert command[0] == "/usr/bin/bwrap"
+    assert "--unshare-net" in command
+    assert command[-3:] == [sys.executable, "-c", "pass"]

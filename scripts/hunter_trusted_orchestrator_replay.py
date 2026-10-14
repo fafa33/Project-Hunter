@@ -51,6 +51,7 @@ from __future__ import annotations
 import argparse
 import hashlib
 import json
+import os
 import re
 import subprocess
 import sys
@@ -265,6 +266,36 @@ def resolve_candidate_root(workspace_root: Path, raw: str) -> Path:
     return resolve_confined_existing(workspace_root, raw, must_be_dir=True, label="--candidate-root")
 
 
+def _network_isolated_worker_command(worker_args: list[str]) -> list[str]:
+    """Fail closed when hosted replay requires an OS-enforced network namespace.
+
+    The binary path is fixed, not resolved through candidate-controlled PATH.
+    Bubblewrap creates the namespace before Python can import candidate code.
+    """
+    if os.environ.get("HUNTER_REPLAY_REQUIRE_NETNS") != "1":
+        return worker_args
+    sandbox = Path("/usr/bin/bwrap")
+    if not sandbox.is_file() or not os.access(sandbox, os.X_OK):
+        raise RuntimeError("trusted replay requires executable /usr/bin/bwrap")
+    return [
+        str(sandbox),
+        "--die-with-parent",
+        "--unshare-net",
+        "--ro-bind",
+        "/",
+        "/",
+        "--dev-bind",
+        "/dev",
+        "/dev",
+        "--proc",
+        "/proc",
+        "--tmpfs",
+        "/tmp",
+        "--",
+        *worker_args,
+    ]
+
+
 def _run_scenario(
     scenario_id: str, candidate_root: Path, fixture_path: Path, *, workspace_root: Path
 ) -> dict[str, Any]:
@@ -272,18 +303,20 @@ def _run_scenario(
         raise ValueError(f"scenario_id {scenario_id!r} is not one of the canonical {REQUIRED_SCENARIO_IDS}")
     started = datetime.now(UTC)
     process = subprocess.run(
-        [
-            sys.executable,
-            str(WORKER_PATH),
-            "--workspace-root",
-            str(workspace_root),
-            "--candidate-root",
-            str(candidate_root.relative_to(workspace_root)),
-            "--scenario",
-            scenario_id,
-            "--fixture",
-            str(fixture_path.relative_to(workspace_root)),
-        ],
+        _network_isolated_worker_command(
+            [
+                sys.executable,
+                str(WORKER_PATH),
+                "--workspace-root",
+                str(workspace_root),
+                "--candidate-root",
+                str(candidate_root.relative_to(workspace_root)),
+                "--scenario",
+                scenario_id,
+                "--fixture",
+                str(fixture_path.relative_to(workspace_root)),
+            ]
+        ),
         cwd=str(ROOT),
         env=_isolated_env(),
         capture_output=True,
