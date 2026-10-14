@@ -107,11 +107,14 @@ jobs:
           set -euo pipefail
           # The trusted controller is checked out from main; isolate its entire execution here,
           # so this protection is effective before the candidate helper changes are merged.
-          # The existing harness creates and unlinks its fixture in the workspace.
-          # Keep that writable; the sandbox enforces network denial, not file immutability.
+          # The harness writes its fixture and the receipt in the workspace root, so the root stays writable, but the
+          # trusted harness (`scripts/`: controller, worker, definition) and the candidate checkout are bound
+          # read-only on top of it, so neither can be rewritten while the replay runs.
           env -i PATH="$PATH" LD_LIBRARY_PATH="${LD_LIBRARY_PATH:-}" LANG=C.UTF-8 HOME=/tmp GITHUB_TOKEN= GH_TOKEN= \
             /usr/bin/bwrap --die-with-parent --unshare-net --unshare-pid --unshare-ipc --unshare-uts --new-session --cap-drop ALL --ro-bind / / --dev /dev --proc /proc --tmpfs /tmp \
-            --bind "$GITHUB_WORKSPACE" "$GITHUB_WORKSPACE" -- \
+            --bind "$GITHUB_WORKSPACE" "$GITHUB_WORKSPACE" \
+            --ro-bind "$GITHUB_WORKSPACE/scripts" "$GITHUB_WORKSPACE/scripts" \
+            --ro-bind "$GITHUB_WORKSPACE/candidate" "$GITHUB_WORKSPACE/candidate" -- \
             python scripts/hunter_trusted_orchestrator_replay.py run \
             --workspace-root "$GITHUB_WORKSPACE" \
             --candidate-root candidate \

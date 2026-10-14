@@ -1790,3 +1790,29 @@ def test_a_declared_entry_module_missing_from_the_tree_is_refused(tmp_path):
 
 def test_the_worker_never_writes_bytecode_into_the_candidate_tree():
     assert sys.dont_write_bytecode is True
+
+
+def test_publisher_rechecks_the_latest_run_immediately_before_publishing():
+    import yaml
+
+    doc = yaml.safe_load(Path(".github/workflows/hunter-trusted-orchestrator-replay-publish.yml").read_text())
+    steps = doc["jobs"]["publish-proof"]["steps"]
+    names = [step.get("id") or step.get("name") for step in steps]
+    recheck = next(step for step in steps if step.get("id") == "recheck")
+    publish = next(step for step in steps if step.get("name") == "Publish exact-head PR-bound status")
+    assert names.index("recheck") < names.index(publish["name"])
+    assert "no longer the latest validation run" in recheck["run"] and "exit 1" in recheck["run"]
+    assert "--paginate" in recheck["run"]
+    assert "steps.recheck.outcome == 'success'" in publish["if"]
+
+
+def test_replay_step_binds_the_trusted_harness_and_candidate_read_only_over_the_writable_workspace():
+    import yaml
+
+    doc = yaml.safe_load(Path(".github/workflows/hunter-trusted-orchestrator-replay-validate.yml").read_text())
+    steps = [step for job in doc["jobs"].values() for step in job["steps"]]
+    run = next(step for step in steps if step.get("name", "").startswith("Run trusted candidate"))["run"]
+    workspace = run.index('--bind "$GITHUB_WORKSPACE" "$GITHUB_WORKSPACE"')
+    scripts = run.index('--ro-bind "$GITHUB_WORKSPACE/scripts" "$GITHUB_WORKSPACE/scripts"')
+    candidate = run.index('--ro-bind "$GITHUB_WORKSPACE/candidate" "$GITHUB_WORKSPACE/candidate"')
+    assert workspace < scripts and workspace < candidate  # later mounts override the writable bind
