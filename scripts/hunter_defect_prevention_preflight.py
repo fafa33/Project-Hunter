@@ -2186,11 +2186,16 @@ def _mode_contract_errors(
         return "candidate preflight-mode step must be unconditional and carry no env/shell overrides"
     if _normalized_script(mode_step.get("run")) != _normalized_script(CANONICAL_MODE_RUN):
         return "candidate preflight-mode step must be the canonical mode script"
-    if "PREFLIGHT_MODE" in str(job.get("env", "")):
-        return "candidate preflight job must not override PREFLIGHT_MODE"
+    if job.get("env") or job.get("defaults"):
+        return "candidate preflight job must not set env or defaults (PATH, PREFLIGHT_MODE, shell, working directory)"
     for index, other in enumerate(steps):
         if index != mode_index and any(marker in str(other.get("run", "")) for marker in _MODE_TAMPER_MARKERS[:2]):
             return "only the preflight-mode step may read or write the preflight mode marker or environment"
+    if any(key in runner for key in ("working-directory", "shell", "uses", "with")) or set(runner.get("env") or {}) - {
+        "PREFLIGHT_MODE",
+        "PYTEST_ADDOPTS",
+    }:
+        return "candidate preflight step must not override its working directory, shell or environment"
     if _normalized_script(runner.get("run")) != CANONICAL_PREFLIGHT_RUN:
         return "candidate preflight step must be exactly the canonical mode-driven invocation"
     if (
@@ -2258,6 +2263,10 @@ def _reviewer_proof_step_errors(workflow_text: str) -> list[str]:
         if problem:
             return [problem]
         gate = steps[proof[0]]
+        if any(key in gate for key in ("working-directory", "shell", "env", "uses", "with")):
+            return ["candidate preflight reviewer proof step must not override its working directory, shell or env"]
+        if document.get("env") or document.get("defaults"):
+            return ["candidate preflight workflow must not set workflow-level env or defaults"]
         if _normalized_script(gate.get("run")) != PROOF_COMMAND:
             return ["candidate preflight reviewer proof step must run exactly the proof command"]
         if gate.get("continue-on-error") not in (None, False):

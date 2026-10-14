@@ -1600,3 +1600,12 @@ def test_status_publication_runs_after_upstream_failure_so_status_never_stays_pe
     publish = next(step for step in steps if step.get("name") == "Publish exact-head PR-bound status")
     assert "always()" in publish["if"]
     assert "steps.context.outcome" in publish["if"]
+
+
+def test_publisher_selects_the_latest_run_by_associated_pr_head_not_by_synthetic_head_sha():
+    import yaml
+
+    doc = yaml.safe_load(Path(".github/workflows/hunter-trusted-orchestrator-replay-publish.yml").read_text())
+    context = next(s for s in doc["jobs"]["publish-proof"]["steps"] if s.get("id") == "context")["run"]
+    assert "pull_requests[0].head.sha" in context and "head_sha=${head_sha}" not in context
+    assert doc["jobs"]["publish-proof"]["concurrency"]["cancel-in-progress"] is False

@@ -939,3 +939,25 @@ def test_the_trusted_lane_runs_the_trusted_proof_runner_before_any_candidate_gat
     assert prevention.run_candidate_quality_gates(tmp_path) == 2
     assert seen == [tmp_path]
     assert executed == []  # no candidate gate ran after a failed proof
+
+
+def test_execution_context_of_the_proof_and_preflight_steps_cannot_be_redirected():
+    def mutate(change) -> list[str]:
+        document = _real_workflow()
+        change(document)
+        return _errors(document)
+
+    def proof(document):
+        return _step(document, lambda step: "hunter_finding_proof" in str(step.get("run", "")))
+
+    def runner(document):
+        return _step(document, lambda step: "hunter_pr_preflight" in str(step.get("run", "")))
+
+    assert mutate(lambda d: proof(d).update({"working-directory": "bypass"}))
+    assert mutate(lambda d: proof(d).update({"env": {"PATH": "/tmp/bypass"}}))
+    assert mutate(lambda d: proof(d).update({"shell": "bash {0}; true"}))
+    assert mutate(lambda d: runner(d).update({"working-directory": "bypass"}))
+    assert mutate(lambda d: runner(d)["env"].update({"PATH": "/tmp/bypass"}))
+    assert mutate(lambda d: d["jobs"]["preflight"].update({"env": {"PATH": "/tmp/bypass"}}))
+    assert mutate(lambda d: d["jobs"]["preflight"].update({"defaults": {"run": {"working-directory": "bypass"}}}))
+    assert mutate(lambda d: d.update({"env": {"PATH": "/tmp/bypass"}}))
