@@ -1752,6 +1752,24 @@ def test_replay_sandbox_uses_a_private_dev_tree_not_the_host_devices():
     assert runs.count("--dev /dev") == 2
 
 
+def test_replay_sandboxes_mask_host_run_sockets_after_binding_the_host_root(monkeypatch):
+    monkeypatch.setenv("HUNTER_REPLAY_REQUIRE_NETNS", "1")
+    monkeypatch.setattr(replay.Path, "is_file", lambda self: True)
+    monkeypatch.setattr(replay.os, "access", lambda *_args: True)
+    import yaml
+
+    doc = yaml.safe_load(Path(".github/workflows/hunter-trusted-orchestrator-replay-validate.yml").read_text())
+    runs = "\n".join(step.get("run", "") for job in doc["jobs"].values() for step in job["steps"])
+    assert runs.count("--tmpfs /run") == runs.count("--ro-bind / /") == 2
+    assert all(
+        line.index("--ro-bind / /") < line.index("--tmpfs /run")
+        for line in runs.splitlines()
+        if "--ro-bind / /" in line
+    )
+    command = replay._network_isolated_worker_command(["python", "w.py"])
+    assert command.index("--ro-bind") < command.index("/run") and command[command.index("/run") - 1] == "--tmpfs"
+
+
 def _scripts_candidate(tmp_path, files):
     candidate = tmp_path / "candidate"
     (candidate / "scripts").mkdir(parents=True)

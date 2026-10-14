@@ -303,6 +303,10 @@ def _network_isolated_worker_command(worker_args: list[str]) -> list[str]:
         "/dev",
         "--proc",
         "/proc",
+        # Mask the host's /run (and /var/run, which resolves to it) so the candidate cannot reach host Unix
+        # sockets such as the Docker or agent sockets; --unshare-net does not block filesystem sockets.
+        "--tmpfs",
+        "/run",
         "--tmpfs",
         SANDBOX_TMP,
         "--",

@@ -94,7 +94,7 @@ jobs:
           # `bwrap --unshare-net` fail while configuring loopback ("RTM_NEWADDR: Operation not permitted").
           # Lift only that restriction on this ephemeral runner, then verify the namespace really denies egress.
           sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0 || true
-          /usr/bin/bwrap --die-with-parent --unshare-net --unshare-pid --unshare-ipc --unshare-uts --new-session --cap-drop ALL --ro-bind / / --dev /dev --proc /proc -- \
+          /usr/bin/bwrap --die-with-parent --unshare-net --unshare-pid --unshare-ipc --unshare-uts --new-session --cap-drop ALL --ro-bind / / --dev /dev --proc /proc --tmpfs /run -- \
             python -c 'import socket; s=socket.socket(); s.settimeout(1); exec("try:\n s.connect((\"1.1.1.1\", 443))\nexcept OSError:\n pass\nelse:\n raise SystemExit(1)")'
 
       - name: Run trusted candidate orchestrator replay
@@ -114,7 +114,7 @@ jobs:
           # variable set earlier in the job cannot point the dynamic loader at attacker-supplied libraries.
           py_lib="$(python -c 'import os, sys; print(os.path.join(sys.base_prefix, "lib"))')"
           env -i PATH="$PATH" LD_LIBRARY_PATH="$py_lib" LANG=C.UTF-8 HOME=/tmp GITHUB_TOKEN= GH_TOKEN= \
-            /usr/bin/bwrap --die-with-parent --unshare-net --unshare-pid --unshare-ipc --unshare-uts --new-session --cap-drop ALL --ro-bind / / --dev /dev --proc /proc --tmpfs /tmp \
+            /usr/bin/bwrap --die-with-parent --unshare-net --unshare-pid --unshare-ipc --unshare-uts --new-session --cap-drop ALL --ro-bind / / --dev /dev --proc /proc --tmpfs /run --tmpfs /tmp \
             --bind "$GITHUB_WORKSPACE" "$GITHUB_WORKSPACE" \
             --ro-bind "$GITHUB_WORKSPACE/scripts" "$GITHUB_WORKSPACE/scripts" \
             --ro-bind "$GITHUB_WORKSPACE/candidate" "$GITHUB_WORKSPACE/candidate" -- \
