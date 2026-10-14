@@ -241,3 +241,29 @@ def test_red_and_green_are_presented_at_the_same_path_with_no_phase_marker(monke
     assert red_call[2] == green_call[2] == repo  # identical view path for both phases
     assert red_call[1] != green_call[1]
     assert not (red_call[1] / ".git").exists() and not (green_call[1] / ".git").exists()
+
+
+def test_snapshot_refuses_a_tracked_symlink_that_would_redirect_a_later_copy(tmp_path: Path):
+    import os
+
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    _git_repo(repo)
+    outside = tmp_path / "outside"
+    outside.mkdir()
+    os.symlink(str(outside), repo / "link")
+    (repo / "plain").mkdir()
+    (repo / "plain" / "later.txt").write_text("x")
+    done = proof.subprocess.run(["git", "add", "-A"], cwd=repo, capture_output=True, check=True)
+    assert done.returncode == 0
+    green = tmp_path / "green"
+    green.mkdir()
+    # a symlinked ancestor of a later tracked path must be refused rather than followed
+    os.symlink(str(outside), green / "plain")
+    try:
+        proof.snapshot_tracked(repo, green)
+    except ValueError:
+        pass
+    else:
+        raise AssertionError("a symlink ancestor inside the snapshot must be refused")
+    assert not (outside / "later.txt").exists()

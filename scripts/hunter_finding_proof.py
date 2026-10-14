@@ -143,15 +143,30 @@ def run_pytest(selectors: list[str], *, source: Path, view: Path) -> subprocess.
 
 
 def snapshot_tracked(root: Path, destination: Path) -> None:
-    """Copy the tracked files of ``root`` (no .git) into ``destination``, preserving symlinks as symlinks."""
+    """Copy the tracked files of ``root`` (no .git) into ``destination``, preserving symlinks as symlinks.
+
+    Fails closed when a tracked path is absolute, climbs out with ``..``, or has a symlink ancestor inside the
+    snapshot: a candidate-controlled tracked symlink must not redirect a later copy outside ``destination``.
+    """
     listing = subprocess.run(
         ["git", "ls-files", "-z"], cwd=root, capture_output=True, timeout=30, check=True
     ).stdout.split(b"\0")
+    base = destination.resolve()
     for raw in filter(None, listing):
         relative = raw.decode("utf-8", "surrogateescape")
+        parts = Path(relative).parts
+        if Path(relative).is_absolute() or ".." in parts:
+            raise ValueError(f"tracked path escapes the snapshot: {relative!r}")
+        ancestor = destination
+        for part in parts[:-1]:
+            ancestor = ancestor / part
+            if ancestor.is_symlink():
+                raise ValueError(f"tracked path traverses a symlink: {relative!r}")
         source = root / relative
         target = destination / relative
         target.parent.mkdir(parents=True, exist_ok=True)
+        if not target.parent.resolve().is_relative_to(base):
+            raise ValueError(f"tracked path escapes the snapshot: {relative!r}")
         if source.is_symlink():
             os.symlink(os.readlink(source), target)
         elif source.is_file():
@@ -258,6 +273,8 @@ def collect_errors(root: Path = ROOT) -> list[str]:
             errors.extend(validate_proof(finding, root=root))
         except IsolationUnavailable as unavailable:
             errors.append(f"{finding.get('id')}: proof refused, {unavailable}")
+        except ValueError as refused:
+            errors.append(f"{finding.get('id')}: proof refused, {refused}")
         except subprocess.TimeoutExpired:
             errors.append(f"{finding.get('id')}: proof timed out (bounded); simplify tests or repair baseline")
     return errors
