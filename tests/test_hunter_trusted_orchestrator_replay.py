@@ -1635,3 +1635,38 @@ def test_outer_supervisor_budget_exceeds_both_worker_windows_and_cleanup(monkeyp
         fixture.write_text("{}", encoding="utf-8")
         replay._run_scenario("A", candidate, fixture, workspace_root=root)
     assert observed["timeout"] == replay.WORKER_TIMEOUT_SECONDS
+
+
+def test_replay_worker_rejects_pickle_frames_without_executing_reducers(tmp_path):
+    """Hostile child pipe bytes cannot execute a pickle reducer in the parent."""
+    import importlib.util
+    import pickle
+
+    worker_path = REPO_ROOT / "scripts/hunter_trusted_orchestrator_replay_worker.py"
+    spec = importlib.util.spec_from_file_location("replay_worker_json_frame_test", worker_path)
+    assert spec is not None and spec.loader is not None
+    worker = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(worker)
+
+    marker = tmp_path / "pickle_executed"
+
+    class Gadget:
+        def __reduce__(self):
+            return (marker.write_text, ("unsafe",))
+
+    frame = pickle.dumps(Gadget())
+    import pytest
+
+    with pytest.raises((UnicodeError, ValueError)):
+        worker._decode_scenario_message(frame)
+    assert not marker.exists()
+
+    for invalid in (
+        b"[]",
+        b'{"stage":"started","extra":1}',
+        b'{"stage":"done","measurements":[]}',
+        b'{"stage":"failed","error":1,"traceback":"x"}',
+    ):
+        with pytest.raises(ValueError):
+            worker._decode_scenario_message(invalid)
+    assert worker._decode_scenario_message(b'{"stage":"started"}') == {"stage": "started"}
