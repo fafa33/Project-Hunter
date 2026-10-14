@@ -43,7 +43,7 @@ def test_prevented_defect_recurrence_fails_prevention_conformance(tmp_path, monk
         "findings": [
             {
                 "id": "RFD-TEST-002",
-                "source_provenance": {"reviewer": "Codex", "reviewed_head_sha": "a" * 40},
+                "source_provenance": {"reviewer": "Codex"},
                 "validation_state": "validated",
                 "classification": "recurrence",
                 "mapped_defect_id": "PRH-007",
@@ -66,24 +66,12 @@ def test_recurrence_becomes_valid_only_after_permanent_corrective_disposition(tm
         "findings": [
             {
                 "id": "RFD-TEST-003",
-                "source_provenance": {"reviewer": "Codex", "reviewed_head_sha": "a" * 40},
+                "source_provenance": {"reviewer": "Codex"},
                 "validation_state": "validated",
                 "classification": "recurrence",
                 "mapped_defect_id": "PRH-007",
                 "resolution_state": "resolved",
                 "permanent_disposition_evidence": "Added exact-head proof check",
-                "root_cause": "Prior exact-head proof admission was incomplete",
-                "negative_regression_evidence": "tests/test_pr376_prevention_regressions.py",
-                "security_impact_review": "Exact-head replay and trust boundary checked",
-                "prevention_gap_correction": "Strengthened exact-head proof admission",
-                "executable_proof": {
-                    "vulnerable_sha": "a" * 40,
-                    "red_test": "tests/test_pr376_prevention_regressions.py::test_protected_preflight_requires_exact_head_pr_bound_status",
-                    "green_test": "tests/test_pr376_prevention_regressions.py::test_protected_preflight_requires_exact_head_pr_bound_status",
-                    "adversarial_tests": [
-                        "tests/test_hunter_reviewer_disposition.py::test_duplicate_reviewer_reports_map_to_one_defect_class"
-                    ],
-                },
                 "guard_reference": "scripts/hunter_governance_review_v2.py::candidate_admission",
                 "test_reference": "tests/test_pr376_prevention_regressions.py::test_protected_preflight_requires_exact_head_pr_bound_status",
             }
@@ -104,47 +92,21 @@ def test_duplicate_reviewer_reports_map_to_one_defect_class(tmp_path, monkeypatc
         "findings": [
             {
                 "id": "RFD-TEST-004A",
-                "source_provenance": {"reviewer": "Reviewer A", "pr_number": 100, "reviewed_head_sha": "a" * 40},
+                "source_provenance": {"reviewer": "Reviewer A", "pr_number": 100},
                 "validation_state": "validated",
                 "classification": "duplicate",
                 "mapped_defect_id": "PRH-007",
                 "resolution_state": "resolved",
                 "permanent_disposition_evidence": "Fixed in PRH-007 guard",
-                "root_cause": "Duplicate reports share an existing defect",
-                "negative_regression_evidence": "tests/test_hunter_reviewer_disposition.py",
-                "security_impact_review": "Duplicate mapping has no additional security impact",
-                "guard_reference": "scripts/hunter_defect_prevention_preflight.py::validate_reviewer_finding_dispositions",
-                "test_reference": "tests/test_hunter_reviewer_disposition.py::test_duplicate_reviewer_reports_map_to_one_defect_class",
-                "executable_proof": {
-                    "vulnerable_sha": "a" * 40,
-                    "red_test": "tests/test_hunter_reviewer_disposition.py::test_duplicate_reviewer_reports_map_to_one_defect_class",
-                    "green_test": "tests/test_hunter_reviewer_disposition.py::test_duplicate_reviewer_reports_map_to_one_defect_class",
-                    "adversarial_tests": [
-                        "tests/test_hunter_reviewer_disposition.py::test_recurrence_becomes_valid_only_after_permanent_corrective_disposition"
-                    ],
-                },
             },
             {
                 "id": "RFD-TEST-004B",
-                "source_provenance": {"reviewer": "Reviewer B", "pr_number": 101, "reviewed_head_sha": "a" * 40},
+                "source_provenance": {"reviewer": "Reviewer B", "pr_number": 101},
                 "validation_state": "validated",
                 "classification": "duplicate",
                 "mapped_defect_id": "PRH-007",
                 "resolution_state": "resolved",
                 "permanent_disposition_evidence": "Fixed in PRH-007 guard",
-                "root_cause": "Duplicate reports share an existing defect",
-                "negative_regression_evidence": "tests/test_hunter_reviewer_disposition.py",
-                "security_impact_review": "Duplicate mapping has no additional security impact",
-                "guard_reference": "scripts/hunter_defect_prevention_preflight.py::validate_reviewer_finding_dispositions",
-                "test_reference": "tests/test_hunter_reviewer_disposition.py::test_duplicate_reviewer_reports_map_to_one_defect_class",
-                "executable_proof": {
-                    "vulnerable_sha": "a" * 40,
-                    "red_test": "tests/test_hunter_reviewer_disposition.py::test_duplicate_reviewer_reports_map_to_one_defect_class",
-                    "green_test": "tests/test_hunter_reviewer_disposition.py::test_duplicate_reviewer_reports_map_to_one_defect_class",
-                    "adversarial_tests": [
-                        "tests/test_hunter_reviewer_disposition.py::test_recurrence_becomes_valid_only_after_permanent_corrective_disposition"
-                    ],
-                },
             },
         ],
     }

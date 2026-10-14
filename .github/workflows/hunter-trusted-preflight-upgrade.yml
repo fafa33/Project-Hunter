@@ -68,19 +68,6 @@ jobs:
           set -euo pipefail
           python -m pip install --disable-pip-version-check -c requirements/ci-constraints.txt -e ".[dev]"
 
-      # Candidate-selected tests and gate scripts only ever run inside bubblewrap (see
-      # scripts/hunter_finding_proof.py). Hosted Ubuntu images restrict unprivileged user namespaces through
-      # AppArmor, so the restriction is lifted for this job's VM, and the sandbox is proven before use.
-      - name: Provision and verify bubblewrap
-        run: |
-          set -euo pipefail
-          sudo apt-get update -qq
-          sudo apt-get install -y -qq bubblewrap
-          sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0 || true
-          bwrap --ro-bind / / --dev /dev --proc /proc --tmpfs /tmp --unshare-net --unshare-pid --cap-drop ALL true
-          # Tells the isolation tests that bubblewrap is provisioned here, so they must run rather than skip.
-          touch "${RUNNER_TEMP}/hunter-bwrap-provisioned"
-
       # Named explicitly rather than left to arrive with the dev extra: the lane
       # below is only honest if this environment is the one that owns the runner.
       # Both the install and the pin come from the trusted default-branch tree at

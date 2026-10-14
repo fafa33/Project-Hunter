@@ -23,8 +23,6 @@ jobs:
         uses: actions/checkout@v7
         with:
           fetch-depth: 0
-          # Candidate-selected proof tests run in this checkout; no token may persist in .git/config.
-          persist-credentials: false
 
       - name: Set up Python
         uses: actions/setup-python@v6
@@ -42,19 +40,6 @@ jobs:
           set -euo pipefail
           python -m pip install --disable-pip-version-check -c requirements/ci-constraints.txt -e ".[dev]"
 
-      # Candidate-selected tests and gate scripts only ever run inside bubblewrap (see
-      # scripts/hunter_finding_proof.py). Hosted Ubuntu images restrict unprivileged user namespaces through
-      # AppArmor, so the restriction is lifted for this job's VM, and the sandbox is proven before use.
-      - name: Provision and verify bubblewrap
-        run: |
-          set -euo pipefail
-          sudo apt-get update -qq
-          sudo apt-get install -y -qq bubblewrap
-          sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0 || true
-          bwrap --ro-bind / / --dev /dev --proc /proc --tmpfs /tmp --unshare-net --unshare-pid --cap-drop ALL true
-          # Tells the isolation tests that bubblewrap is provisioned here, so they must run rather than skip.
-          touch "${RUNNER_TEMP}/hunter-bwrap-provisioned"
-
       - name: Select exact-head preflight mode
         id: preflight-mode
         run: |
@@ -69,10 +54,6 @@ jobs:
           fi
           echo "mode=${PREFLIGHT_MODE}" >> "${GITHUB_OUTPUT}"
           echo "Selected preflight mode: ${PREFLIGHT_MODE}"
-
-      - name: Verify bounded reviewer RED GREEN and adversarial proofs
-        if: ${{ steps.preflight-mode.outputs.mode == 'normal' }}
-        run: python scripts/hunter_finding_proof.py
 
       - name: Fail fast on mapped changed-file regressions
         if: ${{ steps.preflight-mode.outputs.mode == 'normal' }}

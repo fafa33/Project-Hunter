@@ -73,9 +73,6 @@ PREFLIGHT_OWNED_PATHS = frozenset(
         ".githooks/pre-push",
         ".github/workflows/hunter-pre-pr-preflight.yml",
         "scripts/hunter_pr_preflight.py",
-        "scripts/hunter_finding_proof.py",
-        # The proof's canonical input: a PR that changes only the dispositions must reach the trusted lane too.
-        "docs/REVIEWER_FINDING_DISPOSITIONS.json",
         "scripts/hunter_architecture_index_preflight.py",
         "scripts/hunter_artifact_preflight.py",
         "scripts/hunter_defect_prevention_preflight.py",

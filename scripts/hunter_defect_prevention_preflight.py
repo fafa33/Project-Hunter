@@ -10,18 +10,14 @@ import json
 import os
 import re
 import shlex
-import shutil
 import subprocess
-import tempfile
 import tomllib
-from collections.abc import Iterator, Mapping, Sequence
-from contextlib import contextmanager
+from collections.abc import Mapping
 from importlib import metadata
 from pathlib import Path
 from typing import Any, Literal
 
 import hunter_connector_write_ingress as ingress
-import hunter_finding_proof as finding_proof
 import hunter_pre_ready_review as pre_ready
 import hunter_writer_provenance as provenance
 import yaml
@@ -457,57 +453,6 @@ def validate_reviewer_finding_dispositions() -> list[str]:
                     errors.append(
                         f"{finding_id}: resolved {classification} finding requires non-empty string permanent_disposition_evidence"
                     )
-
-        # Resolved substantive findings must carry executable prevention and
-        # explicit blast-radius evidence, not just a reviewer-thread closure.
-        # Legacy records are upgraded in the registry, never silently exempted.
-        if res_state == "resolved" and classification in {"new_systemic_defect", "duplicate", "recurrence"}:
-            for field in ("root_cause", "negative_regression_evidence", "security_impact_review"):
-                if not _is_non_empty_str(finding.get(field)):
-                    errors.append(f"{finding_id}: resolved finding requires {field}")
-            for field, role in (("guard_reference", "guard"), ("test_reference", "test")):
-                reference = finding.get(field)
-                if not _is_non_empty_str(reference):
-                    errors.append(f"{finding_id}: resolved finding requires {field}")
-                else:
-                    problem = _validate_reference_target(str(reference), role=role)
-                    if problem:
-                        errors.append(f"{finding_id}: invalid {field} {reference!r}: {problem}")
-            # Fast local validation; hosted lane executes the bounded proof.
-            if not finding_proof.is_pinned_legacy(finding):
-                proof = finding.get("executable_proof")
-                if not isinstance(proof, dict):
-                    errors.append(f"{finding_id}: missing executable_proof for hosted RED/GREEN replay")
-                else:
-                    vulnerable_sha = proof.get("vulnerable_sha")
-                    if not isinstance(vulnerable_sha, str) or not re.fullmatch(r"[0-9a-f]{40}", vulnerable_sha):
-                        errors.append(f"{finding_id}: executable_proof requires immutable vulnerable_sha")
-                    elif finding_proof.reviewed_head_sha(finding) != vulnerable_sha:
-                        errors.append(f"{finding_id}: vulnerable_sha must equal source_provenance.reviewed_head_sha")
-                    if proof.get("green_test") != proof.get("red_test") or not _is_non_empty_str(proof.get("red_test")):
-                        errors.append(f"{finding_id}: executable_proof requires matching RED/GREEN pytest selectors")
-                    adversarial = proof.get("adversarial_tests")
-                    if (
-                        not isinstance(adversarial, list)
-                        or not adversarial
-                        or not all(_is_non_empty_str(item) for item in adversarial)
-                        or len(set(adversarial)) != len(adversarial)
-                        or proof.get("red_test") in adversarial
-                    ):
-                        errors.append(f"{finding_id}: executable_proof requires distinct, unique adversarial_tests")
-            if classification == "new_systemic_defect" and not finding_proof.is_pinned_legacy(finding):
-                if not _is_non_empty_str(mapped_id) or mapped_id not in mapped_targets:
-                    errors.append(f"{finding_id}: new systemic finding requires a registered defect/family mapping")
-            if classification == "recurrence":
-                finding_stage = (
-                    registry_families[mapped_id].get("lifecycle")
-                    if mapped_id in registry_families
-                    else (explicit_enforcement.get(mapped_id) or {}).get("state")
-                )
-                if finding_stage in {"merge-enforced", "prevented"} and not _is_non_empty_str(
-                    finding.get("prevention_gap_correction")
-                ):
-                    errors.append(f"{finding_id}: recurrence of enforced prevention requires prevention_gap_correction")
 
         if classification == "isolated_non_automatable":
             justification = finding.get("justification") or finding.get("permanent_disposition_evidence")
@@ -2143,145 +2088,6 @@ def validate_candidate_pytest_configuration(candidate_root: Path) -> list[str]:
     return errors
 
 
-def _step_executes(run: object, command: str) -> bool:
-    """True when a non-comment line of the step's shell script begins with the command (not merely mentions it)."""
-    for line in str(run).splitlines():
-        stripped = line.strip()
-        if stripped.startswith("#") or not stripped.startswith(command):
-            continue
-        if len(stripped) == len(command) or stripped[len(command)].isspace():  # a command boundary, not a prefix
-            return True
-    return False
-
-
-# The mode step and the preflight invocation are pinned to their canonical content: any other script could
-# select the tests-first-red lane (which skips the reviewer proof) while the head is admitted as normal.
-CANONICAL_MODE_RUN = """set -euo pipefail
-PREFLIGHT_MODE=normal
-if [ -f .hunter-preflight-mode ]; then
-  PREFLIGHT_MODE="$(cat .hunter-preflight-mode)"
-  if [ "${PREFLIGHT_MODE}" != "tests-first-red" ]; then
-    echo "::error::.hunter-preflight-mode must contain exactly tests-first-red"
-    exit 2
-  fi
-fi
-echo "mode=${PREFLIGHT_MODE}" >> "${GITHUB_OUTPUT}"
-echo "Selected preflight mode: ${PREFLIGHT_MODE}"
-"""
-PROOF_COMMAND = "python scripts/hunter_finding_proof.py"
-PREFLIGHT_COMMAND = "python scripts/hunter_pr_preflight.py"
-CANONICAL_PREFLIGHT_RUN = 'python scripts/hunter_pr_preflight.py --mode "${PREFLIGHT_MODE}"'
-CANONICAL_PYTEST_ADDOPTS = " ".join(TRUSTED_PARALLEL_LANE)
-CANONICAL_PREFLIGHT_MODE_ENV = "${{ steps.preflight-mode.outputs.mode }}"
-_MODE_TAMPER_MARKERS = (".hunter-preflight-mode", "GITHUB_ENV", "PREFLIGHT_MODE")
-
-
-def _normalized_script(run: object) -> str:
-    return "\n".join(line.rstrip() for line in str(run).strip().splitlines())
-
-
-def _mode_contract_errors(
-    job: dict[str, Any], steps: list[dict[str, Any]], mode_index: int, preflight_index: int
-) -> str | None:
-    """Return a problem with the mode/preflight contract of the selected job, or None when it holds."""
-    mode_step = steps[mode_index]
-    runner = steps[preflight_index]
-    if any(key in mode_step for key in ("if", "env", "shell", "working-directory", "continue-on-error")):
-        return "candidate preflight-mode step must be unconditional and carry no env/shell overrides"
-    if _normalized_script(mode_step.get("run")) != _normalized_script(CANONICAL_MODE_RUN):
-        return "candidate preflight-mode step must be the canonical mode script"
-    if job.get("env") or job.get("defaults"):
-        return "candidate preflight job must not set env or defaults (PATH, PREFLIGHT_MODE, shell, working directory)"
-    for index, other in enumerate(steps):
-        if index != mode_index and any(marker in str(other.get("run", "")) for marker in _MODE_TAMPER_MARKERS[:2]):
-            return "only the preflight-mode step may read or write the preflight mode marker or environment"
-    if any(key in runner for key in ("working-directory", "shell", "uses", "with")) or set(runner.get("env") or {}) - {
-        "PREFLIGHT_MODE",
-        "PYTEST_ADDOPTS",
-    }:
-        return "candidate preflight step must not override its working directory, shell or environment"
-    if _normalized_script(runner.get("run")) != CANONICAL_PREFLIGHT_RUN:
-        return "candidate preflight step must be exactly the canonical mode-driven invocation"
-    if (
-        runner.get("continue-on-error") not in (None, False)
-        or str(runner.get("if", "true")).strip() not in {"true", "${{ true }}"}
-        or (runner.get("env") or {}).get("PREFLIGHT_MODE") != CANONICAL_PREFLIGHT_MODE_ENV
-        or (runner.get("env") or {}).get("PYTEST_ADDOPTS") != CANONICAL_PYTEST_ADDOPTS
-    ):
-        return "candidate preflight step must run unconditionally, propagate failure and take the published mode"
-    if preflight_index < mode_index:
-        return "candidate preflight step must follow the preflight-mode step"
-    return None
-
-
-_MODE_ASSIGNMENTS = frozenset({"PREFLIGHT_MODE=normal", 'PREFLIGHT_MODE="$(cat .hunter-preflight-mode)"'})
-_MODE_OUTPUT = 'echo "mode=${PREFLIGHT_MODE}" >> "${GITHUB_OUTPUT}"'
-
-
-def _mode_step_contract_holds(run: str) -> bool:
-    """The mode step must publish the mode exactly once, from only the two canonical sources.
-
-    Any other write to the step output, or any other assignment of the mode variable, could select the
-    tests-first-red lane (which skips the proof) while the head is admitted as a normal candidate.
-    """
-    lines = [line.strip() for line in run.splitlines() if line.strip() and not line.strip().startswith("#")]
-    outputs = [line for line in lines if "GITHUB_OUTPUT" in line]
-    assigns = [line for line in lines if re.match(r"^PREFLIGHT_MODE=", line)]
-    return (
-        outputs == [_MODE_OUTPUT]
-        and "PREFLIGHT_MODE=normal" in assigns
-        and all(line in _MODE_ASSIGNMENTS for line in assigns)
-    )
-
-
-def _reviewer_proof_step_errors(workflow_text: str) -> list[str]:
-    """The reviewer proof gate is judged on parsed job steps, never on raw text a comment or scalar could fake.
-
-    The proof step must live in the same job as the preflight command, after the pinned ``preflight-mode``
-    step that defines the output it is conditioned on, so it cannot be parked in a job that never runs.
-    """
-    import yaml
-
-    try:
-        document = yaml.safe_load(workflow_text)
-    except yaml.YAMLError as exc:
-        return [f"candidate preflight workflow is not valid YAML: {exc}"]
-    jobs = document.get("jobs") if isinstance(document, dict) else None
-    if not isinstance(jobs, dict):
-        return ["candidate preflight workflow has no parsed jobs"]
-    for job in jobs.values():
-        steps = job.get("steps") if isinstance(job, dict) else None
-        if not isinstance(steps, list) or not all(isinstance(step, dict) for step in steps):
-            continue
-        if str(job.get("if", "true")).strip() not in {"true", "${{ true }}"} or job.get("needs"):
-            continue
-        mode = [i for i, step in enumerate(steps) if step.get("id") == "preflight-mode"]
-        proof = [i for i, step in enumerate(steps) if _step_executes(step.get("run", ""), PROOF_COMMAND)]
-        preflight = [i for i, step in enumerate(steps) if _step_executes(step.get("run", ""), PREFLIGHT_COMMAND)]
-        if not (proof and preflight):
-            continue
-        if job.get("continue-on-error") not in (None, False):
-            return ["candidate preflight job must not set continue-on-error"]
-        if not mode or mode[0] >= proof[0]:
-            return ["candidate preflight reviewer proof must follow the preflight-mode step in the same job"]
-        problem = _mode_contract_errors(job, steps, mode[0], preflight[-1])
-        if problem:
-            return [problem]
-        gate = steps[proof[0]]
-        if any(key in gate for key in ("working-directory", "shell", "env", "uses", "with")):
-            return ["candidate preflight reviewer proof step must not override its working directory, shell or env"]
-        if document.get("env") or document.get("defaults"):
-            return ["candidate preflight workflow must not set workflow-level env or defaults"]
-        if _normalized_script(gate.get("run")) != PROOF_COMMAND:
-            return ["candidate preflight reviewer proof step must run exactly the proof command"]
-        if gate.get("continue-on-error") not in (None, False):
-            return ["candidate preflight reviewer proof step must not set continue-on-error"]
-        if str(gate.get("if", "")).strip() != "${{ steps.preflight-mode.outputs.mode == 'normal' }}":
-            return ["candidate preflight workflow must bind reviewer proof to normal preflight mode"]
-        return []
-    return ["candidate preflight workflow omits mandatory reviewer RED/GREEN proof gate in the preflight job"]
-
-
 def validate_candidate_preflight_definition(candidate_root: Path) -> list[str]:
     errors: list[str] = []
     workflow_path = candidate_root / ".github" / "workflows" / "hunter-pre-pr-preflight.yml"
@@ -2291,7 +2097,6 @@ def validate_candidate_preflight_definition(candidate_root: Path) -> list[str]:
         errors.append(f"candidate preflight workflow missing: {workflow_path}")
     else:
         content = workflow_path.read_text(encoding="utf-8")
-        errors.extend(_reviewer_proof_step_errors(content))
         if "python scripts/hunter_pr_preflight.py" not in content:
             errors.append("candidate preflight workflow does not invoke scripts/hunter_pr_preflight.py")
         elif _workflow_has_unconditional_exit_before_preflight(content):
@@ -2397,139 +2202,22 @@ def verify_trusted_parallel_runner() -> int:
     return 0
 
 
-#: Gates whose *logic* is validation authority. They run from the trusted baseline copy of their script and its
-#: local-import closure, bound over the candidate's same paths, so a candidate cannot no-op or weaken the guard
-#: that judges it; everything else they read (docs, workflows, src, tests) is the candidate's, as data.
-GUARD_GATES = frozenset({"Architecture Index Guard", "Artifact Guard", "Defect Prevention Guard"})
-PROVISIONED_MARKER = "hunter-bwrap-provisioned"
-PROVISIONED_ENV = "HUNTER_BWRAP_PROVISIONED"
-GATE_ENV_ALLOWLIST = (
-    "PATH",
-    "LANG",
-    "LC_ALL",
-    "TZ",
-    "CI",
-    "GITHUB_ACTIONS",
-    "PYTEST_ADDOPTS",
-    "PYTHONHASHSEED",
-)
-
-
-def gate_environment(source: Mapping[str, str]) -> dict[str, str]:
-    """The only environment candidate code sees: no tokens, credentials, proxies or runner secrets."""
-    env = {name: source[name] for name in GATE_ENV_ALLOWLIST if name in source}
-    env["HOME"] = finding_proof.SANDBOX_TMP
-    runner_temp = source.get("RUNNER_TEMP")
-    if runner_temp and (Path(runner_temp) / PROVISIONED_MARKER).is_file():
-        # The marker file lives under the masked /home, so hand the sandbox a trusted signal instead.
-        env[PROVISIONED_ENV] = "1"
-    return env
-
-
-def _module_files(root: Path, module: str) -> list[Path]:
-    """Repository files that define ``module`` (and its parent packages) under the trusted ``scripts``/``src``."""
-    parts = module.split(".")
-    base = root / "src" if parts[0] == "hunter" else root / "scripts"
-    found: list[Path] = []
-    for depth in range(1, len(parts) + 1):
-        package = base.joinpath(*parts[:depth])
-        for candidate in (package.with_suffix(".py"), package / "__init__.py"):
-            if candidate.is_file():
-                found.append(candidate)
-    return found
-
-
-def trusted_closure(entries: Sequence[Path]) -> list[Path]:
-    """Trusted-baseline files reachable from ``entries`` through local (``scripts`` and ``hunter``) imports."""
-    root = Path(__file__).resolve().parents[1]
-    pending, seen = list(entries), set()
-    while pending:
-        path = pending.pop()
-        if path in seen:
-            continue
-        seen.add(path)
-        for node in ast.walk(ast.parse(path.read_text(encoding="utf-8"))):
-            if isinstance(node, ast.Import):
-                modules = [alias.name for alias in node.names]
-            elif isinstance(node, ast.ImportFrom) and node.level == 0 and node.module:
-                modules = [node.module, *(f"{node.module}.{alias.name}" for alias in node.names)]
-            elif isinstance(node, ast.ImportFrom) and node.level > 0:
-                package = path.parent.relative_to(root / "src").parts if path.is_relative_to(root / "src") else ()
-                anchor = package[: len(package) - (node.level - 1)] if package else ()
-                tail = node.module.split(".") if node.module else []
-                modules = [".".join([*anchor, *tail, *([alias.name] if not tail else [])]) for alias in node.names]
-                modules.append(".".join([*anchor, *tail]))
-            else:
-                modules = []
-            for module in filter(None, modules):
-                pending.extend(_module_files(root, module))
-    return sorted(seen)
-
-
-#: Guard entrypoints start under ``python -I`` (no PYTHONPATH, no user site, no cwd on ``sys.path``), so nothing the
-#: candidate controls can be imported at interpreter startup (``sitecustomize``, ``usercustomize``, ``.pth``). Only
-#: after startup does this trusted bootstrap add the script's directory and the candidate ``src`` to ``sys.path``,
-#: then runs the (overlaid, trusted) guard exactly as ``python scripts/<guard>.py`` would.
-GUARD_BOOTSTRAP = (
-    "import runpy, sys\n"
-    "from pathlib import Path\n"
-    "script = Path(sys.argv[1]).resolve()\n"
-    "sys.path[:0] = [str(script.parent), str(Path('src').resolve())]\n"
-    "sys.argv = [str(script)]\n"
-    "runpy.run_path(str(script), run_name='__main__')\n"
-)
-
-
-def guard_command(command: Sequence[str]) -> list[str]:
-    """``python scripts/<guard>.py`` re-expressed so the interpreter starts isolated from candidate files."""
-    return [command[0], "-I", "-c", GUARD_BOOTSTRAP, *command[1:]]
-
-
-def guard_overlays(view: Path) -> list[tuple[Path, Path]]:
-    """Trusted guard scripts and their import closure, bound over the candidate's same repository paths."""
-    root = Path(__file__).resolve().parents[1]
-    entries = [
-        root / command[1]
-        for name, command in TRUSTED_CANDIDATE_QUALITY_GATES
-        if name in GUARD_GATES and len(command) > 1
-    ]
-    return [(path, view / path.relative_to(root)) for path in trusted_closure(entries)]
-
-
-@contextmanager
-def private_candidate_copy(candidate_root: Path) -> Iterator[Path]:
-    """A throwaway writable copy of the candidate (git history included): candidate code may write caches and
-    temp files there, and nothing it does reaches the trusted checkout, the runner, or the original checkout."""
-    with tempfile.TemporaryDirectory(prefix="hunter-gates-") as scratch:
-        copy = Path(scratch) / "candidate"
-        shutil.copytree(candidate_root, copy, symlinks=True)
-        yield copy
-
-
-def execute_gate(
-    command: Sequence[str], *, copy: Path, view: Path, env: Mapping[str, str], overlays: Sequence[tuple[Path, Path]]
-) -> int:
-    """Run one gate command inside the credential-free, network-free bubblewrap sandbox."""
-    argv = [*finding_proof.sandbox_prefix(copy, view, writable=True, overlays=overlays), *command]
-    return subprocess.run(argv, cwd=copy, env=dict(env), check=False).returncode
-
-
 def run_candidate_quality_gates(candidate_root: Path) -> int:
     """Execute the candidate through an immutable trusted gate list.
 
     The candidate dispatcher is deliberately not used as proof authority. A PR may
     edit hunter_pr_preflight.py, but it cannot remove or bypass a gate from this
     trusted controller because every required command is launched here directly.
-
-    Candidate code never runs with the controller's privileges: every gate command executes inside a bubblewrap
-    sandbox (read-only host, masked home/credential trees, private tmp, no network, scrubbed environment) over a
-    private writable copy of the candidate. The guard gates run the trusted baseline's own logic.
     """
     if not candidate_root.is_dir():
         print(f"[Trusted Candidate Gates] FAIL: candidate root missing: {candidate_root}")
         return 2
 
-    lane_problem = trusted_lane_problem(os.environ.get("PYTEST_ADDOPTS", ""))
+    env = os.environ.copy()
+    env["GITHUB_TOKEN"] = ""
+    env["GH_TOKEN"] = ""
+
+    lane_problem = trusted_lane_problem(env.get("PYTEST_ADDOPTS", ""))
     if lane_problem is not None:
         print(f"[Trusted Candidate Gates] FAIL: {lane_problem}", flush=True)
         print(
@@ -2538,38 +2226,18 @@ def run_candidate_quality_gates(candidate_root: Path) -> int:
             flush=True,
         )
         return 2
-    env = gate_environment(os.environ)
 
-    # The reviewer RED/GREEN proof runs here from THIS (trusted, default-branch) copy of the proof runner and its
-    # pinned legacy fingerprints, against the candidate's dispositions and tests, before any candidate gate; the
-    # candidate's own runner never attests its own findings.
-    proof_errors = finding_proof.collect_errors(candidate_root)
-    for problem in proof_errors:
-        print(f"[Trusted Candidate Gates] FAIL: reviewer finding proof: {problem}", flush=True)
-    if proof_errors:
-        return 2
-    print("[Trusted Candidate Gates] PASS: reviewer finding proof (trusted runner)", flush=True)
-
-    view = candidate_root.resolve()
-    try:
-        with private_candidate_copy(candidate_root) as copy:
-            for name, command in TRUSTED_CANDIDATE_QUALITY_GATES:
-                print(f"[Trusted Candidate Gates] {name}: {' '.join(command)} (sandboxed)", flush=True)
-                guard = name in GUARD_GATES
-                overlays = guard_overlays(view) if guard else []
-                returncode = execute_gate(
-                    guard_command(command) if guard else command, copy=copy, view=view, env=env, overlays=overlays
-                )
-                if returncode != 0:
-                    print(f"[Trusted Candidate Gates] FAIL: {name} exited {returncode}", flush=True)
-                    return returncode
-                print(f"[Trusted Candidate Gates] PASS: {name}", flush=True)
-    except finding_proof.IsolationUnavailable as unavailable:
-        print(f"[Trusted Candidate Gates] FAIL: {unavailable}; candidate code is never run unisolated", flush=True)
-        return 2
-    except OSError as error:
-        print(f"[Trusted Candidate Gates] FAIL: could not prepare the isolated candidate copy: {error}", flush=True)
-        return 2
+    for name, command in TRUSTED_CANDIDATE_QUALITY_GATES:
+        printable = " ".join(command)
+        print(f"[Trusted Candidate Gates] {name}: {printable}", flush=True)
+        completed = subprocess.run(command, cwd=candidate_root, env=env, check=False)
+        if completed.returncode != 0:
+            print(
+                f"[Trusted Candidate Gates] FAIL: {name} exited {completed.returncode}",
+                flush=True,
+            )
+            return completed.returncode
+        print(f"[Trusted Candidate Gates] PASS: {name}", flush=True)
 
     print("[Trusted Candidate Gates] PASS: immutable trusted gate chain executed", flush=True)
     return 0

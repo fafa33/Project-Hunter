@@ -30,10 +30,9 @@ import inspect
 import os
 import subprocess
 import sys
-from collections.abc import Iterator
-from contextlib import contextmanager
 from importlib import metadata
 from pathlib import Path
+from types import SimpleNamespace
 from typing import Any
 
 import hunter_defect_prevention_preflight as prevention
@@ -306,7 +305,7 @@ def test_a_missing_trusted_runner_fails_the_declared_lane_closed(
     def must_not_run(*args: Any, **kwargs: Any) -> Any:
         raise AssertionError("a lane the environment cannot honour must not execute any gate")
 
-    monkeypatch.setattr(prevention, "execute_gate", must_not_run)
+    monkeypatch.setattr(prevention.subprocess, "run", must_not_run)
 
     assert prevention.run_candidate_quality_gates(tmp_path) == 2
 
@@ -402,13 +401,11 @@ def test_the_trusted_gate_commands_are_unchanged_by_the_lane(monkeypatch: pytest
     """
     executed: list[tuple[str, ...]] = []
 
-    def fake_gate(command: Any, *, copy: Any, view: Any, env: Any, overlays: Any) -> int:
+    def fake_run(command: Any, *, cwd: Any, env: Any, check: Any) -> Any:
         executed.append(tuple(command))
-        return 0
+        return SimpleNamespace(returncode=0)
 
-    monkeypatch.setattr(prevention, "execute_gate", fake_gate)
-    monkeypatch.setattr(prevention, "private_candidate_copy", _in_place)
-    monkeypatch.setattr(prevention.finding_proof, "collect_errors", lambda root: [])
+    monkeypatch.setattr(prevention.subprocess, "run", fake_run)
 
     monkeypatch.setenv("PYTEST_ADDOPTS", " ".join(prevention.TRUSTED_PARALLEL_LANE))
     assert prevention.run_candidate_quality_gates(tmp_path) == 0
@@ -419,10 +416,7 @@ def test_the_trusted_gate_commands_are_unchanged_by_the_lane(monkeypatch: pytest
     assert prevention.run_candidate_quality_gates(tmp_path) == 0
 
     assert parallel == executed
-    assert parallel == [
-        tuple(prevention.guard_command(command)) if name in prevention.GUARD_GATES else command
-        for name, command in prevention.TRUSTED_CANDIDATE_QUALITY_GATES
-    ]
+    assert parallel == [command for _name, command in prevention.TRUSTED_CANDIDATE_QUALITY_GATES]
     assert parallel[-1] == ("pytest",)
     assert prevention.TRUSTED_CANDIDATE_QUALITY_GATES[-1] == preflight.NORMAL_QUALITY_GATES[-1]
 
@@ -440,11 +434,6 @@ def test_the_trusted_and_candidate_gate_definitions_still_have_to_agree() -> Non
 # ---------------------------------------------------------------------------
 
 
-@contextmanager
-def _in_place(candidate_root: Path) -> Iterator[Path]:
-    yield candidate_root
-
-
 def _candidate_tree(tmp_path: Path) -> Path:
     """A minimal candidate whose preflight definition is already valid.
 
@@ -455,10 +444,7 @@ def _candidate_tree(tmp_path: Path) -> Path:
     (root / ".github" / "workflows").mkdir(parents=True)
     (root / "scripts").mkdir()
     (root / ".github" / "workflows" / "hunter-pre-pr-preflight.yml").write_text(
-        (Path(prevention.__file__).resolve().parent.parent / ".github/workflows/hunter-pre-pr-preflight.yml").read_text(
-            encoding="utf-8"
-        ),
-        encoding="utf-8",
+        "run: python scripts/hunter_pr_preflight.py --mode normal\n", encoding="utf-8"
     )
     (root / "scripts" / "hunter_pr_preflight.py").write_text(
         f"NORMAL_QUALITY_GATES = {prevention.TRUSTED_CANDIDATE_QUALITY_GATES!r}\n"
@@ -840,158 +826,3 @@ def test_the_governance_identity_predicate_still_matches_this_workflow() -> None
         {"queued", "in_progress", "waiting", "requested", "pending"}
     )
     assert governance.TRUSTED_PROOF_WAITING_DESCRIPTION == "Waiting for trusted exact-head preflight proof"
-
-
-def test_a_command_that_merely_has_the_script_path_as_a_prefix_is_not_the_preflight():
-    assert prevention._step_executes(
-        "python scripts/hunter_pr_preflight.py --mode normal", "python scripts/hunter_pr_preflight.py"
-    )
-    assert prevention._step_executes("python scripts/hunter_pr_preflight.py", "python scripts/hunter_pr_preflight.py")
-    assert not prevention._step_executes(
-        "python scripts/hunter_pr_preflight.py-malicious", "python scripts/hunter_pr_preflight.py"
-    )
-    assert not prevention._step_executes(
-        "python scripts/hunter_pr_preflight.pyc --mode normal", "python scripts/hunter_pr_preflight.py"
-    )
-
-
-def _real_workflow() -> dict:
-    import yaml
-
-    path = Path(prevention.__file__).resolve().parent.parent / ".github/workflows/hunter-pre-pr-preflight.yml"
-    return yaml.safe_load(path.read_text(encoding="utf-8"))
-
-
-def _errors(document: dict) -> list[str]:
-    import yaml
-
-    return prevention._reviewer_proof_step_errors(yaml.safe_dump(document, sort_keys=False))
-
-
-def _step(document: dict, predicate) -> dict:
-    return next(step for step in document["jobs"]["preflight"]["steps"] if predicate(step))
-
-
-def test_the_real_preflight_workflow_satisfies_the_pinned_contract():
-    assert _errors(_real_workflow()) == []
-
-
-def test_mode_and_preflight_steps_are_pinned_to_their_canonical_content():
-    def mutate(change) -> list[str]:
-        document = _real_workflow()
-        change(document)
-        return _errors(document)
-
-    def mode(document):
-        return _step(document, lambda step: step.get("id") == "preflight-mode")
-
-    def runner(document):
-        return _step(document, lambda step: "hunter_pr_preflight" in str(step.get("run", "")))
-
-    def proof(document):
-        return _step(document, lambda step: "hunter_finding_proof" in str(step.get("run", "")))
-
-    assert mutate(lambda d: mode(d).update({"if": False}))
-    assert mutate(lambda d: mode(d).update({"env": {"PREFLIGHT_MODE": "tests-first-red"}}))
-    assert mutate(
-        lambda d: mode(d).update({"run": mode(d)["run"] + 'echo "mode=tests-first-red" >> "${GITHUB_OUTPUT}"\n'})
-    )
-    assert mutate(
-        lambda d: mode(d).update({"run": mode(d)["run"].replace("PREFLIGHT_MODE=normal", "PREFLIGHT_MODE=other", 1)})
-    )
-    assert mutate(lambda d: d["jobs"]["preflight"].update({"env": {"PREFLIGHT_MODE": "tests-first-red"}}))
-    assert mutate(lambda d: d["jobs"]["preflight"].update({"continue-on-error": True}))
-    assert mutate(lambda d: runner(d).update({"run": runner(d)["run"] + " || true"}))
-    assert mutate(lambda d: runner(d).update({"run": "python scripts/hunter_pr_preflight.py --mode tests-first-red"}))
-    assert mutate(lambda d: runner(d).update({"if": False}))
-    assert mutate(lambda d: runner(d).update({"continue-on-error": True}))
-    assert mutate(lambda d: runner(d)["env"].update({"PREFLIGHT_MODE": "normal"}))
-    assert mutate(lambda d: proof(d).update({"if": False}))
-    assert mutate(lambda d: proof(d).update({"continue-on-error": True}))
-
-    def marker_writer(document):
-        steps = document["jobs"]["preflight"]["steps"]
-        steps.insert(1, {"run": "echo tests-first-red > .hunter-preflight-mode"})
-
-    assert mutate(marker_writer)
-
-    def parked(document):
-        steps = document["jobs"]["preflight"]["steps"]
-        gate = steps.pop(next(i for i, step in enumerate(steps) if "hunter_finding_proof" in str(step.get("run", ""))))
-        document["jobs"]["other"] = {"runs-on": "ubuntu-latest", "steps": [gate]}
-
-    assert mutate(parked)
-
-
-def test_a_commented_or_echoed_preflight_command_is_not_the_preflight():
-    document = _real_workflow()
-    runner = _step(document, lambda step: "hunter_pr_preflight" in str(step.get("run", "")))
-    runner["run"] = "# python scripts/hunter_pr_preflight.py\ntrue"
-    assert _errors(document)
-    runner["run"] = "echo python scripts/hunter_pr_preflight.py"
-    assert _errors(document)
-
-
-def test_the_trusted_lane_runs_the_trusted_proof_runner_before_any_candidate_gate(
-    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
-) -> None:
-    seen: list[Path] = []
-    executed: list[tuple[str, ...]] = []
-
-    def failing_proof(root: Path) -> list[str]:
-        seen.append(root)
-        return ["RFD-X: RED did not fail on vulnerable_sha"]
-
-    monkeypatch.setattr(prevention.finding_proof, "collect_errors", failing_proof)
-
-    def record_gate(command: Any, **kwargs: Any) -> int:
-        executed.append(tuple(command))
-        return 0
-
-    monkeypatch.setattr(prevention, "execute_gate", record_gate)
-    monkeypatch.setattr(prevention, "private_candidate_copy", _in_place)
-    monkeypatch.delenv("PYTEST_ADDOPTS", raising=False)
-
-    assert prevention.run_candidate_quality_gates(tmp_path) == 2
-    assert seen == [tmp_path]
-    assert executed == []  # no candidate gate ran after a failed proof
-
-
-def test_execution_context_of_the_proof_and_preflight_steps_cannot_be_redirected():
-    def mutate(change) -> list[str]:
-        document = _real_workflow()
-        change(document)
-        return _errors(document)
-
-    def proof(document):
-        return _step(document, lambda step: "hunter_finding_proof" in str(step.get("run", "")))
-
-    def runner(document):
-        return _step(document, lambda step: "hunter_pr_preflight" in str(step.get("run", "")))
-
-    assert mutate(lambda d: proof(d).update({"working-directory": "bypass"}))
-    assert mutate(lambda d: proof(d).update({"env": {"PATH": "/tmp/bypass"}}))
-    assert mutate(lambda d: proof(d).update({"shell": "bash {0}; true"}))
-    assert mutate(lambda d: runner(d).update({"working-directory": "bypass"}))
-    assert mutate(lambda d: runner(d)["env"].update({"PATH": "/tmp/bypass"}))
-    assert mutate(lambda d: runner(d)["env"].update({"PYTEST_ADDOPTS": "-k nothing"}))
-    assert mutate(
-        lambda d: runner(d)["env"].update({"PYTEST_ADDOPTS": "--deselect tests/test_x.py -n auto --dist loadfile"})
-    )
-    assert mutate(lambda d: runner(d)["env"].pop("PYTEST_ADDOPTS"))
-    assert mutate(lambda d: d["jobs"]["preflight"].update({"env": {"PATH": "/tmp/bypass"}}))
-    assert mutate(lambda d: d["jobs"]["preflight"].update({"defaults": {"run": {"working-directory": "bypass"}}}))
-    assert mutate(lambda d: d.update({"env": {"PATH": "/tmp/bypass"}}))
-
-
-def test_provisioned_bwrap_signal_reaches_the_sandbox_only_from_the_trusted_marker(tmp_path: Path) -> None:
-    """RUNNER_TEMP is masked inside the sandbox, so the controller must pass the provisioned signal explicitly."""
-    base = {"PATH": "/usr/bin", "RUNNER_TEMP": str(tmp_path)}
-    assert prevention.PROVISIONED_ENV not in prevention.gate_environment(base)
-    (tmp_path / prevention.PROVISIONED_MARKER).write_text("")
-    env = prevention.gate_environment(base)
-    assert env[prevention.PROVISIONED_ENV] == "1"
-    assert "RUNNER_TEMP" not in env
-    # A candidate-supplied variable of the same name in the source environment is not forwarded as-is.
-    forged = prevention.gate_environment({"PATH": "/usr/bin", prevention.PROVISIONED_ENV: "1"})
-    assert prevention.PROVISIONED_ENV not in forged

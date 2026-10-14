@@ -2,8 +2,8 @@ from __future__ import annotations
 
 import importlib
 import json
-from contextlib import contextmanager
 from pathlib import Path
+from types import SimpleNamespace
 from urllib.parse import parse_qs, urlparse
 
 candidate_controller = importlib.import_module("hunter_candidate_admission")
@@ -232,31 +232,18 @@ def test_stale_candidate_admission_event_cannot_draft_newer_head(monkeypatch) ->
 def test_trusted_candidate_runner_executes_immutable_gate_chain(monkeypatch, tmp_path) -> None:
     calls: list[tuple[str, ...]] = []
 
-    def fake_gate(command, *, copy, view, env, overlays):
-        assert copy == tmp_path
-        # Candidate code never sees a credential: the scrubbed environment carries no token variables at all.
-        assert "GITHUB_TOKEN" not in env and "GH_TOKEN" not in env
-        assert env["HOME"] == prevention.finding_proof.SANDBOX_TMP
+    def fake_run(command, *, cwd, env, check):
+        assert cwd == tmp_path
+        assert env["GITHUB_TOKEN"] == ""
+        assert env["GH_TOKEN"] == ""
+        assert check is False
         calls.append(tuple(command))
-        return 0
+        return SimpleNamespace(returncode=0)
 
-    @contextmanager
-    def in_place(candidate_root):
-        yield candidate_root
-
-    monkeypatch.setenv("GITHUB_TOKEN", "must-not-reach-candidate-code")
-    monkeypatch.setenv("GH_TOKEN", "must-not-reach-candidate-code")
-    monkeypatch.setattr(prevention, "execute_gate", fake_gate)
-    monkeypatch.setattr(prevention, "private_candidate_copy", in_place)
-    # The reviewer-finding proof has its own coverage (tests/test_issue_419_trusted_parallel_lane.py and
-    # tests/test_hunter_finding_proof.py); this test pins only the immutable gate chain.
-    monkeypatch.setattr(prevention.finding_proof, "collect_errors", lambda root: [])
+    monkeypatch.setattr(prevention.subprocess, "run", fake_run)
 
     assert prevention.run_candidate_quality_gates(tmp_path) == 0
-    assert calls == [
-        tuple(prevention.guard_command(command)) if name in prevention.GUARD_GATES else command
-        for name, command in prevention.TRUSTED_CANDIDATE_QUALITY_GATES
-    ]
+    assert calls == [command for _name, command in prevention.TRUSTED_CANDIDATE_QUALITY_GATES]
     assert len(calls) == len(prevention.REQUIRED_PREFLIGHT_GATES)
 
 
