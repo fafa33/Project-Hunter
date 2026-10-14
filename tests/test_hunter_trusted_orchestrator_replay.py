@@ -1618,3 +1618,12 @@ def test_publisher_latest_run_match_is_bound_to_the_pr_number_as_well_as_the_hea
     context = next(s for s in doc["jobs"]["publish-proof"]["steps"] if s.get("id") == "context")["run"]
     assert "pull_requests[0].number" in context
     assert "$3 == sha && $4 == pr" in context and '-v pr="$pr_number"' in context
+
+
+def test_publisher_latest_run_lookup_is_paginated_and_bounded_to_the_pr_branch():
+    import yaml
+
+    doc = yaml.safe_load(Path(".github/workflows/hunter-trusted-orchestrator-replay-publish.yml").read_text())
+    context = next(s for s in doc["jobs"]["publish-proof"]["steps"] if s.get("id") == "context")["run"]
+    assert "--paginate" in context
+    assert '-f branch="$head_ref"' in context and ".head.ref" in context

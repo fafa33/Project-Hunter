@@ -91,6 +91,7 @@ jobs:
           fi
           # Fail closed unless this run belongs to the same current PR HEAD.
           head_sha="$(gh api "repos/${GH_REPO}/pulls/${pr_number}" --jq .head.sha)"
+          head_ref="$(gh api "repos/${GH_REPO}/pulls/${pr_number}" --jq .head.ref)"
           run_sha="$(gh api "repos/${GH_REPO}/actions/runs/${RUN_ID}" --jq ".pull_requests[0].head.sha // empty")"
           if [ "$head_sha" != "$run_sha" ] || [ "${#head_sha}" -ne 40 ]; then
             echo "triggering PR head differs from current PR head" >&2
@@ -98,8 +99,9 @@ jobs:
           fi
           # Only the most recent validation run for this head may publish: a rerun or duplicate event whose
           # run is not the latest must not overwrite the status of a newer run.
-          # Match on the associated PR head (a pull_request run's own head_sha may be the merge commit), newest first.
-          latest_run="$(gh api "repos/${GH_REPO}/actions/workflows/hunter-trusted-orchestrator-replay-validate.yml/runs?event=pull_request&per_page=100" --jq '.workflow_runs[] | [.run_number, .id, (.pull_requests[0].head.sha // .head_sha), (.pull_requests[0].number // 0)] | @tsv' | awk -v sha="$head_sha" -v pr="$pr_number" '$3 == sha && $4 == pr' | sort -n | tail -n 1 | cut -f2)"
+          # Match on the associated PR head (a pull_request run's own head_sha may be the merge commit). The listing is
+          # bounded to this PR's branch and paginated, so unrelated PRs' runs can never push the match off the page.
+          latest_run="$(gh api "repos/${GH_REPO}/actions/workflows/hunter-trusted-orchestrator-replay-validate.yml/runs" --method GET -f event=pull_request -f branch="$head_ref" -f per_page=100 --paginate --jq '.workflow_runs[] | [.run_number, .id, (.pull_requests[0].head.sha // .head_sha), (.pull_requests[0].number // 0)] | @tsv' | awk -v sha="$head_sha" -v pr="$pr_number" '$3 == sha && $4 == pr' | sort -n | tail -n 1 | cut -f2)"
           if [ "$latest_run" != "$RUN_ID" ]; then
             echo "triggering run ${RUN_ID} is not the latest validation run (${latest_run:-none}) for ${head_sha}" >&2
             exit 1
