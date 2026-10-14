@@ -2140,6 +2140,15 @@ def validate_candidate_pytest_configuration(candidate_root: Path) -> list[str]:
     return errors
 
 
+def _step_executes(run: object, command: str) -> bool:
+    """True when a non-comment line of the step's shell script begins with the command (not merely mentions it)."""
+    for line in str(run).splitlines():
+        stripped = line.strip()
+        if stripped and not stripped.startswith("#") and stripped.startswith(command):
+            return True
+    return False
+
+
 def _reviewer_proof_step_errors(workflow_text: str) -> list[str]:
     """The reviewer proof gate is judged on parsed job steps, never on raw text a comment or scalar could fake.
 
@@ -2169,7 +2178,9 @@ def _reviewer_proof_step_errors(workflow_text: str) -> list[str]:
                 if str(step.get("run", "")).strip() == "python scripts/hunter_finding_proof.py"
             ],
             "preflight": [
-                i for i, step in enumerate(steps) if "python scripts/hunter_pr_preflight.py" in str(step.get("run", ""))
+                i
+                for i, step in enumerate(steps)
+                if _step_executes(step.get("run", ""), "python scripts/hunter_pr_preflight.py")
             ],
         }
         if not (indexes["proof"] and indexes["preflight"]):

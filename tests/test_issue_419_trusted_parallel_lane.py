@@ -909,3 +909,18 @@ def test_a_mode_step_that_never_publishes_the_mode_output_is_refused():
         "      - run: python scripts/hunter_pr_preflight.py --mode normal\n"
     )
     assert any("preflight-mode step" in error for error in prevention._reviewer_proof_step_errors(fake))
+
+
+def test_a_preflight_command_mentioned_only_in_a_shell_comment_is_not_executed():
+    mode = '      - id: preflight-mode\n        run: |\n          PREFLIGHT_MODE=normal\n          echo "mode=${PREFLIGHT_MODE}" >> "${GITHUB_OUTPUT}"\n'
+    proof = (
+        "      - name: Verify bounded reviewer RED GREEN and adversarial proofs\n"
+        "        if: ${{ steps.preflight-mode.outputs.mode == 'normal' }}\n"
+        "        run: python scripts/hunter_finding_proof.py\n"
+    )
+    real = f"jobs:\n  a:\n    steps:\n{mode}{proof}      - run: python scripts/hunter_pr_preflight.py --mode normal\n"
+    commented = f"jobs:\n  a:\n    steps:\n{mode}{proof}      - run: |\n          # python scripts/hunter_pr_preflight.py\n          true\n"
+    echoed = f"jobs:\n  a:\n    steps:\n{mode}{proof}      - run: echo python scripts/hunter_pr_preflight.py\n"
+    assert prevention._reviewer_proof_step_errors(real) == []
+    assert prevention._reviewer_proof_step_errors(commented)
+    assert prevention._reviewer_proof_step_errors(echoed)
