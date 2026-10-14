@@ -241,6 +241,9 @@ def test_trusted_candidate_runner_executes_immutable_gate_chain(monkeypatch, tmp
         return SimpleNamespace(returncode=0)
 
     monkeypatch.setattr(prevention.subprocess, "run", fake_run)
+    # The reviewer-finding proof has its own coverage (tests/test_issue_419_trusted_parallel_lane.py and
+    # tests/test_hunter_finding_proof.py); this test pins only the immutable gate chain.
+    monkeypatch.setattr(prevention.finding_proof, "collect_errors", lambda root: [])
 
     assert prevention.run_candidate_quality_gates(tmp_path) == 0
     assert calls == [command for _name, command in prevention.TRUSTED_CANDIDATE_QUALITY_GATES]
