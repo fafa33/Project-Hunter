@@ -2460,6 +2460,25 @@ def trusted_closure(entries: Sequence[Path]) -> list[Path]:
     return sorted(seen)
 
 
+#: Guard entrypoints start under ``python -I`` (no PYTHONPATH, no user site, no cwd on ``sys.path``), so nothing the
+#: candidate controls can be imported at interpreter startup (``sitecustomize``, ``usercustomize``, ``.pth``). Only
+#: after startup does this trusted bootstrap add the script's directory and the candidate ``src`` to ``sys.path``,
+#: then runs the (overlaid, trusted) guard exactly as ``python scripts/<guard>.py`` would.
+GUARD_BOOTSTRAP = (
+    "import runpy, sys\n"
+    "from pathlib import Path\n"
+    "script = Path(sys.argv[1]).resolve()\n"
+    "sys.path[:0] = [str(script.parent), str(Path('src').resolve())]\n"
+    "sys.argv = [str(script)]\n"
+    "runpy.run_path(str(script), run_name='__main__')\n"
+)
+
+
+def guard_command(command: Sequence[str]) -> list[str]:
+    """``python scripts/<guard>.py`` re-expressed so the interpreter starts isolated from candidate files."""
+    return [command[0], "-I", "-c", GUARD_BOOTSTRAP, *command[1:]]
+
+
 def guard_overlays(view: Path) -> list[tuple[Path, Path]]:
     """Trusted guard scripts and their import closure, bound over the candidate's same repository paths."""
     root = Path(__file__).resolve().parents[1]
@@ -2532,8 +2551,9 @@ def run_candidate_quality_gates(candidate_root: Path) -> int:
                 print(f"[Trusted Candidate Gates] {name}: {' '.join(command)} (sandboxed)", flush=True)
                 guard = name in GUARD_GATES
                 overlays = guard_overlays(view) if guard else []
-                gate_env = {**env, "PYTHONPATH": str(view / "src")} if guard else env
-                returncode = execute_gate(command, copy=copy, view=view, env=gate_env, overlays=overlays)
+                returncode = execute_gate(
+                    guard_command(command) if guard else command, copy=copy, view=view, env=env, overlays=overlays
+                )
                 if returncode != 0:
                     print(f"[Trusted Candidate Gates] FAIL: {name} exited {returncode}", flush=True)
                     return returncode

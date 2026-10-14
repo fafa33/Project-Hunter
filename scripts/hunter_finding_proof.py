@@ -198,6 +198,25 @@ def unproven_selectors(stdout: str, selectors: list[str], expected: str) -> list
     return missing
 
 
+_SUMMARY_LINE = re.compile(r"^=+ (.+?) in [0-9.]+s.*=+$", re.MULTILINE)
+
+
+def summary_problem(stdout: str, expected_passed: int) -> str | None:
+    """Cross-check pytest's own final summary against the per-node report.
+
+    GREEN must end with exactly ``expected_passed`` passed and nothing skipped, deselected, failed, errored or
+    xfailed. This does not make forged output impossible (hostile test code shares the reporter's process), but a
+    hook that merely hides a selector can no longer be masked by one printed line.
+    """
+    summaries = _SUMMARY_LINE.findall(stdout)
+    if not summaries:
+        return "no pytest summary line"
+    parts = {key: int(count) for count, key in re.findall(r"(\d+) (\w+)", summaries[-1])}
+    if parts.get("passed") != expected_passed or set(parts) - {"passed", "warning", "warnings"}:
+        return f"pytest summary {summaries[-1]!r} does not show exactly {expected_passed} passed and nothing else"
+    return None
+
+
 def snapshot_tracked(root: Path, destination: Path) -> None:
     """Copy the tracked files of ``root`` (no .git) into ``destination``, preserving symlinks as symlinks.
 
@@ -323,6 +342,11 @@ def validate_proof(finding: dict, *, root: Path = ROOT) -> list[str]:
             missing = unproven_selectors(current.stdout, [green, *adversarial], "PASSED")
             if missing:
                 errors.append(f"{ident}: selectors not reported as PASSED (skipped, deselected or absent): {missing}")
+            else:
+                reported = sum(1 for statuses in outcomes(current.stdout).values() if statuses == {"PASSED"})
+                problem = summary_problem(current.stdout, reported)
+                if problem:
+                    errors.append(f"{ident}: {problem}")
     return errors
 
 

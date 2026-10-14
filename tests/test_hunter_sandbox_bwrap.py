@@ -45,15 +45,14 @@ if not _usable():
 
 def _inside(code: str, tmp_path: Path, *, env: dict[str, str] | None = None, overlays=()):
     """Run Python ``code`` in a private writable copy of ``tmp_path/'cand'`` bound at its own path."""
+    return _inside_command([sys.executable, "-c", code], tmp_path, env=env, overlays=overlays)
+
+
+def _inside_command(command: list[str], tmp_path: Path, *, env: dict[str, str] | None = None, overlays=()):
     candidate = tmp_path / "cand"
     candidate.mkdir(exist_ok=True)
     with prevention.private_candidate_copy(candidate) as copy:
-        argv = [
-            *proof.sandbox_prefix(copy, candidate, writable=True, overlays=overlays),
-            sys.executable,
-            "-c",
-            code,
-        ]
+        argv = [*proof.sandbox_prefix(copy, candidate, writable=True, overlays=overlays), *command]
         result = subprocess.run(
             argv,
             cwd=copy,
@@ -206,3 +205,34 @@ def test_the_controller_fails_closed_when_isolation_is_unavailable(monkeypatch, 
     monkeypatch.delenv("PYTEST_ADDOPTS", raising=False)
     assert prevention.run_candidate_quality_gates(tmp_path) == 2
     assert "never run unisolated" in capsys.readouterr().out
+
+
+def test_candidate_startup_hooks_cannot_run_before_a_trusted_guard(tmp_path: Path):
+    candidate = tmp_path / "cand"
+    (candidate / "src").mkdir(parents=True)
+    (candidate / "scripts").mkdir()
+    (candidate / "src" / "sitecustomize.py").write_text("import sys; sys.modules['candidate_startup_ran'] = True\n")
+    (candidate / "scripts" / "guard.py").write_text("print('candidate-no-op')\n")
+    trusted = tmp_path / "trusted-guard.py"
+    trusted.write_text("import sys; print('trusted-guard-ran', 'candidate_startup_ran' in sys.modules)\n")
+    env = prevention.gate_environment(os.environ)
+
+    def run(argv: list[str], extra_env: dict[str, str]):
+        result, _ = _inside_command(
+            argv, tmp_path, env={**env, **extra_env}, overlays=[(trusted, candidate / "scripts" / "guard.py")]
+        )
+        assert result.returncode == 0, result.stderr
+        return result.stdout.strip()
+
+    # control: the old way of exposing the candidate src (PYTHONPATH) lets a candidate sitecustomize run first
+    control = run([sys.executable, "scripts/guard.py"], {"PYTHONPATH": str(candidate / "src")})
+    assert control == "trusted-guard-ran True"
+    guarded = run(prevention.guard_command([sys.executable, "scripts/guard.py"]), {})
+    assert guarded == "trusted-guard-ran False"
+
+
+def test_guard_command_isolates_the_interpreter_and_runs_the_given_script():
+    argv = prevention.guard_command(["python", "scripts/hunter_artifact_preflight.py"])
+    assert argv[:3] == ["python", "-I", "-c"]
+    assert argv[-1] == "scripts/hunter_artifact_preflight.py"
+    assert "PYTHONPATH" not in prevention.gate_environment({"PYTHONPATH": "/x", "PATH": "/usr/bin"})

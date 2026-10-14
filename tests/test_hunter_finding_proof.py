@@ -224,7 +224,8 @@ def test_red_and_green_are_presented_at_the_same_path_with_no_phase_marker(monke
         report = (
             "FAILED tests/test_example.py::test_regression - assert False"
             if code
-            else "PASSED tests/test_example.py::test_regression\nPASSED tests/test_example.py::test_adversarial"
+            else "PASSED tests/test_example.py::test_regression\nPASSED tests/test_example.py::test_adversarial\n"
+            "======= 2 passed in 0.10s ======="
         )
         return type("Result", (), {"returncode": code, "stdout": report, "stderr": ""})()
 
@@ -370,3 +371,15 @@ def test_a_retained_baseline_finding_cannot_be_weakened(tmp_path: Path):
     assert any("weakened" in e for e in proof.baseline_retention_errors(weakened, baseline))
     assert any("weakened" in e for e in proof.baseline_retention_errors(unproofed, baseline))
     assert proof.baseline_retention_errors(same, baseline) == []
+
+
+def test_the_pytest_summary_must_agree_with_the_per_node_report():
+    ok = "======= 2 passed in 0.10s ======="
+    assert proof.summary_problem(ok, 2) is None
+    assert proof.summary_problem("======= 2 passed, 1 warning in 0.10s =======", 2) is None
+    assert proof.summary_problem("======= 1 passed, 1 deselected in 0.10s =======", 1)  # a hidden selector
+    assert proof.summary_problem("======= 1 passed, 1 skipped in 0.10s =======", 1)
+    assert proof.summary_problem("======= 1 passed in 0.10s =======", 2)  # fewer than reported
+    assert proof.summary_problem("PASSED a::b", 1)  # no summary at all
+    forged_then_real = "======= 5 passed in 0.10s =======\n======= 1 passed, 1 deselected in 0.10s ======="
+    assert proof.summary_problem(forged_then_real, 1)  # the last (real, final) line decides
