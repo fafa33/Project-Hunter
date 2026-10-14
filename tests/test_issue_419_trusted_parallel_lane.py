@@ -944,3 +944,16 @@ def test_the_mode_step_cannot_be_disabled_or_given_a_second_output():
     assert prevention._reviewer_proof_step_errors(workflow(run=second))
     reassigned = canonical + "          PREFLIGHT_MODE=tests-first-red\n"
     assert prevention._reviewer_proof_step_errors(workflow(run=reassigned))
+
+
+def test_a_command_that_merely_has_the_script_path_as_a_prefix_is_not_the_preflight():
+    assert prevention._step_executes(
+        "python scripts/hunter_pr_preflight.py --mode normal", "python scripts/hunter_pr_preflight.py"
+    )
+    assert prevention._step_executes("python scripts/hunter_pr_preflight.py", "python scripts/hunter_pr_preflight.py")
+    assert not prevention._step_executes(
+        "python scripts/hunter_pr_preflight.py-malicious", "python scripts/hunter_pr_preflight.py"
+    )
+    assert not prevention._step_executes(
+        "python scripts/hunter_pr_preflight.pyc --mode normal", "python scripts/hunter_pr_preflight.py"
+    )

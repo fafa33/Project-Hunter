@@ -99,7 +99,7 @@ def test_pytest_runs_with_scrubbed_environment_and_no_network(monkeypatch, tmp_p
 
 
 def test_missing_sandbox_fails_closed(monkeypatch, tmp_path: Path):
-    monkeypatch.setattr(proof.shutil, "which", lambda name: None)
+    monkeypatch.setattr(proof, "trusted_bwrap", lambda: None)
     try:
         proof.run_pytest(["tests/test_example.py::test_regression"], cwd=tmp_path)
     except proof.IsolationUnavailable:
@@ -108,7 +108,7 @@ def test_missing_sandbox_fails_closed(monkeypatch, tmp_path: Path):
 
 
 def test_unshare_only_fallback_is_refused(monkeypatch):
-    monkeypatch.setattr(proof.shutil, "which", lambda name: "/usr/bin/unshare" if name == "unshare" else None)
+    monkeypatch.setattr(proof, "trusted_bwrap", lambda: None)
     try:
         proof.sandbox_prefix(Path("."))
     except proof.IsolationUnavailable:
@@ -117,7 +117,7 @@ def test_unshare_only_fallback_is_refused(monkeypatch):
 
 
 def test_sandbox_boundary_masks_credentials_and_keeps_baseline_worktree_visible(monkeypatch, tmp_path: Path):
-    monkeypatch.setattr(proof.shutil, "which", lambda name: "/usr/bin/bwrap" if name == "bwrap" else None)
+    monkeypatch.setattr(proof, "trusted_bwrap", lambda: "/usr/bin/bwrap")
     worktree = tmp_path / "hunter-finding-red-x" / "repo"
     worktree.mkdir(parents=True)
     argv = proof.sandbox_prefix(worktree)
@@ -138,9 +138,7 @@ def test_sandbox_boundary_masks_credentials_and_keeps_baseline_worktree_visible(
 
 
 def test_sandbox_blocks_host_writes_and_credential_reads_when_bwrap_is_usable(tmp_path: Path):
-    import shutil as _shutil
-
-    if not _shutil.which("bwrap"):
+    if not proof.trusted_bwrap():
         return
     probe = proof.subprocess.run([*proof.sandbox_prefix(tmp_path), "true"], capture_output=True, check=False)
     if probe.returncode:
@@ -164,3 +162,13 @@ def test_sandbox_blocks_host_writes_and_credential_reads_when_bwrap_is_usable(tm
     )
     assert result.returncode == 0, result.stderr
     assert not Path("/tmp/hunter-sandbox-probe").exists()  # the sandbox tmpfs never reached the host /tmp
+
+
+def test_bwrap_is_never_resolved_from_ambient_path(monkeypatch, tmp_path: Path):
+    fake = tmp_path / "bwrap"
+    fake.write_text("#!/bin/sh\nexit 0\n")
+    fake.chmod(0o755)
+    monkeypatch.setenv("PATH", f"{tmp_path}:/usr/bin:/bin")
+    assert proof.trusted_bwrap() != str(fake)
+    monkeypatch.setattr(proof, "TRUSTED_BWRAP_PATHS", (str(fake),))
+    assert proof.trusted_bwrap() is None or Path(proof.trusted_bwrap()).stat().st_uid == 0  # test-owned file refused

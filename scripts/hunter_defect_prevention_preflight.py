@@ -2144,7 +2144,9 @@ def _step_executes(run: object, command: str) -> bool:
     """True when a non-comment line of the step's shell script begins with the command (not merely mentions it)."""
     for line in str(run).splitlines():
         stripped = line.strip()
-        if stripped and not stripped.startswith("#") and stripped.startswith(command):
+        if stripped.startswith("#") or not stripped.startswith(command):
+            continue
+        if len(stripped) == len(command) or stripped[len(command)].isspace():  # a command boundary, not a prefix
             return True
     return False
 

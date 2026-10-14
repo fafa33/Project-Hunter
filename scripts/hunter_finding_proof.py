@@ -67,6 +67,24 @@ SANDBOX_TMP = "/tmp"  # NOSONAR S108 - private tmpfs in the sandbox mount namesp
 MASKED_TREES = ("/home", "/root", "/run")
 
 
+TRUSTED_BWRAP_PATHS = ("/usr/bin/bwrap", "/bin/bwrap")
+
+
+def trusted_bwrap() -> str | None:
+    """A root-owned, non-group/world-writable bwrap at a fixed system path; never resolved from ambient PATH.
+
+    A preceding candidate workflow step can prepend a directory to PATH (GITHUB_PATH) and plant a fake binary.
+    """
+    for candidate in TRUSTED_BWRAP_PATHS:
+        path = Path(candidate)
+        if not path.is_file() or not os.access(path, os.X_OK):
+            continue
+        info = path.stat()
+        if info.st_uid == 0 and not info.st_mode & 0o022:
+            return str(path.resolve())
+    return None
+
+
 def sandbox_prefix(cwd: Path) -> list[str]:
     """bwrap argv: read-only root, private tmpfs, no network, host credential trees masked.
 
@@ -74,7 +92,7 @@ def sandbox_prefix(cwd: Path) -> list[str]:
     re-bound read-only on top, so a baseline worktree that lives under the host's /tmp (hidden by the private
     tmpfs) and a checkout under /home remain visible, read-only, and nothing else of those trees is.
     """
-    bwrap = shutil.which("bwrap")
+    bwrap = trusted_bwrap()
     if not bwrap:
         # No weaker fallback: a network-only namespace leaves the workspace writable to candidate-selected tests.
         raise IsolationUnavailable("bwrap is required for filesystem- and network-isolated proof runs")
