@@ -38,6 +38,7 @@ import json
 import multiprocessing as mp
 import os
 import sys
+import time
 import traceback
 from datetime import UTC, datetime, timedelta
 from multiprocessing.connection import Connection
@@ -622,15 +623,17 @@ def _run_scenario_isolated(scenario_id: str, candidate_root: Path, fixture: dict
 
     messages: list[Any] = []
     remaining = float(SCENARIO_CHILD_TIMEOUT_SECONDS)
+    deadline = time.monotonic() + remaining
     try:
         while len(messages) < 2 and parent_conn.poll(timeout=remaining):
             try:
                 messages.append(parent_conn.recv())
             except EOFError:
                 break
-            # A child that sent 'started' must send its second message
-            # promptly; it does not get the full budget twice.
-            remaining = 5.0
+            # Give a real scenario its remaining wall-clock budget. The old
+            # fixed five-second post-start window killed healthy scenarios on
+            # hosted runners, which are slower than local development hosts.
+            remaining = max(0.0, deadline - time.monotonic())
     finally:
         parent_conn.close()
         process.join(timeout=5)
