@@ -129,6 +129,7 @@ def run_pytest(selectors: list[str], *, source: Path, view: Path) -> subprocess.
         "--tb=short",
         "-p",
         "no:cacheprovider",
+        "-rA",
         *selectors,
     ]
     return subprocess.run(
@@ -140,6 +141,27 @@ def run_pytest(selectors: list[str], *, source: Path, view: Path) -> subprocess.
         timeout=TIMEOUT_SECONDS,
         check=False,
     )
+
+
+_OUTCOME_LINE = re.compile(r"^(PASSED|FAILED|ERROR|SKIPPED|XFAIL|XPASS) (\S+)", re.MULTILINE)
+
+
+def outcomes(stdout: str) -> dict[str, set[str]]:
+    """Per-selector set of reported outcomes, from the ``-rA`` short summary (parametrized ids fold to their base)."""
+    found: dict[str, set[str]] = {}
+    for status, node in _OUTCOME_LINE.findall(stdout):
+        found.setdefault(node.split("[", 1)[0], set()).add(status)
+    return found
+
+
+def unproven_selectors(stdout: str, selectors: list[str], expected: str) -> list[str]:
+    """Selectors that were not reported with exactly ``expected`` (skipped, deselected or missing all count).
+
+    A candidate ``conftest.py`` hook can skip or deselect a selector so the run exits 0 without proving anything;
+    requiring an explicit per-selector outcome closes that, independent of the exit code.
+    """
+    reported = outcomes(stdout)
+    return [selector for selector in selectors if reported.get(selector) != {expected}]
 
 
 def snapshot_tracked(root: Path, destination: Path) -> None:
@@ -255,19 +277,39 @@ def validate_proof(finding: dict, *, root: Path = ROOT) -> list[str]:
         red_result = run_pytest([red], source=red_tree, view=root)
         if red_result.returncode == 0:
             errors.append(f"{ident}: RED did not fail on vulnerable_sha")
-        elif red_result.returncode != 1 or " failed" not in red_result.stdout:
-            errors.append(f"{ident}: RED was not a genuine assertion failure (exit {red_result.returncode})")
+        elif red_result.returncode != 1 or unproven_selectors(red_result.stdout, [red], "FAILED"):
+            errors.append(
+                f"{ident}: RED was not a genuine assertion failure of the named test (exit {red_result.returncode})"
+            )
         snapshot_tracked(root, green_tree)
         current = run_pytest([green, *adversarial], source=green_tree, view=root)
         if current.returncode:
             errors.append(f"{ident}: GREEN/adversarial tests failed: {current.stdout[-500:]} {current.stderr[-200:]}")
+        else:
+            missing = unproven_selectors(current.stdout, [green, *adversarial], "PASSED")
+            if missing:
+                errors.append(f"{ident}: selectors not reported as PASSED (skipped, deselected or absent): {missing}")
     return errors
 
 
-def collect_errors(root: Path = ROOT) -> list[str]:
+def baseline_retention_errors(root: Path, baseline: Path) -> list[str]:
+    """The candidate ledger must keep every finding of the trusted baseline ledger."""
+    ledger = "docs/REVIEWER_FINDING_DISPOSITIONS.json"
+    if root.resolve() == baseline.resolve() or not (baseline / ledger).is_file():
+        return []
+    kept = {finding.get("id") for finding in json.loads((root / ledger).read_text())["findings"]}
+    trusted = [finding.get("id") for finding in json.loads((baseline / ledger).read_text())["findings"]]
+    return [
+        f"{ident}: trusted baseline finding was removed from the candidate ledger"
+        for ident in trusted
+        if ident not in kept
+    ]
+
+
+def collect_errors(root: Path = ROOT, baseline: Path = ROOT) -> list[str]:
     """Validate every disposition of ``root``; the trusted lane calls this from its own (base) copy of this module."""
     findings = json.loads((root / "docs/REVIEWER_FINDING_DISPOSITIONS.json").read_text())["findings"]
-    errors: list[str] = []
+    errors: list[str] = baseline_retention_errors(root, baseline)
     for finding in findings:
         try:
             errors.extend(validate_proof(finding, root=root))

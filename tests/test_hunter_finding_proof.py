@@ -221,7 +221,12 @@ def test_red_and_green_are_presented_at_the_same_path_with_no_phase_marker(monke
     def fake_pytest(selectors, *, source, view):
         calls.append((list(selectors), source, view))
         code = 1 if len(calls) == 1 else 0
-        return type("Result", (), {"returncode": code, "stdout": "1 failed" if code else "", "stderr": ""})()
+        report = (
+            "FAILED tests/test_example.py::test_regression - assert False"
+            if code
+            else "PASSED tests/test_example.py::test_regression\nPASSED tests/test_example.py::test_adversarial"
+        )
+        return type("Result", (), {"returncode": code, "stdout": report, "stderr": ""})()
 
     monkeypatch.setattr(proof, "run_pytest", fake_pytest)
     selector = "tests/test_example.py::test_regression"
@@ -267,3 +272,34 @@ def test_snapshot_refuses_a_tracked_symlink_that_would_redirect_a_later_copy(tmp
     else:
         raise AssertionError("a symlink ancestor inside the snapshot must be refused")
     assert not (outside / "later.txt").exists()
+
+
+def test_a_selector_skipped_or_deselected_by_candidate_hooks_is_not_proven():
+    green = "tests/test_example.py::test_regression"
+    adversarial = "tests/test_example.py::test_adversarial"
+    passed = f"PASSED {green}\nPASSED {adversarial}\n2 passed"
+    skipped = f"SKIPPED {green}\nPASSED {adversarial}\n1 passed, 1 skipped"
+    deselected = f"PASSED {adversarial}\n1 passed, 1 deselected"
+    assert proof.unproven_selectors(passed, [green, adversarial], "PASSED") == []
+    assert proof.unproven_selectors(skipped, [green, adversarial], "PASSED") == [green]
+    assert proof.unproven_selectors(deselected, [green, adversarial], "PASSED") == [green]
+    assert proof.unproven_selectors(f"FAILED {green}", [green], "FAILED") == []
+    assert proof.unproven_selectors(f"ERROR {green}", [green], "FAILED") == [green]
+
+
+def test_candidate_ledger_must_retain_every_trusted_baseline_finding(tmp_path: Path):
+    import json
+
+    def ledger(root: Path, ids: list[str]) -> Path:
+        (root / "docs").mkdir(parents=True)
+        (root / "docs/REVIEWER_FINDING_DISPOSITIONS.json").write_text(
+            json.dumps({"findings": [{"id": i} for i in ids]})
+        )
+        return root
+
+    baseline = ledger(tmp_path / "base", ["RFD-1", "RFD-2"])
+    emptied = ledger(tmp_path / "emptied", [])
+    kept = ledger(tmp_path / "kept", ["RFD-1", "RFD-2", "RFD-3"])
+    assert len(proof.baseline_retention_errors(emptied, baseline)) == 2
+    assert proof.baseline_retention_errors(kept, baseline) == []
+    assert proof.baseline_retention_errors(baseline, baseline) == []

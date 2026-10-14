@@ -269,3 +269,8 @@ def test_candidate_controlled_bootstrap_forces_trusted_full_gates(
     reusable, reason = decision.decide(tmp_path, head_sha=HEAD, repository=REPO, pr_number=PR, token="token")
     assert reusable is False
     assert path in reason
+
+
+def test_the_reviewer_dispositions_ledger_is_trusted_definition_input():
+    assert "docs/REVIEWER_FINDING_DISPOSITIONS.json" in governance.PREFLIGHT_OWNED_PATHS
+    assert "docs/REVIEWER_FINDING_DISPOSITIONS.json" in decision.TRUSTED_DEFINITION_PATHS
