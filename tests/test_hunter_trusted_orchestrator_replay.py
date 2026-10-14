@@ -1780,6 +1780,9 @@ def test_digest_closure_covers_candidate_packages_and_submodules(tmp_path):
         "__import__('hunter_helper')\n",
         "exec(open('x').read())\n",
         "import runpy\nrunpy.run_path('x.py')\n",
+        "loader = __import__\nloader('hunter_helper')\n",
+        "from runpy import run_path\nrun_path('x.py')\n",
+        "import importlib\ngetattr(importlib, 'import_module')('hunter_helper')\n",
     ],
 )
 def test_dynamic_import_forms_in_candidate_modules_are_refused(tmp_path, body):
@@ -1813,3 +1816,21 @@ def test_relative_imports_in_candidate_modules_are_refused(tmp_path):
     (candidate / "scripts" / "hunter_review_orchestrator.py").write_text("from . import sibling\n", encoding="utf-8")
     with pytest.raises(ValueError, match="relative import"):
         worker.candidate_module_digest(candidate, "A")
+
+
+def test_replay_sandbox_uses_a_private_dev_tree_not_the_host_devices():
+    import yaml
+
+    doc = yaml.safe_load(Path(".github/workflows/hunter-trusted-orchestrator-replay-validate.yml").read_text())
+    runs = "\n".join(step.get("run", "") for job in doc["jobs"].values() for step in job["steps"])
+    assert "--dev-bind" not in runs
+    assert runs.count("--dev /dev") == 2
+
+
+def test_an_ordinary_variable_named_like_a_loader_is_not_refused(tmp_path):
+    candidate = tmp_path / "candidate"
+    (candidate / "scripts").mkdir(parents=True)
+    (candidate / "scripts" / "hunter_review_orchestrator.py").write_text(
+        "run_path = 'workflow.yml'\nprint(run_path)\n", encoding="utf-8"
+    )
+    assert len(worker.candidate_module_digest(candidate, "A")) == 64

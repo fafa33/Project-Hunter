@@ -125,6 +125,24 @@ DYNAMIC_IMPORT_CALLS = frozenset(
 )
 
 
+#: Bare names that are loaders on their own (builtins). Other loader names only count as attributes
+#: (``importlib.import_module``), as strings (``getattr(importlib, "import_module")``) or as imported names, so an
+#: ordinary local variable that happens to be called ``run_path`` is not mistaken for ``runpy.run_path``.
+BUILTIN_LOADERS = frozenset({"__import__", "exec", "eval"})
+
+
+def _loader_mention(node: ast.AST) -> str | None:
+    if isinstance(node, ast.Name):
+        return node.id if node.id in BUILTIN_LOADERS else None
+    if isinstance(node, ast.Attribute):
+        return node.attr
+    if isinstance(node, ast.Constant) and isinstance(node.value, str):
+        return node.value
+    if isinstance(node, ast.ImportFrom):
+        return next((alias.name for alias in node.names if alias.name in DYNAMIC_IMPORT_CALLS), None)
+    return None
+
+
 def candidate_module_closure(candidate_root: Path, scenario_id: str) -> list[str]:
     """The declared candidate modules plus every ``scripts/`` module they import, transitively.
 
@@ -142,14 +160,14 @@ def candidate_module_closure(candidate_root: Path, scenario_id: str) -> list[str
         seen.add(relative)
         tree = ast.parse(confined_candidate_file(candidate_root, relative).read_text(encoding="utf-8"))
         for node in ast.walk(tree):
-            if isinstance(node, ast.Call):
-                callee = node.func.id if isinstance(node.func, ast.Name) else getattr(node.func, "attr", "")
-                if callee in DYNAMIC_IMPORT_CALLS:
-                    # A computed import cannot be resolved statically, so the digest could not bind to what runs.
-                    raise ValueError(
-                        f"candidate module {relative!r} uses a dynamic import form ({callee}) and is refused"
-                    )
-                continue
+            # Any mention of a loader -- called, aliased (``loader = __import__``), passed around, or named in a
+            # string for ``getattr`` -- is refused, not only a direct call: a computed import cannot be resolved
+            # statically, so the digest could not bind to what actually runs.
+            mentioned = _loader_mention(node)
+            if mentioned in DYNAMIC_IMPORT_CALLS:
+                raise ValueError(
+                    f"candidate module {relative!r} uses a dynamic import form ({mentioned}) and is refused"
+                )
             if isinstance(node, ast.ImportFrom) and node.level > 0:
                 raise ValueError(f"candidate module {relative!r} uses a relative import and is refused")
             if isinstance(node, ast.Import):
