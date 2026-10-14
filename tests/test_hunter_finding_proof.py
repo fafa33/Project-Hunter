@@ -303,3 +303,65 @@ def test_candidate_ledger_must_retain_every_trusted_baseline_finding(tmp_path: P
     assert len(proof.baseline_retention_errors(emptied, baseline)) == 2
     assert proof.baseline_retention_errors(kept, baseline) == []
     assert proof.baseline_retention_errors(baseline, baseline) == []
+
+
+def test_parameterized_selectors_are_normalized_before_lookup():
+    selector = "tests/test_x.py::test_case[param]"
+    assert proof.unproven_selectors(f"PASSED {selector}\n1 passed", [selector], "PASSED") == []
+    assert proof.unproven_selectors(f"SKIPPED {selector}", [selector], "PASSED") == [selector]
+
+
+def test_non_string_adversarial_entries_are_a_controlled_failure():
+    bad = finding()
+    bad["executable_proof"]["adversarial_tests"] = [{"x": 1}, ["y"]]
+    assert "adversarial" in str(proof.validate_proof(bad))
+
+
+def test_the_sandbox_creates_the_view_path_it_binds_under_a_masked_tree(monkeypatch, tmp_path: Path):
+    monkeypatch.setattr(proof, "trusted_bwrap", lambda: "/usr/bin/bwrap")
+    view = tmp_path / "home" / "runner" / "work" / "repo"
+    view.mkdir(parents=True)
+    argv = proof.sandbox_prefix(tmp_path, view)
+    pairs = list(zip(argv, argv[1:], strict=False))
+    assert ("--dir", str(view.resolve())) in pairs
+    assert argv.index("--dir") < argv.index("--ro-bind", argv.index("--tmpfs"))
+
+
+def test_a_symlinked_or_escaping_ledger_is_refused(tmp_path: Path):
+    import json
+    import os
+
+    trusted = tmp_path / "trusted"
+    (trusted / "docs").mkdir(parents=True)
+    (trusted / "docs/REVIEWER_FINDING_DISPOSITIONS.json").write_text(json.dumps({"findings": []}))
+    candidate = tmp_path / "candidate"
+    (candidate / "docs").mkdir(parents=True)
+    os.symlink(
+        trusted / "docs/REVIEWER_FINDING_DISPOSITIONS.json", candidate / "docs/REVIEWER_FINDING_DISPOSITIONS.json"
+    )
+    errors = proof.collect_errors(candidate, trusted)
+    assert errors and "ledger refused" in errors[0]
+
+
+def test_a_retained_baseline_finding_cannot_be_weakened(tmp_path: Path):
+    import json
+
+    def ledger(root: Path, entry: dict) -> Path:
+        (root / "docs").mkdir(parents=True)
+        (root / "docs/REVIEWER_FINDING_DISPOSITIONS.json").write_text(json.dumps({"findings": [entry]}))
+        return root
+
+    proven = {
+        "id": "RFD-9",
+        "validation_state": "validated",
+        "resolution_state": "resolved",
+        "classification": "new_systemic_defect",
+        "executable_proof": {"vulnerable_sha": "a" * 40},
+    }
+    baseline = ledger(tmp_path / "base", proven)
+    weakened = ledger(tmp_path / "weak", {**proven, "validation_state": "unvalidated"})
+    unproofed = ledger(tmp_path / "noproof", {**proven, "executable_proof": None})
+    same = ledger(tmp_path / "same", dict(proven))
+    assert any("weakened" in e for e in proof.baseline_retention_errors(weakened, baseline))
+    assert any("weakened" in e for e in proof.baseline_retention_errors(unproofed, baseline))
+    assert proof.baseline_retention_errors(same, baseline) == []

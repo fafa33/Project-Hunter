@@ -109,7 +109,7 @@ def sandbox_prefix(source: Path, view: Path) -> list[str]:
             command += ["--ro-bind", path, path]
     # The tree under test is presented at one fixed path for every phase, so RED and GREEN see identical
     # paths and no git metadata (snapshots carry none); a test cannot tell which phase it is in.
-    command += ["--ro-bind", str(source.resolve()), str(view.resolve())]
+    command += ["--dir", str(view.resolve()), "--ro-bind", str(source.resolve()), str(view.resolve())]
     command += ["--unshare-net", "--unshare-pid", "--die-with-parent", "--chdir", str(view.resolve())]
     return command
 
@@ -161,7 +161,7 @@ def unproven_selectors(stdout: str, selectors: list[str], expected: str) -> list
     requiring an explicit per-selector outcome closes that, independent of the exit code.
     """
     reported = outcomes(stdout)
-    return [selector for selector in selectors if reported.get(selector) != {expected}]
+    return [selector for selector in selectors if reported.get(selector.split("[", 1)[0]) != {expected}]
 
 
 def snapshot_tracked(root: Path, destination: Path) -> None:
@@ -237,9 +237,9 @@ def validate_proof(finding: dict, *, root: Path = ROOT) -> list[str]:
         not isinstance(adversarial, list)
         or not adversarial
         or len(adversarial) > 6
+        or any(not isinstance(x, str) or not x.startswith("tests/") or "::test_" not in x for x in adversarial)
         or len(set(adversarial)) != len(adversarial)
         or red in adversarial
-        or any(not isinstance(x, str) or not x.startswith("tests/") or "::test_" not in x for x in adversarial)
     ):
         errors.append(f"{ident}: provide 1-6 specific adversarial pytest selectors")
     if isinstance(sha, str) and reviewed_head_sha(finding) != sha:
@@ -292,24 +292,51 @@ def validate_proof(finding: dict, *, root: Path = ROOT) -> list[str]:
     return errors
 
 
+LEDGER = "docs/REVIEWER_FINDING_DISPOSITIONS.json"
+_PROTECTED_FIELDS = ("validation_state", "resolution_state", "classification", "executable_proof")
+
+
+def load_ledger(root: Path) -> list[dict]:
+    """Read the ledger of ``root`` as a regular file confined to ``root`` (no symlink may stand in for it)."""
+    path = root / LEDGER
+    current = root
+    for part in Path(LEDGER).parts:
+        current = current / part
+        if current.is_symlink():
+            raise ValueError(f"{LEDGER} must be a regular, non-symlink file inside the repository")
+    if not path.resolve().is_relative_to(root.resolve()) or not path.is_file():
+        raise ValueError(f"{LEDGER} must be a regular, non-symlink file inside the repository")
+    findings = json.loads(path.read_text())["findings"]
+    if not isinstance(findings, list) or not all(isinstance(entry, dict) for entry in findings):
+        raise ValueError(f"{LEDGER} findings must be a list of objects")
+    return findings
+
+
 def baseline_retention_errors(root: Path, baseline: Path) -> list[str]:
-    """The candidate ledger must keep every finding of the trusted baseline ledger."""
-    ledger = "docs/REVIEWER_FINDING_DISPOSITIONS.json"
-    if root.resolve() == baseline.resolve() or not (baseline / ledger).is_file():
+    """The candidate ledger must keep every trusted-baseline finding and must not weaken a proven one."""
+    if root.resolve() == baseline.resolve() or not (baseline / LEDGER).is_file():
         return []
-    kept = {finding.get("id") for finding in json.loads((root / ledger).read_text())["findings"]}
-    trusted = [finding.get("id") for finding in json.loads((baseline / ledger).read_text())["findings"]]
-    return [
-        f"{ident}: trusted baseline finding was removed from the candidate ledger"
-        for ident in trusted
-        if ident not in kept
-    ]
+    candidate = {entry.get("id"): entry for entry in load_ledger(root)}
+    errors: list[str] = []
+    for trusted in load_ledger(baseline):
+        ident = trusted.get("id")
+        kept = candidate.get(ident)
+        if kept is None:
+            errors.append(f"{ident}: trusted baseline finding was removed from the candidate ledger")
+        elif trusted.get("validation_state") == "validated" and trusted.get("resolution_state") == "resolved":
+            changed = [field for field in _PROTECTED_FIELDS if kept.get(field) != trusted.get(field)]
+            if changed:
+                errors.append(f"{ident}: a validated, resolved baseline finding was weakened (changed {changed})")
+    return errors
 
 
 def collect_errors(root: Path = ROOT, baseline: Path = ROOT) -> list[str]:
     """Validate every disposition of ``root``; the trusted lane calls this from its own (base) copy of this module."""
-    findings = json.loads((root / "docs/REVIEWER_FINDING_DISPOSITIONS.json").read_text())["findings"]
-    errors: list[str] = baseline_retention_errors(root, baseline)
+    try:
+        findings = load_ledger(root)
+        errors: list[str] = baseline_retention_errors(root, baseline)
+    except (ValueError, KeyError, json.JSONDecodeError) as refused:
+        return [f"reviewer ledger refused: {refused}"]
     for finding in findings:
         try:
             errors.extend(validate_proof(finding, root=root))

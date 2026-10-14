@@ -61,7 +61,7 @@ jobs:
     if: ${{ always() && !cancelled() }}
     # Publishers for one head run one at a time, never cancelling an in-flight publication.
     concurrency:
-      group: hunter-replay-publish-${{ github.event.workflow_run.head_sha }}
+      group: hunter-replay-publish-${{ github.event.workflow_run.pull_requests[0].number || github.event.workflow_run.head_branch }}
       cancel-in-progress: false
     name: Publish Exact-Head Trusted Replay Proof
     runs-on: ubuntu-latest
