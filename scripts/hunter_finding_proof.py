@@ -60,26 +60,34 @@ def scrubbed_env(home: str) -> dict[str, str]:
     }
 
 
-def sandbox_prefix() -> list[str]:
+# Mount point of the sandbox's own tmpfs. It is created inside bwrap's private mount namespace (--unshare-*),
+# so it is never the host's /tmp: nothing written there can reach the host or the trusted workspace.
+SANDBOX_TMP = "/tmp"  # NOSONAR S108 - private tmpfs in the sandbox mount namespace, reviewed safe
+# Credential-bearing host trees are masked with empty tmpfs mounts; only what the run needs is re-bound.
+MASKED_TREES = ("/home", "/root", "/run")
+
+
+def sandbox_prefix(cwd: Path) -> list[str]:
+    """bwrap argv: read-only root, private tmpfs, no network, host credential trees masked.
+
+    Mount order matters: masks and the private tmpfs come first, then the working tree and interpreter are
+    re-bound read-only on top, so a baseline worktree that lives under the host's /tmp (hidden by the private
+    tmpfs) and a checkout under /home remain visible, read-only, and nothing else of those trees is.
+    """
     bwrap = shutil.which("bwrap")
-    if bwrap:
-        return [
-            bwrap,
-            "--ro-bind",
-            "/",
-            "/",
-            "--dev",
-            "/dev",
-            "--proc",
-            "/proc",
-            "--tmpfs",
-            "/tmp",  # noqa: S108 - private tmpfs inside the sandbox mount namespace
-            "--unshare-net",
-            "--unshare-pid",
-            "--die-with-parent",
-        ]
-    # No weaker fallback: a network-only namespace leaves the workspace writable to candidate-selected tests.
-    raise IsolationUnavailable("bwrap is required for filesystem- and network-isolated proof runs")
+    if not bwrap:
+        # No weaker fallback: a network-only namespace leaves the workspace writable to candidate-selected tests.
+        raise IsolationUnavailable("bwrap is required for filesystem- and network-isolated proof runs")
+    command = [bwrap, "--ro-bind", "/", "/", "--dev", "/dev", "--proc", "/proc"]
+    for tree in MASKED_TREES:
+        command += ["--tmpfs", tree]
+    command += ["--tmpfs", SANDBOX_TMP]
+    keep = {str(cwd.resolve()), str(Path(sys.prefix).resolve()), str(Path(sys.base_prefix).resolve())}
+    for path in sorted(keep):
+        if path.startswith((*MASKED_TREES, SANDBOX_TMP)):
+            command += ["--ro-bind", path, path]
+    command += ["--unshare-net", "--unshare-pid", "--die-with-parent", "--chdir", str(cwd.resolve())]
+    return command
 
 
 def run(args: list[str], *, cwd: Path, timeout: int = TIMEOUT_SECONDS) -> subprocess.CompletedProcess[str]:
@@ -88,18 +96,26 @@ def run(args: list[str], *, cwd: Path, timeout: int = TIMEOUT_SECONDS) -> subpro
 
 def run_pytest(selectors: list[str], *, cwd: Path) -> subprocess.CompletedProcess[str]:
     """Run selectors with a scrubbed environment and no network; never inherits the preflight process."""
-    prefix = sandbox_prefix()
-    with tempfile.TemporaryDirectory(prefix="hunter-finding-home-") as home:
-        command = [*prefix, sys.executable, "-m", "pytest", "-q", "--tb=short", "-p", "no:cacheprovider", *selectors]
-        return subprocess.run(
-            command,
-            cwd=cwd,
-            env=scrubbed_env(home),
-            text=True,
-            capture_output=True,
-            timeout=TIMEOUT_SECONDS,
-            check=False,
-        )
+    command = [
+        *sandbox_prefix(cwd),
+        sys.executable,
+        "-m",
+        "pytest",
+        "-q",
+        "--tb=short",
+        "-p",
+        "no:cacheprovider",
+        *selectors,
+    ]
+    return subprocess.run(
+        command,
+        cwd=cwd,
+        env=scrubbed_env(SANDBOX_TMP),
+        text=True,
+        capture_output=True,
+        timeout=TIMEOUT_SECONDS,
+        check=False,
+    )
 
 
 def validate_proof(finding: dict, *, root: Path = ROOT) -> list[str]:
