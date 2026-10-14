@@ -1683,3 +1683,29 @@ def test_regular_confined_candidate_module_is_accepted(tmp_path):
     (candidate / "scripts" / "hunter_review_orchestrator.py").write_text("X = 1\n", encoding="utf-8")
     assert len(worker.candidate_module_digest(candidate, "A")) == 64
     worker.assert_candidate_scripts_confined(candidate)
+
+
+def _candidate_with_helper(tmp_path, helper_body):
+    candidate = tmp_path / "candidate"
+    (candidate / "scripts").mkdir(parents=True)
+    (candidate / "scripts" / "hunter_review_orchestrator.py").write_text(
+        "import json\nimport hunter_helper\nfrom hunter_helper import value\n", encoding="utf-8"
+    )
+    (candidate / "scripts" / "hunter_helper.py").write_text(helper_body, encoding="utf-8")
+    return candidate
+
+
+def test_digest_covers_transitively_imported_candidate_helpers(tmp_path):
+    candidate = _candidate_with_helper(tmp_path, "value = 1\n")
+    assert "scripts/hunter_helper.py" in worker.candidate_module_closure(candidate, "A")
+    before = worker.candidate_module_digest(candidate, "A")
+    (candidate / "scripts" / "hunter_helper.py").write_text("value = 2\n", encoding="utf-8")
+    assert worker.candidate_module_digest(candidate, "A") != before
+
+
+def test_unrelated_candidate_files_do_not_change_the_digest(tmp_path):
+    candidate = _candidate_with_helper(tmp_path, "value = 1\n")
+    (candidate / "scripts" / "hunter_unrelated.py").write_text("x = 1\n", encoding="utf-8")
+    before = worker.candidate_module_digest(candidate, "A")
+    (candidate / "scripts" / "hunter_unrelated.py").write_text("x = 2\n", encoding="utf-8")
+    assert worker.candidate_module_digest(candidate, "A") == before

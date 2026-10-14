@@ -32,6 +32,7 @@ harness/production drift rather than for a real regression.
 from __future__ import annotations
 
 import argparse
+import ast
 import hashlib
 import importlib
 import json
@@ -98,9 +99,40 @@ def assert_candidate_scripts_confined(candidate_root: Path) -> None:
         confined_candidate_file(candidate_root, f"scripts/{entry.name}")
 
 
+def candidate_module_closure(candidate_root: Path, scenario_id: str) -> list[str]:
+    """The declared candidate modules plus every ``scripts/`` module they import, transitively.
+
+    The digest must bind to all candidate code a scenario can execute, not only the entry modules: a helper
+    imported by an entry module can change the replayed behavior while the entry file stays byte-identical.
+    Only modules that exist as ``scripts/<name>.py`` in the candidate are followed (standard library and installed
+    packages are not candidate-controlled); every followed file goes through ``confined_candidate_file``.
+    """
+    seen: set[str] = set()
+    pending = list(CANDIDATE_MODULE_FILES[scenario_id])
+    while pending:
+        relative = pending.pop()
+        if relative in seen:
+            continue
+        seen.add(relative)
+        tree = ast.parse(confined_candidate_file(candidate_root, relative).read_text(encoding="utf-8"))
+        for node in ast.walk(tree):
+            if isinstance(node, ast.Import):
+                names = [alias.name for alias in node.names]
+            elif isinstance(node, ast.ImportFrom) and node.level == 0 and node.module:
+                names = [node.module, *(f"{node.module}.{alias.name}" for alias in node.names)]
+            else:
+                continue
+            for name in names:
+                helper = f"scripts/{name.split('.')[0]}.py"
+                helper_path = candidate_root / helper
+                if helper not in seen and (helper_path.is_symlink() or helper_path.is_file()):
+                    pending.append(helper)
+    return sorted(seen)
+
+
 def candidate_module_digest(candidate_root: Path, scenario_id: str) -> str:
     payload = {}
-    for relative in CANDIDATE_MODULE_FILES[scenario_id]:
+    for relative in candidate_module_closure(candidate_root, scenario_id):
         payload[relative] = confined_candidate_file(candidate_root, relative).read_text(encoding="utf-8")
     encoded = json.dumps(payload, sort_keys=True, separators=(",", ":"), ensure_ascii=False).encode("utf-8")
     return hashlib.sha256(encoded).hexdigest()
