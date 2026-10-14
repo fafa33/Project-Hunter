@@ -1770,6 +1770,24 @@ def test_replay_sandboxes_mask_host_run_sockets_after_binding_the_host_root(monk
     assert command.index("--ro-bind") < command.index("/run") and command[command.index("/run") - 1] == "--tmpfs"
 
 
+def test_fixture_is_restored_before_each_worker_launch(tmp_path, monkeypatch):
+    fixture = tmp_path / "fixture.json"
+    victim = tmp_path / "victim.txt"
+    victim.write_text("keep", encoding="utf-8")
+    fixture.symlink_to(victim)
+    seen = []
+
+    def fake_run(*_args, **_kwargs):
+        seen.append(fixture.read_text(encoding="utf-8"))
+        raise RuntimeError("stop")
+
+    monkeypatch.setattr(replay.subprocess, "run", fake_run)
+    with pytest.raises(RuntimeError, match="stop"):
+        replay._run_scenario("A", tmp_path / "candidate", fixture, workspace_root=tmp_path)
+    assert json.loads(seen[0]) == replay.FIXTURE
+    assert not fixture.is_symlink() and victim.read_text(encoding="utf-8") == "keep"
+
+
 def _scripts_candidate(tmp_path, files):
     candidate = tmp_path / "candidate"
     (candidate / "scripts").mkdir(parents=True)

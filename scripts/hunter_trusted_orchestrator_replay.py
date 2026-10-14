@@ -319,6 +319,10 @@ def _run_scenario(
 ) -> dict[str, Any]:
     if scenario_id not in REQUIRED_SCENARIO_IDS:
         raise ValueError(f"scenario_id {scenario_id!r} is not one of the canonical {REQUIRED_SCENARIO_IDS}")
+    # The workspace is writable inside the sandbox, so a previous scenario's candidate code could have rewritten
+    # the fixture. Restore the canonical bytes (replacing any file or symlink) before every worker launch.
+    fixture_path.unlink(missing_ok=True)
+    fixture_path.write_text(json.dumps(FIXTURE, sort_keys=True), encoding="utf-8")
     started = datetime.now(UTC)
     process = subprocess.run(
         _network_isolated_worker_command(
