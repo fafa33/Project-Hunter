@@ -1685,32 +1685,6 @@ def test_regular_confined_candidate_module_is_accepted(tmp_path):
     worker.assert_candidate_scripts_confined(candidate)
 
 
-def _candidate_with_helper(tmp_path, helper_body):
-    candidate = tmp_path / "candidate"
-    (candidate / "scripts").mkdir(parents=True)
-    (candidate / "scripts" / "hunter_review_orchestrator.py").write_text(
-        "import json\nimport hunter_helper\nfrom hunter_helper import value\n", encoding="utf-8"
-    )
-    (candidate / "scripts" / "hunter_helper.py").write_text(helper_body, encoding="utf-8")
-    return candidate
-
-
-def test_digest_covers_transitively_imported_candidate_helpers(tmp_path):
-    candidate = _candidate_with_helper(tmp_path, "value = 1\n")
-    assert "scripts/hunter_helper.py" in worker.candidate_module_closure(candidate, "A")
-    before = worker.candidate_module_digest(candidate, "A")
-    (candidate / "scripts" / "hunter_helper.py").write_text("value = 2\n", encoding="utf-8")
-    assert worker.candidate_module_digest(candidate, "A") != before
-
-
-def test_unrelated_candidate_files_do_not_change_the_digest(tmp_path):
-    candidate = _candidate_with_helper(tmp_path, "value = 1\n")
-    (candidate / "scripts" / "hunter_unrelated.py").write_text("x = 1\n", encoding="utf-8")
-    before = worker.candidate_module_digest(candidate, "A")
-    (candidate / "scripts" / "hunter_unrelated.py").write_text("x = 2\n", encoding="utf-8")
-    assert worker.candidate_module_digest(candidate, "A") == before
-
-
 def test_publisher_resolves_both_validation_job_conclusions_from_the_triggering_run():
     import yaml
 
@@ -1758,47 +1732,6 @@ def test_replay_step_launches_the_sandbox_with_a_cleared_environment():
     assert "env -i " in run and run.index("env -i ") < run.index("/usr/bin/bwrap")
 
 
-def test_digest_closure_covers_candidate_packages_and_submodules(tmp_path):
-    candidate = tmp_path / "candidate"
-    (candidate / "scripts" / "hunter_pkg").mkdir(parents=True)
-    (candidate / "scripts" / "hunter_review_orchestrator.py").write_text(
-        "from hunter_pkg import sub\n", encoding="utf-8"
-    )
-    (candidate / "scripts" / "hunter_pkg" / "__init__.py").write_text("", encoding="utf-8")
-    (candidate / "scripts" / "hunter_pkg" / "sub.py").write_text("value = 1\n", encoding="utf-8")
-    closure = worker.candidate_module_closure(candidate, "A")
-    assert "scripts/hunter_pkg/__init__.py" in closure and "scripts/hunter_pkg/sub.py" in closure
-    before = worker.candidate_module_digest(candidate, "A")
-    (candidate / "scripts" / "hunter_pkg" / "sub.py").write_text("value = 2\n", encoding="utf-8")
-    assert worker.candidate_module_digest(candidate, "A") != before
-
-
-@pytest.mark.parametrize(
-    "body",
-    [
-        "import importlib\nimportlib.import_module('hunter_helper')\n",
-        "__import__('hunter_helper')\n",
-        "exec(open('x').read())\n",
-        "import runpy\nrunpy.run_path('x.py')\n",
-        "loader = __import__\nloader('hunter_helper')\n",
-        "from runpy import run_path\nrun_path('x.py')\n",
-        "import importlib\ngetattr(importlib, 'import_module')('hunter_helper')\n",
-    ],
-)
-def test_dynamic_import_forms_in_candidate_modules_are_refused(tmp_path, body):
-    candidate = tmp_path / "candidate"
-    (candidate / "scripts").mkdir(parents=True)
-    (candidate / "scripts" / "hunter_review_orchestrator.py").write_text(body, encoding="utf-8")
-    with pytest.raises(ValueError, match="dynamic import"):
-        worker.candidate_module_digest(candidate, "A")
-
-
-def test_real_candidate_closure_uses_no_dynamic_import_forms():
-    root = Path(__file__).resolve().parents[1]
-    for scenario in ("A", "B", "G"):
-        assert worker.candidate_module_closure(root, scenario)
-
-
 def test_import_path_drops_the_trusted_scripts_directory_so_missing_helpers_do_not_fall_back(tmp_path):
     trusted = tmp_path / "trusted" / "scripts"
     trusted.mkdir(parents=True)
@@ -1810,14 +1743,6 @@ def test_import_path_drops_the_trusted_scripts_directory_so_missing_helpers_do_n
     assert result == [str(candidate_scripts.resolve()), str(other)]
 
 
-def test_relative_imports_in_candidate_modules_are_refused(tmp_path):
-    candidate = tmp_path / "candidate"
-    (candidate / "scripts").mkdir(parents=True)
-    (candidate / "scripts" / "hunter_review_orchestrator.py").write_text("from . import sibling\n", encoding="utf-8")
-    with pytest.raises(ValueError, match="relative import"):
-        worker.candidate_module_digest(candidate, "A")
-
-
 def test_replay_sandbox_uses_a_private_dev_tree_not_the_host_devices():
     import yaml
 
@@ -1827,10 +1752,41 @@ def test_replay_sandbox_uses_a_private_dev_tree_not_the_host_devices():
     assert runs.count("--dev /dev") == 2
 
 
-def test_an_ordinary_variable_named_like_a_loader_is_not_refused(tmp_path):
+def _scripts_candidate(tmp_path, files):
     candidate = tmp_path / "candidate"
     (candidate / "scripts").mkdir(parents=True)
-    (candidate / "scripts" / "hunter_review_orchestrator.py").write_text(
-        "run_path = 'workflow.yml'\nprint(run_path)\n", encoding="utf-8"
-    )
-    assert len(worker.candidate_module_digest(candidate, "A")) == 64
+    (candidate / "scripts" / "hunter_review_orchestrator.py").write_text("X = 1\n", encoding="utf-8")
+    for relative, content in files.items():
+        target = candidate / "scripts" / relative
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_bytes(content)
+    return candidate
+
+
+@pytest.mark.parametrize(
+    "relative",
+    ["hunter_helper.py", "hunter_pkg/__init__.py", "hunter_pkg/sub.py", "native.so", "__pycache__/x.cpython-311.pyc"],
+)
+def test_digest_binds_to_every_file_in_the_candidate_scripts_tree(tmp_path, relative):
+    candidate = _scripts_candidate(tmp_path, {relative: b"one"})
+    before = worker.candidate_module_digest(candidate, "A")
+    (candidate / "scripts" / relative).write_bytes(b"two")
+    assert worker.candidate_module_digest(candidate, "A") != before
+
+
+def test_adding_any_file_to_the_scripts_tree_changes_the_digest(tmp_path):
+    candidate = _scripts_candidate(tmp_path, {})
+    before = worker.candidate_module_digest(candidate, "A")
+    (candidate / "scripts" / "hunter_new.py").write_text("y = 1\n", encoding="utf-8")
+    assert worker.candidate_module_digest(candidate, "A") != before
+
+
+def test_a_declared_entry_module_missing_from_the_tree_is_refused(tmp_path):
+    candidate = tmp_path / "candidate"
+    (candidate / "scripts").mkdir(parents=True)
+    with pytest.raises(ValueError, match="missing"):
+        worker.candidate_module_digest(candidate, "A")
+
+
+def test_the_worker_never_writes_bytecode_into_the_candidate_tree():
+    assert sys.dont_write_bytecode is True

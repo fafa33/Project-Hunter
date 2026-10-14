@@ -32,7 +32,6 @@ harness/production drift rather than for a real regression.
 from __future__ import annotations
 
 import argparse
-import ast
 import hashlib
 import importlib
 import json
@@ -50,6 +49,9 @@ from typing import Any
 #: digest a scenario reports is provably scoped to the modules it actually
 #: touched, and so the trusted validator can recompute the identical digest
 #: from its own, independent candidate checkout.
+# Never write bytecode into the candidate tree: it must stay byte-identical to a fresh checkout.
+sys.dont_write_bytecode = True
+
 CANDIDATE_MODULE_FILES: dict[str, tuple[str, ...]] = {
     "A": ("scripts/hunter_review_orchestrator.py",),
     "B": ("scripts/hunter_review_orchestrator.py",),
@@ -91,12 +93,14 @@ def confined_candidate_file(candidate_root: Path, relative: str) -> Path:
 
 
 def assert_candidate_scripts_confined(candidate_root: Path) -> None:
-    """Every module a candidate script could import by name from ``scripts/`` must be confined (see above)."""
+    """Every entry of the candidate ``scripts/`` tree must be a regular, physically confined file or directory.
+
+    A symlinked subdirectory (``scripts/helpers -> /outside``) would otherwise make ``import helpers.module`` read
+    files outside the candidate checkout, and any symlinked file would let the proof cover base code.
+    """
     scripts = candidate_root / "scripts"
     if scripts.is_symlink():
         raise ValueError("candidate scripts directory is a symlink and is refused")
-    # Walk the whole tree: a symlinked subdirectory (``scripts/helpers -> /outside``) would otherwise make
-    # ``import helpers.module`` read files outside the candidate checkout.
     for current, directories, files in os.walk(scripts, followlinks=False):
         for name in [*directories, *files]:
             path = Path(current) / name
@@ -105,93 +109,34 @@ def assert_candidate_scripts_confined(candidate_root: Path) -> None:
                     f"candidate path {str(path.relative_to(candidate_root))!r} is a symlink and is refused"
                 )
         for name in files:
-            if name.endswith(".py"):
-                confined_candidate_file(candidate_root, str((Path(current) / name).relative_to(candidate_root)))
+            confined_candidate_file(candidate_root, str((Path(current) / name).relative_to(candidate_root)))
 
 
-#: Calls that load code by a computed name or path; none of the replayed modules use them, so any appearance is refused.
-DYNAMIC_IMPORT_CALLS = frozenset(
-    {
-        "import_module",
-        "__import__",
-        "exec",
-        "eval",
-        "run_path",
-        "run_module",
-        "spec_from_file_location",
-        "load_module",
-        "exec_module",
-    }
-)
-
-
-#: Bare names that are loaders on their own (builtins). Other loader names only count as attributes
-#: (``importlib.import_module``), as strings (``getattr(importlib, "import_module")``) or as imported names, so an
-#: ordinary local variable that happens to be called ``run_path`` is not mistaken for ``runpy.run_path``.
-BUILTIN_LOADERS = frozenset({"__import__", "exec", "eval"})
-
-
-def _loader_mention(node: ast.AST) -> str | None:
-    if isinstance(node, ast.Name):
-        return node.id if node.id in BUILTIN_LOADERS else None
-    if isinstance(node, ast.Attribute):
-        return node.attr
-    if isinstance(node, ast.Constant) and isinstance(node.value, str):
-        return node.value
-    if isinstance(node, ast.ImportFrom):
-        return next((alias.name for alias in node.names if alias.name in DYNAMIC_IMPORT_CALLS), None)
-    return None
-
-
-def candidate_module_closure(candidate_root: Path, scenario_id: str) -> list[str]:
-    """The declared candidate modules plus every ``scripts/`` module they import, transitively.
-
-    The digest must bind to all candidate code a scenario can execute, not only the entry modules: a helper
-    imported by an entry module can change the replayed behavior while the entry file stays byte-identical.
-    Only modules that exist as ``scripts/<name>.py`` in the candidate are followed (standard library and installed
-    packages are not candidate-controlled); every followed file goes through ``confined_candidate_file``.
-    """
-    seen: set[str] = set()
-    pending = list(CANDIDATE_MODULE_FILES[scenario_id])
-    while pending:
-        relative = pending.pop()
-        if relative in seen:
-            continue
-        seen.add(relative)
-        tree = ast.parse(confined_candidate_file(candidate_root, relative).read_text(encoding="utf-8"))
-        for node in ast.walk(tree):
-            # Any mention of a loader -- called, aliased (``loader = __import__``), passed around, or named in a
-            # string for ``getattr`` -- is refused, not only a direct call: a computed import cannot be resolved
-            # statically, so the digest could not bind to what actually runs.
-            mentioned = _loader_mention(node)
-            if mentioned in DYNAMIC_IMPORT_CALLS:
-                raise ValueError(
-                    f"candidate module {relative!r} uses a dynamic import form ({mentioned}) and is refused"
-                )
-            if isinstance(node, ast.ImportFrom) and node.level > 0:
-                raise ValueError(f"candidate module {relative!r} uses a relative import and is refused")
-            if isinstance(node, ast.Import):
-                names = [alias.name for alias in node.names]
-            elif isinstance(node, ast.ImportFrom) and node.level == 0 and node.module:
-                names = [node.module, *(f"{node.module}.{alias.name}" for alias in node.names)]
-            else:
-                continue
-            for name in names:
-                parts = name.split(".")
-                for depth in range(1, len(parts) + 1):
-                    prefix = "/".join(parts[:depth])
-                    # A module may be a plain file or a package (``__init__.py``); every package level is code too.
-                    for helper in (f"scripts/{prefix}.py", f"scripts/{prefix}/__init__.py"):
-                        helper_path = candidate_root / helper
-                        if helper not in seen and (helper_path.is_symlink() or helper_path.is_file()):
-                            pending.append(helper)
-    return sorted(seen)
+def candidate_scripts_files(candidate_root: Path) -> list[str]:
+    """Every file under the candidate ``scripts/`` tree, of any type, as sorted repository-relative paths."""
+    assert_candidate_scripts_confined(candidate_root)
+    found = []
+    for current, _directories, files in os.walk(candidate_root / "scripts", followlinks=False):
+        found.extend(str((Path(current) / name).relative_to(candidate_root)) for name in files)
+    return sorted(found)
 
 
 def candidate_module_digest(candidate_root: Path, scenario_id: str) -> str:
-    payload = {}
-    for relative in candidate_module_closure(candidate_root, scenario_id):
-        payload[relative] = confined_candidate_file(candidate_root, relative).read_text(encoding="utf-8")
+    """Digest of the **whole** candidate ``scripts/`` tree (every file, any type), not a traced import closure.
+
+    Tracing what a scenario imports statically is incomplete by construction (aliased or computed loaders,
+    ``.so``/``.pyc`` modules, packages, relative imports). Binding the proof to every file the interpreter could
+    possibly import from the candidate's ``scripts/`` directory makes all of those routes irrelevant: if any such
+    file changes, the digest changes. The declared entry modules must be present in that tree.
+    """
+    files = candidate_scripts_files(candidate_root)
+    missing = [relative for relative in CANDIDATE_MODULE_FILES[scenario_id] if relative not in files]
+    if missing:
+        raise ValueError(f"declared candidate modules are missing from the scripts tree: {missing}")
+    payload = {
+        relative: hashlib.sha256(confined_candidate_file(candidate_root, relative).read_bytes()).hexdigest()
+        for relative in files
+    }
     encoded = json.dumps(payload, sort_keys=True, separators=(",", ":"), ensure_ascii=False).encode("utf-8")
     return hashlib.sha256(encoded).hexdigest()
 
@@ -883,6 +828,8 @@ def main() -> int:
     fixture = json.loads(fixture_path.read_text(encoding="utf-8"))
     scenario_id = args.scenario
 
+    # Computed before any candidate code runs, so it covers exactly the pristine tree a fresh checkout has.
+    module_digest = candidate_module_digest(candidate_root, scenario_id)
     result: dict[str, Any] = {"scenario_id": scenario_id}
     result.update(_run_scenario_isolated(scenario_id, candidate_root, fixture))
     # Computed here, in this process, which never imports candidate code
@@ -890,7 +837,7 @@ def main() -> int:
     # _run_scenario_isolated) -- and never accepted from anything that child
     # reported, so a forged claim in its (untrusted) pipe messages cannot
     # substitute a fake digest for the real one.
-    result["candidate_module_digest"] = candidate_module_digest(candidate_root, scenario_id)
+    result["candidate_module_digest"] = module_digest
     print(json.dumps(result, sort_keys=True, separators=(",", ":"), ensure_ascii=False))
     return 0
 
