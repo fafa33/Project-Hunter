@@ -1570,7 +1570,7 @@ def test_worker_post_started_timeout_budget_with_controlled_clock(monkeypatch):
         clock = Clock()
         pipe = Pipe(clock, finish_delay)
         monkeypatch.setattr(worker.time, "monotonic", clock.monotonic)
-        monkeypatch.setattr(worker.mp, "get_context", lambda method: Context(pipe))
+        monkeypatch.setattr(worker.mp, "get_context", lambda method, pipe=pipe: Context(pipe))
         monkeypatch.setattr(worker, "SCENARIO_CHILD_TIMEOUT_SECONDS", 60)
         result = worker._run_scenario_isolated("A", REPO_ROOT, {})
         assert result["outcome"] == expected
