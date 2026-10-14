@@ -18,12 +18,13 @@ import hunter_defect_prevention_preflight as prevention
 import hunter_finding_proof as proof
 import pytest
 
-PROVISIONED_MARKER = "hunter-bwrap-provisioned"
-
 
 def _provisioned() -> bool:
+    # Inside the trusted-lane sandbox RUNNER_TEMP is masked, so the controller passes a signal instead.
+    if os.environ.get(prevention.PROVISIONED_ENV) == "1":
+        return True
     runner_temp = os.environ.get("RUNNER_TEMP")
-    return bool(runner_temp) and (Path(runner_temp) / PROVISIONED_MARKER).exists()
+    return bool(runner_temp) and (Path(runner_temp) / prevention.PROVISIONED_MARKER).exists()
 
 
 def _usable() -> bool:
@@ -65,15 +66,13 @@ def _inside_command(command: list[str], tmp_path: Path, *, env: dict[str, str] |
 
 
 def test_home_and_credential_trees_are_masked(tmp_path: Path):
-    secret = Path.home() / ".hunter-bwrap-secret"
-    secret.write_text("credential")
-    try:
+    with tempfile.NamedTemporaryFile(dir=Path.home(), prefix=".hunter-bwrap-secret-") as handle:
+        secret = Path(handle.name)
+        secret.write_text("credential")
         result, _ = _inside(
             f"import os; print(os.path.exists({str(secret)!r}), os.listdir('/root') if os.path.isdir('/root') else [])",
             tmp_path,
         )
-    finally:
-        secret.unlink(missing_ok=True)
     assert result.returncode == 0, result.stderr
     assert result.stdout.split(None, 1)[0] == "False"
     assert result.stdout.strip().endswith("[]")

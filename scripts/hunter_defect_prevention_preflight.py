@@ -2401,6 +2401,8 @@ def verify_trusted_parallel_runner() -> int:
 #: local-import closure, bound over the candidate's same paths, so a candidate cannot no-op or weaken the guard
 #: that judges it; everything else they read (docs, workflows, src, tests) is the candidate's, as data.
 GUARD_GATES = frozenset({"Architecture Index Guard", "Artifact Guard", "Defect Prevention Guard"})
+PROVISIONED_MARKER = "hunter-bwrap-provisioned"
+PROVISIONED_ENV = "HUNTER_BWRAP_PROVISIONED"
 GATE_ENV_ALLOWLIST = (
     "PATH",
     "LANG",
@@ -2417,6 +2419,10 @@ def gate_environment(source: Mapping[str, str]) -> dict[str, str]:
     """The only environment candidate code sees: no tokens, credentials, proxies or runner secrets."""
     env = {name: source[name] for name in GATE_ENV_ALLOWLIST if name in source}
     env["HOME"] = finding_proof.SANDBOX_TMP
+    runner_temp = source.get("RUNNER_TEMP")
+    if runner_temp and (Path(runner_temp) / PROVISIONED_MARKER).is_file():
+        # The marker file lives under the masked /home, so hand the sandbox a trusted signal instead.
+        env[PROVISIONED_ENV] = "1"
     return env
 
 

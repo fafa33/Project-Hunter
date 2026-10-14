@@ -979,3 +979,16 @@ def test_execution_context_of_the_proof_and_preflight_steps_cannot_be_redirected
     assert mutate(lambda d: d["jobs"]["preflight"].update({"env": {"PATH": "/tmp/bypass"}}))
     assert mutate(lambda d: d["jobs"]["preflight"].update({"defaults": {"run": {"working-directory": "bypass"}}}))
     assert mutate(lambda d: d.update({"env": {"PATH": "/tmp/bypass"}}))
+
+
+def test_provisioned_bwrap_signal_reaches_the_sandbox_only_from_the_trusted_marker(tmp_path: Path) -> None:
+    """RUNNER_TEMP is masked inside the sandbox, so the controller must pass the provisioned signal explicitly."""
+    base = {"PATH": "/usr/bin", "RUNNER_TEMP": str(tmp_path)}
+    assert prevention.PROVISIONED_ENV not in prevention.gate_environment(base)
+    (tmp_path / prevention.PROVISIONED_MARKER).write_text("")
+    env = prevention.gate_environment(base)
+    assert env[prevention.PROVISIONED_ENV] == "1"
+    assert "RUNNER_TEMP" not in env
+    # A candidate-supplied variable of the same name in the source environment is not forwarded as-is.
+    forged = prevention.gate_environment({"PATH": "/usr/bin", prevention.PROVISIONED_ENV: "1"})
+    assert prevention.PROVISIONED_ENV not in forged
