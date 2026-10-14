@@ -2151,6 +2151,59 @@ def _step_executes(run: object, command: str) -> bool:
     return False
 
 
+# The mode step and the preflight invocation are pinned to their canonical content: any other script could
+# select the tests-first-red lane (which skips the reviewer proof) while the head is admitted as normal.
+CANONICAL_MODE_RUN = """set -euo pipefail
+PREFLIGHT_MODE=normal
+if [ -f .hunter-preflight-mode ]; then
+  PREFLIGHT_MODE="$(cat .hunter-preflight-mode)"
+  if [ "${PREFLIGHT_MODE}" != "tests-first-red" ]; then
+    echo "::error::.hunter-preflight-mode must contain exactly tests-first-red"
+    exit 2
+  fi
+fi
+echo "mode=${PREFLIGHT_MODE}" >> "${GITHUB_OUTPUT}"
+echo "Selected preflight mode: ${PREFLIGHT_MODE}"
+"""
+PROOF_COMMAND = "python scripts/hunter_finding_proof.py"
+PREFLIGHT_COMMAND = "python scripts/hunter_pr_preflight.py"
+CANONICAL_PREFLIGHT_RUN = 'python scripts/hunter_pr_preflight.py --mode "${PREFLIGHT_MODE}"'
+CANONICAL_PREFLIGHT_MODE_ENV = "${{ steps.preflight-mode.outputs.mode }}"
+_MODE_TAMPER_MARKERS = (".hunter-preflight-mode", "GITHUB_ENV", "PREFLIGHT_MODE")
+
+
+def _normalized_script(run: object) -> str:
+    return "\n".join(line.rstrip() for line in str(run).strip().splitlines())
+
+
+def _mode_contract_errors(
+    job: dict[str, Any], steps: list[dict[str, Any]], mode_index: int, preflight_index: int
+) -> str | None:
+    """Return a problem with the mode/preflight contract of the selected job, or None when it holds."""
+    mode_step = steps[mode_index]
+    runner = steps[preflight_index]
+    if any(key in mode_step for key in ("if", "env", "shell", "working-directory", "continue-on-error")):
+        return "candidate preflight-mode step must be unconditional and carry no env/shell overrides"
+    if _normalized_script(mode_step.get("run")) != _normalized_script(CANONICAL_MODE_RUN):
+        return "candidate preflight-mode step must be the canonical mode script"
+    if "PREFLIGHT_MODE" in str(job.get("env", "")):
+        return "candidate preflight job must not override PREFLIGHT_MODE"
+    for index, other in enumerate(steps):
+        if index != mode_index and any(marker in str(other.get("run", "")) for marker in _MODE_TAMPER_MARKERS[:2]):
+            return "only the preflight-mode step may read or write the preflight mode marker or environment"
+    if _normalized_script(runner.get("run")) != CANONICAL_PREFLIGHT_RUN:
+        return "candidate preflight step must be exactly the canonical mode-driven invocation"
+    if (
+        runner.get("continue-on-error") not in (None, False)
+        or str(runner.get("if", "true")).strip() not in {"true", "${{ true }}"}
+        or (runner.get("env") or {}).get("PREFLIGHT_MODE") != CANONICAL_PREFLIGHT_MODE_ENV
+    ):
+        return "candidate preflight step must run unconditionally, propagate failure and take the published mode"
+    if preflight_index < mode_index:
+        return "candidate preflight step must follow the preflight-mode step"
+    return None
+
+
 _MODE_ASSIGNMENTS = frozenset({"PREFLIGHT_MODE=normal", 'PREFLIGHT_MODE="$(cat .hunter-preflight-mode)"'})
 _MODE_OUTPUT = 'echo "mode=${PREFLIGHT_MODE}" >> "${GITHUB_OUTPUT}"'
 
@@ -2174,8 +2227,8 @@ def _mode_step_contract_holds(run: str) -> bool:
 def _reviewer_proof_step_errors(workflow_text: str) -> list[str]:
     """The reviewer proof gate is judged on parsed job steps, never on raw text a comment or scalar could fake.
 
-    The proof step must live in the same job as the preflight command, after the step that defines the
-    ``preflight-mode`` output it is conditioned on, so it cannot be parked in a job that never runs.
+    The proof step must live in the same job as the preflight command, after the pinned ``preflight-mode``
+    step that defines the output it is conditioned on, so it cannot be parked in a job that never runs.
     """
     import yaml
 
@@ -2192,56 +2245,24 @@ def _reviewer_proof_step_errors(workflow_text: str) -> list[str]:
             continue
         if str(job.get("if", "true")).strip() not in {"true", "${{ true }}"} or job.get("needs"):
             continue
-        indexes = {
-            "mode": [i for i, step in enumerate(steps) if step.get("id") == "preflight-mode"],
-            "proof": [
-                i
-                for i, step in enumerate(steps)
-                if str(step.get("run", "")).strip() == "python scripts/hunter_finding_proof.py"
-            ],
-            "preflight": [
-                i
-                for i, step in enumerate(steps)
-                if _step_executes(step.get("run", ""), "python scripts/hunter_pr_preflight.py")
-            ],
-        }
-        if not (indexes["proof"] and indexes["preflight"]):
+        mode = [i for i, step in enumerate(steps) if step.get("id") == "preflight-mode"]
+        proof = [i for i, step in enumerate(steps) if _step_executes(step.get("run", ""), PROOF_COMMAND)]
+        preflight = [i for i, step in enumerate(steps) if _step_executes(step.get("run", ""), PREFLIGHT_COMMAND)]
+        if not (proof and preflight):
             continue
         if job.get("continue-on-error") not in (None, False):
             return ["candidate preflight job must not set continue-on-error"]
-        runner = steps[indexes["preflight"][-1]]
-        if runner.get("continue-on-error") not in (None, False) or str(runner.get("if", "true")).strip() not in {
-            "true",
-            "${{ true }}",
-        }:
-            return ["candidate preflight step must run unconditionally and propagate failure"]
-        proof = steps[indexes["proof"][0]]
-        if not indexes["mode"] or indexes["mode"][0] >= indexes["proof"][0]:
+        if not mode or mode[0] >= proof[0]:
             return ["candidate preflight reviewer proof must follow the preflight-mode step in the same job"]
-        mode_step = steps[indexes["mode"][0]]
-        if mode_step.get("continue-on-error") not in (None, False) or mode_step.get("if") not in (None, True):
-            return ["candidate preflight-mode step must run unconditionally"]
-        if not _mode_step_contract_holds(str(mode_step.get("run", ""))):
-            return ["candidate preflight-mode step must default to normal and publish mode=... to GITHUB_OUTPUT"]
-        runner = steps[indexes["preflight"][-1]]
-        if runner.get("continue-on-error") not in (None, False) or str(runner.get("if", "true")).strip() not in {
-            "true",
-            "${{ true }}",
-        }:
-            return ["candidate preflight step must run unconditionally and propagate failure"]
-        proof = steps[indexes["proof"][0]]
-        if not indexes["mode"] or indexes["mode"][0] >= indexes["proof"][0]:
-            return ["candidate preflight reviewer proof must follow the preflight-mode step in the same job"]
-        mode_run = str(steps[indexes["mode"][0]].get("run", ""))
-        if (
-            not re.search(r"^\s*PREFLIGHT_MODE=normal\s*$", mode_run, re.MULTILINE)
-            or not re.search(r'echo\s+"mode=\$\{PREFLIGHT_MODE\}"\s*>>\s*"\$\{GITHUB_OUTPUT\}"', mode_run)
-            or steps[indexes["mode"][0]].get("continue-on-error") not in (None, False)
-        ):
-            return ["candidate preflight-mode step must default to normal and publish mode=... to GITHUB_OUTPUT"]
-        if proof.get("continue-on-error") not in (None, False):
+        problem = _mode_contract_errors(job, steps, mode[0], preflight[-1])
+        if problem:
+            return [problem]
+        gate = steps[proof[0]]
+        if _normalized_script(gate.get("run")) != PROOF_COMMAND:
+            return ["candidate preflight reviewer proof step must run exactly the proof command"]
+        if gate.get("continue-on-error") not in (None, False):
             return ["candidate preflight reviewer proof step must not set continue-on-error"]
-        if str(proof.get("if", "")).strip() != "${{ steps.preflight-mode.outputs.mode == 'normal' }}":
+        if str(gate.get("if", "")).strip() != "${{ steps.preflight-mode.outputs.mode == 'normal' }}":
             return ["candidate preflight workflow must bind reviewer proof to normal preflight mode"]
         return []
     return ["candidate preflight workflow omits mandatory reviewer RED/GREEN proof gate in the preflight job"]
@@ -2386,6 +2407,16 @@ def run_candidate_quality_gates(candidate_root: Path) -> int:
             flush=True,
         )
         return 2
+
+    # The reviewer RED/GREEN proof runs here from THIS (trusted, default-branch) copy of the proof runner and its
+    # pinned legacy fingerprints, against the candidate's dispositions and tests; the candidate's own runner is
+    # never what attests its findings.
+    proof_errors = finding_proof.collect_errors(candidate_root)
+    for problem in proof_errors:
+        print(f"[Trusted Candidate Gates] FAIL: reviewer finding proof: {problem}", flush=True)
+    if proof_errors:
+        return 2
+    print("[Trusted Candidate Gates] PASS: reviewer finding proof (trusted runner)", flush=True)
 
     for name, command in TRUSTED_CANDIDATE_QUALITY_GATES:
         printable = " ".join(command)

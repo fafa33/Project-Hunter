@@ -406,6 +406,7 @@ def test_the_trusted_gate_commands_are_unchanged_by_the_lane(monkeypatch: pytest
         return SimpleNamespace(returncode=0)
 
     monkeypatch.setattr(prevention.subprocess, "run", fake_run)
+    monkeypatch.setattr(prevention.finding_proof, "collect_errors", lambda root: [])
 
     monkeypatch.setenv("PYTEST_ADDOPTS", " ".join(prevention.TRUSTED_PARALLEL_LANE))
     assert prevention.run_candidate_quality_gates(tmp_path) == 0
@@ -444,17 +445,9 @@ def _candidate_tree(tmp_path: Path) -> Path:
     (root / ".github" / "workflows").mkdir(parents=True)
     (root / "scripts").mkdir()
     (root / ".github" / "workflows" / "hunter-pre-pr-preflight.yml").write_text(
-        "jobs:\n"
-        "  preflight:\n"
-        "    steps:\n"
-        "      - id: preflight-mode\n"
-        "        run: |\n"
-        "          PREFLIGHT_MODE=normal\n"
-        '          echo "mode=${PREFLIGHT_MODE}" >> "${GITHUB_OUTPUT}"\n'
-        "      - name: Verify bounded reviewer RED GREEN and adversarial proofs\n"
-        "        if: ${{ steps.preflight-mode.outputs.mode == 'normal' }}\n"
-        "        run: python scripts/hunter_finding_proof.py\n"
-        "      - run: python scripts/hunter_pr_preflight.py --mode normal\n",
+        (Path(prevention.__file__).resolve().parent.parent / ".github/workflows/hunter-pre-pr-preflight.yml").read_text(
+            encoding="utf-8"
+        ),
         encoding="utf-8",
     )
     (root / "scripts" / "hunter_pr_preflight.py").write_text(
@@ -839,113 +832,6 @@ def test_the_governance_identity_predicate_still_matches_this_workflow() -> None
     assert governance.TRUSTED_PROOF_WAITING_DESCRIPTION == "Waiting for trusted exact-head preflight proof"
 
 
-def test_reviewer_proof_gate_is_judged_on_parsed_steps_not_comment_text():
-    step = "- name: Verify bounded reviewer RED GREEN and adversarial proofs"
-    guard = "if: ${{ steps.preflight-mode.outputs.mode == 'normal' }}"
-    run = "python scripts/hunter_finding_proof.py"
-    pre = '      - id: preflight-mode\n        run: |\n          PREFLIGHT_MODE=normal\n          echo "mode=${PREFLIGHT_MODE}" >> "${GITHUB_OUTPUT}"\n'
-    tail = "      - run: python scripts/hunter_pr_preflight.py --mode normal\n"
-    real = f"jobs:\n  j:\n    steps:\n{pre}      {step}\n        {guard}\n        run: {run}\n{tail}"
-    faked = f"# {step}\n# {guard}\n# run: {run}\njobs:\n  j:\n    steps:\n      - run: echo ok\n"
-    conditional = real.replace(guard, "if: ${{ false }}")
-    soft = real.replace(f"        run: {run}\n", f"        run: {run}\n        continue-on-error: true\n")
-    assert prevention._reviewer_proof_step_errors(real) == []
-    assert prevention._reviewer_proof_step_errors(faked)
-    assert prevention._reviewer_proof_step_errors(conditional)
-    assert prevention._reviewer_proof_step_errors(soft)
-
-
-def test_reviewer_proof_in_a_separate_or_unbound_job_is_refused():
-    step = (
-        "      - name: Verify bounded reviewer RED GREEN and adversarial proofs\n"
-        "        if: ${{ steps.preflight-mode.outputs.mode == 'normal' }}\n"
-        "        run: python scripts/hunter_finding_proof.py\n"
-    )
-    preflight = "      - run: python scripts/hunter_pr_preflight.py --mode normal\n"
-    mode = '      - id: preflight-mode\n        run: |\n          PREFLIGHT_MODE=normal\n          echo "mode=${PREFLIGHT_MODE}" >> "${GITHUB_OUTPUT}"\n'
-    parked = f"jobs:\n  a:\n    steps:\n{step}  b:\n    steps:\n{mode}{preflight}"
-    unbound = f"jobs:\n  a:\n    steps:\n{step}{mode}{preflight}"
-    gated = f"jobs:\n  a:\n    if: ${{{{ false }}}}\n    steps:\n{mode}{step}{preflight}"
-    valid = f"jobs:\n  a:\n    steps:\n{mode}{step}{preflight}"
-    assert prevention._reviewer_proof_step_errors(parked)
-    assert prevention._reviewer_proof_step_errors(unbound)
-    assert prevention._reviewer_proof_step_errors(gated)
-    assert prevention._reviewer_proof_step_errors(valid) == []
-
-
-def test_job_level_continue_on_error_cannot_neutralise_the_reviewer_proof():
-    step = (
-        "      - name: Verify bounded reviewer RED GREEN and adversarial proofs\n"
-        "        if: ${{ steps.preflight-mode.outputs.mode == 'normal' }}\n"
-        "        run: python scripts/hunter_finding_proof.py\n"
-    )
-    body = (
-        '    steps:\n      - id: preflight-mode\n        run: |\n          PREFLIGHT_MODE=normal\n          echo "mode=${PREFLIGHT_MODE}" >> "${GITHUB_OUTPUT}"\n'
-        f"{step}      - run: python scripts/hunter_pr_preflight.py --mode normal\n"
-    )
-    assert prevention._reviewer_proof_step_errors(f"jobs:\n  a:\n{body}") == []
-    assert prevention._reviewer_proof_step_errors(f"jobs:\n  a:\n    continue-on-error: true\n{body}")
-
-
-def test_preflight_step_cannot_be_skipped_or_made_non_blocking():
-    base = (
-        'jobs:\n  a:\n    steps:\n      - id: preflight-mode\n        run: |\n          PREFLIGHT_MODE=normal\n          echo "mode=${PREFLIGHT_MODE}" >> "${GITHUB_OUTPUT}"\n'
-        "      - name: Verify bounded reviewer RED GREEN and adversarial proofs\n"
-        "        if: ${{ steps.preflight-mode.outputs.mode == 'normal' }}\n"
-        "        run: python scripts/hunter_finding_proof.py\n"
-        "      - run: python scripts/hunter_pr_preflight.py --mode normal\n"
-    )
-    assert prevention._reviewer_proof_step_errors(base) == []
-    assert prevention._reviewer_proof_step_errors(base + "        if: false\n")
-    assert prevention._reviewer_proof_step_errors(base + "        continue-on-error: true\n")
-
-
-def test_a_mode_step_that_never_publishes_the_mode_output_is_refused():
-    fake = (
-        "jobs:\n  a:\n    steps:\n      - id: preflight-mode\n        run: echo mode\n"
-        "      - name: Verify bounded reviewer RED GREEN and adversarial proofs\n"
-        "        if: ${{ steps.preflight-mode.outputs.mode == 'normal' }}\n"
-        "        run: python scripts/hunter_finding_proof.py\n"
-        "      - run: python scripts/hunter_pr_preflight.py --mode normal\n"
-    )
-    assert any("preflight-mode step" in error for error in prevention._reviewer_proof_step_errors(fake))
-
-
-def test_a_preflight_command_mentioned_only_in_a_shell_comment_is_not_executed():
-    mode = '      - id: preflight-mode\n        run: |\n          PREFLIGHT_MODE=normal\n          echo "mode=${PREFLIGHT_MODE}" >> "${GITHUB_OUTPUT}"\n'
-    proof = (
-        "      - name: Verify bounded reviewer RED GREEN and adversarial proofs\n"
-        "        if: ${{ steps.preflight-mode.outputs.mode == 'normal' }}\n"
-        "        run: python scripts/hunter_finding_proof.py\n"
-    )
-    real = f"jobs:\n  a:\n    steps:\n{mode}{proof}      - run: python scripts/hunter_pr_preflight.py --mode normal\n"
-    commented = f"jobs:\n  a:\n    steps:\n{mode}{proof}      - run: |\n          # python scripts/hunter_pr_preflight.py\n          true\n"
-    echoed = f"jobs:\n  a:\n    steps:\n{mode}{proof}      - run: echo python scripts/hunter_pr_preflight.py\n"
-    assert prevention._reviewer_proof_step_errors(real) == []
-    assert prevention._reviewer_proof_step_errors(commented)
-    assert prevention._reviewer_proof_step_errors(echoed)
-
-
-def test_the_mode_step_cannot_be_disabled_or_given_a_second_output():
-    canonical = '          PREFLIGHT_MODE=normal\n          echo "mode=${PREFLIGHT_MODE}" >> "${GITHUB_OUTPUT}"\n'
-    proof = (
-        "      - name: Verify bounded reviewer RED GREEN and adversarial proofs\n"
-        "        if: ${{ steps.preflight-mode.outputs.mode == 'normal' }}\n"
-        "        run: python scripts/hunter_finding_proof.py\n"
-        "      - run: python scripts/hunter_pr_preflight.py --mode normal\n"
-    )
-
-    def workflow(extra_key: str = "", run: str = canonical) -> str:
-        return f"jobs:\n  a:\n    steps:\n      - id: preflight-mode\n{extra_key}        run: |\n{run}{proof}"
-
-    assert prevention._reviewer_proof_step_errors(workflow()) == []
-    assert prevention._reviewer_proof_step_errors(workflow("        if: false\n"))
-    second = canonical + '          echo "mode=tests-first-red" >> "${GITHUB_OUTPUT}"\n'
-    assert prevention._reviewer_proof_step_errors(workflow(run=second))
-    reassigned = canonical + "          PREFLIGHT_MODE=tests-first-red\n"
-    assert prevention._reviewer_proof_step_errors(workflow(run=reassigned))
-
-
 def test_a_command_that_merely_has_the_script_path_as_a_prefix_is_not_the_preflight():
     assert prevention._step_executes(
         "python scripts/hunter_pr_preflight.py --mode normal", "python scripts/hunter_pr_preflight.py"
@@ -957,3 +843,99 @@ def test_a_command_that_merely_has_the_script_path_as_a_prefix_is_not_the_prefli
     assert not prevention._step_executes(
         "python scripts/hunter_pr_preflight.pyc --mode normal", "python scripts/hunter_pr_preflight.py"
     )
+
+
+def _real_workflow() -> dict:
+    import yaml
+
+    path = Path(prevention.__file__).resolve().parent.parent / ".github/workflows/hunter-pre-pr-preflight.yml"
+    return yaml.safe_load(path.read_text(encoding="utf-8"))
+
+
+def _errors(document: dict) -> list[str]:
+    import yaml
+
+    return prevention._reviewer_proof_step_errors(yaml.safe_dump(document, sort_keys=False))
+
+
+def _step(document: dict, predicate) -> dict:
+    return next(step for step in document["jobs"]["preflight"]["steps"] if predicate(step))
+
+
+def test_the_real_preflight_workflow_satisfies_the_pinned_contract():
+    assert _errors(_real_workflow()) == []
+
+
+def test_mode_and_preflight_steps_are_pinned_to_their_canonical_content():
+    def mutate(change) -> list[str]:
+        document = _real_workflow()
+        change(document)
+        return _errors(document)
+
+    def mode(document):
+        return _step(document, lambda step: step.get("id") == "preflight-mode")
+
+    def runner(document):
+        return _step(document, lambda step: "hunter_pr_preflight" in str(step.get("run", "")))
+
+    def proof(document):
+        return _step(document, lambda step: "hunter_finding_proof" in str(step.get("run", "")))
+
+    assert mutate(lambda d: mode(d).update({"if": False}))
+    assert mutate(lambda d: mode(d).update({"env": {"PREFLIGHT_MODE": "tests-first-red"}}))
+    assert mutate(
+        lambda d: mode(d).update({"run": mode(d)["run"] + 'echo "mode=tests-first-red" >> "${GITHUB_OUTPUT}"\n'})
+    )
+    assert mutate(
+        lambda d: mode(d).update({"run": mode(d)["run"].replace("PREFLIGHT_MODE=normal", "PREFLIGHT_MODE=other", 1)})
+    )
+    assert mutate(lambda d: d["jobs"]["preflight"].update({"env": {"PREFLIGHT_MODE": "tests-first-red"}}))
+    assert mutate(lambda d: d["jobs"]["preflight"].update({"continue-on-error": True}))
+    assert mutate(lambda d: runner(d).update({"run": runner(d)["run"] + " || true"}))
+    assert mutate(lambda d: runner(d).update({"run": "python scripts/hunter_pr_preflight.py --mode tests-first-red"}))
+    assert mutate(lambda d: runner(d).update({"if": False}))
+    assert mutate(lambda d: runner(d).update({"continue-on-error": True}))
+    assert mutate(lambda d: runner(d)["env"].update({"PREFLIGHT_MODE": "normal"}))
+    assert mutate(lambda d: proof(d).update({"if": False}))
+    assert mutate(lambda d: proof(d).update({"continue-on-error": True}))
+
+    def marker_writer(document):
+        steps = document["jobs"]["preflight"]["steps"]
+        steps.insert(1, {"run": "echo tests-first-red > .hunter-preflight-mode"})
+
+    assert mutate(marker_writer)
+
+    def parked(document):
+        steps = document["jobs"]["preflight"]["steps"]
+        gate = steps.pop(next(i for i, step in enumerate(steps) if "hunter_finding_proof" in str(step.get("run", ""))))
+        document["jobs"]["other"] = {"runs-on": "ubuntu-latest", "steps": [gate]}
+
+    assert mutate(parked)
+
+
+def test_a_commented_or_echoed_preflight_command_is_not_the_preflight():
+    document = _real_workflow()
+    runner = _step(document, lambda step: "hunter_pr_preflight" in str(step.get("run", "")))
+    runner["run"] = "# python scripts/hunter_pr_preflight.py\ntrue"
+    assert _errors(document)
+    runner["run"] = "echo python scripts/hunter_pr_preflight.py"
+    assert _errors(document)
+
+
+def test_the_trusted_lane_runs_the_trusted_proof_runner_before_any_candidate_gate(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    seen: list[Path] = []
+    executed: list[tuple[str, ...]] = []
+
+    def failing_proof(root: Path) -> list[str]:
+        seen.append(root)
+        return ["RFD-X: RED did not fail on vulnerable_sha"]
+
+    monkeypatch.setattr(prevention.finding_proof, "collect_errors", failing_proof)
+    monkeypatch.setattr(prevention.subprocess, "run", lambda command, **kwargs: executed.append(tuple(command)))
+    monkeypatch.delenv("PYTEST_ADDOPTS", raising=False)
+
+    assert prevention.run_candidate_quality_gates(tmp_path) == 2
+    assert seen == [tmp_path]
+    assert executed == []  # no candidate gate ran after a failed proof

@@ -91,9 +91,9 @@ def test_pytest_runs_with_scrubbed_environment_and_no_network(monkeypatch, tmp_p
         seen.update(command=command, env=kwargs["env"])
         return type("Result", (), {"returncode": 0, "stdout": "", "stderr": ""})()
 
-    monkeypatch.setattr(proof, "sandbox_prefix", lambda cwd: ["sandbox", "--unshare-net"])
+    monkeypatch.setattr(proof, "sandbox_prefix", lambda source, view: ["sandbox", "--unshare-net"])
     monkeypatch.setattr(proof.subprocess, "run", fake_run)
-    proof.run_pytest(["tests/test_example.py::test_regression"], cwd=tmp_path)
+    proof.run_pytest(["tests/test_example.py::test_regression"], source=tmp_path, view=tmp_path)
     assert seen["command"][:2] == ["sandbox", "--unshare-net"]
     assert "GITHUB_TOKEN" not in seen["env"] and "HTTPS_PROXY" not in seen["env"]
 
@@ -101,7 +101,7 @@ def test_pytest_runs_with_scrubbed_environment_and_no_network(monkeypatch, tmp_p
 def test_missing_sandbox_fails_closed(monkeypatch, tmp_path: Path):
     monkeypatch.setattr(proof, "trusted_bwrap", lambda: None)
     try:
-        proof.run_pytest(["tests/test_example.py::test_regression"], cwd=tmp_path)
+        proof.run_pytest(["tests/test_example.py::test_regression"], source=tmp_path, view=tmp_path)
     except proof.IsolationUnavailable:
         return
     raise AssertionError("an unsandboxed proof run must be refused")
@@ -110,7 +110,7 @@ def test_missing_sandbox_fails_closed(monkeypatch, tmp_path: Path):
 def test_unshare_only_fallback_is_refused(monkeypatch):
     monkeypatch.setattr(proof, "trusted_bwrap", lambda: None)
     try:
-        proof.sandbox_prefix(Path("."))
+        proof.sandbox_prefix(Path("."), Path("."))
     except proof.IsolationUnavailable:
         return
     raise AssertionError("a network-only namespace must not be accepted as isolation")
@@ -120,7 +120,7 @@ def test_sandbox_boundary_masks_credentials_and_keeps_baseline_worktree_visible(
     monkeypatch.setattr(proof, "trusted_bwrap", lambda: "/usr/bin/bwrap")
     worktree = tmp_path / "hunter-finding-red-x" / "repo"
     worktree.mkdir(parents=True)
-    argv = proof.sandbox_prefix(worktree)
+    argv = proof.sandbox_prefix(worktree, tmp_path)
 
     def position(*pair):
         return next(i for i in range(len(argv) - 1) if tuple(argv[i : i + 2]) == pair)
@@ -140,7 +140,7 @@ def test_sandbox_boundary_masks_credentials_and_keeps_baseline_worktree_visible(
 def test_sandbox_blocks_host_writes_and_credential_reads_when_bwrap_is_usable(tmp_path: Path):
     if not proof.trusted_bwrap():
         return
-    probe = proof.subprocess.run([*proof.sandbox_prefix(tmp_path), "true"], capture_output=True, check=False)
+    probe = proof.subprocess.run([*proof.sandbox_prefix(tmp_path, tmp_path), "true"], capture_output=True, check=False)
     if probe.returncode:
         return  # user namespaces unavailable on this host; the structural test above still binds the argv
     script = "\n".join(
@@ -158,7 +158,10 @@ def test_sandbox_blocks_host_writes_and_credential_reads_when_bwrap_is_usable(tm
         ]
     )
     result = proof.subprocess.run(
-        [*proof.sandbox_prefix(tmp_path), sys.executable, "-c", script], capture_output=True, text=True, check=False
+        [*proof.sandbox_prefix(tmp_path, tmp_path), sys.executable, "-c", script],
+        capture_output=True,
+        text=True,
+        check=False,
     )
     assert result.returncode == 0, result.stderr
     assert not Path("/tmp/hunter-sandbox-probe").exists()  # the sandbox tmpfs never reached the host /tmp
@@ -172,3 +175,69 @@ def test_bwrap_is_never_resolved_from_ambient_path(monkeypatch, tmp_path: Path):
     assert proof.trusted_bwrap() != str(fake)
     monkeypatch.setattr(proof, "TRUSTED_BWRAP_PATHS", (str(fake),))
     assert proof.trusted_bwrap() is None or Path(proof.trusted_bwrap()).stat().st_uid == 0  # test-owned file refused
+
+
+def _git_repo(path: Path) -> str:
+    def git(*args: str) -> str:
+        env = {
+            "GIT_AUTHOR_NAME": "t",
+            "GIT_AUTHOR_EMAIL": "t@t",
+            "GIT_COMMITTER_NAME": "t",
+            "GIT_COMMITTER_EMAIL": "t@t",
+        }
+        done = proof.subprocess.run(
+            ["git", *args], cwd=path, capture_output=True, text=True, check=True, env={**env, "PATH": "/usr/bin:/bin"}
+        )
+        return done.stdout.strip()
+
+    git("init", "-q")
+    (path / "tests").mkdir()
+    (path / "tests/test_example.py").write_text("def test_regression():\n    assert False\n")
+    git("add", "-A")
+    git("commit", "-q", "-m", "baseline")
+    return git("rev-parse", "HEAD")
+
+
+def test_baseline_and_current_snapshots_carry_no_git_metadata(tmp_path: Path):
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    sha = _git_repo(repo)
+    red, green = tmp_path / "red", tmp_path / "green"
+    red.mkdir()
+    green.mkdir()
+    assert proof.extract_baseline(repo, sha, red) is None
+    proof.snapshot_tracked(repo, green)
+    for tree in (red, green):
+        assert (tree / "tests/test_example.py").is_file()
+        assert not (tree / ".git").exists()  # a test cannot inspect the checked-out SHA
+
+
+def test_red_and_green_are_presented_at_the_same_path_with_no_phase_marker(monkeypatch, tmp_path: Path):
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    sha = _git_repo(repo)
+    calls = []
+
+    def fake_pytest(selectors, *, source, view):
+        calls.append((list(selectors), source, view))
+        code = 1 if len(calls) == 1 else 0
+        return type("Result", (), {"returncode": code, "stdout": "1 failed" if code else "", "stderr": ""})()
+
+    monkeypatch.setattr(proof, "run_pytest", fake_pytest)
+    selector = "tests/test_example.py::test_regression"
+    adversarial = "tests/test_example.py::test_adversarial"
+    (repo / "tests/test_example.py").write_text("def test_regression(): pass\ndef test_adversarial(): pass\n")
+    value = finding(
+        source_provenance={"reviewed_head_sha": sha},
+        executable_proof={
+            "vulnerable_sha": sha,
+            "red_test": selector,
+            "green_test": selector,
+            "adversarial_tests": [adversarial],
+        },
+    )
+    assert proof.validate_proof(value, root=repo) == []
+    red_call, green_call = calls
+    assert red_call[2] == green_call[2] == repo  # identical view path for both phases
+    assert red_call[1] != green_call[1]
+    assert not (red_call[1] / ".git").exists() and not (green_call[1] / ".git").exists()

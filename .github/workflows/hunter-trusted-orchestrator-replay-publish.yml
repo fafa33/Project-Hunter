@@ -59,6 +59,10 @@ on:
 jobs:
   publish-proof:
     if: ${{ always() && !cancelled() }}
+    # Publishers for one head run one at a time, never cancelling an in-flight publication.
+    concurrency:
+      group: hunter-replay-publish-${{ github.event.workflow_run.head_sha }}
+      cancel-in-progress: false
     name: Publish Exact-Head Trusted Replay Proof
     runs-on: ubuntu-latest
     timeout-minutes: 5
@@ -90,6 +94,13 @@ jobs:
           run_sha="$(gh api "repos/${GH_REPO}/actions/runs/${RUN_ID}" --jq ".pull_requests[0].head.sha // empty")"
           if [ "$head_sha" != "$run_sha" ] || [ "${#head_sha}" -ne 40 ]; then
             echo "triggering PR head differs from current PR head" >&2
+            exit 1
+          fi
+          # Only the most recent validation run for this head may publish: a rerun or duplicate event whose
+          # run is not the latest must not overwrite the status of a newer run.
+          latest_run="$(gh api "repos/${GH_REPO}/actions/workflows/hunter-trusted-orchestrator-replay-validate.yml/runs?head_sha=${head_sha}&per_page=100" --jq '[.workflow_runs[]] | sort_by(.run_number) | last | .id // empty')"
+          if [ "$latest_run" != "$RUN_ID" ]; then
+            echo "triggering run ${RUN_ID} is not the latest validation run (${latest_run:-none}) for ${head_sha}" >&2
             exit 1
           fi
           echo "head_sha=$head_sha" >> "$GITHUB_OUTPUT"

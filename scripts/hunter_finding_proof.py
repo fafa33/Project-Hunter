@@ -6,13 +6,16 @@ pull_request_target job. Historic records are pinned, not silently exempted.
 
 from __future__ import annotations
 
+import argparse
 import hashlib
+import io
 import json
 import os
 import re
 import shutil
 import subprocess
 import sys
+import tarfile
 import tempfile
 from pathlib import Path
 
@@ -85,7 +88,7 @@ def trusted_bwrap() -> str | None:
     return None
 
 
-def sandbox_prefix(cwd: Path) -> list[str]:
+def sandbox_prefix(source: Path, view: Path) -> list[str]:
     """bwrap argv: read-only root, private tmpfs, no network, host credential trees masked.
 
     Mount order matters: masks and the private tmpfs come first, then the working tree and interpreter are
@@ -100,11 +103,14 @@ def sandbox_prefix(cwd: Path) -> list[str]:
     for tree in MASKED_TREES:
         command += ["--tmpfs", tree]
     command += ["--tmpfs", SANDBOX_TMP]
-    keep = {str(cwd.resolve()), str(Path(sys.prefix).resolve()), str(Path(sys.base_prefix).resolve())}
-    for path in sorted(keep):
+    # Interpreter trees under a masked prefix stay visible, read-only.
+    for path in sorted({str(Path(sys.prefix).resolve()), str(Path(sys.base_prefix).resolve())}):
         if path.startswith((*MASKED_TREES, SANDBOX_TMP)):
             command += ["--ro-bind", path, path]
-    command += ["--unshare-net", "--unshare-pid", "--die-with-parent", "--chdir", str(cwd.resolve())]
+    # The tree under test is presented at one fixed path for every phase, so RED and GREEN see identical
+    # paths and no git metadata (snapshots carry none); a test cannot tell which phase it is in.
+    command += ["--ro-bind", str(source.resolve()), str(view.resolve())]
+    command += ["--unshare-net", "--unshare-pid", "--die-with-parent", "--chdir", str(view.resolve())]
     return command
 
 
@@ -112,10 +118,10 @@ def run(args: list[str], *, cwd: Path, timeout: int = TIMEOUT_SECONDS) -> subpro
     return subprocess.run(args, cwd=cwd, text=True, capture_output=True, timeout=timeout, check=False)
 
 
-def run_pytest(selectors: list[str], *, cwd: Path) -> subprocess.CompletedProcess[str]:
+def run_pytest(selectors: list[str], *, source: Path, view: Path) -> subprocess.CompletedProcess[str]:
     """Run selectors with a scrubbed environment and no network; never inherits the preflight process."""
     command = [
-        *sandbox_prefix(cwd),
+        *sandbox_prefix(source, view),
         sys.executable,
         "-m",
         "pytest",
@@ -127,13 +133,42 @@ def run_pytest(selectors: list[str], *, cwd: Path) -> subprocess.CompletedProces
     ]
     return subprocess.run(
         command,
-        cwd=cwd,
+        cwd=source,
         env=scrubbed_env(SANDBOX_TMP),
         text=True,
         capture_output=True,
         timeout=TIMEOUT_SECONDS,
         check=False,
     )
+
+
+def snapshot_tracked(root: Path, destination: Path) -> None:
+    """Copy the tracked files of ``root`` (no .git) into ``destination``, preserving symlinks as symlinks."""
+    listing = subprocess.run(
+        ["git", "ls-files", "-z"], cwd=root, capture_output=True, timeout=30, check=True
+    ).stdout.split(b"\0")
+    for raw in filter(None, listing):
+        relative = raw.decode("utf-8", "surrogateescape")
+        source = root / relative
+        target = destination / relative
+        target.parent.mkdir(parents=True, exist_ok=True)
+        if source.is_symlink():
+            os.symlink(os.readlink(source), target)
+        elif source.is_file():
+            shutil.copy2(source, target)
+
+
+def extract_baseline(root: Path, sha: str, destination: Path) -> str | None:
+    """Export the exact baseline commit (no .git) with tarfile's data filter; return an error text or None."""
+    archive = subprocess.run(["git", "archive", sha], cwd=root, capture_output=True, timeout=60, check=False)
+    if archive.returncode:
+        return f"baseline export failed: {archive.stderr[-200:]!r}"
+    try:
+        with tarfile.open(fileobj=io.BytesIO(archive.stdout)) as bundle:
+            bundle.extractall(destination, filter="data")
+    except (tarfile.TarError, OSError) as error:
+        return f"baseline export rejected: {error}"
+    return None
 
 
 def validate_proof(finding: dict, *, root: Path = ROOT) -> list[str]:
@@ -182,54 +217,57 @@ def validate_proof(finding: dict, *, root: Path = ROOT) -> list[str]:
         candidate = (root / path).resolve()
         if not candidate.is_relative_to((root / "tests").resolve()) or not candidate.is_file():
             return [f"{ident}: invalid pytest target {selector}"]
-    with tempfile.TemporaryDirectory(prefix="hunter-finding-red-") as temp:
-        baseline = Path(temp)
-        archive = run(["git", "cat-file", "-e", f"{sha}^{{commit}}"], cwd=root, timeout=15)
-        if archive.returncode:
-            return [f"{ident}: vulnerable_sha unavailable; fetch the exact baseline commit"]
-        added = run(["git", "worktree", "add", "--detach", str(baseline / "repo"), sha], cwd=root, timeout=20)
-        if added.returncode:
-            return [f"{ident}: baseline worktree unavailable: {added.stderr[-300:]}"]
-        try:
-            # Copy the regression test file from the fixed HEAD into the vulnerable
-            # checkout so RED and GREEN execute identical test code.
-            test_file = red.split("::", 1)[0]
-            destination = baseline / "repo" / test_file
-            # Never follow a baseline-controlled symlink, including parent components.
-            baseline_root = baseline / "repo"
-            if any(
-                part.is_symlink()
-                for part in [destination, *destination.parents]
-                if part == baseline_root or baseline_root in part.parents
-            ):
-                return [f"{ident}: baseline test destination contains a symlink"]
-            destination.parent.mkdir(parents=True, exist_ok=True)
-            if not destination.resolve().is_relative_to(baseline_root.resolve()):
-                return [f"{ident}: baseline test destination escapes worktree"]
-            shutil.copy2(root / test_file, destination)
-            red_result = run_pytest([red], cwd=baseline / "repo")
-            if red_result.returncode == 0:
-                errors.append(f"{ident}: RED did not fail on vulnerable_sha")
-            elif red_result.returncode != 1 or " failed" not in red_result.stdout:
-                errors.append(f"{ident}: RED was not a genuine assertion failure (exit {red_result.returncode})")
-        finally:
-            run(["git", "worktree", "remove", "--force", str(baseline / "repo")], cwd=root, timeout=20)
-    current = run_pytest([green, *adversarial], cwd=root)
-    if current.returncode:
-        errors.append(f"{ident}: GREEN/adversarial tests failed: {current.stdout[-500:]} {current.stderr[-200:]}")
+    if run(["git", "cat-file", "-e", f"{sha}^{{commit}}"], cwd=root, timeout=15).returncode:
+        return [f"{ident}: vulnerable_sha unavailable; fetch the exact baseline commit"]
+    with tempfile.TemporaryDirectory(prefix="hunter-finding-") as temp:
+        red_tree = Path(temp) / "red"
+        green_tree = Path(temp) / "green"
+        red_tree.mkdir()
+        green_tree.mkdir()
+        problem = extract_baseline(root, sha, red_tree)
+        if problem:
+            return [f"{ident}: {problem}"]
+        # Copy the regression test file from the fixed HEAD into the vulnerable tree so RED and GREEN execute
+        # identical test code. Never follow a baseline-controlled symlink, including parent components.
+        test_file = red.split("::", 1)[0]
+        destination = red_tree / test_file
+        if any(part.is_symlink() for part in [destination, *destination.parents] if red_tree in (part, *part.parents)):
+            return [f"{ident}: baseline test destination contains a symlink"]
+        destination.parent.mkdir(parents=True, exist_ok=True)
+        if not destination.resolve().is_relative_to(red_tree.resolve()):
+            return [f"{ident}: baseline test destination escapes the exported tree"]
+        shutil.copy2(root / test_file, destination)
+        red_result = run_pytest([red], source=red_tree, view=root)
+        if red_result.returncode == 0:
+            errors.append(f"{ident}: RED did not fail on vulnerable_sha")
+        elif red_result.returncode != 1 or " failed" not in red_result.stdout:
+            errors.append(f"{ident}: RED was not a genuine assertion failure (exit {red_result.returncode})")
+        snapshot_tracked(root, green_tree)
+        current = run_pytest([green, *adversarial], source=green_tree, view=root)
+        if current.returncode:
+            errors.append(f"{ident}: GREEN/adversarial tests failed: {current.stdout[-500:]} {current.stderr[-200:]}")
     return errors
 
 
-def main() -> int:
-    findings = json.loads((ROOT / "docs/REVIEWER_FINDING_DISPOSITIONS.json").read_text())["findings"]
-    errors = []
+def collect_errors(root: Path = ROOT) -> list[str]:
+    """Validate every disposition of ``root``; the trusted lane calls this from its own (base) copy of this module."""
+    findings = json.loads((root / "docs/REVIEWER_FINDING_DISPOSITIONS.json").read_text())["findings"]
+    errors: list[str] = []
     for finding in findings:
         try:
-            errors.extend(validate_proof(finding))
+            errors.extend(validate_proof(finding, root=root))
         except IsolationUnavailable as unavailable:
             errors.append(f"{finding.get('id')}: proof refused, {unavailable}")
         except subprocess.TimeoutExpired:
             errors.append(f"{finding.get('id')}: proof timed out (bounded); simplify tests or repair baseline")
+    return errors
+
+
+def main() -> int:
+    parser = argparse.ArgumentParser(description="Bounded RED/GREEN replay for resolved reviewer findings")
+    parser.add_argument("--root", type=Path, default=ROOT, help="Repository whose dispositions and tests are proven.")
+    root = parser.parse_args().root.resolve()
+    errors = collect_errors(root)
     for error in errors:
         print("[Finding Proof] FAIL:", error)
     if not errors:
