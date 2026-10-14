@@ -1,0 +1,44 @@
+name: Hunter App Authentication Smoke Test
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  verify-app-installation:
+    name: Verify Hunter GitHub App installation
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Check App configuration
+        shell: bash
+        env:
+          APP_ID: ${{ vars.HUNTER_APP_ID }}
+          APP_KEY: ${{ secrets.HUNTER_APP_PRIVATE_KEY }}
+        run: |
+          test -n "$APP_ID" || { echo "::error::HUNTER_APP_ID is missing"; exit 1; }
+          test -n "$APP_KEY" || { echo "::error::HUNTER_APP_PRIVATE_KEY is missing"; exit 1; }
+          echo "App configuration is present"
+
+      - name: Generate installation token
+        id: app-token
+        uses: actions/create-github-app-token@v2
+        with:
+          app-id: ${{ vars.HUNTER_APP_ID }}
+          private-key: ${{ secrets.HUNTER_APP_PRIVATE_KEY }}
+          owner: ${{ github.repository_owner }}
+          repositories: Project-Hunter
+          permission-contents: read
+
+      - name: Verify installation can read this repository
+        shell: bash
+        env:
+          GH_TOKEN: ${{ steps.app-token.outputs.token }}
+          GH_REPO: ${{ github.repository }}
+        run: |
+          set -euo pipefail
+          result="$(gh api "repos/$GH_REPO" --jq '.full_name')"
+          test "$result" = "$GH_REPO" || { echo "::error::App installation repository mismatch"; exit 1; }
+          echo "Hunter App installation token works for $GH_REPO"
