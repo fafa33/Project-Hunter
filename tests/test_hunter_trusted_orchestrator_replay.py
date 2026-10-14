@@ -25,6 +25,7 @@ import tempfile
 from pathlib import Path
 
 import hunter_trusted_orchestrator_replay as replay
+import hunter_trusted_orchestrator_replay_worker as worker
 import pytest
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
@@ -1654,3 +1655,31 @@ def test_hosted_netns_provisioning_lifts_the_apparmor_userns_restriction_before_
     provision = next(step for step in steps if "network namespace" in step.get("name", ""))["run"]
     sysctl = provision.index("kernel.apparmor_restrict_unprivileged_userns=0")
     assert sysctl < provision.index("/usr/bin/bwrap --die-with-parent")
+
+
+def _candidate_with_symlinked_module(tmp_path):
+    trusted = tmp_path / "trusted"
+    (trusted / "scripts").mkdir(parents=True)
+    (trusted / "scripts" / "hunter_review_orchestrator.py").write_text("TRUSTED = True\n", encoding="utf-8")
+    candidate = tmp_path / "candidate"
+    (candidate / "scripts").mkdir(parents=True)
+    (candidate / "scripts" / "hunter_review_orchestrator.py").symlink_to(
+        trusted / "scripts" / "hunter_review_orchestrator.py"
+    )
+    return candidate
+
+
+def test_symlinked_candidate_module_is_refused_for_digest_and_import(tmp_path):
+    candidate = _candidate_with_symlinked_module(tmp_path)
+    with pytest.raises(ValueError, match="symlink|outside"):
+        worker.candidate_module_digest(candidate, "A")
+    with pytest.raises(ValueError, match="symlink|outside"):
+        worker._import_candidate(candidate, "hunter_review_orchestrator")
+
+
+def test_regular_confined_candidate_module_is_accepted(tmp_path):
+    candidate = tmp_path / "candidate"
+    (candidate / "scripts").mkdir(parents=True)
+    (candidate / "scripts" / "hunter_review_orchestrator.py").write_text("X = 1\n", encoding="utf-8")
+    assert len(worker.candidate_module_digest(candidate, "A")) == 64
+    worker.assert_candidate_scripts_confined(candidate)

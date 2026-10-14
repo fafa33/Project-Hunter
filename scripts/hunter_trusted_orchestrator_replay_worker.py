@@ -64,15 +64,49 @@ CANDIDATE_MODULE_FILES: dict[str, tuple[str, ...]] = {
 WAITING_FOR_REVIEWER_STATE = "WAITING_FOR_REVIEWER"
 
 
+def confined_candidate_file(candidate_root: Path, relative: str) -> Path:
+    """The candidate file at ``relative``, refused unless it is a regular file physically inside the candidate.
+
+    A candidate can commit a module as a symlink to a file of the trusted checkout (or anywhere else on the
+    runner). Reading or importing through it would execute and hash the base module while the receipt still
+    validates, so every symlink component and any resolution outside ``candidate_root`` is rejected.
+    """
+    root = candidate_root.resolve(strict=True)
+    path = candidate_root / relative
+    current = candidate_root
+    for part in Path(relative).parts:
+        current = current / part
+        if current.is_symlink():
+            raise ValueError(f"candidate path {relative!r} contains a symlink component and is refused")
+    resolved = path.resolve(strict=True)
+    try:
+        resolved.relative_to(root)
+    except ValueError:
+        raise ValueError(f"candidate path {relative!r} resolves outside the candidate root and is refused") from None
+    if not resolved.is_file():
+        raise ValueError(f"candidate path {relative!r} is not a regular file")
+    return resolved
+
+
+def assert_candidate_scripts_confined(candidate_root: Path) -> None:
+    """Every module a candidate script could import by name from ``scripts/`` must be confined (see above)."""
+    scripts = candidate_root / "scripts"
+    if scripts.is_symlink():
+        raise ValueError("candidate scripts directory is a symlink and is refused")
+    for entry in sorted(scripts.glob("*.py")):
+        confined_candidate_file(candidate_root, f"scripts/{entry.name}")
+
+
 def candidate_module_digest(candidate_root: Path, scenario_id: str) -> str:
     payload = {}
     for relative in CANDIDATE_MODULE_FILES[scenario_id]:
-        payload[relative] = (candidate_root / relative).read_text(encoding="utf-8")
+        payload[relative] = confined_candidate_file(candidate_root, relative).read_text(encoding="utf-8")
     encoded = json.dumps(payload, sort_keys=True, separators=(",", ":"), ensure_ascii=False).encode("utf-8")
     return hashlib.sha256(encoded).hexdigest()
 
 
 def _import_candidate(candidate_root: Path, module_name: str) -> Any:
+    assert_candidate_scripts_confined(candidate_root)
     scripts_dir = str((candidate_root / "scripts").resolve())
     if scripts_dir not in sys.path:
         sys.path.insert(0, scripts_dir)
