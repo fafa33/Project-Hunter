@@ -869,3 +869,17 @@ def test_reviewer_proof_in_a_separate_or_unbound_job_is_refused():
     assert prevention._reviewer_proof_step_errors(unbound)
     assert prevention._reviewer_proof_step_errors(gated)
     assert prevention._reviewer_proof_step_errors(valid) == []
+
+
+def test_job_level_continue_on_error_cannot_neutralise_the_reviewer_proof():
+    step = (
+        "      - name: Verify bounded reviewer RED GREEN and adversarial proofs\n"
+        "        if: ${{ steps.preflight-mode.outputs.mode == 'normal' }}\n"
+        "        run: python scripts/hunter_finding_proof.py\n"
+    )
+    body = (
+        "    steps:\n      - id: preflight-mode\n        run: echo m\n"
+        f"{step}      - run: python scripts/hunter_pr_preflight.py --mode normal\n"
+    )
+    assert prevention._reviewer_proof_step_errors(f"jobs:\n  a:\n{body}") == []
+    assert prevention._reviewer_proof_step_errors(f"jobs:\n  a:\n    continue-on-error: true\n{body}")

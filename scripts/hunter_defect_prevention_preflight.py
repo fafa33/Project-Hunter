@@ -2174,6 +2174,8 @@ def _reviewer_proof_step_errors(workflow_text: str) -> list[str]:
         }
         if not (indexes["proof"] and indexes["preflight"]):
             continue
+        if job.get("continue-on-error") not in (None, False):
+            return ["candidate preflight job must not set continue-on-error"]
         proof = steps[indexes["proof"][0]]
         if not indexes["mode"] or indexes["mode"][0] >= indexes["proof"][0]:
             return ["candidate preflight reviewer proof must follow the preflight-mode step in the same job"]
