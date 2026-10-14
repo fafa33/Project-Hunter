@@ -1839,6 +1839,7 @@ def test_publisher_rechecks_the_latest_run_immediately_before_publishing():
     assert names.index("recheck") < names.index(publish["name"])
     assert "no longer the latest validation run" in recheck["run"] and "exit 1" in recheck["run"]
     assert "--paginate" in recheck["run"]
+    assert ".head.sha" in recheck["run"] and 'live_head_sha" != "$HEAD_SHA"' in recheck["run"]
     assert "steps.recheck.outcome == 'success'" in publish["if"]
 
 
