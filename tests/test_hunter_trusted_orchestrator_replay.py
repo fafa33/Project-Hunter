@@ -1493,3 +1493,85 @@ def test_cmd_run_and_cmd_validate_never_forward_raw_argparse_pr_or_sha():
         assert (
             source.count("args.candidate_sha") == 1
         ), f"{name} references args.candidate_sha somewhere other than identity construction"
+
+
+def test_worker_post_started_timeout_budget_with_controlled_clock(monkeypatch):
+    """Startup time is not charged to execution; a stalled child times out."""
+    import importlib.util
+
+    worker_path = REPO_ROOT / "scripts/hunter_trusted_orchestrator_replay_worker.py"
+    spec = importlib.util.spec_from_file_location("replay_worker_timeout_test", worker_path)
+    assert spec is not None and spec.loader is not None
+    worker = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(worker)
+
+    class Clock:
+        now = 0.0
+
+        def monotonic(self):
+            return self.now
+
+    class Pipe:
+        def __init__(self, clock, finish_delay):
+            self.clock = clock
+            self.finish_delay = finish_delay
+            self.events = [
+                (9.0, {"stage": "started"}),
+                (9.0 + finish_delay, {"stage": "done", "measurements": {"ok": True}}),
+            ]
+            self.available = False
+
+        def poll(self, timeout):
+            if not self.events:
+                self.clock.now += timeout
+                return False
+            at, _ = self.events[0]
+            if at > self.clock.now + timeout:
+                self.clock.now += timeout
+                return False
+            self.clock.now = at
+            self.available = True
+            return True
+
+        def recv(self):
+            assert self.available
+            self.available = False
+            return self.events.pop(0)[1]
+
+        def close(self):
+            pass
+
+    class Process:
+        def start(self):
+            pass
+
+        def join(self, timeout):
+            pass
+
+        def is_alive(self):
+            return False
+
+    class Context:
+        def __init__(self, pipe):
+            self.pipe = pipe
+
+        def Pipe(self, duplex):
+            assert duplex is False
+            return self.pipe, PipeEnd()
+
+        def Process(self, **kwargs):
+            return Process()
+
+    class PipeEnd:
+        def close(self):
+            pass
+
+    for finish_delay, expected in [(59.0, "pass"), (61.0, "fail")]:
+        clock = Clock()
+        pipe = Pipe(clock, finish_delay)
+        monkeypatch.setattr(worker.time, "monotonic", clock.monotonic)
+        monkeypatch.setattr(worker.mp, "get_context", lambda method: Context(pipe))
+        monkeypatch.setattr(worker, "SCENARIO_CHILD_TIMEOUT_SECONDS", 60)
+        result = worker._run_scenario_isolated("A", REPO_ROOT, {})
+        assert result["outcome"] == expected
+        assert clock.now == (9.0 + finish_delay if expected == "pass" else 69.0)

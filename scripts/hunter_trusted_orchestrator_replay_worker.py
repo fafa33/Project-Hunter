@@ -630,9 +630,10 @@ def _run_scenario_isolated(scenario_id: str, candidate_root: Path, fixture: dict
                 messages.append(parent_conn.recv())
             except EOFError:
                 break
-            # Give a real scenario its remaining wall-clock budget. The old
-            # fixed five-second post-start window killed healthy scenarios on
-            # hosted runners, which are slower than local development hosts.
+            # Startup has its own bounded window. A trusted started sentinel
+            # begins a fresh, full scenario execution budget.
+            if len(messages) == 1 and isinstance(messages[0], dict) and messages[0].get("stage") == "started":
+                deadline = time.monotonic() + float(SCENARIO_CHILD_TIMEOUT_SECONDS)
             remaining = max(0.0, deadline - time.monotonic())
     finally:
         parent_conn.close()
