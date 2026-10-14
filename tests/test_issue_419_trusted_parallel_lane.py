@@ -419,7 +419,10 @@ def test_the_trusted_gate_commands_are_unchanged_by_the_lane(monkeypatch: pytest
     assert prevention.run_candidate_quality_gates(tmp_path) == 0
 
     assert parallel == executed
-    assert parallel == [command for _name, command in prevention.TRUSTED_CANDIDATE_QUALITY_GATES]
+    assert parallel == [
+        tuple(prevention.guard_command(command)) if name in prevention.GUARD_GATES else command
+        for name, command in prevention.TRUSTED_CANDIDATE_QUALITY_GATES
+    ]
     assert parallel[-1] == ("pytest",)
     assert prevention.TRUSTED_CANDIDATE_QUALITY_GATES[-1] == preflight.NORMAL_QUALITY_GATES[-1]
 

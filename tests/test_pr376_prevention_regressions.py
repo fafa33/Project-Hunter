@@ -253,7 +253,10 @@ def test_trusted_candidate_runner_executes_immutable_gate_chain(monkeypatch, tmp
     monkeypatch.setattr(prevention.finding_proof, "collect_errors", lambda root: [])
 
     assert prevention.run_candidate_quality_gates(tmp_path) == 0
-    assert calls == [command for _name, command in prevention.TRUSTED_CANDIDATE_QUALITY_GATES]
+    assert calls == [
+        tuple(prevention.guard_command(command)) if name in prevention.GUARD_GATES else command
+        for name, command in prevention.TRUSTED_CANDIDATE_QUALITY_GATES
+    ]
     assert len(calls) == len(prevention.REQUIRED_PREFLIGHT_GATES)
 
 
