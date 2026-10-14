@@ -1575,3 +1575,34 @@ def test_worker_post_started_timeout_budget_with_controlled_clock(monkeypatch):
         result = worker._run_scenario_isolated("A", REPO_ROOT, {})
         assert result["outcome"] == expected
         assert clock.now == (9.0 + finish_delay if expected == "pass" else 69.0)
+
+
+def test_outer_supervisor_budget_exceeds_both_worker_windows_and_cleanup(monkeypatch):
+    """A slow startup cannot cause the outer supervisor to kill a valid worker."""
+    import importlib.util
+
+    worker_path = REPO_ROOT / "scripts/hunter_trusted_orchestrator_replay_worker.py"
+    spec = importlib.util.spec_from_file_location("replay_worker_supervisor_budget_test", worker_path)
+    assert spec is not None and spec.loader is not None
+    worker = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(worker)
+    assert replay.WORKER_STARTUP_TIMEOUT_SECONDS == worker.SCENARIO_CHILD_TIMEOUT_SECONDS
+    assert replay.WORKER_EXECUTION_TIMEOUT_SECONDS == worker.SCENARIO_CHILD_TIMEOUT_SECONDS
+    assert replay.WORKER_TIMEOUT_SECONDS > (
+        2 * worker.SCENARIO_CHILD_TIMEOUT_SECONDS + replay.WORKER_CLEANUP_TIMEOUT_SECONDS
+    )
+    observed = {}
+
+    def fake_run(*args, **kwargs):
+        observed["timeout"] = kwargs["timeout"]
+        return subprocess.CompletedProcess(args[0], 0, stdout='{"outcome":"pass"}\n', stderr="")
+
+    monkeypatch.setattr(replay.subprocess, "run", fake_run)
+    with tempfile.TemporaryDirectory() as tmp:
+        root = Path(tmp)
+        candidate = root / "candidate"
+        candidate.mkdir()
+        fixture = root / "fixture.json"
+        fixture.write_text("{}", encoding="utf-8")
+        replay._run_scenario("A", candidate, fixture, workspace_root=root)
+    assert observed["timeout"] == replay.WORKER_TIMEOUT_SECONDS
