@@ -1737,3 +1737,37 @@ def test_symlinked_directory_in_candidate_scripts_tree_is_refused(tmp_path):
     (candidate / "scripts" / "helpers").symlink_to(outside, target_is_directory=True)
     with pytest.raises(ValueError, match="symlink"):
         worker.assert_candidate_scripts_confined(candidate)
+
+
+def test_worker_environment_is_an_allowlist_and_drops_runner_credentials(monkeypatch):
+    for name in ("ACTIONS_RUNTIME_TOKEN", "ACTIONS_ID_TOKEN_REQUEST_TOKEN", "GITHUB_TOKEN", "GH_TOKEN", "SOME_SECRET"):
+        monkeypatch.setenv(name, "secret-value")
+    monkeypatch.setenv("PATH", "/usr/bin")
+    env = replay._isolated_env()
+    assert "secret-value" not in env.values()
+    assert not any(name in env for name in ("ACTIONS_RUNTIME_TOKEN", "ACTIONS_ID_TOKEN_REQUEST_TOKEN", "SOME_SECRET"))
+    assert env["GITHUB_TOKEN"] == "" and env["GH_TOKEN"] == "" and env["PATH"] == "/usr/bin"
+
+
+def test_replay_step_launches_the_sandbox_with_a_cleared_environment():
+    import yaml
+
+    doc = yaml.safe_load(Path(".github/workflows/hunter-trusted-orchestrator-replay-validate.yml").read_text())
+    steps = [step for job in doc["jobs"].values() for step in job["steps"]]
+    run = next(step for step in steps if step.get("name", "").startswith("Run trusted candidate"))["run"]
+    assert "env -i " in run and run.index("env -i ") < run.index("/usr/bin/bwrap")
+
+
+def test_digest_closure_covers_candidate_packages_and_submodules(tmp_path):
+    candidate = tmp_path / "candidate"
+    (candidate / "scripts" / "hunter_pkg").mkdir(parents=True)
+    (candidate / "scripts" / "hunter_review_orchestrator.py").write_text(
+        "from hunter_pkg import sub\n", encoding="utf-8"
+    )
+    (candidate / "scripts" / "hunter_pkg" / "__init__.py").write_text("", encoding="utf-8")
+    (candidate / "scripts" / "hunter_pkg" / "sub.py").write_text("value = 1\n", encoding="utf-8")
+    closure = worker.candidate_module_closure(candidate, "A")
+    assert "scripts/hunter_pkg/__init__.py" in closure and "scripts/hunter_pkg/sub.py" in closure
+    before = worker.candidate_module_digest(candidate, "A")
+    (candidate / "scripts" / "hunter_pkg" / "sub.py").write_text("value = 2\n", encoding="utf-8")
+    assert worker.candidate_module_digest(candidate, "A") != before

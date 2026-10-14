@@ -123,10 +123,14 @@ def _trusted_harness_sha() -> str:
     return result.stdout.strip()
 
 
-def _isolated_env() -> dict[str, str]:
-    import os
+#: The only variables candidate code is given: enough to run the interpreter, nothing the runner injects
+#: (``ACTIONS_*`` tokens, ``GITHUB_*`` context, secrets). Anything not listed here is dropped.
+WORKER_ENV_ALLOWLIST = ("PATH", "LANG", "LC_ALL", "LD_LIBRARY_PATH", "PYTHONHASHSEED", "TZ")
 
-    env = dict(os.environ)
+
+def _isolated_env() -> dict[str, str]:
+    env = {name: os.environ[name] for name in WORKER_ENV_ALLOWLIST if name in os.environ}
+    env["HOME"] = "/tmp"  # NOSONAR S108 - the worker's HOME is the sandbox's private tmpfs, never the runner's
     env["GITHUB_TOKEN"] = ""
     env["GH_TOKEN"] = ""
     return env

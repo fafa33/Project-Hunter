@@ -109,7 +109,8 @@ jobs:
           # so this protection is effective before the candidate helper changes are merged.
           # The existing harness creates and unlinks its fixture in the workspace.
           # Keep that writable; the sandbox enforces network denial, not file immutability.
-          /usr/bin/bwrap --die-with-parent --unshare-net --unshare-pid --unshare-ipc --unshare-uts --new-session --cap-drop ALL --ro-bind / / --dev-bind /dev /dev --proc /proc --tmpfs /tmp \
+          env -i PATH="$PATH" LD_LIBRARY_PATH="${LD_LIBRARY_PATH:-}" LANG=C.UTF-8 HOME=/tmp GITHUB_TOKEN= GH_TOKEN= \
+            /usr/bin/bwrap --die-with-parent --unshare-net --unshare-pid --unshare-ipc --unshare-uts --new-session --cap-drop ALL --ro-bind / / --dev-bind /dev /dev --proc /proc --tmpfs /tmp \
             --bind "$GITHUB_WORKSPACE" "$GITHUB_WORKSPACE" -- \
             python scripts/hunter_trusted_orchestrator_replay.py run \
             --workspace-root "$GITHUB_WORKSPACE" \

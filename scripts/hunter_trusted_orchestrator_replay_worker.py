@@ -133,10 +133,14 @@ def candidate_module_closure(candidate_root: Path, scenario_id: str) -> list[str
             else:
                 continue
             for name in names:
-                helper = f"scripts/{name.split('.')[0]}.py"
-                helper_path = candidate_root / helper
-                if helper not in seen and (helper_path.is_symlink() or helper_path.is_file()):
-                    pending.append(helper)
+                parts = name.split(".")
+                for depth in range(1, len(parts) + 1):
+                    prefix = "/".join(parts[:depth])
+                    # A module may be a plain file or a package (``__init__.py``); every package level is code too.
+                    for helper in (f"scripts/{prefix}.py", f"scripts/{prefix}/__init__.py"):
+                        helper_path = candidate_root / helper
+                        if helper not in seen and (helper_path.is_symlink() or helper_path.is_file()):
+                            pending.append(helper)
     return sorted(seen)
 
 
