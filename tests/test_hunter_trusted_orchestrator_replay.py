@@ -1816,3 +1816,13 @@ def test_replay_step_binds_the_trusted_harness_and_candidate_read_only_over_the_
     scripts = run.index('--ro-bind "$GITHUB_WORKSPACE/scripts" "$GITHUB_WORKSPACE/scripts"')
     candidate = run.index('--ro-bind "$GITHUB_WORKSPACE/candidate" "$GITHUB_WORKSPACE/candidate"')
     assert workspace < scripts and workspace < candidate  # later mounts override the writable bind
+
+
+def test_replay_step_derives_the_loader_path_from_the_interpreter_instead_of_inheriting_it():
+    import yaml
+
+    doc = yaml.safe_load(Path(".github/workflows/hunter-trusted-orchestrator-replay-validate.yml").read_text())
+    steps = [step for job in doc["jobs"].values() for step in job["steps"]]
+    run = next(step for step in steps if step.get("name", "").startswith("Run trusted candidate"))["run"]
+    assert "${LD_LIBRARY_PATH" not in run
+    assert "sys.base_prefix" in run and 'LD_LIBRARY_PATH="$py_lib"' in run
