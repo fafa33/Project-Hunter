@@ -164,9 +164,11 @@ def scenario_a(candidate_root: Path, fixture: dict[str, Any]) -> dict[str, Any]:
     # terminal result for the same exact head (DFF-041, PR #535).
     orchestrator.collector_liveness = lambda *_a: ("completed", 1)
 
-    # Hermetic by construction: the replay must never reach the network. The candidate's REST helper is replaced
-    # with "this repository has no collector workflow runs", so a scenario's outcome depends only on the durable
-    # record and the stubs above, not on whether a real (or unreachable) GitHub API answers.
+    # Determinism, not isolation: the candidate's REST helper is replaced with "this repository has no collector
+    # workflow runs", so a scenario's outcome does not depend on whether a real (or unreachable) GitHub API answers
+    # through that helper. This is NOT a network boundary: a candidate calling urllib/socket directly is not
+    # blocked here. The security boundary is the job itself (contents: read only, no checkout credentials, no
+    # secrets), not this stub.
     orchestrator.request_json = lambda *_a, **_k: {"workflow_runs": []}
 
     def _recorded(age_seconds: int) -> Any:
@@ -353,9 +355,11 @@ def scenario_b(candidate_root: Path, fixture: dict[str, Any]) -> dict[str, Any]:
 
     orchestrator.collector_liveness = fake_collector_liveness
 
-    # Hermetic by construction: the replay must never reach the network. The candidate's REST helper is replaced
-    # with "this repository has no collector workflow runs", so a scenario's outcome depends only on the durable
-    # record and the stubs above, not on whether a real (or unreachable) GitHub API answers.
+    # Determinism, not isolation: the candidate's REST helper is replaced with "this repository has no collector
+    # workflow runs", so a scenario's outcome does not depend on whether a real (or unreachable) GitHub API answers
+    # through that helper. This is NOT a network boundary: a candidate calling urllib/socket directly is not
+    # blocked here. The security boundary is the job itself (contents: read only, no checkout credentials, no
+    # secrets), not this stub.
     orchestrator.request_json = lambda *_a, **_k: {"workflow_runs": []}
 
     def _recorded(age_seconds: int) -> Any:
