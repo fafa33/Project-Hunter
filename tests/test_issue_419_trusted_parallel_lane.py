@@ -924,3 +924,23 @@ def test_a_preflight_command_mentioned_only_in_a_shell_comment_is_not_executed()
     assert prevention._reviewer_proof_step_errors(real) == []
     assert prevention._reviewer_proof_step_errors(commented)
     assert prevention._reviewer_proof_step_errors(echoed)
+
+
+def test_the_mode_step_cannot_be_disabled_or_given_a_second_output():
+    canonical = '          PREFLIGHT_MODE=normal\n          echo "mode=${PREFLIGHT_MODE}" >> "${GITHUB_OUTPUT}"\n'
+    proof = (
+        "      - name: Verify bounded reviewer RED GREEN and adversarial proofs\n"
+        "        if: ${{ steps.preflight-mode.outputs.mode == 'normal' }}\n"
+        "        run: python scripts/hunter_finding_proof.py\n"
+        "      - run: python scripts/hunter_pr_preflight.py --mode normal\n"
+    )
+
+    def workflow(extra_key: str = "", run: str = canonical) -> str:
+        return f"jobs:\n  a:\n    steps:\n      - id: preflight-mode\n{extra_key}        run: |\n{run}{proof}"
+
+    assert prevention._reviewer_proof_step_errors(workflow()) == []
+    assert prevention._reviewer_proof_step_errors(workflow("        if: false\n"))
+    second = canonical + '          echo "mode=tests-first-red" >> "${GITHUB_OUTPUT}"\n'
+    assert prevention._reviewer_proof_step_errors(workflow(run=second))
+    reassigned = canonical + "          PREFLIGHT_MODE=tests-first-red\n"
+    assert prevention._reviewer_proof_step_errors(workflow(run=reassigned))

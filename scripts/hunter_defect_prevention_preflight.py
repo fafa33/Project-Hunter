@@ -2149,6 +2149,26 @@ def _step_executes(run: object, command: str) -> bool:
     return False
 
 
+_MODE_ASSIGNMENTS = frozenset({"PREFLIGHT_MODE=normal", 'PREFLIGHT_MODE="$(cat .hunter-preflight-mode)"'})
+_MODE_OUTPUT = 'echo "mode=${PREFLIGHT_MODE}" >> "${GITHUB_OUTPUT}"'
+
+
+def _mode_step_contract_holds(run: str) -> bool:
+    """The mode step must publish the mode exactly once, from only the two canonical sources.
+
+    Any other write to the step output, or any other assignment of the mode variable, could select the
+    tests-first-red lane (which skips the proof) while the head is admitted as a normal candidate.
+    """
+    lines = [line.strip() for line in run.splitlines() if line.strip() and not line.strip().startswith("#")]
+    outputs = [line for line in lines if "GITHUB_OUTPUT" in line]
+    assigns = [line for line in lines if re.match(r"^PREFLIGHT_MODE=", line)]
+    return (
+        outputs == [_MODE_OUTPUT]
+        and "PREFLIGHT_MODE=normal" in assigns
+        and all(line in _MODE_ASSIGNMENTS for line in assigns)
+    )
+
+
 def _reviewer_proof_step_errors(workflow_text: str) -> list[str]:
     """The reviewer proof gate is judged on parsed job steps, never on raw text a comment or scalar could fake.
 
@@ -2187,6 +2207,20 @@ def _reviewer_proof_step_errors(workflow_text: str) -> list[str]:
             continue
         if job.get("continue-on-error") not in (None, False):
             return ["candidate preflight job must not set continue-on-error"]
+        runner = steps[indexes["preflight"][-1]]
+        if runner.get("continue-on-error") not in (None, False) or str(runner.get("if", "true")).strip() not in {
+            "true",
+            "${{ true }}",
+        }:
+            return ["candidate preflight step must run unconditionally and propagate failure"]
+        proof = steps[indexes["proof"][0]]
+        if not indexes["mode"] or indexes["mode"][0] >= indexes["proof"][0]:
+            return ["candidate preflight reviewer proof must follow the preflight-mode step in the same job"]
+        mode_step = steps[indexes["mode"][0]]
+        if mode_step.get("continue-on-error") not in (None, False) or mode_step.get("if") not in (None, True):
+            return ["candidate preflight-mode step must run unconditionally"]
+        if not _mode_step_contract_holds(str(mode_step.get("run", ""))):
+            return ["candidate preflight-mode step must default to normal and publish mode=... to GITHUB_OUTPUT"]
         runner = steps[indexes["preflight"][-1]]
         if runner.get("continue-on-error") not in (None, False) or str(runner.get("if", "true")).strip() not in {
             "true",
