@@ -150,6 +150,8 @@ def candidate_module_closure(candidate_root: Path, scenario_id: str) -> list[str
                         f"candidate module {relative!r} uses a dynamic import form ({callee}) and is refused"
                     )
                 continue
+            if isinstance(node, ast.ImportFrom) and node.level > 0:
+                raise ValueError(f"candidate module {relative!r} uses a relative import and is refused")
             if isinstance(node, ast.Import):
                 names = [alias.name for alias in node.names]
             elif isinstance(node, ast.ImportFrom) and node.level == 0 and node.module:
@@ -176,11 +178,33 @@ def candidate_module_digest(candidate_root: Path, scenario_id: str) -> str:
     return hashlib.sha256(encoded).hexdigest()
 
 
+TRUSTED_SCRIPTS_DIR = Path(__file__).resolve().parent
+
+
+def isolated_import_path(
+    path: list[str], candidate_scripts: Path, trusted_scripts: Path = TRUSTED_SCRIPTS_DIR
+) -> list[str]:
+    """``path`` with the trusted checkout's scripts directory removed and the candidate's placed first.
+
+    The worker runs from the trusted ``scripts/`` directory, which is therefore on ``sys.path``. Left there, a
+    helper that a PR deleted or omitted would silently import the base checkout's copy, and the proof would cover
+    mixed code (candidate plus base) that can pass here and fail after merge. Removing it makes a missing helper an
+    ``ImportError`` instead.
+    """
+    keep = []
+    for entry in path:
+        try:
+            resolved = Path(entry or ".").resolve()
+        except OSError:
+            continue
+        if resolved not in (trusted_scripts.resolve(), candidate_scripts.resolve()):
+            keep.append(entry)
+    return [str(candidate_scripts.resolve()), *keep]
+
+
 def _import_candidate(candidate_root: Path, module_name: str) -> Any:
     assert_candidate_scripts_confined(candidate_root)
-    scripts_dir = str((candidate_root / "scripts").resolve())
-    if scripts_dir not in sys.path:
-        sys.path.insert(0, scripts_dir)
+    sys.path[:] = isolated_import_path(sys.path, candidate_root / "scripts")
     return importlib.import_module(module_name)
 
 

@@ -1794,3 +1794,22 @@ def test_real_candidate_closure_uses_no_dynamic_import_forms():
     root = Path(__file__).resolve().parents[1]
     for scenario in ("A", "B", "G"):
         assert worker.candidate_module_closure(root, scenario)
+
+
+def test_import_path_drops_the_trusted_scripts_directory_so_missing_helpers_do_not_fall_back(tmp_path):
+    trusted = tmp_path / "trusted" / "scripts"
+    trusted.mkdir(parents=True)
+    candidate_scripts = tmp_path / "candidate" / "scripts"
+    candidate_scripts.mkdir(parents=True)
+    other = tmp_path / "site"
+    other.mkdir()
+    result = worker.isolated_import_path([str(trusted), str(other), str(candidate_scripts)], candidate_scripts, trusted)
+    assert result == [str(candidate_scripts.resolve()), str(other)]
+
+
+def test_relative_imports_in_candidate_modules_are_refused(tmp_path):
+    candidate = tmp_path / "candidate"
+    (candidate / "scripts").mkdir(parents=True)
+    (candidate / "scripts" / "hunter_review_orchestrator.py").write_text("from . import sibling\n", encoding="utf-8")
+    with pytest.raises(ValueError, match="relative import"):
+        worker.candidate_module_digest(candidate, "A")
