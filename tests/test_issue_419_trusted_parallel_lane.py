@@ -883,3 +883,16 @@ def test_job_level_continue_on_error_cannot_neutralise_the_reviewer_proof():
     )
     assert prevention._reviewer_proof_step_errors(f"jobs:\n  a:\n{body}") == []
     assert prevention._reviewer_proof_step_errors(f"jobs:\n  a:\n    continue-on-error: true\n{body}")
+
+
+def test_preflight_step_cannot_be_skipped_or_made_non_blocking():
+    base = (
+        "jobs:\n  a:\n    steps:\n      - id: preflight-mode\n        run: echo m\n"
+        "      - name: Verify bounded reviewer RED GREEN and adversarial proofs\n"
+        "        if: ${{ steps.preflight-mode.outputs.mode == 'normal' }}\n"
+        "        run: python scripts/hunter_finding_proof.py\n"
+        "      - run: python scripts/hunter_pr_preflight.py --mode normal\n"
+    )
+    assert prevention._reviewer_proof_step_errors(base) == []
+    assert prevention._reviewer_proof_step_errors(base + "        if: false\n")
+    assert prevention._reviewer_proof_step_errors(base + "        continue-on-error: true\n")
