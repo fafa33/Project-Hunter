@@ -1771,3 +1771,26 @@ def test_digest_closure_covers_candidate_packages_and_submodules(tmp_path):
     before = worker.candidate_module_digest(candidate, "A")
     (candidate / "scripts" / "hunter_pkg" / "sub.py").write_text("value = 2\n", encoding="utf-8")
     assert worker.candidate_module_digest(candidate, "A") != before
+
+
+@pytest.mark.parametrize(
+    "body",
+    [
+        "import importlib\nimportlib.import_module('hunter_helper')\n",
+        "__import__('hunter_helper')\n",
+        "exec(open('x').read())\n",
+        "import runpy\nrunpy.run_path('x.py')\n",
+    ],
+)
+def test_dynamic_import_forms_in_candidate_modules_are_refused(tmp_path, body):
+    candidate = tmp_path / "candidate"
+    (candidate / "scripts").mkdir(parents=True)
+    (candidate / "scripts" / "hunter_review_orchestrator.py").write_text(body, encoding="utf-8")
+    with pytest.raises(ValueError, match="dynamic import"):
+        worker.candidate_module_digest(candidate, "A")
+
+
+def test_real_candidate_closure_uses_no_dynamic_import_forms():
+    root = Path(__file__).resolve().parents[1]
+    for scenario in ("A", "B", "G"):
+        assert worker.candidate_module_closure(root, scenario)

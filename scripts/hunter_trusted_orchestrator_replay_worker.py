@@ -109,6 +109,22 @@ def assert_candidate_scripts_confined(candidate_root: Path) -> None:
                 confined_candidate_file(candidate_root, str((Path(current) / name).relative_to(candidate_root)))
 
 
+#: Calls that load code by a computed name or path; none of the replayed modules use them, so any appearance is refused.
+DYNAMIC_IMPORT_CALLS = frozenset(
+    {
+        "import_module",
+        "__import__",
+        "exec",
+        "eval",
+        "run_path",
+        "run_module",
+        "spec_from_file_location",
+        "load_module",
+        "exec_module",
+    }
+)
+
+
 def candidate_module_closure(candidate_root: Path, scenario_id: str) -> list[str]:
     """The declared candidate modules plus every ``scripts/`` module they import, transitively.
 
@@ -126,6 +142,14 @@ def candidate_module_closure(candidate_root: Path, scenario_id: str) -> list[str
         seen.add(relative)
         tree = ast.parse(confined_candidate_file(candidate_root, relative).read_text(encoding="utf-8"))
         for node in ast.walk(tree):
+            if isinstance(node, ast.Call):
+                callee = node.func.id if isinstance(node.func, ast.Name) else getattr(node.func, "attr", "")
+                if callee in DYNAMIC_IMPORT_CALLS:
+                    # A computed import cannot be resolved statically, so the digest could not bind to what runs.
+                    raise ValueError(
+                        f"candidate module {relative!r} uses a dynamic import form ({callee}) and is refused"
+                    )
+                continue
             if isinstance(node, ast.Import):
                 names = [alias.name for alias in node.names]
             elif isinstance(node, ast.ImportFrom) and node.level == 0 and node.module:
