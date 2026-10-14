@@ -448,7 +448,9 @@ def _candidate_tree(tmp_path: Path) -> Path:
         "  preflight:\n"
         "    steps:\n"
         "      - id: preflight-mode\n"
-        "        run: echo mode\n"
+        "        run: |\n"
+        "          PREFLIGHT_MODE=normal\n"
+        '          echo "mode=${PREFLIGHT_MODE}" >> "${GITHUB_OUTPUT}"\n'
         "      - name: Verify bounded reviewer RED GREEN and adversarial proofs\n"
         "        if: ${{ steps.preflight-mode.outputs.mode == 'normal' }}\n"
         "        run: python scripts/hunter_finding_proof.py\n"
@@ -841,7 +843,7 @@ def test_reviewer_proof_gate_is_judged_on_parsed_steps_not_comment_text():
     step = "- name: Verify bounded reviewer RED GREEN and adversarial proofs"
     guard = "if: ${{ steps.preflight-mode.outputs.mode == 'normal' }}"
     run = "python scripts/hunter_finding_proof.py"
-    pre = "      - id: preflight-mode\n        run: echo m\n"
+    pre = '      - id: preflight-mode\n        run: |\n          PREFLIGHT_MODE=normal\n          echo "mode=${PREFLIGHT_MODE}" >> "${GITHUB_OUTPUT}"\n'
     tail = "      - run: python scripts/hunter_pr_preflight.py --mode normal\n"
     real = f"jobs:\n  j:\n    steps:\n{pre}      {step}\n        {guard}\n        run: {run}\n{tail}"
     faked = f"# {step}\n# {guard}\n# run: {run}\njobs:\n  j:\n    steps:\n      - run: echo ok\n"
@@ -860,7 +862,7 @@ def test_reviewer_proof_in_a_separate_or_unbound_job_is_refused():
         "        run: python scripts/hunter_finding_proof.py\n"
     )
     preflight = "      - run: python scripts/hunter_pr_preflight.py --mode normal\n"
-    mode = "      - id: preflight-mode\n        run: echo mode\n"
+    mode = '      - id: preflight-mode\n        run: |\n          PREFLIGHT_MODE=normal\n          echo "mode=${PREFLIGHT_MODE}" >> "${GITHUB_OUTPUT}"\n'
     parked = f"jobs:\n  a:\n    steps:\n{step}  b:\n    steps:\n{mode}{preflight}"
     unbound = f"jobs:\n  a:\n    steps:\n{step}{mode}{preflight}"
     gated = f"jobs:\n  a:\n    if: ${{{{ false }}}}\n    steps:\n{mode}{step}{preflight}"
@@ -878,7 +880,7 @@ def test_job_level_continue_on_error_cannot_neutralise_the_reviewer_proof():
         "        run: python scripts/hunter_finding_proof.py\n"
     )
     body = (
-        "    steps:\n      - id: preflight-mode\n        run: echo m\n"
+        '    steps:\n      - id: preflight-mode\n        run: |\n          PREFLIGHT_MODE=normal\n          echo "mode=${PREFLIGHT_MODE}" >> "${GITHUB_OUTPUT}"\n'
         f"{step}      - run: python scripts/hunter_pr_preflight.py --mode normal\n"
     )
     assert prevention._reviewer_proof_step_errors(f"jobs:\n  a:\n{body}") == []
@@ -887,7 +889,7 @@ def test_job_level_continue_on_error_cannot_neutralise_the_reviewer_proof():
 
 def test_preflight_step_cannot_be_skipped_or_made_non_blocking():
     base = (
-        "jobs:\n  a:\n    steps:\n      - id: preflight-mode\n        run: echo m\n"
+        'jobs:\n  a:\n    steps:\n      - id: preflight-mode\n        run: |\n          PREFLIGHT_MODE=normal\n          echo "mode=${PREFLIGHT_MODE}" >> "${GITHUB_OUTPUT}"\n'
         "      - name: Verify bounded reviewer RED GREEN and adversarial proofs\n"
         "        if: ${{ steps.preflight-mode.outputs.mode == 'normal' }}\n"
         "        run: python scripts/hunter_finding_proof.py\n"
@@ -896,3 +898,14 @@ def test_preflight_step_cannot_be_skipped_or_made_non_blocking():
     assert prevention._reviewer_proof_step_errors(base) == []
     assert prevention._reviewer_proof_step_errors(base + "        if: false\n")
     assert prevention._reviewer_proof_step_errors(base + "        continue-on-error: true\n")
+
+
+def test_a_mode_step_that_never_publishes_the_mode_output_is_refused():
+    fake = (
+        "jobs:\n  a:\n    steps:\n      - id: preflight-mode\n        run: echo mode\n"
+        "      - name: Verify bounded reviewer RED GREEN and adversarial proofs\n"
+        "        if: ${{ steps.preflight-mode.outputs.mode == 'normal' }}\n"
+        "        run: python scripts/hunter_finding_proof.py\n"
+        "      - run: python scripts/hunter_pr_preflight.py --mode normal\n"
+    )
+    assert any("preflight-mode step" in error for error in prevention._reviewer_proof_step_errors(fake))

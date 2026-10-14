@@ -2185,6 +2185,13 @@ def _reviewer_proof_step_errors(workflow_text: str) -> list[str]:
         proof = steps[indexes["proof"][0]]
         if not indexes["mode"] or indexes["mode"][0] >= indexes["proof"][0]:
             return ["candidate preflight reviewer proof must follow the preflight-mode step in the same job"]
+        mode_run = str(steps[indexes["mode"][0]].get("run", ""))
+        if (
+            not re.search(r"^\s*PREFLIGHT_MODE=normal\s*$", mode_run, re.MULTILINE)
+            or not re.search(r'echo\s+"mode=\$\{PREFLIGHT_MODE\}"\s*>>\s*"\$\{GITHUB_OUTPUT\}"', mode_run)
+            or steps[indexes["mode"][0]].get("continue-on-error") not in (None, False)
+        ):
+            return ["candidate preflight-mode step must default to normal and publish mode=... to GITHUB_OUTPUT"]
         if proof.get("continue-on-error") not in (None, False):
             return ["candidate preflight reviewer proof step must not set continue-on-error"]
         if str(proof.get("if", "")).strip() != "${{ steps.preflight-mode.outputs.mode == 'normal' }}":
