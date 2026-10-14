@@ -104,3 +104,12 @@ def test_missing_sandbox_fails_closed(monkeypatch, tmp_path: Path):
     except proof.IsolationUnavailable:
         return
     raise AssertionError("an unsandboxed proof run must be refused")
+
+
+def test_unshare_only_fallback_is_refused(monkeypatch):
+    monkeypatch.setattr(proof.shutil, "which", lambda name: "/usr/bin/unshare" if name == "unshare" else None)
+    try:
+        proof.sandbox_prefix()
+    except proof.IsolationUnavailable:
+        return
+    raise AssertionError("a network-only namespace must not be accepted as isolation")

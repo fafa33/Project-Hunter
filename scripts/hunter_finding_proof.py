@@ -78,10 +78,8 @@ def sandbox_prefix() -> list[str]:
             "--unshare-pid",
             "--die-with-parent",
         ]
-    unshare = shutil.which("unshare")
-    if unshare:
-        return [unshare, "--net", "--map-root-user", "--"]
-    raise IsolationUnavailable("no no-network sandbox (bwrap/unshare) is available")
+    # No weaker fallback: a network-only namespace leaves the workspace writable to candidate-selected tests.
+    raise IsolationUnavailable("bwrap is required for filesystem- and network-isolated proof runs")
 
 
 def run(args: list[str], *, cwd: Path, timeout: int = TIMEOUT_SECONDS) -> subprocess.CompletedProcess[str]:

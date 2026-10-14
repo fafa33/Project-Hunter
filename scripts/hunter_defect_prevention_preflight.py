@@ -492,7 +492,7 @@ def validate_reviewer_finding_dispositions() -> list[str]:
                         or proof.get("red_test") in adversarial
                     ):
                         errors.append(f"{finding_id}: executable_proof requires distinct, unique adversarial_tests")
-            if classification == "new_systemic_defect" and finding_id != "RFD-416-001":
+            if classification == "new_systemic_defect" and not finding_proof.is_pinned_legacy(finding):
                 if not _is_non_empty_str(mapped_id) or mapped_id not in mapped_targets:
                     errors.append(f"{finding_id}: new systemic finding requires a registered defect/family mapping")
             if classification == "recurrence":
@@ -2141,7 +2141,11 @@ def validate_candidate_pytest_configuration(candidate_root: Path) -> list[str]:
 
 
 def _reviewer_proof_step_errors(workflow_text: str) -> list[str]:
-    """The reviewer proof gate is judged on parsed job steps, never on raw text a comment or scalar could fake."""
+    """The reviewer proof gate is judged on parsed job steps, never on raw text a comment or scalar could fake.
+
+    The proof step must live in the same job as the preflight command, after the step that defines the
+    ``preflight-mode`` output it is conditioned on, so it cannot be parked in a job that never runs.
+    """
     import yaml
 
     try:
@@ -2153,19 +2157,32 @@ def _reviewer_proof_step_errors(workflow_text: str) -> list[str]:
         return ["candidate preflight workflow has no parsed jobs"]
     for job in jobs.values():
         steps = job.get("steps") if isinstance(job, dict) else None
-        if not isinstance(steps, list):
+        if not isinstance(steps, list) or not all(isinstance(step, dict) for step in steps):
             continue
-        for step in steps:
-            if not isinstance(step, dict):
-                continue
-            if str(step.get("run", "")).strip() != "python scripts/hunter_finding_proof.py":
-                continue
-            if step.get("continue-on-error") not in (None, False):
-                return ["candidate preflight reviewer proof step must not set continue-on-error"]
-            if str(step.get("if", "")).strip() != "${{ steps.preflight-mode.outputs.mode == 'normal' }}":
-                return ["candidate preflight workflow must bind reviewer proof to normal preflight mode"]
-            return []
-    return ["candidate preflight workflow omits mandatory reviewer RED/GREEN proof gate"]
+        if str(job.get("if", "true")).strip() not in {"true", "${{ true }}"} or job.get("needs"):
+            continue
+        indexes = {
+            "mode": [i for i, step in enumerate(steps) if step.get("id") == "preflight-mode"],
+            "proof": [
+                i
+                for i, step in enumerate(steps)
+                if str(step.get("run", "")).strip() == "python scripts/hunter_finding_proof.py"
+            ],
+            "preflight": [
+                i for i, step in enumerate(steps) if "python scripts/hunter_pr_preflight.py" in str(step.get("run", ""))
+            ],
+        }
+        if not (indexes["proof"] and indexes["preflight"]):
+            continue
+        proof = steps[indexes["proof"][0]]
+        if not indexes["mode"] or indexes["mode"][0] >= indexes["proof"][0]:
+            return ["candidate preflight reviewer proof must follow the preflight-mode step in the same job"]
+        if proof.get("continue-on-error") not in (None, False):
+            return ["candidate preflight reviewer proof step must not set continue-on-error"]
+        if str(proof.get("if", "")).strip() != "${{ steps.preflight-mode.outputs.mode == 'normal' }}":
+            return ["candidate preflight workflow must bind reviewer proof to normal preflight mode"]
+        return []
+    return ["candidate preflight workflow omits mandatory reviewer RED/GREEN proof gate in the preflight job"]
 
 
 def validate_candidate_preflight_definition(candidate_root: Path) -> list[str]:

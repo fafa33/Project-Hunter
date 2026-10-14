@@ -447,6 +447,8 @@ def _candidate_tree(tmp_path: Path) -> Path:
         "jobs:\n"
         "  preflight:\n"
         "    steps:\n"
+        "      - id: preflight-mode\n"
+        "        run: echo mode\n"
         "      - name: Verify bounded reviewer RED GREEN and adversarial proofs\n"
         "        if: ${{ steps.preflight-mode.outputs.mode == 'normal' }}\n"
         "        run: python scripts/hunter_finding_proof.py\n"
@@ -839,11 +841,31 @@ def test_reviewer_proof_gate_is_judged_on_parsed_steps_not_comment_text():
     step = "- name: Verify bounded reviewer RED GREEN and adversarial proofs"
     guard = "if: ${{ steps.preflight-mode.outputs.mode == 'normal' }}"
     run = "python scripts/hunter_finding_proof.py"
-    real = f"jobs:\n  j:\n    steps:\n      {step}\n        {guard}\n        run: {run}\n"
+    pre = "      - id: preflight-mode\n        run: echo m\n"
+    tail = "      - run: python scripts/hunter_pr_preflight.py --mode normal\n"
+    real = f"jobs:\n  j:\n    steps:\n{pre}      {step}\n        {guard}\n        run: {run}\n{tail}"
     faked = f"# {step}\n# {guard}\n# run: {run}\njobs:\n  j:\n    steps:\n      - run: echo ok\n"
     conditional = real.replace(guard, "if: ${{ false }}")
-    soft = real + "        continue-on-error: true\n"
+    soft = real.replace(f"        run: {run}\n", f"        run: {run}\n        continue-on-error: true\n")
     assert prevention._reviewer_proof_step_errors(real) == []
     assert prevention._reviewer_proof_step_errors(faked)
     assert prevention._reviewer_proof_step_errors(conditional)
     assert prevention._reviewer_proof_step_errors(soft)
+
+
+def test_reviewer_proof_in_a_separate_or_unbound_job_is_refused():
+    step = (
+        "      - name: Verify bounded reviewer RED GREEN and adversarial proofs\n"
+        "        if: ${{ steps.preflight-mode.outputs.mode == 'normal' }}\n"
+        "        run: python scripts/hunter_finding_proof.py\n"
+    )
+    preflight = "      - run: python scripts/hunter_pr_preflight.py --mode normal\n"
+    mode = "      - id: preflight-mode\n        run: echo mode\n"
+    parked = f"jobs:\n  a:\n    steps:\n{step}  b:\n    steps:\n{mode}{preflight}"
+    unbound = f"jobs:\n  a:\n    steps:\n{step}{mode}{preflight}"
+    gated = f"jobs:\n  a:\n    if: ${{{{ false }}}}\n    steps:\n{mode}{step}{preflight}"
+    valid = f"jobs:\n  a:\n    steps:\n{mode}{step}{preflight}"
+    assert prevention._reviewer_proof_step_errors(parked)
+    assert prevention._reviewer_proof_step_errors(unbound)
+    assert prevention._reviewer_proof_step_errors(gated)
+    assert prevention._reviewer_proof_step_errors(valid) == []
