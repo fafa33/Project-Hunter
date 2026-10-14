@@ -116,7 +116,23 @@ jobs:
             --candidate-root candidate \
             --pr "$PR_NUMBER" \
             --candidate-sha "$CANDIDATE_SHA" \
-            --out replay-receipt.json
+            --out replay-receipt.json || {
+              rc=$?
+              # Diagnostic only: name each failing scenario (inert, truncated, workflow-command syntax defanged).
+              python - <<'PY' || true
+          import json
+          try:
+              results = json.load(open("replay-receipt.json"))["scenario_results"]
+          except Exception as exc:
+              print(f"replay receipt unreadable: {type(exc).__name__}")
+          else:
+              for item in results:
+                  if item.get("outcome") != "pass":
+                      line = json.dumps({k: v for k, v in item.items() if k != "invariant"})[:600]
+                      print("failing scenario:", line.replace("::", ": :"))
+          PY
+              exit "$rc"
+            }
 
       - name: Upload replay receipt
         uses: actions/upload-artifact@v4

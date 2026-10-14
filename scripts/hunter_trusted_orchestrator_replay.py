@@ -266,6 +266,11 @@ def resolve_candidate_root(workspace_root: Path, raw: str) -> Path:
     return resolve_confined_existing(workspace_root, raw, must_be_dir=True, label="--candidate-root")
 
 
+# Mount point of the sandbox's own tmpfs. It lives in bwrap's private mount namespace, so it is never the host's
+# /tmp: nothing written there can reach the host or the trusted workspace.
+SANDBOX_TMP = "/tmp"  # NOSONAR S108 - private tmpfs in the sandbox mount namespace, reviewed safe
+
+
 def _network_isolated_worker_command(worker_args: list[str]) -> list[str]:
     """Fail closed when hosted replay requires an OS-enforced network namespace.
 
@@ -290,7 +295,7 @@ def _network_isolated_worker_command(worker_args: list[str]) -> list[str]:
         "--proc",
         "/proc",
         "--tmpfs",
-        "/tmp",
+        SANDBOX_TMP,
         "--",
         *worker_args,
     ]
