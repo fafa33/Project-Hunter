@@ -94,7 +94,7 @@ jobs:
           # `bwrap --unshare-net` fail while configuring loopback ("RTM_NEWADDR: Operation not permitted").
           # Lift only that restriction on this ephemeral runner, then verify the namespace really denies egress.
           sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0 || true
-          /usr/bin/bwrap --die-with-parent --unshare-net --ro-bind / / --dev-bind /dev /dev --proc /proc -- \
+          /usr/bin/bwrap --die-with-parent --unshare-net --unshare-pid --unshare-ipc --unshare-uts --new-session --cap-drop ALL --ro-bind / / --dev-bind /dev /dev --proc /proc -- \
             python -c 'import socket; s=socket.socket(); s.settimeout(1); exec("try:\n s.connect((\"1.1.1.1\", 443))\nexcept OSError:\n pass\nelse:\n raise SystemExit(1)")'
 
       - name: Run trusted candidate orchestrator replay
@@ -109,7 +109,7 @@ jobs:
           # so this protection is effective before the candidate helper changes are merged.
           # The existing harness creates and unlinks its fixture in the workspace.
           # Keep that writable; the sandbox enforces network denial, not file immutability.
-          /usr/bin/bwrap --die-with-parent --unshare-net --ro-bind / / --dev-bind /dev /dev --proc /proc --tmpfs /tmp \
+          /usr/bin/bwrap --die-with-parent --unshare-net --unshare-pid --unshare-ipc --unshare-uts --new-session --cap-drop ALL --ro-bind / / --dev-bind /dev /dev --proc /proc --tmpfs /tmp \
             --bind "$GITHUB_WORKSPACE" "$GITHUB_WORKSPACE" -- \
             python scripts/hunter_trusted_orchestrator_replay.py run \
             --workspace-root "$GITHUB_WORKSPACE" \
