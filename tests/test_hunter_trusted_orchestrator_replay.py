@@ -1590,3 +1590,13 @@ def test_replay_failure_cannot_skip_status_publication():
     assert "!cancelled()" in jobs["publish-proof"]["if"]
     assert jobs["publish-proof"]["permissions"]["statuses"] == "write"
     assert set(jobs) == {"publish-proof"}
+
+
+def test_status_publication_runs_after_upstream_failure_so_status_never_stays_pending():
+    import yaml
+
+    doc = yaml.safe_load(Path(".github/workflows/hunter-trusted-orchestrator-replay-publish.yml").read_text())
+    steps = doc["jobs"]["publish-proof"]["steps"]
+    publish = next(step for step in steps if step.get("name") == "Publish exact-head PR-bound status")
+    assert "always()" in publish["if"]
+    assert "steps.context.outcome" in publish["if"]

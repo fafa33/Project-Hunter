@@ -18,6 +18,7 @@ from pathlib import Path
 from typing import Any, Literal
 
 import hunter_connector_write_ingress as ingress
+import hunter_finding_proof as finding_proof
 import hunter_pre_ready_review as pre_ready
 import hunter_writer_provenance as provenance
 import yaml
@@ -470,19 +471,27 @@ def validate_reviewer_finding_dispositions() -> list[str]:
                     if problem:
                         errors.append(f"{finding_id}: invalid {field} {reference!r}: {problem}")
             # Fast local validation; hosted lane executes the bounded proof.
-            if finding_id not in {"RFD-372-001", "RFD-372-002", "RFD-372-003", "RFD-372-004", "RFD-416-001"}:
+            if not finding_proof.is_pinned_legacy(finding):
                 proof = finding.get("executable_proof")
                 if not isinstance(proof, dict):
                     errors.append(f"{finding_id}: missing executable_proof for hosted RED/GREEN replay")
                 else:
-                    if not isinstance(proof.get("vulnerable_sha"), str) or not re.fullmatch(
-                        r"[0-9a-f]{40}", proof["vulnerable_sha"]
-                    ):
+                    vulnerable_sha = proof.get("vulnerable_sha")
+                    if not isinstance(vulnerable_sha, str) or not re.fullmatch(r"[0-9a-f]{40}", vulnerable_sha):
                         errors.append(f"{finding_id}: executable_proof requires immutable vulnerable_sha")
+                    elif finding_proof.reviewed_head_sha(finding) != vulnerable_sha:
+                        errors.append(f"{finding_id}: vulnerable_sha must equal source_provenance.reviewed_head_sha")
                     if proof.get("green_test") != proof.get("red_test") or not _is_non_empty_str(proof.get("red_test")):
                         errors.append(f"{finding_id}: executable_proof requires matching RED/GREEN pytest selectors")
-                    if not isinstance(proof.get("adversarial_tests"), list) or not proof["adversarial_tests"]:
-                        errors.append(f"{finding_id}: executable_proof requires adversarial_tests")
+                    adversarial = proof.get("adversarial_tests")
+                    if (
+                        not isinstance(adversarial, list)
+                        or not adversarial
+                        or not all(_is_non_empty_str(item) for item in adversarial)
+                        or len(set(adversarial)) != len(adversarial)
+                        or proof.get("red_test") in adversarial
+                    ):
+                        errors.append(f"{finding_id}: executable_proof requires distinct, unique adversarial_tests")
             if classification == "new_systemic_defect" and finding_id != "RFD-416-001":
                 if not _is_non_empty_str(mapped_id) or mapped_id not in mapped_targets:
                     errors.append(f"{finding_id}: new systemic finding requires a registered defect/family mapping")
@@ -2131,6 +2140,34 @@ def validate_candidate_pytest_configuration(candidate_root: Path) -> list[str]:
     return errors
 
 
+def _reviewer_proof_step_errors(workflow_text: str) -> list[str]:
+    """The reviewer proof gate is judged on parsed job steps, never on raw text a comment or scalar could fake."""
+    import yaml
+
+    try:
+        document = yaml.safe_load(workflow_text)
+    except yaml.YAMLError as exc:
+        return [f"candidate preflight workflow is not valid YAML: {exc}"]
+    jobs = document.get("jobs") if isinstance(document, dict) else None
+    if not isinstance(jobs, dict):
+        return ["candidate preflight workflow has no parsed jobs"]
+    for job in jobs.values():
+        steps = job.get("steps") if isinstance(job, dict) else None
+        if not isinstance(steps, list):
+            continue
+        for step in steps:
+            if not isinstance(step, dict):
+                continue
+            if str(step.get("run", "")).strip() != "python scripts/hunter_finding_proof.py":
+                continue
+            if step.get("continue-on-error") not in (None, False):
+                return ["candidate preflight reviewer proof step must not set continue-on-error"]
+            if str(step.get("if", "")).strip() != "${{ steps.preflight-mode.outputs.mode == 'normal' }}":
+                return ["candidate preflight workflow must bind reviewer proof to normal preflight mode"]
+            return []
+    return ["candidate preflight workflow omits mandatory reviewer RED/GREEN proof gate"]
+
+
 def validate_candidate_preflight_definition(candidate_root: Path) -> list[str]:
     errors: list[str] = []
     workflow_path = candidate_root / ".github" / "workflows" / "hunter-pre-pr-preflight.yml"
@@ -2140,12 +2177,7 @@ def validate_candidate_preflight_definition(candidate_root: Path) -> list[str]:
         errors.append(f"candidate preflight workflow missing: {workflow_path}")
     else:
         content = workflow_path.read_text(encoding="utf-8")
-        # The reviewer proof gate must not be removed or made conditional by a candidate.
-        proof_step = "- name: Verify bounded reviewer RED GREEN and adversarial proofs"
-        if proof_step not in content or "run: python scripts/hunter_finding_proof.py" not in content:
-            errors.append("candidate preflight workflow omits mandatory reviewer RED/GREEN proof gate")
-        if "if: ${{ steps.preflight-mode.outputs.mode == 'normal' }}" not in content:
-            errors.append("candidate preflight workflow must bind reviewer proof to normal preflight mode")
+        errors.extend(_reviewer_proof_step_errors(content))
         if "python scripts/hunter_pr_preflight.py" not in content:
             errors.append("candidate preflight workflow does not invoke scripts/hunter_pr_preflight.py")
         elif _workflow_has_unconditional_exit_before_preflight(content):

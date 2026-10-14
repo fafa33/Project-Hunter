@@ -300,6 +300,9 @@ jobs:
           PY
 
       - name: Publish exact-head PR-bound status
+        # Runs after any upstream failure (download, fetch, parse, validation) so the PR-bound status
+        # is set to failure rather than left pending; a missing validation result counts as failure.
+        if: ${{ always() && steps.context.outcome == 'success' }}
         env:
           GITHUB_TOKEN: ${{ github.token }}
           GH_REPO: ${{ github.repository }}

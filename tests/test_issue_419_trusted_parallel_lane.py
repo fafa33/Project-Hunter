@@ -444,10 +444,13 @@ def _candidate_tree(tmp_path: Path) -> Path:
     (root / ".github" / "workflows").mkdir(parents=True)
     (root / "scripts").mkdir()
     (root / ".github" / "workflows" / "hunter-pre-pr-preflight.yml").write_text(
-        "- name: Verify bounded reviewer RED GREEN and adversarial proofs\n"
-        "  if: ${{ steps.preflight-mode.outputs.mode == 'normal' }}\n"
-        "  run: python scripts/hunter_finding_proof.py\n"
-        "run: python scripts/hunter_pr_preflight.py --mode normal\n",
+        "jobs:\n"
+        "  preflight:\n"
+        "    steps:\n"
+        "      - name: Verify bounded reviewer RED GREEN and adversarial proofs\n"
+        "        if: ${{ steps.preflight-mode.outputs.mode == 'normal' }}\n"
+        "        run: python scripts/hunter_finding_proof.py\n"
+        "      - run: python scripts/hunter_pr_preflight.py --mode normal\n",
         encoding="utf-8",
     )
     (root / "scripts" / "hunter_pr_preflight.py").write_text(
@@ -830,3 +833,17 @@ def test_the_governance_identity_predicate_still_matches_this_workflow() -> None
         {"queued", "in_progress", "waiting", "requested", "pending"}
     )
     assert governance.TRUSTED_PROOF_WAITING_DESCRIPTION == "Waiting for trusted exact-head preflight proof"
+
+
+def test_reviewer_proof_gate_is_judged_on_parsed_steps_not_comment_text():
+    step = "- name: Verify bounded reviewer RED GREEN and adversarial proofs"
+    guard = "if: ${{ steps.preflight-mode.outputs.mode == 'normal' }}"
+    run = "python scripts/hunter_finding_proof.py"
+    real = f"jobs:\n  j:\n    steps:\n      {step}\n        {guard}\n        run: {run}\n"
+    faked = f"# {step}\n# {guard}\n# run: {run}\njobs:\n  j:\n    steps:\n      - run: echo ok\n"
+    conditional = real.replace(guard, "if: ${{ false }}")
+    soft = real + "        continue-on-error: true\n"
+    assert prevention._reviewer_proof_step_errors(real) == []
+    assert prevention._reviewer_proof_step_errors(faked)
+    assert prevention._reviewer_proof_step_errors(conditional)
+    assert prevention._reviewer_proof_step_errors(soft)

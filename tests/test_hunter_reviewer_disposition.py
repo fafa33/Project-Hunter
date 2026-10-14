@@ -43,7 +43,7 @@ def test_prevented_defect_recurrence_fails_prevention_conformance(tmp_path, monk
         "findings": [
             {
                 "id": "RFD-TEST-002",
-                "source_provenance": {"reviewer": "Codex"},
+                "source_provenance": {"reviewer": "Codex", "reviewed_head_sha": "a" * 40},
                 "validation_state": "validated",
                 "classification": "recurrence",
                 "mapped_defect_id": "PRH-007",
@@ -66,7 +66,7 @@ def test_recurrence_becomes_valid_only_after_permanent_corrective_disposition(tm
         "findings": [
             {
                 "id": "RFD-TEST-003",
-                "source_provenance": {"reviewer": "Codex"},
+                "source_provenance": {"reviewer": "Codex", "reviewed_head_sha": "a" * 40},
                 "validation_state": "validated",
                 "classification": "recurrence",
                 "mapped_defect_id": "PRH-007",
@@ -81,7 +81,7 @@ def test_recurrence_becomes_valid_only_after_permanent_corrective_disposition(tm
                     "red_test": "tests/test_pr376_prevention_regressions.py::test_protected_preflight_requires_exact_head_pr_bound_status",
                     "green_test": "tests/test_pr376_prevention_regressions.py::test_protected_preflight_requires_exact_head_pr_bound_status",
                     "adversarial_tests": [
-                        "tests/test_pr376_prevention_regressions.py::test_protected_preflight_requires_exact_head_pr_bound_status"
+                        "tests/test_hunter_reviewer_disposition.py::test_duplicate_reviewer_reports_map_to_one_defect_class"
                     ],
                 },
                 "guard_reference": "scripts/hunter_governance_review_v2.py::candidate_admission",
@@ -104,7 +104,7 @@ def test_duplicate_reviewer_reports_map_to_one_defect_class(tmp_path, monkeypatc
         "findings": [
             {
                 "id": "RFD-TEST-004A",
-                "source_provenance": {"reviewer": "Reviewer A", "pr_number": 100},
+                "source_provenance": {"reviewer": "Reviewer A", "pr_number": 100, "reviewed_head_sha": "a" * 40},
                 "validation_state": "validated",
                 "classification": "duplicate",
                 "mapped_defect_id": "PRH-007",
@@ -120,13 +120,13 @@ def test_duplicate_reviewer_reports_map_to_one_defect_class(tmp_path, monkeypatc
                     "red_test": "tests/test_hunter_reviewer_disposition.py::test_duplicate_reviewer_reports_map_to_one_defect_class",
                     "green_test": "tests/test_hunter_reviewer_disposition.py::test_duplicate_reviewer_reports_map_to_one_defect_class",
                     "adversarial_tests": [
-                        "tests/test_hunter_reviewer_disposition.py::test_duplicate_reviewer_reports_map_to_one_defect_class"
+                        "tests/test_hunter_reviewer_disposition.py::test_recurrence_becomes_valid_only_after_permanent_corrective_disposition"
                     ],
                 },
             },
             {
                 "id": "RFD-TEST-004B",
-                "source_provenance": {"reviewer": "Reviewer B", "pr_number": 101},
+                "source_provenance": {"reviewer": "Reviewer B", "pr_number": 101, "reviewed_head_sha": "a" * 40},
                 "validation_state": "validated",
                 "classification": "duplicate",
                 "mapped_defect_id": "PRH-007",
@@ -142,7 +142,7 @@ def test_duplicate_reviewer_reports_map_to_one_defect_class(tmp_path, monkeypatc
                     "red_test": "tests/test_hunter_reviewer_disposition.py::test_duplicate_reviewer_reports_map_to_one_defect_class",
                     "green_test": "tests/test_hunter_reviewer_disposition.py::test_duplicate_reviewer_reports_map_to_one_defect_class",
                     "adversarial_tests": [
-                        "tests/test_hunter_reviewer_disposition.py::test_duplicate_reviewer_reports_map_to_one_defect_class"
+                        "tests/test_hunter_reviewer_disposition.py::test_recurrence_becomes_valid_only_after_permanent_corrective_disposition"
                     ],
                 },
             },
