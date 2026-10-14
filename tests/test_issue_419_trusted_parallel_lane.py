@@ -30,9 +30,10 @@ import inspect
 import os
 import subprocess
 import sys
+from collections.abc import Iterator
+from contextlib import contextmanager
 from importlib import metadata
 from pathlib import Path
-from types import SimpleNamespace
 from typing import Any
 
 import hunter_defect_prevention_preflight as prevention
@@ -305,7 +306,7 @@ def test_a_missing_trusted_runner_fails_the_declared_lane_closed(
     def must_not_run(*args: Any, **kwargs: Any) -> Any:
         raise AssertionError("a lane the environment cannot honour must not execute any gate")
 
-    monkeypatch.setattr(prevention.subprocess, "run", must_not_run)
+    monkeypatch.setattr(prevention, "execute_gate", must_not_run)
 
     assert prevention.run_candidate_quality_gates(tmp_path) == 2
 
@@ -401,11 +402,12 @@ def test_the_trusted_gate_commands_are_unchanged_by_the_lane(monkeypatch: pytest
     """
     executed: list[tuple[str, ...]] = []
 
-    def fake_run(command: Any, *, cwd: Any, env: Any, check: Any) -> Any:
+    def fake_gate(command: Any, *, copy: Any, view: Any, env: Any, overlays: Any) -> int:
         executed.append(tuple(command))
-        return SimpleNamespace(returncode=0)
+        return 0
 
-    monkeypatch.setattr(prevention.subprocess, "run", fake_run)
+    monkeypatch.setattr(prevention, "execute_gate", fake_gate)
+    monkeypatch.setattr(prevention, "private_candidate_copy", _in_place)
     monkeypatch.setattr(prevention.finding_proof, "collect_errors", lambda root: [])
 
     monkeypatch.setenv("PYTEST_ADDOPTS", " ".join(prevention.TRUSTED_PARALLEL_LANE))
@@ -433,6 +435,11 @@ def test_the_trusted_and_candidate_gate_definitions_still_have_to_agree() -> Non
 # ---------------------------------------------------------------------------
 # B (enforced). the candidate's own pytest configuration cannot rewrite its proof
 # ---------------------------------------------------------------------------
+
+
+@contextmanager
+def _in_place(candidate_root: Path) -> Iterator[Path]:
+    yield candidate_root
 
 
 def _candidate_tree(tmp_path: Path) -> Path:
@@ -933,7 +940,13 @@ def test_the_trusted_lane_runs_the_trusted_proof_runner_before_any_candidate_gat
         return ["RFD-X: RED did not fail on vulnerable_sha"]
 
     monkeypatch.setattr(prevention.finding_proof, "collect_errors", failing_proof)
-    monkeypatch.setattr(prevention.subprocess, "run", lambda command, **kwargs: executed.append(tuple(command)))
+
+    def record_gate(command: Any, **kwargs: Any) -> int:
+        executed.append(tuple(command))
+        return 0
+
+    monkeypatch.setattr(prevention, "execute_gate", record_gate)
+    monkeypatch.setattr(prevention, "private_candidate_copy", _in_place)
     monkeypatch.delenv("PYTEST_ADDOPTS", raising=False)
 
     assert prevention.run_candidate_quality_gates(tmp_path) == 2
@@ -958,6 +971,11 @@ def test_execution_context_of_the_proof_and_preflight_steps_cannot_be_redirected
     assert mutate(lambda d: proof(d).update({"shell": "bash {0}; true"}))
     assert mutate(lambda d: runner(d).update({"working-directory": "bypass"}))
     assert mutate(lambda d: runner(d)["env"].update({"PATH": "/tmp/bypass"}))
+    assert mutate(lambda d: runner(d)["env"].update({"PYTEST_ADDOPTS": "-k nothing"}))
+    assert mutate(
+        lambda d: runner(d)["env"].update({"PYTEST_ADDOPTS": "--deselect tests/test_x.py -n auto --dist loadfile"})
+    )
+    assert mutate(lambda d: runner(d)["env"].pop("PYTEST_ADDOPTS"))
     assert mutate(lambda d: d["jobs"]["preflight"].update({"env": {"PATH": "/tmp/bypass"}}))
     assert mutate(lambda d: d["jobs"]["preflight"].update({"defaults": {"run": {"working-directory": "bypass"}}}))
     assert mutate(lambda d: d.update({"env": {"PATH": "/tmp/bypass"}}))

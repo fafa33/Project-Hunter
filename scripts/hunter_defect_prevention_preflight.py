@@ -10,9 +10,12 @@ import json
 import os
 import re
 import shlex
+import shutil
 import subprocess
+import tempfile
 import tomllib
-from collections.abc import Mapping
+from collections.abc import Iterator, Mapping, Sequence
+from contextlib import contextmanager
 from importlib import metadata
 from pathlib import Path
 from typing import Any, Literal
@@ -2168,6 +2171,7 @@ echo "Selected preflight mode: ${PREFLIGHT_MODE}"
 PROOF_COMMAND = "python scripts/hunter_finding_proof.py"
 PREFLIGHT_COMMAND = "python scripts/hunter_pr_preflight.py"
 CANONICAL_PREFLIGHT_RUN = 'python scripts/hunter_pr_preflight.py --mode "${PREFLIGHT_MODE}"'
+CANONICAL_PYTEST_ADDOPTS = " ".join(TRUSTED_PARALLEL_LANE)
 CANONICAL_PREFLIGHT_MODE_ENV = "${{ steps.preflight-mode.outputs.mode }}"
 _MODE_TAMPER_MARKERS = (".hunter-preflight-mode", "GITHUB_ENV", "PREFLIGHT_MODE")
 
@@ -2202,6 +2206,7 @@ def _mode_contract_errors(
         runner.get("continue-on-error") not in (None, False)
         or str(runner.get("if", "true")).strip() not in {"true", "${{ true }}"}
         or (runner.get("env") or {}).get("PREFLIGHT_MODE") != CANONICAL_PREFLIGHT_MODE_ENV
+        or (runner.get("env") or {}).get("PYTEST_ADDOPTS") != CANONICAL_PYTEST_ADDOPTS
     ):
         return "candidate preflight step must run unconditionally, propagate failure and take the published mode"
     if preflight_index < mode_index:
@@ -2392,22 +2397,114 @@ def verify_trusted_parallel_runner() -> int:
     return 0
 
 
+#: Gates whose *logic* is validation authority. They run from the trusted baseline copy of their script and its
+#: local-import closure, bound over the candidate's same paths, so a candidate cannot no-op or weaken the guard
+#: that judges it; everything else they read (docs, workflows, src, tests) is the candidate's, as data.
+GUARD_GATES = frozenset({"Architecture Index Guard", "Artifact Guard", "Defect Prevention Guard"})
+GATE_ENV_ALLOWLIST = (
+    "PATH",
+    "LANG",
+    "LC_ALL",
+    "TZ",
+    "CI",
+    "GITHUB_ACTIONS",
+    "PYTEST_ADDOPTS",
+    "PYTHONHASHSEED",
+)
+
+
+def gate_environment(source: Mapping[str, str]) -> dict[str, str]:
+    """The only environment candidate code sees: no tokens, credentials, proxies or runner secrets."""
+    env = {name: source[name] for name in GATE_ENV_ALLOWLIST if name in source}
+    env["HOME"] = finding_proof.SANDBOX_TMP
+    return env
+
+
+def _module_files(root: Path, module: str) -> list[Path]:
+    """Repository files that define ``module`` (and its parent packages) under the trusted ``scripts``/``src``."""
+    parts = module.split(".")
+    base = root / "src" if parts[0] == "hunter" else root / "scripts"
+    found: list[Path] = []
+    for depth in range(1, len(parts) + 1):
+        package = base.joinpath(*parts[:depth])
+        for candidate in (package.with_suffix(".py"), package / "__init__.py"):
+            if candidate.is_file():
+                found.append(candidate)
+    return found
+
+
+def trusted_closure(entries: Sequence[Path]) -> list[Path]:
+    """Trusted-baseline files reachable from ``entries`` through local (``scripts`` and ``hunter``) imports."""
+    root = Path(__file__).resolve().parents[1]
+    pending, seen = list(entries), set()
+    while pending:
+        path = pending.pop()
+        if path in seen:
+            continue
+        seen.add(path)
+        for node in ast.walk(ast.parse(path.read_text(encoding="utf-8"))):
+            if isinstance(node, ast.Import):
+                modules = [alias.name for alias in node.names]
+            elif isinstance(node, ast.ImportFrom) and node.level == 0 and node.module:
+                modules = [node.module, *(f"{node.module}.{alias.name}" for alias in node.names)]
+            elif isinstance(node, ast.ImportFrom) and node.level > 0:
+                package = path.parent.relative_to(root / "src").parts if path.is_relative_to(root / "src") else ()
+                anchor = package[: len(package) - (node.level - 1)] if package else ()
+                tail = node.module.split(".") if node.module else []
+                modules = [".".join([*anchor, *tail, *([alias.name] if not tail else [])]) for alias in node.names]
+                modules.append(".".join([*anchor, *tail]))
+            else:
+                modules = []
+            for module in filter(None, modules):
+                pending.extend(_module_files(root, module))
+    return sorted(seen)
+
+
+def guard_overlays(view: Path) -> list[tuple[Path, Path]]:
+    """Trusted guard scripts and their import closure, bound over the candidate's same repository paths."""
+    root = Path(__file__).resolve().parents[1]
+    entries = [
+        root / command[1]
+        for name, command in TRUSTED_CANDIDATE_QUALITY_GATES
+        if name in GUARD_GATES and len(command) > 1
+    ]
+    return [(path, view / path.relative_to(root)) for path in trusted_closure(entries)]
+
+
+@contextmanager
+def private_candidate_copy(candidate_root: Path) -> Iterator[Path]:
+    """A throwaway writable copy of the candidate (git history included): candidate code may write caches and
+    temp files there, and nothing it does reaches the trusted checkout, the runner, or the original checkout."""
+    with tempfile.TemporaryDirectory(prefix="hunter-gates-") as scratch:
+        copy = Path(scratch) / "candidate"
+        shutil.copytree(candidate_root, copy, symlinks=True)
+        yield copy
+
+
+def execute_gate(
+    command: Sequence[str], *, copy: Path, view: Path, env: Mapping[str, str], overlays: Sequence[tuple[Path, Path]]
+) -> int:
+    """Run one gate command inside the credential-free, network-free bubblewrap sandbox."""
+    argv = [*finding_proof.sandbox_prefix(copy, view, writable=True, overlays=overlays), *command]
+    return subprocess.run(argv, cwd=copy, env=dict(env), check=False).returncode
+
+
 def run_candidate_quality_gates(candidate_root: Path) -> int:
     """Execute the candidate through an immutable trusted gate list.
 
     The candidate dispatcher is deliberately not used as proof authority. A PR may
     edit hunter_pr_preflight.py, but it cannot remove or bypass a gate from this
     trusted controller because every required command is launched here directly.
+
+    Candidate code never runs with the controller's privileges: every gate command executes inside a bubblewrap
+    sandbox (read-only host, masked home/credential trees, private tmp, no network, scrubbed environment) over a
+    private writable copy of the candidate. The guard gates run the trusted baseline's own logic.
     """
     if not candidate_root.is_dir():
         print(f"[Trusted Candidate Gates] FAIL: candidate root missing: {candidate_root}")
         return 2
 
-    env = os.environ.copy()
-    env["GITHUB_TOKEN"] = ""
-    env["GH_TOKEN"] = ""
-
-    lane_problem = trusted_lane_problem(env.get("PYTEST_ADDOPTS", ""))
+    lane_problem = trusted_lane_problem(os.environ.get("PYTEST_ADDOPTS", ""))
     if lane_problem is not None:
         print(f"[Trusted Candidate Gates] FAIL: {lane_problem}", flush=True)
         print(
@@ -2416,10 +2513,11 @@ def run_candidate_quality_gates(candidate_root: Path) -> int:
             flush=True,
         )
         return 2
+    env = gate_environment(os.environ)
 
     # The reviewer RED/GREEN proof runs here from THIS (trusted, default-branch) copy of the proof runner and its
-    # pinned legacy fingerprints, against the candidate's dispositions and tests; the candidate's own runner is
-    # never what attests its findings.
+    # pinned legacy fingerprints, against the candidate's dispositions and tests, before any candidate gate; the
+    # candidate's own runner never attests its own findings.
     proof_errors = finding_proof.collect_errors(candidate_root)
     for problem in proof_errors:
         print(f"[Trusted Candidate Gates] FAIL: reviewer finding proof: {problem}", flush=True)
@@ -2427,17 +2525,25 @@ def run_candidate_quality_gates(candidate_root: Path) -> int:
         return 2
     print("[Trusted Candidate Gates] PASS: reviewer finding proof (trusted runner)", flush=True)
 
-    for name, command in TRUSTED_CANDIDATE_QUALITY_GATES:
-        printable = " ".join(command)
-        print(f"[Trusted Candidate Gates] {name}: {printable}", flush=True)
-        completed = subprocess.run(command, cwd=candidate_root, env=env, check=False)
-        if completed.returncode != 0:
-            print(
-                f"[Trusted Candidate Gates] FAIL: {name} exited {completed.returncode}",
-                flush=True,
-            )
-            return completed.returncode
-        print(f"[Trusted Candidate Gates] PASS: {name}", flush=True)
+    view = candidate_root.resolve()
+    try:
+        with private_candidate_copy(candidate_root) as copy:
+            for name, command in TRUSTED_CANDIDATE_QUALITY_GATES:
+                print(f"[Trusted Candidate Gates] {name}: {' '.join(command)} (sandboxed)", flush=True)
+                guard = name in GUARD_GATES
+                overlays = guard_overlays(view) if guard else []
+                gate_env = {**env, "PYTHONPATH": str(view / "src")} if guard else env
+                returncode = execute_gate(command, copy=copy, view=view, env=gate_env, overlays=overlays)
+                if returncode != 0:
+                    print(f"[Trusted Candidate Gates] FAIL: {name} exited {returncode}", flush=True)
+                    return returncode
+                print(f"[Trusted Candidate Gates] PASS: {name}", flush=True)
+    except finding_proof.IsolationUnavailable as unavailable:
+        print(f"[Trusted Candidate Gates] FAIL: {unavailable}; candidate code is never run unisolated", flush=True)
+        return 2
+    except OSError as error:
+        print(f"[Trusted Candidate Gates] FAIL: could not prepare the isolated candidate copy: {error}", flush=True)
+        return 2
 
     print("[Trusted Candidate Gates] PASS: immutable trusted gate chain executed", flush=True)
     return 0

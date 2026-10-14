@@ -17,6 +17,7 @@ import subprocess
 import sys
 import tarfile
 import tempfile
+from collections.abc import Sequence
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
@@ -88,17 +89,26 @@ def trusted_bwrap() -> str | None:
     return None
 
 
-def sandbox_prefix(source: Path, view: Path) -> list[str]:
+def sandbox_prefix(
+    source: Path,
+    view: Path,
+    *,
+    writable: bool = False,
+    overlays: Sequence[tuple[Path, Path]] = (),
+) -> list[str]:
     """bwrap argv: read-only root, private tmpfs, no network, host credential trees masked.
 
-    Mount order matters: masks and the private tmpfs come first, then the working tree and interpreter are
-    re-bound read-only on top, so a baseline worktree that lives under the host's /tmp (hidden by the private
-    tmpfs) and a checkout under /home remain visible, read-only, and nothing else of those trees is.
+    Mount order matters: masks and the private tmpfs come first, then the tree under test and the interpreter
+    are bound on top, so a work tree that lives under a masked prefix stays visible and nothing else of those
+    trees is. ``source`` is bound at ``view``: read-only by default, or (``writable=True``) a private copy the
+    caller made, so candidate code may write caches and temp files without touching the trusted checkout.
+    ``overlays`` are single trusted files bound read-only over paths inside the view, so a gate's own logic can
+    come from the trusted baseline while it reads the candidate tree as data.
     """
     bwrap = trusted_bwrap()
     if not bwrap:
         # No weaker fallback: a network-only namespace leaves the workspace writable to candidate-selected tests.
-        raise IsolationUnavailable("bwrap is required for filesystem- and network-isolated proof runs")
+        raise IsolationUnavailable("bwrap is required for filesystem- and network-isolated candidate runs")
     command = [bwrap, "--ro-bind", "/", "/", "--dev", "/dev", "--proc", "/proc"]
     for tree in MASKED_TREES:
         command += ["--tmpfs", tree]
@@ -109,8 +119,21 @@ def sandbox_prefix(source: Path, view: Path) -> list[str]:
             command += ["--ro-bind", path, path]
     # The tree under test is presented at one fixed path for every phase, so RED and GREEN see identical
     # paths and no git metadata (snapshots carry none); a test cannot tell which phase it is in.
-    command += ["--dir", str(view.resolve()), "--ro-bind", str(source.resolve()), str(view.resolve())]
-    command += ["--unshare-net", "--unshare-pid", "--die-with-parent", "--chdir", str(view.resolve())]
+    bind = "--bind" if writable else "--ro-bind"
+    command += ["--dir", str(view.resolve()), bind, str(source.resolve()), str(view.resolve())]
+    for trusted_file, inside in overlays:
+        command += ["--ro-bind", str(trusted_file.resolve()), str(inside)]
+    command += [
+        "--unshare-net",
+        "--unshare-pid",
+        "--unshare-ipc",
+        "--new-session",
+        "--cap-drop",
+        "ALL",
+        "--die-with-parent",
+        "--chdir",
+        str(view.resolve()),
+    ]
     return command
 
 
@@ -147,21 +170,32 @@ _OUTCOME_LINE = re.compile(r"^(PASSED|FAILED|ERROR|SKIPPED|XFAIL|XPASS) (\S+)", 
 
 
 def outcomes(stdout: str) -> dict[str, set[str]]:
-    """Per-selector set of reported outcomes, from the ``-rA`` short summary (parametrized ids fold to their base)."""
+    """Per-node-id set of reported outcomes, from the ``-rA`` short summary (full ids, parameters kept)."""
     found: dict[str, set[str]] = {}
     for status, node in _OUTCOME_LINE.findall(stdout):
-        found.setdefault(node.split("[", 1)[0], set()).add(status)
+        found.setdefault(node, set()).add(status)
     return found
 
 
 def unproven_selectors(stdout: str, selectors: list[str], expected: str) -> list[str]:
     """Selectors that were not reported with exactly ``expected`` (skipped, deselected or missing all count).
 
-    A candidate ``conftest.py`` hook can skip or deselect a selector so the run exits 0 without proving anything;
-    requiring an explicit per-selector outcome closes that, independent of the exit code.
+    A selector naming a parameter instance must be reported exactly; one naming a parametrized test must see
+    every reported instance with ``expected`` (a hook deselecting one instance leaves the others, so declare the
+    instance to pin it). A candidate ``conftest.py`` hook that skips or deselects a selector can otherwise exit 0
+    without proving anything.
     """
     reported = outcomes(stdout)
-    return [selector for selector in selectors if reported.get(selector.split("[", 1)[0]) != {expected}]
+    missing = []
+    for selector in selectors:
+        matching = {
+            node: statuses
+            for node, statuses in reported.items()
+            if node == selector or ("[" not in selector and node.startswith(f"{selector}["))
+        }
+        if not matching or any(statuses != {expected} for statuses in matching.values()):
+            missing.append(selector)
+    return missing
 
 
 def snapshot_tracked(root: Path, destination: Path) -> None:

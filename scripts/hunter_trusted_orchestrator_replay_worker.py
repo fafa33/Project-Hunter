@@ -164,6 +164,11 @@ def scenario_a(candidate_root: Path, fixture: dict[str, Any]) -> dict[str, Any]:
     # terminal result for the same exact head (DFF-041, PR #535).
     orchestrator.collector_liveness = lambda *_a: ("completed", 1)
 
+    # Hermetic by construction: the replay must never reach the network. The candidate's REST helper is replaced
+    # with "this repository has no collector workflow runs", so a scenario's outcome depends only on the durable
+    # record and the stubs above, not on whether a real (or unreachable) GitHub API answers.
+    orchestrator.request_json = lambda *_a, **_k: {"workflow_runs": []}
+
     def _recorded(age_seconds: int) -> Any:
         started = (datetime.now(UTC) - timedelta(seconds=age_seconds)).strftime("%Y-%m-%dT%H:%M:%SZ")
         return orchestrator.ReviewCycle(
@@ -347,6 +352,11 @@ def scenario_b(candidate_root: Path, fixture: dict[str, Any]) -> dict[str, Any]:
         return ("dead", count)
 
     orchestrator.collector_liveness = fake_collector_liveness
+
+    # Hermetic by construction: the replay must never reach the network. The candidate's REST helper is replaced
+    # with "this repository has no collector workflow runs", so a scenario's outcome depends only on the durable
+    # record and the stubs above, not on whether a real (or unreachable) GitHub API answers.
+    orchestrator.request_json = lambda *_a, **_k: {"workflow_runs": []}
 
     def _recorded(age_seconds: int) -> Any:
         started = (datetime.now(UTC) - timedelta(seconds=age_seconds)).strftime("%Y-%m-%dT%H:%M:%SZ")

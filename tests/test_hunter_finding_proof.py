@@ -305,10 +305,15 @@ def test_candidate_ledger_must_retain_every_trusted_baseline_finding(tmp_path: P
     assert proof.baseline_retention_errors(baseline, baseline) == []
 
 
-def test_parameterized_selectors_are_normalized_before_lookup():
-    selector = "tests/test_x.py::test_case[param]"
-    assert proof.unproven_selectors(f"PASSED {selector}\n1 passed", [selector], "PASSED") == []
-    assert proof.unproven_selectors(f"SKIPPED {selector}", [selector], "PASSED") == [selector]
+def test_parameter_instances_are_not_folded_together():
+    kept, removed = "tests/test_x.py::test_adv[kept]", "tests/test_x.py::test_adv[removed]"
+    base = "tests/test_x.py::test_adv"
+    only_kept = f"PASSED {kept}\n1 passed, 1 deselected"
+    both = f"PASSED {kept}\nPASSED {removed}"
+    assert proof.unproven_selectors(only_kept, [kept, removed], "PASSED") == [removed]  # the deselected one is caught
+    assert proof.unproven_selectors(both, [kept, removed], "PASSED") == []
+    assert proof.unproven_selectors(both, [base], "PASSED") == []  # an unparameterized selector covers all instances
+    assert proof.unproven_selectors(f"PASSED {kept}\nFAILED {removed}", [base], "PASSED") == [base]
 
 
 def test_non_string_adversarial_entries_are_a_controlled_failure():
