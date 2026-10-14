@@ -1644,3 +1644,13 @@ def test_hosted_replay_uses_fixed_network_namespace_binary(monkeypatch):
     assert command[0] == "/usr/bin/bwrap"
     assert "--unshare-net" in command
     assert command[-3:] == [sys.executable, "-c", "pass"]
+
+
+def test_hosted_netns_provisioning_lifts_the_apparmor_userns_restriction_before_the_first_bwrap_use():
+    import yaml
+
+    doc = yaml.safe_load(Path(".github/workflows/hunter-trusted-orchestrator-replay-validate.yml").read_text())
+    steps = [step for job in doc["jobs"].values() for step in job["steps"]]
+    provision = next(step for step in steps if "network namespace" in step.get("name", ""))["run"]
+    sysctl = provision.index("kernel.apparmor_restrict_unprivileged_userns=0")
+    assert sysctl < provision.index("/usr/bin/bwrap --die-with-parent")
