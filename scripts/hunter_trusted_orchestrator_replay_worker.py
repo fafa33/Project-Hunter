@@ -95,8 +95,18 @@ def assert_candidate_scripts_confined(candidate_root: Path) -> None:
     scripts = candidate_root / "scripts"
     if scripts.is_symlink():
         raise ValueError("candidate scripts directory is a symlink and is refused")
-    for entry in sorted(scripts.glob("*.py")):
-        confined_candidate_file(candidate_root, f"scripts/{entry.name}")
+    # Walk the whole tree: a symlinked subdirectory (``scripts/helpers -> /outside``) would otherwise make
+    # ``import helpers.module`` read files outside the candidate checkout.
+    for current, directories, files in os.walk(scripts, followlinks=False):
+        for name in [*directories, *files]:
+            path = Path(current) / name
+            if path.is_symlink():
+                raise ValueError(
+                    f"candidate path {str(path.relative_to(candidate_root))!r} is a symlink and is refused"
+                )
+        for name in files:
+            if name.endswith(".py"):
+                confined_candidate_file(candidate_root, str((Path(current) / name).relative_to(candidate_root)))
 
 
 def candidate_module_closure(candidate_root: Path, scenario_id: str) -> list[str]:

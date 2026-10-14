@@ -1557,7 +1557,7 @@ def test_inline_validator_fails_closed_on_failed_replay_job_even_with_forged_gre
     script = _extract_inline_validate_script()
     import os as _os
 
-    for failed_job in ("WORKFLOW_CONCLUSION",):
+    for failed_job in ("WORKFLOW_CONCLUSION", "REPLAY_JOB_RESULT", "DIGEST_JOB_RESULT"):
         work = tmp_path / failed_job
         work.mkdir()
         for name in (
@@ -1709,3 +1709,31 @@ def test_unrelated_candidate_files_do_not_change_the_digest(tmp_path):
     before = worker.candidate_module_digest(candidate, "A")
     (candidate / "scripts" / "hunter_unrelated.py").write_text("x = 2\n", encoding="utf-8")
     assert worker.candidate_module_digest(candidate, "A") == before
+
+
+def test_publisher_resolves_both_validation_job_conclusions_from_the_triggering_run():
+    import yaml
+
+    doc = yaml.safe_load(Path(".github/workflows/hunter-trusted-orchestrator-replay-publish.yml").read_text())
+    steps = doc["jobs"]["publish-proof"]["steps"]
+    context = next(step for step in steps if step.get("id") == "context")["run"]
+    assert "actions/runs/${RUN_ID}/jobs" in context
+    assert (
+        "Trusted Candidate Orchestrator Replay" in context
+        and "Independently Verify Candidate Module Digests" in context
+    )
+    assert "${replay_job:-missing}" in context and "${digest_job:-missing}" in context
+    validator = next(step for step in steps if step.get("id") == "validate_receipt")
+    assert validator["env"]["REPLAY_JOB_RESULT"] == "${{ steps.context.outputs.replay_job_result }}"
+    assert validator["env"]["DIGEST_JOB_RESULT"] == "${{ steps.context.outputs.digest_job_result }}"
+
+
+def test_symlinked_directory_in_candidate_scripts_tree_is_refused(tmp_path):
+    outside = tmp_path / "outside"
+    outside.mkdir()
+    (outside / "module.py").write_text("X = 1\n", encoding="utf-8")
+    candidate = tmp_path / "candidate"
+    (candidate / "scripts").mkdir(parents=True)
+    (candidate / "scripts" / "helpers").symlink_to(outside, target_is_directory=True)
+    with pytest.raises(ValueError, match="symlink"):
+        worker.assert_candidate_scripts_confined(candidate)
