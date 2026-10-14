@@ -37,7 +37,10 @@ import importlib
 import json
 import multiprocessing as mp
 import os
+import pickle
+import queue
 import sys
+import threading
 import time
 import traceback
 from datetime import UTC, datetime, timedelta
@@ -605,6 +608,32 @@ def _scenario_child(conn: Connection, scenario_id: str, candidate_root_str: str,
         conn.close()
 
 
+def _recv_before_deadline(conn: Connection, deadline: float) -> Any:
+    """Bound the *whole* framed pipe receive, not merely its first readable byte.
+
+    multiprocessing.Connection.poll() reports a partial frame as readable, but
+    recv() can then block forever. A daemon reader never owns trusted state;
+    on timeout the caller closes the pipe and terminates the isolated child.
+    """
+    result: queue.Queue[tuple[bool, Any]] = queue.Queue(maxsize=1)
+
+    def read() -> None:
+        try:
+            result.put((True, pickle.loads(conn.recv_bytes(maxlength=1024 * 1024))))
+        except (EOFError, OSError, ValueError, pickle.UnpicklingError) as exc:
+            result.put((False, exc))
+
+    reader = threading.Thread(target=read, daemon=True, name="bounded-replay-pipe-reader")
+    reader.start()
+    try:
+        ok, value = result.get(timeout=max(0.0, deadline - time.monotonic()))
+    except queue.Empty as exc:
+        raise TimeoutError("scenario completion frame exceeded its deadline") from exc
+    if not ok:
+        raise value
+    return value
+
+
 def _run_scenario_isolated(scenario_id: str, candidate_root: Path, fixture: dict[str, Any]) -> dict[str, Any]:
     """Runs one scenario in a child process and trusts only the exact ordered
     pair of pipe messages ``_scenario_child`` can produce -- never the
@@ -627,8 +656,8 @@ def _run_scenario_isolated(scenario_id: str, candidate_root: Path, fixture: dict
     try:
         while len(messages) < 2 and parent_conn.poll(timeout=remaining):
             try:
-                messages.append(parent_conn.recv())
-            except EOFError:
+                messages.append(_recv_before_deadline(parent_conn, deadline))
+            except (EOFError, OSError, ValueError, TimeoutError):
                 break
             # Startup has its own bounded window. A trusted started sentinel
             # begins a fresh, full scenario execution budget.

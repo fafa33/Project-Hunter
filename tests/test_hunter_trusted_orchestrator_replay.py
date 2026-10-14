@@ -1572,9 +1572,38 @@ def test_worker_post_started_timeout_budget_with_controlled_clock(monkeypatch):
         monkeypatch.setattr(worker.time, "monotonic", clock.monotonic)
         monkeypatch.setattr(worker.mp, "get_context", lambda method, pipe=pipe: Context(pipe))
         monkeypatch.setattr(worker, "SCENARIO_CHILD_TIMEOUT_SECONDS", 60)
+        monkeypatch.setattr(worker, "_recv_before_deadline", lambda conn, deadline: conn.recv())
         result = worker._run_scenario_isolated("A", REPO_ROOT, {})
         assert result["outcome"] == expected
         assert clock.now == (9.0 + finish_delay if expected == "pass" else 69.0)
+
+
+def test_worker_partial_pipe_frame_cannot_extend_deadline():
+    """A readable header with no payload must not block trusted replay forever."""
+    import importlib.util
+    import multiprocessing.connection
+    import os
+    import time
+
+    worker_path = REPO_ROOT / "scripts/hunter_trusted_orchestrator_replay_worker.py"
+    spec = importlib.util.spec_from_file_location("replay_worker_partial_frame_test", worker_path)
+    assert spec is not None and spec.loader is not None
+    worker = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(worker)
+
+    read_fd, write_fd = os.pipe()
+    conn = multiprocessing.connection.Connection(read_fd, readable=True, writable=False)
+    try:
+        # A valid 4-byte frame header claiming 64 bytes, followed by only one.
+        os.write(write_fd, (64).to_bytes(4, "big", signed=True) + b"x")
+        assert conn.poll(0), "the partial frame is already readable"
+        start = time.monotonic()
+        with pytest.raises(TimeoutError, match="deadline"):
+            worker._recv_before_deadline(conn, start + 0.15)
+        assert time.monotonic() - start < 1.5
+    finally:
+        os.close(write_fd)
+        conn.close()
 
 
 def test_outer_supervisor_budget_exceeds_both_worker_windows_and_cleanup(monkeypatch):
