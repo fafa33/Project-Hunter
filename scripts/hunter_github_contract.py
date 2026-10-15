@@ -25,7 +25,14 @@ def observe_contract(repository: str, *, get: Callable[[str], Any] = github_get)
     rulesets = get(f"repos/{repository}/rulesets?includes_parents=true")
     if not isinstance(rulesets, list):
         raise ValueError("Malformed GitHub ruleset list")
-    active = [item for item in rulesets if isinstance(item, dict) and item.get("enforcement") == "active"]
+    for item in rulesets:
+        if (
+            not isinstance(item, dict)
+            or item.get("enforcement") not in {"active", "disabled", "evaluate"}
+            or type(item.get("id")) is not int
+        ):
+            raise ValueError("Malformed GitHub ruleset summary")
+    active = [item for item in rulesets if item["enforcement"] == "active"]
     if not active:
         raise ValueError("No active GitHub rulesets observed")
     observations = []
@@ -42,6 +49,7 @@ def observe_contract(repository: str, *, get: Callable[[str], Any] = github_get)
                 "name": detail.get("name"),
                 "target": detail.get("target"),
                 "conditions": detail.get("conditions"),
+                "bypass_actors": detail.get("bypass_actors"),
                 "rules": detail["rules"],
             }
         )
@@ -98,6 +106,9 @@ def required_checks(contract: dict[str, Any], *, target_ref: str | None = None) 
     """Extract required contexts and their GitHub App IDs; reject conflicts."""
     result: dict[str, int | None] = {}
     for ruleset in contract["rulesets"]:
+        bypass = ruleset.get("bypass_actors")
+        if bypass is not None and (not isinstance(bypass, list) or bypass):
+            raise ValueError("Ruleset bypass actors are not permitted")
         if target_ref is not None and not _applies_to_ref(ruleset, target_ref):
             continue
         for rule in ruleset["rules"]:

@@ -636,6 +636,35 @@ def _hgcc_hosted_verdict(head_sha: str) -> Decision | None:
 
     try:
         contract = observe_contract(REPO, get=lambda path: request_json("GET", path.removeprefix(f"repos/{REPO}/")))
+        # A publisher cannot require its own status to exist before publishing it.
+        # Preserve every other required context and its configured app identity.
+        contract = {
+            **contract,
+            "rulesets": [
+                {
+                    **ruleset,
+                    "rules": [
+                        (
+                            {
+                                **rule,
+                                "parameters": {
+                                    **rule.get("parameters", {}),
+                                    "required_status_checks": [
+                                        entry
+                                        for entry in rule.get("parameters", {}).get("required_status_checks", [])
+                                        if entry.get("context") != CONTEXT
+                                    ],
+                                },
+                            }
+                            if rule.get("type") == "required_status_checks"
+                            else rule
+                        )
+                        for rule in ruleset["rules"]
+                    ],
+                }
+                for ruleset in contract["rulesets"]
+            ],
+        }
         ok, reason = verify_required_checks(
             contract,
             all_check_runs(head_sha),

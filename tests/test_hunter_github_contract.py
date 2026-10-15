@@ -155,3 +155,31 @@ def test_required_commit_status_can_satisfy_context():
     assert not hgcc.verify_required_checks(
         contract, [], statuses=[{"id": 2, "context": "Hunter Merge Readiness", "state": "failure"}]
     )[0]
+
+
+def test_malformed_active_ruleset_summary_is_not_silently_dropped():
+    def get(path):
+        if "?includes_parents=true" in path:
+            return [{"id": 1, "enforcement": "active"}, {"id": 2, "enforcement": "unknown"}]
+        raise AssertionError("Malformed summaries must be rejected before fetching details")
+
+    with pytest.raises(ValueError, match="Malformed GitHub ruleset summary"):
+        hgcc.observe_contract("fafa33/Project-Hunter", get=get)
+
+
+def test_bypass_actors_fail_closed_before_accepting_required_checks():
+    contract = {
+        "rulesets": [
+            {
+                "bypass_actors": [{"actor_id": 1}],
+                "rules": [
+                    {
+                        "type": "required_status_checks",
+                        "parameters": {"required_status_checks": [{"context": "Quality Gates"}]},
+                    }
+                ],
+            }
+        ]
+    }
+    with pytest.raises(ValueError, match="bypass actors"):
+        hgcc.required_checks(contract)
