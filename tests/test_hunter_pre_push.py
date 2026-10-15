@@ -29,6 +29,10 @@ def _stub_issue_412_boundaries(monkeypatch) -> None:
     for, instead of turning every one of them into an end-to-end git fixture.
     """
 
+    monkeypatch.setattr(hunter_pre_push, "_repository_from_remotes", lambda: "fafa33/Project-Hunter")
+    monkeypatch.setattr(
+        hunter_pre_push, "_run_hgcc_contract_check", lambda _repo: SimpleNamespace(returncode=0, stderr="")
+    )
     monkeypatch.setattr(hunter_pre_push, "_validate_writer_provenance", lambda _head: None)
     monkeypatch.setattr(hunter_pre_push, "_validate_receipt_freshness", lambda _head: None)
     monkeypatch.setattr(hunter_pre_push, "report_pre_ready_review_state", lambda _head, _updates: None)

@@ -96,7 +96,7 @@ def test_owner_merge_boundary_consumes_live_hgcc():
     source = (Path(__file__).resolve().parents[1] / "scripts/hunter_merge_readiness_v2.py").read_text()
     owner_guard = source.split("def owner_merge_guard(", 1)[1].split("\ndef main(", 1)[0]
     assert "observe_contract(" in owner_guard
-    assert "verify_required_checks(contract, all_check_runs(pr_head))" in owner_guard
+    assert "verify_required_checks(" in owner_guard and "all_check_runs(pr_head)" in owner_guard
     assert owner_guard.index("verify_required_checks(") < owner_guard.index("decide_completion(")
 
 
@@ -122,3 +122,36 @@ def test_hosted_readiness_allows_existing_success_with_valid_hgcc(monkeypatch):
     monkeypatch.setattr(readiness, "request_json", lambda method, path, payload=None: published.append(payload))
     readiness.publish("a" * 40, readiness.Decision("success", "ready"))
     assert published[0]["state"] == "success"
+
+
+def test_ruleset_scope_excludes_unrelated_branches():
+    ruleset = {
+        "target": "branch",
+        "conditions": {"ref_name": {"include": ["refs/heads/release/*"], "exclude": []}},
+        "rules": [
+            {"type": "required_status_checks", "parameters": {"required_status_checks": [{"context": "release-only"}]}}
+        ],
+    }
+    assert hgcc.required_checks({"rulesets": [ruleset]}, target_ref="refs/heads/main") == {}
+    assert "release-only" in hgcc.required_checks({"rulesets": [ruleset]}, target_ref="refs/heads/release/1")
+
+
+def test_required_commit_status_can_satisfy_context():
+    contract = {
+        "rulesets": [
+            {
+                "rules": [
+                    {
+                        "type": "required_status_checks",
+                        "parameters": {"required_status_checks": [{"context": "Hunter Merge Readiness"}]},
+                    }
+                ]
+            }
+        ]
+    }
+    assert hgcc.verify_required_checks(
+        contract, [], statuses=[{"id": 1, "context": "Hunter Merge Readiness", "state": "success"}]
+    )[0]
+    assert not hgcc.verify_required_checks(
+        contract, [], statuses=[{"id": 2, "context": "Hunter Merge Readiness", "state": "failure"}]
+    )[0]

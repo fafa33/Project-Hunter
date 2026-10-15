@@ -636,7 +636,12 @@ def _hgcc_hosted_verdict(head_sha: str) -> Decision | None:
 
     try:
         contract = observe_contract(REPO, get=lambda path: request_json("GET", path.removeprefix(f"repos/{REPO}/")))
-        ok, reason = verify_required_checks(contract, all_check_runs(head_sha))
+        ok, reason = verify_required_checks(
+            contract,
+            all_check_runs(head_sha),
+            target_ref="refs/heads/main",
+            statuses=paged(f"commits/{head_sha}/statuses"),
+        )
     except (ValueError, TypeError, KeyError, RuntimeError, transport.GitHubUnavailable) as exc:
         return Decision("pending", f"HGCC-1 indeterminate: {exc}")
     if not ok:
@@ -782,8 +787,13 @@ def owner_merge_guard(pr_number: int) -> CompletionVerdict:
 
     try:
         contract = observe_contract(REPO, get=lambda path: request_json("GET", path.removeprefix(f"repos/{REPO}/")))
-        checks_ok, checks_reason = verify_required_checks(contract, all_check_runs(pr_head))
-    except (ValueError, TypeError, KeyError, transport.GitHubUnavailable) as exc:
+        checks_ok, checks_reason = verify_required_checks(
+            contract,
+            all_check_runs(pr_head),
+            target_ref="refs/heads/main",
+            statuses=paged(f"commits/{pr_head}/statuses"),
+        )
+    except (ValueError, TypeError, KeyError, transport.GitHubUnavailable, transport.GitHubRequestError) as exc:
         return CompletionVerdict(False, "MERGE_NOT_READY", f"HGCC-1 indeterminate: {exc}")
     if not checks_ok:
         return CompletionVerdict(False, "MERGE_NOT_READY", f"HGCC-1: {checks_reason}")

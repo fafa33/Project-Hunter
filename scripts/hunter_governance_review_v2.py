@@ -2444,7 +2444,10 @@ def candidate_admission(repository: str, token: str, head_sha: str, pr_number: i
         ok, changed_paths, error = read_pr_changed_paths(repository, token, pr_number)
         if not ok:
             return "failure", f"Candidate admission blocked: changed-file evidence is unavailable ({error})."
-        touches_protected_preflight = any(path in PREFLIGHT_OWNED_PATHS for path in changed_paths)
+        # Share the trusted definition classifier with hosted proof-reuse routing.
+        from hunter_preflight_reuse_decision import is_trusted_definition_path
+
+        touches_protected_preflight = any(is_trusted_definition_path(path) for path in changed_paths)
 
     head_mode, mode_error = read_head_preflight_mode(repository, token, head_sha)
     if head_mode == "unavailable":
@@ -2482,6 +2485,17 @@ def candidate_admission(repository: str, token: str, head_sha: str, pr_number: i
         )
         if blocking_review:
             return review_state, review_message
+
+    if pr_number is not None:
+        try:
+            recheck = request_json(repository, token, "GET", f"pulls/{pr_number}")
+            if not isinstance(recheck, dict) or not isinstance(recheck.get("head"), dict):
+                return "failure", "Candidate admission blocked: PR payload recheck is malformed."
+            recheck_head = str(recheck["head"].get("sha") or "").strip()
+            if recheck_head != head_sha:
+                return "failure", f"Candidate admission blocked: PR #{pr_number} head changed during validation."
+        except Exception as exc:
+            return "failure", f"Candidate admission blocked: PR head SHA recheck failed ({type(exc).__name__}: {exc})."
 
     if touches_protected_preflight:
         if pr_number is None:

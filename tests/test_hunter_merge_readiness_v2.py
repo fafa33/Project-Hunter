@@ -606,12 +606,14 @@ def test_owner_merge_guard_accepts_only_clean_identical_merge_ready_head(monkeyp
         lambda *args, **kwargs: {
             "rulesets": [
                 {
+                    "target": "branch",
+                    "conditions": {"ref_name": {"include": ["refs/heads/main"], "exclude": []}},
                     "rules": [
                         {
                             "type": "required_status_checks",
                             "parameters": {"required_status_checks": [{"context": "Quality Gates"}]},
                         }
-                    ]
+                    ],
                 }
             ]
         },
@@ -621,6 +623,7 @@ def test_owner_merge_guard_accepts_only_clean_identical_merge_ready_head(monkeyp
         "all_check_runs",
         lambda _head: [{"id": 1, "name": "Quality Gates", "status": "completed", "conclusion": "success"}],
     )
+    monkeypatch.setattr(core, "paged", lambda path: [])
     verdict = core.owner_merge_guard(562)
     assert verdict.accepted
     assert verdict.state == "OWNER_MERGE_GUARD_ACCEPTED"
