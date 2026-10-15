@@ -278,3 +278,29 @@ def test_hma1_canonical_readiness_authority_uniqueness():
     decision = readiness.evaluate(DummyObs())
     assert decision.state == "success"
     assert "Ready to merge" in decision.description
+
+
+def test_trusted_gate_runner_does_not_execute_candidate_script_paths(monkeypatch, tmp_path):
+    import hunter_defect_prevention_preflight as prevention
+
+    candidate = tmp_path / "candidate"
+    candidate.mkdir()
+    seen = []
+
+    class Completed:
+        returncode = 0
+
+    def capture(command, **kwargs):
+        seen.append((command, kwargs))
+        return Completed()
+
+    monkeypatch.setattr(prevention, "trusted_lane_problem", lambda _opts: None)
+    monkeypatch.setattr(prevention.subprocess, "run", capture)
+    assert prevention.run_candidate_quality_gates(candidate) == 0
+    trusted_root = Path(prevention.__file__).resolve().parents[1]
+    for command, options in seen:
+        assert options["cwd"] == candidate
+        assert options["env"]["GITHUB_TOKEN"] == ""
+        if command[0] == "python" and len(command) > 1:
+            assert Path(command[1]).is_absolute()
+            assert Path(command[1]).is_relative_to(trusted_root / "scripts")
