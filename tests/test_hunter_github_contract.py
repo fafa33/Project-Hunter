@@ -2,9 +2,8 @@
 
 from pathlib import Path
 
-import pytest
-
 import hunter_github_contract as hgcc
+import pytest
 
 
 def test_observes_active_rulesets_and_required_checks():
