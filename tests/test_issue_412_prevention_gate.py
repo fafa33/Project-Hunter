@@ -135,6 +135,14 @@ def test_owner_aliases_resolve_to_one_canonical_principal() -> None:
     assert owner is not None
     assert binding.identity_for("Farhad5778") is owner
     assert binding.identity_for_github_user_id(34549283) is owner
+    # The GitHub login and the owner's display name are the same principal,
+    binding, error = provenance.load_binding()
+    assert binding is not None, error
+    # but only with an explicitly bound owner email (never a lookalike email).
+    assert provenance.evaluate_commit(
+        binding, _commit(author=("fafa33", "34549283+fafa33@users.noreply.github.com"))
+    ).ok
+    assert not provenance.evaluate_commit(binding, _commit(author=("fafa33", "attacker@example.invalid"))).ok
     for email in ("34549283+fafa33@users.noreply.github.com", "farhadafshari33@yahoo.com"):
         verdict = provenance.evaluate_commit(binding, _commit(author=("Farhad5778", email)))
         assert verdict.ok is True and verdict.writer_login == "fafa33"
