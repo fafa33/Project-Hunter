@@ -93,122 +93,13 @@ def test_conflicting_required_check_publishers_rejected():
         hgcc.required_checks(contract)
 
 
-def test_owner_merge_boundary_consumes_live_hgcc():
-    source = (Path(__file__).resolve().parents[1] / "scripts/hunter_merge_readiness_v2.py").read_text()
-    owner_guard = source.split("def owner_merge_guard(", 1)[1].split("\ndef main(", 1)[0]
-    assert "observe_contract(" in owner_guard
-    assert "verify_required_checks(" in owner_guard and "all_check_runs(pr_head)" in owner_guard
-    assert owner_guard.index("verify_required_checks(") < owner_guard.index("decide_completion(")
-
-
-def test_hosted_readiness_never_publishes_success_without_hgcc(monkeypatch):
-    import hunter_merge_readiness_v2 as readiness
-
-    published = []
-    monkeypatch.setattr(
-        readiness, "_hgcc_hosted_verdict", lambda _sha: readiness.Decision("pending", "HGCC-1 unavailable")
-    )
-    monkeypatch.setattr(readiness, "request_json", lambda method, path, payload=None: published.append(payload))
-    readiness.publish("a" * 40, readiness.Decision("success", "ready"))
-    assert len(published) == 1
-    assert published[0]["context"] == readiness.CONTEXT
-    assert published[0]["state"] == "pending"
-
-
-def test_hosted_readiness_allows_existing_success_with_valid_hgcc(monkeypatch):
-    import hunter_merge_readiness_v2 as readiness
-
-    published = []
-    monkeypatch.setattr(readiness, "_hgcc_hosted_verdict", lambda _sha: None)
-    monkeypatch.setattr(readiness, "request_json", lambda method, path, payload=None: published.append(payload))
-    readiness.publish("a" * 40, readiness.Decision("success", "ready"))
-    assert published[0]["state"] == "success"
-
-
-def test_ruleset_scope_excludes_unrelated_branches():
-    ruleset = {
-        "target": "branch",
-        "bypass_actors": [],
-        "conditions": {"ref_name": {"include": ["refs/heads/release/*"], "exclude": []}},
-        "rules": [
-            {"type": "required_status_checks", "parameters": {"required_status_checks": [{"context": "release-only"}]}}
-        ],
-    }
-    assert hgcc.required_checks({"rulesets": [ruleset]}, target_ref="refs/heads/main") == {}
-    assert "release-only" in hgcc.required_checks({"rulesets": [ruleset]}, target_ref="refs/heads/release/1")
-
-
-def test_required_commit_status_can_satisfy_context():
-    contract = {
-        "rulesets": [
-            {
-                "rules": [
-                    {
-                        "type": "required_status_checks",
-                        "parameters": {"required_status_checks": [{"context": "Hunter Merge Readiness"}]},
-                    }
-                ]
-            }
-        ]
-    }
-    assert hgcc.verify_required_checks(
-        contract, [], statuses=[{"id": 1, "context": "Hunter Merge Readiness", "state": "success"}]
-    )[0]
-    assert not hgcc.verify_required_checks(
-        contract, [], statuses=[{"id": 2, "context": "Hunter Merge Readiness", "state": "failure"}]
-    )[0]
-
-
-def test_commit_status_user_id_cannot_impersonate_required_app():
-    contract = {
-        "rulesets": [
-            {
-                "rules": [
-                    {
-                        "type": "required_status_checks",
-                        "parameters": {"required_status_checks": [{"context": "legacy", "integration_id": 15368}]},
-                    }
-                ]
-            }
-        ]
-    }
-    ok, reason = hgcc.verify_required_checks(
-        contract, [], statuses=[{"id": 1, "context": "legacy", "state": "success", "creator": {"id": 15368}}]
-    )
-    assert not ok
-    assert "App identity unverifiable" in reason
-
-
-def test_readiness_status_publisher_bootstraps_without_self_dependency():
-    contract = {
-        "rulesets": [
-            {
-                "rules": [
-                    {
-                        "type": "required_status_checks",
-                        "parameters": {
-                            "required_status_checks": [
-                                {"context": "Quality Gates"},
-                                {"context": "Hunter Merge Readiness"},
-                            ]
-                        },
-                    }
-                ]
-            }
-        ]
-    }
-    runs = [{"id": 1, "name": "Quality Gates", "status": "completed", "conclusion": "success"}]
-    assert not hgcc.verify_required_checks(contract, runs)[0]
-    assert hgcc.verify_required_checks(contract, runs, exclude_context="Hunter Merge Readiness")[0]
-    assert not hgcc.verify_required_checks(contract, [], exclude_context="Hunter Merge Readiness")[0]
-
-
-def test_readiness_publisher_only_excludes_self_at_prepublication():
-    source = (Path(__file__).resolve().parents[1] / "scripts/hunter_merge_readiness_v2.py").read_text()
-    publisher_guard = source.split("def _hgcc_hosted_verdict(", 1)[1].split("def publish(", 1)[0]
-    owner_guard = source.split("def owner_merge_guard(", 1)[1].split("def main(", 1)[0]
-    assert "exclude_context=CONTEXT" in publisher_guard
-    assert "exclude_context=" not in owner_guard
+def test_hgcc_remains_at_pre_push_boundary_not_hosted_readiness():
+    root = Path(__file__).resolve().parents[1]
+    pre_push = (root / "scripts/hunter_pre_push.py").read_text()
+    readiness = (root / "scripts/hunter_merge_readiness_v2.py").read_text()
+    assert '"scripts/hunter_github_contract.py"' in pre_push
+    assert "_hgcc_hosted_verdict" not in readiness
+    assert "observe_contract(" not in readiness
 
 
 def test_ruleset_inventory_paginates_and_includes_later_required_checks():

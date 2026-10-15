@@ -515,7 +515,6 @@ def test_decide_completion_is_a_real_production_caller_against_a_live_pr(monkeyp
     `main()`) is a genuine, invokable production path, not test-only code."""
 
     _install_green(monkeypatch)
-    monkeypatch.setattr(core, "_hgcc_hosted_verdict", lambda _sha: None)
 
     verdict = core.decide_completion(501)
 
@@ -728,3 +727,40 @@ def test_controller_replaces_stale_success_after_malformed_evidence(monkeypatch)
     assert len(published) == 1
     assert published[0][0] == head
     assert published[0][1].state == "pending"
+
+
+def test_unchanged_readiness_status_does_not_exhaust_github_quota(monkeypatch):
+    calls = []
+
+    def fake_request(method, path, payload=None):
+        calls.append((method, path, payload))
+        return {
+            "statuses": [{"context": core.CONTEXT, "state": "pending", "description": "Waiting for Ready for Review"}]
+        }
+
+    monkeypatch.setattr(core, "request_json", fake_request)
+    core.publish("a" * 40, core.Decision("pending", "Waiting for Ready for Review"))
+    assert len(calls) == 1
+    assert calls[0][0] == "GET"
+    assert calls[0][1].endswith("/status")
+
+
+def test_changed_readiness_status_must_publish_even_after_previous_success(monkeypatch):
+    calls = []
+
+    def fake_request(method, path, payload=None):
+        calls.append((method, path, payload))
+        return {"statuses": [{"context": core.CONTEXT, "state": "success", "description": "Ready"}]}
+
+    monkeypatch.setattr(core, "request_json", fake_request)
+    core.publish("a" * 40, core.Decision("failure", "New blocking finding"))
+    assert [call[0] for call in calls] == ["GET", "POST"]
+    assert calls[1][2]["state"] == "failure"
+
+
+def test_malformed_combined_status_response_fails_closed(monkeypatch):
+    monkeypatch.setattr(core, "request_json", lambda *_args: {"statuses": None})
+    import pytest
+
+    with pytest.raises(ValueError, match="Malformed combined"):
+        core.publish("a" * 40, core.Decision("success", "Ready"))
