@@ -280,3 +280,39 @@ def test_repository_derivation_falls_back_to_origin_in_a_direct_clone(monkeypatc
     monkeypatch.setattr(hunter_pre_push, "_run_git", fake_git)
 
     assert hunter_pre_push._repository_from_remotes() == "fafa33/Project-Hunter"
+
+
+def test_pre_push_safety_lane_runs_aggregate_execution_and_reports_multiple_failures(monkeypatch, tmp_path) -> None:
+    calls: list[tuple[str, ...]] = []
+
+    def fake_git(*args: str) -> str:
+        if args == ("rev-parse", "--show-toplevel"):
+            return str(tmp_path)
+        if args == ("rev-parse", "HEAD"):
+            return HEAD_A
+        if args == ("status", "--porcelain=v1", "--untracked-files=normal"):
+            return ""
+        raise AssertionError(args)
+
+    def fake_run(command, capture_output=False, text=False, check=False, timeout=None):
+        cmd = tuple(command)
+        calls.append(cmd)
+        if "ruff" in cmd:
+            return SimpleNamespace(returncode=1, stdout="", stderr="ruff error")
+        if "black" in cmd:
+            return SimpleNamespace(returncode=1, stdout="", stderr="black diff")
+        return SimpleNamespace(returncode=0, stdout="", stderr="")
+
+    monkeypatch.setattr(hunter_pre_push, "_run_git", fake_git)
+    monkeypatch.setattr(hunter_pre_push.os, "chdir", lambda _path: None)
+    _stub_issue_412_boundaries(monkeypatch)
+    monkeypatch.setattr(hunter_pre_push, "_select_preflight_mode", lambda _head: hunter_pre_push.NORMAL_MODE)
+    monkeypatch.setattr(hunter_pr_preflight.subprocess, "run", fake_run)
+
+    exit_code = hunter_pre_push.enforce_pre_push(_update())
+
+    assert exit_code != 0
+    # Every independent gate in PUSH_SAFETY_GATES was executed despite ruff failing
+    assert len(calls) == len(hunter_pr_preflight.PUSH_SAFETY_GATES)
+    # Full repository Pytest was NOT executed in push safety
+    assert not any("pytest" in cmd for cmd in calls)

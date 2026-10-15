@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import re
 import subprocess
 import time
@@ -14,6 +15,8 @@ TESTS_FIRST_RED_MODE = "tests-first-red"
 AGGREGATE_MODE = "aggregate"
 PREFLIGHT_MODES = (NORMAL_MODE, TESTS_FIRST_RED_MODE, AGGREGATE_MODE)
 PYTEST_TEST_FAILURE_EXIT = 1
+
+REPORT_DIR = Path(".hunter") / "preflight-reports"
 
 NORMAL_QUALITY_GATES: tuple[tuple[str, tuple[str, ...]], ...] = (
     ("Architecture Index Guard", ("python", "scripts/hunter_architecture_index_preflight.py")),
@@ -39,6 +42,87 @@ PUSH_SAFETY_GATES: tuple[tuple[str, tuple[str, ...]], ...] = TESTS_FIRST_HYGIENE
 QUALITY_GATES = NORMAL_QUALITY_GATES
 
 
+def _repository_root() -> Path:
+    return Path(__file__).resolve().parents[1]
+
+
+def validate_and_resolve_report_path(requested_path: Path | str, root: Path) -> Path:
+    """Validate and resolve report output path strictly inside APPROVED_REPORT_DIR.
+
+    Rejects:
+    - Absolute paths outside the approved report root
+    - Directory traversal ('..')
+    - Symlink components or symlink targets
+    - Directories or non-regular file targets
+    - Overwriting protected repository files or .git metadata
+    """
+    approved_root = (root / REPORT_DIR).resolve()
+    req = Path(requested_path)
+
+    # Resolve candidate path
+    if req.is_absolute():
+        candidate = req.resolve()
+    else:
+        if req.parts and req.parts[0] == ".hunter":
+            candidate = (root / req).resolve()
+        else:
+            candidate = (approved_root / req).resolve()
+
+    if ".." in req.parts:
+        raise ValueError(f"Report path {requested_path!r} contains forbidden '..' traversal")
+
+    try:
+        candidate.relative_to(approved_root)
+    except ValueError as exc:
+        raise ValueError(
+            f"Report path {requested_path!r} resolves outside approved report root {approved_root}"
+        ) from exc
+
+    # Symlink check on candidate and parent directories
+    curr: Path | None = candidate
+    while curr is not None and curr != root.parent:
+        if curr.is_symlink():
+            raise ValueError(f"Report path {requested_path!r} contains symlink component at {curr}")
+        curr = curr.parent if curr != curr.parent else None
+
+    # Protected targets check
+    try:
+        rel_from_root = candidate.relative_to(root.resolve())
+        first_part = rel_from_root.parts[0] if rel_from_root.parts else ""
+        if first_part in (".git", "docs", "scripts", "src", "requirements") or candidate.suffix in (
+            ".py",
+            ".json",
+            ".toml",
+            ".sh",
+        ):
+            if not candidate.is_relative_to(approved_root):
+                raise ValueError(f"Report path {requested_path!r} targets protected repository path {rel_from_root}")
+    except ValueError:
+        pass
+
+    if candidate.exists() and candidate.is_dir():
+        raise ValueError(f"Report path {requested_path!r} points to a directory, not a regular file")
+
+    return candidate
+
+
+def safe_write_report(report_data: dict[str, Any], resolved_path: Path) -> None:
+    """Write report data safely using O_NOFOLLOW / O_TRUNC secure file operations."""
+    resolved_path.parent.mkdir(parents=True, exist_ok=True)
+    payload = (json.dumps(report_data, indent=2) + "\n").encode("utf-8")
+
+    flags = os.O_WRONLY | os.O_CREAT | os.O_TRUNC
+    if hasattr(os, "O_NOFOLLOW"):
+        flags |= os.O_NOFOLLOW
+
+    try:
+        fd = os.open(str(resolved_path), flags, 0o600)
+        with open(fd, "wb") as handle:
+            handle.write(payload)
+    except OSError as exc:
+        raise RuntimeError(f"Failed to securely write report to {resolved_path}: {exc}") from exc
+
+
 def run_quality_gates(gates: Sequence[tuple[str, Sequence[str]]] = QUALITY_GATES) -> int:
     """Run deterministic quality gates in order, failing fast."""
     lane_start = time.monotonic()
@@ -58,20 +142,38 @@ def run_quality_gates(gates: Sequence[tuple[str, Sequence[str]]] = QUALITY_GATES
     return 0
 
 
-def _repository_root() -> Path:
-    return Path(__file__).resolve().parents[1]
-
-
 def _extract_relevant_file_paths(text: str, root: Path) -> list[str]:
+    """Extract relevant repository file paths in linear time with bounded input size and token length.
+
+    Avoids super-linear regex backtracking and unsafe symlink traversal.
+    """
     paths: set[str] = set()
-    for token in re.findall(r"([A-Za-z0-9_./-]+\.[A-Za-z0-9_]+)", text):
-        clean_token = token.split(":")[0]
+    bounded_text = text[:1_000_000]
+    root_resolved = root.resolve()
+
+    delimiters = r"[\s:,\"\''\(\)\[\]<>=;]+"
+    tokens = re.split(delimiters, bounded_text)
+
+    allowed_chars = set("ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789_./-")
+
+    for token in tokens:
+        if not token or len(token) > 256 or "." not in token:
+            continue
+        if ".." in token or token.startswith("/") or token.startswith("\\"):
+            continue
+        if not set(token).issubset(allowed_chars):
+            continue
+
         try:
-            p = Path(clean_token)
-            if not p.is_absolute() and (root / p).is_file():
-                paths.add(p.as_posix())
+            p = Path(token)
+            full = root / p
+            if full.is_file() and not full.is_symlink() and not full.parent.is_symlink():
+                resolved = full.resolve()
+                if resolved.is_relative_to(root_resolved):
+                    paths.add(p.as_posix())
         except Exception:
             pass
+
     return sorted(paths)
 
 
@@ -114,25 +216,33 @@ def run_aggregate_gates(
         gate_start = time.monotonic()
 
         try:
-            completed = subprocess.run(
-                tuple(command),
-                capture_output=True,
-                text=True,
-                check=False,
-                timeout=timeout_seconds,
-            )
+            try:
+                completed = subprocess.run(
+                    tuple(command),
+                    capture_output=True,
+                    text=True,
+                    check=False,
+                    timeout=timeout_seconds,
+                )
+            except TypeError:
+                completed = subprocess.run(tuple(command), check=False)
+
             elapsed = time.monotonic() - gate_start
             print(f"[Hunter Pre-PR] TIMING: {name} {elapsed:.2f}s", flush=True)
 
-            if completed.stdout:
-                print(completed.stdout.rstrip(), flush=True)
-            if completed.stderr:
-                print(completed.stderr.rstrip(), flush=True)
+            stdout_str = getattr(completed, "stdout", "") or ""
+            stderr_str = getattr(completed, "stderr", "") or ""
+            returncode = getattr(completed, "returncode", 1)
 
-            combined_text = (completed.stdout or "") + "\n" + (completed.stderr or "")
+            if stdout_str:
+                print(stdout_str.rstrip(), flush=True)
+            if stderr_str:
+                print(stderr_str.rstrip(), flush=True)
+
+            combined_text = stdout_str + "\n" + stderr_str
             relevant_files = _extract_relevant_file_paths(combined_text, root)
 
-            if completed.returncode == 0:
+            if returncode == 0:
                 print(f"[Hunter Pre-PR] PASS: {name}", flush=True)
                 result = {
                     "name": name,
@@ -145,13 +255,13 @@ def run_aggregate_gates(
                 }
             else:
                 failed_or_blocked_gate_names.add(name)
-                err_detail = completed.stderr.strip() or completed.stdout.strip() or f"Exited {completed.returncode}"
-                print(f"[Hunter Pre-PR] FAIL: {name} exited {completed.returncode}", flush=True)
+                err_detail = stderr_str.strip() or stdout_str.strip() or f"Exited {returncode}"
+                print(f"[Hunter Pre-PR] FAIL: {name} exited {returncode}", flush=True)
                 result = {
                     "name": name,
                     "command": list(command),
                     "outcome": "failed",
-                    "exit_code": completed.returncode,
+                    "exit_code": returncode,
                     "duration": round(elapsed, 2),
                     "error_details": err_detail,
                     "relevant_file_paths": relevant_files,
@@ -226,12 +336,12 @@ def run_aggregate_gates(
     print("=" * 60, flush=True)
 
     if report_path is not None:
-        p = Path(report_path)
-        p.parent.mkdir(parents=True, exist_ok=True)
-        p.write_text(json.dumps(report, indent=2) + "\n", encoding="utf-8")
-        print(f"[Hunter Pre-PR] REPORT WRITTEN: {p}", flush=True)
+        resolved_dest = validate_and_resolve_report_path(report_path, root)
+        safe_write_report(report, resolved_dest)
+        print(f"[Hunter Pre-PR] REPORT WRITTEN: {resolved_dest}", flush=True)
 
-    exit_code = 0 if overall_passed else 1
+    first_failed = next((r["exit_code"] for r in results if r["outcome"] == "failed" and r["exit_code"] is not None), 1)
+    exit_code = 0 if overall_passed else first_failed
     return exit_code, report
 
 
@@ -263,6 +373,8 @@ def run_preflight(
     report_path: Path | str | None = None,
 ) -> int:
     """Run one explicit pre-PR mode without weakening the normal gate."""
+    root = _repository_root()
+
     if mode == NORMAL_MODE:
         if reuse_receipt:
             blocker = _reuse_blocker()
@@ -290,6 +402,42 @@ def run_preflight(
                     "validation definition and toolchain; the full lane is not re-run.",
                     flush=True,
                 )
+                if report_path is not None:
+                    import hunter_validation_receipt as receipts
+
+                    receipt, _err = receipts.load(receipts.receipt_path(root))
+                    if receipt is not None:
+                        report_data = {
+                            "schema": "hunter.preflight-report/1",
+                            "mode": AGGREGATE_MODE,
+                            "overall_outcome": "passed",
+                            "total_duration": 0.0,
+                            "head_sha": receipt.head_sha,
+                            "content_identity": receipt.content_identity,
+                            "definition_identity": receipt.definition_identity,
+                            "toolchain_identity": receipt.toolchain_identity,
+                            "contract_identity": getattr(receipt, "contract_identity", ""),
+                            "receipt_reference": {
+                                "produced_at": receipt.produced_at.isoformat(),
+                                "produced_by": receipt.produced_by,
+                                "lane": receipt.lane,
+                            },
+                            "gates": [
+                                {
+                                    "name": name,
+                                    "command": list(command),
+                                    "outcome": "reused",
+                                    "exit_code": 0,
+                                    "duration": 0.0,
+                                    "error_details": "Reused from valid validation receipt",
+                                    "relevant_file_paths": [],
+                                }
+                                for name, command in NORMAL_QUALITY_GATES
+                            ],
+                        }
+                        resolved_dest = validate_and_resolve_report_path(report_path, root)
+                        safe_write_report(report_data, resolved_dest)
+                        print(f"[Hunter Pre-PR] REPORT WRITTEN (REUSED): {resolved_dest}", flush=True)
                 return 0
             print(f"[Hunter Pre-PR] NO-REUSE: {blocker}", flush=True)
         exit_code, _report = run_aggregate_gates(NORMAL_QUALITY_GATES, report_path=report_path)
@@ -405,12 +553,16 @@ def main() -> int:
             print(f"{name}: {' '.join(command)}")
         return 0
 
-    return run_preflight(
-        mode=mode,
-        reuse_receipt=args.reuse_receipt,
-        record_receipt=args.record_receipt,
-        report_path=args.report_file,
-    )
+    try:
+        return run_preflight(
+            mode=mode,
+            reuse_receipt=args.reuse_receipt,
+            record_receipt=args.record_receipt,
+            report_path=args.report_file,
+        )
+    except (ValueError, RuntimeError) as err:
+        print(f"[Hunter Pre-PR] ERROR: {err}", flush=True)
+        return 1
 
 
 if __name__ == "__main__":

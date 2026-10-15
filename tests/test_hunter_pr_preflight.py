@@ -441,25 +441,70 @@ def test_aggregate_mode_marks_dependent_gates_blocked(monkeypatch) -> None:
     )
 
 
-def test_aggregate_mode_produces_json_report_file(tmp_path, monkeypatch) -> None:
+def test_aggregate_mode_produces_json_report_file(monkeypatch) -> None:
     def fake_run(command, capture_output=False, text=False, check=False, timeout=None):
         return SimpleNamespace(returncode=0, stdout="pass", stderr="")
 
     monkeypatch.setattr(hunter_pr_preflight.subprocess, "run", fake_run)
 
-    report_file = tmp_path / "report.json"
-    exit_code = hunter_pr_preflight.run_preflight(
-        mode="aggregate",
-        report_path=report_file,
-    )
+    root = hunter_pr_preflight._repository_root()
+    report_rel = "test_aggregate_report_file.json"
+    expected_path = hunter_pr_preflight.validate_and_resolve_report_path(report_rel, root)
+    if expected_path.exists():
+        expected_path.unlink()
 
-    assert exit_code == 0
-    assert report_file.is_file()
+    try:
+        exit_code = hunter_pr_preflight.run_preflight(
+            mode="aggregate",
+            report_path=report_rel,
+        )
 
-    import json
+        assert exit_code == 0
+        assert expected_path.is_file()
 
-    data = json.loads(report_file.read_text(encoding="utf-8"))
-    assert data["schema"] == "hunter.preflight-report/1"
-    assert data["mode"] == "aggregate"
-    assert data["overall_outcome"] == "passed"
-    assert len(data["gates"]) == 7
+        import json
+
+        data = json.loads(expected_path.read_text(encoding="utf-8"))
+        assert data["schema"] == "hunter.preflight-report/1"
+        assert data["mode"] == "aggregate"
+        assert data["overall_outcome"] == "passed"
+        assert len(data["gates"]) == 7
+    finally:
+        if expected_path.exists():
+            expected_path.unlink()
+
+
+def test_report_path_security_validation(tmp_path) -> None:
+    root = hunter_pr_preflight._repository_root()
+
+    # Relative path resolves inside approved root (.hunter/preflight-reports)
+    dest = hunter_pr_preflight.validate_and_resolve_report_path("test_out.json", root)
+    assert dest.is_relative_to((root / ".hunter" / "preflight-reports").resolve())
+
+    # Rejects absolute path outside approved root
+    with pytest.raises(ValueError, match="resolves outside approved report root"):
+        hunter_pr_preflight.validate_and_resolve_report_path("/tmp/arbitrary_overwrite.json", root)
+
+    # Rejects .. traversal
+    with pytest.raises(ValueError, match="forbidden '..' traversal"):
+        hunter_pr_preflight.validate_and_resolve_report_path("../outside.json", root)
+
+    # Rejects target inside protected repository directories like .git or docs
+    with pytest.raises(ValueError, match="resolves outside approved report root"):
+        hunter_pr_preflight.validate_and_resolve_report_path("/app/docs/CODE_WRITE_POLICY.json", root)
+
+
+def test_extract_relevant_file_paths_regex_performance_and_linear_time() -> None:
+    root = hunter_pr_preflight._repository_root()
+    import time
+
+    # Adversarial input with 500,000 chars of nested/overlapping patterns
+    adversarial_text = "a/b/c/d/e.f/g/h.i/" * 25000 + "\nscripts/hunter_pr_preflight.py:10\n"
+
+    t0 = time.monotonic()
+    extracted = hunter_pr_preflight._extract_relevant_file_paths(adversarial_text, root)
+    elapsed = time.monotonic() - t0
+
+    # Must complete in under 0.5s (demonstrably linear)
+    assert elapsed < 0.5, f"Extraction took {elapsed:.2f}s, expected linear < 0.5s"
+    assert "scripts/hunter_pr_preflight.py" in extracted
