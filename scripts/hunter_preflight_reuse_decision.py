@@ -48,6 +48,8 @@ TRUSTED_DEFINITION_PATHS = frozenset(governance.PREFLIGHT_OWNED_PATHS) | frozens
     {
         ".github/workflows/ci.yml",
         ".github/workflows/hunter-trusted-preflight-upgrade.yml",
+        "docs/CODE_WRITE_POLICY.json",
+        "docs/VALIDATION_STAGE_CONTRACT.json",
         "pyproject.toml",
         "pytest.ini",
         "tox.ini",

@@ -124,11 +124,14 @@ def _preflight_command(mode: str) -> tuple[str, ...]:
 def _run_push_safety_lane() -> int:
     """Run the deterministic gates that must pass before any network mutation.
 
-    Every gate here is cheap and fails fast, so a formatting or registry defect
-    is reported in seconds instead of behind ten minutes of tests. The full
-    repository suite is deliberately not among them; see the module docstring.
+    Uses aggregate execution mode over PUSH_SAFETY_GATES so all independent
+    failures are collected in a single pre-push run.
+    Every gate here is cheap, so formatting, linting, or registry defects
+    are reported together in seconds instead of behind sequential restarts.
+    The full repository test suite is deliberately not among them.
     """
-    return preflight.run_quality_gates(preflight.PUSH_SAFETY_GATES)
+    exit_code, _report = preflight.run_aggregate_gates(preflight.PUSH_SAFETY_GATES)
+    return exit_code
 
 
 def _lane_label(mode: str) -> str:
