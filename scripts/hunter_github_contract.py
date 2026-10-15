@@ -106,11 +106,12 @@ def required_checks(contract: dict[str, Any], *, target_ref: str | None = None) 
     """Extract required contexts and their GitHub App IDs; reject conflicts."""
     result: dict[str, int | None] = {}
     for ruleset in contract["rulesets"]:
-        bypass = ruleset.get("bypass_actors")
-        if bypass is not None and (not isinstance(bypass, list) or bypass):
-            raise ValueError("Ruleset bypass actors are not permitted")
         if target_ref is not None and not _applies_to_ref(ruleset, target_ref):
             continue
+        if "bypass_actors" in ruleset:
+            bypass = ruleset["bypass_actors"]
+            if not isinstance(bypass, list) or bypass:
+                raise ValueError("Effective ruleset bypass actors must be an empty list")
         for rule in ruleset["rules"]:
             if rule.get("type") != "required_status_checks":
                 continue

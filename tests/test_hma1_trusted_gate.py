@@ -256,7 +256,7 @@ def test_hma1_head_sha_recheck_detects_concurrent_push(monkeypatch):
     assert "head changed during validation" in message
 
 
-def test_hma1_canonical_readiness_authority_uniqueness():
+def test_hma1_canonical_readiness_evaluate_smoke():
     """Verify hunter_merge_readiness_v2.py remains the canonical readiness authority."""
     readiness_script = REPO_ROOT / "scripts" / "hunter_merge_readiness_v2.py"
     assert readiness_script.exists()
@@ -351,3 +351,22 @@ def test_malformed_pr_payloads_fail_closed(monkeypatch):
         status, message = governance.candidate_admission("fafa33/Project-Hunter", "token", "a" * 40, 602)
         assert status == "failure"
         assert "malformed" in message or "verification failed" in message or "differs" in message
+
+
+def test_candidate_reachable_workflow_permission_boundary():
+    """Every pull_request workflow must have explicit, non-privileged permissions."""
+    for path in sorted((REPO_ROOT / ".github/workflows").glob("*.yml")):
+        source = path.read_text(encoding="utf-8")
+        if "  pull_request:" not in source:
+            continue
+        data = yaml.safe_load(source)
+        inherited = data.get("permissions")
+        for job_name, job in data.get("jobs", {}).items():
+            effective = job.get("permissions", inherited)
+            assert isinstance(effective, dict), f"{path.name}/{job_name}: missing permissions"
+            forbidden = {
+                key
+                for key, value in effective.items()
+                if value == "write" and not (path.name == "dependency-review.yml" and key == "pull-requests")
+            }
+            assert not forbidden, f"{path.name}/{job_name}: candidate-reachable privileged permissions {forbidden}"
