@@ -600,6 +600,7 @@ def test_owner_merge_guard_accepts_only_clean_identical_merge_ready_head(monkeyp
     import hunter_github_contract as hgcc
 
     monkeypatch.setattr(core, "REPO", "fafa33/Project-Hunter")
+    monkeypatch.setattr(core, "TOKEN", "authenticated-test-token")
     monkeypatch.setattr(
         hgcc,
         "observe_contract",

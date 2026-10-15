@@ -258,3 +258,18 @@ def test_main_exclusion_selectors_are_honored():
     }
     assert hgcc.required_checks({"rulesets": [rule]}, target_ref="refs/heads/main") == {}
     assert "other" in hgcc.required_checks({"rulesets": [rule]}, target_ref="refs/heads/release")
+
+
+def test_cli_ruleset_read_refuses_anonymous_session(monkeypatch):
+    from subprocess import CompletedProcess
+
+    calls = []
+
+    def run(command, **kwargs):
+        calls.append(tuple(command))
+        return CompletedProcess(command, 1, "", "not authenticated")
+
+    monkeypatch.setattr(hgcc.subprocess, "run", run)
+    with pytest.raises(ValueError, match="Authenticated GitHub"):
+        hgcc.github_get("repos/fafa33/Project-Hunter/rulesets")
+    assert calls == [("gh", "auth", "token")]

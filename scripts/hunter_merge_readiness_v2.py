@@ -635,6 +635,8 @@ def _hgcc_hosted_verdict(head_sha: str) -> Decision | None:
     from hunter_github_contract import observe_contract, verify_required_checks
 
     try:
+        if not TOKEN.strip():
+            raise ValueError("Authenticated GitHub ruleset observer required")
         contract = observe_contract(REPO, get=lambda path: request_json("GET", path.removeprefix(f"repos/{REPO}/")))
         ok, reason = verify_required_checks(
             contract,
@@ -787,6 +789,8 @@ def owner_merge_guard(pr_number: int) -> CompletionVerdict:
     from hunter_github_contract import observe_contract, verify_required_checks
 
     try:
+        if not TOKEN.strip():
+            raise ValueError("Authenticated GitHub ruleset observer required")
         contract = observe_contract(REPO, get=lambda path: request_json("GET", path.removeprefix(f"repos/{REPO}/")))
         checks_ok, checks_reason = verify_required_checks(
             contract,

@@ -13,6 +13,11 @@ from typing import Any
 
 
 def github_get(path: str) -> Any:
+    # `gh api` without credentials can return anonymously cached ruleset data.
+    # Require an authenticated CLI session before trusting the live contract.
+    credential = subprocess.run(("gh", "auth", "token"), capture_output=True, text=True, check=False, timeout=10)
+    if credential.returncode or not credential.stdout.strip():
+        raise ValueError("Authenticated GitHub ruleset observer required")
     result = subprocess.run(("gh", "api", path), capture_output=True, text=True, check=False, timeout=20)
     if result.returncode:
         raise ValueError("GitHub contract API unavailable or access denied")
