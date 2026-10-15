@@ -304,3 +304,18 @@ def test_trusted_gate_runner_does_not_execute_candidate_script_paths(monkeypatch
         if command[0] == "python" and len(command) > 1:
             assert Path(command[1]).is_absolute()
             assert Path(command[1]).is_relative_to(trusted_root / "scripts")
+
+
+def test_status_writing_governance_workflow_is_base_branch_only():
+    """A PR must not be able to supply a status publisher's workflow code."""
+    path = REPO_ROOT / ".github/workflows/hunter-governance-review.yml"
+    source = path.read_text(encoding="utf-8")
+    workflow = yaml.safe_load(source)
+    assert "  pull_request_target:" in source
+    assert "  pull_request:" not in source
+    assert workflow["permissions"]["statuses"] == "write"
+    assert workflow["permissions"]["actions"] == "read"
+    steps = workflow["jobs"]["governance-review"]["steps"]
+    assert steps[0]["with"]["ref"] == "${{ github.event.repository.default_branch }}"
+    assert steps[0]["with"]["persist-credentials"] is False
+    assert all("candidate" not in str(step) for step in steps)

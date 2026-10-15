@@ -3,16 +3,14 @@ name: Hunter Governance Review
 # Current-state governance status. Success is published only when mergeability
 # and exact-head candidate admission are both proven by the trusted controller.
 #
-# This workflow is reachable from `pull_request`, where GitHub runs the candidate's
-# own version of this file. Nothing here may therefore hold a permission that can
-# drive other workflows: a write-level actions permission would let a candidate-authored step
-# dispatch, re-run or cancel trusted workflows with the repository token.
-# Privileged reviewer orchestration lives in Hunter Governance Review Reconcile,
-# which has no `pull_request` trigger and always executes the trusted
-# default-branch version of its own file.
+# This status publisher requires statuses: write. It MUST run only the trusted
+# default-branch workflow definition: pull_request_target resolves from the base
+# branch, unlike pull_request, which executes candidate-authored workflow code.
+# The job checks out only the default branch and never executes candidate files.
+# The separate privileged reconcile workflow also remains base-branch trusted.
 
 on:
-  pull_request:
+  pull_request_target:
     branches:
       - main
     types:
