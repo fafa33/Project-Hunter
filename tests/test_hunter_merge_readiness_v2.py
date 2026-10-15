@@ -766,3 +766,25 @@ def test_malformed_combined_status_response_fails_closed(monkeypatch):
 
     with pytest.raises(ValueError, match="Malformed combined"):
         core.publish("a" * 40, core.Decision("success", "Ready"))
+
+
+def test_hgcc_observer_requires_separate_token(monkeypatch):
+    monkeypatch.setattr(core, "HGCC_READ_TOKEN", "")
+    import pytest
+
+    with pytest.raises(ValueError, match="administration-read token unavailable"):
+        core.hgcc_get("repos/fafa33/Project-Hunter/rulesets/1")
+
+
+def test_hgcc_observer_uses_separate_read_token(monkeypatch):
+    monkeypatch.setattr(core, "HGCC_READ_TOKEN", "app-read-token")
+    calls = []
+
+    def fake_request(**kwargs):
+        calls.append(kwargs)
+        return {"bypass_actors": []}
+
+    monkeypatch.setattr(core.transport, "request_rest_json", fake_request)
+    assert core.hgcc_get("repos/fafa33/Project-Hunter/rulesets/1") == {"bypass_actors": []}
+    assert calls[0]["token"] == "app-read-token"
+    assert calls[0]["method"] == "GET"

@@ -29,6 +29,7 @@ HARD_FAILURES = {"failure", "timed_out", "action_required", "startup_failure"}
 
 REPO = os.environ.get("GH_REPO") or os.environ.get("GITHUB_REPOSITORY") or ""
 TOKEN = os.environ.get("GH_TOKEN") or os.environ.get("GITHUB_TOKEN") or ""
+HGCC_READ_TOKEN = os.environ.get("HGCC_READ_TOKEN") or ""
 RUN_URL = os.environ.get("RUN_URL") or ""
 
 
@@ -158,6 +159,20 @@ def request_json(method: str, path: str, payload: dict[str, Any] | None = None) 
         data=data,
         token=TOKEN,
         what=f"{method} {path}",
+    )
+
+
+def hgcc_get(path: str) -> Any:
+    """Read ruleset details using an independently scoped administration-read token."""
+    if not HGCC_READ_TOKEN:
+        raise ValueError("HGCC-1 administration-read token unavailable")
+    return transport.request_rest_json(
+        url=f"https://api.github.com/{path}",
+        method="GET",
+        headers={},
+        data=None,
+        token=HGCC_READ_TOKEN,
+        what=f"GET {path}",
     )
 
 
@@ -641,7 +656,7 @@ def _hgcc_hosted_verdict(head_sha: str) -> Decision | None:
     try:
         if not TOKEN.strip():
             raise ValueError("Authenticated GitHub ruleset observer required")
-        contract = observe_contract(REPO, get=lambda path: request_json("GET", path.removeprefix(f"repos/{REPO}/")))
+        contract = observe_contract(REPO, get=hgcc_get)
         ok, reason = verify_required_checks(
             contract,
             all_check_runs(head_sha),
@@ -811,7 +826,7 @@ def owner_merge_guard(pr_number: int) -> CompletionVerdict:
     try:
         if not TOKEN.strip():
             raise ValueError("Authenticated GitHub ruleset observer required")
-        contract = observe_contract(REPO, get=lambda path: request_json("GET", path.removeprefix(f"repos/{REPO}/")))
+        contract = observe_contract(REPO, get=hgcc_get)
         checks_ok, checks_reason = verify_required_checks(
             contract,
             all_check_runs(pr_head),
