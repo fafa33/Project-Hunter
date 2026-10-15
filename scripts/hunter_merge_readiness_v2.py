@@ -867,6 +867,22 @@ def main() -> int:
         except Exception as exc:
             failures += 1
             print(f"PR #{number} readiness failed: {type(exc).__name__}: {exc}", file=sys.stderr)
+            # A malformed evidence payload must supersede any prior successful
+            # status on the current head. Recover the head independently from
+            # the PR endpoint, never from the failed observation.
+            try:
+                current = request_json("GET", f"pulls/{number}")
+                head = (current.get("head") or {}).get("sha") if isinstance(current, dict) else None
+                if (
+                    isinstance(current, dict)
+                    and current.get("state") == "open"
+                    and isinstance(head, str)
+                    and len(head) == 40
+                    and all(ch in "0123456789abcdefABCDEF" for ch in head)
+                ):
+                    publish(head, Decision("pending", f"Readiness evidence invalid: {type(exc).__name__}"))
+            except Exception as recovery_exc:
+                print(f"PR #{number} fail-closed publication unavailable: {recovery_exc}", file=sys.stderr)
     return 1 if failures else 0
 
 

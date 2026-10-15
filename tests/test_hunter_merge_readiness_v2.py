@@ -609,6 +609,7 @@ def test_owner_merge_guard_accepts_only_clean_identical_merge_ready_head(monkeyp
             "rulesets": [
                 {
                     "target": "branch",
+                    "bypass_actors": [],
                     "conditions": {"ref_name": {"include": ["refs/heads/main"], "exclude": []}},
                     "rules": [
                         {
@@ -711,3 +712,19 @@ def test_malformed_check_run_response_fails_closed(monkeypatch, payload):
     monkeypatch.setattr(core, "request_json", lambda *_args, **_kwargs: payload)
     with pytest.raises(ValueError, match="Malformed GitHub check"):
         core.all_check_runs("a" * 40)
+
+
+def test_controller_replaces_stale_success_after_malformed_evidence(monkeypatch):
+    import sys
+
+    head = "a" * 40
+    monkeypatch.setattr(core, "candidate_prs", lambda: (605,))
+    monkeypatch.setattr(core, "decide", lambda _pr: (_ for _ in ()).throw(ValueError("malformed check runs")))
+    monkeypatch.setattr(core, "request_json", lambda *_args, **_kwargs: {"state": "open", "head": {"sha": head}})
+    published = []
+    monkeypatch.setattr(core, "publish", lambda sha, decision: published.append((sha, decision)))
+    monkeypatch.setattr(sys, "argv", ["hunter_merge_readiness_v2.py"])
+    assert core.main() == 1
+    assert len(published) == 1
+    assert published[0][0] == head
+    assert published[0][1].state == "pending"

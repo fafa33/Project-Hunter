@@ -13,6 +13,7 @@ def test_observes_active_rulesets_and_required_checks():
         if path.endswith("/1"):
             return {
                 "name": "Protect main",
+                "bypass_actors": [],
                 "rules": [
                     {
                         "type": "required_status_checks",
@@ -127,6 +128,7 @@ def test_hosted_readiness_allows_existing_success_with_valid_hgcc(monkeypatch):
 def test_ruleset_scope_excludes_unrelated_branches():
     ruleset = {
         "target": "branch",
+        "bypass_actors": [],
         "conditions": {"ref_name": {"include": ["refs/heads/release/*"], "exclude": []}},
         "rules": [
             {"type": "required_status_checks", "parameters": {"required_status_checks": [{"context": "release-only"}]}}
@@ -221,6 +223,7 @@ def test_ruleset_inventory_paginates_and_includes_later_required_checks():
         if path.endswith("/101"):
             return {
                 "name": "later",
+                "bypass_actors": [],
                 "target": "branch",
                 "conditions": {"ref_name": {"include": ["main"], "exclude": []}},
                 "rules": [
@@ -241,6 +244,7 @@ def test_ruleset_inventory_paginates_and_includes_later_required_checks():
 def test_main_ruleset_selectors_are_normalized(selector):
     rule = {
         "target": "branch",
+        "bypass_actors": [],
         "conditions": {"ref_name": {"include": [selector], "exclude": []}},
         "rules": [
             {"type": "required_status_checks", "parameters": {"required_status_checks": [{"context": "main-only"}]}}
@@ -253,6 +257,7 @@ def test_main_ruleset_selectors_are_normalized(selector):
 def test_main_exclusion_selectors_are_honored():
     rule = {
         "target": "branch",
+        "bypass_actors": [],
         "conditions": {"ref_name": {"include": ["~ALL"], "exclude": ["~DEFAULT_BRANCH"]}},
         "rules": [{"type": "required_status_checks", "parameters": {"required_status_checks": [{"context": "other"}]}}],
     }
@@ -295,3 +300,18 @@ def test_excluding_only_required_context_fails_closed():
     )
     assert not ok
     assert "No independent" in reason
+
+
+@pytest.mark.parametrize("bypass", [None, [{"actor_id": 1}], "invalid"])
+def test_applicable_main_ruleset_requires_no_bypass_actors(bypass):
+    ruleset = {
+        "target": "branch",
+        "conditions": {"ref_name": {"include": ["refs/heads/main"], "exclude": []}},
+        "rules": [
+            {"type": "required_status_checks", "parameters": {"required_status_checks": [{"context": "Quality Gates"}]}}
+        ],
+    }
+    if bypass is not None:
+        ruleset["bypass_actors"] = bypass
+    with pytest.raises(ValueError, match="bypass actors"):
+        hgcc.required_checks({"rulesets": [ruleset]}, target_ref="refs/heads/main")

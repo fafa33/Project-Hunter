@@ -48,6 +48,8 @@ def observe_contract(repository: str, *, get: Callable[[str], Any] = github_get)
         detail = get(f"repos/{repository}/rulesets/{ruleset_id}")
         if not isinstance(detail, dict) or not isinstance(detail.get("rules"), list):
             raise ValueError("Malformed GitHub ruleset detail")
+        if not isinstance(detail.get("bypass_actors"), list):
+            raise ValueError("Missing or malformed GitHub ruleset bypass actors")
         observations.append(
             {
                 "id": ruleset_id,
@@ -55,6 +57,7 @@ def observe_contract(repository: str, *, get: Callable[[str], Any] = github_get)
                 "target": detail.get("target"),
                 "conditions": detail.get("conditions"),
                 "rules": detail["rules"],
+                "bypass_actors": detail["bypass_actors"],
             }
         )
     return {"schema": "hgcc-1/v1", "repository": repository, "rulesets": observations}
@@ -115,6 +118,10 @@ def required_checks(contract: dict[str, Any], *, target_ref: str | None = None) 
     for ruleset in contract["rulesets"]:
         if target_ref is not None and not _applies_to_ref(ruleset, target_ref):
             continue
+        if target_ref is not None:
+            bypass = ruleset.get("bypass_actors")
+            if not isinstance(bypass, list) or bypass:
+                raise ValueError("Applicable ruleset bypass actors must be explicitly empty")
         for rule in ruleset["rules"]:
             if rule.get("type") != "required_status_checks":
                 continue
