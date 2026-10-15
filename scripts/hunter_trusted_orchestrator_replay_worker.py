@@ -37,7 +37,10 @@ import importlib
 import json
 import multiprocessing as mp
 import os
+import queue
 import sys
+import threading
+import time
 import traceback
 from datetime import UTC, datetime, timedelta
 from multiprocessing.connection import Connection
@@ -546,6 +549,34 @@ SCENARIOS = {"A": scenario_a, "B": scenario_b, "G": scenario_g}
 SCENARIO_CHILD_TIMEOUT_SECONDS = 60
 
 
+MAX_SCENARIO_MESSAGE_BYTES = 1024 * 1024
+
+
+def _send_scenario_message(conn: Connection, message: dict[str, Any]) -> None:
+    payload = json.dumps(message, ensure_ascii=False, allow_nan=False).encode("utf-8")
+    if len(payload) > MAX_SCENARIO_MESSAGE_BYTES:
+        raise ValueError("scenario message exceeds maximum size")
+    conn.send_bytes(payload)
+
+
+def _decode_scenario_message(payload: bytes) -> dict[str, Any]:
+    message = json.loads(payload.decode("utf-8"))
+    if not isinstance(message, dict) or not isinstance(message.get("stage"), str):
+        raise ValueError("scenario message must be an object with a stage")
+    stage = message["stage"]
+    if stage == "started" and set(message) == {"stage"}:
+        return message
+    if stage == "done" and set(message) == {"stage", "measurements"} and isinstance(message["measurements"], dict):
+        return message
+    if (
+        stage == "failed"
+        and set(message) == {"stage", "error", "traceback"}
+        and all(isinstance(message[k], str) for k in ("error", "traceback"))
+    ):
+        return message
+    raise ValueError("invalid scenario message shape")
+
+
 def _scenario_child(conn: Connection, scenario_id: str, candidate_root_str: str, fixture: dict[str, Any]) -> None:
     """Runs in a freshly spawned child process whose only channel back to the
     caller is this pipe -- never stdout, which candidate top-level import
@@ -562,12 +593,9 @@ def _scenario_child(conn: Connection, scenario_id: str, candidate_root_str: str,
     ``failed`` pair, never a bare stdout line or a process exit code (see
     ``_run_scenario_isolated``).
 
-    ``measurements`` is forced through a JSON round-trip before it crosses
-    the pipe: :func:`multiprocessing.connection.Connection.send` pickles its
-    argument, and a scenario's raw return value can carry whatever object a
-    candidate function chose to return, so only JSON-safe primitives -- never
-    an arbitrary picklable object a candidate could shape into a
-    deserialization gadget -- are allowed onto that channel.
+    All messages cross the pipe as bounded JSON bytes, never executable pickle.
+    This prevents deserialization execution, not forgery by a candidate that
+    obtains the pipe handle; child messages are not authentication evidence.
 
     stdout/stderr are redirected to the null device before anything else
     runs, at the OS file-descriptor level (not just reassigning
@@ -583,25 +611,51 @@ def _scenario_child(conn: Connection, scenario_id: str, candidate_root_str: str,
     os.close(devnull_fd)
 
     try:
-        conn.send({"stage": "started"})
+        _send_scenario_message(conn, {"stage": "started"})
         measurements = SCENARIOS[scenario_id](Path(candidate_root_str), fixture)
-        safe_measurements = json.loads(json.dumps(measurements, ensure_ascii=False))
-        conn.send({"stage": "done", "measurements": safe_measurements})
+        _send_scenario_message(conn, {"stage": "done", "measurements": measurements})
     except (
         BaseException
     ) as exc:  # noqa: BLE001 - every candidate-triggered failure must be reported, never crash silently
         try:
-            conn.send(
+            _send_scenario_message(
+                conn,
                 {
                     "stage": "failed",
                     "error": f"{type(exc).__name__}: {exc}",
                     "traceback": traceback.format_exc(),
-                }
+                },
             )
         except Exception:
             pass
     finally:
         conn.close()
+
+
+def _recv_before_deadline(conn: Connection, deadline: float) -> Any:
+    """Bound the *whole* framed pipe receive, not merely its first readable byte.
+
+    multiprocessing.Connection.poll() reports a partial frame as readable, but
+    recv() can then block forever. A daemon reader never owns trusted state;
+    on timeout the caller closes the pipe and terminates the isolated child.
+    """
+    result: queue.Queue[tuple[bool, Any]] = queue.Queue(maxsize=1)
+
+    def read() -> None:
+        try:
+            result.put((True, _decode_scenario_message(conn.recv_bytes(maxlength=MAX_SCENARIO_MESSAGE_BYTES))))
+        except (EOFError, OSError, ValueError, UnicodeError, json.JSONDecodeError) as exc:
+            result.put((False, exc))
+
+    reader = threading.Thread(target=read, daemon=True, name="bounded-replay-pipe-reader")
+    reader.start()
+    try:
+        ok, value = result.get(timeout=max(0.0, deadline - time.monotonic()))
+    except queue.Empty as exc:
+        raise TimeoutError("scenario completion frame exceeded its deadline") from exc
+    if not ok:
+        raise value
+    return value
 
 
 def _run_scenario_isolated(scenario_id: str, candidate_root: Path, fixture: dict[str, Any]) -> dict[str, Any]:
@@ -622,15 +676,18 @@ def _run_scenario_isolated(scenario_id: str, candidate_root: Path, fixture: dict
 
     messages: list[Any] = []
     remaining = float(SCENARIO_CHILD_TIMEOUT_SECONDS)
+    deadline = time.monotonic() + remaining
     try:
         while len(messages) < 2 and parent_conn.poll(timeout=remaining):
             try:
-                messages.append(parent_conn.recv())
-            except EOFError:
+                messages.append(_recv_before_deadline(parent_conn, deadline))
+            except (EOFError, OSError, ValueError, TimeoutError):
                 break
-            # A child that sent 'started' must send its second message
-            # promptly; it does not get the full budget twice.
-            remaining = 5.0
+            # Startup has its own bounded window. A trusted started sentinel
+            # begins a fresh, full scenario execution budget.
+            if len(messages) == 1 and isinstance(messages[0], dict) and messages[0].get("stage") == "started":
+                deadline = time.monotonic() + float(SCENARIO_CHILD_TIMEOUT_SECONDS)
+            remaining = max(0.0, deadline - time.monotonic())
     finally:
         parent_conn.close()
         process.join(timeout=5)

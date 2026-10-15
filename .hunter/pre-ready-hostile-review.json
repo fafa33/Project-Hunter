@@ -2,39 +2,33 @@
   "claims": {
     "acceptance_criteria": [
       {
-        "criterion": "Single trusted 1800-second exact-head advisory deadline",
-        "evidence": "AUTHOR CLAIM: shared deadline not implemented in this PR.",
+        "criterion": "after a valid trusted started sentinel, the replay worker grants one full scenario execution timeout, with bounded startup and no unbounded second execution budget",
+        "evidence": "Author-submitted evidence for independent hostile review, not reviewer approval.",
         "id": "AC-1",
-        "verdict": "not-applicable"
+        "verdict": "satisfied"
       },
       {
-        "criterion": "Collector dispatch budgets, cancellation, and late-writer safety",
-        "evidence": "AUTHOR CLAIM: comprehensive cancellation and CAS not implemented.",
+        "criterion": "focused deterministic tests cover success before the post-start deadline and timeout after it; timeout must not silently succeed",
+        "evidence": "Author-submitted evidence for independent hostile review, not reviewer approval.",
         "id": "AC-2",
-        "verdict": "not-applicable"
+        "verdict": "satisfied"
       },
       {
-        "criterion": "Publish honest nonblocking REVIEW_TIMED_OUT at deadline",
-        "evidence": "AUTHOR CLAIM: completed correlated successful collector settles stale pending to REVIEW_TIMED_OUT; independent verification required.",
+        "criterion": "sqlalchemy repository predicate and scoped-session typing pass mandatory formatting and mypy without relaxing the runtime query semantics",
+        "evidence": "Author-submitted evidence for independent hostile review, not reviewer approval.",
         "id": "AC-3",
         "verdict": "satisfied"
       },
       {
-        "criterion": "Immediate reconciliation and idempotent exact-head generation semantics",
-        "evidence": "AUTHOR CLAIM: re-read before publication added, atomic CAS and complete event integration not established.",
+        "criterion": "the complete base-to-head diff is subjected to the applicable dpm defect-family checks and an independent exact-head hostile review request; the request is not represented as completed reviewer authority",
+        "evidence": "Author-submitted evidence for independent hostile review, not reviewer approval.",
         "id": "AC-4",
-        "verdict": "not-applicable"
+        "verdict": "satisfied"
       },
       {
-        "criterion": "Focused boundary, collector, late evidence, and hosted canary tests",
-        "evidence": "AUTHOR CLAIM: 107 focused tests passed; complete deadline boundary and hosted canary not yet demonstrated.",
+        "criterion": "no automatic merge or claim that pr #600 resolves the broader untrusted-candidate sandbox and publisher security gaps of pr #596",
+        "evidence": "Author-submitted evidence for independent hostile review, not reviewer approval.",
         "id": "AC-5",
-        "verdict": "not-applicable"
-      },
-      {
-        "criterion": "Preserve owner merge approval and independent advisory reviews",
-        "evidence": "AUTHOR CLAIM: no merge action or required gate weakening in this change; independent reviewer must verify.",
-        "id": "AC-6",
         "verdict": "satisfied"
       }
     ],
@@ -52,87 +46,178 @@
       "transaction-snapshot-consistency"
     ],
     "base_ref": "main",
-    "base_sha": "d1130e539592a8e1fa2b2c5b220a2ce3b1ab4914",
+    "base_sha": "dd01add9f856525151c2084532969c9402d95f81",
     "defect_families": [
       {
-        "evidence": "AUTHOR CLAIM: exact-head orchestration and recovery applicability reviewed; independent reviewer must verify relevant invariants and regression coverage.",
-        "family": "DFF-42",
+        "evidence": "Author requests independent assessment of this applicable defect family on the exact candidate diff.",
+        "family": "DFF-001",
         "outcome": "clear"
       },
       {
-        "evidence": "AUTHOR CLAIM: exact-head orchestration and recovery applicability reviewed; independent reviewer must verify relevant invariants and regression coverage.",
-        "family": "DFF-43",
+        "evidence": "Author requests independent assessment of this applicable defect family on the exact candidate diff.",
+        "family": "DFF-002",
         "outcome": "clear"
       },
       {
-        "evidence": "AUTHOR CLAIM: exact-head orchestration and recovery applicability reviewed; independent reviewer must verify relevant invariants and regression coverage.",
-        "family": "DFF-44",
+        "evidence": "Author requests independent assessment of this applicable defect family on the exact candidate diff.",
+        "family": "DFF-003",
+        "outcome": "clear"
+      },
+      {
+        "evidence": "Author requests independent assessment of this applicable defect family on the exact candidate diff.",
+        "family": "DFF-004",
+        "outcome": "clear"
+      },
+      {
+        "evidence": "Author requests independent assessment of this applicable defect family on the exact candidate diff.",
+        "family": "DFF-005",
+        "outcome": "clear"
+      },
+      {
+        "evidence": "Author requests independent assessment of this applicable defect family on the exact candidate diff.",
+        "family": "DFF-006",
+        "outcome": "clear"
+      },
+      {
+        "evidence": "Author requests independent assessment of this applicable defect family on the exact candidate diff.",
+        "family": "DFF-007",
+        "outcome": "clear"
+      },
+      {
+        "evidence": "Author requests independent assessment of this applicable defect family on the exact candidate diff.",
+        "family": "DFF-008",
+        "outcome": "clear"
+      },
+      {
+        "evidence": "Author requests independent assessment of this applicable defect family on the exact candidate diff.",
+        "family": "DFF-009",
+        "outcome": "clear"
+      },
+      {
+        "evidence": "Author requests independent assessment of this applicable defect family on the exact candidate diff.",
+        "family": "DFF-010",
+        "outcome": "clear"
+      },
+      {
+        "evidence": "Author requests independent assessment of this applicable defect family on the exact candidate diff.",
+        "family": "DFF-011",
+        "outcome": "clear"
+      },
+      {
+        "evidence": "Author requests independent assessment of this applicable defect family on the exact candidate diff.",
+        "family": "DFF-012",
+        "outcome": "clear"
+      },
+      {
+        "evidence": "Author requests independent assessment of this applicable defect family on the exact candidate diff.",
+        "family": "DFF-013",
+        "outcome": "clear"
+      },
+      {
+        "evidence": "Author requests independent assessment of this applicable defect family on the exact candidate diff.",
+        "family": "DFF-014",
+        "outcome": "clear"
+      },
+      {
+        "evidence": "Author requests independent assessment of this applicable defect family on the exact candidate diff.",
+        "family": "DFF-015",
+        "outcome": "clear"
+      },
+      {
+        "evidence": "Author requests independent assessment of this applicable defect family on the exact candidate diff.",
+        "family": "DFF-016",
+        "outcome": "clear"
+      },
+      {
+        "evidence": "Author requests independent assessment of this applicable defect family on the exact candidate diff.",
+        "family": "DFF-019",
+        "outcome": "clear"
+      },
+      {
+        "evidence": "Author requests independent assessment of this applicable defect family on the exact candidate diff.",
+        "family": "DFF-020",
+        "outcome": "clear"
+      },
+      {
+        "evidence": "Author requests independent assessment of this applicable defect family on the exact candidate diff.",
+        "family": "DFF-021",
+        "outcome": "clear"
+      },
+      {
+        "evidence": "Author requests independent assessment of this applicable defect family on the exact candidate diff.",
+        "family": "DFF-023",
+        "outcome": "clear"
+      },
+      {
+        "evidence": "Author requests independent assessment of this applicable defect family on the exact candidate diff.",
+        "family": "DFF-029",
+        "outcome": "clear"
+      },
+      {
+        "evidence": "Author requests independent assessment of this applicable defect family on the exact candidate diff.",
+        "family": "DFF-033",
+        "outcome": "clear"
+      },
+      {
+        "evidence": "Author requests independent assessment of this applicable defect family on the exact candidate diff.",
+        "family": "DFF-035",
+        "outcome": "clear"
+      },
+      {
+        "evidence": "Author requests independent assessment of this applicable defect family on the exact candidate diff.",
+        "family": "DFF-036",
+        "outcome": "clear"
+      },
+      {
+        "evidence": "Author requests independent assessment of this applicable defect family on the exact candidate diff.",
+        "family": "DFF-040",
+        "outcome": "clear"
+      },
+      {
+        "evidence": "Author requests independent assessment of this applicable defect family on the exact candidate diff.",
+        "family": "DFF-041",
         "outcome": "clear"
       }
     ],
     "findings": [],
-    "issue": "583",
+    "issue": "601",
     "review_target": [
       {
-        "blob_sha": "e37e2eb3b0d8480126031c41f4564392abf447e9",
-        "path": ".github/workflows/hunter-canonicalization-auto.yml",
+        "blob_sha": "987a37cdb724861bba02a5c2349decd06f84f8d8",
+        "path": "scripts/hunter_trusted_orchestrator_replay.py",
         "previous_path": "",
         "status": "modified"
       },
       {
-        "blob_sha": "886a003a67a2d4526bf9009330a3ddc8b3bb86d8",
-        "path": ".github/workflows/hunter-governance-reconcile.yml",
+        "blob_sha": "1092f3c5296b0fbb8bc85b27f752f7e0b99ceeb6",
+        "path": "scripts/hunter_trusted_orchestrator_replay_worker.py",
         "previous_path": "",
         "status": "modified"
       },
       {
-        "blob_sha": "67cfdc29b24815ffb6d58379aa5afdc1b347bcfc",
-        "path": ".github/workflows/hunter-knowledge-learning.yml",
+        "blob_sha": "5a06d0f833edbb4e6443a210d218651d60ef5071",
+        "path": "src/hunter/persistence/sql/repositories/base.py",
         "previous_path": "",
         "status": "modified"
       },
       {
-        "blob_sha": "bee342c12b5065d4ba4d623a53e2cc5b7d467de0",
-        "path": ".github/workflows/hunter-merge-readiness.yml",
+        "blob_sha": "7f523f9ecaa04820c698beacb557ba95f17f21a0",
+        "path": "src/hunter/persistence/sql/session.py",
         "previous_path": "",
         "status": "modified"
       },
       {
-        "blob_sha": "d6caaac491ac8b52edd8de8fb80a893ed10c9d39",
-        "path": "scripts/hunter_review_orchestrator.py",
-        "previous_path": "",
-        "status": "modified"
-      },
-      {
-        "blob_sha": "7638f7de183472ce5e8b6b1f25a4aeade0da9de2",
-        "path": "tests/test_hunter_governance_review_v2.py",
-        "previous_path": "",
-        "status": "modified"
-      },
-      {
-        "blob_sha": "74e54adbc95a0c672220079e4dffe07e5a7e8abb",
-        "path": "tests/test_hunter_governance_revision.py",
-        "previous_path": "",
-        "status": "modified"
-      },
-      {
-        "blob_sha": "05ef48c710a79fdcb7370e56e53a1f50faf66a7f",
-        "path": "tests/test_hunter_knowledge_learning_workflow.py",
-        "previous_path": "",
-        "status": "modified"
-      },
-      {
-        "blob_sha": "2c06d860a3767ec8c2645fd87c13f17e858bc279",
-        "path": "tests/test_hunter_review_orchestrator.py",
+        "blob_sha": "3ae916fc3229e460d8353633bde2339dd65c62f0",
+        "path": "tests/test_hunter_trusted_orchestrator_replay.py",
         "previous_path": "",
         "status": "modified"
       }
     ],
-    "review_target_digest": "09503465702032f6cb5b260aad20b6f966acae14eba25aac3b08354971291a1f"
+    "review_target_digest": "9e91753d134e9e1db95d2393ff59f84f954a741d1d4a5f95fae4d3b261edddc3"
   },
-  "review_id": "fbe48775f55a45f496e38ea5ce408551b34b46a107339b6c1d1c2b2da2465628",
+  "review_id": "96d8577e4a008954e1312dc0f238470018af11239863dc0544c10645b54dad41",
   "review_request": {
-    "claims_id": "fbe48775f55a45f496e38ea5ce408551b34b46a107339b6c1d1c2b2da2465628",
+    "claims_id": "96d8577e4a008954e1312dc0f238470018af11239863dc0544c10645b54dad41",
     "schema": "hunter.review-request.v1"
   },
   "schema": "hunter.pre-ready-hostile-review.v1"
