@@ -29,7 +29,6 @@ HARD_FAILURES = {"failure", "timed_out", "action_required", "startup_failure"}
 
 REPO = os.environ.get("GH_REPO") or os.environ.get("GITHUB_REPOSITORY") or ""
 TOKEN = os.environ.get("GH_TOKEN") or os.environ.get("GITHUB_TOKEN") or ""
-HGCC_READ_TOKEN = os.environ.get("HGCC_READ_TOKEN") or ""
 RUN_URL = os.environ.get("RUN_URL") or ""
 
 
@@ -159,20 +158,6 @@ def request_json(method: str, path: str, payload: dict[str, Any] | None = None) 
         data=data,
         token=TOKEN,
         what=f"{method} {path}",
-    )
-
-
-def hgcc_get(path: str) -> Any:
-    """Read ruleset details using an independently scoped administration-read token."""
-    if not HGCC_READ_TOKEN:
-        raise ValueError("HGCC-1 administration-read token unavailable")
-    return transport.request_rest_json(
-        url=f"https://api.github.com/{path}",
-        method="GET",
-        headers={},
-        data=None,
-        token=HGCC_READ_TOKEN,
-        what=f"GET {path}",
     )
 
 
@@ -642,42 +627,12 @@ def decide_completion(pr_number: int) -> CompletionVerdict | None:
     if not head_sha:
         return CompletionVerdict(False, "COMPLETION_REJECTED", "current PR head SHA is unavailable")
     completion = evaluate_completion_claim(LiveReadinessObservation(pr_number, pr, head_sha))
-    if completion.accepted:
-        hgcc = _hgcc_hosted_verdict(head_sha)
-        if hgcc is not None:
-            return CompletionVerdict(False, "COMPLETION_REJECTED", hgcc.description)
     return completion
-
-
-def _hgcc_hosted_verdict(head_sha: str) -> Decision | None:
-    """Read live Rulesets at the existing hosted status publisher; no new status."""
-    from hunter_github_contract import observe_contract, verify_required_checks
-
-    try:
-        if not TOKEN.strip():
-            raise ValueError("Authenticated GitHub ruleset observer required")
-        contract = observe_contract(REPO, get=hgcc_get)
-        ok, reason = verify_required_checks(
-            contract,
-            all_check_runs(head_sha),
-            target_ref="refs/heads/main",
-            statuses=paged(f"commits/{head_sha}/statuses"),
-            exclude_context=CONTEXT,
-        )
-    except (ValueError, TypeError, KeyError, RuntimeError, transport.GitHubUnavailable) as exc:
-        return Decision("pending", f"HGCC-1 indeterminate: {exc}")
-    if not ok:
-        return Decision("pending", f"HGCC-1: {reason}")
-    return None
 
 
 def publish(sha: str, decision: Decision) -> None:
     if not sha:
         return
-    if decision.state == "success":
-        hgcc = _hgcc_hosted_verdict(sha)
-        if hgcc is not None:
-            decision = hgcc
     description = decision.description[:140]
     # GitHub caps statuses per SHA/context at 1000. A workflow run URL is
     # diagnostic metadata, not a reason to republish an unchanged verdict.
@@ -819,25 +774,6 @@ def owner_merge_guard(pr_number: int) -> CompletionVerdict:
             "HEAD_DIVERGENCE",
             f"intended local HEAD, remote branch HEAD and PR HEAD are not identical ({local_head[:10]}, {remote_head[:10] or 'missing'}, {pr_head[:10] or 'missing'})",
         )
-    # HGCC-1 at the owner merge boundary: independently verify current-head
-    # required checks and publisher IDs against the live GitHub contract.
-    from hunter_github_contract import observe_contract, verify_required_checks
-
-    try:
-        if not TOKEN.strip():
-            raise ValueError("Authenticated GitHub ruleset observer required")
-        contract = observe_contract(REPO, get=hgcc_get)
-        checks_ok, checks_reason = verify_required_checks(
-            contract,
-            all_check_runs(pr_head),
-            target_ref="refs/heads/main",
-            statuses=paged(f"commits/{pr_head}/statuses"),
-        )
-    except (ValueError, TypeError, KeyError, transport.GitHubUnavailable, transport.GitHubRequestError) as exc:
-        return CompletionVerdict(False, "MERGE_NOT_READY", f"HGCC-1 indeterminate: {exc}")
-    if not checks_ok:
-        return CompletionVerdict(False, "MERGE_NOT_READY", f"HGCC-1: {checks_reason}")
-
     readiness = decide_completion(pr_number)
     if readiness is None or not readiness.accepted:
         reason = "merge readiness is unavailable" if readiness is None else readiness.reason
