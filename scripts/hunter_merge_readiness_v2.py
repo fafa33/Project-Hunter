@@ -664,6 +664,14 @@ def publish(sha: str, decision: Decision) -> None:
         if hgcc is not None:
             decision = hgcc
     description = decision.description[:140]
+    # GitHub caps statuses per SHA/context at 1000. A workflow run URL is
+    # diagnostic metadata, not a reason to republish an unchanged verdict.
+    # Never suppress a changed state or description: doing so could leave
+    # stale success in place after a newly detected failure.
+    previous = latest_status(sha, CONTEXT)
+    if previous is not None and previous.get("state") == decision.state and previous.get("description") == description:
+        print(f"{sha[:10]} {CONTEXT}: unchanged {decision.state} — publication skipped")
+        return
     request_json(
         "POST",
         f"statuses/{sha}",

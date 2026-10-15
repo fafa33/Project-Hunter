@@ -728,3 +728,25 @@ def test_controller_replaces_stale_success_after_malformed_evidence(monkeypatch)
     assert len(published) == 1
     assert published[0][0] == head
     assert published[0][1].state == "pending"
+
+
+def test_unchanged_readiness_status_does_not_exhaust_github_quota(monkeypatch):
+    monkeypatch.setattr(core, "_hgcc_hosted_verdict", lambda _sha: None)
+    monkeypatch.setattr(
+        core,
+        "latest_status",
+        lambda _sha, _context: {"state": "pending", "description": "Waiting for Ready for Review"},
+    )
+    posts = []
+    monkeypatch.setattr(core, "request_json", lambda *args: posts.append(args))
+    core.publish("a" * 40, core.Decision("pending", "Waiting for Ready for Review"))
+    assert posts == []
+
+
+def test_changed_readiness_status_must_publish_even_after_previous_success(monkeypatch):
+    monkeypatch.setattr(core, "latest_status", lambda _sha, _context: {"state": "success", "description": "Ready"})
+    posts = []
+    monkeypatch.setattr(core, "request_json", lambda *args: posts.append(args))
+    core.publish("a" * 40, core.Decision("failure", "New blocking finding"))
+    assert len(posts) == 1
+    assert posts[0][2]["state"] == "failure"
