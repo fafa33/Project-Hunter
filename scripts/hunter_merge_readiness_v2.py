@@ -191,8 +191,12 @@ def all_check_runs(sha: str) -> list[dict[str, Any]]:
     page = 1
     while True:
         payload = request_json("GET", f"commits/{sha}/check-runs?per_page=100&page={page}&filter=all")
-        batch = list((payload or {}).get("check_runs") or [])
-        runs.extend(run for run in batch if isinstance(run, dict))
+        if not isinstance(payload, dict) or not isinstance(payload.get("check_runs"), list):
+            raise ValueError("Malformed GitHub check-runs payload")
+        batch = payload["check_runs"]
+        if not all(isinstance(run, dict) for run in batch):
+            raise ValueError("Malformed GitHub check-run entry")
+        runs.extend(batch)
         if len(batch) < 100:
             return runs
         page += 1
@@ -622,12 +626,43 @@ def decide_completion(pr_number: int) -> CompletionVerdict | None:
     head_sha = str((pr.get("head") or {}).get("sha") or "").strip()
     if not head_sha:
         return CompletionVerdict(False, "COMPLETION_REJECTED", "current PR head SHA is unavailable")
-    return evaluate_completion_claim(LiveReadinessObservation(pr_number, pr, head_sha))
+    completion = evaluate_completion_claim(LiveReadinessObservation(pr_number, pr, head_sha))
+    if completion.accepted:
+        hgcc = _hgcc_hosted_verdict(head_sha)
+        if hgcc is not None:
+            return CompletionVerdict(False, "COMPLETION_REJECTED", hgcc.description)
+    return completion
+
+
+def _hgcc_hosted_verdict(head_sha: str) -> Decision | None:
+    """Read live Rulesets at the existing hosted status publisher; no new status."""
+    from hunter_github_contract import observe_contract, verify_required_checks
+
+    try:
+        if not TOKEN.strip():
+            raise ValueError("Authenticated GitHub ruleset observer required")
+        contract = observe_contract(REPO, get=lambda path: request_json("GET", path.removeprefix(f"repos/{REPO}/")))
+        ok, reason = verify_required_checks(
+            contract,
+            all_check_runs(head_sha),
+            target_ref="refs/heads/main",
+            statuses=paged(f"commits/{head_sha}/statuses"),
+            exclude_context=CONTEXT,
+        )
+    except (ValueError, TypeError, KeyError, RuntimeError, transport.GitHubUnavailable) as exc:
+        return Decision("pending", f"HGCC-1 indeterminate: {exc}")
+    if not ok:
+        return Decision("pending", f"HGCC-1: {reason}")
+    return None
 
 
 def publish(sha: str, decision: Decision) -> None:
     if not sha:
         return
+    if decision.state == "success":
+        hgcc = _hgcc_hosted_verdict(sha)
+        if hgcc is not None:
+            decision = hgcc
     description = decision.description[:140]
     request_json(
         "POST",
@@ -753,6 +788,25 @@ def owner_merge_guard(pr_number: int) -> CompletionVerdict:
             "HEAD_DIVERGENCE",
             f"intended local HEAD, remote branch HEAD and PR HEAD are not identical ({local_head[:10]}, {remote_head[:10] or 'missing'}, {pr_head[:10] or 'missing'})",
         )
+    # HGCC-1 at the owner merge boundary: independently verify current-head
+    # required checks and publisher IDs against the live GitHub contract.
+    from hunter_github_contract import observe_contract, verify_required_checks
+
+    try:
+        if not TOKEN.strip():
+            raise ValueError("Authenticated GitHub ruleset observer required")
+        contract = observe_contract(REPO, get=lambda path: request_json("GET", path.removeprefix(f"repos/{REPO}/")))
+        checks_ok, checks_reason = verify_required_checks(
+            contract,
+            all_check_runs(pr_head),
+            target_ref="refs/heads/main",
+            statuses=paged(f"commits/{pr_head}/statuses"),
+        )
+    except (ValueError, TypeError, KeyError, transport.GitHubUnavailable, transport.GitHubRequestError) as exc:
+        return CompletionVerdict(False, "MERGE_NOT_READY", f"HGCC-1 indeterminate: {exc}")
+    if not checks_ok:
+        return CompletionVerdict(False, "MERGE_NOT_READY", f"HGCC-1: {checks_reason}")
+
     readiness = decide_completion(pr_number)
     if readiness is None or not readiness.accepted:
         reason = "merge readiness is unavailable" if readiness is None else readiness.reason
@@ -813,6 +867,22 @@ def main() -> int:
         except Exception as exc:
             failures += 1
             print(f"PR #{number} readiness failed: {type(exc).__name__}: {exc}", file=sys.stderr)
+            # A malformed evidence payload must supersede any prior successful
+            # status on the current head. Recover the head independently from
+            # the PR endpoint, never from the failed observation.
+            try:
+                current = request_json("GET", f"pulls/{number}")
+                head = (current.get("head") or {}).get("sha") if isinstance(current, dict) else None
+                if (
+                    isinstance(current, dict)
+                    and current.get("state") == "open"
+                    and isinstance(head, str)
+                    and len(head) == 40
+                    and all(ch in "0123456789abcdefABCDEF" for ch in head)
+                ):
+                    publish(head, Decision("pending", f"Readiness evidence invalid: {type(exc).__name__}"))
+            except Exception as recovery_exc:
+                print(f"PR #{number} fail-closed publication unavailable: {recovery_exc}", file=sys.stderr)
     return 1 if failures else 0
 
 

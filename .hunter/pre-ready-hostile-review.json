@@ -2,32 +2,32 @@
   "claims": {
     "acceptance_criteria": [
       {
-        "criterion": "after a valid trusted started sentinel, the replay worker grants one full scenario execution timeout, with bounded startup and no unbounded second execution budget",
-        "evidence": "Author-submitted evidence for independent hostile review, not reviewer approval.",
+        "criterion": "HMA-1 Phase 1\u20132 trusted gate enforces exact-head, trusted GitHub required-check and proof verification without broadening scope",
+        "evidence": "Author-submitted evidence for independent hostile review; not independent reviewer approval.",
         "id": "AC-1",
         "verdict": "satisfied"
       },
       {
-        "criterion": "focused deterministic tests cover success before the post-start deadline and timeout after it; timeout must not silently succeed",
-        "evidence": "Author-submitted evidence for independent hostile review, not reviewer approval.",
+        "criterion": "Candidate admission and merge-readiness publisher use the canonical trusted outcome and do not depend on their own unpublished status",
+        "evidence": "Author-submitted evidence for independent hostile review; not independent reviewer approval.",
         "id": "AC-2",
         "verdict": "satisfied"
       },
       {
-        "criterion": "sqlalchemy repository predicate and scoped-session typing pass mandatory formatting and mypy without relaxing the runtime query semantics",
-        "evidence": "Author-submitted evidence for independent hostile review, not reviewer approval.",
+        "criterion": "Hosted preflight, trusted candidate validation, SonarCloud, CodeQL and regression tests pass for the candidate HEAD",
+        "evidence": "Author-submitted evidence for independent hostile review; not independent reviewer approval.",
         "id": "AC-3",
         "verdict": "satisfied"
       },
       {
-        "criterion": "the complete base-to-head diff is subjected to the applicable dpm defect-family checks and an independent exact-head hostile review request; the request is not represented as completed reviewer authority",
-        "evidence": "Author-submitted evidence for independent hostile review, not reviewer approval.",
+        "criterion": "Complete base-to-head diff including post-review corrections is submitted for independent hostile review; this request is not reviewer approval",
+        "evidence": "Author-submitted evidence for independent hostile review; not independent reviewer approval.",
         "id": "AC-4",
         "verdict": "satisfied"
       },
       {
-        "criterion": "no automatic merge or claim that pr #600 resolves the broader untrusted-candidate sandbox and publisher security gaps of pr #596",
-        "evidence": "Author-submitted evidence for independent hostile review, not reviewer approval.",
+        "criterion": "No merge before owner authorization; no HMA-1 phases 3\u20135 or unrelated PR changes",
+        "evidence": "Author-submitted evidence for independent hostile review; not independent reviewer approval.",
         "id": "AC-5",
         "verdict": "satisfied"
       }
@@ -46,135 +46,135 @@
       "transaction-snapshot-consistency"
     ],
     "base_ref": "main",
-    "base_sha": "dd01add9f856525151c2084532969c9402d95f81",
+    "base_sha": "82d480dc05c66707fe880e11c8ac0e2da7115d01",
     "defect_families": [
       {
-        "evidence": "Author requests independent assessment of this applicable defect family on the exact candidate diff.",
+        "evidence": "Author requests independent assessment against this exact candidate diff; not reviewer approval.",
         "family": "DFF-001",
         "outcome": "clear"
       },
       {
-        "evidence": "Author requests independent assessment of this applicable defect family on the exact candidate diff.",
+        "evidence": "Author requests independent assessment against this exact candidate diff; not reviewer approval.",
         "family": "DFF-002",
         "outcome": "clear"
       },
       {
-        "evidence": "Author requests independent assessment of this applicable defect family on the exact candidate diff.",
+        "evidence": "Author requests independent assessment against this exact candidate diff; not reviewer approval.",
         "family": "DFF-003",
         "outcome": "clear"
       },
       {
-        "evidence": "Author requests independent assessment of this applicable defect family on the exact candidate diff.",
+        "evidence": "Author requests independent assessment against this exact candidate diff; not reviewer approval.",
         "family": "DFF-004",
         "outcome": "clear"
       },
       {
-        "evidence": "Author requests independent assessment of this applicable defect family on the exact candidate diff.",
+        "evidence": "Author requests independent assessment against this exact candidate diff; not reviewer approval.",
         "family": "DFF-005",
         "outcome": "clear"
       },
       {
-        "evidence": "Author requests independent assessment of this applicable defect family on the exact candidate diff.",
+        "evidence": "Author requests independent assessment against this exact candidate diff; not reviewer approval.",
         "family": "DFF-006",
         "outcome": "clear"
       },
       {
-        "evidence": "Author requests independent assessment of this applicable defect family on the exact candidate diff.",
+        "evidence": "Author requests independent assessment against this exact candidate diff; not reviewer approval.",
         "family": "DFF-007",
         "outcome": "clear"
       },
       {
-        "evidence": "Author requests independent assessment of this applicable defect family on the exact candidate diff.",
+        "evidence": "Author requests independent assessment against this exact candidate diff; not reviewer approval.",
         "family": "DFF-008",
         "outcome": "clear"
       },
       {
-        "evidence": "Author requests independent assessment of this applicable defect family on the exact candidate diff.",
+        "evidence": "Author requests independent assessment against this exact candidate diff; not reviewer approval.",
         "family": "DFF-009",
         "outcome": "clear"
       },
       {
-        "evidence": "Author requests independent assessment of this applicable defect family on the exact candidate diff.",
+        "evidence": "Author requests independent assessment against this exact candidate diff; not reviewer approval.",
         "family": "DFF-010",
         "outcome": "clear"
       },
       {
-        "evidence": "Author requests independent assessment of this applicable defect family on the exact candidate diff.",
+        "evidence": "Author requests independent assessment against this exact candidate diff; not reviewer approval.",
         "family": "DFF-011",
         "outcome": "clear"
       },
       {
-        "evidence": "Author requests independent assessment of this applicable defect family on the exact candidate diff.",
+        "evidence": "Author requests independent assessment against this exact candidate diff; not reviewer approval.",
         "family": "DFF-012",
         "outcome": "clear"
       },
       {
-        "evidence": "Author requests independent assessment of this applicable defect family on the exact candidate diff.",
+        "evidence": "Author requests independent assessment against this exact candidate diff; not reviewer approval.",
         "family": "DFF-013",
         "outcome": "clear"
       },
       {
-        "evidence": "Author requests independent assessment of this applicable defect family on the exact candidate diff.",
+        "evidence": "Author requests independent assessment against this exact candidate diff; not reviewer approval.",
         "family": "DFF-014",
         "outcome": "clear"
       },
       {
-        "evidence": "Author requests independent assessment of this applicable defect family on the exact candidate diff.",
+        "evidence": "Author requests independent assessment against this exact candidate diff; not reviewer approval.",
         "family": "DFF-015",
         "outcome": "clear"
       },
       {
-        "evidence": "Author requests independent assessment of this applicable defect family on the exact candidate diff.",
+        "evidence": "Author requests independent assessment against this exact candidate diff; not reviewer approval.",
         "family": "DFF-016",
         "outcome": "clear"
       },
       {
-        "evidence": "Author requests independent assessment of this applicable defect family on the exact candidate diff.",
+        "evidence": "Author requests independent assessment against this exact candidate diff; not reviewer approval.",
         "family": "DFF-019",
         "outcome": "clear"
       },
       {
-        "evidence": "Author requests independent assessment of this applicable defect family on the exact candidate diff.",
+        "evidence": "Author requests independent assessment against this exact candidate diff; not reviewer approval.",
         "family": "DFF-020",
         "outcome": "clear"
       },
       {
-        "evidence": "Author requests independent assessment of this applicable defect family on the exact candidate diff.",
+        "evidence": "Author requests independent assessment against this exact candidate diff; not reviewer approval.",
         "family": "DFF-021",
         "outcome": "clear"
       },
       {
-        "evidence": "Author requests independent assessment of this applicable defect family on the exact candidate diff.",
+        "evidence": "Author requests independent assessment against this exact candidate diff; not reviewer approval.",
         "family": "DFF-023",
         "outcome": "clear"
       },
       {
-        "evidence": "Author requests independent assessment of this applicable defect family on the exact candidate diff.",
+        "evidence": "Author requests independent assessment against this exact candidate diff; not reviewer approval.",
         "family": "DFF-029",
         "outcome": "clear"
       },
       {
-        "evidence": "Author requests independent assessment of this applicable defect family on the exact candidate diff.",
+        "evidence": "Author requests independent assessment against this exact candidate diff; not reviewer approval.",
         "family": "DFF-033",
         "outcome": "clear"
       },
       {
-        "evidence": "Author requests independent assessment of this applicable defect family on the exact candidate diff.",
+        "evidence": "Author requests independent assessment against this exact candidate diff; not reviewer approval.",
         "family": "DFF-035",
         "outcome": "clear"
       },
       {
-        "evidence": "Author requests independent assessment of this applicable defect family on the exact candidate diff.",
+        "evidence": "Author requests independent assessment against this exact candidate diff; not reviewer approval.",
         "family": "DFF-036",
         "outcome": "clear"
       },
       {
-        "evidence": "Author requests independent assessment of this applicable defect family on the exact candidate diff.",
+        "evidence": "Author requests independent assessment against this exact candidate diff; not reviewer approval.",
         "family": "DFF-040",
         "outcome": "clear"
       },
       {
-        "evidence": "Author requests independent assessment of this applicable defect family on the exact candidate diff.",
+        "evidence": "Author requests independent assessment against this exact candidate diff; not reviewer approval.",
         "family": "DFF-041",
         "outcome": "clear"
       }
@@ -183,41 +183,137 @@
     "issue": "601",
     "review_target": [
       {
-        "blob_sha": "987a37cdb724861bba02a5c2349decd06f84f8d8",
-        "path": "scripts/hunter_trusted_orchestrator_replay.py",
+        "blob_sha": "3038208eab2c168fbc0ed37b9b2a2a24ccc03437",
+        "path": "docs/architecture/HMA-1-EXECUTION.md",
+        "previous_path": "",
+        "status": "added"
+      },
+      {
+        "blob_sha": "d6cecc798854b000566dc4b5eeaa20f1858c4921",
+        "path": "docs/architecture/HMA-1.md",
+        "previous_path": "",
+        "status": "added"
+      },
+      {
+        "blob_sha": "2feaaf00bb8b1e2996c425e6cc08dcb4aebd93b9",
+        "path": "scripts/hunter_github_contract.py",
+        "previous_path": "",
+        "status": "added"
+      },
+      {
+        "blob_sha": "95ef0fd7f5750a3b8e8772d374fefe92eb8f1fc4",
+        "path": "tests/test_hma1_trusted_gate.py",
+        "previous_path": "",
+        "status": "added"
+      },
+      {
+        "blob_sha": "ca8415f4d6e9f42eb0f8c9ab77a83cff2aa55186",
+        "path": "tests/test_hunter_github_contract.py",
+        "previous_path": "",
+        "status": "added"
+      },
+      {
+        "blob_sha": "1ed9512f0c99fbc13a06759f76e9f0a10b88295e",
+        "path": ".github/instructions/project-hunter.instructions.md",
         "previous_path": "",
         "status": "modified"
       },
       {
-        "blob_sha": "1092f3c5296b0fbb8bc85b27f752f7e0b99ceeb6",
-        "path": "scripts/hunter_trusted_orchestrator_replay_worker.py",
+        "blob_sha": "1b7a4109690949c5fb39508d783619040e84ce02",
+        "path": ".github/workflows/ci.yml",
         "previous_path": "",
         "status": "modified"
       },
       {
-        "blob_sha": "5a06d0f833edbb4e6443a210d218651d60ef5071",
-        "path": "src/hunter/persistence/sql/repositories/base.py",
+        "blob_sha": "f14eb419a38f8f9740eaa6d22db87e3309b22bdc",
+        "path": "AGENTS.md",
         "previous_path": "",
         "status": "modified"
       },
       {
-        "blob_sha": "7f523f9ecaa04820c698beacb557ba95f17f21a0",
-        "path": "src/hunter/persistence/sql/session.py",
+        "blob_sha": "f33fa9def9d529409a189ebfb7607d1cb6e2e7d8",
+        "path": "docs/CODE_WRITE_POLICY.json",
         "previous_path": "",
         "status": "modified"
       },
       {
-        "blob_sha": "3ae916fc3229e460d8353633bde2339dd65c62f0",
-        "path": "tests/test_hunter_trusted_orchestrator_replay.py",
+        "blob_sha": "40f173a73bd34eebac92eaa1460dbdec8033deac",
+        "path": "scripts/hunter_governance_review_v2.py",
+        "previous_path": "",
+        "status": "modified"
+      },
+      {
+        "blob_sha": "8940655a864e8801151b3a61732a4173155ba244",
+        "path": "scripts/hunter_issue_agent_lifecycle.py",
+        "previous_path": "",
+        "status": "modified"
+      },
+      {
+        "blob_sha": "f69c16781b4960edb7029125c2c8034aacce898a",
+        "path": "scripts/hunter_merge_readiness_v2.py",
+        "previous_path": "",
+        "status": "modified"
+      },
+      {
+        "blob_sha": "f0dcbbddbab2851ba5c9f0428f0fc18d59bca5fd",
+        "path": "scripts/hunter_pre_push.py",
+        "previous_path": "",
+        "status": "modified"
+      },
+      {
+        "blob_sha": "46bff60be4e293eaef5803a62280b54dc3a2584a",
+        "path": "scripts/hunter_preflight_reuse_decision.py",
+        "previous_path": "",
+        "status": "modified"
+      },
+      {
+        "blob_sha": "5cd75a530100329f09d72e12064be7e0db78c7ef",
+        "path": "tests/test_connector_write_ingress.py",
+        "previous_path": "",
+        "status": "modified"
+      },
+      {
+        "blob_sha": "0397f981a6812cdd1b94d494f16efacc29783121",
+        "path": "tests/test_hunter_governance_review_v2.py",
+        "previous_path": "",
+        "status": "modified"
+      },
+      {
+        "blob_sha": "d17bbfe42d70f32a30032473d8ff83171a1cb91c",
+        "path": "tests/test_hunter_merge_readiness_v2.py",
+        "previous_path": "",
+        "status": "modified"
+      },
+      {
+        "blob_sha": "bfd620352f0c85ef4a066f053244fae970a90778",
+        "path": "tests/test_hunter_pre_push.py",
+        "previous_path": "",
+        "status": "modified"
+      },
+      {
+        "blob_sha": "baae4b1be10b4d3d5964d23b030b84c9ea19fd3d",
+        "path": "tests/test_hunter_reviewer_disposition.py",
+        "previous_path": "",
+        "status": "modified"
+      },
+      {
+        "blob_sha": "73ec024a4173b2c7b5ee975b8014267917514c6d",
+        "path": "tests/test_issue_412_prevention_gate.py",
+        "previous_path": "",
+        "status": "modified"
+      },
+      {
+        "blob_sha": "defeb0c430ad28854170ba043387af8683de919c",
+        "path": "tests/test_issue_417_governance_waiting_state.py",
         "previous_path": "",
         "status": "modified"
       }
     ],
-    "review_target_digest": "9e91753d134e9e1db95d2393ff59f84f954a741d1d4a5f95fae4d3b261edddc3"
+    "review_target_digest": "6c8b4f960816af07ae2bae88ba64a5c63b8cd6d8b955f3c7f1313a1592e932e8"
   },
-  "review_id": "96d8577e4a008954e1312dc0f238470018af11239863dc0544c10645b54dad41",
+  "review_id": "bddd2303840988de351d7f412c5053513b2d211c3a6f46d50c773beb23090c36",
   "review_request": {
-    "claims_id": "96d8577e4a008954e1312dc0f238470018af11239863dc0544c10645b54dad41",
+    "claims_id": "bddd2303840988de351d7f412c5053513b2d211c3a6f46d50c773beb23090c36",
     "schema": "hunter.review-request.v1"
   },
   "schema": "hunter.pre-ready-hostile-review.v1"

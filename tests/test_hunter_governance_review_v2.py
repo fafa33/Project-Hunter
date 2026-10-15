@@ -3,11 +3,25 @@ from __future__ import annotations
 import importlib
 from pathlib import Path
 
+import pytest
+
 core = importlib.import_module("hunter_governance_review_v2")
 transport = importlib.import_module("hunter_github_transport")
 
 
 HEAD = "b" * 40
+
+
+@pytest.fixture(autouse=True)
+def _stub_candidate_admission_pr_head(monkeypatch):
+    original = core.request_json
+
+    def guarded(*args, **kwargs):
+        if len(args) >= 4 and args[2] == "GET" and str(args[3]).startswith("pulls/"):
+            return {"head": {"sha": HEAD}}
+        return original(*args, **kwargs)
+
+    monkeypatch.setattr(core, "request_json", guarded)
 
 
 def _pr(mergeable: bool | None) -> dict:

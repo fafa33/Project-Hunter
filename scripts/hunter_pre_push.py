@@ -412,6 +412,16 @@ def report_pre_ready_review_state(head_sha: str, updates: Iterable[tuple[str, st
     )
 
 
+def _run_hgcc_contract_check(repository: str) -> subprocess.CompletedProcess[str]:
+    """Isolate live-contract invocation from the existing push-safety runner seam."""
+    return subprocess.run(
+        (sys.executable, "scripts/hunter_github_contract.py", repository),
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+
+
 def enforce_pre_push(lines: Iterable[str]) -> int:
     updates = _parse_updates(lines)
     if not updates:
@@ -424,6 +434,15 @@ def enforce_pre_push(lines: Iterable[str]) -> int:
     _require_exact_head(updates, before_head)
     _validate_writer_provenance(before_head)
     _validate_receipt_freshness(before_head)
+    # HGCC-1: shared read-only GitHub contract observation for every agent using
+    # the repository-owned push boundary. No independent status publisher.
+    repository = _repository_from_remotes()
+    if not repository:
+        raise RuntimeError("HGCC-1 cannot determine GitHub repository")
+    contract_check = _run_hgcc_contract_check(repository)
+    if contract_check.returncode:
+        raise RuntimeError(f"HGCC-1 contract unavailable: {contract_check.stderr.strip()}")
+    print("[Hunter Pre-Push] HGCC-1: live GitHub rulesets observed")
     mode = _select_preflight_mode(before_head)
 
     if mode == TESTS_FIRST_RED_MODE:
