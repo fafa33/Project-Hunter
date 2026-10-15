@@ -2424,6 +2424,20 @@ def verify_pre_ready_hostile_review(
 def candidate_admission(repository: str, token: str, head_sha: str, pr_number: int | None = None) -> tuple[str, str]:
     touches_protected_preflight = False
     if pr_number is not None:
+        try:
+            pr_payload = request_json(repository, token, "GET", f"pulls/{pr_number}")
+            if not isinstance(pr_payload, dict):
+                return "failure", "Candidate admission blocked: PR payload is malformed."
+            pr_head_sha = str(((pr_payload.get("head") or {}).get("sha")) or "").strip()
+            if not pr_head_sha or pr_head_sha != head_sha:
+                return (
+                    "failure",
+                    f"Candidate admission blocked: PR #{pr_number} current head SHA ({pr_head_sha[:8] if pr_head_sha else 'none'}) "
+                    f"differs from evaluation HEAD ({head_sha[:8]}).",
+                )
+        except Exception as exc:
+            return "failure", f"Candidate admission blocked: PR head SHA verification failed ({type(exc).__name__}: {exc})."
+
         ok, changed_paths, error = read_pr_changed_paths(repository, token, pr_number)
         if not ok:
             return "failure", f"Candidate admission blocked: changed-file evidence is unavailable ({error})."

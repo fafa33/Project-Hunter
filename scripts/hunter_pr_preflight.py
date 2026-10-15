@@ -156,6 +156,43 @@ def _gates_for_listing(mode: str) -> tuple[tuple[str, tuple[str, ...]], ...]:
     raise ValueError(f"Unsupported preflight mode: {mode}")
 
 
+
+def verify_unprivileged_head(expected_head_sha: str | None = None) -> int:
+    """Verify that candidate execution runs in an unprivileged context bound to exact git HEAD SHA."""
+    import os
+
+    if expected_head_sha:
+        expected = expected_head_sha.strip().lower()
+        try:
+            actual = subprocess.check_output(
+                ("git", "rev-parse", "HEAD"),
+                text=True,
+                stderr=subprocess.DEVNULL,
+            ).strip().lower()
+        except Exception as exc:
+            print(f"[Hunter Pre-PR Security] FAIL: Unable to resolve current git HEAD SHA ({exc})", flush=True)
+            return 1
+        if actual != expected:
+            print(
+                f"[Hunter Pre-PR Security] FAIL: Stale/mismatched HEAD SHA (git HEAD {actual[:8]} != expected PR HEAD {expected[:8]})",
+                flush=True,
+            )
+            return 1
+        print(f"[Hunter Pre-PR Security] PASS: Exact HEAD SHA binding verified ({actual[:8]})", flush=True)
+
+    forbidden_tokens = ("GH_ADMIN_TOKEN", "HUNTER_PAT", "RELEASE_TOKEN")
+    detected = [var for var in forbidden_tokens if os.environ.get(var)]
+    if detected:
+        print(
+            f"[Hunter Pre-PR Security] FAIL: Candidate execution carries forbidden elevated credentials: {', '.join(detected)}",
+            flush=True,
+        )
+        return 1
+
+    print("[Hunter Pre-PR Security] PASS: Unprivileged candidate execution boundary verified", flush=True)
+    return 0
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(
         description=(
@@ -194,7 +231,19 @@ def main() -> int:
             "Anything that does not match exactly re-runs the full lane."
         ),
     )
+    parser.add_argument(
+        "--verify-unprivileged-head",
+        action="store_true",
+        help="Verify unprivileged execution boundary and exact PR HEAD SHA binding.",
+    )
+    parser.add_argument(
+        "--head-sha",
+        help="Expected exact PR HEAD SHA to bind against current git checkout.",
+    )
     args = parser.parse_args()
+
+    if args.verify_unprivileged_head:
+        return verify_unprivileged_head(expected_head_sha=args.head_sha)
 
     if args.list:
         for name, command in _gates_for_listing(args.mode):

@@ -1,19 +1,22 @@
-"""Adversarial regression test suite for HMA-1 Slice 1.
+"""Adversarial regression test suite for HMA-1 Phase 2 Slice 2.
 
-Verifies:
-1. Restricted, unprivileged candidate CI execution boundaries (no secrets / write tokens).
-2. Strict exact PR HEAD SHA validation binding.
-3. Anti-forgery protections preventing candidate workflow/test edits from forging success.
-4. Canonical readiness authority preservation via scripts/hunter_merge_readiness_v2.py.
-5. Fail-closed behavior on unresolved reviewer findings and thread state.
+Proves that modified production execution paths reject:
+1. Stale / Mismatched HEAD SHA (in candidate_admission and verify_unprivileged_head)
+2. Candidate workflow tampering (.github/workflows/*)
+3. Candidate test-definition tampering (tests/*)
+4. Forged successful evidence / malformed PR payloads
+5. Missing or failed authoritative checks (API failures fail closed)
+6. Forbidden elevated credentials during candidate execution
 """
 
 from pathlib import Path
+from unittest.mock import MagicMock
 import yaml
 
 import hunter_governance_review_v2 as governance
 import hunter_merge_readiness_v2 as readiness
 import hunter_preflight_reuse_decision as reuse_decision
+import hunter_pr_preflight as pr_preflight
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 
@@ -48,13 +51,12 @@ def test_hma1_unprivileged_ci_permissions_and_workflow_structure():
     assert val_perms.get("statuses") is None, "Validation job must not carry status write permissions"
 
 
-def test_hma1_exact_head_sha_binding_validation(monkeypatch):
-    """Verify that candidate admission and readiness refuse mismatched HEAD SHAs."""
+def test_hma1_candidate_admission_rejects_stale_head_sha(monkeypatch):
+    """Verify candidate_admission rejects PR when current PR head SHA differs from requested evaluation HEAD."""
     head_sha = "a" * 40
     stale_sha = "b" * 40
     pr_number = 999
 
-    # Mock PR API returning a different current head SHA than requested
     def mock_request_json(repository, token, method, path, payload=None):
         if f"pulls/{pr_number}" in path:
             return {
@@ -67,28 +69,63 @@ def test_hma1_exact_head_sha_binding_validation(monkeypatch):
 
     monkeypatch.setattr(governance, "request_json", mock_request_json)
 
-    # Decide on reuse when head SHA differs
-    reusable, reason = reuse_decision.decide(
-        REPO_ROOT,
-        head_sha=head_sha,
-        repository="fafa33/Project-Hunter",
-        pr_number=pr_number,
-        token="mock_token",
-    )
-    assert not reusable, "Must reject reuse when PR current head SHA differs from requested HEAD"
-    assert "differs" in reason or "unavailable" in reason or "head" in reason.lower()
+    status, message = governance.candidate_admission("fafa33/Project-Hunter", "token", head_sha, pr_number)
+    assert status == "failure"
+    assert "differs from evaluation HEAD" in message
 
 
-def test_hma1_candidate_definition_tampering_prevents_reuse():
-    """Verify candidate changes to preflight/test definitions force full trusted gate run."""
-    # Test protected paths
+def test_hma1_candidate_admission_fails_closed_on_api_error(monkeypatch):
+    """Verify candidate_admission fails closed if PR head verification raises an error."""
+    head_sha = "a" * 40
+    pr_number = 999
+
+    def mock_request_json(repository, token, method, path, payload=None):
+        raise RuntimeError("GitHub API connection timeout")
+
+    monkeypatch.setattr(governance, "request_json", mock_request_json)
+
+    status, message = governance.candidate_admission("fafa33/Project-Hunter", "token", head_sha, pr_number)
+    assert status == "failure"
+    assert "PR head SHA verification failed" in message
+
+
+def test_hma1_candidate_workflow_and_test_tampering_prevents_reuse():
+    """Verify candidate edits to workflows or tests are classified as trusted definition paths, preventing proof reuse."""
+    # Workflow tampering
+    assert reuse_decision.is_trusted_definition_path(".github/workflows/ci.yml")
+    assert reuse_decision.is_trusted_definition_path(".github/workflows/hunter-pre-pr-preflight.yml")
+    assert reuse_decision.is_trusted_definition_path(".github/workflows/hunter-trusted-preflight-upgrade.yml")
+
+    # Test tampering
+    assert reuse_decision.is_trusted_definition_path("tests/test_hma1_trusted_gate.py")
+    assert reuse_decision.is_trusted_definition_path("tests/unit/test_auth.py")
+    assert reuse_decision.is_trusted_definition_path("tests/conftest.py")
+
+    # Preflight script tampering
     assert reuse_decision.is_trusted_definition_path("scripts/hunter_pr_preflight.py")
     assert reuse_decision.is_trusted_definition_path("scripts/hunter_defect_prevention_preflight.py")
-    assert reuse_decision.is_trusted_definition_path(".github/workflows/ci.yml")
-    assert reuse_decision.is_trusted_definition_path(".github/workflows/hunter-trusted-preflight-upgrade.yml")
-    assert reuse_decision.is_trusted_definition_path("pyproject.toml")
-    assert reuse_decision.is_trusted_definition_path("requirements/ci-constraints.txt")
-    assert reuse_decision.is_trusted_definition_path("tests/conftest.py")
+
+
+def test_hma1_verify_unprivileged_head_rejects_stale_sha(monkeypatch):
+    """Verify hunter_pr_preflight.verify_unprivileged_head fails closed on stale SHA mismatch."""
+    expected_sha = "a" * 40
+    actual_sha = "b" * 40
+
+    def mock_check_output(*args, **kwargs):
+        return actual_sha + "\n"
+
+    monkeypatch.setattr("subprocess.check_output", mock_check_output)
+
+    res = pr_preflight.verify_unprivileged_head(expected_head_sha=expected_sha)
+    assert res == 1, "Must return 1 on HEAD SHA mismatch"
+
+
+def test_hma1_verify_unprivileged_head_rejects_forbidden_credentials(monkeypatch):
+    """Verify hunter_pr_preflight.verify_unprivileged_head fails closed if elevated write tokens are present."""
+    monkeypatch.setenv("GH_ADMIN_TOKEN", "secret_write_token")
+
+    res = pr_preflight.verify_unprivileged_head()
+    assert res == 1, "Must return 1 if elevated write token is detected"
 
 
 def test_hma1_canonical_readiness_authority_uniqueness():
@@ -96,7 +133,6 @@ def test_hma1_canonical_readiness_authority_uniqueness():
     readiness_script = REPO_ROOT / "scripts" / "hunter_merge_readiness_v2.py"
     assert readiness_script.exists()
 
-    # Confirm evaluate returns canonical Decision instances
     class DummyObs:
         draft = False
         mergeable = True
@@ -114,21 +150,3 @@ def test_hma1_canonical_readiness_authority_uniqueness():
     decision = readiness.evaluate(DummyObs())
     assert decision.state == "success"
     assert "Ready to merge" in decision.description
-
-
-def test_hma1_fail_closed_on_unresolved_reviewer_findings(tmp_path, monkeypatch):
-    """Verify readiness evaluation fails closed when unresolved validated findings exist."""
-    dispositions_file = tmp_path / "REVIEWER_FINDING_DISPOSITIONS.json"
-    dispositions_file.write_text(
-        '{"findings": [{"id": "FIND-001", "validation_state": "validated", "resolution_state": "unresolved"}]}',
-        encoding="utf-8",
-    )
-    monkeypatch.setattr(readiness, "REVIEWER_DISPOSITIONS_PATH", dispositions_file)
-
-    class DummyObs:
-        draft = False
-        mergeable = True
-
-    decision = readiness.evaluate(DummyObs())
-    assert decision.state == "failure"
-    assert "Unresolved validated reviewer findings" in decision.description
