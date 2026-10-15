@@ -207,3 +207,54 @@ def test_readiness_publisher_only_excludes_self_at_prepublication():
     owner_guard = source.split("def owner_merge_guard(", 1)[1].split("def main(", 1)[0]
     assert "exclude_context=CONTEXT" in publisher_guard
     assert "exclude_context=" not in owner_guard
+
+
+def test_ruleset_inventory_paginates_and_includes_later_required_checks():
+    calls = []
+
+    def get(path):
+        calls.append(path)
+        if "&page=1" in path:
+            return [{"id": i, "enforcement": "disabled"} for i in range(1, 101)]
+        if "&page=2" in path:
+            return [{"id": 101, "enforcement": "active"}]
+        if path.endswith("/101"):
+            return {
+                "name": "later",
+                "target": "branch",
+                "conditions": {"ref_name": {"include": ["main"], "exclude": []}},
+                "rules": [
+                    {
+                        "type": "required_status_checks",
+                        "parameters": {"required_status_checks": [{"context": "Late Check"}]},
+                    }
+                ],
+            }
+        raise AssertionError(path)
+
+    contract = hgcc.observe_contract("fafa33/Project-Hunter", get=get)
+    assert "page=2" in calls[1]
+    assert "Late Check" in hgcc.required_checks(contract, target_ref="refs/heads/main")
+
+
+@pytest.mark.parametrize("selector", ["main", "refs/heads/main", "~DEFAULT_BRANCH"])
+def test_main_ruleset_selectors_are_normalized(selector):
+    rule = {
+        "target": "branch",
+        "conditions": {"ref_name": {"include": [selector], "exclude": []}},
+        "rules": [
+            {"type": "required_status_checks", "parameters": {"required_status_checks": [{"context": "main-only"}]}}
+        ],
+    }
+    assert "main-only" in hgcc.required_checks({"rulesets": [rule]}, target_ref="refs/heads/main")
+    assert hgcc.required_checks({"rulesets": [rule]}, target_ref="refs/heads/release") == {}
+
+
+def test_main_exclusion_selectors_are_honored():
+    rule = {
+        "target": "branch",
+        "conditions": {"ref_name": {"include": ["~ALL"], "exclude": ["~DEFAULT_BRANCH"]}},
+        "rules": [{"type": "required_status_checks", "parameters": {"required_status_checks": [{"context": "other"}]}}],
+    }
+    assert hgcc.required_checks({"rulesets": [rule]}, target_ref="refs/heads/main") == {}
+    assert "other" in hgcc.required_checks({"rulesets": [rule]}, target_ref="refs/heads/release")

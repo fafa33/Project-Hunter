@@ -22,9 +22,16 @@ def github_get(path: str) -> Any:
 def observe_contract(repository: str, *, get: Callable[[str], Any] = github_get) -> dict[str, Any]:
     if len(repository.split("/")) != 2 or not all(repository.split("/")):
         raise ValueError("Invalid repository identity")
-    rulesets = get(f"repos/{repository}/rulesets?includes_parents=true")
-    if not isinstance(rulesets, list):
-        raise ValueError("Malformed GitHub ruleset list")
+    rulesets: list[Any] = []
+    for page in range(1, 1001):
+        batch = get(f"repos/{repository}/rulesets?includes_parents=true&per_page=100&page={page}")
+        if not isinstance(batch, list):
+            raise ValueError("Malformed GitHub ruleset list")
+        rulesets.extend(batch)
+        if len(batch) < 100:
+            break
+    else:
+        raise ValueError("GitHub ruleset pagination exceeded safe bound")
     active = [item for item in rulesets if isinstance(item, dict) and item.get("enforcement") == "active"]
     if not active:
         raise ValueError("No active GitHub rulesets observed")
@@ -87,9 +94,12 @@ def _applies_to_ref(ruleset: dict[str, Any], ref: str) -> bool:
     def matches(pattern: str) -> bool:
         if pattern == "~ALL":
             return True
+        if pattern == "~DEFAULT_BRANCH":
+            return ref == "refs/heads/main"
         if pattern.startswith("~"):
             raise ValueError("Unsupported GitHub ruleset ref selector")
-        return fnmatchcase(ref, pattern)
+        normalized = pattern if pattern.startswith("refs/heads/") else f"refs/heads/{pattern}"
+        return fnmatchcase(ref, normalized)
 
     return any(matches(x) for x in names["include"]) and not any(matches(x) for x in names["exclude"])
 
