@@ -40,6 +40,8 @@ def observe_contract(repository: str, *, get: Callable[[str], Any] = github_get)
             {
                 "id": ruleset_id,
                 "name": detail.get("name"),
+                "target": detail.get("target"),
+                "conditions": detail.get("conditions"),
                 "rules": detail["rules"],
             }
         )
@@ -63,10 +65,41 @@ if __name__ == "__main__":
     raise SystemExit(main())
 
 
-def required_checks(contract: dict[str, Any]) -> dict[str, int | None]:
+def _applies_to_ref(ruleset: dict[str, Any], ref: str) -> bool:
+    """Fail closed on unknown ruleset conditions; support explicit GitHub ref patterns."""
+    from fnmatch import fnmatchcase
+
+    if ruleset.get("target") != "branch":
+        return False
+    conditions = ruleset.get("conditions")
+    if not isinstance(conditions, dict) or set(conditions) != {"ref_name"}:
+        raise ValueError("Unsupported ruleset conditions")
+    names = conditions["ref_name"]
+    if (
+        not isinstance(names, dict)
+        or not isinstance(names.get("include"), list)
+        or not isinstance(names.get("exclude"), list)
+    ):
+        raise ValueError("Malformed ruleset ref conditions")
+    if not all(isinstance(x, str) for x in names["include"] + names["exclude"]):
+        raise ValueError("Malformed ruleset ref pattern")
+
+    def matches(pattern: str) -> bool:
+        if pattern == "~ALL":
+            return True
+        if pattern.startswith("~"):
+            raise ValueError("Unsupported GitHub ruleset ref selector")
+        return fnmatchcase(ref, pattern)
+
+    return any(matches(x) for x in names["include"]) and not any(matches(x) for x in names["exclude"])
+
+
+def required_checks(contract: dict[str, Any], *, target_ref: str | None = None) -> dict[str, int | None]:
     """Extract required contexts and their GitHub App IDs; reject conflicts."""
     result: dict[str, int | None] = {}
     for ruleset in contract["rulesets"]:
+        if target_ref is not None and not _applies_to_ref(ruleset, target_ref):
+            continue
         for rule in ruleset["rules"]:
             if rule.get("type") != "required_status_checks":
                 continue
@@ -85,15 +118,29 @@ def required_checks(contract: dict[str, Any]) -> dict[str, int | None]:
     return result
 
 
-def verify_required_checks(contract: dict[str, Any], runs: list[dict[str, Any]]) -> tuple[bool, str]:
+def verify_required_checks(
+    contract: dict[str, Any],
+    runs: list[dict[str, Any]],
+    *,
+    target_ref: str | None = None,
+    statuses: list[dict[str, Any]] | None = None,
+) -> tuple[bool, str]:
     """Only real successful check-runs from the configured app satisfy a requirement."""
-    checks = required_checks(contract)
+    checks = required_checks(contract, target_ref=target_ref)
     if not checks:
         return False, "No required checks found in effective contract"
     for name, app_id in checks.items():
         matches = [run for run in runs if run.get("name") == name]
         if not matches:
-            return False, f"Required check missing: {name}"
+            status_matches = [item for item in (statuses or []) if item.get("context") == name]
+            if not status_matches:
+                return False, f"Required check missing: {name}"
+            latest_status = max(status_matches, key=lambda item: int(item.get("id") or 0))
+            if latest_status.get("state") != "success":
+                return False, f"Required commit status not successful: {name}"
+            if app_id is not None and (latest_status.get("creator") or {}).get("id") != app_id:
+                return False, f"Required status publisher mismatch: {name}"
+            continue
         latest = max(matches, key=lambda run: int(run.get("id") or 0))
         if latest.get("status") != "completed" or latest.get("conclusion") != "success":
             return False, f"Required check not successful: {name}"
