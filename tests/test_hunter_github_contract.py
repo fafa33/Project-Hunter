@@ -47,3 +47,55 @@ def test_trusted_publisher_checks_contract_even_without_local_hook():
     assert "observe_contract(" in publisher
     assert "PUBLICATION_UNAVAILABLE" in publisher
     assert publisher.index("observe_contract(") < publisher.index("roles.run_publisher(")
+
+
+def test_required_check_identity_and_success():
+    contract = {
+        "rulesets": [
+            {
+                "rules": [
+                    {
+                        "type": "required_status_checks",
+                        "parameters": {
+                            "required_status_checks": [{"context": "Quality Gates", "integration_id": 15368}]
+                        },
+                    }
+                ]
+            }
+        ]
+    }
+    valid = [{"id": 7, "name": "Quality Gates", "status": "completed", "conclusion": "success", "app": {"id": 15368}}]
+    assert hgcc.verify_required_checks(contract, valid)[0]
+    assert not hgcc.verify_required_checks(contract, [{**valid[0], "app": {"id": 42}}])[0]
+    assert not hgcc.verify_required_checks(contract, [{**valid[0], "conclusion": "failure"}])[0]
+    assert not hgcc.verify_required_checks(contract, [valid[0], {**valid[0], "id": 8, "conclusion": "failure"}])[0]
+
+
+def test_conflicting_required_check_publishers_rejected():
+    contract = {
+        "rulesets": [
+            {
+                "rules": [
+                    {
+                        "type": "required_status_checks",
+                        "parameters": {
+                            "required_status_checks": [
+                                {"context": "CodeQL", "integration_id": 1},
+                                {"context": "CodeQL", "integration_id": 2},
+                            ]
+                        },
+                    }
+                ]
+            }
+        ]
+    }
+    with pytest.raises(ValueError):
+        hgcc.required_checks(contract)
+
+
+def test_owner_merge_boundary_consumes_live_hgcc():
+    source = (Path(__file__).resolve().parents[1] / "scripts/hunter_merge_readiness_v2.py").read_text()
+    owner_guard = source.split("def owner_merge_guard(", 1)[1].split("\ndef main(", 1)[0]
+    assert "observe_contract(" in owner_guard
+    assert "verify_required_checks(contract, all_check_runs(pr_head))" in owner_guard
+    assert owner_guard.index("verify_required_checks(") < owner_guard.index("decide_completion(")

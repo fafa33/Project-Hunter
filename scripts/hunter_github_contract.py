@@ -61,3 +61,42 @@ def main() -> int:
 
 if __name__ == "__main__":
     raise SystemExit(main())
+
+
+def required_checks(contract: dict[str, Any]) -> dict[str, int | None]:
+    """Extract required contexts and their GitHub App IDs; reject conflicts."""
+    result: dict[str, int | None] = {}
+    for ruleset in contract["rulesets"]:
+        for rule in ruleset["rules"]:
+            if rule.get("type") != "required_status_checks":
+                continue
+            entries = (rule.get("parameters") or {}).get("required_status_checks")
+            if not isinstance(entries, list):
+                raise ValueError("Malformed required checks contract")
+            for entry in entries:
+                if not isinstance(entry, dict) or not isinstance(entry.get("context"), str):
+                    raise ValueError("Malformed required check identity")
+                name, app_id = entry["context"], entry.get("integration_id")
+                if app_id is not None and (type(app_id) is not int or app_id <= 0):
+                    raise ValueError("Malformed required check app identity")
+                if name in result and result[name] != app_id:
+                    raise ValueError("Conflicting required check publishers")
+                result[name] = app_id
+    return result
+
+
+def verify_required_checks(contract: dict[str, Any], runs: list[dict[str, Any]]) -> tuple[bool, str]:
+    """Only real successful check-runs from the configured app satisfy a requirement."""
+    checks = required_checks(contract)
+    if not checks:
+        return False, "No required checks found in effective contract"
+    for name, app_id in checks.items():
+        matches = [run for run in runs if run.get("name") == name]
+        if not matches:
+            return False, f"Required check missing: {name}"
+        latest = max(matches, key=lambda run: int(run.get("id") or 0))
+        if latest.get("status") != "completed" or latest.get("conclusion") != "success":
+            return False, f"Required check not successful: {name}"
+        if app_id is not None and (latest.get("app") or {}).get("id") != app_id:
+            return False, f"Required check publisher mismatch: {name}"
+    return True, "Required checks and publisher identities verified"
