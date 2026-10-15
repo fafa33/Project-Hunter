@@ -378,6 +378,7 @@
       "scripts/hunter_merge_readiness_v2.py",
       "scripts/hunter_workflow_state.py",
       "scripts/hunter_github_transport.py",
+      "scripts/hunter_github_contract.py",
       "scripts/hunter_pre_push.py",
       "scripts/hunter_validation_receipt.py",
       "scripts/hunter_validation_reuse.py",
