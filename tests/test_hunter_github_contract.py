@@ -39,3 +39,11 @@ def test_every_agent_push_uses_same_contract_boundary():
     assert '"scripts/hunter_github_contract.py"' in script
     assert "contract_check.returncode" in script
     assert "HGCC-1 contract unavailable" in script
+
+
+def test_trusted_publisher_checks_contract_even_without_local_hook():
+    source = (Path(__file__).resolve().parents[1] / "scripts/hunter_issue_agent_lifecycle.py").read_text()
+    publisher = source.split("def cmd_publish(", 1)[1].split("\ndef cmd_candidate_gate(", 1)[0]
+    assert "observe_contract(" in publisher
+    assert "PUBLICATION_UNAVAILABLE" in publisher
+    assert publisher.index("observe_contract(") < publisher.index("roles.run_publisher(")
