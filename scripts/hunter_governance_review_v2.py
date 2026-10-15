@@ -2521,6 +2521,22 @@ def candidate_admission(repository: str, token: str, head_sha: str, pr_number: i
         return "pending", "Waiting for exact-head branch preflight to complete."
     if conclusion != "success":
         return "failure", f"Candidate admission blocked: exact-head branch preflight={conclusion or 'unknown'}."
+
+    if pr_number is not None:
+        try:
+            recheck = request_json(repository, token, "GET", f"pulls/{pr_number}")
+            if not isinstance(recheck, dict):
+                return "failure", "Candidate admission blocked: PR payload recheck is malformed."
+            recheck_head = str(((recheck.get("head") or {}).get("sha")) or "").strip()
+            if not recheck_head or recheck_head != head_sha:
+                return (
+                    "failure",
+                    f"Candidate admission blocked: PR #{pr_number} head changed during validation "
+                    f"({recheck_head[:8] if recheck_head else 'none'} != {head_sha[:8]}).",
+                )
+        except Exception as exc:
+            return "failure", f"Candidate admission blocked: PR head SHA recheck failed ({type(exc).__name__}: {exc})."
+
     return "success", "Exact-head branch preflight passed before review progression."
 
 
