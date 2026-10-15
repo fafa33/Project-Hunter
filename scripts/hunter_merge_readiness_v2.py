@@ -622,12 +622,35 @@ def decide_completion(pr_number: int) -> CompletionVerdict | None:
     head_sha = str((pr.get("head") or {}).get("sha") or "").strip()
     if not head_sha:
         return CompletionVerdict(False, "COMPLETION_REJECTED", "current PR head SHA is unavailable")
-    return evaluate_completion_claim(LiveReadinessObservation(pr_number, pr, head_sha))
+    completion = evaluate_completion_claim(LiveReadinessObservation(pr_number, pr, head_sha))
+    if completion.accepted:
+        hgcc = _hgcc_hosted_verdict(head_sha)
+        if hgcc is not None:
+            return CompletionVerdict(False, "COMPLETION_REJECTED", hgcc.description)
+    return completion
+
+
+def _hgcc_hosted_verdict(head_sha: str) -> Decision | None:
+    """Read live Rulesets at the existing hosted status publisher; no new status."""
+    from hunter_github_contract import observe_contract, verify_required_checks
+
+    try:
+        contract = observe_contract(REPO, get=lambda path: request_json("GET", path.removeprefix(f"repos/{REPO}/")))
+        ok, reason = verify_required_checks(contract, all_check_runs(head_sha))
+    except (ValueError, TypeError, KeyError, RuntimeError, transport.GitHubUnavailable) as exc:
+        return Decision("pending", f"HGCC-1 indeterminate: {exc}")
+    if not ok:
+        return Decision("pending", f"HGCC-1: {reason}")
+    return None
 
 
 def publish(sha: str, decision: Decision) -> None:
     if not sha:
         return
+    if decision.state == "success":
+        hgcc = _hgcc_hosted_verdict(sha)
+        if hgcc is not None:
+            decision = hgcc
     description = decision.description[:140]
     request_json(
         "POST",

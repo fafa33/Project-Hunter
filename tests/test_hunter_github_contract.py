@@ -99,3 +99,27 @@ def test_owner_merge_boundary_consumes_live_hgcc():
     assert "observe_contract(" in owner_guard
     assert "verify_required_checks(contract, all_check_runs(pr_head))" in owner_guard
     assert owner_guard.index("verify_required_checks(") < owner_guard.index("decide_completion(")
+
+
+def test_hosted_readiness_never_publishes_success_without_hgcc(monkeypatch):
+    import hunter_merge_readiness_v2 as readiness
+
+    published = []
+    monkeypatch.setattr(
+        readiness, "_hgcc_hosted_verdict", lambda _sha: readiness.Decision("pending", "HGCC-1 unavailable")
+    )
+    monkeypatch.setattr(readiness, "request_json", lambda method, path, payload=None: published.append(payload))
+    readiness.publish("a" * 40, readiness.Decision("success", "ready"))
+    assert len(published) == 1
+    assert published[0]["context"] == readiness.CONTEXT
+    assert published[0]["state"] == "pending"
+
+
+def test_hosted_readiness_allows_existing_success_with_valid_hgcc(monkeypatch):
+    import hunter_merge_readiness_v2 as readiness
+
+    published = []
+    monkeypatch.setattr(readiness, "_hgcc_hosted_verdict", lambda _sha: None)
+    monkeypatch.setattr(readiness, "request_json", lambda method, path, payload=None: published.append(payload))
+    readiness.publish("a" * 40, readiness.Decision("success", "ready"))
+    assert published[0]["state"] == "success"

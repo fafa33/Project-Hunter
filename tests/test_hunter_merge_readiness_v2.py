@@ -514,6 +514,7 @@ def test_decide_completion_is_a_real_production_caller_against_a_live_pr(monkeyp
     `main()`) is a genuine, invokable production path, not test-only code."""
 
     _install_green(monkeypatch)
+    monkeypatch.setattr(core, "_hgcc_hosted_verdict", lambda _sha: None)
 
     verdict = core.decide_completion(501)
 
