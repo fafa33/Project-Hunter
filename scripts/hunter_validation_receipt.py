@@ -75,6 +75,8 @@ RECEIPT_NAME = "full.json"
 DEFINITION_PATHS: tuple[str, ...] = (
     ".github/workflows/ci.yml",
     ".github/workflows/hunter-pre-pr-preflight.yml",
+    "docs/CODE_WRITE_POLICY.json",
+    "docs/VALIDATION_STAGE_CONTRACT.json",
     "pyproject.toml",
     "requirements/ci-constraints.txt",
     "scripts/hunter_architecture_index_preflight.py",

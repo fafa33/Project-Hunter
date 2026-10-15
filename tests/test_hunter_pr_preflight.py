@@ -373,3 +373,93 @@ def test_agent_instructions_reference_machine_contract_surfaces() -> None:
         text = path.read_text(encoding="utf-8")
         for contract_surface in required:
             assert contract_surface in text, (path, contract_surface)
+
+
+def test_aggregate_mode_runs_all_independent_gates_on_failure(monkeypatch) -> None:
+    calls: list[tuple[str, ...]] = []
+
+    def fake_run(command, capture_output=False, text=False, check=False, timeout=None):
+        cmd = tuple(command)
+        calls.append(cmd)
+        if "ruff" in cmd:
+            return SimpleNamespace(returncode=1, stdout="", stderr="ruff error in src/hunter/app.py")
+        if "black" in cmd:
+            return SimpleNamespace(returncode=1, stdout="", stderr="black diff in src/hunter/app.py")
+        return SimpleNamespace(returncode=0, stdout="", stderr="")
+
+    monkeypatch.setattr(hunter_pr_preflight.subprocess, "run", fake_run)
+
+    exit_code, report = hunter_pr_preflight.run_aggregate_gates(
+        gates=(
+            ("Ruff", ("ruff", "check", ".")),
+            ("Black", ("black", "--check", ".")),
+            ("Mypy", ("mypy",)),
+        ),
+        dependencies={},
+    )
+
+    assert exit_code == 1
+    assert len(calls) == 3
+    assert report["overall_outcome"] == "failed"
+    outcomes = {g["name"]: g["outcome"] for g in report["gates"]}
+    assert outcomes == {"Ruff": "failed", "Black": "failed", "Mypy": "passed"}
+
+
+def test_aggregate_mode_marks_dependent_gates_blocked(monkeypatch) -> None:
+    calls: list[tuple[str, ...]] = []
+
+    def fake_run(command, capture_output=False, text=False, check=False, timeout=None):
+        cmd = tuple(command)
+        calls.append(cmd)
+        if "defect" in " ".join(cmd):
+            return SimpleNamespace(returncode=1, stdout="", stderr="Defect prevention failure")
+        return SimpleNamespace(returncode=0, stdout="", stderr="")
+
+    monkeypatch.setattr(hunter_pr_preflight.subprocess, "run", fake_run)
+
+    exit_code, report = hunter_pr_preflight.run_aggregate_gates(
+        gates=(
+            ("Defect Prevention Guard", ("python", "scripts/hunter_defect_prevention_preflight.py")),
+            ("Ruff", ("ruff", "check", ".")),
+            ("Pytest", ("pytest",)),
+        ),
+        dependencies={"Pytest": ("Defect Prevention Guard",)},
+    )
+
+    assert exit_code == 1
+    assert calls == [
+        ("python", "scripts/hunter_defect_prevention_preflight.py"),
+        ("ruff", "check", "."),
+    ]
+    gate_dict = {g["name"]: g for g in report["gates"]}
+    assert gate_dict["Defect Prevention Guard"]["outcome"] == "failed"
+    assert gate_dict["Ruff"]["outcome"] == "passed"
+    assert gate_dict["Pytest"]["outcome"] == "blocked"
+    assert (
+        "Blocked by failed or blocked dependent gate(s): Defect Prevention Guard"
+        in gate_dict["Pytest"]["error_details"]
+    )
+
+
+def test_aggregate_mode_produces_json_report_file(tmp_path, monkeypatch) -> None:
+    def fake_run(command, capture_output=False, text=False, check=False, timeout=None):
+        return SimpleNamespace(returncode=0, stdout="pass", stderr="")
+
+    monkeypatch.setattr(hunter_pr_preflight.subprocess, "run", fake_run)
+
+    report_file = tmp_path / "report.json"
+    exit_code = hunter_pr_preflight.run_preflight(
+        mode="aggregate",
+        report_path=report_file,
+    )
+
+    assert exit_code == 0
+    assert report_file.is_file()
+
+    import json
+
+    data = json.loads(report_file.read_text(encoding="utf-8"))
+    assert data["schema"] == "hunter.preflight-report/1"
+    assert data["mode"] == "aggregate"
+    assert data["overall_outcome"] == "passed"
+    assert len(data["gates"]) == 7

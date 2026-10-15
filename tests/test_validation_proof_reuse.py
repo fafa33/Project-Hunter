@@ -686,3 +686,15 @@ def test_ci_workflow_can_read_the_trusted_run_record() -> None:
 
     assert workflow["permissions"] == {}
     assert workflow["jobs"]["quality"]["permissions"]["actions"] == "read"
+
+
+def test_hgcc1_contract_change_invalidates_receipt_reuse(tmp_path: Path) -> None:
+    """Verifies that altering HGCC-1 contract files invalidates receipt reuse."""
+    root = _definition_root(tmp_path)
+    before_identity = receipts.definition_identity(root)
+
+    policy_file = root / "docs" / "CODE_WRITE_POLICY.json"
+    policy_file.write_bytes(policy_file.read_bytes() + b"\n")
+
+    after_identity = receipts.definition_identity(root)
+    assert before_identity != after_identity, "Altering CODE_WRITE_POLICY.json must change definition identity"
