@@ -2436,7 +2436,10 @@ def candidate_admission(repository: str, token: str, head_sha: str, pr_number: i
                     f"differs from evaluation HEAD ({head_sha[:8]}).",
                 )
         except Exception as exc:
-            return "failure", f"Candidate admission blocked: PR head SHA verification failed ({type(exc).__name__}: {exc})."
+            return (
+                "failure",
+                f"Candidate admission blocked: PR head SHA verification failed ({type(exc).__name__}: {exc}).",
+            )
 
         ok, changed_paths, error = read_pr_changed_paths(repository, token, pr_number)
         if not ok:
