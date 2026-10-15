@@ -668,7 +668,15 @@ def publish(sha: str, decision: Decision) -> None:
     # diagnostic metadata, not a reason to republish an unchanged verdict.
     # Never suppress a changed state or description: doing so could leave
     # stale success in place after a newly detected failure.
-    previous = latest_status(sha, CONTEXT)
+    # The combined-status endpoint returns only the latest entry per context,
+    # avoiding full history pagination on long-lived heads.
+    combined = request_json("GET", f"commits/{sha}/status")
+    if not isinstance(combined, dict) or not isinstance(combined.get("statuses"), list):
+        raise ValueError("Malformed combined commit status response")
+    previous = next(
+        (entry for entry in combined["statuses"] if isinstance(entry, dict) and entry.get("context") == CONTEXT),
+        None,
+    )
     if previous is not None and previous.get("state") == decision.state and previous.get("description") == description:
         print(f"{sha[:10]} {CONTEXT}: unchanged {decision.state} — publication skipped")
         return

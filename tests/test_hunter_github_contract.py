@@ -105,11 +105,15 @@ def test_hosted_readiness_never_publishes_success_without_hgcc(monkeypatch):
     import hunter_merge_readiness_v2 as readiness
 
     published = []
-    monkeypatch.setattr(readiness, "latest_status", lambda _sha, _context: None)
+
     monkeypatch.setattr(
         readiness, "_hgcc_hosted_verdict", lambda _sha: readiness.Decision("pending", "HGCC-1 unavailable")
     )
-    monkeypatch.setattr(readiness, "request_json", lambda method, path, payload=None: published.append(payload))
+    monkeypatch.setattr(
+        readiness,
+        "request_json",
+        lambda method, path, payload=None: {"statuses": []} if method == "GET" else published.append(payload),
+    )
     readiness.publish("a" * 40, readiness.Decision("success", "ready"))
     assert len(published) == 1
     assert published[0]["context"] == readiness.CONTEXT
@@ -120,9 +124,13 @@ def test_hosted_readiness_allows_existing_success_with_valid_hgcc(monkeypatch):
     import hunter_merge_readiness_v2 as readiness
 
     published = []
-    monkeypatch.setattr(readiness, "latest_status", lambda _sha, _context: None)
+
     monkeypatch.setattr(readiness, "_hgcc_hosted_verdict", lambda _sha: None)
-    monkeypatch.setattr(readiness, "request_json", lambda method, path, payload=None: published.append(payload))
+    monkeypatch.setattr(
+        readiness,
+        "request_json",
+        lambda method, path, payload=None: {"statuses": []} if method == "GET" else published.append(payload),
+    )
     readiness.publish("a" * 40, readiness.Decision("success", "ready"))
     assert published[0]["state"] == "success"
 
