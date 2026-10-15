@@ -138,8 +138,10 @@ def verify_required_checks(
             latest_status = max(status_matches, key=lambda item: int(item.get("id") or 0))
             if latest_status.get("state") != "success":
                 return False, f"Required commit status not successful: {name}"
-            if app_id is not None and (latest_status.get("creator") or {}).get("id") != app_id:
-                return False, f"Required status publisher mismatch: {name}"
+            if app_id is not None:
+                # Commit status creator.id is a user ID, not a GitHub App ID.
+                # Without verifiable App provenance, do not authorize this fallback.
+                return False, f"Required status publisher App identity unverifiable: {name}"
             continue
         latest = max(matches, key=lambda run: int(run.get("id") or 0))
         if latest.get("status") != "completed" or latest.get("conclusion") != "success":

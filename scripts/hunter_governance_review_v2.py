@@ -2503,6 +2503,21 @@ def candidate_admission(repository: str, token: str, head_sha: str, pr_number: i
         proof_state, proof_description = read_trusted_upgrade_status(repository, token, head_sha, pr_number)
         if proof_state == "missing":
             return "failure", proof_description
+        if pr_number is not None:
+            try:
+                final_pr = request_json(repository, token, "GET", f"pulls/{pr_number}")
+                if not isinstance(final_pr, dict) or not isinstance(final_pr.get("head"), dict):
+                    return "failure", "Candidate admission blocked: final PR payload is malformed."
+                if str(final_pr["head"].get("sha") or "").strip() != head_sha:
+                    return (
+                        "failure",
+                        f"Candidate admission blocked: PR #{pr_number} head changed during trusted proof validation.",
+                    )
+            except Exception as exc:
+                return (
+                    "failure",
+                    f"Candidate admission blocked: final PR head recheck failed ({type(exc).__name__}: {exc}).",
+                )
         return proof_state, proof_description
 
     encoded_sha = quote(head_sha, safe="")

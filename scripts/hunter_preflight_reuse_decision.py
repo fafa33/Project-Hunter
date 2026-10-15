@@ -53,6 +53,7 @@ TRUSTED_DEFINITION_PATHS = frozenset(governance.PREFLIGHT_OWNED_PATHS) | frozens
         "tox.ini",
         "setup.cfg",
         "requirements/ci-constraints.txt",
+        "scripts/hunter_github_contract.py",
         "scripts/hunter_validation_receipt.py",
         "scripts/hunter_validation_reuse.py",
         "scripts/hunter_ci_impact.py",

@@ -110,6 +110,8 @@ def test_hma1_candidate_workflow_and_test_tampering_prevents_reuse():
     assert reuse_decision.is_trusted_definition_path(".github/workflows/ci.yml")
     assert reuse_decision.is_trusted_definition_path(".github/workflows/hunter-pre-pr-preflight.yml")
 
+    assert reuse_decision.is_trusted_definition_path("scripts/hunter_github_contract.py")
+
     # Tests
     assert reuse_decision.is_trusted_definition_path("tests/test_hma1_trusted_gate.py")
     assert reuse_decision.is_trusted_definition_path("tests/conftest.py")
@@ -278,3 +280,27 @@ def test_hma1_canonical_readiness_authority_uniqueness():
     decision = readiness.evaluate(DummyObs())
     assert decision.state == "success"
     assert "Ready to merge" in decision.description
+
+
+def test_hma1_trusted_proof_rechecks_pr_head_after_proof(monkeypatch):
+    head_sha = "a" * 40
+    calls = {"pr": 0}
+
+    def request(_repository, _token, method, path, payload=None):
+        if method == "GET" and path == "pulls/999":
+            calls["pr"] += 1
+            return {"head": {"sha": "b" * 40 if calls["pr"] >= 3 else head_sha}}
+        return {}
+
+    monkeypatch.setattr(governance, "request_json", request)
+    monkeypatch.setattr(governance, "verify_code_write_ingress_provenance", lambda *_a, **_k: ("success", "ok"))
+    monkeypatch.setattr(
+        governance, "read_pr_changed_paths", lambda *_a, **_k: (True, ["scripts/hunter_github_contract.py"], None)
+    )
+    monkeypatch.setattr(governance, "read_unresolved_review_threads", lambda *_a, **_k: ((), None))
+    monkeypatch.setattr(governance, "verify_pre_ready_hostile_review", lambda *_a, **_k: ("success", "ok"))
+    monkeypatch.setattr(governance, "read_trusted_upgrade_status", lambda *_a, **_k: ("success", "trusted"))
+    state, message = governance.candidate_admission("fafa33/Project-Hunter", "token", head_sha, 999)
+    assert state == "failure"
+    assert "head changed" in message
+    assert calls["pr"] >= 3

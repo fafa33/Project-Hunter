@@ -155,3 +155,23 @@ def test_required_commit_status_can_satisfy_context():
     assert not hgcc.verify_required_checks(
         contract, [], statuses=[{"id": 2, "context": "Hunter Merge Readiness", "state": "failure"}]
     )[0]
+
+
+def test_commit_status_user_id_cannot_impersonate_required_app():
+    contract = {
+        "rulesets": [
+            {
+                "rules": [
+                    {
+                        "type": "required_status_checks",
+                        "parameters": {"required_status_checks": [{"context": "legacy", "integration_id": 15368}]},
+                    }
+                ]
+            }
+        ]
+    }
+    ok, reason = hgcc.verify_required_checks(
+        contract, [], statuses=[{"id": 1, "context": "legacy", "state": "success", "creator": {"id": 15368}}]
+    )
+    assert not ok
+    assert "App identity unverifiable" in reason
