@@ -1,36 +1,36 @@
-# HMA-1 Execution Record — Slice 1
+# HMA-1 Execution Record — Phase 2 Slice 2
 
 ## Metadata
 - **Branch:** `hma1-minimal-trusted-gate`
 - **Base Branch:** `main`
 - **HEAD SHA:** `82d480dc05c66707fe880e11c8ac0e2da7115d01`
-- **Timestamp:** 2026-10-15T07:15:00Z
+- **Timestamp:** 2026-10-15T07:30:00Z
 
 ---
 
-## Completed Checklist Items
+## Completed Checklist Items — Slice 2
 
-- [x] **Phase 1 — Targeted Inventory:**
-  - [x] Identified existing CI and replay workflows (`ci.yml`, `hunter-pre-pr-preflight.yml`, `hunter-trusted-preflight-upgrade.yml`, `hunter-merge-readiness.yml`).
-  - [x] Identified required status checks (`Quality Gates`, `dependency-review`, `CodeQL`, `Hunter Trusted Preflight Upgrade`, `Hunter Merge Readiness`) and their publishers.
-  - [x] Mapped consumers of readiness status (GitHub `main` Ruleset, `hunter_workflow_state.py`, candidate admission).
-  - [x] Evaluated trust boundaries, secret isolation, and exact HEAD SHA binding requirements.
-  - [x] Documented inventory and migration safety requirements in `docs/architecture/HMA-1.md`.
+- [x] **Production CI Security-Boundary Changes Implemented:**
+  - [x] **Unprivileged Candidate Execution & Token Boundary:** Updated `.github/workflows/ci.yml` and `scripts/hunter_pr_preflight.py` (`verify_unprivileged_head`) to verify unprivileged candidate execution and reject forbidden elevated write credentials (`GH_ADMIN_TOKEN`, `HUNTER_PAT`, `RELEASE_TOKEN`).
+  - [x] **Exact PR HEAD SHA Binding:** Updated `scripts/hunter_governance_review_v2.py` (`candidate_admission`) to fetch `pulls/{pr_number}` and reject PRs where the current head SHA on GitHub differs from the requested evaluation HEAD.
+  - [x] **Fail-Closed API Errors:** Updated `candidate_admission` to fail closed with `failure` if GitHub API queries encounter network or payload errors.
+  - [x] **Forge Prevention for Test & Workflow Tampering:** Updated `scripts/hunter_preflight_reuse_decision.py` (`TRUSTED_DEFINITION_PREFIXES`) to classify `.github/workflows/` and `tests/` as trusted definition paths, ensuring candidate modifications to workflows or tests force full execution under the default-branch controller (`hunter-trusted-preflight-upgrade.yml`).
+  - [x] **Canonical Readiness Authority Preserved:** Retained `scripts/hunter_merge_readiness_v2.py` as the single canonical readiness decision engine without introducing secondary or duplicate decision engines.
 
-- [x] **Phase 2 — First Implementation Slice:**
-  - [x] Enforced unprivileged candidate execution boundaries (no secrets or status write permissions in candidate jobs).
-  - [x] Verified exact PR HEAD SHA binding across preflight reuse decision and candidate admission controllers.
-  - [x] Verified anti-forgery protections ensuring candidate edits to preflight definitions, workflows, or test infrastructure force full execution under the trusted default-branch controller.
-  - [x] Preserved existing `ci.yml` and `hunter-merge-readiness.yml` behavior without creating duplicate decision engines.
-  - [x] Added focused adversarial regression tests (`tests/test_hma1_trusted_gate.py`).
+- [x] **Focused Adversarial Regression Tests Added:**
+  - [x] Updated `tests/test_hma1_trusted_gate.py` with 7 focused adversarial tests proving rejection of stale HEAD SHA, workflow tampering, test-definition tampering, forged evidence, API failures, and elevated credentials.
 
 ---
 
-## Changed Files
+## Actual Changed Production Files
 
-1. `tests/test_hma1_trusted_gate.py` (New): Focused adversarial regression tests verifying unprivileged execution boundaries, exact HEAD SHA binding, forge prevention, and fail-closed readiness evaluation.
-2. `docs/architecture/HMA-1.md` (New): HMA-1 minimal automation architecture specification and Phase 1 targeted inventory.
-3. `docs/architecture/HMA-1-EXECUTION.md` (New): Execution tracking document for Slice 1 handoff.
+1. `.github/workflows/ci.yml`: Updated `quality` job step `Verify exact HEAD SHA binding and unprivileged boundary` to invoke `python scripts/hunter_pr_preflight.py --verify-unprivileged-head --head-sha "${PR_HEAD_SHA}"`.
+2. `scripts/hunter_governance_review_v2.py`: Added exact PR HEAD SHA verification and fail-closed API error handling in `candidate_admission`.
+3. `scripts/hunter_pr_preflight.py`: Added `verify_unprivileged_head` function and CLI arguments (`--verify-unprivileged-head`, `--head-sha`).
+4. `scripts/hunter_preflight_reuse_decision.py`: Added `.github/workflows/` and `tests/` to `TRUSTED_DEFINITION_PREFIXES`.
+5. `tests/test_hma1_trusted_gate.py`: Added adversarial regression tests for Phase 2 Slice 2 security boundary checks.
+6. `docs/architecture/HMA-1.md`: HMA-1 architecture specification and inventory.
+7. `docs/architecture/HMA-1-EXECUTION.md`: Execution tracking document for Phase 2 Slice 2.
 
 ---
 
@@ -46,16 +46,16 @@ PYTHONPATH=scripts:src /home/jules/.local/bin/pytest tests/test_hma1_trusted_gat
 platform linux -- Python 3.12.3, pytest-9.0.2, pluggy-1.6.0
 rootdir: /app
 configfile: pyproject.toml
-collected 5 items
+collected 7 items
 
-tests/test_hma1_trusted_gate.py .....                                    [100%]
+tests/test_hma1_trusted_gate.py .......                                  [100%]
 
-============================== 5 passed in 0.22s ===============================
+============================== 7 passed in 0.25s ===============================
 ```
 
-### Command 2: Canonical Merge Readiness Test Suite
+### Command 2: Combined HMA-1 and Canonical Merge Readiness Suite
 ```bash
-PYTHONPATH=scripts:src /home/jules/.local/bin/pytest tests/test_hunter_merge_readiness_v2.py
+PYTHONPATH=scripts:src /home/jules/.local/bin/pytest tests/test_hma1_trusted_gate.py tests/test_hunter_merge_readiness_v2.py
 ```
 **Output:**
 ```
@@ -63,39 +63,31 @@ PYTHONPATH=scripts:src /home/jules/.local/bin/pytest tests/test_hunter_merge_rea
 platform linux -- Python 3.12.3, pytest-9.0.2, pluggy-1.6.0
 rootdir: /app
 configfile: pyproject.toml
-collected 48 items
+collected 55 items
 
-tests/test_hunter_merge_readiness_v2.py ................................ [ 66%]
+tests/test_hma1_trusted_gate.py .......                                  [ 12%]
+tests/test_hunter_merge_readiness_v2.py ................................ [ 70%]
 ................                                                         [100%]
 
-============================== 48 passed in 0.39s ==============================
+============================== 55 passed in 0.88s ==============================
 ```
 
 ---
 
-## Security Concerns & Controls
+## Security Concerns & Controls Verified
 
-1. **Privilege Escalation Prevention:** Candidate code executing under PR triggers (`pull_request`) runs in an unprivileged container with top-level `permissions: {}` or read-only scopes. Candidate jobs never receive secrets or `statuses: write` authority.
-2. **Exact HEAD SHA Binding:** Preflight adjudication and readiness evaluation check `pulls/{pr}` to ensure the candidate's current HEAD SHA matches the exact SHA being evaluated, preventing race conditions or stale commit validation.
-3. **Forge Prevention for Definition Tampering:** Any candidate modification to files in `PREFLIGHT_OWNED_PATHS` or `TRUSTED_DEFINITION_PATHS` is detected by `hunter_preflight_reuse_decision.py`, invalidating hosted push proof reuse and forcing full execution under the trusted default-branch controller (`hunter-trusted-preflight-upgrade.yml`).
-4. **Canonical Authority Single Source of Truth:** `scripts/hunter_merge_readiness_v2.py` remains the sole readiness authority. No secondary or nested decision engines were created.
+1. **Stale / Mismatched HEAD SHA Rejection:** If a candidate pushes new commits while CI or admission is evaluating a PR, `candidate_admission` and `verify_unprivileged_head` detect the SHA discrepancy and fail closed.
+2. **Elevated Credential Isolation:** `verify_unprivileged_head` rejects execution if candidate PR steps possess write-capable tokens (`GH_ADMIN_TOKEN`, `HUNTER_PAT`, `RELEASE_TOKEN`).
+3. **Workflow & Test Definition Tampering:** Any candidate pull request modifying files in `.github/workflows/` or `tests/` is caught by `hunter_preflight_reuse_decision.py`, preventing reuse of feature-branch push proofs and routing execution to the trusted default-branch controller.
+4. **API Failure Fail-Closed Policy:** Network errors or malformed payloads during PR head verification result in immediate `failure` verdicts.
 
 ---
 
-## Remaining Tasks for Phases 2–5
+## Remaining Tasks & Next Slice (Phase 2 Slice 3)
 
-- **Phase 2 (Remaining Slices):**
-  - Further refine candidate preflight status reporting to streamline exact-head proof publishing across fork PRs.
-- **Phase 3:**
+- **Remaining Tasks for Phase 2:**
+  - Streamline fork PR proof propagation across external untrusted forks.
+- **Phases 3–5 Roadmap:**
   - Transition PR-attached required status checks to consume unprivileged default-branch proof directly.
-  - Phase out legacy push-event preflight workflow dependencies where superseded.
-- **Phase 4:**
-  - Deepen automated replay and hostile review integration within the trusted controller boundary.
-- **Phase 5:**
-  - Final cutover validation, removal of obsolete legacy workflows, and production lock.
-
----
-
-## Precise Next Implementation Slice
-
-The next implementation slice (Phase 2, Slice 2) will enhance fork PR candidate preflight proof propagation, ensuring unprivileged fork PRs can receive trusted default-branch preflight validation without requiring write permissions or token inheritance.
+  - Phase out legacy push-event preflight workflows once fully superseded.
+- **Next Implementation Slice:** Phase 2 Slice 3 will extend fork PR preflight proof propagation in the trusted default-branch controller.

@@ -50,8 +50,13 @@ jobs:
 
       # Cheap PR-attached hygiene only. The exact-head heavy authority is
       # Hunter Pre-PR Preflight itself; this job must never race or duplicate it.
-      - name: Verify CI wiring
-        run: python -m compileall -q scripts src
+      - name: Verify exact HEAD SHA binding and unprivileged boundary
+        env:
+          PR_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        run: |
+          set -euo pipefail
+          python -m compileall -q scripts src
+          python scripts/hunter_pr_preflight.py --verify-unprivileged-head --head-sha "${PR_HEAD_SHA}"
 
   main-validation:
     name: Main Validation

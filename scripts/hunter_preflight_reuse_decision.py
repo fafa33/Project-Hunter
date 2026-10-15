@@ -66,6 +66,8 @@ TRUSTED_DEFINITION_PREFIXES = (
     "build_backend/",
     "requirements/",
     ".github/actions/",
+    ".github/workflows/",
+    "tests/",
 )
 
 
