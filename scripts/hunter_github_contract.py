@@ -143,11 +143,13 @@ def verify_required_checks(
 ) -> tuple[bool, str]:
     """Only real successful check-runs from the configured app satisfy a requirement."""
     checks = required_checks(contract, target_ref=target_ref)
+    # Excluding the publisher's own context must not turn a self-only
+    # contract into an empty, automatically successful verification.
+    if exclude_context is not None:
+        checks.pop(exclude_context, None)
     if not checks:
-        return False, "No required checks found in effective contract"
+        return False, "No independent required checks found in effective contract"
     for name, app_id in checks.items():
-        if name == exclude_context:
-            continue
         matches = [run for run in runs if run.get("name") == name]
         if not matches:
             status_matches = [item for item in (statuses or []) if item.get("context") == name]

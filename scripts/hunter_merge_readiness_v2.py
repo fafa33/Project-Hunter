@@ -191,8 +191,12 @@ def all_check_runs(sha: str) -> list[dict[str, Any]]:
     page = 1
     while True:
         payload = request_json("GET", f"commits/{sha}/check-runs?per_page=100&page={page}&filter=all")
-        batch = list((payload or {}).get("check_runs") or [])
-        runs.extend(run for run in batch if isinstance(run, dict))
+        if not isinstance(payload, dict) or not isinstance(payload.get("check_runs"), list):
+            raise ValueError("Malformed GitHub check-runs payload")
+        batch = payload["check_runs"]
+        if not all(isinstance(run, dict) for run in batch):
+            raise ValueError("Malformed GitHub check-run entry")
+        runs.extend(batch)
         if len(batch) < 100:
             return runs
         page += 1

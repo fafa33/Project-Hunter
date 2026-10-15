@@ -3,6 +3,7 @@ from __future__ import annotations
 from pathlib import Path
 
 import hunter_merge_readiness_v2 as core
+import pytest
 
 
 def _pr(*, draft: bool = False, mergeable: bool | None = True, body: str = "anything") -> dict:
@@ -703,3 +704,10 @@ def test_merge_readiness_reconciles_both_exact_head_preflight_completions(monkey
         )
         monkeypatch.setattr(core, "open_prs_for_head", lambda _sha: (582,))
         assert core.candidate_prs() == (582,)
+
+
+@pytest.mark.parametrize("payload", [None, [], "invalid", {}, {"check_runs": "bad"}, {"check_runs": [None]}])
+def test_malformed_check_run_response_fails_closed(monkeypatch, payload):
+    monkeypatch.setattr(core, "request_json", lambda *_args, **_kwargs: payload)
+    with pytest.raises(ValueError, match="Malformed GitHub check"):
+        core.all_check_runs("a" * 40)

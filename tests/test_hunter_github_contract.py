@@ -273,3 +273,25 @@ def test_cli_ruleset_read_refuses_anonymous_session(monkeypatch):
     with pytest.raises(ValueError, match="Authenticated GitHub"):
         hgcc.github_get("repos/fafa33/Project-Hunter/rulesets")
     assert calls == [("gh", "auth", "token")]
+
+
+def test_excluding_only_required_context_fails_closed():
+    contract = {
+        "rulesets": [
+            {
+                "rules": [
+                    {
+                        "type": "required_status_checks",
+                        "parameters": {"required_status_checks": [{"context": "Hunter Merge Readiness"}]},
+                    }
+                ]
+            }
+        ]
+    }
+    ok, reason = hgcc.verify_required_checks(
+        contract,
+        [{"id": 1, "name": "Hunter Merge Readiness", "status": "completed", "conclusion": "success"}],
+        exclude_context="Hunter Merge Readiness",
+    )
+    assert not ok
+    assert "No independent" in reason
