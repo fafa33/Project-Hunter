@@ -36,7 +36,7 @@ def test_hma1_unprivileged_ci_permissions_and_no_secret_injection():
     assert quality_job, "quality job must exist in ci.yml"
 
     job_perms = quality_job.get("permissions", {})
-    assert "statuses" not in job_perms, "Quality job must not carry status write permissions"
+    assert job_perms == {"actions": "read", "contents": "read"}, "Candidate quality job must have only read permissions"
     assert "secrets" not in str(quality_job), "Quality job must not receive secrets"
 
 
@@ -319,3 +319,35 @@ def test_status_writing_governance_workflow_is_base_branch_only():
     assert steps[0]["with"]["ref"] == "${{ github.event.repository.default_branch }}"
     assert steps[0]["with"]["persist-credentials"] is False
     assert all("candidate" not in str(step) for step in steps)
+
+
+def test_protected_changed_path_forces_fresh_decision(monkeypatch, tmp_path):
+    sha = "a" * 40
+    monkeypatch.setattr(
+        governance,
+        "request_json",
+        lambda *_args, **_kwargs: {"head": {"sha": sha}},
+    )
+    monkeypatch.setattr(
+        governance,
+        "read_pr_changed_paths",
+        lambda *_args: (True, ("tests/test_hma1_trusted_gate.py",), None),
+    )
+
+    def no_reuse(*_args, **_kwargs):
+        raise AssertionError("protected definitions must not invoke proof reuse")
+
+    monkeypatch.setattr(reuse_decision.reuse, "resolve", no_reuse)
+    reusable, reason = reuse_decision.decide(
+        tmp_path, head_sha=sha, repository="fafa33/Project-Hunter", pr_number=602, token="token"
+    )
+    assert reusable is False
+    assert "trusted validation definition" in reason
+
+
+def test_malformed_pr_payloads_fail_closed(monkeypatch):
+    for payload in (None, {}, {"head": {}}, {"head": "invalid"}):
+        monkeypatch.setattr(governance, "request_json", lambda *_args, _payload=payload, **_kwargs: _payload)
+        status, message = governance.candidate_admission("fafa33/Project-Hunter", "token", "a" * 40, 602)
+        assert status == "failure"
+        assert "malformed" in message or "verification failed" in message or "differs" in message

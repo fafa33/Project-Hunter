@@ -11,7 +11,7 @@
 ## Adversarial Review Remediation Summary
 
 ### Finding 1 Remediation — Candidate-Controlled Security Validation Separation
-- **Architectural Shift:** Removed superficial candidate-side security validation (`--verify-unprivileged-head`) from `scripts/hunter_pr_preflight.py` and `.github/workflows/ci.yml`. Candidate-executed CI (`ci.yml`) is strictly designated as non-authoritative candidate hygiene ("Quality Gates").
+- **Architectural Shift:** Candidate-side checks are non-authoritative; trusted default-branch verification controls admission. Candidate-executed CI (`ci.yml`) is strictly designated as non-authoritative candidate hygiene ("Quality Gates").
 - **Default-Branch Owned Adjudication:** Authoritative security validation and candidate admission adjudication execute exclusively in default-branch-owned controllers (`scripts/hunter_governance_review_v2.py` / `scripts/hunter_merge_readiness_v2.py` / `scripts/hunter_preflight_reuse_decision.py`).
 - **Exact PR HEAD SHA Binding & Revalidation:** Default-branch controller queries `GET /repos/{repo}/pulls/{pr}` to bind validation strictly to `head.sha`. Before issuing authoritative success, `candidate_admission` revalidates `head.sha` to detect concurrent candidate pushes.
 - **Fail-Closed API Errors:** Network failures, API timeouts, or malformed PR payloads during SHA verification fail closed with immediate `failure` status.
@@ -19,7 +19,7 @@
 
 ### Finding 2 Remediation — Inadequate Privilege Verification
 - **Least-Privilege Enforcement:** Verified `.github/workflows/ci.yml` enforces least privilege via top-level `permissions: {}` and job `permissions: actions: read, contents: read`. Candidate jobs carry no write-capable tokens or secret environment variables.
-- **Removal of Environment-Variable Name Checks:** Removed superficial `GH_ADMIN_TOKEN` / `HUNTER_PAT` env-var checks from `scripts/hunter_pr_preflight.py`. Security boundaries are enforced via workflow permissions and default-branch API verification rather than candidate-controlled script assertions.
+- **Removal of Environment-Variable Name Checks:** Candidate-side environment-variable checks do not establish the trusted boundary; GitHub workflow permissions and trusted controllers are the authority. Security boundaries are enforced via workflow permissions and default-branch API verification rather than candidate-controlled script assertions.
 - **Trusted Controller Privilege Separation:** Trusted validation (`hunter-trusted-preflight-upgrade.yml`) checks out default-branch scripts first and executes candidate code as an untrusted payload (`./candidate`) without write permissions or secret injection.
 
 ---
@@ -28,7 +28,7 @@
 
 1. `.github/workflows/ci.yml`: Restored `Verify CI wiring` hygiene step and added inline architectural documentation clarifying non-authoritative candidate hygiene status.
 2. `scripts/hunter_governance_review_v2.py`: Added exact PR HEAD SHA initial verification, fail-closed API error handling, and pre-success PR HEAD SHA revalidation in `candidate_admission`.
-3. `scripts/hunter_pr_preflight.py`: Removed superficial candidate-side environment variable security checks.
+3. `scripts/hunter_pr_preflight.py`: Candidate-side hygiene only; no authority to publish readiness.
 4. `scripts/hunter_preflight_reuse_decision.py`: Included `.github/workflows/` and `tests/` in `TRUSTED_DEFINITION_PREFIXES` to detect candidate workflow/test tampering and force default-branch trusted gate execution.
 5. `tests/test_hma1_trusted_gate.py`: Implemented 9 mandatory adversarial tests verifying real execution and consumption paths.
 6. `docs/architecture/HMA-1.md`: HMA-1 architecture specification.
@@ -77,5 +77,5 @@ tests/test_hunter_merge_readiness_v2.py ................................ [ 71%]
 
 ## Unresolved Security Risks
 
-- **Current Status:** No critical or high-severity security findings remain for the Phase 2 boundary.
+- **Current Status:** Security findings are tracked in live PR review threads; no claim of full closure is made before GitHub checks and review resolution.
 - **Risk Mitigation:** All candidate admission and status adjudication logic executes strictly in default-branch-owned code with exact PR HEAD SHA binding and fail-closed API error handling.
