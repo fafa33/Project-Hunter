@@ -251,10 +251,9 @@ def live_contract_identity(
             ruleset_bytes = json.dumps(active_rulesets, sort_keys=True, separators=(",", ":")).encode("utf-8")
             parts.append(f"live_rulesets:{repo}:{hashlib.sha256(ruleset_bytes).hexdigest()}")
         except Exception as exc:
-            if require_live:
-                raise ValidationEvidenceUnavailable(
-                    f"live HGCC-1 contract observation is unavailable or unverifiable ({exc})"
-                ) from exc
+            raise ValidationEvidenceUnavailable(
+                f"live HGCC-1 contract observation is unavailable or unverifiable ({exc})"
+            ) from exc
     elif require_live:
         raise ValidationEvidenceUnavailable(
             "live HGCC-1 contract observation is required but repository or GitHub token is unavailable"

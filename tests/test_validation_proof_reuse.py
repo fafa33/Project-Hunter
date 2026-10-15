@@ -749,6 +749,19 @@ def test_missing_live_contract_observation_fails_closed_when_required(
         receipts.live_contract_identity(root, "fafa33/Project-Hunter", "token", require_live=True)
 
 
+def test_configured_live_ruleset_outage_fails_closed_without_explicit_require_live(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    root = _definition_root(tmp_path)
+
+    def unavailable(*_args: Any, **_kwargs: Any) -> Any:
+        raise RuntimeError("GitHub rulesets unavailable")
+
+    monkeypatch.setattr("hunter_reviewer_collector._pages", unavailable)
+    with pytest.raises(receipts.ValidationEvidenceUnavailable, match="unavailable or unverifiable"):
+        receipts.live_contract_identity(root, "fafa33/Project-Hunter", "token")
+
+
 def test_aggregate_receipt_reuse_writes_json_report_file(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     root = _committed_definition_repo(tmp_path)
     head_sha = receipts.resolve_head_sha(root)

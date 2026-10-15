@@ -508,3 +508,11 @@ def test_extract_relevant_file_paths_regex_performance_and_linear_time() -> None
     # Must complete in under 0.5s (demonstrably linear)
     assert elapsed < 0.5, f"Extraction took {elapsed:.2f}s, expected linear < 0.5s"
     assert "scripts/hunter_pr_preflight.py" in extracted
+
+
+def test_generated_preflight_report_directory_is_gitignored() -> None:
+    from pathlib import Path
+
+    root = Path(__file__).resolve().parents[1]
+    ignored = (root / ".gitignore").read_text(encoding="utf-8").splitlines()
+    assert ".hunter/preflight-reports/" in ignored
