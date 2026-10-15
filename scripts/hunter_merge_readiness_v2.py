@@ -641,6 +641,7 @@ def _hgcc_hosted_verdict(head_sha: str) -> Decision | None:
             all_check_runs(head_sha),
             target_ref="refs/heads/main",
             statuses=paged(f"commits/{head_sha}/statuses"),
+            exclude_context=CONTEXT,
         )
     except (ValueError, TypeError, KeyError, RuntimeError, transport.GitHubUnavailable) as exc:
         return Decision("pending", f"HGCC-1 indeterminate: {exc}")

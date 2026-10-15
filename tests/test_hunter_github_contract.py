@@ -175,3 +175,35 @@ def test_commit_status_user_id_cannot_impersonate_required_app():
     )
     assert not ok
     assert "App identity unverifiable" in reason
+
+
+def test_readiness_status_publisher_bootstraps_without_self_dependency():
+    contract = {
+        "rulesets": [
+            {
+                "rules": [
+                    {
+                        "type": "required_status_checks",
+                        "parameters": {
+                            "required_status_checks": [
+                                {"context": "Quality Gates"},
+                                {"context": "Hunter Merge Readiness"},
+                            ]
+                        },
+                    }
+                ]
+            }
+        ]
+    }
+    runs = [{"id": 1, "name": "Quality Gates", "status": "completed", "conclusion": "success"}]
+    assert not hgcc.verify_required_checks(contract, runs)[0]
+    assert hgcc.verify_required_checks(contract, runs, exclude_context="Hunter Merge Readiness")[0]
+    assert not hgcc.verify_required_checks(contract, [], exclude_context="Hunter Merge Readiness")[0]
+
+
+def test_readiness_publisher_only_excludes_self_at_prepublication():
+    source = (Path(__file__).resolve().parents[1] / "scripts/hunter_merge_readiness_v2.py").read_text()
+    publisher_guard = source.split("def _hgcc_hosted_verdict(", 1)[1].split("def publish(", 1)[0]
+    owner_guard = source.split("def owner_merge_guard(", 1)[1].split("def main(", 1)[0]
+    assert "exclude_context=CONTEXT" in publisher_guard
+    assert "exclude_context=" not in owner_guard
