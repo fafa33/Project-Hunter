@@ -596,6 +596,30 @@ def test_owner_merge_guard_accepts_only_clean_identical_merge_ready_head(monkeyp
     monkeypatch.setattr(
         core, "decide_completion", lambda _number: core.CompletionVerdict(True, "COMPLETION_ACCEPTED", "ready")
     )
+    import hunter_github_contract as hgcc
+
+    monkeypatch.setattr(core, "REPO", "fafa33/Project-Hunter")
+    monkeypatch.setattr(
+        hgcc,
+        "observe_contract",
+        lambda *args, **kwargs: {
+            "rulesets": [
+                {
+                    "rules": [
+                        {
+                            "type": "required_status_checks",
+                            "parameters": {"required_status_checks": [{"context": "Quality Gates"}]},
+                        }
+                    ]
+                }
+            ]
+        },
+    )
+    monkeypatch.setattr(
+        core,
+        "all_check_runs",
+        lambda _head: [{"id": 1, "name": "Quality Gates", "status": "completed", "conclusion": "success"}],
+    )
     verdict = core.owner_merge_guard(562)
     assert verdict.accepted
     assert verdict.state == "OWNER_MERGE_GUARD_ACCEPTED"
