@@ -61,3 +61,13 @@ The active merge path is current-state based. A PR is not ready while any of the
 `Hunter Merge Readiness` is the final current-state controller. Do not merge until it and every required gate on the final code head are green. Human merge approval remains required.
 
 Do not run or recreate the retired `hunter_governance_preflight.py`, Draft Promotion, owner-`+1`, PR-body identity, or exact-pair hostile-review-attestation ceremony as merge prerequisites.
+
+## HGCC-1 common agent boundary (Issue #603)
+
+Before pushing changes, all agents must use the repository's existing pre-push
+hook, which retrieves the live GitHub ruleset contract through
+`scripts/hunter_github_contract.py`. Treat API failure as indeterminate and do
+not claim readiness. The contract observer does not publish checks or replace
+the trusted merge-readiness controller; the latter alone verifies the actual
+PR HEAD, check identities, and unresolved reviews. Security-sensitive workflow
+edits require targeted privileged/untrusted execution analysis.

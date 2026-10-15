@@ -156,9 +156,6 @@ def _gates_for_listing(mode: str) -> tuple[tuple[str, tuple[str, ...]], ...]:
     raise ValueError(f"Unsupported preflight mode: {mode}")
 
 
-
-
-
 def main() -> int:
     parser = argparse.ArgumentParser(
         description=(

@@ -13,11 +13,11 @@ Verifies:
 """
 
 from pathlib import Path
-import yaml
 
 import hunter_governance_review_v2 as governance
 import hunter_merge_readiness_v2 as readiness
 import hunter_preflight_reuse_decision as reuse_decision
+import yaml
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 
@@ -27,7 +27,7 @@ def test_hma1_unprivileged_ci_permissions_and_no_secret_injection():
     ci_path = REPO_ROOT / ".github" / "workflows" / "ci.yml"
     assert ci_path.exists(), "ci.yml must exist"
 
-    with open(ci_path, "r", encoding="utf-8") as f:
+    with open(ci_path, encoding="utf-8") as f:
         ci_data = yaml.safe_load(f)
 
     assert ci_data.get("permissions") == {}, "Top-level permissions in ci.yml must be empty {}"
@@ -45,7 +45,7 @@ def test_hma1_trusted_validation_originates_from_default_branch():
     upgrade_path = REPO_ROOT / ".github" / "workflows" / "hunter-trusted-preflight-upgrade.yml"
     assert upgrade_path.exists(), "hunter-trusted-preflight-upgrade.yml must exist"
 
-    with open(upgrade_path, "r", encoding="utf-8") as f:
+    with open(upgrade_path, encoding="utf-8") as f:
         upgrade_data = yaml.safe_load(f)
 
     validate_job = upgrade_data.get("jobs", {}).get("validate-candidate", {})
@@ -69,7 +69,12 @@ def test_hma1_candidate_script_tampering_cannot_grant_admission(monkeypatch):
         if f"pulls/{pr_number}/commits" in path:
             return []
         if f"pulls/{pr_number}" in path:
-            return {"number": pr_number, "state": "open", "head": {"sha": head_sha, "ref": "feature"}, "base": {"ref": "main"}}
+            return {
+                "number": pr_number,
+                "state": "open",
+                "head": {"sha": head_sha, "ref": "feature"},
+                "base": {"ref": "main"},
+            }
         if f"commits/{head_sha}/statuses" in path:
             return []  # No trusted upgrade status check
         if f"actions/runs?head_sha={head_sha}" in path:
@@ -92,7 +97,11 @@ def test_hma1_candidate_script_tampering_cannot_grant_admission(monkeypatch):
 
     status, message = governance.candidate_admission("fafa33/Project-Hunter", "token", head_sha, pr_number)
     assert status == "failure", "Must reject candidate editing preflight script without trusted upgrade proof"
-    assert "trusted preflight upgrade status is missing" in message or "protected preflight" in message or "admission blocked" in message
+    assert (
+        "trusted preflight upgrade status is missing" in message
+        or "protected preflight" in message
+        or "admission blocked" in message
+    )
 
 
 def test_hma1_candidate_workflow_and_test_tampering_prevents_reuse():
@@ -114,7 +123,12 @@ def test_hma1_stale_pr_head_sha_rejected(monkeypatch):
 
     def mock_request_json(repository, token, method, path, payload=None):
         if f"pulls/{pr_number}" in path:
-            return {"number": pr_number, "state": "open", "head": {"sha": stale_sha, "ref": "feature"}, "base": {"ref": "main"}}
+            return {
+                "number": pr_number,
+                "state": "open",
+                "head": {"sha": stale_sha, "ref": "feature"},
+                "base": {"ref": "main"},
+            }
         return {}
 
     monkeypatch.setattr(governance, "request_json", mock_request_json)
@@ -146,7 +160,12 @@ def test_hma1_forged_candidate_status_without_backed_run_rejected(monkeypatch):
 
     def mock_request_json(repository, token, method, path, payload=None):
         if f"pulls/{pr_number}" in path:
-            return {"number": pr_number, "state": "open", "head": {"sha": head_sha, "ref": "feature"}, "base": {"ref": "main"}}
+            return {
+                "number": pr_number,
+                "state": "open",
+                "head": {"sha": head_sha, "ref": "feature"},
+                "base": {"ref": "main"},
+            }
         if f"pulls/{pr_number}/files" in path:
             if "page=1" in path or "page=" not in path:
                 return [{"filename": "scripts/hunter_pr_preflight.py", "status": "modified"}]
@@ -158,7 +177,7 @@ def test_hma1_forged_candidate_status_without_backed_run_rejected(monkeypatch):
                     "context": f"Hunter Trusted Preflight Upgrade / PR #{pr_number}",
                     "state": "success",
                     "creator": {"login": "github-actions[bot]", "type": "Bot"},
-                    "target_url": f"https://github.com/fafa33/Project-Hunter/actions/runs/99999",
+                    "target_url": "https://github.com/fafa33/Project-Hunter/actions/runs/99999",
                 }
             ]
         if "actions/runs/99999" in path:
@@ -196,8 +215,18 @@ def test_hma1_head_sha_recheck_detects_concurrent_push(monkeypatch):
         if f"pulls/{pr_number}" in path and "files" not in path and "commits" not in path:
             call_count += 1
             if call_count == 1:
-                return {"number": pr_number, "state": "open", "head": {"sha": head_sha, "ref": "feature-branch"}, "base": {"ref": "main"}}
-            return {"number": pr_number, "state": "open", "head": {"sha": new_sha, "ref": "feature-branch"}, "base": {"ref": "main"}}
+                return {
+                    "number": pr_number,
+                    "state": "open",
+                    "head": {"sha": head_sha, "ref": "feature-branch"},
+                    "base": {"ref": "main"},
+                }
+            return {
+                "number": pr_number,
+                "state": "open",
+                "head": {"sha": new_sha, "ref": "feature-branch"},
+                "base": {"ref": "main"},
+            }
         if f"pulls/{pr_number}/files" in path:
             if "page=1" in path or "page=" not in path:
                 return [{"filename": "src/app.py", "status": "modified"}]
