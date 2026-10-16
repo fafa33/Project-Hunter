@@ -103,88 +103,103 @@
     "base_sha": "0eecab620fbaa1ae2e9bb5d6008e2174dc2b68b1",
     "defect_families": [
       {
-        "evidence": "Candidate requests external independent review of focused recovery fix; no review approval asserted.",
+        "evidence": "Applicable family included for independent review of current PR #611 content; no reviewer approval or completed adversarial sweep asserted.",
         "family": "DFF-007",
         "outcome": "clear"
       },
       {
-        "evidence": "Candidate requests external independent review of focused recovery fix; no review approval asserted.",
+        "evidence": "Applicable family included for independent review of current PR #611 content; no reviewer approval or completed adversarial sweep asserted.",
         "family": "DFF-008",
         "outcome": "clear"
       },
       {
-        "evidence": "Candidate requests external independent review of focused recovery fix; no review approval asserted.",
+        "evidence": "Applicable family included for independent review of current PR #611 content; no reviewer approval or completed adversarial sweep asserted.",
         "family": "DFF-009",
         "outcome": "clear"
       },
       {
-        "evidence": "Candidate requests external independent review of focused recovery fix; no review approval asserted.",
+        "evidence": "Applicable family included for independent review of current PR #611 content; no reviewer approval or completed adversarial sweep asserted.",
         "family": "DFF-010",
         "outcome": "clear"
       },
       {
-        "evidence": "Candidate requests external independent review of focused recovery fix; no review approval asserted.",
+        "evidence": "Applicable family included for independent review of current PR #611 content; no reviewer approval or completed adversarial sweep asserted.",
         "family": "DFF-011",
         "outcome": "clear"
       },
       {
-        "evidence": "Candidate requests external independent review of focused recovery fix; no review approval asserted.",
+        "evidence": "Applicable family included for independent review of current PR #611 content; no reviewer approval or completed adversarial sweep asserted.",
         "family": "DFF-012",
         "outcome": "clear"
       },
       {
-        "evidence": "Candidate requests external independent review of focused recovery fix; no review approval asserted.",
+        "evidence": "Applicable family included for independent review of current PR #611 content; no reviewer approval or completed adversarial sweep asserted.",
         "family": "DFF-013",
         "outcome": "clear"
       },
       {
-        "evidence": "Candidate requests external independent review of focused recovery fix; no review approval asserted.",
+        "evidence": "Applicable family included for independent review of current PR #611 content; no reviewer approval or completed adversarial sweep asserted.",
         "family": "DFF-014",
         "outcome": "clear"
       },
       {
-        "evidence": "Candidate requests external independent review of focused recovery fix; no review approval asserted.",
+        "evidence": "Applicable family included for independent review of current PR #611 content; no reviewer approval or completed adversarial sweep asserted.",
         "family": "DFF-015",
         "outcome": "clear"
       },
       {
-        "evidence": "Candidate requests external independent review of focused recovery fix; no review approval asserted.",
+        "evidence": "Applicable family included for independent review of current PR #611 content; no reviewer approval or completed adversarial sweep asserted.",
         "family": "DFF-016",
         "outcome": "clear"
       },
       {
-        "evidence": "Candidate requests external independent review of focused recovery fix; no review approval asserted.",
+        "evidence": "Applicable family included for independent review of current PR #611 content; no reviewer approval or completed adversarial sweep asserted.",
         "family": "DFF-019",
         "outcome": "clear"
       },
       {
-        "evidence": "Candidate requests external independent review of focused recovery fix; no review approval asserted.",
+        "evidence": "Applicable family included for independent review of current PR #611 content; no reviewer approval or completed adversarial sweep asserted.",
         "family": "DFF-020",
         "outcome": "clear"
       },
       {
-        "evidence": "Candidate requests external independent review of focused recovery fix; no review approval asserted.",
+        "evidence": "Applicable family included for independent review of current PR #611 content; no reviewer approval or completed adversarial sweep asserted.",
         "family": "DFF-021",
         "outcome": "clear"
       },
       {
-        "evidence": "Candidate requests external independent review of focused recovery fix; no review approval asserted.",
+        "evidence": "Applicable family included for independent review of current PR #611 content; no reviewer approval or completed adversarial sweep asserted.",
+        "family": "DFF-022",
+        "outcome": "clear"
+      },
+      {
+        "evidence": "Applicable family included for independent review of current PR #611 content; no reviewer approval or completed adversarial sweep asserted.",
         "family": "DFF-023",
         "outcome": "clear"
       },
       {
-        "evidence": "Candidate requests external independent review of focused recovery fix; no review approval asserted.",
+        "evidence": "Applicable family included for independent review of current PR #611 content; no reviewer approval or completed adversarial sweep asserted.",
         "family": "DFF-029",
         "outcome": "clear"
       },
       {
-        "evidence": "Candidate requests external independent review of focused recovery fix; no review approval asserted.",
+        "evidence": "Applicable family included for independent review of current PR #611 content; no reviewer approval or completed adversarial sweep asserted.",
         "family": "DFF-033",
         "outcome": "clear"
       },
       {
-        "evidence": "Candidate requests external independent review of focused recovery fix; no review approval asserted.",
+        "evidence": "Applicable family included for independent review of current PR #611 content; no reviewer approval or completed adversarial sweep asserted.",
         "family": "DFF-035",
+        "outcome": "clear"
+      },
+      {
+        "evidence": "Applicable family included for independent review of current PR #611 content; no reviewer approval or completed adversarial sweep asserted.",
+        "family": "DFF-037",
+        "outcome": "clear"
+      },
+      {
+        "evidence": "Applicable family included for independent review of current PR #611 content; no reviewer approval or completed adversarial sweep asserted.",
+        "family": "DFF-043",
         "outcome": "clear"
       }
     ],
@@ -192,23 +207,59 @@
     "issue": "532",
     "review_target": [
       {
-        "blob_sha": "5f1d1aa7aa1d7160ed9810d6f01ade42b9dbd8e6",
+        "blob_sha": "cfac2cfd84af4805f9ac1b72ef4aa0956600eb94",
+        "path": ".githooks/pre-commit",
+        "previous_path": "",
+        "status": "added"
+      },
+      {
+        "blob_sha": "6bb0c0476c9f17e54cf8380c758af4a340fc099e",
+        "path": "scripts/hunter_writer_commit_finalizer.py",
+        "previous_path": "",
+        "status": "added"
+      },
+      {
+        "blob_sha": "d3e099894ee82fdb1313cefa61432b1240f1ad51",
+        "path": "tests/test_hunter_writer_commit_finalizer.py",
+        "previous_path": "",
+        "status": "added"
+      },
+      {
+        "blob_sha": "c2898fb8eea2075f1d18a02f4fda728e331a9272",
+        "path": "AGENTS.md",
+        "previous_path": "",
+        "status": "modified"
+      },
+      {
+        "blob_sha": "d9dd8804c1faf59f2ffb5215575478ccaf9a3a97",
         "path": "scripts/hunter_canonicalization_candidate_pr.py",
         "previous_path": "",
         "status": "modified"
       },
       {
-        "blob_sha": "2c5086f018a0420b3688832c72271140b3e4b18b",
+        "blob_sha": "acdf164a242c823531684934f65602a4dbfc714b",
+        "path": "scripts/hunter_pre_ready_review.py",
+        "previous_path": "",
+        "status": "modified"
+      },
+      {
+        "blob_sha": "9d7f1e9cc8c4e6a870d40d6101429bfdde2e37f0",
+        "path": "tests/test_exact_head_review_authority.py",
+        "previous_path": "",
+        "status": "modified"
+      },
+      {
+        "blob_sha": "295b270645f943c7789a069a651d5fb81609abac",
         "path": "tests/test_hunter_canonicalization_candidate_pr.py",
         "previous_path": "",
         "status": "modified"
       }
     ],
-    "review_target_digest": "15d6604084e18850915b4d89784492350f276590cbbbf7e31c2a7fd2fc4fe7f1"
+    "review_target_digest": "174e24bd8acce6ac5e0bac4216d212daf3e8128d572b4058890931b33eb9261f"
   },
-  "review_id": "209c03b9704bf74910f1063305095fbe7eb24cb841db208655e78c2b873847c5",
+  "review_id": "2c5f8b8aada2eb74e6869253f64f1ebae517714b0c1e806f5ccefb0395c2a8e2",
   "review_request": {
-    "claims_id": "209c03b9704bf74910f1063305095fbe7eb24cb841db208655e78c2b873847c5",
+    "claims_id": "2c5f8b8aada2eb74e6869253f64f1ebae517714b0c1e806f5ccefb0395c2a8e2",
     "schema": "hunter.review-request.v1"
   },
   "schema": "hunter.pre-ready-hostile-review.v1"
