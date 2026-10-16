@@ -2044,7 +2044,20 @@ def valid_current_review_request(
         coverage_scopes=coverage_scopes,
         head_sha=head_sha,
     )
-    return verdict.ok or verdict.state == pre_ready.SCOPED_STATE, verdict.reason
+    if not (verdict.ok or verdict.state == pre_ready.SCOPED_STATE):
+        return False, verdict.reason
+    # GitHub PR file listings are mutable. Recheck after validation so a push
+    # from a remote/API writer cannot authorize review of a superseded head.
+    try:
+        current = request_json(repository, token, "GET", f"pulls/{pr_number}")
+        if not isinstance(current, dict) or not isinstance(current.get("head"), dict):
+            return False, "exact-head review request PR recheck is malformed"
+        current_head = str(current["head"].get("sha") or "").strip()
+        if current_head != head_sha:
+            return False, "exact-head review request PR head changed during verification"
+    except Exception as exc:
+        return False, f"exact-head review request PR recheck unavailable ({type(exc).__name__}: {exc})"
+    return True, verdict.reason
 
 
 def review_orchestration_state(repository: str, token: str, pr_number: int, head_sha: str) -> tuple[str, str]:
