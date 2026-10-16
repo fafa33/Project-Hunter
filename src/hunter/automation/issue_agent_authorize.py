@@ -59,6 +59,7 @@ from hunter.automation.n8n_handoff import serialize_prompt_automation_handoff
 from hunter.evidence_intelligence.engineering_context_authority import (
     ENGINEERING_IMPLEMENT_TASK_KEY,
     EngineeringContextAuthority,
+    EngineeringContextAuthorityError,
 )
 from hunter.evidence_intelligence.intake import evidence_document_id
 from hunter.evidence_intelligence.repository import EvidenceIntelligenceRepository
@@ -73,6 +74,11 @@ HANDOFF_BUNDLE_SCHEMA_VERSION: Final = "hunter-issue-agent-handoff-bundle-v1"
 PREPARED_SCHEMA_VERSION: Final = "hunter-issue-agent-prepared-authorization-v1"
 LIFECYCLE_PUBLISH_DEADLINE: Final = timedelta(hours=6)
 DEFAULT_ADMISSION_CAP: Final = 2
+
+
+def _engineering_context_refusal(error: EngineeringContextAuthorityError) -> AuthorizeRefused:
+    """Expose only authority-owned machine codes, never untrusted exception prose."""
+    return AuthorizeRefused("COMPILATION_REFUSED", f"EngineeringContextAuthorityError/{error.reason_code}")
 
 
 class AuthorizeRefused(RuntimeError):
@@ -128,6 +134,7 @@ class AuthorizeDependencies:
     #: Definitive count of active lifecycles across Issues; raises on an indefinite observation.
     active_lifecycles: Callable[[], int]
     compiler_identity_sha256: str
+    repository_checkout: Path = field(default_factory=Path.cwd)
     admission_cap: int = DEFAULT_ADMISSION_CAP
     #: Verified anchored-knowledge overlay (ADR 0039 L2): prevention knowledge reaches the task before its model.
     knowledge_overlay: Sequence[Mapping[str, Any]] = ()
@@ -284,7 +291,12 @@ def prepare(
             ),
             provenance_resolver=dependencies.provenance_resolver,
         )
-        dpm = EngineeringContextAuthority(knowledge_overlay=dependencies.knowledge_overlay)
+        # Bind DPM to the explicitly configured control checkout, never the
+        # ambient working directory or the installed package location.
+        dpm = EngineeringContextAuthority(
+            registry_path=dependencies.repository_checkout / "docs" / "DEFECT_REGISTRY.json",
+            knowledge_overlay=dependencies.knowledge_overlay,
+        )
         composed = compose_governed_compilation(
             repository=EvidenceIntelligenceRepository(evidence),
             source_handling_resolver=resolver,
@@ -305,6 +317,10 @@ def prepare(
         compiled = composed.ingress.compile(request, implementation_scope=scope)
     except AuthorizeRefused:
         raise
+    except EngineeringContextAuthorityError as error:
+        # The authority owns the machine code; never parse attacker-controlled
+        # identifiers or echo the raw exception to public Actions logs.
+        raise _engineering_context_refusal(error) from None
     except state.LedgerError:
         raise
     except Exception as error:

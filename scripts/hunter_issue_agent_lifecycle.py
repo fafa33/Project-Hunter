@@ -440,6 +440,7 @@ def cmd_resolve(configuration: control.Configuration, arguments: argparse.Namesp
     store = _store(configuration, authenticated=True)
     known = _knowledge_view(configuration, github)
     resolved = 0
+    resolved_proofs: list[control.ResolutionProof] = []
     for issue in ([arguments.issue] if arguments.issue else _active_issues(configuration)):
         _head, state_view = control.load_ledger(store, configuration, provenance, issue)
         for finding_id in sorted(known.findings):
@@ -494,11 +495,22 @@ def cmd_resolve(configuration: control.Configuration, arguments: argparse.Namesp
                     recorded_at=_timestamp(),
                 )
                 resolved += 1
+                resolved_proofs.append(proof)
                 print(f"issue {issue}: resolved {finding_id[:12]} at {proof.remediated_head_sha[:12]}")
             except control.FactsUnavailable as error:
                 print(f"issue {issue}: no-op ({error})")
             except state.LedgerConflictError:
                 print(f"issue {issue}: no-op (the knowledge ledger moved; the next pass re-decides)")
+    if resolved:
+        # GitHub does not emit a workflow event when a review thread is resolved.
+        # Dispatch the existing current-state gate immediately after confirmed writes.
+        # A failed dispatch is visible and retriable by the existing scheduled sweep.
+        affected_prs = sorted({proof.pull_request_number for proof in resolved_proofs})
+        for pr_number in affected_prs:
+            if not github.dispatch("hunter-merge-readiness.yml", {"pr_number": str(pr_number)}):
+                raise control.FactsUnavailable(
+                    f"merge readiness refresh dispatch failed for PR #{pr_number}; scheduled recovery remains"
+                )
     return 0 if resolved or arguments.issue else EXIT_NOOP
 
 
@@ -537,7 +549,9 @@ def _export_public_trust(configuration: control.Configuration) -> None:
     os.environ.update(environment)
 
 
-def _authorize_dependencies(configuration: control.Configuration, github: control.GitHubRest) -> Any:
+def _authorize_dependencies(
+    configuration: control.Configuration, github: control.GitHubRest, *, repository_checkout: Path | None = None
+) -> Any:
     import hunter_issue_agent_provisioner as provisioner
 
     from hunter.automation.issue_agent_execution import IssueAgentAuthorizationVerifier
@@ -588,7 +602,10 @@ def _authorize_dependencies(configuration: control.Configuration, github: contro
         handoff_recipient=configuration.handoff_recipient,
         open_issue_agent_pull_request=open_pull_request,
         active_lifecycles=active_lifecycles,
-        compiler_identity_sha256=authorize.compiler_identity(control_sha=control_sha, checkout=Path.cwd()),
+        compiler_identity_sha256=authorize.compiler_identity(
+            control_sha=control_sha, checkout=repository_checkout or Path.cwd()
+        ),
+        repository_checkout=repository_checkout or Path.cwd(),
         knowledge_overlay=_knowledge_overlay(configuration, github),
     )
 
@@ -821,8 +838,12 @@ def cmd_authorize_prepare(configuration: control.Configuration, arguments: argpa
     out.mkdir(parents=True, exist_ok=True)
     context = _authorize_context()
     prepared, sealed = authorize.prepare(
-        document.encode(),
-        dependencies=_authorize_dependencies(configuration, github),
+        document,
+        dependencies=_authorize_dependencies(
+            configuration,
+            github,
+            repository_checkout=Path(getattr(arguments, "checkout", None) or Path.cwd()).resolve(),
+        ),
         context=context,
         state_store=_store(configuration, authenticated=True),
         source_handling_store=_store(configuration, authenticated=True),
@@ -907,6 +928,49 @@ def cmd_bound(configuration: control.Configuration, arguments: argparse.Namespac
         values[f"{stage}_outcome"] = control.outcome_artifact_name(view.authorization_id, stage, attempt)
     _output(**values)
     return 0
+
+
+MODEL_TAIL_OPTION = "--model-argv"
+
+
+def _model_command(tail: Sequence[str]) -> tuple[str, ...]:
+    """The model command exactly as given after ``--model-argv``.
+
+    One leading ``--`` is the conventional end-of-options separator and is not part of the command; every other word,
+    including later ``--`` and options such as ``--model``, is forwarded unchanged.
+    """
+
+    command = tuple(tail[1:] if tail[:1] == ["--"] else tail)
+    if not command or not command[0].strip():
+        raise LifecycleRefused("MISSING_CONFIGURATION", "execute requires a model command after --model-argv")
+    return command
+
+
+def parse_arguments(argv: Sequence[str] | None = None) -> argparse.Namespace:
+    """Parse the lifecycle command line; the model command after ``--model-argv`` never reaches argparse.
+
+    The first ``--model-argv`` word splits the line: the head is parsed as lifecycle options, the tail is the downstream
+    model command, forwarded verbatim. Argparse therefore cannot reinterpret or abbreviate the tail's own options, and
+    ``--model-argv`` is accepted for ``execute`` only. A missing or empty tail is refused.
+    """
+
+    words = list(sys.argv[1:] if argv is None else argv)
+    tail: list[str] | None = None
+    if MODEL_TAIL_OPTION in words:
+        boundary = words.index(MODEL_TAIL_OPTION)
+        words, tail = words[:boundary], words[boundary + 1 :]
+    parser = _parser()
+    arguments = parser.parse_args(words)
+    if arguments.command == "execute":
+        if tail is None:
+            parser.error(f"execute requires {MODEL_TAIL_OPTION} COMMAND [ARGS...]")
+        try:
+            arguments.model_argv = _model_command(tail)
+        except LifecycleRefused as refusal:
+            parser.error(str(refusal))
+    elif tail is not None:
+        parser.error(f"{MODEL_TAIL_OPTION} is valid only for execute")
+    return arguments
 
 
 def cmd_execute(configuration: control.Configuration, arguments: argparse.Namespace) -> int:
@@ -1007,6 +1071,17 @@ def _issue_gate(configuration: control.Configuration, github: control.GitHubRest
 
 def cmd_publish(configuration: control.Configuration, arguments: argparse.Namespace) -> int:
     github = _github(configuration)
+    # HGCC-1 trusted publication boundary: agents cannot bypass this by
+    # disabling local git hooks. Read-only; never publishes a parallel status.
+    from hunter_github_contract import observe_contract
+
+    try:
+        observe_contract(
+            configuration.repository,
+            get=lambda path: control.definitive(github.get(f"/{path}")),
+        )
+    except (ValueError, OSError, TypeError) as exc:
+        raise LifecycleRefused("PUBLICATION_UNAVAILABLE", f"HGCC-1 GitHub contract unavailable: {exc}") from None
     open_pr = control.definitive(github.get(f"/repos/{configuration.repository}/pulls?state=open&per_page=100"))
     if not isinstance(open_pr, list):
         raise LifecycleRefused("PUBLICATION_UNAVAILABLE", "pull requests are not observable")
@@ -1093,12 +1168,14 @@ Command = Callable[[control.Configuration, argparse.Namespace], int]
 
 
 def _parser() -> argparse.ArgumentParser:
-    parser = argparse.ArgumentParser(prog="hunter_issue_agent_lifecycle")
+    # No option abbreviation anywhere: a lifecycle option is only ever its full name, so a token meant for the model
+    # command can never be mistaken for (or silently resolved to) one of ours.
+    parser = argparse.ArgumentParser(prog="hunter_issue_agent_lifecycle", allow_abbrev=False)
     parser.add_argument("--checkout", default=".")
     sub = parser.add_subparsers(dest="command", required=True)
 
     def add(name: str, command: Command) -> argparse.ArgumentParser:
-        child = sub.add_parser(name)
+        child = sub.add_parser(name, allow_abbrev=False)
         child.set_defaults(handler=command)
         return child
 
@@ -1133,7 +1210,9 @@ def _parser() -> argparse.ArgumentParser:
     execute.add_argument("--out", required=True)
     execute.add_argument("--workroot", required=True)
     execute.add_argument("--model-key-name", required=True)
-    execute.add_argument("--model-argv", nargs="+", required=True)
+    # `--model-argv <command> [args...]` is not an argparse option: it is the tail boundary handled by
+    # `parse_arguments`, so the model command's own options never reach the lifecycle parser.
+    execute.epilog = "The model command follows --model-argv and must be the last words: --model-argv COMMAND [ARGS...]"
     for child in (validate, publish):
         child.add_argument("--result", required=True)
         child.add_argument("--trusted-repo", required=True)
@@ -1152,7 +1231,7 @@ def _parser() -> argparse.ArgumentParser:
 
 
 def main(argv: Sequence[str] | None = None) -> int:
-    arguments = _parser().parse_args(argv)
+    arguments = parse_arguments(argv)
     try:
         # First, before any secret, ledger or network access: an unprovisioned repository refuses here.
         configuration = control.load_configuration(Path(arguments.checkout))

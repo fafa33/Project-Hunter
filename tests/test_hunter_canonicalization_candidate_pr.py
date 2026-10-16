@@ -94,11 +94,14 @@ def origin_repo(tmp_path: Path) -> Path:
 class RecordingRun:
     """Passes real `git` commands through; fakes `gh` so tests need no network/auth."""
 
-    def __init__(self, *, existing_pr: int | None = None, fail_pr_create: bool = False) -> None:
+    def __init__(
+        self, *, existing_pr: int | None = None, fail_pr_create: bool = False, source_merged: bool = True
+    ) -> None:
         self.calls: list[list[str]] = []
         self.existing_pr = existing_pr
         self.fail_pr_create = fail_pr_create
         self.pr_create_calls = 0
+        self.source_merged = source_merged
 
     def __call__(self, command: list[str]) -> subprocess.CompletedProcess[str]:
         self.calls.append(list(command))
@@ -107,6 +110,9 @@ class RecordingRun:
         return subprocess.run(list(command), check=True, capture_output=True, text=True)
 
     def _fake_gh(self, command: list[str]) -> subprocess.CompletedProcess[str]:
+        if command[1:3] == ["pr", "view"]:
+            stdout = "MERGED 2026-10-07T00:00:00Z" if self.source_merged else "OPEN "
+            return subprocess.CompletedProcess(command, 0, stdout=stdout, stderr="")
         if command[1:3] == ["pr", "list"]:
             stdout = str(self.existing_pr) if self.existing_pr is not None else ""
             return subprocess.CompletedProcess(command, 0, stdout=stdout, stderr="")
@@ -161,7 +167,24 @@ def test_propose_noop_makes_no_git_write_or_pr_calls(origin_repo: Path, tmp_path
 
     assert "NO-OP" in message
     assert not any("push" in call for call in recorder.calls)
-    assert not any(call[0] == "gh" for call in recorder.calls)
+    assert not any(call[0] == "gh" and call[1:3] in (["pr", "create"], ["pr", "list"]) for call in recorder.calls)
+
+
+def test_open_source_pr_defers_without_any_git_or_pr_write(origin_repo: Path, tmp_path: Path) -> None:
+    recorder = RecordingRun(source_merged=False)
+    message = candidate_pr.propose(
+        pr=568,
+        head=HEAD,
+        base=BASE,
+        observations=[_observation(568)],
+        repo=str(origin_repo),
+        repo_root=tmp_path / "seed",
+        run=recorder,
+    )
+    assert "DEFERRED" in message
+    assert recorder.pr_create_calls == 0
+    assert not any("push" in call for call in recorder.calls)
+    assert not any(call[:2] == ["git", "-C"] and "commit" in call for call in recorder.calls)
 
 
 def test_propose_opens_draft_pr_for_confirmed_finding(origin_repo: Path, tmp_path: Path) -> None:
@@ -505,18 +528,16 @@ def test_github_review_finding_is_durably_captured_even_before_classification(
         repo_root=tmp_path / "seed",
         run=RecordingRun(existing_pr=None),
     )
-    assert "OPENED" in message
-    captured = subprocess.run(
-        ["git", "show", f"{candidate_pr.DEDICATED_BRANCH}:docs/REVIEWER_FINDING_DISPOSITIONS.json"],
-        cwd=origin_repo,
+    assert "NO-OP" in message
+    # Unclassified lifecycle evidence is retained by the workflow artifact; it
+    # must not create repository work merely to persist raw evidence.
+    branch = subprocess.run(
+        ["git", "ls-remote", "--heads", str(origin_repo), candidate_pr.DEDICATED_BRANCH],
         check=True,
         capture_output=True,
         text=True,
     ).stdout
-    document = json.loads(captured)
-    entry = next(item for item in document["findings"] if item["id"] == "RFD-AUTO-530-review-comment-4114624029")
-    assert entry["validation_state"] == "unvalidated"
-    assert "source_head=" + "c" * 40 in entry["source_provenance"]["reference"]
+    assert branch == ""
 
 
 def test_duplicate_github_review_capture_is_idempotent(origin_repo: Path, tmp_path: Path) -> None:
@@ -549,7 +570,7 @@ def test_duplicate_github_review_capture_is_idempotent(origin_repo: Path, tmp_pa
         repo_root=tmp_path / "seed",
         run=RecordingRun(),
     )
-    assert "OPENED" in first
+    assert "NO-OP" in first
     second = candidate_pr.propose(
         pr=530,
         head=HEAD,

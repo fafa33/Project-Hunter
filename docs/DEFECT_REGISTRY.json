@@ -512,6 +512,46 @@
       "guard": "A trusted validation harness must derive each scenario's assertions from an authoritative production contract or an already-observable production invariant, and must never require an API or an execution the production code does not implement. Scenario A asserted the candidate's review opportunity equals a reviewer-pool worst-case derivation, calling hunter_review_orchestrator.independent_review_opportunity_seconds and hunter_pre_ready_review.reviewer_chain_worst_case_seconds; neither symbol has ever existed on any commit, and production's own documented contract is only that one global opportunity budget (INDEPENDENT_REVIEW_OPPORTUNITY_SECONDS) must never leave an exact head pending forever. Scenario B pinned the combined-status read to permanently return absent and required exactly one dispatch, an execution production's own ensure_collector comment explicitly rules out ('the next reconciliation observes a dispatched cycle'); suppressing a duplicate under a read that never catches up would have required a new local durability authority, not a correction. The defect was invisible because tests/test_hunter_trusted_orchestrator_replay.py substituted purpose-built fixed/buggy modules for the code under test, so the suite exercised injected stand-ins rather than the real production shape and stayed green while the real replay failed on every candidate. The correction restates both scenarios as properties the production code already documents -- a positive finite budget that actually ends an over-budget cycle while leaving an in-budget one pending, and dispatch that is one for an unrecorded head, zero further once the recorded cycle is observed, one bounded liveness recovery, and none once the dispatch budget is spent -- and the harness tests now build candidates from this repository's real production modules, proving discrimination through narrowly named mutations of the real hunter_review_orchestrator.py (DROPS_OPPORTUNITY_TERMINALITY, MAKES_OPPORTUNITY_NON_POSITIVE, MAKES_OPPORTUNITY_UNCONDITIONAL, DROPS_COLLECTOR_IDEMPOTENCY_RECORD, DROPS_LIVENESS_RECOVERY, DROPS_DISPATCH_BUDGET) whose anchors must still exist, so a refactor fails loudly rather than making a negative test vacuous. A repair to a trusted harness is incomplete until its scenarios are replayed against at least one known-valid unchanged candidate and prove the harness does not reject that valid candidate for harness/production drift; PR #538 at a91cc8f9ac3f99d10588bb06973d9a403ccc7e16 was that candidate, and A/B/G all pass against it unchanged.",
       "test": "tests/test_hunter_trusted_orchestrator_replay.py::test_scenario_a_passes_against_real_production",
       "status": "guarded"
+    },
+    {
+      "id": "PRH-066",
+      "class": "hosted-dpm-registry-checkout-authority-drift",
+      "source": "PR #579 Codex review 4222875872 and Copilot reviews 4222896715, 4222896794 (2026-10-08)",
+      "classification": "systemic",
+      "guard_boundary": "Issue Agent authorize DPM registry and compiler identity must bind to configured trusted checkout, with production-path regression",
+      "guard": "The authorization dependency carries the configured control checkout; DPM registry and compiler identity use that same checkout, never the installed module root or ambient process CWD. Regression executes authorize.prepare against a distinct configured checkout and verifies missing registry refuses authorization.",
+      "test": "tests/test_issue_agent_authorize.py::test_prepare_reads_configured_checkout_registry_not_ambient_cwd",
+      "status": "guarded"
+    },
+    {
+      "id": "PRH-067",
+      "class": "mutable-pr-head-file-list-used-for-immutable-event-head",
+      "source": "PR #582 Copilot review comment 4224886962 (2026-10-08)",
+      "classification": "systemic",
+      "guard_boundary": "Exact-head trusted preflight proof decision must not classify current PR diff for an older event head",
+      "guard": "Before and after classification and hosted proof adjudication, verify current PR head equals event exact-head SHA; otherwise refuse reuse and execute trusted full gates.",
+      "test": "tests/test_preflight_reuse_decision.py::test_changed_pr_head_refuses_reuse; tests/test_preflight_reuse_decision.py::test_head_changes_during_adjudication_refuses_reuse",
+      "status": "guarded"
+    },
+    {
+      "id": "PRH-068",
+      "class": "malformed-pr-files-page-silently-drops-protected-path",
+      "source": "PR #582 Copilot review comment 4224887008 (2026-10-08)",
+      "classification": "systemic",
+      "guard_boundary": "PR changed-file evidence must be complete before security-sensitive reuse classification",
+      "guard": "Fail closed on non-object or missing/blank filename entries in GitHub PR file pages, rather than silently skipping entries.",
+      "test": "tests/test_preflight_reuse_decision.py::test_malformed_pr_file_listing_refuses_reuse",
+      "status": "guarded"
+    },
+    {
+      "id": "PRH-069",
+      "class": "candidate-build-backend-omitted-from-trusted-validation-definition",
+      "source": "PR #582 Codex review finding (2026-10-09)",
+      "classification": "systemic",
+      "guard_boundary": "Hosted candidate-controlled bootstrap or build backend cannot authorize skipping independent trusted validation",
+      "guard": "Prefix-aware protected-path classification covers build_backend/, requirements/, local composite actions and nested pytest conftest.py; changes force fresh trusted full gates.",
+      "test": "tests/test_preflight_reuse_decision.py::test_candidate_controlled_bootstrap_forces_trusted_full_gates",
+      "status": "guarded"
     }
   ],
   "families": [
@@ -1911,10 +1951,14 @@
         "tests/test_issue_412_prevention_gate.py::test_missing_review_request_state_names_the_command_to_start_it",
         "tests/test_issue_412_prevention_gate.py::test_stale_review_request_state_does_not_carry_the_missing_only_hint",
         "tests/test_exact_head_review_authority.py::test_a_live_pending_orchestration_cycle_is_not_misclassified_as_malformed",
-        "tests/test_exact_head_review_authority.py::test_review_authority_state_waits_while_a_committed_review_request_is_unadopted"
+        "tests/test_exact_head_review_authority.py::test_review_authority_state_waits_while_a_committed_review_request_is_unadopted",
+        "tests/test_review_orchestrator_collector_finalization.py::test_collector_completion_without_any_wake_up_ends_the_open_cycle",
+        "tests/test_review_orchestrator_collector_finalization.py::test_the_collector_workflow_runs_collector_complete_in_its_own_working_directory",
+        "tests/test_review_orchestrator_collector_finalization.py::test_a_collector_run_may_assert_only_the_unavailable_terminal_state"
       ],
       "lifecycle": "regression-tested",
       "sources": [
+        "PR #576 (Issue #574) exact head cabe151: the dispatched reviewer collector completed with Codex and Copilot silent and Gemini/Groq unavailable, yet no reconcile followed -- none of 17 recorded collector completions (2026-10-02 to 2026-10-08) was followed by a collector-triggered Reconcile run, and the declared */30 and */5 schedules ran only every 3-7 hours -- so the exact-head cycle stayed WAITING_FOR_REVIEWER past its 2820 s budget until a manual re-run published REVIEW_TIMED_OUT. A configured workflow_run trigger is not a delivered wake-up. collector-complete now ends an exhausted pool itself (REVIEWER_UNAVAILABLE, non-blocking, authority-free). Remaining gap: a collector that dies before collector-complete still depends on a later reconcile pass (PR event, schedule or manual re-run) to publish REVIEW_TIMED_OUT.",
         "Issue #534, discovered via PR #533 exact HEAD 1184dac8cf6d87bf879a81a8a5fdb8858237ae95: transitioning PR #533 from Draft to Ready for Review caused Hunter / Merge Readiness to wake immediately (it listens for `ready_for_review`), but hunter-governance-reconcile.yml -- the only workflow that runs the privileged `hunter_review_orchestrator.py ensure` -- had no trigger for that transition, so Merge Readiness published WAITING_FOR_REVIEWER: no trusted exact-head orchestration cycle has been published, and no reviewer opportunity had actually started.",
         "Issue #534 root cause 2, live evidence: after the ready_for_review trigger was added and pushed (PR #535 exact HEAD 9c02a1e8c45b80943e9c459b85ddc9668c2ed692), a manually re-run trusted Hunter Governance Review Reconcile (run 36335901035, attempt 2, against trusted main HEAD 156ed2fad8638dabc9bd1c45a4efbfece2b2d69c) completed SUCCESS but still published no orchestration cycle and dispatched no collector run for PR #535. GitHub Contents API confirmed the cause: `.hunter/pre-ready-hostile-review.json` at that exact head was a leftover review-request document from an unrelated, already-merged candidate (Issue #532's content, base_sha c25b48228f422a7a4e3e85112bd9ffdc216da849, an entirely different review_target), so `hunter_governance_review_v2.valid_current_review_request` correctly found it stale/invalid for PR #535's actual content and `ensure_current` correctly no-op'd. No PR for #535 or #532 had ever committed a review-request document that actually described its own content.",
         "Issue #534 root cause 3, live evidence: after root causes 1 and 2 were fixed and pushed (PR #535 exact HEAD c05da168545c5fa95fe300706eccaac2228fc391), hosted `Hunter Governance Review Reconcile` run 36338855130 (workflow_run trigger, path .github/workflows/hunter-governance-reconcile.yml, head_branch main) completed SUCCESS and published commit status `Hunter Review Orchestration / PR #535` = pending, description `WAITING_FOR_REVIEWER||36338855130|<config-digest>|`, at 2026-09-27T17:58:22Z -- proving the orchestration cycle genuinely existed. Twenty-six seconds later, run 36338905562 (`Hunter Merge Readiness`) still published `Independent-review authority failed: MALFORMED_REVIEW: WAITING_FOR_REVIEWER: no trusted exact-head orchestration cycle has been published`, a hard `failure` state. Traced to `hunter_merge_readiness_v2.resolve_review_authority` never handling a `pending` verification status from `hunter_governance_review_v2.verify_pre_ready_hostile_review`.",
@@ -2073,6 +2117,58 @@
       "lifecycle": "regression-tested",
       "sources": [
         "Issue #520 canary run 37507946220, 2026-10-06: authorize-prepare exited 2 with required --out-dir missing because the workflow wrapped after the subcommand without shell continuation; every downstream lifecycle job was skipped."
+      ]
+    },
+    {
+      "id": "DFF-053",
+      "title": "trusted-preflight-success-masks-unresolved-review-threads",
+      "invariant": "Candidate admission and merge readiness must fail closed whenever any GitHub pull-request review thread is unresolved. A successful trusted exact-head/preflight proof cannot bypass this blocker; outdated is not resolved, and unavailable thread evidence cannot become green.",
+      "applicability": {
+        "changed_paths": [
+          "scripts/hunter_governance_review_v2.py",
+          "scripts/hunter_merge_readiness_v2.py",
+          ".github/workflows/hunter-governance-review.yml"
+        ],
+        "rationale": "Governance/admission status is authoritative for merge progression and must preserve live reviewer-finding lifecycle independently of trusted preflight success."
+      },
+      "prevention": {
+        "mechanism": "candidate_admission reads authoritative paginated GitHub reviewThreads before any protected-preflight success shortcut and returns BLOCKING_FINDINGS for unresolved threads or unavailable thread evidence.",
+        "boundary": "merge-gate",
+        "guard_reference": "scripts/hunter_governance_review_v2.py::candidate_admission"
+      },
+      "regression_evidence": [
+        "tests/test_hunter_governance_review_v2.py::test_candidate_admission_blocks_unresolved_threads_before_trusted_preflight_success",
+        "tests/test_hunter_governance_review_v2.py::test_candidate_admission_fails_closed_when_thread_evidence_is_unavailable"
+      ],
+      "lifecycle": "regression-tested",
+      "sources": [
+        "PR #569 live audit 2026-10-07: five Copilot review threads were isResolved=false while Hunter Governance Review was green; two threads were outdated but still unresolved, proving trusted-preflight success could mask live findings."
+      ]
+    },
+    {
+      "id": "DFF-054",
+      "title": "hosted-authorize-dpm-registry-checkout-authority-drift",
+      "invariant": "The hosted and CLI Issue Agent authorization must compile DPM prevention knowledge from the exact trusted configured control checkout used to load configuration and calculate compiler identity. Never infer this authority from Python site-packages or ambient cwd. Missing trusted registry must fail closed; a unit test of EngineeringContextAuthority alone is not sufficient evidence of the production wiring.",
+      "applicability": {
+        "changed_paths": [
+          "src/hunter/automation/issue_agent_authorize.py",
+          "scripts/hunter_issue_agent_lifecycle.py",
+          "src/hunter/evidence_intelligence/engineering_context_authority.py",
+          "tests/test_issue_agent_authorize.py"
+        ],
+        "rationale": "Changes to hosted authorization or DPM binding can silently load stale/candidate-controlled prevention context or block all Issue Agent canaries."
+      },
+      "prevention": {
+        "mechanism": "Explicit repository_checkout authorization dependency shared by DPM and compiler identity, verified through real authorize.prepare tests with distinct trusted and ambient roots and missing-registry fail-closed coverage.",
+        "boundary": "local-pre-push"
+      },
+      "regression_evidence": [
+        "tests/test_issue_agent_authorize.py::test_prepare_reads_configured_checkout_registry_not_ambient_cwd",
+        "tests/test_issue_agent_authorize.py::test_prepare_missing_configured_checkout_registry_fails_closed"
+      ],
+      "lifecycle": "regression-tested",
+      "sources": [
+        "PR #579 Codex thread 4222875872 and Copilot threads 4222896715, 4222896794, 2026-10-08; Issue #574 hosted canary run 37819851226: EngineeringContextAuthorityError/DEFECT_REGISTRY_INVALID."
       ]
     }
   ]

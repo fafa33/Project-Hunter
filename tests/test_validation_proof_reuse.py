@@ -686,3 +686,105 @@ def test_ci_workflow_can_read_the_trusted_run_record() -> None:
 
     assert workflow["permissions"] == {}
     assert workflow["jobs"]["quality"]["permissions"]["actions"] == "read"
+
+
+def test_hgcc1_contract_change_invalidates_receipt_reuse(tmp_path: Path) -> None:
+    """Verifies that altering HGCC-1 contract files invalidates receipt reuse."""
+    root = _definition_root(tmp_path)
+    before_identity = receipts.definition_identity(root)
+
+    policy_file = root / "docs" / "CODE_WRITE_POLICY.json"
+    policy_file.write_bytes(policy_file.read_bytes() + b"\n")
+
+    after_identity = receipts.definition_identity(root)
+    assert before_identity != after_identity, "Altering CODE_WRITE_POLICY.json must change definition identity"
+
+
+def test_live_contract_identity_changes_invalidate_receipt_reuse(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    root = _definition_root(tmp_path)
+
+    ruleset_v1 = [{"id": 1, "name": "r1", "enforcement": "active", "target": "branch", "rules": [{"type": "deletion"}]}]
+    ruleset_v2 = [
+        {
+            "id": 1,
+            "name": "r1",
+            "enforcement": "active",
+            "target": "branch",
+            "rules": [{"type": "deletion"}, {"type": "non_fast_forward"}],
+        }
+    ]
+
+    current_rulesets = [ruleset_v1]
+
+    def fake_pages(repo, tok, path):
+        return [{"id": 1, "enforcement": "active", "target": "branch"}]
+
+    def fake_request(repo, tok, method, path):
+        return current_rulesets[0][0]
+
+    monkeypatch.setattr("hunter_reviewer_collector._pages", fake_pages)
+    monkeypatch.setattr("hunter_governance_review_v2.request_json", fake_request)
+
+    identity_v1 = receipts.live_contract_identity(root, "fafa33/Project-Hunter", "token")
+
+    current_rulesets[0] = ruleset_v2
+    identity_v2 = receipts.live_contract_identity(root, "fafa33/Project-Hunter", "token")
+
+    assert identity_v1 != identity_v2, "Live ruleset change must change live contract identity"
+
+
+def test_missing_live_contract_observation_fails_closed_when_required(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    root = _definition_root(tmp_path)
+
+    def failing_pages(*args, **kwargs):
+        raise RuntimeError("GitHub API unavailable")
+
+    monkeypatch.setattr("hunter_reviewer_collector._pages", failing_pages)
+
+    with pytest.raises(receipts.ValidationEvidenceUnavailable, match="unavailable or unverifiable"):
+        receipts.live_contract_identity(root, "fafa33/Project-Hunter", "token", require_live=True)
+
+
+def test_configured_live_ruleset_outage_fails_closed_without_explicit_require_live(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    root = _definition_root(tmp_path)
+
+    def unavailable(*_args: Any, **_kwargs: Any) -> Any:
+        raise RuntimeError("GitHub rulesets unavailable")
+
+    monkeypatch.setattr("hunter_reviewer_collector._pages", unavailable)
+    with pytest.raises(receipts.ValidationEvidenceUnavailable, match="unavailable or unverifiable"):
+        receipts.live_contract_identity(root, "fafa33/Project-Hunter", "token")
+
+
+def test_aggregate_receipt_reuse_writes_json_report_file(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    root = _committed_definition_repo(tmp_path)
+    head_sha = receipts.resolve_head_sha(root)
+    receipts.record(root, head_sha=head_sha, produced_by="local-preflight")
+
+    monkeypatch.setattr(preflight, "_repository_root", lambda: root)
+    report_file = "reused_report.json"
+
+    exit_code = preflight.run_preflight(
+        mode="aggregate",
+        reuse_receipt=True,
+        report_path=report_file,
+    )
+
+    assert exit_code == 0
+    resolved_path = preflight.validate_and_resolve_report_path(report_file, root)
+    assert resolved_path.is_file()
+
+    import json
+
+    data = json.loads(resolved_path.read_text(encoding="utf-8"))
+    assert data["schema"] == "hunter.preflight-report/1"
+    assert data["mode"] == "aggregate"
+    assert data["overall_outcome"] == "passed"
+    assert all(g["outcome"] == "reused" for g in data["gates"])
+    assert "receipt_reference" in data

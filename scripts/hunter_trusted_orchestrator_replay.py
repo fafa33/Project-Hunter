@@ -90,7 +90,20 @@ FIXTURE: dict[str, Any] = _DEFINITION["fixture"]
 #: guards against a receipt claiming instantaneous or reversed timing, not
 #: against ordinary CI variance.
 MAX_SCENARIO_SECONDS = _DEFINITION["max_scenario_seconds"]
-WORKER_TIMEOUT_SECONDS = 120
+# The worker permits one full startup window and a fresh execution window
+# after the trusted started sentinel, then up to 10 seconds of child cleanup.
+# Keep the outer subprocess budget strictly larger so its supervisor cannot
+# preempt the worker's structured timeout result.
+WORKER_STARTUP_TIMEOUT_SECONDS = 60
+WORKER_EXECUTION_TIMEOUT_SECONDS = 60
+WORKER_CLEANUP_TIMEOUT_SECONDS = 10
+WORKER_SUPERVISOR_MARGIN_SECONDS = 10
+WORKER_TIMEOUT_SECONDS = (
+    WORKER_STARTUP_TIMEOUT_SECONDS
+    + WORKER_EXECUTION_TIMEOUT_SECONDS
+    + WORKER_CLEANUP_TIMEOUT_SECONDS
+    + WORKER_SUPERVISOR_MARGIN_SECONDS
+)
 
 
 def _digest(payload: Any) -> str:

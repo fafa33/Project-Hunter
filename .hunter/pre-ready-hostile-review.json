@@ -1,31 +1,6 @@
 {
   "claims": {
-    "acceptance_criteria": [
-      {
-        "criterion": "The one-shot GitHub-native Source Handling bootstrap entrypoint is exercised end to end at the command boundary against a real anchored ledger, covering the first bootstrap, idempotent re-dispatch, tampered and foreign pre-existing ledgers, anchor weakening, trust-root and signing-key mismatches, re-run refusal, lost compare-and-swap, crash before and after a durable write with prefix recovery, single-ref write scope, and secret non-disclosure.",
-        "evidence": "tests/test_issue_agent_source_handling_bootstrap_entry.py (26 entrypoint tests driving scripts/hunter_issue_agent_lifecycle.py against a local bare remote and an authenticated GitHub read double; includes a replay-operational-failure redispatch-refusal regression and the same-family corruption freeze is pinned by existing tests).",
-        "id": "AC-1",
-        "verdict": "satisfied"
-      },
-      {
-        "criterion": "Every refusal the bootstrap can raise is a bounded, documented machine-checked refusal or freeze code rather than an unhandled traceback, and failure leaves no out-of-scope durable write.",
-        "evidence": "scripts/hunter_issue_agent_lifecycle.py cmd_source_handling_bootstrap translation layer, the store git normalization, the workspace/sqlite operational refusals, and the `_apply` replay re-raise of sqlite3.OperationalError (raw, so the lifecycle reports its sanitized re-dispatch refusal) with the corruption message carrying no sqlite payload; every refusal path is mutation-checked (RED without the fix, GREEN with it) and the focused S6 suite (200 tests, including 26 entrypoint tests) is green; no Traceback in stdout or stderr for any refusal path.",
-        "id": "AC-2",
-        "verdict": "satisfied"
-      },
-      {
-        "criterion": "ADR 0038 Implementation Status and the ADR 0037 S6 status text describe the implementation that actually exists after PR #562 and PR #564, without claiming a dispatched bootstrap or a written state ref.",
-        "evidence": "docs/ADR/0038-source-handling-github-native-authority-store.md and docs/ADR/0037-github-native-issue-agent-execution.md edits in this range; Architecture Index Guard PASS.",
-        "id": "AC-3",
-        "verdict": "satisfied"
-      },
-      {
-        "criterion": "The range introduces no second Source Handling authority, ledger, SPM, DPM or publisher, changes no trust root or pinned authorization rule, dispatches no bootstrap, and writes no production state ref.",
-        "evidence": "Changed paths are limited to the added entrypoint test suite, the lifecycle entrypoint translation layer, the ledger store git normalization, the canonicalization writer-identity pin with its `env` identity sanitizer and adversarial regression, the `_apply` replay operational re-raise and its store/entry-level regressions, the ADR 0038/0037 bodies and their index, and this generated artifact; config/issue_agent_trust_roots.json and the workflows are untouched, and refs/heads/hunter-state/v1/source-handling remains absent on origin.",
-        "id": "AC-4",
-        "verdict": "satisfied"
-      }
-    ],
+    "acceptance_criteria": [],
     "adversarial_dimensions": [
       "authorization",
       "caller-controlled-time-state",
@@ -40,213 +15,208 @@
       "transaction-snapshot-consistency"
     ],
     "base_ref": "main",
-    "base_sha": "ef0b2a4bf5a59be5ea17ebc5f80bebd71358f3d9",
+    "base_sha": "ecdf661d7fd5f6592cb76dd82d87bcb170d67e08",
     "defect_families": [
       {
-        "evidence": "Included in exact-candidate hostile-review scope; applicable by trusted registry path matching; no timestamp or ordering decision path is changed by this range.",
+        "evidence": "Author requests independent assessment against this exact candidate diff; not reviewer approval.",
         "family": "DFF-001",
         "outcome": "clear"
       },
       {
-        "evidence": "Included in exact-candidate hostile-review scope; applicable by trusted registry path matching; the store still validates against one explicit snapshot and commits through CAS on the observed head.",
+        "evidence": "Author requests independent assessment against this exact candidate diff; not reviewer approval.",
         "family": "DFF-002",
         "outcome": "clear"
       },
       {
-        "evidence": "Included in exact-candidate hostile-review scope; applicable by trusted registry path matching; no identity assignment or authorization path is changed by this range.",
+        "evidence": "Author requests independent assessment against this exact candidate diff; not reviewer approval.",
         "family": "DFF-003",
         "outcome": "clear"
       },
       {
-        "evidence": "Included in exact-candidate hostile-review scope; applicable by trusted registry path matching; absent or unknown authority values still fail closed.",
+        "evidence": "Author requests independent assessment against this exact candidate diff; not reviewer approval.",
         "family": "DFF-004",
         "outcome": "clear"
       },
       {
-        "evidence": "Included in exact-candidate hostile-review scope; applicable by trusted registry path matching; the store deliberately omits OS error text from LedgerError so the authentication header in argv can never leak into durable evidence.",
+        "evidence": "Author requests independent assessment against this exact candidate diff; not reviewer approval.",
         "family": "DFF-005",
         "outcome": "clear"
       },
       {
-        "evidence": "Included in exact-candidate hostile-review scope; applicable by trusted registry path matching; no ordering guarantee is weakened and interrupted-prefix recovery remains monotonic.",
+        "evidence": "Author requests independent assessment against this exact candidate diff; not reviewer approval.",
         "family": "DFF-006",
         "outcome": "clear"
       },
       {
-        "evidence": "Included in exact-candidate hostile-review scope; applicable by trusted registry path matching; no authorization-replay instance is introduced by this range.",
+        "evidence": "Author requests independent assessment against this exact candidate diff; not reviewer approval.",
         "family": "DFF-007",
         "outcome": "clear"
       },
       {
-        "evidence": "Included in exact-candidate hostile-review scope; applicable by trusted registry path matching; no tamper or history-forgery instance is introduced by this range.",
+        "evidence": "Author requests independent assessment against this exact candidate diff; not reviewer approval.",
         "family": "DFF-008",
         "outcome": "clear"
       },
       {
-        "evidence": "Included in exact-candidate hostile-review scope; applicable by trusted registry path matching; no connector-provenance instance is introduced by this range.",
+        "evidence": "Author requests independent assessment against this exact candidate diff; not reviewer approval.",
         "family": "DFF-009",
         "outcome": "clear"
       },
       {
-        "evidence": "Included in exact-candidate hostile-review scope; applicable by trusted registry path matching; writer identity remains bound by the pinned trust roots.",
+        "evidence": "Author requests independent assessment against this exact candidate diff; not reviewer approval.",
         "family": "DFF-010",
         "outcome": "clear"
       },
       {
-        "evidence": "Included in exact-candidate hostile-review scope; applicable by trusted registry path matching; interrupted-prefix recovery is covered by tests/test_issue_agent_source_handling_bootstrap_entry.py.",
+        "evidence": "Author requests independent assessment against this exact candidate diff; not reviewer approval.",
         "family": "DFF-011",
         "outcome": "clear"
       },
       {
-        "evidence": "Included in exact-candidate hostile-review scope; applicable by trusted registry path matching; no receipt publication is added by this range.",
+        "evidence": "Author requests independent assessment against this exact candidate diff; not reviewer approval.",
         "family": "DFF-012",
         "outcome": "clear"
       },
       {
-        "evidence": "Included in exact-candidate hostile-review scope; applicable by trusted registry path matching; this candidate stays Draft until the owner marks it Ready.",
+        "evidence": "Author requests independent assessment against this exact candidate diff; not reviewer approval.",
         "family": "DFF-013",
         "outcome": "clear"
       },
       {
-        "evidence": "Included in exact-candidate hostile-review scope; applicable by trusted registry path matching; pending preflight and Draft states are reported as pending, never as failure.",
+        "evidence": "Author requests independent assessment against this exact candidate diff; not reviewer approval.",
         "family": "DFF-014",
         "outcome": "clear"
       },
       {
-        "evidence": "Included in exact-candidate hostile-review scope; applicable by trusted registry path matching; no prevention or review state is over-claimed: the ADR edits record what has and has not been delivered.",
+        "evidence": "Author requests independent assessment against this exact candidate diff; not reviewer approval.",
         "family": "DFF-015",
         "outcome": "clear"
       },
       {
-        "evidence": "Included in exact-candidate hostile-review scope; applicable by trusted registry path matching; no validation proof is minted or reused by this range.",
+        "evidence": "Author requests independent assessment against this exact candidate diff; not reviewer approval.",
         "family": "DFF-016",
         "outcome": "clear"
       },
       {
-        "evidence": "Included in exact-candidate hostile-review scope; applicable by trusted registry path matching; no Railway runtime or volume behaviour is touched by this range.",
+        "evidence": "Author requests independent assessment against this exact candidate diff; not reviewer approval.",
         "family": "DFF-019",
         "outcome": "clear"
       },
       {
-        "evidence": "Included in exact-candidate hostile-review scope; applicable by trusted registry path matching; no live-instance execution or ownership isolation boundary is changed.",
+        "evidence": "Author requests independent assessment against this exact candidate diff; not reviewer approval.",
         "family": "DFF-020",
         "outcome": "clear"
       },
       {
-        "evidence": "Included in exact-candidate hostile-review scope; applicable by trusted registry path matching; no execution shutdown or drain path is changed.",
+        "evidence": "Author requests independent assessment against this exact candidate diff; not reviewer approval.",
         "family": "DFF-021",
         "outcome": "clear"
       },
       {
-        "evidence": "Included in exact-candidate hostile-review scope; applicable by trusted registry path matching; the bootstrap entrypoint still runs the canonical anchor, provenance and preflight checks before any ledger claim, and now validates the pinned state key before any write.",
+        "evidence": "Author requests independent assessment against this exact candidate diff; not reviewer approval.",
         "family": "DFF-023",
         "outcome": "clear"
       },
       {
-        "evidence": "Included in exact-candidate hostile-review scope; applicable by trusted registry path matching; no readiness or probe path is changed by this range.",
-        "family": "DFF-027",
-        "outcome": "clear"
-      },
-      {
-        "evidence": "Included in exact-candidate hostile-review scope; applicable by trusted registry path matching; no execution boundary or credential-holding path is changed by this range.",
-        "family": "DFF-028",
-        "outcome": "clear"
-      },
-      {
-        "evidence": "Included in exact-candidate hostile-review scope; applicable by trusted registry path matching; canonical preflight remains the gate for publication and is untouched here.",
+        "evidence": "Author requests independent assessment against this exact candidate diff; not reviewer approval.",
         "family": "DFF-029",
         "outcome": "clear"
       },
       {
-        "evidence": "Included in exact-candidate hostile-review scope; applicable by trusted registry path matching; no tracked governance asset is moved or renamed.",
+        "evidence": "Author requests independent assessment against this exact candidate diff; not reviewer approval.",
         "family": "DFF-033",
         "outcome": "clear"
       },
       {
-        "evidence": "Included in exact-candidate hostile-review scope; applicable by trusted registry path matching; the new suite drives real git, the real store and the real command rather than an external precondition.",
+        "evidence": "Author requests independent assessment against this exact candidate diff; not reviewer approval.",
         "family": "DFF-035",
         "outcome": "clear"
       },
       {
-        "evidence": "Included in exact-candidate hostile-review scope; applicable by trusted registry path matching; no uid or credential-boundary path is changed by this range.",
-        "family": "DFF-047",
+        "evidence": "Author requests independent assessment against this exact candidate diff; not reviewer approval.",
+        "family": "DFF-036",
         "outcome": "clear"
       },
       {
-        "evidence": "Included in exact-candidate hostile-review scope; applicable by trusted registry path matching; no success-recording or publication path is changed by this range.",
-        "family": "DFF-049",
+        "evidence": "Author requests independent assessment against this exact candidate diff; not reviewer approval.",
+        "family": "DFF-040",
+        "outcome": "clear"
+      },
+      {
+        "evidence": "Author requests independent assessment against this exact candidate diff; not reviewer approval.",
+        "family": "DFF-041",
         "outcome": "clear"
       }
     ],
     "findings": [],
-    "issue": "560",
+    "issue": "603",
     "review_target": [
       {
-        "blob_sha": "7b78439039684c26bd3185cf78f46c1164155f0c",
-        "path": "tests/test_issue_agent_source_handling_bootstrap_entry.py",
-        "previous_path": "",
-        "status": "added"
-      },
-      {
-        "blob_sha": "1ba07c477243513a95f9eb451d2a9dda95c1a11f",
-        "path": "docs/ADR/0037-github-native-issue-agent-execution.md",
+        "blob_sha": "88190f742409d500980adf82b32ff30649f57822",
+        "path": ".github/workflows/hunter-governance-review.yml",
         "previous_path": "",
         "status": "modified"
       },
       {
-        "blob_sha": "5b3e0dfd9b47d34047cf780d35837c634f196144",
-        "path": "docs/ADR/0038-source-handling-github-native-authority-store.md",
+        "blob_sha": "aa41e0380d6a8f027669c4571e9c3df6aeb9379c",
+        "path": "scripts/hunter_defect_prevention_preflight.py",
         "previous_path": "",
         "status": "modified"
       },
       {
-        "blob_sha": "a6d57a48daf87e09db6bb6c9670a1d7acf9c6db9",
-        "path": "docs/ADR/README.md",
+        "blob_sha": "2136b1d57c0e141494349cb4e93f2a1376205ad2",
+        "path": "scripts/hunter_github_contract.py",
         "previous_path": "",
         "status": "modified"
       },
       {
-        "blob_sha": "2a745bc2e795e5ce4b2238659824e6a13b2f9818",
-        "path": "scripts/hunter_canonicalization_candidate_pr.py",
+        "blob_sha": "db67d6065e753cde6ee14d1162d83eb1e4d82eb7",
+        "path": "scripts/hunter_merge_readiness_v2.py",
         "previous_path": "",
         "status": "modified"
       },
       {
-        "blob_sha": "dffe39081e118768914827e1413d0ddd8b9b7eeb",
-        "path": "scripts/hunter_issue_agent_lifecycle.py",
+        "blob_sha": "5cbaa3239000a5e572a5a50613e16c1a95de8121",
+        "path": "tests/test_hma1_trusted_gate.py",
         "previous_path": "",
         "status": "modified"
       },
       {
-        "blob_sha": "94ad28477c5a545a54d8ec0bd9a7dca20775a06e",
-        "path": "src/hunter/automation/issue_agent_source_handling_store.py",
+        "blob_sha": "c8655e9f7bcbb385c2b84ff66e5c84bcb2393baa",
+        "path": "tests/test_hunter_github_contract.py",
         "previous_path": "",
         "status": "modified"
       },
       {
-        "blob_sha": "a7e78f0901ba1161c84826a84c8ae70dfa463074",
-        "path": "src/hunter/automation/issue_agent_state.py",
+        "blob_sha": "fd34c747f402893cd2f0487ef76e339f6f646946",
+        "path": "tests/test_hunter_governance_review_v2.py",
         "previous_path": "",
         "status": "modified"
       },
       {
-        "blob_sha": "51de2985efc9e94e3d798281cc6b9e160b575807",
-        "path": "tests/test_hunter_canonicalization_candidate_pr.py",
+        "blob_sha": "ba8222cb05eb4f25b6eac22f3a94c030c901035b",
+        "path": "tests/test_hunter_review_orchestrator.py",
         "previous_path": "",
         "status": "modified"
       },
       {
-        "blob_sha": "50d3fce3966f2e5518ef5e81b7c8cbef54c3a50a",
-        "path": "tests/test_issue_agent_source_handling_store.py",
+        "blob_sha": "a20beeec7196acb890ecd972e54aee7a98ada15f",
+        "path": "tests/test_issue_419_trusted_parallel_lane.py",
+        "previous_path": "",
+        "status": "modified"
+      },
+      {
+        "blob_sha": "17f613e3a87742155796f6318eaaf9d20999c399",
+        "path": "tests/test_pr376_prevention_regressions.py",
         "previous_path": "",
         "status": "modified"
       }
     ],
-    "review_target_digest": "3b726bd752a00fd9cbd2b86e7b4fe053de587644ded10b0a6c13330d61816f99"
+    "review_target_digest": "23883ba34cff245892dcf0ee58e3faace5e29d445c214c775df27f291357e1bd"
   },
-  "review_id": "65135893c0fe9fdad87c39762f8311c9ca96db486492bf2d4e39659bca1008a5",
+  "review_id": "5bdfa7cb21fca5f8f2990ee404a24c6451ae9adecdf91098c4fd751f0c64f10d",
   "review_request": {
-    "claims_id": "65135893c0fe9fdad87c39762f8311c9ca96db486492bf2d4e39659bca1008a5",
+    "claims_id": "5bdfa7cb21fca5f8f2990ee404a24c6451ae9adecdf91098c4fd751f0c64f10d",
     "schema": "hunter.review-request.v1"
   },
   "schema": "hunter.pre-ready-hostile-review.v1"

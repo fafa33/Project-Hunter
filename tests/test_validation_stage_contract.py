@@ -35,6 +35,7 @@ PIPELINE_ORDER = (
     "focused-development-verification",
     "pre-push-safety",
     "hosted-full-exact-head-proof",
+    "trusted-preflight-upgrade-lane",
     "candidate-admission",
     "pull-request-integration-compatibility",
     "merge-readiness",
@@ -127,11 +128,11 @@ def test_pre_push_declares_and_runs_no_full_repository_suite(monkeypatch: pytest
 
     executed: list[tuple[str, tuple[str, ...]]] = []
 
-    def record(gates: Any) -> int:
+    def record(gates: Any, **_kwargs: Any) -> tuple[int, dict[str, Any]]:
         executed.extend(tuple(gate) for gate in gates)
-        return 0
+        return 0, {"overall_outcome": "passed", "gates": []}
 
-    monkeypatch.setattr(preflight, "run_quality_gates", record)
+    monkeypatch.setattr(preflight, "run_aggregate_gates", record)
 
     assert hunter_pre_push._run_push_safety_lane() == 0
     assert executed == [tuple(gate) for gate in preflight.PUSH_SAFETY_GATES]

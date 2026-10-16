@@ -374,3 +374,19 @@ def test_representative_engineering_implement_scope_fits_the_real_prevention_bud
     assert families, "the representative scope must select at least one applicable family"
     blob = json.dumps(families, sort_keys=True, separators=(",", ":"), ensure_ascii=False)
     assert len(blob.encode("utf-8")) <= ENGINEERING_IMPLEMENT_PREVENTION_CONTEXT_MAX_BYTES
+
+
+def test_hosted_noneditable_install_uses_explicit_checkout_registry(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Hosted pip installs cannot locate checkout docs relative to site-packages."""
+    checkout = tmp_path / "checkout"
+    registry = checkout / "docs" / "DEFECT_REGISTRY.json"
+    registry.parent.mkdir(parents=True)
+    registry.write_text('{"families": []}', encoding="utf-8")
+    monkeypatch.chdir(checkout)
+    authority = EngineeringContextAuthority(registry_path=Path.cwd() / "docs" / "DEFECT_REGISTRY.json")
+    assert authority._families() == []
+    registry.unlink()
+    with pytest.raises(EngineeringContextAuthorityError, match="defect registry is unavailable"):
+        authority._families()

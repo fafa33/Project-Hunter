@@ -1645,6 +1645,45 @@ OPTIONAL_JUDGEMENT_KEYS = ("coverage_scope",)
 REQUEST_JUDGEMENT_KEYS = tuple(key for key in JUDGEMENT_KEYS if key != "authority")
 
 
+def validate_request_governing_issue(issue: str, judgement: dict[str, Any]) -> None:
+    """Reject stale/wrong Issue evidence before minting a review request.
+
+    The authenticated hosted verifier remains authoritative. This early check
+    prevents agents from copying another PR's request and discovering the
+    mismatch only after a hosted reconcile failure.
+    """
+    if not issue.isdecimal() or int(issue) < 1:
+        raise ValueError("review request requires a real governing Issue number")
+    completed = subprocess.run(
+        ("gh", "api", f"repos/fafa33/Project-Hunter/issues/{issue}"),
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    if completed.returncode:
+        raise ValueError(f"governing Issue #{issue} cannot be verified through GitHub")
+    try:
+        payload = json.loads(completed.stdout)
+    except json.JSONDecodeError as exc:
+        raise ValueError("governing Issue API returned malformed JSON") from exc
+    if not isinstance(payload, dict) or payload.get("number") != int(issue):
+        raise ValueError(f"governing Issue #{issue} identity cannot be verified")
+    if "pull_request" in payload:
+        raise ValueError(f"#{issue} is a pull request, not a governing Issue")
+    body = payload.get("body")
+    if not isinstance(body, str):
+        raise ValueError(f"governing Issue #{issue} body is unavailable")
+    required = set(parse_issue_acceptance_criteria(body))
+    if not required:
+        raise ValueError(f"governing Issue #{issue} has no Acceptance Criteria section")
+    supplied = judgement.get("acceptance_criteria")
+    if not isinstance(supplied, list):
+        raise ValueError("review request has no acceptance-criteria records")
+    covered = {normalize_criterion(str(item.get("criterion", ""))) for item in supplied if isinstance(item, dict)}
+    if not required.issubset(covered):
+        raise ValueError(f"review request does not cover governing Issue #{issue} acceptance criteria")
+
+
 def prepare_request(
     *,
     issue: str,
@@ -1771,6 +1810,7 @@ def main() -> int:
             judgement = json.loads(Path(args.request).read_text(encoding="utf-8"))
             if not isinstance(judgement, dict):
                 raise ValueError("review request judgement must be a JSON object")
+            validate_request_governing_issue(str(args.issue), judgement)
             document = prepare_request(
                 issue=str(args.issue),
                 base=args.base,

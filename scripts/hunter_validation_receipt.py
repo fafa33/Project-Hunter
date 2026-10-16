@@ -46,6 +46,7 @@ from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from importlib import metadata
 from pathlib import Path
+from typing import Any
 
 RECEIPT_SCHEMA = "hunter.validation-receipt/1"
 
@@ -75,6 +76,8 @@ RECEIPT_NAME = "full.json"
 DEFINITION_PATHS: tuple[str, ...] = (
     ".github/workflows/ci.yml",
     ".github/workflows/hunter-pre-pr-preflight.yml",
+    "docs/CODE_WRITE_POLICY.json",
+    "docs/VALIDATION_STAGE_CONTRACT.json",
     "pyproject.toml",
     "requirements/ci-constraints.txt",
     "scripts/hunter_architecture_index_preflight.py",
@@ -182,6 +185,83 @@ def definition_identity(root: Path) -> str:
     return _digest(parts)
 
 
+def normalize_ruleset(ruleset_detail: Mapping[str, Any]) -> dict[str, Any]:
+    """Normalize a GitHub Ruleset object keeping only security-relevant fields."""
+    return {
+        "id": ruleset_detail.get("id"),
+        "name": str(ruleset_detail.get("name") or "").strip(),
+        "enforcement": str(ruleset_detail.get("enforcement") or "").strip(),
+        "target": str(ruleset_detail.get("target") or "").strip(),
+        "conditions": ruleset_detail.get("conditions"),
+        "rules": ruleset_detail.get("rules"),
+        "bypass_actors": ruleset_detail.get("bypass_actors"),
+    }
+
+
+def live_contract_identity(
+    root: Path,
+    repository: str | None = None,
+    token: str | None = None,
+    *,
+    require_live: bool = False,
+) -> str:
+    """Compute the deterministic HGCC-1 contract identity combining local policies and live GitHub Rulesets.
+
+    Reuses existing hunter_reviewer_collector and hunter_governance_review_v2 readers.
+    Fails closed if live contract observation is required/configured but unavailable or unverifiable.
+    """
+    import hunter_governance_review_v2 as governance
+    import hunter_pre_push
+
+    parts: list[str] = [RECEIPT_SCHEMA, "hgcc1-contract"]
+
+    for relative in ("docs/CODE_WRITE_POLICY.json", "docs/VALIDATION_STAGE_CONTRACT.json"):
+        path = root / relative
+        try:
+            payload = path.read_bytes()
+            parts.append(f"file:{relative}:{hashlib.sha256(payload).hexdigest()}")
+        except OSError as exc:
+            raise ValidationEvidenceUnavailable(f"contract file unreadable: {relative} ({exc})") from exc
+
+    repo = repository or hunter_pre_push._repository_from_remotes()
+    tok = token or hunter_pre_push._github_access_token()
+
+    if repo and tok:
+        try:
+            import hunter_reviewer_collector as collector
+
+            ruleset_summaries = collector._pages(repo, tok, "rulesets")
+            active_rulesets: list[dict[str, Any]] = []
+
+            for summary in ruleset_summaries:
+                if not isinstance(summary, Mapping):
+                    continue
+                if summary.get("enforcement") != "active" or summary.get("target") not in ("branch", "pull_request"):
+                    continue
+                ruleset_id = summary.get("id")
+                if not isinstance(ruleset_id, int):
+                    continue
+
+                detail = governance.request_json(repo, tok, "GET", f"rulesets/{ruleset_id}")
+                if not isinstance(detail, Mapping):
+                    raise ValidationEvidenceUnavailable(f"ruleset {ruleset_id} detail is missing or malformed")
+                active_rulesets.append(normalize_ruleset(detail))
+
+            active_rulesets.sort(key=lambda r: int(r.get("id") or 0))
+            ruleset_bytes = json.dumps(active_rulesets, sort_keys=True, separators=(",", ":")).encode("utf-8")
+            parts.append(f"live_rulesets:{repo}:{hashlib.sha256(ruleset_bytes).hexdigest()}")
+        except Exception as exc:
+            raise ValidationEvidenceUnavailable(
+                f"live HGCC-1 contract observation is unavailable or unverifiable ({exc})"
+            ) from exc
+    elif require_live:
+        raise ValidationEvidenceUnavailable(
+            "live HGCC-1 contract observation is required but repository or GitHub token is unavailable"
+        )
+
+    return _digest(parts)
+
+
 def measured_toolchain() -> dict[str, str]:
     """The versions actually installed in this interpreter."""
     resolved = {"python": ".".join(str(part) for part in sys.version_info[:3])}
@@ -194,13 +274,7 @@ def measured_toolchain() -> dict[str, str]:
 
 
 def pinned_toolchain(root: Path) -> dict[str, str]:
-    """The versions the tree pins for the full lane.
-
-    Comparing this against :func:`measured_toolchain` is what lets one boundary
-    conclude something about another's toolchain without shipping it a receipt:
-    two runs that both install from the same pinned files in the same tree, and
-    both match the pin, match each other.
-    """
+    """The versions the tree pins for the full lane."""
     interpreters: set[str] = set()
     for relative in _TOOLCHAIN_PIN_WORKFLOWS:
         path = root / relative
@@ -250,13 +324,21 @@ class ValidationIdentity:
     content: str
     definition: str
     toolchain: str
+    contract: str = ""
 
 
-def current_identity(root: Path) -> ValidationIdentity:
+def current_identity(
+    root: Path,
+    repository: str | None = None,
+    token: str | None = None,
+    *,
+    require_live: bool = False,
+) -> ValidationIdentity:
     return ValidationIdentity(
         content=content_identity(root),
         definition=definition_identity(root),
         toolchain=toolchain_identity(measured_toolchain()),
+        contract=live_contract_identity(root, repository, token, require_live=require_live),
     )
 
 
@@ -279,6 +361,7 @@ class ValidationReceipt:
     toolchain_identity: str
     produced_at: datetime
     produced_by: str
+    contract_identity: str = ""
 
     @classmethod
     def from_document(cls, document: object) -> tuple[ValidationReceipt | None, str]:
@@ -305,6 +388,8 @@ class ValidationReceipt:
                 return None, problem
             values[key] = value
 
+        contract_id = str(document.get("contract_identity") or "").strip()
+
         if values["lane"] not in LANES:
             return None, f"unsupported receipt lane {values['lane']!r}"
         if values["result"] not in RESULTS:
@@ -326,12 +411,13 @@ class ValidationReceipt:
                 toolchain_identity=values["toolchain_identity"],
                 produced_at=produced_at.astimezone(UTC),
                 produced_by=values["produced_by"],
+                contract_identity=contract_id,
             ),
             "",
         )
 
     def to_document(self) -> dict[str, str]:
-        return {
+        doc = {
             "schema": RECEIPT_SCHEMA,
             "lane": self.lane,
             "result": self.result,
@@ -342,6 +428,9 @@ class ValidationReceipt:
             "produced_at": self.produced_at.astimezone(UTC).isoformat().replace("+00:00", "Z"),
             "produced_by": self.produced_by,
         }
+        if self.contract_identity:
+            doc["contract_identity"] = self.contract_identity
+        return doc
 
 
 def verify(
@@ -352,19 +441,7 @@ def verify(
     now: datetime | None = None,
     max_age_seconds: int = DEFAULT_MAX_AGE_SECONDS,
 ) -> str | None:
-    """Return why ``receipt`` may not be reused, or ``None`` when it may.
-
-    Every branch here is a refusal. There is deliberately no path that accepts
-    a receipt because of something the receipt itself asserts.
-
-    ``head_sha`` is required rather than optional. It was optional once, and the
-    local reuse path silently omitted it while the push boundary supplied it --
-    so content identity alone decided reuse on one of the two production paths.
-    Two commits can carry the same tree (an amended message is the everyday
-    case), so that path would have let a proof recorded for one candidate
-    authorize another. A binding that can be dropped by forgetting a keyword is
-    not a binding; having no default is what makes forgetting impossible.
-    """
+    """Return why ``receipt`` may not be reused, or ``None`` when it may."""
     if receipt.lane != FULL_LANE:
         return f"receipt is for the {receipt.lane!r} lane, not the full repository lane"
     if receipt.result != PASSED:
@@ -377,6 +454,8 @@ def verify(
         return "validation definition changed since the receipt was produced"
     if receipt.toolchain_identity != expected.toolchain:
         return "validation toolchain changed since the receipt was produced"
+    if expected.contract and receipt.contract_identity != expected.contract:
+        return "live HGCC-1 contract changed since the receipt was produced"
 
     moment = now if now is not None else datetime.now(UTC)
     age = moment - receipt.produced_at
@@ -406,9 +485,17 @@ def store(receipt: ValidationReceipt, path: Path) -> None:
     path.write_text(json.dumps(receipt.to_document(), indent=2, sort_keys=True) + "\n", encoding="utf-8")
 
 
-def record(root: Path, *, head_sha: str, produced_by: str, result: str = PASSED) -> ValidationReceipt:
+def record(
+    root: Path,
+    *,
+    head_sha: str,
+    produced_by: str,
+    result: str = PASSED,
+    repository: str | None = None,
+    token: str | None = None,
+) -> ValidationReceipt:
     """Record the outcome of a full-lane run over the current identity."""
-    identity = current_identity(root)
+    identity = current_identity(root, repository=repository, token=token)
     receipt = ValidationReceipt(
         lane=FULL_LANE,
         result=result,
@@ -418,6 +505,7 @@ def record(root: Path, *, head_sha: str, produced_by: str, result: str = PASSED)
         toolchain_identity=identity.toolchain,
         produced_at=datetime.now(UTC),
         produced_by=produced_by,
+        contract_identity=identity.contract,
     )
     store(receipt, receipt_path(root))
     return receipt
@@ -429,16 +517,13 @@ def reuse_blocker(
     head_sha: str | None = None,
     now: datetime | None = None,
     max_age_seconds: int = DEFAULT_MAX_AGE_SECONDS,
+    repository: str | None = None,
+    token: str | None = None,
+    require_live_contract: bool = False,
 ) -> str | None:
-    """Why the recorded local receipt may not stand in for a full-lane run.
-
-    ``head_sha`` is resolved from the repository when the caller has not already
-    established one. A caller that has -- the push boundary, which validated the
-    exact head before anything else -- passes it in, but a caller that simply
-    asks "may I reuse?" must not thereby get an unbound answer.
-    """
+    """Why the recorded local receipt may not stand in for a full-lane run."""
     try:
-        expected = current_identity(root)
+        expected = current_identity(root, repository=repository, token=token, require_live=require_live_contract)
         bound_head = head_sha if head_sha is not None else resolve_head_sha(root)
     except ValidationEvidenceUnavailable as exc:
         return f"validation identity is unavailable ({exc})"

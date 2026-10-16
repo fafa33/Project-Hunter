@@ -263,3 +263,15 @@ def test_the_published_status_is_stamped_with_the_evaluated_revision(monkeypatch
 
     assert published["sha"] == BASE.head_sha
     assert parse_marker(published["description"]) == (258, governance_revision(BASE))
+
+
+def test_trusted_governance_review_changes_have_bounded_approval_free_reconciliation():
+    from pathlib import Path
+
+    workflow = (Path(__file__).resolve().parents[1] / ".github/workflows/hunter-governance-reconcile.yml").read_text()
+    assert 'cron: "*/5 * * * *"' in workflow
+    assert "  pull_request_review:" not in workflow
+    assert "  pull_request_review_comment:" not in workflow
+    assert "  pull_request_target:" in workflow
+    assert "  workflow_run:" in workflow
+    assert 'if [[ "${event_name}" == "pull_request_target" ]]' in workflow

@@ -24,6 +24,7 @@ GOVERNED = (
     "hunter-issue-agent-reconcile.yml",
     "hunter-issue-agent-candidate-pr.yml",
     "hunter-issue-agent-replacement-rehearsal.yml",
+    "hunter-issue-agent-rehearsal-producer.yml",
     "hunter-issue-agent-knowledge.yml",
     "hunter-issue-agent-source-handling-bootstrap.yml",
 )
@@ -392,3 +393,31 @@ def test_prose_mentioning_the_retirement_is_not_a_client() -> None:
 )
 def test_a_cancelling_or_dropping_concurrency_is_refused(concurrency: object) -> None:
     assert not queued_concurrency({"concurrency": concurrency})
+
+
+def test_resolve_finding_is_event_driven_for_pr_review_lifecycle() -> None:
+    """DFF-053: review findings must refresh the visible resolve-finding gate without waiting for cron/manual dispatch."""
+    document = load("hunter-issue-agent-reconcile.yml")
+    triggers = next((value for key, value in document.items() if key is True or key == "on"), None)
+    assert isinstance(triggers, dict)
+    assert "pull_request_review" not in triggers
+    assert "pull_request_review_comment" not in triggers
+    assert "pull_request_target" not in triggers
+    job = document["jobs"]["resolve-finding"]
+    assert job["name"] == "resolve-finding"
+    assert job["permissions"]["pull-requests"] == "write"
+    assert "scripts/hunter_issue_agent_lifecycle.py resolve-finding" in str(job["steps"])
+
+
+def test_resolve_finding_immediately_dispatches_merge_readiness() -> None:
+    """Thread resolution must refresh its PR without waiting for the scheduled sweep."""
+    from pathlib import Path
+
+    root = Path(__file__).resolve().parents[1]
+    lifecycle = (root / "scripts/hunter_issue_agent_lifecycle.py").read_text()
+    resolve_body = lifecycle.split("def cmd_resolve(", 1)[1].split("\ndef cmd_resume_bind(", 1)[0]
+    assert 'github.dispatch("hunter-merge-readiness.yml", {"pr_number": str(pr_number)})' in resolve_body
+    assert "resolved_proofs.append(proof)" in resolve_body
+    workflow = (root / ".github/workflows/hunter-issue-agent-reconcile.yml").read_text()
+    resolve_job = workflow.split("  resolve-finding:", 1)[1].split("    steps:", 1)[0]
+    assert "actions: write" in resolve_job

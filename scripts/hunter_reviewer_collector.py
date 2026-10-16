@@ -550,6 +550,10 @@ def collect_attempts(pool: dict[str, Any], head: str, backend: Backend) -> list[
             start = backend.now()
             ack_deadline = start + agent["ack_timeout_seconds"]
             review_deadline = start + agent["review_timeout_seconds"]
+            # GitHub review assignment confirms only that GitHub recorded the request.
+            # No provider-start ACK is exposed, so do not abort after 30 seconds:
+            # a normal Codex review has historically taken 21–29 minutes.
+            native_review_request = trigger_scheme(agent) == "github-review-request"
             acknowledged = False
             ack_elapsed: float | None = None
             state = "waiting"
@@ -561,17 +565,17 @@ def collect_attempts(pool: dict[str, Any], head: str, backend: Backend) -> list[
                     break
                 if state != "waiting":
                     raise ValueError(f"unsupported reviewer response state: {state}")
-                if not acknowledged and backend.acknowledged(agent, trigger):
+                if not native_review_request and not acknowledged and backend.acknowledged(agent, trigger):
                     acknowledged = True
                     ack_elapsed = backend.now() - start
                 now = backend.now()
-                if not acknowledged and now >= ack_deadline:
+                if not native_review_request and not acknowledged and now >= ack_deadline:
                     state = "unacknowledged"
                     break
                 if now >= review_deadline:
                     state = "timed_out"
                     break
-                if acknowledged:
+                if acknowledged or native_review_request:
                     backend.sleep(min(15, review_deadline - now))
                 else:
                     backend.sleep(min(5, ack_deadline - now))

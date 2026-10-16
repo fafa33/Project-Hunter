@@ -286,7 +286,7 @@ def evaluate_commit(binding: WriterIdentityBinding, commit: CommitProvenance) ->
 
 
 def evaluate_range(binding: WriterIdentityBinding, commits: tuple[CommitProvenance, ...]) -> ProvenanceVerdict:
-    """Evaluate every commit in the governed range under one bound writer.
+    """Evaluate every commit in the governed range under its own bound writer.
 
     An empty range is not silently admissible: a range that carries no commit
     evidence is exactly the state that cannot be checked, so it fails closed.
@@ -307,10 +307,11 @@ def evaluate_range(binding: WriterIdentityBinding, commits: tuple[CommitProvenan
             False,
             "governed range mixes authorization-bound writers: " + ", ".join(sorted(writers)),
         )
-    writer = sorted(writers)[0]
+    writer = sorted(writers)[0] if len(writers) == 1 else ""
+    description = f"writer {writer!r}" if writer else "authorized writers " + ", ".join(sorted(writers))
     return ProvenanceVerdict(
         True,
-        f"{len(commits)} commit(s) in the governed range are bound to writer {writer!r}",
+        f"{len(commits)} commit(s) in the governed range are bound to {description}",
         writer,
     )
 

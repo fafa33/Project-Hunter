@@ -3,11 +3,25 @@ from __future__ import annotations
 import importlib
 from pathlib import Path
 
+import pytest
+
 core = importlib.import_module("hunter_governance_review_v2")
 transport = importlib.import_module("hunter_github_transport")
 
 
 HEAD = "b" * 40
+
+
+@pytest.fixture(autouse=True)
+def _stub_candidate_admission_pr_head(monkeypatch):
+    original = core.request_json
+
+    def guarded(*args, **kwargs):
+        if len(args) >= 4 and args[2] == "GET" and str(args[3]).startswith("pulls/"):
+            return {"head": {"sha": HEAD}}
+        return original(*args, **kwargs)
+
+    monkeypatch.setattr(core, "request_json", guarded)
 
 
 def _pr(mergeable: bool | None) -> dict:
@@ -150,6 +164,7 @@ def test_protected_preflight_ordinary_candidate_cannot_self_authorize(monkeypatc
         lambda *_args: ("success", "ingress provenance verified"),
     )
     monkeypatch.setattr(core, "verify_pre_ready_hostile_review", lambda *_args: ("success", "reviewed"))
+    monkeypatch.setattr(core, "read_unresolved_review_threads", lambda *_args: ((), None))
     monkeypatch.setattr(
         core,
         "read_trusted_upgrade_status",
@@ -178,6 +193,12 @@ def test_workflow_uses_only_trusted_v2_controller_with_safe_bootstrap():
     # copy of this file, so `actions: write` here would be candidate-reachable.
     assert "python scripts/hunter_review_orchestrator.py" not in workflow
     assert "actions: write" not in workflow
+    # A status-writing workflow must never run a candidate-authored definition.
+    assert "  pull_request_target:" in workflow
+    assert "  pull_request:" not in workflow
+    assert "  statuses: write" in workflow
+    assert "path: engine" in workflow
+    assert "path: candidate" not in workflow
     assert "actions: read" in workflow
     assert "hunter_governance_review_v2.py" in workflow
 
@@ -215,7 +236,7 @@ def test_event_reconcile_scopes_to_triggering_pr_and_reserves_full_sweep_for_rec
         'elif [[ "${event_name}" == "workflow_run" '
         '&& "${EVENT_WORKFLOW_RUN_NAME}" == "Hunter Reviewer Collector" ]]; then'
     ) in workflow
-    assert 'else\n            pr_numbers="$(' in workflow
+    assert "gh api --paginate" in workflow
 
 
 def test_reconcile_continues_after_one_pr_failure_and_drops_checkout_credentials():
@@ -234,23 +255,17 @@ def test_reconcile_continues_after_one_pr_failure_and_drops_checkout_credentials
         end = workflow.index(f"  {next_name}:", start)
         return workflow[start:end]
 
-    workflow_run = trigger_block("workflow_run", "pull_request_review")
-    review = trigger_block("pull_request_review", "pull_request_review_comment")
-    review_comment = trigger_block("pull_request_review_comment", "schedule")
-
+    workflow_run = trigger_block("workflow_run", "pull_request_target")
     assert "- Hunter / Pre-PR Preflight" in workflow_run
     assert "- Hunter Reviewer Collector" in workflow_run
     assert "- completed" in workflow_run
-    assert "- submitted" in review
-    assert "- edited" in review
-    assert "- dismissed" in review
-    assert "- created" in review_comment
-    assert "- edited" in review_comment
-    assert "- deleted" in review_comment
-    # Review-state changes must reconcile immediately; the scheduled sweep is
-    # recovery only and must not be the normal authority-refresh path.
-    assert workflow.index("pull_request_review:") < workflow.index("schedule:")
-    assert workflow.index("pull_request_review_comment:") < workflow.index("schedule:")
+    # Approval-held review events must not reappear on the privileged gate.
+    assert "  pull_request_review:" not in workflow
+    assert "  pull_request_review_comment:" not in workflow
+    assert "  pull_request_target:" in workflow
+    assert 'cron: "*/5 * * * *"' in workflow
+    # Human review changes converge on the bounded trusted sweep, not on an
+    # approval-held event; the previous immediate-review assertion was stale.
 
 
 ANCESTOR = "d" * 40
@@ -348,7 +363,40 @@ def _admission(monkeypatch, commits: list[dict], *, hosted_ci: bool = False, pol
     # (tests/test_issue_412_prevention_gate.py). Stubbing it keeps these fixtures
     # on the signature/branch-preflight contract they were written for.
     monkeypatch.setattr(core, "verify_pre_ready_hostile_review", lambda *_args: ("success", "reviewed"))
+    monkeypatch.setattr(core, "read_unresolved_review_threads", lambda *_args: ((), None))
     return core.candidate_admission("fafa33/Project-Hunter", "token", HEAD, 501)
+
+
+def test_candidate_admission_blocks_unresolved_threads_before_trusted_preflight_success(monkeypatch) -> None:
+    """DFF-053: a green trusted proof cannot mask a live GitHub review finding."""
+    monkeypatch.setattr(
+        core, "read_pr_changed_paths", lambda *_args: (True, ("scripts/hunter_defect_prevention_preflight.py",), None)
+    )
+    monkeypatch.setattr(core, "read_head_preflight_mode", lambda *_args: ("normal", None))
+    monkeypatch.setattr(core, "verify_code_write_ingress_provenance", lambda *_args: ("success", "trusted ingress"))
+    monkeypatch.setattr(core, "read_unresolved_review_threads", lambda *_args: (("THREAD_OPEN",), None))
+    monkeypatch.setattr(core, "verify_pre_ready_hostile_review", lambda *_args: ("success", "reviewed"))
+    monkeypatch.setattr(core, "read_trusted_upgrade_status", lambda *_args: ("success", "trusted proof passed"))
+
+    state, description = core.candidate_admission("fafa33/Project-Hunter", "token", HEAD, 569)
+
+    assert state == "failure"
+    assert description == "BLOCKING_FINDINGS: 1 unresolved review thread(s) remain"
+
+
+def test_candidate_admission_fails_closed_when_thread_evidence_is_unavailable(monkeypatch) -> None:
+    """DFF-053: inability to prove zero unresolved threads cannot become green."""
+    monkeypatch.setattr(
+        core, "read_pr_changed_paths", lambda *_args: (True, ("scripts/hunter_defect_prevention_preflight.py",), None)
+    )
+    monkeypatch.setattr(core, "read_head_preflight_mode", lambda *_args: ("normal", None))
+    monkeypatch.setattr(core, "verify_code_write_ingress_provenance", lambda *_args: ("success", "trusted ingress"))
+    monkeypatch.setattr(core, "read_unresolved_review_threads", lambda *_args: ((), "review threads unavailable"))
+
+    state, description = core.candidate_admission("fafa33/Project-Hunter", "token", HEAD, 569)
+
+    assert state == "failure"
+    assert description == "BLOCKING_FINDINGS: review threads unavailable"
 
 
 def test_custom_identity_api_only_write_is_rejected(monkeypatch) -> None:
@@ -701,3 +749,11 @@ def test_connector_github_unavailable_is_pending_not_semantic_failure(monkeypatc
     state, description = core.verify_code_write_ingress_provenance("fafa33/Project-Hunter", "token", HEAD, 501)
     assert state == "pending"
     assert "temporarily unavailable" in description
+
+
+def test_scheduled_governance_sweeps_all_open_pr_pages():
+    from pathlib import Path
+
+    workflow = (Path(__file__).resolve().parents[1] / ".github/workflows/hunter-governance-reconcile.yml").read_text()
+    assert "gh api --paginate" in workflow
+    assert "repos/${GITHUB_REPOSITORY}/pulls?state=open&base=main&per_page=100" in workflow

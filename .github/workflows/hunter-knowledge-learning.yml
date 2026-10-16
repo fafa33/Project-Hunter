@@ -1,14 +1,14 @@
 name: Hunter Knowledge Learning
 on:
-  pull_request_review:
-    types: [submitted, edited, dismissed]
-  pull_request_review_comment:
-    types: [created, edited, deleted]
+  # Copilot review events are approval-held by GitHub before jobs start.
+  # Periodic trusted current-state catch-up covers reviews without bot runs.
+  schedule:
+    - cron: "17 * * * *"
 permissions:
   contents: read
   pull-requests: read
 concurrency:
-  group: hunter-knowledge-learning-${{ github.event.pull_request.number }}
+  group: hunter-knowledge-learning-${{ github.event.pull_request.number || github.event.inputs.pr_number || github.event_name }}
   cancel-in-progress: true
 jobs:
   learn:
@@ -38,16 +38,43 @@ jobs:
             echo "available=false" >> "$GITHUB_OUTPUT"
             echo "Bootstrap: learning engine is not on trusted default branch yet; no candidate code will be executed."
           fi
+      - name: Resolve exact PR for review or scheduled catch-up
+        id: target
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPOSITORY: ${{ github.repository }}
+          EVENT_PR: ${{ github.event.pull_request.number }}
+        run: |
+          set -euo pipefail
+          if [[ -n "${EVENT_PR}" ]]; then
+            echo "number=${EVENT_PR}" >> "$GITHUB_OUTPUT"
+          else
+            # Rotate one PR per run across ALL open main PRs. The REST API
+            # pagination is required: --limit 100 silently starves later PRs.
+            open_pr_numbers="$(gh api --paginate "repos/${REPOSITORY}/pulls?state=open&base=main&per_page=100" --jq '.[].number' | sort -n)"
+            open_prs=()
+            if [[ -n "${open_pr_numbers}" ]]; then
+              mapfile -t open_prs <<< "${open_pr_numbers}"
+            fi
+            hour="$(( $(date -u +%s) / 3600 ))"
+            number=""
+            if (( ${#open_prs[@]} > 0 )); then
+              number="${open_prs[$((hour % ${#open_prs[@]}))]}"
+            fi
+            echo "number=${number}" >> "$GITHUB_OUTPUT"
+          fi
       - name: Build exact-head learning artifact
-        if: steps.engine.outputs.available == 'true'
+        if: steps.engine.outputs.available == 'true' && steps.target.outputs.number != ''
         env:
           PYTHONPATH: src
           GITHUB_TOKEN: ${{ github.token }}
           REPOSITORY: ${{ github.repository }}
-          PR_NUMBER: ${{ github.event.pull_request.number }}
-          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
-          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          PR_NUMBER: ${{ steps.target.outputs.number }}
         run: |
+          HEAD_SHA="$(gh pr view "$PR_NUMBER" --repo "$REPOSITORY" --json headRefOid --jq .headRefOid)"
+          BASE_SHA="$(gh pr view "$PR_NUMBER" --repo "$REPOSITORY" --json baseRefOid --jq .baseRefOid)"
+          echo "HEAD_SHA=$HEAD_SHA" >> "$GITHUB_ENV"
+          echo "BASE_SHA=$BASE_SHA" >> "$GITHUB_ENV"
           python scripts/hunter_collect_learning_observations.py --repository "$REPOSITORY" --pr "$PR_NUMBER" --head "$HEAD_SHA" --base "$BASE_SHA" > github-learning-observations.json
           python scripts/hunter_collect_sonar_observations.py --project "fafa33_Project-Hunter" --pr "$PR_NUMBER" --head "$HEAD_SHA" --base "$BASE_SHA" > sonar-learning-observations.json
           python - <<'PY'
@@ -58,7 +85,7 @@ jobs:
           PY
           python scripts/hunter_incremental_knowledge.py --pr "$PR_NUMBER" --head "$HEAD_SHA" --base "$BASE_SHA" --observations learning-observations.json > hunter-learning-ledger.json
       - name: Render controlled canonical DPM candidate
-        if: steps.engine.outputs.available == 'true'
+        if: steps.engine.outputs.available == 'true' && steps.target.outputs.number != ''
         env:
           PYTHONPATH: src
         run: python scripts/hunter_integrate_learning_ledger.py > hunter-defect-registry-candidate.json
@@ -73,17 +100,17 @@ jobs:
         # write. continue-on-error keeps a failure here from
         # skipping the artifact upload below or affecting any required check
         # -- this workflow is not in the required-checks list either way.
-        if: steps.engine.outputs.available == 'true'
+        if: steps.engine.outputs.available == 'true' && steps.target.outputs.number != ''
         continue-on-error: true
         env:
           PYTHONPATH: src
-          PR_NUMBER: ${{ github.event.pull_request.number }}
-          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
-          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          PR_NUMBER: ${{ steps.target.outputs.number }}
+          HEAD_SHA: ${{ env.HEAD_SHA }}
+          BASE_SHA: ${{ env.BASE_SHA }}
         run: |
           python scripts/hunter_canonicalize_learning.py --pr "$PR_NUMBER" --head "$HEAD_SHA" --base "$BASE_SHA" --observations learning-observations.json --dry-run > hunter-canonicalization-dry-run.log
       - name: Publish non-authoritative learning artifact
-        if: steps.engine.outputs.available == 'true'
+        if: steps.engine.outputs.available == 'true' && steps.target.outputs.number != ''
         uses: actions/upload-artifact@v4
         with:
           name: hunter-learning
