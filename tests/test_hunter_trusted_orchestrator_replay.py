@@ -1295,6 +1295,11 @@ def _write_trusted_fetched_files(work: Path) -> None:
         encoding="utf-8",
     )
     (work / "trusted-main-sha.fetched").write_text(replay._trusted_harness_sha(), encoding="utf-8")
+    workflow_text = (repo_root / ".github" / "workflows" / "hunter-trusted-orchestrator-replay-validate.yml").read_text(
+        encoding="utf-8"
+    )
+    (work / "executed-validate-workflow.fetched").write_text(workflow_text, encoding="utf-8")
+    (work / "trusted-validate-workflow.fetched").write_text(workflow_text, encoding="utf-8")
 
 
 def test_checkout_free_inline_validator_accepts_a_genuinely_good_receipt(tmp_path):
@@ -1332,6 +1337,26 @@ def test_checkout_free_inline_validator_rejects_a_forged_candidate_sha(tmp_path)
     # Same disposition as the trusted module's own validation for the same forgery.
     module_errors = replay.validate_receipt_trusted_fields(receipt, pr_number=535, candidate_sha="a" * 40)
     assert any("candidate_sha" in e for e in module_errors)
+
+
+def test_checkout_free_inline_validator_rejects_a_tampered_executed_workflow_definition(tmp_path):
+    receipt, _root = _good_receipt(tmp_path)
+    (tmp_path / "replay-receipt.json").write_text(json.dumps(receipt), encoding="utf-8")
+    (tmp_path / "digest-check.json").write_text(json.dumps({"errors": []}), encoding="utf-8")
+    _write_trusted_fetched_files(tmp_path)
+    # A candidate keeps the workflow name and every receipt field intact while
+    # swapping the executed definition's trigger/steps/permissions.
+    (tmp_path / "executed-validate-workflow.fetched").write_text(
+        "name: Hunter / Trusted Orchestrator Replay Validate\non:\n  pull_request_target:\n",
+        encoding="utf-8",
+    )
+
+    returncode, _stdout, stderr, github_output = _run_inline_validate_script(
+        tmp_path, conclusion="success", pr_number=535, candidate_sha="a" * 40
+    )
+    assert returncode == 0  # the inline script itself exits 0; failure is reported via GITHUB_OUTPUT
+    assert "trusted base-approved definition" in stderr
+    assert "result=failure" in github_output
 
 
 def test_checkout_free_inline_validator_rejects_incomplete_evidence():
@@ -1516,11 +1541,14 @@ def test_trusted_replay_workflows_separate_candidate_and_publisher_permissions()
     root = Path(__file__).resolve().parents[1] / ".github" / "workflows"
     validate = yaml.safe_load((root / "hunter-trusted-orchestrator-replay-validate.yml").read_text())
     publish = yaml.safe_load((root / "hunter-trusted-orchestrator-replay-publish.yml").read_text())
-    # Base-owned validation is mandatory: PR-authored workflow YAML must not
-    # be able to forge a passing validation job or its upstream artifacts.
+    # The candidate-touching validate workflow runs unprivileged on
+    # `pull_request`, never the privileged `pull_request_target`; the
+    # privileged publisher (workflow_run, base-owned) independently
+    # re-derives every trusted quantity and re-verifies the executed
+    # workflow definition against the trusted base definition.
     validate_header = (root / "hunter-trusted-orchestrator-replay-validate.yml").read_text().split("jobs:", 1)[0]
-    assert "pull_request_target:" in validate_header
-    assert "pull_request:" not in validate_header
+    assert "pull_request:" in validate_header
+    assert "pull_request_target:" not in validate_header
     assert "workflow_dispatch:" not in validate_header
     assert "workflow_run:" not in validate_header
     assert validate["jobs"]
@@ -1620,22 +1648,27 @@ def test_status_publication_runs_after_upstream_failure_so_status_never_stays_pe
     assert "steps.context.outcome" in publish["if"]
 
 
-def test_publisher_selects_the_latest_run_by_associated_pr_head_not_by_synthetic_head_sha():
+def test_publisher_binds_to_the_runs_authoritative_head_sha_not_the_dynamic_pr_head_field():
     import yaml
 
     doc = yaml.safe_load(Path(".github/workflows/hunter-trusted-orchestrator-replay-publish.yml").read_text())
     context = next(s for s in doc["jobs"]["publish-proof"]["steps"] if s.get("id") == "context")["run"]
-    assert "pull_requests[0].head.sha" in context and "head_sha=${head_sha}" not in context
+    # `.pull_requests[0].head.sha` is resolved dynamically by the API to the
+    # PR's *current* head, so it cannot identify the commit the triggering run
+    # actually executed; the run's own `head_sha` is authoritative.
+    assert ".head_sha" in context
+    assert "pull_requests[0].head.sha" not in context
     assert doc["jobs"]["publish-proof"]["concurrency"]["cancel-in-progress"] is False
 
 
-def test_publisher_latest_run_match_is_bound_to_the_pr_number_as_well_as_the_head_sha():
+def test_publisher_latest_run_match_is_bound_to_the_exact_run_head_sha():
     import yaml
 
     doc = yaml.safe_load(Path(".github/workflows/hunter-trusted-orchestrator-replay-publish.yml").read_text())
     context = next(s for s in doc["jobs"]["publish-proof"]["steps"] if s.get("id") == "context")["run"]
     assert "pull_requests[0].number" in context
-    assert "$3 == sha && $4 == pr" in context and '-v pr="$pr_number"' in context
+    assert "$4 == sha" in context and '-v sha="$run_sha"' in context
+    assert "$3 == sha && $4 == pr" not in context and '-v pr="$pr_number"' not in context
 
 
 def test_publisher_latest_run_lookup_is_paginated_and_bound_to_exact_pr_head():
@@ -1644,12 +1677,11 @@ def test_publisher_latest_run_lookup_is_paginated_and_bound_to_exact_pr_head():
     doc = yaml.safe_load(Path(".github/workflows/hunter-trusted-orchestrator-replay-publish.yml").read_text())
     context = next(s for s in doc["jobs"]["publish-proof"]["steps"] if s.get("id") == "context")["run"]
     assert "--paginate" in context
-    assert "-f event=pull_request_target" in context
-    assert ".pull_requests[0].head.sha" in context
-    assert ".pull_requests[0].number" in context
-    assert '-v sha="$head_sha"' in context
-    assert '-v pr="$pr_number"' in context
-    assert "$3 == sha && $4 == pr" in context
+    assert "-f event=pull_request" in context
+    assert ".head_sha" in context
+    assert "pull_requests[0].head.sha" not in context
+    assert '-v sha="$run_sha"' in context
+    assert "$4 == sha" in context
     assert 'if [ "$latest_run" != "$RUN_ID" ]; then' in context
     assert '-f branch="$head_ref"' not in context
 
@@ -1863,7 +1895,8 @@ def test_publisher_rechecks_the_latest_run_immediately_before_publishing():
     assert names.index("recheck") < names.index(publish["name"])
     assert "no longer the latest validation run" in recheck["run"] and "exit 1" in recheck["run"]
     assert "--paginate" in recheck["run"]
-    assert ".head.sha" in recheck["run"] and 'live_head_sha" != "$HEAD_SHA"' in recheck["run"]
+    assert ".head.sha" in recheck["run"] and 'pr_head" != "$HEAD_SHA"' in recheck["run"]
+    assert "-f event=pull_request" in recheck["run"]
     assert "steps.recheck.outcome == 'success'" in publish["if"]
 
 
