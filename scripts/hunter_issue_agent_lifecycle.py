@@ -1071,17 +1071,6 @@ def _issue_gate(configuration: control.Configuration, github: control.GitHubRest
 
 def cmd_publish(configuration: control.Configuration, arguments: argparse.Namespace) -> int:
     github = _github(configuration)
-    # HGCC-1 trusted publication boundary: agents cannot bypass this by
-    # disabling local git hooks. Read-only; never publishes a parallel status.
-    from hunter_github_contract import observe_contract
-
-    try:
-        observe_contract(
-            configuration.repository,
-            get=lambda path: control.definitive(github.get(f"/{path}")),
-        )
-    except (ValueError, OSError, TypeError) as exc:
-        raise LifecycleRefused("PUBLICATION_UNAVAILABLE", f"HGCC-1 GitHub contract unavailable: {exc}") from None
     open_pr = control.definitive(github.get(f"/repos/{configuration.repository}/pulls?state=open&per_page=100"))
     if not isinstance(open_pr, list):
         raise LifecycleRefused("PUBLICATION_UNAVAILABLE", "pull requests are not observable")

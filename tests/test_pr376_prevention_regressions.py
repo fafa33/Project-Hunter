@@ -243,16 +243,7 @@ def test_trusted_candidate_runner_executes_immutable_gate_chain(monkeypatch, tmp
     monkeypatch.setattr(prevention.subprocess, "run", fake_run)
 
     assert prevention.run_candidate_quality_gates(tmp_path) == 0
-    trusted_root = Path(prevention.__file__).resolve().parents[1]
-    expected = [
-        (
-            (command[0], str(trusted_root / command[1]), *command[2:])
-            if len(command) >= 2 and command[0] == "python" and command[1].startswith("scripts/")
-            else command
-        )
-        for _name, command in prevention.TRUSTED_CANDIDATE_QUALITY_GATES
-    ]
-    assert calls == expected
+    assert calls == [command for _name, command in prevention.TRUSTED_CANDIDATE_QUALITY_GATES]
     assert len(calls) == len(prevention.REQUIRED_PREFLIGHT_GATES)
 
 

@@ -282,8 +282,7 @@
         "login": "fafa33",
         "channel": "clone-capable",
         "git_names": [
-          "Farhad5778",
-          "fafa33"
+          "Farhad5778"
         ],
         "git_emails": [
           "34549283+fafa33@users.noreply.github.com",
@@ -378,7 +377,6 @@
       "scripts/hunter_merge_readiness_v2.py",
       "scripts/hunter_workflow_state.py",
       "scripts/hunter_github_transport.py",
-      "scripts/hunter_github_contract.py",
       "scripts/hunter_pre_push.py",
       "scripts/hunter_validation_receipt.py",
       "scripts/hunter_validation_reuse.py",

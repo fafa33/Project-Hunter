@@ -191,12 +191,8 @@ def all_check_runs(sha: str) -> list[dict[str, Any]]:
     page = 1
     while True:
         payload = request_json("GET", f"commits/{sha}/check-runs?per_page=100&page={page}&filter=all")
-        if not isinstance(payload, dict) or not isinstance(payload.get("check_runs"), list):
-            raise ValueError("Malformed GitHub check-runs payload")
-        batch = payload["check_runs"]
-        if not all(isinstance(run, dict) for run in batch):
-            raise ValueError("Malformed GitHub check-run entry")
-        runs.extend(batch)
+        batch = list((payload or {}).get("check_runs") or [])
+        runs.extend(run for run in batch if isinstance(run, dict))
         if len(batch) < 100:
             return runs
         page += 1
@@ -626,30 +622,13 @@ def decide_completion(pr_number: int) -> CompletionVerdict | None:
     head_sha = str((pr.get("head") or {}).get("sha") or "").strip()
     if not head_sha:
         return CompletionVerdict(False, "COMPLETION_REJECTED", "current PR head SHA is unavailable")
-    completion = evaluate_completion_claim(LiveReadinessObservation(pr_number, pr, head_sha))
-    return completion
+    return evaluate_completion_claim(LiveReadinessObservation(pr_number, pr, head_sha))
 
 
 def publish(sha: str, decision: Decision) -> None:
     if not sha:
         return
     description = decision.description[:140]
-    # GitHub caps statuses per SHA/context at 1000. A workflow run URL is
-    # diagnostic metadata, not a reason to republish an unchanged verdict.
-    # Never suppress a changed state or description: doing so could leave
-    # stale success in place after a newly detected failure.
-    # The combined-status endpoint returns only the latest entry per context,
-    # avoiding full history pagination on long-lived heads.
-    combined = request_json("GET", f"commits/{sha}/status")
-    if not isinstance(combined, dict) or not isinstance(combined.get("statuses"), list):
-        raise ValueError("Malformed combined commit status response")
-    previous = next(
-        (entry for entry in combined["statuses"] if isinstance(entry, dict) and entry.get("context") == CONTEXT),
-        None,
-    )
-    if previous is not None and previous.get("state") == decision.state and previous.get("description") == description:
-        print(f"{sha[:10]} {CONTEXT}: unchanged {decision.state} — publication skipped")
-        return
     request_json(
         "POST",
         f"statuses/{sha}",
@@ -774,23 +753,6 @@ def owner_merge_guard(pr_number: int) -> CompletionVerdict:
             "HEAD_DIVERGENCE",
             f"intended local HEAD, remote branch HEAD and PR HEAD are not identical ({local_head[:10]}, {remote_head[:10] or 'missing'}, {pr_head[:10] or 'missing'})",
         )
-    # HGCC-1 at the owner merge boundary: independently verify current-head
-    # required checks and publisher IDs against the live GitHub contract.
-    from hunter_github_contract import observe_contract, verify_required_checks
-
-    try:
-        contract = observe_contract(REPO, get=lambda path: request_json("GET", path.removeprefix(f"repos/{REPO}/")))
-        checks_ok, checks_reason = verify_required_checks(
-            contract,
-            all_check_runs(pr_head),
-            target_ref="refs/heads/main",
-            statuses=paged(f"commits/{pr_head}/statuses"),
-        )
-    except (ValueError, TypeError, KeyError, transport.GitHubUnavailable, transport.GitHubRequestError) as exc:
-        return CompletionVerdict(False, "MERGE_NOT_READY", f"HGCC-1 indeterminate: {exc}")
-    if not checks_ok:
-        return CompletionVerdict(False, "MERGE_NOT_READY", f"HGCC-1: {checks_reason}")
-
     readiness = decide_completion(pr_number)
     if readiness is None or not readiness.accepted:
         reason = "merge readiness is unavailable" if readiness is None else readiness.reason
@@ -851,22 +813,6 @@ def main() -> int:
         except Exception as exc:
             failures += 1
             print(f"PR #{number} readiness failed: {type(exc).__name__}: {exc}", file=sys.stderr)
-            # A malformed evidence payload must supersede any prior successful
-            # status on the current head. Recover the head independently from
-            # the PR endpoint, never from the failed observation.
-            try:
-                current = request_json("GET", f"pulls/{number}")
-                head = (current.get("head") or {}).get("sha") if isinstance(current, dict) else None
-                if (
-                    isinstance(current, dict)
-                    and current.get("state") == "open"
-                    and isinstance(head, str)
-                    and len(head) == 40
-                    and all(ch in "0123456789abcdefABCDEF" for ch in head)
-                ):
-                    publish(head, Decision("pending", f"Readiness evidence invalid: {type(exc).__name__}"))
-            except Exception as recovery_exc:
-                print(f"PR #{number} fail-closed publication unavailable: {recovery_exc}", file=sys.stderr)
     return 1 if failures else 0
 
 

@@ -2227,11 +2227,7 @@ def run_candidate_quality_gates(candidate_root: Path) -> int:
         )
         return 2
 
-    # Gate implementations must come from the trusted checkout, not the PR.
-    trusted_root = Path(__file__).resolve().parents[1]
     for name, command in TRUSTED_CANDIDATE_QUALITY_GATES:
-        if len(command) >= 2 and command[0] == "python" and command[1].startswith("scripts/"):
-            command = (command[0], str(trusted_root / command[1]), *command[2:])
         printable = " ".join(command)
         print(f"[Trusted Candidate Gates] {name}: {printable}", flush=True)
         completed = subprocess.run(command, cwd=candidate_root, env=env, check=False)

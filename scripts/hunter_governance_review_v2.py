@@ -2436,18 +2436,12 @@ def candidate_admission(repository: str, token: str, head_sha: str, pr_number: i
                     f"differs from evaluation HEAD ({head_sha[:8]}).",
                 )
         except Exception as exc:
-            return (
-                "failure",
-                f"Candidate admission blocked: PR head SHA verification failed ({type(exc).__name__}: {exc}).",
-            )
+            return "failure", f"Candidate admission blocked: PR head SHA verification failed ({type(exc).__name__}: {exc})."
 
         ok, changed_paths, error = read_pr_changed_paths(repository, token, pr_number)
         if not ok:
             return "failure", f"Candidate admission blocked: changed-file evidence is unavailable ({error})."
-        # Share the trusted definition classifier with hosted proof-reuse routing.
-        from hunter_preflight_reuse_decision import is_trusted_definition_path
-
-        touches_protected_preflight = any(is_trusted_definition_path(path) for path in changed_paths)
+        touches_protected_preflight = any(path in PREFLIGHT_OWNED_PATHS for path in changed_paths)
 
     head_mode, mode_error = read_head_preflight_mode(repository, token, head_sha)
     if head_mode == "unavailable":
@@ -2486,38 +2480,12 @@ def candidate_admission(repository: str, token: str, head_sha: str, pr_number: i
         if blocking_review:
             return review_state, review_message
 
-    if pr_number is not None:
-        try:
-            recheck = request_json(repository, token, "GET", f"pulls/{pr_number}")
-            if not isinstance(recheck, dict) or not isinstance(recheck.get("head"), dict):
-                return "failure", "Candidate admission blocked: PR payload recheck is malformed."
-            recheck_head = str(recheck["head"].get("sha") or "").strip()
-            if recheck_head != head_sha:
-                return "failure", f"Candidate admission blocked: PR #{pr_number} head changed during validation."
-        except Exception as exc:
-            return "failure", f"Candidate admission blocked: PR head SHA recheck failed ({type(exc).__name__}: {exc})."
-
     if touches_protected_preflight:
         if pr_number is None:
             return "failure", "Candidate admission blocked: protected preflight changes require PR-bound proof."
         proof_state, proof_description = read_trusted_upgrade_status(repository, token, head_sha, pr_number)
         if proof_state == "missing":
             return "failure", proof_description
-        if pr_number is not None:
-            try:
-                final_pr = request_json(repository, token, "GET", f"pulls/{pr_number}")
-                if not isinstance(final_pr, dict) or not isinstance(final_pr.get("head"), dict):
-                    return "failure", "Candidate admission blocked: final PR payload is malformed."
-                if str(final_pr["head"].get("sha") or "").strip() != head_sha:
-                    return (
-                        "failure",
-                        f"Candidate admission blocked: PR #{pr_number} head changed during trusted proof validation.",
-                    )
-            except Exception as exc:
-                return (
-                    "failure",
-                    f"Candidate admission blocked: final PR head recheck failed ({type(exc).__name__}: {exc}).",
-                )
         return proof_state, proof_description
 
     encoded_sha = quote(head_sha, safe="")

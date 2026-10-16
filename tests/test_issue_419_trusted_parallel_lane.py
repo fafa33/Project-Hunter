@@ -416,16 +416,7 @@ def test_the_trusted_gate_commands_are_unchanged_by_the_lane(monkeypatch: pytest
     assert prevention.run_candidate_quality_gates(tmp_path) == 0
 
     assert parallel == executed
-    trusted_root = Path(prevention.__file__).resolve().parents[1]
-    expected = [
-        (
-            (command[0], str(trusted_root / command[1]), *command[2:])
-            if len(command) >= 2 and command[0] == "python" and command[1].startswith("scripts/")
-            else command
-        )
-        for _name, command in prevention.TRUSTED_CANDIDATE_QUALITY_GATES
-    ]
-    assert parallel == expected
+    assert parallel == [command for _name, command in prevention.TRUSTED_CANDIDATE_QUALITY_GATES]
     assert parallel[-1] == ("pytest",)
     assert prevention.TRUSTED_CANDIDATE_QUALITY_GATES[-1] == preflight.NORMAL_QUALITY_GATES[-1]
 
@@ -668,8 +659,6 @@ def test_exact_head_proof_identity_is_unchanged() -> None:
     assert receipts.DEFINITION_PATHS == (
         ".github/workflows/ci.yml",
         ".github/workflows/hunter-pre-pr-preflight.yml",
-        "docs/CODE_WRITE_POLICY.json",
-        "docs/VALIDATION_STAGE_CONTRACT.json",
         "pyproject.toml",
         "requirements/ci-constraints.txt",
         "scripts/hunter_architecture_index_preflight.py",

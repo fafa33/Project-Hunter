@@ -424,10 +424,6 @@ def test_deterministic_preflight_failure_cannot_cross_normal_push_boundary(tmp_p
         raise AssertionError(args)
 
     monkeypatch.setattr(hunter_pre_push, "_run_git", fake_git)
-    monkeypatch.setattr(hunter_pre_push, "_repository_from_remotes", lambda: "fafa33/Project-Hunter")
-    monkeypatch.setattr(
-        hunter_pre_push, "_run_hgcc_contract_check", lambda _repo: type("Result", (), {"returncode": 0, "stderr": ""})()
-    )
     monkeypatch.setattr(hunter_pre_push.os, "chdir", lambda _path: None)
     # The Issue #412 provenance and receipt boundaries are enforced by the same
     # entrypoint and have their own regressions; stubbing them keeps this fixture

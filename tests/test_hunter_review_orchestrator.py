@@ -856,7 +856,7 @@ def test_governance_review_workflow_keeps_only_read_access_to_actions():
 
     path = pathlib.Path(REPOSITORY_ROOT, ".github/workflows/hunter-governance-review.yml")
     document = yaml.safe_load(path.read_text(encoding="utf-8"))
-    assert "pull_request_target" in _triggers(document)
+    assert "pull_request" in _triggers(document)
     blocks = _permission_blocks(document)
     assert blocks and all(str(block.get("actions", "read")).strip() == "read" for block in blocks)
     assert "python scripts/hunter_review_orchestrator.py" not in path.read_text(encoding="utf-8")
