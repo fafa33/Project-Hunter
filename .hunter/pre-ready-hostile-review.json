@@ -179,6 +179,21 @@
       },
       {
         "evidence": "Applicable family included for independent review of current PR #611 content; no reviewer approval or completed adversarial sweep asserted.",
+        "family": "DFF-024",
+        "outcome": "clear"
+      },
+      {
+        "evidence": "Applicable family included for independent review of current PR #611 content; no reviewer approval or completed adversarial sweep asserted.",
+        "family": "DFF-025",
+        "outcome": "clear"
+      },
+      {
+        "evidence": "Applicable family included for independent review of current PR #611 content; no reviewer approval or completed adversarial sweep asserted.",
+        "family": "DFF-026",
+        "outcome": "clear"
+      },
+      {
+        "evidence": "Applicable family included for independent review of current PR #611 content; no reviewer approval or completed adversarial sweep asserted.",
         "family": "DFF-029",
         "outcome": "clear"
       },
@@ -199,7 +214,27 @@
       },
       {
         "evidence": "Applicable family included for independent review of current PR #611 content; no reviewer approval or completed adversarial sweep asserted.",
+        "family": "DFF-038",
+        "outcome": "clear"
+      },
+      {
+        "evidence": "Applicable family included for independent review of current PR #611 content; no reviewer approval or completed adversarial sweep asserted.",
+        "family": "DFF-039",
+        "outcome": "clear"
+      },
+      {
+        "evidence": "Applicable family included for independent review of current PR #611 content; no reviewer approval or completed adversarial sweep asserted.",
+        "family": "DFF-040",
+        "outcome": "clear"
+      },
+      {
+        "evidence": "Applicable family included for independent review of current PR #611 content; no reviewer approval or completed adversarial sweep asserted.",
         "family": "DFF-043",
+        "outcome": "clear"
+      },
+      {
+        "evidence": "Applicable family included for independent review of current PR #611 content; no reviewer approval or completed adversarial sweep asserted.",
+        "family": "DFF-053",
         "outcome": "clear"
       }
     ],
@@ -215,6 +250,12 @@
       {
         "blob_sha": "6bb0c0476c9f17e54cf8380c758af4a340fc099e",
         "path": "scripts/hunter_writer_commit_finalizer.py",
+        "previous_path": "",
+        "status": "added"
+      },
+      {
+        "blob_sha": "07b9630fbacf76ef10e04017cacd79095035250b",
+        "path": "tests/test_external_writer_review_head_recheck.py",
         "previous_path": "",
         "status": "added"
       },
@@ -237,6 +278,12 @@
         "status": "modified"
       },
       {
+        "blob_sha": "ec616cd684ceb5d3e522141d59d7f742b992cafe",
+        "path": "scripts/hunter_governance_review_v2.py",
+        "previous_path": "",
+        "status": "modified"
+      },
+      {
         "blob_sha": "acdf164a242c823531684934f65602a4dbfc714b",
         "path": "scripts/hunter_pre_ready_review.py",
         "previous_path": "",
@@ -255,11 +302,11 @@
         "status": "modified"
       }
     ],
-    "review_target_digest": "174e24bd8acce6ac5e0bac4216d212daf3e8128d572b4058890931b33eb9261f"
+    "review_target_digest": "dc09c8f25bf5a522bf28717674b1a66baa3f5180623c4bda4d22ca77a4636c00"
   },
-  "review_id": "2c5f8b8aada2eb74e6869253f64f1ebae517714b0c1e806f5ccefb0395c2a8e2",
+  "review_id": "cb85f2439fb28b52d0e2cf5db7dd26d759fb2084296aa38ad4690581cc77e418",
   "review_request": {
-    "claims_id": "2c5f8b8aada2eb74e6869253f64f1ebae517714b0c1e806f5ccefb0395c2a8e2",
+    "claims_id": "cb85f2439fb28b52d0e2cf5db7dd26d759fb2084296aa38ad4690581cc77e418",
     "schema": "hunter.review-request.v1"
   },
   "schema": "hunter.pre-ready-hostile-review.v1"
