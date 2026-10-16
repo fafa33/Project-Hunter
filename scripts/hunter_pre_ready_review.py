@@ -1777,6 +1777,11 @@ def main() -> int:
     mode.add_argument(
         "--request", metavar="JUDGEMENT", help="Prepare claims for authenticated external exact-HEAD review."
     )
+    mode.add_argument(
+        "--refresh-request",
+        metavar="JUDGEMENT",
+        help="Regenerate an exact-head request after remediation from freshly reviewed judgement JSON; never reuse reviewer authority.",
+    )
     parser.add_argument("--issue", help="Governing Issue number; required with --record or --request.")
     args = parser.parse_args()
 
@@ -1802,12 +1807,12 @@ def main() -> int:
         REVIEW_PATH.write_text(json.dumps(document, indent=2, sort_keys=True) + "\n", encoding="utf-8")
         print(f"[Pre-Ready Hostile Review] RECORDED: {REVIEW_RELATIVE_PATH} ({document['review_id'][:12]})")
 
-    if args.request:
+    if args.request or args.refresh_request:
         if not args.issue:
             print("[Pre-Ready Hostile Review] FAIL: --request requires --issue", file=sys.stderr)
             return 2
         try:
-            judgement = json.loads(Path(args.request).read_text(encoding="utf-8"))
+            judgement = json.loads(Path(args.request or args.refresh_request).read_text(encoding="utf-8"))
             if not isinstance(judgement, dict):
                 raise ValueError("review request judgement must be a JSON object")
             validate_request_governing_issue(str(args.issue), judgement)
@@ -1818,6 +1823,20 @@ def main() -> int:
                 base_ref=args.base_ref,
                 judgement=judgement,
             )
+            if args.refresh_request:
+                changes = local_changes(args.base, args.head)
+                families, family_error = load_families()
+                if family_error:
+                    raise ValueError(family_error)
+                # A new remediation head must receive a fresh judgement of the
+                # applicable defect families. No old reviewer verdict is copied.
+                applicable = set(applicable_family_ids(families, tuple(c.path for c in changes)))
+                supplied = {record.get("family") for record in judgement["defect_families"]}
+                if applicable != supplied:
+                    raise ValueError("remediation changed applicable defect families; refresh the judgement first")
+                verdict = verify_review_request(document, base_sha=args.base, changes=changes, families=families)
+                if not verdict.ok:
+                    raise ValueError(f"refreshed review request is invalid: {verdict.reason}")
         except (OSError, UnicodeError, json.JSONDecodeError, ValueError, GitEvidenceUnavailable) as exc:
             print(f"[Pre-Ready Hostile Review] FAIL: {type(exc).__name__}: {exc}", file=sys.stderr)
             return 2
