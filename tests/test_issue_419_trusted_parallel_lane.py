@@ -659,6 +659,8 @@ def test_exact_head_proof_identity_is_unchanged() -> None:
     assert receipts.DEFINITION_PATHS == (
         ".github/workflows/ci.yml",
         ".github/workflows/hunter-pre-pr-preflight.yml",
+        "docs/CODE_WRITE_POLICY.json",
+        "docs/VALIDATION_STAGE_CONTRACT.json",
         "pyproject.toml",
         "requirements/ci-constraints.txt",
         "scripts/hunter_architecture_index_preflight.py",

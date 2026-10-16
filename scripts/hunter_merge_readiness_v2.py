@@ -191,8 +191,12 @@ def all_check_runs(sha: str) -> list[dict[str, Any]]:
     page = 1
     while True:
         payload = request_json("GET", f"commits/{sha}/check-runs?per_page=100&page={page}&filter=all")
-        batch = list((payload or {}).get("check_runs") or [])
-        runs.extend(run for run in batch if isinstance(run, dict))
+        if not isinstance(payload, dict) or not isinstance(payload.get("check_runs"), list):
+            raise ValueError("Malformed GitHub check-runs payload")
+        batch = payload["check_runs"]
+        if not all(isinstance(run, dict) for run in batch):
+            raise ValueError("Malformed GitHub check-run entry")
+        runs.extend(batch)
         if len(batch) < 100:
             return runs
         page += 1
@@ -623,69 +627,29 @@ def decide_completion(pr_number: int) -> CompletionVerdict | None:
     if not head_sha:
         return CompletionVerdict(False, "COMPLETION_REJECTED", "current PR head SHA is unavailable")
     completion = evaluate_completion_claim(LiveReadinessObservation(pr_number, pr, head_sha))
-    if completion.accepted:
-        hgcc = _hgcc_hosted_verdict(head_sha)
-        if hgcc is not None:
-            return CompletionVerdict(False, "COMPLETION_REJECTED", hgcc.description)
     return completion
-
-
-def _hgcc_hosted_verdict(head_sha: str) -> Decision | None:
-    """Read live Rulesets at the existing hosted status publisher; no new status."""
-    from hunter_github_contract import observe_contract, verify_required_checks
-
-    try:
-        contract = observe_contract(REPO, get=lambda path: request_json("GET", path.removeprefix(f"repos/{REPO}/")))
-        # A publisher cannot require its own status to exist before publishing it.
-        # Preserve every other required context and its configured app identity.
-        contract = {
-            **contract,
-            "rulesets": [
-                {
-                    **ruleset,
-                    "rules": [
-                        (
-                            {
-                                **rule,
-                                "parameters": {
-                                    **rule.get("parameters", {}),
-                                    "required_status_checks": [
-                                        entry
-                                        for entry in rule.get("parameters", {}).get("required_status_checks", [])
-                                        if entry.get("context") != CONTEXT
-                                    ],
-                                },
-                            }
-                            if rule.get("type") == "required_status_checks"
-                            else rule
-                        )
-                        for rule in ruleset["rules"]
-                    ],
-                }
-                for ruleset in contract["rulesets"]
-            ],
-        }
-        ok, reason = verify_required_checks(
-            contract,
-            all_check_runs(head_sha),
-            target_ref="refs/heads/main",
-            statuses=paged(f"commits/{head_sha}/statuses"),
-        )
-    except (ValueError, TypeError, KeyError, RuntimeError, transport.GitHubUnavailable) as exc:
-        return Decision("pending", f"HGCC-1 indeterminate: {exc}")
-    if not ok:
-        return Decision("pending", f"HGCC-1: {reason}")
-    return None
 
 
 def publish(sha: str, decision: Decision) -> None:
     if not sha:
         return
-    if decision.state == "success":
-        hgcc = _hgcc_hosted_verdict(sha)
-        if hgcc is not None:
-            decision = hgcc
     description = decision.description[:140]
+    # GitHub caps statuses per SHA/context at 1000. A workflow run URL is
+    # diagnostic metadata, not a reason to republish an unchanged verdict.
+    # Never suppress a changed state or description: doing so could leave
+    # stale success in place after a newly detected failure.
+    # The combined-status endpoint returns only the latest entry per context,
+    # avoiding full history pagination on long-lived heads.
+    combined = request_json("GET", f"commits/{sha}/status")
+    if not isinstance(combined, dict) or not isinstance(combined.get("statuses"), list):
+        raise ValueError("Malformed combined commit status response")
+    previous = next(
+        (entry for entry in combined["statuses"] if isinstance(entry, dict) and entry.get("context") == CONTEXT),
+        None,
+    )
+    if previous is not None and previous.get("state") == decision.state and previous.get("description") == description:
+        print(f"{sha[:10]} {CONTEXT}: unchanged {decision.state} — publication skipped")
+        return
     request_json(
         "POST",
         f"statuses/{sha}",
@@ -887,6 +851,22 @@ def main() -> int:
         except Exception as exc:
             failures += 1
             print(f"PR #{number} readiness failed: {type(exc).__name__}: {exc}", file=sys.stderr)
+            # A malformed evidence payload must supersede any prior successful
+            # status on the current head. Recover the head independently from
+            # the PR endpoint, never from the failed observation.
+            try:
+                current = request_json("GET", f"pulls/{number}")
+                head = (current.get("head") or {}).get("sha") if isinstance(current, dict) else None
+                if (
+                    isinstance(current, dict)
+                    and current.get("state") == "open"
+                    and isinstance(head, str)
+                    and len(head) == 40
+                    and all(ch in "0123456789abcdefABCDEF" for ch in head)
+                ):
+                    publish(head, Decision("pending", f"Readiness evidence invalid: {type(exc).__name__}"))
+            except Exception as recovery_exc:
+                print(f"PR #{number} fail-closed publication unavailable: {recovery_exc}", file=sys.stderr)
     return 1 if failures else 0
 
 

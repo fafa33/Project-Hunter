@@ -13,6 +13,11 @@ from typing import Any
 
 
 def github_get(path: str) -> Any:
+    # `gh api` without credentials can return anonymously cached ruleset data.
+    # Require an authenticated CLI session before trusting the live contract.
+    credential = subprocess.run(("gh", "auth", "token"), capture_output=True, text=True, check=False, timeout=10)
+    if credential.returncode or not credential.stdout.strip():
+        raise ValueError("Authenticated GitHub ruleset observer required")
     result = subprocess.run(("gh", "api", path), capture_output=True, text=True, check=False, timeout=20)
     if result.returncode:
         raise ValueError("GitHub contract API unavailable or access denied")
@@ -22,16 +27,23 @@ def github_get(path: str) -> Any:
 def observe_contract(repository: str, *, get: Callable[[str], Any] = github_get) -> dict[str, Any]:
     if len(repository.split("/")) != 2 or not all(repository.split("/")):
         raise ValueError("Invalid repository identity")
-    rulesets = get(f"repos/{repository}/rulesets?includes_parents=true")
-    if not isinstance(rulesets, list):
-        raise ValueError("Malformed GitHub ruleset list")
-    for item in rulesets:
-        if (
-            not isinstance(item, dict)
-            or item.get("enforcement") not in {"active", "disabled", "evaluate"}
-            or type(item.get("id")) is not int
-        ):
-            raise ValueError("Malformed GitHub ruleset summary")
+    rulesets: list[Any] = []
+    for page in range(1, 1001):
+        batch = get(f"repos/{repository}/rulesets?includes_parents=true&per_page=100&page={page}")
+        if not isinstance(batch, list):
+            raise ValueError("Malformed GitHub ruleset list")
+        for item in batch:
+            if (
+                not isinstance(item, dict)
+                or item.get("enforcement") not in {"active", "disabled", "evaluate"}
+                or type(item.get("id")) is not int
+            ):
+                raise ValueError("Malformed GitHub ruleset summary")
+        rulesets.extend(batch)
+        if len(batch) < 100:
+            break
+    else:
+        raise ValueError("GitHub ruleset pagination exceeded safe bound")
     active = [item for item in rulesets if item["enforcement"] == "active"]
     if not active:
         raise ValueError("No active GitHub rulesets observed")
@@ -43,14 +55,16 @@ def observe_contract(repository: str, *, get: Callable[[str], Any] = github_get)
         detail = get(f"repos/{repository}/rulesets/{ruleset_id}")
         if not isinstance(detail, dict) or not isinstance(detail.get("rules"), list):
             raise ValueError("Malformed GitHub ruleset detail")
+        if not isinstance(detail.get("bypass_actors"), list):
+            raise ValueError("Missing or malformed GitHub ruleset bypass actors")
         observations.append(
             {
                 "id": ruleset_id,
                 "name": detail.get("name"),
                 "target": detail.get("target"),
                 "conditions": detail.get("conditions"),
-                "bypass_actors": detail.get("bypass_actors"),
                 "rules": detail["rules"],
+                "bypass_actors": detail["bypass_actors"],
             }
         )
     return {"schema": "hgcc-1/v1", "repository": repository, "rulesets": observations}
@@ -95,9 +109,12 @@ def _applies_to_ref(ruleset: dict[str, Any], ref: str) -> bool:
     def matches(pattern: str) -> bool:
         if pattern == "~ALL":
             return True
+        if pattern == "~DEFAULT_BRANCH":
+            return ref == "refs/heads/main"
         if pattern.startswith("~"):
             raise ValueError("Unsupported GitHub ruleset ref selector")
-        return fnmatchcase(ref, pattern)
+        normalized = pattern if pattern.startswith("refs/heads/") else f"refs/heads/{pattern}"
+        return fnmatchcase(ref, normalized)
 
     return any(matches(x) for x in names["include"]) and not any(matches(x) for x in names["exclude"])
 
@@ -108,10 +125,10 @@ def required_checks(contract: dict[str, Any], *, target_ref: str | None = None) 
     for ruleset in contract["rulesets"]:
         if target_ref is not None and not _applies_to_ref(ruleset, target_ref):
             continue
-        if "bypass_actors" in ruleset:
-            bypass = ruleset["bypass_actors"]
+        if target_ref is not None:
+            bypass = ruleset.get("bypass_actors")
             if not isinstance(bypass, list) or bypass:
-                raise ValueError("Effective ruleset bypass actors must be an empty list")
+                raise ValueError("Applicable ruleset bypass actors must be explicitly empty")
         for rule in ruleset["rules"]:
             if rule.get("type") != "required_status_checks":
                 continue
@@ -136,11 +153,16 @@ def verify_required_checks(
     *,
     target_ref: str | None = None,
     statuses: list[dict[str, Any]] | None = None,
+    exclude_context: str | None = None,
 ) -> tuple[bool, str]:
     """Only real successful check-runs from the configured app satisfy a requirement."""
     checks = required_checks(contract, target_ref=target_ref)
+    # Excluding the publisher's own context must not turn a self-only
+    # contract into an empty, automatically successful verification.
+    if exclude_context is not None:
+        checks.pop(exclude_context, None)
     if not checks:
-        return False, "No required checks found in effective contract"
+        return False, "No independent required checks found in effective contract"
     for name, app_id in checks.items():
         matches = [run for run in runs if run.get("name") == name]
         if not matches:
@@ -150,8 +172,10 @@ def verify_required_checks(
             latest_status = max(status_matches, key=lambda item: int(item.get("id") or 0))
             if latest_status.get("state") != "success":
                 return False, f"Required commit status not successful: {name}"
-            if app_id is not None and (latest_status.get("creator") or {}).get("id") != app_id:
-                return False, f"Required status publisher mismatch: {name}"
+            if app_id is not None:
+                # Commit status creator.id is a user ID, not a GitHub App ID.
+                # Without verifiable App provenance, do not authorize this fallback.
+                return False, f"Required status publisher App identity unverifiable: {name}"
             continue
         latest = max(matches, key=lambda run: int(run.get("id") or 0))
         if latest.get("status") != "completed" or latest.get("conclusion") != "success":

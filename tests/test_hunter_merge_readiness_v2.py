@@ -3,6 +3,7 @@ from __future__ import annotations
 from pathlib import Path
 
 import hunter_merge_readiness_v2 as core
+import pytest
 
 
 def _pr(*, draft: bool = False, mergeable: bool | None = True, body: str = "anything") -> dict:
@@ -514,7 +515,6 @@ def test_decide_completion_is_a_real_production_caller_against_a_live_pr(monkeyp
     `main()`) is a genuine, invokable production path, not test-only code."""
 
     _install_green(monkeypatch)
-    monkeypatch.setattr(core, "_hgcc_hosted_verdict", lambda _sha: None)
 
     verdict = core.decide_completion(501)
 
@@ -600,6 +600,7 @@ def test_owner_merge_guard_accepts_only_clean_identical_merge_ready_head(monkeyp
     import hunter_github_contract as hgcc
 
     monkeypatch.setattr(core, "REPO", "fafa33/Project-Hunter")
+    monkeypatch.setattr(core, "TOKEN", "authenticated-test-token")
     monkeypatch.setattr(
         hgcc,
         "observe_contract",
@@ -607,6 +608,7 @@ def test_owner_merge_guard_accepts_only_clean_identical_merge_ready_head(monkeyp
             "rulesets": [
                 {
                     "target": "branch",
+                    "bypass_actors": [],
                     "conditions": {"ref_name": {"include": ["refs/heads/main"], "exclude": []}},
                     "rules": [
                         {
@@ -702,3 +704,63 @@ def test_merge_readiness_reconciles_both_exact_head_preflight_completions(monkey
         )
         monkeypatch.setattr(core, "open_prs_for_head", lambda _sha: (582,))
         assert core.candidate_prs() == (582,)
+
+
+@pytest.mark.parametrize("payload", [None, [], "invalid", {}, {"check_runs": "bad"}, {"check_runs": [None]}])
+def test_malformed_check_run_response_fails_closed(monkeypatch, payload):
+    monkeypatch.setattr(core, "request_json", lambda *_args, **_kwargs: payload)
+    with pytest.raises(ValueError, match="Malformed GitHub check"):
+        core.all_check_runs("a" * 40)
+
+
+def test_controller_replaces_stale_success_after_malformed_evidence(monkeypatch):
+    import sys
+
+    head = "a" * 40
+    monkeypatch.setattr(core, "candidate_prs", lambda: (605,))
+    monkeypatch.setattr(core, "decide", lambda _pr: (_ for _ in ()).throw(ValueError("malformed check runs")))
+    monkeypatch.setattr(core, "request_json", lambda *_args, **_kwargs: {"state": "open", "head": {"sha": head}})
+    published = []
+    monkeypatch.setattr(core, "publish", lambda sha, decision: published.append((sha, decision)))
+    monkeypatch.setattr(sys, "argv", ["hunter_merge_readiness_v2.py"])
+    assert core.main() == 1
+    assert len(published) == 1
+    assert published[0][0] == head
+    assert published[0][1].state == "pending"
+
+
+def test_unchanged_readiness_status_does_not_exhaust_github_quota(monkeypatch):
+    calls = []
+
+    def fake_request(method, path, payload=None):
+        calls.append((method, path, payload))
+        return {
+            "statuses": [{"context": core.CONTEXT, "state": "pending", "description": "Waiting for Ready for Review"}]
+        }
+
+    monkeypatch.setattr(core, "request_json", fake_request)
+    core.publish("a" * 40, core.Decision("pending", "Waiting for Ready for Review"))
+    assert len(calls) == 1
+    assert calls[0][0] == "GET"
+    assert calls[0][1].endswith("/status")
+
+
+def test_changed_readiness_status_must_publish_even_after_previous_success(monkeypatch):
+    calls = []
+
+    def fake_request(method, path, payload=None):
+        calls.append((method, path, payload))
+        return {"statuses": [{"context": core.CONTEXT, "state": "success", "description": "Ready"}]}
+
+    monkeypatch.setattr(core, "request_json", fake_request)
+    core.publish("a" * 40, core.Decision("failure", "New blocking finding"))
+    assert [call[0] for call in calls] == ["GET", "POST"]
+    assert calls[1][2]["state"] == "failure"
+
+
+def test_malformed_combined_status_response_fails_closed(monkeypatch):
+    monkeypatch.setattr(core, "request_json", lambda *_args: {"statuses": None})
+    import pytest
+
+    with pytest.raises(ValueError, match="Malformed combined"):
+        core.publish("a" * 40, core.Decision("success", "Ready"))

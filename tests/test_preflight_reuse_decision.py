@@ -269,3 +269,20 @@ def test_candidate_controlled_bootstrap_forces_trusted_full_gates(
     reusable, reason = decision.decide(tmp_path, head_sha=HEAD, repository=REPO, pr_number=PR, token="token")
     assert reusable is False
     assert path in reason
+
+
+@pytest.mark.parametrize(
+    "path",
+    [
+        "docs/CODE_WRITE_POLICY.json",
+        "docs/VALIDATION_STAGE_CONTRACT.json",
+    ],
+)
+def test_hgcc1_policy_changes_force_trusted_full_gates(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, path: str
+) -> None:
+    monkeypatch.setattr(decision.governance, "read_pr_changed_paths", lambda *_a, **_k: (True, (path,), None))
+    _failing_resolve_spy(monkeypatch)
+    reusable, reason = decision.decide(tmp_path, head_sha=HEAD, repository=REPO, pr_number=PR, token="token")
+    assert reusable is False
+    assert path in reason

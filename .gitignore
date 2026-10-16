@@ -7,6 +7,7 @@ __pycache__/
 .secrets/
 .mypy_cache/
 .hunter/validation-receipts/
+.hunter/preflight-reports/
 *.pid
 *.log
 nohup.out

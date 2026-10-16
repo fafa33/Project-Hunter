@@ -13,6 +13,7 @@ def test_observes_active_rulesets_and_required_checks():
         if path.endswith("/1"):
             return {
                 "name": "Protect main",
+                "bypass_actors": [],
                 "rules": [
                     {
                         "type": "required_status_checks",
@@ -92,51 +93,85 @@ def test_conflicting_required_check_publishers_rejected():
         hgcc.required_checks(contract)
 
 
-def test_owner_merge_boundary_consumes_live_hgcc():
-    source = (Path(__file__).resolve().parents[1] / "scripts/hunter_merge_readiness_v2.py").read_text()
-    owner_guard = source.split("def owner_merge_guard(", 1)[1].split("\ndef main(", 1)[0]
-    assert "observe_contract(" in owner_guard
-    assert "verify_required_checks(" in owner_guard and "all_check_runs(pr_head)" in owner_guard
-    assert owner_guard.index("verify_required_checks(") < owner_guard.index("decide_completion(")
+def test_hgcc_remains_at_pre_push_boundary_not_hosted_readiness():
+    root = Path(__file__).resolve().parents[1]
+    pre_push = (root / "scripts/hunter_pre_push.py").read_text()
+    readiness = (root / "scripts/hunter_merge_readiness_v2.py").read_text()
+    assert '"scripts/hunter_github_contract.py"' in pre_push
+    assert "_hgcc_hosted_verdict" not in readiness
+    assert "observe_contract(" in readiness  # Owner merge boundary still verifies live contract.
 
 
-def test_hosted_readiness_never_publishes_success_without_hgcc(monkeypatch):
-    import hunter_merge_readiness_v2 as readiness
+def test_ruleset_inventory_paginates_and_includes_later_required_checks():
+    calls = []
 
-    published = []
-    monkeypatch.setattr(
-        readiness, "_hgcc_hosted_verdict", lambda _sha: readiness.Decision("pending", "HGCC-1 unavailable")
-    )
-    monkeypatch.setattr(readiness, "request_json", lambda method, path, payload=None: published.append(payload))
-    readiness.publish("a" * 40, readiness.Decision("success", "ready"))
-    assert len(published) == 1
-    assert published[0]["context"] == readiness.CONTEXT
-    assert published[0]["state"] == "pending"
+    def get(path):
+        calls.append(path)
+        if "&page=1" in path:
+            return [{"id": i, "enforcement": "disabled"} for i in range(1, 101)]
+        if "&page=2" in path:
+            return [{"id": 101, "enforcement": "active"}]
+        if path.endswith("/101"):
+            return {
+                "name": "later",
+                "bypass_actors": [],
+                "target": "branch",
+                "conditions": {"ref_name": {"include": ["main"], "exclude": []}},
+                "rules": [
+                    {
+                        "type": "required_status_checks",
+                        "parameters": {"required_status_checks": [{"context": "Late Check"}]},
+                    }
+                ],
+            }
+        raise AssertionError(path)
+
+    contract = hgcc.observe_contract("fafa33/Project-Hunter", get=get)
+    assert "page=2" in calls[1]
+    assert "Late Check" in hgcc.required_checks(contract, target_ref="refs/heads/main")
 
 
-def test_hosted_readiness_allows_existing_success_with_valid_hgcc(monkeypatch):
-    import hunter_merge_readiness_v2 as readiness
-
-    published = []
-    monkeypatch.setattr(readiness, "_hgcc_hosted_verdict", lambda _sha: None)
-    monkeypatch.setattr(readiness, "request_json", lambda method, path, payload=None: published.append(payload))
-    readiness.publish("a" * 40, readiness.Decision("success", "ready"))
-    assert published[0]["state"] == "success"
-
-
-def test_ruleset_scope_excludes_unrelated_branches():
-    ruleset = {
+@pytest.mark.parametrize("selector", ["main", "refs/heads/main", "~DEFAULT_BRANCH"])
+def test_main_ruleset_selectors_are_normalized(selector):
+    rule = {
         "target": "branch",
-        "conditions": {"ref_name": {"include": ["refs/heads/release/*"], "exclude": []}},
+        "bypass_actors": [],
+        "conditions": {"ref_name": {"include": [selector], "exclude": []}},
         "rules": [
-            {"type": "required_status_checks", "parameters": {"required_status_checks": [{"context": "release-only"}]}}
+            {"type": "required_status_checks", "parameters": {"required_status_checks": [{"context": "main-only"}]}}
         ],
     }
-    assert hgcc.required_checks({"rulesets": [ruleset]}, target_ref="refs/heads/main") == {}
-    assert "release-only" in hgcc.required_checks({"rulesets": [ruleset]}, target_ref="refs/heads/release/1")
+    assert "main-only" in hgcc.required_checks({"rulesets": [rule]}, target_ref="refs/heads/main")
+    assert hgcc.required_checks({"rulesets": [rule]}, target_ref="refs/heads/release") == {}
 
 
-def test_required_commit_status_can_satisfy_context():
+def test_main_exclusion_selectors_are_honored():
+    rule = {
+        "target": "branch",
+        "bypass_actors": [],
+        "conditions": {"ref_name": {"include": ["~ALL"], "exclude": ["~DEFAULT_BRANCH"]}},
+        "rules": [{"type": "required_status_checks", "parameters": {"required_status_checks": [{"context": "other"}]}}],
+    }
+    assert hgcc.required_checks({"rulesets": [rule]}, target_ref="refs/heads/main") == {}
+    assert "other" in hgcc.required_checks({"rulesets": [rule]}, target_ref="refs/heads/release")
+
+
+def test_cli_ruleset_read_refuses_anonymous_session(monkeypatch):
+    from subprocess import CompletedProcess
+
+    calls = []
+
+    def run(command, **kwargs):
+        calls.append(tuple(command))
+        return CompletedProcess(command, 1, "", "not authenticated")
+
+    monkeypatch.setattr(hgcc.subprocess, "run", run)
+    with pytest.raises(ValueError, match="Authenticated GitHub"):
+        hgcc.github_get("repos/fafa33/Project-Hunter/rulesets")
+    assert calls == [("gh", "auth", "token")]
+
+
+def test_excluding_only_required_context_fails_closed():
     contract = {
         "rulesets": [
             {
@@ -149,37 +184,25 @@ def test_required_commit_status_can_satisfy_context():
             }
         ]
     }
-    assert hgcc.verify_required_checks(
-        contract, [], statuses=[{"id": 1, "context": "Hunter Merge Readiness", "state": "success"}]
-    )[0]
-    assert not hgcc.verify_required_checks(
-        contract, [], statuses=[{"id": 2, "context": "Hunter Merge Readiness", "state": "failure"}]
-    )[0]
+    ok, reason = hgcc.verify_required_checks(
+        contract,
+        [{"id": 1, "name": "Hunter Merge Readiness", "status": "completed", "conclusion": "success"}],
+        exclude_context="Hunter Merge Readiness",
+    )
+    assert not ok
+    assert "No independent" in reason
 
 
-def test_malformed_active_ruleset_summary_is_not_silently_dropped():
-    def get(path):
-        if "?includes_parents=true" in path:
-            return [{"id": 1, "enforcement": "active"}, {"id": 2, "enforcement": "unknown"}]
-        raise AssertionError("Malformed summaries must be rejected before fetching details")
-
-    with pytest.raises(ValueError, match="Malformed GitHub ruleset summary"):
-        hgcc.observe_contract("fafa33/Project-Hunter", get=get)
-
-
-def test_bypass_actors_fail_closed_before_accepting_required_checks():
-    contract = {
-        "rulesets": [
-            {
-                "bypass_actors": [{"actor_id": 1}],
-                "rules": [
-                    {
-                        "type": "required_status_checks",
-                        "parameters": {"required_status_checks": [{"context": "Quality Gates"}]},
-                    }
-                ],
-            }
-        ]
+@pytest.mark.parametrize("bypass", [None, [{"actor_id": 1}], "invalid"])
+def test_applicable_main_ruleset_requires_no_bypass_actors(bypass):
+    ruleset = {
+        "target": "branch",
+        "conditions": {"ref_name": {"include": ["refs/heads/main"], "exclude": []}},
+        "rules": [
+            {"type": "required_status_checks", "parameters": {"required_status_checks": [{"context": "Quality Gates"}]}}
+        ],
     }
+    if bypass is not None:
+        ruleset["bypass_actors"] = bypass
     with pytest.raises(ValueError, match="bypass actors"):
-        hgcc.required_checks(contract)
+        hgcc.required_checks({"rulesets": [ruleset]}, target_ref="refs/heads/main")
