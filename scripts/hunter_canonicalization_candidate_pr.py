@@ -370,22 +370,35 @@ def _recoverable_candidate_delta(run: RunCommand, root: str, main_sha: str, prev
     An ancestry test alone cannot identify a squash merge: the old tip is
     unreachable even when all its knowledge changes landed on main.
     """
-    output = _run(
+    merge_base = _run(
         run,
-        ["git", "-C", root, "diff", "--name-only", main_sha, previous_sha],
-        what="verify orphan candidate content against current main",
+        ["git", "-C", root, "merge-base", main_sha, previous_sha],
+        what="resolve candidate fork point",
+    ).strip()
+    introduced = set(
+        _run(
+            run,
+            ["git", "-C", root, "diff", "--name-only", merge_base, previous_sha],
+            what="inspect candidate-introduced paths",
+        ).splitlines()
     )
-    paths = set(output.splitlines())
     knowledge_paths = {REGISTRY_RELATIVE_PATH, DISPOSITIONS_RELATIVE_PATH}
     allowed = knowledge_paths | {pre_ready.REVIEW_RELATIVE_PATH}
-    knowledge = paths & knowledge_paths
-    if not knowledge:
-        return False
-    if paths - allowed:
+    unexpected = introduced - allowed
+    if unexpected:
         raise CanonicalizationCandidatePrError(
-            "orphan canonicalization branch contains non-knowledge changes: " + ", ".join(sorted(paths - allowed))
+            "orphan canonicalization branch contains non-knowledge changes: " + ", ".join(sorted(unexpected))
         )
-    return True
+    # Compare *contents* with current main independently: the old candidate
+    # may be unreachable after a squash merge but carry no new knowledge.
+    remaining = set(
+        _run(
+            run,
+            ["git", "-C", root, "diff", "--name-only", main_sha, previous_sha, "--", *sorted(knowledge_paths)],
+            what="verify remaining candidate knowledge content",
+        ).splitlines()
+    )
+    return bool(introduced & knowledge_paths and remaining)
 
 
 def _remote_branch_tree(run: RunCommand, worktree: Path, sha: str) -> str:

@@ -840,3 +840,34 @@ def test_squash_merged_branch_cannot_be_reopened_as_orphan(origin_repo: Path, tm
     )
     assert "NO-OP" in result
     assert recovery.pr_create_calls == 0
+
+
+def test_recovery_ignores_main_only_nonknowledge_changes(origin_repo: Path, tmp_path: Path) -> None:
+    """Codex PR #611: new main code changes must not poison orphan recovery."""
+    seed = tmp_path / "seed"
+    recorder = RecordingRun(existing_pr=None)
+    candidate_pr.propose(
+        pr=901,
+        head=HEAD,
+        base=BASE,
+        observations=[_observation(901)],
+        repo=str(origin_repo),
+        repo_root=seed,
+        run=recorder,
+    )
+    (seed / "unrelated-main-change.txt").write_text("unrelated merged change\n")
+    subprocess.run(["git", "add", "unrelated-main-change.txt"], cwd=seed, check=True, capture_output=True)
+    subprocess.run(["git", "commit", "-m", "unrelated main change"], cwd=seed, check=True, capture_output=True)
+    subprocess.run(["git", "push", "origin", "main"], cwd=seed, check=True, capture_output=True)
+    recovery = RecordingRun(existing_pr=None)
+    result = candidate_pr.propose(
+        pr=901,
+        head=HEAD,
+        base=BASE,
+        observations=[_observation(901)],
+        repo=str(origin_repo),
+        repo_root=seed,
+        run=recovery,
+    )
+    assert "NO-OP" not in result
+    assert recovery.pr_create_calls == 1
