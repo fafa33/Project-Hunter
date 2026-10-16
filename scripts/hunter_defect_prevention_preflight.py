@@ -23,7 +23,11 @@ import hunter_writer_provenance as provenance
 import yaml
 from hunter_workflow_state import path_matches_scope_entry
 
-ROOT = Path(__file__).resolve().parents[1]
+ROOT = (
+    Path(os.environ["HUNTER_TRUSTED_VALIDATION_ROOT"]).resolve()
+    if "HUNTER_TRUSTED_VALIDATION_ROOT" in os.environ
+    else Path(__file__).resolve().parents[1]
+)
 REQUIRED_PREFLIGHT_GATES = (
     "Architecture Index Guard",
     "Artifact Guard",
@@ -2216,6 +2220,7 @@ def run_candidate_quality_gates(candidate_root: Path) -> int:
     env = os.environ.copy()
     env["GITHUB_TOKEN"] = ""
     env["GH_TOKEN"] = ""
+    env["HUNTER_TRUSTED_VALIDATION_ROOT"] = str(candidate_root.resolve())
 
     lane_problem = trusted_lane_problem(env.get("PYTEST_ADDOPTS", ""))
     if lane_problem is not None:

@@ -623,9 +623,9 @@ def test_owner_merge_guard_accepts_only_clean_identical_merge_ready_head(monkeyp
     monkeypatch.setattr(
         core,
         "all_check_runs",
-        lambda _head: [{"id": 1, "name": "Quality Gates", "status": "completed", "conclusion": "success"}],
+        lambda _head, **kwargs: [{"id": 1, "name": "Quality Gates", "status": "completed", "conclusion": "success"}],
     )
-    monkeypatch.setattr(core, "paged", lambda path: [])
+    monkeypatch.setattr(core, "paged", lambda path, **kwargs: [])
     verdict = core.owner_merge_guard(562)
     assert verdict.accepted
     assert verdict.state == "OWNER_MERGE_GUARD_ACCEPTED"

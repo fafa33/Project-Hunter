@@ -147,7 +147,7 @@ def resolve_review_authority(verification: tuple[str, str]) -> ReviewAuthorityVe
     return ReviewAuthorityVerdict("MALFORMED_REVIEW", detail)
 
 
-def request_json(method: str, path: str, payload: dict[str, Any] | None = None) -> Any:
+def request_json(method: str, path: str, payload: dict[str, Any] | None = None, *, token: str | None = None) -> Any:
     if not REPO:
         raise RuntimeError("GH_REPO or GITHUB_REPOSITORY is required")
     data = None if payload is None else json.dumps(payload).encode("utf-8")
@@ -156,7 +156,7 @@ def request_json(method: str, path: str, payload: dict[str, Any] | None = None) 
         method=method,
         headers={},
         data=data,
-        token=TOKEN,
+        token=TOKEN if token is None else token,
         what=f"{method} {path}",
     )
 
@@ -172,12 +172,14 @@ def graphql_json(query: str, variables: dict[str, Any]) -> Any:
     )
 
 
-def paged(path: str) -> list[Any]:
+def paged(path: str, *, token: str | None = None) -> list[Any]:
     items: list[Any] = []
     page = 1
     while True:
         separator = "&" if "?" in path else "?"
-        batch = request_json("GET", f"{path}{separator}per_page=100&page={page}")
+        batch = request_json(
+            "GET", f"{path}{separator}per_page=100&page={page}", **({"token": token} if token is not None else {})
+        )
         if not isinstance(batch, list):
             raise RuntimeError(f"Expected a list from {path}")
         items.extend(batch)
@@ -186,11 +188,15 @@ def paged(path: str) -> list[Any]:
         page += 1
 
 
-def all_check_runs(sha: str) -> list[dict[str, Any]]:
+def all_check_runs(sha: str, *, token: str | None = None) -> list[dict[str, Any]]:
     runs: list[dict[str, Any]] = []
     page = 1
     while True:
-        payload = request_json("GET", f"commits/{sha}/check-runs?per_page=100&page={page}&filter=all")
+        payload = request_json(
+            "GET",
+            f"commits/{sha}/check-runs?per_page=100&page={page}&filter=all",
+            **({"token": token} if token is not None else {}),
+        )
         if not isinstance(payload, dict) or not isinstance(payload.get("check_runs"), list):
             raise ValueError("Malformed GitHub check-runs payload")
         batch = payload["check_runs"]
@@ -779,12 +785,14 @@ def owner_merge_guard(pr_number: int) -> CompletionVerdict:
     from hunter_github_contract import observe_contract, verify_required_checks
 
     try:
-        contract = observe_contract(REPO, get=lambda path: request_json("GET", path.removeprefix(f"repos/{REPO}/")))
+        contract = observe_contract(
+            REPO, get=lambda path: request_json("GET", path.removeprefix(f"repos/{REPO}/"), token=auth_token)
+        )
         checks_ok, checks_reason = verify_required_checks(
             contract,
-            all_check_runs(pr_head),
+            all_check_runs(pr_head, token=auth_token),
             target_ref="refs/heads/main",
-            statuses=paged(f"commits/{pr_head}/statuses"),
+            statuses=paged(f"commits/{pr_head}/statuses", token=auth_token),
         )
     except (ValueError, TypeError, KeyError, transport.GitHubUnavailable, transport.GitHubRequestError) as exc:
         return CompletionVerdict(False, "MERGE_NOT_READY", f"HGCC-1 indeterminate: {exc}")
