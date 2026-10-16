@@ -228,6 +228,9 @@ def capture_reviewer_findings(
         if observation.get("source") != "github-review" or observation.get("provider") != "github-review":
             continue
         event_id = observation.get("event_id")
+        # Only inline comments are findings; overview reviews are not.
+        if not isinstance(event_id, str) or not event_id.startswith("review-comment-"):
+            continue
         reviewer = observation.get("reviewer")
         source_pr = observation.get("source_pr")
         message = observation.get("message")

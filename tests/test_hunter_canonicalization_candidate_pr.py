@@ -621,19 +621,22 @@ def test_capture_reviewer_findings_persists_message_path_and_line_for_deleted_fi
     assert "c" * 40 in entry["source_provenance"]["reference"]
 
 
-def test_capture_reviewer_findings_evidence_omits_absent_path_and_line() -> None:
-    """A top-level review body (no path/line) still durably captures its
-    message; absent optional fields are omitted rather than fabricated."""
-    observation = _github_review_observation(
-        event_id="review-2002", message="top-level review body", path=None, line=None
-    )
+def test_capture_reviewer_findings_ignores_top_level_review_wrappers() -> None:
+    """A top-level overview, including Codex's generic wrapper, is not a finding."""
+    observations = [
+        _github_review_observation(
+            event_id="review-2002", message="Codex generic review wrapper", path=None, line=None
+        ),
+        _github_review_observation(
+            event_id="review-2003", message="Copilot review overview", path=None, line=None
+        ),
+    ]
     rendered, added = candidate_pr.capture_reviewer_findings(
-        observations=[observation], origin_bytes=DISPOSITIONS.read_bytes()
+        observations=observations, origin_bytes=DISPOSITIONS.read_bytes()
     )
-    assert added == ("RFD-AUTO-530-review-2002",)
-    document = json.loads(rendered)
-    entry = next(item for item in document["findings"] if item["id"] == "RFD-AUTO-530-review-2002")
-    assert entry["finding_evidence"] == {"message": "top-level review body"}
+    assert added == ()
+    assert json.loads(rendered) == json.loads(DISPOSITIONS.read_bytes())
+
 
 
 def test_capture_reviewer_findings_replay_is_idempotent_and_does_not_mutate_identity() -> None:
