@@ -110,6 +110,16 @@ class RecordingRun:
         return subprocess.run(list(command), check=True, capture_output=True, text=True)
 
     def _fake_gh(self, command: list[str]) -> subprocess.CompletedProcess[str]:
+        if command[1:3] == ["issue", "view"]:
+            return subprocess.CompletedProcess(
+                command,
+                0,
+                stdout=(
+                    "## Acceptance Criteria\n- Automatic finding-to-canonical-knowledge lifecycle: "
+                    "a resolved finding is turned into a canonicalization candidate branch and Draft PR.\n"
+                ),
+                stderr="",
+            )
         if command[1:3] == ["pr", "view"]:
             stdout = "MERGED 2026-10-07T00:00:00Z" if self.source_merged else "OPEN "
             return subprocess.CompletedProcess(command, 0, stdout=stdout, stderr="")
@@ -642,19 +652,19 @@ def test_capture_reviewer_findings_persists_message_path_and_line_for_deleted_fi
     assert "c" * 40 in entry["source_provenance"]["reference"]
 
 
-def test_capture_reviewer_findings_evidence_omits_absent_path_and_line() -> None:
-    """A top-level review body (no path/line) still durably captures its
-    message; absent optional fields are omitted rather than fabricated."""
-    observation = _github_review_observation(
-        event_id="review-2002", message="top-level review body", path=None, line=None
-    )
+def test_capture_reviewer_findings_ignores_top_level_review_wrappers() -> None:
+    """A top-level overview, including Codex's generic wrapper, is not a finding."""
+    observations = [
+        _github_review_observation(
+            event_id="review-2002", message="Codex generic review wrapper", path=None, line=None
+        ),
+        _github_review_observation(event_id="review-2003", message="Copilot review overview", path=None, line=None),
+    ]
     rendered, added = candidate_pr.capture_reviewer_findings(
-        observations=[observation], origin_bytes=DISPOSITIONS.read_bytes()
+        observations=observations, origin_bytes=DISPOSITIONS.read_bytes()
     )
-    assert added == ("RFD-AUTO-530-review-2002",)
-    document = json.loads(rendered)
-    entry = next(item for item in document["findings"] if item["id"] == "RFD-AUTO-530-review-2002")
-    assert entry["finding_evidence"] == {"message": "top-level review body"}
+    assert added == ()
+    assert json.loads(rendered) == json.loads(DISPOSITIONS.read_bytes())
 
 
 def test_capture_reviewer_findings_replay_is_idempotent_and_does_not_mutate_identity() -> None:
@@ -748,3 +758,39 @@ def test_canonicalization_provisions_pre_push_toolchain_from_setup_python():
     assert "'.[dev]'" in command
     assert 'sysconfig.get_path("scripts")' in command
     assert '>> "$GITHUB_PATH"' in command
+
+
+def test_governed_review_request_rejects_missing_issue_criteria(tmp_path: Path) -> None:
+    """Never reuse inherited review claims when trusted Issue evidence is empty."""
+
+    class MissingCriteriaRun:
+        def __call__(self, command: list[str]) -> subprocess.CompletedProcess[str]:
+            assert command[:3] == ["gh", "issue", "view"]
+            return subprocess.CompletedProcess(command, 0, stdout="## Acceptance Criteria\n", stderr="")
+
+    with pytest.raises(candidate_pr.CanonicalizationCandidatePrError, match="no verifiable acceptance criteria"):
+        candidate_pr._write_governed_review_request(MissingCriteriaRun(), tmp_path, BASE)
+
+
+def test_candidate_review_request_binds_real_issue_and_never_reuses_603(origin_repo: Path, tmp_path: Path) -> None:
+    recorder = RecordingRun()
+    candidate_pr.propose(
+        pr=301,
+        head=HEAD,
+        base=BASE,
+        observations=[_observation(301)],
+        repo=str(origin_repo),
+        repo_root=tmp_path / "seed",
+        run=recorder,
+    )
+    raw = subprocess.run(
+        ["git", "show", f"{candidate_pr.DEDICATED_BRANCH}:.hunter/pre-ready-hostile-review.json"],
+        cwd=origin_repo,
+        check=True,
+        capture_output=True,
+        text=True,
+    ).stdout
+    document = json.loads(raw)
+    assert document["claims"]["issue"] == candidate_pr.GOVERNING_ISSUE == "532"
+    assert document["claims"]["acceptance_criteria"]
+    assert document["review_request"]["claims_id"] == document["review_id"]
