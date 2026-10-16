@@ -6,6 +6,9 @@ import hunter_governance_review_v2 as governance
 
 
 def test_external_writer_stale_head_fails_closed(monkeypatch):
+    monkeypatch.setattr(
+        governance, "read_head_pre_ready_review", lambda *_: ("present", {"claims": {"issue": "532"}}, None)
+    )
     monkeypatch.setattr(governance, "read_pr_refs", lambda *_: (True, "feature", "main", None))
     monkeypatch.setattr(governance, "read_merge_base", lambda *_: (True, "a" * 40, None))
     monkeypatch.setattr(governance, "read_pr_changed_files", lambda *_: (True, (), None))
@@ -17,7 +20,8 @@ def test_external_writer_stale_head_fails_closed(monkeypatch):
         "verify_review_request",
         lambda *_a, **_kw: governance.pre_ready.ReviewVerdict("valid", "valid"),
     )
-    monkeypatch.setattr(governance, "request_json", lambda *_: {"head": {"sha": "b" * 40}})
+    calls = iter(({"head": {"sha": "c" * 40}}, {"head": {"sha": "b" * 40}}))
+    monkeypatch.setattr(governance, "request_json", lambda *_: next(calls))
     valid, reason = governance.valid_current_review_request(
         "fafa33/Project-Hunter", "token", 611, "c" * 40, {"claims": {"issue": "532"}}
     )
@@ -26,6 +30,9 @@ def test_external_writer_stale_head_fails_closed(monkeypatch):
 
 
 def test_external_writer_exact_head_can_pass(monkeypatch):
+    monkeypatch.setattr(
+        governance, "read_head_pre_ready_review", lambda *_: ("present", {"claims": {"issue": "532"}}, None)
+    )
     monkeypatch.setattr(governance, "read_pr_refs", lambda *_: (True, "feature", "main", None))
     monkeypatch.setattr(governance, "read_merge_base", lambda *_: (True, "a" * 40, None))
     monkeypatch.setattr(governance, "read_pr_changed_files", lambda *_: (True, (), None))
@@ -42,3 +49,13 @@ def test_external_writer_exact_head_can_pass(monkeypatch):
         "fafa33/Project-Hunter", "token", 611, "c" * 40, {"claims": {"issue": "532"}}
     )
     assert valid, reason
+
+
+def test_external_writer_uncommitted_request_rejected(monkeypatch):
+    monkeypatch.setattr(governance, "request_json", lambda *_: {"head": {"sha": "c" * 40}})
+    monkeypatch.setattr(governance, "read_head_pre_ready_review", lambda *_: ("absent", None, None))
+    valid, reason = governance.valid_current_review_request(
+        "fafa33/Project-Hunter", "token", 611, "c" * 40, {"claims": {"issue": "532"}}
+    )
+    assert not valid
+    assert "committed evidence mismatch" in reason

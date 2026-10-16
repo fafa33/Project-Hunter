@@ -2000,6 +2000,24 @@ def valid_current_review_request(
 ) -> tuple[bool, str]:
     """Verify request claims before the trusted collector spends reviewer capacity."""
 
+    # The caller may have read a candidate HEAD before an external writer pushed.
+    # Bind the entire verification to the live PR HEAD, not just the caller's SHA.
+    try:
+        initial = request_json(repository, token, "GET", f"pulls/{pr_number}")
+        if not isinstance(initial, dict) or not isinstance(initial.get("head"), dict):
+            return False, "exact-head review request initial PR evidence is malformed"
+        if str(initial["head"].get("sha") or "").strip() != head_sha:
+            return False, "exact-head review request PR head differs from requested head"
+    except Exception as exc:
+        return False, f"exact-head review request initial PR evidence unavailable ({type(exc).__name__}: {exc})"
+    # The document must be committed to this immutable HEAD, never supplied
+    # solely by an untrusted caller or a connector's out-of-band metadata.
+    state, committed, evidence_error = read_head_pre_ready_review(repository, token, head_sha)
+    if state != "present" or committed != document:
+        return (
+            False,
+            f"exact-head review request committed evidence mismatch ({state}: {evidence_error or 'different content'})",
+        )
     ok_refs, _head_ref, base_ref, refs_error = read_pr_refs(repository, token, pr_number)
     if not ok_refs:
         return False, f"pull-request ref evidence is unavailable ({refs_error})"
