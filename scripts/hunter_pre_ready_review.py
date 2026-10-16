@@ -1719,6 +1719,57 @@ def prepare_request(
     return document
 
 
+def finalize_writer_review_request(
+    *,
+    issue: str,
+    base: str,
+    head: str,
+    base_ref: str,
+    judgement: dict[str, Any],
+    cwd: Path | None = None,
+    issue_criteria: tuple[str, ...] | None = None,
+) -> bool:
+    """Shared authorized-writer pre-commit finalizer; never signs or pushes.
+
+    Returns False when the current request already matches the content.
+    The writer remains responsible for signing and committing this artifact.
+    """
+    root = (cwd or ROOT).resolve()
+    changes = local_changes(base, head, cwd=root)
+    families, error = load_families(root / REGISTRY_RELATIVE_PATH)
+    if error:
+        raise ValueError(error)
+    expected = set(applicable_family_ids(families, tuple(change.path for change in changes)))
+    records = judgement.get("defect_families")
+    if not isinstance(records, list) or {item.get("family") for item in records if isinstance(item, dict)} != expected:
+        raise ValueError("writer judgement does not cover exactly the applicable defect families")
+    document = prepare_request(
+        issue=issue,
+        base=base,
+        head=head,
+        base_ref=base_ref,
+        judgement=judgement,
+        cwd=root,
+    )
+    verdict = verify_review_request(
+        document,
+        base_sha=base,
+        changes=changes,
+        families=families,
+        issue_criteria=issue_criteria,
+        head_sha=head,
+    )
+    if not verdict.ok:
+        raise ValueError("writer review request invalid: " + verdict.reason)
+    path = root / REVIEW_RELATIVE_PATH
+    content = json.dumps(document, indent=2, sort_keys=True) + "\n"
+    if path.is_file() and path.read_text(encoding="utf-8") == content:
+        return False
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(content, encoding="utf-8")
+    return True
+
+
 def record(
     *,
     issue: str,
@@ -1827,6 +1878,16 @@ def main() -> int:
             if not isinstance(judgement, dict):
                 raise ValueError("review request judgement must be a JSON object")
             validate_request_governing_issue(str(args.issue), judgement)
+            if args.refresh_request:
+                finalize_writer_review_request(
+                    issue=str(args.issue),
+                    base=args.base,
+                    head=args.head,
+                    base_ref=args.base_ref,
+                    judgement=judgement,
+                )
+                print(f"[Pre-Ready Hostile Review] FINALIZED: {REVIEW_RELATIVE_PATH}")
+                return 0
             document = prepare_request(
                 issue=str(args.issue),
                 base=args.base,

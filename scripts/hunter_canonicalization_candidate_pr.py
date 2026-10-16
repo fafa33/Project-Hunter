@@ -341,27 +341,18 @@ def _write_governed_review_request(run: RunCommand, worktree: Path, main_sha: st
         "findings": [],
         "adversarial_dimensions": dimensions,
     }
-    document = pre_ready.prepare_request(
-        issue=GOVERNING_ISSUE,
-        base=main_sha,
-        head=head,
-        base_ref=BASE_BRANCH,
-        judgement=judgement,
-        cwd=worktree,
-    )
-    verdict = pre_ready.verify_review_request(
-        document,
-        base_sha=main_sha,
-        changes=changes,
-        families=families,
-        issue_criteria=criteria,
-        coverage_scopes=(),
-        head_sha=head,
-    )
-    if not verdict.ok:
-        raise CanonicalizationCandidatePrError(f"review request failed pre-commit validation: {verdict.reason}")
-    inherited.parent.mkdir(parents=True, exist_ok=True)
-    inherited.write_text(json.dumps(document, indent=2, sort_keys=True) + "\n")
+    try:
+        pre_ready.finalize_writer_review_request(
+            issue=GOVERNING_ISSUE,
+            base=main_sha,
+            head=head,
+            base_ref=BASE_BRANCH,
+            judgement=judgement,
+            cwd=worktree,
+            issue_criteria=criteria,
+        )
+    except ValueError as exc:
+        raise CanonicalizationCandidatePrError(str(exc)) from exc
 
 
 def _recoverable_candidate_delta(run: RunCommand, root: str, main_sha: str, previous_sha: str) -> bool:
