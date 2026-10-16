@@ -32,12 +32,19 @@ def observe_contract(repository: str, *, get: Callable[[str], Any] = github_get)
         batch = get(f"repos/{repository}/rulesets?includes_parents=true&per_page=100&page={page}")
         if not isinstance(batch, list):
             raise ValueError("Malformed GitHub ruleset list")
+        for item in batch:
+            if (
+                not isinstance(item, dict)
+                or item.get("enforcement") not in {"active", "disabled", "evaluate"}
+                or type(item.get("id")) is not int
+            ):
+                raise ValueError("Malformed GitHub ruleset summary")
         rulesets.extend(batch)
         if len(batch) < 100:
             break
     else:
         raise ValueError("GitHub ruleset pagination exceeded safe bound")
-    active = [item for item in rulesets if isinstance(item, dict) and item.get("enforcement") == "active"]
+    active = [item for item in rulesets if item["enforcement"] == "active"]
     if not active:
         raise ValueError("No active GitHub rulesets observed")
     observations = []

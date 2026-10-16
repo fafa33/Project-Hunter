@@ -774,6 +774,23 @@ def owner_merge_guard(pr_number: int) -> CompletionVerdict:
             "HEAD_DIVERGENCE",
             f"intended local HEAD, remote branch HEAD and PR HEAD are not identical ({local_head[:10]}, {remote_head[:10] or 'missing'}, {pr_head[:10] or 'missing'})",
         )
+    # HGCC-1 at the owner merge boundary: independently verify current-head
+    # required checks and publisher IDs against the live GitHub contract.
+    from hunter_github_contract import observe_contract, verify_required_checks
+
+    try:
+        contract = observe_contract(REPO, get=lambda path: request_json("GET", path.removeprefix(f"repos/{REPO}/")))
+        checks_ok, checks_reason = verify_required_checks(
+            contract,
+            all_check_runs(pr_head),
+            target_ref="refs/heads/main",
+            statuses=paged(f"commits/{pr_head}/statuses"),
+        )
+    except (ValueError, TypeError, KeyError, transport.GitHubUnavailable, transport.GitHubRequestError) as exc:
+        return CompletionVerdict(False, "MERGE_NOT_READY", f"HGCC-1 indeterminate: {exc}")
+    if not checks_ok:
+        return CompletionVerdict(False, "MERGE_NOT_READY", f"HGCC-1: {checks_reason}")
+
     readiness = decide_completion(pr_number)
     if readiness is None or not readiness.accepted:
         reason = "merge readiness is unavailable" if readiness is None else readiness.reason

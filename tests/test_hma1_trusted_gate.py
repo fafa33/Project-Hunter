@@ -36,7 +36,7 @@ def test_hma1_unprivileged_ci_permissions_and_no_secret_injection():
     assert quality_job, "quality job must exist in ci.yml"
 
     job_perms = quality_job.get("permissions", {})
-    assert "statuses" not in job_perms, "Quality job must not carry status write permissions"
+    assert job_perms == {"actions": "read", "contents": "read"}, "Candidate quality job must have only read permissions"
     assert "secrets" not in str(quality_job), "Quality job must not receive secrets"
 
 
@@ -258,7 +258,7 @@ def test_hma1_head_sha_recheck_detects_concurrent_push(monkeypatch):
     assert "head changed during validation" in message
 
 
-def test_hma1_canonical_readiness_authority_uniqueness():
+def test_hma1_canonical_readiness_evaluate_smoke():
     """Verify hunter_merge_readiness_v2.py remains the canonical readiness authority."""
     readiness_script = REPO_ROOT / "scripts" / "hunter_merge_readiness_v2.py"
     assert readiness_script.exists()
@@ -280,6 +280,98 @@ def test_hma1_canonical_readiness_authority_uniqueness():
     decision = readiness.evaluate(DummyObs())
     assert decision.state == "success"
     assert "Ready to merge" in decision.description
+
+
+def test_trusted_gate_runner_does_not_execute_candidate_script_paths(monkeypatch, tmp_path):
+    import hunter_defect_prevention_preflight as prevention
+
+    candidate = tmp_path / "candidate"
+    candidate.mkdir()
+    seen = []
+
+    class Completed:
+        returncode = 0
+
+    def capture(command, **kwargs):
+        seen.append((command, kwargs))
+        return Completed()
+
+    monkeypatch.setattr(prevention, "trusted_lane_problem", lambda _opts: None)
+    monkeypatch.setattr(prevention.subprocess, "run", capture)
+    assert prevention.run_candidate_quality_gates(candidate) == 0
+    trusted_root = Path(prevention.__file__).resolve().parents[1]
+    for command, options in seen:
+        assert options["cwd"] == candidate
+        assert options["env"]["GITHUB_TOKEN"] == ""
+        if command[0] == "python" and len(command) > 1:
+            assert Path(command[1]).is_absolute()
+            assert Path(command[1]).is_relative_to(trusted_root / "scripts")
+
+
+def test_status_writing_governance_workflow_is_base_branch_only():
+    """A PR must not be able to supply a status publisher's workflow code."""
+    path = REPO_ROOT / ".github/workflows/hunter-governance-review.yml"
+    source = path.read_text(encoding="utf-8")
+    workflow = yaml.safe_load(source)
+    assert "  pull_request_target:" in source
+    assert "  pull_request:" not in source
+    assert workflow["permissions"]["statuses"] == "write"
+    assert workflow["permissions"]["actions"] == "read"
+    steps = workflow["jobs"]["governance-review"]["steps"]
+    assert steps[0]["with"]["ref"] == "${{ github.event.repository.default_branch }}"
+    assert steps[0]["with"]["persist-credentials"] is False
+    assert all("candidate" not in str(step) for step in steps)
+
+
+def test_protected_changed_path_forces_fresh_decision(monkeypatch, tmp_path):
+    sha = "a" * 40
+    monkeypatch.setattr(
+        governance,
+        "request_json",
+        lambda *_args, **_kwargs: {"head": {"sha": sha}},
+    )
+    monkeypatch.setattr(
+        governance,
+        "read_pr_changed_paths",
+        lambda *_args: (True, ("tests/test_hma1_trusted_gate.py",), None),
+    )
+
+    def no_reuse(*_args, **_kwargs):
+        raise AssertionError("protected definitions must not invoke proof reuse")
+
+    monkeypatch.setattr(reuse_decision.reuse, "resolve", no_reuse)
+    reusable, reason = reuse_decision.decide(
+        tmp_path, head_sha=sha, repository="fafa33/Project-Hunter", pr_number=602, token="token"
+    )
+    assert reusable is False
+    assert "trusted validation definition" in reason
+
+
+def test_malformed_pr_payloads_fail_closed(monkeypatch):
+    for payload in (None, {}, {"head": {}}, {"head": "invalid"}):
+        monkeypatch.setattr(governance, "request_json", lambda *_args, _payload=payload, **_kwargs: _payload)
+        status, message = governance.candidate_admission("fafa33/Project-Hunter", "token", "a" * 40, 602)
+        assert status == "failure"
+        assert "malformed" in message or "verification failed" in message or "differs" in message
+
+
+def test_candidate_reachable_workflow_permission_boundary():
+    """Every pull_request workflow must have explicit, non-privileged permissions."""
+    for path in sorted((REPO_ROOT / ".github/workflows").glob("*.yml")):
+        source = path.read_text(encoding="utf-8")
+        if "  pull_request:" not in source:
+            continue
+        data = yaml.safe_load(source)
+        inherited = data.get("permissions")
+        for job_name, job in data.get("jobs", {}).items():
+            effective = job.get("permissions", inherited)
+            assert isinstance(effective, dict), f"{path.name}/{job_name}: missing permissions"
+            forbidden = {
+                key
+                for key, value in effective.items()
+                if value == "write" and not (path.name == "dependency-review.yml" and key == "pull-requests")
+            }
+            assert not forbidden, f"{path.name}/{job_name}: candidate-reachable privileged permissions {forbidden}"
 
 
 def test_hma1_trusted_proof_rechecks_pr_head_after_proof(monkeypatch):
