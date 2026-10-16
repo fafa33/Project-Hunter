@@ -1968,3 +1968,21 @@ def test_merge_readiness_existing_blocking_review_finding_still_blocks_without_p
     decision = readiness.evaluate(observation)
     assert decision.state == "failure"
     assert "Changes requested" in decision.description
+
+
+def test_agent_judgement_path_cannot_escape_checkout(tmp_path, monkeypatch):
+    import hunter_pre_ready_review as review
+
+    checkout = tmp_path / "checkout"
+    checkout.mkdir()
+    inside = checkout / "judgement.json"
+    inside.write_text("{}")
+    outside = tmp_path / "secret.json"
+    outside.write_text("{}")
+    monkeypatch.chdir(checkout)
+    assert review._trusted_judgement_path(str(inside)) == inside
+    with pytest.raises(ValueError, match="authorized checkout"):
+        review._trusted_judgement_path(str(outside))
+    (checkout / "symlink.json").symlink_to(outside)
+    with pytest.raises(ValueError, match="authorized checkout"):
+        review._trusted_judgement_path("symlink.json")

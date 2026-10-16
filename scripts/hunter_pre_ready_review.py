@@ -1763,6 +1763,15 @@ def record(
     return document_for(claims, authority=authority, coverage_scope=judgement.get("coverage_scope"))
 
 
+def _trusted_judgement_path(value: str) -> Path:
+    """Do not let agent-supplied CLI paths read outside the authorized checkout."""
+    root = Path.cwd().resolve(strict=True)
+    candidate = Path(value).resolve(strict=True)
+    if not candidate.is_relative_to(root) or not candidate.is_file():
+        raise ValueError("review judgement must be a regular file inside the authorized checkout")
+    return candidate
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(
         description=(
@@ -1790,7 +1799,7 @@ def main() -> int:
             print("[Pre-Ready Hostile Review] FAIL: --record requires --issue", file=sys.stderr)
             return 2
         try:
-            judgement = json.loads(Path(args.record).read_text(encoding="utf-8"))
+            judgement = json.loads(_trusted_judgement_path(args.record).read_text(encoding="utf-8"))
             if not isinstance(judgement, dict):
                 raise ValueError("review judgement must be a JSON object")
             document = record(
@@ -1812,7 +1821,9 @@ def main() -> int:
             print("[Pre-Ready Hostile Review] FAIL: --request requires --issue", file=sys.stderr)
             return 2
         try:
-            judgement = json.loads(Path(args.request or args.refresh_request).read_text(encoding="utf-8"))
+            judgement = json.loads(
+                _trusted_judgement_path(args.request or args.refresh_request).read_text(encoding="utf-8")
+            )
             if not isinstance(judgement, dict):
                 raise ValueError("review request judgement must be a JSON object")
             validate_request_governing_issue(str(args.issue), judgement)
