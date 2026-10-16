@@ -1986,3 +1986,22 @@ def test_agent_judgement_path_cannot_escape_checkout(tmp_path, monkeypatch):
     (checkout / "symlink.json").symlink_to(outside)
     with pytest.raises(ValueError, match="authorized checkout"):
         review._trusted_judgement_path("symlink.json")
+
+
+def test_writer_finalizer_idempotent_and_content_bound(tmp_path, monkeypatch):
+    """A writer must not rewrite unchanged evidence or accept a stale family scope."""
+    from pathlib import Path
+
+    changes = (_change("src/hunter/worker.py"),)
+    monkeypatch.setattr(review, "local_changes", lambda *_args, **_kwargs: changes)
+    monkeypatch.setattr(review, "load_families", lambda *_args, **_kwargs: ([], ""))
+    monkeypatch.setattr(review, "applicable_family_ids", lambda *_args, **_kwargs: ())
+    monkeypatch.setattr(review, "prepare_request", lambda **_kwargs: {"review_id": "id", "claims": {}})
+    monkeypatch.setattr(review, "verify_review_request", lambda *_args, **_kwargs: review.ReviewVerdict("valid", "ok"))
+    kwargs = dict(issue="532", base=BASE, head=HEAD, base_ref="main", cwd=tmp_path, judgement={"defect_families": []})
+    assert review.finalize_writer_review_request(**kwargs)
+    assert not review.finalize_writer_review_request(**kwargs)
+    kwargs["judgement"] = {"defect_families": [{"family": "unexpected"}]}
+    with pytest.raises(ValueError, match="applicable defect families"):
+        review.finalize_writer_review_request(**kwargs)
+    assert (Path(tmp_path) / review.REVIEW_RELATIVE_PATH).is_file()

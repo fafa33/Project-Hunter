@@ -1895,20 +1895,6 @@ def main() -> int:
                 base_ref=args.base_ref,
                 judgement=judgement,
             )
-            if args.refresh_request:
-                changes = local_changes(args.base, args.head)
-                families, family_error = load_families()
-                if family_error:
-                    raise ValueError(family_error)
-                # A new remediation head must receive a fresh judgement of the
-                # applicable defect families. No old reviewer verdict is copied.
-                applicable = set(applicable_family_ids(families, tuple(c.path for c in changes)))
-                supplied = {record.get("family") for record in judgement["defect_families"]}
-                if applicable != supplied:
-                    raise ValueError("remediation changed applicable defect families; refresh the judgement first")
-                verdict = verify_review_request(document, base_sha=args.base, changes=changes, families=families)
-                if not verdict.ok:
-                    raise ValueError(f"refreshed review request is invalid: {verdict.reason}")
         except (OSError, UnicodeError, json.JSONDecodeError, ValueError, GitEvidenceUnavailable) as exc:
             print(f"[Pre-Ready Hostile Review] FAIL: {type(exc).__name__}: {exc}", file=sys.stderr)
             return 2
