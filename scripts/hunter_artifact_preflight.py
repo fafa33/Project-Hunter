@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import re
 import subprocess
 from collections import Counter
@@ -10,7 +11,11 @@ from functools import cache
 from pathlib import Path
 from typing import Any
 
-ROOT = Path(__file__).resolve().parents[1]
+ROOT = (
+    Path(os.environ["HUNTER_TRUSTED_VALIDATION_ROOT"]).resolve()
+    if "HUNTER_TRUSTED_VALIDATION_ROOT" in os.environ
+    else Path(__file__).resolve().parents[1]
+)
 REGISTRY_PATH = ROOT / "docs" / "DEFECT_REGISTRY.json"
 ADR_INDEX_PATH = ROOT / "docs" / "ADR" / "README.md"
 ADR_INDEX_RELATIVE = "docs/ADR/README.md"

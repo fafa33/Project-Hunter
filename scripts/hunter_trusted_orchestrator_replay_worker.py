@@ -37,7 +37,9 @@ import importlib
 import json
 import multiprocessing as mp
 import os
+import queue
 import sys
+import threading
 import time
 import traceback
 from datetime import UTC, datetime, timedelta
@@ -601,7 +603,7 @@ def scenario_b(candidate_root: Path, fixture: dict[str, Any]) -> dict[str, Any]:
     }
 
 
-def scenario_g(candidate_root: Path, fixture: dict[str, Any]) -> dict[str, Any]:
+def scenario_g_observe(candidate_root: Path, fixture: dict[str, Any]) -> dict[str, Any]:
     """WAITING_FOR_REVIEWER classifies to pending end-to-end via the real path.
 
     Calls the candidate's real ``hunter_governance_review_v2.pending_review_authority_state``,
@@ -618,8 +620,6 @@ def scenario_g(candidate_root: Path, fixture: dict[str, Any]) -> dict[str, Any]:
 
     orchestration.read_cycle = lambda *_a: ("absent", None, None)
     state, detail = governance.pending_review_authority_state("owner/repo", "token", pr_number, head)
-    assert state == "pending", f"expected pending classification for an absent cycle, got {state!r}"
-    assert detail.startswith("WAITING_FOR_REVIEWER:"), f"expected a WAITING_FOR_REVIEWER detail, got {detail!r}"
 
     cycle = orchestration.ReviewCycle(
         pr_number=pr_number,
@@ -632,7 +632,6 @@ def scenario_g(candidate_root: Path, fixture: dict[str, Any]) -> dict[str, Any]:
     )
     orchestration.read_cycle = lambda *_a: ("present", cycle, None)
     state2, _detail2 = governance.pending_review_authority_state("owner/repo", "token", pr_number, head)
-    assert state2 == "pending", f"expected pending classification for an in-progress cycle, got {state2!r}"
 
     orchestration.read_cycle = lambda *_a: ("present", None, "pull request is not open")
     raised = False
@@ -640,9 +639,51 @@ def scenario_g(candidate_root: Path, fixture: dict[str, Any]) -> dict[str, Any]:
         governance.pending_review_authority_state("owner/repo", "token", pr_number, head)
     except RuntimeError:
         raised = True
-    assert raised, "malformed cycle evidence must fail closed, never classify as pending"
 
-    return {"absent_state": state, "in_progress_state": state2}
+    return {"absent_state": state, "absent_detail": detail, "in_progress_state": state2, "malformed_raised": raised}
+
+
+def scenario_g_grade(observation: dict[str, Any]) -> dict[str, Any]:
+    """Trusted assertions over candidate observations; never imports candidate."""
+    assert observation.get("absent_state") == "pending", "absent cycle must classify as pending"
+    assert isinstance(observation.get("absent_detail"), str) and observation["absent_detail"].startswith(
+        "WAITING_FOR_REVIEWER:"
+    ), "absent cycle must carry WAITING_FOR_REVIEWER detail"
+    assert observation.get("in_progress_state") == "pending", "in-progress cycle must classify as pending"
+    assert observation.get("malformed_raised") is True, "malformed evidence must fail closed: expected RuntimeError"
+    return {"absent_state": observation["absent_state"], "in_progress_state": observation["in_progress_state"]}
+
+
+def scenario_g(candidate_root: Path, fixture: dict[str, Any]) -> dict[str, Any]:
+    return scenario_g_grade(scenario_g_observe(candidate_root, fixture))
+
+
+def scenario_a_grade(observation: dict[str, Any]) -> dict[str, Any]:
+    """Trusted parent-side validation of scenario A's summary evidence."""
+    budget = observation.get("opportunity_seconds")
+    assert type(budget) is int and budget > 2, "opportunity budget must be a positive integer"
+    assert observation.get("below_boundary_seconds") == budget - 2, "below-budget probe is invalid"
+    assert observation.get("above_boundary_seconds") == budget + 2, "above-budget probe is invalid"
+    assert observation.get("timed_out_state") == "REVIEW_TIMED_OUT", "past-budget cycle must terminate"
+    assert observation.get("in_opportunity_state") == "WAITING_FOR_REVIEWER", "within-budget cycle must stay pending"
+    assert observation.get("active_deferred_state") == "WAITING_FOR_REVIEWER", "active collector must defer timeout"
+    assert observation.get("active_ceiling_seconds") == budget * ACTIVE_COLLECTOR_CEILING_MULTIPLIER + 2
+    assert observation.get("active_ceiling_state") == "REVIEW_TIMED_OUT", "collector ceiling must terminate"
+    return observation
+
+
+def scenario_b_grade(observation: dict[str, Any]) -> dict[str, Any]:
+    """Trusted parent-side validation of scenario B's summary evidence."""
+    assert isinstance(observation, dict), "collector observations must be an object"
+    grace = observation.get("liveness_grace_seconds")
+    maximum = observation.get("max_dispatches")
+    assert type(grace) is int and grace > 0, "liveness grace must be positive"
+    assert type(maximum) is int and maximum >= 1, "dispatch budget must be positive"
+    assert type(observation.get("dispatches")) is int and observation["dispatches"] >= maximum, "dispatch count is inconsistent"
+    assert observation.get("correlated_runs") == maximum, "correlated runs must exhaust budget"
+    assert type(observation.get("durable_records_published")) is int and observation["durable_records_published"] >= 2, "durable record missing"
+    assert observation.get("exhausted_state") == "WAITING_FOR_REVIEWER", "exhausted cycle must remain pending"
+    return observation
 
 
 SCENARIOS = {"A": scenario_a, "B": scenario_b, "G": scenario_g}
@@ -650,6 +691,34 @@ SCENARIOS = {"A": scenario_a, "B": scenario_b, "G": scenario_g}
 #: a hostile candidate module that hangs (an infinite loop, a blocking call)
 #: instead of ever returning or raising.
 SCENARIO_CHILD_TIMEOUT_SECONDS = 60
+
+
+MAX_SCENARIO_MESSAGE_BYTES = 1024 * 1024
+
+
+def _send_scenario_message(conn: Connection, message: dict[str, Any]) -> None:
+    payload = json.dumps(message, ensure_ascii=False, allow_nan=False).encode("utf-8")
+    if len(payload) > MAX_SCENARIO_MESSAGE_BYTES:
+        raise ValueError("scenario message exceeds maximum size")
+    conn.send_bytes(payload)
+
+
+def _decode_scenario_message(payload: bytes) -> dict[str, Any]:
+    message = json.loads(payload.decode("utf-8"))
+    if not isinstance(message, dict) or not isinstance(message.get("stage"), str):
+        raise ValueError("scenario message must be an object with a stage")
+    stage = message["stage"]
+    if stage == "started" and set(message) == {"stage"}:
+        return message
+    if stage == "done" and set(message) == {"stage", "measurements"} and isinstance(message["measurements"], dict):
+        return message
+    if (
+        stage == "failed"
+        and set(message) == {"stage", "error", "traceback"}
+        and all(isinstance(message[k], str) for k in ("error", "traceback"))
+    ):
+        return message
+    raise ValueError("invalid scenario message shape")
 
 
 def _scenario_child(conn: Connection, scenario_id: str, candidate_root_str: str, fixture: dict[str, Any]) -> None:
@@ -668,12 +737,9 @@ def _scenario_child(conn: Connection, scenario_id: str, candidate_root_str: str,
     ``failed`` pair, never a bare stdout line or a process exit code (see
     ``_run_scenario_isolated``).
 
-    ``measurements`` is forced through a JSON round-trip before it crosses
-    the pipe: :func:`multiprocessing.connection.Connection.send` pickles its
-    argument, and a scenario's raw return value can carry whatever object a
-    candidate function chose to return, so only JSON-safe primitives -- never
-    an arbitrary picklable object a candidate could shape into a
-    deserialization gadget -- are allowed onto that channel.
+    All messages cross the pipe as bounded JSON bytes, never executable pickle.
+    This prevents deserialization execution, not forgery by a candidate that
+    obtains the pipe handle; child messages are not authentication evidence.
 
     stdout/stderr are redirected to the null device before anything else
     runs, at the OS file-descriptor level (not just reassigning
@@ -689,25 +755,53 @@ def _scenario_child(conn: Connection, scenario_id: str, candidate_root_str: str,
     os.close(devnull_fd)
 
     try:
-        conn.send({"stage": "started"})
-        measurements = SCENARIOS[scenario_id](Path(candidate_root_str), fixture)
-        safe_measurements = json.loads(json.dumps(measurements, ensure_ascii=False))
-        conn.send({"stage": "done", "measurements": safe_measurements})
+        _send_scenario_message(conn, {"stage": "started"})
+        # Freeze trusted dispatch before importing candidate code.
+        trusted_scenario = SCENARIOS[scenario_id]
+        measurements = (scenario_g_observe if scenario_id == "G" else trusted_scenario)(Path(candidate_root_str), fixture)
+        _send_scenario_message(conn, {"stage": "done", "measurements": measurements})
     except (
         BaseException
     ) as exc:  # noqa: BLE001 - every candidate-triggered failure must be reported, never crash silently
         try:
-            conn.send(
+            _send_scenario_message(
+                conn,
                 {
                     "stage": "failed",
                     "error": f"{type(exc).__name__}: {exc}",
                     "traceback": traceback.format_exc(),
-                }
+                },
             )
         except Exception:
             pass
     finally:
         conn.close()
+
+
+def _recv_before_deadline(conn: Connection, deadline: float) -> Any:
+    """Bound the *whole* framed pipe receive, not merely its first readable byte.
+
+    multiprocessing.Connection.poll() reports a partial frame as readable, but
+    recv() can then block forever. A daemon reader never owns trusted state;
+    on timeout the caller closes the pipe and terminates the isolated child.
+    """
+    result: queue.Queue[tuple[bool, Any]] = queue.Queue(maxsize=1)
+
+    def read() -> None:
+        try:
+            result.put((True, _decode_scenario_message(conn.recv_bytes(maxlength=MAX_SCENARIO_MESSAGE_BYTES))))
+        except (EOFError, OSError, ValueError, UnicodeError, json.JSONDecodeError) as exc:
+            result.put((False, exc))
+
+    reader = threading.Thread(target=read, daemon=True, name="bounded-replay-pipe-reader")
+    reader.start()
+    try:
+        ok, value = result.get(timeout=max(0.0, deadline - time.monotonic()))
+    except queue.Empty as exc:
+        raise TimeoutError("scenario completion frame exceeded its deadline") from exc
+    if not ok:
+        raise value
+    return value
 
 
 def _run_scenario_isolated(scenario_id: str, candidate_root: Path, fixture: dict[str, Any]) -> dict[str, Any]:
@@ -732,12 +826,13 @@ def _run_scenario_isolated(scenario_id: str, candidate_root: Path, fixture: dict
     try:
         while len(messages) < 2 and parent_conn.poll(timeout=remaining):
             try:
-                messages.append(parent_conn.recv())
-            except EOFError:
+                messages.append(_recv_before_deadline(parent_conn, deadline))
+            except (EOFError, OSError, ValueError, TimeoutError):
                 break
-            # Give a real scenario its remaining wall-clock budget. The old
-            # fixed five-second post-start window killed healthy scenarios on
-            # hosted runners, which are slower than local development hosts.
+            # Startup has its own bounded window. A trusted started sentinel
+            # begins a fresh, full scenario execution budget.
+            if len(messages) == 1 and isinstance(messages[0], dict) and messages[0].get("stage") == "started":
+                deadline = time.monotonic() + float(SCENARIO_CHILD_TIMEOUT_SECONDS)
             remaining = max(0.0, deadline - time.monotonic())
     finally:
         parent_conn.close()
@@ -769,6 +864,15 @@ def _run_scenario_isolated(scenario_id: str, candidate_root: Path, fixture: dict
     measurements = finished.get("measurements")
     if not isinstance(measurements, dict):
         return fail("'done' message carried non-dict measurements")
+    try:
+        if scenario_id == "G":
+            measurements = scenario_g_grade(measurements)
+        elif scenario_id == "A":
+            measurements = scenario_a_grade(measurements)
+        elif scenario_id == "B":
+            measurements = scenario_b_grade(measurements)
+    except (AssertionError, KeyError, TypeError, ValueError) as exc:
+        return fail(f"trusted {scenario_id} grader rejected candidate observations: {exc}")
     return {"outcome": "pass", "measurements": measurements}
 
 

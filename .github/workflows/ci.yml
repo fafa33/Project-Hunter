@@ -48,8 +48,11 @@ jobs:
           set -euo pipefail
           python -m pip install --disable-pip-version-check --only-binary :all: -c requirements/ci-constraints.txt -e ".[dev]"
 
-      # Cheap PR-attached hygiene only. The exact-head heavy authority is
-      # Hunter Pre-PR Preflight itself; this job must never race or duplicate it.
+      # Unprivileged PR-attached hygiene check only. All authoritative
+      # security validation, PR HEAD SHA binding, forge prevention, and
+      # candidate admission adjudication are performed exclusively by
+      # default-branch-owned controllers (hunter_governance_review_v2.py /
+      # hunter-trusted-preflight-upgrade.yml / hunter_merge_readiness_v2.py).
       - name: Verify CI wiring
         run: python -m compileall -q scripts src
 

@@ -512,6 +512,16 @@ def test_scenario_fails_against_a_candidate_that_forges_a_passing_payload_and_ex
     assert "trusted completion message" in result["error"]
 
 
+def test_untrusted_candidate_cannot_change_scenario_dispatch(tmp_path):
+    candidate_source = """import __main__
+if hasattr(__main__, 'SCENARIOS'):
+    __main__.SCENARIOS['B'] = lambda *_: {'dispatches': 1}
+"""
+    root = _candidate_root(tmp_path, orchestrator_src=candidate_source)
+    result = replay._run_scenario('B', root, _fixture_path(tmp_path), workspace_root=tmp_path)
+    assert result['outcome'] == 'fail', result
+
+
 # --- Scenario G: WAITING_FOR_REVIEWER -> pending classification ------------
 
 
@@ -1863,3 +1873,184 @@ def test_replay_step_derives_the_loader_path_from_the_interpreter_instead_of_inh
     run = next(step for step in steps if step.get("name", "").startswith("Run trusted candidate"))["run"]
     assert "${LD_LIBRARY_PATH" not in run
     assert "sys.base_prefix" in run and 'LD_LIBRARY_PATH="$py_lib"' in run
+
+
+
+def test_worker_post_started_timeout_budget_with_controlled_clock(monkeypatch):
+    """Startup time is not charged to execution; a stalled child times out."""
+    import importlib.util
+
+    worker_path = REPO_ROOT / "scripts/hunter_trusted_orchestrator_replay_worker.py"
+    spec = importlib.util.spec_from_file_location("replay_worker_timeout_test", worker_path)
+    assert spec is not None and spec.loader is not None
+    worker = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(worker)
+
+    class Clock:
+        now = 0.0
+
+        def monotonic(self):
+            return self.now
+
+    class Pipe:
+        def __init__(self, clock, finish_delay):
+            self.clock = clock
+            self.finish_delay = finish_delay
+            self.events = [
+                (9.0, {"stage": "started"}),
+                (9.0 + finish_delay, {"stage": "done", "measurements": {"ok": True}}),
+            ]
+            self.available = False
+
+        def poll(self, timeout):
+            if not self.events:
+                self.clock.now += timeout
+                return False
+            at, _ = self.events[0]
+            if at > self.clock.now + timeout:
+                self.clock.now += timeout
+                return False
+            self.clock.now = at
+            self.available = True
+            return True
+
+        def recv(self):
+            assert self.available
+            self.available = False
+            return self.events.pop(0)[1]
+
+        def close(self):
+            pass
+
+    class Process:
+        def start(self):
+            pass
+
+        def join(self, timeout):
+            pass
+
+        def is_alive(self):
+            return False
+
+    class Context:
+        def __init__(self, pipe):
+            self.pipe = pipe
+
+        def Pipe(self, duplex):
+            assert duplex is False
+            return self.pipe, PipeEnd()
+
+        def Process(self, **kwargs):
+            return Process()
+
+    class PipeEnd:
+        def close(self):
+            pass
+
+    # This test isolates deadline accounting; scenario A evidence grading is tested separately.
+    monkeypatch.setattr(worker, "scenario_a_grade", lambda measurements: measurements)
+
+    for finish_delay, expected in [(59.0, "pass"), (61.0, "fail")]:
+        clock = Clock()
+        pipe = Pipe(clock, finish_delay)
+        monkeypatch.setattr(worker.time, "monotonic", clock.monotonic)
+        monkeypatch.setattr(worker.mp, "get_context", lambda method, pipe=pipe: Context(pipe))
+        monkeypatch.setattr(worker, "SCENARIO_CHILD_TIMEOUT_SECONDS", 60)
+        monkeypatch.setattr(worker, "_recv_before_deadline", lambda conn, deadline: conn.recv())
+        result = worker._run_scenario_isolated("A", REPO_ROOT, {})
+        assert result["outcome"] == expected
+        assert clock.now == (9.0 + finish_delay if expected == "pass" else 69.0)
+
+
+def test_worker_partial_pipe_frame_cannot_extend_deadline():
+    """A readable header with no payload must not block trusted replay forever."""
+    import importlib.util
+    import multiprocessing.connection
+    import os
+    import time
+
+    worker_path = REPO_ROOT / "scripts/hunter_trusted_orchestrator_replay_worker.py"
+    spec = importlib.util.spec_from_file_location("replay_worker_partial_frame_test", worker_path)
+    assert spec is not None and spec.loader is not None
+    worker = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(worker)
+
+    read_fd, write_fd = os.pipe()
+    conn = multiprocessing.connection.Connection(read_fd, readable=True, writable=False)
+    try:
+        # A valid 4-byte frame header claiming 64 bytes, followed by only one.
+        os.write(write_fd, (64).to_bytes(4, "big", signed=True) + b"x")
+        assert conn.poll(0), "the partial frame is already readable"
+        start = time.monotonic()
+        with pytest.raises(TimeoutError, match="deadline"):
+            worker._recv_before_deadline(conn, start + 0.15)
+        assert time.monotonic() - start < 1.5
+    finally:
+        os.close(write_fd)
+        conn.close()
+
+
+def test_outer_supervisor_budget_exceeds_both_worker_windows_and_cleanup(monkeypatch):
+    """A slow startup cannot cause the outer supervisor to kill a valid worker."""
+    import importlib.util
+
+    worker_path = REPO_ROOT / "scripts/hunter_trusted_orchestrator_replay_worker.py"
+    spec = importlib.util.spec_from_file_location("replay_worker_supervisor_budget_test", worker_path)
+    assert spec is not None and spec.loader is not None
+    worker = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(worker)
+    assert replay.WORKER_STARTUP_TIMEOUT_SECONDS == worker.SCENARIO_CHILD_TIMEOUT_SECONDS
+    assert replay.WORKER_EXECUTION_TIMEOUT_SECONDS == worker.SCENARIO_CHILD_TIMEOUT_SECONDS
+    assert replay.WORKER_TIMEOUT_SECONDS > (
+        2 * worker.SCENARIO_CHILD_TIMEOUT_SECONDS + replay.WORKER_CLEANUP_TIMEOUT_SECONDS
+    )
+    observed = {}
+
+    def fake_run(*args, **kwargs):
+        observed["timeout"] = kwargs["timeout"]
+        return subprocess.CompletedProcess(args[0], 0, stdout='{"outcome":"pass"}\n', stderr="")
+
+    monkeypatch.setattr(replay.subprocess, "run", fake_run)
+    with tempfile.TemporaryDirectory() as tmp:
+        root = Path(tmp)
+        candidate = root / "candidate"
+        candidate.mkdir()
+        fixture = root / "fixture.json"
+        fixture.write_text("{}", encoding="utf-8")
+        replay._run_scenario("A", candidate, fixture, workspace_root=root)
+    assert observed["timeout"] == replay.WORKER_TIMEOUT_SECONDS
+
+
+def test_replay_worker_rejects_pickle_frames_without_executing_reducers(tmp_path):
+    """Hostile child pipe bytes cannot execute a pickle reducer in the parent."""
+    import importlib.util
+    import pickle
+
+    worker_path = REPO_ROOT / "scripts/hunter_trusted_orchestrator_replay_worker.py"
+    spec = importlib.util.spec_from_file_location("replay_worker_json_frame_test", worker_path)
+    assert spec is not None and spec.loader is not None
+    worker = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(worker)
+
+    marker = tmp_path / "pickle_executed"
+
+    class Gadget:
+        def __reduce__(self):
+            return (marker.write_text, ("unsafe",))
+
+    frame = pickle.dumps(Gadget())
+    import pytest
+
+    with pytest.raises((UnicodeError, ValueError)):
+        worker._decode_scenario_message(frame)
+    assert not marker.exists()
+
+    for invalid in (
+        b"[]",
+        b'{"stage":"started","extra":1}',
+        b'{"stage":"done","measurements":[]}',
+        b'{"stage":"failed","error":1,"traceback":"x"}',
+    ):
+        with pytest.raises(ValueError):
+            worker._decode_scenario_message(invalid)
+    assert worker._decode_scenario_message(b'{"stage":"started"}') == {"stage": "started"}

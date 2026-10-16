@@ -135,6 +135,14 @@ def test_owner_aliases_resolve_to_one_canonical_principal() -> None:
     assert owner is not None
     assert binding.identity_for("Farhad5778") is owner
     assert binding.identity_for_github_user_id(34549283) is owner
+    # The GitHub login and the owner's display name are the same principal,
+    binding, error = provenance.load_binding()
+    assert binding is not None, error
+    # but only with an explicitly bound owner email (never a lookalike email).
+    assert provenance.evaluate_commit(
+        binding, _commit(author=("fafa33", "34549283+fafa33@users.noreply.github.com"))
+    ).ok
+    assert not provenance.evaluate_commit(binding, _commit(author=("fafa33", "attacker@example.invalid"))).ok
     for email in ("34549283+fafa33@users.noreply.github.com", "farhadafshari33@yahoo.com"):
         verdict = provenance.evaluate_commit(binding, _commit(author=("Farhad5778", email)))
         assert verdict.ok is True and verdict.writer_login == "fafa33"
@@ -1629,6 +1637,13 @@ def test_candidate_admission_propagates_pending_instead_of_publishing_failure(mo
         lambda *_a: ("pending", "Candidate admission is waiting: hosted proof is running"),
     )
 
+    monkeypatch.setattr(
+        core,
+        "request_json",
+        lambda _repo, _token, method, path, *_a: (
+            {"head": {"sha": HEAD}} if method == "GET" and path.startswith("pulls/") else {}
+        ),
+    )
     state, description = core.candidate_admission("repo", "token", HEAD, PR_NUMBER)
 
     assert state == "pending"
@@ -1785,6 +1800,10 @@ def test_pre_push_refuses_an_unbound_writer_before_any_network_push(monkeypatch,
     """The whole point of Issue #412: the refusal happens locally, not after a push."""
     pushed: list[object] = []
     monkeypatch.setattr(hunter_pre_push, "_run_git", _pre_push_git(tmp_path, HEAD))
+    monkeypatch.setattr(hunter_pre_push, "_repository_from_remotes", lambda: "fafa33/Project-Hunter")
+    monkeypatch.setattr(
+        hunter_pre_push, "_run_hgcc_contract_check", lambda _repo: type("Result", (), {"returncode": 0, "stderr": ""})()
+    )
     monkeypatch.setattr(hunter_pre_push.os, "chdir", lambda _path: None)
     monkeypatch.setattr(hunter_pre_push, "_validate_receipt_freshness", lambda _head: None)
     monkeypatch.setattr(
@@ -1809,6 +1828,10 @@ def test_pre_push_refuses_an_unbound_writer_before_any_network_push(monkeypatch,
 def test_pre_push_admits_a_bound_multi_commit_range(monkeypatch, tmp_path: Path) -> None:
     """The paired positive: a bound range reaches the canonical preflight."""
     monkeypatch.setattr(hunter_pre_push, "_run_git", _pre_push_git(tmp_path, HEAD))
+    monkeypatch.setattr(hunter_pre_push, "_repository_from_remotes", lambda: "fafa33/Project-Hunter")
+    monkeypatch.setattr(
+        hunter_pre_push, "_run_hgcc_contract_check", lambda _repo: type("Result", (), {"returncode": 0, "stderr": ""})()
+    )
     monkeypatch.setattr(hunter_pre_push.os, "chdir", lambda _path: None)
     monkeypatch.setattr(hunter_pre_push, "_validate_receipt_freshness", lambda _head: None)
     monkeypatch.setattr(hunter_pre_push, "report_pre_ready_review_state", lambda _head, _updates: None)
@@ -2649,6 +2672,10 @@ def test_governing_criteria_are_fetched_from_the_canonical_repository_not_the_fo
         raise AssertionError(args)
 
     monkeypatch.setattr(hunter_pre_push, "_run_git", fake_git)
+    monkeypatch.setattr(hunter_pre_push, "_repository_from_remotes", lambda: "fafa33/Project-Hunter")
+    monkeypatch.setattr(
+        hunter_pre_push, "_run_hgcc_contract_check", lambda _repo: type("Result", (), {"returncode": 0, "stderr": ""})()
+    )
     captured: dict[str, str] = {}
 
     def _criteria(repository: str, _token: str, issue: str) -> tuple[str, tuple[str, ...], str]:
@@ -2813,6 +2840,10 @@ def test_malformed_review_evidence_does_not_block_an_ordinary_draft_push(monkeyp
         raise AssertionError(args)
 
     monkeypatch.setattr(hunter_pre_push, "_run_git", fake_git)
+    monkeypatch.setattr(hunter_pre_push, "_repository_from_remotes", lambda: "fafa33/Project-Hunter")
+    monkeypatch.setattr(
+        hunter_pre_push, "_run_hgcc_contract_check", lambda _repo: type("Result", (), {"returncode": 0, "stderr": ""})()
+    )
     monkeypatch.setattr(hunter_pre_push.os, "chdir", lambda _path: None)
     monkeypatch.setattr(hunter_pre_push, "_validate_writer_provenance", lambda _head: None)
     monkeypatch.setattr(hunter_pre_push, "_validate_receipt_freshness", lambda _head: None)

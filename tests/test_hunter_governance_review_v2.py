@@ -3,11 +3,25 @@ from __future__ import annotations
 import importlib
 from pathlib import Path
 
+import pytest
+
 core = importlib.import_module("hunter_governance_review_v2")
 transport = importlib.import_module("hunter_github_transport")
 
 
 HEAD = "b" * 40
+
+
+@pytest.fixture(autouse=True)
+def _stub_candidate_admission_pr_head(monkeypatch):
+    original = core.request_json
+
+    def guarded(*args, **kwargs):
+        if len(args) >= 4 and args[2] == "GET" and str(args[3]).startswith("pulls/"):
+            return {"head": {"sha": HEAD}}
+        return original(*args, **kwargs)
+
+    monkeypatch.setattr(core, "request_json", guarded)
 
 
 def _pr(mergeable: bool | None) -> dict:
@@ -179,6 +193,12 @@ def test_workflow_uses_only_trusted_v2_controller_with_safe_bootstrap():
     # copy of this file, so `actions: write` here would be candidate-reachable.
     assert "python scripts/hunter_review_orchestrator.py" not in workflow
     assert "actions: write" not in workflow
+    # A status-writing workflow must never run a candidate-authored definition.
+    assert "  pull_request_target:" in workflow
+    assert "  pull_request:" not in workflow
+    assert "  statuses: write" in workflow
+    assert "path: engine" in workflow
+    assert "path: candidate" not in workflow
     assert "actions: read" in workflow
     assert "hunter_governance_review_v2.py" in workflow
 
