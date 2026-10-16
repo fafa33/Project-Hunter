@@ -364,6 +364,30 @@ def _write_governed_review_request(run: RunCommand, worktree: Path, main_sha: st
     inherited.write_text(json.dumps(document, indent=2, sort_keys=True) + "\n")
 
 
+def _recoverable_candidate_delta(run: RunCommand, root: str, main_sha: str, previous_sha: str) -> bool:
+    """Reject stale squash-merged branches and non-knowledge orphan recovery.
+
+    An ancestry test alone cannot identify a squash merge: the old tip is
+    unreachable even when all its knowledge changes landed on main.
+    """
+    output = _run(
+        run,
+        ["git", "-C", root, "diff", "--name-only", main_sha, previous_sha],
+        what="verify orphan candidate content against current main",
+    )
+    paths = set(output.splitlines())
+    knowledge_paths = {REGISTRY_RELATIVE_PATH, DISPOSITIONS_RELATIVE_PATH}
+    allowed = knowledge_paths | {pre_ready.REVIEW_RELATIVE_PATH}
+    knowledge = paths & knowledge_paths
+    if not knowledge:
+        return False
+    if paths - allowed:
+        raise CanonicalizationCandidatePrError(
+            "orphan canonicalization branch contains non-knowledge changes: " + ", ".join(sorted(paths - allowed))
+        )
+    return True
+
+
 def _remote_branch_tree(run: RunCommand, worktree: Path, sha: str) -> str:
     output = _run(run, ["git", "-C", str(worktree), "rev-parse", f"{sha}^{{tree}}"], what="resolve remote tree")
     return output.strip()
@@ -511,7 +535,10 @@ def propose(
         # still-unmerged finding's proposal on the same branch/PR.
         base_sha = main_sha
         if previous_sha is not None and not _is_ancestor(run, root, previous_sha, main_sha):
-            base_sha = previous_sha
+            # A squash-merged candidate is not a Git ancestor of main. Only
+            # accumulate a branch that still carries actual knowledge changes.
+            if _recoverable_candidate_delta(run, root, main_sha, previous_sha):
+                base_sha = previous_sha
 
         _run(
             run,
@@ -544,7 +571,11 @@ def propose(
                 # content and return NO-OP forever, silently orphaning the
                 # branch. Reconcile it here: if the branch is real, unmerged,
                 # and has no open PR, open one for it -- no new commit needed.
-                if previous_sha is not None and not _is_ancestor(run, root, previous_sha, main_sha):
+                if (
+                    previous_sha is not None
+                    and not _is_ancestor(run, root, previous_sha, main_sha)
+                    and _recoverable_candidate_delta(run, root, main_sha, previous_sha)
+                ):
                     if _existing_open_pr_number(run, DEDICATED_BRANCH) is None:
                         create_output = _open_candidate_pr(
                             run,
@@ -564,7 +595,11 @@ def propose(
                 # captured only raw lifecycle evidence. A disposition delta is
                 # intentionally not committed, but it must not suppress recovery
                 # of a previously pushed canonical branch that still lacks a PR.
-                if previous_sha is not None and not _is_ancestor(run, root, previous_sha, main_sha):
+                if (
+                    previous_sha is not None
+                    and not _is_ancestor(run, root, previous_sha, main_sha)
+                    and _recoverable_candidate_delta(run, root, main_sha, previous_sha)
+                ):
                     if _existing_open_pr_number(run, DEDICATED_BRANCH) is None:
                         create_output = _open_candidate_pr(
                             run,
