@@ -794,3 +794,80 @@ def test_candidate_review_request_binds_real_issue_and_never_reuses_603(origin_r
     assert document["claims"]["issue"] == candidate_pr.GOVERNING_ISSUE == "532"
     assert document["claims"]["acceptance_criteria"]
     assert document["review_request"]["claims_id"] == document["review_id"]
+
+
+def test_squash_merged_branch_cannot_be_reopened_as_orphan(origin_repo: Path, tmp_path: Path) -> None:
+    """Squash merge breaks ancestry; identical knowledge content is not a new PR."""
+    recorder = RecordingRun(existing_pr=None)
+    candidate_pr.propose(
+        pr=901,
+        head=HEAD,
+        base=BASE,
+        observations=[_observation(901)],
+        repo=str(origin_repo),
+        repo_root=tmp_path / "seed",
+        run=recorder,
+    )
+    # Reproduce a squash merge: copy only governed knowledge content onto main.
+    seed = tmp_path / "seed"
+    subprocess.run(
+        ["git", "fetch", str(origin_repo), candidate_pr.DEDICATED_BRANCH], cwd=seed, check=True, capture_output=True
+    )
+    subprocess.run(
+        [
+            "git",
+            "checkout",
+            "FETCH_HEAD",
+            "--",
+            candidate_pr.REGISTRY_RELATIVE_PATH,
+            candidate_pr.DISPOSITIONS_RELATIVE_PATH,
+        ],
+        cwd=seed,
+        check=True,
+        capture_output=True,
+    )
+    subprocess.run(["git", "commit", "-m", "squash knowledge candidate"], cwd=seed, check=True, capture_output=True)
+    subprocess.run(["git", "push", "origin", "main"], cwd=seed, check=True, capture_output=True)
+    recovery = RecordingRun(existing_pr=None)
+    result = candidate_pr.propose(
+        pr=901,
+        head=HEAD,
+        base=BASE,
+        observations=[_observation(901)],
+        repo=str(origin_repo),
+        repo_root=seed,
+        run=recovery,
+    )
+    assert "NO-OP" in result
+    assert recovery.pr_create_calls == 0
+
+
+def test_recovery_ignores_main_only_nonknowledge_changes(origin_repo: Path, tmp_path: Path) -> None:
+    """Codex PR #611: new main code changes must not poison orphan recovery."""
+    seed = tmp_path / "seed"
+    recorder = RecordingRun(existing_pr=None)
+    candidate_pr.propose(
+        pr=901,
+        head=HEAD,
+        base=BASE,
+        observations=[_observation(901)],
+        repo=str(origin_repo),
+        repo_root=seed,
+        run=recorder,
+    )
+    (seed / "unrelated-main-change.txt").write_text("unrelated merged change\n")
+    subprocess.run(["git", "add", "unrelated-main-change.txt"], cwd=seed, check=True, capture_output=True)
+    subprocess.run(["git", "commit", "-m", "unrelated main change"], cwd=seed, check=True, capture_output=True)
+    subprocess.run(["git", "push", "origin", "main"], cwd=seed, check=True, capture_output=True)
+    recovery = RecordingRun(existing_pr=None)
+    result = candidate_pr.propose(
+        pr=901,
+        head=HEAD,
+        base=BASE,
+        observations=[_observation(901)],
+        repo=str(origin_repo),
+        repo_root=seed,
+        run=recovery,
+    )
+    assert "NO-OP" not in result
+    assert recovery.pr_create_calls == 1

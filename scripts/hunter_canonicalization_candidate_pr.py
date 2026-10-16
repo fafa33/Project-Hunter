@@ -341,27 +341,55 @@ def _write_governed_review_request(run: RunCommand, worktree: Path, main_sha: st
         "findings": [],
         "adversarial_dimensions": dimensions,
     }
-    document = pre_ready.prepare_request(
-        issue=GOVERNING_ISSUE,
-        base=main_sha,
-        head=head,
-        base_ref=BASE_BRANCH,
-        judgement=judgement,
-        cwd=worktree,
+    try:
+        pre_ready.finalize_writer_review_request(
+            issue=GOVERNING_ISSUE,
+            base=main_sha,
+            head=head,
+            base_ref=BASE_BRANCH,
+            judgement=judgement,
+            cwd=worktree,
+            issue_criteria=criteria,
+        )
+    except ValueError as exc:
+        raise CanonicalizationCandidatePrError(str(exc)) from exc
+
+
+def _recoverable_candidate_delta(run: RunCommand, root: str, main_sha: str, previous_sha: str) -> bool:
+    """Reject stale squash-merged branches and non-knowledge orphan recovery.
+
+    An ancestry test alone cannot identify a squash merge: the old tip is
+    unreachable even when all its knowledge changes landed on main.
+    """
+    merge_base = _run(
+        run,
+        ["git", "-C", root, "merge-base", main_sha, previous_sha],
+        what="resolve candidate fork point",
+    ).strip()
+    introduced = set(
+        _run(
+            run,
+            ["git", "-C", root, "diff", "--name-only", merge_base, previous_sha],
+            what="inspect candidate-introduced paths",
+        ).splitlines()
     )
-    verdict = pre_ready.verify_review_request(
-        document,
-        base_sha=main_sha,
-        changes=changes,
-        families=families,
-        issue_criteria=criteria,
-        coverage_scopes=(),
-        head_sha=head,
+    knowledge_paths = {REGISTRY_RELATIVE_PATH, DISPOSITIONS_RELATIVE_PATH}
+    allowed = knowledge_paths | {pre_ready.REVIEW_RELATIVE_PATH}
+    unexpected = introduced - allowed
+    if unexpected:
+        raise CanonicalizationCandidatePrError(
+            "orphan canonicalization branch contains non-knowledge changes: " + ", ".join(sorted(unexpected))
+        )
+    # Compare *contents* with current main independently: the old candidate
+    # may be unreachable after a squash merge but carry no new knowledge.
+    remaining = set(
+        _run(
+            run,
+            ["git", "-C", root, "diff", "--name-only", main_sha, previous_sha, "--", *sorted(knowledge_paths)],
+            what="verify remaining candidate knowledge content",
+        ).splitlines()
     )
-    if not verdict.ok:
-        raise CanonicalizationCandidatePrError(f"review request failed pre-commit validation: {verdict.reason}")
-    inherited.parent.mkdir(parents=True, exist_ok=True)
-    inherited.write_text(json.dumps(document, indent=2, sort_keys=True) + "\n")
+    return bool(introduced & knowledge_paths and remaining)
 
 
 def _remote_branch_tree(run: RunCommand, worktree: Path, sha: str) -> str:
@@ -511,7 +539,10 @@ def propose(
         # still-unmerged finding's proposal on the same branch/PR.
         base_sha = main_sha
         if previous_sha is not None and not _is_ancestor(run, root, previous_sha, main_sha):
-            base_sha = previous_sha
+            # A squash-merged candidate is not a Git ancestor of main. Only
+            # accumulate a branch that still carries actual knowledge changes.
+            if _recoverable_candidate_delta(run, root, main_sha, previous_sha):
+                base_sha = previous_sha
 
         _run(
             run,
@@ -544,7 +575,11 @@ def propose(
                 # content and return NO-OP forever, silently orphaning the
                 # branch. Reconcile it here: if the branch is real, unmerged,
                 # and has no open PR, open one for it -- no new commit needed.
-                if previous_sha is not None and not _is_ancestor(run, root, previous_sha, main_sha):
+                if (
+                    previous_sha is not None
+                    and not _is_ancestor(run, root, previous_sha, main_sha)
+                    and _recoverable_candidate_delta(run, root, main_sha, previous_sha)
+                ):
                     if _existing_open_pr_number(run, DEDICATED_BRANCH) is None:
                         create_output = _open_candidate_pr(
                             run,
@@ -564,7 +599,11 @@ def propose(
                 # captured only raw lifecycle evidence. A disposition delta is
                 # intentionally not committed, but it must not suppress recovery
                 # of a previously pushed canonical branch that still lacks a PR.
-                if previous_sha is not None and not _is_ancestor(run, root, previous_sha, main_sha):
+                if (
+                    previous_sha is not None
+                    and not _is_ancestor(run, root, previous_sha, main_sha)
+                    and _recoverable_candidate_delta(run, root, main_sha, previous_sha)
+                ):
                     if _existing_open_pr_number(run, DEDICATED_BRANCH) is None:
                         create_output = _open_candidate_pr(
                             run,
@@ -661,6 +700,39 @@ def propose(
                 ],
                 what="commit governed review request",
             )
+
+            # A review request is committed *after* the reviewed content. Verify
+            # the final commit's actual base-to-HEAD diff, not just its parent.
+            # Otherwise a valid-looking request can be pushed with stale claims
+            # and the trusted Reconcile fails only after PR creation.
+            final_head = _run(
+                run,
+                ["git", "-C", str(worktree), "rev-parse", "HEAD"],
+                what="resolve final candidate head",
+            ).strip()
+            final_document = json.loads((worktree / pre_ready.REVIEW_RELATIVE_PATH).read_text())
+            final_changes = pre_ready.local_changes(main_sha, final_head, cwd=worktree)
+            final_families, final_error = pre_ready.load_families(worktree / pre_ready.REGISTRY_RELATIVE_PATH)
+            if final_error:
+                raise CanonicalizationCandidatePrError(final_error)
+            final_verdict = pre_ready.verify_review_request(
+                final_document,
+                base_sha=main_sha,
+                changes=final_changes,
+                families=final_families,
+                issue_criteria=pre_ready.parse_issue_acceptance_criteria(
+                    _run(
+                        run,
+                        ["gh", "issue", "view", GOVERNING_ISSUE, "--json", "body", "--jq", ".body"],
+                        what="verify final governing Issue criteria",
+                    )
+                ),
+                head_sha=final_head,
+            )
+            if not final_verdict.ok:
+                raise CanonicalizationCandidatePrError(
+                    "final committed review request does not match candidate HEAD: " + final_verdict.reason
+                )
 
             new_tree = _run(
                 run, ["git", "-C", str(worktree), "rev-parse", "HEAD^{tree}"], what="resolve candidate tree"

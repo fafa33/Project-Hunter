@@ -2000,6 +2000,24 @@ def valid_current_review_request(
 ) -> tuple[bool, str]:
     """Verify request claims before the trusted collector spends reviewer capacity."""
 
+    # The caller may have read a candidate HEAD before an external writer pushed.
+    # Bind the entire verification to the live PR HEAD, not just the caller's SHA.
+    try:
+        initial = request_json(repository, token, "GET", f"pulls/{pr_number}")
+        if not isinstance(initial, dict) or not isinstance(initial.get("head"), dict):
+            return False, "exact-head review request initial PR evidence is malformed"
+        if str(initial["head"].get("sha") or "").strip() != head_sha:
+            return False, "exact-head review request PR head differs from requested head"
+    except Exception as exc:
+        return False, f"exact-head review request initial PR evidence unavailable ({type(exc).__name__}: {exc})"
+    # The document must be committed to this immutable HEAD, never supplied
+    # solely by an untrusted caller or a connector's out-of-band metadata.
+    state, committed, evidence_error = read_head_pre_ready_review(repository, token, head_sha)
+    if state != "present" or committed != document:
+        return (
+            False,
+            f"exact-head review request committed evidence mismatch ({state}: {evidence_error or 'different content'})",
+        )
     ok_refs, _head_ref, base_ref, refs_error = read_pr_refs(repository, token, pr_number)
     if not ok_refs:
         return False, f"pull-request ref evidence is unavailable ({refs_error})"
@@ -2044,7 +2062,20 @@ def valid_current_review_request(
         coverage_scopes=coverage_scopes,
         head_sha=head_sha,
     )
-    return verdict.ok or verdict.state == pre_ready.SCOPED_STATE, verdict.reason
+    if not (verdict.ok or verdict.state == pre_ready.SCOPED_STATE):
+        return False, verdict.reason
+    # GitHub PR file listings are mutable. Recheck after validation so a push
+    # from a remote/API writer cannot authorize review of a superseded head.
+    try:
+        current = request_json(repository, token, "GET", f"pulls/{pr_number}")
+        if not isinstance(current, dict) or not isinstance(current.get("head"), dict):
+            return False, "exact-head review request PR recheck is malformed"
+        current_head = str(current["head"].get("sha") or "").strip()
+        if current_head != head_sha:
+            return False, "exact-head review request PR head changed during verification"
+    except Exception as exc:
+        return False, f"exact-head review request PR recheck unavailable ({type(exc).__name__}: {exc})"
+    return True, verdict.reason
 
 
 def review_orchestration_state(repository: str, token: str, pr_number: int, head_sha: str) -> tuple[str, str]:

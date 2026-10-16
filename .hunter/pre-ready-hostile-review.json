@@ -3,85 +3,85 @@
     "acceptance_criteria": [
       {
         "criterion": "lean governance: extend existing authorities (merge readiness, governance review, the pre-ready hostile review, the dpm/spm context path) rather than introducing a parallel governance or orchestration framework",
-        "evidence": "PR #570 is a canonical knowledge candidate; this broader Issue #532 criterion is not established by this candidate diff and remains open for its governing mission.",
+        "evidence": "PR #611 only fixes stale squash-merge orphan recovery; this broader Issue #532 criterion is not asserted as completed by this focused correction.",
         "id": "AC-01",
         "verdict": "not-applicable"
       },
       {
         "criterion": "no repository rediscovery reaches the machine-consumed agent execution path, not only human-facing documentation",
-        "evidence": "PR #570 is a canonical knowledge candidate; this broader Issue #532 criterion is not established by this candidate diff and remains open for its governing mission.",
+        "evidence": "PR #611 only fixes stale squash-merge orphan recovery; this broader Issue #532 criterion is not asserted as completed by this focused correction.",
         "id": "AC-02",
         "verdict": "not-applicable"
       },
       {
         "criterion": "execution economy: focused verification is used by default; full-repository validation runs only at the repository-defined stage or when concrete evidence requires it; unchanged exact-head validation evidence is reused rather than rerun",
-        "evidence": "PR #570 is a canonical knowledge candidate; this broader Issue #532 criterion is not established by this candidate diff and remains open for its governing mission.",
+        "evidence": "PR #611 only fixes stale squash-merge orphan recovery; this broader Issue #532 criterion is not asserted as completed by this focused correction.",
         "id": "AC-03",
         "verdict": "not-applicable"
       },
       {
         "criterion": "bounded independent review: the review opportunity has a visible state and does not wait on any single provider indefinitely; explicit reviewer failure, quota exhaustion, or timeout is recorded and does not paralyze the candidate",
-        "evidence": "PR #570 is a canonical knowledge candidate; this broader Issue #532 criterion is not established by this candidate diff and remains open for its governing mission.",
+        "evidence": "PR #611 only fixes stale squash-merge orphan recovery; this broader Issue #532 criterion is not asserted as completed by this focused correction.",
         "id": "AC-04",
         "verdict": "not-applicable"
       },
       {
         "criterion": "no false ready while the bounded independent-review opportunity is still pending: a candidate is not reported fully ready to merge while a legitimately requested review has not yet reached a terminal state",
-        "evidence": "PR #570 is a canonical knowledge candidate; this broader Issue #532 criterion is not established by this candidate diff and remains open for its governing mission.",
+        "evidence": "PR #611 only fixes stale squash-merge orphan recovery; this broader Issue #532 criterion is not asserted as completed by this focused correction.",
         "id": "AC-05",
         "verdict": "not-applicable"
       },
       {
         "criterion": "a machine-consumable execution contract constrains agent execution: acceptance criteria and mission scope are immutable to the worker: an agent may not silently omit, defer, reinterpret, or narrow a criterion, and any scope expansion must be evidence-gated (state why current scope is insufficient, the exact additional scope, and its cost, before acting on it)",
-        "evidence": "PR #570 is a canonical knowledge candidate; this broader Issue #532 criterion is not established by this candidate diff and remains open for its governing mission.",
+        "evidence": "PR #611 only fixes stale squash-merge orphan recovery; this broader Issue #532 criterion is not asserted as completed by this focused correction.",
         "id": "AC-06",
         "verdict": "not-applicable"
       },
       {
         "criterion": "prevention of premature agent completion: an agent's own claim of completion, a final report, a passed local preflight, a pushed commit, or an opened pull request does not itself complete the mission",
-        "evidence": "PR #570 is a canonical knowledge candidate; this broader Issue #532 criterion is not established by this candidate diff and remains open for its governing mission.",
+        "evidence": "PR #611 only fixes stale squash-merge orphan recovery; this broader Issue #532 criterion is not asserted as completed by this focused correction.",
         "id": "AC-07",
         "verdict": "not-applicable"
       },
       {
         "criterion": "an independent completion gate evaluates completion against real, current, exact-head evidence (required hosted checks green, governance/verification gates green, the bounded independent-review opportunity at a legitimate terminal state, no unresolved substantive finding), not against any agent's self-report",
-        "evidence": "PR #570 is a canonical knowledge candidate; this broader Issue #532 criterion is not established by this candidate diff and remains open for its governing mission.",
+        "evidence": "PR #611 only fixes stale squash-merge orphan recovery; this broader Issue #532 criterion is not asserted as completed by this focused correction.",
         "id": "AC-08",
         "verdict": "not-applicable"
       },
       {
         "criterion": "automatic finding-to-remediation orchestration: a validated finding is durably captured and cannot be silently dropped or falsely marked resolved by the remediation lifecycle",
-        "evidence": "PR #570 is a canonical knowledge candidate; this broader Issue #532 criterion is not established by this candidate diff and remains open for its governing mission.",
+        "evidence": "PR #611 only fixes stale squash-merge orphan recovery; this broader Issue #532 criterion is not asserted as completed by this focused correction.",
         "id": "AC-09",
         "verdict": "not-applicable"
       },
       {
         "criterion": "automatic finding-to-canonical-knowledge lifecycle: a resolved finding that maps to an existing canonical defect family is automatically turned into a canonicalization candidate branch and draft pr, without requiring the owner to run the canonicalization cli by hand, and without ever writing directly to main or auto-merging",
-        "evidence": "Candidate PR #570 is generated by scripts/hunter_canonicalization_candidate_pr.py and updates the canonical registry through its governed branch; this is a review request, not reviewer approval.",
+        "evidence": "PR #611 prevents the automatic canonicalization candidate from reopening stale squash-merged branches; regression tests cover both real orphan recovery and squash-merged stale content.",
         "id": "AC-10",
         "verdict": "satisfied"
       },
       {
         "criterion": "one controlled, real end-to-end proof of the automatic finding-to-canonicalization lifecycle exists, using a safe representative finding",
-        "evidence": "PR #570 is a canonical knowledge candidate; this broader Issue #532 criterion is not established by this candidate diff and remains open for its governing mission.",
+        "evidence": "PR #611 only fixes stale squash-merge orphan recovery; this broader Issue #532 criterion is not asserted as completed by this focused correction.",
         "id": "AC-11",
         "verdict": "not-applicable"
       },
       {
         "criterion": "no repository-write authority is broadened, no new code_write_policy.json grant is added, main is never written to directly, and no auto-merge exists anywhere in the new mechanism",
-        "evidence": "PR #570 is a canonical knowledge candidate; this broader Issue #532 criterion is not established by this candidate diff and remains open for its governing mission.",
+        "evidence": "PR #611 only fixes stale squash-merge orphan recovery; this broader Issue #532 criterion is not asserted as completed by this focused correction.",
         "id": "AC-12",
         "verdict": "not-applicable"
       },
       {
         "criterion": "no mandatory paid or external ai provider dependency is introduced anywhere in the new mechanism; the local/manual cli recovery path from pr #528 remains fully supported",
-        "evidence": "PR #570 is a canonical knowledge candidate; this broader Issue #532 criterion is not established by this candidate diff and remains open for its governing mission.",
+        "evidence": "PR #611 only fixes stale squash-merge orphan recovery; this broader Issue #532 criterion is not asserted as completed by this focused correction.",
         "id": "AC-13",
         "verdict": "not-applicable"
       },
       {
         "criterion": "human merge approval remains the final, sole authority to integrate into main; nothing in this mission marks a pr ready or merges it",
-        "evidence": "PR #570 is a canonical knowledge candidate; this broader Issue #532 criterion is not established by this candidate diff and remains open for its governing mission.",
+        "evidence": "PR #611 only fixes stale squash-merge orphan recovery; this broader Issue #532 criterion is not asserted as completed by this focused correction.",
         "id": "AC-14",
         "verdict": "not-applicable"
       }
@@ -100,136 +100,141 @@
       "transaction-snapshot-consistency"
     ],
     "base_ref": "main",
-    "base_sha": "b643fbe589253a3d0ee60bab22efbd53bfc0bf06",
+    "base_sha": "0eecab620fbaa1ae2e9bb5d6008e2174dc2b68b1",
     "defect_families": [
       {
-        "evidence": "Author requests independent assessment against this exact candidate diff; not reviewer approval.",
-        "family": "DFF-001",
-        "outcome": "clear"
-      },
-      {
-        "evidence": "Author requests independent assessment against this exact candidate diff; not reviewer approval.",
-        "family": "DFF-002",
-        "outcome": "clear"
-      },
-      {
-        "evidence": "Author requests independent assessment against this exact candidate diff; not reviewer approval.",
-        "family": "DFF-003",
-        "outcome": "clear"
-      },
-      {
-        "evidence": "Author requests independent assessment against this exact candidate diff; not reviewer approval.",
-        "family": "DFF-004",
-        "outcome": "clear"
-      },
-      {
-        "evidence": "Author requests independent assessment against this exact candidate diff; not reviewer approval.",
-        "family": "DFF-005",
-        "outcome": "clear"
-      },
-      {
-        "evidence": "Author requests independent assessment against this exact candidate diff; not reviewer approval.",
-        "family": "DFF-006",
-        "outcome": "clear"
-      },
-      {
-        "evidence": "Author requests independent assessment against this exact candidate diff; not reviewer approval.",
+        "evidence": "Applicable family included for independent review of current PR #611 content; no reviewer approval or completed adversarial sweep asserted.",
         "family": "DFF-007",
         "outcome": "clear"
       },
       {
-        "evidence": "Author requests independent assessment against this exact candidate diff; not reviewer approval.",
+        "evidence": "Applicable family included for independent review of current PR #611 content; no reviewer approval or completed adversarial sweep asserted.",
         "family": "DFF-008",
         "outcome": "clear"
       },
       {
-        "evidence": "Author requests independent assessment against this exact candidate diff; not reviewer approval.",
+        "evidence": "Applicable family included for independent review of current PR #611 content; no reviewer approval or completed adversarial sweep asserted.",
         "family": "DFF-009",
         "outcome": "clear"
       },
       {
-        "evidence": "Author requests independent assessment against this exact candidate diff; not reviewer approval.",
+        "evidence": "Applicable family included for independent review of current PR #611 content; no reviewer approval or completed adversarial sweep asserted.",
         "family": "DFF-010",
         "outcome": "clear"
       },
       {
-        "evidence": "Author requests independent assessment against this exact candidate diff; not reviewer approval.",
+        "evidence": "Applicable family included for independent review of current PR #611 content; no reviewer approval or completed adversarial sweep asserted.",
         "family": "DFF-011",
         "outcome": "clear"
       },
       {
-        "evidence": "Author requests independent assessment against this exact candidate diff; not reviewer approval.",
+        "evidence": "Applicable family included for independent review of current PR #611 content; no reviewer approval or completed adversarial sweep asserted.",
         "family": "DFF-012",
         "outcome": "clear"
       },
       {
-        "evidence": "Author requests independent assessment against this exact candidate diff; not reviewer approval.",
+        "evidence": "Applicable family included for independent review of current PR #611 content; no reviewer approval or completed adversarial sweep asserted.",
         "family": "DFF-013",
         "outcome": "clear"
       },
       {
-        "evidence": "Author requests independent assessment against this exact candidate diff; not reviewer approval.",
+        "evidence": "Applicable family included for independent review of current PR #611 content; no reviewer approval or completed adversarial sweep asserted.",
         "family": "DFF-014",
         "outcome": "clear"
       },
       {
-        "evidence": "Author requests independent assessment against this exact candidate diff; not reviewer approval.",
+        "evidence": "Applicable family included for independent review of current PR #611 content; no reviewer approval or completed adversarial sweep asserted.",
         "family": "DFF-015",
         "outcome": "clear"
       },
       {
-        "evidence": "Author requests independent assessment against this exact candidate diff; not reviewer approval.",
+        "evidence": "Applicable family included for independent review of current PR #611 content; no reviewer approval or completed adversarial sweep asserted.",
         "family": "DFF-016",
         "outcome": "clear"
       },
       {
-        "evidence": "Author requests independent assessment against this exact candidate diff; not reviewer approval.",
+        "evidence": "Applicable family included for independent review of current PR #611 content; no reviewer approval or completed adversarial sweep asserted.",
         "family": "DFF-019",
         "outcome": "clear"
       },
       {
-        "evidence": "Author requests independent assessment against this exact candidate diff; not reviewer approval.",
+        "evidence": "Applicable family included for independent review of current PR #611 content; no reviewer approval or completed adversarial sweep asserted.",
         "family": "DFF-020",
         "outcome": "clear"
       },
       {
-        "evidence": "Author requests independent assessment against this exact candidate diff; not reviewer approval.",
+        "evidence": "Applicable family included for independent review of current PR #611 content; no reviewer approval or completed adversarial sweep asserted.",
         "family": "DFF-021",
         "outcome": "clear"
       },
       {
-        "evidence": "Author requests independent assessment against this exact candidate diff; not reviewer approval.",
+        "evidence": "Applicable family included for independent review of current PR #611 content; no reviewer approval or completed adversarial sweep asserted.",
+        "family": "DFF-022",
+        "outcome": "clear"
+      },
+      {
+        "evidence": "Applicable family included for independent review of current PR #611 content; no reviewer approval or completed adversarial sweep asserted.",
         "family": "DFF-023",
         "outcome": "clear"
       },
       {
-        "evidence": "Author requests independent assessment against this exact candidate diff; not reviewer approval.",
+        "evidence": "Applicable family included for independent review of current PR #611 content; no reviewer approval or completed adversarial sweep asserted.",
+        "family": "DFF-024",
+        "outcome": "clear"
+      },
+      {
+        "evidence": "Applicable family included for independent review of current PR #611 content; no reviewer approval or completed adversarial sweep asserted.",
+        "family": "DFF-025",
+        "outcome": "clear"
+      },
+      {
+        "evidence": "Applicable family included for independent review of current PR #611 content; no reviewer approval or completed adversarial sweep asserted.",
+        "family": "DFF-026",
+        "outcome": "clear"
+      },
+      {
+        "evidence": "Applicable family included for independent review of current PR #611 content; no reviewer approval or completed adversarial sweep asserted.",
         "family": "DFF-029",
         "outcome": "clear"
       },
       {
-        "evidence": "Author requests independent assessment against this exact candidate diff; not reviewer approval.",
+        "evidence": "Applicable family included for independent review of current PR #611 content; no reviewer approval or completed adversarial sweep asserted.",
         "family": "DFF-033",
         "outcome": "clear"
       },
       {
-        "evidence": "Author requests independent assessment against this exact candidate diff; not reviewer approval.",
+        "evidence": "Applicable family included for independent review of current PR #611 content; no reviewer approval or completed adversarial sweep asserted.",
         "family": "DFF-035",
         "outcome": "clear"
       },
       {
-        "evidence": "Author requests independent assessment against this exact candidate diff; not reviewer approval.",
-        "family": "DFF-036",
+        "evidence": "Applicable family included for independent review of current PR #611 content; no reviewer approval or completed adversarial sweep asserted.",
+        "family": "DFF-037",
         "outcome": "clear"
       },
       {
-        "evidence": "Author requests independent assessment against this exact candidate diff; not reviewer approval.",
+        "evidence": "Applicable family included for independent review of current PR #611 content; no reviewer approval or completed adversarial sweep asserted.",
+        "family": "DFF-038",
+        "outcome": "clear"
+      },
+      {
+        "evidence": "Applicable family included for independent review of current PR #611 content; no reviewer approval or completed adversarial sweep asserted.",
+        "family": "DFF-039",
+        "outcome": "clear"
+      },
+      {
+        "evidence": "Applicable family included for independent review of current PR #611 content; no reviewer approval or completed adversarial sweep asserted.",
         "family": "DFF-040",
         "outcome": "clear"
       },
       {
-        "evidence": "Author requests independent assessment against this exact candidate diff; not reviewer approval.",
-        "family": "DFF-041",
+        "evidence": "Applicable family included for independent review of current PR #611 content; no reviewer approval or completed adversarial sweep asserted.",
+        "family": "DFF-043",
+        "outcome": "clear"
+      },
+      {
+        "evidence": "Applicable family included for independent review of current PR #611 content; no reviewer approval or completed adversarial sweep asserted.",
+        "family": "DFF-053",
         "outcome": "clear"
       }
     ],
@@ -237,23 +242,71 @@
     "issue": "532",
     "review_target": [
       {
-        "blob_sha": "16c077274e76b9ed86a1cf6d18275785409bdaa6",
+        "blob_sha": "cfac2cfd84af4805f9ac1b72ef4aa0956600eb94",
+        "path": ".githooks/pre-commit",
+        "previous_path": "",
+        "status": "added"
+      },
+      {
+        "blob_sha": "6bb0c0476c9f17e54cf8380c758af4a340fc099e",
+        "path": "scripts/hunter_writer_commit_finalizer.py",
+        "previous_path": "",
+        "status": "added"
+      },
+      {
+        "blob_sha": "07b9630fbacf76ef10e04017cacd79095035250b",
+        "path": "tests/test_external_writer_review_head_recheck.py",
+        "previous_path": "",
+        "status": "added"
+      },
+      {
+        "blob_sha": "d3e099894ee82fdb1313cefa61432b1240f1ad51",
+        "path": "tests/test_hunter_writer_commit_finalizer.py",
+        "previous_path": "",
+        "status": "added"
+      },
+      {
+        "blob_sha": "c2898fb8eea2075f1d18a02f4fda728e331a9272",
+        "path": "AGENTS.md",
+        "previous_path": "",
+        "status": "modified"
+      },
+      {
+        "blob_sha": "d9dd8804c1faf59f2ffb5215575478ccaf9a3a97",
         "path": "scripts/hunter_canonicalization_candidate_pr.py",
         "previous_path": "",
         "status": "modified"
       },
       {
-        "blob_sha": "ae1ed9d115082b64d2921c70be79db5596f31f02",
+        "blob_sha": "ec616cd684ceb5d3e522141d59d7f742b992cafe",
+        "path": "scripts/hunter_governance_review_v2.py",
+        "previous_path": "",
+        "status": "modified"
+      },
+      {
+        "blob_sha": "acdf164a242c823531684934f65602a4dbfc714b",
+        "path": "scripts/hunter_pre_ready_review.py",
+        "previous_path": "",
+        "status": "modified"
+      },
+      {
+        "blob_sha": "9d7f1e9cc8c4e6a870d40d6101429bfdde2e37f0",
+        "path": "tests/test_exact_head_review_authority.py",
+        "previous_path": "",
+        "status": "modified"
+      },
+      {
+        "blob_sha": "295b270645f943c7789a069a651d5fb81609abac",
         "path": "tests/test_hunter_canonicalization_candidate_pr.py",
         "previous_path": "",
         "status": "modified"
       }
     ],
-    "review_target_digest": "7322a6c349b5e063cb1551b364b8c793b8b21437f04dfc64ab9b6ef7c6ffb02d"
+    "review_target_digest": "dc09c8f25bf5a522bf28717674b1a66baa3f5180623c4bda4d22ca77a4636c00"
   },
-  "review_id": "d380ecf229d33195b50544565b1008799bddb16605a65cd489e453d6ccd66d00",
+  "review_id": "cb85f2439fb28b52d0e2cf5db7dd26d759fb2084296aa38ad4690581cc77e418",
   "review_request": {
-    "claims_id": "d380ecf229d33195b50544565b1008799bddb16605a65cd489e453d6ccd66d00",
+    "claims_id": "cb85f2439fb28b52d0e2cf5db7dd26d759fb2084296aa38ad4690581cc77e418",
     "schema": "hunter.review-request.v1"
   },
   "schema": "hunter.pre-ready-hostile-review.v1"
