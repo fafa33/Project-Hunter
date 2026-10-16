@@ -1734,6 +1734,17 @@ def finalize_writer_review_request(
     Returns False when the current request already matches the content.
     The writer remains responsible for signing and committing this artifact.
     """
+    if issue_criteria is None:
+        validate_request_governing_issue(issue, judgement)
+    else:
+        supplied = judgement.get("acceptance_criteria")
+        covered = (
+            {normalize_criterion(str(item.get("criterion", ""))) for item in supplied if isinstance(item, dict)}
+            if isinstance(supplied, list)
+            else set()
+        )
+        if not {normalize_criterion(criterion) for criterion in issue_criteria}.issubset(covered):
+            raise ValueError("writer review request does not cover verified Issue criteria")
     root = (cwd or ROOT).resolve()
     changes = local_changes(base, head, cwd=root)
     families, error = load_families(root / REGISTRY_RELATIVE_PATH)

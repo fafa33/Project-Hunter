@@ -1998,10 +1998,31 @@ def test_writer_finalizer_idempotent_and_content_bound(tmp_path, monkeypatch):
     monkeypatch.setattr(review, "applicable_family_ids", lambda *_args, **_kwargs: ())
     monkeypatch.setattr(review, "prepare_request", lambda **_kwargs: {"review_id": "id", "claims": {}})
     monkeypatch.setattr(review, "verify_review_request", lambda *_args, **_kwargs: review.ReviewVerdict("valid", "ok"))
-    kwargs = dict(issue="532", base=BASE, head=HEAD, base_ref="main", cwd=tmp_path, judgement={"defect_families": []})
+    kwargs = dict(
+        issue="532",
+        base=BASE,
+        head=HEAD,
+        base_ref="main",
+        cwd=tmp_path,
+        issue_criteria=(),
+        judgement={"defect_families": []},
+    )
     assert review.finalize_writer_review_request(**kwargs)
     assert not review.finalize_writer_review_request(**kwargs)
     kwargs["judgement"] = {"defect_families": [{"family": "unexpected"}]}
     with pytest.raises(ValueError, match="applicable defect families"):
         review.finalize_writer_review_request(**kwargs)
     assert (Path(tmp_path) / review.REVIEW_RELATIVE_PATH).is_file()
+
+
+def test_writer_finalizer_rejects_unverified_issue_criteria(tmp_path):
+    with pytest.raises(ValueError, match="verified Issue criteria"):
+        review.finalize_writer_review_request(
+            issue="532",
+            base=BASE,
+            head=HEAD,
+            base_ref="main",
+            cwd=tmp_path,
+            issue_criteria=("Required acceptance criterion",),
+            judgement={"acceptance_criteria": [], "defect_families": []},
+        )
