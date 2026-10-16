@@ -17,7 +17,7 @@ name: Hunter / Trusted Orchestrator Replay Validate
 # This workflow replays the candidate's controller-logic modules against
 # fixed, offline scenario fixtures and independently recomputes their module
 # digests -- and does nothing else. It is deliberately triggered by
-# `pull_request`, never `pull_request_target`: no job here ever holds a write
+# `pull_request_target` with explicitly read-only jobs and trusted base-controlled workflow: no job here ever holds a write
 # permission, a repository secret, or a status/check-publishing token, so
 # there is nothing for untrusted candidate code (which both jobs below
 # execute, by necessity, inside a further credential-blanked, process-isolated
@@ -43,7 +43,7 @@ name: Hunter / Trusted Orchestrator Replay Validate
 # scripts/hunter_trusted_orchestrator_replay.py for the full evidence boundary.
 
 on:
-  pull_request:
+  pull_request_target:
     branches:
       - main
     types:

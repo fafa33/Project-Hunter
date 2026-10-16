@@ -1516,13 +1516,20 @@ def test_trusted_replay_workflows_separate_candidate_and_publisher_permissions()
     root = Path(__file__).resolve().parents[1] / ".github" / "workflows"
     validate = yaml.safe_load((root / "hunter-trusted-orchestrator-replay-validate.yml").read_text())
     publish = yaml.safe_load((root / "hunter-trusted-orchestrator-replay-publish.yml").read_text())
-    assert (
-        "pull_request_target:"
-        not in (root / "hunter-trusted-orchestrator-replay-validate.yml").read_text().split("jobs:", 1)[0]
-    )
-    assert (
-        "pull_request:" in (root / "hunter-trusted-orchestrator-replay-validate.yml").read_text().split("jobs:", 1)[0]
-    )
+    # Base-owned validation is mandatory: PR-authored workflow YAML must not
+    # be able to forge a passing validation job or its upstream artifacts.
+    validate_header = (root / "hunter-trusted-orchestrator-replay-validate.yml").read_text().split("jobs:", 1)[0]
+    assert "pull_request_target:" in validate_header
+    assert "pull_request:" not in validate_header
+    assert "workflow_dispatch:" not in validate_header
+    assert "workflow_run:" not in validate_header
+    assert validate["jobs"]
+    for job in validate["jobs"].values():
+        checkouts = [step for step in job["steps"] if "actions/checkout" in step.get("uses", "")]
+        assert any(
+            step.get("with", {}).get("ref") == "${{ github.event.repository.default_branch }}" for step in checkouts
+        )
+        assert all(step.get("with", {}).get("ref") != "${{ github.head_ref }}" for step in checkouts)
     assert "workflow_run:" in (root / "hunter-trusted-orchestrator-replay-publish.yml").read_text().split("jobs:", 1)[0]
     for job in validate["jobs"].values():
         assert job["permissions"] == {"contents": "read"}
@@ -1631,13 +1638,20 @@ def test_publisher_latest_run_match_is_bound_to_the_pr_number_as_well_as_the_hea
     assert "$3 == sha && $4 == pr" in context and '-v pr="$pr_number"' in context
 
 
-def test_publisher_latest_run_lookup_is_paginated_and_bounded_to_the_pr_branch():
+def test_publisher_latest_run_lookup_is_paginated_and_bound_to_exact_pr_head():
     import yaml
 
     doc = yaml.safe_load(Path(".github/workflows/hunter-trusted-orchestrator-replay-publish.yml").read_text())
     context = next(s for s in doc["jobs"]["publish-proof"]["steps"] if s.get("id") == "context")["run"]
     assert "--paginate" in context
-    assert '-f branch="$head_ref"' in context and ".head.ref" in context
+    assert "-f event=pull_request_target" in context
+    assert ".pull_requests[0].head.sha" in context
+    assert ".pull_requests[0].number" in context
+    assert '-v sha="$head_sha"' in context
+    assert '-v pr="$pr_number"' in context
+    assert "$3 == sha && $4 == pr" in context
+    assert 'if [ "$latest_run" != "$RUN_ID" ]; then' in context
+    assert '-f branch="$head_ref"' not in context
 
 
 def test_hosted_replay_fails_closed_without_network_namespace(monkeypatch):

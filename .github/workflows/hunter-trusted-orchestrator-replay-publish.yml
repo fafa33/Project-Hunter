@@ -84,9 +84,11 @@ jobs:
           RUN_ID: ${{ github.event.workflow_run.id }}
         run: |
           set -euo pipefail
-          # Bind the unprivileged pull_request validation run to its associated PR SHA.
+          # pull_request_target runs execute against BASE, so run.head_sha and
+          # run.head_branch are not candidate identifiers. Bind to the exact
+          # triggering event payload instead of guessing from run listings.
           event_json="$(gh api "repos/${GH_REPO}/actions/runs/${RUN_ID}" --jq '.event')"
-          if [ "$event_json" != "pull_request" ]; then
+          if [ "$event_json" != "pull_request_target" ]; then
             echo "unexpected validation event: $event_json" >&2
             exit 1
           fi
@@ -103,10 +105,10 @@ jobs:
             echo "validation run candidate SHA differs from live PR HEAD" >&2
             exit 1
           fi
-          # Enumerate pull_request validation runs for this branch and select only
+          # The API does not guarantee a candidate branch filter for
+          # pull_request_target runs; enumerate recent runs and select only
           # exact associated PR+SHA, then require this run to be newest.
-          head_ref="$(printf '%s' "$pr_json" | jq -r '.head.ref')"
-          latest_run="$(gh api "repos/${GH_REPO}/actions/workflows/hunter-trusted-orchestrator-replay-validate.yml/runs" --method GET -f event=pull_request -f branch="$head_ref" -f per_page=100 --paginate --jq '.workflow_runs[] | [.run_number, .id, (.pull_requests[0].head.sha // ""), (.pull_requests[0].number // 0)] | @tsv' | awk -v sha="$head_sha" -v pr="$pr_number" '$3 == sha && $4 == pr' | sort -n | tail -n 1 | cut -f2)"
+          latest_run="$(gh api "repos/${GH_REPO}/actions/workflows/hunter-trusted-orchestrator-replay-validate.yml/runs" --method GET -f event=pull_request_target -f per_page=100 --paginate --jq '.workflow_runs[] | [.run_number, .id, (.pull_requests[0].head.sha // ""), (.pull_requests[0].number // 0)] | @tsv' | awk -v sha="$head_sha" -v pr="$pr_number" '$3 == sha && $4 == pr' | sort -n | tail -n 1 | cut -f2)"
           if [ "$latest_run" != "$RUN_ID" ]; then
             echo "validation run is not latest for exact PR head" >&2
             exit 1
@@ -353,7 +355,7 @@ jobs:
             echo "PR #${PR_NUMBER} head is now ${live_head_sha}, not ${HEAD_SHA}; not publishing a stale status" >&2
             exit 1
           fi
-          latest_run="$(gh api "repos/${GH_REPO}/actions/workflows/hunter-trusted-orchestrator-replay-validate.yml/runs" --method GET -f event=pull_request -f branch="$head_ref" -f per_page=100 --paginate --jq '.workflow_runs[] | [.run_number, .id, (.pull_requests[0].head.sha // .head_sha), (.pull_requests[0].number // 0)] | @tsv' | awk -v sha="$HEAD_SHA" -v pr="$PR_NUMBER" '$3 == sha && $4 == pr' | sort -n | tail -n 1 | cut -f2)"
+          latest_run="$(gh api "repos/${GH_REPO}/actions/workflows/hunter-trusted-orchestrator-replay-validate.yml/runs" --method GET -f event=pull_request_target -f per_page=100 --paginate --jq '.workflow_runs[] | [.run_number, .id, (.pull_requests[0].head.sha // .head_sha), (.pull_requests[0].number // 0)] | @tsv' | awk -v sha="$HEAD_SHA" -v pr="$PR_NUMBER" '$3 == sha && $4 == pr' | sort -n | tail -n 1 | cut -f2)"
           if [ "$latest_run" != "$RUN_ID" ]; then
             echo "triggering run ${RUN_ID} is no longer the latest validation run (${latest_run:-none}) for ${HEAD_SHA}; not publishing" >&2
             exit 1
