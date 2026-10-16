@@ -1774,6 +1774,8 @@ def finalize_writer_review_request(
         raise ValueError("writer review request invalid: " + verdict.reason)
     path = root / REVIEW_RELATIVE_PATH
     content = json.dumps(document, indent=2, sort_keys=True) + "\n"
+    if path.is_symlink() or path.parent.is_symlink():
+        raise ValueError("writer review request destination must not be a symlink")
     if path.is_file() and path.read_text(encoding="utf-8") == content:
         return False
     path.parent.mkdir(parents=True, exist_ok=True)
@@ -1889,31 +1891,18 @@ def main() -> int:
             if not isinstance(judgement, dict):
                 raise ValueError("review request judgement must be a JSON object")
             validate_request_governing_issue(str(args.issue), judgement)
-            if args.refresh_request:
-                finalize_writer_review_request(
-                    issue=str(args.issue),
-                    base=args.base,
-                    head=args.head,
-                    base_ref=args.base_ref,
-                    judgement=judgement,
-                )
-                print(f"[Pre-Ready Hostile Review] FINALIZED: {REVIEW_RELATIVE_PATH}")
-                return 0
-            document = prepare_request(
+            finalize_writer_review_request(
                 issue=str(args.issue),
                 base=args.base,
                 head=args.head,
                 base_ref=args.base_ref,
                 judgement=judgement,
             )
+            print(f"[Pre-Ready Hostile Review] FINALIZED: {REVIEW_RELATIVE_PATH}")
+            return 0
         except (OSError, UnicodeError, json.JSONDecodeError, ValueError, GitEvidenceUnavailable) as exc:
             print(f"[Pre-Ready Hostile Review] FAIL: {type(exc).__name__}: {exc}", file=sys.stderr)
             return 2
-        REVIEW_PATH.parent.mkdir(parents=True, exist_ok=True)
-        REVIEW_PATH.write_text(json.dumps(document, indent=2, sort_keys=True) + "\n", encoding="utf-8")
-        print(f"[Pre-Ready Hostile Review] REQUESTED: {REVIEW_RELATIVE_PATH} ({document['review_id'][:12]})")
-        return 0
-
     verdict = verify_local(args.base, args.head)
     if not verdict.ok:
         print(f"[Pre-Ready Hostile Review] {verdict.state.upper()}: {verdict.reason}", file=sys.stderr)

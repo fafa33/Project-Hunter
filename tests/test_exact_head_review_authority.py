@@ -2026,3 +2026,27 @@ def test_writer_finalizer_rejects_unverified_issue_criteria(tmp_path):
             issue_criteria=("Required acceptance criterion",),
             judgement={"acceptance_criteria": [], "defect_families": []},
         )
+
+
+def test_writer_finalizer_rejects_symlink_destination(tmp_path, monkeypatch):
+    outside = tmp_path / "outside.json"
+    outside.write_text("unchanged")
+    path = tmp_path / review.REVIEW_RELATIVE_PATH
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.symlink_to(outside)
+    monkeypatch.setattr(review, "local_changes", lambda *_args, **_kwargs: ())
+    monkeypatch.setattr(review, "load_families", lambda *_args, **_kwargs: ([], ""))
+    monkeypatch.setattr(review, "applicable_family_ids", lambda *_args, **_kwargs: ())
+    monkeypatch.setattr(review, "prepare_request", lambda **_kwargs: {"review_id": "id"})
+    monkeypatch.setattr(review, "verify_review_request", lambda *_args, **_kwargs: review.ReviewVerdict("valid", "ok"))
+    with pytest.raises(ValueError, match="symlink"):
+        review.finalize_writer_review_request(
+            issue="532",
+            base=BASE,
+            head=HEAD,
+            base_ref="main",
+            cwd=tmp_path,
+            issue_criteria=(),
+            judgement={"defect_families": []},
+        )
+    assert outside.read_text() == "unchanged"
