@@ -12,6 +12,24 @@ Validated work must not exist only in a temporary agent workspace. At every mean
 
 If push fails, stop substantial new work immediately, preserve and report the exact local commit SHA and blocker, and restore durable persistence before proceeding. An explicit owner instruction not to push takes precedence; in that case preserve the commit locally and report that remote persistence is intentionally withheld.
 
+## Review request finalization after remediation
+
+For every governed PR whose code HEAD changes after a finding fix, the **authorized
+writer**, not Reconcile or the reviewer, must finalize the exact-head review
+request before the final signed push. After focused regression verification and
+before the final signed commit, regenerate `.hunter/pre-ready-hostile-review.json`
+using `scripts/hunter_pre_ready_review.py --refresh-request` with a freshly
+substantiated judgement for the governing Issue and actual base-to-candidate
+HEAD. Recompute applicable defect-family coverage from the current diff; never
+reuse previous reviewer authority, assert success without evidence, or copy a
+stale request. Commit the regenerated request through the same approved signed
+writer channel, then verify the committed final HEAD with the canonical
+`verify_review_request` verifier. If judgement evidence is unavailable, stop
+review orchestration fail-closed and report the blocker rather than fabricating
+review results. Repeat only if content changes; never rerun reviewers solely
+because the same valid request is encountered again. Reconcile remains a
+read-only consumer and must not receive write or signing privileges.
+
 ## HGCC-1: GitHub contract compliance (Issue #603)
 
 Every agent (Jules, Hermes, OpenCode, and future providers) must use the existing
