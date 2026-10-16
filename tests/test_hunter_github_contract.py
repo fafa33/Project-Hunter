@@ -99,7 +99,7 @@ def test_hgcc_remains_at_pre_push_boundary_not_hosted_readiness():
     readiness = (root / "scripts/hunter_merge_readiness_v2.py").read_text()
     assert '"scripts/hunter_github_contract.py"' in pre_push
     assert "_hgcc_hosted_verdict" not in readiness
-    assert "observe_contract(" not in readiness
+    assert "observe_contract(" in readiness  # Owner merge boundary still verifies live contract.
 
 
 def test_ruleset_inventory_paginates_and_includes_later_required_checks():

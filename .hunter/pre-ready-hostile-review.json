@@ -1,31 +1,6 @@
 {
   "claims": {
-    "acceptance_criteria": [
-      {
-        "criterion": "Unified Preflight aggregates gate results while normal mode remains fail-fast",
-        "evidence": "Author-submitted; independent review pending",
-        "id": "AC-1",
-        "verdict": "satisfied"
-      },
-      {
-        "criterion": "Pre-push safety uses aggregate gate runner without executing full repository pytest",
-        "evidence": "Author-submitted; independent review pending",
-        "id": "AC-2",
-        "verdict": "satisfied"
-      },
-      {
-        "criterion": "Secure report paths reject symlink and nonregular targets; receipts bind live contract identity",
-        "evidence": "Author-submitted; independent review pending",
-        "id": "AC-3",
-        "verdict": "satisfied"
-      },
-      {
-        "criterion": "Focused regression tests and hosted checks verify candidate exact head",
-        "evidence": "Author-submitted; independent review pending",
-        "id": "AC-4",
-        "verdict": "satisfied"
-      }
-    ],
+    "acceptance_criteria": [],
     "adversarial_dimensions": [
       "authorization",
       "caller-controlled-time-state",
@@ -40,7 +15,7 @@
       "transaction-snapshot-consistency"
     ],
     "base_ref": "main",
-    "base_sha": "5a3cdcbdc27cb14e9ce84a7d40e1e670b0d09ff3",
+    "base_sha": "ecdf661d7fd5f6592cb76dd82d87bcb170d67e08",
     "defect_families": [
       {
         "evidence": "Author requests independent assessment against this exact candidate diff; not reviewer approval.",
@@ -174,80 +149,74 @@
       }
     ],
     "findings": [],
-    "issue": "604",
+    "issue": "603",
     "review_target": [
       {
-        "blob_sha": "f80adfce1c49e7b5ff0770a41ac7499790716d17",
-        "path": ".gitignore",
+        "blob_sha": "88190f742409d500980adf82b32ff30649f57822",
+        "path": ".github/workflows/hunter-governance-review.yml",
         "previous_path": "",
         "status": "modified"
       },
       {
-        "blob_sha": "602c302c1a198fda7f985367e27c85b70d7544fc",
-        "path": "scripts/hunter_pr_preflight.py",
+        "blob_sha": "aa41e0380d6a8f027669c4571e9c3df6aeb9379c",
+        "path": "scripts/hunter_defect_prevention_preflight.py",
         "previous_path": "",
         "status": "modified"
       },
       {
-        "blob_sha": "00dadff7e0e19e39f3980972982acb7647fee385",
-        "path": "scripts/hunter_pre_push.py",
+        "blob_sha": "2136b1d57c0e141494349cb4e93f2a1376205ad2",
+        "path": "scripts/hunter_github_contract.py",
         "previous_path": "",
         "status": "modified"
       },
       {
-        "blob_sha": "e188ae41900afdb10a47677ded1dbebac7a042c8",
-        "path": "scripts/hunter_preflight_reuse_decision.py",
+        "blob_sha": "db67d6065e753cde6ee14d1162d83eb1e4d82eb7",
+        "path": "scripts/hunter_merge_readiness_v2.py",
         "previous_path": "",
         "status": "modified"
       },
       {
-        "blob_sha": "365a2c1ccada5687ad90f77f2b124ad03c42ab9d",
-        "path": "scripts/hunter_validation_receipt.py",
+        "blob_sha": "5cbaa3239000a5e572a5a50613e16c1a95de8121",
+        "path": "tests/test_hma1_trusted_gate.py",
         "previous_path": "",
         "status": "modified"
       },
       {
-        "blob_sha": "b5a640ec9a8d71281a0edcd7d2c702c889099b6b",
-        "path": "tests/test_hunter_pr_preflight.py",
+        "blob_sha": "c8655e9f7bcbb385c2b84ff66e5c84bcb2393baa",
+        "path": "tests/test_hunter_github_contract.py",
         "previous_path": "",
         "status": "modified"
       },
       {
-        "blob_sha": "d68737364f3cbd8a370d0466001ae7ab776e1023",
-        "path": "tests/test_hunter_pre_push.py",
+        "blob_sha": "fd34c747f402893cd2f0487ef76e339f6f646946",
+        "path": "tests/test_hunter_governance_review_v2.py",
         "previous_path": "",
         "status": "modified"
       },
       {
-        "blob_sha": "7f33066022478fcb2791d00f4e4060911d38032e",
+        "blob_sha": "ba8222cb05eb4f25b6eac22f3a94c030c901035b",
+        "path": "tests/test_hunter_review_orchestrator.py",
+        "previous_path": "",
+        "status": "modified"
+      },
+      {
+        "blob_sha": "a20beeec7196acb890ecd972e54aee7a98ada15f",
         "path": "tests/test_issue_419_trusted_parallel_lane.py",
         "previous_path": "",
         "status": "modified"
       },
       {
-        "blob_sha": "1f0b45766ed494e2ec51e39f8d2a78e2562b266e",
-        "path": "tests/test_preflight_reuse_decision.py",
-        "previous_path": "",
-        "status": "modified"
-      },
-      {
-        "blob_sha": "8e03baae3726b9b7c87fa32235ba312374ca57ac",
-        "path": "tests/test_validation_proof_reuse.py",
-        "previous_path": "",
-        "status": "modified"
-      },
-      {
-        "blob_sha": "105a9d00267127aa4a9e8345940cb2be785cc4f1",
-        "path": "tests/test_validation_stage_contract.py",
+        "blob_sha": "17f613e3a87742155796f6318eaaf9d20999c399",
+        "path": "tests/test_pr376_prevention_regressions.py",
         "previous_path": "",
         "status": "modified"
       }
     ],
-    "review_target_digest": "7a637cadfcfa582d53c314d9f0095b2fe26a2bacf2e7b9f19e0c05e44f4ba922"
+    "review_target_digest": "23883ba34cff245892dcf0ee58e3faace5e29d445c214c775df27f291357e1bd"
   },
-  "review_id": "55d25dd14ac76a172d19a9944b50ab224f8225d47ed34fc50e012a82c1c872d1",
+  "review_id": "5bdfa7cb21fca5f8f2990ee404a24c6451ae9adecdf91098c4fd751f0c64f10d",
   "review_request": {
-    "claims_id": "55d25dd14ac76a172d19a9944b50ab224f8225d47ed34fc50e012a82c1c872d1",
+    "claims_id": "5bdfa7cb21fca5f8f2990ee404a24c6451ae9adecdf91098c4fd751f0c64f10d",
     "schema": "hunter.review-request.v1"
   },
   "schema": "hunter.pre-ready-hostile-review.v1"
