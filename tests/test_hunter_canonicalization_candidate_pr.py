@@ -648,16 +648,13 @@ def test_capture_reviewer_findings_ignores_top_level_review_wrappers() -> None:
         _github_review_observation(
             event_id="review-2002", message="Codex generic review wrapper", path=None, line=None
         ),
-        _github_review_observation(
-            event_id="review-2003", message="Copilot review overview", path=None, line=None
-        ),
+        _github_review_observation(event_id="review-2003", message="Copilot review overview", path=None, line=None),
     ]
     rendered, added = candidate_pr.capture_reviewer_findings(
         observations=observations, origin_bytes=DISPOSITIONS.read_bytes()
     )
     assert added == ()
     assert json.loads(rendered) == json.loads(DISPOSITIONS.read_bytes())
-
 
 
 def test_capture_reviewer_findings_replay_is_idempotent_and_does_not_mutate_identity() -> None:
