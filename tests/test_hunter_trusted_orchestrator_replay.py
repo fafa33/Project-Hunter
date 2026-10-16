@@ -518,8 +518,8 @@ if hasattr(__main__, 'SCENARIOS'):
     __main__.SCENARIOS['B'] = lambda *_: {'dispatches': 1}
 """
     root = _candidate_root(tmp_path, orchestrator_src=candidate_source)
-    result = replay._run_scenario('B', root, _fixture_path(tmp_path), workspace_root=tmp_path)
-    assert result['outcome'] == 'fail', result
+    result = replay._run_scenario("B", root, _fixture_path(tmp_path), workspace_root=tmp_path)
+    assert result["outcome"] == "fail", result
 
 
 # --- Scenario G: WAITING_FOR_REVIEWER -> pending classification ------------
@@ -1873,7 +1873,6 @@ def test_replay_step_derives_the_loader_path_from_the_interpreter_instead_of_inh
     run = next(step for step in steps if step.get("name", "").startswith("Run trusted candidate"))["run"]
     assert "${LD_LIBRARY_PATH" not in run
     assert "sys.base_prefix" in run and 'LD_LIBRARY_PATH="$py_lib"' in run
-
 
 
 def test_worker_post_started_timeout_budget_with_controlled_clock(monkeypatch):

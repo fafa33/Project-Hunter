@@ -679,9 +679,13 @@ def scenario_b_grade(observation: dict[str, Any]) -> dict[str, Any]:
     maximum = observation.get("max_dispatches")
     assert type(grace) is int and grace > 0, "liveness grace must be positive"
     assert type(maximum) is int and maximum >= 1, "dispatch budget must be positive"
-    assert type(observation.get("dispatches")) is int and observation["dispatches"] >= maximum, "dispatch count is inconsistent"
+    assert (
+        type(observation.get("dispatches")) is int and observation["dispatches"] >= maximum
+    ), "dispatch count is inconsistent"
     assert observation.get("correlated_runs") == maximum, "correlated runs must exhaust budget"
-    assert type(observation.get("durable_records_published")) is int and observation["durable_records_published"] >= 2, "durable record missing"
+    assert (
+        type(observation.get("durable_records_published")) is int and observation["durable_records_published"] >= 2
+    ), "durable record missing"
     assert observation.get("exhausted_state") == "WAITING_FOR_REVIEWER", "exhausted cycle must remain pending"
     return observation
 
@@ -758,7 +762,9 @@ def _scenario_child(conn: Connection, scenario_id: str, candidate_root_str: str,
         _send_scenario_message(conn, {"stage": "started"})
         # Freeze trusted dispatch before importing candidate code.
         trusted_scenario = SCENARIOS[scenario_id]
-        measurements = (scenario_g_observe if scenario_id == "G" else trusted_scenario)(Path(candidate_root_str), fixture)
+        measurements = (scenario_g_observe if scenario_id == "G" else trusted_scenario)(
+            Path(candidate_root_str), fixture
+        )
         _send_scenario_message(conn, {"stage": "done", "measurements": measurements})
     except (
         BaseException
