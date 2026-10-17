@@ -25,62 +25,10 @@ import tempfile
 from pathlib import Path
 
 import hunter_trusted_orchestrator_replay as replay
+import hunter_trusted_orchestrator_replay_worker as worker
 import pytest
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
-
-
-#: Contract version aware test helpers
-def _get_contract_version(candidate_root: Path) -> str:
-    """Detect the contract version of a candidate root."""
-    return replay.detect_contract_version(candidate_root)
-
-
-def _expected_measurements_a(contract_version: str) -> dict:
-    """Expected measurements for scenario A based on contract version."""
-    if contract_version == "v1":
-        return {
-            "grace_positive": True,
-            "ensure_collector_present": True,
-            "grace_used_in_dispatch": True,
-            "recovery_dispatches": 3,
-            "terminal_timeout": True,
-            "active_ceiling": True,
-        }
-    else:  # v2
-        return {
-            "budget_positive": True,
-            "publisher": "present",
-            "collector": "absent",
-            "off_branch": "absent",
-            "forged_creator": "absent",
-            "no_creator": "absent",
-        }
-
-
-def _expected_measurements_b(contract_version: str) -> dict:
-    """Expected measurements for scenario B based on contract version."""
-    if contract_version == "v1":
-        return {
-            "grace_positive": True,
-            "grace_used_in_needs_dispatch": True,
-            "older_than_present": True,
-        }
-    else:  # v2
-        return {
-            "rejected": [
-                "bad attempts",
-                "bad claims",
-                "minimal object",
-                "not an object",
-                "other attempt",
-                "other generation",
-                "other head",
-                "other pull request",
-                "other run",
-            ]
-        }
-
 
 #: Real production regressions each corrected scenario must still catch. Every
 #: entry is a narrow, named mutation of this repository's *real*
@@ -94,133 +42,151 @@ def _expected_measurements_b(contract_version: str) -> dict:
 #: Each mutation is ``(anchor, replacement)``; the anchor must still be present
 #: in the real source, so a production refactor that moves these lines fails
 #: loudly here instead of silently making a negative test vacuous.
+DROPS_OPPORTUNITY_TERMINALITY = (
+    """            if existing.state in PENDING_STATES and _older_than(
+                existing.started_at, independent_review_opportunity_seconds()
+            ):""",
+    "            if False:",
+)
+
+#: The budget is derived from the candidate's own trusted reviewer pool rather
+#: than published as a module constant, so the mutation that makes it
+#: non-positive now targets the derivation's own return rather than a
+#: module-level assignment.
 MAKES_OPPORTUNITY_NON_POSITIVE = (
     "    return pre_ready.reviewer_chain_worst_case_seconds(pool)",
     "    return 0",
 )
 
-MAKES_OPPORTUNITY_UNBOUNDED = (
-    "    return pre_ready.reviewer_chain_worst_case_seconds(pool)",
-    "    return 10**9",
+MAKES_OPPORTUNITY_UNCONDITIONAL = (
+    """            if existing.state in PENDING_STATES and _older_than(
+                existing.started_at, independent_review_opportunity_seconds()
+            ):""",
+    "            if existing.state in PENDING_STATES:",
 )
 
-#: A status citing the status-less collector run must never be a cycle: the collector certifies nothing.
-TRUSTS_THE_COLLECTOR_AS_A_PUBLISHER = (
-    '        ".github/workflows/hunter-governance-review.yml",',
-    '        ".github/workflows/hunter-governance-review.yml",\n        ".github/workflows/hunter-reviewer-collector.yml",',
+DROPS_COLLECTOR_IDEMPOTENCY_RECORD = (
+    """            if existing.trigger_id is not None and not collector_needs_dispatch(repository, token, existing):
+                return existing""",
+    "            pass",
 )
 
-#: A run off the default branch (candidate-controlled workflow text) must never vouch for a cycle.
-DROPS_THE_DEFAULT_BRANCH_BINDING = (
-    '        if str(run.get("head_branch") or "") != default_branch:',
-    "        if False:",
-)
-
-#: Any workflow at all may vouch for a cycle: the cited-run check is the whole per-workflow binding.
-DROPS_THE_TRUSTED_WORKFLOW_BINDING = (
-    "        if run_path not in TRUSTED_WORKFLOWS and not collector_terminal:",
-    "        if False:",
-)
-
-#: A receipt is usable for whatever run, pull request or head it was minted for.
-IGNORES_RECEIPT_IDENTITY = (
-    '        expected["run_attempt"] = run_attempt\n    for name, value in expected.items():\n'
-    "        if receipt.get(name) != value or type(receipt.get(name)) is not type(value):",
-    '        expected["run_attempt"] = run_attempt\n    for name, value in expected.items():\n        if False:',
-)
-
-#: A rerun attempt or a duplicate event may reuse another attempt's receipt.
-IGNORES_THE_RUN_ATTEMPT = (
-    '    if run_attempt is not None:\n        expected["run_attempt"] = run_attempt',
-    '    if False:\n        expected["run_attempt"] = run_attempt',
-)
-
-#: Exhaustion recorded under a superseded remediation generation is replayed for the current one.
-IGNORES_THE_GENERATION = (
-    "    if generation_id is not None and generation != generation_id:",
-    "    if False:",
-)
-
-#: A receipt with a missing or malformed claims / configuration digest is accepted.
-IGNORES_THE_IDENTITY_DIGESTS = (
-    '        if not isinstance(receipt.get(name), str) or not re.fullmatch(r"[0-9a-f]{64}", receipt[name]):',
-    "        if False:",
-)
-
-#: A partial or malformed attempt list is accepted as complete evidence.
-IGNORES_THE_ATTEMPT_LIST_SHAPE = (
-    "    if not isinstance(attempts, list) or not all(isinstance(item, dict) for item in attempts):",
-    "    if False:",
-)
-
-#: The exported budget is a hard-coded, superficially plausible number rather than pool-derived.
-HARDCODES_THE_BUDGET = (
-    "    return pre_ready.reviewer_chain_worst_case_seconds(pool)",
-    "    return 3600",
-)
-
-#: A malformed or unreadable reviewer pool yields a number instead of failing closed.
-SWALLOWS_A_BAD_REVIEWER_POOL = (
-    '    if pool is None or error:\n        raise RuntimeError(f"reviewer pool unavailable: {error}")\n'
-    "    return pre_ready.reviewer_chain_worst_case_seconds(pool)",
-    "    if pool is None or error:\n        return 3600\n    return pre_ready.reviewer_chain_worst_case_seconds(pool)",
-)
-
-#: Creator authentication is removed from the production status parser.
-DROPS_THE_CREATOR_CHECK = (
-    '    if str((status.get("creator") or {}).get("login") or "") != TRUSTED_STATUS_CREATOR:',
-    "    if False:",
-)
-
-#: The description shape (field count / digest length) is no longer enforced.
-DROPS_THE_DESCRIPTION_SHAPE_CHECK = (
-    "    if len(parts) != 5 or len(parts[3]) != 64:",
-    "    if False:",
-)
-
-#: v1: the dispatch budget no longer bounds recovery, so a dead collector is redispatched without end.
-UNBOUNDS_COLLECTOR_REDISPATCH = (
-    "    if count >= MAX_COLLECTOR_DISPATCHES:",
-    "    if False:",
-)
-
-#: v1: a cycle past the opportunity budget never reaches the terminal timeout.
-NEVER_TIMES_OUT_A_STALE_CYCLE = (
-    "            if existing.state in PENDING_STATES and _older_than(\n"
-    "                existing.started_at, independent_review_opportunity_seconds()\n            ):",
-    "            if False:",
-)
-
-#: v1: ensure_collector never recovers a stale cycle whose collector died.
-NEVER_RECOVERS_A_STALE_CYCLE = (
-    "    if not _older_than(cycle.started_at, COLLECTOR_LIVENESS_GRACE_SECONDS):\n        return False",
+DROPS_LIVENESS_RECOVERY = (
+    """    if not _older_than(cycle.started_at, COLLECTOR_LIVENESS_GRACE_SECONDS):
+        return False""",
     "    return False",
 )
 
-# v2 fixtures use the actual candidate production receipt validator, never a test-supplied implementation.
+DROPS_DISPATCH_BUDGET = ("    if count >= MAX_COLLECTOR_DISPATCHES:", "    if False:")
 
-# v1-specific mutations (for ensure_collector/COLLECTOR_LIVENESS_GRACE_SECONDS contract)
-#: The grace period is not positive and finite.
-MAKES_GRACE_NON_POSITIVE = (
-    "COLLECTOR_LIVENESS_GRACE_SECONDS = 180",
-    "COLLECTOR_LIVENESS_GRACE_SECONDS = 0",
+#: Codex P1 on PR #539: the declared budget is wider than the threshold the
+#: candidate actually enforces. Sampling the two probes far apart only proves
+#: *some* cutoff sits between them, so a 1.5x threshold still passed.
+OPPORTUNITY_THRESHOLD_EXCEEDS_DECLARED = (
+    "                existing.started_at, independent_review_opportunity_seconds()",
+    "                existing.started_at, independent_review_opportunity_seconds() * 3 // 2",
 )
 
-MAKES_GRACE_UNBOUNDED = (
-    "COLLECTOR_LIVENESS_GRACE_SECONDS = 180",
-    "COLLECTOR_LIVENESS_GRACE_SECONDS = 10**9",
+#: PR #535: production that finalizes a cycle on the nominal deadline even
+#: though its correlated collector is still running, so that live collector can
+#: later publish a competing terminal result for the same exact head.
+TIMES_OUT_AN_ACTIVE_COLLECTOR_ON_THE_NOMINAL_DEADLINE = (
+    '    return liveness == "active"\n',
+    "    return False\n",
 )
 
-#: The grace period is not used in collector_needs_dispatch.
-IGNORES_GRACE_IN_NEEDS_DISPATCH = (
-    "if not _older_than(cycle.started_at, COLLECTOR_LIVENESS_GRACE_SECONDS):",
-    "if False:",
+#: Codex P1 on PR #552: the active-collector deferral with its bound removed. A
+#: perpetually active or wedged collector would leave the exact head pending
+#: forever.
+HOLDS_AN_ACTIVE_COLLECTOR_OPEN_WITHOUT_BOUND = (
+    """    if _older_than(cycle.started_at, budget * ACTIVE_COLLECTOR_GRACE_MULTIPLIER):
+        return False
+""",
+    "",
 )
 
-#: The grace period is not used in ensure_collector.
-IGNORES_GRACE_IN_ENSURE_COLLECTOR = (
-    "if not _older_than(cycle.started_at, COLLECTOR_LIVENESS_GRACE_SECONDS):",
-    "if False:",
+#: The same deferral, bounded only by a candidate-declared multiplier wider than
+#: the grader's own ceiling. The candidate cannot widen the trusted bound.
+WIDENS_ITS_OWN_ACTIVE_COLLECTOR_GRACE = (
+    "ACTIVE_COLLECTOR_GRACE_MULTIPLIER = 2\n",
+    "ACTIVE_COLLECTOR_GRACE_MULTIPLIER = 1000\n",
+)
+
+#: Codex P1 on PR #539: the recovery dispatch is real, but the durable cycle it
+#: was dispatched for is never refreshed, so every later reconcile recovers the
+#: same exact head again off the original stale record. Written as a
+#: three-part mutation (a recovery flag, its initialisation, and a publish that
+#: skips the recovery) because suppressing the publish for the recovery alone
+#: requires distinguishing the recovery path from the first dispatch.
+_RECOVERY_FLAG_INIT = (
+    """    digest = reviewer_pool_config_digest()
+    state, existing, _error = read_cycle(repository, token, pr_number, head_sha)""",
+    """    digest = reviewer_pool_config_digest()
+    _recovering = False
+    state, existing, _error = read_cycle(repository, token, pr_number, head_sha)""",
+)
+_RECOVERY_FLAG_SET = (
+    """            if existing.trigger_id is not None and not collector_needs_dispatch(repository, token, existing):
+                return existing""",
+    """            if existing.trigger_id is not None and not collector_needs_dispatch(repository, token, existing):
+                return existing
+            _recovering = True""",
+)
+_RECOVERY_PUBLISH_SKIPPED = (
+    """    publish_cycle(repository, token, head_sha, cycle=cycle)
+    if liveness not in {"active", "completed"}:
+        dispatch_collector(repository, token, pr_number, head_sha, generation_id)
+    return cycle""",
+    """    if not _recovering:
+        publish_cycle(repository, token, head_sha, cycle=cycle)
+    if liveness not in {"active", "completed"}:
+        dispatch_collector(repository, token, pr_number, head_sha, generation_id)
+    return cycle""",
+)
+RECOVERY_DISPATCHES_WITHOUT_REFRESHING_RECORD = (
+    _RECOVERY_FLAG_INIT,
+    _RECOVERY_FLAG_SET,
+    _RECOVERY_PUBLISH_SKIPPED,
+)
+
+# Codex P1 on PR #540: the pre-fix dispatch stub always created a correlated
+# run, so the stale-cycle recovery probe could only ever observe ("dead", 1).
+# ("missing", 0) -- a dispatch that was accepted but never produced a run --
+# was never exercised, and a candidate that refuses recovery specifically in
+# that state slipped through.
+RECOVERY_DECLINED_WHEN_NO_RUN_EXISTS = (
+    (
+        """    if liveness in {"active", "completed"}:
+        return False
+    if count >= MAX_COLLECTOR_DISPATCHES:""",
+        """    if liveness in {"active", "completed"}:
+        return False
+    if liveness == "missing" and count == 0:
+        return False
+    if count >= MAX_COLLECTOR_DISPATCHES:""",
+    ),
+)
+
+_DATETIME_IMPORT_WITH_TIMEDELTA = (
+    "from datetime import UTC, datetime",
+    "from datetime import UTC, datetime, timedelta",
+)
+
+# Codex P1 on PR #540: the pre-fix scenario aged/replaced the durable record
+# right after recovery, so it never reconciled the refreshed record the
+# recovery actually published. A candidate that published a distinct record
+# while preserving an already-stale liveness timestamp passed even though the
+# very next real reconcile re-dispatches the same exact head.
+RECOVERY_REFRESH_PRESERVES_STALE_STARTED_AT = (
+    _DATETIME_IMPORT_WITH_TIMEDELTA,
+    (
+        """        started_at=datetime.now(UTC).strftime("%Y-%m-%dT%H:%M:%SZ"),""",
+        """        started_at=(
+            datetime.now(UTC) - timedelta(seconds=COLLECTOR_LIVENESS_GRACE_SECONDS + 60)
+            if existing is not None
+            else datetime.now(UTC)
+        ).strftime("%Y-%m-%dT%H:%M:%SZ"),""",
+    ),
 )
 
 HOSTILE_EARLY_EXIT_ORCHESTRATOR = """
@@ -285,7 +251,6 @@ def _candidate_root(
     orchestrator_mutations: tuple[tuple[str, str], ...] = (),
     orchestrator_src: str | None = None,
     governance_src: str | None = None,
-    v2: bool = False,
 ) -> Path:
     """Build a candidate root out of this repository's *real* production modules.
 
@@ -297,11 +262,7 @@ def _candidate_root(
     is what previously let the harness assert an invariant production never
     implemented while its own suite stayed green.
     """
-    tmp_path.mkdir(parents=True, exist_ok=True)
     root = tmp_path / "candidate"
-    # Remove existing directory if it exists (for test isolation)
-    if root.exists():
-        shutil.rmtree(root)
     shutil.copytree(REPO_ROOT / "scripts", root / "scripts")
     shutil.copytree(REPO_ROOT / "src", root / "src")
     (root / "docs").mkdir(parents=True, exist_ok=True)
@@ -309,37 +270,12 @@ def _candidate_root(
 
     orchestrator_path = root / "scripts" / "hunter_review_orchestrator.py"
     source = orchestrator_path.read_text(encoding="utf-8") if orchestrator_src is None else orchestrator_src
-    if not v2:
-        # Emulate trusted main's legacy v1 surface from the production module;
-        # v2 fixtures must retain the unmodified, real production receipt API.
-        source = source.split("\n\ndef collector_receipt_problem(", 1)[0]
     for anchor, replacement in orchestrator_mutations:
         assert anchor in source, f"mutation anchor missing from candidate orchestrator: {anchor!r}"
         source = source.replace(anchor, replacement, 1)
     _write(orchestrator_path, source)
     if governance_src is not None:
         _write(root / "scripts" / "hunter_governance_review_v2.py", governance_src)
-    # Isolated candidate must have its own Git identity: never borrow the host HEAD.
-    subprocess.run(["git", "init", "-q", str(root)], check=True, capture_output=True)
-    subprocess.run(
-        [
-            "git",
-            "-C",
-            str(root),
-            "-c",
-            "user.name=Replay Fixture",
-            "-c",
-            "user.email=replay@example.invalid",
-            "-c",
-            "commit.gpgsign=false",
-            "commit",
-            "--allow-empty",
-            "-qm",
-            "fixture",
-        ],
-        check=True,
-        capture_output=True,
-    )
     return root
 
 
@@ -349,242 +285,218 @@ def _fixture_path(tmp_path: Path) -> Path:
     return path
 
 
-# --- Contract-aware test helpers -----------------------------------------
+# --- Scenario A: bounded review opportunity that ends a cycle ---------------
 
 
-def _run_scenario_a(tmp_path, mutations=(), v2=False):
-    """Run scenario A with given mutations, returns (contract_version, result)."""
-    root = _candidate_root(tmp_path, orchestrator_mutations=mutations, v2=v2)
-    contract_version = _get_contract_version(root)
-    result = replay._run_scenario("A", root, _fixture_path(tmp_path), workspace_root=tmp_path)
-    return contract_version, result
+def test_scenario_a_passes_against_real_production(tmp_path):
+    """The scenario must pass against the candidate's real production
+    orchestrator. The pre-fix harness could not do this at all: it called an
+    API production never had, so every fixture in this file substituted a
+    synthetic module and the suite stayed green while the real replay failed.
+    """
 
-
-def _run_scenario_b(tmp_path, mutations=(), v2=False):
-    """Run scenario B with given mutations, returns (contract_version, result)."""
-    root = _candidate_root(tmp_path, orchestrator_mutations=mutations, v2=v2)
-    contract_version = _get_contract_version(root)
-    result = replay._run_scenario("B", root, _fixture_path(tmp_path), workspace_root=tmp_path)
-    return contract_version, result
-
-
-def _run_scenario_g(tmp_path, governance_src=None, v2=False):
-    """Run scenario G with given governance source, returns (contract_version, result)."""
-    root = _candidate_root(tmp_path, governance_src=governance_src, v2=v2)
-    contract_version = _get_contract_version(root)
-    result = replay._run_scenario("G", root, _fixture_path(tmp_path), workspace_root=tmp_path)
-    return contract_version, result
-
-
-def _assert_scenario_a_pass(contract_version: str, result: dict):
-    """Assert scenario A passed with correct measurements for the contract version."""
-    assert result["outcome"] == "pass", result.get("error")
-    expected = _expected_measurements_a(contract_version)
-    assert result["measurements"] == expected, f"contract {contract_version}: {result['measurements']} != {expected}"
-
-
-def _assert_scenario_b_pass(contract_version: str, result: dict):
-    """Assert scenario B passed with correct measurements for the contract version."""
-    assert result["outcome"] == "pass", result.get("error")
-    expected = _expected_measurements_b(contract_version)
-    if contract_version == "v1":
-        # v1 has different keys
-        for key, value in expected.items():
-            assert (
-                result["measurements"].get(key) == value
-            ), f"contract {contract_version}: {key} = {result['measurements'].get(key)} != {value}"
-    else:
-        # v2 has rejected list
-        assert result["measurements"]["rejected"] == expected["rejected"]
-
-
-def _fails_contract_aware(tmp_path, mutations, scenario="A", v2=False):
-    """Run a failing test for the appropriate contract version."""
-    if scenario == "A":
-        contract_version, result = _run_scenario_a(tmp_path, mutations, v2=v2)
-    elif scenario == "B":
-        contract_version, result = _run_scenario_b(tmp_path, mutations, v2=v2)
-    else:
-        contract_version, result = _run_scenario_g(tmp_path, v2=v2)
-    assert result["outcome"] == "fail", f"scenario {scenario} accepted a regression: {mutations!r}"
-    return contract_version, result["error"]
-
-
-def _detect_contract_version_once(tmp_path):
-    """Detect contract version by creating a candidate root once."""
     root = _candidate_root(tmp_path)
-    return _get_contract_version(root)
-
-
-# --- Scenario A: a bounded budget / grace period, and only a trusted publisher can end a cycle -----------------------------
-
-
-def test_v2_candidate_fixture_is_classified_as_v2_and_legacy_fixture_remains_v1(tmp_path):
-    """Both contracts are exercised by the normal suite: nothing below is skipped for lack of a v2 candidate."""
-    assert replay.detect_contract_version(REPO_ROOT) == "v2"
-    assert replay.detect_contract_version(_candidate_root(tmp_path / "v1")) == "v1"
-    assert replay.detect_contract_version(_candidate_root(tmp_path / "v2", v2=True)) == "v2"
-
-
-def test_contract_selection_binds_scenario_set_and_invariants_to_the_detected_version(tmp_path):
-    for version, v2 in (("v1", False), ("v2", True)):
-        root = _candidate_root(tmp_path / version, v2=v2)
-        detected = replay.detect_contract_version(root)
-        assert detected == version
-        assert replay.get_scenario_set_id(detected) == f"hunter-orchestrator-replay-{version}"
-        assert set(replay.get_scenario_invariants(detected)) == set(replay.get_required_scenario_ids(detected))
-    assert replay.get_scenario_invariants("v1") != replay.get_scenario_invariants("v2")
-    with pytest.raises(ValueError, match="unknown contract version"):
-        replay.get_contract_definition("v3")
-
-
-# --- Scenario A: a bounded budget / grace period, and only a trusted publisher can end a cycle -----------------------------
-
-
-@pytest.mark.parametrize("v2", [False, True], ids=["v1", "v2"])
-def test_scenario_a_passes_against_real_production(tmp_path, v2):
-    """The scenario must pass against the candidate's real production orchestrator, never a stand-in."""
-    contract_version, result = _run_scenario_a(tmp_path, v2=v2)
-    assert contract_version == ("v2" if v2 else "v1")
-    _assert_scenario_a_pass(contract_version, result)
-
-
-def test_scenario_a_v1_fails_when_the_grace_is_not_a_real_bound(tmp_path):
-    _version, error = _fails_contract_aware(tmp_path, (MAKES_GRACE_NON_POSITIVE,), scenario="A")
-    assert "not positive and finite" in error
-
-
-def test_scenario_a_v1_accepts_any_positive_grace_period(tmp_path):
-    """The v1 definition promises a positive, finite grace only; it states no harness-imposed cap."""
-    _version, result = _run_scenario_a(tmp_path, (MAKES_GRACE_UNBOUNDED,))
+    result = replay._run_scenario("A", root, _fixture_path(tmp_path), workspace_root=tmp_path)
     assert result["outcome"] == "pass", result.get("error")
-    assert (
-        result["measurements"]["recovery_dispatches"] == 0
-    )  # unreachable: the cycle times out before it is judged dead
-
-
-@pytest.mark.parametrize(
-    ("mutation", "expected"),
-    [
-        (UNBOUNDS_COLLECTOR_REDISPATCH, "dispatch budget not honoured"),
-        (NEVER_TIMES_OUT_A_STALE_CYCLE, "never reached the terminal timeout"),
-        (NEVER_RECOVERS_A_STALE_CYCLE, "dispatch budget not honoured"),
-    ],
-    ids=["unbounded-redispatch", "no-terminal-timeout", "no-recovery"],
-)
-def test_scenario_a_v1_fails_when_ensure_collector_recovery_is_not_bounded_and_terminal(tmp_path, mutation, expected):
-    """The v1 scenario drives the real ensure_collector through a stale-cycle sequence."""
-    _version, error = _fails_contract_aware(tmp_path, (mutation,), scenario="A")
-    assert expected in error
-
-
-@pytest.mark.parametrize(
-    ("mutation", "expected"),
-    [
-        (MAKES_OPPORTUNITY_NON_POSITIVE, "not positive and finite"),
-        (MAKES_OPPORTUNITY_UNBOUNDED, "not positive and finite"),
-        (HARDCODES_THE_BUDGET, "not derived from the reviewer pool"),
-        (SWALLOWS_A_BAD_REVIEWER_POOL, "instead of failing closed"),
-    ],
-    ids=["non-positive", "unbounded", "hardcoded-3600", "swallowed-bad-pool"],
-)
-def test_scenario_a_v2_fails_when_the_budget_is_not_derived_from_the_reviewer_pool(tmp_path, mutation, expected):
-    contract_version, error = _fails_contract_aware(tmp_path, (mutation,), scenario="A", v2=True)
-    assert contract_version == "v2"
-    assert expected in error
-
-
-def test_scenario_a_v2_fails_when_a_hardcoded_budget_happens_to_equal_the_current_pool_value(tmp_path):
-    """A constant equal to today's pool-derived value is still not derived: it ignores a pool mutation."""
-    import hunter_pre_ready_review as pre_ready
-
-    pool, error = pre_ready.load_reviewer_pool()
-    assert pool is not None and not error
-    current = pre_ready.reviewer_chain_worst_case_seconds(pool)
-    mutation = (HARDCODES_THE_BUDGET[0], f"    return {current}")
-    _version, failure = _fails_contract_aware(tmp_path, (mutation,), scenario="A", v2=True)
-    assert "ignores the reviewer pool configuration" in failure
-
-
-def test_scenario_a_v2_follows_a_candidate_reviewer_pool_configuration_change(tmp_path):
-    """A consistently re-derived budget passes, and the independent digest still changes with the policy."""
-    root = _candidate_root(tmp_path, v2=True)
-    baseline = replay.build_receipt(candidate_root=root, pr_number=535, candidate_sha="a" * 40, workspace_root=tmp_path)
-    assert baseline["overall_result"] == "pass"
-    policy_path = root / "docs" / "CODE_WRITE_POLICY.json"
-    policy = json.loads(policy_path.read_text(encoding="utf-8"))
-    agents = policy["review_progression"]["review_authority"]["reviewer_pool"]["agents"]
-    enabled = next(agent for agent in agents if agent.get("enabled") is True)
-    enabled["review_timeout_seconds"] = int(enabled["review_timeout_seconds"]) - 60
-    policy_path.write_text(json.dumps(policy, indent=2), encoding="utf-8")
-    contract_version, result = _run_scenario_a_on(root, tmp_path)
-    assert contract_version == "v2" and result["outcome"] == "pass", result.get("error")
-    stale = replay.verify_candidate_module_digests(baseline, root)
-    assert any("candidate_module_digest" in error for error in stale)
-
-
-def _run_scenario_a_on(root, tmp_path):
-    return replay.detect_contract_version(root), replay._run_scenario(
-        "A", root, _fixture_path(tmp_path), workspace_root=tmp_path
+    measurements = result["measurements"]
+    budget = measurements["opportunity_seconds"]
+    assert budget > 0
+    # The two probes must straddle the candidate's own declared budget
+    # immediately, not merely sit on either side of some wider threshold.
+    assert measurements["below_boundary_seconds"] < budget < measurements["above_boundary_seconds"], (
+        f"the boundary probes must straddle the declared {budget}s budget, got "
+        f"{measurements['below_boundary_seconds']}s and {measurements['above_boundary_seconds']}s"
     )
+    assert (
+        budget - measurements["below_boundary_seconds"] <= 2
+    ), "the inside probe must sit immediately below the boundary"
+    assert (
+        measurements["above_boundary_seconds"] - budget <= 2
+    ), "the outside probe must sit immediately above the boundary"
+    assert measurements["timed_out_state"] == "REVIEW_TIMED_OUT"
+    assert measurements["in_opportunity_state"] != "REVIEW_TIMED_OUT"
+    # A still-running collector is held open just past the nominal budget, yet
+    # still finalized once the trusted ceiling is passed.
+    assert measurements["active_deferred_state"] != "REVIEW_TIMED_OUT"
+    assert measurements["active_ceiling_state"] == "REVIEW_TIMED_OUT"
 
 
-@pytest.mark.parametrize(
-    ("mutation", "expected"),
-    [
-        (TRUSTS_THE_COLLECTOR_AS_A_PUBLISHER, "citing the collector run must never be a cycle"),
-        (DROPS_THE_DEFAULT_BRANCH_BINDING, "off the default branch"),
-        (DROPS_THE_TRUSTED_WORKFLOW_BINDING, "must never be a cycle"),
-        (DROPS_THE_CREATOR_CHECK, "untrusted creator must never be a cycle"),
-        (DROPS_THE_DESCRIPTION_SHAPE_CHECK, "malformed description must be refused"),
-    ],
-    ids=["collector-publisher", "default-branch", "trusted-workflow", "creator", "description-shape"],
-)
-def test_scenario_a_v2_fails_when_a_cycle_can_be_vouched_for_by_the_wrong_party(tmp_path, mutation, expected):
-    contract_version, error = _fails_contract_aware(tmp_path, (mutation,), scenario="A", v2=True)
-    assert contract_version == "v2"
-    assert expected in error
+def test_scenario_a_fails_when_the_real_threshold_exceeds_the_declared_budget(tmp_path):
+    """Codex P1 on PR #539: a candidate whose real timeout cutoff is wider than
+    the budget it declares must be rejected. The pre-fix probes (1s inside,
+    2x outside) both sat inside such a candidate's 1.5x threshold, so it passed
+    while still leaving an exact head pending well past the bound it advertised.
+    """
+
+    root = _candidate_root(tmp_path, orchestrator_mutations=(OPPORTUNITY_THRESHOLD_EXCEEDS_DECLARED,))
+    result = replay._run_scenario("A", root, _fixture_path(tmp_path), workspace_root=tmp_path)
+    assert result["outcome"] == "fail"
+    assert "real timeout threshold is wider than the budget it declares" in result["error"]
 
 
-def test_scenario_a_v2_positive_publisher_fixture_is_genuinely_recognised_as_present(tmp_path):
-    """The positive fixture must reach `present` through production _parse_cycle, never by silent misclassification."""
-    _version, result = _run_scenario_a(tmp_path, v2=True)
+def test_scenario_a_fails_when_a_pending_cycle_can_stay_pending_forever(tmp_path):
+    """Regression: production's own contract is that a completed or timed-out
+    opportunity must never leave the exact-head status pending forever. A
+    candidate that stops enforcing that must be rejected."""
+
+    root = _candidate_root(tmp_path, orchestrator_mutations=(DROPS_OPPORTUNITY_TERMINALITY,))
+    result = replay._run_scenario("A", root, _fixture_path(tmp_path), workspace_root=tmp_path)
+    assert result["outcome"] == "fail"
+    assert "must reach a terminal state" in result["error"]
+
+
+def test_scenario_a_fails_when_the_opportunity_is_not_a_real_bound(tmp_path):
+    """A non-positive budget is not a bound, so it cannot be the thing that ends
+    a cycle."""
+
+    root = _candidate_root(tmp_path, orchestrator_mutations=(MAKES_OPPORTUNITY_NON_POSITIVE,))
+    result = replay._run_scenario("A", root, _fixture_path(tmp_path), workspace_root=tmp_path)
+    assert result["outcome"] == "fail"
+    assert "must be strictly positive" in result["error"]
+
+
+def test_scenario_a_fails_when_the_opportunity_is_ignored(tmp_path):
+    """Proves the in-budget half of the invariant is load-bearing: timing out
+    every pending cycle regardless of age is an unbounded wait in the other
+    direction and must not pass."""
+
+    root = _candidate_root(tmp_path, orchestrator_mutations=(MAKES_OPPORTUNITY_UNCONDITIONAL,))
+    result = replay._run_scenario("A", root, _fixture_path(tmp_path), workspace_root=tmp_path)
+    assert result["outcome"] == "fail"
+    assert "must not be timed out" in result["error"]
+
+
+def test_scenario_a_fails_when_an_active_collector_is_timed_out_on_the_nominal_deadline(tmp_path):
+    """PR #535: a correlated collector that is still running must not be
+    finalized on the nominal budget, and withholding the timeout must publish
+    nothing, so no competing terminal result can exist for the exact head."""
+
+    root = _candidate_root(tmp_path, orchestrator_mutations=(TIMES_OUT_AN_ACTIVE_COLLECTOR_ON_THE_NOMINAL_DEADLINE,))
+    result = replay._run_scenario("A", root, _fixture_path(tmp_path), workspace_root=tmp_path)
+    assert result["outcome"] == "fail"
+    assert "with a correlated collector still active must not be finalized as timed out" in result["error"]
+
+
+def test_scenario_a_fails_when_an_active_collector_holds_the_cycle_open_without_bound(tmp_path):
+    """Codex P1 on PR #552: withholding the nominal timeout from a live
+    collector is only legitimate while it stays bounded. A candidate that never
+    times out an active collector must be rejected by the trusted ceiling."""
+
+    root = _candidate_root(tmp_path, orchestrator_mutations=(HOLDS_AN_ACTIVE_COLLECTOR_OPEN_WITHOUT_BOUND,))
+    result = replay._run_scenario("A", root, _fixture_path(tmp_path), workspace_root=tmp_path)
+    assert result["outcome"] == "fail"
+    assert "an active collector can hold the exact head pending without bound" in result["error"]
+
+
+def test_scenario_a_fails_when_the_candidate_widens_its_own_active_collector_grace(tmp_path):
+    """The ceiling is the grader's, not the candidate's: declaring a wider grace
+    multiplier does not buy a longer wait past the trusted bound."""
+
+    root = _candidate_root(tmp_path, orchestrator_mutations=(WIDENS_ITS_OWN_ACTIVE_COLLECTOR_GRACE,))
+    result = replay._run_scenario("A", root, _fixture_path(tmp_path), workspace_root=tmp_path)
+    assert result["outcome"] == "fail"
+    assert "an active collector can hold the exact head pending without bound" in result["error"]
+
+
+# --- Scenario B: bounded, idempotent exact-head collector dispatch ----------
+
+
+def test_scenario_b_passes_against_real_production(tmp_path):
+    root = _candidate_root(tmp_path)
+    result = replay._run_scenario("B", root, _fixture_path(tmp_path), workspace_root=tmp_path)
     assert result["outcome"] == "pass", result.get("error")
-    assert result["measurements"]["publisher"] == "present"
-    assert result["measurements"]["forged_creator"] == "absent"
-    assert result["measurements"]["no_creator"] == "absent"
+    measurements = result["measurements"]
+    # Production spends MAX_COLLECTOR_DISPATCHES on correlated runs, not on
+    # dispatches: ``collector_liveness`` returns len(runs) and
+    # ``collector_needs_dispatch`` compares that count to the budget. The two
+    # dispatches that produced no run therefore do not consume it, so the bound
+    # is asserted on the run count, with the dispatch total checked to be
+    # exactly those no-run dispatches plus the budget.
+    assert measurements["correlated_runs"] == measurements["max_dispatches"], (
+        "the dispatch budget must be consumed by the runs production actually created, got "
+        f"{measurements['correlated_runs']} run(s)"
+    )
+    assert measurements["dispatches"] == measurements["max_dispatches"] + 2, (
+        f"expected 2 dispatches that produced no correlated run plus the {measurements['max_dispatches']}-run "
+        f"budget, got {measurements['dispatches']} dispatch(es)"
+    )
+    # The recovery refreshes the durable record, so more than one durable cycle
+    # exists beyond the initial record and the stale probe.
+    assert measurements["durable_records_published"] > 1
+    assert measurements["exhausted_state"] == "WAITING_FOR_REVIEWER"
 
 
-# --- Scenario B: a receipt is usable only for the exact run it names -----------------------------------------
+def test_scenario_b_fails_when_recovery_does_not_refresh_the_durable_record(tmp_path):
+    """Codex P1 on PR #539: a candidate may dispatch the recovery and still
+    leave the original stale durable record in place. Every later reconcile then
+    recovers the same exact head again off a record that never changed. The
+    pre-fix scenario substituted a synthetic liveness count at exactly this
+    point, so it never read the durable record back and this passed.
+    """
+
+    root = _candidate_root(tmp_path, orchestrator_mutations=RECOVERY_DISPATCHES_WITHOUT_REFRESHING_RECORD)
+    result = replay._run_scenario("B", root, _fixture_path(tmp_path), workspace_root=tmp_path)
+    assert result["outcome"] == "fail"
+    assert "must publish/refresh the durable cycle record" in result["error"]
 
 
-@pytest.mark.parametrize("v2", [False, True], ids=["v1", "v2"])
-def test_scenario_b_passes_against_real_production(tmp_path, v2):
-    contract_version, result = _run_scenario_b(tmp_path, v2=v2)
-    assert contract_version == ("v2" if v2 else "v1")
-    _assert_scenario_b_pass(contract_version, result)
+def test_scenario_b_fails_when_recovery_declines_a_cycle_with_no_run(tmp_path):
+    """Codex P1 on PR #540: a dispatch can be accepted and still never produce
+    a run, which production reports as ("missing", 0). The pre-fix dispatch stub
+    always created a run, so the recovery probe could only observe ("dead", 1)
+    and this candidate -- which refuses recovery in exactly the missing-run
+    state -- passed while leaving the exact head pending forever.
+    """
+
+    root = _candidate_root(tmp_path, orchestrator_mutations=RECOVERY_DECLINED_WHEN_NO_RUN_EXISTS)
+    result = replay._run_scenario("B", root, _fixture_path(tmp_path), workspace_root=tmp_path)
+    assert result["outcome"] == "fail"
+    assert "must recover exactly one further dispatch" in result["error"]
 
 
-def test_scenario_b_v1_fails_when_recovery_ignores_the_grace(tmp_path):
-    _version, error = _fails_contract_aware(tmp_path, (IGNORES_GRACE_IN_NEEDS_DISPATCH,), scenario="B")
-    assert "dispatch within grace" in error
+def test_scenario_b_fails_when_the_refresh_keeps_a_stale_liveness_timestamp(tmp_path):
+    """Codex P1 on PR #540: the pre-fix scenario aged/replaced the durable record
+    straight after recovery, so the refreshed record was never reconciled on its
+    own. A candidate that published a distinct record while preserving an
+    already-stale started_at therefore passed, even though the next real
+    reconcile re-dispatches the same exact head. Reconciling the refreshed
+    record before ageing anything catches it.
+    """
+
+    root = _candidate_root(tmp_path, orchestrator_mutations=RECOVERY_REFRESH_PRESERVES_STALE_STARTED_AT)
+    result = replay._run_scenario("B", root, _fixture_path(tmp_path), workspace_root=tmp_path)
+    assert result["outcome"] == "fail"
+    assert "reconciling the refreshed durable record must dispatch no further collector" in result["error"]
 
 
-@pytest.mark.parametrize(
-    "mutation",
-    [
-        IGNORES_RECEIPT_IDENTITY,
-        IGNORES_THE_RUN_ATTEMPT,
-        IGNORES_THE_GENERATION,
-        IGNORES_THE_IDENTITY_DIGESTS,
-        IGNORES_THE_ATTEMPT_LIST_SHAPE,
-    ],
-    ids=["identity", "attempt", "generation", "digests", "attempt-list"],
-)
-def test_scenario_b_v2_fails_when_a_receipt_is_usable_beyond_the_run_it_names(tmp_path, mutation):
-    contract_version, error = _fails_contract_aware(tmp_path, (mutation,), scenario="B", v2=True)
-    assert contract_version == "v2"
-    assert "receipts must be refused for" in error
+def test_scenario_b_fails_when_a_recorded_cycle_is_dispatched_again(tmp_path):
+    """Regression: the published cycle is the durable idempotency record, so a
+    reconcile that can observe it must never issue a duplicate dispatch."""
+
+    root = _candidate_root(tmp_path, orchestrator_mutations=(DROPS_COLLECTOR_IDEMPOTENCY_RECORD,))
+    result = replay._run_scenario("B", root, _fixture_path(tmp_path), workspace_root=tmp_path)
+    assert result["outcome"] == "fail"
+    assert "must dispatch no further collector" in result["error"]
+
+
+def test_scenario_b_fails_without_bounded_liveness_recovery(tmp_path):
+    """A dispatch that never produces a run must recover, or the exact head
+    stays pending forever."""
+
+    root = _candidate_root(tmp_path, orchestrator_mutations=(DROPS_LIVENESS_RECOVERY,))
+    result = replay._run_scenario("B", root, _fixture_path(tmp_path), workspace_root=tmp_path)
+    assert result["outcome"] == "fail"
+    assert "must recover exactly one further dispatch" in result["error"]
+
+
+def test_scenario_b_fails_when_dispatch_is_unbounded(tmp_path):
+    """Production states the bound explicitly: a cycle that keeps failing must
+    settle into a blocked pending state rather than dispatch without end."""
+
+    root = _candidate_root(tmp_path, orchestrator_mutations=(DROPS_DISPATCH_BUDGET,))
+    result = replay._run_scenario("B", root, _fixture_path(tmp_path), workspace_root=tmp_path)
+    assert result["outcome"] == "fail"
+    assert "spent the dispatch budget must dispatch no further collector" in result["error"]
 
 
 def test_scenario_fails_against_a_candidate_that_forges_a_passing_payload_and_exits_early(tmp_path):
@@ -595,26 +507,33 @@ def test_scenario_fails_against_a_candidate_that_forges_a_passing_payload_and_ex
     the harness reports fail rather than being fooled by forged stdout."""
 
     root = _candidate_root(tmp_path, orchestrator_src=HOSTILE_EARLY_EXIT_ORCHESTRATOR)
-    # An unknown hostile candidate must be rejected before import or worker launch.
-    # The classifier reads inert AST only; executing this module would terminate
-    # the test process and could forge stdout from a privileged parent.
-    with pytest.raises(ValueError, match="no complete trusted contract marker set"):
-        replay._run_scenario("B", root, _fixture_path(tmp_path), workspace_root=tmp_path)
+    result = replay._run_scenario("B", root, _fixture_path(tmp_path), workspace_root=tmp_path)
+    assert result["outcome"] == "fail"
+    assert "trusted completion message" in result["error"]
+
+
+def test_untrusted_candidate_cannot_change_scenario_dispatch(tmp_path):
+    candidate_source = """import __main__
+if hasattr(__main__, 'SCENARIOS'):
+    __main__.SCENARIOS['B'] = lambda *_: {'dispatches': 1}
+"""
+    root = _candidate_root(tmp_path, orchestrator_src=candidate_source)
+    result = replay._run_scenario("B", root, _fixture_path(tmp_path), workspace_root=tmp_path)
+    assert result["outcome"] == "fail", result
 
 
 # --- Scenario G: WAITING_FOR_REVIEWER -> pending classification ------------
 
 
 def test_scenario_g_passes_against_correct_end_to_end_classification(tmp_path):
-    contract_version, result = _run_scenario_g(tmp_path)
+    root = _candidate_root(tmp_path)
+    result = replay._run_scenario("G", root, _fixture_path(tmp_path), workspace_root=tmp_path)
     assert result["outcome"] == "pass", result.get("error")
-    # Scenario G is identical for both contracts
-    assert result["measurements"]["absent_state"] == "pending"
-    assert result["measurements"]["in_progress_state"] == "pending"
 
 
 def test_scenario_g_fails_against_a_swallowed_fail_closed_path(tmp_path):
-    contract_version, result = _run_scenario_g(tmp_path, governance_src=BUGGY_GOVERNANCE)
+    root = _candidate_root(tmp_path, governance_src=BUGGY_GOVERNANCE)
+    result = replay._run_scenario("G", root, _fixture_path(tmp_path), workspace_root=tmp_path)
     assert result["outcome"] == "fail"
     assert "fail closed" in result["error"]
 
@@ -639,19 +558,15 @@ def test_trusted_harness_definition_digest_is_deterministic_and_content_sensitiv
 
 
 def test_scenario_set_digest_is_deterministic_and_content_sensitive(monkeypatch):
-    # Test for both contract versions
-    for contract_version in ("v1", "v2"):
-        first = replay.scenario_set_digest(contract_version)
-        second = replay.scenario_set_digest(contract_version)
-        assert first == second, f"contract {contract_version}: digest not deterministic"
+    first = replay.scenario_set_digest()
+    second = replay.scenario_set_digest()
+    assert first == second
 
-        # Mutate the actual in-memory trusted definition; never edit a tracked file.
-        original = replay.CONTRACT_VERSIONS[contract_version]["scenario_invariants"]
-        modified = dict(original)
-        modified["A"] += " (mutation probe)"
-        monkeypatch.setitem(replay.CONTRACT_VERSIONS[contract_version], "scenario_invariants", modified)
-        assert replay.scenario_set_digest(contract_version) != first
-        monkeypatch.setitem(replay.CONTRACT_VERSIONS[contract_version], "scenario_invariants", original)
+    mutated_invariants = dict(replay.SCENARIO_INVARIANTS)
+    mutated_invariants["A"] = mutated_invariants["A"] + " (mutated for this test)"
+    monkeypatch.setattr(replay, "SCENARIO_INVARIANTS", mutated_invariants)
+    changed = replay.scenario_set_digest()
+    assert changed != first, "digest must depend on the actual invariant text, not be a constant"
 
 
 def test_fixture_digest_is_deterministic_and_content_sensitive(monkeypatch):
@@ -666,8 +581,8 @@ def test_fixture_digest_is_deterministic_and_content_sensitive(monkeypatch):
     assert changed != first, "digest must depend on the actual fixture content, not be a constant"
 
 
-def _good_receipt(tmp_path: Path, v2: bool = False) -> tuple[dict, Path]:
-    root = _candidate_root(tmp_path, v2=v2)
+def _good_receipt(tmp_path: Path) -> tuple[dict, Path]:
+    root = _candidate_root(tmp_path)
     receipt = replay.build_receipt(candidate_root=root, pr_number=535, candidate_sha="a" * 40, workspace_root=tmp_path)
     return receipt, root
 
@@ -705,7 +620,7 @@ def test_candidate_digest_verification_alone_catches_a_forged_digest(tmp_path):
 
 
 def test_verify_digests_and_validate_cli_round_trip_through_two_unprivileged_steps(tmp_path):
-    receipt, root = _good_receipt(tmp_path, v2=True)
+    receipt, root = _good_receipt(tmp_path)
     receipt_path = tmp_path / "receipt.json"
     receipt_path.write_text(json.dumps(receipt), encoding="utf-8")
     digest_check_path = tmp_path / "digest-check.json"
@@ -998,6 +913,7 @@ def test_verify_digests_cli_rejects_an_alternate_candidate_root_substitution(tmp
     # "candidate" and the real one already occupies that name in tmp_path.
     unrenamed_alternate_root = _candidate_root(
         tmp_path / "alt-source",
+        orchestrator_mutations=(DROPS_DISPATCH_BUDGET,),
         governance_src=(REPO_ROOT / "scripts" / "hunter_governance_review_v2.py").read_text(encoding="utf-8")
         + "\n# alternate candidate checkout\n",
     )
@@ -1275,10 +1191,11 @@ def test_publish_workflow_contains_no_git_clone_fetch_or_checkout_commands():
 
 
 def test_publish_workflow_executes_no_repository_script():
-    text = _publish_workflow_text()
-    # The only `python` invocations left are `python - <<'PY' ... PY`
-    # heredocs running this file's own inline, non-repository script text --
-    # never `python scripts/...` (a repository-hosted script path).
+    doc = _publish_workflow_doc()
+    steps = doc["jobs"]["publish-proof"]["steps"]
+    text = "\n".join(step.get("run", "") for step in steps)
+    # Only the credential-free trusted-replay job runs the base-controlled
+    # repository scripts. The status writer must remain checkout-free.
     assert "python scripts/" not in text
     assert re.search(r"^\s*python - <<'PY'\s*$", text, re.MULTILINE)
 
@@ -1317,6 +1234,7 @@ def test_publish_workflow_pr_head_binding_remains_fail_closed():
     context_step = next(s for s in steps if s.get("id") == "context")
     assert context_step["env"]["RUN_ID"] == "${{ github.event.workflow_run.id }}"
     assert "pull_requests[0].number" in context_step["run"]
+    assert 'if [ "$head_sha" != "$run_sha" ]' in context_step["run"]
     assert "exit 1" in context_step["run"]
 
 
@@ -1351,6 +1269,8 @@ def _run_inline_validate_script(
     env.update(
         {
             "WORKFLOW_CONCLUSION": conclusion,
+            "REPLAY_JOB_RESULT": "success",
+            "DIGEST_JOB_RESULT": "success",
             "PR_NUMBER": str(pr_number),
             "CANDIDATE_SHA": candidate_sha,
             "GITHUB_OUTPUT": str(github_output),
@@ -1375,6 +1295,11 @@ def _write_trusted_fetched_files(work: Path) -> None:
         encoding="utf-8",
     )
     (work / "trusted-main-sha.fetched").write_text(replay._trusted_harness_sha(), encoding="utf-8")
+    workflow_text = (repo_root / ".github" / "workflows" / "hunter-trusted-orchestrator-replay-validate.yml").read_text(
+        encoding="utf-8"
+    )
+    (work / "executed-validate-workflow.fetched").write_text(workflow_text, encoding="utf-8")
+    (work / "trusted-validate-workflow.fetched").write_text(workflow_text, encoding="utf-8")
 
 
 def test_checkout_free_inline_validator_accepts_a_genuinely_good_receipt(tmp_path):
@@ -1412,6 +1337,26 @@ def test_checkout_free_inline_validator_rejects_a_forged_candidate_sha(tmp_path)
     # Same disposition as the trusted module's own validation for the same forgery.
     module_errors = replay.validate_receipt_trusted_fields(receipt, pr_number=535, candidate_sha="a" * 40)
     assert any("candidate_sha" in e for e in module_errors)
+
+
+def test_checkout_free_inline_validator_rejects_a_tampered_executed_workflow_definition(tmp_path):
+    receipt, _root = _good_receipt(tmp_path)
+    (tmp_path / "replay-receipt.json").write_text(json.dumps(receipt), encoding="utf-8")
+    (tmp_path / "digest-check.json").write_text(json.dumps({"errors": []}), encoding="utf-8")
+    _write_trusted_fetched_files(tmp_path)
+    # A candidate keeps the workflow name and every receipt field intact while
+    # swapping the executed definition's trigger/steps/permissions.
+    (tmp_path / "executed-validate-workflow.fetched").write_text(
+        "name: Hunter / Trusted Orchestrator Replay Validate\non:\n  pull_request_target:\n",
+        encoding="utf-8",
+    )
+
+    returncode, _stdout, stderr, github_output = _run_inline_validate_script(
+        tmp_path, conclusion="success", pr_number=535, candidate_sha="a" * 40
+    )
+    assert returncode == 0  # the inline script itself exits 0; failure is reported via GITHUB_OUTPUT
+    assert "trusted base-approved definition" in stderr
+    assert "result=failure" in github_output
 
 
 def test_checkout_free_inline_validator_rejects_incomplete_evidence():
@@ -1542,7 +1487,7 @@ def test_parse_trusted_replay_identity_rejects_out_of_domain_pr(bad_pr):
 
 
 def test_run_cli_persists_only_the_normalized_identity_values(tmp_path):
-    root = _candidate_root(tmp_path, v2=True)
+    root = _candidate_root(tmp_path)
     out_path = tmp_path / "receipt.json"
 
     run = subprocess.run(
@@ -1590,503 +1535,784 @@ def test_cmd_run_and_cmd_validate_never_forward_raw_argparse_pr_or_sha():
         ), f"{name} references args.candidate_sha somewhere other than identity construction"
 
 
-def test_failed_replay_still_uploads_diagnostic_receipt_without_weakening_gate() -> None:
-    """A failed replay must expose its evidence but never unlock digest verification."""
+def test_trusted_replay_workflows_separate_candidate_and_publisher_permissions():
     import yaml
 
-    workflow = yaml.safe_load(
-        (REPO_ROOT / ".github/workflows/hunter-trusted-orchestrator-replay-validate.yml").read_text(encoding="utf-8")
-    )
-    jobs = workflow["jobs"]
-    steps = jobs["validate-replay"]["steps"]
-    replay_step = next(step for step in steps if step["name"] == "Run trusted candidate orchestrator replay")
-    upload = next(step for step in steps if step["name"] == "Upload replay receipt")
-    assert "continue-on-error" not in replay_step
-    assert upload.get("if", upload.get(True)) == "${{ always() }}"
-    assert upload["with"]["path"] == "replay-receipt.json"
-    assert "needs.validate-replay.result == 'success'" in jobs["verify-candidate-digest"].get(
-        "if", jobs["verify-candidate-digest"].get(True, "")
-    )
-
-
-def test_trusted_floor_rejects_candidate_controlled_v2_to_v1_downgrade(tmp_path):
-    trusted = _candidate_root(tmp_path)
-    candidate = tmp_path / "downgraded"
-    shutil.copytree(trusted, candidate, ignore=shutil.ignore_patterns(".git"))
-    module = trusted / "scripts" / "hunter_review_orchestrator.py"
-    with module.open("a", encoding="utf-8") as handle:
-        handle.write("\nCOLLECTOR_RESULTS_SCHEMA = 'trusted-v2'\n\ndef collector_receipt_problem():\n    pass\n")
-    with pytest.raises(ValueError, match="v2-to-v1"):
-        replay.enforce_trusted_contract_floor(candidate, trusted)
-
-
-def test_trusted_floor_rejects_modified_v1_candidate(tmp_path):
-    trusted = _candidate_root(tmp_path)
-    candidate = tmp_path / "changed-v1"
-    shutil.copytree(trusted, candidate, ignore=shutil.ignore_patterns(".git"))
-    module = candidate / "scripts" / "hunter_review_orchestrator.py"
-    module.write_text(module.read_text(encoding="utf-8") + "\n# downgrade camouflage\n", encoding="utf-8")
-    with pytest.raises(ValueError, match="modified candidate dependency cannot select weaker v1"):
-        replay.enforce_trusted_contract_floor(candidate, trusted)
-
-
-def test_digest_verifier_rejects_receipt_contract_relabel(tmp_path):
-    receipt, candidate = _good_receipt(tmp_path)
-    receipt["contract_version"] = "v1" if receipt["contract_version"] == "v2" else "v2"
-    errors = replay.verify_candidate_module_digests(receipt, candidate)
-    assert any("differs from candidate" in error for error in errors)
-
-
-def test_trusted_floor_allows_unchanged_legacy_candidate(tmp_path):
-    trusted = _candidate_root(tmp_path)
-    candidate = tmp_path / "identical"
-    shutil.copytree(trusted, candidate, ignore=shutil.ignore_patterns(".git"))
-    assert replay.enforce_trusted_contract_floor(candidate, trusted) == replay.detect_contract_version(trusted)
-
-
-# --- Symlink / path-escape confinement of candidate inputs (PR #594 review) ---------------------------------------------
-#
-# A candidate can commit a symlink in place of a module (or of a parent directory)
-# that points into the trusted checkout. Classification, comparison, import and
-# hashing would then all follow it and execute trusted code as if it were the
-# candidate's. These tests plant such a link and prove every stage fails closed
-# before the target is classified, compared, imported or hashed.
-
-IMPORT_MARKER_SOURCE = (
-    "from pathlib import Path\n" "Path(__file__).with_name('IMPORTED').write_text('executed', encoding='utf-8')\n"
-)
-
-
-def _outside_copy_of_orchestrator(tmp_path: Path) -> Path:
-    """A stand-in for the trusted checkout's orchestrator, living outside the candidate root."""
-    outside = tmp_path / "trusted_checkout" / "scripts"
-    outside.mkdir(parents=True)
-    target = outside / "hunter_review_orchestrator.py"
-    shutil.copy(REPO_ROOT / "scripts" / "hunter_review_orchestrator.py", target)
-    return target
-
-
-def _symlink_module_candidate(tmp_path: Path) -> tuple[Path, Path]:
-    root = _candidate_root(tmp_path / "work")
-    target = _outside_copy_of_orchestrator(tmp_path)
-    module = root / "scripts" / "hunter_review_orchestrator.py"
-    module.unlink()
-    module.symlink_to(target)
-    return root, target
-
-
-def _symlink_parent_candidate(tmp_path: Path) -> tuple[Path, Path]:
-    root = _candidate_root(tmp_path / "work")
-    outside_scripts = tmp_path / "trusted_checkout_scripts"
-    shutil.copytree(root / "scripts", outside_scripts)
-    shutil.rmtree(root / "scripts")
-    (root / "scripts").symlink_to(outside_scripts, target_is_directory=True)
-    return root, outside_scripts / "hunter_review_orchestrator.py"
-
-
-@pytest.mark.parametrize("builder", [_symlink_module_candidate, _symlink_parent_candidate], ids=["module", "parent"])
-def test_symlinked_candidate_orchestrator_is_rejected_before_classification(tmp_path, builder):
-    root, _target = builder(tmp_path)
-    with pytest.raises(ValueError, match="symlink"):
-        replay.detect_contract_version(root)
-
-
-@pytest.mark.parametrize("builder", [_symlink_module_candidate, _symlink_parent_candidate], ids=["module", "parent"])
-def test_trusted_floor_rejects_a_symlink_that_would_compare_equal_to_the_trusted_orchestrator(tmp_path, builder):
-    """Even a link to byte-identical trusted content must not select the weaker v1 contract."""
-    root, _target = builder(tmp_path)
-    with pytest.raises(ValueError, match="symlink"):
-        replay.enforce_trusted_contract_floor(root, REPO_ROOT)
-
-
-@pytest.mark.parametrize("builder", [_symlink_module_candidate, _symlink_parent_candidate], ids=["module", "parent"])
-def test_independent_digest_verifier_cannot_approve_a_symlink_substitution(tmp_path, builder):
-    receipt, honest_root = _good_receipt(tmp_path / "honest")
-    root, _target = builder(tmp_path / "hostile")
-    errors = replay.verify_candidate_module_digests(receipt, root)
-    assert errors and any("symlink" in error for error in errors), errors
-    assert replay.verify_candidate_module_digests(receipt, honest_root) == []
-
-
-@pytest.mark.parametrize("builder", [_symlink_module_candidate, _symlink_parent_candidate], ids=["module", "parent"])
-def test_symlinked_candidate_is_never_imported_by_the_worker(tmp_path, builder):
-    """The worker validates and hashes before importing: a substituted file is never executed."""
-    root, target = builder(tmp_path)
-    target.write_text(
-        target.read_text(encoding="utf-8") + "\n" + IMPORT_MARKER_SOURCE.replace("__file__", repr(str(target))),
-        encoding="utf-8",
-    )
-    marker = target.with_name("IMPORTED")
-    result = replay._run_scenario("A", root, _fixture_path(tmp_path), workspace_root=tmp_path, contract_version="v1")
-    assert result["outcome"] == "fail"
-    assert result["candidate_module_digest"] == ""
-    assert "symlink" in result["error"]
-    assert not marker.exists(), "the substituted file was executed"
-
-
-def test_symlinked_candidate_dependency_and_config_are_rejected(tmp_path):
-    """Dependencies and configuration are confined exactly like the root module."""
-    for relative in ("scripts/hunter_pre_ready_review.py", "docs/CODE_WRITE_POLICY.json"):
-        root = _candidate_root(tmp_path / relative.replace("/", "_"))
-        outside = tmp_path / ("outside_" + relative.replace("/", "_"))
-        shutil.copy(root / relative, outside)
-        (root / relative).unlink()
-        (root / relative).symlink_to(outside)
-        with pytest.raises(ValueError, match="symlink"):
-            worker_module().candidate_module_digest(root, "A", "v1")
-
-
-def test_candidate_path_escape_forms_are_rejected(tmp_path):
-    root = _candidate_root(tmp_path)
-    worker = worker_module()
-    for bad in ("../outside.py", "/etc/passwd", "", "scripts/../../x.py"):
-        with pytest.raises(ValueError):
-            worker.resolve_candidate_file(root, bad)
-    with pytest.raises(OSError):
-        worker.resolve_candidate_file(root, "scripts/does_not_exist.py")
-    assert worker.resolve_candidate_file(root, "scripts/hunter_review_orchestrator.py").is_file()
-
-
-def test_ordinary_candidate_files_still_pass_confinement(tmp_path):
-    receipt, root = _good_receipt(tmp_path)
-    assert receipt["overall_result"] == "pass"
-    assert replay.validate_receipt(receipt, candidate_root=root, pr_number=535, candidate_sha="a" * 40) == []
-
-
-def worker_module():
-    import hunter_trusted_orchestrator_replay_worker as worker
-
-    return worker
-
-
-# --- Complete candidate input closure for the digest --------------------------------------------------------------------
-
-
-def test_digest_closure_includes_transitive_dependencies_and_configuration(tmp_path):
-    root = _candidate_root(tmp_path)
-    worker = worker_module()
-    for version in ("v1", "v2"):
-        for scenario_id in ("A", "B", "G"):
-            closure = worker.candidate_input_closure(root, scenario_id, version)
-            assert "scripts/hunter_review_orchestrator.py" in closure
-            assert "scripts/hunter_pre_ready_review.py" in closure
-            assert "scripts/hunter_github_transport.py" in closure
-            assert "docs/CODE_WRITE_POLICY.json" in closure
-            assert list(closure) == sorted(set(closure)), "closure must be canonical and duplicate-free"
-    # Nested (function-level) imports and import cycles are both covered and terminate.
-    assert "scripts/hunter_reviewer_collector.py" in worker.candidate_input_closure(root, "B", "v2")
-    assert "scripts/hunter_governance_review_v2.py" in worker.candidate_input_closure(root, "G", "v1")
-
-
-@pytest.mark.parametrize(
-    ("relative", "scenario_id"),
-    [
-        ("scripts/hunter_pre_ready_review.py", "A"),
-        ("scripts/hunter_github_transport.py", "A"),
-        ("docs/CODE_WRITE_POLICY.json", "A"),
-        ("scripts/hunter_reviewer_collector.py", "B"),
-        ("scripts/hunter_pre_ready_review.py", "B"),
-    ],
-)
-def test_mutating_any_candidate_dependency_changes_the_digest(tmp_path, relative, scenario_id):
-    root = _candidate_root(tmp_path, v2=True)
-    worker = worker_module()
-    before = worker.candidate_module_digest(root, scenario_id, "v2")
-    path = root / relative
-    path.write_text(path.read_text(encoding="utf-8") + ("\n" if relative.endswith(".json") else "\n# mutated\n"))
-    assert worker.candidate_module_digest(root, scenario_id, "v2") != before
-
-
-def test_run_and_verify_jobs_share_one_digest_definition(tmp_path):
-    receipt, root = _good_receipt(tmp_path)
-    worker = worker_module()
-    for entry in receipt["scenario_results"]:
-        assert entry["candidate_module_digest"] == worker.candidate_module_digest(
-            root, entry["scenario_id"], receipt["contract_version"]
+    root = Path(__file__).resolve().parents[1] / ".github" / "workflows"
+    validate = yaml.safe_load((root / "hunter-trusted-orchestrator-replay-validate.yml").read_text())
+    publish = yaml.safe_load((root / "hunter-trusted-orchestrator-replay-publish.yml").read_text())
+    # The candidate-touching validate workflow runs unprivileged on
+    # `pull_request`, never the privileged `pull_request_target`; the
+    # privileged publisher (workflow_run, base-owned) independently
+    # re-derives every trusted quantity and re-verifies the executed
+    # workflow definition against the trusted base definition.
+    validate_header = (root / "hunter-trusted-orchestrator-replay-validate.yml").read_text().split("jobs:", 1)[0]
+    assert "pull_request:" in validate_header
+    assert "pull_request_target:" not in validate_header
+    assert "workflow_dispatch:" not in validate_header
+    assert "workflow_run:" not in validate_header
+    assert validate["jobs"]
+    for job in validate["jobs"].values():
+        checkouts = [step for step in job["steps"] if "actions/checkout" in step.get("uses", "")]
+        assert any(
+            step.get("with", {}).get("ref") == "${{ github.event.repository.default_branch }}" for step in checkouts
         )
-    assert replay.verify_candidate_module_digests(receipt, root) == []
+        assert all(step.get("with", {}).get("ref") != "${{ github.head_ref }}" for step in checkouts)
+    assert "workflow_run:" in (root / "hunter-trusted-orchestrator-replay-publish.yml").read_text().split("jobs:", 1)[0]
+    for job in validate["jobs"].values():
+        assert job["permissions"] == {"contents": "read"}
+        assert not any("statuses" in str(step) for step in job["steps"])
+        for step in job["steps"]:
+            if "uses" in step and "actions/checkout" in step["uses"]:
+                assert step["with"]["persist-credentials"] is False
+    publisher = publish["jobs"]["publish-proof"]
+    assert publisher["permissions"]["statuses"] == "write"
+    assert publisher["permissions"]["pull-requests"] == "read"
+    assert all("actions/checkout" not in step.get("uses", "") for step in publisher["steps"])
+    assert 'if [ "$head_sha" != "$run_sha" ]' in publisher["steps"][0]["run"]
+
+
+def test_replay_publisher_uses_only_upstream_unprivileged_evidence():
+    doc = _publish_workflow_doc()
+    jobs = doc["jobs"]
+    assert set(jobs) == {"publish-proof"}
+    publisher = jobs["publish-proof"]
+    assert "needs" not in publisher
+    assert "always()" in publisher["if"]
+    assert publisher["permissions"]["statuses"] == "write"
+    downloads = [step for step in publisher["steps"] if "download-artifact" in step.get("uses", "")]
+    assert len(downloads) == 2
+    assert {step["with"]["name"] for step in downloads} == {"replay-receipt", "digest-check"}
+    assert all(step["with"]["run-id"] == "${{ github.event.workflow_run.id }}" for step in downloads)
+    assert all(step["with"]["github-token"] == "${{ github.token }}" for step in downloads)
+    assert all(step["continue-on-error"] is True for step in downloads)
+    assert not any("actions/checkout" in step.get("uses", "") for step in publisher["steps"])
+    assert not any(
+        "python scripts/hunter_trusted_orchestrator_replay.py" in step.get("run", "") for step in publisher["steps"]
+    )
+    validator = next(step for step in publisher["steps"] if step.get("id") == "validate_receipt")
+    assert 'conclusion != "success"' in validator["run"]
+
+
+def test_inline_validator_fails_closed_on_failed_replay_job_even_with_forged_green_artifacts(tmp_path):
+    receipt, _ = _good_receipt(tmp_path)
+    (tmp_path / "replay-receipt.json").write_text(json.dumps(receipt), encoding="utf-8")
+    (tmp_path / "digest-check.json").write_text(json.dumps({"errors": []}), encoding="utf-8")
+    _write_trusted_fetched_files(tmp_path)
+    script = _extract_inline_validate_script()
+    import os as _os
+
+    for failed_job in ("WORKFLOW_CONCLUSION", "REPLAY_JOB_RESULT", "DIGEST_JOB_RESULT"):
+        work = tmp_path / failed_job
+        work.mkdir()
+        for name in (
+            "replay-receipt.json",
+            "digest-check.json",
+            "trusted-controller.fetched",
+            "trusted-worker.fetched",
+            "trusted-definition.fetched",
+            "trusted-main-sha.fetched",
+        ):
+            (work / name).write_bytes((tmp_path / name).read_bytes())
+        output = work / "output.txt"
+        env = dict(
+            _os.environ,
+            WORKFLOW_CONCLUSION="success",
+            REPLAY_JOB_RESULT="success",
+            DIGEST_JOB_RESULT="success",
+            PR_NUMBER="535",
+            CANDIDATE_SHA="a" * 40,
+            GITHUB_OUTPUT=str(output),
+        )
+        env[failed_job] = "failure"
+        result = subprocess.run([sys.executable, "-c", script], cwd=work, env=env, capture_output=True, text=True)
+        assert result.returncode == 0, result.stderr
+        assert "result=failure" in output.read_text()
+
+
+def test_replay_failure_cannot_skip_status_publication():
+    jobs = _publish_workflow_doc()["jobs"]
+    assert "always()" in jobs["publish-proof"]["if"]
+    assert "!cancelled()" in jobs["publish-proof"]["if"]
+    assert jobs["publish-proof"]["permissions"]["statuses"] == "write"
+    assert set(jobs) == {"publish-proof"}
+
+
+def test_status_publication_runs_after_upstream_failure_so_status_never_stays_pending():
+    import yaml
+
+    doc = yaml.safe_load(Path(".github/workflows/hunter-trusted-orchestrator-replay-publish.yml").read_text())
+    steps = doc["jobs"]["publish-proof"]["steps"]
+    publish = next(step for step in steps if step.get("name") == "Publish exact-head PR-bound status")
+    assert "always()" in publish["if"]
+    assert "steps.context.outcome" in publish["if"]
+
+
+def test_publisher_binds_to_the_runs_authoritative_head_sha_not_the_dynamic_pr_head_field():
+    import yaml
+
+    doc = yaml.safe_load(Path(".github/workflows/hunter-trusted-orchestrator-replay-publish.yml").read_text())
+    context = next(s for s in doc["jobs"]["publish-proof"]["steps"] if s.get("id") == "context")["run"]
+    # `.pull_requests[0].head.sha` is resolved dynamically by the API to the
+    # PR's *current* head, so it cannot identify the commit the triggering run
+    # actually executed; the run's own `head_sha` is authoritative.
+    assert ".head_sha" in context
+    assert "pull_requests[0].head.sha" not in context
+    assert doc["jobs"]["publish-proof"]["concurrency"]["cancel-in-progress"] is False
+
+
+def test_publisher_accepts_ref_qualified_validation_run_path_only_for_expected_workflow():
+    import subprocess
+
+    doc = _publish_workflow_doc()
+    context = next(step for step in doc["jobs"]["publish-proof"]["steps"] if step.get("id") == "context")["run"]
+    # Execute the actual publisher guard rather than copying its comparison.
+    guard = context[context.index('if [ "${run_path%%@*}"') :]
+    guard = guard[: guard.index('if [ -z "$pr_number" ]')]
+    expected = ".github/workflows/hunter-trusted-orchestrator-replay-validate.yml"
+    for path, accepted in (
+        (expected, True),
+        (expected + "@refs/heads/main", True),
+        (expected + "@feature-branch", True),
+        (".github/workflows/untrusted.yml@refs/heads/main", False),
+        (expected + ".evil@main", False),
+    ):
+        result = subprocess.run(
+            ["bash", "-c", 'run_path="$1"\n' + guard, "guard", path],
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        assert (result.returncode == 0) is accepted, (path, result.stderr)
+
+
+def test_publisher_latest_run_match_is_bound_to_the_exact_run_head_sha():
+    import yaml
+
+    doc = yaml.safe_load(Path(".github/workflows/hunter-trusted-orchestrator-replay-publish.yml").read_text())
+    context = next(s for s in doc["jobs"]["publish-proof"]["steps"] if s.get("id") == "context")["run"]
+    assert "pull_requests[0].number" in context
+    assert "$4 == sha" in context and '-v sha="$run_sha"' in context
+    assert "$3 == sha && $4 == pr" not in context and '-v pr="$pr_number"' not in context
+
+
+def test_publisher_latest_run_lookup_is_paginated_and_bound_to_exact_pr_head():
+    import yaml
+
+    doc = yaml.safe_load(Path(".github/workflows/hunter-trusted-orchestrator-replay-publish.yml").read_text())
+    context = next(s for s in doc["jobs"]["publish-proof"]["steps"] if s.get("id") == "context")["run"]
+    assert "--paginate" in context
+    assert "-f event=pull_request" in context
+    assert ".head_sha" in context
+    assert "pull_requests[0].head.sha" not in context
+    assert '-v sha="$run_sha"' in context
+    assert "$4 == sha" in context
+    assert 'if [ "$latest_run" != "$RUN_ID" ]; then' in context
+    assert '-f branch="$head_ref"' not in context
+
+
+def test_hosted_replay_fails_closed_without_network_namespace(monkeypatch):
+    monkeypatch.setenv("HUNTER_REPLAY_REQUIRE_NETNS", "1")
+    monkeypatch.setattr(replay.Path, "is_file", lambda self: False if str(self) == "/usr/bin/bwrap" else True)
+    with pytest.raises(RuntimeError, match="requires executable /usr/bin/bwrap"):
+        replay._network_isolated_worker_command([sys.executable, "-c", "pass"])
+
+
+def test_hosted_replay_uses_fixed_network_namespace_binary(monkeypatch):
+    monkeypatch.setenv("HUNTER_REPLAY_REQUIRE_NETNS", "1")
+    monkeypatch.setattr(replay.Path, "is_file", lambda self: True)
+    monkeypatch.setattr(replay.os, "access", lambda *_args: True)
+    command = replay._network_isolated_worker_command([sys.executable, "-c", "pass"])
+    assert command[0] == "/usr/bin/bwrap"
+    assert "--unshare-net" in command
+    assert command[-3:] == [sys.executable, "-c", "pass"]
+
+
+def test_hosted_netns_provisioning_lifts_the_apparmor_userns_restriction_before_the_first_bwrap_use():
+    import yaml
+
+    doc = yaml.safe_load(Path(".github/workflows/hunter-trusted-orchestrator-replay-validate.yml").read_text())
+    steps = [step for job in doc["jobs"].values() for step in job["steps"]]
+    provision = next(step for step in steps if "network namespace" in step.get("name", ""))["run"]
+    sysctl = provision.index("kernel.apparmor_restrict_unprivileged_userns=0")
+    assert sysctl < provision.index("/usr/bin/bwrap --die-with-parent")
+
+
+def _candidate_with_symlinked_module(tmp_path):
+    trusted = tmp_path / "trusted"
+    (trusted / "scripts").mkdir(parents=True)
+    (trusted / "scripts" / "hunter_review_orchestrator.py").write_text("TRUSTED = True\n", encoding="utf-8")
+    candidate = tmp_path / "candidate"
+    (candidate / "scripts").mkdir(parents=True)
+    (candidate / "scripts" / "hunter_review_orchestrator.py").symlink_to(
+        trusted / "scripts" / "hunter_review_orchestrator.py"
+    )
+    return candidate
+
+
+def test_symlinked_candidate_module_is_refused_for_digest_and_import(tmp_path):
+    candidate = _candidate_with_symlinked_module(tmp_path)
+    with pytest.raises(ValueError, match="symlink|outside"):
+        worker.candidate_module_digest(candidate, "A")
+    with pytest.raises(ValueError, match="symlink|outside"):
+        worker._import_candidate(candidate, "hunter_review_orchestrator")
+
+
+def test_regular_confined_candidate_module_is_accepted(tmp_path):
+    candidate = tmp_path / "candidate"
+    (candidate / "scripts").mkdir(parents=True)
+    (candidate / "scripts" / "hunter_review_orchestrator.py").write_text("X = 1\n", encoding="utf-8")
+    assert len(worker.candidate_module_digest(candidate, "A")) == 64
+    worker.assert_candidate_scripts_confined(candidate)
+
+
+def test_publisher_resolves_both_validation_job_conclusions_from_the_triggering_run():
+    import yaml
+
+    doc = yaml.safe_load(Path(".github/workflows/hunter-trusted-orchestrator-replay-publish.yml").read_text())
+    steps = doc["jobs"]["publish-proof"]["steps"]
+    context = next(step for step in steps if step.get("id") == "context")["run"]
+    assert "actions/runs/${RUN_ID}/jobs" in context
+    assert (
+        "Trusted Candidate Orchestrator Replay" in context
+        and "Independently Verify Candidate Module Digests" in context
+    )
+    assert "${replay_job:-missing}" in context and "${digest_job:-missing}" in context
+    validator = next(step for step in steps if step.get("id") == "validate_receipt")
+    assert validator["env"]["REPLAY_JOB_RESULT"] == "${{ steps.context.outputs.replay_job_result }}"
+    assert validator["env"]["DIGEST_JOB_RESULT"] == "${{ steps.context.outputs.digest_job_result }}"
+
+
+def test_symlinked_directory_in_candidate_scripts_tree_is_refused(tmp_path):
+    outside = tmp_path / "outside"
+    outside.mkdir()
+    (outside / "module.py").write_text("X = 1\n", encoding="utf-8")
+    candidate = tmp_path / "candidate"
+    (candidate / "scripts").mkdir(parents=True)
+    (candidate / "scripts" / "helpers").symlink_to(outside, target_is_directory=True)
+    with pytest.raises(ValueError, match="symlink"):
+        worker.assert_candidate_scripts_confined(candidate)
+
+
+def test_worker_environment_is_an_allowlist_and_drops_runner_credentials(monkeypatch):
+    for name in ("ACTIONS_RUNTIME_TOKEN", "ACTIONS_ID_TOKEN_REQUEST_TOKEN", "GITHUB_TOKEN", "GH_TOKEN", "SOME_SECRET"):
+        monkeypatch.setenv(name, "secret-value")
+    monkeypatch.setenv("PATH", "/usr/bin")
+    env = replay._isolated_env()
+    assert "secret-value" not in env.values()
+    assert not any(name in env for name in ("ACTIONS_RUNTIME_TOKEN", "ACTIONS_ID_TOKEN_REQUEST_TOKEN", "SOME_SECRET"))
+    assert env["GITHUB_TOKEN"] == "" and env["GH_TOKEN"] == "" and env["PATH"] == "/usr/bin"
+
+
+def test_replay_step_launches_the_sandbox_with_a_cleared_environment():
+    import yaml
+
+    doc = yaml.safe_load(Path(".github/workflows/hunter-trusted-orchestrator-replay-validate.yml").read_text())
+    steps = [step for job in doc["jobs"].values() for step in job["steps"]]
+    run = next(step for step in steps if step.get("name", "").startswith("Run trusted candidate"))["run"]
+    assert "env -i " in run and run.index("env -i ") < run.index("/usr/bin/bwrap")
+
+
+def test_import_path_drops_the_trusted_scripts_directory_so_missing_helpers_do_not_fall_back(tmp_path):
+    trusted = tmp_path / "trusted" / "scripts"
+    trusted.mkdir(parents=True)
+    candidate_scripts = tmp_path / "candidate" / "scripts"
+    candidate_scripts.mkdir(parents=True)
+    other = tmp_path / "site"
+    other.mkdir()
+    result = worker.isolated_import_path(
+        [str(trusted), str(other), str(candidate_scripts)], candidate_scripts.parent, trusted
+    )
+    assert result == [str(candidate_scripts.resolve()), str(candidate_scripts.parent.resolve()), str(other)]
+
+
+def test_replay_sandbox_uses_a_private_dev_tree_not_the_host_devices():
+    import yaml
+
+    doc = yaml.safe_load(Path(".github/workflows/hunter-trusted-orchestrator-replay-validate.yml").read_text())
+    runs = "\n".join(step.get("run", "") for job in doc["jobs"].values() for step in job["steps"])
+    assert "--dev-bind" not in runs
+    assert runs.count("--dev /dev") == 2
+
+
+def test_replay_sandboxes_mask_host_run_sockets_after_binding_the_host_root(monkeypatch):
+    monkeypatch.setenv("HUNTER_REPLAY_REQUIRE_NETNS", "1")
+    monkeypatch.setattr(replay.Path, "is_file", lambda self: True)
+    monkeypatch.setattr(replay.os, "access", lambda *_args: True)
+    import yaml
+
+    doc = yaml.safe_load(Path(".github/workflows/hunter-trusted-orchestrator-replay-validate.yml").read_text())
+    runs = "\n".join(step.get("run", "") for job in doc["jobs"].values() for step in job["steps"])
+    assert runs.count("--tmpfs /run") == runs.count("--ro-bind / /") == 2
+    assert all(
+        line.index("--ro-bind / /") < line.index("--tmpfs /run")
+        for line in runs.splitlines()
+        if "--ro-bind / /" in line
+    )
+    command = replay._network_isolated_worker_command(["python", "w.py"])
+    assert command.index("--ro-bind") < command.index("/run") and command[command.index("/run") - 1] == "--tmpfs"
+
+
+def test_fixture_is_restored_before_each_worker_launch(tmp_path, monkeypatch):
+    fixture = tmp_path / "fixture.json"
+    victim = tmp_path / "victim.txt"
+    victim.write_text("keep", encoding="utf-8")
+    fixture.symlink_to(victim)
+    seen = []
+
+    def fake_run(*_args, **_kwargs):
+        seen.append(fixture.read_text(encoding="utf-8"))
+        raise RuntimeError("stop")
+
+    monkeypatch.setattr(replay.subprocess, "run", fake_run)
+    with pytest.raises(RuntimeError, match="stop"):
+        replay._run_scenario("A", tmp_path / "candidate", fixture, workspace_root=tmp_path)
+    assert json.loads(seen[0]) == replay.FIXTURE
+    assert not fixture.is_symlink() and victim.read_text(encoding="utf-8") == "keep"
+
+
+def _scripts_candidate(tmp_path, files):
+    candidate = tmp_path / "candidate"
+    (candidate / "scripts").mkdir(parents=True)
+    (candidate / "scripts" / "hunter_review_orchestrator.py").write_text("X = 1\n", encoding="utf-8")
+    for relative, content in files.items():
+        target = candidate / "scripts" / relative
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_bytes(content)
+    return candidate
 
 
 @pytest.mark.parametrize(
     "relative",
-    ["scripts/hunter_pre_ready_review.py", "docs/CODE_WRITE_POLICY.json"],
+    ["hunter_helper.py", "hunter_pkg/__init__.py", "hunter_pkg/sub.py", "native.so", "__pycache__/x.cpython-311.pyc"],
 )
-def test_independent_verifier_rejects_a_dependency_changed_after_the_receipt(tmp_path, relative):
-    receipt, root = _good_receipt(tmp_path)
-    path = root / relative
-    path.write_text(path.read_text(encoding="utf-8") + ("\n" if relative.endswith(".json") else "\n# swapped\n"))
-    errors = replay.verify_candidate_module_digests(receipt, root)
-    assert any("candidate_module_digest" in error for error in errors), errors
+def test_digest_binds_to_every_file_in_the_candidate_scripts_tree(tmp_path, relative):
+    candidate = _scripts_candidate(tmp_path, {relative: b"one"})
+    before = worker.candidate_module_digest(candidate, "A")
+    (candidate / "scripts" / relative).write_bytes(b"two")
+    assert worker.candidate_module_digest(candidate, "A") != before
 
 
-@pytest.mark.parametrize("relative", ["docs/CODE_WRITE_POLICY.json", "scripts/hunter_pre_ready_review.py"])
-def test_missing_dependency_files_fail_closed(tmp_path, relative):
-    receipt, root = _good_receipt(tmp_path)
-    (root / relative).unlink()
-    errors = replay.verify_candidate_module_digests(receipt, root)
-    assert errors and all("candidate_module_digest" not in error or "safely verified" in error for error in errors)
-    assert any("could not be safely verified" in error for error in errors), errors
+def test_adding_any_file_to_the_scripts_tree_changes_the_digest(tmp_path):
+    candidate = _scripts_candidate(tmp_path, {})
+    before = worker.candidate_module_digest(candidate, "A")
+    (candidate / "scripts" / "hunter_new.py").write_text("y = 1\n", encoding="utf-8")
+    assert worker.candidate_module_digest(candidate, "A") != before
 
 
-def test_unparseable_dependency_fails_closed(tmp_path):
-    receipt, root = _good_receipt(tmp_path)
-    (root / "scripts" / "hunter_pre_ready_review.py").write_text("def broken(:\n", encoding="utf-8")
-    errors = replay.verify_candidate_module_digests(receipt, root)
-    assert any("could not be safely verified" in error for error in errors), errors
+def test_a_declared_entry_module_missing_from_the_tree_is_refused(tmp_path):
+    candidate = tmp_path / "candidate"
+    (candidate / "scripts").mkdir(parents=True)
+    with pytest.raises(ValueError, match="missing"):
+        worker.candidate_module_digest(candidate, "A")
 
 
-# --- v2 end-to-end: receipt invariants, contract floor and relabel rejection ----------------------------------------------
+def test_the_worker_never_writes_bytecode_into_the_candidate_tree():
+    assert sys.dont_write_bytecode is True
 
 
-def test_v2_receipt_round_trips_through_trusted_and_digest_validation(tmp_path):
-    receipt, root = _good_receipt(tmp_path, v2=True)
-    assert receipt["contract_version"] == "v2" and receipt["overall_result"] == "pass"
-    assert receipt["scenario_set_id"] == "hunter-orchestrator-replay-v2"
-    assert replay.validate_receipt(receipt, candidate_root=root, pr_number=535, candidate_sha="a" * 40) == []
+def test_publisher_rechecks_the_latest_run_immediately_before_publishing():
+    import yaml
+
+    doc = yaml.safe_load(Path(".github/workflows/hunter-trusted-orchestrator-replay-publish.yml").read_text())
+    steps = doc["jobs"]["publish-proof"]["steps"]
+    names = [step.get("id") or step.get("name") for step in steps]
+    recheck = next(step for step in steps if step.get("id") == "recheck")
+    publish = next(step for step in steps if step.get("name") == "Publish exact-head PR-bound status")
+    assert names.index("recheck") < names.index(publish["name"])
+    assert "no longer the latest validation run" in recheck["run"] and "exit 1" in recheck["run"]
+    assert "--paginate" in recheck["run"]
+    assert ".head.sha" in recheck["run"] and 'pr_head" != "$HEAD_SHA"' in recheck["run"]
+    assert "-f event=pull_request" in recheck["run"]
+    assert "steps.recheck.outcome == 'success'" in publish["if"]
 
 
-def test_v2_candidate_is_allowed_by_the_floor_and_a_v1_relabel_is_rejected(tmp_path):
-    root = _candidate_root(tmp_path, v2=True)
-    assert replay.enforce_trusted_contract_floor(root, REPO_ROOT) == "v2"
-    receipt = replay.build_receipt(candidate_root=root, pr_number=535, candidate_sha="a" * 40, workspace_root=tmp_path)
-    relabelled = {**receipt, "contract_version": "v1"}
-    assert any("differs from candidate" in e for e in replay.verify_candidate_module_digests(relabelled, root))
+def test_replay_step_binds_the_trusted_harness_and_candidate_read_only_over_the_writable_workspace():
+    import yaml
+
+    doc = yaml.safe_load(Path(".github/workflows/hunter-trusted-orchestrator-replay-validate.yml").read_text())
+    steps = [step for job in doc["jobs"].values() for step in job["steps"]]
+    run = next(step for step in steps if step.get("name", "").startswith("Run trusted candidate"))["run"]
+    workspace = run.index('--bind "$GITHUB_WORKSPACE" "$GITHUB_WORKSPACE"')
+    scripts = run.index('--ro-bind "$GITHUB_WORKSPACE/scripts" "$GITHUB_WORKSPACE/scripts"')
+    candidate = run.index('--ro-bind "$GITHUB_WORKSPACE/candidate" "$GITHUB_WORKSPACE/candidate"')
+    assert workspace < scripts and workspace < candidate  # later mounts override the writable bind
 
 
-def test_v2_receipt_with_a_failing_scenario_is_rejected(tmp_path):
-    root = _candidate_root(tmp_path, orchestrator_mutations=(HARDCODES_THE_BUDGET,), v2=True)
-    receipt = replay.build_receipt(candidate_root=root, pr_number=535, candidate_sha="a" * 40, workspace_root=tmp_path)
-    assert receipt["overall_result"] == "fail"
-    errors = replay.validate_receipt(receipt, candidate_root=root, pr_number=535, candidate_sha="a" * 40)
-    assert any("outcome is 'fail'" in e for e in errors)
+def test_replay_step_derives_the_loader_path_from_the_interpreter_instead_of_inheriting_it():
+    import yaml
+
+    doc = yaml.safe_load(Path(".github/workflows/hunter-trusted-orchestrator-replay-validate.yml").read_text())
+    steps = [step for job in doc["jobs"].values() for step in job["steps"]]
+    run = next(step for step in steps if step.get("name", "").startswith("Run trusted candidate"))["run"]
+    assert "${LD_LIBRARY_PATH" not in run
+    assert "sys.base_prefix" in run and 'LD_LIBRARY_PATH="$py_lib"' in run
 
 
-def test_malformed_v2_cycle_descriptions_are_refused_by_production_parsing(tmp_path):
-    """Regression guard for the fixture defect: the positive and malformed shapes must classify differently."""
-    root = _candidate_root(tmp_path, v2=True)
-    code = """
-import sys
+def test_worker_post_started_timeout_budget_with_controlled_clock(monkeypatch):
+    """Startup time is not charged to execution; a stalled child times out."""
+    import importlib.util
 
-sys.path.insert(0, sys.argv[1])
-import hunter_review_orchestrator as o
+    worker_path = REPO_ROOT / "scripts/hunter_trusted_orchestrator_replay_worker.py"
+    spec = importlib.util.spec_from_file_location("replay_worker_timeout_test", worker_path)
+    assert spec is not None and spec.loader is not None
+    worker = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(worker)
 
-digest = "f" * 64
+    class Clock:
+        now = 0.0
+
+        def monotonic(self):
+            return self.now
+
+    class Pipe:
+        def __init__(self, clock, finish_delay):
+            self.clock = clock
+            self.finish_delay = finish_delay
+            self.events = [
+                (9.0, {"stage": "started"}),
+                (9.0 + finish_delay, {"stage": "done", "measurements": {"ok": True}}),
+            ]
+            self.available = False
+
+        def poll(self, timeout):
+            if not self.events:
+                self.clock.now += timeout
+                return False
+            at, _ = self.events[0]
+            if at > self.clock.now + timeout:
+                self.clock.now += timeout
+                return False
+            self.clock.now = at
+            self.available = True
+            return True
+
+        def recv(self):
+            assert self.available
+            self.available = False
+            return self.events.pop(0)[1]
+
+        def close(self):
+            pass
+
+    class Process:
+        def start(self):
+            pass
+
+        def join(self, timeout):
+            pass
+
+        def is_alive(self):
+            return False
+
+    class Context:
+        def __init__(self, pipe):
+            self.pipe = pipe
+
+        def Pipe(self, duplex):
+            assert duplex is False
+            return self.pipe, PipeEnd()
+
+        def Process(self, **kwargs):
+            return Process()
+
+    class PipeEnd:
+        def close(self):
+            pass
+
+    # This test isolates deadline accounting; scenario A evidence grading is tested separately.
+    monkeypatch.setattr(worker, "scenario_a_grade", lambda measurements: measurements)
+
+    for finish_delay, expected in [(59.0, "pass"), (61.0, "fail")]:
+        clock = Clock()
+        pipe = Pipe(clock, finish_delay)
+        monkeypatch.setattr(worker.time, "monotonic", clock.monotonic)
+        monkeypatch.setattr(worker.mp, "get_context", lambda method, pipe=pipe: Context(pipe))
+        monkeypatch.setattr(worker, "SCENARIO_CHILD_TIMEOUT_SECONDS", 60)
+        monkeypatch.setattr(worker, "_recv_before_deadline", lambda conn, deadline: conn.recv())
+        result = worker._run_scenario_isolated("A", REPO_ROOT, {})
+        assert result["outcome"] == expected
+        assert clock.now == (9.0 + finish_delay if expected == "pass" else 69.0)
 
 
-def parse(description, creator="github-actions[bot]"):
-    status = {
-        "creator": {"login": creator},
-        "context": o.CONTEXT_PREFIX + "7",
-        "description": description,
-        "created_at": "2026-01-01T00:00:00Z",
-    }
-    return o._parse_cycle(status, 7, "b" * 40)
+def test_worker_partial_pipe_frame_cannot_extend_deadline():
+    """A readable header with no payload must not block trusted replay forever."""
+    import importlib.util
+    import multiprocessing.connection
+    import os
+    import time
+
+    worker_path = REPO_ROOT / "scripts/hunter_trusted_orchestrator_replay_worker.py"
+    spec = importlib.util.spec_from_file_location("replay_worker_partial_frame_test", worker_path)
+    assert spec is not None and spec.loader is not None
+    worker = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(worker)
+
+    read_fd, write_fd = os.pipe()
+    conn = multiprocessing.connection.Connection(read_fd, readable=True, writable=False)
+    try:
+        # A valid 4-byte frame header claiming 64 bytes, followed by only one.
+        os.write(write_fd, (64).to_bytes(4, "big", signed=True) + b"x")
+        assert conn.poll(0), "the partial frame is already readable"
+        start = time.monotonic()
+        with pytest.raises(TimeoutError, match="deadline"):
+            worker._recv_before_deadline(conn, start + 0.15)
+        assert time.monotonic() - start < 1.5
+    finally:
+        os.close(write_fd)
+        conn.close()
 
 
-assert parse(f"REVIEWER_UNAVAILABLE||5|{digest}") is not None
-assert parse(f"REVIEWER_UNAVAILABLE||5|{digest}||x") is None
-assert parse(f"REVIEWER_UNAVAILABLE||5|{digest}|bad generation") is None
-assert parse(f"REVIEWER_UNAVAILABLE||5|{digest}", creator="mallory") is None
-"""
-    script = tmp_path / "probe.py"
-    script.write_text(code, encoding="utf-8")
-    completed = subprocess.run(
-        [sys.executable, "-I", str(script), str(root / "scripts")], capture_output=True, text=True, check=False
+def test_outer_supervisor_budget_exceeds_both_worker_windows_and_cleanup(monkeypatch):
+    """A slow startup cannot cause the outer supervisor to kill a valid worker."""
+    import importlib.util
+
+    worker_path = REPO_ROOT / "scripts/hunter_trusted_orchestrator_replay_worker.py"
+    spec = importlib.util.spec_from_file_location("replay_worker_supervisor_budget_test", worker_path)
+    assert spec is not None and spec.loader is not None
+    worker = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(worker)
+    assert replay.WORKER_STARTUP_TIMEOUT_SECONDS == worker.SCENARIO_CHILD_TIMEOUT_SECONDS
+    assert replay.WORKER_EXECUTION_TIMEOUT_SECONDS == worker.SCENARIO_CHILD_TIMEOUT_SECONDS
+    assert replay.WORKER_TIMEOUT_SECONDS > (
+        2 * worker.SCENARIO_CHILD_TIMEOUT_SECONDS + replay.WORKER_CLEANUP_TIMEOUT_SECONDS
     )
-    assert completed.returncode == 0, completed.stderr
+    observed = {}
 
-
-def test_v1_floor_rejects_changed_transitive_dependency(tmp_path):
-    trusted = _candidate_root(tmp_path)
-    candidate = tmp_path / "changed-helper"
-    # Git maintenance can create ephemeral lock files concurrently during CI.
-    # The controller closure never includes .git; copy only fixture sources.
-    shutil.copytree(trusted, candidate, ignore=shutil.ignore_patterns(".git"))
-    helper = candidate / "scripts/hunter_pre_ready_review.py"
-    helper.write_text(helper.read_text(encoding="utf-8") + "\n# malicious drift\n", encoding="utf-8")
-    with pytest.raises(ValueError, match="modified candidate dependency"):
-        replay.enforce_trusted_contract_floor(candidate, trusted)
-
-
-def test_package_and_relative_imports_are_in_digest_closure(tmp_path):
-    root = _candidate_root(tmp_path)
-    worker = worker_module()
-    helper = root / "scripts/hunter_review_orchestrator.py"
-    helper.write_text(
-        helper.read_text(encoding="utf-8") + "\nfrom hunter.task_scope import TaskScopeContract\n", encoding="utf-8"
-    )
-    (root / "src/hunter").mkdir(parents=True, exist_ok=True)
-    (root / "src/hunter/__init__.py").write_text("", encoding="utf-8")
-    (root / "src/hunter/task_scope.py").write_text("from . import helper\n", encoding="utf-8")
-    (root / "src/hunter/helper.py").write_text("VALUE = 1\n", encoding="utf-8")
-    closure = worker.candidate_input_closure(root, "A", "v1")
-    assert "src/hunter/task_scope.py" in closure
-    assert "src/hunter/helper.py" in closure
-    assert "src/hunter/__init__.py" in closure
-    before = worker.candidate_module_digest(root, "A", "v1")
-    (root / "src/hunter/helper.py").write_text("VALUE = 2\n", encoding="utf-8")
-    assert before != worker.candidate_module_digest(root, "A", "v1")
-
-
-def test_hosted_replay_requires_filesystem_sandbox(tmp_path, monkeypatch):
-    """Hosted replay must hide the trusted checkout, not merely drop write privileges."""
-    import shutil
-    import subprocess
-
-    workspace = tmp_path.resolve()
-    monkeypatch.setenv("GITHUB_ACTIONS", "true")
-    monkeypatch.setenv("GITHUB_WORKSPACE", str(workspace))
-    calls = []
-
-    def fake_run(command, **kwargs):
-        calls.append(command)
-        return subprocess.CompletedProcess(command, 0, stdout='{"outcome":"pass","measurements":{}}', stderr="")
+    def fake_run(*args, **kwargs):
+        observed["timeout"] = kwargs["timeout"]
+        return subprocess.CompletedProcess(args[0], 0, stdout='{"outcome":"pass"}\n', stderr="")
 
     monkeypatch.setattr(replay.subprocess, "run", fake_run)
-    monkeypatch.setattr(shutil, "which", lambda name: "/usr/bin/bwrap" if name == "bwrap" else None)
-    replay._run_scenario(
-        "A", workspace / "candidate", workspace / "fixture.json", workspace_root=workspace, contract_version="v2"
-    )
-    command = calls[0]
-    assert command[0] == "bwrap"
-    assert "--unshare-all" in command
-    assert "--share-net" not in command
-    assert "--ro-bind" in command
-    assert str(workspace / "candidate") in command
-    assert str(workspace / "fixture.json") in command
-    assert ("--ro-bind", str(replay.WORKER_PATH)) in [(command[i], command[i + 1]) for i in range(len(command) - 1)]
-    assert not any(command[i : i + 2] == ["--ro-bind", str(workspace)] for i in range(len(command) - 1))
+    with tempfile.TemporaryDirectory() as tmp:
+        root = Path(tmp)
+        candidate = root / "candidate"
+        candidate.mkdir()
+        fixture = root / "fixture.json"
+        fixture.write_text("{}", encoding="utf-8")
+        replay._run_scenario("A", candidate, fixture, workspace_root=root)
+    assert observed["timeout"] == replay.WORKER_TIMEOUT_SECONDS
 
-    calls.clear()
-    monkeypatch.setattr(shutil, "which", lambda name: None)
+
+def test_replay_worker_rejects_pickle_frames_without_executing_reducers(tmp_path):
+    """Hostile child pipe bytes cannot execute a pickle reducer in the parent."""
+    import importlib.util
+    import pickle
+
+    worker_path = REPO_ROOT / "scripts/hunter_trusted_orchestrator_replay_worker.py"
+    spec = importlib.util.spec_from_file_location("replay_worker_json_frame_test", worker_path)
+    assert spec is not None and spec.loader is not None
+    worker = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(worker)
+
+    marker = tmp_path / "pickle_executed"
+
+    class Gadget:
+        def __reduce__(self):
+            return (marker.write_text, ("unsafe",))
+
+    frame = pickle.dumps(Gadget())
     import pytest
 
-    with pytest.raises(RuntimeError, match="requires bubblewrap"):
-        replay._run_scenario(
-            "A", workspace / "candidate", workspace / "fixture.json", workspace_root=workspace, contract_version="v2"
-        )
-    assert not calls
+    with pytest.raises((UnicodeError, ValueError)):
+        worker._decode_scenario_message(frame)
+    assert not marker.exists()
+
+    for invalid in (
+        b"[]",
+        b'{"stage":"started","extra":1}',
+        b'{"stage":"done","measurements":[]}',
+        b'{"stage":"failed","error":1,"traceback":"x"}',
+    ):
+        with pytest.raises(ValueError):
+            worker._decode_scenario_message(invalid)
+    assert worker._decode_scenario_message(b'{"stage":"started"}') == {"stage": "started"}
 
 
-def test_hosted_worker_does_not_apply_to_unrelated_test_fixture(tmp_path, monkeypatch):
-    import subprocess
+# --- Trusted worker hardening: candidate confinement, isolated import path,
+# whole-tree digest, and bytecode containment. These guard the trusted
+# harness the hosted replay runs from the default branch, so a candidate can
+# neither be proved against the base checkout's code nor leave bytecode in
+# the tree the digest covers. -----------------------------------------------
 
-    monkeypatch.setenv("GITHUB_ACTIONS", "true")
-    monkeypatch.setenv("GITHUB_WORKSPACE", str(tmp_path / "actual-ci-root"))
-    calls = []
 
-    def fake_run(command, **kwargs):
-        calls.append(command)
-        return subprocess.CompletedProcess(command, 0, stdout='{"outcome":"pass","measurements":{}}', stderr="")
+def _load_bootstrap_worker():
+    import importlib.util
 
-    monkeypatch.setattr(replay.subprocess, "run", fake_run)
-    replay._run_scenario(
-        "A", tmp_path / "candidate", tmp_path / "fixture.json", workspace_root=tmp_path, contract_version="v2"
+    worker_path = REPO_ROOT / "scripts" / "hunter_trusted_orchestrator_replay_worker.py"
+    spec = importlib.util.spec_from_file_location("replay_bootstrap_worker", worker_path)
+    assert spec is not None and spec.loader is not None
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
+def test_import_path_places_the_candidate_first_and_drops_every_trusted_entry(tmp_path, monkeypatch):
+    worker = _load_bootstrap_worker()
+    monkeypatch.chdir(tmp_path)
+    trusted_scripts = tmp_path / "scripts"
+    trusted_scripts.mkdir()
+    candidate_root = tmp_path / "candidate"
+    (candidate_root / "scripts").mkdir(parents=True)
+    other = tmp_path / "site"
+    other.mkdir()
+    # The trusted repository root (here the process cwd), an explicit trusted
+    # root entry, the trusted scripts directory and an empty entry that resolves
+    # to the cwd (the trusted root) must all be dropped: any of them would let a
+    # package-qualified `import scripts.helper` load base code. The candidate
+    # root and its scripts directory are (re)placed first.
+    result = worker.isolated_import_path(
+        ["", str(trusted_scripts), str(tmp_path), str(other), str(candidate_root / "scripts"), str(candidate_root)],
+        candidate_root,
+        trusted_scripts,
     )
-    assert calls[0][0] == __import__("sys").executable
+    assert result == [
+        str((candidate_root / "scripts").resolve()),
+        str(candidate_root.resolve()),
+        str(other),
+    ]
 
 
-def test_v2_receipt_validation_is_native_production_and_reaches_finalization(tmp_path):
-    import inspect
+def _worker_in_synthetic_trusted_checkout(tmp_path):
+    """A copy of the trusted worker inside its own trusted checkout.
 
-    import hunter_review_orchestrator as production
-
-    root = _candidate_root(tmp_path, v2=True)
-    actual_source = (root / "scripts/hunter_review_orchestrator.py").read_text(encoding="utf-8")
-    assert actual_source == (REPO_ROOT / "scripts/hunter_review_orchestrator.py").read_text(encoding="utf-8")
-    assert "collector_receipt_problem(" in inspect.getsource(production.pool_exhaustion)
-
-
-def test_v2_scenario_rejects_removed_trusted_run_revision_binding(tmp_path):
-    mutation = (
-        '            if not isinstance(comparison, dict) or comparison.get("status") not in {"ahead", "identical"}:',
-        "            if False:",
+    Copying it makes ``TRUSTED_SCRIPTS_DIR`` (and its parent root) the synthetic
+    checkout, exactly as the hosted job runs the real one from the default
+    branch, so the subprocess's cwd-as-trusted-root behavior is exercised for real.
+    """
+    trusted_root = tmp_path / "trusted"
+    (trusted_root / "scripts").mkdir(parents=True)
+    shutil.copy(
+        REPO_ROOT / "scripts" / "hunter_trusted_orchestrator_replay_worker.py",
+        trusted_root / "scripts" / "hunter_trusted_orchestrator_replay_worker.py",
     )
-    version, error = _fails_contract_aware(tmp_path, (mutation,), scenario="A", v2=True)
-    assert version == "v2"
-    assert "unrelated commit" in error
+    return trusted_root
 
 
-def test_digest_binds_dynamic_candidate_import_and_direct_file_read(tmp_path):
-    root = _candidate_root(tmp_path, v2=True)
-    from hunter_trusted_orchestrator_replay_worker import candidate_module_digest
+def _run_candidate_import(trusted_root, candidate_root, module_name="hunter_review_orchestrator"):
+    """Import a candidate module through the real worker from a trusted checkout.
 
-    script = root / "scripts/hunter_review_orchestrator.py"
-    script.write_text(
-        script.read_text(encoding="utf-8") + "\nimport importlib\nimportlib.import_module('dynamic_probe')\n",
-        encoding="utf-8",
+    Run as a fresh subprocess with cwd = the trusted root, so ``sys.path`` carries
+    the empty entry that resolves to the trusted repository root -- the exact
+    condition under which a package-qualified candidate import could reach base
+    code. Returns the completed subprocess.
+    """
+    worker_path = trusted_root / "scripts" / "hunter_trusted_orchestrator_replay_worker.py"
+    script = (
+        "import importlib.util\n"
+        "from pathlib import Path\n"
+        f"spec = importlib.util.spec_from_file_location('w', {str(worker_path)!r})\n"
+        "assert spec is not None and spec.loader is not None\n"
+        "w = importlib.util.module_from_spec(spec)\n"
+        "spec.loader.exec_module(w)\n"
+        f"mod = w._import_candidate(Path({str(candidate_root)!r}), {module_name!r})\n"
+        "print('SOURCE=' + str(getattr(mod, 'SOURCE', '')))\n"
     )
-    dynamic = root / "scripts/dynamic_probe.py"
-    dynamic.write_text("VALUE = 1\n", encoding="utf-8")
-    direct_file = root / "custom-runtime-settings.json"
-    direct_file.write_text('{"mode":"safe"}', encoding="utf-8")
-    first = candidate_module_digest(root, "A", "v2")
-    dynamic.write_text("VALUE = 2\n", encoding="utf-8")
-    assert candidate_module_digest(root, "A", "v2") != first
-    second = candidate_module_digest(root, "A", "v2")
-    direct_file.write_text('{"mode":"unsafe"}', encoding="utf-8")
-    assert candidate_module_digest(root, "A", "v2") != second
+    return subprocess.run([sys.executable, "-c", script], cwd=str(trusted_root), capture_output=True, text=True)
 
 
-def test_digest_refuses_untrusted_symlink_in_dynamic_candidate_input(tmp_path):
-    root = _candidate_root(tmp_path, v2=True)
-    from hunter_trusted_orchestrator_replay_worker import candidate_module_digest
-
-    (root / "dynamic-external.json").symlink_to(REPO_ROOT / "docs/CODE_WRITE_POLICY.json")
-    with pytest.raises(ValueError, match="symlink"):
-        candidate_module_digest(root, "A", "v2")
-
-
-def test_candidate_venv_helper_cannot_escape_complete_digest(tmp_path):
-    root = _candidate_root(tmp_path, v2=True)
-    worker = worker_module()
-    helper = root / ".venv" / "candidate_helper.py"
-    helper.parent.mkdir(exist_ok=True)
-    helper.write_text("VALUE = 1\n", encoding="utf-8")
-    before = worker.candidate_module_digest(root, "A", "v2")
-    helper.write_text("VALUE = 2\n", encoding="utf-8")
-    assert worker.candidate_module_digest(root, "A", "v2") != before
-
-
-def test_tracked_candidate_file_in_excluded_cache_fails_closed(tmp_path):
-    root = _candidate_root(tmp_path, v2=True)
-    worker = worker_module()
-    hidden = root / ".pytest_cache" / "payload.py"
-    hidden.parent.mkdir(exist_ok=True)
-    hidden.write_text("CODE = 'unverified'\n", encoding="utf-8")
-    subprocess.run(["git", "-C", str(root), "add", "-f", ".pytest_cache/payload.py"], check=True)
-    with pytest.raises(ValueError, match="tracked candidate input"):
-        worker.candidate_module_digest(root, "A", "v2")
-
-
-def test_collector_receipt_validator_defined_before_cli_execution():
-    import ast
-
-    source = (REPO_ROOT / "scripts/hunter_review_orchestrator.py").read_text(encoding="utf-8")
-    tree = ast.parse(source)
-    validator = next(n for n in tree.body if isinstance(n, ast.FunctionDef) and n.name == "collector_receipt_problem")
-    cli_guard = next(n for n in tree.body if isinstance(n, ast.If) and "__main__" in ast.unparse(n.test))
-    assert validator.lineno < cli_guard.lineno
-
-
-def test_tracked_bytecode_cannot_escape_candidate_digest(tmp_path):
-    root = _candidate_root(tmp_path, v2=True)
-    worker = worker_module()
-    bytecode = root / "scripts" / "sourceless_payload.pyc"
-    bytecode.write_bytes(b"candidate executable bytecode")
-    subprocess.run(["git", "-C", str(root), "add", "-f", "scripts/sourceless_payload.pyc"], check=True)
-    with pytest.raises(ValueError, match="tracked candidate input is excluded"):
-        worker.candidate_module_digest(root, "A", "v2")
-
-
-def test_v1_probe_refuses_candidate_extended_active_collector_ceiling(tmp_path):
-    root = _candidate_root(tmp_path)
-    source = root / "scripts" / "hunter_review_orchestrator.py"
-    original = source.read_text(encoding="utf-8")
-    assert "ACTIVE_COLLECTOR_GRACE_MULTIPLIER = 2" in original
-    source.write_text(
-        original.replace("ACTIVE_COLLECTOR_GRACE_MULTIPLIER = 2", "ACTIVE_COLLECTOR_GRACE_MULTIPLIER = 20", 1),
-        encoding="utf-8",
+def test_package_qualified_candidate_import_resolves_to_candidate_not_the_trusted_base(tmp_path):
+    trusted_root = _worker_in_synthetic_trusted_checkout(tmp_path)
+    (trusted_root / "scripts" / "helper.py").write_text('SOURCE = "trusted"\n', encoding="utf-8")
+    candidate = tmp_path / "candidate"
+    (candidate / "scripts").mkdir(parents=True)
+    (candidate / "scripts" / "helper.py").write_text('SOURCE = "candidate"\n', encoding="utf-8")
+    (candidate / "scripts" / "hunter_review_orchestrator.py").write_text(
+        "import scripts.helper\n\nSOURCE = scripts.helper.SOURCE\n", encoding="utf-8"
     )
-    result = replay._run_scenario("A", root, _fixture_path(tmp_path), workspace_root=tmp_path)
-    assert result["outcome"] == "fail"
+    result = _run_candidate_import(trusted_root, candidate)
+    assert result.returncode == 0, result.stderr
+    assert "SOURCE=candidate" in result.stdout, result.stdout
+
+
+def test_missing_candidate_helper_fails_closed_instead_of_importing_the_trusted_base(tmp_path):
+    trusted_root = _worker_in_synthetic_trusted_checkout(tmp_path)
+    (trusted_root / "scripts" / "helper.py").write_text('SOURCE = "trusted"\n', encoding="utf-8")
+    candidate = tmp_path / "candidate"
+    (candidate / "scripts").mkdir(parents=True)
+    # The candidate imports a package-qualified helper it does not ship, while the
+    # trusted base does ship one. Removing the trusted root must make this an
+    # ImportError, never a silent read of the base checkout's helper.
+    (candidate / "scripts" / "hunter_review_orchestrator.py").write_text(
+        "import scripts.helper\n\nSOURCE = scripts.helper.SOURCE\n", encoding="utf-8"
+    )
+    result = _run_candidate_import(trusted_root, candidate)
+    assert result.returncode != 0
+    assert "ModuleNotFoundError" in result.stderr or "ImportError" in result.stderr
+
+
+def test_bare_candidate_import_prefers_the_candidate_over_the_trusted_base(tmp_path):
+    trusted_root = _worker_in_synthetic_trusted_checkout(tmp_path)
+    (trusted_root / "scripts" / "hunter_review_orchestrator.py").write_text('SOURCE = "trusted"\n', encoding="utf-8")
+    candidate = tmp_path / "candidate"
+    (candidate / "scripts").mkdir(parents=True)
+    (candidate / "scripts" / "hunter_review_orchestrator.py").write_text('SOURCE = "candidate"\n', encoding="utf-8")
+    result = _run_candidate_import(trusted_root, candidate)
+    assert result.returncode == 0, result.stderr
+    assert "SOURCE=candidate" in result.stdout, result.stdout
+
+
+def test_main_fails_closed_when_the_candidate_tree_mutates_during_execution(tmp_path, monkeypatch, capsys):
+    worker = _load_bootstrap_worker()
+    candidate = tmp_path / "candidate"
+    (candidate / "scripts").mkdir(parents=True)
+    (candidate / "scripts" / "hunter_review_orchestrator.py").write_text("X = 1\n", encoding="utf-8")
+    (tmp_path / "fixture.json").write_text("{}", encoding="utf-8")
+    pristine = worker.candidate_module_digest(candidate, "A")
+
+    def _mutating_run(_scenario_id, candidate_root, _fixture):
+        # A candidate entry module that imports a helper it writes mid-scenario:
+        # the receipt would otherwise carry the pristine digest for bytes it never ran.
+        (candidate_root / "scripts" / "hunter_injected.py").write_text("Y = 2\n", encoding="utf-8")
+        return {"outcome": "pass", "measurements": {}}
+
+    monkeypatch.setattr(worker, "_run_scenario_isolated", _mutating_run)
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        [
+            "worker",
+            "--workspace-root",
+            str(tmp_path),
+            "--candidate-root",
+            "candidate",
+            "--scenario",
+            "A",
+            "--fixture",
+            "fixture.json",
+        ],
+    )
+    assert worker.main() == 0
+    payload = json.loads(capsys.readouterr().out.strip().splitlines()[-1])
+    assert payload["outcome"] == "fail"
+    assert "mutated" in payload["error"]
+    assert payload["candidate_module_digest"] == pristine
+
+
+def test_main_reports_the_pristine_digest_when_the_candidate_tree_is_unchanged(tmp_path, monkeypatch, capsys):
+    worker = _load_bootstrap_worker()
+    candidate = tmp_path / "candidate"
+    (candidate / "scripts").mkdir(parents=True)
+    (candidate / "scripts" / "hunter_review_orchestrator.py").write_text("X = 1\n", encoding="utf-8")
+    (tmp_path / "fixture.json").write_text("{}", encoding="utf-8")
+    pristine = worker.candidate_module_digest(candidate, "A")
+    monkeypatch.setattr(worker, "_run_scenario_isolated", lambda *_a: {"outcome": "pass", "measurements": {}})
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        [
+            "worker",
+            "--workspace-root",
+            str(tmp_path),
+            "--candidate-root",
+            "candidate",
+            "--scenario",
+            "A",
+            "--fixture",
+            "fixture.json",
+        ],
+    )
+    assert worker.main() == 0
+    payload = json.loads(capsys.readouterr().out.strip().splitlines()[-1])
+    assert payload["outcome"] == "pass"
+    assert payload["candidate_module_digest"] == pristine

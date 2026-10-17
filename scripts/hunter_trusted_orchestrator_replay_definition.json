@@ -1,24 +1,15 @@
 {
-  "schema": "hunter.trusted-orchestrator-replay.v2",
-  "contract_versions": {
-    "v1": {
-      "scenario_set_id": "hunter-orchestrator-replay-v1",
-      "required_scenario_ids": ["A", "B", "G"],
-      "scenario_invariants": {
-        "A": "The legacy orchestrator's ensure_collector function manages collector dispatch for pending cycles, and COLLECTOR_LIVENESS_GRACE_SECONDS is a strictly positive, finite grace period before liveness is judged, so an ordinary listing lag cannot be mistaken for a dead collector and duplicate the dispatch. Recovery must remain idempotent and must not exceed the collector dispatch budget; an active collector is protected only within the finite active-collector ceiling.",
-        "B": "The legacy orchestrator's collector_needs_dispatch uses COLLECTOR_LIVENESS_GRACE_SECONDS to bound re-dispatch: a collector run that has been accepted but not yet listed must not trigger a re-dispatch, and the _older_than helper correctly compares elapsed time against the grace period. Completed collectors never redispatch, absent collectors recover only below the dispatch budget, and active collector protection terminates at a finite ceiling.",
-        "G": "A WAITING_FOR_REVIEWER exact-head cycle classifies to pending end-to-end through the real resolution path for absent and in-progress cycle evidence, and malformed cycle evidence fails closed rather than classifying as pending."
-      }
-    },
-    "v2": {
-      "scenario_set_id": "hunter-orchestrator-replay-v2",
-      "required_scenario_ids": ["A", "B", "G"],
-      "scenario_invariants": {
-        "A": "The published review opportunity is a strictly positive, finite budget derived from the candidate's own reviewer pool, and a published cycle is believed only when the run it cites is a trusted-publisher run executing from default-branch history, with exact PR/head/repository binding for pull_request_target events: a status citing the status-less collector run, a candidate pull_request run, or a run without trusted base provenance is never a cycle, so neither the collector nor elapsed time can complete one.",
-        "B": "A collector receipt is usable only for the exact run, attempt, pull request, head and remediation generation it names: a well-formed receipt is accepted, and a receipt for another pull request, head, run, attempt or generation, a missing or malformed identity digest, a malformed attempt list, the minimal object and a non-object are all refused, so replayed, rerun or duplicate events cannot turn one run's receipt into another's result.",
-        "G": "A WAITING_FOR_REVIEWER exact-head cycle classifies to pending end-to-end through the real resolution path for absent and in-progress cycle evidence, and malformed cycle evidence fails closed rather than classifying as pending."
-      }
-    }
+  "schema": "hunter.trusted-orchestrator-replay.v1",
+  "scenario_set_id": "hunter-orchestrator-replay-v1",
+  "required_scenario_ids": [
+    "A",
+    "B",
+    "G"
+  ],
+  "scenario_invariants": {
+    "A": "The published review opportunity is a strictly positive, finite budget, and it is the budget that ends a cycle: probed immediately on both sides of the candidate's own declared boundary, a recorded pending cycle just inside the budget stays pending while one just outside it is driven to a terminal state and published, and a cycle whose correlated collector still reads active is held open with nothing published just past that budget but is driven to a terminal state and published no later than twice that budget.",
+    "B": "Collector dispatch for an exact head is bounded and idempotent, and every step reads back the durable record production actually published rather than a substituted liveness reading: a first reconcile against an unrecorded head dispatches exactly once and publishes the durable cycle, reconciles observing that record dispatch nothing further, a durable record whose collector produced no run at all -- liveness exactly (\"missing\", 0) -- and that exceeds the liveness grace recovers exactly one further dispatch, that recovery refreshes the durable record and that exact refreshed record is then reconciled again with nothing aged or substituted in between so a refresh that preserves an already-stale liveness timestamp cannot re-dispatch the same exact head, and a cycle whose real accumulated runs have spent the dispatch budget stays pending rather than dispatching without end.",
+    "G": "A WAITING_FOR_REVIEWER exact-head cycle classifies to pending end-to-end through the real resolution path for absent and in-progress cycle evidence, and malformed cycle evidence fails closed rather than classifying as pending."
   },
   "fixture": {
     "head_sha": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
