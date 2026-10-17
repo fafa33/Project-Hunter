@@ -104,7 +104,9 @@ jobs:
             echo "unexpected validation event: $run_event" >&2
             exit 1
           fi
-          if [ "$run_path" != ".github/workflows/hunter-trusted-orchestrator-replay-validate.yml" ]; then
+          # GitHub's run.path can be ref-qualified (workflow.yml@refs/heads/main).
+          # Compare the exact workflow path while preserving all other run checks.
+          if [ "${run_path%%@*}" != ".github/workflows/hunter-trusted-orchestrator-replay-validate.yml" ]; then
             echo "validation run executed an unexpected workflow path: $run_path" >&2
             exit 1
           fi

@@ -1661,6 +1661,31 @@ def test_publisher_binds_to_the_runs_authoritative_head_sha_not_the_dynamic_pr_h
     assert doc["jobs"]["publish-proof"]["concurrency"]["cancel-in-progress"] is False
 
 
+def test_publisher_accepts_ref_qualified_validation_run_path_only_for_expected_workflow():
+    import subprocess
+
+    doc = _publish_workflow_doc()
+    context = next(step for step in doc["jobs"]["publish-proof"]["steps"] if step.get("id") == "context")["run"]
+    # Execute the actual publisher guard rather than copying its comparison.
+    guard = context[context.index('if [ "${run_path%%@*}"') :]
+    guard = guard[: guard.index('if [ -z "$pr_number" ]')]
+    expected = ".github/workflows/hunter-trusted-orchestrator-replay-validate.yml"
+    for path, accepted in (
+        (expected, True),
+        (expected + "@refs/heads/main", True),
+        (expected + "@feature-branch", True),
+        (".github/workflows/untrusted.yml@refs/heads/main", False),
+        (expected + ".evil@main", False),
+    ):
+        result = subprocess.run(
+            ["bash", "-c", 'run_path="$1"\n' + guard, "guard", path],
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        assert (result.returncode == 0) is accepted, (path, result.stderr)
+
+
 def test_publisher_latest_run_match_is_bound_to_the_exact_run_head_sha():
     import yaml
 
