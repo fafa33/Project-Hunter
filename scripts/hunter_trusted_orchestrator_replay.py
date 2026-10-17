@@ -421,6 +421,40 @@ def _index_scenario_results(results: list[Any]) -> dict[str, dict[str, Any]]:
     return by_id
 
 
+def _scenario_result_errors(results: list[Any]) -> list[str]:
+    """Reject malformed or duplicate scenario entries before any lookup.
+
+    ``_index_scenario_results`` collapses entries by last-write-wins, so a
+    candidate-controlled receipt carrying an earlier failing or malformed result
+    behind a later passing duplicate of the same ``scenario_id`` would satisfy a
+    set-membership check while hiding the real result. Every entry must be a
+    well-formed object with a unique, non-empty string ``scenario_id``, and the
+    number of results must equal the canonical scenario count -- no duplicate,
+    substitution, omission or malformed entry.
+    """
+
+    errors: list[str] = []
+    if len(results) != len(REQUIRED_SCENARIO_IDS):
+        errors.append(
+            f"receipt scenario_results must contain exactly {len(REQUIRED_SCENARIO_IDS)} entries "
+            f"(one per required scenario), found {len(results)}"
+        )
+    seen: set[str] = set()
+    for index, entry in enumerate(results):
+        if not isinstance(entry, dict):
+            errors.append(f"receipt scenario_results[{index}] is not a JSON object")
+            continue
+        scenario_id = entry.get("scenario_id")
+        if not isinstance(scenario_id, str) or not scenario_id:
+            errors.append(f"receipt scenario_results[{index}] has a missing or non-string scenario_id")
+            continue
+        if scenario_id in seen:
+            errors.append(f"receipt scenario_results contains a duplicate scenario_id {scenario_id!r}")
+            continue
+        seen.add(scenario_id)
+    return errors
+
+
 def verify_candidate_module_digests(receipt: Any, candidate_root: Path) -> list[str]:
     """The one part of receipt validation that needs candidate file access.
 
@@ -438,9 +472,10 @@ def verify_candidate_module_digests(receipt: Any, candidate_root: Path) -> list[
         return ["receipt scenario_results must be a list"]
     by_id = _index_scenario_results(results)
 
+    errors = _scenario_result_errors(results)
+
     import hunter_trusted_orchestrator_replay_worker as worker
 
-    errors: list[str] = []
     for scenario_id in REQUIRED_SCENARIO_IDS:
         entry = by_id.get(scenario_id)
         if entry is None:
@@ -513,7 +548,9 @@ def validate_receipt_trusted_fields(
         return errors + ["receipt scenario_results must be a list"]
 
     by_id = _index_scenario_results(results)
-    # 8. exactly the required scenario ids, no substitution and no omission
+    # 8. every entry well-formed, and exactly the required scenario ids with no
+    # duplicate, substitution or omission (count must equal the canonical count)
+    errors.extend(_scenario_result_errors(results))
     if set(by_id) != set(REQUIRED_SCENARIO_IDS):
         errors.append(
             f"receipt scenario_results must cover exactly {sorted(REQUIRED_SCENARIO_IDS)}, found {sorted(by_id)}"
