@@ -147,29 +147,47 @@ TRUSTED_SCRIPTS_DIR = Path(__file__).resolve().parent
 
 
 def isolated_import_path(
-    path: list[str], candidate_scripts: Path, trusted_scripts: Path = TRUSTED_SCRIPTS_DIR
+    path: list[str], candidate_root: Path, trusted_scripts: Path = TRUSTED_SCRIPTS_DIR
 ) -> list[str]:
-    """``path`` with the trusted checkout's scripts directory removed and the candidate's placed first.
+    """``path`` with every trusted-checkout entry removed and the candidate's own roots placed first.
 
-    The worker runs from the trusted ``scripts/`` directory, which is therefore on ``sys.path``. Left there, a
-    helper that a PR deleted or omitted would silently import the base checkout's copy, and the proof would cover
-    mixed code (candidate plus base) that can pass here and fail after merge. Removing it makes a missing helper an
-    ``ImportError`` instead.
+    The worker subprocess is spawned with its current directory set to the trusted repository root, so
+    the interpreter's ``sys.path`` can carry that root, the trusted ``scripts/`` directory, or an empty
+    entry (``""``) that resolves to the current directory -- the trusted root again. Any of those would
+    let a **package-qualified** candidate import such as ``import scripts.some_helper`` resolve to the
+    *base* checkout even though only the candidate's ``scripts/`` tree is prepended and bound by the
+    digest: the replay would then exercise mixed trusted/candidate code that can pass here and fail
+    after merge (or vice versa).
+
+    Both the trusted ``scripts/`` directory and its parent repository root are therefore removed, and
+    the candidate root and its ``scripts/`` directory are prepended so that every candidate import --
+    bare (``import hunter_review_orchestrator``) or package-qualified (``import scripts.helper``) --
+    resolves inside the candidate checkout, or fails closed with ``ImportError``. A helper a PR deleted
+    or omitted can never silently fall back to the base checkout's copy.
     """
+    candidate_scripts = (candidate_root / "scripts").resolve()
+    candidate_root_resolved = candidate_root.resolve()
+    trusted_scripts_resolved = trusted_scripts.resolve()
+    forbidden = {
+        candidate_scripts,
+        candidate_root_resolved,
+        trusted_scripts_resolved,
+        trusted_scripts_resolved.parent,
+    }
     keep = []
     for entry in path:
         try:
             resolved = Path(entry or ".").resolve()
         except OSError:
             continue
-        if resolved not in (trusted_scripts.resolve(), candidate_scripts.resolve()):
+        if resolved not in forbidden:
             keep.append(entry)
-    return [str(candidate_scripts.resolve()), *keep]
+    return [str(candidate_scripts), str(candidate_root_resolved), *keep]
 
 
 def _import_candidate(candidate_root: Path, module_name: str) -> Any:
     assert_candidate_scripts_confined(candidate_root)
-    sys.path[:] = isolated_import_path(sys.path, candidate_root / "scripts")
+    sys.path[:] = isolated_import_path(sys.path, candidate_root)
     return importlib.import_module(module_name)
 
 
@@ -938,16 +956,42 @@ def main() -> int:
     fixture = json.loads(fixture_path.read_text(encoding="utf-8"))
     scenario_id = args.scenario
 
-    # Computed before any candidate code runs, so it covers exactly the pristine tree a fresh checkout has.
-    module_digest = candidate_module_digest(candidate_root, scenario_id)
+    # The digest binds the pristine candidate tree -- the exact bytes a fresh
+    # checkout reproduces -- so the trusted validator's independent recomputation
+    # matches only an unmutated candidate. It is taken before any candidate code
+    # runs, then re-taken after the scenario completes: the candidate checkout
+    # stays writable, and an imported entry module could replace or create a
+    # helper and then import it during the scenario. Comparing the two digests
+    # makes exactly that mutation fail closed, instead of reporting a
+    # pristine-tree digest for bytes the scenario never executed. (A fresh,
+    # truly immutable snapshot would be stronger still; this restores the
+    # post-execution check without widening what the receipt binds.)
+    pristine_digest = candidate_module_digest(candidate_root, scenario_id)
     result: dict[str, Any] = {"scenario_id": scenario_id}
     result.update(_run_scenario_isolated(scenario_id, candidate_root, fixture))
-    # Computed here, in this process, which never imports candidate code
-    # itself -- the scenario ran in a separate spawned child (see
-    # _run_scenario_isolated) -- and never accepted from anything that child
-    # reported, so a forged claim in its (untrusted) pipe messages cannot
-    # substitute a fake digest for the real one.
-    result["candidate_module_digest"] = module_digest
+    try:
+        executed_digest = candidate_module_digest(candidate_root, scenario_id)
+        mutated = executed_digest != pristine_digest
+        mutation_error = (
+            "the candidate scripts tree mutated during scenario execution: the executed bytes no longer "
+            "match the pristine-tree digest the receipt binds"
+        )
+    except (OSError, ValueError) as exc:
+        mutated = True
+        mutation_error = (
+            "the candidate scripts tree could not be re-verified against its pristine digest after scenario "
+            f"execution: {type(exc).__name__}: {exc}"
+        )
+    if mutated:
+        result["outcome"] = "fail"
+        result["measurements"] = {}
+        result["error"] = mutation_error
+    # Reported from this process, which never imports candidate code itself --
+    # the scenario ran in a separate spawned child (see _run_scenario_isolated)
+    # -- and never accepted from anything that child reported, so a forged claim
+    # in its (untrusted) pipe messages cannot substitute a fake digest for the
+    # real one.
+    result["candidate_module_digest"] = pristine_digest
     print(json.dumps(result, sort_keys=True, separators=(",", ":"), ensure_ascii=False))
     return 0
 

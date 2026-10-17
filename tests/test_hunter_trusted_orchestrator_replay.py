@@ -1745,16 +1745,175 @@ def test_symlinked_directory_in_candidate_scripts_tree_is_refused(tmp_path):
         worker.assert_candidate_scripts_confined(candidate)
 
 
-def test_import_path_drops_the_trusted_scripts_directory_so_missing_helpers_do_not_fall_back(tmp_path):
+def test_import_path_places_the_candidate_first_and_drops_every_trusted_entry(tmp_path, monkeypatch):
     worker = _load_bootstrap_worker()
-    trusted = tmp_path / "trusted" / "scripts"
-    trusted.mkdir(parents=True)
-    candidate_scripts = tmp_path / "candidate" / "scripts"
-    candidate_scripts.mkdir(parents=True)
+    monkeypatch.chdir(tmp_path)
+    trusted_scripts = tmp_path / "scripts"
+    trusted_scripts.mkdir()
+    candidate_root = tmp_path / "candidate"
+    (candidate_root / "scripts").mkdir(parents=True)
     other = tmp_path / "site"
     other.mkdir()
-    result = worker.isolated_import_path([str(trusted), str(other), str(candidate_scripts)], candidate_scripts, trusted)
-    assert result == [str(candidate_scripts.resolve()), str(other)]
+    # The trusted repository root (here the process cwd), an explicit trusted
+    # root entry, the trusted scripts directory and an empty entry that resolves
+    # to the cwd (the trusted root) must all be dropped: any of them would let a
+    # package-qualified `import scripts.helper` load base code. The candidate
+    # root and its scripts directory are (re)placed first.
+    result = worker.isolated_import_path(
+        ["", str(trusted_scripts), str(tmp_path), str(other), str(candidate_root / "scripts"), str(candidate_root)],
+        candidate_root,
+        trusted_scripts,
+    )
+    assert result == [
+        str((candidate_root / "scripts").resolve()),
+        str(candidate_root.resolve()),
+        str(other),
+    ]
+
+
+def _worker_in_synthetic_trusted_checkout(tmp_path):
+    """A copy of the trusted worker inside its own trusted checkout.
+
+    Copying it makes ``TRUSTED_SCRIPTS_DIR`` (and its parent root) the synthetic
+    checkout, exactly as the hosted job runs the real one from the default
+    branch, so the subprocess's cwd-as-trusted-root behavior is exercised for real.
+    """
+    trusted_root = tmp_path / "trusted"
+    (trusted_root / "scripts").mkdir(parents=True)
+    shutil.copy(
+        REPO_ROOT / "scripts" / "hunter_trusted_orchestrator_replay_worker.py",
+        trusted_root / "scripts" / "hunter_trusted_orchestrator_replay_worker.py",
+    )
+    return trusted_root
+
+
+def _run_candidate_import(trusted_root, candidate_root, module_name="hunter_review_orchestrator"):
+    """Import a candidate module through the real worker from a trusted checkout.
+
+    Run as a fresh subprocess with cwd = the trusted root, so ``sys.path`` carries
+    the empty entry that resolves to the trusted repository root -- the exact
+    condition under which a package-qualified candidate import could reach base
+    code. Returns the completed subprocess.
+    """
+    worker_path = trusted_root / "scripts" / "hunter_trusted_orchestrator_replay_worker.py"
+    script = (
+        "import importlib.util\n"
+        "from pathlib import Path\n"
+        f"spec = importlib.util.spec_from_file_location('w', {str(worker_path)!r})\n"
+        "assert spec is not None and spec.loader is not None\n"
+        "w = importlib.util.module_from_spec(spec)\n"
+        "spec.loader.exec_module(w)\n"
+        f"mod = w._import_candidate(Path({str(candidate_root)!r}), {module_name!r})\n"
+        "print('SOURCE=' + str(getattr(mod, 'SOURCE', '')))\n"
+    )
+    return subprocess.run([sys.executable, "-c", script], cwd=str(trusted_root), capture_output=True, text=True)
+
+
+def test_package_qualified_candidate_import_resolves_to_candidate_not_the_trusted_base(tmp_path):
+    trusted_root = _worker_in_synthetic_trusted_checkout(tmp_path)
+    (trusted_root / "scripts" / "helper.py").write_text('SOURCE = "trusted"\n', encoding="utf-8")
+    candidate = tmp_path / "candidate"
+    (candidate / "scripts").mkdir(parents=True)
+    (candidate / "scripts" / "helper.py").write_text('SOURCE = "candidate"\n', encoding="utf-8")
+    (candidate / "scripts" / "hunter_review_orchestrator.py").write_text(
+        "import scripts.helper\n\nSOURCE = scripts.helper.SOURCE\n", encoding="utf-8"
+    )
+    result = _run_candidate_import(trusted_root, candidate)
+    assert result.returncode == 0, result.stderr
+    assert "SOURCE=candidate" in result.stdout, result.stdout
+
+
+def test_missing_candidate_helper_fails_closed_instead_of_importing_the_trusted_base(tmp_path):
+    trusted_root = _worker_in_synthetic_trusted_checkout(tmp_path)
+    (trusted_root / "scripts" / "helper.py").write_text('SOURCE = "trusted"\n', encoding="utf-8")
+    candidate = tmp_path / "candidate"
+    (candidate / "scripts").mkdir(parents=True)
+    # The candidate imports a package-qualified helper it does not ship, while the
+    # trusted base does ship one. Removing the trusted root must make this an
+    # ImportError, never a silent read of the base checkout's helper.
+    (candidate / "scripts" / "hunter_review_orchestrator.py").write_text(
+        "import scripts.helper\n\nSOURCE = scripts.helper.SOURCE\n", encoding="utf-8"
+    )
+    result = _run_candidate_import(trusted_root, candidate)
+    assert result.returncode != 0
+    assert "ModuleNotFoundError" in result.stderr or "ImportError" in result.stderr
+
+
+def test_bare_candidate_import_prefers_the_candidate_over_the_trusted_base(tmp_path):
+    trusted_root = _worker_in_synthetic_trusted_checkout(tmp_path)
+    (trusted_root / "scripts" / "hunter_review_orchestrator.py").write_text('SOURCE = "trusted"\n', encoding="utf-8")
+    candidate = tmp_path / "candidate"
+    (candidate / "scripts").mkdir(parents=True)
+    (candidate / "scripts" / "hunter_review_orchestrator.py").write_text('SOURCE = "candidate"\n', encoding="utf-8")
+    result = _run_candidate_import(trusted_root, candidate)
+    assert result.returncode == 0, result.stderr
+    assert "SOURCE=candidate" in result.stdout, result.stdout
+
+
+def test_main_fails_closed_when_the_candidate_tree_mutates_during_execution(tmp_path, monkeypatch, capsys):
+    worker = _load_bootstrap_worker()
+    candidate = tmp_path / "candidate"
+    (candidate / "scripts").mkdir(parents=True)
+    (candidate / "scripts" / "hunter_review_orchestrator.py").write_text("X = 1\n", encoding="utf-8")
+    (tmp_path / "fixture.json").write_text("{}", encoding="utf-8")
+    pristine = worker.candidate_module_digest(candidate, "A")
+
+    def _mutating_run(_scenario_id, candidate_root, _fixture):
+        # A candidate entry module that imports a helper it writes mid-scenario:
+        # the receipt would otherwise carry the pristine digest for bytes it never ran.
+        (candidate_root / "scripts" / "hunter_injected.py").write_text("Y = 2\n", encoding="utf-8")
+        return {"outcome": "pass", "measurements": {}}
+
+    monkeypatch.setattr(worker, "_run_scenario_isolated", _mutating_run)
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        [
+            "worker",
+            "--workspace-root",
+            str(tmp_path),
+            "--candidate-root",
+            "candidate",
+            "--scenario",
+            "A",
+            "--fixture",
+            "fixture.json",
+        ],
+    )
+    assert worker.main() == 0
+    payload = json.loads(capsys.readouterr().out.strip().splitlines()[-1])
+    assert payload["outcome"] == "fail"
+    assert "mutated" in payload["error"]
+    assert payload["candidate_module_digest"] == pristine
+
+
+def test_main_reports_the_pristine_digest_when_the_candidate_tree_is_unchanged(tmp_path, monkeypatch, capsys):
+    worker = _load_bootstrap_worker()
+    candidate = tmp_path / "candidate"
+    (candidate / "scripts").mkdir(parents=True)
+    (candidate / "scripts" / "hunter_review_orchestrator.py").write_text("X = 1\n", encoding="utf-8")
+    (tmp_path / "fixture.json").write_text("{}", encoding="utf-8")
+    pristine = worker.candidate_module_digest(candidate, "A")
+    monkeypatch.setattr(worker, "_run_scenario_isolated", lambda *_a: {"outcome": "pass", "measurements": {}})
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        [
+            "worker",
+            "--workspace-root",
+            str(tmp_path),
+            "--candidate-root",
+            "candidate",
+            "--scenario",
+            "A",
+            "--fixture",
+            "fixture.json",
+        ],
+    )
+    assert worker.main() == 0
+    payload = json.loads(capsys.readouterr().out.strip().splitlines()[-1])
+    assert payload["outcome"] == "pass"
+    assert payload["candidate_module_digest"] == pristine
 
 
 @pytest.mark.parametrize(
