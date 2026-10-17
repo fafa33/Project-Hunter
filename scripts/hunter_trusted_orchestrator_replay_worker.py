@@ -51,6 +51,9 @@ from typing import Any
 #: digest a scenario reports is provably scoped to the modules it actually
 #: touched, and so the trusted validator can recompute the identical digest
 #: from its own, independent candidate checkout.
+# Never write bytecode into the candidate tree: it must stay byte-identical to a fresh checkout.
+sys.dont_write_bytecode = True
+
 CANDIDATE_MODULE_FILES: dict[str, tuple[str, ...]] = {
     "A": ("scripts/hunter_review_orchestrator.py",),
     "B": ("scripts/hunter_review_orchestrator.py",),
@@ -67,18 +70,124 @@ CANDIDATE_MODULE_FILES: dict[str, tuple[str, ...]] = {
 WAITING_FOR_REVIEWER_STATE = "WAITING_FOR_REVIEWER"
 
 
+def confined_candidate_file(candidate_root: Path, relative: str) -> Path:
+    """The candidate file at ``relative``, refused unless it is a regular file physically inside the candidate.
+
+    A candidate can commit a module as a symlink to a file of the trusted checkout (or anywhere else on the
+    runner). Reading or importing through it would execute and hash the base module while the receipt still
+    validates, so every symlink component and any resolution outside ``candidate_root`` is rejected.
+    """
+    root = candidate_root.resolve(strict=True)
+    path = candidate_root / relative
+    current = candidate_root
+    for part in Path(relative).parts:
+        current = current / part
+        if current.is_symlink():
+            raise ValueError(f"candidate path {relative!r} contains a symlink component and is refused")
+    resolved = path.resolve(strict=True)
+    try:
+        resolved.relative_to(root)
+    except ValueError:
+        raise ValueError(f"candidate path {relative!r} resolves outside the candidate root and is refused") from None
+    if not resolved.is_file():
+        raise ValueError(f"candidate path {relative!r} is not a regular file")
+    return resolved
+
+
+def assert_candidate_scripts_confined(candidate_root: Path) -> None:
+    """Every entry of the candidate ``scripts/`` tree must be a regular, physically confined file or directory.
+
+    A symlinked subdirectory (``scripts/helpers -> /outside``) would otherwise make ``import helpers.module`` read
+    files outside the candidate checkout, and any symlinked file would let the proof cover base code.
+    """
+    scripts = candidate_root / "scripts"
+    if scripts.is_symlink():
+        raise ValueError("candidate scripts directory is a symlink and is refused")
+    for current, directories, files in os.walk(scripts, followlinks=False):
+        for name in [*directories, *files]:
+            path = Path(current) / name
+            if path.is_symlink():
+                raise ValueError(
+                    f"candidate path {str(path.relative_to(candidate_root))!r} is a symlink and is refused"
+                )
+        for name in files:
+            confined_candidate_file(candidate_root, str((Path(current) / name).relative_to(candidate_root)))
+
+
+def candidate_scripts_files(candidate_root: Path) -> list[str]:
+    """Every file under the candidate ``scripts/`` tree, of any type, as sorted repository-relative paths."""
+    assert_candidate_scripts_confined(candidate_root)
+    found = []
+    for current, _directories, files in os.walk(candidate_root / "scripts", followlinks=False):
+        found.extend(str((Path(current) / name).relative_to(candidate_root)) for name in files)
+    return sorted(found)
+
+
 def candidate_module_digest(candidate_root: Path, scenario_id: str) -> str:
-    payload = {}
-    for relative in CANDIDATE_MODULE_FILES[scenario_id]:
-        payload[relative] = (candidate_root / relative).read_text(encoding="utf-8")
+    """Digest of the **whole** candidate ``scripts/`` tree (every file, any type), not a traced import closure.
+
+    Tracing what a scenario imports statically is incomplete by construction (aliased or computed loaders,
+    ``.so``/``.pyc`` modules, packages, relative imports). Binding the proof to every file the interpreter could
+    possibly import from the candidate's ``scripts/`` directory makes all of those routes irrelevant: if any such
+    file changes, the digest changes. The declared entry modules must be present in that tree.
+    """
+    files = candidate_scripts_files(candidate_root)
+    missing = [relative for relative in CANDIDATE_MODULE_FILES[scenario_id] if relative not in files]
+    if missing:
+        raise ValueError(f"declared candidate modules are missing from the scripts tree: {missing}")
+    payload = {
+        relative: hashlib.sha256(confined_candidate_file(candidate_root, relative).read_bytes()).hexdigest()
+        for relative in files
+    }
     encoded = json.dumps(payload, sort_keys=True, separators=(",", ":"), ensure_ascii=False).encode("utf-8")
     return hashlib.sha256(encoded).hexdigest()
 
 
+TRUSTED_SCRIPTS_DIR = Path(__file__).resolve().parent
+
+
+def isolated_import_path(
+    path: list[str], candidate_root: Path, trusted_scripts: Path = TRUSTED_SCRIPTS_DIR
+) -> list[str]:
+    """``path`` with every trusted-checkout entry removed and the candidate's own roots placed first.
+
+    The worker subprocess is spawned with its current directory set to the trusted repository root, so
+    the interpreter's ``sys.path`` can carry that root, the trusted ``scripts/`` directory, or an empty
+    entry (``""``) that resolves to the current directory -- the trusted root again. Any of those would
+    let a **package-qualified** candidate import such as ``import scripts.some_helper`` resolve to the
+    *base* checkout even though only the candidate's ``scripts/`` tree is prepended and bound by the
+    digest: the replay would then exercise mixed trusted/candidate code that can pass here and fail
+    after merge (or vice versa).
+
+    Both the trusted ``scripts/`` directory and its parent repository root are therefore removed, and
+    the candidate root and its ``scripts/`` directory are prepended so that every candidate import --
+    bare (``import hunter_review_orchestrator``) or package-qualified (``import scripts.helper``) --
+    resolves inside the candidate checkout, or fails closed with ``ImportError``. A helper a PR deleted
+    or omitted can never silently fall back to the base checkout's copy.
+    """
+    candidate_scripts = (candidate_root / "scripts").resolve()
+    candidate_root_resolved = candidate_root.resolve()
+    trusted_scripts_resolved = trusted_scripts.resolve()
+    forbidden = {
+        candidate_scripts,
+        candidate_root_resolved,
+        trusted_scripts_resolved,
+        trusted_scripts_resolved.parent,
+    }
+    keep = []
+    for entry in path:
+        try:
+            resolved = Path(entry or ".").resolve()
+        except OSError:
+            continue
+        if resolved not in forbidden:
+            keep.append(entry)
+    return [str(candidate_scripts), str(candidate_root_resolved), *keep]
+
+
 def _import_candidate(candidate_root: Path, module_name: str) -> Any:
-    scripts_dir = str((candidate_root / "scripts").resolve())
-    if scripts_dir not in sys.path:
-        sys.path.insert(0, scripts_dir)
+    assert_candidate_scripts_confined(candidate_root)
+    sys.path[:] = isolated_import_path(sys.path, candidate_root)
     return importlib.import_module(module_name)
 
 
@@ -166,6 +275,13 @@ def scenario_a(candidate_root: Path, fixture: dict[str, Any]) -> dict[str, Any]:
     # invariant and would leave that live collector free to publish a competing
     # terminal result for the same exact head (DFF-041, PR #535).
     orchestrator.collector_liveness = lambda *_a: ("completed", 1)
+
+    # Determinism, not isolation: the candidate's REST helper is replaced with "this repository has no collector
+    # workflow runs", so a scenario's outcome does not depend on whether a real (or unreachable) GitHub API answers
+    # through that helper. This is NOT a network boundary: a candidate calling urllib/socket directly is not
+    # blocked here. The security boundary is the job itself (contents: read only, no checkout credentials, no
+    # secrets), not this stub.
+    orchestrator.request_json = lambda *_a, **_k: {"workflow_runs": []}
 
     def _recorded(age_seconds: int) -> Any:
         started = (datetime.now(UTC) - timedelta(seconds=age_seconds)).strftime("%Y-%m-%dT%H:%M:%SZ")
@@ -351,6 +467,13 @@ def scenario_b(candidate_root: Path, fixture: dict[str, Any]) -> dict[str, Any]:
 
     orchestrator.collector_liveness = fake_collector_liveness
 
+    # Determinism, not isolation: the candidate's REST helper is replaced with "this repository has no collector
+    # workflow runs", so a scenario's outcome does not depend on whether a real (or unreachable) GitHub API answers
+    # through that helper. This is NOT a network boundary: a candidate calling urllib/socket directly is not
+    # blocked here. The security boundary is the job itself (contents: read only, no checkout credentials, no
+    # secrets), not this stub.
+    orchestrator.request_json = lambda *_a, **_k: {"workflow_runs": []}
+
     def _recorded(age_seconds: int) -> Any:
         started = (datetime.now(UTC) - timedelta(seconds=age_seconds)).strftime("%Y-%m-%dT%H:%M:%SZ")
         return orchestrator.ReviewCycle(
@@ -498,7 +621,7 @@ def scenario_b(candidate_root: Path, fixture: dict[str, Any]) -> dict[str, Any]:
     }
 
 
-def scenario_g(candidate_root: Path, fixture: dict[str, Any]) -> dict[str, Any]:
+def scenario_g_observe(candidate_root: Path, fixture: dict[str, Any]) -> dict[str, Any]:
     """WAITING_FOR_REVIEWER classifies to pending end-to-end via the real path.
 
     Calls the candidate's real ``hunter_governance_review_v2.pending_review_authority_state``,
@@ -515,8 +638,6 @@ def scenario_g(candidate_root: Path, fixture: dict[str, Any]) -> dict[str, Any]:
 
     orchestration.read_cycle = lambda *_a: ("absent", None, None)
     state, detail = governance.pending_review_authority_state("owner/repo", "token", pr_number, head)
-    assert state == "pending", f"expected pending classification for an absent cycle, got {state!r}"
-    assert detail.startswith("WAITING_FOR_REVIEWER:"), f"expected a WAITING_FOR_REVIEWER detail, got {detail!r}"
 
     cycle = orchestration.ReviewCycle(
         pr_number=pr_number,
@@ -529,7 +650,6 @@ def scenario_g(candidate_root: Path, fixture: dict[str, Any]) -> dict[str, Any]:
     )
     orchestration.read_cycle = lambda *_a: ("present", cycle, None)
     state2, _detail2 = governance.pending_review_authority_state("owner/repo", "token", pr_number, head)
-    assert state2 == "pending", f"expected pending classification for an in-progress cycle, got {state2!r}"
 
     orchestration.read_cycle = lambda *_a: ("present", None, "pull request is not open")
     raised = False
@@ -537,9 +657,55 @@ def scenario_g(candidate_root: Path, fixture: dict[str, Any]) -> dict[str, Any]:
         governance.pending_review_authority_state("owner/repo", "token", pr_number, head)
     except RuntimeError:
         raised = True
-    assert raised, "malformed cycle evidence must fail closed, never classify as pending"
 
-    return {"absent_state": state, "in_progress_state": state2}
+    return {"absent_state": state, "absent_detail": detail, "in_progress_state": state2, "malformed_raised": raised}
+
+
+def scenario_g_grade(observation: dict[str, Any]) -> dict[str, Any]:
+    """Trusted assertions over candidate observations; never imports candidate."""
+    assert observation.get("absent_state") == "pending", "absent cycle must classify as pending"
+    assert isinstance(observation.get("absent_detail"), str) and observation["absent_detail"].startswith(
+        "WAITING_FOR_REVIEWER:"
+    ), "absent cycle must carry WAITING_FOR_REVIEWER detail"
+    assert observation.get("in_progress_state") == "pending", "in-progress cycle must classify as pending"
+    assert observation.get("malformed_raised") is True, "malformed evidence must fail closed: expected RuntimeError"
+    return {"absent_state": observation["absent_state"], "in_progress_state": observation["in_progress_state"]}
+
+
+def scenario_g(candidate_root: Path, fixture: dict[str, Any]) -> dict[str, Any]:
+    return scenario_g_grade(scenario_g_observe(candidate_root, fixture))
+
+
+def scenario_a_grade(observation: dict[str, Any]) -> dict[str, Any]:
+    """Trusted parent-side validation of scenario A's summary evidence."""
+    budget = observation.get("opportunity_seconds")
+    assert type(budget) is int and budget > 2, "opportunity budget must be a positive integer"
+    assert observation.get("below_boundary_seconds") == budget - 2, "below-budget probe is invalid"
+    assert observation.get("above_boundary_seconds") == budget + 2, "above-budget probe is invalid"
+    assert observation.get("timed_out_state") == "REVIEW_TIMED_OUT", "past-budget cycle must terminate"
+    assert observation.get("in_opportunity_state") == "WAITING_FOR_REVIEWER", "within-budget cycle must stay pending"
+    assert observation.get("active_deferred_state") == "WAITING_FOR_REVIEWER", "active collector must defer timeout"
+    assert observation.get("active_ceiling_seconds") == budget * ACTIVE_COLLECTOR_CEILING_MULTIPLIER + 2
+    assert observation.get("active_ceiling_state") == "REVIEW_TIMED_OUT", "collector ceiling must terminate"
+    return observation
+
+
+def scenario_b_grade(observation: dict[str, Any]) -> dict[str, Any]:
+    """Trusted parent-side validation of scenario B's summary evidence."""
+    assert isinstance(observation, dict), "collector observations must be an object"
+    grace = observation.get("liveness_grace_seconds")
+    maximum = observation.get("max_dispatches")
+    assert type(grace) is int and grace > 0, "liveness grace must be positive"
+    assert type(maximum) is int and maximum >= 1, "dispatch budget must be positive"
+    assert (
+        type(observation.get("dispatches")) is int and observation["dispatches"] >= maximum
+    ), "dispatch count is inconsistent"
+    assert observation.get("correlated_runs") == maximum, "correlated runs must exhaust budget"
+    assert (
+        type(observation.get("durable_records_published")) is int and observation["durable_records_published"] >= 2
+    ), "durable record missing"
+    assert observation.get("exhausted_state") == "WAITING_FOR_REVIEWER", "exhausted cycle must remain pending"
+    return observation
 
 
 SCENARIOS = {"A": scenario_a, "B": scenario_b, "G": scenario_g}
@@ -612,7 +778,11 @@ def _scenario_child(conn: Connection, scenario_id: str, candidate_root_str: str,
 
     try:
         _send_scenario_message(conn, {"stage": "started"})
-        measurements = SCENARIOS[scenario_id](Path(candidate_root_str), fixture)
+        # Freeze trusted dispatch before importing candidate code.
+        trusted_scenario = SCENARIOS[scenario_id]
+        measurements = (scenario_g_observe if scenario_id == "G" else trusted_scenario)(
+            Path(candidate_root_str), fixture
+        )
         _send_scenario_message(conn, {"stage": "done", "measurements": measurements})
     except (
         BaseException
@@ -718,6 +888,15 @@ def _run_scenario_isolated(scenario_id: str, candidate_root: Path, fixture: dict
     measurements = finished.get("measurements")
     if not isinstance(measurements, dict):
         return fail("'done' message carried non-dict measurements")
+    try:
+        if scenario_id == "G":
+            measurements = scenario_g_grade(measurements)
+        elif scenario_id == "A":
+            measurements = scenario_a_grade(measurements)
+        elif scenario_id == "B":
+            measurements = scenario_b_grade(measurements)
+    except (AssertionError, KeyError, TypeError, ValueError) as exc:
+        return fail(f"trusted {scenario_id} grader rejected candidate observations: {exc}")
     return {"outcome": "pass", "measurements": measurements}
 
 
@@ -777,14 +956,42 @@ def main() -> int:
     fixture = json.loads(fixture_path.read_text(encoding="utf-8"))
     scenario_id = args.scenario
 
+    # The digest binds the pristine candidate tree -- the exact bytes a fresh
+    # checkout reproduces -- so the trusted validator's independent recomputation
+    # matches only an unmutated candidate. It is taken before any candidate code
+    # runs, then re-taken after the scenario completes: the candidate checkout
+    # stays writable, and an imported entry module could replace or create a
+    # helper and then import it during the scenario. Comparing the two digests
+    # makes exactly that mutation fail closed, instead of reporting a
+    # pristine-tree digest for bytes the scenario never executed. (A fresh,
+    # truly immutable snapshot would be stronger still; this restores the
+    # post-execution check without widening what the receipt binds.)
+    pristine_digest = candidate_module_digest(candidate_root, scenario_id)
     result: dict[str, Any] = {"scenario_id": scenario_id}
     result.update(_run_scenario_isolated(scenario_id, candidate_root, fixture))
-    # Computed here, in this process, which never imports candidate code
-    # itself -- the scenario ran in a separate spawned child (see
-    # _run_scenario_isolated) -- and never accepted from anything that child
-    # reported, so a forged claim in its (untrusted) pipe messages cannot
-    # substitute a fake digest for the real one.
-    result["candidate_module_digest"] = candidate_module_digest(candidate_root, scenario_id)
+    try:
+        executed_digest = candidate_module_digest(candidate_root, scenario_id)
+        mutated = executed_digest != pristine_digest
+        mutation_error = (
+            "the candidate scripts tree mutated during scenario execution: the executed bytes no longer "
+            "match the pristine-tree digest the receipt binds"
+        )
+    except (OSError, ValueError) as exc:
+        mutated = True
+        mutation_error = (
+            "the candidate scripts tree could not be re-verified against its pristine digest after scenario "
+            f"execution: {type(exc).__name__}: {exc}"
+        )
+    if mutated:
+        result["outcome"] = "fail"
+        result["measurements"] = {}
+        result["error"] = mutation_error
+    # Reported from this process, which never imports candidate code itself --
+    # the scenario ran in a separate spawned child (see _run_scenario_isolated)
+    # -- and never accepted from anything that child reported, so a forged claim
+    # in its (untrusted) pipe messages cannot substitute a fake digest for the
+    # real one.
+    result["candidate_module_digest"] = pristine_digest
     print(json.dumps(result, sort_keys=True, separators=(",", ":"), ensure_ascii=False))
     return 0
 
