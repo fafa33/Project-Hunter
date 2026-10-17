@@ -1113,6 +1113,34 @@ def test_adversarial_11_malformed_receipt_json_fails_closed(tmp_path):
     assert errors == ["receipt is not a JSON object"]
 
 
+def test_adversarial_12_duplicate_scenario_id_hiding_a_failing_result_is_rejected(tmp_path):
+    receipt, root = _good_receipt(tmp_path)
+    failing = dict(next(r for r in receipt["scenario_results"] if r["scenario_id"] == "A"))
+    failing["outcome"] = "fail"
+    passing_duplicate = dict(failing, outcome="pass")
+    others = [r for r in receipt["scenario_results"] if r["scenario_id"] != "A"]
+    # Last-write-wins indexing would collapse these to the trailing passing
+    # duplicate and satisfy the set-membership check while hiding the failing one.
+    receipt["scenario_results"] = [failing, *others, passing_duplicate]
+    errors = replay.validate_receipt(receipt, candidate_root=root, pr_number=535, candidate_sha="a" * 40)
+    assert any("duplicate scenario_id 'A'" in e for e in errors)
+    assert any("exactly" in e and "scenario_results" in e for e in errors)
+
+
+def test_adversarial_13_non_object_scenario_entry_is_rejected(tmp_path):
+    receipt, root = _good_receipt(tmp_path)
+    receipt["scenario_results"][0] = "not a JSON object"
+    errors = replay.validate_receipt(receipt, candidate_root=root, pr_number=535, candidate_sha="a" * 40)
+    assert any("is not a JSON object" in e for e in errors)
+
+
+def test_adversarial_14_missing_scenario_id_is_rejected(tmp_path):
+    receipt, root = _good_receipt(tmp_path)
+    del receipt["scenario_results"][0]["scenario_id"]
+    errors = replay.validate_receipt(receipt, candidate_root=root, pr_number=535, candidate_sha="a" * 40)
+    assert any("missing or non-string scenario_id" in e for e in errors)
+
+
 # --- No production authority resolver may consult this diagnostic status --
 
 

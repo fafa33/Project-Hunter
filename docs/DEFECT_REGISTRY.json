@@ -1775,7 +1775,10 @@
         "tests/test_hunter_trusted_orchestrator_replay.py::test_scenario_b_passes_against_real_production",
         "tests/test_hunter_trusted_orchestrator_replay.py::test_scenario_b_fails_when_a_recorded_cycle_is_dispatched_again",
         "tests/test_hunter_trusted_orchestrator_replay.py::test_scenario_b_fails_without_bounded_liveness_recovery",
-        "tests/test_hunter_trusted_orchestrator_replay.py::test_scenario_b_fails_when_dispatch_is_unbounded"
+        "tests/test_hunter_trusted_orchestrator_replay.py::test_scenario_b_fails_when_dispatch_is_unbounded",
+        "tests/test_hunter_trusted_orchestrator_replay.py::test_adversarial_12_duplicate_scenario_id_hiding_a_failing_result_is_rejected",
+        "tests/test_hunter_trusted_orchestrator_replay.py::test_adversarial_13_non_object_scenario_entry_is_rejected",
+        "tests/test_hunter_trusted_orchestrator_replay.py::test_adversarial_14_missing_scenario_id_is_rejected"
       ],
       "lifecycle": "regression-tested",
       "sources": [

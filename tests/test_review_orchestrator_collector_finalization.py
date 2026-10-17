@@ -27,6 +27,14 @@ GENERATION = ""
 REPOSITORY = "owner/repo"
 ROOT = pathlib.Path(orchestrator.__file__).resolve().parents[1]
 
+# The PR #594 incident, reproduced from live evidence (collector run 39074557596): the exact-head cycle was published
+# by a ``pull_request_target`` reconcile run (39074522719) on branch fix/trusted-replay-native-contract, at the base
+# generation, one remediation generation below base.
+INCIDENT_BRANCH = "fix/trusted-replay-native-contract"
+INCIDENT_BASE = "d" * 40
+INCIDENT_GENERATION = "b56e998249410121"
+RECONCILE_RUN_ID = 39074522719
+
 
 def _pool() -> dict[str, Any]:
     pool, error = pre_ready.load_reviewer_pool()
@@ -92,6 +100,7 @@ def verdict(receipt: Any, **overrides: Any) -> orchestrator.PoolExhaustion:
         "pr_number": PR,
         "head_sha": HEAD,
         "run_id": RUN_ID,
+        "run_attempt": 1,
         "claims_id": CLAIMS,
         "generation_id": GENERATION,
         "pool": _pool(),
@@ -222,6 +231,7 @@ class Harness:
         self.dispatches = 0
         self.reads = 0
         self.cycles = cycles if cycles is not None else [self.open_cycle()]
+        monkeypatch.setenv("GITHUB_RUN_ATTEMPT", "1")
         self.path = tmp_path / "reviewer-results.json"
         self.path.write_text(json.dumps(make_receipt() if receipt is None else receipt), encoding="utf-8")
         monkeypatch.setattr(orchestrator, "current_run_id", lambda: RUN_ID)
@@ -390,7 +400,8 @@ def _status_world(
         "created_at": "2026-10-08T10:44:50Z",
         "target_url": f"https://github.com/{REPOSITORY}/actions/runs/{RUN_ID}",
     }
-    run = {"head_branch": "main", "path": run_path, "event": event}
+    trusted_main_sha = "d" * 40
+    run = {"head_branch": "main", "head_sha": trusted_main_sha, "path": run_path, "event": event}
 
     def fake(repository, token, method, path, payload=None):
         if path == f"pulls/{PR}":
@@ -399,6 +410,8 @@ def _status_world(
             return [status]
         if path == "":
             return {"default_branch": "main"}
+        if path == "commits/main":
+            return {"sha": trusted_main_sha}
         if path == f"actions/runs/{RUN_ID}":
             return run
         raise AssertionError(path)
@@ -432,6 +445,124 @@ def test_a_collector_status_needs_a_dispatched_default_branch_run_and_the_truste
     assert orchestrator.read_cycle(REPOSITORY, "token", PR, HEAD)[0] == "absent"
     _status_world(monkeypatch, state="REVIEWER_UNAVAILABLE", run_path=".github/workflows/other.yml")
     assert orchestrator.read_cycle(REPOSITORY, "token", PR, HEAD)[0] == "absent"
+
+
+# --- The PR #594 incident: a target-event cycle the trusted collector could not see ------------------------------------
+#
+# Live incident (collector run 39074557596): the exact-head cycle was published by a ``pull_request_target`` reconcile
+# run, so the status cited a run whose ``head_branch`` is the pull-request branch -- not the default branch. The
+# orchestrator the collector actually executes (the trusted default-branch copy) then accepted a cited run only when
+# ``head_branch`` equalled the default branch, so it read no cycle at all and ``collector-complete`` reported
+# ``SKIPPED: no open cycle for this exact head, generation and pool configuration`` while the cycle stayed in
+# WAITING_FOR_REVIEWER. Provenance binding (``_target_run_base_revision``) authenticates such a run by its exact, single
+# pull-request association instead. These tests pin both halves of that boundary, end to end: the bound incident cycle
+# is finalized, and an unbound target run stays fail-closed. Neither proves that a reviewer reviewed anything.
+
+
+def _incident_request_json(monkeypatch, *, association: bool) -> None:
+    config = orchestrator.reviewer_pool_config_digest()
+    status = {
+        "creator": {"login": orchestrator.TRUSTED_STATUS_CREATOR},
+        "context": f"{orchestrator.CONTEXT_PREFIX}{PR}",
+        "description": f"WAITING_FOR_REVIEWER||{RECONCILE_RUN_ID}|{config}|{INCIDENT_GENERATION}",
+        "created_at": "2026-10-17T22:18:53Z",
+        "target_url": f"https://github.com/{REPOSITORY}/actions/runs/{RECONCILE_RUN_ID}",
+    }
+    base_repo = {"id": 2}
+    head_repo = {"id": 1}
+    pull_request = {
+        "state": "open",
+        "head": {"sha": HEAD, "ref": INCIDENT_BRANCH, "repo": head_repo},
+        "base": {"ref": "main", "repo": base_repo},
+    }
+    associated = {
+        "number": PR,
+        "head": {"sha": HEAD, "ref": INCIDENT_BRANCH, "repo": head_repo},
+        "base": {"sha": INCIDENT_BASE, "ref": "main", "repo": base_repo},
+    }
+    run = {
+        "id": RECONCILE_RUN_ID,
+        "event": "pull_request_target",
+        "head_branch": INCIDENT_BRANCH,
+        "head_sha": HEAD,
+        "path": ".github/workflows/hunter-governance-reconcile.yml",
+        "pull_requests": [associated] if association else [],
+    }
+
+    def fake(repository, token, method, path, payload=None):
+        if path == f"pulls/{PR}":
+            return pull_request
+        if path.startswith(f"commits/{HEAD}/statuses"):
+            return [status]
+        if path == "":
+            return {"default_branch": "main", "id": 2}
+        if path == "commits/main":
+            return {"sha": INCIDENT_BASE}
+        if path == f"actions/runs/{RECONCILE_RUN_ID}":
+            return run
+        raise AssertionError(path)
+
+    monkeypatch.setattr(orchestrator, "request_json", fake)
+
+
+class _IncidentFinalization:
+    """Drives the real ``finalize_exhausted_pool`` with the real ``read_cycle``: the incident is in provenance binding."""
+
+    def __init__(self, monkeypatch, tmp_path, *, association: bool):
+        self.published: list[orchestrator.ReviewCycle] = []
+        monkeypatch.setenv("GITHUB_RUN_ATTEMPT", "1")
+        monkeypatch.setattr(orchestrator, "current_run_id", lambda: RUN_ID)
+        monkeypatch.setattr(
+            orchestrator,
+            "review_request_state",
+            lambda *_a: orchestrator.ReviewRequestReadiness(True, CLAIMS, "", "success"),
+        )
+        monkeypatch.setattr(orchestrator, "current_remediation_generation", lambda *_a: INCIDENT_GENERATION)
+        monkeypatch.setattr(orchestrator, "publish_cycle", lambda *_a, cycle: self.published.append(cycle))
+        monkeypatch.setattr(orchestrator, "dispatch_collector", self._forbid_dispatch)
+        _incident_request_json(monkeypatch, association=association)
+        receipt = make_receipt()
+        receipt["remediation_generation_id"] = INCIDENT_GENERATION
+        self.path = tmp_path / "reviewer-results.json"
+        self.path.write_text(json.dumps(receipt), encoding="utf-8")
+
+    @staticmethod
+    def _forbid_dispatch(*_a, **_k):
+        raise AssertionError("finalization must never dispatch a collector")
+
+    def run(self) -> str:
+        return orchestrator.finalize_exhausted_pool(REPOSITORY, "token", PR, HEAD, RUN_ID, self.path)
+
+
+def test_the_incident_cycle_published_by_a_target_event_reconcile_is_finalized(monkeypatch, tmp_path):
+    """Regression for run 39074557596: the bound target-event cycle is found and finalized, not skipped as absent."""
+
+    incident = _IncidentFinalization(monkeypatch, tmp_path, association=True)
+    state, cycle, _ = orchestrator.read_cycle(REPOSITORY, "token", PR, HEAD)
+    assert state == "present" and cycle is not None
+    assert cycle.state == "WAITING_FOR_REVIEWER"
+    assert cycle.generation_id == INCIDENT_GENERATION
+    assert cycle.config_digest == orchestrator.reviewer_pool_config_digest()
+
+    assert incident.run() == "PUBLISHED: REVIEWER_UNAVAILABLE"
+    (published,) = incident.published
+    # The wake-up terminal, never a fabricated clearance and never a blocking verdict.
+    assert published.state == "REVIEWER_UNAVAILABLE"
+    assert published.state in orchestrator.TERMINAL_NONBLOCKING_STATES
+    assert (published.pr_number, published.head_sha) == (PR, HEAD)
+    assert published.generation_id == INCIDENT_GENERATION
+    assert published.config_digest == orchestrator.reviewer_pool_config_digest()
+    assert published.trigger_id == RECONCILE_RUN_ID
+    assert published.started_at == "2026-10-17T22:18:53Z"
+
+
+def test_an_unbound_target_event_run_is_still_not_a_cycle(monkeypatch, tmp_path):
+    """The same status without its exact pull-request association is not provenance, so the pool is not finalized."""
+
+    incident = _IncidentFinalization(monkeypatch, tmp_path, association=False)
+    assert orchestrator.read_cycle(REPOSITORY, "token", PR, HEAD)[0] == "absent"
+    assert incident.run() == "SKIPPED: no open cycle for this exact head, generation and pool configuration"
+    assert incident.published == []
 
 
 def test_reconcile_published_states_are_still_believed(monkeypatch):
@@ -496,3 +627,18 @@ def test_collector_receipt_rejects_symlink_outside_working_directory(tmp_path):
     receipt, reason = orchestrator.read_collector_receipt(symlink)
     assert receipt is None
     assert "missing or too large" in reason
+
+
+def test_exhaustion_rejects_receipt_from_another_run_attempt():
+    assert verdict(make_receipt(run_attempt=1), run_attempt=2).exhausted is False
+    assert verdict(make_receipt(run_attempt=2), run_attempt=2).exhausted is True
+
+
+def test_collector_finalization_requires_trusted_attempt_environment(monkeypatch, tmp_path):
+    harness = Harness(monkeypatch, tmp_path)
+    monkeypatch.delenv("GITHUB_RUN_ATTEMPT")
+    assert "trusted run attempt" in harness.run()
+    assert harness.published == []
+    monkeypatch.setenv("GITHUB_RUN_ATTEMPT", "2")
+    assert "run_attempt" in harness.run()
+    assert harness.published == []
