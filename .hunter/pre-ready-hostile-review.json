@@ -205,7 +205,7 @@
     "issue": "412",
     "review_target": [
       {
-        "blob_sha": "ae16521f8d45ea3db4046162366eb9b829ed5955",
+        "blob_sha": "444670d17e445286ae5f093659cc6a5cfba7766b",
         "path": "docs/DEFECT_REGISTRY.json",
         "previous_path": "",
         "status": "modified"
@@ -241,11 +241,11 @@
         "status": "modified"
       }
     ],
-    "review_target_digest": "bf542b95700f91a0a020520c439e768038a83a485cccd877e3b0b819cb49094e"
+    "review_target_digest": "0d5892c7ba6d302aa1bf7c1905a8f7c8596f36600d268807599aac2ea2ad8e38"
   },
-  "review_id": "c6eb5b32a1fe80fc4018f52966841b7fcaba3043f3ab444081a707973a0d190a",
+  "review_id": "9c6b56b168be43a72f7fe20134f850dc15cfdb73a5b10c16a9808acffb408658",
   "review_request": {
-    "claims_id": "c6eb5b32a1fe80fc4018f52966841b7fcaba3043f3ab444081a707973a0d190a",
+    "claims_id": "9c6b56b168be43a72f7fe20134f850dc15cfdb73a5b10c16a9808acffb408658",
     "schema": "hunter.review-request.v1"
   },
   "schema": "hunter.pre-ready-hostile-review.v1"
