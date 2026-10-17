@@ -2,59 +2,40 @@
   "claims": {
     "acceptance_criteria": [
       {
-        "criterion": "after a valid trusted started sentinel, the replay worker grants one full scenario execution timeout, with bounded startup and no unbounded second execution budget",
+        "criterion": "Candidate replay executes only in the unprivileged pull_request validation workflow with read-only contents and blanked tokens, and that workflow publishes no status or check.",
         "evidence": "Author-submitted evidence for independent hostile review, not reviewer approval.",
         "id": "AC-1",
         "verdict": "satisfied"
       },
       {
-        "criterion": "focused deterministic tests cover success before the post-start deadline and timeout after it; timeout must not silently succeed",
+        "criterion": "The privileged workflow_run publisher resolves the triggering run's own authoritative head SHA and refuses to publish unless that SHA equals the live pull-request head and the run is the latest validation run for that exact head.",
         "evidence": "Author-submitted evidence for independent hostile review, not reviewer approval.",
         "id": "AC-2",
         "verdict": "satisfied"
       },
       {
-        "criterion": "sqlalchemy repository predicate and scoped-session typing pass mandatory formatting and mypy without relaxing the runtime query semantics",
+        "criterion": "The publisher checks out and executes no candidate code, and fails closed unless the exact validation workflow definition the triggering run executed is byte-identical to the trusted base-approved definition and both validation jobs concluded successfully.",
         "evidence": "Author-submitted evidence for independent hostile review, not reviewer approval.",
         "id": "AC-3",
         "verdict": "satisfied"
       },
       {
-        "criterion": "the complete base-to-head diff is subjected to the applicable dpm defect-family checks and an independent exact-head hostile review request; the request is not represented as completed reviewer authority",
+        "criterion": "The replay worker executes candidate code in a fixed-binary, fail-closed, network-isolated sandbox with a credential-free environment allowlist, restoring the canonical fixture bytes before every worker launch.",
         "evidence": "Author-submitted evidence for independent hostile review, not reviewer approval.",
         "id": "AC-4",
         "verdict": "satisfied"
       },
       {
-        "criterion": "no automatic merge or claim that pr #600 resolves the broader untrusted-candidate sandbox and publisher security gaps of pr #596",
+        "criterion": "Focused deterministic regression tests enforce the workflow trigger, the separated job permissions, the checkout-free publisher, the exact-head binding, the sandbox isolation, and the completed-collector-settled scenario boundary, and pass.",
         "evidence": "Author-submitted evidence for independent hostile review, not reviewer approval.",
         "id": "AC-5",
-
         "verdict": "satisfied"
       },
       {
-        "criterion": "one controlled, real end-to-end proof of the automatic finding-to-canonicalization lifecycle exists, using a safe representative finding",
-        "evidence": "PR #611 only fixes stale squash-merge orphan recovery; this broader Issue #532 criterion is not asserted as completed by this focused correction.",
-        "id": "AC-11",
-        "verdict": "not-applicable"
-      },
-      {
-        "criterion": "no repository-write authority is broadened, no new code_write_policy.json grant is added, main is never written to directly, and no auto-merge exists anywhere in the new mechanism",
-        "evidence": "PR #611 only fixes stale squash-merge orphan recovery; this broader Issue #532 criterion is not asserted as completed by this focused correction.",
-        "id": "AC-12",
-        "verdict": "not-applicable"
-      },
-      {
-        "criterion": "no mandatory paid or external ai provider dependency is introduced anywhere in the new mechanism; the local/manual cli recovery path from pr #528 remains fully supported",
-        "evidence": "PR #611 only fixes stale squash-merge orphan recovery; this broader Issue #532 criterion is not asserted as completed by this focused correction.",
-        "id": "AC-13",
-        "verdict": "not-applicable"
-      },
-      {
-        "criterion": "human merge approval remains the final, sole authority to integrate into main; nothing in this mission marks a pr ready or merges it",
-        "evidence": "PR #611 only fixes stale squash-merge orphan recovery; this broader Issue #532 criterion is not asserted as completed by this focused correction.",
-        "id": "AC-14",
-        "verdict": "not-applicable"
+        "criterion": "The change keeps mandatory formatting and mypy checks green, leaves the pull request in Draft, performs no automatic merge, and introduces no security-gate bypass.",
+        "evidence": "Author-submitted evidence for independent hostile review, not reviewer approval.",
+        "id": "AC-6",
+        "verdict": "satisfied"
       }
     ],
     "adversarial_dimensions": [
@@ -71,38 +52,8 @@
       "transaction-snapshot-consistency"
     ],
     "base_ref": "main",
-    "base_sha": "dd01add9f856525151c2084532969c9402d95f81",
+    "base_sha": "ec098a9daebad890a1e86c2819eda618f7061ed4",
     "defect_families": [
-      {
-        "evidence": "Author requests independent assessment of this applicable defect family on the exact candidate diff.",
-        "family": "DFF-001",
-        "outcome": "clear"
-      },
-      {
-        "evidence": "Author requests independent assessment of this applicable defect family on the exact candidate diff.",
-        "family": "DFF-002",
-        "outcome": "clear"
-      },
-      {
-        "evidence": "Author requests independent assessment of this applicable defect family on the exact candidate diff.",
-        "family": "DFF-003",
-        "outcome": "clear"
-      },
-      {
-        "evidence": "Author requests independent assessment of this applicable defect family on the exact candidate diff.",
-        "family": "DFF-004",
-        "outcome": "clear"
-      },
-      {
-        "evidence": "Author requests independent assessment of this applicable defect family on the exact candidate diff.",
-        "family": "DFF-005",
-        "outcome": "clear"
-      },
-      {
-        "evidence": "Author requests independent assessment of this applicable defect family on the exact candidate diff.",
-        "family": "DFF-006",
-        "outcome": "clear"
-      },
       {
         "evidence": "Author requests independent assessment of this applicable defect family on the exact candidate diff.",
         "family": "DFF-007",
@@ -175,6 +126,21 @@
       },
       {
         "evidence": "Author requests independent assessment of this applicable defect family on the exact candidate diff.",
+        "family": "DFF-025",
+        "outcome": "clear"
+      },
+      {
+        "evidence": "Author requests independent assessment of this applicable defect family on the exact candidate diff.",
+        "family": "DFF-027",
+        "outcome": "clear"
+      },
+      {
+        "evidence": "Author requests independent assessment of this applicable defect family on the exact candidate diff.",
+        "family": "DFF-028",
+        "outcome": "clear"
+      },
+      {
+        "evidence": "Author requests independent assessment of this applicable defect family on the exact candidate diff.",
         "family": "DFF-029",
         "outcome": "clear"
       },
@@ -202,53 +168,63 @@
         "evidence": "Author requests independent assessment of this applicable defect family on the exact candidate diff.",
         "family": "DFF-041",
         "outcome": "clear"
+      },
+      {
+        "evidence": "Author requests independent assessment of this applicable defect family on the exact candidate diff.",
+        "family": "DFF-046",
+        "outcome": "clear"
+      },
+      {
+        "evidence": "Author requests independent assessment of this applicable defect family on the exact candidate diff.",
+        "family": "DFF-052",
+        "outcome": "clear"
       }
     ],
     "findings": [],
-    "issue": "601",
+    "issue": "614",
     "review_target": [
       {
-        "blob_sha": "987a37cdb724861bba02a5c2349decd06f84f8d8",
+        "blob_sha": "6c7c9bab2a51cc1f5cfb0f9479e57d6c0a5735de",
+        "path": ".github/workflows/hunter-trusted-orchestrator-replay-publish.yml",
+        "previous_path": "",
+        "status": "modified"
+      },
+      {
+        "blob_sha": "5c3be55ba932ac57414e22ee3577fe5cc02bfaa4",
+        "path": ".github/workflows/hunter-trusted-orchestrator-replay-validate.yml",
+        "previous_path": "",
+        "status": "modified"
+      },
+      {
+        "blob_sha": "32fc536605f5330865988b925a256c4c81f7ccae",
+        "path": "docs/ARCHITECTURE_AUDITS/adpr-0012-source-handling-independent-audit.md",
+        "previous_path": "",
+        "status": "modified"
+      },
+      {
+        "blob_sha": "420795d52569d0ca7610a6ad017f5195062f7b7f",
         "path": "scripts/hunter_trusted_orchestrator_replay.py",
-
         "previous_path": "",
         "status": "modified"
       },
       {
-        "blob_sha": "1092f3c5296b0fbb8bc85b27f752f7e0b99ceeb6",
+        "blob_sha": "9432eab2d649a11978cc59d4363d9eb04062a799",
         "path": "scripts/hunter_trusted_orchestrator_replay_worker.py",
-
         "previous_path": "",
         "status": "modified"
       },
       {
-        "blob_sha": "5a06d0f833edbb4e6443a210d218651d60ef5071",
-        "path": "src/hunter/persistence/sql/repositories/base.py",
-
-        "previous_path": "",
-        "status": "modified"
-      },
-      {
-        "blob_sha": "7f523f9ecaa04820c698beacb557ba95f17f21a0",
-        "path": "src/hunter/persistence/sql/session.py",
-
-        "previous_path": "",
-        "status": "modified"
-      },
-      {
-        "blob_sha": "3ae916fc3229e460d8353633bde2339dd65c62f0",
+        "blob_sha": "780a761785143e7f111eae9c581b377b9863dce1",
         "path": "tests/test_hunter_trusted_orchestrator_replay.py",
-
         "previous_path": "",
         "status": "modified"
       }
     ],
-    "review_target_digest": "9e91753d134e9e1db95d2393ff59f84f954a741d1d4a5f95fae4d3b261edddc3"
+    "review_target_digest": "79a27d5a56bfa67cf1f37e4804c0412ed9e2684e345ee0a810ed6e20b58ae965"
   },
-  "review_id": "96d8577e4a008954e1312dc0f238470018af11239863dc0544c10645b54dad41",
+  "review_id": "0ee0a67591b879b363ff8d15e8929d49007dbb3da1a7a6a916aeb236bea82eca",
   "review_request": {
-    "claims_id": "96d8577e4a008954e1312dc0f238470018af11239863dc0544c10645b54dad41",
-
+    "claims_id": "0ee0a67591b879b363ff8d15e8929d49007dbb3da1a7a6a916aeb236bea82eca",
     "schema": "hunter.review-request.v1"
   },
   "schema": "hunter.pre-ready-hostile-review.v1"
