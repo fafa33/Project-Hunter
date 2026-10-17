@@ -1566,6 +1566,9 @@ def test_worker_post_started_timeout_budget_with_controlled_clock(monkeypatch):
         def close(self):
             pass
 
+    # This test isolates deadline accounting; scenario A evidence grading is tested separately.
+    monkeypatch.setattr(worker, "scenario_a_grade", lambda measurements: measurements)
+
     for finish_delay, expected in [(59.0, "pass"), (61.0, "fail")]:
         clock = Clock()
         pipe = Pipe(clock, finish_delay)
@@ -1670,3 +1673,118 @@ def test_replay_worker_rejects_pickle_frames_without_executing_reducers(tmp_path
         with pytest.raises(ValueError):
             worker._decode_scenario_message(invalid)
     assert worker._decode_scenario_message(b'{"stage":"started"}') == {"stage": "started"}
+
+
+# --- Trusted worker hardening: candidate confinement, isolated import path,
+# whole-tree digest, and bytecode containment. These guard the trusted
+# harness the hosted replay runs from the default branch, so a candidate can
+# neither be proved against the base checkout's code nor leave bytecode in
+# the tree the digest covers. -----------------------------------------------
+
+
+def _load_bootstrap_worker():
+    import importlib.util
+
+    worker_path = REPO_ROOT / "scripts" / "hunter_trusted_orchestrator_replay_worker.py"
+    spec = importlib.util.spec_from_file_location("replay_bootstrap_worker", worker_path)
+    assert spec is not None and spec.loader is not None
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
+def _candidate_with_symlinked_module(tmp_path):
+    trusted = tmp_path / "trusted"
+    (trusted / "scripts").mkdir(parents=True)
+    (trusted / "scripts" / "hunter_review_orchestrator.py").write_text("TRUSTED = True\n", encoding="utf-8")
+    candidate = tmp_path / "candidate"
+    (candidate / "scripts").mkdir(parents=True)
+    (candidate / "scripts" / "hunter_review_orchestrator.py").symlink_to(
+        trusted / "scripts" / "hunter_review_orchestrator.py"
+    )
+    return candidate
+
+
+def _scripts_candidate(tmp_path, files):
+    candidate = tmp_path / "candidate"
+    (candidate / "scripts").mkdir(parents=True)
+    (candidate / "scripts" / "hunter_review_orchestrator.py").write_text("X = 1\n", encoding="utf-8")
+    for relative, content in files.items():
+        target = candidate / "scripts" / relative
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_bytes(content)
+    return candidate
+
+
+def test_symlinked_candidate_module_is_refused_for_digest_and_import(tmp_path):
+    worker = _load_bootstrap_worker()
+    candidate = _candidate_with_symlinked_module(tmp_path)
+    with pytest.raises(ValueError, match="symlink|outside"):
+        worker.candidate_module_digest(candidate, "A")
+    with pytest.raises(ValueError, match="symlink|outside"):
+        worker._import_candidate(candidate, "hunter_review_orchestrator")
+
+
+def test_regular_confined_candidate_module_is_accepted(tmp_path):
+    worker = _load_bootstrap_worker()
+    candidate = tmp_path / "candidate"
+    (candidate / "scripts").mkdir(parents=True)
+    (candidate / "scripts" / "hunter_review_orchestrator.py").write_text("X = 1\n", encoding="utf-8")
+    assert len(worker.candidate_module_digest(candidate, "A")) == 64
+    worker.assert_candidate_scripts_confined(candidate)
+
+
+def test_symlinked_directory_in_candidate_scripts_tree_is_refused(tmp_path):
+    worker = _load_bootstrap_worker()
+    outside = tmp_path / "outside"
+    outside.mkdir()
+    candidate = tmp_path / "candidate"
+    (candidate / "scripts").mkdir(parents=True)
+    (candidate / "scripts" / "helpers").symlink_to(outside, target_is_directory=True)
+    with pytest.raises(ValueError, match="symlink"):
+        worker.assert_candidate_scripts_confined(candidate)
+
+
+def test_import_path_drops_the_trusted_scripts_directory_so_missing_helpers_do_not_fall_back(tmp_path):
+    worker = _load_bootstrap_worker()
+    trusted = tmp_path / "trusted" / "scripts"
+    trusted.mkdir(parents=True)
+    candidate_scripts = tmp_path / "candidate" / "scripts"
+    candidate_scripts.mkdir(parents=True)
+    other = tmp_path / "site"
+    other.mkdir()
+    result = worker.isolated_import_path([str(trusted), str(other), str(candidate_scripts)], candidate_scripts, trusted)
+    assert result == [str(candidate_scripts.resolve()), str(other)]
+
+
+@pytest.mark.parametrize(
+    "relative",
+    ["hunter_helper.py", "hunter_pkg/__init__.py", "hunter_pkg/sub.py", "native.so", "__pycache__/x.cpython-311.pyc"],
+)
+def test_digest_binds_to_every_file_in_the_candidate_scripts_tree(tmp_path, relative):
+    worker = _load_bootstrap_worker()
+    candidate = _scripts_candidate(tmp_path, {relative: b"one"})
+    before = worker.candidate_module_digest(candidate, "A")
+    (candidate / "scripts" / relative).write_bytes(b"two")
+    assert worker.candidate_module_digest(candidate, "A") != before
+
+
+def test_adding_any_file_to_the_scripts_tree_changes_the_digest(tmp_path):
+    worker = _load_bootstrap_worker()
+    candidate = _scripts_candidate(tmp_path, {})
+    before = worker.candidate_module_digest(candidate, "A")
+    (candidate / "scripts" / "hunter_new.py").write_text("y = 1\n", encoding="utf-8")
+    assert worker.candidate_module_digest(candidate, "A") != before
+
+
+def test_a_declared_entry_module_missing_from_the_tree_is_refused(tmp_path):
+    worker = _load_bootstrap_worker()
+    candidate = tmp_path / "candidate"
+    (candidate / "scripts").mkdir(parents=True)
+    with pytest.raises(ValueError, match="missing"):
+        worker.candidate_module_digest(candidate, "A")
+
+
+def test_the_worker_never_writes_bytecode_into_the_candidate_tree():
+    _load_bootstrap_worker()
+    assert sys.dont_write_bytecode is True
