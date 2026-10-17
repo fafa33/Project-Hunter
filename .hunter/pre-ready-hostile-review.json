@@ -58,7 +58,7 @@
       "transaction-snapshot-consistency"
     ],
     "base_ref": "main",
-    "base_sha": "577f49955a39e611180d8db64c08f94b09cc6e65",
+    "base_sha": "577f499",
     "defect_families": [
       {
         "evidence": "Author-submitted evidence for independent hostile review, not reviewer approval.",
@@ -243,9 +243,9 @@
     ],
     "review_target_digest": "0d5892c7ba6d302aa1bf7c1905a8f7c8596f36600d268807599aac2ea2ad8e38"
   },
-  "review_id": "9c6b56b168be43a72f7fe20134f850dc15cfdb73a5b10c16a9808acffb408658",
+  "review_id": "e8a3d04e5a3461f58963b430eb3c64467720adc1397fafad7f3427938e6abbea",
   "review_request": {
-    "claims_id": "9c6b56b168be43a72f7fe20134f850dc15cfdb73a5b10c16a9808acffb408658",
+    "claims_id": "e8a3d04e5a3461f58963b430eb3c64467720adc1397fafad7f3427938e6abbea",
     "schema": "hunter.review-request.v1"
   },
   "schema": "hunter.pre-ready-hostile-review.v1"
