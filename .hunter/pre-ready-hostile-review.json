@@ -2,45 +2,39 @@
   "claims": {
     "acceptance_criteria": [
       {
-        "criterion": "the trusted replay worker resolves every candidate import, bare and package-qualified, inside the candidate checkout, and never loads code from the trusted default-branch checkout",
-        "evidence": "isolated_import_path removes the trusted scripts directory and its parent repository root (including the empty cwd entry) and prepends the candidate root and scripts directory; package-qualified and bare import regression tests cover it.",
-        "id": "AC-01",
+        "criterion": "Candidate replay executes only in the unprivileged pull_request validation workflow with read-only contents and blanked tokens, and that workflow publishes no status or check.",
+        "evidence": "Author-submitted evidence for independent hostile review, not reviewer approval.",
+        "id": "AC-1",
         "verdict": "satisfied"
       },
       {
-        "criterion": "a candidate helper the candidate did not ship fails closed with an import error instead of silently importing the trusted base checkout's copy",
-        "evidence": "Removing the trusted root makes an unshipped package-qualified helper an ImportError; test_missing_candidate_helper_fails_closed_instead_of_importing_the_trusted_base proves no base fallback.",
-        "id": "AC-02",
+        "criterion": "The privileged workflow_run publisher resolves the triggering run's own authoritative head SHA and refuses to publish unless that SHA equals the live pull-request head and the run is the latest validation run for that exact head.",
+        "evidence": "Author-submitted evidence for independent hostile review, not reviewer approval.",
+        "id": "AC-2",
         "verdict": "satisfied"
       },
       {
-        "criterion": "the candidate-module digest the receipt binds is reproducible from an independent fresh checkout of the same candidate head",
-        "evidence": "candidate_module_digest hashes the whole candidate scripts tree and verify_candidate_module_digests recomputes it from an independent fresh checkout; unchanged by this fix.",
-        "id": "AC-03",
+        "criterion": "The publisher checks out and executes no candidate code, and fails closed unless the exact validation workflow definition the triggering run executed is byte-identical to the trusted base-approved definition and both validation jobs concluded successfully.",
+        "evidence": "Author-submitted evidence for independent hostile review, not reviewer approval.",
+        "id": "AC-3",
         "verdict": "satisfied"
       },
       {
-        "criterion": "mutating the candidate scripts tree during scenario execution is detected and fails the scenario closed, rather than reporting a pristine-tree digest for bytes that were not executed",
-        "evidence": "main() re-takes the digest after the scenario and fails the scenario closed when it differs; test_main_fails_closed_when_the_candidate_tree_mutates_during_execution and the positive control cover it.",
-        "id": "AC-04",
+        "criterion": "The replay worker executes candidate code in a fixed-binary, fail-closed, network-isolated sandbox with a credential-free environment allowlist, restoring the canonical fixture bytes before every worker launch.",
+        "evidence": "Author-submitted evidence for independent hostile review, not reviewer approval.",
+        "id": "AC-4",
         "verdict": "satisfied"
       },
       {
-        "criterion": "focused deterministic tests cover candidate import-path confinement and executed-tree mutation detection",
-        "evidence": "Focused tests added in tests/test_hunter_trusted_orchestrator_replay.py; the suite passes (106 passed).",
-        "id": "AC-05",
+        "criterion": "Focused deterministic regression tests enforce the workflow trigger, the separated job permissions, the checkout-free publisher, the exact-head binding, the sandbox isolation, and the completed-collector-settled scenario boundary, and pass.",
+        "evidence": "Author-submitted evidence for independent hostile review, not reviewer approval.",
+        "id": "AC-5",
         "verdict": "satisfied"
       },
       {
-        "criterion": "the complete base-to-head diff is subjected to the applicable dpm defect-family checks and an independent exact-head hostile review request; the request is not represented as completed reviewer authority",
-        "evidence": "This request lists the 19 applicable DPM families for the changed paths; an independent exact-head hostile review is requested, never represented as completed reviewer authority.",
-        "id": "AC-06",
-        "verdict": "satisfied"
-      },
-      {
-        "criterion": "no automatic merge occurs, and no claim is made that this bootstrap resolves the broader untrusted-candidate sandbox, publisher, or workflow-binding gaps tracked for the main replay change",
-        "evidence": "This is a minimal base-owned bootstrap; it performs no automatic merge and does not claim to resolve the broader untrusted-candidate sandbox, publisher, or workflow-binding gaps.",
-        "id": "AC-07",
+        "criterion": "The change keeps mandatory formatting and mypy checks green, leaves the pull request in Draft, performs no automatic merge, and introduces no security-gate bypass.",
+        "evidence": "Author-submitted evidence for independent hostile review, not reviewer approval.",
+        "id": "AC-6",
         "verdict": "satisfied"
       }
     ],
@@ -58,146 +52,179 @@
       "transaction-snapshot-consistency"
     ],
     "base_ref": "main",
-    "base_sha": "84ff369077221acef4e57c377995a01a48c7ca7b",
+    "base_sha": "ec098a9daebad890a1e86c2819eda618f7061ed4",
     "defect_families": [
       {
-        "evidence": "Applicable recurring-defect family DFF-007 included for independent exact-head review of PR #612; no reviewer approval asserted.",
+        "evidence": "Author requests independent assessment of this applicable defect family on the exact candidate diff.",
         "family": "DFF-007",
         "outcome": "clear"
       },
       {
-        "evidence": "Applicable recurring-defect family DFF-008 included for independent exact-head review of PR #612; no reviewer approval asserted.",
+        "evidence": "Author requests independent assessment of this applicable defect family on the exact candidate diff.",
         "family": "DFF-008",
         "outcome": "clear"
       },
       {
-        "evidence": "Applicable recurring-defect family DFF-009 included for independent exact-head review of PR #612; no reviewer approval asserted.",
+        "evidence": "Author requests independent assessment of this applicable defect family on the exact candidate diff.",
         "family": "DFF-009",
         "outcome": "clear"
       },
       {
-        "evidence": "Applicable recurring-defect family DFF-010 included for independent exact-head review of PR #612; no reviewer approval asserted.",
+        "evidence": "Author requests independent assessment of this applicable defect family on the exact candidate diff.",
         "family": "DFF-010",
         "outcome": "clear"
       },
       {
-        "evidence": "Applicable recurring-defect family DFF-011 included for independent exact-head review of PR #612; no reviewer approval asserted.",
+        "evidence": "Author requests independent assessment of this applicable defect family on the exact candidate diff.",
         "family": "DFF-011",
         "outcome": "clear"
       },
       {
-        "evidence": "Applicable recurring-defect family DFF-012 included for independent exact-head review of PR #612; no reviewer approval asserted.",
+        "evidence": "Author requests independent assessment of this applicable defect family on the exact candidate diff.",
         "family": "DFF-012",
         "outcome": "clear"
       },
       {
-        "evidence": "Applicable recurring-defect family DFF-013 included for independent exact-head review of PR #612; no reviewer approval asserted.",
+        "evidence": "Author requests independent assessment of this applicable defect family on the exact candidate diff.",
         "family": "DFF-013",
         "outcome": "clear"
       },
       {
-        "evidence": "Applicable recurring-defect family DFF-014 included for independent exact-head review of PR #612; no reviewer approval asserted.",
+        "evidence": "Author requests independent assessment of this applicable defect family on the exact candidate diff.",
         "family": "DFF-014",
         "outcome": "clear"
       },
       {
-        "evidence": "Applicable recurring-defect family DFF-015 included for independent exact-head review of PR #612; no reviewer approval asserted.",
+        "evidence": "Author requests independent assessment of this applicable defect family on the exact candidate diff.",
         "family": "DFF-015",
         "outcome": "clear"
       },
       {
-        "evidence": "Applicable recurring-defect family DFF-016 included for independent exact-head review of PR #612; no reviewer approval asserted.",
+        "evidence": "Author requests independent assessment of this applicable defect family on the exact candidate diff.",
         "family": "DFF-016",
         "outcome": "clear"
       },
       {
-        "evidence": "Applicable recurring-defect family DFF-019 included for independent exact-head review of PR #612; no reviewer approval asserted.",
+        "evidence": "Author requests independent assessment of this applicable defect family on the exact candidate diff.",
         "family": "DFF-019",
         "outcome": "clear"
       },
       {
-        "evidence": "Applicable recurring-defect family DFF-020 included for independent exact-head review of PR #612; no reviewer approval asserted.",
+        "evidence": "Author requests independent assessment of this applicable defect family on the exact candidate diff.",
         "family": "DFF-020",
         "outcome": "clear"
       },
       {
-        "evidence": "Applicable recurring-defect family DFF-021 included for independent exact-head review of PR #612; no reviewer approval asserted.",
+        "evidence": "Author requests independent assessment of this applicable defect family on the exact candidate diff.",
         "family": "DFF-021",
         "outcome": "clear"
       },
       {
-        "evidence": "Applicable recurring-defect family DFF-023 included for independent exact-head review of PR #612; no reviewer approval asserted.",
+        "evidence": "Author requests independent assessment of this applicable defect family on the exact candidate diff.",
         "family": "DFF-023",
         "outcome": "clear"
       },
       {
-        "evidence": "Applicable recurring-defect family DFF-029 included for independent exact-head review of PR #612; no reviewer approval asserted.",
+        "evidence": "Author requests independent assessment of this applicable defect family on the exact candidate diff.",
+        "family": "DFF-025",
+        "outcome": "clear"
+      },
+      {
+        "evidence": "Author requests independent assessment of this applicable defect family on the exact candidate diff.",
+        "family": "DFF-027",
+        "outcome": "clear"
+      },
+      {
+        "evidence": "Author requests independent assessment of this applicable defect family on the exact candidate diff.",
+        "family": "DFF-028",
+        "outcome": "clear"
+      },
+      {
+        "evidence": "Author requests independent assessment of this applicable defect family on the exact candidate diff.",
         "family": "DFF-029",
         "outcome": "clear"
       },
       {
-        "evidence": "Applicable recurring-defect family DFF-033 included for independent exact-head review of PR #612; no reviewer approval asserted.",
+        "evidence": "Author requests independent assessment of this applicable defect family on the exact candidate diff.",
         "family": "DFF-033",
         "outcome": "clear"
       },
       {
-        "evidence": "Applicable recurring-defect family DFF-035 included for independent exact-head review of PR #612; no reviewer approval asserted.",
+        "evidence": "Author requests independent assessment of this applicable defect family on the exact candidate diff.",
         "family": "DFF-035",
         "outcome": "clear"
       },
       {
-        "evidence": "Applicable recurring-defect family DFF-040 included for independent exact-head review of PR #612; no reviewer approval asserted.",
+        "evidence": "Author requests independent assessment of this applicable defect family on the exact candidate diff.",
+        "family": "DFF-036",
+        "outcome": "clear"
+      },
+      {
+        "evidence": "Author requests independent assessment of this applicable defect family on the exact candidate diff.",
         "family": "DFF-040",
         "outcome": "clear"
       },
       {
-        "evidence": "Applicable recurring-defect family DFF-041 included for independent exact-head review of PR #612; no reviewer approval asserted.",
+        "evidence": "Author requests independent assessment of this applicable defect family on the exact candidate diff.",
         "family": "DFF-041",
+        "outcome": "clear"
+      },
+      {
+        "evidence": "Author requests independent assessment of this applicable defect family on the exact candidate diff.",
+        "family": "DFF-046",
+        "outcome": "clear"
+      },
+      {
+        "evidence": "Author requests independent assessment of this applicable defect family on the exact candidate diff.",
+        "family": "DFF-052",
         "outcome": "clear"
       }
     ],
-    "findings": [
-      {
-        "evidence": "Codex P1: a package-qualified candidate import could resolve to the trusted repository root. isolated_import_path now drops the trusted scripts directory and its parent root (including the empty cwd entry) and prepends the candidate root and scripts directory.",
-        "id": "PRRT_kwDOTRDHr86te6lv",
-        "resolution": "resolved",
-        "resolution_evidence": {
-          "correction": "b4538ec49a42d8ac6da99052964a67500ea069b5",
-          "regression_test": "tests/test_hunter_trusted_orchestrator_replay.py"
-        },
-        "severity": "blocking"
-      },
-      {
-        "evidence": "Codex P1: the digest was bound before execution, so a mid-scenario mutation executed unbound bytes. main() now re-takes the whole-tree digest after the scenario and fails closed on any difference.",
-        "id": "PRRT_kwDOTRDHr86te6lx",
-        "resolution": "resolved",
-        "resolution_evidence": {
-          "correction": "b4538ec49a42d8ac6da99052964a67500ea069b5",
-          "regression_test": "tests/test_hunter_trusted_orchestrator_replay.py"
-        },
-        "severity": "blocking"
-      }
-    ],
-    "issue": "613",
+    "findings": [],
+    "issue": "614",
     "review_target": [
       {
-        "blob_sha": "0d32a9e53ab05308a7aa138cf76710264daf9e49",
+        "blob_sha": "6c7c9bab2a51cc1f5cfb0f9479e57d6c0a5735de",
+        "path": ".github/workflows/hunter-trusted-orchestrator-replay-publish.yml",
+        "previous_path": "",
+        "status": "modified"
+      },
+      {
+        "blob_sha": "5c3be55ba932ac57414e22ee3577fe5cc02bfaa4",
+        "path": ".github/workflows/hunter-trusted-orchestrator-replay-validate.yml",
+        "previous_path": "",
+        "status": "modified"
+      },
+      {
+        "blob_sha": "32fc536605f5330865988b925a256c4c81f7ccae",
+        "path": "docs/ARCHITECTURE_AUDITS/adpr-0012-source-handling-independent-audit.md",
+        "previous_path": "",
+        "status": "modified"
+      },
+      {
+        "blob_sha": "420795d52569d0ca7610a6ad017f5195062f7b7f",
+        "path": "scripts/hunter_trusted_orchestrator_replay.py",
+        "previous_path": "",
+        "status": "modified"
+      },
+      {
+        "blob_sha": "9432eab2d649a11978cc59d4363d9eb04062a799",
         "path": "scripts/hunter_trusted_orchestrator_replay_worker.py",
         "previous_path": "",
         "status": "modified"
       },
       {
-        "blob_sha": "1536457e9f21e1be117162330edc0f764e35edbb",
+        "blob_sha": "780a761785143e7f111eae9c581b377b9863dce1",
         "path": "tests/test_hunter_trusted_orchestrator_replay.py",
         "previous_path": "",
         "status": "modified"
       }
     ],
-    "review_target_digest": "411f281cd8871d671caa843b3c039f99812093981a7807fe7615718d35b30080"
+    "review_target_digest": "79a27d5a56bfa67cf1f37e4804c0412ed9e2684e345ee0a810ed6e20b58ae965"
   },
-  "review_id": "cd45964f6e4b029b1d207cc5e39b1ce03b323e589d8b88ccd9af687dae8845d5",
+  "review_id": "0ee0a67591b879b363ff8d15e8929d49007dbb3da1a7a6a916aeb236bea82eca",
   "review_request": {
-    "claims_id": "cd45964f6e4b029b1d207cc5e39b1ce03b323e589d8b88ccd9af687dae8845d5",
+    "claims_id": "0ee0a67591b879b363ff8d15e8929d49007dbb3da1a7a6a916aeb236bea82eca",
     "schema": "hunter.review-request.v1"
   },
   "schema": "hunter.pre-ready-hostile-review.v1"

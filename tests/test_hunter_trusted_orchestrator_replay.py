@@ -25,6 +25,7 @@ import tempfile
 from pathlib import Path
 
 import hunter_trusted_orchestrator_replay as replay
+import hunter_trusted_orchestrator_replay_worker as worker
 import pytest
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
@@ -509,6 +510,16 @@ def test_scenario_fails_against_a_candidate_that_forges_a_passing_payload_and_ex
     result = replay._run_scenario("B", root, _fixture_path(tmp_path), workspace_root=tmp_path)
     assert result["outcome"] == "fail"
     assert "trusted completion message" in result["error"]
+
+
+def test_untrusted_candidate_cannot_change_scenario_dispatch(tmp_path):
+    candidate_source = """import __main__
+if hasattr(__main__, 'SCENARIOS'):
+    __main__.SCENARIOS['B'] = lambda *_: {'dispatches': 1}
+"""
+    root = _candidate_root(tmp_path, orchestrator_src=candidate_source)
+    result = replay._run_scenario("B", root, _fixture_path(tmp_path), workspace_root=tmp_path)
+    assert result["outcome"] == "fail", result
 
 
 # --- Scenario G: WAITING_FOR_REVIEWER -> pending classification ------------
@@ -1180,10 +1191,11 @@ def test_publish_workflow_contains_no_git_clone_fetch_or_checkout_commands():
 
 
 def test_publish_workflow_executes_no_repository_script():
-    text = _publish_workflow_text()
-    # The only `python` invocations left are `python - <<'PY' ... PY`
-    # heredocs running this file's own inline, non-repository script text --
-    # never `python scripts/...` (a repository-hosted script path).
+    doc = _publish_workflow_doc()
+    steps = doc["jobs"]["publish-proof"]["steps"]
+    text = "\n".join(step.get("run", "") for step in steps)
+    # Only the credential-free trusted-replay job runs the base-controlled
+    # repository scripts. The status writer must remain checkout-free.
     assert "python scripts/" not in text
     assert re.search(r"^\s*python - <<'PY'\s*$", text, re.MULTILINE)
 
@@ -1222,6 +1234,7 @@ def test_publish_workflow_pr_head_binding_remains_fail_closed():
     context_step = next(s for s in steps if s.get("id") == "context")
     assert context_step["env"]["RUN_ID"] == "${{ github.event.workflow_run.id }}"
     assert "pull_requests[0].number" in context_step["run"]
+    assert 'if [ "$head_sha" != "$run_sha" ]' in context_step["run"]
     assert "exit 1" in context_step["run"]
 
 
@@ -1256,6 +1269,8 @@ def _run_inline_validate_script(
     env.update(
         {
             "WORKFLOW_CONCLUSION": conclusion,
+            "REPLAY_JOB_RESULT": "success",
+            "DIGEST_JOB_RESULT": "success",
             "PR_NUMBER": str(pr_number),
             "CANDIDATE_SHA": candidate_sha,
             "GITHUB_OUTPUT": str(github_output),
@@ -1280,6 +1295,11 @@ def _write_trusted_fetched_files(work: Path) -> None:
         encoding="utf-8",
     )
     (work / "trusted-main-sha.fetched").write_text(replay._trusted_harness_sha(), encoding="utf-8")
+    workflow_text = (repo_root / ".github" / "workflows" / "hunter-trusted-orchestrator-replay-validate.yml").read_text(
+        encoding="utf-8"
+    )
+    (work / "executed-validate-workflow.fetched").write_text(workflow_text, encoding="utf-8")
+    (work / "trusted-validate-workflow.fetched").write_text(workflow_text, encoding="utf-8")
 
 
 def test_checkout_free_inline_validator_accepts_a_genuinely_good_receipt(tmp_path):
@@ -1317,6 +1337,26 @@ def test_checkout_free_inline_validator_rejects_a_forged_candidate_sha(tmp_path)
     # Same disposition as the trusted module's own validation for the same forgery.
     module_errors = replay.validate_receipt_trusted_fields(receipt, pr_number=535, candidate_sha="a" * 40)
     assert any("candidate_sha" in e for e in module_errors)
+
+
+def test_checkout_free_inline_validator_rejects_a_tampered_executed_workflow_definition(tmp_path):
+    receipt, _root = _good_receipt(tmp_path)
+    (tmp_path / "replay-receipt.json").write_text(json.dumps(receipt), encoding="utf-8")
+    (tmp_path / "digest-check.json").write_text(json.dumps({"errors": []}), encoding="utf-8")
+    _write_trusted_fetched_files(tmp_path)
+    # A candidate keeps the workflow name and every receipt field intact while
+    # swapping the executed definition's trigger/steps/permissions.
+    (tmp_path / "executed-validate-workflow.fetched").write_text(
+        "name: Hunter / Trusted Orchestrator Replay Validate\non:\n  pull_request_target:\n",
+        encoding="utf-8",
+    )
+
+    returncode, _stdout, stderr, github_output = _run_inline_validate_script(
+        tmp_path, conclusion="success", pr_number=535, candidate_sha="a" * 40
+    )
+    assert returncode == 0  # the inline script itself exits 0; failure is reported via GITHUB_OUTPUT
+    assert "trusted base-approved definition" in stderr
+    assert "result=failure" in github_output
 
 
 def test_checkout_free_inline_validator_rejects_incomplete_evidence():
@@ -1493,6 +1533,420 @@ def test_cmd_run_and_cmd_validate_never_forward_raw_argparse_pr_or_sha():
         assert (
             source.count("args.candidate_sha") == 1
         ), f"{name} references args.candidate_sha somewhere other than identity construction"
+
+
+def test_trusted_replay_workflows_separate_candidate_and_publisher_permissions():
+    import yaml
+
+    root = Path(__file__).resolve().parents[1] / ".github" / "workflows"
+    validate = yaml.safe_load((root / "hunter-trusted-orchestrator-replay-validate.yml").read_text())
+    publish = yaml.safe_load((root / "hunter-trusted-orchestrator-replay-publish.yml").read_text())
+    # The candidate-touching validate workflow runs unprivileged on
+    # `pull_request`, never the privileged `pull_request_target`; the
+    # privileged publisher (workflow_run, base-owned) independently
+    # re-derives every trusted quantity and re-verifies the executed
+    # workflow definition against the trusted base definition.
+    validate_header = (root / "hunter-trusted-orchestrator-replay-validate.yml").read_text().split("jobs:", 1)[0]
+    assert "pull_request:" in validate_header
+    assert "pull_request_target:" not in validate_header
+    assert "workflow_dispatch:" not in validate_header
+    assert "workflow_run:" not in validate_header
+    assert validate["jobs"]
+    for job in validate["jobs"].values():
+        checkouts = [step for step in job["steps"] if "actions/checkout" in step.get("uses", "")]
+        assert any(
+            step.get("with", {}).get("ref") == "${{ github.event.repository.default_branch }}" for step in checkouts
+        )
+        assert all(step.get("with", {}).get("ref") != "${{ github.head_ref }}" for step in checkouts)
+    assert "workflow_run:" in (root / "hunter-trusted-orchestrator-replay-publish.yml").read_text().split("jobs:", 1)[0]
+    for job in validate["jobs"].values():
+        assert job["permissions"] == {"contents": "read"}
+        assert not any("statuses" in str(step) for step in job["steps"])
+        for step in job["steps"]:
+            if "uses" in step and "actions/checkout" in step["uses"]:
+                assert step["with"]["persist-credentials"] is False
+    publisher = publish["jobs"]["publish-proof"]
+    assert publisher["permissions"]["statuses"] == "write"
+    assert publisher["permissions"]["pull-requests"] == "read"
+    assert all("actions/checkout" not in step.get("uses", "") for step in publisher["steps"])
+    assert 'if [ "$head_sha" != "$run_sha" ]' in publisher["steps"][0]["run"]
+
+
+def test_replay_publisher_uses_only_upstream_unprivileged_evidence():
+    doc = _publish_workflow_doc()
+    jobs = doc["jobs"]
+    assert set(jobs) == {"publish-proof"}
+    publisher = jobs["publish-proof"]
+    assert "needs" not in publisher
+    assert "always()" in publisher["if"]
+    assert publisher["permissions"]["statuses"] == "write"
+    downloads = [step for step in publisher["steps"] if "download-artifact" in step.get("uses", "")]
+    assert len(downloads) == 2
+    assert {step["with"]["name"] for step in downloads} == {"replay-receipt", "digest-check"}
+    assert all(step["with"]["run-id"] == "${{ github.event.workflow_run.id }}" for step in downloads)
+    assert all(step["with"]["github-token"] == "${{ github.token }}" for step in downloads)
+    assert all(step["continue-on-error"] is True for step in downloads)
+    assert not any("actions/checkout" in step.get("uses", "") for step in publisher["steps"])
+    assert not any(
+        "python scripts/hunter_trusted_orchestrator_replay.py" in step.get("run", "") for step in publisher["steps"]
+    )
+    validator = next(step for step in publisher["steps"] if step.get("id") == "validate_receipt")
+    assert 'conclusion != "success"' in validator["run"]
+
+
+def test_inline_validator_fails_closed_on_failed_replay_job_even_with_forged_green_artifacts(tmp_path):
+    receipt, _ = _good_receipt(tmp_path)
+    (tmp_path / "replay-receipt.json").write_text(json.dumps(receipt), encoding="utf-8")
+    (tmp_path / "digest-check.json").write_text(json.dumps({"errors": []}), encoding="utf-8")
+    _write_trusted_fetched_files(tmp_path)
+    script = _extract_inline_validate_script()
+    import os as _os
+
+    for failed_job in ("WORKFLOW_CONCLUSION", "REPLAY_JOB_RESULT", "DIGEST_JOB_RESULT"):
+        work = tmp_path / failed_job
+        work.mkdir()
+        for name in (
+            "replay-receipt.json",
+            "digest-check.json",
+            "trusted-controller.fetched",
+            "trusted-worker.fetched",
+            "trusted-definition.fetched",
+            "trusted-main-sha.fetched",
+        ):
+            (work / name).write_bytes((tmp_path / name).read_bytes())
+        output = work / "output.txt"
+        env = dict(
+            _os.environ,
+            WORKFLOW_CONCLUSION="success",
+            REPLAY_JOB_RESULT="success",
+            DIGEST_JOB_RESULT="success",
+            PR_NUMBER="535",
+            CANDIDATE_SHA="a" * 40,
+            GITHUB_OUTPUT=str(output),
+        )
+        env[failed_job] = "failure"
+        result = subprocess.run([sys.executable, "-c", script], cwd=work, env=env, capture_output=True, text=True)
+        assert result.returncode == 0, result.stderr
+        assert "result=failure" in output.read_text()
+
+
+def test_replay_failure_cannot_skip_status_publication():
+    jobs = _publish_workflow_doc()["jobs"]
+    assert "always()" in jobs["publish-proof"]["if"]
+    assert "!cancelled()" in jobs["publish-proof"]["if"]
+    assert jobs["publish-proof"]["permissions"]["statuses"] == "write"
+    assert set(jobs) == {"publish-proof"}
+
+
+def test_status_publication_runs_after_upstream_failure_so_status_never_stays_pending():
+    import yaml
+
+    doc = yaml.safe_load(Path(".github/workflows/hunter-trusted-orchestrator-replay-publish.yml").read_text())
+    steps = doc["jobs"]["publish-proof"]["steps"]
+    publish = next(step for step in steps if step.get("name") == "Publish exact-head PR-bound status")
+    assert "always()" in publish["if"]
+    assert "steps.context.outcome" in publish["if"]
+
+
+def test_publisher_binds_to_the_runs_authoritative_head_sha_not_the_dynamic_pr_head_field():
+    import yaml
+
+    doc = yaml.safe_load(Path(".github/workflows/hunter-trusted-orchestrator-replay-publish.yml").read_text())
+    context = next(s for s in doc["jobs"]["publish-proof"]["steps"] if s.get("id") == "context")["run"]
+    # `.pull_requests[0].head.sha` is resolved dynamically by the API to the
+    # PR's *current* head, so it cannot identify the commit the triggering run
+    # actually executed; the run's own `head_sha` is authoritative.
+    assert ".head_sha" in context
+    assert "pull_requests[0].head.sha" not in context
+    assert doc["jobs"]["publish-proof"]["concurrency"]["cancel-in-progress"] is False
+
+
+def test_publisher_accepts_ref_qualified_validation_run_path_only_for_expected_workflow():
+    import subprocess
+
+    doc = _publish_workflow_doc()
+    context = next(step for step in doc["jobs"]["publish-proof"]["steps"] if step.get("id") == "context")["run"]
+    # Execute the actual publisher guard rather than copying its comparison.
+    guard = context[context.index('if [ "${run_path%%@*}"') :]
+    guard = guard[: guard.index('if [ -z "$pr_number" ]')]
+    expected = ".github/workflows/hunter-trusted-orchestrator-replay-validate.yml"
+    for path, accepted in (
+        (expected, True),
+        (expected + "@refs/heads/main", True),
+        (expected + "@feature-branch", True),
+        (".github/workflows/untrusted.yml@refs/heads/main", False),
+        (expected + ".evil@main", False),
+    ):
+        result = subprocess.run(
+            ["bash", "-c", 'run_path="$1"\n' + guard, "guard", path],
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        assert (result.returncode == 0) is accepted, (path, result.stderr)
+
+
+def test_publisher_latest_run_match_is_bound_to_the_exact_run_head_sha():
+    import yaml
+
+    doc = yaml.safe_load(Path(".github/workflows/hunter-trusted-orchestrator-replay-publish.yml").read_text())
+    context = next(s for s in doc["jobs"]["publish-proof"]["steps"] if s.get("id") == "context")["run"]
+    assert "pull_requests[0].number" in context
+    assert "$4 == sha" in context and '-v sha="$run_sha"' in context
+    assert "$3 == sha && $4 == pr" not in context and '-v pr="$pr_number"' not in context
+
+
+def test_publisher_latest_run_lookup_is_paginated_and_bound_to_exact_pr_head():
+    import yaml
+
+    doc = yaml.safe_load(Path(".github/workflows/hunter-trusted-orchestrator-replay-publish.yml").read_text())
+    context = next(s for s in doc["jobs"]["publish-proof"]["steps"] if s.get("id") == "context")["run"]
+    assert "--paginate" in context
+    assert "-f event=pull_request" in context
+    assert ".head_sha" in context
+    assert "pull_requests[0].head.sha" not in context
+    assert '-v sha="$run_sha"' in context
+    assert "$4 == sha" in context
+    assert 'if [ "$latest_run" != "$RUN_ID" ]; then' in context
+    assert '-f branch="$head_ref"' not in context
+
+
+def test_hosted_replay_fails_closed_without_network_namespace(monkeypatch):
+    monkeypatch.setenv("HUNTER_REPLAY_REQUIRE_NETNS", "1")
+    monkeypatch.setattr(replay.Path, "is_file", lambda self: False if str(self) == "/usr/bin/bwrap" else True)
+    with pytest.raises(RuntimeError, match="requires executable /usr/bin/bwrap"):
+        replay._network_isolated_worker_command([sys.executable, "-c", "pass"])
+
+
+def test_hosted_replay_uses_fixed_network_namespace_binary(monkeypatch):
+    monkeypatch.setenv("HUNTER_REPLAY_REQUIRE_NETNS", "1")
+    monkeypatch.setattr(replay.Path, "is_file", lambda self: True)
+    monkeypatch.setattr(replay.os, "access", lambda *_args: True)
+    command = replay._network_isolated_worker_command([sys.executable, "-c", "pass"])
+    assert command[0] == "/usr/bin/bwrap"
+    assert "--unshare-net" in command
+    assert command[-3:] == [sys.executable, "-c", "pass"]
+
+
+def test_hosted_netns_provisioning_lifts_the_apparmor_userns_restriction_before_the_first_bwrap_use():
+    import yaml
+
+    doc = yaml.safe_load(Path(".github/workflows/hunter-trusted-orchestrator-replay-validate.yml").read_text())
+    steps = [step for job in doc["jobs"].values() for step in job["steps"]]
+    provision = next(step for step in steps if "network namespace" in step.get("name", ""))["run"]
+    sysctl = provision.index("kernel.apparmor_restrict_unprivileged_userns=0")
+    assert sysctl < provision.index("/usr/bin/bwrap --die-with-parent")
+
+
+def _candidate_with_symlinked_module(tmp_path):
+    trusted = tmp_path / "trusted"
+    (trusted / "scripts").mkdir(parents=True)
+    (trusted / "scripts" / "hunter_review_orchestrator.py").write_text("TRUSTED = True\n", encoding="utf-8")
+    candidate = tmp_path / "candidate"
+    (candidate / "scripts").mkdir(parents=True)
+    (candidate / "scripts" / "hunter_review_orchestrator.py").symlink_to(
+        trusted / "scripts" / "hunter_review_orchestrator.py"
+    )
+    return candidate
+
+
+def test_symlinked_candidate_module_is_refused_for_digest_and_import(tmp_path):
+    candidate = _candidate_with_symlinked_module(tmp_path)
+    with pytest.raises(ValueError, match="symlink|outside"):
+        worker.candidate_module_digest(candidate, "A")
+    with pytest.raises(ValueError, match="symlink|outside"):
+        worker._import_candidate(candidate, "hunter_review_orchestrator")
+
+
+def test_regular_confined_candidate_module_is_accepted(tmp_path):
+    candidate = tmp_path / "candidate"
+    (candidate / "scripts").mkdir(parents=True)
+    (candidate / "scripts" / "hunter_review_orchestrator.py").write_text("X = 1\n", encoding="utf-8")
+    assert len(worker.candidate_module_digest(candidate, "A")) == 64
+    worker.assert_candidate_scripts_confined(candidate)
+
+
+def test_publisher_resolves_both_validation_job_conclusions_from_the_triggering_run():
+    import yaml
+
+    doc = yaml.safe_load(Path(".github/workflows/hunter-trusted-orchestrator-replay-publish.yml").read_text())
+    steps = doc["jobs"]["publish-proof"]["steps"]
+    context = next(step for step in steps if step.get("id") == "context")["run"]
+    assert "actions/runs/${RUN_ID}/jobs" in context
+    assert (
+        "Trusted Candidate Orchestrator Replay" in context
+        and "Independently Verify Candidate Module Digests" in context
+    )
+    assert "${replay_job:-missing}" in context and "${digest_job:-missing}" in context
+    validator = next(step for step in steps if step.get("id") == "validate_receipt")
+    assert validator["env"]["REPLAY_JOB_RESULT"] == "${{ steps.context.outputs.replay_job_result }}"
+    assert validator["env"]["DIGEST_JOB_RESULT"] == "${{ steps.context.outputs.digest_job_result }}"
+
+
+def test_symlinked_directory_in_candidate_scripts_tree_is_refused(tmp_path):
+    outside = tmp_path / "outside"
+    outside.mkdir()
+    (outside / "module.py").write_text("X = 1\n", encoding="utf-8")
+    candidate = tmp_path / "candidate"
+    (candidate / "scripts").mkdir(parents=True)
+    (candidate / "scripts" / "helpers").symlink_to(outside, target_is_directory=True)
+    with pytest.raises(ValueError, match="symlink"):
+        worker.assert_candidate_scripts_confined(candidate)
+
+
+def test_worker_environment_is_an_allowlist_and_drops_runner_credentials(monkeypatch):
+    for name in ("ACTIONS_RUNTIME_TOKEN", "ACTIONS_ID_TOKEN_REQUEST_TOKEN", "GITHUB_TOKEN", "GH_TOKEN", "SOME_SECRET"):
+        monkeypatch.setenv(name, "secret-value")
+    monkeypatch.setenv("PATH", "/usr/bin")
+    env = replay._isolated_env()
+    assert "secret-value" not in env.values()
+    assert not any(name in env for name in ("ACTIONS_RUNTIME_TOKEN", "ACTIONS_ID_TOKEN_REQUEST_TOKEN", "SOME_SECRET"))
+    assert env["GITHUB_TOKEN"] == "" and env["GH_TOKEN"] == "" and env["PATH"] == "/usr/bin"
+
+
+def test_replay_step_launches_the_sandbox_with_a_cleared_environment():
+    import yaml
+
+    doc = yaml.safe_load(Path(".github/workflows/hunter-trusted-orchestrator-replay-validate.yml").read_text())
+    steps = [step for job in doc["jobs"].values() for step in job["steps"]]
+    run = next(step for step in steps if step.get("name", "").startswith("Run trusted candidate"))["run"]
+    assert "env -i " in run and run.index("env -i ") < run.index("/usr/bin/bwrap")
+
+
+def test_import_path_drops_the_trusted_scripts_directory_so_missing_helpers_do_not_fall_back(tmp_path):
+    trusted = tmp_path / "trusted" / "scripts"
+    trusted.mkdir(parents=True)
+    candidate_scripts = tmp_path / "candidate" / "scripts"
+    candidate_scripts.mkdir(parents=True)
+    other = tmp_path / "site"
+    other.mkdir()
+    result = worker.isolated_import_path(
+        [str(trusted), str(other), str(candidate_scripts)], candidate_scripts.parent, trusted
+    )
+    assert result == [str(candidate_scripts.resolve()), str(candidate_scripts.parent.resolve()), str(other)]
+
+
+def test_replay_sandbox_uses_a_private_dev_tree_not_the_host_devices():
+    import yaml
+
+    doc = yaml.safe_load(Path(".github/workflows/hunter-trusted-orchestrator-replay-validate.yml").read_text())
+    runs = "\n".join(step.get("run", "") for job in doc["jobs"].values() for step in job["steps"])
+    assert "--dev-bind" not in runs
+    assert runs.count("--dev /dev") == 2
+
+
+def test_replay_sandboxes_mask_host_run_sockets_after_binding_the_host_root(monkeypatch):
+    monkeypatch.setenv("HUNTER_REPLAY_REQUIRE_NETNS", "1")
+    monkeypatch.setattr(replay.Path, "is_file", lambda self: True)
+    monkeypatch.setattr(replay.os, "access", lambda *_args: True)
+    import yaml
+
+    doc = yaml.safe_load(Path(".github/workflows/hunter-trusted-orchestrator-replay-validate.yml").read_text())
+    runs = "\n".join(step.get("run", "") for job in doc["jobs"].values() for step in job["steps"])
+    assert runs.count("--tmpfs /run") == runs.count("--ro-bind / /") == 2
+    assert all(
+        line.index("--ro-bind / /") < line.index("--tmpfs /run")
+        for line in runs.splitlines()
+        if "--ro-bind / /" in line
+    )
+    command = replay._network_isolated_worker_command(["python", "w.py"])
+    assert command.index("--ro-bind") < command.index("/run") and command[command.index("/run") - 1] == "--tmpfs"
+
+
+def test_fixture_is_restored_before_each_worker_launch(tmp_path, monkeypatch):
+    fixture = tmp_path / "fixture.json"
+    victim = tmp_path / "victim.txt"
+    victim.write_text("keep", encoding="utf-8")
+    fixture.symlink_to(victim)
+    seen = []
+
+    def fake_run(*_args, **_kwargs):
+        seen.append(fixture.read_text(encoding="utf-8"))
+        raise RuntimeError("stop")
+
+    monkeypatch.setattr(replay.subprocess, "run", fake_run)
+    with pytest.raises(RuntimeError, match="stop"):
+        replay._run_scenario("A", tmp_path / "candidate", fixture, workspace_root=tmp_path)
+    assert json.loads(seen[0]) == replay.FIXTURE
+    assert not fixture.is_symlink() and victim.read_text(encoding="utf-8") == "keep"
+
+
+def _scripts_candidate(tmp_path, files):
+    candidate = tmp_path / "candidate"
+    (candidate / "scripts").mkdir(parents=True)
+    (candidate / "scripts" / "hunter_review_orchestrator.py").write_text("X = 1\n", encoding="utf-8")
+    for relative, content in files.items():
+        target = candidate / "scripts" / relative
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_bytes(content)
+    return candidate
+
+
+@pytest.mark.parametrize(
+    "relative",
+    ["hunter_helper.py", "hunter_pkg/__init__.py", "hunter_pkg/sub.py", "native.so", "__pycache__/x.cpython-311.pyc"],
+)
+def test_digest_binds_to_every_file_in_the_candidate_scripts_tree(tmp_path, relative):
+    candidate = _scripts_candidate(tmp_path, {relative: b"one"})
+    before = worker.candidate_module_digest(candidate, "A")
+    (candidate / "scripts" / relative).write_bytes(b"two")
+    assert worker.candidate_module_digest(candidate, "A") != before
+
+
+def test_adding_any_file_to_the_scripts_tree_changes_the_digest(tmp_path):
+    candidate = _scripts_candidate(tmp_path, {})
+    before = worker.candidate_module_digest(candidate, "A")
+    (candidate / "scripts" / "hunter_new.py").write_text("y = 1\n", encoding="utf-8")
+    assert worker.candidate_module_digest(candidate, "A") != before
+
+
+def test_a_declared_entry_module_missing_from_the_tree_is_refused(tmp_path):
+    candidate = tmp_path / "candidate"
+    (candidate / "scripts").mkdir(parents=True)
+    with pytest.raises(ValueError, match="missing"):
+        worker.candidate_module_digest(candidate, "A")
+
+
+def test_the_worker_never_writes_bytecode_into_the_candidate_tree():
+    assert sys.dont_write_bytecode is True
+
+
+def test_publisher_rechecks_the_latest_run_immediately_before_publishing():
+    import yaml
+
+    doc = yaml.safe_load(Path(".github/workflows/hunter-trusted-orchestrator-replay-publish.yml").read_text())
+    steps = doc["jobs"]["publish-proof"]["steps"]
+    names = [step.get("id") or step.get("name") for step in steps]
+    recheck = next(step for step in steps if step.get("id") == "recheck")
+    publish = next(step for step in steps if step.get("name") == "Publish exact-head PR-bound status")
+    assert names.index("recheck") < names.index(publish["name"])
+    assert "no longer the latest validation run" in recheck["run"] and "exit 1" in recheck["run"]
+    assert "--paginate" in recheck["run"]
+    assert ".head.sha" in recheck["run"] and 'pr_head" != "$HEAD_SHA"' in recheck["run"]
+    assert "-f event=pull_request" in recheck["run"]
+    assert "steps.recheck.outcome == 'success'" in publish["if"]
+
+
+def test_replay_step_binds_the_trusted_harness_and_candidate_read_only_over_the_writable_workspace():
+    import yaml
+
+    doc = yaml.safe_load(Path(".github/workflows/hunter-trusted-orchestrator-replay-validate.yml").read_text())
+    steps = [step for job in doc["jobs"].values() for step in job["steps"]]
+    run = next(step for step in steps if step.get("name", "").startswith("Run trusted candidate"))["run"]
+    workspace = run.index('--bind "$GITHUB_WORKSPACE" "$GITHUB_WORKSPACE"')
+    scripts = run.index('--ro-bind "$GITHUB_WORKSPACE/scripts" "$GITHUB_WORKSPACE/scripts"')
+    candidate = run.index('--ro-bind "$GITHUB_WORKSPACE/candidate" "$GITHUB_WORKSPACE/candidate"')
+    assert workspace < scripts and workspace < candidate  # later mounts override the writable bind
+
+
+def test_replay_step_derives_the_loader_path_from_the_interpreter_instead_of_inheriting_it():
+    import yaml
+
+    doc = yaml.safe_load(Path(".github/workflows/hunter-trusted-orchestrator-replay-validate.yml").read_text())
+    steps = [step for job in doc["jobs"].values() for step in job["steps"]]
+    run = next(step for step in steps if step.get("name", "").startswith("Run trusted candidate"))["run"]
+    assert "${LD_LIBRARY_PATH" not in run
+    assert "sys.base_prefix" in run and 'LD_LIBRARY_PATH="$py_lib"' in run
 
 
 def test_worker_post_started_timeout_budget_with_controlled_clock(monkeypatch):
@@ -1693,58 +2147,6 @@ def _load_bootstrap_worker():
     return module
 
 
-def _candidate_with_symlinked_module(tmp_path):
-    trusted = tmp_path / "trusted"
-    (trusted / "scripts").mkdir(parents=True)
-    (trusted / "scripts" / "hunter_review_orchestrator.py").write_text("TRUSTED = True\n", encoding="utf-8")
-    candidate = tmp_path / "candidate"
-    (candidate / "scripts").mkdir(parents=True)
-    (candidate / "scripts" / "hunter_review_orchestrator.py").symlink_to(
-        trusted / "scripts" / "hunter_review_orchestrator.py"
-    )
-    return candidate
-
-
-def _scripts_candidate(tmp_path, files):
-    candidate = tmp_path / "candidate"
-    (candidate / "scripts").mkdir(parents=True)
-    (candidate / "scripts" / "hunter_review_orchestrator.py").write_text("X = 1\n", encoding="utf-8")
-    for relative, content in files.items():
-        target = candidate / "scripts" / relative
-        target.parent.mkdir(parents=True, exist_ok=True)
-        target.write_bytes(content)
-    return candidate
-
-
-def test_symlinked_candidate_module_is_refused_for_digest_and_import(tmp_path):
-    worker = _load_bootstrap_worker()
-    candidate = _candidate_with_symlinked_module(tmp_path)
-    with pytest.raises(ValueError, match="symlink|outside"):
-        worker.candidate_module_digest(candidate, "A")
-    with pytest.raises(ValueError, match="symlink|outside"):
-        worker._import_candidate(candidate, "hunter_review_orchestrator")
-
-
-def test_regular_confined_candidate_module_is_accepted(tmp_path):
-    worker = _load_bootstrap_worker()
-    candidate = tmp_path / "candidate"
-    (candidate / "scripts").mkdir(parents=True)
-    (candidate / "scripts" / "hunter_review_orchestrator.py").write_text("X = 1\n", encoding="utf-8")
-    assert len(worker.candidate_module_digest(candidate, "A")) == 64
-    worker.assert_candidate_scripts_confined(candidate)
-
-
-def test_symlinked_directory_in_candidate_scripts_tree_is_refused(tmp_path):
-    worker = _load_bootstrap_worker()
-    outside = tmp_path / "outside"
-    outside.mkdir()
-    candidate = tmp_path / "candidate"
-    (candidate / "scripts").mkdir(parents=True)
-    (candidate / "scripts" / "helpers").symlink_to(outside, target_is_directory=True)
-    with pytest.raises(ValueError, match="symlink"):
-        worker.assert_candidate_scripts_confined(candidate)
-
-
 def test_import_path_places_the_candidate_first_and_drops_every_trusted_entry(tmp_path, monkeypatch):
     worker = _load_bootstrap_worker()
     monkeypatch.chdir(tmp_path)
@@ -1914,36 +2316,3 @@ def test_main_reports_the_pristine_digest_when_the_candidate_tree_is_unchanged(t
     payload = json.loads(capsys.readouterr().out.strip().splitlines()[-1])
     assert payload["outcome"] == "pass"
     assert payload["candidate_module_digest"] == pristine
-
-
-@pytest.mark.parametrize(
-    "relative",
-    ["hunter_helper.py", "hunter_pkg/__init__.py", "hunter_pkg/sub.py", "native.so", "__pycache__/x.cpython-311.pyc"],
-)
-def test_digest_binds_to_every_file_in_the_candidate_scripts_tree(tmp_path, relative):
-    worker = _load_bootstrap_worker()
-    candidate = _scripts_candidate(tmp_path, {relative: b"one"})
-    before = worker.candidate_module_digest(candidate, "A")
-    (candidate / "scripts" / relative).write_bytes(b"two")
-    assert worker.candidate_module_digest(candidate, "A") != before
-
-
-def test_adding_any_file_to_the_scripts_tree_changes_the_digest(tmp_path):
-    worker = _load_bootstrap_worker()
-    candidate = _scripts_candidate(tmp_path, {})
-    before = worker.candidate_module_digest(candidate, "A")
-    (candidate / "scripts" / "hunter_new.py").write_text("y = 1\n", encoding="utf-8")
-    assert worker.candidate_module_digest(candidate, "A") != before
-
-
-def test_a_declared_entry_module_missing_from_the_tree_is_refused(tmp_path):
-    worker = _load_bootstrap_worker()
-    candidate = tmp_path / "candidate"
-    (candidate / "scripts").mkdir(parents=True)
-    with pytest.raises(ValueError, match="missing"):
-        worker.candidate_module_digest(candidate, "A")
-
-
-def test_the_worker_never_writes_bytecode_into_the_candidate_tree():
-    _load_bootstrap_worker()
-    assert sys.dont_write_bytecode is True

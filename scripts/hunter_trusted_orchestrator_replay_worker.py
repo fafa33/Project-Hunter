@@ -275,6 +275,8 @@ def scenario_a(candidate_root: Path, fixture: dict[str, Any]) -> dict[str, Any]:
     # invariant and would leave that live collector free to publish a competing
     # terminal result for the same exact head (DFF-041, PR #535).
     orchestrator.collector_liveness = lambda *_a: ("completed", 1)
+    # The nominal timeout boundary must not exercise successful-run recovery.
+    orchestrator.completed_collector_settled = lambda *_a: False
 
     # Determinism, not isolation: the candidate's REST helper is replaced with "this repository has no collector
     # workflow runs", so a scenario's outcome does not depend on whether a real (or unreachable) GitHub API answers
