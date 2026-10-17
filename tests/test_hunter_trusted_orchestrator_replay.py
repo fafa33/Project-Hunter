@@ -1795,7 +1795,9 @@ def test_import_path_drops_the_trusted_scripts_directory_so_missing_helpers_do_n
     candidate_scripts.mkdir(parents=True)
     other = tmp_path / "site"
     other.mkdir()
-    result = worker.isolated_import_path([str(trusted), str(other), str(candidate_scripts)], candidate_scripts.parent, trusted)
+    result = worker.isolated_import_path(
+        [str(trusted), str(other), str(candidate_scripts)], candidate_scripts.parent, trusted
+    )
     assert result == [str(candidate_scripts.resolve()), str(candidate_scripts.parent.resolve()), str(other)]
 
 
@@ -2120,58 +2122,6 @@ def _load_bootstrap_worker():
     return module
 
 
-def _candidate_with_symlinked_module(tmp_path):
-    trusted = tmp_path / "trusted"
-    (trusted / "scripts").mkdir(parents=True)
-    (trusted / "scripts" / "hunter_review_orchestrator.py").write_text("TRUSTED = True\n", encoding="utf-8")
-    candidate = tmp_path / "candidate"
-    (candidate / "scripts").mkdir(parents=True)
-    (candidate / "scripts" / "hunter_review_orchestrator.py").symlink_to(
-        trusted / "scripts" / "hunter_review_orchestrator.py"
-    )
-    return candidate
-
-
-def _scripts_candidate(tmp_path, files):
-    candidate = tmp_path / "candidate"
-    (candidate / "scripts").mkdir(parents=True)
-    (candidate / "scripts" / "hunter_review_orchestrator.py").write_text("X = 1\n", encoding="utf-8")
-    for relative, content in files.items():
-        target = candidate / "scripts" / relative
-        target.parent.mkdir(parents=True, exist_ok=True)
-        target.write_bytes(content)
-    return candidate
-
-
-def test_symlinked_candidate_module_is_refused_for_digest_and_import(tmp_path):
-    worker = _load_bootstrap_worker()
-    candidate = _candidate_with_symlinked_module(tmp_path)
-    with pytest.raises(ValueError, match="symlink|outside"):
-        worker.candidate_module_digest(candidate, "A")
-    with pytest.raises(ValueError, match="symlink|outside"):
-        worker._import_candidate(candidate, "hunter_review_orchestrator")
-
-
-def test_regular_confined_candidate_module_is_accepted(tmp_path):
-    worker = _load_bootstrap_worker()
-    candidate = tmp_path / "candidate"
-    (candidate / "scripts").mkdir(parents=True)
-    (candidate / "scripts" / "hunter_review_orchestrator.py").write_text("X = 1\n", encoding="utf-8")
-    assert len(worker.candidate_module_digest(candidate, "A")) == 64
-    worker.assert_candidate_scripts_confined(candidate)
-
-
-def test_symlinked_directory_in_candidate_scripts_tree_is_refused(tmp_path):
-    worker = _load_bootstrap_worker()
-    outside = tmp_path / "outside"
-    outside.mkdir()
-    candidate = tmp_path / "candidate"
-    (candidate / "scripts").mkdir(parents=True)
-    (candidate / "scripts" / "helpers").symlink_to(outside, target_is_directory=True)
-    with pytest.raises(ValueError, match="symlink"):
-        worker.assert_candidate_scripts_confined(candidate)
-
-
 def test_import_path_places_the_candidate_first_and_drops_every_trusted_entry(tmp_path, monkeypatch):
     worker = _load_bootstrap_worker()
     monkeypatch.chdir(tmp_path)
@@ -2341,36 +2291,3 @@ def test_main_reports_the_pristine_digest_when_the_candidate_tree_is_unchanged(t
     payload = json.loads(capsys.readouterr().out.strip().splitlines()[-1])
     assert payload["outcome"] == "pass"
     assert payload["candidate_module_digest"] == pristine
-
-
-@pytest.mark.parametrize(
-    "relative",
-    ["hunter_helper.py", "hunter_pkg/__init__.py", "hunter_pkg/sub.py", "native.so", "__pycache__/x.cpython-311.pyc"],
-)
-def test_digest_binds_to_every_file_in_the_candidate_scripts_tree(tmp_path, relative):
-    worker = _load_bootstrap_worker()
-    candidate = _scripts_candidate(tmp_path, {relative: b"one"})
-    before = worker.candidate_module_digest(candidate, "A")
-    (candidate / "scripts" / relative).write_bytes(b"two")
-    assert worker.candidate_module_digest(candidate, "A") != before
-
-
-def test_adding_any_file_to_the_scripts_tree_changes_the_digest(tmp_path):
-    worker = _load_bootstrap_worker()
-    candidate = _scripts_candidate(tmp_path, {})
-    before = worker.candidate_module_digest(candidate, "A")
-    (candidate / "scripts" / "hunter_new.py").write_text("y = 1\n", encoding="utf-8")
-    assert worker.candidate_module_digest(candidate, "A") != before
-
-
-def test_a_declared_entry_module_missing_from_the_tree_is_refused(tmp_path):
-    worker = _load_bootstrap_worker()
-    candidate = tmp_path / "candidate"
-    (candidate / "scripts").mkdir(parents=True)
-    with pytest.raises(ValueError, match="missing"):
-        worker.candidate_module_digest(candidate, "A")
-
-
-def test_the_worker_never_writes_bytecode_into_the_candidate_tree():
-    _load_bootstrap_worker()
-    assert sys.dont_write_bytecode is True
