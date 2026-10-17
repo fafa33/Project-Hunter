@@ -2,88 +2,46 @@
   "claims": {
     "acceptance_criteria": [
       {
-        "criterion": "lean governance: extend existing authorities (merge readiness, governance review, the pre-ready hostile review, the dpm/spm context path) rather than introducing a parallel governance or orchestration framework",
-        "evidence": "PR #611 only fixes stale squash-merge orphan recovery; this broader Issue #532 criterion is not asserted as completed by this focused correction.",
+        "criterion": "the trusted replay worker resolves every candidate import, bare and package-qualified, inside the candidate checkout, and never loads code from the trusted default-branch checkout",
+        "evidence": "isolated_import_path removes the trusted scripts directory and its parent repository root (including the empty cwd entry) and prepends the candidate root and scripts directory; package-qualified and bare import regression tests cover it.",
         "id": "AC-01",
-        "verdict": "not-applicable"
-      },
-      {
-        "criterion": "no repository rediscovery reaches the machine-consumed agent execution path, not only human-facing documentation",
-        "evidence": "PR #611 only fixes stale squash-merge orphan recovery; this broader Issue #532 criterion is not asserted as completed by this focused correction.",
-        "id": "AC-02",
-        "verdict": "not-applicable"
-      },
-      {
-        "criterion": "execution economy: focused verification is used by default; full-repository validation runs only at the repository-defined stage or when concrete evidence requires it; unchanged exact-head validation evidence is reused rather than rerun",
-        "evidence": "PR #611 only fixes stale squash-merge orphan recovery; this broader Issue #532 criterion is not asserted as completed by this focused correction.",
-        "id": "AC-03",
-        "verdict": "not-applicable"
-      },
-      {
-        "criterion": "bounded independent review: the review opportunity has a visible state and does not wait on any single provider indefinitely; explicit reviewer failure, quota exhaustion, or timeout is recorded and does not paralyze the candidate",
-        "evidence": "PR #611 only fixes stale squash-merge orphan recovery; this broader Issue #532 criterion is not asserted as completed by this focused correction.",
-        "id": "AC-04",
-        "verdict": "not-applicable"
-      },
-      {
-        "criterion": "no false ready while the bounded independent-review opportunity is still pending: a candidate is not reported fully ready to merge while a legitimately requested review has not yet reached a terminal state",
-        "evidence": "PR #611 only fixes stale squash-merge orphan recovery; this broader Issue #532 criterion is not asserted as completed by this focused correction.",
-        "id": "AC-05",
-        "verdict": "not-applicable"
-      },
-      {
-        "criterion": "a machine-consumable execution contract constrains agent execution: acceptance criteria and mission scope are immutable to the worker: an agent may not silently omit, defer, reinterpret, or narrow a criterion, and any scope expansion must be evidence-gated (state why current scope is insufficient, the exact additional scope, and its cost, before acting on it)",
-        "evidence": "PR #611 only fixes stale squash-merge orphan recovery; this broader Issue #532 criterion is not asserted as completed by this focused correction.",
-        "id": "AC-06",
-        "verdict": "not-applicable"
-      },
-      {
-        "criterion": "prevention of premature agent completion: an agent's own claim of completion, a final report, a passed local preflight, a pushed commit, or an opened pull request does not itself complete the mission",
-        "evidence": "PR #611 only fixes stale squash-merge orphan recovery; this broader Issue #532 criterion is not asserted as completed by this focused correction.",
-        "id": "AC-07",
-        "verdict": "not-applicable"
-      },
-      {
-        "criterion": "an independent completion gate evaluates completion against real, current, exact-head evidence (required hosted checks green, governance/verification gates green, the bounded independent-review opportunity at a legitimate terminal state, no unresolved substantive finding), not against any agent's self-report",
-        "evidence": "PR #611 only fixes stale squash-merge orphan recovery; this broader Issue #532 criterion is not asserted as completed by this focused correction.",
-        "id": "AC-08",
-        "verdict": "not-applicable"
-      },
-      {
-        "criterion": "automatic finding-to-remediation orchestration: a validated finding is durably captured and cannot be silently dropped or falsely marked resolved by the remediation lifecycle",
-        "evidence": "PR #611 only fixes stale squash-merge orphan recovery; this broader Issue #532 criterion is not asserted as completed by this focused correction.",
-        "id": "AC-09",
-        "verdict": "not-applicable"
-      },
-      {
-        "criterion": "automatic finding-to-canonical-knowledge lifecycle: a resolved finding that maps to an existing canonical defect family is automatically turned into a canonicalization candidate branch and draft pr, without requiring the owner to run the canonicalization cli by hand, and without ever writing directly to main or auto-merging",
-        "evidence": "PR #611 prevents the automatic canonicalization candidate from reopening stale squash-merged branches; regression tests cover both real orphan recovery and squash-merged stale content.",
-        "id": "AC-10",
         "verdict": "satisfied"
       },
       {
-        "criterion": "one controlled, real end-to-end proof of the automatic finding-to-canonicalization lifecycle exists, using a safe representative finding",
-        "evidence": "PR #611 only fixes stale squash-merge orphan recovery; this broader Issue #532 criterion is not asserted as completed by this focused correction.",
-        "id": "AC-11",
-        "verdict": "not-applicable"
+        "criterion": "a candidate helper the candidate did not ship fails closed with an import error instead of silently importing the trusted base checkout's copy",
+        "evidence": "Removing the trusted root makes an unshipped package-qualified helper an ImportError; test_missing_candidate_helper_fails_closed_instead_of_importing_the_trusted_base proves no base fallback.",
+        "id": "AC-02",
+        "verdict": "satisfied"
       },
       {
-        "criterion": "no repository-write authority is broadened, no new code_write_policy.json grant is added, main is never written to directly, and no auto-merge exists anywhere in the new mechanism",
-        "evidence": "PR #611 only fixes stale squash-merge orphan recovery; this broader Issue #532 criterion is not asserted as completed by this focused correction.",
-        "id": "AC-12",
-        "verdict": "not-applicable"
+        "criterion": "the candidate-module digest the receipt binds is reproducible from an independent fresh checkout of the same candidate head",
+        "evidence": "candidate_module_digest hashes the whole candidate scripts tree and verify_candidate_module_digests recomputes it from an independent fresh checkout; unchanged by this fix.",
+        "id": "AC-03",
+        "verdict": "satisfied"
       },
       {
-        "criterion": "no mandatory paid or external ai provider dependency is introduced anywhere in the new mechanism; the local/manual cli recovery path from pr #528 remains fully supported",
-        "evidence": "PR #611 only fixes stale squash-merge orphan recovery; this broader Issue #532 criterion is not asserted as completed by this focused correction.",
-        "id": "AC-13",
-        "verdict": "not-applicable"
+        "criterion": "mutating the candidate scripts tree during scenario execution is detected and fails the scenario closed, rather than reporting a pristine-tree digest for bytes that were not executed",
+        "evidence": "main() re-takes the digest after the scenario and fails the scenario closed when it differs; test_main_fails_closed_when_the_candidate_tree_mutates_during_execution and the positive control cover it.",
+        "id": "AC-04",
+        "verdict": "satisfied"
       },
       {
-        "criterion": "human merge approval remains the final, sole authority to integrate into main; nothing in this mission marks a pr ready or merges it",
-        "evidence": "PR #611 only fixes stale squash-merge orphan recovery; this broader Issue #532 criterion is not asserted as completed by this focused correction.",
-        "id": "AC-14",
-        "verdict": "not-applicable"
+        "criterion": "focused deterministic tests cover candidate import-path confinement and executed-tree mutation detection",
+        "evidence": "Focused tests added in tests/test_hunter_trusted_orchestrator_replay.py; the suite passes (106 passed).",
+        "id": "AC-05",
+        "verdict": "satisfied"
+      },
+      {
+        "criterion": "the complete base-to-head diff is subjected to the applicable dpm defect-family checks and an independent exact-head hostile review request; the request is not represented as completed reviewer authority",
+        "evidence": "This request lists the 19 applicable DPM families for the changed paths; an independent exact-head hostile review is requested, never represented as completed reviewer authority.",
+        "id": "AC-06",
+        "verdict": "satisfied"
+      },
+      {
+        "criterion": "no automatic merge occurs, and no claim is made that this bootstrap resolves the broader untrusted-candidate sandbox, publisher, or workflow-binding gaps tracked for the main replay change",
+        "evidence": "This is a minimal base-owned bootstrap; it performs no automatic merge and does not claim to resolve the broader untrusted-candidate sandbox, publisher, or workflow-binding gaps.",
+        "id": "AC-07",
+        "verdict": "satisfied"
       }
     ],
     "adversarial_dimensions": [
@@ -100,213 +58,146 @@
       "transaction-snapshot-consistency"
     ],
     "base_ref": "main",
-    "base_sha": "0eecab620fbaa1ae2e9bb5d6008e2174dc2b68b1",
+    "base_sha": "84ff369077221acef4e57c377995a01a48c7ca7b",
     "defect_families": [
       {
-        "evidence": "Applicable family included for independent review of current PR #611 content; no reviewer approval or completed adversarial sweep asserted.",
+        "evidence": "Applicable recurring-defect family DFF-007 included for independent exact-head review of PR #612; no reviewer approval asserted.",
         "family": "DFF-007",
         "outcome": "clear"
       },
       {
-        "evidence": "Applicable family included for independent review of current PR #611 content; no reviewer approval or completed adversarial sweep asserted.",
+        "evidence": "Applicable recurring-defect family DFF-008 included for independent exact-head review of PR #612; no reviewer approval asserted.",
         "family": "DFF-008",
         "outcome": "clear"
       },
       {
-        "evidence": "Applicable family included for independent review of current PR #611 content; no reviewer approval or completed adversarial sweep asserted.",
+        "evidence": "Applicable recurring-defect family DFF-009 included for independent exact-head review of PR #612; no reviewer approval asserted.",
         "family": "DFF-009",
         "outcome": "clear"
       },
       {
-        "evidence": "Applicable family included for independent review of current PR #611 content; no reviewer approval or completed adversarial sweep asserted.",
+        "evidence": "Applicable recurring-defect family DFF-010 included for independent exact-head review of PR #612; no reviewer approval asserted.",
         "family": "DFF-010",
         "outcome": "clear"
       },
       {
-        "evidence": "Applicable family included for independent review of current PR #611 content; no reviewer approval or completed adversarial sweep asserted.",
+        "evidence": "Applicable recurring-defect family DFF-011 included for independent exact-head review of PR #612; no reviewer approval asserted.",
         "family": "DFF-011",
         "outcome": "clear"
       },
       {
-        "evidence": "Applicable family included for independent review of current PR #611 content; no reviewer approval or completed adversarial sweep asserted.",
+        "evidence": "Applicable recurring-defect family DFF-012 included for independent exact-head review of PR #612; no reviewer approval asserted.",
         "family": "DFF-012",
         "outcome": "clear"
       },
       {
-        "evidence": "Applicable family included for independent review of current PR #611 content; no reviewer approval or completed adversarial sweep asserted.",
+        "evidence": "Applicable recurring-defect family DFF-013 included for independent exact-head review of PR #612; no reviewer approval asserted.",
         "family": "DFF-013",
         "outcome": "clear"
       },
       {
-        "evidence": "Applicable family included for independent review of current PR #611 content; no reviewer approval or completed adversarial sweep asserted.",
+        "evidence": "Applicable recurring-defect family DFF-014 included for independent exact-head review of PR #612; no reviewer approval asserted.",
         "family": "DFF-014",
         "outcome": "clear"
       },
       {
-        "evidence": "Applicable family included for independent review of current PR #611 content; no reviewer approval or completed adversarial sweep asserted.",
+        "evidence": "Applicable recurring-defect family DFF-015 included for independent exact-head review of PR #612; no reviewer approval asserted.",
         "family": "DFF-015",
         "outcome": "clear"
       },
       {
-        "evidence": "Applicable family included for independent review of current PR #611 content; no reviewer approval or completed adversarial sweep asserted.",
+        "evidence": "Applicable recurring-defect family DFF-016 included for independent exact-head review of PR #612; no reviewer approval asserted.",
         "family": "DFF-016",
         "outcome": "clear"
       },
       {
-        "evidence": "Applicable family included for independent review of current PR #611 content; no reviewer approval or completed adversarial sweep asserted.",
+        "evidence": "Applicable recurring-defect family DFF-019 included for independent exact-head review of PR #612; no reviewer approval asserted.",
         "family": "DFF-019",
         "outcome": "clear"
       },
       {
-        "evidence": "Applicable family included for independent review of current PR #611 content; no reviewer approval or completed adversarial sweep asserted.",
+        "evidence": "Applicable recurring-defect family DFF-020 included for independent exact-head review of PR #612; no reviewer approval asserted.",
         "family": "DFF-020",
         "outcome": "clear"
       },
       {
-        "evidence": "Applicable family included for independent review of current PR #611 content; no reviewer approval or completed adversarial sweep asserted.",
+        "evidence": "Applicable recurring-defect family DFF-021 included for independent exact-head review of PR #612; no reviewer approval asserted.",
         "family": "DFF-021",
         "outcome": "clear"
       },
       {
-        "evidence": "Applicable family included for independent review of current PR #611 content; no reviewer approval or completed adversarial sweep asserted.",
-        "family": "DFF-022",
-        "outcome": "clear"
-      },
-      {
-        "evidence": "Applicable family included for independent review of current PR #611 content; no reviewer approval or completed adversarial sweep asserted.",
+        "evidence": "Applicable recurring-defect family DFF-023 included for independent exact-head review of PR #612; no reviewer approval asserted.",
         "family": "DFF-023",
         "outcome": "clear"
       },
       {
-        "evidence": "Applicable family included for independent review of current PR #611 content; no reviewer approval or completed adversarial sweep asserted.",
-        "family": "DFF-024",
-        "outcome": "clear"
-      },
-      {
-        "evidence": "Applicable family included for independent review of current PR #611 content; no reviewer approval or completed adversarial sweep asserted.",
-        "family": "DFF-025",
-        "outcome": "clear"
-      },
-      {
-        "evidence": "Applicable family included for independent review of current PR #611 content; no reviewer approval or completed adversarial sweep asserted.",
-        "family": "DFF-026",
-        "outcome": "clear"
-      },
-      {
-        "evidence": "Applicable family included for independent review of current PR #611 content; no reviewer approval or completed adversarial sweep asserted.",
+        "evidence": "Applicable recurring-defect family DFF-029 included for independent exact-head review of PR #612; no reviewer approval asserted.",
         "family": "DFF-029",
         "outcome": "clear"
       },
       {
-        "evidence": "Applicable family included for independent review of current PR #611 content; no reviewer approval or completed adversarial sweep asserted.",
+        "evidence": "Applicable recurring-defect family DFF-033 included for independent exact-head review of PR #612; no reviewer approval asserted.",
         "family": "DFF-033",
         "outcome": "clear"
       },
       {
-        "evidence": "Applicable family included for independent review of current PR #611 content; no reviewer approval or completed adversarial sweep asserted.",
+        "evidence": "Applicable recurring-defect family DFF-035 included for independent exact-head review of PR #612; no reviewer approval asserted.",
         "family": "DFF-035",
         "outcome": "clear"
       },
       {
-        "evidence": "Applicable family included for independent review of current PR #611 content; no reviewer approval or completed adversarial sweep asserted.",
-        "family": "DFF-037",
-        "outcome": "clear"
-      },
-      {
-        "evidence": "Applicable family included for independent review of current PR #611 content; no reviewer approval or completed adversarial sweep asserted.",
-        "family": "DFF-038",
-        "outcome": "clear"
-      },
-      {
-        "evidence": "Applicable family included for independent review of current PR #611 content; no reviewer approval or completed adversarial sweep asserted.",
-        "family": "DFF-039",
-        "outcome": "clear"
-      },
-      {
-        "evidence": "Applicable family included for independent review of current PR #611 content; no reviewer approval or completed adversarial sweep asserted.",
+        "evidence": "Applicable recurring-defect family DFF-040 included for independent exact-head review of PR #612; no reviewer approval asserted.",
         "family": "DFF-040",
         "outcome": "clear"
       },
       {
-        "evidence": "Applicable family included for independent review of current PR #611 content; no reviewer approval or completed adversarial sweep asserted.",
-        "family": "DFF-043",
-        "outcome": "clear"
-      },
-      {
-        "evidence": "Applicable family included for independent review of current PR #611 content; no reviewer approval or completed adversarial sweep asserted.",
-        "family": "DFF-053",
+        "evidence": "Applicable recurring-defect family DFF-041 included for independent exact-head review of PR #612; no reviewer approval asserted.",
+        "family": "DFF-041",
         "outcome": "clear"
       }
     ],
-    "findings": [],
-    "issue": "532",
+    "findings": [
+      {
+        "evidence": "Codex P1: a package-qualified candidate import could resolve to the trusted repository root. isolated_import_path now drops the trusted scripts directory and its parent root (including the empty cwd entry) and prepends the candidate root and scripts directory.",
+        "id": "PRRT_kwDOTRDHr86te6lv",
+        "resolution": "resolved",
+        "resolution_evidence": {
+          "correction": "b4538ec49a42d8ac6da99052964a67500ea069b5",
+          "regression_test": "tests/test_hunter_trusted_orchestrator_replay.py"
+        },
+        "severity": "blocking"
+      },
+      {
+        "evidence": "Codex P1: the digest was bound before execution, so a mid-scenario mutation executed unbound bytes. main() now re-takes the whole-tree digest after the scenario and fails closed on any difference.",
+        "id": "PRRT_kwDOTRDHr86te6lx",
+        "resolution": "resolved",
+        "resolution_evidence": {
+          "correction": "b4538ec49a42d8ac6da99052964a67500ea069b5",
+          "regression_test": "tests/test_hunter_trusted_orchestrator_replay.py"
+        },
+        "severity": "blocking"
+      }
+    ],
+    "issue": "613",
     "review_target": [
       {
-        "blob_sha": "cfac2cfd84af4805f9ac1b72ef4aa0956600eb94",
-        "path": ".githooks/pre-commit",
-        "previous_path": "",
-        "status": "added"
-      },
-      {
-        "blob_sha": "6bb0c0476c9f17e54cf8380c758af4a340fc099e",
-        "path": "scripts/hunter_writer_commit_finalizer.py",
-        "previous_path": "",
-        "status": "added"
-      },
-      {
-        "blob_sha": "07b9630fbacf76ef10e04017cacd79095035250b",
-        "path": "tests/test_external_writer_review_head_recheck.py",
-        "previous_path": "",
-        "status": "added"
-      },
-      {
-        "blob_sha": "d3e099894ee82fdb1313cefa61432b1240f1ad51",
-        "path": "tests/test_hunter_writer_commit_finalizer.py",
-        "previous_path": "",
-        "status": "added"
-      },
-      {
-        "blob_sha": "c2898fb8eea2075f1d18a02f4fda728e331a9272",
-        "path": "AGENTS.md",
+        "blob_sha": "0d32a9e53ab05308a7aa138cf76710264daf9e49",
+        "path": "scripts/hunter_trusted_orchestrator_replay_worker.py",
         "previous_path": "",
         "status": "modified"
       },
       {
-        "blob_sha": "d9dd8804c1faf59f2ffb5215575478ccaf9a3a97",
-        "path": "scripts/hunter_canonicalization_candidate_pr.py",
-        "previous_path": "",
-        "status": "modified"
-      },
-      {
-        "blob_sha": "ec616cd684ceb5d3e522141d59d7f742b992cafe",
-        "path": "scripts/hunter_governance_review_v2.py",
-        "previous_path": "",
-        "status": "modified"
-      },
-      {
-        "blob_sha": "acdf164a242c823531684934f65602a4dbfc714b",
-        "path": "scripts/hunter_pre_ready_review.py",
-        "previous_path": "",
-        "status": "modified"
-      },
-      {
-        "blob_sha": "9d7f1e9cc8c4e6a870d40d6101429bfdde2e37f0",
-        "path": "tests/test_exact_head_review_authority.py",
-        "previous_path": "",
-        "status": "modified"
-      },
-      {
-        "blob_sha": "295b270645f943c7789a069a651d5fb81609abac",
-        "path": "tests/test_hunter_canonicalization_candidate_pr.py",
+        "blob_sha": "1536457e9f21e1be117162330edc0f764e35edbb",
+        "path": "tests/test_hunter_trusted_orchestrator_replay.py",
         "previous_path": "",
         "status": "modified"
       }
     ],
-    "review_target_digest": "dc09c8f25bf5a522bf28717674b1a66baa3f5180623c4bda4d22ca77a4636c00"
+    "review_target_digest": "411f281cd8871d671caa843b3c039f99812093981a7807fe7615718d35b30080"
   },
-  "review_id": "cb85f2439fb28b52d0e2cf5db7dd26d759fb2084296aa38ad4690581cc77e418",
+  "review_id": "cd45964f6e4b029b1d207cc5e39b1ce03b323e589d8b88ccd9af687dae8845d5",
   "review_request": {
-    "claims_id": "cb85f2439fb28b52d0e2cf5db7dd26d759fb2084296aa38ad4690581cc77e418",
+    "claims_id": "cd45964f6e4b029b1d207cc5e39b1ce03b323e589d8b88ccd9af687dae8845d5",
     "schema": "hunter.review-request.v1"
   },
   "schema": "hunter.pre-ready-hostile-review.v1"
