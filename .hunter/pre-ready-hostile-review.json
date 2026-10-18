@@ -257,8 +257,18 @@
         "outcome": "clear"
       },
       {
+        "evidence": "AUTHOR CLAIM ONLY: governance review v2 emits structured ReviewVerdict via verify_review_request/verify_claims; mandatory gates read structured fields, not prose tokens. Reviewed against b2674c5..503bbd8 (26 changed paths); independent reviewer verification required.",
+        "family": "DFF-037",
+        "outcome": "clear"
+      },
+      {
         "evidence": "AUTHOR CLAIM ONLY: reviewed against b2674c5..bc7846fcf4 (24 changed paths); independent reviewer verification required.",
         "family": "DFF-038",
+        "outcome": "clear"
+      },
+      {
+        "evidence": "REGRESSION TESTS: tests/test_full_history_defect_scan.py::test_auth_verification_uses_global_rate_limit_endpoint, ::test_global_seam_addresses_global_url_through_governed_transport, ::test_repository_scoped_seam_does_not_silently_absorb_global_paths, ::test_global_seam_is_read_only_and_allowlisted, ::test_global_seam_preserves_transient_retry_then_exhaustion, ::test_global_seam_keeps_permanent_status_unretried. All pass. Reviewed against b2674c5..503bbd8 (26 changed paths).",
+        "family": "DFF-039",
         "outcome": "clear"
       },
       {
@@ -416,6 +426,12 @@
         "status": "modified"
       },
       {
+        "blob_sha": "fec917b394c128507d9ddc5411788969c23092fb",
+        "path": "scripts/hunter_governance_review_v2.py",
+        "previous_path": "",
+        "status": "modified"
+      },
+      {
         "blob_sha": "441e291f4b44fba6bdbca120f13fa533bc84dce3",
         "path": "scripts/hunter_issue_agent_lifecycle.py",
         "previous_path": "",
@@ -452,6 +468,12 @@
         "status": "modified"
       },
       {
+        "blob_sha": "86409b61e940a0581da8dc605420ab0438710338",
+        "path": "tests/test_hunter_governance_review_v2.py",
+        "previous_path": "",
+        "status": "modified"
+      },
+      {
         "blob_sha": "745bdf2303cf01cd4757759ba8293a0d2349c62e",
         "path": "tests/test_hunter_review_orchestrator.py",
         "previous_path": "",
@@ -470,11 +492,11 @@
         "status": "modified"
       }
     ],
-    "review_target_digest": "e2281ca8cba08f6118137adfb82ae6747db12c7375c33f47e74688ba320a58b5"
+    "review_target_digest": "18c16445dfe91912433a2fe0e2eb56d4997d0310f2321e8664c620862ad962a3"
   },
-  "review_id": "cee833e72da059eb5d0e5ab1fbb46887fc1608c05fd58c9d9333e6ce36a6d3bd",
+  "review_id": "e19f9e2dc3a29e686aa7f073d6af719454c30b32b726362fbd495e7d8f3d4fa1",
   "review_request": {
-    "claims_id": "cee833e72da059eb5d0e5ab1fbb46887fc1608c05fd58c9d9333e6ce36a6d3bd",
+    "claims_id": "e19f9e2dc3a29e686aa7f073d6af719454c30b32b726362fbd495e7d8f3d4fa1",
     "schema": "hunter.review-request.v1"
   },
   "schema": "hunter.pre-ready-hostile-review.v1"
