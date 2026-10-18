@@ -145,7 +145,7 @@ REQUIRED_ADVERSARIAL_DIMENSIONS = (
 _HEADING = re.compile(r"\A(#{1,6})\s+(.*?)\s*#*\s*\Z")
 #: A top-level markdown list item. Indented items are sub-detail of a criterion,
 #: not criteria in their own right.
-_TOP_LEVEL_BULLET = re.compile(r"\A[-*+]\s+(.*)\Z")
+_TOP_LEVEL_BULLET = re.compile(r"\A(?:[-*+]|[0-9]+[.)])\s+(.*)\Z")
 ACCEPTANCE_CRITERIA_HEADING = "acceptance criteria"
 
 
