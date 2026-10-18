@@ -1615,6 +1615,125 @@ def test_collector_workflow_publishes_completion_from_its_own_trusted_inputs():
     assert env.get("CANDIDATE_HEAD") == "${{ inputs.head_sha }}"
 
 
+_GENERIC_WORKFLOW_RUN_MARKER = 'elif [[ "${event_name}" == "workflow_run" ]]; then'
+
+
+def _prerequisite_wake_branch_body() -> str:
+    """The committed shell that derives PR numbers for any workflow_run
+    completion that is not one of the two identity-specialised branches
+    (Governance Review carries its PR number, the collector carries its
+    run-name): the exact-head preflight completions that must find the
+    candidate PR by the head the run was actually built at."""
+
+    script = _reconcile_run_script()
+    assert script.count(_GENERIC_WORKFLOW_RUN_MARKER) == 1
+    return script.split(_GENERIC_WORKFLOW_RUN_MARKER, 1)[1].split("\nelse\n", 1)[0]
+
+
+def _run_prerequisite_wake_body(tmp_path, head_sha: str, stub_output: str, pr_number_env: str) -> tuple[str, list[str]]:
+    """Execute the real committed branch text in bash with a stubbed ``gh``
+    that records its argv and emits ``stub_output`` as the jq result."""
+
+    bin_dir = tmp_path / "bin"
+    bin_dir.mkdir(exist_ok=True)
+    gh = bin_dir / "gh"
+    gh.write_text(
+        "#!/bin/sh\n"
+        'printf \'%s\\n\' "$@" > "$GH_ARGS_FILE"\n'
+        'if [ -n "${GH_STUB_OUTPUT:-}" ]; then\n'
+        "  printf '%s\\n' \"$GH_STUB_OUTPUT\"\n"
+        "fi\n",
+        encoding="utf-8",
+    )
+    gh.chmod(0o755)
+    args_file = tmp_path / "gh-args"
+    result = subprocess.run(
+        ["bash", "-c", "set -euo pipefail\n" + _prerequisite_wake_branch_body() + '\nprintf "%s" "$pr_numbers"'],
+        env={
+            "PATH": f"{bin_dir}:{os.environ.get('PATH', '/usr/bin:/bin')}",
+            "GITHUB_REPOSITORY": "fafa33/Project-Hunter",
+            "EVENT_WORKFLOW_RUN_HEAD_SHA": head_sha,
+            "EVENT_WORKFLOW_RUN_PR_NUMBER": pr_number_env,
+            "GH_STUB_OUTPUT": stub_output,
+            "GH_ARGS_FILE": str(args_file),
+        },
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+    return result.stdout, args_file.read_text(encoding="utf-8").splitlines()
+
+
+def test_prerequisite_completion_wake_selects_the_candidate_pr_by_exact_head_identity(tmp_path):
+    """Collector liveness (thread PRRT_kwDOTRDHr86rUzHk): when the exact-head
+    preflight completes, the wake must find the candidate PR from the run's
+    head_sha -- the identity a push-triggered preflight run genuinely carries --
+    and never from workflow_run.pull_requests, which is empty for such runs."""
+
+    body = _prerequisite_wake_branch_body()
+    assert "EVENT_WORKFLOW_RUN_PR_NUMBER" not in body
+    assert '--search "${EVENT_WORKFLOW_RUN_HEAD_SHA}"' in body
+    assert "gh api --paginate" not in body
+
+    head = "e" * 40
+    output, args = _run_prerequisite_wake_body(tmp_path, head, "592", "")
+    assert output == "592"
+    assert args[:2] == ["pr", "list"]
+    assert args[args.index("--state") + 1] == "open"
+    assert args[args.index("--base") + 1] == "main"
+    assert args[args.index("--search") + 1] == head
+    assert args[args.index("--json") + 1] == "number,headRefOid"
+    assert head in args[args.index("--jq") + 1]
+
+    # Adversarial: a wake whose head no open PR points at resolves to no PR
+    # even when the event payload also carries a foreign PR number -- the
+    # branch cannot be steered into reconciling an unrelated pull request.
+    miss_output, _miss_args = _run_prerequisite_wake_body(tmp_path, "f" * 40, "", "9999")
+    assert miss_output == ""
+
+
+def test_collector_liveness_after_prerequisite_completion_is_event_wired_and_bounded():
+    """Collector liveness (thread PRRT_kwDOTRDHr86rUzHk): the approved
+    continuation for a head whose exact-head preflight was pending when
+    orchestration last ran. Completion of either prerequisite the dispatch
+    decision consults wakes the only actions:write gate, which re-enters the
+    trusted orchestrator scoped to the candidate head, and the 5-minute sweep
+    is the bounded backstop -- no new trigger, no polling loop, no privilege."""
+
+    document = yaml.safe_load(RECONCILE_WORKFLOW.read_text(encoding="utf-8"))
+    workflow_run = document[True]["workflow_run"]
+    assert {"Hunter / Pre-PR Preflight", "Hunter / Trusted Preflight Upgrade"} <= set(workflow_run["workflows"])
+    assert workflow_run["types"] == ["completed"]
+    script = _reconcile_run_script()
+    assert "python scripts/hunter_review_orchestrator.py ensure" in script
+    assert '--search "${EVENT_WORKFLOW_RUN_HEAD_SHA}"' in script
+    text = RECONCILE_WORKFLOW.read_text(encoding="utf-8")
+    assert 'cron: "*/5 * * * *"' in text
+    assert document["permissions"]["actions"] == "write"
+    assert document["jobs"]["reconcile"]["timeout-minutes"] == 15
+    checkout = document["jobs"]["reconcile"]["steps"][0]
+    assert checkout["with"]["ref"] == "main"
+    assert checkout["with"]["persist-credentials"] is False
+
+
+def test_collector_trigger_surface_stays_dispatch_only_so_liveness_stays_orchestrator_owned():
+    """Collector liveness (thread PRRT_kwDOTRDHr86rUzHk): the collector must
+    keep exactly one entry point. A workflow_run or lifecycle trigger on the
+    collector itself would let a completed prerequisite start an uncorrelated
+    cycle outside the orchestrator's dispatch idempotency record -- duplicate
+    reviewer spend and a second identity path for the receipt. Least privilege
+    stays exactly as approved."""
+
+    document = yaml.safe_load(COLLECTOR_WORKFLOW_FILE.read_text(encoding="utf-8"))
+    assert set(document[True]) == {"workflow_dispatch"}
+    collect = document["jobs"]["collect"]
+    assert collect["if"] == "github.ref == format('refs/heads/{0}', github.event.repository.default_branch)"
+    assert document["concurrency"]["cancel-in-progress"] is False
+    permissions = document["permissions"]
+    assert set(permissions) == {"contents", "actions", "pull-requests", "statuses"}
+    assert permissions["contents"] == "read"
+
+
 def test_collector_completion_accepts_trusted_ancestor_of_current_main(monkeypatch):
     old_main = "b" * 40
     current_main = "c" * 40
