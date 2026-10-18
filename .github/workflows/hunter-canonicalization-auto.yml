@@ -108,6 +108,8 @@ jobs:
       - name: Propose canonical knowledge when replayable evidence exists
         if: steps.engine.outputs.available == 'true'
         env:
+          # Read-only API access for gh pr view/list and issue evidence; SSH remains the only push channel.
+          GH_TOKEN: ${{ github.token }}
           REPOSITORY: ${{ github.repository }}
           HUNTER_REGRESSION_ROOT: ${{ github.workspace }}/reviewed-pr
         run: |

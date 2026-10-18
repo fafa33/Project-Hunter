@@ -871,3 +871,20 @@ def test_recovery_ignores_main_only_nonknowledge_changes(origin_repo: Path, tmp_
     )
     assert "NO-OP" not in result
     assert recovery.pr_create_calls == 1
+
+
+def test_automatic_canonicalization_proposal_has_read_only_graphql_auth() -> None:
+    """The trusted proposal step must authenticate gh GraphQL without granting write scope."""
+    import yaml
+
+    path = Path(__file__).resolve().parents[1] / ".github/workflows/hunter-canonicalization-auto.yml"
+    workflow = yaml.safe_load(path.read_text())
+    job = workflow["jobs"]["canonicalize"]
+    assert workflow["permissions"] == {"contents": "read", "pull-requests": "read"}
+    assert "permissions" not in job
+    steps = {step["name"]: step for step in job["steps"]}
+    proposal = steps["Propose canonical knowledge when replayable evidence exists"]
+    assert proposal["env"]["GH_TOKEN"] == "${{ github.token }}"
+    assert "GITHUB_TOKEN" not in proposal["env"]
+    assert "hunter_canonicalization_candidate_pr.py" in proposal["run"]
+    assert "git@github.com:${REPOSITORY}.git" in proposal["run"]
