@@ -1967,3 +1967,85 @@ def test_merge_readiness_existing_blocking_review_finding_still_blocks_without_p
     decision = readiness.evaluate(observation)
     assert decision.state == "failure"
     assert "Changes requested" in decision.description
+
+
+def test_agent_judgement_path_cannot_escape_checkout(tmp_path, monkeypatch):
+    import hunter_pre_ready_review as review
+
+    checkout = tmp_path / "checkout"
+    checkout.mkdir()
+    inside = checkout / "judgement.json"
+    inside.write_text("{}")
+    outside = tmp_path / "secret.json"
+    outside.write_text("{}")
+    monkeypatch.chdir(checkout)
+    assert review._trusted_judgement_path(str(inside)) == inside
+    with pytest.raises(ValueError, match="authorized checkout"):
+        review._trusted_judgement_path(str(outside))
+    (checkout / "symlink.json").symlink_to(outside)
+    with pytest.raises(ValueError, match="authorized checkout"):
+        review._trusted_judgement_path("symlink.json")
+
+
+def test_writer_finalizer_idempotent_and_content_bound(tmp_path, monkeypatch):
+    """A writer must not rewrite unchanged evidence or accept a stale family scope."""
+    from pathlib import Path
+
+    changes = (_change("src/hunter/worker.py"),)
+    monkeypatch.setattr(review, "local_changes", lambda *_args, **_kwargs: changes)
+    monkeypatch.setattr(review, "load_families", lambda *_args, **_kwargs: ([], ""))
+    monkeypatch.setattr(review, "applicable_family_ids", lambda *_args, **_kwargs: ())
+    monkeypatch.setattr(review, "prepare_request", lambda **_kwargs: {"review_id": "id", "claims": {}})
+    monkeypatch.setattr(review, "verify_review_request", lambda *_args, **_kwargs: review.ReviewVerdict("valid", "ok"))
+    kwargs = dict(
+        issue="532",
+        base=BASE,
+        head=HEAD,
+        base_ref="main",
+        cwd=tmp_path,
+        issue_criteria=(),
+        judgement={"defect_families": []},
+    )
+    assert review.finalize_writer_review_request(**kwargs)
+    assert not review.finalize_writer_review_request(**kwargs)
+    kwargs["judgement"] = {"defect_families": [{"family": "unexpected"}]}
+    with pytest.raises(ValueError, match="applicable defect families"):
+        review.finalize_writer_review_request(**kwargs)
+    assert (Path(tmp_path) / review.REVIEW_RELATIVE_PATH).is_file()
+
+
+def test_writer_finalizer_rejects_unverified_issue_criteria(tmp_path):
+    with pytest.raises(ValueError, match="verified Issue criteria"):
+        review.finalize_writer_review_request(
+            issue="532",
+            base=BASE,
+            head=HEAD,
+            base_ref="main",
+            cwd=tmp_path,
+            issue_criteria=("Required acceptance criterion",),
+            judgement={"acceptance_criteria": [], "defect_families": []},
+        )
+
+
+def test_writer_finalizer_rejects_symlink_destination(tmp_path, monkeypatch):
+    outside = tmp_path / "outside.json"
+    outside.write_text("unchanged")
+    path = tmp_path / review.REVIEW_RELATIVE_PATH
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.symlink_to(outside)
+    monkeypatch.setattr(review, "local_changes", lambda *_args, **_kwargs: ())
+    monkeypatch.setattr(review, "load_families", lambda *_args, **_kwargs: ([], ""))
+    monkeypatch.setattr(review, "applicable_family_ids", lambda *_args, **_kwargs: ())
+    monkeypatch.setattr(review, "prepare_request", lambda **_kwargs: {"review_id": "id"})
+    monkeypatch.setattr(review, "verify_review_request", lambda *_args, **_kwargs: review.ReviewVerdict("valid", "ok"))
+    with pytest.raises(ValueError, match="symlink"):
+        review.finalize_writer_review_request(
+            issue="532",
+            base=BASE,
+            head=HEAD,
+            base_ref="main",
+            cwd=tmp_path,
+            issue_criteria=(),
+            judgement={"defect_families": []},
+        )
+    assert outside.read_text() == "unchanged"

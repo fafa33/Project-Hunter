@@ -3,11 +3,25 @@ from __future__ import annotations
 import importlib
 from pathlib import Path
 
+import pytest
+
 core = importlib.import_module("hunter_governance_review_v2")
 transport = importlib.import_module("hunter_github_transport")
 
 
 HEAD = "b" * 40
+
+
+@pytest.fixture(autouse=True)
+def _stub_candidate_admission_pr_head(monkeypatch):
+    original = core.request_json
+
+    def guarded(*args, **kwargs):
+        if len(args) >= 4 and args[2] == "GET" and str(args[3]).startswith("pulls/"):
+            return {"head": {"sha": HEAD}}
+        return original(*args, **kwargs)
+
+    monkeypatch.setattr(core, "request_json", guarded)
 
 
 def _pr(mergeable: bool | None) -> dict:
@@ -179,46 +193,79 @@ def test_workflow_uses_only_trusted_v2_controller_with_safe_bootstrap():
     # copy of this file, so `actions: write` here would be candidate-reachable.
     assert "python scripts/hunter_review_orchestrator.py" not in workflow
     assert "actions: write" not in workflow
+    # A status-writing workflow must never run a candidate-authored definition.
+    assert "  pull_request_target:" in workflow
+    assert "  pull_request:" not in workflow
+    assert "  statuses: write" in workflow
+    assert "path: engine" in workflow
+    assert "path: candidate" not in workflow
     assert "actions: read" in workflow
     assert "hunter_governance_review_v2.py" in workflow
 
-    # There is no privileged reconcile workflow any more: the native collector runs on
-    # `pull_request_target`, a trusted publisher records only its verified result, and this
-    # workflow stays read-only apart from the status it publishes.
-    assert not (Path(__file__).resolve().parents[1] / ".github/workflows/hunter-governance-reconcile.yml").exists()
-
-
-def test_governance_review_resolves_its_pull_request_from_fresh_state_not_titles_or_payloads():
-    workflow = (
-        Path(__file__).resolve().parents[1] / ".github" / "workflows" / "hunter-governance-review.yml"
+    reconcile = (
+        Path(__file__).resolve().parents[1] / ".github" / "workflows" / "hunter-governance-reconcile.yml"
     ).read_text(encoding="utf-8")
-
-    assert "  pull_request_target:" in workflow
-    assert "  workflow_run:" in workflow
-    assert "- Hunter / Pre-PR Preflight" in workflow
-    assert "- Hunter / Trusted Preflight Upgrade" in workflow
-    assert "gh api --paginate" in workflow
-    assert '.head.sha == \\"${EVENT_HEAD_SHA}\\"' in workflow
-    # Run titles, commit messages and dispatch payloads are never an identity source.
-    for forbidden in ("display_title", "head_commit.message", "client_payload", "repository_dispatch"):
-        assert forbidden not in workflow
-    # Privileged orchestration is gone: nothing here dispatches, re-runs or cancels.
-    assert "actions: write" not in workflow
-    assert "python scripts/hunter_review_orchestrator.py" not in workflow
+    assert "actions: write" in reconcile
+    assert "python scripts/hunter_review_orchestrator.py ensure" in reconcile
+    assert "if [ ! -f scripts/hunter_review_orchestrator.py ]; then" in reconcile
 
 
-def test_governance_review_drops_checkout_credentials_and_has_no_polling_or_review_events():
+def test_event_reconcile_scopes_to_triggering_pr_and_reserves_full_sweep_for_recovery():
     workflow = (
-        Path(__file__).resolve().parents[1] / ".github" / "workflows" / "hunter-governance-review.yml"
+        Path(__file__).resolve().parents[1] / ".github" / "workflows" / "hunter-governance-reconcile.yml"
+    ).read_text(encoding="utf-8")
+    assert 'event_name="${{ github.event_name }}"' in workflow
+    assert 'pr_numbers="${{ github.event.pull_request.number }}"' in workflow
+    assert '--search "${EVENT_WORKFLOW_RUN_HEAD_SHA}"' in workflow
+    assert 'select(.headRefOid == \\"${EVENT_WORKFLOW_RUN_HEAD_SHA}\\")' in workflow
+    assert 'elif [[ "${event_name}" == "workflow_run" ]]' in workflow
+    # A synchronize event must have a trusted actions:write handoff after the
+    # read-only Governance Review detects pending exact-head review authority.
+    assert "Hunter Governance Review" in workflow
+    assert "EVENT_WORKFLOW_RUN_PR_NUMBER: ${{ github.event.workflow_run.pull_requests[0].number }}" in workflow
+    assert (
+        'elif [[ "${event_name}" == "workflow_run" '
+        '&& "${EVENT_WORKFLOW_RUN_NAME}" == "Hunter Governance Review" ]]; then'
+    ) in workflow
+    assert 'pr_numbers="${EVENT_WORKFLOW_RUN_PR_NUMBER}"' in workflow
+    # PR #541: a completed Hunter Reviewer Collector run always executes from
+    # the trusted default branch, so its own workflow_run.head_sha is main's,
+    # never the candidate's -- it must be scoped by its own trusted run-name
+    # identity instead, never by that head_sha.
+    assert (
+        'elif [[ "${event_name}" == "workflow_run" '
+        '&& "${EVENT_WORKFLOW_RUN_NAME}" == "Hunter Reviewer Collector" ]]; then'
+    ) in workflow
+    assert "gh api --paginate" in workflow
+
+
+def test_reconcile_continues_after_one_pr_failure_and_drops_checkout_credentials():
+    workflow = (
+        Path(__file__).resolve().parents[1] / ".github" / "workflows" / "hunter-governance-reconcile.yml"
     ).read_text(encoding="utf-8")
 
     assert "persist-credentials: false" in workflow
-    # Approval-held review events and perpetual polling must not reappear on the privileged gate.
+    assert "failures=0" in workflow
+    assert "if ! python scripts/hunter_governance_review_v2.py" in workflow
+    assert "failures=1" in workflow
+    assert 'exit "${failures}"' in workflow
+
+    def trigger_block(name: str, next_name: str) -> str:
+        start = workflow.index(f"  {name}:")
+        end = workflow.index(f"  {next_name}:", start)
+        return workflow[start:end]
+
+    workflow_run = trigger_block("workflow_run", "pull_request_target")
+    assert "- Hunter / Pre-PR Preflight" in workflow_run
+    assert "- Hunter Reviewer Collector" in workflow_run
+    assert "- completed" in workflow_run
+    # Approval-held review events must not reappear on the privileged gate.
     assert "  pull_request_review:" not in workflow
     assert "  pull_request_review_comment:" not in workflow
-    assert "  schedule:" not in workflow
-    assert "cron:" not in workflow
-    assert "  pull_request:" not in workflow
+    assert "  pull_request_target:" in workflow
+    assert 'cron: "*/5 * * * *"' in workflow
+    # Human review changes converge on the bounded trusted sweep, not on an
+    # approval-held event; the previous immediate-review assertion was stale.
 
 
 ANCESTOR = "d" * 40
@@ -702,3 +749,11 @@ def test_connector_github_unavailable_is_pending_not_semantic_failure(monkeypatc
     state, description = core.verify_code_write_ingress_provenance("fafa33/Project-Hunter", "token", HEAD, 501)
     assert state == "pending"
     assert "temporarily unavailable" in description
+
+
+def test_scheduled_governance_sweeps_all_open_pr_pages():
+    from pathlib import Path
+
+    workflow = (Path(__file__).resolve().parents[1] / ".github/workflows/hunter-governance-reconcile.yml").read_text()
+    assert "gh api --paginate" in workflow
+    assert "repos/${GITHUB_REPOSITORY}/pulls?state=open&base=main&per_page=100" in workflow

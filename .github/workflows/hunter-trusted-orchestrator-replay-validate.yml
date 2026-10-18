@@ -17,15 +17,18 @@ name: Hunter / Trusted Orchestrator Replay Validate
 # This workflow replays the candidate's controller-logic modules against
 # fixed, offline scenario fixtures and independently recomputes their module
 # digests -- and does nothing else. It is deliberately triggered by
-# `pull_request`, never `pull_request_target`: no job here ever holds a write
+# `pull_request` (never `pull_request_target`): no job here ever holds a write
 # permission, a repository secret, or a status/check-publishing token, so
 # there is nothing for untrusted candidate code (which both jobs below
 # execute, by necessity, inside a further credential-blanked, process-isolated
 # subprocess -- see scripts/hunter_trusted_orchestrator_replay_worker.py) to
-# escalate even if a candidate branch's own copy of this workflow file were
-# tampered with. The only thing either job produces is an artifact; the
-# separate, privileged publish workflow re-derives every trusted quantity
-# itself and never trusts either job's own account of what it did.
+# escalate. Because a `pull_request` run executes the workflow YAML and the
+# trusted harness exactly as the candidate tree and base branch define them,
+# the candidate-touching half cannot be trusted on its own -- so the separate,
+# privileged publish workflow independently re-derives every trusted quantity
+# and additionally fails closed unless the exact workflow definition that this
+# run executed is byte-identical to the trusted, base-approved definition. It
+# never trusts either job's own account of what it did.
 #
 # validate-replay   (contents: read, blanked tokens) checks out the exact
 #   candidate and replays its controller-logic modules against fixed,
@@ -87,6 +90,19 @@ jobs:
         with:
           python-version: "3.11.13"
 
+      - name: Provision and verify trusted network namespace
+        run: |
+          set -euo pipefail
+          sudo apt-get update -qq
+          sudo apt-get install -y bubblewrap
+          test -x /usr/bin/bwrap
+          # Ubuntu 24.04 runners restrict unprivileged user namespaces through AppArmor, which makes
+          # `bwrap --unshare-net` fail while configuring loopback ("RTM_NEWADDR: Operation not permitted").
+          # Lift only that restriction on this ephemeral runner, then verify the namespace really denies egress.
+          sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0 || true
+          /usr/bin/bwrap --die-with-parent --unshare-net --unshare-pid --unshare-ipc --unshare-uts --new-session --cap-drop ALL --ro-bind / / --dev /dev --proc /proc --tmpfs /run -- \
+            python -c 'import socket; s=socket.socket(); s.settimeout(1); exec("try:\n s.connect((\"1.1.1.1\", 443))\nexcept OSError:\n pass\nelse:\n raise SystemExit(1)")'
+
       - name: Run trusted candidate orchestrator replay
         env:
           GITHUB_TOKEN: ""
@@ -95,12 +111,41 @@ jobs:
           CANDIDATE_SHA: ${{ github.event.pull_request.head.sha }}
         run: |
           set -euo pipefail
-          python scripts/hunter_trusted_orchestrator_replay.py run \
+          # The trusted controller is checked out from main; isolate its entire execution here,
+          # so this protection is effective before the candidate helper changes are merged.
+          # The harness writes its fixture and the receipt in the workspace root, so the root stays writable, but the
+          # trusted harness (`scripts/`: controller, worker, definition) and the candidate checkout are bound
+          # read-only on top of it, so neither can be rewritten while the replay runs.
+          # The loader path is derived from the interpreter's own prefix, not inherited from the environment, so a
+          # variable set earlier in the job cannot point the dynamic loader at attacker-supplied libraries.
+          py_lib="$(python -c 'import os, sys; print(os.path.join(sys.base_prefix, "lib"))')"
+          env -i PATH="$PATH" LD_LIBRARY_PATH="$py_lib" LANG=C.UTF-8 HOME=/tmp GITHUB_TOKEN= GH_TOKEN= \
+            /usr/bin/bwrap --die-with-parent --unshare-net --unshare-pid --unshare-ipc --unshare-uts --new-session --cap-drop ALL --ro-bind / / --dev /dev --proc /proc --tmpfs /run --tmpfs /tmp \
+            --bind "$GITHUB_WORKSPACE" "$GITHUB_WORKSPACE" \
+            --ro-bind "$GITHUB_WORKSPACE/scripts" "$GITHUB_WORKSPACE/scripts" \
+            --ro-bind "$GITHUB_WORKSPACE/candidate" "$GITHUB_WORKSPACE/candidate" -- \
+            python scripts/hunter_trusted_orchestrator_replay.py run \
             --workspace-root "$GITHUB_WORKSPACE" \
             --candidate-root candidate \
             --pr "$PR_NUMBER" \
             --candidate-sha "$CANDIDATE_SHA" \
-            --out replay-receipt.json
+            --out replay-receipt.json || {
+              rc=$?
+              # Diagnostic only: name each failing scenario (inert, truncated, workflow-command syntax defanged).
+              python - <<'PY' || true
+          import json
+          try:
+              results = json.load(open("replay-receipt.json"))["scenario_results"]
+          except Exception as exc:
+              print(f"replay receipt unreadable: {type(exc).__name__}")
+          else:
+              for item in results:
+                  if item.get("outcome") != "pass":
+                      line = json.dumps({k: v for k, v in item.items() if k != "invariant"})[:600]
+                      print("failing scenario:", line.replace("::", ": :"))
+          PY
+              exit "$rc"
+            }
 
       # Preserve failed scenario evidence without changing the replay job conclusion.
       - name: Upload replay receipt

@@ -3,12 +3,11 @@ name: Hunter Governance Review
 # Current-state governance status. Success is published only when mergeability
 # and exact-head candidate admission are both proven by the trusted controller.
 #
-# This workflow publishes commit statuses, so its definition MUST come from
-# the trusted base branch. A pull_request trigger would execute candidate-authored
-# steps with statuses:write and permit forged merge readiness.
-# The one privileged reviewer-result publisher is Hunter Collector Result Publisher
-# (workflow_run), which has no `pull_request` trigger and always executes the trusted
-# default-branch version of its own file; the reviewer collector itself holds no status write.
+# This status publisher requires statuses: write. It MUST run only the trusted
+# default-branch workflow definition: pull_request_target resolves from the base
+# branch, unlike pull_request, which executes candidate-authored workflow code.
+# The job checks out only the default branch and never executes candidate files.
+# The separate privileged reconcile workflow also remains base-branch trusted.
 
 on:
   pull_request_target:
@@ -18,21 +17,17 @@ on:
       - opened
       - reopened
       - synchronize
-      - ready_for_review
-      - converted_to_draft
-  # A push to main changes the base every open pull request is judged against, so each is re-evaluated.
-  # A push to main runs the pushed (trusted) definition of this file; nothing candidate-authored can.
-  push:
-    branches:
-      - main
-  # Exact-head proofs completing re-evaluate the status. The pull request is resolved from fresh
-  # GitHub state by head commit, never from a run title or a dispatch payload.
   workflow_run:
     workflows:
-      - Hunter / Pre-PR Preflight
       - Hunter / Trusted Preflight Upgrade
     types:
       - completed
+  workflow_dispatch:
+    inputs:
+      pr_number:
+        description: "Pull request number to review"
+        required: true
+        type: string
 
 permissions:
   # Read-only Actions access: the controller reads collector runs and artifacts
@@ -48,6 +43,7 @@ concurrency:
     hunter-governance-review-${{
       github.event.pull_request.number
       || github.event.workflow_run.pull_requests[0].number
+      || github.event.inputs.pr_number
       || github.run_id
     }}
   cancel-in-progress: false
@@ -56,7 +52,12 @@ jobs:
   governance-review:
     name: Hunter Governance Review
     runs-on: ubuntu-latest
-    timeout-minutes: 15
+    timeout-minutes: 5
+    if: >-
+      ${{
+        github.event_name != 'workflow_run'
+        || github.event.workflow_run.pull_requests[0].number
+      }}
 
     steps:
       - name: Checkout trusted controller
@@ -69,36 +70,17 @@ jobs:
       - name: Publish current governance and admission status
         env:
           GITHUB_TOKEN: ${{ github.token }}
-          GH_TOKEN: ${{ github.token }}
           GH_REPO: ${{ github.repository }}
           PR_NUMBER: >-
             ${{
               github.event.pull_request.number
               || github.event.workflow_run.pull_requests[0].number
+              || github.event.inputs.pr_number
             }}
-          EVENT_NAME: ${{ github.event_name }}
-          EVENT_HEAD_SHA: ${{ github.event.workflow_run.head_sha }}
           GITHUB_RUN_ID: ${{ github.run_id }}
           GITHUB_SERVER_URL: ${{ github.server_url }}
         run: |
           set -euo pipefail
-          PR_NUMBERS="${PR_NUMBER}"
-          if [[ "${EVENT_NAME}" == "push" ]]; then
-            # The base moved: every open pull request is re-evaluated. A failed listing fails the job.
-            PR_NUMBERS="$(gh api --paginate "repos/${GH_REPO}/pulls?state=open&base=main&per_page=100" --jq ".[] | .number")"
-          elif [[ -z "${PR_NUMBERS}" && -n "${EVENT_HEAD_SHA}" ]]; then
-            # GitHub did not associate the completed run with a pull request: find every open
-            # pull request that currently has this exact head commit. Pull requests can share a
-            # commit, and each has its own mergeability, findings and admission state, so each is
-            # evaluated independently rather than taking the first match. Captured without a pipe
-            # into `head` (SIGPIPE under `set -o pipefail`, PRH-112); a failed listing fails the job.
-            PR_NUMBERS="$(gh api --paginate "repos/${GH_REPO}/pulls?state=open&base=main&per_page=100" \
-              --jq ".[] | select(.head.sha == \"${EVENT_HEAD_SHA}\") | .number")"
-          fi
-          if [[ -z "${PR_NUMBERS}" ]]; then
-            echo "::notice::No open pull request has this head commit; nothing to evaluate."
-            exit 0
-          fi
           # The bridge below is always the trusted default-branch copy, and it
           # owns the controller-migration state itself: while the default branch
           # cannot yet orchestrate exact-head review it publishes an explicit
@@ -109,10 +91,6 @@ jobs:
           # python "${GITHUB_WORKSPACE}/engine/scripts/hunter_governance_review_v2.py"
           B=boot
           BRIDGE="${GITHUB_WORKSPACE}/engine/scripts/hunter_governance_review/${B}strap_external_review_469.py"
-          failures=0
-          for number in ${PR_NUMBERS}; do
-            if ! python "${BRIDGE}" governance --pr "${number}" --repository "${GH_REPO}"; then
-              failures=1
-            fi
-          done
-          exit "${failures}"
+          python "${BRIDGE}" governance \
+            --pr "${PR_NUMBER}" \
+            --repository "${GH_REPO}"

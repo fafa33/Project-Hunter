@@ -27,6 +27,14 @@ GENERATION = ""
 REPOSITORY = "owner/repo"
 ROOT = pathlib.Path(orchestrator.__file__).resolve().parents[1]
 
+# The PR #594 incident, reproduced from live evidence (collector run 39074557596): the exact-head cycle was published
+# by a ``pull_request_target`` reconcile run (39074522719) on branch fix/trusted-replay-native-contract, at the base
+# generation, one remediation generation below base.
+INCIDENT_BRANCH = "fix/trusted-replay-native-contract"
+INCIDENT_BASE = "d" * 40
+INCIDENT_GENERATION = "b56e998249410121"
+RECONCILE_RUN_ID = 39074522719
+
 
 def _pool() -> dict[str, Any]:
     pool, error = pre_ready.load_reviewer_pool()
@@ -92,6 +100,7 @@ def verdict(receipt: Any, **overrides: Any) -> orchestrator.PoolExhaustion:
         "pr_number": PR,
         "head_sha": HEAD,
         "run_id": RUN_ID,
+        "run_attempt": 1,
         "claims_id": CLAIMS,
         "generation_id": GENERATION,
         "pool": _pool(),
@@ -222,6 +231,7 @@ class Harness:
         self.dispatches = 0
         self.reads = 0
         self.cycles = cycles if cycles is not None else [self.open_cycle()]
+        monkeypatch.setenv("GITHUB_RUN_ATTEMPT", "1")
         self.path = tmp_path / "reviewer-results.json"
         self.path.write_text(json.dumps(make_receipt() if receipt is None else receipt), encoding="utf-8")
         monkeypatch.setattr(orchestrator, "current_run_id", lambda: RUN_ID)
@@ -264,12 +274,116 @@ class Harness:
         return orchestrator.finalize_exhausted_pool(REPOSITORY, "token", PR, head, run_id, self.path)
 
 
+def test_collector_completion_without_any_wake_up_ends_the_open_cycle(monkeypatch, tmp_path):
+    harness = Harness(monkeypatch, tmp_path)
+    assert harness.run() == "PUBLISHED: REVIEWER_UNAVAILABLE"
+    (published,) = harness.published
+    assert published.state == "REVIEWER_UNAVAILABLE"
+    assert (published.pr_number, published.head_sha, published.generation_id) == (PR, HEAD, GENERATION)
+    assert published.config_digest == orchestrator.reviewer_pool_config_digest()
+    assert published.trigger_id == 37765294070 and published.started_at == "2026-10-08T10:43:30Z"
+    assert harness.dispatches == 0
+
+
 def test_the_terminal_state_is_non_blocking_authority_free_and_idempotent():
     cycle = Harness.open_cycle(state="REVIEWER_UNAVAILABLE")
     assert orchestrator.governance_projection(cycle) == ("success", "REVIEWER_UNAVAILABLE")
     assert "REVIEWER_UNAVAILABLE" in orchestrator.TERMINAL_NONBLOCKING_STATES
     assert "REVIEWER_UNAVAILABLE" not in orchestrator.PENDING_STATES
     assert cycle.state not in orchestrator.OPEN_CYCLE_STATES
+
+
+@pytest.mark.parametrize(
+    "state", ["REVIEWER_UNAVAILABLE", "REVIEW_TIMED_OUT", "POOL_EXHAUSTED", "REVIEW_CLEAR", "FINDINGS_OPEN"]
+)
+def test_an_already_terminal_cycle_is_never_published_over(monkeypatch, tmp_path, state):
+    harness = Harness(monkeypatch, tmp_path, cycles=[Harness.open_cycle(state=state)])
+    assert harness.run().startswith("SKIPPED")
+    assert harness.published == []
+
+
+def test_a_second_completion_for_the_same_head_publishes_nothing(monkeypatch, tmp_path):
+    harness = Harness(monkeypatch, tmp_path)
+    assert harness.run().startswith("PUBLISHED")
+    harness.cycles = [harness.published[-1]]
+    harness.reads = 0
+    assert harness.run().startswith("SKIPPED")
+    assert len(harness.published) == 1
+
+
+def test_a_cycle_that_ends_concurrently_between_the_check_and_the_publish_is_left_alone(monkeypatch, tmp_path):
+    ended = Harness.open_cycle(state="REVIEW_TIMED_OUT")
+    harness = Harness(monkeypatch, tmp_path, cycles=[Harness.open_cycle(), ended])
+    assert harness.run() == "SKIPPED: the cycle ended concurrently"
+    assert harness.published == []
+
+
+def test_a_stale_generation_or_other_pool_configuration_is_never_finalized(monkeypatch, tmp_path):
+    other_generation = "0123456789abcdef"
+    for cycle in (
+        Harness.open_cycle(generation_id=other_generation),
+        Harness.open_cycle(config_digest="e" * 64),
+    ):
+        harness = Harness(monkeypatch, tmp_path, cycles=[cycle])
+        assert harness.run().startswith("SKIPPED")
+        assert harness.published == []
+    # The trusted generation moved on after the receipt was written: the receipt is stale evidence.
+    harness = Harness(monkeypatch, tmp_path, generation=other_generation)
+    assert harness.run().startswith("SKIPPED")
+    assert harness.published == []
+
+
+def test_a_head_that_changed_or_has_no_cycle_publishes_nothing(monkeypatch, tmp_path):
+    harness = Harness(monkeypatch, tmp_path, cycles=[None])
+    assert harness.run().startswith("SKIPPED")
+    assert harness.published == []
+    harness = Harness(monkeypatch, tmp_path)
+    assert harness.run(head="short").startswith("SKIPPED")
+    assert harness.run(head=OTHER_HEAD).startswith("SKIPPED")
+    assert harness.published == []
+
+
+def test_a_completion_from_a_different_run_is_refused(monkeypatch, tmp_path):
+    harness = Harness(monkeypatch, tmp_path)
+    assert harness.run(run_id=RUN_ID + 1).startswith("SKIPPED")
+    assert harness.published == []
+
+
+@pytest.mark.parametrize("content", ["", "not json", "[]", "{}", json.dumps({"attempts": []})])
+def test_an_unusable_receipt_file_leaves_the_cycle_open(monkeypatch, tmp_path, content):
+    harness = Harness(monkeypatch, tmp_path)
+    harness.path.write_text(content, encoding="utf-8")
+    assert harness.run().startswith("SKIPPED")
+    assert harness.published == []
+
+
+def test_a_missing_or_oversized_receipt_file_leaves_the_cycle_open(monkeypatch, tmp_path):
+    harness = Harness(monkeypatch, tmp_path)
+    harness.path.unlink()
+    assert harness.run().startswith("SKIPPED")
+    harness.path.write_text(" " * (orchestrator.COLLECTOR_RESULTS_MAX_BYTES + 1), encoding="utf-8")
+    assert harness.run().startswith("SKIPPED")
+    assert harness.published == []
+
+
+def test_a_review_request_that_is_not_usable_leaves_the_cycle_open(monkeypatch, tmp_path):
+    harness = Harness(monkeypatch, tmp_path)
+    monkeypatch.setattr(
+        orchestrator,
+        "review_request_state",
+        lambda *_a: orchestrator.ReviewRequestReadiness(False, "", "stale", "success"),
+    )
+    assert harness.run().startswith("SKIPPED")
+    assert harness.published == []
+
+
+@pytest.mark.parametrize("outcome", ["clear", "blocking"])
+def test_a_substantive_verdict_stays_with_the_authenticated_review_path(monkeypatch, tmp_path, outcome):
+    attempts = _exhausted_attempts()
+    attempts[0] = _record(_agents()[0], outcome)
+    harness = Harness(monkeypatch, tmp_path, receipt=make_receipt(attempts=attempts[:1]))
+    assert harness.run().startswith("SKIPPED")
+    assert harness.published == []
 
 
 # --- Reading the terminal state back: who may assert it ---------------------------------------------------------------
@@ -286,7 +400,8 @@ def _status_world(
         "created_at": "2026-10-08T10:44:50Z",
         "target_url": f"https://github.com/{REPOSITORY}/actions/runs/{RUN_ID}",
     }
-    run = {"head_branch": "main", "path": run_path, "event": event}
+    trusted_main_sha = "d" * 40
+    run = {"head_branch": "main", "head_sha": trusted_main_sha, "path": run_path, "event": event}
 
     def fake(repository, token, method, path, payload=None):
         if path == f"pulls/{PR}":
@@ -295,6 +410,8 @@ def _status_world(
             return [status]
         if path == "":
             return {"default_branch": "main"}
+        if path == "commits/main":
+            return {"sha": trusted_main_sha}
         if path == f"actions/runs/{RUN_ID}":
             return run
         raise AssertionError(path)
@@ -302,18 +419,10 @@ def _status_world(
     monkeypatch.setattr(orchestrator, "request_json", fake)
 
 
-def test_a_status_citing_a_collector_run_is_never_a_terminal_state(monkeypatch):
-    """The collector holds no status write under the current contract, and a pre-migration run that
-    still carries the old grant has no owner, binding or claim: neither can end a cycle."""
-
-    for event in ("workflow_dispatch", "repository_dispatch"):
-        _status_world(
-            monkeypatch,
-            state="REVIEWER_UNAVAILABLE",
-            run_path=orchestrator.COLLECTOR_WORKFLOW_PATH,
-            event=event,
-        )
-        assert orchestrator.read_cycle(REPOSITORY, "token", PR, HEAD)[0] == "absent", event
+def test_a_collector_run_may_assert_only_the_unavailable_terminal_state(monkeypatch):
+    _status_world(monkeypatch, state="REVIEWER_UNAVAILABLE", run_path=orchestrator.COLLECTOR_WORKFLOW_PATH)
+    state, cycle, _ = orchestrator.read_cycle(REPOSITORY, "token", PR, HEAD)
+    assert state == "present" and cycle is not None and cycle.state == "REVIEWER_UNAVAILABLE"
     for forbidden in ("REVIEW_CLEAR", "FINDINGS_OPEN", "REVIEW_TIMED_OUT", "WAITING_FOR_REVIEWER"):
         _status_world(monkeypatch, state=forbidden, run_path=orchestrator.COLLECTOR_WORKFLOW_PATH)
         assert orchestrator.read_cycle(REPOSITORY, "token", PR, HEAD)[0] == "absent"
@@ -338,15 +447,176 @@ def test_a_collector_status_needs_a_dispatched_default_branch_run_and_the_truste
     assert orchestrator.read_cycle(REPOSITORY, "token", PR, HEAD)[0] == "absent"
 
 
+# --- The PR #594 incident: a target-event cycle the trusted collector could not see ------------------------------------
+#
+# Live incident (collector run 39074557596): the exact-head cycle was published by a ``pull_request_target`` reconcile
+# run, so the status cited a run whose ``head_branch`` is the pull-request branch -- not the default branch. The
+# orchestrator the collector actually executes (the trusted default-branch copy) then accepted a cited run only when
+# ``head_branch`` equalled the default branch, so it read no cycle at all and ``collector-complete`` reported
+# ``SKIPPED: no open cycle for this exact head, generation and pool configuration`` while the cycle stayed in
+# WAITING_FOR_REVIEWER. Provenance binding (``_target_run_base_revision``) authenticates such a run by its exact, single
+# pull-request association instead. These tests pin both halves of that boundary, end to end: the bound incident cycle
+# is finalized, and an unbound target run stays fail-closed. Neither proves that a reviewer reviewed anything.
+
+
+def _incident_request_json(monkeypatch, *, association: bool) -> None:
+    config = orchestrator.reviewer_pool_config_digest()
+    status = {
+        "creator": {"login": orchestrator.TRUSTED_STATUS_CREATOR},
+        "context": f"{orchestrator.CONTEXT_PREFIX}{PR}",
+        "description": f"WAITING_FOR_REVIEWER||{RECONCILE_RUN_ID}|{config}|{INCIDENT_GENERATION}",
+        "created_at": "2026-10-17T22:18:53Z",
+        "target_url": f"https://github.com/{REPOSITORY}/actions/runs/{RECONCILE_RUN_ID}",
+    }
+    base_repo = {"id": 2}
+    head_repo = {"id": 1}
+    pull_request = {
+        "state": "open",
+        "head": {"sha": HEAD, "ref": INCIDENT_BRANCH, "repo": head_repo},
+        "base": {"ref": "main", "repo": base_repo},
+    }
+    associated = {
+        "number": PR,
+        "head": {"sha": HEAD, "ref": INCIDENT_BRANCH, "repo": head_repo},
+        "base": {"sha": INCIDENT_BASE, "ref": "main", "repo": base_repo},
+    }
+    run = {
+        "id": RECONCILE_RUN_ID,
+        "event": "pull_request_target",
+        "head_branch": INCIDENT_BRANCH,
+        "head_sha": HEAD,
+        "path": ".github/workflows/hunter-governance-reconcile.yml",
+        "pull_requests": [associated] if association else [],
+    }
+
+    def fake(repository, token, method, path, payload=None):
+        if path == f"pulls/{PR}":
+            return pull_request
+        if path.startswith(f"commits/{HEAD}/statuses"):
+            return [status]
+        if path == "":
+            return {"default_branch": "main", "id": 2}
+        if path == "commits/main":
+            return {"sha": INCIDENT_BASE}
+        if path == f"actions/runs/{RECONCILE_RUN_ID}":
+            return run
+        raise AssertionError(path)
+
+    monkeypatch.setattr(orchestrator, "request_json", fake)
+
+
+class _IncidentFinalization:
+    """Drives the real ``finalize_exhausted_pool`` with the real ``read_cycle``: the incident is in provenance binding."""
+
+    def __init__(self, monkeypatch, tmp_path, *, association: bool):
+        self.published: list[orchestrator.ReviewCycle] = []
+        monkeypatch.setenv("GITHUB_RUN_ATTEMPT", "1")
+        monkeypatch.setattr(orchestrator, "current_run_id", lambda: RUN_ID)
+        monkeypatch.setattr(
+            orchestrator,
+            "review_request_state",
+            lambda *_a: orchestrator.ReviewRequestReadiness(True, CLAIMS, "", "success"),
+        )
+        monkeypatch.setattr(orchestrator, "current_remediation_generation", lambda *_a: INCIDENT_GENERATION)
+        monkeypatch.setattr(orchestrator, "publish_cycle", lambda *_a, cycle: self.published.append(cycle))
+        monkeypatch.setattr(orchestrator, "dispatch_collector", self._forbid_dispatch)
+        _incident_request_json(monkeypatch, association=association)
+        receipt = make_receipt()
+        receipt["remediation_generation_id"] = INCIDENT_GENERATION
+        self.path = tmp_path / "reviewer-results.json"
+        self.path.write_text(json.dumps(receipt), encoding="utf-8")
+
+    @staticmethod
+    def _forbid_dispatch(*_a, **_k):
+        raise AssertionError("finalization must never dispatch a collector")
+
+    def run(self) -> str:
+        return orchestrator.finalize_exhausted_pool(REPOSITORY, "token", PR, HEAD, RUN_ID, self.path)
+
+
+def test_the_incident_cycle_published_by_a_target_event_reconcile_is_finalized(monkeypatch, tmp_path):
+    """Regression for run 39074557596: the bound target-event cycle is found and finalized, not skipped as absent."""
+
+    incident = _IncidentFinalization(monkeypatch, tmp_path, association=True)
+    state, cycle, _ = orchestrator.read_cycle(REPOSITORY, "token", PR, HEAD)
+    assert state == "present" and cycle is not None
+    assert cycle.state == "WAITING_FOR_REVIEWER"
+    assert cycle.generation_id == INCIDENT_GENERATION
+    assert cycle.config_digest == orchestrator.reviewer_pool_config_digest()
+
+    assert incident.run() == "PUBLISHED: REVIEWER_UNAVAILABLE"
+    (published,) = incident.published
+    # The wake-up terminal, never a fabricated clearance and never a blocking verdict.
+    assert published.state == "REVIEWER_UNAVAILABLE"
+    assert published.state in orchestrator.TERMINAL_NONBLOCKING_STATES
+    assert (published.pr_number, published.head_sha) == (PR, HEAD)
+    assert published.generation_id == INCIDENT_GENERATION
+    assert published.config_digest == orchestrator.reviewer_pool_config_digest()
+    assert published.trigger_id == RECONCILE_RUN_ID
+    assert published.started_at == "2026-10-17T22:18:53Z"
+
+
+def test_an_unbound_target_event_run_is_still_not_a_cycle(monkeypatch, tmp_path):
+    """The same status without its exact pull-request association is not provenance, so the pool is not finalized."""
+
+    incident = _IncidentFinalization(monkeypatch, tmp_path, association=False)
+    assert orchestrator.read_cycle(REPOSITORY, "token", PR, HEAD)[0] == "absent"
+    assert incident.run() == "SKIPPED: no open cycle for this exact head, generation and pool configuration"
+    assert incident.published == []
+
+
+def test_reconcile_published_states_are_still_believed(monkeypatch):
+    _status_world(
+        monkeypatch,
+        state="REVIEW_TIMED_OUT",
+        run_path=".github/workflows/hunter-governance-reconcile.yml",
+        event="workflow_run",
+    )
+    state, cycle, _ = orchestrator.read_cycle(REPOSITORY, "token", PR, HEAD)
+    assert state == "present" and cycle is not None and cycle.state == "REVIEW_TIMED_OUT"
+
+
 # --- The wiring that makes the finalization run ---------------------------------------------------------------------
 
 
 def test_the_collector_workflow_runs_collector_complete_in_its_own_working_directory():
     document = yaml.safe_load((ROOT / ".github/workflows/hunter-reviewer-collector.yml").read_text(encoding="utf-8"))
     steps = document["jobs"]["collect"]["steps"]
-    assert any("hunter_reviewer_collector.py" in str(step.get("run", "")) for step in steps)
-    assert all("collector-complete" not in str(step.get("run", "")) for step in steps)
-    assert document["permissions"].get("statuses") != "write"
+    output = next(step for step in steps if "hunter_reviewer_collector.py" in str(step.get("run", "")))
+    complete = next(step for step in steps if "collector-complete" in str(step.get("run", "")))
+    assert steps.index(output) < steps.index(complete)
+    assert f"--output {orchestrator.COLLECTOR_RESULTS_FILE}" in " ".join(str(output["run"]).split())
+    assert complete["if"] == "success()"
+
+
+def test_collector_complete_defaults_to_the_receipt_the_collector_step_writes():
+    arguments = orchestrator.parser().parse_args(
+        ["collector-complete", "--repository", REPOSITORY, "--pr", "1", "--head", HEAD, "--run-id", "2"]
+    )
+    assert not hasattr(arguments, "results")  # no caller-controlled receipt path
+
+
+def test_collector_completion_refuses_caller_supplied_receipt_path(tmp_path):
+    """Untrusted CLI arguments must never select an arbitrary file to read."""
+    import pytest
+
+    with pytest.raises(SystemExit) as error:
+        orchestrator.parser().parse_args(
+            [
+                "collector-complete",
+                "--repository",
+                REPOSITORY,
+                "--pr",
+                "1",
+                "--head",
+                HEAD,
+                "--run-id",
+                "2",
+                "--results",
+                str(tmp_path / "outside.json"),
+            ]
+        )
+    assert error.value.code == 2
 
 
 def test_collector_receipt_rejects_symlink_outside_working_directory(tmp_path):
@@ -359,12 +629,16 @@ def test_collector_receipt_rejects_symlink_outside_working_directory(tmp_path):
     assert "missing or too large" in reason
 
 
-def test_the_collector_invocation_writes_the_receipt_path_that_is_uploaded_and_read_by_recovery():
-    document = yaml.safe_load((ROOT / ".github/workflows/hunter-reviewer-collector.yml").read_text(encoding="utf-8"))
-    steps = document["jobs"]["collect"]["steps"]
-    invocations = [s for s in steps if "scripts/hunter_reviewer_collector.py" in str(s.get("run", ""))]
-    assert len(invocations) == 1
-    tokens = str(invocations[0]["run"]).replace("\\\n", " ").split()
-    assert tokens[tokens.index("--output") + 1] == "reviewer-results.json"
-    uploads = [s for s in steps if str(s.get("uses", "")).startswith("actions/upload-artifact")]
-    assert any(s["with"].get("path") == "reviewer-results.json" for s in uploads)
+def test_exhaustion_rejects_receipt_from_another_run_attempt():
+    assert verdict(make_receipt(run_attempt=1), run_attempt=2).exhausted is False
+    assert verdict(make_receipt(run_attempt=2), run_attempt=2).exhausted is True
+
+
+def test_collector_finalization_requires_trusted_attempt_environment(monkeypatch, tmp_path):
+    harness = Harness(monkeypatch, tmp_path)
+    monkeypatch.delenv("GITHUB_RUN_ATTEMPT")
+    assert "trusted run attempt" in harness.run()
+    assert harness.published == []
+    monkeypatch.setenv("GITHUB_RUN_ATTEMPT", "2")
+    assert "run_attempt" in harness.run()
+    assert harness.published == []

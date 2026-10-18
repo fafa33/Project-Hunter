@@ -16,7 +16,7 @@ class SessionFactory:
         return self._maker()
 
     def scoped(self) -> scoped_session:
-        return scoped_session(self._maker)  # type: ignore[return-value]
+        return scoped_session(self._maker)
 
 
 class SessionManager:

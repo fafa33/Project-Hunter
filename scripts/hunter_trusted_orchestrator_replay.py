@@ -55,6 +55,7 @@ from __future__ import annotations
 import argparse
 import hashlib
 import json
+import os
 import re
 import subprocess
 import sys
@@ -94,7 +95,20 @@ FIXTURE: dict[str, Any] = _DEFINITION["fixture"]
 #: guards against a receipt claiming instantaneous or reversed timing, not
 #: against ordinary CI variance.
 MAX_SCENARIO_SECONDS = _DEFINITION["max_scenario_seconds"]
-WORKER_TIMEOUT_SECONDS = 120
+# The worker permits one full startup window and a fresh execution window
+# after the trusted started sentinel, then up to 10 seconds of child cleanup.
+# Keep the outer subprocess budget strictly larger so its supervisor cannot
+# preempt the worker's structured timeout result.
+WORKER_STARTUP_TIMEOUT_SECONDS = 60
+WORKER_EXECUTION_TIMEOUT_SECONDS = 60
+WORKER_CLEANUP_TIMEOUT_SECONDS = 10
+WORKER_SUPERVISOR_MARGIN_SECONDS = 10
+WORKER_TIMEOUT_SECONDS = (
+    WORKER_STARTUP_TIMEOUT_SECONDS
+    + WORKER_EXECUTION_TIMEOUT_SECONDS
+    + WORKER_CLEANUP_TIMEOUT_SECONDS
+    + WORKER_SUPERVISOR_MARGIN_SECONDS
+)
 
 
 def _digest(payload: Any) -> str:
@@ -126,10 +140,14 @@ def _trusted_harness_sha() -> str:
     return result.stdout.strip()
 
 
-def _isolated_env() -> dict[str, str]:
-    import os
+#: The only variables candidate code is given: enough to run the interpreter, nothing the runner injects
+#: (``ACTIONS_*`` tokens, ``GITHUB_*`` context, secrets). Anything not listed here is dropped.
+WORKER_ENV_ALLOWLIST = ("PATH", "LANG", "LC_ALL", "LD_LIBRARY_PATH", "PYTHONHASHSEED", "TZ")
 
-    env = dict(os.environ)
+
+def _isolated_env() -> dict[str, str]:
+    env = {name: os.environ[name] for name in WORKER_ENV_ALLOWLIST if name in os.environ}
+    env["HOME"] = "/tmp"  # NOSONAR S108 - the worker's HOME is the sandbox's private tmpfs, never the runner's
     env["GITHUB_TOKEN"] = ""
     env["GH_TOKEN"] = ""
     return env
@@ -269,25 +287,75 @@ def resolve_candidate_root(workspace_root: Path, raw: str) -> Path:
     return resolve_confined_existing(workspace_root, raw, must_be_dir=True, label="--candidate-root")
 
 
+# Mount point of the sandbox's own tmpfs. It lives in bwrap's private mount namespace, so it is never the host's
+# /tmp: nothing written there can reach the host or the trusted workspace.
+SANDBOX_TMP = "/tmp"  # NOSONAR S108 - private tmpfs in the sandbox mount namespace, reviewed safe
+
+
+def _network_isolated_worker_command(worker_args: list[str]) -> list[str]:
+    """Fail closed when hosted replay requires an OS-enforced network namespace.
+
+    The binary path is fixed, not resolved through candidate-controlled PATH.
+    Bubblewrap creates the namespace before Python can import candidate code.
+    """
+    if os.environ.get("HUNTER_REPLAY_REQUIRE_NETNS") != "1":
+        return worker_args
+    sandbox = Path("/usr/bin/bwrap")
+    if not sandbox.is_file() or not os.access(sandbox, os.X_OK):
+        raise RuntimeError("trusted replay requires executable /usr/bin/bwrap")
+    return [
+        str(sandbox),
+        "--die-with-parent",
+        "--unshare-net",
+        "--unshare-pid",
+        "--unshare-ipc",
+        "--unshare-uts",
+        "--new-session",
+        "--cap-drop",
+        "ALL",
+        "--ro-bind",
+        "/",
+        "/",
+        "--dev",
+        "/dev",
+        "--proc",
+        "/proc",
+        # Mask the host's /run (and /var/run, which resolves to it) so the candidate cannot reach host Unix
+        # sockets such as the Docker or agent sockets; --unshare-net does not block filesystem sockets.
+        "--tmpfs",
+        "/run",
+        "--tmpfs",
+        SANDBOX_TMP,
+        "--",
+        *worker_args,
+    ]
+
+
 def _run_scenario(
     scenario_id: str, candidate_root: Path, fixture_path: Path, *, workspace_root: Path
 ) -> dict[str, Any]:
     if scenario_id not in REQUIRED_SCENARIO_IDS:
         raise ValueError(f"scenario_id {scenario_id!r} is not one of the canonical {REQUIRED_SCENARIO_IDS}")
+    # The workspace is writable inside the sandbox, so a previous scenario's candidate code could have rewritten
+    # the fixture. Restore the canonical bytes (replacing any file or symlink) before every worker launch.
+    fixture_path.unlink(missing_ok=True)
+    fixture_path.write_text(json.dumps(FIXTURE, sort_keys=True), encoding="utf-8")
     started = datetime.now(UTC)
     process = subprocess.run(
-        [
-            sys.executable,
-            str(WORKER_PATH),
-            "--workspace-root",
-            str(workspace_root),
-            "--candidate-root",
-            str(candidate_root.relative_to(workspace_root)),
-            "--scenario",
-            scenario_id,
-            "--fixture",
-            str(fixture_path.relative_to(workspace_root)),
-        ],
+        _network_isolated_worker_command(
+            [
+                sys.executable,
+                str(WORKER_PATH),
+                "--workspace-root",
+                str(workspace_root),
+                "--candidate-root",
+                str(candidate_root.relative_to(workspace_root)),
+                "--scenario",
+                scenario_id,
+                "--fixture",
+                str(fixture_path.relative_to(workspace_root)),
+            ]
+        ),
         cwd=str(ROOT),
         env=_isolated_env(),
         capture_output=True,
@@ -357,6 +425,40 @@ def _index_scenario_results(results: list[Any]) -> dict[str, dict[str, Any]]:
     return by_id
 
 
+def _scenario_result_errors(results: list[Any]) -> list[str]:
+    """Reject malformed or duplicate scenario entries before any lookup.
+
+    ``_index_scenario_results`` collapses entries by last-write-wins, so a
+    candidate-controlled receipt carrying an earlier failing or malformed result
+    behind a later passing duplicate of the same ``scenario_id`` would satisfy a
+    set-membership check while hiding the real result. Every entry must be a
+    well-formed object with a unique, non-empty string ``scenario_id``, and the
+    number of results must equal the canonical scenario count -- no duplicate,
+    substitution, omission or malformed entry.
+    """
+
+    errors: list[str] = []
+    if len(results) != len(REQUIRED_SCENARIO_IDS):
+        errors.append(
+            f"receipt scenario_results must contain exactly {len(REQUIRED_SCENARIO_IDS)} entries "
+            f"(one per required scenario), found {len(results)}"
+        )
+    seen: set[str] = set()
+    for index, entry in enumerate(results):
+        if not isinstance(entry, dict):
+            errors.append(f"receipt scenario_results[{index}] is not a JSON object")
+            continue
+        scenario_id = entry.get("scenario_id")
+        if not isinstance(scenario_id, str) or not scenario_id:
+            errors.append(f"receipt scenario_results[{index}] has a missing or non-string scenario_id")
+            continue
+        if scenario_id in seen:
+            errors.append(f"receipt scenario_results contains a duplicate scenario_id {scenario_id!r}")
+            continue
+        seen.add(scenario_id)
+    return errors
+
+
 def verify_candidate_module_digests(receipt: Any, candidate_root: Path) -> list[str]:
     """The one part of receipt validation that needs candidate file access.
 
@@ -374,9 +476,10 @@ def verify_candidate_module_digests(receipt: Any, candidate_root: Path) -> list[
         return ["receipt scenario_results must be a list"]
     by_id = _index_scenario_results(results)
 
+    errors = _scenario_result_errors(results)
+
     import hunter_trusted_orchestrator_replay_worker as worker
 
-    errors: list[str] = []
     for scenario_id in REQUIRED_SCENARIO_IDS:
         entry = by_id.get(scenario_id)
         if entry is None:
@@ -449,7 +552,9 @@ def validate_receipt_trusted_fields(
         return errors + ["receipt scenario_results must be a list"]
 
     by_id = _index_scenario_results(results)
-    # 8. exactly the required scenario ids, no substitution and no omission
+    # 8. every entry well-formed, and exactly the required scenario ids with no
+    # duplicate, substitution or omission (count must equal the canonical count)
+    errors.extend(_scenario_result_errors(results))
     if set(by_id) != set(REQUIRED_SCENARIO_IDS):
         errors.append(
             f"receipt scenario_results must cover exactly {sorted(REQUIRED_SCENARIO_IDS)}, found {sorted(by_id)}"

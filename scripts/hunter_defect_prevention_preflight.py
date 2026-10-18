@@ -23,7 +23,11 @@ import hunter_writer_provenance as provenance
 import yaml
 from hunter_workflow_state import path_matches_scope_entry
 
-ROOT = Path(__file__).resolve().parents[1]
+ROOT = (
+    Path(os.environ["HUNTER_TRUSTED_VALIDATION_ROOT"]).resolve()
+    if "HUNTER_TRUSTED_VALIDATION_ROOT" in os.environ
+    else Path(__file__).resolve().parents[1]
+)
 REQUIRED_PREFLIGHT_GATES = (
     "Architecture Index Guard",
     "Artifact Guard",
@@ -2654,6 +2658,7 @@ def run_candidate_quality_gates(candidate_root: Path) -> int:
     env = os.environ.copy()
     env["GITHUB_TOKEN"] = ""
     env["GH_TOKEN"] = ""
+    env["HUNTER_TRUSTED_VALIDATION_ROOT"] = str(candidate_root.resolve())
 
     lane_problem = trusted_lane_problem(env.get("PYTEST_ADDOPTS", ""))
     if lane_problem is not None:
@@ -2665,7 +2670,11 @@ def run_candidate_quality_gates(candidate_root: Path) -> int:
         )
         return 2
 
+    # Gate implementations must come from the trusted checkout, not the PR.
+    trusted_root = Path(__file__).resolve().parents[1]
     for name, command in TRUSTED_CANDIDATE_QUALITY_GATES:
+        if len(command) >= 2 and command[0] == "python" and command[1].startswith("scripts/"):
+            command = (command[0], str(trusted_root / command[1]), *command[2:])
         printable = " ".join(command)
         print(f"[Trusted Candidate Gates] {name}: {printable}", flush=True)
         completed = subprocess.run(command, cwd=candidate_root, env=env, check=False)
