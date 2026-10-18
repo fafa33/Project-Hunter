@@ -1834,15 +1834,23 @@ def test_combined_status_endpoint_exposes_no_creator():
 
 
 def test_read_cycle_reads_the_status_list_endpoint():
-    """`read_cycle` must not use the combined endpoint for provenance."""
+    """`read_cycle` must not use the combined endpoint for provenance.
+
+    The list read itself now lives in the bounded pagination helper, so both
+    halves are checked: `read_cycle` reaches that helper and nothing else, and
+    the helper reads the creator-bearing list endpoint page by page -- never the
+    publisher-free combined endpoint.
+    """
 
     import inspect
 
     source = inspect.getsource(orchestrator.read_cycle)
-    assert "commits/{head_sha}/statuses?per_page=100" in source
-    assert 'f"commits/{head_sha}/status"' not in source
-    # Only the list endpoint, so the publisher is actually populated.
-    assert source.count("commits/{head_sha}") == 1
+    helper = inspect.getsource(orchestrator._all_commit_statuses)
+    assert "_all_commit_statuses" in source
+    assert source.count("commits/{head_sha}") == 0
+    assert "commits/{head_sha}/statuses?per_page=100" in helper
+    assert 'f"commits/{head_sha}/status"' not in source + helper
+    assert helper.count("commits/{head_sha}") == 1
 
 
 def test_trusted_creator_cycle_is_accepted():
@@ -2158,3 +2166,233 @@ def test_read_cycle_binds_pull_request_target_provenance(monkeypatch, case, expe
     state, cycle, _ = orchestrator.read_cycle("owner/repo", "token", 472, HEAD)
     assert state == expected
     assert (cycle is not None) == (expected == "present")
+
+
+# --- M2: candidate-reachable status/check publication (PR #592 slice 1) -------
+
+
+def _candidate_status_publishers(document):
+    """Candidate-owned workflow definitions must never receive status/check write authority.
+
+    A definition is candidate-owned when GitHub can execute the candidate's own copy
+    of it: the `pull_request`-class triggers run the head branch's file, and a `push`
+    outside the default branch runs the pushed file. `pull_request_target` resolves
+    from the base branch, `workflow_run`, `schedule` and `push` to the default branch
+    always run the trusted default-branch file, and `workflow_dispatch` is gated on
+    repository write access, so none of them can carry a candidate-authored step --
+    which is exactly the trust model `test_trusted_orchestration_runs_only_from_
+    workflows_without_pull_request_triggers` enforces for the orchestrator itself.
+    """
+    if not isinstance(document, dict):
+        return []
+    triggers = _triggers(document)
+    push = document.get("on", document.get(True))
+    push = push.get("push") if isinstance(push, dict) else None
+    main_only_push = (
+        isinstance(push, dict)
+        and push.get("branches") == ["main"]
+        and not push.get("branches-ignore")
+        and not push.get("tags")
+    )
+    if not ({"pull_request", "pull_request_review", "pull_request_review_comment"} & set(triggers)) and not (
+        "push" in triggers and not main_only_push
+    ):
+        return []
+    blocks = [document.get("permissions")]
+    jobs = document.get("jobs")
+    job_blocks = (
+        [job.get("permissions") for job in jobs.values() if isinstance(job, dict)] if isinstance(jobs, dict) else []
+    )
+    if blocks[0] is None and any(block is None for block in job_blocks):
+        # No top-level baseline leaves every block-less job on the repository
+        # default token. A job may pin itself instead (the replay-validate
+        # pattern: contents: read on every job), but an unpinned job is an
+        # unbounded one.
+        return ["missing-workflow-permissions"]
+    blocks.extend(job_blocks)
+    unsafe = []
+    for block in blocks:
+        if isinstance(block, str) and block.strip() == "write-all":
+            unsafe.append("write-all")
+        elif isinstance(block, dict):
+            unsafe.extend(key for key in ("statuses", "checks") if str(block.get(key, "")).strip() in WORKFLOW_DRIVING)
+    return unsafe
+
+
+def test_candidate_workflows_cannot_publish_protected_commit_statuses():
+    unsafe = [(path.name, _candidate_status_publishers(document)) for path, document in _workflow_documents()]
+    assert [(name, grants) for name, grants in unsafe if grants] == []
+
+
+@pytest.mark.parametrize(
+    "trigger",
+    [
+        "on: pull_request",
+        "on: pull_request_review",
+        "on: pull_request_review_comment",
+        "on: [push, pull_request]",
+        '"on": {pull_request: null}',
+        "on: push",
+        "on: {push: {branches-ignore: [main]}}",
+        "on: {push: {branches: [feature, main]}}",
+    ],
+)
+@pytest.mark.parametrize(
+    "grant", ["permissions: {statuses: write}", "permissions: {checks: write}", "permissions: write-all"]
+)
+def test_candidate_status_spoofing_mutation_is_rejected(trigger, grant):
+    assert _candidate_status_publishers(yaml.safe_load(f"{trigger}\n{grant}\n"))
+
+
+@pytest.mark.parametrize("scope", ["statuses", "checks"])
+def test_job_override_cannot_publish_protected_status(scope):
+    document = yaml.safe_load(
+        f"on: pull_request\npermissions: {{{scope}: read}}\njobs:\n  spoof:\n    permissions: {{{scope}: write}}\n"
+    )
+    assert _candidate_status_publishers(document) == [scope]
+
+
+def test_job_write_all_cannot_publish_protected_status():
+    document = yaml.safe_load(
+        "on: pull_request\npermissions: {contents: read}\njobs:\n  spoof:\n    permissions: write-all\n"
+    )
+    assert _candidate_status_publishers(document) == ["write-all"]
+
+
+def test_candidate_missing_explicit_permission_baseline_is_rejected():
+    document = yaml.safe_load("on: pull_request\njobs:\n  build:\n    runs-on: ubuntu-latest\n")
+    assert _candidate_status_publishers(document) == ["missing-workflow-permissions"]
+
+
+def test_main_only_push_is_trusted():
+    document = yaml.safe_load("on: {push: {branches: [main]}}\npermissions: {statuses: write}\n")
+    assert _candidate_status_publishers(document) == []
+
+
+def test_commit_status_pagination_keeps_old_trusted_dispatch_proof(monkeypatch):
+    calls = []
+    proof = {
+        "context": "Hunter Collector Dispatch Proof / PR #472",
+        "creator": {"login": "github-actions[bot]"},
+        "id": 7,
+    }
+
+    def request(_repo, _token, _method, path, _payload=None):
+        calls.append(path)
+        if path.endswith("page=100"):
+            return [{"id": n} for n in range(100)]
+        if path.endswith("page=2"):
+            return [proof]
+        raise AssertionError(path)
+
+    monkeypatch.setattr(orchestrator, "request_json", request)
+    statuses = orchestrator._all_commit_statuses("owner/repo", "token", HEAD)
+    assert len(statuses) == 101
+    assert proof in statuses
+    assert len(calls) == 2
+
+
+def test_pr592_defect_registry_never_claims_unverified_findings_prevented():
+    """The learning ledger must not silently promote historical review titles."""
+    import json
+
+    root = REPOSITORY_ROOT
+    ledger = json.loads((root / "docs" / "PR592_COPILOT_FINDING_LEDGER.json").read_text())
+    registry = json.loads((root / "docs" / "DEFECT_REGISTRY.json").read_text())
+    by_id = {entry["id"]: entry for entry in registry["defects"]}
+    assert len(ledger["findings"]) == ledger["captured_findings"] == 43
+    for finding in ledger["findings"]:
+        assert finding["id"] in by_id
+        assert finding["status"] != "prevented"
+        assert finding.get("verification")
+
+
+def test_missing_workflow_permission_baseline_is_detected_in_action_guard():
+    """An unpinned job under no workflow-level baseline is an unbounded one.
+
+    The workflow-level block is not the only place a baseline can live: a
+    workflow may pin every job instead (the replay-validate pattern). What the
+    guard must never miss is a job left on the repository default token.
+    """
+    unpinned = yaml.safe_load("on: pull_request\njobs: {build: {runs-on: ubuntu-latest}}\n")
+    assert _candidate_status_publishers(unpinned) == ["missing-workflow-permissions"]
+    pinned = yaml.safe_load(
+        "on: pull_request\njobs: {build: {runs-on: ubuntu-latest, permissions: {contents: read}}}\n"
+    )
+    assert _candidate_status_publishers(pinned) == []
+
+
+def _publishes_protected_checks(document):
+    if not isinstance(document, dict):
+        return False
+    blocks = [document.get("permissions")]
+    jobs = document.get("jobs")
+    if isinstance(jobs, dict):
+        blocks.extend(job.get("permissions") for job in jobs.values() if isinstance(job, dict))
+    for block in blocks:
+        if isinstance(block, str) and block.strip() == "write-all":
+            return True
+        if isinstance(block, dict):
+            levels = [str(block.get(key, "")).strip() for key in ("statuses", "checks")]
+            if any(level in WORKFLOW_DRIVING for level in levels):
+                return True
+    return False
+
+
+def test_status_publishing_workflows_are_never_head_resolved():
+    publishing = [
+        (path.name, _triggers(document))
+        for path, document in _workflow_documents()
+        if isinstance(document, dict) and _publishes_protected_checks(document)
+    ]
+    assert publishing, "no workflow publishes protected commit statuses"
+    for name, triggers in publishing:
+        assert "pull_request" not in triggers, name
+    assert "hunter-governance-reconcile.yml" in {name for name, _ in publishing}
+
+
+def test_no_dispatch_entry_point_selects_a_git_ref():
+    selectors = {"ref", "branch", "revision", "head_ref", "git_ref", "target_ref"}
+    for path, document in _workflow_documents():
+        if not isinstance(document, dict):
+            continue
+        on = document.get("on", document.get(True))
+        if not isinstance(on, dict) or "workflow_dispatch" not in on:
+            continue
+        block = on.get("workflow_dispatch") or {}
+        inputs = set(block.get("inputs") or {}) if isinstance(block, dict) else set()
+        assert not (inputs & selectors), path.name
+
+
+def test_commit_status_history_is_bounded_and_fails_closed(monkeypatch):
+    """The bounded window fails closed instead of spending a job's API budget."""
+    calls = []
+
+    def request(_repo, _token, _method, path, _payload=None):
+        calls.append(path)
+        if path.startswith(f"commits/{HEAD}/statuses"):
+            return [{"context": "x", "state": "success"}] * 100
+        raise AssertionError(path)
+
+    monkeypatch.setattr(orchestrator, "request_json", request)
+    monkeypatch.setattr(orchestrator, "COMMIT_STATUS_MAX_PAGES", 3)
+    with pytest.raises(ValueError, match="bounded"):
+        orchestrator._all_commit_statuses("owner/repo", "token", HEAD)
+    assert len(calls) == 3
+
+
+def test_an_unreadable_status_history_fails_the_cycle_closed(monkeypatch):
+    """No half-read history: an unreadable listing derives an absent cycle."""
+
+    def request(_repo, _token, _method, path, _payload=None):
+        if path.startswith(f"commits/{HEAD}/statuses"):
+            raise ValueError("commit status history exceeds the bounded inspection window")
+        if path == "pulls/472":
+            return {"state": "open", "head": {"sha": HEAD}}
+        if path == "":
+            return {"default_branch": "main"}
+        raise AssertionError(path)
+
+    monkeypatch.setattr(orchestrator, "request_json", request)
+    state, cycle, diagnostic = orchestrator.read_cycle("owner/repo", "token", 472, HEAD)
+    assert (state, cycle, diagnostic) == ("absent", None, None)

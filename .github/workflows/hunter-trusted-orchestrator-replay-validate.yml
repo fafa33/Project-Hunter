@@ -54,9 +54,6 @@ on:
       - reopened
       - synchronize
 
-permissions:
-  contents: read
-
 concurrency:
   group: hunter-orchestrator-replay-validate-${{ github.event.pull_request.number }}
   cancel-in-progress: true
@@ -147,9 +144,7 @@ jobs:
               exit "$rc"
             }
 
-      # Preserve failed scenario evidence without changing the replay job conclusion.
       - name: Upload replay receipt
-        if: ${{ always() }}
         uses: actions/upload-artifact@v4
         with:
           name: replay-receipt

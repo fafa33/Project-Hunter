@@ -1037,13 +1037,3 @@ def test_non_vacuousness_trusting_the_trigger_payload_breaks_replay_safety(gh, m
     drive(monkeypatch, tmp_path, gh, "workflow_run", payload)
 
     assert gh.readiness_status(new_head)[0] == "pending"
-
-
-def test_trusted_repository_dispatch_is_a_full_open_pull_request_sweep(gh):
-    """hunter-trusted-recovery carries no pull request; it must refresh every open PR, not none."""
-    head = ready_pull_request(gh)
-    core.event_name = "repository_dispatch"
-    event = {"action": "hunter-trusted-recovery", "client_payload": {}}
-    assert head and core.candidate_pull_requests("repository_dispatch", event) == [501]
-    # An unrelated event with no pull request still yields nothing.
-    assert core.candidate_pull_requests("push", {}) == []

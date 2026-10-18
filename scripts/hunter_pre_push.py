@@ -379,7 +379,7 @@ def require_current_review_request_if_present(head_sha: str, updates: Iterable[t
     A missing or stale review-request document must never deadlock code push
     or deterministic merge authority. Issue #534 (root cause 2): nothing in
     this repository auto-generates or regenerates a review-request document --
-    `hunter_reviewer_collector.verify_native_start` only ever consumes an existing
+    `hunter_review_orchestrator.ensure_current` only ever consumes an existing
     valid one, it never produces one. The contributor commits it via
     `python scripts/hunter_pre_ready_review.py --request`, and until that
     lands at the exact head, trusted review orchestration has nothing valid to

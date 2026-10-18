@@ -348,14 +348,14 @@ def test_sweep_isolates_failure_to_one_pull_request(monkeypatch):
     assert published == [("d" * 40, "success")]
 
 
-def test_collector_publisher_completion_sweeps_open_pull_requests(monkeypatch):
-    """The publisher runs from the default branch, so its head SHA is never a candidate head."""
+def test_governance_reconcile_completion_sweeps_open_pull_requests(monkeypatch):
+    """The reconcile run publishes PR statuses from a default-branch run."""
     monkeypatch.setattr(
         core,
         "event_payload",
         lambda: {
             "workflow_run": {
-                "name": "Hunter Collector Result Publisher",
+                "name": "Hunter Governance Review Reconcile",
                 "head_sha": "m" * 40,
                 "pull_requests": [],
             }

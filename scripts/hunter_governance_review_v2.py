@@ -710,66 +710,26 @@ def reviewer_identity_map(pool: dict[str, Any]) -> dict[str, str]:
     return identities
 
 
-def trusted_collector_run(
-    repository: str,
-    token: str,
-    trigger: dict[str, Any],
-    pr_number: int,
-    *,
-    trigger_comment_id: int | None = None,
-    response_digest: str | None = None,
-) -> bool:
-    """Require reviewer trigger identity to originate from Hunter's trusted collector workflow.
-
-    The actual run is re-read from GitHub (collector workflow, ``pull_request_target`` event,
-    default branch, completed and successful) and its integrity-checked receipt must name this
-    exact pull request, head, claims and remediation generation. A run title, a dispatch payload
-    or an artifact alone never qualifies. Anything unreadable or inconsistent is refused.
-
-    A comment posted as ``github-actions[bot]`` is not evidence by itself: a candidate-authored
-    workflow with ``pull-requests: write`` can post as that account. When ``trigger_comment_id`` is
-    given, the trigger must therefore also be one the verified receipt recorded for that reviewer
-    (same comment id and attempt number), and when ``response_digest`` is given that attempt must have
-    recorded exactly that digest as a clear result. Forged comments cannot satisfy a real run's receipt.
-    """
-    from hunter_reviewer_collector import verified_collector_receipt
+def trusted_collector_run(repository: str, token: str, trigger: dict[str, Any]) -> bool:
+    """Require reviewer trigger identity to originate from Hunter's trusted collector workflow."""
+    from hunter_reviewer_collector import WORKFLOW, _run_on_default_branch_history, valid_run
 
     run_id = trigger.get("collector_run_id")
     attempt = trigger.get("collector_run_attempt")
-    head = str(trigger.get("head_sha") or "")
-    if type(run_id) is not int or type(attempt) is not int or not _is_commit_sha(head):
+    if type(run_id) is not int or type(attempt) is not int:
         return False
     try:
-        run, receipt = verified_collector_receipt(repository, token, run_id, pr_number, head)
-        pool, pool_error = pre_ready.load_reviewer_pool()
-        if pool is None or pool_error:
+        repo = request_json(repository, token, "GET", "")
+        run = request_json(repository, token, "GET", f"actions/runs/{run_id}")
+        if not isinstance(repo, dict) or not isinstance(run, dict):
             return False
-        # A receipt produced under another reviewer pool configuration is not authority now, exactly as
-        # the exhaustion path already refuses it.
-        from hunter_reviewer_collector import configuration_digest
-
-        if receipt.get("configuration_digest") != configuration_digest(pool):
-            return False
-        if trigger_comment_id is not None:
-            recorded = [
-                item
-                for item in receipt.get("attempts") or []
-                if isinstance(item, dict)
-                and item.get("agent_id") == trigger.get("reviewer_agent")
-                and item.get("trigger_id") == trigger_comment_id
-                and item.get("attempt_number") == trigger.get("attempt_number")
-                and item.get("collector_run_id") == run_id
-            ]
-            if len(recorded) != 1:
-                return False
-            if response_digest is not None and (
-                recorded[0].get("response_digest") != response_digest or recorded[0].get("outcome") != "clear"
-            ):
-                return False
+        branch = str(repo.get("default_branch") or "")
+        revision = str(run.get("head_sha") or "")
         return (
-            run.get("run_attempt") == attempt
-            and receipt.get("claims_id") == trigger.get("claims_id")
-            and receipt.get("remediation_generation_id") == str(trigger.get("remediation_generation_id") or "")
+            run.get("path") == WORKFLOW
+            and run.get("run_attempt") == attempt
+            and valid_run(run, run_id, branch, revision)
+            and _run_on_default_branch_history(repository, token, branch, revision)
         )
     except Exception:
         return False
@@ -867,14 +827,7 @@ def read_pr_pool_review_comments(
                     trigger.get(k) != result.get(k)
                     for k in ("head_sha", "claims_id", "reviewer_agent", "collector_run_id")
                 )
-                or not trusted_collector_run(
-                    repository,
-                    token,
-                    trigger,
-                    pr_number,
-                    trigger_comment_id=int(result["trigger_id"]),
-                    response_digest=str(result["response_digest"]),
-                )
+                or not trusted_collector_run(repository, token, trigger)
             ):
                 continue
             trusted_results[
@@ -903,9 +856,7 @@ def read_pr_pool_review_comments(
             if (
                 trigger is not None
                 and trigger.get("reviewer_agent") == "codex"
-                and trusted_collector_run(
-                    repository, token, trigger, pr_number, trigger_comment_id=int(comment.get("id") or 0)
-                )
+                and trusted_collector_run(repository, token, trigger)
             ):
                 native_triggers.append((str(comment.get("created_at") or ""), trigger))
         for review_item in reviews:

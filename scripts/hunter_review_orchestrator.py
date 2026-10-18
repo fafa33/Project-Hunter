@@ -497,6 +497,27 @@ def _target_run_base_revision(
     return str(associated["base"].get("sha") or "")
 
 
+#: Commit-status history is read in full, but within a bound: GitHub caps statuses
+#: per context, so this is generous. Exceeding it is unavailable evidence and fails
+#: closed rather than letting one head exhaust a governance job's API/time budget.
+COMMIT_STATUS_MAX_PAGES = 20
+
+
+def _all_commit_statuses(repository: str, token: str, head_sha: str) -> list[dict[str, Any]]:
+    """Read the full creator-bearing status history; never lose old proofs."""
+    base = f"commits/{head_sha}/statuses?per_page=100"
+    collected: list[dict[str, Any]] = []
+    for page in range(1, COMMIT_STATUS_MAX_PAGES + 1):
+        path = base if page == 1 else f"{base}&page={page}"
+        batch = request_json(repository, token, "GET", path)
+        if not isinstance(batch, list):
+            raise ValueError("commit status history unavailable")
+        collected.extend(status for status in batch if isinstance(status, dict))
+        if len(batch) < 100:
+            return collected
+    raise ValueError("commit status history exceeds the bounded inspection window")
+
+
 def read_cycle(
     repository: str, token: str, pr_number: int, head_sha: str
 ) -> tuple[str, ReviewCycle | None, str | None]:
@@ -517,11 +538,17 @@ def read_cycle(
     # read from it can never be satisfied -- which is what previously forced a
     # creator-less fallback that trusted a caller-controlled payload. Reading the
     # list endpoint restores a real authenticated publisher and lets the strict
-    # check in `_parse_cycle` stand on its own. Only the latest statuses are
-    # listed, and the context, description, digest, generation and cited run are
-    # all still re-verified below and in `_parse_cycle`.
-    listed = request_json(repository, token, "GET", f"commits/{head_sha}/statuses?per_page=100")
-    statuses = listed if isinstance(listed, list) else []
+    # check in `_parse_cycle` stand on its own. The history is read page by page
+    # within a bounded window, so an older trusted proof that GitHub pushed past
+    # the first page is still seen; the context, description, digest, generation
+    # and cited run are all still re-verified below and in `_parse_cycle`.
+    try:
+        statuses = _all_commit_statuses(repository, token, head_sha)
+    except ValueError:
+        # An unreadable listing is exactly what a malformed payload produced
+        # before paginated reading existed: no status is believed, so the state
+        # derived below stays `absent` rather than a half-read history.
+        statuses = []
     repository_info = request_json(repository, token, "GET", "")
     default_branch = str((repository_info or {}).get("default_branch") or "main")
     for status in statuses:
@@ -591,9 +618,7 @@ def read_collector_completion(
     repository: str, token: str, pr_number: int, head_sha: str
 ) -> tuple[str, int | None, str | None]:
     try:
-        statuses = request_json(repository, token, "GET", f"commits/{head_sha}/statuses?per_page=100")
-        if not isinstance(statuses, list):
-            return "absent", None, "collector status payload is malformed"
+        statuses = _all_commit_statuses(repository, token, head_sha)
         repository_info = request_json(repository, token, "GET", "")
         default_branch = str((repository_info or {}).get("default_branch") or "main")
         revision = request_json(repository, token, "GET", f"commits/{default_branch}")
