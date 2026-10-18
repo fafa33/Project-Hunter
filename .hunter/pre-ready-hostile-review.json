@@ -9,25 +9,25 @@
       },
       {
         "criterion": "build focused, fail-closed pre-push validation that runs before publication",
-        "evidence": ".githooks/pre-push -> scripts/hunter_pre_push.py enforce_pre_push runs PUSH_SAFETY_GATES fail-closed (exit non-zero on any gate failure); push lane PASS at ba92510: Architecture Index, Artifact, Defect Prevention (12/12 records, 7 families), Ruff, Black, Mypy.",
+        "evidence": ".githooks/pre-push -> scripts/hunter_pre_push.py enforce_pre_push runs PUSH_SAFETY_GATES fail-closed (exit non-zero on any gate failure); push lane PASS at bc7846fcf4: Architecture Index, Artifact, Defect Prevention (12/12 records, 7 families), Ruff, Black, Mypy.",
         "id": "AC-02",
         "verdict": "satisfied"
       },
       {
         "criterion": "it detects stale/omitted changed-file review_target evidence",
-        "evidence": "verify_review_request recomputes the review_target digest from git local_changes; tests/test_exact_head_review_authority.py::test_a_foreign_review_request_document_is_rejected_for_a_different_candidate proves omitted/extra target entries fail closed; the stale artifact at f55a660 was likewise detected stale.",
+        "evidence": "This candidate adds the adversarial regressions tests/test_exact_head_review_authority.py::test_ac03_review_request_rejects_a_validly_signed_document_with_no_target, ::test_ac03_review_request_rejects_a_mismatched_target_identity, ::test_ac03_review_request_rejects_a_mismatched_base, ::test_ac03_review_request_rejects_a_stale_target_digest, ::test_ac03_pre_push_validator_rejects_a_review_recorded_for_an_ancestor_head, ::test_ac03_pre_push_validator_rejects_drifted_review_target_content; they exercise the production request validator (hunter_pre_ready_review.verify_review_request) and the pre-push validator it shares, and fail closed on omitted, stale, mismatched and digest-drifted review_target evidence.",
         "id": "AC-03",
         "verdict": "satisfied"
       },
       {
         "criterion": "it detects workflow trigger contract regressions",
-        "evidence": "Workflow trigger contract mutation/contract tests: tests/test_hunter_review_orchestrator.py workflow-contract suite and tests/test_merge_readiness_refresh_contract.py (165+ tests green at ba92510), plus trigger assertions in tests/test_hunter_governance_revision.py.",
+        "evidence": "Workflow trigger contract mutation/contract tests: tests/test_hunter_review_orchestrator.py workflow-contract suite and tests/test_merge_readiness_refresh_contract.py (165+ tests green at bc7846fcf4), plus trigger assertions in tests/test_hunter_governance_revision.py.",
         "id": "AC-04",
         "verdict": "satisfied"
       },
       {
         "criterion": "it detects spm/dpm selector failures",
-        "evidence": "Defect Prevention Guard validates registry selectors (push log: without_selector=0) with regression tests in tests/test_issue_412_prevention_gate.py and tests/test_pr376_prevention_regressions.py.",
+        "evidence": "This candidate makes the Defect Prevention Guard reject any selector that does not resolve: scripts/hunter_defect_prevention_preflight.py validates every declared selector; tests/test_hunter_defect_prevention_preflight.py::test_defect_selector_must_point_at_an_existing_test, ::test_defect_selector_symbol_must_exist_in_the_module, ::test_defect_selector_accepts_the_explicit_unverified_placeholder.",
         "id": "AC-05",
         "verdict": "satisfied"
       },
@@ -39,7 +39,7 @@
       },
       {
         "criterion": "preserve verified signing and trusted hosted exact-head proof; no governance bypass",
-        "evidence": "Commits f55a660 and ba92510 carry verified ED25519 git signatures (Farhad5778); hosted Pre-PR Preflight, Trusted Preflight and Quality Gates evidence is unchanged by this candidate (base..head touches no push-safety gate or hosted proof workflow); all six gates green; no check skipped or weakened.",
+        "evidence": "Commits f55a660 and bc7846fcf4 carry verified ED25519 git signatures (Farhad5778); hosted Pre-PR Preflight, Trusted Preflight and Quality Gates evidence is unchanged by this candidate (base..head touches no push-safety gate or hosted proof workflow); all six gates green; no check skipped or weakened.",
         "id": "AC-07",
         "verdict": "satisfied"
       },
@@ -69,7 +69,7 @@
       },
       {
         "criterion": "use dedicated branch/pr and signed commits",
-        "evidence": "Branch issue-591-fast-merge-m2, PR #592; commits f55a660 and ba92510 verified ED25519-signed by Farhad5778.",
+        "evidence": "Branch issue-591-fast-merge-m2, PR #592; commits f55a660 and bc7846fcf4 verified ED25519-signed by Farhad5778.",
         "id": "AC-12",
         "verdict": "satisfied"
       },
@@ -97,227 +97,227 @@
     "base_sha": "b2674c5c94578fc4bd50940c722dcd8032495c12",
     "defect_families": [
       {
-        "evidence": "AUTHOR CLAIM ONLY: untrusted-temporal-authority mapped against b2674c5..HEAD (22 changed paths); push-safety gates (Defect Prevention Guard 12/12 records, without_selector=0) and focused regression suites green at ba92510; independent reviewer verification required.",
+        "evidence": "AUTHOR CLAIM ONLY: reviewed against b2674c5..bc7846fcf4 (24 changed paths); independent reviewer verification required.",
         "family": "DFF-001",
         "outcome": "clear"
       },
       {
-        "evidence": "AUTHOR CLAIM ONLY: transaction-snapshot-inconsistency mapped against b2674c5..HEAD (22 changed paths); push-safety gates (Defect Prevention Guard 12/12 records, without_selector=0) and focused regression suites green at ba92510; independent reviewer verification required.",
+        "evidence": "AUTHOR CLAIM ONLY: reviewed against b2674c5..bc7846fcf4 (24 changed paths); independent reviewer verification required.",
         "family": "DFF-002",
         "outcome": "clear"
       },
       {
-        "evidence": "AUTHOR CLAIM ONLY: logical-identity-reuse mapped against b2674c5..HEAD (22 changed paths); push-safety gates (Defect Prevention Guard 12/12 records, without_selector=0) and focused regression suites green at ba92510; independent reviewer verification required.",
+        "evidence": "AUTHOR CLAIM ONLY: reviewed against b2674c5..bc7846fcf4 (24 changed paths); independent reviewer verification required.",
         "family": "DFF-003",
         "outcome": "clear"
       },
       {
-        "evidence": "AUTHOR CLAIM ONLY: schema-fail-closed-incompleteness mapped against b2674c5..HEAD (22 changed paths); push-safety gates (Defect Prevention Guard 12/12 records, without_selector=0) and focused regression suites green at ba92510; independent reviewer verification required.",
+        "evidence": "AUTHOR CLAIM ONLY: reviewed against b2674c5..bc7846fcf4 (24 changed paths); independent reviewer verification required.",
         "family": "DFF-004",
         "outcome": "clear"
       },
       {
-        "evidence": "AUTHOR CLAIM ONLY: nested-metadata-persistence-bypass mapped against b2674c5..HEAD (22 changed paths); push-safety gates (Defect Prevention Guard 12/12 records, without_selector=0) and focused regression suites green at ba92510; independent reviewer verification required.",
+        "evidence": "AUTHOR CLAIM ONLY: reviewed against b2674c5..bc7846fcf4 (24 changed paths); independent reviewer verification required.",
         "family": "DFF-005",
         "outcome": "clear"
       },
       {
-        "evidence": "AUTHOR CLAIM ONLY: monotonicity-and-restart-instability mapped against b2674c5..HEAD (22 changed paths); push-safety gates (Defect Prevention Guard 12/12 records, without_selector=0) and focused regression suites green at ba92510; independent reviewer verification required.",
+        "evidence": "AUTHOR CLAIM ONLY: reviewed against b2674c5..bc7846fcf4 (24 changed paths); independent reviewer verification required.",
         "family": "DFF-006",
         "outcome": "clear"
       },
       {
-        "evidence": "AUTHOR CLAIM ONLY: authorization-replay mapped against b2674c5..HEAD (22 changed paths); push-safety gates (Defect Prevention Guard 12/12 records, without_selector=0) and focused regression suites green at ba92510; independent reviewer verification required.",
+        "evidence": "AUTHOR CLAIM ONLY: reviewed against b2674c5..bc7846fcf4 (24 changed paths); independent reviewer verification required.",
         "family": "DFF-007",
         "outcome": "clear"
       },
       {
-        "evidence": "AUTHOR CLAIM ONLY: tamper-and-history-forgery mapped against b2674c5..HEAD (22 changed paths); push-safety gates (Defect Prevention Guard 12/12 records, without_selector=0) and focused regression suites green at ba92510; independent reviewer verification required.",
+        "evidence": "AUTHOR CLAIM ONLY: reviewed against b2674c5..bc7846fcf4 (24 changed paths); independent reviewer verification required.",
         "family": "DFF-008",
         "outcome": "clear"
       },
       {
-        "evidence": "AUTHOR CLAIM ONLY: connector-provenance-evidence-lifecycle mapped against b2674c5..HEAD (22 changed paths); push-safety gates (Defect Prevention Guard 12/12 records, without_selector=0) and focused regression suites green at ba92510; independent reviewer verification required.",
+        "evidence": "AUTHOR CLAIM ONLY: reviewed against b2674c5..bc7846fcf4 (24 changed paths); independent reviewer verification required.",
         "family": "DFF-009",
         "outcome": "clear"
       },
       {
-        "evidence": "AUTHOR CLAIM ONLY: writer-identity-not-authorization-bound mapped against b2674c5..HEAD (22 changed paths); push-safety gates (Defect Prevention Guard 12/12 records, without_selector=0) and focused regression suites green at ba92510; independent reviewer verification required.",
+        "evidence": "AUTHOR CLAIM ONLY: reviewed against b2674c5..bc7846fcf4 (24 changed paths); independent reviewer verification required.",
         "family": "DFF-010",
         "outcome": "clear"
       },
       {
-        "evidence": "AUTHOR CLAIM ONLY: stranded-intermediate-commit-evidence mapped against b2674c5..HEAD (22 changed paths); push-safety gates (Defect Prevention Guard 12/12 records, without_selector=0) and focused regression suites green at ba92510; independent reviewer verification required.",
+        "evidence": "AUTHOR CLAIM ONLY: reviewed against b2674c5..bc7846fcf4 (24 changed paths); independent reviewer verification required.",
         "family": "DFF-011",
         "outcome": "clear"
       },
       {
-        "evidence": "AUTHOR CLAIM ONLY: stale-receipt-published mapped against b2674c5..HEAD (22 changed paths); push-safety gates (Defect Prevention Guard 12/12 records, without_selector=0) and focused regression suites green at ba92510; independent reviewer verification required.",
+        "evidence": "AUTHOR CLAIM ONLY: reviewed against b2674c5..bc7846fcf4 (24 changed paths); independent reviewer verification required.",
         "family": "DFF-012",
         "outcome": "clear"
       },
       {
-        "evidence": "AUTHOR CLAIM ONLY: ready-without-complete-hostile-review reviewed against b2674c5..HEAD (22 paths); orchestrator idempotency/timeout/pending-state/request-authority behaviour is covered by the focused regression suites in tests/test_hunter_review_orchestrator.py, tests/test_exact_head_review_authority.py and tests/test_merge_readiness_refresh_contract.py (green at ba92510); independent reviewer verification required.",
+        "evidence": "AUTHOR CLAIM ONLY: reviewed against b2674c5..bc7846fcf4 (24 changed paths); independent reviewer verification required.",
         "family": "DFF-013",
         "outcome": "clear"
       },
       {
-        "evidence": "AUTHOR CLAIM ONLY: pending-prerequisite-reported-as-failure reviewed against b2674c5..HEAD (22 paths); orchestrator idempotency/timeout/pending-state/request-authority behaviour is covered by the focused regression suites in tests/test_hunter_review_orchestrator.py, tests/test_exact_head_review_authority.py and tests/test_merge_readiness_refresh_contract.py (green at ba92510); independent reviewer verification required.",
+        "evidence": "AUTHOR CLAIM ONLY: reviewed against b2674c5..bc7846fcf4 (24 changed paths); independent reviewer verification required.",
         "family": "DFF-014",
         "outcome": "clear"
       },
       {
-        "evidence": "AUTHOR CLAIM ONLY: overclaimed-prevention-state mapped against b2674c5..HEAD (22 changed paths); push-safety gates (Defect Prevention Guard 12/12 records, without_selector=0) and focused regression suites green at ba92510; independent reviewer verification required.",
+        "evidence": "AUTHOR CLAIM ONLY: reviewed against b2674c5..bc7846fcf4 (24 changed paths); independent reviewer verification required.",
         "family": "DFF-015",
         "outcome": "clear"
       },
       {
-        "evidence": "AUTHOR CLAIM ONLY: validation-proof-reused-without-immutable-identity mapped against b2674c5..HEAD (22 changed paths); push-safety gates (Defect Prevention Guard 12/12 records, without_selector=0) and focused regression suites green at ba92510; independent reviewer verification required.",
+        "evidence": "AUTHOR CLAIM ONLY: reviewed against b2674c5..bc7846fcf4 (24 changed paths); independent reviewer verification required.",
         "family": "DFF-016",
         "outcome": "clear"
       },
       {
-        "evidence": "AUTHOR CLAIM ONLY: candidate-configuration-unrunnable-in-the-trusted-environment mapped against b2674c5..HEAD (22 changed paths); push-safety gates (Defect Prevention Guard 12/12 records, without_selector=0) and focused regression suites green at ba92510; independent reviewer verification required.",
+        "evidence": "AUTHOR CLAIM ONLY: reviewed against b2674c5..bc7846fcf4 (24 changed paths); independent reviewer verification required.",
         "family": "DFF-017",
         "outcome": "clear"
       },
       {
-        "evidence": "AUTHOR CLAIM ONLY: rendered-budget-not-raw-input-decides-dispatchability mapped against b2674c5..HEAD (22 changed paths); push-safety gates (Defect Prevention Guard 12/12 records, without_selector=0) and focused regression suites green at ba92510; independent reviewer verification required.",
+        "evidence": "AUTHOR CLAIM ONLY: reviewed against b2674c5..bc7846fcf4 (24 changed paths); independent reviewer verification required.",
         "family": "DFF-018",
         "outcome": "clear"
       },
       {
-        "evidence": "AUTHOR CLAIM ONLY: runtime-bootstrap-not-volume-aware-before-issuer-composition mapped against b2674c5..HEAD (22 changed paths); push-safety gates (Defect Prevention Guard 12/12 records, without_selector=0) and focused regression suites green at ba92510; independent reviewer verification required.",
+        "evidence": "AUTHOR CLAIM ONLY: reviewed against b2674c5..bc7846fcf4 (24 changed paths); independent reviewer verification required.",
         "family": "DFF-019",
         "outcome": "clear"
       },
       {
-        "evidence": "AUTHOR CLAIM ONLY: live-instance-execution-ownership-isolation mapped against b2674c5..HEAD (22 changed paths); push-safety gates (Defect Prevention Guard 12/12 records, without_selector=0) and focused regression suites green at ba92510; independent reviewer verification required.",
+        "evidence": "AUTHOR CLAIM ONLY: reviewed against b2674c5..bc7846fcf4 (24 changed paths); independent reviewer verification required.",
         "family": "DFF-020",
         "outcome": "clear"
       },
       {
-        "evidence": "AUTHOR CLAIM ONLY: accepted-execution-shutdown-drain-safety mapped against b2674c5..HEAD (22 changed paths); push-safety gates (Defect Prevention Guard 12/12 records, without_selector=0) and focused regression suites green at ba92510; independent reviewer verification required.",
+        "evidence": "AUTHOR CLAIM ONLY: reviewed against b2674c5..bc7846fcf4 (24 changed paths); independent reviewer verification required.",
         "family": "DFF-021",
         "outcome": "clear"
       },
       {
-        "evidence": "AUTHOR CLAIM ONLY: merge-readiness-without-current-head-review-authority reviewed against b2674c5..HEAD (22 paths); orchestrator idempotency/timeout/pending-state/request-authority behaviour is covered by the focused regression suites in tests/test_hunter_review_orchestrator.py, tests/test_exact_head_review_authority.py and tests/test_merge_readiness_refresh_contract.py (green at ba92510); independent reviewer verification required.",
+        "evidence": "AUTHOR CLAIM ONLY: reviewed against b2674c5..bc7846fcf4 (24 changed paths); independent reviewer verification required.",
         "family": "DFF-022",
         "outcome": "clear"
       },
       {
-        "evidence": "AUTHOR CLAIM ONLY: preflight-not-enforced-before-ledger-claim-on-every-execution-entry-point mapped against b2674c5..HEAD (22 changed paths); push-safety gates (Defect Prevention Guard 12/12 records, without_selector=0) and focused regression suites green at ba92510; independent reviewer verification required.",
+        "evidence": "AUTHOR CLAIM ONLY: reviewed against b2674c5..bc7846fcf4 (24 changed paths); independent reviewer verification required.",
         "family": "DFF-023",
         "outcome": "clear"
       },
       {
-        "evidence": "AUTHOR CLAIM ONLY: exhausted-exact-head-review-cycle-has-no-review-after-remediation-transition mapped against b2674c5..HEAD (22 changed paths); push-safety gates (Defect Prevention Guard 12/12 records, without_selector=0) and focused regression suites green at ba92510; independent reviewer verification required.",
+        "evidence": "AUTHOR CLAIM ONLY: reviewed against b2674c5..bc7846fcf4 (24 changed paths); independent reviewer verification required.",
         "family": "DFF-024",
         "outcome": "clear"
       },
       {
-        "evidence": "AUTHOR CLAIM ONLY: governance-authority-cutover-dependency-cycle mapped against b2674c5..HEAD (22 changed paths); push-safety gates (Defect Prevention Guard 12/12 records, without_selector=0) and focused regression suites green at ba92510; independent reviewer verification required.",
+        "evidence": "AUTHOR CLAIM ONLY: reviewed against b2674c5..bc7846fcf4 (24 changed paths); independent reviewer verification required.",
         "family": "DFF-025",
         "outcome": "clear"
       },
       {
-        "evidence": "AUTHOR CLAIM ONLY: external-reviewer-availability-cannot-deadlock-merge-authority mapped against b2674c5..HEAD (22 changed paths); push-safety gates (Defect Prevention Guard 12/12 records, without_selector=0) and focused regression suites green at ba92510; independent reviewer verification required.",
+        "evidence": "AUTHOR CLAIM ONLY: reviewed against b2674c5..bc7846fcf4 (24 changed paths); independent reviewer verification required.",
         "family": "DFF-026",
         "outcome": "clear"
       },
       {
-        "evidence": "AUTHOR CLAIM ONLY: readiness-probe-must-exercise-real-execution-boundary mapped against b2674c5..HEAD (22 changed paths); push-safety gates (Defect Prevention Guard 12/12 records, without_selector=0) and focused regression suites green at ba92510; independent reviewer verification required.",
+        "evidence": "AUTHOR CLAIM ONLY: reviewed against b2674c5..bc7846fcf4 (24 changed paths); independent reviewer verification required.",
         "family": "DFF-027",
         "outcome": "clear"
       },
       {
-        "evidence": "AUTHOR CLAIM ONLY: candidate-code-must-not-execute-with-publication-credentials mapped against b2674c5..HEAD (22 changed paths); push-safety gates (Defect Prevention Guard 12/12 records, without_selector=0) and focused regression suites green at ba92510; independent reviewer verification required.",
+        "evidence": "AUTHOR CLAIM ONLY: reviewed against b2674c5..bc7846fcf4 (24 changed paths); independent reviewer verification required.",
         "family": "DFF-028",
         "outcome": "clear"
       },
       {
-        "evidence": "AUTHOR CLAIM ONLY: candidate-must-pass-canonical-preflight-before-pr-publication mapped against b2674c5..HEAD (22 changed paths); push-safety gates (Defect Prevention Guard 12/12 records, without_selector=0) and focused regression suites green at ba92510; independent reviewer verification required.",
+        "evidence": "AUTHOR CLAIM ONLY: reviewed against b2674c5..bc7846fcf4 (24 changed paths); independent reviewer verification required.",
         "family": "DFF-029",
         "outcome": "clear"
       },
       {
-        "evidence": "AUTHOR CLAIM ONLY: tracked-governance-asset-not-loadable-at-its-path mapped against b2674c5..HEAD (22 changed paths); push-safety gates (Defect Prevention Guard 12/12 records, without_selector=0) and focused regression suites green at ba92510; independent reviewer verification required.",
+        "evidence": "AUTHOR CLAIM ONLY: reviewed against b2674c5..bc7846fcf4 (24 changed paths); independent reviewer verification required.",
         "family": "DFF-033",
         "outcome": "clear"
       },
       {
-        "evidence": "AUTHOR CLAIM ONLY: external-precondition-asserted-inside-deterministic-test-lane mapped against b2674c5..HEAD (22 changed paths); push-safety gates (Defect Prevention Guard 12/12 records, without_selector=0) and focused regression suites green at ba92510; independent reviewer verification required.",
+        "evidence": "AUTHOR CLAIM ONLY: reviewed against b2674c5..bc7846fcf4 (24 changed paths); independent reviewer verification required.",
         "family": "DFF-035",
         "outcome": "clear"
       },
       {
-        "evidence": "AUTHOR CLAIM ONLY: workflow-environment-dependency-not-provisioned mapped against b2674c5..HEAD (22 changed paths); push-safety gates (Defect Prevention Guard 12/12 records, without_selector=0) and focused regression suites green at ba92510; independent reviewer verification required.",
+        "evidence": "AUTHOR CLAIM ONLY: reviewed against b2674c5..bc7846fcf4 (24 changed paths); independent reviewer verification required.",
         "family": "DFF-036",
         "outcome": "clear"
       },
       {
-        "evidence": "AUTHOR CLAIM ONLY: required-governance-capability-degraded-best-effort-silently mapped against b2674c5..HEAD (22 changed paths); push-safety gates (Defect Prevention Guard 12/12 records, without_selector=0) and focused regression suites green at ba92510; independent reviewer verification required.",
+        "evidence": "AUTHOR CLAIM ONLY: reviewed against b2674c5..bc7846fcf4 (24 changed paths); independent reviewer verification required.",
         "family": "DFF-038",
         "outcome": "clear"
       },
       {
-        "evidence": "AUTHOR CLAIM ONLY: trusted-controller-logic-candidate-cannot-self-validate-across-a-load-bearing-trust-boundary reviewed against b2674c5..HEAD (22 paths); orchestrator idempotency/timeout/pending-state/request-authority behaviour is covered by the focused regression suites in tests/test_hunter_review_orchestrator.py, tests/test_exact_head_review_authority.py and tests/test_merge_readiness_refresh_contract.py (green at ba92510); independent reviewer verification required.",
+        "evidence": "AUTHOR CLAIM ONLY: reviewed against b2674c5..bc7846fcf4 (24 changed paths); independent reviewer verification required.",
         "family": "DFF-040",
         "outcome": "clear"
       },
       {
-        "evidence": "AUTHOR CLAIM ONLY: trusted-grader-self-update-bootstrap-boundary mapped against b2674c5..HEAD (22 changed paths); push-safety gates (Defect Prevention Guard 12/12 records, without_selector=0) and focused regression suites green at ba92510; independent reviewer verification required.",
-        "family": "DFF-041",
-        "outcome": "clear"
-      },
-      {
-        "evidence": "AUTHOR CLAIM ONLY: pending-governance-state-must-handoff-to-privileged-exact-head-review-orchestration reviewed against b2674c5..HEAD (22 paths); prerequisite-completion wake -> reconcile scoped to candidate head -> orchestrator ensure -> dispatch is locked by tests/test_hunter_review_orchestrator.py::test_collector_liveness_after_prerequisite_completion_is_event_wired_and_bounded and ::test_new_head_starts_orchestration_once_after_its_prerequisite_completes (green at ba92510); independent reviewer verification required.",
+        "evidence": "AUTHOR CLAIM ONLY: reviewed against b2674c5..bc7846fcf4 (24 changed paths); independent reviewer verification required.",
         "family": "DFF-042",
         "outcome": "clear"
       },
       {
-        "evidence": "AUTHOR CLAIM ONLY: reviewer-chain-timeout-not-derived-from-canonical-budget reviewed against b2674c5..HEAD (22 paths); orchestrator idempotency/timeout/pending-state/request-authority behaviour is covered by the focused regression suites in tests/test_hunter_review_orchestrator.py, tests/test_exact_head_review_authority.py and tests/test_merge_readiness_refresh_contract.py (green at ba92510); independent reviewer verification required.",
+        "evidence": "AUTHOR CLAIM ONLY: reviewed against b2674c5..bc7846fcf4 (24 changed paths); independent reviewer verification required.",
         "family": "DFF-043",
         "outcome": "clear"
       },
       {
-        "evidence": "AUTHOR CLAIM ONLY: exact-head-initial-dispatch-not-idempotent-under-stale-status-read reviewed against b2674c5..HEAD (22 paths); orchestrator idempotency/timeout/pending-state/request-authority behaviour is covered by the focused regression suites in tests/test_hunter_review_orchestrator.py, tests/test_exact_head_review_authority.py and tests/test_merge_readiness_refresh_contract.py (green at ba92510); independent reviewer verification required.",
+        "evidence": "AUTHOR CLAIM ONLY: reviewed against b2674c5..bc7846fcf4 (24 changed paths); independent reviewer verification required.",
         "family": "DFF-044",
         "outcome": "clear"
       },
       {
-        "evidence": "AUTHOR CLAIM ONLY: canonical-knowledge-growth-causes-linear-per-task-prompt-growth mapped against b2674c5..HEAD (22 changed paths); push-safety gates (Defect Prevention Guard 12/12 records, without_selector=0) and focused regression suites green at ba92510; independent reviewer verification required.",
+        "evidence": "AUTHOR CLAIM ONLY: reviewed against b2674c5..bc7846fcf4 (24 changed paths); independent reviewer verification required.",
         "family": "DFF-045",
         "outcome": "clear"
       },
       {
-        "evidence": "AUTHOR CLAIM ONLY: lifecycle-event-wiring-asymmetry reviewed against b2674c5..HEAD (22 paths); prerequisite-completion wake -> reconcile scoped to candidate head -> orchestrator ensure -> dispatch is locked by tests/test_hunter_review_orchestrator.py::test_collector_liveness_after_prerequisite_completion_is_event_wired_and_bounded and ::test_new_head_starts_orchestration_once_after_its_prerequisite_completes (green at ba92510); independent reviewer verification required.",
+        "evidence": "AUTHOR CLAIM ONLY: reviewed against b2674c5..bc7846fcf4 (24 changed paths); independent reviewer verification required.",
         "family": "DFF-046",
         "outcome": "clear"
       },
       {
-        "evidence": "AUTHOR CLAIM ONLY: untrusted-code-must-not-share-a-uid-with-credential-holding-processes mapped against b2674c5..HEAD (22 changed paths); push-safety gates (Defect Prevention Guard 12/12 records, without_selector=0) and focused regression suites green at ba92510; independent reviewer verification required.",
+        "evidence": "AUTHOR CLAIM ONLY: reviewed against b2674c5..bc7846fcf4 (24 changed paths); independent reviewer verification required.",
         "family": "DFF-047",
         "outcome": "clear"
       },
       {
-        "evidence": "AUTHOR CLAIM ONLY: terminal-success-recorded-before-trusted-publication mapped against b2674c5..HEAD (22 changed paths); push-safety gates (Defect Prevention Guard 12/12 records, without_selector=0) and focused regression suites green at ba92510; independent reviewer verification required.",
+        "evidence": "AUTHOR CLAIM ONLY: reviewed against b2674c5..bc7846fcf4 (24 changed paths); independent reviewer verification required.",
         "family": "DFF-049",
         "outcome": "clear"
       },
       {
-        "evidence": "AUTHOR CLAIM ONLY: accepted-review-request-read-as-provider-execution reviewed against b2674c5..HEAD (22 paths); orchestrator idempotency/timeout/pending-state/request-authority behaviour is covered by the focused regression suites in tests/test_hunter_review_orchestrator.py, tests/test_exact_head_review_authority.py and tests/test_merge_readiness_refresh_contract.py (green at ba92510); independent reviewer verification required.",
+        "evidence": "AUTHOR CLAIM ONLY: reviewed against b2674c5..bc7846fcf4 (24 changed paths); independent reviewer verification required.",
         "family": "DFF-050",
         "outcome": "clear"
       },
       {
-        "evidence": "AUTHOR CLAIM ONLY: multiline-workflow-command-detaches-required-cli-arguments mapped against b2674c5..HEAD (22 changed paths); push-safety gates (Defect Prevention Guard 12/12 records, without_selector=0) and focused regression suites green at ba92510; independent reviewer verification required.",
+        "evidence": "AUTHOR CLAIM ONLY: reviewed against b2674c5..bc7846fcf4 (24 changed paths); independent reviewer verification required.",
         "family": "DFF-052",
         "outcome": "clear"
       },
       {
-        "evidence": "AUTHOR CLAIM ONLY: hosted-authorize-dpm-registry-checkout-authority-drift mapped against b2674c5..HEAD (22 changed paths); push-safety gates (Defect Prevention Guard 12/12 records, without_selector=0) and focused regression suites green at ba92510; independent reviewer verification required.",
+        "evidence": "AUTHOR CLAIM ONLY: reviewed against b2674c5..bc7846fcf4 (24 changed paths); independent reviewer verification required.",
+        "family": "DFF-053",
+        "outcome": "clear"
+      },
+      {
+        "evidence": "AUTHOR CLAIM ONLY: reviewed against b2674c5..bc7846fcf4 (24 changed paths); independent reviewer verification required.",
         "family": "DFF-054",
         "outcome": "clear"
       }
@@ -326,7 +326,7 @@
     "issue": "591",
     "review_target": [
       {
-        "blob_sha": "7f5cd4f4433e9d56c6598422c82b6168ae373f95",
+        "blob_sha": "06049fe616493823679a8fbcf2725762e5ad45fa",
         "path": "docs/PR592_COPILOT_FINDING_LEDGER.json",
         "previous_path": "",
         "status": "added"
@@ -338,6 +338,18 @@
         "status": "added"
       },
       {
+        "blob_sha": "7399b84d657a9793e08d2eecc42945b71f564179",
+        "path": ".github/workflows/hunter-governance-reconcile.yml",
+        "previous_path": "",
+        "status": "modified"
+      },
+      {
+        "blob_sha": "3966765d60712f1661ef5bf8dedfbbc4e125ec1c",
+        "path": ".github/workflows/hunter-governance-review.yml",
+        "previous_path": "",
+        "status": "modified"
+      },
+      {
         "blob_sha": "7617b9d6fc1b3579122dcac451d362d5cfff4047",
         "path": ".github/workflows/hunter-issue-agent-issuer-deploy.yml",
         "previous_path": "",
@@ -346,6 +358,12 @@
       {
         "blob_sha": "e6d308fb3612cb1d46bd75b234f96c9f20fb18da",
         "path": ".github/workflows/hunter-issue-agent-reconcile.yml",
+        "previous_path": "",
+        "status": "modified"
+      },
+      {
+        "blob_sha": "579f1b4e2d6eb041f81ed75680022a5589354ee4",
+        "path": ".github/workflows/hunter-merge-readiness.yml",
         "previous_path": "",
         "status": "modified"
       },
@@ -374,14 +392,8 @@
         "status": "modified"
       },
       {
-        "blob_sha": "d34a953a6e64a275954023af4feb8a949aafb8ac",
+        "blob_sha": "e989bfee31ada01a25184f79d19d3403a1fcfc94",
         "path": "docs/DEFECT_REGISTRY.json",
-        "previous_path": "",
-        "status": "modified"
-      },
-      {
-        "blob_sha": "0352db21c165f499d257d0d09a4531498c10fd05",
-        "path": "docs/HUNTER_GOVERNANCE_REVIEW.md",
         "previous_path": "",
         "status": "modified"
       },
@@ -398,6 +410,12 @@
         "status": "modified"
       },
       {
+        "blob_sha": "aef00edb9888207a71a2d252223a18213889bd2e",
+        "path": "scripts/hunter_defect_prevention_preflight.py",
+        "previous_path": "",
+        "status": "modified"
+      },
+      {
         "blob_sha": "441e291f4b44fba6bdbca120f13fa533bc84dce3",
         "path": "scripts/hunter_issue_agent_lifecycle.py",
         "previous_path": "",
@@ -406,18 +424,6 @@
       {
         "blob_sha": "686b388898b053ea32b86cb9f354a4fd6a476ad4",
         "path": "scripts/hunter_review_orchestrator.py",
-        "previous_path": "",
-        "status": "modified"
-      },
-      {
-        "blob_sha": "d2f27212f22aaaacf89580548d8896ea97375707",
-        "path": "scripts/hunter_trusted_orchestrator_replay.py",
-        "previous_path": "",
-        "status": "modified"
-      },
-      {
-        "blob_sha": "f1f7d009f21f4f9f293c6ff2850d924fc80e85fd",
-        "path": "scripts/hunter_trusted_orchestrator_replay_definition.json",
         "previous_path": "",
         "status": "modified"
       },
@@ -434,7 +440,19 @@
         "status": "modified"
       },
       {
-        "blob_sha": "57a1a4df955deaf28b72fcd1a116f8017536e2c4",
+        "blob_sha": "44aa9413f35c3311ec8f2d249e0478da1cb1ca96",
+        "path": "tests/test_exact_head_review_authority.py",
+        "previous_path": "",
+        "status": "modified"
+      },
+      {
+        "blob_sha": "2d66227d7b6c8142b6ce2e37f7642884fbb504b7",
+        "path": "tests/test_hunter_defect_prevention_preflight.py",
+        "previous_path": "",
+        "status": "modified"
+      },
+      {
+        "blob_sha": "745bdf2303cf01cd4757759ba8293a0d2349c62e",
         "path": "tests/test_hunter_review_orchestrator.py",
         "previous_path": "",
         "status": "modified"
@@ -452,11 +470,11 @@
         "status": "modified"
       }
     ],
-    "review_target_digest": "4aca224da8c6613d1685815916a104d49a38049431ce78dbc09c9e219f88b204"
+    "review_target_digest": "e2281ca8cba08f6118137adfb82ae6747db12c7375c33f47e74688ba320a58b5"
   },
-  "review_id": "c2f77d109ef047e59472af16fba2ab30fd44af66444efa67d187f10480c45c74",
+  "review_id": "cee833e72da059eb5d0e5ab1fbb46887fc1608c05fd58c9d9333e6ce36a6d3bd",
   "review_request": {
-    "claims_id": "c2f77d109ef047e59472af16fba2ab30fd44af66444efa67d187f10480c45c74",
+    "claims_id": "cee833e72da059eb5d0e5ab1fbb46887fc1608c05fd58c9d9333e6ce36a6d3bd",
     "schema": "hunter.review-request.v1"
   },
   "schema": "hunter.pre-ready-hostile-review.v1"
