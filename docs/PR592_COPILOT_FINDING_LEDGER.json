@@ -3,7 +3,7 @@
   "source_pr": 592,
   "source_issue": 591,
   "captured_findings": 43,
-  "prevention_status": "One targeted regression mutation checked; remaining findings require individually demonstrated negative mutation and root-cause review. Passing existing tests alone is not proof of prevention.",
+  "prevention_status": "No finding is independently verified as prevented; each requires a demonstrated negative mutation and root-cause review. Passing existing tests alone is not proof of prevention.",
   "findings": [
     {
       "id": "PRH-070",
@@ -110,7 +110,7 @@
       "discussion_id": "4234905391",
       "status": "candidate-regression-linked",
       "root_cause": "Review description documents the failure mode; root-cause classification requires verification against the relevant implementation and regression.",
-      "regression_evidence": "tests/test_hunter_review_orchestrator.py::test_trusted_collector_completion_dispatch_capability",
+      "regression_evidence": "tests/test_hunter_review_orchestrator.py::test_collector_completion_status_binds_trusted_run_to_exact_head",
       "verification": "Existing regression target executed in focused suite; negative mutation per finding not yet demonstrated."
     },
     {
@@ -119,7 +119,7 @@
       "discussion_id": "4234905426",
       "status": "candidate-regression-linked",
       "root_cause": "Review description documents the failure mode; root-cause classification requires verification against the relevant implementation and regression.",
-      "regression_evidence": "tests/test_hunter_review_orchestrator.py::test_collector_completion_is_published_only_by_trusted_reconcile",
+      "regression_evidence": "tests/test_hunter_review_orchestrator.py::test_exhausted_provider_chain_terminates_the_opportunity",
       "verification": "Existing regression target executed in focused suite; negative mutation per finding not yet demonstrated."
     },
     {
@@ -128,7 +128,7 @@
       "discussion_id": "4234905466",
       "status": "candidate-regression-linked",
       "root_cause": "Review description documents the failure mode; root-cause classification requires verification against the relevant implementation and regression.",
-      "regression_evidence": "tests/test_hunter_review_orchestrator.py::test_trusted_collector_completion_dispatch_capability",
+      "regression_evidence": "tests/test_hunter_review_orchestrator.py::test_collector_completion_status_binds_trusted_run_to_exact_head",
       "verification": "Existing regression target executed in focused suite; negative mutation per finding not yet demonstrated."
     },
     {
@@ -137,7 +137,7 @@
       "discussion_id": "4235043019",
       "status": "candidate-regression-linked",
       "root_cause": "Review description documents the failure mode; root-cause classification requires verification against the relevant implementation and regression.",
-      "regression_evidence": "tests/test_hunter_review_orchestrator.py::test_trusted_collector_completion_rejects_untrusted_run",
+      "regression_evidence": "tests/test_hunter_review_orchestrator.py::test_read_collector_completion_rejects_untrusted_or_wrong_head_run",
       "verification": "Existing regression target executed in focused suite; negative mutation per finding not yet demonstrated."
     },
     {
@@ -146,7 +146,7 @@
       "discussion_id": "4235043076",
       "status": "candidate-regression-linked",
       "root_cause": "Review description documents the failure mode; root-cause classification requires verification against the relevant implementation and regression.",
-      "regression_evidence": "tests/test_hunter_review_orchestrator.py::test_trusted_completion_rejects_replayed_proof_on_another_run",
+      "regression_evidence": "tests/test_hunter_review_orchestrator.py::test_read_collector_completion_rejects_untrusted_or_wrong_head_run",
       "verification": "Existing regression target executed in focused suite; negative mutation per finding not yet demonstrated."
     },
     {
@@ -164,7 +164,7 @@
       "discussion_id": "4235043166",
       "status": "candidate-regression-linked",
       "root_cause": "Review description documents the failure mode; root-cause classification requires verification against the relevant implementation and regression.",
-      "regression_evidence": "tests/test_hunter_review_orchestrator.py::test_scheduled_trusted_collector_recovery_uses_exact_attempt_artifacts",
+      "regression_evidence": "tests/test_hunter_review_orchestrator.py::test_a_failed_collector_is_redispatched_rather_than_parking_the_cycle",
       "verification": "Existing regression target executed in focused suite; negative mutation per finding not yet demonstrated."
     },
     {
@@ -182,7 +182,7 @@
       "discussion_id": "4235096376",
       "status": "candidate-regression-linked",
       "root_cause": "Review description documents the failure mode; root-cause classification requires verification against the relevant implementation and regression.",
-      "regression_evidence": "tests/test_hunter_review_orchestrator.py::test_scheduled_trusted_collector_recovery_uses_exact_attempt_artifacts",
+      "regression_evidence": "tests/test_hunter_review_orchestrator.py::test_a_failed_collector_is_redispatched_rather_than_parking_the_cycle",
       "verification": "Existing regression target executed in focused suite; negative mutation per finding not yet demonstrated."
     },
     {
@@ -236,7 +236,7 @@
       "discussion_id": null,
       "status": "candidate-regression-linked",
       "root_cause": "Review description documents the failure mode; root-cause classification requires verification against the relevant implementation and regression.",
-      "regression_evidence": "tests/test_hunter_review_orchestrator.py::test_scheduled_trusted_collector_recovery_uses_exact_attempt_artifacts",
+      "regression_evidence": "tests/test_hunter_review_orchestrator.py::test_reconcile_runs_when_reviewer_collector_completes",
       "verification": "Existing regression target executed in focused suite; negative mutation per finding not yet demonstrated."
     },
     {
@@ -272,7 +272,7 @@
       "discussion_id": null,
       "status": "candidate-regression-linked",
       "root_cause": "Review description documents the failure mode; root-cause classification requires verification against the relevant implementation and regression.",
-      "regression_evidence": "tests/test_hunter_review_orchestrator.py::test_scheduled_trusted_collector_recovery_uses_exact_attempt_artifacts",
+      "regression_evidence": "tests/test_hunter_review_orchestrator.py::test_reconcile_runs_when_reviewer_collector_completes",
       "verification": "Existing regression target executed in focused suite; negative mutation per finding not yet demonstrated."
     },
     {
@@ -299,7 +299,7 @@
       "discussion_id": "4235462212",
       "status": "candidate-regression-linked",
       "root_cause": "Review description documents the failure mode; root-cause classification requires verification against the relevant implementation and regression.",
-      "regression_evidence": "tests/test_hunter_review_orchestrator.py::test_scheduled_trusted_collector_recovery_uses_exact_attempt_artifacts",
+      "regression_evidence": "tests/test_hunter_review_orchestrator.py::test_commit_status_pagination_keeps_old_trusted_dispatch_proof",
       "verification": "Existing regression target executed in focused suite; negative mutation per finding not yet demonstrated."
     },
     {
@@ -326,7 +326,7 @@
       "discussion_id": "4235504961",
       "status": "candidate-regression-linked",
       "root_cause": "Review description documents the failure mode; root-cause classification requires verification against the relevant implementation and regression.",
-      "regression_evidence": "tests/test_hunter_review_orchestrator.py::test_trusted_completion_rejects_replayed_proof_on_another_run",
+      "regression_evidence": "tests/test_hunter_review_orchestrator.py::test_collector_liveness_ignores_runs_for_another_candidate",
       "verification": "Existing regression target executed in focused suite; negative mutation per finding not yet demonstrated."
     },
     {
@@ -335,7 +335,7 @@
       "discussion_id": "4235504987",
       "status": "candidate-regression-linked",
       "root_cause": "Review description documents the failure mode; root-cause classification requires verification against the relevant implementation and regression.",
-      "regression_evidence": "tests/test_hunter_review_orchestrator.py::test_scheduled_trusted_collector_recovery_uses_exact_attempt_artifacts",
+      "regression_evidence": "tests/test_hunter_review_orchestrator.py::test_commit_status_history_is_bounded_and_fails_closed",
       "verification": "Existing regression target executed in focused suite; negative mutation per finding not yet demonstrated."
     },
     {
@@ -353,7 +353,7 @@
       "discussion_id": null,
       "status": "candidate-regression-linked",
       "root_cause": "Review description documents the failure mode; root-cause classification requires verification against the relevant implementation and regression.",
-      "regression_evidence": "tests/test_hunter_review_orchestrator.py::test_trusted_collector_completion_dispatch_capability",
+      "regression_evidence": "tests/test_hunter_review_orchestrator.py::test_read_collector_completion_rejects_untrusted_or_wrong_head_run",
       "verification": "Existing regression target executed in focused suite; negative mutation per finding not yet demonstrated."
     },
     {
@@ -371,7 +371,7 @@
       "discussion_id": null,
       "status": "candidate-regression-linked",
       "root_cause": "Review description documents the failure mode; root-cause classification requires verification against the relevant implementation and regression.",
-      "regression_evidence": "tests/test_hunter_review_orchestrator.py::test_scheduled_trusted_collector_recovery_uses_exact_attempt_artifacts",
+      "regression_evidence": "tests/test_hunter_review_orchestrator.py::test_commit_status_pagination_keeps_old_trusted_dispatch_proof",
       "verification": "Existing regression target executed in focused suite; negative mutation per finding not yet demonstrated."
     },
     {
@@ -380,20 +380,20 @@
       "discussion_id": null,
       "status": "candidate-regression-linked",
       "root_cause": "Review description documents the failure mode; root-cause classification requires verification against the relevant implementation and regression.",
-      "regression_evidence": "tests/test_hunter_review_orchestrator.py::test_untrusted_earlier_claimant_cannot_block_valid_collector",
+      "regression_evidence": "tests/test_hunter_review_orchestrator.py::test_collector_liveness_ignores_runs_for_another_candidate",
       "verification": "Existing regression target executed in focused suite; negative mutation per finding not yet demonstrated."
     },
     {
       "id": "PRH-112",
       "title": "Avoid SIGPIPE from early-closing paginated status search",
       "discussion_id": null,
-      "status": "regression-tested",
+      "status": "candidate-regression-linked",
       "root_cause": "grep -q closes its upstream pipe after the first match; with pipefail, paginated gh api may terminate via SIGPIPE and the recovery check can falsely report no completion.",
-      "regression_evidence": "tests/test_hunter_review_orchestrator.py::test_scheduled_recovery_status_search_does_not_short_circuit_paginated_api",
+      "regression_evidence": "tests/test_hunter_review_orchestrator.py::test_commit_status_pagination_keeps_old_trusted_dispatch_proof",
       "verification": "Regression asserts current pipeline consumes the full status stream and rejects the earlier grep -q form; mutation test checks rejection."
     }
   ],
   "regression_links": 33,
-  "unverified": 42,
-  "verified_regressions": 1
+  "unverified": 43,
+  "verified_regressions": 0
 }

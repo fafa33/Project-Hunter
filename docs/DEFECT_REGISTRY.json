@@ -390,7 +390,7 @@
       "classification": "systemic",
       "guard_boundary": "trusted exact-head review orchestration and reviewer invocation identity",
       "guard": "Every reviewer invocation was keyed by exact head and claims digest alone, and the collector run that correlates those invocations was named the same way, so a cycle whose reviewers had all been exhausted or timed out was terminal for that immutable head: the collector read as already completed, the reviewer trigger comment read as already posted, and remediating the blocking findings the cycle itself produced could buy no further review. The repair is a remediation generation: a digest over the exact head, the claims digest and the full set of resolved blocking review threads, where a blocking thread counts only when an authenticated reviewer app that is neither Hunter's own automation nor the pull-request author opened it. It is derived from trusted GitHub review-thread state by the trusted default-branch orchestrator and re-derived independently by the trusted collector, which fails closed when the generation it was dispatched for is not the one the evidence supports, so neither candidate prose nor a dispatch input can mint one. The generation enters the collector run name, the reviewer invocation key, the reviewer trigger body and the collector receipt, so a new generation buys exactly one new invocation per reviewer while an unchanged generation stays idempotent; an exhaustion receipt from a superseded generation is refused rather than replayed. The transition is bounded on every side: the previous generation's collector must be finished, a collector must not already exist for this generation, and one exact head may spend at most MAX_REMEDIATION_GENERATIONS generations before the candidate stays pending. Exact-head and claims binding, authenticated reviewer identity, fail-closed pending semantics and human merge approval are unchanged.",
-      "test": "tests/test_native_collector_flow.py::test_a_receipt_for_other_claims_or_a_stale_generation_publishes_nothing",
+      "test": "tests/test_review_after_remediation_generation.py::test_exhausted_cycle_redispatches_exactly_once_after_blockers_are_resolved",
       "status": "guarded"
     },
     {
@@ -450,7 +450,7 @@
       "classification": "systemic",
       "guard_boundary": "Defect Prevention family applicability and pre-ready family selection",
       "guard": "A locally-enforced defect family must include the concrete file that contains its guard in changed_paths whenever applicability is path-selected; DFF-027 therefore includes scripts/hunter_issue_agent_issuer.py so edits to the admission guard require DFF-027 coverage.",
-      "test": "tests/test_issue_412_prevention_gate.py::test_applicable_family_ids_use_changed_paths",
+      "test": "tests/test_issue_412_prevention_gate.py::test_every_declared_family_is_reachable_by_some_changed_path",
       "status": "guarded"
     },
     {
@@ -610,7 +610,7 @@
       "classification": "systemic",
       "guard_boundary": "Governance workflow / collector dispatch, provenance, recovery, and review lifecycle",
       "guard": "Finding recorded; candidate regression mapping is not independently verified as prevention.",
-      "test": "tests/test_native_collector_workflows.py::test_the_collector_runs_only_default_branch_code",
+      "test": "UNVERIFIED: targeted regression required",
       "status": "open"
     },
     {
@@ -670,7 +670,7 @@
       "classification": "systemic",
       "guard_boundary": "Governance workflow / collector dispatch, provenance, recovery, and review lifecycle",
       "guard": "Finding recorded; candidate regression mapping is not independently verified as prevention.",
-      "test": "tests/test_native_collector_flow.py::test_an_untrusted_event_never_collects",
+      "test": "tests/test_hunter_review_orchestrator.py::test_collector_completion_status_binds_trusted_run_to_exact_head",
       "status": "open"
     },
     {
@@ -680,7 +680,7 @@
       "classification": "systemic",
       "guard_boundary": "Governance workflow / collector dispatch, provenance, recovery, and review lifecycle",
       "guard": "Finding recorded; candidate regression mapping is not independently verified as prevention.",
-      "test": "tests/test_native_collector_workflows.py::test_the_publisher_holds_the_only_status_write_and_no_actions_or_contents_write",
+      "test": "tests/test_hunter_review_orchestrator.py::test_exhausted_provider_chain_terminates_the_opportunity",
       "status": "open"
     },
     {
@@ -690,7 +690,7 @@
       "classification": "systemic",
       "guard_boundary": "Governance workflow / collector dispatch, provenance, recovery, and review lifecycle",
       "guard": "Finding recorded; candidate regression mapping is not independently verified as prevention.",
-      "test": "tests/test_native_collector_flow.py::test_an_untrusted_event_never_collects",
+      "test": "tests/test_hunter_review_orchestrator.py::test_collector_completion_status_binds_trusted_run_to_exact_head",
       "status": "open"
     },
     {
@@ -700,7 +700,7 @@
       "classification": "systemic",
       "guard_boundary": "Governance workflow / collector dispatch, provenance, recovery, and review lifecycle",
       "guard": "Finding recorded; candidate regression mapping is not independently verified as prevention.",
-      "test": "tests/test_native_collector_flow.py::test_only_a_completed_successful_trusted_collector_run_is_verified",
+      "test": "tests/test_hunter_review_orchestrator.py::test_read_collector_completion_rejects_untrusted_or_wrong_head_run",
       "status": "open"
     },
     {
@@ -710,7 +710,7 @@
       "classification": "systemic",
       "guard_boundary": "Governance workflow / collector dispatch, provenance, recovery, and review lifecycle",
       "guard": "Finding recorded; candidate regression mapping is not independently verified as prevention.",
-      "test": "tests/test_native_collector_flow.py::test_a_receipt_that_disagrees_with_the_run_that_produced_it_is_refused",
+      "test": "tests/test_hunter_review_orchestrator.py::test_read_collector_completion_rejects_untrusted_or_wrong_head_run",
       "status": "open"
     },
     {
@@ -730,7 +730,7 @@
       "classification": "systemic",
       "guard_boundary": "Governance workflow / collector dispatch, provenance, recovery, and review lifecycle",
       "guard": "Finding recorded; candidate regression mapping is not independently verified as prevention.",
-      "test": "tests/test_native_collector_flow.py::test_a_rerun_attempt_is_verified_against_its_own_attempt_and_artifact",
+      "test": "tests/test_hunter_review_orchestrator.py::test_a_failed_collector_is_redispatched_rather_than_parking_the_cycle",
       "status": "open"
     },
     {
@@ -750,7 +750,7 @@
       "classification": "systemic",
       "guard_boundary": "Governance workflow / collector dispatch, provenance, recovery, and review lifecycle",
       "guard": "Finding recorded; candidate regression mapping is not independently verified as prevention.",
-      "test": "tests/test_native_collector_flow.py::test_a_rerun_attempt_is_verified_against_its_own_attempt_and_artifact",
+      "test": "tests/test_hunter_review_orchestrator.py::test_a_failed_collector_is_redispatched_rather_than_parking_the_cycle",
       "status": "open"
     },
     {
@@ -810,7 +810,7 @@
       "classification": "systemic",
       "guard_boundary": "Governance workflow / collector dispatch, provenance, recovery, and review lifecycle",
       "guard": "Finding recorded; candidate regression mapping is not independently verified as prevention.",
-      "test": "tests/test_native_collector_flow.py::test_a_rerun_attempt_is_verified_against_its_own_attempt_and_artifact",
+      "test": "tests/test_hunter_review_orchestrator.py::test_reconcile_runs_when_reviewer_collector_completes",
       "status": "open"
     },
     {
@@ -840,7 +840,7 @@
       "classification": "systemic",
       "guard_boundary": "Governance workflow / collector dispatch, provenance, recovery, and review lifecycle",
       "guard": "Finding recorded; candidate regression mapping is not independently verified as prevention.",
-      "test": "tests/test_native_collector_flow.py::test_a_duplicate_or_re_delivered_event_publishes_nothing_more",
+      "test": "UNVERIFIED: targeted regression required",
       "status": "open"
     },
     {
@@ -850,7 +850,7 @@
       "classification": "systemic",
       "guard_boundary": "Governance workflow / collector dispatch, provenance, recovery, and review lifecycle",
       "guard": "Finding recorded; candidate regression mapping is not independently verified as prevention.",
-      "test": "tests/test_native_collector_flow.py::test_a_rerun_attempt_is_verified_against_its_own_attempt_and_artifact",
+      "test": "tests/test_hunter_review_orchestrator.py::test_reconcile_runs_when_reviewer_collector_completes",
       "status": "open"
     },
     {
@@ -880,7 +880,7 @@
       "classification": "systemic",
       "guard_boundary": "Governance workflow / collector dispatch, provenance, recovery, and review lifecycle",
       "guard": "Finding recorded; candidate regression mapping is not independently verified as prevention.",
-      "test": "tests/test_native_collector_flow.py::test_a_rerun_attempt_is_verified_against_its_own_attempt_and_artifact",
+      "test": "tests/test_hunter_review_orchestrator.py::test_commit_status_pagination_keeps_old_trusted_dispatch_proof",
       "status": "open"
     },
     {
@@ -900,7 +900,7 @@
       "classification": "systemic",
       "guard_boundary": "Governance workflow / collector dispatch, provenance, recovery, and review lifecycle",
       "guard": "Finding recorded; candidate regression mapping is not independently verified as prevention.",
-      "test": "tests/test_native_collector_flow.py::test_a_terminal_cycle_for_this_head_and_generation_is_not_collected_again",
+      "test": "UNVERIFIED: targeted regression required",
       "status": "open"
     },
     {
@@ -910,7 +910,7 @@
       "classification": "systemic",
       "guard_boundary": "Governance workflow / collector dispatch, provenance, recovery, and review lifecycle",
       "guard": "Finding recorded; candidate regression mapping is not independently verified as prevention.",
-      "test": "tests/test_native_collector_flow.py::test_a_receipt_that_disagrees_with_the_run_that_produced_it_is_refused",
+      "test": "tests/test_hunter_review_orchestrator.py::test_collector_liveness_ignores_runs_for_another_candidate",
       "status": "open"
     },
     {
@@ -920,7 +920,7 @@
       "classification": "systemic",
       "guard_boundary": "Governance workflow / collector dispatch, provenance, recovery, and review lifecycle",
       "guard": "Finding recorded; candidate regression mapping is not independently verified as prevention.",
-      "test": "tests/test_native_collector_flow.py::test_a_rerun_attempt_is_verified_against_its_own_attempt_and_artifact",
+      "test": "tests/test_hunter_review_orchestrator.py::test_commit_status_history_is_bounded_and_fails_closed",
       "status": "open"
     },
     {
@@ -930,7 +930,7 @@
       "classification": "systemic",
       "guard_boundary": "Governance workflow / collector dispatch, provenance, recovery, and review lifecycle",
       "guard": "Finding recorded; candidate regression mapping is not independently verified as prevention.",
-      "test": "tests/test_native_collector_flow.py::test_only_a_completed_successful_trusted_collector_run_is_verified",
+      "test": "UNVERIFIED: targeted regression required",
       "status": "open"
     },
     {
@@ -940,7 +940,7 @@
       "classification": "systemic",
       "guard_boundary": "Governance workflow / collector dispatch, provenance, recovery, and review lifecycle",
       "guard": "Finding recorded; candidate regression mapping is not independently verified as prevention.",
-      "test": "tests/test_native_collector_flow.py::test_an_untrusted_event_never_collects",
+      "test": "tests/test_hunter_review_orchestrator.py::test_read_collector_completion_rejects_untrusted_or_wrong_head_run",
       "status": "open"
     },
     {
@@ -960,7 +960,7 @@
       "classification": "systemic",
       "guard_boundary": "Governance workflow / collector dispatch, provenance, recovery, and review lifecycle",
       "guard": "Finding recorded; candidate regression mapping is not independently verified as prevention.",
-      "test": "tests/test_native_collector_flow.py::test_a_rerun_attempt_is_verified_against_its_own_attempt_and_artifact",
+      "test": "tests/test_hunter_review_orchestrator.py::test_commit_status_pagination_keeps_old_trusted_dispatch_proof",
       "status": "open"
     },
     {
@@ -970,7 +970,7 @@
       "classification": "systemic",
       "guard_boundary": "Governance workflow / collector dispatch, provenance, recovery, and review lifecycle",
       "guard": "Finding recorded; candidate regression mapping is not independently verified as prevention.",
-      "test": "tests/test_native_collector_flow.py::test_a_run_that_is_not_the_trusted_default_branch_collector_never_collects",
+      "test": "tests/test_hunter_review_orchestrator.py::test_collector_liveness_ignores_runs_for_another_candidate",
       "status": "open"
     },
     {
@@ -980,7 +980,7 @@
       "classification": "systemic",
       "guard_boundary": "Governance workflow / collector dispatch, provenance, recovery, and review lifecycle",
       "guard": "Consume the entire paginated status stream before evaluating whether a trusted completion exists; reject early-closing grep -q in the pipeline.",
-      "test": "tests/test_native_collector_workflows.py::test_governance_review_re_evaluates_on_exact_head_proofs_resolving_the_pr_from_fresh_state",
+      "test": "tests/test_hunter_review_orchestrator.py::test_commit_status_pagination_keeps_old_trusted_dispatch_proof",
       "status": "open"
     },
     {
@@ -990,7 +990,7 @@
       "classification": "systemic",
       "guard_boundary": "Governance workflow / collector dispatch, provenance, recovery, and review lifecycle",
       "guard": "One create-only owner ref per (PR, exact head, generation, recovery epoch) independent of the dispatch nonce; a new epoch only on Actions-API evidence that the owner run ended without a valid collector result (never timeout alone), bounded by MAX_COLLECTOR_DISPATCHES; collector start and trusted completion both require the newest epoch, the matching proof status and the run-attempt claim; the run-attempts endpoint is addressed per attempt. Exercised through the real election against a create-only ref model, not a helper. [#592: the mechanism described above was eliminated by the native pull_request_target collector and verified publisher; the class stays covered by the mapped native test.]",
-      "test": "tests/test_native_collector_flow.py::test_a_duplicate_or_re_delivered_event_publishes_nothing_more",
+      "test": "UNVERIFIED: targeted regression required",
       "status": "open"
     },
     {
@@ -1000,7 +1000,7 @@
       "classification": "systemic",
       "guard_boundary": "Governance workflow / collector dispatch, provenance, recovery, and review lifecycle",
       "guard": "The recovery work queue is derived from durable GitHub state (open PR -> current cycle -> newest epoch's run claim -> completed run whose completion is not published), never from a position in run history, so it cannot be starved by unrelated runs; each sweep is bounded by time and count with a time-rotated start. Publication is idempotent and epoch-fenced at production and consumption. A bounded drain keeps pre-migration workflow_dispatch collectors as liveness evidence only. [#592: the mechanism described above was eliminated by the native pull_request_target collector and verified publisher; the class stays covered by the mapped native test.]",
-      "test": "tests/test_native_collector_flow.py::test_a_verified_run_yields_its_own_receipt_and_identity",
+      "test": "UNVERIFIED: targeted regression required",
       "status": "open"
     },
     {
@@ -1010,7 +1010,7 @@
       "classification": "systemic",
       "guard_boundary": "Governance workflow / collector dispatch, provenance, recovery, and review lifecycle",
       "guard": "The logical completion is one immutable create-only completion record per exact cycle (PR, head, generation), written by the claim winner after its fence; consumers accept a completion only for the run that record names, so a duplicate, late, replayed or conflicting status row cannot change the accepted identity or recovery eligibility. Physical status writes stay single-writer through the bounded claim chain; after the chain is exhausted the record is re-projected so recovery is bounded and eventual. Physical exactly-once status creation is not claimed. [#592: the mechanism described above was eliminated by the native pull_request_target collector and verified publisher; the class stays covered by the mapped native test.]",
-      "test": "tests/test_native_collector_flow.py::test_a_duplicate_or_re_delivered_event_publishes_nothing_more",
+      "test": "UNVERIFIED: targeted regression required",
       "status": "open"
     },
     {
@@ -1020,7 +1020,7 @@
       "classification": "systemic",
       "guard_boundary": "Governance workflow / collector dispatch, provenance, recovery, and review lifecycle",
       "guard": "The capability is bound to the earliest eligible run that publishes an HMAC possession record keyed by the dispatch nonce, under a ref name containing the MAC. Runs created before the epoch's trusted proof status are never contenders, a later run holding a copied nonce always loses to the genuine earlier run, only a run holding the epoch's binding and run claim is evidence that an attempt failed, and the dispatch budget counts elected epochs, not listed runs. NOT a complete guard: the nonce is not secret (it is in the collector step env shown in public run logs and in the public collector-dispatch-proof artifact), so an actor with contents:write can forge a valid possession record for a lookalike dispatched between proof issuance and the genuine run, or create the predictable bind/run-claim refs directly, and deny service. Closing it needs an arbitration key unavailable to candidate code, e.g. a secret in an Actions environment restricted to main (owner setting). [#592: the mechanism described above was eliminated by the native pull_request_target collector and verified publisher; the class stays covered by the mapped native test.]",
-      "test": "tests/test_native_collector_flow.py::test_a_forged_run_title_confers_no_identity",
+      "test": "UNVERIFIED: targeted regression required",
       "status": "open"
     },
     {
@@ -1030,7 +1030,7 @@
       "classification": "systemic",
       "guard_boundary": "Defect prevention preflight / workflow guard",
       "guard": "The collector step is held to a restricted invocation contract instead of being parsed as shell: one simple command on one line of plain words and double-quoted step-env expansions, the trusted collector as executable, exactly one --generation bound to the dispatched payload expression, default shell only. Newlines, separators, chaining, continuation, substitution, subshells, comments, quoting tricks and assignments all fail closed.",
-      "test": "tests/test_native_collector_workflows.py::test_the_guard_rejects_each_collector_contract_violation",
+      "test": "UNVERIFIED: targeted regression required",
       "status": "open"
     },
     {
@@ -1040,7 +1040,7 @@
       "classification": "systemic",
       "guard_boundary": "Governance workflow / collector dispatch, provenance, recovery, and review lifecycle",
       "guard": "One canonical receipt contract (collector_receipt_problem: schema, exact repository/PR/head/run/attempt/generation, claims and configuration digests, attempt records) is applied by the collector before writing, by the trusted completion path before any success is written, by the exhausted-pool finalizer and by the governance exhaustion loader. A recorded completion stays in the recovery queue until finalization reaches a definitive outcome, so unusable or temporarily unavailable evidence never suppresses recovery. [#592: the mechanism described above was eliminated by the native pull_request_target collector and verified publisher; the class stays covered by the mapped native test.]",
-      "test": "tests/test_native_collector_flow.py::test_a_partial_receipt_is_incomplete_evidence_and_publishes_nothing",
+      "test": "UNVERIFIED: targeted regression required",
       "status": "open"
     }
   ],

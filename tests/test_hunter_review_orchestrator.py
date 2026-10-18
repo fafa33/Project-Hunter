@@ -2290,17 +2290,45 @@ def test_read_cycle_binds_pull_request_target_provenance(monkeypatch, case, expe
 # --- M2: candidate-reachable status/check publication (PR #592 slice 1) -------
 
 
+#: The only boundary GitHub evaluates against the run's real ref that a definition
+#: can place on a privileged job to refuse candidate-ref execution. `github.ref` is
+#: derived from the dispatched ref, so a candidate cannot forge it by editing a
+#: workflow on its own branch.
+DEFAULT_BRANCH_REF_GUARD = "github.ref == format('refs/heads/{0}', github.event.repository.default_branch)"
+
+
+def _enforces_default_branch_ref(job):
+    """True when the job refuses to run off the trusted default-branch ref.
+
+    The comparison is evaluated by GitHub against `github.ref`: a `workflow_dispatch`
+    run on a candidate branch yields `refs/heads/<candidate>`, so a job carrying this
+    boundary is skipped rather than executing candidate-authored privileged steps.
+    """
+    if not isinstance(job, dict):
+        return False
+    condition = job.get("if")
+    if not isinstance(condition, str):
+        return False
+    return DEFAULT_BRANCH_REF_GUARD in condition
+
+
 def _candidate_status_publishers(document):
     """Candidate-owned workflow definitions must never receive status/check write authority.
 
     A definition is candidate-owned when GitHub can execute the candidate's own copy
-    of it: the `pull_request`-class triggers run the head branch's file, and a `push`
-    outside the default branch runs the pushed file. `pull_request_target` resolves
-    from the base branch, `workflow_run`, `schedule` and `push` to the default branch
-    always run the trusted default-branch file, and `workflow_dispatch` is gated on
-    repository write access, so none of them can carry a candidate-authored step --
-    which is exactly the trust model `test_trusted_orchestration_runs_only_from_
-    workflows_without_pull_request_triggers` enforces for the orchestrator itself.
+    of it. The `pull_request`-class triggers run the head branch's file, and a `push`
+    outside the default branch runs the pushed file: those definitions are always
+    candidate-controlled, and a boundary guard cannot rescue them because the
+    candidate can simply delete it from the file that runs.
+
+    `workflow_dispatch` also runs the dispatched ref's file, so a dispatch-reachable
+    status/check publisher is candidate-reachable *unless every job that inherits a
+    status/check-writing permission refuses to run off the trusted default-branch ref*
+    (`DEFAULT_BRANCH_REF_GUARD`). `pull_request_target` resolves from the base branch,
+    and `workflow_run`, `schedule` and a default-branch `push` always run the trusted
+    default-branch file, so none of them can carry a candidate-authored step -- which
+    is exactly the trust model `test_trusted_orchestration_runs_only_from_workflows_
+    without_pull_request_triggers` enforces for the orchestrator itself.
     """
     if not isinstance(document, dict):
         return []
@@ -2313,28 +2341,36 @@ def _candidate_status_publishers(document):
         and not push.get("branches-ignore")
         and not push.get("tags")
     )
-    if not ({"pull_request", "pull_request_review", "pull_request_review_comment"} & set(triggers)) and not (
+    head_resolved = bool({"pull_request", "pull_request_review", "pull_request_review_comment"} & set(triggers)) or (
         "push" in triggers and not main_only_push
-    ):
-        return []
-    blocks = [document.get("permissions")]
-    jobs = document.get("jobs")
-    job_blocks = (
-        [job.get("permissions") for job in jobs.values() if isinstance(job, dict)] if isinstance(jobs, dict) else []
     )
-    if blocks[0] is None and any(block is None for block in job_blocks):
+    dispatch_reachable = "workflow_dispatch" in triggers
+    if not (head_resolved or dispatch_reachable):
+        return []
+    jobs = document.get("jobs")
+    job_items = [(name, job) for name, job in jobs.items() if isinstance(job, dict)] if isinstance(jobs, dict) else []
+    job_blocks = [job.get("permissions") for _, job in job_items]
+    top_block = document.get("permissions")
+    if top_block is None and any(block is None for block in job_blocks):
         # No top-level baseline leaves every block-less job on the repository
         # default token. A job may pin itself instead (the replay-validate
         # pattern: contents: read on every job), but an unpinned job is an
         # unbounded one.
         return ["missing-workflow-permissions"]
-    blocks.extend(job_blocks)
+    all_jobs_guarded = bool(job_items) and all(_enforces_default_branch_ref(job) for _, job in job_items)
+    # The workflow-level block reaches every job, so it is trusted only when every
+    # job carries the boundary; a job-level block is trusted only on that job.
+    blocks = [(top_block, all_jobs_guarded)]
+    blocks.extend((job.get("permissions"), _enforces_default_branch_ref(job)) for _, job in job_items)
     unsafe = []
-    for block in blocks:
-        if isinstance(block, str) and block.strip() == "write-all":
-            unsafe.append("write-all")
-        elif isinstance(block, dict):
-            unsafe.extend(key for key in ("statuses", "checks") if str(block.get(key, "")).strip() in WORKFLOW_DRIVING)
+    for block, guarded in blocks:
+        if head_resolved or not guarded:
+            if isinstance(block, str) and block.strip() == "write-all":
+                unsafe.append("write-all")
+            elif isinstance(block, dict):
+                unsafe.extend(
+                    key for key in ("statuses", "checks") if str(block.get(key, "")).strip() in WORKFLOW_DRIVING
+                )
     return unsafe
 
 
@@ -2414,6 +2450,7 @@ def test_commit_status_pagination_keeps_old_trusted_dispatch_proof(monkeypatch):
 def test_pr592_defect_registry_never_claims_unverified_findings_prevented():
     """The learning ledger must not silently promote historical review titles."""
     import json
+    import re
 
     root = REPOSITORY_ROOT
     ledger = json.loads((root / "docs" / "PR592_COPILOT_FINDING_LEDGER.json").read_text())
@@ -2424,6 +2461,15 @@ def test_pr592_defect_registry_never_claims_unverified_findings_prevented():
         assert finding["id"] in by_id
         assert finding["status"] != "prevented"
         assert finding.get("verification")
+        evidence = finding.get("regression_evidence")
+        if evidence:
+            # A cited regression must resolve to a real test, not just a plausible
+            # symbol: unverifiable evidence reads as prevention that does not exist.
+            for part in (token.strip() for token in evidence.split(";")):
+                file_part, _, selector = part.partition("::")
+                target = REPOSITORY_ROOT / file_part
+                assert target.is_file(), part
+                assert re.search(rf"(def|class)\s+{re.escape(selector)}\b", target.read_text(encoding="utf-8")), part
 
 
 def test_missing_workflow_permission_baseline_is_detected_in_action_guard():
@@ -2439,6 +2485,50 @@ def test_missing_workflow_permission_baseline_is_detected_in_action_guard():
         "on: pull_request\njobs: {build: {runs-on: ubuntu-latest, permissions: {contents: read}}}\n"
     )
     assert _candidate_status_publishers(pinned) == []
+
+
+def test_workflow_dispatch_status_publisher_without_boundary_is_candidate_reachable():
+    """`workflow_dispatch` runs the dispatched ref's file, so it is not trusted by event identity."""
+    document = yaml.safe_load(
+        "on: workflow_dispatch\npermissions: {statuses: write}\njobs: {publish: {runs-on: ubuntu-latest}}\n"
+    )
+    assert _candidate_status_publishers(document) == ["statuses"]
+
+
+def test_workflow_dispatch_status_publisher_with_default_branch_boundary_is_trusted():
+    document = yaml.safe_load(
+        "on: workflow_dispatch\npermissions: {statuses: write}\n"
+        "jobs:\n"
+        "  publish:\n"
+        "    runs-on: ubuntu-latest\n"
+        f"    if: {DEFAULT_BRANCH_REF_GUARD}\n"
+    )
+    assert _candidate_status_publishers(document) == []
+
+
+def test_one_unguarded_job_reopens_a_dispatch_reachable_workflow():
+    document = yaml.safe_load(
+        "on: workflow_dispatch\npermissions: {statuses: write}\n"
+        "jobs:\n"
+        "  guarded:\n"
+        "    runs-on: ubuntu-latest\n"
+        f"    if: {DEFAULT_BRANCH_REF_GUARD}\n"
+        "  unguarded:\n"
+        "    runs-on: ubuntu-latest\n"
+    )
+    assert _candidate_status_publishers(document) == ["statuses"]
+
+
+def test_head_resolved_workflow_cannot_hide_behind_a_boundary_guard():
+    """A candidate can delete a boundary guard from the file that actually runs."""
+    document = yaml.safe_load(
+        "on: pull_request\npermissions: {statuses: write}\n"
+        "jobs:\n"
+        "  publish:\n"
+        "    runs-on: ubuntu-latest\n"
+        f"    if: {DEFAULT_BRANCH_REF_GUARD}\n"
+    )
+    assert _candidate_status_publishers(document) == ["statuses"]
 
 
 def _publishes_protected_checks(document):
