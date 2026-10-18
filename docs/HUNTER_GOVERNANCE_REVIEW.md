@@ -16,7 +16,7 @@ The trusted workflow checks out the repository default branch and runs that cont
 
 ## Current decision
 
-Before publishing any status, the controller verifies that the open pull request targets `main`. The workflow runs only for pull requests targeting `main`; manual dispatch of this status-writing workflow is disabled.
+Before publishing any status, the controller verifies that the open pull request targets `main`. A manually dispatched run for a PR targeting another base branch is ignored and publishes no governance status.
 
 For an open PR targeting `main`:
 
@@ -42,7 +42,7 @@ Code quality, dependency security, CodeQL, unresolved review feedback, `CHANGES_
 
 ## Triggers
 
-The primary workflow runs via trusted `pull_request_target` on PR open/reopen/synchronize/ready/draft, on completion of the exact-head preflight proofs (`workflow_run`), and on every push to `main`, which re-evaluates every open pull request against the new base (a push-to-`main` run always executes the pushed trusted definition). It has no manual-dispatch entry point and no schedule; there is no separate reconciliation workflow. Recovery from a missed or failed run is GitHub\'s own "Re-run all jobs" or a new push.
+The primary workflow runs on PR open/reopen/synchronize and may be dispatched manually. Reconciliation refreshes open PRs after `main` changes and periodically as a recovery path.
 
 ## Security boundary
 

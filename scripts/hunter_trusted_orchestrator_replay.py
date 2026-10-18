@@ -23,15 +23,11 @@ trusting either job's own account of what it did.
 What a green replay proves, and what it does not
 -------------------------------------------------
 PROVEN by a passing replay:
-  * The candidate's ``independent_review_opportunity_seconds`` is a positive,
-    finite budget derived from its own reviewer pool, and a published cycle is
-    believed only when the run it cites is a trusted-publisher run on the
-    default branch -- the status-less collector run and runs off the default
-    branch can never complete a cycle (scenario A).
-  * The candidate's canonical ``collector_receipt_problem`` contract accepts a
-    well-formed receipt for its own run and refuses every receipt for another
-    pull request, head, run, attempt or generation, and every partial one
-    (scenario B).
+  * The candidate's ``independent_review_opportunity_seconds`` is derived from,
+    and covers, its own real reviewer-pool configuration (scenario A).
+  * The candidate's ``ensure_collector`` dispatches an exact-head collector at
+    most once under a modeled read-your-write-stale reconcile race, and
+    recovers cleanly once the read catches up (scenario B).
   * The candidate's real WAITING_FOR_REVIEWER -> pending classification path,
     end to end from ``pending_review_authority_state`` through
     ``review_orchestration_state``, resolves correctly for absent, in-progress
