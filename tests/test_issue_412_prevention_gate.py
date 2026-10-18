@@ -2200,6 +2200,23 @@ def test_a_wrapped_criterion_is_one_criterion() -> None:
     assert review.parse_issue_acceptance_criteria(body) == ("a criterion that wraps onto a second line",)
 
 
+def test_numbered_issue_acceptance_criteria_are_covered_without_including_nested_items() -> None:
+    body = (
+        "## Motivation\n\n1. Not a criterion.\n"
+        "## Acceptance criteria\n\n"
+        "1. First requirement.\n"
+        "2) Second requirement that wraps\n  onto the next line.\n"
+        "  1. Nested detail must not become a criterion.\n"
+        "3. Third requirement.\n"
+        "## Scope guard\n\n4. Not a criterion.\n"
+    )
+    assert review.parse_issue_acceptance_criteria(body) == (
+        "first requirement",
+        "second requirement that wraps onto the next line",
+        "third requirement",
+    )
+
+
 def test_indented_sub_bullets_are_detail_not_criteria() -> None:
     body = "## Acceptance criteria\n\n- A criterion.\n  - supporting detail\n"
 

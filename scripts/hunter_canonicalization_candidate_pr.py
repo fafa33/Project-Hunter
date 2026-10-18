@@ -67,6 +67,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import shutil
 import subprocess
 import tempfile
@@ -134,8 +135,16 @@ class CanonicalizationPlan:
 
 
 def _default_run(command: Sequence[str]) -> subprocess.CompletedProcess[str]:
+    # The workflow's GH_TOKEN is intentionally read-only for GraphQL lookups.
+    # A Draft PR creation is a separate, owner-authorized write operation:
+    # never let the read-only workflow token shadow the runner's configured
+    # gh credential. If no authorized credential exists, gh fails closed.
+    env = os.environ.copy()
+    if tuple(command[:3]) == ("gh", "pr", "create"):
+        env.pop("GH_TOKEN", None)
+        env.pop("GITHUB_TOKEN", None)
     return subprocess.run(  # noqa: S603 - command list is always literal/argv, never shell text
-        list(command), check=True, capture_output=True, text=True
+        list(command), check=True, capture_output=True, text=True, env=env
     )
 
 

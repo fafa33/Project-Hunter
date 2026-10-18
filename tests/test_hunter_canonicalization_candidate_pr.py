@@ -888,3 +888,24 @@ def test_automatic_canonicalization_proposal_has_read_only_graphql_auth() -> Non
     assert "GITHUB_TOKEN" not in proposal["env"]
     assert "hunter_canonicalization_candidate_pr.py" in proposal["run"]
     assert "git@github.com:${REPOSITORY}.git" in proposal["run"]
+
+
+def test_pr_creation_does_not_inherit_read_only_workflow_token(monkeypatch) -> None:
+    import subprocess
+
+    monkeypatch.setenv("GH_TOKEN", "read-only-workflow-token")
+    monkeypatch.setenv("GITHUB_TOKEN", "read-only-workflow-token")
+    monkeypatch.setenv("GH_HOST", "github.com")
+    calls = []
+
+    def fake_run(command, **kwargs):
+        calls.append((command, kwargs["env"]))
+        return subprocess.CompletedProcess(command, 0, stdout="ok")
+
+    monkeypatch.setattr(candidate_pr.subprocess, "run", fake_run)
+    candidate_pr._default_run(["gh", "pr", "view", "615"])
+    candidate_pr._default_run(["gh", "pr", "create", "--draft"])
+    assert calls[0][1]["GH_TOKEN"] == "read-only-workflow-token"
+    assert "GH_TOKEN" not in calls[1][1]
+    assert "GITHUB_TOKEN" not in calls[1][1]
+    assert calls[1][1]["GH_HOST"] == "github.com"
