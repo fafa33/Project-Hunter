@@ -855,19 +855,20 @@ def read_pr_pool_review_comments(
             trigger = parse_native_trigger(str(comment.get("body") or ""))
             if (
                 trigger is not None
-                and trigger.get("reviewer_agent") == "codex"
+                and trigger.get("reviewer_agent") in {"codex", "copilot"}
                 and trusted_collector_run(repository, token, trigger)
             ):
                 native_triggers.append((str(comment.get("created_at") or ""), trigger))
         for review_item in reviews:
-            if review_item.get("agent_id") != "codex" or review_item.get("source_kind") != "review":
+            agent_id = review_item.get("agent_id")
+            if agent_id not in {"codex", "copilot"} or review_item.get("source_kind") != "review":
                 continue
             if review_item.get("commit_id") != exact_head:
                 continue
             eligible = [
                 t
                 for _created, t in sorted(native_triggers, key=lambda item: item[0])
-                if t.get("head_sha") == exact_head
+                if t.get("head_sha") == exact_head and t.get("reviewer_agent") == agent_id
             ]
             if eligible:
                 review_item["trigger_claims_id"] = eligible[-1]["claims_id"]

@@ -1864,6 +1864,39 @@ def validate_review_after_remediation_boundary() -> list[str]:
     return errors
 
 
+#: A defect whose prevention cannot yet name an executable regression selector must
+#: say so with this exact marker rather than cite a file or symbol that does not exist.
+UNVERIFIED_DEFECT_SELECTOR = "UNVERIFIED: targeted regression required"
+
+
+def _validate_defect_regression_selector(defect_id: str, selector: Any) -> list[str]:
+    """Every declared defect regression selector must name evidence that exists.
+
+    A registry entry points reviewers at the test that is supposed to hold the line,
+    so a selector that resolves to nothing reads as enforcement that is not there.
+    The explicit placeholder is the only honest way to record that no executable
+    regression exists yet; anything else has to resolve.
+    """
+    if selector is None:
+        return []
+    if not _is_non_empty_str(selector):
+        return [f"{defect_id}: test selector must be a non-empty string"]
+    text = str(selector).strip()
+    if text == UNVERIFIED_DEFECT_SELECTOR:
+        return []
+    errors: list[str] = []
+    for part in (token.strip() for token in text.split(";")):
+        if not part:
+            continue
+        if "::" in part:
+            problem = _validate_reference_target(part, role="test")
+            if problem:
+                errors.append(f"{defect_id}: test selector {part!r} is invalid: {problem}")
+        elif not (ROOT / part).is_file():
+            errors.append(f"{defect_id}: test selector {part!r} points at a file that does not exist")
+    return errors
+
+
 def validate_defect_prevention_lifecycle() -> list[str]:
     errors: list[str] = []
     registry = _load_object(REGISTRY_PATH)
@@ -1915,6 +1948,7 @@ def validate_defect_prevention_lifecycle() -> list[str]:
             errors.append(f"{defect_id}: status must be a non-empty string")
         else:
             statuses.add(status)
+        errors.extend(_validate_defect_regression_selector(defect_id, defect.get("test")))
 
     if isinstance(legacy, dict):
         for status in sorted(statuses):
