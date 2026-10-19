@@ -68,21 +68,53 @@ env:
   PYTHONDONTWRITEBYTECODE: "1"
 
 jobs:
+  scope-admission:
+    name: unprivileged scope admission
+    if: >-
+      github.event_name == 'issues'
+      && github.event.label.name == 'hunter-agent-execute'
+      && github.actor == github.repository_owner
+      && !github.event.issue.pull_request
+      && github.event.issue.state == 'open'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions: {}
+    outputs:
+      eligible: ${{ steps.scope.outputs.eligible }}
+    steps:
+      - name: Checkout trusted workflow code
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+      - name: Set up Python
+        uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6.3.0
+        with:
+          python-version: "3.11.13"
+      - name: Install pinned runtime
+        run: python -m pip install --only-binary ':all:' -c requirements/ci-constraints.txt .
+      - name: Check canonical scope before privileged environment
+        id: scope
+        run: python scripts/hunter_issue_scope_admission.py
   authorize:
+    needs: scope-admission
     name: authorize
     if: >-
+      always() && (
       (
         github.event_name == 'issues'
         && github.event.label.name == 'hunter-agent-execute'
         && github.actor == github.repository_owner
         && !github.event.issue.pull_request
         && github.event.issue.state == 'open'
-        && contains(github.event.issue.body, '<!-- hunter-task-scope-v1')
+        && needs.scope-admission.result == 'success'
+        && needs.scope-admission.outputs.eligible == 'true'
       )
       || (github.event_name == 'workflow_dispatch'
           && inputs.remediation_authorization != ''
           && github.actor == github.repository_owner)
       && github.ref == 'refs/heads/main'
+      )
     runs-on: ubuntu-latest
     timeout-minutes: 20
     environment: hunter-issue-agent-control
