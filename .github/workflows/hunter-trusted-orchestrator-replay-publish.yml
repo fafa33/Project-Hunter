@@ -130,9 +130,19 @@ jobs:
             exit 1
           fi
           # Both validation jobs must have concluded successfully; a missing, skipped or failed job counts as failure.
-          jobs_tsv="$(gh api "repos/${GH_REPO}/actions/runs/${RUN_ID}/jobs" --method GET -f per_page=100 --paginate --jq '.jobs[] | [.name, (.conclusion // "none")] | @tsv')"
-          replay_job="$(printf '%s\n' "$jobs_tsv" | awk -F'\t' '$1 == "Trusted Candidate Orchestrator Replay" {print $2}' | head -n 1)"
-          digest_job="$(printf '%s\n' "$jobs_tsv" | awk -F'\t' '$1 == "Independently Verify Candidate Module Digests" {print $2}' | head -n 1)"
+          # GitHub can emit workflow_run.completed before its Jobs API has finalized
+          # every job conclusion. Bound the wait; never accept absent/failed jobs.
+          replay_job=""
+          digest_job=""
+          for poll in 1 2 3 4 5 6; do
+            jobs_tsv="$(gh api "repos/${GH_REPO}/actions/runs/${RUN_ID}/attempts/${run_attempt}/jobs" --method GET -f per_page=100 --paginate --jq '.jobs[] | [.name, (.conclusion // "none")] | @tsv')"
+            replay_job="$(printf '%s\n' "$jobs_tsv" | awk -F'\t' '$1 == "Trusted Candidate Orchestrator Replay" {print $2}' | head -n 1)"
+            digest_job="$(printf '%s\n' "$jobs_tsv" | awk -F'\t' '$1 == "Independently Verify Candidate Module Digests" {print $2}' | head -n 1)"
+            if [ "$replay_job" != "none" ] && [ -n "$replay_job" ] && [ "$digest_job" != "none" ] && [ -n "$digest_job" ]; then
+              break
+            fi
+            if [ "$poll" -lt 6 ]; then sleep 5; fi
+          done
           echo "head_sha=$head_sha" >> "$GITHUB_OUTPUT"
           echo "pr_number=$pr_number" >> "$GITHUB_OUTPUT"
           echo "run_attempt=$run_attempt" >> "$GITHUB_OUTPUT"
