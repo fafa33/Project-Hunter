@@ -1800,7 +1800,17 @@ def test_publisher_resolves_both_validation_job_conclusions_from_the_triggering_
     doc = yaml.safe_load(Path(".github/workflows/hunter-trusted-orchestrator-replay-publish.yml").read_text())
     steps = doc["jobs"]["publish-proof"]["steps"]
     context = next(step for step in steps if step.get("id") == "context")["run"]
-    assert "actions/runs/${RUN_ID}/jobs" in context
+    assert "actions/runs/${RUN_ID}/attempts/${run_attempt}/jobs" in context
+    assert steps[0]["env"]["EVENT_ATTEMPT"] == "${{ github.event.workflow_run.run_attempt }}"
+    assert 'run_attempt="$EVENT_ATTEMPT"' in context
+    assert 'current_attempt="$(printf' in context
+    assert 'if [ "$current_attempt" != "$run_attempt" ]; then' in context
+    assert "triggering attempt $run_attempt was superseded" in context
+    assert 'run_attempt="$(printf' not in context
+    assert "for poll in 1 2 3 4 5 6" in context
+    assert '"$replay_job" != "none"' in context
+    assert '"$digest_job" != "none"' in context
+    assert 'if [ "$poll" -lt 6 ]; then sleep 5; fi' in context
     assert (
         "Trusted Candidate Orchestrator Replay" in context
         and "Independently Verify Candidate Module Digests" in context
