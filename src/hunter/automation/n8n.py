@@ -26,6 +26,7 @@ from dataclasses import fields
 from typing import Any
 from urllib.parse import unquote, urlsplit
 
+from hunter.automation.retired_issue_agent_authority import refuse_retired_authority
 from hunter.evidence_intelligence.model_adapter_transport import TransportCredential
 from hunter.evidence_intelligence.smart_prompt_machine import SmartPromptMachineError
 from hunter.evidence_intelligence.smart_prompt_routing import PromptAutomationEnvelope, PromptAutomationVerifier
@@ -403,6 +404,7 @@ class N8nPromptAutomationTransport:
 
     def deliver(self, payload: Mapping[str, str]) -> PromptAutomationAcknowledgement:
         """POST one canonical payload only inside the dispatcher authorization scope."""
+        refuse_retired_authority("n8n.N8nPromptAutomationTransport")
         envelope = _require_active_dispatch(self, payload, self._verifier)
         canonical = _canonical_payload(payload)
         _validate_dispatcher_lineage(canonical, envelope, self._verifier)

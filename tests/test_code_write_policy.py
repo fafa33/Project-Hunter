@@ -4,6 +4,7 @@ import json
 from pathlib import Path
 
 import hunter_defect_prevention_preflight as prevention
+import pytest
 
 ROOT = Path(__file__).resolve().parents[1]
 
@@ -337,3 +338,149 @@ def test_codex_hard_review_budget_covers_its_observed_hosted_latency() -> None:
     assert codex["review_timeout_seconds"] >= 30 * 60
     assert codex["retryable"] is False
     assert pool["timeout_policy"]["bounded"] is True
+
+
+# --- ADR 0037 / OD-3: least-privilege Issue-agent publisher and state-ledger grants -------------------
+
+
+def _issue_agent_errors(monkeypatch, tmp_path, mutator) -> list[str]:
+    policy = json.loads((ROOT / "docs" / "CODE_WRITE_POLICY.json").read_text(encoding="utf-8"))
+    mutator(policy["code_write_paths"])
+    target = tmp_path / "CODE_WRITE_POLICY.json"
+    target.write_text(json.dumps(policy), encoding="utf-8")
+    monkeypatch.setattr(prevention, "WRITE_POLICY_PATH", target)
+    return prevention.validate_code_write_policy()
+
+
+def _set(path: str, value):
+    def mutate(paths):
+        node = paths
+        *parents, leaf = path.split(".")
+        for key in parents:
+            node = node[key]
+        node[leaf] = value
+
+    return mutate
+
+
+def _drop(path: str):
+    def mutate(paths):
+        node = paths
+        *parents, leaf = path.split(".")
+        for key in parents:
+            node = node[key]
+        del node[leaf]
+
+    return mutate
+
+
+ISSUE_AGENT_WIDENINGS = {
+    "actor from another workflow": _set(
+        "issue_agent_publisher.actor.workflow_path", ".github/workflows/some-other-workflow.yml"
+    ),
+    "actor from another job": _set("issue_agent_publisher.actor.job", "execute"),
+    "actor in another environment": _set("issue_agent_publisher.actor.environment", "hunter-issue-agent-executor"),
+    "actor with an extra binding": _set("issue_agent_publisher.actor.repository", "someone/else"),
+    "actor missing its environment": _drop("issue_agent_publisher.actor.environment"),
+    "authorized signer that is not the OD-2a writer": _set("issue_agent_publisher.writer_login", "claude"),
+    "target prefix in another branch namespace": _set(
+        "issue_agent_publisher.target_ref.prefix", "refs/heads/candidate-"
+    ),
+    "target ref with an extra field": _set("issue_agent_publisher.target_ref.allow_existing", True),
+    "ledger in a different version namespace": _set(
+        "issue_agent_state_ledger.target_ref_prefix", "refs/heads/hunter-state/v2/"
+    ),
+    "ledger widened to all hunter-state branches": _set(
+        "issue_agent_state_ledger.target_ref_prefix", "refs/heads/hunter-state/"
+    ),
+    "publisher disallowed": _set("issue_agent_publisher.allowed", False),
+    "publisher acts from a non-main ref": _set("issue_agent_publisher.actor.ref", "refs/heads/feature"),
+    "publisher acts on a re-run attempt": _set("issue_agent_publisher.actor.run_attempt", 2),
+    "run attempt coerced from a boolean": _set("issue_agent_publisher.actor.run_attempt", True),
+    "unnamed publisher job": _set("issue_agent_publisher.actor.job", " "),
+    "writer is not an authorized signer": _set("issue_agent_publisher.writer_login", "not-a-signer"),
+    "authentication key instead of signing-only": _set("issue_agent_publisher.signing.key_kind", "authentication"),
+    "unverified signatures accepted": _set("issue_agent_publisher.signing.required_github_verification", "any"),
+    "publication into main": _set("issue_agent_publisher.target_ref.prefix", "refs/heads/main"),
+    "publication into tags": _set("issue_agent_publisher.target_ref.prefix", "refs/tags/issue-"),
+    "branch not bound to the Issue": _set("issue_agent_publisher.target_ref.issue_binding", False),
+    "short authorization digest": _set("issue_agent_publisher.target_ref.authorization_digest_hex_length", 8),
+    "update authority": _set("issue_agent_publisher.operation.update", True),
+    "force authority": _set("issue_agent_publisher.operation.force", True),
+    "delete authority": _set("issue_agent_publisher.operation.delete", True),
+    "tag authority": _set("issue_agent_publisher.operation.tag", True),
+    "pull-request authority": _set("issue_agent_publisher.operation.pull_request", True),
+    "not create-only": _set("issue_agent_publisher.operation.create_only", False),
+    "update coerced from integer zero": _set("issue_agent_publisher.operation.update", 0),
+    "extra operation smuggled in": _set("issue_agent_publisher.operation.rename", True),
+    "workflows permission granted": _set("issue_agent_publisher.token.workflows", "write"),
+    "extra token permission": _set("issue_agent_publisher.token.pull_requests", "write"),
+    "token for other repositories": _set("issue_agent_publisher.token.repository_scope", "all-repositories"),
+    "more than one commit": _set("issue_agent_publisher.commit_shape.count", 2),
+    "model prose in commit metadata": _set("issue_agent_publisher.commit_shape.model_prose_in_metadata", True),
+    "commit not bound to the validated unsigned commit": _set(
+        "issue_agent_publisher.commit_shape.non_signature_fields_equal", "head_sha"
+    ),
+    "second path authority": _set("issue_agent_publisher.path_authority", "publisher_allowlist"),
+    "boundary names no contract stage": _set("issue_agent_publisher.required_boundary.stage", "made-up-stage"),
+    "boundary moved to a different real stage": _set(
+        "issue_agent_publisher.required_boundary.stage", "hosted-full-exact-head-proof"
+    ),
+    "pre-push-safety executed by the publisher": _set("issue_agent_publisher.required_boundary.executor", "publisher"),
+    "pre-push-safety not bound to the unsigned commit": _set(
+        "issue_agent_publisher.required_boundary.bound_to", "tree_sha"
+    ),
+    "candidate code with credentials": _set("issue_agent_publisher.candidate_code_with_credentials", True),
+    "hooks executed with credentials": _set("issue_agent_publisher.hooks_executed", True),
+    "publisher grant missing": _drop("issue_agent_publisher"),
+    "ledger grant missing": _drop("issue_agent_state_ledger"),
+    "ledger classified as code": _set("issue_agent_state_ledger.classification", "code"),
+    "ledger admissible as a candidate": _set("issue_agent_state_ledger.admissible_as_candidate", True),
+    "ledger carries source paths": _set("issue_agent_state_ledger.source_paths", True),
+    "ledger in an unprotectable custom ref": _set("issue_agent_state_ledger.target_ref_prefix", "refs/hunter/state/"),
+    "ledger owns all branches": _set("issue_agent_state_ledger.target_ref_prefix", "refs/heads/"),
+    "ledger overlaps candidate branches": _set(
+        "issue_agent_state_ledger.target_ref_prefix", "refs/heads/issue-ledger/"
+    ),
+    "ledger prefix without a namespace boundary": _set(
+        "issue_agent_state_ledger.target_ref_prefix", "refs/heads/hunter-state/v1"
+    ),
+    "ledger force authority": _set("issue_agent_state_ledger.operation.force", True),
+    "ledger delete authority": _set("issue_agent_state_ledger.operation.delete", True),
+    "anchor without non_fast_forward": _set("issue_agent_state_ledger.anchor.ruleset_rules", ["deletion"]),
+    "anchor duplicated rule hides a missing one": _set(
+        "issue_agent_state_ledger.anchor.ruleset_rules", ["deletion", "deletion"]
+    ),
+    "anchor with a bypass actor": _set(
+        "issue_agent_state_ledger.anchor.bypass_actors", [{"actor_type": "RepositoryRole", "actor_id": 5}]
+    ),
+    "ledger written by a personal token": _set("issue_agent_state_ledger.writer.token", "PAT"),
+    "ledger written from a feature branch": _set("issue_agent_state_ledger.writer.ref", "refs/heads/feature"),
+}
+
+
+def test_issue_agent_grants_validate_on_the_canonical_policy() -> None:
+    policy = json.loads((ROOT / "docs" / "CODE_WRITE_POLICY.json").read_text(encoding="utf-8"))
+    assert prevention.validate_issue_agent_code_write_paths(policy) == []
+
+
+@pytest.mark.parametrize("widening", sorted(ISSUE_AGENT_WIDENINGS))
+def test_issue_agent_grants_reject_every_widening(monkeypatch, tmp_path, widening) -> None:
+    assert _issue_agent_errors(monkeypatch, tmp_path, ISSUE_AGENT_WIDENINGS[widening]) != []
+
+
+ISSUE_AGENT_EQUIVALENTS = {
+    "operation keys reordered": lambda paths: paths["issue_agent_publisher"].update(
+        operation=dict(reversed(list(paths["issue_agent_publisher"]["operation"].items())))
+    ),
+    "anchor rules listed in another order": _set(
+        "issue_agent_state_ledger.anchor.ruleset_rules", ["non_fast_forward", "deletion"]
+    ),
+    "descriptive prose reworded": _set("issue_agent_publisher.purpose", "Narrow create-only Issue-agent publication."),
+    "extra descriptive note": _set("issue_agent_state_ledger.note", "Ledger records are public and non-secret."),
+}
+
+
+@pytest.mark.parametrize("equivalent", sorted(ISSUE_AGENT_EQUIVALENTS))
+def test_issue_agent_grants_accept_canonically_equivalent_spellings(monkeypatch, tmp_path, equivalent) -> None:
+    assert _issue_agent_errors(monkeypatch, tmp_path, ISSUE_AGENT_EQUIVALENTS[equivalent]) == []

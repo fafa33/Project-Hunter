@@ -12,6 +12,7 @@ import re
 import shlex
 import subprocess
 import tomllib
+from collections.abc import Mapping
 from importlib import metadata
 from pathlib import Path
 from typing import Any, Literal
@@ -22,7 +23,11 @@ import hunter_writer_provenance as provenance
 import yaml
 from hunter_workflow_state import path_matches_scope_entry
 
-ROOT = Path(__file__).resolve().parents[1]
+ROOT = (
+    Path(os.environ["HUNTER_TRUSTED_VALIDATION_ROOT"]).resolve()
+    if "HUNTER_TRUSTED_VALIDATION_ROOT" in os.environ
+    else Path(__file__).resolve().parents[1]
+)
 REQUIRED_PREFLIGHT_GATES = (
     "Architecture Index Guard",
     "Artifact Guard",
@@ -146,15 +151,6 @@ EXPECTED_STAGES = (
     "merge-enforced",
     "prevented",
 )
-REQUIRED_ENFORCEMENT_FIELDS = ("local", "hosted", "merge", "recurrence")
-ALLOWED_CODE_WRITE_PATHS = frozenset(
-    {
-        "local_git_push",
-        "github_contents_api",
-        "github_git_data_api",
-        "api_only_agents",
-    }
-)
 
 VALIDATED_CLASSIFICATIONS = frozenset(
     {
@@ -185,8 +181,45 @@ ALLOWED_CODE_WRITE_PATHS = frozenset(
         "github_contents_api",
         "github_git_data_api",
         "api_only_agents",
+        "issue_agent_publisher",
+        "issue_agent_state_ledger",
     }
 )
+VALIDATION_STAGE_CONTRACT_PATH = ROOT / "docs" / "VALIDATION_STAGE_CONTRACT.json"
+#: ADR 0037 D6 / Retirement Plan 2.4 (OD-3): the only operation the Issue-agent publisher may perform.
+ISSUE_AGENT_PUBLISHER_OPERATION = {
+    "create_only": True,
+    # ADR 0039 L7 (RD-5): a finding-driven remediation of the publisher's own PR branch fast-forwards that
+    # branch from the exact bound head under that head's exact `--force-with-lease`. Anything else -- a force,
+    # a delete, a tag, a PR write, or a different `update` spelling -- is refused.
+    "update": "fast-forward-from-bound-head",
+    "force": False,
+    "delete": False,
+    "tag": False,
+    "pull_request": False,
+}
+#: ADR 0037 D6: the one permission the publisher token may carry; `workflows` must stay absent.
+ISSUE_AGENT_PUBLISHER_TOKEN = {"repository_scope": "this-repository", "contents": "write", "workflows": False}
+#: ADR 0037 D1/D6: the one canonical actor allowed to publish (the lifecycle workflow's publish job).
+ISSUE_AGENT_PUBLISHER_ACTOR = {
+    "workflow_path": ".github/workflows/hunter-issue-agent-trigger.yml",
+    "job": "publish",
+    "environment": "hunter-issue-agent-publisher",
+    "ref": "refs/heads/main",
+    "run_attempt": 1,
+}
+#: Owner decision OD-2a: the canonical verified signer of Issue-agent candidates.
+ISSUE_AGENT_PUBLISHER_WRITER = "fafa33"
+#: ADR 0037 D6 / state machine spec section 2: issue-<n>-<first 16 hex of the authorization identity>.
+ISSUE_AGENT_PUBLISHER_TARGET_REF = {
+    "prefix": "refs/heads/issue-",
+    "issue_binding": True,
+    "authorization_digest_hex_length": 16,
+}
+#: ADR 0037 D2a: the ruleset-anchored, forward-only ledger namespace.
+ISSUE_AGENT_STATE_LEDGER_PREFIX = "refs/heads/hunter-state/v1/"
+ISSUE_AGENT_STATE_LEDGER_OPERATION = {"fast_forward_append_only": True, "force": False, "delete": False}
+ISSUE_AGENT_STATE_LEDGER_ANCHOR_RULES = frozenset({"deletion", "non_fast_forward"})
 
 
 def _load_object(path: Path) -> dict[str, Any]:
@@ -311,6 +344,25 @@ def _validate_reference_target(ref_str: str, *, role: ReferenceRole) -> str | No
     return None
 
 
+def _mapped_family_title_errors(
+    finding_id: Any, mapped_id: str, finding: Mapping[str, Any], registry_families: Mapping[str, Any]
+) -> list[str]:
+    """ADR 0039 L6 (RD-3): a disposition mapped to a canonical family must name that family's own title.
+
+    A promoted finding is written by trusted plumbing from the registry, so its class can be checked against
+    the registry rather than trusted. That closes the one field a machine-written disposition could otherwise
+    use to claim a different defect class than the one it was proven against.
+    """
+
+    family = registry_families.get(mapped_id)
+    if family is None:
+        return []
+    title = family.get("title")
+    if not _is_non_empty_str(title) or finding.get("mapped_defect_class") != title:
+        return [f"{finding_id}: mapped family {mapped_id} requires mapped_defect_class to be its canonical title"]
+    return []
+
+
 def validate_reviewer_finding_dispositions() -> list[str]:
     errors: list[str] = []
     if not REVIEWER_DISPOSITIONS_PATH.is_file():
@@ -330,6 +382,13 @@ def validate_reviewer_finding_dispositions() -> list[str]:
         for defect in registry.get("defects", [])
         if isinstance(defect, dict) and isinstance(defect.get("id"), str)
     }
+    # ADR 0039 L6 (RD-3): a proven remediation maps to a canonical *family* as readily as to a legacy defect.
+    registry_families = {
+        family["id"]: family
+        for family in registry.get("families", [])
+        if isinstance(family, dict) and isinstance(family.get("id"), str)
+    }
+    mapped_targets = {**registry_defects, **registry_families}
 
     lifecycle = _load_object(LIFECYCLE_PATH)
     explicit_enforcement = lifecycle.get("explicit_enforcement", {})
@@ -386,9 +445,10 @@ def validate_reviewer_finding_dispositions() -> list[str]:
         elif classification == "recurrence":
             if not _is_non_empty_str(mapped_id):
                 errors.append(f"{finding_id}: recurrence classification requires non-empty mapped_defect_id")
-            elif mapped_id not in registry_defects:
+            elif mapped_id not in mapped_targets:
                 errors.append(f"{finding_id}: mapped_defect_id {mapped_id!r} not found in DEFECT_REGISTRY.json")
             else:
+                errors.extend(_mapped_family_title_errors(finding_id, mapped_id, finding, registry_families))
                 enforcement_entry = explicit_enforcement.get(mapped_id, {})
                 stage = enforcement_entry.get("state") if isinstance(enforcement_entry, dict) else None
                 if stage in {"prevented", "merge-enforced"}:
@@ -412,8 +472,12 @@ def validate_reviewer_finding_dispositions() -> list[str]:
                         if test_err:
                             errors.append(f"{finding_id}: invalid test_reference {test_ref!r}: {test_err}")
         elif mapped_id is not None:
-            if not _is_non_empty_str(mapped_id) or mapped_id not in registry_defects:
+            # ADR 0039 L6: the promotion of a proven finding names its canonical family, so the mapped target
+            # may be a family; the record must then carry that family's own title, never a restated claim.
+            if not _is_non_empty_str(mapped_id) or mapped_id not in mapped_targets:
                 errors.append(f"{finding_id}: mapped_defect_id {mapped_id!r} not found in DEFECT_REGISTRY.json")
+            else:
+                errors.extend(_mapped_family_title_errors(finding_id, mapped_id, finding, registry_families))
 
         if res_state == "resolved":
             if classification in {"new_systemic_defect", "duplicate", "recurrence"}:
@@ -901,6 +965,135 @@ def validate_code_write_policy() -> list[str]:
 
     errors.extend(validate_writer_identity_binding(policy))
     errors.extend(validate_connector_write_ingress(policy))
+    errors.extend(validate_issue_agent_code_write_paths(policy))
+    return errors
+
+
+def _validation_stage_ids() -> set[str]:
+    contract = _load_object(VALIDATION_STAGE_CONTRACT_PATH)
+    return {str(stage.get("id")) for stage in contract.get("stages") or [] if isinstance(stage, dict)}
+
+
+def _exactly(value: Any, expected: Any) -> bool:
+    """Structural equality that refuses JSON type coercion (``1``/``true``, ``0``/``false``)."""
+
+    if type(value) is not type(expected):
+        return False
+    if isinstance(expected, dict):
+        return set(value) == set(expected) and all(_exactly(value[key], expected[key]) for key in expected)
+    if isinstance(expected, list):
+        return len(value) == len(expected) and all(_exactly(a, b) for a, b in zip(value, expected, strict=True))
+    return bool(value == expected)
+
+
+def validate_issue_agent_code_write_paths(policy: dict[str, Any]) -> list[str]:
+    """Validate the ADR 0037 / OD-3 least-privilege Issue-agent publisher and state-ledger grants.
+
+    Both grants are closed, structured contracts. The guard compares meaning (exact operation and
+    permission sets, the bound signer, the owning validation stage, the ref namespaces), never prose, so
+    an equivalent spelling of a description cannot fail it and a widened grant cannot pass it.
+    """
+
+    errors: list[str] = []
+    paths = policy.get("code_write_paths") or {}
+    publisher = paths.get("issue_agent_publisher")
+    ledger = paths.get("issue_agent_state_ledger")
+    if not isinstance(publisher, dict) or not isinstance(ledger, dict):
+        return ["issue_agent_publisher and issue_agent_state_ledger must be objects"]
+
+    if publisher.get("allowed") is not True:
+        errors.append("issue_agent_publisher must be an explicitly allowed, narrowly scoped path")
+    if not _exactly(publisher.get("actor"), ISSUE_AGENT_PUBLISHER_ACTOR):
+        errors.append(
+            "issue_agent_publisher actor must be exactly the lifecycle workflow publish job in the publisher "
+            "environment on refs/heads/main at run attempt 1"
+        )
+
+    provenance_policy = policy.get("ingress_provenance") or {}
+    signers = set(provenance_policy.get("authorized_signers") or [])
+    bound = {
+        str(identity.get("login"))
+        for identity in (policy.get("writer_identity_binding") or {}).get("identities") or []
+        if isinstance(identity, dict)
+    }
+    writer = publisher.get("writer_login")
+    if writer not in signers or writer not in bound:
+        errors.append("issue_agent_publisher writer must be an authorized signer with a bound writer identity")
+    elif writer != ISSUE_AGENT_PUBLISHER_WRITER:
+        errors.append("issue_agent_publisher writer must be the canonical OD-2a signer")
+    signing = publisher.get("signing")
+    if not _exactly(
+        signing,
+        {
+            "format": "ssh",
+            "algorithm": "ed25519",
+            "key_kind": "signing-only",
+            "required_github_verification": "verified",
+        },
+    ):
+        errors.append("issue_agent_publisher must sign with a verified signing-only SSH Ed25519 key")
+
+    if not _exactly(publisher.get("target_ref"), ISSUE_AGENT_PUBLISHER_TARGET_REF):
+        errors.append(
+            "issue_agent_publisher target ref must be exactly refs/heads/issue-<issue>-<16 hex of the authorization>"
+        )
+    if not _exactly(publisher.get("operation"), ISSUE_AGENT_PUBLISHER_OPERATION):
+        errors.append(
+            "issue_agent_publisher must be create-only, or a fast-forward update from the exact bound head, with "
+            "no force, delete, tag or PR authority"
+        )
+    if not _exactly(publisher.get("token"), ISSUE_AGENT_PUBLISHER_TOKEN):
+        errors.append("issue_agent_publisher token must be contents:write on this repository with workflows absent")
+    shape = publisher.get("commit_shape")
+    if not _exactly(
+        shape,
+        {
+            "count": 1,
+            "parent": "signed_base_sha",
+            "tree": "validated_tree_sha",
+            "non_signature_fields_equal": "unsigned_commit_sha",
+            "model_prose_in_metadata": False,
+        },
+    ):
+        errors.append("issue_agent_publisher must publish exactly one commit bound to the validated unsigned commit")
+    if publisher.get("path_authority") != "task_scope":
+        errors.append("issue_agent_publisher path authority must be the canonical TaskScope, never a second list")
+    boundary = publisher.get("required_boundary")
+    if not isinstance(boundary, dict) or boundary.get("stage") not in _validation_stage_ids():
+        errors.append("issue_agent_publisher boundary must name a stage of the validation stage contract")
+    elif not _exactly(
+        boundary,
+        {
+            "stage": "pre-push-safety",
+            "executor": "credential-free-validator",
+            "bound_to": "unsigned_commit_sha",
+            "code_identity": "control_sha",
+        },
+    ):
+        errors.append("issue_agent_publisher pre-push-safety must run credential-free and bind unsigned_commit_sha")
+    if publisher.get("candidate_code_with_credentials") is not False or publisher.get("hooks_executed") is not False:
+        errors.append("issue_agent_publisher must never execute candidate code or hooks with credentials (DFF-028)")
+
+    if ledger.get("allowed") is not True or ledger.get("classification") != "non-code-ledger":
+        errors.append("issue_agent_state_ledger must be an allowed non-code ledger path")
+    if ledger.get("admissible_as_candidate") is not False or ledger.get("source_paths") is not False:
+        errors.append("issue_agent_state_ledger must never carry source paths or be admissible as a candidate")
+    if not _exactly(ledger.get("target_ref_prefix"), ISSUE_AGENT_STATE_LEDGER_PREFIX):
+        errors.append("issue_agent_state_ledger must own exactly the anchored refs/heads/hunter-state/v1/ namespace")
+    if not _exactly(ledger.get("operation"), ISSUE_AGENT_STATE_LEDGER_OPERATION):
+        errors.append("issue_agent_state_ledger must be fast-forward append-only with no force or delete")
+    anchor = ledger.get("anchor")
+    if (
+        not isinstance(anchor, dict)
+        or not isinstance(anchor.get("ruleset_rules"), list)
+        or len(anchor["ruleset_rules"]) != len(ISSUE_AGENT_STATE_LEDGER_ANCHOR_RULES)
+        or set(anchor["ruleset_rules"]) != ISSUE_AGENT_STATE_LEDGER_ANCHOR_RULES
+        or not _exactly(anchor.get("bypass_actors"), [])
+    ):
+        errors.append("issue_agent_state_ledger must be anchored by a no-bypass deletion+non_fast_forward ruleset")
+    writer_spec = ledger.get("writer")
+    if not _exactly(writer_spec, {"token": "GITHUB_TOKEN", "role": "control", "ref": "refs/heads/main"}):
+        errors.append("issue_agent_state_ledger writer must be the control role's GITHUB_TOKEN on main")
     return errors
 
 
@@ -935,14 +1128,11 @@ def validate_writer_identity_binding(policy: dict[str, Any]) -> list[str]:
         if not _is_non_empty_str(raw.get(field)):
             errors.append(f"{BINDING_FIELD} must declare {field}")
 
-    # The owner-recovery boundary is the only sanctioned way for a range to hold
-    # two writers; disabling single-writer enforcement would admit mixed ranges
-    # with no boundary at all while every recovery check below still passed.
-    if raw.get("require_single_writer_per_range") is not True or not binding.require_single_writer_per_range:
-        errors.append(
-            f"{BINDING_FIELD}.require_single_writer_per_range must be true; only a valid owner-recovery boundary "
-            "may admit a second writer epoch"
-        )
+    # Current trusted-main policy explicitly permits multiple independently
+    # authorized writers. Recovery is an additional tightly scoped path, not
+    # a reason to override the canonical policy with an older single-writer rule.
+    if raw.get("require_single_writer_per_range") is not False or binding.require_single_writer_per_range:
+        errors.append(f"{BINDING_FIELD}.require_single_writer_per_range must preserve the approved multi-writer policy")
 
     enforcement = raw.get("enforcement")
     if not isinstance(enforcement, dict):
@@ -1845,6 +2035,39 @@ def validate_review_after_remediation_boundary() -> list[str]:
     return errors
 
 
+#: A defect whose prevention cannot yet name an executable regression selector must
+#: say so with this exact marker rather than cite a file or symbol that does not exist.
+UNVERIFIED_DEFECT_SELECTOR = "UNVERIFIED: targeted regression required"
+
+
+def _validate_defect_regression_selector(defect_id: str, selector: Any) -> list[str]:
+    """Every declared defect regression selector must name evidence that exists.
+
+    A registry entry points reviewers at the test that is supposed to hold the line,
+    so a selector that resolves to nothing reads as enforcement that is not there.
+    The explicit placeholder is the only honest way to record that no executable
+    regression exists yet; anything else has to resolve.
+    """
+    if selector is None:
+        return []
+    if not _is_non_empty_str(selector):
+        return [f"{defect_id}: test selector must be a non-empty string"]
+    text = str(selector).strip()
+    if text == UNVERIFIED_DEFECT_SELECTOR:
+        return []
+    errors: list[str] = []
+    for part in (token.strip() for token in text.split(";")):
+        if not part:
+            continue
+        if "::" in part:
+            problem = _validate_reference_target(part, role="test")
+            if problem:
+                errors.append(f"{defect_id}: test selector {part!r} is invalid: {problem}")
+        elif not (ROOT / part).is_file():
+            errors.append(f"{defect_id}: test selector {part!r} points at a file that does not exist")
+    return errors
+
+
 def validate_defect_prevention_lifecycle() -> list[str]:
     errors: list[str] = []
     registry = _load_object(REGISTRY_PATH)
@@ -1896,6 +2119,7 @@ def validate_defect_prevention_lifecycle() -> list[str]:
             errors.append(f"{defect_id}: status must be a non-empty string")
         else:
             statuses.add(status)
+        errors.extend(_validate_defect_regression_selector(defect_id, defect.get("test")))
 
     if isinstance(legacy, dict):
         for status in sorted(statuses):
@@ -2201,6 +2425,7 @@ def run_candidate_quality_gates(candidate_root: Path) -> int:
     env = os.environ.copy()
     env["GITHUB_TOKEN"] = ""
     env["GH_TOKEN"] = ""
+    env["HUNTER_TRUSTED_VALIDATION_ROOT"] = str(candidate_root.resolve())
 
     lane_problem = trusted_lane_problem(env.get("PYTEST_ADDOPTS", ""))
     if lane_problem is not None:
@@ -2212,7 +2437,11 @@ def run_candidate_quality_gates(candidate_root: Path) -> int:
         )
         return 2
 
+    # Gate implementations must come from the trusted checkout, not the PR.
+    trusted_root = Path(__file__).resolve().parents[1]
     for name, command in TRUSTED_CANDIDATE_QUALITY_GATES:
+        if len(command) >= 2 and command[0] == "python" and command[1].startswith("scripts/"):
+            command = (command[0], str(trusted_root / command[1]), *command[2:])
         printable = " ".join(command)
         print(f"[Trusted Candidate Gates] {name}: {printable}", flush=True)
         completed = subprocess.run(command, cwd=candidate_root, env=env, check=False)

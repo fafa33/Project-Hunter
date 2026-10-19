@@ -12,6 +12,7 @@ from datetime import UTC, datetime
 from pathlib import Path
 
 from hunter.automation.n8n_handoff import PromptAutomationEnvelopeHandoff
+from hunter.automation.retired_issue_agent_authority import refuse_retired_authority
 from hunter.evidence_intelligence.pre_model_persistence import EvidencePreModelPersistenceRepository
 from hunter.evidence_intelligence.repository import EvidenceIntelligenceRepository
 
@@ -138,6 +139,7 @@ def _push_trusted(
     source_ref: str = "HEAD",
     run_pre_push: bool = True,
 ) -> None:
+    refuse_retired_authority("opencode_provider_runtime")
     """Push under an exact lease; an empty expected head is a create-only lease."""
     args = [
         "push",
@@ -405,6 +407,7 @@ def _sync_primary_checkout(repo: Path, branch: str, head_before: str, expected_h
 
 
 def run(document: str) -> int:
+    refuse_retired_authority("opencode_provider_runtime")
     repo = Path(_required_env(_REPO_ENV)).resolve()
     branch = _required_env(_BRANCH_ENV)
     database = Path(_required_env(_DB_ENV)).resolve()

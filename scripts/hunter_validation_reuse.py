@@ -26,13 +26,17 @@ Everything else fails closed onto running the full lane: a different event, a
 missing or unsuccessful run, unavailable Git or API evidence, a tests-first-red
 head, a toolchain that does not match its pin, or a receipt that does not verify.
 Refusing reuse is always safe; it costs time, not proof.
+
+Reuse is deliberately non-blocking. A queued or in-progress trusted run is not proof yet,
+so CI immediately runs its own full lane instead of polling another workflow. This keeps
+validation reuse an optimization rather than a cross-workflow synchronization boundary;
+correctness never depends on timing, and PR latency cannot be held by another run.
 """
 
 from __future__ import annotations
 
 import argparse
 import os
-import time
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass
 from datetime import UTC, datetime
@@ -56,7 +60,11 @@ PRE_PR_WORKFLOW_PATH = ".github/workflows/hunter-pre-pr-preflight.yml"
 #: head carrying the marker can never authorize skipping the full lane.
 MODE_MARKER = ".hunter-preflight-mode"
 
+#: Reuse is a non-blocking optimization, never a synchronization boundary.
+#: A pending trusted run is not proof yet; CI validates independently immediately.
+#: This invariant prevents cross-workflow polling from becoming PR latency.
 PRODUCED_BY = "hunter-pre-pr-preflight"
+RUN_PENDING_STATUSES = frozenset({"queued", "in_progress", "requested", "waiting", "pending"})
 
 Fetch = Callable[[str, str, str], Any]
 
@@ -100,8 +108,14 @@ def trusted_branch_preflight_run(runs: Sequence[Any], head_sha: str) -> tuple[di
         return None, f"no exact-head {PRE_PR_WORKFLOW_NAME} push run exists for {head_sha}"
 
     latest = max(matching, key=lambda run: int(run.get("id") or 0))
-    if str(latest.get("status") or "") != "completed":
-        return latest, f"exact-head {PRE_PR_WORKFLOW_NAME} has not completed"
+    status = str(latest.get("status") or "")
+    if status != "completed":
+        # Only a status that is genuinely still moving is waited on. An unreadable
+        # status is not evidence that the run is progressing, so it fails closed
+        # instead of being treated as pending indefinitely.
+        if status in RUN_PENDING_STATUSES:
+            return latest, f"exact-head {PRE_PR_WORKFLOW_NAME} is {status}"
+        return None, f"exact-head {PRE_PR_WORKFLOW_NAME} reports unreadable status {status or 'unknown'}"
     conclusion = str(latest.get("conclusion") or "")
     if conclusion != "success":
         return None, f"exact-head {PRE_PR_WORKFLOW_NAME} concluded {conclusion or 'unknown'}"
@@ -121,54 +135,65 @@ def _run_produced_at(run: dict[str, Any]) -> tuple[datetime | None, str]:
     return moment.astimezone(UTC), ""
 
 
-def resolve(
-    root: Path,
-    *,
-    event_name: str,
-    head_sha: str,
-    repository: str,
-    token: str,
-    now: datetime | None = None,
-    fetch: Fetch | None = None,
-) -> ReuseDecision:
-    """Decide whether this job may stand on the trusted exact-head proof."""
+@dataclass(frozen=True)
+class CandidateEvidence:
+    """The identities a reusable proof must be bound to, computed once per decision."""
+
+    head_sha: str
+    integration: str
+    candidate: str
+    definition: str
+    toolchain: str
+
+
+def candidate_evidence(root: Path, *, event_name: str, head_sha: str) -> tuple[CandidateEvidence | None, str]:
+    """Everything decidable without the API, or why this candidate cannot reuse proof.
+
+    Kept separate from the run record so a bounded wait recomputes no Git evidence:
+    the tree, definition and toolchain identities cannot change while this job waits,
+    so re-deriving them on every poll would cost subprocess work and prove nothing.
+    """
     if event_name != "pull_request":
-        return ReuseDecision(False, f"{event_name or 'unknown'} events validate their own tree in full")
+        return None, f"{event_name or 'unknown'} events validate their own tree in full"
     if not receipts.is_object_sha(head_sha):
-        return ReuseDecision(False, "no exact candidate head SHA is available")
+        return None, "no exact candidate head SHA is available"
     if (root / MODE_MARKER).exists():
-        return ReuseDecision(False, "a tests-first-red head is never full repository proof")
+        return None, "a tests-first-red head is never full repository proof"
 
     try:
         integration = receipts.content_identity(root)
         candidate = receipts.commit_tree_identity(root, head_sha)
         definition = receipts.definition_identity(root)
-        measured = receipts.measured_toolchain()
-        pinned = receipts.pinned_toolchain(root)
+        measured = receipts.toolchain_identity(receipts.measured_toolchain())
     except receipts.ValidationEvidenceUnavailable as exc:
-        return ReuseDecision(False, f"validation identity evidence is unavailable ({exc})")
+        return None, f"validation identity evidence is unavailable ({exc})"
 
     if integration != candidate:
-        return ReuseDecision(
-            False,
-            "the integration tree differs from the validated candidate tree, so it is different work",
-        )
-    measured_identity = receipts.toolchain_identity(measured)
-    if measured_identity != receipts.toolchain_identity(pinned):
-        return ReuseDecision(False, "this runner's toolchain does not match the toolchain the tree pins")
+        return None, "the integration tree differs from the validated candidate tree, so it is different work"
+    if measured != receipts.toolchain_identity(receipts.pinned_toolchain(root)):
+        return None, "this runner's toolchain does not match the toolchain the tree pins"
+    return CandidateEvidence(head_sha, integration, candidate, definition, measured), ""
 
+
+def _authoritative_runs(
+    repository: str, token: str, head_sha: str, fetch: Fetch | None
+) -> tuple[list[Any] | None, str]:
     payload = (fetch or _fetch)(
         repository,
         token,
         f"actions/runs?head_sha={quote(head_sha, safe='')}&event=push&per_page=100",
     )
     if not isinstance(payload, dict):
-        return ReuseDecision(False, "branch preflight run evidence is malformed")
+        return None, "branch preflight run evidence is malformed"
     runs = payload.get("workflow_runs")
     if not isinstance(runs, list):
-        return ReuseDecision(False, "workflow_runs payload is malformed")
+        return None, "workflow_runs payload is malformed"
+    return runs, ""
 
-    run, problem = trusted_branch_preflight_run(runs, head_sha)
+
+def decide_from_runs(runs: list[Any], evidence: CandidateEvidence, *, now: datetime | None = None) -> ReuseDecision:
+    """Decide reuse from the authoritative run record and the identities it must match."""
+    run, problem = trusted_branch_preflight_run(runs, evidence.head_sha)
     if run is None:
         return ReuseDecision(False, problem)
     if problem:
@@ -180,22 +205,47 @@ def resolve(
     receipt = receipts.ValidationReceipt(
         lane=receipts.FULL_LANE,
         result=receipts.PASSED,
-        head_sha=head_sha,
-        content_identity=candidate,
-        definition_identity=definition,
-        toolchain_identity=measured_identity,
+        head_sha=evidence.head_sha,
+        content_identity=evidence.candidate,
+        definition_identity=evidence.definition,
+        toolchain_identity=evidence.toolchain,
         produced_at=produced_at,
         produced_by=PRODUCED_BY,
     )
-    expected = receipts.ValidationIdentity(content=integration, definition=definition, toolchain=measured_identity)
-    blocker = receipts.verify(receipt, expected, head_sha=head_sha, now=now)
+    expected = receipts.ValidationIdentity(
+        content=evidence.integration, definition=evidence.definition, toolchain=evidence.toolchain
+    )
+    blocker = receipts.verify(receipt, expected, head_sha=evidence.head_sha, now=now)
     if blocker is not None:
         return ReuseDecision(False, blocker)
 
     return ReuseDecision(
         True,
-        f"the trusted exact-head {PRE_PR_WORKFLOW_NAME} already validated this exact tree ({candidate})",
+        f"the trusted exact-head {PRE_PR_WORKFLOW_NAME} already validated this exact tree ({evidence.candidate})",
     )
+
+
+def resolve(
+    root: Path,
+    *,
+    event_name: str,
+    head_sha: str,
+    repository: str,
+    token: str,
+    now: datetime | None = None,
+    fetch: Fetch | None = None,
+) -> ReuseDecision:
+    """Decide whether this job may stand on the trusted exact-head proof, without waiting."""
+    evidence, blocker = candidate_evidence(root, event_name=event_name, head_sha=head_sha)
+    if evidence is None:
+        return ReuseDecision(False, blocker)
+    try:
+        runs, problem = _authoritative_runs(repository, token, head_sha, fetch)
+    except Exception as exc:  # noqa: BLE001 - any failure here must fall back to full validation
+        return ReuseDecision(False, f"reuse evidence could not be established ({type(exc).__name__}: {exc})")
+    if runs is None:
+        return ReuseDecision(False, problem)
+    return decide_from_runs(runs, evidence, now=now)
 
 
 def _emit(decision: ReuseDecision) -> None:
@@ -217,33 +267,30 @@ def main(argv: Sequence[str] | None = None) -> int:
     parser.add_argument("--event-name", default=os.environ.get("GITHUB_EVENT_NAME", ""))
     parser.add_argument("--head-sha", default=os.environ.get("PR_HEAD_SHA", ""))
     parser.add_argument("--repository", default=os.environ.get("GH_REPO", ""))
-    parser.add_argument("--wait-seconds", type=float, default=420.0)
-    parser.add_argument("--poll-seconds", type=float, default=10.0)
+    parser.add_argument(
+        "--require-proof",
+        action="store_true",
+        help="Act as a proof-only consumer: return nonzero until exact-head proof exists; never run or wait for validation.",
+    )
     args = parser.parse_args(argv)
 
     token = os.environ.get("GITHUB_TOKEN") or os.environ.get("GH_TOKEN") or ""
-    deadline = time.monotonic() + max(0.0, args.wait_seconds)
-    while True:
-        try:
-            decision = resolve(
-                ROOT,
-                event_name=args.event_name,
-                head_sha=args.head_sha,
-                repository=args.repository,
-                token=token,
-            )
-        except Exception as exc:  # noqa: BLE001 - any failure here must fall back to full validation
-            decision = ReuseDecision(False, f"reuse evidence could not be established ({type(exc).__name__}: {exc})")
-        if not decision.pending:
-            break
-        remaining = deadline - time.monotonic()
-        if remaining <= 0:
-            decision = ReuseDecision(False, f"{decision.reason}; bounded wait expired")
-            break
-        delay = min(max(0.1, args.poll_seconds), remaining)
-        print(f"[Hunter Validation Reuse] WAIT: {decision.reason}; polling again in {delay:g}s", flush=True)
-        time.sleep(delay)
+    try:
+        decision = resolve(
+            ROOT,
+            event_name=args.event_name,
+            head_sha=args.head_sha,
+            repository=args.repository,
+            token=token,
+        )
+    except Exception as exc:  # noqa: BLE001 - reuse is optional; full validation is the fail-closed path
+        decision = ReuseDecision(False, f"reuse resolution failed ({type(exc).__name__}: {exc})")
     _emit(decision)
+    if args.require_proof and not decision.reusable:
+        # Fail closed without duplicating the heavy lane. A push/synchronize event
+        # re-evaluates this cheap consumer on the next immutable candidate; merge
+        # authority remains blocked until canonical proof is observable.
+        return 2
     return 0
 
 

@@ -70,3 +70,74 @@ def test_unknown_legacy_status_fails_closed(monkeypatch, tmp_path) -> None:
     errors = prevention.validate_defect_prevention_lifecycle()
 
     assert "legacy registry status has no prevention semantics: mystery" in errors
+
+
+def _validate_registry(monkeypatch, tmp_path, defects) -> list[str]:
+    registry = {"defects": defects}
+    lifecycle = {
+        "version": 1,
+        "stages": list(prevention.EXPECTED_STAGES),
+        "legacy_status_semantics": {"guarded": "detected"},
+        "explicit_enforcement": {},
+    }
+    registry_path = tmp_path / "registry.json"
+    lifecycle_path = tmp_path / "lifecycle.json"
+    registry_path.write_text(json.dumps(registry), encoding="utf-8")
+    lifecycle_path.write_text(json.dumps(lifecycle), encoding="utf-8")
+    monkeypatch.setattr(prevention, "REGISTRY_PATH", registry_path)
+    monkeypatch.setattr(prevention, "LIFECYCLE_PATH", lifecycle_path)
+
+    return prevention.validate_defect_prevention_lifecycle()
+
+
+def test_defect_selector_must_point_at_an_existing_test(monkeypatch, tmp_path) -> None:
+    """A defect may not cite a regression test file or symbol that does not exist."""
+    errors = _validate_registry(
+        monkeypatch,
+        tmp_path,
+        [{"id": "X-001", "status": "guarded", "test": "tests/test_does_not_exist.py::test_nothing"}],
+    )
+    assert any("test selector" in error and "X-001" in error for error in errors)
+
+
+def test_defect_selector_symbol_must_exist_in_the_module(monkeypatch, tmp_path) -> None:
+    errors = _validate_registry(
+        monkeypatch,
+        tmp_path,
+        [
+            {
+                "id": "X-001",
+                "status": "guarded",
+                "test": "tests/test_hunter_defect_prevention_preflight.py::test_a_symbol_that_is_not_here",
+            }
+        ],
+    )
+    assert any("test selector" in error and "X-001" in error for error in errors)
+
+
+def test_defect_selector_accepts_the_explicit_unverified_placeholder(monkeypatch, tmp_path) -> None:
+    errors = _validate_registry(
+        monkeypatch,
+        tmp_path,
+        [{"id": "X-001", "status": "open", "test": prevention.UNVERIFIED_DEFECT_SELECTOR}],
+    )
+    assert not any("test selector" in error for error in errors)
+
+
+def test_defect_selector_accepts_multiple_resolvable_targets(monkeypatch, tmp_path) -> None:
+    errors = _validate_registry(
+        monkeypatch,
+        tmp_path,
+        [
+            {
+                "id": "X-001",
+                "status": "guarded",
+                "test": (
+                    "tests/test_hunter_defect_prevention_preflight.py::"
+                    "test_current_defect_prevention_lifecycle_is_valid; "
+                    "tests/test_hunter_defect_prevention_preflight.py::test_legacy_guarded_is_not_treated_as_prevented"
+                ),
+            }
+        ],
+    )
+    assert not any("test selector" in error for error in errors)

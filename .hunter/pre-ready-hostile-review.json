@@ -3,43 +3,43 @@
     "acceptance_criteria": [
       {
         "criterion": "a regression fixture demonstrates that a defect class found and fixed in an earlier pr is rejected when intentionally reintroduced in a later pr",
-        "evidence": "Not implemented by this candidate: the reintroduced-defect regression fixture belongs to the #412 recurring-defect gate already on main; PR #538 does not change that gate. It adds DFF-010 regressions only.",
+        "evidence": "Not delivered by this bootstrap PR. PR #553 changes exactly docs/CODE_WRITE_POLICY.json (adds writer_identity_binding.signing_key_bindings as trusted data) and adds tests/test_signing_key_binding_bootstrap.py (4 tests pinning that data). No executable code changes. The cross-PR defect-reintroduction regression fixture is out of this change set.",
         "id": "AC-1",
         "verdict": "not-applicable"
       },
       {
         "criterion": "a large pr cannot reach ready until the full hostile review pass is complete and all findings are batched and closed",
-        "evidence": "Not implemented by this candidate: the full-hostile-review readiness rule is the #412 pre-ready review gate already on main (DFF-013); PR #538 does not modify hunter_pre_ready_review.py or merge readiness.",
+        "evidence": "Not delivered by this bootstrap PR; it changes no ready/review gating code. PR #553 changes exactly docs/CODE_WRITE_POLICY.json (adds writer_identity_binding.signing_key_bindings as trusted data) and adds tests/test_signing_key_binding_bootstrap.py (4 tests pinning that data). No executable code changes.",
         "id": "AC-2",
         "verdict": "not-applicable"
       },
       {
         "criterion": "exact-head evidence shows no stale receipt and no unresolved applicable recurring-defect rule",
-        "evidence": "Not implemented by this candidate: stale-receipt and recurring-rule evidence are produced by existing receipt/registry machinery (DFF-012) that PR #538 does not change.",
+        "evidence": "Not delivered by this bootstrap PR; it changes no receipt or exact-head evidence code. PR #553 changes exactly docs/CODE_WRITE_POLICY.json (adds writer_identity_binding.signing_key_bindings as trusted data) and adds tests/test_signing_key_binding_bootstrap.py (4 tests pinning that data). No executable code changes.",
         "id": "AC-3",
         "verdict": "not-applicable"
       },
       {
         "criterion": "an authorized coding agent can produce a multi-commit pr without manual rewind/force-push solely to satisfy per-commit actor evidence",
-        "evidence": "Not implemented by this candidate: range-level multi-commit publication evidence is DFF-011 machinery already on main; PR #538 does not change it.",
+        "evidence": "Not delivered by this bootstrap PR; it changes no per-commit actor evidence code. PR #553 changes exactly docs/CODE_WRITE_POLICY.json (adds writer_identity_binding.signing_key_bindings as trusted data) and adds tests/test_signing_key_binding_bootstrap.py (4 tests pinning that data). No executable code changes.",
         "id": "AC-4",
         "verdict": "not-applicable"
       },
       {
         "criterion": "candidate admission rejects writer/committer mismatch before remote push and reports the exact mismatched provenance claim",
-        "evidence": "PR #538 extends the local pre-push writer binding (DFF-010) so the commit's actual SSH signing key (%GK, verified via %G?) must be bound to the writer its author/committer headers resolve to, read from the server-fresh canonical base tip rather than the candidate's own policy; a header/key mismatch such as the PR #535 unknown_key case is refused before remote push and the refusal names the exact commit, writer and key. Evidence: test_the_pr_535_identity_key_mismatch_is_refused_locally, test_signing_keys_and_parents_are_read_for_real_signed_commits, test_a_candidate_cannot_bind_its_own_signing_key, test_a_stale_cached_trusted_tip_fails_closed.",
+        "evidence": "Header-level writer/committer mismatch rejection before push already exists on the trusted base (scripts/hunter_writer_provenance.py evaluate_commit/evaluate_range, run by .githooks/pre-push) and is unchanged here. This PR establishes, on the trusted default branch and outside the candidate it will judge, the exact root-of-trust data the key-level half needs: signing_key_bindings binds claude -> SHA256:32dP45eSMmVSt/G/CGvcxl/P+MO3Nwj9xeTh/GSA2wc and fafa33 -> SHA256:Yee9tbonym7Jvs2UbjpudVIRkv3aF1tcFlK240pXuBo, each with recorded trusted evidence, require_key_bound_to_resolved_writer=true, and explicit fail-closed and unsigned-commit semantics. tests/test_signing_key_binding_bootstrap.py pins the exact bindings (any self-binding, replacement or extra key fails), requires one key set per bound login with full SHA-256 fingerprints and no key shared between writers, and requires evidence for each key.",
         "id": "AC-5",
         "verdict": "satisfied"
       },
       {
         "criterion": "commit attribution to an implementation agent can coexist with the authorization-bound writer identity without weakening auditability",
-        "evidence": "Attribution stays in trailers and is never read as identity; the owner-recovery boundary lets the already-authorized owner take over a departed writer's range without re-attributing that writer's commits, with epochs decided by ancestry. Evidence: test_agent_attribution_trailer_cannot_rescue_an_unbound_identity, test_historical_attribution_before_the_boundary_is_not_reattributed, test_a_valid_owner_recovery_is_admitted, test_a_departed_writer_commit_that_merges_in_after_the_takeover_is_refused.",
+        "evidence": "Attribution remains trailer-only (attribution_semantics unchanged); identity is still read only from author/committer headers. The new bindings give each writer exactly its own key (claude's key is not bound to fafa33 and vice versa; test_every_bound_writer_has_exactly_its_own_explicit_key), so agent attribution coexists with the bound writer identity, and auditability is strengthened because a commit's real signing key can be tied to the writer it claims.",
         "id": "AC-6",
         "verdict": "satisfied"
       },
       {
         "criterion": "no auto-merge; separate owner merge approval remains mandatory",
-        "evidence": "Not implemented by this candidate: PR #538 does not touch merge controls; owner merge approval remains mandatory and unchanged.",
+        "evidence": "Not affected: no merge, auto-merge, or approval logic is touched; owner merge approval remains mandatory. PR #553 changes exactly docs/CODE_WRITE_POLICY.json (adds writer_identity_binding.signing_key_bindings as trusted data) and adds tests/test_signing_key_binding_bootstrap.py (4 tests pinning that data). No executable code changes.",
         "id": "AC-7",
         "verdict": "not-applicable"
       }
@@ -61,316 +61,119 @@
     "base_sha": "207475240223027ce5875c8cdbc30f4f288baafb",
     "defect_families": [
       {
-        "evidence": "A recovery declaration binds its exact parent SHA and is read with git's trailer parser after identity and key are resolved, so it cannot be replayed onto another boundary; a gpgsig copied onto other content yields %G?=B and binds nothing (test_a_bound_key_on_a_signature_that_did_not_verify_binds_nothing).",
+        "evidence": "No authorization path or replayable token is introduced; the change is static policy data. A binding cannot be replayed onto another writer because each fingerprint is bound to exactly one login, and the test forbids sharing a key between writers.",
         "family": "DFF-007",
         "outcome": "clear"
       },
       {
-        "evidence": "Writer authority is read from git objects (%GK, %G?, %P, trailers) and the trusted tip's committed policy; candidate-edited policy and forged signatures are refused (test_a_candidate_cannot_bind_its_own_signing_key).",
+        "evidence": "History-forgery resistance: bindings are evidenced by trusted-main %GK fingerprints and the GitHub-registered owner key, not by candidate-supplied claims. The exact-binding test makes any later edit to the root-of-trust data a deliberate, reviewed test change.",
         "family": "DFF-008",
         "outcome": "clear"
       },
       {
-        "evidence": "Connector ingress grant and its proof are unchanged; signing-key bindings authenticate the writer rather than restating caller-chosen headers.",
+        "evidence": "No connector provenance, receipt or evidence-lifecycle code or artifact is changed.",
         "family": "DFF-009",
         "outcome": "clear"
       },
       {
-        "evidence": "Primary family. The signing key that actually signed each commit is bound to the resolved writer; authority comes from the server-fresh canonical base tip, never the candidate; owner recovery is a single owner-signed, parent-pinned, ancestry-checked boundary. See the DFF-010 regression_evidence list in docs/DEFECT_REGISTRY.json.",
+        "evidence": "Directly addressed: the authorization-bound writer identity gains a signing-key binding so a commit that claims one writer while carrying another writer's key can be refused. Bootstrapped on trusted main by an owner-merged change rather than self-asserted by the candidate it judges; pinned by tests/test_signing_key_binding_bootstrap.py.",
         "family": "DFF-010",
-        "outcome": "repaired"
+        "outcome": "clear"
       },
       {
-        "evidence": "Range-level publication evidence is unchanged; per-commit evaluation is still over the whole governed range.",
+        "evidence": "Single bootstrap commit 623b695 on base 2074752; no intermediate commit evidence is stranded.",
         "family": "DFF-011",
         "outcome": "clear"
       },
       {
-        "evidence": "No receipt is minted or modified by this candidate.",
+        "evidence": "No receipt is produced or published by this change.",
         "family": "DFF-012",
         "outcome": "clear"
       },
       {
-        "evidence": "This document is a review request only and carries no authority; readiness still requires the authenticated exact-head review.",
+        "evidence": "This document is the exact-head hostile review request for this candidate's own content (review_target binds both changed blobs); it replaces an inherited request that described different content.",
         "family": "DFF-013",
         "outcome": "clear"
       },
       {
-        "evidence": "No hosted-prerequisite status semantics changed.",
+        "evidence": "No prerequisite/pending reporting logic is changed.",
         "family": "DFF-014",
         "outcome": "clear"
       },
       {
-        "evidence": "Every new DFF-010 regression_evidence entry resolves to a committed test; the registry claims locally-enforced only, which is the boundary these guards actually run at.",
+        "evidence": "Prevention state is not overclaimed: the PR records the bindings as data and states in binding_evidence/why what each proves; it does not claim the key-level push refusal is enforced on this head (that consumer is not in this change set; see finding F-1).",
         "family": "DFF-015",
         "outcome": "clear"
       },
       {
-        "evidence": "No validation proof reuse or receipt identity changed.",
-        "family": "DFF-016",
-        "outcome": "clear"
-      },
-      {
-        "evidence": "New tests require only git and ssh-keygen, both present in the hosted runners that already passed Quality Gates and Pre-PR Preflight on this branch.",
-        "family": "DFF-017",
-        "outcome": "clear"
-      },
-      {
-        "evidence": "No issuer runtime/volume bootstrap code touched.",
-        "family": "DFF-019",
-        "outcome": "clear"
-      },
-      {
-        "evidence": "No issuer instance ownership code touched.",
-        "family": "DFF-020",
-        "outcome": "clear"
-      },
-      {
-        "evidence": "No execution dispatch/drain code touched.",
-        "family": "DFF-021",
-        "outcome": "clear"
-      },
-      {
-        "evidence": "Merge Readiness is unchanged and still requires current-head review authority.",
+        "evidence": "No merge-readiness or review-authority code is changed; this request carries no authority and is not review completion.",
         "family": "DFF-022",
         "outcome": "clear"
       },
       {
-        "evidence": "No execution-ledger or Source Handling entry points touched.",
-        "family": "DFF-023",
-        "outcome": "clear"
-      },
-      {
-        "evidence": "Review-after-remediation generation logic unchanged; this request starts the normal exact-head opportunity.",
+        "evidence": "No review-cycle or remediation-transition logic is changed.",
         "family": "DFF-024",
         "outcome": "clear"
       },
       {
-        "evidence": "External reviewers remain optional; provenance failures are deterministic local checks, not reviewer dependencies.",
+        "evidence": "No reviewer-availability or merge-authority logic is changed.",
         "family": "DFF-026",
         "outcome": "clear"
       },
       {
-        "evidence": "Every push of this candidate went through .githooks/pre-push; the hosted exact-head Pre-PR Preflight is the full proof.",
+        "evidence": "Canonical preflight is unchanged and still governs this candidate at the exact head; the new tests are deterministic and offline.",
         "family": "DFF-029",
         "outcome": "clear"
       },
       {
-        "evidence": "No tracked governance asset paths added or renamed.",
+        "evidence": "docs/CODE_WRITE_POLICY.json remains valid JSON loadable at its tracked path; the tests load it from the repository-relative path ROOT/docs/CODE_WRITE_POLICY.json.",
         "family": "DFF-033",
         "outcome": "clear"
       },
       {
-        "evidence": "New tests assert only repository-owned state: temporary local repositories and local bare remotes, with no network or GitHub API dependency.",
+        "evidence": "The new tests assert only repository content; they need no network, keyring, GitHub API, or signing key, so no external precondition is asserted inside the deterministic lane.",
         "family": "DFF-035",
         "outcome": "clear"
       },
       {
-        "evidence": "Unreadable or stale trusted authority fails closed (test_an_unreachable_trusted_server_fails_closed, test_a_stale_cached_trusted_tip_fails_closed); no best-effort fallback was added.",
+        "evidence": "No governance capability is made best-effort; the declared fail_closed semantics enumerate every malformed/missing case as a push block.",
         "family": "DFF-038",
         "outcome": "clear"
       },
       {
-        "evidence": "No reviewer timeout or budget changed.",
+        "evidence": "No reviewer-chain timeout or budget is changed.",
         "family": "DFF-043",
-        "outcome": "clear"
-      },
-      {
-        "evidence": "Registry growth is limited to DFF-010 regression references; no prompt-assembly code touched.",
-        "family": "DFF-045",
         "outcome": "clear"
       }
     ],
     "findings": [
       {
-        "evidence": "Hosted CI: %GK read empty without gpg.ssh.allowedSignersFile, so every commit read as unsigned on hosted runners. Regression: test_signing_keys_and_parents_are_read_for_real_signed_commits.",
+        "evidence": "On this head no executable code reads writer_identity_binding.signing_key_bindings, so the bindings are inert data until the consumer that enforces key-to-writer binding at the push boundary lands (PR #538). This is the intended bootstrap order (trusted data first, on main, by an owner-merged change), not a defect in this change set.",
         "id": "F-1",
-        "resolution": "resolved",
-        "resolution_evidence": {
-          "correction": "2e1ead36ad46cd2781766cda7e853f1cbfd6ef3f",
-          "regression_test": "tests/test_issue_412_prevention_gate.py"
-        },
-        "severity": "blocking"
-      },
-      {
-        "evidence": "Hosted CI: real-signed test depended on unreachable PR #535 objects; replaced with an ephemeral-key fixture. Regression: test_signing_keys_and_parents_are_read_for_real_signed_commits.",
-        "id": "F-2",
-        "resolution": "resolved",
-        "resolution_evidence": {
-          "correction": "39278e635306447bcc9ae3ad1ae08de86e488da1",
-          "regression_test": "tests/test_issue_412_prevention_gate.py"
-        },
-        "severity": "non-blocking"
-      },
-      {
-        "evidence": "Copilot: owner_writer.login was only checked to be a bound writer, not the repository owner. Regression: test_naming_another_bound_writer_as_owner_does_not_make_it_the_owner.",
-        "id": "F-3",
-        "resolution": "resolved",
-        "resolution_evidence": {
-          "correction": "dfa09675a3b5478d3cc42ec644588e0db921d37e",
-          "regression_test": "tests/test_issue_412_prevention_gate.py"
-        },
-        "severity": "blocking"
-      },
-      {
-        "evidence": "Copilot: %GK accepted without %G? signature-verification status. Regression: test_a_bound_key_on_a_signature_that_did_not_verify_binds_nothing.",
-        "id": "F-4",
-        "resolution": "resolved",
-        "resolution_evidence": {
-          "correction": "dfa09675a3b5478d3cc42ec644588e0db921d37e",
-          "regression_test": "tests/test_issue_412_prevention_gate.py"
-        },
-        "severity": "blocking"
-      },
-      {
-        "evidence": "Copilot: require_single_writer_per_range could be disabled in policy. Regression: test_single_writer_enforcement_cannot_be_switched_off_in_policy.",
-        "id": "F-5",
-        "resolution": "resolved",
-        "resolution_evidence": {
-          "correction": "dfa09675a3b5478d3cc42ec644588e0db921d37e",
-          "regression_test": "tests/test_issue_412_prevention_gate.py"
-        },
-        "severity": "blocking"
-      },
-      {
-        "evidence": "Copilot: commit-record parser accepted any field count of six or more. Regression: test_a_record_with_any_other_field_count_fails_closed.",
-        "id": "F-6",
-        "resolution": "resolved",
-        "resolution_evidence": {
-          "correction": "dfa09675a3b5478d3cc42ec644588e0db921d37e",
-          "regression_test": "tests/test_issue_412_prevention_gate.py"
-        },
-        "severity": "non-blocking"
-      },
-      {
-        "evidence": "Codex P1: one signing key could be bound to two writers. Regression: test_a_signing_key_bound_to_two_writers_fails_closed.",
-        "id": "F-7",
-        "resolution": "resolved",
-        "resolution_evidence": {
-          "correction": "e91b5fcd2e698b635f1d1cc006db5efe8f23a034",
-          "regression_test": "tests/test_issue_412_prevention_gate.py"
-        },
-        "severity": "blocking"
-      },
-      {
-        "evidence": "Codex P2: log.showSignature corrupted machine-readable git log output. Regression: test_signing_keys_and_parents_are_read_for_real_signed_commits.",
-        "id": "F-8",
-        "resolution": "resolved",
-        "resolution_evidence": {
-          "correction": "e91b5fcd2e698b635f1d1cc006db5efe8f23a034",
-          "regression_test": "tests/test_issue_412_prevention_gate.py"
-        },
-        "severity": "non-blocking"
-      },
-      {
-        "evidence": "Copilot+Codex P1: recovery epochs split by log position, not ancestry. Regression: test_a_departed_writer_commit_that_merges_in_after_the_takeover_is_refused.",
-        "id": "F-9",
-        "resolution": "resolved",
-        "resolution_evidence": {
-          "correction": "ca5eef93db8bf8d43d9788753a4b315927587d15",
-          "regression_test": "tests/test_issue_412_prevention_gate.py"
-        },
-        "severity": "blocking"
-      },
-      {
-        "evidence": "Codex P1: check_range trusted candidate-edited signing-key bindings. Regression: test_a_candidate_cannot_bind_its_own_signing_key.",
-        "id": "F-10",
-        "resolution": "resolved",
-        "resolution_evidence": {
-          "correction": "801453262a6de89b958a0ff3ce37e7c08759a1bd",
-          "regression_test": "tests/test_issue_412_prevention_gate.py"
-        },
-        "severity": "blocking"
-      },
-      {
-        "evidence": "Codex P1: authority read from the historical fork point, not the current trusted tip. Regression: test_a_branch_forked_before_key_binding_meets_the_current_trusted_tip.",
-        "id": "F-11",
-        "resolution": "resolved",
-        "resolution_evidence": {
-          "correction": "e8377a80930616c8fe4fc93f995bf4dc64116e9e",
-          "regression_test": "tests/test_issue_412_prevention_gate.py"
-        },
-        "severity": "blocking"
-      },
-      {
-        "evidence": "Copilot: a declared but malformed owner_recovery grant degraded to no recovery. Regression: test_a_declared_but_malformed_recovery_grant_fails_closed.",
-        "id": "F-12",
-        "resolution": "resolved",
-        "resolution_evidence": {
-          "correction": "e8377a80930616c8fe4fc93f995bf4dc64116e9e",
-          "regression_test": "tests/test_issue_412_prevention_gate.py"
-        },
-        "severity": "blocking"
-      },
-      {
-        "evidence": "Codex P1 + Copilot: trusted tip read from a possibly stale local cache. Regression: test_a_stale_cached_trusted_tip_fails_closed.",
-        "id": "F-13",
-        "resolution": "resolved",
-        "resolution_evidence": {
-          "correction": "f2ef8b83d6ce01d1be0814258d2c1b9100520ff0",
-          "regression_test": "tests/test_issue_412_prevention_gate.py"
-        },
-        "severity": "blocking"
-      },
-      {
-        "evidence": "Codex P1: fork clones read authority from origin instead of upstream. Regression: test_a_fork_clone_reads_authority_from_upstream.",
-        "id": "F-14",
-        "resolution": "resolved",
-        "resolution_evidence": {
-          "correction": "f2ef8b83d6ce01d1be0814258d2c1b9100520ff0",
-          "regression_test": "tests/test_issue_412_prevention_gate.py"
-        },
-        "severity": "blocking"
-      },
-      {
-        "evidence": "Copilot: missing-policy test depended on a real origin/main ref. Regression: test_pre_push_fails_closed_without_repository_policy.",
-        "id": "F-15",
-        "resolution": "resolved",
-        "resolution_evidence": {
-          "correction": "f2ef8b83d6ce01d1be0814258d2c1b9100520ff0",
-          "regression_test": "tests/test_issue_412_prevention_gate.py"
-        },
+        "resolution": "unresolved",
         "severity": "non-blocking"
       }
     ],
     "issue": "412",
     "review_target": [
       {
-        "blob_sha": "4f0a08df8ba1bf40ae56632e2f4072f851f9913e",
+        "blob_sha": "2ab3b02563a25d6a8bd7fa1f2c0e73d18502f140",
+        "path": "tests/test_signing_key_binding_bootstrap.py",
+        "previous_path": "",
+        "status": "added"
+      },
+      {
+        "blob_sha": "c840932e104fd465040d14adb84e522f962eb993",
         "path": "docs/CODE_WRITE_POLICY.json",
-        "previous_path": "",
-        "status": "modified"
-      },
-      {
-        "blob_sha": "663bcfef4f17c9a2e132af76b640111935e1245c",
-        "path": "docs/DEFECT_REGISTRY.json",
-        "previous_path": "",
-        "status": "modified"
-      },
-      {
-        "blob_sha": "58e9c98052246e26245d707b6b35116fd2afb1c4",
-        "path": "scripts/hunter_defect_prevention_preflight.py",
-        "previous_path": "",
-        "status": "modified"
-      },
-      {
-        "blob_sha": "8e66e9c222c6c0853f6094d1518e26e7149cd717",
-        "path": "scripts/hunter_writer_provenance.py",
-        "previous_path": "",
-        "status": "modified"
-      },
-      {
-        "blob_sha": "e817e21e007f1b4e6afe43871b4274c84a1b0d99",
-        "path": "tests/test_issue_412_prevention_gate.py",
         "previous_path": "",
         "status": "modified"
       }
     ],
-    "review_target_digest": "abb30cc365903a0c1cbb0c625bb43073a515ab40a31fd4a30b25cfb5892a2846"
+    "review_target_digest": "ea9ad9e07986d146ffeefeb9b44f52975ff76def441b57cc5499c2975dfcb216"
   },
-  "review_id": "f49fd64f3431db55f5f42785ec2aa229818e9c927564d1ea90c39592408cb864",
+  "review_id": "cdb7c3c1c3e62b8c33aef23cd5f5228f626f33fef54293972ae21700324d4b78",
   "review_request": {
-    "claims_id": "f49fd64f3431db55f5f42785ec2aa229818e9c927564d1ea90c39592408cb864",
+    "claims_id": "cdb7c3c1c3e62b8c33aef23cd5f5228f626f33fef54293972ae21700324d4b78",
     "schema": "hunter.review-request.v1"
   },
   "schema": "hunter.pre-ready-hostile-review.v1"

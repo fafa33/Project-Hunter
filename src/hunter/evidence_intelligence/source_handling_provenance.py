@@ -55,6 +55,7 @@ from urllib.parse import quote
 from cryptography.exceptions import InvalidSignature
 from cryptography.hazmat.primitives import serialization
 
+from hunter.evidence_intelligence.source_handling_commit_observer import notify_commit
 from hunter.evidence_intelligence.source_handling_persistence import (
     SourceHandlingBlockedError,
     SourceHandlingOperatorRoot,
@@ -406,6 +407,7 @@ class SourceHandlingProvenanceAuthorityRepository:
             raise
         else:
             connection.commit()
+            notify_commit(self.path)
         finally:
             connection.close()
 

@@ -145,7 +145,7 @@ REQUIRED_ADVERSARIAL_DIMENSIONS = (
 _HEADING = re.compile(r"\A(#{1,6})\s+(.*?)\s*#*\s*\Z")
 #: A top-level markdown list item. Indented items are sub-detail of a criterion,
 #: not criteria in their own right.
-_TOP_LEVEL_BULLET = re.compile(r"\A[-*+]\s+(.*)\Z")
+_TOP_LEVEL_BULLET = re.compile(r"\A(?:[-*+]|[0-9]+[.)])\s+(.*)\Z")
 ACCEPTANCE_CRITERIA_HEADING = "acceptance criteria"
 
 
@@ -1645,6 +1645,45 @@ OPTIONAL_JUDGEMENT_KEYS = ("coverage_scope",)
 REQUEST_JUDGEMENT_KEYS = tuple(key for key in JUDGEMENT_KEYS if key != "authority")
 
 
+def validate_request_governing_issue(issue: str, judgement: dict[str, Any]) -> None:
+    """Reject stale/wrong Issue evidence before minting a review request.
+
+    The authenticated hosted verifier remains authoritative. This early check
+    prevents agents from copying another PR's request and discovering the
+    mismatch only after a hosted reconcile failure.
+    """
+    if not issue.isdecimal() or int(issue) < 1:
+        raise ValueError("review request requires a real governing Issue number")
+    completed = subprocess.run(
+        ("gh", "api", f"repos/fafa33/Project-Hunter/issues/{issue}"),
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    if completed.returncode:
+        raise ValueError(f"governing Issue #{issue} cannot be verified through GitHub")
+    try:
+        payload = json.loads(completed.stdout)
+    except json.JSONDecodeError as exc:
+        raise ValueError("governing Issue API returned malformed JSON") from exc
+    if not isinstance(payload, dict) or payload.get("number") != int(issue):
+        raise ValueError(f"governing Issue #{issue} identity cannot be verified")
+    if "pull_request" in payload:
+        raise ValueError(f"#{issue} is a pull request, not a governing Issue")
+    body = payload.get("body")
+    if not isinstance(body, str):
+        raise ValueError(f"governing Issue #{issue} body is unavailable")
+    required = set(parse_issue_acceptance_criteria(body))
+    if not required:
+        raise ValueError(f"governing Issue #{issue} has no Acceptance Criteria section")
+    supplied = judgement.get("acceptance_criteria")
+    if not isinstance(supplied, list):
+        raise ValueError("review request has no acceptance-criteria records")
+    covered = {normalize_criterion(str(item.get("criterion", ""))) for item in supplied if isinstance(item, dict)}
+    if not required.issubset(covered):
+        raise ValueError(f"review request does not cover governing Issue #{issue} acceptance criteria")
+
+
 def prepare_request(
     *,
     issue: str,
@@ -1678,6 +1717,70 @@ def prepare_request(
     document = document_for(claims, coverage_scope=judgement.get("coverage_scope"))
     document["review_request"] = {"schema": "hunter.review-request.v1", "claims_id": document["review_id"]}
     return document
+
+
+def finalize_writer_review_request(
+    *,
+    issue: str,
+    base: str,
+    head: str,
+    base_ref: str,
+    judgement: dict[str, Any],
+    cwd: Path | None = None,
+    issue_criteria: tuple[str, ...] | None = None,
+) -> bool:
+    """Shared authorized-writer pre-commit finalizer; never signs or pushes.
+
+    Returns False when the current request already matches the content.
+    The writer remains responsible for signing and committing this artifact.
+    """
+    if issue_criteria is None:
+        validate_request_governing_issue(issue, judgement)
+    else:
+        supplied = judgement.get("acceptance_criteria")
+        covered = (
+            {normalize_criterion(str(item.get("criterion", ""))) for item in supplied if isinstance(item, dict)}
+            if isinstance(supplied, list)
+            else set()
+        )
+        if not {normalize_criterion(criterion) for criterion in issue_criteria}.issubset(covered):
+            raise ValueError("writer review request does not cover verified Issue criteria")
+    root = (cwd or ROOT).resolve()
+    changes = local_changes(base, head, cwd=root)
+    families, error = load_families(root / REGISTRY_RELATIVE_PATH)
+    if error:
+        raise ValueError(error)
+    expected = set(applicable_family_ids(families, tuple(change.path for change in changes)))
+    records = judgement.get("defect_families")
+    if not isinstance(records, list) or {item.get("family") for item in records if isinstance(item, dict)} != expected:
+        raise ValueError("writer judgement does not cover exactly the applicable defect families")
+    document = prepare_request(
+        issue=issue,
+        base=base,
+        head=head,
+        base_ref=base_ref,
+        judgement=judgement,
+        cwd=root,
+    )
+    verdict = verify_review_request(
+        document,
+        base_sha=base,
+        changes=changes,
+        families=families,
+        issue_criteria=issue_criteria,
+        head_sha=head,
+    )
+    if not verdict.ok:
+        raise ValueError("writer review request invalid: " + verdict.reason)
+    path = root / REVIEW_RELATIVE_PATH
+    content = json.dumps(document, indent=2, sort_keys=True) + "\n"
+    if path.is_symlink() or path.parent.is_symlink():
+        raise ValueError("writer review request destination must not be a symlink")
+    if path.is_file() and path.read_text(encoding="utf-8") == content:
+        return False
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(content, encoding="utf-8")
+    return True
 
 
 def record(
@@ -1724,6 +1827,15 @@ def record(
     return document_for(claims, authority=authority, coverage_scope=judgement.get("coverage_scope"))
 
 
+def _trusted_judgement_path(value: str) -> Path:
+    """Do not let agent-supplied CLI paths read outside the authorized checkout."""
+    root = Path.cwd().resolve(strict=True)
+    candidate = Path(value).resolve(strict=True)
+    if not candidate.is_relative_to(root) or not candidate.is_file():
+        raise ValueError("review judgement must be a regular file inside the authorized checkout")
+    return candidate
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(
         description=(
@@ -1738,6 +1850,11 @@ def main() -> int:
     mode.add_argument(
         "--request", metavar="JUDGEMENT", help="Prepare claims for authenticated external exact-HEAD review."
     )
+    mode.add_argument(
+        "--refresh-request",
+        metavar="JUDGEMENT",
+        help="Regenerate an exact-head request after remediation from freshly reviewed judgement JSON; never reuse reviewer authority.",
+    )
     parser.add_argument("--issue", help="Governing Issue number; required with --record or --request.")
     args = parser.parse_args()
 
@@ -1746,7 +1863,7 @@ def main() -> int:
             print("[Pre-Ready Hostile Review] FAIL: --record requires --issue", file=sys.stderr)
             return 2
         try:
-            judgement = json.loads(Path(args.record).read_text(encoding="utf-8"))
+            judgement = json.loads(_trusted_judgement_path(args.record).read_text(encoding="utf-8"))
             if not isinstance(judgement, dict):
                 raise ValueError("review judgement must be a JSON object")
             document = record(
@@ -1763,29 +1880,29 @@ def main() -> int:
         REVIEW_PATH.write_text(json.dumps(document, indent=2, sort_keys=True) + "\n", encoding="utf-8")
         print(f"[Pre-Ready Hostile Review] RECORDED: {REVIEW_RELATIVE_PATH} ({document['review_id'][:12]})")
 
-    if args.request:
+    if args.request or args.refresh_request:
         if not args.issue:
             print("[Pre-Ready Hostile Review] FAIL: --request requires --issue", file=sys.stderr)
             return 2
         try:
-            judgement = json.loads(Path(args.request).read_text(encoding="utf-8"))
+            judgement = json.loads(
+                _trusted_judgement_path(args.request or args.refresh_request).read_text(encoding="utf-8")
+            )
             if not isinstance(judgement, dict):
                 raise ValueError("review request judgement must be a JSON object")
-            document = prepare_request(
+            validate_request_governing_issue(str(args.issue), judgement)
+            finalize_writer_review_request(
                 issue=str(args.issue),
                 base=args.base,
                 head=args.head,
                 base_ref=args.base_ref,
                 judgement=judgement,
             )
+            print(f"[Pre-Ready Hostile Review] FINALIZED: {REVIEW_RELATIVE_PATH}")
+            return 0
         except (OSError, UnicodeError, json.JSONDecodeError, ValueError, GitEvidenceUnavailable) as exc:
             print(f"[Pre-Ready Hostile Review] FAIL: {type(exc).__name__}: {exc}", file=sys.stderr)
             return 2
-        REVIEW_PATH.parent.mkdir(parents=True, exist_ok=True)
-        REVIEW_PATH.write_text(json.dumps(document, indent=2, sort_keys=True) + "\n", encoding="utf-8")
-        print(f"[Pre-Ready Hostile Review] REQUESTED: {REVIEW_RELATIVE_PATH} ({document['review_id'][:12]})")
-        return 0
-
     verdict = verify_local(args.base, args.head)
     if not verdict.ok:
         print(f"[Pre-Ready Hostile Review] {verdict.state.upper()}: {verdict.reason}", file=sys.stderr)

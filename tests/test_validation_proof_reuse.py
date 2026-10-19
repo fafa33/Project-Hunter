@@ -10,7 +10,6 @@ asserts the boundary refuses it.
 
 from __future__ import annotations
 
-import json
 import subprocess
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
@@ -24,6 +23,7 @@ import hunter_validation_reuse as reuse
 import pytest
 
 ROOT = Path(__file__).resolve().parents[1]
+PRE_PR_WORKFLOW = f".github/workflows/{reuse.PRE_PR_WORKFLOW_PATH.rsplit(chr(47), 1)[-1]}"
 
 HEAD = "a" * 40
 FOREIGN_HEAD = "b" * 40
@@ -467,38 +467,34 @@ def test_incomplete_run_cannot_authorize_reuse(tmp_path: Path, monkeypatch: pyte
 
     assert not decision.reusable
     assert decision.pending
-    assert "not completed" in decision.reason
+    # The truthful reason names the observed status rather than a generic "not completed".
+    assert "is in_progress" in decision.reason
 
 
-def test_pending_exact_head_proof_is_polled_then_reused(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    output = tmp_path / "output.txt"
-    monkeypatch.setenv("GITHUB_OUTPUT", str(output))
-    decisions = iter(
-        [
-            reuse.ReuseDecision(False, "exact-head proof has not completed", pending=True),
-            reuse.ReuseDecision(True, "exact-head proof completed"),
-        ]
-    )
-    monkeypatch.setattr(reuse, "resolve", lambda *args, **kwargs: next(decisions))
-    monkeypatch.setattr(reuse.time, "sleep", lambda seconds: None)
-
-    assert reuse.main(["--wait-seconds", "30", "--poll-seconds", "1"]) == 0
-    assert output.read_text(encoding="utf-8").strip() == "reusable=true"
-
-
-def test_pending_exact_head_proof_timeout_falls_back_to_full_lane(
+def test_pending_authoritative_run_falls_back_immediately_without_cross_workflow_wait(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    output = tmp_path / "output.txt"
-    monkeypatch.setenv("GITHUB_OUTPUT", str(output))
-    monkeypatch.setattr(
-        reuse,
-        "resolve",
-        lambda *args, **kwargs: reuse.ReuseDecision(False, "exact-head proof has not completed", pending=True),
-    )
+    _stub_identity(monkeypatch)
+    decision = _resolve(tmp_path, [_run(status="in_progress", conclusion=None)])
+    assert decision.reusable is False
+    assert decision.pending is True
+    assert "in_progress" in decision.reason
 
-    assert reuse.main(["--wait-seconds", "0"]) == 0
-    assert output.read_text(encoding="utf-8").strip() == "reusable=false"
+
+def test_reuse_module_has_no_polling_or_sleep_boundary() -> None:
+    source = (ROOT / "scripts" / "hunter_validation_reuse.py").read_text(encoding="utf-8")
+    forbidden = ("time.sleep", "wait_for_authoritative_run", "--wait-seconds", "--poll-seconds")
+    assert all(
+        token not in source for token in forbidden
+    ), "validation reuse must remain a one-shot evidence lookup; never reintroduce cross-workflow waiting"
+
+
+def test_ci_quality_gate_does_not_wait_for_cross_workflow_proof() -> None:
+    ci = _ci_workflow()
+    quality = ci["jobs"]["quality"]
+    runs = "\n".join(str(step.get("run", "")) for step in quality["steps"])
+    assert "hunter_validation_reuse.py" not in runs
+    assert quality["timeout-minutes"] <= 10
 
 
 def test_latest_run_for_the_head_decides_rather_than_any_green_one(
@@ -640,16 +636,43 @@ def test_reuse_marker_matches_the_canonical_preflight_mode_marker() -> None:
     assert reuse.MODE_MARKER == hunter_pre_push.MODE_MARKER.as_posix()
 
 
-def test_ci_workflow_guards_the_full_lane_on_the_reuse_decision() -> None:
-    """The reuse decision must actually gate the expensive step in CI."""
-    workflow = json.loads(json.dumps(_ci_workflow()))
-    steps = workflow["jobs"]["quality"]["steps"]
-    resolver = next(step for step in steps if "hunter_validation_reuse.py" in str(step.get("run", "")))
-    preflight_step = next(step for step in steps if "hunter_pr_preflight.py" in str(step.get("run", "")))
+def test_ci_quality_gate_is_pr_attached_and_never_duplicates_full_lane() -> None:
+    workflow = _ci_workflow()
+    job = workflow["jobs"]["quality"]
+    runs = "\n".join(str(step.get("run", "")) for step in job["steps"])
 
-    assert resolver["id"], "the reuse resolver step must expose an id for the guard to reference"
-    assert steps.index(resolver) < steps.index(preflight_step)
-    assert f"steps.{resolver['id']}.outputs.reusable" in preflight_step["if"]
+    assert "pull_request" in workflow[True]
+    assert "workflow_run" not in workflow[True]
+    assert "github.event_name == 'pull_request'" in str(job["if"])
+    assert "compileall" in runs
+    assert "hunter_pr_preflight.py" not in runs
+    assert "hunter_validation_reuse.py" not in runs
+    assert "pytest" not in runs
+    assert job["timeout-minutes"] <= 10
+    assert job["permissions"] == {"actions": "read", "contents": "read"}
+
+    main = workflow["jobs"]["main-validation"]
+    main_runs = "\n".join(str(step.get("run", "")) for step in main["steps"])
+    assert "github.event_name == 'push'" in str(main["if"])
+    assert "hunter_pr_preflight.py --mode normal" in main_runs
+
+
+def test_proof_only_consumer_fails_closed_without_starting_or_waiting_for_validation(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(reuse, "resolve", lambda *_args, **_kwargs: reuse.ReuseDecision(False, "proof pending", True))
+    assert (
+        reuse.main(["--require-proof", "--event-name", "pull_request", "--head-sha", "a" * 40, "--repository", "o/r"])
+        == 2
+    )
+
+
+def test_proof_only_consumer_accepts_completed_exact_head_proof(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(reuse, "resolve", lambda *_args, **_kwargs: reuse.ReuseDecision(True, "exact proof"))
+    assert (
+        reuse.main(["--require-proof", "--event-name", "pull_request", "--head-sha", "a" * 40, "--repository", "o/r"])
+        == 0
+    )
 
 
 def _ci_workflow() -> Any:
@@ -661,4 +684,107 @@ def _ci_workflow() -> Any:
 def test_ci_workflow_can_read_the_trusted_run_record() -> None:
     workflow = _ci_workflow()
 
-    assert workflow["permissions"]["actions"] == "read"
+    assert workflow["permissions"] == {}
+    assert workflow["jobs"]["quality"]["permissions"]["actions"] == "read"
+
+
+def test_hgcc1_contract_change_invalidates_receipt_reuse(tmp_path: Path) -> None:
+    """Verifies that altering HGCC-1 contract files invalidates receipt reuse."""
+    root = _definition_root(tmp_path)
+    before_identity = receipts.definition_identity(root)
+
+    policy_file = root / "docs" / "CODE_WRITE_POLICY.json"
+    policy_file.write_bytes(policy_file.read_bytes() + b"\n")
+
+    after_identity = receipts.definition_identity(root)
+    assert before_identity != after_identity, "Altering CODE_WRITE_POLICY.json must change definition identity"
+
+
+def test_live_contract_identity_changes_invalidate_receipt_reuse(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    root = _definition_root(tmp_path)
+
+    ruleset_v1 = [{"id": 1, "name": "r1", "enforcement": "active", "target": "branch", "rules": [{"type": "deletion"}]}]
+    ruleset_v2 = [
+        {
+            "id": 1,
+            "name": "r1",
+            "enforcement": "active",
+            "target": "branch",
+            "rules": [{"type": "deletion"}, {"type": "non_fast_forward"}],
+        }
+    ]
+
+    current_rulesets = [ruleset_v1]
+
+    def fake_pages(repo, tok, path):
+        return [{"id": 1, "enforcement": "active", "target": "branch"}]
+
+    def fake_request(repo, tok, method, path):
+        return current_rulesets[0][0]
+
+    monkeypatch.setattr("hunter_reviewer_collector._pages", fake_pages)
+    monkeypatch.setattr("hunter_governance_review_v2.request_json", fake_request)
+
+    identity_v1 = receipts.live_contract_identity(root, "fafa33/Project-Hunter", "token")
+
+    current_rulesets[0] = ruleset_v2
+    identity_v2 = receipts.live_contract_identity(root, "fafa33/Project-Hunter", "token")
+
+    assert identity_v1 != identity_v2, "Live ruleset change must change live contract identity"
+
+
+def test_missing_live_contract_observation_fails_closed_when_required(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    root = _definition_root(tmp_path)
+
+    def failing_pages(*args, **kwargs):
+        raise RuntimeError("GitHub API unavailable")
+
+    monkeypatch.setattr("hunter_reviewer_collector._pages", failing_pages)
+
+    with pytest.raises(receipts.ValidationEvidenceUnavailable, match="unavailable or unverifiable"):
+        receipts.live_contract_identity(root, "fafa33/Project-Hunter", "token", require_live=True)
+
+
+def test_configured_live_ruleset_outage_fails_closed_without_explicit_require_live(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    root = _definition_root(tmp_path)
+
+    def unavailable(*_args: Any, **_kwargs: Any) -> Any:
+        raise RuntimeError("GitHub rulesets unavailable")
+
+    monkeypatch.setattr("hunter_reviewer_collector._pages", unavailable)
+    with pytest.raises(receipts.ValidationEvidenceUnavailable, match="unavailable or unverifiable"):
+        receipts.live_contract_identity(root, "fafa33/Project-Hunter", "token")
+
+
+def test_aggregate_receipt_reuse_writes_json_report_file(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    root = _committed_definition_repo(tmp_path)
+    head_sha = receipts.resolve_head_sha(root)
+    receipts.record(root, head_sha=head_sha, produced_by="local-preflight")
+
+    monkeypatch.setattr(preflight, "_repository_root", lambda: root)
+    report_file = "reused_report.json"
+
+    exit_code = preflight.run_preflight(
+        mode="aggregate",
+        reuse_receipt=True,
+        report_path=report_file,
+    )
+
+    assert exit_code == 0
+    resolved_path = preflight.validate_and_resolve_report_path(report_file, root)
+    assert resolved_path.is_file()
+
+    import json
+
+    data = json.loads(resolved_path.read_text(encoding="utf-8"))
+    assert data["schema"] == "hunter.preflight-report/1"
+    assert data["mode"] == "aggregate"
+    assert data["overall_outcome"] == "passed"
+    assert all(g["outcome"] == "reused" for g in data["gates"])
+    assert "receipt_reference" in data

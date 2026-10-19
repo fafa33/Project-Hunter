@@ -127,7 +127,10 @@ def normalize_identity_value(value: str) -> str:
 class WriterIdentity:
     """One authorized writer and the exact Git identities bound to it."""
 
+    principal_id: str
     login: str
+    aliases: frozenset[str]
+    github_user_id: int | None
     names: frozenset[str]
     emails: frozenset[str]
     canonical_name: str
@@ -170,12 +173,14 @@ class WriterIdentityBinding:
                 return identity
         return None
 
-    def identity_for(self, login: str) -> WriterIdentity | None:
-        wanted = normalize_identity_value(login)
-        for identity in self.identities:
-            if normalize_identity_value(identity.login) == wanted:
-                return identity
-        return None
+    def identity_for(self, alias: str) -> WriterIdentity | None:
+        wanted = normalize_identity_value(alias)
+        matches = [identity for identity in self.identities if wanted in identity.aliases]
+        return matches[0] if len(matches) == 1 else None
+
+    def identity_for_github_user_id(self, user_id: int) -> WriterIdentity | None:
+        matches = [identity for identity in self.identities if identity.github_user_id == user_id]
+        return matches[0] if len(matches) == 1 else None
 
     @property
     def logins(self) -> tuple[str, ...]:
@@ -391,6 +396,9 @@ def parse_binding(policy: Any, *, predates_key_binding: bool = False) -> tuple[W
 
     identities: list[WriterIdentity] = []
     seen_logins: set[str] = set()
+    seen_principals: set[str] = set()
+    seen_aliases: set[str] = set()
+    seen_github_user_ids: set[int] = set()
     for index, entry in enumerate(raw_identities):
         label = f"{BINDING_FIELD}.identities[{index}]"
         if not isinstance(entry, dict):
@@ -402,6 +410,30 @@ def parse_binding(policy: Any, *, predates_key_binding: bool = False) -> tuple[W
         if normalized_login in seen_logins:
             return None, f"{label} binds login {login!r} a second time"
         seen_logins.add(normalized_login)
+
+        principal_id = entry.get("principal_id")
+        if not isinstance(principal_id, str) or not principal_id.strip():
+            return None, label + " must name one canonical principal_id"
+        normalized_principal = normalize_identity_value(principal_id)
+        if normalized_principal in seen_principals:
+            return None, label + " binds principal_id a second time"
+        seen_principals.add(normalized_principal)
+
+        aliases = _string_set(entry, "aliases")
+        if aliases is None or normalized_login not in aliases:
+            return None, label + " aliases must be non-empty and include its login"
+        overlap = aliases & seen_aliases
+        if overlap:
+            return None, label + " reuses alias across principals"
+        seen_aliases.update(aliases)
+
+        github_user_id = entry.get("github_user_id")
+        if github_user_id is not None:
+            if type(github_user_id) is not int or github_user_id <= 0:
+                return None, label + ".github_user_id must be a positive integer when present"
+            if github_user_id in seen_github_user_ids:
+                return None, label + " binds github_user_id a second time"
+            seen_github_user_ids.add(github_user_id)
 
         names = _string_set(entry, "git_names")
         emails = _string_set(entry, "git_emails")
@@ -419,7 +451,10 @@ def parse_binding(policy: Any, *, predates_key_binding: bool = False) -> tuple[W
 
         identities.append(
             WriterIdentity(
+                principal_id=principal_id.strip(),
                 login=login.strip(),
+                aliases=aliases,
+                github_user_id=github_user_id,
                 names=names,
                 emails=emails,
                 canonical_name=canonical_name.strip(),
@@ -479,7 +514,7 @@ def evaluate_commit(binding: WriterIdentityBinding, commit: CommitProvenance) ->
             f"commit {short} committer {commit.committer_name} <{commit.committer_email}> is not an "
             f"authorization-bound writer identity",
         )
-    if author.login != committer.login:
+    if author.principal_id != committer.principal_id:
         return ProvenanceVerdict(
             False,
             f"commit {short} splits its provenance: author is bound to {author.login!r} but committer is "
@@ -733,7 +768,7 @@ def evaluate_owner_recovery(
 
 
 def evaluate_range(binding: WriterIdentityBinding, commits: tuple[CommitProvenance, ...]) -> ProvenanceVerdict:
-    """Evaluate every commit in the governed range, one single-writer epoch at a time.
+    """Evaluate every commit in the governed range under its own bound writer.
 
     An empty range is not silently admissible: a range that carries no commit
     evidence is exactly the state that cannot be checked, so it fails closed.
@@ -765,12 +800,11 @@ def evaluate_range(binding: WriterIdentityBinding, commits: tuple[CommitProvenan
         )
 
     if not binding.require_single_writer_per_range:
-        writer = sorted(writers)[0]
         return ProvenanceVerdict(
             True,
-            f"{len(commits)} commit(s) in the governed range are bound to {len(writers)} writer(s) because "
-            f"{BINDING_FIELD}.require_single_writer_per_range is disabled",
-            writer,
+            f"{len(commits)} commit(s) in the governed range are bound to authorized writers "
+            + ", ".join(sorted(writers)),
+            "",
         )
     if binding.owner_recovery is None:
         return ProvenanceVerdict(

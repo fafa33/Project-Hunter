@@ -55,6 +55,26 @@ COLLECTOR_LIVENESS_GRACE_SECONDS = 180
 #: liveness evidence reads active, dead, or cannot be read at all.
 ACTIVE_COLLECTOR_GRACE_MULTIPLIER = 2
 TERMINAL_NONBLOCKING_STATES = frozenset({"REVIEW_TIMED_OUT", "REVIEWER_UNAVAILABLE", "POOL_EXHAUSTED"})
+#: Issue #574 / PR #576: the only terminal state a *collector* run may publish, from its own `collector-complete` step.
+#: Every other cycle state is only believed when a governance/reconcile run published it (``TRUSTED_WORKFLOWS``).
+COLLECTOR_PUBLISHABLE_STATES = frozenset({"REVIEWER_UNAVAILABLE"})
+#: Cycle states in which the exact-head opportunity is still open and may be finalized by the collector.
+OPEN_CYCLE_STATES = frozenset({"WAITING_FOR_REVIEWER", "REVIEW_IN_PROGRESS", "FAILOVER_IN_PROGRESS"})
+#: Identity of the collector receipt this module reads. Kept equal to ``hunter_reviewer_collector.SCHEMA`` by a test; it
+#: cannot be imported here because the collector imports this module.
+COLLECTOR_RESULTS_SCHEMA = "hunter.reviewer-collection.v1"
+COLLECTOR_RESULTS_FILE = "reviewer-results.json"
+COLLECTOR_RESULTS_MAX_BYTES = 1_048_576
+#: Outcomes of an invocation that gave no review: the only ones that can exhaust a reviewer.
+EXHAUSTED_OUTCOMES = frozenset({"timed_out", "unavailable", "unacknowledged"})
+_RECORD_POOL_FIELDS = (
+    "priority",
+    "ack_timeout_seconds",
+    "review_timeout_seconds",
+    "trigger_method",
+    "evidence_parser",
+    "retryable",
+)
 PENDING_STATES = frozenset({"WAITING_FOR_REVIEWER", "REVIEW_IN_PROGRESS", "FAILOVER_IN_PROGRESS", "POOL_EXHAUSTED"})
 
 #: Issue #461 / PR #473: an exact-head cycle whose reviewers were all exhausted
@@ -409,8 +429,8 @@ def _parse_cycle(status: dict[str, Any], pr_number: int, head_sha: str) -> Revie
     # gone. See `read_cycle` for the live evidence.
     #
     # `read_cycle` remains the outer bound: it independently re-fetches the run
-    # the status cites and requires it to be on the default branch and to come from
-    # a trusted governance workflow.
+    # the status cites and requires a trusted governance workflow executing from
+    # default-branch history, with exact PR binding for pull_request_target.
     if str((status.get("creator") or {}).get("login") or "") != TRUSTED_STATUS_CREATOR:
         return None
     if str(status.get("context") or "") != f"{CONTEXT_PREFIX}{pr_number}":
@@ -440,6 +460,64 @@ def _parse_cycle(status: dict[str, Any], pr_number: int, head_sha: str) -> Revie
     )
 
 
+def _target_run_base_revision(
+    run: dict[str, Any], pr: dict[str, Any], pr_number: int, head_sha: str, default_branch: str
+) -> str:
+    """Bind a base-executed target event to its exact PR before checking base history."""
+    head = pr.get("head") or {}
+    base = pr.get("base") or {}
+    if (
+        run.get("head_sha") != head_sha
+        or not head.get("ref")
+        or run.get("head_branch") != head.get("ref")
+        or base.get("ref") != default_branch
+    ):
+        return ""
+    associations = run.get("pull_requests")
+    if not isinstance(associations, list) or len(associations) != 1:
+        return ""
+    associated = associations[0]
+    if not isinstance(associated, dict) or associated.get("number") != pr_number:
+        return ""
+    for name, expected in (("head", head), ("base", base)):
+        actual = associated.get(name)
+        if not isinstance(actual, dict) or actual.get("ref") != expected.get("ref"):
+            return ""
+        actual_repo = actual.get("repo")
+        expected_repo = expected.get("repo")
+        if (
+            not isinstance(actual_repo, dict)
+            or not isinstance(expected_repo, dict)
+            or not expected_repo.get("id")
+            or actual_repo.get("id") != expected_repo.get("id")
+        ):
+            return ""
+    if associated["head"].get("sha") != head_sha:
+        return ""
+    return str(associated["base"].get("sha") or "")
+
+
+#: Commit-status history is read in full, but within a bound: GitHub caps statuses
+#: per context, so this is generous. Exceeding it is unavailable evidence and fails
+#: closed rather than letting one head exhaust a governance job's API/time budget.
+COMMIT_STATUS_MAX_PAGES = 20
+
+
+def _all_commit_statuses(repository: str, token: str, head_sha: str) -> list[dict[str, Any]]:
+    """Read the full creator-bearing status history; never lose old proofs."""
+    base = f"commits/{head_sha}/statuses?per_page=100"
+    collected: list[dict[str, Any]] = []
+    for page in range(1, COMMIT_STATUS_MAX_PAGES + 1):
+        path = base if page == 1 else f"{base}&page={page}"
+        batch = request_json(repository, token, "GET", path)
+        if not isinstance(batch, list):
+            raise ValueError("commit status history unavailable")
+        collected.extend(status for status in batch if isinstance(status, dict))
+        if len(batch) < 100:
+            return collected
+    raise ValueError("commit status history exceeds the bounded inspection window")
+
+
 def read_cycle(
     repository: str, token: str, pr_number: int, head_sha: str
 ) -> tuple[str, ReviewCycle | None, str | None]:
@@ -460,11 +538,17 @@ def read_cycle(
     # read from it can never be satisfied -- which is what previously forced a
     # creator-less fallback that trusted a caller-controlled payload. Reading the
     # list endpoint restores a real authenticated publisher and lets the strict
-    # check in `_parse_cycle` stand on its own. Only the latest statuses are
-    # listed, and the context, description, digest, generation and cited run are
-    # all still re-verified below and in `_parse_cycle`.
-    listed = request_json(repository, token, "GET", f"commits/{head_sha}/statuses?per_page=100")
-    statuses = listed if isinstance(listed, list) else []
+    # check in `_parse_cycle` stand on its own. The history is read page by page
+    # within a bounded window, so an older trusted proof that GitHub pushed past
+    # the first page is still seen; the context, description, digest, generation
+    # and cited run are all still re-verified below and in `_parse_cycle`.
+    try:
+        statuses = _all_commit_statuses(repository, token, head_sha)
+    except ValueError:
+        # An unreadable listing is exactly what a malformed payload produced
+        # before paginated reading existed: no status is believed, so the state
+        # derived below stays `absent` rather than a half-read history.
+        statuses = []
     repository_info = request_json(repository, token, "GET", "")
     default_branch = str((repository_info or {}).get("default_branch") or "main")
     for status in statuses:
@@ -479,9 +563,36 @@ def read_cycle(
         run = request_json(repository, token, "GET", f"actions/runs/{run_id}")
         if not isinstance(run, dict):
             continue
-        if str(run.get("head_branch") or "") != default_branch:
+        event = str(run.get("event") or "")
+        if event == "pull_request":
+            continue  # The candidate can supply this workflow definition.
+        if event == "pull_request_target":
+            # API run metadata names the PR source, while GitHub executes the
+            # base workflow. Authenticate the association and check BASE history.
+            if str(run.get("path") or "") not in TRUSTED_WORKFLOWS:
+                continue
+            run_revision = _target_run_base_revision(run, pr, pr_number, head_sha, default_branch)
+        else:
+            if str(run.get("head_branch") or "") != default_branch:
+                continue
+            run_revision = str(run.get("head_sha") or "")
+        if not re.fullmatch(r"[0-9a-f]{40}", run_revision):
             continue
-        if str(run.get("path") or "") not in TRUSTED_WORKFLOWS:
+        trusted_tip = request_json(repository, token, "GET", f"commits/{default_branch}")
+        trusted_revision = str((trusted_tip or {}).get("sha") or "")
+        if not re.fullmatch(r"[0-9a-f]{40}", trusted_revision):
+            continue
+        if run_revision != trusted_revision:
+            comparison = request_json(repository, token, "GET", f"compare/{run_revision}...{trusted_revision}")
+            if not isinstance(comparison, dict) or comparison.get("status") not in {"ahead", "identical"}:
+                continue
+        run_path = str(run.get("path") or "")
+        collector_terminal = (
+            run_path == COLLECTOR_WORKFLOW_PATH
+            and cycle.state in COLLECTOR_PUBLISHABLE_STATES
+            and str(run.get("event") or "") == "workflow_dispatch"
+        )
+        if run_path not in TRUSTED_WORKFLOWS and not collector_terminal:
             continue
         return "present", cycle, None
     return "absent", None, None
@@ -507,9 +618,7 @@ def read_collector_completion(
     repository: str, token: str, pr_number: int, head_sha: str
 ) -> tuple[str, int | None, str | None]:
     try:
-        statuses = request_json(repository, token, "GET", f"commits/{head_sha}/statuses?per_page=100")
-        if not isinstance(statuses, list):
-            return "absent", None, "collector status payload is malformed"
+        statuses = _all_commit_statuses(repository, token, head_sha)
         repository_info = request_json(repository, token, "GET", "")
         default_branch = str((repository_info or {}).get("default_branch") or "main")
         revision = request_json(repository, token, "GET", f"commits/{default_branch}")
@@ -694,6 +803,34 @@ def _active_collector_still_running(repository: str, token: str, cycle: ReviewCy
     return liveness == "active"
 
 
+def completed_collector_settled(repository: str, token: str, cycle: ReviewCycle) -> bool:
+    """A successful exact-cycle collector finished, but its status publisher was lost.
+
+    Give GitHub status propagation three minutes. Never infer review success:
+    this only terminates the optional opportunity, while admission still needs
+    its separately authenticated exact-head review evidence.
+    """
+    runs = collector_runs(repository, token, cycle.pr_number, cycle.head_sha, cycle.generation_id)
+    if any(str(run.get("status") or "") in ACTIVE_RUN_STATES for run in runs):
+        return False
+    successful = [run for run in runs if run.get("status") == "completed" and run.get("conclusion") == "success"]
+    if not successful:
+        return False
+    # A previous successful attempt cannot close the propagation window for a
+    # newer successful attempt. Missing timestamps are unknown, not stale.
+    timestamps = [run.get("updated_at") for run in successful]
+    if any(not isinstance(value, str) or not value for value in timestamps):
+        return False
+    try:
+        parsed = [datetime.fromisoformat(value.replace("Z", "+00:00")) for value in timestamps]
+        if any(value.tzinfo is None or value.utcoffset() is None for value in parsed):
+            return False
+        newest = max(parsed)
+    except (ValueError, TypeError, OverflowError):
+        return False
+    return _older_than(newest.isoformat(), COLLECTOR_LIVENESS_GRACE_SECONDS)
+
+
 def independent_review_opportunity_seconds() -> int:
     """One global opportunity budget across the whole reviewer chain.
 
@@ -835,6 +972,229 @@ def publish_cycle(
     )
 
 
+class PoolExhaustion(NamedTuple):
+    """Whether one collector receipt proves every enabled authority reviewer gave no review."""
+
+    exhausted: bool
+    reason: str
+
+
+def _record_problem(record: Any, agent: dict[str, Any], number: int) -> str | None:
+    """Why one recorded invocation cannot be believed, or ``None``; mirrors the collector's own receipt checks."""
+
+    if not isinstance(record, dict):
+        return "an invocation record is not an object"
+    if record.get("agent_id") != agent["id"] or record.get("attempt_number") != number:
+        return "invocation records are out of order or do not match the enabled reviewer pool"
+    if any(record.get(name) != agent[name] for name in _RECORD_POOL_FIELDS):
+        return f"{agent['id']} record disagrees with the configured pool"
+    outcome = record.get("outcome")
+    elapsed = record.get("elapsed_seconds")
+    trigger_id = record.get("trigger_id")
+    if (
+        type(record.get("priority")) is not int
+        or type(record.get("ack_timeout_seconds")) is not int
+        or type(record.get("review_timeout_seconds")) is not int
+        or type(record.get("retryable")) is not bool
+        or type(record.get("attempt_number")) is not int
+        or type(trigger_id) is not int
+        or trigger_id < 0
+        or type(elapsed) not in (int, float)
+        or not 0 <= elapsed < 7200
+    ):
+        return f"{agent['id']} record has malformed identity or timing fields"
+    if outcome == "timed_out" and elapsed < agent["review_timeout_seconds"]:
+        return f"{agent['id']} reported a timeout before its review budget elapsed"
+    if outcome == "unacknowledged" and elapsed < agent["ack_timeout_seconds"]:
+        return f"{agent['id']} reported no acknowledgement before its acknowledgement budget elapsed"
+    return None
+
+
+def pool_exhaustion(
+    receipt: Any,
+    *,
+    repository: str,
+    pr_number: int,
+    head_sha: str,
+    run_id: int,
+    run_attempt: int,
+    claims_id: str,
+    generation_id: str,
+    pool: dict[str, Any],
+) -> PoolExhaustion:
+    """Decide, from the collector's own receipt, whether the opportunity ended with no review at all.
+
+    The receipt is evidence about *this* collector run and nothing else, so every identity it carries must equal what
+    the trusted caller derived independently: pull request, full head, run, claims, generation and pool configuration.
+    A result that is missing, malformed, partial, stale or mixed is never exhaustion. A substantive ``clear`` or
+    ``blocking`` verdict from an authority-eligible reviewer is never converted into unavailability: it stays with the
+    existing authenticated-review path.
+    """
+
+    # Imported here: the collector imports this module at import time.
+    import hunter_reviewer_collector as collector
+
+    problem = collector_receipt_problem(
+        receipt,
+        repository=repository,
+        pr_number=pr_number,
+        head_sha=head_sha,
+        run_id=run_id,
+        run_attempt=run_attempt,
+        generation_id=generation_id,
+    )
+    if problem:
+        return PoolExhaustion(False, problem)
+    if not isinstance(receipt, dict):
+        return PoolExhaustion(False, "collector receipt is not an object")
+    expected = {
+        "schema": COLLECTOR_RESULTS_SCHEMA,
+        "repository": repository,
+        "pr_number": pr_number,
+        "head_sha": head_sha,
+        "run_id": run_id,
+        "claims_id": claims_id,
+        "remediation_generation_id": generation_id,
+        "configuration_digest": collector.configuration_digest(pool),
+    }
+    for name, value in expected.items():
+        if receipt.get(name) != value or type(receipt.get(name)) is not type(value):
+            return PoolExhaustion(False, f"collector receipt {name} does not match the trusted identity")
+    if type(receipt.get("run_attempt")) is not int or receipt["run_attempt"] < 1:
+        return PoolExhaustion(False, "collector receipt run_attempt is malformed")
+    records = receipt.get("attempts")
+    if not isinstance(records, list):
+        return PoolExhaustion(False, "collector attempts are missing")
+
+    agents = sorted(pre_ready.enabled_pool_reviewers(pool), key=lambda agent: agent["priority"])
+    if not any(agent.get("authority_eligible") is not False for agent in agents):
+        return PoolExhaustion(False, "the pool has no authority-eligible reviewer to exhaust")
+    retries = pool["timeout_policy"]["retries_per_agent"]
+    seen: set[tuple[str, int]] = set()
+    offset = 0
+    for agent in agents:
+        eligible = agent.get("authority_eligible") is not False
+        budget = 1 + (retries if agent["retryable"] else 0)
+        for number in range(1, budget + 1):
+            if offset >= len(records):
+                return PoolExhaustion(False, f"{agent['id']} was skipped or not fully attempted")
+            record = records[offset]
+            offset += 1
+            problem = _record_problem(record, agent, number)
+            if problem is not None:
+                return PoolExhaustion(False, problem)
+            identity = (agent["id"], record["trigger_id"])
+            if identity in seen:
+                return PoolExhaustion(False, "duplicate invocation identity")
+            seen.add(identity)
+            outcome = record["outcome"]
+            if outcome in {"clear", "blocking"}:
+                if eligible:
+                    return PoolExhaustion(False, f"{agent['id']} gave a substantive {outcome} verdict")
+                break
+            if outcome not in EXHAUSTED_OUTCOMES:
+                return PoolExhaustion(False, f"{agent['id']} recorded unsupported outcome {outcome!r}")
+            if outcome != "timed_out":
+                break
+            if number == budget:
+                break
+    if offset != len(records):
+        return PoolExhaustion(False, "collector receipt carries extra or mixed invocation records")
+    return PoolExhaustion(True, "every enabled authority reviewer recorded no review")
+
+
+def read_collector_receipt(path: Path) -> tuple[Any, str]:
+    """The collector's own receipt from its working directory, bounded; ``(None, reason)`` when unusable."""
+
+    try:
+        # Never follow a symlink: the collector owns this fixed-name artifact.
+        if path.is_symlink() or not path.is_file() or path.stat().st_size > COLLECTOR_RESULTS_MAX_BYTES:
+            return None, f"{path} is missing or too large"
+        return json.loads(path.read_text(encoding="utf-8")), ""
+    except (OSError, ValueError) as exc:
+        return None, f"{path} is unreadable: {type(exc).__name__}"
+
+
+def finalize_exhausted_pool(
+    repository: str, token: str, pr_number: int, head_sha: str, run_id: int, results_path: Path
+) -> str:
+    """Publish ``REVIEWER_UNAVAILABLE`` for an exact head whose collector proved no reviewer gave a review.
+
+    Runs inside the trusted collector's own ``collector-complete`` step, so it does not depend on any later wake-up:
+    the ``workflow_run`` edge from a dispatched collector to reconcile was never delivered in 17 of 17 recorded
+    completions. It only ever *ends* an open opportunity as a non-blocking, authority-free state. It never dispatches,
+    never mints review authority and never touches a cycle that is already terminal, superseded, for another
+    generation, or published under another pool configuration. Returns a short, stable outcome label.
+    """
+
+    if not re.fullmatch("[0-9a-f]{40}", head_sha):
+        return "SKIPPED: exact head is not a full SHA"
+    if current_run_id() != run_id:
+        return "SKIPPED: the completing run is not this process's run"
+    # Only the runner's authenticated environment can supply the current
+    # attempt. Never infer it from the untrusted collector receipt itself.
+    raw_attempt = os.environ.get("GITHUB_RUN_ATTEMPT", "")
+    if not re.fullmatch(r"[1-9][0-9]*", raw_attempt):
+        return "SKIPPED: trusted run attempt is unavailable or malformed"
+    run_attempt = int(raw_attempt)
+    receipt, unreadable = read_collector_receipt(results_path)
+    if receipt is None:
+        return f"SKIPPED: {unreadable}"
+    readiness = review_request_state(repository, token, pr_number, head_sha)
+    if not readiness.ready:
+        return f"SKIPPED: review request not usable ({readiness.reason})"
+    generation = current_remediation_generation(repository, token, pr_number, head_sha, readiness.claims_id)
+    pool, pool_error = pre_ready.load_reviewer_pool()
+    if pool is None or pool_error:
+        return f"SKIPPED: reviewer pool unavailable ({pool_error})"
+    digest = reviewer_pool_config_digest()
+    verdict = pool_exhaustion(
+        receipt,
+        repository=repository,
+        pr_number=pr_number,
+        head_sha=head_sha,
+        run_id=run_id,
+        run_attempt=run_attempt,
+        claims_id=readiness.claims_id,
+        generation_id=generation,
+        pool=pool,
+    )
+    if not verdict.exhausted:
+        return f"SKIPPED: {verdict.reason}"
+
+    def open_cycle() -> ReviewCycle | None:
+        state, cycle, _error = read_cycle(repository, token, pr_number, head_sha)
+        if state != "present" or cycle is None:
+            return None
+        if cycle.config_digest != digest or cycle.generation_id != generation or cycle.state not in OPEN_CYCLE_STATES:
+            return None
+        return cycle
+
+    if open_cycle() is None:
+        return "SKIPPED: no open cycle for this exact head, generation and pool configuration"
+    # Re-read immediately before publishing: a concurrent reconcile may have just ended the same opportunity, and the
+    # terminal states are all non-blocking, so the only thing to avoid is overwriting a state that is no longer open.
+    cycle = open_cycle()
+    if cycle is None:
+        return "SKIPPED: the cycle ended concurrently"
+    publish_cycle(
+        repository,
+        token,
+        head_sha,
+        cycle=ReviewCycle(
+            pr_number=cycle.pr_number,
+            head_sha=cycle.head_sha,
+            state="REVIEWER_UNAVAILABLE",
+            provider_id=cycle.provider_id,
+            trigger_id=cycle.trigger_id,
+            started_at=cycle.started_at,
+            config_digest=cycle.config_digest,
+            generation_id=cycle.generation_id,
+        ),
+    )
+    return "PUBLISHED: REVIEWER_UNAVAILABLE"
+
+
 def ensure_collector(
     repository: str, token: str, pr_number: int, head_sha: str, generation_id: str = BASE_GENERATION_ID
 ) -> ReviewCycle:
@@ -847,6 +1207,41 @@ def ensure_collector(
             # resolved-finding set, so nothing here may invoke them a second time.
             if existing.state in {"REVIEW_CLEAR", "FINDINGS_OPEN"} | TERMINAL_NONBLOCKING_STATES:
                 return existing
+            # A completed successful collector must not leave an optional status
+            # pending for the full reviewer-chain budget when its publisher failed.
+            # Fail closed on unreadable run evidence, and never claim review clear.
+            if existing.state in PENDING_STATES and existing.trigger_id is not None:
+                try:
+                    settled = completed_collector_settled(repository, token, existing)
+                except (transport.GitHubRequestError, ValueError):
+                    settled = False
+                if settled:
+                    # Collector completion may have published a terminal state meanwhile.
+                    state_now, cycle_now, _ = read_cycle(repository, token, pr_number, head_sha)
+                    if state_now != "present" or cycle_now is None:
+                        return existing
+                    if cycle_now != existing or cycle_now.state not in OPEN_CYCLE_STATES:
+                        return cycle_now
+                    # Revalidate correlated runs at the publication boundary. A
+                    # duplicate dispatch may become visible after the first read.
+                    # Unreadable evidence must never authorize a timeout.
+                    try:
+                        if not completed_collector_settled(repository, token, cycle_now):
+                            return cycle_now
+                    except (transport.GitHubRequestError, ValueError):
+                        return cycle_now
+                    terminal = ReviewCycle(
+                        pr_number=existing.pr_number,
+                        head_sha=existing.head_sha,
+                        state="REVIEW_TIMED_OUT",
+                        provider_id=existing.provider_id,
+                        trigger_id=existing.trigger_id,
+                        started_at=existing.started_at,
+                        config_digest=existing.config_digest,
+                        generation_id=existing.generation_id,
+                    )
+                    publish_cycle(repository, token, head_sha, cycle=terminal)
+                    return terminal
             if existing.state in PENDING_STATES and _older_than(
                 existing.started_at, independent_review_opportunity_seconds()
             ):
@@ -861,6 +1256,28 @@ def ensure_collector(
                 if not _active_collector_still_running(
                     repository, token, existing, independent_review_opportunity_seconds()
                 ):
+                    # A successful run owns its publication grace only within
+                    # the same bounded active-collector ceiling. Otherwise a
+                    # stale success plus a wedged retry could wait forever.
+                    budget = independent_review_opportunity_seconds()
+                    within_ceiling = not _older_than(existing.started_at, budget * ACTIVE_COLLECTOR_GRACE_MULTIPLIER)
+                    if within_ceiling and existing.trigger_id is not None:
+                        try:
+                            runs = collector_runs(
+                                repository, token, existing.pr_number, existing.head_sha, existing.generation_id
+                            )
+                            successful = [
+                                run
+                                for run in runs
+                                if run.get("status") == "completed" and run.get("conclusion") == "success"
+                            ]
+                            if successful and not completed_collector_settled(repository, token, existing):
+                                return existing
+                        except (transport.GitHubRequestError, ValueError):
+                            # Run-list lookup is not a status-publishing authority.
+                            # The bounded optional timeout must remain live even
+                            # when GitHub's run-list API is unavailable.
+                            pass
                     terminal = ReviewCycle(
                         pr_number=existing.pr_number,
                         head_sha=existing.head_sha,
@@ -1178,6 +1595,15 @@ def main() -> int:
     try:
         if args.command == "collector-complete":
             publish_collector_completion(args.repository, token, args.pr, args.head, args.run_id)
+            # Best effort and fail closed: the completion marker above is already durable, and an unusable receipt
+            # leaves the cycle open for the reconcile backstop rather than failing a collector that did its job.
+            try:
+                outcome = finalize_exhausted_pool(
+                    args.repository, token, args.pr, args.head, args.run_id, Path(COLLECTOR_RESULTS_FILE)
+                )
+            except Exception as exc:
+                outcome = f"SKIPPED: finalization raised {type(exc).__name__}: {exc}"
+            print(f"Collector finalization: {outcome}")
         else:
             ensure_current(args.repository, token, args.pr)
         return 0
@@ -1195,6 +1621,35 @@ def main() -> int:
     except Exception as exc:
         print(f"Review orchestration failed: {type(exc).__name__}: {exc}", file=sys.stderr)
         return 1
+
+
+def collector_receipt_problem(
+    receipt, *, repository, pr_number, head_sha, run_id, run_attempt=None, generation_id=None
+):
+    if not isinstance(receipt, dict):
+        return "receipt is not an object"
+    expected = {
+        "schema": COLLECTOR_RESULTS_SCHEMA,
+        "repository": repository,
+        "pr_number": pr_number,
+        "head_sha": head_sha,
+        "run_id": run_id,
+    }
+    if run_attempt is not None:
+        expected["run_attempt"] = run_attempt
+    for name, value in expected.items():
+        if receipt.get(name) != value or type(receipt.get(name)) is not type(value):
+            return f"receipt {name} does not match the run it was minted for"
+    for name in ("claims_id", "configuration_digest"):
+        if not isinstance(receipt.get(name), str) or not re.fullmatch(r"[0-9a-f]{64}", receipt[name]):
+            return f"receipt {name} is missing or malformed"
+    generation = receipt.get("remediation_generation_id", "")
+    if generation_id is not None and generation != generation_id:
+        return "receipt belongs to another remediation generation"
+    attempts = receipt.get("attempts")
+    if not isinstance(attempts, list) or not all(isinstance(item, dict) for item in attempts):
+        return "receipt attempts are malformed"
+    return ""
 
 
 if __name__ == "__main__":

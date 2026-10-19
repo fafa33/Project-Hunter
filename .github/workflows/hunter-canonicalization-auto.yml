@@ -5,14 +5,13 @@ name: Hunter Automatic Canonicalization
 # already-authorized local_git_push path on the owner's Mac, so this workflow
 # grants no new GitHub repository-write authority.
 on:
-  pull_request_review:
-    types: [submitted, edited, dismissed]
-  pull_request_review_comment:
-    types: [created, edited, deleted]
-  # GitHub Actions has no pull_request_review_thread trigger. Thread-resolution
-  # state is therefore reconciled on the supported review/comment events below
-  # and by explicit workflow_dispatch catch-up; never declare an unsupported
-  # event here because GitHub rejects the whole workflow before any job starts.
+  # The merged/closed event is the authoritative writer continuation.
+  # workflow_dispatch is the explicit recovery path for an authorized PR.
+  # Review and comment events are intentionally not triggers: bot-authored
+  # events are approval-held and unmerged PRs cannot enter the writer path.
+  # GitHub Actions provides no review-thread-resolution event.
+  pull_request:
+    types: [closed]
   workflow_dispatch:
     inputs:
       pr_number:
@@ -80,7 +79,15 @@ jobs:
         if: steps.engine.outputs.available == 'true'
         env:
           PIP_CONSTRAINT: requirements/ci-constraints.txt
-        run: python -m pip install --only-binary ':all:' -c requirements/ci-constraints.txt .
+        run: |
+          # Canonicalization pushes cross the repository pre-push safety lane.
+          # Provision that lane's tools in the setup-python interpreter instead of
+          # inheriting same-named, non-executable shims from the self-hosted runner.
+          python -m pip install --only-binary ':all:' --no-binary cryptography -c requirements/ci-constraints.txt '.[dev]'
+          python - <<'PYTOOLS' >> "$GITHUB_PATH"
+          import sysconfig
+          print(sysconfig.get_path("scripts"))
+          PYTOOLS
       - name: Checkout exact reviewed PR for regression evidence
         if: steps.engine.outputs.available == 'true'
         uses: actions/checkout@v7
@@ -101,6 +108,8 @@ jobs:
       - name: Propose canonical knowledge when replayable evidence exists
         if: steps.engine.outputs.available == 'true'
         env:
+          # Read-only API access for gh pr view/list and issue evidence; SSH remains the only push channel.
+          GH_TOKEN: ${{ github.token }}
           REPOSITORY: ${{ github.repository }}
           HUNTER_REGRESSION_ROOT: ${{ github.workspace }}/reviewed-pr
         run: |

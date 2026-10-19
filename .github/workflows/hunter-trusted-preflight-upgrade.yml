@@ -32,7 +32,9 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 30
     permissions:
+      actions: read
       contents: read
+      pull-requests: read
 
     steps:
       - name: Checkout trusted controller
@@ -85,7 +87,31 @@ jobs:
           set -euo pipefail
           python scripts/hunter_defect_prevention_preflight.py --validate-candidate candidate
 
+      # Issue #580: when the candidate changes no trusted validation definition
+      # path, the authored exact-head Hunter / Pre-PR Preflight push run is the
+      # same proof this lane exists to produce. Reuse it via the same immutable
+      # identity adjudication candidate admission uses; any evidence failure
+      # falls back to running the full trusted gates below. The token is scoped
+      # to this step only and is consumed by trusted default-branch code, never
+      # by candidate code; the gate-execution step never inherits it.
+      - name: Decide whether the hosted exact-head proof may be reused
+        id: reuse-decision
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+          CANDIDATE_ROOT: ${{ github.workspace }}/candidate
+        run: |
+          set -euo pipefail
+          python scripts/hunter_preflight_reuse_decision.py \
+            --pr "${PR_NUMBER}" \
+            --repository "${GH_REPO}" \
+            --head-sha "${HEAD_SHA}" \
+            --candidate-root "${CANDIDATE_ROOT}"
+
       - name: Execute immutable trusted gate chain against exact candidate
+        if: steps.reuse-decision.outputs.reusable != 'true'
         env:
           GITHUB_TOKEN: ""
           GH_TOKEN: ""

@@ -722,6 +722,7 @@ def _admission(
         ),
     )
     monkeypatch.setattr(core, "read_pr_changed_paths", lambda *_args: (True, changed_paths, None))
+    monkeypatch.setattr(core, "read_unresolved_review_threads", lambda *_args: ((), None))
     monkeypatch.setattr(core, "read_head_preflight_mode", lambda *_args: ("normal", None))
     monkeypatch.setattr(core, "load_ingress_provenance_policy", lambda: (signers, "", None))
     monkeypatch.setattr(core, "load_connector_write_ingress_policy", lambda: connector_policy)
@@ -774,6 +775,7 @@ def _admission(
     # prerequisite with its own regression suite
     # (tests/test_issue_412_prevention_gate.py). Stubbing it keeps this harness
     # on the ingress contract it was written for.
+    monkeypatch.setattr(core, "read_unresolved_review_threads", lambda *_args: ((), None))
     monkeypatch.setattr(core, "verify_pre_ready_hostile_review", lambda *_args: ("success", "reviewed"))
     return core.candidate_admission("fafa33/Project-Hunter", "token", HEAD, 501)
 
@@ -1062,7 +1064,7 @@ def test_active_grant_requires_hosted_proof_for_clone_written_ranges_too(monkeyp
 
 
 def test_clone_capable_range_is_unaffected_while_no_grant_is_active(monkeypatch) -> None:
-    """With the grant inactive, admission stays exactly signature-plus-branch-preflight."""
+    """Even signed clone-origin changes to test definitions need hosted trusted proof."""
     state, description = _admission(
         monkeypatch,
         head_ref="claude/issue-403-x",
@@ -1072,8 +1074,8 @@ def test_clone_capable_range_is_unaffected_while_no_grant_is_active(monkeypatch)
         statuses=[],
     )
 
-    assert state == "success"
-    assert "trusted hosted" not in description
+    assert state == "failure", description
+    assert "trusted preflight upgrade status is missing" in description
 
 
 def test_malformed_connector_grant_blocks_admission(monkeypatch) -> None:

@@ -1614,6 +1614,191 @@ def test_a_freshly_prepared_review_request_bound_to_the_current_candidate_is_val
     assert verdict.ok is True, verdict.reason
 
 
+def _candidate_request(monkeypatch, *, changes: tuple[Any, ...] = CANDIDATE_CHANGES) -> dict[str, Any]:
+    """A request produced by the real ``--request`` writer for THIS candidate."""
+    monkeypatch.setattr(review, "local_changes", lambda *_a, **_k: changes)
+    return review.prepare_request(issue="591", base=BASE, head=HEAD, base_ref="main", judgement=_request_judgement())
+
+
+def _rebind_request_identity(document: dict[str, Any]) -> dict[str, Any]:
+    """Mutate like a real re-authored document: keep the self-identity honest.
+
+    Editing the claims without recomputing the bound identity only proves the
+    identity check fired, not that the review_target itself is validated. A
+    re-authoring writer recomputes it, so the adversarial cases below recompute
+    it too and reach the content comparison.
+    """
+    identifier = review.review_id(document["claims"])
+    document["review_id"] = identifier
+    document["review_request"]["claims_id"] = identifier
+    return document
+
+
+def _verify_candidate_request(document: dict[str, Any]) -> review.ReviewVerdict:
+    return review.verify_review_request(
+        document, base_sha=BASE, changes=CANDIDATE_CHANGES, families=FAMILIES, head_sha=HEAD
+    )
+
+
+def test_ac03_review_request_rejects_a_validly_signed_document_with_no_target(monkeypatch) -> None:
+    """Issue #591 AC-03: an omitted review_target fails closed, not silently.
+
+    The pre-publication request writer runs ``verify_review_request`` on the
+    document it is about to commit, so a request that drops the changed-file
+    binding never reaches publication as a "current" request.
+    """
+    document = _candidate_request(monkeypatch)
+    del document["claims"]["review_target"]
+
+    verdict = _verify_candidate_request(_rebind_request_identity(document))
+
+    assert verdict.ok is False
+    assert verdict.state == "incomplete"
+    assert "canonical claim set" in verdict.reason
+
+
+def test_ac03_review_request_rejects_a_mismatched_target_identity(monkeypatch) -> None:
+    """A target entry whose blob does not match the candidate content is stale."""
+    document = _candidate_request(monkeypatch)
+    document["claims"]["review_target"][0]["blob_sha"] = "f" * 40
+
+    verdict = _verify_candidate_request(_rebind_request_identity(document))
+
+    assert verdict.ok is False
+    assert verdict.state == "stale"
+    assert "different content" in verdict.reason
+
+
+def test_ac03_review_request_rejects_an_extra_unbound_target_entry(monkeypatch) -> None:
+    """An omitted candidate file is as much a mismatch as an extra fabricated one.
+
+    A review that lists a file the candidate never touched (or omits one it did)
+    describes different content and must not be admitted.
+    """
+    document = _candidate_request(monkeypatch)
+    document["claims"]["review_target"].append(
+        {"blob_sha": "e" * 40, "path": "docs/never-touched.md", "previous_path": "", "status": "added"}
+    )
+
+    verdict = _verify_candidate_request(_rebind_request_identity(document))
+
+    assert verdict.ok is False
+    assert verdict.state == "stale"
+
+
+def test_ac03_review_request_rejects_a_mismatched_base(monkeypatch) -> None:
+    """A request authored against a different base is stale for this candidate."""
+    document = _candidate_request(monkeypatch)
+    document["claims"]["base_sha"] = "9" * 40
+
+    verdict = _verify_candidate_request(_rebind_request_identity(document))
+
+    assert verdict.ok is False
+    assert verdict.state == "stale"
+    assert "taken against base" in verdict.reason
+
+
+def test_ac03_review_request_rejects_a_stale_target_digest(monkeypatch) -> None:
+    """A recomputed target that still carries an old digest is stale, not current.
+
+    This is the "formatting-after-receipt" case (AC-11): the digest is derived
+    from the candidate's content, so any post-authoring byte change invalidates
+    it even when the emitted target entries look plausible.
+    """
+    document = _candidate_request(monkeypatch)
+    document["claims"]["review_target_digest"] = "0" * 64
+
+    verdict = _verify_candidate_request(_rebind_request_identity(document))
+
+    assert verdict.ok is False
+    assert verdict.state == "stale"
+    assert "digest" in verdict.reason
+
+
+def test_ac03_review_request_identity_must_bind_its_claims(monkeypatch) -> None:
+    """A request whose claims_id/review_id do not hash its claims is incomplete.
+
+    This is the stale-head binding: a document recorded for an earlier head and
+    then edited without re-binding must not pass as the current request.
+    """
+    document = _candidate_request(monkeypatch)
+    document["review_id"] = "d" * 40
+
+    assert _verify_candidate_request(document).state == "incomplete"
+
+
+def test_ac03_review_request_rejects_malformed_and_incomplete_evidence(monkeypatch) -> None:
+    """Non-object, wrong-schema and claimless evidence all fail closed."""
+    document = _candidate_request(monkeypatch)
+
+    assert (
+        review.verify_review_request(
+            None, base_sha=BASE, changes=CANDIDATE_CHANGES, families=FAMILIES, head_sha=HEAD
+        ).state
+        == "missing"
+    )
+
+    wrong_schema = json.loads(json.dumps(document))
+    wrong_schema["schema"] = "hunter.not-the-schema.v1"
+    assert _verify_candidate_request(wrong_schema).state == "missing"
+
+    no_claims = json.loads(json.dumps(document))
+    no_claims["claims"] = []
+    assert _verify_candidate_request(no_claims).state == "incomplete"
+
+
+def test_ac03_review_request_accepts_the_bound_candidate(monkeypatch) -> None:
+    """The paired positive: the real writer output for this candidate is valid."""
+    verdict = _verify_candidate_request(_candidate_request(monkeypatch))
+
+    assert verdict.ok is True, verdict.reason
+
+
+def test_ac03_pre_push_validator_rejects_a_review_recorded_for_an_ancestor_head(monkeypatch) -> None:
+    """The pre-push validator refuses a review bound to a different exact head.
+
+    ``hunter_pre_push.report_pre_ready_review_state`` calls ``review.verify_local``;
+    a document whose authority records an ancestor head must never legitimise the
+    current candidate.
+    """
+    monkeypatch.setattr(review, "load_families", lambda: (FAMILIES, ""))
+    monkeypatch.setattr(review, "local_changes", lambda _b, _h, **_k: CANDIDATE_CHANGES)
+    monkeypatch.setattr(
+        review, "read_review_document", lambda: _review_document(authority=_authority(head_sha="b" * 40))
+    )
+
+    verdict = review.verify_local(BASE, HEAD)
+
+    assert verdict.ok is False
+    assert verdict.state == "stale"
+    assert "exact head" in verdict.reason
+
+
+def test_ac03_pre_push_validator_rejects_drifted_review_target_content(monkeypatch) -> None:
+    """A review describing different content than the candidate is stale here too."""
+    drifted = (_change("docs/other-file.md", "7" * 40, "added"),)
+    monkeypatch.setattr(review, "load_families", lambda: (FAMILIES, ""))
+    monkeypatch.setattr(review, "local_changes", lambda _b, _h, **_k: CANDIDATE_CHANGES)
+    monkeypatch.setattr(review, "read_review_document", lambda: _review_document(changes=drifted))
+
+    verdict = review.verify_local(BASE, HEAD)
+
+    assert verdict.ok is False
+    assert verdict.state == "stale"
+    assert "different content" in verdict.reason
+
+
+def test_ac03_pre_push_validator_accepts_the_exact_candidate_review(monkeypatch) -> None:
+    """The paired positive: a review bound to this exact content/head is valid."""
+    monkeypatch.setattr(review, "load_families", lambda: (FAMILIES, ""))
+    monkeypatch.setattr(review, "local_changes", lambda _b, _h, **_k: CANDIDATE_CHANGES)
+    monkeypatch.setattr(review, "read_review_document", lambda: _review_document())
+
+    verdict = review.verify_local(BASE, HEAD)
+
+    assert verdict.ok is True, verdict.reason
+
+
 def _fallback_pool(login: str = "fafa33") -> dict[str, Any]:
     return {**_pool(), "last_resort_github_login": login}
 
@@ -1968,3 +2153,85 @@ def test_merge_readiness_existing_blocking_review_finding_still_blocks_without_p
     decision = readiness.evaluate(observation)
     assert decision.state == "failure"
     assert "Changes requested" in decision.description
+
+
+def test_agent_judgement_path_cannot_escape_checkout(tmp_path, monkeypatch):
+    import hunter_pre_ready_review as review
+
+    checkout = tmp_path / "checkout"
+    checkout.mkdir()
+    inside = checkout / "judgement.json"
+    inside.write_text("{}")
+    outside = tmp_path / "secret.json"
+    outside.write_text("{}")
+    monkeypatch.chdir(checkout)
+    assert review._trusted_judgement_path(str(inside)) == inside
+    with pytest.raises(ValueError, match="authorized checkout"):
+        review._trusted_judgement_path(str(outside))
+    (checkout / "symlink.json").symlink_to(outside)
+    with pytest.raises(ValueError, match="authorized checkout"):
+        review._trusted_judgement_path("symlink.json")
+
+
+def test_writer_finalizer_idempotent_and_content_bound(tmp_path, monkeypatch):
+    """A writer must not rewrite unchanged evidence or accept a stale family scope."""
+    from pathlib import Path
+
+    changes = (_change("src/hunter/worker.py"),)
+    monkeypatch.setattr(review, "local_changes", lambda *_args, **_kwargs: changes)
+    monkeypatch.setattr(review, "load_families", lambda *_args, **_kwargs: ([], ""))
+    monkeypatch.setattr(review, "applicable_family_ids", lambda *_args, **_kwargs: ())
+    monkeypatch.setattr(review, "prepare_request", lambda **_kwargs: {"review_id": "id", "claims": {}})
+    monkeypatch.setattr(review, "verify_review_request", lambda *_args, **_kwargs: review.ReviewVerdict("valid", "ok"))
+    kwargs = dict(
+        issue="532",
+        base=BASE,
+        head=HEAD,
+        base_ref="main",
+        cwd=tmp_path,
+        issue_criteria=(),
+        judgement={"defect_families": []},
+    )
+    assert review.finalize_writer_review_request(**kwargs)
+    assert not review.finalize_writer_review_request(**kwargs)
+    kwargs["judgement"] = {"defect_families": [{"family": "unexpected"}]}
+    with pytest.raises(ValueError, match="applicable defect families"):
+        review.finalize_writer_review_request(**kwargs)
+    assert (Path(tmp_path) / review.REVIEW_RELATIVE_PATH).is_file()
+
+
+def test_writer_finalizer_rejects_unverified_issue_criteria(tmp_path):
+    with pytest.raises(ValueError, match="verified Issue criteria"):
+        review.finalize_writer_review_request(
+            issue="532",
+            base=BASE,
+            head=HEAD,
+            base_ref="main",
+            cwd=tmp_path,
+            issue_criteria=("Required acceptance criterion",),
+            judgement={"acceptance_criteria": [], "defect_families": []},
+        )
+
+
+def test_writer_finalizer_rejects_symlink_destination(tmp_path, monkeypatch):
+    outside = tmp_path / "outside.json"
+    outside.write_text("unchanged")
+    path = tmp_path / review.REVIEW_RELATIVE_PATH
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.symlink_to(outside)
+    monkeypatch.setattr(review, "local_changes", lambda *_args, **_kwargs: ())
+    monkeypatch.setattr(review, "load_families", lambda *_args, **_kwargs: ([], ""))
+    monkeypatch.setattr(review, "applicable_family_ids", lambda *_args, **_kwargs: ())
+    monkeypatch.setattr(review, "prepare_request", lambda **_kwargs: {"review_id": "id"})
+    monkeypatch.setattr(review, "verify_review_request", lambda *_args, **_kwargs: review.ReviewVerdict("valid", "ok"))
+    with pytest.raises(ValueError, match="symlink"):
+        review.finalize_writer_review_request(
+            issue="532",
+            base=BASE,
+            head=HEAD,
+            base_ref="main",
+            cwd=tmp_path,
+            issue_criteria=(),
+            judgement={"defect_families": []},
+        )
+    assert outside.read_text() == "unchanged"
