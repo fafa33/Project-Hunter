@@ -2,82 +2,46 @@
   "claims": {
     "acceptance_criteria": [
       {
-        "criterion": "parent #588; depends on m1 #589 and draft pr #590",
-        "evidence": "Issue #591 body and PR #592 body declare Parent #588, M1 #589, Draft PR #590 (GitHub API, 2026-10-18).",
-        "id": "AC-01",
+        "criterion": "a regression fixture demonstrates that a defect class found and fixed in an earlier pr is rejected when intentionally reintroduced in a later pr",
+        "evidence": "Not delivered by this bootstrap PR. PR #553 changes exactly docs/CODE_WRITE_POLICY.json (adds writer_identity_binding.signing_key_bindings as trusted data) and adds tests/test_signing_key_binding_bootstrap.py (4 tests pinning that data). No executable code changes. The cross-PR defect-reintroduction regression fixture is out of this change set.",
+        "id": "AC-1",
+        "verdict": "not-applicable"
+      },
+      {
+        "criterion": "a large pr cannot reach ready until the full hostile review pass is complete and all findings are batched and closed",
+        "evidence": "Not delivered by this bootstrap PR; it changes no ready/review gating code. PR #553 changes exactly docs/CODE_WRITE_POLICY.json (adds writer_identity_binding.signing_key_bindings as trusted data) and adds tests/test_signing_key_binding_bootstrap.py (4 tests pinning that data). No executable code changes.",
+        "id": "AC-2",
+        "verdict": "not-applicable"
+      },
+      {
+        "criterion": "exact-head evidence shows no stale receipt and no unresolved applicable recurring-defect rule",
+        "evidence": "Not delivered by this bootstrap PR; it changes no receipt or exact-head evidence code. PR #553 changes exactly docs/CODE_WRITE_POLICY.json (adds writer_identity_binding.signing_key_bindings as trusted data) and adds tests/test_signing_key_binding_bootstrap.py (4 tests pinning that data). No executable code changes.",
+        "id": "AC-3",
+        "verdict": "not-applicable"
+      },
+      {
+        "criterion": "an authorized coding agent can produce a multi-commit pr without manual rewind/force-push solely to satisfy per-commit actor evidence",
+        "evidence": "Not delivered by this bootstrap PR; it changes no per-commit actor evidence code. PR #553 changes exactly docs/CODE_WRITE_POLICY.json (adds writer_identity_binding.signing_key_bindings as trusted data) and adds tests/test_signing_key_binding_bootstrap.py (4 tests pinning that data). No executable code changes.",
+        "id": "AC-4",
+        "verdict": "not-applicable"
+      },
+      {
+        "criterion": "candidate admission rejects writer/committer mismatch before remote push and reports the exact mismatched provenance claim",
+        "evidence": "Header-level writer/committer mismatch rejection before push already exists on the trusted base (scripts/hunter_writer_provenance.py evaluate_commit/evaluate_range, run by .githooks/pre-push) and is unchanged here. This PR establishes, on the trusted default branch and outside the candidate it will judge, the exact root-of-trust data the key-level half needs: signing_key_bindings binds claude -> SHA256:32dP45eSMmVSt/G/CGvcxl/P+MO3Nwj9xeTh/GSA2wc and fafa33 -> SHA256:Yee9tbonym7Jvs2UbjpudVIRkv3aF1tcFlK240pXuBo, each with recorded trusted evidence, require_key_bound_to_resolved_writer=true, and explicit fail-closed and unsigned-commit semantics. tests/test_signing_key_binding_bootstrap.py pins the exact bindings (any self-binding, replacement or extra key fails), requires one key set per bound login with full SHA-256 fingerprints and no key shared between writers, and requires evidence for each key.",
+        "id": "AC-5",
         "verdict": "satisfied"
       },
       {
-        "criterion": "build focused, fail-closed pre-push validation that runs before publication",
-        "evidence": ".githooks/pre-push -> scripts/hunter_pre_push.py enforce_pre_push runs PUSH_SAFETY_GATES fail-closed (exit non-zero on any gate failure); push lane PASS at bc7846fcf4: Architecture Index, Artifact, Defect Prevention (12/12 records, 7 families), Ruff, Black, Mypy.",
-        "id": "AC-02",
+        "criterion": "commit attribution to an implementation agent can coexist with the authorization-bound writer identity without weakening auditability",
+        "evidence": "Attribution remains trailer-only (attribution_semantics unchanged); identity is still read only from author/committer headers. The new bindings give each writer exactly its own key (claude's key is not bound to fafa33 and vice versa; test_every_bound_writer_has_exactly_its_own_explicit_key), so agent attribution coexists with the bound writer identity, and auditability is strengthened because a commit's real signing key can be tied to the writer it claims.",
+        "id": "AC-6",
         "verdict": "satisfied"
       },
       {
-        "criterion": "it detects stale/omitted changed-file review_target evidence",
-        "evidence": "This candidate adds the adversarial regressions tests/test_exact_head_review_authority.py::test_ac03_review_request_rejects_a_validly_signed_document_with_no_target, ::test_ac03_review_request_rejects_a_mismatched_target_identity, ::test_ac03_review_request_rejects_a_mismatched_base, ::test_ac03_review_request_rejects_a_stale_target_digest, ::test_ac03_pre_push_validator_rejects_a_review_recorded_for_an_ancestor_head, ::test_ac03_pre_push_validator_rejects_drifted_review_target_content; they exercise the production request validator (hunter_pre_ready_review.verify_review_request) and the pre-push validator it shares, and fail closed on omitted, stale, mismatched and digest-drifted review_target evidence.",
-        "id": "AC-03",
-        "verdict": "satisfied"
-      },
-      {
-        "criterion": "it detects workflow trigger contract regressions",
-        "evidence": "Workflow trigger contract mutation/contract tests: tests/test_hunter_review_orchestrator.py workflow-contract suite and tests/test_merge_readiness_refresh_contract.py (165+ tests green at bc7846fcf4), plus trigger assertions in tests/test_hunter_governance_revision.py.",
-        "id": "AC-04",
-        "verdict": "satisfied"
-      },
-      {
-        "criterion": "it detects spm/dpm selector failures",
-        "evidence": "This candidate makes the Defect Prevention Guard reject any selector that does not resolve: scripts/hunter_defect_prevention_preflight.py validates every declared selector; tests/test_hunter_defect_prevention_preflight.py::test_defect_selector_must_point_at_an_existing_test, ::test_defect_selector_symbol_must_exist_in_the_module, ::test_defect_selector_accepts_the_explicit_unverified_placeholder.",
-        "id": "AC-05",
-        "verdict": "satisfied"
-      },
-      {
-        "criterion": "evidence generation must occur after final content commit; no auto-generated stale proof",
-        "evidence": "scripts/hunter_pre_push.py _require_clean_tree + _require_exact_head run against the committed HEAD before any gate; Artifact/Defect Prevention Guards evaluate committed git state, so proof cannot be generated from an uncommitted or earlier state.",
-        "id": "AC-06",
-        "verdict": "satisfied"
-      },
-      {
-        "criterion": "preserve verified signing and trusted hosted exact-head proof; no governance bypass",
-        "evidence": "Commits f55a660 and bc7846fcf4 carry verified ED25519 git signatures (Farhad5778); hosted Pre-PR Preflight, Trusted Preflight and Quality Gates evidence is unchanged by this candidate (base..head touches no push-safety gate or hosted proof workflow); all six gates green; no check skipped or weakened.",
-        "id": "AC-07",
-        "verdict": "satisfied"
-      },
-      {
-        "criterion": "adversarial tests cover missing/extra/renamed files",
-        "evidence": "Content binding fails closed on missing/extra entries (foreign-request stale verdict above); rename transitions are covered by tests/test_connector_admission_channel.py::test_rename_cannot_hide_a_source_transition_inside_the_review_path and ::test_rename_plus_modify_requires_the_exact_destination_blob.",
-        "id": "AC-08",
-        "verdict": "satisfied"
-      },
-      {
-        "criterion": "adversarial tests cover stale sha",
-        "evidence": "tests/test_exact_head_review_authority.py::test_an_ancestor_recorded_head_is_stale_not_valid, ::test_an_exact_head_comment_does_not_rescue_a_stale_artifact; tests/test_connector_write_ingress.py::test_stale_base_commit_is_rejected.",
-        "id": "AC-09",
-        "verdict": "satisfied"
-      },
-      {
-        "criterion": "adversarial tests cover bot event approval holds",
-        "evidence": "Privileged reconcile declares no pull_request_review or pull_request_review_comment triggers, so approval-held bot events cannot wake it; the bounded 5-minute cron is the review-state path: tests/test_hunter_governance_revision.py::test_trusted_governance_review_changes_have_bounded_approval_free_reconciliation.",
-        "id": "AC-10",
-        "verdict": "satisfied"
-      },
-      {
-        "criterion": "adversarial tests cover formatting-after-receipt",
-        "evidence": "Any post-receipt byte change (including a formatting pass) changes the review_target digest and the exact head; fail-closed proven by the foreign-request stale verdict and tests/test_exact_head_review_authority.py::test_an_exact_head_comment_does_not_rescue_a_stale_artifact.",
-        "id": "AC-11",
-        "verdict": "satisfied"
-      },
-      {
-        "criterion": "use dedicated branch/pr and signed commits",
-        "evidence": "Branch issue-591-fast-merge-m2, PR #592; commits f55a660 and bc7846fcf4 verified ED25519-signed by Farhad5778.",
-        "id": "AC-12",
-        "verdict": "satisfied"
-      },
-      {
-        "criterion": "do not merge without owner approval",
-        "evidence": "PR #592 is state OPEN and unmerged (gh, 2026-10-18); no merge or Ready transition performed; owner approval required by AGENTS.md and not claimed.",
-        "id": "AC-13",
-        "verdict": "satisfied"
+        "criterion": "no auto-merge; separate owner merge approval remains mandatory",
+        "evidence": "Not affected: no merge, auto-merge, or approval logic is touched; owner merge approval remains mandatory. PR #553 changes exactly docs/CODE_WRITE_POLICY.json (adds writer_identity_binding.signing_key_bindings as trusted data) and adds tests/test_signing_key_binding_bootstrap.py (4 tests pinning that data). No executable code changes.",
+        "id": "AC-7",
+        "verdict": "not-applicable"
       }
     ],
     "adversarial_dimensions": [
@@ -94,409 +58,122 @@
       "transaction-snapshot-consistency"
     ],
     "base_ref": "main",
-    "base_sha": "b2674c5c94578fc4bd50940c722dcd8032495c12",
+    "base_sha": "207475240223027ce5875c8cdbc30f4f288baafb",
     "defect_families": [
       {
-        "evidence": "AUTHOR CLAIM ONLY: reviewed against b2674c5..bc7846fcf4 (24 changed paths); independent reviewer verification required.",
-        "family": "DFF-001",
-        "outcome": "clear"
-      },
-      {
-        "evidence": "AUTHOR CLAIM ONLY: reviewed against b2674c5..bc7846fcf4 (24 changed paths); independent reviewer verification required.",
-        "family": "DFF-002",
-        "outcome": "clear"
-      },
-      {
-        "evidence": "AUTHOR CLAIM ONLY: reviewed against b2674c5..bc7846fcf4 (24 changed paths); independent reviewer verification required.",
-        "family": "DFF-003",
-        "outcome": "clear"
-      },
-      {
-        "evidence": "AUTHOR CLAIM ONLY: reviewed against b2674c5..bc7846fcf4 (24 changed paths); independent reviewer verification required.",
-        "family": "DFF-004",
-        "outcome": "clear"
-      },
-      {
-        "evidence": "AUTHOR CLAIM ONLY: reviewed against b2674c5..bc7846fcf4 (24 changed paths); independent reviewer verification required.",
-        "family": "DFF-005",
-        "outcome": "clear"
-      },
-      {
-        "evidence": "AUTHOR CLAIM ONLY: reviewed against b2674c5..bc7846fcf4 (24 changed paths); independent reviewer verification required.",
-        "family": "DFF-006",
-        "outcome": "clear"
-      },
-      {
-        "evidence": "AUTHOR CLAIM ONLY: reviewed against b2674c5..bc7846fcf4 (24 changed paths); independent reviewer verification required.",
+        "evidence": "No authorization path or replayable token is introduced; the change is static policy data. A binding cannot be replayed onto another writer because each fingerprint is bound to exactly one login, and the test forbids sharing a key between writers.",
         "family": "DFF-007",
         "outcome": "clear"
       },
       {
-        "evidence": "AUTHOR CLAIM ONLY: reviewed against b2674c5..bc7846fcf4 (24 changed paths); independent reviewer verification required.",
+        "evidence": "History-forgery resistance: bindings are evidenced by trusted-main %GK fingerprints and the GitHub-registered owner key, not by candidate-supplied claims. The exact-binding test makes any later edit to the root-of-trust data a deliberate, reviewed test change.",
         "family": "DFF-008",
         "outcome": "clear"
       },
       {
-        "evidence": "AUTHOR CLAIM ONLY: reviewed against b2674c5..bc7846fcf4 (24 changed paths); independent reviewer verification required.",
+        "evidence": "No connector provenance, receipt or evidence-lifecycle code or artifact is changed.",
         "family": "DFF-009",
         "outcome": "clear"
       },
       {
-        "evidence": "AUTHOR CLAIM ONLY: reviewed against b2674c5..bc7846fcf4 (24 changed paths); independent reviewer verification required.",
+        "evidence": "Directly addressed: the authorization-bound writer identity gains a signing-key binding so a commit that claims one writer while carrying another writer's key can be refused. Bootstrapped on trusted main by an owner-merged change rather than self-asserted by the candidate it judges; pinned by tests/test_signing_key_binding_bootstrap.py.",
         "family": "DFF-010",
         "outcome": "clear"
       },
       {
-        "evidence": "AUTHOR CLAIM ONLY: reviewed against b2674c5..bc7846fcf4 (24 changed paths); independent reviewer verification required.",
+        "evidence": "Single bootstrap commit 623b695 on base 2074752; no intermediate commit evidence is stranded.",
         "family": "DFF-011",
         "outcome": "clear"
       },
       {
-        "evidence": "AUTHOR CLAIM ONLY: reviewed against b2674c5..bc7846fcf4 (24 changed paths); independent reviewer verification required.",
+        "evidence": "No receipt is produced or published by this change.",
         "family": "DFF-012",
         "outcome": "clear"
       },
       {
-        "evidence": "AUTHOR CLAIM ONLY: reviewed against b2674c5..bc7846fcf4 (24 changed paths); independent reviewer verification required.",
+        "evidence": "This document is the exact-head hostile review request for this candidate's own content (review_target binds both changed blobs); it replaces an inherited request that described different content.",
         "family": "DFF-013",
         "outcome": "clear"
       },
       {
-        "evidence": "AUTHOR CLAIM ONLY: reviewed against b2674c5..bc7846fcf4 (24 changed paths); independent reviewer verification required.",
+        "evidence": "No prerequisite/pending reporting logic is changed.",
         "family": "DFF-014",
         "outcome": "clear"
       },
       {
-        "evidence": "AUTHOR CLAIM ONLY: reviewed against b2674c5..bc7846fcf4 (24 changed paths); independent reviewer verification required.",
+        "evidence": "Prevention state is not overclaimed: the PR records the bindings as data and states in binding_evidence/why what each proves; it does not claim the key-level push refusal is enforced on this head (that consumer is not in this change set; see finding F-1).",
         "family": "DFF-015",
         "outcome": "clear"
       },
       {
-        "evidence": "AUTHOR CLAIM ONLY: reviewed against b2674c5..bc7846fcf4 (24 changed paths); independent reviewer verification required.",
-        "family": "DFF-016",
-        "outcome": "clear"
-      },
-      {
-        "evidence": "AUTHOR CLAIM ONLY: reviewed against b2674c5..bc7846fcf4 (24 changed paths); independent reviewer verification required.",
-        "family": "DFF-017",
-        "outcome": "clear"
-      },
-      {
-        "evidence": "AUTHOR CLAIM ONLY: reviewed against b2674c5..bc7846fcf4 (24 changed paths); independent reviewer verification required.",
-        "family": "DFF-018",
-        "outcome": "clear"
-      },
-      {
-        "evidence": "AUTHOR CLAIM ONLY: reviewed against b2674c5..bc7846fcf4 (24 changed paths); independent reviewer verification required.",
-        "family": "DFF-019",
-        "outcome": "clear"
-      },
-      {
-        "evidence": "AUTHOR CLAIM ONLY: reviewed against b2674c5..bc7846fcf4 (24 changed paths); independent reviewer verification required.",
-        "family": "DFF-020",
-        "outcome": "clear"
-      },
-      {
-        "evidence": "AUTHOR CLAIM ONLY: reviewed against b2674c5..bc7846fcf4 (24 changed paths); independent reviewer verification required.",
-        "family": "DFF-021",
-        "outcome": "clear"
-      },
-      {
-        "evidence": "AUTHOR CLAIM ONLY: reviewed against b2674c5..bc7846fcf4 (24 changed paths); independent reviewer verification required.",
+        "evidence": "No merge-readiness or review-authority code is changed; this request carries no authority and is not review completion.",
         "family": "DFF-022",
         "outcome": "clear"
       },
       {
-        "evidence": "AUTHOR CLAIM ONLY: reviewed against b2674c5..bc7846fcf4 (24 changed paths); independent reviewer verification required.",
-        "family": "DFF-023",
-        "outcome": "clear"
-      },
-      {
-        "evidence": "AUTHOR CLAIM ONLY: reviewed against b2674c5..bc7846fcf4 (24 changed paths); independent reviewer verification required.",
+        "evidence": "No review-cycle or remediation-transition logic is changed.",
         "family": "DFF-024",
         "outcome": "clear"
       },
       {
-        "evidence": "AUTHOR CLAIM ONLY: reviewed against b2674c5..bc7846fcf4 (24 changed paths); independent reviewer verification required.",
-        "family": "DFF-025",
-        "outcome": "clear"
-      },
-      {
-        "evidence": "AUTHOR CLAIM ONLY: reviewed against b2674c5..bc7846fcf4 (24 changed paths); independent reviewer verification required.",
+        "evidence": "No reviewer-availability or merge-authority logic is changed.",
         "family": "DFF-026",
         "outcome": "clear"
       },
       {
-        "evidence": "AUTHOR CLAIM ONLY: reviewed against b2674c5..bc7846fcf4 (24 changed paths); independent reviewer verification required.",
-        "family": "DFF-027",
-        "outcome": "clear"
-      },
-      {
-        "evidence": "AUTHOR CLAIM ONLY: reviewed against b2674c5..bc7846fcf4 (24 changed paths); independent reviewer verification required.",
-        "family": "DFF-028",
-        "outcome": "clear"
-      },
-      {
-        "evidence": "AUTHOR CLAIM ONLY: reviewed against b2674c5..bc7846fcf4 (24 changed paths); independent reviewer verification required.",
+        "evidence": "Canonical preflight is unchanged and still governs this candidate at the exact head; the new tests are deterministic and offline.",
         "family": "DFF-029",
         "outcome": "clear"
       },
       {
-        "evidence": "AUTHOR CLAIM ONLY: reviewed against b2674c5..bc7846fcf4 (24 changed paths); independent reviewer verification required.",
+        "evidence": "docs/CODE_WRITE_POLICY.json remains valid JSON loadable at its tracked path; the tests load it from the repository-relative path ROOT/docs/CODE_WRITE_POLICY.json.",
         "family": "DFF-033",
         "outcome": "clear"
       },
       {
-        "evidence": "AUTHOR CLAIM ONLY: reviewed against b2674c5..bc7846fcf4 (24 changed paths); independent reviewer verification required.",
+        "evidence": "The new tests assert only repository content; they need no network, keyring, GitHub API, or signing key, so no external precondition is asserted inside the deterministic lane.",
         "family": "DFF-035",
         "outcome": "clear"
       },
       {
-        "evidence": "AUTHOR CLAIM ONLY: reviewed against b2674c5..bc7846fcf4 (24 changed paths); independent reviewer verification required.",
-        "family": "DFF-036",
-        "outcome": "clear"
-      },
-      {
-        "evidence": "AUTHOR CLAIM ONLY: governance review v2 emits structured ReviewVerdict via verify_review_request/verify_claims; mandatory gates read structured fields, not prose tokens. Reviewed against b2674c5..503bbd8 (26 changed paths); independent reviewer verification required.",
-        "family": "DFF-037",
-        "outcome": "clear"
-      },
-      {
-        "evidence": "AUTHOR CLAIM ONLY: reviewed against b2674c5..bc7846fcf4 (24 changed paths); independent reviewer verification required.",
+        "evidence": "No governance capability is made best-effort; the declared fail_closed semantics enumerate every malformed/missing case as a push block.",
         "family": "DFF-038",
         "outcome": "clear"
       },
       {
-        "evidence": "REGRESSION TESTS: tests/test_full_history_defect_scan.py::test_auth_verification_uses_global_rate_limit_endpoint, ::test_global_seam_addresses_global_url_through_governed_transport, ::test_repository_scoped_seam_does_not_silently_absorb_global_paths, ::test_global_seam_is_read_only_and_allowlisted, ::test_global_seam_preserves_transient_retry_then_exhaustion, ::test_global_seam_keeps_permanent_status_unretried. All pass. Reviewed against b2674c5..503bbd8 (26 changed paths).",
-        "family": "DFF-039",
-        "outcome": "clear"
-      },
-      {
-        "evidence": "AUTHOR CLAIM ONLY: reviewed against b2674c5..bc7846fcf4 (24 changed paths); independent reviewer verification required.",
-        "family": "DFF-040",
-        "outcome": "clear"
-      },
-      {
-        "evidence": "AUTHOR CLAIM ONLY: reviewed against b2674c5..bc7846fcf4 (24 changed paths); independent reviewer verification required.",
-        "family": "DFF-042",
-        "outcome": "clear"
-      },
-      {
-        "evidence": "AUTHOR CLAIM ONLY: reviewed against b2674c5..bc7846fcf4 (24 changed paths); independent reviewer verification required.",
+        "evidence": "No reviewer-chain timeout or budget is changed.",
         "family": "DFF-043",
-        "outcome": "clear"
-      },
-      {
-        "evidence": "AUTHOR CLAIM ONLY: reviewed against b2674c5..bc7846fcf4 (24 changed paths); independent reviewer verification required.",
-        "family": "DFF-044",
-        "outcome": "clear"
-      },
-      {
-        "evidence": "AUTHOR CLAIM ONLY: reviewed against b2674c5..bc7846fcf4 (24 changed paths); independent reviewer verification required.",
-        "family": "DFF-045",
-        "outcome": "clear"
-      },
-      {
-        "evidence": "AUTHOR CLAIM ONLY: reviewed against b2674c5..bc7846fcf4 (24 changed paths); independent reviewer verification required.",
-        "family": "DFF-046",
-        "outcome": "clear"
-      },
-      {
-        "evidence": "AUTHOR CLAIM ONLY: reviewed against b2674c5..bc7846fcf4 (24 changed paths); independent reviewer verification required.",
-        "family": "DFF-047",
-        "outcome": "clear"
-      },
-      {
-        "evidence": "AUTHOR CLAIM ONLY: reviewed against b2674c5..bc7846fcf4 (24 changed paths); independent reviewer verification required.",
-        "family": "DFF-049",
-        "outcome": "clear"
-      },
-      {
-        "evidence": "AUTHOR CLAIM ONLY: reviewed against b2674c5..bc7846fcf4 (24 changed paths); independent reviewer verification required.",
-        "family": "DFF-050",
-        "outcome": "clear"
-      },
-      {
-        "evidence": "AUTHOR CLAIM ONLY: reviewed against b2674c5..bc7846fcf4 (24 changed paths); independent reviewer verification required.",
-        "family": "DFF-052",
-        "outcome": "clear"
-      },
-      {
-        "evidence": "AUTHOR CLAIM ONLY: reviewed against b2674c5..bc7846fcf4 (24 changed paths); independent reviewer verification required.",
-        "family": "DFF-053",
-        "outcome": "clear"
-      },
-      {
-        "evidence": "AUTHOR CLAIM ONLY: reviewed against b2674c5..bc7846fcf4 (24 changed paths); independent reviewer verification required.",
-        "family": "DFF-054",
         "outcome": "clear"
       }
     ],
-    "findings": [],
-    "issue": "591",
+    "findings": [
+      {
+        "evidence": "On this head no executable code reads writer_identity_binding.signing_key_bindings, so the bindings are inert data until the consumer that enforces key-to-writer binding at the push boundary lands (PR #538). This is the intended bootstrap order (trusted data first, on main, by an owner-merged change), not a defect in this change set.",
+        "id": "F-1",
+        "resolution": "unresolved",
+        "severity": "non-blocking"
+      }
+    ],
+    "issue": "412",
     "review_target": [
       {
-        "blob_sha": "06049fe616493823679a8fbcf2725762e5ad45fa",
-        "path": "docs/PR592_COPILOT_FINDING_LEDGER.json",
+        "blob_sha": "2ab3b02563a25d6a8bd7fa1f2c0e73d18502f140",
+        "path": "tests/test_signing_key_binding_bootstrap.py",
         "previous_path": "",
         "status": "added"
       },
       {
-        "blob_sha": "162a725886f48d1bbb7b93de6805d6f8492f68b9",
-        "path": "tests/test_merge_readiness_refresh_contract.py",
-        "previous_path": "",
-        "status": "added"
-      },
-      {
-        "blob_sha": "7399b84d657a9793e08d2eecc42945b71f564179",
-        "path": ".github/workflows/hunter-governance-reconcile.yml",
-        "previous_path": "",
-        "status": "modified"
-      },
-      {
-        "blob_sha": "3966765d60712f1661ef5bf8dedfbbc4e125ec1c",
-        "path": ".github/workflows/hunter-governance-review.yml",
-        "previous_path": "",
-        "status": "modified"
-      },
-      {
-        "blob_sha": "7617b9d6fc1b3579122dcac451d362d5cfff4047",
-        "path": ".github/workflows/hunter-issue-agent-issuer-deploy.yml",
-        "previous_path": "",
-        "status": "modified"
-      },
-      {
-        "blob_sha": "e6d308fb3612cb1d46bd75b234f96c9f20fb18da",
-        "path": ".github/workflows/hunter-issue-agent-reconcile.yml",
-        "previous_path": "",
-        "status": "modified"
-      },
-      {
-        "blob_sha": "579f1b4e2d6eb041f81ed75680022a5589354ee4",
-        "path": ".github/workflows/hunter-merge-readiness.yml",
-        "previous_path": "",
-        "status": "modified"
-      },
-      {
-        "blob_sha": "50b92e43fb55b6647e16fe9d1b7230774de47ca2",
-        "path": "build_backend/project_hunter_build.py",
-        "previous_path": "",
-        "status": "modified"
-      },
-      {
-        "blob_sha": "92c4dfbfd06ba2870e7e437e9351127446bd3642",
-        "path": "configs/governance_cutover_target.json",
-        "previous_path": "",
-        "status": "modified"
-      },
-      {
-        "blob_sha": "1dbe17279c1b947b355ae540c73abbae07a921a1",
+        "blob_sha": "c840932e104fd465040d14adb84e522f962eb993",
         "path": "docs/CODE_WRITE_POLICY.json",
         "previous_path": "",
         "status": "modified"
-      },
-      {
-        "blob_sha": "8b47386a50c3f621991857b9d5638297435ede27",
-        "path": "docs/DEFECT_PREVENTION_LIFECYCLE.json",
-        "previous_path": "",
-        "status": "modified"
-      },
-      {
-        "blob_sha": "e989bfee31ada01a25184f79d19d3403a1fcfc94",
-        "path": "docs/DEFECT_REGISTRY.json",
-        "previous_path": "",
-        "status": "modified"
-      },
-      {
-        "blob_sha": "6d523611643f9f1a781d109f8d8b2a5a18441132",
-        "path": "docs/MERGE_READINESS_GATE.md",
-        "previous_path": "",
-        "status": "modified"
-      },
-      {
-        "blob_sha": "d94206d7a1109b059b709769bf33e6b6f7b8b68a",
-        "path": "pyproject.toml",
-        "previous_path": "",
-        "status": "modified"
-      },
-      {
-        "blob_sha": "aef00edb9888207a71a2d252223a18213889bd2e",
-        "path": "scripts/hunter_defect_prevention_preflight.py",
-        "previous_path": "",
-        "status": "modified"
-      },
-      {
-        "blob_sha": "fec917b394c128507d9ddc5411788969c23092fb",
-        "path": "scripts/hunter_governance_review_v2.py",
-        "previous_path": "",
-        "status": "modified"
-      },
-      {
-        "blob_sha": "441e291f4b44fba6bdbca120f13fa533bc84dce3",
-        "path": "scripts/hunter_issue_agent_lifecycle.py",
-        "previous_path": "",
-        "status": "modified"
-      },
-      {
-        "blob_sha": "686b388898b053ea32b86cb9f354a4fd6a476ad4",
-        "path": "scripts/hunter_review_orchestrator.py",
-        "previous_path": "",
-        "status": "modified"
-      },
-      {
-        "blob_sha": "a556cb9167cb5aa10251f8cff5059ae2ca09cab7",
-        "path": "src/hunter/automation/issue_agent_replacement_executor.py",
-        "previous_path": "",
-        "status": "modified"
-      },
-      {
-        "blob_sha": "4b3159beef677e944afea4235f3011acd6be4f2c",
-        "path": "src/hunter/evidence_intelligence/source_handling_persistence.py",
-        "previous_path": "",
-        "status": "modified"
-      },
-      {
-        "blob_sha": "44aa9413f35c3311ec8f2d249e0478da1cb1ca96",
-        "path": "tests/test_exact_head_review_authority.py",
-        "previous_path": "",
-        "status": "modified"
-      },
-      {
-        "blob_sha": "2d66227d7b6c8142b6ce2e37f7642884fbb504b7",
-        "path": "tests/test_hunter_defect_prevention_preflight.py",
-        "previous_path": "",
-        "status": "modified"
-      },
-      {
-        "blob_sha": "86409b61e940a0581da8dc605420ab0438710338",
-        "path": "tests/test_hunter_governance_review_v2.py",
-        "previous_path": "",
-        "status": "modified"
-      },
-      {
-        "blob_sha": "745bdf2303cf01cd4757759ba8293a0d2349c62e",
-        "path": "tests/test_hunter_review_orchestrator.py",
-        "previous_path": "",
-        "status": "modified"
-      },
-      {
-        "blob_sha": "fc2c4497b59f9ab0c8221135c542fd1f5fb8abae",
-        "path": "tests/test_issue_agent_workflows.py",
-        "previous_path": "",
-        "status": "modified"
-      },
-      {
-        "blob_sha": "3a58b9206fdef1d6d014d9815d38d4e696017454",
-        "path": "tests/test_source_handling_production_runtime.py",
-        "previous_path": "",
-        "status": "modified"
       }
     ],
-    "review_target_digest": "18c16445dfe91912433a2fe0e2eb56d4997d0310f2321e8664c620862ad962a3"
+    "review_target_digest": "ea9ad9e07986d146ffeefeb9b44f52975ff76def441b57cc5499c2975dfcb216"
   },
-  "review_id": "e19f9e2dc3a29e686aa7f073d6af719454c30b32b726362fbd495e7d8f3d4fa1",
+  "review_id": "cdb7c3c1c3e62b8c33aef23cd5f5228f626f33fef54293972ae21700324d4b78",
   "review_request": {
-    "claims_id": "e19f9e2dc3a29e686aa7f073d6af719454c30b32b726362fbd495e7d8f3d4fa1",
+    "claims_id": "cdb7c3c1c3e62b8c33aef23cd5f5228f626f33fef54293972ae21700324d4b78",
     "schema": "hunter.review-request.v1"
   },
   "schema": "hunter.pre-ready-hostile-review.v1"
