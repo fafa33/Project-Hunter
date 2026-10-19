@@ -5,7 +5,8 @@
   "full_repository_suite_semantics": {
     "never": "This stage must not execute the full repository test suite. Its proof is either cheaper than the suite or is owned by another stage.",
     "always": "This stage executes the full repository test suite against the exact candidate content on every candidate. Exactly one stage may declare this: it is the authoritative full exact-head proof.",
-    "only-when-content-identity-differs": "This stage executes the full repository test suite only when the content it validates is not the content an authoritative proof already covers. Identical content is never re-validated."
+    "only-when-content-identity-differs": "This stage executes the full repository test suite only when the content it validates is not the content an authoritative proof already covers. Identical content is never re-validated.",
+    "only-when-trusted-definition-changes": "This stage executes the full repository test suite only when the candidate changes a trusted validation-definition path that the hosted exact-head proof cannot self-attest. A candidate changing none of those paths reuses the authoritative hosted proof for the same immutable head."
   },
   "reuse_semantics": {
     "identity": "Reuse is keyed to immutable content identity (a Git tree object), the validation-definition identity, and the executing toolchain identity. Mutable notions such as a run number or 'latest green' are never reuse authority.",
@@ -37,6 +38,14 @@
       "proof": "The complete canonical normal preflight -- Architecture Index Guard, Artifact Guard, Defect Prevention Guard, Ruff, Black, Mypy and Pytest -- executed against the exact pushed branch head.",
       "full_repository_suite": "always",
       "must_not": "Be replaced by any locally asserted proof. The run record is read from the Actions API by immutable head SHA, so no writer on any channel can mint it."
+    },
+    {
+      "id": "trusted-preflight-upgrade-lane",
+      "owner": "Hunter / Trusted Preflight Upgrade (.github/workflows/hunter-trusted-preflight-upgrade.yml)",
+      "boundary": "hosted-gate",
+      "proof": "That a candidate may change a trusted validation-definition path without self-authorizing.\nThe candidate gate structure is always checked by trusted default-branch code. When the candidate changes no trusted validation-definition path, the trusted lane reuses the authoritative hosted exact-head proof for the same immutable head; when it does, the full trusted gate chain runs against the exact candidate.",
+      "full_repository_suite": "only-when-trusted-definition-changes",
+      "must_not": "Accept a candidate-asserted proof, reuse a proof for a candidate that changed a trusted validation-definition path, or skip the trusted candidate gate-structure checks. Every evidence failure runs the full trusted gates."
     },
     {
       "id": "candidate-admission",

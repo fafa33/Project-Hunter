@@ -6,7 +6,7 @@
 
 - Reviewed artifact: `docs/architecture-records/ADPR-0012-source-handling-design-implementation-contract.md`
 - Reviewed revision: `8e30a77aa19f42ffd3679042867068f40d96946c`
-- Repository evidence baseline: `8e30a77aa19f42ffd3679042867068f40d96946c`
+- Repository evidence baseline: `4817b9e0d1d156645acc62cf9de972861d9f8ea9`
 - Audit target: PR #394 (the pull request that prepared ADPR-0012)
 - Audit type: `FULL`
 - Auditor: `Claude Code independent architecture audit agent`

@@ -27,6 +27,7 @@ import socket
 import subprocess
 import threading
 import time
+import urllib.error
 import urllib.request
 from dataclasses import replace
 from datetime import UTC, datetime
@@ -783,18 +784,27 @@ def test_railway_single_public_port_reaches_both_isolated_authorities(
             names = {entry.split(b"=", 1)[0] for entry in environ_path.read_bytes().split(b"\0") if entry}
             assert bootstrap.SIGNING_KEY_ENV.encode() not in names
 
-        # Environment proxies are disabled so the request reaches the stand-in edge.
-        opener = urllib.request.build_opener(
-            urllib.request.ProxyHandler({}), trigger._RejectRedirects, _PublicDomainToIngress(ports.public)
-        )
-        monkeypatch.setattr(trigger, "_OPENER", opener)
+        # Environment proxies are disabled so the request reaches the stand-in edge. The trigger's own
+        # webhook transport was removed (Issue #560 S5, ADR 0037 D9); this retained Railway topology test
+        # (deleted with the servers in S8) drives the two edges with the identical POSTs directly.
+        opener = urllib.request.build_opener(urllib.request.ProxyHandler({}), _PublicDomainToIngress(ports.public))
+
+        def provision_and_dispatch(document: str) -> None:
+            for url in (
+                "https://hunter.example.up.railway.app/issue-agent/provision",
+                "https://hunter.example.up.railway.app/issue-agent/authorize",
+            ):
+                request = urllib.request.Request(
+                    url, data=document.encode("utf-8"), headers={"Content-Type": "application/json"}, method="POST"
+                )
+                try:
+                    with opener.open(request, timeout=30) as response:
+                        assert 200 <= response.status < 300
+                except urllib.error.HTTPError as error:
+                    raise RuntimeError(f"edge rejected the authorization with HTTP {error.code}") from None
+
         document = _authorization_document()
-        trigger._provision_and_dispatch(
-            "https://hunter.example.up.railway.app/issue-agent/provision",
-            "https://hunter.example.up.railway.app/issue-agent/authorize",
-            document,
-            timeout=30,
-        )
+        provision_and_dispatch(document)
 
         signed = SignedIssueAgentAuthorization.from_json(document.encode("utf-8"))
         identity = (signed.authorization.authorization_id, signed.issuer_signature)
@@ -803,13 +813,8 @@ def test_railway_single_public_port_reaches_both_isolated_authorities(
 
         # A re-dispatch of the identical document provisions idempotently and is
         # refused by the issuer's replay ledger: the Issue never executes twice.
-        with pytest.raises(trigger.IssueAgentTriggerError, match="HTTP 409"):
-            trigger._provision_and_dispatch(
-                "https://hunter.example.up.railway.app/issue-agent/provision",
-                "https://hunter.example.up.railway.app/issue-agent/authorize",
-                document,
-                timeout=30,
-            )
+        with pytest.raises(RuntimeError, match="HTTP 409"):
+            provision_and_dispatch(document)
         assert [step for step, _, _ in order] == ["provision", "authorize", "provision", "authorize"]
         time.sleep(0.5)
         assert len(fallback.documents) == 1

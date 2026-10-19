@@ -7,6 +7,7 @@ from typing import Any, cast
 
 import pytest
 
+from hunter.automation import n8n as n8n_module
 from hunter.automation.n8n_handoff import (
     PROMPT_AUTOMATION_HANDOFF_SCHEMA_VERSION,
     N8nPromptAutomationWorker,
@@ -96,6 +97,12 @@ class _AcceptingOpener:
             separators=(",", ":"),
         ).encode("utf-8")
         return _Response(acknowledgement)
+
+
+@pytest.fixture(autouse=True)
+def _retained_internals(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Exercise the retained-until-S8 internals; the production entry refuses (AT-46, test_retired_issue_agent_authority)."""
+    monkeypatch.setattr(n8n_module, "refuse_retired_authority", lambda _name: None)
 
 
 def _profile() -> PromptMachineProfile:

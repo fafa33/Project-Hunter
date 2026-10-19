@@ -5,6 +5,7 @@ import pathlib
 import re
 import subprocess
 import sys
+from dataclasses import replace
 
 import hunter_github_transport as transport
 import hunter_pre_ready_review as pre_ready
@@ -63,10 +64,13 @@ def test_read_cycle_accepts_only_current_head_trusted_workflow_status(monkeypatc
             ]
         if path == "":
             return {"default_branch": "main"}
+        if path == "commits/main":
+            return {"sha": "e" * 40}
         if path == "actions/runs/123":
             return {
                 "id": 123,
                 "head_branch": "main",
+                "head_sha": "e" * 40,
                 "path": ".github/workflows/hunter-governance-review.yml",
             }
         raise AssertionError(path)
@@ -855,7 +859,7 @@ def test_governance_review_workflow_keeps_only_read_access_to_actions():
 
     path = pathlib.Path(REPOSITORY_ROOT, ".github/workflows/hunter-governance-review.yml")
     document = yaml.safe_load(path.read_text(encoding="utf-8"))
-    assert "pull_request" in _triggers(document)
+    assert "pull_request_target" in _triggers(document)
     blocks = _permission_blocks(document)
     assert blocks and all(str(block.get("actions", "read")).strip() == "read" for block in blocks)
     assert "python scripts/hunter_review_orchestrator.py" not in path.read_text(encoding="utf-8")
@@ -1611,6 +1615,125 @@ def test_collector_workflow_publishes_completion_from_its_own_trusted_inputs():
     assert env.get("CANDIDATE_HEAD") == "${{ inputs.head_sha }}"
 
 
+_GENERIC_WORKFLOW_RUN_MARKER = 'elif [[ "${event_name}" == "workflow_run" ]]; then'
+
+
+def _prerequisite_wake_branch_body() -> str:
+    """The committed shell that derives PR numbers for any workflow_run
+    completion that is not one of the two identity-specialised branches
+    (Governance Review carries its PR number, the collector carries its
+    run-name): the exact-head preflight completions that must find the
+    candidate PR by the head the run was actually built at."""
+
+    script = _reconcile_run_script()
+    assert script.count(_GENERIC_WORKFLOW_RUN_MARKER) == 1
+    return script.split(_GENERIC_WORKFLOW_RUN_MARKER, 1)[1].split("\nelse\n", 1)[0]
+
+
+def _run_prerequisite_wake_body(tmp_path, head_sha: str, stub_output: str, pr_number_env: str) -> tuple[str, list[str]]:
+    """Execute the real committed branch text in bash with a stubbed ``gh``
+    that records its argv and emits ``stub_output`` as the jq result."""
+
+    bin_dir = tmp_path / "bin"
+    bin_dir.mkdir(exist_ok=True)
+    gh = bin_dir / "gh"
+    gh.write_text(
+        "#!/bin/sh\n"
+        'printf \'%s\\n\' "$@" > "$GH_ARGS_FILE"\n'
+        'if [ -n "${GH_STUB_OUTPUT:-}" ]; then\n'
+        "  printf '%s\\n' \"$GH_STUB_OUTPUT\"\n"
+        "fi\n",
+        encoding="utf-8",
+    )
+    gh.chmod(0o755)
+    args_file = tmp_path / "gh-args"
+    result = subprocess.run(
+        ["bash", "-c", "set -euo pipefail\n" + _prerequisite_wake_branch_body() + '\nprintf "%s" "$pr_numbers"'],
+        env={
+            "PATH": f"{bin_dir}:{os.environ.get('PATH', '/usr/bin:/bin')}",
+            "GITHUB_REPOSITORY": "fafa33/Project-Hunter",
+            "EVENT_WORKFLOW_RUN_HEAD_SHA": head_sha,
+            "EVENT_WORKFLOW_RUN_PR_NUMBER": pr_number_env,
+            "GH_STUB_OUTPUT": stub_output,
+            "GH_ARGS_FILE": str(args_file),
+        },
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+    return result.stdout, args_file.read_text(encoding="utf-8").splitlines()
+
+
+def test_prerequisite_completion_wake_selects_the_candidate_pr_by_exact_head_identity(tmp_path):
+    """Collector liveness (thread PRRT_kwDOTRDHr86rUzHk): when the exact-head
+    preflight completes, the wake must find the candidate PR from the run's
+    head_sha -- the identity a push-triggered preflight run genuinely carries --
+    and never from workflow_run.pull_requests, which is empty for such runs."""
+
+    body = _prerequisite_wake_branch_body()
+    assert "EVENT_WORKFLOW_RUN_PR_NUMBER" not in body
+    assert '--search "${EVENT_WORKFLOW_RUN_HEAD_SHA}"' in body
+    assert "gh api --paginate" not in body
+
+    head = "e" * 40
+    output, args = _run_prerequisite_wake_body(tmp_path, head, "592", "")
+    assert output == "592"
+    assert args[:2] == ["pr", "list"]
+    assert args[args.index("--state") + 1] == "open"
+    assert args[args.index("--base") + 1] == "main"
+    assert args[args.index("--search") + 1] == head
+    assert args[args.index("--json") + 1] == "number,headRefOid"
+    assert head in args[args.index("--jq") + 1]
+
+    # Adversarial: a wake whose head no open PR points at resolves to no PR
+    # even when the event payload also carries a foreign PR number -- the
+    # branch cannot be steered into reconciling an unrelated pull request.
+    miss_output, _miss_args = _run_prerequisite_wake_body(tmp_path, "f" * 40, "", "9999")
+    assert miss_output == ""
+
+
+def test_collector_liveness_after_prerequisite_completion_is_event_wired_and_bounded():
+    """Collector liveness (thread PRRT_kwDOTRDHr86rUzHk): the approved
+    continuation for a head whose exact-head preflight was pending when
+    orchestration last ran. Completion of either prerequisite the dispatch
+    decision consults wakes the only actions:write gate, which re-enters the
+    trusted orchestrator scoped to the candidate head, and the 5-minute sweep
+    is the bounded backstop -- no new trigger, no polling loop, no privilege."""
+
+    document = yaml.safe_load(RECONCILE_WORKFLOW.read_text(encoding="utf-8"))
+    workflow_run = document[True]["workflow_run"]
+    assert {"Hunter / Pre-PR Preflight", "Hunter / Trusted Preflight Upgrade"} <= set(workflow_run["workflows"])
+    assert workflow_run["types"] == ["completed"]
+    script = _reconcile_run_script()
+    assert "python scripts/hunter_review_orchestrator.py ensure" in script
+    assert '--search "${EVENT_WORKFLOW_RUN_HEAD_SHA}"' in script
+    text = RECONCILE_WORKFLOW.read_text(encoding="utf-8")
+    assert 'cron: "*/5 * * * *"' in text
+    assert document["permissions"]["actions"] == "write"
+    assert document["jobs"]["reconcile"]["timeout-minutes"] == 15
+    checkout = document["jobs"]["reconcile"]["steps"][0]
+    assert checkout["with"]["ref"] == "main"
+    assert checkout["with"]["persist-credentials"] is False
+
+
+def test_collector_trigger_surface_stays_dispatch_only_so_liveness_stays_orchestrator_owned():
+    """Collector liveness (thread PRRT_kwDOTRDHr86rUzHk): the collector must
+    keep exactly one entry point. A workflow_run or lifecycle trigger on the
+    collector itself would let a completed prerequisite start an uncorrelated
+    cycle outside the orchestrator's dispatch idempotency record -- duplicate
+    reviewer spend and a second identity path for the receipt. Least privilege
+    stays exactly as approved."""
+
+    document = yaml.safe_load(COLLECTOR_WORKFLOW_FILE.read_text(encoding="utf-8"))
+    assert set(document[True]) == {"workflow_dispatch"}
+    collect = document["jobs"]["collect"]
+    assert collect["if"] == "github.ref == format('refs/heads/{0}', github.event.repository.default_branch)"
+    assert document["concurrency"]["cancel-in-progress"] is False
+    permissions = document["permissions"]
+    assert set(permissions) == {"contents", "actions", "pull-requests", "statuses"}
+    assert permissions["contents"] == "read"
+
+
 def test_collector_completion_accepts_trusted_ancestor_of_current_main(monkeypatch):
     old_main = "b" * 40
     current_main = "c" * 40
@@ -1754,6 +1877,8 @@ def test_exhausted_provider_chain_terminates_the_opportunity(monkeypatch):
         raising=False,
     )
     monkeypatch.setattr(orchestrator, "collector_needs_dispatch", lambda *_args: False, raising=False)
+    # This exhausted-chain fixture has no correlated successful collector run.
+    monkeypatch.setattr(orchestrator, "collector_runs", lambda *_args: [], raising=False)
     monkeypatch.setattr(
         orchestrator,
         "publish_cycle",
@@ -1828,15 +1953,23 @@ def test_combined_status_endpoint_exposes_no_creator():
 
 
 def test_read_cycle_reads_the_status_list_endpoint():
-    """`read_cycle` must not use the combined endpoint for provenance."""
+    """`read_cycle` must not use the combined endpoint for provenance.
+
+    The list read itself now lives in the bounded pagination helper, so both
+    halves are checked: `read_cycle` reaches that helper and nothing else, and
+    the helper reads the creator-bearing list endpoint page by page -- never the
+    publisher-free combined endpoint.
+    """
 
     import inspect
 
     source = inspect.getsource(orchestrator.read_cycle)
-    assert "commits/{head_sha}/statuses?per_page=100" in source
-    assert 'f"commits/{head_sha}/status"' not in source
-    # Only the list endpoint, so the publisher is actually populated.
-    assert source.count("commits/{head_sha}") == 1
+    helper = inspect.getsource(orchestrator._all_commit_statuses)
+    assert "_all_commit_statuses" in source
+    assert source.count("commits/{head_sha}") == 0
+    assert "commits/{head_sha}/statuses?per_page=100" in helper
+    assert 'f"commits/{head_sha}/status"' not in source + helper
+    assert helper.count("commits/{head_sha}") == 1
 
 
 def test_trusted_creator_cycle_is_accepted():
@@ -1894,3 +2027,581 @@ def test_exact_head_and_generation_binding_are_unchanged():
         is None
     )
     assert orchestrator._parse_cycle(_status(TRUSTED, _desc("REVIEW_CLEAR", digest="short")), 472, HEAD) is None
+
+
+def test_completed_collector_settles_stale_pending_without_waiting_for_full_chain(monkeypatch):
+    cycle = make_cycle(trigger_id=123, started_at=_five_minutes_ago())
+    run = _collector_run("completed", "success")
+    run["updated_at"] = "2020-01-01T00:00:00Z"
+    stored = _ensure_harness(monkeypatch, cycle, [run])
+    result = orchestrator.ensure_collector("owner/repo", "token", 472, HEAD)
+    assert result.state == "REVIEW_TIMED_OUT"
+    assert stored["dispatches"] == 0
+    assert stored["published"][-1].head_sha == HEAD
+
+
+def test_recently_completed_collector_preserves_status_propagation_grace(monkeypatch):
+    from datetime import UTC, datetime
+
+    cycle = make_cycle(trigger_id=123, started_at=_five_minutes_ago())
+    run = _collector_run("completed", "success")
+    run["updated_at"] = datetime.now(UTC).isoformat()
+    stored = _ensure_harness(monkeypatch, cycle, [run])
+    result = orchestrator.ensure_collector("owner/repo", "token", 472, HEAD)
+    assert result.state == "WAITING_FOR_REVIEWER"
+    assert stored["published"] == []
+
+
+def test_stale_success_with_active_retry_cannot_outlive_bounded_ceiling(monkeypatch):
+    from datetime import UTC, datetime, timedelta
+
+    budget = orchestrator.independent_review_opportunity_seconds()
+    ceiling = budget * orchestrator.ACTIVE_COLLECTOR_GRACE_MULTIPLIER
+    cycle = make_cycle(trigger_id=123, started_at=_seconds_ago(ceiling + 60))
+    success = _collector_run("completed", "success")
+    success["updated_at"] = (datetime.now(UTC) - timedelta(seconds=ceiling)).isoformat()
+    stored = _ensure_harness(monkeypatch, cycle, [success, _collector_run("in_progress")])
+    result = orchestrator.ensure_collector("owner/repo", "token", 472, HEAD)
+    assert result.state == "REVIEW_TIMED_OUT"
+    assert [item.state for item in stored["published"]] == ["REVIEW_TIMED_OUT"]
+
+
+def test_completed_collector_grace_survives_expired_independent_budget(monkeypatch):
+    from datetime import UTC, datetime, timedelta
+
+    budget = orchestrator.independent_review_opportunity_seconds()
+    cycle = make_cycle(trigger_id=123, started_at=_seconds_ago(budget + 60))
+    run = _collector_run("completed", "success")
+    run["updated_at"] = (datetime.now(UTC) - timedelta(seconds=30)).isoformat()
+    stored = _ensure_harness(monkeypatch, cycle, [run])
+    result = orchestrator.ensure_collector("owner/repo", "token", 472, HEAD)
+    assert result.state == "WAITING_FOR_REVIEWER"
+    assert stored["published"] == []
+
+
+def test_completed_collector_grace_boundary_at_179_and_180_seconds(monkeypatch):
+    from datetime import UTC, datetime, timedelta
+
+    fixed_now = datetime(2026, 10, 9, 12, 0, tzinfo=UTC)
+    real_datetime = orchestrator.datetime
+
+    class FixedDatetime:
+        @staticmethod
+        def now(tz):
+            return fixed_now
+
+        @staticmethod
+        def fromisoformat(value):
+            return real_datetime.fromisoformat(value)
+
+    monkeypatch.setattr(orchestrator, "datetime", FixedDatetime)
+    for age, expected in ((179, "WAITING_FOR_REVIEWER"), (180, "REVIEW_TIMED_OUT")):
+        cycle = make_cycle(trigger_id=123, started_at="2026-10-09T11:58:00Z")
+        run = _collector_run("completed", "success")
+        run["updated_at"] = (fixed_now - timedelta(seconds=age)).isoformat()
+        stored = _ensure_harness(monkeypatch, cycle, [run])
+        assert orchestrator.ensure_collector("owner/repo", "token", 472, HEAD).state == expected
+        assert bool(stored["published"]) == (age == 180)
+
+
+def test_completed_collector_with_active_retry_never_settles_early(monkeypatch):
+    cycle = make_cycle(trigger_id=123, started_at=_five_minutes_ago())
+    completed = _collector_run("completed", "success")
+    completed["updated_at"] = "2020-01-01T00:00:00Z"
+    active = _collector_run("in_progress", run_id=2)
+    stored = _ensure_harness(monkeypatch, cycle, [completed, active])
+    result = orchestrator.ensure_collector("owner/repo", "token", 472, HEAD)
+    assert result.state == "WAITING_FOR_REVIEWER"
+    assert stored["published"] == []
+
+
+def test_newer_successful_collector_prevents_premature_settlement(monkeypatch):
+    from datetime import UTC, datetime
+
+    cycle = make_cycle(trigger_id=123, started_at=_five_minutes_ago())
+    old = _collector_run("completed", "success", run_id=1)
+    old["updated_at"] = "2020-01-01T00:00:00Z"
+    new = _collector_run("completed", "success", run_id=2)
+    new["updated_at"] = datetime.now(UTC).isoformat()
+    stored = _ensure_harness(monkeypatch, cycle, [old, new])
+    assert orchestrator.ensure_collector("owner/repo", "token", 472, HEAD).state == "WAITING_FOR_REVIEWER"
+    assert stored["published"] == []
+
+
+def test_malformed_latest_success_timestamp_fails_closed(monkeypatch):
+    cycle = make_cycle(trigger_id=123, started_at=_five_minutes_ago())
+    old = _collector_run("completed", "success", run_id=1)
+    old["updated_at"] = "2020-01-01T00:00:00Z"
+    new = _collector_run("completed", "success", run_id=2)
+    new["updated_at"] = "not-a-date"
+    stored = _ensure_harness(monkeypatch, cycle, [old, new])
+    assert orchestrator.ensure_collector("owner/repo", "token", 472, HEAD).state == "WAITING_FOR_REVIEWER"
+    assert stored["published"] == []
+
+
+def test_completed_collector_rejects_naive_timestamps(monkeypatch):
+    cycle = make_cycle(trigger_id=123, started_at=_five_minutes_ago())
+    run = _collector_run("completed", "success")
+    run["updated_at"] = "2020-01-01T00:00:00"
+    stored = _ensure_harness(monkeypatch, cycle, [run])
+    assert orchestrator.ensure_collector("owner/repo", "token", 472, HEAD).state == "WAITING_FOR_REVIEWER"
+    assert stored["published"] == []
+
+
+def test_completed_collector_does_not_overwrite_concurrent_terminal(monkeypatch):
+    cycle = make_cycle(trigger_id=123, started_at=_five_minutes_ago())
+    run = _collector_run("completed", "success")
+    run["updated_at"] = "2020-01-01T00:00:00Z"
+    stored = _ensure_harness(monkeypatch, cycle, [run])
+    terminal = replace(cycle, state="REVIEWER_UNAVAILABLE")
+    reads = iter([cycle, terminal])
+    monkeypatch.setattr(orchestrator, "read_cycle", lambda *_args: ("present", next(reads), None))
+    assert orchestrator.ensure_collector("owner/repo", "token", 472, HEAD).state == "REVIEWER_UNAVAILABLE"
+    assert stored["published"] == []
+
+
+def test_duplicate_collector_appearing_at_terminal_boundary_blocks_timeout(monkeypatch):
+    cycle = make_cycle(trigger_id=123, started_at=_five_minutes_ago())
+    successful = _collector_run("completed", "success")
+    successful["updated_at"] = "2020-01-01T00:00:00Z"
+    runs = [successful]
+    stored = _ensure_harness(monkeypatch, cycle, runs)
+    original_read = orchestrator.read_cycle
+    reads = 0
+
+    def racing_read(*args):
+        nonlocal reads
+        reads += 1
+        if reads == 2:
+            runs.append(_collector_run("in_progress", run_id=2))
+        return original_read(*args)
+
+    monkeypatch.setattr(orchestrator, "read_cycle", racing_read)
+    result = orchestrator.ensure_collector("owner/repo", "token", 472, HEAD)
+    assert result.state == "WAITING_FOR_REVIEWER"
+    assert stored["published"] == []
+
+
+def test_pool_exhaustion_uses_native_receipt_validator(monkeypatch):
+    monkeypatch.setattr(orchestrator, "collector_receipt_problem", lambda *_a, **_k: "reject from native validator")
+    result = orchestrator.pool_exhaustion(
+        {},
+        repository="owner/repo",
+        pr_number=472,
+        head_sha=HEAD,
+        run_id=123,
+        run_attempt=1,
+        claims_id="d" * 64,
+        generation_id="",
+        pool={},
+    )
+    assert result.exhausted is False
+    assert "reject from native validator" in result.reason
+
+
+@pytest.mark.parametrize(
+    ("case", "expected"),
+    [
+        ("valid", "present"),
+        ("historical_base", "present"),
+        ("candidate_event", "absent"),
+        ("candidate_event_on_main", "absent"),
+        ("wrong_head", "absent"),
+        ("wrong_branch", "absent"),
+        ("wrong_pr", "absent"),
+        ("wrong_base", "absent"),
+        ("foreign_base_repo", "absent"),
+        ("foreign_head_repo", "absent"),
+        ("wrong_bound_head", "absent"),
+        ("missing_pr", "absent"),
+        ("diverged_base", "absent"),
+    ],
+)
+def test_read_cycle_binds_pull_request_target_provenance(monkeypatch, case, expected):
+    base_sha = "e" * 40
+    association = {
+        "number": 472,
+        "head": {"sha": HEAD, "ref": "feature", "repo": {"id": 1}},
+        "base": {"sha": base_sha, "ref": "main", "repo": {"id": 2}},
+    }
+    run = {
+        "id": 123,
+        "event": "pull_request_target",
+        "head_branch": "feature",
+        "head_sha": HEAD,
+        "path": ".github/workflows/hunter-governance-review.yml",
+        "pull_requests": [association],
+    }
+    if case.startswith("candidate_event"):
+        run["event"] = "pull_request"
+    if case == "candidate_event_on_main":
+        run.update(head_branch="main", head_sha=base_sha)
+    if case == "wrong_head":
+        run["head_sha"] = "b" * 40
+    if case == "wrong_branch":
+        run["head_branch"] = "other"
+    if case == "wrong_pr":
+        association["number"] = 473
+    if case == "wrong_base":
+        association["base"]["ref"] = "other"
+    if case == "foreign_base_repo":
+        association["base"]["repo"]["id"] = 3
+    if case == "foreign_head_repo":
+        association["head"]["repo"]["id"] = 3
+    if case == "wrong_bound_head":
+        association["head"]["sha"] = "b" * 40
+    if case == "missing_pr":
+        run["pull_requests"] = []
+    if case in {"historical_base", "diverged_base"}:
+        association["base"]["sha"] = "c" * 40
+
+    def request(_repository, _token, _method, path, _payload=None):
+        if path == "pulls/472":
+            return {
+                "state": "open",
+                "head": {"sha": HEAD, "ref": "feature", "repo": {"id": 1}},
+                "base": {"ref": "main", "repo": {"id": 2}},
+            }
+        if path == f"commits/{HEAD}/statuses?per_page=100":
+            return [
+                {
+                    "context": "Hunter Review Orchestration / PR #472",
+                    "description": f"WAITING_FOR_REVIEWER|local|0|{'d' * 64}",
+                    "target_url": "https://github.com/owner/repo/actions/runs/123",
+                    "creator": {"login": "github-actions[bot]"},
+                }
+            ]
+        if path == "":
+            return {"default_branch": "main", "id": 2}
+        if path == "commits/main":
+            return {"sha": base_sha}
+        if path == f"compare/{'c' * 40}...{base_sha}":
+            return {"status": "ahead" if case == "historical_base" else "diverged"}
+        if path == "actions/runs/123":
+            return run
+        raise AssertionError(path)
+
+    monkeypatch.setattr(orchestrator, "request_json", request)
+    state, cycle, _ = orchestrator.read_cycle("owner/repo", "token", 472, HEAD)
+    assert state == expected
+    assert (cycle is not None) == (expected == "present")
+
+
+# --- M2: candidate-reachable status/check publication (PR #592 slice 1) -------
+
+
+#: The only boundary GitHub evaluates against the run's real ref that a definition
+#: can place on a privileged job to refuse candidate-ref execution. `github.ref` is
+#: derived from the dispatched ref, so a candidate cannot forge it by editing a
+#: workflow on its own branch.
+DEFAULT_BRANCH_REF_GUARD = "github.ref == format('refs/heads/{0}', github.event.repository.default_branch)"
+
+
+def _enforces_default_branch_ref(job):
+    """True when the job refuses to run off the trusted default-branch ref.
+
+    The comparison is evaluated by GitHub against `github.ref`: a `workflow_dispatch`
+    run on a candidate branch yields `refs/heads/<candidate>`, so a job carrying this
+    boundary is skipped rather than executing candidate-authored privileged steps.
+    """
+    if not isinstance(job, dict):
+        return False
+    condition = job.get("if")
+    if not isinstance(condition, str):
+        return False
+    return DEFAULT_BRANCH_REF_GUARD in condition
+
+
+def _candidate_status_publishers(document):
+    """Candidate-owned workflow definitions must never receive status/check write authority.
+
+    A definition is candidate-owned when GitHub can execute the candidate's own copy
+    of it. The `pull_request`-class triggers run the head branch's file, and a `push`
+    outside the default branch runs the pushed file: those definitions are always
+    candidate-controlled, and a boundary guard cannot rescue them because the
+    candidate can simply delete it from the file that runs.
+
+    `workflow_dispatch` also runs the dispatched ref's file, so a dispatch-reachable
+    status/check publisher is candidate-reachable *unless every job that inherits a
+    status/check-writing permission refuses to run off the trusted default-branch ref*
+    (`DEFAULT_BRANCH_REF_GUARD`). `pull_request_target` resolves from the base branch,
+    and `workflow_run`, `schedule` and a default-branch `push` always run the trusted
+    default-branch file, so none of them can carry a candidate-authored step -- which
+    is exactly the trust model `test_trusted_orchestration_runs_only_from_workflows_
+    without_pull_request_triggers` enforces for the orchestrator itself.
+    """
+    if not isinstance(document, dict):
+        return []
+    triggers = _triggers(document)
+    push = document.get("on", document.get(True))
+    push = push.get("push") if isinstance(push, dict) else None
+    main_only_push = (
+        isinstance(push, dict)
+        and push.get("branches") == ["main"]
+        and not push.get("branches-ignore")
+        and not push.get("tags")
+    )
+    head_resolved = bool({"pull_request", "pull_request_review", "pull_request_review_comment"} & set(triggers)) or (
+        "push" in triggers and not main_only_push
+    )
+    dispatch_reachable = "workflow_dispatch" in triggers
+    if not (head_resolved or dispatch_reachable):
+        return []
+    jobs = document.get("jobs")
+    job_items = [(name, job) for name, job in jobs.items() if isinstance(job, dict)] if isinstance(jobs, dict) else []
+    job_blocks = [job.get("permissions") for _, job in job_items]
+    top_block = document.get("permissions")
+    if top_block is None and any(block is None for block in job_blocks):
+        # No top-level baseline leaves every block-less job on the repository
+        # default token. A job may pin itself instead (the replay-validate
+        # pattern: contents: read on every job), but an unpinned job is an
+        # unbounded one.
+        return ["missing-workflow-permissions"]
+    all_jobs_guarded = bool(job_items) and all(_enforces_default_branch_ref(job) for _, job in job_items)
+    # The workflow-level block reaches every job, so it is trusted only when every
+    # job carries the boundary; a job-level block is trusted only on that job.
+    blocks = [(top_block, all_jobs_guarded)]
+    blocks.extend((job.get("permissions"), _enforces_default_branch_ref(job)) for _, job in job_items)
+    unsafe = []
+    for block, guarded in blocks:
+        if head_resolved or not guarded:
+            if isinstance(block, str) and block.strip() == "write-all":
+                unsafe.append("write-all")
+            elif isinstance(block, dict):
+                unsafe.extend(
+                    key for key in ("statuses", "checks") if str(block.get(key, "")).strip() in WORKFLOW_DRIVING
+                )
+    return unsafe
+
+
+def test_candidate_workflows_cannot_publish_protected_commit_statuses():
+    unsafe = [(path.name, _candidate_status_publishers(document)) for path, document in _workflow_documents()]
+    assert [(name, grants) for name, grants in unsafe if grants] == []
+
+
+@pytest.mark.parametrize(
+    "trigger",
+    [
+        "on: pull_request",
+        "on: pull_request_review",
+        "on: pull_request_review_comment",
+        "on: [push, pull_request]",
+        '"on": {pull_request: null}',
+        "on: push",
+        "on: {push: {branches-ignore: [main]}}",
+        "on: {push: {branches: [feature, main]}}",
+    ],
+)
+@pytest.mark.parametrize(
+    "grant", ["permissions: {statuses: write}", "permissions: {checks: write}", "permissions: write-all"]
+)
+def test_candidate_status_spoofing_mutation_is_rejected(trigger, grant):
+    assert _candidate_status_publishers(yaml.safe_load(f"{trigger}\n{grant}\n"))
+
+
+@pytest.mark.parametrize("scope", ["statuses", "checks"])
+def test_job_override_cannot_publish_protected_status(scope):
+    document = yaml.safe_load(
+        f"on: pull_request\npermissions: {{{scope}: read}}\njobs:\n  spoof:\n    permissions: {{{scope}: write}}\n"
+    )
+    assert _candidate_status_publishers(document) == [scope]
+
+
+def test_job_write_all_cannot_publish_protected_status():
+    document = yaml.safe_load(
+        "on: pull_request\npermissions: {contents: read}\njobs:\n  spoof:\n    permissions: write-all\n"
+    )
+    assert _candidate_status_publishers(document) == ["write-all"]
+
+
+def test_candidate_missing_explicit_permission_baseline_is_rejected():
+    document = yaml.safe_load("on: pull_request\njobs:\n  build:\n    runs-on: ubuntu-latest\n")
+    assert _candidate_status_publishers(document) == ["missing-workflow-permissions"]
+
+
+def test_main_only_push_is_trusted():
+    document = yaml.safe_load("on: {push: {branches: [main]}}\npermissions: {statuses: write}\n")
+    assert _candidate_status_publishers(document) == []
+
+
+def test_commit_status_pagination_keeps_old_trusted_dispatch_proof(monkeypatch):
+    calls = []
+    proof = {
+        "context": "Hunter Collector Dispatch Proof / PR #472",
+        "creator": {"login": "github-actions[bot]"},
+        "id": 7,
+    }
+
+    def request(_repo, _token, _method, path, _payload=None):
+        calls.append(path)
+        if path.endswith("page=100"):
+            return [{"id": n} for n in range(100)]
+        if path.endswith("page=2"):
+            return [proof]
+        raise AssertionError(path)
+
+    monkeypatch.setattr(orchestrator, "request_json", request)
+    statuses = orchestrator._all_commit_statuses("owner/repo", "token", HEAD)
+    assert len(statuses) == 101
+    assert proof in statuses
+    assert len(calls) == 2
+
+
+def test_pr592_defect_registry_never_claims_unverified_findings_prevented():
+    """The learning ledger must not silently promote historical review titles."""
+    import json
+    import re
+
+    root = REPOSITORY_ROOT
+    ledger = json.loads((root / "docs" / "PR592_COPILOT_FINDING_LEDGER.json").read_text())
+    registry = json.loads((root / "docs" / "DEFECT_REGISTRY.json").read_text())
+    by_id = {entry["id"]: entry for entry in registry["defects"]}
+    assert len(ledger["findings"]) == ledger["captured_findings"] == 43
+    for finding in ledger["findings"]:
+        assert finding["id"] in by_id
+        assert finding["status"] != "prevented"
+        assert finding.get("verification")
+        evidence = finding.get("regression_evidence")
+        if evidence:
+            # A cited regression must resolve to a real test, not just a plausible
+            # symbol: unverifiable evidence reads as prevention that does not exist.
+            for part in (token.strip() for token in evidence.split(";")):
+                file_part, _, selector = part.partition("::")
+                target = REPOSITORY_ROOT / file_part
+                assert target.is_file(), part
+                assert re.search(rf"(def|class)\s+{re.escape(selector)}\b", target.read_text(encoding="utf-8")), part
+
+
+def test_missing_workflow_permission_baseline_is_detected_in_action_guard():
+    """An unpinned job under no workflow-level baseline is an unbounded one.
+
+    The workflow-level block is not the only place a baseline can live: a
+    workflow may pin every job instead (the replay-validate pattern). What the
+    guard must never miss is a job left on the repository default token.
+    """
+    unpinned = yaml.safe_load("on: pull_request\njobs: {build: {runs-on: ubuntu-latest}}\n")
+    assert _candidate_status_publishers(unpinned) == ["missing-workflow-permissions"]
+    pinned = yaml.safe_load(
+        "on: pull_request\njobs: {build: {runs-on: ubuntu-latest, permissions: {contents: read}}}\n"
+    )
+    assert _candidate_status_publishers(pinned) == []
+
+
+def test_workflow_dispatch_status_publisher_without_boundary_is_candidate_reachable():
+    """`workflow_dispatch` runs the dispatched ref's file, so it is not trusted by event identity."""
+    document = yaml.safe_load(
+        "on: workflow_dispatch\npermissions: {statuses: write}\njobs: {publish: {runs-on: ubuntu-latest}}\n"
+    )
+    assert _candidate_status_publishers(document) == ["statuses"]
+
+
+def test_workflow_dispatch_status_publisher_with_default_branch_boundary_is_trusted():
+    document = yaml.safe_load(
+        "on: workflow_dispatch\npermissions: {statuses: write}\n"
+        "jobs:\n"
+        "  publish:\n"
+        "    runs-on: ubuntu-latest\n"
+        f"    if: {DEFAULT_BRANCH_REF_GUARD}\n"
+    )
+    assert _candidate_status_publishers(document) == []
+
+
+def test_one_unguarded_job_reopens_a_dispatch_reachable_workflow():
+    document = yaml.safe_load(
+        "on: workflow_dispatch\npermissions: {statuses: write}\n"
+        "jobs:\n"
+        "  guarded:\n"
+        "    runs-on: ubuntu-latest\n"
+        f"    if: {DEFAULT_BRANCH_REF_GUARD}\n"
+        "  unguarded:\n"
+        "    runs-on: ubuntu-latest\n"
+    )
+    assert _candidate_status_publishers(document) == ["statuses"]
+
+
+def test_head_resolved_workflow_cannot_hide_behind_a_boundary_guard():
+    """A candidate can delete a boundary guard from the file that actually runs."""
+    document = yaml.safe_load(
+        "on: pull_request\npermissions: {statuses: write}\n"
+        "jobs:\n"
+        "  publish:\n"
+        "    runs-on: ubuntu-latest\n"
+        f"    if: {DEFAULT_BRANCH_REF_GUARD}\n"
+    )
+    assert _candidate_status_publishers(document) == ["statuses"]
+
+
+def _publishes_protected_checks(document):
+    if not isinstance(document, dict):
+        return False
+    blocks = [document.get("permissions")]
+    jobs = document.get("jobs")
+    if isinstance(jobs, dict):
+        blocks.extend(job.get("permissions") for job in jobs.values() if isinstance(job, dict))
+    for block in blocks:
+        if isinstance(block, str) and block.strip() == "write-all":
+            return True
+        if isinstance(block, dict):
+            levels = [str(block.get(key, "")).strip() for key in ("statuses", "checks")]
+            if any(level in WORKFLOW_DRIVING for level in levels):
+                return True
+    return False
+
+
+def test_status_publishing_workflows_are_never_head_resolved():
+    publishing = [
+        (path.name, _triggers(document))
+        for path, document in _workflow_documents()
+        if isinstance(document, dict) and _publishes_protected_checks(document)
+    ]
+    assert publishing, "no workflow publishes protected commit statuses"
+    for name, triggers in publishing:
+        assert "pull_request" not in triggers, name
+    assert "hunter-governance-reconcile.yml" in {name for name, _ in publishing}
+
+
+def test_no_dispatch_entry_point_selects_a_git_ref():
+    selectors = {"ref", "branch", "revision", "head_ref", "git_ref", "target_ref"}
+    for path, document in _workflow_documents():
+        if not isinstance(document, dict):
+            continue
+        on = document.get("on", document.get(True))
+        if not isinstance(on, dict) or "workflow_dispatch" not in on:
+            continue
+        block = on.get("workflow_dispatch") or {}
+        inputs = set(block.get("inputs") or {}) if isinstance(block, dict) else set()
+        assert not (inputs & selectors), path.name
+
+
+def test_commit_status_history_is_bounded_and_fails_closed(monkeypatch):
+    """The bounded window fails closed instead of spending a job's API budget."""
+    calls = []
+
+    def request(_repo, _token, _method, path, _payload=None):
+        calls.append(path)
+        if path.startswith(f"commits/{HEAD}/statuses"):
+            return [{"context": "x", "state": "success"}] * 100
+        raise AssertionError(path)
+
+    monkeypatch.setattr(orchestrator, "request_json", request)
+    monkeypatch.setattr(orchestrator, "COMMIT_STATUS_MAX_PAGES", 3)
+    with pytest.raises(ValueError, match="bounded"):
+        orchestrator._all_commit_statuses("owner/repo", "token", HEAD)
+    assert len(calls) == 3
+
+
+def test_an_unreadable_status_history_fails_the_cycle_closed(monkeypatch):
+    """No half-read history: an unreadable listing derives an absent cycle."""
+
+    def request(_repo, _token, _method, path, _payload=None):
+        if path.startswith(f"commits/{HEAD}/statuses"):
+            raise ValueError("commit status history exceeds the bounded inspection window")
+        if path == "pulls/472":
+            return {"state": "open", "head": {"sha": HEAD}}
+        if path == "":
+            return {"default_branch": "main"}
+        raise AssertionError(path)
+
+    monkeypatch.setattr(orchestrator, "request_json", request)
+    state, cycle, diagnostic = orchestrator.read_cycle("owner/repo", "token", 472, HEAD)
+    assert (state, cycle, diagnostic) == ("absent", None, None)

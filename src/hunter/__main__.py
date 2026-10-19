@@ -2,8 +2,11 @@ from __future__ import annotations
 
 import sys
 
-from hunter.automation.agent_fallback_runtime import main as agent_fallback_run_main
-from hunter.automation.n8n_canary import main as n8n_canary_main
+from hunter.automation.retired_issue_agent_authority import (
+    RETIRED_AUTHORITY_EXIT_CODE,
+    RetiredAuthorityError,
+    refuse_retired_authority,
+)
 from hunter.cli import main as cli_main
 from hunter.committee.command import main as committee_authority_main
 from hunter.valuation_authority.command import main as valuation_authority_main
@@ -31,10 +34,13 @@ def main(argv: list[str] | None = None) -> int:
         return valuation_evidence_main(arguments[1:])
     if arguments and arguments[0] == "valuation-authority":
         return valuation_authority_main(arguments[1:])
-    if arguments and arguments[0] == "n8n-canary":
-        return n8n_canary_main(arguments[1:])
-    if arguments and arguments[0] == "agent-fallback-run":
-        return agent_fallback_run_main(arguments[1:])
+    if arguments and arguments[0] in ("n8n-canary", "agent-fallback-run"):
+        # Retired parallel Issue-agent authorities (ADR 0037 D9, AT-46): refused before any import.
+        try:
+            refuse_retired_authority(arguments[0])
+        except RetiredAuthorityError as error:
+            print(f"hunter: {error}", file=sys.stderr)
+            return RETIRED_AUTHORITY_EXIT_CODE
     return cli_main(arguments)
 
 

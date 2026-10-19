@@ -8,12 +8,7 @@ on:
     branches:
       - main
 
-permissions:
-  # Reading the trusted exact-head branch preflight run record is what lets an
-  # identical integration tree stand on proof that already exists instead of
-  # re-running it. Read-only: this job publishes nothing.
-  actions: read
-  contents: read
+permissions: {}
 
 concurrency:
   group: ci-${{ github.workflow }}-${{ github.ref }}
@@ -23,7 +18,13 @@ jobs:
   quality:
     name: Quality Gates
     runs-on: ubuntu-latest
-    timeout-minutes: 30
+    if: github.event_name == 'pull_request'
+    # PR-attached required check. It never owns the feature-branch full suite;
+    # Hunter / Pre-PR Preflight is the single heavy producer for that SHA.
+    timeout-minutes: 10
+    permissions:
+      actions: read
+      contents: read
 
     steps:
       - name: Checkout
@@ -45,29 +46,43 @@ jobs:
           PIP_CONSTRAINT: requirements/ci-constraints.txt
         run: |
           set -euo pipefail
-          python -m pip install --disable-pip-version-check -c requirements/ci-constraints.txt -e ".[dev]"
+          python -m pip install --disable-pip-version-check --only-binary :all: -c requirements/ci-constraints.txt -e ".[dev]"
 
-      # Issue #415: when the tree GitHub would merge is byte-for-byte the tree the
-      # trusted exact-head branch preflight already validated, re-running the
-      # identical suite establishes nothing. Anything else -- a divergent
-      # integration tree, a missing or unsuccessful trusted run, unavailable
-      # evidence -- falls back to the full lane below.
-      - name: Resolve exact-identity validation reuse
-        id: validation-reuse
-        env:
-          GITHUB_TOKEN: ${{ github.token }}
-          GH_REPO: ${{ github.repository }}
-          PR_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
-        run: python scripts/hunter_validation_reuse.py
+      # Unprivileged PR-attached hygiene check only. All authoritative
+      # security validation, PR HEAD SHA binding, forge prevention, and
+      # candidate admission adjudication are performed exclusively by
+      # default-branch-owned controllers (hunter_governance_review_v2.py /
+      # hunter-trusted-preflight-upgrade.yml / hunter_merge_readiness_v2.py).
+      - name: Verify CI wiring
+        run: python -m compileall -q scripts src
 
-      - name: Run shared deterministic preflight
-        if: steps.validation-reuse.outputs.reusable != 'true'
+  main-validation:
+    name: Main Validation
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+      - name: Set up Python
+        uses: actions/setup-python@v6
+        with:
+          python-version: "3.11.13"
+          cache: pip
+          cache-dependency-path: |
+            pyproject.toml
+            requirements/ci-constraints.txt
+      - name: Install project
         env:
-          # Issue #415: the full repository suite is this pipeline's long pole,
-          # so the boundaries that own it run it in parallel. `loadfile` keeps
-          # every test in a file on one worker, so intra-file ordering and
-          # module-scoped state behave exactly as they do serially and only
-          # whole files run concurrently. Measured on 4 vCPU over 3,628 tests:
-          # 416s serial, 126s parallel.
+          PIP_CONSTRAINT: requirements/ci-constraints.txt
+        run: |
+          set -euo pipefail
+          python -m pip install --disable-pip-version-check --only-binary :all: -c requirements/ci-constraints.txt -e ".[dev]"
+      - name: Validate integrated main tree
+        env:
           PYTEST_ADDOPTS: -n auto --dist loadfile
         run: python scripts/hunter_pr_preflight.py --mode normal

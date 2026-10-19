@@ -58,6 +58,7 @@ from hunter.evidence_intelligence.source_handling import (
     validate_policy_body,
     verify_publication,
 )
+from hunter.evidence_intelligence.source_handling_commit_observer import notify_commit
 from hunter.execution import Clock, SystemClock
 
 SOURCE_HANDLING_FAMILIES = frozenset({"FACT", "POLICY", "FIELD_CATEGORY_REGISTRY", "AUTHORIZATION_RULE"})
@@ -617,7 +618,8 @@ class SourceHandlingAuthorityRepository:
 
     def _initialize(self) -> None:
         with self._connect(verify_operator_root=False, verify_history=False) as connection:
-            connection.executescript("""
+            connection.executescript(
+                """
                 CREATE TABLE IF NOT EXISTS source_handling_operator_root (
                     singleton_id TEXT PRIMARY KEY CHECK (singleton_id = 'SOURCE_HANDLING'),
                     genesis_rule_sha256 TEXT NOT NULL,
@@ -683,7 +685,8 @@ class SourceHandlingAuthorityRepository:
                 BEGIN
                     SELECT RAISE(ABORT, 'Source Handling history commitments are append-only');
                 END;
-                """)
+                """
+            )
             columns = {
                 str(row["name"])
                 for row in connection.execute("PRAGMA table_info(source_handling_authority_records)").fetchall()
@@ -698,20 +701,24 @@ class SourceHandlingAuthorityRepository:
             # duplicate could never be removed, so uniqueness is enforced by the
             # database itself rather than by a caller-side check.
             try:
-                connection.execute("""
+                connection.execute(
+                    """
                     CREATE UNIQUE INDEX IF NOT EXISTS source_handling_registry_logical_identity_unique
                     ON source_handling_authority_records(
                         json_extract(payload_json, '$.field_category_registry_id')
                     )
                     WHERE family = 'FIELD_CATEGORY_REGISTRY'
-                    """)
-                connection.execute("""
+                    """
+                )
+                connection.execute(
+                    """
                     CREATE UNIQUE INDEX IF NOT EXISTS source_handling_rule_logical_identity_unique
                     ON source_handling_authority_records(
                         json_extract(payload_json, '$.authorization_rule_id')
                     )
                     WHERE family = 'AUTHORIZATION_RULE'
-                    """)
+                    """
+                )
             except sqlite3.IntegrityError as error:
                 raise SourceHandlingBlockedError("logical authority identity is duplicated") from error
             pinned = connection.execute(
@@ -745,6 +752,7 @@ class SourceHandlingAuthorityRepository:
                 operator_root=self._operator_root,
             )
             connection.commit()
+        notify_commit(self.path)
 
     @contextlib.contextmanager
     def _connect(
@@ -805,6 +813,7 @@ class SourceHandlingAuthorityRepository:
                 raise
             else:
                 connection.commit()
+                notify_commit(self.path)
 
 
 class SqliteSourceHandlingAuthorityReadView(SourceHandlingAuthorityReadView):

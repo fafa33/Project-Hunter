@@ -1,9 +1,14 @@
 from __future__ import annotations
 
+import os
 import re
 from pathlib import Path
 
-ROOT = Path(__file__).resolve().parents[1]
+ROOT = (
+    Path(os.environ["HUNTER_TRUSTED_VALIDATION_ROOT"]).resolve()
+    if "HUNTER_TRUSTED_VALIDATION_ROOT" in os.environ
+    else Path(__file__).resolve().parents[1]
+)
 ARCHITECTURE_INDEX_PATH = ROOT / "docs" / "architecture-index.md"
 ADPR_0006 = "ADPR-0006"
 ADPR_0006_RUNTIME_PATHS = (

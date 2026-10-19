@@ -18,8 +18,8 @@ name: Hunter / Trusted Orchestrator Replay Publish
 # (main, never candidate) happened to be safe -- there is nothing here left
 # that could be pointed at the wrong ref in the first place.
 #
-# It only ever touches three kinds of content, all of it inert data, never
-# executed, imported, or used to select an executable path:
+# It only ever touches inert data, never executed, imported, or used to
+# select an executable path:
 #   1. Two small JSON artifacts the validate workflow produced, downloaded by
 #      fixed name from the exact triggering run id.
 #   2. The exact byte content of three trusted definition files (the two
@@ -30,7 +30,12 @@ name: Hunter / Trusted Orchestrator Replay Publish
 #      Python, so it can independently recompute
 #      trusted_harness_definition_digest / scenario_set_digest /
 #      input_fixture_digest without trusting the validate job's receipt.
-#   3. The current tip SHA of `main`, resolved through the read-only GitHub
+#   3. The exact validate-workflow definition the triggering run executed
+#      (fetched at that run's own head SHA) and the trusted base-approved
+#      definition (fetched at the resolved default branch) -- both inert text,
+#      byte-compared fail-closed so a candidate cannot keep the workflow name
+#      while replacing its steps, permissions, or trigger.
+#   4. The current tip SHA of `main`, resolved through the read-only GitHub
 #      Commits API (never `git rev-parse` against a checkout).
 #
 # The inline validation script below is this file's OWN trusted logic --
@@ -58,6 +63,11 @@ on:
 
 jobs:
   publish-proof:
+    if: ${{ always() && !cancelled() }}
+    # Publishers for one head run one at a time, never cancelling an in-flight publication.
+    concurrency:
+      group: hunter-replay-publish-${{ github.event.workflow_run.pull_requests[0].number || github.event.workflow_run.head_branch }}
+      cancel-in-progress: false
     name: Publish Exact-Head Trusted Replay Proof
     runs-on: ubuntu-latest
     timeout-minutes: 5
@@ -67,6 +77,7 @@ jobs:
     permissions:
       contents: read
       actions: read
+      pull-requests: read
       statuses: write
 
     steps:
@@ -76,44 +87,104 @@ jobs:
           GH_TOKEN: ${{ github.token }}
           GH_REPO: ${{ github.repository }}
           RUN_ID: ${{ github.event.workflow_run.id }}
+          EVENT_ATTEMPT: ${{ github.event.workflow_run.run_attempt }}
         run: |
           set -euo pipefail
-          pr_number="$(gh api "repos/${GH_REPO}/actions/runs/${RUN_ID}" --jq '.pull_requests[0].number // empty')"
-          if [ -z "$pr_number" ]; then
-            echo "no associated pull request found for triggering run ${RUN_ID}" >&2
+          # The candidate-touching validation workflow runs on the `pull_request`
+          # event. Bind to the run's own authoritative identity -- never to the
+          # associated-PR head field, which the API resolves dynamically to the
+          # PR's *current* head and therefore cannot identify the commit this
+          # run actually executed.
+          run_json="$(gh api "repos/${GH_REPO}/actions/runs/${RUN_ID}")"
+          run_event="$(printf '%s' "$run_json" | jq -r '.event')"
+          run_path="$(printf '%s' "$run_json" | jq -r '.path')"
+          run_attempt="$EVENT_ATTEMPT"
+          current_attempt="$(printf '%s' "$run_json" | jq -r '.run_attempt')"
+          run_sha="$(printf '%s' "$run_json" | jq -r '.head_sha')"
+          pr_number="$(printf '%s' "$run_json" | jq -r '.pull_requests[0].number // empty')"
+          if [ "$run_event" != "pull_request" ]; then
+            echo "unexpected validation event: $run_event" >&2
             exit 1
           fi
+          # GitHub's run.path can be ref-qualified (workflow.yml@refs/heads/main).
+          # Compare the exact workflow path while preserving all other run checks.
+          if [ "${run_path%%@*}" != ".github/workflows/hunter-trusted-orchestrator-replay-validate.yml" ]; then
+            echo "validation run executed an unexpected workflow path: $run_path" >&2
+            exit 1
+          fi
+          if [ -z "$pr_number" ] || [ "${#run_sha}" -ne 40 ] || ! [[ "$run_attempt" =~ ^[1-9][0-9]*$ ]]; then
+            echo "validation run lacks a verifiable associated PR, head SHA, or attempt" >&2
+            exit 1
+          fi
+          if [ "$current_attempt" != "$run_attempt" ]; then
+            echo "triggering attempt $run_attempt was superseded by $current_attempt; refusing stale publication" >&2
+            exit 1
+          fi
+          # The run's head SHA is the commit it executed. It must still be the
+          # live PR head, or a status would be written for a superseded commit.
+          pr_json="$(gh api "repos/${GH_REPO}/pulls/${pr_number}")"
+          head_sha="$(printf '%s' "$pr_json" | jq -r '.head.sha')"
+          if [ "$head_sha" != "$run_sha" ]; then
+            echo "validation run head $run_sha differs from live PR head $head_sha" >&2
+            exit 1
+          fi
+          # Enumerate recent runs and select only the exact PR + head SHA, then
+          # require this specific run (and attempt) to be the newest for that head.
+          latest_run="$(gh api "repos/${GH_REPO}/actions/workflows/hunter-trusted-orchestrator-replay-validate.yml/runs" --method GET -f event=pull_request -f per_page=100 --paginate --jq '.workflow_runs[] | [.run_number, .id, .run_attempt, (.head_sha // "")] | @tsv' | awk -v sha="$run_sha" '$4 == sha' | sort -n | tail -n 1 | cut -f2)"
+          if [ "$latest_run" != "$RUN_ID" ]; then
+            echo "validation run is not latest for exact PR head" >&2
+            exit 1
+          fi
+          # Both validation jobs must have concluded successfully; a missing, skipped or failed job counts as failure.
+          # GitHub can emit workflow_run.completed before its Jobs API has finalized
+          # every job conclusion. Bound the wait; never accept absent/failed jobs.
+          replay_job=""
+          digest_job=""
+          for poll in 1 2 3 4 5 6; do
+            jobs_tsv="$(gh api "repos/${GH_REPO}/actions/runs/${RUN_ID}/attempts/${run_attempt}/jobs" --method GET -f per_page=100 --paginate --jq '.jobs[] | [.name, (.conclusion // "none")] | @tsv')"
+            replay_job="$(printf '%s\n' "$jobs_tsv" | awk -F'\t' '$1 == "Trusted Candidate Orchestrator Replay" {print $2}' | head -n 1)"
+            digest_job="$(printf '%s\n' "$jobs_tsv" | awk -F'\t' '$1 == "Independently Verify Candidate Module Digests" {print $2}' | head -n 1)"
+            if [ "$replay_job" != "none" ] && [ -n "$replay_job" ] && [ "$digest_job" != "none" ] && [ -n "$digest_job" ]; then
+              break
+            fi
+            if [ "$poll" -lt 6 ]; then sleep 5; fi
+          done
+          echo "head_sha=$head_sha" >> "$GITHUB_OUTPUT"
           echo "pr_number=$pr_number" >> "$GITHUB_OUTPUT"
+          echo "run_attempt=$run_attempt" >> "$GITHUB_OUTPUT"
+          echo "replay_job_result=${replay_job:-missing}" >> "$GITHUB_OUTPUT"
+          echo "digest_job_result=${digest_job:-missing}" >> "$GITHUB_OUTPUT"
 
       - name: Set up Python
         uses: actions/setup-python@v6
         with:
           python-version: "3.11.13"
 
-      - name: Download replay receipt
-        if: ${{ github.event.workflow_run.conclusion == 'success' }}
+      - name: Download replay evidence from exact triggering validation run
+        id: download_replay
+        continue-on-error: true
         uses: actions/download-artifact@v4
         with:
           name: replay-receipt
-          path: .
-          github-token: ${{ github.token }}
           run-id: ${{ github.event.workflow_run.id }}
-        continue-on-error: true
+          github-token: ${{ github.token }}
+          path: .
 
-      - name: Download digest verification result
-        if: ${{ always() }}
+      - name: Download independent digest evidence from exact triggering validation run
+        id: download_digest
+        continue-on-error: true
         uses: actions/download-artifact@v4
         with:
           name: digest-check
-          path: .
-          github-token: ${{ github.token }}
           run-id: ${{ github.event.workflow_run.id }}
-        continue-on-error: true
+          github-token: ${{ github.token }}
+          path: .
 
       - name: Fetch trusted definition files as inert data (no checkout, never executed)
         env:
           GH_TOKEN: ${{ github.token }}
           GH_REPO: ${{ github.repository }}
+          RUN_HEAD_SHA: ${{ steps.context.outputs.head_sha }}
         run: |
           set -euo pipefail
           fetch_inert_file() {
@@ -124,7 +195,8 @@ jobs:
             # script below.
             local repo_path="$1"
             local out_file="$2"
-            gh api "repos/${GH_REPO}/contents/${repo_path}?ref=main" --jq '.content' \
+            local ref="${3:-main}"
+            gh api "repos/${GH_REPO}/contents/${repo_path}?ref=${ref}" --jq '.content' \
               | base64 -d > "$out_file"
           }
           fetch_inert_file "scripts/hunter_trusted_orchestrator_replay.py" \
@@ -134,6 +206,14 @@ jobs:
           fetch_inert_file "scripts/hunter_trusted_orchestrator_replay_definition.json" \
             "trusted-definition.fetched"
           gh api "repos/${GH_REPO}/commits/main" --jq '.sha' > trusted-main-sha.fetched
+          # The exact workflow definition the triggering run executed (fetched at
+          # the run's own head SHA) and the trusted base-approved definition
+          # (fetched at the resolved default branch). Both are inert text, only
+          # ever byte-compared -- never executed.
+          fetch_inert_file ".github/workflows/hunter-trusted-orchestrator-replay-validate.yml" \
+            "executed-validate-workflow.fetched" "$RUN_HEAD_SHA"
+          fetch_inert_file ".github/workflows/hunter-trusted-orchestrator-replay-validate.yml" \
+            "trusted-validate-workflow.fetched" main
 
       - name: Independently validate the trusted replay receipt (checkout-free)
         id: validate_receipt
@@ -141,8 +221,10 @@ jobs:
           GITHUB_TOKEN: ""
           GH_TOKEN: ""
           WORKFLOW_CONCLUSION: ${{ github.event.workflow_run.conclusion }}
+          REPLAY_JOB_RESULT: ${{ steps.context.outputs.replay_job_result }}
+          DIGEST_JOB_RESULT: ${{ steps.context.outputs.digest_job_result }}
           PR_NUMBER: ${{ steps.context.outputs.pr_number }}
-          CANDIDATE_SHA: ${{ github.event.workflow_run.head_sha }}
+          CANDIDATE_SHA: ${{ steps.context.outputs.head_sha }}
         run: |
           set -euo pipefail
           python - <<'PY'
@@ -172,8 +254,12 @@ jobs:
           pr_number = int(os.environ["PR_NUMBER"])
           candidate_sha = os.environ["CANDIDATE_SHA"]
 
-          if conclusion != "success" or not os.path.isfile("replay-receipt.json") or not os.path.isfile(
-              "digest-check.json"
+          job_results = (os.environ.get("REPLAY_JOB_RESULT", "missing"), os.environ.get("DIGEST_JOB_RESULT", "missing"))
+          if (
+              conclusion != "success"
+              or any(result != "success" for result in job_results)
+              or not os.path.isfile("replay-receipt.json")
+              or not os.path.isfile("digest-check.json")
           ):
               print("validate workflow did not produce complete evidence; treating replay as failed", file=sys.stderr)
               _write_result("failure")
@@ -194,6 +280,12 @@ jobs:
               worker_text = fh.read()
           with open("trusted-main-sha.fetched", encoding="utf-8") as fh:
               expected_harness_sha = fh.read().strip()
+          # The exact validation workflow definition the triggering run executed
+          # and the trusted base-approved definition, fetched as inert bytes.
+          with open("executed-validate-workflow.fetched", encoding="utf-8") as fh:
+              executed_workflow_text = fh.read()
+          with open("trusted-validate-workflow.fetched", encoding="utf-8") as fh:
+              trusted_workflow_text = fh.read()
 
           definition = json.loads(definition_text)
           schema = definition["schema"]
@@ -213,6 +305,16 @@ jobs:
           expected_fixture_digest = _digest(fixture)
 
           errors: list[str] = []
+          # Fail closed unless the exact workflow definition this run executed is
+          # byte-identical to the trusted base-approved definition. Neither the
+          # workflow name, the candidate's own YAML, an artifact digest, nor a
+          # self-reported workflow SHA is accepted in place of this comparison.
+          if executed_workflow_text != trusted_workflow_text:
+              errors.append(
+                  "the exact validation workflow definition this run executed does not match the trusted "
+                  "base-approved definition (executed sha256 "
+                  f"{hashlib.sha256(executed_workflow_text.encode('utf-8')).hexdigest()}); refusing to publish"
+              )
           if not isinstance(receipt, dict):
               errors.append("receipt is not a JSON object")
           else:
@@ -289,11 +391,41 @@ jobs:
               _write_result("success")
           PY
 
+      - name: Re-verify this is still the latest validation run immediately before publication
+        id: recheck
+        if: ${{ always() && steps.context.outcome == 'success' }}
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          RUN_ID: ${{ github.event.workflow_run.id }}
+          PR_NUMBER: ${{ steps.context.outputs.pr_number }}
+          HEAD_SHA: ${{ steps.context.outputs.head_sha }}
+        run: |
+          set -euo pipefail
+          # A newer validation run for the same head may have started while this job downloaded and validated
+          # artifacts. Publishing from the older run would overwrite the newer result, so check again right before
+          # the status is written (the first check is in the context step).
+          # Re-read the live PR head too: the PR may have advanced since the context step, and a status must never
+          # be written for a commit that is no longer the head.
+          pr_head="$(gh api "repos/${GH_REPO}/pulls/${PR_NUMBER}" --jq '[.head.sha] | .[0]')"
+          if [ "$pr_head" != "$HEAD_SHA" ]; then
+            echo "PR #${PR_NUMBER} head is now ${pr_head}, not ${HEAD_SHA}; not publishing a stale status" >&2
+            exit 1
+          fi
+          latest_run="$(gh api "repos/${GH_REPO}/actions/workflows/hunter-trusted-orchestrator-replay-validate.yml/runs" --method GET -f event=pull_request -f per_page=100 --paginate --jq '.workflow_runs[] | [.run_number, .id, (.head_sha // "")] | @tsv' | awk -v sha="$HEAD_SHA" '$3 == sha' | sort -n | tail -n 1 | cut -f2)"
+          if [ "$latest_run" != "$RUN_ID" ]; then
+            echo "triggering run ${RUN_ID} is no longer the latest validation run (${latest_run:-none}) for ${HEAD_SHA}; not publishing" >&2
+            exit 1
+          fi
+
       - name: Publish exact-head PR-bound status
+        # Runs after any upstream failure (download, fetch, parse, validation) so the PR-bound status
+        # is set to failure rather than left pending; a missing validation result counts as failure.
+        if: ${{ always() && steps.context.outcome == 'success' && steps.recheck.outcome == 'success' }}
         env:
           GITHUB_TOKEN: ${{ github.token }}
           GH_REPO: ${{ github.repository }}
-          HEAD_SHA: ${{ github.event.workflow_run.head_sha }}
+          HEAD_SHA: ${{ steps.context.outputs.head_sha }}
           PR_NUMBER: ${{ steps.context.outputs.pr_number }}
           VALIDATION_RESULT: ${{ steps.validate_receipt.outputs.result }}
           RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}

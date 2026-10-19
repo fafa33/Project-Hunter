@@ -242,14 +242,22 @@ def test_the_workflow_runs_the_trusted_module_only_after_a_green_push_preflight(
     workflow = _workflow()
     triggers = workflow.get("on", workflow.get(True))
     assert triggers == {"workflow_run": {"workflows": ["Hunter / Pre-PR Preflight"], "types": ["completed"]}}
-    # The workflow token can read only; the one write uses the dedicated token.
-    assert workflow["permissions"] == {"contents": "read", "issues": "read", "pull-requests": "read"}
+    assert workflow["permissions"] == {}
+    jobs = workflow["jobs"]
+    assert set(jobs) == {"gate", "open-draft-pr", "record"}
 
-    (job,) = workflow["jobs"].values()
-    condition = " ".join(job["if"].split())
-    assert "github.event.workflow_run.event == 'push'" in condition
-    assert "github.event.workflow_run.conclusion == 'success'" in condition
-    assert "github.event.workflow_run.head_repository.full_name == github.repository" in condition
+    # Only a same-repository push of an Issue-agent branch reaches the ledger gate.
+    gate = " ".join(jobs["gate"]["if"].split())
+    assert "github.event.workflow_run.event == 'push'" in gate
+    assert "github.event.workflow_run.head_repository.full_name == github.repository" in gate
+    assert "startsWith(github.event.workflow_run.head_branch, 'issue-')" in gate
+    assert jobs["gate"]["permissions"] == {}
+
+    # The PR opener needs the ledger gate and a green preflight; its token can read only.
+    job = jobs["open-draft-pr"]
+    assert job["needs"] == "gate"
+    assert job["if"] == "github.event.workflow_run.conclusion == 'success'"
+    assert job["permissions"] == {"contents": "read", "issues": "read", "pull-requests": "read"}
 
     _checkout, _python, step = job["steps"]
     assert step["working-directory"] == "engine/scripts"
@@ -259,9 +267,15 @@ def test_the_workflow_runs_the_trusted_module_only_after_a_green_push_preflight(
     assert "python hunter_issue_agent_candidate_pr.py" in step["run"]
     assert '--head-repository "${HEAD_REPOSITORY}"' in step["run"]
 
+    # The ledger record runs in the control environment for success and failure alike, after the gate.
+    record = jobs["record"]
+    assert record["environment"] == "hunter-issue-agent-control"
+    assert record["if"] == "always() && needs.gate.result == 'success'"
+
 
 def test_the_privileged_job_never_checks_out_or_executes_candidate_content() -> None:
-    (job,) = _workflow()["jobs"].values()
+    workflow = _workflow()
+    job = workflow["jobs"]["open-draft-pr"]
     checkout, python, step = job["steps"]
 
     # The only checkout is this workflow's own trusted default-branch commit:
@@ -271,19 +285,27 @@ def test_the_privileged_job_never_checks_out_or_executes_candidate_content() -> 
     assert python["uses"].startswith("actions/setup-python@")
     assert set(python["with"]) == {"python-version"}
 
-    # Candidate identifiers appear only as environment values of the trusted
-    # step, never in a checkout, a `uses`, a working directory or shell text.
-    for current in job["steps"]:
-        rendered = {key: value for key, value in current.items() if key != "env"}
-        assert "workflow_run.head" not in repr(rendered)
+    # Candidate identifiers appear only as environment values of trusted steps, never in a checkout,
+    # a `uses`, a working directory or shell text, in any job of this workflow.
+    for current_job in workflow["jobs"].values():
+        for current in current_job["steps"]:
+            assert "ref" not in (current.get("with") or {})
+            rendered = {key: value for key, value in current.items() if key != "env"}
+            assert "workflow_run.head" not in repr(rendered)
     assert {name for name, value in step["env"].items() if "workflow_run.head" in value} == {
         "HEAD_REPOSITORY",
         "HEAD_BRANCH",
         "HEAD_SHA",
     }
-    # The dedicated token exists in exactly one step, and only there.
-    assert [current for current in job["steps"] if "secrets." in repr(current)] == [step]
-    assert "secrets." not in repr({key: value for key, value in _workflow().items() if key != "jobs"})
+    # The dedicated PR token exists in exactly one step, and only there.
+    holders = [
+        current
+        for current_job in workflow["jobs"].values()
+        for current in current_job["steps"]
+        if "HUNTER_ISSUE_AGENT_PR_TOKEN" in repr(current)
+    ]
+    assert holders == [step]
+    assert "secrets." not in repr({key: value for key, value in workflow.items() if key != "jobs"})
 
 
 @pytest.mark.parametrize(

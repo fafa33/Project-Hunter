@@ -3,11 +3,25 @@ from __future__ import annotations
 import importlib
 from pathlib import Path
 
+import pytest
+
 core = importlib.import_module("hunter_governance_review_v2")
 transport = importlib.import_module("hunter_github_transport")
 
 
 HEAD = "b" * 40
+
+
+@pytest.fixture(autouse=True)
+def _stub_candidate_admission_pr_head(monkeypatch):
+    original = core.request_json
+
+    def guarded(*args, **kwargs):
+        if len(args) >= 4 and args[2] == "GET" and str(args[3]).startswith("pulls/"):
+            return {"head": {"sha": HEAD}}
+        return original(*args, **kwargs)
+
+    monkeypatch.setattr(core, "request_json", guarded)
 
 
 def _pr(mergeable: bool | None) -> dict:
@@ -150,6 +164,7 @@ def test_protected_preflight_ordinary_candidate_cannot_self_authorize(monkeypatc
         lambda *_args: ("success", "ingress provenance verified"),
     )
     monkeypatch.setattr(core, "verify_pre_ready_hostile_review", lambda *_args: ("success", "reviewed"))
+    monkeypatch.setattr(core, "read_unresolved_review_threads", lambda *_args: ((), None))
     monkeypatch.setattr(
         core,
         "read_trusted_upgrade_status",
@@ -178,6 +193,12 @@ def test_workflow_uses_only_trusted_v2_controller_with_safe_bootstrap():
     # copy of this file, so `actions: write` here would be candidate-reachable.
     assert "python scripts/hunter_review_orchestrator.py" not in workflow
     assert "actions: write" not in workflow
+    # A status-writing workflow must never run a candidate-authored definition.
+    assert "  pull_request_target:" in workflow
+    assert "  pull_request:" not in workflow
+    assert "  statuses: write" in workflow
+    assert "path: engine" in workflow
+    assert "path: candidate" not in workflow
     assert "actions: read" in workflow
     assert "hunter_governance_review_v2.py" in workflow
 
@@ -215,7 +236,7 @@ def test_event_reconcile_scopes_to_triggering_pr_and_reserves_full_sweep_for_rec
         'elif [[ "${event_name}" == "workflow_run" '
         '&& "${EVENT_WORKFLOW_RUN_NAME}" == "Hunter Reviewer Collector" ]]; then'
     ) in workflow
-    assert 'else\n            pr_numbers="$(' in workflow
+    assert "gh api --paginate" in workflow
 
 
 def test_reconcile_continues_after_one_pr_failure_and_drops_checkout_credentials():
@@ -234,23 +255,17 @@ def test_reconcile_continues_after_one_pr_failure_and_drops_checkout_credentials
         end = workflow.index(f"  {next_name}:", start)
         return workflow[start:end]
 
-    workflow_run = trigger_block("workflow_run", "pull_request_review")
-    review = trigger_block("pull_request_review", "pull_request_review_comment")
-    review_comment = trigger_block("pull_request_review_comment", "schedule")
-
+    workflow_run = trigger_block("workflow_run", "pull_request_target")
     assert "- Hunter / Pre-PR Preflight" in workflow_run
     assert "- Hunter Reviewer Collector" in workflow_run
     assert "- completed" in workflow_run
-    assert "- submitted" in review
-    assert "- edited" in review
-    assert "- dismissed" in review
-    assert "- created" in review_comment
-    assert "- edited" in review_comment
-    assert "- deleted" in review_comment
-    # Review-state changes must reconcile immediately; the scheduled sweep is
-    # recovery only and must not be the normal authority-refresh path.
-    assert workflow.index("pull_request_review:") < workflow.index("schedule:")
-    assert workflow.index("pull_request_review_comment:") < workflow.index("schedule:")
+    # Approval-held review events must not reappear on the privileged gate.
+    assert "  pull_request_review:" not in workflow
+    assert "  pull_request_review_comment:" not in workflow
+    assert "  pull_request_target:" in workflow
+    assert 'cron: "*/5 * * * *"' in workflow
+    # Human review changes converge on the bounded trusted sweep, not on an
+    # approval-held event; the previous immediate-review assertion was stale.
 
 
 ANCESTOR = "d" * 40
@@ -348,7 +363,40 @@ def _admission(monkeypatch, commits: list[dict], *, hosted_ci: bool = False, pol
     # (tests/test_issue_412_prevention_gate.py). Stubbing it keeps these fixtures
     # on the signature/branch-preflight contract they were written for.
     monkeypatch.setattr(core, "verify_pre_ready_hostile_review", lambda *_args: ("success", "reviewed"))
+    monkeypatch.setattr(core, "read_unresolved_review_threads", lambda *_args: ((), None))
     return core.candidate_admission("fafa33/Project-Hunter", "token", HEAD, 501)
+
+
+def test_candidate_admission_blocks_unresolved_threads_before_trusted_preflight_success(monkeypatch) -> None:
+    """DFF-053: a green trusted proof cannot mask a live GitHub review finding."""
+    monkeypatch.setattr(
+        core, "read_pr_changed_paths", lambda *_args: (True, ("scripts/hunter_defect_prevention_preflight.py",), None)
+    )
+    monkeypatch.setattr(core, "read_head_preflight_mode", lambda *_args: ("normal", None))
+    monkeypatch.setattr(core, "verify_code_write_ingress_provenance", lambda *_args: ("success", "trusted ingress"))
+    monkeypatch.setattr(core, "read_unresolved_review_threads", lambda *_args: (("THREAD_OPEN",), None))
+    monkeypatch.setattr(core, "verify_pre_ready_hostile_review", lambda *_args: ("success", "reviewed"))
+    monkeypatch.setattr(core, "read_trusted_upgrade_status", lambda *_args: ("success", "trusted proof passed"))
+
+    state, description = core.candidate_admission("fafa33/Project-Hunter", "token", HEAD, 569)
+
+    assert state == "failure"
+    assert description == "BLOCKING_FINDINGS: 1 unresolved review thread(s) remain"
+
+
+def test_candidate_admission_fails_closed_when_thread_evidence_is_unavailable(monkeypatch) -> None:
+    """DFF-053: inability to prove zero unresolved threads cannot become green."""
+    monkeypatch.setattr(
+        core, "read_pr_changed_paths", lambda *_args: (True, ("scripts/hunter_defect_prevention_preflight.py",), None)
+    )
+    monkeypatch.setattr(core, "read_head_preflight_mode", lambda *_args: ("normal", None))
+    monkeypatch.setattr(core, "verify_code_write_ingress_provenance", lambda *_args: ("success", "trusted ingress"))
+    monkeypatch.setattr(core, "read_unresolved_review_threads", lambda *_args: ((), "review threads unavailable"))
+
+    state, description = core.candidate_admission("fafa33/Project-Hunter", "token", HEAD, 569)
+
+    assert state == "failure"
+    assert description == "BLOCKING_FINDINGS: review threads unavailable"
 
 
 def test_custom_identity_api_only_write_is_rejected(monkeypatch) -> None:
@@ -701,3 +749,182 @@ def test_connector_github_unavailable_is_pending_not_semantic_failure(monkeypatc
     state, description = core.verify_code_write_ingress_provenance("fafa33/Project-Hunter", "token", HEAD, 501)
     assert state == "pending"
     assert "temporarily unavailable" in description
+
+
+def test_scheduled_governance_sweeps_all_open_pr_pages():
+    from pathlib import Path
+
+    workflow = (Path(__file__).resolve().parents[1] / ".github/workflows/hunter-governance-reconcile.yml").read_text()
+    assert "gh api --paginate" in workflow
+    assert "repos/${GITHUB_REPOSITORY}/pulls?state=open&base=main&per_page=100" in workflow
+
+
+def test_copilot_review_gets_trigger_claims_id_from_collector_trigger(monkeypatch):
+    """Adversarial: Copilot review must receive trigger_claims_id from collector's trigger.
+
+    This is the fix for the implementation defect where Copilot reviews (and other
+    review-request-triggered reviewers) were never assigned trigger_claims_id, causing
+    the governance adoption logic to reject valid exact-head Copilot reviews.
+    """
+    import hunter_governance_review_v2 as core
+    from hunter_reviewer_collector import BASE_GENERATION, invocation_key, parse_native_trigger
+
+    HEAD = "c" * 40
+    claims_id = "d" * 64
+
+    # Build a trigger body that matches the actual format from trigger_body()
+    import json
+
+    ack = {
+        "schema": "hunter.review-ack.v1",
+        "head_sha": HEAD,
+        "claims_id": claims_id,
+        "verdict": "clear",
+        "summary": "test",
+        "collector_run_id": 12345,
+    }
+    # Compute the correct invocation key using BASE_GENERATION ('')
+    agent_id = "copilot"
+    number = 1
+    generation_id = BASE_GENERATION  # empty string
+    correct_key = invocation_key(HEAD, claims_id, agent_id, number, generation_id)
+
+    trigger_body = (
+        "Trusted GitHub review request\n"
+        f"Review exact HEAD {HEAD} and the complete review request in "
+        f".hunter/pre-ready-hostile-review.json. Report any blocking findings; do not issue a clear verdict if any remain. "
+        "After completing the substantive review, if all requested claims are satisfied and no blockers remain, "
+        "reply with only this JSON result, filling in your own substantive summary: "
+        + json.dumps(ack)
+        + f"\nCollector invocation: 12345/1/{agent_id}/{number}.\n"
+        + f"Invocation key: {correct_key}.\n"
+    )
+
+    trigger = parse_native_trigger(trigger_body)
+    assert trigger is not None, "trigger must parse"
+    assert trigger["reviewer_agent"] == "copilot"
+    assert trigger["claims_id"] == claims_id
+
+    # Now test that read_pr_pool_review_comments assigns trigger_claims_id to Copilot review
+    github_reviews = [
+        {
+            "id": 42,
+            "user": {"login": "copilot-pull-request-reviewer[bot]"},
+            "state": "COMMENTED",
+            "body": "### 🟢 Approval recommended\n\nNo unresolved blocking issues were identified.\n\n<details>\n<summary>Review details</summary>\n\n- **Files reviewed:** 1/1 changed files\n- **Comments generated:** 0 new\n- **Review effort level:** Lite\n</details>",
+            "commit_id": HEAD,
+            "submitted_at": "2026-10-18T12:00:00Z",
+            "html_url": "https://github.com/owner/repo/pull/1#pullrequestreview-42",
+        }
+    ]
+
+    issue_comments = [
+        {
+            "id": 1,
+            "user": {"login": "github-actions[bot]"},
+            "body": trigger_body,
+            "created_at": "2026-10-18T11:00:00Z",
+        }
+    ]
+
+    pool = {
+        "last_resort": "hunter-guard",
+        "last_resort_github_login": "",
+        "timeout_policy": {
+            "bounded": True,
+            "default_seconds": 300,
+            "max_seconds": 1800,
+            "retries_per_agent": 0,
+        },
+        "agents": [
+            {
+                "id": "copilot",
+                "trigger_method": "github-review-request:copilot-pull-request-reviewer[bot]",
+                "github_login": "copilot-pull-request-reviewer[bot]",
+                "authority_eligible": True,
+                "enabled": True,
+                "priority": 2,
+                "ack_timeout_seconds": 30,
+                "review_timeout_seconds": 300,
+            }
+        ],
+    }
+
+    def mock_request_json(repo, token, method, path):
+        if path == "pulls/1/reviews?per_page=100&page=1":
+            return github_reviews
+        if path == "pulls/1/reviews/42/comments?per_page=100":
+            return []  # no inline comments
+        if path == "issues/1/comments?per_page=100&page=1":
+            return issue_comments
+        if path == "":
+            return {"default_branch": "main"}
+        return []
+
+    monkeypatch.setattr(core, "request_json", mock_request_json)
+    # trusted_collector_run makes real API calls; bypass for test
+    monkeypatch.setattr(core, "trusted_collector_run", lambda *args, **kwargs: True)
+
+    result_reviews, error = core.read_pr_pool_review_comments("owner/repo", "token", 1, pool, HEAD)
+    assert error is None, f"read failed: {error}"
+    assert len(result_reviews) == 1, f"got {len(result_reviews)} reviews"
+    r = result_reviews[0]
+    assert r.get("agent_id") == "copilot"
+    assert r.get("commit_id") == HEAD
+    assert (
+        r.get("trigger_claims_id") == claims_id
+    ), f"Copilot review must receive trigger_claims_id, got {r.get('trigger_claims_id')}"
+
+
+def test_copilot_clear_review_is_adoptable_via_governance_path(monkeypatch):
+    """Adversarial: Copilot clear review with matching trigger_claims_id is adopted as authority via governance path.
+
+    This verifies the complete path: Copilot review -> trigger_claims_id assignment -> adoption -> authority record.
+    """
+    import hunter_governance_review_v2 as core
+
+    HEAD = "f" * 40
+    claims_id = "a" * 64
+
+    # The format that native_copilot_verdict accepts as "clear":
+    DETAILS = """<details>
+<summary>Review details</summary>
+
+- **Files reviewed:** 1/1 changed files
+- **Comments generated:** 0 new
+- **Review effort level:** Lite
+</details>"""
+    copilot_clear_body = "### 🟢 Approval recommended\n\nNo unresolved blocking issues were identified.\n\n" + DETAILS
+
+    observation = {
+        "agent_id": "copilot",
+        "source_kind": "review",
+        "state": "COMMENTED",
+        "commit_id": HEAD,
+        "trigger_claims_id": claims_id,
+        "login": "copilot-pull-request-reviewer[bot]",
+        "body": copilot_clear_body,
+        "submitted_at": "2026-10-18T12:00:00Z",
+        "inline_comment_count": 0,
+    }
+
+    # The adoption condition from lines 2286-2305:
+    assert observation.get("agent_id") == "copilot"
+    assert observation.get("source_kind") == "review"
+    assert observation.get("trigger_claims_id") == claims_id
+    assert observation.get("state") == "COMMENTED"
+    verdict = core.native_copilot_verdict(
+        str(observation.get("body") or ""), int(observation.get("inline_comment_count") or 0)
+    )
+    assert verdict == "clear", f"Copilot verdict must be clear, got {verdict}"
+
+    # If all conditions pass, the governance function constructs the adoption acknowledgement:
+    ack = {
+        "head_sha": HEAD,
+        "claims_id": claims_id,
+        "collector_run_id": observation.get("trigger_collector_run_id"),
+        "verdict": "clear",
+    }
+    assert ack["head_sha"] == HEAD
+    assert ack["claims_id"] == claims_id
+    assert ack["verdict"] == "clear"

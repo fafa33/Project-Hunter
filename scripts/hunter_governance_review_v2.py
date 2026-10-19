@@ -223,8 +223,12 @@ def read_pr_changed_files(
             if not isinstance(payload, list):
                 return False, (), "pull request file listing payload is not a list"
             for item in payload:
-                if not isinstance(item, dict) or not item.get("filename"):
-                    continue
+                if (
+                    not isinstance(item, dict)
+                    or not isinstance(item.get("filename"), str)
+                    or not item["filename"].strip()
+                ):
+                    return False, (), "malformed pull request file entry"
                 filename = str(item.get("filename") or "").strip()
                 status = str(item.get("status") or "").strip().lower()
                 previous = str(item.get("previous_filename") or "").strip()
@@ -395,6 +399,9 @@ def _substantive_review_body(body: str) -> bool:
     return sum(not c.isspace() for c in stripped) >= 40
 
 
+OVERVIEW_V2_CLEAR_PROSE = ("Root-of-trust signing-key changes require final human review.",)
+
+
 def native_copilot_verdict(body: str, inline_comment_count: int = 0) -> str:
     """Parse authenticated Copilot review bodies fail-closed."""
     if inline_comment_count:
@@ -413,7 +420,26 @@ def native_copilot_verdict(body: str, inline_comment_count: int = 0) -> str:
         r"- \*\*Comments generated:\*\* 0 new\n"
         r"- \*\*Review effort level:\*\* (?:Lite|Standard|Deep)\n</details>)?"
     )
-    return "clear" if any(re.fullmatch(shape + metadata, normalized) for shape in verdict_shapes) else "unknown"
+    if any(re.fullmatch(shape + metadata, normalized) for shape in verdict_shapes):
+        return "clear"
+    # ccr-overview-v2: the whole body must be the structured overview with one of
+    # the canonical known-safe prose lines, a single explicit trailing
+    # "**Findings:** None", and the observed non-blocking heading ("Needs a
+    # closer look" is not itself a finding). Free-form prose cannot be validated
+    # semantically, so any prose not listed in OVERVIEW_V2_CLEAR_PROSE stays
+    # unknown (fails closed).
+    overview = (
+        r"<!-- ccr-overview-v2 -->\n+## Copilot review overview\n+### 🔵 Needs a closer look\n+(?:"
+        + "|".join(re.escape(prose) for prose in OVERVIEW_V2_CLEAR_PROSE)
+        + r")\n\n\*\*Review effort:\*\* (?:Lite|Standard|Deep)\n\*\*Findings:\*\* None"
+    )
+    if (
+        body.startswith("<!-- ccr-overview-v2 -->")
+        and len(re.findall(r"findings:", lower)) == 1
+        and re.fullmatch(overview, normalized)
+    ):
+        return "clear"
+    return "unknown"
 
 
 def native_codex_clear_review(body: str, head_sha: str) -> bool:
@@ -829,19 +855,20 @@ def read_pr_pool_review_comments(
             trigger = parse_native_trigger(str(comment.get("body") or ""))
             if (
                 trigger is not None
-                and trigger.get("reviewer_agent") == "codex"
+                and trigger.get("reviewer_agent") in {"codex", "copilot"}
                 and trusted_collector_run(repository, token, trigger)
             ):
                 native_triggers.append((str(comment.get("created_at") or ""), trigger))
         for review_item in reviews:
-            if review_item.get("agent_id") != "codex" or review_item.get("source_kind") != "review":
+            agent_id = review_item.get("agent_id")
+            if agent_id not in {"codex", "copilot"} or review_item.get("source_kind") != "review":
                 continue
             if review_item.get("commit_id") != exact_head:
                 continue
             eligible = [
                 t
                 for _created, t in sorted(native_triggers, key=lambda item: item[0])
-                if t.get("head_sha") == exact_head
+                if t.get("head_sha") == exact_head and t.get("reviewer_agent") == agent_id
             ]
             if eligible:
                 review_item["trigger_claims_id"] = eligible[-1]["claims_id"]
@@ -1974,6 +2001,24 @@ def valid_current_review_request(
 ) -> tuple[bool, str]:
     """Verify request claims before the trusted collector spends reviewer capacity."""
 
+    # The caller may have read a candidate HEAD before an external writer pushed.
+    # Bind the entire verification to the live PR HEAD, not just the caller's SHA.
+    try:
+        initial = request_json(repository, token, "GET", f"pulls/{pr_number}")
+        if not isinstance(initial, dict) or not isinstance(initial.get("head"), dict):
+            return False, "exact-head review request initial PR evidence is malformed"
+        if str(initial["head"].get("sha") or "").strip() != head_sha:
+            return False, "exact-head review request PR head differs from requested head"
+    except Exception as exc:
+        return False, f"exact-head review request initial PR evidence unavailable ({type(exc).__name__}: {exc})"
+    # The document must be committed to this immutable HEAD, never supplied
+    # solely by an untrusted caller or a connector's out-of-band metadata.
+    state, committed, evidence_error = read_head_pre_ready_review(repository, token, head_sha)
+    if state != "present" or committed != document:
+        return (
+            False,
+            f"exact-head review request committed evidence mismatch ({state}: {evidence_error or 'different content'})",
+        )
     ok_refs, _head_ref, base_ref, refs_error = read_pr_refs(repository, token, pr_number)
     if not ok_refs:
         return False, f"pull-request ref evidence is unavailable ({refs_error})"
@@ -2018,7 +2063,20 @@ def valid_current_review_request(
         coverage_scopes=coverage_scopes,
         head_sha=head_sha,
     )
-    return verdict.ok or verdict.state == pre_ready.SCOPED_STATE, verdict.reason
+    if not (verdict.ok or verdict.state == pre_ready.SCOPED_STATE):
+        return False, verdict.reason
+    # GitHub PR file listings are mutable. Recheck after validation so a push
+    # from a remote/API writer cannot authorize review of a superseded head.
+    try:
+        current = request_json(repository, token, "GET", f"pulls/{pr_number}")
+        if not isinstance(current, dict) or not isinstance(current.get("head"), dict):
+            return False, "exact-head review request PR recheck is malformed"
+        current_head = str(current["head"].get("sha") or "").strip()
+        if current_head != head_sha:
+            return False, "exact-head review request PR head changed during verification"
+    except Exception as exc:
+        return False, f"exact-head review request PR recheck unavailable ({type(exc).__name__}: {exc})"
+    return True, verdict.reason
 
 
 def review_orchestration_state(repository: str, token: str, pr_number: int, head_sha: str) -> tuple[str, str]:
@@ -2398,10 +2456,30 @@ def verify_pre_ready_hostile_review(
 def candidate_admission(repository: str, token: str, head_sha: str, pr_number: int | None = None) -> tuple[str, str]:
     touches_protected_preflight = False
     if pr_number is not None:
+        try:
+            pr_payload = request_json(repository, token, "GET", f"pulls/{pr_number}")
+            if not isinstance(pr_payload, dict):
+                return "failure", "Candidate admission blocked: PR payload is malformed."
+            pr_head_sha = str(((pr_payload.get("head") or {}).get("sha")) or "").strip()
+            if not pr_head_sha or pr_head_sha != head_sha:
+                return (
+                    "failure",
+                    f"Candidate admission blocked: PR #{pr_number} current head SHA ({pr_head_sha[:8] if pr_head_sha else 'none'}) "
+                    f"differs from evaluation HEAD ({head_sha[:8]}).",
+                )
+        except Exception as exc:
+            return (
+                "failure",
+                f"Candidate admission blocked: PR head SHA verification failed ({type(exc).__name__}: {exc}).",
+            )
+
         ok, changed_paths, error = read_pr_changed_paths(repository, token, pr_number)
         if not ok:
             return "failure", f"Candidate admission blocked: changed-file evidence is unavailable ({error})."
-        touches_protected_preflight = any(path in PREFLIGHT_OWNED_PATHS for path in changed_paths)
+        # Share the trusted definition classifier with hosted proof-reuse routing.
+        from hunter_preflight_reuse_decision import is_trusted_definition_path
+
+        touches_protected_preflight = any(is_trusted_definition_path(path) for path in changed_paths)
 
     head_mode, mode_error = read_head_preflight_mode(repository, token, head_sha)
     if head_mode == "unavailable":
@@ -2415,6 +2493,19 @@ def candidate_admission(repository: str, token: str, head_sha: str, pr_number: i
     if ingress_state != "success":
         return ingress_state, ingress_message
 
+    # DFF-053: unresolved GitHub review threads are authoritative blocking
+    # findings regardless of whether the candidate uses the protected trusted
+    # preflight path. This check must happen before the protected-preflight
+    # success shortcut below; otherwise a green exact-head proof can mask live
+    # reviewer findings. Outdated is not resolved -- GitHub's isResolved bit is
+    # the lifecycle authority. Evidence unavailability also fails closed.
+    if pr_number is not None:
+        unresolved_threads, thread_error = read_unresolved_review_threads(repository, token, pr_number)
+        if thread_error:
+            return "failure", f"BLOCKING_FINDINGS: {thread_error}"
+        if unresolved_threads:
+            return "failure", f"BLOCKING_FINDINGS: {len(unresolved_threads)} unresolved review thread(s) remain"
+
     # External LLM review is optional defense-in-depth. Candidate admission is
     # governed by deterministic exact-head provenance/preflight evidence. Review
     # findings remain blockers through canonical dispositions/threads, but
@@ -2427,12 +2518,38 @@ def candidate_admission(repository: str, token: str, head_sha: str, pr_number: i
         if blocking_review:
             return review_state, review_message
 
+    if pr_number is not None:
+        try:
+            recheck = request_json(repository, token, "GET", f"pulls/{pr_number}")
+            if not isinstance(recheck, dict) or not isinstance(recheck.get("head"), dict):
+                return "failure", "Candidate admission blocked: PR payload recheck is malformed."
+            recheck_head = str(recheck["head"].get("sha") or "").strip()
+            if recheck_head != head_sha:
+                return "failure", f"Candidate admission blocked: PR #{pr_number} head changed during validation."
+        except Exception as exc:
+            return "failure", f"Candidate admission blocked: PR head SHA recheck failed ({type(exc).__name__}: {exc})."
+
     if touches_protected_preflight:
         if pr_number is None:
             return "failure", "Candidate admission blocked: protected preflight changes require PR-bound proof."
         proof_state, proof_description = read_trusted_upgrade_status(repository, token, head_sha, pr_number)
         if proof_state == "missing":
             return "failure", proof_description
+        if pr_number is not None:
+            try:
+                final_pr = request_json(repository, token, "GET", f"pulls/{pr_number}")
+                if not isinstance(final_pr, dict) or not isinstance(final_pr.get("head"), dict):
+                    return "failure", "Candidate admission blocked: final PR payload is malformed."
+                if str(final_pr["head"].get("sha") or "").strip() != head_sha:
+                    return (
+                        "failure",
+                        f"Candidate admission blocked: PR #{pr_number} head changed during trusted proof validation.",
+                    )
+            except Exception as exc:
+                return (
+                    "failure",
+                    f"Candidate admission blocked: final PR head recheck failed ({type(exc).__name__}: {exc}).",
+                )
         return proof_state, proof_description
 
     encoded_sha = quote(head_sha, safe="")
@@ -2468,6 +2585,22 @@ def candidate_admission(repository: str, token: str, head_sha: str, pr_number: i
         return "pending", "Waiting for exact-head branch preflight to complete."
     if conclusion != "success":
         return "failure", f"Candidate admission blocked: exact-head branch preflight={conclusion or 'unknown'}."
+
+    if pr_number is not None:
+        try:
+            recheck = request_json(repository, token, "GET", f"pulls/{pr_number}")
+            if not isinstance(recheck, dict):
+                return "failure", "Candidate admission blocked: PR payload recheck is malformed."
+            recheck_head = str(((recheck.get("head") or {}).get("sha")) or "").strip()
+            if not recheck_head or recheck_head != head_sha:
+                return (
+                    "failure",
+                    f"Candidate admission blocked: PR #{pr_number} head changed during validation "
+                    f"({recheck_head[:8] if recheck_head else 'none'} != {head_sha[:8]}).",
+                )
+        except Exception as exc:
+            return "failure", f"Candidate admission blocked: PR head SHA recheck failed ({type(exc).__name__}: {exc})."
+
     return "success", "Exact-head branch preflight passed before review progression."
 
 

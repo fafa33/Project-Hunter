@@ -1,5 +1,7 @@
 # Automatic Incremental Knowledge Learning
 
+> **Amended by [ADR 0039](../../ADR/0039-review-knowledge-remediation-loop.md) (2026-10-04).** The non-goals "automatic registry commit", "semantic LLM classification" and "automatic new-family creation" are replaced by their mechanically proven forms: hybrid classification accepted only behind a RED→GREEN proof, and promotion written by trusted plumbing inside the remediation commit. Raw prose remains evidence only.
+
 ## Objective
 Connect Hunter's real PR lifecycle to the #491 deterministic learning core without granting any event source canonical authority.
 

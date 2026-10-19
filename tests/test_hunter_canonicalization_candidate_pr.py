@@ -94,11 +94,14 @@ def origin_repo(tmp_path: Path) -> Path:
 class RecordingRun:
     """Passes real `git` commands through; fakes `gh` so tests need no network/auth."""
 
-    def __init__(self, *, existing_pr: int | None = None, fail_pr_create: bool = False) -> None:
+    def __init__(
+        self, *, existing_pr: int | None = None, fail_pr_create: bool = False, source_merged: bool = True
+    ) -> None:
         self.calls: list[list[str]] = []
         self.existing_pr = existing_pr
         self.fail_pr_create = fail_pr_create
         self.pr_create_calls = 0
+        self.source_merged = source_merged
 
     def __call__(self, command: list[str]) -> subprocess.CompletedProcess[str]:
         self.calls.append(list(command))
@@ -107,6 +110,19 @@ class RecordingRun:
         return subprocess.run(list(command), check=True, capture_output=True, text=True)
 
     def _fake_gh(self, command: list[str]) -> subprocess.CompletedProcess[str]:
+        if command[1:3] == ["issue", "view"]:
+            return subprocess.CompletedProcess(
+                command,
+                0,
+                stdout=(
+                    "## Acceptance Criteria\n- Automatic finding-to-canonical-knowledge lifecycle: "
+                    "a resolved finding is turned into a canonicalization candidate branch and Draft PR.\n"
+                ),
+                stderr="",
+            )
+        if command[1:3] == ["pr", "view"]:
+            stdout = "MERGED 2026-10-07T00:00:00Z" if self.source_merged else "OPEN "
+            return subprocess.CompletedProcess(command, 0, stdout=stdout, stderr="")
         if command[1:3] == ["pr", "list"]:
             stdout = str(self.existing_pr) if self.existing_pr is not None else ""
             return subprocess.CompletedProcess(command, 0, stdout=stdout, stderr="")
@@ -161,7 +177,24 @@ def test_propose_noop_makes_no_git_write_or_pr_calls(origin_repo: Path, tmp_path
 
     assert "NO-OP" in message
     assert not any("push" in call for call in recorder.calls)
-    assert not any(call[0] == "gh" for call in recorder.calls)
+    assert not any(call[0] == "gh" and call[1:3] in (["pr", "create"], ["pr", "list"]) for call in recorder.calls)
+
+
+def test_open_source_pr_defers_without_any_git_or_pr_write(origin_repo: Path, tmp_path: Path) -> None:
+    recorder = RecordingRun(source_merged=False)
+    message = candidate_pr.propose(
+        pr=568,
+        head=HEAD,
+        base=BASE,
+        observations=[_observation(568)],
+        repo=str(origin_repo),
+        repo_root=tmp_path / "seed",
+        run=recorder,
+    )
+    assert "DEFERRED" in message
+    assert recorder.pr_create_calls == 0
+    assert not any("push" in call for call in recorder.calls)
+    assert not any(call[:2] == ["git", "-C"] and "commit" in call for call in recorder.calls)
 
 
 def test_propose_opens_draft_pr_for_confirmed_finding(origin_repo: Path, tmp_path: Path) -> None:
@@ -349,6 +382,87 @@ def test_propose_rebuilds_fresh_once_dedicated_branch_is_stale(origin_repo: Path
     assert second_recorder.pr_create_calls == 1
 
 
+def test_propose_records_canonicalized_commits_under_the_bound_writer_identity(
+    origin_repo: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Canonicalization commits must carry the authorization-bound writer
+    identity from `docs/CODE_WRITE_POLICY.json`, never the runner's ambient
+    git identity. The canonical pre-push hook refuses unbound identities
+    (exactly what happened when a runner's environment resolved
+    `user.email` to a personal address), so the recording step must pin the
+    bound identity itself and fail closed if it is not declared. Git reads
+    `GIT_AUTHOR_NAME`, `GIT_AUTHOR_EMAIL`, `GIT_COMMITTER_NAME` and
+    `GIT_COMMITTER_EMAIL` from the environment before any `-c user.*`
+    override, so even a hostile inherited environment must be sanitized or
+    the recorded author and committer end up unbound."""
+
+    # Ambient runner config matches the broken local_git_push environment:
+    # a plausible name paired with an unbound personal email.
+    _git(["config", "user.name", "Farhad5778"], cwd=tmp_path / "seed")
+    _git(["config", "user.email", "farhadafshari33@yahoo.com"], cwd=tmp_path / "seed")
+    _git(["config", "commit.gpgsign", "false"], cwd=tmp_path / "seed")
+
+    # Hostile inherited identity environment: git would otherwise prefer
+    # these over both `-c user.name` and `-c user.email`.
+    for name, value in {
+        "GIT_AUTHOR_NAME": "GIT Hostile Author",
+        "GIT_AUTHOR_EMAIL": "git-hostile-author@example.invalid",
+        "GIT_COMMITTER_NAME": "GIT Hostile Committer",
+        "GIT_COMMITTER_EMAIL": "git-hostile-committer@example.invalid",
+        "EMAIL": "hostile-email@example.invalid",
+    }.items():
+        monkeypatch.setenv(name, value)
+
+    recorder = RecordingRun()
+    message = candidate_pr.propose(
+        pr=811,
+        head=HEAD,
+        base=BASE,
+        observations=[_observation(811)],
+        repo=str(origin_repo),
+        repo_root=tmp_path / "seed",
+        run=recorder,
+    )
+    assert "OPENED" in message
+
+    commit_calls = [call for call in recorder.calls if call[0] == "env" and "git" in call and "commit" in call]
+    assert commit_calls, "the recording commit must run under the `env` identity sanitizer"
+    pinned = next(
+        call
+        for call in commit_calls
+        if "user.name=Farhad5778" in call and "user.email=34549283+fafa33@users.noreply.github.com" in call
+    )
+    sanitized = " ".join(pinned)
+    for variable in ("GIT_AUTHOR_NAME", "GIT_AUTHOR_EMAIL", "GIT_COMMITTER_NAME", "GIT_COMMITTER_EMAIL", "EMAIL"):
+        assert f"-u {variable}" in sanitized, f"the recording commit must unset {variable}"
+
+    head_sha = subprocess.run(
+        ["git", "rev-parse", candidate_pr.DEDICATED_BRANCH],
+        cwd=origin_repo,
+        check=True,
+        capture_output=True,
+        text=True,
+    ).stdout.strip()
+    identity = (
+        subprocess.run(
+            ["git", "show", "-s", "--format=%an%x00%ae%x00%cn%x00%ce", head_sha],
+            cwd=origin_repo,
+            check=True,
+            capture_output=True,
+            text=True,
+        )
+        .stdout.strip()
+        .split("\x00")
+    )
+    assert identity == ["Farhad5778", "34549283+fafa33@users.noreply.github.com"] * 2
+    assert "farhadafshari33@yahoo.com" not in identity
+    assert "fixture@example.invalid" not in identity
+    assert "git-hostile-author@example.invalid" not in identity
+    assert "git-hostile-committer@example.invalid" not in identity
+    assert "GIT Hostile Author" not in identity
+    assert "GIT Hostile Committer" not in identity
+
+
 def test_propose_reconciles_an_orphaned_branch_left_by_a_failed_pr_create(origin_repo: Path, tmp_path: Path) -> None:
     """Regression for Codex P1 (PR #530 review): if a prior run's push
     succeeded but its own `gh pr create` call then failed (a transient
@@ -424,18 +538,16 @@ def test_github_review_finding_is_durably_captured_even_before_classification(
         repo_root=tmp_path / "seed",
         run=RecordingRun(existing_pr=None),
     )
-    assert "OPENED" in message
-    captured = subprocess.run(
-        ["git", "show", f"{candidate_pr.DEDICATED_BRANCH}:docs/REVIEWER_FINDING_DISPOSITIONS.json"],
-        cwd=origin_repo,
+    assert "NO-OP" in message
+    # Unclassified lifecycle evidence is retained by the workflow artifact; it
+    # must not create repository work merely to persist raw evidence.
+    branch = subprocess.run(
+        ["git", "ls-remote", "--heads", str(origin_repo), candidate_pr.DEDICATED_BRANCH],
         check=True,
         capture_output=True,
         text=True,
     ).stdout
-    document = json.loads(captured)
-    entry = next(item for item in document["findings"] if item["id"] == "RFD-AUTO-530-review-comment-4114624029")
-    assert entry["validation_state"] == "unvalidated"
-    assert "source_head=" + "c" * 40 in entry["source_provenance"]["reference"]
+    assert branch == ""
 
 
 def test_duplicate_github_review_capture_is_idempotent(origin_repo: Path, tmp_path: Path) -> None:
@@ -468,7 +580,7 @@ def test_duplicate_github_review_capture_is_idempotent(origin_repo: Path, tmp_pa
         repo_root=tmp_path / "seed",
         run=RecordingRun(),
     )
-    assert "OPENED" in first
+    assert "NO-OP" in first
     second = candidate_pr.propose(
         pr=530,
         head=HEAD,
@@ -540,19 +652,19 @@ def test_capture_reviewer_findings_persists_message_path_and_line_for_deleted_fi
     assert "c" * 40 in entry["source_provenance"]["reference"]
 
 
-def test_capture_reviewer_findings_evidence_omits_absent_path_and_line() -> None:
-    """A top-level review body (no path/line) still durably captures its
-    message; absent optional fields are omitted rather than fabricated."""
-    observation = _github_review_observation(
-        event_id="review-2002", message="top-level review body", path=None, line=None
-    )
+def test_capture_reviewer_findings_ignores_top_level_review_wrappers() -> None:
+    """A top-level overview, including Codex's generic wrapper, is not a finding."""
+    observations = [
+        _github_review_observation(
+            event_id="review-2002", message="Codex generic review wrapper", path=None, line=None
+        ),
+        _github_review_observation(event_id="review-2003", message="Copilot review overview", path=None, line=None),
+    ]
     rendered, added = candidate_pr.capture_reviewer_findings(
-        observations=[observation], origin_bytes=DISPOSITIONS.read_bytes()
+        observations=observations, origin_bytes=DISPOSITIONS.read_bytes()
     )
-    assert added == ("RFD-AUTO-530-review-2002",)
-    document = json.loads(rendered)
-    entry = next(item for item in document["findings"] if item["id"] == "RFD-AUTO-530-review-2002")
-    assert entry["finding_evidence"] == {"message": "top-level review body"}
+    assert added == ()
+    assert json.loads(rendered) == json.loads(DISPOSITIONS.read_bytes())
 
 
 def test_capture_reviewer_findings_replay_is_idempotent_and_does_not_mutate_identity() -> None:
@@ -628,3 +740,172 @@ def test_canonicalization_python_setup_is_portable_across_runner_accounts():
     executable = "\n".join(line for line in source.splitlines() if not line.lstrip().startswith("#"))
     assert "/Users/" not in executable
     assert "farhadafshari" not in executable
+
+
+def test_canonicalization_provisions_pre_push_toolchain_from_setup_python():
+    """Canonicalization must not inherit broken tool shims from a self-hosted runner."""
+    import yaml
+
+    path = Path(__file__).resolve().parents[1] / ".github" / "workflows" / "hunter-canonicalization-auto.yml"
+    workflow = yaml.safe_load(path.read_text())
+    install = next(
+        step
+        for job in workflow["jobs"].values()
+        for step in job.get("steps", [])
+        if step.get("name") == "Install trusted canonicalization engine"
+    )
+    command = install.get("run") or ""
+    assert "'.[dev]'" in command
+    assert 'sysconfig.get_path("scripts")' in command
+    assert '>> "$GITHUB_PATH"' in command
+
+
+def test_governed_review_request_rejects_missing_issue_criteria(tmp_path: Path) -> None:
+    """Never reuse inherited review claims when trusted Issue evidence is empty."""
+
+    class MissingCriteriaRun:
+        def __call__(self, command: list[str]) -> subprocess.CompletedProcess[str]:
+            assert command[:3] == ["gh", "issue", "view"]
+            return subprocess.CompletedProcess(command, 0, stdout="## Acceptance Criteria\n", stderr="")
+
+    with pytest.raises(candidate_pr.CanonicalizationCandidatePrError, match="no verifiable acceptance criteria"):
+        candidate_pr._write_governed_review_request(MissingCriteriaRun(), tmp_path, BASE)
+
+
+def test_candidate_review_request_binds_real_issue_and_never_reuses_603(origin_repo: Path, tmp_path: Path) -> None:
+    recorder = RecordingRun()
+    candidate_pr.propose(
+        pr=301,
+        head=HEAD,
+        base=BASE,
+        observations=[_observation(301)],
+        repo=str(origin_repo),
+        repo_root=tmp_path / "seed",
+        run=recorder,
+    )
+    raw = subprocess.run(
+        ["git", "show", f"{candidate_pr.DEDICATED_BRANCH}:.hunter/pre-ready-hostile-review.json"],
+        cwd=origin_repo,
+        check=True,
+        capture_output=True,
+        text=True,
+    ).stdout
+    document = json.loads(raw)
+    assert document["claims"]["issue"] == candidate_pr.GOVERNING_ISSUE == "532"
+    assert document["claims"]["acceptance_criteria"]
+    assert document["review_request"]["claims_id"] == document["review_id"]
+
+
+def test_squash_merged_branch_cannot_be_reopened_as_orphan(origin_repo: Path, tmp_path: Path) -> None:
+    """Squash merge breaks ancestry; identical knowledge content is not a new PR."""
+    recorder = RecordingRun(existing_pr=None)
+    candidate_pr.propose(
+        pr=901,
+        head=HEAD,
+        base=BASE,
+        observations=[_observation(901)],
+        repo=str(origin_repo),
+        repo_root=tmp_path / "seed",
+        run=recorder,
+    )
+    # Reproduce a squash merge: copy only governed knowledge content onto main.
+    seed = tmp_path / "seed"
+    subprocess.run(
+        ["git", "fetch", str(origin_repo), candidate_pr.DEDICATED_BRANCH], cwd=seed, check=True, capture_output=True
+    )
+    subprocess.run(
+        [
+            "git",
+            "checkout",
+            "FETCH_HEAD",
+            "--",
+            candidate_pr.REGISTRY_RELATIVE_PATH,
+            candidate_pr.DISPOSITIONS_RELATIVE_PATH,
+        ],
+        cwd=seed,
+        check=True,
+        capture_output=True,
+    )
+    subprocess.run(["git", "commit", "-m", "squash knowledge candidate"], cwd=seed, check=True, capture_output=True)
+    subprocess.run(["git", "push", "origin", "main"], cwd=seed, check=True, capture_output=True)
+    recovery = RecordingRun(existing_pr=None)
+    result = candidate_pr.propose(
+        pr=901,
+        head=HEAD,
+        base=BASE,
+        observations=[_observation(901)],
+        repo=str(origin_repo),
+        repo_root=seed,
+        run=recovery,
+    )
+    assert "NO-OP" in result
+    assert recovery.pr_create_calls == 0
+
+
+def test_recovery_ignores_main_only_nonknowledge_changes(origin_repo: Path, tmp_path: Path) -> None:
+    """Codex PR #611: new main code changes must not poison orphan recovery."""
+    seed = tmp_path / "seed"
+    recorder = RecordingRun(existing_pr=None)
+    candidate_pr.propose(
+        pr=901,
+        head=HEAD,
+        base=BASE,
+        observations=[_observation(901)],
+        repo=str(origin_repo),
+        repo_root=seed,
+        run=recorder,
+    )
+    (seed / "unrelated-main-change.txt").write_text("unrelated merged change\n")
+    subprocess.run(["git", "add", "unrelated-main-change.txt"], cwd=seed, check=True, capture_output=True)
+    subprocess.run(["git", "commit", "-m", "unrelated main change"], cwd=seed, check=True, capture_output=True)
+    subprocess.run(["git", "push", "origin", "main"], cwd=seed, check=True, capture_output=True)
+    recovery = RecordingRun(existing_pr=None)
+    result = candidate_pr.propose(
+        pr=901,
+        head=HEAD,
+        base=BASE,
+        observations=[_observation(901)],
+        repo=str(origin_repo),
+        repo_root=seed,
+        run=recovery,
+    )
+    assert "NO-OP" not in result
+    assert recovery.pr_create_calls == 1
+
+
+def test_automatic_canonicalization_proposal_has_read_only_graphql_auth() -> None:
+    """The trusted proposal step must authenticate gh GraphQL without granting write scope."""
+    import yaml
+
+    path = Path(__file__).resolve().parents[1] / ".github/workflows/hunter-canonicalization-auto.yml"
+    workflow = yaml.safe_load(path.read_text())
+    job = workflow["jobs"]["canonicalize"]
+    assert workflow["permissions"] == {"contents": "read", "pull-requests": "read"}
+    assert "permissions" not in job
+    steps = {step["name"]: step for step in job["steps"]}
+    proposal = steps["Propose canonical knowledge when replayable evidence exists"]
+    assert proposal["env"]["GH_TOKEN"] == "${{ github.token }}"
+    assert "GITHUB_TOKEN" not in proposal["env"]
+    assert "hunter_canonicalization_candidate_pr.py" in proposal["run"]
+    assert "git@github.com:${REPOSITORY}.git" in proposal["run"]
+
+
+def test_pr_creation_does_not_inherit_read_only_workflow_token(monkeypatch) -> None:
+    import subprocess
+
+    monkeypatch.setenv("GH_TOKEN", "read-only-workflow-token")
+    monkeypatch.setenv("GITHUB_TOKEN", "read-only-workflow-token")
+    monkeypatch.setenv("GH_HOST", "github.com")
+    calls = []
+
+    def fake_run(command, **kwargs):
+        calls.append((command, kwargs["env"]))
+        return subprocess.CompletedProcess(command, 0, stdout="ok")
+
+    monkeypatch.setattr(candidate_pr.subprocess, "run", fake_run)
+    candidate_pr._default_run(["gh", "pr", "view", "615"])
+    candidate_pr._default_run(["gh", "pr", "create", "--draft"])
+    assert calls[0][1]["GH_TOKEN"] == "read-only-workflow-token"
+    assert "GH_TOKEN" not in calls[1][1]
+    assert "GITHUB_TOKEN" not in calls[1][1]
+    assert calls[1][1]["GH_HOST"] == "github.com"

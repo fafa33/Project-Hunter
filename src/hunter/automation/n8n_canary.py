@@ -14,6 +14,7 @@ from typing import Any
 
 from hunter.automation.n8n import N8N_WEBHOOK_TOKEN_ENV
 from hunter.automation.n8n_handoff import N8nPromptAutomationWorker, PromptAutomationHandoffError
+from hunter.automation.retired_issue_agent_authority import refuse_retired_authority
 from hunter.evidence_intelligence.smart_prompt_routing import PromptTaskAuthorityError
 from hunter.evidence_intelligence.smart_prompt_transport import PromptAutomationTransportError
 
@@ -76,6 +77,7 @@ def run_n8n_canary(
     recorded_at: datetime | None = None,
 ) -> N8nCanaryReceipt:
     """Dispatch one already-issued handoff and return only a non-secret accepted receipt."""
+    refuse_retired_authority("n8n-canary")
     source = os.environ if environ is None else environ
     worker = N8nPromptAutomationWorker.from_environment(environ=source, opener=opener)
     result = worker.dispatch_document(document)
