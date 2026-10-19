@@ -1805,7 +1805,7 @@ def test_publisher_resolves_both_validation_job_conclusions_from_the_triggering_
     assert 'run_attempt="$EVENT_ATTEMPT"' in context
     assert 'current_attempt="$(printf' in context
     assert 'if [ "$current_attempt" != "$run_attempt" ]; then' in context
-    assert 'triggering attempt $run_attempt was superseded' in context
+    assert "triggering attempt $run_attempt was superseded" in context
     assert 'run_attempt="$(printf' not in context
     assert "for poll in 1 2 3 4 5 6" in context
     assert '"$replay_job" != "none"' in context
