@@ -1782,7 +1782,11 @@ def test_the_workflow_provisions_the_package_before_the_lifecycle_entry_point() 
     for job in workflow["jobs"].values():
         commands = [str(step.get("run", "")) for step in job["steps"]]
         install = next(i for i, c in enumerate(commands) if "-c requirements/ci-constraints.txt" in c)
-        entry = next(i for i, c in enumerate(commands) if "scripts/hunter_issue_agent_lifecycle.py" in c)
+        entry = next(
+            i
+            for i, c in enumerate(commands)
+            if "scripts/hunter_issue_agent_lifecycle.py" in c or "scripts/hunter_issue_scope_admission.py" in c
+        )
         assert install < entry
 
 

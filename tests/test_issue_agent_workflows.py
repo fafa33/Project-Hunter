@@ -32,6 +32,7 @@ GOVERNED = (
 CONTROL, EXECUTOR = "hunter-issue-agent-control", "hunter-issue-agent-executor"
 VALIDATOR, PUBLISHER = "hunter-issue-agent-validator", "hunter-issue-agent-publisher"
 LIFECYCLE_DOMAINS = {
+    "scope-admission": None,
     "authorize": CONTROL,
     "bind": CONTROL,
     "resume-bind": CONTROL,
@@ -232,7 +233,7 @@ def test_each_lifecycle_job_runs_in_its_own_trust_domain() -> None:
 def test_secrets_never_cross_a_trust_domain() -> None:
     jobs = load(LIFECYCLE)["jobs"]
     for job_id, job in jobs.items():
-        assert job_secrets(job) <= DOMAIN_SECRETS[job["environment"]], job_id
+        assert job_secrets(job) <= DOMAIN_SECRETS[job.get("environment")], job_id
     model_holders = {
         job_id for job_id, job in jobs.items() if "HUNTER_ISSUE_AGENT_EXECUTOR_MODEL_API_KEY" in job_secrets(job)
     }
@@ -278,6 +279,12 @@ def test_content_processing_jobs_run_exactly_control_sha() -> None:
 def test_every_lifecycle_job_goes_through_the_fail_closed_entry_point() -> None:
     for name in (LIFECYCLE, "hunter-issue-agent-reconcile.yml", "hunter-issue-agent-knowledge.yml"):
         for job_id, job in load(name)["jobs"].items():
+            if name == LIFECYCLE and job_id == "scope-admission":
+                assert job.get("environment") is None
+                assert job.get("permissions") == {}
+                assert job_secrets(job) == set()
+                assert any("scripts/hunter_issue_scope_admission.py" in str(step.get("run", "")) for step in steps(job))
+                continue
             commands = [str(s["run"]) for s in steps(job) if "run" in s and "pip install" not in str(s["run"])]
             python = [c for c in commands if "python " in c]
             assert python and all("scripts/hunter_issue_agent_lifecycle.py" in c for c in python), job_id
