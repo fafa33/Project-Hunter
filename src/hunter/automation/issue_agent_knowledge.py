@@ -554,6 +554,12 @@ def ingestion_writes(
             continue  # first observation wins; later heads re-observe the same thread (idempotent fast path)
         queued.add(identity)
         writes.append(Write("finding_ingested", evidence))
+        # Every author is learned, but an untrusted author's text must never
+        # supply deterministic DPM family authority (#586, Codex PR #624).
+        if str(evidence["provenance"]["reviewer"]).lower().removesuffix("[bot]") not in {
+            name.lower().removesuffix("[bot]") for name in trusted_reviewers
+        }:
+            continue
         family: str | None = None
         outcome: str | None = None
         if tag is not None:

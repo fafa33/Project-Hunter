@@ -196,7 +196,14 @@ class Loop:
         """One reconcile pass: a fresh store, then the real eligibility decision at the PR's current head."""
 
         facts = rr.Facts().open_pr(head=self.head)
-        candidate = control.eligible_remediation(facts, ct.CONFIG, read_issue(self.restart("detect")), known, rt.ISSUE)
+        candidate = control.eligible_remediation(
+            facts,
+            ct.CONFIG,
+            read_issue(self.restart("detect")),
+            known,
+            rt.ISSUE,
+            trusted_reviewers=frozenset({"chatgpt-codex-connector"}),
+        )
         assert candidate is not None, "an ingested open finding at the PR head must be eligible"
         return candidate
 
@@ -547,7 +554,12 @@ def test_an_ambiguous_mapping_is_never_remediated(tmp_path: Path, unprivileged: 
     assert classification is not None and classification["outcome"] == "ambiguous"
     assert (
         control.eligible_remediation(
-            rr.Facts().open_pr(head=loop.head), ct.CONFIG, read_issue(loop.restart("detect")), known, rt.ISSUE
+            rr.Facts().open_pr(head=loop.head),
+            ct.CONFIG,
+            read_issue(loop.restart("detect")),
+            known,
+            rt.ISSUE,
+            trusted_reviewers=frozenset({"chatgpt-codex-connector"}),
         )
         is None
     )

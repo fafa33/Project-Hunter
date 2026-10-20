@@ -200,6 +200,16 @@ def test_deterministic_classification(store: state.GitLedgerStore) -> None:
     assert classification_of(view, 15) is None
 
 
+def test_untrusted_author_is_learned_without_deterministic_family_authority(store: state.GitLedgerStore) -> None:
+    view, written, refusals = ingest(
+        store,
+        observation(comment=81, reviewer="external-reviewer", message="Bad guard. [family:DFF-049]"),
+        observation(comment=82, reviewer="external-reviewer", message="Bad guard."),
+    )
+    assert written == 2 and not refusals
+    assert all(item.classification is None for item in view.findings.values())
+
+
 def test_two_family_tags_are_ambiguous_input_and_refused(store: state.GitLedgerStore) -> None:
     _, written, refusals = ingest(store, observation(message="Bad. [family:DFF-049] [family:DFF-028]"))
     assert written == 0 and "more than one family" in refusals[0]

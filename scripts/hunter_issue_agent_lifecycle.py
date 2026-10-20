@@ -363,6 +363,8 @@ def cmd_remediate(configuration: control.Configuration, arguments: argparse.Name
     the findings come from the verified anchored knowledge ledger and the head from a GitHub observation.
     """
 
+    import hunter_collect_learning_observations as collector
+
     writer = _writer("reconcile", "remediate", control.RECONCILE_WORKFLOW)
     github = _github(configuration)
     control.require_anchor(github, configuration, knowledge.KNOWLEDGE_LEDGER_REF)
@@ -374,7 +376,12 @@ def cmd_remediate(configuration: control.Configuration, arguments: argparse.Name
         try:
             _, ledger_view = control.load_ledger(store, configuration, provenance, issue)
             candidate = control.eligible_remediation(
-                github, configuration, ledger_view, _knowledge_view(configuration, github), issue
+                github,
+                configuration,
+                ledger_view,
+                _knowledge_view(configuration, github),
+                issue,
+                trusted_reviewers=collector._trusted_reviewer_logins(),
             )
             if candidate is None:
                 print(f"issue {issue}: no eligible remediation")
