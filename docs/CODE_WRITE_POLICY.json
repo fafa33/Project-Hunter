@@ -318,12 +318,13 @@
           "SHA256:32dP45eSMmVSt/G/CGvcxl/P+MO3Nwj9xeTh/GSA2wc"
         ],
         "fafa33": [
-          "SHA256:Yee9tbonym7Jvs2UbjpudVIRkv3aF1tcFlK240pXuBo"
+          "SHA256:Yee9tbonym7Jvs2UbjpudVIRkv3aF1tcFlK240pXuBo",
+          "SHA256:SaZ+MnrI3u2Mi22KIiKn7r2CnMxZ6mJwNsjb//StB4k"
         ]
       },
       "binding_evidence": {
         "claude": "Trusted-main evidence: SHA256:32dP45eSMmVSt/G/CGvcxl/P+MO3Nwj9xeTh/GSA2wc is the %GK fingerprint of every SSH-signed commit reachable from main at 207475240223027ce5875c8cdbc30f4f288baafb (83 commits), each authored and committed as 'Claude <noreply@anthropic.com>' and admitted through governed ingress that requires GitHub verified=true reason=valid for authorized signer 'claude'.",
-        "fafa33": "SHA256:Yee9tbonym7Jvs2UbjpudVIRkv3aF1tcFlK240pXuBo is the public SSH signing key registered on the GitHub account fafa33 ('Mac Git Signing', key id 1160850) and the repository owner's configured git signing key; the fingerprints are identical."
+        "fafa33": "SHA256:Yee9tbonym7Jvs2UbjpudVIRkv3aF1tcFlK240pXuBo is the public SSH signing key registered on the GitHub account fafa33 ('Mac Git Signing', key id 1160850) and the repository owner's configured git signing key; the fingerprints are identical. The same GitHub account fafa33 (canonical principal github-user:34549283) also publishes SSH signing key SHA256:SaZ+MnrI3u2Mi22KIiKn7r2CnMxZ6mJwNsjb//StB4k as Hunter Gateway signing, GitHub public signing-key id 1252092, added 2026-10-17. This grants no new writer identity or publisher authority."
       },
       "unsigned_commit_semantics": "A governed-range commit that carries no signing key has no fingerprint to bind and is refused. Hosted governance already requires verified=true reason=valid for every commit in the range beyond ingress_provenance.attested_from_commit, so this is parity with the authority boundary rather than a new obligation; it simply surfaces before publication instead of after.",
       "fail_closed": "Missing or malformed signing_key_bindings, a binding for a login no writer_identity_binding.identities entry binds, an empty fingerprint list, a fingerprint that is not a full SSH SHA-256 fingerprint, unreadable commit metadata, a commit with no readable signing key, and a commit whose signing key is not bound to the writer its author/committer headers resolved to all block the push."

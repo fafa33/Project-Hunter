@@ -17,6 +17,8 @@ Evidence for each pinned fingerprint:
 * ``fafa33``: the SSH signing key registered on the GitHub account ``fafa33``
   ("Mac Git Signing", key id 1160850), identical to the owner's configured git
   signing key.
+* ``fafa33`` Gateway: GitHub public SSH signing-key id 1252092,
+  "Hunter Gateway signing", belongs to the same canonical owner principal.
 """
 
 from __future__ import annotations
@@ -31,7 +33,10 @@ FINGERPRINT = re.compile(r"\ASHA256:[A-Za-z0-9+/]{43}\Z")
 
 TRUSTED_BINDINGS = {
     "claude": ["SHA256:32dP45eSMmVSt/G/CGvcxl/P+MO3Nwj9xeTh/GSA2wc"],
-    "fafa33": ["SHA256:Yee9tbonym7Jvs2UbjpudVIRkv3aF1tcFlK240pXuBo"],
+    "fafa33": [
+        "SHA256:Yee9tbonym7Jvs2UbjpudVIRkv3aF1tcFlK240pXuBo",
+        "SHA256:SaZ+MnrI3u2Mi22KIiKn7r2CnMxZ6mJwNsjb//StB4k",
+    ],
 }
 
 
