@@ -1285,7 +1285,7 @@ def test_blocked_review_request_reports_the_reason_and_never_dispatches(monkeypa
     assert stored["cycle"] is None
 
 
-def test_blocked_review_request_makes_the_reconcile_exit_non_zero(monkeypatch):
+def test_blocked_review_request_has_distinct_waiting_exit_code(monkeypatch):
     """The reconcile step only fails visibly when the orchestrator exits
     non-zero, so a blocked head must not exit 0."""
 
@@ -1293,7 +1293,7 @@ def test_blocked_review_request_makes_the_reconcile_exit_non_zero(monkeypatch):
     _collector_harness(monkeypatch)
     monkeypatch.setattr(sys, "argv", ["orchestrator", "ensure", "--repository", "owner/repo", "--pr", "472"])
 
-    assert orchestrator.main() == 1
+    assert orchestrator.main() == 3
 
 
 def test_new_head_starts_orchestration_once_after_its_prerequisite_completes(monkeypatch):
@@ -2605,3 +2605,15 @@ def test_an_unreadable_status_history_fails_the_cycle_closed(monkeypatch):
     monkeypatch.setattr(orchestrator, "request_json", request)
     state, cycle, diagnostic = orchestrator.read_cycle("owner/repo", "token", 472, HEAD)
     assert (state, cycle, diagnostic) == ("absent", None, None)
+
+
+def test_reconcile_distinguishes_exact_head_waiting_from_execution_failure():
+    from pathlib import Path
+
+    workflow = Path(".github/workflows/hunter-governance-reconcile.yml").read_text()
+    assert "orchestration_rc=0" in workflow
+    assert "orchestration_rc=$?" in workflow
+    assert '"${orchestration_rc}" -eq 3' in workflow
+    assert "WAITING_FOR_EXACT_HEAD_REVIEW for PR #" in workflow
+    assert '"${orchestration_rc}" -ne 0' in workflow
+    assert "failures=1" in workflow

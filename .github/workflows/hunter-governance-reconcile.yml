@@ -172,11 +172,20 @@ jobs:
             # step above still owns exact-head review authority.
             if [ ! -f scripts/hunter_review_orchestrator.py ]; then
               echo "::notice::Bootstrap phase: hunter_review_orchestrator.py not yet on default branch; skipping orchestration for PR #${pr_number}."
-            elif ! python scripts/hunter_review_orchestrator.py ensure \
-              --pr "${pr_number}" \
-              --repository "${GITHUB_REPOSITORY}"; then
-              echo "::error::Review orchestration failed for PR #${pr_number}; continuing."
-              failures=1
+            else
+              # Exit 3 is a blocked exact-head review prerequisite, not a
+              # process failure. It must remain visible and must NEVER imply
+              # review completion or Ready; candidate admission owns that gate.
+              orchestration_rc=0
+              python scripts/hunter_review_orchestrator.py ensure \
+                --pr "${pr_number}" \
+                --repository "${GITHUB_REPOSITORY}" || orchestration_rc=$?
+              if [ "${orchestration_rc}" -eq 3 ]; then
+                echo "::warning::WAITING_FOR_EXACT_HEAD_REVIEW for PR #${pr_number}; commit a valid exact-head request before review dispatch."
+              elif [ "${orchestration_rc}" -ne 0 ]; then
+                echo "::error::Review orchestration failed for PR #${pr_number}; continuing."
+                failures=1
+              fi
             fi
           done <<< "${pr_numbers}"
 

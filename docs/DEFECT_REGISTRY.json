@@ -2690,13 +2690,15 @@
         "rationale": "Changes to review-request generation, candidate mutation, reconciliation and reviewer dispatch can repeatedly turn a legitimate stale-head security block into failing reconcile runs."
       },
       "prevention": {
-        "mechanism": "Required targeted integration regression: candidate reviewed at HEAD A, content changed at HEAD B, stale request rejected and Ready blocked, reconcile records actionable waiting state without false success or workflow failure; authenticated exact-head B request resumes exactly once; genuine security or execution errors remain failures. No weakening of exact-head proof. Existing stale-head regression covers only fail-closed rejection; the waiting/recovery regression is NOT YET IMPLEMENTED.",
+        "mechanism": "Required targeted integration regression: candidate reviewed at HEAD A, content changed at HEAD B, stale request rejected and Ready blocked, reconcile records actionable waiting state without false success or workflow failure; authenticated exact-head B request resumes exactly once; genuine security or execution errors remain failures. No weakening of exact-head proof. Existing stale-head regression covers only fail-closed rejection; waiting-vs-execution-error classification is regression-tested; authenticated new-head dispatch remains covered by test_new_head_starts_orchestration_once_after_its_prerequisite_completes.",
         "boundary": "hosted-gate"
       },
       "regression_evidence": [
-        "tests/test_issue_541_review_opportunity_cutover.py::test_stale_head_review_evidence_remains_invalid"
+        "tests/test_issue_541_review_opportunity_cutover.py::test_stale_head_review_evidence_remains_invalid",
+        "tests/test_hunter_review_orchestrator.py::test_blocked_review_request_has_distinct_waiting_exit_code",
+        "tests/test_hunter_review_orchestrator.py::test_reconcile_distinguishes_exact_head_waiting_from_execution_failure"
       ],
-      "lifecycle": "recorded",
+      "lifecycle": "regression-tested",
       "sources": [
         "PR #622 Governance Reconcile run 39442251750 (2026-10-20); scripts/hunter_review_orchestrator.py review_request_state and ReviewRequestBlocked; Issue #588 related stale readiness/reconciliation history"
       ]
