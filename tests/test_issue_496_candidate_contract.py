@@ -106,16 +106,108 @@ def test_github_workflow_latest_exact_head_controls_admission(monkeypatch):
     assert core.candidate_admission("fafa33/Project-Hunter", "token", HEAD, 496)[0] == "success"
 
 
-def test_provider_runtime_reconstructs_exact_governed_build(monkeypatch, tmp_path):
-    from hunter.automation import opencode_provider_runtime as provider
-    from hunter.automation.n8n_handoff import PromptAutomationEnvelopeHandoff
+def test_real_model_adapter_retry_retains_build_and_rejects_uncertain_delivery(tmp_path):
+    """Exercise the active Model Adapter, never the retired OpenCode runtime."""
+    import model_adapter_fixture as fixture
+    import pytest
+    from test_model_adapter_phase_b import dispatch, prepare
 
-    _, machine = _build(monkeypatch, tmp_path, [_family("DFF-RUNTIME")])
-    compiled = machine.compile_task(_request(), implementation_scope=_scope())
-    assert "DFF-RUNTIME" in _compiled_prompt_content(compiled)
-    handoff = PromptAutomationEnvelopeHandoff.from_envelope(compiled.envelope)
-    document = handoff.to_json()
-    exact_first = provider._exact_prompt(document, tmp_path / "evidence.sqlite")
-    exact_retry = provider._exact_prompt(document, tmp_path / "evidence.sqlite")
-    assert exact_first == exact_retry
-    assert "DFF-RUNTIME" in exact_first
+    from hunter.evidence_intelligence.model_adapter import ModelAdapterService, RetryNotAuthorized
+    from hunter.evidence_intelligence.model_adapter_persistence import ModelAdapterPersistenceRepository
+    from hunter.evidence_intelligence.repository import EvidenceIntelligenceRepository
+
+    repository = ModelAdapterPersistenceRepository(EvidenceIntelligenceRepository(tmp_path / "adapter.sqlite"))
+    service = ModelAdapterService(repository, transport_endpoints=fixture.PHASE_B_ENDPOINTS)
+    first = prepare(service)
+    refused = dispatch(
+        service,
+        first,
+        fixture.FakeTransport(
+            fixture.transport_result(
+                result_class="PROVIDER_REFUSED",
+                execution_evidence="NO_EXECUTION_ESTABLISHED",
+                response_text=None,
+                correlation_identity=None,
+                reason_code="PROVIDER_HTTP_400",
+            )
+        ),
+    ).outcome
+    retry = prepare(
+        service,
+        authority=fixture.attempt_authority(cutoff=fixture.later(30)),
+        attempt_ordinal=2,
+        predecessor_attempt_id=first.attempt.attempt_id,
+        predecessor_outcome=refused,
+        recorded_at=fixture.later(31),
+    )
+    assert retry.attempt.build_record_id == first.attempt.build_record_id
+    assert retry.attempt.prompt_artifact_id == first.attempt.prompt_artifact_id
+    assert retry.attempt.attempt_id != first.attempt.attempt_id
+    assert retry.attempt.predecessor_attempt_id == first.attempt.attempt_id
+    with pytest.raises(RetryNotAuthorized):
+        prepare(
+            service,
+            authority=fixture.attempt_authority(cutoff=fixture.later(60)),
+            attempt_ordinal=3,
+            predecessor_attempt_id=retry.attempt.attempt_id,
+            recorded_at=fixture.later(61),
+        )
+
+
+def test_injected_known_defect_regression_rejected_until_fixed(monkeypatch, tmp_path):
+    """Run a real failing/passing regression, then feed its result through GitHub admission."""
+    import subprocess
+    import sys
+
+    core = admission.governance
+    candidate = tmp_path / "test_prevent_regression.py"
+    candidate.write_text("def test_known_invariant():\n    assert 1 + 1 == 3\n", encoding="utf-8")
+
+    def run_regression():
+        return subprocess.run(
+            [sys.executable, "-m", "pytest", "-q", "-p", "no:cacheprovider", str(candidate)],
+            cwd=tmp_path,
+            capture_output=True,
+            text=True,
+            timeout=35,
+        )
+
+    failed = run_regression()
+    assert failed.returncode != 0 and "FAILED" in failed.stdout
+    state = {"conclusion": "failure", "head": HEAD}
+
+    def github_api(_repo, _token, method, path):
+        assert method == "GET"
+        if path == "pulls/496":
+            return {"head": {"sha": state["head"]}}
+        if path.startswith("actions/runs?"):
+            return {
+                "workflow_runs": [
+                    {
+                        "id": 201,
+                        "name": core.PRE_PR_WORKFLOW_NAME,
+                        "path": core.PRE_PR_WORKFLOW_PATH,
+                        "event": "push",
+                        "head_sha": state["head"],
+                        "status": "completed",
+                        "conclusion": state["conclusion"],
+                    }
+                ]
+            }
+        raise AssertionError(path)
+
+    monkeypatch.setattr(core, "request_json", github_api)
+    monkeypatch.setattr(core, "read_pr_changed_paths", lambda *_: (True, ("src/hunter/example.py",), None))
+    monkeypatch.setattr(core, "read_head_preflight_mode", lambda *_: ("normal", None))
+    monkeypatch.setattr(core, "verify_code_write_ingress_provenance", lambda *_: ("success", "ingress"))
+    monkeypatch.setattr(core, "read_unresolved_review_threads", lambda *_: ((), None))
+    monkeypatch.setattr(core, "verify_pre_ready_hostile_review", lambda *_: ("success", "review"))
+    assert core.candidate_admission("fafa33/Project-Hunter", "token", HEAD, 496)[0] == "failure"
+
+    candidate.write_text("def test_known_invariant():\n    assert 1 + 1 == 2  # fixed\n", encoding="utf-8")
+    for cache in (tmp_path / "__pycache__").glob("test_prevent_regression*.pyc"):
+        cache.unlink()
+    fixed = run_regression()
+    assert fixed.returncode == 0 and "1 passed" in fixed.stdout
+    state["conclusion"] = "success"
+    assert core.candidate_admission("fafa33/Project-Hunter", "token", HEAD, 496)[0] == "success"
