@@ -42,6 +42,43 @@ def convert_to_draft(token: str, pull_request_node_id: str) -> bool:
     return True
 
 
+MARK_READY_MUTATION = """mutation($id: ID!) { markPullRequestReadyForReview(input: {pullRequestId: $id}) { pullRequest { id isDraft } } }"""
+
+
+def mark_ready(token: str, node_id: str) -> bool:
+    try:
+        payload = transport.request_graphql_json(
+            url="https://api.github.com/graphql",
+            headers={},
+            query=MARK_READY_MUTATION,
+            variables={"id": node_id},
+            token=token,
+            what="mark admitted PR ready",
+            policy=transport.RetryPolicy(attempts=1),
+        )
+        pr = (payload.get("markPullRequestReadyForReview") or {}).get("pullRequest") or {}
+        return pr.get("id") == node_id and pr.get("isDraft") is False
+    except Exception as exc:
+        print(f"Ready transition failed closed: {exc}")
+        return False
+
+
+def safe_draft(pr: dict, repository: str) -> bool:
+    head, base = pr.get("head") or {}, pr.get("base") or {}
+    return (
+        isinstance(head, dict)
+        and isinstance(base, dict)
+        and isinstance(head.get("repo"), dict)
+        and isinstance(base.get("repo"), dict)
+        and head["repo"].get("full_name") == repository
+        and base["repo"].get("full_name") == repository
+        and base.get("ref") == "main"
+        and bool(base.get("sha"))
+        and pr.get("mergeable") is True
+        and bool(pr.get("node_id"))
+    )
+
+
 def ready_checks(repository: str, token: str, head_sha: str, mergeable: bool | None) -> tuple[str, str]:
     """Ready requires the same current code/security/governance checks as merge."""
     import hunter_merge_readiness_v2 as readiness
@@ -91,8 +128,7 @@ def enforce_candidate_admission(
     base_ref = str((pr.get("base") or {}).get("ref") or "").strip()
     if base_ref != "main":
         return 0
-    if pr.get("draft") is True:
-        return 0
+    was_draft = pr.get("draft") is True
 
     head_sha = str((pr.get("head") or {}).get("sha") or "").strip()
     if not head_sha:
@@ -110,6 +146,37 @@ def enforce_candidate_admission(
         head_sha,
         pr_number,
     )
+    if admission_state == "success" and was_draft:
+        if not safe_draft(pr, repository):
+            print(f"PR #{pr_number} remains Draft: unsafe base/head/fork/mergeability")
+            return 1
+        latest = governance.read_mergeability(repository, token, pr_number)
+        if (
+            not safe_draft(latest, repository)
+            or latest.get("state") != "open"
+            or latest.get("draft") is not True
+            or (latest.get("head") or {}).get("sha") != head_sha
+            or (latest.get("base") or {}).get("sha") != (pr.get("base") or {}).get("sha")
+            or latest.get("node_id") != pr.get("node_id")
+        ):
+            print(f"PR #{pr_number} stale before Ready transition")
+            return 1
+        mutation_confirmed = mark_ready(token, str(latest["node_id"]))
+        # An ambiguous transport failure may follow a committed GitHub mutation.
+        # Re-read authoritative PR state before deciding whether the operation failed.
+        confirmed = governance.read_mergeability(repository, token, pr_number)
+        if (
+            confirmed.get("state") != "open"
+            or confirmed.get("draft") is not False
+            or (confirmed.get("head") or {}).get("sha") != head_sha
+            or (confirmed.get("base") or {}).get("sha") != (pr.get("base") or {}).get("sha")
+        ):
+            print(f"PR #{pr_number} Ready confirmation failed")
+            return 1
+        if not mutation_confirmed:
+            print(f"PR #{pr_number} Ready mutation response ambiguous; GitHub state confirms Ready")
+        print(f"PR #{pr_number} automatically Ready on {head_sha}")
+        return 0
     if admission_state == "success":
         admission_state, description = ready_checks(repository, token, head_sha, pr.get("mergeable"))
     if admission_state == "success":
