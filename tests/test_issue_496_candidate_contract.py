@@ -52,3 +52,70 @@ def test_provider_retry_preserves_build_and_stale_or_cancelled_event_cannot_read
     monkeypatch.setattr(admission.governance, "candidate_admission", forbidden)
     monkeypatch.setattr(admission, "mark_ready", forbidden)
     assert admission.enforce_candidate_admission("fafa33/Project-Hunter", "token", 496, HEAD) == 0
+
+
+def test_github_workflow_latest_exact_head_controls_admission(monkeypatch):
+    core = admission.governance
+    state = {"conclusion": "failure", "current_head": HEAD}
+
+    def github_request(_repository, _token, method, path):
+        assert method == "GET"
+        if path == "pulls/496":
+            return {"head": {"sha": state["current_head"]}}
+        if path.startswith("actions/runs?"):
+            return {
+                "workflow_runs": [
+                    {
+                        "id": 100,
+                        "name": core.PRE_PR_WORKFLOW_NAME,
+                        "path": core.PRE_PR_WORKFLOW_PATH,
+                        "event": "push",
+                        "head_sha": HEAD,
+                        "status": "completed",
+                        "conclusion": "success",
+                    },
+                    {
+                        "id": 101,
+                        "name": core.PRE_PR_WORKFLOW_NAME,
+                        "path": core.PRE_PR_WORKFLOW_PATH,
+                        "event": "push",
+                        "head_sha": HEAD,
+                        "status": "completed",
+                        "conclusion": state["conclusion"],
+                    },
+                ]
+            }
+        raise AssertionError(f"unexpected GitHub request: {path}")
+
+    monkeypatch.setattr(core, "request_json", github_request)
+    monkeypatch.setattr(core, "read_pr_changed_paths", lambda *_: (True, ("src/hunter/example.py",), None))
+    monkeypatch.setattr(core, "read_head_preflight_mode", lambda *_: ("normal", None))
+    monkeypatch.setattr(core, "verify_code_write_ingress_provenance", lambda *_: ("success", "trusted ingress"))
+    monkeypatch.setattr(core, "read_unresolved_review_threads", lambda *_: ((), None))
+    monkeypatch.setattr(core, "verify_pre_ready_hostile_review", lambda *_: ("success", "reviewed"))
+
+    for conclusion in ("failure", "cancelled"):
+        state["conclusion"] = conclusion
+        verdict, detail = core.candidate_admission("fafa33/Project-Hunter", "token", HEAD, 496)
+        assert verdict == "failure" and conclusion in detail
+
+    state["current_head"] = "c" * 40
+    assert core.candidate_admission("fafa33/Project-Hunter", "token", HEAD, 496)[0] == "failure"
+    state["current_head"] = HEAD
+    state["conclusion"] = "success"
+    assert core.candidate_admission("fafa33/Project-Hunter", "token", HEAD, 496)[0] == "success"
+
+
+def test_provider_runtime_reconstructs_exact_governed_build(monkeypatch, tmp_path):
+    from hunter.automation import opencode_provider_runtime as provider
+    from hunter.automation.n8n_handoff import PromptAutomationEnvelopeHandoff
+
+    _, machine = _build(monkeypatch, tmp_path, [_family("DFF-RUNTIME")])
+    compiled = machine.compile_task(_request(), implementation_scope=_scope())
+    assert "DFF-RUNTIME" in _compiled_prompt_content(compiled)
+    handoff = PromptAutomationEnvelopeHandoff.from_envelope(compiled.envelope)
+    document = handoff.to_json()
+    exact_first = provider._exact_prompt(document, tmp_path / "evidence.sqlite")
+    exact_retry = provider._exact_prompt(document, tmp_path / "evidence.sqlite")
+    assert exact_first == exact_retry
+    assert "DFF-RUNTIME" in exact_first
