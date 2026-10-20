@@ -175,7 +175,7 @@ def collect(repository: str, token: str, pr: int, head: str, base: str) -> list[
                 if not is_deleted_owner_disposition_reply:
                     comments.append(event_comment)
 
-    trusted_reviewers = _trusted_reviewer_logins()
+    trusted_reviewers = _trusted_reviewer_logins()  # top-level review authority only
     dispositions = _owner_replies(comments, owner)
     thread_state = _review_threads(repository, token, pr) if dispositions else {}
     observations: list[dict[str, Any]] = []
@@ -187,8 +187,6 @@ def collect(repository: str, token: str, pr: int, head: str, base: str) -> list[
             raise ValueError("review comment id must be an integer")
         user = item.get("user") if isinstance(item.get("user"), dict) else {}
         reviewer = str(user.get("login") or "")
-        if _normalized_login(reviewer) not in trusted_reviewers:
-            continue
         classification = None
         invariant = None
         fix_reference = None

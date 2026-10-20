@@ -132,7 +132,7 @@ def test_the_fingerprint_survives_new_heads_and_renumbering_but_not_another_path
     "change",
     [
         {"event_id": "review-77"},  # a top-level review is not an inline finding
-        {"reviewer": "random-user"},
+        {"reviewer": ""},
         {"path": None},
         {"reviewed_head_sha": "not-a-sha"},
         {"source_pr": 0},
@@ -172,7 +172,7 @@ def test_conflicting_evidence_under_one_key_is_refused(store: state.GitLedgerSto
 
 
 def test_refusals_are_reported_never_silently_dropped(store: state.GitLedgerStore) -> None:
-    _, written, refusals = ingest(store, observation(reviewer="random-user"), observation(comment=12))
+    _, written, refusals = ingest(store, observation(reviewer=""), observation(comment=12))
     assert written == 1 and len(refusals) == 1 and "review-comment-11" in refusals[0]
 
 
@@ -537,3 +537,14 @@ def test_a_later_head_re_observation_alone_writes_nothing(store: state.GitLedger
     view, written, _ = ingest(store, observation(reviewed_head_sha=LATER, source_event_head_sha=LATER))
     assert written == 0
     assert view.findings[knowledge.finding_id(1, 561, 11)].ingested["provenance"]["reviewed_head_sha"] == HEAD
+
+
+def test_copilot_and_other_authenticated_reviewers_are_ingested(store: state.GitLedgerStore) -> None:
+    view, written, refusals = ingest(
+        store,
+        observation(comment=71, reviewer="copilot-pull-request-reviewer[bot]"),
+        observation(comment=72, reviewer="external-reviewer"),
+    )
+    assert written == 2
+    assert not refusals
+    assert len(view.findings) == 2

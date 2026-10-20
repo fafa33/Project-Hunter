@@ -217,15 +217,17 @@ def fingerprint(path: str, claim: str) -> str:
 def finding_from_observation(
     observation: Mapping[str, Any], *, repository_id: int, trusted_reviewers: frozenset[str]
 ) -> dict[str, Any]:
-    """L1 evidence for one trusted-reviewer thread observation (``hunter_collect_learning_observations``)."""
+    """L1 evidence for one authenticated GitHub inline thread observation."""
 
     event = str(observation.get("event_id", ""))
     match = re.fullmatch(r"review-comment-([1-9][0-9]{0,18})", event)
     if match is None:
         raise FindingRefused("only inline review threads are findings")
     reviewer = str(observation.get("reviewer", ""))
-    if reviewer.lower().removesuffix("[bot]") not in trusted_reviewers:
-        raise FindingRefused("the reviewer is not an authenticated pool reviewer")
+    # Reviewer authority is independent of learning ingestion. GitHub API
+    # authenticates the source; reviewer identity remains evidence, not a gate.
+    if not reviewer.strip():
+        raise FindingRefused("an inline finding must identify its author")
     path = observation.get("path")
     if not isinstance(path, str) or not path:
         raise FindingRefused("an inline finding must name its path")

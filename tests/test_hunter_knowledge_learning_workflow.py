@@ -239,7 +239,7 @@ def test_collector_rejects_untrusted_reviewer_and_keeps_trusted_history(monkeypa
         collector.governance, "request_json", lambda _r, _t, _m, path: payload if "/comments?" in path else []
     )
     result = collector.collect("fafa33/Project-Hunter", "token", 530, head, base)
-    assert [item["event_id"] for item in result] == ["review-comment-11"]
+    assert [item["event_id"] for item in result] == ["review-comment-11", "review-comment-12"]
     assert result[0]["classification"] is None
 
 
@@ -453,3 +453,41 @@ def test_scheduled_learning_rotates_over_paginated_open_pr_set():
     assert 'gh api --paginate "repos/${REPOSITORY}/pulls?state=open&base=main&per_page=100"' in workflow
     assert "gh pr list --repo" not in workflow
     assert "hour % ${#open_prs[@]}" in workflow
+
+
+def test_authenticated_copilot_inline_finding_is_collected_without_review_authority(monkeypatch):
+    import sys
+
+    sys.path.insert(0, str(Path("scripts").resolve()))
+    import hunter_collect_learning_observations as collector
+
+    head, base = "a" * 40, "b" * 40
+    comments = [
+        {
+            "id": 4222896715,
+            "commit_id": head,
+            "user": {"login": "Copilot"},
+            "path": "scripts/example.py",
+            "line": 8,
+            "body": "Potential regression",
+        }
+    ]
+    monkeypatch.setattr(collector, "_trusted_reviewer_logins", lambda: frozenset({"chatgpt-codex-connector"}))
+    monkeypatch.setattr(
+        collector.governance, "request_json", lambda _r, _t, _m, path: comments if "/comments?" in path else []
+    )
+    result = collector.collect("fafa33/Project-Hunter", "token", 579, head, base)
+    assert len(result) == 1
+    assert result[0]["reviewer"] == "Copilot"
+    assert result[0]["event_id"] == "review-comment-4222896715"
+
+
+def test_bounded_merged_pr_backfill_dispatch_is_explicit_and_main_only():
+    from pathlib import Path
+
+    content = Path(".github/workflows/hunter-issue-agent-knowledge.yml").read_text()
+    assert "workflow_dispatch:" in content
+    assert "BACKFILL_PR: ${{ inputs.pr" in content
+    assert 'knowledge-ingest --pr "$BACKFILL_PR"' in content
+    assert "github.ref == 'refs/heads/main'" in content
+    assert "HUNTER_ISSUE_AGENT_STATE_SIGNING_KEY" in content

@@ -299,7 +299,7 @@ def _knowledge_view(configuration: control.Configuration, github: control.GitHub
 
 
 def cmd_knowledge_ingest(configuration: control.Configuration, arguments: argparse.Namespace) -> int:
-    """ADR 0039 L1/L3.1 fast path: record every trusted-reviewer finding once, with its deterministic mapping."""
+    """ADR 0039 L1/L3.1: ingest authenticated inline findings independently of reviewer authority."""
 
     import hunter_collect_learning_observations as collector
 
@@ -320,7 +320,9 @@ def cmd_knowledge_ingest(configuration: control.Configuration, arguments: argpar
     store = _store(configuration, authenticated=True)
     for number in numbers:
         pull = control.definitive(github.get(f"/repos/{configuration.repository}/pulls/{number}"))
-        if not isinstance(pull, Mapping) or pull.get("state") != "open":
+        if not isinstance(pull, Mapping):
+            raise control.FactsUnavailable("pull request metadata is not observable")
+        if pull.get("state") != "open" and not (arguments.pr and pull.get("merged_at")):
             continue
         head, base = str(pull["head"]["sha"]), str(pull["base"]["sha"])
         observations = collector.collect(configuration.repository, token, number, head, base)
