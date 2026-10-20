@@ -666,7 +666,7 @@ def test_an_unreachable_trusted_server_fails_closed(tmp_path, _hosted_git) -> No
     assert problem is not None and "freshness" in problem
 
 
-def test_a_fork_clone_reads_authority_from_upstream(tmp_path, _hosted_git) -> None:
+def test_a_fork_clone_reads_authority_from_upstream(tmp_path, _hosted_git, monkeypatch) -> None:
     """Codex P1: with ``origin`` as the contributor's fork, authority is ``upstream``.
 
     The fork's ``main`` binds the candidate's key; canonical ``upstream/main``
@@ -682,6 +682,16 @@ def test_a_fork_clone_reads_authority_from_upstream(tmp_path, _hosted_git) -> No
     git("push", "-q", "origin", "HEAD:refs/heads/main")  # the fork's main carries the candidate's own policy
     git("commit", "-q", "--allow-empty", "-S", "-m", "further candidate work signed with the same key")
 
+    # The fixture uses a local bare Git repository as canonical upstream.
+    # Represent its verified GitHub identity only for remote-selection logic.
+    actual_run_git = provenance._run_git
+
+    def canonical_upstream(*args, **kwargs):
+        if args == ("config", "--get", "remote.upstream.url"):
+            return "git@github.com:fafa33/Project-Hunter.git"
+        return actual_run_git(*args, **kwargs)
+
+    monkeypatch.setattr(provenance, "_run_git", canonical_upstream)
     assert provenance.trusted_remote(cwd=repo) == "upstream"
     problem = provenance.check_range("HEAD", cwd=repo)
 
@@ -1113,7 +1123,7 @@ def test_a_boundary_at_the_first_commit_has_no_departed_epoch_to_recover() -> No
     verdict = provenance.evaluate_range(_recovery_binding(), range_)
 
     assert verdict.ok is False
-    assert "first position" in verdict.reason
+    assert "no departed writer epoch" in verdict.reason
 
 
 def test_the_recovery_epoch_may_be_exactly_the_boundary_commit() -> None:
@@ -3967,3 +3977,70 @@ def test_malformed_review_evidence_does_not_block_an_ordinary_draft_push(monkeyp
     assert "does not block push or deterministic merge authority" in captured.out
     assert "AttributeError" not in captured.out
     assert captured.err == ""
+
+
+def test_review_finding_malformed_signing_flag_fails_closed() -> None:
+    for value in ("false", None, 0, []):
+        policy = _policy()
+        policy[provenance.BINDING_FIELD][provenance.SIGNING_KEY_BINDINGS_FIELD][
+            "require_key_bound_to_resolved_writer"
+        ] = value
+        parsed, error = provenance.parse_binding(policy)
+        assert parsed is None
+        assert "must be a boolean" in error
+
+
+def test_review_finding_malformed_recovery_trailer_refused_for_single_writer() -> None:
+    binding = _recovery_binding()
+    commit = _owner("d" * 40, parents="a" * 40, recovery_declaration='{"schema":')
+    verdict = provenance.evaluate_range(binding, (commit,))
+    assert not verdict.ok
+    assert "malformed" in verdict.reason
+
+
+def test_review_finding_recovery_ancestry_not_log_position() -> None:
+    boundary = _owner(
+        "b" * 40,
+        parents="a" * 40,
+        recovery_declaration=_declaration(parent_sha="a" * 40),
+    )
+    departed = _claude("a" * 40, parents="9" * 40)
+    verdict = provenance.evaluate_range(_recovery_binding(), (boundary, departed))
+    assert verdict.ok, verdict.reason
+    assert "claude' (1 commit(s))" in verdict.reason
+    assert "fafa33' (1 commit(s))" in verdict.reason
+
+
+def test_review_finding_untrusted_upstream_is_not_authority(tmp_path) -> None:
+    subprocess.run(("git", "init", "-q", str(tmp_path)), check=True)
+    subprocess.run(
+        ("git", "-C", str(tmp_path), "remote", "add", "upstream", "https://example.org/attacker/repo"),
+        check=True,
+    )
+    assert provenance.trusted_remote(cwd=tmp_path) == "origin"
+    subprocess.run(
+        ("git", "-C", str(tmp_path), "remote", "set-url", "upstream", "git@github.com:fafa33/Project-Hunter.git"),
+        check=True,
+    )
+    assert provenance.trusted_remote(cwd=tmp_path) == "upstream"
+
+
+def test_review_finding_multiline_trailer_is_not_truncated(monkeypatch) -> None:
+    commit = _owner("a" * 40)
+    declaration = _declaration(parent_sha="9" * 40)
+    raw = (
+        f"{commit.sha}{provenance.GIT_FIELD_SEPARATOR}{declaration}\n extra field" f"{provenance.GIT_RECORD_SEPARATOR}"
+    )
+
+    def fake_run_git(*args, **kwargs):
+        if any("trailers:key=" in arg for arg in args):
+            return raw
+        return "fixture"
+
+    monkeypatch.setattr(provenance, "_run_git", fake_run_git)
+    monkeypatch.setattr(provenance, "parse_commit_records", lambda _raw: (commit,))
+    read = provenance.read_range_commits("base", "head", binding=_recovery_binding())
+    assert "extra field" in read[0].recovery_declaration
+    declaration_value, error = provenance.parse_recovery_declaration(read[0], _recovery_binding().owner_recovery)
+    assert declaration_value is None
+    assert "malformed" in error

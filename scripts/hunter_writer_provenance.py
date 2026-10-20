@@ -371,12 +371,19 @@ def parse_binding(policy: Any, *, predates_key_binding: bool = False) -> tuple[W
         signing_keys, key_error = parse_signing_key_bindings(policy)
         if signing_keys is None:
             return None, key_error
-    require_key_binding = binding.get(SIGNING_KEY_BINDINGS_FIELD)
-    require_key_binding = (
-        require_key_binding.get("require_key_bound_to_resolved_writer") is True
-        if isinstance(require_key_binding, dict)
-        else False
-    )
+    key_policy = binding.get(SIGNING_KEY_BINDINGS_FIELD)
+    if key_policy is not None and not isinstance(key_policy, dict):
+        return None, f"{BINDING_FIELD}.{SIGNING_KEY_BINDINGS_FIELD} must be an object"
+    if isinstance(key_policy, dict):
+        key_required = key_policy.get("require_key_bound_to_resolved_writer")
+        if not isinstance(key_required, bool):
+            return None, (
+                f"{BINDING_FIELD}.{SIGNING_KEY_BINDINGS_FIELD}."
+                "require_key_bound_to_resolved_writer must be a boolean"
+            )
+        require_key_binding = key_required
+    else:
+        require_key_binding = False
     bound_logins = {
         entry.get("login").strip()
         for entry in raw_identities
@@ -702,13 +709,6 @@ def evaluate_owner_recovery(
             f"{boundary.first_parent[:10] or '(none)'}",
         )
 
-    if index == 0:
-        return ProvenanceVerdict(
-            False,
-            f"commit {short} declares a writer-recovery boundary at the first position of the governed range, "
-            "where there is no departed writer epoch to recover from",
-        )
-
     # The epochs are defined by ancestry, never by position. ``git log
     # --reverse`` orders by date, so in a range with a merge a departed-writer
     # side branch can sort before the boundary without being reachable from
@@ -760,8 +760,8 @@ def evaluate_owner_recovery(
     return ProvenanceVerdict(
         True,
         f"{len(resolved)} commit(s) in the governed range are single-writer across an owner-authorized recovery "
-        f"boundary at {short}: epoch {actual_departed!r} ({index} commit(s)) then epoch "
-        f"{boundary_writer.login!r} ({len(resolved) - index} commit(s)). Historical attribution before the "
+        f"boundary at {short}: epoch {actual_departed!r} ({len(departed_shas)} commit(s)) then epoch "
+        f"{boundary_writer.login!r} ({len(recovery_shas)} commit(s)). Historical attribution before the "
         "boundary is unchanged.",
         boundary_writer.login,
     )
@@ -789,6 +789,12 @@ def evaluate_range(binding: WriterIdentityBinding, commits: tuple[CommitProvenan
         if key_problem is not None:
             return ProvenanceVerdict(False, key_problem)
         resolved.append((commit, writer))
+
+    if binding.owner_recovery is not None:
+        for commit, _writer in resolved:
+            _declaration, error = parse_recovery_declaration(commit, binding.owner_recovery)
+            if error:
+                return ProvenanceVerdict(False, error)
 
     writers = {writer.login for _commit, writer in resolved}
     if len(writers) <= 1:
@@ -891,17 +897,30 @@ def read_range_commits(
         *GIT_SIGNATURE_READ_CONFIG,
         "log",
         "--reverse",
-        f"--format=%H{GIT_FIELD_SEPARATOR}%(trailers:key={trailer},valueonly,separator={GIT_FIELD_SEPARATOR})",
+        f"--format=%H{GIT_FIELD_SEPARATOR}%(trailers:key={trailer},valueonly,separator={GIT_FIELD_SEPARATOR}){GIT_RECORD_SEPARATOR}",
         f"{base}..{head}",
         cwd=cwd,
     )
     found: dict[str, str] = {}
-    for line in declarations.splitlines():
-        if GIT_FIELD_SEPARATOR not in line:
+    expected_shas = {commit.sha.lower() for commit in commits}
+    seen: set[str] = set()
+    for record in declarations.split(GIT_RECORD_SEPARATOR):
+        if not record.strip():
             continue
-        sha, _, value = line.partition(GIT_FIELD_SEPARATOR)
-        if sha.strip() and value.strip():
-            found[sha.strip().lower()] = value.strip()
+        fields = record.strip("\n").split(GIT_FIELD_SEPARATOR)
+        if len(fields) < 2:
+            raise GitEvidenceUnavailable("recovery trailer record is missing its separator")
+        sha = fields[0].strip().lower()
+        if sha not in expected_shas or sha in seen:
+            raise GitEvidenceUnavailable("recovery trailer record has an unknown or duplicate commit")
+        seen.add(sha)
+        value = GIT_FIELD_SEPARATOR.join(fields[1:]).strip()
+        if value:
+            # Retain every continuation and duplicate trailer value; the strict
+            # JSON declaration parser rejects anything beyond one JSON object.
+            found[sha] = value
+    if seen != expected_shas:
+        raise GitEvidenceUnavailable("recovery trailer records do not cover the governed range")
     if not found:
         return commits
     return tuple(
@@ -972,8 +991,10 @@ def trusted_remote(*, cwd: Path | None = None) -> str:
     """
 
     try:
-        _run_git("config", "--get", "remote.upstream.url", cwd=cwd)
+        url = _run_git("config", "--get", "remote.upstream.url", cwd=cwd).strip()
     except GitEvidenceUnavailable:
+        return "origin"
+    if _REMOTE_OWNER_REPO.search(url) is None:
         return "origin"
     return "upstream"
 
