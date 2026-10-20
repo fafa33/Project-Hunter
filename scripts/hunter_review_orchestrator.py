@@ -1608,13 +1608,12 @@ def main() -> int:
             ensure_current(args.repository, token, args.pr)
         return 0
     except ReviewRequestBlocked as exc:
-        # Reported, not swallowed: the reconcile step turns this into a visible
-        # failure instead of a green run that promised orchestration it never
-        # performed. The blocker is the committed pre-ready review request, so
-        # the operator action is to commit one for this exact head; the next
-        # reconcile then dispatches exactly once.
-        print(f"::error::{exc}", file=sys.stderr)
-        return 1
+        # Dedicated CLI outcome: the exact-head review prerequisite is blocked,
+        # not an orchestrator execution error. The trusted reconcile emits a
+        # visible warning and keeps admission fail-closed; only a new authenticated
+        # review request for a new HEAD can unblock this state.
+        print(f"::warning::WAITING_FOR_EXACT_HEAD_REVIEW: {exc}", file=sys.stderr)
+        return 3
     except transport.GitHubUnavailable as exc:
         print(f"Review orchestration infrastructure unavailable; remaining pending: {exc}", file=sys.stderr)
         return 0
