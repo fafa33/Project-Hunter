@@ -569,9 +569,11 @@ def test_a_malformed_finding_is_refused_and_records_nothing(tmp_path: Path, unpr
         trusted_reviewers=frozenset({"chatgpt-codex-connector"}),
         applicability=applicable,
     )
-    # The unauthenticated reviewer and the pathless inline comment are refused with a reason; a top-level
-    # review summary is not an inline finding at all, so it is skipped rather than recorded.
-    assert produced == [] and len(refusals) == 2
+    # Reviewer membership does not gate authenticated inline learning (#586).
+    # A pathless comment is refused and a top-level summary is skipped.
+    assert len(produced) == 1 and produced[0].kind == "finding_ingested"
+    assert produced[0].evidence["provenance"]["reviewer"] == "somebody-else"
+    assert len(refusals) == 1
     assert read_knowledge(store).findings == {}
 
 
