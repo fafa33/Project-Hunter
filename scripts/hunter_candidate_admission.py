@@ -48,8 +48,12 @@ MARK_READY_MUTATION = """mutation($id: ID!) { markPullRequestReadyForReview(inpu
 def mark_ready(token: str, node_id: str) -> bool:
     try:
         payload = transport.request_graphql_json(
-            url="https://api.github.com/graphql", headers={}, query=MARK_READY_MUTATION,
-            variables={"id": node_id}, token=token, what="mark admitted PR ready",
+            url="https://api.github.com/graphql",
+            headers={},
+            query=MARK_READY_MUTATION,
+            variables={"id": node_id},
+            token=token,
+            what="mark admitted PR ready",
         )
         pr = (payload.get("markPullRequestReadyForReview") or {}).get("pullRequest") or {}
         return pr.get("id") == node_id and pr.get("isDraft") is False
@@ -61,12 +65,16 @@ def mark_ready(token: str, node_id: str) -> bool:
 def safe_draft(pr: dict, repository: str) -> bool:
     head, base = pr.get("head") or {}, pr.get("base") or {}
     return (
-        isinstance(head, dict) and isinstance(base, dict)
-        and isinstance(head.get("repo"), dict) and isinstance(base.get("repo"), dict)
+        isinstance(head, dict)
+        and isinstance(base, dict)
+        and isinstance(head.get("repo"), dict)
+        and isinstance(base.get("repo"), dict)
         and head["repo"].get("full_name") == repository
         and base["repo"].get("full_name") == repository
-        and base.get("ref") == "main" and bool(base.get("sha"))
-        and pr.get("mergeable") is True and bool(pr.get("node_id"))
+        and base.get("ref") == "main"
+        and bool(base.get("sha"))
+        and pr.get("mergeable") is True
+        and bool(pr.get("node_id"))
     )
 
 
@@ -144,7 +152,8 @@ def enforce_candidate_admission(
         latest = governance.read_mergeability(repository, token, pr_number)
         if (
             not safe_draft(latest, repository)
-            or latest.get("state") != "open" or latest.get("draft") is not True
+            or latest.get("state") != "open"
+            or latest.get("draft") is not True
             or (latest.get("head") or {}).get("sha") != head_sha
             or (latest.get("base") or {}).get("sha") != (pr.get("base") or {}).get("sha")
             or latest.get("node_id") != pr.get("node_id")
@@ -155,7 +164,8 @@ def enforce_candidate_admission(
             return 1
         confirmed = governance.read_mergeability(repository, token, pr_number)
         if (
-            confirmed.get("state") != "open" or confirmed.get("draft") is not False
+            confirmed.get("state") != "open"
+            or confirmed.get("draft") is not False
             or (confirmed.get("head") or {}).get("sha") != head_sha
             or (confirmed.get("base") or {}).get("sha") != (pr.get("base") or {}).get("sha")
         ):

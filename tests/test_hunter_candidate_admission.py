@@ -221,6 +221,7 @@ def test_pull_request_target_does_not_run_admission_before_trusted_preflight_com
     assert "github.event_name == 'workflow_run'" in condition
     assert "github.event_name == 'pull_request_target'" not in condition
 
+
 def test_draft_success_marks_ready_exact_head(monkeypatch):
     calls = []
     states = iter([_pr(draft=True), _pr(draft=True), _pr(draft=False)])
@@ -271,6 +272,7 @@ def test_duplicate_ready_event_does_not_mark_again(monkeypatch):
     monkeypatch.setattr(admission, "mark_ready", lambda *_: (_ for _ in ()).throw(AssertionError("duplicate")))
     assert admission.enforce_candidate_admission("fafa33/Project-Hunter", "token", 616) == 0
 
+
 def test_draft_base_race_blocks_transition(monkeypatch):
     first, second = _pr(draft=True), _pr(draft=True)
     second["base"]["sha"] = "c" * 40
@@ -289,7 +291,9 @@ def test_draft_failed_proof_never_marks_ready(monkeypatch):
 
 
 def test_mark_ready_requires_graphql_confirmation(monkeypatch):
-    monkeypatch.setattr(admission.transport, "request_graphql_json", lambda **_: {
-        "markPullRequestReadyForReview": {"pullRequest": {"id": "PR_test_node", "isDraft": True}}
-    })
+    monkeypatch.setattr(
+        admission.transport,
+        "request_graphql_json",
+        lambda **_: {"markPullRequestReadyForReview": {"pullRequest": {"id": "PR_test_node", "isDraft": True}}},
+    )
     assert admission.mark_ready("token", "PR_test_node") is False
