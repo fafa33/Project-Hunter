@@ -390,3 +390,29 @@ def test_hosted_noneditable_install_uses_explicit_checkout_registry(
     registry.unlink()
     with pytest.raises(EngineeringContextAuthorityError, match="defect registry is unavailable"):
         authority._families()
+
+
+def test_issue_496_elided_rule_changes_auditable_prevention_identity(tmp_path: Path) -> None:
+    """An elided rule must still change the compiled context's identity."""
+    families = [_family(f"DFF-B{i:03d}", "scripts/", invariant=_LONG_INVARIANT) for i in range(30)]
+    path = _registry(tmp_path, families)
+    authority = EngineeringContextAuthority(registry_path=path)
+    first = authority.compile(ENGINEERING_IMPLEMENT_TASK_KEY, scope=_scope("scripts/"), budget_bytes=1_000)
+    assert first["elided_family_ids"]
+    digest = first["selected_prevention_rules_sha256"]
+    assert isinstance(digest, str) and len(digest) == 64
+    # Change an applicable family that was not rendered into the prompt.
+    elided_ids = cast(list[str], first["elided_family_ids"])
+    elided = elided_ids[0]
+    for family in families:
+        if family["id"] == elided:
+            family["invariant"] = "NEW mandatory canonical rule content"
+    _registry(tmp_path, families)
+    second = authority.compile(ENGINEERING_IMPLEMENT_TASK_KEY, scope=_scope("scripts/"), budget_bytes=1_000)
+    assert second["selected_prevention_rules_sha256"] != digest
+    assert (
+        second["selected_prevention_rules_sha256"]
+        == authority.compile(ENGINEERING_IMPLEMENT_TASK_KEY, scope=_scope("scripts/"), budget_bytes=1_000)[
+            "selected_prevention_rules_sha256"
+        ]
+    )

@@ -7,6 +7,7 @@ Issue/task prose when deciding which defect families apply.
 
 from __future__ import annotations
 
+import hashlib
 import json
 from collections.abc import Mapping, Sequence
 from pathlib import Path
@@ -325,6 +326,15 @@ class EngineeringContextAuthority:
             rendered_entries.append(max(members, key=priority))
         rendered_entries.sort(key=lambda entry: entry["id"])
 
+        # Bind the COMPLETE applicable prevention set, including rules that
+        # bounded rendering may later elide, to the existing compiled build
+        # identity. The digest is audit evidence, not a substitute for executing
+        # required regressions at pre-ready.
+        selected_rules = [{"id": entry["id"], "rule": entry["full"]} for entry in rendered_entries]
+        selected_rules_digest = hashlib.sha256(
+            json.dumps(selected_rules, sort_keys=True, separators=(",", ":"), ensure_ascii=False).encode("utf-8")
+        ).hexdigest()
+
         # Bounded rendering: try full detail for every applicable entry first,
         # regardless of whether its match was through an exact file or a
         # directory root, and only degrade -- in deterministic,
@@ -404,6 +414,7 @@ class EngineeringContextAuthority:
             "scope_allowed_paths": list(scope.allowed_paths),
             "scope_prohibited_paths": list(scope.prohibited_paths),
             "applicable_defect_families": rendered,
+            "selected_prevention_rules_sha256": selected_rules_digest,
             "execution_discipline": list(EXECUTION_DISCIPLINE_RULES),
         }
         if elided:
