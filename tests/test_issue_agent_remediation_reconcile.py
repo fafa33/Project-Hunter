@@ -244,7 +244,9 @@ def ingested(store: state.GitLedgerStore, *observations: Mapping[str, Any]) -> k
 def eligible(
     github: Facts, view: state.LedgerView, known: knowledge.KnowledgeView
 ) -> control.RemediationCandidate | None:
-    return control.eligible_remediation(github, ct.CONFIG, view, known, ISSUE)
+    return control.eligible_remediation(
+        github, ct.CONFIG, view, known, ISSUE, trusted_reviewers=frozenset({"chatgpt-codex-connector"})
+    )
 
 
 @pytest.fixture
@@ -272,6 +274,16 @@ def test_a_completed_parent_with_an_open_finding_is_eligible_at_the_pr_head(
     assert [item["path"] for item in candidate.findings] == [GUARD]
     assert candidate.attempts == (1,)
     assert candidate.findings[0]["claim"] == CLAIM
+
+
+def test_untrusted_inline_finding_is_learned_but_never_authorizes_remediation(
+    store: state.GitLedgerStore, completed: state.LedgerView
+) -> None:
+    head = completed.authorizations[AUTH].evidence[state.PUBLISHED]["head_sha"]
+    facts = Facts().open_pr(head=head)
+    known = ingested(store, {**OBSERVATION, "reviewed_head_sha": head, "reviewer": "external-reviewer"})
+    assert len(known.findings) == 1
+    assert eligible(facts, completed, known) is None
 
 
 def test_a_finding_observed_at_another_head_is_not_yet_eligible(

@@ -196,7 +196,14 @@ class Loop:
         """One reconcile pass: a fresh store, then the real eligibility decision at the PR's current head."""
 
         facts = rr.Facts().open_pr(head=self.head)
-        candidate = control.eligible_remediation(facts, ct.CONFIG, read_issue(self.restart("detect")), known, rt.ISSUE)
+        candidate = control.eligible_remediation(
+            facts,
+            ct.CONFIG,
+            read_issue(self.restart("detect")),
+            known,
+            rt.ISSUE,
+            trusted_reviewers=frozenset({"chatgpt-codex-connector"}),
+        )
         assert candidate is not None, "an ingested open finding at the PR head must be eligible"
         return candidate
 
@@ -547,7 +554,12 @@ def test_an_ambiguous_mapping_is_never_remediated(tmp_path: Path, unprivileged: 
     assert classification is not None and classification["outcome"] == "ambiguous"
     assert (
         control.eligible_remediation(
-            rr.Facts().open_pr(head=loop.head), ct.CONFIG, read_issue(loop.restart("detect")), known, rt.ISSUE
+            rr.Facts().open_pr(head=loop.head),
+            ct.CONFIG,
+            read_issue(loop.restart("detect")),
+            known,
+            rt.ISSUE,
+            trusted_reviewers=frozenset({"chatgpt-codex-connector"}),
         )
         is None
     )
@@ -569,9 +581,11 @@ def test_a_malformed_finding_is_refused_and_records_nothing(tmp_path: Path, unpr
         trusted_reviewers=frozenset({"chatgpt-codex-connector"}),
         applicability=applicable,
     )
-    # The unauthenticated reviewer and the pathless inline comment are refused with a reason; a top-level
-    # review summary is not an inline finding at all, so it is skipped rather than recorded.
-    assert produced == [] and len(refusals) == 2
+    # Reviewer membership does not gate authenticated inline learning (#586).
+    # A pathless comment is refused and a top-level summary is skipped.
+    assert len(produced) == 1 and produced[0].kind == "finding_ingested"
+    assert produced[0].evidence["provenance"]["reviewer"] == "somebody-else"
+    assert len(refusals) == 1
     assert read_knowledge(store).findings == {}
 
 

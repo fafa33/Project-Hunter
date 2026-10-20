@@ -299,7 +299,7 @@ def _knowledge_view(configuration: control.Configuration, github: control.GitHub
 
 
 def cmd_knowledge_ingest(configuration: control.Configuration, arguments: argparse.Namespace) -> int:
-    """ADR 0039 L1/L3.1 fast path: record every trusted-reviewer finding once, with its deterministic mapping."""
+    """ADR 0039 L1/L3.1: ingest authenticated inline findings independently of reviewer authority."""
 
     import hunter_collect_learning_observations as collector
 
@@ -320,7 +320,9 @@ def cmd_knowledge_ingest(configuration: control.Configuration, arguments: argpar
     store = _store(configuration, authenticated=True)
     for number in numbers:
         pull = control.definitive(github.get(f"/repos/{configuration.repository}/pulls/{number}"))
-        if not isinstance(pull, Mapping) or pull.get("state") != "open":
+        if not isinstance(pull, Mapping):
+            raise control.FactsUnavailable("pull request metadata is not observable")
+        if pull.get("state") != "open" and not (arguments.pr and pull.get("merged_at")):
             continue
         head, base = str(pull["head"]["sha"]), str(pull["base"]["sha"])
         observations = collector.collect(configuration.repository, token, number, head, base)
@@ -361,6 +363,8 @@ def cmd_remediate(configuration: control.Configuration, arguments: argparse.Name
     the findings come from the verified anchored knowledge ledger and the head from a GitHub observation.
     """
 
+    import hunter_collect_learning_observations as collector
+
     writer = _writer("reconcile", "remediate", control.RECONCILE_WORKFLOW)
     github = _github(configuration)
     control.require_anchor(github, configuration, knowledge.KNOWLEDGE_LEDGER_REF)
@@ -372,7 +376,12 @@ def cmd_remediate(configuration: control.Configuration, arguments: argparse.Name
         try:
             _, ledger_view = control.load_ledger(store, configuration, provenance, issue)
             candidate = control.eligible_remediation(
-                github, configuration, ledger_view, _knowledge_view(configuration, github), issue
+                github,
+                configuration,
+                ledger_view,
+                _knowledge_view(configuration, github),
+                issue,
+                trusted_reviewers=collector._trusted_reviewer_logins(),
             )
             if candidate is None:
                 print(f"issue {issue}: no eligible remediation")

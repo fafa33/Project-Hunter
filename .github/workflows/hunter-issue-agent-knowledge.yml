@@ -17,6 +17,11 @@ on:
   schedule:
     - cron: "7,37 * * * *"
   workflow_dispatch:
+    inputs:
+      pr:
+        description: "Optional merged PR for bounded historical finding backfill"
+        required: false
+        type: number
 
 permissions: {}
 
@@ -54,4 +59,11 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ github.token }}
           HUNTER_ISSUE_AGENT_STATE_SIGNING_KEY: ${{ secrets.HUNTER_ISSUE_AGENT_STATE_SIGNING_KEY }}
-        run: python scripts/hunter_issue_agent_lifecycle.py knowledge-ingest
+          BACKFILL_PR: ${{ inputs.pr || '' }}
+        run: |
+          if [[ -n "$BACKFILL_PR" ]]; then
+            [[ "$BACKFILL_PR" =~ ^[1-9][0-9]*$ ]] || exit 1
+            python scripts/hunter_issue_agent_lifecycle.py knowledge-ingest --pr "$BACKFILL_PR"
+          else
+            python scripts/hunter_issue_agent_lifecycle.py knowledge-ingest
+          fi

@@ -701,6 +701,8 @@ def eligible_remediation(
     view: state.LedgerView,
     known: knowledge.KnowledgeView,
     issue: int,
+    *,
+    trusted_reviewers: frozenset[str] = frozenset(),
 ) -> RemediationCandidate | None:
     """ADR 0039 L4 (RD-4/RD-5): the one eligible remediation for this Issue, or ``None``.
 
@@ -746,6 +748,12 @@ def eligible_remediation(
     attempts: list[int] = []
     for identity, item in sorted(known.findings.items()):
         if item.pull_request_number != number or not item.open or item.proven is not None:
+            continue
+        # Ingestion is reviewer-independent, execution authority is not.
+        # Missing trusted reviewer configuration fails closed.
+        if str(item.ingested["provenance"]["reviewer"]).lower().removesuffix("[bot]") not in {
+            name.lower().removesuffix("[bot]") for name in trusted_reviewers
+        }:
             continue
         classification = item.classification
         if classification is not None and classification["outcome"] == "ambiguous":
