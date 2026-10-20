@@ -199,3 +199,20 @@ def _compiled_prompt_content(result) -> str:
     artifact = result.compilation.orchestration.build_result.prompt_artifact
     assert artifact is not None, "a READY build must carry a concrete prompt artifact"
     return cast(str, artifact.content)
+
+
+def test_elided_rule_mutation_changes_signed_build_lineage(monkeypatch, tmp_path: Path) -> None:
+    """Even a budget-elided applicable rule must bind the exact SPM build."""
+    families = [_family(f"DFF-B{i:03d}") for i in range(45)]
+    registry_path, machine = _build(monkeypatch, tmp_path, families)
+    # The production implementation budget is deliberately bounded.
+    baseline = machine.compile_task(_request(), implementation_scope=_scope())
+    content = _compiled_prompt_content(baseline)
+    assert "selected_prevention_rules_sha256" in content
+    # Changing a rule without changing its identity/applicability must still
+    # invalidate the old signed build lineage.
+    families[0]["invariant"] = "updated canonical invariant for the same family"
+    _registry(registry_path, families)
+    changed = machine.compile_task(_request(), implementation_scope=_scope())
+    assert changed.envelope.build_record_id != baseline.envelope.build_record_id
+    assert changed.compilation.manifest.manifest_id != baseline.compilation.manifest.manifest_id
