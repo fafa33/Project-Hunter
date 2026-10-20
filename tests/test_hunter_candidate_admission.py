@@ -13,8 +13,8 @@ def _pr(*, draft: bool = False) -> dict:
         "state": "open",
         "draft": draft,
         "node_id": "PR_test_node",
-        "head": {"sha": HEAD},
-        "base": {"ref": "main"},
+        "head": {"sha": HEAD, "repo": {"full_name": "fafa33/Project-Hunter"}},
+        "base": {"ref": "main", "sha": "b" * 40, "repo": {"full_name": "fafa33/Project-Hunter"}},
         "mergeable": True,
     }
 
@@ -124,7 +124,7 @@ def test_admitted_candidate_stays_ready(monkeypatch) -> None:
     )
 
 
-def test_already_draft_candidate_does_not_requery_admission(monkeypatch) -> None:
+def test_draft_candidate_pending_does_not_mutate(monkeypatch) -> None:
     monkeypatch.setattr(
         admission.governance,
         "read_mergeability",
@@ -133,7 +133,7 @@ def test_already_draft_candidate_does_not_requery_admission(monkeypatch) -> None
     monkeypatch.setattr(
         admission.governance,
         "candidate_admission",
-        lambda *_args: (_ for _ in ()).throw(AssertionError("must not query")),
+        lambda *_args: ("pending", "proof in flight"),
     )
 
     assert (
@@ -220,3 +220,76 @@ def test_pull_request_target_does_not_run_admission_before_trusted_preflight_com
     condition = workflow["jobs"]["candidate-admission"]["if"]
     assert "github.event_name == 'workflow_run'" in condition
     assert "github.event_name == 'pull_request_target'" not in condition
+
+def test_draft_success_marks_ready_exact_head(monkeypatch):
+    calls = []
+    states = iter([_pr(draft=True), _pr(draft=True), _pr(draft=False)])
+    monkeypatch.setattr(admission.governance, "read_mergeability", lambda *_: next(states))
+    monkeypatch.setattr(admission.governance, "candidate_admission", lambda *_: ("success", "proof"))
+    monkeypatch.setattr(admission, "mark_ready", lambda token, node: calls.append(node) or True)
+    assert admission.enforce_candidate_admission("fafa33/Project-Hunter", "token", 616, HEAD) == 0
+    assert calls == ["PR_test_node"]
+
+
+def test_draft_stale_head_blocks_transition(monkeypatch):
+    monkeypatch.setattr(admission.governance, "read_mergeability", lambda *_: _pr(draft=True))
+    monkeypatch.setattr(admission.governance, "candidate_admission", lambda *_: ("success", "proof"))
+    monkeypatch.setattr(admission, "mark_ready", lambda *_: (_ for _ in ()).throw(AssertionError("unsafe")))
+    assert admission.enforce_candidate_admission("fafa33/Project-Hunter", "token", 616, "c" * 40) == 0
+
+
+def test_draft_head_race_blocks_transition(monkeypatch):
+    stale = _pr(draft=True)
+    changed = _pr(draft=True)
+    changed["head"]["sha"] = "c" * 40
+    states = iter([stale, changed])
+    monkeypatch.setattr(admission.governance, "read_mergeability", lambda *_: next(states))
+    monkeypatch.setattr(admission.governance, "candidate_admission", lambda *_: ("success", "proof"))
+    monkeypatch.setattr(admission, "mark_ready", lambda *_: (_ for _ in ()).throw(AssertionError("unsafe")))
+    assert admission.enforce_candidate_admission("fafa33/Project-Hunter", "token", 616) == 1
+
+
+def test_draft_fork_blocks_transition(monkeypatch):
+    pr = _pr(draft=True)
+    pr["head"]["repo"]["full_name"] = "other/fork"
+    monkeypatch.setattr(admission.governance, "read_mergeability", lambda *_: pr)
+    monkeypatch.setattr(admission.governance, "candidate_admission", lambda *_: ("success", "proof"))
+    monkeypatch.setattr(admission, "mark_ready", lambda *_: (_ for _ in ()).throw(AssertionError("unsafe")))
+    assert admission.enforce_candidate_admission("fafa33/Project-Hunter", "token", 616) == 1
+
+
+def test_draft_permission_failure_remains_draft(monkeypatch):
+    monkeypatch.setattr(admission.governance, "read_mergeability", lambda *_: _pr(draft=True))
+    monkeypatch.setattr(admission.governance, "candidate_admission", lambda *_: ("success", "proof"))
+    monkeypatch.setattr(admission, "mark_ready", lambda *_: False)
+    assert admission.enforce_candidate_admission("fafa33/Project-Hunter", "token", 616) == 1
+
+
+def test_duplicate_ready_event_does_not_mark_again(monkeypatch):
+    monkeypatch.setattr(admission.governance, "read_mergeability", lambda *_: _pr(draft=False))
+    monkeypatch.setattr(admission.governance, "candidate_admission", lambda *_: ("pending", "review"))
+    monkeypatch.setattr(admission, "mark_ready", lambda *_: (_ for _ in ()).throw(AssertionError("duplicate")))
+    assert admission.enforce_candidate_admission("fafa33/Project-Hunter", "token", 616) == 0
+
+def test_draft_base_race_blocks_transition(monkeypatch):
+    first, second = _pr(draft=True), _pr(draft=True)
+    second["base"]["sha"] = "c" * 40
+    states = iter([first, second])
+    monkeypatch.setattr(admission.governance, "read_mergeability", lambda *_: next(states))
+    monkeypatch.setattr(admission.governance, "candidate_admission", lambda *_: ("success", "proof"))
+    monkeypatch.setattr(admission, "mark_ready", lambda *_: (_ for _ in ()).throw(AssertionError("unsafe")))
+    assert admission.enforce_candidate_admission("fafa33/Project-Hunter", "token", 616) == 1
+
+
+def test_draft_failed_proof_never_marks_ready(monkeypatch):
+    monkeypatch.setattr(admission.governance, "read_mergeability", lambda *_: _pr(draft=True))
+    monkeypatch.setattr(admission.governance, "candidate_admission", lambda *_: ("failure", "invalid digest"))
+    monkeypatch.setattr(admission, "mark_ready", lambda *_: (_ for _ in ()).throw(AssertionError("unsafe")))
+    assert admission.enforce_candidate_admission("fafa33/Project-Hunter", "token", 616) == 1
+
+
+def test_mark_ready_requires_graphql_confirmation(monkeypatch):
+    monkeypatch.setattr(admission.transport, "request_graphql_json", lambda **_: {
+        "markPullRequestReadyForReview": {"pullRequest": {"id": "PR_test_node", "isDraft": True}}
+    })
+    assert admission.mark_ready("token", "PR_test_node") is False
