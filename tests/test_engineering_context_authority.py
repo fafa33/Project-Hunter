@@ -416,3 +416,21 @@ def test_issue_496_elided_rule_changes_auditable_prevention_identity(tmp_path: P
             "selected_prevention_rules_sha256"
         ]
     )
+
+
+def test_canonical_non_rendered_rule_changes_invalidate_prevention_digest(tmp_path: Path) -> None:
+    family = _family("DFF-900")
+    path = _registry(tmp_path, [family])
+    authority = EngineeringContextAuthority(registry_path=path)
+    before = authority.compile(ENGINEERING_IMPLEMENT_TASK_KEY, scope=_scope("src/hunter/"))
+    for field, replacement in (
+        ("regression_evidence", ["tests/test_other.py::test_other"]),
+        ("sources", ["another-source"]),
+        ("applicability", {"changed_paths": ["src/hunter/"], "rationale": "updated"}),
+        ("prevention", {"mechanism": "new mechanism", "boundary": "review"}),
+    ):
+        changed = dict(family)
+        changed[field] = replacement
+        _registry(tmp_path, [changed])
+        after = authority.compile(ENGINEERING_IMPLEMENT_TASK_KEY, scope=_scope("src/hunter/"))
+        assert after["selected_prevention_rules_sha256"] != before["selected_prevention_rules_sha256"], field

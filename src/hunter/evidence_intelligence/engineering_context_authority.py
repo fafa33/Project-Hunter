@@ -288,6 +288,7 @@ class EngineeringContextAuthority:
             candidates.append(
                 {
                     "id": family["id"],
+                    "canonical_rule": family,
                     "specificity": _specificity(matched),
                     "lifecycle_rank": _lifecycle_rank(family["lifecycle"]),
                     "equivalence_class": prevention.get("equivalence_class"),
@@ -330,7 +331,7 @@ class EngineeringContextAuthority:
         # bounded rendering may later elide, to the existing compiled build
         # identity. The digest is audit evidence, not a substitute for executing
         # required regressions at pre-ready.
-        selected_rules = [{"id": entry["id"], "rule": entry["full"]} for entry in rendered_entries]
+        selected_rules = [{"id": entry["id"], "rule": entry["canonical_rule"]} for entry in rendered_entries]
         selected_rules_digest = hashlib.sha256(
             json.dumps(selected_rules, sort_keys=True, separators=(",", ":"), ensure_ascii=False).encode("utf-8")
         ).hexdigest()

@@ -56,6 +56,9 @@ jobs:
           private-key: ${{ secrets.HUNTER_APP_PRIVATE_KEY }}
           permission-pull-requests: write
           permission-contents: read
+          permission-actions: read
+          permission-checks: read
+          permission-statuses: read
 
       - name: Enforce exact-head review admission
         env:
