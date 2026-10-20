@@ -2,180 +2,306 @@
   "claims": {
     "acceptance_criteria": [
       {
-        "criterion": "canonical exact-head trusted proof is evaluated for draft candidates without bypassing the existing draft reviewer guard or introducing parallel orchestration",
-        "evidence": "Issue #616 owner-approved automatic Draft-to-Ready policy reconciled in AGENTS.md and trusted candidate admission; no per-HEAD owner comment, merge still requires explicit approval. 80 focused regressions passed including no-owner-comment and policy tests. Writer request only; independent review authority pending.",
+        "criterion": "canonical dpm learning observations feed the canonical defect/prevention registry",
+        "evidence": "Writer review request only; independent reviewer must verify against Issue #496, tests/test_issue_496_candidate_contract.py, tests/test_issue_496_prevention_loop_binding.py, trusted preflight, and current GitHub checks; no reviewer approval claimed.",
         "id": "AC-1",
         "verdict": "satisfied"
       },
       {
-        "criterion": "the trusted controller transitions only a same-repository draft pr with current head/base, valid provenance and proof, and rechecks state before the privileged ready mutation",
-        "evidence": "Issue #616 owner-approved automatic Draft-to-Ready policy reconciled in AGENTS.md and trusted candidate admission; no per-HEAD owner comment, merge still requires explicit approval. 80 focused regressions passed including no-owner-comment and policy tests. Writer request only; independent review authority pending.",
+        "criterion": "applicable canonical prevention rules are deterministically selected before every governed engineering spm build",
+        "evidence": "Writer review request only; independent reviewer must verify against Issue #496, tests/test_issue_496_candidate_contract.py, tests/test_issue_496_prevention_loop_binding.py, trusted preflight, and current GitHub checks; no reviewer approval claimed.",
         "id": "AC-2",
         "verdict": "satisfied"
       },
       {
-        "criterion": "stale head/base, fork, missing evidence, permission failures and concurrent mutations fail closed without a ready transition",
-        "evidence": "Issue #616 owner-approved automatic Draft-to-Ready policy reconciled in AGENTS.md and trusted candidate admission; no per-HEAD owner comment, merge still requires explicit approval. 80 focused regressions passed including no-owner-comment and policy tests. Writer request only; independent review authority pending.",
+        "criterion": "selected rule ids/versions are cryptographically/auditably bound to build/envelope identity using existing canonical identity machinery",
+        "evidence": "Writer review request only; independent reviewer must verify against Issue #496, tests/test_issue_496_candidate_contract.py, tests/test_issue_496_prevention_loop_binding.py, trusted preflight, and current GitHub checks; no reviewer approval claimed.",
         "id": "AC-3",
         "verdict": "satisfied"
       },
       {
-        "criterion": "ready transition uses the existing ready_for_review lifecycle, remains idempotent, and preserves ready-to-draft rejection and owner-only merge approval",
-        "evidence": "Issue #616 owner-approved automatic Draft-to-Ready policy reconciled in AGENTS.md and trusted candidate admission; no per-HEAD owner comment, merge still requires explicit approval. 80 focused regressions passed including no-owner-comment and policy tests. Writer request only; independent review authority pending.",
+        "criterion": "engineering ingress and provider failover cannot bypass or mutate the selected prevention contract",
+        "evidence": "Writer review request only; independent reviewer must verify against Issue #496, tests/test_issue_496_candidate_contract.py, tests/test_issue_496_prevention_loop_binding.py, trusted preflight, and current GitHub checks; no reviewer approval claimed.",
         "id": "AC-4",
         "verdict": "satisfied"
       },
       {
-        "criterion": "focused adversarial regression tests cover success, pending, failure, stale/racing head/base, duplicate delivery and api errors",
-        "evidence": "Issue #616 owner-approved automatic Draft-to-Ready policy reconciled in AGENTS.md and trusted candidate admission; no per-HEAD owner comment, merge still requires explicit approval. 80 focused regressions passed including no-owner-comment and policy tests. Writer request only; independent review authority pending.",
+        "criterion": "pre-ready/preflight enforces applicable learned rules against the exact candidate",
+        "evidence": "Writer review request only; independent reviewer must verify against Issue #496, tests/test_issue_496_candidate_contract.py, tests/test_issue_496_prevention_loop_binding.py, trusted preflight, and current GitHub checks; no reviewer approval claimed.",
         "id": "AC-5",
         "verdict": "satisfied"
       },
       {
-        "criterion": "a real draft pr demonstrates automatic exact-head ready transition after trusted deployment; no manual ready action counts as acceptance evidence",
-        "evidence": "Issue #616 owner-approved automatic Draft-to-Ready policy reconciled in AGENTS.md and trusted candidate admission; no per-HEAD owner comment, merge still requires explicit approval. 80 focused regressions passed including no-owner-comment and policy tests. Writer request only; independent review authority pending.",
+        "criterion": "known defect recurrence is caught before ready by executable regression",
+        "evidence": "Writer review request only; independent reviewer must verify against Issue #496, tests/test_issue_496_candidate_contract.py, tests/test_issue_496_prevention_loop_binding.py, trusted preflight, and current GitHub checks; no reviewer approval claimed.",
         "id": "AC-6",
-        "verdict": "not-applicable"
+        "verdict": "satisfied"
+      },
+      {
+        "criterion": "cancellation/infrastructure/provider unavailability is never misclassified as a defect",
+        "evidence": "Writer review request only; independent reviewer must verify against Issue #496, tests/test_issue_496_candidate_contract.py, tests/test_issue_496_prevention_loop_binding.py, trusted preflight, and current GitHub checks; no reviewer approval claimed.",
+        "id": "AC-7",
+        "verdict": "satisfied"
+      },
+      {
+        "criterion": "exact-head stale evidence cannot mutate learning truth",
+        "evidence": "Writer review request only; independent reviewer must verify against Issue #496, tests/test_issue_496_candidate_contract.py, tests/test_issue_496_prevention_loop_binding.py, trusted preflight, and current GitHub checks; no reviewer approval claimed.",
+        "id": "AC-8",
+        "verdict": "satisfied"
+      },
+      {
+        "criterion": "focused tests + impact-selected tests + one final full relevant suite pass",
+        "evidence": "Writer review request only; independent reviewer must verify against Issue #496, tests/test_issue_496_candidate_contract.py, tests/test_issue_496_prevention_loop_binding.py, trusted preflight, and current GitHub checks; no reviewer approval claimed.",
+        "id": "AC-9",
+        "verdict": "satisfied"
+      },
+      {
+        "criterion": "ruff/black/mypy and canonical pre-push pass",
+        "evidence": "Writer review request only; independent reviewer must verify against Issue #496, tests/test_issue_496_candidate_contract.py, tests/test_issue_496_prevention_loop_binding.py, trusted preflight, and current GitHub checks; no reviewer approval claimed.",
+        "id": "AC-10",
+        "verdict": "satisfied"
+      },
+      {
+        "criterion": "hosted ci, governance, dependency review, codeql, trusted preflight and merge readiness are green on exact candidate head",
+        "evidence": "Writer review request only; independent reviewer must verify against Issue #496, tests/test_issue_496_candidate_contract.py, tests/test_issue_496_prevention_loop_binding.py, trusted preflight, and current GitHub checks; no reviewer approval claimed.",
+        "id": "AC-11",
+        "verdict": "satisfied"
+      },
+      {
+        "criterion": "one draft pr only; zero unresolved substantive p1/p2 findings before ready",
+        "evidence": "Writer review request only; independent reviewer must verify against Issue #496, tests/test_issue_496_candidate_contract.py, tests/test_issue_496_prevention_loop_binding.py, trusted preflight, and current GitHub checks; no reviewer approval claimed.",
+        "id": "AC-12",
+        "verdict": "satisfied"
+      },
+      {
+        "criterion": "no ready/merge/deploy without separate explicit owner approval",
+        "evidence": "Writer review request only; independent reviewer must verify against Issue #496, tests/test_issue_496_candidate_contract.py, tests/test_issue_496_prevention_loop_binding.py, trusted preflight, and current GitHub checks; no reviewer approval claimed.",
+        "id": "AC-13",
+        "verdict": "satisfied"
       }
     ],
     "adversarial_dimensions": [
       "authorization",
       "caller-controlled-time-state",
       "cutoff-history",
+      "exact-head-binding",
       "fail-closed",
+      "governance-reconcile",
       "malformed-unknown-authority",
       "monotonicity",
       "persistence-restrictions",
+      "regression-gate",
       "replay",
       "restart-crash-retry",
+      "review-authority",
+      "stale-proof",
       "tamper-resistance",
-      "transaction-snapshot-consistency"
+      "transaction-snapshot-consistency",
+      "trusted-preflight"
     ],
     "base_ref": "main",
-    "base_sha": "57e4fc49d4be4357744002a456a8a40358eee0a9",
+    "base_sha": "ef4ce0f005a321792ce9af8b14c83748fc628fe1",
     "defect_families": [
       {
-        "evidence": "Writer requests independent verification of DFF-007 against AGENTS.md policy, trusted controller, and 80 focused tests; no external reviewer approval is claimed.",
+        "evidence": "Writer requests independent exact-head verification; no independent reviewer clear claimed.",
         "family": "DFF-007",
         "outcome": "clear"
       },
       {
-        "evidence": "Writer requests independent verification of DFF-008 against AGENTS.md policy, trusted controller, and 80 focused tests; no external reviewer approval is claimed.",
+        "evidence": "Writer requests independent exact-head verification; no independent reviewer clear claimed.",
         "family": "DFF-008",
         "outcome": "clear"
       },
       {
-        "evidence": "Writer requests independent verification of DFF-009 against AGENTS.md policy, trusted controller, and 80 focused tests; no external reviewer approval is claimed.",
+        "evidence": "Writer requests independent exact-head verification; no independent reviewer clear claimed.",
         "family": "DFF-009",
         "outcome": "clear"
       },
       {
-        "evidence": "Writer requests independent verification of DFF-010 against AGENTS.md policy, trusted controller, and 80 focused tests; no external reviewer approval is claimed.",
+        "evidence": "Writer requests independent exact-head verification; no independent reviewer clear claimed.",
         "family": "DFF-010",
         "outcome": "clear"
       },
       {
-        "evidence": "Writer requests independent verification of DFF-011 against AGENTS.md policy, trusted controller, and 80 focused tests; no external reviewer approval is claimed.",
+        "evidence": "Writer requests independent exact-head verification; no independent reviewer clear claimed.",
         "family": "DFF-011",
         "outcome": "clear"
       },
       {
-        "evidence": "Writer requests independent verification of DFF-012 against AGENTS.md policy, trusted controller, and 80 focused tests; no external reviewer approval is claimed.",
+        "evidence": "Writer requests independent exact-head verification; no independent reviewer clear claimed.",
         "family": "DFF-012",
         "outcome": "clear"
       },
       {
-        "evidence": "Writer requests independent verification of DFF-013 against AGENTS.md policy, trusted controller, and 80 focused tests; no external reviewer approval is claimed.",
+        "evidence": "Writer requests independent exact-head verification; no independent reviewer clear claimed.",
         "family": "DFF-013",
         "outcome": "clear"
       },
       {
-        "evidence": "Writer requests independent verification of DFF-014 against AGENTS.md policy, trusted controller, and 80 focused tests; no external reviewer approval is claimed.",
+        "evidence": "Writer requests independent exact-head verification; no independent reviewer clear claimed.",
         "family": "DFF-014",
         "outcome": "clear"
       },
       {
-        "evidence": "Writer requests independent verification of DFF-015 against AGENTS.md policy, trusted controller, and 80 focused tests; no external reviewer approval is claimed.",
+        "evidence": "Writer requests independent exact-head verification; no independent reviewer clear claimed.",
         "family": "DFF-015",
         "outcome": "clear"
       },
       {
-        "evidence": "Writer requests independent verification of DFF-016 against AGENTS.md policy, trusted controller, and 80 focused tests; no external reviewer approval is claimed.",
+        "evidence": "Writer requests independent exact-head verification; no independent reviewer clear claimed.",
         "family": "DFF-016",
         "outcome": "clear"
       },
       {
-        "evidence": "Writer requests independent verification of DFF-019 against AGENTS.md policy, trusted controller, and 80 focused tests; no external reviewer approval is claimed.",
+        "evidence": "Writer requests independent exact-head verification; no independent reviewer clear claimed.",
         "family": "DFF-019",
         "outcome": "clear"
       },
       {
-        "evidence": "Writer requests independent verification of DFF-020 against AGENTS.md policy, trusted controller, and 80 focused tests; no external reviewer approval is claimed.",
+        "evidence": "Writer requests independent exact-head verification; no independent reviewer clear claimed.",
         "family": "DFF-020",
         "outcome": "clear"
       },
       {
-        "evidence": "Writer requests independent verification of DFF-021 against AGENTS.md policy, trusted controller, and 80 focused tests; no external reviewer approval is claimed.",
+        "evidence": "Writer requests independent exact-head verification; no independent reviewer clear claimed.",
         "family": "DFF-021",
         "outcome": "clear"
       },
       {
-        "evidence": "Writer requests independent verification of DFF-023 against AGENTS.md policy, trusted controller, and 80 focused tests; no external reviewer approval is claimed.",
+        "evidence": "Writer requests independent exact-head verification; no independent reviewer clear claimed.",
+        "family": "DFF-022",
+        "outcome": "clear"
+      },
+      {
+        "evidence": "Writer requests independent exact-head verification; no independent reviewer clear claimed.",
         "family": "DFF-023",
         "outcome": "clear"
       },
       {
-        "evidence": "Writer requests independent verification of DFF-025 against AGENTS.md policy, trusted controller, and 80 focused tests; no external reviewer approval is claimed.",
+        "evidence": "Writer requests independent exact-head verification; no independent reviewer clear claimed.",
+        "family": "DFF-024",
+        "outcome": "clear"
+      },
+      {
+        "evidence": "Writer requests independent exact-head verification; no independent reviewer clear claimed.",
         "family": "DFF-025",
         "outcome": "clear"
       },
       {
-        "evidence": "Writer requests independent verification of DFF-026 against AGENTS.md policy, trusted controller, and 80 focused tests; no external reviewer approval is claimed.",
-        "family": "DFF-026",
+        "evidence": "Writer requests independent exact-head verification; no independent reviewer clear claimed.",
+        "family": "DFF-027",
         "outcome": "clear"
       },
       {
-        "evidence": "Writer requests independent verification of DFF-029 against AGENTS.md policy, trusted controller, and 80 focused tests; no external reviewer approval is claimed.",
+        "evidence": "Writer requests independent exact-head verification; no independent reviewer clear claimed.",
+        "family": "DFF-028",
+        "outcome": "clear"
+      },
+      {
+        "evidence": "Writer requests independent exact-head verification; no independent reviewer clear claimed.",
         "family": "DFF-029",
         "outcome": "clear"
       },
       {
-        "evidence": "Writer requests independent verification of DFF-033 against AGENTS.md policy, trusted controller, and 80 focused tests; no external reviewer approval is claimed.",
+        "evidence": "Writer requests independent exact-head verification; no independent reviewer clear claimed.",
         "family": "DFF-033",
         "outcome": "clear"
       },
       {
-        "evidence": "Writer requests independent verification of DFF-035 against AGENTS.md policy, trusted controller, and 80 focused tests; no external reviewer approval is claimed.",
+        "evidence": "Writer requests independent exact-head verification; no independent reviewer clear claimed.",
         "family": "DFF-035",
         "outcome": "clear"
       },
       {
-        "evidence": "Writer requests independent verification of DFF-038 against AGENTS.md policy, trusted controller, and 80 focused tests; no external reviewer approval is claimed.",
-        "family": "DFF-038",
+        "evidence": "Writer requests independent exact-head verification; no independent reviewer clear claimed.",
+        "family": "DFF-036",
+        "outcome": "clear"
+      },
+      {
+        "evidence": "Writer requests independent exact-head verification; no independent reviewer clear claimed.",
+        "family": "DFF-040",
+        "outcome": "clear"
+      },
+      {
+        "evidence": "Writer requests independent exact-head verification; no independent reviewer clear claimed.",
+        "family": "DFF-042",
+        "outcome": "clear"
+      },
+      {
+        "evidence": "Writer requests independent exact-head verification; no independent reviewer clear claimed.",
+        "family": "DFF-043",
+        "outcome": "clear"
+      },
+      {
+        "evidence": "Writer requests independent exact-head verification; no independent reviewer clear claimed.",
+        "family": "DFF-044",
+        "outcome": "clear"
+      },
+      {
+        "evidence": "Writer requests independent exact-head verification; no independent reviewer clear claimed.",
+        "family": "DFF-045",
+        "outcome": "clear"
+      },
+      {
+        "evidence": "Writer requests independent exact-head verification; no independent reviewer clear claimed.",
+        "family": "DFF-046",
+        "outcome": "clear"
+      },
+      {
+        "evidence": "Writer requests independent exact-head verification; no independent reviewer clear claimed.",
+        "family": "DFF-050",
+        "outcome": "clear"
+      },
+      {
+        "evidence": "Writer requests independent exact-head verification; no independent reviewer clear claimed.",
+        "family": "DFF-052",
+        "outcome": "clear"
+      },
+      {
+        "evidence": "Writer requests independent exact-head verification; no independent reviewer clear claimed.",
+        "family": "DFF-055",
         "outcome": "clear"
       }
     ],
     "findings": [],
-    "issue": "616",
+    "issue": "496",
     "review_target": [
       {
-        "blob_sha": "b619058755f16bc9906226e5a4ef0061758c21b3",
-        "path": "scripts/hunter_candidate_admission.py",
+        "blob_sha": "8e33a551818301914491e20d8afe9407c2ee5216",
+        "path": "tests/test_issue_496_candidate_contract.py",
+        "previous_path": "",
+        "status": "added"
+      },
+      {
+        "blob_sha": "d09fb203836abda2a895d8ebbc54808aa1963f31",
+        "path": ".github/workflows/hunter-governance-reconcile.yml",
         "previous_path": "",
         "status": "modified"
       },
       {
-        "blob_sha": "5660b5ed811417e6535a6be60546e2cb7cef67d9",
-        "path": "tests/test_hunter_candidate_admission.py",
+        "blob_sha": "796e472afbf7583a7b714b64f7cf2e194ed34257",
+        "path": "docs/DEFECT_REGISTRY.json",
+        "previous_path": "",
+        "status": "modified"
+      },
+      {
+        "blob_sha": "608b5f33f0919dc1d36e2d39e0e3e92a035a90f8",
+        "path": "scripts/hunter_review_orchestrator.py",
+        "previous_path": "",
+        "status": "modified"
+      },
+      {
+        "blob_sha": "c55c6cd0a8ae24921a364493cc7fc8e106d6743f",
+        "path": "tests/test_hunter_review_orchestrator.py",
         "previous_path": "",
         "status": "modified"
       }
     ],
-    "review_target_digest": "79ebf154cea1952c4fda4c6d7fd369fa143b54e52ec2c145b2e9bda82dd96b73"
+    "review_target_digest": "9be3fabedd95cee331f42ee6a6845d67c63191ee3cdac29c7b0f3efc2abc5d7d"
   },
-  "review_id": "6f1c6ad1104d61df2867770ef4065828976eb7d956d1841e9d37dda05a399b15",
+  "review_id": "584d42cdc2700a1fc33aaade46ed08c96c482f398d6d10576bf80799659b8b8c",
   "review_request": {
-    "claims_id": "6f1c6ad1104d61df2867770ef4065828976eb7d956d1841e9d37dda05a399b15",
+    "claims_id": "584d42cdc2700a1fc33aaade46ed08c96c482f398d6d10576bf80799659b8b8c",
     "schema": "hunter.review-request.v1"
   },
   "schema": "hunter.pre-ready-hostile-review.v1"
