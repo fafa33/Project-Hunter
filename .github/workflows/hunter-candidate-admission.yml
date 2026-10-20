@@ -45,9 +45,21 @@ jobs:
         with:
           python-version: "3.11.13"
 
+      # GITHUB_TOKEN cannot execute markPullRequestReadyForReview for this
+      # repository (verified FORBIDDEN on PR #621). Use the already-provisioned
+      # Hunter App identity; never fall back to a weaker/anonymous mutation.
+      - name: Mint Hunter App admission token
+        id: admission-token
+        uses: actions/create-github-app-token@v2
+        with:
+          app-id: ${{ vars.HUNTER_APP_ID }}
+          private-key: ${{ secrets.HUNTER_APP_PRIVATE_KEY }}
+          permission-pull-requests: write
+          permission-contents: read
+
       - name: Enforce exact-head review admission
         env:
-          GITHUB_TOKEN: ${{ github.token }}
+          GITHUB_TOKEN: ${{ steps.admission-token.outputs.token }}
           GH_REPO: ${{ github.repository }}
           EVENT_HEAD_SHA: ${{ github.event.pull_request.head.sha || github.event.workflow_run.head_sha }}
           DIRECT_PR_NUMBER: ${{ github.event.pull_request.number }}
