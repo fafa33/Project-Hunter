@@ -17,9 +17,8 @@ Evidence for each pinned fingerprint:
 * ``fafa33``: the SSH signing key registered on the GitHub account ``fafa33``
   ("Mac Git Signing", key id 1160850), identical to the owner's configured git
   signing key.
-* ``fafa33`` Gateway: the second SSH signing key registered on the same
-  GitHub account ("Hunter Gateway signing", key id 1252092), confirmed by
-  GitHub public signing-key endpoint. No additional principal is authorized.
+* ``fafa33`` Gateway: GitHub public SSH signing-key id 1252092,
+  "Hunter Gateway signing", belongs to the same canonical owner principal.
 """
 
 from __future__ import annotations

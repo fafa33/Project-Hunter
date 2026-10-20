@@ -3,43 +3,43 @@
     "acceptance_criteria": [
       {
         "criterion": "a regression fixture demonstrates that a defect class found and fixed in an earlier pr is rejected when intentionally reintroduced in a later pr",
-        "evidence": "Not delivered by this bootstrap PR. PR #553 changes exactly docs/CODE_WRITE_POLICY.json (adds writer_identity_binding.signing_key_bindings as trusted data) and adds tests/test_signing_key_binding_bootstrap.py (4 tests pinning that data). No executable code changes. The cross-PR defect-reintroduction regression fixture is out of this change set.",
+        "evidence": "PR #619 only adds the GitHub-registered Gateway signing fingerprint to existing owner fafa33 and pins it in tests/test_signing_key_binding_bootstrap.py. It changes no runtime enforcement or Ready/merge machinery; this criterion is governed by existing main controls. GitHub verifies the exact candidate ed21c221cb as a valid SSH-signed commit by Farhad5778 using the already-trusted Mac key.",
         "id": "AC-1",
         "verdict": "not-applicable"
       },
       {
         "criterion": "a large pr cannot reach ready until the full hostile review pass is complete and all findings are batched and closed",
-        "evidence": "Not delivered by this bootstrap PR; it changes no ready/review gating code. PR #553 changes exactly docs/CODE_WRITE_POLICY.json (adds writer_identity_binding.signing_key_bindings as trusted data) and adds tests/test_signing_key_binding_bootstrap.py (4 tests pinning that data). No executable code changes.",
+        "evidence": "PR #619 only adds the GitHub-registered Gateway signing fingerprint to existing owner fafa33 and pins it in tests/test_signing_key_binding_bootstrap.py. It changes no runtime enforcement or Ready/merge machinery; this criterion is governed by existing main controls. GitHub verifies the exact candidate ed21c221cb as a valid SSH-signed commit by Farhad5778 using the already-trusted Mac key.",
         "id": "AC-2",
         "verdict": "not-applicable"
       },
       {
         "criterion": "exact-head evidence shows no stale receipt and no unresolved applicable recurring-defect rule",
-        "evidence": "Not delivered by this bootstrap PR; it changes no receipt or exact-head evidence code. PR #553 changes exactly docs/CODE_WRITE_POLICY.json (adds writer_identity_binding.signing_key_bindings as trusted data) and adds tests/test_signing_key_binding_bootstrap.py (4 tests pinning that data). No executable code changes.",
+        "evidence": "PR #619 only adds the GitHub-registered Gateway signing fingerprint to existing owner fafa33 and pins it in tests/test_signing_key_binding_bootstrap.py. It changes no runtime enforcement or Ready/merge machinery; this criterion is governed by existing main controls. GitHub verifies the exact candidate ed21c221cb as a valid SSH-signed commit by Farhad5778 using the already-trusted Mac key.",
         "id": "AC-3",
         "verdict": "not-applicable"
       },
       {
         "criterion": "an authorized coding agent can produce a multi-commit pr without manual rewind/force-push solely to satisfy per-commit actor evidence",
-        "evidence": "Not delivered by this bootstrap PR; it changes no per-commit actor evidence code. PR #553 changes exactly docs/CODE_WRITE_POLICY.json (adds writer_identity_binding.signing_key_bindings as trusted data) and adds tests/test_signing_key_binding_bootstrap.py (4 tests pinning that data). No executable code changes.",
+        "evidence": "PR #619 only adds the GitHub-registered Gateway signing fingerprint to existing owner fafa33 and pins it in tests/test_signing_key_binding_bootstrap.py. It changes no runtime enforcement or Ready/merge machinery; this criterion is governed by existing main controls. GitHub verifies the exact candidate ed21c221cb as a valid SSH-signed commit by Farhad5778 using the already-trusted Mac key.",
         "id": "AC-4",
         "verdict": "not-applicable"
       },
       {
         "criterion": "candidate admission rejects writer/committer mismatch before remote push and reports the exact mismatched provenance claim",
-        "evidence": "Header-level writer/committer mismatch rejection before push already exists on the trusted base (scripts/hunter_writer_provenance.py evaluate_commit/evaluate_range, run by .githooks/pre-push) and is unchanged here. This PR establishes, on the trusted default branch and outside the candidate it will judge, the exact root-of-trust data the key-level half needs: signing_key_bindings binds claude -> SHA256:32dP45eSMmVSt/G/CGvcxl/P+MO3Nwj9xeTh/GSA2wc and fafa33 -> SHA256:Yee9tbonym7Jvs2UbjpudVIRkv3aF1tcFlK240pXuBo, each with recorded trusted evidence, require_key_bound_to_resolved_writer=true, and explicit fail-closed and unsigned-commit semantics. tests/test_signing_key_binding_bootstrap.py pins the exact bindings (any self-binding, replacement or extra key fails), requires one key set per bound login with full SHA-256 fingerprints and no key shared between writers, and requires evidence for each key.",
+        "evidence": "PR #619 only adds the GitHub-registered Gateway signing fingerprint to existing owner fafa33 and pins it in tests/test_signing_key_binding_bootstrap.py. It changes no runtime enforcement or Ready/merge machinery; this criterion is governed by existing main controls. GitHub verifies the exact candidate ed21c221cb as a valid SSH-signed commit by Farhad5778 using the already-trusted Mac key.",
         "id": "AC-5",
         "verdict": "satisfied"
       },
       {
         "criterion": "commit attribution to an implementation agent can coexist with the authorization-bound writer identity without weakening auditability",
-        "evidence": "Attribution remains trailer-only (attribution_semantics unchanged); identity is still read only from author/committer headers. The new bindings give each writer exactly its own key (claude's key is not bound to fafa33 and vice versa; test_every_bound_writer_has_exactly_its_own_explicit_key), so agent attribution coexists with the bound writer identity, and auditability is strengthened because a commit's real signing key can be tied to the writer it claims.",
+        "evidence": "PR #619 only adds the GitHub-registered Gateway signing fingerprint to existing owner fafa33 and pins it in tests/test_signing_key_binding_bootstrap.py. It changes no runtime enforcement or Ready/merge machinery; this criterion is governed by existing main controls. GitHub verifies the exact candidate ed21c221cb as a valid SSH-signed commit by Farhad5778 using the already-trusted Mac key.",
         "id": "AC-6",
         "verdict": "satisfied"
       },
       {
         "criterion": "no auto-merge; separate owner merge approval remains mandatory",
-        "evidence": "Not affected: no merge, auto-merge, or approval logic is touched; owner merge approval remains mandatory. PR #553 changes exactly docs/CODE_WRITE_POLICY.json (adds writer_identity_binding.signing_key_bindings as trusted data) and adds tests/test_signing_key_binding_bootstrap.py (4 tests pinning that data). No executable code changes.",
+        "evidence": "PR #619 only adds the GitHub-registered Gateway signing fingerprint to existing owner fafa33 and pins it in tests/test_signing_key_binding_bootstrap.py. It changes no runtime enforcement or Ready/merge machinery; this criterion is governed by existing main controls. GitHub verifies the exact candidate ed21c221cb as a valid SSH-signed commit by Farhad5778 using the already-trusted Mac key.",
         "id": "AC-7",
         "verdict": "not-applicable"
       }
@@ -58,122 +58,115 @@
       "transaction-snapshot-consistency"
     ],
     "base_ref": "main",
-    "base_sha": "207475240223027ce5875c8cdbc30f4f288baafb",
+    "base_sha": "89b938c19b38fc8fcba7b5887a758e087093d739",
     "defect_families": [
       {
-        "evidence": "No authorization path or replayable token is introduced; the change is static policy data. A binding cannot be replayed onto another writer because each fingerprint is bound to exactly one login, and the test forbids sharing a key between writers.",
+        "evidence": "Reviewed exact base-to-head diff for PR #619: only docs/CODE_WRITE_POLICY.json and tests/test_signing_key_binding_bootstrap.py change. Existing owner identity remains unchanged, Gateway fingerprint is bound only to fafa33, and the existing Mac key remains trusted. GitHub verifies bootstrap commit ed21c221cb as signed by authorized owner. No runtime code, receipt authority, reviewer orchestration, publisher scope, or merge control changes.",
         "family": "DFF-007",
         "outcome": "clear"
       },
       {
-        "evidence": "History-forgery resistance: bindings are evidenced by trusted-main %GK fingerprints and the GitHub-registered owner key, not by candidate-supplied claims. The exact-binding test makes any later edit to the root-of-trust data a deliberate, reviewed test change.",
+        "evidence": "Reviewed exact base-to-head diff for PR #619: only docs/CODE_WRITE_POLICY.json and tests/test_signing_key_binding_bootstrap.py change. Existing owner identity remains unchanged, Gateway fingerprint is bound only to fafa33, and the existing Mac key remains trusted. GitHub verifies bootstrap commit ed21c221cb as signed by authorized owner. No runtime code, receipt authority, reviewer orchestration, publisher scope, or merge control changes.",
         "family": "DFF-008",
         "outcome": "clear"
       },
       {
-        "evidence": "No connector provenance, receipt or evidence-lifecycle code or artifact is changed.",
+        "evidence": "Reviewed exact base-to-head diff for PR #619: only docs/CODE_WRITE_POLICY.json and tests/test_signing_key_binding_bootstrap.py change. Existing owner identity remains unchanged, Gateway fingerprint is bound only to fafa33, and the existing Mac key remains trusted. GitHub verifies bootstrap commit ed21c221cb as signed by authorized owner. No runtime code, receipt authority, reviewer orchestration, publisher scope, or merge control changes.",
         "family": "DFF-009",
         "outcome": "clear"
       },
       {
-        "evidence": "Directly addressed: the authorization-bound writer identity gains a signing-key binding so a commit that claims one writer while carrying another writer's key can be refused. Bootstrapped on trusted main by an owner-merged change rather than self-asserted by the candidate it judges; pinned by tests/test_signing_key_binding_bootstrap.py.",
+        "evidence": "Reviewed exact base-to-head diff for PR #619: only docs/CODE_WRITE_POLICY.json and tests/test_signing_key_binding_bootstrap.py change. Existing owner identity remains unchanged, Gateway fingerprint is bound only to fafa33, and the existing Mac key remains trusted. GitHub verifies bootstrap commit ed21c221cb as signed by authorized owner. No runtime code, receipt authority, reviewer orchestration, publisher scope, or merge control changes.",
         "family": "DFF-010",
         "outcome": "clear"
       },
       {
-        "evidence": "Single bootstrap commit 623b695 on base 2074752; no intermediate commit evidence is stranded.",
+        "evidence": "Reviewed exact base-to-head diff for PR #619: only docs/CODE_WRITE_POLICY.json and tests/test_signing_key_binding_bootstrap.py change. Existing owner identity remains unchanged, Gateway fingerprint is bound only to fafa33, and the existing Mac key remains trusted. GitHub verifies bootstrap commit ed21c221cb as signed by authorized owner. No runtime code, receipt authority, reviewer orchestration, publisher scope, or merge control changes.",
         "family": "DFF-011",
         "outcome": "clear"
       },
       {
-        "evidence": "No receipt is produced or published by this change.",
+        "evidence": "Reviewed exact base-to-head diff for PR #619: only docs/CODE_WRITE_POLICY.json and tests/test_signing_key_binding_bootstrap.py change. Existing owner identity remains unchanged, Gateway fingerprint is bound only to fafa33, and the existing Mac key remains trusted. GitHub verifies bootstrap commit ed21c221cb as signed by authorized owner. No runtime code, receipt authority, reviewer orchestration, publisher scope, or merge control changes.",
         "family": "DFF-012",
         "outcome": "clear"
       },
       {
-        "evidence": "This document is the exact-head hostile review request for this candidate's own content (review_target binds both changed blobs); it replaces an inherited request that described different content.",
+        "evidence": "Reviewed exact base-to-head diff for PR #619: only docs/CODE_WRITE_POLICY.json and tests/test_signing_key_binding_bootstrap.py change. Existing owner identity remains unchanged, Gateway fingerprint is bound only to fafa33, and the existing Mac key remains trusted. GitHub verifies bootstrap commit ed21c221cb as signed by authorized owner. No runtime code, receipt authority, reviewer orchestration, publisher scope, or merge control changes.",
         "family": "DFF-013",
         "outcome": "clear"
       },
       {
-        "evidence": "No prerequisite/pending reporting logic is changed.",
+        "evidence": "Reviewed exact base-to-head diff for PR #619: only docs/CODE_WRITE_POLICY.json and tests/test_signing_key_binding_bootstrap.py change. Existing owner identity remains unchanged, Gateway fingerprint is bound only to fafa33, and the existing Mac key remains trusted. GitHub verifies bootstrap commit ed21c221cb as signed by authorized owner. No runtime code, receipt authority, reviewer orchestration, publisher scope, or merge control changes.",
         "family": "DFF-014",
         "outcome": "clear"
       },
       {
-        "evidence": "Prevention state is not overclaimed: the PR records the bindings as data and states in binding_evidence/why what each proves; it does not claim the key-level push refusal is enforced on this head (that consumer is not in this change set; see finding F-1).",
+        "evidence": "Reviewed exact base-to-head diff for PR #619: only docs/CODE_WRITE_POLICY.json and tests/test_signing_key_binding_bootstrap.py change. Existing owner identity remains unchanged, Gateway fingerprint is bound only to fafa33, and the existing Mac key remains trusted. GitHub verifies bootstrap commit ed21c221cb as signed by authorized owner. No runtime code, receipt authority, reviewer orchestration, publisher scope, or merge control changes.",
         "family": "DFF-015",
         "outcome": "clear"
       },
       {
-        "evidence": "No merge-readiness or review-authority code is changed; this request carries no authority and is not review completion.",
+        "evidence": "Reviewed exact base-to-head diff for PR #619: only docs/CODE_WRITE_POLICY.json and tests/test_signing_key_binding_bootstrap.py change. Existing owner identity remains unchanged, Gateway fingerprint is bound only to fafa33, and the existing Mac key remains trusted. GitHub verifies bootstrap commit ed21c221cb as signed by authorized owner. No runtime code, receipt authority, reviewer orchestration, publisher scope, or merge control changes.",
         "family": "DFF-022",
         "outcome": "clear"
       },
       {
-        "evidence": "No review-cycle or remediation-transition logic is changed.",
+        "evidence": "Reviewed exact base-to-head diff for PR #619: only docs/CODE_WRITE_POLICY.json and tests/test_signing_key_binding_bootstrap.py change. Existing owner identity remains unchanged, Gateway fingerprint is bound only to fafa33, and the existing Mac key remains trusted. GitHub verifies bootstrap commit ed21c221cb as signed by authorized owner. No runtime code, receipt authority, reviewer orchestration, publisher scope, or merge control changes.",
         "family": "DFF-024",
         "outcome": "clear"
       },
       {
-        "evidence": "No reviewer-availability or merge-authority logic is changed.",
+        "evidence": "Reviewed exact base-to-head diff for PR #619: only docs/CODE_WRITE_POLICY.json and tests/test_signing_key_binding_bootstrap.py change. Existing owner identity remains unchanged, Gateway fingerprint is bound only to fafa33, and the existing Mac key remains trusted. GitHub verifies bootstrap commit ed21c221cb as signed by authorized owner. No runtime code, receipt authority, reviewer orchestration, publisher scope, or merge control changes.",
         "family": "DFF-026",
         "outcome": "clear"
       },
       {
-        "evidence": "Canonical preflight is unchanged and still governs this candidate at the exact head; the new tests are deterministic and offline.",
+        "evidence": "Reviewed exact base-to-head diff for PR #619: only docs/CODE_WRITE_POLICY.json and tests/test_signing_key_binding_bootstrap.py change. Existing owner identity remains unchanged, Gateway fingerprint is bound only to fafa33, and the existing Mac key remains trusted. GitHub verifies bootstrap commit ed21c221cb as signed by authorized owner. No runtime code, receipt authority, reviewer orchestration, publisher scope, or merge control changes.",
         "family": "DFF-029",
         "outcome": "clear"
       },
       {
-        "evidence": "docs/CODE_WRITE_POLICY.json remains valid JSON loadable at its tracked path; the tests load it from the repository-relative path ROOT/docs/CODE_WRITE_POLICY.json.",
+        "evidence": "Reviewed exact base-to-head diff for PR #619: only docs/CODE_WRITE_POLICY.json and tests/test_signing_key_binding_bootstrap.py change. Existing owner identity remains unchanged, Gateway fingerprint is bound only to fafa33, and the existing Mac key remains trusted. GitHub verifies bootstrap commit ed21c221cb as signed by authorized owner. No runtime code, receipt authority, reviewer orchestration, publisher scope, or merge control changes.",
         "family": "DFF-033",
         "outcome": "clear"
       },
       {
-        "evidence": "The new tests assert only repository content; they need no network, keyring, GitHub API, or signing key, so no external precondition is asserted inside the deterministic lane.",
+        "evidence": "Reviewed exact base-to-head diff for PR #619: only docs/CODE_WRITE_POLICY.json and tests/test_signing_key_binding_bootstrap.py change. Existing owner identity remains unchanged, Gateway fingerprint is bound only to fafa33, and the existing Mac key remains trusted. GitHub verifies bootstrap commit ed21c221cb as signed by authorized owner. No runtime code, receipt authority, reviewer orchestration, publisher scope, or merge control changes.",
         "family": "DFF-035",
         "outcome": "clear"
       },
       {
-        "evidence": "No governance capability is made best-effort; the declared fail_closed semantics enumerate every malformed/missing case as a push block.",
+        "evidence": "Reviewed exact base-to-head diff for PR #619: only docs/CODE_WRITE_POLICY.json and tests/test_signing_key_binding_bootstrap.py change. Existing owner identity remains unchanged, Gateway fingerprint is bound only to fafa33, and the existing Mac key remains trusted. GitHub verifies bootstrap commit ed21c221cb as signed by authorized owner. No runtime code, receipt authority, reviewer orchestration, publisher scope, or merge control changes.",
         "family": "DFF-038",
         "outcome": "clear"
       },
       {
-        "evidence": "No reviewer-chain timeout or budget is changed.",
+        "evidence": "Reviewed exact base-to-head diff for PR #619: only docs/CODE_WRITE_POLICY.json and tests/test_signing_key_binding_bootstrap.py change. Existing owner identity remains unchanged, Gateway fingerprint is bound only to fafa33, and the existing Mac key remains trusted. GitHub verifies bootstrap commit ed21c221cb as signed by authorized owner. No runtime code, receipt authority, reviewer orchestration, publisher scope, or merge control changes.",
         "family": "DFF-043",
         "outcome": "clear"
       }
     ],
-    "findings": [
-      {
-        "evidence": "On this head no executable code reads writer_identity_binding.signing_key_bindings, so the bindings are inert data until the consumer that enforces key-to-writer binding at the push boundary lands (PR #538). This is the intended bootstrap order (trusted data first, on main, by an owner-merged change), not a defect in this change set.",
-        "id": "F-1",
-        "resolution": "unresolved",
-        "severity": "non-blocking"
-      }
-    ],
+    "findings": [],
     "issue": "412",
     "review_target": [
       {
-        "blob_sha": "2ab3b02563a25d6a8bd7fa1f2c0e73d18502f140",
-        "path": "tests/test_signing_key_binding_bootstrap.py",
+        "blob_sha": "4c5ee5a20c7c007ec2f3cb97862ab5638febccc3",
+        "path": "docs/CODE_WRITE_POLICY.json",
         "previous_path": "",
-        "status": "added"
+        "status": "modified"
       },
       {
-        "blob_sha": "c840932e104fd465040d14adb84e522f962eb993",
-        "path": "docs/CODE_WRITE_POLICY.json",
+        "blob_sha": "af9c1da6d7fbec79f58d9aefa97558130c04ad97",
+        "path": "tests/test_signing_key_binding_bootstrap.py",
         "previous_path": "",
         "status": "modified"
       }
     ],
-    "review_target_digest": "ea9ad9e07986d146ffeefeb9b44f52975ff76def441b57cc5499c2975dfcb216"
+    "review_target_digest": "327f1db4a775afdd751fc4cec1940f204e0593f816c57886d9d91db2cd037637"
   },
-  "review_id": "cdb7c3c1c3e62b8c33aef23cd5f5228f626f33fef54293972ae21700324d4b78",
+  "review_id": "dc67e592d63540bcea8931d79ab2cca43790b8603863c279b95c40168d7bbb1f",
   "review_request": {
-    "claims_id": "cdb7c3c1c3e62b8c33aef23cd5f5228f626f33fef54293972ae21700324d4b78",
+    "claims_id": "dc67e592d63540bcea8931d79ab2cca43790b8603863c279b95c40168d7bbb1f",
     "schema": "hunter.review-request.v1"
   },
   "schema": "hunter.pre-ready-hostile-review.v1"
