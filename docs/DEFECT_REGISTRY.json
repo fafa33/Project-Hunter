@@ -1042,6 +1042,16 @@
       "guard": "One canonical receipt contract (collector_receipt_problem: schema, exact repository/PR/head/run/attempt/generation, claims and configuration digests, attempt records) is applied by the collector before writing, by the trusted completion path before any success is written, by the exhausted-pool finalizer and by the governance exhaustion loader. A recorded completion stays in the recovery queue until finalization reaches a definitive outcome, so unusable or temporarily unavailable evidence never suppresses recovery. [#592: the mechanism described above was eliminated by the native pull_request_target collector and verified publisher; the class stays covered by the mapped native test.]",
       "test": "UNVERIFIED: targeted regression required",
       "status": "open"
+    },
+    {
+      "id": "PRH-119",
+      "class": "exact-head-review-request-stale-after-candidate-mutation-reconcile-hard-failure",
+      "source": "PR #622, Governance Reconcile run 39442251750, 2026-10-20 14:46 UTC; related lifecycle Issue #588",
+      "classification": "systemic",
+      "guard_boundary": "GitHub-native exact-head pre-ready review request -> trusted reviewer orchestration -> governance reconcile",
+      "guard": "Keep exact-head hostile review binding fail-closed: never reuse a request after candidate content changes and never fabricate review. Distinguish missing/stale review prerequisite requiring an authenticated new request from actual execution failure; preserve visible waiting/blocking state and bounded recovery, without marking Ready or permitting merge. Existing ReviewRequestBlocked path currently causes reconciliation exit 1; root-cause remediation and regression are pending.",
+      "test": "UNVERIFIED: targeted regression required",
+      "status": "open"
     }
   ],
   "families": [
@@ -2662,6 +2672,33 @@
       "lifecycle": "regression-tested",
       "sources": [
         "PR #579 Codex thread 4222875872 and Copilot threads 4222896715, 4222896794, 2026-10-08; Issue #574 hosted canary run 37819851226: EngineeringContextAuthorityError/DEFECT_REGISTRY_INVALID."
+      ]
+    },
+    {
+      "id": "DFF-055",
+      "title": "stale-exact-head-review-request-reconcile-terminal-error-loop",
+      "invariant": "A pre-ready hostile-review request binds the reviewed candidate content and exact PR HEAD. Mutation invalidates prior review evidence and blocks Ready/merge. The trusted GitHub-native reconcile must represent missing/stale review as a durable, actionable blocked/waiting state, distinguish it from execution/security failures, and recover after a new authenticated exact-head request without rerun loops, forged approvals or unbounded polling.",
+      "applicability": {
+        "changed_paths": [
+          "scripts/hunter_pre_ready_review.py",
+          "scripts/hunter_review_orchestrator.py",
+          ".github/workflows/hunter-governance-reconcile.yml",
+          "scripts/hunter_governance_review_v2.py",
+          "tests/test_issue_541_review_opportunity_cutover.py",
+          "tests/test_hunter_merge_readiness_v2.py"
+        ],
+        "rationale": "Changes to review-request generation, candidate mutation, reconciliation and reviewer dispatch can repeatedly turn a legitimate stale-head security block into failing reconcile runs."
+      },
+      "prevention": {
+        "mechanism": "Required targeted integration regression: candidate reviewed at HEAD A, content changed at HEAD B, stale request rejected and Ready blocked, reconcile records actionable waiting state without false success or workflow failure; authenticated exact-head B request resumes exactly once; genuine security or execution errors remain failures. No weakening of exact-head proof. Existing stale-head regression covers only fail-closed rejection; the waiting/recovery regression is NOT YET IMPLEMENTED.",
+        "boundary": "hosted-gate"
+      },
+      "regression_evidence": [
+        "tests/test_issue_541_review_opportunity_cutover.py::test_stale_head_review_evidence_remains_invalid"
+      ],
+      "lifecycle": "recorded",
+      "sources": [
+        "PR #622 Governance Reconcile run 39442251750 (2026-10-20); scripts/hunter_review_orchestrator.py review_request_state and ReviewRequestBlocked; Issue #588 related stale readiness/reconciliation history"
       ]
     }
   ]
