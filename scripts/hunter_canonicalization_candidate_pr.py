@@ -507,13 +507,55 @@ def _merged_candidate_tip(run: RunCommand, branch: str, previous_sha: str) -> bo
 
 
 def _existing_open_pr_number(run: RunCommand, branch: str) -> int | None:
+    # Do not trust unqualified --head: a fork can use the same branch name.
     output = _run(
         run,
-        ["gh", "pr", "list", "--head", branch, "--state", "open", "--json", "number", "--jq", ".[0].number"],
-        what="check existing candidate PR",
+        [
+            "gh",
+            "pr",
+            "list",
+            "--state",
+            "open",
+            "--limit",
+            "100",
+            "--json",
+            "number,headRefName,isCrossRepository,headRepositoryOwner,baseRefName",
+            "--jq",
+            '.[] | select(.headRefName == "'
+            + branch
+            + '" and .isCrossRepository == false and .headRepositoryOwner.login == "fafa33" and .baseRefName == "main") | .number',
+        ],
+        what="check trusted same-repository candidate PR",
     )
-    stripped = output.strip()
-    return int(stripped) if stripped else None
+    numbers = output.splitlines()
+    if len(numbers) > 1:
+        raise CanonicalizationCandidatePrError("ambiguous owner candidate PR")
+    return int(numbers[0]) if numbers else None
+
+
+def _remote_generation_sha(run: RunCommand, root: str, repo: str, branch: str) -> str:
+    output = _run(
+        run, ["git", "-C", root, "ls-remote", "--heads", repo, branch], what="resolve remote candidate generation"
+    )
+    rows = output.splitlines()
+    if len(rows) != 1 or not rows[0].endswith("refs/heads/" + branch):
+        raise CanonicalizationCandidatePrError("ambiguous candidate remote ref")
+    return rows[0].split()[0]
+
+
+def _candidate_remote_generations(run: RunCommand, root: str, repo: str) -> list[str]:
+    output = _run(
+        run,
+        ["git", "-C", root, "ls-remote", "--heads", repo, ACTIVE_BRANCH_PREFIX + "*"],
+        what="discover existing owner-repository candidate branches",
+    )
+    return sorted(
+        {
+            line.split("refs/heads/", 1)[1]
+            for line in output.splitlines()
+            if "refs/heads/" in line and line.split("refs/heads/", 1)[1].startswith(ACTIVE_BRANCH_PREFIX)
+        }
+    )
 
 
 def propose(
@@ -558,27 +600,17 @@ def propose(
         # A single active generation is shared by all source PRs. After merge,
         # the next generation is named from the new main tip. Unlike the old
         # fixed branch, no generation ever requires a non-fast-forward push.
-        active = _run(
-            run,
-            [
-                "gh",
-                "pr",
-                "list",
-                "--state",
-                "open",
-                "--limit",
-                "100",
-                "--json",
-                "headRefName",
-                "--jq",
-                ".[].headRefName",
-            ],
-            what="locate active canonicalization generation",
-        ).splitlines()
-        active = [name for name in active if name.startswith(ACTIVE_BRANCH_PREFIX)]
-        if len(active) > 1:
-            raise CanonicalizationCandidatePrError("multiple active canonicalization generations")
-        branch = active[0] if active else ACTIVE_BRANCH_PREFIX + main_sha[:16]
+        remote_generations = _candidate_remote_generations(run, root, repo)
+        active = [name for name in remote_generations if _existing_open_pr_number(run, name) is not None]
+        orphans = [
+            name
+            for name in remote_generations
+            if name not in active
+            and not _merged_candidate_tip(run, name, _remote_generation_sha(run, root, repo, name))
+        ]
+        if len(active) > 1 or len(orphans) > 1 or (active and orphans):
+            raise CanonicalizationCandidatePrError("ambiguous canonicalization generations; refusing new proposal")
+        branch = (active or orphans or [ACTIVE_BRANCH_PREFIX + main_sha[:16]])[0]
 
         # Best-effort: the dedicated branch may not exist yet (first run ever).
         # Fetching it (rather than only `ls-remote`) also pulls its tree/blob

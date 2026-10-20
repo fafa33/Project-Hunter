@@ -982,3 +982,50 @@ def test_candidate_reuses_existing_active_generation(origin_repo: Path, tmp_path
     assert "UPDATED" in result
     assert "#42" in result
     assert second.pr_create_calls == 0
+
+
+def test_generation_discovery_recovers_orphan_after_main_moves(origin_repo: Path, tmp_path: Path) -> None:
+    first = RecordingRun()
+    first.fail_pr_create = True
+    with pytest.raises(candidate_pr.CanonicalizationCandidatePrError):
+        candidate_pr.propose(
+            pr=941,
+            head=HEAD,
+            base=BASE,
+            observations=[_observation(941)],
+            repo=str(origin_repo),
+            repo_root=tmp_path / "seed",
+            run=first,
+        )
+    old_branch = _generation(origin_repo)
+    _git(["checkout", "-q", "main"], cwd=tmp_path / "seed")
+    _git(["commit", "--allow-empty", "-m", "main moved"], cwd=tmp_path / "seed")
+    _git(["push", "-q", "origin", "main"], cwd=tmp_path / "seed")
+    second = RecordingRun()
+    result = candidate_pr.propose(
+        pr=942,
+        head=HEAD,
+        base=BASE,
+        observations=[_observation(942)],
+        repo=str(origin_repo),
+        repo_root=tmp_path / "seed",
+        run=second,
+    )
+    assert "OPENED" in result
+    pushes = [call for call in second.calls if call[:1] == ["git"] and "push" in call]
+    assert pushes[0][-1] == "HEAD:refs/heads/" + old_branch
+
+
+def test_existing_pr_lookup_excludes_fork_owned_collision() -> None:
+    calls = []
+
+    def run(command):
+        calls.append(command)
+        return subprocess.CompletedProcess(command, 0, stdout="", stderr="")
+
+    assert candidate_pr._existing_open_pr_number(run, "fix/hunter-canonicalization-abc") is None
+    command = calls[0]
+    assert "isCrossRepository" in command[command.index("--json") + 1]
+    assert "headRepositoryOwner" in command[command.index("--json") + 1]
+    assert ".isCrossRepository == false" in command[command.index("--jq") + 1]
+    assert '.headRepositoryOwner.login == "fafa33"' in command[command.index("--jq") + 1]
