@@ -163,18 +163,38 @@ def test_injected_known_defect_regression_rejected_until_fixed(monkeypatch, tmp_
     candidate = tmp_path / "test_prevent_regression.py"
     candidate.write_text("def test_known_invariant():\n    assert 1 + 1 == 3\n", encoding="utf-8")
 
-    def run_regression():
-        return subprocess.run(
-            [sys.executable, "-m", "pytest", "-q", "-p", "no:cacheprovider", str(candidate)],
-            cwd=tmp_path,
-            capture_output=True,
-            text=True,
-            timeout=35,
-        )
+    import hunter_defect_prevention_preflight as trusted_preflight
 
-    failed = run_regression()
-    assert failed.returncode != 0 and "FAILED" in failed.stdout
-    state = {"conclusion": "failure", "head": HEAD}
+    # The production trusted gate runner owns the verdict. Other gates are
+    # deterministic fixtures; its actual Pytest gate executes the candidate.
+    real_subprocess_run = subprocess.run
+    observed_pytest = []
+
+    def execute_gate(command, **kwargs):
+        if command[0] == "pytest":
+            result = real_subprocess_run(
+                [sys.executable, "-m", "pytest", "-q", "-p", "no:cacheprovider", str(candidate)],
+                cwd=tmp_path,
+                capture_output=True,
+                text=True,
+                timeout=35,
+            )
+            observed_pytest.append(result)
+            return result
+        return subprocess.CompletedProcess(command, 0)
+
+    monkeypatch.setattr(trusted_preflight.subprocess, "run", execute_gate)
+    monkeypatch.setattr(trusted_preflight, "trusted_lane_problem", lambda _opts: None)
+    state = {"conclusion": None, "head": HEAD}
+
+    def publish_trusted_preflight():
+        result = trusted_preflight.run_candidate_quality_gates(tmp_path)
+        assert observed_pytest, "trusted preflight must execute the regression gate"
+        state["conclusion"] = "success" if result == 0 else "failure"
+        return result
+
+    assert publish_trusted_preflight() != 0
+    assert "FAILED" in observed_pytest[-1].stdout
 
     def github_api(_repo, _token, method, path):
         assert method == "GET"
@@ -207,7 +227,6 @@ def test_injected_known_defect_regression_rejected_until_fixed(monkeypatch, tmp_
     candidate.write_text("def test_known_invariant():\n    assert 1 + 1 == 2  # fixed\n", encoding="utf-8")
     for cache in (tmp_path / "__pycache__").glob("test_prevent_regression*.pyc"):
         cache.unlink()
-    fixed = run_regression()
-    assert fixed.returncode == 0 and "1 passed" in fixed.stdout
-    state["conclusion"] = "success"
+    assert publish_trusted_preflight() == 0
+    assert "1 passed" in observed_pytest[-1].stdout
     assert core.candidate_admission("fafa33/Project-Hunter", "token", HEAD, 496)[0] == "success"
