@@ -124,7 +124,10 @@ class RecordingRun:
             stdout = "MERGED 2026-10-07T00:00:00Z" if self.source_merged else "OPEN "
             return subprocess.CompletedProcess(command, 0, stdout=stdout, stderr="")
         if command[1:3] == ["pr", "list"]:
-            stdout = str(self.existing_pr) if self.existing_pr is not None else ""
+            if "headRefName" in command:
+                stdout = getattr(self, "active_branch", "")
+            else:
+                stdout = str(self.existing_pr) if self.existing_pr is not None else ""
             return subprocess.CompletedProcess(command, 0, stdout=stdout, stderr="")
         if command[1:3] == ["pr", "create"]:
             if self.fail_pr_create:
@@ -132,6 +135,15 @@ class RecordingRun:
             self.pr_create_calls += 1
             return subprocess.CompletedProcess(command, 0, stdout="https://example.invalid/pull/1\n", stderr="")
         raise AssertionError(f"unexpected gh command: {command}")
+
+
+def _generation(origin_repo: Path) -> str:
+    import subprocess
+
+    sha = subprocess.run(
+        ["git", "rev-parse", "main"], cwd=origin_repo, check=True, capture_output=True, text=True
+    ).stdout.strip()
+    return candidate_pr.ACTIVE_BRANCH_PREFIX + sha[:16]
 
 
 def test_compute_plan_is_pure_and_deterministic() -> None:
@@ -177,7 +189,7 @@ def test_propose_noop_makes_no_git_write_or_pr_calls(origin_repo: Path, tmp_path
 
     assert "NO-OP" in message
     assert not any("push" in call for call in recorder.calls)
-    assert not any(call[0] == "gh" and call[1:3] in (["pr", "create"], ["pr", "list"]) for call in recorder.calls)
+    assert not any(call[0] == "gh" and call[1:3] == ["pr", "create"] for call in recorder.calls)
 
 
 def test_open_source_pr_defers_without_any_git_or_pr_write(origin_repo: Path, tmp_path: Path) -> None:
@@ -216,10 +228,10 @@ def test_propose_opens_draft_pr_for_confirmed_finding(origin_repo: Path, tmp_pat
 
     push_calls = [call for call in recorder.calls if call[:1] == ["git"] and "push" in call]
     assert len(push_calls) == 1
-    assert push_calls[0][-1] == f"HEAD:refs/heads/{candidate_pr.DEDICATED_BRANCH}"
+    assert push_calls[0][-1] == f"HEAD:refs/heads/{_generation(origin_repo)}"
 
     create_calls = [call for call in recorder.calls if call[:1] == ["gh"] and call[1:3] == ["pr", "create"]]
-    assert create_calls[0][create_calls[0].index("--head") + 1] == candidate_pr.DEDICATED_BRANCH
+    assert create_calls[0][create_calls[0].index("--head") + 1] == _generation(origin_repo)
     assert create_calls[0][create_calls[0].index("--base") + 1] == "main"
     assert "--draft" in create_calls[0]
 
@@ -335,7 +347,7 @@ def test_propose_accumulates_a_second_finding_onto_an_unmerged_first_candidate(
     assert "#99" in second
 
     branch_registry = subprocess.run(
-        ["git", "show", f"{candidate_pr.DEDICATED_BRANCH}:docs/DEFECT_REGISTRY.json"],
+        ["git", "show", f"{_generation(origin_repo)}:docs/DEFECT_REGISTRY.json"],
         cwd=origin_repo,
         check=True,
         capture_output=True,
@@ -362,7 +374,7 @@ def test_propose_rebuilds_fresh_once_dedicated_branch_is_stale(origin_repo: Path
     assert "OPENED" in first
 
     # Simulate the first candidate PR having been merged into main.
-    _git(["fetch", "-q", str(origin_repo), candidate_pr.DEDICATED_BRANCH], cwd=tmp_path / "seed")
+    _git(["fetch", "-q", str(origin_repo), _generation(origin_repo)], cwd=tmp_path / "seed")
     _git(["checkout", "-q", "main"], cwd=tmp_path / "seed")
     _git(["merge", "-q", "--no-edit", "FETCH_HEAD"], cwd=tmp_path / "seed")
     _git(["push", "-q", "origin", "main"], cwd=tmp_path / "seed")
@@ -437,7 +449,7 @@ def test_propose_records_canonicalized_commits_under_the_bound_writer_identity(
         assert f"-u {variable}" in sanitized, f"the recording commit must unset {variable}"
 
     head_sha = subprocess.run(
-        ["git", "rev-parse", candidate_pr.DEDICATED_BRANCH],
+        ["git", "rev-parse", _generation(origin_repo)],
         cwd=origin_repo,
         check=True,
         capture_output=True,
@@ -542,7 +554,7 @@ def test_github_review_finding_is_durably_captured_even_before_classification(
     # Unclassified lifecycle evidence is retained by the workflow artifact; it
     # must not create repository work merely to persist raw evidence.
     branch = subprocess.run(
-        ["git", "ls-remote", "--heads", str(origin_repo), candidate_pr.DEDICATED_BRANCH],
+        ["git", "ls-remote", "--heads", str(origin_repo), _generation(origin_repo)],
         check=True,
         capture_output=True,
         text=True,
@@ -784,7 +796,7 @@ def test_candidate_review_request_binds_real_issue_and_never_reuses_603(origin_r
         run=recorder,
     )
     raw = subprocess.run(
-        ["git", "show", f"{candidate_pr.DEDICATED_BRANCH}:.hunter/pre-ready-hostile-review.json"],
+        ["git", "show", f"{_generation(origin_repo)}:.hunter/pre-ready-hostile-review.json"],
         cwd=origin_repo,
         check=True,
         capture_output=True,
@@ -811,7 +823,7 @@ def test_squash_merged_branch_cannot_be_reopened_as_orphan(origin_repo: Path, tm
     # Reproduce a squash merge: copy only governed knowledge content onto main.
     seed = tmp_path / "seed"
     subprocess.run(
-        ["git", "fetch", str(origin_repo), candidate_pr.DEDICATED_BRANCH], cwd=seed, check=True, capture_output=True
+        ["git", "fetch", str(origin_repo), _generation(origin_repo)], cwd=seed, check=True, capture_output=True
     )
     subprocess.run(
         [
@@ -909,3 +921,111 @@ def test_pr_creation_does_not_inherit_read_only_workflow_token(monkeypatch) -> N
     assert "GH_TOKEN" not in calls[1][1]
     assert "GITHUB_TOKEN" not in calls[1][1]
     assert calls[1][1]["GH_HOST"] == "github.com"
+
+
+def test_merged_candidate_tip_requires_exact_head_sha() -> None:
+    """An older merged PR must not hide a newer, still-unmerged branch tip."""
+    import subprocess
+
+    calls = []
+
+    def run(command):
+        calls.append(command)
+        return subprocess.CompletedProcess(command, 0, stdout="abc123\nother456\n")
+
+    assert candidate_pr._merged_candidate_tip(run, candidate_pr.DEDICATED_BRANCH, "abc123")
+    assert not candidate_pr._merged_candidate_tip(run, candidate_pr.DEDICATED_BRANCH, "newer789")
+    assert calls[0][:4] == ["gh", "pr", "list", "--head"]
+    assert "merged" in calls[0]
+
+
+def test_candidate_publication_is_forward_only(origin_repo: Path, tmp_path: Path) -> None:
+    recorder = RecordingRun(existing_pr=None)
+    result = candidate_pr.propose(
+        pr=901,
+        head=HEAD,
+        base=BASE,
+        observations=[_observation(901)],
+        repo=str(origin_repo),
+        repo_root=tmp_path / "seed",
+        run=recorder,
+    )
+    assert "OPENED" in result
+    pushes = [call for call in recorder.calls if call[:1] == ["git"] and "push" in call]
+    assert len(pushes) == 1
+    assert all(not arg.startswith("--force") for arg in pushes[0])
+    assert pushes[0][-1].startswith("HEAD:refs/heads/fix/hunter-canonicalization-")
+
+
+def test_candidate_reuses_existing_active_generation(origin_repo: Path, tmp_path: Path) -> None:
+    first = RecordingRun()
+    candidate_pr.propose(
+        pr=901,
+        head=HEAD,
+        base=BASE,
+        observations=[_observation(901)],
+        repo=str(origin_repo),
+        repo_root=tmp_path / "seed",
+        run=first,
+    )
+    second = RecordingRun(existing_pr=42)
+    second.active_branch = _generation(origin_repo)
+    result = candidate_pr.propose(
+        pr=902,
+        head=HEAD,
+        base=BASE,
+        observations=[_observation(902, regression_test="test_compute_plan_noop_for_non_confirmed_observation")],
+        repo=str(origin_repo),
+        repo_root=tmp_path / "seed",
+        run=second,
+    )
+    assert "UPDATED" in result
+    assert "#42" in result
+    assert second.pr_create_calls == 0
+
+
+def test_generation_discovery_recovers_orphan_after_main_moves(origin_repo: Path, tmp_path: Path) -> None:
+    first = RecordingRun()
+    first.fail_pr_create = True
+    with pytest.raises(candidate_pr.CanonicalizationCandidatePrError):
+        candidate_pr.propose(
+            pr=941,
+            head=HEAD,
+            base=BASE,
+            observations=[_observation(941)],
+            repo=str(origin_repo),
+            repo_root=tmp_path / "seed",
+            run=first,
+        )
+    old_branch = _generation(origin_repo)
+    _git(["checkout", "-q", "main"], cwd=tmp_path / "seed")
+    _git(["commit", "--allow-empty", "-m", "main moved"], cwd=tmp_path / "seed")
+    _git(["push", "-q", "origin", "main"], cwd=tmp_path / "seed")
+    second = RecordingRun()
+    result = candidate_pr.propose(
+        pr=942,
+        head=HEAD,
+        base=BASE,
+        observations=[_observation(942)],
+        repo=str(origin_repo),
+        repo_root=tmp_path / "seed",
+        run=second,
+    )
+    assert "OPENED" in result
+    pushes = [call for call in second.calls if call[:1] == ["git"] and "push" in call]
+    assert pushes[0][-1] == "HEAD:refs/heads/" + old_branch
+
+
+def test_existing_pr_lookup_excludes_fork_owned_collision() -> None:
+    calls = []
+
+    def run(command):
+        calls.append(command)
+        return subprocess.CompletedProcess(command, 0, stdout="", stderr="")
+
+    assert candidate_pr._existing_open_pr_number(run, "fix/hunter-canonicalization-abc") is None
+    command = calls[0]
+    assert "isCrossRepository" in command[command.index("--json") + 1]
+    assert "headRepositoryOwner" in command[command.index("--json") + 1]
+    assert ".isCrossRepository == false" in command[command.index("--jq") + 1]
+    assert '.headRepositoryOwner.login == "fafa33"' in command[command.index("--jq") + 1]

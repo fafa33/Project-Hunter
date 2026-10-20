@@ -85,6 +85,7 @@ from hunter.evidence_intelligence.incremental_knowledge_learning import (
 
 _PREFIX = "[Hunter Canonicalization Candidate PR]"
 DEDICATED_BRANCH = "canonicalization/defect-registry-auto"
+ACTIVE_BRANCH_PREFIX = "fix/hunter-canonicalization-"
 BASE_BRANCH = "main"
 REGISTRY_RELATIVE_PATH = "docs/DEFECT_REGISTRY.json"
 DISPOSITIONS_RELATIVE_PATH = "docs/REVIEWER_FINDING_DISPOSITIONS.json"
@@ -430,7 +431,7 @@ def _is_ancestor(run: RunCommand, root: str, ancestor_sha: str, descendant_sha: 
     return True
 
 
-def _open_candidate_pr(run: RunCommand, *, pr: int, extra_body: str) -> str:
+def _open_candidate_pr(run: RunCommand, *, pr: int, extra_body: str, branch: str = DEDICATED_BRANCH) -> str:
     body = (
         "Automatic canonicalization candidate, opened by "
         "`scripts/hunter_canonicalization_candidate_pr.py` per "
@@ -451,7 +452,7 @@ def _open_candidate_pr(run: RunCommand, *, pr: int, extra_body: str) -> str:
             "--base",
             BASE_BRANCH,
             "--head",
-            DEDICATED_BRANCH,
+            branch,
             "--draft",
             "--title",
             PR_TITLE,
@@ -477,14 +478,84 @@ def _source_pr_is_merged(run: RunCommand, pr: int) -> bool:
     return state == "MERGED" and bool(merged_at)
 
 
-def _existing_open_pr_number(run: RunCommand, branch: str) -> int | None:
+def _merged_candidate_tip(run: RunCommand, branch: str, previous_sha: str) -> bool:
+    """A squash-merged historical branch is not an orphan to resurrect.
+
+    Require GitHub's merged PR evidence bound to the exact remote branch tip;
+    a similarly named or older merged PR cannot excuse a newer unmerged tip.
+    """
     output = _run(
         run,
-        ["gh", "pr", "list", "--head", branch, "--state", "open", "--json", "number", "--jq", ".[0].number"],
-        what="check existing candidate PR",
+        [
+            "gh",
+            "pr",
+            "list",
+            "--head",
+            branch,
+            "--state",
+            "merged",
+            "--limit",
+            "100",
+            "--json",
+            "headRefOid",
+            "--jq",
+            ".[].headRefOid",
+        ],
+        what="check merged candidate branch identity",
     )
-    stripped = output.strip()
-    return int(stripped) if stripped else None
+    return previous_sha in output.splitlines()
+
+
+def _existing_open_pr_number(run: RunCommand, branch: str) -> int | None:
+    # Do not trust unqualified --head: a fork can use the same branch name.
+    output = _run(
+        run,
+        [
+            "gh",
+            "pr",
+            "list",
+            "--state",
+            "open",
+            "--limit",
+            "100",
+            "--json",
+            "number,headRefName,isCrossRepository,headRepositoryOwner,baseRefName",
+            "--jq",
+            '.[] | select(.headRefName == "'
+            + branch
+            + '" and .isCrossRepository == false and .headRepositoryOwner.login == "fafa33" and .baseRefName == "main") | .number',
+        ],
+        what="check trusted same-repository candidate PR",
+    )
+    numbers = output.splitlines()
+    if len(numbers) > 1:
+        raise CanonicalizationCandidatePrError("ambiguous owner candidate PR")
+    return int(numbers[0]) if numbers else None
+
+
+def _remote_generation_sha(run: RunCommand, root: str, repo: str, branch: str) -> str:
+    output = _run(
+        run, ["git", "-C", root, "ls-remote", "--heads", repo, branch], what="resolve remote candidate generation"
+    )
+    rows = output.splitlines()
+    if len(rows) != 1 or not rows[0].endswith("refs/heads/" + branch):
+        raise CanonicalizationCandidatePrError("ambiguous candidate remote ref")
+    return rows[0].split()[0]
+
+
+def _candidate_remote_generations(run: RunCommand, root: str, repo: str) -> list[str]:
+    output = _run(
+        run,
+        ["git", "-C", root, "ls-remote", "--heads", repo, ACTIVE_BRANCH_PREFIX + "*"],
+        what="discover existing owner-repository candidate branches",
+    )
+    return sorted(
+        {
+            line.split("refs/heads/", 1)[1]
+            for line in output.splitlines()
+            if "refs/heads/" in line and line.split("refs/heads/", 1)[1].startswith(ACTIVE_BRANCH_PREFIX)
+        }
+    )
 
 
 def propose(
@@ -526,6 +597,21 @@ def propose(
         _run(run, ["git", "-C", root, "fetch", repo, BASE_BRANCH], what="fetch base branch")
         main_sha = _run(run, ["git", "-C", root, "rev-parse", "FETCH_HEAD"], what="resolve base branch tip").strip()
 
+        # A single active generation is shared by all source PRs. After merge,
+        # the next generation is named from the new main tip. Unlike the old
+        # fixed branch, no generation ever requires a non-fast-forward push.
+        remote_generations = _candidate_remote_generations(run, root, repo)
+        active = [name for name in remote_generations if _existing_open_pr_number(run, name) is not None]
+        orphans = [
+            name
+            for name in remote_generations
+            if name not in active
+            and not _merged_candidate_tip(run, name, _remote_generation_sha(run, root, repo, name))
+        ]
+        if len(active) > 1 or len(orphans) > 1 or (active and orphans):
+            raise CanonicalizationCandidatePrError("ambiguous canonicalization generations; refusing new proposal")
+        branch = (active or orphans or [ACTIVE_BRANCH_PREFIX + main_sha[:16]])[0]
+
         # Best-effort: the dedicated branch may not exist yet (first run ever).
         # Fetching it (rather than only `ls-remote`) also pulls its tree/blob
         # objects into this repository's shared object store, which the
@@ -533,12 +619,22 @@ def propose(
         # `<previous_sha>^{tree}` locally for the idempotency check.
         previous_sha: str | None = None
         try:
-            _run(run, ["git", "-C", root, "fetch", repo, DEDICATED_BRANCH], what="fetch dedicated branch")
+            _run(run, ["git", "-C", root, "fetch", repo, branch], what="fetch dedicated branch")
             previous_sha = _run(
                 run, ["git", "-C", root, "rev-parse", "FETCH_HEAD"], what="resolve dedicated branch tip"
             ).strip()
         except CanonicalizationCandidatePrError:
             previous_sha = None
+
+        # A merged PR can leave a squash-unreachable branch with historical
+        # implementation changes. Never treat that exact merged tip as a live
+        # orphan or use it as the next proposal base. Preserve its SHA for the
+        # later compare-and-swap push lease.
+        historical_merged_tip = (
+            previous_sha is not None
+            and _existing_open_pr_number(run, branch) is None
+            and _merged_candidate_tip(run, branch, previous_sha)
+        )
 
         # Accumulate onto the dedicated branch's own tip when it still carries
         # an unmerged candidate (not yet an ancestor of main); rebuild fresh
@@ -547,7 +643,11 @@ def propose(
         # `main_sha` would let a second finding silently overwrite a first,
         # still-unmerged finding's proposal on the same branch/PR.
         base_sha = main_sha
-        if previous_sha is not None and not _is_ancestor(run, root, previous_sha, main_sha):
+        if (
+            previous_sha is not None
+            and not historical_merged_tip
+            and not _is_ancestor(run, root, previous_sha, main_sha)
+        ):
             # A squash-merged candidate is not a Git ancestor of main. Only
             # accumulate a branch that still carries actual knowledge changes.
             if _recoverable_candidate_delta(run, root, main_sha, previous_sha):
@@ -586,13 +686,15 @@ def propose(
                 # and has no open PR, open one for it -- no new commit needed.
                 if (
                     previous_sha is not None
+                    and not historical_merged_tip
                     and not _is_ancestor(run, root, previous_sha, main_sha)
                     and _recoverable_candidate_delta(run, root, main_sha, previous_sha)
                 ):
-                    if _existing_open_pr_number(run, DEDICATED_BRANCH) is None:
+                    if _existing_open_pr_number(run, branch) is None:
                         create_output = _open_candidate_pr(
                             run,
                             pr=pr,
+                            branch=branch,
                             extra_body=(
                                 "Reconciled: this branch already carried this exact content from a prior "
                                 "run that pushed but never opened a PR for it (for example a transient "
@@ -610,13 +712,15 @@ def propose(
                 # of a previously pushed canonical branch that still lacks a PR.
                 if (
                     previous_sha is not None
+                    and not historical_merged_tip
                     and not _is_ancestor(run, root, previous_sha, main_sha)
                     and _recoverable_candidate_delta(run, root, main_sha, previous_sha)
                 ):
-                    if _existing_open_pr_number(run, DEDICATED_BRANCH) is None:
+                    if _existing_open_pr_number(run, branch) is None:
                         create_output = _open_candidate_pr(
                             run,
                             pr=pr,
+                            branch=branch,
                             extra_body=(
                                 "Reconciled: this branch already carried canonical content from a prior "
                                 "run that pushed but never opened a PR. Raw lifecycle evidence from this "
@@ -630,7 +734,7 @@ def propose(
                 registry_path.write_bytes(plan.registry_bytes)
             if dispositions_changed:
                 dispositions_path.write_bytes(captured_bytes)
-            _run(run, ["git", "-C", str(worktree), "checkout", "-B", DEDICATED_BRANCH], what="create dedicated branch")
+            _run(run, ["git", "-C", str(worktree), "checkout", "-B", branch], what="create dedicated branch")
             _run(
                 run,
                 ["git", "-C", str(worktree), "add", "--", REGISTRY_RELATIVE_PATH, DISPOSITIONS_RELATIVE_PATH],
@@ -758,7 +862,6 @@ def propose(
             # value entirely (which git resolves from a local remote-tracking
             # ref that this disposable worktree never fetched and does not
             # have).
-            lease = f"{DEDICATED_BRANCH}:{previous_sha or ''}"
             _run(
                 run,
                 [
@@ -766,20 +869,20 @@ def propose(
                     "-C",
                     str(worktree),
                     "push",
-                    "--force-with-lease=" + lease,
                     repo,
-                    f"HEAD:refs/heads/{DEDICATED_BRANCH}",
+                    f"HEAD:refs/heads/{branch}",
                 ],
                 what="push dedicated branch",
             )
 
-            existing = _existing_open_pr_number(run, DEDICATED_BRANCH)
+            existing = _existing_open_pr_number(run, branch)
             if existing is not None:
                 return f"{_PREFIX} UPDATED: pushed new canonicalization content to existing PR #{existing}."
 
             create_output = _open_candidate_pr(
                 run,
                 pr=pr,
+                branch=branch,
                 extra_body=(
                     f"- integrated proposal ids: {list(plan.integrated_proposal_ids)}\n"
                     f"- skipped items: {plan.skipped_items}\n"
