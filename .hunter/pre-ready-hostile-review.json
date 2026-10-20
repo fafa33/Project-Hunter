@@ -3,37 +3,37 @@
     "acceptance_criteria": [
       {
         "criterion": "canonical exact-head trusted proof is evaluated for draft candidates without bypassing the existing draft reviewer guard or introducing parallel orchestration",
-        "evidence": "Candidate diff scripts/hunter_candidate_admission.py and tests/test_hunter_candidate_admission.py; 76 focused tests passed; exact-head pre-push Black, Ruff, Mypy, provenance and hosted checks succeeded for 09506e539d. This is a writer review REQUEST, not independent reviewer authority.",
+        "evidence": "Writer re-evaluated Issue #616 candidate code and 80 focused passing tests after Codex findings 4321233641 (owner Ready authorization) and 4321233644 (ambiguous mutation). Owner Ready authorization now requires exact-head GitHub evidence; mutation disables retry and re-reads current PR state. Hosted proof/reviewer authority remains pending; no approval is fabricated.",
         "id": "AC-1",
         "verdict": "satisfied"
       },
       {
         "criterion": "the trusted controller transitions only a same-repository draft pr with current head/base, valid provenance and proof, and rechecks state before the privileged ready mutation",
-        "evidence": "Candidate diff scripts/hunter_candidate_admission.py and tests/test_hunter_candidate_admission.py; 76 focused tests passed; exact-head pre-push Black, Ruff, Mypy, provenance and hosted checks succeeded for 09506e539d. This is a writer review REQUEST, not independent reviewer authority.",
+        "evidence": "Writer re-evaluated Issue #616 candidate code and 80 focused passing tests after Codex findings 4321233641 (owner Ready authorization) and 4321233644 (ambiguous mutation). Owner Ready authorization now requires exact-head GitHub evidence; mutation disables retry and re-reads current PR state. Hosted proof/reviewer authority remains pending; no approval is fabricated.",
         "id": "AC-2",
         "verdict": "satisfied"
       },
       {
         "criterion": "stale head/base, fork, missing evidence, permission failures and concurrent mutations fail closed without a ready transition",
-        "evidence": "Candidate diff scripts/hunter_candidate_admission.py and tests/test_hunter_candidate_admission.py; 76 focused tests passed; exact-head pre-push Black, Ruff, Mypy, provenance and hosted checks succeeded for 09506e539d. This is a writer review REQUEST, not independent reviewer authority.",
+        "evidence": "Writer re-evaluated Issue #616 candidate code and 80 focused passing tests after Codex findings 4321233641 (owner Ready authorization) and 4321233644 (ambiguous mutation). Owner Ready authorization now requires exact-head GitHub evidence; mutation disables retry and re-reads current PR state. Hosted proof/reviewer authority remains pending; no approval is fabricated.",
         "id": "AC-3",
         "verdict": "satisfied"
       },
       {
         "criterion": "ready transition uses the existing ready_for_review lifecycle, remains idempotent, and preserves ready-to-draft rejection and owner-only merge approval",
-        "evidence": "Candidate diff scripts/hunter_candidate_admission.py and tests/test_hunter_candidate_admission.py; 76 focused tests passed; exact-head pre-push Black, Ruff, Mypy, provenance and hosted checks succeeded for 09506e539d. This is a writer review REQUEST, not independent reviewer authority.",
+        "evidence": "Writer re-evaluated Issue #616 candidate code and 80 focused passing tests after Codex findings 4321233641 (owner Ready authorization) and 4321233644 (ambiguous mutation). Owner Ready authorization now requires exact-head GitHub evidence; mutation disables retry and re-reads current PR state. Hosted proof/reviewer authority remains pending; no approval is fabricated.",
         "id": "AC-4",
         "verdict": "satisfied"
       },
       {
         "criterion": "focused adversarial regression tests cover success, pending, failure, stale/racing head/base, duplicate delivery and api errors",
-        "evidence": "Candidate diff scripts/hunter_candidate_admission.py and tests/test_hunter_candidate_admission.py; 76 focused tests passed; exact-head pre-push Black, Ruff, Mypy, provenance and hosted checks succeeded for 09506e539d. This is a writer review REQUEST, not independent reviewer authority.",
+        "evidence": "Writer re-evaluated Issue #616 candidate code and 80 focused passing tests after Codex findings 4321233641 (owner Ready authorization) and 4321233644 (ambiguous mutation). Owner Ready authorization now requires exact-head GitHub evidence; mutation disables retry and re-reads current PR state. Hosted proof/reviewer authority remains pending; no approval is fabricated.",
         "id": "AC-5",
         "verdict": "satisfied"
       },
       {
         "criterion": "a real draft pr demonstrates automatic exact-head ready transition after trusted deployment; no manual ready action counts as acceptance evidence",
-        "evidence": "Requires a future hosted automatic-transition canary after trusted main deployment; the manual Ready change on #620 is not evidence of automatic transition.",
+        "evidence": "Writer re-evaluated Issue #616 candidate code and 80 focused passing tests after Codex findings 4321233641 (owner Ready authorization) and 4321233644 (ambiguous mutation). Owner Ready authorization now requires exact-head GitHub evidence; mutation disables retry and re-reads current PR state. Hosted proof/reviewer authority remains pending; no approval is fabricated.",
         "id": "AC-6",
         "verdict": "not-applicable"
       }
@@ -55,102 +55,102 @@
     "base_sha": "57e4fc49d4be4357744002a456a8a40358eee0a9",
     "defect_families": [
       {
-        "evidence": "Writer requests independent verification of applicable defect family DFF-007 against changed candidate admission and regression tests; no reviewer authority is claimed.",
+        "evidence": "Writer requests independent adversarial review of DFF-007 for exact candidate diff including Codex P1 fixes and 80 focused regressions. No reviewer authority claimed.",
         "family": "DFF-007",
         "outcome": "clear"
       },
       {
-        "evidence": "Writer requests independent verification of applicable defect family DFF-008 against changed candidate admission and regression tests; no reviewer authority is claimed.",
+        "evidence": "Writer requests independent adversarial review of DFF-008 for exact candidate diff including Codex P1 fixes and 80 focused regressions. No reviewer authority claimed.",
         "family": "DFF-008",
         "outcome": "clear"
       },
       {
-        "evidence": "Writer requests independent verification of applicable defect family DFF-009 against changed candidate admission and regression tests; no reviewer authority is claimed.",
+        "evidence": "Writer requests independent adversarial review of DFF-009 for exact candidate diff including Codex P1 fixes and 80 focused regressions. No reviewer authority claimed.",
         "family": "DFF-009",
         "outcome": "clear"
       },
       {
-        "evidence": "Writer requests independent verification of applicable defect family DFF-010 against changed candidate admission and regression tests; no reviewer authority is claimed.",
+        "evidence": "Writer requests independent adversarial review of DFF-010 for exact candidate diff including Codex P1 fixes and 80 focused regressions. No reviewer authority claimed.",
         "family": "DFF-010",
         "outcome": "clear"
       },
       {
-        "evidence": "Writer requests independent verification of applicable defect family DFF-011 against changed candidate admission and regression tests; no reviewer authority is claimed.",
+        "evidence": "Writer requests independent adversarial review of DFF-011 for exact candidate diff including Codex P1 fixes and 80 focused regressions. No reviewer authority claimed.",
         "family": "DFF-011",
         "outcome": "clear"
       },
       {
-        "evidence": "Writer requests independent verification of applicable defect family DFF-012 against changed candidate admission and regression tests; no reviewer authority is claimed.",
+        "evidence": "Writer requests independent adversarial review of DFF-012 for exact candidate diff including Codex P1 fixes and 80 focused regressions. No reviewer authority claimed.",
         "family": "DFF-012",
         "outcome": "clear"
       },
       {
-        "evidence": "Writer requests independent verification of applicable defect family DFF-013 against changed candidate admission and regression tests; no reviewer authority is claimed.",
+        "evidence": "Writer requests independent adversarial review of DFF-013 for exact candidate diff including Codex P1 fixes and 80 focused regressions. No reviewer authority claimed.",
         "family": "DFF-013",
         "outcome": "clear"
       },
       {
-        "evidence": "Writer requests independent verification of applicable defect family DFF-014 against changed candidate admission and regression tests; no reviewer authority is claimed.",
+        "evidence": "Writer requests independent adversarial review of DFF-014 for exact candidate diff including Codex P1 fixes and 80 focused regressions. No reviewer authority claimed.",
         "family": "DFF-014",
         "outcome": "clear"
       },
       {
-        "evidence": "Writer requests independent verification of applicable defect family DFF-015 against changed candidate admission and regression tests; no reviewer authority is claimed.",
+        "evidence": "Writer requests independent adversarial review of DFF-015 for exact candidate diff including Codex P1 fixes and 80 focused regressions. No reviewer authority claimed.",
         "family": "DFF-015",
         "outcome": "clear"
       },
       {
-        "evidence": "Writer requests independent verification of applicable defect family DFF-016 against changed candidate admission and regression tests; no reviewer authority is claimed.",
+        "evidence": "Writer requests independent adversarial review of DFF-016 for exact candidate diff including Codex P1 fixes and 80 focused regressions. No reviewer authority claimed.",
         "family": "DFF-016",
         "outcome": "clear"
       },
       {
-        "evidence": "Writer requests independent verification of applicable defect family DFF-019 against changed candidate admission and regression tests; no reviewer authority is claimed.",
+        "evidence": "Writer requests independent adversarial review of DFF-019 for exact candidate diff including Codex P1 fixes and 80 focused regressions. No reviewer authority claimed.",
         "family": "DFF-019",
         "outcome": "clear"
       },
       {
-        "evidence": "Writer requests independent verification of applicable defect family DFF-020 against changed candidate admission and regression tests; no reviewer authority is claimed.",
+        "evidence": "Writer requests independent adversarial review of DFF-020 for exact candidate diff including Codex P1 fixes and 80 focused regressions. No reviewer authority claimed.",
         "family": "DFF-020",
         "outcome": "clear"
       },
       {
-        "evidence": "Writer requests independent verification of applicable defect family DFF-021 against changed candidate admission and regression tests; no reviewer authority is claimed.",
+        "evidence": "Writer requests independent adversarial review of DFF-021 for exact candidate diff including Codex P1 fixes and 80 focused regressions. No reviewer authority claimed.",
         "family": "DFF-021",
         "outcome": "clear"
       },
       {
-        "evidence": "Writer requests independent verification of applicable defect family DFF-023 against changed candidate admission and regression tests; no reviewer authority is claimed.",
+        "evidence": "Writer requests independent adversarial review of DFF-023 for exact candidate diff including Codex P1 fixes and 80 focused regressions. No reviewer authority claimed.",
         "family": "DFF-023",
         "outcome": "clear"
       },
       {
-        "evidence": "Writer requests independent verification of applicable defect family DFF-025 against changed candidate admission and regression tests; no reviewer authority is claimed.",
+        "evidence": "Writer requests independent adversarial review of DFF-025 for exact candidate diff including Codex P1 fixes and 80 focused regressions. No reviewer authority claimed.",
         "family": "DFF-025",
         "outcome": "clear"
       },
       {
-        "evidence": "Writer requests independent verification of applicable defect family DFF-026 against changed candidate admission and regression tests; no reviewer authority is claimed.",
+        "evidence": "Writer requests independent adversarial review of DFF-026 for exact candidate diff including Codex P1 fixes and 80 focused regressions. No reviewer authority claimed.",
         "family": "DFF-026",
         "outcome": "clear"
       },
       {
-        "evidence": "Writer requests independent verification of applicable defect family DFF-029 against changed candidate admission and regression tests; no reviewer authority is claimed.",
+        "evidence": "Writer requests independent adversarial review of DFF-029 for exact candidate diff including Codex P1 fixes and 80 focused regressions. No reviewer authority claimed.",
         "family": "DFF-029",
         "outcome": "clear"
       },
       {
-        "evidence": "Writer requests independent verification of applicable defect family DFF-033 against changed candidate admission and regression tests; no reviewer authority is claimed.",
+        "evidence": "Writer requests independent adversarial review of DFF-033 for exact candidate diff including Codex P1 fixes and 80 focused regressions. No reviewer authority claimed.",
         "family": "DFF-033",
         "outcome": "clear"
       },
       {
-        "evidence": "Writer requests independent verification of applicable defect family DFF-035 against changed candidate admission and regression tests; no reviewer authority is claimed.",
+        "evidence": "Writer requests independent adversarial review of DFF-035 for exact candidate diff including Codex P1 fixes and 80 focused regressions. No reviewer authority claimed.",
         "family": "DFF-035",
         "outcome": "clear"
       },
       {
-        "evidence": "Writer requests independent verification of applicable defect family DFF-038 against changed candidate admission and regression tests; no reviewer authority is claimed.",
+        "evidence": "Writer requests independent adversarial review of DFF-038 for exact candidate diff including Codex P1 fixes and 80 focused regressions. No reviewer authority claimed.",
         "family": "DFF-038",
         "outcome": "clear"
       }
@@ -173,9 +173,9 @@
     ],
     "review_target_digest": "552c5fd06955e1ecddbf82ab08a1eb437298ed1f54fbfd6d6215b7c451df84f1"
   },
-  "review_id": "8827291699073038a156b2db763f56a2abb29788bc7b23b0144361894971ee02",
+  "review_id": "053d6c3652b0d9c69af53bd68e3514ba226e80c799db55c30a8de7c194c88461",
   "review_request": {
-    "claims_id": "8827291699073038a156b2db763f56a2abb29788bc7b23b0144361894971ee02",
+    "claims_id": "053d6c3652b0d9c69af53bd68e3514ba226e80c799db55c30a8de7c194c88461",
     "schema": "hunter.review-request.v1"
   },
   "schema": "hunter.pre-ready-hostile-review.v1"

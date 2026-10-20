@@ -45,6 +45,24 @@ def convert_to_draft(token: str, pull_request_node_id: str) -> bool:
 MARK_READY_MUTATION = """mutation($id: ID!) { markPullRequestReadyForReview(input: {pullRequestId: $id}) { pullRequest { id isDraft } } }"""
 
 
+def owner_ready_authorized(repository: str, token: str, pr_number: int, head_sha: str) -> bool:
+    """Require an exact-head owner statement from trusted GitHub PR comments."""
+    try:
+        comments = governance.request_json(repository, token, "GET", f"issues/{pr_number}/comments?per_page=100")
+        if not isinstance(comments, list):
+            return False
+        marker = f"OWNER-APPROVED-READY HEAD={head_sha}"
+        return any(
+            isinstance(comment, dict)
+            and (comment.get("user") or {}).get("login", "").lower() == "fafa33"
+            and str(comment.get("body") or "").strip() == marker
+            for comment in comments
+        )
+    except Exception as exc:
+        print(f"Ready owner approval unavailable: {exc}")
+        return False
+
+
 def mark_ready(token: str, node_id: str) -> bool:
     try:
         payload = transport.request_graphql_json(
@@ -54,6 +72,7 @@ def mark_ready(token: str, node_id: str) -> bool:
             variables={"id": node_id},
             token=token,
             what="mark admitted PR ready",
+            policy=transport.RetryPolicy(attempts=1),
         )
         pr = (payload.get("markPullRequestReadyForReview") or {}).get("pullRequest") or {}
         return pr.get("id") == node_id and pr.get("isDraft") is False
@@ -146,6 +165,9 @@ def enforce_candidate_admission(
         pr_number,
     )
     if admission_state == "success" and was_draft:
+        if not owner_ready_authorized(repository, token, pr_number, head_sha):
+            print(f"PR #{pr_number} remains Draft: exact-head owner Ready authorization missing")
+            return 0
         if not safe_draft(pr, repository):
             print(f"PR #{pr_number} remains Draft: unsafe base/head/fork/mergeability")
             return 1
@@ -160,8 +182,12 @@ def enforce_candidate_admission(
         ):
             print(f"PR #{pr_number} stale before Ready transition")
             return 1
-        if not mark_ready(token, str(latest["node_id"])):
+        if not owner_ready_authorized(repository, token, pr_number, head_sha):
+            print(f"PR #{pr_number} owner Ready authorization changed")
             return 1
+        mutation_confirmed = mark_ready(token, str(latest["node_id"]))
+        # An ambiguous transport failure may follow a committed GitHub mutation.
+        # Re-read authoritative PR state before deciding whether the operation failed.
         confirmed = governance.read_mergeability(repository, token, pr_number)
         if (
             confirmed.get("state") != "open"
@@ -171,6 +197,8 @@ def enforce_candidate_admission(
         ):
             print(f"PR #{pr_number} Ready confirmation failed")
             return 1
+        if not mutation_confirmed:
+            print(f"PR #{pr_number} Ready mutation response ambiguous; GitHub state confirms Ready")
         print(f"PR #{pr_number} automatically Ready on {head_sha}")
         return 0
     if admission_state == "success":
