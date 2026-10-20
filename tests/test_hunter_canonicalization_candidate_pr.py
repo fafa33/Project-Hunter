@@ -909,3 +909,19 @@ def test_pr_creation_does_not_inherit_read_only_workflow_token(monkeypatch) -> N
     assert "GH_TOKEN" not in calls[1][1]
     assert "GITHUB_TOKEN" not in calls[1][1]
     assert calls[1][1]["GH_HOST"] == "github.com"
+
+
+def test_merged_candidate_tip_requires_exact_head_sha() -> None:
+    """An older merged PR must not hide a newer, still-unmerged branch tip."""
+    import subprocess
+
+    calls = []
+
+    def run(command):
+        calls.append(command)
+        return subprocess.CompletedProcess(command, 0, stdout="abc123\nother456\n")
+
+    assert candidate_pr._merged_candidate_tip(run, candidate_pr.DEDICATED_BRANCH, "abc123")
+    assert not candidate_pr._merged_candidate_tip(run, candidate_pr.DEDICATED_BRANCH, "newer789")
+    assert calls[0][:4] == ["gh", "pr", "list", "--head"]
+    assert "merged" in calls[0]

@@ -477,6 +477,34 @@ def _source_pr_is_merged(run: RunCommand, pr: int) -> bool:
     return state == "MERGED" and bool(merged_at)
 
 
+def _merged_candidate_tip(run: RunCommand, branch: str, previous_sha: str) -> bool:
+    """A squash-merged historical branch is not an orphan to resurrect.
+
+    Require GitHub's merged PR evidence bound to the exact remote branch tip;
+    a similarly named or older merged PR cannot excuse a newer unmerged tip.
+    """
+    output = _run(
+        run,
+        [
+            "gh",
+            "pr",
+            "list",
+            "--head",
+            branch,
+            "--state",
+            "merged",
+            "--limit",
+            "100",
+            "--json",
+            "headRefOid",
+            "--jq",
+            ".[].headRefOid",
+        ],
+        what="check merged candidate branch identity",
+    )
+    return previous_sha in output.splitlines()
+
+
 def _existing_open_pr_number(run: RunCommand, branch: str) -> int | None:
     output = _run(
         run,
@@ -540,6 +568,16 @@ def propose(
         except CanonicalizationCandidatePrError:
             previous_sha = None
 
+        # A merged PR can leave a squash-unreachable branch with historical
+        # implementation changes. Never treat that exact merged tip as a live
+        # orphan or use it as the next proposal base. Preserve its SHA for the
+        # later compare-and-swap push lease.
+        historical_merged_tip = (
+            previous_sha is not None
+            and _existing_open_pr_number(run, DEDICATED_BRANCH) is None
+            and _merged_candidate_tip(run, DEDICATED_BRANCH, previous_sha)
+        )
+
         # Accumulate onto the dedicated branch's own tip when it still carries
         # an unmerged candidate (not yet an ancestor of main); rebuild fresh
         # from main only for the first run ever, or once the branch's prior
@@ -547,7 +585,11 @@ def propose(
         # `main_sha` would let a second finding silently overwrite a first,
         # still-unmerged finding's proposal on the same branch/PR.
         base_sha = main_sha
-        if previous_sha is not None and not _is_ancestor(run, root, previous_sha, main_sha):
+        if (
+            previous_sha is not None
+            and not historical_merged_tip
+            and not _is_ancestor(run, root, previous_sha, main_sha)
+        ):
             # A squash-merged candidate is not a Git ancestor of main. Only
             # accumulate a branch that still carries actual knowledge changes.
             if _recoverable_candidate_delta(run, root, main_sha, previous_sha):
@@ -586,6 +628,7 @@ def propose(
                 # and has no open PR, open one for it -- no new commit needed.
                 if (
                     previous_sha is not None
+                    and not historical_merged_tip
                     and not _is_ancestor(run, root, previous_sha, main_sha)
                     and _recoverable_candidate_delta(run, root, main_sha, previous_sha)
                 ):
@@ -610,6 +653,7 @@ def propose(
                 # of a previously pushed canonical branch that still lacks a PR.
                 if (
                     previous_sha is not None
+                    and not historical_merged_tip
                     and not _is_ancestor(run, root, previous_sha, main_sha)
                     and _recoverable_candidate_delta(run, root, main_sha, previous_sha)
                 ):
