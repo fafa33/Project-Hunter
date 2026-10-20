@@ -223,7 +223,6 @@ def test_pull_request_target_does_not_run_admission_before_trusted_preflight_com
 
 
 def test_draft_success_marks_ready_exact_head(monkeypatch):
-    monkeypatch.setattr(admission, "owner_ready_authorized", lambda *_: True)
     calls = []
     states = iter([_pr(draft=True), _pr(draft=True), _pr(draft=False)])
     monkeypatch.setattr(admission.governance, "read_mergeability", lambda *_: next(states))
@@ -241,7 +240,6 @@ def test_draft_stale_head_blocks_transition(monkeypatch):
 
 
 def test_draft_head_race_blocks_transition(monkeypatch):
-    monkeypatch.setattr(admission, "owner_ready_authorized", lambda *_: True)
     stale = _pr(draft=True)
     changed = _pr(draft=True)
     changed["head"]["sha"] = "c" * 40
@@ -253,7 +251,6 @@ def test_draft_head_race_blocks_transition(monkeypatch):
 
 
 def test_draft_fork_blocks_transition(monkeypatch):
-    monkeypatch.setattr(admission, "owner_ready_authorized", lambda *_: True)
     pr = _pr(draft=True)
     pr["head"]["repo"]["full_name"] = "other/fork"
     monkeypatch.setattr(admission.governance, "read_mergeability", lambda *_: pr)
@@ -263,7 +260,6 @@ def test_draft_fork_blocks_transition(monkeypatch):
 
 
 def test_draft_permission_failure_remains_draft(monkeypatch):
-    monkeypatch.setattr(admission, "owner_ready_authorized", lambda *_: True)
     monkeypatch.setattr(admission.governance, "read_mergeability", lambda *_: _pr(draft=True))
     monkeypatch.setattr(admission.governance, "candidate_admission", lambda *_: ("success", "proof"))
     monkeypatch.setattr(admission, "mark_ready", lambda *_: False)
@@ -278,7 +274,6 @@ def test_duplicate_ready_event_does_not_mark_again(monkeypatch):
 
 
 def test_draft_base_race_blocks_transition(monkeypatch):
-    monkeypatch.setattr(admission, "owner_ready_authorized", lambda *_: True)
     first, second = _pr(draft=True), _pr(draft=True)
     second["base"]["sha"] = "c" * 40
     states = iter([first, second])
@@ -304,30 +299,33 @@ def test_mark_ready_requires_graphql_confirmation(monkeypatch):
     assert admission.mark_ready("token", "PR_test_node") is False
 
 
-def test_owner_ready_authorization_requires_exact_head_and_owner(monkeypatch):
-    comments = [
-        {"user": {"login": "attacker"}, "body": f"OWNER-APPROVED-READY HEAD={HEAD}"},
-        {"user": {"login": "fafa33"}, "body": "OWNER-APPROVED-READY HEAD=" + "b" * 40},
-    ]
-    monkeypatch.setattr(admission.governance, "request_json", lambda *_: comments)
-    assert admission.owner_ready_authorized("fafa33/Project-Hunter", "token", 616, HEAD) is False
-    comments.append({"user": {"login": "fafa33"}, "body": f"OWNER-APPROVED-READY HEAD={HEAD}"})
-    assert admission.owner_ready_authorized("fafa33/Project-Hunter", "token", 616, HEAD) is True
-
-
-def test_missing_owner_approval_preserves_draft(monkeypatch):
-    monkeypatch.setattr(admission.governance, "read_mergeability", lambda *_: _pr(draft=True))
+def test_issue_616_policy_authorizes_automatic_ready_without_owner_comment(monkeypatch):
+    """Canonical exact-head proof, not a per-HEAD owner comment, authorizes Ready."""
+    states = iter([_pr(draft=True), _pr(draft=True), _pr(draft=False)])
+    monkeypatch.setattr(admission.governance, "read_mergeability", lambda *_: next(states))
     monkeypatch.setattr(admission.governance, "candidate_admission", lambda *_: ("success", "proof"))
-    monkeypatch.setattr(admission, "owner_ready_authorized", lambda *_: False)
-    monkeypatch.setattr(admission, "mark_ready", lambda *_: (_ for _ in ()).throw(AssertionError("unauthorized")))
-    assert admission.enforce_candidate_admission("fafa33/Project-Hunter", "token", 616) == 0
+    monkeypatch.setattr(
+        admission.governance,
+        "request_json",
+        lambda *_: (_ for _ in ()).throw(AssertionError("must not request owner comments")),
+    )
+    called = []
+    monkeypatch.setattr(admission, "mark_ready", lambda _token, node: called.append(node) or True)
+    assert admission.enforce_candidate_admission("fafa33/Project-Hunter", "token", 616, HEAD) == 0
+    assert called == ["PR_test_node"]
+
+
+def test_agents_policy_separates_ready_from_merge_approval():
+    rules = (ROOT / "AGENTS.md").read_text()
+    assert "owner-approved Issue #616 policy" in rules
+    assert "no per-PR or per-HEAD owner comment" in rules
+    assert "merging always requires separate explicit owner approval" in rules
 
 
 def test_ambiguous_mutation_with_confirmed_ready_is_success(monkeypatch):
     states = iter([_pr(draft=True), _pr(draft=True), _pr(draft=False)])
     monkeypatch.setattr(admission.governance, "read_mergeability", lambda *_: next(states))
     monkeypatch.setattr(admission.governance, "candidate_admission", lambda *_: ("success", "proof"))
-    monkeypatch.setattr(admission, "owner_ready_authorized", lambda *_: True)
     monkeypatch.setattr(admission, "mark_ready", lambda *_: False)
     assert admission.enforce_candidate_admission("fafa33/Project-Hunter", "token", 616) == 0
 
@@ -335,6 +333,5 @@ def test_ambiguous_mutation_with_confirmed_ready_is_success(monkeypatch):
 def test_ambiguous_mutation_still_draft_is_failure(monkeypatch):
     monkeypatch.setattr(admission.governance, "read_mergeability", lambda *_: _pr(draft=True))
     monkeypatch.setattr(admission.governance, "candidate_admission", lambda *_: ("success", "proof"))
-    monkeypatch.setattr(admission, "owner_ready_authorized", lambda *_: True)
     monkeypatch.setattr(admission, "mark_ready", lambda *_: False)
     assert admission.enforce_candidate_admission("fafa33/Project-Hunter", "token", 616) == 1

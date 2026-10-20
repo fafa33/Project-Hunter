@@ -3,37 +3,37 @@
     "acceptance_criteria": [
       {
         "criterion": "canonical exact-head trusted proof is evaluated for draft candidates without bypassing the existing draft reviewer guard or introducing parallel orchestration",
-        "evidence": "Writer re-evaluated Issue #616 candidate code and 80 focused passing tests after Codex findings 4321233641 (owner Ready authorization) and 4321233644 (ambiguous mutation). Owner Ready authorization now requires exact-head GitHub evidence; mutation disables retry and re-reads current PR state. Hosted proof/reviewer authority remains pending; no approval is fabricated.",
+        "evidence": "Issue #616 owner-approved automatic Draft-to-Ready policy reconciled in AGENTS.md and trusted candidate admission; no per-HEAD owner comment, merge still requires explicit approval. 80 focused regressions passed including no-owner-comment and policy tests. Writer request only; independent review authority pending.",
         "id": "AC-1",
         "verdict": "satisfied"
       },
       {
         "criterion": "the trusted controller transitions only a same-repository draft pr with current head/base, valid provenance and proof, and rechecks state before the privileged ready mutation",
-        "evidence": "Writer re-evaluated Issue #616 candidate code and 80 focused passing tests after Codex findings 4321233641 (owner Ready authorization) and 4321233644 (ambiguous mutation). Owner Ready authorization now requires exact-head GitHub evidence; mutation disables retry and re-reads current PR state. Hosted proof/reviewer authority remains pending; no approval is fabricated.",
+        "evidence": "Issue #616 owner-approved automatic Draft-to-Ready policy reconciled in AGENTS.md and trusted candidate admission; no per-HEAD owner comment, merge still requires explicit approval. 80 focused regressions passed including no-owner-comment and policy tests. Writer request only; independent review authority pending.",
         "id": "AC-2",
         "verdict": "satisfied"
       },
       {
         "criterion": "stale head/base, fork, missing evidence, permission failures and concurrent mutations fail closed without a ready transition",
-        "evidence": "Writer re-evaluated Issue #616 candidate code and 80 focused passing tests after Codex findings 4321233641 (owner Ready authorization) and 4321233644 (ambiguous mutation). Owner Ready authorization now requires exact-head GitHub evidence; mutation disables retry and re-reads current PR state. Hosted proof/reviewer authority remains pending; no approval is fabricated.",
+        "evidence": "Issue #616 owner-approved automatic Draft-to-Ready policy reconciled in AGENTS.md and trusted candidate admission; no per-HEAD owner comment, merge still requires explicit approval. 80 focused regressions passed including no-owner-comment and policy tests. Writer request only; independent review authority pending.",
         "id": "AC-3",
         "verdict": "satisfied"
       },
       {
         "criterion": "ready transition uses the existing ready_for_review lifecycle, remains idempotent, and preserves ready-to-draft rejection and owner-only merge approval",
-        "evidence": "Writer re-evaluated Issue #616 candidate code and 80 focused passing tests after Codex findings 4321233641 (owner Ready authorization) and 4321233644 (ambiguous mutation). Owner Ready authorization now requires exact-head GitHub evidence; mutation disables retry and re-reads current PR state. Hosted proof/reviewer authority remains pending; no approval is fabricated.",
+        "evidence": "Issue #616 owner-approved automatic Draft-to-Ready policy reconciled in AGENTS.md and trusted candidate admission; no per-HEAD owner comment, merge still requires explicit approval. 80 focused regressions passed including no-owner-comment and policy tests. Writer request only; independent review authority pending.",
         "id": "AC-4",
         "verdict": "satisfied"
       },
       {
         "criterion": "focused adversarial regression tests cover success, pending, failure, stale/racing head/base, duplicate delivery and api errors",
-        "evidence": "Writer re-evaluated Issue #616 candidate code and 80 focused passing tests after Codex findings 4321233641 (owner Ready authorization) and 4321233644 (ambiguous mutation). Owner Ready authorization now requires exact-head GitHub evidence; mutation disables retry and re-reads current PR state. Hosted proof/reviewer authority remains pending; no approval is fabricated.",
+        "evidence": "Issue #616 owner-approved automatic Draft-to-Ready policy reconciled in AGENTS.md and trusted candidate admission; no per-HEAD owner comment, merge still requires explicit approval. 80 focused regressions passed including no-owner-comment and policy tests. Writer request only; independent review authority pending.",
         "id": "AC-5",
         "verdict": "satisfied"
       },
       {
         "criterion": "a real draft pr demonstrates automatic exact-head ready transition after trusted deployment; no manual ready action counts as acceptance evidence",
-        "evidence": "Writer re-evaluated Issue #616 candidate code and 80 focused passing tests after Codex findings 4321233641 (owner Ready authorization) and 4321233644 (ambiguous mutation). Owner Ready authorization now requires exact-head GitHub evidence; mutation disables retry and re-reads current PR state. Hosted proof/reviewer authority remains pending; no approval is fabricated.",
+        "evidence": "Issue #616 owner-approved automatic Draft-to-Ready policy reconciled in AGENTS.md and trusted candidate admission; no per-HEAD owner comment, merge still requires explicit approval. 80 focused regressions passed including no-owner-comment and policy tests. Writer request only; independent review authority pending.",
         "id": "AC-6",
         "verdict": "not-applicable"
       }
@@ -55,102 +55,102 @@
     "base_sha": "57e4fc49d4be4357744002a456a8a40358eee0a9",
     "defect_families": [
       {
-        "evidence": "Writer requests independent adversarial review of DFF-007 for exact candidate diff including Codex P1 fixes and 80 focused regressions. No reviewer authority claimed.",
+        "evidence": "Writer requests independent verification of DFF-007 against AGENTS.md policy, trusted controller, and 80 focused tests; no external reviewer approval is claimed.",
         "family": "DFF-007",
         "outcome": "clear"
       },
       {
-        "evidence": "Writer requests independent adversarial review of DFF-008 for exact candidate diff including Codex P1 fixes and 80 focused regressions. No reviewer authority claimed.",
+        "evidence": "Writer requests independent verification of DFF-008 against AGENTS.md policy, trusted controller, and 80 focused tests; no external reviewer approval is claimed.",
         "family": "DFF-008",
         "outcome": "clear"
       },
       {
-        "evidence": "Writer requests independent adversarial review of DFF-009 for exact candidate diff including Codex P1 fixes and 80 focused regressions. No reviewer authority claimed.",
+        "evidence": "Writer requests independent verification of DFF-009 against AGENTS.md policy, trusted controller, and 80 focused tests; no external reviewer approval is claimed.",
         "family": "DFF-009",
         "outcome": "clear"
       },
       {
-        "evidence": "Writer requests independent adversarial review of DFF-010 for exact candidate diff including Codex P1 fixes and 80 focused regressions. No reviewer authority claimed.",
+        "evidence": "Writer requests independent verification of DFF-010 against AGENTS.md policy, trusted controller, and 80 focused tests; no external reviewer approval is claimed.",
         "family": "DFF-010",
         "outcome": "clear"
       },
       {
-        "evidence": "Writer requests independent adversarial review of DFF-011 for exact candidate diff including Codex P1 fixes and 80 focused regressions. No reviewer authority claimed.",
+        "evidence": "Writer requests independent verification of DFF-011 against AGENTS.md policy, trusted controller, and 80 focused tests; no external reviewer approval is claimed.",
         "family": "DFF-011",
         "outcome": "clear"
       },
       {
-        "evidence": "Writer requests independent adversarial review of DFF-012 for exact candidate diff including Codex P1 fixes and 80 focused regressions. No reviewer authority claimed.",
+        "evidence": "Writer requests independent verification of DFF-012 against AGENTS.md policy, trusted controller, and 80 focused tests; no external reviewer approval is claimed.",
         "family": "DFF-012",
         "outcome": "clear"
       },
       {
-        "evidence": "Writer requests independent adversarial review of DFF-013 for exact candidate diff including Codex P1 fixes and 80 focused regressions. No reviewer authority claimed.",
+        "evidence": "Writer requests independent verification of DFF-013 against AGENTS.md policy, trusted controller, and 80 focused tests; no external reviewer approval is claimed.",
         "family": "DFF-013",
         "outcome": "clear"
       },
       {
-        "evidence": "Writer requests independent adversarial review of DFF-014 for exact candidate diff including Codex P1 fixes and 80 focused regressions. No reviewer authority claimed.",
+        "evidence": "Writer requests independent verification of DFF-014 against AGENTS.md policy, trusted controller, and 80 focused tests; no external reviewer approval is claimed.",
         "family": "DFF-014",
         "outcome": "clear"
       },
       {
-        "evidence": "Writer requests independent adversarial review of DFF-015 for exact candidate diff including Codex P1 fixes and 80 focused regressions. No reviewer authority claimed.",
+        "evidence": "Writer requests independent verification of DFF-015 against AGENTS.md policy, trusted controller, and 80 focused tests; no external reviewer approval is claimed.",
         "family": "DFF-015",
         "outcome": "clear"
       },
       {
-        "evidence": "Writer requests independent adversarial review of DFF-016 for exact candidate diff including Codex P1 fixes and 80 focused regressions. No reviewer authority claimed.",
+        "evidence": "Writer requests independent verification of DFF-016 against AGENTS.md policy, trusted controller, and 80 focused tests; no external reviewer approval is claimed.",
         "family": "DFF-016",
         "outcome": "clear"
       },
       {
-        "evidence": "Writer requests independent adversarial review of DFF-019 for exact candidate diff including Codex P1 fixes and 80 focused regressions. No reviewer authority claimed.",
+        "evidence": "Writer requests independent verification of DFF-019 against AGENTS.md policy, trusted controller, and 80 focused tests; no external reviewer approval is claimed.",
         "family": "DFF-019",
         "outcome": "clear"
       },
       {
-        "evidence": "Writer requests independent adversarial review of DFF-020 for exact candidate diff including Codex P1 fixes and 80 focused regressions. No reviewer authority claimed.",
+        "evidence": "Writer requests independent verification of DFF-020 against AGENTS.md policy, trusted controller, and 80 focused tests; no external reviewer approval is claimed.",
         "family": "DFF-020",
         "outcome": "clear"
       },
       {
-        "evidence": "Writer requests independent adversarial review of DFF-021 for exact candidate diff including Codex P1 fixes and 80 focused regressions. No reviewer authority claimed.",
+        "evidence": "Writer requests independent verification of DFF-021 against AGENTS.md policy, trusted controller, and 80 focused tests; no external reviewer approval is claimed.",
         "family": "DFF-021",
         "outcome": "clear"
       },
       {
-        "evidence": "Writer requests independent adversarial review of DFF-023 for exact candidate diff including Codex P1 fixes and 80 focused regressions. No reviewer authority claimed.",
+        "evidence": "Writer requests independent verification of DFF-023 against AGENTS.md policy, trusted controller, and 80 focused tests; no external reviewer approval is claimed.",
         "family": "DFF-023",
         "outcome": "clear"
       },
       {
-        "evidence": "Writer requests independent adversarial review of DFF-025 for exact candidate diff including Codex P1 fixes and 80 focused regressions. No reviewer authority claimed.",
+        "evidence": "Writer requests independent verification of DFF-025 against AGENTS.md policy, trusted controller, and 80 focused tests; no external reviewer approval is claimed.",
         "family": "DFF-025",
         "outcome": "clear"
       },
       {
-        "evidence": "Writer requests independent adversarial review of DFF-026 for exact candidate diff including Codex P1 fixes and 80 focused regressions. No reviewer authority claimed.",
+        "evidence": "Writer requests independent verification of DFF-026 against AGENTS.md policy, trusted controller, and 80 focused tests; no external reviewer approval is claimed.",
         "family": "DFF-026",
         "outcome": "clear"
       },
       {
-        "evidence": "Writer requests independent adversarial review of DFF-029 for exact candidate diff including Codex P1 fixes and 80 focused regressions. No reviewer authority claimed.",
+        "evidence": "Writer requests independent verification of DFF-029 against AGENTS.md policy, trusted controller, and 80 focused tests; no external reviewer approval is claimed.",
         "family": "DFF-029",
         "outcome": "clear"
       },
       {
-        "evidence": "Writer requests independent adversarial review of DFF-033 for exact candidate diff including Codex P1 fixes and 80 focused regressions. No reviewer authority claimed.",
+        "evidence": "Writer requests independent verification of DFF-033 against AGENTS.md policy, trusted controller, and 80 focused tests; no external reviewer approval is claimed.",
         "family": "DFF-033",
         "outcome": "clear"
       },
       {
-        "evidence": "Writer requests independent adversarial review of DFF-035 for exact candidate diff including Codex P1 fixes and 80 focused regressions. No reviewer authority claimed.",
+        "evidence": "Writer requests independent verification of DFF-035 against AGENTS.md policy, trusted controller, and 80 focused tests; no external reviewer approval is claimed.",
         "family": "DFF-035",
         "outcome": "clear"
       },
       {
-        "evidence": "Writer requests independent adversarial review of DFF-038 for exact candidate diff including Codex P1 fixes and 80 focused regressions. No reviewer authority claimed.",
+        "evidence": "Writer requests independent verification of DFF-038 against AGENTS.md policy, trusted controller, and 80 focused tests; no external reviewer approval is claimed.",
         "family": "DFF-038",
         "outcome": "clear"
       }
@@ -159,23 +159,23 @@
     "issue": "616",
     "review_target": [
       {
-        "blob_sha": "1640a3be4ceac90fde8824be785b8ccd2837b8b6",
+        "blob_sha": "b619058755f16bc9906226e5a4ef0061758c21b3",
         "path": "scripts/hunter_candidate_admission.py",
         "previous_path": "",
         "status": "modified"
       },
       {
-        "blob_sha": "2862f59313be2b4ed370913d07b10519d03958ef",
+        "blob_sha": "5660b5ed811417e6535a6be60546e2cb7cef67d9",
         "path": "tests/test_hunter_candidate_admission.py",
         "previous_path": "",
         "status": "modified"
       }
     ],
-    "review_target_digest": "552c5fd06955e1ecddbf82ab08a1eb437298ed1f54fbfd6d6215b7c451df84f1"
+    "review_target_digest": "79ebf154cea1952c4fda4c6d7fd369fa143b54e52ec2c145b2e9bda82dd96b73"
   },
-  "review_id": "053d6c3652b0d9c69af53bd68e3514ba226e80c799db55c30a8de7c194c88461",
+  "review_id": "6f1c6ad1104d61df2867770ef4065828976eb7d956d1841e9d37dda05a399b15",
   "review_request": {
-    "claims_id": "053d6c3652b0d9c69af53bd68e3514ba226e80c799db55c30a8de7c194c88461",
+    "claims_id": "6f1c6ad1104d61df2867770ef4065828976eb7d956d1841e9d37dda05a399b15",
     "schema": "hunter.review-request.v1"
   },
   "schema": "hunter.pre-ready-hostile-review.v1"

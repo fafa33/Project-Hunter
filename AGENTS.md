@@ -4,7 +4,7 @@ All agents must treat repository-local authority and current GitHub state as the
 
 Read `.github/instructions/project-hunter.instructions.md` before substantive work, then read the governing Issue and acceptance criteria, relevant ADRs and architecture/roadmap documents, affected tests, and applicable entries in `docs/DEFECT_REGISTRY.json`.
 
-Trace real executable paths before changing architecture. Use tests first for bug fixes and behavioral changes. Run the required Hunter verification gates before completion claims. Do not bypass governance or evidence requirements. Never merge, mark Ready, deploy, or perform irreversible actions without explicit owner approval.
+Trace real executable paths before changing architecture. Use tests first for bug fixes and behavioral changes. Run the required Hunter verification gates before completion claims. Do not bypass governance or evidence requirements. Never merge, deploy, or perform irreversible actions without explicit owner approval. Under the owner-approved Issue #616 policy, only the trusted default-branch Candidate Admission controller may automatically mark a same-repository Draft PR Ready after canonical exact-head proof and all pre-Ready security/acceptance checks pass; no per-PR or per-HEAD owner comment, manual Ready action, or additional owner approval is required. Ready is not merge authorization; merging always requires separate explicit owner approval. Fail closed for missing/stale/ambiguous proof, HEAD/base races, forks, or permission errors. Preserve the existing Draft reviewer guard and ready_for_review orchestration; do not give candidate code privileged write authority.
 
 ## Durable checkpoints
 
