@@ -324,10 +324,56 @@
       },
       "binding_evidence": {
         "claude": "Trusted-main evidence: SHA256:32dP45eSMmVSt/G/CGvcxl/P+MO3Nwj9xeTh/GSA2wc is the %GK fingerprint of every SSH-signed commit reachable from main at 207475240223027ce5875c8cdbc30f4f288baafb (83 commits), each authored and committed as 'Claude <noreply@anthropic.com>' and admitted through governed ingress that requires GitHub verified=true reason=valid for authorized signer 'claude'.",
-        "fafa33": "SHA256:Yee9tbonym7Jvs2UbjpudVIRkv3aF1tcFlK240pXuBo is the public SSH signing key registered on the GitHub account fafa33 ('Mac Git Signing', key id 1160850) and the repository owner's configured git signing key; the fingerprints are identical. The same GitHub account fafa33 (canonical principal github-user:34549283) also publishes SSH signing key SHA256:SaZ+MnrI3u2Mi22KIiKn7r2CnMxZ6mJwNsjb//StB4k as Hunter Gateway signing, GitHub public signing-key id 1252092, added 2026-10-17. This grants no new writer identity or publisher authority."
+        "fafa33": "SHA256:Yee9tbonym7Jvs2UbjpudVIRkv3aF1tcFlK240pXuBo is the public SSH signing key registered on the GitHub account fafa33 ('Mac Git Signing', key id 1160850) and the repository owner's configured git signing key; the fingerprints are identical. Additional owner SSH signing key SHA256:SaZ+MnrI3u2Mi22KIiKn7r2CnMxZ6mJwNsjb//StB4k is published by GitHub REST GET /users/fafa33/ssh_signing_keys as key id 1252092, title Hunter Gateway signing (added 2026-10-17); this is the same GitHub account principal github-user:34549283 and does not authorize a new writer or widen publisher S6 privileges."
       },
       "unsigned_commit_semantics": "A governed-range commit that carries no signing key has no fingerprint to bind and is refused. Hosted governance already requires verified=true reason=valid for every commit in the range beyond ingress_provenance.attested_from_commit, so this is parity with the authority boundary rather than a new obligation; it simply surfaces before publication instead of after.",
       "fail_closed": "Missing or malformed signing_key_bindings, a binding for a login no writer_identity_binding.identities entry binds, an empty fingerprint list, a fingerprint that is not a full SSH SHA-256 fingerprint, unreadable commit metadata, a commit with no readable signing key, and a commit whose signing key is not bound to the writer its author/committer headers resolved to all block the push."
+    },
+    "owner_recovery": {
+      "purpose": "Allow the already-authorized repository owner to explicitly take over the candidate tail when a departing writer's signing capability has become permanently unavailable, without falsifying that writer's historical attribution and without the departing writer's private key. This is a recovery boundary, not a relaxation: every epoch either side of it is still single-writer, and only the owner may open one.",
+      "governing_issue": "535",
+      "enabled": true,
+      "declaration_trailer": "Hunter-Writer-Recovery",
+      "declaration_schema": "hunter-writer-recovery-v1",
+      "required_claims": [
+        "schema",
+        "departed_writer",
+        "recovery_writer",
+        "parent_sha"
+      ],
+      "max_boundaries_per_range": 1,
+      "required_boundary_properties": {
+        "boundary_commit_authored_and_committed_by_owner": true,
+        "boundary_signing_key_bound_to_owner": true,
+        "departed_writer_already_authorization_bound": true,
+        "recovery_writer_is_repository_owner": true,
+        "previous_epoch_single_writer": true,
+        "previous_epoch_not_reattributed": true,
+        "recovery_epoch_single_writer": true,
+        "boundary_pins_exact_parent_sha": true,
+        "boundary_count_bounded_to_one": true,
+        "unknown_signing_key_refused": true
+      },
+      "forbidden": [
+        "agent_to_agent",
+        "unauthorized_writer",
+        "unknown_key",
+        "second_writer_after_takeover",
+        "multiple_boundaries_in_range",
+        "boundary_at_first_commit",
+        "historical_reattribution",
+        "undeclared_or_inferred_boundary"
+      ],
+      "trailing_boundary_is_permitted": "The recovery epoch may be exactly the boundary commit. An owner who takes over and then lands one further commit has performed a complete recovery, and requiring a second owner commit after the boundary would add nothing that the boundary itself does not already prove. What is refused instead is a boundary without a departed epoch in its pinned parent's in-range ancestry, regardless of git log presentation order.",
+      "semantics": "The recovery boundary is the single commit in the governed range that carries a Hunter-Writer-Recovery trailer. That commit must itself be authored and committed by the owner authority, must be signed with a key bound to the owner, and must name the departed writer and its own exact parent. Everything strictly before the boundary is the departed writer's epoch and is evaluated exactly as it was before: single-writer, identity-bound, and never re-attributed. The boundary commit and everything after it form the owner's epoch and must resolve to the owner alone.",
+      "why_not_generic_mixed_writers": "Four properties keep this a recovery rather than a mixed-writer allowance. Only the owner may declare a boundary, and only by signing it with the owner's already-registered key, so no agent can authorize its own replacement. The departed and recovery writers must both already be authorization-bound, so no range can introduce a new writer. Each epoch is independently single-writer, so claude -> owner -> a second agent is refused. And the boundary is a real signed commit in history, so the takeover is explicit, deterministic, and permanently auditable rather than inferred from a changed author email.",
+      "determinism": "The boundary is located by a single explicit trailer, not inferred from a differing author email, a key change, or commit ordering, so two verifiers reading the same range reach the same verdict.",
+      "fail_closed": "A malformed enabled owner_recovery block, a declaration that does not parse as JSON, an unknown or mismatched schema, a declaration carrying claims beyond the required set, a boundary commit that is not authored and committed by the owner, a boundary whose signing key is not bound to the owner, a recovery_writer that is not the owner, a departed_writer that is not an authorization-bound login, a parent_sha that is not a full SHA or is not the boundary commit's exact parent, more than one boundary in the range, a boundary with no in-range departed ancestry, a departed epoch that is empty or that is not single-writer, a departed_writer that is not the departed epoch's sole writer, a recovery epoch that is not single-writer, and a recovery epoch whose sole writer is not the owner all block the push. A missing or disabled owner_recovery grant allows ordinary single-writer ranges but never authorizes a mixed-writer recovery. A malformed declaration is rejected even in a single-writer range; a valid declaration there grants no recovery."
+    },
+    "owner_writer": {
+      "login": "fafa33",
+      "authority": "repository owner",
+      "evidence": "GitHub collaborator listing for this repository shows exactly one account with write access: fafa33 (admin). The same login is already ingress_provenance.authorized_signers and is already bound in writer_identity_binding.identities, so naming it as the owner recovery authority introduces no new trust root and expands no allowlist."
     }
   },
   "connector_write_ingress": {
