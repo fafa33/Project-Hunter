@@ -385,6 +385,53 @@ def cmd_historical_coverage(configuration: control.Configuration, arguments: arg
     return 0
 
 
+def cmd_knowledge_context_check(configuration: control.Configuration, arguments: argparse.Namespace) -> int:
+    """Exercise the real Issue-agent engineering context compiler with signed live knowledge."""
+
+    from hunter.evidence_intelligence.engineering_context_authority import (
+        ENGINEERING_IMPLEMENT_TASK_KEY,
+        EngineeringContextAuthority,
+    )
+    from hunter.task_scope import TaskScopeContract
+
+    path = arguments.path
+    if not path or path.startswith("/") or ".." in Path(path).parts or "\\" in path:
+        raise LifecycleRefused("INVALID_SCOPE", "unsafe engineering context path")
+    scope = TaskScopeContract(
+        task_id="historical-knowledge-consumption-check",
+        branch_pattern="issue-586-*",
+        base_ref="main",
+        base_sha=arguments.base_sha,
+        allowed_paths=(path,),
+        prohibited_paths=(),
+    )
+    scope_refusal = scope.incompleteness()
+    if scope_refusal:
+        raise LifecycleRefused("INVALID_SCOPE", scope_refusal)
+    github = _github(configuration)
+    control.require_anchor(github, configuration, knowledge.KNOWLEDGE_LEDGER_REF)
+    context = EngineeringContextAuthority(
+        registry_path=Path(arguments.checkout) / "docs" / "DEFECT_REGISTRY.json",
+        knowledge_overlay=_knowledge_overlay(configuration, github),
+    ).compile(ENGINEERING_IMPLEMENT_TASK_KEY, scope=scope)
+    matches = [item["id"] for item in context["applicable_defect_families"] if str(item["id"]).startswith("KF-")]
+    if not matches:
+        raise LifecycleRefused("PREVENTION_NOT_MATERIALIZED", "no signed finding reached engineering context")
+    print(
+        json.dumps(
+            {
+                "schema_version": "hunter-knowledge-context-check-v1",
+                "source": "anchored-signed-knowledge-to-issue-agent-engineering-context",
+                "scope_path": path,
+                "selected_prevention_rules_sha256": context["selected_prevention_rules_sha256"],
+                "finding_prevention_ids": matches,
+            },
+            sort_keys=True,
+        )
+    )
+    return 0
+
+
 def cmd_remediate(configuration: control.Configuration, arguments: argparse.Namespace) -> int:
     """ADR 0039 L4 (RD-4/RD-5): detect an eligible lifecycle PR and dispatch one bounded remediation.
 
@@ -1260,6 +1307,9 @@ def _parser() -> argparse.ArgumentParser:
     ingest.add_argument("--pr", type=int)
     historical = add("historical-coverage", cmd_historical_coverage)
     historical.add_argument("--pr", type=int, action="append", required=True)
+    context_check = add("knowledge-context-check", cmd_knowledge_context_check)
+    context_check.add_argument("--path", required=True)
+    context_check.add_argument("--base-sha", required=True)
     remediate = add("remediate", cmd_remediate)
     remediate.add_argument("--issue", type=int)
     resolve = add("resolve-finding", cmd_resolve)
