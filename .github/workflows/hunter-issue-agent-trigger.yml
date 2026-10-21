@@ -215,6 +215,7 @@ jobs:
           set -euo pipefail
           sudo useradd --create-home --shell /usr/sbin/nologin hunter-untrusted
           sudo install -d -m 0711 /tmp/hunter-ia
+          sudo install -d -m 0711 -o "$(id -u)" -g "$(id -g)" /tmp/hunter-ia/execute
       - name: Download the bound handoff
         uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
         with:

@@ -1052,6 +1052,16 @@
       "guard": "Keep exact-head hostile review binding fail-closed: never reuse a request after candidate content changes and never fabricate review. Distinguish missing/stale review prerequisite requiring an authenticated new request from actual execution failure; preserve visible waiting/blocking state and bounded recovery, without marking Ready or permitting merge. Existing ReviewRequestBlocked path currently causes reconciliation exit 1; root-cause remediation and regression are pending.",
       "test": "UNVERIFIED: targeted regression required",
       "status": "open"
+    },
+    {
+      "id": "PRH-120",
+      "class": "issue-agent-executor-workroot-root-owned-parent-denies-runner-materialization",
+      "source": "Issue #520 run 39614695642, execute job 119273648134, 2026-10-21; governing Issue #574; DFF-048",
+      "classification": "systemic",
+      "guard_boundary": "trusted lifecycle executor provisioning before signed-base materialization and isolated model execution",
+      "guard": "Pre-create the execute workroot with the runner UID/GID and traversal-only access for other users (0711), before the credential-isolated executor attempts workspace creation. Keep trusted Git metadata runner-owned and 0700; never fix this by running the model as runner/root or making the workroot group/world-writable.",
+      "test": "tests/test_issue_agent_workflows.py::test_executor_prepares_runner_owned_traversable_workroot",
+      "status": "guarded"
     }
   ],
   "families": [
@@ -2515,12 +2525,14 @@
         "tests/test_issue_agent_workflows.py::test_no_retired_railway_webhook_or_n8n_client",
         "tests/test_issue_agent_workflows.py::test_every_lifecycle_job_goes_through_the_fail_closed_entry_point",
         "tests/test_issue_agent_trigger.py::test_the_trigger_has_no_network_client",
-        "tests/test_retired_issue_agent_authority.py::test_the_cli_refuses_the_retired_verbs"
+        "tests/test_retired_issue_agent_authority.py::test_the_cli_refuses_the_retired_verbs",
+        "tests/test_issue_agent_workflows.py::test_executor_prepares_runner_owned_traversable_workroot"
       ],
       "lifecycle": "regression-tested",
       "sources": [
         "Issue #557, 2026-10-03: canary #520 accepted, no Draft PR, the trigger posted only to the retired Railway issuer; #558 record PRH-066, carried forward re-scoped per Issue #560 B-6",
-        "Issue #560 S5 (PR #561): lifecycle workflow without a Railway client plus AT-42/AT-46 guards; advanced to regression-tested pending the S7 canary."
+        "Issue #560 S5 (PR #561): lifecycle workflow without a Railway client plus AT-42/AT-46 guards; advanced to regression-tested pending the S7 canary.",
+        "Issue #520 hosted canary run 39614695642, job 119273648134 (2026-10-21): authorization/SPM/DPM succeeded, but root-owned /tmp/hunter-ia mode 0711 prevented the runner from creating execute/workspace before the provider was invoked. Provision the execute workroot with the runner UID/GID and mode 0711; retain the isolated model UID and private trusted.git mode 0700. Hosted recovery proof remains pending owner-approved merge."
       ]
     },
     {

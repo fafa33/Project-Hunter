@@ -8,7 +8,11 @@ equivalent must be accepted.
 from __future__ import annotations
 
 import json
+import os
 import re
+import shlex
+import stat
+import subprocess
 from collections.abc import Iterator, Mapping
 from pathlib import Path
 from typing import Any
@@ -429,3 +433,27 @@ def test_resolve_finding_uses_trusted_scheduled_readiness() -> None:
     workflow = (root / ".github/workflows/hunter-issue-agent-reconcile.yml").read_text()
     resolve_job = workflow.split("  resolve-finding:", 1)[1].split("    steps:", 1)[0]
     assert "actions: write" not in resolve_job
+
+
+def test_executor_prepares_runner_owned_traversable_workroot(tmp_path: Path) -> None:
+    """PR #520 run 39614695642: the runner cannot mkdir below a root-owned 0711 parent."""
+    job = load(LIFECYCLE)["jobs"]["execute"]
+    commands = [
+        line.strip()
+        for step in steps(job)
+        for line in str(step.get("run", "")).splitlines()
+        if shlex.split(line.strip())[:2] == ["sudo", "install"]
+    ]
+    installs = [command for command in commands if shlex.split(command)[-1] == "/tmp/hunter-ia/execute"]
+    assert len(installs) == 1, "executor workroot must be provisioned before runner-owned materialization"
+    command = installs[0]
+    words = shlex.split(command)
+    assert "-o" in words and "-g" in words, "root install must explicitly hand ownership to the runner"
+    destination = tmp_path / "execute"
+    executable = command.removeprefix("sudo ").removesuffix("/tmp/hunter-ia/execute") + shlex.quote(str(destination))
+    subprocess.run(["sh", "-eu", "-c", executable], check=True, capture_output=True)
+    info = destination.stat()
+    assert info.st_uid == os.getuid() and info.st_gid == os.getgid()
+    mode = stat.S_IMODE(info.st_mode)
+    assert mode == 0o711, "isolated UID needs traversal, but must not write/list the trusted workroot"
+    (destination / "workspace").mkdir()
