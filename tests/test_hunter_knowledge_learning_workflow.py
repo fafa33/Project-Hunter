@@ -488,6 +488,9 @@ def test_bounded_merged_pr_backfill_dispatch_is_explicit_and_main_only():
     content = Path(".github/workflows/hunter-issue-agent-knowledge.yml").read_text()
     assert "workflow_dispatch:" in content
     assert "BACKFILL_PR: ${{ inputs.pr" in content
-    assert 'knowledge-ingest --pr "$BACKFILL_PR"' in content
+    assert 'historical-assess --pr "$BACKFILL_PR"' in content
+    assert "579|581|582)" in content
+    assert "Unsupported historical PR scope" in content
+    assert "python scripts/hunter_issue_agent_lifecycle.py knowledge-ingest" in content
     assert "github.ref == 'refs/heads/main'" in content
     assert "HUNTER_ISSUE_AGENT_STATE_SIGNING_KEY" in content
