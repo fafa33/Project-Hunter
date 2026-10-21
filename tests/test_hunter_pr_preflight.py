@@ -516,3 +516,19 @@ def test_generated_preflight_report_directory_is_gitignored() -> None:
     root = Path(__file__).resolve().parents[1]
     ignored = (root / ".gitignore").read_text(encoding="utf-8").splitlines()
     assert ".hunter/preflight-reports/" in ignored
+
+
+def test_expected_red_lane_timing_includes_pytest_duration(monkeypatch, capsys) -> None:
+    """Historical PR #581 / finding 4224365171: lane timing must include expected-RED Pytest."""
+    monkeypatch.setattr(hunter_pr_preflight, "run_quality_gates", lambda _gates: 0)
+    monkeypatch.setattr(
+        hunter_pr_preflight.subprocess,
+        "run",
+        lambda _command, *, check: SimpleNamespace(returncode=1),
+    )
+    moments = iter((10.0, 12.0, 17.0, 20.0))
+    monkeypatch.setattr(hunter_pr_preflight.time, "monotonic", lambda: next(moments))
+    assert hunter_pr_preflight.run_preflight(mode="tests-first-red") == 0
+    output = capsys.readouterr().out
+    assert "TIMING: Pytest (expected RED) 5.00s" in output
+    assert "TIMING: tests-first-red lane 10.00s" in output

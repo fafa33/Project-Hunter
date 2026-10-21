@@ -354,6 +354,206 @@ def cmd_knowledge_ingest(configuration: control.Configuration, arguments: argpar
     return 0
 
 
+def cmd_historical_coverage(configuration: control.Configuration, arguments: argparse.Namespace) -> int:
+    """Read live GitHub review threads and the anchored signed ledger; never synthesize proof."""
+
+    import hunter_collect_learning_observations as collector
+
+    from hunter.automation.historical_finding_coverage import coverage
+
+    github = _github(configuration)
+    control.require_anchor(github, configuration, knowledge.KNOWLEDGE_LEDGER_REF)
+    view = _knowledge_view(configuration, github)
+    numbers = sorted(set(arguments.pr))
+    if not numbers or len(numbers) > 20 or any(number <= 0 for number in numbers):
+        raise LifecycleRefused("INVALID_SCOPE", "historical coverage requires 1..20 positive PR numbers")
+    threads: dict[tuple[int, int], dict[str, Any]] = {}
+    for number in numbers:
+        pull = control.definitive(github.get(f"/repos/{configuration.repository}/pulls/{number}"))
+        if not isinstance(pull, Mapping) or pull.get("number") != number:
+            raise control.FactsUnavailable(f"PR #{number} metadata unavailable")
+        observed = collector._review_threads(configuration.repository, _secret("GITHUB_TOKEN"), number)
+        for comment_id, resolved in observed.items():
+            threads[(number, comment_id)] = {
+                "pull_request_number": number,
+                "comment_id": comment_id,
+                "resolved": resolved,
+            }
+    report = coverage(view, pull_requests=numbers, github_threads=threads)
+    report["source"] = "live-github-review-threads-and-anchored-signed-knowledge"
+    print(json.dumps(report, sort_keys=True, indent=2))
+    return 0
+
+
+def cmd_historical_assess(configuration: control.Configuration, arguments: argparse.Namespace) -> int:
+    """Write only retrospectively authenticated evidence; never mint exact-head finding proof."""
+
+    import hunter_collect_learning_observations as collector
+
+    from hunter.automation.historical_finding_coverage import coverage
+
+    number = arguments.pr
+    if number not in {579, 581, 582}:
+        raise LifecycleRefused("INVALID_SCOPE", "only the approved historical PR inventory is eligible")
+    writer = _writer("knowledge-ingest", "knowledge-ingest", control.KNOWLEDGE_WORKFLOW)
+    github = _github(configuration)
+    control.require_anchor(github, configuration, knowledge.KNOWLEDGE_LEDGER_REF)
+    view = _knowledge_view(configuration, github)
+    pull = control.definitive(github.get(f"/repos/{configuration.repository}/pulls/{number}"))
+    if not isinstance(pull, Mapping) or pull.get("number") != number or not pull.get("merged_at"):
+        raise control.FactsUnavailable("historical PR is not authentically merged")
+    evidence_path = Path(arguments.checkout) / "docs" / "evidence" / "historical-findings-579-581-582.md"
+    if not evidence_path.is_file():
+        raise LifecycleRefused("MISSING_EVIDENCE", "canonical historical finding inventory is absent")
+    # Source commit/test inventory is a finite, reviewed contract. No caller-supplied
+    # commit, digest, disposition or tests can cross this privileged writer boundary.
+    from hunter.automation.historical_finding_coverage import HISTORICAL_EVIDENCE
+
+    threads = collector._review_threads(configuration.repository, _secret("GITHUB_TOKEN"), number)
+    expected = HISTORICAL_EVIDENCE[number]
+    if set(threads) != set(expected["findings"]):
+        raise LifecycleRefused("COVERAGE_GAP", "historical review-thread inventory differs from the approved set")
+    finalized = str(pull["head"]["sha"])
+    merged = str(pull["merge_commit_sha"])
+    expected_final, expected_merge = expected["final_head"], expected["merge_commit"]
+    if finalized != expected_final or merged != expected_merge:
+        raise LifecycleRefused("STALE_HISTORICAL_SOURCE", "historical head or merge identity changed")
+    runs = control.definitive(
+        github.get(f"/repos/{configuration.repository}/commits/{finalized}/check-runs?per_page=100")
+    )
+    if not isinstance(runs, Mapping) or not isinstance(runs.get("check_runs"), list):
+        raise control.FactsUnavailable("historical hosted check runs unavailable")
+    checks = [
+        item
+        for item in runs["check_runs"]
+        if isinstance(item, Mapping)
+        and item.get("name") == "Hunter Pre-PR Preflight"
+        and item.get("conclusion") == "success"
+        and item.get("head_sha") == finalized
+        and isinstance(item.get("id"), int)
+    ]
+    if not checks:
+        raise LifecycleRefused("HISTORICAL_PROOF_GAP", "successful exact-head preflight metadata is absent")
+    if len(checks) != 1 or checks[0]["id"] != expected["preflight_job_id"]:
+        raise LifecycleRefused(
+            "HISTORICAL_PROOF_GAP", "historical preflight job identity does not match approved evidence"
+        )
+    run_id = checks[0]["id"]
+    writes: list[knowledge.Write] = []
+    for comment_id, mapping in sorted(expected["findings"].items()):
+        identity = knowledge.finding_id(configuration.repository_id, number, comment_id)
+        finding = view.findings.get(identity)
+        if finding is None or finding.ingested["provenance"]["reviewed_head_sha"] != mapping["reviewed_head"]:
+            raise LifecycleRefused("COVERAGE_GAP", "historical review finding identity is not anchored")
+        if not threads[comment_id]:
+            raise LifecycleRefused("HISTORICAL_THREAD_OPEN", "historical review thread was not resolved")
+        commit = control.definitive(github.get(f"/repos/{configuration.repository}/commits/{mapping['commit']}"))
+        if not isinstance(commit, Mapping) or commit.get("sha") != mapping["commit"]:
+            raise control.FactsUnavailable("historical remediation commit cannot be authenticated")
+        files = commit.get("files")
+        if not isinstance(files, list) or not any(
+            isinstance(file, Mapping) and file.get("filename") in mapping["paths"] for file in files
+        ):
+            raise LifecycleRefused("HISTORICAL_DIFF_GAP", "historical commit does not touch the approved fix path")
+        writes.append(
+            knowledge.Write(
+                "historical_evidence_assessed",
+                {
+                    "finding_id": identity,
+                    "pull_request_number": number,
+                    "comment_id": comment_id,
+                    "reviewed_head_sha": mapping["reviewed_head"],
+                    "remediation_commit_sha": mapping["commit"],
+                    "final_head_sha": finalized,
+                    "merge_commit_sha": merged,
+                    "hosted_preflight_run_id": run_id,
+                    "regression_tests": list(mapping["tests"]),
+                    "disposition": mapping["disposition"],
+                    "source": "github-authenticated-historical-review",
+                },
+            )
+        )
+    if len(writes) != len(expected["findings"]):
+        raise LifecycleRefused("COVERAGE_GAP", "historical evidence count is incomplete")
+    # The single existing CAS, K_STATE signature and trusted-run provenance remain authoritative.
+    _, resulting, written = knowledge.append(
+        _store(configuration, authenticated=True),
+        writes,
+        trust=configuration.trust,
+        provenance=control.run_provenance(github, configuration),
+        signing_key=_ed25519(STATE_SIGNING_KEY_ENV),
+        recorded_by=writer.recorded_by(),
+        recorded_at=_timestamp(),
+    )
+    report = coverage(
+        resulting,
+        pull_requests=[number],
+        github_threads={
+            (number, key): {"pull_request_number": number, "comment_id": key, "resolved": resolved}
+            for key, resolved in threads.items()
+        },
+    )
+    print(
+        json.dumps(
+            {
+                "records_written": written,
+                "historical_assessed": report["historical_assessed"],
+                "signed_proven": report["signed_proven"],
+                "proof_gap": report["proof_gap"],
+            },
+            sort_keys=True,
+        )
+    )
+    return 0
+
+
+def cmd_knowledge_context_check(configuration: control.Configuration, arguments: argparse.Namespace) -> int:
+    """Exercise the real Issue-agent engineering context compiler with signed live knowledge."""
+
+    from hunter.evidence_intelligence.engineering_context_authority import (
+        ENGINEERING_IMPLEMENT_TASK_KEY,
+        EngineeringContextAuthority,
+    )
+    from hunter.task_scope import TaskScopeContract
+
+    path = arguments.path
+    if not path or path.startswith("/") or ".." in Path(path).parts or "\\" in path:
+        raise LifecycleRefused("INVALID_SCOPE", "unsafe engineering context path")
+    scope = TaskScopeContract(
+        task_id="historical-knowledge-consumption-check",
+        branch_pattern="issue-586-*",
+        base_ref="main",
+        base_sha=arguments.base_sha,
+        allowed_paths=(path,),
+        prohibited_paths=(),
+    )
+    scope_refusal = scope.incompleteness()
+    if scope_refusal:
+        raise LifecycleRefused("INVALID_SCOPE", scope_refusal)
+    github = _github(configuration)
+    control.require_anchor(github, configuration, knowledge.KNOWLEDGE_LEDGER_REF)
+    context = EngineeringContextAuthority(
+        registry_path=Path(arguments.checkout) / "docs" / "DEFECT_REGISTRY.json",
+        knowledge_overlay=_knowledge_overlay(configuration, github),
+    ).compile(ENGINEERING_IMPLEMENT_TASK_KEY, scope=scope)
+    matches = [item["id"] for item in context["applicable_defect_families"] if str(item["id"]).startswith("KF-")]
+    if not matches:
+        raise LifecycleRefused("PREVENTION_NOT_MATERIALIZED", "no signed finding reached engineering context")
+    print(
+        json.dumps(
+            {
+                "schema_version": "hunter-knowledge-context-check-v1",
+                "source": "anchored-signed-knowledge-to-issue-agent-engineering-context",
+                "scope_path": path,
+                "selected_prevention_rules_sha256": context["selected_prevention_rules_sha256"],
+                "finding_prevention_ids": matches,
+            },
+            sort_keys=True,
+        )
+    )
+    return 0
+
+
 def cmd_remediate(configuration: control.Configuration, arguments: argparse.Namespace) -> int:
     """ADR 0039 L4 (RD-4/RD-5): detect an eligible lifecycle PR and dispatch one bounded remediation.
 
@@ -1227,6 +1427,13 @@ def _parser() -> argparse.ArgumentParser:
     publish.add_argument("--workroot", required=True)
     ingest = add("knowledge-ingest", cmd_knowledge_ingest)
     ingest.add_argument("--pr", type=int)
+    assess = add("historical-assess", cmd_historical_assess)
+    assess.add_argument("--pr", type=int, required=True)
+    historical = add("historical-coverage", cmd_historical_coverage)
+    historical.add_argument("--pr", type=int, action="append", required=True)
+    context_check = add("knowledge-context-check", cmd_knowledge_context_check)
+    context_check.add_argument("--path", required=True)
+    context_check.add_argument("--base-sha", required=True)
     remediate = add("remediate", cmd_remediate)
     remediate.add_argument("--issue", type=int)
     resolve = add("resolve-finding", cmd_resolve)

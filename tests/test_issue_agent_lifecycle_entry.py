@@ -33,6 +33,9 @@ COMMANDS = {
     ],  # fmt: skip
     "candidate-gate": ["--branch", "issue-1-" + "a" * 16, "--head-sha", "b" * 40],
     "knowledge-ingest": ["--pr", "561"],
+    "historical-coverage": ["--pr", "579"],
+    "historical-assess": ["--pr", "579"],
+    "knowledge-context-check": ["--path", "scripts/x.py", "--base-sha", "a" * 40],
 }
 SECRETS = {
     "GITHUB_TOKEN": "ghs_runner_token_value",

@@ -558,3 +558,67 @@ def test_copilot_and_other_authenticated_reviewers_are_ingested(store: state.Git
     assert written == 2
     assert not refusals
     assert len(view.findings) == 2
+
+
+def historical_assessment(identity: str, **changes: Any) -> knowledge.Write:
+    evidence = {
+        "finding_id": identity,
+        "pull_request_number": 561,
+        "comment_id": 11,
+        "reviewed_head_sha": HEAD,
+        "remediation_commit_sha": LATER,
+        "final_head_sha": LATER,
+        "merge_commit_sha": "f" * 40,
+        "hosted_preflight_run_id": 300,
+        "regression_tests": [TEST],
+        "disposition": "historical-fix-evidence",
+        "source": "github-authenticated-historical-review",
+    }
+    evidence.update(changes)
+    return knowledge.Write("historical_evidence_assessed", evidence)
+
+
+def test_historical_assessment_is_signed_insert_only_and_not_exact_head_proof(store: state.GitLedgerStore) -> None:
+    identity = seeded(store)
+    item = historical_assessment(identity)
+    _, view, written = write(store, item, by={**BY, "role": "knowledge-ingest"})
+    assert written == 1
+    assert view.findings[identity].historical_assessment == dict(item.evidence)
+    assert view.findings[identity].proven is None
+    assert view.findings[identity].resolved is None
+    assert view.findings[identity].open
+    _, _, written = write(store, item, by={**BY, "role": "knowledge-ingest"})
+    assert written == 0
+    with pytest.raises(knowledge.KnowledgeLedgerError, match="different evidence"):
+        write(store, historical_assessment(identity, final_head_sha="0" * 40), by={**BY, "role": "knowledge-ingest"})
+
+
+@pytest.mark.parametrize("change", [{"comment_id": 12}, {"reviewed_head_sha": BASE}, {"pull_request_number": 999}])
+def test_historical_assessment_must_bind_original_finding(store: state.GitLedgerStore, change: dict) -> None:
+    identity = seeded(store)
+    with pytest.raises(knowledge.KnowledgeLedgerError, match="historical assessment"):
+        write(store, historical_assessment(identity, **change), by={**BY, "role": "knowledge-ingest"})
+
+
+def test_historical_assessment_requires_authorized_writer(store: state.GitLedgerStore) -> None:
+    identity = seeded(store)
+    with pytest.raises(knowledge.KnowledgeLedgerError, match="role may not write"):
+        write(store, historical_assessment(identity))
+
+
+def test_historical_assessment_does_not_authorize_resolution_or_recurrence(store: state.GitLedgerStore) -> None:
+    identity = seeded(store)
+    _, view, _ = write(store, historical_assessment(identity), by={**BY, "role": "knowledge-ingest"})
+    assert knowledge.overlay_families(view)
+    with pytest.raises(knowledge.KnowledgeLedgerError, match="after exact-head proof"):
+        write(
+            store,
+            knowledge.Write(
+                "thread_resolved",
+                {
+                    "finding_id": identity,
+                    "remediated_head_sha": LATER,
+                    "reply_comment_id": 5,
+                },
+            ),
+        )

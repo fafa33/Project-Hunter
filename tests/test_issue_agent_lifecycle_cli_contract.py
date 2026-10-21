@@ -81,7 +81,8 @@ def test_the_workflows_exercise_every_lifecycle_subcommand() -> None:
     parser = lifecycle._parser()
     declared = next(a for a in parser._actions if a.dest == "command").choices
     invoked = {argv[0] for _, argv in _lifecycle_invocations() if not argv[0].startswith("-")}
-    assert set(declared) == invoked
+    # Read-only operator diagnostics require no privileged workflow invocation.
+    assert set(declared) - {"historical-coverage", "knowledge-context-check"} == invoked
 
 
 def _execute_argv() -> list[str]:
@@ -245,3 +246,17 @@ def test_the_candidate_pr_opener_invocation_matches_its_parser(monkeypatch: pyte
     monkeypatch.setattr(candidate_pr, "run", fake_run)
     assert candidate_pr.main(argv) == 0
     assert set(seen) >= {"repository", "head_repository", "branch", "head_sha"}
+
+
+def test_historical_assessment_only_runs_on_trusted_main_with_existing_signer() -> None:
+    document = yaml.safe_load((WORKFLOWS / "hunter-issue-agent-knowledge.yml").read_text())
+    job = document["jobs"]["knowledge-ingest"]
+    assert "refs/heads/main" in job["if"]
+    assert job["environment"] == "hunter-issue-agent-control"
+    assert job["permissions"]["contents"] == "write"
+    assert job["permissions"]["checks"] == "read"
+    step = next(step for step in job["steps"] if "historical-assess" in str(step.get("run", "")))
+    assert "579|581|582)" in step["run"]
+    assert "historical-assess --pr" in step["run"]
+    assert "HUNTER_ISSUE_AGENT_STATE_SIGNING_KEY" in step["env"]
+    assert "knowledge-ingest" in step["run"]
