@@ -1061,7 +1061,7 @@
       "guard_boundary": "trusted lifecycle executor provisioning before signed-base materialization and isolated model execution",
       "guard": "Pre-create the execute workroot with the runner UID/GID and traversal-only access for other users (0711), before the credential-isolated executor attempts workspace creation. Keep trusted Git metadata runner-owned and 0700; never fix this by running the model as runner/root or making the workroot group/world-writable.",
       "test": "tests/test_issue_agent_workflows.py::test_executor_prepares_runner_owned_traversable_workroot",
-      "status": "fixed"
+      "status": "guarded"
     }
   ],
   "families": [
