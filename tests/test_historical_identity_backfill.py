@@ -79,3 +79,26 @@ def test_missing_or_spoofed_historical_source_fails_closed(change):
         observations.clear()
     with pytest.raises(lifecycle.LifecycleRefused, match="COVERAGE_GAP|STALE_HISTORICAL_SOURCE"):
         backfill(comments=comments, observations=observations, expected=expected)
+
+
+def test_backfill_write_batch_counts_ingestions_separately_from_assessments():
+    ingested = backfill()
+    identity = ingested[0].evidence["finding_id"]
+    assessed = knowledge.Write("historical_evidence_assessed", {"finding_id": identity, "comment_id": COMMENT})
+    lifecycle._validate_historical_write_batch([*ingested, assessed], {COMMENT: {"reviewed_head": ORIGINAL}})
+    lifecycle._validate_historical_write_batch([assessed], {COMMENT: {"reviewed_head": ORIGINAL}})
+
+
+@pytest.mark.parametrize("kind", ["missing_assessment", "duplicate_ingestion", "unknown_ingestion"])
+def test_historical_write_batch_rejects_missing_or_unmatched_records(kind):
+    ingested = backfill()
+    identity = ingested[0].evidence["finding_id"]
+    assessed = knowledge.Write("historical_evidence_assessed", {"finding_id": identity, "comment_id": COMMENT})
+    if kind == "missing_assessment":
+        writes = ingested
+    elif kind == "duplicate_ingestion":
+        writes = [*ingested, *ingested, assessed]
+    else:
+        writes = [knowledge.Write("finding_ingested", {"finding_id": "a" * 64}), assessed]
+    with pytest.raises(lifecycle.LifecycleRefused, match="COVERAGE_GAP"):
+        lifecycle._validate_historical_write_batch(writes, {COMMENT: {"reviewed_head": ORIGINAL}})

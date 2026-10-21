@@ -432,6 +432,27 @@ def _historical_ingestion_writes(
     return writes
 
 
+def _validate_historical_write_batch(
+    writes: Sequence[knowledge.Write], expected_findings: Mapping[int, Mapping[str, Any]]
+) -> None:
+    """Account for both new ingestions and all historical assessments before CAS."""
+    # Missing signed identities add finding_ingested records before assessments.
+    # Validate each record class independently; the total is not the assessment count.
+    assessments = [write for write in writes if write.kind == "historical_evidence_assessed"]
+    ingestions = [write for write in writes if write.kind == "finding_ingested"]
+    if (
+        len(assessments) != len(expected_findings)
+        or len(ingestions) > len(expected_findings)
+        or len(assessments) + len(ingestions) != len(writes)
+        or {item.evidence["comment_id"] for item in assessments} != set(expected_findings)
+        or len({item.evidence["finding_id"] for item in ingestions}) != len(ingestions)
+        or not {item.evidence["finding_id"] for item in ingestions}.issubset(
+            {item.evidence["finding_id"] for item in assessments}
+        )
+    ):
+        raise LifecycleRefused("COVERAGE_GAP", "historical evidence count or identity is incomplete")
+
+
 def cmd_historical_assess(configuration: control.Configuration, arguments: argparse.Namespace) -> int:
     """Write only retrospectively authenticated evidence; never mint exact-head finding proof."""
 
@@ -534,8 +555,7 @@ def cmd_historical_assess(configuration: control.Configuration, arguments: argpa
                 },
             )
         )
-    if len(writes) != len(expected["findings"]):
-        raise LifecycleRefused("COVERAGE_GAP", "historical evidence count is incomplete")
+    _validate_historical_write_batch(writes, expected["findings"])
     # The single existing CAS, K_STATE signature and trusted-run provenance remain authoritative.
     _, resulting, written = knowledge.append(
         _store(configuration, authenticated=True),
