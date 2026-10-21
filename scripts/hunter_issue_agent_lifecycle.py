@@ -354,6 +354,37 @@ def cmd_knowledge_ingest(configuration: control.Configuration, arguments: argpar
     return 0
 
 
+def cmd_historical_coverage(configuration: control.Configuration, arguments: argparse.Namespace) -> int:
+    """Read live GitHub review threads and the anchored signed ledger; never synthesize proof."""
+
+    import hunter_collect_learning_observations as collector
+
+    from hunter.automation.historical_finding_coverage import coverage
+
+    github = _github(configuration)
+    control.require_anchor(github, configuration, knowledge.KNOWLEDGE_LEDGER_REF)
+    view = _knowledge_view(configuration, github)
+    numbers = sorted(set(arguments.pr))
+    if not numbers or len(numbers) > 20 or any(number <= 0 for number in numbers):
+        raise LifecycleRefused("INVALID_SCOPE", "historical coverage requires 1..20 positive PR numbers")
+    threads: dict[tuple[int, int], dict[str, Any]] = {}
+    for number in numbers:
+        pull = control.definitive(github.get(f"/repos/{configuration.repository}/pulls/{number}"))
+        if not isinstance(pull, Mapping) or pull.get("number") != number:
+            raise control.FactsUnavailable(f"PR #{number} metadata unavailable")
+        observed = collector._review_threads(configuration.repository, _secret("GITHUB_TOKEN"), number)
+        for comment_id, resolved in observed.items():
+            threads[(number, comment_id)] = {
+                "pull_request_number": number,
+                "comment_id": comment_id,
+                "resolved": resolved,
+            }
+    report = coverage(view, pull_requests=numbers, github_threads=threads)
+    report["source"] = "live-github-review-threads-and-anchored-signed-knowledge"
+    print(json.dumps(report, sort_keys=True, indent=2))
+    return 0
+
+
 def cmd_remediate(configuration: control.Configuration, arguments: argparse.Namespace) -> int:
     """ADR 0039 L4 (RD-4/RD-5): detect an eligible lifecycle PR and dispatch one bounded remediation.
 
@@ -1227,6 +1258,8 @@ def _parser() -> argparse.ArgumentParser:
     publish.add_argument("--workroot", required=True)
     ingest = add("knowledge-ingest", cmd_knowledge_ingest)
     ingest.add_argument("--pr", type=int)
+    historical = add("historical-coverage", cmd_historical_coverage)
+    historical.add_argument("--pr", type=int, action="append", required=True)
     remediate = add("remediate", cmd_remediate)
     remediate.add_argument("--issue", type=int)
     resolve = add("resolve-finding", cmd_resolve)
