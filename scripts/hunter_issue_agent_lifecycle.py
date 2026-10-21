@@ -385,6 +385,74 @@ def cmd_historical_coverage(configuration: control.Configuration, arguments: arg
     return 0
 
 
+def _historical_ingestion_writes(
+    *,
+    view: knowledge.KnowledgeView,
+    observations: Sequence[Mapping[str, Any]],
+    original_comments: Sequence[Mapping[str, Any]],
+    repository_id: int,
+    number: int,
+    expected_findings: Mapping[int, Mapping[str, Any]],
+) -> list[knowledge.Write]:
+    """Bind missing signed knowledge identities to authenticated original GitHub review SHAs."""
+    comments = {item.get("id"): item for item in original_comments if isinstance(item, Mapping)}
+    if len(comments) != len(original_comments) or set(comments) != set(expected_findings):
+        raise LifecycleRefused("COVERAGE_GAP", "historical REST comment inventory differs from approved set")
+    observed = {item.get("event_id"): item for item in observations}
+    writes: list[knowledge.Write] = []
+    for comment_id, mapping in sorted(expected_findings.items()):
+        source = comments[comment_id]
+        original = source.get("original_commit_id")
+        if original != mapping["reviewed_head"] or not isinstance(source.get("path"), str):
+            raise LifecycleRefused("STALE_HISTORICAL_SOURCE", "original review SHA or path cannot be authenticated")
+        observation = observed.get(f"review-comment-{comment_id}")
+        if observation is None or observation.get("source_pr") != number or observation.get("path") != source["path"]:
+            raise LifecycleRefused("COVERAGE_GAP", "authenticated historical observation is missing")
+        authenticated = dict(observation)
+        authenticated["reviewed_head_sha"] = original
+        authenticated["source_event_head_sha"] = source.get("commit_id")
+        try:
+            evidence = knowledge.finding_from_observation(
+                authenticated, repository_id=repository_id, trusted_reviewers=frozenset()
+            )
+        except knowledge.FindingRefused as error:
+            raise LifecycleRefused("COVERAGE_GAP", f"historical finding refused: {error}") from None
+        identity = knowledge.finding_id(repository_id, number, comment_id)
+        if evidence["finding_id"] != identity:
+            raise LifecycleRefused("COVERAGE_GAP", "historical finding identity differs from signed ledger key")
+        existing = view.findings.get(identity)
+        if existing is None:
+            writes.append(knowledge.Write("finding_ingested", evidence))
+        elif (
+            existing.ingested["provenance"]["pull_request_number"] != number
+            or existing.ingested["provenance"]["comment_id"] != comment_id
+            or existing.ingested["provenance"]["path"] != source["path"]
+        ):
+            raise LifecycleRefused("COVERAGE_GAP", "existing signed finding provenance conflicts with GitHub")
+    return writes
+
+
+def _validate_historical_write_batch(
+    writes: Sequence[knowledge.Write], expected_findings: Mapping[int, Mapping[str, Any]]
+) -> None:
+    """Account for both new ingestions and all historical assessments before CAS."""
+    # Missing signed identities add finding_ingested records before assessments.
+    # Validate each record class independently; the total is not the assessment count.
+    assessments = [write for write in writes if write.kind == "historical_evidence_assessed"]
+    ingestions = [write for write in writes if write.kind == "finding_ingested"]
+    if (
+        len(assessments) != len(expected_findings)
+        or len(ingestions) > len(expected_findings)
+        or len(assessments) + len(ingestions) != len(writes)
+        or {item.evidence["comment_id"] for item in assessments} != set(expected_findings)
+        or len({item.evidence["finding_id"] for item in ingestions}) != len(ingestions)
+        or not {item.evidence["finding_id"] for item in ingestions}.issubset(
+            {item.evidence["finding_id"] for item in assessments}
+        )
+    ):
+        raise LifecycleRefused("COVERAGE_GAP", "historical evidence count or identity is incomplete")
+
+
 def cmd_historical_assess(configuration: control.Configuration, arguments: argparse.Namespace) -> int:
     """Write only retrospectively authenticated evidence; never mint exact-head finding proof."""
 
@@ -439,12 +507,26 @@ def cmd_historical_assess(configuration: control.Configuration, arguments: argpa
             "HISTORICAL_PROOF_GAP", "historical preflight job identity does not match approved evidence"
         )
     run_id = checks[0]["id"]
-    writes: list[knowledge.Write] = []
+    # Authenticate the original review SHA from GitHub, not the final PR HEAD.
+    # Existing signed identities remain immutable; only missing ones are ingested.
+    rest_comments = control.definitive(
+        github.get(f"/repos/{configuration.repository}/pulls/{number}/comments?per_page=100")
+    )
+    if not isinstance(rest_comments, list) or any(not isinstance(item, Mapping) for item in rest_comments):
+        raise control.FactsUnavailable("historical REST review comments are unavailable")
+    observations = collector.collect(
+        configuration.repository, _secret("GITHUB_TOKEN"), number, finalized, str(pull["base"]["sha"])
+    )
+    writes = _historical_ingestion_writes(
+        view=view,
+        observations=observations,
+        original_comments=rest_comments,
+        repository_id=configuration.repository_id,
+        number=number,
+        expected_findings=expected["findings"],
+    )
     for comment_id, mapping in sorted(expected["findings"].items()):
         identity = knowledge.finding_id(configuration.repository_id, number, comment_id)
-        finding = view.findings.get(identity)
-        if finding is None or finding.ingested["provenance"]["reviewed_head_sha"] != mapping["reviewed_head"]:
-            raise LifecycleRefused("COVERAGE_GAP", "historical review finding identity is not anchored")
         if not threads[comment_id]:
             raise LifecycleRefused("HISTORICAL_THREAD_OPEN", "historical review thread was not resolved")
         commit = control.definitive(github.get(f"/repos/{configuration.repository}/commits/{mapping['commit']}"))
@@ -473,8 +555,7 @@ def cmd_historical_assess(configuration: control.Configuration, arguments: argpa
                 },
             )
         )
-    if len(writes) != len(expected["findings"]):
-        raise LifecycleRefused("COVERAGE_GAP", "historical evidence count is incomplete")
+    _validate_historical_write_batch(writes, expected["findings"])
     # The single existing CAS, K_STATE signature and trusted-run provenance remain authoritative.
     _, resulting, written = knowledge.append(
         _store(configuration, authenticated=True),
