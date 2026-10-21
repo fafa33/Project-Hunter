@@ -916,7 +916,7 @@ def _run(
     # A successor provenance head belongs to exactly one revision timestamp.
     # This admits a provenance-only interrupted retry of that revision while
     # rejecting replay of an older signed revision after a newer successor.
-    if current_provenance_is_successor and existing_known_at != on_or_after:
+    if current_provenance_is_successor and not newer_issue_revision and existing_known_at != on_or_after:
         raise SourceHandlingBlockedError(
             "the incoming Issue authorization does not match the current provenance revision"
         )

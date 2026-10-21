@@ -827,3 +827,73 @@ def test_railway_single_public_port_reaches_both_isolated_authorities(
         public_ingress.wait(timeout=30)
         provisioning_edge.shutdown()
         issuer_edge.shutdown()
+
+
+def test_new_issue_revision_successor_and_idempotent_retry(deployment: dict[str, Any], edge: Any) -> None:
+    """A changed signed Issue must advance its authority and remain retryable."""
+    from datetime import timedelta
+
+    hook = edge(deployment["configuration"])
+    initial_event = _event()
+    initial_event["issue"]["updated_at"] = (
+        (datetime.now(UTC) - timedelta(seconds=20)).isoformat().replace("+00:00", "Z")
+    )
+    first = _authorization_document(event=initial_event).encode("utf-8")
+    status, body = hook.post(first)
+    assert status == 200, body
+    original = json.loads(body)
+
+    time.sleep(0.02)
+    event = _event()
+    event["issue"]["updated_at"] = datetime.now(UTC).isoformat().replace("+00:00", "Z")
+    revised = _authorization_document(event=event).encode("utf-8")
+    status, body = hook.post(revised)
+    assert status == 200, body
+    successor = json.loads(body)
+    assert successor["document_id"] == original["document_id"]
+    assert successor["authorization_id"] != original["authorization_id"]
+    assert successor["records"]["FACT"]["record_id"] != original["records"]["FACT"]["record_id"]
+
+    status, body = hook.post(revised)
+    assert status == 200, body
+    repeated = json.loads(body)
+    assert repeated["status"] == "already-provisioned"
+    assert {key: value["record_id"] for key, value in repeated["records"].items()} == {
+        key: value["record_id"] for key, value in successor["records"].items()
+    }
+
+
+def test_canary_repeated_issue_revisions_after_successor(deployment: dict[str, Any], edge: Any) -> None:
+    """Reproduce canary: existing successor followed by another Issue update."""
+    from datetime import timedelta
+
+    hook = edge(deployment["configuration"])
+    for revision in range(3):
+        event = _event()
+        event["issue"]["updated_at"] = (
+            (datetime.now(UTC) - timedelta(seconds=30 - revision * 10)).isoformat().replace("+00:00", "Z")
+        )
+        document = _authorization_document(event=event).encode("utf-8")
+        status, body = hook.post(document)
+        assert status == 200, (revision, body)
+        payload = json.loads(body)
+        assert payload["authorization_id"]
+
+
+def test_canary_revision_after_existing_successor_head(deployment: dict[str, Any], edge: Any) -> None:
+    """A third Issue revision after an already-published successor must not be rejected as a retry."""
+    from datetime import timedelta
+
+    hook = edge(deployment["configuration"])
+    for revision in range(3):
+        event = _event()
+        if revision == 0:
+            event["issue"]["updated_at"] = (
+                (datetime.now(UTC) - timedelta(seconds=10)).isoformat().replace("+00:00", "Z")
+            )
+        else:
+            event["issue"]["updated_at"] = datetime.now(UTC).isoformat().replace("+00:00", "Z")
+        document = _authorization_document(event=event).encode("utf-8")
+        status, body = hook.post(document)
+        assert status == 200, (revision, body)
+        time.sleep(0.04)
