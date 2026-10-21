@@ -124,7 +124,8 @@ EVIDENCE_SCHEMAS: Final = {
             "regression_tests": _list(_pattern(_TEST_ID), maximum=16),
             "disposition": _enum({"historical-fix-evidence", "historical-regression-gap"}),
             "source": _exact("github-authenticated-historical-review"),
-        }
+        },
+        optional={"ingested_head_sha": SHA40},
     ),
     "family_candidate": _object(
         {
@@ -414,7 +415,7 @@ def _fold(view: KnowledgeView, kind: str, evidence: dict[str, Any]) -> None:
         _require(
             source["pull_request_number"] == evidence["pull_request_number"]
             and source["comment_id"] == evidence["comment_id"]
-            and source["reviewed_head_sha"] == evidence["reviewed_head_sha"],
+            and source["reviewed_head_sha"] == evidence.get("ingested_head_sha", evidence["reviewed_head_sha"]),
             "historical assessment does not bind the ingested review identity",
         )
         _require(evidence["regression_tests"], "historical assessment must name regression tests")

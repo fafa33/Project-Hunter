@@ -537,6 +537,15 @@ def cmd_historical_assess(configuration: control.Configuration, arguments: argpa
             isinstance(file, Mapping) and file.get("filename") in mapping["paths"] for file in files
         ):
             raise LifecycleRefused("HISTORICAL_DIFF_GAP", "historical commit does not touch the approved fix path")
+        # The original reviewed SHA is GitHub-authenticated above. Legacy signed
+        # ingestions may have captured the then-current PR HEAD instead; bind
+        # both without rewriting either immutable historical identity.
+        signed_finding = view.findings.get(identity)
+        signed_head = (
+            signed_finding.ingested["provenance"]["reviewed_head_sha"]
+            if signed_finding is not None
+            else mapping["reviewed_head"]
+        )
         writes.append(
             knowledge.Write(
                 "historical_evidence_assessed",
@@ -545,6 +554,7 @@ def cmd_historical_assess(configuration: control.Configuration, arguments: argpa
                     "pull_request_number": number,
                     "comment_id": comment_id,
                     "reviewed_head_sha": mapping["reviewed_head"],
+                    **({"ingested_head_sha": signed_head} if signed_head != mapping["reviewed_head"] else {}),
                     "remediation_commit_sha": mapping["commit"],
                     "final_head_sha": finalized,
                     "merge_commit_sha": merged,
