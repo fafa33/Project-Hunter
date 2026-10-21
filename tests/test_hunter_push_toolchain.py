@@ -25,8 +25,22 @@ def test_push_preserves_git_hooks_and_injects_path(tmp_path, monkeypatch):
     bindir.mkdir()
     for tool in module.TOOLS:
         (bindir / tool).touch()
-    with patch.object(module.subprocess, "call", return_value=0) as call:
+    with (
+        patch.object(module, "hook_bound", return_value=True),
+        patch.object(module.subprocess, "call", return_value=0) as call,
+    ):
         assert module.main(["origin", "HEAD:refs/heads/test"]) == 0
     args, kwargs = call.call_args
     assert args[0] == ["git", "push", "origin", "HEAD:refs/heads/test"]
     assert kwargs["env"]["PATH"].startswith(str(bindir) + ":")
+
+
+def test_missing_hook_binding_blocks_push(tmp_path, monkeypatch):
+    monkeypatch.setenv("HUNTER_PUSH_VENV", str(tmp_path))
+    bindir = tmp_path / "bin"
+    bindir.mkdir()
+    for tool in module.TOOLS:
+        (bindir / tool).touch()
+    with patch.object(module, "hook_bound", return_value=False), patch.object(module.subprocess, "call") as call:
+        assert module.main(["origin", "HEAD"]) == 70
+        call.assert_not_called()
