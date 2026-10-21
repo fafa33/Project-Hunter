@@ -70,6 +70,7 @@ WRITER_ROLES: Final[Mapping[str, frozenset[str]]] = {
     "family_candidate": frozenset({"record-validation", "reconcile"}),
     "remediation_requested": frozenset({"reconcile"}),
     "finding_proven": frozenset({"reconcile"}),
+    "historical_evidence_assessed": frozenset({"knowledge-ingest"}),
     "thread_resolved": frozenset({"reconcile"}),
     "recurrence": frozenset({"reconcile"}),
 }
@@ -108,6 +109,23 @@ EVIDENCE_SCHEMAS: Final = {
         }
     ),
     "finding_classified": _CLASSIFICATION,
+    # A retrospective assessment describes authenticated old commits and check runs.
+    # It NEVER substitutes for exact-head Issue-agent finding_proven or thread_resolved.
+    "historical_evidence_assessed": _object(
+        {
+            "finding_id": SHA64,
+            "pull_request_number": POSITIVE,
+            "comment_id": POSITIVE,
+            "reviewed_head_sha": SHA40,
+            "remediation_commit_sha": SHA40,
+            "final_head_sha": SHA40,
+            "merge_commit_sha": SHA40,
+            "hosted_preflight_run_id": POSITIVE,
+            "regression_tests": _list(_pattern(_TEST_ID), maximum=16),
+            "disposition": _enum({"historical-fix-evidence", "historical-regression-gap"}),
+            "source": _exact("github-authenticated-historical-review"),
+        }
+    ),
     "family_candidate": _object(
         {
             "candidate_id": SHA64,
@@ -278,6 +296,7 @@ class Finding:
     remediations: list[dict[str, Any]] = field(default_factory=list)
     proven: dict[str, Any] | None = None
     resolved: dict[str, Any] | None = None
+    historical_assessment: dict[str, Any] | None = None
 
     @property
     def path(self) -> str:
@@ -325,7 +344,7 @@ class KnowledgeView:
 def record_key(kind: str, evidence: Mapping[str, Any]) -> str:
     """The L2 uniqueness key of a record, derived only from its evidence."""
 
-    if kind in {"finding_ingested", "finding_proven", "thread_resolved"}:
+    if kind in {"finding_ingested", "finding_proven", "thread_resolved", "historical_evidence_assessed"}:
         return str(evidence["finding_id"])
     if kind == "finding_classified":
         return sha256_hex(canonical_json({"finding_id": evidence["finding_id"], "basis": evidence["basis"]}))
@@ -390,6 +409,17 @@ def _fold(view: KnowledgeView, kind: str, evidence: dict[str, Any]) -> None:
     item = view.findings.get(evidence["finding_id"])
     _require(item is not None, f"{kind} for an unknown finding")
     assert item is not None
+    if kind == "historical_evidence_assessed":
+        source = item.ingested["provenance"]
+        _require(
+            source["pull_request_number"] == evidence["pull_request_number"]
+            and source["comment_id"] == evidence["comment_id"]
+            and source["reviewed_head_sha"] == evidence["reviewed_head_sha"],
+            "historical assessment does not bind the ingested review identity",
+        )
+        _require(evidence["regression_tests"], "historical assessment must name regression tests")
+        item.historical_assessment = dict(evidence)
+        return
     if kind == "finding_classified":
         outcome, basis = evidence["outcome"], evidence["basis"]
         # One classification per basis is the (finding_id, basis) key plus the insert-only rule above.

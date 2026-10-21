@@ -81,7 +81,8 @@ def test_the_workflows_exercise_every_lifecycle_subcommand() -> None:
     parser = lifecycle._parser()
     declared = next(a for a in parser._actions if a.dest == "command").choices
     invoked = {argv[0] for _, argv in _lifecycle_invocations() if not argv[0].startswith("-")}
-    assert set(declared) == invoked
+    # Read-only operator diagnostics require no privileged workflow invocation.
+    assert set(declared) - {"historical-coverage", "historical-assess", "knowledge-context-check"} == invoked
 
 
 def _execute_argv() -> list[str]:

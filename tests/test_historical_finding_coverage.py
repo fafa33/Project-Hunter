@@ -67,3 +67,25 @@ def test_untrusted_resolution_type_fails_closed() -> None:
 def test_empty_scope_refused() -> None:
     with pytest.raises(ValueError, match="positive PR"):
         coverage(view(), pull_requests=[], github_threads={})
+
+
+def test_historical_assessment_is_visible_but_does_not_reduce_proof_gap() -> None:
+    known = view()
+    known.findings["f" * 64].historical_assessment = {"disposition": "historical-fix-evidence"}
+    report = coverage(
+        known,
+        pull_requests=[579],
+        github_threads={(579, 123): {"pull_request_number": 579, "comment_id": 123, "resolved": True}},
+    )
+    assert report["historical_assessed"] == 1
+    assert report["proof_gap"] == 1
+    assert report["findings"][0]["signed_proof"] is False
+    assert report["findings"][0]["historical_disposition"] == "historical-fix-evidence"
+
+
+def test_signed_ledger_proof_remains_authoritative_if_github_thread_disappears() -> None:
+    known = view()
+    known.findings["f" * 64].proven = {"regression_tests": ["tests/test_x.py::test_fix"]}
+    report = coverage(known, pull_requests=[579], github_threads={})
+    assert report["findings"][0]["status"] == "proven-awaiting-ledger-resolution"
+    assert report["signed_proven"] == 1
