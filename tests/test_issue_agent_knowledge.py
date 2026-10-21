@@ -622,3 +622,24 @@ def test_historical_assessment_does_not_authorize_resolution_or_recurrence(store
                 },
             ),
         )
+
+
+def test_historical_assessment_binds_original_sha_and_legacy_signed_ingestion(store: state.GitLedgerStore) -> None:
+    identity = seeded(store)
+    assessed = historical_assessment(identity, reviewed_head_sha=LATER, ingested_head_sha=HEAD)
+    _, view, written = write(store, assessed, by={**BY, "role": "knowledge-ingest"})
+    assert written == 1
+    assert view.findings[identity].historical_assessment["reviewed_head_sha"] == LATER
+    assert view.findings[identity].historical_assessment["ingested_head_sha"] == HEAD
+    assert view.findings[identity].proven is None
+    assert view.findings[identity].resolved is None
+
+
+def test_historical_legacy_binding_rejects_wrong_signed_ingestion_head(store: state.GitLedgerStore) -> None:
+    identity = seeded(store)
+    with pytest.raises(knowledge.KnowledgeLedgerError, match="historical assessment"):
+        write(
+            store,
+            historical_assessment(identity, reviewed_head_sha=LATER, ingested_head_sha="0" * 40),
+            by={**BY, "role": "knowledge-ingest"},
+        )
