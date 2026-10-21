@@ -116,6 +116,27 @@ def coverage(
     selected = set(pull_requests)
     if not selected or any(not isinstance(pr, int) or isinstance(pr, bool) or pr <= 0 for pr in selected):
         raise ValueError("nonempty positive PR selection required")
+    # The GitHub inventory is independent of the signed ledger.  A partial
+    # ingestion must not silently turn live unresolved findings into zero gaps.
+    anchored = {
+        (finding.pull_request_number, finding.ingested["provenance"]["comment_id"])
+        for finding in view.findings.values()
+        if finding.pull_request_number in selected
+    }
+    for key, thread in github_threads.items():
+        if (
+            not isinstance(key, tuple)
+            or len(key) != 2
+            or any(not isinstance(part, int) or isinstance(part, bool) or part <= 0 for part in key)
+            or not isinstance(thread, Mapping)
+            or thread.get("pull_request_number") != key[0]
+            or thread.get("comment_id") != key[1]
+        ):
+            raise ValueError("GitHub thread evidence identity mismatch")
+        if not isinstance(thread.get("resolved"), bool):
+            raise ValueError("GitHub thread resolution must be a boolean")
+        if key[0] in selected and key not in anchored:
+            raise ValueError("GitHub thread missing from signed ledger")
     rows: list[dict[str, Any]] = []
     for identity, finding in sorted(view.findings.items()):
         pr = finding.pull_request_number

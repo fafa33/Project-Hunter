@@ -89,3 +89,45 @@ def test_signed_ledger_proof_remains_authoritative_if_github_thread_disappears()
     report = coverage(known, pull_requests=[579], github_threads={})
     assert report["findings"][0]["status"] == "proven-awaiting-ledger-resolution"
     assert report["signed_proven"] == 1
+
+
+def test_live_thread_missing_from_signed_ledger_fails_closed() -> None:
+    with pytest.raises(ValueError, match="missing from signed ledger"):
+        coverage(
+            KnowledgeView(repository_id=1),
+            pull_requests=[579],
+            github_threads={(579, 123): {"pull_request_number": 579, "comment_id": 123, "resolved": False}},
+        )
+
+
+def test_partially_ingested_pr_cannot_hide_unanchored_review() -> None:
+    with pytest.raises(ValueError, match="missing from signed ledger"):
+        coverage(
+            view(),
+            pull_requests=[579],
+            github_threads={
+                (579, 123): {"pull_request_number": 579, "comment_id": 123, "resolved": True},
+                (579, 124): {"pull_request_number": 579, "comment_id": 124, "resolved": False},
+            },
+        )
+
+
+def test_unknown_live_thread_cannot_hide_behind_signed_proof() -> None:
+    known = view()
+    known.findings["f" * 64].proven = {"regression_tests": ["tests/test_x.py::test_fix"]}
+    with pytest.raises(ValueError, match="missing from signed ledger"):
+        coverage(
+            known,
+            pull_requests=[579],
+            github_threads={(579, 124): {"pull_request_number": 579, "comment_id": 124, "resolved": True}},
+        )
+
+
+def test_unselected_pr_threads_do_not_change_selected_scope() -> None:
+    report = coverage(
+        view(),
+        pull_requests=[579],
+        github_threads={(581, 124): {"pull_request_number": 581, "comment_id": 124, "resolved": False}},
+    )
+    assert report["examined"] == 1
+    assert report["proof_gap"] == 1
