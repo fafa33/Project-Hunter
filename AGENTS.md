@@ -6,6 +6,10 @@ Read `.github/instructions/project-hunter.instructions.md` before substantive wo
 
 Trace real executable paths before changing architecture. Use tests first for bug fixes and behavioral changes. Run the required Hunter verification gates before completion claims. Do not bypass governance or evidence requirements. Never merge, deploy, or perform irreversible actions without explicit owner approval. Under the owner-approved Issue #616 policy, only the trusted default-branch Candidate Admission controller may automatically mark a same-repository Draft PR Ready after canonical exact-head proof and all pre-Ready security/acceptance checks pass; no per-PR or per-HEAD owner comment, manual Ready action, or additional owner approval is required. Ready is not merge authorization; merging always requires separate explicit owner approval. Fail closed for missing/stale/ambiguous proof, HEAD/base races, forks, or permission errors. Preserve the existing Draft reviewer guard and ready_for_review orchestration; do not give candidate code privileged write authority.
 
+## Portable push toolchain
+
+Before the first push on each execution host, provision the repository-declared developer toolchain with `python3 scripts/hunter_push.py --setup`. Use `python3 scripts/hunter_push.py ...` for subsequent pushes. This preserves the repository-owned pre-push hook in non-interactive Gateway/SSH sessions and fails closed if the persistent toolchain is missing. See `docs/HUNTER_PUSH_TOOLCHAIN.md`; never bypass the hook for missing tools.
+
 ## Durable checkpoints
 
 Validated work must not exist only in a temporary agent workspace. At every meaningful checkpoint, after the required checks have the expected outcome, commit the exact state, push the intended branch, and verify that the remote branch HEAD exactly matches the local commit SHA before continuing substantial work.
