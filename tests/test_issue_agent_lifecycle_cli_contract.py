@@ -282,8 +282,10 @@ def test_execute_advisory_is_visible_without_a_result(
     args = lifecycle.parse_arguments(_execute_argv())
     args.authorization_id = "hunter-issue-agent-authorization:" + "a" * 64
     args.out = str(tmp_path / "result.sealed")
+    output_path = tmp_path / "github-output"
+    monkeypatch.setenv("GITHUB_OUTPUT", str(output_path))
     assert lifecycle.cmd_execute(config, args) == 0
     captured = capsys.readouterr().out
     assert "executor advisory: PROVIDER_UNAVAILABLE" in captured
-    assert "sealed=false" in captured
+    assert "sealed=false" in output_path.read_text()
     assert not (tmp_path / "result.sealed").exists()
