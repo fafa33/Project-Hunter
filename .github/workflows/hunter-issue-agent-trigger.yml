@@ -102,6 +102,7 @@ jobs:
     concurrency:
       group: hunter-issue-agent-source-handling-authorize
       cancel-in-progress: false
+      queue: max
     name: authorize
     if: >-
       always() && (

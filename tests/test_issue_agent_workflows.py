@@ -465,5 +465,6 @@ def test_authorize_serializes_shared_source_handling_prepare_commit() -> None:
     assert job["concurrency"] == {
         "group": "hunter-issue-agent-source-handling-authorize",
         "cancel-in-progress": False,
+        "queue": "max",
     }
     assert "${{" not in job["concurrency"]["group"]
