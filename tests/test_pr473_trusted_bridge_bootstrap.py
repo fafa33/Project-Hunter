@@ -206,7 +206,7 @@ def test_bootstrap_pending_does_not_admit_the_candidate(
     _mergeability(monkeypatch, _pull_request())
     calls: list[tuple[int, str | None]] = []
 
-    def _enforce(_repo: str, _token: str, pr_number: int, expected_head: str | None) -> int:
+    def _enforce(_repo: str, _token: str, pr_number: int, expected_head: str | None, *_mutation_token: str | None) -> int:
         calls.append((pr_number, expected_head))
         return 1
 

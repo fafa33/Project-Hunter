@@ -120,7 +120,16 @@ def enforce_candidate_admission(
     token: str,
     pr_number: int,
     expected_head_sha: str | None = None,
+    mutation_token: str | None = None,
 ) -> int:
+    # Reads (PR state, check-runs, statuses) use the default workflow token,
+    # which already carries the read scopes declared on this workflow.
+    # Mutations (convertPullRequestToDraft / markPullRequestReadyForReview)
+    # use a narrower-scoped Hunter App token, because GITHUB_TOKEN is verified
+    # FORBIDDEN from executing markPullRequestReadyForReview on this repository
+    # (PR #621). Falling back to `token` keeps callers that only have one
+    # credential (e.g. tests, local invocations) working unchanged.
+    mutation_token = mutation_token or token
     pr = governance.read_mergeability(repository, token, pr_number)
     if pr.get("state") != "open":
         return 0
@@ -161,7 +170,7 @@ def enforce_candidate_admission(
         ):
             print(f"PR #{pr_number} stale before Ready transition")
             return 1
-        mutation_confirmed = mark_ready(token, str(latest["node_id"]))
+        mutation_confirmed = mark_ready(mutation_token, str(latest["node_id"]))
         # An ambiguous transport failure may follow a committed GitHub mutation.
         # Re-read authoritative PR state before deciding whether the operation failed.
         confirmed = governance.read_mergeability(repository, token, pr_number)
@@ -209,7 +218,7 @@ def enforce_candidate_admission(
         return 1
 
     pull_request_node_id = str(latest.get("node_id") or "").strip()
-    drafted = convert_to_draft(token, pull_request_node_id)
+    drafted = convert_to_draft(mutation_token, pull_request_node_id)
     if drafted:
         print(
             f"PR #{pr_number} returned to Draft because exact-head candidate "
@@ -234,8 +243,12 @@ def parser() -> argparse.ArgumentParser:
 def main() -> int:
     args = parser().parse_args()
     token = os.environ.get("GITHUB_TOKEN") or os.environ.get("GH_TOKEN") or ""
+    # HUNTER_APP_MUTATION_TOKEN carries the narrowly-scoped Hunter App
+    # identity used only for the two PR mutations. It falls back to `token`
+    # when unset so direct/local invocations keep working with one credential.
+    mutation_token = os.environ.get("HUNTER_APP_MUTATION_TOKEN") or token
     try:
-        return enforce_candidate_admission(args.repository, token, args.pr, args.head_sha)
+        return enforce_candidate_admission(args.repository, token, args.pr, args.head_sha, mutation_token)
     except transport.GitHubUnavailable as exc:
         print(f"Candidate admission infrastructure unavailable: {exc}")
         return 1

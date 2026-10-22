@@ -47,7 +47,14 @@ jobs:
 
       # GITHUB_TOKEN cannot execute markPullRequestReadyForReview for this
       # repository (verified FORBIDDEN on PR #621). Use the already-provisioned
-      # Hunter App identity; never fall back to a weaker/anonymous mutation.
+      # Hunter App identity for that mutation; never fall back to a
+      # weaker/anonymous mutation. The installation only grants this App
+      # pull-requests:write (requesting the other scopes 422s with
+      # "permissions requested are not granted to this installation"), and
+      # none of the read-only admission checks need the App identity anyway:
+      # this job's own `permissions:` block already grants GITHUB_TOKEN
+      # checks/statuses/actions/contents read, so reads stay on GITHUB_TOKEN
+      # and only the two PR mutations use the narrower App token.
       - name: Mint Hunter App admission token
         id: admission-token
         uses: actions/create-github-app-token@v2
@@ -55,14 +62,11 @@ jobs:
           app-id: ${{ vars.HUNTER_APP_ID }}
           private-key: ${{ secrets.HUNTER_APP_PRIVATE_KEY }}
           permission-pull-requests: write
-          permission-contents: read
-          permission-actions: read
-          permission-checks: read
-          permission-statuses: read
 
       - name: Enforce exact-head review admission
         env:
-          GITHUB_TOKEN: ${{ steps.admission-token.outputs.token }}
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          HUNTER_APP_MUTATION_TOKEN: ${{ steps.admission-token.outputs.token }}
           GH_REPO: ${{ github.repository }}
           EVENT_HEAD_SHA: ${{ github.event.pull_request.head.sha || github.event.workflow_run.head_sha }}
           DIRECT_PR_NUMBER: ${{ github.event.pull_request.number }}
