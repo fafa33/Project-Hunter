@@ -309,9 +309,15 @@ def governance_mode(repository: str, token: str, pr_number: int) -> int:
     return governance.review(repository, token, pr_number)
 
 
-def candidate_mode(repository: str, token: str, pr_number: int, expected_head_sha: str | None) -> int:
+def candidate_mode(
+    repository: str,
+    token: str,
+    pr_number: int,
+    expected_head_sha: str | None,
+    mutation_token: str | None = None,
+) -> int:
     """Run canonical candidate admission; reviewer availability is non-authoritative."""
-    return candidate.enforce_candidate_admission(repository, token, pr_number, expected_head_sha)
+    return candidate.enforce_candidate_admission(repository, token, pr_number, expected_head_sha, mutation_token)
 
 
 def readiness_mode(repository: str, token: str) -> int:
@@ -342,10 +348,14 @@ def parser() -> argparse.ArgumentParser:
 def main() -> int:
     args = parser().parse_args()
     token = os.environ.get("GITHUB_TOKEN") or os.environ.get("GH_TOKEN") or ""
+    # HUNTER_APP_MUTATION_TOKEN is the narrowly-scoped Hunter App identity used
+    # only for the PR mutation calls inside candidate admission; it falls back
+    # to `token` when unset so other callers keep working with one credential.
+    mutation_token = os.environ.get("HUNTER_APP_MUTATION_TOKEN") or token
     if args.mode == "governance":
         return governance_mode(args.repository, token, args.pr)
     if args.mode == "candidate":
-        return candidate_mode(args.repository, token, args.pr, args.head_sha)
+        return candidate_mode(args.repository, token, args.pr, args.head_sha, mutation_token)
     repository = os.environ.get("GH_REPO") or os.environ.get("GITHUB_REPOSITORY") or ""
     return readiness_mode(repository, token)
 

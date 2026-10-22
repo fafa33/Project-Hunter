@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import sys
 from pathlib import Path
 
 import hunter_candidate_admission as admission
@@ -335,3 +336,128 @@ def test_ambiguous_mutation_still_draft_is_failure(monkeypatch):
     monkeypatch.setattr(admission.governance, "candidate_admission", lambda *_: ("success", "proof"))
     monkeypatch.setattr(admission, "mark_ready", lambda *_: False)
     assert admission.enforce_candidate_admission("fafa33/Project-Hunter", "token", 616) == 1
+
+
+def test_workflow_mints_app_token_with_pull_requests_write_only() -> None:
+    """The Hunter App installation 422s if any scope beyond pull-requests:write is requested."""
+    workflow = (ROOT / ".github" / "workflows" / "hunter-candidate-admission.yml").read_text(encoding="utf-8")
+    assert "permission-pull-requests: write" in workflow
+    for forbidden in (
+        "permission-contents:",
+        "permission-actions:",
+        "permission-checks:",
+        "permission-statuses:",
+    ):
+        assert forbidden not in workflow, f"App token must not request {forbidden!r}; installation rejects it with 422"
+
+
+def test_workflow_routes_reads_to_github_token_and_mutations_to_app_token() -> None:
+    """Reads must stay on GITHUB_TOKEN; only the mutation-token env may carry the App token."""
+    workflow = (ROOT / ".github" / "workflows" / "hunter-candidate-admission.yml").read_text(encoding="utf-8")
+    assert "GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}" in workflow
+    assert "HUNTER_APP_MUTATION_TOKEN: ${{ steps.admission-token.outputs.token }}" in workflow
+    # The minted App token output must never be assigned directly to GITHUB_TOKEN.
+    assert "GITHUB_TOKEN: ${{ steps.admission-token.outputs.token }}" not in workflow
+
+
+def test_reads_use_primary_token_mutations_use_app_token(monkeypatch) -> None:
+    """enforce_candidate_admission must route reads/mutations to distinct supplied tokens."""
+    read_calls: list[str] = []
+    mutation_calls: list[str] = []
+    states = iter([_pr(draft=True), _pr(draft=True), _pr(draft=False)])
+
+    def read_mergeability(_repo: str, token: str, _number: int) -> dict:
+        read_calls.append(token)
+        return next(states)
+
+    def mark_ready(token: str, node: str) -> bool:
+        mutation_calls.append(token)
+        return True
+
+    monkeypatch.setattr(admission.governance, "read_mergeability", read_mergeability)
+    monkeypatch.setattr(admission.governance, "candidate_admission", lambda *_: ("success", "proof"))
+    monkeypatch.setattr(admission, "mark_ready", mark_ready)
+
+    assert (
+        admission.enforce_candidate_admission(
+            "fafa33/Project-Hunter",
+            "read-token",
+            616,
+            HEAD,
+            "app-mutation-token",
+        )
+        == 0
+    )
+    assert read_calls and all(token == "read-token" for token in read_calls)
+    assert mutation_calls == ["app-mutation-token"]
+
+
+def test_missing_mutation_token_falls_back_to_primary_token(monkeypatch) -> None:
+    """An unset/empty mutation token must still allow mutations via the primary token (no silent skip)."""
+    mutation_calls: list[str] = []
+    states = iter([_pr(draft=True), _pr(draft=True), _pr(draft=False)])
+
+    monkeypatch.setattr(admission.governance, "read_mergeability", lambda *_: next(states))
+    monkeypatch.setattr(admission.governance, "candidate_admission", lambda *_: ("success", "proof"))
+
+    def record_ready(token: str, node: str) -> bool:
+        mutation_calls.append(token)
+        return True
+
+    monkeypatch.setattr(admission, "mark_ready", record_ready)
+
+    assert (
+        admission.enforce_candidate_admission(
+            "fafa33/Project-Hunter",
+            "only-token",
+            616,
+            HEAD,
+            None,
+        )
+        == 0
+    )
+    assert mutation_calls == ["only-token"]
+
+
+def test_main_sources_mutation_token_from_dedicated_env_var(monkeypatch) -> None:
+    """main() must read the App token from HUNTER_APP_MUTATION_TOKEN, not GITHUB_TOKEN."""
+    captured: dict = {}
+
+    def fake_enforce(repository: str, token: str, pr_number: int, head_sha, mutation_token) -> int:
+        captured["token"] = token
+        captured["mutation_token"] = mutation_token
+        return 0
+
+    monkeypatch.setattr(admission, "enforce_candidate_admission", fake_enforce)
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        ["hunter_candidate_admission.py", "--pr", "616", "--repository", "fafa33/Project-Hunter"],
+    )
+    monkeypatch.setenv("GITHUB_TOKEN", "read-token")
+    monkeypatch.setenv("HUNTER_APP_MUTATION_TOKEN", "app-token")
+
+    assert admission.main() == 0
+    assert captured == {"token": "read-token", "mutation_token": "app-token"}
+
+
+def test_main_without_app_mutation_token_falls_back(monkeypatch) -> None:
+    """When HUNTER_APP_MUTATION_TOKEN is absent, main() must not leave mutations tokenless."""
+    captured: dict = {}
+
+    def fake_enforce(repository: str, token: str, pr_number: int, head_sha, mutation_token) -> int:
+        captured["token"] = token
+        captured["mutation_token"] = mutation_token
+        return 0
+
+    monkeypatch.setattr(admission, "enforce_candidate_admission", fake_enforce)
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        ["hunter_candidate_admission.py", "--pr", "616", "--repository", "fafa33/Project-Hunter"],
+    )
+    monkeypatch.setenv("GITHUB_TOKEN", "read-token")
+    monkeypatch.delenv("HUNTER_APP_MUTATION_TOKEN", raising=False)
+
+    assert admission.main() == 0
+    assert captured == {"token": "read-token", "mutation_token": "read-token"}
