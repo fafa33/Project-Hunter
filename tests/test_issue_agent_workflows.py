@@ -457,3 +457,14 @@ def test_executor_prepares_runner_owned_traversable_workroot(tmp_path: Path) -> 
     mode = stat.S_IMODE(info.st_mode)
     assert mode == 0o711, "isolated UID needs traversal, but must not write/list the trusted workroot"
     (destination / "workspace").mkdir()
+
+
+def test_authorize_serializes_shared_source_handling_prepare_commit() -> None:
+    """Two different Issues must not authorize against the same shared ledger head."""
+    job = load(LIFECYCLE)["jobs"]["authorize"]
+    assert job["concurrency"] == {
+        "group": "hunter-issue-agent-source-handling-authorize",
+        "cancel-in-progress": False,
+        "queue": "max",
+    }
+    assert "${{" not in job["concurrency"]["group"]

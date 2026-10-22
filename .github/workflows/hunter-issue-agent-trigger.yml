@@ -98,6 +98,11 @@ jobs:
         run: python scripts/hunter_issue_scope_admission.py
   authorize:
     needs: scope-admission
+    # Serialize shared signed Source Handling CAS writes across Issues.
+    concurrency:
+      group: hunter-issue-agent-source-handling-authorize
+      cancel-in-progress: false
+      queue: max
     name: authorize
     if: >-
       always() && (
