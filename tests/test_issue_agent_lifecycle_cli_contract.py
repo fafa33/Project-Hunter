@@ -260,3 +260,32 @@ def test_historical_assessment_only_runs_on_trusted_main_with_existing_signer() 
     assert "historical-assess --pr" in step["run"]
     assert "HUNTER_ISSUE_AGENT_STATE_SIGNING_KEY" in step["env"]
     assert "knowledge-ingest" in step["run"]
+
+
+def test_execute_advisory_is_visible_without_a_result(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str], tmp_path: Path
+) -> None:
+    monkeypatch.setattr(
+        lifecycle.roles, "run_executor", lambda **kwargs: lifecycle.roles.ExecutorOutcome(None, "PROVIDER_UNAVAILABLE")
+    )
+    monkeypatch.setattr(lifecycle.roles, "SudoIsolation", lambda _user: object())
+    monkeypatch.setattr(lifecycle, "_run_context", lambda: (1, 1, "c" * 40))
+    monkeypatch.setattr(lifecycle, "_secret", lambda name: "secret-value")
+    monkeypatch.setattr(lifecycle, "_ledger_access", lambda _c: object())
+    monkeypatch.setattr(lifecycle, "_x25519", lambda _n: object())
+    monkeypatch.setattr(lifecycle, "_remote", lambda _c: "remote")
+    monkeypatch.setattr(lifecycle.Path, "read_bytes", lambda self: b"handoff")
+    key = Ed25519PrivateKey.from_private_bytes(bytes(32)).public_key()
+    public_hex = key.public_bytes(Encoding.Raw, PublicFormat.Raw).hex()
+    monkeypatch.setenv("HUNTER_PROMPT_AUTOMATION_VERIFYING_KEY", "unset")
+    config = type("C", (), {"prompt_verifying_key": public_hex, "result_recipient": object()})()
+    args = lifecycle.parse_arguments(_execute_argv())
+    args.authorization_id = "hunter-issue-agent-authorization:" + "a" * 64
+    args.out = str(tmp_path / "result.sealed")
+    output_path = tmp_path / "github-output"
+    monkeypatch.setenv("GITHUB_OUTPUT", str(output_path))
+    assert lifecycle.cmd_execute(config, args) == 0
+    captured = capsys.readouterr().out
+    assert "executor advisory: PROVIDER_UNAVAILABLE" in captured
+    assert "sealed=false" in output_path.read_text()
+    assert not (tmp_path / "result.sealed").exists()
