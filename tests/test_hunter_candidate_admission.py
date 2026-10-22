@@ -311,7 +311,7 @@ def test_issue_616_policy_authorizes_automatic_ready_without_owner_comment(monke
         lambda *_: (_ for _ in ()).throw(AssertionError("must not request owner comments")),
     )
     called = []
-    monkeypatch.setattr(admission, "mark_ready", lambda _token, node: called.append(node) or True)
+    monkeypatch.setattr(admission, "mark_ready", lambda _token, node: (called.append(node), True)[1])
     assert admission.enforce_candidate_admission("fafa33/Project-Hunter", "token", 616, HEAD) == 0
     assert called == ["PR_test_node"]
 
