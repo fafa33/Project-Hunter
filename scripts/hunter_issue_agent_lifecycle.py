@@ -1297,6 +1297,9 @@ def cmd_execute(configuration: control.Configuration, arguments: argparse.Namesp
     )
     if outcome.sealed_result is not None:
         Path(arguments.out).write_bytes(outcome.sealed_result)
+    elif outcome.advisory_code:
+        # Emit only an allowlisted, non-secret diagnostic; never model stdout.
+        print(f"executor advisory: {outcome.advisory_code}")
     _output(
         advisory_code=outcome.advisory_code or "",
         sealed="true" if outcome.sealed_result else "false",
