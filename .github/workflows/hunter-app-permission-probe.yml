@@ -1,0 +1,25 @@
+name: Hunter App Permission Probe
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  probe:
+    runs-on: ubuntu-latest
+    timeout-minutes: 3
+    steps:
+      - name: Mint exact Candidate Admission permission set
+        uses: actions/create-github-app-token@v2
+        with:
+          app-id: ${{ vars.HUNTER_APP_ID }}
+          private-key: ${{ secrets.HUNTER_APP_PRIVATE_KEY }}
+          permission-pull-requests: write
+          permission-contents: read
+          permission-actions: read
+          permission-checks: read
+          permission-statuses: read
+      - name: Report successful mint without exposing token
+        run: echo "GitHub App installation accepted all five requested permissions."
