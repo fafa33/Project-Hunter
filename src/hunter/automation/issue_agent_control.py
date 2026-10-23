@@ -1001,7 +1001,13 @@ def _preflight(github: GitHub, configuration: Configuration, head_sha: str) -> t
     runs = [
         run
         for run in listing["workflow_runs"]
-        if isinstance(run, Mapping) and run.get("head_sha") == head_sha and run.get("head_branch") is not None
+        if (
+            isinstance(run, Mapping)
+            and run.get("head_sha") == head_sha
+            and run.get("event") == "push"
+            and run.get("head_branch") is not None
+            and run.get("run_attempt") == 1
+        )
     ]
     if not runs:
         return None, None
