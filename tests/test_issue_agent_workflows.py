@@ -54,7 +54,7 @@ DOMAIN_SECRETS = {
         "HUNTER_SOURCE_HANDLING_SIGNING_KEY",
         "HUNTER_PROMPT_AUTOMATION_SIGNING_KEY",
     },
-    EXECUTOR: {"HUNTER_ISSUE_AGENT_HANDOFF_KEY", "HUNTER_ISSUE_AGENT_EXECUTOR_MODEL_API_KEY"},
+    EXECUTOR: {"HUNTER_ISSUE_AGENT_HANDOFF_KEY", "HUNTER_ISSUE_AGENT_OPENCODE_API_KEY"},
     VALIDATOR: {"HUNTER_ISSUE_AGENT_RESULT_KEY"},
     PUBLISHER: {
         "HUNTER_ISSUE_AGENT_RESULT_KEY",
@@ -239,7 +239,7 @@ def test_secrets_never_cross_a_trust_domain() -> None:
     for job_id, job in jobs.items():
         assert job_secrets(job) <= DOMAIN_SECRETS[job.get("environment")], job_id
     model_holders = {
-        job_id for job_id, job in jobs.items() if "HUNTER_ISSUE_AGENT_EXECUTOR_MODEL_API_KEY" in job_secrets(job)
+        job_id for job_id, job in jobs.items() if "HUNTER_ISSUE_AGENT_OPENCODE_API_KEY" in job_secrets(job)
     }
     push_holders = {
         job_id for job_id, job in jobs.items() if "HUNTER_ISSUE_AGENT_PUBLISHER_PUSH_TOKEN" in job_secrets(job)
