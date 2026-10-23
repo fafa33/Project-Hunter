@@ -686,6 +686,8 @@ def completion_world(repos: dict[str, Any], signing_key: str, conclusion: str | 
                 "run_number": 5,
                 "head_sha": head,
                 "head_branch": BRANCH,
+                "event": "push",
+                "run_attempt": 1,
                 "status": "completed",
                 "conclusion": conclusion,
             }
@@ -704,6 +706,17 @@ def test_completed_requires_the_draft_pr_and_a_successful_exact_head_preflight(
     assert step(repos, github, role="reconcile").target_state == state.COMPLETED
     evidence = ledger_state(repos).evidence[state.COMPLETED]
     assert evidence["pull_request_head_sha"] == head and evidence["preflight_run_id"] == 77
+
+
+@pytest.mark.parametrize("tamper", [{"event": "workflow_dispatch"}, {"run_attempt": 2}, {"event": None}])
+def test_completion_refuses_untrusted_preflight_run_metadata(
+    repos: dict[str, Any], signing_key: str, tamper: dict[str, object]
+) -> None:
+    github, _ = completion_world(repos, signing_key, "success")
+    key = f"/repos/{rt.REPOSITORY}/actions/workflows/{control.PREFLIGHT_WORKFLOW_FILE}/runs"
+    github.routes[key]["workflow_runs"][0].update(tamper)
+    assert step(repos, github, role="reconcile").action == "noop"
+    assert ledger_state(repos).state == state.PUBLISHED
 
 
 def test_a_failed_preflight_fails_even_with_a_pr(repos: dict[str, Any], signing_key: str) -> None:
