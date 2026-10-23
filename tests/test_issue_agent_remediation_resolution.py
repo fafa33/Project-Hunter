@@ -93,6 +93,8 @@ class World:
                         {
                             "head_sha": self.head,
                             "head_branch": rr.BRANCH,
+                            "event": "push",
+                            "run_attempt": 1,
                             "status": "completed",
                             "conclusion": self.preflight,
                             "run_number": 7,
