@@ -30,16 +30,19 @@ jobs:
             exit 1
           fi
           sudo useradd --create-home --shell /usr/sbin/nologin hunter-untrusted
-          mkdir -p "$RUNNER_TEMP/opencode-auth-smoke"
-          chmod 755 "$RUNNER_TEMP/opencode-auth-smoke"
-          cd "$RUNNER_TEMP/opencode-auth-smoke"
+          # Use a private, untrusted-user-owned workdir with traversable parents.
+          # RUNNER_TEMP can have runner-only ancestors on hosted runners.
+          smoke_dir="$(mktemp -d /tmp/hunter-opencode-smoke.XXXXXXXX)"
+          chmod 700 "$smoke_dir"
+          sudo chown hunter-untrusted:hunter-untrusted "$smoke_dir"
+          cd "$smoke_dir"
           # Capture diagnostics privately; never upload or print provider output.
           diagnostic_file="$(mktemp)"
           chmod 600 "$diagnostic_file"
-          trap 'rm -f "$diagnostic_file"' EXIT
+          trap 'rm -f "$diagnostic_file"; sudo rm -rf -- "$smoke_dir"' EXIT
           set +e
           timeout 90s sudo -n --preserve-env=OPENCODE_API_KEY,MODEL -u hunter-untrusted \
-            /usr/bin/env HOME=/home/hunter-untrusted /opt/hunter/bin/opencode run \
+            /usr/bin/env HOME=/home/hunter-untrusted XDG_CONFIG_HOME=/home/hunter-untrusted/.config XDG_CACHE_HOME=/home/hunter-untrusted/.cache /opt/hunter/bin/opencode run \
             --model "$MODEL" 'Reply with exactly AUTH_OK' > "$diagnostic_file" 2>&1
           result=$?
           set -e
