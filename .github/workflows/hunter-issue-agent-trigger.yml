@@ -231,7 +231,7 @@ jobs:
         id: execute
         env:
           HUNTER_ISSUE_AGENT_HANDOFF_KEY: ${{ secrets.HUNTER_ISSUE_AGENT_HANDOFF_KEY }}
-          HUNTER_ISSUE_AGENT_EXECUTOR_MODEL_API_KEY: ${{ secrets.HUNTER_ISSUE_AGENT_EXECUTOR_MODEL_API_KEY }}
+          HUNTER_ISSUE_AGENT_EXECUTOR_MODEL_API_KEY: ${{ secrets.HUNTER_ISSUE_AGENT_OPENCODE_API_KEY }}
           ISSUE: ${{ needs.authorize.outputs.issue }}
           AUTHORIZATION_ID: ${{ needs.authorize.outputs.authorization_id }}
           MODEL: ${{ vars.HUNTER_ISSUE_AGENT_EXECUTOR_MODEL }}
