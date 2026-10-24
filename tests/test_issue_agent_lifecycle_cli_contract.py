@@ -97,6 +97,7 @@ def test_the_exact_execute_command_forwards_the_model_command_to_opencode_unchan
     arguments = lifecycle.parse_arguments(argv)
     tail = argv[argv.index("--model-argv") + 1 :]
     assert tail[:2] == ["/opt/hunter/bin/opencode", "run"] and tail[2] == "--model"
+    assert tail[-2:] == ["--agent", "build"], "the hosted model must use the coding agent, not a read-only default"
     assert arguments.model_argv == tuple(tail)
     # The lifecycle's own required options are still parsed as lifecycle options, not swallowed by the tail.
     assert (arguments.command, arguments.issue, arguments.model_key_name) == ("execute", 1, "placeholder-value")

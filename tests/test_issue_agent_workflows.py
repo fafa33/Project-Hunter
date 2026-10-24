@@ -468,3 +468,11 @@ def test_authorize_serializes_shared_source_handling_prepare_commit() -> None:
         "queue": "max",
     }
     assert "${{" not in job["concurrency"]["group"]
+
+
+def test_hosted_executor_selects_mutating_opencode_agent() -> None:
+    """A model may answer successfully without editing unless the coding agent is explicitly selected."""
+    job = load(LIFECYCLE)["jobs"]["execute"]
+    invocation = next(str(step["run"]) for step in steps(job) if step.get("id") == "execute")
+    assert '--model-argv /opt/hunter/bin/opencode run --model "$MODEL" --agent build' in invocation
+    assert "--auto" not in invocation and "--yolo" not in invocation
