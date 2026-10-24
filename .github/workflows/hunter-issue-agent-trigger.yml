@@ -241,7 +241,7 @@ jobs:
           --issue "$ISSUE" --authorization-id "$AUTHORIZATION_ID"
           --handoff "$(find "$RUNNER_TEMP/handoff" -type f -name handoff.sealed)"
           --out "$RUNNER_TEMP/result.sealed" --workroot /tmp/hunter-ia/execute
-          --model-key-name "$MODEL_KEY_NAME" --model-argv /opt/hunter/bin/opencode run --model "$MODEL"
+          --model-key-name "$MODEL_KEY_NAME" --model-argv /opt/hunter/bin/opencode run --model "$MODEL" --agent build
       - name: Upload the sealed result
         if: steps.execute.outputs.sealed == 'true'
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
