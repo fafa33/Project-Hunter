@@ -339,7 +339,12 @@ def test_unsigned_candidate_safety_keeps_exact_head_and_gates_without_publicatio
     monkeypatch.setattr(hunter_pre_push, "_run_git", git)
     monkeypatch.setattr(hunter_pre_push.os, "chdir", lambda _path: None)
     monkeypatch.setattr(hunter_pre_push, "_select_preflight_mode", lambda _head: hunter_pre_push.NORMAL_MODE)
-    monkeypatch.setattr(hunter_pre_push, "_run_push_safety_lane", lambda: calls.append("safety") or 0)
+
+    def successful_safety() -> int:
+        calls.append("safety")
+        return 0
+
+    monkeypatch.setattr(hunter_pre_push, "_run_push_safety_lane", successful_safety)
     monkeypatch.setattr(
         hunter_pre_push, "_validate_writer_provenance", lambda _head: pytest.fail("unsigned provenance")
     )
