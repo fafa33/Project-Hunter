@@ -326,6 +326,15 @@ class Topology:
             time.sleep(0.05)
         raise AssertionError(f"execution did not reach a terminal state: {self.ledger.entry(self.authorization_id)}")
 
+    def wait_workspace_cleanup(self) -> None:
+        """Wait for worker teardown, which follows durable ledger finalization."""
+        deadline = time.monotonic() + EXECUTION_TIMEOUT
+        while time.monotonic() < deadline:
+            if not self.workspace_root.exists() or not any(self.workspace_root.iterdir()):
+                return
+            time.sleep(0.05)
+        raise AssertionError("terminal execution left a workspace on disk")
+
     def status(self, authorization_id: str | None = None) -> tuple[int, dict[str, Any] | str]:
         code, body = self.webhook.get(f"/issue-agent/status/{authorization_id or self.authorization_id}")
         try:
@@ -465,7 +474,7 @@ def test_base_not_on_main_fails_closed_without_running_a_provider(topology: Any,
     assert entry.state == "FAILED"
     assert entry.failure_code == "BASE_NOT_ON_MAIN"
     assert not run.marker.exists()
-    assert not any(run.workspace_root.iterdir()), "a refused workspace must not be left on disk"
+    run.wait_workspace_cleanup()
     assert github.head(_expected_branch(run.document)) is None
     code, payload = run.status()
     assert code == 200
@@ -484,7 +493,7 @@ def test_foreign_remote_branch_is_never_taken_over(topology: Any, github: FakeGi
     assert entry.failure_code == "REMOTE_BRANCH_CONFLICT"
     assert github.head(branch) == github.main_head
     assert not run.marker.exists()
-    assert not any(run.workspace_root.iterdir()), "a refused workspace must not be left on disk"
+    run.wait_workspace_cleanup()
 
 
 def test_merging_main_into_the_authorization_branch_is_never_a_valid_candidate(
