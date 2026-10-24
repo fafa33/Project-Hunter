@@ -292,6 +292,11 @@ def test_the_model_runs_once_through_isolation_and_its_result_is_sealed(repos: d
     assert len(isolation.calls) == 1 and isolation.stopped == 1
     call = isolation.calls[0]
     assert call["stdin"] == PROMPT.encode() and call["secret"] == {"GROQ_API_KEY": SECRET}
+    assert call["public"]["XDG_CONFIG_HOME"] == str(Path(call["public"]["HOME"]) / ".config")
+    assert call["public"]["XDG_CACHE_HOME"] == str(Path(call["public"]["HOME"]) / ".cache")
+    assert call["public"]["XDG_DATA_HOME"] == str(Path(call["public"]["HOME"]) / ".local" / "share")
+    assert call["public"]["XDG_STATE_HOME"] == str(Path(call["public"]["HOME"]) / ".local" / "state")
+    assert call["public"]["HOME"] != str(Path.home())
     assert SECRET not in json.dumps(call["public"]) and SECRET.encode() not in outcome.sealed_result
     assert b"canary" not in outcome.sealed_result
 

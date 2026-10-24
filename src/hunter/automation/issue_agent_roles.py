@@ -403,7 +403,15 @@ def run_executor(
         status = isolation.run(
             config.model_argv,
             cwd=workspace,
-            public_env={**config.model_public_env, "HOME": str(home), "PWD": str(workspace)},
+            public_env={
+                **config.model_public_env,
+                "HOME": str(home),
+                "PWD": str(workspace),
+                "XDG_CONFIG_HOME": str(home / ".config"),
+                "XDG_CACHE_HOME": str(home / ".cache"),
+                "XDG_DATA_HOME": str(home / ".local" / "share"),
+                "XDG_STATE_HOME": str(home / ".local" / "state"),
+            },
             secret_env=config.model_secret_env,
             stdin=prompt,
             timeout=config.model_timeout_seconds,
