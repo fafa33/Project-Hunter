@@ -425,6 +425,38 @@ def _run_hgcc_contract_check(repository: str) -> subprocess.CompletedProcess[str
     )
 
 
+def enforce_credential_free_candidate_safety(lines: Iterable[str]) -> int:
+    """Check unsigned candidate content without treating it as an authorized push.
+
+    This entrypoint is selected only by the trusted validator invocation. It
+    retains exact-HEAD, clean-tree, immutable-base mode and deterministic
+    push-safety gates. Writer signatures, receipts and live GitHub contracts
+    belong to the signed publication/admission boundary, not an unsigned
+    credential-free candidate clone. It never grants push authority.
+    """
+    updates = _parse_updates(lines)
+    if not updates:
+        raise RuntimeError("candidate safety requires one exact branch update")
+    if len(updates) != 1 or not updates[0][2].startswith("refs/heads/"):
+        raise RuntimeError("candidate safety requires exactly one branch update")
+    repo_root = Path(_run_git("rev-parse", "--show-toplevel")).resolve()
+    os.chdir(repo_root)
+    head = _run_git("rev-parse", "HEAD")
+    _require_clean_tree()
+    _require_exact_head(updates, head)
+    if _select_preflight_mode(head) != NORMAL_MODE:
+        raise RuntimeError("candidate safety refuses tests-first-red mode")
+    result = _run_push_safety_lane()
+    if result != 0:
+        return result or 1
+    _require_clean_tree()
+    if _run_git("rev-parse", "HEAD") != head:
+        raise RuntimeError("candidate safety HEAD changed during validation")
+    _require_exact_head(updates, head)
+    print(f"[Hunter Candidate Safety] PASS: exact unsigned HEAD {head} passed deterministic safety gates")
+    return 0
+
+
 def enforce_pre_push(lines: Iterable[str]) -> int:
     updates = _parse_updates(lines)
     if not updates:

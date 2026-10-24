@@ -320,3 +320,56 @@ def test_pre_push_safety_lane_runs_aggregate_execution_and_reports_multiple_fail
     assert len([cmd for cmd in calls if cmd[0] != "git"]) == len(hunter_pr_preflight.PUSH_SAFETY_GATES)
     # Full repository Pytest was NOT executed in push safety
     assert not any("pytest" in cmd for cmd in calls)
+
+
+def test_unsigned_candidate_safety_keeps_exact_head_and_gates_without_publication_authority(
+    monkeypatch, tmp_path
+) -> None:
+    calls: list[str] = []
+
+    def git(*args: str) -> str:
+        if args == ("rev-parse", "--show-toplevel"):
+            return str(tmp_path)
+        if args == ("rev-parse", "HEAD"):
+            return HEAD_A
+        if args == ("status", "--porcelain=v1", "--untracked-files=normal"):
+            return ""
+        raise AssertionError(args)
+
+    monkeypatch.setattr(hunter_pre_push, "_run_git", git)
+    monkeypatch.setattr(hunter_pre_push.os, "chdir", lambda _path: None)
+    monkeypatch.setattr(hunter_pre_push, "_select_preflight_mode", lambda _head: hunter_pre_push.NORMAL_MODE)
+
+    def successful_safety() -> int:
+        calls.append("safety")
+        return 0
+
+    monkeypatch.setattr(hunter_pre_push, "_run_push_safety_lane", successful_safety)
+    monkeypatch.setattr(
+        hunter_pre_push, "_validate_writer_provenance", lambda _head: pytest.fail("unsigned provenance")
+    )
+    monkeypatch.setattr(hunter_pre_push, "_validate_receipt_freshness", lambda _head: pytest.fail("receipt"))
+    monkeypatch.setattr(hunter_pre_push, "_run_hgcc_contract_check", lambda _repo: pytest.fail("GitHub API"))
+    assert hunter_pre_push.enforce_credential_free_candidate_safety(_update()) == 0
+    assert calls == ["safety"]
+    with pytest.raises(RuntimeError, match="exact HEAD"):
+        hunter_pre_push.enforce_credential_free_candidate_safety(_update(HEAD_B))
+    with pytest.raises(RuntimeError, match="exactly one branch update"):
+        hunter_pre_push.enforce_credential_free_candidate_safety(_update() + _update())
+    monkeypatch.setattr(hunter_pre_push, "_select_preflight_mode", lambda _head: hunter_pre_push.TESTS_FIRST_RED_MODE)
+    with pytest.raises(RuntimeError, match="tests-first-red"):
+        hunter_pre_push.enforce_credential_free_candidate_safety(_update())
+
+
+def test_unsigned_candidate_safety_fails_closed_on_gate_failure(monkeypatch, tmp_path) -> None:
+    monkeypatch.setattr(
+        hunter_pre_push,
+        "_run_git",
+        lambda *a: (
+            str(tmp_path) if a == ("rev-parse", "--show-toplevel") else HEAD_A if a == ("rev-parse", "HEAD") else ""
+        ),
+    )
+    monkeypatch.setattr(hunter_pre_push.os, "chdir", lambda _path: None)
+    monkeypatch.setattr(hunter_pre_push, "_select_preflight_mode", lambda _head: hunter_pre_push.NORMAL_MODE)
+    monkeypatch.setattr(hunter_pre_push, "_run_push_safety_lane", lambda: 7)
+    assert hunter_pre_push.enforce_credential_free_candidate_safety(_update()) == 7
