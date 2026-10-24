@@ -791,18 +791,20 @@ def _trusted_base_ref(repo: Path) -> str:
 def _run_pre_push_safety(
     repo: Path, *, validated: ValidatedReplacementResult, head: str, push_url: str, isolation_user: str
 ) -> None:
-    """Run the trusted pre-push hook on exact candidate content as the untrusted user.
+    """Run exact-tree safety gates as the isolated user, without publication authority.
 
-    The hook executes candidate-controlled repository scripts. It runs in a
-    standalone clone owned by the isolation user, with an explicit allowlist
-    environment, so no credential of the validating job -- in its own
-    environment or readable from any trusted process -- is available to it.
+    The candidate-controlled script runs only in a credential-free clone. The
+    ordinary pre-push hook still enforces signed provenance and GitHub contracts
+    on real writers; an unsigned safety commit cannot satisfy those controls.
     """
     user = require_isolation_user(isolation_user)
-    hook = _git_plumbing(repo, "show", f"{validated.base_sha}:.githooks/pre-push").encode()
+    # The trusted base supplies the safety entrypoint, not a candidate-written bypass.
+    safety_script = _git_plumbing(repo, "show", f"{validated.base_sha}:scripts/hunter_pre_push.py").encode()
+    if b"def enforce_credential_free_candidate_safety(" not in safety_script:
+        raise ReplacementExecutorError("trusted base has no credential-free candidate safety entrypoint")
     ref = f"refs/hunter/candidate-safety/{head}"
     root = new_isolation_root("hunter-candidate-safety-")
-    candidate, home, hook_path = root / "candidate", root / "home", root / "pre-push"
+    candidate, home = root / "candidate", root / "home"
     try:
         _git_plumbing(repo, "update-ref", ref, head)
         _git_plumbing(
@@ -818,15 +820,18 @@ def _run_pre_push_safety(
         )  # fmt: skip
         _git_plumbing(candidate, "-c", "core.hooksPath=/dev/null", "checkout", "--quiet", "--detach", head)
         home.mkdir(mode=0o700)
-        hook_path.write_bytes(hook)
-        hook_path.chmod(0o755)
         run_privileged("chown", "-R", user, str(candidate), str(home))
         line = f"refs/heads/{validated.branch} {head} refs/heads/{validated.branch} {'0' * 40}\n"
         completed = subprocess.run(
             isolated_command(
                 user,
                 untrusted_environment(os.environ, home=home, pythonpath=candidate / "src"),
-                (str(hook_path), "origin", push_url),
+                (
+                    "python",
+                    "-c",
+                    "import sys; sys.path.insert(0, 'scripts'); "
+                    "import hunter_pre_push; sys.exit(hunter_pre_push.enforce_credential_free_candidate_safety(sys.stdin))",
+                ),
             ),
             cwd=candidate,
             env=dict(SUDO_ENVIRONMENT),

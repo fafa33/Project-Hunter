@@ -299,7 +299,7 @@ def _capture_isolated_hook(monkeypatch, tmp_path):
     calls = []
 
     def fake_git(_repo, *args, **_kwargs):
-        return "#!/bin/sh\nexit 0\n" if args[0] == "show" else ""
+        return "def enforce_credential_free_candidate_safety(lines):\n    return 0\n" if args[0] == "show" else ""
 
     class Done:
         returncode = 0
@@ -350,7 +350,7 @@ def test_candidate_pre_push_receives_only_an_explicit_allowlist_as_the_isolation
         push_url="https://github.com/fafa33/Project-Hunter.git",
         isolation_user="hunter-untrusted",
     )
-    hook = [argv for argv, _env in calls if any(part.endswith("/pre-push") for part in argv)]
+    hook = [argv for argv, _env in calls if "enforce_credential_free_candidate_safety" in " ".join(argv)]
     assert len(hook) == 1
     argv = hook[0]
     assert argv[:7] == ("sudo", "-n", "-u", "hunter-untrusted", "--", "/usr/bin/env", "-i")
@@ -543,9 +543,11 @@ def test_candidate_clone_of_a_pinned_detached_checkout_still_has_the_governed_ba
     git = lambda *a: subprocess.run(  # noqa: E731
         ("git", *a), cwd=repo, env=env, check=True, capture_output=True, text=True
     ).stdout.strip()
-    (repo / ".githooks").mkdir()
-    (repo / ".githooks" / "pre-push").write_text("#!/bin/sh\nexit 0\n")
-    git("add", ".githooks/pre-push")
+    (repo / "scripts").mkdir()
+    (repo / "scripts" / "hunter_pre_push.py").write_text(
+        "def enforce_credential_free_candidate_safety(lines):\n    return 0\n"
+    )
+    git("add", "scripts/hunter_pre_push.py")
     git("commit", "-q", "-m", "trusted hook")
     base = git("rev-parse", "HEAD")
     # Shape of actions/checkout at an exact SHA with fetch-depth 0: detached HEAD,
