@@ -53,7 +53,7 @@ from hunter.evidence_intelligence.smart_prompt_routing import PromptAutomationVe
 from hunter.task_scope import TaskScopeContract
 
 RECEIPT_SCHEMA_VERSION: Final = "hunter-issue-agent-validation-receipt-v2"
-MODEL_TIMEOUT_SECONDS: Final = 50 * 60
+MODEL_TIMEOUT_SECONDS: Final = 12 * 60
 _SHA40 = re.compile(r"[0-9a-f]{40}")
 
 

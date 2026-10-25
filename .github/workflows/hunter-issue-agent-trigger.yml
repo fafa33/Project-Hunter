@@ -195,7 +195,7 @@ jobs:
     name: execute
     needs: authorize
     runs-on: ubuntu-latest
-    timeout-minutes: 60
+    timeout-minutes: 20
     environment: hunter-issue-agent-executor
     permissions: {}
     outputs:
@@ -430,11 +430,12 @@ jobs:
 
   publish:
     name: publish
-    needs: [authorize, record-validation, resume-bind]
+    needs: [authorize, record-validation, validate, resume-bind]
     if: >-
       always() && (
         ((github.event_name == 'issues' || needs.authorize.outputs.remediation == 'true')
-          && needs.record-validation.result == 'success')
+          && needs.record-validation.result == 'success'
+          && needs.validate.result == 'success')
         || (github.event_name == 'workflow_dispatch' && inputs.stage == 'publication'
             && needs.resume-bind.result == 'success')
       )
