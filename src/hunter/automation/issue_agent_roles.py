@@ -177,6 +177,10 @@ class SudoIsolation:
                 check=False,
                 timeout=timeout,
             )
+            # Never disclose model text. A zero exit without edits must still be
+            # distinguishable from a model that emitted no response at all.
+            stdout.seek(0, os.SEEK_END)
+            stdout_present = stdout.tell() > 0
             stderr.seek(0)
             # Closed-vocabulary, non-content telemetry only. No excerpts or
             # user-controlled strings cross the isolation boundary into logs.
@@ -193,7 +197,8 @@ class SudoIsolation:
             reason = next((code for marker, code in categories if marker in sample), "UNCLASSIFIED")
             print(
                 f"isolated model diagnostic: exit={'ZERO' if completed.returncode == 0 else 'NONZERO'} "
-                f"stderr_category={reason} stderr_present={bool(sample)}"
+                f"stderr_category={reason} stderr_present={bool(sample)} "
+                f"stdout_present={stdout_present}"
             )
         return completed.returncode
 

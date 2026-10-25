@@ -804,4 +804,5 @@ def test_isolation_diagnostic_classifies_without_leaking_untrusted_output(
     diagnostic = capsys.readouterr().out
     assert "stderr_category=PERMISSION" in diagnostic
     assert "exit=ZERO" in diagnostic
+    assert "stdout_present=True" in diagnostic
     assert private_text not in diagnostic
