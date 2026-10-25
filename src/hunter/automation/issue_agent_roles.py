@@ -397,11 +397,27 @@ def run_executor(
         remediation_branch=bound["execution_branch"] if bound.get("remediation") is not None else None,
     )
     home.mkdir(mode=0o700)
+    model_argv = config.model_argv
+    model_stdin = prompt
+    # OpenCode 1.18.30 `run [message..]` does not consume stdin as a task.
+    # Keep the signed prompt out of process argv and sudo logs: attach it as a
+    # private file, with only a constant, non-sensitive positional instruction.
+    if len(model_argv) >= 2 and Path(model_argv[0]).name == "opencode" and model_argv[1] == "run":
+        prompt_path = home / "hunter-task.txt"
+        prompt_path.write_bytes(prompt)
+        prompt_path.chmod(0o600)
+        model_argv = (
+            *model_argv,
+            "Execute the task in the attached file. Make the required changes in this workspace.",
+            "--file",
+            str(prompt_path),
+        )
+        model_stdin = b""
     isolation.prepare(workspace, home)
     advisory: str | None = None
     try:
         status = isolation.run(
-            config.model_argv,
+            model_argv,
             cwd=workspace,
             public_env={
                 **config.model_public_env,
@@ -413,7 +429,7 @@ def run_executor(
                 "XDG_STATE_HOME": str(home / ".local" / "state"),
             },
             secret_env=config.model_secret_env,
-            stdin=prompt,
+            stdin=model_stdin,
             timeout=config.model_timeout_seconds,
         )
         if status != 0:
