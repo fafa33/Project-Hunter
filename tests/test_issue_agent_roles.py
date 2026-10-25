@@ -659,6 +659,11 @@ def test_the_model_secret_crosses_the_uid_boundary_only_through_the_launcher_env
     assert kwargs["stdout"] is subprocess.DEVNULL and kwargs["stderr"] is subprocess.DEVNULL
 
 
+def test_model_budget_is_bounded_below_hosted_job_timeout() -> None:
+    assert roles.MODEL_TIMEOUT_SECONDS == 12 * 60
+    assert roles.MODEL_TIMEOUT_SECONDS < 20 * 60
+
+
 def test_a_secret_free_launch_inherits_nothing(sudo: tuple[roles.SudoIsolation, _Launch], tmp_path: Path) -> None:
     isolation, launch = sudo
     isolation.run(("true",), cwd=tmp_path, public_env={"LANG": "C"}, secret_env={}, stdin=b"", timeout=1.0)
