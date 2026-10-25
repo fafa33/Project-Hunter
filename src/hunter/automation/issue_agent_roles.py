@@ -471,7 +471,11 @@ def run_executor(
             base_sha=bound["base_sha"],
         )
     except RoleRefused as refusal:
-        return ExecutorOutcome(None, refusal.code if refusal.code in state.ADVISORY_CODES else "NO_CHANGES")
+        # Keep the original closed-vocabulary failure where supported. Never
+        # disguise a collector rejection as a model that made no changes.
+        code = refusal.code if refusal.code in state.ADVISORY_CODES else "EXECUTOR_RESULT_REJECTED"
+        print(f"executor collector advisory: {code}")
+        return ExecutorOutcome(None, code)
     if result_carries_secret(document, list(config.model_secret_env.values())):
         return ExecutorOutcome(None, "SECRET_IN_RESULT")  # never sealed, never uploaded
     binding = TransportBinding(

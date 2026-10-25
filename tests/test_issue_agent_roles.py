@@ -422,6 +422,23 @@ def test_model_failures_are_advisory_never_retried_and_always_stopped(
     assert len(isolation.calls) == 1 and isolation.stopped == 1
 
 
+def test_collector_rejection_is_not_misreported_as_no_changes(
+    repos: dict[str, Any], monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    ledger, envelope = authorize(repos)
+
+    def reject(*args: Any, **kwargs: Any) -> bytes:
+        raise roles.RoleRefused("UNRECOGNIZED_COLLECTOR_FAILURE", "sensitive untrusted detail")
+
+    monkeypatch.setattr(roles, "collect_result", reject)
+    isolation = RecordingIsolation("true")
+    outcome = execute(repos, ledger, envelope, isolation)
+    assert outcome.sealed_result is None
+    assert outcome.advisory_code == "EXECUTOR_RESULT_REJECTED"
+    assert "sensitive untrusted detail" not in capsys.readouterr().out
+    assert isolation.stopped == 1
+
+
 @pytest.mark.parametrize(
     "leak",
     [
