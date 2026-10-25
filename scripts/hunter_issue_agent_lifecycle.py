@@ -204,6 +204,10 @@ def cmd_step(configuration: control.Configuration, arguments: argparse.Namespace
                 executor_advisory_code=arguments.advisory or None,
             )
             print(f"issue {issue}: {decision.action} {decision.target_state or decision.code or ''}".rstrip())
+            if arguments.role == "bind":
+                # Job success does not imply a bound result. Only the signed
+                # transition permits the downstream validator to start.
+                _output(result_bound="true" if decision.target_state == state.RESULT_BOUND else "false")
             if decision.target_state == state.VALIDATED and job == "record-validation":
                 _record_proven_classification(configuration, github, writer, issue)
         except control.FactsUnavailable as error:

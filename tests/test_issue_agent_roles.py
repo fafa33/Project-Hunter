@@ -734,7 +734,7 @@ def test_the_model_secret_crosses_the_uid_boundary_only_through_the_launcher_env
     assert SECRET not in " ".join(argv)
     assert kwargs["env"] == {**core.SUDO_ENVIRONMENT, "GROQ_API_KEY": SECRET}
     assert kwargs["input"] == b"prompt" and kwargs["timeout"] == 12.0 and kwargs["cwd"] == tmp_path
-    assert kwargs["stdout"] is subprocess.DEVNULL and kwargs["stderr"] is subprocess.DEVNULL
+    assert kwargs["stdout"] is not subprocess.DEVNULL and kwargs["stderr"] is not subprocess.DEVNULL
 
 
 def test_model_budget_is_bounded_below_hosted_job_timeout() -> None:
@@ -767,3 +767,24 @@ def test_isolation_hands_over_the_workspace_and_kills_every_leftover(
 def test_isolation_refuses_root_or_an_invalid_user(user: str) -> None:
     with pytest.raises(core.ReplacementExecutorError):
         roles.SudoIsolation(user)
+
+
+def test_isolation_diagnostic_classifies_without_leaking_untrusted_output(
+    sudo: tuple[roles.SudoIsolation, _Launch], tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    isolation, launch = sudo
+    private_text = "SENSITIVE_PROMPT_AND_KEY"
+
+    def run_with_private_output(argv: Sequence[str], **kwargs: Any) -> Any:
+        kwargs["stderr"].write(f"permission denied {private_text}".encode())
+        kwargs["stdout"].write(private_text.encode())
+        return subprocess.CompletedProcess(argv, 0)
+
+    launch.calls.clear()
+    with pytest.MonkeyPatch.context() as patch:
+        patch.setattr(roles.subprocess, "run", run_with_private_output)
+        assert isolation.run(("opencode", "run"), cwd=tmp_path, public_env={}, secret_env={}, stdin=b"", timeout=1) == 0
+    diagnostic = capsys.readouterr().out
+    assert "stderr_category=PERMISSION" in diagnostic
+    assert "exit=ZERO" in diagnostic
+    assert private_text not in diagnostic

@@ -31,6 +31,7 @@ import json
 import os
 import re
 import subprocess
+import tempfile
 import urllib.parse
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
@@ -163,16 +164,37 @@ class SudoIsolation:
             command, launcher = core.isolated_secret_launch(self.user, public_env, secret_env, argv)
         else:
             command, launcher = core.isolated_command(self.user, public_env, argv), dict(core.SUDO_ENVIRONMENT)
-        completed = subprocess.run(  # noqa: S603 - fixed launcher, closed argv
-            command,
-            cwd=cwd,
-            env=launcher,
-            input=stdin,
-            stdout=subprocess.DEVNULL,
-            stderr=subprocess.DEVNULL,
-            check=False,
-            timeout=timeout,
-        )
+        # Capture only in private, short-lived files. Never print untrusted model
+        # output: it may echo signed instructions, secrets, or repository data.
+        with tempfile.TemporaryFile() as stdout, tempfile.TemporaryFile() as stderr:
+            completed = subprocess.run(  # noqa: S603 - fixed launcher, closed argv
+                command,
+                cwd=cwd,
+                env=launcher,
+                input=stdin,
+                stdout=stdout,
+                stderr=stderr,
+                check=False,
+                timeout=timeout,
+            )
+            stderr.seek(0)
+            # Closed-vocabulary, non-content telemetry only. No excerpts or
+            # user-controlled strings cross the isolation boundary into logs.
+            sample = stderr.read(65536).lower()
+            categories = (
+                (b"permission denied", "PERMISSION"),
+                (b"eacces", "PERMISSION"),
+                (b"rate limit", "RATE_LIMIT"),
+                (b"unauthorized", "AUTHENTICATION"),
+                (b"connection refused", "NETWORK"),
+                (b"network unreachable", "NETWORK"),
+                (b"not found", "NOT_FOUND"),
+            )
+            reason = next((code for marker, code in categories if marker in sample), "UNCLASSIFIED")
+            print(
+                f"isolated model diagnostic: exit={'ZERO' if completed.returncode == 0 else 'NONZERO'} "
+                f"stderr_category={reason} stderr_present={bool(sample)}"
+            )
         return completed.returncode
 
     def prepare(self, *paths: Path) -> None:
