@@ -1,0 +1,57 @@
+name: Hunter / Issue Agent OpenCode Diagnostic
+
+on:
+  workflow_dispatch:
+
+permissions: {}
+
+jobs:
+  probe:
+    if: github.ref == 'refs/heads/main' && github.actor == github.repository_owner
+    runs-on: ubuntu-latest
+    timeout-minutes: 8
+    environment: hunter-issue-agent-executor
+    steps:
+      - name: Checkout trusted main
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Install pinned OpenCode
+        run: sudo python3 scripts/install_opencode_runtime.py --destination /opt/hunter/bin/opencode
+      - name: Create dedicated untrusted principal
+        run: |
+          sudo useradd --create-home --shell /usr/sbin/nologin hunter-untrusted
+          sudo install -d -m 0700 -o hunter-untrusted -g hunter-untrusted "$RUNNER_TEMP/probe"
+      - name: Run bounded diagnostic with hosted provider
+        env:
+          OPENCODE_API_KEY: ${{ secrets.HUNTER_ISSUE_AGENT_OPENCODE_API_KEY }}
+          MODEL: ${{ vars.HUNTER_ISSUE_AGENT_EXECUTOR_MODEL }}
+          PROBE_DIR: ${{ runner.temp }}/probe
+        run: |
+          set -euo pipefail
+          test -n "$OPENCODE_API_KEY" && test -n "$MODEL"
+          printf 'before\n' | sudo tee "$PROBE_DIR/probe.txt" >/dev/null
+          printf 'Replace before with after in probe.txt. Do not modify any other file.\n' | sudo tee "$PROBE_DIR/task.txt" >/dev/null
+          sudo chown hunter-untrusted:hunter-untrusted "$PROBE_DIR/probe.txt" "$PROBE_DIR/task.txt"
+          sudo chmod 0600 "$PROBE_DIR/task.txt"
+          # Secret travels through sudo environment, never argv. Output stays private.
+          set +e
+          timeout 240 sudo -n --preserve-env=OPENCODE_API_KEY -u hunter-untrusted -- /usr/bin/env \
+            HOME=/home/hunter-untrusted PWD="$PROBE_DIR" \
+            /opt/hunter/bin/opencode run --dir "$PROBE_DIR" --model "$MODEL" --agent build \
+            'Execute the task in the attached file. Make the required changes in this workspace.' \
+            --file "$PROBE_DIR/task.txt" > "$RUNNER_TEMP/probe-out" 2> "$RUNNER_TEMP/probe-err"
+          rc=$?
+          set -e
+          PROBE_EXIT="$rc" python3 - <<'PYCODE'
+          import os
+          from pathlib import Path
+          p=Path(os.environ['PROBE_DIR'])
+          data=Path(os.environ['RUNNER_TEMP'],'probe-err').read_bytes()[:65536].lower()
+          classification='PERMISSION' if b'permission denied' in data else 'AUTHENTICATION' if b'unauthorized' in data else 'RATE_LIMIT' if b'rate limit' in data else 'NETWORK' if b'connection refused' in data else 'UNCLASSIFIED'
+          changed=(p/'probe.txt').read_bytes()==b'after\n'
+          print(f"HOSTED_PROBE exit_zero={os.environ['PROBE_EXIT']=='0'} edited={changed} stderr_category={classification} stderr_present={bool(data)}")
+          if os.environ['PROBE_EXIT']!='0' or not changed:
+              raise SystemExit('Hosted OpenCode probe did not produce the expected edit')
+          PYCODE
+          rm -f "$RUNNER_TEMP/probe-out" "$RUNNER_TEMP/probe-err"
