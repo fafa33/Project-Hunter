@@ -291,7 +291,8 @@ def test_the_model_runs_once_through_isolation_and_its_result_is_sealed(repos: d
     assert outcome.advisory_code is None and outcome.sealed_result
     assert len(isolation.calls) == 1 and isolation.stopped == 1
     call = isolation.calls[0]
-    assert call["stdin"] == PROMPT.encode() and call["secret"] == {"GROQ_API_KEY": SECRET}
+    assert call["stdin"] == b"" and call["secret"] == {"GROQ_API_KEY": SECRET}
+    assert Path(call["argv"][-1]).read_bytes() == PROMPT.encode()
     assert call["public"]["XDG_CONFIG_HOME"] == str(Path(call["public"]["HOME"]) / ".config")
     assert call["public"]["XDG_CACHE_HOME"] == str(Path(call["public"]["HOME"]) / ".cache")
     assert call["public"]["XDG_DATA_HOME"] == str(Path(call["public"]["HOME"]) / ".local" / "share")
@@ -299,6 +300,83 @@ def test_the_model_runs_once_through_isolation_and_its_result_is_sealed(repos: d
     assert call["public"]["HOME"] != str(Path.home())
     assert SECRET not in json.dumps(call["public"]) and SECRET.encode() not in outcome.sealed_result
     assert b"canary" not in outcome.sealed_result
+
+
+def test_real_subprocess_receives_prompt_and_writes_candidate_file(repos: dict[str, Any]) -> None:
+    """Exercise real subprocess stdin, workspace write, and sealed result collection."""
+    ledger, envelope = authorize(repos)
+
+    class RealSubprocessIsolation(RecordingIsolation):
+        def run(
+            self,
+            argv: Sequence[str],
+            *,
+            cwd: Path,
+            public_env: Mapping[str, str],
+            secret_env: Mapping[str, str],
+            stdin: bytes,
+            timeout: float,
+        ) -> int:
+            self.calls.append(
+                {"argv": tuple(argv), "public": dict(public_env), "secret": dict(secret_env), "stdin": stdin}
+            )
+            program = (
+                "import pathlib,sys; p=pathlib.Path(sys.argv[1]).read_bytes(); "
+                "assert b'ISSUE_AGENT_CANARY.md' in p; "
+                "d=pathlib.Path('docs'); d.mkdir(exist_ok=True); "
+                "(d/'ISSUE_AGENT_CANARY.md').write_text('canary\\n')"
+            )
+            result = subprocess.run(
+                ["python3", "-c", program, argv[-1]],
+                cwd=cwd,
+                input=stdin,
+                capture_output=True,
+                timeout=timeout,
+                check=False,
+            )
+            assert result.returncode == 0, result.stderr
+            return result.returncode
+
+    isolation = RealSubprocessIsolation()
+    outcome = execute(repos, ledger, envelope, isolation)
+    assert outcome.advisory_code is None and outcome.sealed_result is not None
+    assert isolation.calls[0]["stdin"] == b""
+    assert Path(isolation.calls[0]["argv"][-1]).read_bytes() == PROMPT.encode()
+    assert isolation.stopped == 1
+
+
+def test_opencode_receives_signed_prompt_via_private_attachment_not_argv(repos: dict[str, Any]) -> None:
+    ledger, envelope = authorize(repos)
+    isolation = RecordingIsolation(CANARY)
+    config = executor_config(repos)
+    config = roles.ExecutorConfig(
+        remote=config.remote,
+        model_argv=("/opt/hunter/bin/opencode", "run", "--model", "opencode/big-pickle", "--agent", "build"),
+        model_public_env=config.model_public_env,
+        model_secret_env=config.model_secret_env,
+        handoff_key=config.handoff_key,
+        result_recipient=config.result_recipient,
+        prompt_verifier=config.prompt_verifier,
+    )
+    outcome = roles.run_executor(
+        issue=ISSUE,
+        authorization_id=AUTH,
+        context=roles.RoleContext(100, 1),
+        ledger=ledger.access,
+        handoff_envelope=envelope,
+        config=config,
+        isolation=isolation,
+        workroot=repos["tmp"] / "run-opencode",
+    )
+    assert outcome.advisory_code is None and outcome.sealed_result is not None
+    call = isolation.calls[0]
+    assert call["stdin"] == b""
+    assert PROMPT not in " ".join(call["argv"])
+    assert call["argv"][-2] == "--file"
+    path = Path(call["argv"][-1])
+    assert path.read_bytes() == PROMPT.encode()
+    assert path.stat().st_mode & 0o777 == 0o600
+    assert "Execute the task" in call["argv"][-3]
 
 
 @pytest.mark.parametrize("context", [roles.RoleContext(100, 2), roles.RoleContext(999, 1)])
