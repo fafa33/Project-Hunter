@@ -376,7 +376,9 @@ def test_opencode_receives_signed_prompt_via_private_attachment_not_argv(repos: 
     path = Path(call["argv"][-1])
     assert path.read_bytes() == PROMPT.encode()
     assert path.stat().st_mode & 0o777 == 0o600
-    assert "Execute the task" in call["argv"][-3]
+    assert "Implement the signed task" in call["argv"][-3]
+    assert "Do not merely explain a plan" in call["argv"][-3]
+    assert "do not fabricate edits" in call["argv"][-3]
 
 
 @pytest.mark.parametrize("context", [roles.RoleContext(100, 2), roles.RoleContext(999, 1)])

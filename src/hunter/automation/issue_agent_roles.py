@@ -435,7 +435,13 @@ def run_executor(
         prompt_path.chmod(0o600)
         model_argv = (
             *model_argv,
-            "Execute the task in the attached file. Make the required changes in this workspace.",
+            (
+                "Implement the signed task in the attached file by editing actual repository files "
+                "in this workspace. Respect its allowed and prohibited paths. "
+                "Do not merely explain a plan or claim completion: inspect the relevant files, "
+                "make the smallest correct code/test changes, and run focused checks. "
+                "If the task cannot be implemented within the authorized scope, do not fabricate edits."
+            ),
             "--file",
             str(prompt_path),
         )
