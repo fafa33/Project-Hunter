@@ -16,49 +16,65 @@ jobs:
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
-      - name: Install pinned OpenCode
-        run: sudo python3 scripts/install_opencode_runtime.py --destination /opt/hunter/bin/opencode
+      - name: Set up Python
+        uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6.3.0
+        with:
+          python-version: "3.11.13"
+      - name: Install pinned runtime and model client
+        run: |
+          set -euo pipefail
+          python -m pip install --only-binary ':all:' -c requirements/ci-constraints.txt .
+          sudo python scripts/install_opencode_runtime.py --destination /opt/hunter/bin/opencode
       - name: Create dedicated untrusted principal
         run: |
           sudo useradd --create-home --shell /usr/sbin/nologin hunter-untrusted
-          sudo install -d -m 0700 -o hunter-untrusted -g hunter-untrusted "$RUNNER_TEMP/probe"
-      - name: Run bounded diagnostic with hosted provider
+          sudo install -d -m 0711 /tmp/hunter-ia
+          sudo install -d -m 0711 -o "$(id -u)" -g "$(id -g)" /tmp/hunter-ia/execute
+      - name: Run bounded diagnostic via production isolation launcher
         env:
-          OPENCODE_API_KEY: ${{ secrets.HUNTER_ISSUE_AGENT_OPENCODE_API_KEY }}
+          HUNTER_ISSUE_AGENT_EXECUTOR_MODEL_API_KEY: ${{ secrets.HUNTER_ISSUE_AGENT_OPENCODE_API_KEY }}
           MODEL: ${{ vars.HUNTER_ISSUE_AGENT_EXECUTOR_MODEL }}
-          PROBE_DIR: ${{ runner.temp }}/probe
+          MODEL_KEY_NAME: ${{ vars.HUNTER_ISSUE_AGENT_EXECUTOR_MODEL_KEY_NAME }}
         run: |
-          set -euo pipefail
-          test -n "$OPENCODE_API_KEY" && test -n "$MODEL"
-          printf 'before\n' | sudo tee "$PROBE_DIR/probe.txt" >/dev/null
-          printf 'Replace before with after in probe.txt. Do not modify any other file.\n' | sudo tee "$PROBE_DIR/task.txt" >/dev/null
-          sudo chown hunter-untrusted:hunter-untrusted "$PROBE_DIR/probe.txt" "$PROBE_DIR/task.txt"
-          sudo chmod 0600 "$PROBE_DIR/task.txt"
-          # Secret travels through sudo environment, never argv. Output stays private.
-          set +e
-          timeout 240 sudo -n --preserve-env=OPENCODE_API_KEY -u hunter-untrusted -- /usr/bin/env \
-            HOME=/home/hunter-untrusted PWD="$PROBE_DIR" \
-            /opt/hunter/bin/opencode run --dir "$PROBE_DIR" --model "$MODEL" --agent build \
-            'Execute the task in the attached file. Make the required changes in this workspace.' \
-            --file "$PROBE_DIR/task.txt" > "$RUNNER_TEMP/probe-out" 2> "$RUNNER_TEMP/probe-err"
-          rc=$?
-          set -e
-          PROBE_EXIT="$rc" python3 - <<'PYCODE'
+          python - <<'PYCODE'
           import os
           from pathlib import Path
-          p=Path(os.environ['PROBE_DIR'])
-          data=Path(os.environ['RUNNER_TEMP'],'probe-err').read_bytes()[:65536].lower()
-          classification='PERMISSION' if b'permission denied' in data else 'AUTHENTICATION' if b'unauthorized' in data else 'RATE_LIMIT' if b'rate limit' in data else 'NETWORK' if b'connection refused' in data else 'UNCLASSIFIED'
-          # The probe workspace is owned by the isolated UID (0700).
-          # Inspect the result as that UID; the trusted runner must not
-          # weaken workspace permissions or read untrusted content directly.
-          import subprocess
-          check=subprocess.run(['sudo','-n','-u','hunter-untrusted','--','/usr/bin/grep',
-                                '-qx','after',str(p/'probe.txt')],check=False,
-                                stdout=subprocess.DEVNULL,stderr=subprocess.DEVNULL)
-          changed=check.returncode==0
-          print(f"HOSTED_PROBE exit_zero={os.environ['PROBE_EXIT']=='0'} edited={changed} stderr_category={classification} stderr_present={bool(data)}")
-          if os.environ['PROBE_EXIT']!='0' or not changed:
+          from hunter.automation.issue_agent_roles import SudoIsolation
+
+          from hunter.automation import issue_agent_replacement_executor as core
+
+          root = Path('/tmp/hunter-ia/execute')
+          workspace = root / 'workspace'
+          home = root / 'home'
+          workspace.mkdir()
+          home.mkdir(mode=0o700)
+          (workspace / 'probe.txt').write_text('before\n')
+          task = home / 'hunter-task.txt'
+          task.write_text('Replace before with after in probe.txt. Do not modify any other file.\n')
+          task.chmod(0o600)
+          isolation = SudoIsolation('hunter-untrusted')
+          isolation.prepare(workspace, home)
+          key_name = os.environ['MODEL_KEY_NAME']
+          if not key_name or not os.environ['MODEL']:
+              raise SystemExit('Missing configured executor model or key name')
+          argv = ('/opt/hunter/bin/opencode', 'run', '--model', os.environ['MODEL'], '--agent', 'build',
+                  'Execute the task in the attached file. Make the required changes in this workspace.',
+                  '--file', str(task))
+          try:
+              rc = isolation.run(argv, cwd=workspace, public_env={
+                  'HOME': str(home), 'PWD': str(workspace),
+                  'XDG_CONFIG_HOME': str(home / '.config'),
+                  'XDG_CACHE_HOME': str(home / '.cache'),
+                  'XDG_DATA_HOME': str(home / '.local' / 'share'),
+                  'XDG_STATE_HOME': str(home / '.local' / 'state'),
+              }, secret_env={key_name: os.environ['HUNTER_ISSUE_AGENT_EXECUTOR_MODEL_API_KEY']},
+                  stdin=b'', timeout=240)
+          finally:
+              isolation.stop()
+          # Result is trusted-runner-readable after the isolated process exits,
+          # as in the production executor; no model text is printed.
+          changed = (workspace / 'probe.txt').read_bytes() == b'after\n'
+          print(f'HOSTED_PROBE exit_zero={rc == 0} edited={changed}')
+          if rc != 0 or not changed:
               raise SystemExit('Hosted OpenCode probe did not produce the expected edit')
           PYCODE
-          rm -f "$RUNNER_TEMP/probe-out" "$RUNNER_TEMP/probe-err"
