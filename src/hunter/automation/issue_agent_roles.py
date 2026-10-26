@@ -31,8 +31,8 @@ import json
 import os
 import re
 import subprocess
-import threading
 import tempfile
+import threading
 import urllib.parse
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass

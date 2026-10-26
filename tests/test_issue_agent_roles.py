@@ -835,7 +835,6 @@ def test_isolation_diagnostic_detects_opencode_provider_error_without_leaking(
 def test_isolation_observes_private_output_growth_without_disclosing_content(
     sudo: tuple[roles.SudoIsolation, _Launch], tmp_path: Path, capsys: pytest.CaptureFixture[str]
 ) -> None:
-    import threading
     import time
 
     isolation, _ = sudo
