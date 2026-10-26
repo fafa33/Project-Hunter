@@ -46,8 +46,9 @@ jobs:
           root = Path('/tmp/hunter-ia/execute')
           workspace = root / 'workspace'
           home = root / 'home'
-          workspace.mkdir()
           home.mkdir(mode=0o700)
+          import subprocess
+          subprocess.run(['git', 'clone', '--quiet', '--no-local', os.environ['GITHUB_WORKSPACE'], str(workspace)], check=True)
           (workspace / 'probe.txt').write_text('before\n')
           task = home / 'hunter-task.txt'
           task.write_text('Replace before with after in probe.txt. Do not modify any other file.\n')
@@ -74,7 +75,9 @@ jobs:
           # Result is trusted-runner-readable after the isolated process exits,
           # as in the production executor; no model text is printed.
           changed = (workspace / 'probe.txt').read_bytes() == b'after\n'
+          git_changed = bool(subprocess.run(['sudo', '-u', 'hunter-untrusted', 'git', '-C', str(workspace), 'status', '--porcelain', '--untracked-files=all'], check=True, capture_output=True).stdout)
+          print(f'HOSTED_REAL_WORKSPACE git_changed={git_changed}')
           print(f'HOSTED_PROBE exit_zero={rc == 0} edited={changed}')
-          if rc != 0 or not changed:
+          if rc != 0 or not changed or not git_changed:
               raise SystemExit('Hosted OpenCode probe did not produce the expected edit')
           PYCODE
