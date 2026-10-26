@@ -830,3 +830,24 @@ def test_isolation_diagnostic_detects_opencode_provider_error_without_leaking(
     diagnostic = capsys.readouterr().out
     assert "stderr_category=MODEL_NOT_FOUND" in diagnostic
     assert private_text not in diagnostic
+
+
+def test_isolation_timeout_reports_safe_output_presence_without_leaking(
+    sudo: tuple[roles.SudoIsolation, _Launch], tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    isolation, _ = sudo
+    private = "PRIVATE_PROMPT_TOKEN_NOT_FOR_LOGS"
+
+    def timed_out(argv: Sequence[str], **kwargs: Any) -> Any:
+        kwargs["stdout"].write(private.encode())
+        kwargs["stderr"].write(private.encode())
+        raise subprocess.TimeoutExpired(argv, kwargs["timeout"])
+
+    with pytest.MonkeyPatch.context() as patch:
+        patch.setattr(roles.subprocess, "run", timed_out)
+        with pytest.raises(subprocess.TimeoutExpired):
+            isolation.run(("opencode", "run"), cwd=tmp_path, public_env={}, secret_env={}, stdin=b"", timeout=1)
+    diagnostic = capsys.readouterr().out
+    assert "isolated model launch: started" in diagnostic
+    assert "exit=TIMEOUT stdout_present=True stderr_present=True" in diagnostic
+    assert private not in diagnostic
