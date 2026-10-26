@@ -167,16 +167,27 @@ class SudoIsolation:
         # Capture only in private, short-lived files. Never print untrusted model
         # output: it may echo signed instructions, secrets, or repository data.
         with tempfile.TemporaryFile() as stdout, tempfile.TemporaryFile() as stderr:
-            completed = subprocess.run(  # noqa: S603 - fixed launcher, closed argv
-                command,
-                cwd=cwd,
-                env=launcher,
-                input=stdin,
-                stdout=stdout,
-                stderr=stderr,
-                check=False,
-                timeout=timeout,
-            )
+            print("isolated model launch: started", flush=True)
+            try:
+                completed = subprocess.run(  # noqa: S603 - fixed launcher, closed argv
+                    command,
+                    cwd=cwd,
+                    env=launcher,
+                    input=stdin,
+                    stdout=stdout,
+                    stderr=stderr,
+                    check=False,
+                    timeout=timeout,
+                )
+            except subprocess.TimeoutExpired:
+                stdout.seek(0, os.SEEK_END)
+                stderr.seek(0, os.SEEK_END)
+                print(
+                    "isolated model diagnostic: exit=TIMEOUT "
+                    f"stdout_present={stdout.tell() > 0} stderr_present={stderr.tell() > 0}",
+                    flush=True,
+                )
+                raise
             # Never disclose model text. A zero exit without edits must still be
             # distinguishable from a model that emitted no response at all.
             stdout.seek(0, os.SEEK_END)
