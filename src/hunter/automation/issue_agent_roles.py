@@ -266,6 +266,68 @@ def _git(git_dir: Path, work_tree: Path, *args: str) -> bytes:
     return completed.stdout
 
 
+#: A zero-change run is explained from counts only. The walk is telemetry, never authority, and is bounded.
+_DIAGNOSTIC_ENTRY_LIMIT = 200_000
+_HOME_STATE_DIRECTORIES = frozenset({".config", ".cache", ".local"})
+_TASK_ATTACHMENT = "hunter-task.txt"
+
+
+def workspace_diagnostics(workspace: Path, git_dir: Path, home: Path) -> dict[str, int]:
+    """Non-content counts that separate "the model edited nothing" from "an edit the collector cannot see".
+
+    ``NO_CHANGES`` alone cannot distinguish a model that declined to edit from one whose edits were ignored
+    by ``git add --all`` (ignored paths), unreadable to the collector (permissions) or written outside the
+    workspace (the isolated home). Only integers leave this function: never a path, a name or file content.
+    ``-1`` means the count could not be established.
+    """
+
+    inspected = 0
+    unreadable = 0
+
+    def unreadable_directory(_error: OSError) -> None:
+        nonlocal unreadable
+        unreadable += 1
+
+    def walk(root: Path, *, skip_top: frozenset[str] = frozenset()) -> int:
+        nonlocal inspected, unreadable
+        files = 0
+        for current, directories, names in os.walk(root, onerror=unreadable_directory):
+            if Path(current) == root:
+                directories[:] = [name for name in directories if name not in skip_top]
+                names[:] = [name for name in names if name not in skip_top]
+            for name in names:
+                inspected += 1
+                if inspected > _DIAGNOSTIC_ENTRY_LIMIT:
+                    return -1
+                path = Path(current, name)
+                files += 1
+                if not path.is_symlink() and not os.access(path, os.R_OK):
+                    unreadable += 1
+        return files
+
+    try:
+        ignored = len(
+            [
+                item
+                for item in _git(
+                    git_dir, workspace, "ls-files", "-z", "--others", "--ignored", "--exclude-standard"
+                ).split(b"\0")
+                if item
+            ]
+        )
+    except (RoleRefused, subprocess.SubprocessError, OSError):
+        ignored = -1
+    walk(workspace)
+    home_files = walk(home, skip_top=_HOME_STATE_DIRECTORIES | {_TASK_ATTACHMENT})
+    truncated = inspected > _DIAGNOSTIC_ENTRY_LIMIT
+    return {
+        "ignored_files": ignored,
+        "unreadable_paths": unreadable,
+        "home_files": home_files,
+        "truncated": int(truncated),
+    }
+
+
 def materialize_base(
     workspace: Path, git_dir: Path, *, remote: str, base_sha: str, remediation_branch: str | None = None
 ) -> None:
@@ -520,6 +582,9 @@ def run_executor(
         # disguise a collector rejection as a model that made no changes.
         code = refusal.code if refusal.code in state.ADVISORY_CODES else "EXECUTOR_RESULT_REJECTED"
         print(f"executor collector advisory: {code}")
+        if code == "NO_CHANGES":
+            counts = workspace_diagnostics(workspace, git_dir, home)
+            print("executor workspace diagnostic: " + " ".join(f"{name}={value}" for name, value in counts.items()))
         return ExecutorOutcome(None, code)
     if result_carries_secret(document, list(config.model_secret_env.values())):
         return ExecutorOutcome(None, "SECRET_IN_RESULT")  # never sealed, never uploaded

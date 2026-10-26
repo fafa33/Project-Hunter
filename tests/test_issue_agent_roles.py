@@ -5,6 +5,7 @@ from __future__ import annotations
 import base64
 import json
 import os
+import re
 import subprocess
 from collections.abc import Mapping, Sequence
 from pathlib import Path
@@ -439,6 +440,88 @@ def test_collector_rejection_is_not_misreported_as_no_changes(
     assert outcome.advisory_code == "EXECUTOR_RESULT_REJECTED"
     assert "sensitive untrusted detail" not in capsys.readouterr().out
     assert isolation.stopped == 1
+
+
+DIAGNOSTIC_LINE = re.compile(
+    r"^executor workspace diagnostic: ignored_files=-?\d+ unreadable_paths=\d+ home_files=-?\d+ truncated=[01]$"
+)
+
+
+def _bare_workspace(tmp_path: Path) -> tuple[Path, Path, Path]:
+    workspace, git_dir, home = tmp_path / "workspace", tmp_path / "trusted.git", tmp_path / "home"
+    workspace.mkdir()
+    home.mkdir()
+    roles._git(git_dir, workspace, "init", "--quiet")
+    return workspace, git_dir, home
+
+
+def test_a_zero_change_run_reports_counts_only_and_stays_a_terminal_no_changes(
+    repos: dict[str, Any], capsys: pytest.CaptureFixture[str]
+) -> None:
+    ledger, envelope = authorize(repos)
+    # The stand-in model writes outside the workspace, under a name that must never be echoed.
+    isolation = RecordingIsolation('echo x > "$HOME/leaked-name-1f3a"')
+    outcome = execute(repos, ledger, envelope, isolation)
+    assert (outcome.sealed_result, outcome.advisory_code) == (None, "NO_CHANGES")
+    out = capsys.readouterr().out
+    lines = [line for line in out.splitlines() if line.startswith("executor workspace diagnostic")]
+    assert len(lines) == 1 and DIAGNOSTIC_LINE.fullmatch(lines[0])
+    assert "home_files=1" in lines[0] and "ignored_files=0" in lines[0] and "unreadable_paths=0" in lines[0]
+    assert "leaked-name-1f3a" not in out and SECRET not in out
+
+
+def test_a_collected_change_emits_no_workspace_diagnostic(
+    repos: dict[str, Any], capsys: pytest.CaptureFixture[str]
+) -> None:
+    ledger, envelope = authorize(repos)
+    outcome = execute(repos, ledger, envelope, RecordingIsolation(CANARY))
+    assert outcome.advisory_code is None and outcome.sealed_result
+    assert "executor workspace diagnostic" not in capsys.readouterr().out
+
+
+def test_an_ignored_edit_is_distinguished_from_an_edit_never_made(tmp_path: Path) -> None:
+    workspace, git_dir, home = _bare_workspace(tmp_path)
+    assert roles.workspace_diagnostics(workspace, git_dir, home) == {
+        "ignored_files": 0,
+        "unreadable_paths": 0,
+        "home_files": 0,
+        "truncated": 0,
+    }
+    (workspace / ".gitignore").write_text("*.log\n")
+    (workspace / "edited.log").write_text("model output\n")
+    assert roles.workspace_diagnostics(workspace, git_dir, home)["ignored_files"] == 1
+
+
+def test_isolated_home_state_is_not_counted_as_a_stray_write(tmp_path: Path) -> None:
+    workspace, git_dir, home = _bare_workspace(tmp_path)
+    for state_dir in (".config", ".cache", ".local/share"):
+        (home / state_dir).mkdir(parents=True)
+        (home / state_dir / "state.json").write_text("{}")
+    (home / "hunter-task.txt").write_text("signed prompt")
+    assert roles.workspace_diagnostics(workspace, git_dir, home)["home_files"] == 0
+    (home / "stray.txt").write_text("x")
+    assert roles.workspace_diagnostics(workspace, git_dir, home)["home_files"] == 1
+
+
+@pytest.mark.skipif(os.geteuid() == 0, reason="root can read everything")
+def test_files_the_collector_cannot_read_are_counted(tmp_path: Path) -> None:
+    workspace, git_dir, home = _bare_workspace(tmp_path)
+    (workspace / "private.txt").write_text("x")
+    (workspace / "private.txt").chmod(0)
+    (workspace / "closed").mkdir()
+    (workspace / "closed" / "inner.txt").write_text("x")
+    (workspace / "closed").chmod(0)
+    try:
+        assert roles.workspace_diagnostics(workspace, git_dir, home)["unreadable_paths"] >= 2
+    finally:
+        (workspace / "closed").chmod(0o700)
+
+
+def test_an_unavailable_git_view_is_reported_as_unknown_never_as_zero(tmp_path: Path) -> None:
+    workspace, _, home = tmp_path / "workspace", tmp_path / "x", tmp_path / "home"
+    workspace.mkdir()
+    home.mkdir()
+    assert roles.workspace_diagnostics(workspace, tmp_path / "not-a-git-dir", home)["ignored_files"] == -1
 
 
 @pytest.mark.parametrize(
