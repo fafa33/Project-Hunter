@@ -186,6 +186,11 @@ class SudoIsolation:
             # user-controlled strings cross the isolation boundary into logs.
             sample = stderr.read(65536).lower()
             categories = (
+                (b"providermodelnotfounderror", "MODEL_NOT_FOUND"),
+                (b"modelnotfounderror", "MODEL_NOT_FOUND"),
+                (b"providererror", "PROVIDER_ERROR"),
+                (b"authenticationerror", "AUTHENTICATION"),
+                (b"ratelimiterror", "RATE_LIMIT"),
                 (b"permission denied", "PERMISSION"),
                 (b"eacces", "PERMISSION"),
                 (b"rate limit", "RATE_LIMIT"),

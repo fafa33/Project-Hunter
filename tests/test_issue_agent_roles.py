@@ -808,3 +808,25 @@ def test_isolation_diagnostic_classifies_without_leaking_untrusted_output(
     assert "exit=ZERO" in diagnostic
     assert "stdout_present=True" in diagnostic
     assert private_text not in diagnostic
+
+
+def test_isolation_diagnostic_detects_opencode_provider_error_without_leaking(
+    sudo: tuple[roles.SudoIsolation, _Launch], tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    isolation, _ = sudo
+    private_text = "PRIVATE_PROVIDER_DETAIL_NEVER_LOG"
+
+    def fake_run(argv: Sequence[str], **kwargs: Any) -> Any:
+        kwargs["stderr"].write(
+            (
+                '{"type":"error","error":{"name":"ProviderModelNotFoundError",' '"message":"' + private_text + '"}}\n'
+            ).encode()
+        )
+        return subprocess.CompletedProcess(argv, 0)
+
+    with pytest.MonkeyPatch.context() as patch:
+        patch.setattr(roles.subprocess, "run", fake_run)
+        isolation.run(("opencode", "run"), cwd=tmp_path, public_env={}, secret_env={}, stdin=b"", timeout=1)
+    diagnostic = capsys.readouterr().out
+    assert "stderr_category=MODEL_NOT_FOUND" in diagnostic
+    assert private_text not in diagnostic
