@@ -787,6 +787,7 @@ def test_the_rest_client_maps_only_200_and_404_to_definitive_facts() -> None:
             },
             seen,
         ),
+        sleep=lambda _seconds: None,
     )
     assert client.get("/repos/fafa33/Project-Hunter/a") == control.Read("ok", {"ok": 1})
     assert client.get("/repos/fafa33/Project-Hunter/b").status == "absent"
@@ -836,3 +837,114 @@ def test_the_artifact_blob_redirect_never_receives_the_token() -> None:
     assert client.download_artifact(5) == control.Read("ok", b"sealed")
     assert seen[0].get_header("Authorization") == "Bearer tok"
     assert seen[1].get_header("Authorization") is None
+
+
+def _scripted_client(
+    responses: list[Any], *, token: str | None = "tok", sleeps: list[float] | None = None
+) -> tuple[control.GitHubRest, list[Any]]:
+    """A client whose successive replies are scripted: an int is an HTTP error, a dict is ``(code, headers)``."""
+
+    import urllib.error
+
+    seen: list[Any] = []
+    queue = list(responses)
+
+    def open_(request: Any, _timeout: float) -> Any:
+        seen.append(request)
+        item = queue.pop(0)
+        if item == "ok":
+            return Response(200, b'{"id": 7}')
+        if item == "transport":
+            raise urllib.error.URLError("boom")
+        code, headers = item if isinstance(item, tuple) else (item, {})
+        raise urllib.error.HTTPError(request.full_url, code, "x", headers, None)  # type: ignore[arg-type]
+
+    client = control.GitHubRest(
+        rt.REPOSITORY, token, opener=open_, sleep=(sleeps.append if sleeps is not None else lambda _s: None)
+    )
+    return client, seen
+
+
+RUN_PATH = f"/repos/{rt.REPOSITORY}/actions/runs/40387832190/attempts/1"
+
+
+def test_a_transient_failure_recovers_within_a_bounded_number_of_attempts() -> None:
+    sleeps: list[float] = []
+    client, seen = _scripted_client([502, "transport", "ok"], sleeps=sleeps)
+    assert client.get(RUN_PATH) == control.Read("ok", {"id": 7})
+    assert len(seen) == 3 and sleeps == [1.0, 2.0]
+
+
+def test_a_persistent_transient_failure_stays_indefinite_with_a_sanitized_diagnostic() -> None:
+    client, seen = _scripted_client([503, 503, 503, "ok"])
+    read = client.get(RUN_PATH + "?token=hunter2")
+    assert read.status == "unknown" and len(seen) == control.GET_MAX_ATTEMPTS
+    assert read.diagnostic is not None
+    for expected in ("category=server_error", "http=503", "retryable=true", f"attempts={control.GET_MAX_ATTEMPTS}"):
+        assert expected in read.diagnostic
+    assert f"endpoint={RUN_PATH}" in read.diagnostic
+    assert "hunter2" not in read.diagnostic and "Bearer" not in read.diagnostic
+    with pytest.raises(control.FactsUnavailable, match=r"an observation was indefinite \[operation=github_get"):
+        control.definitive(read)
+
+
+def test_a_transport_failure_is_classified_and_never_read_as_absence() -> None:
+    client, _ = _scripted_client(["transport"] * 3)
+    read = client.get(RUN_PATH)
+    assert read.status == "unknown" and read.diagnostic is not None
+    assert "category=transport_failure" in read.diagnostic and "http=none" in read.diagnostic
+
+
+@pytest.mark.parametrize("code", [401, 403, 410, 422, 400])
+def test_a_permanent_failure_is_not_retried(code: int) -> None:
+    client, seen = _scripted_client([code, "ok"])
+    read = client.get(RUN_PATH)
+    assert read.status == "unknown" and len(seen) == 1
+    assert read.diagnostic is not None and "retryable=false" in read.diagnostic and f"http={code}" in read.diagnostic
+
+
+def test_a_rate_limit_with_a_short_wait_is_retried_once_the_wait_has_elapsed() -> None:
+    sleeps: list[float] = []
+    headers = {"Retry-After": "7", "X-RateLimit-Remaining": "0", "X-RateLimit-Limit": "60"}
+    client, seen = _scripted_client([(429, headers), "ok"], sleeps=sleeps)
+    assert client.get(RUN_PATH).status == "ok"
+    assert len(seen) == 2 and sleeps == [7.0]
+
+
+def test_an_exhausted_anonymous_rate_limit_with_a_distant_reset_stops_without_sleeping() -> None:
+    import time as _time
+
+    sleeps: list[float] = []
+    headers = {
+        "X-RateLimit-Remaining": "0",
+        "X-RateLimit-Limit": "60",
+        "X-RateLimit-Reset": str(int(_time.time()) + 3000),
+        "Set-Cookie": "secret=1",
+    }
+    client, seen = _scripted_client([(403, headers)], token=None, sleeps=sleeps)
+    read = client.get(RUN_PATH)
+    assert read.status == "unknown" and len(seen) == 1 and sleeps == []
+    assert read.diagnostic is not None
+    assert "category=rate_limited" in read.diagnostic and "ratelimit-remaining=0" in read.diagnostic
+    assert "ratelimit-limit=60" in read.diagnostic and "secret" not in read.diagnostic
+    assert seen[0].get_header("Authorization") is None
+
+
+def test_a_malformed_success_body_is_classified_and_not_retried() -> None:
+    client = control.GitHubRest(
+        rt.REPOSITORY,
+        "tok",
+        opener=opener({f"https://api.github.com{RUN_PATH}": lambda _r: Response(200, b"<html>")}, []),
+    )
+    read = client.get(RUN_PATH)
+    assert read.status == "unknown" and read.diagnostic is not None and "category=malformed_response" in read.diagnostic
+
+
+def test_an_absent_run_remains_a_definitive_negative_and_is_never_retried() -> None:
+    client, seen = _scripted_client([404, "ok"])
+    assert client.get(RUN_PATH).status == "absent" and len(seen) == 1
+
+
+def test_the_diagnostic_never_changes_read_equality() -> None:
+    assert control.Read("unknown", diagnostic="x") == control.Read("unknown")
+    assert control.Read("unknown", diagnostic="x") != control.Read("absent")

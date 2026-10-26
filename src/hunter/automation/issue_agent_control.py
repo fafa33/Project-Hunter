@@ -22,12 +22,13 @@ import io
 import json
 import re
 import secrets
+import time
 import urllib.error
 import urllib.parse
 import urllib.request
 import zipfile
 from collections.abc import Callable, Mapping
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any, Final, Literal, Protocol
@@ -258,6 +259,8 @@ def load_configuration(checkout: Path) -> Configuration:
 class Read:
     status: Literal["ok", "absent", "unknown"]
     value: Any = None
+    #: Sanitized, non-secret description of an ``unknown`` read. Never part of equality or of any decision.
+    diagnostic: str | None = field(default=None, compare=False)
 
 
 class GitHub(Protocol):
@@ -279,7 +282,8 @@ def definitive(read: Read) -> Any:
         return read.value
     if read.status == "absent":
         return None
-    raise FactsUnavailable("an observation was indefinite")
+    detail = f" [{read.diagnostic}]" if read.diagnostic else ""
+    raise FactsUnavailable(f"an observation was indefinite{detail}")
 
 
 Opener = Callable[[urllib.request.Request, float], Any]
@@ -294,13 +298,85 @@ def _default_opener(request: urllib.request.Request, timeout: float) -> Any:
     return urllib.request.build_opener(_NoRedirect).open(request, timeout=timeout)
 
 
+#: Bounded retry of a transient read: at most this many attempts, with exponential backoff capped per wait.
+GET_MAX_ATTEMPTS: Final = 3
+_GET_BACKOFF_SECONDS: Final = 1.0
+_GET_MAX_WAIT_SECONDS: Final = 30.0
+_RATE_HEADERS: Final = ("retry-after", "x-ratelimit-remaining", "x-ratelimit-limit", "x-ratelimit-reset")
+_NUMERIC: Final = re.compile(r"[0-9]{1,12}")
+_TRANSIENT: Final = frozenset({"transport_failure", "server_error", "rate_limited"})
+
+
+def _rate_headers(raw: Any) -> Mapping[str, str]:
+    """Only the numeric rate-limit headers are kept; nothing else from a response is ever surfaced."""
+
+    lowered = {str(name).lower(): value for name, value in raw.items()} if raw else {}
+    kept: dict[str, str] = {}
+    for name in _RATE_HEADERS:
+        value = lowered.get(name)
+        if isinstance(value, str) and _NUMERIC.fullmatch(value.strip()):
+            kept[name] = value.strip()
+    return kept
+
+
+def _failure_category(status: int, headers: Mapping[str, str]) -> str:
+    if status == 0:
+        return "transport_failure"
+    if status == 429 or (status == 403 and ("retry-after" in headers or headers.get("x-ratelimit-remaining") == "0")):
+        return "rate_limited"
+    if status in (401, 403):
+        return "authentication_or_permission"
+    if status >= 500:
+        return "server_error"
+    return "unexpected_status"
+
+
+def _retry_delay(category: str, headers: Mapping[str, str], attempts: int) -> float | None:
+    """Seconds to wait before another attempt, or ``None`` when the failure is not demonstrably transient."""
+
+    backoff = min(_GET_BACKOFF_SECONDS * 2 ** (attempts - 1), _GET_MAX_WAIT_SECONDS)
+    if category in ("transport_failure", "server_error"):
+        return backoff
+    if category == "rate_limited":
+        if "retry-after" in headers:
+            wait = float(headers["retry-after"])
+        elif headers.get("x-ratelimit-reset"):
+            wait = float(headers["x-ratelimit-reset"]) - time.time()
+        else:
+            return None
+        # A limit that resets beyond the wait cap is a stop condition, never a long sleep inside a job.
+        return max(wait, backoff) if wait <= _GET_MAX_WAIT_SECONDS else None
+    return None
+
+
+def _diagnostic(path: str, category: str, status: int, headers: Mapping[str, str], attempts: int) -> str:
+    parts = [
+        "operation=github_get",
+        f"endpoint={path.split('?', 1)[0]}",
+        f"category={category}",
+        f"http={status if status else 'none'}",
+        f"retryable={'true' if category in _TRANSIENT else 'false'}",
+        f"attempts={attempts}",
+    ]
+    for name in ("x-ratelimit-limit", "x-ratelimit-remaining", "x-ratelimit-reset", "retry-after"):
+        if name in headers:
+            parts.append(f"{name.removeprefix('x-')}={headers[name]}")
+    return " ".join(parts)
+
+
 class GitHubRest:
     """Authenticated REST reads (anonymous reads were proven CDN-stale in S0). The token never leaves headers."""
 
     API = "https://api.github.com"
 
     def __init__(
-        self, repository: str, token: str | None, *, opener: Opener | None = None, timeout: float = 30.0
+        self,
+        repository: str,
+        token: str | None,
+        *,
+        opener: Opener | None = None,
+        timeout: float = 30.0,
+        sleep: Callable[[float], None] = time.sleep,
     ) -> None:
         """``token=None`` is an anonymous client for the role jobs whose ``GITHUB_TOKEN`` is ``{}``."""
 
@@ -310,8 +386,15 @@ class GitHubRest:
         self._token = token
         self._open = opener or _default_opener
         self._timeout = timeout
+        self._sleep = sleep
 
     def _request(self, method: str, url: str, body: bytes | None = None, *, auth: bool = True) -> tuple[int, bytes]:
+        status, payload, _headers = self._exchange(method, url, body, auth=auth)
+        return status, payload
+
+    def _exchange(
+        self, method: str, url: str, body: bytes | None = None, *, auth: bool = True
+    ) -> tuple[int, bytes, Mapping[str, str]]:
         headers = {"Accept": "application/vnd.github+json", "X-GitHub-Api-Version": "2022-11-28"}
         if auth and self._token is not None:
             headers["Authorization"] = f"Bearer {self._token}"
@@ -320,27 +403,48 @@ class GitHubRest:
         request = urllib.request.Request(url, data=body, method=method, headers=headers)
         try:
             with self._open(request, self._timeout) as response:
-                return int(response.status), response.read(MAX_ARTIFACT_BYTES + 1)
+                return int(response.status), response.read(MAX_ARTIFACT_BYTES + 1), {}
         except urllib.error.HTTPError as error:
             location = error.headers.get("Location") if error.headers else None
             if error.code in (301, 302, 303, 307, 308) and location:
-                return error.code, location.encode()
-            return error.code, b""
+                return error.code, location.encode(), {}
+            return error.code, b"", _rate_headers(error.headers)
         except (urllib.error.URLError, TimeoutError, OSError):
-            return 0, b""
+            return 0, b"", {}
 
     def get(self, path: str) -> Read:
+        """One repository-scoped read. Only demonstrably transient failures are retried, boundedly.
+
+        A retry never changes what an indefinite answer means: after the last attempt the read is ``unknown``
+        and carries a sanitized diagnostic (operation, endpoint, failure category, status, retryability).
+        """
+
         if not path.startswith("/repos/"):
             raise ValueError("only repository-scoped reads are allowed")
-        status, body = self._request("GET", self.API + path)
-        if status == 404:
-            return Read("absent")
-        if status != 200 or len(body) > MAX_ARTIFACT_BYTES:
-            return Read("unknown")
-        try:
-            return Read("ok", json.loads(body))
-        except ValueError:
-            return Read("unknown")
+        attempts = 0
+        while True:
+            attempts += 1
+            status, body, headers = self._exchange("GET", self.API + path)
+            if status == 404:
+                return Read("absent")
+            category: str | None = None
+            value: Any = None
+            if status == 200:
+                if len(body) > MAX_ARTIFACT_BYTES:
+                    category = "oversize_response"
+                else:
+                    try:
+                        value = json.loads(body)
+                    except ValueError:
+                        category = "malformed_response"
+            else:
+                category = _failure_category(status, headers)
+            if category is None:
+                return Read("ok", value)
+            delay = _retry_delay(category, headers, attempts)
+            if delay is None or attempts >= GET_MAX_ATTEMPTS:
+                return Read("unknown", diagnostic=_diagnostic(path, category, status, headers, attempts))
+            self._sleep(delay)
 
     def download_artifact(self, artifact_id: int) -> Read:
         status, body = self._request("GET", f"{self.API}/repos/{self.repository}/actions/artifacts/{artifact_id}/zip")
