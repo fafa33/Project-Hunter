@@ -75,7 +75,7 @@ jobs:
           # Result is trusted-runner-readable after the isolated process exits,
           # as in the production executor; no model text is printed.
           changed = (workspace / 'probe.txt').read_bytes() == b'after\n'
-          git_changed = bool(subprocess.run(['git', 'status', '--porcelain', '--untracked-files=all'], cwd=workspace, check=True, capture_output=True).stdout)
+          git_changed = bool(subprocess.run(['sudo', '-u', 'hunter-untrusted', 'git', '-C', str(workspace), 'status', '--porcelain', '--untracked-files=all'], check=True, capture_output=True).stdout)
           print(f'HOSTED_REAL_WORKSPACE git_changed={git_changed}')
           print(f'HOSTED_PROBE exit_zero={rc == 0} edited={changed}')
           if rc != 0 or not changed or not git_changed:
