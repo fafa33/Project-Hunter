@@ -31,6 +31,7 @@ import json
 import os
 import re
 import subprocess
+import threading
 import tempfile
 import urllib.parse
 from collections.abc import Callable, Mapping, Sequence
@@ -167,7 +168,21 @@ class SudoIsolation:
         # Capture only in private, short-lived files. Never print untrusted model
         # output: it may echo signed instructions, secrets, or repository data.
         with tempfile.TemporaryFile() as stdout, tempfile.TemporaryFile() as stderr:
+            finished = threading.Event()
+
+            def observe_output() -> None:
+                previous = (0, 0)
+                while not finished.wait(5.0):
+                    sizes = (os.fstat(stdout.fileno()).st_size, os.fstat(stderr.fileno()).st_size)
+                    if sizes != previous:
+                        if previous == (0, 0):
+                            print("isolated model progress: first_output_observed=True", flush=True)
+                        print("isolated model progress: output_advanced=True", flush=True)
+                        previous = sizes
+
+            observer = threading.Thread(target=observe_output, daemon=True)
             print("isolated model launch: started", flush=True)
+            observer.start()
             try:
                 completed = subprocess.run(  # noqa: S603 - fixed launcher, closed argv
                     command,
@@ -188,6 +203,9 @@ class SudoIsolation:
                     flush=True,
                 )
                 raise
+            finally:
+                finished.set()
+                observer.join()
             # Never disclose model text. A zero exit without edits must still be
             # distinguishable from a model that emitted no response at all.
             stdout.seek(0, os.SEEK_END)

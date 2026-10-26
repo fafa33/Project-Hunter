@@ -832,6 +832,32 @@ def test_isolation_diagnostic_detects_opencode_provider_error_without_leaking(
     assert private_text not in diagnostic
 
 
+def test_isolation_observes_private_output_growth_without_disclosing_content(
+    sudo: tuple[roles.SudoIsolation, _Launch], tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    import threading
+    import time
+
+    isolation, _ = sudo
+    private = b"SECRET_MODEL_STREAM_NOT_FOR_LOGS"
+
+    def fake_run(argv: Sequence[str], **kwargs: Any) -> Any:
+        kwargs["stdout"].write(private)
+        kwargs["stdout"].flush()
+        time.sleep(5.2)
+        return subprocess.CompletedProcess(argv, 0)
+
+    with pytest.MonkeyPatch.context() as patch:
+        patch.setattr(roles.subprocess, "run", fake_run)
+        assert (
+            isolation.run(("opencode", "run"), cwd=tmp_path, public_env={}, secret_env={}, stdin=b"", timeout=10) == 0
+        )
+    output = capsys.readouterr().out
+    assert "first_output_observed=True" in output
+    assert "output_advanced=True" in output
+    assert private.decode() not in output
+
+
 def test_isolation_timeout_reports_safe_output_presence_without_leaking(
     sudo: tuple[roles.SudoIsolation, _Launch], tmp_path: Path, capsys: pytest.CaptureFixture[str]
 ) -> None:
