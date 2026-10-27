@@ -25,6 +25,8 @@ class HistoricalCandidateAdmission:
     observed_at: datetime
     known_at: datetime
     content_hash: str
+    supersedes_content_hash: str | None = None
+    correction_reason: str = ""
 
     def __post_init__(self) -> None:
         if not all((self.source_id, self.source_version, self.taxonomy_id, self.taxonomy_version, self.content_hash)):
@@ -37,6 +39,19 @@ class HistoricalCandidateAdmission:
             or self.published_at > self.known_at
         ):
             raise ValueError("historical admission chronology is inconsistent")
+        if self.supersedes_content_hash is not None:
+            if not self.correction_reason:
+                raise ValueError("historical correction requires a reason")
+            if self.supersedes_content_hash == self.content_hash:
+                raise ValueError("historical correction must change the content hash")
+            if (
+                not self.supersedes_content_hash.startswith("sha256:")
+                or len(self.supersedes_content_hash) != 71
+                or any(c not in "0123456789abcdef" for c in self.supersedes_content_hash[7:])
+            ):
+                raise ValueError("historical correction requires a SHA-256 superseded hash")
+        elif self.correction_reason:
+            raise ValueError("historical correction reason requires superseded evidence")
         if (
             not self.content_hash.startswith("sha256:")
             or len(self.content_hash) != 71
@@ -78,6 +93,8 @@ def select_historical_candidates(
             or item.candidate.source_record_version != item.source_version
         ):
             raise ValueError("candidate provenance does not match admission")
+        if item.supersedes_content_hash is not None:
+            raise ValueError("historical correction requires canonical lineage resolution")
         identity = item.candidate.identity
         key = (identity.entity_id, identity.representation_id)
         if any(existing.candidate.identity.entity_id == identity.entity_id for existing in selected.values()):

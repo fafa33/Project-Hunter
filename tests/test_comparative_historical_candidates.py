@@ -128,3 +128,21 @@ def test_timezone_equivalent_cutoff_replay():
         taxonomy_id="taxonomy",
         taxonomy_version="v1",
     ) == _select([admission])
+
+
+def test_correction_requires_provenance_and_cannot_silently_rewrite_history():
+    from dataclasses import replace
+
+    admission = _admission()
+    with pytest.raises(ValueError, match="reason"):
+        replace(admission, supersedes_content_hash="sha256:" + "b" * 64)
+    with pytest.raises(ValueError, match="superseded evidence"):
+        replace(admission, correction_reason="updated")
+    correction = replace(
+        admission,
+        content_hash="sha256:" + "c" * 64,
+        supersedes_content_hash="sha256:" + "b" * 64,
+        correction_reason="source correction",
+    )
+    with pytest.raises(ValueError, match="canonical lineage resolution"):
+        _select([correction])
