@@ -31,7 +31,11 @@ class HistoricalCandidateAdmission:
             raise ValueError("historical admission requires versioned provenance")
         if any(t.tzinfo is None for t in (self.effective_at, self.published_at, self.observed_at, self.known_at)):
             raise ValueError("historical admission timestamps must be timezone-aware")
-        if not self.content_hash.startswith("sha256:") or len(self.content_hash) != 71:
+        if (
+            not self.content_hash.startswith("sha256:")
+            or len(self.content_hash) != 71
+            or any(c not in "0123456789abcdef" for c in self.content_hash[7:])
+        ):
             raise ValueError("historical admission requires a SHA-256 content hash")
 
 
@@ -51,6 +55,8 @@ def select_historical_candidates(
     """
     if cutoff.tzinfo is None or known_by.tzinfo is None or known_by > cutoff:
         raise ValueError("historical replay requires aware known_by <= cutoff")
+    if not taxonomy_id or not taxonomy_version:
+        raise ValueError("historical replay requires versioned taxonomy")
     selected: dict[tuple[str, str], HistoricalCandidateAdmission] = {}
     for item in admissions:
         if item.taxonomy_id != taxonomy_id or item.taxonomy_version != taxonomy_version:
@@ -66,7 +72,7 @@ def select_historical_candidates(
             raise ValueError("candidate provenance does not match admission")
         identity = item.candidate.identity
         key = (identity.entity_id, identity.representation_id)
-        if key in selected:
-            raise ValueError("conflicting historical candidate membership")
+        if any(existing.candidate.identity.entity_id == identity.entity_id for existing in selected.values()):
+            raise ValueError("conflicting historical economic-entity membership")
         selected[key] = item
     return tuple(selected[key].candidate for key in sorted(selected))

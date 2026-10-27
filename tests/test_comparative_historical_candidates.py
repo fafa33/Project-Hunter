@@ -80,3 +80,28 @@ def test_future_known_by_is_rejected():
             taxonomy_id="taxonomy",
             taxonomy_version="v1",
         )
+
+
+def test_second_representation_of_same_entity_fails_closed():
+    from dataclasses import replace
+
+    first = _admission("a")
+    other_identity = replace(first.candidate.identity, representation_id="different")
+    second = replace(first, candidate=replace(first.candidate, identity=other_identity))
+    with pytest.raises(ValueError, match="economic-entity"):
+        _select([first, second])
+
+
+def test_malformed_hash_and_missing_taxonomy_fail_closed():
+    from dataclasses import replace
+
+    with pytest.raises(ValueError, match="SHA-256"):
+        replace(_admission(), content_hash="sha256:" + "z" * 64)
+    with pytest.raises(ValueError, match="versioned taxonomy"):
+        select_historical_candidates(
+            (_admission(),),
+            cutoff=datetime(2025, 1, 2, tzinfo=UTC),
+            known_by=datetime(2025, 1, 2, tzinfo=UTC),
+            taxonomy_id="",
+            taxonomy_version="v1",
+        )
