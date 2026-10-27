@@ -51,7 +51,7 @@ from hunter.automation.issue_agent_transport import (
     seal,
 )
 from hunter.automation.n8n_handoff import PromptAutomationEnvelopeHandoff
-from hunter.evidence_intelligence.smart_prompt_routing import PromptAutomationVerifier
+from hunter.evidence_intelligence.smart_prompt_routing import WORKSPACE_EDIT_OUTPUT_CONTRACT, PromptAutomationVerifier
 from hunter.task_scope import TaskScopeContract
 
 RECEIPT_SCHEMA_VERSION: Final = "hunter-issue-agent-validation-receipt-v2"
@@ -266,6 +266,138 @@ def _git(git_dir: Path, work_tree: Path, *args: str) -> bytes:
     return completed.stdout
 
 
+#: A zero-change run is explained from counts only. The walk is telemetry, never authority, and is bounded.
+_DIAGNOSTIC_ENTRY_LIMIT = 200_000
+_HOME_STATE_DIRECTORIES = frozenset({".config", ".cache", ".local"})
+_TASK_ATTACHMENT = "hunter-task.txt"
+
+
+def workspace_diagnostics(workspace: Path, git_dir: Path, home: Path) -> dict[str, int]:
+    """Non-content counts that separate "the model edited nothing" from "an edit the collector cannot see".
+
+    ``NO_CHANGES`` alone cannot distinguish a model that declined to edit from one whose edits were ignored
+    by ``git add --all`` (ignored paths), unreadable to the collector (permissions) or written outside the
+    workspace (the isolated home). Only integers leave this function: never a path, a name or file content.
+    ``-1`` means the count could not be established.
+    """
+
+    inspected = 0
+    unreadable = 0
+
+    def unreadable_directory(_error: OSError) -> None:
+        nonlocal unreadable
+        unreadable += 1
+
+    def walk(root: Path, *, skip_top: frozenset[str] = frozenset()) -> int:
+        nonlocal inspected, unreadable
+        files = 0
+        for current, directories, names in os.walk(root, onerror=unreadable_directory):
+            if Path(current) == root:
+                directories[:] = [name for name in directories if name not in skip_top]
+                names[:] = [name for name in names if name not in skip_top]
+            for name in names:
+                inspected += 1
+                if inspected > _DIAGNOSTIC_ENTRY_LIMIT:
+                    return -1
+                path = Path(current, name)
+                files += 1
+                if not path.is_symlink() and not os.access(path, os.R_OK):
+                    unreadable += 1
+        return files
+
+    try:
+        ignored = len(
+            [
+                item
+                for item in _git(
+                    git_dir, workspace, "ls-files", "-z", "--others", "--ignored", "--exclude-standard"
+                ).split(b"\0")
+                if item
+            ]
+        )
+    except (RoleRefused, subprocess.SubprocessError, OSError):
+        ignored = -1
+    walk(workspace)
+    home_files = walk(home, skip_top=_HOME_STATE_DIRECTORIES | {_TASK_ATTACHMENT})
+    truncated = inspected > _DIAGNOSTIC_ENTRY_LIMIT
+    return {
+        "ignored_files": ignored,
+        "unreadable_paths": unreadable,
+        "home_files": home_files,
+        "truncated": int(truncated),
+    }
+
+
+#: The only instruction the executor adds to the signed prompt. Collection reads the workspace diff and nothing the
+#: model prints, so the directive is what makes repository edits (not a printed JSON proposal) the deliverable.
+EDIT_DIRECTIVE: Final = (
+    "Implement the signed task in the attached file by editing actual repository files "
+    "in this workspace. Respect its allowed and prohibited paths. "
+    "Do not merely explain a plan or claim completion: inspect the relevant files, "
+    "make the smallest correct code/test changes, and run focused checks. "
+    "If the task cannot be implemented within the authorized scope, do not fabricate edits."
+)
+
+#: The task contract the model is actually handed, described by structure and counts only. The prompt text is
+#: signed, untrusted-derived and never logged: no section body, path or sentence leaves this function.
+_PROMPT_SECTIONS: Final = ("SYSTEM", "TASK", "OBJECTIVE", "AUTHORITY", "OUTPUT_CONTRACT", "CONTEXT", "MISSINGNESS")
+_JSON_OBJECT_CONTRACT: Final = '{"type":"object"}'
+_EXTRACTION_AUTHORITY: Final = "Maximum output authority: ExtractionProposal"
+
+
+def _delivered_scope(text: str) -> Mapping[str, Any]:
+    """The DPM scope the objective carries.
+
+    ``OBJECTIVE`` is one JSON line whose ``untrusted_user_task`` is itself JSON; the scope sits under its top-level
+    ``governed_prevention_context`` key. Issue text lives under a different key, so it cannot spoof these counts.
+    """
+
+    match = re.search(r"^OBJECTIVE\n([^\n]*)$", text, re.MULTILINE)
+    if match is None:
+        return {}
+    try:
+        context = json.loads(json.loads(match.group(1))["untrusted_user_task"])["governed_prevention_context"]
+    except (ValueError, KeyError, TypeError):
+        return {}
+    return context if isinstance(context, dict) else {}
+
+
+def _scope_path_count(scope: Mapping[str, Any], key: str) -> int:
+    value = scope.get(key)
+    return len(value) if isinstance(value, list) and all(isinstance(item, str) for item in value) else -1
+
+
+def prompt_contract_summary(prompt: bytes) -> dict[str, str | int]:
+    """Structural facts of the delivered prompt: which sections, what output it asks for, how wide the scope is.
+
+    ``-1`` means a count could not be established; ``absent`` means the construct is not in the prompt.
+    """
+
+    text = prompt.decode("utf-8", errors="replace")
+    sections = sum(1 for name in _PROMPT_SECTIONS if re.search(rf"^{name}$", text, re.MULTILINE))
+    contract = re.search(r"^OUTPUT_CONTRACT\n([^\n]*)$", text, re.MULTILINE)
+    if contract is None:
+        output_contract = "absent"
+    else:
+        # The deliverable is the whole contract text, which may run past one line.
+        declared = text[contract.start(1) :].split("\n\nCONTEXT", 1)[0].strip()
+        output_contract = (
+            "workspace_edits"
+            if declared == WORKSPACE_EDIT_OUTPUT_CONTRACT
+            else "json_object" if contract.group(1).strip() == _JSON_OBJECT_CONTRACT else "other"
+        )
+    scope = _delivered_scope(text)
+    return {
+        "prompt_bytes": len(prompt),
+        "prompt_sha256_12": hashlib.sha256(prompt).hexdigest()[:12],
+        "sections": sections,
+        "output_contract": output_contract,
+        "extraction_proposal_authority": int(_EXTRACTION_AUTHORITY in text),
+        "scope_allowed_paths": _scope_path_count(scope, "scope_allowed_paths"),
+        "scope_prohibited_paths": _scope_path_count(scope, "scope_prohibited_paths"),
+    }
+
+
 def materialize_base(
     workspace: Path, git_dir: Path, *, remote: str, base_sha: str, remediation_branch: str | None = None
 ) -> None:
@@ -469,17 +601,13 @@ def run_executor(
         prompt_path.chmod(0o600)
         model_argv = (
             *model_argv,
-            (
-                "Implement the signed task in the attached file by editing actual repository files "
-                "in this workspace. Respect its allowed and prohibited paths. "
-                "Do not merely explain a plan or claim completion: inspect the relevant files, "
-                "make the smallest correct code/test changes, and run focused checks. "
-                "If the task cannot be implemented within the authorized scope, do not fabricate edits."
-            ),
+            EDIT_DIRECTIVE,
             "--file",
             str(prompt_path),
         )
         model_stdin = b""
+    contract = prompt_contract_summary(prompt)
+    print("executor task contract: " + " ".join(f"{name}={value}" for name, value in contract.items()), flush=True)
     isolation.prepare(workspace, home)
     advisory: str | None = None
     try:
@@ -520,6 +648,9 @@ def run_executor(
         # disguise a collector rejection as a model that made no changes.
         code = refusal.code if refusal.code in state.ADVISORY_CODES else "EXECUTOR_RESULT_REJECTED"
         print(f"executor collector advisory: {code}")
+        if code == "NO_CHANGES":
+            counts = workspace_diagnostics(workspace, git_dir, home)
+            print("executor workspace diagnostic: " + " ".join(f"{name}={value}" for name, value in counts.items()))
         return ExecutorOutcome(None, code)
     if result_carries_secret(document, list(config.model_secret_env.values())):
         return ExecutorOutcome(None, "SECRET_IN_RESULT")  # never sealed, never uploaded

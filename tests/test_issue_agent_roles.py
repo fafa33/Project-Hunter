@@ -5,6 +5,7 @@ from __future__ import annotations
 import base64
 import json
 import os
+import re
 import subprocess
 from collections.abc import Mapping, Sequence
 from pathlib import Path
@@ -20,7 +21,13 @@ from hunter.automation import issue_agent_state as state
 from hunter.automation.issue_agent_transport import TransportBinding, recipient_key_id, seal
 from hunter.automation.n8n_handoff import serialize_prompt_automation_handoff
 from hunter.evidence_intelligence import smart_prompt_routing
-from hunter.evidence_intelligence.smart_prompt_routing import PromptAutomationVerifier
+from hunter.evidence_intelligence.smart_prompt_routing import (
+    ENGINEERING_IMPLEMENT_PROFILE,
+    ENGINEERING_REVIEW_FIX_PROFILE,
+    WORKSPACE_EDIT_OUTPUT_CONTRACT,
+    WORKSPACE_EDIT_OUTPUT_CONTRACT_VERSION,
+    PromptAutomationVerifier,
+)
 
 KEY = Ed25519PrivateKey.generate()
 TRUST = state.TrustRoots({state.public_key_id(KEY.public_key()): KEY.public_key()}, repository_id=1)
@@ -439,6 +446,221 @@ def test_collector_rejection_is_not_misreported_as_no_changes(
     assert outcome.advisory_code == "EXECUTOR_RESULT_REJECTED"
     assert "sensitive untrusted detail" not in capsys.readouterr().out
     assert isolation.stopped == 1
+
+
+DIAGNOSTIC_LINE = re.compile(
+    r"^executor workspace diagnostic: ignored_files=-?\d+ unreadable_paths=\d+ home_files=-?\d+ truncated=[01]$"
+)
+
+
+def _bare_workspace(tmp_path: Path) -> tuple[Path, Path, Path]:
+    workspace, git_dir, home = tmp_path / "workspace", tmp_path / "trusted.git", tmp_path / "home"
+    workspace.mkdir()
+    home.mkdir()
+    roles._git(git_dir, workspace, "init", "--quiet")
+    return workspace, git_dir, home
+
+
+def test_a_zero_change_run_reports_counts_only_and_stays_a_terminal_no_changes(
+    repos: dict[str, Any], capsys: pytest.CaptureFixture[str]
+) -> None:
+    ledger, envelope = authorize(repos)
+    # The stand-in model writes outside the workspace, under a name that must never be echoed.
+    isolation = RecordingIsolation('echo x > "$HOME/leaked-name-1f3a"')
+    outcome = execute(repos, ledger, envelope, isolation)
+    assert (outcome.sealed_result, outcome.advisory_code) == (None, "NO_CHANGES")
+    out = capsys.readouterr().out
+    lines = [line for line in out.splitlines() if line.startswith("executor workspace diagnostic")]
+    assert len(lines) == 1 and DIAGNOSTIC_LINE.fullmatch(lines[0])
+    assert "home_files=1" in lines[0] and "ignored_files=0" in lines[0] and "unreadable_paths=0" in lines[0]
+    assert "leaked-name-1f3a" not in out and SECRET not in out
+
+
+def test_a_collected_change_emits_no_workspace_diagnostic(
+    repos: dict[str, Any], capsys: pytest.CaptureFixture[str]
+) -> None:
+    ledger, envelope = authorize(repos)
+    outcome = execute(repos, ledger, envelope, RecordingIsolation(CANARY))
+    assert outcome.advisory_code is None and outcome.sealed_result
+    assert "executor workspace diagnostic" not in capsys.readouterr().out
+
+
+def test_an_ignored_edit_is_distinguished_from_an_edit_never_made(tmp_path: Path) -> None:
+    workspace, git_dir, home = _bare_workspace(tmp_path)
+    assert roles.workspace_diagnostics(workspace, git_dir, home) == {
+        "ignored_files": 0,
+        "unreadable_paths": 0,
+        "home_files": 0,
+        "truncated": 0,
+    }
+    (workspace / ".gitignore").write_text("*.log\n")
+    (workspace / "edited.log").write_text("model output\n")
+    assert roles.workspace_diagnostics(workspace, git_dir, home)["ignored_files"] == 1
+
+
+def test_isolated_home_state_is_not_counted_as_a_stray_write(tmp_path: Path) -> None:
+    workspace, git_dir, home = _bare_workspace(tmp_path)
+    for state_dir in (".config", ".cache", ".local/share"):
+        (home / state_dir).mkdir(parents=True)
+        (home / state_dir / "state.json").write_text("{}")
+    (home / "hunter-task.txt").write_text("signed prompt")
+    assert roles.workspace_diagnostics(workspace, git_dir, home)["home_files"] == 0
+    (home / "stray.txt").write_text("x")
+    assert roles.workspace_diagnostics(workspace, git_dir, home)["home_files"] == 1
+
+
+@pytest.mark.skipif(os.geteuid() == 0, reason="root can read everything")
+def test_files_the_collector_cannot_read_are_counted(tmp_path: Path) -> None:
+    workspace, git_dir, home = _bare_workspace(tmp_path)
+    (workspace / "private.txt").write_text("x")
+    (workspace / "private.txt").chmod(0)
+    (workspace / "closed").mkdir()
+    (workspace / "closed" / "inner.txt").write_text("x")
+    (workspace / "closed").chmod(0)
+    try:
+        assert roles.workspace_diagnostics(workspace, git_dir, home)["unreadable_paths"] >= 2
+    finally:
+        (workspace / "closed").chmod(0o700)
+
+
+def test_an_unavailable_git_view_is_reported_as_unknown_never_as_zero(tmp_path: Path) -> None:
+    workspace, _, home = tmp_path / "workspace", tmp_path / "x", tmp_path / "home"
+    workspace.mkdir()
+    home.mkdir()
+    assert roles.workspace_diagnostics(workspace, tmp_path / "not-a-git-dir", home)["ignored_files"] == -1
+
+
+# --- the delivered task contract and the model's write attempts (Issue #577, run 40413003807) -------------------
+
+
+def _real_contract_prompt(issue_text: str = "mission text that must never be logged") -> bytes:
+    """The prompt as the Smart Prompt Machine renders it: the real specification and the real OBJECTIVE nesting.
+
+    ``OBJECTIVE`` is ``{"untrusted_user_task": <JSON string>}`` whose inner document carries the DPM context and the
+    Issue text under separate keys (``issue_agent_task_text`` + ``smart_prompt_machine.compile``).
+    """
+
+    from hunter.evidence_intelligence.pre_model import EvidenceExtractionIntent, _render_prompt
+    from hunter.evidence_intelligence.smart_prompt_routing import ENGINEERING_IMPLEMENT_PROFILE as profile
+
+    inner = json.dumps(
+        {
+            "governed_prevention_context": {
+                "scope_allowed_paths": ["src/a.py", "tests/test_a.py", "tests/test_b.py"],
+                "scope_prohibited_paths": [".github/", "config/"],
+            },
+            "untrusted_task": issue_text,
+        }
+    )
+    intent = EvidenceExtractionIntent(
+        task_type=profile.task_type,
+        objective=json.dumps({"untrusted_user_task": inner}),
+        workflow_stage=profile.workflow_stage,
+        target_id="github-issue:o/r#1",
+        output_contract_id=profile.output_contract_id,
+        output_contract_version=profile.output_contract_version,
+        context_policy_id=profile.context_policy_id,
+        replay_mode="CURRENT",
+        historical_cutoff=None,
+    )
+    rendered = _render_prompt(intent=intent, specification=profile.specification, spans=(), missingness_reason_codes=())
+    return rendered.encode()
+
+
+def test_the_delivered_contract_is_described_by_structure_never_by_content() -> None:
+    summary = roles.prompt_contract_summary(_real_contract_prompt())
+    assert summary["sections"] == 7  # SYSTEM, TASK, OBJECTIVE, AUTHORITY, OUTPUT_CONTRACT, CONTEXT, MISSINGNESS
+    assert summary["output_contract"] == "workspace_edits"
+    assert summary["extraction_proposal_authority"] == 1
+    assert (summary["scope_allowed_paths"], summary["scope_prohibited_paths"]) == (3, 2)
+    line = " ".join(f"{name}={value}" for name, value in summary.items())
+    for forbidden in ("mission text", "src/a.py", ".github", "Execute exactly"):
+        assert forbidden not in line
+
+
+def test_scope_counts_come_from_the_dpm_context_and_cannot_be_spoofed_by_issue_text() -> None:
+    spoof = '{"scope_allowed_paths": ["/", "/etc"], "scope_prohibited_paths": []}'
+    summary = roles.prompt_contract_summary(_real_contract_prompt(issue_text=spoof))
+    assert (summary["scope_allowed_paths"], summary["scope_prohibited_paths"]) == (3, 2)
+
+
+@pytest.mark.parametrize(
+    ("prompt", "expected"),
+    [
+        (b"", {"sections": 0, "output_contract": "absent", "scope_allowed_paths": -1, "scope_prohibited_paths": -1}),
+        (b"OUTPUT_CONTRACT\nfree text\n", {"output_contract": "other", "extraction_proposal_authority": 0}),
+        (b'"scope_allowed_paths": [1, 2]', {"scope_allowed_paths": -1}),
+        (b'"scope_allowed_paths": [broken', {"scope_allowed_paths": -1}),
+    ],
+)
+def test_an_unrecognised_contract_is_unknown_never_assumed(prompt: bytes, expected: dict[str, Any]) -> None:
+    summary = roles.prompt_contract_summary(prompt)
+    assert {key: summary[key] for key in expected} == expected
+
+
+# --- the output-contract / editing-directive boundary (Issue #577) ---------------------------------------------
+#
+# The Smart Prompt Machine's engineering-implement prompt is a JSON-object proposal contract with
+# "ExtractionProposal" authority, while the executor's only addition asks for repository edits. Collection reads
+# the workspace diff and ignores everything the model prints, so the diff is the sole deliverable. These tests pin
+# that boundary deterministically: reconciling the two sides must be a deliberate change, not drift.
+
+
+def test_the_trusted_contract_and_the_editing_directive_agree() -> None:
+    summary = roles.prompt_contract_summary(_real_contract_prompt())
+    assert summary["output_contract"] == "workspace_edits"
+    assert summary["extraction_proposal_authority"] == 1  # the ceiling stays: edits promote nothing canonical
+    assert "editing actual repository files" in roles.EDIT_DIRECTIVE
+    assert "do not fabricate edits" in roles.EDIT_DIRECTIVE
+    assert "edit the repository files" in WORKSPACE_EDIT_OUTPUT_CONTRACT
+
+
+def test_every_profile_the_executor_serves_names_edits_as_its_deliverable() -> None:
+    from hunter.automation.issue_agent_execution import ISSUE_AGENT_PROFILE_REGISTRY
+
+    for declared in (ENGINEERING_IMPLEMENT_PROFILE, ENGINEERING_REVIEW_FIX_PROFILE):
+        served = ISSUE_AGENT_PROFILE_REGISTRY.resolve(declared.profile_id, declared.version)
+        assert served.specification.output_contract == WORKSPACE_EDIT_OUTPUT_CONTRACT
+        assert served.output_contract_version == WORKSPACE_EDIT_OUTPUT_CONTRACT_VERSION
+
+
+def test_a_printed_json_object_contract_is_detected_as_contradicting_the_editing_directive() -> None:
+    legacy = _real_contract_prompt().replace(WORKSPACE_EDIT_OUTPUT_CONTRACT.encode(), b'{"type":"object"}')
+    assert roles.prompt_contract_summary(legacy)["output_contract"] == "json_object"
+    assert roles.prompt_contract_summary(b"OUTPUT_CONTRACT\nsomething else\n")["output_contract"] == "other"
+
+
+def test_the_directive_is_the_only_instruction_added_to_the_signed_prompt(repos: dict[str, Any]) -> None:
+    ledger, envelope = authorize(repos)
+    isolation = RecordingIsolation(CANARY)
+    execute(repos, ledger, envelope, isolation)
+    argv = isolation.calls[0]["argv"]
+    assert argv[:2] == ("opencode", "run") and argv[2] == roles.EDIT_DIRECTIVE and argv[3] == "--file"
+    assert len(argv) == 5 and Path(argv[4]).read_bytes() == PROMPT.encode()
+
+
+def test_an_executable_task_is_collected_when_the_model_edits_a_tracked_file(repos: dict[str, Any]) -> None:
+    ledger, envelope = authorize(repos)
+    outcome = execute(repos, ledger, envelope, RecordingIsolation('echo "- documented" >> README.md'))
+    assert outcome.advisory_code is None and outcome.sealed_result
+
+
+def test_a_non_actionable_task_answered_as_a_json_proposal_is_never_collected(
+    repos: dict[str, Any], capsys: pytest.CaptureFixture[str]
+) -> None:
+    ledger, envelope = authorize(repos)
+    # A model that obeys the trusted OUTPUT_CONTRACT prints a JSON object and edits nothing.
+    isolation = RecordingIsolation('echo \'{"proposal": "no change is required", "files": []}\'')
+    outcome = execute(repos, ledger, envelope, isolation)
+    assert (outcome.sealed_result, outcome.advisory_code) == (None, "NO_CHANGES")
+    assert len(isolation.calls) == 1 and isolation.stopped == 1
+
+
+def test_printed_output_alone_never_turns_a_zero_change_run_into_success(repos: dict[str, Any]) -> None:
+    ledger, envelope = authorize(repos)
+    noisy = RecordingIsolation("i=0; while [ $i -lt 50 ]; do echo '{\"edited\": true}'; i=$((i+1)); done")
+    outcome = execute(repos, ledger, envelope, noisy)
+    assert (outcome.sealed_result, outcome.advisory_code) == (None, "NO_CHANGES")
 
 
 @pytest.mark.parametrize(
