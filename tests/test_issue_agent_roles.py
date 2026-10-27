@@ -534,14 +534,27 @@ def test_an_unavailable_git_view_is_reported_as_unknown_never_as_zero(tmp_path: 
 
 
 def _real_contract_prompt(issue_text: str = "mission text that must never be logged") -> bytes:
-    """The prompt as the Smart Prompt Machine renders it from the real engineering-implement specification."""
+    """The prompt as the Smart Prompt Machine renders it: the real specification and the real OBJECTIVE nesting.
+
+    ``OBJECTIVE`` is ``{"untrusted_user_task": <JSON string>}`` whose inner document carries the DPM context and the
+    Issue text under separate keys (``issue_agent_task_text`` + ``smart_prompt_machine.compile``).
+    """
 
     from hunter.evidence_intelligence.pre_model import EvidenceExtractionIntent, _render_prompt
     from hunter.evidence_intelligence.smart_prompt_routing import ENGINEERING_IMPLEMENT_PROFILE as profile
 
+    inner = json.dumps(
+        {
+            "governed_prevention_context": {
+                "scope_allowed_paths": ["src/a.py", "tests/test_a.py", "tests/test_b.py"],
+                "scope_prohibited_paths": [".github/", "config/"],
+            },
+            "untrusted_task": issue_text,
+        }
+    )
     intent = EvidenceExtractionIntent(
         task_type=profile.task_type,
-        objective=json.dumps({"untrusted_user_task": issue_text}),
+        objective=json.dumps({"untrusted_user_task": inner}),
         workflow_stage=profile.workflow_stage,
         target_id="github-issue:o/r#1",
         output_contract_id=profile.output_contract_id,
@@ -551,13 +564,7 @@ def _real_contract_prompt(issue_text: str = "mission text that must never be log
         historical_cutoff=None,
     )
     rendered = _render_prompt(intent=intent, specification=profile.specification, spans=(), missingness_reason_codes=())
-    context = json.dumps(
-        {
-            "scope_allowed_paths": ["src/a.py", "tests/test_a.py", "tests/test_b.py"],
-            "scope_prohibited_paths": [".github/", "config/"],
-        }
-    )
-    return rendered.replace("CONTEXT\n", "CONTEXT\n" + context, 1).encode()
+    return rendered.encode()
 
 
 def test_the_delivered_contract_is_described_by_structure_never_by_content() -> None:
@@ -569,6 +576,12 @@ def test_the_delivered_contract_is_described_by_structure_never_by_content() -> 
     line = " ".join(f"{name}={value}" for name, value in summary.items())
     for forbidden in ("mission text", "src/a.py", ".github", "Execute exactly"):
         assert forbidden not in line
+
+
+def test_scope_counts_come_from_the_dpm_context_and_cannot_be_spoofed_by_issue_text() -> None:
+    spoof = '{"scope_allowed_paths": ["/", "/etc"], "scope_prohibited_paths": []}'
+    summary = roles.prompt_contract_summary(_real_contract_prompt(issue_text=spoof))
+    assert (summary["scope_allowed_paths"], summary["scope_prohibited_paths"]) == (3, 2)
 
 
 @pytest.mark.parametrize(

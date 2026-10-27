@@ -345,14 +345,25 @@ _JSON_OBJECT_CONTRACT: Final = '{"type":"object"}'
 _EXTRACTION_AUTHORITY: Final = "Maximum output authority: ExtractionProposal"
 
 
-def _scope_path_count(text: str, key: str) -> int:
-    match = re.search(rf'"{key}"\s*:\s*(\[[^\]]*\])', text)
+def _delivered_scope(text: str) -> Mapping[str, Any]:
+    """The DPM scope the objective carries.
+
+    ``OBJECTIVE`` is one JSON line whose ``untrusted_user_task`` is itself JSON; the scope sits under its top-level
+    ``governed_prevention_context`` key. Issue text lives under a different key, so it cannot spoof these counts.
+    """
+
+    match = re.search(r"^OBJECTIVE\n([^\n]*)$", text, re.MULTILINE)
     if match is None:
-        return -1
+        return {}
     try:
-        value = json.loads(match.group(1))
-    except ValueError:
-        return -1
+        context = json.loads(json.loads(match.group(1))["untrusted_user_task"])["governed_prevention_context"]
+    except (ValueError, KeyError, TypeError):
+        return {}
+    return context if isinstance(context, dict) else {}
+
+
+def _scope_path_count(scope: Mapping[str, Any], key: str) -> int:
+    value = scope.get(key)
     return len(value) if isinstance(value, list) and all(isinstance(item, str) for item in value) else -1
 
 
@@ -375,14 +386,15 @@ def prompt_contract_summary(prompt: bytes) -> dict[str, str | int]:
             if declared == WORKSPACE_EDIT_OUTPUT_CONTRACT
             else "json_object" if contract.group(1).strip() == _JSON_OBJECT_CONTRACT else "other"
         )
+    scope = _delivered_scope(text)
     return {
         "prompt_bytes": len(prompt),
         "prompt_sha256_12": hashlib.sha256(prompt).hexdigest()[:12],
         "sections": sections,
         "output_contract": output_contract,
         "extraction_proposal_authority": int(_EXTRACTION_AUTHORITY in text),
-        "scope_allowed_paths": _scope_path_count(text, "scope_allowed_paths"),
-        "scope_prohibited_paths": _scope_path_count(text, "scope_prohibited_paths"),
+        "scope_allowed_paths": _scope_path_count(scope, "scope_allowed_paths"),
+        "scope_prohibited_paths": _scope_path_count(scope, "scope_prohibited_paths"),
     }
 
 
