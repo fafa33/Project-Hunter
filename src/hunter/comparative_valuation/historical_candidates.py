@@ -8,7 +8,7 @@ This module deliberately does not activate comparative valuation.
 from __future__ import annotations
 
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import UTC, datetime
 
 from hunter.comparative_valuation.models import PeerCandidate
 
@@ -31,6 +31,12 @@ class HistoricalCandidateAdmission:
             raise ValueError("historical admission requires versioned provenance")
         if any(t.tzinfo is None for t in (self.effective_at, self.published_at, self.observed_at, self.known_at)):
             raise ValueError("historical admission timestamps must be timezone-aware")
+        if (
+            self.effective_at > self.observed_at
+            or self.observed_at > self.published_at
+            or self.published_at > self.known_at
+        ):
+            raise ValueError("historical admission chronology is inconsistent")
         if (
             not self.content_hash.startswith("sha256:")
             or len(self.content_hash) != 71
@@ -58,12 +64,14 @@ def select_historical_candidates(
     if not taxonomy_id or not taxonomy_version:
         raise ValueError("historical replay requires versioned taxonomy")
     selected: dict[tuple[str, str], HistoricalCandidateAdmission] = {}
+    cutoff = cutoff.astimezone(UTC)
+    known_by = known_by.astimezone(UTC)
     for item in admissions:
         if item.taxonomy_id != taxonomy_id or item.taxonomy_version != taxonomy_version:
             continue
-        if max(item.effective_at, item.published_at, item.observed_at, item.known_at) > cutoff:
+        if item.effective_at > cutoff:
             continue
-        if max(item.published_at, item.observed_at, item.known_at) > known_by:
+        if item.known_at > known_by:
             continue
         if (
             item.candidate.source_record_id != item.source_id

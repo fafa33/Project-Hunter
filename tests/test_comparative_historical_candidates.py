@@ -105,3 +105,26 @@ def test_malformed_hash_and_missing_taxonomy_fail_closed():
             taxonomy_id="",
             taxonomy_version="v1",
         )
+
+
+def test_inconsistent_admission_chronology_fails_closed():
+    from dataclasses import replace
+
+    admission = _admission()
+    with pytest.raises(ValueError, match="chronology"):
+        replace(admission, published_at=admission.effective_at - timedelta(seconds=1))
+
+
+def test_timezone_equivalent_cutoff_replay():
+    from datetime import timezone
+
+    admission = _admission()
+    offset = timezone(timedelta(hours=2))
+    cutoff = datetime(2025, 1, 2, tzinfo=UTC)
+    assert select_historical_candidates(
+        (admission,),
+        cutoff=cutoff.astimezone(offset),
+        known_by=cutoff.astimezone(offset),
+        taxonomy_id="taxonomy",
+        taxonomy_version="v1",
+    ) == _select([admission])
