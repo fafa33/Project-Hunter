@@ -30,8 +30,6 @@ import hashlib
 import json
 import os
 import re
-import shutil
-import sqlite3
 import subprocess
 import tempfile
 import threading
@@ -330,6 +328,16 @@ def workspace_diagnostics(workspace: Path, git_dir: Path, home: Path) -> dict[st
     }
 
 
+#: The only instruction the executor adds to the signed prompt. Collection reads the workspace diff and nothing the
+#: model prints, so the directive is what makes repository edits (not a printed JSON proposal) the deliverable.
+EDIT_DIRECTIVE: Final = (
+    "Implement the signed task in the attached file by editing actual repository files "
+    "in this workspace. Respect its allowed and prohibited paths. "
+    "Do not merely explain a plan or claim completion: inspect the relevant files, "
+    "make the smallest correct code/test changes, and run focused checks. "
+    "If the task cannot be implemented within the authorized scope, do not fabricate edits."
+)
+
 #: The task contract the model is actually handed, described by structure and counts only. The prompt text is
 #: signed, untrusted-derived and never logged: no section body, path or sentence leaves this function.
 _PROMPT_SECTIONS: Final = ("SYSTEM", "TASK", "OBJECTIVE", "AUTHORITY", "OUTPUT_CONTRACT", "CONTEXT", "MISSINGNESS")
@@ -370,184 +378,6 @@ def prompt_contract_summary(prompt: bytes) -> dict[str, str | int]:
         "scope_allowed_paths": _scope_path_count(text, "scope_allowed_paths"),
         "scope_prohibited_paths": _scope_path_count(text, "scope_prohibited_paths"),
     }
-
-
-#: OpenCode 1.18.30 keeps sessions in SQLite (`<XDG_DATA_HOME>/opencode/opencode*.db`): `part.data` holds one JSON
-#: part per row; a tool part is ``{"type": "tool", "tool": <id>, "state": {"status": ..., "input": {...}}}``.
-_WRITE_TOOLS: Final = frozenset({"write", "edit", "multiedit", "patch", "apply_patch"})
-_READ_TOOLS: Final = frozenset({"read", "glob", "grep", "list", "codesearch", "lsp"})
-_SESSION_DB_LIMIT_BYTES: Final = 256 * 1024 * 1024
-_SESSION_ROW_LIMIT: Final = 50_000
-_SESSION_ROW_BYTES: Final = 1024 * 1024
-_ACTIVITY_KEYS: Final = (
-    "session_db", "delivered_text_bytes", "attachment_parts", "assistant_messages", "finish_stop",
-    "finish_tool_calls", "finish_other", "assistant_errors", "session_changed_files", "tool_calls",
-    "read_calls", "shell_calls", "other_calls", "write_calls", "write_completed", "write_error",
-    "write_unfinished", "write_err_permission", "write_err_missing", "write_err_outside_project",
-    "write_err_other", "write_inside", "write_outside", "write_unparsed", "targets_changed",
-    "targets_ignored", "targets_unchanged", "targets_missing", "truncated",
-)  # fmt: skip
-
-
-def _write_target(workspace: Path, raw: Any) -> tuple[str, str | None]:
-    """``(inside|outside|unparsed, workspace-relative path)`` for one write call's target. Never logged."""
-
-    if not isinstance(raw, str) or not raw or "\0" in raw:
-        return "unparsed", None
-    root = os.path.realpath(workspace)
-    candidate = os.path.realpath(raw if os.path.isabs(raw) else os.path.join(root, raw))
-    if candidate == root or not candidate.startswith(root + os.sep):
-        return "outside", None
-    return "inside", os.path.relpath(candidate, root)
-
-
-def _error_class(message: Any) -> str:
-    lowered = message.lower() if isinstance(message, str) else ""
-    if any(marker in lowered for marker in ("permission", "eacces", "denied", "not allowed", "rejected")):
-        return "permission"
-    if any(marker in lowered for marker in ("outside", "external", "not in the project")):
-        return "outside_project"
-    if any(marker in lowered for marker in ("enoent", "no such file", "not found", "does not exist")):
-        return "missing"
-    return "other"
-
-
-def _session_database(home: Path) -> Path | None:
-    found = sorted((home / ".local" / "share" / "opencode").glob("opencode*.db"))
-    return found[0] if found else None
-
-
-def _is_private_regular_file(path: Path, home: Path) -> bool:
-    """The model controls this tree: a link out of the home must never be followed by the trusted reader."""
-
-    root = os.path.realpath(home)
-    return not path.is_symlink() and path.is_file() and os.path.realpath(path).startswith(root + os.sep)
-
-
-def model_session_activity(home: Path, workspace: Path, git_dir: Path, *, base_sha: str) -> dict[str, int]:
-    """Whether the model attempted a filesystem write, whether it succeeded, where, and whether it took effect.
-
-    The session database is written by the untrusted model process, so it is read from a private copy, bounded,
-    and used for telemetry only: nothing here is authority and only integers are returned (``-1`` = unknown,
-    ``0`` for ``session_db`` = no session database). No prompt, message text, tool output, path or name is emitted.
-    """
-
-    counts = dict.fromkeys(_ACTIVITY_KEYS, 0)
-    database = _session_database(home)
-    if database is None:
-        return counts
-    counts["session_db"] = -1
-    if not _is_private_regular_file(database, home):
-        return counts
-    ignored: set[str] = set()
-    changed: set[str] = set()
-    try:
-        _git(git_dir, workspace, "add", "--all")
-        listing = _git(git_dir, workspace, "ls-files", "-z", "--others", "--ignored", "--exclude-standard")
-        ignored = {item.decode("utf-8", "replace") for item in listing.split(b"\0") if item}
-        names = _git(git_dir, workspace, "diff", "--cached", "--no-renames", "--name-only", "-z", base_sha)
-        changed = {item.decode("utf-8", "replace") for item in names.split(b"\0") if item}
-        git_known = True
-    except (RoleRefused, subprocess.SubprocessError, OSError):
-        git_known = False
-    try:
-        if database.stat().st_size > _SESSION_DB_LIMIT_BYTES:
-            return counts
-        with tempfile.TemporaryDirectory() as scratch:
-            copy = Path(scratch) / "session.db"
-            shutil.copyfile(database, copy)
-            for suffix in ("-wal", "-shm"):
-                sibling = database.with_name(database.name + suffix)
-                if sibling.is_file():
-                    shutil.copyfile(sibling, Path(scratch) / ("session.db" + suffix))
-            connection = sqlite3.connect(copy)
-            try:
-                connection.execute("PRAGMA query_only = 1")
-                roles_by_message: dict[str, str] = {}
-                for message_id, raw in connection.execute(
-                    "SELECT id, data FROM message ORDER BY time_created LIMIT ?", (_SESSION_ROW_LIMIT,)
-                ):
-                    data = _json_object(raw)
-                    role = data.get("role")
-                    roles_by_message[str(message_id)] = role if isinstance(role, str) else ""
-                    if role == "assistant":
-                        counts["assistant_messages"] += 1
-                        finish = data.get("finish")
-                        counts[
-                            (
-                                "finish_stop"
-                                if finish == "stop"
-                                else "finish_tool_calls" if finish == "tool-calls" else "finish_other"
-                            )
-                        ] += 1
-                        counts["assistant_errors"] += int(bool(data.get("error")))
-                counts["session_changed_files"] = int(
-                    connection.execute("SELECT COALESCE(SUM(summary_files), 0) FROM session").fetchone()[0] or 0
-                )
-                targets: set[str] = set()
-                parts = connection.execute(
-                    "SELECT message_id, data FROM part ORDER BY time_created LIMIT ?", (_SESSION_ROW_LIMIT + 1,)
-                ).fetchall()
-            finally:
-                connection.close()
-    except (sqlite3.Error, OSError, ValueError, TypeError):
-        return counts
-    counts["truncated"] = int(len(parts) > _SESSION_ROW_LIMIT)
-    for message_id, raw in parts[:_SESSION_ROW_LIMIT]:
-        part = _json_object(raw)
-        kind = part.get("type")
-        if kind == "file" and roles_by_message.get(str(message_id)) == "user":
-            counts["attachment_parts"] += 1
-        elif kind == "text" and roles_by_message.get(str(message_id)) == "user":
-            text = part.get("text")
-            counts["delivered_text_bytes"] += len(text.encode("utf-8")) if isinstance(text, str) else 0
-        elif kind == "tool":
-            tool = part.get("tool")
-            state_ = part.get("state") if isinstance(part.get("state"), dict) else {}
-            status = state_.get("status")
-            counts["tool_calls"] += 1
-            if tool in _WRITE_TOOLS:
-                counts["write_calls"] += 1
-                key = {"completed": "write_completed", "error": "write_error"}.get(status, "write_unfinished")
-                counts[key] += 1
-                if status == "error":
-                    counts[f"write_err_{_error_class(state_.get('error'))}"] += 1
-                arguments = state_.get("input") if isinstance(state_.get("input"), dict) else {}
-                where, relative = _write_target(workspace, arguments.get("filePath", arguments.get("path")))
-                counts[f"write_{where}"] += 1
-                if status == "completed" and relative is not None:
-                    targets.add(relative)
-            elif tool in _READ_TOOLS:
-                counts["read_calls"] += 1
-            elif tool == "bash":
-                counts["shell_calls"] += 1
-            else:
-                counts["other_calls"] += 1
-    for relative in targets:
-        if not git_known:
-            counts["targets_changed"] = counts["targets_ignored"] = counts["targets_unchanged"] = -1
-            counts["targets_missing"] = -1
-            break
-        if not os.path.lexists(os.path.join(workspace, relative)):
-            counts["targets_missing"] += 1
-        elif relative in changed:
-            counts["targets_changed"] += 1
-        elif relative in ignored:
-            counts["targets_ignored"] += 1
-        else:
-            counts["targets_unchanged"] += 1
-    counts["session_db"] = 1
-    return counts
-
-
-def _json_object(raw: Any) -> dict[str, Any]:
-    if not isinstance(raw, str) or len(raw) > _SESSION_ROW_BYTES:
-        return {}
-    try:
-        value = json.loads(raw)
-    except ValueError:
-        return {}
-    return value if isinstance(value, dict) else {}
 
 
 def materialize_base(
@@ -753,13 +583,7 @@ def run_executor(
         prompt_path.chmod(0o600)
         model_argv = (
             *model_argv,
-            (
-                "Implement the signed task in the attached file by editing actual repository files "
-                "in this workspace. Respect its allowed and prohibited paths. "
-                "Do not merely explain a plan or claim completion: inspect the relevant files, "
-                "make the smallest correct code/test changes, and run focused checks. "
-                "If the task cannot be implemented within the authorized scope, do not fabricate edits."
-            ),
+            EDIT_DIRECTIVE,
             "--file",
             str(prompt_path),
         )
@@ -791,8 +615,6 @@ def run_executor(
         advisory = "MODEL_TIMEOUT"
     finally:
         isolation.stop()  # nothing the model started survives into collection
-    activity = model_session_activity(home, workspace, git_dir, base_sha=bound["base_sha"])
-    print("executor model activity: " + " ".join(f"{name}={value}" for name, value in activity.items()), flush=True)
     if advisory is not None:
         return ExecutorOutcome(None, advisory)
     try:

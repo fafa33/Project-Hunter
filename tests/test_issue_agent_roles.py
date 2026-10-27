@@ -579,196 +579,52 @@ def test_an_unrecognised_contract_is_unknown_never_assumed(prompt: bytes, expect
     assert {key: summary[key] for key in expected} == expected
 
 
-SESSION_SCHEMA = (
-    "CREATE TABLE session (id text PRIMARY KEY, summary_files integer);"
-    "CREATE TABLE message (id text PRIMARY KEY, session_id text, time_created integer, time_updated integer, data text);"
-    "CREATE TABLE part (id text PRIMARY KEY, message_id text, session_id text, time_created integer,"
-    " time_updated integer, data text);"
-)
+# --- the output-contract / editing-directive boundary (Issue #577) ---------------------------------------------
+#
+# The Smart Prompt Machine's engineering-implement prompt is a JSON-object proposal contract with
+# "ExtractionProposal" authority, while the executor's only addition asks for repository edits. Collection reads
+# the workspace diff and ignores everything the model prints, so the diff is the sole deliverable. These tests pin
+# that boundary deterministically: reconciling the two sides must be a deliberate change, not drift.
 
 
-def _session(
-    home: Path, *, messages: Sequence[Mapping[str, Any]], parts: Sequence[tuple[int, Any]], files: int = 0
-) -> None:
-    """A session database in OpenCode 1.18.30's own table layout (message/part rows hold one JSON document)."""
-
-    import sqlite3
-
-    directory = home / ".local" / "share" / "opencode"
-    directory.mkdir(parents=True)
-    with sqlite3.connect(directory / "opencode.db") as db:
-        db.executescript(SESSION_SCHEMA)
-        db.execute("INSERT INTO session VALUES ('s', ?)", (files,))
-        for index, message in enumerate(messages):
-            db.execute("INSERT INTO message VALUES (?, 's', ?, ?, ?)", (f"m{index}", index, index, json.dumps(message)))
-        for index, (owner, part) in enumerate(parts):
-            db.execute(
-                "INSERT INTO part VALUES (?, ?, 's', ?, ?, ?)",
-                (f"p{index}", f"m{owner}", index, index, part if isinstance(part, str) else json.dumps(part)),
-            )
+def test_the_trusted_contract_and_the_editing_directive_are_pinned_together() -> None:
+    summary = roles.prompt_contract_summary(_real_contract_prompt())
+    assert (summary["output_contract"], summary["extraction_proposal_authority"]) == ("json_object", 1)
+    assert "editing actual repository files" in roles.EDIT_DIRECTIVE
+    assert "do not fabricate edits" in roles.EDIT_DIRECTIVE
 
 
-def _tool(name: str, status: str, **state: Any) -> dict[str, Any]:
-    return {"type": "tool", "tool": name, "callID": "c", "state": {"status": status, **state}}
+def test_the_directive_is_the_only_instruction_added_to_the_signed_prompt(repos: dict[str, Any]) -> None:
+    ledger, envelope = authorize(repos)
+    isolation = RecordingIsolation(CANARY)
+    execute(repos, ledger, envelope, isolation)
+    argv = isolation.calls[0]["argv"]
+    assert argv[:2] == ("opencode", "run") and argv[2] == roles.EDIT_DIRECTIVE and argv[3] == "--file"
+    assert len(argv) == 5 and Path(argv[4]).read_bytes() == PROMPT.encode()
 
 
-def _tracked_workspace(tmp_path: Path) -> tuple[Path, Path, Path, str]:
-    workspace, git_dir, home = tmp_path / "workspace", tmp_path / "trusted.git", tmp_path / "home"
-    workspace.mkdir()
-    home.mkdir()
-    roles._git(git_dir, workspace, "init", "--quiet")
-    (workspace / "kept.py").write_text("one\n")
-    (workspace / ".gitignore").write_text("*.log\n")
-    roles._git(git_dir, workspace, "add", "kept.py", ".gitignore")
-    roles._git(
-        git_dir,
-        workspace,
-        "-c",
-        "user.name=s",
-        "-c",
-        "user.email=s@s",
-        "-c",
-        "commit.gpgsign=false",
-        "commit",
-        "-qm",
-        "base",
-    )
-    return workspace, git_dir, home, roles._git(git_dir, workspace, "rev-parse", "HEAD").decode().strip()
+def test_an_executable_task_is_collected_when_the_model_edits_a_tracked_file(repos: dict[str, Any]) -> None:
+    ledger, envelope = authorize(repos)
+    outcome = execute(repos, ledger, envelope, RecordingIsolation('echo "- documented" >> README.md'))
+    assert outcome.advisory_code is None and outcome.sealed_result
 
 
-def test_no_session_database_is_reported_as_zero_not_as_an_attempt(tmp_path: Path) -> None:
-    workspace, git_dir, home, base = _tracked_workspace(tmp_path)
-    activity = roles.model_session_activity(home, workspace, git_dir, base_sha=base)
-    assert activity["session_db"] == 0 and activity["write_calls"] == 0 and activity["tool_calls"] == 0
-
-
-def test_a_model_that_only_read_files_is_distinguished_from_one_that_tried_to_write(tmp_path: Path) -> None:
-    workspace, git_dir, home, base = _tracked_workspace(tmp_path)
-    _session(
-        home,
-        messages=[{"role": "user"}, {"role": "assistant", "finish": "stop"}],
-        parts=[
-            (0, {"type": "text", "text": "x" * 1000}),
-            (0, {"type": "file", "mime": "text/plain"}),
-            (1, _tool("read", "completed", input={"filePath": "kept.py"})),
-            (1, _tool("grep", "completed")),
-            (1, _tool("bash", "completed")),
-        ],
-    )
-    activity = roles.model_session_activity(home, workspace, git_dir, base_sha=base)
-    assert (activity["session_db"], activity["delivered_text_bytes"], activity["attachment_parts"]) == (1, 1000, 1)
-    assert (activity["read_calls"], activity["shell_calls"], activity["write_calls"]) == (2, 1, 0)
-    assert (activity["assistant_messages"], activity["finish_stop"]) == (1, 1)
-
-
-def test_write_attempts_are_classified_by_outcome_target_and_effect(tmp_path: Path) -> None:
-    workspace, git_dir, home, base = _tracked_workspace(tmp_path)
-    (workspace / "kept.py").write_text("two\n")  # a real, collectable edit
-    (workspace / "noise.log").write_text("ignored\n")  # an edit git add --all will never see
-    secret_path = str(tmp_path / "elsewhere" / "private-name.txt")
-    _session(
-        home,
-        messages=[{"role": "assistant", "finish": "tool-calls"}],
-        parts=[
-            (0, _tool("edit", "completed", input={"filePath": "kept.py"})),
-            (0, _tool("write", "completed", input={"filePath": str(workspace / "noise.log")})),
-            (0, _tool("write", "completed", input={"filePath": "never-created.py"})),
-            (
-                0,
-                _tool("edit", "error", input={"filePath": secret_path}, error="Permission denied: /x/private-name.txt"),
-            ),
-            (0, _tool("write", "error", input={"filePath": "../escape.py"}, error="path is outside the project")),
-            (0, _tool("write", "running", input={})),
-            (0, _tool("apply_patch", "completed", input={"patchText": "***"})),
-        ],
-        files=1,
-    )
-    activity = roles.model_session_activity(home, workspace, git_dir, base_sha=base)
-    assert activity["write_calls"] == 7
-    assert (activity["write_completed"], activity["write_error"], activity["write_unfinished"]) == (4, 2, 1)
-    assert (activity["write_err_permission"], activity["write_err_outside_project"]) == (1, 1)
-    assert (activity["write_inside"], activity["write_outside"], activity["write_unparsed"]) == (3, 2, 2)
-    assert (activity["targets_changed"], activity["targets_ignored"], activity["targets_missing"]) == (1, 1, 1)
-    assert activity["targets_unchanged"] == 0 and activity["session_changed_files"] == 1
-    assert activity["finish_tool_calls"] == 1
-
-
-def test_a_claimed_write_with_no_effect_is_unchanged_not_changed(tmp_path: Path) -> None:
-    workspace, git_dir, home, base = _tracked_workspace(tmp_path)
-    _session(home, messages=[], parts=[(0, _tool("edit", "completed", input={"filePath": "kept.py"}))])
-    activity = roles.model_session_activity(home, workspace, git_dir, base_sha=base)
-    assert (activity["targets_unchanged"], activity["targets_changed"]) == (1, 0)
-
-
-def test_a_hostile_session_database_is_bounded_and_never_trusted(tmp_path: Path) -> None:
-    workspace, git_dir, home, base = _tracked_workspace(tmp_path)
-    directory = home / ".local" / "share" / "opencode"
-    directory.mkdir(parents=True)
-    (directory / "opencode.db").write_bytes(b"this is not sqlite")
-    assert roles.model_session_activity(home, workspace, git_dir, base_sha=base)["session_db"] == -1
-
-
-def test_a_session_database_linked_out_of_the_home_is_never_followed(tmp_path: Path) -> None:
-    workspace, git_dir, home, base = _tracked_workspace(tmp_path)
-    outside = tmp_path / "outside.db"
-    outside.write_bytes(b"x")
-    directory = home / ".local" / "share" / "opencode"
-    directory.mkdir(parents=True)
-    (directory / "opencode.db").symlink_to(outside)
-    assert roles.model_session_activity(home, workspace, git_dir, base_sha=base)["session_db"] == -1
-
-
-def test_malformed_rows_and_oversized_rows_are_ignored(tmp_path: Path) -> None:
-    workspace, git_dir, home, base = _tracked_workspace(tmp_path)
-    _session(
-        home,
-        messages=[{"role": "assistant"}],
-        parts=[
-            (0, "not json"),
-            (0, json.dumps([1, 2])),
-            (0, '{"type": "tool", "tool": "write", "pad": "' + "x" * (2 * 1024 * 1024) + '"}'),
-        ],
-    )
-    activity = roles.model_session_activity(home, workspace, git_dir, base_sha=base)
-    assert activity["session_db"] == 1 and activity["tool_calls"] == 0 and activity["finish_other"] == 1
-
-
-SESSION_SCRIPT = """python3 - <<'PY'
-import json, os, sqlite3
-directory = os.path.join(os.environ["HOME"], ".local", "share", "opencode")
-os.makedirs(directory)
-db = sqlite3.connect(os.path.join(directory, "opencode.db"))
-db.executescript({schema!r})
-db.execute("INSERT INTO session VALUES ('s', 0)")
-db.execute("INSERT INTO message VALUES ('m0', 's', 0, 0, ?)", (json.dumps({{"role": "assistant", "finish": "stop"}}),))
-part = {{"type": "tool", "tool": "edit", "state": {{"status": "completed", "input": {{"filePath": "README.md"}}}}}}
-db.execute("INSERT INTO part VALUES ('p0', 'm0', 's', 0, 0, ?)", (json.dumps(part),))
-db.commit()
-PY"""
-
-
-def test_a_claimed_edit_the_collector_never_saw_is_visible_next_to_no_changes(
+def test_a_non_actionable_task_answered_as_a_json_proposal_is_never_collected(
     repos: dict[str, Any], capsys: pytest.CaptureFixture[str]
 ) -> None:
     ledger, envelope = authorize(repos)
-    outcome = execute(repos, ledger, envelope, RecordingIsolation(SESSION_SCRIPT.format(schema=SESSION_SCHEMA)))
+    # A model that obeys the trusted OUTPUT_CONTRACT prints a JSON object and edits nothing.
+    isolation = RecordingIsolation('echo \'{"proposal": "no change is required", "files": []}\'')
+    outcome = execute(repos, ledger, envelope, isolation)
     assert (outcome.sealed_result, outcome.advisory_code) == (None, "NO_CHANGES")
-    out = capsys.readouterr().out
-    contract = [line for line in out.splitlines() if line.startswith("executor task contract: ")]
-    activity = [line for line in out.splitlines() if line.startswith("executor model activity: ")]
-    assert len(contract) == 1 and len(activity) == 1
-    assert "output_contract=absent" in contract[0]  # the stand-in prompt is not an SPM render
-    assert "session_db=1" in activity[0] and "write_calls=1" in activity[0] and "targets_unchanged=1" in activity[0]
-    assert "README.md" not in out and SECRET not in out and PROMPT not in out
+    assert len(isolation.calls) == 1 and isolation.stopped == 1
 
 
-def test_the_activity_report_is_emitted_when_the_model_times_out_too(
-    repos: dict[str, Any], capsys: pytest.CaptureFixture[str]
-) -> None:
+def test_printed_output_alone_never_turns_a_zero_change_run_into_success(repos: dict[str, Any]) -> None:
     ledger, envelope = authorize(repos)
-    outcome = execute(repos, ledger, envelope, RecordingIsolation(hang=True))
-    assert outcome.advisory_code == "MODEL_TIMEOUT"
-    assert "executor model activity: session_db=0" in capsys.readouterr().out
+    noisy = RecordingIsolation("i=0; while [ $i -lt 50 ]; do echo '{\"edited\": true}'; i=$((i+1)); done")
+    outcome = execute(repos, ledger, envelope, noisy)
+    assert (outcome.sealed_result, outcome.advisory_code) == (None, "NO_CHANGES")
 
 
 @pytest.mark.parametrize(
