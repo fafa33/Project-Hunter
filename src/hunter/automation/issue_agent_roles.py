@@ -51,7 +51,7 @@ from hunter.automation.issue_agent_transport import (
     seal,
 )
 from hunter.automation.n8n_handoff import PromptAutomationEnvelopeHandoff
-from hunter.evidence_intelligence.smart_prompt_routing import PromptAutomationVerifier
+from hunter.evidence_intelligence.smart_prompt_routing import WORKSPACE_EDIT_OUTPUT_CONTRACT, PromptAutomationVerifier
 from hunter.task_scope import TaskScopeContract
 
 RECEIPT_SCHEMA_VERSION: Final = "hunter-issue-agent-validation-receipt-v2"
@@ -368,7 +368,13 @@ def prompt_contract_summary(prompt: bytes) -> dict[str, str | int]:
     if contract is None:
         output_contract = "absent"
     else:
-        output_contract = "json_object" if contract.group(1).strip() == _JSON_OBJECT_CONTRACT else "other"
+        # The deliverable is the whole contract text, which may run past one line.
+        declared = text[contract.start(1) :].split("\n\nCONTEXT", 1)[0].strip()
+        output_contract = (
+            "workspace_edits"
+            if declared == WORKSPACE_EDIT_OUTPUT_CONTRACT
+            else "json_object" if contract.group(1).strip() == _JSON_OBJECT_CONTRACT else "other"
+        )
     return {
         "prompt_bytes": len(prompt),
         "prompt_sha256_12": hashlib.sha256(prompt).hexdigest()[:12],

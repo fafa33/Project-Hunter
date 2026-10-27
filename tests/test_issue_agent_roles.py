@@ -21,7 +21,13 @@ from hunter.automation import issue_agent_state as state
 from hunter.automation.issue_agent_transport import TransportBinding, recipient_key_id, seal
 from hunter.automation.n8n_handoff import serialize_prompt_automation_handoff
 from hunter.evidence_intelligence import smart_prompt_routing
-from hunter.evidence_intelligence.smart_prompt_routing import PromptAutomationVerifier
+from hunter.evidence_intelligence.smart_prompt_routing import (
+    ENGINEERING_IMPLEMENT_PROFILE,
+    ENGINEERING_REVIEW_FIX_PROFILE,
+    WORKSPACE_EDIT_OUTPUT_CONTRACT,
+    WORKSPACE_EDIT_OUTPUT_CONTRACT_VERSION,
+    PromptAutomationVerifier,
+)
 
 KEY = Ed25519PrivateKey.generate()
 TRUST = state.TrustRoots({state.public_key_id(KEY.public_key()): KEY.public_key()}, repository_id=1)
@@ -557,7 +563,7 @@ def _real_contract_prompt(issue_text: str = "mission text that must never be log
 def test_the_delivered_contract_is_described_by_structure_never_by_content() -> None:
     summary = roles.prompt_contract_summary(_real_contract_prompt())
     assert summary["sections"] == 7  # SYSTEM, TASK, OBJECTIVE, AUTHORITY, OUTPUT_CONTRACT, CONTEXT, MISSINGNESS
-    assert summary["output_contract"] == "json_object"
+    assert summary["output_contract"] == "workspace_edits"
     assert summary["extraction_proposal_authority"] == 1
     assert (summary["scope_allowed_paths"], summary["scope_prohibited_paths"]) == (3, 2)
     line = " ".join(f"{name}={value}" for name, value in summary.items())
@@ -587,11 +593,28 @@ def test_an_unrecognised_contract_is_unknown_never_assumed(prompt: bytes, expect
 # that boundary deterministically: reconciling the two sides must be a deliberate change, not drift.
 
 
-def test_the_trusted_contract_and_the_editing_directive_are_pinned_together() -> None:
+def test_the_trusted_contract_and_the_editing_directive_agree() -> None:
     summary = roles.prompt_contract_summary(_real_contract_prompt())
-    assert (summary["output_contract"], summary["extraction_proposal_authority"]) == ("json_object", 1)
+    assert summary["output_contract"] == "workspace_edits"
+    assert summary["extraction_proposal_authority"] == 1  # the ceiling stays: edits promote nothing canonical
     assert "editing actual repository files" in roles.EDIT_DIRECTIVE
     assert "do not fabricate edits" in roles.EDIT_DIRECTIVE
+    assert "edit the repository files" in WORKSPACE_EDIT_OUTPUT_CONTRACT
+
+
+def test_every_profile_the_executor_serves_names_edits_as_its_deliverable() -> None:
+    from hunter.automation.issue_agent_execution import ISSUE_AGENT_PROFILE_REGISTRY
+
+    for declared in (ENGINEERING_IMPLEMENT_PROFILE, ENGINEERING_REVIEW_FIX_PROFILE):
+        served = ISSUE_AGENT_PROFILE_REGISTRY.resolve(declared.profile_id, declared.version)
+        assert served.specification.output_contract == WORKSPACE_EDIT_OUTPUT_CONTRACT
+        assert served.output_contract_version == WORKSPACE_EDIT_OUTPUT_CONTRACT_VERSION
+
+
+def test_a_printed_json_object_contract_is_detected_as_contradicting_the_editing_directive() -> None:
+    legacy = _real_contract_prompt().replace(WORKSPACE_EDIT_OUTPUT_CONTRACT.encode(), b'{"type":"object"}')
+    assert roles.prompt_contract_summary(legacy)["output_contract"] == "json_object"
+    assert roles.prompt_contract_summary(b"OUTPUT_CONTRACT\nsomething else\n")["output_contract"] == "other"
 
 
 def test_the_directive_is_the_only_instruction_added_to_the_signed_prompt(repos: dict[str, Any]) -> None:
