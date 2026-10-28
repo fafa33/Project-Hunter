@@ -436,6 +436,16 @@ class CanonicalComparativeValuationService:
             raise CanonicalComparativeValuationAuthorityError(
                 "no strict-known fully-diluted observed market value is available for this identity"
             )
+        supply = self._strict_known_supply(
+            policy=policy,
+            identity=identity,
+            effective_at=effective_at,
+            known_at=known_at,
+        )
+        if supply is None:
+            raise CanonicalComparativeValuationAuthorityError(
+                "no strict-known coherent fully-diluted supply basis is available for this identity"
+            )
         flow_evidence = self._strict_known_flow_evidence(
             policy=policy,
             identity=identity,

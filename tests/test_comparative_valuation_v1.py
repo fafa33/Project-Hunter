@@ -1185,3 +1185,15 @@ def test_prohibited_cross_authority_composition_is_absent(tmp_path) -> None:
     ):
         assert not hasattr(fixture.service, attribute)
     assert not hasattr(fixture.service, "normalize")
+
+
+def test_observation_requires_strict_known_coherent_supply(tmp_path, monkeypatch) -> None:
+    fixture = Fixture(tmp_path)
+    policy = fixture.persist_policy()
+    universe = fixture.persist_universe(policy=policy)
+    original = fixture.service._strict_known_supply
+    monkeypatch.setattr(fixture.service, "_strict_known_supply", lambda **kwargs: None)
+    with pytest.raises(CanonicalComparativeValuationAuthorityError, match="strict-known coherent fully-diluted supply"):
+        fixture.persist_observation(universe=universe, entity="target")
+    monkeypatch.setattr(fixture.service, "_strict_known_supply", original)
+    assert fixture.persist_observation(universe=universe, entity="target").numerator_value
