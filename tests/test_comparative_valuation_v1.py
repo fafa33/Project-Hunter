@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from dataclasses import replace
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
@@ -1197,3 +1198,32 @@ def test_observation_requires_strict_known_coherent_supply(tmp_path, monkeypatch
         fixture.persist_observation(universe=universe, entity="target")
     monkeypatch.setattr(fixture.service, "_strict_known_supply", original)
     assert fixture.persist_observation(universe=universe, entity="target").numerator_value
+
+
+def test_historical_supply_must_bind_selected_fdv(tmp_path, monkeypatch) -> None:
+    fixture = Fixture(tmp_path)
+    policy = fixture.persist_policy()
+    universe = fixture.persist_universe(policy=policy)
+    original = fixture.service._strict_known_supply
+    monkeypatch.setattr(
+        fixture.service,
+        "_strict_known_supply",
+        lambda **kwargs: replace(original(**kwargs), observed_market_fact_ids=("unrelated-fdv",)),
+    )
+    with pytest.raises(CanonicalComparativeValuationAuthorityError, match="does not bind"):
+        fixture.persist_observation(universe=universe, entity="target")
+
+
+def test_historical_flow_requires_exact_365_days(tmp_path, monkeypatch) -> None:
+    fixture = Fixture(tmp_path)
+    policy = fixture.persist_policy()
+    universe = fixture.persist_universe(policy=policy)
+    original = fixture.service._strict_known_flow_evidence
+
+    def shifted(**kwargs):
+        evidence, rule = original(**kwargs)
+        return replace(evidence, accounting_period_start=evidence.accounting_period_start + timedelta(seconds=1)), rule
+
+    monkeypatch.setattr(fixture.service, "_strict_known_flow_evidence", shifted)
+    with pytest.raises(CanonicalComparativeValuationAuthorityError, match="365-day"):
+        fixture.persist_observation(universe=universe, entity="target")

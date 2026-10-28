@@ -446,6 +446,15 @@ class CanonicalComparativeValuationService:
             raise CanonicalComparativeValuationAuthorityError(
                 "no strict-known coherent fully-diluted supply basis is available for this identity"
             )
+        if numerator.record_id not in supply.observed_market_fact_ids:
+            raise CanonicalComparativeValuationAuthorityError(
+                "historical supply basis does not bind the selected observed FDV market fact"
+            )
+        fact_index = supply.observed_market_fact_ids.index(numerator.record_id)
+        if supply.observed_market_fact_versions[fact_index] != numerator.semantic_version:
+            raise CanonicalComparativeValuationAuthorityError(
+                "historical supply basis binds an incompatible observed FDV market fact version"
+            )
         flow_evidence = self._strict_known_flow_evidence(
             policy=policy,
             identity=identity,
@@ -468,8 +477,7 @@ class CanonicalComparativeValuationService:
             raise CanonicalComparativeValuationAuthorityError(
                 "evidence accounting period is not fully contained within the 365-day lookback window"
             )
-        accounting_period_days = (evidence.accounting_period_end - evidence.accounting_period_start).days
-        if accounting_period_days != policy.accounting_horizon_days:
+        if evidence.accounting_period_start != horizon_start or evidence.accounting_period_end != effective_at:
             raise CanonicalComparativeValuationAuthorityError(
                 "evidence accounting period length does not match the 365-day horizon; no annualization is authorized"
             )
