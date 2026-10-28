@@ -9,6 +9,10 @@ from decimal import Decimal
 from pathlib import Path
 from typing import Any
 
+from hunter.comparative_valuation.historical_candidates import (
+    HistoricalCandidateAdmission,
+    select_historical_candidates,
+)
 from hunter.comparative_valuation.models import (
     AUTHORIZING_ADR_REFERENCE,
     AVAILABILITY_STATES,
@@ -257,6 +261,38 @@ class CanonicalComparativeValuationService:
         record = _normalize_universe(record)
         self._persist(_UNIVERSE_SNAPSHOT_TYPE, universe_snapshot, record)
         return record
+
+    def historical_candidates_for_policy(
+        self,
+        *,
+        policy_record_id: str,
+        admissions: tuple[HistoricalCandidateAdmission, ...],
+        cutoff: datetime,
+        known_by: datetime,
+    ) -> tuple[PeerCandidate, ...]:
+        """Reconstruct a historical candidate set without inventing a past write.
+
+        Only a strict-known policy can select admissions. This is a read-only
+        boundary: callers must not treat reconstructed candidates as persisted
+        historical observations or as eligibility decisions.
+        """
+        if cutoff.tzinfo is None or known_by.tzinfo is None or known_by > cutoff:
+            raise CanonicalComparativeValuationAuthorityError("invalid historical cutoff coordinates")
+        policy = self.repository.get_peer_policy(policy_record_id)
+        if policy is None or policy.quality_state != "accepted" or policy.conflict_state not in {"none", "resolved"}:
+            raise CanonicalComparativeValuationAuthorityError("historical candidate policy is unavailable")
+        if policy.effective_at > cutoff or policy.known_at > known_by or policy.recorded_at > known_by:
+            raise CanonicalComparativeValuationAuthorityError("historical candidate policy was not strict-known")
+        candidates = select_historical_candidates(
+            admissions,
+            cutoff=cutoff,
+            known_by=known_by,
+            taxonomy_id=policy.taxonomy,
+            taxonomy_version=policy.taxonomy_version,
+        )
+        if len(candidates) > policy.maximum_candidate_universe_size:
+            raise CanonicalComparativeValuationAuthorityError("historical candidate universe exceeds policy limit")
+        return candidates
 
     # -------------------------------------------------------- eligibility decisions
 

@@ -146,3 +146,41 @@ def test_correction_requires_provenance_and_cannot_silently_rewrite_history():
     )
     with pytest.raises(ValueError, match="canonical lineage resolution"):
         _select([correction])
+
+
+def test_service_historical_candidate_boundary_requires_strict_known_policy():
+    from types import SimpleNamespace
+
+    from hunter.comparative_valuation.service import (
+        CanonicalComparativeValuationAuthorityError,
+        CanonicalComparativeValuationService,
+    )
+
+    admission = _admission()
+    cutoff = datetime(2025, 1, 2, tzinfo=UTC)
+    policy = SimpleNamespace(
+        quality_state="accepted",
+        conflict_state="none",
+        effective_at=cutoff,
+        known_at=cutoff,
+        recorded_at=cutoff,
+        taxonomy="taxonomy",
+        taxonomy_version="v1",
+        maximum_candidate_universe_size=10,
+    )
+    service = object.__new__(CanonicalComparativeValuationService)
+    service.repository = SimpleNamespace(get_peer_policy=lambda _: policy)
+    assert service.historical_candidates_for_policy(
+        policy_record_id="policy",
+        admissions=(admission,),
+        cutoff=cutoff,
+        known_by=cutoff,
+    ) == (admission.candidate,)
+    policy.recorded_at = cutoff + timedelta(seconds=1)
+    with pytest.raises(CanonicalComparativeValuationAuthorityError, match="strict-known"):
+        service.historical_candidates_for_policy(
+            policy_record_id="policy",
+            admissions=(admission,),
+            cutoff=cutoff,
+            known_by=cutoff,
+        )
