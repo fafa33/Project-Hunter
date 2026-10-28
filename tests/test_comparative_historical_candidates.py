@@ -184,3 +184,65 @@ def test_service_historical_candidate_boundary_requires_strict_known_policy():
             cutoff=cutoff,
             known_by=cutoff,
         )
+
+
+def test_valid_correction_replays_only_when_known_at_cutoff():
+    from dataclasses import replace
+
+    original = _admission()
+    corrected = replace(
+        original,
+        content_hash="sha256:" + "c" * 64,
+        supersedes_content_hash=original.content_hash,
+        correction_reason="verified upstream correction",
+        known_at=original.known_at + timedelta(days=1),
+        published_at=original.published_at + timedelta(days=1),
+        candidate=replace(original.candidate, sector_classification="corrected-protocol"),
+    )
+    early = select_historical_candidates(
+        (corrected, original),
+        cutoff=datetime(2025, 1, 1, tzinfo=UTC),
+        known_by=datetime(2025, 1, 1, tzinfo=UTC),
+        taxonomy_id="taxonomy",
+        taxonomy_version="v1",
+    )
+    assert early == (original.candidate,)
+    assert _select((corrected, original)) == (corrected.candidate,)
+    assert _select((original, corrected)) == (corrected.candidate,)
+
+
+def test_correction_branch_and_cross_identity_fail_closed():
+    from dataclasses import replace
+
+    original = _admission()
+    correction = replace(
+        original,
+        content_hash="sha256:" + "c" * 64,
+        supersedes_content_hash=original.content_hash,
+        correction_reason="correct",
+        published_at=original.published_at + timedelta(days=1),
+        known_at=original.known_at + timedelta(days=1),
+    )
+    branch = replace(correction, content_hash="sha256:" + "d" * 64)
+    with pytest.raises(ValueError, match="branching"):
+        _select((original, correction, branch))
+    alien = replace(
+        correction, candidate=replace(correction.candidate, identity=_admission("alien").candidate.identity)
+    )
+    with pytest.raises(ValueError, match="lineage"):
+        _select((original, alien))
+
+
+def test_later_unknown_correction_does_not_rewrite_historical_replay():
+    from dataclasses import replace
+
+    original = _admission()
+    future = replace(
+        original,
+        content_hash="sha256:" + "c" * 64,
+        supersedes_content_hash=original.content_hash,
+        correction_reason="later correction",
+        published_at=original.published_at + timedelta(days=3),
+        known_at=original.known_at + timedelta(days=3),
+    )
+    assert _select((original, future)) == (original.candidate,)

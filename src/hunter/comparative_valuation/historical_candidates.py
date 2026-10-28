@@ -78,26 +78,57 @@ def select_historical_candidates(
         raise ValueError("historical replay requires aware known_by <= cutoff")
     if not taxonomy_id or not taxonomy_version:
         raise ValueError("historical replay requires versioned taxonomy")
-    selected: dict[tuple[str, str], HistoricalCandidateAdmission] = {}
     cutoff = cutoff.astimezone(UTC)
     known_by = known_by.astimezone(UTC)
+    eligible: dict[str, HistoricalCandidateAdmission] = {}
     for item in admissions:
         if item.taxonomy_id != taxonomy_id or item.taxonomy_version != taxonomy_version:
             continue
-        if item.effective_at > cutoff:
-            continue
-        if item.known_at > known_by:
+        if item.effective_at > cutoff or item.known_at > known_by:
             continue
         if (
             item.candidate.source_record_id != item.source_id
             or item.candidate.source_record_version != item.source_version
         ):
             raise ValueError("candidate provenance does not match admission")
-        if item.supersedes_content_hash is not None:
+        if item.content_hash in eligible:
+            previous = eligible[item.content_hash]
+            if previous.candidate.identity.entity_id == item.candidate.identity.entity_id:
+                raise ValueError("conflicting historical economic-entity membership")
+            # Hash collisions between different identities are not valid lineage links;
+            # preserve unrelated records for deterministic membership replay.
+            if previous.candidate.identity != item.candidate.identity:
+                eligible[item.content_hash + ":" + item.candidate.identity.entity_id] = item
+                continue
+        eligible[item.content_hash] = item
+
+    children: dict[str, str] = {}
+    for item in eligible.values():
+        predecessor_hash = item.supersedes_content_hash
+        if predecessor_hash is None:
+            continue
+        predecessor = eligible.get(predecessor_hash)
+        if predecessor is None:
             raise ValueError("historical correction requires canonical lineage resolution")
+        if (
+            predecessor.candidate.identity != item.candidate.identity
+            or predecessor.source_id != item.source_id
+            or predecessor.taxonomy_id != item.taxonomy_id
+            or predecessor.taxonomy_version != item.taxonomy_version
+            or predecessor.known_at >= item.known_at
+            or predecessor.effective_at > item.effective_at
+        ):
+            raise ValueError("historical correction lineage is inconsistent")
+        if predecessor_hash in children:
+            raise ValueError("branching historical correction lineage")
+        children[predecessor_hash] = item.content_hash
+
+    selected: dict[str, HistoricalCandidateAdmission] = {}
+    for item in eligible.values():
+        if item.content_hash in children:
+            continue
         identity = item.candidate.identity
-        key = (identity.entity_id, identity.representation_id)
-        if any(existing.candidate.identity.entity_id == identity.entity_id for existing in selected.values()):
+        if identity.entity_id in selected:
             raise ValueError("conflicting historical economic-entity membership")
-        selected[key] = item
+        selected[identity.entity_id] = item
     return tuple(selected[key].candidate for key in sorted(selected))
