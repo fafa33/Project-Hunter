@@ -2,9 +2,9 @@
 
 ## Mission
 
-Project Hunter exists to continuously discover, validate, prioritize, and deeply analyze the best long-term cryptocurrency investment opportunities across the digital asset ecosystem.
+Project Hunter exists to continuously discover, validate, prioritize, and deeply analyze the early, executable asymmetric capital-growth opportunities across the digital asset ecosystem.
 
-Hunter is not a price prediction system. It is an evidence-first investment intelligence platform whose purpose is to identify where significant gaps may exist between observed market value and evidence-supported intrinsic long-term value while making every conclusion explainable, auditable, and evidence-backed.
+Hunter is an evidence-first opportunity hunting platform: it identifies time-bounded, potentially transient price-multiple opportunities before market repricing, estimates evidence-backed target-hit probabilities, and supports realizable entry and profit-taking. Intrinsic valuation, project-quality research and long-term forecasts are optional supporting signals, not the mission or mandatory hunt criteria. All conclusions remain explainable, auditable and evidence-backed.
 
 ---
 
@@ -35,7 +35,7 @@ Project Hunter aims to:
 
 ## Investment Philosophy
 
-Hunter focuses on long-term asymmetric investment opportunities rather than short-term market prediction.
+Hunter focuses on asymmetric, executable capital-growth opportunities across market cycles. It models the probability of a target being reached at least once within a specified window, distinct from the probability of holding that price at the horizon. It is not a day-trading signal service and does not assume perpetual holding.
 
 Meaningful investment conclusions require evidence regarding:
 
@@ -74,7 +74,7 @@ Success includes:
 - Reduced false confidence.
 - Lower dependence on unsupported assumptions.
 - Consistent historical correctness.
-- Trustworthy long-term analytical outputs.
+- Historically validated early hunt detection, executable profit-taking windows, and measured realizable returns.
 
 Technical sophistication is valuable only when it improves these outcomes.
 
@@ -112,6 +112,6 @@ Project Hunter should always remain:
 - Conservative under uncertainty.
 - Transparent about assumptions.
 - Honest about missing evidence.
-- Focused on improving investment decisions rather than predicting markets.
+- Focused on actionable, evidence-backed hunting and profit realization rather than research output volume.
 
 The project's governance, architecture, implementation process, and development roadmap are intentionally defined and maintained in their respective canonical documents. This document defines the project's vision only.

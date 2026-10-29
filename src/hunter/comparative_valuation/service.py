@@ -1120,6 +1120,12 @@ class CanonicalComparativeValuationService:
             if missingness is not None:
                 missingness.append("attribution_mismatch")
             return None
+        # Aggregated protocol revenue is not proof of native token-holder flow.
+        # Only a primary, independently attributable source may enter the multiple.
+        if evidence.source_authority_tier not in {"official", "audited", "onchain"}:
+            if missingness is not None:
+                missingness.append("non_primary_flow_source")
+            return None
         if evidence.amount is None:
             if missingness is not None:
                 missingness.append("missing_flow_amount")
