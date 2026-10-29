@@ -54,7 +54,10 @@ def test_future_admission_is_not_backfilled():
 
 
 def test_historical_order_independent_of_input():
-    a, b = _admission("a"), _admission("b")
+    from dataclasses import replace
+
+    a = _admission("a")
+    b = replace(_admission("b"), content_hash="sha256:" + "b" * 64)
     assert _select([b, a]) == _select([a, b])
 
 
@@ -246,3 +249,18 @@ def test_later_unknown_correction_does_not_rewrite_historical_replay():
         known_at=original.known_at + timedelta(days=3),
     )
     assert _select((original, future)) == (original.candidate,)
+
+
+def test_cross_entity_digest_reuse_fails_closed():
+    # Identical hashes for different entities must not silently create two
+    # independently authorized historical membership records.
+    with pytest.raises(ValueError, match="content hash"):
+        _select((_admission("a"), _admission("b")))
+
+
+def test_distinct_historical_digests_remain_order_independent():
+    from dataclasses import replace
+
+    a = _admission("a")
+    b = replace(_admission("b"), content_hash="sha256:" + "b" * 64)
+    assert _select((a, b)) == _select((b, a))

@@ -92,14 +92,12 @@ def select_historical_candidates(
         ):
             raise ValueError("candidate provenance does not match admission")
         if item.content_hash in eligible:
-            previous = eligible[item.content_hash]
-            if previous.candidate.identity.entity_id == item.candidate.identity.entity_id:
+            if eligible[item.content_hash].candidate.identity.entity_id == item.candidate.identity.entity_id:
                 raise ValueError("conflicting historical economic-entity membership")
-            # Hash collisions between different identities are not valid lineage links;
-            # preserve unrelated records for deterministic membership replay.
-            if previous.candidate.identity != item.candidate.identity:
-                eligible[item.content_hash + ":" + item.candidate.identity.entity_id] = item
-                continue
+            # One content digest cannot authorize distinct historical admissions.
+            # Reject even cross-entity reuse: a digest is a provenance identity,
+            # not a namespace to be silently disambiguated by entity ID.
+            raise ValueError("conflicting historical admission content hash")
         eligible[item.content_hash] = item
 
     children: dict[str, str] = {}
