@@ -294,6 +294,66 @@ class CanonicalComparativeValuationService:
             raise CanonicalComparativeValuationAuthorityError("historical candidate universe exceeds policy limit")
         return candidates
 
+    def historical_native_flow_for_cutoff(
+        self,
+        *,
+        policy_record_id: str,
+        identity: EconomicClaimIdentity,
+        evidence_type: str,
+        rule_type: str,
+        cutoff: datetime,
+        known_by: datetime,
+    ) -> tuple[Any, Any]:
+        """Read canonical native flow/rule evidence for an exact historical year.
+
+        This is deliberately acquisition-free: an absent historical observation
+        cannot be manufactured from today's provider response or annualized.
+        """
+        if cutoff.tzinfo is None or known_by.tzinfo is None or known_by > cutoff:
+            raise CanonicalComparativeValuationAuthorityError("invalid historical cutoff coordinates")
+        policy = self.repository.get_peer_policy(policy_record_id)
+        if (
+            policy is None
+            or policy.quality_state != "accepted"
+            or policy.conflict_state not in {"none", "resolved"}
+            or policy.effective_at > cutoff
+            or policy.known_at > known_by
+            or policy.recorded_at > known_by
+        ):
+            raise CanonicalComparativeValuationAuthorityError("historical flow policy was not strict-known")
+        if (
+            evidence_type not in policy.required_native_evidence_types
+            or rule_type not in policy.required_value_capture_mechanism_types
+        ):
+            raise CanonicalComparativeValuationAuthorityError("historical flow is not authorized by policy")
+        pair = self._strict_known_flow_evidence(
+            policy=policy,
+            identity=identity,
+            evidence_type=evidence_type,
+            rule_type=rule_type,
+            effective_at=cutoff,
+            known_at=known_by,
+        )
+        if pair is None:
+            raise CanonicalComparativeValuationAuthorityError("historical native flow evidence is unavailable")
+        evidence, rule = pair
+        if (
+            evidence.accounting_period_start != cutoff - timedelta(days=365)
+            or evidence.accounting_period_end != cutoff
+            or evidence.unit is None
+            or evidence.unit.strip().lower() != policy.required_quote_currency
+            or rule.rate_or_proportion is None
+            or evidence.amount is None
+        ):
+            raise CanonicalComparativeValuationAuthorityError(
+                "historical native flow is not exact-365-day strict-known evidence"
+            )
+        amount = Decimal(evidence.amount)
+        rate = Decimal(rule.rate_or_proportion)
+        if not amount.is_finite() or not rate.is_finite() or amount <= 0 or rate <= 0 or rate > 1:
+            raise CanonicalComparativeValuationAuthorityError("historical native attributable flow is invalid")
+        return evidence, rule
+
     # -------------------------------------------------------- eligibility decisions
 
     def persist_eligibility_decision(

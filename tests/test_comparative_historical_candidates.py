@@ -264,3 +264,54 @@ def test_distinct_historical_digests_remain_order_independent():
     a = _admission("a")
     b = replace(_admission("b"), content_hash="sha256:" + "b" * 64)
     assert _select((a, b)) == _select((b, a))
+
+
+def test_historical_native_flow_requires_exact_window_and_known_policy():
+    from types import SimpleNamespace
+
+    from hunter.comparative_valuation.service import (
+        CanonicalComparativeValuationAuthorityError,
+        CanonicalComparativeValuationService,
+    )
+
+    cutoff = datetime(2025, 1, 2, tzinfo=UTC)
+    policy = SimpleNamespace(
+        quality_state="accepted",
+        conflict_state="none",
+        effective_at=cutoff,
+        known_at=cutoff,
+        recorded_at=cutoff,
+        required_native_evidence_types=("onchain_observation",),
+        required_value_capture_mechanism_types=("burn",),
+        required_quote_currency="usd",
+    )
+    evidence = SimpleNamespace(
+        accounting_period_start=cutoff - timedelta(days=365),
+        accounting_period_end=cutoff,
+        unit="usd",
+        amount="100",
+    )
+    rule = SimpleNamespace(rate_or_proportion="0.5")
+    service = object.__new__(CanonicalComparativeValuationService)
+    service.repository = SimpleNamespace(get_peer_policy=lambda _: policy)
+    service._strict_known_flow_evidence = lambda **_: (evidence, rule)
+    kwargs = dict(
+        policy_record_id="policy",
+        identity=_admission().candidate.identity,
+        evidence_type="onchain_observation",
+        rule_type="burn",
+        cutoff=cutoff,
+        known_by=cutoff,
+    )
+    assert service.historical_native_flow_for_cutoff(**kwargs) == (evidence, rule)
+    evidence.accounting_period_start += timedelta(days=1)
+    with pytest.raises(CanonicalComparativeValuationAuthorityError, match="exact-365-day"):
+        service.historical_native_flow_for_cutoff(**kwargs)
+    evidence.accounting_period_start -= timedelta(days=1)
+    policy.recorded_at += timedelta(seconds=1)
+    with pytest.raises(CanonicalComparativeValuationAuthorityError, match="strict-known"):
+        service.historical_native_flow_for_cutoff(**kwargs)
+    policy.recorded_at = cutoff
+    service._strict_known_flow_evidence = lambda **_: None
+    with pytest.raises(CanonicalComparativeValuationAuthorityError, match="unavailable"):
+        service.historical_native_flow_for_cutoff(**kwargs)
