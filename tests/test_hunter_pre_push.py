@@ -375,7 +375,7 @@ def test_unsigned_candidate_safety_fails_closed_on_gate_failure(monkeypatch, tmp
     assert hunter_pre_push.enforce_credential_free_candidate_safety(_update()) == 7
 
 
-def test_push_safety_gates_are_bounded_and_black_is_serial(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_push_safety_gates_are_bounded_and_black_matches_trusted_contract(monkeypatch: pytest.MonkeyPatch) -> None:
     observed = {}
 
     def capture(gates, **kwargs):
@@ -387,5 +387,4 @@ def test_push_safety_gates_are_bounded_and_black_is_serial(monkeypatch: pytest.M
     assert hunter_pre_push._run_push_safety_lane() == 0
     assert observed["timeout"] == 180
     black = dict(observed["gates"])["Black"]
-    assert black[:3] == ("black", "--workers", "1")
-    assert "--check" in black and "--diff" in black
+    assert black == ("black", "--check", "--diff", ".")
