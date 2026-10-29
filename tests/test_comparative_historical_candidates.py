@@ -315,3 +315,67 @@ def test_historical_native_flow_requires_exact_window_and_known_policy():
     service._strict_known_flow_evidence = lambda **_: None
     with pytest.raises(CanonicalComparativeValuationAuthorityError, match="unavailable"):
         service.historical_native_flow_for_cutoff(**kwargs)
+
+
+def test_historical_fdv_supply_rejects_mismatched_representation_and_future():
+    from dataclasses import replace
+    from types import SimpleNamespace
+
+    from hunter.comparative_valuation.service import (
+        CanonicalComparativeValuationAuthorityError,
+        CanonicalComparativeValuationService,
+    )
+
+    cutoff = datetime(2025, 1, 2, tzinfo=UTC)
+    identity = _admission().candidate.identity
+    policy = SimpleNamespace(
+        quality_state="accepted",
+        conflict_state="none",
+        effective_at=cutoff,
+        known_at=cutoff,
+        recorded_at=cutoff,
+    )
+    market_identity = SimpleNamespace(
+        entity_id=identity.entity_id,
+        representation_id=identity.representation_id,
+    )
+    fact = SimpleNamespace(
+        identity=market_identity,
+        record_id="fdv-1",
+        semantic_version="1.0.0",
+        effective_at=cutoff,
+        known_at=cutoff,
+        recorded_at=cutoff,
+        value="1000",
+    )
+    supply = SimpleNamespace(
+        identity=identity,
+        supply_basis_type="fully_diluted_supply",
+        observed_market_fact_ids=("fdv-1",),
+        observed_market_fact_versions=("1.0.0",),
+        effective_at=cutoff,
+        known_at=cutoff,
+        recorded_at=cutoff,
+        quantity="100",
+    )
+    service = object.__new__(CanonicalComparativeValuationService)
+    service.repository = SimpleNamespace(get_peer_policy=lambda _: policy)
+    service._strict_known_market_fact = lambda **_: fact
+    service._strict_known_supply = lambda **_: supply
+    kwargs = dict(policy_record_id="policy", identity=identity, cutoff=cutoff, known_by=cutoff)
+    assert service.historical_fdv_supply_for_cutoff(**kwargs) == (fact, supply)
+    supply.observed_market_fact_versions = ("2.0.0",)
+    with pytest.raises(CanonicalComparativeValuationAuthorityError, match="version mismatch"):
+        service.historical_fdv_supply_for_cutoff(**kwargs)
+    supply.observed_market_fact_versions = ("1.0.0",)
+    supply.identity = replace(identity, representation_id="different")
+    with pytest.raises(CanonicalComparativeValuationAuthorityError, match="representation"):
+        service.historical_fdv_supply_for_cutoff(**kwargs)
+    supply.identity = identity
+    fact.recorded_at += timedelta(seconds=1)
+    with pytest.raises(CanonicalComparativeValuationAuthorityError, match="future"):
+        service.historical_fdv_supply_for_cutoff(**kwargs)
+    fact.recorded_at = cutoff
+    policy.known_at += timedelta(seconds=1)
+    with pytest.raises(CanonicalComparativeValuationAuthorityError, match="strict-known"):
+        service.historical_fdv_supply_for_cutoff(**kwargs)

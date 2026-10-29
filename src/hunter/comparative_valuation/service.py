@@ -354,6 +354,72 @@ class CanonicalComparativeValuationService:
             raise CanonicalComparativeValuationAuthorityError("historical native attributable flow is invalid")
         return evidence, rule
 
+    def historical_fdv_supply_for_cutoff(
+        self,
+        *,
+        policy_record_id: str,
+        identity: EconomicClaimIdentity,
+        cutoff: datetime,
+        known_by: datetime,
+    ) -> tuple[Any, Any]:
+        """Resolve immutable historical FDV and its coherent supply denominator.
+
+        No network lookup or present-day substitution is allowed on this read path.
+        """
+        if cutoff.tzinfo is None or known_by.tzinfo is None or known_by > cutoff:
+            raise CanonicalComparativeValuationAuthorityError("invalid historical cutoff coordinates")
+        policy = self.repository.get_peer_policy(policy_record_id)
+        if (
+            policy is None
+            or policy.quality_state != "accepted"
+            or policy.conflict_state not in {"none", "resolved"}
+            or policy.effective_at > cutoff
+            or policy.known_at > known_by
+            or policy.recorded_at > known_by
+        ):
+            raise CanonicalComparativeValuationAuthorityError("historical FDV policy was not strict-known")
+        fact = self._strict_known_market_fact(
+            policy=policy,
+            identity=identity,
+            effective_at=cutoff,
+            known_at=known_by,
+        )
+        supply = self._strict_known_supply(
+            policy=policy,
+            identity=identity,
+            effective_at=cutoff,
+            known_at=known_by,
+        )
+        if fact is None or supply is None:
+            raise CanonicalComparativeValuationAuthorityError("historical FDV/supply evidence is unavailable")
+        if (
+            fact.identity.entity_id != identity.entity_id
+            or fact.identity.representation_id != identity.representation_id
+            or supply.identity != identity
+            or supply.supply_basis_type != "fully_diluted_supply"
+            or fact.record_id not in supply.observed_market_fact_ids
+        ):
+            raise CanonicalComparativeValuationAuthorityError(
+                "historical FDV/supply representation or lineage mismatch"
+            )
+        position = supply.observed_market_fact_ids.index(fact.record_id)
+        if supply.observed_market_fact_versions[position] != fact.semantic_version:
+            raise CanonicalComparativeValuationAuthorityError("historical FDV/supply version mismatch")
+        if (
+            fact.effective_at > cutoff
+            or fact.known_at > known_by
+            or fact.recorded_at > known_by
+            or supply.effective_at > cutoff
+            or supply.known_at > known_by
+            or supply.recorded_at > known_by
+        ):
+            raise CanonicalComparativeValuationAuthorityError("future historical FDV/supply evidence")
+        value = Decimal(fact.value)
+        quantity = Decimal(supply.quantity)
+        if not value.is_finite() or value <= 0 or not quantity.is_finite() or quantity <= 0:
+            raise CanonicalComparativeValuationAuthorityError("historical FDV/supply must be strictly positive")
+        return fact, supply
+
     # -------------------------------------------------------- eligibility decisions
 
     def persist_eligibility_decision(
