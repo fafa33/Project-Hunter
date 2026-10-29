@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import tempfile
 from pathlib import Path
 
@@ -15,7 +16,7 @@ def checkpoint_path(path: Path) -> Path:
         raise ValueError("absolute SKY checkpoint path and root required")
     if root.is_symlink() or path.is_symlink() or path.parent.is_symlink():
         raise ValueError("symlink checkpoint paths are forbidden")
-    if not path.name.endswith(".json") or path.name in (".json", "..json"):
+    if re.fullmatch(r"[A-Za-z0-9_-][A-Za-z0-9_.-]{0,127}\.json", path.name) is None or ".." in path.name:
         raise ValueError("checkpoint must be a named JSON file")
     if path.parent != root or path.name in (".", ".."):
         raise ValueError("checkpoint must be directly within the configured SKY checkpoint directory")
@@ -25,6 +26,13 @@ def checkpoint_path(path: Path) -> Path:
     if path.exists() and (not path.is_file() or path.stat().st_nlink != 1):
         raise ValueError("unsafe checkpoint target")
     return root / path.name
+
+
+def _validated_checkpoint_name(name: str) -> str:
+    """Only a single portable filename may cross the directory-fd IO boundary."""
+    if re.fullmatch(r"[A-Za-z0-9_-][A-Za-z0-9_.-]{0,127}\.json", name) is None or ".." in name:
+        raise ValueError("invalid SKY checkpoint filename")
+    return name
 
 
 def _private_directory_fd() -> int:
@@ -44,10 +52,11 @@ def _private_directory_fd() -> int:
 
 def read_checkpoint(path: Path) -> dict:
     checked = checkpoint_path(path)
+    name = _validated_checkpoint_name(checked.name)
     directory_fd = _private_directory_fd()
     try:
         flags = os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0)
-        fd = os.open(checked.name, flags, dir_fd=directory_fd)
+        fd = os.open(name, flags, dir_fd=directory_fd)
         with os.fdopen(fd, "r", encoding="utf-8") as handle:
             if os.fstat(handle.fileno()).st_nlink != 1:
                 raise ValueError("unsafe checkpoint target")
@@ -61,6 +70,7 @@ def read_checkpoint(path: Path) -> dict:
 
 def write_checkpoint(path: Path, state: dict) -> None:
     checked = checkpoint_path(path)
+    name = _validated_checkpoint_name(checked.name)
     serialized = json.dumps(state, sort_keys=True, indent=2) + "\n"
     directory_fd = _private_directory_fd()
     temporary_name = None
@@ -74,7 +84,7 @@ def write_checkpoint(path: Path, state: dict) -> None:
                 handle.flush()
                 os.fsync(handle.fileno())
             checkpoint_path(checked)
-            os.replace(temporary_name, checked.name, src_dir_fd=directory_fd, dst_dir_fd=directory_fd)
+            os.replace(temporary_name, name, src_dir_fd=directory_fd, dst_dir_fd=directory_fd)
             temporary_name = None
         finally:
             if temporary_name is not None:
