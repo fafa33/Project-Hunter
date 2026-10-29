@@ -420,6 +420,67 @@ class CanonicalComparativeValuationService:
             raise CanonicalComparativeValuationAuthorityError("historical FDV/supply must be strictly positive")
         return fact, supply
 
+    def reconstruct_historical_evidence(
+        self,
+        *,
+        policy_record_id: str,
+        admissions: tuple[HistoricalCandidateAdmission, ...],
+        cutoff: datetime,
+        known_by: datetime,
+    ) -> dict[str, Any]:
+        """Read-only, deterministic cutoff replay with explicit rejected identities.
+
+        No persistence, provider acquisition, or current-state peer selection.
+        Records are referenced by their existing canonical IDs, never duplicated.
+        """
+        candidates = self.historical_candidates_for_policy(
+            policy_record_id=policy_record_id,
+            admissions=admissions,
+            cutoff=cutoff,
+            known_by=known_by,
+        )
+        accepted: list[dict[str, str]] = []
+        rejected: list[dict[str, str]] = []
+        for candidate in candidates:
+            identity = candidate.identity
+            try:
+                evidence, rule = self.historical_native_flow_for_cutoff(
+                    policy_record_id=policy_record_id,
+                    identity=identity,
+                    evidence_type=candidate.native_evidence_type,
+                    rule_type=candidate.value_capture_mechanism_type,
+                    cutoff=cutoff,
+                    known_by=known_by,
+                )
+                fact, supply = self.historical_fdv_supply_for_cutoff(
+                    policy_record_id=policy_record_id,
+                    identity=identity,
+                    cutoff=cutoff,
+                    known_by=known_by,
+                )
+            except CanonicalComparativeValuationAuthorityError as exc:
+                rejected.append({"entity_id": identity.entity_id, "reason": str(exc)})
+                continue
+            accepted.append(
+                {
+                    "entity_id": identity.entity_id,
+                    "evidence_id": evidence.record_id,
+                    "evidence_hash": evidence.raw_content_hash,
+                    "rule_id": rule.record_id,
+                    "supply_id": supply.record_id,
+                    "supply_hash": supply.raw_payload_hash,
+                    "fdv_id": fact.record_id,
+                    "fdv_hash": fact.raw_payload_hash,
+                }
+            )
+        return {
+            "policy_record_id": policy_record_id,
+            "cutoff": cutoff.astimezone(UTC).isoformat(),
+            "known_by": known_by.astimezone(UTC).isoformat(),
+            "accepted": tuple(accepted),
+            "rejected": tuple(rejected),
+        }
+
     # -------------------------------------------------------- eligibility decisions
 
     def persist_eligibility_decision(

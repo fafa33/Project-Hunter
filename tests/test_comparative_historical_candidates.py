@@ -379,3 +379,61 @@ def test_historical_fdv_supply_rejects_mismatched_representation_and_future():
     policy.known_at += timedelta(seconds=1)
     with pytest.raises(CanonicalComparativeValuationAuthorityError, match="strict-known"):
         service.historical_fdv_supply_for_cutoff(**kwargs)
+
+
+def test_integrated_historical_replay_bytes_and_rejections(monkeypatch):
+    import json
+    from dataclasses import replace
+    from datetime import timezone
+    from types import SimpleNamespace
+
+    from hunter.comparative_valuation.service import (
+        CanonicalComparativeValuationAuthorityError,
+        CanonicalComparativeValuationService,
+    )
+
+    cutoff = datetime(2025, 1, 2, tzinfo=UTC)
+    a = _admission("a")
+    b = replace(_admission("b"), content_hash="sha256:" + "b" * 64)
+    policy = SimpleNamespace(
+        quality_state="accepted",
+        conflict_state="none",
+        effective_at=cutoff,
+        known_at=cutoff,
+        recorded_at=cutoff,
+        taxonomy="taxonomy",
+        taxonomy_version="v1",
+        maximum_candidate_universe_size=10,
+    )
+    service = object.__new__(CanonicalComparativeValuationService)
+    service.repository = SimpleNamespace(get_peer_policy=lambda _: policy)
+
+    def flow(**kwargs):
+        if kwargs["identity"].entity_id == "b":
+            raise CanonicalComparativeValuationAuthorityError("missing native flow")
+        return SimpleNamespace(record_id="e", raw_content_hash="sha256:" + "e" * 64), SimpleNamespace(record_id="r")
+
+    monkeypatch.setattr(service, "historical_native_flow_for_cutoff", flow)
+    monkeypatch.setattr(
+        service,
+        "historical_fdv_supply_for_cutoff",
+        lambda **_: (
+            SimpleNamespace(record_id="f", raw_payload_hash="sha256:" + "f" * 64),
+            SimpleNamespace(record_id="s", raw_payload_hash="sha256:" + "c" * 64),
+        ),
+    )
+    kwargs = dict(policy_record_id="p", cutoff=cutoff, known_by=cutoff)
+
+    def replay(admissions, **overrides):
+        result = service.reconstruct_historical_evidence(admissions=admissions, **(kwargs | overrides))
+        return json.dumps(result, sort_keys=True, separators=(",", ":")).encode()
+
+    assert replay((a, b)) == replay((b, a)) == replay((a, b))
+    payload = json.loads(replay((a, b)))
+    assert payload["accepted"][0]["evidence_id"] == "e"
+    assert payload["rejected"] == [{"entity_id": "b", "reason": "missing native flow"}]
+    offset = timezone(timedelta(hours=2))
+    assert replay((a, b)) == replay((a, b), cutoff=cutoff.astimezone(offset), known_by=cutoff.astimezone(offset))
+    policy.recorded_at += timedelta(seconds=1)
+    with pytest.raises(CanonicalComparativeValuationAuthorityError, match="strict-known"):
+        replay((a, b))
