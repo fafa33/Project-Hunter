@@ -130,7 +130,7 @@ def _run_push_safety_lane() -> int:
     are reported together in seconds instead of behind sequential restarts.
     The full repository test suite is deliberately not among them.
     """
-    exit_code, _report = preflight.run_aggregate_gates(preflight.PUSH_SAFETY_GATES)
+    exit_code, _report = preflight.run_aggregate_gates(preflight.PUSH_SAFETY_GATES, timeout_seconds=180)
     return exit_code
 
 
