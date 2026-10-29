@@ -4,6 +4,7 @@ The budget derives from independently published revenue *policy*, not from a
 fungible USDS coin's transfer history.  No transfer is silently promoted to
 revenue, and reported burn USD stays distinct from exact spend allocation.
 """
+
 from __future__ import annotations
 
 import hashlib
@@ -28,14 +29,18 @@ BURNS = {
 # receipt mint logs. They remain independent of the live mutable aggregator.
 MONTHS = {
     "msc-12": {
-        "net_revenue": "15745296", "window_flapper_usds": "1026300",
-        "window_sky_bought": "15735190.69", "allocated_sky": "2860943.76",
+        "net_revenue": "15745296",
+        "window_flapper_usds": "1026300",
+        "window_sky_bought": "15735190.69",
+        "allocated_sky": "2860943.76",
         "reported_burn_usd": "186553.806539509538247255",
         "published_buyback_usd": "1457746.193460490461752745",
     },
     "msc-13": {
-        "net_revenue": "14635947", "window_flapper_usds": "2791800",
-        "window_sky_bought": "40547581.67", "allocated_sky": "7372287.58",
+        "net_revenue": "14635947",
+        "window_flapper_usds": "2791800",
+        "window_sky_bought": "40547581.67",
+        "allocated_sky": "7372287.58",
         "reported_burn_usd": "507599.999999999999789964",
         "published_buyback_usd": "2284200.000000000000210036",
     },
@@ -75,14 +80,19 @@ class EconomicAttribution:
     reported_source: str
 
     def require_independent_economic_proof(self) -> None:
-        if not (self.revenue_to_payment_proven and self.burn_allocation_proven
-                and self.costs_match_within_tolerance):
+        if not (self.revenue_to_payment_proven and self.burn_allocation_proven and self.costs_match_within_tolerance):
             raise ValueError("economic revenue funding and burn cost not independently proven")
 
 
-def reconcile_month(*, settlement: str, receipt_burn_tx: str, receipt_burn_sky: object,
-                    official_msc: dict, official_monthly: dict,
-                    independently_verified_spend_usds: object) -> EconomicAttribution:
+def reconcile_month(
+    *,
+    settlement: str,
+    receipt_burn_tx: str,
+    receipt_burn_sky: object,
+    official_msc: dict,
+    official_monthly: dict,
+    independently_verified_spend_usds: object,
+) -> EconomicAttribution:
     """Require matching burn identity; publish reconciliation and explicit proof gaps."""
     if settlement not in BURNS:
         raise ValueError("unknown Sky settlement")
@@ -97,7 +107,11 @@ def reconcile_month(*, settlement: str, receipt_burn_tx: str, receipt_burn_sky: 
     if official_monthly.get("month") != month + "-01":
         raise ValueError("settlement attribution month mismatch")
     for key in ("net_revenue", "buyback_usd", "burn_usd"):
-        expected = "reported_burn_usd" if key == "burn_usd" else "published_buyback_usd" if key == "buyback_usd" else "net_revenue"
+        expected = (
+            "reported_burn_usd"
+            if key == "burn_usd"
+            else "published_buyback_usd" if key == "buyback_usd" else "net_revenue"
+        )
         if abs(_value(official_msc[key]) - _value(numbers[expected])) > ROUNDING_USDS:
             raise ValueError("published MSC numbers have changed; reattestation required")
     if abs(_value(official_monthly["burn_usd"]) - _value(official_msc["burn_usd"])) > ROUNDING_USDS:
@@ -117,7 +131,9 @@ def reconcile_month(*, settlement: str, receipt_burn_tx: str, receipt_burn_sky: 
     # The MSC burn moves a fungible SKY treasury inventory. Neither a USDS mint
     # nor the monthly net revenue proves the exact source of the allocated funds.
     return EconomicAttribution(
-        settlement=settlement, tx_hash=tx, burn_sky=expected_sky,
+        settlement=settlement,
+        tx_hash=tx,
+        burn_sky=expected_sky,
         net_revenue_usds=str(_value(official_msc["net_revenue"])),
         independently_verified_spend_usds=str(actual_spend),
         rule_allocated_spend_usds=str(allocated_usds),
@@ -125,9 +141,11 @@ def reconcile_month(*, settlement: str, receipt_burn_tx: str, receipt_burn_sky: 
         rule_allocated_burn_sky=str(allocated_sky),
         revenue_source_class="pinned_issuer_net_revenue_accounting_not_payment_origin",
         burn_cost_source_class="pinned_tmf_policy_and_verified_payment_not_fifo",
-        revenue_to_payment_proven=False, burn_allocation_proven=False,
+        revenue_to_payment_proven=False,
+        burn_allocation_proven=False,
         costs_match_within_tolerance=abs(gap) <= ROUNDING_USDS,
-        reconciliation_gap_usds=str(gap), policy_source=SOTER_SOURCES[settlement],
+        reconciliation_gap_usds=str(gap),
+        policy_source=SOTER_SOURCES[settlement],
         reported_source=FORUM_12 if settlement == "msc-12" else FORUM_13,
     )
 

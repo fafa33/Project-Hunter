@@ -2,6 +2,7 @@
 
 Reported USD is NOT independent proof of payment, funding origin, or revenue.
 """
+
 from __future__ import annotations
 
 from dataclasses import dataclass

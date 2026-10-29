@@ -2,6 +2,7 @@
 
 Raw transfers are observations, never automatically classified as economic burns.
 """
+
 from __future__ import annotations
 
 import json
@@ -58,7 +59,9 @@ class EthereumRpcReader:
         with urlopen(request, timeout=20) as response:
             result = json.load(response)
         if not isinstance(result, dict) or "error" in result or "result" not in result:
-            raise ValueError(f"Ethereum RPC failed: {result.get('error') if isinstance(result, dict) else 'invalid response'}")
+            raise ValueError(
+                f"Ethereum RPC failed: {result.get('error') if isinstance(result, dict) else 'invalid response'}"
+            )
         return result["result"]
 
     def finalized_block_number(self) -> int:
@@ -80,12 +83,17 @@ class EthereumRpcReader:
         if block_number < 0 or block_number > self.finalized_block_number():
             return False
         try:
-            self.call("eth_getLogs", [{
-                "fromBlock": hex(block_number),
-                "toBlock": hex(block_number),
-                "address": SKY_TOKEN,
-                "topics": [TRANSFER_TOPIC],
-            }])
+            self.call(
+                "eth_getLogs",
+                [
+                    {
+                        "fromBlock": hex(block_number),
+                        "toBlock": hex(block_number),
+                        "address": SKY_TOKEN,
+                        "topics": [TRANSFER_TOPIC],
+                    }
+                ],
+            )
         except (ValueError, OSError, TimeoutError):
             return False
         return True
@@ -109,7 +117,9 @@ class EthereumRpcReader:
         results: list[EthereumTransferObservation] = []
         seen: set[tuple[str, int]] = set()
         for start in range(from_block, to_block + 1, self.max_log_blocks):
-            for event in self.fetch_sky_transfers(from_block=start, to_block=min(start + self.max_log_blocks - 1, to_block)):
+            for event in self.fetch_sky_transfers(
+                from_block=start, to_block=min(start + self.max_log_blocks - 1, to_block)
+            ):
                 key = (event.tx_hash.lower(), event.log_index)
                 if key in seen:
                     raise ValueError("duplicate Ethereum log across batches")
@@ -125,12 +135,17 @@ class EthereumRpcReader:
         finalized = self.finalized_block_number()
         if to_block > finalized:
             raise ValueError("requested block exceeds finalized Ethereum head")
-        raw = self.call("eth_getLogs", [{
-            "fromBlock": hex(from_block),
-            "toBlock": hex(to_block),
-            "address": SKY_TOKEN,
-            "topics": [TRANSFER_TOPIC],
-        }])
+        raw = self.call(
+            "eth_getLogs",
+            [
+                {
+                    "fromBlock": hex(from_block),
+                    "toBlock": hex(to_block),
+                    "address": SKY_TOKEN,
+                    "topics": [TRANSFER_TOPIC],
+                }
+            ],
+        )
         if not isinstance(raw, list):
             raise ValueError("invalid log response")
         events = []
@@ -146,15 +161,17 @@ class EthereumRpcReader:
             block = self.call("eth_getBlockByNumber", [hex(block_number), False])
             if not isinstance(block, dict) or block.get("hash") != log["blockHash"]:
                 raise ValueError("block hash provenance mismatch")
-            events.append(EthereumTransferObservation(
-                tx_hash=log["transactionHash"],
-                block_hash=log["blockHash"],
-                block_number=block_number,
-                log_index=int(log["logIndex"], 16),
-                block_time=datetime.fromtimestamp(int(block["timestamp"], 16), tz=UTC),
-                from_address="0x" + topics[1][-40:],
-                to_address="0x" + topics[2][-40:],
-                raw_amount=int(log["data"], 16),
-                source_endpoint=self.source_endpoint,
-            ))
+            events.append(
+                EthereumTransferObservation(
+                    tx_hash=log["transactionHash"],
+                    block_hash=log["blockHash"],
+                    block_number=block_number,
+                    log_index=int(log["logIndex"], 16),
+                    block_time=datetime.fromtimestamp(int(block["timestamp"], 16), tz=UTC),
+                    from_address="0x" + topics[1][-40:],
+                    to_address="0x" + topics[2][-40:],
+                    raw_amount=int(log["data"], 16),
+                    source_endpoint=self.source_endpoint,
+                )
+            )
         return tuple(events)

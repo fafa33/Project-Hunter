@@ -3,6 +3,7 @@
 A proven USDS mint/payment and SKY treasury receipt are transaction facts.
 They do not alone establish revenue origin, cost basis, or allocation to burns.
 """
+
 from __future__ import annotations
 
 from dataclasses import dataclass
@@ -57,7 +58,15 @@ def attest_sky_buyback_payment(receipt: dict, *, source_endpoint: str) -> SkyVer
                 or int(log["blockNumber"], 16) != number
             ):
                 raise ValueError("payment log provenance mismatch")
-            transfers.append((token, "0x" + topics[1][-40:].lower(), "0x" + topics[2][-40:].lower(), Decimal(int(log["data"], 16)) / Decimal(10**18), int(log["logIndex"], 16)))
+            transfers.append(
+                (
+                    token,
+                    "0x" + topics[1][-40:].lower(),
+                    "0x" + topics[2][-40:].lower(),
+                    Decimal(int(log["data"], 16)) / Decimal(10**18),
+                    int(log["logIndex"], 16),
+                )
+            )
     except (KeyError, ValueError, TypeError, IndexError) as exc:
         raise ValueError("invalid onchain payment transfer") from exc
 
@@ -72,4 +81,6 @@ def attest_sky_buyback_payment(receipt: dict, *, source_endpoint: str) -> SkyVer
     mint, payment, sky = mints[0], payments[0], receipts[0]
     if mint[0] <= 0 or mint[0] != payment[0] or sky[0] <= 0 or not (mint[1] < payment[1] < sky[1]):
         raise ValueError("invalid buyback payment order or amounts")
-    return SkyVerifiedBuybackPayment(tx.lower(), block.lower(), number, payment[0], sky[0], payment[1], sky[1], source_endpoint)
+    return SkyVerifiedBuybackPayment(
+        tx.lower(), block.lower(), number, payment[0], sky[0], payment[1], sky[1], source_endpoint
+    )

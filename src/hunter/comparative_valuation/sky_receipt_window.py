@@ -3,6 +3,7 @@
 An indexed swap is only eligible after the full receipt attestation has
 already passed. This source must not infer revenue origin from USDS minting.
 """
+
 from __future__ import annotations
 
 from decimal import Decimal, InvalidOperation

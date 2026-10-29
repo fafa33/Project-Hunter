@@ -1,4 +1,5 @@
 """Bounded Alchemy discovery, receipt-backed exact SKY treasury audit."""
+
 from __future__ import annotations
 
 import argparse
@@ -25,10 +26,14 @@ def fetch_transfers(start: int, end: int, direction: str) -> list[dict]:
     if direction not in ("fromAddress", "toAddress"):
         raise ValueError("invalid direction")
     params = {
-        "fromBlock": hex(start + 1), "toBlock": hex(end),
-        direction: SKY_TREASURY, "contractAddresses": [SKY_TOKEN],
-        "category": ["erc20"], "withMetadata": False,
-        "maxCount": "0x3e8", "order": "asc",
+        "fromBlock": hex(start + 1),
+        "toBlock": hex(end),
+        direction: SKY_TREASURY,
+        "contractAddresses": [SKY_TOKEN],
+        "category": ["erc20"],
+        "withMetadata": False,
+        "maxCount": "0x3e8",
+        "order": "asc",
     }
     result: list[dict] = []
     seen_pages: set[str] = set()
@@ -64,8 +69,7 @@ def normalize(rows: list[dict], start: int, end: int) -> dict[str, dict]:
         if contract.get("decimal") != "0x12" or SKY_TREASURY not in (sender, to):
             raise ValueError("invalid SKY discovery entry")
         key = tx + ":" + str(idx)
-        item = {"tx": tx, "block": number, "log_index": idx, "from": sender,
-                "to": to, "raw": str(int(raw, 16))}
+        item = {"tx": tx, "block": number, "log_index": idx, "from": sender, "to": to, "raw": str(int(raw, 16))}
         if key in found and found[key] != item:
             raise ValueError("conflicting transfer discovery")
         found[key] = item
@@ -74,6 +78,7 @@ def normalize(rows: list[dict], start: int, end: int) -> dict[str, dict]:
 
 def receipt_log_match(row: dict, receipt: dict) -> dict:
     from hunter.comparative_valuation.ethereum_rpc import TRANSFER_TOPIC
+
     if int(receipt["blockNumber"], 16) != row["block"] or receipt["transactionHash"].lower() != row["tx"]:
         raise ValueError("receipt identity mismatch")
     if receipt.get("status") != "0x1":
@@ -106,13 +111,19 @@ def audit(start: int, end: int, checkpoint: Path, max_batches: int = 10) -> dict
         outgoing = fetch_transfers(start, end, "fromAddress")
         incoming = fetch_transfers(start, end, "toAddress")
         discovery = normalize(outgoing + incoming, start, end)
-        state = {"schema": "sky-fast-treasury/v1", "start": start, "end": end,
-                 "candidate_count": len(discovery), "candidates": discovery, "verified": {},
-                 "evidence_class": "token_receipt_ledger_not_revenue_or_burn_cost"}
+        state = {
+            "schema": "sky-fast-treasury/v1",
+            "start": start,
+            "end": end,
+            "candidate_count": len(discovery),
+            "candidates": discovery,
+            "verified": {},
+            "evidence_class": "token_receipt_ledger_not_revenue_or_burn_cost",
+        }
         save(checkpoint, state)
     keys = sorted(set(state["candidates"]) - set(state["verified"]))
     for begin in range(0, min(len(keys), max_batches * 10), 10):
-        batch = keys[begin:begin + 10]
+        batch = keys[begin : begin + 10]
         receipts = rpc_batch_receipts(sorted({state["candidates"][key]["tx"] for key in batch}))
         for key in batch:
             row = state["candidates"][key]
@@ -124,18 +135,30 @@ def audit(start: int, end: int, checkpoint: Path, max_batches: int = 10) -> dict
     outgoing_raw = sum(int(x["raw"]) for x in events if x["from"] == SKY_TREASURY and x["to"] != SKY_TREASURY)
     burn_raw = sum(int(x["raw"]) for x in events if x["from"] == SKY_TREASURY and x["to"] == ZERO)
     pool_raw = sum(int(x["raw"]) for x in events if x["from"] == BUYBACK_POOL and x["to"] == SKY_TREASURY)
+
     def fmt(n: int) -> str:
         return str(Decimal(n) / SCALE)
-    result = {"complete": complete, "candidates": len(state["candidates"]),
-              "verified": len(events), "incoming_sky": fmt(incoming_raw),
-              "outgoing_sky": fmt(outgoing_raw), "burn_sky": fmt(burn_raw),
-              "pool_buyback_sky": fmt(pool_raw),
-              "other_incoming_sky": fmt(incoming_raw - pool_raw),
-              "other_outgoing_sky": fmt(outgoing_raw - burn_raw)}
+
+    result = {
+        "complete": complete,
+        "candidates": len(state["candidates"]),
+        "verified": len(events),
+        "incoming_sky": fmt(incoming_raw),
+        "outgoing_sky": fmt(outgoing_raw),
+        "burn_sky": fmt(burn_raw),
+        "pool_buyback_sky": fmt(pool_raw),
+        "other_incoming_sky": fmt(incoming_raw - pool_raw),
+        "other_outgoing_sky": fmt(outgoing_raw - burn_raw),
+    }
     if complete:
         before, after = token_balance(start), token_balance(end)
-        result.update({"start_balance_sky": fmt(before), "end_balance_sky": fmt(after),
-                       "residual_sky": fmt(after - before - incoming_raw + outgoing_raw)})
+        result.update(
+            {
+                "start_balance_sky": fmt(before),
+                "end_balance_sky": fmt(after),
+                "residual_sky": fmt(after - before - incoming_raw + outgoing_raw),
+            }
+        )
         if after - before != incoming_raw - outgoing_raw:
             raise ValueError("treasury balance residual nonzero; discovery incomplete")
     return result
@@ -143,11 +166,12 @@ def audit(start: int, end: int, checkpoint: Path, max_batches: int = 10) -> dict
 
 def rpc_batch_receipts(hashes: list[str]) -> dict[str, dict]:
     import urllib.request
+
     endpoint = os.environ["HUNTER_ETHEREUM_RPC_URL"]
-    body = [{"jsonrpc": "2.0", "id": i, "method": "eth_getTransactionReceipt", "params": [h]}
-            for i, h in enumerate(hashes)]
-    req = urllib.request.Request(endpoint, data=json.dumps(body).encode(),
-                                 headers={"Content-Type": "application/json"})
+    body = [
+        {"jsonrpc": "2.0", "id": i, "method": "eth_getTransactionReceipt", "params": [h]} for i, h in enumerate(hashes)
+    ]
+    req = urllib.request.Request(endpoint, data=json.dumps(body).encode(), headers={"Content-Type": "application/json"})
     with urllib.request.urlopen(req, timeout=40) as response:
         data = json.load(response)
     if not isinstance(data, list) or len(data) != len(hashes):

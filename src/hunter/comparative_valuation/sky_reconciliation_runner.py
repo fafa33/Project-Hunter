@@ -1,4 +1,5 @@
 """Bounded checkpointed SKY buyback receipt verification; no revenue promotion."""
+
 from __future__ import annotations
 
 import argparse
@@ -19,7 +20,10 @@ END_BLOCK = 26176859
 def fetch_page(page: int) -> dict:
     if page < 1 or page > 500:
         raise ValueError("page outside bounded allowance")
-    req = Request(f"{EVENTS_URL}?page={page}&limit=100", headers={"Accept": "application/json", "User-Agent": "Project-Hunter/1.0"})
+    req = Request(
+        f"{EVENTS_URL}?page={page}&limit=100",
+        headers={"Accept": "application/json", "User-Agent": "Project-Hunter/1.0"},
+    )
     with urlopen(req, timeout=20) as response:
         value = json.load(response)
     if not isinstance(value, dict) or not isinstance(value.get("data"), dict):
@@ -32,8 +36,13 @@ def rpc_receipts(tx_hashes: list[str]) -> dict[str, dict]:
     if not 1 <= len(tx_hashes) <= 10:
         raise ValueError("bounded batch of 1..10 required")
     endpoint = os.environ["HUNTER_ETHEREUM_RPC_URL"]
-    request_body = [{"jsonrpc": "2.0", "id": i, "method": "eth_getTransactionReceipt", "params": [tx]} for i, tx in enumerate(tx_hashes)]
-    req = Request(endpoint, data=json.dumps(request_body).encode(), headers={"Content-Type": "application/json"}, method="POST")
+    request_body = [
+        {"jsonrpc": "2.0", "id": i, "method": "eth_getTransactionReceipt", "params": [tx]}
+        for i, tx in enumerate(tx_hashes)
+    ]
+    req = Request(
+        endpoint, data=json.dumps(request_body).encode(), headers={"Content-Type": "application/json"}, method="POST"
+    )
     with urlopen(req, timeout=30) as response:
         returned = json.load(response)
     if not isinstance(returned, list) or len(returned) != len(tx_hashes):
@@ -52,7 +61,9 @@ def rpc_receipts(tx_hashes: list[str]) -> dict[str, dict]:
     return results
 
 
-def build_candidates(*, start_block: int = START_BLOCK, end_block: int = END_BLOCK, max_pages: int = 40) -> tuple[list[dict], list[dict]]:
+def build_candidates(
+    *, start_block: int = START_BLOCK, end_block: int = END_BLOCK, max_pages: int = 40
+) -> tuple[list[dict], list[dict]]:
     """Require stable source pagination and contiguous event ordering in selected window."""
     events = []
     snapshots = []
@@ -103,16 +114,31 @@ def execute(*, path: Path, max_batches: int = 5, start_block: int = START_BLOCK,
     candidates, pages = build_candidates(start_block=start_block, end_block=end_block)
     if path.exists():
         state = json.loads(path.read_text())
-        if state.get("start_block") != start_block or state.get("end_block") != end_block or state.get("pages") != pages:
+        if (
+            state.get("start_block") != start_block
+            or state.get("end_block") != end_block
+            or state.get("pages") != pages
+        ):
             raise ValueError("source changed since checkpoint; refusing stale continuation")
     else:
-        state = {"schema": "sky-buyback-receipt-reconciliation/v1", "start_block": start_block, "end_block": end_block,
-                 "pages": pages, "verified": {}, "rejected": {}, "total_candidates": len(candidates),
-                 "evidence_class": "onchain_payment_only_revenue_and_burn_allocation_unproven"}
+        state = {
+            "schema": "sky-buyback-receipt-reconciliation/v1",
+            "start_block": start_block,
+            "end_block": end_block,
+            "pages": pages,
+            "verified": {},
+            "rejected": {},
+            "total_candidates": len(candidates),
+            "evidence_class": "onchain_payment_only_revenue_and_burn_allocation_unproven",
+        }
     batches = 0
     for offset in range(0, len(candidates), 10):
-        portion = candidates[offset:offset + 10]
-        unseen = [row for row in portion if row["order_index"] not in state["verified"] and row["order_index"] not in state["rejected"]]
+        portion = candidates[offset : offset + 10]
+        unseen = [
+            row
+            for row in portion
+            if row["order_index"] not in state["verified"] and row["order_index"] not in state["rejected"]
+        ]
         if not unseen:
             continue
         if batches >= max_batches:
@@ -127,13 +153,24 @@ def execute(*, path: Path, max_batches: int = 5, start_block: int = START_BLOCK,
         for row in unseen:
             key = row["order_index"]
             try:
-                proof = attest_sky_buyback_payment(receipt_by_hash[row["tx_hash"].lower()], source_endpoint="ethereum-mainnet")
-                if proof.block_number != row["block_number"] or proof.usds_paid != Decimal(row["usds_amount"]) or proof.sky_received != Decimal(row["sky_amount"]):
+                proof = attest_sky_buyback_payment(
+                    receipt_by_hash[row["tx_hash"].lower()], source_endpoint="ethereum-mainnet"
+                )
+                if (
+                    proof.block_number != row["block_number"]
+                    or proof.usds_paid != Decimal(row["usds_amount"])
+                    or proof.sky_received != Decimal(row["sky_amount"])
+                ):
                     raise ValueError("indexed-to-receipt mismatch")
-                state["verified"][key] = {"tx_hash": proof.tx_hash, "block_hash": proof.block_hash,
-                                           "block_number": proof.block_number, "usds_paid": str(proof.usds_paid),
-                                           "sky_received": str(proof.sky_received), "payment_log_index": proof.payment_log_index,
-                                           "sky_receipt_log_index": proof.sky_receipt_log_index}
+                state["verified"][key] = {
+                    "tx_hash": proof.tx_hash,
+                    "block_hash": proof.block_hash,
+                    "block_number": proof.block_number,
+                    "usds_paid": str(proof.usds_paid),
+                    "sky_received": str(proof.sky_received),
+                    "payment_log_index": proof.payment_log_index,
+                    "sky_receipt_log_index": proof.sky_receipt_log_index,
+                }
             except (ValueError, KeyError, TypeError) as exc:
                 state["rejected"][key] = {"tx_hash": row["tx_hash"], "reason": str(exc)[:180]}
         batches += 1
@@ -145,7 +182,17 @@ def execute(*, path: Path, max_batches: int = 5, start_block: int = START_BLOCK,
     state["verified_usds"] = str(sum((Decimal(item["usds_paid"]) for item in state["verified"].values()), Decimal(0)))
     state["verified_sky"] = str(sum((Decimal(item["sky_received"]) for item in state["verified"].values()), Decimal(0)))
     update_checkpoint(path, state)
-    return {k: state[k] for k in ("total_candidates", "verified_count", "rejected_count", "remaining_count", "verified_usds", "verified_sky")}
+    return {
+        k: state[k]
+        for k in (
+            "total_candidates",
+            "verified_count",
+            "rejected_count",
+            "remaining_count",
+            "verified_usds",
+            "verified_sky",
+        )
+    }
 
 
 if __name__ == "__main__":

@@ -3,6 +3,7 @@
 Only caller-verified receipts with transaction/block provenance are accepted.
 This module does not assert that a transfer to a sink is a verified economic burn.
 """
+
 from __future__ import annotations
 
 from dataclasses import dataclass
@@ -42,9 +43,7 @@ class SkyEconomicEvent:
             raise ValueError("primary source and verified attribution required")
 
 
-def reconcile_sky_365d(
-    events: tuple[SkyEconomicEvent, ...], *, as_of: datetime, known_by: datetime
-) -> Decimal:
+def reconcile_sky_365d(events: tuple[SkyEconomicEvent, ...], *, as_of: datetime, known_by: datetime) -> Decimal:
     """Return exact-window flow, fail closed on duplicate/conflicting provenance."""
     if as_of.tzinfo is None or known_by.tzinfo is None or known_by > as_of:
         raise ValueError("invalid historical coordinates")
