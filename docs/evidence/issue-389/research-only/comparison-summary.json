@@ -1,0 +1,14 @@
+{
+  "canonical_eligibility": false,
+  "cg_market_cap_usd": 162004185.03887558,
+  "cg_price_usd": 0.601544107311932,
+  "cg_total_supply": null,
+  "cmc_market_cap_usd": 161890272.66637793,
+  "cmc_price_usd": 0.6011211348051804,
+  "cmc_total_supply": 554997632.84,
+  "coingecko_history_date": "2026-08-01",
+  "coinmarketcap_quote_timestamp": "2026-08-01T00:00:00.000Z",
+  "comparison": "independent historical provider snapshots; NOT point-in-time strict-known proof",
+  "market_cap_relative_difference_pct": 0.07036,
+  "price_relative_difference_pct": 0.07036
+}
