@@ -24,12 +24,12 @@ def checkpoint_path(path: Path) -> Path:
         raise ValueError("SKY checkpoint directory must be private and non-symlinked")
     if path.exists() and (not path.is_file() or path.stat().st_nlink != 1):
         raise ValueError("unsafe checkpoint target")
-    return path
+    return root / path.name
 
 
-def _private_directory_fd(path: Path) -> int:
+def _private_directory_fd() -> int:
     """Anchor checkpoint operations to a verified private directory inode."""
-    directory = path.parent
+    directory = Path(os.environ.get("HUNTER_SKY_CHECKPOINT_DIR", str(Path.home() / ".local/state/hunter/sky")))
     flags = os.O_RDONLY | getattr(os, "O_DIRECTORY", 0) | getattr(os, "O_NOFOLLOW", 0)
     fd = os.open(directory, flags)
     try:
@@ -43,11 +43,11 @@ def _private_directory_fd(path: Path) -> int:
 
 
 def read_checkpoint(path: Path) -> dict:
-    path = checkpoint_path(path)
-    directory_fd = _private_directory_fd(path)
+    checked = checkpoint_path(path)
+    directory_fd = _private_directory_fd()
     try:
         flags = os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0)
-        fd = os.open(path.name, flags, dir_fd=directory_fd)
+        fd = os.open(checked.name, flags, dir_fd=directory_fd)
         with os.fdopen(fd, "r", encoding="utf-8") as handle:
             if os.fstat(handle.fileno()).st_nlink != 1:
                 raise ValueError("unsafe checkpoint target")
@@ -60,21 +60,21 @@ def read_checkpoint(path: Path) -> dict:
 
 
 def write_checkpoint(path: Path, state: dict) -> None:
-    path = checkpoint_path(path)
+    checked = checkpoint_path(path)
     serialized = json.dumps(state, sort_keys=True, indent=2) + "\n"
-    directory_fd = _private_directory_fd(path)
+    directory_fd = _private_directory_fd()
     temporary_name = None
     try:
         # Secure temporary file is created in the already verified directory.
-        fd, temporary = tempfile.mkstemp(prefix=".sky-", suffix=".tmp", dir=path.parent)
+        fd, temporary = tempfile.mkstemp(prefix=".sky-", suffix=".tmp", dir=checked.parent)
         temporary_name = Path(temporary).name
         try:
             with os.fdopen(fd, "w", encoding="utf-8") as handle:
                 handle.write(serialized)
                 handle.flush()
                 os.fsync(handle.fileno())
-            checkpoint_path(path)
-            os.replace(temporary_name, path.name, src_dir_fd=directory_fd, dst_dir_fd=directory_fd)
+            checkpoint_path(checked)
+            os.replace(temporary_name, checked.name, src_dir_fd=directory_fd, dst_dir_fd=directory_fd)
             temporary_name = None
         finally:
             if temporary_name is not None:
