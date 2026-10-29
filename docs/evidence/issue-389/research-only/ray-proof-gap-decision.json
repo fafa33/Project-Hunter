@@ -1,0 +1,29 @@
+{
+  "current_adapter_calculation": "holders revenue = total trading fees * 0.12; NOT observed on-chain transfers",
+  "current_blob_sha": "676287d70b5d18c1411363e936c81c78b98954e2",
+  "current_markers": {
+    "0.12": true,
+    "G7rxL8y": true,
+    "buybackFees": true,
+    "dailyHoldersRevenue": true,
+    "rayPrice": true
+  },
+  "current_sha256": "6f6971569250d712d9767dcc5dd6c01e33f84272efa14a4adfd9f0e4ebefe63d",
+  "current_source_url": "https://api.github.com/repos/DefiLlama/fees-adapters/contents/dexs/raydium/index.ts?ref=master",
+  "decision": "NOT PROVEN: exclude RAY from canonical replay until historical on-chain ledger and point-in-time evidence validated",
+  "observed_buyback_transaction_set": "MISSING",
+  "precutoff_commit": "d40b4ef1fe482eb6f52b18a38e42360967670649",
+  "precutoff_commit_date": "2026-06-06T09:48:59Z",
+  "precutoff_markers": {
+    "0.12": true,
+    "G7rxL8y": true,
+    "buybackFees": false,
+    "dailyHoldersRevenue": true,
+    "rayPrice": true
+  },
+  "precutoff_sha256": "199c5e598d445d14ab3e5270a61a0da1a52c6b8c8fa427b136626fa0eeb6d35a",
+  "precutoff_source_code_known": "Git commit exists before cutoff; does NOT prove 365d time series was available as of cutoff",
+  "precutoff_source_url": "https://api.github.com/repos/DefiLlama/fees-adapters/contents/dexs/raydium/index.ts?ref=d40b4ef1fe482eb6f52b18a38e42360967670649",
+  "retrieved_at": "2026-10-29T23:32:23.299510+00:00",
+  "strict_known_at_cutoff": "NOT PROVEN"
+}
