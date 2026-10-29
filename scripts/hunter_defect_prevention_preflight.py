@@ -42,7 +42,7 @@ TRUSTED_CANDIDATE_QUALITY_GATES: tuple[tuple[str, tuple[str, ...]], ...] = (
     ("Artifact Guard", ("python", "scripts/hunter_artifact_preflight.py")),
     ("Defect Prevention Guard", ("python", "scripts/hunter_defect_prevention_preflight.py")),
     ("Ruff", ("ruff", "check", ".")),
-    ("Black", ("black", "--workers", "1", "--check", "--diff", ".")),
+    ("Black", ("black", "--check", "--diff", ".")),
     ("Mypy", ("mypy",)),
     ("Pytest", ("pytest",)),
 )

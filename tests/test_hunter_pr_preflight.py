@@ -64,7 +64,7 @@ def test_normal_quality_gate_order_matches_ci_contract() -> None:
         ("Artifact Guard", ("python", "scripts/hunter_artifact_preflight.py")),
         ("Defect Prevention Guard", ("python", "scripts/hunter_defect_prevention_preflight.py")),
         ("Ruff", ("ruff", "check", ".")),
-        ("Black", ("black", "--workers", "1", "--check", "--diff", ".")),
+        ("Black", ("black", "--check", "--diff", ".")),
         ("Mypy", ("mypy",)),
         ("Pytest", ("pytest",)),
     )
@@ -77,7 +77,7 @@ def test_tests_first_red_hygiene_gate_order_excludes_only_pytest() -> None:
         ("Artifact Guard", ("python", "scripts/hunter_artifact_preflight.py")),
         ("Defect Prevention Guard", ("python", "scripts/hunter_defect_prevention_preflight.py")),
         ("Ruff", ("ruff", "check", ".")),
-        ("Black", ("black", "--workers", "1", "--check", "--diff", ".")),
+        ("Black", ("black", "--check", "--diff", ".")),
         ("Mypy", ("mypy",)),
     )
 
@@ -140,7 +140,7 @@ def test_tests_first_red_succeeds_only_for_clean_hygiene_and_red_pytest(monkeypa
         ("python", "scripts/hunter_artifact_preflight.py"),
         ("python", "scripts/hunter_defect_prevention_preflight.py"),
         ("ruff", "check", "."),
-        ("black", "--workers", "1", "--check", "--diff", "."),
+        ("black", "--check", "--diff", "."),
         ("mypy",),
         ("pytest",),
     ]
@@ -222,7 +222,7 @@ def test_tests_first_red_never_launders_hygiene_failure(monkeypatch) -> None:
         ("python", "scripts/hunter_artifact_preflight.py"),
         ("python", "scripts/hunter_defect_prevention_preflight.py"),
         ("ruff", "check", "."),
-        ("black", "--workers", "1", "--check", "--diff", "."),
+        ("black", "--check", "--diff", "."),
     ]
 
 

@@ -61,3 +61,28 @@ def test_rejects_hardlinked_checkpoint(tmp_path: Path, monkeypatch: pytest.Monke
     os.link(original, root / "audit.json")
     with pytest.raises(ValueError):
         checkpoint_path(root / "audit.json")
+
+
+def test_repair_rejects_outside_checkpoint(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    from hunter.comparative_valuation.sky_treasury_repair import repair
+
+    root = tmp_path / "sky"
+    monkeypatch.setenv("HUNTER_SKY_CHECKPOINT_DIR", str(root))
+    outside = tmp_path / "outside.json"
+    outside.write_text('{"schema":"sky-fast-treasury/v1","candidates":{},"verified":{}}')
+    with pytest.raises(ValueError, match="directly within"):
+        repair(outside)
+    assert outside.exists()
+
+
+def test_repair_rejects_symlink_checkpoint(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    from hunter.comparative_valuation.sky_treasury_repair import repair
+
+    root = tmp_path / "sky"
+    root.mkdir(mode=0o700)
+    monkeypatch.setenv("HUNTER_SKY_CHECKPOINT_DIR", str(root))
+    outside = tmp_path / "outside.json"
+    outside.write_text('{"schema":"sky-fast-treasury/v1","candidates":{},"verified":{}}')
+    (root / "audit.json").symlink_to(outside)
+    with pytest.raises(ValueError, match="symlink"):
+        repair(root / "audit.json")

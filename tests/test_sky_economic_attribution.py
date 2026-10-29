@@ -47,7 +47,16 @@ def test_attribution_does_not_promote_published_revenue_or_spend(settlement: str
     assert not report.revenue_to_payment_proven
     assert not report.burn_allocation_proven
     assert report.revenue_source_class.startswith("pinned_issuer_")
-    assert digest_record(report) == digest_record(report)
+    assert digest_record(report) == digest_record(
+        reconcile_month(
+            settlement=settlement,
+            receipt_burn_tx=tx,
+            receipt_burn_sky=D(amount),
+            official_msc=msc,
+            official_monthly=monthly,
+            independently_verified_spend_usds=D(MONTHS[settlement]["window_flapper_usds"]),
+        )
+    )
     with pytest.raises(ValueError, match="not independently proven"):
         report.require_independent_economic_proof()
 

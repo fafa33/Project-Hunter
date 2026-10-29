@@ -27,12 +27,33 @@ def checkpoint_path(path: Path) -> Path:
     return path
 
 
+def _private_directory_fd(path: Path) -> int:
+    """Anchor checkpoint operations to a verified private directory inode."""
+    directory = path.parent
+    flags = os.O_RDONLY | getattr(os, "O_DIRECTORY", 0) | getattr(os, "O_NOFOLLOW", 0)
+    fd = os.open(directory, flags)
+    try:
+        stat = os.fstat(fd)
+        if stat.st_mode & 0o077 or os.fstat(fd).st_ino != directory.stat().st_ino:
+            raise ValueError("SKY checkpoint directory changed or is not private")
+        return fd
+    except BaseException:
+        os.close(fd)
+        raise
+
+
 def read_checkpoint(path: Path) -> dict:
     path = checkpoint_path(path)
-    flags = os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0)
-    fd = os.open(path, flags)
-    with os.fdopen(fd, "r", encoding="utf-8") as handle:
-        state = json.load(handle)
+    directory_fd = _private_directory_fd(path)
+    try:
+        flags = os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0)
+        fd = os.open(path.name, flags, dir_fd=directory_fd)
+        with os.fdopen(fd, "r", encoding="utf-8") as handle:
+            if os.fstat(handle.fileno()).st_nlink != 1:
+                raise ValueError("unsafe checkpoint target")
+            state = json.load(handle)
+    finally:
+        os.close(directory_fd)
     if not isinstance(state, dict):
         raise ValueError("invalid SKY checkpoint state")
     return state
@@ -41,14 +62,22 @@ def read_checkpoint(path: Path) -> dict:
 def write_checkpoint(path: Path, state: dict) -> None:
     path = checkpoint_path(path)
     serialized = json.dumps(state, sort_keys=True, indent=2) + "\n"
-    fd, temporary = tempfile.mkstemp(prefix=".sky-", suffix=".tmp", dir=path.parent)
+    directory_fd = _private_directory_fd(path)
+    temporary_name = None
     try:
-        with os.fdopen(fd, "w", encoding="utf-8") as handle:
-            handle.write(serialized)
-            handle.flush()
-            os.fsync(handle.fileno())
-        checkpoint_path(path)
-        os.replace(temporary, path)
+        # Secure temporary file is created in the already verified directory.
+        fd, temporary = tempfile.mkstemp(prefix=".sky-", suffix=".tmp", dir=path.parent)
+        temporary_name = Path(temporary).name
+        try:
+            with os.fdopen(fd, "w", encoding="utf-8") as handle:
+                handle.write(serialized)
+                handle.flush()
+                os.fsync(handle.fileno())
+            checkpoint_path(path)
+            os.replace(temporary_name, path.name, src_dir_fd=directory_fd, dst_dir_fd=directory_fd)
+            temporary_name = None
+        finally:
+            if temporary_name is not None:
+                os.unlink(temporary_name, dir_fd=directory_fd)
     finally:
-        if os.path.exists(temporary):
-            os.unlink(temporary)
+        os.close(directory_fd)

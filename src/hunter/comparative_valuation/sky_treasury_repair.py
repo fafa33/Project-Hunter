@@ -4,11 +4,12 @@ import json
 from pathlib import Path
 
 from hunter.comparative_valuation.ethereum_rpc import TRANSFER_TOPIC
+from hunter.comparative_valuation.sky_checkpoint_security import read_checkpoint
 from hunter.comparative_valuation.sky_treasury_fast_audit import SKY_TOKEN, rpc_batch_receipts, save
 
 
 def repair(path: Path, max_batches: int = 20) -> dict:
-    state = json.loads(path.read_text())
+    state = read_checkpoint(path)
     if state.get("schema") != "sky-fast-treasury/v1":
         raise ValueError("wrong checkpoint")
     skipped = state.setdefault("phantom_discovery", {})
