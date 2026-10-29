@@ -16,13 +16,18 @@ def payload(settlement: str) -> tuple[dict, dict]:
     tx, amount, month = BURNS[settlement]
     row = MONTHS[settlement]
     msc = {
-        "slug": settlement, "exec_tx_hash": tx, "net_revenue": row["net_revenue"],
+        "slug": settlement,
+        "exec_tx_hash": tx,
+        "net_revenue": row["net_revenue"],
         "buyback_usd": row["published_buyback_usd"],
         "burn_usd": row["reported_burn_usd"],
     }
     monthly = {
-        "msc_slug": settlement, "burn_tx_hash": tx, "month": month + "-01",
-        "burned_amount": amount, "burn_usd": row["reported_burn_usd"],
+        "msc_slug": settlement,
+        "burn_tx_hash": tx,
+        "month": month + "-01",
+        "burned_amount": amount,
+        "burn_usd": row["reported_burn_usd"],
     }
     return msc, monthly
 
@@ -32,8 +37,11 @@ def test_attribution_does_not_promote_published_revenue_or_spend(settlement: str
     tx, amount, _ = BURNS[settlement]
     msc, monthly = payload(settlement)
     report = reconcile_month(
-        settlement=settlement, receipt_burn_tx=tx, receipt_burn_sky=D(amount),
-        official_msc=msc, official_monthly=monthly,
+        settlement=settlement,
+        receipt_burn_tx=tx,
+        receipt_burn_sky=D(amount),
+        official_msc=msc,
+        official_monthly=monthly,
         independently_verified_spend_usds=D(MONTHS[settlement]["window_flapper_usds"]),
     )
     assert not report.revenue_to_payment_proven
@@ -47,8 +55,11 @@ def test_attribution_does_not_promote_published_revenue_or_spend(settlement: str
 def test_august_reported_cost_differs_from_exact_share() -> None:
     msc, monthly = payload("msc-12")
     report = reconcile_month(
-        settlement="msc-12", receipt_burn_tx=BURNS["msc-12"][0],
-        receipt_burn_sky=D("2860943.76"), official_msc=msc, official_monthly=monthly,
+        settlement="msc-12",
+        receipt_burn_tx=BURNS["msc-12"][0],
+        receipt_burn_sky=D("2860943.76"),
+        official_msc=msc,
+        official_monthly=monthly,
         independently_verified_spend_usds=D("1026300"),
     )
     assert report.rule_allocated_spend_usds == "186600.0000000000000000000000"
@@ -74,8 +85,11 @@ def test_economic_mismatch_fails_closed(mutation: str) -> None:
         burn = D("0")
     with pytest.raises(ValueError):
         reconcile_month(
-            settlement="msc-13", receipt_burn_tx=tx, receipt_burn_sky=burn,
-            official_msc=msc, official_monthly=monthly,
+            settlement="msc-13",
+            receipt_burn_tx=tx,
+            receipt_burn_sky=burn,
+            official_msc=msc,
+            official_monthly=monthly,
             independently_verified_spend_usds=month_spend,
         )
 
@@ -83,6 +97,11 @@ def test_economic_mismatch_fails_closed(mutation: str) -> None:
 def test_reject_nonfinite_money() -> None:
     msc, monthly = payload("msc-13")
     with pytest.raises(ValueError):
-        reconcile_month(settlement="msc-13", receipt_burn_tx=BURNS["msc-13"][0],
-                        receipt_burn_sky=D("7372288"), official_msc=msc,
-                        official_monthly=monthly, independently_verified_spend_usds=D("NaN"))
+        reconcile_month(
+            settlement="msc-13",
+            receipt_burn_tx=BURNS["msc-13"][0],
+            receipt_burn_sky=D("7372288"),
+            official_msc=msc,
+            official_monthly=monthly,
+            independently_verified_spend_usds=D("NaN"),
+        )

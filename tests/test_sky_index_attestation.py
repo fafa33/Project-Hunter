@@ -67,7 +67,6 @@ def test_successful_receipt_still_cannot_prove_economic_burn():
         inclusion.require_verified_economic_burn()
 
 
-
 def test_verified_burn_requires_matching_sky_to_zero_receipt_log():
     from decimal import Decimal
 
@@ -111,6 +110,7 @@ def test_verified_burn_requires_matching_sky_to_zero_receipt_log():
 def test_verified_burn_rejects_missing_receipt_and_multiple_burns():
     from hunter.comparative_valuation.ethereum_rpc import SKY_TOKEN, TRANSFER_TOPIC
     from hunter.comparative_valuation.sky_index_attestation import attest_indexed_sky_token_burn
+
     reader = rpc()
     with pytest.raises(ValueError, match="successful matching receipt"):
         attest_indexed_sky_token_burn(candidate(), spell_address=SPELL, rpc=reader)
@@ -123,9 +123,17 @@ def test_verified_burn_rejects_missing_receipt_and_multiple_burns():
         "blockNumber": hex(26176859),
         "logIndex": "0x2",
     }
-    reader = rpc(receipt={"transactionHash": HASH, "blockHash": BLOCK_HASH, "status": "0x1", "logs": [log, {**log, "logIndex": "0x3"}]})
+    reader = rpc(
+        receipt={
+            "transactionHash": HASH,
+            "blockHash": BLOCK_HASH,
+            "status": "0x1",
+            "logs": [log, {**log, "logIndex": "0x3"}],
+        }
+    )
     with pytest.raises(ValueError, match="exactly one"):
         attest_indexed_sky_token_burn(candidate(), spell_address=SPELL, rpc=reader)
+
 
 def test_successful_receipt_is_linked():
     r = rpc(receipt={"transactionHash": HASH, "blockHash": BLOCK_HASH, "status": "0x1"})

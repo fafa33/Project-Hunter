@@ -48,10 +48,13 @@ def audit_window(*, start: int, end: int, checkpoint: Path, chunk: int = 10, max
     chain = rpc("eth_chainId", [])
     if chain != "0x1":
         raise ValueError("Ethereum mainnet required")
-    finalized = int(rpc("eth_getBlockByNumber", ["finalized", False])["number"], 16)
+    finalized_block = rpc("eth_getBlockByNumber", ["finalized", False])
+    if not isinstance(finalized_block, dict):
+        raise ValueError("invalid finalized block response")
+    finalized = int(finalized_block["number"], 16)
     if end > finalized:
         raise ValueError("non-finalized audit range")
-    state = (
+    state: dict = (
         json.loads(checkpoint.read_text())
         if checkpoint.exists()
         else {

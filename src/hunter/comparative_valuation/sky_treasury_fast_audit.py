@@ -101,7 +101,10 @@ def audit(start: int, end: int, checkpoint: Path, max_batches: int = 10) -> dict
         raise ValueError("invalid audit bounds")
     if rpc("eth_chainId", []) != "0x1":
         raise ValueError("Ethereum mainnet required")
-    if int(rpc("eth_getBlockByNumber", ["finalized", False])["number"], 16) < end:
+    finalized_block = rpc("eth_getBlockByNumber", ["finalized", False])
+    if not isinstance(finalized_block, dict):
+        raise ValueError("invalid finalized block response")
+    if int(finalized_block["number"], 16) < end:
         raise ValueError("unfinalized audit range")
     if checkpoint.exists():
         state = json.loads(checkpoint.read_text())

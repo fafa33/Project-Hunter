@@ -10,13 +10,14 @@ from hunter.comparative_valuation.sky_receipt_window import verified_spend_for_w
 def fixture() -> dict:
     return {
         "schema": "sky-buyback-receipt-reconciliation/v1",
-        "start_block": 10, "end_block": 20, "remaining_count": 0,
-        "rejected_count": 0, "verified_count": 2,
+        "start_block": 10,
+        "end_block": 20,
+        "remaining_count": 0,
+        "rejected_count": 0,
+        "verified_count": 2,
         "verified": {
-            "one": {"tx_hash": "0x" + "a" * 64, "block_hash": "0x" + "c" * 64,
-                    "block_number": 12, "usds_paid": "6000"},
-            "two": {"tx_hash": "0x" + "b" * 64, "block_hash": "0x" + "d" * 64,
-                    "block_number": 20, "usds_paid": "800"},
+            "one": {"tx_hash": "0x" + "a" * 64, "block_hash": "0x" + "c" * 64, "block_number": 12, "usds_paid": "6000"},
+            "two": {"tx_hash": "0x" + "b" * 64, "block_hash": "0x" + "d" * 64, "block_number": 20, "usds_paid": "800"},
         },
     }
 

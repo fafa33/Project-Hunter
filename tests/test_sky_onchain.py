@@ -50,5 +50,6 @@ def test_conflicting_same_log_fail_closed():
 
 def test_unverified_attribution_rejected():
     from dataclasses import replace
+
     with pytest.raises(ValueError, match="verified attribution"):
         replace(event(), verified_attribution=False)
