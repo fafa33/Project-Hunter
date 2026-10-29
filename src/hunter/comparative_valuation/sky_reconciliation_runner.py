@@ -10,6 +10,7 @@ from decimal import Decimal
 from pathlib import Path
 from urllib.request import Request, urlopen
 
+from hunter.comparative_valuation.sky_checkpoint_security import checkpoint_path, read_checkpoint, write_checkpoint
 from hunter.comparative_valuation.sky_payment_provenance import attest_sky_buyback_payment
 
 EVENTS_URL = "https://sky.data.blockanalitica.com/internal/buyback/events/"
@@ -102,18 +103,16 @@ def build_candidates(
 
 def update_checkpoint(path: Path, state: dict) -> None:
     """Atomic replacement with deterministic digest and no private RPC endpoint."""
-    serialized = json.dumps(state, sort_keys=True, indent=2) + "\n"
-    temp = path.with_suffix(".tmp")
-    temp.write_text(serialized)
-    os.replace(temp, path)
+    write_checkpoint(path, state)
 
 
 def execute(*, path: Path, max_batches: int = 5, start_block: int = START_BLOCK, end_block: int = END_BLOCK) -> dict:
     if not 1 <= max_batches <= 500:
         raise ValueError("bounded execution budget required")
+    path = checkpoint_path(path)
     candidates, pages = build_candidates(start_block=start_block, end_block=end_block)
     if path.exists():
-        state = json.loads(path.read_text())
+        state = read_checkpoint(path)
         if (
             state.get("start_block") != start_block
             or state.get("end_block") != end_block

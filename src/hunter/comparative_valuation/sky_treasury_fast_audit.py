@@ -8,6 +8,7 @@ import os
 from decimal import Decimal
 from pathlib import Path
 
+from hunter.comparative_valuation.sky_checkpoint_security import checkpoint_path, read_checkpoint, write_checkpoint
 from hunter.comparative_valuation.sky_treasury_audit import (
     BUYBACK_POOL,
     END,
@@ -97,6 +98,7 @@ def receipt_log_match(row: dict, receipt: dict) -> dict:
 
 
 def audit(start: int, end: int, checkpoint: Path, max_batches: int = 10) -> dict:
+    checkpoint = checkpoint_path(checkpoint)
     if start < 0 or end <= start or not 1 <= max_batches <= 100:
         raise ValueError("invalid audit bounds")
     if rpc("eth_chainId", []) != "0x1":
@@ -107,7 +109,7 @@ def audit(start: int, end: int, checkpoint: Path, max_batches: int = 10) -> dict
     if int(finalized_block["number"], 16) < end:
         raise ValueError("unfinalized audit range")
     if checkpoint.exists():
-        state = json.loads(checkpoint.read_text())
+        state = read_checkpoint(checkpoint)
         if (state["start"], state["end"]) != (start, end):
             raise ValueError("checkpoint scope mismatch")
     else:
@@ -193,9 +195,7 @@ def rpc_batch_receipts(hashes: list[str]) -> dict[str, dict]:
 
 
 def save(path: Path, state: dict) -> None:
-    tmp = path.with_suffix(".tmp")
-    tmp.write_text(json.dumps(state, sort_keys=True, indent=2) + "\n")
-    os.replace(tmp, path)
+    write_checkpoint(path, state)
 
 
 if __name__ == "__main__":

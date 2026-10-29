@@ -10,6 +10,7 @@ from pathlib import Path
 from urllib.request import Request, urlopen
 
 from hunter.comparative_valuation.ethereum_rpc import SKY_TOKEN, TRANSFER_TOPIC
+from hunter.comparative_valuation.sky_checkpoint_security import checkpoint_path, read_checkpoint, write_checkpoint
 from hunter.comparative_valuation.sky_payment_provenance import BUYBACK_POOL, SKY_TREASURY, ZERO
 
 START = 25968583
@@ -45,6 +46,7 @@ def token_balance(block: int) -> int:
 def audit_window(*, start: int, end: int, checkpoint: Path, chunk: int = 10, max_chunks: int = 200) -> dict:
     if not 0 <= start < end or not 1 <= chunk <= 10 or not 1 <= max_chunks <= 5000:
         raise ValueError("invalid bounded audit parameters")
+    checkpoint = checkpoint_path(checkpoint)
     chain = rpc("eth_chainId", [])
     if chain != "0x1":
         raise ValueError("Ethereum mainnet required")
@@ -55,7 +57,7 @@ def audit_window(*, start: int, end: int, checkpoint: Path, chunk: int = 10, max
     if end > finalized:
         raise ValueError("non-finalized audit range")
     state: dict = (
-        json.loads(checkpoint.read_text())
+        read_checkpoint(checkpoint)
         if checkpoint.exists()
         else {
             "schema": "sky-treasury-audit/v1",
@@ -108,9 +110,7 @@ def audit_window(*, start: int, end: int, checkpoint: Path, chunk: int = 10, max
                 raise ValueError("conflicting transfer identity")
             state["events"][key] = item
         state["next"] = hi + 1
-        tmp = checkpoint.with_suffix(".tmp")
-        tmp.write_text(json.dumps(state, sort_keys=True, indent=2) + "\n")
-        os.replace(tmp, checkpoint)
+        write_checkpoint(checkpoint, state)
         completed += 1
     events = list(state["events"].values())
     incoming = sum(int(e["raw"]) for e in events if e["to"] == SKY_TREASURY and e["from"] != SKY_TREASURY)
