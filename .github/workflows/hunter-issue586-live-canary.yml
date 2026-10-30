@@ -54,7 +54,7 @@ jobs:
                   findings = [item for item in observations if item["event_id"].startswith("sonar-issue-")]
                   print(f"Live Sonar exact-head observations: {len(findings)} issue(s)", flush=True)
                   if not findings:
-                      print("NO FINDING: real finding ingestion is not proven by this canary", flush=True)
+                      raise SystemExit("NOT PROVEN: zero real Sonar findings at exact HEAD; signed ingestion cannot be demonstrated")
                   break
               if unavailable != ["Sonar exact-head analysis is not available yet"]:
                   raise SystemExit(f"FAIL-CLOSED: Sonar observation unavailable: {unavailable!r}")
