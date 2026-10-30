@@ -655,15 +655,22 @@ def overlay_families(view: KnowledgeView) -> list[dict[str, Any]]:
             }
         )
     for identity, item in sorted(view.findings.items()):
-        if not item.open:
-            continue
         classification = item.classification
         mapped = classification.get("family_id") if classification else None
+        # Closed findings are not discarded from prevention: only an exact-head
+        # proven, resolved and classified fix can become durable guidance.
+        durable = (
+            item.resolved is not None
+            and item.proven is not None
+            and (classification is not None and classification.get("basis") == "proven")
+        )
+        if not item.open and not durable:
+            continue
         entries.append(
             {
                 "id": f"KF-{identity[:12]}",
-                "title": f"open-reviewer-finding-pr-{item.pull_request_number}",
-                "invariant": f"Unresolved reviewer finding on {item.path}"
+                "title": f"{'verified-prevention' if durable else 'open-reviewer-finding'}-pr-{item.pull_request_number}",
+                "invariant": f"{'Verified regression prevention' if durable else 'Unresolved reviewer finding'} on {item.path}"
                 + (f" (family {mapped})" if mapped else "")
                 + f": {item.ingested['claim']}",
                 "lifecycle": "recorded",
