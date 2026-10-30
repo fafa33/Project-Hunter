@@ -2,7 +2,6 @@ import json
 from types import SimpleNamespace
 
 import pytest
-
 from hunter_issue_evidence_writer import EvidenceWriteError, publish
 
 
