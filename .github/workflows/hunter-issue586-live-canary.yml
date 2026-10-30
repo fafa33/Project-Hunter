@@ -32,20 +32,37 @@ jobs:
           BASE_SHA: ${{ github.event.pull_request.base.sha }}
         run: |
           set -euo pipefail
-          python scripts/hunter_collect_sonar_observations.py --project fafa33_Project-Hunter --pr 662 --head "$HEAD_SHA" --base "$BASE_SHA" > "$RUNNER_TEMP/sonar.json"
-          python - "$RUNNER_TEMP/sonar.json" "$HEAD_SHA" <<'PY'
-          import json,sys
-          observations=json.load(open(sys.argv[1],encoding='utf-8'))
-          assert isinstance(observations,list) and observations
-          assert all(item['reviewed_head_sha']==sys.argv[2] for item in observations)
-          unavailable=[item['message'] for item in observations if item.get('availability')!='available']
-          if unavailable:
-              raise SystemExit('FAIL-CLOSED: exact-head Sonar unavailable: '+repr(unavailable))
-          findings=[item for item in observations if item['event_id'].startswith('sonar-issue-')]
-          print(f'Live Sonar exact-head observations: {len(findings)} issue(s)')
-          if not findings:
-              print('NO FINDING: cannot prove ingestion of a real Sonar issue from this canary')
-          PY
+          # Sonar's PR analysis is asynchronous relative to the pull_request event.
+          # Retry only the exact-head-not-ready observation, never stale or partial proof.
+          python - "$RUNNER_TEMP/sonar.json" "$HEAD_SHA" "$BASE_SHA" <<'PYCODE'
+          import json
+          import sys
+          import time
+
+          from pathlib import Path
+
+          sys.path.insert(0, "scripts")
+          import hunter_collect_sonar_observations as sonar
+
+          output, head, base = Path(sys.argv[1]), sys.argv[2], sys.argv[3]
+          for attempt in range(1, 21):
+              observations = sonar.collect("fafa33_Project-Hunter", 662, head, base)
+              assert observations and all(item["reviewed_head_sha"] == head for item in observations)
+              unavailable = [item["message"] for item in observations if item.get("availability") != "available"]
+              if not unavailable:
+                  output.write_text(json.dumps(observations, sort_keys=True, indent=2) + "\n", encoding="utf-8")
+                  findings = [item for item in observations if item["event_id"].startswith("sonar-issue-")]
+                  print(f"Live Sonar exact-head observations: {len(findings)} issue(s)", flush=True)
+                  if not findings:
+                      print("NO FINDING: real finding ingestion is not proven by this canary", flush=True)
+                  break
+              if unavailable != ["Sonar exact-head analysis is not available yet"]:
+                  raise SystemExit(f"FAIL-CLOSED: Sonar observation unavailable: {unavailable!r}")
+              if attempt == 20:
+                  raise SystemExit("FAIL-CLOSED: Sonar exact-head analysis unavailable after 20 bounded attempts")
+              print(f"Sonar exact-head analysis pending ({attempt}/20); waiting 15s", flush=True)
+              time.sleep(15)
+          PYCODE
       - name: Verify candidate learning contract
         run: |
           python -m pip install --disable-pip-version-check --only-binary ':all:' -c requirements/ci-constraints.txt . pytest
