@@ -9,6 +9,10 @@ from decimal import Decimal
 from pathlib import Path
 from typing import Any
 
+from hunter.comparative_valuation.historical_candidates import (
+    HistoricalCandidateAdmission,
+    select_historical_candidates,
+)
 from hunter.comparative_valuation.models import (
     AUTHORIZING_ADR_REFERENCE,
     AVAILABILITY_STATES,
@@ -258,6 +262,225 @@ class CanonicalComparativeValuationService:
         self._persist(_UNIVERSE_SNAPSHOT_TYPE, universe_snapshot, record)
         return record
 
+    def historical_candidates_for_policy(
+        self,
+        *,
+        policy_record_id: str,
+        admissions: tuple[HistoricalCandidateAdmission, ...],
+        cutoff: datetime,
+        known_by: datetime,
+    ) -> tuple[PeerCandidate, ...]:
+        """Reconstruct a historical candidate set without inventing a past write.
+
+        Only a strict-known policy can select admissions. This is a read-only
+        boundary: callers must not treat reconstructed candidates as persisted
+        historical observations or as eligibility decisions.
+        """
+        if cutoff.tzinfo is None or known_by.tzinfo is None or known_by > cutoff:
+            raise CanonicalComparativeValuationAuthorityError("invalid historical cutoff coordinates")
+        policy = self.repository.get_peer_policy(policy_record_id)
+        if policy is None or policy.quality_state != "accepted" or policy.conflict_state not in {"none", "resolved"}:
+            raise CanonicalComparativeValuationAuthorityError("historical candidate policy is unavailable")
+        if policy.effective_at > cutoff or policy.known_at > known_by or policy.recorded_at > known_by:
+            raise CanonicalComparativeValuationAuthorityError("historical candidate policy was not strict-known")
+        candidates = select_historical_candidates(
+            admissions,
+            cutoff=cutoff,
+            known_by=known_by,
+            taxonomy_id=policy.taxonomy,
+            taxonomy_version=policy.taxonomy_version,
+        )
+        if len(candidates) > policy.maximum_candidate_universe_size:
+            raise CanonicalComparativeValuationAuthorityError("historical candidate universe exceeds policy limit")
+        return candidates
+
+    def historical_native_flow_for_cutoff(
+        self,
+        *,
+        policy_record_id: str,
+        identity: EconomicClaimIdentity,
+        evidence_type: str,
+        rule_type: str,
+        cutoff: datetime,
+        known_by: datetime,
+    ) -> tuple[Any, Any]:
+        """Read canonical native flow/rule evidence for an exact historical year.
+
+        This is deliberately acquisition-free: an absent historical observation
+        cannot be manufactured from today's provider response or annualized.
+        """
+        if cutoff.tzinfo is None or known_by.tzinfo is None or known_by > cutoff:
+            raise CanonicalComparativeValuationAuthorityError("invalid historical cutoff coordinates")
+        policy = self.repository.get_peer_policy(policy_record_id)
+        if (
+            policy is None
+            or policy.quality_state != "accepted"
+            or policy.conflict_state not in {"none", "resolved"}
+            or policy.effective_at > cutoff
+            or policy.known_at > known_by
+            or policy.recorded_at > known_by
+        ):
+            raise CanonicalComparativeValuationAuthorityError("historical flow policy was not strict-known")
+        if (
+            evidence_type not in policy.required_native_evidence_types
+            or rule_type not in policy.required_value_capture_mechanism_types
+        ):
+            raise CanonicalComparativeValuationAuthorityError("historical flow is not authorized by policy")
+        pair = self._strict_known_flow_evidence(
+            policy=policy,
+            identity=identity,
+            evidence_type=evidence_type,
+            rule_type=rule_type,
+            effective_at=cutoff,
+            known_at=known_by,
+        )
+        if pair is None:
+            raise CanonicalComparativeValuationAuthorityError("historical native flow evidence is unavailable")
+        evidence, rule = pair
+        if (
+            evidence.accounting_period_start != cutoff - timedelta(days=365)
+            or evidence.accounting_period_end != cutoff
+            or evidence.unit is None
+            or evidence.unit.strip().lower() != policy.required_quote_currency
+            or rule.rate_or_proportion is None
+            or evidence.amount is None
+        ):
+            raise CanonicalComparativeValuationAuthorityError(
+                "historical native flow is not exact-365-day strict-known evidence"
+            )
+        amount = Decimal(evidence.amount)
+        rate = Decimal(rule.rate_or_proportion)
+        if not amount.is_finite() or not rate.is_finite() or amount <= 0 or rate <= 0 or rate > 1:
+            raise CanonicalComparativeValuationAuthorityError("historical native attributable flow is invalid")
+        return evidence, rule
+
+    def historical_fdv_supply_for_cutoff(
+        self,
+        *,
+        policy_record_id: str,
+        identity: EconomicClaimIdentity,
+        cutoff: datetime,
+        known_by: datetime,
+    ) -> tuple[Any, Any]:
+        """Resolve immutable historical FDV and its coherent supply denominator.
+
+        No network lookup or present-day substitution is allowed on this read path.
+        """
+        if cutoff.tzinfo is None or known_by.tzinfo is None or known_by > cutoff:
+            raise CanonicalComparativeValuationAuthorityError("invalid historical cutoff coordinates")
+        policy = self.repository.get_peer_policy(policy_record_id)
+        if (
+            policy is None
+            or policy.quality_state != "accepted"
+            or policy.conflict_state not in {"none", "resolved"}
+            or policy.effective_at > cutoff
+            or policy.known_at > known_by
+            or policy.recorded_at > known_by
+        ):
+            raise CanonicalComparativeValuationAuthorityError("historical FDV policy was not strict-known")
+        fact = self._strict_known_market_fact(
+            policy=policy,
+            identity=identity,
+            effective_at=cutoff,
+            known_at=known_by,
+        )
+        supply = self._strict_known_supply(
+            policy=policy,
+            identity=identity,
+            effective_at=cutoff,
+            known_at=known_by,
+        )
+        if fact is None or supply is None:
+            raise CanonicalComparativeValuationAuthorityError("historical FDV/supply evidence is unavailable")
+        if (
+            fact.identity.entity_id != identity.entity_id
+            or fact.identity.representation_id != identity.representation_id
+            or supply.identity != identity
+            or supply.supply_basis_type != "fully_diluted_supply"
+            or fact.record_id not in supply.observed_market_fact_ids
+        ):
+            raise CanonicalComparativeValuationAuthorityError(
+                "historical FDV/supply representation or lineage mismatch"
+            )
+        position = supply.observed_market_fact_ids.index(fact.record_id)
+        if supply.observed_market_fact_versions[position] != fact.semantic_version:
+            raise CanonicalComparativeValuationAuthorityError("historical FDV/supply version mismatch")
+        if (
+            fact.effective_at > cutoff
+            or fact.known_at > known_by
+            or fact.recorded_at > known_by
+            or supply.effective_at > cutoff
+            or supply.known_at > known_by
+            or supply.recorded_at > known_by
+        ):
+            raise CanonicalComparativeValuationAuthorityError("future historical FDV/supply evidence")
+        value = Decimal(fact.value)
+        quantity = Decimal(supply.quantity)
+        if not value.is_finite() or value <= 0 or not quantity.is_finite() or quantity <= 0:
+            raise CanonicalComparativeValuationAuthorityError("historical FDV/supply must be strictly positive")
+        return fact, supply
+
+    def reconstruct_historical_evidence(
+        self,
+        *,
+        policy_record_id: str,
+        admissions: tuple[HistoricalCandidateAdmission, ...],
+        cutoff: datetime,
+        known_by: datetime,
+    ) -> dict[str, Any]:
+        """Read-only, deterministic cutoff replay with explicit rejected identities.
+
+        No persistence, provider acquisition, or current-state peer selection.
+        Records are referenced by their existing canonical IDs, never duplicated.
+        """
+        candidates = self.historical_candidates_for_policy(
+            policy_record_id=policy_record_id,
+            admissions=admissions,
+            cutoff=cutoff,
+            known_by=known_by,
+        )
+        accepted: list[dict[str, str]] = []
+        rejected: list[dict[str, str]] = []
+        for candidate in candidates:
+            identity = candidate.identity
+            try:
+                evidence, rule = self.historical_native_flow_for_cutoff(
+                    policy_record_id=policy_record_id,
+                    identity=identity,
+                    evidence_type=candidate.native_evidence_type,
+                    rule_type=candidate.value_capture_mechanism_type,
+                    cutoff=cutoff,
+                    known_by=known_by,
+                )
+                fact, supply = self.historical_fdv_supply_for_cutoff(
+                    policy_record_id=policy_record_id,
+                    identity=identity,
+                    cutoff=cutoff,
+                    known_by=known_by,
+                )
+            except CanonicalComparativeValuationAuthorityError as exc:
+                rejected.append({"entity_id": identity.entity_id, "reason": str(exc)})
+                continue
+            accepted.append(
+                {
+                    "entity_id": identity.entity_id,
+                    "evidence_id": evidence.record_id,
+                    "evidence_hash": evidence.raw_content_hash,
+                    "rule_id": rule.record_id,
+                    "supply_id": supply.record_id,
+                    "supply_hash": supply.raw_payload_hash,
+                    "fdv_id": fact.record_id,
+                    "fdv_hash": fact.raw_payload_hash,
+                }
+            )
+        return {
+            "policy_record_id": policy_record_id,
+            "cutoff": cutoff.astimezone(UTC).isoformat(),
+            "known_by": known_by.astimezone(UTC).isoformat(),
+            "accepted": tuple(accepted),
+            "rejected": tuple(rejected),
+        }
+
     # -------------------------------------------------------- eligibility decisions
 
     def persist_eligibility_decision(
@@ -400,6 +623,25 @@ class CanonicalComparativeValuationService:
             raise CanonicalComparativeValuationAuthorityError(
                 "no strict-known fully-diluted observed market value is available for this identity"
             )
+        supply = self._strict_known_supply(
+            policy=policy,
+            identity=identity,
+            effective_at=effective_at,
+            known_at=known_at,
+        )
+        if supply is None:
+            raise CanonicalComparativeValuationAuthorityError(
+                "no strict-known coherent fully-diluted supply basis is available for this identity"
+            )
+        if numerator.record_id not in supply.observed_market_fact_ids:
+            raise CanonicalComparativeValuationAuthorityError(
+                "historical supply basis does not bind the selected observed FDV market fact"
+            )
+        fact_index = supply.observed_market_fact_ids.index(numerator.record_id)
+        if supply.observed_market_fact_versions[fact_index] != numerator.semantic_version:
+            raise CanonicalComparativeValuationAuthorityError(
+                "historical supply basis binds an incompatible observed FDV market fact version"
+            )
         flow_evidence = self._strict_known_flow_evidence(
             policy=policy,
             identity=identity,
@@ -422,8 +664,7 @@ class CanonicalComparativeValuationService:
             raise CanonicalComparativeValuationAuthorityError(
                 "evidence accounting period is not fully contained within the 365-day lookback window"
             )
-        accounting_period_days = (evidence.accounting_period_end - evidence.accounting_period_start).days
-        if accounting_period_days != policy.accounting_horizon_days:
+        if evidence.accounting_period_start != horizon_start or evidence.accounting_period_end != effective_at:
             raise CanonicalComparativeValuationAuthorityError(
                 "evidence accounting period length does not match the 365-day horizon; no annualization is authorized"
             )
@@ -1065,6 +1306,12 @@ class CanonicalComparativeValuationService:
         if evidence.attribution_rule_id != rule.mechanism_policy_id:
             if missingness is not None:
                 missingness.append("attribution_mismatch")
+            return None
+        # Aggregated protocol revenue is not proof of native token-holder flow.
+        # Only a primary, independently attributable source may enter the multiple.
+        if evidence.source_authority_tier not in {"official", "audited", "onchain"}:
+            if missingness is not None:
+                missingness.append("non_primary_flow_source")
             return None
         if evidence.amount is None:
             if missingness is not None:

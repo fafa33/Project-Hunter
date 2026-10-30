@@ -54,7 +54,10 @@ def test_future_admission_is_not_backfilled():
 
 
 def test_historical_order_independent_of_input():
-    a, b = _admission("a"), _admission("b")
+    from dataclasses import replace
+
+    a = _admission("a")
+    b = replace(_admission("b"), content_hash="sha256:" + "b" * 64)
     assert _select([b, a]) == _select([a, b])
 
 
@@ -105,3 +108,332 @@ def test_malformed_hash_and_missing_taxonomy_fail_closed():
             taxonomy_id="",
             taxonomy_version="v1",
         )
+
+
+def test_inconsistent_admission_chronology_fails_closed():
+    from dataclasses import replace
+
+    admission = _admission()
+    with pytest.raises(ValueError, match="chronology"):
+        replace(admission, published_at=admission.effective_at - timedelta(seconds=1))
+
+
+def test_timezone_equivalent_cutoff_replay():
+    from datetime import timezone
+
+    admission = _admission()
+    offset = timezone(timedelta(hours=2))
+    cutoff = datetime(2025, 1, 2, tzinfo=UTC)
+    assert select_historical_candidates(
+        (admission,),
+        cutoff=cutoff.astimezone(offset),
+        known_by=cutoff.astimezone(offset),
+        taxonomy_id="taxonomy",
+        taxonomy_version="v1",
+    ) == _select([admission])
+
+
+def test_correction_requires_provenance_and_cannot_silently_rewrite_history():
+    from dataclasses import replace
+
+    admission = _admission()
+    with pytest.raises(ValueError, match="reason"):
+        replace(admission, supersedes_content_hash="sha256:" + "b" * 64)
+    with pytest.raises(ValueError, match="superseded evidence"):
+        replace(admission, correction_reason="updated")
+    correction = replace(
+        admission,
+        content_hash="sha256:" + "c" * 64,
+        supersedes_content_hash="sha256:" + "b" * 64,
+        correction_reason="source correction",
+    )
+    with pytest.raises(ValueError, match="canonical lineage resolution"):
+        _select([correction])
+
+
+def test_service_historical_candidate_boundary_requires_strict_known_policy():
+    from types import SimpleNamespace
+
+    from hunter.comparative_valuation.service import (
+        CanonicalComparativeValuationAuthorityError,
+        CanonicalComparativeValuationService,
+    )
+
+    admission = _admission()
+    cutoff = datetime(2025, 1, 2, tzinfo=UTC)
+    policy = SimpleNamespace(
+        quality_state="accepted",
+        conflict_state="none",
+        effective_at=cutoff,
+        known_at=cutoff,
+        recorded_at=cutoff,
+        taxonomy="taxonomy",
+        taxonomy_version="v1",
+        maximum_candidate_universe_size=10,
+    )
+    service = object.__new__(CanonicalComparativeValuationService)
+    service.repository = SimpleNamespace(get_peer_policy=lambda _: policy)
+    assert service.historical_candidates_for_policy(
+        policy_record_id="policy",
+        admissions=(admission,),
+        cutoff=cutoff,
+        known_by=cutoff,
+    ) == (admission.candidate,)
+    policy.recorded_at = cutoff + timedelta(seconds=1)
+    with pytest.raises(CanonicalComparativeValuationAuthorityError, match="strict-known"):
+        service.historical_candidates_for_policy(
+            policy_record_id="policy",
+            admissions=(admission,),
+            cutoff=cutoff,
+            known_by=cutoff,
+        )
+
+
+def test_valid_correction_replays_only_when_known_at_cutoff():
+    from dataclasses import replace
+
+    original = _admission()
+    corrected = replace(
+        original,
+        content_hash="sha256:" + "c" * 64,
+        supersedes_content_hash=original.content_hash,
+        correction_reason="verified upstream correction",
+        known_at=original.known_at + timedelta(days=1),
+        published_at=original.published_at + timedelta(days=1),
+        candidate=replace(original.candidate, sector_classification="corrected-protocol"),
+    )
+    early = select_historical_candidates(
+        (corrected, original),
+        cutoff=datetime(2025, 1, 1, tzinfo=UTC),
+        known_by=datetime(2025, 1, 1, tzinfo=UTC),
+        taxonomy_id="taxonomy",
+        taxonomy_version="v1",
+    )
+    assert early == (original.candidate,)
+    assert _select((corrected, original)) == (corrected.candidate,)
+    assert _select((original, corrected)) == (corrected.candidate,)
+
+
+def test_correction_branch_and_cross_identity_fail_closed():
+    from dataclasses import replace
+
+    original = _admission()
+    correction = replace(
+        original,
+        content_hash="sha256:" + "c" * 64,
+        supersedes_content_hash=original.content_hash,
+        correction_reason="correct",
+        published_at=original.published_at + timedelta(days=1),
+        known_at=original.known_at + timedelta(days=1),
+    )
+    branch = replace(correction, content_hash="sha256:" + "d" * 64)
+    with pytest.raises(ValueError, match="branching"):
+        _select((original, correction, branch))
+    alien = replace(
+        correction, candidate=replace(correction.candidate, identity=_admission("alien").candidate.identity)
+    )
+    with pytest.raises(ValueError, match="lineage"):
+        _select((original, alien))
+
+
+def test_later_unknown_correction_does_not_rewrite_historical_replay():
+    from dataclasses import replace
+
+    original = _admission()
+    future = replace(
+        original,
+        content_hash="sha256:" + "c" * 64,
+        supersedes_content_hash=original.content_hash,
+        correction_reason="later correction",
+        published_at=original.published_at + timedelta(days=3),
+        known_at=original.known_at + timedelta(days=3),
+    )
+    assert _select((original, future)) == (original.candidate,)
+
+
+def test_cross_entity_digest_reuse_fails_closed():
+    # Identical hashes for different entities must not silently create two
+    # independently authorized historical membership records.
+    with pytest.raises(ValueError, match="content hash"):
+        _select((_admission("a"), _admission("b")))
+
+
+def test_distinct_historical_digests_remain_order_independent():
+    from dataclasses import replace
+
+    a = _admission("a")
+    b = replace(_admission("b"), content_hash="sha256:" + "b" * 64)
+    assert _select((a, b)) == _select((b, a))
+
+
+def test_historical_native_flow_requires_exact_window_and_known_policy():
+    from types import SimpleNamespace
+
+    from hunter.comparative_valuation.service import (
+        CanonicalComparativeValuationAuthorityError,
+        CanonicalComparativeValuationService,
+    )
+
+    cutoff = datetime(2025, 1, 2, tzinfo=UTC)
+    policy = SimpleNamespace(
+        quality_state="accepted",
+        conflict_state="none",
+        effective_at=cutoff,
+        known_at=cutoff,
+        recorded_at=cutoff,
+        required_native_evidence_types=("onchain_observation",),
+        required_value_capture_mechanism_types=("burn",),
+        required_quote_currency="usd",
+    )
+    evidence = SimpleNamespace(
+        accounting_period_start=cutoff - timedelta(days=365),
+        accounting_period_end=cutoff,
+        unit="usd",
+        amount="100",
+    )
+    rule = SimpleNamespace(rate_or_proportion="0.5")
+    service = object.__new__(CanonicalComparativeValuationService)
+    service.repository = SimpleNamespace(get_peer_policy=lambda _: policy)
+    service._strict_known_flow_evidence = lambda **_: (evidence, rule)
+    kwargs = dict(
+        policy_record_id="policy",
+        identity=_admission().candidate.identity,
+        evidence_type="onchain_observation",
+        rule_type="burn",
+        cutoff=cutoff,
+        known_by=cutoff,
+    )
+    assert service.historical_native_flow_for_cutoff(**kwargs) == (evidence, rule)
+    evidence.accounting_period_start += timedelta(days=1)
+    with pytest.raises(CanonicalComparativeValuationAuthorityError, match="exact-365-day"):
+        service.historical_native_flow_for_cutoff(**kwargs)
+    evidence.accounting_period_start -= timedelta(days=1)
+    policy.recorded_at += timedelta(seconds=1)
+    with pytest.raises(CanonicalComparativeValuationAuthorityError, match="strict-known"):
+        service.historical_native_flow_for_cutoff(**kwargs)
+    policy.recorded_at = cutoff
+    service._strict_known_flow_evidence = lambda **_: None
+    with pytest.raises(CanonicalComparativeValuationAuthorityError, match="unavailable"):
+        service.historical_native_flow_for_cutoff(**kwargs)
+
+
+def test_historical_fdv_supply_rejects_mismatched_representation_and_future():
+    from dataclasses import replace
+    from types import SimpleNamespace
+
+    from hunter.comparative_valuation.service import (
+        CanonicalComparativeValuationAuthorityError,
+        CanonicalComparativeValuationService,
+    )
+
+    cutoff = datetime(2025, 1, 2, tzinfo=UTC)
+    identity = _admission().candidate.identity
+    policy = SimpleNamespace(
+        quality_state="accepted",
+        conflict_state="none",
+        effective_at=cutoff,
+        known_at=cutoff,
+        recorded_at=cutoff,
+    )
+    market_identity = SimpleNamespace(
+        entity_id=identity.entity_id,
+        representation_id=identity.representation_id,
+    )
+    fact = SimpleNamespace(
+        identity=market_identity,
+        record_id="fdv-1",
+        semantic_version="1.0.0",
+        effective_at=cutoff,
+        known_at=cutoff,
+        recorded_at=cutoff,
+        value="1000",
+    )
+    supply = SimpleNamespace(
+        identity=identity,
+        supply_basis_type="fully_diluted_supply",
+        observed_market_fact_ids=("fdv-1",),
+        observed_market_fact_versions=("1.0.0",),
+        effective_at=cutoff,
+        known_at=cutoff,
+        recorded_at=cutoff,
+        quantity="100",
+    )
+    service = object.__new__(CanonicalComparativeValuationService)
+    service.repository = SimpleNamespace(get_peer_policy=lambda _: policy)
+    service._strict_known_market_fact = lambda **_: fact
+    service._strict_known_supply = lambda **_: supply
+    kwargs = dict(policy_record_id="policy", identity=identity, cutoff=cutoff, known_by=cutoff)
+    assert service.historical_fdv_supply_for_cutoff(**kwargs) == (fact, supply)
+    supply.observed_market_fact_versions = ("2.0.0",)
+    with pytest.raises(CanonicalComparativeValuationAuthorityError, match="version mismatch"):
+        service.historical_fdv_supply_for_cutoff(**kwargs)
+    supply.observed_market_fact_versions = ("1.0.0",)
+    supply.identity = replace(identity, representation_id="different")
+    with pytest.raises(CanonicalComparativeValuationAuthorityError, match="representation"):
+        service.historical_fdv_supply_for_cutoff(**kwargs)
+    supply.identity = identity
+    fact.recorded_at += timedelta(seconds=1)
+    with pytest.raises(CanonicalComparativeValuationAuthorityError, match="future"):
+        service.historical_fdv_supply_for_cutoff(**kwargs)
+    fact.recorded_at = cutoff
+    policy.known_at += timedelta(seconds=1)
+    with pytest.raises(CanonicalComparativeValuationAuthorityError, match="strict-known"):
+        service.historical_fdv_supply_for_cutoff(**kwargs)
+
+
+def test_integrated_historical_replay_bytes_and_rejections(monkeypatch):
+    import json
+    from dataclasses import replace
+    from datetime import timezone
+    from types import SimpleNamespace
+
+    from hunter.comparative_valuation.service import (
+        CanonicalComparativeValuationAuthorityError,
+        CanonicalComparativeValuationService,
+    )
+
+    cutoff = datetime(2025, 1, 2, tzinfo=UTC)
+    a = _admission("a")
+    b = replace(_admission("b"), content_hash="sha256:" + "b" * 64)
+    policy = SimpleNamespace(
+        quality_state="accepted",
+        conflict_state="none",
+        effective_at=cutoff,
+        known_at=cutoff,
+        recorded_at=cutoff,
+        taxonomy="taxonomy",
+        taxonomy_version="v1",
+        maximum_candidate_universe_size=10,
+    )
+    service = object.__new__(CanonicalComparativeValuationService)
+    service.repository = SimpleNamespace(get_peer_policy=lambda _: policy)
+
+    def flow(**kwargs):
+        if kwargs["identity"].entity_id == "b":
+            raise CanonicalComparativeValuationAuthorityError("missing native flow")
+        return SimpleNamespace(record_id="e", raw_content_hash="sha256:" + "e" * 64), SimpleNamespace(record_id="r")
+
+    monkeypatch.setattr(service, "historical_native_flow_for_cutoff", flow)
+    monkeypatch.setattr(
+        service,
+        "historical_fdv_supply_for_cutoff",
+        lambda **_: (
+            SimpleNamespace(record_id="f", raw_payload_hash="sha256:" + "f" * 64),
+            SimpleNamespace(record_id="s", raw_payload_hash="sha256:" + "c" * 64),
+        ),
+    )
+    kwargs = dict(policy_record_id="p", cutoff=cutoff, known_by=cutoff)
+
+    def replay(admissions, **overrides):
+        result = service.reconstruct_historical_evidence(admissions=admissions, **(kwargs | overrides))
+        return json.dumps(result, sort_keys=True, separators=(",", ":")).encode()
+
+    assert replay((a, b)) == replay((b, a)) == replay((a, b))
+    payload = json.loads(replay((a, b)))
+    assert payload["accepted"][0]["evidence_id"] == "e"
+    assert payload["rejected"] == [{"entity_id": "b", "reason": "missing native flow"}]
+    offset = timezone(timedelta(hours=2))
+    assert replay((a, b)) == replay((a, b), cutoff=cutoff.astimezone(offset), known_by=cutoff.astimezone(offset))
+    policy.recorded_at += timedelta(seconds=1)
+    with pytest.raises(CanonicalComparativeValuationAuthorityError, match="strict-known"):
+        replay((a, b))

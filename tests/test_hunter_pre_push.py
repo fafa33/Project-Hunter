@@ -373,3 +373,18 @@ def test_unsigned_candidate_safety_fails_closed_on_gate_failure(monkeypatch, tmp
     monkeypatch.setattr(hunter_pre_push, "_select_preflight_mode", lambda _head: hunter_pre_push.NORMAL_MODE)
     monkeypatch.setattr(hunter_pre_push, "_run_push_safety_lane", lambda: 7)
     assert hunter_pre_push.enforce_credential_free_candidate_safety(_update()) == 7
+
+
+def test_push_safety_gates_are_bounded_and_black_matches_trusted_contract(monkeypatch: pytest.MonkeyPatch) -> None:
+    observed = {}
+
+    def capture(gates, **kwargs):
+        observed["gates"] = gates
+        observed["timeout"] = kwargs.get("timeout_seconds")
+        return 0, {"overall_outcome": "passed", "gates": []}
+
+    monkeypatch.setattr(hunter_pr_preflight, "run_aggregate_gates", capture)
+    assert hunter_pre_push._run_push_safety_lane() == 0
+    assert observed["timeout"] == 180
+    black = dict(observed["gates"])["Black"]
+    assert black == ("black", "--check", "--diff", ".")

@@ -1,0 +1,15 @@
+{
+  "buyback_vs_burn": "buy-and-hold per historical token disclosure; do not classify as burn",
+  "bytes": 102378,
+  "canonical_eligibility": false,
+  "classification": "provider-reported holders revenue / RAY buyback candidate; not independently reconciled to Solana transaction ledger",
+  "daily_observations": 365,
+  "onchain_transaction_receipts": "MISSING",
+  "period": "(2025-07-31T00:00:00Z,2026-07-31T00:00:00Z]",
+  "retrieved_at": "2026-10-29T23:23:05.729605+00:00",
+  "rule_known_at": "NOT PROVEN",
+  "sha256": "2a00a4b641c04a65a1b5794a1d4333b87903326242717a2646c0874d5f3bce46",
+  "source_url": "https://api.llama.fi/summary/fees/raydium?dataType=dailyHoldersRevenue",
+  "strict_known_at_cutoff": "NOT PROVEN: fetched after cutoff; may contain revised history",
+  "sum_usd": 19810006
+}

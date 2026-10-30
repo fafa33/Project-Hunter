@@ -1,0 +1,16 @@
+{
+  "cmc_asset_id": 8526,
+  "cmc_market_cap_usd": 161890272.66637793,
+  "cmc_price_usd": 0.6011211348051804,
+  "cmc_quote_timestamp": "2026-08-01T00:00:00.000Z",
+  "cmc_raw_bytes": 626,
+  "cmc_raw_sha256": "36c174f565a896954994405b4d21a076382e3fe85a7b2ef0ec0f1e8be002a89b",
+  "coingecko_comparison_status": "response_obtained",
+  "coingecko_http_status": 200,
+  "eligibility": "RESEARCH_ONLY",
+  "historical_cohort": "MISSING",
+  "historical_fdv_supply_basis": "UNPROVEN: total supply is not independently verified fully diluted supply",
+  "native_attributable_flow_365d": "MISSING",
+  "purpose": "Issue 389 market data research only; NOT canonical proof or ADR-0026 eligible evidence",
+  "strict_known_at_2026_07_31": "FAIL: 2026-08-01 quote and 2026-10-29 retrieval postdate cutoff"
+}

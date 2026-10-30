@@ -31,14 +31,30 @@ sources:
     source_type: onchain_observation
     allowed_hosts:
       - ethereum.publicnode.com
+      - rpc.flashbots.net
+      - eth-mainnet.g.alchemy.com
     endpoint_patterns:
       - https://ethereum.publicnode.com
+      - https://rpc.flashbots.net
+      - https://eth-mainnet.g.alchemy.com/v2/
     parser_version: evm-value-capture-v1
     capabilities:
       - evidence:onchain_observation
       - supply:total_supply
       - supply:burned_supply
       - supply:protocol_owned_supply
+    enabled: true
+
+  - source_id: sky-financial-burn-index
+    authority_tier: aggregator
+    source_type: indexed_onchain_observation
+    allowed_hosts:
+      - sky.data.blockanalitica.com
+    endpoint_patterns:
+      - https://sky.data.blockanalitica.com/internal/buyback/burns/
+    parser_version: sky-burn-index-v1
+    capabilities:
+      - evidence:indexed_burn_observation
     enabled: true
 
   - source_id: sky-protocol-tokenomics-disclosure
