@@ -95,3 +95,26 @@ def test_actual_issue_list_cannot_exceed_bound_even_if_total_lies():
     rows = module.collect("fafa33_Project-Hunter", 494, HEAD, BASE, get_json=getter(issues=issues, total=1))
     assert rows[0]["availability"] == "unavailable"
     assert "bounded limit" in rows[0]["message"]
+
+
+def test_resolved_finding_is_still_observed_with_stable_identity():
+    issue = {
+        "key": "AaGNUnVwvW-F6WQX-cKx",
+        "rule": "python:S2083",
+        "severity": "CRITICAL",
+        "component": "fafa33_Project-Hunter:scripts/hunter_issue_evidence_writer.py",
+        "message": "Path Traversal",
+        "issueStatus": "FIXED",
+    }
+    seen = []
+
+    def get(url: str):
+        seen.append(url)
+        return getter(issues=[issue])(url)
+
+    rows = module.collect("fafa33_Project-Hunter", 494, HEAD, BASE, get_json=get)
+    assert "resolved=false" in seen[1]
+    assert "resolved=true" in seen[2]
+    assert rows[0]["event_id"] == "sonar-issue-AaGNUnVwvW-F6WQX-cKx"
+    assert "sonar_status=FIXED" in rows[0]["message"]
+    assert rows[0]["classification"] is None
