@@ -514,6 +514,79 @@ def result_carries_secret(document: bytes, secrets: Sequence[str]) -> bool:
     return any(needle in content for content in contents for needle in needles)
 
 
+# --- OpenCode workspace and permission contract (Issue #574) --------------------------------------------
+
+#: Tools the isolated model may use against its own workspace. Every other tool, including all
+#: external-directory, web, subagent, skill and question actions, is denied by the catch-all rule.
+_OPENCODE_WORKSPACE_TOOLS: Final = ("read", "edit", "glob", "grep", "lsp")
+#: ``bash`` stays visible for OpenCode's free-tier classifier, but the trusted shell below refuses every
+#: command, so the permission entry can never execute anything outside the contract.
+_OPENCODE_PERMISSION: Final[Mapping[str, str]] = {
+    "*": "deny",
+    "external_directory": "deny",
+    **{tool: "allow" for tool in _OPENCODE_WORKSPACE_TOOLS},
+    "bash": "allow",
+}
+_OPENCODE_DENIED_SHELL: Final = "#!/bin/sh\necho 'Hunter governed runtime forbids shell execution' >&2\nexit 126\n"
+_OPENCODE_DENIED_SHELL_NAME: Final = "hunter-denied-shell"
+_OPENCODE_RUNTIME_INSTRUCTION_NAME: Final = "hunter-provider-runtime.md"
+_OPENCODE_RUNTIME_INSTRUCTIONS: Final = (
+    "Operate only with the provider tools enabled by this governed runtime: read, edit, glob, grep and lsp. "
+    "Do not attempt shell or test commands, web access, subagents/tasks, skills, questions, or "
+    "external-directory access. Provider-side validation is not completion evidence; the trusted parent "
+    "owns exact-head targeted validation after publication."
+)
+
+
+def _is_opencode_run(argv: Sequence[str]) -> bool:
+    return len(argv) >= 2 and Path(argv[0]).name == "opencode" and argv[1] == "run"
+
+
+def opencode_workspace_argv(argv: Sequence[str], workspace: Path) -> tuple[str, ...]:
+    """``opencode run`` bound to ``workspace`` in pure mode; every other word is forwarded unchanged."""
+
+    if not _is_opencode_run(argv):
+        return tuple(argv)
+    return (argv[0], "--pure", "run", "--dir", str(workspace), *argv[2:])
+
+
+def opencode_workspace_environment(home: Path, workspace: Path) -> dict[str, str]:
+    """The ephemeral OpenCode contract: trusted inline config, no project config, no real shell.
+
+    The shell lives outside the workspace (``external_directory`` is denied), is read-only, and is
+    verified before use: OpenCode silently falls back to a real shell when the configured one is
+    missing or not executable. The permission map is repeated under the shipped ``build`` agent because
+    agent rules take precedence over global rules.
+    """
+
+    config_dir = home / ".config" / "opencode"
+    config_dir.mkdir(parents=True, exist_ok=True)
+    shell = config_dir / _OPENCODE_DENIED_SHELL_NAME
+    shell.write_text(_OPENCODE_DENIED_SHELL, encoding="utf-8")
+    shell.chmod(0o555)
+    if not (shell.is_file() and os.access(shell, os.X_OK)):
+        raise RoleRefused("EXECUTION_NOT_COMPLETED", "the governed model shell is not executable")
+    instructions = config_dir / _OPENCODE_RUNTIME_INSTRUCTION_NAME
+    instructions.write_text(_OPENCODE_RUNTIME_INSTRUCTIONS, encoding="utf-8")
+    permission = dict(_OPENCODE_PERMISSION)
+    content = {
+        "permission": permission,
+        "agent": {"build": {"permission": dict(permission)}},
+        "instructions": [str(instructions)],
+        "shell": str(shell),
+    }
+    return {
+        "PWD": str(workspace),
+        "SHELL": str(shell),
+        "OPENCODE_CONFIG_DIR": str(config_dir),
+        "OPENCODE_CONFIG_CONTENT": json.dumps(content, sort_keys=True, separators=(",", ":")),
+        "OPENCODE_DISABLE_PROJECT_CONFIG": "1",
+        "OPENCODE_DISABLE_CLAUDE_CODE": "1",
+        "OPENCODE_AUTO_SHARE": "false",
+        "OPENCODE_DISABLE_AUTOUPDATE": "true",
+    }
+
+
 # --- executor ------------------------------------------------------------------------------------------
 
 
@@ -592,11 +665,12 @@ def run_executor(
     home.mkdir(mode=0o700)
     model_argv = config.model_argv
     model_stdin = prompt
+    opencode_environment: Mapping[str, str] = {}
     # OpenCode 1.18.30 `run [message..]` does not consume stdin as a task.
     # Keep the signed prompt out of process argv and sudo logs: attach it as a
     # private file, with only a constant, non-sensitive positional instruction.
-    if len(model_argv) >= 2 and Path(model_argv[0]).name == "opencode" and model_argv[1] == "run":
-        prompt_path = home / "hunter-task.txt"
+    if _is_opencode_run(model_argv):
+        prompt_path = home / _TASK_ATTACHMENT
         prompt_path.write_bytes(prompt)
         prompt_path.chmod(0o600)
         model_argv = (
@@ -606,6 +680,10 @@ def run_executor(
             str(prompt_path),
         )
         model_stdin = b""
+        # Issue #574: bind OpenCode to the isolated workspace and the trusted permission contract, so
+        # every read/edit lands where the collector looks and repository files cannot widen the contract.
+        opencode_environment = opencode_workspace_environment(home, workspace)
+        model_argv = opencode_workspace_argv(model_argv, workspace)
     contract = prompt_contract_summary(prompt)
     print("executor task contract: " + " ".join(f"{name}={value}" for name, value in contract.items()), flush=True)
     isolation.prepare(workspace, home)
@@ -616,6 +694,7 @@ def run_executor(
             cwd=workspace,
             public_env={
                 **config.model_public_env,
+                **opencode_environment,
                 "HOME": str(home),
                 "PWD": str(workspace),
                 "XDG_CONFIG_HOME": str(home / ".config"),

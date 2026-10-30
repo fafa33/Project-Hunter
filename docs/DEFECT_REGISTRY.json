@@ -1062,6 +1062,16 @@
       "guard": "Pre-create the execute workroot with the runner UID/GID and traversal-only access for other users (0711), before the credential-isolated executor attempts workspace creation. Keep trusted Git metadata runner-owned and 0700; never fix this by running the model as runner/root or making the workroot group/world-writable.",
       "test": "tests/test_issue_agent_workflows.py::test_executor_prepares_runner_owned_traversable_workroot",
       "status": "guarded"
+    },
+    {
+      "id": "PRH-121",
+      "class": "issue-agent-opencode-workspace-and-permission-contract-not-bound",
+      "source": "Issue #574; docs/ISSUE_AGENT_EXECUTION_CONTRACT.md I9; OpenCode 1.18.30 resolves its project directory from the inherited PWD and defaults to permissive tool permissions",
+      "classification": "systemic",
+      "guard_boundary": "trusted executor before isolated OpenCode model execution",
+      "guard": "Launch OpenCode with --pure and an explicit --dir bound to the isolated workspace, with PWD set to the same directory and OLDPWD removed. Supply an ephemeral inline permission contract through OPENCODE_CONFIG_CONTENT that denies external_directory and every tool except workspace read/edit/glob/grep/lsp, repeated under the shipped build agent because agent rules take precedence over global rules. Disable project configuration and Claude Code sources, and neutralize bash with a read-only deny-all shell outside the workspace. A zero exit without an authorized workspace edit stays NO_CHANGES and is never sealed.",
+      "test": "tests/test_issue_agent_roles.py::test_opencode_runs_in_the_isolated_workspace_it_is_given; tests/test_issue_agent_roles.py::test_the_opencode_permission_contract_allows_only_workspace_operations; tests/test_issue_agent_roles.py::test_repository_files_cannot_override_the_trusted_permission_contract; tests/test_issue_agent_roles.py::test_the_model_shell_is_a_trusted_deny_all_executable_outside_the_workspace; tests/test_issue_agent_roles.py::test_an_opencode_run_that_exits_zero_without_authorized_edits_is_not_success",
+      "status": "guarded"
     }
   ],
   "families": [
