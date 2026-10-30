@@ -1,0 +1,52 @@
+name: Hunter / Issue 586 Live Canary
+on:
+  pull_request:
+    types: [opened, synchronize, reopened]
+    paths:
+      - 'scripts/hunter_collect_sonar_observations.py'
+      - 'scripts/hunter_issue_agent_lifecycle.py'
+      - 'src/hunter/automation/issue_agent_knowledge.py'
+      - 'tests/test_issue_agent_knowledge.py'
+      - '.github/workflows/hunter-issue586-live-canary.yml'
+permissions:
+  contents: read
+  pull-requests: read
+jobs:
+  live-observation-canary:
+    if: github.event.pull_request.number == 662 && github.event.pull_request.head.repo.full_name == github.repository
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Checkout candidate without credentials
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+          persist-credentials: false
+      - name: Set up Python
+        uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6.3.0
+        with:
+          python-version: '3.11.13'
+      - name: Collect actual exact-head Sonar findings (no signing key)
+        env:
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+        run: |
+          set -euo pipefail
+          python scripts/hunter_collect_sonar_observations.py --project fafa33_Project-Hunter --pr 662 --head "$HEAD_SHA" --base "$BASE_SHA" > "$RUNNER_TEMP/sonar.json"
+          python - "$RUNNER_TEMP/sonar.json" "$HEAD_SHA" <<'PY'
+          import json,sys
+          observations=json.load(open(sys.argv[1],encoding='utf-8'))
+          assert isinstance(observations,list) and observations
+          assert all(item['reviewed_head_sha']==sys.argv[2] for item in observations)
+          unavailable=[item['message'] for item in observations if item.get('availability')!='available']
+          if unavailable:
+              raise SystemExit('FAIL-CLOSED: exact-head Sonar unavailable: '+repr(unavailable))
+          findings=[item for item in observations if item['event_id'].startswith('sonar-issue-')]
+          print(f'Live Sonar exact-head observations: {len(findings)} issue(s)')
+          if not findings:
+              print('NO FINDING: cannot prove ingestion of a real Sonar issue from this canary')
+          PY
+      - name: Verify candidate learning contract
+        run: |
+          python -m pip install --disable-pip-version-check --only-binary ':all:' -c requirements/ci-constraints.txt . pytest
+          python -m pytest -q tests/test_issue_agent_knowledge.py -k 'sonar_finding_flows or proven_resolved_finding'
