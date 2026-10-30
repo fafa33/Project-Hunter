@@ -97,6 +97,30 @@ def test_actual_issue_list_cannot_exceed_bound_even_if_total_lies():
     assert "bounded limit" in rows[0]["message"]
 
 
+def test_malformed_sonar_issue_cannot_be_dropped_into_false_clean_result():
+    for malformed in (None, {"message": "missing key"}, {"key": 42}):
+        rows = module.collect("fafa33_Project-Hunter", 494, HEAD, BASE, get_json=getter(issues=[malformed]))
+        assert len(rows) == 1
+        assert rows[0]["availability"] == "unavailable"
+        assert "malformed issue" in rows[0]["message"]
+
+
+def test_malformed_issue_in_either_response_prevents_partial_findings():
+    valid = {"key": "real", "component": "fafa33_Project-Hunter:src/x.py", "message": "real issue"}
+    for malformed_resolved in (False, True):
+        def get(url: str):
+            if "project_pull_requests" in url:
+                return {"pullRequests": [{"key": "494", "commit": {"sha": HEAD}}]}
+            if ("resolved=true" in url) == malformed_resolved:
+                return {"issues": [valid, None], "total": 2}
+            return {"issues": [valid], "total": 1}
+
+        rows = module.collect("fafa33_Project-Hunter", 494, HEAD, BASE, get_json=get)
+        assert len(rows) == 1
+        assert rows[0]["availability"] == "unavailable"
+        assert "malformed issue" in rows[0]["message"]
+
+
 def test_resolved_finding_is_still_observed_with_stable_identity():
     issue = {
         "key": "AaGNUnVwvW-F6WQX-cKx",

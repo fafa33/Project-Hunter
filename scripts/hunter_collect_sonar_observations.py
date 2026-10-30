@@ -87,11 +87,10 @@ def collect(project: str, pr: int, head: str, base: str, *, get_json: JsonGetter
             return _unavailable(
                 pr, head, base, "Sonar issue count is inconsistent, exceeds bounded limit or is malformed"
             )
-        combined = {
-            item.get("key"): item
-            for item in open_payload["issues"] + fixed_payload["issues"]
-            if isinstance(item, dict) and isinstance(item.get("key"), str)
-        }
+        raw_issues = open_payload["issues"] + fixed_payload["issues"]
+        if any(not isinstance(item, dict) or not isinstance(item.get("key"), str) for item in raw_issues):
+            return _unavailable(pr, head, base, "Sonar issue payload contains a malformed issue")
+        combined = {item["key"]: item for item in raw_issues}
         issues_payload = {"issues": list(combined.values()), "total": len(combined)}
         # Close the TOCTOU window: a newer Sonar analysis can replace the PR
         # issue view between the first metadata read and issues/search.
