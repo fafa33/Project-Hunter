@@ -40,19 +40,16 @@ def publish(repo: str, issue: int, marker: str, body: str, *, run: Callable = su
         return json.loads(result.stdout)
 
     def lookup():
-        page = 1
-        while True:
+        matches = []
+        for page in range(1, 11):
             comments = api(endpoint, "-f", "per_page=100", "-f", f"page={page}", "-X", "GET")
-            matches = [x for x in comments if tag in x.get("body", "")]
+            matches.extend(x for x in comments if tag in x.get("body", ""))
             if len(matches) > 1:
                 raise EvidenceWriteError("duplicate marker found; manual reconciliation required")
-            if matches:
-                return matches[0]["html_url"]
             if len(comments) < 100:
-                return None
-            page += 1
-            if page > 10:
-                raise EvidenceWriteError("comment history exceeds bounded scan")
+                return matches[0]["html_url"] if matches else None
+        # A full last page means the next page may contain a duplicate.
+        raise EvidenceWriteError("comment history exceeds bounded scan")
 
     existing = lookup()
     if existing:
