@@ -118,3 +118,28 @@ def test_resolved_finding_is_still_observed_with_stable_identity():
     assert rows[0]["event_id"] == "sonar-issue-AaGNUnVwvW-F6WQX-cKx"
     assert "sonar_status=FIXED" in rows[0]["message"]
     assert rows[0]["classification"] is None
+
+
+def test_sonar_observation_enters_existing_signed_ledger_ingestion_contract():
+    from hunter.automation import issue_agent_knowledge as knowledge
+
+    issue = {
+        "key": "AaGNUnVwvW-F6WQX-cKx",
+        "rule": "python:S2083",
+        "severity": "CRITICAL",
+        "component": "fafa33_Project-Hunter:scripts/hunter_issue_evidence_writer.py",
+        "message": "Path Traversal",
+        "issueStatus": "FIXED",
+    }
+    observation = module.collect("fafa33_Project-Hunter", 494, HEAD, BASE, get_json=getter(issues=[issue]))[0]
+    evidence = knowledge.finding_from_observation(observation, repository_id=1292945327, trusted_reviewers=frozenset())
+    assert evidence["provenance"]["provider"] == "sonar"
+    assert evidence["provenance"]["source_issue_key"] == issue["key"]
+    assert (
+        evidence["finding_id"]
+        == knowledge.finding_from_observation(
+            {**observation, "reviewed_head_sha": "c" * 40},
+            repository_id=1292945327,
+            trusted_reviewers=frozenset(),
+        )["finding_id"]
+    )

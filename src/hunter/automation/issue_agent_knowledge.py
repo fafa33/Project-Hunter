@@ -81,12 +81,13 @@ _PROVENANCE = _object(
         "reviewed_head_sha": SHA40,
         "reviewed_base_sha": SHA40,
         "source_event_head_sha": _optional(SHA40),
-        "provider": _exact("github-review"),
+        "provider": _enum({"github-review", "sonar"}),
         "reviewer": _pattern(_LOGIN),
         "comment_id": POSITIVE,
         "path": _pattern(_PATH),
         "line": _optional(POSITIVE),
-    }
+    },
+    optional={"source_issue_key": _pattern(re.compile(r"[A-Za-z0-9_-]{1,128}"))},
 )
 _CLASSIFICATION = _object(
     {
@@ -240,8 +241,11 @@ def finding_from_observation(
 
     event = str(observation.get("event_id", ""))
     match = re.fullmatch(r"review-comment-([1-9][0-9]{0,18})", event)
-    if match is None:
-        raise FindingRefused("only inline review threads are findings")
+    sonar = re.fullmatch(r"sonar-issue-([A-Za-z0-9_-]{1,128})", event)
+    if match is None and (sonar is None or observation.get("provider") != "sonar"):
+        raise FindingRefused("only authenticated inline reviews or Sonar issues are findings")
+    if match is not None and observation.get("provider") != "github-review":
+        raise FindingRefused("GitHub comment identity requires GitHub provenance")
     reviewer = str(observation.get("reviewer", ""))
     # Reviewer authority is independent of learning ingestion. GitHub API
     # authenticates the source; reviewer identity remains evidence, not a gate.
@@ -251,7 +255,12 @@ def finding_from_observation(
     if not isinstance(path, str) or not path:
         raise FindingRefused("an inline finding must name its path")
     claim = normalized_claim(str(observation.get("message", "")))
-    comment = int(match.group(1))
+    # Domain-separate provider identities from GitHub's numeric comment IDs.
+    comment = (
+        int(match.group(1))
+        if match is not None
+        else int(sha256_hex(canonical_json({"sonar_issue_key": sonar.group(1)}))[:15], 16) + 10**18
+    )
     provenance = {
         "pull_request_number": observation.get("source_pr"),
         "reviewed_head_sha": observation.get("reviewed_head_sha"),
@@ -263,6 +272,8 @@ def finding_from_observation(
         "path": path,
         "line": observation.get("line"),
     }
+    if sonar is not None:
+        provenance["source_issue_key"] = sonar.group(1)
     evidence = {
         "finding_id": finding_id(repository_id, int(provenance["pull_request_number"] or 0), comment),
         "fingerprint": fingerprint(path, claim),
@@ -393,6 +404,11 @@ def apply(view: KnowledgeView, record: Mapping[str, Any], *, trust: TrustRoots, 
 def _fold(view: KnowledgeView, kind: str, evidence: dict[str, Any]) -> None:
     if kind == "finding_ingested":
         provenance = evidence["provenance"]
+        if provenance["provider"] == "sonar":
+            source_key = provenance.get("source_issue_key")
+            _require(isinstance(source_key, str), "Sonar finding lacks source identity")
+            derived = int(sha256_hex(canonical_json({"sonar_issue_key": source_key}))[:15], 16) + 10**18
+            _require(provenance["comment_id"] == derived, "Sonar source identity mismatch")
         expected = finding_id(view.repository_id, provenance["pull_request_number"], provenance["comment_id"])
         _require(evidence["finding_id"] == expected, "finding id is not derived from its provenance")
         _require(evidence["fingerprint"] == fingerprint(provenance["path"], evidence["claim"]), "fingerprint")
@@ -570,8 +586,8 @@ def ingestion_writes(
     pending: dict[str, str] = {}  # fingerprint -> family, within this batch
     queued: set[str] = set()
     for observation in observations:
-        if not str(observation.get("event_id", "")).startswith("review-comment-"):
-            continue  # top-level reviews stay learning observations, not findings
+        if not str(observation.get("event_id", "")).startswith(("review-comment-", "sonar-issue-")):
+            continue  # top-level reviews and clean/unavailable sensors are not findings
         try:
             evidence = finding_from_observation(
                 observation, repository_id=repository_id, trusted_reviewers=trusted_reviewers
