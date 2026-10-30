@@ -3,7 +3,7 @@ from types import SimpleNamespace
 
 import pytest
 
-from scripts.hunter_issue_evidence_writer import EvidenceWriteError, publish
+from hunter_issue_evidence_writer import EvidenceWriteError, publish
 
 
 def test_create_then_read_after_write_and_repeat_without_second_post():
