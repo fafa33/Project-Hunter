@@ -157,6 +157,37 @@ def test_duplicate_delivery_and_restart_record_each_finding_once(store: state.Gi
     assert written == 0 and len(view.findings) == 1
 
 
+def test_sonar_finding_flows_through_signed_ledger_into_dpm_without_forged_authority(
+    store: state.GitLedgerStore,
+) -> None:
+    sonar = {
+        "source": "sonar",
+        "provider": "sonar",
+        "event_id": "sonar-issue-SONAR-123",
+        "source_pr": 662,
+        "reviewed_head_sha": HEAD,
+        "reviewed_base_sha": BASE,
+        "reviewer": "sonarqube-cloud",
+        "path": "src/hunter/automation/issue_agent_state.py",
+        "line": 7,
+        "message": "[MAJOR] python:S123: Example regression [sonar_status=FIXED]",
+        "availability": "available",
+    }
+    view, written, refusals = ingest(store, sonar)
+    assert (written, refusals) == (1, [])
+    identity = next(iter(view.findings))
+    assert view.findings[identity].ingested["provenance"]["provider"] == "sonar"
+    assert view.findings[identity].classification is None  # sensor cannot authorize a defect family
+    _, again, refusals = ingest(store, {**sonar, "reviewed_head_sha": LATER})
+    assert (again, refusals) == (0, [])
+    _, restored = knowledge.read(store, trust=TRUST, provenance=trusted)
+    overlay = knowledge.overlay_families(restored)
+    context = EngineeringContextAuthority(knowledge_overlay=overlay).compile(
+        ENGINEERING_IMPLEMENT_TASK_KEY, scope=scope(("src/hunter/automation/",))
+    )
+    assert f"KF-{identity[:12]}" in {item["id"] for item in context["applicable_defect_families"]}
+
+
 def test_a_lost_acknowledgement_replays_as_a_no_op(store: state.GitLedgerStore) -> None:
     evidence = knowledge.finding_from_observation(observation(), repository_id=1, trusted_reviewers=REVIEWERS)
     write(store, knowledge.Write("finding_ingested", evidence))
