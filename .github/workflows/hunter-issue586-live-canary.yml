@@ -67,3 +67,14 @@ jobs:
         run: |
           python -m pip install --disable-pip-version-check --only-binary ':all:' -c requirements/ci-constraints.txt . pytest
           python -m pytest -q tests/test_issue_agent_knowledge.py -k 'sonar_finding_flows or proven_resolved_finding'
+      - name: Verify signed GitHub knowledge ingestion is consumed by real DPM context
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+        run: |
+          set -euo pipefail
+          # No signing secret, write token, synthetic ledger or mock: consume the
+          # existing trusted-main GitHub knowledge ledger and its live provenance.
+          python scripts/hunter_issue_agent_lifecycle.py knowledge-context-check \
+            --path scripts/hunter_issue_evidence_writer.py \
+            --base-sha "$BASE_SHA"
