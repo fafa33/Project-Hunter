@@ -8,7 +8,7 @@ It describes **what** Hunter is expected to become over time. It does not define
 
 Every roadmap milestone must contribute directly to improving investment decision quality through better discovery, stronger evidence, improved prioritization, or more reliable analytical conclusions.
 
-Hunter's central mission is not merely to describe the current state of crypto projects. Hunter must discover early-stage opportunities whose observable evidence indicates the potential to become future category leaders, estimate their multi-year development paths, measure their probability of survival and failure, and identify cases where potential upside is strongly asymmetric relative to downside risk.
+Hunter's central mission is not merely to describe the current state of crypto projects. Hunter must discover early-stage, executable asymmetric profit opportunities before repricing, including transient 10x/50x/100x/1000x price excursions. Future category leadership, long-term intrinsic value and survival research are supporting evidence, never mandatory selection criteria.
 
 The intended outcome is a system capable of finding projects at an early stage analogous to historically exceptional opportunities, while avoiding hindsight, deterministic price claims, fabricated certainty, and superficial pattern matching.
 
@@ -24,12 +24,12 @@ Roadmap priorities are determined by the following principles:
 - Preserve deterministic, explainable, and replayable behavior.
 - Build new capabilities only after prerequisite foundations are trustworthy.
 - Prefer incremental production-safe evolution over large architectural rewrites.
-- Evaluate opportunities across explicit 1-year, 3-year, and 5-year horizons.
+- Evaluate opportunity-specific time windows, including months and years; distinguish target-hit-within-window from terminal-horizon price and require credible exit liquidity.
 - Separate current project quality from future opportunity potential.
 - Model multiple possible futures rather than presenting one deterministic forecast.
 - Treat survival probability, failure probability, dilution, competition, and token value capture as first-class inputs.
 - Require every projected outcome to expose assumptions, evidence, uncertainty, invalidation conditions, and missing information.
-- Judge long-term opportunity by probability-weighted asymmetry, not by low token price or small market capitalization alone.
+- Judge actionable hunting opportunities by calibrated target-hit probabilities, realizable profit potential, timing and downside; do not promote sub-50% targets to HUNT or manufacture confidence.
 
 ---
 
