@@ -108,7 +108,8 @@ def test_malformed_sonar_issue_cannot_be_dropped_into_false_clean_result():
 def test_malformed_issue_in_either_response_prevents_partial_findings():
     valid = {"key": "real", "component": "fafa33_Project-Hunter:src/x.py", "message": "real issue"}
     for malformed_resolved in (False, True):
-        def get(url: str):
+
+        def get(url: str, *, malformed_resolved: bool = malformed_resolved):
             if "project_pull_requests" in url:
                 return {"pullRequests": [{"key": "494", "commit": {"sha": HEAD}}]}
             if ("resolved=true" in url) == malformed_resolved:
