@@ -1,0 +1,34 @@
+{
+  "candidate_review": [
+    {
+      "candidate": "aave",
+      "historical_candidate_membership": "NOT_PROVEN",
+      "historical_fdv_supply": "NOT_PROVEN",
+      "historical_native_flow": "NOT_PROVEN",
+      "source_status": "NO_PRE_CUTOFF_COMMIT_FOR_PATH"
+    },
+    {
+      "candidate": "uniswap",
+      "commit_date": "2025-07-15T17:23:47Z",
+      "historical_adapter_paths": [],
+      "historical_candidate_membership": "NOT_PROVEN",
+      "historical_fdv_supply": "NOT_PROVEN",
+      "historical_native_flow": "NOT_PROVEN",
+      "precutoff_commit": "961b8e0e064f60a31e59ceb86ffdd67239f10f89",
+      "source_status": "HTTPError: HTTP Error 404: Not Found"
+    },
+    {
+      "candidate": "pancakeswap",
+      "commit_date": "2026-02-24T14:27:54Z",
+      "historical_adapter_paths": [],
+      "historical_candidate_membership": "NOT_PROVEN",
+      "historical_fdv_supply": "NOT_PROVEN",
+      "historical_native_flow": "NOT_PROVEN",
+      "precutoff_commit": "4a742363669bce0b9db6e36bd11001841451aaa9",
+      "source_status": "HTTPError: HTTP Error 404: Not Found"
+    }
+  ],
+  "cutoff": "2026-07-31T00:00:00Z",
+  "disclaimer": "Historical source-code existence is not evidence of actual 365-day native token flow or historical FDV. No candidate admitted to canonical replay.",
+  "eligibility": "RESEARCH_ONLY"
+}
