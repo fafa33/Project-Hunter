@@ -40,3 +40,24 @@ def test_failed_write_does_not_retry_or_change_channel():
 def test_invalid_scope_fails_before_io():
     with pytest.raises(ValueError):
         publish("bad;repo", 3, "proof-12345", "evidence")
+
+
+def test_evidence_file_rejects_traversal_and_absolute_paths(tmp_path):
+    from hunter_issue_evidence_writer import read_evidence_file
+
+    (tmp_path / "evidence.txt").write_text("verified")
+    assert read_evidence_file("evidence.txt", root=tmp_path) == "verified"
+    for path in ("../secret", str(tmp_path / "evidence.txt")):
+        with pytest.raises(ValueError):
+            read_evidence_file(path, root=tmp_path)
+
+
+def test_evidence_file_rejects_symlink_and_directory(tmp_path):
+    from hunter_issue_evidence_writer import read_evidence_file
+
+    (tmp_path / "real.txt").write_text("verified")
+    (tmp_path / "link.txt").symlink_to("real.txt")
+    (tmp_path / "folder").mkdir()
+    for path in ("link.txt", "folder"):
+        with pytest.raises((OSError, ValueError)):
+            read_evidence_file(path, root=tmp_path)
