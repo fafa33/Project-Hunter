@@ -64,9 +64,34 @@ def collect(project: str, pr: int, head: str, base: str, *, get_json: JsonGetter
         commit = match.get("commit") if isinstance(match, dict) and isinstance(match.get("commit"), dict) else {}
         if not match or commit.get("sha") != head:
             return _unavailable(pr, head, base, "Sonar exact-head analysis is not available yet")
-        issues_payload = get_json(
+        # Query both supported boolean states; Sonar's resolved parameter is
+        # not a comma-separated enum. Preserve historical findings after fixes.
+        open_payload = get_json(
             _url("issues/search", componentKeys=project, pullRequest=pr, resolved="false", ps=MAX_ISSUES)
         )
+        fixed_payload = get_json(
+            _url("issues/search", componentKeys=project, pullRequest=pr, resolved="true", ps=MAX_ISSUES)
+        )
+
+        def valid_page(page: Any) -> bool:
+            return (
+                isinstance(page, dict)
+                and isinstance(page.get("issues"), list)
+                and type(page.get("total")) is int
+                and page["total"] >= 0
+                and page["total"] == len(page["issues"])
+                and page["total"] <= MAX_ISSUES
+            )
+
+        if not valid_page(open_payload) or not valid_page(fixed_payload):
+            return _unavailable(
+                pr, head, base, "Sonar issue count is inconsistent, exceeds bounded limit or is malformed"
+            )
+        raw_issues = open_payload["issues"] + fixed_payload["issues"]
+        if any(not isinstance(item, dict) or not isinstance(item.get("key"), str) for item in raw_issues):
+            return _unavailable(pr, head, base, "Sonar issue payload contains a malformed issue")
+        combined = {item["key"]: item for item in raw_issues}
+        issues_payload = {"issues": list(combined.values()), "total": len(combined)}
         # Close the TOCTOU window: a newer Sonar analysis can replace the PR
         # issue view between the first metadata read and issues/search.
         refreshed = get_json(_url("project_pull_requests/list", project=project))
@@ -108,6 +133,9 @@ def collect(project: str, pr: int, head: str, base: str, *, get_json: JsonGetter
         rule = str(item.get("rule") or "unknown-rule")
         severity = str(item.get("severity") or "unknown-severity")
         message = str(item.get("message") or "Sonar finding")
+        # Historical findings must survive a successful remediation. The provider
+        # identity is stable across subsequent analyses; status is evidence only.
+        issue_status = str(item.get("issueStatus") or item.get("status") or "UNKNOWN")
         observations.append(
             {
                 "source": "sonar",
@@ -119,7 +147,7 @@ def collect(project: str, pr: int, head: str, base: str, *, get_json: JsonGetter
                 "reviewer": "sonarqube-cloud",
                 "path": path,
                 "line": line,
-                "message": f"[{severity}] {rule}: {message}",
+                "message": f"[{severity}] {rule}: {message} [sonar_status={issue_status}]",
                 "availability": "available",
                 "classification": None,
                 "invariant": None,

@@ -306,6 +306,7 @@ def cmd_knowledge_ingest(configuration: control.Configuration, arguments: argpar
     """ADR 0039 L1/L3.1: ingest authenticated inline findings independently of reviewer authority."""
 
     import hunter_collect_learning_observations as collector
+    import hunter_collect_sonar_observations as sonar_collector
 
     writer = _writer("knowledge-ingest", "knowledge-ingest", control.KNOWLEDGE_WORKFLOW)
     github = _github(configuration)
@@ -330,6 +331,7 @@ def cmd_knowledge_ingest(configuration: control.Configuration, arguments: argpar
             continue
         head, base = str(pull["head"]["sha"]), str(pull["base"]["sha"])
         observations = collector.collect(configuration.repository, token, number, head, base)
+        observations.extend(sonar_collector.collect("fafa33_Project-Hunter", number, head, base))
         try:
             _, view = knowledge.read(store, trust=configuration.trust, provenance=provenance)
             writes, refusals = knowledge.ingestion_writes(

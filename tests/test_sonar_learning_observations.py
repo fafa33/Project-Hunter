@@ -95,3 +95,76 @@ def test_actual_issue_list_cannot_exceed_bound_even_if_total_lies():
     rows = module.collect("fafa33_Project-Hunter", 494, HEAD, BASE, get_json=getter(issues=issues, total=1))
     assert rows[0]["availability"] == "unavailable"
     assert "bounded limit" in rows[0]["message"]
+
+
+def test_malformed_sonar_issue_cannot_be_dropped_into_false_clean_result():
+    for malformed in (None, {"message": "missing key"}, {"key": 42}):
+        rows = module.collect("fafa33_Project-Hunter", 494, HEAD, BASE, get_json=getter(issues=[malformed]))
+        assert len(rows) == 1
+        assert rows[0]["availability"] == "unavailable"
+        assert "malformed issue" in rows[0]["message"]
+
+
+def test_malformed_issue_in_either_response_prevents_partial_findings():
+    valid = {"key": "real", "component": "fafa33_Project-Hunter:src/x.py", "message": "real issue"}
+    for malformed_resolved in (False, True):
+
+        def get(url: str, *, malformed_resolved: bool = malformed_resolved):
+            if "project_pull_requests" in url:
+                return {"pullRequests": [{"key": "494", "commit": {"sha": HEAD}}]}
+            if ("resolved=true" in url) == malformed_resolved:
+                return {"issues": [valid, None], "total": 2}
+            return {"issues": [valid], "total": 1}
+
+        rows = module.collect("fafa33_Project-Hunter", 494, HEAD, BASE, get_json=get)
+        assert len(rows) == 1
+        assert rows[0]["availability"] == "unavailable"
+        assert "malformed issue" in rows[0]["message"]
+
+
+def test_resolved_finding_is_still_observed_with_stable_identity():
+    issue = {
+        "key": "AaGNUnVwvW-F6WQX-cKx",
+        "rule": "python:S2083",
+        "severity": "CRITICAL",
+        "component": "fafa33_Project-Hunter:scripts/hunter_issue_evidence_writer.py",
+        "message": "Path Traversal",
+        "issueStatus": "FIXED",
+    }
+    seen = []
+
+    def get(url: str):
+        seen.append(url)
+        return getter(issues=[issue])(url)
+
+    rows = module.collect("fafa33_Project-Hunter", 494, HEAD, BASE, get_json=get)
+    assert "resolved=false" in seen[1]
+    assert "resolved=true" in seen[2]
+    assert rows[0]["event_id"] == "sonar-issue-AaGNUnVwvW-F6WQX-cKx"
+    assert "sonar_status=FIXED" in rows[0]["message"]
+    assert rows[0]["classification"] is None
+
+
+def test_sonar_observation_enters_existing_signed_ledger_ingestion_contract():
+    from hunter.automation import issue_agent_knowledge as knowledge
+
+    issue = {
+        "key": "AaGNUnVwvW-F6WQX-cKx",
+        "rule": "python:S2083",
+        "severity": "CRITICAL",
+        "component": "fafa33_Project-Hunter:scripts/hunter_issue_evidence_writer.py",
+        "message": "Path Traversal",
+        "issueStatus": "FIXED",
+    }
+    observation = module.collect("fafa33_Project-Hunter", 494, HEAD, BASE, get_json=getter(issues=[issue]))[0]
+    evidence = knowledge.finding_from_observation(observation, repository_id=1292945327, trusted_reviewers=frozenset())
+    assert evidence["provenance"]["provider"] == "sonar"
+    assert evidence["provenance"]["source_issue_key"] == issue["key"]
+    assert (
+        evidence["finding_id"]
+        == knowledge.finding_from_observation(
+            {**observation, "reviewed_head_sha": "c" * 40},
+            repository_id=1292945327,
+            trusted_reviewers=frozenset(),
+        )["finding_id"]
+    )

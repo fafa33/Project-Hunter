@@ -468,6 +468,7 @@
       "scripts/hunter_governance_cutover_preflight.py",
       "scripts/bootstrap_source_handling_authority.py",
       "scripts/hunter_collect_learning_observations.py",
+      "scripts/hunter_collect_sonar_observations.py",
       "scripts/hunter_issue_agent_issuer.py",
       "scripts/hunter_issue_agent_lifecycle.py",
       "scripts/hunter_issue_agent_provisioner.py",
