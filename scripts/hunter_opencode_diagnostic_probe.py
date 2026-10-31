@@ -53,18 +53,97 @@ class ProbeFailed(RuntimeError):
     """The probe could not establish its own trusted base. Its message never carries candidate content."""
 
 
+_DANGEROUS_GIT_FLAGS: Final = frozenset(
+    {
+        "--upload-pack",
+        "--receive-pack",
+        "--exec-path",
+        "--output",
+        "--paginate",
+        "--no-pager",
+        "--literal-pathspecs",
+    }
+)
+
+
+def _validate_probe_path(path: Path | str, *, must_exist: bool = False, label: str = "path") -> Path:
+    """Validate a trusted probe path, rejecting traversal sequences, symlinks, and unsafe arguments."""
+    candidate = Path(path) if isinstance(path, str) else path
+    raw = str(candidate)
+    if not raw or any(part.startswith("-") for part in candidate.parts):
+        raise ProbeFailed(f"{label} cannot be empty or contain components starting with '-'")
+    if "\0" in raw:
+        raise ProbeFailed(f"{label} cannot contain null bytes")
+    if ".." in candidate.parts:
+        raise ProbeFailed(f"{label} cannot contain '..' traversal sequences")
+    if candidate.is_symlink():
+        raise ProbeFailed(f"{label} cannot be a symlink")
+
+    resolved = candidate.resolve()
+    if any(part.startswith("-") for part in resolved.parts):
+        raise ProbeFailed(f"{label} resolved path cannot contain components starting with '-'")
+    if ".." in resolved.parts:
+        raise ProbeFailed(f"{label} resolved path cannot contain '..' traversal sequences")
+    if resolved.is_symlink():
+        raise ProbeFailed(f"{label} resolved path cannot be a symlink")
+
+    curr = candidate
+    while curr.exists() and curr != curr.parent:
+        if curr.is_symlink():
+            raise ProbeFailed(f"{label} ancestor cannot be a symlink")
+        curr = curr.parent
+
+    if must_exist:
+        if not resolved.exists():
+            raise ProbeFailed(f"{label} does not exist: {resolved}")
+        if not resolved.is_dir():
+            raise ProbeFailed(f"{label} must be an existing directory: {resolved}")
+
+    return resolved
+
+
+def _reject_unsafe_git_args(args: Sequence[str]) -> None:
+    """Reject arguments that could inject dangerous git options or commands."""
+    for arg in args:
+        if not isinstance(arg, str):
+            raise ProbeFailed("git argument must be str")
+        if "\0" in arg or "\n" in arg or "\r" in arg:
+            raise ProbeFailed("git argument contains forbidden control characters")
+        for dangerous in _DANGEROUS_GIT_FLAGS:
+            if arg == dangerous or arg.startswith(f"{dangerous}="):
+                raise ProbeFailed(f"unsafe git argument rejected: {dangerous}")
+
+
 def _git(git_dir: Path, workspace: Path, *args: str) -> bytes:
     """Git against the trusted metadata directory only; nothing inside the model's workspace configures it."""
 
-    command = (
-        "git", f"--git-dir={git_dir}", f"--work-tree={workspace}",
-        "-c", "core.hooksPath=/dev/null", "-c", "core.fsmonitor=false", *args,
-    )  # fmt: skip
+    valid_git_dir = _validate_probe_path(git_dir, must_exist=False, label="git_dir")
+    valid_workspace = _validate_probe_path(workspace, must_exist=False, label="workspace")
+    _reject_unsafe_git_args(args)
+
+    command = [
+        "git",
+        "--git-dir",
+        str(valid_git_dir),
+        "--work-tree",
+        str(valid_workspace),
+        "-c",
+        "core.hooksPath=/dev/null",
+        "-c",
+        "core.fsmonitor=false",
+        *args,
+    ]
     completed = subprocess.run(
-        command, cwd=workspace, env=dict(GIT_ENVIRONMENT), capture_output=True, check=False, timeout=300
+        command,
+        cwd=valid_workspace,
+        env=dict(GIT_ENVIRONMENT),
+        capture_output=True,
+        check=False,
+        timeout=300,
     )
     if completed.returncode != 0:
-        raise ProbeFailed(f"probe git {args[0]} failed")
+        action = args[0] if args else "command"
+        raise ProbeFailed(f"probe git {action} failed")
     return completed.stdout
 
 
@@ -75,18 +154,53 @@ def prepare(source: Path, workspace: Path, git_dir: Path) -> str:
     Returns the exact base commit the collector diffs against.
     """
 
-    workspace.mkdir(parents=True)
-    _git(git_dir, workspace, "init", "--quiet")
-    _git(git_dir, workspace, "fetch", "--quiet", "--no-tags", str(source), "+refs/heads/main:refs/probe/base")
-    _git(git_dir, workspace, "checkout", "--quiet", "--detach", "refs/probe/base")
-    (workspace / PROBE_FILE).write_bytes(PROBE_BEFORE)
-    _git(git_dir, workspace, "add", "--", PROBE_FILE)
+    valid_source = _validate_probe_path(source, must_exist=True, label="source")
+    valid_workspace = _validate_probe_path(workspace, must_exist=False, label="workspace")
+    valid_git_dir = _validate_probe_path(git_dir, must_exist=False, label="git_dir")
+
+    if valid_workspace == valid_git_dir:
+        raise ProbeFailed("workspace and git_dir cannot be the same path")
+    try:
+        valid_git_dir.relative_to(valid_workspace)
+        raise ProbeFailed("git_dir cannot be inside workspace")
+    except ValueError:
+        pass
+    try:
+        valid_workspace.relative_to(valid_git_dir)
+        raise ProbeFailed("workspace cannot be inside git_dir")
+    except ValueError:
+        pass
+
+    valid_workspace.mkdir(parents=True, exist_ok=True)
+    _git(valid_git_dir, valid_workspace, "init", "--quiet")
     _git(
-        git_dir, workspace,
-        "-c", f"user.name={PROBE_COMMIT_NAME}", "-c", f"user.email={PROBE_COMMIT_EMAIL}",
-        "-c", "commit.gpgsign=false", "commit", "--quiet", "-m", "diagnostic probe base",
-    )  # fmt: skip
-    return _git(git_dir, workspace, "rev-parse", "HEAD").decode().strip()
+        valid_git_dir,
+        valid_workspace,
+        "fetch",
+        "--quiet",
+        "--no-tags",
+        "--",
+        str(valid_source),
+        "+refs/heads/main:refs/probe/base",
+    )
+    _git(valid_git_dir, valid_workspace, "checkout", "--quiet", "--detach", "refs/probe/base")
+    (valid_workspace / PROBE_FILE).write_bytes(PROBE_BEFORE)
+    _git(valid_git_dir, valid_workspace, "add", "--", PROBE_FILE)
+    _git(
+        valid_git_dir,
+        valid_workspace,
+        "-c",
+        f"user.name={PROBE_COMMIT_NAME}",
+        "-c",
+        f"user.email={PROBE_COMMIT_EMAIL}",
+        "-c",
+        "commit.gpgsign=false",
+        "commit",
+        "--quiet",
+        "-m",
+        "diagnostic probe base",
+    )
+    return _git(valid_git_dir, valid_workspace, "rev-parse", "HEAD").decode().strip()
 
 
 def contract_telemetry(invocation: roles.OpenCodeInvocation, workspace: Path) -> dict[str, bool]:
@@ -117,10 +231,15 @@ def assess(workspace: Path, git_dir: Path, base_sha: str) -> tuple[bool, int]:
     "no change", and never as success.
     """
 
+    valid_workspace = _validate_probe_path(workspace, must_exist=False, label="workspace")
+    valid_git_dir = _validate_probe_path(git_dir, must_exist=False, label="git_dir")
+    if roles._SHA40.fullmatch(base_sha) is None:
+        return (False, -1)
+
     try:
         document = roles.collect_result(
-            workspace,
-            git_dir,
+            valid_workspace,
+            valid_git_dir,
             authorization_id="hosted-diagnostic-probe",
             branch="hosted-diagnostic-probe",
             base_sha=base_sha,
@@ -173,18 +292,36 @@ def run_probe(
 ) -> ProbeOutcome:
     """Run the model once through isolation on the production contract and assess a tracked repository edit."""
 
-    base_sha = prepare(source, workspace, git_dir)
-    home.mkdir(mode=0o700)
-    invocation = probe_invocation(opencode=opencode, model=model, home=home, workspace=workspace)
-    telemetry = " ".join(f"{name}={value}" for name, value in contract_telemetry(invocation, workspace).items())
+    valid_source = _validate_probe_path(source, must_exist=True, label="source")
+    valid_workspace = _validate_probe_path(workspace, must_exist=False, label="workspace")
+    valid_git_dir = _validate_probe_path(git_dir, must_exist=False, label="git_dir")
+    valid_home = _validate_probe_path(home, must_exist=False, label="home")
+
+    if valid_home == valid_workspace or valid_home == valid_git_dir:
+        raise ProbeFailed("home cannot collide with workspace or git_dir")
+    try:
+        valid_home.relative_to(valid_workspace)
+        raise ProbeFailed("home cannot be inside workspace")
+    except ValueError:
+        pass
+    try:
+        valid_workspace.relative_to(valid_home)
+        raise ProbeFailed("workspace cannot be inside home")
+    except ValueError:
+        pass
+
+    base_sha = prepare(valid_source, valid_workspace, valid_git_dir)
+    valid_home.mkdir(mode=0o700, parents=True, exist_ok=True)
+    invocation = probe_invocation(opencode=opencode, model=model, home=valid_home, workspace=valid_workspace)
+    telemetry = " ".join(f"{name}={value}" for name, value in contract_telemetry(invocation, valid_workspace).items())
     print(f"hosted diagnostic contract: {telemetry}", flush=True)
     timed_out = False
     status = 1
-    isolation.prepare(workspace, home)
+    isolation.prepare(valid_workspace, valid_home)
     try:
         status = isolation.run(
             invocation.argv,
-            cwd=workspace,
+            cwd=valid_workspace,
             public_env=invocation.public_env,
             secret_env=secret_environment,
             stdin=invocation.stdin,
@@ -194,7 +331,7 @@ def run_probe(
         timed_out = True
     finally:
         isolation.stop()  # nothing the model started survives into collection
-    tracked_edit, changed_files = assess(workspace, git_dir, base_sha)
+    tracked_edit, changed_files = assess(valid_workspace, valid_git_dir, base_sha)
     outcome = ProbeOutcome(
         exit_zero=status == 0 and not timed_out,
         timed_out=timed_out,
@@ -226,6 +363,24 @@ def _parser() -> argparse.ArgumentParser:
 
 def main(argv: Sequence[str] | None = None) -> int:
     arguments = _parser().parse_args(argv)
+    for flag_name, path_val in (
+        ("--source", arguments.source),
+        ("--workspace", arguments.workspace),
+        ("--git-dir", arguments.git_dir),
+        ("--home", arguments.home),
+        ("--opencode", arguments.opencode),
+    ):
+        raw = str(path_val)
+        if not raw or any(part.startswith("-") for part in path_val.parts) or "\0" in raw or ".." in path_val.parts:
+            print(f"hosted diagnostic refused: invalid path for {flag_name}")
+            return 2
+    if (
+        not arguments.isolation_user
+        or arguments.isolation_user.startswith("-")
+        or not arguments.isolation_user.replace("-", "").replace("_", "").isalnum()
+    ):
+        print("hosted diagnostic refused: invalid isolation user")
+        return 2
     credential = os.environ.get(arguments.secret_env)
     if not arguments.model or not credential or not arguments.model_key_name:
         print("hosted diagnostic refused: configured model or model credential is absent")

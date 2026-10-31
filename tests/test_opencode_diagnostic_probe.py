@@ -302,3 +302,108 @@ def test_a_runtime_that_is_not_opencode_is_refused(
     )  # fmt: skip
     assert rc == 2
     assert "the configured runtime is not the pinned OpenCode executable" in capsys.readouterr().out
+
+
+def test_prepare_rejects_traversal_symlinks_and_unsafe_paths(tmp_path: Path, source: Path) -> None:
+    workspace, git_dir = tmp_path / "run" / "workspace", tmp_path / "run" / "trusted.git"
+
+    with pytest.raises(probe.ProbeFailed, match="cannot contain '..' traversal"):
+        probe.prepare(source, tmp_path / "run" / ".." / "escaped_ws", git_dir)
+
+    with pytest.raises(probe.ProbeFailed, match="starting with '-'"):
+        probe.prepare(source, tmp_path / "-ws", git_dir)
+
+    with pytest.raises(probe.ProbeFailed, match="same path"):
+        probe.prepare(source, workspace, workspace)
+
+    with pytest.raises(probe.ProbeFailed, match="git_dir cannot be inside workspace"):
+        probe.prepare(source, workspace, workspace / "nested.git")
+
+    link_ws = tmp_path / "symlink_ws"
+    real_ws = tmp_path / "real_ws"
+    real_ws.mkdir()
+    link_ws.symlink_to(real_ws)
+    with pytest.raises(probe.ProbeFailed, match="cannot be a symlink"):
+        probe.prepare(source, link_ws, git_dir)
+
+
+def test_run_probe_rejects_home_traversal_and_escapes(tmp_path: Path, source: Path) -> None:
+    root = tmp_path / "run"
+    isolation = StandInIsolation()
+
+    with pytest.raises(probe.ProbeFailed, match="cannot contain '..' traversal"):
+        probe.run_probe(
+            source=source,
+            workspace=root / "workspace",
+            git_dir=root / "trusted.git",
+            home=root / ".." / "evil_home",
+            opencode=Path("/opt/hunter/bin/opencode"),
+            model="m",
+            secret_environment={"KEY": CREDENTIAL},
+            isolation=isolation,
+        )
+
+    with pytest.raises(probe.ProbeFailed, match="starting with '-'"):
+        probe.run_probe(
+            source=source,
+            workspace=root / "workspace",
+            git_dir=root / "trusted.git",
+            home=root / "-home",
+            opencode=Path("/opt/hunter/bin/opencode"),
+            model="m",
+            secret_environment={"KEY": CREDENTIAL},
+            isolation=isolation,
+        )
+
+    with pytest.raises(probe.ProbeFailed, match="home cannot collide with workspace or git_dir"):
+        probe.run_probe(
+            source=source,
+            workspace=root / "workspace",
+            git_dir=root / "trusted.git",
+            home=root / "workspace",
+            opencode=Path("/opt/hunter/bin/opencode"),
+            model="m",
+            secret_environment={"KEY": CREDENTIAL},
+            isolation=isolation,
+        )
+
+
+def test_probe_git_rejects_command_argument_injection(tmp_path: Path) -> None:
+    git_dir = tmp_path / "trusted.git"
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+
+    for dangerous in ("--upload-pack=/bin/sh", "--receive-pack=/bin/sh", "--exec-path=/tmp"):
+        with pytest.raises(probe.ProbeFailed, match="unsafe git argument rejected"):
+            probe._git(git_dir, workspace, dangerous)
+
+    with pytest.raises(probe.ProbeFailed, match="forbidden control characters"):
+        probe._git(git_dir, workspace, "status\0evil")
+
+    with pytest.raises(probe.ProbeFailed, match="starting with '-'"):
+        probe._git(tmp_path / "-git", workspace, "status")
+
+
+def test_probe_cli_rejects_traversal_and_unsafe_flags(capsys: pytest.CaptureFixture[str]) -> None:
+    rc = probe.main(
+        [
+            "--source",
+            "/src",
+            "--workspace",
+            "../escaped",
+            "--git-dir",
+            "/ws.git",
+            "--home",
+            "/home",
+            "--opencode",
+            "/opt/hunter/bin/opencode",
+            "--model",
+            "m",
+            "--secret-env",
+            "KEY",
+            "--model-key-name",
+            "KEY",
+        ]
+    )
+    assert rc == 2
+    assert "invalid path for --workspace" in capsys.readouterr().out
