@@ -11,6 +11,7 @@ from collections.abc import Mapping, Sequence
 from pathlib import Path
 from typing import Any
 
+import hunter_opencode_diagnostic_probe as diagnostic_probe
 import pytest
 from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
 from cryptography.hazmat.primitives.asymmetric.x25519 import X25519PrivateKey
@@ -1229,3 +1230,130 @@ def test_isolation_timeout_reports_safe_output_presence_without_leaking(
     assert "isolated model launch: started" in diagnostic
     assert "exit=TIMEOUT stdout_present=True stderr_present=True" in diagnostic
     assert private not in diagnostic
+
+
+# --- hosted diagnostic parity and closed-vocabulary failure classification (Issue #574) -------------------------
+#
+# A hosted diagnostic exit is only evidence about production if it launches the production contract. These tests pin
+# both halves: the diagnostic's launch is the executor's launch, and an unexplained provider failure is classified from
+# a closed vocabulary instead of being reported as UNCLASSIFIED while arbitrary stderr stays private.
+
+
+def test_the_hosted_diagnostic_probe_launches_the_executor_contract(repos: dict[str, Any]) -> None:
+    ledger, envelope = authorize(repos)
+    _, call = run_opencode(repos, ledger, envelope, RecordingIsolation(CANARY))
+    home, workspace = Path(call["public"]["HOME"]), Path(call["cwd"])
+    probe = diagnostic_probe.probe_invocation(
+        opencode=Path(call["argv"][0]), model="opencode/big-pickle", home=home, workspace=workspace
+    )
+    # Same argv, same environment: the hosted diagnostic cannot describe a different runtime than production.
+    assert probe.argv == call["argv"]
+    assert probe.public_env == call["public"]
+    assert probe.stdin == call["stdin"] == b""
+    assert diagnostic_probe.contract_telemetry(probe, workspace) == {
+        "pure": True,
+        "workspace_bound": True,
+        "workspace_only_tools": True,
+        "shell_denied": True,
+        "project_config_disabled": True,
+    }
+
+
+@pytest.mark.parametrize(
+    ("stderr", "expected"),
+    [
+        ("ProviderModelNotFoundError: model not available", "MODEL_NOT_FOUND"),
+        ('{"name":"AI_APICallError","message":"upstream failed"}', "PROVIDER_CALL_FAILED"),
+        ("429 Too Many Requests", "RATE_LIMIT"),
+        ("insufficient_quota: check your plan", "QUOTA_EXCEEDED"),
+        ("401 Unauthorized: invalid api key", "AUTHENTICATION"),
+        ("connect ECONNREFUSED 127.0.0.1:443", "NETWORK"),
+        ("503 Service Unavailable", "PROVIDER_UNAVAILABLE"),
+        ("provider is overloaded, retry later", "PROVIDER_OVERLOADED"),
+        ("permission denied for /tmp/x", "PERMISSION"),
+        ("something nobody has seen before", "UNCLASSIFIED"),
+    ],
+)
+def test_the_stderr_vocabulary_classifies_known_provider_failures(stderr: str, expected: str) -> None:
+    assert roles.stderr_category(stderr.encode()) == expected
+
+
+def test_the_stderr_vocabulary_is_closed_and_never_echoes_the_sample() -> None:
+    vocabulary = {code for _, code in roles._STDERR_CATEGORIES} | {"UNCLASSIFIED"}
+    sample = f"AI_APICallError {SECRET} {PROMPT}".encode()
+    category = roles.stderr_category(sample)
+    assert category in vocabulary
+    assert SECRET not in category and PROMPT not in category
+
+
+def test_a_classified_provider_failure_reaches_the_hosted_diagnostic_line(
+    sudo: tuple[roles.SudoIsolation, _Launch], tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    isolation, launch = sudo
+    private = "PRIVATE_CREDENTIAL_SHAPED_TEXT"
+
+    def failing(argv: Sequence[str], **kwargs: Any) -> Any:
+        kwargs["stderr"].write(f"AI_APICallError: {private}".encode())
+        return subprocess.CompletedProcess(argv, 1)
+
+    launch.calls.clear()
+    with pytest.MonkeyPatch.context() as patch:
+        patch.setattr(roles.subprocess, "run", failing)
+        assert isolation.run(("opencode", "run"), cwd=tmp_path, public_env={}, secret_env={}, stdin=b"", timeout=1) == 1
+    diagnostic = capsys.readouterr().out
+    assert "exit=NONZERO stderr_category=PROVIDER_CALL_FAILED" in diagnostic
+    assert private not in diagnostic
+
+
+def test_roles_git_rejects_command_argument_injection(tmp_path: Path) -> None:
+    git_dir = tmp_path / "trusted.git"
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+
+    for dangerous in ("--upload-pack=/bin/sh", "--receive-pack=/bin/sh", "--exec-path=/tmp"):
+        with pytest.raises(roles.RoleRefused) as exc_info:
+            roles._git(git_dir, workspace, dangerous)
+        assert exc_info.value.code == "EXECUTION_NOT_COMPLETED"
+
+    with pytest.raises(roles.RoleRefused) as exc_info:
+        roles._git(git_dir, workspace, "status\0evil")
+    assert exc_info.value.code == "EXECUTION_NOT_COMPLETED"
+
+    with pytest.raises(roles.RoleRefused) as exc_info:
+        roles._git(tmp_path / "-git", workspace, "status")
+    assert exc_info.value.code == "EXECUTION_NOT_COMPLETED"
+
+    with pytest.raises(roles.RoleRefused) as exc_info:
+        roles._git(git_dir, tmp_path / "-ws", "status")
+    assert exc_info.value.code == "EXECUTION_NOT_COMPLETED"
+
+
+def test_roles_collect_result_rejects_invalid_base_sha(tmp_path: Path) -> None:
+    workspace, git_dir = tmp_path / "workspace", tmp_path / "git"
+    workspace.mkdir()
+    git_dir.mkdir()
+
+    for bad_sha in ("not-a-sha", "--upload-pack", "0" * 39, "0" * 41, "-c"):
+        with pytest.raises(roles.RoleRefused) as exc_info:
+            roles.collect_result(workspace, git_dir, authorization_id="auth", branch="b", base_sha=bad_sha)
+        assert exc_info.value.code == "BASE_NOT_ON_MAIN"
+
+
+def test_roles_materialize_base_rejects_unsafe_remote_and_branch(tmp_path: Path) -> None:
+    workspace, git_dir = tmp_path / "workspace", tmp_path / "git"
+
+    with pytest.raises(roles.RoleRefused) as exc_info:
+        roles.materialize_base(workspace, git_dir, remote="--upload-pack=evil", base_sha="0" * 40)
+    assert exc_info.value.code == "CONFIGURATION_INVALID"
+
+    with pytest.raises(roles.RoleRefused) as exc_info:
+        roles.materialize_base(
+            workspace, git_dir, remote="https://github.com/o/r.git", base_sha="0" * 40, remediation_branch="-b"
+        )
+    assert exc_info.value.code == "CONFIGURATION_INVALID"
+
+    with pytest.raises(roles.RoleRefused) as exc_info:
+        roles.materialize_base(
+            workspace, git_dir, remote="https://github.com/o/r.git", base_sha="0" * 40, remediation_branch="../main"
+        )
+    assert exc_info.value.code == "CONFIGURATION_INVALID"

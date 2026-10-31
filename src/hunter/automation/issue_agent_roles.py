@@ -142,6 +142,61 @@ class Isolation(Protocol):
     def stop(self) -> None: ...
 
 
+#: Closed vocabulary of non-content stderr classifications for an isolated model launch (Issue #574).
+#:
+#: Markers are lowercase substrings of the provider clients' own error vocabulary, not anything Hunter writes.
+#: Ordered most specific first so that a recognized provider failure is never reported as ``UNCLASSIFIED`` merely
+#: because a broader marker appears earlier. Only the category name leaves the isolation boundary: no excerpt,
+#: prompt, credential or arbitrary stderr text is ever logged or returned.
+_STDERR_CATEGORIES: Final = (
+    (b"providermodelnotfounderror", "MODEL_NOT_FOUND"),
+    (b"modelnotfounderror", "MODEL_NOT_FOUND"),
+    (b"model_not_found", "MODEL_NOT_FOUND"),
+    (b"model not found", "MODEL_NOT_FOUND"),
+    (b"invalid model", "MODEL_NOT_FOUND"),
+    (b"ratelimiterror", "RATE_LIMIT"),
+    (b"rate_limit", "RATE_LIMIT"),
+    (b"rate limit", "RATE_LIMIT"),
+    (b"too many requests", "RATE_LIMIT"),
+    (b"insufficient_quota", "QUOTA_EXCEEDED"),
+    (b"insufficient quota", "QUOTA_EXCEEDED"),
+    (b"quota exceeded", "QUOTA_EXCEEDED"),
+    (b"credit balance", "QUOTA_EXCEEDED"),
+    (b"out of credits", "QUOTA_EXCEEDED"),
+    (b"authenticationerror", "AUTHENTICATION"),
+    (b"invalid_api_key", "AUTHENTICATION"),
+    (b"invalid api key", "AUTHENTICATION"),
+    (b"unauthorized", "AUTHENTICATION"),
+    (b"permission denied", "PERMISSION"),
+    (b"eacces", "PERMISSION"),
+    (b"econnrefused", "NETWORK"),
+    (b"enotfound", "NETWORK"),
+    (b"etimedout", "NETWORK"),
+    (b"connection refused", "NETWORK"),
+    (b"connection reset", "NETWORK"),
+    (b"network unreachable", "NETWORK"),
+    (b"provider unavailable", "PROVIDER_UNAVAILABLE"),
+    (b"service unavailable", "PROVIDER_UNAVAILABLE"),
+    (b"bad gateway", "PROVIDER_UNAVAILABLE"),
+    (b"gateway timeout", "PROVIDER_UNAVAILABLE"),
+    (b"overloaded", "PROVIDER_OVERLOADED"),
+    (b"apicallerror", "PROVIDER_CALL_FAILED"),
+    (b"providererror", "PROVIDER_ERROR"),
+    (b"not found", "NOT_FOUND"),
+)
+
+
+def stderr_category(sample: bytes) -> str:
+    """Classify private stderr into the closed vocabulary, never echoing any of its content.
+
+    ``UNCLASSIFIED`` is an honest answer: an unrecognized provider failure is reported as unknown rather than
+    guessed from an arbitrary string, and no byte of the sample leaves this function.
+    """
+
+    lowered = sample.lower()
+    return next((code for marker, code in _STDERR_CATEGORIES if marker in lowered), "UNCLASSIFIED")
+
+
 @dataclass(frozen=True, slots=True)
 class SudoIsolation:
     """Production isolation: a distinct, non-root uid via ``sudo -n -u <uid> -- /usr/bin/env -i`` (S0 A-6)."""
@@ -211,24 +266,8 @@ class SudoIsolation:
             stdout.seek(0, os.SEEK_END)
             stdout_present = stdout.tell() > 0
             stderr.seek(0)
-            # Closed-vocabulary, non-content telemetry only. No excerpts or
-            # user-controlled strings cross the isolation boundary into logs.
-            sample = stderr.read(65536).lower()
-            categories = (
-                (b"providermodelnotfounderror", "MODEL_NOT_FOUND"),
-                (b"modelnotfounderror", "MODEL_NOT_FOUND"),
-                (b"providererror", "PROVIDER_ERROR"),
-                (b"authenticationerror", "AUTHENTICATION"),
-                (b"ratelimiterror", "RATE_LIMIT"),
-                (b"permission denied", "PERMISSION"),
-                (b"eacces", "PERMISSION"),
-                (b"rate limit", "RATE_LIMIT"),
-                (b"unauthorized", "AUTHENTICATION"),
-                (b"connection refused", "NETWORK"),
-                (b"network unreachable", "NETWORK"),
-                (b"not found", "NOT_FOUND"),
-            )
-            reason = next((code for marker, code in categories if marker in sample), "UNCLASSIFIED")
+            sample = stderr.read(65536)
+            reason = stderr_category(sample)
             print(
                 f"isolated model diagnostic: exit={'ZERO' if completed.returncode == 0 else 'NONZERO'} "
                 f"stderr_category={reason} stderr_present={bool(sample)} "
@@ -246,23 +285,95 @@ class SudoIsolation:
 # --- trusted git over a workspace the model controls -----------------------------------------------------
 
 
+_DANGEROUS_GIT_FLAGS: Final = frozenset(
+    {
+        "--upload-pack",
+        "--receive-pack",
+        "--exec-path",
+        "--output",
+        "--paginate",
+        "--no-pager",
+        "--literal-pathspecs",
+    }
+)
+
+
+def _validate_trusted_git_path(path: Path | str, label: str = "path") -> Path:
+    """Validate a git path, rejecting traversal sequences, symlinks, and option syntax."""
+    candidate = Path(path) if isinstance(path, str) else path
+    raw = str(candidate)
+    if not raw or any(part.startswith("-") for part in candidate.parts):
+        raise RoleRefused("EXECUTION_NOT_COMPLETED", f"{label} cannot be empty or contain components starting with '-'")
+    if "\0" in raw:
+        raise RoleRefused("EXECUTION_NOT_COMPLETED", f"{label} cannot contain null bytes")
+    if ".." in candidate.parts:
+        raise RoleRefused("EXECUTION_NOT_COMPLETED", f"{label} cannot contain '..' traversal sequences")
+    if candidate.is_symlink():
+        raise RoleRefused("EXECUTION_NOT_COMPLETED", f"{label} cannot be a symlink")
+
+    resolved = candidate.resolve()
+    if any(part.startswith("-") for part in resolved.parts):
+        raise RoleRefused(
+            "EXECUTION_NOT_COMPLETED", f"{label} resolved path cannot contain components starting with '-'"
+        )
+    if ".." in resolved.parts:
+        raise RoleRefused("EXECUTION_NOT_COMPLETED", f"{label} resolved path cannot contain '..' traversal sequences")
+    if resolved.is_symlink():
+        raise RoleRefused("EXECUTION_NOT_COMPLETED", f"{label} resolved path cannot be a symlink")
+
+    curr = candidate
+    while curr.exists() and curr != curr.parent:
+        if curr.is_symlink():
+            raise RoleRefused("EXECUTION_NOT_COMPLETED", f"{label} ancestor cannot be a symlink")
+        curr = curr.parent
+
+    return resolved
+
+
+def _reject_unsafe_git_args(args: Sequence[str]) -> None:
+    """Reject arguments that could inject dangerous git options or commands."""
+    for arg in args:
+        if not isinstance(arg, str):
+            raise RoleRefused("EXECUTION_NOT_COMPLETED", "git argument must be str")
+        if "\0" in arg or "\n" in arg or "\r" in arg:
+            raise RoleRefused("EXECUTION_NOT_COMPLETED", "git argument contains forbidden control characters")
+        for dangerous in _DANGEROUS_GIT_FLAGS:
+            if arg == dangerous or arg.startswith(f"{dangerous}="):
+                raise RoleRefused("EXECUTION_NOT_COMPLETED", f"unsafe git argument rejected: {dangerous}")
+
+
 def _git(git_dir: Path, work_tree: Path, *args: str) -> bytes:
     """Git against the trusted metadata directory only; nothing in the work tree configures it."""
 
+    valid_git_dir = _validate_trusted_git_path(git_dir, label="git_dir")
+    valid_work_tree = _validate_trusted_git_path(work_tree, label="work_tree")
+    _reject_unsafe_git_args(args)
+
     environment = {
         "PATH": os.environ.get("PATH", "/usr/bin:/bin"),
-        "HOME": str(git_dir),
+        "HOME": str(valid_git_dir),
         "GIT_CONFIG_GLOBAL": os.devnull,
         "GIT_CONFIG_NOSYSTEM": "1",
         "GIT_TERMINAL_PROMPT": "0",
     }
-    command = (
-        "git", f"--git-dir={git_dir}", f"--work-tree={work_tree}",
-        "-c", "core.hooksPath=/dev/null", "-c", "core.fsmonitor=false", *args,
-    )  # fmt: skip
-    completed = subprocess.run(command, cwd=work_tree, env=environment, capture_output=True, check=False, timeout=300)
+    command = [
+        "git",
+        "--git-dir",
+        str(valid_git_dir),
+        "--work-tree",
+        str(valid_work_tree),
+        "-c",
+        "core.hooksPath=/dev/null",
+        "-c",
+        "core.fsmonitor=false",
+        *args,
+    ]
+    completed = subprocess.run(
+        command, cwd=valid_work_tree, env=environment, capture_output=True, check=False, timeout=300
+    )
     if completed.returncode != 0:
-        raise RoleRefused("EXECUTION_NOT_COMPLETED", f"workspace git {args[0]} failed")
+        action = args[0] if args else "command"
+        raise RoleRefused("EXECUTION_NOT_COMPLETED", f"workspace git {action} failed")
     return completed.stdout
 
 
@@ -410,10 +521,33 @@ def materialize_base(
 
     if _SHA40.fullmatch(base_sha) is None:
         raise RoleRefused("BASE_NOT_ON_MAIN", "base is not an exact commit")
-    workspace.mkdir(parents=True)
-    _git(git_dir, workspace, "init", "--quiet")
-    git_dir.chmod(0o700)
-    _git(git_dir, workspace, "fetch", "--quiet", "--no-tags", remote, "+refs/heads/main:refs/remotes/origin/main")
+    if not remote or remote.startswith("-") or "\0" in remote or "\n" in remote:
+        raise RoleRefused("CONFIGURATION_INVALID", "invalid git remote")
+    if remediation_branch is not None:
+        if (
+            not remediation_branch
+            or remediation_branch.startswith("-")
+            or ".." in remediation_branch
+            or "\0" in remediation_branch
+        ):
+            raise RoleRefused("CONFIGURATION_INVALID", "invalid remediation branch")
+
+    valid_workspace = _validate_trusted_git_path(workspace, label="workspace")
+    valid_git_dir = _validate_trusted_git_path(git_dir, label="git_dir")
+
+    valid_workspace.mkdir(parents=True, exist_ok=True)
+    _git(valid_git_dir, valid_workspace, "init", "--quiet")
+    valid_git_dir.chmod(0o700)
+    _git(
+        valid_git_dir,
+        valid_workspace,
+        "fetch",
+        "--quiet",
+        "--no-tags",
+        "--",
+        remote,
+        "+refs/heads/main:refs/remotes/origin/main",
+    )
     if remediation_branch is None:
         environment = {
             "GIT_CONFIG_GLOBAL": os.devnull,
@@ -421,7 +555,15 @@ def materialize_base(
             "PATH": os.environ.get("PATH", ""),
         }
         ancestry = subprocess.run(
-            ("git", f"--git-dir={git_dir}", "merge-base", "--is-ancestor", base_sha, "refs/remotes/origin/main"),
+            (
+                "git",
+                "--git-dir",
+                str(valid_git_dir),
+                "merge-base",
+                "--is-ancestor",
+                base_sha,
+                "refs/remotes/origin/main",
+            ),
             env=environment,
             capture_output=True,
             check=False,
@@ -430,20 +572,45 @@ def materialize_base(
             raise RoleRefused("BASE_NOT_ON_MAIN", "the signed base is not reachable from main")
     else:
         _git(
-            git_dir, workspace, "fetch", "--quiet", "--no-tags", remote,
+            valid_git_dir,
+            valid_workspace,
+            "fetch",
+            "--quiet",
+            "--no-tags",
+            "--",
+            remote,
             f"+refs/heads/{remediation_branch}:refs/remotes/origin/{remediation_branch}",
-        )  # fmt: skip
-        head = _git(git_dir, workspace, "rev-parse", f"refs/remotes/origin/{remediation_branch}").decode().strip()
+        )
+        head = (
+            _git(valid_git_dir, valid_workspace, "rev-parse", f"refs/remotes/origin/{remediation_branch}")
+            .decode()
+            .strip()
+        )
         if head != base_sha:
             raise RoleRefused("PR_HEAD_MOVED", "the remediated pull request head is no longer the bound head")
-    _git(git_dir, workspace, "checkout", "--quiet", "--detach", base_sha)
+    _git(valid_git_dir, valid_workspace, "checkout", "--quiet", "--detach", base_sha)
 
 
 def collect_result(workspace: Path, git_dir: Path, *, authorization_id: str, branch: str, base_sha: str) -> bytes:
     """The closed-schema hostile result: added or modified regular files only (salvaged from #558)."""
 
-    _git(git_dir, workspace, "add", "--all")
-    listing = _git(git_dir, workspace, "diff", "--cached", "--no-renames", "--name-status", "-z", base_sha).split(b"\0")
+    if _SHA40.fullmatch(base_sha) is None:
+        raise RoleRefused("BASE_NOT_ON_MAIN", "base is not an exact commit")
+    valid_workspace = _validate_trusted_git_path(workspace, label="workspace")
+    valid_git_dir = _validate_trusted_git_path(git_dir, label="git_dir")
+
+    _git(valid_git_dir, valid_workspace, "add", "--all")
+    listing = _git(
+        valid_git_dir,
+        valid_workspace,
+        "diff",
+        "--cached",
+        "--no-renames",
+        "--name-status",
+        "-z",
+        base_sha,
+        "--",
+    ).split(b"\0")
     entries = [item for item in listing if item]
     if not entries:
         raise RoleRefused("NO_CHANGES", "the model produced no candidate change")
@@ -455,10 +622,12 @@ def collect_result(workspace: Path, git_dir: Path, *, authorization_id: str, bra
             path = raw_path.decode("utf-8")
         except UnicodeDecodeError:
             raise RoleRefused("EXECUTOR_RESULT_REJECTED", "non-UTF-8 path") from None
-        mode = _git(git_dir, workspace, "ls-files", "--stage", "--", path).decode().split(" ", 1)[0]
+        if not path or path.startswith("-") or path.startswith("/") or ".." in Path(path).parts or "\0" in path:
+            raise RoleRefused("EXECUTOR_RESULT_REJECTED", "unsafe path in candidate change")
+        mode = _git(valid_git_dir, valid_workspace, "ls-files", "--stage", "--", path).decode().split(" ", 1)[0]
         if mode not in ("100644", "100755"):
             raise RoleRefused("EXECUTOR_RESULT_REJECTED", "unsupported file mode")
-        content = _git(git_dir, workspace, "cat-file", "blob", f":{path}")
+        content = _git(valid_git_dir, valid_workspace, "cat-file", "blob", "--", f":{path}")
         files.append(
             {
                 "path": path,
@@ -562,6 +731,10 @@ def opencode_workspace_environment(home: Path, workspace: Path) -> dict[str, str
     config_dir = home / ".config" / "opencode"
     config_dir.mkdir(parents=True, exist_ok=True)
     shell = config_dir / _OPENCODE_DENIED_SHELL_NAME
+    # Idempotent: the shell installed by an earlier call on the same home is read-only, so a repeated contract (a
+    # diagnostic re-run, a parity check) must widen it deliberately before rewriting it, never fail on its own file.
+    if shell.exists():
+        shell.chmod(0o700)
     shell.write_text(_OPENCODE_DENIED_SHELL, encoding="utf-8")
     shell.chmod(0o555)
     if not (shell.is_file() and os.access(shell, os.X_OK)):
@@ -585,6 +758,58 @@ def opencode_workspace_environment(home: Path, workspace: Path) -> dict[str, str
         "OPENCODE_AUTO_SHARE": "false",
         "OPENCODE_DISABLE_AUTOUPDATE": "true",
     }
+
+
+#: Non-secret environment every production model launch receives (the execute job's ``model_public_env``).
+MODEL_PUBLIC_ENVIRONMENT: Final[Mapping[str, str]] = {"LANG": "C.UTF-8"}
+
+
+@dataclass(frozen=True, slots=True)
+class OpenCodeInvocation:
+    """One complete, production-equivalent OpenCode launch (Issue #574).
+
+    The hosted diagnostic probe launches through exactly this value, so diagnostic parity is structural rather
+    than a second copy of the contract that can drift: the workspace binding, argv, private prompt attachment,
+    permission map and shell contract are the ones the executor itself uses.
+    """
+
+    argv: tuple[str, ...]
+    stdin: bytes
+    public_env: Mapping[str, str]
+
+
+def opencode_invocation(
+    model_argv: Sequence[str],
+    *,
+    prompt: bytes,
+    home: Path,
+    workspace: Path,
+    model_environment: Mapping[str, str] = MODEL_PUBLIC_ENVIRONMENT,
+) -> OpenCodeInvocation:
+    """Bind one ``opencode run`` to ``workspace``, its private prompt attachment and the trusted permissions.
+
+    ``opencode run [message..]`` does not consume stdin as a task, so the prompt is attached as a private file and
+    only a constant, non-sensitive positional instruction (``EDIT_DIRECTIVE``) enters argv. The prompt stays out of
+    the process arguments and ``sudo`` logs.
+    """
+
+    prompt_path = home / _TASK_ATTACHMENT
+    prompt_path.write_bytes(prompt)
+    prompt_path.chmod(0o600)
+    return OpenCodeInvocation(
+        argv=opencode_workspace_argv((*model_argv, EDIT_DIRECTIVE, "--file", str(prompt_path)), workspace),
+        stdin=b"",
+        public_env={
+            **model_environment,
+            **opencode_workspace_environment(home, workspace),
+            "HOME": str(home),
+            "PWD": str(workspace),
+            "XDG_CONFIG_HOME": str(home / ".config"),
+            "XDG_CACHE_HOME": str(home / ".cache"),
+            "XDG_DATA_HOME": str(home / ".local" / "share"),
+            "XDG_STATE_HOME": str(home / ".local" / "state"),
+        },
+    )
 
 
 # --- executor ------------------------------------------------------------------------------------------
@@ -665,25 +890,31 @@ def run_executor(
     home.mkdir(mode=0o700)
     model_argv = config.model_argv
     model_stdin = prompt
-    opencode_environment: Mapping[str, str] = {}
-    # OpenCode 1.18.30 `run [message..]` does not consume stdin as a task.
-    # Keep the signed prompt out of process argv and sudo logs: attach it as a
-    # private file, with only a constant, non-sensitive positional instruction.
-    if _is_opencode_run(model_argv):
-        prompt_path = home / _TASK_ATTACHMENT
-        prompt_path.write_bytes(prompt)
-        prompt_path.chmod(0o600)
-        model_argv = (
-            *model_argv,
-            EDIT_DIRECTIVE,
-            "--file",
-            str(prompt_path),
+    # Issue #574: OpenCode runs through the single production contract (``opencode_invocation``), which binds it to
+    # the isolated workspace, the private prompt attachment and the trusted permission map, so every read/edit lands
+    # where the collector looks and repository files cannot widen the contract. Other providers keep their argv.
+    invocation = (
+        opencode_invocation(
+            model_argv, prompt=prompt, home=home, workspace=workspace, model_environment=config.model_public_env
         )
-        model_stdin = b""
-        # Issue #574: bind OpenCode to the isolated workspace and the trusted permission contract, so
-        # every read/edit lands where the collector looks and repository files cannot widen the contract.
-        opencode_environment = opencode_workspace_environment(home, workspace)
-        model_argv = opencode_workspace_argv(model_argv, workspace)
+        if _is_opencode_run(model_argv)
+        else None
+    )
+    if invocation is not None:
+        model_argv, model_stdin = invocation.argv, invocation.stdin
+    public_env: Mapping[str, str] = (
+        invocation.public_env
+        if invocation is not None
+        else {
+            **config.model_public_env,
+            "HOME": str(home),
+            "PWD": str(workspace),
+            "XDG_CONFIG_HOME": str(home / ".config"),
+            "XDG_CACHE_HOME": str(home / ".cache"),
+            "XDG_DATA_HOME": str(home / ".local" / "share"),
+            "XDG_STATE_HOME": str(home / ".local" / "state"),
+        }
+    )
     contract = prompt_contract_summary(prompt)
     print("executor task contract: " + " ".join(f"{name}={value}" for name, value in contract.items()), flush=True)
     isolation.prepare(workspace, home)
@@ -692,16 +923,7 @@ def run_executor(
         status = isolation.run(
             model_argv,
             cwd=workspace,
-            public_env={
-                **config.model_public_env,
-                **opencode_environment,
-                "HOME": str(home),
-                "PWD": str(workspace),
-                "XDG_CONFIG_HOME": str(home / ".config"),
-                "XDG_CACHE_HOME": str(home / ".cache"),
-                "XDG_DATA_HOME": str(home / ".local" / "share"),
-                "XDG_STATE_HOME": str(home / ".local" / "state"),
-            },
+            public_env=public_env,
             secret_env=config.model_secret_env,
             stdin=model_stdin,
             timeout=config.model_timeout_seconds,
