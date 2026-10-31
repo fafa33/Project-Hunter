@@ -1292,7 +1292,7 @@ def cmd_execute(configuration: control.Configuration, arguments: argparse.Namesp
         config=roles.ExecutorConfig(
             remote=_remote(configuration),
             model_argv=tuple(arguments.model_argv),
-            model_public_env={"LANG": "C.UTF-8"},
+            model_public_env=roles.MODEL_PUBLIC_ENVIRONMENT,
             model_secret_env={arguments.model_key_name: model_key},
             handoff_key=_x25519(HANDOFF_KEY_ENV),
             result_recipient=configuration.result_recipient,

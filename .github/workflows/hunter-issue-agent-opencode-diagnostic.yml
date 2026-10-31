@@ -36,48 +36,17 @@ jobs:
           MODEL: ${{ vars.HUNTER_ISSUE_AGENT_EXECUTOR_MODEL }}
           MODEL_KEY_NAME: ${{ vars.HUNTER_ISSUE_AGENT_EXECUTOR_MODEL_KEY_NAME }}
         run: |
-          python - <<'PYCODE'
-          import os
-          from pathlib import Path
-          from hunter.automation.issue_agent_roles import SudoIsolation
-
-          from hunter.automation import issue_agent_replacement_executor as core
-
-          root = Path('/tmp/hunter-ia/execute')
-          workspace = root / 'workspace'
-          home = root / 'home'
-          home.mkdir(mode=0o700)
-          import subprocess
-          subprocess.run(['git', 'clone', '--quiet', '--no-local', os.environ['GITHUB_WORKSPACE'], str(workspace)], check=True)
-          (workspace / 'probe.txt').write_text('before\n')
-          task = home / 'hunter-task.txt'
-          task.write_text('Replace before with after in probe.txt. Do not modify any other file.\n')
-          task.chmod(0o600)
-          isolation = SudoIsolation('hunter-untrusted')
-          isolation.prepare(workspace, home)
-          key_name = os.environ['MODEL_KEY_NAME']
-          if not key_name or not os.environ['MODEL']:
-              raise SystemExit('Missing configured executor model or key name')
-          argv = ('/opt/hunter/bin/opencode', 'run', '--model', os.environ['MODEL'], '--agent', 'build',
-                  'Execute the task in the attached file. Make the required changes in this workspace.',
-                  '--file', str(task))
-          try:
-              rc = isolation.run(argv, cwd=workspace, public_env={
-                  'HOME': str(home), 'PWD': str(workspace),
-                  'XDG_CONFIG_HOME': str(home / '.config'),
-                  'XDG_CACHE_HOME': str(home / '.cache'),
-                  'XDG_DATA_HOME': str(home / '.local' / 'share'),
-                  'XDG_STATE_HOME': str(home / '.local' / 'state'),
-              }, secret_env={key_name: os.environ['HUNTER_ISSUE_AGENT_EXECUTOR_MODEL_API_KEY']},
-                  stdin=b'', timeout=240)
-          finally:
-              isolation.stop()
-          # Result is trusted-runner-readable after the isolated process exits,
-          # as in the production executor; no model text is printed.
-          changed = (workspace / 'probe.txt').read_bytes() == b'after\n'
-          git_changed = bool(subprocess.run(['sudo', '-u', 'hunter-untrusted', 'git', '-C', str(workspace), 'status', '--porcelain', '--untracked-files=all'], check=True, capture_output=True).stdout)
-          print(f'HOSTED_REAL_WORKSPACE git_changed={git_changed}')
-          print(f'HOSTED_PROBE exit_zero={rc == 0} edited={changed}')
-          if rc != 0 or not changed or not git_changed:
-              raise SystemExit('Hosted OpenCode probe did not produce the expected edit')
-          PYCODE
+          set -euo pipefail
+          # The probe launches through hunter.automation.issue_agent_roles.opencode_invocation, the same contract
+          # the production executor uses, and asserts a tracked-file edit through the production collector.
+          python scripts/hunter_opencode_diagnostic_probe.py \
+            --source "$GITHUB_WORKSPACE" \
+            --workspace /tmp/hunter-ia/execute/workspace \
+            --git-dir /tmp/hunter-ia/execute/trusted.git \
+            --home /tmp/hunter-ia/execute/home \
+            --opencode /opt/hunter/bin/opencode \
+            --model "$MODEL" \
+            --secret-env HUNTER_ISSUE_AGENT_EXECUTOR_MODEL_API_KEY \
+            --model-key-name "$MODEL_KEY_NAME" \
+            --isolation-user hunter-untrusted \
+            --timeout 240
