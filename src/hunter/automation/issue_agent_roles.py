@@ -142,6 +142,61 @@ class Isolation(Protocol):
     def stop(self) -> None: ...
 
 
+#: Closed vocabulary of non-content stderr classifications for an isolated model launch (Issue #574).
+#:
+#: Markers are lowercase substrings of the provider clients' own error vocabulary, not anything Hunter writes.
+#: Ordered most specific first so that a recognized provider failure is never reported as ``UNCLASSIFIED`` merely
+#: because a broader marker appears earlier. Only the category name leaves the isolation boundary: no excerpt,
+#: prompt, credential or arbitrary stderr text is ever logged or returned.
+_STDERR_CATEGORIES: Final = (
+    (b"providermodelnotfounderror", "MODEL_NOT_FOUND"),
+    (b"modelnotfounderror", "MODEL_NOT_FOUND"),
+    (b"model_not_found", "MODEL_NOT_FOUND"),
+    (b"model not found", "MODEL_NOT_FOUND"),
+    (b"invalid model", "MODEL_NOT_FOUND"),
+    (b"ratelimiterror", "RATE_LIMIT"),
+    (b"rate_limit", "RATE_LIMIT"),
+    (b"rate limit", "RATE_LIMIT"),
+    (b"too many requests", "RATE_LIMIT"),
+    (b"insufficient_quota", "QUOTA_EXCEEDED"),
+    (b"insufficient quota", "QUOTA_EXCEEDED"),
+    (b"quota exceeded", "QUOTA_EXCEEDED"),
+    (b"credit balance", "QUOTA_EXCEEDED"),
+    (b"out of credits", "QUOTA_EXCEEDED"),
+    (b"authenticationerror", "AUTHENTICATION"),
+    (b"invalid_api_key", "AUTHENTICATION"),
+    (b"invalid api key", "AUTHENTICATION"),
+    (b"unauthorized", "AUTHENTICATION"),
+    (b"permission denied", "PERMISSION"),
+    (b"eacces", "PERMISSION"),
+    (b"econnrefused", "NETWORK"),
+    (b"enotfound", "NETWORK"),
+    (b"etimedout", "NETWORK"),
+    (b"connection refused", "NETWORK"),
+    (b"connection reset", "NETWORK"),
+    (b"network unreachable", "NETWORK"),
+    (b"provider unavailable", "PROVIDER_UNAVAILABLE"),
+    (b"service unavailable", "PROVIDER_UNAVAILABLE"),
+    (b"bad gateway", "PROVIDER_UNAVAILABLE"),
+    (b"gateway timeout", "PROVIDER_UNAVAILABLE"),
+    (b"overloaded", "PROVIDER_OVERLOADED"),
+    (b"apicallerror", "PROVIDER_CALL_FAILED"),
+    (b"providererror", "PROVIDER_ERROR"),
+    (b"not found", "NOT_FOUND"),
+)
+
+
+def stderr_category(sample: bytes) -> str:
+    """Classify private stderr into the closed vocabulary, never echoing any of its content.
+
+    ``UNCLASSIFIED`` is an honest answer: an unrecognized provider failure is reported as unknown rather than
+    guessed from an arbitrary string, and no byte of the sample leaves this function.
+    """
+
+    lowered = sample.lower()
+    return next((code for marker, code in _STDERR_CATEGORIES if marker in lowered), "UNCLASSIFIED")
+
+
 @dataclass(frozen=True, slots=True)
 class SudoIsolation:
     """Production isolation: a distinct, non-root uid via ``sudo -n -u <uid> -- /usr/bin/env -i`` (S0 A-6)."""
@@ -211,24 +266,8 @@ class SudoIsolation:
             stdout.seek(0, os.SEEK_END)
             stdout_present = stdout.tell() > 0
             stderr.seek(0)
-            # Closed-vocabulary, non-content telemetry only. No excerpts or
-            # user-controlled strings cross the isolation boundary into logs.
-            sample = stderr.read(65536).lower()
-            categories = (
-                (b"providermodelnotfounderror", "MODEL_NOT_FOUND"),
-                (b"modelnotfounderror", "MODEL_NOT_FOUND"),
-                (b"providererror", "PROVIDER_ERROR"),
-                (b"authenticationerror", "AUTHENTICATION"),
-                (b"ratelimiterror", "RATE_LIMIT"),
-                (b"permission denied", "PERMISSION"),
-                (b"eacces", "PERMISSION"),
-                (b"rate limit", "RATE_LIMIT"),
-                (b"unauthorized", "AUTHENTICATION"),
-                (b"connection refused", "NETWORK"),
-                (b"network unreachable", "NETWORK"),
-                (b"not found", "NOT_FOUND"),
-            )
-            reason = next((code for marker, code in categories if marker in sample), "UNCLASSIFIED")
+            sample = stderr.read(65536)
+            reason = stderr_category(sample)
             print(
                 f"isolated model diagnostic: exit={'ZERO' if completed.returncode == 0 else 'NONZERO'} "
                 f"stderr_category={reason} stderr_present={bool(sample)} "
@@ -562,6 +601,10 @@ def opencode_workspace_environment(home: Path, workspace: Path) -> dict[str, str
     config_dir = home / ".config" / "opencode"
     config_dir.mkdir(parents=True, exist_ok=True)
     shell = config_dir / _OPENCODE_DENIED_SHELL_NAME
+    # Idempotent: the shell installed by an earlier call on the same home is read-only, so a repeated contract (a
+    # diagnostic re-run, a parity check) must widen it deliberately before rewriting it, never fail on its own file.
+    if shell.exists():
+        shell.chmod(0o700)
     shell.write_text(_OPENCODE_DENIED_SHELL, encoding="utf-8")
     shell.chmod(0o555)
     if not (shell.is_file() and os.access(shell, os.X_OK)):
@@ -585,6 +628,58 @@ def opencode_workspace_environment(home: Path, workspace: Path) -> dict[str, str
         "OPENCODE_AUTO_SHARE": "false",
         "OPENCODE_DISABLE_AUTOUPDATE": "true",
     }
+
+
+#: Non-secret environment every production model launch receives (the execute job's ``model_public_env``).
+MODEL_PUBLIC_ENVIRONMENT: Final[Mapping[str, str]] = {"LANG": "C.UTF-8"}
+
+
+@dataclass(frozen=True, slots=True)
+class OpenCodeInvocation:
+    """One complete, production-equivalent OpenCode launch (Issue #574).
+
+    The hosted diagnostic probe launches through exactly this value, so diagnostic parity is structural rather
+    than a second copy of the contract that can drift: the workspace binding, argv, private prompt attachment,
+    permission map and shell contract are the ones the executor itself uses.
+    """
+
+    argv: tuple[str, ...]
+    stdin: bytes
+    public_env: Mapping[str, str]
+
+
+def opencode_invocation(
+    model_argv: Sequence[str],
+    *,
+    prompt: bytes,
+    home: Path,
+    workspace: Path,
+    model_environment: Mapping[str, str] = MODEL_PUBLIC_ENVIRONMENT,
+) -> OpenCodeInvocation:
+    """Bind one ``opencode run`` to ``workspace``, its private prompt attachment and the trusted permissions.
+
+    ``opencode run [message..]`` does not consume stdin as a task, so the prompt is attached as a private file and
+    only a constant, non-sensitive positional instruction (``EDIT_DIRECTIVE``) enters argv. The prompt stays out of
+    the process arguments and ``sudo`` logs.
+    """
+
+    prompt_path = home / _TASK_ATTACHMENT
+    prompt_path.write_bytes(prompt)
+    prompt_path.chmod(0o600)
+    return OpenCodeInvocation(
+        argv=opencode_workspace_argv((*model_argv, EDIT_DIRECTIVE, "--file", str(prompt_path)), workspace),
+        stdin=b"",
+        public_env={
+            **model_environment,
+            **opencode_workspace_environment(home, workspace),
+            "HOME": str(home),
+            "PWD": str(workspace),
+            "XDG_CONFIG_HOME": str(home / ".config"),
+            "XDG_CACHE_HOME": str(home / ".cache"),
+            "XDG_DATA_HOME": str(home / ".local" / "share"),
+            "XDG_STATE_HOME": str(home / ".local" / "state"),
+        },
+    )
 
 
 # --- executor ------------------------------------------------------------------------------------------
@@ -665,25 +760,31 @@ def run_executor(
     home.mkdir(mode=0o700)
     model_argv = config.model_argv
     model_stdin = prompt
-    opencode_environment: Mapping[str, str] = {}
-    # OpenCode 1.18.30 `run [message..]` does not consume stdin as a task.
-    # Keep the signed prompt out of process argv and sudo logs: attach it as a
-    # private file, with only a constant, non-sensitive positional instruction.
-    if _is_opencode_run(model_argv):
-        prompt_path = home / _TASK_ATTACHMENT
-        prompt_path.write_bytes(prompt)
-        prompt_path.chmod(0o600)
-        model_argv = (
-            *model_argv,
-            EDIT_DIRECTIVE,
-            "--file",
-            str(prompt_path),
+    # Issue #574: OpenCode runs through the single production contract (``opencode_invocation``), which binds it to
+    # the isolated workspace, the private prompt attachment and the trusted permission map, so every read/edit lands
+    # where the collector looks and repository files cannot widen the contract. Other providers keep their argv.
+    invocation = (
+        opencode_invocation(
+            model_argv, prompt=prompt, home=home, workspace=workspace, model_environment=config.model_public_env
         )
-        model_stdin = b""
-        # Issue #574: bind OpenCode to the isolated workspace and the trusted permission contract, so
-        # every read/edit lands where the collector looks and repository files cannot widen the contract.
-        opencode_environment = opencode_workspace_environment(home, workspace)
-        model_argv = opencode_workspace_argv(model_argv, workspace)
+        if _is_opencode_run(model_argv)
+        else None
+    )
+    if invocation is not None:
+        model_argv, model_stdin = invocation.argv, invocation.stdin
+    public_env: Mapping[str, str] = (
+        invocation.public_env
+        if invocation is not None
+        else {
+            **config.model_public_env,
+            "HOME": str(home),
+            "PWD": str(workspace),
+            "XDG_CONFIG_HOME": str(home / ".config"),
+            "XDG_CACHE_HOME": str(home / ".cache"),
+            "XDG_DATA_HOME": str(home / ".local" / "share"),
+            "XDG_STATE_HOME": str(home / ".local" / "state"),
+        }
+    )
     contract = prompt_contract_summary(prompt)
     print("executor task contract: " + " ".join(f"{name}={value}" for name, value in contract.items()), flush=True)
     isolation.prepare(workspace, home)
@@ -692,16 +793,7 @@ def run_executor(
         status = isolation.run(
             model_argv,
             cwd=workspace,
-            public_env={
-                **config.model_public_env,
-                **opencode_environment,
-                "HOME": str(home),
-                "PWD": str(workspace),
-                "XDG_CONFIG_HOME": str(home / ".config"),
-                "XDG_CACHE_HOME": str(home / ".cache"),
-                "XDG_DATA_HOME": str(home / ".local" / "share"),
-                "XDG_STATE_HOME": str(home / ".local" / "state"),
-            },
+            public_env=public_env,
             secret_env=config.model_secret_env,
             stdin=model_stdin,
             timeout=config.model_timeout_seconds,

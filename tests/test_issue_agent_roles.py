@@ -11,6 +11,7 @@ from collections.abc import Mapping, Sequence
 from pathlib import Path
 from typing import Any
 
+import hunter_opencode_diagnostic_probe as diagnostic_probe
 import pytest
 from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
 from cryptography.hazmat.primitives.asymmetric.x25519 import X25519PrivateKey
@@ -1228,4 +1229,77 @@ def test_isolation_timeout_reports_safe_output_presence_without_leaking(
     diagnostic = capsys.readouterr().out
     assert "isolated model launch: started" in diagnostic
     assert "exit=TIMEOUT stdout_present=True stderr_present=True" in diagnostic
+    assert private not in diagnostic
+
+
+# --- hosted diagnostic parity and closed-vocabulary failure classification (Issue #574) -------------------------
+#
+# A hosted diagnostic exit is only evidence about production if it launches the production contract. These tests pin
+# both halves: the diagnostic's launch is the executor's launch, and an unexplained provider failure is classified from
+# a closed vocabulary instead of being reported as UNCLASSIFIED while arbitrary stderr stays private.
+
+
+def test_the_hosted_diagnostic_probe_launches_the_executor_contract(repos: dict[str, Any]) -> None:
+    ledger, envelope = authorize(repos)
+    _, call = run_opencode(repos, ledger, envelope, RecordingIsolation(CANARY))
+    home, workspace = Path(call["public"]["HOME"]), Path(call["cwd"])
+    probe = diagnostic_probe.probe_invocation(
+        opencode=Path(call["argv"][0]), model="opencode/big-pickle", home=home, workspace=workspace
+    )
+    # Same argv, same environment: the hosted diagnostic cannot describe a different runtime than production.
+    assert probe.argv == call["argv"]
+    assert probe.public_env == call["public"]
+    assert probe.stdin == call["stdin"] == b""
+    assert diagnostic_probe.contract_telemetry(probe, workspace) == {
+        "pure": True,
+        "workspace_bound": True,
+        "workspace_only_tools": True,
+        "shell_denied": True,
+        "project_config_disabled": True,
+    }
+
+
+@pytest.mark.parametrize(
+    ("stderr", "expected"),
+    [
+        ("ProviderModelNotFoundError: model not available", "MODEL_NOT_FOUND"),
+        ('{"name":"AI_APICallError","message":"upstream failed"}', "PROVIDER_CALL_FAILED"),
+        ("429 Too Many Requests", "RATE_LIMIT"),
+        ("insufficient_quota: check your plan", "QUOTA_EXCEEDED"),
+        ("401 Unauthorized: invalid api key", "AUTHENTICATION"),
+        ("connect ECONNREFUSED 127.0.0.1:443", "NETWORK"),
+        ("503 Service Unavailable", "PROVIDER_UNAVAILABLE"),
+        ("provider is overloaded, retry later", "PROVIDER_OVERLOADED"),
+        ("permission denied for /tmp/x", "PERMISSION"),
+        ("something nobody has seen before", "UNCLASSIFIED"),
+    ],
+)
+def test_the_stderr_vocabulary_classifies_known_provider_failures(stderr: str, expected: str) -> None:
+    assert roles.stderr_category(stderr.encode()) == expected
+
+
+def test_the_stderr_vocabulary_is_closed_and_never_echoes_the_sample() -> None:
+    vocabulary = {code for _, code in roles._STDERR_CATEGORIES} | {"UNCLASSIFIED"}
+    sample = f"AI_APICallError {SECRET} {PROMPT}".encode()
+    category = roles.stderr_category(sample)
+    assert category in vocabulary
+    assert SECRET not in category and PROMPT not in category
+
+
+def test_a_classified_provider_failure_reaches_the_hosted_diagnostic_line(
+    sudo: tuple[roles.SudoIsolation, _Launch], tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    isolation, launch = sudo
+    private = "PRIVATE_CREDENTIAL_SHAPED_TEXT"
+
+    def failing(argv: Sequence[str], **kwargs: Any) -> Any:
+        kwargs["stderr"].write(f"AI_APICallError: {private}".encode())
+        return subprocess.CompletedProcess(argv, 1)
+
+    launch.calls.clear()
+    with pytest.MonkeyPatch.context() as patch:
+        patch.setattr(roles.subprocess, "run", failing)
+        assert isolation.run(("opencode", "run"), cwd=tmp_path, public_env={}, secret_env={}, stdin=b"", timeout=1) == 1
+    diagnostic = capsys.readouterr().out
+    assert "exit=NONZERO stderr_category=PROVIDER_CALL_FAILED" in diagnostic
     assert private not in diagnostic
