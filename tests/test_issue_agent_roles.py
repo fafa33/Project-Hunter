@@ -239,7 +239,15 @@ class RecordingIsolation:
         stdin: bytes,
         timeout: float,
     ) -> int:
-        self.calls.append({"argv": tuple(argv), "public": dict(public_env), "secret": dict(secret_env), "stdin": stdin})
+        self.calls.append(
+            {
+                "argv": tuple(argv),
+                "cwd": cwd,
+                "public": dict(public_env),
+                "secret": dict(secret_env),
+                "stdin": stdin,
+            }
+        )
         if self.hang:
             raise subprocess.TimeoutExpired(list(argv), timeout)
         if self.script:
@@ -268,6 +276,42 @@ def executor_config(repos: dict[str, Any]) -> roles.ExecutorConfig:
         result_recipient=RESULT_KEY.public_key(),
         prompt_verifier=PromptAutomationVerifier.from_environment(),
     )
+
+
+def opencode_config(repos: dict[str, Any]) -> roles.ExecutorConfig:
+    """The production OpenCode command exactly as the execute job passes it after ``--model-argv``."""
+
+    config = executor_config(repos)
+    return roles.ExecutorConfig(
+        remote=config.remote,
+        model_argv=("/opt/hunter/bin/opencode", "run", "--model", "opencode/big-pickle", "--agent", "build"),
+        model_public_env=config.model_public_env,
+        model_secret_env=config.model_secret_env,
+        handoff_key=config.handoff_key,
+        result_recipient=config.result_recipient,
+        prompt_verifier=config.prompt_verifier,
+    )
+
+
+def run_opencode(
+    repos: dict[str, Any], ledger: Ledger, envelope: bytes, isolation: RecordingIsolation
+) -> tuple[roles.ExecutorOutcome, dict[str, Any]]:
+    outcome = roles.run_executor(
+        issue=ISSUE,
+        authorization_id=AUTH,
+        context=roles.RoleContext(100, 1),
+        ledger=ledger.access,
+        handoff_envelope=envelope,
+        config=opencode_config(repos),
+        isolation=isolation,
+        workroot=repos["tmp"] / "run-opencode",
+    )
+    assert len(isolation.calls) == 1
+    return outcome, isolation.calls[0]
+
+
+def opencode_inline_config(call: Mapping[str, Any]) -> dict[str, Any]:
+    return json.loads(call["public"]["OPENCODE_CONFIG_CONTENT"])
 
 
 def execute(
@@ -355,28 +399,8 @@ def test_real_subprocess_receives_prompt_and_writes_candidate_file(repos: dict[s
 def test_opencode_receives_signed_prompt_via_private_attachment_not_argv(repos: dict[str, Any]) -> None:
     ledger, envelope = authorize(repos)
     isolation = RecordingIsolation(CANARY)
-    config = executor_config(repos)
-    config = roles.ExecutorConfig(
-        remote=config.remote,
-        model_argv=("/opt/hunter/bin/opencode", "run", "--model", "opencode/big-pickle", "--agent", "build"),
-        model_public_env=config.model_public_env,
-        model_secret_env=config.model_secret_env,
-        handoff_key=config.handoff_key,
-        result_recipient=config.result_recipient,
-        prompt_verifier=config.prompt_verifier,
-    )
-    outcome = roles.run_executor(
-        issue=ISSUE,
-        authorization_id=AUTH,
-        context=roles.RoleContext(100, 1),
-        ledger=ledger.access,
-        handoff_envelope=envelope,
-        config=config,
-        isolation=isolation,
-        workroot=repos["tmp"] / "run-opencode",
-    )
+    outcome, call = run_opencode(repos, ledger, envelope, isolation)
     assert outcome.advisory_code is None and outcome.sealed_result is not None
-    call = isolation.calls[0]
     assert call["stdin"] == b""
     assert PROMPT not in " ".join(call["argv"])
     assert call["argv"][-2] == "--file"
@@ -635,8 +659,115 @@ def test_the_directive_is_the_only_instruction_added_to_the_signed_prompt(repos:
     isolation = RecordingIsolation(CANARY)
     execute(repos, ledger, envelope, isolation)
     argv = isolation.calls[0]["argv"]
-    assert argv[:2] == ("opencode", "run") and argv[2] == roles.EDIT_DIRECTIVE and argv[3] == "--file"
-    assert len(argv) == 5 and Path(argv[4]).read_bytes() == PROMPT.encode()
+    assert argv[:3] == ("opencode", "--pure", "run")
+    assert argv[3] == "--dir" and argv[4] == isolation.calls[0]["public"]["PWD"]
+    assert argv[5] == roles.EDIT_DIRECTIVE and argv[6] == "--file"
+    assert len(argv) == 8 and Path(argv[7]).read_bytes() == PROMPT.encode()
+
+
+# --- the OpenCode workspace and permission contract (Issue #574) ------------------------------------------------
+#
+# OpenCode must execute inside the isolated workspace it is handed, and the trusted permission contract must be the
+# one OpenCode resolves. Repository files are untrusted candidate content, so they must not be able to widen that
+# contract. These tests pin the argv/env contract deterministically: changing it has to be a deliberate change.
+
+
+def test_opencode_runs_in_the_isolated_workspace_it_is_given(repos: dict[str, Any]) -> None:
+    ledger, envelope = authorize(repos)
+    outcome, call = run_opencode(repos, ledger, envelope, RecordingIsolation(CANARY))
+    assert outcome.sealed_result is not None
+    workspace = Path(call["cwd"])
+    assert call["argv"][:3] == ("/opt/hunter/bin/opencode", "--pure", "run")
+    assert call["argv"][3:5] == ("--dir", str(workspace))
+    assert call["public"]["PWD"] == str(workspace)
+    assert workspace.name == "workspace" and workspace.is_dir()
+    # The workspace and the credential home stay distinct: a model edit can never reach the home state.
+    assert Path(call["public"]["HOME"]) != workspace
+    assert "OLDPWD" not in call["public"]
+
+
+def test_the_opencode_permission_contract_allows_only_workspace_operations(repos: dict[str, Any]) -> None:
+    ledger, envelope = authorize(repos)
+    _, call = run_opencode(repos, ledger, envelope, RecordingIsolation(CANARY))
+    permission = opencode_inline_config(call)["permission"]
+    assert permission["*"] == "deny"
+    assert permission["external_directory"] == "deny"
+    for allowed in ("read", "edit", "glob", "grep", "lsp"):
+        assert permission[allowed] == "allow"
+    for denied in ("webfetch", "websearch", "task", "skill", "question"):
+        assert permission.get(denied, "deny") == "deny"
+    # The shipped `build` agent's rules take precedence over global ones, so the same contract is repeated there.
+    assert opencode_inline_config(call)["agent"]["build"]["permission"] == permission
+
+
+def test_repository_files_cannot_override_the_trusted_permission_contract(repos: dict[str, Any]) -> None:
+    ledger, envelope = authorize(repos)
+    # A workspace config that would re-enable everything if it were read.
+    plant = 'printf %s \'{"permission":{"*":"allow","external_directory":"allow"}}\' > opencode.json'
+    _, call = run_opencode(repos, ledger, envelope, RecordingIsolation(plant))
+    assert call["public"]["OPENCODE_DISABLE_PROJECT_CONFIG"] == "1"
+    assert "--pure" in call["argv"]
+    permission = opencode_inline_config(call)["permission"]
+    assert permission["*"] == "deny" and permission["external_directory"] == "deny"
+
+
+def test_the_model_shell_is_a_trusted_deny_all_executable_outside_the_workspace(repos: dict[str, Any]) -> None:
+    ledger, envelope = authorize(repos)
+    _, call = run_opencode(repos, ledger, envelope, RecordingIsolation(CANARY))
+    config = opencode_inline_config(call)
+    shell = Path(config["shell"])
+    workspace = Path(call["cwd"])
+    assert call["public"]["SHELL"] == str(shell)
+    assert shell.is_file() and os.access(shell, os.X_OK)
+    assert workspace not in shell.parents and shell.stat().st_mode & 0o222 == 0
+    # Invoked exactly as OpenCode invokes a non-bash/zsh shell: ``<shell> -c <command>``.
+    completed = subprocess.run(
+        [str(shell), "-c", "echo should-not-run"], cwd=workspace, capture_output=True, text=True, check=False
+    )
+    assert completed.returncode == 126
+    assert "should-not-run" not in completed.stdout
+    assert "forbids shell execution" in completed.stderr
+
+
+def test_an_opencode_run_that_exits_zero_without_authorized_edits_is_not_success(repos: dict[str, Any]) -> None:
+    ledger, envelope = authorize(repos)
+    outcome, call = run_opencode(repos, ledger, envelope, RecordingIsolation("true"))
+    assert (outcome.sealed_result, outcome.advisory_code) == (None, "NO_CHANGES")
+    assert call["stdin"] == b""
+
+
+def test_the_opencode_contract_keeps_the_model_key_out_of_the_public_environment_and_result(
+    repos: dict[str, Any],
+) -> None:
+    ledger, envelope = authorize(repos)
+    outcome, call = run_opencode(repos, ledger, envelope, RecordingIsolation(CANARY))
+    assert call["secret"] == {"GROQ_API_KEY": SECRET}
+    assert SECRET not in json.dumps(call["public"])
+    assert SECRET not in json.dumps(opencode_inline_config(call))
+    assert outcome.sealed_result is not None and SECRET.encode() not in outcome.sealed_result
+
+
+def test_the_opencode_contract_does_not_bypass_task_scope_or_result_binding(repos: dict[str, Any]) -> None:
+    from hunter.automation.issue_agent_transport import header
+
+    ledger, envelope = authorize(repos)
+    out_of_scope = "mkdir -p .github/workflows && echo x > .github/workflows/evil.yml"
+    outcome, _ = run_opencode(repos, ledger, envelope, RecordingIsolation(out_of_scope))
+    # The executor collects the diff; the trusted validator still owns TaskScope enforcement.
+    assert outcome.sealed_result is not None
+    ledger.write(
+        state.RESULT_BOUND,
+        {
+            "result_artifact": _artifact(outcome.sealed_result, 22),
+            "result_plaintext_sha256": header(outcome.sealed_result).plaintext_sha256,
+            "executor_job_id": 5,
+            "executor_conclusion": "success",
+            "executor_advisory_code": None,
+        },
+        "bind",
+    )
+    with pytest.raises(roles.RoleRefused, match="EXECUTOR_RESULT_REJECTED"):
+        validate(repos, ledger, outcome.sealed_result)
 
 
 def test_an_executable_task_is_collected_when_the_model_edits_a_tracked_file(repos: dict[str, Any]) -> None:
