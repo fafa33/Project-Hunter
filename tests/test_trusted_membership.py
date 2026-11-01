@@ -20,6 +20,7 @@ from hunter.market_validation.trusted_membership import (
     EVIDENCE_DOMAIN,
     GitHubAnchorReader,
     MembershipAnchorPin,
+    MembershipAnchorPublisher,
     PinnedMembershipTrust,
     RegistryIdentityVerifier,
     canonical_bytes,
@@ -600,9 +601,50 @@ def test_f5_registry_identity_verifier(tmp_path):
     # Empty registry: nothing is verified.
     empty_repo = CandidateRegistryRepository(tmp_path / "empty.sqlite")
     assert not RegistryIdentityVerifier(empty_repo).verify_entity("entity-1")
-    # Exact identity: verified.
+    # Exact current-state identity alone is NOT historical canonical proof.
     repo = _setup_registry_candidate(tmp_path, outcome="exact")
-    assert RegistryIdentityVerifier(repo).verify_entity("entity-1")
+    assert not RegistryIdentityVerifier(repo).verify_entity("entity-1")
     # Probable identity: not eligible.
     repo2 = _setup_registry_candidate(tmp_path / "probable", outcome="probable", confidence=0.85)
     assert not RegistryIdentityVerifier(repo2).verify_entity("entity-1")
+
+
+def test_f2_reader_uses_latest_signed_anchor():
+    entries = _make_entries("stale") + [("new", {"membership-anchor.json": b"current"})]
+    assert _make_reader(_FakeLedgerStore("new", entries)).read_signed_head(REPO) == "current"
+
+
+def test_f2_publisher_requires_protected_cas_and_signed_monotonic_head():
+    key = Ed25519PrivateKey.generate()
+    trust = PinnedMembershipTrust(REPO, key.public_key(), key.public_key())
+    old = signed(key, ANCHOR_DOMAIN, {"repository": REPO, "sequence": 1, "digest": "a" * 64})
+    new = signed(key, ANCHOR_DOMAIN, {"repository": REPO, "sequence": 2, "digest": "b" * 64})
+
+    class Store(_FakeLedgerStore):
+        def ref_head(self, ref):
+            return self._head
+
+        def append_files(self, ref, expected_head, files, *, message, timestamp):
+            assert ref == _make_pin().ref and expected_head == "head"
+            assert files == {"membership-anchor.json": new.encode()}
+            self._head = "next"
+            return "next"
+
+    store = Store("head", _make_entries(old))
+    publisher = MembershipAnchorPublisher(
+        REPO,
+        store=store,
+        trust=trust,
+        pin=_make_pin(),
+        ruleset=_intact_ruleset(),
+        branch_rules=_intact_branch_rules(),
+    )
+    with pytest.raises(ValueError, match="must advance"):
+        publisher.publish(old, expected_head="head", timestamp=NOW.isoformat())
+    with pytest.raises(ValueError, match="untrusted membership anchor"):
+        publisher.publish("forged", expected_head="head", timestamp=NOW.isoformat())
+    with pytest.raises(ValueError, match="missing or stale"):
+        publisher.publish(new, expected_head="wrong", timestamp=NOW.isoformat())
+    assert publisher.publish(new, expected_head="head", timestamp=NOW.isoformat()) == "next"
+    with pytest.raises(ValueError, match="missing or stale"):
+        publisher.publish(new, expected_head="head", timestamp=NOW.isoformat())

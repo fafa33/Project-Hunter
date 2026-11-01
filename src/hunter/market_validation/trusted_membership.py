@@ -201,44 +201,13 @@ class RegistryIdentityVerifier:
         self._repository = repository
 
     def verify_entity(self, entity_id: str) -> bool:
-        """Return True only if ``entity_id`` maps to exactly one Registry entity.
+        """Legacy upsert identity cannot prove a historical economic entity.
 
-        Looks up the entity by candidate ID first, then by any identifier
-        value. The candidate's identity resolution outcome must be ``exact``.
-        Uniqueness is enforced: if multiple candidates map to the same entity
-        ID, the mapping is ambiguous and rejected (F-5).
+        ADR 0040 forbids deriving canonical identity from candidate identifiers
+        or a current-state exact outcome. Until the Registry owns a durable,
+        known-time, source-bound canonical mapping, admission stays disabled.
         """
-        matches = self._find_candidates(entity_id)
-        if len(matches) != 1:
-            return False
-        return self._identity_outcome_exact(matches[0])
-
-    def _find_candidates(self, entity_id: str) -> list:
-        """Find all Registry candidates matching ``entity_id``."""
-        result = []
-        candidate = self._repository.get(entity_id)
-        if candidate is not None:
-            result.append(candidate)
-        for candidate in self._repository.list_candidates(limit=10_000):
-            if candidate.candidate_id == entity_id:
-                continue  # already counted
-            for identifier in candidate.identifiers:
-                if identifier.value == entity_id:
-                    result.append(candidate)
-                    break
-        return result
-
-    def _identity_outcome_exact(self, candidate) -> bool:
-        identity = self._identity_for_candidate(candidate.candidate_id)
-        if identity is None:
-            return False
-        return identity.outcome == "exact"
-
-    def _identity_for_candidate(self, candidate_id: str):
-        try:
-            return self._repository.latest_identity_by_candidate().get(candidate_id)
-        except Exception:
-            return None
+        return False
 
 
 class GitHubAnchorReader(ExternalAnchorReader):
@@ -281,16 +250,66 @@ class GitHubAnchorReader(ExternalAnchorReader):
         head, entries = self._store.read_files(self._pin.ref, frozenset({self.ANCHOR_FILE}))
         if head is None:
             raise ValueError("external anchor unavailable")
-        for _commit, files in entries:
-            if not isinstance(files, dict):
-                raise ValueError("unexpected file layout from ledger store")
-            for name, content in files.items():
-                if name == self.ANCHOR_FILE:
-                    text = content.decode("utf-8") if isinstance(content, (bytes, bytearray)) else str(content)
-                    if not text.strip():
-                        raise ValueError("external anchor unavailable")
-                    return text
-        raise ValueError("external anchor unavailable")
+        if not entries:
+            raise ValueError("external anchor unavailable")
+        # GitLedgerStore returns oldest-first. The last commit is the current
+        # signed head; returning the first would silently replay stale proof.
+        _commit, files = entries[-1]
+        if set(files) != {self.ANCHOR_FILE}:
+            raise ValueError("unexpected file layout from ledger store")
+        content = files[self.ANCHOR_FILE]
+        if not isinstance(content, bytes):
+            raise ValueError("invalid external anchor encoding")
+        text = content.decode("utf-8")
+        if not text.strip():
+            raise ValueError("external anchor unavailable")
+        return text
+
+
+class MembershipAnchorPublisher:
+    """CAS publisher for independently signed membership anchors (shadow only).
+
+    Uses the existing GitLedgerStore; never signs claims, bootstraps refs,
+    generates credentials, or bypasses protected-ref verification.
+    """
+
+    def __init__(
+        self,
+        repository: str,
+        *,
+        store: Any,
+        trust: PinnedMembershipTrust,
+        pin: MembershipAnchorPin,
+        ruleset: dict[str, Any] | None,
+        branch_rules: list[dict[str, Any]] | None,
+    ) -> None:
+        self.repository = repository
+        self.store = store
+        self.trust = trust
+        self.pin = pin
+        self.ruleset = ruleset
+        self.branch_rules = branch_rules
+
+    def publish(self, signed_anchor: str, *, expected_head: str, timestamp: str) -> str:
+        if self.repository != self.trust.repository:
+            raise ValueError("publisher repository mismatch")
+        self.pin.verify(self.ruleset, self.branch_rules)
+        if not expected_head or self.store.ref_head(self.pin.ref) != expected_head:
+            raise ValueError("protected membership anchor ref missing or stale")
+        new = self.trust.verify_anchor(signed_anchor)
+        head, entries = self.store.read_files(self.pin.ref, frozenset({GitHubAnchorReader.ANCHOR_FILE}))
+        if head != expected_head or not entries:
+            raise ValueError("protected membership anchor changed during read")
+        old = self.trust.verify_anchor(entries[-1][1][GitHubAnchorReader.ANCHOR_FILE].decode("utf-8"))
+        if new.sequence <= old.sequence or new.digest == old.digest:
+            raise ValueError("membership anchor must advance")
+        return self.store.append_files(
+            self.pin.ref,
+            expected_head,
+            {GitHubAnchorReader.ANCHOR_FILE: signed_anchor.encode("utf-8")},
+            message=f"membership anchor sequence {new.sequence}",
+            timestamp=timestamp,
+        )
 
 
 def load_pinned_membership_trust(document: dict[str, Any]) -> PinnedMembershipTrust:
