@@ -561,28 +561,28 @@ def _intact_branch_rules() -> list[dict]:
     ]
 
 
-def test_f2_github_anchor_reader_missing_anchor():
-    pin = MembershipAnchorPin(ruleset_id=24526712, updated_at="2026-10-06T20:52:31.773Z")
-    reader = GitHubAnchorReader(
+def _make_pin() -> MembershipAnchorPin:
+    return MembershipAnchorPin(ruleset_id=24526712, updated_at="2026-10-06T20:52:31.773Z")
+
+
+def _make_reader(store, ruleset=None, branch_rules=None):
+    return GitHubAnchorReader(
         REPO,
-        store=_FakeLedgerStore("head", []),
-        pin=pin,
-        ruleset=_intact_ruleset(),
-        branch_rules=_intact_branch_rules(),
+        store=store,
+        pin=_make_pin(),
+        ruleset=ruleset or _intact_ruleset(),
+        branch_rules=branch_rules if branch_rules is not None else _intact_branch_rules(),
     )
+
+
+def test_f2_github_anchor_reader_missing_anchor():
+    reader = _make_reader(_FakeLedgerStore("head", []))
     with pytest.raises(ValueError, match="external anchor unavailable"):
         reader.read_signed_head(REPO)
 
 
 def test_f2_github_anchor_reader_malformed_anchor():
-    pin = MembershipAnchorPin(ruleset_id=24526712, updated_at="2026-10-06T20:52:31.773Z")
-    reader = GitHubAnchorReader(
-        REPO,
-        store=_FakeLedgerStore("head", _make_entries("not valid json")),
-        pin=pin,
-        ruleset=_intact_ruleset(),
-        branch_rules=_intact_branch_rules(),
-    )
+    reader = _make_reader(_FakeLedgerStore("head", _make_entries("not valid json")))
     # Reader returns the raw anchor text; signature verification happens in
     # PinnedMembershipTrust.verify_anchor().
     text = reader.read_signed_head(REPO)
@@ -599,33 +599,18 @@ def test_f2_github_anchor_reader_malformed_anchor():
 
 
 def test_f2_github_anchor_reader_unexpected_file_layout():
-    pin = MembershipAnchorPin(ruleset_id=24526712, updated_at="2026-10-06T20:52:31.773Z")
-    reader = GitHubAnchorReader(
-        REPO,
-        store=_FakeLedgerStore("head", [("abc123", "not-a-dict")]),
-        pin=pin,
-        ruleset=_intact_ruleset(),
-        branch_rules=_intact_branch_rules(),
-    )
+    reader = _make_reader(_FakeLedgerStore("head", [("abc123", "not-a-dict")]))
     with pytest.raises(ValueError, match="unexpected file layout"):
         reader.read_signed_head(REPO)
 
 
 def test_f2_github_anchor_reader_mismatched_repository():
-    pin = MembershipAnchorPin(ruleset_id=24526712, updated_at="2026-10-06T20:52:31.773Z")
-    reader = GitHubAnchorReader(
-        REPO,
-        store=_FakeLedgerStore("head", _make_entries("{}")),
-        pin=pin,
-        ruleset=_intact_ruleset(),
-        branch_rules=_intact_branch_rules(),
-    )
+    reader = _make_reader(_FakeLedgerStore("head", _make_entries("{}")))
     with pytest.raises(ValueError, match="anchor repository mismatch"):
         reader.read_signed_head("other/repository")
 
 
 def test_f2_github_anchor_reader_unprotected_reference():
-    pin = MembershipAnchorPin(ruleset_id=24526712, updated_at="2026-10-06T20:52:31.773Z")
     # Ruleset missing required rules => fail closed.
     ruleset = {
         "id": 24526712,
@@ -633,6 +618,7 @@ def test_f2_github_anchor_reader_unprotected_reference():
         "updated_at": "2026-10-06T20:52:31.773Z",
         "rules": [{"type": "deletion"}],  # missing non_fast_forward
     }
+    pin = _make_pin()
     reader = GitHubAnchorReader(
         REPO,
         store=_FakeLedgerStore("head", _make_entries("{}")),
@@ -650,14 +636,7 @@ def test_f2_github_anchor_reader_valid_anchor():
     anchor_key = Ed25519PrivateKey.generate()
     anchor_payload = {"repository": REPO, "sequence": 1, "digest": "0" * 64}
     signed_anchor = signed(anchor_key, ANCHOR_DOMAIN, anchor_payload)
-    pin = MembershipAnchorPin(ruleset_id=24526712, updated_at="2026-10-06T20:52:31.773Z")
-    reader = GitHubAnchorReader(
-        REPO,
-        store=_FakeLedgerStore("head", _make_entries(signed_anchor)),
-        pin=pin,
-        ruleset=_intact_ruleset(),
-        branch_rules=_intact_branch_rules(),
-    )
+    reader = _make_reader(_FakeLedgerStore("head", _make_entries(signed_anchor)))
     result = reader.read_signed_head(REPO)
     assert result == signed_anchor
 

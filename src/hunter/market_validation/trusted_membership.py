@@ -128,9 +128,10 @@ class ExternalAnchorReader:
 class MembershipAnchorPin:
     """Pinned anti-rollback ruleset for the membership history anchor (F-2).
 
-    Protects ``refs/heads/hunter-state/v1/knowledge`` with deletion and
-    non_fast_forward rules so that no actor can rewrite, truncate or roll back
-    the signed membership head.
+    Protects ``refs/heads/hunter-state/v1/membership-anchor`` (a dedicated
+    ref, NOT the knowledge ledger) with deletion and non_fast_forward rules
+    so that no actor can rewrite, truncate or roll back the signed membership
+    head.
     """
 
     def __init__(
@@ -138,7 +139,7 @@ class MembershipAnchorPin:
         *,
         ruleset_id: int,
         updated_at: str,
-        ref: str = "refs/heads/hunter-state/v1/knowledge",
+        ref: str = "refs/heads/hunter-state/v1/membership-anchor",
         required_rules: frozenset[str] | None = None,
     ) -> None:
         self.ruleset_id = ruleset_id
@@ -197,20 +198,32 @@ class RegistryIdentityVerifier:
         self._repository = repository
 
     def verify_entity(self, entity_id: str) -> bool:
-        """Return True only if ``entity_id`` is an authoritative Registry entity.
+        """Return True only if ``entity_id`` maps to exactly one Registry entity.
 
         Looks up the entity by candidate ID first, then by any identifier
         value. The candidate's identity resolution outcome must be ``exact``.
+        Uniqueness is enforced: if multiple candidates map to the same entity
+        ID, the mapping is ambiguous and rejected (F-5).
         """
+        matches = self._find_candidates(entity_id)
+        if len(matches) != 1:
+            return False
+        return self._identity_outcome_exact(matches[0])
+
+    def _find_candidates(self, entity_id: str) -> list:
+        """Find all Registry candidates matching ``entity_id``."""
+        result = []
         candidate = self._repository.get(entity_id)
         if candidate is not None:
-            return self._identity_outcome_exact(candidate)
-        # Fall back to identifier-value lookup (chain contracts, provider IDs, etc.).
+            result.append(candidate)
         for candidate in self._repository.list_candidates(limit=10_000):
+            if candidate.candidate_id == entity_id:
+                continue  # already counted
             for identifier in candidate.identifiers:
                 if identifier.value == entity_id:
-                    return self._identity_outcome_exact(candidate)
-        return False
+                    result.append(candidate)
+                    break
+        return result
 
     def _identity_outcome_exact(self, candidate) -> bool:
         identity = self._identity_for_candidate(candidate.candidate_id)
@@ -228,10 +241,11 @@ class RegistryIdentityVerifier:
 class GitHubAnchorReader(ExternalAnchorReader):
     """Reads signed membership head anchors from GitHub protected storage.
 
-    Retrieves the anchor from ``refs/heads/hunter-state/v1/knowledge`` under
-    ruleset 24526712 (deletion + non_fast_forward). Ruleset integrity is
-    verified before the anchor is accepted, so a weakened or removed ruleset
-    causes fail-closed behavior (F-2).
+    Retrieves the anchor from a dedicated protected ref
+    ``refs/heads/hunter-state/v1/membership-anchor`` (NOT the knowledge
+    ledger) under the configured ruleset (deletion + non_fast_forward).
+    Ruleset integrity is verified before the anchor is accepted, so a
+    weakened or removed ruleset causes fail-closed behavior (F-2).
 
     The caller supplies a ``store`` object with a ``read_files(ref, names)``
     method (compatible with :class:`GitLedgerStore`) and pre-fetched
