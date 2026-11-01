@@ -89,3 +89,41 @@ def test_trusted_verifier_controls_shadow_admission(tmp_path):
     accepted = history.authorize_shadow(**kwargs, verify_attestation=lambda att, source, digest: True)
     assert not rejected.runnable and accepted.runnable
     assert len(accepted.targets) == 50
+
+
+def test_replace_insert_cannot_rewrite_history_from_separate_connection(tmp_path):
+    import sqlite3
+
+    history = ImmutableMembershipHistory(tmp_path / "history.sqlite")
+    digest = history.append(snapshot())
+    with sqlite3.connect(history.path) as conn:
+        original = conn.execute(
+            "SELECT sequence, candidate_id, known_at, content, digest, previous_digest " "FROM membership_history"
+        ).fetchone()
+        for replacement in (
+            (
+                original[0],
+                original[1],
+                original[2],
+                original[3].replace("identified", "rejected"),
+                "forged-digest",
+                original[5],
+            ),
+            (
+                original[0] + 1,
+                original[1],
+                original[2],
+                original[3].replace("identified", "rejected"),
+                original[4],
+                original[5],
+            ),
+        ):
+            with pytest.raises(sqlite3.IntegrityError, match="immutable history conflict"):
+                conn.execute(
+                    "INSERT OR REPLACE INTO membership_history "
+                    "(sequence, candidate_id, known_at, content, digest, previous_digest) "
+                    "VALUES (?, ?, ?, ?, ?, ?)",
+                    replacement,
+                )
+    assert history.as_of(NOW)[0].lifecycle_status == "identified"
+    assert history.append(snapshot(2)) != digest

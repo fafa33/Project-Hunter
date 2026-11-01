@@ -62,6 +62,13 @@ class ImmutableMembershipHistory:
                 );
                 CREATE INDEX IF NOT EXISTS membership_history_candidate
                     ON membership_history(candidate_id, known_at, sequence);
+                CREATE TRIGGER IF NOT EXISTS membership_history_no_replace
+                    BEFORE INSERT ON membership_history
+                    WHEN EXISTS (
+                        SELECT 1 FROM membership_history
+                        WHERE sequence = NEW.sequence OR digest = NEW.digest
+                    )
+                    BEGIN SELECT RAISE(ABORT, 'immutable history conflict'); END;
                 CREATE TRIGGER IF NOT EXISTS membership_history_no_update
                     BEFORE UPDATE ON membership_history BEGIN SELECT RAISE(ABORT, 'immutable history'); END;
                 CREATE TRIGGER IF NOT EXISTS membership_history_no_delete
