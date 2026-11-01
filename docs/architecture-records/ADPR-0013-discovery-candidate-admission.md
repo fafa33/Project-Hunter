@@ -5,13 +5,15 @@
 - Status: READY_FOR_REVIEW (not approved)
 - Version: 0.2
 - Author: Project Hunter architecture preparation for Issue #666
-- Reviewers: Claude Code independent audit (v0.1 verdict ADPR_REVISION_REQUIRED); v0.2 targeted re-audit pending
+- Reviewers: Claude Code independent audit (v0.1 ADPR_REVISION_REQUIRED); targeted v0.2 re-audit READY_FOR_ADR_WITH_MINOR_FINDINGS at `25bdb15e21a773b19f183ccbcce631b04e603bc7` (before this editorial clarification)
 - Created: 2026-11-01
 - Related Issue: #666; parent #135 finding F-135-01
 - Planned ADR: Discovery Candidate Admission Authority (not accepted)
 - Original baseline main: `1353e868bc802a11daf83e438d8a32816b8bcc94`; v0.2 base: `394aee4f63fb6d78e9f33be1031ba27bc9a2effb`
 
 ## Executive Summary
+**Version note:** Sections from v0.1 below are preserved as historical preparation only; wherever they recommend Option C, separate admission statuses, or NEEDS_REVISION, the v0.2 remediation and its revised assessment govern. No architecture option or ADR has been accepted.
+
 The Discovery registry screens and queues candidates, but the canonical Market Validation CLI loads a fixed configured universe and its runner iterates that universe. The proposed solution is a **separate deterministic admission decision**, not Discovery-generated scoring, with explicit pending/unavailable states. No production mutation is authorized by this ADPR. The owner wants early 10x–1000x hypotheses preserved without converting them into calibrated probabilities or authoritative rankings.
 
 ## Problem Statement
@@ -178,7 +180,8 @@ This section supersedes the conflicting preliminary recommendation, assumption A
 | ADR 0020 | **Market Validation input assembly alone** accepts or marks missing production inputs; admission must never assert evidence sufficiency for scoring. Four inputs (valuation, comparative_valuation, mispricing, asymmetry) are currently unavailable without authorized formulas; missing required inputs produce `INSUFFICIENT_EVIDENCE`. Strict-known-time applies |
 | ADR 0021 / 0025 | Valuation evidence and assembly authorities constrain source acceptance; candidate admission cannot invent or substitute unavailable valuation evidence |
 | ADR 0027 | Composition was **Proposed at audit time**; it is not accepted authority merely because a document exists. Verify current status at ADR drafting and preserve disabled-by-default behavior until authorized |
-| ADR 0028 | Supporting evidence-assembly boundaries remain subordinate to canonical production input acceptance; verify current status and applicability before ADR acceptance |
+| ADR 0028 | **Accepted, Revision 9** (architectural authority only; implementation/activation separately governed). Supporting evidence-assembly boundaries remain subordinate to canonical production input acceptance; verify runtime implementation and applicability before ADR acceptance |
+| ADR 0022 / 0023 / 0024 / 0026 | **Accepted architectural decisions** for valuation methodology, supply-basis tolerance, valuation scalar semantics and comparative methodology. Acceptance does not prove those inputs are wired into production Market Validation. ADR 0027 remains **Proposed**; verify runtime availability independently rather than treating the historical ADR 0020 unavailable-input statement as a fresh runtime measurement |
 
 **Corrected A2:** There is no demonstrated currently available full qualifying production evidence bundle for a newly discovered candidate. Discovery identity eligibility, universe inclusion eligibility and production input sufficiency are three distinct decisions. An eligible candidate can be included in a bounded validation run yet legitimately yield `INSUFFICIENT_EVIDENCE`. Neither `ADMITTED` nor a watch state promises an authoritative score, rank, champion or investment recommendation. The admission decision may determine **universe membership only**, never whether a production engine input is accepted. No additional admission service may duplicate ADR 0020 input assembly.
 
@@ -234,7 +237,7 @@ Hostile tests required *after* an ADR, not claimed executed: duplicate entity ac
 - **Architecture readiness:** `READY_FOR_REVIEW` of this revised preparation, **not independently verified**.
 - **ADR readiness:** `NEEDS_REVISION` until targeted independent re-audit resolves F-001–F-003 and identifies whether remaining owner, membership, and run-shape choices are sufficiently evidenced for decision. No accepted ADR or implementation authorization.
 - **Comparative direction for audit:** Prefer investigating **D + E** (existing input-boundary ownership plus segregated versioned candidate run) before adding a new service C; this is a preparation hypothesis, not an architectural decision. Retain A/F as fallback and reject B under existing authorities. D+E is invalid if ownership separation or minimum-50 contract cannot be satisfied without accepted change.
-- **Missing proof:** real strict-known candidate identity/evidence example; existing persistence and run-contract confirmation; ADR 0027/0028 current acceptance status; operational cost and canary thresholds. These remain explicitly open and must not be invented.
+- **Missing proof:** real strict-known candidate identity/evidence example; existing persistence and run-contract confirmation; ADR 0027 current acceptance status and ADR 0022–0028 actual runtime wiring (ADR 0028 is Accepted, Rev 9); operational cost and canary thresholds. These remain explicitly open and must not be invented.
 - **Re-audit scope:** Only F-001–F-006 and any directly consequential new contradiction; follow `docs/ARCHITECTURE_AUDIT_PROTOCOL.md` materiality rules, no full-repository rediscovery.
 
 ### Revision history
@@ -242,3 +245,8 @@ Hostile tests required *after* an ADR, not claimed executed: duplicate entity ac
 | Date | Version | Action |
 |---|---|---|
 | 2026-11-01 | 0.2 | Addressed independent audit F-001–F-006 in bounded preparation amendment; independent re-audit pending |
+
+### Targeted re-audit and editorial clarification
+
+- Targeted re-audit of v0.2 at `25bdb15e21a773b19f183ccbcce631b04e603bc7`: `READY_FOR_ADR_WITH_MINOR_FINDINGS`, F-001–F-006 resolved. Evidence: https://github.com/fafa33/Project-Hunter/issues/666#issuecomment-6558172180.
+- This subsequent change clarifies **N-001** (accepted ADR 0022/23/24/26/28 versus proposed ADR 0027, without claiming runtime activation) and **N-002** (v0.1 sections explicitly historical/superseded). No option is selected and no ADR is accepted. Because the HEAD changed, the prior verdict is bound to the earlier HEAD; this editorial change requires an exact-HEAD delta check before relying on it for merge.
