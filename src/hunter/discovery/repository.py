@@ -46,6 +46,18 @@ class CandidateRegistryRepository:
             row = conn.execute("SELECT digest FROM canonical_entity_history ORDER BY sequence DESC LIMIT 1").fetchone()
             previous = str(row[0]) if row else f"GENESIS:{repository}"
             payload = record.payload(repository=repository, ingested_at=clock(), previous_digest=previous)
+            prior = conn.execute(
+                "SELECT content FROM canonical_entity_history ORDER BY sequence DESC"
+            ).fetchall()
+            for historical in prior:
+                previous_record = json.loads(historical[0])
+                if previous_record["repository"] != repository:
+                    raise ValueError("canonical identity repository mismatch")
+                if previous_record["candidate_id"] == record.candidate_id and (
+                    payload["known_at"] <= previous_record["known_at"]
+                    or payload["ingested_at"] < previous_record["ingested_at"]
+                ):
+                    raise ValueError("canonical identity supersession must advance trusted time")
             if not verify_attestation(payload):
                 raise ValueError("canonical identity attestation unverified")
             digest = digest_payload(payload)

@@ -89,3 +89,36 @@ def test_registry_verifier_requires_historical_attestation(tmp_path):
     assert not verifier.verify_historical_entity(
         "entity-a", candidate_id="candidate-a", cutoff=NOW, repository=REPO, verify_attestation=lambda _: False
     )
+
+
+def test_same_candidate_supersession_requires_strictly_newer_known_time(tmp_path):
+    repo = CandidateRegistryRepository(tmp_path / "registry.sqlite")
+    repo.append_canonical_entity(record(), repository=REPO, clock=lambda: NOW, verify_attestation=lambda _: True)
+    with pytest.raises(ValueError, match="supersession must advance"):
+        repo.append_canonical_entity(
+            record(entity="entity-b"),
+            repository=REPO,
+            clock=lambda: NOW + timedelta(seconds=1),
+            verify_attestation=lambda _: True,
+        )
+    assert repo.canonical_entities_as_of(repository=REPO, cutoff=NOW, verify_attestation=lambda _: True) == {
+        "entity-a": "candidate-a"
+    }
+
+
+def test_future_dated_attestation_cannot_hide_from_cutoff_verification(tmp_path):
+    repo = CandidateRegistryRepository(tmp_path / "registry.sqlite")
+    later = NOW + timedelta(days=1)
+    repo.append_canonical_entity(record(), repository=REPO, clock=lambda: NOW, verify_attestation=lambda _: True)
+    repo.append_canonical_entity(
+        record("candidate-b", "entity-b", known=later),
+        repository=REPO,
+        clock=lambda: later,
+        verify_attestation=lambda _: True,
+    )
+    with pytest.raises(ValueError, match="attestation unverified"):
+        repo.canonical_entities_as_of(
+            repository=REPO,
+            cutoff=NOW,
+            verify_attestation=lambda payload: payload["candidate_id"] != "candidate-b",
+        )

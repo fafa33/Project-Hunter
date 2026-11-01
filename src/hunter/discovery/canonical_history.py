@@ -91,11 +91,27 @@ def replay_canonical_entities(
         if digest_payload(payload) != digest:
             raise ValueError("canonical identity digest mismatch")
         previous = digest
-        if payload.get("known_at", "~") > cutoff_text or payload.get("ingested_at", "~") > cutoff_text:
-            continue
         if not verify_attestation(payload):
             raise ValueError("canonical identity attestation unverified")
-        candidates[str(payload["candidate_id"])] = payload
+        observed = payload.get("observed_at")
+        known = payload.get("known_at")
+        ingested = payload.get("ingested_at")
+        if not all(isinstance(value, str) for value in (observed, known, ingested)):
+            raise ValueError("canonical identity chronology invalid")
+        try:
+            if not all(datetime.fromisoformat(value).tzinfo is not None for value in (observed, known, ingested)):
+                raise ValueError("canonical identity chronology invalid")
+        except (TypeError, ValueError) as exc:
+            raise ValueError("canonical identity chronology invalid") from exc
+        if not observed <= known <= ingested:
+            raise ValueError("canonical identity chronology invalid")
+        if known > cutoff_text or ingested > cutoff_text:
+            continue
+        candidate_id = str(payload["candidate_id"])
+        prior = candidates.get(candidate_id)
+        if prior is not None and known <= prior["known_at"]:
+            raise ValueError("canonical identity ambiguous supersession")
+        candidates[candidate_id] = payload
     eligible: dict[str, str] = {}
     counts: dict[str, int] = {}
     for candidate_id, payload in candidates.items():
