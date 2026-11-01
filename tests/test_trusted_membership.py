@@ -195,51 +195,40 @@ def _content_digest_without_attestation(data: dict) -> str:
     return hashlib.sha256(canonical_bytes({k: v for k, v in data.items() if k != "upstream_attestation"})).hexdigest()
 
 
-def test_f1_modified_sector_rejected(tmp_path):
+def _first_row_and_attestation(tmp_path):
     history, trust, anchor = fixture(tmp_path)
     with sqlite3.connect(history.path) as conn:
         row = json.loads(conn.execute("SELECT content FROM membership_history LIMIT 1").fetchone()[0])
-        att = row["upstream_attestation"]
-        modified = dict(row)
-        modified["project"] = dict(row["project"], sector="defi")
-        modified_digest = _content_digest_without_attestation(modified)
-    # Old attestation signed over old digest must not verify against modified content.
-    assert not trust.verify_evidence(att, modified_digest)
-    # Old attestation still verifies against the original digest.
+    return trust, row["upstream_attestation"], row
+
+
+def test_f1_modified_sector_rejected(tmp_path):
+    trust, att, row = _first_row_and_attestation(tmp_path)
+    modified = dict(row)
+    modified["project"] = dict(row["project"], sector="defi")
+    assert not trust.verify_evidence(att, _content_digest_without_attestation(modified))
     assert trust.verify_evidence(att, _content_digest_without_attestation(row))
 
 
 def test_f1_modified_lifecycle_rejected(tmp_path):
-    history, trust, anchor = fixture(tmp_path)
-    with sqlite3.connect(history.path) as conn:
-        row = json.loads(conn.execute("SELECT content FROM membership_history LIMIT 1").fetchone()[0])
-        att = row["upstream_attestation"]
-        modified = dict(row)
-        modified["lifecycle_status"] = "rejected"
-        modified_digest = _content_digest_without_attestation(modified)
-    assert not trust.verify_evidence(att, modified_digest)
+    trust, att, row = _first_row_and_attestation(tmp_path)
+    modified = dict(row)
+    modified["lifecycle_status"] = "rejected"
+    assert not trust.verify_evidence(att, _content_digest_without_attestation(modified))
 
 
 def test_f1_modified_timestamps_rejected(tmp_path):
-    history, trust, anchor = fixture(tmp_path)
-    with sqlite3.connect(history.path) as conn:
-        row = json.loads(conn.execute("SELECT content FROM membership_history LIMIT 1").fetchone()[0])
-        att = row["upstream_attestation"]
-        modified = dict(row)
-        modified["known_at"] = "2020-01-01T00:00:00+00:00"
-        modified_digest = _content_digest_without_attestation(modified)
-    assert not trust.verify_evidence(att, modified_digest)
+    trust, att, row = _first_row_and_attestation(tmp_path)
+    modified = dict(row)
+    modified["known_at"] = "2020-01-01T00:00:00+00:00"
+    assert not trust.verify_evidence(att, _content_digest_without_attestation(modified))
 
 
 def test_f1_modified_source_digest_rejected(tmp_path):
-    history, trust, anchor = fixture(tmp_path)
-    with sqlite3.connect(history.path) as conn:
-        row = json.loads(conn.execute("SELECT content FROM membership_history LIMIT 1").fetchone()[0])
-        att = row["upstream_attestation"]
-        modified = dict(row)
-        modified["source_digest"] = "sha256:forged"
-        modified_digest = _content_digest_without_attestation(modified)
-    assert not trust.verify_evidence(att, modified_digest)
+    trust, att, row = _first_row_and_attestation(tmp_path)
+    modified = dict(row)
+    modified["source_digest"] = "sha256:forged"
+    assert not trust.verify_evidence(att, _content_digest_without_attestation(modified))
 
 
 def test_f1_wrong_repository_anchor_rejected(tmp_path):
