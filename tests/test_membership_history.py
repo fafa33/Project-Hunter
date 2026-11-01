@@ -3,7 +3,11 @@ from datetime import UTC, datetime, timedelta
 
 import pytest
 
-from hunter.market_validation.membership_history import HistoricalMembershipSnapshot, ImmutableMembershipHistory
+from hunter.market_validation.membership_history import (
+    HistoricalMembershipSnapshot,
+    ImmutableMembershipHistory,
+    TrustedHistoryAnchor,
+)
 from hunter.market_validation.models import ProjectValidationTarget
 
 NOW = datetime(2026, 10, 1, tzinfo=UTC)
@@ -21,7 +25,17 @@ def snapshot(i=1, *, known_at=NOW, sector="other"):
         source_digest=f"sha256:{i}",
         registry_reference=f"registry:{i}",
         upstream_attestation=f"attestation:{i}",
+        ingested_at=known_at,
     )
+
+
+def anchor(history):
+    # Test fixture only: production anchor MUST come from independently trusted storage.
+    import sqlite3
+
+    with sqlite3.connect(history.path) as conn:
+        row = conn.execute("SELECT sequence, digest FROM membership_history ORDER BY sequence DESC LIMIT 1").fetchone()
+    return TrustedHistoryAnchor(*row)
 
 
 def test_append_only_cutoff_and_supersession(tmp_path):
@@ -30,10 +44,11 @@ def test_append_only_cutoff_and_supersession(tmp_path):
     later = NOW + timedelta(days=1)
     second = history.append(snapshot(known_at=later, sector="defi"))
     assert first != second
-    assert history.as_of(NOW)[0].project.sector == "other"
-    assert history.as_of(later)[0].project.sector == "defi"
-    with pytest.raises(ValueError, match="backdating"):
-        history.append(snapshot(2))
+    assert history.as_of(NOW, trusted_anchor=anchor(history))[0].project.sector == "other"
+    assert history.as_of(later, trusted_anchor=anchor(history))[0].project.sector == "defi"
+    with pytest.raises(ValueError, match="advance"):
+        history.append(snapshot(known_at=NOW))
+    history.append(snapshot(2))  # Different candidates need no global watermark.
 
 
 def test_mutation_and_deletion_blocked(tmp_path):
@@ -59,6 +74,7 @@ def test_shadow_is_fail_closed_without_verified_attestation(tmp_path):
         policy_version="v1",
         output_directory="reports/candidates",
         baseline_output_directory="reports/baseline",
+        trusted_anchor=anchor(history),
     )
     assert not result.runnable
     assert len(result.targets) == 0
@@ -84,9 +100,10 @@ def test_trusted_verifier_controls_shadow_admission(tmp_path):
         policy_version="v1",
         output_directory="reports/candidates",
         baseline_output_directory="reports/baseline",
+        trusted_anchor=anchor(history),
     )
-    rejected = history.authorize_shadow(**kwargs, verify_attestation=lambda att, source, digest: False)
-    accepted = history.authorize_shadow(**kwargs, verify_attestation=lambda att, source, digest: True)
+    rejected = history.authorize_shadow(**kwargs, verify_attestation=lambda att, payload_digest: False)
+    accepted = history.authorize_shadow(**kwargs, verify_attestation=lambda att, payload_digest: True)
     assert not rejected.runnable and accepted.runnable
     assert len(accepted.targets) == 50
 
@@ -125,5 +142,69 @@ def test_replace_insert_cannot_rewrite_history_from_separate_connection(tmp_path
                     "VALUES (?, ?, ?, ?, ?, ?)",
                     replacement,
                 )
-    assert history.as_of(NOW)[0].lifecycle_status == "identified"
+    assert history.as_of(NOW, trusted_anchor=anchor(history))[0].lifecycle_status == "identified"
     assert history.append(snapshot(2)) != digest
+
+
+def test_external_anchor_rejects_tail_truncation_and_rollback(tmp_path):
+    import sqlite3
+
+    history = ImmutableMembershipHistory(tmp_path / "history.sqlite")
+    history.append(snapshot(1))
+    history.append(snapshot(2))
+    trusted = anchor(history)
+    with sqlite3.connect(history.path) as conn:
+        conn.execute("DROP TRIGGER membership_history_no_delete")
+        conn.execute("DELETE FROM membership_history WHERE sequence=2")
+    with pytest.raises(ValueError, match="anchor mismatch"):
+        history.as_of(NOW, trusted_anchor=trusted)
+
+
+def test_preseeded_neutered_trigger_rejected(tmp_path):
+    import sqlite3
+
+    path = tmp_path / "history.sqlite"
+    ImmutableMembershipHistory(path)
+    with sqlite3.connect(path) as conn:
+        conn.execute("DROP TRIGGER membership_history_no_update")
+        conn.execute(
+            "CREATE TRIGGER membership_history_no_update BEFORE UPDATE ON membership_history WHEN 0 BEGIN SELECT RAISE(ABORT, 'immutable history'); END"
+        )
+    with pytest.raises(ValueError, match="untrusted membership history trigger"):
+        ImmutableMembershipHistory(path)
+
+
+def test_canonical_entity_requires_normalized_id(tmp_path):
+    history = ImmutableMembershipHistory(tmp_path / "history.sqlite")
+    for entity in ("Entity-A", " entity-a "):
+        with pytest.raises(ValueError, match="normalized"):
+            history.append(replace(snapshot(), canonical_entity_id=entity))
+
+
+def test_attestation_payload_digest_changes_with_identity_and_sector(tmp_path):
+    history = ImmutableMembershipHistory(tmp_path / "history.sqlite")
+    history.append(snapshot(1))
+    history.append(replace(snapshot(2), upstream_attestation="attestation:1", source_digest="sha256:1"))
+    seen = []
+
+    def verifier(attestation, payload_digest):
+        seen.append((attestation, payload_digest))
+        return False
+
+    history.as_of(NOW, trusted_anchor=anchor(history), verify_attestation=verifier)
+    assert len(seen) == 2
+    assert seen[0][0] == seen[1][0]
+    assert seen[0][1] != seen[1][1]
+
+
+def test_historical_backfill_not_visible_before_ingestion(tmp_path):
+    history = ImmutableMembershipHistory(tmp_path / "history.sqlite")
+    history.append(replace(snapshot(), ingested_at=NOW + timedelta(days=2)))
+    assert history.as_of(NOW, trusted_anchor=anchor(history)) == ()
+
+
+def test_same_timestamp_conflict_rejected(tmp_path):
+    history = ImmutableMembershipHistory(tmp_path / "history.sqlite")
+    history.append(snapshot())
+    with pytest.raises(ValueError, match="advance"):
+        history.append(snapshot(sector="defi"))
