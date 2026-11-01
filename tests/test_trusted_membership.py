@@ -669,89 +669,13 @@ def test_f5_registry_identity_verifier_accepts_exact_identity(tmp_path):
 
 
 def test_f5_registry_identity_verifier_accepts_with_exact_outcome(tmp_path):
-    from hunter.discovery.models import CandidateIdentifier, CandidateIdentity, CandidateRecord
-    from hunter.discovery.repository import CandidateRegistryRepository
-
-    reg_path = tmp_path / "registry.sqlite"
-    repository = CandidateRegistryRepository(reg_path)
-    candidate = CandidateRecord(
-        candidate_id="entity-1",
-        slug="entity-1",
-        name="Entity One",
-        sector="other",
-        primary_chain=None,
-        candidate_type="token",
-        symbol=None,
-        lifecycle_status="identified",
-        discovery_source="seed",
-        first_seen_at=NOW,
-        last_seen_at=NOW,
-        confidence=1.0,
-        identifiers=(
-            CandidateIdentifier(
-                candidate_id="entity-1",
-                namespace="hunter_project",
-                value="entity-1",
-                source="registry",
-            ),
-        ),
-    )
-    repository.upsert_candidate(candidate)
-    repository.save_identity_results(
-        (
-            CandidateIdentity(
-                candidate_id="entity-1",
-                outcome="exact",
-                confidence=1.0,
-                evidence_ids=(),
-                reason="exact identity",
-            ),
-        )
-    )
+    repository = _setup_registry_candidate(tmp_path, outcome="exact")
     verifier = RegistryIdentityVerifier(repository)
     assert verifier.verify_entity("entity-1")
 
 
 def test_f5_registry_identity_verifier_rejects_probable_identity(tmp_path):
-    from hunter.discovery.models import CandidateIdentifier, CandidateIdentity, CandidateRecord
-    from hunter.discovery.repository import CandidateRegistryRepository
-
-    reg_path = tmp_path / "registry.sqlite"
-    repository = CandidateRegistryRepository(reg_path)
-    candidate = CandidateRecord(
-        candidate_id="entity-1",
-        slug="entity-1",
-        name="Entity One",
-        sector="other",
-        primary_chain=None,
-        candidate_type="token",
-        symbol=None,
-        lifecycle_status="identified",
-        discovery_source="seed",
-        first_seen_at=NOW,
-        last_seen_at=NOW,
-        confidence=1.0,
-        identifiers=(
-            CandidateIdentifier(
-                candidate_id="entity-1",
-                namespace="hunter_project",
-                value="entity-1",
-                source="registry",
-            ),
-        ),
-    )
-    repository.upsert_candidate(candidate)
-    repository.save_identity_results(
-        (
-            CandidateIdentity(
-                candidate_id="entity-1",
-                outcome="probable",
-                confidence=0.85,
-                evidence_ids=(),
-                reason="probable identity",
-            ),
-        )
-    )
+    repository = _setup_registry_candidate(tmp_path, outcome="probable", confidence=0.85)
     verifier = RegistryIdentityVerifier(repository)
     # probable is not eligible.
     assert not verifier.verify_entity("entity-1")
