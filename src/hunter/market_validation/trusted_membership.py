@@ -173,14 +173,17 @@ class MembershipAnchorPin:
         if not self.required_rules <= declared:
             raise ValueError("membership anchor ruleset rules weakened")
 
-        if branch_rules is not None:
-            applied = {
-                str(rule.get("type"))
-                for rule in branch_rules
-                if isinstance(rule, dict) and rule.get("ruleset_id") == self.ruleset_id
-            }
-            if not self.required_rules <= applied:
-                raise ValueError("membership anchor ruleset does not cover this ref")
+        # A valid repository-wide ruleset alone does not prove that it applies
+        # to the exact anchor ref. Missing branch-specific evidence fails closed.
+        if branch_rules is None:
+            raise ValueError("membership anchor ref protection unverified")
+        applied = {
+            str(rule.get("type"))
+            for rule in branch_rules
+            if isinstance(rule, dict) and rule.get("ruleset_id") == self.ruleset_id
+        }
+        if not self.required_rules <= applied:
+            raise ValueError("membership anchor ruleset does not cover this ref")
 
 
 class RegistryIdentityVerifier:

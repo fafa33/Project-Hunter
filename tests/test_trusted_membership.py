@@ -490,6 +490,17 @@ def test_f2_github_anchor_reader():
     )
     with pytest.raises(ValueError, match="rules weakened"):
         reader4.read_signed_head(REPO)
+    # Repository-wide protection alone is insufficient without proof that
+    # the ruleset applies to the exact membership-anchor branch.
+    reader_unverified = GitHubAnchorReader(
+        REPO,
+        store=_FakeLedgerStore("head", _make_entries("{}")),
+        pin=_make_pin(),
+        ruleset=_intact_ruleset(),
+        branch_rules=None,
+    )
+    with pytest.raises(ValueError, match="ref protection unverified"):
+        reader_unverified.read_signed_head(REPO)
     # Valid anchor
     anchor_key = Ed25519PrivateKey.generate()
     anchor_payload = {"repository": REPO, "sequence": 1, "digest": "0" * 64}
