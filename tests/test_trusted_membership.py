@@ -145,17 +145,15 @@ def test_attestation_replay_fails_on_modified_entity(tmp_path):
     assert trust.verify_evidence(att, json.loads(att)["payload"]["payload_digest"])
 
 
-def test_external_anchor_detects_truncation(tmp_path):
+def test_external_anchor_truncation_and_forgery_rejected(tmp_path):
     history, trust, anchor = fixture(tmp_path)
+    # Truncation
     with sqlite3.connect(history.path) as conn:
         conn.execute("DROP TRIGGER membership_history_no_delete")
         conn.execute("DELETE FROM membership_history WHERE sequence=50")
     with pytest.raises(ValueError, match="anchor mismatch"):
         run_shadow(history, trust, anchor)
-
-
-def test_unsigned_or_forged_anchor_rejected(tmp_path):
-    history, trust, anchor = fixture(tmp_path)
+    # Forged anchor
     claim = json.loads(anchor)
     claim["payload"]["sequence"] = 49
     with pytest.raises(ValueError, match="untrusted membership anchor"):
