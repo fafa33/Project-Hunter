@@ -235,8 +235,22 @@ class ImmutableMembershipHistory:
         verify_attestation: Callable[[str, str], bool] | None = None,
         trusted_anchor: TrustedHistoryAnchor | None = None,
     ) -> AuthorizedUniverse:
-        # Only a caller-supplied trusted verifier can attest historical evidence.
-        # Without one, the shadow path remains non-runnable by design.
+        # Legacy caller-injected callbacks cannot confer admission authority.
+        # The only supported path is the pinned, signed trust adapter.
+        raise ValueError("legacy callback admission disabled; use pinned membership trust adapter")
+
+    def _authorize_verified_shadow(
+        self,
+        *,
+        cutoff: datetime,
+        run_id: str,
+        baseline_run_id: str,
+        policy_version: str,
+        output_directory: str,
+        baseline_output_directory: str,
+        verify_attestation: Callable[[str, str], bool],
+        trusted_anchor: TrustedHistoryAnchor,
+    ) -> AuthorizedUniverse:
         return MarketValidationUniverseMembershipAuthority().authorize(
             self.as_of(cutoff, verify_attestation=verify_attestation, trusted_anchor=trusted_anchor),
             cutoff=cutoff,

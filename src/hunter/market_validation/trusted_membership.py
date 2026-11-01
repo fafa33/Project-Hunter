@@ -99,7 +99,7 @@ class PinnedMembershipTrust:
         output_directory: str,
         baseline_output_directory: str,
     ) -> AuthorizedUniverse:
-        return history.authorize_shadow(
+        return history._authorize_verified_shadow(
             cutoff=cutoff,
             run_id=run_id,
             baseline_run_id=baseline_run_id,
@@ -109,3 +109,54 @@ class PinnedMembershipTrust:
             trusted_anchor=self.verify_anchor(signed_external_anchor),
             verify_attestation=self.verify_evidence,
         )
+
+
+class ExternalAnchorReader:
+    """An independently authenticated anti-rollback read, never a SQLite-derived head."""
+
+    def read_signed_head(self, repository: str) -> str:
+        raise NotImplementedError
+
+
+def load_pinned_membership_trust(document: dict[str, Any]) -> PinnedMembershipTrust:
+    """Explicitly provisioned keys only; no generated or environment fallback."""
+    if document.get("schema_version") != "hunter-membership-trust-v1" or document.get("provisioned") is not True:
+        raise ValueError("membership trust roots not provisioned")
+    if set(document) != {"schema_version", "provisioned", "repository", "evidence_public_key", "anchor_public_key"}:
+        raise ValueError("unexpected membership trust configuration")
+    repository = document["repository"]
+    if not isinstance(repository, str) or "/" not in repository:
+        raise ValueError("invalid trusted repository")
+    try:
+        evidence_key = Ed25519PublicKey.from_public_bytes(bytes.fromhex(document["evidence_public_key"]))
+        anchor_key = Ed25519PublicKey.from_public_bytes(bytes.fromhex(document["anchor_public_key"]))
+    except (TypeError, ValueError) as exc:
+        raise ValueError("invalid pinned membership public keys") from exc
+    return PinnedMembershipTrust(repository, evidence_key, anchor_key)
+
+
+def authorize_from_external_anchor(
+    history: ImmutableMembershipHistory,
+    *,
+    trust: PinnedMembershipTrust,
+    anchor_reader: ExternalAnchorReader,
+    cutoff: datetime,
+    run_id: str,
+    baseline_run_id: str,
+    policy_version: str,
+    output_directory: str,
+    baseline_output_directory: str,
+) -> AuthorizedUniverse:
+    signed_head = anchor_reader.read_signed_head(trust.repository)
+    if not isinstance(signed_head, str) or not signed_head:
+        raise ValueError("external anchor unavailable")
+    return trust.authorize_shadow(
+        history,
+        signed_external_anchor=signed_head,
+        cutoff=cutoff,
+        run_id=run_id,
+        baseline_run_id=baseline_run_id,
+        policy_version=policy_version,
+        output_directory=output_directory,
+        baseline_output_directory=baseline_output_directory,
+    )

@@ -121,3 +121,38 @@ def test_unsigned_or_forged_anchor_rejected(tmp_path):
     claim["payload"]["sequence"] = 49
     with pytest.raises(ValueError, match="untrusted membership anchor"):
         run_shadow(history, trust, json.dumps(claim))
+
+
+def test_unprovisioned_trust_roots_fail_closed():
+    from hunter.market_validation.trusted_membership import load_pinned_membership_trust
+
+    with pytest.raises(ValueError, match="not provisioned"):
+        load_pinned_membership_trust({"schema_version": "hunter-membership-trust-v1", "provisioned": False})
+
+
+def test_external_anchor_reader_must_supply_signed_head(tmp_path):
+    from hunter.market_validation.trusted_membership import ExternalAnchorReader, authorize_from_external_anchor
+
+    history, trust, anchor = fixture(tmp_path)
+
+    class Reader(ExternalAnchorReader):
+        def __init__(self, value):
+            self.value = value
+
+        def read_signed_head(self, repository):
+            assert repository == REPO
+            return self.value
+
+    kwargs = dict(
+        history=history,
+        trust=trust,
+        cutoff=NOW,
+        run_id="candidate",
+        baseline_run_id="baseline",
+        policy_version="v1",
+        output_directory="reports/candidates",
+        baseline_output_directory="reports/baseline",
+    )
+    with pytest.raises(ValueError, match="external anchor unavailable"):
+        authorize_from_external_anchor(**kwargs, anchor_reader=Reader(""))
+    assert authorize_from_external_anchor(**kwargs, anchor_reader=Reader(anchor)).runnable

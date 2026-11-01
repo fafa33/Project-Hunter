@@ -63,22 +63,20 @@ def test_mutation_and_deletion_blocked(tmp_path):
             conn.execute("UPDATE membership_history SET content = 'tampered'")
 
 
-def test_shadow_is_fail_closed_without_verified_attestation(tmp_path):
+def test_legacy_shadow_entrypoint_is_disabled(tmp_path):
     history = ImmutableMembershipHistory(tmp_path / "history.sqlite")
-    for i in range(50):
-        history.append(snapshot(i))
-    result = history.authorize_shadow(
-        cutoff=NOW,
-        run_id="candidate",
-        baseline_run_id="baseline",
-        policy_version="v1",
-        output_directory="reports/candidates",
-        baseline_output_directory="reports/baseline",
-        trusted_anchor=anchor(history),
-    )
-    assert not result.runnable
-    assert len(result.targets) == 0
-    assert all(d.outcome == "unavailable" for d in result.decisions)
+    history.append(snapshot())
+    with pytest.raises(ValueError, match="legacy callback admission disabled"):
+        history.authorize_shadow(
+            cutoff=NOW,
+            run_id="candidate",
+            baseline_run_id="baseline",
+            policy_version="v1",
+            output_directory="reports/candidates",
+            baseline_output_directory="reports/baseline",
+            trusted_anchor=anchor(history),
+            verify_attestation=lambda *_: True,
+        )
 
 
 def test_attestation_and_time_required(tmp_path):
@@ -87,25 +85,6 @@ def test_attestation_and_time_required(tmp_path):
         history.append(replace(snapshot(), upstream_attestation=""))
     with pytest.raises(ValueError, match="before observation"):
         history.append(snapshot(known_at=NOW - timedelta(seconds=1)))
-
-
-def test_trusted_verifier_controls_shadow_admission(tmp_path):
-    history = ImmutableMembershipHistory(tmp_path / "history.sqlite")
-    for i in range(50):
-        history.append(snapshot(i))
-    kwargs = dict(
-        cutoff=NOW,
-        run_id="candidate",
-        baseline_run_id="baseline",
-        policy_version="v1",
-        output_directory="reports/candidates",
-        baseline_output_directory="reports/baseline",
-        trusted_anchor=anchor(history),
-    )
-    rejected = history.authorize_shadow(**kwargs, verify_attestation=lambda att, payload_digest: False)
-    accepted = history.authorize_shadow(**kwargs, verify_attestation=lambda att, payload_digest: True)
-    assert not rejected.runnable and accepted.runnable
-    assert len(accepted.targets) == 50
 
 
 def test_replace_insert_cannot_rewrite_history_from_separate_connection(tmp_path):
