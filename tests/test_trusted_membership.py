@@ -249,28 +249,24 @@ def test_f1_malformed_signature_rejected(tmp_path):
 # --- F-2 hostile tests: anchor pin and ruleset verification ----------------
 
 
-def test_f2_anchor_pin_rejects_wrong_ruleset_id():
+def test_f2_anchor_pin_rejects_invalid():
+    # Wrong ruleset ID
     pin = MembershipAnchorPin(ruleset_id=99999, updated_at="2026-10-06T20:52:31.773Z")
     with pytest.raises(ValueError, match="missing or replaced"):
         pin.verify(
             {"id": 24526712, "enforcement": "active", "rules": [{"type": "deletion"}, {"type": "non_fast_forward"}]},
             None,
         )
-
-
-def test_f2_anchor_pin_rejects_inactive_ruleset():
-    pin = _make_pin()
+    # Inactive ruleset
+    pin2 = _make_pin()
     with pytest.raises(ValueError, match="not active"):
-        pin.verify(
+        pin2.verify(
             {"id": 24526712, "enforcement": "inactive", "rules": [{"type": "deletion"}, {"type": "non_fast_forward"}]},
             None,
         )
-
-
-def test_f2_anchor_pin_rejects_weakened_rules():
-    pin = _make_pin()
+    # Weakened rules
     with pytest.raises(ValueError, match="rules weakened"):
-        pin.verify(
+        pin2.verify(
             {
                 "id": 24526712,
                 "enforcement": "active",
@@ -279,12 +275,9 @@ def test_f2_anchor_pin_rejects_weakened_rules():
             },
             None,
         )
-
-
-def test_f2_anchor_pin_rejects_stale_updated_at():
-    pin = _make_pin()
+    # Stale updated_at
     with pytest.raises(ValueError, match="modified since it was pinned"):
-        pin.verify(
+        pin2.verify(
             {
                 "id": 24526712,
                 "enforcement": "active",
@@ -293,15 +286,12 @@ def test_f2_anchor_pin_rejects_stale_updated_at():
             },
             None,
         )
-
-
-def test_f2_anchor_pin_rejects_ruleset_not_covering_ref():
-    pin = _make_pin()
+    # Ruleset not covering ref
     with pytest.raises(ValueError, match="does not cover this ref"):
-        pin.verify(_intact_ruleset(), [{"type": "deletion", "ruleset_id": 99999}])
+        pin2.verify(_intact_ruleset(), [{"type": "deletion", "ruleset_id": 99999}])
 
 
-def test_f2_anchor_pin_accepts_intact_ruleset():
+def test_f2_anchor_pin_accepts_intact():
     pin = _make_pin()
     pin.verify(_intact_ruleset(), _intact_branch_rules())  # should not raise
 
