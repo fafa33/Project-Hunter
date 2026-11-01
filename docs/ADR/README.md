@@ -174,3 +174,6 @@ It does not own:
 - development workflow.
 
 Those responsibilities remain with their respective canonical owners.
+## Current Proposed Decision
+
+- [ADR 0040 — Governed Discovery Candidate Universe Admission](0040-discovery-candidate-universe-admission.md) — **Proposed**, Issue #666 / PR #669; independent architecture re-audit and owner acceptance required before this becomes binding.
