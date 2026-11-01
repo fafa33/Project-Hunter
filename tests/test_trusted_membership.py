@@ -545,24 +545,30 @@ def _make_entries(anchor_text: str) -> list[tuple[str, dict[str, bytes]]]:
     return [("abc123", {"membership-anchor.json": anchor_text.encode("utf-8")})]
 
 
-def test_f2_github_anchor_reader_missing_anchor():
-    pin = MembershipAnchorPin(ruleset_id=24526712, updated_at="2026-10-06T20:52:31.773Z")
-    ruleset = {
+def _intact_ruleset() -> dict:
+    return {
         "id": 24526712,
         "enforcement": "active",
         "updated_at": "2026-10-06T20:52:31.773Z",
         "rules": [{"type": "deletion"}, {"type": "non_fast_forward"}],
     }
-    branch_rules = [
+
+
+def _intact_branch_rules() -> list[dict]:
+    return [
         {"type": "deletion", "ruleset_id": 24526712},
         {"type": "non_fast_forward", "ruleset_id": 24526712},
     ]
+
+
+def test_f2_github_anchor_reader_missing_anchor():
+    pin = MembershipAnchorPin(ruleset_id=24526712, updated_at="2026-10-06T20:52:31.773Z")
     reader = GitHubAnchorReader(
         REPO,
         store=_FakeLedgerStore("head", []),
         pin=pin,
-        ruleset=ruleset,
-        branch_rules=branch_rules,
+        ruleset=_intact_ruleset(),
+        branch_rules=_intact_branch_rules(),
     )
     with pytest.raises(ValueError, match="external anchor unavailable"):
         reader.read_signed_head(REPO)
@@ -570,22 +576,12 @@ def test_f2_github_anchor_reader_missing_anchor():
 
 def test_f2_github_anchor_reader_malformed_anchor():
     pin = MembershipAnchorPin(ruleset_id=24526712, updated_at="2026-10-06T20:52:31.773Z")
-    ruleset = {
-        "id": 24526712,
-        "enforcement": "active",
-        "updated_at": "2026-10-06T20:52:31.773Z",
-        "rules": [{"type": "deletion"}, {"type": "non_fast_forward"}],
-    }
-    branch_rules = [
-        {"type": "deletion", "ruleset_id": 24526712},
-        {"type": "non_fast_forward", "ruleset_id": 24526712},
-    ]
     reader = GitHubAnchorReader(
         REPO,
         store=_FakeLedgerStore("head", _make_entries("not valid json")),
         pin=pin,
-        ruleset=ruleset,
-        branch_rules=branch_rules,
+        ruleset=_intact_ruleset(),
+        branch_rules=_intact_branch_rules(),
     )
     # Reader returns the raw anchor text; signature verification happens in
     # PinnedMembershipTrust.verify_anchor().
@@ -604,22 +600,12 @@ def test_f2_github_anchor_reader_malformed_anchor():
 
 def test_f2_github_anchor_reader_unexpected_file_layout():
     pin = MembershipAnchorPin(ruleset_id=24526712, updated_at="2026-10-06T20:52:31.773Z")
-    ruleset = {
-        "id": 24526712,
-        "enforcement": "active",
-        "updated_at": "2026-10-06T20:52:31.773Z",
-        "rules": [{"type": "deletion"}, {"type": "non_fast_forward"}],
-    }
-    branch_rules = [
-        {"type": "deletion", "ruleset_id": 24526712},
-        {"type": "non_fast_forward", "ruleset_id": 24526712},
-    ]
     reader = GitHubAnchorReader(
         REPO,
         store=_FakeLedgerStore("head", [("abc123", "not-a-dict")]),
         pin=pin,
-        ruleset=ruleset,
-        branch_rules=branch_rules,
+        ruleset=_intact_ruleset(),
+        branch_rules=_intact_branch_rules(),
     )
     with pytest.raises(ValueError, match="unexpected file layout"):
         reader.read_signed_head(REPO)
@@ -627,22 +613,12 @@ def test_f2_github_anchor_reader_unexpected_file_layout():
 
 def test_f2_github_anchor_reader_mismatched_repository():
     pin = MembershipAnchorPin(ruleset_id=24526712, updated_at="2026-10-06T20:52:31.773Z")
-    ruleset = {
-        "id": 24526712,
-        "enforcement": "active",
-        "updated_at": "2026-10-06T20:52:31.773Z",
-        "rules": [{"type": "deletion"}, {"type": "non_fast_forward"}],
-    }
-    branch_rules = [
-        {"type": "deletion", "ruleset_id": 24526712},
-        {"type": "non_fast_forward", "ruleset_id": 24526712},
-    ]
     reader = GitHubAnchorReader(
         REPO,
         store=_FakeLedgerStore("head", _make_entries("{}")),
         pin=pin,
-        ruleset=ruleset,
-        branch_rules=branch_rules,
+        ruleset=_intact_ruleset(),
+        branch_rules=_intact_branch_rules(),
     )
     with pytest.raises(ValueError, match="anchor repository mismatch"):
         reader.read_signed_head("other/repository")
@@ -675,22 +651,12 @@ def test_f2_github_anchor_reader_valid_anchor():
     anchor_payload = {"repository": REPO, "sequence": 1, "digest": "0" * 64}
     signed_anchor = signed(anchor_key, ANCHOR_DOMAIN, anchor_payload)
     pin = MembershipAnchorPin(ruleset_id=24526712, updated_at="2026-10-06T20:52:31.773Z")
-    ruleset = {
-        "id": 24526712,
-        "enforcement": "active",
-        "updated_at": "2026-10-06T20:52:31.773Z",
-        "rules": [{"type": "deletion"}, {"type": "non_fast_forward"}],
-    }
-    branch_rules = [
-        {"type": "deletion", "ruleset_id": 24526712},
-        {"type": "non_fast_forward", "ruleset_id": 24526712},
-    ]
     reader = GitHubAnchorReader(
         REPO,
         store=_FakeLedgerStore("head", _make_entries(signed_anchor)),
         pin=pin,
-        ruleset=ruleset,
-        branch_rules=branch_rules,
+        ruleset=_intact_ruleset(),
+        branch_rules=_intact_branch_rules(),
     )
     result = reader.read_signed_head(REPO)
     assert result == signed_anchor
@@ -734,6 +700,50 @@ def test_f3_trusted_ingress_caller_cannot_backdate(tmp_path):
 # --- F-5 integration tests: RegistryIdentityVerifier ------------------------
 
 
+def _setup_registry_candidate(tmp_path, outcome="exact", confidence=1.0, candidate_id="entity-1"):
+    """Helper to create a Registry candidate with the given identity outcome."""
+    from hunter.discovery.models import CandidateIdentifier, CandidateIdentity, CandidateRecord
+    from hunter.discovery.repository import CandidateRegistryRepository
+
+    reg_path = tmp_path / "registry.sqlite"
+    repository = CandidateRegistryRepository(reg_path)
+    candidate = CandidateRecord(
+        candidate_id=candidate_id,
+        slug=candidate_id,
+        name="Entity One",
+        sector="other",
+        primary_chain=None,
+        candidate_type="token",
+        symbol=None,
+        lifecycle_status="identified",
+        discovery_source="seed",
+        first_seen_at=NOW,
+        last_seen_at=NOW,
+        confidence=confidence,
+        identifiers=(
+            CandidateIdentifier(
+                candidate_id=candidate_id,
+                namespace="hunter_project",
+                value=candidate_id,
+                source="registry",
+            ),
+        ),
+    )
+    repository.upsert_candidate(candidate)
+    repository.save_identity_results(
+        (
+            CandidateIdentity(
+                candidate_id=candidate_id,
+                outcome=outcome,
+                confidence=confidence,
+                evidence_ids=(),
+                reason=f"{outcome} identity",
+            ),
+        )
+    )
+    return repository
+
+
 def test_f5_registry_identity_verifier_rejects_unmapped(tmp_path):
     from hunter.discovery.repository import CandidateRegistryRepository
 
@@ -745,38 +755,9 @@ def test_f5_registry_identity_verifier_rejects_unmapped(tmp_path):
 
 
 def test_f5_registry_identity_verifier_accepts_exact_identity(tmp_path):
-
-    from hunter.discovery.models import CandidateIdentifier, CandidateRecord
-    from hunter.discovery.repository import CandidateRegistryRepository
-
-    reg_path = tmp_path / "registry.sqlite"
-    repository = CandidateRegistryRepository(reg_path)
-    candidate = CandidateRecord(
-        candidate_id="entity-1",
-        slug="entity-1",
-        name="Entity One",
-        sector="other",
-        primary_chain=None,
-        candidate_type="token",
-        symbol=None,
-        lifecycle_status="identified",
-        discovery_source="seed",
-        first_seen_at=NOW,
-        last_seen_at=NOW,
-        confidence=1.0,
-        identifiers=(
-            CandidateIdentifier(
-                candidate_id="entity-1",
-                namespace="hunter_project",
-                value="entity-1",
-                source="registry",
-            ),
-        ),
-    )
-    repository.upsert_candidate(candidate)
+    repository = _setup_registry_candidate(tmp_path, outcome="exact")
     verifier = RegistryIdentityVerifier(repository)
-    # Candidate with no identity result yet -> not verified.
-    assert not verifier.verify_entity("entity-1")
+    assert verifier.verify_entity("entity-1")
 
 
 def test_f5_registry_identity_verifier_accepts_with_exact_outcome(tmp_path):
