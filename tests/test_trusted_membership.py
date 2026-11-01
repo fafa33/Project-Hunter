@@ -202,33 +202,24 @@ def _first_row_and_attestation(tmp_path):
     return trust, row["upstream_attestation"], row
 
 
-def test_f1_modified_sector_rejected(tmp_path):
+@pytest.mark.parametrize(
+    "field, value",
+    [
+        ("sector", "defi"),
+        ("lifecycle_status", "rejected"),
+        ("known_at", "2020-01-01T00:00:00+00:00"),
+        ("source_digest", "sha256:forged"),
+    ],
+)
+def test_f1_modified_field_rejected(tmp_path, field, value):
     trust, att, row = _first_row_and_attestation(tmp_path)
     modified = dict(row)
-    modified["project"] = dict(row["project"], sector="defi")
+    if field == "sector":
+        modified["project"] = dict(row["project"], sector=value)
+    else:
+        modified[field] = value
     assert not trust.verify_evidence(att, _content_digest_without_attestation(modified))
     assert trust.verify_evidence(att, _content_digest_without_attestation(row))
-
-
-def test_f1_modified_lifecycle_rejected(tmp_path):
-    trust, att, row = _first_row_and_attestation(tmp_path)
-    modified = dict(row)
-    modified["lifecycle_status"] = "rejected"
-    assert not trust.verify_evidence(att, _content_digest_without_attestation(modified))
-
-
-def test_f1_modified_timestamps_rejected(tmp_path):
-    trust, att, row = _first_row_and_attestation(tmp_path)
-    modified = dict(row)
-    modified["known_at"] = "2020-01-01T00:00:00+00:00"
-    assert not trust.verify_evidence(att, _content_digest_without_attestation(modified))
-
-
-def test_f1_modified_source_digest_rejected(tmp_path):
-    trust, att, row = _first_row_and_attestation(tmp_path)
-    modified = dict(row)
-    modified["source_digest"] = "sha256:forged"
-    assert not trust.verify_evidence(att, _content_digest_without_attestation(modified))
 
 
 def test_f1_wrong_repository_anchor_rejected(tmp_path):
