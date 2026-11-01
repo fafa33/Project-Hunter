@@ -53,6 +53,21 @@ class ProbeFailed(RuntimeError):
     """The probe could not establish its own trusted base. Its message never carries candidate content."""
 
 
+class StagedProbeFailed(ProbeFailed):
+    """Closed, non-sensitive diagnostic stage code; never expose the underlying exception."""
+
+    def __init__(self, code: str) -> None:
+        if code not in {
+            "PROBE_PATH_INVALID",
+            "PROBE_GIT_PREPARE_FAILED",
+            "PROBE_LAUNCH_FAILED",
+            "PROBE_COLLECT_FAILED",
+        }:
+            raise ValueError("unknown diagnostic stage")
+        self.code = code
+        super().__init__(code)
+
+
 _DANGEROUS_GIT_FLAGS: Final = frozenset(
     {
         "--upload-pack",
@@ -142,8 +157,7 @@ def _git(git_dir: Path, workspace: Path, *args: str) -> bytes:
         timeout=300,
     )
     if completed.returncode != 0:
-        action = args[0] if args else "command"
-        raise ProbeFailed(f"probe git {action} failed")
+        raise StagedProbeFailed("PROBE_GIT_PREPARE_FAILED")
     return completed.stdout
 
 
@@ -310,14 +324,22 @@ def run_probe(
     except ValueError:
         pass
 
-    base_sha = prepare(valid_source, valid_workspace, valid_git_dir)
+    try:
+        base_sha = prepare(valid_source, valid_workspace, valid_git_dir)
+    except StagedProbeFailed:
+        raise
+    except (ProbeFailed, OSError, subprocess.TimeoutExpired) as exc:
+        raise StagedProbeFailed("PROBE_GIT_PREPARE_FAILED") from exc
     valid_home.mkdir(mode=0o700, parents=True, exist_ok=True)
     invocation = probe_invocation(opencode=opencode, model=model, home=valid_home, workspace=valid_workspace)
     telemetry = " ".join(f"{name}={value}" for name, value in contract_telemetry(invocation, valid_workspace).items())
     print(f"hosted diagnostic contract: {telemetry}", flush=True)
     timed_out = False
     status = 1
-    isolation.prepare(valid_workspace, valid_home)
+    try:
+        isolation.prepare(valid_workspace, valid_home)
+    except (roles.RoleRefused, OSError) as exc:
+        raise StagedProbeFailed("PROBE_LAUNCH_FAILED") from exc
     try:
         status = isolation.run(
             invocation.argv,
@@ -331,7 +353,10 @@ def run_probe(
         timed_out = True
     finally:
         isolation.stop()  # nothing the model started survives into collection
-    tracked_edit, changed_files = assess(valid_workspace, valid_git_dir, base_sha)
+    try:
+        tracked_edit, changed_files = assess(valid_workspace, valid_git_dir, base_sha)
+    except (ProbeFailed, OSError, ValueError) as exc:
+        raise StagedProbeFailed("PROBE_COLLECT_FAILED") from exc
     outcome = ProbeOutcome(
         exit_zero=status == 0 and not timed_out,
         timed_out=timed_out,
@@ -363,7 +388,7 @@ def _parser() -> argparse.ArgumentParser:
 
 def main(argv: Sequence[str] | None = None) -> int:
     arguments = _parser().parse_args(argv)
-    for flag_name, path_val in (
+    for _flag_name, path_val in (
         ("--source", arguments.source),
         ("--workspace", arguments.workspace),
         ("--git-dir", arguments.git_dir),
@@ -372,7 +397,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     ):
         raw = str(path_val)
         if not raw or any(part.startswith("-") for part in path_val.parts) or "\0" in raw or ".." in path_val.parts:
-            print(f"hosted diagnostic refused: invalid path for {flag_name}")
+            print("hosted diagnostic refused: PROBE_PATH_INVALID")
             return 2
     if (
         not arguments.isolation_user

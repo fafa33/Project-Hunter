@@ -406,4 +406,49 @@ def test_probe_cli_rejects_traversal_and_unsafe_flags(capsys: pytest.CaptureFixt
         ]
     )
     assert rc == 2
-    assert "invalid path for --workspace" in capsys.readouterr().out
+    assert "PROBE_PATH_INVALID" in capsys.readouterr().out
+
+
+def test_staged_probe_errors_are_closed_codes_and_do_not_echo_secrets(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    for stage in ("PROBE_PATH_INVALID", "PROBE_GIT_PREPARE_FAILED", "PROBE_LAUNCH_FAILED", "PROBE_COLLECT_FAILED"):
+
+        def fail(_stage: str = stage, **_kwargs: object) -> probe.ProbeOutcome:
+            raise probe.StagedProbeFailed(_stage) from RuntimeError(PRIVATE_MODEL_TEXT + CREDENTIAL)
+
+        monkeypatch.setattr(probe, "run_probe", fail)
+        monkeypatch.setattr(probe.roles, "SudoIsolation", lambda _user: StandInIsolation())
+        monkeypatch.setenv("HUNTER_DIAGNOSTIC_KEY", CREDENTIAL)
+        rc = probe.main(
+            [
+                "--source",
+                "/src",
+                "--workspace",
+                "/ws",
+                "--git-dir",
+                "/ws.git",
+                "--home",
+                "/home",
+                "--opencode",
+                "/opt/hunter/bin/opencode",
+                "--model",
+                "m",
+                "--secret-env",
+                "HUNTER_DIAGNOSTIC_KEY",
+                "--model-key-name",
+                "GROQ_API_KEY",
+            ]
+        )
+        output = capsys.readouterr().out
+        assert rc == 2
+        assert f"hosted diagnostic refused: {stage}" in output
+        assert PRIVATE_MODEL_TEXT not in output and CREDENTIAL not in output
+
+
+def test_git_failure_uses_non_sensitive_stage_code(tmp_path: Path) -> None:
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    with pytest.raises(probe.StagedProbeFailed) as caught:
+        probe._git(tmp_path / "metadata.git", workspace, "rev-parse", "HEAD")
+    assert caught.value.code == "PROBE_GIT_PREPARE_FAILED"
