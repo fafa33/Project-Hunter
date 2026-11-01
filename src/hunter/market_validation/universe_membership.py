@@ -66,14 +66,22 @@ class MarketValidationUniverseMembershipAuthority:
     ) -> AuthorizedUniverse:
         if cutoff.tzinfo is None or not run_id.strip() or not policy_version.strip():
             raise ValueError("aware cutoff, run_id and policy_version are required")
-        if (run_id == baseline_run_id or minimum_entities < 50 or not output_directory.strip()
-                or not baseline_output_directory.strip()):
+        if (
+            run_id == baseline_run_id
+            or minimum_entities < 50
+            or not output_directory.strip()
+            or not baseline_output_directory.strip()
+        ):
             raise ValueError("candidate run must be isolated and preserve the 50-entity minimum")
         from pathlib import PurePosixPath
 
         candidate_path = PurePosixPath(output_directory)
         baseline_path = PurePosixPath(baseline_output_directory)
-        if candidate_path == baseline_path or candidate_path in baseline_path.parents or baseline_path in candidate_path.parents:
+        if (
+            candidate_path == baseline_path
+            or candidate_path in baseline_path.parents
+            or baseline_path in candidate_path.parents
+        ):
             raise ValueError("candidate output must not overlap baseline output")
         cutoff = cutoff.astimezone(UTC)
         decisions: list[MembershipDecision] = []
@@ -106,15 +114,24 @@ class MarketValidationUniverseMembershipAuthority:
         # Never expose an undersized candidate universe as executable.
         runnable = len(targets) >= minimum_entities
         payload = {
-            "cutoff": cutoff.isoformat(), "run_id": run_id, "policy_version": policy_version,
+            "cutoff": cutoff.isoformat(),
+            "run_id": run_id,
+            "policy_version": policy_version,
             "output_directory": str(candidate_path),
             "evidence": [
-                {"candidate_id": e.candidate_id, "entity_id": e.canonical_entity_id,
-                 "known_at": e.known_at.isoformat(), "observed_at": e.observed_at.isoformat(),
-                 "digest": e.source_digest, "registry": e.registry_reference, "verified": e.provenance_verified}
+                {
+                    "candidate_id": e.candidate_id,
+                    "entity_id": e.canonical_entity_id,
+                    "known_at": e.known_at.isoformat(),
+                    "observed_at": e.observed_at.isoformat(),
+                    "digest": e.source_digest,
+                    "registry": e.registry_reference,
+                    "verified": e.provenance_verified,
+                }
                 for e in sorted(evidence, key=lambda e: (e.candidate_id, e.canonical_entity_id))
             ],
-            "decisions": [d.__dict__ for d in decisions], "runnable": runnable,
+            "decisions": [d.__dict__ for d in decisions],
+            "runnable": runnable,
         }
         digest = hashlib.sha256(json.dumps(payload, sort_keys=True, separators=(",", ":")).encode()).hexdigest()
         return AuthorizedUniverse(run_id, cutoff, policy_version, tuple(decisions), tuple(targets), digest, runnable)
