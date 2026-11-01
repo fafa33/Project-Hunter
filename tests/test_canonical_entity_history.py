@@ -122,3 +122,16 @@ def test_future_dated_attestation_cannot_hide_from_cutoff_verification(tmp_path)
             cutoff=NOW,
             verify_attestation=lambda payload: payload["candidate_id"] != "candidate-b",
         )
+
+
+def test_replay_normalizes_timezone_offsets_before_cutoff():
+    from hunter.discovery.canonical_history import digest_payload, replay_canonical_entities
+
+    payload = record().payload(repository=REPO, ingested_at=NOW, previous_digest=f"GENESIS:{REPO}")
+    payload["known_at"] = "2026-10-01T01:00:00+01:00"
+    payload["observed_at"] = "2026-10-01T00:00:00+00:00"
+    payload["ingested_at"] = "2026-10-01T02:00:00+02:00"
+    entries = [(digest_payload(payload), payload)]
+    assert replay_canonical_entities(entries, repository=REPO, cutoff=NOW, verify_attestation=lambda _: True) == {
+        "entity-a": "candidate-a"
+    }

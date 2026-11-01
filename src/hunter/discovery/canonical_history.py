@@ -82,9 +82,10 @@ def replay_canonical_entities(
     verify_attestation: Callable[[dict[str, Any]], bool],
 ) -> dict[str, str]:
     """Strict-known replay; returns entity -> candidate only for proven unique exact mappings."""
-    cutoff_text = _time(cutoff)
+    cutoff_time = datetime.fromisoformat(_time(cutoff))
     previous = f"GENESIS:{repository}"
     candidates: dict[str, dict[str, Any]] = {}
+    candidate_known: dict[str, datetime] = {}
     for digest, payload in entries:
         if payload.get("repository") != repository or payload.get("previous_digest") != previous:
             raise ValueError("canonical identity chain mismatch")
@@ -99,18 +100,20 @@ def replay_canonical_entities(
         if not all(isinstance(value, str) for value in (observed, known, ingested)):
             raise ValueError("canonical identity chronology invalid")
         try:
-            if not all(datetime.fromisoformat(value).tzinfo is not None for value in (observed, known, ingested)):
+            parsed = [datetime.fromisoformat(value) for value in (observed, known, ingested)]
+            if not all(value.tzinfo is not None for value in parsed):
                 raise ValueError("canonical identity chronology invalid")
+            observed_time, known_time, ingested_time = (value.astimezone(UTC) for value in parsed)
         except (TypeError, ValueError) as exc:
             raise ValueError("canonical identity chronology invalid") from exc
-        if not observed <= known <= ingested:
+        if not observed_time <= known_time <= ingested_time:
             raise ValueError("canonical identity chronology invalid")
-        if known > cutoff_text or ingested > cutoff_text:
-            continue
         candidate_id = str(payload["candidate_id"])
-        prior = candidates.get(candidate_id)
-        if prior is not None and known <= prior["known_at"]:
+        if candidate_id in candidate_known and known_time <= candidate_known[candidate_id]:
             raise ValueError("canonical identity ambiguous supersession")
+        candidate_known[candidate_id] = known_time
+        if known_time > cutoff_time or ingested_time > cutoff_time:
+            continue
         candidates[candidate_id] = payload
     eligible: dict[str, str] = {}
     counts: dict[str, int] = {}
