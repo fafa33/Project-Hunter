@@ -231,26 +231,20 @@ def test_f1_modified_field_rejected(tmp_path, field, value):
     assert trust.verify_evidence(att, _content_digest_without_attestation(row))
 
 
-def test_f1_wrong_repository_anchor_rejected(tmp_path):
+def test_f1_signature_replay_and_malformed_rejected(tmp_path):
     history, trust, anchor = fixture(tmp_path)
+    # Wrong repository
     claim = json.loads(anchor)
     claim["payload"]["repository"] = "other/repository"
     with pytest.raises(ValueError, match="untrusted membership anchor"):
         run_shadow(history, trust, json.dumps(claim))
-
-
-def test_f1_replayed_signature_rejected(tmp_path):
-    history, trust, anchor = fixture(tmp_path)
+    # Replayed signature
     with sqlite3.connect(history.path) as conn:
         rows = conn.execute("SELECT content FROM membership_history ORDER BY sequence LIMIT 2").fetchall()
         att1 = json.loads(rows[0][0])["upstream_attestation"]
-    # Replaying candidate-1's attestation for candidate-2's content must fail.
     digest2 = _content_digest_without_attestation(json.loads(rows[1][0]))
     assert not trust.verify_evidence(att1, digest2)
-
-
-def test_f1_malformed_signature_rejected(tmp_path):
-    history, trust, anchor = fixture(tmp_path)
+    # Malformed signature
     assert not trust.verify_evidence("not-json", "0" * 64)
     assert not trust.verify_evidence(json.dumps({"payload": {}, "signature": "zzz"}), "0" * 64)
 
