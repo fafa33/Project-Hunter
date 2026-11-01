@@ -648,3 +648,52 @@ def test_f2_publisher_requires_protected_cas_and_signed_monotonic_head():
     assert publisher.publish(new, expected_head="head", timestamp=NOW.isoformat()) == "next"
     with pytest.raises(ValueError, match="missing or stale"):
         publisher.publish(new, expected_head="head", timestamp=NOW.isoformat())
+
+
+def test_registry_identity_attestation_binds_full_history_payload():
+    import hashlib
+    import json
+
+    from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
+
+    from hunter.market_validation.trusted_membership import EVIDENCE_DOMAIN, PinnedMembershipTrust, canonical_bytes
+
+    signer = Ed25519PrivateKey.generate()
+    trust = PinnedMembershipTrust(
+        repository="fafa33/Project-Hunter",
+        evidence_public_key=signer.public_key(),
+        anchor_public_key=Ed25519PrivateKey.generate().public_key(),
+    )
+    unsigned = {
+        "repository": "fafa33/Project-Hunter",
+        "candidate_id": "candidate:bitcoin",
+        "canonical_entity_id": "bitcoin",
+        "representation": "native:bitcoin",
+        "outcome": "exact",
+        "lifecycle_status": "identified",
+        "source_digest": "a" * 64,
+        "source_reference": "provider:bitcoin",
+        "policy_version": "test-v1",
+        "observed_at": "2026-11-02T00:00:00+00:00",
+        "known_at": "2026-11-02T00:00:00+00:00",
+        "ingested_at": "2026-11-02T00:00:01+00:00",
+        "previous_digest": "GENESIS:fafa33/Project-Hunter",
+    }
+    digest = hashlib.sha256(canonical_bytes(unsigned)).hexdigest()
+    claim = {"repository": trust.repository, "payload_digest": digest}
+    signature = signer.sign(EVIDENCE_DOMAIN + canonical_bytes(claim)).hex()
+    payload = {**unsigned, "upstream_attestation": json.dumps({"payload": claim, "signature": signature})}
+    assert trust.verify_registry_identity(payload)
+    for field, replacement in (
+        ("outcome", "unresolved"),
+        ("source_digest", "b" * 64),
+        ("known_at", "2026-11-01T00:00:00+00:00"),
+        ("previous_digest", "GENESIS:other/repository"),
+    ):
+        assert not trust.verify_registry_identity({**payload, field: replacement})
+    assert not trust.verify_registry_identity({**payload, "upstream_attestation": "not-json"})
+    assert not PinnedMembershipTrust(
+        repository=trust.repository,
+        evidence_public_key=Ed25519PrivateKey.generate().public_key(),
+        anchor_public_key=trust.anchor_public_key,
+    ).verify_registry_identity(payload)

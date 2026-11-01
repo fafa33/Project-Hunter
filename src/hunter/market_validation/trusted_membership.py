@@ -7,6 +7,7 @@ No production CLI is wired to this module.
 
 from __future__ import annotations
 
+import hashlib
 import json
 from dataclasses import dataclass
 from datetime import UTC, datetime
@@ -65,6 +66,26 @@ class PinnedMembershipTrust:
                 expected_repository=self.repository,
             )
             return payload == {"repository": self.repository, "payload_digest": payload_digest}
+        except (ValueError, TypeError, KeyError, json.JSONDecodeError):
+            return False
+
+    def verify_registry_identity(self, payload: dict[str, Any]) -> bool:
+        """Verify the full immutable Registry assertion, not just a source hash.
+
+        The independent evidence signer must bind every Registry field,
+        including the trusted ingress timestamp and previous chain digest.
+        """
+        try:
+            unsigned = {key: value for key, value in payload.items() if key != "upstream_attestation"}
+            digest = hashlib.sha256(canonical_bytes(unsigned)).hexdigest()
+            claim = json.loads(payload["upstream_attestation"])
+            verified = verify_signed_claim(
+                claim,
+                public_key=self.evidence_public_key,
+                domain=EVIDENCE_DOMAIN,
+                expected_repository=self.repository,
+            )
+            return verified == {"repository": self.repository, "payload_digest": digest}
         except (ValueError, TypeError, KeyError, json.JSONDecodeError):
             return False
 
