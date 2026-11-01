@@ -300,32 +300,18 @@ def test_f2_anchor_pin_accepts_intact():
 # --- F-3 hostile tests: trusted ingress and time ---------------------------
 
 
-def test_f3_future_timestamp_poisoning_rejected(tmp_path):
+def test_f3_trusted_ingress_rejected_and_filtered(tmp_path):
+    # Future known_at is rejected (ingested_at = now < known_at).
     history = ImmutableMembershipHistory(tmp_path / "history.sqlite", repository=REPO, clock=lambda: NOW)
-    # known_at in the future is rejected because ingested_at = now < known_at.
-    late_known = datetime(2099, 1, 1, tzinfo=UTC)
     with pytest.raises(ValueError, match="cannot be known before trusted ingestion"):
-        history.append(snapshot(known_at=late_known))
-
-
-def test_f3_forged_ingestion_timestamp_rejected(tmp_path):
-    history = ImmutableMembershipHistory(tmp_path / "history.sqlite", repository=REPO, clock=lambda: NOW)
-    # Caller cannot supply ingested_at; known_at after now is rejected because
-    # ingested_at is assigned by the trusted service clock (= now).
-    late_known = NOW + timedelta(days=1)
-    with pytest.raises(ValueError, match="cannot be known before trusted ingestion"):
-        history.append(snapshot(known_at=late_known))
-
-
-def test_f3_evidence_after_cutoff_not_visible(tmp_path):
-    history = ImmutableMembershipHistory(
-        tmp_path / "history.sqlite", repository=REPO, clock=lambda: NOW + timedelta(days=1)
+        history.append(snapshot(known_at=NOW + timedelta(days=1)))
+    # Evidence ingested after cutoff is not visible at that cutoff.
+    history2 = ImmutableMembershipHistory(
+        tmp_path / "history2.sqlite", repository=REPO, clock=lambda: NOW + timedelta(days=1)
     )
-    history.append(snapshot())
-    # Evidence ingested after the cutoff must not be visible at that cutoff.
-    assert history.as_of(NOW, trusted_anchor=anchor(history)) == ()
-    # At the future ingestion time, the evidence becomes visible.
-    assert len(history.as_of(NOW + timedelta(days=1), trusted_anchor=anchor(history))) == 1
+    history2.append(snapshot())
+    assert history2.as_of(NOW, trusted_anchor=anchor(history2)) == ()
+    assert len(history2.as_of(NOW + timedelta(days=1), trusted_anchor=anchor(history2))) == 1
 
 
 # --- F-2 hostile tests: whole-database rollback and stale anchor ----------
@@ -653,30 +639,15 @@ def _setup_registry_candidate(tmp_path, outcome="exact", confidence=1.0, candida
     return repository
 
 
-def test_f5_registry_identity_verifier_rejects_unmapped(tmp_path):
+def test_f5_registry_identity_verifier(tmp_path):
     from hunter.discovery.repository import CandidateRegistryRepository
 
-    reg_path = tmp_path / "registry.sqlite"
-    repository = CandidateRegistryRepository(reg_path)
-    verifier = RegistryIdentityVerifier(repository)
     # Empty registry: nothing is verified.
-    assert not verifier.verify_entity("entity-1")
-
-
-def test_f5_registry_identity_verifier_accepts_exact_identity(tmp_path):
-    repository = _setup_registry_candidate(tmp_path, outcome="exact")
-    verifier = RegistryIdentityVerifier(repository)
-    assert verifier.verify_entity("entity-1")
-
-
-def test_f5_registry_identity_verifier_accepts_with_exact_outcome(tmp_path):
-    repository = _setup_registry_candidate(tmp_path, outcome="exact")
-    verifier = RegistryIdentityVerifier(repository)
-    assert verifier.verify_entity("entity-1")
-
-
-def test_f5_registry_identity_verifier_rejects_probable_identity(tmp_path):
-    repository = _setup_registry_candidate(tmp_path, outcome="probable", confidence=0.85)
-    verifier = RegistryIdentityVerifier(repository)
-    # probable is not eligible.
-    assert not verifier.verify_entity("entity-1")
+    empty_repo = CandidateRegistryRepository(tmp_path / "empty.sqlite")
+    assert not RegistryIdentityVerifier(empty_repo).verify_entity("entity-1")
+    # Exact identity: verified.
+    repo = _setup_registry_candidate(tmp_path, outcome="exact")
+    assert RegistryIdentityVerifier(repo).verify_entity("entity-1")
+    # Probable identity: not eligible.
+    repo2 = _setup_registry_candidate(tmp_path / "probable", outcome="probable", confidence=0.85)
+    assert not RegistryIdentityVerifier(repo2).verify_entity("entity-1")
