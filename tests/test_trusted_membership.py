@@ -357,39 +357,35 @@ class _Verifier:
         return entity_id in self._allowed
 
 
-def test_f5_registry_verifier_rejects_unmapped_entity(tmp_path):
+def test_f5_registry_verifier(tmp_path):
+    # Unmapped entity rejected
     history = _make_history(tmp_path)
-
-    verifier = _Verifier({"entity-1"})  # only entity-1 is in the Registry
-
+    verifier = _Verifier({"entity-1"})
     with pytest.raises(ValueError, match="not verified by Registry"):
         history.append(snapshot(2), registry=verifier)
-
-
-def test_f5_registry_verifier_accepts_mapped_entity(tmp_path):
-    history = _make_history(tmp_path)
-
-    verifier = _Verifier({"entity-1", "entity-2"})
-
-    history.append(snapshot(1), registry=verifier)
-    history.append(snapshot(2), registry=verifier)
-    trusted = anchor(history)
-    result = history.as_of(NOW, trusted_anchor=trusted, verify_attestation=lambda *_: False)
+    # Mapped entity accepted
+    history2 = _make_history(tmp_path / "h2")
+    verifier2 = _Verifier({"entity-1", "entity-2"})
+    history2.append(snapshot(1), registry=verifier2)
+    history2.append(snapshot(2), registry=verifier2)
+    trusted = anchor(history2)
+    result = history2.as_of(NOW, trusted_anchor=trusted, verify_attestation=lambda *_: False)
     assert len(result) == 2
+    # Forged registry reference rejected
+    history3 = _make_history(tmp_path / "h3")
+    with pytest.raises(ValueError, match="source provenance required"):
+        history3.append(replace(snapshot(1), registry_reference=""))
 
 
-def test_f5_same_asset_multi_chain_deduplicates_to_one_entity(tmp_path):
+def test_f5_registry_multi_chain(tmp_path):
     history = _make_history(tmp_path)
+    verifier = _Verifier(set())
 
-    verifier = _Verifier(set())  # all entities verified by Registry (accept everything)
-
-    # Override verify_entity to accept all
     def _accept_all(entity_id: str) -> bool:
         return True
 
     verifier.verify_entity = _accept_all  # type: ignore[method-assign]
-
-    # ERC-20 on Ethereum and the same asset on Polygon map to one economic entity.
+    # Multi-chain: same entity on different chains
     history.append(
         replace(
             snapshot(1),
@@ -410,59 +406,37 @@ def test_f5_same_asset_multi_chain_deduplicates_to_one_entity(tmp_path):
     )
     trusted = anchor(history)
     result = history.as_of(NOW, trusted_anchor=trusted, verify_attestation=lambda *_: False)
-    # Both rows are stored; deduplication to one economic entity happens at the
-    # authority level (universe_membership), not at append time.
     assert len(result) == 2
-
-
-def test_f5_wrapped_token_representation(tmp_path):
-    history = _make_history(tmp_path)
-
-    verifier = _Verifier({"weth-ethereum", "weth-polygon"})
-
-    # Wrapped ETH on different chains are distinct chain representations but
-    # may map to distinct or the same economic entity depending on the Registry.
-    history.append(
+    # Wrapped token representations
+    history2 = _make_history(tmp_path / "h2")
+    verifier2 = _Verifier({"weth-ethereum", "weth-polygon"})
+    history2.append(
         replace(
             snapshot(1),
             canonical_entity_id="weth-ethereum",
             project=ProjectValidationTarget("weth-ethereum", "WETH", "other", {}),
             registry_reference="registry:weth-eth",
         ),
-        registry=verifier,
+        registry=verifier2,
     )
-    history.append(
+    history2.append(
         replace(
             snapshot(2),
             canonical_entity_id="weth-polygon",
             project=ProjectValidationTarget("weth-polygon", "WETH", "other", {}),
             registry_reference="registry:weth-poly",
         ),
-        registry=verifier,
+        registry=verifier2,
     )
-    trusted = anchor(history)
-    result = history.as_of(NOW, trusted_anchor=trusted, verify_attestation=lambda *_: False)
-    assert len(result) == 2
-
-
-def test_f5_conflicting_identity_mappings_rejected(tmp_path):
-    history = _make_history(tmp_path)
-
-    verifier = _Verifier({"entity-1"})  # Registry says entity-2 is not eligible
-
-    history.append(snapshot(1), registry=verifier)
+    trusted2 = anchor(history2)
+    result2 = history2.as_of(NOW, trusted_anchor=trusted2, verify_attestation=lambda *_: False)
+    assert len(result2) == 2
+    # Conflicting mappings rejected
+    history3 = _make_history(tmp_path / "h3")
+    verifier3 = _Verifier({"entity-1"})
+    history3.append(snapshot(1), registry=verifier3)
     with pytest.raises(ValueError, match="not verified by Registry"):
-        history.append(snapshot(2), registry=verifier)
-
-
-def test_f5_forged_registry_reference_rejected(tmp_path):
-    history = _make_history(tmp_path)
-    # registry_reference must be non-empty and well-formed; a forged reference
-    # cannot be used to claim Registry provenance.
-    with pytest.raises(ValueError, match="source provenance required"):
-        history.append(
-            replace(snapshot(1), registry_reference=""),
-        )
+        history3.append(snapshot(2), registry=verifier3)
 
 
 # --- F-2 integration tests: GitHubAnchorReader with GitLedgerStore ----------
