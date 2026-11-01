@@ -516,7 +516,9 @@ def _make_reader(store, ruleset=None, branch_rules=None):
     )
 
 
-def test_f2_github_anchor_reader_rejects_invalid():
+def test_f2_github_anchor_reader():
+    from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
+
     # Missing anchor
     reader = _make_reader(_FakeLedgerStore("head", []))
     with pytest.raises(ValueError, match="external anchor unavailable"):
@@ -529,7 +531,7 @@ def test_f2_github_anchor_reader_rejects_invalid():
     reader3 = _make_reader(_FakeLedgerStore("head", _make_entries("{}")))
     with pytest.raises(ValueError, match="anchor repository mismatch"):
         reader3.read_signed_head("other/repository")
-    # Unprotected reference (missing non_fast_forward)
+    # Unprotected reference
     ruleset = {
         "id": 24526712,
         "enforcement": "active",
@@ -541,20 +543,15 @@ def test_f2_github_anchor_reader_rejects_invalid():
     )
     with pytest.raises(ValueError, match="rules weakened"):
         reader4.read_signed_head(REPO)
-
-
-def test_f2_github_anchor_reader_accepts_valid():
-    from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
-
+    # Valid anchor
     anchor_key = Ed25519PrivateKey.generate()
     anchor_payload = {"repository": REPO, "sequence": 1, "digest": "0" * 64}
     signed_anchor = signed(anchor_key, ANCHOR_DOMAIN, anchor_payload)
-    reader = _make_reader(_FakeLedgerStore("head", _make_entries(signed_anchor)))
-    assert reader.read_signed_head(REPO) == signed_anchor
-    # Malformed anchor returned but rejected by trust adapter
-    reader2 = _make_reader(_FakeLedgerStore("head", _make_entries("not valid json")))
-    text = reader2.read_signed_head(REPO)
-    assert text == "not valid json"
+    reader5 = _make_reader(_FakeLedgerStore("head", _make_entries(signed_anchor)))
+    assert reader5.read_signed_head(REPO) == signed_anchor
+    # Malformed anchor
+    reader6 = _make_reader(_FakeLedgerStore("head", _make_entries("not valid json")))
+    assert reader6.read_signed_head(REPO) == "not valid json"
 
 
 # --- F-3 integration tests: TrustedIngress service --------------------------
