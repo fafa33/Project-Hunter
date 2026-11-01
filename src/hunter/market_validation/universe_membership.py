@@ -11,6 +11,7 @@ import hashlib
 import json
 from dataclasses import dataclass
 from datetime import UTC, datetime
+from pathlib import PurePosixPath
 from typing import Literal
 
 from hunter.market_validation.models import ProjectValidationTarget
@@ -73,10 +74,12 @@ class MarketValidationUniverseMembershipAuthority:
             or not baseline_output_directory.strip()
         ):
             raise ValueError("candidate run must be isolated and preserve the 50-entity minimum")
-        from pathlib import PurePosixPath
-
         candidate_path = PurePosixPath(output_directory)
         baseline_path = PurePosixPath(baseline_output_directory)
+        if any(part == ".." for part in candidate_path.parts + baseline_path.parts):
+            raise ValueError("noncanonical output paths are forbidden")
+        if candidate_path.is_absolute() or baseline_path.is_absolute():
+            raise ValueError("output paths must be relative to the same workspace root")
         if (
             candidate_path == baseline_path
             or candidate_path in baseline_path.parents
@@ -131,6 +134,10 @@ class MarketValidationUniverseMembershipAuthority:
                 for e in sorted(evidence, key=lambda e: (e.candidate_id, e.canonical_entity_id))
             ],
             "decisions": [d.__dict__ for d in decisions],
+            "targets": [
+                {"project_id": t.project_id, "name": t.name, "sector": t.sector, "metadata": dict(t.metadata)}
+                for t in targets
+            ],
             "runnable": runnable,
         }
         digest = hashlib.sha256(json.dumps(payload, sort_keys=True, separators=(",", ":")).encode()).hexdigest()

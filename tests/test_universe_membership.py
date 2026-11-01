@@ -110,3 +110,32 @@ def test_unverified_provenance_and_overlapping_outputs_fail_closed():
             output_directory="reports/baseline/candidate",
             baseline_output_directory="reports/baseline",
         )
+
+
+def test_dotdot_alias_cannot_escape_output_isolation():
+    with pytest.raises(ValueError, match="noncanonical"):
+        MarketValidationUniverseMembershipAuthority().authorize(
+            tuple(evidence(i) for i in range(50)),
+            cutoff=NOW,
+            run_id="candidate",
+            baseline_run_id="baseline",
+            policy_version="v1",
+            output_directory="reports/candidate/../baseline",
+            baseline_output_directory="reports/baseline",
+        )
+
+
+def test_authorized_target_sector_and_metadata_bind_manifest_digest():
+    from dataclasses import replace
+
+    items = [evidence(i) for i in range(50)]
+    original = authorize(items)
+    changed_sector = list(items)
+    changed_sector[0] = replace(
+        items[0], project=replace(items[0].project, sector="defi", metadata=dict(items[0].project.metadata))
+    )
+    changed_metadata = list(items)
+    changed_metadata[0] = replace(items[0], project=replace(items[0].project, metadata={"chain": "ethereum"}))
+    assert original.runnable
+    assert authorize(changed_sector).manifest_digest != original.manifest_digest
+    assert authorize(changed_metadata).manifest_digest != original.manifest_digest
