@@ -33,6 +33,13 @@ def _utc(value: datetime) -> str:
 
 @dataclass(frozen=True)
 class HistoricalMembershipSnapshot:
+    """Membership evidence submitted to the immutable history ledger.
+
+    ``ingested_at`` is deliberately NOT a caller field: it is assigned by the
+    trusted ingress service clock at append time (F-3). Callers must never
+    supply it.
+    """
+
     candidate_id: str
     canonical_entity_id: str
     project: ProjectValidationTarget
@@ -43,11 +50,17 @@ class HistoricalMembershipSnapshot:
     source_digest: str
     registry_reference: str
     upstream_attestation: str
-    ingested_at: datetime | None = None
 
 
 @dataclass(frozen=True)
 class TrustedHistoryAnchor:
+    """Externally verified membership head anchor from protected storage.
+
+    Binds repository, sequence and head digest so that rollback, truncation
+    or substitution across repositories is detected (F-2).
+    """
+
+    repository: str
     sequence: int
     digest: str
 
@@ -55,8 +68,9 @@ class TrustedHistoryAnchor:
 class ImmutableMembershipHistory:
     """Append-only snapshots with explicit attestation and no retrospective backfill."""
 
-    def __init__(self, path: str | Path) -> None:
+    def __init__(self, path: str | Path, repository: str = "") -> None:
         self.path = Path(path)
+        self.repository = repository
         self.path.parent.mkdir(parents=True, exist_ok=True)
         with self._connect() as conn:
             conn.executescript("""
@@ -111,7 +125,24 @@ class ImmutableMembershipHistory:
         conn.row_factory = sqlite3.Row
         return conn
 
-    def append(self, snapshot: HistoricalMembershipSnapshot) -> str:
+    def append(
+        self,
+        snapshot: HistoricalMembershipSnapshot,
+        *,
+        ingested_at: datetime,
+        registry_verifier: Callable[[str], bool] | None = None,
+    ) -> str:
+        """Append one attested snapshot.
+
+        ``ingested_at`` is assigned by the trusted ingress service clock (F-3),
+        never accepted from the caller. It is bound into the signed attestation
+        payload so that any change to the ingestion time invalidates the signature.
+
+        ``registry_verifier``, when provided, checks that the canonical economic
+        entity is proven by the authoritative Candidate Registry (F-5). Without
+        a verifier, the mapping is caller-claimed and admission must fail closed
+        downstream.
+        """
         if snapshot.identity_outcome not in {"exact", "ambiguous", "conflict", "unresolved", "rejected"}:
             raise ValueError("invalid identity outcome")
         if not snapshot.candidate_id.strip() or not snapshot.canonical_entity_id.strip():
@@ -127,10 +158,17 @@ class ImmutableMembershipHistory:
         known, observed = _utc(snapshot.known_at), _utc(snapshot.observed_at)
         if observed > known:
             raise ValueError("evidence cannot be known before observation")
-        # A self-asserted historical timestamp is never sufficient to prove historical knowability.
-        ingested = _utc(snapshot.ingested_at) if snapshot.ingested_at else _utc(datetime.now(UTC))
-        if known > ingested or ingested > _utc(datetime.now(UTC)):
-            raise ValueError("invalid evidence ingestion time")
+        # Ingestion timestamp comes from the trusted service clock; the caller
+        # cannot backdate or future-poison it.
+        ingested = _utc(ingested_at)
+        if known > ingested:
+            raise ValueError("evidence cannot be known before trusted ingestion")
+        if ingested > _utc(datetime.now(UTC)):
+            raise ValueError("ingested_at cannot be in the future")
+        # F-5: authoritative canonical economic entity mapping must be proven
+        # by the Registry; caller-claimed identities are not accepted as proof.
+        if registry_verifier is not None and not registry_verifier(snapshot.canonical_entity_id):
+            raise ValueError("canonical economic entity not verified by Registry")
         payload = {
             "candidate_id": snapshot.candidate_id,
             "canonical_entity_id": snapshot.canonical_entity_id,
@@ -159,7 +197,7 @@ class ImmutableMembershipHistory:
             ).fetchone()
             if previous_candidate and known <= previous_candidate["known_at"]:
                 raise ValueError("same-candidate history must advance known_at")
-            previous = str(last["digest"]) if last else "GENESIS"
+            previous = str(last["digest"]) if last else f"GENESIS:{self.repository}"
             digest = hashlib.sha256((previous + "\n" + content).encode()).hexdigest()
             conn.execute(
                 "INSERT INTO membership_history(candidate_id, known_at, content, digest, previous_digest) VALUES (?, ?, ?, ?, ?)",
@@ -179,7 +217,11 @@ class ImmutableMembershipHistory:
             rows = conn.execute("SELECT * FROM membership_history ORDER BY sequence").fetchall()
         if trusted_anchor is None:
             raise ValueError("external trusted history anchor required")
-        previous = "GENESIS"
+        if self.repository and trusted_anchor.repository != self.repository:
+            raise ValueError("anchor repository does not match history repository")
+        # Genesis is bound to the repository identity so that a chain from one
+        # repository cannot be replayed as another's history (F-2).
+        previous = f"GENESIS:{trusted_anchor.repository}"
         latest: dict[str, tuple[dict, str]] = {}
         for row in rows:
             digest = hashlib.sha256((previous + "\n" + row["content"]).encode()).hexdigest()

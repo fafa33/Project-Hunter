@@ -13,6 +13,9 @@ from hunter.market_validation.models import ProjectValidationTarget
 NOW = datetime(2026, 10, 1, tzinfo=UTC)
 
 
+REPO = "fafa33/Project-Hunter"
+
+
 def snapshot(i=1, *, known_at=NOW, sector="other"):
     return HistoricalMembershipSnapshot(
         candidate_id=f"candidate-{i}",
@@ -25,7 +28,6 @@ def snapshot(i=1, *, known_at=NOW, sector="other"):
         source_digest=f"sha256:{i}",
         registry_reference=f"registry:{i}",
         upstream_attestation=f"attestation:{i}",
-        ingested_at=known_at,
     )
 
 
@@ -35,27 +37,27 @@ def anchor(history):
 
     with sqlite3.connect(history.path) as conn:
         row = conn.execute("SELECT sequence, digest FROM membership_history ORDER BY sequence DESC LIMIT 1").fetchone()
-    return TrustedHistoryAnchor(*row)
+    return TrustedHistoryAnchor(repository="fafa33/Project-Hunter", sequence=row[0], digest=row[1])
 
 
 def test_append_only_cutoff_and_supersession(tmp_path):
-    history = ImmutableMembershipHistory(tmp_path / "history.sqlite")
-    first = history.append(snapshot())
+    history = ImmutableMembershipHistory(tmp_path / "history.sqlite", repository=REPO)
+    first = history.append(snapshot(), ingested_at=NOW)
     later = NOW + timedelta(days=1)
-    second = history.append(snapshot(known_at=later, sector="defi"))
+    second = history.append(snapshot(known_at=later, sector="defi"), ingested_at=later)
     assert first != second
     assert history.as_of(NOW, trusted_anchor=anchor(history))[0].project.sector == "other"
     assert history.as_of(later, trusted_anchor=anchor(history))[0].project.sector == "defi"
     with pytest.raises(ValueError, match="advance"):
-        history.append(snapshot(known_at=NOW))
-    history.append(snapshot(2))  # Different candidates need no global watermark.
+        history.append(snapshot(known_at=NOW), ingested_at=NOW)
+    history.append(snapshot(2), ingested_at=NOW)  # Different candidates need no global watermark.
 
 
 def test_mutation_and_deletion_blocked(tmp_path):
     import sqlite3
 
-    history = ImmutableMembershipHistory(tmp_path / "history.sqlite")
-    history.append(snapshot())
+    history = ImmutableMembershipHistory(tmp_path / "history.sqlite", repository=REPO)
+    history.append(snapshot(), ingested_at=NOW)
     with sqlite3.connect(history.path) as conn:
         with pytest.raises(sqlite3.IntegrityError):
             conn.execute("DELETE FROM membership_history")
@@ -64,8 +66,8 @@ def test_mutation_and_deletion_blocked(tmp_path):
 
 
 def test_legacy_shadow_entrypoint_is_disabled(tmp_path):
-    history = ImmutableMembershipHistory(tmp_path / "history.sqlite")
-    history.append(snapshot())
+    history = ImmutableMembershipHistory(tmp_path / "history.sqlite", repository=REPO)
+    history.append(snapshot(), ingested_at=NOW)
     with pytest.raises(ValueError, match="legacy callback admission disabled"):
         history.authorize_shadow(
             cutoff=NOW,
@@ -80,18 +82,18 @@ def test_legacy_shadow_entrypoint_is_disabled(tmp_path):
 
 
 def test_attestation_and_time_required(tmp_path):
-    history = ImmutableMembershipHistory(tmp_path / "history.sqlite")
+    history = ImmutableMembershipHistory(tmp_path / "history.sqlite", repository=REPO)
     with pytest.raises(ValueError, match="attestation"):
-        history.append(replace(snapshot(), upstream_attestation=""))
+        history.append(replace(snapshot(), upstream_attestation=""), ingested_at=NOW)
     with pytest.raises(ValueError, match="before observation"):
-        history.append(snapshot(known_at=NOW - timedelta(seconds=1)))
+        history.append(snapshot(known_at=NOW - timedelta(seconds=1)), ingested_at=NOW)
 
 
 def test_replace_insert_cannot_rewrite_history_from_separate_connection(tmp_path):
     import sqlite3
 
-    history = ImmutableMembershipHistory(tmp_path / "history.sqlite")
-    digest = history.append(snapshot())
+    history = ImmutableMembershipHistory(tmp_path / "history.sqlite", repository=REPO)
+    digest = history.append(snapshot(), ingested_at=NOW)
     with sqlite3.connect(history.path) as conn:
         original = conn.execute(
             "SELECT sequence, candidate_id, known_at, content, digest, previous_digest " "FROM membership_history"
@@ -122,15 +124,15 @@ def test_replace_insert_cannot_rewrite_history_from_separate_connection(tmp_path
                     replacement,
                 )
     assert history.as_of(NOW, trusted_anchor=anchor(history))[0].lifecycle_status == "identified"
-    assert history.append(snapshot(2)) != digest
+    assert history.append(snapshot(2), ingested_at=NOW) != digest
 
 
 def test_external_anchor_rejects_tail_truncation_and_rollback(tmp_path):
     import sqlite3
 
-    history = ImmutableMembershipHistory(tmp_path / "history.sqlite")
-    history.append(snapshot(1))
-    history.append(snapshot(2))
+    history = ImmutableMembershipHistory(tmp_path / "history.sqlite", repository=REPO)
+    history.append(snapshot(1), ingested_at=NOW)
+    history.append(snapshot(2), ingested_at=NOW)
     trusted = anchor(history)
     with sqlite3.connect(history.path) as conn:
         conn.execute("DROP TRIGGER membership_history_no_delete")
@@ -143,27 +145,29 @@ def test_preseeded_neutered_trigger_rejected(tmp_path):
     import sqlite3
 
     path = tmp_path / "history.sqlite"
-    ImmutableMembershipHistory(path)
+    ImmutableMembershipHistory(path, repository=REPO)
     with sqlite3.connect(path) as conn:
         conn.execute("DROP TRIGGER membership_history_no_update")
         conn.execute(
             "CREATE TRIGGER membership_history_no_update BEFORE UPDATE ON membership_history WHEN 0 BEGIN SELECT RAISE(ABORT, 'immutable history'); END"
         )
     with pytest.raises(ValueError, match="untrusted membership history trigger"):
-        ImmutableMembershipHistory(path)
+        ImmutableMembershipHistory(path, repository=REPO)
 
 
 def test_canonical_entity_requires_normalized_id(tmp_path):
-    history = ImmutableMembershipHistory(tmp_path / "history.sqlite")
+    history = ImmutableMembershipHistory(tmp_path / "history.sqlite", repository=REPO)
     for entity in ("Entity-A", " entity-a "):
         with pytest.raises(ValueError, match="normalized"):
-            history.append(replace(snapshot(), canonical_entity_id=entity))
+            history.append(replace(snapshot(), canonical_entity_id=entity), ingested_at=NOW)
 
 
 def test_attestation_payload_digest_changes_with_identity_and_sector(tmp_path):
-    history = ImmutableMembershipHistory(tmp_path / "history.sqlite")
-    history.append(snapshot(1))
-    history.append(replace(snapshot(2), upstream_attestation="attestation:1", source_digest="sha256:1"))
+    history = ImmutableMembershipHistory(tmp_path / "history.sqlite", repository=REPO)
+    history.append(snapshot(1), ingested_at=NOW)
+    history.append(
+        replace(snapshot(2), upstream_attestation="attestation:1", source_digest="sha256:1"), ingested_at=NOW
+    )
     seen = []
 
     def verifier(attestation, payload_digest):
@@ -177,19 +181,19 @@ def test_attestation_payload_digest_changes_with_identity_and_sector(tmp_path):
 
 
 def test_historical_backfill_not_visible_before_ingestion(tmp_path):
-    history = ImmutableMembershipHistory(tmp_path / "history.sqlite")
-    history.append(replace(snapshot(), ingested_at=NOW + timedelta(days=2)))
+    history = ImmutableMembershipHistory(tmp_path / "history.sqlite", repository=REPO)
+    history.append(snapshot(), ingested_at=NOW + timedelta(days=2))
     assert history.as_of(NOW, trusted_anchor=anchor(history)) == ()
 
 
 def test_same_timestamp_conflict_rejected(tmp_path):
-    history = ImmutableMembershipHistory(tmp_path / "history.sqlite")
-    history.append(snapshot())
+    history = ImmutableMembershipHistory(tmp_path / "history.sqlite", repository=REPO)
+    history.append(snapshot(), ingested_at=NOW)
     with pytest.raises(ValueError, match="advance"):
-        history.append(snapshot(sector="defi"))
+        history.append(snapshot(sector="defi"), ingested_at=NOW)
 
 
 def test_reject_unrecognized_identity_outcome(tmp_path):
-    history = ImmutableMembershipHistory(tmp_path / "history.sqlite")
+    history = ImmutableMembershipHistory(tmp_path / "history.sqlite", repository=REPO)
     with pytest.raises(ValueError, match="invalid identity outcome"):
-        history.append(replace(snapshot(), identity_outcome="invented"))
+        history.append(replace(snapshot(), identity_outcome="invented"), ingested_at=NOW)
