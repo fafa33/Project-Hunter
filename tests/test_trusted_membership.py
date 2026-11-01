@@ -58,7 +58,7 @@ def signed(private, domain, payload):
 def fixture(tmp_path):
     evidence_key, anchor_key = Ed25519PrivateKey.generate(), Ed25519PrivateKey.generate()
     trust = PinnedMembershipTrust(REPO, evidence_key.public_key(), anchor_key.public_key())
-    history = ImmutableMembershipHistory(tmp_path / "history.sqlite", repository=REPO, clock=lambda: NOW)
+    history = _make_history(tmp_path)
     for i in range(50):
         project = ProjectValidationTarget(f"entity-{i}", f"Entity {i}", "other")
         payload = {
@@ -110,7 +110,15 @@ def run_shadow(history, trust, anchor):
     )
 
 
-@pytest.fixture
+def _make_history(tmp_path, clock=None, filename="history.sqlite"):
+    if clock is None:
+
+        def clock():
+            return NOW
+
+    return ImmutableMembershipHistory(tmp_path / filename, repository=REPO, clock=clock)
+
+
 def test_signed_evidence_and_external_anchor_allow_shadow_only(tmp_path):
     history, trust, anchor = fixture(tmp_path)
     result = run_shadow(history, trust, anchor)
@@ -302,13 +310,11 @@ def test_f2_anchor_pin_accepts_intact():
 
 def test_f3_trusted_ingress_rejected_and_filtered(tmp_path):
     # Future known_at is rejected (ingested_at = now < known_at).
-    history = ImmutableMembershipHistory(tmp_path / "history.sqlite", repository=REPO, clock=lambda: NOW)
+    history = _make_history(tmp_path)
     with pytest.raises(ValueError, match="cannot be known before trusted ingestion"):
         history.append(snapshot(known_at=NOW + timedelta(days=1)))
     # Evidence ingested after cutoff is not visible at that cutoff.
-    history2 = ImmutableMembershipHistory(
-        tmp_path / "history2.sqlite", repository=REPO, clock=lambda: NOW + timedelta(days=1)
-    )
+    history2 = _make_history(tmp_path, clock=lambda: NOW + timedelta(days=1), filename="history2.sqlite")
     history2.append(snapshot())
     assert history2.as_of(NOW, trusted_anchor=anchor(history2)) == ()
     assert len(history2.as_of(NOW + timedelta(days=1), trusted_anchor=anchor(history2))) == 1
@@ -318,7 +324,7 @@ def test_f3_trusted_ingress_rejected_and_filtered(tmp_path):
 
 
 def test_f2_whole_database_rollback_rejected(tmp_path):
-    history = ImmutableMembershipHistory(tmp_path / "history.sqlite", repository=REPO, clock=lambda: NOW)
+    history = _make_history(tmp_path)
     history.append(snapshot(1))
     history.append(snapshot(2))
     trusted = anchor(history)
@@ -333,7 +339,7 @@ def test_f2_whole_database_rollback_rejected(tmp_path):
 
 
 def test_f2_stale_signed_anchor_replay_rejected(tmp_path):
-    history = ImmutableMembershipHistory(tmp_path / "history.sqlite", repository=REPO, clock=lambda: NOW)
+    history = _make_history(tmp_path)
     history.append(snapshot(1))
     history.append(snapshot(2))
     # Anchor for sequence 1 (stale) must not validate a chain of length 2.
@@ -358,7 +364,7 @@ class _Verifier:
 
 
 def test_f5_registry_verifier_rejects_unmapped_entity(tmp_path):
-    history = ImmutableMembershipHistory(tmp_path / "history.sqlite", repository=REPO, clock=lambda: NOW)
+    history = _make_history(tmp_path)
 
     verifier = _Verifier({"entity-1"})  # only entity-1 is in the Registry
 
@@ -367,7 +373,7 @@ def test_f5_registry_verifier_rejects_unmapped_entity(tmp_path):
 
 
 def test_f5_registry_verifier_accepts_mapped_entity(tmp_path):
-    history = ImmutableMembershipHistory(tmp_path / "history.sqlite", repository=REPO, clock=lambda: NOW)
+    history = _make_history(tmp_path)
 
     verifier = _Verifier({"entity-1", "entity-2"})
 
@@ -379,7 +385,7 @@ def test_f5_registry_verifier_accepts_mapped_entity(tmp_path):
 
 
 def test_f5_same_asset_multi_chain_deduplicates_to_one_entity(tmp_path):
-    history = ImmutableMembershipHistory(tmp_path / "history.sqlite", repository=REPO, clock=lambda: NOW)
+    history = _make_history(tmp_path)
 
     verifier = _Verifier(set())  # all entities verified by Registry (accept everything)
 
@@ -416,7 +422,7 @@ def test_f5_same_asset_multi_chain_deduplicates_to_one_entity(tmp_path):
 
 
 def test_f5_wrapped_token_representation(tmp_path):
-    history = ImmutableMembershipHistory(tmp_path / "history.sqlite", repository=REPO, clock=lambda: NOW)
+    history = _make_history(tmp_path)
 
     verifier = _Verifier({"weth-ethereum", "weth-polygon"})
 
@@ -446,7 +452,7 @@ def test_f5_wrapped_token_representation(tmp_path):
 
 
 def test_f5_conflicting_identity_mappings_rejected(tmp_path):
-    history = ImmutableMembershipHistory(tmp_path / "history.sqlite", repository=REPO, clock=lambda: NOW)
+    history = _make_history(tmp_path)
 
     verifier = _Verifier({"entity-1"})  # Registry says entity-2 is not eligible
 
@@ -456,7 +462,7 @@ def test_f5_conflicting_identity_mappings_rejected(tmp_path):
 
 
 def test_f5_forged_registry_reference_rejected(tmp_path):
-    history = ImmutableMembershipHistory(tmp_path / "history.sqlite", repository=REPO, clock=lambda: NOW)
+    history = _make_history(tmp_path)
     # registry_reference must be non-empty and well-formed; a forged reference
     # cannot be used to claim Registry provenance.
     with pytest.raises(ValueError, match="source provenance required"):
@@ -569,7 +575,7 @@ class _FakeClock:
 
 
 def test_f3_trusted_ingress_assigns_timestamp(tmp_path):
-    history = ImmutableMembershipHistory(tmp_path / "history.sqlite", repository=REPO, clock=lambda: NOW)
+    history = _make_history(tmp_path)
     clock = _FakeClock(NOW)
     ingress = TrustedIngress(history, clock=clock)
     result = ingress.ingest(snapshot())
@@ -582,7 +588,7 @@ def test_f3_trusted_ingress_assigns_timestamp(tmp_path):
 
 
 def test_f3_trusted_ingress_caller_cannot_backdate(tmp_path):
-    history = ImmutableMembershipHistory(tmp_path / "history.sqlite", repository=REPO, clock=lambda: NOW)
+    history = _make_history(tmp_path)
     clock = _FakeClock(NOW)
     ingress = TrustedIngress(history, clock=clock)
     # Caller sets known_at after ingested_at; ingested_at is still the trusted clock (= NOW).
