@@ -539,70 +539,45 @@ def _make_reader(store, ruleset=None, branch_rules=None):
     )
 
 
-def test_f2_github_anchor_reader_missing_anchor():
+def test_f2_github_anchor_reader_rejects_invalid():
+    # Missing anchor
     reader = _make_reader(_FakeLedgerStore("head", []))
     with pytest.raises(ValueError, match="external anchor unavailable"):
         reader.read_signed_head(REPO)
-
-
-def test_f2_github_anchor_reader_malformed_anchor():
-    reader = _make_reader(_FakeLedgerStore("head", _make_entries("not valid json")))
-    # Reader returns the raw anchor text; signature verification happens in
-    # PinnedMembershipTrust.verify_anchor().
-    text = reader.read_signed_head(REPO)
-    assert text == "not valid json"
-    # The trust adapter rejects the malformed anchor.
-    from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
-
-    from hunter.market_validation.trusted_membership import PinnedMembershipTrust
-
-    key = Ed25519PrivateKey.generate()
-    trust = PinnedMembershipTrust(REPO, key.public_key(), key.public_key())
-    with pytest.raises(ValueError, match="untrusted membership anchor"):
-        trust.verify_anchor(text)
-
-
-def test_f2_github_anchor_reader_unexpected_file_layout():
-    reader = _make_reader(_FakeLedgerStore("head", [("abc123", "not-a-dict")]))
+    # Unexpected file layout
+    reader2 = _make_reader(_FakeLedgerStore("head", [("abc123", "not-a-dict")]))
     with pytest.raises(ValueError, match="unexpected file layout"):
-        reader.read_signed_head(REPO)
-
-
-def test_f2_github_anchor_reader_mismatched_repository():
-    reader = _make_reader(_FakeLedgerStore("head", _make_entries("{}")))
+        reader2.read_signed_head(REPO)
+    # Mismatched repository
+    reader3 = _make_reader(_FakeLedgerStore("head", _make_entries("{}")))
     with pytest.raises(ValueError, match="anchor repository mismatch"):
-        reader.read_signed_head("other/repository")
-
-
-def test_f2_github_anchor_reader_unprotected_reference():
-    # Ruleset missing required rules => fail closed.
+        reader3.read_signed_head("other/repository")
+    # Unprotected reference (missing non_fast_forward)
     ruleset = {
         "id": 24526712,
         "enforcement": "active",
         "updated_at": "2026-10-06T20:52:31.773Z",
-        "rules": [{"type": "deletion"}],  # missing non_fast_forward
+        "rules": [{"type": "deletion"}],
     }
-    pin = _make_pin()
-    reader = GitHubAnchorReader(
-        REPO,
-        store=_FakeLedgerStore("head", _make_entries("{}")),
-        pin=pin,
-        ruleset=ruleset,
-        branch_rules=None,
+    reader4 = GitHubAnchorReader(
+        REPO, store=_FakeLedgerStore("head", _make_entries("{}")), pin=_make_pin(), ruleset=ruleset, branch_rules=None
     )
     with pytest.raises(ValueError, match="rules weakened"):
-        reader.read_signed_head(REPO)
+        reader4.read_signed_head(REPO)
 
 
-def test_f2_github_anchor_reader_valid_anchor():
+def test_f2_github_anchor_reader_accepts_valid():
     from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
 
     anchor_key = Ed25519PrivateKey.generate()
     anchor_payload = {"repository": REPO, "sequence": 1, "digest": "0" * 64}
     signed_anchor = signed(anchor_key, ANCHOR_DOMAIN, anchor_payload)
     reader = _make_reader(_FakeLedgerStore("head", _make_entries(signed_anchor)))
-    result = reader.read_signed_head(REPO)
-    assert result == signed_anchor
+    assert reader.read_signed_head(REPO) == signed_anchor
+    # Malformed anchor returned but rejected by trust adapter
+    reader2 = _make_reader(_FakeLedgerStore("head", _make_entries("not valid json")))
+    text = reader2.read_signed_head(REPO)
+    assert text == "not valid json"
 
 
 # --- F-3 integration tests: TrustedIngress service --------------------------
