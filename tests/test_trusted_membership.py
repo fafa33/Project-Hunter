@@ -279,7 +279,7 @@ def test_f2_anchor_pin_rejects_wrong_ruleset_id():
 
 
 def test_f2_anchor_pin_rejects_inactive_ruleset():
-    pin = MembershipAnchorPin(ruleset_id=24526712, updated_at="2026-10-06T20:52:31.773Z")
+    pin = _make_pin()
     with pytest.raises(ValueError, match="not active"):
         pin.verify(
             {"id": 24526712, "enforcement": "inactive", "rules": [{"type": "deletion"}, {"type": "non_fast_forward"}]},
@@ -288,7 +288,7 @@ def test_f2_anchor_pin_rejects_inactive_ruleset():
 
 
 def test_f2_anchor_pin_rejects_weakened_rules():
-    pin = MembershipAnchorPin(ruleset_id=24526712, updated_at="2026-10-06T20:52:31.773Z")
+    pin = _make_pin()
     with pytest.raises(ValueError, match="rules weakened"):
         pin.verify(
             {
@@ -302,7 +302,7 @@ def test_f2_anchor_pin_rejects_weakened_rules():
 
 
 def test_f2_anchor_pin_rejects_stale_updated_at():
-    pin = MembershipAnchorPin(ruleset_id=24526712, updated_at="2026-10-06T20:52:31.773Z")
+    pin = _make_pin()
     with pytest.raises(ValueError, match="modified since it was pinned"):
         pin.verify(
             {
@@ -316,30 +316,14 @@ def test_f2_anchor_pin_rejects_stale_updated_at():
 
 
 def test_f2_anchor_pin_rejects_ruleset_not_covering_ref():
-    pin = MembershipAnchorPin(ruleset_id=24526712, updated_at="2026-10-06T20:52:31.773Z")
+    pin = _make_pin()
     with pytest.raises(ValueError, match="does not cover this ref"):
-        pin.verify(
-            {
-                "id": 24526712,
-                "enforcement": "active",
-                "updated_at": "2026-10-06T20:52:31.773Z",
-                "rules": [{"type": "deletion"}, {"type": "non_fast_forward"}],
-            },
-            [{"type": "deletion", "ruleset_id": 99999}],
-        )
+        pin.verify(_intact_ruleset(), [{"type": "deletion", "ruleset_id": 99999}])
 
 
 def test_f2_anchor_pin_accepts_intact_ruleset():
-    pin = MembershipAnchorPin(ruleset_id=24526712, updated_at="2026-10-06T20:52:31.773Z")
-    pin.verify(
-        {
-            "id": 24526712,
-            "enforcement": "active",
-            "updated_at": "2026-10-06T20:52:31.773Z",
-            "rules": [{"type": "deletion"}, {"type": "non_fast_forward"}],
-        },
-        [{"type": "deletion", "ruleset_id": 24526712}, {"type": "non_fast_forward", "ruleset_id": 24526712}],
-    )  # should not raise
+    pin = _make_pin()
+    pin.verify(_intact_ruleset(), _intact_branch_rules())  # should not raise
 
 
 # --- F-3 hostile tests: trusted ingress and time ---------------------------
