@@ -16,6 +16,7 @@ from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
+from typing import Any
 
 from hunter.market_validation.models import ProjectValidationTarget
 from hunter.market_validation.universe_membership import (
@@ -68,9 +69,16 @@ class TrustedHistoryAnchor:
 class ImmutableMembershipHistory:
     """Append-only snapshots with explicit attestation and no retrospective backfill."""
 
-    def __init__(self, path: str | Path, repository: str = "") -> None:
+    def __init__(
+        self,
+        path: str | Path,
+        repository: str = "",
+        *,
+        clock: Callable[[], datetime] | None = None,
+    ) -> None:
         self.path = Path(path)
         self.repository = repository
+        self._clock = clock or (lambda: datetime.now(UTC))
         self.path.parent.mkdir(parents=True, exist_ok=True)
         with self._connect() as conn:
             conn.executescript("""
@@ -129,18 +137,18 @@ class ImmutableMembershipHistory:
         self,
         snapshot: HistoricalMembershipSnapshot,
         *,
-        ingested_at: datetime,
-        registry_verifier: Callable[[str], bool] | None = None,
+        registry: Any | None = None,
     ) -> str:
         """Append one attested snapshot.
 
-        ``ingested_at`` is assigned by the trusted ingress service clock (F-3),
-        never accepted from the caller. It is bound into the signed attestation
-        payload so that any change to the ingestion time invalidates the signature.
+        ``ingested_at`` is assigned by the trusted ingress service clock (F-3)
+        inside this method -- callers cannot supply it, so they cannot
+        backdate or future-poison ingestion time.
 
-        ``registry_verifier``, when provided, checks that the canonical economic
-        entity is proven by the authoritative Candidate Registry (F-5). Without
-        a verifier, the mapping is caller-claimed and admission must fail closed
+        ``registry``, when provided, verifies that the canonical economic
+        entity is proven by the authoritative Candidate Registry (F-5). It must
+        expose ``verify_entity(entity_id: str) -> bool``. Without a registry,
+        the mapping is caller-claimed and admission must fail closed
         downstream.
         """
         if snapshot.identity_outcome not in {"exact", "ambiguous", "conflict", "unresolved", "rejected"}:
@@ -158,16 +166,14 @@ class ImmutableMembershipHistory:
         known, observed = _utc(snapshot.known_at), _utc(snapshot.observed_at)
         if observed > known:
             raise ValueError("evidence cannot be known before observation")
-        # Ingestion timestamp comes from the trusted service clock; the caller
-        # cannot backdate or future-poison it.
-        ingested = _utc(ingested_at)
+        # Trusted ingress: ingestion time is assigned by the service clock,
+        # never accepted from the caller.
+        ingested = _utc(self._clock())
         if known > ingested:
             raise ValueError("evidence cannot be known before trusted ingestion")
-        if ingested > _utc(datetime.now(UTC)):
-            raise ValueError("ingested_at cannot be in the future")
         # F-5: authoritative canonical economic entity mapping must be proven
         # by the Registry; caller-claimed identities are not accepted as proof.
-        if registry_verifier is not None and not registry_verifier(snapshot.canonical_entity_id):
+        if registry is not None and not registry.verify_entity(snapshot.canonical_entity_id):
             raise ValueError("canonical economic entity not verified by Registry")
         payload = {
             "candidate_id": snapshot.candidate_id,
@@ -306,3 +312,40 @@ class ImmutableMembershipHistory:
             output_directory=output_directory,
             baseline_output_directory=baseline_output_directory,
         )
+
+
+class TrustedIngress:
+    """Trusted ingress service for membership history (F-3).
+
+    Owns the service clock that assigns ``ingested_at``. Callers submit
+    attested snapshots; this service assigns the ingestion timestamp and
+    persists via ``ImmutableMembershipHistory.append``. The caller can never
+    control ingestion time, so backdating and future poisoning are impossible.
+
+    A ``clock`` callable returning an aware ``datetime`` may be injected for
+    deterministic testing; it defaults to ``datetime.now(UTC)``.
+    """
+
+    def __init__(
+        self,
+        history: ImmutableMembershipHistory,
+        *,
+        registry: Any | None = None,
+        clock: Callable[[], datetime] | None = None,
+    ) -> None:
+        self.history = history
+        self.registry = registry
+        self._clock = clock or (lambda: datetime.now(UTC))
+        # The history's clock and the ingress clock must agree so that
+        # ingested_at assigned by the service matches the history's clock.
+        history._clock = self._clock
+
+    def ingest(self, snapshot: HistoricalMembershipSnapshot) -> str:
+        """Ingest one attested snapshot with a trusted ingestion timestamp.
+
+        ``ingested_at`` is assigned by this service's clock and bound into the
+        signed attestation payload. Historical evidence cannot qualify before
+        trusted ingestion; per-candidate monotonic supersession is preserved
+        by the underlying history ledger.
+        """
+        return self.history.append(snapshot, registry=self.registry)

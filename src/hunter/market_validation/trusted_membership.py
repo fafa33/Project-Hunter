@@ -15,6 +15,7 @@ from typing import Any
 from cryptography.exceptions import InvalidSignature
 from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PublicKey
 
+from hunter.discovery.repository import CandidateRegistryRepository
 from hunter.market_validation.membership_history import (
     ImmutableMembershipHistory,
     TrustedHistoryAnchor,
@@ -181,6 +182,49 @@ class MembershipAnchorPin:
                 raise ValueError("membership anchor ruleset does not cover this ref")
 
 
+class RegistryIdentityVerifier:
+    """Authoritative Candidate Registry integration for canonical economic identity (F-5).
+
+    Wraps :class:`CandidateRegistryRepository` and verifies that a canonical
+    economic entity ID maps to exactly one Registry candidate with an
+    ``exact`` identity outcome. Ambiguous, conflicting, unresolved, probable
+    and rejected identities are rejected. No inference from ticker, candidate
+    ID, project ID, string case or related IDs is performed -- only the
+    Registry's authoritative identity resolution counts.
+    """
+
+    def __init__(self, repository: CandidateRegistryRepository) -> None:
+        self._repository = repository
+
+    def verify_entity(self, entity_id: str) -> bool:
+        """Return True only if ``entity_id`` is an authoritative Registry entity.
+
+        Looks up the entity by candidate ID first, then by any identifier
+        value. The candidate's identity resolution outcome must be ``exact``.
+        """
+        candidate = self._repository.get(entity_id)
+        if candidate is not None:
+            return self._identity_outcome_exact(candidate)
+        # Fall back to identifier-value lookup (chain contracts, provider IDs, etc.).
+        for candidate in self._repository.list_candidates(limit=10_000):
+            for identifier in candidate.identifiers:
+                if identifier.value == entity_id:
+                    return self._identity_outcome_exact(candidate)
+        return False
+
+    def _identity_outcome_exact(self, candidate) -> bool:
+        identity = self._identity_for_candidate(candidate.candidate_id)
+        if identity is None:
+            return False
+        return identity.outcome == "exact"
+
+    def _identity_for_candidate(self, candidate_id: str):
+        try:
+            return self._repository.latest_identity_by_candidate().get(candidate_id)
+        except Exception:
+            return None
+
+
 class GitHubAnchorReader(ExternalAnchorReader):
     """Reads signed membership head anchors from GitHub protected storage.
 
@@ -221,7 +265,9 @@ class GitHubAnchorReader(ExternalAnchorReader):
         if head is None:
             raise ValueError("external anchor unavailable")
         for _commit, files in entries:
-            for name, content in files:
+            if not isinstance(files, dict):
+                raise ValueError("unexpected file layout from ledger store")
+            for name, content in files.items():
                 if name == self.ANCHOR_FILE:
                     text = content.decode("utf-8") if isinstance(content, (bytes, bytearray)) else str(content)
                     if not text.strip():

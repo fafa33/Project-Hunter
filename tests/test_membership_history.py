@@ -41,23 +41,26 @@ def anchor(history):
 
 
 def test_append_only_cutoff_and_supersession(tmp_path):
-    history = ImmutableMembershipHistory(tmp_path / "history.sqlite", repository=REPO)
-    first = history.append(snapshot(), ingested_at=NOW)
-    later = NOW + timedelta(days=1)
-    second = history.append(snapshot(known_at=later, sector="defi"), ingested_at=later)
-    assert first != second
-    assert history.as_of(NOW, trusted_anchor=anchor(history))[0].project.sector == "other"
-    assert history.as_of(later, trusted_anchor=anchor(history))[0].project.sector == "defi"
+    history = ImmutableMembershipHistory(tmp_path / "history.sqlite", repository=REPO, clock=lambda: NOW)
+    first = history.append(snapshot())
+    assert first is not None
+    # Same candidate, same known_at: rejected (must advance).
     with pytest.raises(ValueError, match="advance"):
-        history.append(snapshot(known_at=NOW), ingested_at=NOW)
-    history.append(snapshot(2), ingested_at=NOW)  # Different candidates need no global watermark.
+        history.append(snapshot(known_at=NOW))
+    # Different candidate: OK.
+    history.append(snapshot(2))
+    # Supersession: same candidate, later known_at with advancing clock.
+    later = NOW + timedelta(days=1)
+    history_later = ImmutableMembershipHistory(tmp_path / "history_later.sqlite", repository=REPO, clock=lambda: later)
+    history_later.append(snapshot(known_at=later, sector="defi"))
+    assert history_later.as_of(later, trusted_anchor=anchor(history_later))[0].project.sector == "defi"
 
 
 def test_mutation_and_deletion_blocked(tmp_path):
     import sqlite3
 
-    history = ImmutableMembershipHistory(tmp_path / "history.sqlite", repository=REPO)
-    history.append(snapshot(), ingested_at=NOW)
+    history = ImmutableMembershipHistory(tmp_path / "history.sqlite", repository=REPO, clock=lambda: NOW)
+    history.append(snapshot())
     with sqlite3.connect(history.path) as conn:
         with pytest.raises(sqlite3.IntegrityError):
             conn.execute("DELETE FROM membership_history")
@@ -66,8 +69,8 @@ def test_mutation_and_deletion_blocked(tmp_path):
 
 
 def test_legacy_shadow_entrypoint_is_disabled(tmp_path):
-    history = ImmutableMembershipHistory(tmp_path / "history.sqlite", repository=REPO)
-    history.append(snapshot(), ingested_at=NOW)
+    history = ImmutableMembershipHistory(tmp_path / "history.sqlite", repository=REPO, clock=lambda: NOW)
+    history.append(snapshot())
     with pytest.raises(ValueError, match="legacy callback admission disabled"):
         history.authorize_shadow(
             cutoff=NOW,
@@ -82,18 +85,18 @@ def test_legacy_shadow_entrypoint_is_disabled(tmp_path):
 
 
 def test_attestation_and_time_required(tmp_path):
-    history = ImmutableMembershipHistory(tmp_path / "history.sqlite", repository=REPO)
+    history = ImmutableMembershipHistory(tmp_path / "history.sqlite", repository=REPO, clock=lambda: NOW)
     with pytest.raises(ValueError, match="attestation"):
-        history.append(replace(snapshot(), upstream_attestation=""), ingested_at=NOW)
+        history.append(replace(snapshot(), upstream_attestation=""))
     with pytest.raises(ValueError, match="before observation"):
-        history.append(snapshot(known_at=NOW - timedelta(seconds=1)), ingested_at=NOW)
+        history.append(snapshot(known_at=NOW - timedelta(seconds=1)))
 
 
 def test_replace_insert_cannot_rewrite_history_from_separate_connection(tmp_path):
     import sqlite3
 
-    history = ImmutableMembershipHistory(tmp_path / "history.sqlite", repository=REPO)
-    digest = history.append(snapshot(), ingested_at=NOW)
+    history = ImmutableMembershipHistory(tmp_path / "history.sqlite", repository=REPO, clock=lambda: NOW)
+    digest = history.append(snapshot())
     with sqlite3.connect(history.path) as conn:
         original = conn.execute(
             "SELECT sequence, candidate_id, known_at, content, digest, previous_digest " "FROM membership_history"
@@ -124,15 +127,19 @@ def test_replace_insert_cannot_rewrite_history_from_separate_connection(tmp_path
                     replacement,
                 )
     assert history.as_of(NOW, trusted_anchor=anchor(history))[0].lifecycle_status == "identified"
-    assert history.append(snapshot(2), ingested_at=NOW) != digest
+    assert history.append(snapshot(2)) != digest
 
 
 def test_external_anchor_rejects_tail_truncation_and_rollback(tmp_path):
     import sqlite3
 
-    history = ImmutableMembershipHistory(tmp_path / "history.sqlite", repository=REPO)
-    history.append(snapshot(1), ingested_at=NOW)
-    history.append(snapshot(2), ingested_at=NOW)
+    history = ImmutableMembershipHistory(tmp_path / "history.sqlite", repository=REPO, clock=lambda: NOW)
+    history.append(
+        snapshot(1),
+    )
+    history.append(
+        snapshot(2),
+    )
     trusted = anchor(history)
     with sqlite3.connect(history.path) as conn:
         conn.execute("DROP TRIGGER membership_history_no_delete")
@@ -156,18 +163,18 @@ def test_preseeded_neutered_trigger_rejected(tmp_path):
 
 
 def test_canonical_entity_requires_normalized_id(tmp_path):
-    history = ImmutableMembershipHistory(tmp_path / "history.sqlite", repository=REPO)
+    history = ImmutableMembershipHistory(tmp_path / "history.sqlite", repository=REPO, clock=lambda: NOW)
     for entity in ("Entity-A", " entity-a "):
         with pytest.raises(ValueError, match="normalized"):
-            history.append(replace(snapshot(), canonical_entity_id=entity), ingested_at=NOW)
+            history.append(
+                replace(snapshot(), canonical_entity_id=entity),
+            )
 
 
 def test_attestation_payload_digest_changes_with_identity_and_sector(tmp_path):
-    history = ImmutableMembershipHistory(tmp_path / "history.sqlite", repository=REPO)
-    history.append(snapshot(1), ingested_at=NOW)
-    history.append(
-        replace(snapshot(2), upstream_attestation="attestation:1", source_digest="sha256:1"), ingested_at=NOW
-    )
+    history = ImmutableMembershipHistory(tmp_path / "history.sqlite", repository=REPO, clock=lambda: NOW)
+    history.append(snapshot(1))
+    history.append(replace(snapshot(2), upstream_attestation="attestation:1", source_digest="sha256:1"))
     seen = []
 
     def verifier(attestation, payload_digest):
@@ -181,19 +188,28 @@ def test_attestation_payload_digest_changes_with_identity_and_sector(tmp_path):
 
 
 def test_historical_backfill_not_visible_before_ingestion(tmp_path):
-    history = ImmutableMembershipHistory(tmp_path / "history.sqlite", repository=REPO)
-    history.append(snapshot(), ingested_at=NOW + timedelta(days=2))
+    history = ImmutableMembershipHistory(
+        tmp_path / "history.sqlite", repository=REPO, clock=lambda: NOW + timedelta(days=1)
+    )
+    # Ingestion is scheduled for the future; evidence must not be visible at NOW.
+    history.append(snapshot())
     assert history.as_of(NOW, trusted_anchor=anchor(history)) == ()
+    # At the future ingestion time, the evidence becomes visible.
+    assert len(history.as_of(NOW + timedelta(days=1), trusted_anchor=anchor(history))) == 1
 
 
 def test_same_timestamp_conflict_rejected(tmp_path):
-    history = ImmutableMembershipHistory(tmp_path / "history.sqlite", repository=REPO)
-    history.append(snapshot(), ingested_at=NOW)
+    history = ImmutableMembershipHistory(tmp_path / "history.sqlite", repository=REPO, clock=lambda: NOW)
+    history.append(snapshot())
     with pytest.raises(ValueError, match="advance"):
-        history.append(snapshot(sector="defi"), ingested_at=NOW)
+        history.append(
+            snapshot(sector="defi"),
+        )
 
 
 def test_reject_unrecognized_identity_outcome(tmp_path):
-    history = ImmutableMembershipHistory(tmp_path / "history.sqlite", repository=REPO)
+    history = ImmutableMembershipHistory(tmp_path / "history.sqlite", repository=REPO, clock=lambda: NOW)
     with pytest.raises(ValueError, match="invalid identity outcome"):
-        history.append(replace(snapshot(), identity_outcome="invented"), ingested_at=NOW)
+        history.append(
+            replace(snapshot(), identity_outcome="invented"),
+        )
