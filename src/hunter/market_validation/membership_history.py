@@ -112,6 +112,8 @@ class ImmutableMembershipHistory:
         return conn
 
     def append(self, snapshot: HistoricalMembershipSnapshot) -> str:
+        if snapshot.identity_outcome not in {"exact", "ambiguous", "conflict", "unresolved", "rejected"}:
+            raise ValueError("invalid identity outcome")
         if not snapshot.candidate_id.strip() or not snapshot.canonical_entity_id.strip():
             raise ValueError("candidate and canonical economic identity required")
         if not re.fullmatch(r"[a-z0-9][a-z0-9._:-]*", snapshot.canonical_entity_id):
@@ -189,6 +191,8 @@ class ImmutableMembershipHistory:
                 raise ValueError("membership history index mismatch")
             if data["known_at"] <= limit and data["ingested_at"] <= limit:
                 latest[data["candidate_id"]] = (data, digest)
+        if any(row["sequence"] != index for index, row in enumerate(rows, start=1)):
+            raise ValueError("membership history sequence gap")
         if (len(rows), previous) != (trusted_anchor.sequence, trusted_anchor.digest):
             raise ValueError("external history anchor mismatch")
         results = []

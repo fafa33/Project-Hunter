@@ -187,3 +187,9 @@ def test_same_timestamp_conflict_rejected(tmp_path):
     history.append(snapshot())
     with pytest.raises(ValueError, match="advance"):
         history.append(snapshot(sector="defi"))
+
+
+def test_reject_unrecognized_identity_outcome(tmp_path):
+    history = ImmutableMembershipHistory(tmp_path / "history.sqlite")
+    with pytest.raises(ValueError, match="invalid identity outcome"):
+        history.append(replace(snapshot(), identity_outcome="invented"))
