@@ -3,11 +3,12 @@ from __future__ import annotations
 import json
 import sqlite3
 from collections import Counter
-from collections.abc import Iterable
+from collections.abc import Callable, Iterable
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
+from hunter.discovery.canonical_history import CanonicalEntityRecord, digest_payload, replay_canonical_entities
 from hunter.discovery.models import (
     CandidateAlias,
     CandidateIdentifier,
@@ -30,6 +31,41 @@ class CandidateRegistryRepository:
         self.path = Path(path)
         self.path.parent.mkdir(parents=True, exist_ok=True)
         self._initialize()
+
+    def append_canonical_entity(
+        self,
+        record: CanonicalEntityRecord,
+        *,
+        repository: str,
+        clock: Callable[[], datetime],
+        verify_attestation: Callable[[dict[str, Any]], bool],
+    ) -> str:
+        """Registry-only immutable evidence write; no implicit identity promotion."""
+        with self._connect() as conn:
+            conn.execute("BEGIN IMMEDIATE")
+            row = conn.execute("SELECT digest FROM canonical_entity_history ORDER BY sequence DESC LIMIT 1").fetchone()
+            previous = str(row[0]) if row else f"GENESIS:{repository}"
+            payload = record.payload(repository=repository, ingested_at=clock(), previous_digest=previous)
+            if not verify_attestation(payload):
+                raise ValueError("canonical identity attestation unverified")
+            digest = digest_payload(payload)
+            conn.execute(
+                "INSERT INTO canonical_entity_history (digest, content) VALUES (?, ?)",
+                (digest, json.dumps(payload, sort_keys=True, separators=(",", ":"))),
+            )
+            return digest
+
+    def canonical_entity_history(self) -> list[tuple[str, dict[str, Any]]]:
+        with self._connect() as conn:
+            rows = conn.execute("SELECT digest, content FROM canonical_entity_history ORDER BY sequence").fetchall()
+        return [(str(row[0]), json.loads(row[1])) for row in rows]
+
+    def canonical_entities_as_of(
+        self, *, repository: str, cutoff: datetime, verify_attestation: Callable[[dict[str, Any]], bool]
+    ) -> dict[str, str]:
+        return replay_canonical_entities(
+            self.canonical_entity_history(), repository=repository, cutoff=cutoff, verify_attestation=verify_attestation
+        )
 
     def upsert_candidate(self, candidate: CandidateRecord) -> str:
         with self._connect() as conn:
@@ -135,24 +171,16 @@ class CandidateRegistryRepository:
                     "SELECT discovery_source, COUNT(*) AS count FROM candidates GROUP BY discovery_source"
                 ).fetchall()
             }
-            screenable = int(
-                conn.execute(
-                    """
+            screenable = int(conn.execute("""
                     SELECT COUNT(*) FROM candidates
                     WHERE lifecycle_status IN ('screenable', 'analyzable', 'ranked', 'deep_research')
-                    """
-                ).fetchone()[0]
-            )
-            identity_ready = int(
-                conn.execute(
-                    """
+                    """).fetchone()[0])
+            identity_ready = int(conn.execute("""
                     SELECT COUNT(*) FROM (
                         SELECT candidate_id FROM identifiers
                         GROUP BY candidate_id HAVING COUNT(*) >= 1
                     )
-                    """
-                ).fetchone()[0]
-            )
+                    """).fetchone()[0])
             last_run = conn.execute("SELECT MAX(finished_at) FROM runs").fetchone()[0]
             return CandidateRegistryStats(
                 total_candidates=total,
@@ -416,8 +444,7 @@ class CandidateRegistryRepository:
 
     def latest_screening_results(self) -> tuple[CandidateScreeningResult, ...]:
         with self._connect() as conn:
-            rows = conn.execute(
-                """
+            rows = conn.execute("""
                 SELECT sr.* FROM screening_results sr
                 JOIN (
                     SELECT candidate_id, MAX(screened_at) AS screened_at
@@ -425,8 +452,7 @@ class CandidateRegistryRepository:
                 ) latest
                 ON sr.candidate_id = latest.candidate_id AND sr.screened_at = latest.screened_at
                 ORDER BY sr.score DESC, sr.candidate_id
-                """
-            ).fetchall()
+                """).fetchall()
             return tuple(_screening_from_row(row) for row in rows)
 
     def save_queue_entries(self, entries: tuple[CandidateQueueEntry, ...]) -> None:
@@ -476,8 +502,7 @@ class CandidateRegistryRepository:
 
     def _initialize(self) -> None:
         with self._connect() as conn:
-            conn.executescript(
-                """
+            conn.executescript("""
                 CREATE TABLE IF NOT EXISTS candidates (
                     candidate_id TEXT PRIMARY KEY,
                     slug TEXT NOT NULL UNIQUE,
@@ -599,6 +624,15 @@ class CandidateRegistryRepository:
                     updated_at TEXT NOT NULL,
                     status TEXT NOT NULL
                 );
+                CREATE TABLE IF NOT EXISTS canonical_entity_history (
+                    sequence INTEGER PRIMARY KEY AUTOINCREMENT,
+                    digest TEXT NOT NULL UNIQUE,
+                    content TEXT NOT NULL
+                );
+                CREATE TRIGGER IF NOT EXISTS canonical_entity_history_no_update
+                    BEFORE UPDATE ON canonical_entity_history BEGIN SELECT RAISE(ABORT, 'immutable canonical identity'); END;
+                CREATE TRIGGER IF NOT EXISTS canonical_entity_history_no_delete
+                    BEFORE DELETE ON canonical_entity_history BEGIN SELECT RAISE(ABORT, 'immutable canonical identity'); END;
                 CREATE TABLE IF NOT EXISTS identity_results (
                     candidate_id TEXT PRIMARY KEY,
                     outcome TEXT NOT NULL,
@@ -624,8 +658,7 @@ class CandidateRegistryRepository:
                 CREATE INDEX IF NOT EXISTS queue_priority_idx ON queue_entries(priority_score);
                 CREATE INDEX IF NOT EXISTS conflicts_candidate_idx ON conflicts(candidate_id);
                 CREATE INDEX IF NOT EXISTS identity_outcome_idx ON identity_results(outcome);
-                """
-            )
+                """)
 
     def _connect(self) -> sqlite3.Connection:
         conn = sqlite3.connect(self.path)

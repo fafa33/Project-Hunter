@@ -201,13 +201,27 @@ class RegistryIdentityVerifier:
         self._repository = repository
 
     def verify_entity(self, entity_id: str) -> bool:
-        """Legacy upsert identity cannot prove a historical economic entity.
-
-        ADR 0040 forbids deriving canonical identity from candidate identifiers
-        or a current-state exact outcome. Until the Registry owns a durable,
-        known-time, source-bound canonical mapping, admission stays disabled.
-        """
+        # A current-state exact outcome never authorizes a historical mapping.
         return False
+
+    def verify_historical_entity(
+        self,
+        entity_id: str,
+        *,
+        candidate_id: str,
+        cutoff: datetime,
+        repository: str,
+        verify_attestation: Any,
+    ) -> bool:
+        try:
+            entities = self._repository.canonical_entities_as_of(
+                repository=repository,
+                cutoff=cutoff,
+                verify_attestation=verify_attestation,
+            )
+            return entities.get(entity_id) == candidate_id
+        except (ValueError, KeyError, TypeError):
+            return False
 
 
 class GitHubAnchorReader(ExternalAnchorReader):
