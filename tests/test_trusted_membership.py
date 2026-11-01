@@ -110,6 +110,7 @@ def run_shadow(history, trust, anchor):
     )
 
 
+@pytest.fixture
 def test_signed_evidence_and_external_anchor_allow_shadow_only(tmp_path):
     history, trust, anchor = fixture(tmp_path)
     result = run_shadow(history, trust, anchor)
