@@ -139,6 +139,8 @@ class ImmutableMembershipHistory:
         *,
         registry: Any | None = None,
         verify_registry_attestation: Callable[[dict[str, Any]], bool] | None = None,
+        sign_evidence_digest: Callable[[str], str] | None = None,
+        verify_evidence: Callable[[str, str], bool] | None = None,
     ) -> str:
         """Append one attested snapshot.
 
@@ -161,8 +163,10 @@ class ImmutableMembershipHistory:
             raise ValueError("canonical entity mapping must match project identity")
         if not snapshot.source_digest.strip() or not snapshot.registry_reference.strip():
             raise ValueError("source provenance required")
-        if not snapshot.upstream_attestation.strip():
+        if not snapshot.upstream_attestation.strip() and sign_evidence_digest is None:
             raise ValueError("independent upstream attestation required")
+        if sign_evidence_digest is not None and (verify_evidence is None or snapshot.upstream_attestation):
+            raise ValueError("signed ingress requires a pinned verifier and unsigned snapshot")
         known, observed = _utc(snapshot.known_at), _utc(snapshot.observed_at)
         if observed > known:
             raise ValueError("evidence cannot be known before observation")
@@ -203,9 +207,17 @@ class ImmutableMembershipHistory:
             "ingested_at": ingested,
             "upstream_attestation": snapshot.upstream_attestation,
         }
-        content = json.dumps(payload, sort_keys=True, separators=(",", ":"))
         with self._connect() as conn:
             conn.execute("BEGIN IMMEDIATE")
+            if sign_evidence_digest is not None:
+                unsigned = {key: value for key, value in payload.items() if key != "upstream_attestation"}
+                from hunter.market_validation.trusted_membership import canonical_bytes
+
+                evidence_digest = hashlib.sha256(canonical_bytes(unsigned)).hexdigest()
+                payload["upstream_attestation"] = sign_evidence_digest(evidence_digest)
+                if not verify_evidence or not verify_evidence(payload["upstream_attestation"], evidence_digest):
+                    raise ValueError("membership evidence attestation unverified")
+            content = json.dumps(payload, sort_keys=True, separators=(",", ":"))
             last = conn.execute("SELECT digest FROM membership_history ORDER BY sequence DESC LIMIT 1").fetchone()
             previous_candidate = conn.execute(
                 "SELECT known_at, content FROM membership_history WHERE candidate_id=? ORDER BY sequence DESC LIMIT 1",
@@ -342,9 +354,19 @@ class TrustedIngress:
         *,
         registry: Any | None = None,
         clock: Callable[[], datetime] | None = None,
+        verify_registry_attestation: Callable[[dict[str, Any]], bool] | None = None,
+        sign_evidence_digest: Callable[[str], str] | None = None,
+        verify_evidence: Callable[[str, str], bool] | None = None,
     ) -> None:
         self.history = history
         self.registry = registry
+        self._verify_registry_attestation = verify_registry_attestation
+        self._sign_evidence_digest = sign_evidence_digest
+        self._verify_evidence = verify_evidence
+        if registry is not None and verify_registry_attestation is None:
+            raise ValueError("authenticated historical Registry verifier required")
+        if sign_evidence_digest is not None and verify_evidence is None:
+            raise ValueError("pinned membership evidence verifier required")
         self._clock = clock or (lambda: datetime.now(UTC))
         # The history's clock and the ingress clock must agree so that
         # ingested_at assigned by the service matches the history's clock.
@@ -358,4 +380,10 @@ class TrustedIngress:
         trusted ingestion; per-candidate monotonic supersession is preserved
         by the underlying history ledger.
         """
-        return self.history.append(snapshot, registry=self.registry)
+        return self.history.append(
+            snapshot,
+            registry=self.registry,
+            verify_registry_attestation=self._verify_registry_attestation,
+            sign_evidence_digest=self._sign_evidence_digest,
+            verify_evidence=self._verify_evidence,
+        )
