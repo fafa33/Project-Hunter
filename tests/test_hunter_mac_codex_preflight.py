@@ -3,7 +3,7 @@
 from pathlib import Path
 from types import SimpleNamespace
 
-from scripts import hunter_mac_codex_preflight as preflight
+from hunter.automation import mac_codex_preflight as preflight
 
 
 def test_missing_user_fails_closed(monkeypatch, tmp_path: Path):
