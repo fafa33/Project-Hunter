@@ -139,3 +139,12 @@ def test_authorized_target_sector_and_metadata_bind_manifest_digest():
     assert original.runnable
     assert authorize(changed_sector).manifest_digest != original.manifest_digest
     assert authorize(changed_metadata).manifest_digest != original.manifest_digest
+
+
+def test_case_and_whitespace_variants_cannot_inflate_entity_minimum():
+    items = [evidence(i) for i in range(49)]
+    items += [evidence(49, entity="ENTITY-0"), evidence(50, entity=" entity-0 ")]
+    result = authorize(items)
+    assert not result.runnable
+    assert len(result.targets) == 49
+    assert sum(d.reason == "unproven canonical economic entity mapping" for d in result.decisions) == 2
