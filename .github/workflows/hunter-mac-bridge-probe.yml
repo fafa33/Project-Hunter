@@ -36,11 +36,4 @@ jobs:
           TRUSTED_SHA: ${{ github.sha }}
         run: |
           set -euo pipefail
-          python3 scripts/hunter_mac_bridge_probe.py --repository "$REPOSITORY" --head "$TRUSTED_SHA" --output mac-bridge-receipt.json
-      - name: Upload diagnostic receipt
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
-        with:
-          name: hunter-mac-bridge-readonly-${{ github.sha }}-${{ github.run_id }}
-          path: mac-bridge-receipt.json
-          if-no-files-found: error
-          retention-days: 1
+          python3 scripts/hunter_mac_bridge_probe.py --repository "$REPOSITORY" --head "$TRUSTED_SHA"
