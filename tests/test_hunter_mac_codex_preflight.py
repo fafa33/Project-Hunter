@@ -1,0 +1,59 @@
+"""Ensure the Mac executor prerequisite checker fails closed."""
+
+from pathlib import Path
+from types import SimpleNamespace
+
+from hunter.automation import mac_codex_preflight as preflight
+
+
+def test_missing_user_fails_closed(monkeypatch, tmp_path: Path):
+    def missing(_user):
+        raise KeyError
+
+    monkeypatch.setattr(preflight.pwd, "getpwnam", missing)
+    assert preflight.verify_principal("missing", current_uid=501, owner_home=tmp_path) == ["ISOLATION_ACCOUNT_MISSING"]
+
+
+def test_same_uid_and_traversable_home_fail(monkeypatch, tmp_path: Path):
+    home = tmp_path / "agent"
+    home.mkdir()
+    owner = tmp_path / "owner"
+    owner.mkdir(mode=0o755)
+    owner.chmod(0o755)
+    monkeypatch.setattr(preflight.pwd, "getpwnam", lambda _: SimpleNamespace(pw_uid=501, pw_dir=str(home)))
+    assert preflight.verify_principal("agent", current_uid=501, owner_home=owner) == [
+        "ISOLATION_UID_NOT_DISTINCT",
+        "OWNER_HOME_TRAVERSABLE",
+    ]
+
+
+def test_private_owner_home_does_not_claim_full_isolation(monkeypatch, tmp_path: Path):
+    home = tmp_path / "agent"
+    home.mkdir()
+    owner = tmp_path / "owner"
+    owner.mkdir()
+    owner.chmod(0o700)
+    monkeypatch.setattr(preflight.pwd, "getpwnam", lambda _: SimpleNamespace(pw_uid=502, pw_dir=str(home)))
+    assert preflight.verify_principal("agent", current_uid=501, owner_home=owner) == []
+
+
+def test_missing_dedicated_auth_blocks_activation(monkeypatch, tmp_path: Path):
+    monkeypatch.setattr(preflight.platform, "system", lambda: "Darwin")
+    monkeypatch.setattr(
+        preflight.pwd, "getpwnam", lambda _: SimpleNamespace(pw_uid=502, pw_dir=str(tmp_path / "agent"))
+    )
+    monkeypatch.setattr(preflight.os, "getuid", lambda: 501)
+    monkeypatch.setattr(preflight.subprocess, "run", lambda *a, **k: SimpleNamespace(returncode=0))
+    owner = tmp_path / "owner"
+    owner.mkdir(mode=0o700)
+    owner.chmod(0o700)
+    assert "DEDICATED_CODEX_AUTH_MISSING" in preflight.check("hunteragent", owner)
+
+
+def test_unapproved_user_never_reaches_sudo(monkeypatch, tmp_path: Path):
+    def unexpected(*_args, **_kwargs):
+        raise AssertionError("sudo must not run for an unapproved principal")
+
+    monkeypatch.setattr(preflight.subprocess, "run", unexpected)
+    assert preflight.check("-root", tmp_path) == ["UNAPPROVED_EXECUTOR_USER"]
+    assert preflight.check("other-agent", tmp_path) == ["UNAPPROVED_EXECUTOR_USER"]

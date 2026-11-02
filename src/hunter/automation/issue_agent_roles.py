@@ -812,6 +812,101 @@ def opencode_invocation(
     )
 
 
+def _is_codex_exec(argv: Sequence[str]) -> bool:
+    return len(argv) >= 2 and Path(argv[0]).name == "codex" and argv[1] == "exec"
+
+
+def codex_invocation(
+    model_argv: Sequence[str],
+    *,
+    prompt: bytes,
+    home: Path,
+    workspace: Path,
+    model_environment: Mapping[str, str] = MODEL_PUBLIC_ENVIRONMENT,
+) -> OpenCodeInvocation:
+    """Build a bounded Codex invocation; OS-level principal isolation remains mandatory.
+
+    This is an argv/environment adapter, NOT a macOS isolation implementation.
+    It is only safe when launched through the existing separate-UID Isolation port.
+    Codex's own workspace sandbox is defense in depth, not the credential boundary.
+    """
+    if not _is_codex_exec(model_argv):
+        raise RoleRefused("EXECUTION_NOT_COMPLETED", "Codex adapter requires codex exec")
+    # Reject caller-provided flags that could override the sandbox, directory,
+    # config source, or inject a positional task outside the sealed prompt.
+    if any(
+        arg
+        in {
+            "--dangerously-bypass-approvals-and-sandbox",
+            "--dangerously-bypass-hook-trust",
+            "--add-dir",
+            "--cd",
+            "-C",
+            "--sandbox",
+            "-s",
+            "--profile",
+            "-p",
+            "--config",
+            "-c",
+            "--oss",
+            "--local-provider",
+            "--worktree",
+            "--approve-for-me",
+            "--image",
+            "-i",
+            "--",
+        }
+        or arg.startswith(("--config=", "--sandbox=", "--cd=", "--add-dir=", "--profile="))
+        for arg in model_argv[2:]
+    ):
+        raise RoleRefused("EXECUTION_NOT_COMPLETED", "untrusted Codex launch flags")
+    # Only permit an explicit model choice, never arbitrary positional instructions.
+    if (
+        len(model_argv) != 4
+        or model_argv[2] not in {"--model", "-m"}
+        or not model_argv[3].strip()
+        or model_argv[3].startswith("-")
+    ):
+        raise RoleRefused("EXECUTION_NOT_COMPLETED", "Codex model argv must contain only --model MODEL")
+    # The model's transient HOME is created by the trusted executor, then
+    # chowned to the isolated principal by Isolation.prepare. Codex login
+    # material is never copied from the runner owner's ~/.codex.
+    # Without a dedicated credential handoff and macOS sandbox, this adapter
+    # must remain inactive in the production workflow.
+    codex_home = home / ".codex"
+    return OpenCodeInvocation(
+        argv=(
+            model_argv[0],
+            "exec",
+            "--model",
+            model_argv[3],
+            "--sandbox",
+            "workspace-write",
+            "--cd",
+            str(workspace),
+            "--skip-git-repo-check",
+            "--ephemeral",
+            "--ignore-user-config",
+            "-c",
+            'model_reasoning_effort="low"',
+            "-c",
+            "sandbox_workspace_write.network_access=false",
+            "-",
+        ),
+        stdin=prompt,
+        public_env={
+            **model_environment,
+            "HOME": str(home),
+            "PWD": str(workspace),
+            "CODEX_HOME": str(codex_home),
+            "XDG_CONFIG_HOME": str(home / ".config"),
+            "XDG_CACHE_HOME": str(home / ".cache"),
+            "XDG_DATA_HOME": str(home / ".local" / "share"),
+            "XDG_STATE_HOME": str(home / ".local" / "state"),
+        },
+    )
+
+
 # --- executor ------------------------------------------------------------------------------------------
 
 
@@ -898,7 +993,13 @@ def run_executor(
             model_argv, prompt=prompt, home=home, workspace=workspace, model_environment=config.model_public_env
         )
         if _is_opencode_run(model_argv)
-        else None
+        else (
+            codex_invocation(
+                model_argv, prompt=prompt, home=home, workspace=workspace, model_environment=config.model_public_env
+            )
+            if _is_codex_exec(model_argv)
+            else None
+        )
     )
     if invocation is not None:
         model_argv, model_stdin = invocation.argv, invocation.stdin
