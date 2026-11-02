@@ -374,39 +374,6 @@ def test_f5_rejects_legacy_current_state_verifier(tmp_path):
         history.append(snapshot(1), registry=Legacy(), verify_registry_attestation=lambda _: True)
 
 
-def _make_entries(anchor_text: str) -> list[tuple[str, dict[str, bytes]]]:
-    return [("abc123", {"membership-anchor.json": anchor_text.encode("utf-8")})]
-
-
-def _intact_ruleset() -> dict:
-    return {
-        "id": 24526712,
-        "enforcement": "active",
-        "updated_at": "2026-10-06T20:52:31.773Z",
-        "rules": [{"type": "deletion"}, {"type": "non_fast_forward"}],
-    }
-
-
-def _intact_branch_rules() -> list[dict]:
-    return [
-        {"type": "deletion", "ruleset_id": 24526712},
-        {"type": "non_fast_forward", "ruleset_id": 24526712},
-    ]
-
-
-def _make_pin() -> MembershipAnchorPin:
-    return MembershipAnchorPin(ruleset_id=24526712, updated_at="2026-10-06T20:52:31.773Z")
-
-
-def _make_reader(store, ruleset=None, branch_rules=None):
-    return GitHubAnchorReader(
-        REPO,
-        store=store,
-        pin=_make_pin(),
-        ruleset=ruleset or _intact_ruleset(),
-        branch_rules=branch_rules if branch_rules is not None else _intact_branch_rules(),
-    )
-
 
 # --- F-2 integration tests: GitHubAnchorReader with GitLedgerStore ----------
 
