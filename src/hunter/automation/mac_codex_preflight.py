@@ -36,6 +36,9 @@ def verify_principal(user: str, *, current_uid: int, owner_home: Path) -> list[s
 
 
 def check(user: str, owner_home: Path) -> list[str]:
+    # The sudo target is a fixed, provisioned principal, never caller input.
+    if user != "hunteragent":
+        return ["UNAPPROVED_EXECUTOR_USER"]
     failures = []
     if platform.system() != "Darwin":
         failures.append("NOT_MACOS")
@@ -58,7 +61,7 @@ def check(user: str, owner_home: Path) -> list[str]:
     # No password prompt; no privilege change and no secret values passed.
     try:
         probe = subprocess.run(
-            ("sudo", "-n", "-u", user, "--", "/usr/bin/id", "-u"),
+            ("/usr/bin/sudo", "-n", "-u", "hunteragent", "--", "/usr/bin/id", "-u"),
             stdout=subprocess.DEVNULL,
             stderr=subprocess.DEVNULL,
             timeout=5,

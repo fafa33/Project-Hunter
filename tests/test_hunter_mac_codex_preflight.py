@@ -48,3 +48,12 @@ def test_missing_dedicated_auth_blocks_activation(monkeypatch, tmp_path: Path):
     owner.mkdir(mode=0o700)
     owner.chmod(0o700)
     assert "DEDICATED_CODEX_AUTH_MISSING" in preflight.check("hunteragent", owner)
+
+
+def test_unapproved_user_never_reaches_sudo(monkeypatch, tmp_path: Path):
+    def unexpected(*_args, **_kwargs):
+        raise AssertionError("sudo must not run for an unapproved principal")
+
+    monkeypatch.setattr(preflight.subprocess, "run", unexpected)
+    assert preflight.check("-root", tmp_path) == ["UNAPPROVED_EXECUTOR_USER"]
+    assert preflight.check("other-agent", tmp_path) == ["UNAPPROVED_EXECUTOR_USER"]
