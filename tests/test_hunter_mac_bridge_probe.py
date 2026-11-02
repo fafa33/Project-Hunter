@@ -31,3 +31,32 @@ def test_stale_head_fails(tmp_path):
     ):
         with pytest.raises(ValueError, match="stale"):
             receipt("fafa33/Project-Hunter", SHA, "macOS", root=tmp_path)
+
+
+def test_cli_bootstraps_without_installed_hunter_package():
+    """Regression: a bare self-hosted runner must not need the Hunter package."""
+    import os
+    import subprocess
+    import sys
+    from pathlib import Path
+
+    repo_root = Path(__file__).resolve().parents[1]
+    result = subprocess.run(
+        [
+            sys.executable,
+            "-I",
+            str(repo_root / "scripts" / "hunter_mac_bridge_probe.py"),
+            "--repository",
+            "untrusted/repo",
+            "--head",
+            SHA,
+        ],
+        cwd=repo_root,
+        env={**os.environ, "PYTHONPATH": ""},
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    assert result.returncode != 0
+    assert "untrusted repository" in result.stderr
+    assert "ModuleNotFoundError" not in result.stderr
