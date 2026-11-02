@@ -2,7 +2,7 @@ from unittest.mock import patch
 
 import pytest
 
-from scripts.hunter_mac_bridge_probe import receipt
+from hunter.automation.mac_bridge_probe import receipt
 
 SHA = "a" * 40
 
