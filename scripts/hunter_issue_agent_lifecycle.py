@@ -1285,12 +1285,14 @@ def cmd_execute(configuration: control.Configuration, arguments: argparse.Namesp
     mac_codex = os.environ.get("HUNTER_ISSUE_AGENT_MAC_CODEX") == "1"
     if mac_codex:
         if sys.platform != "darwin" or tuple(arguments.model_argv[:2]) != (
-            "/Users/hunterexecutor/.local/hunter-codex/node_modules/.bin/codex", "exec"
+            "/Users/hunterexecutor/.local/hunter-codex/node_modules/.bin/codex",
+            "exec",
         ):
             raise LifecycleRefused("MISSING_CONFIGURATION", "macOS Codex executor command is not pinned")
         if arguments.model_key_name != "NONE":
             raise LifecycleRefused("MISSING_CONFIGURATION", "Codex uses dedicated login, not an injected model API key")
         from hunter.automation.mac_codex_preflight import check as mac_preflight
+
         failures = mac_preflight("hunterexecutor", Path("/Users/farhadafshari"))
         if failures:
             raise LifecycleRefused("ISOLATION_NOT_READY", ",".join(failures))

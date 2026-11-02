@@ -56,7 +56,9 @@ def test_pinned_dedicated_mac_codex_uses_isolated_login(tmp_path: Path) -> None:
     workspace.mkdir()
     result = roles.codex_invocation(
         ("/Users/hunterexecutor/.local/hunter-codex/node_modules/.bin/codex", "exec", "--model", "gpt-6-luna"),
-        prompt=b"signed task", home=home, workspace=workspace,
+        prompt=b"signed task",
+        home=home,
+        workspace=workspace,
     )
     assert result.public_env["CODEX_HOME"] == "/Users/hunterexecutor/.codex"
     assert result.public_env["HOME"] == str(home)
