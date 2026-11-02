@@ -35,3 +35,16 @@ def test_private_owner_home_does_not_claim_full_isolation(monkeypatch, tmp_path:
     owner.chmod(0o700)
     monkeypatch.setattr(preflight.pwd, "getpwnam", lambda _: SimpleNamespace(pw_uid=502, pw_dir=str(home)))
     assert preflight.verify_principal("agent", current_uid=501, owner_home=owner) == []
+
+
+def test_missing_dedicated_auth_blocks_activation(monkeypatch, tmp_path: Path):
+    monkeypatch.setattr(preflight.platform, "system", lambda: "Darwin")
+    monkeypatch.setattr(
+        preflight.pwd, "getpwnam", lambda _: SimpleNamespace(pw_uid=502, pw_dir=str(tmp_path / "agent"))
+    )
+    monkeypatch.setattr(preflight.os, "getuid", lambda: 501)
+    monkeypatch.setattr(preflight.subprocess, "run", lambda *a, **k: SimpleNamespace(returncode=0))
+    owner = tmp_path / "owner"
+    owner.mkdir(mode=0o700)
+    owner.chmod(0o700)
+    assert "DEDICATED_CODEX_AUTH_MISSING" in preflight.check("hunteragent", owner)

@@ -42,6 +42,19 @@ def check(user: str, owner_home: Path) -> list[str]:
     failures.extend(verify_principal(user, current_uid=os.getuid(), owner_home=owner_home))
     if not Path("/usr/bin/sandbox-exec").is_file():
         failures.append("SANDBOX_BINARY_MISSING")
+    # Never read auth.json: only inspect metadata. Credentials must belong to
+    # the isolated user, not be copied from the runner's personal account.
+    try:
+        isolated = pwd.getpwnam(user)
+        auth = Path(isolated.pw_dir) / ".codex" / "auth.json"
+        if not auth.is_file():
+            failures.append("DEDICATED_CODEX_AUTH_MISSING")
+        else:
+            info = auth.stat()
+            if info.st_uid != isolated.pw_uid or (stat.S_IMODE(info.st_mode) & 0o077):
+                failures.append("DEDICATED_CODEX_AUTH_PERMISSIONS")
+    except (KeyError, OSError):
+        failures.append("DEDICATED_CODEX_AUTH_UNVERIFIED")
     # No password prompt; no privilege change and no secret values passed.
     try:
         probe = subprocess.run(
