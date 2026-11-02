@@ -1,0 +1,46 @@
+name: Hunter / Mac Bridge Read-Only Probe
+# Diagnostic transport only: NOT a canonical proof authority or a general agent executor.
+# Owner-authorized workflow_dispatch on default branch; no Issue/PR text or shell input.
+on:
+  workflow_dispatch:
+  issues:
+    types: [labeled]
+permissions:
+  contents: read
+concurrency:
+  group: hunter-mac-bridge-readonly-probe
+  cancel-in-progress: false
+jobs:
+  probe:
+    if: >-
+      github.actor == github.repository_owner
+      && github.ref == 'refs/heads/main'
+      && (github.event_name == 'workflow_dispatch'
+          || (github.event_name == 'issues'
+              && github.event.label.name == 'hunter-mac-bridge-probe'
+              && github.event.issue.number == 390
+              && github.event.issue.state == 'open'))
+    runs-on: [self-hosted, macOS, hunter-reviewer]
+    timeout-minutes: 5
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout trusted default branch
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+      - name: Emit bounded local liveness receipt
+        env:
+          REPOSITORY: ${{ github.repository }}
+          TRUSTED_SHA: ${{ github.sha }}
+        run: |
+          set -euo pipefail
+          python3 scripts/hunter_mac_bridge_probe.py --repository "$REPOSITORY" --head "$TRUSTED_SHA" --output mac-bridge-receipt.json
+      - name: Upload diagnostic receipt
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: hunter-mac-bridge-readonly-${{ github.sha }}-${{ github.run_id }}
+          path: mac-bridge-receipt.json
+          if-no-files-found: error
+          retention-days: 1
