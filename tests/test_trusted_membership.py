@@ -374,7 +374,6 @@ def test_f5_rejects_legacy_current_state_verifier(tmp_path):
         history.append(snapshot(1), registry=Legacy(), verify_registry_attestation=lambda _: True)
 
 
-
 # --- F-2 integration tests: GitHubAnchorReader with GitLedgerStore ----------
 
 
