@@ -19,6 +19,7 @@ def test_codex_uses_sealed_stdin_private_home_and_workspace(tmp_path: Path) -> N
     assert prompt.decode().strip() not in " ".join(result.argv)
     assert result.argv[-1] == "-"
     assert ("--sandbox", "workspace-write") == result.argv[4:6]
+    assert not (home / ".codex").exists()  # invocation must not create owner-owned credential directories
     assert result.public_env["HOME"] == str(home)
     assert result.public_env["CODEX_HOME"] == str(home / ".codex")
     assert result.public_env["PWD"] == str(workspace)

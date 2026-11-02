@@ -868,8 +868,12 @@ def codex_invocation(
         or model_argv[3].startswith("-")
     ):
         raise RoleRefused("EXECUTION_NOT_COMPLETED", "Codex model argv must contain only --model MODEL")
+    # The model's transient HOME is created by the trusted executor, then
+    # chowned to the isolated principal by Isolation.prepare. Codex login
+    # material is never copied from the runner owner's ~/.codex.
+    # Without a dedicated credential handoff and macOS sandbox, this adapter
+    # must remain inactive in the production workflow.
     codex_home = home / ".codex"
-    codex_home.mkdir(mode=0o700, exist_ok=True)
     return OpenCodeInvocation(
         argv=(
             model_argv[0],
