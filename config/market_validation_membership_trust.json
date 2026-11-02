@@ -1,0 +1,7 @@
+{
+  "schema_version": "hunter-membership-trust-v1",
+  "provisioned": false,
+  "repository": "fafa33/Project-Hunter",
+  "evidence_public_key": null,
+  "anchor_public_key": null
+}
