@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import re
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import PurePosixPath
@@ -103,7 +104,11 @@ class MarketValidationUniverseMembershipAuthority:
                 outcome, reason = "unavailable", "evidence not knowable at cutoff"
             elif not item.provenance_verified or not item.source_digest.strip() or not item.registry_reference.strip():
                 outcome, reason = "unavailable", "missing authenticated evidence provenance"
-            elif not entity or item.project.project_id != entity:
+            elif (
+                not re.fullmatch(r"[a-z0-9][a-z0-9._:-]*", item.canonical_entity_id)
+                or item.canonical_entity_id != entity
+                or item.project.project_id != entity
+            ):
                 outcome, reason = "unavailable", "unproven canonical economic entity mapping"
             elif item.identity_outcome != "exact" or item.lifecycle_status in {"rejected", "archived"}:
                 outcome, reason = "not_included", "identity or lifecycle ineligible"
