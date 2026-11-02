@@ -48,3 +48,26 @@ def test_codex_rejects_override_and_task_injection(tmp_path: Path, tail: tuple[s
 def test_codex_requires_explicit_model(tmp_path: Path) -> None:
     with pytest.raises(roles.RoleRefused):
         roles.codex_invocation(("codex", "exec"), prompt=b"task", home=tmp_path, workspace=tmp_path)
+
+
+def test_pinned_dedicated_mac_codex_uses_isolated_login(tmp_path: Path) -> None:
+    home, workspace = tmp_path / "home", tmp_path / "workspace"
+    home.mkdir()
+    workspace.mkdir()
+    result = roles.codex_invocation(
+        ("/Users/hunterexecutor/.local/hunter-codex/node_modules/.bin/codex", "exec", "--model", "gpt-6-luna"),
+        prompt=b"signed task", home=home, workspace=workspace,
+    )
+    assert result.public_env["CODEX_HOME"] == "/Users/hunterexecutor/.codex"
+    assert result.public_env["HOME"] == str(home)
+    assert "signed task" not in " ".join(result.argv)
+
+
+def test_github_executor_stays_in_single_existing_lifecycle() -> None:
+    workflow = Path(".github/workflows/hunter-issue-agent-trigger.yml").read_text()
+    execute = workflow.split("\n  execute:\n", 1)[1].split("\n  bind:\n", 1)[0]
+    assert "runs-on: [self-hosted, macOS, hunter-reviewer]" in execute
+    assert "--model-argv /Users/hunterexecutor/.local/hunter-codex/node_modules/.bin/codex exec" in execute
+    assert "HUNTER_ISSUE_AGENT_MAC_CODEX" in execute
+    assert "HUNTER_ISSUE_AGENT_OPENCODE_API_KEY" not in execute
+    assert "python3 scripts/hunter_issue_agent_lifecycle.py execute" in execute

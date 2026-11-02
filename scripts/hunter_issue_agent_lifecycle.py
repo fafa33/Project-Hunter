@@ -1282,7 +1282,23 @@ def cmd_execute(configuration: control.Configuration, arguments: argparse.Namesp
 
     run_id, attempt, _ = _run_context()
     os.environ["HUNTER_PROMPT_AUTOMATION_VERIFYING_KEY"] = configuration.prompt_verifying_key
-    model_key = _secret(MODEL_KEY_ENV)
+    mac_codex = os.environ.get("HUNTER_ISSUE_AGENT_MAC_CODEX") == "1"
+    if mac_codex:
+        if sys.platform != "darwin" or tuple(arguments.model_argv[:2]) != (
+            "/Users/hunterexecutor/.local/hunter-codex/node_modules/.bin/codex", "exec"
+        ):
+            raise LifecycleRefused("MISSING_CONFIGURATION", "macOS Codex executor command is not pinned")
+        if arguments.model_key_name != "NONE":
+            raise LifecycleRefused("MISSING_CONFIGURATION", "Codex uses dedicated login, not an injected model API key")
+        from hunter.automation.mac_codex_preflight import check as mac_preflight
+        failures = mac_preflight("hunterexecutor", Path("/Users/farhadafshari"))
+        if failures:
+            raise LifecycleRefused("ISOLATION_NOT_READY", ",".join(failures))
+        model_secret_env = {}
+        isolation_user = "hunterexecutor"
+    else:
+        model_secret_env = {arguments.model_key_name: _secret(MODEL_KEY_ENV)}
+        isolation_user = ISOLATION_USER
     outcome = roles.run_executor(
         issue=arguments.issue,
         authorization_id=arguments.authorization_id,
@@ -1293,12 +1309,12 @@ def cmd_execute(configuration: control.Configuration, arguments: argparse.Namesp
             remote=_remote(configuration),
             model_argv=tuple(arguments.model_argv),
             model_public_env=roles.MODEL_PUBLIC_ENVIRONMENT,
-            model_secret_env={arguments.model_key_name: model_key},
+            model_secret_env=model_secret_env,
             handoff_key=_x25519(HANDOFF_KEY_ENV),
             result_recipient=configuration.result_recipient,
             prompt_verifier=PromptAutomationVerifier.from_environment(),
         ),
-        isolation=roles.SudoIsolation(ISOLATION_USER),
+        isolation=roles.SudoIsolation(isolation_user),
         workroot=Path(arguments.workroot),
     )
     if outcome.sealed_result is not None:

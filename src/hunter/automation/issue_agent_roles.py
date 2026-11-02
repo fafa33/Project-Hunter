@@ -873,7 +873,13 @@ def codex_invocation(
     # material is never copied from the runner owner's ~/.codex.
     # Without a dedicated credential handoff and macOS sandbox, this adapter
     # must remain inactive in the production workflow.
-    codex_home = home / ".codex"
+    # The dedicated principal owns this login; the runner owner's login is never mounted.
+    # Only the exact pinned macOS executable may use this fixed credential home.
+    codex_home = (
+        Path("/Users/hunterexecutor/.codex")
+        if model_argv[0] == "/Users/hunterexecutor/.local/hunter-codex/node_modules/.bin/codex"
+        else home / ".codex"
+    )
     return OpenCodeInvocation(
         argv=(
             model_argv[0],

@@ -37,7 +37,7 @@ def verify_principal(user: str, *, current_uid: int, owner_home: Path) -> list[s
 
 def check(user: str, owner_home: Path) -> list[str]:
     # The sudo target is a fixed, provisioned principal, never caller input.
-    if user != "hunteragent":
+    if user not in {"hunteragent", "hunterexecutor"}:
         return ["UNAPPROVED_EXECUTOR_USER"]
     failures = []
     if platform.system() != "Darwin":
