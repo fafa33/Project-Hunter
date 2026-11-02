@@ -79,10 +79,19 @@ def test_signed_ingress_fails_closed_without_verified_authority(tmp_path):
 
     with pytest.raises(ValueError, match="authenticated historical Registry verifier"):
         TrustedIngress(history, registry=Registry())
-    with pytest.raises(ValueError, match="pinned membership evidence verifier"):
+    with pytest.raises(ValueError, match="signed membership ingress requires authenticated Registry"):
         TrustedIngress(history, sign_evidence_digest=lambda _: "fake")
+    with pytest.raises(ValueError, match="pinned membership evidence verifier"):
+        TrustedIngress(
+            history,
+            registry=Registry(),
+            verify_registry_attestation=lambda _: True,
+            sign_evidence_digest=lambda _: "fake",
+        )
     ingress = TrustedIngress(
         history,
+        registry=Registry(),
+        verify_registry_attestation=lambda _: True,
         clock=lambda: NOW,
         sign_evidence_digest=lambda _: "fake",
         verify_evidence=lambda *_: False,

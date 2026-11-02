@@ -365,6 +365,8 @@ class TrustedIngress:
         self._verify_evidence = verify_evidence
         if registry is not None and verify_registry_attestation is None:
             raise ValueError("authenticated historical Registry verifier required")
+        if sign_evidence_digest is not None and (registry is None or verify_registry_attestation is None):
+            raise ValueError("signed membership ingress requires authenticated Registry")
         if sign_evidence_digest is not None and verify_evidence is None:
             raise ValueError("pinned membership evidence verifier required")
         self._clock = clock or (lambda: datetime.now(UTC))
