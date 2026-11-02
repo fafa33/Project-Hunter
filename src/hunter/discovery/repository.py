@@ -46,9 +46,7 @@ class CandidateRegistryRepository:
             row = conn.execute("SELECT digest FROM canonical_entity_history ORDER BY sequence DESC LIMIT 1").fetchone()
             previous = str(row[0]) if row else f"GENESIS:{repository}"
             payload = record.payload(repository=repository, ingested_at=clock(), previous_digest=previous)
-            prior = conn.execute(
-                "SELECT content FROM canonical_entity_history ORDER BY sequence DESC"
-            ).fetchall()
+            prior = conn.execute("SELECT content FROM canonical_entity_history ORDER BY sequence DESC").fetchall()
             for historical in prior:
                 previous_record = json.loads(historical[0])
                 if previous_record["repository"] != repository:
@@ -58,6 +56,51 @@ class CandidateRegistryRepository:
                     or payload["ingested_at"] < previous_record["ingested_at"]
                 ):
                     raise ValueError("canonical identity supersession must advance trusted time")
+            if not verify_attestation(payload):
+                raise ValueError("canonical identity attestation unverified")
+            digest = digest_payload(payload)
+            conn.execute(
+                "INSERT INTO canonical_entity_history (digest, content) VALUES (?, ?)",
+                (digest, json.dumps(payload, sort_keys=True, separators=(",", ":"))),
+            )
+            return digest
+
+    def append_signed_canonical_entity(
+        self,
+        record: CanonicalEntityRecord,
+        *,
+        repository: str,
+        clock: Callable[[], datetime],
+        sign_digest: Callable[[str], str],
+        verify_attestation: Callable[[dict[str, Any]], bool],
+    ) -> str:
+        """Atomically bind trusted ingress time and chain head to an external signature.
+
+        The signer is injected by an independently authorized authority; this
+        repository never creates or loads signing keys. Verification is mandatory
+        before commit, and any signer failure rolls back the transaction.
+        """
+        with self._connect() as conn:
+            conn.execute("BEGIN IMMEDIATE")
+            last = conn.execute("SELECT digest FROM canonical_entity_history ORDER BY sequence DESC LIMIT 1").fetchone()
+            previous = str(last[0]) if last else f"GENESIS:{repository}"
+            import hashlib
+            from dataclasses import replace
+
+            from hunter.market_validation.trusted_membership import canonical_bytes
+
+            unsigned_record = replace(record, upstream_attestation="PENDING")
+            payload = unsigned_record.payload(repository=repository, ingested_at=clock(), previous_digest=previous)
+            for historical in conn.execute("SELECT content FROM canonical_entity_history ORDER BY sequence DESC"):
+                earlier = json.loads(historical[0])
+                if earlier["repository"] != repository:
+                    raise ValueError("canonical identity repository mismatch")
+                if earlier["candidate_id"] == record.candidate_id and (
+                    payload["known_at"] <= earlier["known_at"] or payload["ingested_at"] < earlier["ingested_at"]
+                ):
+                    raise ValueError("canonical identity supersession must advance trusted time")
+            unsigned = {key: value for key, value in payload.items() if key != "upstream_attestation"}
+            payload["upstream_attestation"] = sign_digest(hashlib.sha256(canonical_bytes(unsigned)).hexdigest())
             if not verify_attestation(payload):
                 raise ValueError("canonical identity attestation unverified")
             digest = digest_payload(payload)

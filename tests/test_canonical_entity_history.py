@@ -135,3 +135,57 @@ def test_replay_normalizes_timezone_offsets_before_cutoff():
     assert replay_canonical_entities(entries, repository=REPO, cutoff=NOW, verify_attestation=lambda _: True) == {
         "entity-a": "candidate-a"
     }
+
+
+def test_signed_registry_ingress_uses_independent_ed25519_and_atomic_rollback(tmp_path):
+    import json
+    from dataclasses import replace
+
+    from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
+
+    from hunter.market_validation.trusted_membership import (
+        EVIDENCE_DOMAIN,
+        PinnedMembershipTrust,
+        canonical_bytes,
+    )
+
+    signer = Ed25519PrivateKey.generate()
+    trust = PinnedMembershipTrust(REPO, signer.public_key(), Ed25519PrivateKey.generate().public_key())
+    registry = CandidateRegistryRepository(tmp_path / "registry.sqlite")
+
+    def sign_digest(digest):
+        claim = {"repository": REPO, "payload_digest": digest}
+        return json.dumps({"payload": claim, "signature": signer.sign(EVIDENCE_DOMAIN + canonical_bytes(claim)).hex()})
+
+    signed = replace(record(), upstream_attestation="")
+    digest = registry.append_signed_canonical_entity(
+        signed,
+        repository=REPO,
+        clock=lambda: NOW,
+        sign_digest=sign_digest,
+        verify_attestation=trust.verify_registry_identity,
+    )
+    assert len(digest) == 64
+    assert registry.canonical_entities_as_of(
+        repository=REPO, cutoff=NOW, verify_attestation=trust.verify_registry_identity
+    ) == {"entity-a": "candidate-a"}
+    assert not trust.verify_registry_identity({**registry.canonical_entity_history()[0][1], "outcome": "conflict"})
+
+    with pytest.raises(ValueError, match="attestation unverified"):
+        registry.append_signed_canonical_entity(
+            replace(record("candidate-b", "entity-b"), upstream_attestation=""),
+            repository=REPO,
+            clock=lambda: NOW,
+            sign_digest=lambda _: "not-signed",
+            verify_attestation=trust.verify_registry_identity,
+        )
+    assert len(registry.canonical_entity_history()) == 1
+    with pytest.raises(ValueError, match="supersession"):
+        registry.append_signed_canonical_entity(
+            signed,
+            repository=REPO,
+            clock=lambda: NOW,
+            sign_digest=sign_digest,
+            verify_attestation=trust.verify_registry_identity,
+        )
+    assert len(registry.canonical_entity_history()) == 1
