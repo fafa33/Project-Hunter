@@ -138,6 +138,7 @@ class ImmutableMembershipHistory:
         snapshot: HistoricalMembershipSnapshot,
         *,
         registry: Any | None = None,
+        verify_registry_attestation: Callable[[dict[str, Any]], bool] | None = None,
     ) -> str:
         """Append one attested snapshot.
 
@@ -145,11 +146,10 @@ class ImmutableMembershipHistory:
         inside this method -- callers cannot supply it, so they cannot
         backdate or future-poison ingestion time.
 
-        ``registry``, when provided, verifies that the canonical economic
-        entity is proven by the authoritative Candidate Registry (F-5). It must
-        expose ``verify_entity(entity_id: str) -> bool``. Without a registry,
-        the mapping is caller-claimed and admission must fail closed
-        downstream.
+        When ``registry`` is provided, verify the exact candidate/entity mapping
+        at the snapshot known-time cutoff using authenticated Registry history.
+        Without a registry, the shadow record remains unproven and must fail
+        closed at admission; this method does not grant admission.
         """
         if snapshot.identity_outcome not in {"exact", "ambiguous", "conflict", "unresolved", "rejected"}:
             raise ValueError("invalid identity outcome")
@@ -173,8 +173,18 @@ class ImmutableMembershipHistory:
             raise ValueError("evidence cannot be known before trusted ingestion")
         # F-5: authoritative canonical economic entity mapping must be proven
         # by the Registry; caller-claimed identities are not accepted as proof.
-        if registry is not None and not registry.verify_entity(snapshot.canonical_entity_id):
-            raise ValueError("canonical economic entity not verified by Registry")
+        if registry is not None:
+            if verify_registry_attestation is None or not self.repository:
+                raise ValueError("authenticated historical Registry verifier required")
+            verifier = getattr(registry, "verify_historical_entity", None)
+            if not callable(verifier) or not verifier(
+                snapshot.canonical_entity_id,
+                candidate_id=snapshot.candidate_id,
+                cutoff=snapshot.known_at,
+                repository=self.repository,
+                verify_attestation=verify_registry_attestation,
+            ):
+                raise ValueError("canonical economic entity not verified by Registry")
         payload = {
             "candidate_id": snapshot.candidate_id,
             "canonical_entity_id": snapshot.canonical_entity_id,

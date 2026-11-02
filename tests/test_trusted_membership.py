@@ -323,94 +323,89 @@ def test_f2_stale_signed_anchor_replay_rejected(tmp_path):
 # --- F-5 hostile tests: canonical economic entity mapping -------------------
 
 
-class _Verifier:
-    def __init__(self, allowed: set[str]) -> None:
-        self._allowed = allowed
+def test_f5_authenticated_historical_registry_binding(tmp_path):
+    from hunter.discovery.canonical_history import CanonicalEntityRecord
+    from hunter.discovery.repository import CandidateRegistryRepository
+    from hunter.market_validation.trusted_membership import RegistryIdentityVerifier
 
-    def verify_entity(self, entity_id: str) -> bool:
-        return entity_id in self._allowed
-
-
-def test_f5_registry_verifier(tmp_path):
-    # Unmapped entity rejected
-    history = _make_history(tmp_path)
-    verifier = _Verifier({"entity-1"})
+    repo = CandidateRegistryRepository(tmp_path / "registry.sqlite")
+    history = _make_history(tmp_path / "history")
+    entry = snapshot(1)
+    record = CanonicalEntityRecord(
+        candidate_id=entry.candidate_id,
+        canonical_entity_id=entry.canonical_entity_id,
+        representation="bitcoin-mainnet:genesis",
+        outcome="exact",
+        lifecycle_status="identified",
+        source_digest="source:verified",
+        source_reference="upstream:verified",
+        policy_version="v1",
+        observed_at=entry.observed_at,
+        known_at=entry.known_at,
+        upstream_attestation="test:attested",
+    )
+    repo.append_canonical_entity(record, repository=REPO, clock=lambda: NOW, verify_attestation=lambda _: True)
+    verifier = RegistryIdentityVerifier(repo)
+    with pytest.raises(ValueError, match="authenticated historical"):
+        history.append(entry, registry=verifier)
     with pytest.raises(ValueError, match="not verified by Registry"):
-        history.append(snapshot(2), registry=verifier)
-    # Mapped entity accepted
-    history2 = _make_history(tmp_path / "h2")
-    verifier2 = _Verifier({"entity-1", "entity-2"})
-    history2.append(snapshot(1), registry=verifier2)
-    history2.append(snapshot(2), registry=verifier2)
-    trusted = anchor(history2)
-    result = history2.as_of(NOW, trusted_anchor=trusted, verify_attestation=lambda *_: False)
-    assert len(result) == 2
-    # Forged registry reference rejected
-    history3 = _make_history(tmp_path / "h3")
-    with pytest.raises(ValueError, match="source provenance required"):
-        history3.append(replace(snapshot(1), registry_reference=""))
-
-
-def test_f5_registry_multi_chain(tmp_path):
-    history = _make_history(tmp_path)
-    verifier = _Verifier(set())
-
-    def _accept_all(entity_id: str) -> bool:
-        return True
-
-    verifier.verify_entity = _accept_all  # type: ignore[method-assign]
-    # Multi-chain: same entity on different chains
-    history.append(
-        replace(
-            snapshot(1),
-            canonical_entity_id="usd-coin",
-            project=ProjectValidationTarget("usd-coin", "USD Coin", "other", {}),
-            registry_reference="registry:usdc-eth",
-        ),
-        registry=verifier,
-    )
-    history.append(
-        replace(
-            snapshot(2),
-            canonical_entity_id="usd-coin",
-            project=ProjectValidationTarget("usd-coin", "USD Coin", "other", {}),
-            registry_reference="registry:usdc-polygon",
-        ),
-        registry=verifier,
-    )
-    trusted = anchor(history)
-    result = history.as_of(NOW, trusted_anchor=trusted, verify_attestation=lambda *_: False)
-    assert len(result) == 2
-    # Wrapped token representations
-    history2 = _make_history(tmp_path / "h2")
-    verifier2 = _Verifier({"weth-ethereum", "weth-polygon"})
-    history2.append(
-        replace(
-            snapshot(1),
-            canonical_entity_id="weth-ethereum",
-            project=ProjectValidationTarget("weth-ethereum", "WETH", "other", {}),
-            registry_reference="registry:weth-eth",
-        ),
-        registry=verifier2,
-    )
-    history2.append(
-        replace(
-            snapshot(2),
-            canonical_entity_id="weth-polygon",
-            project=ProjectValidationTarget("weth-polygon", "WETH", "other", {}),
-            registry_reference="registry:weth-poly",
-        ),
-        registry=verifier2,
-    )
-    trusted2 = anchor(history2)
-    result2 = history2.as_of(NOW, trusted_anchor=trusted2, verify_attestation=lambda *_: False)
-    assert len(result2) == 2
-    # Conflicting mappings rejected
-    history3 = _make_history(tmp_path / "h3")
-    verifier3 = _Verifier({"entity-1"})
-    history3.append(snapshot(1), registry=verifier3)
+        history.append(entry, registry=verifier, verify_registry_attestation=lambda _: False)
     with pytest.raises(ValueError, match="not verified by Registry"):
-        history3.append(snapshot(2), registry=verifier3)
+        history.append(snapshot(2), registry=verifier, verify_registry_attestation=lambda _: True)
+    assert history.append(entry, registry=verifier, verify_registry_attestation=lambda _: True)
+    with pytest.raises(ValueError, match="not verified by Registry"):
+        history.append(
+            replace(entry, canonical_entity_id="other", project=ProjectValidationTarget("other", "Other", "other", {})),
+            registry=verifier,
+            verify_registry_attestation=lambda _: True,
+        )
+
+
+def test_f5_rejects_legacy_current_state_verifier(tmp_path):
+    history = _make_history(tmp_path)
+
+    class Legacy:
+        def verify_entity(self, entity_id):
+            return True
+
+    with pytest.raises(ValueError, match="authenticated historical"):
+        history.append(snapshot(1), registry=Legacy())
+    with pytest.raises(ValueError, match="not verified by Registry"):
+        history.append(snapshot(1), registry=Legacy(), verify_registry_attestation=lambda _: True)
+
+
+def _make_entries(anchor_text: str) -> list[tuple[str, dict[str, bytes]]]:
+    return [("abc123", {"membership-anchor.json": anchor_text.encode("utf-8")})]
+
+
+def _intact_ruleset() -> dict:
+    return {
+        "id": 24526712,
+        "enforcement": "active",
+        "updated_at": "2026-10-06T20:52:31.773Z",
+        "rules": [{"type": "deletion"}, {"type": "non_fast_forward"}],
+    }
+
+
+def _intact_branch_rules() -> list[dict]:
+    return [
+        {"type": "deletion", "ruleset_id": 24526712},
+        {"type": "non_fast_forward", "ruleset_id": 24526712},
+    ]
+
+
+def _make_pin() -> MembershipAnchorPin:
+    return MembershipAnchorPin(ruleset_id=24526712, updated_at="2026-10-06T20:52:31.773Z")
+
+
+def _make_reader(store, ruleset=None, branch_rules=None):
+    return GitHubAnchorReader(
+        REPO,
+        store=store,
+        pin=_make_pin(),
+        ruleset=ruleset or _intact_ruleset(),
+        branch_rules=branch_rules if branch_rules is not None else _intact_branch_rules(),
+    )
 
 
 # --- F-2 integration tests: GitHubAnchorReader with GitLedgerStore ----------
