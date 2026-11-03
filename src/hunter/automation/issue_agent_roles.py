@@ -873,6 +873,8 @@ def kilo_invocation(
         public_env={
             **model_environment,
             **governed_env,
+            # The pinned Kilo CLI uses /usr/bin/env node; the isolated env has no inherited PATH.
+            "PATH": "/usr/local/bin:/usr/bin:/bin",
             "HOME": str(home),
             "PWD": str(workspace),
             "XDG_CONFIG_HOME": str(home / ".config"),

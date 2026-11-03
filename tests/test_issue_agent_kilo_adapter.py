@@ -33,6 +33,7 @@ def test_kilo_private_task_and_workspace(tmp_path: Path) -> None:
     assert attachment.parent == home
     assert attachment.read_bytes() == secret
     assert stat.S_IMODE(attachment.stat().st_mode) == 0o600
+    assert result.public_env["PATH"] == "/usr/local/bin:/usr/bin:/bin"
     assert result.public_env["HOME"] == str(home)
     assert result.public_env["PWD"] == str(workspace)
     assert result.public_env["XDG_CONFIG_HOME"] == str(home / ".config")
