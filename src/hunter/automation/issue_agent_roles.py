@@ -836,6 +836,10 @@ def kilo_invocation(
             "EXECUTION_NOT_COMPLETED", "Kilo requires exactly run --model MODEL"
         )
 
+    # Kilo is an OpenCode-derived runtime: install the same trusted deny-by-default
+    # tool policy and non-executable shell boundary before exposing any model key.
+    # This also disables repository-controlled configuration.
+    governed_env = opencode_workspace_environment(home, workspace)
     prompt_path = home / _TASK_ATTACHMENT
     prompt_path.write_bytes(prompt)
     prompt_path.chmod(0o600)
@@ -848,6 +852,7 @@ def kilo_invocation(
         stdin=b"",
         public_env={
             **model_environment,
+            **governed_env,
             "HOME": str(home),
             "PWD": str(workspace),
             "XDG_CONFIG_HOME": str(home / ".config"),
