@@ -7,7 +7,6 @@ import pytest
 
 from hunter.automation import issue_agent_roles as roles
 
-
 MODEL = "kilo/nvidia/nemotron-3-ultra-550b-a55b:free"
 
 
