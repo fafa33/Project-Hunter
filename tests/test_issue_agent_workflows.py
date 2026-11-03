@@ -290,9 +290,14 @@ def test_every_lifecycle_job_goes_through_the_fail_closed_entry_point() -> None:
             python = [c for c in commands if re.search(r"\bpython(?:3)?\s", c)]
             assert python, job_id
             for command in python:
-                if name == LIFECYCLE and job_id == "execute" and "scripts/hunter_mac_codex_preflight.py" in command:
-                    assert "--user hunterexecutor" in command
-                    continue
+                if name == LIFECYCLE and job_id == "execute":
+                    if "scripts/hunter_mac_codex_preflight.py" in command:
+                        assert "--user hunterexecutor" in command
+                        continue
+                    if "/usr/local/libexec/hunter/hunter_mac_workspace_owner.py" in command:
+                        assert "reclaim" in command
+                        assert '"$HUNTER_ISSUE_AGENT_WORKROOT"' in command
+                        continue
                 assert "scripts/hunter_issue_agent_lifecycle.py" in command, job_id
 
 
@@ -444,9 +449,11 @@ def test_executor_prepares_runner_owned_traversable_workroot() -> None:
     run = str(preparation["run"])
     assert "set -euo pipefail" in run
     assert "python3 scripts/hunter_mac_codex_preflight.py --user hunterexecutor" in run
-    assert 'mkdir -p "$RUNNER_TEMP/hunter-ia/execute"' in run
+    assert "WORKROOT_PARENT=/usr/local/var/hunter/workroots" in run
+    assert 'mktemp -d "$WORKROOT_PARENT/hunter-ia.XXXXXXXX"' in run
+    assert 'echo "HUNTER_ISSUE_AGENT_WORKROOT=$WORKROOT" >> "$GITHUB_ENV"' in run
     invocation = next(str(step["run"]) for step in steps(job) if step.get("id") == "execute")
-    assert '--workroot "$RUNNER_TEMP/hunter-ia/execute"' in invocation
+    assert '--workroot "$HUNTER_ISSUE_AGENT_WORKROOT"' in invocation
     assert job["permissions"] == {}
 
 
