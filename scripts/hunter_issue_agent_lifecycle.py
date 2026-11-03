@@ -1299,8 +1299,11 @@ def cmd_execute(configuration: control.Configuration, arguments: argparse.Namesp
         model_secret_env = {}
         isolation_user = "hunterexecutor"
     else:
-        model_secret_env = {arguments.model_key_name: _secret(MODEL_KEY_ENV)}
-        isolation_user = ISOLATION_USER
+        # Issue #390: the retired hosted OpenCode provider must not be revived by
+        # a stale workflow, manual dispatch, or inherited model-key setting.
+        raise LifecycleRefused(
+            "MISSING_CONFIGURATION", "Issue-agent execution requires the dedicated macOS Codex runtime"
+        )
     outcome = roles.run_executor(
         issue=arguments.issue,
         authorization_id=arguments.authorization_id,

@@ -73,3 +73,26 @@ def test_github_executor_stays_in_single_existing_lifecycle() -> None:
     assert "HUNTER_ISSUE_AGENT_MAC_CODEX" in execute
     assert "HUNTER_ISSUE_AGENT_OPENCODE_API_KEY" not in execute
     assert "python3 scripts/hunter_issue_agent_lifecycle.py execute" in execute
+
+
+def test_production_executor_refuses_legacy_opencode_before_ledger_access(monkeypatch: pytest.MonkeyPatch) -> None:
+    """No legacy provider path may execute even when its API key is configured."""
+    import argparse
+
+    from scripts import hunter_issue_agent_lifecycle as lifecycle
+
+    monkeypatch.delenv("HUNTER_ISSUE_AGENT_MAC_CODEX", raising=False)
+    monkeypatch.setenv("HUNTER_ISSUE_AGENT_EXECUTOR_MODEL_API_KEY", "dummy-not-a-secret")
+    monkeypatch.setattr(lifecycle, "_run_context", lambda: ("1", 1, ""))
+    with pytest.raises(lifecycle.LifecycleRefused, match="dedicated macOS Codex runtime"):
+        lifecycle.cmd_execute(
+            type("C", (), {"prompt_verifying_key": "test"})(),
+            argparse.Namespace(model_argv=("/opt/hunter/bin/opencode", "run"), model_key_name="OPENCODE_API_KEY"),
+        )
+
+
+def test_active_issue_agent_workflow_never_installs_or_selects_opencode() -> None:
+    workflow = Path(".github/workflows/hunter-issue-agent-trigger.yml").read_text()
+    execute = workflow.split("\n  execute:\n", 1)[1].split("\n  bind:\n", 1)[0]
+    assert "opencode" not in execute.lower()
+    assert 'HUNTER_ISSUE_AGENT_MAC_CODEX: "1"' in execute

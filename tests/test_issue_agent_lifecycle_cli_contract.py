@@ -224,8 +224,14 @@ def test_the_model_command_reaches_the_executor_unchanged(monkeypatch: pytest.Mo
     monkeypatch.setattr(lifecycle, "_x25519", lambda _n: object())
     monkeypatch.setattr(lifecycle, "_remote", lambda _c: "remote")
     monkeypatch.setattr(lifecycle.Path, "read_bytes", lambda self: b"handoff")
+    monkeypatch.setenv("HUNTER_ISSUE_AGENT_MAC_CODEX", "1")
+    monkeypatch.setattr(lifecycle.sys, "platform", "darwin")
+    from hunter.automation import mac_codex_preflight
+
+    monkeypatch.setattr(mac_codex_preflight, "check", lambda *_args: [])
     argv = _execute_argv()
     arguments = lifecycle.parse_arguments(argv)
+    arguments.model_key_name = "NONE"
     key = Ed25519PrivateKey.from_private_bytes(bytes(32)).public_key()
     public_hex = key.public_bytes(Encoding.Raw, PublicFormat.Raw).hex()
     monkeypatch.setenv("HUNTER_PROMPT_AUTOMATION_VERIFYING_KEY", "unset")  # restored on teardown; cmd_execute writes it
@@ -281,7 +287,13 @@ def test_execute_advisory_is_visible_without_a_result(
     public_hex = key.public_bytes(Encoding.Raw, PublicFormat.Raw).hex()
     monkeypatch.setenv("HUNTER_PROMPT_AUTOMATION_VERIFYING_KEY", "unset")
     config = type("C", (), {"prompt_verifying_key": public_hex, "result_recipient": object()})()
+    monkeypatch.setenv("HUNTER_ISSUE_AGENT_MAC_CODEX", "1")
+    monkeypatch.setattr(lifecycle.sys, "platform", "darwin")
+    from hunter.automation import mac_codex_preflight
+
+    monkeypatch.setattr(mac_codex_preflight, "check", lambda *_args: [])
     args = lifecycle.parse_arguments(_execute_argv())
+    args.model_key_name = "NONE"
     args.authorization_id = "hunter-issue-agent-authorization:" + "a" * 64
     args.out = str(tmp_path / "result.sealed")
     output_path = tmp_path / "github-output"
