@@ -221,7 +221,9 @@ jobs:
           set -euo pipefail
           python3 scripts/hunter_mac_codex_preflight.py --user hunterexecutor --owner-home /Users/farhadafshari
           test -x /Users/hunterexecutor/.local/hunter-codex/node_modules/.bin/codex
-          mkdir -p "$RUNNER_TEMP/hunter-ia/execute"
+          WORKROOT="$(mktemp -d /private/tmp/hunter-ia.XXXXXXXX)"
+          chmod 0711 "$WORKROOT"
+          echo "HUNTER_ISSUE_AGENT_WORKROOT=$WORKROOT" >> "$GITHUB_ENV"
       - name: Download the bound handoff
         uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
         with:
@@ -241,7 +243,7 @@ jobs:
           python3 scripts/hunter_issue_agent_lifecycle.py execute
           --issue "$ISSUE" --authorization-id "$AUTHORIZATION_ID"
           --handoff "$(find "$RUNNER_TEMP/handoff" -type f -name handoff.sealed)"
-          --out "$RUNNER_TEMP/result.sealed" --workroot "$RUNNER_TEMP/hunter-ia/execute"
+          --out "$RUNNER_TEMP/result.sealed" --workroot "$HUNTER_ISSUE_AGENT_WORKROOT"
           --model-key-name "$MODEL_KEY_NAME" --model-argv /Users/hunterexecutor/.local/hunter-codex/node_modules/.bin/codex exec --model "$MODEL"
       - name: Upload the sealed result
         if: steps.execute.outputs.sealed == 'true'
@@ -251,6 +253,21 @@ jobs:
           path: ${{ runner.temp }}/result.sealed
           if-no-files-found: error
           retention-days: 1
+      - name: Remove isolated workroot
+        if: always()
+        run: |
+          set -euo pipefail
+          if [ -n "${HUNTER_ISSUE_AGENT_WORKROOT:-}" ]; then
+            case "$HUNTER_ISSUE_AGENT_WORKROOT" in
+              /private/tmp/hunter-ia.*)
+                # The model-owned workspace is not removable by the runner UID.
+                # Use the same narrowly provisioned chown authority as isolation.prepare.
+                sudo -n chown -R "$(id -un)" "$HUNTER_ISSUE_AGENT_WORKROOT"
+                rm -rf -- "$HUNTER_ISSUE_AGENT_WORKROOT"
+                ;;
+              *) exit 1 ;;
+            esac
+          fi
 
   bind:
     name: bind
