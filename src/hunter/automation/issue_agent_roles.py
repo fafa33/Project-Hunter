@@ -719,20 +719,12 @@ def opencode_workspace_argv(argv: Sequence[str], workspace: Path) -> tuple[str, 
     return (argv[0], "--pure", "run", "--dir", str(workspace), *argv[2:])
 
 
-def opencode_workspace_environment(home: Path, workspace: Path) -> dict[str, str]:
-    """The ephemeral OpenCode contract: trusted inline config, no project config, no real shell.
-
-    The shell lives outside the workspace (``external_directory`` is denied), is read-only, and is
-    verified before use: OpenCode silently falls back to a real shell when the configured one is
-    missing or not executable. The permission map is repeated under the shipped ``build`` agent because
-    agent rules take precedence over global rules.
-    """
-
-    config_dir = home / ".config" / "opencode"
+def _governed_workspace_policy(home: Path, runtime: str) -> tuple[Path, Path, dict[str, object]]:
+    """Materialize one trusted, deny-by-default tool and shell policy for an isolated runtime."""
+    config_dir = home / ".config" / runtime
     config_dir.mkdir(parents=True, exist_ok=True)
     shell = config_dir / _OPENCODE_DENIED_SHELL_NAME
-    # Idempotent: the shell installed by an earlier call on the same home is read-only, so a repeated contract (a
-    # diagnostic re-run, a parity check) must widen it deliberately before rewriting it, never fail on its own file.
+    # A repeated invocation may encounter the prior read-only shell.
     if shell.exists():
         shell.chmod(0o700)
     shell.write_text(_OPENCODE_DENIED_SHELL, encoding="utf-8")
@@ -742,12 +734,25 @@ def opencode_workspace_environment(home: Path, workspace: Path) -> dict[str, str
     instructions = config_dir / _OPENCODE_RUNTIME_INSTRUCTION_NAME
     instructions.write_text(_OPENCODE_RUNTIME_INSTRUCTIONS, encoding="utf-8")
     permission = dict(_OPENCODE_PERMISSION)
-    content = {
+    content: dict[str, object] = {
         "permission": permission,
         "agent": {"build": {"permission": dict(permission)}},
         "instructions": [str(instructions)],
         "shell": str(shell),
     }
+    return config_dir, shell, content
+
+
+def opencode_workspace_environment(home: Path, workspace: Path) -> dict[str, str]:
+    """The ephemeral OpenCode contract: trusted inline config, no project config, no real shell.
+
+    The shell lives outside the workspace (``external_directory`` is denied), is read-only, and is
+    verified before use: OpenCode silently falls back to a real shell when the configured one is
+    missing or not executable. The permission map is repeated under the shipped ``build`` agent because
+    agent rules take precedence over global rules.
+    """
+
+    config_dir, shell, content = _governed_workspace_policy(home, "opencode")
     return {
         "PWD": str(workspace),
         "SHELL": str(shell),
@@ -814,24 +819,7 @@ def opencode_invocation(
 
 def kilo_workspace_environment(home: Path, workspace: Path) -> dict[str, str]:
     """Install the deny-by-default Kilo 7.8.18 runtime policy without OpenCode configuration."""
-    config_dir = home / ".config" / "kilo"
-    config_dir.mkdir(parents=True, exist_ok=True)
-    shell = config_dir / _OPENCODE_DENIED_SHELL_NAME
-    if shell.exists():
-        shell.chmod(0o700)
-    shell.write_text(_OPENCODE_DENIED_SHELL, encoding="utf-8")
-    shell.chmod(0o555)
-    if not (shell.is_file() and os.access(shell, os.X_OK)):
-        raise RoleRefused("EXECUTION_NOT_COMPLETED", "the governed model shell is not executable")
-    instructions = config_dir / _OPENCODE_RUNTIME_INSTRUCTION_NAME
-    instructions.write_text(_OPENCODE_RUNTIME_INSTRUCTIONS, encoding="utf-8")
-    permission = dict(_OPENCODE_PERMISSION)
-    content = {
-        "permission": permission,
-        "agent": {"build": {"permission": dict(permission)}},
-        "instructions": [str(instructions)],
-        "shell": str(shell),
-    }
+    config_dir, shell, content = _governed_workspace_policy(home, "kilo")
     return {
         "PWD": str(workspace),
         "SHELL": str(shell),
