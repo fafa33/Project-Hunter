@@ -289,7 +289,15 @@ class SudoIsolation:
                 or any(path.is_symlink() or not path.is_dir() for path in paths)
             ):
                 raise RoleRefused("ISOLATION_PATH_INVALID", "executor workroot is not isolated")
-        core.run_privileged("chown", "-R", self.user, *(str(path) for path in paths))
+        if self.user == "hunterexecutor":
+            core.run_privileged(
+                "/usr/bin/python3",
+                "/usr/local/libexec/hunter/hunter_mac_workspace_owner.py",
+                "prepare",
+                str(paths[0].parent),
+            )
+        else:
+            core.run_privileged("chown", "-R", self.user, *(str(path) for path in paths))
 
     def stop(self) -> None:
         core.stop_isolated_processes(self.user)
