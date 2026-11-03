@@ -840,6 +840,14 @@ def kilo_invocation(
     # tool policy and non-executable shell boundary before exposing any model key.
     # This also disables repository-controlled configuration.
     governed_env = opencode_workspace_environment(home, workspace)
+    # Kilo 7.8.18 reads KILO_* config flags, not OPENCODE_* flags.
+    # Do not rely on an OpenCode-only environment contract for Kilo.
+    governed_env.update({
+        "KILO_CONFIG_DIR": governed_env["OPENCODE_CONFIG_DIR"],
+        "KILO_CONFIG_CONTENT": governed_env["OPENCODE_CONFIG_CONTENT"],
+        "KILO_DISABLE_PROJECT_CONFIG": "1",
+        "KILO_DISABLE_CLAUDE_CODE": "1",
+    })
     prompt_path = home / _TASK_ATTACHMENT
     prompt_path.write_bytes(prompt)
     prompt_path.chmod(0o600)

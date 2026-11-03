@@ -36,7 +36,9 @@ def test_kilo_private_task_and_workspace(tmp_path: Path) -> None:
     assert result.public_env["HOME"] == str(home)
     assert result.public_env["PWD"] == str(workspace)
     assert result.public_env["XDG_CONFIG_HOME"] == str(home / ".config")
-    config = json.loads(result.public_env["OPENCODE_CONFIG_CONTENT"])
+    assert result.public_env["KILO_DISABLE_PROJECT_CONFIG"] == "1"
+    assert result.public_env["KILO_CONFIG_DIR"] == result.public_env["OPENCODE_CONFIG_DIR"]
+    config = json.loads(result.public_env["KILO_CONFIG_CONTENT"])
     assert config["permission"]["*"] == "deny"
     assert config["permission"]["external_directory"] == "deny"
     assert config["agent"]["build"]["permission"] == config["permission"]
