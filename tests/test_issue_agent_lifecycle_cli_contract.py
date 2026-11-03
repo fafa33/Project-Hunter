@@ -1,7 +1,7 @@
 """Workflow-to-CLI contract of the GitHub-native Issue Agent lifecycle (Issue #574).
 
 The first live ``execute`` job could not have started: the workflow passes
-``--model-argv /opt/hunter/bin/opencode run --model "$MODEL"`` and argparse resolved the model command's own ``--model``
+``--model-argv /opt/hunter/node_modules/.bin/kilo run --model "$MODEL"`` and argparse resolved the model command's own ``--model``
 by abbreviation to the ambiguous pair ``--model-key-name`` / ``--model-argv``. These tests parse the *real* invocations
 out of the workflow files with the real parser, so a mismatch between the two is caught before a hosted run.
 """
@@ -124,7 +124,7 @@ EXECUTE_HEAD = [
 
 def test_the_model_command_is_preserved_verbatim_including_lifecycle_lookalikes() -> None:
     tail = [
-        "/opt/hunter/bin/opencode",
+        "/opt/hunter/node_modules/.bin/kilo",
         "run",
         "--model",
         "p/m",
@@ -166,14 +166,14 @@ def test_each_required_lifecycle_option_must_still_be_supplied(drop: str) -> Non
     index = head.index(drop)
     del head[index : index + 2]
     with pytest.raises(SystemExit):
-        lifecycle.parse_arguments([*head, "--model-argv", "/opt/hunter/bin/opencode", "run"])
+        lifecycle.parse_arguments([*head, "--model-argv", "/opt/hunter/node_modules/.bin/kilo", "run"])
 
 
 def test_a_lifecycle_option_placed_after_the_tail_cannot_be_smuggled_in() -> None:
     head = [a for a in EXECUTE_HEAD if a not in {"--out", "o"}]
     # --out only appears inside the model command, so the lifecycle's own requirement stays unmet.
     with pytest.raises(SystemExit):
-        lifecycle.parse_arguments([*head, "--model-argv", "/opt/hunter/bin/opencode", "run", "--out", "o"])
+        lifecycle.parse_arguments([*head, "--model-argv", "/opt/hunter/node_modules/.bin/kilo", "run", "--out", "o"])
 
 
 def test_a_missing_or_empty_model_command_fails_safely() -> None:
@@ -191,17 +191,15 @@ def test_a_missing_or_empty_model_command_fails_safely() -> None:
 
 
 def test_a_leading_double_dash_separator_is_dropped_and_later_ones_are_forwarded() -> None:
-    command = ["/opt/hunter/bin/opencode", "run", "--model", "p/m", "--", "--model=x", "--", "tail"]
+    command = ["/opt/hunter/node_modules/.bin/kilo", "run", "--model", "p/m", "--", "--model=x", "--", "tail"]
     plain = lifecycle.parse_arguments([*EXECUTE_HEAD, "--model-argv", *command])
     separated = lifecycle.parse_arguments([*EXECUTE_HEAD, "--model-argv", "--", *command])
     assert plain.model_argv == separated.model_argv == tuple(command)
 
 
 def test_the_first_model_argv_is_the_boundary_and_later_ones_belong_to_the_command() -> None:
-    arguments = lifecycle.parse_arguments(
-        [*EXECUTE_HEAD, "--model-argv", "opencode", "--model-argv", "again", "--help"]
-    )
-    assert arguments.model_argv == ("opencode", "--model-argv", "again", "--help")  # even --help is not ours here
+    arguments = lifecycle.parse_arguments([*EXECUTE_HEAD, "--model-argv", "kilo", "--model-argv", "again", "--help"])
+    assert arguments.model_argv == ("kilo", "--model-argv", "again", "--help")  # even --help is not ours here
 
 
 def test_model_argv_is_valid_for_execute_only() -> None:
