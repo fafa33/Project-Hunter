@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import os
 import pwd
+import re
 import stat
 import sys
 from pathlib import Path
@@ -44,8 +45,11 @@ def _change_tree(fd: int, uid: int, gid: int, device: int) -> None:
 
 
 def prepare(root: str, *, reclaim: bool = False) -> None:
-    prefix = str(WORKROOT_PARENT) + "/hunter-ia."
-    if not root.startswith(prefix) or "/" in root[len(str(WORKROOT_PARENT)) + 1 :] or root.endswith("."):
+    prefix = str(WORKROOT_PARENT) + "/"
+    if not root.startswith(prefix):
+        raise ValueError("invalid workspace path")
+    workroot_name = root[len(prefix) :]
+    if re.fullmatch(r"hunter-ia\.[A-Za-z0-9]{8}", workroot_name, flags=re.ASCII) is None:
         raise ValueError("invalid workspace path")
     if os.geteuid() != 0:
         raise PermissionError("requires administrative installation")
@@ -59,7 +63,7 @@ def prepare(root: str, *, reclaim: bool = False) -> None:
         parent_stat = os.fstat(parent)
         if parent_stat.st_uid != runner.pw_uid or stat.S_IMODE(parent_stat.st_mode) != 0o711:
             raise ValueError("unsafe workspace parent")
-        root_fd = _open_directory(root[len(str(WORKROOT_PARENT)) + 1 :], parent)
+        root_fd = _open_directory(workroot_name, parent)
         try:
             metadata = os.fstat(root_fd)
             if metadata.st_uid != runner.pw_uid or metadata.st_mode & 0o022:

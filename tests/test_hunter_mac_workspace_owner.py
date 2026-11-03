@@ -21,6 +21,13 @@ spec.loader.exec_module(helper)
         "/private/tmp/hunter-ia.",
         "/private/tmp/hunter-ia.x/other",
         "/tmp/hunter-ia.x",
+        "/usr/local/var/hunter/workroots/hunter-ia.abcdefgh/../../etc",
+        "/usr/local/var/hunter/workroots/hunter-ia.abcdefgh/other",
+        "/usr/local/var/hunter/workroots/hunter-ia.abcdefgh\\x00",
+        "/usr/local/var/hunter/workroots/hunter-ia.abcdefgh..",
+        "/usr/local/var/hunter/workroots/hunter-ia.abcdefgh%2fetc",
+        "/usr/local/var/hunter/workroots/hunter-ia.abcdefg/",
+        "/usr/local/var/hunter/workroots/hunter-ia.abcdefg-",
     ],
 )
 def test_rejects_unapproved_workroots(root):
