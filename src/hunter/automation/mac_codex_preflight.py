@@ -61,7 +61,7 @@ def check(user: str, owner_home: Path) -> list[str]:
     # No password prompt; no privilege change and no secret values passed.
     try:
         probe = subprocess.run(
-            ("/usr/bin/sudo", "-n", "-u", "hunteragent", "--", "/usr/bin/id", "-u"),
+            ("/usr/bin/sudo", "-n", "-u", user, "--", "/usr/bin/id", "-u"),
             stdout=subprocess.DEVNULL,
             stderr=subprocess.DEVNULL,
             timeout=5,

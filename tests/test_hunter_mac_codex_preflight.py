@@ -57,3 +57,21 @@ def test_unapproved_user_never_reaches_sudo(monkeypatch, tmp_path: Path):
     monkeypatch.setattr(preflight.subprocess, "run", unexpected)
     assert preflight.check("-root", tmp_path) == ["UNAPPROVED_EXECUTOR_USER"]
     assert preflight.check("other-agent", tmp_path) == ["UNAPPROVED_EXECUTOR_USER"]
+
+
+def test_executor_sudo_denial_cannot_be_hidden_by_hunteragent_access(monkeypatch, tmp_path: Path):
+    """Permission for the old principal is not permission for the selected executor."""
+    monkeypatch.setattr(preflight.platform, "system", lambda: "Darwin")
+    monkeypatch.setattr(
+        preflight.pwd, "getpwnam", lambda _: SimpleNamespace(pw_uid=502, pw_dir=str(tmp_path / "agent"))
+    )
+    monkeypatch.setattr(preflight.os, "getuid", lambda: 501)
+    monkeypatch.setattr(
+        preflight.subprocess,
+        "run",
+        lambda argv, **kwargs: SimpleNamespace(returncode=1 if argv[3] == "hunterexecutor" else 0),
+    )
+    owner = tmp_path / "owner"
+    owner.mkdir(mode=0o700)
+    assert "NONINTERACTIVE_SUDO_UNVERIFIED" in preflight.check("hunterexecutor", owner)
+    assert "NONINTERACTIVE_SUDO_UNVERIFIED" not in preflight.check("hunteragent", owner)
