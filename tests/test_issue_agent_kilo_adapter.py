@@ -37,12 +37,12 @@ def test_kilo_private_task_and_workspace(tmp_path: Path) -> None:
     assert result.public_env["PWD"] == str(workspace)
     assert result.public_env["XDG_CONFIG_HOME"] == str(home / ".config")
     assert result.public_env["KILO_DISABLE_PROJECT_CONFIG"] == "1"
-    assert result.public_env["KILO_CONFIG_DIR"] == result.public_env["OPENCODE_CONFIG_DIR"]
+    assert Path(result.public_env["KILO_CONFIG_DIR"]).name == "kilo"
+    assert not any(key.startswith("OPENCODE_") for key in result.public_env)
     config = json.loads(result.public_env["KILO_CONFIG_CONTENT"])
     assert config["permission"]["*"] == "deny"
     assert config["permission"]["external_directory"] == "deny"
     assert config["agent"]["build"]["permission"] == config["permission"]
-    assert result.public_env["OPENCODE_DISABLE_PROJECT_CONFIG"] == "1"
     shell = Path(config["shell"])
     assert shell.is_file()
     assert stat.S_IMODE(shell.stat().st_mode) == 0o555

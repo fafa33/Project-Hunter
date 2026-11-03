@@ -812,6 +812,36 @@ def opencode_invocation(
     )
 
 
+def kilo_workspace_environment(home: Path, workspace: Path) -> dict[str, str]:
+    """Install the deny-by-default Kilo 7.8.18 runtime policy without OpenCode configuration."""
+    config_dir = home / ".config" / "kilo"
+    config_dir.mkdir(parents=True, exist_ok=True)
+    shell = config_dir / _OPENCODE_DENIED_SHELL_NAME
+    if shell.exists():
+        shell.chmod(0o700)
+    shell.write_text(_OPENCODE_DENIED_SHELL, encoding="utf-8")
+    shell.chmod(0o555)
+    if not (shell.is_file() and os.access(shell, os.X_OK)):
+        raise RoleRefused("EXECUTION_NOT_COMPLETED", "the governed model shell is not executable")
+    instructions = config_dir / _OPENCODE_RUNTIME_INSTRUCTION_NAME
+    instructions.write_text(_OPENCODE_RUNTIME_INSTRUCTIONS, encoding="utf-8")
+    permission = dict(_OPENCODE_PERMISSION)
+    content = {
+        "permission": permission,
+        "agent": {"build": {"permission": dict(permission)}},
+        "instructions": [str(instructions)],
+        "shell": str(shell),
+    }
+    return {
+        "PWD": str(workspace),
+        "SHELL": str(shell),
+        "KILO_CONFIG_DIR": str(config_dir),
+        "KILO_CONFIG_CONTENT": json.dumps(content, sort_keys=True, separators=(",", ":")),
+        "KILO_DISABLE_PROJECT_CONFIG": "1",
+        "KILO_DISABLE_CLAUDE_CODE": "1",
+    }
+
+
 def _is_kilo_run(argv: Sequence[str]) -> bool:
     return len(argv) >= 2 and Path(argv[0]).name == "kilo" and argv[1] == "run"
 
@@ -834,20 +864,8 @@ def kilo_invocation(
     ):
         raise RoleRefused("EXECUTION_NOT_COMPLETED", "Kilo requires exactly run --model MODEL")
 
-    # Kilo is an OpenCode-derived runtime: install the same trusted deny-by-default
-    # tool policy and non-executable shell boundary before exposing any model key.
-    # This also disables repository-controlled configuration.
-    governed_env = opencode_workspace_environment(home, workspace)
-    # Kilo 7.8.18 reads KILO_* config flags, not OPENCODE_* flags.
-    # Do not rely on an OpenCode-only environment contract for Kilo.
-    governed_env.update(
-        {
-            "KILO_CONFIG_DIR": governed_env["OPENCODE_CONFIG_DIR"],
-            "KILO_CONFIG_CONTENT": governed_env["OPENCODE_CONFIG_CONTENT"],
-            "KILO_DISABLE_PROJECT_CONFIG": "1",
-            "KILO_DISABLE_CLAUDE_CODE": "1",
-        }
-    )
+    # Kilo owns its own governed configuration; never inherit legacy OpenCode flags.
+    governed_env = kilo_workspace_environment(home, workspace)
     prompt_path = home / _TASK_ATTACHMENT
     prompt_path.write_bytes(prompt)
     prompt_path.chmod(0o600)
