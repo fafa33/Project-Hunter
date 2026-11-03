@@ -289,3 +289,37 @@ def test_execute_advisory_is_visible_without_a_result(
     assert "executor advisory: PROVIDER_UNAVAILABLE" in captured
     assert "sealed=false" in output_path.read_text()
     assert not (tmp_path / "result.sealed").exists()
+
+
+@pytest.mark.parametrize(
+    "model",
+    [
+        "kilo/nvidia/nemotron-3-ultra-550b-a55b:free",
+        "kilo/cohere/north-mini-code:free",
+    ],
+)
+def test_free_kilo_models_do_not_require_a_provider_secret(model: str, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.delenv(lifecycle.MODEL_KEY_ENV, raising=False)
+    assert lifecycle._executor_model_secrets(("/opt/hunter/node_modules/.bin/kilo", "run", "--model", model), "") == {}
+
+
+@pytest.mark.parametrize(
+    "command",
+    [
+        ("kilo", "run", "--model", "kilo/anthropic/claude-sonnet-4.5"),
+        ("opencode", "run", "--model", "kilo/nvidia/nemotron-3-ultra-550b-a55b:free"),
+        ("kilo", "run", "--model", "opencode/glm-5.3-flash-free"),
+        ("kilo", "run", "--model", "kilo/nvidia/nemotron-3-ultra-550b-a55b:free", "--extra"),
+    ],
+)
+def test_other_models_still_require_secret(command: tuple[str, ...], monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.delenv(lifecycle.MODEL_KEY_ENV, raising=False)
+    with pytest.raises(lifecycle.LifecycleRefused, match="MISSING_CONFIGURATION"):
+        lifecycle._executor_model_secrets(command, "KILO_API_KEY")
+
+
+def test_paid_kilo_model_passes_secret_only_when_provisioned(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv(lifecycle.MODEL_KEY_ENV, "secret-value")
+    assert lifecycle._executor_model_secrets(
+        ("kilo", "run", "--model", "kilo/anthropic/claude-sonnet-4.5"), "KILO_API_KEY"
+    ) == {"KILO_API_KEY": "secret-value"}

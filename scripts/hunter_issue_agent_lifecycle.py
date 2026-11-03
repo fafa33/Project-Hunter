@@ -1277,12 +1277,30 @@ def parse_arguments(argv: Sequence[str] | None = None) -> argparse.Namespace:
     return arguments
 
 
+def _executor_model_secrets(model_argv: Sequence[str], model_key_name: str) -> dict[str, str]:
+    """Allow keyless execution only for explicitly free Kilo models.
+
+    Never relax the credential requirement for paid, unknown, or legacy providers.
+    """
+    if (
+        len(model_argv) == 4
+        and Path(model_argv[0]).name == "kilo"
+        and model_argv[1:3] == ("run", "--model")
+        and model_argv[3].startswith("kilo/")
+        and model_argv[3].endswith(":free")
+    ):
+        return {}
+    if not model_key_name:
+        raise LifecycleRefused("MISSING_CONFIGURATION", "a valid model key name is required")
+    return {model_key_name: _secret(MODEL_KEY_ENV)}
+
+
 def cmd_execute(configuration: control.Configuration, arguments: argparse.Namespace) -> int:
     from hunter.evidence_intelligence.smart_prompt_routing import PromptAutomationVerifier
 
     run_id, attempt, _ = _run_context()
     os.environ["HUNTER_PROMPT_AUTOMATION_VERIFYING_KEY"] = configuration.prompt_verifying_key
-    model_key = _secret(MODEL_KEY_ENV)
+    model_secrets = _executor_model_secrets(tuple(arguments.model_argv), arguments.model_key_name)
     outcome = roles.run_executor(
         issue=arguments.issue,
         authorization_id=arguments.authorization_id,
@@ -1293,7 +1311,7 @@ def cmd_execute(configuration: control.Configuration, arguments: argparse.Namesp
             remote=_remote(configuration),
             model_argv=tuple(arguments.model_argv),
             model_public_env=roles.MODEL_PUBLIC_ENVIRONMENT,
-            model_secret_env={arguments.model_key_name: model_key},
+            model_secret_env=model_secrets,
             handoff_key=_x25519(HANDOFF_KEY_ENV),
             result_recipient=configuration.result_recipient,
             prompt_verifier=PromptAutomationVerifier.from_environment(),
