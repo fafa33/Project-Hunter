@@ -54,7 +54,7 @@ DOMAIN_SECRETS = {
         "HUNTER_SOURCE_HANDLING_SIGNING_KEY",
         "HUNTER_PROMPT_AUTOMATION_SIGNING_KEY",
     },
-    EXECUTOR: {"HUNTER_ISSUE_AGENT_HANDOFF_KEY", "HUNTER_ISSUE_AGENT_OPENCODE_API_KEY"},
+    EXECUTOR: {"HUNTER_ISSUE_AGENT_HANDOFF_KEY", "HUNTER_ISSUE_AGENT_EXECUTOR_MODEL_API_KEY"},
     VALIDATOR: {"HUNTER_ISSUE_AGENT_RESULT_KEY"},
     PUBLISHER: {
         "HUNTER_ISSUE_AGENT_RESULT_KEY",
@@ -239,7 +239,7 @@ def test_secrets_never_cross_a_trust_domain() -> None:
     for job_id, job in jobs.items():
         assert job_secrets(job) <= DOMAIN_SECRETS[job.get("environment")], job_id
     model_holders = {
-        job_id for job_id, job in jobs.items() if "HUNTER_ISSUE_AGENT_OPENCODE_API_KEY" in job_secrets(job)
+        job_id for job_id, job in jobs.items() if "HUNTER_ISSUE_AGENT_EXECUTOR_MODEL_API_KEY" in job_secrets(job)
     }
     push_holders = {
         job_id for job_id, job in jobs.items() if "HUNTER_ISSUE_AGENT_PUBLISHER_PUSH_TOKEN" in job_secrets(job)
@@ -470,9 +470,9 @@ def test_authorize_serializes_shared_source_handling_prepare_commit() -> None:
     assert "${{" not in job["concurrency"]["group"]
 
 
-def test_hosted_executor_selects_mutating_opencode_agent() -> None:
+def test_hosted_executor_selects_governed_kilo_agent() -> None:
     """A model may answer successfully without editing unless the coding agent is explicitly selected."""
     job = load(LIFECYCLE)["jobs"]["execute"]
     invocation = next(str(step["run"]) for step in steps(job) if step.get("id") == "execute")
-    assert '--model-argv /opt/hunter/bin/opencode run --model "$MODEL" --agent build' in invocation
+    assert '--model-argv /opt/hunter/node_modules/.bin/kilo run --model "$MODEL"' in invocation
     assert "--auto" not in invocation and "--yolo" not in invocation

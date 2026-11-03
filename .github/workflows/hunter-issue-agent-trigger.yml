@@ -214,7 +214,7 @@ jobs:
         run: |
           set -euo pipefail
           python -m pip install --only-binary ':all:' -c requirements/ci-constraints.txt .
-          sudo python scripts/install_opencode_runtime.py --destination /opt/hunter/bin/opencode
+          sudo npm install --prefix /opt/hunter --no-save --ignore-scripts @kilocode/cli@7.8.18
       - name: Create the isolation uid
         run: |
           set -euo pipefail
@@ -231,7 +231,7 @@ jobs:
         id: execute
         env:
           HUNTER_ISSUE_AGENT_HANDOFF_KEY: ${{ secrets.HUNTER_ISSUE_AGENT_HANDOFF_KEY }}
-          HUNTER_ISSUE_AGENT_EXECUTOR_MODEL_API_KEY: ${{ secrets.HUNTER_ISSUE_AGENT_OPENCODE_API_KEY }}
+          HUNTER_ISSUE_AGENT_EXECUTOR_MODEL_API_KEY: ${{ secrets.HUNTER_ISSUE_AGENT_EXECUTOR_MODEL_API_KEY }}
           ISSUE: ${{ needs.authorize.outputs.issue }}
           AUTHORIZATION_ID: ${{ needs.authorize.outputs.authorization_id }}
           MODEL: ${{ vars.HUNTER_ISSUE_AGENT_EXECUTOR_MODEL }}
@@ -241,7 +241,7 @@ jobs:
           --issue "$ISSUE" --authorization-id "$AUTHORIZATION_ID"
           --handoff "$(find "$RUNNER_TEMP/handoff" -type f -name handoff.sealed)"
           --out "$RUNNER_TEMP/result.sealed" --workroot /tmp/hunter-ia/execute
-          --model-key-name "$MODEL_KEY_NAME" --model-argv /opt/hunter/bin/opencode run --model "$MODEL" --agent build
+          --model-key-name "$MODEL_KEY_NAME" --model-argv /opt/hunter/node_modules/.bin/kilo run --model "$MODEL"
       - name: Upload the sealed result
         if: steps.execute.outputs.sealed == 'true'
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
