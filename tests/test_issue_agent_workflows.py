@@ -8,11 +8,7 @@ equivalent must be accepted.
 from __future__ import annotations
 
 import json
-import os
 import re
-import shlex
-import stat
-import subprocess
 from collections.abc import Iterator, Mapping
 from pathlib import Path
 from typing import Any
@@ -244,7 +240,8 @@ def test_secrets_never_cross_a_trust_domain() -> None:
     push_holders = {
         job_id for job_id, job in jobs.items() if "HUNTER_ISSUE_AGENT_PUBLISHER_PUSH_TOKEN" in job_secrets(job)
     }
-    assert model_holders == {"execute"} and push_holders == {"publish"}
+    assert model_holders == set() and push_holders == {"publish"}
+    assert job_secrets(jobs["execute"]) == {"HUNTER_ISSUE_AGENT_HANDOFF_KEY"}
 
 
 @pytest.mark.parametrize("name", GOVERNED[1:])
@@ -290,8 +287,13 @@ def test_every_lifecycle_job_goes_through_the_fail_closed_entry_point() -> None:
                 assert any("scripts/hunter_issue_scope_admission.py" in str(step.get("run", "")) for step in steps(job))
                 continue
             commands = [str(s["run"]) for s in steps(job) if "run" in s and "pip install" not in str(s["run"])]
-            python = [c for c in commands if "python " in c]
-            assert python and all("scripts/hunter_issue_agent_lifecycle.py" in c for c in python), job_id
+            python = [c for c in commands if re.search(r"\bpython(?:3)?\s", c)]
+            assert python, job_id
+            for command in python:
+                if name == LIFECYCLE and job_id == "execute" and "scripts/hunter_mac_codex_preflight.py" in command:
+                    assert "--user hunterexecutor" in command
+                    continue
+                assert "scripts/hunter_issue_agent_lifecycle.py" in command, job_id
 
 
 def test_the_publisher_identity_is_the_code_write_policy_actor() -> None:
@@ -435,28 +437,17 @@ def test_resolve_finding_uses_trusted_scheduled_readiness() -> None:
     assert "actions: write" not in resolve_job
 
 
-def test_executor_prepares_runner_owned_traversable_workroot(tmp_path: Path) -> None:
-    """PR #520 run 39614695642: the runner cannot mkdir below a root-owned 0711 parent."""
+def test_executor_prepares_runner_owned_traversable_workroot() -> None:
+    """macOS executor creates an isolated temporary workroot before sealed execution."""
     job = load(LIFECYCLE)["jobs"]["execute"]
-    commands = [
-        line.strip()
-        for step in steps(job)
-        for line in str(step.get("run", "")).splitlines()
-        if shlex.split(line.strip())[:2] == ["sudo", "install"]
-    ]
-    installs = [command for command in commands if shlex.split(command)[-1] == "/tmp/hunter-ia/execute"]
-    assert len(installs) == 1, "executor workroot must be provisioned before runner-owned materialization"
-    command = installs[0]
-    words = shlex.split(command)
-    assert "-o" in words and "-g" in words, "root install must explicitly hand ownership to the runner"
-    destination = tmp_path / "execute"
-    executable = command.removeprefix("sudo ").removesuffix("/tmp/hunter-ia/execute") + shlex.quote(str(destination))
-    subprocess.run(["sh", "-eu", "-c", executable], check=True, capture_output=True)
-    info = destination.stat()
-    assert info.st_uid == os.getuid() and info.st_gid == os.getgid()
-    mode = stat.S_IMODE(info.st_mode)
-    assert mode == 0o711, "isolated UID needs traversal, but must not write/list the trusted workroot"
-    (destination / "workspace").mkdir()
+    preparation = next(step for step in steps(job) if step.get("name") == "Check dedicated executor prerequisites")
+    run = str(preparation["run"])
+    assert "set -euo pipefail" in run
+    assert "python3 scripts/hunter_mac_codex_preflight.py --user hunterexecutor" in run
+    assert 'mkdir -p "$RUNNER_TEMP/hunter-ia/execute"' in run
+    invocation = next(str(step["run"]) for step in steps(job) if step.get("id") == "execute")
+    assert '--workroot "$RUNNER_TEMP/hunter-ia/execute"' in invocation
+    assert job["permissions"] == {}
 
 
 def test_authorize_serializes_shared_source_handling_prepare_commit() -> None:
@@ -470,9 +461,13 @@ def test_authorize_serializes_shared_source_handling_prepare_commit() -> None:
     assert "${{" not in job["concurrency"]["group"]
 
 
-def test_hosted_executor_selects_mutating_opencode_agent() -> None:
-    """A model may answer successfully without editing unless the coding agent is explicitly selected."""
+def test_mac_executor_selects_pinned_codex_agent() -> None:
+    """The governed executor must invoke the dedicated Codex CLI, not a shell or owner CLI."""
     job = load(LIFECYCLE)["jobs"]["execute"]
     invocation = next(str(step["run"]) for step in steps(job) if step.get("id") == "execute")
-    assert '--model-argv /opt/hunter/bin/opencode run --model "$MODEL" --agent build' in invocation
+    assert (
+        '--model-argv /Users/hunterexecutor/.local/hunter-codex/node_modules/.bin/codex exec --model "$MODEL"'
+        in invocation
+    )
+    assert "HUNTER_ISSUE_AGENT_MAC_CODEX" in str(job["steps"])
     assert "--auto" not in invocation and "--yolo" not in invocation

@@ -91,13 +91,14 @@ def _execute_argv() -> list[str]:
     return _argv(re.search(r"hunter_issue_agent_lifecycle\.py\s+((?:[^\n\\]|\\\n)+)", run).group(1))  # type: ignore[union-attr]
 
 
-def test_the_exact_execute_command_forwards_the_model_command_to_opencode_unchanged() -> None:
+def test_the_exact_execute_command_forwards_the_model_command_to_codex_unchanged() -> None:
     argv = _execute_argv()
     assert "--model" in argv  # the workflow really does pass the downstream option that used to be ambiguous
     arguments = lifecycle.parse_arguments(argv)
     tail = argv[argv.index("--model-argv") + 1 :]
-    assert tail[:2] == ["/opt/hunter/bin/opencode", "run"] and tail[2] == "--model"
-    assert tail[-2:] == ["--agent", "build"], "the hosted model must use the coding agent, not a read-only default"
+    assert tail[:2] == ["/Users/hunterexecutor/.local/hunter-codex/node_modules/.bin/codex", "exec"]
+    assert tail[2] == "--model"
+    assert tail[-2:] == ["--model", "placeholder-value"], "the model must remain explicitly pinned"
     assert arguments.model_argv == tuple(tail)
     # The lifecycle's own required options are still parsed as lifecycle options, not swallowed by the tail.
     assert (arguments.command, arguments.issue, arguments.model_key_name) == ("execute", 1, "placeholder-value")
