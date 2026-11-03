@@ -8,7 +8,7 @@ import stat
 import sys
 from pathlib import Path
 
-WORKROOT_PARENT = Path("/private/tmp")
+WORKROOT_PARENT = Path("/usr/local/var/hunter/workroots")
 EXECUTOR = "hunterexecutor"
 
 
@@ -43,8 +43,9 @@ def _change_tree(fd: int, uid: int, gid: int, device: int) -> None:
     os.fchown(fd, uid, gid)
 
 
-def prepare(root: str) -> None:
-    if not root.startswith("/private/tmp/hunter-ia.") or "/" in root[len("/private/tmp/") :] or root.endswith("."):
+def prepare(root: str, *, reclaim: bool = False) -> None:
+    prefix = str(WORKROOT_PARENT) + "/hunter-ia."
+    if not root.startswith(prefix) or "/" in root[len(str(WORKROOT_PARENT)) + 1 :] or root.endswith("."):
         raise ValueError("invalid workspace path")
     if os.geteuid() != 0:
         raise PermissionError("requires administrative installation")
@@ -53,9 +54,12 @@ def prepare(root: str) -> None:
         raise PermissionError("helper must be owned by root and not writable")
     account = pwd.getpwnam(EXECUTOR)
     runner = pwd.getpwnam("farhadafshari")
-    parent = os.open("/private/tmp", os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
+    parent = os.open(WORKROOT_PARENT, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
     try:
-        root_fd = _open_directory(root[len("/private/tmp/") :], parent)
+        parent_stat = os.fstat(parent)
+        if parent_stat.st_uid != runner.pw_uid or stat.S_IMODE(parent_stat.st_mode) != 0o711:
+            raise ValueError("unsafe workspace parent")
+        root_fd = _open_directory(root[len(str(WORKROOT_PARENT)) + 1 :], parent)
         try:
             metadata = os.fstat(root_fd)
             if metadata.st_uid != runner.pw_uid or metadata.st_mode & 0o022:
@@ -63,7 +67,8 @@ def prepare(root: str) -> None:
             for name in ("workspace", "home"):
                 child = _open_directory(name, root_fd)
                 try:
-                    _change_tree(child, account.pw_uid, account.pw_gid, metadata.st_dev)
+                    target = runner if reclaim else account
+                    _change_tree(child, target.pw_uid, target.pw_gid, metadata.st_dev)
                 finally:
                     os.close(child)
         finally:
@@ -73,10 +78,10 @@ def prepare(root: str) -> None:
 
 
 def main(argv: list[str]) -> int:
-    if len(argv) != 2 or argv[0] != "prepare":
+    if len(argv) != 2 or argv[0] not in ("prepare", "reclaim"):
         return 2
     try:
-        prepare(argv[1])
+        prepare(argv[1], reclaim=argv[0] == "reclaim")
     except (OSError, ValueError, KeyError):
         return 1
     return 0

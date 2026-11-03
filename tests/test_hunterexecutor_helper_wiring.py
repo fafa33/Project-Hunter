@@ -12,7 +12,7 @@ def test_executor_uses_fixed_helper(monkeypatch):
     monkeypatch.setattr(Path, "is_symlink", lambda self: False)
     monkeypatch.setattr(Path, "is_dir", lambda self: True)
     isolation = roles.SudoIsolation("hunterexecutor")
-    root = Path("/private/tmp/hunter-ia.testscope")
+    root = Path("/usr/local/var/hunter/workroots/hunter-ia.testscope")
     isolation.prepare(root / "workspace", root / "home")
     assert calls == [
         (

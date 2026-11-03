@@ -27,7 +27,7 @@ def test_executor_rejects_symlink_workspace_without_sudo(monkeypatch, tmp_path):
     monkeypatch.setattr(roles.core, "require_isolation_user", lambda user: user)
     monkeypatch.setattr(roles.core, "run_privileged", lambda *args: calls.append(args))
     isolation = roles.SudoIsolation("hunterexecutor")
-    root = Path("/private/tmp/hunter-ia.test-scope")
+    root = Path("/usr/local/var/hunter/workroots/hunter-ia.test-scope")
     monkeypatch.setattr(Path, "is_symlink", lambda self: self.name == "workspace")
     monkeypatch.setattr(Path, "is_dir", lambda self: True)
     with pytest.raises(roles.RoleRefused, match="workroot"):

@@ -284,7 +284,7 @@ class SudoIsolation:
             parent = paths[0].parent
             if (
                 parent != paths[1].parent
-                or parent.parent != Path("/private/tmp")
+                or parent.parent != Path("/usr/local/var/hunter/workroots")
                 or not parent.name.startswith("hunter-ia.")
                 or any(path.is_symlink() or not path.is_dir() for path in paths)
             ):

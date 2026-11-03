@@ -74,13 +74,16 @@ def test_github_executor_stays_in_single_existing_lifecycle() -> None:
     assert "HUNTER_ISSUE_AGENT_OPENCODE_API_KEY" not in execute
     assert "python3 scripts/hunter_issue_agent_lifecycle.py execute" in execute
     # Runner temp is under the private owner home; the isolated UID cannot traverse it.
-    assert "mktemp -d /private/tmp/hunter-ia.XXXXXXXX" in execute
+    assert "WORKROOT_PARENT=/usr/local/var/hunter/workroots" in execute
+    assert 'mktemp -d "$WORKROOT_PARENT/hunter-ia.XXXXXXXX"' in execute
+    assert "/private/tmp/hunter-ia." not in execute
     assert 'chmod 0711 "$WORKROOT"' in execute
     assert '--workroot "$HUNTER_ISSUE_AGENT_WORKROOT"' in execute
     assert '--workroot "$RUNNER_TEMP/hunter-ia/execute"' not in execute
     assert "if: always()" in execute
     assert "Remove isolated workroot" in execute
-    assert 'sudo -n chown -R "$(id -un)" "$HUNTER_ISSUE_AGENT_WORKROOT"' in execute
+    assert 'hunter_mac_workspace_owner.py reclaim "$HUNTER_ISSUE_AGENT_WORKROOT"' in execute
+    assert "sudo -n chown -R" not in execute
 
 
 def test_production_executor_refuses_legacy_opencode_before_ledger_access(monkeypatch: pytest.MonkeyPatch) -> None:

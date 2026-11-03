@@ -221,7 +221,11 @@ jobs:
           set -euo pipefail
           python3 scripts/hunter_mac_codex_preflight.py --user hunterexecutor --owner-home /Users/farhadafshari
           test -x /Users/hunterexecutor/.local/hunter-codex/node_modules/.bin/codex
-          WORKROOT="$(mktemp -d /private/tmp/hunter-ia.XXXXXXXX)"
+          WORKROOT_PARENT=/usr/local/var/hunter/workroots
+          test -d "$WORKROOT_PARENT"
+          test ! -L "$WORKROOT_PARENT"
+          test "$(stat -f '%Su:%Lp' "$WORKROOT_PARENT")" = "$(id -un):711"
+          WORKROOT="$(mktemp -d "$WORKROOT_PARENT/hunter-ia.XXXXXXXX")"
           chmod 0711 "$WORKROOT"
           echo "HUNTER_ISSUE_AGENT_WORKROOT=$WORKROOT" >> "$GITHUB_ENV"
       - name: Download the bound handoff
@@ -259,10 +263,9 @@ jobs:
           set -euo pipefail
           if [ -n "${HUNTER_ISSUE_AGENT_WORKROOT:-}" ]; then
             case "$HUNTER_ISSUE_AGENT_WORKROOT" in
-              /private/tmp/hunter-ia.*)
-                # The model-owned workspace is not removable by the runner UID.
-                # Use the same narrowly provisioned chown authority as isolation.prepare.
-                sudo -n chown -R "$(id -un)" "$HUNTER_ISSUE_AGENT_WORKROOT"
+              /usr/local/var/hunter/workroots/hunter-ia.*)
+                # Reclaim through the fixed-scope, root-installed helper only.
+                sudo -n /usr/bin/python3 /usr/local/libexec/hunter/hunter_mac_workspace_owner.py reclaim "$HUNTER_ISSUE_AGENT_WORKROOT"
                 rm -rf -- "$HUNTER_ISSUE_AGENT_WORKROOT"
                 ;;
               *) exit 1 ;;
