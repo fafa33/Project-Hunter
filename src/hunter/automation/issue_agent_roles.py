@@ -812,6 +812,52 @@ def opencode_invocation(
     )
 
 
+def _is_kilo_run(argv: Sequence[str]) -> bool:
+    return len(argv) >= 2 and Path(argv[0]).name == "kilo" and argv[1] == "run"
+
+
+def kilo_invocation(
+    model_argv: Sequence[str],
+    *,
+    prompt: bytes,
+    home: Path,
+    workspace: Path,
+    model_environment: Mapping[str, str] = MODEL_PUBLIC_ENVIRONMENT,
+) -> OpenCodeInvocation:
+    """Bind the Kilo invocation to a private task attachment and isolated workspace."""
+    if (
+        len(model_argv) != 4
+        or not _is_kilo_run(model_argv)
+        or model_argv[2] not in {"--model", "-m"}
+        or not model_argv[3].strip()
+        or model_argv[3].startswith("-")
+    ):
+        raise RoleRefused(
+            "EXECUTION_NOT_COMPLETED", "Kilo requires exactly run --model MODEL"
+        )
+
+    prompt_path = home / _TASK_ATTACHMENT
+    prompt_path.write_bytes(prompt)
+    prompt_path.chmod(0o600)
+    return OpenCodeInvocation(
+        argv=(
+            model_argv[0], "run", "--dir", str(workspace),
+            "--model", model_argv[3], EDIT_DIRECTIVE,
+            "--file", str(prompt_path),
+        ),
+        stdin=b"",
+        public_env={
+            **model_environment,
+            "HOME": str(home),
+            "PWD": str(workspace),
+            "XDG_CONFIG_HOME": str(home / ".config"),
+            "XDG_CACHE_HOME": str(home / ".cache"),
+            "XDG_DATA_HOME": str(home / ".local" / "share"),
+            "XDG_STATE_HOME": str(home / ".local" / "state"),
+        },
+    )
+
+
 def _is_codex_exec(argv: Sequence[str]) -> bool:
     return len(argv) >= 2 and Path(argv[0]).name == "codex" and argv[1] == "exec"
 
@@ -994,7 +1040,11 @@ def run_executor(
         )
         if _is_opencode_run(model_argv)
         else (
-            codex_invocation(
+            kilo_invocation(
+                model_argv, prompt=prompt, home=home, workspace=workspace, model_environment=config.model_public_env
+            )
+            if _is_kilo_run(model_argv)
+            else codex_invocation(
                 model_argv, prompt=prompt, home=home, workspace=workspace, model_environment=config.model_public_env
             )
             if _is_codex_exec(model_argv)
