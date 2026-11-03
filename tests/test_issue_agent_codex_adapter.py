@@ -79,7 +79,7 @@ def test_production_executor_refuses_legacy_opencode_before_ledger_access(monkey
     """No legacy provider path may execute even when its API key is configured."""
     import argparse
 
-    from scripts import hunter_issue_agent_lifecycle as lifecycle
+    import hunter_issue_agent_lifecycle as lifecycle
 
     monkeypatch.delenv("HUNTER_ISSUE_AGENT_MAC_CODEX", raising=False)
     monkeypatch.setenv("HUNTER_ISSUE_AGENT_EXECUTOR_MODEL_API_KEY", "dummy-not-a-secret")
