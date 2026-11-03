@@ -832,9 +832,7 @@ def kilo_invocation(
         or not model_argv[3].strip()
         or model_argv[3].startswith("-")
     ):
-        raise RoleRefused(
-            "EXECUTION_NOT_COMPLETED", "Kilo requires exactly run --model MODEL"
-        )
+        raise RoleRefused("EXECUTION_NOT_COMPLETED", "Kilo requires exactly run --model MODEL")
 
     # Kilo is an OpenCode-derived runtime: install the same trusted deny-by-default
     # tool policy and non-executable shell boundary before exposing any model key.
@@ -842,20 +840,28 @@ def kilo_invocation(
     governed_env = opencode_workspace_environment(home, workspace)
     # Kilo 7.8.18 reads KILO_* config flags, not OPENCODE_* flags.
     # Do not rely on an OpenCode-only environment contract for Kilo.
-    governed_env.update({
-        "KILO_CONFIG_DIR": governed_env["OPENCODE_CONFIG_DIR"],
-        "KILO_CONFIG_CONTENT": governed_env["OPENCODE_CONFIG_CONTENT"],
-        "KILO_DISABLE_PROJECT_CONFIG": "1",
-        "KILO_DISABLE_CLAUDE_CODE": "1",
-    })
+    governed_env.update(
+        {
+            "KILO_CONFIG_DIR": governed_env["OPENCODE_CONFIG_DIR"],
+            "KILO_CONFIG_CONTENT": governed_env["OPENCODE_CONFIG_CONTENT"],
+            "KILO_DISABLE_PROJECT_CONFIG": "1",
+            "KILO_DISABLE_CLAUDE_CODE": "1",
+        }
+    )
     prompt_path = home / _TASK_ATTACHMENT
     prompt_path.write_bytes(prompt)
     prompt_path.chmod(0o600)
     return OpenCodeInvocation(
         argv=(
-            model_argv[0], "run", "--dir", str(workspace),
-            "--model", model_argv[3], EDIT_DIRECTIVE,
-            "--file", str(prompt_path),
+            model_argv[0],
+            "run",
+            "--dir",
+            str(workspace),
+            "--model",
+            model_argv[3],
+            EDIT_DIRECTIVE,
+            "--file",
+            str(prompt_path),
         ),
         stdin=b"",
         public_env={
@@ -1057,11 +1063,13 @@ def run_executor(
                 model_argv, prompt=prompt, home=home, workspace=workspace, model_environment=config.model_public_env
             )
             if _is_kilo_run(model_argv)
-            else codex_invocation(
-                model_argv, prompt=prompt, home=home, workspace=workspace, model_environment=config.model_public_env
+            else (
+                codex_invocation(
+                    model_argv, prompt=prompt, home=home, workspace=workspace, model_environment=config.model_public_env
+                )
+                if _is_codex_exec(model_argv)
+                else None
             )
-            if _is_codex_exec(model_argv)
-            else None
         )
     )
     if invocation is not None:
