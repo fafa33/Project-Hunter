@@ -276,6 +276,19 @@ class SudoIsolation:
         return completed.returncode
 
     def prepare(self, *paths: Path) -> None:
+        # Reject out-of-scope paths before crossing sudo. This is defense in
+        # depth, not a substitute for a root-owned race-safe privilege helper.
+        if self.user == "hunterexecutor":
+            if len(paths) != 2 or tuple(path.name for path in paths) != ("workspace", "home"):
+                raise RoleRefused("ISOLATION_PATH_INVALID", "unexpected executor ownership targets")
+            parent = paths[0].parent
+            if (
+                parent != paths[1].parent
+                or parent.parent != Path("/private/tmp")
+                or not parent.name.startswith("hunter-ia.")
+                or any(path.is_symlink() or not path.is_dir() for path in paths)
+            ):
+                raise RoleRefused("ISOLATION_PATH_INVALID", "executor workroot is not isolated")
         core.run_privileged("chown", "-R", self.user, *(str(path) for path in paths))
 
     def stop(self) -> None:
