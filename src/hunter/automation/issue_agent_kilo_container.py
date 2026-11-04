@@ -47,9 +47,16 @@ class KiloContainerIsolation:
             # never echo command arguments, environment files, or raw container stderr.
             from hunter.automation.issue_agent_roles import stderr_category
 
-            print("isolated Docker setup diagnostic: operation=" + args[0] + " stderr_category=" + stderr_category(result.stderr[:65536]), flush=True)
+            print(
+                "isolated Docker setup diagnostic: operation="
+                + args[0]
+                + " stderr_category="
+                + stderr_category(result.stderr[:65536]),
+                flush=True,
+            )
             # Docker setup has no secrets in argv; expose only a bounded, sanitized error line.
             import re
+
             diagnostic = result.stderr.decode("utf-8", errors="replace").splitlines()
             detail = diagnostic[-1][:350] if diagnostic else "NO_STDERR"
             detail = re.sub(r"[^a-zA-Z0-9_ /.:()\[\],=-]", "?", detail)
@@ -93,6 +100,7 @@ class KiloContainerIsolation:
                 "import os;os.chown('/run/hunter',65533,65532);os.chmod('/run/hunter',0o770);"
                 "os.chown('/workspace',65534,65532);os.chown('/hunter-home',65534,65532);"
                 "os.chown('/hunter-home/hunter-task.txt',65534,65532);"
+                "[os.chown(p,65534,65532) for dp,_,fs in os.walk('/workspace') for p in [dp]+[os.path.join(dp,f) for f in fs]];"
                 "os.system('true')",
             )
             self._checked(
