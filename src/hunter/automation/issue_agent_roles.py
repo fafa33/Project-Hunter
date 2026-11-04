@@ -862,6 +862,7 @@ def kilo_invocation(
         argv=(
             model_argv[0],
             "run",
+            "--auto",  # Kilo CI: approvals obey the governed deny-first policy.
             "--dir",
             str(workspace),
             "--model",
