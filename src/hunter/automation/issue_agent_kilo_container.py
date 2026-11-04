@@ -79,6 +79,7 @@ class KiloContainerIsolation:
                 "-c",
                 "import os;os.chown('/run/hunter',65533,65532);os.chmod('/run/hunter',0o770);"
                 "os.chown('/workspace',65534,65532);os.chown('/hunter-home',65534,65532);"
+                "os.chown('/hunter-home/hunter-task.txt',65534,65532);"
                 "os.system('true')",
             )
             self._checked(
