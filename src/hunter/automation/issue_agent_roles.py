@@ -445,8 +445,11 @@ EDIT_DIRECTIVE: Final = (
     "Implement the signed task in the attached file by editing actual repository files "
     "in this workspace. Respect its allowed and prohibited paths. "
     "Do not merely explain a plan or claim completion: inspect the relevant files, "
-    "make the smallest correct code/test changes. Do not execute shell commands or tests; "
-    "trusted Hunter validation runs focused checks after collection. "
+    "make the smallest correct code/test changes. Shell commands are permitted only through "
+    "the Hunter governed shell broker and only for explicitly allowlisted focused checks; "
+    "never invoke an alternate shell, direct subprocess, or bypass the broker. "
+    "If the governed broker is unavailable, do not run commands or tests; "
+    "trusted Hunter validation still runs checks after collection. "
     "If the task cannot be implemented within the authorized scope, do not fabricate edits."
 )
 

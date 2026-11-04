@@ -474,10 +474,11 @@ def test_failed_model_reports_safe_workspace_counts_without_collecting(
     assert "PRIVATE_SIGNED_TASK" not in output
 
 
-def test_executor_directive_respects_governed_no_shell_policy() -> None:
-    assert "Do not execute shell commands or tests" in roles.EDIT_DIRECTIVE
-    assert "trusted Hunter validation runs focused checks" in roles.EDIT_DIRECTIVE
-    assert "run focused checks" not in roles.EDIT_DIRECTIVE
+def test_executor_directive_requires_governed_broker_only() -> None:
+    assert "only through the Hunter governed shell broker" in roles.EDIT_DIRECTIVE
+    assert "never invoke an alternate shell" in roles.EDIT_DIRECTIVE
+    assert "If the governed broker is unavailable, do not run commands or tests" in roles.EDIT_DIRECTIVE
+    assert "trusted Hunter validation still runs checks" in roles.EDIT_DIRECTIVE
 
 
 def test_collector_rejection_is_not_misreported_as_no_changes(
