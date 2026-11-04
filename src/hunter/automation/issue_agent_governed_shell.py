@@ -62,18 +62,22 @@ def run_governed(
     command: str, *, workspace: Path, image: str = "hunter-issue-agent-tools:locked", timeout: int = 60
 ) -> subprocess.CompletedProcess[str]:
     args = parse_command(command)
+    if workspace.is_symlink():
+        raise ShellDenied("symlink workspace")
     root = workspace.resolve(strict=True)
-    if not root.is_dir() or root.is_symlink():
+    if not root.is_dir():
         raise ShellDenied("invalid workspace")
-    # Refuse symlinks in supplied paths; the container itself must also have
-    # no host mounts other than this workspace and no Docker socket.
-    for arg in args:
-        if not arg.startswith("-") and "/" in arg:
-            target = root / arg
-            if target.is_symlink() or (target.exists() and not target.resolve().is_relative_to(root)):
-                raise ShellDenied("workspace path escape")
+    # Never mount a workspace containing symlinks: a symlink can point to
+    # sensitive paths *inside* the container, bypassing lexical argument checks.
+    # This conservative first slice refuses all symlinks, including nested ones.
+    for directory, dirs, files in os.walk(root, followlinks=False):
+        for name in (*dirs, *files):
+            if (Path(directory) / name).is_symlink():
+                raise ShellDenied("symlink in task workspace")
     if os.environ.get("HUNTER_GOVERNED_SHELL_ENABLED") != "1":
         raise ShellDenied("container tool runtime not explicitly enabled")
+    if not image.startswith("sha256:") and "@sha256:" not in image:
+        raise ShellDenied("container image must be digest pinned")
     return subprocess.run(
         [
             "docker",

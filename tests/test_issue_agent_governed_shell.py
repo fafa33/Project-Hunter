@@ -48,3 +48,18 @@ def test_default_is_fail_closed(tmp_path, monkeypatch):
     monkeypatch.delenv("HUNTER_GOVERNED_SHELL_ENABLED", raising=False)
     with pytest.raises(ShellDenied):
         run_governed("python -m pytest -q", workspace=tmp_path)
+
+
+def test_symlink_workspace_rejected(tmp_path, monkeypatch):
+    monkeypatch.setenv("HUNTER_GOVERNED_SHELL_ENABLED", "1")
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    (workspace / "external").symlink_to(tmp_path, target_is_directory=True)
+    with pytest.raises(ShellDenied, match="symlink"):
+        run_governed("git status --short", workspace=workspace, image="sha256:" + "a" * 64)
+
+
+def test_unpinned_image_rejected(tmp_path, monkeypatch):
+    monkeypatch.setenv("HUNTER_GOVERNED_SHELL_ENABLED", "1")
+    with pytest.raises(ShellDenied, match="digest"):
+        run_governed("git status --short", workspace=tmp_path)
