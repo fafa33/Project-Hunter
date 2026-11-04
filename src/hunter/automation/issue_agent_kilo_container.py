@@ -43,6 +43,11 @@ class KiloContainerIsolation:
     def _checked(self, *args: str) -> None:
         result = self._docker(*args)
         if result.returncode:
+            # Only the fixed Docker setup operation and a bounded error category are logged;
+            # never echo command arguments, environment files, or raw container stderr.
+            from hunter.automation.issue_agent_roles import stderr_category
+
+            print("isolated Docker setup diagnostic: operation=" + args[0] + " stderr_category=" + stderr_category(result.stderr[:65536]), flush=True)
             raise RoleRefused("EXECUTION_NOT_STARTED", "governed container setup failed")
 
     def prepare(self, *paths: Path) -> None:
