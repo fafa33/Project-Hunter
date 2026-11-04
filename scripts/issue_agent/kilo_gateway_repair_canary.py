@@ -203,6 +203,18 @@ def main() -> None:
             or "assert 2 + 2 == 4" not in content
         ):
             raise RuntimeError("REAL KILO EDIT/REPAIR/RETEST NOT PROVEN")
+        # Independent verifier runs in a separate process, reopens the volume read-only,
+        # and reads broker evidence without relying on Kilo stdout.
+        verified = __import__("subprocess").run(
+            ["python3", str(Path(__file__).parent / "kilo_canary_independent_validator.py"), work_volume, broker],
+            capture_output=True,
+            text=True,
+            check=False,
+            timeout=40,
+        )
+        if verified.returncode or "CANARY_ONLY_NOT_PRODUCTION_TRUSTED_VALIDATOR" not in verified.stdout:
+            raise RuntimeError("independent canary verification failed")
+        print("INDEPENDENT_CANARY_VERIFIER", verified.stdout.strip())
         print("REAL_KILO_REPAIR_PROVEN")
     finally:
         docker("rm", "-f", broker)
