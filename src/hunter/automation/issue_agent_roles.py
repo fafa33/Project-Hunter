@@ -1003,6 +1003,12 @@ class ExecutorOutcome:
     advisory_code: str | None
 
 
+def require_governed_kilo_isolation(model_argv: Sequence[str], isolation: Isolation) -> None:
+    """Refuse Kilo on the legacy host runner until container/egress enforcement is wired."""
+    if _is_kilo_run(model_argv) and isinstance(isolation, SudoIsolation):
+        raise RoleRefused("EXECUTION_NOT_STARTED", "Kilo requires governed container isolation")
+
+
 def run_executor(
     *,
     issue: int,
@@ -1047,6 +1053,8 @@ def run_executor(
     prompt = str(bundle["prompt"]).encode("utf-8")
     if state.sha256_hex(prompt) != bound["lineage"]["prompt_sha256"]:
         raise RoleRefused("TRANSPORT_INTEGRITY_FAILED", "prompt differs from the bound prompt digest")
+
+    require_governed_kilo_isolation(config.model_argv, isolation)
 
     workspace, git_dir, home = workroot / "workspace", workroot / "trusted.git", workroot / "home"
     # ADR 0039 L4: a remediation executes on its parent PR branch at the exact bound head, not on main.
