@@ -19,6 +19,16 @@ def test_retired_migration_surfaces_are_absent() -> None:
         assert not (ROOT / relative).exists(), relative
 
 
+def test_merge_readiness_avoids_restricted_privileged_pr_event() -> None:
+    """Privileged merge controller uses only trusted event ingress."""
+    text = (Path(__file__).resolve().parents[1] / ".github/workflows/hunter-merge-readiness.yml").read_text()
+    assert "  pull_request_target:" not in text
+    assert "  workflow_run:" in text
+    assert "  schedule:" in text
+    assert "  workflow_dispatch:" in text
+    assert "runs-on: ubuntu-24.04" in text
+
+
 def test_agent_instructions_use_current_state_governance() -> None:
     path = ROOT / ".github/instructions/project-hunter.instructions.md"
     text = path.read_text(encoding="utf-8")
