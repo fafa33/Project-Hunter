@@ -8,10 +8,18 @@ name: Hunter / Merge Readiness
 # - failed or incomplete exact-head code/security checks
 
 on:
-  # Privileged controller runs only from trusted default-branch events.
-  # GitHub will restrict pull_request_target for public repositories in Dec 2026.
-  # workflow_run handles completed exact-head checks; schedule/dispatch recover
-  # PRs without associated workflow_run events, without executing untrusted code.
+  # Keep immediate exact-HEAD lifecycle reconciliation until the trusted
+  # governance-reconcile controller is migrated to an equivalent event path.
+  # Removing this trigger independently breaks the DFF-045 wakeup contract.
+  pull_request_target:
+    branches:
+      - main
+    types:
+      - opened
+      - reopened
+      - synchronize
+      - ready_for_review
+      - converted_to_draft
   workflow_run:
     workflows:
       - CI

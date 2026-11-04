@@ -19,10 +19,12 @@ def test_retired_migration_surfaces_are_absent() -> None:
         assert not (ROOT / relative).exists(), relative
 
 
-def test_merge_readiness_avoids_restricted_privileged_pr_event() -> None:
-    """Privileged merge controller uses only trusted event ingress."""
+def test_merge_readiness_preserves_exact_head_lifecycle_wakeups() -> None:
+    """Readiness must not silently lose exact-head lifecycle triggers."""
     text = (Path(__file__).resolve().parents[1] / ".github/workflows/hunter-merge-readiness.yml").read_text()
-    assert "  pull_request_target:" not in text
+    assert "  pull_request_target:" in text
+    assert "      - synchronize" in text
+    assert "      - ready_for_review" in text
     assert "  workflow_run:" in text
     assert "  schedule:" in text
     assert "  workflow_dispatch:" in text
