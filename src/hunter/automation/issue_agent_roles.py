@@ -445,7 +445,8 @@ EDIT_DIRECTIVE: Final = (
     "Implement the signed task in the attached file by editing actual repository files "
     "in this workspace. Respect its allowed and prohibited paths. "
     "Do not merely explain a plan or claim completion: inspect the relevant files, "
-    "make the smallest correct code/test changes, and run focused checks. "
+    "make the smallest correct code/test changes. Do not execute shell commands or tests; "
+    "trusted Hunter validation runs focused checks after collection. "
     "If the task cannot be implemented within the authorized scope, do not fabricate edits."
 )
 
@@ -1115,6 +1116,19 @@ def run_executor(
     finally:
         isolation.stop()  # nothing the model started survives into collection
     if advisory is not None:
+        # Never promote a failed model run, but distinguish a model that edited files
+        # from one that only printed text. Report counts only, never paths/content.
+        try:
+            changed = _git(git_dir, workspace, "status", "--porcelain", "-z", "--untracked-files=normal")
+            changed_count = sum(bool(item) for item in changed.split(b"\0"))
+        except (RoleRefused, subprocess.SubprocessError, OSError):
+            changed_count = -1
+        counts = workspace_diagnostics(workspace, git_dir, home)
+        print(
+            f"executor failed-workspace diagnostic: changed_entries={changed_count} "
+            + " ".join(f"{name}={value}" for name, value in counts.items()),
+            flush=True,
+        )
         return ExecutorOutcome(None, advisory)
     try:
         document = collect_result(
