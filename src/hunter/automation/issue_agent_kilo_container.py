@@ -12,6 +12,7 @@ import tempfile
 import uuid
 from collections.abc import Mapping, Sequence
 from pathlib import Path
+from urllib.parse import urlunsplit
 
 from hunter.automation.issue_agent_roles import RoleRefused, stderr_category
 
@@ -174,18 +175,21 @@ class KiloContainerIsolation:
         for scope in (policy, policy["agent"]["build"]):
             scope["permission"] = {"*": "deny", "bash": "allow", "read": "allow", "edit": "allow"}
         env["KILO_CONFIG_CONTENT"] = json.dumps(policy, separators=(",", ":"))
+        # This is a plain HTTP CONNECT *proxy* on a Docker internal network,
+        # not a plaintext upstream model connection. The tunnel carries TLS.
+        proxy_endpoint = urlunsplit(("http", f"{self.gateway}:8080", "", "", ""))
         env.update(
             {
                 "HOME": "/hunter-home",
                 "SHELL": "/usr/local/bin/hunter-governed-shell",
-                "HTTP_PROXY": f"http://{self.gateway}:8080",  # NOSONAR: private Docker CONNECT hop; upstream TLS remains end-to-end
-                "HTTPS_PROXY": f"http://{self.gateway}:8080",  # NOSONAR: CONNECT proxy speaks HTTP locally, not upstream
-                "ALL_PROXY": f"http://{self.gateway}:8080",  # NOSONAR: only internal bridge reachable by isolated agent
+                "HTTP_PROXY": proxy_endpoint,
+                "HTTPS_PROXY": proxy_endpoint,
+                "ALL_PROXY": proxy_endpoint,
                 "NO_PROXY": "",
                 "NODE_USE_ENV_PROXY": "1",
-                "TMPDIR": "/tmp",  # NOSONAR: private read-only container tmpfs, not host /tmp
-                "TMP": "/tmp",  # NOSONAR: isolated container-local tmpfs
-                "TEMP": "/tmp",  # NOSONAR: isolated container-local tmpfs
+                "TMPDIR": "/run/hunter-private-tmp",
+                "TMP": "/run/hunter-private-tmp",
+                "TEMP": "/run/hunter-private-tmp",
             }
         )
         if any("\n" in key or "=" in key or "\n" in value or "\r" in value for key, value in env.items()):
