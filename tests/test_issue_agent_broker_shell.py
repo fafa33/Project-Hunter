@@ -1,6 +1,7 @@
 import sys
+from importlib import import_module
 
-from scripts.issue_agent import broker_shell
+broker_shell = import_module("scripts.issue_agent.broker_shell")
 
 
 def test_missing_broker_fails_closed(monkeypatch):

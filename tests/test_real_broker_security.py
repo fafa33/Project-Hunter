@@ -3,9 +3,10 @@
 import json
 import socket
 import struct
+from importlib import import_module
 from unittest.mock import Mock, patch
 
-from scripts.issue_agent.real_broker_server import handle
+handle = import_module("scripts.issue_agent.real_broker_server").handle
 
 socket.SO_PEERCRED = getattr(socket, "SO_PEERCRED", 17)
 
