@@ -82,3 +82,12 @@ def test_kilo_rejects_unapproved_args(tmp_path: Path, tail: tuple[str, ...]) -> 
 def test_kilo_does_not_use_production_dispatch_yet() -> None:
     """Document that this test suite does not prove production wiring."""
     assert callable(roles.kilo_invocation)
+
+
+def test_kilo_production_host_isolation_is_refused(monkeypatch: pytest.MonkeyPatch) -> None:
+    # No actual sudo process is needed to prove the dispatch guard.
+    monkeypatch.setattr(roles.core, "require_isolation_user", lambda _user: None)
+    isolation = roles.SudoIsolation("untrusted")
+    with pytest.raises(roles.RoleRefused, match="governed container isolation"):
+        roles.require_governed_kilo_isolation(("kilo", "run", "--model", MODEL), isolation)
+    roles.require_governed_kilo_isolation(("opencode", "run", "--model", MODEL), isolation)

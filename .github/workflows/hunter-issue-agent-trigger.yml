@@ -215,6 +215,20 @@ jobs:
           set -euo pipefail
           python -m pip install --only-binary ':all:' -c requirements/ci-constraints.txt .
           sudo npm install --prefix /opt/hunter --no-save --ignore-scripts @kilocode/cli@7.8.18
+      - name: Provision governed Kilo container images
+        run: |
+          set -euo pipefail
+          docker build --pull --file scripts/issue_agent/Dockerfile.kilo-canary \
+            --tag hunter-682-kilo-canary:local .
+          docker build --pull --file scripts/issue_agent/Dockerfile.broker-canary \
+            --tag hunter-682-broker-canary:local .
+          docker image inspect hunter-682-kilo-canary:local hunter-682-broker-canary:local >/dev/null
+      - name: Verify Docker network isolation prerequisites
+        run: |
+          set -euo pipefail
+          docker info >/dev/null
+          docker image inspect python@sha256:78387bc3881b8273120a12ebe6c1ab22b018ccc2c9adf565ae1ac9b536e184ea >/dev/null || \
+            docker pull python@sha256:78387bc3881b8273120a12ebe6c1ab22b018ccc2c9adf565ae1ac9b536e184ea
       - name: Create the isolation uid
         run: |
           set -euo pipefail

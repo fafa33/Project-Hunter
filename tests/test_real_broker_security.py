@@ -3,7 +3,14 @@
 import json
 import socket
 import struct
+
+# The preflight uses the pytest console entrypoint, which does not add the
+# checkout root to sys.path. Resolve only this checkout, not a global path.
+import sys
 from importlib import import_module
+from pathlib import Path
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from unittest.mock import Mock, patch
 
 handle = import_module("scripts.issue_agent.real_broker_server").handle

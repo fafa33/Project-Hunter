@@ -1,5 +1,11 @@
 import sys
 from importlib import import_module
+from pathlib import Path
+
+# The preflight uses the pytest console entrypoint, which does not add the
+# checkout root to sys.path. Resolve only this checkout, not a global path.
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 broker_shell = import_module("scripts.issue_agent.broker_shell")
 
