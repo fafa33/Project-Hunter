@@ -1296,6 +1296,7 @@ def _executor_model_secrets(model_argv: Sequence[str], model_key_name: str) -> d
 
 
 def cmd_execute(configuration: control.Configuration, arguments: argparse.Namespace) -> int:
+    from hunter.automation.issue_agent_kilo_container import KiloContainerIsolation
     from hunter.evidence_intelligence.smart_prompt_routing import PromptAutomationVerifier
 
     run_id, attempt, _ = _run_context()
@@ -1316,7 +1317,11 @@ def cmd_execute(configuration: control.Configuration, arguments: argparse.Namesp
             result_recipient=configuration.result_recipient,
             prompt_verifier=PromptAutomationVerifier.from_environment(),
         ),
-        isolation=roles.SudoIsolation(ISOLATION_USER),
+        isolation=(
+            KiloContainerIsolation(Path(__file__).resolve().parent / "issue_agent")
+            if roles._is_kilo_run(tuple(arguments.model_argv))
+            else roles.SudoIsolation(ISOLATION_USER)
+        ),
         workroot=Path(arguments.workroot),
     )
     if outcome.sealed_result is not None:

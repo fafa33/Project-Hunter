@@ -456,6 +456,31 @@ def test_model_failures_are_advisory_never_retried_and_always_stopped(
     assert len(isolation.calls) == 1 and isolation.stopped == 1
 
 
+def test_failed_model_reports_safe_workspace_counts_without_collecting(
+    repos: dict[str, Any], monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    ledger, envelope = authorize(repos)
+
+    def forbidden_collector(*args: Any, **kwargs: Any) -> bytes:
+        raise AssertionError("failed model must never collect or publish")
+
+    monkeypatch.setattr(roles, "collect_result", forbidden_collector)
+    outcome = execute(repos, ledger, envelope, RecordingIsolation(CANARY, fail=True))
+    assert outcome.sealed_result is None
+    assert outcome.advisory_code == "PROVIDER_UNAVAILABLE"
+    output = capsys.readouterr().out
+    assert "executor failed-workspace diagnostic: changed_entries=" in output
+    assert "ignored_files=" in output
+    assert "PRIVATE_SIGNED_TASK" not in output
+
+
+def test_executor_directive_requires_governed_broker_only() -> None:
+    assert "only through the Hunter governed shell broker" in roles.EDIT_DIRECTIVE
+    assert "never invoke an alternate shell" in roles.EDIT_DIRECTIVE
+    assert "If the governed broker is unavailable, do not run commands or tests" in roles.EDIT_DIRECTIVE
+    assert "trusted Hunter validation still runs checks" in roles.EDIT_DIRECTIVE
+
+
 def test_collector_rejection_is_not_misreported_as_no_changes(
     repos: dict[str, Any], monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
 ) -> None:

@@ -445,7 +445,11 @@ EDIT_DIRECTIVE: Final = (
     "Implement the signed task in the attached file by editing actual repository files "
     "in this workspace. Respect its allowed and prohibited paths. "
     "Do not merely explain a plan or claim completion: inspect the relevant files, "
-    "make the smallest correct code/test changes, and run focused checks. "
+    "make the smallest correct code/test changes. Shell commands are permitted only through "
+    "the Hunter governed shell broker and only for explicitly allowlisted focused checks; "
+    "never invoke an alternate shell, direct subprocess, or bypass the broker. "
+    "If the governed broker is unavailable, do not run commands or tests; "
+    "trusted Hunter validation still runs checks after collection. "
     "If the task cannot be implemented within the authorized scope, do not fabricate edits."
 )
 
@@ -861,6 +865,7 @@ def kilo_invocation(
         argv=(
             model_argv[0],
             "run",
+            "--auto",  # Kilo CI: approvals obey the governed deny-first policy.
             "--dir",
             str(workspace),
             "--model",
@@ -1001,6 +1006,15 @@ class ExecutorOutcome:
     advisory_code: str | None
 
 
+def require_governed_kilo_isolation(model_argv: Sequence[str], isolation: Isolation) -> None:
+    """Refuse Kilo on the legacy host runner until container/egress enforcement is wired."""
+    if _is_kilo_run(model_argv) and not (
+        type(isolation).__module__ == "hunter.automation.issue_agent_kilo_container"
+        and type(isolation).__name__ == "KiloContainerIsolation"
+    ):
+        raise RoleRefused("EXECUTION_NOT_STARTED", "Kilo requires governed container isolation")
+
+
 def run_executor(
     *,
     issue: int,
@@ -1045,6 +1059,8 @@ def run_executor(
     prompt = str(bundle["prompt"]).encode("utf-8")
     if state.sha256_hex(prompt) != bound["lineage"]["prompt_sha256"]:
         raise RoleRefused("TRANSPORT_INTEGRITY_FAILED", "prompt differs from the bound prompt digest")
+
+    require_governed_kilo_isolation(config.model_argv, isolation)
 
     workspace, git_dir, home = workroot / "workspace", workroot / "trusted.git", workroot / "home"
     # ADR 0039 L4: a remediation executes on its parent PR branch at the exact bound head, not on main.
@@ -1115,6 +1131,19 @@ def run_executor(
     finally:
         isolation.stop()  # nothing the model started survives into collection
     if advisory is not None:
+        # Never promote a failed model run, but distinguish a model that edited files
+        # from one that only printed text. Report counts only, never paths/content.
+        try:
+            changed = _git(git_dir, workspace, "status", "--porcelain", "-z", "--untracked-files=normal")
+            changed_count = sum(bool(item) for item in changed.split(b"\0"))
+        except (RoleRefused, subprocess.SubprocessError, OSError):
+            changed_count = -1
+        counts = workspace_diagnostics(workspace, git_dir, home)
+        print(
+            f"executor failed-workspace diagnostic: changed_entries={changed_count} "
+            + " ".join(f"{name}={value}" for name, value in counts.items()),
+            flush=True,
+        )
         return ExecutorOutcome(None, advisory)
     try:
         document = collect_result(

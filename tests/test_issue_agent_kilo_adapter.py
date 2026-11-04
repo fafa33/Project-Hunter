@@ -25,9 +25,10 @@ def test_kilo_private_task_and_workspace(tmp_path: Path) -> None:
     assert result.stdin == b""
     assert secret.decode() not in " ".join(result.argv)
     assert result.argv[:2] == ("/opt/hunter/bin/kilo", "run")
-    assert result.argv[2:4] == ("--dir", str(workspace))
-    assert result.argv[4:6] == ("--model", MODEL)
-    assert "--auto" not in result.argv
+    assert result.argv[2] == "--auto"
+    assert result.argv.count("--auto") == 1
+    assert result.argv[3:5] == ("--dir", str(workspace))
+    assert result.argv[5:7] == ("--model", MODEL)
     assert result.argv[-2] == "--file"
     attachment = Path(result.argv[-1])
     assert attachment.parent == home
@@ -43,6 +44,11 @@ def test_kilo_private_task_and_workspace(tmp_path: Path) -> None:
     config = json.loads(result.public_env["KILO_CONFIG_CONTENT"])
     assert config["permission"]["*"] == "deny"
     assert config["permission"]["external_directory"] == "deny"
+    for tool in ("read", "edit", "glob", "grep", "lsp"):
+        assert config["permission"][tool] == "allow"
+    for tool in ("webfetch", "websearch", "task", "skill", "question"):
+        assert config["permission"].get(tool, "deny") == "deny"
+    assert config["permission"]["bash"] == "allow"  # Trusted shell exits 126.
     assert config["agent"]["build"]["permission"] == config["permission"]
     shell = Path(config["shell"])
     assert shell.is_file()
@@ -76,3 +82,12 @@ def test_kilo_rejects_unapproved_args(tmp_path: Path, tail: tuple[str, ...]) -> 
 def test_kilo_does_not_use_production_dispatch_yet() -> None:
     """Document that this test suite does not prove production wiring."""
     assert callable(roles.kilo_invocation)
+
+
+def test_kilo_production_host_isolation_is_refused(monkeypatch: pytest.MonkeyPatch) -> None:
+    # No actual sudo process is needed to prove the dispatch guard.
+    monkeypatch.setattr(roles.core, "require_isolation_user", lambda _user: None)
+    isolation = roles.SudoIsolation("untrusted")
+    with pytest.raises(roles.RoleRefused, match="governed container isolation"):
+        roles.require_governed_kilo_isolation(("kilo", "run", "--model", MODEL), isolation)
+    roles.require_governed_kilo_isolation(("opencode", "run", "--model", MODEL), isolation)

@@ -8,6 +8,9 @@ name: Hunter / Merge Readiness
 # - failed or incomplete exact-head code/security checks
 
 on:
+  # Keep immediate exact-HEAD lifecycle reconciliation until the trusted
+  # governance-reconcile controller is migrated to an equivalent event path.
+  # Removing this trigger independently breaks the DFF-045 wakeup contract.
   pull_request_target:
     branches:
       - main
@@ -17,9 +20,6 @@ on:
       - synchronize
       - ready_for_review
       - converted_to_draft
-  # Bot-authored review events can be held by GitHub before jobs start.
-  # Trusted pull_request_target, workflow_run and scheduled reconciliation
-  # retain authoritative current-state review checks without manual approval.
   workflow_run:
     workflows:
       - CI
@@ -60,7 +60,7 @@ concurrency:
 jobs:
   controller:
     name: Hunter Merge Readiness Controller
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 10
     # `workflow_dispatch` runs the dispatched ref's file, so refuse to run this
     # status-writing job off the trusted default-branch ref.
