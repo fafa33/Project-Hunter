@@ -442,7 +442,7 @@ def test_executor_prepares_runner_owned_traversable_workroot(tmp_path: Path) -> 
         line.strip()
         for step in steps(job)
         for line in str(step.get("run", "")).splitlines()
-        if shlex.split(line.strip())[:2] == ["sudo", "install"]
+        if line.strip().startswith("sudo install ")
     ]
     installs = [command for command in commands if shlex.split(command)[-1] == "/tmp/hunter-ia/execute"]
     assert len(installs) == 1, "executor workroot must be provisioned before runner-owned materialization"
