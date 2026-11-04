@@ -8,7 +8,7 @@ from unittest.mock import Mock, patch
 
 handle = import_module("scripts.issue_agent.real_broker_server").handle
 
-socket.SO_PEERCRED = getattr(socket, "SO_PEERCRED", 17)
+socket.SO_PEERCRED = getattr(socket, "SO_PEERCRED", 17)  # type: ignore[misc]
 
 
 def fake_conn(uid, payload):
