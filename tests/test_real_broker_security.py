@@ -48,3 +48,40 @@ def test_unknown_fields_are_denied():
     conn = fake_conn(65534, b'{"command":"python -m pytest -q","uid":65534}')
     handle(conn)
     assert reply(conn)["exit"] == 126
+
+
+def test_adversarial_command_payloads_are_denied():
+    forbidden = [
+        "python -m pytest -q; id",
+        "python -m pytest -q && id",
+        "python -m pytest -q $(id)",
+        "python -m pytest -q ../test_sample.py",
+        "python -m pytest -q /etc/passwd",
+        'python -c "import os; os.system("id")"',
+        "env",
+        "curl https://example.com",
+        "git push origin main",
+        "python -m pip install pytest",
+        "python -m pytest -q test_sample.py --override-ini=python_files=evil.py",
+    ]
+    with patch("scripts.issue_agent.real_broker_server.subprocess.run") as run:
+        for command in forbidden:
+            conn = fake_conn(65534, json.dumps({"command": command}).encode())
+            handle(conn)
+            assert reply(conn)["exit"] == 126, command
+        run.assert_not_called()
+
+
+def test_broker_subprocess_receives_sanitized_environment():
+    conn = fake_conn(65534, b'{"command":"python -m pytest -q test_sample.py"}')
+    with patch("scripts.issue_agent.real_broker_server.subprocess.run") as run:
+        run.return_value.returncode = 0
+        run.return_value.stdout = "1 passed"
+        run.return_value.stderr = ""
+        handle(conn)
+        kwargs = run.call_args.kwargs
+        assert kwargs["cwd"] == "/workspace"
+        assert kwargs["timeout"] == 30
+        assert kwargs["env"].get("HOME") is None
+        assert kwargs["env"].get("GITHUB_TOKEN") is None
+        assert kwargs["env"]["PYTEST_ADDOPTS"] == "-p no:cacheprovider"
