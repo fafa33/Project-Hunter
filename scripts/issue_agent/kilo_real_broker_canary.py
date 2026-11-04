@@ -1,8 +1,11 @@
 """Bounded Kilo -> governed shell -> Unix broker proof on Docker Desktop."""
 
 import json
+import shutil
+import tempfile
 import time
 import uuid
+from pathlib import Path
 
 from container_broker_canary import IMAGE, docker
 
@@ -12,6 +15,7 @@ def main():
     volume = f"hunter-682-e2e-{suffix}"
     broker = f"hunter-682-e2e-broker-{suffix}"
     assert docker("volume", "create", volume).returncode == 0
+    workspace = None
     try:
         setup = docker(
             "run",
@@ -33,10 +37,7 @@ def main():
         )
         if setup.returncode:
             raise RuntimeError("volume setup failed: " + setup.stderr)
-        import tempfile
-        from pathlib import Path
-
-        workspace = Path(tempfile.mkdtemp(prefix="hunter-broker-work-", dir="/tmp"))
+        workspace = Path(tempfile.mkdtemp(prefix="hunter-broker-work-", dir=Path.home()))
         (workspace / "test_sample.py").write_text("def test_sample():\n    assert 2 + 2 == 4\n")
         started = docker(
             "run",
@@ -143,6 +144,8 @@ def main():
         if "BROKER_EXECUTED:" not in logs.stdout or "1 passed" not in agent.stdout + agent.stderr:
             raise RuntimeError("NO VERIFIED REAL TEST EXECUTION")
     finally:
+        if workspace is not None:
+            shutil.rmtree(workspace)
         docker("rm", "-f", broker)
         docker("volume", "rm", "-f", volume)
 

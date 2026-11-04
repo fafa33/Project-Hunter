@@ -14,7 +14,7 @@ IMAGE = "python@sha256:78387bc3881b8273120a12ebe6c1ab22b018ccc2c9adf565ae1ac9b53
 
 
 def probe() -> None:
-    with tempfile.TemporaryDirectory(prefix="hunter-682-", dir="/tmp") as root:
+    with tempfile.TemporaryDirectory(prefix="hunter-682-", dir=Path.home()) as root:
         base = Path(root)
         workspace = base / "workspace"
         workspace.mkdir()
