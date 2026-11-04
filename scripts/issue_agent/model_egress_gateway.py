@@ -13,7 +13,7 @@ import socket
 import socketserver
 
 MAX_HEADER = 4096
-ALLOWED_HOSTS = frozenset({"api.kilo.ai", "api.kilocode.ai"})
+ALLOWED_HOSTS = frozenset({"ai-gateway.kilo.ai", "models.dev"})
 
 
 def permitted_target(request: bytes) -> tuple[str, int] | None:
@@ -59,6 +59,7 @@ class Handler(socketserver.BaseRequestHandler):
                 header += part
             target = permitted_target(header)
             if target is None:
+                print("GATEWAY_DENIED_CONNECT", repr(header.split(b"\r\n", 1)[0][:180]), flush=True)
                 self.request.sendall(b"HTTP/1.1 403 Forbidden\r\nContent-Length: 0\r\n\r\n")
                 return
             for family, kind, proto, _, address in public_addresses(target[0]):
