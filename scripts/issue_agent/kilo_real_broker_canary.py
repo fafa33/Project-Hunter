@@ -13,6 +13,26 @@ def main():
     broker = f"hunter-682-e2e-broker-{suffix}"
     assert docker("volume", "create", volume).returncode == 0
     try:
+        setup = docker(
+            "run",
+            "--rm",
+            "--network",
+            "none",
+            "--cap-drop",
+            "ALL",
+            "--cap-add",
+            "CHOWN",
+            "--cap-add",
+            "FOWNER",
+            "--mount",
+            f"type=volume,src={volume},dst=/run/hunter",
+            IMAGE,
+            "python",
+            "-c",
+            "import os;os.chown('/run/hunter',65533,65532);os.chmod('/run/hunter',0o770)",
+        )
+        if setup.returncode:
+            raise RuntimeError("volume setup failed: " + setup.stderr)
         import tempfile
         from pathlib import Path
 
@@ -23,6 +43,8 @@ def main():
             "-d",
             "--name",
             broker,
+            "--user",
+            "65533:65532",
             "--network",
             "none",
             "--read-only",
@@ -63,7 +85,9 @@ def main():
                 break
             time.sleep(0.2)
         else:
-            raise RuntimeError("broker socket unavailable: " + docker("logs", broker).stderr + docker("logs", broker).stdout)
+            raise RuntimeError(
+                "broker socket unavailable: " + docker("logs", broker).stderr + docker("logs", broker).stdout
+            )
         policy = {
             "permission": {"*": "deny", "bash": "allow", "read": "allow"},
             "agent": {"build": {"permission": {"*": "deny", "bash": "allow", "read": "allow"}}},
@@ -84,7 +108,7 @@ def main():
             "--cpus",
             "1",
             "--user",
-            "65534:65534",
+            "65534:65532",
             "--tmpfs",
             "/tmp:rw,nosuid,size=128m",
             "--mount",
