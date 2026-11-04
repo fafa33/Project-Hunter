@@ -1,11 +1,20 @@
 """Adversarial checks for the model's restricted CONNECT gateway."""
 
+import importlib.util
 import socket
+from pathlib import Path
 from unittest.mock import patch
 
 import pytest
 
-from scripts.issue_agent.model_egress_gateway import permitted_target, public_addresses
+# Load this standalone container entrypoint without giving it two mypy module names.
+_gateway_path = Path(__file__).resolve().parents[1] / "scripts/issue_agent/model_egress_gateway.py"
+_spec = importlib.util.spec_from_file_location("hunter_gateway_test_entrypoint", _gateway_path)
+assert _spec is not None and _spec.loader is not None
+_gateway = importlib.util.module_from_spec(_spec)
+_spec.loader.exec_module(_gateway)
+permitted_target = _gateway.permitted_target
+public_addresses = _gateway.public_addresses
 
 
 @pytest.mark.parametrize(
