@@ -1005,7 +1005,10 @@ class ExecutorOutcome:
 
 def require_governed_kilo_isolation(model_argv: Sequence[str], isolation: Isolation) -> None:
     """Refuse Kilo on the legacy host runner until container/egress enforcement is wired."""
-    if _is_kilo_run(model_argv) and isinstance(isolation, SudoIsolation):
+    if _is_kilo_run(model_argv) and not (
+        type(isolation).__module__ == "hunter.automation.issue_agent_kilo_container"
+        and type(isolation).__name__ == "KiloContainerIsolation"
+    ):
         raise RoleRefused("EXECUTION_NOT_STARTED", "Kilo requires governed container isolation")
 
 
