@@ -251,6 +251,28 @@ class KiloContainerIsolation:
                 *mapped[1:],
             ]
             result = self._docker(*command, timeout=timeout, stdin=stdin)
+        # Bounded, content-free telemetry: do not log model text, task attachment, or secrets.
+        output = result.stdout[:262144].lower()
+        markers = {
+            "error": b"error" in output,
+            "permission": b"permission" in output or b"denied" in output,
+            "unauthorized": b"unauthorized" in output or b"401" in output,
+            "rate_limit": b"rate limit" in output or b"429" in output,
+            "model": b"model" in output,
+            "tool": b"tool" in output,
+            "edit": b"edit" in output,
+            "pytest": b"pytest" in output,
+            "file": b"test_sample.py" in output,
+        }
+        print(
+            "isolated Kilo response diagnostic: stdout_bytes="
+            + str(len(result.stdout))
+            + " stderr_bytes="
+            + str(len(result.stderr))
+            + " markers="
+            + ",".join(key for key, present in markers.items() if present),
+            flush=True,
+        )
         print(
             "isolated Kilo container diagnostic: exit="
             + ("ZERO" if result.returncode == 0 else "NONZERO")
