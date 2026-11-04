@@ -1,4 +1,4 @@
 FROM python:3.12-slim
 RUN pip install --no-cache-dir --only-binary=:all: pytest==8.3.5
-USER 0:0
+USER 65533:65532
 WORKDIR /workspace
