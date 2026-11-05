@@ -39,12 +39,9 @@ jobs:
           set -euo pipefail
           # The probe launches through hunter.automation.issue_agent_roles.opencode_invocation, the same contract
           # the production executor uses, and asserts a tracked-file edit through the production collector.
+          # It takes no path, executable or git options: its workspace, external git metadata and home are fixed
+          # siblings of /tmp/hunter-ia/execute, so no argument can redirect a trusted write.
           python scripts/hunter_opencode_diagnostic_probe.py \
-            --source "$GITHUB_WORKSPACE" \
-            --workspace /tmp/hunter-ia/execute/workspace \
-            --git-dir /tmp/hunter-ia/execute/trusted.git \
-            --home /tmp/hunter-ia/execute/home \
-            --opencode /opt/hunter/bin/opencode \
             --model "$MODEL" \
             --secret-env HUNTER_ISSUE_AGENT_EXECUTOR_MODEL_API_KEY \
             --model-key-name "$MODEL_KEY_NAME" \
