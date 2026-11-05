@@ -68,7 +68,7 @@ admission.
   requires the owner's authorization and documented technical necessity, a bounded post-merge verification, one exact `head_sha`,
   a `trust_root` path and sha256 that must equal the base-branch file, an `expires_at`, and the explicit deferred evidence ids and
   criteria. All non-deferred evidence must still be proven before merge. The result is
-  `ACCEPTANCE_PRODUCTION_ONLY_PENDING`: readiness may be positive but its description says Issue acceptance is NOT complete, and
+  `ACCEPTANCE_PRODUCTION_ONLY_PENDING`: readiness may be positive but its published description leads with "Issue acceptance NOT complete" (so GitHub's 140-character status limit can never cut it), and
   the record stays in the registry until the owner removes it with production evidence. After `expires_at` it blocks again.
 - **Three distinct facts.** PR merge readiness, Issue acceptance completion and post-merge production acceptance are separate;
   this section affects only the first and never reports the others as done. Closing an Issue is not evidence.

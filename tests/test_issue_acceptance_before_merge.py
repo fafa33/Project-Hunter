@@ -151,6 +151,21 @@ def test_a_failed_producer_run_is_not_proof() -> None:
     assert state == "pending" and detail.startswith("ACCEPTANCE_MISSING")
 
 
+def test_a_newer_unfinished_run_is_not_masked_by_an_older_success() -> None:
+    older_success = run(PROOF, ident=1)
+    newer_running = {**run(PROOF, ident=2), "status": "in_progress", "conclusion": None}
+    state, detail = evaluate(registry(requirement()), GOVERNED, [older_success, newer_running, run(SAFETY, ident=3)])
+    assert state == "pending" and detail.startswith("ACCEPTANCE_MISSING") and "proof" in detail
+
+
+def test_a_newer_failed_run_is_not_masked_by_an_older_success() -> None:
+    newer_failed = run(PROOF, ident=2, conclusion="failure")
+    state, detail = evaluate(
+        registry(requirement()), GOVERNED, [run(PROOF, ident=1), newer_failed, run(SAFETY, ident=3)]
+    )
+    assert state == "pending" and detail.startswith("ACCEPTANCE_MISSING")
+
+
 def test_an_incomplete_latest_run_is_not_proof() -> None:
     pending = {**run(PROOF), "status": "in_progress", "conclusion": None}
     state, detail = evaluate(registry(requirement()), GOVERNED, [pending, run(SAFETY, ident=2)])
@@ -428,8 +443,27 @@ def test_missing_stale_ambiguous_or_unresolved_acceptance_prevents_a_positive_de
 def test_a_production_only_exception_is_ready_but_never_described_as_accepted() -> None:
     decision = decide(("success", "ACCEPTANCE_PRODUCTION_ONLY_PENDING: Issue #682 acceptance is NOT complete."))
     assert decision.state == "success"
-    assert "Issue acceptance is NOT complete" in decision.description
+    assert "Issue acceptance NOT complete" in decision.description
     assert "accepted" not in decision.description.lower()
+
+
+def test_the_published_status_keeps_the_not_complete_warning_within_githubs_limit(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    decision = decide(("success", "ACCEPTANCE_PRODUCTION_ONLY_PENDING: Issue #682 acceptance is NOT complete."))
+    posted: list[dict[str, Any]] = []
+
+    def request(method: str, path: str, payload: dict[str, Any] | None = None, **_k: Any) -> Any:
+        if method == "GET":
+            return {"statuses": []}
+        posted.append(payload or {})
+        return {}
+
+    monkeypatch.setattr(readiness, "request_json", request)
+    readiness.publish("c" * 40, decision)
+    (published,) = posted
+    assert len(published["description"]) <= 140
+    assert "NOT complete" in published["description"] and "production-only" in published["description"]
 
 
 def test_acceptance_never_masks_a_draft_or_a_failing_required_check() -> None:

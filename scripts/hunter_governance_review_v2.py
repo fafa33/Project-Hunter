@@ -2485,9 +2485,13 @@ def _evidence_status(spec: pre_ready.EvidenceSpec, runs: list[dict[str, Any]] | 
     if runs is None:
         return "unavailable", f"{spec.id}: producer runs are unavailable"
     ours = [r for r in runs if r.get("path") == spec.workflow and r.get("event") == spec.event]
-    exact = [r for r in ours if r.get("head_sha") == head_sha and r.get("status") == "completed"]
+    exact = [r for r in ours if r.get("head_sha") == head_sha]
     if exact:
+        # The LATEST exact-head run decides, whatever its status: an older success must never mask a newer run that is
+        # still queued or in progress (or that failed), so completion is required of that latest run itself.
         latest = max(exact, key=lambda r: (int(r.get("run_number", 0)), int(r.get("id", 0))))
+        if latest.get("status") != "completed":
+            return "missing", f"{spec.id}: the producer's latest run at the exact head has not completed"
         if latest.get("conclusion") == "success":
             return "proven", f"{spec.id}: run {latest.get('id')} succeeded at the exact head"
         return "missing", f"{spec.id}: the producer's latest run at the exact head did not succeed"

@@ -585,16 +585,18 @@ def evaluate(observation: ReadinessObservation) -> Decision:
         others = ", ".join(f"#{number}" for number in observation.shared_open_prs)
         return Decision("pending", f"Head is shared with open PR {others}; waiting for unique attribution.")
 
-    acceptance_note = (
-        "; Issue acceptance is NOT complete (production-only exception outstanding)"
-        if acceptance_detail.startswith("ACCEPTANCE_PRODUCTION_ONLY_PENDING")
-        else ""
-    )
+    if acceptance_detail.startswith("ACCEPTANCE_PRODUCTION_ONLY_PENDING"):
+        # GitHub truncates a status description at 140 characters (see publish), so the distinction this exception
+        # exists to preserve comes FIRST and must never be the part that is cut.
+        return Decision(
+            "success",
+            "Ready to merge; Issue acceptance NOT complete (production-only exception outstanding); "
+            "deterministic code/security/governance checks pass.",
+        )
     return Decision(
         "success",
         "Ready to merge: deterministic code/security/governance checks pass; "
         + review_disposition_phrase(_authority_state, _authority_detail)
-        + acceptance_note
         + ".",
     )
 
