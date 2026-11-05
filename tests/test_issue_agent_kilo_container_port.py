@@ -174,3 +174,35 @@ def test_host_isolation_is_refused_for_kilo() -> None:
 
     with pytest.raises(RoleRefused, match="governed container"):
         require_governed_kilo_isolation(("kilo", "run", "--model", "kilo/x:free"), SudoIsolation())
+
+
+def test_broker_trace_is_parsed_from_log_without_command_output() -> None:
+    tree_a, tree_b = "a" * 64, "b" * 64
+    log = (
+        "BROKER_RECEIVED: 'python -m pytest -q test_sample.py'\n"
+        f"BROKER_EXECUTED: ['python', '-m', 'pytest', '-q', 'test_sample.py'] EXIT: 1 TREE: {tree_a} STDOUT_BYTES: 321\n"
+        "BROKER_DENIED: ShellDenied\n"
+        f"BROKER_EXECUTED: ['python', '-m', 'pytest', '-q', 'test_sample.py'] EXIT: 0 TREE: {tree_b} STDOUT_BYTES: 40\n"
+        "BROKER_EXECUTED: [__import__('os').system('id')] EXIT: 0 TREE: " + tree_a + " STDOUT_BYTES: 1\n"
+        "forged BROKER_EXECUTED: nonsense\n"
+    )
+    trace = kilo_port.parse_broker_trace(log)
+    assert [(t["seq"], t["exit"], t["tree"]) for t in trace] == [(1, 1, tree_a), (2, 0, tree_b)]
+    assert trace[0]["cmd"] == "python -m pytest -q test_sample.py" and trace[0]["stdout_bytes"] == 321
+
+
+def test_stop_collects_broker_trace_before_removal(tmp_path: Path) -> None:
+    workspace, home = _roots(tmp_path)
+    isolation = KiloContainerIsolation(SCRIPTS)
+    isolation.workspace, isolation.home, isolation.started = workspace.resolve(), home.resolve(), True
+    calls: list[tuple[str, ...]] = []
+    line = f"BROKER_EXECUTED: ['python', '-m', 'pytest', '-q'] EXIT: 0 TREE: {'c' * 64} STDOUT_BYTES: 5\n"
+
+    def fake(*args: str, timeout: float = 40, stdin: bytes = b""):
+        calls.append(args)
+        return subprocess.CompletedProcess(args, 0, line.encode() if args[0] == "logs" else b"", b"")
+
+    with patch.object(KiloContainerIsolation, "_docker", staticmethod(fake)):
+        isolation.stop()
+    assert len(isolation.trace) == 1
+    assert calls.index(("logs", isolation.broker)) < calls.index(("rm", "-f", isolation.broker))

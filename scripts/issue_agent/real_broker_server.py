@@ -13,6 +13,7 @@ Repair-loop budgets are explicit and fail closed:
 
 from __future__ import annotations
 
+import hashlib
 import json
 import os
 import resource
@@ -86,6 +87,26 @@ def assert_no_symlinks(root: str = WORKSPACE) -> None:
                 raise ShellDenied("symlink in task workspace")
 
 
+def workspace_fingerprint(root: str = WORKSPACE) -> str:
+    """Digest of the workspace as the command sees it: proves an edit happened between two runs."""
+    digest = hashlib.sha256()
+    seen = 0
+    for directory, dirs, files in os.walk(root, followlinks=False):
+        dirs[:] = sorted(d for d in dirs if d != ".git")
+        for name in sorted(files):
+            seen += 1
+            if seen > MAX_WORKSPACE_ENTRIES:
+                digest.update(b"truncated")
+                return digest.hexdigest()
+            path = os.path.join(directory, name)
+            size = os.lstat(path).st_size
+            digest.update(f"{os.path.relpath(path, root)}\0{size}\0".encode())
+            if size <= 256 * 1024:
+                with open(path, "rb") as handle_:
+                    digest.update(hashlib.sha256(handle_.read()).digest())
+    return digest.hexdigest()
+
+
 def handle(conn: socket.socket, budget: Budget | None = None) -> None:
     budget = budget or Budget()
     try:
@@ -113,6 +134,7 @@ def handle(conn: socket.socket, budget: Budget | None = None) -> None:
         if remaining <= 0:
             raise BudgetExhausted("wall-clock budget exhausted before execution")
         print("BROKER_RECEIVED:", repr(command), flush=True)
+        tree = workspace_fingerprint()
         # Black writes a cache; give every command its own unpredictable 0700 directory owned by
         # this uid instead of a predictable shared path, and remove it afterwards.
         with tempfile.TemporaryDirectory(prefix="hunter-cache-") as cache_dir:
@@ -133,7 +155,17 @@ def handle(conn: socket.socket, budget: Budget | None = None) -> None:
                 },
             )
         response = {"exit": result.returncode, "stdout": result.stdout[:16000], "stderr": result.stderr[:16000]}
-        print("BROKER_EXECUTED:", repr(args), "EXIT:", result.returncode, flush=True)
+        print(
+            "BROKER_EXECUTED:",
+            repr(args),
+            "EXIT:",
+            result.returncode,
+            "TREE:",
+            tree,
+            "STDOUT_BYTES:",
+            len(result.stdout),
+            flush=True,
+        )
     except (
         PermissionError,
         ShellDenied,

@@ -6,7 +6,9 @@ the dual-homed allowlisted CONNECT gateway is its sole external route.
 
 from __future__ import annotations
 
+import ast
 import json
+import re
 import subprocess
 import tempfile
 import uuid
@@ -24,6 +26,30 @@ BROKER_DEADLINE_SECONDS = 660  # strictly below the 12 minute model timeout
 PYTHON_IMAGE = "python@sha256:78387bc3881b8273120a12ebe6c1ab22b018ccc2c9adf565ae1ac9b536e184ea"
 
 
+_TRACE = re.compile(r"BROKER_EXECUTED: (\[[^\n]*?\]) EXIT: (-?\d+) TREE: ([0-9a-f]{64}) STDOUT_BYTES: (\d+)")
+
+
+def parse_broker_trace(log: str) -> list[dict[str, object]]:
+    """Closed-vocabulary execution trace from the broker log; never includes command output."""
+    trace: list[dict[str, object]] = []
+    for match in _TRACE.finditer(log[:262144]):
+        try:
+            argv = ast.literal_eval(match.group(1))
+        except (ValueError, SyntaxError):
+            continue
+        if isinstance(argv, list) and all(isinstance(a, str) for a in argv) and len(trace) < 64:
+            trace.append(
+                {
+                    "seq": len(trace) + 1,
+                    "cmd": " ".join(argv),
+                    "exit": int(match.group(2)),
+                    "tree": match.group(3),
+                    "stdout_bytes": int(match.group(4)),
+                }
+            )
+    return trace
+
+
 class KiloContainerIsolation:
     """Bounded Docker implementation of the Runner's existing Isolation protocol."""
 
@@ -39,6 +65,7 @@ class KiloContainerIsolation:
         self.workspace: Path | None = None
         self.home: Path | None = None
         self.started = False
+        self.trace: list[dict[str, object]] = []
 
     @staticmethod
     def _docker(*args: str, timeout: float = 40, stdin: bytes = b"") -> subprocess.CompletedProcess[bytes]:
@@ -308,6 +335,17 @@ class KiloContainerIsolation:
     def stop(self) -> None:
         if not self.started:
             return
+        try:  # evidence of what the broker actually executed, read before the container is removed
+            logs = self._docker("logs", self.broker, timeout=15)
+            self.trace = parse_broker_trace((logs.stdout + logs.stderr).decode("utf-8", errors="replace"))
+            for entry in self.trace:
+                print(
+                    f"isolated broker trace: seq={entry['seq']} cmd={entry['cmd']!r} exit={entry['exit']} "
+                    f"tree={str(entry['tree'])[:12]} stdout_bytes={entry['stdout_bytes']}",
+                    flush=True,
+                )
+        except (OSError, subprocess.TimeoutExpired, RoleRefused):
+            pass
         for args in (
             ("rm", "-f", self.agent),
             ("rm", "-f", self.broker),

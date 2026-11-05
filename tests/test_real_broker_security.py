@@ -293,3 +293,17 @@ def test_every_broker_launcher_provisions_the_shared_policy():
         assert "issue_agent_governed_shell.py" in text, path.name
         assert "dst=/opt/policy/issue_agent_governed_shell.py,readonly" in text, path.name
         assert "PYTHONPATH=/opt/policy" in text, path.name
+
+
+def test_executed_commands_log_a_workspace_fingerprint_that_changes_with_edits(tmp_path, monkeypatch, capsys):
+    (tmp_path / "test_sample.py").write_text("assert 2 + 2 == 5\n")
+    before = broker.workspace_fingerprint(str(tmp_path))
+    assert before == broker.workspace_fingerprint(str(tmp_path))  # deterministic
+    (tmp_path / "test_sample.py").write_text("assert 2 + 2 == 4\n")
+    assert broker.workspace_fingerprint(str(tmp_path)) != before  # an edit is visible
+    monkeypatch.setattr(broker, "assert_no_symlinks", lambda: None)
+    monkeypatch.setattr(broker, "workspace_fingerprint", lambda: "f" * 64)
+    with patch(RUN) as run:
+        run.return_value.returncode, run.return_value.stdout, run.return_value.stderr = 1, "failed", ""
+        _send("python -m pytest -q test_sample.py")
+    assert f"EXIT: 1 TREE: {'f' * 64} STDOUT_BYTES: 6" in capsys.readouterr().out
