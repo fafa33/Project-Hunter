@@ -9,12 +9,14 @@ from __future__ import annotations
 
 import argparse
 import base64
+import hashlib
 import json
 import os
 import re
 import sys
 import time
 from dataclasses import dataclass
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 from urllib.parse import quote, urlparse
@@ -2450,6 +2452,189 @@ def verify_pre_ready_hostile_review(
     return (
         "success",
         f"{kind}: complete base->HEAD hostile review; substantive exact-head review and structured evidence verified.",
+    )
+
+
+# --- Issue acceptance before merge (owner-registered Issues only) ---------------------------------------------
+#
+# The registry (`CODE_WRITE_POLICY ... acceptance_requirements`, read from the trusted default branch) only names
+# which already-trusted evidence producer must have succeeded at the exact head for a governed Issue. This
+# evaluator proves nothing itself: PR prose, branch names, committed claims, reviewer/LLM verdicts, a generic CI
+# check and Issue closure are never inputs. A pull request is bound to an Issue only by the trusted changed-file
+# evidence matching the registry's governed paths.
+
+ACCEPTANCE_NOT_GOVERNED = "ACCEPTANCE_NOT_GOVERNED"
+ACCEPTANCE_PROVEN = "ACCEPTANCE_PROVEN"
+ACCEPTANCE_PRODUCTION_ONLY_PENDING = "ACCEPTANCE_PRODUCTION_ONLY_PENDING"
+ACCEPTANCE_MISSING = "ACCEPTANCE_MISSING"
+ACCEPTANCE_STALE = "ACCEPTANCE_STALE"
+ACCEPTANCE_AMBIGUOUS = "ACCEPTANCE_AMBIGUOUS"
+ACCEPTANCE_UNRESOLVED = "ACCEPTANCE_UNRESOLVED"
+
+
+def _utc_instant(value: str) -> datetime | None:
+    try:
+        return datetime.strptime(value, "%Y-%m-%dT%H:%M:%SZ").replace(tzinfo=UTC)
+    except ValueError:
+        return None
+
+
+def _evidence_status(spec: pre_ready.EvidenceSpec, runs: list[dict[str, Any]] | None, head_sha: str) -> tuple[str, str]:
+    """``proven`` / ``missing`` / ``stale`` / ``unavailable`` for one producer at the exact head."""
+
+    if runs is None:
+        return "unavailable", f"{spec.id}: producer runs are unavailable"
+    ours = [r for r in runs if r.get("path") == spec.workflow and r.get("event") == spec.event]
+    exact = [r for r in ours if r.get("head_sha") == head_sha]
+    if exact:
+        # The LATEST exact-head run decides, whatever its status: an older success must never mask a newer run that is
+        # still queued or in progress (or that failed), so completion is required of that latest run itself.
+        latest = max(exact, key=lambda r: (int(r.get("run_number", 0)), int(r.get("id", 0))))
+        if latest.get("status") != "completed":
+            return "missing", f"{spec.id}: the producer's latest run at the exact head has not completed"
+        if latest.get("conclusion") == "success":
+            return "proven", f"{spec.id}: run {latest.get('id')} succeeded at the exact head"
+        return "missing", f"{spec.id}: the producer's latest run at the exact head did not succeed"
+    if any(r.get("conclusion") == "success" and r.get("head_sha") != head_sha for r in ours):
+        return "stale", f"{spec.id}: evidence exists only for a different head"
+    return "missing", f"{spec.id}: no completed producer run at the exact head"
+
+
+def evaluate_issue_acceptance(
+    registry: tuple[pre_ready.AcceptanceRequirement, ...],
+    changed_paths: tuple[str, ...],
+    head_sha: str,
+    *,
+    runs_for: Any,
+    trust_root_sha256: Any,
+    now: datetime,
+) -> tuple[str, str]:
+    """Pure decision. ``runs_for(spec)`` -> producer runs or None; ``trust_root_sha256(path)`` -> hex or None."""
+
+    from hunter_workflow_state import path_matches_scope_entry
+
+    bound = [
+        entry
+        for entry in registry
+        if any(path_matches_scope_entry(path, g) for path in changed_paths for g in entry.governed_paths)
+    ]
+    if not bound:
+        return "success", f"{ACCEPTANCE_NOT_GOVERNED}: no registered Issue governs this change."
+    if len(bound) > 1:
+        issues = ", ".join(f"#{e.issue}" for e in sorted(bound, key=lambda e: int(e.issue)))
+        return "failure", f"{ACCEPTANCE_AMBIGUOUS}: the change binds more than one governed Issue ({issues})."
+    entry = bound[0]
+    label = f"Issue #{entry.issue}"
+    producers = {spec.workflow for spec in entry.evidence}
+    touched = sorted(producers & set(changed_paths))
+    if touched:
+        return (
+            "failure",
+            f"{ACCEPTANCE_UNRESOLVED}: {label} evidence producer is modified by this change ({', '.join(touched)}); "
+            "it cannot vouch for itself.",
+        )
+
+    results = {spec.id: _evidence_status(spec, runs_for(spec), head_sha) for spec in entry.evidence}
+    exception = entry.production_only
+    deferred_ids: frozenset[str] = exception.deferred_evidence if exception is not None else frozenset()
+    unavailable = sorted(i for i, (state, _) in results.items() if state == "unavailable")
+    if unavailable:
+        return "pending", f"{ACCEPTANCE_UNRESOLVED}: {label} evidence is unavailable ({', '.join(unavailable)})."
+    required = {i: r for i, r in results.items() if i not in deferred_ids}
+    stale = sorted(i for i, (state, _) in required.items() if state == "stale")
+    missing = sorted(i for i, (state, _) in required.items() if state == "missing")
+    if stale:
+        return "pending", f"{ACCEPTANCE_STALE}: {label} evidence does not match the current head ({', '.join(stale)})."
+    if missing:
+        return "pending", f"{ACCEPTANCE_MISSING}: {label} required evidence is absent ({', '.join(missing)})."
+    outstanding = sorted(entry.unverifiable_criteria - (exception.deferred_criteria if exception else frozenset()))
+    if outstanding:
+        return (
+            "failure",
+            f"{ACCEPTANCE_UNRESOLVED}: {label} has {len(outstanding)} criterion/criteria that cannot be verified "
+            "mechanically and are not covered by an owner production-only exception.",
+        )
+    pending_post_merge = sorted(deferred_ids) + sorted(
+        entry.unverifiable_criteria & (exception.deferred_criteria if exception else frozenset())
+    )
+    unproven_deferred = [i for i in deferred_ids if results.get(i, ("missing", ""))[0] != "proven"]
+    if exception is None or not (unproven_deferred or entry.unverifiable_criteria):
+        return "success", f"{ACCEPTANCE_PROVEN}: {label} required acceptance evidence is valid at the exact head."
+    # Production-only exception: every condition must hold, and the result is never "completed acceptance".
+    if exception.head_sha != head_sha:
+        return "pending", f"{ACCEPTANCE_STALE}: the {label} production-only exception is bound to a different head."
+    root_digest = trust_root_sha256(exception.trust_root_path)
+    if root_digest is None:
+        return "pending", f"{ACCEPTANCE_UNRESOLVED}: the {label} trust root is unavailable."
+    if root_digest != exception.trust_root_sha256:
+        return "pending", f"{ACCEPTANCE_STALE}: the {label} exception no longer matches the current trust root."
+    expires = _utc_instant(exception.expires_at)
+    if expires is None or now > expires:
+        return "pending", f"{ACCEPTANCE_MISSING}: the {label} production-only exception has expired."
+    return (
+        "success",
+        f"{ACCEPTANCE_PRODUCTION_ONLY_PENDING}: {label} acceptance is NOT complete; owner-authorized "
+        f"({exception.authorized_by}) production-only exception, post-merge verification due by "
+        f"{exception.expires_at}; outstanding: {', '.join(pending_post_merge) or 'criteria'}.",
+    )
+
+
+def issue_acceptance_state(
+    repository: str, token: str, head_sha: str, pr_number: int | None, *, now: datetime | None = None
+) -> tuple[str, str]:
+    """Live adapter over the trusted default-branch registry and trusted GitHub observations.
+
+    Unregistered change sets cost no network reads and keep the existing behaviour. A malformed registry or an
+    unreadable change set fails closed.
+    """
+
+    registry, problem = pre_ready.load_acceptance_registry()
+    if registry is None:
+        return "failure", f"{ACCEPTANCE_UNRESOLVED}: the acceptance registry is unreadable ({problem})."
+    if not registry:
+        return "success", f"{ACCEPTANCE_NOT_GOVERNED}: no Issue is registered."
+    if pr_number is None:
+        return "failure", f"{ACCEPTANCE_UNRESOLVED}: acceptance requires pull-request-bound change evidence."
+    ok_files, files, files_error = read_pr_changed_files(repository, token, pr_number)
+    if not ok_files:
+        return "pending", f"{ACCEPTANCE_UNRESOLVED}: changed-file evidence is unavailable ({files_error})."
+    paths = tuple(sorted({path for item in files for path in item.affected_paths() if path}))
+    ok_refs, head_ref, base_ref, refs_error = read_pr_refs(repository, token, pr_number)
+    if not ok_refs:
+        return "pending", f"{ACCEPTANCE_UNRESOLVED}: pull-request ref evidence is unavailable ({refs_error})."
+
+    def runs_for(spec: pre_ready.EvidenceSpec) -> list[dict[str, Any]] | None:
+        name = quote(Path(spec.workflow).name, safe="")
+        collected: dict[int, dict[str, Any]] = {}
+        try:
+            for query in (f"head_sha={head_sha}", f"branch={quote(head_ref, safe='')}&status=success"):
+                payload = request_json(repository, token, "GET", f"actions/workflows/{name}/runs?{query}&per_page=100")
+                if not isinstance(payload, dict) or not isinstance(payload.get("workflow_runs"), list):
+                    return None
+                for run in payload["workflow_runs"]:
+                    head_repo = (run.get("head_repository") or {}).get("full_name") if isinstance(run, dict) else None
+                    if isinstance(run, dict) and head_repo == repository and isinstance(run.get("id"), int):
+                        collected[run["id"]] = run
+        except Exception:
+            return None
+        return list(collected.values())
+
+    def trust_root_sha256(path: str) -> str | None:
+        try:
+            payload = request_json(repository, token, "GET", f"contents/{quote(path, safe='/')}?ref={quote(base_ref)}")
+            if not isinstance(payload, dict) or payload.get("encoding") != "base64":
+                return None
+            return hashlib.sha256(base64.b64decode(str(payload.get("content") or ""))).hexdigest()
+        except Exception:
+            return None
+
+    return evaluate_issue_acceptance(
+        registry,
+        paths,
+        head_sha,
+        runs_for=runs_for,
+        trust_root_sha256=trust_root_sha256,
+        now=now or datetime.now(UTC),
     )
 
 
