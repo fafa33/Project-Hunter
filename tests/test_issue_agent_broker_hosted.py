@@ -119,7 +119,8 @@ def test_command_timeout_is_fail_closed_and_session_continues(session) -> None:
 
 NET_PROBE = (
     "import json,os,socket,sys\n"
-    "out={'docker_socket':os.path.exists('/var/run/docker.sock'),'env_secrets':[k for k in os.environ if any(w in k for w in ('TOKEN','SECRET','KEY'))]}\n"
+    "IMAGE_ENV={'PATH','HOSTNAME','HOME','LANG','GPG_KEY','PYTHON_VERSION','PYTHON_SHA256'}\n"
+    "out={'docker_socket':os.path.exists('/var/run/docker.sock'),'unexpected_env':sorted(set(os.environ)-IMAGE_ENV)}\n"
     "def direct(host):\n"
     "    try:\n        socket.create_connection((host,443),timeout=5).close();return 'CONNECTED'\n"
     "    except OSError as e:\n        return 'DENIED'\n"
@@ -145,7 +146,7 @@ def test_network_is_internal_and_only_the_allowlisted_gateway_route_exists(sessi
     )  # fmt: skip
     assert done.returncode == 0, done.stderr
     probe = json.loads(done.stdout)
-    assert probe["docker_socket"] is False and probe["env_secrets"] == [], probe
+    assert probe["docker_socket"] is False and probe["unexpected_env"] == [], probe
     assert probe["direct_ip"] == "DENIED" and probe["direct_dns"] == "DENIED", probe  # no route around the gateway
     for key in ("connect_unapproved", "connect_wrong_port", "connect_private"):
         assert " 403 " in probe[key], (key, probe)
