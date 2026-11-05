@@ -59,6 +59,11 @@ def main():
             f"type=bind,src={workspace},dst=/workspace,readonly",
             "--mount",
             f"type=bind,src={Path(__file__).parent / 'real_broker_server.py'},dst=/opt/broker.py,readonly",
+            "--mount",
+            f"type=bind,src={Path(__file__).resolve().parents[2] / 'src/hunter/automation/issue_agent_governed_shell.py'},"
+            "dst=/opt/policy/issue_agent_governed_shell.py,readonly",
+            "-e",
+            "PYTHONPATH=/opt/policy",
             "--tmpfs",
             "/tmp:rw,nosuid,size=32m",
             "-e",

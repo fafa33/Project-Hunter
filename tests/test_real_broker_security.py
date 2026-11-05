@@ -252,3 +252,44 @@ def test_black_cache_is_private_unique_and_removed(monkeypatch):
         assert mode == "0o700" and uid == os.geteuid()
         assert not cache.startswith("/tmp/black") and cache != "/tmp/black-cache"
         assert not os.path.exists(cache)  # cleaned up after the command
+
+
+def test_deadline_is_rechecked_after_receive_and_caps_command_timeout(monkeypatch):
+    monkeypatch.setattr(broker, "assert_no_symlinks", lambda: None)
+    # The session expires while the payload is being received: nothing may execute.
+    budget = broker.Budget(deadline=time.monotonic() + 100)
+    conn = fake_conn(65534, b'{"command":"python -m pytest -q"}')
+
+    def slow_recv(_size):
+        budget.deadline = time.monotonic() - 1
+        return b'{"command":"python -m pytest -q"}'
+
+    conn.recv.side_effect = slow_recv
+    with patch(RUN) as run:
+        broker.handle(conn, budget)
+        run.assert_not_called()
+    assert reply(conn)["exit"] == 126
+    # A nearly-spent session bounds the subprocess to the remaining wall clock.
+    budget = broker.Budget(deadline=time.monotonic() + 5)
+    with patch(RUN) as run:
+        run.return_value.returncode, run.return_value.stdout, run.return_value.stderr = 0, "", ""
+        assert _send("python -m pytest -q", budget)["exit"] == 0
+        assert run.call_args.kwargs["timeout"] <= 5
+
+
+def test_every_broker_launcher_provisions_the_shared_policy():
+    root = Path(__file__).resolve().parents[1]
+    launchers = [
+        path
+        for path in [
+            *(root / "scripts/issue_agent").glob("*.py"),
+            root / "src/hunter/automation/issue_agent_kilo_container.py",
+        ]
+        if "real_broker_server.py" in path.read_text() and path.name != "real_broker_server.py"
+    ]
+    assert len(launchers) >= 4
+    for path in launchers:
+        text = path.read_text()
+        assert "issue_agent_governed_shell.py" in text, path.name
+        assert "dst=/opt/policy/issue_agent_governed_shell.py,readonly" in text, path.name
+        assert "PYTHONPATH=/opt/policy" in text, path.name

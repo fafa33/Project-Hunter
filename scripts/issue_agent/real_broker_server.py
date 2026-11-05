@@ -109,6 +109,9 @@ def handle(conn: socket.socket, budget: Budget | None = None) -> None:
             raise ShellDenied("tool not provided in broker")
         assert_no_symlinks()
         budget.charge_command()
+        remaining = budget.deadline - time.monotonic()  # recv() and the scan above consumed wall clock
+        if remaining <= 0:
+            raise BudgetExhausted("wall-clock budget exhausted before execution")
         print("BROKER_RECEIVED:", repr(command), flush=True)
         # Black writes a cache; give every command its own unpredictable 0700 directory owned by
         # this uid instead of a predictable shared path, and remove it afterwards.
@@ -118,7 +121,7 @@ def handle(conn: socket.socket, budget: Budget | None = None) -> None:
                 cwd=WORKSPACE,
                 capture_output=True,
                 text=True,
-                timeout=COMMAND_TIMEOUT,
+                timeout=min(COMMAND_TIMEOUT, remaining),
                 check=False,
                 preexec_fn=_limits,
                 env={
