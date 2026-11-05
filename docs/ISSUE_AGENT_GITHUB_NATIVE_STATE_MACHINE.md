@@ -257,10 +257,11 @@ re-dispatched.
 | Crash after push, before record | reconcile observes the branch at the conforming head → PUBLISHED. It **discovers** the existing branch and never creates a second one. |
 | Lost push ACK | re-push of the identical deterministic head; the branch is already at that head → success |
 | Duplicate / out-of-order replay | the empty lease makes the branch create-only; a duplicate publisher produces the identical head (no-op); any **foreign** head → TF `REMOTE_BRANCH_CONFLICT`, and nothing is overwritten; a stale publisher of an old authorization targets a different branch name |
-| Timeout | publish ≤ 10 min; lifecycle deadline → TF `LIFECYCLE_DEADLINE_EXCEEDED` |
+| Timeout | publish ≤ 10 min; the lifecycle deadline → TF `LIFECYCLE_DEADLINE_EXCEEDED` is only a backstop for an authorization with no evidence at all. A definitive failure terminalizes from its own evidence (see section 6, *Prompt terminalization*), never by waiting for the deadline, and an active stage job is never terminated by it (`advance` is a no-op while the stage job is active) |
 | GitHub outage | push or API failure → resume within budget and deadline; ambiguous → read the remote ref before re-pushing |
 | Provider outage | not applicable |
 | Platform refusal | for example a workflow file without the `workflows` scope → TF `PUBLICATION_REJECTED_BY_PLATFORM` (terminal; a deterministic retry would fail the same way) |
+| Contract refusal | the HGCC-1 ruleset contract observed by the publisher is definitively unsatisfied (data the observer actually received is malformed, empty, or lacks `bypass_actors`) → the publisher uploads the REFUSED outcome `PUBLICATION_CONTRACT_REFUSED` and the same run's finalize records TF (terminal; the same read with the same code and credential cannot change). An outage, an unusable session, a missing credential or an unclassified failure is **not** definitive: it is a crash for budget purposes (`PUBLICATION_UNAVAILABLE` after the cap). |
 | Terminal / recovery | non-terminal; `deadline_completed_at` is set |
 
 ### T5: PUBLISHED → COMPLETED (single Draft PR observed)
@@ -316,6 +317,7 @@ re-dispatched.
 | RESULT_BOUND | otherwise | TF `VALIDATION_UNAVAILABLE` / `RESULT_TRANSPORT_EXPIRED` |
 | VALIDATED | conforming remote head | T4 |
 | VALIDATED | foreign head | TF `REMOTE_BRANCH_CONFLICT` |
+| VALIDATED | trusted publisher outcome REFUSED with a code in the publication closed set | TF with that code (checked before the deadline and before any resume) |
 | VALIDATED | absent, attempts < 3, unexpired, before deadline | publication resume |
 | VALIDATED | otherwise | TF `PUBLICATION_UNAVAILABLE` / `RESULT_TRANSPORT_EXPIRED` / `LIFECYCLE_DEADLINE_EXCEEDED` |
 | PUBLISHED | Pre-PR non-success at head | TF `CANDIDATE_PREFLIGHT_FAILED` (checked first, even if a PR exists) |
@@ -325,6 +327,28 @@ re-dispatched.
 | any | verification fails | **freeze** `STATE_CORRUPT` (§7) |
 | any | anchor integrity fails | **global freeze** `ANCHOR_INTEGRITY_FAILED` (§7) |
 | state before VALIDATED but the authorization's branch exists, or state before PUBLISHED but its PR exists | contradiction | **freeze** `STATE_ROLLBACK_SUSPECTED`: no automated write; owner quarantine. Forward facts never skip a state whose evidence is missing. The adjacent cases (VALIDATED + conforming branch, PUBLISHED + PR) are the normal crash windows handled by T4 and T5. |
+
+### Prompt terminalization (no fixed-hour wait)
+
+A stopped authorization releases the Issue's active slot from its own evidence, not from a timer:
+
+- **Definitive failures are evidence.** A trusted stage reports a deterministic refusal as its REFUSED outcome with a
+  code from that stage's closed set. The observer fails the authorization from it in the same run's `finalize` job.
+  Deterministic refusals are kept separate from recoverable ones: only a verdict on data actually received is
+  definitive; outages, missing credentials and unclassified failures consume the bounded resume budget.
+- **A concluded stage is observable immediately.** A bound resume run counts as concluded once its own stage job
+  (`validate` or `publish`) has completed, because only that job writes the stage output. The observer does not wait
+  for the whole run or for the next scheduled reconcile. A stage job that is not completed keeps the run active and
+  nothing is interrupted.
+- **One continuation after an abandonment.** `resume_abandoned` only clears the pending resume and consumes the
+  attempt; the next decision (the next bounded attempt, or the exhausted-cap failure) is then fully determined. The
+  observer takes it in the same call, once, from fresh facts. Every write is a CAS on the signed ledger, so a
+  concurrent observer makes the second writer a no-op, and a crash between the two records is picked up by the next
+  observer. No new state, writer role or orchestrator is introduced.
+- **The lock follows the ledger.** The `ISSUE_EXECUTION_ACTIVE` slot (`active_authorization_id`) is cleared only by the
+  signed terminal record. The lifecycle deadline is unchanged and remains a backstop; recovery never depends on it.
+- **Old authorizations are not rewritten.** An authorization runs the `control_sha` bound at authorization (resume
+  runs included); new observer code only terminalizes it from evidence it can already observe.
 
 ## 7. Corruption, rollback, quarantine, retention
 

@@ -1128,7 +1128,13 @@ def _resume_run_status(github: GitHub, configuration: Configuration, view: state
         run = definitive(github.get(f"/repos/{configuration.repository}/actions/runs/{pending['bound_run_id']}"))
         if not isinstance(run, Mapping):
             return "concluded"  # the bound run was deleted: it can never produce the stage output
-        return "active" if run.get("status") in _ACTIVE_RUN_STATUSES else "concluded"
+        if run.get("status") not in _ACTIVE_RUN_STATUSES:
+            return "concluded"
+        # The run is still in flight only because a later job (finalize, this observer) is running. The stage output
+        # is written by the stage job alone, so once that job has completed the output either exists or never will:
+        # waiting for the whole run, or for the next scheduled observer, would only add idle time.
+        job, _completed = _job(github, configuration.repository, int(pending["bound_run_id"]), STAGE_JOBS[view.state])
+        return "concluded" if job is not None and job.get("status") == "completed" else "active"
     query = urllib.parse.urlencode({"event": "workflow_dispatch", "branch": "main", "per_page": 100})
     workflow = Path(LIFECYCLE_WORKFLOW).name
     listing = definitive(github.get(f"/repos/{configuration.repository}/actions/workflows/{workflow}/runs?{query}"))
@@ -1426,8 +1432,12 @@ def step(
     clock: Callable[[], datetime],
     executor_advisory_code: str | None = None,
     new_nonce: Callable[[], str] = lambda: secrets.token_hex(32),
+    chain: bool = True,
 ) -> state.Decision:
-    """Run ``advance`` once for the Issue's active authorization and record its decision."""
+    """Run ``advance`` once for the Issue's active authorization and record its decision.
+
+    The only chained continuation is the one that follows ``abandon_resume`` (see below); it never chains again.
+    """
 
     require_anchor(github, configuration, state.ledger_ref(issue))
     provenance = run_provenance(github, configuration)
@@ -1494,6 +1504,23 @@ def step(
             evidence={"nonce": view.pending_resume["nonce"], "reason": "run_concluded_without_output"},
             now=now,
         )
+        if chain:
+            # The abandonment consumed the attempt and only cleared the pending resume. The next decision (the next
+            # bounded attempt, or the exhausted-cap terminal failure) is already determined by the signed ledger, so
+            # take it now instead of waiting for the next scheduled observer. It is re-derived from fresh facts, and
+            # the append above is a CAS: a concurrent observer that took it first makes this a no-op.
+            return step(
+                github=github,
+                configuration=configuration,
+                store=store,
+                signing_key=signing_key,
+                writer=writer,
+                issue=issue,
+                clock=clock,
+                executor_advisory_code=executor_advisory_code,
+                new_nonce=new_nonce,
+                chain=False,
+            )
         return decision
     return decision
 

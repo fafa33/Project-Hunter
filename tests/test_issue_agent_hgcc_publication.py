@@ -106,10 +106,11 @@ def test_a_missing_credential_refuses_without_any_fallback(monkeypatch, tmp_path
 
 def test_a_ruleset_without_a_bypass_actors_array_refuses_naming_the_closed_reason(monkeypatch, tmp_path):
     _world(monkeypatch, tmp_path, break_id=20523851)
-    with pytest.raises(lifecycle.LifecycleRefused) as refusal:
+    with pytest.raises(lifecycle.PublicationContractRefused) as refusal:
         lifecycle._observe_hgcc_contract(REPOSITORY)
     assert str(refusal.value) == (
-        "PUBLICATION_UNAVAILABLE: HGCC-1 GitHub contract unavailable: Missing or malformed GitHub ruleset bypass actors"
+        "PUBLICATION_CONTRACT_REFUSED: HGCC-1 GitHub contract unavailable: "
+        "Missing or malformed GitHub ruleset bypass actors"
     )
 
 
@@ -292,3 +293,84 @@ def test_publication_observes_before_anything_else_and_the_rest_of_the_flow_keep
     with pytest.raises(lifecycle.LifecycleRefused):
         lifecycle.cmd_publish(configuration, SimpleNamespace(workroot="w"))
     assert order == []
+
+
+# --- definitive versus transient publisher refusals (stuck-authorization recovery) -----------------------
+
+
+def test_observer_reasons_partition_into_definitive_and_undetermined():
+    assert set(contract.DEFINITIVE_REASONS) | set(contract.UNDETERMINED_REASONS) == set(contract.REFUSAL_REASONS)
+    assert not set(contract.DEFINITIVE_REASONS) & set(contract.UNDETERMINED_REASONS)
+    assert "Missing or malformed GitHub ruleset bypass actors" in contract.DEFINITIVE_REASONS
+    assert "GitHub contract API unavailable or access denied" in contract.UNDETERMINED_REASONS
+
+
+def test_an_incomplete_contract_with_a_clean_exit_is_definitive(monkeypatch):
+    _stub_subprocess(monkeypatch, stdout=_contract(rulesets=[{"id": 1}]))
+    with pytest.raises(lifecycle.PublicationContractRefused):
+        lifecycle._observe_hgcc_contract(REPOSITORY)
+
+
+@pytest.mark.parametrize("reason", contract.UNDETERMINED_REASONS)
+def test_an_undetermined_observation_stays_transient(monkeypatch, reason):
+    _stub_subprocess(monkeypatch, returncode=1, stderr=f"[HGCC-1] INDETERMINATE: {reason}\n")
+    with pytest.raises(lifecycle.LifecycleRefused) as refusal:
+        lifecycle._observe_hgcc_contract(REPOSITORY)
+    assert not isinstance(refusal.value, lifecycle.PublicationContractRefused)
+    assert refusal.value.code == "PUBLICATION_UNAVAILABLE"
+
+
+@pytest.mark.parametrize("reason", contract.DEFINITIVE_REASONS)
+def test_a_definitive_observer_verdict_is_a_contract_refusal(monkeypatch, reason):
+    _stub_subprocess(monkeypatch, returncode=1, stderr=f"[HGCC-1] INDETERMINATE: {reason}\n")
+    with pytest.raises(lifecycle.PublicationContractRefused):
+        lifecycle._observe_hgcc_contract(REPOSITORY)
+
+
+@pytest.mark.parametrize(
+    "outage",
+    [
+        {"raises": OSError("no gh")},
+        {"returncode": 3, "stderr": "boom"},
+        {"returncode": 1, "stderr": "[HGCC-1] INDETERMINATE: not a closed reason"},
+    ],
+)
+def test_outages_and_unclassified_failures_stay_transient(monkeypatch, outage):
+    _stub_subprocess(monkeypatch, **outage)
+    with pytest.raises(lifecycle.LifecycleRefused) as refusal:
+        lifecycle._observe_hgcc_contract(REPOSITORY)
+    assert not isinstance(refusal.value, lifecycle.PublicationContractRefused)
+
+
+def test_a_definitive_refusal_uploads_the_refused_outcome_and_publishes_nothing(monkeypatch, tmp_path, capsys):
+    def observe(repository: str) -> None:
+        raise lifecycle.PublicationContractRefused("HGCC-1 GitHub contract unavailable: X")
+
+    def forbidden(*_a, **_k):
+        raise AssertionError("nothing may be read or pushed after a definitive refusal")
+
+    monkeypatch.setattr(lifecycle, "_observe_hgcc_contract", observe)
+    monkeypatch.setattr(lifecycle, "_github", forbidden)
+    monkeypatch.setattr(lifecycle.roles, "run_publisher", forbidden)
+    monkeypatch.delenv("GITHUB_OUTPUT", raising=False)
+    out = tmp_path / "outcome.json"
+    arguments = SimpleNamespace(out=str(out), authorization_id="hunter-issue-agent-authorization:" + "a" * 64)
+    assert lifecycle.cmd_publish(SimpleNamespace(repository=REPOSITORY), arguments) == 0
+    assert json.loads(out.read_text()) == {
+        "schema_version": lifecycle.control.OUTCOME_SCHEMA_VERSION,
+        "authorization_id": arguments.authorization_id,
+        "verdict": "REFUSED",
+        "code": "PUBLICATION_CONTRACT_REFUSED",
+    }
+    assert "refused=true" in capsys.readouterr().out
+
+
+def test_a_transient_refusal_writes_no_outcome_and_stays_within_the_resume_budget(monkeypatch, tmp_path):
+    def observe(repository: str) -> None:
+        raise lifecycle.LifecycleRefused("PUBLICATION_UNAVAILABLE", "HGCC-1 GitHub contract unavailable: X")
+
+    monkeypatch.setattr(lifecycle, "_observe_hgcc_contract", observe)
+    out = tmp_path / "outcome.json"
+    with pytest.raises(lifecycle.LifecycleRefused):
+        lifecycle.cmd_publish(SimpleNamespace(repository=REPOSITORY), SimpleNamespace(out=str(out)))
+    assert not out.exists()

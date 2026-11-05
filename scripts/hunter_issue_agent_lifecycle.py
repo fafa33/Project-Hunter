@@ -61,6 +61,13 @@ class LifecycleRefused(RuntimeError):
         self.code = code
 
 
+class PublicationContractRefused(LifecycleRefused):
+    """The observed HGCC-1 contract definitively fails: terminal and uploaded as the publisher's REFUSED outcome."""
+
+    def __init__(self, message: str) -> None:
+        super().__init__("PUBLICATION_CONTRACT_REFUSED", message)
+
+
 def _secret(name: str) -> str:
     value = os.environ.get(name, "").strip()
     if not value:
@@ -1413,10 +1420,15 @@ def _observe_hgcc_contract(repository: str) -> None:
     forwarded: a refusal carries only a reason from a closed vocabulary.
     """
 
-    from hunter_github_contract import REFUSAL_REASONS
+    from hunter_github_contract import DEFINITIVE_REASONS, REFUSAL_REASONS
 
     def refuse(reason: str) -> LifecycleRefused:
-        return LifecycleRefused("PUBLICATION_UNAVAILABLE", f"HGCC-1 GitHub contract unavailable: {reason}")
+        message = f"HGCC-1 GitHub contract unavailable: {reason}"
+        # Only a verdict on data actually received is definitive; an outage, a missing credential or an unclassified
+        # failure stays transient and is bounded by the publication resume budget.
+        if reason in DEFINITIVE_REASONS or reason == "OBSERVATION_INCOMPLETE":
+            return PublicationContractRefused(message)
+        return LifecycleRefused("PUBLICATION_UNAVAILABLE", message)
 
     token = os.environ.pop(HGCC_TOKEN_ENV, "").strip()
     if not token:
@@ -1462,8 +1474,26 @@ def _observe_hgcc_contract(repository: str) -> None:
         raise refuse("OBSERVATION_INCOMPLETE")
 
 
+def _refused_outcome(arguments: argparse.Namespace, code: str) -> int:
+    _write_outcome(
+        arguments.out,
+        {
+            "schema_version": control.OUTCOME_SCHEMA_VERSION,
+            "authorization_id": arguments.authorization_id,
+            "verdict": "REFUSED",
+            "code": code,
+        },
+    )
+    _output(refused="true")
+    print(f"publication refused: {code}")
+    return 0
+
+
 def cmd_publish(configuration: control.Configuration, arguments: argparse.Namespace) -> int:
-    _observe_hgcc_contract(configuration.repository)
+    try:
+        _observe_hgcc_contract(configuration.repository)
+    except PublicationContractRefused as error:
+        return _refused_outcome(arguments, error.code)
     github = _github(configuration)
     open_pr = control.definitive(github.get(f"/repos/{configuration.repository}/pulls?state=open&per_page=100"))
     if not isinstance(open_pr, list):
@@ -1496,18 +1526,7 @@ def cmd_publish(configuration: control.Configuration, arguments: argparse.Namesp
     except roles.RoleRefused as error:
         if error.code not in state.PUBLICATION_REFUSAL_CODES:
             raise
-        _write_outcome(
-            arguments.out,
-            {
-                "schema_version": control.OUTCOME_SCHEMA_VERSION,
-                "authorization_id": arguments.authorization_id,
-                "verdict": "REFUSED",
-                "code": error.code,
-            },
-        )
-        _output(refused="true")
-        print(f"publication refused: {error.code}")
-        return 0
+        return _refused_outcome(arguments, error.code)
     finally:
         signing_key.unlink(missing_ok=True)
     print(f"published {publication.branch} at {publication.head_sha}")
