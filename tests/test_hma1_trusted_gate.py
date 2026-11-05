@@ -270,6 +270,7 @@ def test_hma1_canonical_readiness_evaluate_smoke():
         changes_requested = ()
         review_authority = ("VALID_AGENT_REVIEW", "approved")
         candidate_admission = ("success", "preflight passed")
+        issue_acceptance = ("success", "ACCEPTANCE_NOT_GOVERNED: no Issue is registered.")
         check_runs = (
             {"name": "Quality Gates", "status": "completed", "conclusion": "success"},
             {"name": "dependency-review", "status": "completed", "conclusion": "success"},
