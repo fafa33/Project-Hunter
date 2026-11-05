@@ -57,6 +57,7 @@ DOMAIN_SECRETS = {
     EXECUTOR: {"HUNTER_ISSUE_AGENT_HANDOFF_KEY", "HUNTER_ISSUE_AGENT_EXECUTOR_MODEL_API_KEY"},
     VALIDATOR: {"HUNTER_ISSUE_AGENT_RESULT_KEY"},
     PUBLISHER: {
+        "HUNTER_HGCC_READ_TOKEN",
         "HUNTER_ISSUE_AGENT_RESULT_KEY",
         "HUNTER_ISSUE_AGENT_PUBLISHER_PUSH_TOKEN",
         "HUNTER_ISSUE_AGENT_PUBLISHER_SIGNING_KEY",
@@ -245,6 +246,9 @@ def test_secrets_never_cross_a_trust_domain() -> None:
         job_id for job_id, job in jobs.items() if "HUNTER_ISSUE_AGENT_PUBLISHER_PUSH_TOKEN" in job_secrets(job)
     }
     assert model_holders == {"execute"} and push_holders == {"publish"}
+    # The read-only ruleset-observation credential is held by the publisher job alone, never by any other domain.
+    hgcc_holders = {job_id for job_id, job in jobs.items() if "HUNTER_HGCC_READ_TOKEN" in job_secrets(job)}
+    assert hgcc_holders == {"publish"}
 
 
 @pytest.mark.parametrize("name", GOVERNED[1:])
@@ -476,3 +480,194 @@ def test_hosted_executor_selects_governed_kilo_agent() -> None:
     invocation = next(str(step["run"]) for step in steps(job) if step.get("id") == "execute")
     assert '--model-argv /opt/hunter/node_modules/.bin/kilo run --model "$MODEL"' in invocation
     assert "--auto" not in invocation and "--yolo" not in invocation
+
+
+# --- Issue #682: the resume path never runs `bind` (it has no issue) and the HGCC credential stays in one step ------
+
+
+def evaluate(expression: str, context: Mapping[str, Any]) -> Any:
+    """A small evaluator for the subset of GitHub Actions expressions the lifecycle workflow uses.
+
+    Grammar: ``||``, ``&&``, ``==``/``!=`` (string, case-insensitive), ``!``, parentheses, ``'strings'``, ``always()``
+    and dotted context lookups (an unknown path is the empty string). Truthiness follows GitHub: ``''`` and ``null`` are
+    falsy, any other string (including ``'false'``) is truthy.
+    """
+    text = expression.strip()
+    if text.startswith("${{") and text.endswith("}}"):
+        text = text[3:-2].strip()
+    tokens = re.findall(r"&&|\|\||==|!=|!|\(|\)|'[^']*'|[A-Za-z_][\w.\-]*\(\)|[A-Za-z_][\w.\-]*", text)
+    position = 0
+
+    def peek() -> str | None:
+        return tokens[position] if position < len(tokens) else None
+
+    def take() -> str:
+        nonlocal position
+        position += 1
+        return tokens[position - 1]
+
+    def truthy(value: Any) -> bool:
+        return value not in ("", None, False, 0)
+
+    def lookup(path: str) -> Any:
+        value: Any = context
+        for part in path.split("."):
+            if not isinstance(value, Mapping) or part not in value:
+                return ""
+            value = value[part]
+        return value
+
+    def primary() -> Any:
+        token = take()
+        if token == "(":
+            value = either()
+            assert take() == ")"
+            return value
+        if token == "!":
+            return not truthy(primary())
+        if token.startswith("'"):
+            return token[1:-1]
+        if token == "always()":
+            return True
+        if token in ("true", "false"):
+            return token == "true"
+        return lookup(token)
+
+    def comparison() -> Any:
+        left = primary()
+        if peek() in ("==", "!="):
+            operator = take()
+            right = primary()
+            same = str("" if left is None else left).lower() == str("" if right is None else right).lower()
+            return same if operator == "==" else not same
+        return left
+
+    def both() -> Any:
+        value = comparison()
+        while peek() == "&&":
+            take()
+            right = comparison()
+            value = right if truthy(value) else value
+        return value
+
+    def either() -> Any:
+        value = both()
+        while peek() == "||":
+            take()
+            right = both()
+            value = value if truthy(value) else right
+        return value
+
+    result = either()
+    assert position == len(tokens), (expression, tokens[position:])
+    return result
+
+
+#: `bind`'s condition before the fix: it admitted a resume dispatch (authorize skipped, remediation input empty).
+_PRE_FIX_BIND_IF = (
+    "always() && (needs.authorize.result == 'success' || (needs.authorize.result == 'skipped' "
+    "&& github.event_name == 'workflow_dispatch' && inputs.remediation_authorization == ''))"
+)
+
+
+def _resume(stage: str) -> dict[str, Any]:
+    return {
+        "github": {"event_name": "workflow_dispatch", "ref": "refs/heads/main"},
+        "inputs": {"issue": "520", "stage": stage, "remediation_authorization": "", "nonce": "n"},
+        "needs": {
+            "authorize": {"result": "skipped", "outputs": {}},
+            "resume-bind": {"result": "success"},
+            "execute": {"result": "skipped"},
+            "bind": {"result": "skipped", "outputs": {}},
+            "validate": {"result": "success"},
+            "record-validation": {"result": "success"},
+        },
+    }
+
+
+_FRESH: dict[str, Any] = {
+    "github": {"event_name": "issues", "event": {"label": {"name": "hunter-agent-execute"}}},
+    "inputs": {},
+    "needs": {
+        "authorize": {"result": "success", "outputs": {"issue": "520"}},
+        "execute": {"result": "success"},
+        "bind": {"result": "success", "outputs": {"result_bound": "true"}},
+        "validate": {"result": "success"},
+        "record-validation": {"result": "success"},
+        "resume-bind": {"result": "skipped"},
+    },
+}
+_REMEDIATION: dict[str, Any] = {
+    "github": {"event_name": "workflow_dispatch", "ref": "refs/heads/main"},
+    "inputs": {"remediation_authorization": "authorization-id"},
+    "needs": {"authorize": {"result": "success", "outputs": {"issue": "9", "remediation": "true"}}},
+}
+
+
+def test_the_evaluator_is_faithful_on_the_documented_subset() -> None:
+    context = {"a": {"b": "X"}, "e": ""}
+    assert evaluate("a.b == 'x'", context) is True  # case-insensitive, like GitHub
+    assert evaluate("a.missing || a.b", context) == "X"
+    assert evaluate("!e && (a.b != 'y')", context) is True
+    assert not evaluate("e && a.b", context)
+    assert evaluate("always()", {}) is True
+    assert evaluate("'false'", {}) == "false"  # a non-empty string is truthy in GitHub expressions
+
+
+def test_resume_dispatch_never_runs_bind_which_would_receive_an_empty_issue() -> None:
+    jobs = load(LIFECYCLE)["jobs"]
+    # The defect: the old condition admitted exactly a resume dispatch, so `bind` ran with `--issue ''`.
+    for stage in ("validation", "publication"):
+        assert evaluate(_PRE_FIX_BIND_IF, _resume(stage))
+        assert not evaluate(jobs["bind"]["if"], _resume(stage)), stage
+    # Legitimate flows keep their `bind`: a fresh label run and a remediation dispatch (authorize succeeded).
+    assert evaluate(jobs["bind"]["if"], _FRESH)
+    assert evaluate(jobs["bind"]["if"], _REMEDIATION)
+    # A failed or skipped authorize never binds.
+    failed = {**_FRESH, "needs": {**_FRESH["needs"], "authorize": {"result": "failure"}}}
+    assert not evaluate(jobs["bind"]["if"], failed)
+
+
+def job_runs(job: Mapping[str, Any], context: Mapping[str, Any]) -> bool:
+    """GitHub semantics: without ``always()`` a job runs only if every job it needs succeeded, then its own ``if``."""
+    condition = job.get("if")
+    if condition is None or "always()" not in str(condition):
+        needed = job.get("needs") or []
+        needed = [needed] if isinstance(needed, str) else needed
+        if any((context.get("needs") or {}).get(name, {}).get("result") != "success" for name in needed):
+            return False
+    return condition is None or bool(evaluate(str(condition), context))
+
+
+def test_resume_still_runs_its_own_stages_and_every_job_that_runs_has_an_issue() -> None:
+    jobs = load(LIFECYCLE)["jobs"]
+    cases = {
+        "validation": ("resume-bind", "validate", "record-validation", "finalize"),
+        "publication": ("resume-bind", "publish", "record-validation", "finalize"),
+    }
+    for stage, must_run in cases.items():
+        context = _resume(stage)
+        for job_id in must_run:
+            assert job_runs(jobs[job_id], context), (stage, job_id)
+        for job_id, job in jobs.items():
+            if not job_runs(job, context):
+                continue  # the job does not run on this dispatch
+            for step in steps(job):
+                if '--issue "$ISSUE"' not in str(step.get("run", "")):
+                    continue
+                expression = (step.get("env") or {}).get("ISSUE") or (job.get("env") or {}).get("ISSUE")
+                assert expression, (stage, job_id)
+                assert evaluate(
+                    str(expression), context
+                ), f"{job_id} would run with an empty --issue on a {stage} resume"
+
+
+def test_the_hgcc_credential_reaches_only_the_publish_step_and_never_the_push_or_signing_steps() -> None:
+    publish = load(LIFECYCLE)["jobs"]["publish"]
+    holders = [step for step in steps(publish) if "HUNTER_HGCC_READ_TOKEN" in (step.get("env") or {})]
+    assert len(holders) == 1 and "lifecycle.py publish" in str(holders[0]["run"]).replace("\n", " ")
+    assert holders[0]["env"]["HUNTER_HGCC_READ_TOKEN"] == "${{ secrets.HUNTER_HGCC_READ_TOKEN }}"
+    for step in steps(publish):
+        for value in (step.get("with") or {}).values():
+            assert "HGCC" not in str(value)
+    assert "HUNTER_HGCC_READ_TOKEN" not in str(publish.get("env", {}))
