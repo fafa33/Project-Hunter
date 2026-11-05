@@ -43,6 +43,24 @@ class KiloContainerIsolation:
     def _checked(self, *args: str) -> None:
         result = self._docker(*args)
         if result.returncode:
+            # Only the fixed Docker setup operation and a bounded error category are logged;
+            # never echo command arguments, environment files, or raw container stderr.
+            from hunter.automation.issue_agent_roles import stderr_category
+
+            print(
+                "isolated Docker setup diagnostic: operation="
+                + args[0]
+                + " stderr_category="
+                + stderr_category(result.stderr[:65536]),
+                flush=True,
+            )
+            # Docker setup has no secrets in argv; expose only a bounded, sanitized error line.
+            import re
+
+            diagnostic = result.stderr.decode("utf-8", errors="replace").splitlines()
+            detail = diagnostic[-1][:350] if diagnostic else "NO_STDERR"
+            detail = re.sub(r"[^a-zA-Z0-9_ /.:()\[\],=-]", "?", detail)
+            print("isolated Docker setup detail: " + detail, flush=True)
             raise RoleRefused("EXECUTION_NOT_STARTED", "governed container setup failed")
 
     def prepare(self, *paths: Path) -> None:
@@ -68,6 +86,8 @@ class KiloContainerIsolation:
                 "CHOWN",
                 "--cap-add",
                 "FOWNER",
+                "--cap-add",
+                "DAC_OVERRIDE",
                 "--mount",
                 f"type=volume,src={self.socket_volume},dst=/run/hunter",
                 "--mount",
@@ -79,6 +99,8 @@ class KiloContainerIsolation:
                 "-c",
                 "import os;os.chown('/run/hunter',65533,65532);os.chmod('/run/hunter',0o770);"
                 "os.chown('/workspace',65534,65532);os.chown('/hunter-home',65534,65532);"
+                "os.chown('/hunter-home/hunter-task.txt',65534,65532);"
+                "[os.chown(p,65534,65532) for dp,_,fs in os.walk('/workspace') for p in [dp]+[os.path.join(dp,f) for f in fs]];"
                 "os.system('true')",
             )
             self._checked(
@@ -237,6 +259,28 @@ class KiloContainerIsolation:
                 *mapped[1:],
             ]
             result = self._docker(*command, timeout=timeout, stdin=stdin)
+        # Bounded, content-free telemetry: do not log model text, task attachment, or secrets.
+        output = result.stdout[:262144].lower()
+        markers = {
+            "error": b"error" in output,
+            "permission": b"permission" in output or b"denied" in output,
+            "unauthorized": b"unauthorized" in output or b"401" in output,
+            "rate_limit": b"rate limit" in output or b"429" in output,
+            "model": b"model" in output,
+            "tool": b"tool" in output,
+            "edit": b"edit" in output,
+            "pytest": b"pytest" in output,
+            "file": b"test_sample.py" in output,
+        }
+        print(
+            "isolated Kilo response diagnostic: stdout_bytes="
+            + str(len(result.stdout))
+            + " stderr_bytes="
+            + str(len(result.stderr))
+            + " markers="
+            + ",".join(key for key, present in markers.items() if present),
+            flush=True,
+        )
         print(
             "isolated Kilo container diagnostic: exit="
             + ("ZERO" if result.returncode == 0 else "NONZERO")
