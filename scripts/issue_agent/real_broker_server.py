@@ -22,10 +22,10 @@ import subprocess
 import time
 from pathlib import Path
 
-try:  # container: policy module is bind-mounted flat next to PYTHONPATH
-    from issue_agent_governed_shell import ShellDenied, parse_command
-except ImportError:  # tests / host checkout
+try:
     from hunter.automation.issue_agent_governed_shell import ShellDenied, parse_command
+except ImportError:  # container: the policy module is bind-mounted flat and PYTHONPATH points at it
+    from issue_agent_governed_shell import ShellDenied, parse_command  # type: ignore[import-not-found,no-redef]
 
 AGENT_UID = 65534
 BROKER_UID = 65533
