@@ -92,7 +92,12 @@ def test_prepared_containers_have_no_docker_socket_host_home_or_privileges(tmp_p
     assert f"HUNTER_BROKER_MAX_COMMANDS={kilo_port.BROKER_MAX_COMMANDS}" in broker_run
     assert f"HUNTER_BROKER_DEADLINE_SECONDS={kilo_port.BROKER_DEADLINE_SECONDS}" in broker_run
     assert kilo_port.BROKER_DEADLINE_SECONDS < 12 * 60  # strictly inside the model wall clock
-    assert all(str(Path.home()) not in part for part in broker_run)
+    sources = {part.split("src=")[1].split(",")[0] for part in broker_run if part.startswith("type=bind")}
+    assert sources == {
+        str(workspace),
+        str(isolation.scripts / "real_broker_server.py"),
+        str(isolation.policy),
+    }  # no home directory, Docker socket or any other host path reaches the broker
     for run_call in (c for c in calls if c[0] == "run" and "--rm" not in c):
         assert "--cap-drop" in run_call and "no-new-privileges" in run_call and "--read-only" in run_call
 
