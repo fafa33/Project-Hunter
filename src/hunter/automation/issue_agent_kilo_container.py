@@ -6,9 +6,12 @@ the dual-homed allowlisted CONNECT gateway is its sole external route.
 
 from __future__ import annotations
 
+import ast
 import json
+import re
 import subprocess
 import tempfile
+import time
 import uuid
 from collections.abc import Mapping, Sequence
 from pathlib import Path
@@ -18,7 +21,34 @@ from hunter.automation.issue_agent_roles import RoleRefused, stderr_category
 
 KILO_IMAGE = "hunter-682-kilo-canary:local"
 BROKER_IMAGE = "hunter-682-broker-canary:local"
+# Explicit repair-loop budgets enforced by the broker (fail closed on exhaustion).
+BROKER_MAX_COMMANDS = 16
+BROKER_DEADLINE_SECONDS = 660  # strictly below the 12 minute model timeout
 PYTHON_IMAGE = "python@sha256:78387bc3881b8273120a12ebe6c1ab22b018ccc2c9adf565ae1ac9b536e184ea"
+
+
+_TRACE = re.compile(r"BROKER_EXECUTED: (\[[^\n]*?\]) EXIT: (-?\d+) TREE: ([0-9a-f]{64}) STDOUT_BYTES: (\d+)")
+
+
+def parse_broker_trace(log: str) -> list[dict[str, object]]:
+    """Closed-vocabulary execution trace from the broker log; never includes command output."""
+    trace: list[dict[str, object]] = []
+    for match in _TRACE.finditer(log[:262144]):
+        try:
+            argv = ast.literal_eval(match.group(1))
+        except (ValueError, SyntaxError):
+            continue
+        if isinstance(argv, list) and all(isinstance(a, str) for a in argv) and len(trace) < 64:
+            trace.append(
+                {
+                    "seq": len(trace) + 1,
+                    "cmd": " ".join(argv),
+                    "exit": int(match.group(2)),
+                    "tree": match.group(3),
+                    "stdout_bytes": int(match.group(4)),
+                }
+            )
+    return trace
 
 
 class KiloContainerIsolation:
@@ -26,6 +56,7 @@ class KiloContainerIsolation:
 
     def __init__(self, scripts: Path) -> None:
         self.scripts = scripts.resolve(strict=True)
+        self.policy = Path(__file__).resolve().with_name("issue_agent_governed_shell.py")
         self.suffix = uuid.uuid4().hex[:12]
         self.network = f"hunter-682-runner-{self.suffix}"
         self.gateway = f"hunter-682-runner-gw-{self.suffix}"
@@ -35,10 +66,14 @@ class KiloContainerIsolation:
         self.workspace: Path | None = None
         self.home: Path | None = None
         self.started = False
+        self.trace: list[dict[str, object]] = []
 
     @staticmethod
     def _docker(*args: str, timeout: float = 40, stdin: bytes = b"") -> subprocess.CompletedProcess[bytes]:
-        return subprocess.run(["docker", *args], input=stdin, capture_output=True, check=False, timeout=timeout)
+        try:
+            return subprocess.run(["docker", *args], input=stdin, capture_output=True, check=False, timeout=timeout)
+        except FileNotFoundError:  # no container runtime: never fall back to a host shell
+            raise RoleRefused("EXECUTION_NOT_STARTED", "container runtime unavailable") from None
 
     def _checked(self, *args: str) -> None:
         result = self._docker(*args)
@@ -145,22 +180,40 @@ class KiloContainerIsolation:
                 "--pids-limit",
                 "64",
                 "--memory",
-                "256m",
+                "512m",
                 "--mount",
                 f"type=volume,src={self.socket_volume},dst=/run/hunter",
                 "--mount",
                 f"type=bind,src={self.workspace},dst=/workspace,readonly",
                 "--mount",
                 f"type=bind,src={self.scripts / 'real_broker_server.py'},dst=/opt/broker.py,readonly",
+                "--mount",
+                f"type=bind,src={self.policy},dst=/opt/policy/issue_agent_governed_shell.py,readonly",
+                "--env",
+                "PYTHONPATH=/opt/policy",
+                "--env",
+                f"HUNTER_BROKER_MAX_COMMANDS={BROKER_MAX_COMMANDS}",
+                "--env",
+                f"HUNTER_BROKER_DEADLINE_SECONDS={BROKER_DEADLINE_SECONDS}",
                 "--tmpfs",
-                "/tmp:rw,nosuid,size=32m",
+                "/tmp:rw,nosuid,size=160m",
                 BROKER_IMAGE,
                 "python",
                 "/opt/broker.py",
             )
+            self._await_broker_snapshot()
         except BaseException:
             self.stop()
             raise
+
+    def _await_broker_snapshot(self, attempts: int = 60) -> None:
+        """The agent must not start before the broker's baseline snapshot exists, or ``git diff`` would hide edits."""
+        for _ in range(attempts):
+            logs = self._docker("logs", self.broker, timeout=15)
+            if b"BROKER_GIT_SNAPSHOT:" in logs.stdout + logs.stderr:
+                return
+            time.sleep(1)
+        raise RoleRefused("EXECUTION_NOT_STARTED", "governed broker did not become ready")
 
     def run(
         self,
@@ -293,6 +346,17 @@ class KiloContainerIsolation:
     def stop(self) -> None:
         if not self.started:
             return
+        try:  # evidence of what the broker actually executed, read before the container is removed
+            logs = self._docker("logs", self.broker, timeout=15)
+            self.trace = parse_broker_trace((logs.stdout + logs.stderr).decode("utf-8", errors="replace"))
+            for entry in self.trace:
+                print(
+                    f"isolated broker trace: seq={entry['seq']} cmd={entry['cmd']!r} exit={entry['exit']} "
+                    f"tree={str(entry['tree'])[:12]} stdout_bytes={entry['stdout_bytes']}",
+                    flush=True,
+                )
+        except (OSError, subprocess.TimeoutExpired, RoleRefused):
+            pass
         for args in (
             ("rm", "-f", self.agent),
             ("rm", "-f", self.broker),

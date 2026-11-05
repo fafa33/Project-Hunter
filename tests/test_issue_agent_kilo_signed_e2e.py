@@ -6,12 +6,17 @@ pre-push safety must still be proven in its own trusted CI environment.
 
 from __future__ import annotations
 
+import hashlib
+import json
 import os
+import re
+import time
 from pathlib import Path
 
 import pytest
 import test_issue_agent_roles as fixture
 
+from hunter.automation import issue_agent_kilo_container as kilo_port
 from hunter.automation import issue_agent_roles as roles
 from hunter.automation import issue_agent_state as state
 from hunter.automation.issue_agent_kilo_container import KiloContainerIsolation
@@ -26,16 +31,27 @@ _prompt_keys = fixture._prompt_keys
 def test_signed_authorization_real_kilo_sealed_result_independent_validator(
     repos: dict, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    prompt = (
-        "In /workspace/test_sample.py there is a deliberately broken assertion. "
-        "First use the bash tool to run exactly `python -m pytest -q test_sample.py` and observe failure. "
-        "Then use the edit tool to change only the incorrect expected number from 5 to 4 in that file. "
-        "Then use the bash tool to run exactly `python -m pytest -q test_sample.py` again. "
-        "Do not use other bash commands. Report both test results."
+    # The correct literal exists nowhere in the prompt or the seed: it is derived from a hash at test time and can
+    # only be learned from the failing test's diagnostic (the model has no way to run Python besides pytest).
+    expected = int(hashlib.sha256(b"hunter-682-diagnostic-nonce").hexdigest()[:7], 16)
+    seed_source = (
+        "import hashlib\n\n"
+        'EXPECTED = int(hashlib.sha256(b"hunter-682-diagnostic-nonce").hexdigest()[:7], 16)\n'
+        "VALUE = 0\n\n\n"
+        "def test_value_matches_expected():\n    assert VALUE == EXPECTED\n"
     )
+    prompt = (
+        "In /workspace/test_sample.py the constant VALUE is wrong. First use the bash tool to run exactly "
+        "`python -m pytest -q test_sample.py` and read the failure. Then use the edit tool to change only the line "
+        "`VALUE = 0` so that VALUE is the literal integer shown on the right-hand side of the failing assertion. "
+        "Do not change EXPECTED, do not compute anything and do not reference EXPECTED in VALUE. Then use the bash "
+        "tool to run exactly `python -m pytest -q test_sample.py` again. Do not use other bash commands. "
+        "Report both test results."
+    )
+    assert str(expected) not in prompt and str(expected) not in seed_source
     monkeypatch.setattr(fixture, "PROMPT", prompt)
     seed = repos["tmp"] / "seed"
-    (seed / "test_sample.py").write_text("def test_sample():\n    assert 2 + 2 == 5\n")
+    (seed / "test_sample.py").write_text(seed_source)
     fixture.git(seed, "add", "test_sample.py")
     fixture.git(
         seed, "-c", "user.name=s", "-c", "user.email=s@s", "-c", "commit.gpgsign=false", "commit", "-qm", "seed"
@@ -56,6 +72,7 @@ def test_signed_authorization_real_kilo_sealed_result_independent_validator(
         model_timeout_seconds=150,
     )
     isolation = KiloContainerIsolation(Path(__file__).resolve().parents[1] / "scripts/issue_agent")
+    started = time.monotonic()
     outcome = roles.run_executor(
         issue=fixture.ISSUE,
         authorization_id=fixture.AUTH,
@@ -66,7 +83,24 @@ def test_signed_authorization_real_kilo_sealed_result_independent_validator(
         isolation=isolation,
         workroot=repos["tmp"] / "signed-kilo-execute",
     )
+    elapsed = time.monotonic() - started
     assert outcome.sealed_result is not None, outcome.advisory_code
+    # Acceptance evidence from what the broker actually executed (not from the prompt): a failing test,
+    # a workspace change, then a passing retest, all inside the explicit attempt and wall-clock budgets.
+    trace = isolation.trace
+    assert len(trace) >= 2, trace
+    assert all(entry["cmd"] == "python -m pytest -q test_sample.py" for entry in trace)
+    assert trace[0]["exit"] != 0 and trace[0]["stdout_bytes"] > 0  # failure with diagnostic output returned to Kilo
+    assert trace[-1]["exit"] == 0
+    assert trace[0]["tree"] != trace[-1]["tree"]  # the workspace was edited between the failing and passing runs
+    assert len(trace) <= kilo_port.BROKER_MAX_COMMANDS
+    # Causality: the repaired literal equals the value that only the failing diagnostic revealed, in a file the real
+    # agent edited, while the expectation itself was left untouched.
+    repaired = (repos["tmp"] / "signed-kilo-execute" / "workspace" / "test_sample.py").read_text()
+    match = re.search(r"^VALUE = (\d+)$", repaired, flags=re.MULTILINE)
+    assert match is not None and int(match.group(1)) == expected, repaired
+    assert repaired.count("EXPECTED = int(hashlib.sha256") == 1 and "VALUE = EXPECTED" not in repaired
+    assert elapsed < kilo_port.BROKER_DEADLINE_SECONDS
     ledger.write(
         state.RESULT_BOUND,
         {
@@ -89,6 +123,33 @@ def test_signed_authorization_real_kilo_sealed_result_independent_validator(
     assert receipt["result_sha256"] == header(outcome.sealed_result).plaintext_sha256
     assert receipt["ciphertext_sha256"] == state.sha256_hex(outcome.sealed_result)
     assert receipt["base_sha"] == repos["base"]
+    event = {}
+    if os.environ.get("GITHUB_EVENT_PATH"):
+        event = json.loads(Path(os.environ["GITHUB_EVENT_PATH"]).read_text())
+    pull_request = event.get("pull_request", {})
+    proof = {
+        "repository": os.environ.get("GITHUB_REPOSITORY"),
+        "pull_request": pull_request.get("number"),
+        "head_sha": pull_request.get("head", {}).get("sha"),
+        "run_id": os.environ.get("GITHUB_RUN_ID"),
+        "run_attempt": os.environ.get("GITHUB_RUN_ATTEMPT"),
+        "job": os.environ.get("GITHUB_JOB"),
+        "execution_id": receipt["execution_id"],
+        "validator_verdict": receipt["verdict"],
+        "result_sha256": receipt["result_sha256"],
+        "ciphertext_sha256": receipt["ciphertext_sha256"],
+        "diagnostic_value_sha256": hashlib.sha256(str(expected).encode()).hexdigest(),
+        "repair_literal_equals_diagnostic_value": True,
+        "broker_trace": [[e["seq"], e["exit"], str(e["tree"])[:12]] for e in trace],
+        "attempts_used": len(trace),
+        "attempt_budget": kilo_port.BROKER_MAX_COMMANDS,
+        "elapsed_seconds": round(elapsed, 1),
+        "deadline_seconds": kilo_port.BROKER_DEADLINE_SECONDS,
+    }
+    if os.environ.get("GITHUB_ACTIONS") == "true":
+        assert proof["pull_request"] and proof["head_sha"] and proof["run_id"] and proof["job"], proof
+    proof["proof_sha256"] = hashlib.sha256(json.dumps(proof, sort_keys=True).encode()).hexdigest()
+    print("HUNTER_682_ACCEPTANCE_PROOF " + json.dumps(proof, sort_keys=True))
     print("SIGNED_KILO_RUNNER_TO_VALIDATOR_PASS", receipt["execution_id"], receipt["unsigned_commit_sha"])
     corrupted = bytearray(outcome.sealed_result)
     corrupted[-1] ^= 1
