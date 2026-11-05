@@ -437,6 +437,48 @@ def _git_repo_at_base(tmp_path):
     return repo, run("rev-parse", "HEAD"), ident
 
 
+def _pinned_detached_repo(tmp_path, hook_text):
+    """Shape of actions/checkout at an exact SHA with fetch-depth 0: detached HEAD, main only as a remote-tracking ref.
+
+    Returns ``(repo, base, head, git)``; ``head`` is an unsigned candidate commit adding ``docs/x.md`` to ``base``.
+    """
+    import subprocess
+
+    repo, _first, ident = _git_repo_at_base(tmp_path)
+    env = {
+        "GIT_CONFIG_GLOBAL": "/dev/null",
+        "GIT_CONFIG_NOSYSTEM": "1",
+        "PATH": "/usr/bin:/bin:/usr/local/bin",
+        **ident,
+    }
+    git = lambda *a: subprocess.run(  # noqa: E731
+        ("git", *a), cwd=repo, env=env, check=True, capture_output=True, text=True
+    ).stdout.strip()
+    (repo / "scripts").mkdir()
+    (repo / "scripts" / "hunter_pre_push.py").write_text(hook_text)
+    git("add", "scripts/hunter_pre_push.py")
+    git("commit", "-q", "-m", "trusted hook")
+    base = git("rev-parse", "HEAD")
+    git("update-ref", "refs/remotes/origin/main", base)
+    git("checkout", "-q", "--detach", base)
+    for branch in git("for-each-ref", "--format=%(refname:short)", "refs/heads").split():
+        git("branch", "-q", "-D", branch)
+    (repo / "docs").mkdir()
+    (repo / "docs" / "x.md").write_text("candidate\n")
+    git("add", "docs/x.md")
+    head = git("commit-tree", git("write-tree"), "-p", base, "-m", "candidate")
+    git("reset", "-q", "--hard", base)
+    return repo, base, head, git
+
+
+def _stub_isolation(monkeypatch, core, tmp_path, runner):
+    """Replace ``sudo`` and the isolation user with ``runner`` while keeping real git and the real flow."""
+    monkeypatch.setattr(core, "require_isolation_user", lambda user: user)
+    monkeypatch.setattr(core, "isolated_command", runner)
+    monkeypatch.setattr(core, "run_privileged", lambda *_a, **_k: None)
+    monkeypatch.setattr(core, "ISOLATION_ROOT", tmp_path)
+
+
 def _signed_at(base_sha):
     s = _signed()
     scope = TaskScopeContract(
@@ -529,38 +571,12 @@ def test_isolation_root_is_unique_private_and_never_writable_by_others(monkeypat
 
 def test_candidate_clone_of_a_pinned_detached_checkout_still_has_the_governed_base(monkeypatch, tmp_path):
     """Codex P2 consequence: an exact-SHA (detached) trusted checkout has no local main."""
-    import subprocess
 
     import hunter.automation.issue_agent_replacement_executor as core
 
-    repo, _first, ident = _git_repo_at_base(tmp_path)
-    env = {
-        "GIT_CONFIG_GLOBAL": "/dev/null",
-        "GIT_CONFIG_NOSYSTEM": "1",
-        "PATH": "/usr/bin:/bin:/usr/local/bin",
-        **ident,
-    }
-    git = lambda *a: subprocess.run(  # noqa: E731
-        ("git", *a), cwd=repo, env=env, check=True, capture_output=True, text=True
-    ).stdout.strip()
-    (repo / "scripts").mkdir()
-    (repo / "scripts" / "hunter_pre_push.py").write_text(
-        "def enforce_credential_free_candidate_safety(lines):\n    return 0\n"
+    repo, base, head, git = _pinned_detached_repo(
+        tmp_path, "def enforce_credential_free_candidate_safety(lines):\n    return 0\n"
     )
-    git("add", "scripts/hunter_pre_push.py")
-    git("commit", "-q", "-m", "trusted hook")
-    base = git("rev-parse", "HEAD")
-    # Shape of actions/checkout at an exact SHA with fetch-depth 0: detached HEAD,
-    # main only as a remote-tracking ref.
-    git("update-ref", "refs/remotes/origin/main", base)
-    git("checkout", "-q", "--detach", base)
-    for branch in git("for-each-ref", "--format=%(refname:short)", "refs/heads").split():
-        git("branch", "-q", "-D", branch)
-    (repo / "docs").mkdir()
-    (repo / "docs" / "x.md").write_text("candidate\n")
-    git("add", "docs/x.md")
-    head = git("commit-tree", git("write-tree"), "-p", base, "-m", "candidate")
-    git("reset", "-q", "--hard", base)
     signed = _signed_at(base)
     validated = core.validate_replacement_result(_result(signed), signed_authorization=signed, rehearsal=False)
     report = tmp_path / "report"
@@ -569,12 +585,13 @@ def test_candidate_clone_of_a_pinned_detached_checkout_still_has_the_governed_ba
         script = f'git rev-parse HEAD origin/main > "{report}"'
         return ("/usr/bin/env", "-i", *(f"{k}={v}" for k, v in environment.items()), "/bin/sh", "-c", script)
 
-    monkeypatch.setattr(core, "require_isolation_user", lambda user: user)
-    monkeypatch.setattr(core, "isolated_command", as_runner)
-    monkeypatch.setattr(core, "run_privileged", lambda *_a, **_k: None)
-    monkeypatch.setattr(core, "ISOLATION_ROOT", tmp_path)
+    _stub_isolation(monkeypatch, core, tmp_path, as_runner)
     core._run_pre_push_safety(
-        repo, validated=validated, head=head, push_url="https://github.com/x/y.git", isolation_user="u"
+        repo,
+        validated=validated,
+        head=head,
+        push_url="https://github.com/fafa33/Project-Hunter.git",
+        isolation_user="u",
     )
     assert report.read_text().split() == [head, base]
     assert git("for-each-ref", "refs/hunter") == ""
@@ -586,3 +603,202 @@ def test_publisher_and_validator_reject_the_executor_model_credential_and_any_ap
         assert not publisher_environment_is_safe({name: "configured"})
     assert publisher_environment_is_safe({"PATH": "/usr/bin", "HUNTER_ISSUE_AGENT_PUBLISHER_PUSH_TOKEN": "t"})
     assert publisher_environment_is_safe({"HUNTER_ISSUE_AGENT_EXECUTOR_MODEL_API_KEY": "  "})
+
+
+# --- Issue #682: the isolated candidate clone must carry the authorized repository identity ----------------------
+#
+# Production run 42021800036 refused a valid canary with PRE_PUSH_SAFETY_FAILED: the Defect Prevention Guard reads the
+# repository owner from the repository's own identity (GITHUB_REPOSITORY or a GitHub origin) and the isolated clone's
+# origin was a filesystem path while the allowlisted environment carries no GITHUB_REPOSITORY. ``push_url`` was passed
+# to ``_run_pre_push_safety`` but never used.
+
+_SCRIPTS = __import__("pathlib").Path(__file__).resolve().parents[1] / "scripts"
+_SECRET = "SECRET-VALUE-123"
+#: Stand-in for the trusted base's safety entrypoint. It uses the REAL repository-owner resolver the guard uses, so the
+#: outcome depends on the clone's own identity and the (scrubbed) environment, exactly like the production guard.
+_OWNER_HOOK = f"""import os, sys
+sys.path.insert(0, {str(_SCRIPTS)!r})
+import hunter_writer_provenance as provenance
+
+
+def enforce_credential_free_candidate_safety(lines):
+    if provenance.repository_owner(cwd=os.getcwd()) != "fafa33":
+        print("  - Defect Prevention Guard        [FAILED ] (0.1s)")
+        print("      Details: /home/runner/private {_SECRET} owner unknown")
+        sys.stderr.write("Traceback: {_SECRET} /home/runner/private")
+        return 1
+    return 0
+"""
+
+
+def _owner_guard_world(tmp_path, monkeypatch, *, repository="fafa33/Project-Hunter"):
+    """Real git in the production shape (detached checkout, tracked main only); sudo replaced by ``env -i``."""
+    import dataclasses
+    import sys
+
+    import hunter.automation.issue_agent_replacement_executor as core
+
+    repo, base, head, _git = _pinned_detached_repo(tmp_path, _OWNER_HOOK)
+    signed = _signed_at(base)
+    validated = core.validate_replacement_result(_result(signed), signed_authorization=signed, rehearsal=False)
+    validated = dataclasses.replace(validated, repository=repository)
+    launched = []
+
+    def as_runner(_user, environment, argv):
+        launched.append(dict(environment))
+        return ("/usr/bin/env", "-i", *(f"{k}={v}" for k, v in environment.items()), sys.executable, *argv[1:])
+
+    _stub_isolation(monkeypatch, core, tmp_path, as_runner)
+
+    def run(push_url):
+        core._run_pre_push_safety(repo, validated=validated, head=head, push_url=push_url, isolation_user="u")
+
+    return core, run, launched, validated
+
+
+def test_correct_authorized_remote_passes_the_owner_guard(monkeypatch, tmp_path):
+    core, run, launched, _ = _owner_guard_world(tmp_path, monkeypatch)
+    # Mirror the hosted runner, which exports GITHUB_REPOSITORY; a different owner proves it is NOT what satisfied the guard.
+    monkeypatch.setenv("GITHUB_REPOSITORY", "attacker/other")
+    run("https://github.com/fafa33/Project-Hunter.git")  # no exception: owner came from the clone's origin
+    assert len(launched) == 1
+
+
+def test_no_github_repository_is_injected_into_the_isolated_environment(monkeypatch, tmp_path):
+    core, run, launched, _ = _owner_guard_world(tmp_path, monkeypatch)
+    monkeypatch.setenv("GITHUB_REPOSITORY", "fafa33/Project-Hunter")
+    run("https://github.com/fafa33/Project-Hunter.git")
+    (environment,) = launched
+    assert "GITHUB_REPOSITORY" not in environment
+    assert set(environment) <= {
+        "PATH", "LANG", "LC_ALL", "TZ", "HOME", "PYTHONPATH", "GIT_CONFIG_GLOBAL", "GIT_CONFIG_NOSYSTEM", "GIT_TERMINAL_PROMPT",
+    }  # fmt: skip
+
+
+def test_missing_github_remote_is_refused_with_the_failed_gate_name_only(monkeypatch, tmp_path, capsys):
+    """The original defect: an origin that is a filesystem path leaves the repository owner unknown."""
+    core, run, launched, _ = _owner_guard_world(tmp_path, monkeypatch)
+    monkeypatch.setattr(core, "_candidate_origin", lambda _validated, _url: str(tmp_path / "local-origin"))
+    with pytest.raises(core.ReplacementExecutorError) as refusal:
+        run("https://github.com/fafa33/Project-Hunter.git")
+    assert str(refusal.value) == "candidate pre-push safety failed: gates=Defect Prevention Guard"
+    printed = capsys.readouterr().out
+    assert "candidate pre-push safety failed: gates=Defect Prevention Guard exit=1" in printed
+    for leaked in (_SECRET, "/home/runner/private", "Traceback", "Details"):
+        assert leaked not in printed and leaked not in str(refusal.value)
+
+
+def test_wrong_repository_owner_is_refused(monkeypatch, tmp_path):
+    core, run, _launched, _ = _owner_guard_world(tmp_path, monkeypatch, repository="someone-else/other")
+    with pytest.raises(core.ReplacementExecutorError, match="gates=Defect Prevention Guard"):
+        run(
+            "https://github.com/someone-else/other.git"
+        )  # a self-consistent URL for another owner is still not the owner
+
+
+@pytest.mark.parametrize(
+    "push_url",
+    [
+        "",
+        "https://x-access-token:ghp_credential@github.com/fafa33/Project-Hunter.git",
+        "https://fafa33:password@github.com/fafa33/Project-Hunter.git",
+        "http://github.com/fafa33/Project-Hunter.git",
+        "https://github.com/fafa33/Project-Hunter",
+        "https://github.com/fafa33/Project-Hunter.git\n",
+        " https://github.com/fafa33/Project-Hunter.git",
+        "https://github.com/fafa33/Project-Hunter.git?token=1",
+        "https://evil.example/fafa33/Project-Hunter.git",
+        "https://github.com.evil.example/fafa33/Project-Hunter.git",
+        "git@github.com:fafa33/Project-Hunter.git",
+        "file:///etc",
+        "/tmp/local-origin",
+        "https://github.com/someone-else/other.git",
+        "https://GitHub.com/fafa33/Project-Hunter.git",
+    ],
+)
+def test_invalid_or_credential_bearing_push_url_is_refused_before_anything_runs(monkeypatch, tmp_path, push_url):
+    core, run, launched, _ = _owner_guard_world(tmp_path, monkeypatch)
+
+    def must_not_run(*_args, **_kwargs):
+        raise AssertionError("nothing may be cloned, chowned or launched for an unauthorized remote")
+
+    monkeypatch.setattr(core, "_git_plumbing", must_not_run)
+    monkeypatch.setattr(core, "run_privileged", must_not_run)
+    monkeypatch.setattr(core.subprocess, "run", must_not_run)
+    with pytest.raises(core.ReplacementExecutorError, match="authorized repository"):
+        run(push_url)
+    assert launched == []
+
+
+def test_invalid_signed_repository_identity_is_refused(monkeypatch, tmp_path):
+    core, run, _launched, _ = _owner_guard_world(tmp_path, monkeypatch, repository="not a/repository")
+    with pytest.raises(core.ReplacementExecutorError, match="repository identity"):
+        run("https://github.com/not a/repository.git")
+
+
+def test_failed_gate_diagnostic_is_a_closed_vocabulary():
+    import hunter.automation.issue_agent_replacement_executor as core
+
+    summary = "\n".join(
+        [
+            "  - Architecture Index Guard       [PASSED ] (0.0s)",
+            "  - Defect Prevention Guard        [FAILED ] (4.3s)",
+            "      Details: [Defect Prevention Guard] FAIL: /home/runner/private SECRET",
+            "  - Mypy                           [FAILED ] (19.9s)",
+            "  - Mypy                           [FAILED ] (19.9s)",
+            "  - Evil Gate (rm -rf /)           [FAILED ] (0.1s)",
+            "  - Ruff-ish                       [FAILED ] (0.1s)",
+            "Ruff [FAILED ] not a summary row",
+            "  - Black                          [PASSED ] (10s)",
+        ]
+    )
+    assert core.failed_safety_gates(summary) == ("Defect Prevention Guard", "Mypy")
+    assert core.failed_safety_gates("Traceback ... SECRET") == ()
+    assert core.failed_safety_gates("  - Black [FAILED]\n  - Ruff [FAILED ] ") == ("Black", "Ruff")
+
+
+def test_failed_gate_parsing_is_linear_on_adversarial_output():
+    """Sonar python:S5852: candidate-influenced output must not be able to trigger super-linear backtracking."""
+    import time
+
+    import hunter.automation.issue_agent_replacement_executor as core
+
+    hostile = "-" + " " * 250_000 + "[FAILED"
+    started = time.monotonic()
+    assert core.failed_safety_gates(hostile) == ()
+    assert core.failed_safety_gates("- " + "A " * 100_000 + "[FAILED ]\n" * 1000) == ()
+    assert core.failed_safety_gates(("  - " + "Ruff " * 50 + "[FAILED ]\n") * 1000) == ()
+    assert time.monotonic() - started < 2.0
+
+
+def test_unrecognised_failure_reports_unclassified_without_stderr(monkeypatch, tmp_path, capsys):
+    core, run, _launched, _ = _owner_guard_world(tmp_path, monkeypatch)
+    hook = (
+        "import sys\n"
+        f"def enforce_credential_free_candidate_safety(lines):\n    sys.stderr.write('{_SECRET} /home/runner/private')\n    return 7\n"
+    )
+    monkeypatch.setattr(core, "_git_plumbing", _replace_hook(core._git_plumbing, hook))
+    with pytest.raises(core.ReplacementExecutorError) as refusal:
+        run("https://github.com/fafa33/Project-Hunter.git")
+    assert str(refusal.value) == "candidate pre-push safety failed: gates=UNCLASSIFIED"
+    assert "exit=" in capsys.readouterr().out
+
+
+def _replace_hook(real, hook):
+    """The trusted base still advertises the entrypoint; the clone's own script is what fails."""
+
+    def patched(repo, *args, **kwargs):
+        out = real(repo, *args, **kwargs)
+        if "checkout" in args:  # candidate checked out: swap in a failing script (candidate-controlled code)
+            (repo / "scripts" / "hunter_pre_push.py").write_text(hook)
+        return out
+
+    return patched
+
+
+def test_gate_vocabulary_matches_the_trusted_preflight_lane_names():
+    import hunter.automation.issue_agent_replacement_executor as core
+
+    lane_source = (_SCRIPTS / "hunter_pr_preflight.py").read_text()
+    for gate in core.SAFETY_GATE_VOCABULARY:
+        assert f'("{gate}", (' in lane_source, gate
