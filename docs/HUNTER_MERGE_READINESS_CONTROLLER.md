@@ -20,6 +20,8 @@ For each candidate PR, the controller reads:
 - current head SHA;
 - unresolved inline review threads;
 - current `CHANGES_REQUESTED` reviewers;
+- the governance path's registered-Issue acceptance result (see `docs/MERGE_READINESS_GATE.md`); it is `success` with no extra read
+  unless the trusted default-branch registry governs the changed paths;
 - exact-head `Quality Gates`, `dependency-review`, and `CodeQL` results;
 - other open PRs sharing the same head SHA.
 
@@ -30,6 +32,7 @@ For each candidate PR, the controller reads:
 - unresolved mergeability -> `pending`;
 - unresolved substantive review thread -> `failure`;
 - current `CHANGES_REQUESTED` -> `failure`;
+- registered-Issue acceptance missing, stale or unavailable -> `pending`; ambiguous, unresolved or malformed registry -> `failure`;
 - missing/pending required check -> `pending`;
 - failed/cancelled required check -> `failure`;
 - failed Governance Review -> `failure`;
@@ -40,7 +43,7 @@ A stale Governance `pending` does not hold a resolved mergeable PR forever; curr
 
 ## Explicit exclusions
 
-The controller does not consume PR title/body, Issue identity, branch naming, top-level comments, reactions, owner acknowledgements, acceptance-matrix formatting, Draft Promotion state, hostile-review markers, semantic revisions, or superseded workflow history.
+The controller does not consume PR title/body, Issue identity (except the governance path's owner-registry result), branch naming, top-level comments, reactions, owner acknowledgements, acceptance-matrix formatting, Draft Promotion state, hostile-review markers, semantic revisions, or superseded workflow history.
 
 ## Reconciliation
 

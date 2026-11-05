@@ -1132,6 +1132,223 @@ def load_coverage_scopes(
     return tuple(scopes), ""
 
 
+# --- Issue acceptance registry (owner-authored, base-loaded; a policy registry, NOT a proof authority) ----------
+
+ACCEPTANCE_REGISTRY_FIELD = "acceptance_requirements"
+#: The only evidence kind: a successful run of a named, repository-owned workflow at the exact PR head. The
+#: workflow *is* the trusted producer; this registry only names which producer must have succeeded.
+EVIDENCE_TRUSTED_WORKFLOW_RUN = "trusted_workflow_run"
+EVIDENCE_EVENTS = frozenset({"push", "workflow_run"})
+_WORKFLOW_PATH = re.compile(r"\A\.github/workflows/[A-Za-z0-9._-]+\.ya?ml\Z")
+_UTC_INSTANT = re.compile(r"\A\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z\Z")
+_SHA256 = re.compile(r"\A[0-9a-f]{64}\Z")
+
+
+class EvidenceSpec(NamedTuple):
+    """One required piece of acceptance evidence, produced by an existing trusted workflow."""
+
+    id: str
+    kind: str
+    workflow: str
+    event: str
+
+
+class ProductionOnlyException(NamedTuple):
+    """Owner authorization to merge before evidence that can only exist in production.
+
+    Bound to one exact head and to the current trust-root file digest, bounded in time, and never a claim
+    that acceptance is complete: the deferred evidence and criteria stay outstanding in this record.
+    """
+
+    authorized_by: str
+    authorization: str
+    technical_necessity: str
+    post_merge_verification: str
+    head_sha: str
+    trust_root_path: str
+    trust_root_sha256: str
+    deferred_evidence: frozenset[str]
+    deferred_criteria: frozenset[str]
+    expires_at: str
+
+
+class AcceptanceRequirement(NamedTuple):
+    issue: str
+    governed_paths: tuple[str, ...]
+    evidence: tuple[EvidenceSpec, ...]
+    unverifiable_criteria: frozenset[str]
+    production_only: ProductionOnlyException | None
+
+
+def _clean_text(value: Any) -> str:
+    return value.strip() if isinstance(value, str) else ""
+
+
+def _parse_evidence(raw: Any, issue: str) -> tuple[tuple[EvidenceSpec, ...] | None, str]:
+    if not isinstance(raw, list):
+        return None, f"acceptance requirement for Issue #{issue} must declare an evidence list"
+    specs: list[EvidenceSpec] = []
+    seen: set[str] = set()
+    for item in raw:
+        if not isinstance(item, dict) or set(item) != {"id", "kind", "workflow", "event"}:
+            return None, f"acceptance evidence for Issue #{issue} must be exactly id, kind, workflow, event"
+        ident, kind, workflow, event = (_clean_text(item[k]) for k in ("id", "kind", "workflow", "event"))
+        if not ident or ident in seen:
+            return None, f"acceptance evidence ids for Issue #{issue} must be unique and non-empty"
+        if kind != EVIDENCE_TRUSTED_WORKFLOW_RUN:
+            return None, f"acceptance evidence {ident!r} for Issue #{issue} has an unrecognised kind {kind!r}"
+        if _WORKFLOW_PATH.fullmatch(workflow) is None:
+            return None, f"acceptance evidence {ident!r} for Issue #{issue} must name a repository workflow file"
+        if event not in EVIDENCE_EVENTS:
+            return None, f"acceptance evidence {ident!r} for Issue #{issue} has an unrecognised event {event!r}"
+        seen.add(ident)
+        specs.append(EvidenceSpec(ident, kind, workflow, event))
+    return tuple(specs), ""
+
+
+def _parse_production_only(raw: Any, issue: str, evidence_ids: set[str]) -> tuple[ProductionOnlyException | None, str]:
+    fields = {
+        "authorized_by",
+        "authorization",
+        "technical_necessity",
+        "post_merge_verification",
+        "head_sha",
+        "trust_root",
+        "deferred_evidence",
+        "deferred_criteria",
+        "expires_at",
+    }
+    if not isinstance(raw, dict) or set(raw) != fields:
+        return None, f"the production-only exception for Issue #{issue} must declare exactly {sorted(fields)}"
+    texts = {k: _clean_text(raw[k]) for k in ("authorized_by", "authorization", "technical_necessity")}
+    texts["post_merge_verification"] = _clean_text(raw["post_merge_verification"])
+    if not all(texts.values()):
+        return None, f"the production-only exception for Issue #{issue} must state authorization and necessity"
+    head = _clean_text(raw["head_sha"])
+    if _GIT_SHA.fullmatch(head) is None:
+        return None, f"the production-only exception for Issue #{issue} must pin one exact head_sha"
+    root = raw["trust_root"]
+    if not isinstance(root, dict) or set(root) != {"path", "sha256"}:
+        return None, f"the production-only exception for Issue #{issue} must bind a trust_root path and sha256"
+    root_path, root_sha = _clean_text(root["path"]), _clean_text(root["sha256"])
+    if (
+        not root_path
+        or root_path.startswith("/")
+        or ".." in root_path.split("/")
+        or _SHA256.fullmatch(root_sha) is None
+    ):
+        return None, f"the production-only exception for Issue #{issue} has an invalid trust_root binding"
+    expires = _clean_text(raw["expires_at"])
+    if _UTC_INSTANT.fullmatch(expires) is None:
+        return None, f"the production-only exception for Issue #{issue} must declare a bounded UTC expires_at"
+    deferred = raw["deferred_evidence"]
+    criteria = raw["deferred_criteria"]
+    if (
+        not isinstance(deferred, list)
+        or not all(isinstance(i, str) for i in deferred)
+        or not isinstance(criteria, list)
+        or not all(isinstance(c, str) and c.strip() for c in criteria)
+    ):
+        return None, f"the production-only exception for Issue #{issue} deferred lists are malformed"
+    if not set(deferred) <= evidence_ids:
+        return (
+            None,
+            f"the production-only exception for Issue #{issue} defers evidence the requirement does not declare",
+        )
+    if not deferred and not criteria:
+        return None, f"the production-only exception for Issue #{issue} defers nothing"
+    return (
+        ProductionOnlyException(
+            texts["authorized_by"],
+            texts["authorization"],
+            texts["technical_necessity"],
+            texts["post_merge_verification"],
+            head.lower(),
+            root_path,
+            root_sha,
+            frozenset(deferred),
+            frozenset(normalize_criterion(c) for c in criteria),
+            expires,
+        ),
+        "",
+    )
+
+
+def load_acceptance_registry(
+    source: Any = None,
+) -> tuple[tuple[AcceptanceRequirement, ...] | None, str]:
+    """Read the owner-authored acceptance registry from the trusted policy.
+
+    A registry of *which Issue is governed by which already-trusted evidence producers*. It proves nothing by
+    itself and never reads a pull request: the caller loads it from the trusted default branch. An empty or absent
+    registry is the strict default (nothing governed, existing behaviour). Anything that cannot be read
+    unambiguously returns ``(None, message)`` and the caller fails closed, like ``load_coverage_scopes``.
+    """
+
+    if source is None or isinstance(source, Path):
+        target = source if source is not None else CODE_WRITE_POLICY_PATH
+        try:
+            loaded = json.loads(target.read_text(encoding="utf-8"))
+        except FileNotFoundError:
+            return None, f"{CODE_WRITE_POLICY_RELATIVE_PATH} is missing"
+        except (OSError, UnicodeError, json.JSONDecodeError) as exc:
+            return None, f"{CODE_WRITE_POLICY_RELATIVE_PATH} is unreadable ({type(exc).__name__}: {exc})"
+        if not isinstance(loaded, dict):
+            return None, f"{CODE_WRITE_POLICY_RELATIVE_PATH} must be a JSON object"
+        policy = loaded
+    elif isinstance(source, Mapping):
+        policy = dict(source)
+    else:
+        return None, "acceptance registry source must be a policy mapping or a path"
+    progression = policy.get("review_progression")
+    authority = progression.get("review_authority") if isinstance(progression, dict) else None
+    if not isinstance(authority, dict):
+        return None, "CODE_WRITE_POLICY review_authority must be an object"
+    raw_entries = authority.get(ACCEPTANCE_REGISTRY_FIELD, [])
+    if not isinstance(raw_entries, list):
+        return None, f"CODE_WRITE_POLICY {ACCEPTANCE_REGISTRY_FIELD} must be a list"
+    entries: list[AcceptanceRequirement] = []
+    seen: set[str] = set()
+    for entry in raw_entries:
+        allowed = {"issue", "governed_paths", "evidence", "unverifiable_criteria", "production_only"}
+        if not isinstance(entry, dict) or not {"issue", "governed_paths", "evidence"} <= set(entry) <= allowed:
+            return None, f"CODE_WRITE_POLICY {ACCEPTANCE_REGISTRY_FIELD} entry is malformed"
+        issue = _clean_text(entry["issue"]).lstrip("#")
+        if not issue.isdigit() or issue in seen:
+            return None, f"CODE_WRITE_POLICY {ACCEPTANCE_REGISTRY_FIELD} must name each governing Issue exactly once"
+        paths = entry["governed_paths"]
+        if (
+            not isinstance(paths, list)
+            or not paths
+            or not all(isinstance(p, str) and p.strip() and not p.strip().startswith("/") for p in paths)
+        ):
+            return None, f"the acceptance requirement for Issue #{issue} must declare governed_paths"
+        specs, problem = _parse_evidence(entry["evidence"], issue)
+        if specs is None:
+            return None, problem
+        unverifiable = entry.get("unverifiable_criteria", [])
+        if not isinstance(unverifiable, list) or not all(isinstance(c, str) and c.strip() for c in unverifiable):
+            return None, f"the acceptance requirement for Issue #{issue} unverifiable_criteria is malformed"
+        if not specs and not unverifiable:
+            return None, f"the acceptance requirement for Issue #{issue} requires nothing"
+        exception = None
+        if "production_only" in entry:
+            exception, problem = _parse_production_only(entry["production_only"], issue, {s.id for s in specs})
+            if exception is None:
+                return None, problem
+        seen.add(issue)
+        entries.append(
+            AcceptanceRequirement(
+                issue,
+                tuple(p.strip() for p in paths),
+                specs,
+                frozenset(normalize_criterion(c) for c in unverifiable),
+                exception,
+            )
+        )
+    return tuple(entries), ""
+
+
 def _coverage_scope_error(
     document: Any,
     claims: dict[str, Any],

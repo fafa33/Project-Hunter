@@ -25,9 +25,10 @@ When none of those conditions exists, the controller may publish success.
 
 ## Explicit non-authority
 
-The following do not determine automated merge readiness:
+The following do not determine automated merge readiness (the single, narrow exception for owner-registered Issues is
+defined in *Registered Issue acceptance* below; nothing else on this list gains authority from it):
 
-- Issue identity;
+- Issue identity (except through the owner registry below);
 - branch naming;
 - commit-message Issue references;
 - PR title/body format or acceptance-matrix syntax;
@@ -41,6 +42,36 @@ The following do not determine automated merge readiness:
 - hostile-review attestation markers.
 
 These may still be useful traceability, but they are not merge authority.
+
+## Registered Issue acceptance
+
+`docs/CODE_WRITE_POLICY.json` -> `review_progression.review_authority.acceptance_requirements` is an owner-authored **policy
+registry**. It is not a proof authority: it only names which already-trusted evidence producer (a repository workflow file and
+event) must have succeeded at the exact PR head for a governed Issue. It is read from the trusted default branch, so a candidate
+cannot register, narrow or waive its own obligation. Evidence evaluation lives in the governance path
+(`hunter_governance_review_v2.issue_acceptance_state`); Merge Readiness only consumes the `(state, detail)` result, like candidate
+admission.
+
+- **Binding.** A PR is bound to a registered Issue only by trusted changed-file evidence matching the entry's `governed_paths`.
+  PR title/body, closing keywords, branch names, committed claims, reviewer or LLM verdicts, Issue closure and generic CI checks are
+  never inputs. A PR that binds no registered Issue, or a repository with an empty registry, behaves exactly as before and costs
+  no extra read.
+- **States** (the first token of the detail): `ACCEPTANCE_PROVEN` (every required producer succeeded at the exact head),
+  `ACCEPTANCE_MISSING` (required evidence absent or its latest exact-head run did not succeed), `ACCEPTANCE_STALE` (evidence
+  exists only for another head or the exception no longer matches), `ACCEPTANCE_AMBIGUOUS` (the change binds more than one
+  registered Issue), `ACCEPTANCE_UNRESOLVED` (criteria that cannot be verified mechanically, an unreadable registry, unavailable
+  evidence, or a producer modified by the same change). `ACCEPTANCE_NOT_GOVERNED` means nothing is registered for the change.
+- **Effect.** Only `PROVEN`, `NOT_GOVERNED` and a valid production-only exception allow a positive decision. Missing, stale and
+  unavailable evidence is `pending`; ambiguous, structurally unresolved or malformed is `failure`. Unavailable evidence is never
+  success.
+- **Production-only exception.** An entry may carry one `production_only` record for evidence that can only exist after merge. It
+  requires the owner's authorization and documented technical necessity, a bounded post-merge verification, one exact `head_sha`,
+  a `trust_root` path and sha256 that must equal the base-branch file, an `expires_at`, and the explicit deferred evidence ids and
+  criteria. All non-deferred evidence must still be proven before merge. The result is
+  `ACCEPTANCE_PRODUCTION_ONLY_PENDING`: readiness may be positive but its description says Issue acceptance is NOT complete, and
+  the record stays in the registry until the owner removes it with production evidence. After `expires_at` it blocks again.
+- **Three distinct facts.** PR merge readiness, Issue acceptance completion and post-merge production acceptance are separate;
+  this section affects only the first and never reports the others as done. Closing an Issue is not evidence.
 
 ## Review findings
 
