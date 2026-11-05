@@ -300,6 +300,21 @@ def candidate_admission_state(head_sha: str, pr_number: int) -> tuple[str, str]:
         return "pending", f"Candidate admission evidence unavailable: {type(exc).__name__}: {exc}"
 
 
+def issue_acceptance_state(head_sha: str, pr_number: int) -> tuple[str, str]:
+    """Registered-Issue acceptance, evaluated by the governance path (single implementation).
+
+    Unregistered change sets are ``success`` without any read. Evidence that cannot be read is ``pending``, never
+    success.
+    """
+
+    import hunter_governance_review_v2 as governance
+
+    try:
+        return governance.issue_acceptance_state(REPO, TOKEN, head_sha, pr_number)
+    except Exception as exc:
+        return "pending", f"ACCEPTANCE_UNRESOLVED: acceptance evidence unavailable: {type(exc).__name__}: {exc}"
+
+
 def review_authority_state(head_sha: str, pr_number: int) -> tuple[str, str]:
     """Fail-closed exact-head review prerequisite for merge readiness.
 
@@ -396,6 +411,9 @@ class ReadinessObservation(Protocol):
     def candidate_admission(self) -> tuple[str, str]: ...
 
     @property
+    def issue_acceptance(self) -> tuple[str, str]: ...
+
+    @property
     def check_runs(self) -> tuple[dict[str, Any], ...]: ...
 
     @property
@@ -415,6 +433,7 @@ class StaticReadinessObservation:
     changes_requested: tuple[str, ...] = ()
     review_authority: tuple[str, str] = ("success", "")
     candidate_admission: tuple[str, str] = ("success", "")
+    issue_acceptance: tuple[str, str] = ("success", "")
     check_runs: tuple[dict[str, Any], ...] = ()
     governance_status: dict[str, Any] | None = None
     shared_open_prs: tuple[int, ...] = ()
@@ -451,6 +470,10 @@ class LiveReadinessObservation:
     @cached_property
     def candidate_admission(self) -> tuple[str, str]:
         return candidate_admission_state(self._head_sha, self._pr_number)
+
+    @cached_property
+    def issue_acceptance(self) -> tuple[str, str]:
+        return issue_acceptance_state(self._head_sha, self._pr_number)
 
     @cached_property
     def check_runs(self) -> tuple[dict[str, Any], ...]:
@@ -518,6 +541,15 @@ def evaluate(observation: ReadinessObservation) -> Decision:
     if admission_state != "success":
         return Decision("failure", "Candidate admission prerequisite not met: " + admission_detail)
 
+    # Registered-Issue acceptance (owner-registered Issues only; unregistered changes are unaffected). The evaluation
+    # lives in the governance path; this is only its consumed result. A missing, stale, ambiguous or unresolved
+    # result never yields a positive decision, and a production-only exception is never reported as completion.
+    acceptance_state, acceptance_detail = observation.issue_acceptance
+    if acceptance_state == "pending":
+        return Decision("pending", "Waiting for Issue acceptance evidence: " + acceptance_detail)
+    if acceptance_state != "success":
+        return Decision("failure", "Issue acceptance prerequisite not met: " + acceptance_detail)
+
     runs = list(observation.check_runs)
     missing: list[str] = []
     pending: list[str] = []
@@ -553,6 +585,14 @@ def evaluate(observation: ReadinessObservation) -> Decision:
         others = ", ".join(f"#{number}" for number in observation.shared_open_prs)
         return Decision("pending", f"Head is shared with open PR {others}; waiting for unique attribution.")
 
+    if acceptance_detail.startswith("ACCEPTANCE_PRODUCTION_ONLY_PENDING"):
+        # GitHub truncates a status description at 140 characters (see publish), so the distinction this exception
+        # exists to preserve comes FIRST and must never be the part that is cut.
+        return Decision(
+            "success",
+            "Ready to merge; Issue acceptance NOT complete (production-only exception outstanding); "
+            "deterministic code/security/governance checks pass.",
+        )
     return Decision(
         "success",
         "Ready to merge: deterministic code/security/governance checks pass; "

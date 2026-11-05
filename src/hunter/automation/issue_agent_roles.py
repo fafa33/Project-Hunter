@@ -332,6 +332,8 @@ def trusted_git_path(value: Path, what: str) -> Path:
     """
 
     path = Path(_git_scalar(str(value), what))
+    if any(part.startswith("-") for part in path.parts):
+        raise RoleRefused("EXECUTION_NOT_COMPLETED", f"{what} has a component that would be read as an option")
     if not path.is_absolute():
         raise RoleRefused("EXECUTION_NOT_COMPLETED", f"{what} is not absolute")
     try:
@@ -350,7 +352,7 @@ def trusted_remote(remote: str) -> str:
 
     _git_scalar(remote, "git remote")
     if remote.startswith("-") or _REMOTE.fullmatch(remote) is None:
-        raise RoleRefused("EXECUTION_NOT_COMPLETED", "git remote is not an https URL or an absolute local path")
+        raise RoleRefused("CONFIGURATION_INVALID", "git remote is not an https URL or an absolute local path")
     return remote
 
 
@@ -359,7 +361,7 @@ def trusted_branch(branch: str) -> str:
 
     _git_scalar(branch, "branch")
     if re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._/-]{0,200}", branch) is None or ".." in branch or "//" in branch:
-        raise RoleRefused("EXECUTION_NOT_COMPLETED", "branch is not a plain ref name")
+        raise RoleRefused("CONFIGURATION_INVALID", "branch is not a plain ref name")
     return branch
 
 
@@ -419,7 +421,8 @@ def _git(git_dir: Path, work_tree: Path, *args: str) -> bytes:
         command, cwd=work_tree, env=_git_environment(git_dir), capture_output=True, check=False, timeout=300
     )
     if completed.returncode != 0:
-        raise RoleRefused("EXECUTION_NOT_COMPLETED", f"workspace git {args[0]} failed")
+        action = args[0] if args else "command"
+        raise RoleRefused("EXECUTION_NOT_COMPLETED", f"workspace git {action} failed")
     return completed.stdout
 
 
@@ -500,7 +503,11 @@ EDIT_DIRECTIVE: Final = (
     "Implement the signed task in the attached file by editing actual repository files "
     "in this workspace. Respect its allowed and prohibited paths. "
     "Do not merely explain a plan or claim completion: inspect the relevant files, "
-    "make the smallest correct code/test changes, and run focused checks. "
+    "make the smallest correct code/test changes. Shell commands are permitted only through "
+    "the Hunter governed shell broker and only for explicitly allowlisted focused checks; "
+    "never invoke an alternate shell, direct subprocess, or bypass the broker. "
+    "If the governed broker is unavailable, do not run commands or tests; "
+    "trusted Hunter validation still runs checks after collection. "
     "If the task cannot be implemented within the authorized scope, do not fabricate edits."
 )
 
@@ -580,7 +587,9 @@ def materialize_base(
     workspace = trusted_git_path(workspace, "workspace")
     git_dir = trusted_git_path(git_dir, "git metadata directory")
     remote = trusted_remote(remote)
-    workspace.mkdir(parents=True)
+    if remediation_branch is not None:
+        trusted_branch(remediation_branch)  # refused before anything is created or fetched
+    workspace.mkdir(parents=True, exist_ok=True)
     _git(git_dir, workspace, "init", "--quiet")
     git_dir.chmod(0o700)
     _git(git_dir, workspace, "fetch", "--quiet", "--no-tags", "--", remote, "+refs/heads/main:refs/remotes/origin/main")
@@ -624,6 +633,8 @@ def collect_result(workspace: Path, git_dir: Path, *, authorization_id: str, bra
             path = trusted_result_path(raw_path.decode("utf-8"))
         except UnicodeDecodeError:
             raise RoleRefused("EXECUTOR_RESULT_REJECTED", "non-UTF-8 path") from None
+        if not path or path.startswith("-") or path.startswith("/") or ".." in Path(path).parts or "\0" in path:
+            raise RoleRefused("EXECUTOR_RESULT_REJECTED", "unsafe path in candidate change")
         mode = _git(git_dir, workspace, "ls-files", "--stage", "--", path).decode().split(" ", 1)[0]
         if mode not in ("100644", "100755"):
             raise RoleRefused("EXECUTOR_RESULT_REJECTED", "unsupported file mode")
@@ -719,20 +730,12 @@ def opencode_workspace_argv(argv: Sequence[str], workspace: Path) -> tuple[str, 
     return (argv[0], "--pure", "run", "--dir", str(workspace), *argv[2:])
 
 
-def opencode_workspace_environment(home: Path, workspace: Path) -> dict[str, str]:
-    """The ephemeral OpenCode contract: trusted inline config, no project config, no real shell.
-
-    The shell lives outside the workspace (``external_directory`` is denied), is read-only, and is
-    verified before use: OpenCode silently falls back to a real shell when the configured one is
-    missing or not executable. The permission map is repeated under the shipped ``build`` agent because
-    agent rules take precedence over global rules.
-    """
-
-    config_dir = home / ".config" / "opencode"
+def _governed_workspace_policy(home: Path, runtime: str) -> tuple[Path, Path, dict[str, object]]:
+    """Materialize one trusted, deny-by-default tool and shell policy for an isolated runtime."""
+    config_dir = home / ".config" / runtime
     config_dir.mkdir(parents=True, exist_ok=True)
     shell = config_dir / _OPENCODE_DENIED_SHELL_NAME
-    # Idempotent: the shell installed by an earlier call on the same home is read-only, so a repeated contract (a
-    # diagnostic re-run, a parity check) must widen it deliberately before rewriting it, never fail on its own file.
+    # A repeated invocation may encounter the prior read-only shell.
     if shell.exists():
         shell.chmod(0o700)
     shell.write_text(_OPENCODE_DENIED_SHELL, encoding="utf-8")
@@ -742,12 +745,25 @@ def opencode_workspace_environment(home: Path, workspace: Path) -> dict[str, str
     instructions = config_dir / _OPENCODE_RUNTIME_INSTRUCTION_NAME
     instructions.write_text(_OPENCODE_RUNTIME_INSTRUCTIONS, encoding="utf-8")
     permission = dict(_OPENCODE_PERMISSION)
-    content = {
+    content: dict[str, object] = {
         "permission": permission,
         "agent": {"build": {"permission": dict(permission)}},
         "instructions": [str(instructions)],
         "shell": str(shell),
     }
+    return config_dir, shell, content
+
+
+def opencode_workspace_environment(home: Path, workspace: Path) -> dict[str, str]:
+    """The ephemeral OpenCode contract: trusted inline config, no project config, no real shell.
+
+    The shell lives outside the workspace (``external_directory`` is denied), is read-only, and is
+    verified before use: OpenCode silently falls back to a real shell when the configured one is
+    missing or not executable. The permission map is repeated under the shipped ``build`` agent because
+    agent rules take precedence over global rules.
+    """
+
+    config_dir, shell, content = _governed_workspace_policy(home, "opencode")
     return {
         "PWD": str(workspace),
         "SHELL": str(shell),
@@ -812,6 +828,170 @@ def opencode_invocation(
     )
 
 
+def kilo_workspace_environment(home: Path, workspace: Path) -> dict[str, str]:
+    """Install the deny-by-default Kilo 7.8.18 runtime policy without OpenCode configuration."""
+    config_dir, shell, content = _governed_workspace_policy(home, "kilo")
+    return {
+        "PWD": str(workspace),
+        "SHELL": str(shell),
+        "KILO_CONFIG_DIR": str(config_dir),
+        "KILO_CONFIG_CONTENT": json.dumps(content, sort_keys=True, separators=(",", ":")),
+        "KILO_DISABLE_PROJECT_CONFIG": "1",
+        "KILO_DISABLE_CLAUDE_CODE": "1",
+    }
+
+
+def _is_kilo_run(argv: Sequence[str]) -> bool:
+    return len(argv) >= 2 and Path(argv[0]).name == "kilo" and argv[1] == "run"
+
+
+def kilo_invocation(
+    model_argv: Sequence[str],
+    *,
+    prompt: bytes,
+    home: Path,
+    workspace: Path,
+    model_environment: Mapping[str, str] = MODEL_PUBLIC_ENVIRONMENT,
+) -> OpenCodeInvocation:
+    """Bind the Kilo invocation to a private task attachment and isolated workspace."""
+    if (
+        len(model_argv) != 4
+        or not _is_kilo_run(model_argv)
+        or model_argv[2] not in {"--model", "-m"}
+        or not model_argv[3].strip()
+        or model_argv[3].startswith("-")
+    ):
+        raise RoleRefused("EXECUTION_NOT_COMPLETED", "Kilo requires exactly run --model MODEL")
+
+    # Kilo owns its own governed configuration; never inherit legacy OpenCode flags.
+    governed_env = kilo_workspace_environment(home, workspace)
+    prompt_path = home / _TASK_ATTACHMENT
+    prompt_path.write_bytes(prompt)
+    prompt_path.chmod(0o600)
+    return OpenCodeInvocation(
+        argv=(
+            model_argv[0],
+            "run",
+            "--auto",  # Kilo CI: approvals obey the governed deny-first policy.
+            "--dir",
+            str(workspace),
+            "--model",
+            model_argv[3],
+            EDIT_DIRECTIVE,
+            "--file",
+            str(prompt_path),
+        ),
+        stdin=b"",
+        public_env={
+            **model_environment,
+            **governed_env,
+            # The pinned Kilo CLI uses /usr/bin/env node; the isolated env has no inherited PATH.
+            "PATH": "/usr/local/bin:/usr/bin:/bin",
+            "HOME": str(home),
+            "PWD": str(workspace),
+            "XDG_CONFIG_HOME": str(home / ".config"),
+            "XDG_CACHE_HOME": str(home / ".cache"),
+            "XDG_DATA_HOME": str(home / ".local" / "share"),
+            "XDG_STATE_HOME": str(home / ".local" / "state"),
+        },
+    )
+
+
+def _is_codex_exec(argv: Sequence[str]) -> bool:
+    return len(argv) >= 2 and Path(argv[0]).name == "codex" and argv[1] == "exec"
+
+
+def codex_invocation(
+    model_argv: Sequence[str],
+    *,
+    prompt: bytes,
+    home: Path,
+    workspace: Path,
+    model_environment: Mapping[str, str] = MODEL_PUBLIC_ENVIRONMENT,
+) -> OpenCodeInvocation:
+    """Build a bounded Codex invocation; OS-level principal isolation remains mandatory.
+
+    This is an argv/environment adapter, NOT a macOS isolation implementation.
+    It is only safe when launched through the existing separate-UID Isolation port.
+    Codex's own workspace sandbox is defense in depth, not the credential boundary.
+    """
+    if not _is_codex_exec(model_argv):
+        raise RoleRefused("EXECUTION_NOT_COMPLETED", "Codex adapter requires codex exec")
+    # Reject caller-provided flags that could override the sandbox, directory,
+    # config source, or inject a positional task outside the sealed prompt.
+    if any(
+        arg
+        in {
+            "--dangerously-bypass-approvals-and-sandbox",
+            "--dangerously-bypass-hook-trust",
+            "--add-dir",
+            "--cd",
+            "-C",
+            "--sandbox",
+            "-s",
+            "--profile",
+            "-p",
+            "--config",
+            "-c",
+            "--oss",
+            "--local-provider",
+            "--worktree",
+            "--approve-for-me",
+            "--image",
+            "-i",
+            "--",
+        }
+        or arg.startswith(("--config=", "--sandbox=", "--cd=", "--add-dir=", "--profile="))
+        for arg in model_argv[2:]
+    ):
+        raise RoleRefused("EXECUTION_NOT_COMPLETED", "untrusted Codex launch flags")
+    # Only permit an explicit model choice, never arbitrary positional instructions.
+    if (
+        len(model_argv) != 4
+        or model_argv[2] not in {"--model", "-m"}
+        or not model_argv[3].strip()
+        or model_argv[3].startswith("-")
+    ):
+        raise RoleRefused("EXECUTION_NOT_COMPLETED", "Codex model argv must contain only --model MODEL")
+    # The model's transient HOME is created by the trusted executor, then
+    # chowned to the isolated principal by Isolation.prepare. Codex login
+    # material is never copied from the runner owner's ~/.codex.
+    # Without a dedicated credential handoff and macOS sandbox, this adapter
+    # must remain inactive in the production workflow.
+    codex_home = home / ".codex"
+    return OpenCodeInvocation(
+        argv=(
+            model_argv[0],
+            "exec",
+            "--model",
+            model_argv[3],
+            "--sandbox",
+            "workspace-write",
+            "--cd",
+            str(workspace),
+            "--skip-git-repo-check",
+            "--ephemeral",
+            "--ignore-user-config",
+            "-c",
+            'model_reasoning_effort="low"',
+            "-c",
+            "sandbox_workspace_write.network_access=false",
+            "-",
+        ),
+        stdin=prompt,
+        public_env={
+            **model_environment,
+            "HOME": str(home),
+            "PWD": str(workspace),
+            "CODEX_HOME": str(codex_home),
+            "XDG_CONFIG_HOME": str(home / ".config"),
+            "XDG_CACHE_HOME": str(home / ".cache"),
+            "XDG_DATA_HOME": str(home / ".local" / "share"),
+            "XDG_STATE_HOME": str(home / ".local" / "state"),
+        },
+    )
+
+
 # --- executor ------------------------------------------------------------------------------------------
 
 
@@ -831,6 +1011,15 @@ class ExecutorConfig:
 class ExecutorOutcome:
     sealed_result: bytes | None
     advisory_code: str | None
+
+
+def require_governed_kilo_isolation(model_argv: Sequence[str], isolation: Isolation) -> None:
+    """Refuse Kilo on the legacy host runner until container/egress enforcement is wired."""
+    if _is_kilo_run(model_argv) and not (
+        type(isolation).__module__ == "hunter.automation.issue_agent_kilo_container"
+        and type(isolation).__name__ == "KiloContainerIsolation"
+    ):
+        raise RoleRefused("EXECUTION_NOT_STARTED", "Kilo requires governed container isolation")
 
 
 def run_executor(
@@ -878,6 +1067,8 @@ def run_executor(
     if state.sha256_hex(prompt) != bound["lineage"]["prompt_sha256"]:
         raise RoleRefused("TRANSPORT_INTEGRITY_FAILED", "prompt differs from the bound prompt digest")
 
+    require_governed_kilo_isolation(config.model_argv, isolation)
+
     workspace, git_dir, home = workroot / "workspace", workroot / "trusted.git", workroot / "home"
     # ADR 0039 L4: a remediation executes on its parent PR branch at the exact bound head, not on main.
     materialize_base(
@@ -898,7 +1089,19 @@ def run_executor(
             model_argv, prompt=prompt, home=home, workspace=workspace, model_environment=config.model_public_env
         )
         if _is_opencode_run(model_argv)
-        else None
+        else (
+            kilo_invocation(
+                model_argv, prompt=prompt, home=home, workspace=workspace, model_environment=config.model_public_env
+            )
+            if _is_kilo_run(model_argv)
+            else (
+                codex_invocation(
+                    model_argv, prompt=prompt, home=home, workspace=workspace, model_environment=config.model_public_env
+                )
+                if _is_codex_exec(model_argv)
+                else None
+            )
+        )
     )
     if invocation is not None:
         model_argv, model_stdin = invocation.argv, invocation.stdin
@@ -935,6 +1138,19 @@ def run_executor(
     finally:
         isolation.stop()  # nothing the model started survives into collection
     if advisory is not None:
+        # Never promote a failed model run, but distinguish a model that edited files
+        # from one that only printed text. Report counts only, never paths/content.
+        try:
+            changed = _git(git_dir, workspace, "status", "--porcelain", "-z", "--untracked-files=normal")
+            changed_count = sum(bool(item) for item in changed.split(b"\0"))
+        except (RoleRefused, subprocess.SubprocessError, OSError):
+            changed_count = -1
+        counts = workspace_diagnostics(workspace, git_dir, home)
+        print(
+            f"executor failed-workspace diagnostic: changed_entries={changed_count} "
+            + " ".join(f"{name}={value}" for name, value in counts.items()),
+            flush=True,
+        )
         return ExecutorOutcome(None, advisory)
     try:
         document = collect_result(

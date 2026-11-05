@@ -11,6 +11,30 @@ import sys
 from collections.abc import Callable
 from typing import Any
 
+#: Every refusal the observation can report. A caller that runs the observer in a subprocess reports only these (or
+#: ``UNCLASSIFIED``), never free-form output.
+REFUSAL_REASONS: tuple[str, ...] = (
+    "Authenticated GitHub ruleset observer required",
+    "GitHub contract API unavailable or access denied",
+    "Invalid repository identity",
+    "Malformed GitHub ruleset list",
+    "Malformed GitHub ruleset summary",
+    "GitHub ruleset pagination exceeded safe bound",
+    "No active GitHub rulesets observed",
+    "Malformed GitHub ruleset identity",
+    "Malformed GitHub ruleset detail",
+    "Missing or malformed GitHub ruleset bypass actors",
+)
+#: Reasons that say nothing definitive about the repository contract: an outage, an unusable session or a denied
+#: read can be transient, so a publisher that sees one stays within its bounded resume budget.
+UNDETERMINED_REASONS: tuple[str, ...] = (
+    "Authenticated GitHub ruleset observer required",
+    "GitHub contract API unavailable or access denied",
+)
+#: Every other reason is a definitive verdict on data the observer actually received (malformed, empty, or without
+#: ``bypass_actors``). Repeating the same read with the same credential and code cannot change it.
+DEFINITIVE_REASONS: tuple[str, ...] = tuple(r for r in REFUSAL_REASONS if r not in UNDETERMINED_REASONS)
+
 
 def github_get(path: str) -> Any:
     # `gh api` without credentials can return anonymously cached ruleset data.

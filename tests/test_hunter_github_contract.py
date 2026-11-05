@@ -44,9 +44,26 @@ def test_every_agent_push_uses_same_contract_boundary():
 def test_trusted_publisher_checks_contract_even_without_local_hook():
     source = (Path(__file__).resolve().parents[1] / "scripts/hunter_issue_agent_lifecycle.py").read_text()
     publisher = source.split("def cmd_publish(", 1)[1].split("\ndef cmd_candidate_gate(", 1)[0]
-    assert "observe_contract(" in publisher
-    assert "PUBLICATION_UNAVAILABLE" in publisher
-    assert publisher.index("observe_contract(") < publisher.index("roles.run_publisher(")
+    # The publisher observes the live contract through its dedicated read-only helper, before it publishes anything.
+    assert "_observe_hgcc_contract(" in publisher
+    assert publisher.index("_observe_hgcc_contract(") < publisher.index("roles.run_publisher(")
+    helper = source.split("def _observe_hgcc_contract(", 1)[1].split("\ndef cmd_publish(", 1)[0]
+    assert "hunter_github_contract.py" in helper and "PUBLICATION_UNAVAILABLE" in helper
+    # No fallback credential by construction: outside its docstring the helper names neither the runner token nor the
+    # publisher push token (neither as a string nor as the constant that holds it).
+    import ast
+
+    function = ast.parse("def _observe_hgcc_contract(" + helper).body[0]
+    body = function.body[1:] if isinstance(function.body[0].value, ast.Constant) else function.body  # type: ignore[attr-defined]
+    named = {node.value for statement in body for node in ast.walk(statement) if isinstance(node, ast.Constant)} | {
+        node.id for statement in body for node in ast.walk(statement) if isinstance(node, ast.Name)
+    }
+    assert not named & {
+        "GITHUB_TOKEN",
+        "GH_TOKEN_FALLBACK",
+        "PUSH_TOKEN_ENV",
+        "HUNTER_ISSUE_AGENT_PUBLISHER_PUSH_TOKEN",
+    }
 
 
 def test_required_check_identity_and_success():

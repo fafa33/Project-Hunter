@@ -19,6 +19,7 @@ import os
 import sqlite3
 import subprocess
 import sys
+import tempfile
 from collections.abc import Callable, Mapping, Sequence
 from datetime import UTC, datetime
 from pathlib import Path
@@ -39,6 +40,9 @@ HANDOFF_KEY_ENV = "HUNTER_ISSUE_AGENT_HANDOFF_KEY"
 RESULT_KEY_ENV = "HUNTER_ISSUE_AGENT_RESULT_KEY"
 MODEL_KEY_ENV = "HUNTER_ISSUE_AGENT_EXECUTOR_MODEL_API_KEY"
 PUSH_TOKEN_ENV = "HUNTER_ISSUE_AGENT_PUBLISHER_PUSH_TOKEN"
+#: Read-only credential (Administration: read + Metadata: read, this repository only) used solely to observe the
+#: live ruleset contract. It has no push, PR or other authority and is never a fallback for, or from, any other token.
+HGCC_TOKEN_ENV = "HUNTER_HGCC_READ_TOKEN"
 PUBLISHER_SIGNING_KEY_ENV = "HUNTER_ISSUE_AGENT_PUBLISHER_SIGNING_KEY"
 #: K_AUTH: the issuer key that mints both an Issue authorization and a remediation authorization (ADR 0039 L4).
 AUTHORIZATION_SIGNING_KEY_ENV = "HUNTER_ISSUE_AGENT_AUTHORIZATION_SIGNING_KEY"
@@ -55,6 +59,13 @@ class LifecycleRefused(RuntimeError):
     def __init__(self, code: str, message: str) -> None:
         super().__init__(f"{code}: {message}")
         self.code = code
+
+
+class PublicationContractRefused(LifecycleRefused):
+    """The observed HGCC-1 contract definitively fails: terminal and uploaded as the publisher's REFUSED outcome."""
+
+    def __init__(self, message: str) -> None:
+        super().__init__("PUBLICATION_CONTRACT_REFUSED", message)
 
 
 def _secret(name: str) -> str:
@@ -1277,12 +1288,31 @@ def parse_arguments(argv: Sequence[str] | None = None) -> argparse.Namespace:
     return arguments
 
 
+def _executor_model_secrets(model_argv: Sequence[str], model_key_name: str) -> dict[str, str]:
+    """Allow keyless execution only for explicitly free Kilo models.
+
+    Never relax the credential requirement for paid, unknown, or legacy providers.
+    """
+    if (
+        len(model_argv) == 4
+        and Path(model_argv[0]).name == "kilo"
+        and model_argv[1:3] == ("run", "--model")
+        and model_argv[3].startswith("kilo/")
+        and model_argv[3].endswith(":free")
+    ):
+        return {}
+    if not model_key_name:
+        raise LifecycleRefused("MISSING_CONFIGURATION", "a valid model key name is required")
+    return {model_key_name: _secret(MODEL_KEY_ENV)}
+
+
 def cmd_execute(configuration: control.Configuration, arguments: argparse.Namespace) -> int:
+    from hunter.automation.issue_agent_kilo_container import KiloContainerIsolation
     from hunter.evidence_intelligence.smart_prompt_routing import PromptAutomationVerifier
 
     run_id, attempt, _ = _run_context()
     os.environ["HUNTER_PROMPT_AUTOMATION_VERIFYING_KEY"] = configuration.prompt_verifying_key
-    model_key = _secret(MODEL_KEY_ENV)
+    model_secrets = _executor_model_secrets(tuple(arguments.model_argv), arguments.model_key_name)
     outcome = roles.run_executor(
         issue=arguments.issue,
         authorization_id=arguments.authorization_id,
@@ -1293,12 +1323,16 @@ def cmd_execute(configuration: control.Configuration, arguments: argparse.Namesp
             remote=_remote(configuration),
             model_argv=tuple(arguments.model_argv),
             model_public_env=roles.MODEL_PUBLIC_ENVIRONMENT,
-            model_secret_env={arguments.model_key_name: model_key},
+            model_secret_env=model_secrets,
             handoff_key=_x25519(HANDOFF_KEY_ENV),
             result_recipient=configuration.result_recipient,
             prompt_verifier=PromptAutomationVerifier.from_environment(),
         ),
-        isolation=roles.SudoIsolation(ISOLATION_USER),
+        isolation=(
+            KiloContainerIsolation(Path(__file__).resolve().parent / "issue_agent")
+            if roles._is_kilo_run(tuple(arguments.model_argv))
+            else roles.SudoIsolation(ISOLATION_USER)
+        ),
         workroot=Path(arguments.workroot),
     )
     if outcome.sealed_result is not None:
@@ -1376,19 +1410,91 @@ def _issue_gate(configuration: control.Configuration, github: control.GitHubRest
     )
 
 
-def cmd_publish(configuration: control.Configuration, arguments: argparse.Namespace) -> int:
-    github = _github(configuration)
-    # HGCC-1 trusted publication boundary: agents cannot bypass this by
-    # disabling local git hooks. Read-only; never publishes a parallel status.
-    from hunter_github_contract import observe_contract
+def _observe_hgcc_contract(repository: str) -> None:
+    """HGCC-1 trusted publication boundary: the live ruleset contract must be completely observable, or refuse.
 
+    ``bypass_actors`` is returned only to a credential with ruleset-level visibility, which ``GITHUB_TOKEN`` cannot
+    hold. The dedicated read-only credential is read once, removed from this process's environment so no later
+    subprocess (git push, PR calls) inherits it, and handed only to the observer subprocess, whose environment holds
+    nothing else. There is no fallback to ``GITHUB_TOKEN`` or the publisher push token. Nothing the observer prints is
+    forwarded: a refusal carries only a reason from a closed vocabulary.
+    """
+
+    from hunter_github_contract import DEFINITIVE_REASONS, REFUSAL_REASONS
+
+    def refuse(reason: str) -> LifecycleRefused:
+        message = f"HGCC-1 GitHub contract unavailable: {reason}"
+        # Only a verdict on data actually received is definitive; an outage, a missing credential or an unclassified
+        # failure stays transient and is bounded by the publication resume budget.
+        if reason in DEFINITIVE_REASONS or reason == "OBSERVATION_INCOMPLETE":
+            return PublicationContractRefused(message)
+        return LifecycleRefused("PUBLICATION_UNAVAILABLE", message)
+
+    token = os.environ.pop(HGCC_TOKEN_ENV, "").strip()
+    if not token:
+        raise refuse("READ_CREDENTIAL_MISSING")
+    script = Path(__file__).resolve().with_name("hunter_github_contract.py")
+    with tempfile.TemporaryDirectory(prefix="hunter-hgcc-") as home:
+        environment = {
+            "PATH": os.environ.get("PATH", "/usr/local/bin:/usr/bin:/bin"),
+            "HOME": home,
+            "GH_CONFIG_DIR": home,
+            "GH_TOKEN": token,
+            "GH_PROMPT_DISABLED": "1",
+            "GH_NO_UPDATE_NOTIFIER": "1",
+        }
+        try:
+            done = subprocess.run(  # noqa: S603 - fixed argv, minimal environment
+                (sys.executable, str(script), repository),
+                env=environment,
+                capture_output=True,
+                text=True,
+                timeout=120,
+                check=False,
+            )
+        except (OSError, subprocess.SubprocessError):
+            raise refuse("OBSERVATION_FAILED") from None
+    if done.returncode != 0:
+        prefix = "[HGCC-1] INDETERMINATE: "
+        reasons = [line[len(prefix) :] for line in done.stderr.splitlines() if line.startswith(prefix)]
+        raise refuse(reasons[-1] if reasons and reasons[-1] in REFUSAL_REASONS else "UNCLASSIFIED")
     try:
-        observe_contract(
-            configuration.repository,
-            get=lambda path: control.definitive(github.get(f"/{path}")),
+        contract = json.loads(done.stdout)
+        rulesets = contract["rulesets"]
+        complete = (
+            contract["schema"] == "hgcc-1/v1"
+            and contract["repository"] == repository
+            and isinstance(rulesets, list)
+            and bool(rulesets)
+            and all(isinstance(item, dict) and isinstance(item.get("bypass_actors"), list) for item in rulesets)
         )
-    except (ValueError, OSError, TypeError) as exc:
-        raise LifecycleRefused("PUBLICATION_UNAVAILABLE", f"HGCC-1 GitHub contract unavailable: {exc}") from None
+    except (ValueError, KeyError, TypeError):
+        complete = False
+    if not complete:
+        raise refuse("OBSERVATION_INCOMPLETE")
+
+
+def _refused_outcome(arguments: argparse.Namespace, code: str) -> int:
+    _write_outcome(
+        arguments.out,
+        {
+            "schema_version": control.OUTCOME_SCHEMA_VERSION,
+            "authorization_id": arguments.authorization_id,
+            "verdict": "REFUSED",
+            "code": code,
+        },
+    )
+    _output(refused="true")
+    print(f"publication refused: {code}")
+    return 0
+
+
+def cmd_publish(configuration: control.Configuration, arguments: argparse.Namespace) -> int:
+    try:
+        _observe_hgcc_contract(configuration.repository)
+    except PublicationContractRefused as error:
+        return _refused_outcome(arguments, error.code)
+    github = _github(configuration)
     open_pr = control.definitive(github.get(f"/repos/{configuration.repository}/pulls?state=open&per_page=100"))
     if not isinstance(open_pr, list):
         raise LifecycleRefused("PUBLICATION_UNAVAILABLE", "pull requests are not observable")
@@ -1420,18 +1526,7 @@ def cmd_publish(configuration: control.Configuration, arguments: argparse.Namesp
     except roles.RoleRefused as error:
         if error.code not in state.PUBLICATION_REFUSAL_CODES:
             raise
-        _write_outcome(
-            arguments.out,
-            {
-                "schema_version": control.OUTCOME_SCHEMA_VERSION,
-                "authorization_id": arguments.authorization_id,
-                "verdict": "REFUSED",
-                "code": error.code,
-            },
-        )
-        _output(refused="true")
-        print(f"publication refused: {error.code}")
-        return 0
+        return _refused_outcome(arguments, error.code)
     finally:
         signing_key.unlink(missing_ok=True)
     print(f"published {publication.branch} at {publication.head_sha}")

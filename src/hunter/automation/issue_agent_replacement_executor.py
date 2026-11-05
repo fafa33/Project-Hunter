@@ -788,6 +788,52 @@ def _trusted_base_ref(repo: Path) -> str:
     raise ReplacementExecutorError("trusted checkout has no governed base branch")
 
 
+#: The only gates the validator ever names in a refusal diagnostic. Free-form output from candidate-influenced tools
+#: is never reported; an unrecognised failure is reported as ``UNCLASSIFIED``.
+SAFETY_GATE_VOCABULARY: tuple[str, ...] = (
+    "Architecture Index Guard",
+    "Artifact Guard",
+    "Defect Prevention Guard",
+    "Ruff",
+    "Black",
+    "Mypy",
+)
+_GITHUB_REPOSITORY = re.compile(r"[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+")
+
+
+def failed_safety_gates(output: str) -> tuple[str, ...]:
+    """Names of failed gates, restricted to ``SAFETY_GATE_VOCABULARY``, in first-seen order.
+
+    The input is output of candidate-influenced tools, so it is parsed line by line with plain string operations
+    (no backtracking regular expression) and every line is length-bounded: the work is linear in the input.
+    """
+    names: list[str] = []
+    for line in output[:262144].splitlines():
+        row = line.strip()
+        if len(row) > 200 or not row.startswith("- "):
+            continue
+        gate, marker, rest = row[2:].partition("[FAILED")
+        gate = gate.strip()
+        if marker and rest.lstrip().startswith("]") and gate in SAFETY_GATE_VOCABULARY and gate not in names:
+            names.append(gate)
+    return tuple(names)
+
+
+def _candidate_origin(validated: ValidatedReplacementResult, push_url: str) -> str:
+    """The credential-free GitHub URL of exactly the authorized repository, or refuse.
+
+    The Defect Prevention Guard derives the repository owner from the repository's own identity (never from
+    policy text), so the isolated clone must carry the authorized repository as ``origin``. Anything but the exact
+    canonical URL -- another host, owner or repository, a credential, a scheme other than https, whitespace -- is
+    refused before any clone, sudo or candidate code.
+    """
+    if _GITHUB_REPOSITORY.fullmatch(validated.repository) is None:
+        raise ReplacementExecutorError("signed repository identity is invalid")
+    if push_url != f"https://github.com/{validated.repository}.git":
+        raise ReplacementExecutorError("candidate safety remote is not the authorized repository")
+    return push_url
+
+
 def _run_pre_push_safety(
     repo: Path, *, validated: ValidatedReplacementResult, head: str, push_url: str, isolation_user: str
 ) -> None:
@@ -798,6 +844,7 @@ def _run_pre_push_safety(
     on real writers; an unsigned safety commit cannot satisfy those controls.
     """
     user = require_isolation_user(isolation_user)
+    origin = _candidate_origin(validated, push_url)
     # The trusted base supplies the safety entrypoint, not a candidate-written bypass.
     safety_script = _git_plumbing(repo, "show", f"{validated.base_sha}:scripts/hunter_pre_push.py").encode()
     if b"def enforce_credential_free_candidate_safety(" not in safety_script:
@@ -818,6 +865,9 @@ def _run_pre_push_safety(
             candidate, "-c", "core.hooksPath=/dev/null", "fetch", "--quiet", "origin",
             f"+{_trusted_base_ref(repo)}:refs/remotes/origin/{ISSUE_AGENT_BASE_BRANCH}",
         )  # fmt: skip
+        # Only now (every fetch above needs the local origin) does the clone take the repository's own identity.
+        # No network is used by the lane and the URL carries no credential.
+        _git_plumbing(candidate, "-c", "core.hooksPath=/dev/null", "remote", "set-url", "origin", origin)
         _git_plumbing(candidate, "-c", "core.hooksPath=/dev/null", "checkout", "--quiet", "--detach", head)
         home.mkdir(mode=0o700)
         run_privileged("chown", "-R", user, str(candidate), str(home))
@@ -841,10 +891,13 @@ def _run_pre_push_safety(
             timeout=900,
         )
         if completed.returncode != 0:
-            detail = (
-                completed.stderr.decode(errors="replace").strip() or completed.stdout.decode(errors="replace").strip()
+            # Closed vocabulary only: never stderr, paths, secrets or a free-form exception message.
+            gates = failed_safety_gates(
+                completed.stdout.decode(errors="replace") + "\n" + completed.stderr.decode(errors="replace")
             )
-            raise ReplacementExecutorError("candidate pre-push safety failed: " + (detail or "unknown failure"))
+            summary = ",".join(gates) or "UNCLASSIFIED"
+            print(f"candidate pre-push safety failed: gates={summary} exit={completed.returncode}", flush=True)
+            raise ReplacementExecutorError(f"candidate pre-push safety failed: gates={summary}")
     finally:
         try:
             remove_isolation_root(root, user)
@@ -1144,11 +1197,9 @@ class ReplacementResultLedger:
     def __init__(self, database: str | Path) -> None:
         self._database = Path(database)
         with sqlite3.connect(self._database) as db:
-            db.execute(
-                """CREATE TABLE IF NOT EXISTS issue_agent_replacement_results (
+            db.execute("""CREATE TABLE IF NOT EXISTS issue_agent_replacement_results (
                 authorization_id TEXT PRIMARY KEY, result_sha256 TEXT NOT NULL,
-                validation_definition TEXT NOT NULL, published_head TEXT)"""
-            )
+                validation_definition TEXT NOT NULL, published_head TEXT)""")
 
     def record_validated(self, receipt: ReplacementValidationReceipt) -> None:
         with sqlite3.connect(self._database) as db:

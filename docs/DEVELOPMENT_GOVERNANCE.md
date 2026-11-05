@@ -61,6 +61,8 @@ Issues, ADRs, PR descriptions, acceptance notes, and operational evidence remain
 
 If a governing Issue contains real acceptance criteria or operational requirements, those requirements must actually be satisfied before merge. They do not need to be encoded in a particular PR-body table to be valid.
 
+For an Issue the owner has explicitly registered in `docs/CODE_WRITE_POLICY.json` (`acceptance_requirements`), that obligation is also enforced mechanically: required evidence from the already-trusted producers must be valid at the exact PR head, an owner-authorized, exact-head, trust-root-bound and time-bounded `production_only` exception is the only way to merge before evidence that can exist only in production, and such a merge never records the Issue as accepted. Unregistered Issues keep the behaviour above. The registry is a policy registry, not a proof authority; see `docs/MERGE_READINESS_GATE.md`. Merge readiness, Issue acceptance completion and post-merge production acceptance remain three distinct facts, and Issue closure is not proof of any of them.
+
 ## Merge readiness
 
 A PR must not merge while any of the following is true:
@@ -72,6 +74,7 @@ A PR must not merge while any of the following is true:
 - a required code/security check is missing, pending, cancelled, or failed;
 - `Hunter Governance Review` reports failure;
 - the current head cannot be safely attributed to the PR;
+- a registered Issue's required acceptance evidence is missing, stale, ambiguous or unresolved (the owner registry in `docs/CODE_WRITE_POLICY.json`);
 - a real governing acceptance requirement is known to remain unsatisfied.
 
 The automated controller derives readiness from current GitHub state. Historical superseded workflow runs, metadata edits, Issue/branch naming, PR prose, comments, reactions, owner acknowledgements, Draft Promotion state, and hostile-review attestation markers do not determine readiness.

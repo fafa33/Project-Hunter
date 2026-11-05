@@ -259,12 +259,12 @@ def test_a_harness_failure_is_reported_by_code_and_never_echoes_candidate_conten
         raise probe.ProbeFailed(f"{PRIVATE_MODEL_TEXT} {CREDENTIAL}")
 
     monkeypatch.setattr(probe, "run_probe", failing)
-    monkeypatch.setattr(probe, "trusted_layout", lambda: _fake_layout())
     monkeypatch.setattr(probe.roles, "SudoIsolation", lambda _user: StandInIsolation())
     monkeypatch.setenv("HUNTER_DIAGNOSTIC_KEY", CREDENTIAL)
     rc = probe.main(
         [
-            "--model", "m",
+            "--source", "/src", "--workspace", "/ws", "--git-dir", "/ws.git", "--home", "/home",
+            "--opencode", "/opt/hunter/bin/opencode", "--model", "m",
             "--secret-env", "HUNTER_DIAGNOSTIC_KEY", "--model-key-name", "GROQ_API_KEY",
         ]
     )  # fmt: skip
@@ -280,7 +280,8 @@ def test_a_missing_credential_refuses_before_any_model_launch(
     launched = StandInIsolation()
     rc = probe.main(
         [
-            "--model", "m",
+            "--source", "/src", "--workspace", "/ws", "--git-dir", "/ws.git", "--home", "/home",
+            "--opencode", "/opt/hunter/bin/opencode", "--model", "m",
             "--secret-env", "HUNTER_DIAGNOSTIC_KEY", "--model-key-name", "GROQ_API_KEY",
         ]
     )  # fmt: skip
@@ -288,144 +289,188 @@ def test_a_missing_credential_refuses_before_any_model_launch(
     assert "refused: configured model or model credential is absent" in capsys.readouterr().out
 
 
-def test_a_runtime_that_is_not_the_pinned_opencode_is_refused(
-    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, capsys: pytest.CaptureFixture[str]
+def test_a_runtime_that_is_not_opencode_is_refused(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
 ) -> None:
     monkeypatch.setenv("HUNTER_DIAGNOSTIC_KEY", CREDENTIAL)
-    monkeypatch.setattr(probe, "EXECUTION_ROOT", _execution_root(tmp_path))
-    monkeypatch.setattr(probe, "OPENCODE_EXECUTABLE", Path("/bin/sh"))
     rc = probe.main(
         [
-            "--model", "m",
+            "--source", "/src", "--workspace", "/ws", "--git-dir", "/ws.git", "--home", "/home",
+            "--opencode", "/bin/sh", "--model", "m",
             "--secret-env", "HUNTER_DIAGNOSTIC_KEY", "--model-key-name", "GROQ_API_KEY",
         ]
     )  # fmt: skip
-    output = capsys.readouterr().out
     assert rc == 2
-    assert "hosted diagnostic refused: ProbeFailed" in output
-    assert "pinned OpenCode runtime" not in output  # closed code only, never the diagnosis text
+    assert "the configured runtime is not the pinned OpenCode executable" in capsys.readouterr().out
 
 
-# --- the trusted path and argument boundary (Issue #574 security remediation) ------------------------------------
-#
-# The probe writes as the trusted runner: it creates directories, installs a config, and runs git with an
-# externally held metadata directory. None of that may be steered by a caller or reached through a symlink, and no
-# git argument may be read as an option (``--upload-pack=<program>`` makes ``git fetch`` execute it).
+def test_prepare_rejects_traversal_symlinks_and_unsafe_paths(tmp_path: Path, source: Path) -> None:
+    workspace, git_dir = tmp_path / "run" / "workspace", tmp_path / "run" / "trusted.git"
+
+    with pytest.raises(probe.ProbeFailed, match="cannot contain '..' traversal"):
+        probe.prepare(source, tmp_path / "run" / ".." / "escaped_ws", git_dir)
+
+    with pytest.raises(probe.ProbeFailed, match="starting with '-'"):
+        probe.prepare(source, tmp_path / "-ws", git_dir)
+
+    with pytest.raises(probe.ProbeFailed, match="same path"):
+        probe.prepare(source, workspace, workspace)
+
+    with pytest.raises(probe.ProbeFailed, match="git_dir cannot be inside workspace"):
+        probe.prepare(source, workspace, workspace / "nested.git")
+
+    link_ws = tmp_path / "symlink_ws"
+    real_ws = tmp_path / "real_ws"
+    real_ws.mkdir()
+    link_ws.symlink_to(real_ws)
+    with pytest.raises(probe.ProbeFailed, match="cannot be a symlink"):
+        probe.prepare(source, link_ws, git_dir)
 
 
-def _fake_layout() -> probe.TrustedLayout:
-    return probe.TrustedLayout(
-        root=Path("/run"),
-        source=Path("/src"),
-        workspace=Path("/run/workspace"),
-        git_dir=Path("/run/trusted.git"),
-        home=Path("/run/home"),
-        opencode=Path("/opt/hunter/bin/opencode"),
-    )
+def test_run_probe_rejects_home_traversal_and_escapes(tmp_path: Path, source: Path) -> None:
+    root = tmp_path / "run"
+    isolation = StandInIsolation()
 
-
-def _execution_root(tmp_path: Path) -> Path:
-    root = tmp_path / "execute"
-    root.mkdir(mode=0o711)
-    root.chmod(0o711)
-    return root
-
-
-def _pinned_opencode(tmp_path: Path) -> Path:
-    binary = tmp_path / "bin" / "opencode"
-    binary.parent.mkdir(parents=True)
-    binary.write_text("#!/bin/sh\nexit 0\n")
-    binary.chmod(0o755)
-    return binary
-
-
-@pytest.mark.parametrize("flag", ["--workspace", "--git-dir", "--home", "--source", "--opencode"])
-def test_the_probe_accepts_no_path_or_runtime_override(flag: str, capsys: pytest.CaptureFixture[str]) -> None:
-    """The layout is fixed, so a crafted invocation cannot redirect a trusted write or the pinned runtime."""
-
-    with pytest.raises(SystemExit):
-        probe.main(["--model", "m", "--secret-env", "K", "--model-key-name", "K", flag, "/etc"])
-    assert "unrecognized arguments" in capsys.readouterr().err
-
-
-def test_prepare_refuses_a_workspace_reached_through_a_symlink(tmp_path: Path, source: Path) -> None:
-    real = tmp_path / "real"
-    real.mkdir()
-    link = tmp_path / "link"
-    link.symlink_to(real, target_is_directory=True)
-    with pytest.raises(probe.ProbeFailed):
-        probe.prepare(source, link, tmp_path / "trusted.git")
-    assert not (tmp_path / "trusted.git").exists()
-
-
-def test_prepare_refuses_git_metadata_inside_the_model_workspace(tmp_path: Path, source: Path) -> None:
-    workspace = tmp_path / "workspace"
-    with pytest.raises(probe.ProbeFailed):
-        probe.prepare(source, workspace, workspace / "trusted.git")
-    assert not workspace.exists()
-
-
-@pytest.mark.parametrize("relative", [Path("workspace"), Path("run/../escape")])
-def test_prepare_refuses_a_non_canonical_workspace_path(tmp_path: Path, source: Path, relative: Path) -> None:
-    with pytest.raises(probe.ProbeFailed):
-        probe.prepare(source, relative, tmp_path / "trusted.git")
-
-
-def test_the_probe_git_boundary_refuses_option_shaped_and_unsplittable_arguments(tmp_path: Path, source: Path) -> None:
-    workspace, git_dir = tmp_path / "workspace", tmp_path / "trusted.git"
-    probe.prepare(source, workspace, git_dir)
-    for args in (
-        ("fetch", "--upload-pack=/tmp/injected", "origin"),
-        ("diff", "--output=/tmp/injected"),
-        ("rev-parse", "HEAD\n--output=/tmp/injected"),
-    ):
-        with pytest.raises(probe.ProbeFailed):
-            probe._git(git_dir, workspace, *args)
-    # The legitimate invocation still runs, so the boundary is not a blanket refusal.
-    assert probe._git(git_dir, workspace, "rev-parse", "HEAD").strip()
-
-
-def test_run_probe_refuses_a_home_inside_the_model_workspace(tmp_path: Path, source: Path) -> None:
-    isolation = StandInIsolation(_edit(probe.PROBE_AFTER))
-    with pytest.raises(probe.ProbeFailed):
+    with pytest.raises(probe.ProbeFailed, match="cannot contain '..' traversal"):
         probe.run_probe(
             source=source,
-            workspace=tmp_path / "workspace",
-            git_dir=tmp_path / "trusted.git",
-            home=tmp_path / "workspace" / "home",
+            workspace=root / "workspace",
+            git_dir=root / "trusted.git",
+            home=root / ".." / "evil_home",
             opencode=Path("/opt/hunter/bin/opencode"),
-            model="opencode/glm-5.3-flash-free",
-            secret_environment={"GROQ_API_KEY": CREDENTIAL},
+            model="m",
+            secret_environment={"KEY": CREDENTIAL},
             isolation=isolation,
-            timeout=30,
         )
-    assert isolation.calls == []
+
+    with pytest.raises(probe.ProbeFailed, match="starting with '-'"):
+        probe.run_probe(
+            source=source,
+            workspace=root / "workspace",
+            git_dir=root / "trusted.git",
+            home=root / "-home",
+            opencode=Path("/opt/hunter/bin/opencode"),
+            model="m",
+            secret_environment={"KEY": CREDENTIAL},
+            isolation=isolation,
+        )
+
+    with pytest.raises(probe.ProbeFailed, match="home cannot collide with workspace or git_dir"):
+        probe.run_probe(
+            source=source,
+            workspace=root / "workspace",
+            git_dir=root / "trusted.git",
+            home=root / "workspace",
+            opencode=Path("/opt/hunter/bin/opencode"),
+            model="m",
+            secret_environment={"KEY": CREDENTIAL},
+            isolation=isolation,
+        )
 
 
-def test_the_execution_root_must_be_trusted(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    world_writable = _execution_root(tmp_path)
-    world_writable.chmod(0o777)
-    monkeypatch.setattr(probe, "EXECUTION_ROOT", world_writable)
-    monkeypatch.setattr(probe, "OPENCODE_EXECUTABLE", _pinned_opencode(tmp_path))
-    with pytest.raises(probe.ProbeFailed):
-        probe.trusted_layout()
+def test_probe_git_rejects_command_argument_injection(tmp_path: Path) -> None:
+    git_dir = tmp_path / "trusted.git"
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
 
-    symlinked = tmp_path / "linked"
-    symlinked.symlink_to(world_writable, target_is_directory=True)
-    monkeypatch.setattr(probe, "EXECUTION_ROOT", symlinked)
-    with pytest.raises(probe.ProbeFailed):
-        probe.trusted_layout()
+    for dangerous in ("--upload-pack=/bin/sh", "--receive-pack=/bin/sh", "--exec-path=/tmp"):
+        with pytest.raises(probe.ProbeFailed, match="unsafe git argument rejected"):
+            probe._git(git_dir, workspace, dangerous)
+
+    with pytest.raises(probe.ProbeFailed, match="forbidden control characters"):
+        probe._git(git_dir, workspace, "status\0evil")
+
+    with pytest.raises(probe.ProbeFailed, match="starting with '-'"):
+        probe._git(tmp_path / "-git", workspace, "status")
 
 
-def test_the_trusted_layout_keeps_metadata_outside_the_workspace(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+def test_probe_git_refuses_option_shaped_tokens_outside_the_old_denylist(tmp_path: Path) -> None:
+    """PRH-128: the probe composes git only through the shared closed-allowlist builder, not a flag denylist."""
+    git_dir = tmp_path / "trusted.git"
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+
+    for option_shaped in ("--config=core.pager=/tmp/x", "-c", "--git-dir=/tmp/elsewhere", "--template=/tmp/t"):
+        with pytest.raises(probe.StagedProbeFailed) as caught:
+            probe._git(git_dir, workspace, "status", option_shaped)
+        assert caught.value.code == "PROBE_GIT_PREPARE_FAILED"
+
+
+def test_prepare_refuses_a_source_that_is_not_an_absolute_local_repository_path(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, source: Path
 ) -> None:
-    root = _execution_root(tmp_path)
-    opencode = _pinned_opencode(tmp_path)
-    monkeypatch.setattr(probe, "EXECUTION_ROOT", root)
-    monkeypatch.setattr(probe, "OPENCODE_EXECUTABLE", opencode)
-    layout = probe.trusted_layout()
-    assert layout.root == root and layout.opencode == opencode
-    assert layout.workspace == root / "workspace" and layout.git_dir == root / "trusted.git"
-    assert layout.git_dir not in layout.workspace.parents and layout.workspace.parent == layout.git_dir.parent
-    assert layout.source == Path(probe.__file__).resolve().parents[1] and (layout.source / ".git").is_dir()
+    monkeypatch.setattr(roles, "trusted_remote", lambda _remote: (_ for _ in ()).throw(roles.RoleRefused("X", "no")))
+    with pytest.raises(probe.StagedProbeFailed) as caught:
+        probe.prepare(source, tmp_path / "run" / "workspace", tmp_path / "run" / "trusted.git")
+    assert caught.value.code == "PROBE_GIT_PREPARE_FAILED"
+    assert not (tmp_path / "run" / "workspace").exists()
+
+
+def test_probe_cli_rejects_traversal_and_unsafe_flags(capsys: pytest.CaptureFixture[str]) -> None:
+    rc = probe.main(
+        [
+            "--source",
+            "/src",
+            "--workspace",
+            "../escaped",
+            "--git-dir",
+            "/ws.git",
+            "--home",
+            "/home",
+            "--opencode",
+            "/opt/hunter/bin/opencode",
+            "--model",
+            "m",
+            "--secret-env",
+            "KEY",
+            "--model-key-name",
+            "KEY",
+        ]
+    )
+    assert rc == 2
+    assert "PROBE_PATH_INVALID" in capsys.readouterr().out
+
+
+def test_staged_probe_errors_are_closed_codes_and_do_not_echo_secrets(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    for stage in ("PROBE_PATH_INVALID", "PROBE_GIT_PREPARE_FAILED", "PROBE_LAUNCH_FAILED", "PROBE_COLLECT_FAILED"):
+
+        def fail(_stage: str = stage, **_kwargs: object) -> probe.ProbeOutcome:
+            raise probe.StagedProbeFailed(_stage) from RuntimeError(PRIVATE_MODEL_TEXT + CREDENTIAL)
+
+        monkeypatch.setattr(probe, "run_probe", fail)
+        monkeypatch.setattr(probe.roles, "SudoIsolation", lambda _user: StandInIsolation())
+        monkeypatch.setenv("HUNTER_DIAGNOSTIC_KEY", CREDENTIAL)
+        rc = probe.main(
+            [
+                "--source",
+                "/src",
+                "--workspace",
+                "/ws",
+                "--git-dir",
+                "/ws.git",
+                "--home",
+                "/home",
+                "--opencode",
+                "/opt/hunter/bin/opencode",
+                "--model",
+                "m",
+                "--secret-env",
+                "HUNTER_DIAGNOSTIC_KEY",
+                "--model-key-name",
+                "GROQ_API_KEY",
+            ]
+        )
+        output = capsys.readouterr().out
+        assert rc == 2
+        assert f"hosted diagnostic refused: {stage}" in output
+        assert PRIVATE_MODEL_TEXT not in output and CREDENTIAL not in output
+
+
+def test_git_failure_uses_non_sensitive_stage_code(tmp_path: Path) -> None:
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    with pytest.raises(probe.StagedProbeFailed) as caught:
+        probe._git(tmp_path / "metadata.git", workspace, "rev-parse", "HEAD")
+    assert caught.value.code == "PROBE_GIT_PREPARE_FAILED"

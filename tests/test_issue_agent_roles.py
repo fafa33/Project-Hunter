@@ -456,6 +456,31 @@ def test_model_failures_are_advisory_never_retried_and_always_stopped(
     assert len(isolation.calls) == 1 and isolation.stopped == 1
 
 
+def test_failed_model_reports_safe_workspace_counts_without_collecting(
+    repos: dict[str, Any], monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    ledger, envelope = authorize(repos)
+
+    def forbidden_collector(*args: Any, **kwargs: Any) -> bytes:
+        raise AssertionError("failed model must never collect or publish")
+
+    monkeypatch.setattr(roles, "collect_result", forbidden_collector)
+    outcome = execute(repos, ledger, envelope, RecordingIsolation(CANARY, fail=True))
+    assert outcome.sealed_result is None
+    assert outcome.advisory_code == "PROVIDER_UNAVAILABLE"
+    output = capsys.readouterr().out
+    assert "executor failed-workspace diagnostic: changed_entries=" in output
+    assert "ignored_files=" in output
+    assert "PRIVATE_SIGNED_TASK" not in output
+
+
+def test_executor_directive_requires_governed_broker_only() -> None:
+    assert "only through the Hunter governed shell broker" in roles.EDIT_DIRECTIVE
+    assert "never invoke an alternate shell" in roles.EDIT_DIRECTIVE
+    assert "If the governed broker is unavailable, do not run commands or tests" in roles.EDIT_DIRECTIVE
+    assert "trusted Hunter validation still runs checks" in roles.EDIT_DIRECTIVE
+
+
 def test_collector_rejection_is_not_misreported_as_no_changes(
     repos: dict[str, Any], monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
 ) -> None:
@@ -1325,7 +1350,7 @@ def test_a_remote_that_looks_like_a_git_option_is_refused_before_any_git_runs(
     monkeypatch.setattr(roles, "_git_status", unreachable)
     with pytest.raises(roles.RoleRefused) as refusal:
         roles.materialize_base(workspace, git_dir, remote="--upload-pack=/tmp/injected", base_sha="a" * 40)
-    assert refusal.value.code == "EXECUTION_NOT_COMPLETED"
+    assert refusal.value.code == "CONFIGURATION_INVALID"
     assert not workspace.exists() and not git_dir.exists()
 
 
@@ -1414,3 +1439,57 @@ def test_a_diff_listed_path_that_escapes_the_workspace_is_rejected(
             base_sha="b" * 40,
         )
     assert refusal.value.code == "EXECUTOR_RESULT_REJECTED"
+
+
+def test_roles_git_rejects_command_argument_injection(tmp_path: Path) -> None:
+    git_dir = tmp_path / "trusted.git"
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+
+    for dangerous in ("--upload-pack=/bin/sh", "--receive-pack=/bin/sh", "--exec-path=/tmp"):
+        with pytest.raises(roles.RoleRefused) as exc_info:
+            roles._git(git_dir, workspace, dangerous)
+        assert exc_info.value.code == "EXECUTION_NOT_COMPLETED"
+
+    with pytest.raises(roles.RoleRefused) as exc_info:
+        roles._git(git_dir, workspace, "status\0evil")
+    assert exc_info.value.code == "EXECUTION_NOT_COMPLETED"
+
+    with pytest.raises(roles.RoleRefused) as exc_info:
+        roles._git(tmp_path / "-git", workspace, "status")
+    assert exc_info.value.code == "EXECUTION_NOT_COMPLETED"
+
+    with pytest.raises(roles.RoleRefused) as exc_info:
+        roles._git(git_dir, tmp_path / "-ws", "status")
+    assert exc_info.value.code == "EXECUTION_NOT_COMPLETED"
+
+
+def test_roles_collect_result_rejects_invalid_base_sha(tmp_path: Path) -> None:
+    workspace, git_dir = tmp_path / "workspace", tmp_path / "git"
+    workspace.mkdir()
+    git_dir.mkdir()
+
+    for bad_sha in ("not-a-sha", "--upload-pack", "0" * 39, "0" * 41, "-c"):
+        with pytest.raises(roles.RoleRefused) as exc_info:
+            roles.collect_result(workspace, git_dir, authorization_id="auth", branch="b", base_sha=bad_sha)
+        assert exc_info.value.code == "BASE_NOT_ON_MAIN"
+
+
+def test_roles_materialize_base_rejects_unsafe_remote_and_branch(tmp_path: Path) -> None:
+    workspace, git_dir = tmp_path / "workspace", tmp_path / "git"
+
+    with pytest.raises(roles.RoleRefused) as exc_info:
+        roles.materialize_base(workspace, git_dir, remote="--upload-pack=evil", base_sha="0" * 40)
+    assert exc_info.value.code == "CONFIGURATION_INVALID"
+
+    with pytest.raises(roles.RoleRefused) as exc_info:
+        roles.materialize_base(
+            workspace, git_dir, remote="https://github.com/o/r.git", base_sha="0" * 40, remediation_branch="-b"
+        )
+    assert exc_info.value.code == "CONFIGURATION_INVALID"
+
+    with pytest.raises(roles.RoleRefused) as exc_info:
+        roles.materialize_base(
+            workspace, git_dir, remote="https://github.com/o/r.git", base_sha="0" * 40, remediation_branch="../main"
+        )
+    assert exc_info.value.code == "CONFIGURATION_INVALID"

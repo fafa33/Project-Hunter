@@ -16,12 +16,6 @@ workspace contract. This probe exists to remove exactly those two ambiguities:
 Only closed-vocabulary, non-content telemetry is printed: exit status, timeout, edit outcome, changed-file count
 and contract booleans. Model stdout, stderr, the attached task, and any credential are never printed, and the
 credential reaches the isolated child only through the launcher environment.
-
-The probe has **no path inputs**. It writes as the trusted runner, so its layout is fixed: the workspace, the
-external git metadata and the isolated home are constant siblings of the workflow-created execution root, and its
-base comes from the trusted checkout that contains this file. A caller cannot redirect a trusted ``mkdir``,
-``chmod`` or ``git checkout`` at another directory, no git argument can be read as an option, and git metadata is
-required to stay outside the model-controlled workspace.
 """
 
 from __future__ import annotations
@@ -30,7 +24,6 @@ import argparse
 import base64
 import json
 import os
-import re
 import subprocess
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
@@ -45,13 +38,6 @@ PROBE_BEFORE: Final = b"before\n"
 PROBE_AFTER: Final = b"after\n"
 PROBE_TASK: Final = "Replace before with after in probe.txt. Do not modify any other file."
 DEFAULT_TIMEOUT_SECONDS: Final = 240.0
-#: The execution root the diagnostic workflow creates for the runner (``install -d -m 0711 -o <runner>``).
-EXECUTION_ROOT: Final = Path("/tmp/hunter-ia/execute")
-#: The runtime the workflow installs and the production executor is launched with (``--model-argv`` in the trigger).
-OPENCODE_EXECUTABLE: Final = Path("/opt/hunter/bin/opencode")
-#: One provider-qualified model name: a single argv value with no control characters or leading option.
-MODEL_NAME: Final = re.compile(r"[A-Za-z0-9][A-Za-z0-9._:/-]{0,200}")
-_CONTROL: Final = re.compile(r"[\x00-\x1f\x7f]")
 #: The probe commit is a local diagnostic identity, never the owner or the trusted publisher.
 PROBE_COMMIT_NAME: Final = "hunter-diagnostic"
 PROBE_COMMIT_EMAIL: Final = "hunter-diagnostic@invalid"
@@ -60,6 +46,7 @@ GIT_ENVIRONMENT: Final[Mapping[str, str]] = {
     "GIT_CONFIG_GLOBAL": os.devnull,
     "GIT_CONFIG_NOSYSTEM": "1",
     "GIT_TERMINAL_PROMPT": "0",
+    # The commit identity is environment-supplied: the closed git builder accepts no ``-c`` configuration option.
     "GIT_AUTHOR_NAME": PROBE_COMMIT_NAME,
     "GIT_AUTHOR_EMAIL": PROBE_COMMIT_EMAIL,
     "GIT_COMMITTER_NAME": PROBE_COMMIT_NAME,
@@ -71,87 +58,105 @@ class ProbeFailed(RuntimeError):
     """The probe could not establish its own trusted base. Its message never carries candidate content."""
 
 
-def safe_path(value: Path, what: str, *, must_exist: bool) -> Path:
-    """A canonical absolute directory path with no symlinked component, or nothing is created under it.
+class StagedProbeFailed(ProbeFailed):
+    """Closed, non-sensitive diagnostic stage code; never expose the underlying exception."""
 
-    ``resolve`` is compared with the text itself, so ``..``, ``.``, a linked ancestor or a linked leaf is refused
-    rather than followed. ``must_exist`` distinguishes the fixed layout directories (present after the workflow
-    provisions them) from the per-run children that the probe itself creates once.
-    """
-
-    text = str(value)
-    if not text or _CONTROL.search(text):
-        raise ProbeFailed(f"{what} is not a single safe path")
-    if not value.is_absolute():
-        raise ProbeFailed(f"{what} is not absolute")
-    try:
-        resolved = value.resolve()
-    except (OSError, RuntimeError):
-        raise ProbeFailed(f"{what} cannot be resolved") from None
-    if resolved != value:
-        raise ProbeFailed(f"{what} traverses a symlink or a non-canonical component")
-    if must_exist and not value.is_dir():
-        raise ProbeFailed(f"{what} is not an existing directory")
-    if value.exists() and not value.is_dir():
-        raise ProbeFailed(f"{what} is not a directory")
-    return value
+    def __init__(self, code: str) -> None:
+        if code not in {
+            "PROBE_PATH_INVALID",
+            "PROBE_GIT_PREPARE_FAILED",
+            "PROBE_LAUNCH_FAILED",
+            "PROBE_COLLECT_FAILED",
+        }:
+            raise ValueError("unknown diagnostic stage")
+        self.code = code
+        super().__init__(code)
 
 
-@dataclass(frozen=True, slots=True)
-class TrustedLayout:
-    """The probe's fixed directories, all derived from constants and this file's own trusted checkout."""
+_DANGEROUS_GIT_FLAGS: Final = frozenset(
+    {
+        "--upload-pack",
+        "--receive-pack",
+        "--exec-path",
+        "--output",
+        "--paginate",
+        "--no-pager",
+        "--literal-pathspecs",
+    }
+)
 
-    root: Path
-    source: Path
-    workspace: Path
-    git_dir: Path
-    home: Path
-    opencode: Path
+
+def _validate_probe_path(path: Path | str, *, must_exist: bool = False, label: str = "path") -> Path:
+    """Validate a trusted probe path, rejecting traversal sequences, symlinks, and unsafe arguments."""
+    candidate = Path(path) if isinstance(path, str) else path
+    raw = str(candidate)
+    if not raw or any(part.startswith("-") for part in candidate.parts):
+        raise ProbeFailed(f"{label} cannot be empty or contain components starting with '-'")
+    if "\0" in raw:
+        raise ProbeFailed(f"{label} cannot contain null bytes")
+    if ".." in candidate.parts:
+        raise ProbeFailed(f"{label} cannot contain '..' traversal sequences")
+    if candidate.is_symlink():
+        raise ProbeFailed(f"{label} cannot be a symlink")
+
+    resolved = candidate.resolve()
+    if any(part.startswith("-") for part in resolved.parts):
+        raise ProbeFailed(f"{label} resolved path cannot contain components starting with '-'")
+    if ".." in resolved.parts:
+        raise ProbeFailed(f"{label} resolved path cannot contain '..' traversal sequences")
+    if resolved.is_symlink():
+        raise ProbeFailed(f"{label} resolved path cannot be a symlink")
+
+    curr = candidate
+    while curr.exists() and curr != curr.parent:
+        if curr.is_symlink():
+            raise ProbeFailed(f"{label} ancestor cannot be a symlink")
+        curr = curr.parent
+
+    if must_exist:
+        if not resolved.exists():
+            raise ProbeFailed(f"{label} does not exist: {resolved}")
+        if not resolved.is_dir():
+            raise ProbeFailed(f"{label} must be an existing directory: {resolved}")
+
+    return resolved
 
 
-def trusted_layout() -> TrustedLayout:
-    """The one layout the hosted probe may use: provisioned root, fixed children, trusted checkout, pinned runtime."""
-
-    root = safe_path(EXECUTION_ROOT, "execution root", must_exist=True)
-    metadata = root.stat()
-    if metadata.st_uid != os.geteuid():
-        raise ProbeFailed("the execution root is not owned by the diagnostic user")
-    if metadata.st_mode & 0o022:
-        raise ProbeFailed("the execution root is writable by another principal")
-    workspace = safe_path(root / "workspace", "workspace", must_exist=False)
-    git_dir = safe_path(root / "trusted.git", "git metadata directory", must_exist=False)
-    home = safe_path(root / "home", "home", must_exist=False)
-    if git_dir == workspace or git_dir in workspace.parents:
-        raise ProbeFailed("git metadata must stay outside the model workspace")
-    # The base is the checkout that contains this file: the probe cannot take a base from anywhere it was not
-    # installed alongside, and a crafted ``--source`` has no way in.
-    source = safe_path(Path(__file__).resolve().parents[1], "trusted checkout", must_exist=True)
-    if not (source / ".git").is_dir():
-        raise ProbeFailed("the trusted checkout has no git metadata")
-    opencode = OPENCODE_EXECUTABLE
-    if opencode.is_symlink() or opencode.name != "opencode" or not opencode.is_file():
-        raise ProbeFailed("the pinned OpenCode runtime is not a regular executable file")
-    if opencode.resolve() != opencode or not os.access(opencode, os.X_OK):
-        raise ProbeFailed("the pinned OpenCode runtime is not a canonical executable")
-    return TrustedLayout(root=root, source=source, workspace=workspace, git_dir=git_dir, home=home, opencode=opencode)
+def _reject_unsafe_git_args(args: Sequence[str]) -> None:
+    """Reject arguments that could inject dangerous git options or commands."""
+    for arg in args:
+        if not isinstance(arg, str):
+            raise ProbeFailed("git argument must be str")
+        if "\0" in arg or "\n" in arg or "\r" in arg:
+            raise ProbeFailed("git argument contains forbidden control characters")
+        for dangerous in _DANGEROUS_GIT_FLAGS:
+            if arg == dangerous or arg.startswith(f"{dangerous}="):
+                raise ProbeFailed(f"unsafe git argument rejected: {dangerous}")
 
 
 def _git(git_dir: Path, workspace: Path, *args: str) -> bytes:
-    """Git against the trusted metadata directory only; nothing inside the model's workspace configures it.
+    """Git against the trusted metadata directory only; nothing inside the model's workspace configures it."""
 
-    The argv comes from the shared production builder (:func:`roles.trusted_git_command`), so an option-shaped
-    argument or a traversing path is refused here exactly as it is in the executor.
-    """
+    valid_git_dir = _validate_probe_path(git_dir, must_exist=False, label="git_dir")
+    valid_workspace = _validate_probe_path(workspace, must_exist=False, label="workspace")
+    _reject_unsafe_git_args(args)
 
+    # The argv comes from the shared production builder, so an option-shaped argument, an unseparated positional
+    # or git metadata inside the model workspace is refused here exactly as it is in the executor (PRH-122).
     try:
-        command = roles.trusted_git_command(git_dir, workspace, args)
+        command = roles.trusted_git_command(valid_git_dir, valid_workspace, args)
     except roles.RoleRefused:
-        raise ProbeFailed(f"probe git {args[0] if args else 'invocation'} refused an unsafe invocation") from None
+        raise StagedProbeFailed("PROBE_GIT_PREPARE_FAILED") from None
     completed = subprocess.run(
-        command, cwd=workspace, env=dict(GIT_ENVIRONMENT), capture_output=True, check=False, timeout=300
+        command,
+        cwd=valid_workspace,
+        env=dict(GIT_ENVIRONMENT),
+        capture_output=True,
+        check=False,
+        timeout=300,
     )
     if completed.returncode != 0:
-        raise ProbeFailed(f"probe git {args[0]} failed")
+        raise StagedProbeFailed("PROBE_GIT_PREPARE_FAILED")
     return completed.stdout
 
 
@@ -162,22 +167,52 @@ def prepare(source: Path, workspace: Path, git_dir: Path) -> str:
     Returns the exact base commit the collector diffs against.
     """
 
-    source = safe_path(source, "trusted checkout", must_exist=True)
-    workspace = safe_path(workspace, "workspace", must_exist=False)
-    git_dir = safe_path(git_dir, "git metadata directory", must_exist=False)
-    if workspace == git_dir or git_dir in workspace.parents or workspace.parent != git_dir.parent:
-        raise ProbeFailed("git metadata must be an external sibling of the model workspace")
-    workspace.mkdir(parents=True)
-    _git(git_dir, workspace, "init", "--quiet")
+    valid_source = _validate_probe_path(source, must_exist=True, label="source")
+    valid_workspace = _validate_probe_path(workspace, must_exist=False, label="workspace")
+    valid_git_dir = _validate_probe_path(git_dir, must_exist=False, label="git_dir")
+
+    if valid_workspace == valid_git_dir:
+        raise ProbeFailed("workspace and git_dir cannot be the same path")
+    try:
+        valid_git_dir.relative_to(valid_workspace)
+        raise ProbeFailed("git_dir cannot be inside workspace")
+    except ValueError:
+        pass
+    try:
+        valid_workspace.relative_to(valid_git_dir)
+        raise ProbeFailed("workspace cannot be inside git_dir")
+    except ValueError:
+        pass
+
+    try:
+        remote = roles.trusted_remote(str(valid_source))
+    except roles.RoleRefused:
+        raise StagedProbeFailed("PROBE_GIT_PREPARE_FAILED") from None
+    valid_workspace.mkdir(parents=True, exist_ok=True)
+    _git(valid_git_dir, valid_workspace, "init", "--quiet")
     _git(
-        git_dir, workspace,
-        "fetch", "--quiet", "--no-tags", "--", roles.trusted_remote(str(source)), "+refs/heads/main:refs/probe/base",
-    )  # fmt: skip
-    _git(git_dir, workspace, "checkout", "--quiet", "--detach", "refs/probe/base", "--")
-    (workspace / PROBE_FILE).write_bytes(PROBE_BEFORE)
-    _git(git_dir, workspace, "add", "--", PROBE_FILE)
-    _git(git_dir, workspace, "commit", "--quiet", "--no-gpg-sign", "-m", "diagnostic probe base")
-    return _git(git_dir, workspace, "rev-parse", "HEAD").decode().strip()
+        valid_git_dir,
+        valid_workspace,
+        "fetch",
+        "--quiet",
+        "--no-tags",
+        "--",
+        remote,
+        "+refs/heads/main:refs/probe/base",
+    )
+    _git(valid_git_dir, valid_workspace, "checkout", "--quiet", "--detach", "refs/probe/base", "--")
+    (valid_workspace / PROBE_FILE).write_bytes(PROBE_BEFORE)
+    _git(valid_git_dir, valid_workspace, "add", "--", PROBE_FILE)
+    _git(
+        valid_git_dir,
+        valid_workspace,
+        "commit",
+        "--quiet",
+        "--no-gpg-sign",
+        "-m",
+        "diagnostic probe base",
+    )
+    return _git(valid_git_dir, valid_workspace, "rev-parse", "HEAD").decode().strip()
 
 
 def contract_telemetry(invocation: roles.OpenCodeInvocation, workspace: Path) -> dict[str, bool]:
@@ -208,10 +243,15 @@ def assess(workspace: Path, git_dir: Path, base_sha: str) -> tuple[bool, int]:
     "no change", and never as success.
     """
 
+    valid_workspace = _validate_probe_path(workspace, must_exist=False, label="workspace")
+    valid_git_dir = _validate_probe_path(git_dir, must_exist=False, label="git_dir")
+    if roles._SHA40.fullmatch(base_sha) is None:
+        return (False, -1)
+
     try:
         document = roles.collect_result(
-            workspace,
-            git_dir,
+            valid_workspace,
+            valid_git_dir,
             authorization_id="hosted-diagnostic-probe",
             branch="hosted-diagnostic-probe",
             base_sha=base_sha,
@@ -264,21 +304,44 @@ def run_probe(
 ) -> ProbeOutcome:
     """Run the model once through isolation on the production contract and assess a tracked repository edit."""
 
-    base_sha = prepare(source, workspace, git_dir)
-    home = safe_path(home, "home", must_exist=False)
-    if home == workspace or home in workspace.parents or workspace in home.parents:
-        raise ProbeFailed("the isolated home must stay outside the model workspace")
-    home.mkdir(mode=0o700)
-    invocation = probe_invocation(opencode=opencode, model=model, home=home, workspace=workspace)
-    telemetry = " ".join(f"{name}={value}" for name, value in contract_telemetry(invocation, workspace).items())
+    valid_source = _validate_probe_path(source, must_exist=True, label="source")
+    valid_workspace = _validate_probe_path(workspace, must_exist=False, label="workspace")
+    valid_git_dir = _validate_probe_path(git_dir, must_exist=False, label="git_dir")
+    valid_home = _validate_probe_path(home, must_exist=False, label="home")
+
+    if valid_home == valid_workspace or valid_home == valid_git_dir:
+        raise ProbeFailed("home cannot collide with workspace or git_dir")
+    try:
+        valid_home.relative_to(valid_workspace)
+        raise ProbeFailed("home cannot be inside workspace")
+    except ValueError:
+        pass
+    try:
+        valid_workspace.relative_to(valid_home)
+        raise ProbeFailed("workspace cannot be inside home")
+    except ValueError:
+        pass
+
+    try:
+        base_sha = prepare(valid_source, valid_workspace, valid_git_dir)
+    except StagedProbeFailed:
+        raise
+    except (ProbeFailed, OSError, subprocess.TimeoutExpired) as exc:
+        raise StagedProbeFailed("PROBE_GIT_PREPARE_FAILED") from exc
+    valid_home.mkdir(mode=0o700, parents=True, exist_ok=True)
+    invocation = probe_invocation(opencode=opencode, model=model, home=valid_home, workspace=valid_workspace)
+    telemetry = " ".join(f"{name}={value}" for name, value in contract_telemetry(invocation, valid_workspace).items())
     print(f"hosted diagnostic contract: {telemetry}", flush=True)
     timed_out = False
     status = 1
-    isolation.prepare(workspace, home)
+    try:
+        isolation.prepare(valid_workspace, valid_home)
+    except (roles.RoleRefused, OSError) as exc:
+        raise StagedProbeFailed("PROBE_LAUNCH_FAILED") from exc
     try:
         status = isolation.run(
             invocation.argv,
-            cwd=workspace,
+            cwd=valid_workspace,
             public_env=invocation.public_env,
             secret_env=secret_environment,
             stdin=invocation.stdin,
@@ -288,7 +351,10 @@ def run_probe(
         timed_out = True
     finally:
         isolation.stop()  # nothing the model started survives into collection
-    tracked_edit, changed_files = assess(workspace, git_dir, base_sha)
+    try:
+        tracked_edit, changed_files = assess(valid_workspace, valid_git_dir, base_sha)
+    except (ProbeFailed, OSError, ValueError) as exc:
+        raise StagedProbeFailed("PROBE_COLLECT_FAILED") from exc
     outcome = ProbeOutcome(
         exit_zero=status == 0 and not timed_out,
         timed_out=timed_out,
@@ -305,8 +371,11 @@ def run_probe(
 
 def _parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="hunter-opencode-diagnostic-probe")
-    # Deliberately no path, executable or git options: the layout is fixed above, so a caller (or a workflow edit)
-    # cannot redirect a trusted write. Only the model identity and its credential channel are configurable.
+    parser.add_argument("--source", type=Path, required=True, help="trusted checkout the probe base comes from")
+    parser.add_argument("--workspace", type=Path, required=True)
+    parser.add_argument("--git-dir", type=Path, required=True)
+    parser.add_argument("--home", type=Path, required=True)
+    parser.add_argument("--opencode", type=Path, required=True)
     parser.add_argument("--model", required=True)
     parser.add_argument("--secret-env", required=True, help="environment variable holding the model credential")
     parser.add_argument("--model-key-name", required=True, help="variable name the isolated child receives")
@@ -317,18 +386,38 @@ def _parser() -> argparse.ArgumentParser:
 
 def main(argv: Sequence[str] | None = None) -> int:
     arguments = _parser().parse_args(argv)
+    for _flag_name, path_val in (
+        ("--source", arguments.source),
+        ("--workspace", arguments.workspace),
+        ("--git-dir", arguments.git_dir),
+        ("--home", arguments.home),
+        ("--opencode", arguments.opencode),
+    ):
+        raw = str(path_val)
+        if not raw or any(part.startswith("-") for part in path_val.parts) or "\0" in raw or ".." in path_val.parts:
+            print("hosted diagnostic refused: PROBE_PATH_INVALID")
+            return 2
+    if (
+        not arguments.isolation_user
+        or arguments.isolation_user.startswith("-")
+        or not arguments.isolation_user.replace("-", "").replace("_", "").isalnum()
+    ):
+        print("hosted diagnostic refused: invalid isolation user")
+        return 2
     credential = os.environ.get(arguments.secret_env)
-    if MODEL_NAME.fullmatch(arguments.model or "") is None or not credential or not arguments.model_key_name:
+    if not arguments.model or not credential or not arguments.model_key_name:
         print("hosted diagnostic refused: configured model or model credential is absent")
         return 2
+    if arguments.opencode.name != "opencode":
+        print("hosted diagnostic refused: the configured runtime is not the pinned OpenCode executable")
+        return 2
     try:
-        layout = trusted_layout()
         outcome = run_probe(
-            source=layout.source,
-            workspace=layout.workspace,
-            git_dir=layout.git_dir,
-            home=layout.home,
-            opencode=layout.opencode,
+            source=arguments.source,
+            workspace=arguments.workspace,
+            git_dir=arguments.git_dir,
+            home=arguments.home,
+            opencode=arguments.opencode,
             model=arguments.model,
             secret_environment={arguments.model_key_name: credential},
             isolation=roles.SudoIsolation(arguments.isolation_user),

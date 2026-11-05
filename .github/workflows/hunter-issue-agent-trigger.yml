@@ -214,7 +214,21 @@ jobs:
         run: |
           set -euo pipefail
           python -m pip install --only-binary ':all:' -c requirements/ci-constraints.txt .
-          sudo python scripts/install_opencode_runtime.py --destination /opt/hunter/bin/opencode
+          sudo npm install --prefix /opt/hunter --no-save --ignore-scripts @kilocode/cli@7.8.18
+      - name: Provision governed Kilo container images
+        run: |
+          set -euo pipefail
+          docker build --pull --file scripts/issue_agent/Dockerfile.kilo-canary \
+            --tag hunter-682-kilo-canary:local .
+          docker build --pull --file scripts/issue_agent/Dockerfile.broker-canary \
+            --tag hunter-682-broker-canary:local .
+          docker image inspect hunter-682-kilo-canary:local hunter-682-broker-canary:local >/dev/null
+      - name: Verify Docker network isolation prerequisites
+        run: |
+          set -euo pipefail
+          docker info >/dev/null
+          docker image inspect python@sha256:78387bc3881b8273120a12ebe6c1ab22b018ccc2c9adf565ae1ac9b536e184ea >/dev/null || \
+            docker pull python@sha256:78387bc3881b8273120a12ebe6c1ab22b018ccc2c9adf565ae1ac9b536e184ea
       - name: Create the isolation uid
         run: |
           set -euo pipefail
@@ -231,7 +245,7 @@ jobs:
         id: execute
         env:
           HUNTER_ISSUE_AGENT_HANDOFF_KEY: ${{ secrets.HUNTER_ISSUE_AGENT_HANDOFF_KEY }}
-          HUNTER_ISSUE_AGENT_EXECUTOR_MODEL_API_KEY: ${{ secrets.HUNTER_ISSUE_AGENT_OPENCODE_API_KEY }}
+          HUNTER_ISSUE_AGENT_EXECUTOR_MODEL_API_KEY: ${{ secrets.HUNTER_ISSUE_AGENT_EXECUTOR_MODEL_API_KEY }}
           ISSUE: ${{ needs.authorize.outputs.issue }}
           AUTHORIZATION_ID: ${{ needs.authorize.outputs.authorization_id }}
           MODEL: ${{ vars.HUNTER_ISSUE_AGENT_EXECUTOR_MODEL }}
@@ -241,7 +255,7 @@ jobs:
           --issue "$ISSUE" --authorization-id "$AUTHORIZATION_ID"
           --handoff "$(find "$RUNNER_TEMP/handoff" -type f -name handoff.sealed)"
           --out "$RUNNER_TEMP/result.sealed" --workroot /tmp/hunter-ia/execute
-          --model-key-name "$MODEL_KEY_NAME" --model-argv /opt/hunter/bin/opencode run --model "$MODEL" --agent build
+          --model-key-name "$MODEL_KEY_NAME" --model-argv /opt/hunter/node_modules/.bin/kilo run --model "$MODEL"
       - name: Upload the sealed result
         if: steps.execute.outputs.sealed == 'true'
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
@@ -256,11 +270,11 @@ jobs:
     needs: [authorize, execute]
     outputs:
       result_bound: ${{ steps.advance.outputs.result_bound }}
+    # A resume dispatch skips `authorize` (and `execute`), so `bind` has no issue and nothing to bind: its resume is
+    # `resume-bind`. Running it there failed with `--issue ''` and turned every resume run red.
     if: >-
       always()
-      && (needs.authorize.result == 'success'
-          || (needs.authorize.result == 'skipped' && github.event_name == 'workflow_dispatch'
-              && inputs.remediation_authorization == ''))
+      && needs.authorize.result == 'success'
     runs-on: ubuntu-latest
     timeout-minutes: 10
     environment: hunter-issue-agent-control
@@ -484,6 +498,7 @@ jobs:
         id: publish
         env:
           GITHUB_TOKEN: ${{ github.token }}
+          HUNTER_HGCC_READ_TOKEN: ${{ secrets.HUNTER_HGCC_READ_TOKEN }}
           HUNTER_ISSUE_AGENT_RESULT_KEY: ${{ secrets.HUNTER_ISSUE_AGENT_RESULT_KEY }}
           HUNTER_ISSUE_AGENT_PUBLISHER_PUSH_TOKEN: ${{ secrets.HUNTER_ISSUE_AGENT_PUBLISHER_PUSH_TOKEN }}
           HUNTER_ISSUE_AGENT_PUBLISHER_SIGNING_KEY: ${{ secrets.HUNTER_ISSUE_AGENT_PUBLISHER_SIGNING_KEY }}
