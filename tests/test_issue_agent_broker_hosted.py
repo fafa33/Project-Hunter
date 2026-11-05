@@ -115,3 +115,37 @@ def test_command_timeout_is_fail_closed_and_session_continues(session) -> None:
     elapsed = time.monotonic() - started
     assert result["exit"] == 126 and 20 < elapsed < 70, (result, elapsed)
     assert send(isolation, "python -m pytest -q test_app.py")["exit"] == 0
+
+
+NET_PROBE = (
+    "import json,os,socket,sys\n"
+    "out={'docker_socket':os.path.exists('/var/run/docker.sock'),'env_secrets':[k for k in os.environ if any(w in k for w in ('TOKEN','SECRET','KEY'))]}\n"
+    "def direct(host):\n"
+    "    try:\n        socket.create_connection((host,443),timeout=5).close();return 'CONNECTED'\n"
+    "    except OSError as e:\n        return 'DENIED'\n"
+    "out['direct_ip']=direct('1.1.1.1')\n"
+    "out['direct_dns']=direct('example.com')\n"
+    "def connect(target):\n"
+    "    s=socket.create_connection((sys.argv[1],8080),timeout=10)\n"
+    "    s.sendall(('CONNECT %s HTTP/1.1\\r\\nHost: %s\\r\\n\\r\\n'%(target,target)).encode());\n"
+    "    return s.recv(200).split(b'\\r\\n')[0].decode()\n"
+    "out['connect_unapproved']=connect('example.com:443')\n"
+    "out['connect_wrong_port']=connect('ai-gateway.kilo.ai:22')\n"
+    "out['connect_private']=connect('169.254.169.254:443')\n"
+    "print(json.dumps(out))\n"
+)
+
+
+def test_network_is_internal_and_only_the_allowlisted_gateway_route_exists(session) -> None:
+    """Same flags as the production agent container: internal network, no docker socket, no credential env."""
+    isolation, _ = session
+    done = _docker(
+        "run", "--rm", "--network", isolation.network, "--user", "65534:65532", "--read-only", "--cap-drop", "ALL",
+        "--security-opt", "no-new-privileges", PYTHON_IMAGE, "python", "-c", NET_PROBE, isolation.gateway,
+    )  # fmt: skip
+    assert done.returncode == 0, done.stderr
+    probe = json.loads(done.stdout)
+    assert probe["docker_socket"] is False and probe["env_secrets"] == [], probe
+    assert probe["direct_ip"] == "DENIED" and probe["direct_dns"] == "DENIED", probe  # no route around the gateway
+    for key in ("connect_unapproved", "connect_wrong_port", "connect_private"):
+        assert " 403 " in probe[key], (key, probe)
