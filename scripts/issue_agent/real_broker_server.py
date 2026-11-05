@@ -38,8 +38,10 @@ MAX_COMMANDS = max(1, min(int(os.environ.get("HUNTER_BROKER_MAX_COMMANDS", "16")
 MAX_REQUESTS = 4 * MAX_COMMANDS
 DEADLINE_SECONDS = max(1, min(int(os.environ.get("HUNTER_BROKER_DEADLINE_SECONDS", "660")), 900))
 COMMAND_TIMEOUT = 30
+CPU_GRACE_SECONDS = 5  # CPU backstop sits above the wall timeout so the timeout deterministically wins
 MAX_WORKSPACE_ENTRIES = 50000
 WORKSPACE = "/workspace"
+TOOL_PATH = "/usr/local/bin:/usr/bin:/bin"
 MEMORY_LIMIT_BYTES = 2 * 1024**3  # address-space backstop; the container cgroup is the hard memory wall
 BROKER_TOOLS = {"python", "python3", "git"}
 # Read-only task-scoped git: a private, broker-owned snapshot of the workspace at session start. No host
@@ -93,7 +95,7 @@ class Budget:
 
 def _limits() -> None:  # runs in the child between fork and exec
     for kind, value in (
-        (resource.RLIMIT_CPU, COMMAND_TIMEOUT),
+        (resource.RLIMIT_CPU, COMMAND_TIMEOUT + CPU_GRACE_SECONDS),
         (resource.RLIMIT_FSIZE, 10 * 1024 * 1024),
         (resource.RLIMIT_NPROC, 64),
         (resource.RLIMIT_AS, MEMORY_LIMIT_BYTES),
@@ -188,7 +190,7 @@ def handle(conn: socket.socket, budget: Budget | None = None) -> None:
         if args[0] not in BROKER_TOOLS:
             raise ShellDenied("tool not provided in broker")
         env = {
-            "PATH": "/usr/local/bin:/usr/bin:/bin",
+            "PATH": TOOL_PATH,
             "PYTHONDONTWRITEBYTECODE": "1",
             "PYTEST_ADDOPTS": "-p no:cacheprovider",
             "RUFF_NO_CACHE": "true",

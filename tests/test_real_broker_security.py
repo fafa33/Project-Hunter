@@ -443,9 +443,18 @@ def _run_limited(code, monkeypatch, cpu=None):
 
 
 def test_cpu_limit_kills_a_busy_loop(monkeypatch):
+    monkeypatch.setattr(broker, "CPU_GRACE_SECONDS", 0)
     started = time.monotonic()
     result = _run_limited("while True: pass", monkeypatch, cpu=1)
     assert result.returncode in (-signal.SIGXCPU, -signal.SIGKILL) and time.monotonic() - started < 15
+
+
+def test_cpu_backstop_sits_above_the_wall_timeout_so_the_timeout_wins_deterministically():
+    assert broker.CPU_GRACE_SECONDS > 0
+    limits = {}
+    with patch.object(broker.resource, "setrlimit", lambda kind, value: limits.setdefault(kind, value)):
+        broker._limits()
+    assert limits[broker.resource.RLIMIT_CPU][0] == broker.COMMAND_TIMEOUT + broker.CPU_GRACE_SECONDS
 
 
 def test_memory_limit_stops_a_large_allocation(monkeypatch):
@@ -475,6 +484,9 @@ def test_real_command_timeout_is_denied_and_the_broker_keeps_serving(tmp_path, m
     (workspace / "test_ok.py").write_text("def test_ok():\n    assert True\n")
     monkeypatch.setattr(broker, "WORKSPACE", str(workspace))
     monkeypatch.setattr(broker, "COMMAND_TIMEOUT", 2)
+    # Hosted runners keep their interpreter (with pytest) outside the container PATH; the command still goes through
+    # the real allowlist, sanitized environment and limits.
+    monkeypatch.setattr(broker, "TOOL_PATH", f"{os.path.dirname(sys.executable)}:{broker.TOOL_PATH}")
     budget = broker.Budget(commands=4, requests=10)
     started = time.monotonic()
     assert _send("python -m pytest -q test_busy.py", budget)["exit"] == 126
