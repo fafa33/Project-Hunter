@@ -25,6 +25,15 @@ REFUSAL_REASONS: tuple[str, ...] = (
     "Malformed GitHub ruleset detail",
     "Missing or malformed GitHub ruleset bypass actors",
 )
+#: Reasons that say nothing definitive about the repository contract: an outage, an unusable session or a denied
+#: read can be transient, so a publisher that sees one stays within its bounded resume budget.
+UNDETERMINED_REASONS: tuple[str, ...] = (
+    "Authenticated GitHub ruleset observer required",
+    "GitHub contract API unavailable or access denied",
+)
+#: Every other reason is a definitive verdict on data the observer actually received (malformed, empty, or without
+#: ``bypass_actors``). Repeating the same read with the same credential and code cannot change it.
+DEFINITIVE_REASONS: tuple[str, ...] = tuple(r for r in REFUSAL_REASONS if r not in UNDETERMINED_REASONS)
 
 
 def github_get(path: str) -> Any:

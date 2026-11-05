@@ -171,7 +171,7 @@ def step(
         writer=who,
         issue=rt.ISSUE,
         clock=lambda: NOW,
-        new_nonce=lambda: "f" * 64,
+        new_nonce=kw.pop("new_nonce", lambda: "f" * 64),
         **kw,
     )
 
@@ -948,3 +948,229 @@ def test_an_absent_run_remains_a_definitive_negative_and_is_never_retried() -> N
 def test_the_diagnostic_never_changes_read_equality() -> None:
     assert control.Read("unknown", diagnostic="x") == control.Read("unknown")
     assert control.Read("unknown", diagnostic="x") != control.Read("absent")
+
+
+# --- prompt terminalization of a stopped authorization (no fixed-hour wait) ---------------------------------
+
+TRIGGER_RUNS = f"/repos/{rt.REPOSITORY}/actions/workflows/hunter-issue-agent-trigger.yml/runs"
+
+
+def full_view(repos: dict[str, Any]) -> state.LedgerView:
+    _, entries = state.GitLedgerStore(repos["remote"], workdir=repos["tmp"] / "full").read(rt.ISSUE)
+    return state.verify_chain(
+        [e.record for e in entries], repository_id=1, issue_number=rt.ISSUE, trust=rt.TRUST, provenance=rt.trusted
+    )
+
+
+def nonces(*values: str) -> Callable[[], str]:
+    queue = list(values)
+    return lambda: queue.pop(0)
+
+
+def resume_run(github: FakeGitHub, run_id: int, publish: tuple[str, str] | None, outcome: str | None = None) -> None:
+    """A publication resume run in flight: only its finalize job (the observer itself) is still running."""
+
+    base = f"/repos/{rt.REPOSITORY}/actions/runs/{run_id}"
+    github.routes[f"{base}/attempts/1"] = run(run_id, event="workflow_dispatch")
+    github.routes[base] = run(run_id, event="workflow_dispatch", status="in_progress")
+    jobs = [github.job("finalize", run_id * 10, conclusion="", status="in_progress")]
+    if publish is not None:
+        jobs.insert(0, github.job("publish", run_id * 10 + 1, conclusion=publish[1], status=publish[0]))
+    github.routes[f"{base}/jobs"] = {"total_count": len(jobs), "jobs": jobs}
+    github.routes[f"{base}/artifacts"] = []
+    if outcome is not None:
+        view = full_view_cache["view"]
+        name = control.outcome_artifact_name(rt.AUTH, "publication", control._attempt(view, "publication"))
+        document = {
+            "schema_version": control.OUTCOME_SCHEMA_VERSION,
+            "authorization_id": rt.AUTH,
+            "verdict": "REFUSED",
+            "code": outcome,
+        }
+        github.routes[f"{base}/artifacts"] = [github.artifact(run_id, name, json.dumps(document).encode())]
+
+
+full_view_cache: dict[str, Any] = {}
+
+
+def publication_world(repos: dict[str, Any]) -> FakeGitHub:
+    """VALIDATED; the first publish run crashed without an outcome and finalize requested resume attempt 1."""
+
+    rt.validated_ledger(repos)
+    github = FakeGitHub()
+    github.routes[f"/repos/{rt.REPOSITORY}/actions/runs/100/jobs"] = {
+        "total_count": 1,
+        "jobs": [github.job("publish", 11, conclusion="failure")],
+    }
+    github.artifact(22, state.result_artifact_name(rt.AUTH), b"sealed")
+    github.routes[TRIGGER_RUNS] = {"workflow_runs": []}
+    github.routes[f"/repos/{rt.REPOSITORY}/compare/{rt.CONTROL}...main"] = {"status": "ahead"}
+    return github
+
+
+def finalize_in(repos: dict[str, Any], github: FakeGitHub, run_id: int, *generated: str) -> state.Decision:
+    full_view_cache["view"] = full_view(repos).authorizations[rt.AUTH]
+    return control.step(
+        github=github,
+        configuration=CONFIG,
+        store=state.GitLedgerStore(repos["remote"], workdir=repos["tmp"] / f"fin-{run_id}-{len(github.reads)}"),
+        signing_key=rt.KEY,
+        writer=writer("finalize", run_id=run_id),
+        issue=rt.ISSUE,
+        clock=lambda: NOW,
+        new_nonce=nonces(*generated),
+    )
+
+
+def bind_publication(repos: dict[str, Any], github: FakeGitHub, nonce: str, run_id: int) -> None:
+    github.routes[f"/repos/{rt.REPOSITORY}/actions/runs/{run_id}/attempts/1"] = run(run_id, event="workflow_dispatch")
+    control.bind_resume(
+        github=github,
+        configuration=CONFIG,
+        store=state.GitLedgerStore(repos["remote"], workdir=repos["tmp"] / f"bp-{run_id}"),
+        signing_key=rt.KEY,
+        writer=writer("bind", job="resume-bind", run_id=run_id),
+        issue=rt.ISSUE,
+        authorization_id=rt.AUTH,
+        stage="publication",
+        nonce=nonce,
+        clock=lambda: NOW,
+    )
+
+
+def started_resume(repos: dict[str, Any], run_id: int = 400, nonce: str = "a" * 64) -> FakeGitHub:
+    github = publication_world(repos)
+    assert finalize_in(repos, github, 100, nonce).action == "resume"
+    bind_publication(repos, github, nonce, run_id)
+    return github
+
+
+def test_a_definitive_publisher_refusal_in_a_resume_run_terminalizes_in_that_same_run(repos: dict[str, Any]) -> None:
+    github = started_resume(repos)
+    full_view_cache["view"] = full_view(repos).authorizations[rt.AUTH]
+    resume_run(github, 400, ("completed", "success"), outcome="PUBLICATION_CONTRACT_REFUSED")
+    before = len(github.dispatched)
+    decision = finalize_in(repos, github, 400, "b" * 64)
+    assert (decision.action, decision.code) == ("fail", "PUBLICATION_CONTRACT_REFUSED")
+    view = full_view(repos)
+    assert view.active is None, "the Issue's authorization lock is released only by the signed terminal record"
+    final = view.authorizations[rt.AUTH]
+    assert final.state == state.FAILED and final.evidence[state.FAILED]["code"] == "PUBLICATION_CONTRACT_REFUSED"
+    assert len(github.dispatched) == before, "a permanently impossible operation is never dispatched again"
+    # Replay (a concurrent or later observer) finds no active authorization and writes nothing.
+    assert finalize_in(repos, github, 400).action == "noop"
+
+
+def test_a_crashed_resume_run_is_abandoned_and_the_next_bounded_attempt_starts_without_waiting(
+    repos: dict[str, Any],
+) -> None:
+    github = started_resume(repos)
+    resume_run(github, 400, ("completed", "failure"))
+    decision = finalize_in(repos, github, 400, "b" * 64)
+    assert decision.action == "resume"
+    kinds = [r["kind"] for r in full_view(repos).authorizations[rt.AUTH].records][-3:]
+    assert kinds == ["resume_bound", "resume_abandoned", "resume_requested"]
+    pending = full_view(repos).authorizations[rt.AUTH].pending_resume
+    assert pending is not None and pending["nonce"] == "b" * 64 and pending["attempt"] == 2
+    assert [stage for _wf, inputs in github.dispatched for stage in [inputs["stage"]]] == ["publication"] * 2
+    assert github.dispatched[-1][1]["nonce"] == "b" * 64
+
+
+def test_the_exhausted_budget_terminalizes_promptly_with_no_further_dispatch(repos: dict[str, Any]) -> None:
+    github = started_resume(repos)
+    resume_run(github, 400, ("completed", "failure"))
+    assert finalize_in(repos, github, 400, "b" * 64).action == "resume"
+    bind_publication(repos, github, "b" * 64, 401)
+    resume_run(github, 401, ("completed", "failure"))
+    dispatched = len(github.dispatched)
+    decision = finalize_in(repos, github, 401)
+    assert (decision.action, decision.code) == ("fail", "PUBLICATION_UNAVAILABLE")
+    view = full_view(repos)
+    assert view.active is None and view.authorizations[rt.AUTH].state == state.FAILED
+    assert len(github.dispatched) == dispatched
+
+
+def test_a_resume_whose_publish_job_is_still_running_is_never_interrupted(repos: dict[str, Any]) -> None:
+    github = started_resume(repos)
+    resume_run(github, 400, ("in_progress", ""))
+    records = len(full_view(repos).authorizations[rt.AUTH].records)
+    dispatched = len(github.dispatched)
+    assert finalize_in(repos, github, 400).action == "noop"
+    assert len(full_view(repos).authorizations[rt.AUTH].records) == records
+    assert len(github.dispatched) == dispatched
+
+
+def test_a_resume_run_whose_publish_job_has_not_started_is_not_concluded(repos: dict[str, Any]) -> None:
+    github = started_resume(repos)
+    resume_run(github, 400, None)
+    assert finalize_in(repos, github, 400).action == "noop"
+    assert full_view(repos).authorizations[rt.AUTH].pending_resume is not None
+
+
+def test_unknown_remote_state_writes_nothing_and_never_terminalizes(repos: dict[str, Any]) -> None:
+    github = started_resume(repos)
+    resume_run(github, 400, ("completed", "failure"))
+    del github.routes[f"/repos/{rt.REPOSITORY}/git/ref/heads/{BRANCH}"]  # the branch read is indefinite
+    records = len(full_view(repos).authorizations[rt.AUTH].records)
+    with pytest.raises(control.FactsUnavailable):
+        finalize_in(repos, github, 400, "b" * 64)
+    assert len(full_view(repos).authorizations[rt.AUTH].records) == records
+    assert full_view(repos).active == rt.AUTH
+
+
+def test_a_foreign_remote_branch_head_is_a_conflict_not_a_retry(repos: dict[str, Any]) -> None:
+    github = started_resume(repos)
+    resume_run(github, 400, ("completed", "failure"))
+    foreign = "9" * 40
+    github.routes[f"/repos/{rt.REPOSITORY}/git/ref/heads/{BRANCH}"] = {"object": {"sha": foreign}}
+    github.routes[f"/repos/{rt.REPOSITORY}/commits/{foreign}"] = {"sha": foreign, "parents": [], "commit": {}}
+    decision = finalize_in(repos, github, 400, "b" * 64)
+    assert (decision.action, decision.code) == ("fail", "REMOTE_BRANCH_CONFLICT")
+    assert full_view(repos).active is None
+
+
+def test_a_concurrent_observer_after_the_chained_step_dispatches_nothing_twice(repos: dict[str, Any]) -> None:
+    github = started_resume(repos)
+    resume_run(github, 400, ("completed", "failure"))
+    assert finalize_in(repos, github, 400, "b" * 64).action == "resume"
+    dispatched = len(github.dispatched)
+    records = len(full_view(repos).authorizations[rt.AUTH].records)
+    # The same observation from a second observer: the new nonce is pending and unbound, within its grace.
+    github.routes[f"/repos/{rt.REPOSITORY}/actions/runs/300/attempts/1"] = run(300, RECONCILE, "schedule")
+    second = control.step(
+        github=github,
+        configuration=CONFIG,
+        store=state.GitLedgerStore(repos["remote"], workdir=repos["tmp"] / "second"),
+        signing_key=rt.KEY,
+        writer=writer("reconcile", workflow=RECONCILE, run_id=300),
+        issue=rt.ISSUE,
+        clock=lambda: NOW,
+        new_nonce=nonces("c" * 64),
+    )
+    assert second.action == "noop"
+    assert len(github.dispatched) == dispatched
+    assert len(full_view(repos).authorizations[rt.AUTH].records) == records
+
+
+def test_recovery_only_ever_dispatches_the_model_free_resume_never_the_model(repos: dict[str, Any]) -> None:
+    github = started_resume(repos)
+    resume_run(github, 400, ("completed", "failure"))
+    finalize_in(repos, github, 400, "b" * 64)
+    for workflow, inputs in github.dispatched:
+        assert workflow == "hunter-issue-agent-trigger.yml"
+        assert set(inputs) == {"issue", "authorization_id", "stage", "nonce"}
+        assert inputs["stage"] == "publication" and "remediation_authorization" not in inputs
+
+
+def test_a_stale_control_commit_still_fails_the_authorization_for_a_publication_resume(repos: dict[str, Any]) -> None:
+    github = publication_world(repos)
+    assert finalize_in(repos, github, 100, "a" * 64).action == "resume"
+    github.routes[f"/repos/{rt.REPOSITORY}/compare/{rt.CONTROL}...main"] = {"status": "diverged"}
+    with pytest.raises(control.ControlRefused, match="CONTROL_SHA_NOT_ON_MAIN"):
+        bind_publication(repos, github, "a" * 64, 400)
+    assert full_view(repos).active is None
+
+
+def test_the_contract_refusal_code_is_a_closed_publication_and_failure_code() -> None:
+    assert "PUBLICATION_CONTRACT_REFUSED" in state.PUBLICATION_REFUSAL_CODES
+    assert "PUBLICATION_CONTRACT_REFUSED" in state.FAILURE_CODES
