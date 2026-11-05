@@ -226,9 +226,29 @@ def test_host_secrets_never_reach_command_environment(monkeypatch):
         env = run.call_args.kwargs["env"]
     assert "leak-sentinel" not in env.values()
     assert set(env) == {"PATH", "PYTHONDONTWRITEBYTECODE", "PYTEST_ADDOPTS", "RUFF_NO_CACHE", "BLACK_CACHE_DIR"}
+    assert env["BLACK_CACHE_DIR"] != "/tmp/black-cache"
 
 
 def test_budget_constants_are_bounded():
     assert 1 <= broker.MAX_COMMANDS <= 32
     assert broker.MAX_REQUESTS >= broker.MAX_COMMANDS
     assert broker.DEADLINE_SECONDS <= 900
+
+
+def test_black_cache_is_private_unique_and_removed(monkeypatch):
+    monkeypatch.setattr(broker, "assert_no_symlinks", lambda: None)
+    seen = []
+
+    def fake_run(*_args, **kwargs):
+        cache = kwargs["env"]["BLACK_CACHE_DIR"]
+        seen.append((cache, oct(os.stat(cache).st_mode & 0o777), os.stat(cache).st_uid))
+        return subprocess.CompletedProcess(_args, 0, "", "")
+
+    with patch(RUN, side_effect=fake_run):
+        _send("python -m black --check .")
+        _send("python -m black --check .")
+    assert len({cache for cache, _, _ in seen}) == 2  # unpredictable and not shared between commands
+    for cache, mode, uid in seen:
+        assert mode == "0o700" and uid == os.geteuid()
+        assert not cache.startswith("/tmp/black") and cache != "/tmp/black-cache"
+        assert not os.path.exists(cache)  # cleaned up after the command

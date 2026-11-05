@@ -19,6 +19,7 @@ import resource
 import socket
 import struct
 import subprocess
+import tempfile
 import time
 from pathlib import Path
 
@@ -109,22 +110,25 @@ def handle(conn: socket.socket, budget: Budget | None = None) -> None:
         assert_no_symlinks()
         budget.charge_command()
         print("BROKER_RECEIVED:", repr(command), flush=True)
-        result = subprocess.run(
-            args,
-            cwd=WORKSPACE,
-            capture_output=True,
-            text=True,
-            timeout=COMMAND_TIMEOUT,
-            check=False,
-            preexec_fn=_limits,
-            env={
-                "PATH": "/usr/local/bin:/usr/bin:/bin",
-                "PYTHONDONTWRITEBYTECODE": "1",
-                "PYTEST_ADDOPTS": "-p no:cacheprovider",
-                "RUFF_NO_CACHE": "true",
-                "BLACK_CACHE_DIR": "/tmp/black-cache",
-            },
-        )
+        # Black writes a cache; give every command its own unpredictable 0700 directory owned by
+        # this uid instead of a predictable shared path, and remove it afterwards.
+        with tempfile.TemporaryDirectory(prefix="hunter-cache-") as cache_dir:
+            result = subprocess.run(
+                args,
+                cwd=WORKSPACE,
+                capture_output=True,
+                text=True,
+                timeout=COMMAND_TIMEOUT,
+                check=False,
+                preexec_fn=_limits,
+                env={
+                    "PATH": "/usr/local/bin:/usr/bin:/bin",
+                    "PYTHONDONTWRITEBYTECODE": "1",
+                    "PYTEST_ADDOPTS": "-p no:cacheprovider",
+                    "RUFF_NO_CACHE": "true",
+                    "BLACK_CACHE_DIR": cache_dir,
+                },
+            )
         response = {"exit": result.returncode, "stdout": result.stdout[:16000], "stderr": result.stderr[:16000]}
         print("BROKER_EXECUTED:", repr(args), "EXIT:", result.returncode, flush=True)
     except (
