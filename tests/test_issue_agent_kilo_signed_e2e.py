@@ -9,6 +9,7 @@ from __future__ import annotations
 import hashlib
 import json
 import os
+import re
 import time
 from pathlib import Path
 
@@ -30,16 +31,27 @@ _prompt_keys = fixture._prompt_keys
 def test_signed_authorization_real_kilo_sealed_result_independent_validator(
     repos: dict, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    prompt = (
-        "In /workspace/test_sample.py there is a deliberately broken assertion. "
-        "First use the bash tool to run exactly `python -m pytest -q test_sample.py` and observe failure. "
-        "Then use the edit tool to change only the incorrect expected number from 5 to 4 in that file. "
-        "Then use the bash tool to run exactly `python -m pytest -q test_sample.py` again. "
-        "Do not use other bash commands. Report both test results."
+    # The correct literal exists nowhere in the prompt or the seed: it is derived from a hash at test time and can
+    # only be learned from the failing test's diagnostic (the model has no way to run Python besides pytest).
+    expected = int(hashlib.sha256(b"hunter-682-diagnostic-nonce").hexdigest()[:7], 16)
+    seed_source = (
+        "import hashlib\n\n"
+        'EXPECTED = int(hashlib.sha256(b"hunter-682-diagnostic-nonce").hexdigest()[:7], 16)\n'
+        "VALUE = 0\n\n\n"
+        "def test_value_matches_expected():\n    assert VALUE == EXPECTED\n"
     )
+    prompt = (
+        "In /workspace/test_sample.py the constant VALUE is wrong. First use the bash tool to run exactly "
+        "`python -m pytest -q test_sample.py` and read the failure. Then use the edit tool to change only the line "
+        "`VALUE = 0` so that VALUE is the literal integer shown on the right-hand side of the failing assertion. "
+        "Do not change EXPECTED, do not compute anything and do not reference EXPECTED in VALUE. Then use the bash "
+        "tool to run exactly `python -m pytest -q test_sample.py` again. Do not use other bash commands. "
+        "Report both test results."
+    )
+    assert str(expected) not in prompt and str(expected) not in seed_source
     monkeypatch.setattr(fixture, "PROMPT", prompt)
     seed = repos["tmp"] / "seed"
-    (seed / "test_sample.py").write_text("def test_sample():\n    assert 2 + 2 == 5\n")
+    (seed / "test_sample.py").write_text(seed_source)
     fixture.git(seed, "add", "test_sample.py")
     fixture.git(
         seed, "-c", "user.name=s", "-c", "user.email=s@s", "-c", "commit.gpgsign=false", "commit", "-qm", "seed"
@@ -82,6 +94,12 @@ def test_signed_authorization_real_kilo_sealed_result_independent_validator(
     assert trace[-1]["exit"] == 0
     assert trace[0]["tree"] != trace[-1]["tree"]  # the workspace was edited between the failing and passing runs
     assert len(trace) <= kilo_port.BROKER_MAX_COMMANDS
+    # Causality: the repaired literal equals the value that only the failing diagnostic revealed, in a file the real
+    # agent edited, while the expectation itself was left untouched.
+    repaired = (repos["tmp"] / "signed-kilo-execute" / "workspace" / "test_sample.py").read_text()
+    match = re.search(r"^VALUE = (\d+)$", repaired, flags=re.MULTILINE)
+    assert match is not None and int(match.group(1)) == expected, repaired
+    assert repaired.count("EXPECTED = int(hashlib.sha256") == 1 and "VALUE = EXPECTED" not in repaired
     assert elapsed < kilo_port.BROKER_DEADLINE_SECONDS
     ledger.write(
         state.RESULT_BOUND,
@@ -120,6 +138,8 @@ def test_signed_authorization_real_kilo_sealed_result_independent_validator(
         "validator_verdict": receipt["verdict"],
         "result_sha256": receipt["result_sha256"],
         "ciphertext_sha256": receipt["ciphertext_sha256"],
+        "diagnostic_value_sha256": hashlib.sha256(str(expected).encode()).hexdigest(),
+        "repair_literal_equals_diagnostic_value": True,
         "broker_trace": [[e["seq"], e["exit"], str(e["tree"])[:12]] for e in trace],
         "attempts_used": len(trace),
         "attempt_budget": kilo_port.BROKER_MAX_COMMANDS,

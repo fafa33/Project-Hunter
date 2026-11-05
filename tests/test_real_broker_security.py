@@ -307,3 +307,189 @@ def test_executed_commands_log_a_workspace_fingerprint_that_changes_with_edits(t
         run.return_value.returncode, run.return_value.stdout, run.return_value.stderr = 1, "failed", ""
         _send("python -m pytest -q test_sample.py")
     assert f"EXIT: 1 TREE: {'f' * 64} STDOUT_BYTES: 6" in capsys.readouterr().out
+
+
+# --- Issue #682: read-only task-scoped git and resource enforcement (real git / real subprocesses) --------
+import shutil  # noqa: E402
+import signal  # noqa: E402
+import sys  # noqa: E402
+
+needs_git = pytest.mark.skipif(shutil.which("git") is None, reason="git required")
+
+
+@pytest.fixture
+def git_workspace(tmp_path, monkeypatch):
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    (workspace / "app.py").write_text("VALUE = 1\n")
+    (workspace / "test_app.py").write_text("from app import VALUE\n\ndef test_v():\n    assert VALUE == 1\n")
+    monkeypatch.setattr(broker, "WORKSPACE", str(workspace))
+    git_dir = broker.init_git_snapshot(str(workspace))
+    assert git_dir is not None
+    monkeypatch.setattr(broker, "GIT_DIR", git_dir)
+    yield workspace, Path(git_dir)
+    shutil.rmtree(git_dir, ignore_errors=True)
+
+
+@needs_git
+def test_git_status_and_diff_show_agent_edits_without_writing_the_workspace(git_workspace):
+    workspace, git_dir = git_workspace
+    assert not git_dir.is_relative_to(workspace) and oct(git_dir.stat().st_mode & 0o777) == "0o700"
+    (workspace / "app.py").write_text("VALUE = 42\n")
+    (workspace / "new.py").write_text("x = 1\n")
+    status = _send("git status --short")
+    assert status["exit"] == 0 and " M app.py" in status["stdout"] and "?? new.py" in status["stdout"]
+    stat = _send("git diff --stat")
+    assert stat["exit"] == 0 and "app.py" in stat["stdout"]
+    diff = _send("git diff")
+    assert "-VALUE = 1" in diff["stdout"] and "+VALUE = 42" in diff["stdout"]
+    assert not (workspace / ".git").exists()  # nothing was created in the (agent-visible) workspace
+
+
+@needs_git
+def test_workspace_controlled_git_config_hooks_and_drivers_never_execute(git_workspace, tmp_path):
+    workspace, _ = git_workspace
+    sentinel = tmp_path / "executed"
+    script = tmp_path / "evil.sh"
+    script.write_text(f"#!/bin/sh\ntouch {sentinel}\n")
+    script.chmod(0o755)
+    # An agent-planted repository inside the workspace: config, hooks, attributes, external diff / textconv.
+    planted = workspace / ".git"
+    subprocess.run(["git", "init", "-q", str(workspace)], check=True, env=broker.GIT_ENV, capture_output=True)
+    (planted / "hooks").mkdir(parents=True, exist_ok=True)
+    planted.joinpath("config").write_text(
+        f"[core]\n\tfsmonitor = {script}\n\tpager = {script}\n\thooksPath = {planted / 'hooks'}\n"
+        f'[diff "evil"]\n\tcommand = {script}\n\ttextconv = {script}\n[filter "evil"]\n\tclean = {script}\n'
+    )
+    (planted / "hooks" / "post-index-change").write_text(f"#!/bin/sh\ntouch {sentinel}\n")
+    (planted / "hooks" / "post-index-change").chmod(0o755)
+    (workspace / ".gitattributes").write_text("* diff=evil filter=evil\n")
+    (workspace / "app.py").write_text("VALUE = 7\n")
+    for command in ("git status --short", "git diff", "git diff --stat"):
+        _send(command)
+    assert not sentinel.exists(), "workspace-controlled configuration executed code"
+
+
+@needs_git
+@pytest.mark.parametrize(
+    "command",
+    [
+        "git log",
+        "git show HEAD",
+        "git push",
+        "git commit -m x",
+        "git config --list",
+        "git checkout .",
+        "git diff --no-index app.py test_app.py",
+        "git diff --output=out.txt",
+        "git status --ignored",
+        "git -c core.fsmonitor=evil status",
+        "git --git-dir=/etc status",
+        "git clean -fd",
+        "git stash",
+        "git remote -v",
+        "git status; id",
+        "git status && id",
+        "git diff /etc/passwd",
+        "git diff ../outside",
+        "git status $(id)",
+    ],
+)
+def test_git_cannot_escape_the_allowlist(git_workspace, command):
+    with patch(RUN) as run:
+        assert _send(command)["exit"] == 126, command
+        run.assert_not_called()
+
+
+def test_git_fails_closed_when_the_snapshot_is_unavailable(monkeypatch):
+    monkeypatch.setattr(broker, "GIT_DIR", None)
+    monkeypatch.setattr(broker, "assert_no_symlinks", lambda: None)
+    with patch(RUN) as run:
+        assert _send("git status --short")["exit"] == 126
+        run.assert_not_called()
+
+
+def test_snapshot_failure_returns_none_and_removes_the_private_directory(tmp_path):
+    created = []
+    real = broker.tempfile.mkdtemp
+
+    def tracking(*args, **kwargs):
+        created.append(real(*args, **kwargs))
+        return created[-1]
+
+    with patch.object(broker.tempfile, "mkdtemp", tracking), patch(RUN, side_effect=OSError("no git")):
+        assert broker.init_git_snapshot(str(tmp_path)) is None
+    assert created and not os.path.exists(created[0])
+
+
+def test_git_argv_is_hardened_and_only_status_or_diff():
+    argv = broker.git_argv(["git", "diff", "--stat"], "/g", "/w")
+    assert argv[:2] == ["git", "--no-pager"] and "core.hooksPath=/dev/null" in argv and "core.fsmonitor=false" in argv
+    assert argv[argv.index("diff") :] == ["diff", "--no-ext-diff", "--no-textconv", "--stat"]
+    assert "--git-dir=/g" in argv and "--work-tree=/w" in argv
+    assert broker.git_argv(["git", "status"], "/g", "/w")[-1] == "status"
+    for sub in ("log", "show", "config", "push", "checkout"):
+        with pytest.raises(broker.ShellDenied):
+            broker.git_argv(["git", sub], "/g", "/w")
+    assert broker.GIT_ENV["GIT_CONFIG_GLOBAL"] == os.devnull and broker.GIT_ENV["GIT_CONFIG_NOSYSTEM"] == "1"
+
+
+def _run_limited(code, monkeypatch, cpu=None):
+    if cpu is not None:
+        monkeypatch.setattr(broker, "COMMAND_TIMEOUT", cpu)
+    return subprocess.run(
+        [sys.executable, "-c", code], capture_output=True, text=True, timeout=30, preexec_fn=broker._limits, check=False
+    )
+
+
+def test_cpu_limit_kills_a_busy_loop(monkeypatch):
+    started = time.monotonic()
+    result = _run_limited("while True: pass", monkeypatch, cpu=1)
+    assert result.returncode in (-signal.SIGXCPU, -signal.SIGKILL) and time.monotonic() - started < 15
+
+
+def test_memory_limit_stops_a_large_allocation(monkeypatch):
+    monkeypatch.setattr(broker, "MEMORY_LIMIT_BYTES", 512 * 1024**2)
+    result = _run_limited("x = bytearray(2 * 1024**3)", monkeypatch)
+    assert result.returncode != 0 and "MemoryError" in result.stderr
+
+
+def test_file_size_limit_stops_unbounded_writes(monkeypatch, tmp_path):
+    target = tmp_path / "big"
+    result = _run_limited(f"open({str(target)!r}, 'wb').write(b'x' * (11 * 1024 * 1024))", monkeypatch)
+    assert result.returncode == -signal.SIGXFSZ or result.returncode != 0
+    assert not target.exists() or target.stat().st_size <= 10 * 1024 * 1024
+
+
+@pytest.mark.skipif(os.geteuid() == 0, reason="RLIMIT_NPROC is not enforced for root; proven in the hosted run")
+def test_process_limit_stops_a_fork_flood(monkeypatch):
+    code = "import subprocess,sys\nn=0\nfor _ in range(300):\n  try: subprocess.Popen(['sleep','5']); n+=1\n  except OSError: break\nprint(n)"
+    result = _run_limited(code, monkeypatch)
+    assert int(result.stdout.strip() or 0) < 100
+
+
+def test_real_command_timeout_is_denied_and_the_broker_keeps_serving(tmp_path, monkeypatch):
+    workspace = tmp_path / "ws"
+    workspace.mkdir()
+    (workspace / "test_busy.py").write_text("def test_busy():\n    while True:\n        pass\n")
+    (workspace / "test_ok.py").write_text("def test_ok():\n    assert True\n")
+    monkeypatch.setattr(broker, "WORKSPACE", str(workspace))
+    monkeypatch.setattr(broker, "COMMAND_TIMEOUT", 2)
+    budget = broker.Budget(commands=4, requests=10)
+    started = time.monotonic()
+    assert _send("python -m pytest -q test_busy.py", budget)["exit"] == 126
+    assert time.monotonic() - started < 20
+    assert _send("python -m pytest -q test_ok.py", budget)["exit"] == 0  # fail closed per command, not per session
+
+
+def test_cache_directory_is_removed_even_when_the_command_times_out(monkeypatch):
+    monkeypatch.setattr(broker, "assert_no_symlinks", lambda: None)
+    seen = []
+
+    def boom(*_args, **kwargs):
+        seen.append(kwargs["env"]["BLACK_CACHE_DIR"])
+        raise subprocess.TimeoutExpired("python", 1)
+
+    with patch(RUN, side_effect=boom):
+        assert _send("python -m black --check .")["exit"] == 126
+    assert seen and not os.path.exists(seen[0])

@@ -11,6 +11,7 @@ import json
 import re
 import subprocess
 import tempfile
+import time
 import uuid
 from collections.abc import Mapping, Sequence
 from pathlib import Path
@@ -179,7 +180,7 @@ class KiloContainerIsolation:
                 "--pids-limit",
                 "64",
                 "--memory",
-                "256m",
+                "512m",
                 "--mount",
                 f"type=volume,src={self.socket_volume},dst=/run/hunter",
                 "--mount",
@@ -195,14 +196,24 @@ class KiloContainerIsolation:
                 "--env",
                 f"HUNTER_BROKER_DEADLINE_SECONDS={BROKER_DEADLINE_SECONDS}",
                 "--tmpfs",
-                "/tmp:rw,nosuid,size=32m",
+                "/tmp:rw,nosuid,size=160m",
                 BROKER_IMAGE,
                 "python",
                 "/opt/broker.py",
             )
+            self._await_broker_snapshot()
         except BaseException:
             self.stop()
             raise
+
+    def _await_broker_snapshot(self, attempts: int = 60) -> None:
+        """The agent must not start before the broker's baseline snapshot exists, or ``git diff`` would hide edits."""
+        for _ in range(attempts):
+            logs = self._docker("logs", self.broker, timeout=15)
+            if b"BROKER_GIT_SNAPSHOT:" in logs.stdout + logs.stderr:
+                return
+            time.sleep(1)
+        raise RoleRefused("EXECUTION_NOT_STARTED", "governed broker did not become ready")
 
     def run(
         self,

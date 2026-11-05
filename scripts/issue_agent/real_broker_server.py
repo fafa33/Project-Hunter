@@ -17,6 +17,7 @@ import hashlib
 import json
 import os
 import resource
+import shutil
 import socket
 import struct
 import subprocess
@@ -39,7 +40,32 @@ DEADLINE_SECONDS = max(1, min(int(os.environ.get("HUNTER_BROKER_DEADLINE_SECONDS
 COMMAND_TIMEOUT = 30
 MAX_WORKSPACE_ENTRIES = 50000
 WORKSPACE = "/workspace"
-BROKER_TOOLS = {"python", "python3"}  # git is not provided: the workspace carries no .git metadata
+MEMORY_LIMIT_BYTES = 2 * 1024**3  # address-space backstop; the container cgroup is the hard memory wall
+BROKER_TOOLS = {"python", "python3", "git"}
+# Read-only task-scoped git: a private, broker-owned snapshot of the workspace at session start. No host
+# repository, credentials or remote is ever mounted; the agent can write neither the snapshot nor its config.
+GIT_DIR: str | None = None
+GIT_HARDENING = (
+    "--no-pager",
+    "-c",
+    "core.fsmonitor=false",
+    "-c",
+    "core.hooksPath=/dev/null",
+    "-c",
+    "diff.external=",
+    "-c",
+    "safe.directory=*",
+    "-c",
+    "protocol.allow=never",
+)
+GIT_ENV = {
+    "PATH": "/usr/local/bin:/usr/bin:/bin",
+    "GIT_CONFIG_GLOBAL": os.devnull,
+    "GIT_CONFIG_NOSYSTEM": "1",
+    "GIT_TERMINAL_PROMPT": "0",
+    "GIT_PAGER": "cat",
+    "LC_ALL": "C",
+}
 
 
 class BudgetExhausted(PermissionError):
@@ -70,13 +96,15 @@ def _limits() -> None:  # runs in the child between fork and exec
         (resource.RLIMIT_CPU, COMMAND_TIMEOUT),
         (resource.RLIMIT_FSIZE, 10 * 1024 * 1024),
         (resource.RLIMIT_NPROC, 64),
+        (resource.RLIMIT_AS, MEMORY_LIMIT_BYTES),
         (resource.RLIMIT_CORE, 0),
     ):
         resource.setrlimit(kind, (value, value))
 
 
-def assert_no_symlinks(root: str = WORKSPACE) -> None:
+def assert_no_symlinks(root: str | None = None) -> None:
     """The agent can create links with its edit tool at any time: re-check before every command."""
+    root = root or WORKSPACE
     seen = 0
     for directory, dirs, files in os.walk(root, followlinks=False):
         for name in (*dirs, *files):
@@ -87,8 +115,9 @@ def assert_no_symlinks(root: str = WORKSPACE) -> None:
                 raise ShellDenied("symlink in task workspace")
 
 
-def workspace_fingerprint(root: str = WORKSPACE) -> str:
+def workspace_fingerprint(root: str | None = None) -> str:
     """Digest of the workspace as the command sees it: proves an edit happened between two runs."""
+    root = root or WORKSPACE
     digest = hashlib.sha256()
     seen = 0
     for directory, dirs, files in os.walk(root, followlinks=False):
@@ -105,6 +134,36 @@ def workspace_fingerprint(root: str = WORKSPACE) -> str:
                 with open(path, "rb") as handle_:
                     digest.update(hashlib.sha256(handle_.read()).digest())
     return digest.hexdigest()
+
+
+def init_git_snapshot(root: str | None = None) -> str | None:
+    """Create the private baseline snapshot; None (git then fails closed) if it cannot be built."""
+    root = root or WORKSPACE
+    git_dir = tempfile.mkdtemp(prefix="hunter-git-")  # unpredictable, mode 0700, owned by this uid
+    base = ["git", *GIT_HARDENING, f"--git-dir={git_dir}", f"--work-tree={root}"]
+    identity = ["-c", "user.name=hunter", "-c", "user.email=hunter@localhost", "-c", "commit.gpgsign=false"]
+    try:
+        for step in (
+            [*base, "init", "-q"],
+            [*base, "add", "-A"],
+            [*base, *identity, "commit", "-q", "--allow-empty", "-m", "baseline"],
+        ):
+            done = subprocess.run(step, capture_output=True, timeout=60, check=False, env=GIT_ENV)
+            if done.returncode:
+                raise OSError("git snapshot failed")
+    except (OSError, subprocess.SubprocessError):
+        shutil.rmtree(git_dir, ignore_errors=True)
+        return None
+    return git_dir
+
+
+def git_argv(args: list[str], git_dir: str, root: str | None = None) -> list[str]:
+    """Hardened argv for one allowlisted ``git status|diff``; no external diff, textconv, hook or pager."""
+    sub = args[1]
+    if sub not in {"status", "diff"}:
+        raise ShellDenied("git subcommand not allowed")
+    extra = ["--no-ext-diff", "--no-textconv"] if sub == "diff" else []
+    return ["git", *GIT_HARDENING, f"--git-dir={git_dir}", f"--work-tree={root or WORKSPACE}", sub, *extra, *args[2:]]
 
 
 def handle(conn: socket.socket, budget: Budget | None = None) -> None:
@@ -125,9 +184,21 @@ def handle(conn: socket.socket, budget: Budget | None = None) -> None:
         command = request["command"]
         if not isinstance(command, str) or len(command) > 256:
             raise ValueError("invalid command")
-        args = parse_command(command)
+        args = parsed = parse_command(command)
         if args[0] not in BROKER_TOOLS:
             raise ShellDenied("tool not provided in broker")
+        env = {
+            "PATH": "/usr/local/bin:/usr/bin:/bin",
+            "PYTHONDONTWRITEBYTECODE": "1",
+            "PYTEST_ADDOPTS": "-p no:cacheprovider",
+            "RUFF_NO_CACHE": "true",
+        }
+        is_git = args[0] == "git"
+        if is_git:
+            if GIT_DIR is None:
+                raise ShellDenied("git snapshot unavailable")
+            args = git_argv(args, GIT_DIR)
+            env = dict(GIT_ENV)
         assert_no_symlinks()
         budget.charge_command()
         remaining = budget.deadline - time.monotonic()  # recv() and the scan above consumed wall clock
@@ -146,18 +217,12 @@ def handle(conn: socket.socket, budget: Budget | None = None) -> None:
                 timeout=min(COMMAND_TIMEOUT, remaining),
                 check=False,
                 preexec_fn=_limits,
-                env={
-                    "PATH": "/usr/local/bin:/usr/bin:/bin",
-                    "PYTHONDONTWRITEBYTECODE": "1",
-                    "PYTEST_ADDOPTS": "-p no:cacheprovider",
-                    "RUFF_NO_CACHE": "true",
-                    "BLACK_CACHE_DIR": cache_dir,
-                },
+                env=env if is_git else {**env, "BLACK_CACHE_DIR": cache_dir},
             )
         response = {"exit": result.returncode, "stdout": result.stdout[:16000], "stderr": result.stderr[:16000]}
         print(
             "BROKER_EXECUTED:",
-            repr(args),
+            repr(parsed),
             "EXIT:",
             result.returncode,
             "TREE:",
@@ -190,6 +255,9 @@ def main() -> None:
     server.bind(path)
     os.chmod(path, 0o660)
     server.listen(4)
+    global GIT_DIR
+    GIT_DIR = init_git_snapshot()
+    print("BROKER_GIT_SNAPSHOT:", "ready" if GIT_DIR else "unavailable", flush=True)
     budget = Budget()
     try:
         while budget.requests > 0:

@@ -7,6 +7,8 @@ on:
       - 'src/hunter/automation/issue_agent_kilo_container.py'
       - 'src/hunter/automation/issue_agent_roles.py'
       - 'src/hunter/automation/issue_agent_governed_shell.py'
+      - 'tests/test_issue_agent_broker_hosted.py'
+      - 'tests/test_issue_agent_canary_proof.py'
       - 'tests/test_issue_agent_kilo_signed_e2e.py'
       - 'scripts/issue_agent/**'
   workflow_dispatch:
@@ -30,7 +32,9 @@ jobs:
           && github.event.pull_request.head.ref == 'issue-682-hosted-canary'
           && github.actor == github.repository_owner)
     runs-on: ubuntu-latest
-    timeout-minutes: 12
+    timeout-minutes: 20
+    permissions:
+      actions: read  # read-only: lets the trusted verification step resolve the authoritative numeric job id
     steps:
       - name: Checkout exact head without credentials
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -51,12 +55,24 @@ jobs:
           docker build --pull -f scripts/issue_agent/Dockerfile.kilo-canary -t hunter-682-kilo-canary:local .
           docker build --pull -f scripts/issue_agent/Dockerfile.broker-canary -t hunter-682-broker-canary:local .
           docker pull python@sha256:78387bc3881b8273120a12ebe6c1ab22b018ccc2c9adf565ae1ac9b536e184ea
+      - name: Model-free broker boundary (git inspection, timeout, memory, process enforcement)
+        env:
+          HUNTER_RUN_REAL_BROKER_E2E: '1'
+        run: |
+          set -euo pipefail
+          python -m pytest -q -s --tb=short tests/test_issue_agent_broker_hosted.py
       - name: Real isolated Kilo repair and independent signed Trusted Validator
         env:
           HUNTER_RUN_REAL_KILO_E2E: '1'
         run: |
           set -euo pipefail
-          python -m pytest -q -s --tb=short tests/test_issue_agent_kilo_signed_e2e.py
+          python -m pytest -q -s --tb=short tests/test_issue_agent_kilo_signed_e2e.py | tee "$RUNNER_TEMP/kilo-e2e.log"
+      - name: Bind the proof to the authoritative GitHub job identity
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          python scripts/issue_agent/verify_canary_proof.py "$RUNNER_TEMP/kilo-e2e.log"
       - name: Verify no secrets or repository writes were granted
         run: |
           test "${{ github.event_name }}" != 'workflow_dispatch' || test "${{ github.ref }}" = 'refs/heads/main'

@@ -45,7 +45,7 @@ def _roots(tmp_path: Path) -> tuple[Path, Path]:
 def _recorder(calls: list[tuple[str, ...]]):
     def fake(*args: str, timeout: float = 40, stdin: bytes = b""):
         calls.append(args)
-        return subprocess.CompletedProcess(args, 0, b"", b"")
+        return subprocess.CompletedProcess(args, 0, b"BROKER_GIT_SNAPSHOT: ready\n" if args[0] == "logs" else b"", b"")
 
     return fake
 
@@ -206,3 +206,22 @@ def test_stop_collects_broker_trace_before_removal(tmp_path: Path) -> None:
         isolation.stop()
     assert len(isolation.trace) == 1
     assert calls.index(("logs", isolation.broker)) < calls.index(("rm", "-f", isolation.broker))
+
+
+def test_agent_is_not_started_until_the_broker_snapshot_is_ready(tmp_path: Path) -> None:
+    workspace, home = _roots(tmp_path)
+    isolation = KiloContainerIsolation(SCRIPTS)
+    calls: list[tuple[str, ...]] = []
+
+    def never_ready(*args: str, timeout: float = 40, stdin: bytes = b""):
+        calls.append(args)
+        return subprocess.CompletedProcess(args, 0, b"", b"")
+
+    with (
+        patch.object(KiloContainerIsolation, "_docker", staticmethod(never_ready)),
+        patch.object(kilo_port.time, "sleep"),
+    ):
+        with pytest.raises(RoleRefused, match="did not become ready"):
+            isolation.prepare(workspace, home)
+    assert not isolation.started  # torn down: the agent was never launched
+    assert sum(1 for c in calls if c[:2] == ("logs", isolation.broker)) >= 60
