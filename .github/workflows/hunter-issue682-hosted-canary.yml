@@ -72,7 +72,7 @@ jobs:
           GITHUB_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
-          python scripts/issue_agent/verify_canary_proof.py "$RUNNER_TEMP/kilo-e2e.log"
+          python scripts/issue_agent/verify_canary_proof.py < "$RUNNER_TEMP/kilo-e2e.log"
       - name: Verify no secrets or repository writes were granted
         run: |
           test "${{ github.event_name }}" != 'workflow_dispatch' || test "${{ github.ref }}" = 'refs/heads/main'

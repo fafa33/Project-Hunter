@@ -5,6 +5,7 @@ from __future__ import annotations
 import copy
 import hashlib
 import importlib.util
+import io
 import json
 from pathlib import Path
 
@@ -121,22 +122,26 @@ def test_forged_or_duplicated_proof_records_in_the_log_are_rejected() -> None:
 
 
 def test_main_fails_closed_without_a_token_and_on_api_errors(tmp_path, monkeypatch) -> None:
-    log = tmp_path / "log"
-    log.write_text(verify.PROOF_PREFIX + json.dumps(sealed(BASE)))
+    log = verify.PROOF_PREFIX + json.dumps(sealed(BASE))
     event = tmp_path / "event.json"
     event.write_text(json.dumps(EVENT))
     for name, value in {**ENV, "GITHUB_EVENT_PATH": str(event)}.items():
         monkeypatch.setenv(name, value)
     monkeypatch.delenv("GITHUB_TOKEN", raising=False)
-    assert verify.main([str(log)]) == 1  # missing token
+    assert verify.main(io.StringIO(log)) == 1  # missing token
     monkeypatch.setenv("GITHUB_TOKEN", "t")
 
     def api(url: str, token: str):
         return RUN if "jobs" not in url else JOBS
 
-    assert verify.main([str(log)], fetch=api) == 0
+    assert verify.main(io.StringIO(log), fetch=api) == 0
 
     def broken(url: str, token: str):
         raise OSError("unavailable")
 
-    assert verify.main([str(log)], fetch=broken) == 1
+    assert verify.main(io.StringIO(log), fetch=broken) == 1
+
+
+def test_no_file_path_is_taken_from_the_command_line() -> None:
+    source = (Path(__file__).resolve().parents[1] / "scripts/issue_agent/verify_canary_proof.py").read_text()
+    assert "sys.argv" not in source and "argv[" not in source

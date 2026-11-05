@@ -15,7 +15,7 @@ import sys
 import urllib.request
 from collections.abc import Callable, Mapping
 from pathlib import Path
-from typing import Any
+from typing import Any, TextIO
 
 PROOF_PREFIX = "HUNTER_682_ACCEPTANCE_PROOF "
 CANONICAL_PREFIX = "HUNTER_682_CANONICAL_PROOF "
@@ -99,12 +99,13 @@ def _get(url: str, token: str) -> dict[str, Any]:
         return json.load(response)
 
 
-def main(argv: list[str], fetch: Callable[[str, str], dict[str, Any]] = _get) -> int:
+def main(stdin: TextIO, fetch: Callable[[str, str], dict[str, Any]] = _get) -> int:
+    """The log arrives on stdin (``< "$RUNNER_TEMP/..."``): no file path is ever taken from the command line."""
     env = os.environ
     repository, run_id, attempt = env["GITHUB_REPOSITORY"], env["GITHUB_RUN_ID"], env["GITHUB_RUN_ATTEMPT"]
     api = f"https://api.github.com/repos/{repository}/actions/runs/{run_id}"
     try:
-        proof = extract_proof(Path(argv[0]).read_text(errors="replace"))
+        proof = extract_proof(stdin.read())
         event = json.loads(Path(env["GITHUB_EVENT_PATH"]).read_text())
         record = canonicalize(
             proof,
@@ -121,4 +122,4 @@ def main(argv: list[str], fetch: Callable[[str, str], dict[str, Any]] = _get) ->
 
 
 if __name__ == "__main__":
-    sys.exit(main(sys.argv[1:]))
+    sys.exit(main(sys.stdin))
