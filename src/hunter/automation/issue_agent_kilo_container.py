@@ -18,6 +18,9 @@ from hunter.automation.issue_agent_roles import RoleRefused, stderr_category
 
 KILO_IMAGE = "hunter-682-kilo-canary:local"
 BROKER_IMAGE = "hunter-682-broker-canary:local"
+# Explicit repair-loop budgets enforced by the broker (fail closed on exhaustion).
+BROKER_MAX_COMMANDS = 16
+BROKER_DEADLINE_SECONDS = 660  # strictly below the 12 minute model timeout
 PYTHON_IMAGE = "python@sha256:78387bc3881b8273120a12ebe6c1ab22b018ccc2c9adf565ae1ac9b536e184ea"
 
 
@@ -26,6 +29,7 @@ class KiloContainerIsolation:
 
     def __init__(self, scripts: Path) -> None:
         self.scripts = scripts.resolve(strict=True)
+        self.policy = Path(__file__).resolve().with_name("issue_agent_governed_shell.py")
         self.suffix = uuid.uuid4().hex[:12]
         self.network = f"hunter-682-runner-{self.suffix}"
         self.gateway = f"hunter-682-runner-gw-{self.suffix}"
@@ -38,7 +42,10 @@ class KiloContainerIsolation:
 
     @staticmethod
     def _docker(*args: str, timeout: float = 40, stdin: bytes = b"") -> subprocess.CompletedProcess[bytes]:
-        return subprocess.run(["docker", *args], input=stdin, capture_output=True, check=False, timeout=timeout)
+        try:
+            return subprocess.run(["docker", *args], input=stdin, capture_output=True, check=False, timeout=timeout)
+        except FileNotFoundError:  # no container runtime: never fall back to a host shell
+            raise RoleRefused("EXECUTION_NOT_STARTED", "container runtime unavailable") from None
 
     def _checked(self, *args: str) -> None:
         result = self._docker(*args)
@@ -152,6 +159,14 @@ class KiloContainerIsolation:
                 f"type=bind,src={self.workspace},dst=/workspace,readonly",
                 "--mount",
                 f"type=bind,src={self.scripts / 'real_broker_server.py'},dst=/opt/broker.py,readonly",
+                "--mount",
+                f"type=bind,src={self.policy},dst=/opt/policy/issue_agent_governed_shell.py,readonly",
+                "--env",
+                "PYTHONPATH=/opt/policy",
+                "--env",
+                f"HUNTER_BROKER_MAX_COMMANDS={BROKER_MAX_COMMANDS}",
+                "--env",
+                f"HUNTER_BROKER_DEADLINE_SECONDS={BROKER_DEADLINE_SECONDS}",
                 "--tmpfs",
                 "/tmp:rw,nosuid,size=32m",
                 BROKER_IMAGE,

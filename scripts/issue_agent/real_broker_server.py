@@ -1,32 +1,99 @@
-"""Restricted container broker: allowlisted argv, peer UID, bounded output/time."""
+"""Governed container broker: shared allowlist policy, peer UID, explicit repair budgets.
+
+The agent has no shell of its own; every command arrives here and is parsed by the single
+shared policy (``issue_agent_governed_shell.parse_command``). The broker is the *only* place a
+task command executes, inside a no-network container over a read-only workspace.
+
+Repair-loop budgets are explicit and fail closed:
+* ``MAX_COMMANDS``  - executed test/lint attempts (edit/test/diagnose/repair/retest cycles)
+* ``MAX_REQUESTS``  - all requests, including denied probes
+* ``DEADLINE_SECONDS`` - wall clock for the whole session; after it nothing runs
+* ``COMMAND_TIMEOUT`` - per command, with CPU / file-size / process rlimits
+"""
 
 from __future__ import annotations
 
 import json
 import os
-import shlex
+import resource
 import socket
 import struct
 import subprocess
+import time
 from pathlib import Path
+
+try:  # container: policy module is bind-mounted flat next to PYTHONPATH
+    from issue_agent_governed_shell import ShellDenied, parse_command
+except ImportError:  # tests / host checkout
+    from hunter.automation.issue_agent_governed_shell import ShellDenied, parse_command
 
 AGENT_UID = 65534
 BROKER_UID = 65533
 SHARED_GID = 65532
 MAX_REQUEST = 4096
-ALLOWED = {
-    ("python", "-m", "pytest", "-q"),
-    ("python", "-m", "pytest", "-q", "test_sample.py"),
-}
+MAX_COMMANDS = max(1, min(int(os.environ.get("HUNTER_BROKER_MAX_COMMANDS", "16")), 32))
+MAX_REQUESTS = 4 * MAX_COMMANDS
+DEADLINE_SECONDS = max(1, min(int(os.environ.get("HUNTER_BROKER_DEADLINE_SECONDS", "660")), 900))
+COMMAND_TIMEOUT = 30
+MAX_WORKSPACE_ENTRIES = 50000
+WORKSPACE = "/workspace"
+BROKER_TOOLS = {"python", "python3"}  # git is not provided: the workspace carries no .git metadata
 
 
-def handle(conn: socket.socket) -> None:
+class BudgetExhausted(PermissionError):
+    pass
+
+
+class Budget:
+    """Mutable session budget; a fresh instance per broker process."""
+
+    def __init__(self, commands: int = MAX_COMMANDS, requests: int = MAX_REQUESTS, deadline: float | None = None):
+        self.commands = commands
+        self.requests = requests
+        self.deadline = time.monotonic() + DEADLINE_SECONDS if deadline is None else deadline
+
+    def charge_request(self) -> None:
+        self.requests -= 1
+        if self.requests < 0 or time.monotonic() >= self.deadline:
+            raise BudgetExhausted("request or wall-clock budget exhausted")
+
+    def charge_command(self) -> None:
+        self.commands -= 1
+        if self.commands < 0:
+            raise BudgetExhausted("repair attempt budget exhausted")
+
+
+def _limits() -> None:  # runs in the child between fork and exec
+    for kind, value in (
+        (resource.RLIMIT_CPU, COMMAND_TIMEOUT),
+        (resource.RLIMIT_FSIZE, 10 * 1024 * 1024),
+        (resource.RLIMIT_NPROC, 64),
+        (resource.RLIMIT_CORE, 0),
+    ):
+        resource.setrlimit(kind, (value, value))
+
+
+def assert_no_symlinks(root: str = WORKSPACE) -> None:
+    """The agent can create links with its edit tool at any time: re-check before every command."""
+    seen = 0
+    for directory, dirs, files in os.walk(root, followlinks=False):
+        for name in (*dirs, *files):
+            seen += 1
+            if seen > MAX_WORKSPACE_ENTRIES:
+                raise ShellDenied("workspace too large")
+            if os.path.islink(os.path.join(directory, name)):
+                raise ShellDenied("symlink in task workspace")
+
+
+def handle(conn: socket.socket, budget: Budget | None = None) -> None:
+    budget = budget or Budget()
     try:
         conn.settimeout(4)
         credentials = conn.getsockopt(socket.SOL_SOCKET, socket.SO_PEERCRED, struct.calcsize("3i"))
         _, uid, _ = struct.unpack("3i", credentials)
         if uid != AGENT_UID:
             raise PermissionError("unauthorized peer")
+        budget.charge_request()
         payload = conn.recv(MAX_REQUEST + 1)
         if len(payload) > MAX_REQUEST:
             raise ValueError("oversized request")
@@ -36,27 +103,33 @@ def handle(conn: socket.socket) -> None:
         command = request["command"]
         if not isinstance(command, str) or len(command) > 256:
             raise ValueError("invalid command")
-        args = shlex.split(command)
-        if tuple(args) not in ALLOWED:
-            raise ValueError("command not allowlisted")
+        args = parse_command(command)
+        if args[0] not in BROKER_TOOLS:
+            raise ShellDenied("tool not provided in broker")
+        assert_no_symlinks()
+        budget.charge_command()
         print("BROKER_RECEIVED:", repr(command), flush=True)
         result = subprocess.run(
             args,
-            cwd="/workspace",
+            cwd=WORKSPACE,
             capture_output=True,
             text=True,
-            timeout=30,
+            timeout=COMMAND_TIMEOUT,
             check=False,
+            preexec_fn=_limits,
             env={
                 "PATH": "/usr/local/bin:/usr/bin:/bin",
                 "PYTHONDONTWRITEBYTECODE": "1",
                 "PYTEST_ADDOPTS": "-p no:cacheprovider",
+                "RUFF_NO_CACHE": "true",
+                "BLACK_CACHE_DIR": "/tmp/black-cache",
             },
         )
         response = {"exit": result.returncode, "stdout": result.stdout[:16000], "stderr": result.stderr[:16000]}
         print("BROKER_EXECUTED:", repr(args), "EXIT:", result.returncode, flush=True)
     except (
         PermissionError,
+        ShellDenied,
         ValueError,
         TypeError,
         UnicodeError,
@@ -78,12 +151,19 @@ def main() -> None:
     server.bind(path)
     os.chmod(path, 0o660)
     server.listen(4)
-    server.settimeout(75)
+    budget = Budget()
     try:
-        for _ in range(2):
-            conn, _ = server.accept()
+        while budget.requests > 0:
+            remaining = budget.deadline - time.monotonic()
+            if remaining <= 0:
+                break
+            server.settimeout(min(remaining, 120))
+            try:
+                conn, _ = server.accept()
+            except TimeoutError:
+                break
             with conn:
-                handle(conn)
+                handle(conn, budget)
     finally:
         server.close()
 

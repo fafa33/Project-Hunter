@@ -6,6 +6,7 @@ on:
       - '.github/workflows/hunter-issue682-hosted-canary.yml'
       - 'src/hunter/automation/issue_agent_kilo_container.py'
       - 'src/hunter/automation/issue_agent_roles.py'
+      - 'src/hunter/automation/issue_agent_governed_shell.py'
       - 'tests/test_issue_agent_kilo_signed_e2e.py'
       - 'scripts/issue_agent/**'
   workflow_dispatch:
