@@ -437,6 +437,48 @@ def _git_repo_at_base(tmp_path):
     return repo, run("rev-parse", "HEAD"), ident
 
 
+def _pinned_detached_repo(tmp_path, hook_text):
+    """Shape of actions/checkout at an exact SHA with fetch-depth 0: detached HEAD, main only as a remote-tracking ref.
+
+    Returns ``(repo, base, head, git)``; ``head`` is an unsigned candidate commit adding ``docs/x.md`` to ``base``.
+    """
+    import subprocess
+
+    repo, _first, ident = _git_repo_at_base(tmp_path)
+    env = {
+        "GIT_CONFIG_GLOBAL": "/dev/null",
+        "GIT_CONFIG_NOSYSTEM": "1",
+        "PATH": "/usr/bin:/bin:/usr/local/bin",
+        **ident,
+    }
+    git = lambda *a: subprocess.run(  # noqa: E731
+        ("git", *a), cwd=repo, env=env, check=True, capture_output=True, text=True
+    ).stdout.strip()
+    (repo / "scripts").mkdir()
+    (repo / "scripts" / "hunter_pre_push.py").write_text(hook_text)
+    git("add", "scripts/hunter_pre_push.py")
+    git("commit", "-q", "-m", "trusted hook")
+    base = git("rev-parse", "HEAD")
+    git("update-ref", "refs/remotes/origin/main", base)
+    git("checkout", "-q", "--detach", base)
+    for branch in git("for-each-ref", "--format=%(refname:short)", "refs/heads").split():
+        git("branch", "-q", "-D", branch)
+    (repo / "docs").mkdir()
+    (repo / "docs" / "x.md").write_text("candidate\n")
+    git("add", "docs/x.md")
+    head = git("commit-tree", git("write-tree"), "-p", base, "-m", "candidate")
+    git("reset", "-q", "--hard", base)
+    return repo, base, head, git
+
+
+def _stub_isolation(monkeypatch, core, tmp_path, runner):
+    """Replace ``sudo`` and the isolation user with ``runner`` while keeping real git and the real flow."""
+    monkeypatch.setattr(core, "require_isolation_user", lambda user: user)
+    monkeypatch.setattr(core, "isolated_command", runner)
+    monkeypatch.setattr(core, "run_privileged", lambda *_a, **_k: None)
+    monkeypatch.setattr(core, "ISOLATION_ROOT", tmp_path)
+
+
 def _signed_at(base_sha):
     s = _signed()
     scope = TaskScopeContract(
@@ -529,38 +571,12 @@ def test_isolation_root_is_unique_private_and_never_writable_by_others(monkeypat
 
 def test_candidate_clone_of_a_pinned_detached_checkout_still_has_the_governed_base(monkeypatch, tmp_path):
     """Codex P2 consequence: an exact-SHA (detached) trusted checkout has no local main."""
-    import subprocess
 
     import hunter.automation.issue_agent_replacement_executor as core
 
-    repo, _first, ident = _git_repo_at_base(tmp_path)
-    env = {
-        "GIT_CONFIG_GLOBAL": "/dev/null",
-        "GIT_CONFIG_NOSYSTEM": "1",
-        "PATH": "/usr/bin:/bin:/usr/local/bin",
-        **ident,
-    }
-    git = lambda *a: subprocess.run(  # noqa: E731
-        ("git", *a), cwd=repo, env=env, check=True, capture_output=True, text=True
-    ).stdout.strip()
-    (repo / "scripts").mkdir()
-    (repo / "scripts" / "hunter_pre_push.py").write_text(
-        "def enforce_credential_free_candidate_safety(lines):\n    return 0\n"
+    repo, base, head, git = _pinned_detached_repo(
+        tmp_path, "def enforce_credential_free_candidate_safety(lines):\n    return 0\n"
     )
-    git("add", "scripts/hunter_pre_push.py")
-    git("commit", "-q", "-m", "trusted hook")
-    base = git("rev-parse", "HEAD")
-    # Shape of actions/checkout at an exact SHA with fetch-depth 0: detached HEAD,
-    # main only as a remote-tracking ref.
-    git("update-ref", "refs/remotes/origin/main", base)
-    git("checkout", "-q", "--detach", base)
-    for branch in git("for-each-ref", "--format=%(refname:short)", "refs/heads").split():
-        git("branch", "-q", "-D", branch)
-    (repo / "docs").mkdir()
-    (repo / "docs" / "x.md").write_text("candidate\n")
-    git("add", "docs/x.md")
-    head = git("commit-tree", git("write-tree"), "-p", base, "-m", "candidate")
-    git("reset", "-q", "--hard", base)
     signed = _signed_at(base)
     validated = core.validate_replacement_result(_result(signed), signed_authorization=signed, rehearsal=False)
     report = tmp_path / "report"
@@ -569,10 +585,7 @@ def test_candidate_clone_of_a_pinned_detached_checkout_still_has_the_governed_ba
         script = f'git rev-parse HEAD origin/main > "{report}"'
         return ("/usr/bin/env", "-i", *(f"{k}={v}" for k, v in environment.items()), "/bin/sh", "-c", script)
 
-    monkeypatch.setattr(core, "require_isolation_user", lambda user: user)
-    monkeypatch.setattr(core, "isolated_command", as_runner)
-    monkeypatch.setattr(core, "run_privileged", lambda *_a, **_k: None)
-    monkeypatch.setattr(core, "ISOLATION_ROOT", tmp_path)
+    _stub_isolation(monkeypatch, core, tmp_path, as_runner)
     core._run_pre_push_safety(
         repo,
         validated=validated,
@@ -621,35 +634,11 @@ def enforce_credential_free_candidate_safety(lines):
 def _owner_guard_world(tmp_path, monkeypatch, *, repository="fafa33/Project-Hunter"):
     """Real git in the production shape (detached checkout, tracked main only); sudo replaced by ``env -i``."""
     import dataclasses
-    import subprocess
     import sys
 
     import hunter.automation.issue_agent_replacement_executor as core
 
-    repo, _first, ident = _git_repo_at_base(tmp_path)
-    env = {
-        "GIT_CONFIG_GLOBAL": "/dev/null",
-        "GIT_CONFIG_NOSYSTEM": "1",
-        "PATH": "/usr/bin:/bin:/usr/local/bin",
-        **ident,
-    }
-    git = lambda *a: subprocess.run(  # noqa: E731
-        ("git", *a), cwd=repo, env=env, check=True, capture_output=True, text=True
-    ).stdout.strip()
-    (repo / "scripts").mkdir()
-    (repo / "scripts" / "hunter_pre_push.py").write_text(_OWNER_HOOK)
-    git("add", "scripts/hunter_pre_push.py")
-    git("commit", "-q", "-m", "trusted hook")
-    base = git("rev-parse", "HEAD")
-    git("update-ref", "refs/remotes/origin/main", base)
-    git("checkout", "-q", "--detach", base)
-    for branch in git("for-each-ref", "--format=%(refname:short)", "refs/heads").split():
-        git("branch", "-q", "-D", branch)
-    (repo / "docs").mkdir()
-    (repo / "docs" / "x.md").write_text("candidate\n")
-    git("add", "docs/x.md")
-    head = git("commit-tree", git("write-tree"), "-p", base, "-m", "candidate")
-    git("reset", "-q", "--hard", base)
+    repo, base, head, _git = _pinned_detached_repo(tmp_path, _OWNER_HOOK)
     signed = _signed_at(base)
     validated = core.validate_replacement_result(_result(signed), signed_authorization=signed, rehearsal=False)
     validated = dataclasses.replace(validated, repository=repository)
@@ -659,10 +648,7 @@ def _owner_guard_world(tmp_path, monkeypatch, *, repository="fafa33/Project-Hunt
         launched.append(dict(environment))
         return ("/usr/bin/env", "-i", *(f"{k}={v}" for k, v in environment.items()), sys.executable, *argv[1:])
 
-    monkeypatch.setattr(core, "require_isolation_user", lambda user: user)
-    monkeypatch.setattr(core, "isolated_command", as_runner)
-    monkeypatch.setattr(core, "run_privileged", lambda *_a, **_k: None)
-    monkeypatch.setattr(core, "ISOLATION_ROOT", tmp_path)
+    _stub_isolation(monkeypatch, core, tmp_path, as_runner)
 
     def run(push_url):
         core._run_pre_push_safety(repo, validated=validated, head=head, push_url=push_url, isolation_user="u")
