@@ -754,7 +754,21 @@ def test_failed_gate_diagnostic_is_a_closed_vocabulary():
     )
     assert core.failed_safety_gates(summary) == ("Defect Prevention Guard", "Mypy")
     assert core.failed_safety_gates("Traceback ... SECRET") == ()
-    assert core.failed_safety_gates("  - Ruff [FAILED ] " + "x" * 10**6) == ("Ruff",)
+    assert core.failed_safety_gates("  - Black [FAILED]\n  - Ruff [FAILED ] ") == ("Black", "Ruff")
+
+
+def test_failed_gate_parsing_is_linear_on_adversarial_output():
+    """Sonar python:S5852: candidate-influenced output must not be able to trigger super-linear backtracking."""
+    import time
+
+    import hunter.automation.issue_agent_replacement_executor as core
+
+    hostile = "-" + " " * 250_000 + "[FAILED"
+    started = time.monotonic()
+    assert core.failed_safety_gates(hostile) == ()
+    assert core.failed_safety_gates("- " + "A " * 100_000 + "[FAILED ]\n" * 1000) == ()
+    assert core.failed_safety_gates(("  - " + "Ruff " * 50 + "[FAILED ]\n") * 1000) == ()
+    assert time.monotonic() - started < 2.0
 
 
 def test_unrecognised_failure_reports_unclassified_without_stderr(monkeypatch, tmp_path, capsys):

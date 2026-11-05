@@ -798,16 +798,23 @@ SAFETY_GATE_VOCABULARY: tuple[str, ...] = (
     "Black",
     "Mypy",
 )
-_FAILED_GATE = re.compile(r"^\s*-\s+(?P<gate>[A-Za-z ]+?)\s+\[FAILED\s*\]", re.MULTILINE)
 _GITHUB_REPOSITORY = re.compile(r"[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+")
 
 
 def failed_safety_gates(output: str) -> tuple[str, ...]:
-    """Names of failed gates, restricted to ``SAFETY_GATE_VOCABULARY``, in first-seen order."""
+    """Names of failed gates, restricted to ``SAFETY_GATE_VOCABULARY``, in first-seen order.
+
+    The input is output of candidate-influenced tools, so it is parsed line by line with plain string operations
+    (no backtracking regular expression) and every line is length-bounded: the work is linear in the input.
+    """
     names: list[str] = []
-    for match in _FAILED_GATE.finditer(output[:262144]):
-        gate = match.group("gate").strip()
-        if gate in SAFETY_GATE_VOCABULARY and gate not in names:
+    for line in output[:262144].splitlines():
+        row = line.strip()
+        if len(row) > 200 or not row.startswith("- "):
+            continue
+        gate, marker, rest = row[2:].partition("[FAILED")
+        gate = gate.strip()
+        if marker and rest.lstrip().startswith("]") and gate in SAFETY_GATE_VOCABULARY and gate not in names:
             names.append(gate)
     return tuple(names)
 
