@@ -19,6 +19,7 @@ import os
 import sqlite3
 import subprocess
 import sys
+import tempfile
 from collections.abc import Callable, Mapping, Sequence
 from datetime import UTC, datetime
 from pathlib import Path
@@ -39,6 +40,9 @@ HANDOFF_KEY_ENV = "HUNTER_ISSUE_AGENT_HANDOFF_KEY"
 RESULT_KEY_ENV = "HUNTER_ISSUE_AGENT_RESULT_KEY"
 MODEL_KEY_ENV = "HUNTER_ISSUE_AGENT_EXECUTOR_MODEL_API_KEY"
 PUSH_TOKEN_ENV = "HUNTER_ISSUE_AGENT_PUBLISHER_PUSH_TOKEN"
+#: Read-only credential (Administration: read + Metadata: read, this repository only) used solely to observe the
+#: live ruleset contract. It has no push, PR or other authority and is never a fallback for, or from, any other token.
+HGCC_TOKEN_ENV = "HUNTER_HGCC_READ_TOKEN"
 PUBLISHER_SIGNING_KEY_ENV = "HUNTER_ISSUE_AGENT_PUBLISHER_SIGNING_KEY"
 #: K_AUTH: the issuer key that mints both an Issue authorization and a remediation authorization (ADR 0039 L4).
 AUTHORIZATION_SIGNING_KEY_ENV = "HUNTER_ISSUE_AGENT_AUTHORIZATION_SIGNING_KEY"
@@ -1399,19 +1403,68 @@ def _issue_gate(configuration: control.Configuration, github: control.GitHubRest
     )
 
 
-def cmd_publish(configuration: control.Configuration, arguments: argparse.Namespace) -> int:
-    github = _github(configuration)
-    # HGCC-1 trusted publication boundary: agents cannot bypass this by
-    # disabling local git hooks. Read-only; never publishes a parallel status.
-    from hunter_github_contract import observe_contract
+def _observe_hgcc_contract(repository: str) -> None:
+    """HGCC-1 trusted publication boundary: the live ruleset contract must be completely observable, or refuse.
 
+    ``bypass_actors`` is returned only to a credential with ruleset-level visibility, which ``GITHUB_TOKEN`` cannot
+    hold. The dedicated read-only credential is read once, removed from this process's environment so no later
+    subprocess (git push, PR calls) inherits it, and handed only to the observer subprocess, whose environment holds
+    nothing else. There is no fallback to ``GITHUB_TOKEN`` or the publisher push token. Nothing the observer prints is
+    forwarded: a refusal carries only a reason from a closed vocabulary.
+    """
+
+    from hunter_github_contract import REFUSAL_REASONS
+
+    def refuse(reason: str) -> LifecycleRefused:
+        return LifecycleRefused("PUBLICATION_UNAVAILABLE", f"HGCC-1 GitHub contract unavailable: {reason}")
+
+    token = os.environ.pop(HGCC_TOKEN_ENV, "").strip()
+    if not token:
+        raise refuse("READ_CREDENTIAL_MISSING")
+    script = Path(__file__).resolve().with_name("hunter_github_contract.py")
+    with tempfile.TemporaryDirectory(prefix="hunter-hgcc-") as home:
+        environment = {
+            "PATH": os.environ.get("PATH", "/usr/local/bin:/usr/bin:/bin"),
+            "HOME": home,
+            "GH_CONFIG_DIR": home,
+            "GH_TOKEN": token,
+            "GH_PROMPT_DISABLED": "1",
+            "GH_NO_UPDATE_NOTIFIER": "1",
+        }
+        try:
+            done = subprocess.run(  # noqa: S603 - fixed argv, minimal environment
+                (sys.executable, str(script), repository),
+                env=environment,
+                capture_output=True,
+                text=True,
+                timeout=120,
+                check=False,
+            )
+        except (OSError, subprocess.SubprocessError):
+            raise refuse("OBSERVATION_FAILED") from None
+    if done.returncode != 0:
+        prefix = "[HGCC-1] INDETERMINATE: "
+        reasons = [line[len(prefix) :] for line in done.stderr.splitlines() if line.startswith(prefix)]
+        raise refuse(reasons[-1] if reasons and reasons[-1] in REFUSAL_REASONS else "UNCLASSIFIED")
     try:
-        observe_contract(
-            configuration.repository,
-            get=lambda path: control.definitive(github.get(f"/{path}")),
+        contract = json.loads(done.stdout)
+        rulesets = contract["rulesets"]
+        complete = (
+            contract["schema"] == "hgcc-1/v1"
+            and contract["repository"] == repository
+            and isinstance(rulesets, list)
+            and bool(rulesets)
+            and all(isinstance(item, dict) and isinstance(item.get("bypass_actors"), list) for item in rulesets)
         )
-    except (ValueError, OSError, TypeError) as exc:
-        raise LifecycleRefused("PUBLICATION_UNAVAILABLE", f"HGCC-1 GitHub contract unavailable: {exc}") from None
+    except (ValueError, KeyError, TypeError):
+        complete = False
+    if not complete:
+        raise refuse("OBSERVATION_INCOMPLETE")
+
+
+def cmd_publish(configuration: control.Configuration, arguments: argparse.Namespace) -> int:
+    _observe_hgcc_contract(configuration.repository)
+    github = _github(configuration)
     open_pr = control.definitive(github.get(f"/repos/{configuration.repository}/pulls?state=open&per_page=100"))
     if not isinstance(open_pr, list):
         raise LifecycleRefused("PUBLICATION_UNAVAILABLE", "pull requests are not observable")
