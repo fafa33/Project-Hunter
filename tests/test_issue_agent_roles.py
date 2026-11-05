@@ -470,6 +470,8 @@ def test_failed_model_reports_safe_workspace_counts_without_collecting(
     assert outcome.advisory_code == "PROVIDER_UNAVAILABLE"
     output = capsys.readouterr().out
     assert "executor failed-workspace diagnostic: changed_entries=" in output
+    # -1 is the fallback for a refused/failed git call: a healthy workspace must report a real count.
+    assert "changed_entries=-1" not in output
     assert "ignored_files=" in output
     assert "PRIVATE_SIGNED_TASK" not in output
 
@@ -1493,3 +1495,12 @@ def test_roles_materialize_base_rejects_unsafe_remote_and_branch(tmp_path: Path)
             workspace, git_dir, remote="https://github.com/o/r.git", base_sha="0" * 40, remediation_branch="../main"
         )
     assert exc_info.value.code == "CONFIGURATION_INVALID"
+
+
+def test_the_failed_run_status_invocation_is_accepted_by_the_trusted_git_builder(tmp_path: Path) -> None:
+    git_dir, workspace = tmp_path / "trusted.git", tmp_path / "workspace"
+    workspace.mkdir()
+    roles._git(git_dir, workspace, "init", "--quiet")
+    (workspace / "edited.txt").write_text("x")
+    status = roles._git(git_dir, workspace, "status", "--porcelain", "-z", "--untracked-files=normal")
+    assert [item for item in status.split(b"\0") if item] == [b"?? edited.txt"]

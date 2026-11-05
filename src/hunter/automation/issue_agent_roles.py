@@ -308,6 +308,8 @@ _GIT_OPTIONS: Final = frozenset(
         "--is-ancestor",
         "-m",
         "--no-gpg-sign",
+        "--porcelain",
+        "--untracked-files=normal",
     }
 )
 #: An https URL or an absolute local path, and nothing a git transport could read as an option or a helper program.
