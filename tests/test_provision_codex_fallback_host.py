@@ -254,3 +254,62 @@ def test_pinned_archive_reader_refuses_paths_outside_staging_roots(tmp_path: Pat
     for outside in (Path("/etc/hosts"), nested / "a.tgz"):
         with pytest.raises(provision.ProvisionError, match="staged"):
             provision.read_pinned_tarball(outside)
+
+
+WORK_ROOT_LISTING = "drwx------+ 2 hunterrunner hunterrunner 64 Nov  6 22:00 /private/var/hunter-fallback/work\n"
+
+
+def test_the_work_root_grants_hunteragent_traversal_and_nothing_else() -> None:
+    assert provision.work_root_acl_is_exact(WORK_ROOT_LISTING + " 0: user:hunteragent allow search\n")
+
+
+@pytest.mark.parametrize(
+    "entries",
+    [
+        "",
+        " 0: user:hunteragent allow search,list\n",
+        " 0: user:hunterrunner allow search\n",
+        " 0: user:hunteragent allow search inherited\n",
+        " 0: user:hunteragent allow search\n 1: everyone allow search\n",
+        " 0: group:staff allow search\n 1: user:hunteragent allow search\n",
+    ],
+)
+def test_any_other_work_root_acl_fails_verification(entries: str) -> None:
+    assert not provision.work_root_acl_is_exact(WORK_ROOT_LISTING + entries)
+
+
+def _world_writable_mode_literals(path: Path) -> list[str]:
+    """Literal modes handed to chmod/mkdir calls that would grant write to every local user."""
+
+    found = []
+    for node in ast.walk(ast.parse(path.read_text())):
+        if not isinstance(node, ast.Call):
+            continue
+        name = node.func.attr if isinstance(node.func, ast.Attribute) else getattr(node.func, "id", "")
+        if name not in {"chmod", "mkdir", "makedirs"}:
+            continue
+        for arg in [*node.args, *(keyword.value for keyword in node.keywords)]:
+            if isinstance(arg, ast.Constant) and isinstance(arg.value, int) and arg.value & 0o002:
+                found.append(f"{path.name}:{node.lineno} {oct(arg.value)}")
+    return found
+
+
+@pytest.mark.parametrize(
+    "script",
+    [
+        SCRIPT,
+        ROOT / "scripts" / "hunter_codex_sandbox_probe.py",
+        ROOT / "scripts/issue_agent/codex_fallback_launcher.py",
+    ],
+)
+def test_no_fallback_host_script_grants_world_write(script: Path) -> None:
+    assert _world_writable_mode_literals(script) == []
+
+
+def test_the_world_write_guard_sees_code_not_prose(tmp_path: Path) -> None:
+    trap = tmp_path / "trap.py"
+    trap.write_text(
+        "import os\n# os.chmod(p, 0o1777)\nNOTE = 'os.chmod(p, 0o777)'\nos.chmod(p, 0o700)\n"
+        "os.chmod(p, mode=0o777)\nPath(p).mkdir(0o1777)\n"
+    )
+    assert _world_writable_mode_literals(trap) == ["trap.py:5 0o777", "trap.py:6 0o1777"]

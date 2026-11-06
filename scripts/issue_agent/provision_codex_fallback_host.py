@@ -33,6 +33,7 @@ RUNNER_USER, AGENT_USER = "hunterrunner", "hunteragent"
 ADMIN_GID, STAFF_GID = 80, 20
 FALLBACK_ROOT = Path("/private/var/hunter-fallback")
 WORK_ROOT, RUN_DIR, OWNER_INBOX = FALLBACK_ROOT / "work", FALLBACK_ROOT / "run", FALLBACK_ROOT / "owner-inbox"
+WORK_ROOT_ACL = f"user:{AGENT_USER} allow search"
 SOCKET_PATH = RUN_DIR / "launcher.sock"
 CODEX_BINARY = Path("/opt/hunter/codex/bin/codex")
 HUNTER_LIBRARY = Path("/Library/Hunter")
@@ -302,7 +303,9 @@ def apply(checkout: Path, tarball: Path, owner: str) -> dict[str, object]:
     root_directory(RUN_DIR)
     WORK_ROOT.mkdir(exist_ok=True)
     os.chown(WORK_ROOT, runner_uid, runner_gid)
-    os.chmod(WORK_ROOT, 0o711)  # NOSONAR: traversable, never listable; each workroot is 0700 plus per-run ACLs
+    os.chmod(WORK_ROOT, 0o700)
+    run(["/bin/chmod", "-N", str(WORK_ROOT)])
+    run(["/bin/chmod", "+a", WORK_ROOT_ACL, str(WORK_ROOT)])  # only hunteragent traverses; nobody else, never lists
     OWNER_INBOX.mkdir(exist_ok=True)
     owner_account = pwd.getpwnam(owner)
     os.chown(OWNER_INBOX, owner_account.pw_uid, owner_account.pw_gid)
@@ -355,7 +358,8 @@ def verify(checkout: Path, *, privileged: bool) -> dict[str, object]:
         and hashlib.sha256(CODEX_BINARY.read_bytes()).hexdigest() == CODEX_BINARY_SHA256
     )
     work = os.lstat(WORK_ROOT) if WORK_ROOT.exists() else None
-    checks["work_root"] = bool(work and work.st_uid == runner.pw_uid and stat.S_IMODE(work.st_mode) == 0o711)
+    checks["work_root"] = bool(work and work.st_uid == runner.pw_uid and stat.S_IMODE(work.st_mode) == 0o700)
+    checks["work_root_acl"] = work_root_acl_is_exact(run(["/bin/ls", "-led", str(WORK_ROOT)], check=False))
     inbox = os.lstat(OWNER_INBOX) if OWNER_INBOX.exists() else None
     checks["owner_inbox_private"] = bool(inbox and inbox.st_uid not in (0, runner.pw_uid, agent.pw_uid))
     checks["owner_inbox_mode"] = bool(inbox and stat.S_IMODE(inbox.st_mode) == 0o700)
@@ -386,6 +390,13 @@ def verify(checkout: Path, *, privileged: bool) -> dict[str, object]:
     }
 
 
+def work_root_acl_is_exact(listing: str) -> bool:
+    """`ls -led` output grants exactly one ACL entry: hunteragent may traverse the work root and nothing else."""
+
+    entries = [line.split(":", 1)[1].strip() for line in listing.splitlines()[1:] if re.match(r"^\s*\d+:", line)]
+    return entries == [WORK_ROOT_ACL]
+
+
 def sandbox_denials(agent: pwd.struct_passwd) -> bool:
     """The production profile, applied as hunteragent: allowed writes work, everything else is denied."""
 
@@ -397,9 +408,11 @@ def sandbox_denials(agent: pwd.struct_passwd) -> bool:
             os.chown(directory, agent.pw_uid, agent.pw_gid)
         canary = root / "canary"
         canary.write_text("HUNTER_ATTEST_CANARY\n")
-        os.chmod(canary, 0o644)  # NOSONAR: deliberately readable so only the sandbox can deny the read
-        # Unix would allow both the canary read and an outside write, so only the sandbox can deny them.
-        os.chmod(root, 0o1777)  # NOSONAR: deliberately permissive so only the sandbox can deny the write
+        os.chmod(canary, 0o600)
+        # Unix grants hunteragent alone the canary read and an outside write (ACLs, no world bits),
+        # so only the sandbox can deny them.
+        run(["/bin/chmod", "+a", f"user:{AGENT_USER} allow read", str(canary)])
+        run(["/bin/chmod", "+a", f"user:{AGENT_USER} allow search,add_file", str(root)])
         profile = ["/usr/bin/sandbox-exec", "-f", str(HUNTER_LIBRARY / "codex-fallback.sb")]
         params = ["-D", f"WORKSPACE={workspace}", "-D", f"HOME={home}", "-D", f"CODEX_DIR={CODEX_BINARY.parent.parent}"]
         cases = (
@@ -498,7 +511,7 @@ def plan(checkout: Path, tarball: Path | None) -> dict[str, object]:
             f"install Codex {CODEX_VERSION} at {CODEX_BINARY} (root:wheel 0755) from the verified tarball",
             f"install the launcher, profile, gateway and host config in {HUNTER_LIBRARY} (root:wheel 0644)",
             f"install {PLIST_PATH} (root:wheel 0644) and bootstrap it (socket-activated, idle until used)",
-            f"create {WORK_ROOT} ({RUNNER_USER} 0711), {RUN_DIR} (root 0755), {OWNER_INBOX} (owner 0700, "
+            f"create {WORK_ROOT} ({RUNNER_USER} 0700, {AGENT_USER} search only), {RUN_DIR} (root 0755), {OWNER_INBOX} (owner 0700, "
             f"{AGENT_USER} add_file only)",
             "verify everything, run live sandbox denials as hunteragent and a launcher attestation as hunterrunner",
         ],
