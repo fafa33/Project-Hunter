@@ -333,7 +333,7 @@ def test_a_failed_fallback_never_probes_or_signals_another_fallback(
     )
     probes: list[int] = []
     config = fallback_config(repos)
-    config = roles.ExecutorConfig(**{**_fields(config), "provider_probe": lambda: probes.append(1) or "RATE_LIMIT"})
+    config = roles.ExecutorConfig(**{**_fields(config), "provider_probe": lambda: _record_probe(probes, 1)})
     outcome = run(ledger, second, config, port, mac.WORK_ROOT / WORKROOT_ID)
     assert outcome == roles.ExecutorOutcome(None, "PROVIDER_UNAVAILABLE") and probes == []
 
@@ -364,7 +364,7 @@ def test_a_failed_primary_reports_its_hint_and_the_trusted_probe(repos: dict[str
     outcome = run(
         ledger,
         envelope,
-        primary_with_probe(repos, lambda: order.append("probe") or "RATE_LIMIT"),
+        primary_with_probe(repos, lambda: _record_probe(order, "probe")),
         isolation,
         repos["tmp"] / "exec-primary-probe",
     )
@@ -377,8 +377,13 @@ def test_the_probe_runs_only_for_a_launched_primary_that_exited_non_zero(repos: 
     ledger, envelope = authorize(repos)
     isolation = RecordingIsolation(CANARY, hang=kind == "timeout")
     probes: list[int] = []
-    probe = None if kind == "no-probe" else (lambda: probes.append(1) or "RATE_LIMIT")
+    probe = None if kind == "no-probe" else (lambda: _record_probe(probes, 1))
     if kind == "no-probe":
         isolation = RecordingIsolation(CANARY, fail=True)
     outcome = run(ledger, envelope, primary_with_probe(repos, probe), isolation, repos["tmp"] / f"exec-{kind}")
     assert probes == [] and outcome.stderr_category is None and outcome.probe_category is None
+
+
+def _record_probe(log: list[Any], marker: Any) -> str:
+    log.append(marker)
+    return "RATE_LIMIT"
