@@ -74,6 +74,8 @@ WRITERS: Final[Mapping[str, WriterWorkflow]] = {
             "authorize": frozenset({"authorize"}),
             # ADR 0041 F4: ``bind-fallback`` binds the admitted fallback's result in the same run.
             "bind": frozenset({"bind", "resume-bind", "bind-fallback"}),
+            # ADR 0041 F1: the owner's explicit approve/reject label run.
+            "owner-decision": frozenset({"fallback-decision"}),
             "record-validation": frozenset({"record-validation"}),
             "finalize": frozenset({"finalize"}),
         },
@@ -104,6 +106,9 @@ STAGE_JOBS: Final[Mapping[str, str]] = {
 }
 OUTCOME_SCHEMA_VERSION: Final = "hunter-issue-agent-stage-outcome-v1"
 COMPLETION_DEADLINE: Final = timedelta(hours=24)
+#: ADR 0041 F1: a fallback result gets the same publish window the primary gets at authorization, from its own bind.
+FALLBACK_PUBLISH_DEADLINE: Final = timedelta(hours=6)
+FALLBACK_DECISIONS: Final = frozenset({"approve", "reject"})
 MAX_ARTIFACT_BYTES: Final = MAX_PLAINTEXT_BYTES * 2 + 64 * 1024
 _ACTIVE_RUN_STATUSES: Final = frozenset({"queued", "in_progress", "waiting", "pending", "requested"})
 _SHA40 = re.compile(r"[0-9a-f]{40}")
@@ -1212,7 +1217,7 @@ def observe(
             fields["executor_probe_category"] = executor_probe_category
         observation["executor_job_id"] = executor_job_id
     if current == state.FALLBACK_AUTHORIZED:
-        run_id = int(view.binding("authorize_run_id"))
+        run_id = _owning_run(view)  # the owner-approved resume run, once one has claimed its nonce
         fields["result_artifacts"] = _named_artifacts(
             github, repository, run_id, state.result_artifact_name(view.authorization_id)
         ) + _named_artifacts(github, repository, run_id, state.fallback_result_artifact_name(view.authorization_id))
@@ -1220,6 +1225,8 @@ def observe(
         if executor_advisory_code in state.ADVISORY_CODES:
             fields["executor_advisory_code"] = executor_advisory_code
         observation["executor_job_id"] = executor_job_id
+        if view.pending_resume is not None:
+            fields["resume_run_status"] = _resume_run_status(github, configuration, view)
     if current in (state.RESULT_BOUND, state.VALIDATED):
         bound_id = view.evidence[state.RESULT_BOUND]["result_artifact"]["artifact_id"]
         item = definitive(github.get(f"/repos/{repository}/actions/artifacts/{bound_id}"))
@@ -1357,7 +1364,7 @@ def _bound_result(
         return None, "TRANSPORT_INTEGRITY_FAILED"
     return {
         "result_artifact": {
-            "run_id": int(bound["authorize_run_id"]),
+            "run_id": _owning_run(view),
             "artifact_id": artifact.artifact_id,
             "artifact_digest": artifact.digest,
             "ciphertext_sha256": state.sha256_hex(ciphertext),
@@ -1417,6 +1424,7 @@ def _evidence(
                 "execution_attempt": 2,
                 "executor": "codex",
                 "attestation_sha256": fallback_attestation_sha256,
+                "deadline_published_at": _timestamp(now + FALLBACK_PUBLISH_DEADLINE),
             }
         return target, bound_evidence
     if target == state.VALIDATED:
@@ -1600,6 +1608,60 @@ def step(
     return decision
 
 
+def owner_decision(
+    *,
+    github: GitHub,
+    configuration: Configuration,
+    store: state.GitLedgerStore,
+    signing_key: Ed25519PrivateKey,
+    writer: Writer,
+    issue: int,
+    decision: str,
+    clock: Callable[[], datetime],
+    new_nonce: Callable[[], str] = lambda: secrets.token_hex(32),
+) -> state.Decision:
+    """ADR 0041 F1: the owner's explicit approval requests one fallback run; the owner's rejection withdraws it.
+
+    The request has no deadline and holds no runner while it waits. Approval records a nonce-bound resume before
+    dispatching it, exactly like every other resume. Rejection is refused while an approved run is in flight, because
+    Codex may already be running there; that run's own outcome then decides.
+    """
+
+    if decision not in FALLBACK_DECISIONS or writer.role != "owner-decision":
+        raise ControlRefused("MISSING_CONFIGURATION", "unknown fallback decision or writer")
+    require_anchor(github, configuration, state.ledger_ref(issue))
+    provenance = run_provenance(github, configuration)
+    _, ledger_view = load_ledger(store, configuration, provenance, issue)
+    if ledger_view.active is None:
+        return state.Decision("noop", reason="no active authorization")
+    view = ledger_view.authorizations[ledger_view.active]
+    if view.state != state.FALLBACK_AUTHORIZED:
+        return state.Decision("noop", reason="no fallback awaits an owner decision")
+    ledger = Ledger(store, configuration, provenance, signing_key, writer, issue)
+    now = _timestamp(clock())
+    if view.pending_resume is not None:
+        return state.Decision("noop", reason="an owner-approved fallback run is already pending or in flight")
+    if decision == "reject":
+        ledger.append(
+            view.authorization_id,
+            kind="transition",
+            target=state.FAILED,
+            evidence={"code": "OWNER_WITHDREW", "failed_from_state": view.state},
+            now=now,
+        )
+        return state.Decision("fail", code="OWNER_WITHDREW")
+    nonce = new_nonce()
+    ledger.append(
+        view.authorization_id,
+        kind="resume_requested",
+        target=view.state,
+        evidence={"stage": "fallback", "nonce": nonce, "attempt": _attempt(view, "fallback"), "dispatched_at": now},
+        now=now,
+    )
+    _dispatch_resume(github, issue, view.authorization_id, "fallback", nonce)
+    return state.Decision("resume", stage="fallback")
+
+
 def _dispatch_resume(github: GitHub, issue: int, authorization_id: str, stage: str, nonce: str) -> None:
     # A lost dispatch is recovered by the grace-period redispatch with the same nonce; never by a new nonce.
     github.dispatch(
@@ -1679,6 +1741,7 @@ __all__ = [
     "ReviewThread",
     "ResolutionProof",
     "bind_resume",
+    "owner_decision",
     "dispatch_remediation",
     "eligible_remediation",
     "exact_head_proof",

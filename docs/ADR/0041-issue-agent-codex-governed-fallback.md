@@ -2,7 +2,16 @@
 
 ## Status
 
-**Proposed, revision 3: owner-approved interim implementation direction** (2026-11-06, Issue #390).
+**Proposed, revision 4: owner-approved interim implementation direction** (2026-11-06, Issue #390).
+
+Revision 4 applies the owner's decision of 2026-11-06:
+
+- the 10-minute approval deadline is removed;
+- a fallback request stays pending until the owner explicitly approves or rejects it;
+- device-code expiry never cancels the request, and the owner's next approval renews the code;
+- no runner is held while the request waits.
+
+See F1 and F6.
 
 Revision 2 rests on verified evidence about the Codex CLI's authentication methods and on the owner's cost
 constraint: an existing ChatGPT Pro plan, with no API key, new subscription or other spend. On 2026-11-06 the owner
@@ -142,15 +151,38 @@ read the per-run session tokens. The F6 mitigations bound that exposure:
 
 ### F1. At most one governed fallback dispatch (amends ADR 0037 D8)
 
-D8 becomes: *the model is never re-dispatched, except for **at most one** Codex fallback dispatch per
-authorization, in the **same** lifecycle run (`run_attempt == 1`), and only after the control domain has written a
-signed `FALLBACK_AUTHORIZED` ledger record (F4).*
+D8 becomes: *the model is never re-dispatched, except for **at most one** launched Codex fallback execution per
+authorization. That execution happens only after the control domain has written a signed `FALLBACK_AUTHORIZED`
+ledger record (F4), and only in an owner-approved resume run that claimed its nonce (`run_attempt == 1`).*
 
-- **Admission is automatic.** Under F6, the **launch** additionally requires an owner-approved Codex session. If no
-  approval arrives within `fallback_session_window` (10 minutes), the authorization fails with
-  `EXECUTION_NOT_STARTED`. No model has run at that point.
+**Admission is automatic; execution waits for the owner.** `bind` writes `FALLBACK_AUTHORIZED`, and the label run
+then ends. No fallback job runs and no runner is held. The request stays pending with **no deadline**:
+
+- `reconcile` and `bind` treat it as a permanent no-op;
+- only the owner's explicit decision moves it.
+
+**The owner's decision.** It is a label on the open Issue, `hunter-codex-fallback-approve` or
+`hunter-codex-fallback-reject`, by the repository owner. The `fallback-decision` control job re-verifies the event
+payload (action, label, sender, open Issue).
+
+- **Approval** records a nonce-bound `resume_requested(stage="fallback")` on the ledger, then dispatches one run.
+  This is the existing resume protocol: `resume-bind` claims the nonce by CAS and returns the bound `control_sha`.
+- **Rejection** writes `FAILED / OWNER_WITHDREW` from `FALLBACK_AUTHORIZED`.
+- **One run at a time.** A decision while an approved run is pending or in flight does nothing. That run's own
+  outcome decides, because Codex may already be running in it.
+
+**Back to pending, or final.**
+
+- **Back to pending.** A run in which Codex was never launched reports `FALLBACK_SESSION_NOT_STARTED`. That covers
+  a run where the owner's device sign-in did not complete, the code expired, attestation was refused, or the job
+  never started. The resume is abandoned and the request returns to pending, so the next approval issues a fresh
+  device code. This stage has no attempt cap: every attempt is an explicit owner approval.
+- **Final.** Once Codex has been launched, the outcome is final: a bound result, or a terminal failure.
+
+**Rules that still hold.**
+
 - **No chaining.** The fallback never falls back again.
-- **Resumes.** Resumes never dispatch a model.
+- **Resumes.** No automatic resume dispatches a model. The only model resume is the owner-approved fallback run.
 - **Fixed order.** Kilo stays the primary. The provider order is fixed in trusted code at `control_sha`. Issue
   text, prompts, repository content and workflow inputs cannot select or reorder providers.
 
@@ -350,8 +382,10 @@ launcher disables it, and the outer profile is the sole boundary. Codex is never
    `codex login --device-auth`.
 2. **Code delivery.** The verification URL and the one-time user code go **only** to an owner-only local channel on
    the Mac. They never go to the Actions log, which is public. P0 selects the channel.
-3. **Approval.** The owner approves in their own signed-in browser within `fallback_session_window`. If they don't,
-   the result is `EXECUTION_NOT_STARTED`.
+3. **Sign-in.** The owner, who has just approved this run (F1), signs in with the code in their own browser. Only
+   the device code's own validity bounds this sign-in, with a hard host cap of 15 minutes so that a run never holds
+   the host indefinitely. This is not an approval deadline. Expiry launches no model, the run reports
+   `FALLBACK_SESSION_NOT_STARTED`, and the request returns to pending. The owner's next approval issues a new code.
 4. **Run.** `codex exec` runs once.
 5. **Teardown.** Then, in all cases, `codex logout` (P0 verifies that it revokes the session) and deletion of
    `CODEX_HOME`.
@@ -390,15 +424,23 @@ Validation Stage Contract are unchanged. The executor identity is evidence only.
   - the runner is online.
 
   If any of these is missing, `bind` cannot write `FALLBACK_AUTHORIZED`, and behavior is identical to today.
-- **Recovery is attended.** Under F6, fallback recovers a run only while the owner is available to approve a device
-  code.
+- **Recovery waits for the owner, with no deadline.** No runner or host is held while the request waits.
+- **The waiting limit is GitHub's.** Artifact retention bounds how long a request can wait.
+  - The fallback handoff is the only copy of the sealed task (there is no confidential durable store), so it is
+    uploaded with the longest retention GitHub allows, 90 days.
+  - After it expires, the approved run's download step fails before the executor starts, so no model runs. The
+    authorization then ends terminally (`EXECUTION_NOT_COMPLETED`), because a failed job without a not-started report
+    is never assumed to have launched nothing.
+- **Publish deadline.** It restarts at the fallback's own bind (`RESULT_BOUND.fallback.deadline_published_at`, 6
+  hours), so a late approval is not failed by the original authorization's window.
+- **The Issue stays busy.** A pending fallback keeps its authorization active, so the Issue takes no new
+  authorization until the owner approves and the fallback completes, or rejects.
 - **Guards and documents to extend:**
   - the state machine document;
   - the defect registry;
   - the static workflow guard (AT-41/42/47), which must cover the new job, the new environment and the
     self-hosted label (permitted only on `execute-fallback`).
-- **Cost.** At most one extra model run per authorization, on the included plan quota. The lifecycle deadline
-  includes the fallback job's timeout and the session window.
+- **Cost.** At most one launched extra model run per authorization, on the included plan quota.
 
 ## Alternatives Considered
 

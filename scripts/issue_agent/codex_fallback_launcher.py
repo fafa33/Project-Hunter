@@ -34,7 +34,10 @@ GATEWAY_PORT = 18443
 SOCKET_NAME = "Listener"
 MAX_HEADER = 4096
 MAX_PROMPT = 256 * 1024
-DEVICE_AUTH_WINDOW_SECONDS = 600
+# Not an approval deadline (ADR 0041 F1): the owner has already approved this run. This only bounds one device code's
+# sign-in so a run never holds the host indefinitely. Expiry launches no model; the request returns to pending and
+# the owner's next approval issues a fresh code.
+DEVICE_CODE_SESSION_CAP_SECONDS = 15 * 60
 MODEL_TIMEOUT_SECONDS = 12 * 60
 WORKROOT_ID = re.compile(r"[0-9a-f]{32}")
 MODEL = re.compile(r"[A-Za-z0-9][A-Za-z0-9._-]{0,63}")
@@ -208,7 +211,7 @@ def device_session(workroot_id: str, workspace: Path, home: Path) -> str:
         start_new_session=True,
     )
     assert process.stdout is not None
-    captured, deadline = b"", time.monotonic() + DEVICE_AUTH_WINDOW_SECONDS
+    captured, deadline = b"", time.monotonic() + DEVICE_CODE_SESSION_CAP_SECONDS
     os.set_blocking(process.stdout.fileno(), False)
     url_seen_at: float | None = None
     written = False
@@ -227,7 +230,7 @@ def device_session(workroot_id: str, workspace: Path, home: Path) -> str:
     if process.poll() is None:
         os.killpg(process.pid, signal.SIGKILL)
         process.wait()
-        return "DEVICE_AUTH_TIMEOUT"
+        return "DEVICE_CODE_EXPIRED"
     if process.returncode in SETUP_EXITS:
         return "SANDBOX_SETUP_FAILED"
     if process.returncode != 0 or not written:

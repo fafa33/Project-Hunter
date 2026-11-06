@@ -1071,8 +1071,15 @@ def run_executor(
     fallback = view.state == state.FALLBACK_AUTHORIZED
     if view.state not in (state.AUTHORIZED, state.FALLBACK_AUTHORIZED) or bound is None:
         raise RoleRefused("EXECUTION_NOT_STARTED", "the authorization is not awaiting execution")
-    if context.run_attempt != 1 or bound["authorize_run_id"] != context.run_id:
-        raise RoleRefused("EXECUTION_NOT_STARTED", "the model runs only in attempt 1 of its own authorize run")
+    owning_run = bound["authorize_run_id"]
+    if fallback:
+        # ADR 0041 F1: the fallback runs only in the owner-approved resume run that claimed the pending nonce.
+        pending = view.pending_resume
+        if pending is None or pending["stage"] != "fallback" or pending["bound_run_id"] is None:
+            raise RoleRefused("EXECUTION_NOT_STARTED", "no owner-approved fallback run has claimed the request")
+        owning_run = pending["bound_run_id"]
+    if context.run_attempt != 1 or owning_run != context.run_id:
+        raise RoleRefused("EXECUTION_NOT_STARTED", "the model runs only in attempt 1 of its own bound run")
     expected = TransportBinding(
         payload_kind="handoff",
         repository_id=view.records[0]["repository_id"],

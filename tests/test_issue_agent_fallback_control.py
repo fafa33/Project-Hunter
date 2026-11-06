@@ -9,7 +9,8 @@ from typing import Any
 import pytest
 import test_issue_agent_fallback_executor as fx
 import test_issue_agent_roles as rt
-from test_issue_agent_control import CONFIG, FakeGitHub, ledger_state, provisioned, step, write_roots
+from test_issue_agent_control import CONFIG, NOW, FakeGitHub, ledger_state, provisioned, step, write_roots
+from test_issue_agent_control import run as control_run
 
 from hunter.automation import issue_agent_control as control
 from hunter.automation import issue_agent_mac_fallback as mac
@@ -113,13 +114,20 @@ def fallback_result(repos: dict[str, Any], tmp_path: Path, monkeypatch: Any) -> 
     return outcome.sealed_result
 
 
-def fallback_world(sealed: bytes, name: str | None = None) -> FakeGitHub:
+RESUME = f"/repos/{rt.REPOSITORY}/actions/runs/{fx.APPROVED_RUN}"
+
+
+def fallback_world(sealed: bytes | None, name: str | None = None, conclusion: str = "success") -> FakeGitHub:
+    """The owner-approved resume run (not the authorize run) owns the fallback job and its result."""
+
     github = FakeGitHub()
-    github.routes[JOBS] = {
-        "total_count": 2,
-        "jobs": [github.job("execute", 9, "success"), github.job("execute-fallback", 10, "success")],
-    }
-    github.routes[ARTIFACTS] = [github.artifact(31, name or state.fallback_result_artifact_name(rt.AUTH), sealed)]
+    github.routes[f"{RESUME}/attempts/1"] = control_run(fx.APPROVED_RUN, event="workflow_dispatch")
+    github.routes[RESUME] = control_run(fx.APPROVED_RUN, status="completed")
+    github.routes[f"{RESUME}/jobs"] = {"total_count": 1, "jobs": [github.job("execute-fallback", 10, conclusion)]}
+    items = (
+        [] if sealed is None else [github.artifact(31, name or state.fallback_result_artifact_name(rt.AUTH), sealed)]
+    )
+    github.routes[f"{RESUME}/artifacts"] = items
     return github
 
 
@@ -132,7 +140,14 @@ def test_bind_fallback_binds_the_attempt_two_result_with_its_attestation(
     view = ledger_state(repos)
     evidence = view.evidence[state.RESULT_BOUND]
     assert evidence["executor_job_id"] == 10 and evidence["result_artifact"]["artifact_id"] == 31
-    assert evidence["fallback"] == {"execution_attempt": 2, "executor": "codex", "attestation_sha256": "ab" * 32}
+    assert evidence["fallback"] == {
+        "execution_attempt": 2,
+        "executor": "codex",
+        "attestation_sha256": "ab" * 32,
+        "deadline_published_at": "2026-10-04T19:00:00Z",  # restarted at this bind, not at authorization
+    }
+    assert evidence["result_artifact"]["run_id"] == fx.APPROVED_RUN  # the validator downloads from the approved run
+    assert view.publish_deadline == "2026-10-04T19:00:00Z"
     assert view.execution_id == view.evidence[state.AUTHORIZED]["fallback"]["execution_id"]
 
 
@@ -198,17 +213,116 @@ def test_a_late_primary_artifact_during_the_fallback_is_an_integrity_failure(
 ) -> None:
     sealed = fallback_result(repos, tmp_path, monkeypatch)
     github = fallback_world(sealed)
-    github.routes[ARTIFACTS].append(github.artifact(32, state.result_artifact_name(rt.AUTH), sealed))
+    github.routes[f"{RESUME}/artifacts"].append(github.artifact(32, state.result_artifact_name(rt.AUTH), sealed))
     decision = step(repos, github, configuration=FALLBACK_CONFIG, fallback_attestation_sha256="ab" * 32)
     assert decision.code == "TRANSPORT_INTEGRITY_FAILED"
 
 
 def test_a_running_fallback_job_is_a_noop(repos: dict[str, Any]) -> None:
     fx.offer_and_admit(repos)
-    github = FakeGitHub()
-    github.routes[JOBS] = {
-        "total_count": 2,
-        "jobs": [github.job("execute", 9), github.job("execute-fallback", 10, None, "in_progress")],  # type: ignore[arg-type]
+    github = fallback_world(None)
+    github.routes[RESUME] = control_run(fx.APPROVED_RUN, status="in_progress")
+    github.routes[f"{RESUME}/jobs"] = {
+        "total_count": 1,
+        "jobs": [github.job("execute-fallback", 10, None, "in_progress")],  # type: ignore[arg-type]
     }
     assert step(repos, github, configuration=FALLBACK_CONFIG).action == "noop"
     assert ledger_state(repos).state == state.FALLBACK_AUTHORIZED
+
+
+def test_a_session_that_never_started_returns_the_request_to_pending(repos: dict[str, Any]) -> None:
+    fx.offer_and_admit(repos)
+    decision = step(
+        repos,
+        fallback_world(None),
+        configuration=FALLBACK_CONFIG,
+        executor_advisory_code="FALLBACK_SESSION_NOT_STARTED",
+    )
+    assert decision.action in ("abandon_resume", "noop")
+    view = ledger_state(repos)
+    assert view.state == state.FALLBACK_AUTHORIZED and view.pending_resume is None
+    assert view.resume_attempts == {"fallback": 1}
+
+
+def test_a_launched_fallback_that_failed_is_final(repos: dict[str, Any]) -> None:
+    fx.offer_and_admit(repos)
+    decision = step(repos, fallback_world(None, conclusion="failure"), configuration=FALLBACK_CONFIG)
+    assert decision.code == "EXECUTION_NOT_COMPLETED"
+    assert ledger_state(repos).evidence[state.FAILED]["failed_from_state"] == state.FALLBACK_AUTHORIZED
+
+
+def test_reconcile_never_expires_a_fallback_awaiting_the_owner(repos: dict[str, Any]) -> None:
+    fx.offer_and_admit(repos, approved=False)
+    for observer in ("reconcile", "bind"):
+        assert step(repos, FakeGitHub(), role=observer, configuration=FALLBACK_CONFIG).action == "noop"
+    assert ledger_state(repos).state == state.FALLBACK_AUTHORIZED
+
+
+# --- the owner's explicit decision ------------------------------------------------------------------------------
+
+
+def decide(repos: dict[str, Any], github: FakeGitHub, decision: str) -> state.Decision:
+    return control.owner_decision(
+        github=github,
+        configuration=FALLBACK_CONFIG,
+        store=state.GitLedgerStore(repos["remote"], workdir=repos["tmp"] / f"owner-{len(github.reads)}"),
+        signing_key=rt.KEY,
+        writer=control.Writer(control.LIFECYCLE_WORKFLOW, "fallback-decision", "owner-decision", 100, 1, rt.CONTROL),
+        issue=rt.ISSUE,
+        decision=decision,
+        clock=lambda: NOW,
+        new_nonce=lambda: "cd" * 32,
+    )
+
+
+def test_owner_approval_records_a_nonce_bound_request_before_dispatching_it(repos: dict[str, Any]) -> None:
+    fx.offer_and_admit(repos, approved=False)
+    github = FakeGitHub()
+    assert decide(repos, github, "approve") == state.Decision("resume", stage="fallback")
+    view = ledger_state(repos)
+    assert view.pending_resume is not None and view.pending_resume["nonce"] == "cd" * 32
+    assert view.pending_resume["stage"] == "fallback" and view.pending_resume["bound_run_id"] is None
+    assert [inputs for _, inputs in github.dispatched] == [
+        {"issue": str(rt.ISSUE), "authorization_id": rt.AUTH, "stage": "fallback", "nonce": "cd" * 32}
+    ]
+
+
+def test_a_second_approval_while_one_is_pending_does_nothing(repos: dict[str, Any]) -> None:
+    fx.offer_and_admit(repos)  # already approved and claimed by run 200
+    github = fallback_world(None)
+    assert decide(repos, github, "approve").action == "noop"
+    assert decide(repos, github, "reject").action == "noop"  # Codex may be running in the claimed run
+    assert github.dispatched == [] and ledger_state(repos).state == state.FALLBACK_AUTHORIZED
+
+
+def test_owner_rejection_withdraws_a_pending_fallback(repos: dict[str, Any]) -> None:
+    fx.offer_and_admit(repos, approved=False)
+    github = FakeGitHub()
+    assert decide(repos, github, "reject").code == "OWNER_WITHDREW"
+    view = ledger_state(repos)
+    assert view.state == state.FAILED and view.evidence[state.FAILED]["code"] == "OWNER_WITHDREW"
+    assert github.dispatched == []
+
+
+def test_a_decision_without_an_admitted_fallback_does_nothing(repos: dict[str, Any]) -> None:
+    fx.offer_and_admit(repos, admit=False)
+    github = FakeGitHub()
+    assert decide(repos, github, "approve").action == "noop"
+    assert decide(repos, github, "reject").action == "noop"
+    assert ledger_state(repos).state == state.AUTHORIZED and github.dispatched == []
+
+
+@pytest.mark.parametrize("decision,role", [("delete", "owner-decision"), ("approve", "bind")])
+def test_an_unknown_decision_or_writer_is_refused(repos: dict[str, Any], decision: str, role: str) -> None:
+    fx.offer_and_admit(repos, approved=False)
+    with pytest.raises(control.ControlRefused):
+        control.owner_decision(
+            github=FakeGitHub(),
+            configuration=FALLBACK_CONFIG,
+            store=state.GitLedgerStore(repos["remote"], workdir=repos["tmp"] / "owner-bad"),
+            signing_key=rt.KEY,
+            writer=control.Writer(control.LIFECYCLE_WORKFLOW, "fallback-decision", role, 100, 1, rt.CONTROL),
+            issue=rt.ISSUE,
+            decision=decision,
+            clock=lambda: NOW,
+        )

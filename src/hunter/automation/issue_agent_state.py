@@ -76,11 +76,21 @@ WRITER_ROLES: Final[Mapping[str, frozenset[str]]] = {
     VALIDATED: frozenset({"record-validation", "reconcile"}),
     PUBLISHED: frozenset({"finalize", "reconcile"}),
     COMPLETED: frozenset({"candidate-pr-record", "reconcile"}),
-    FAILED: frozenset({"authorize", "bind", "record-validation", "finalize", "reconcile", "candidate-pr-record"}),
+    FAILED: frozenset(
+        {"authorize", "bind", "record-validation", "finalize", "reconcile", "candidate-pr-record", "owner-decision"}
+    ),
 }
-RESUME_ROLES: Final = frozenset({"bind", "record-validation", "finalize", "reconcile"})
+#: ``owner-decision`` (ADR 0041 F1): only the owner's explicit approval requests a fallback run, and only the owner's
+#: explicit rejection withdraws a pending fallback.
+RESUME_ROLES: Final = frozenset({"bind", "record-validation", "finalize", "reconcile", "owner-decision"})
 #: Model-free stages that may resume, with their attempt caps. The model never resumes.
-RESUME_STAGES: Final[Mapping[str, tuple[str, int]]] = {"validation": (RESULT_BOUND, 2), "publication": (VALIDATED, 3)}
+RESUME_STAGES: Final[Mapping[str, tuple[str, int | None]]] = {
+    "validation": (RESULT_BOUND, 2),
+    "publication": (VALIDATED, 3),
+    # ADR 0041 F1: the admitted fallback starts only in an owner-approved resume run. It has no cap and no deadline:
+    # every attempt is the owner's explicit approval, and an attempt whose sign-in never completed ran no model.
+    "fallback": (FALLBACK_AUTHORIZED, None),
+}
 #: An unbound resume whose dispatch produced no run within this grace is re-dispatched with the same nonce.
 RESUME_DISPATCH_GRACE_SECONDS: Final = 600
 
@@ -119,6 +129,8 @@ ADVISORY_CODES: Final = frozenset(
         "MISSING_CONFIGURATION",
         "SECRET_IN_RESULT",
         "EXECUTOR_RESULT_REJECTED",
+        # ADR 0041 F1/F6: the fallback run ended before Codex was launched (no owner sign-in, or no attestation).
+        "FALLBACK_SESSION_NOT_STARTED",
     }
 )
 EXECUTOR_CONCLUSIONS: Final = frozenset({"success", "failure", "cancelled", "timed_out", "skipped"})
@@ -449,6 +461,7 @@ _RECORDED_BY = _object(
                 "candidate-pr-record",
                 "source-handling-bootstrap",
                 "knowledge-ingest",
+                "owner-decision",  # ADR 0041 F1: the owner's explicit fallback approval or rejection
             }
         ),
         "run_id": POSITIVE,
@@ -558,6 +571,8 @@ EVIDENCE_SCHEMAS: Final[Mapping[str, Validator]] = {
                     "execution_attempt": _exact(2),
                     "executor": _enum(FALLBACK_EXECUTORS),
                     "attestation_sha256": SHA64,
+                    # The publish deadline restarts at the fallback's bind: an owner may approve days later.
+                    "deadline_published_at": TIMESTAMP,
                 }
             )
         },
@@ -849,6 +864,13 @@ class AuthorizationView:
             return str(admitted["fallback_execution_id"])
         return str(self.evidence[AUTHORIZED]["execution_id"])
 
+    @property
+    def publish_deadline(self) -> str:
+        """The bound result's publish deadline: the fallback's own when the result came from the fallback."""
+
+        fallback = self.evidence.get(RESULT_BOUND, {}).get("fallback")
+        return str(fallback["deadline_published_at"] if fallback else self.binding("deadline_published_at"))
+
 
 @dataclass(slots=True)
 class LedgerView:
@@ -1032,7 +1054,7 @@ def apply_record(
             attempts = (current.resume_attempts or {}).get(stage, 0) + 1
             if current.state != stage_state or current.pending_resume is not None:
                 raise LedgerCorruptError("resume requested outside its stage or while one is pending")
-            if evidence["attempt"] != attempts or attempts > cap - 1:
+            if evidence["attempt"] != attempts or (cap is not None and attempts > cap - 1):
                 raise LedgerCorruptError("resume attempt is not the next attempt within the cap")
             current.resume_attempts = {**(current.resume_attempts or {}), stage: attempts}
             current.pending_resume = {
@@ -1371,21 +1393,7 @@ def advance(view: AuthorizationView, facts: Facts) -> Decision:
         return _executor_failure(facts)
 
     if state == FALLBACK_AUTHORIZED:
-        if facts.result_artifacts is UNKNOWN or facts.executor_conclusion is UNKNOWN:
-            return Decision("noop", reason="fallback executor facts unknown")
-        primary = [a for a in facts.result_artifacts if a.name == result_artifact_name(view.authorization_id)]
-        second = [a for a in facts.result_artifacts if a.name == fallback_result_artifact_name(view.authorization_id)]
-        if primary or len(second) > 1:
-            return Decision("fail", code="TRANSPORT_INTEGRITY_FAILED", reason="a result other than one fallback result")
-        if len(second) == 1:
-            if second[0].expired:
-                return Decision("fail", code="RESULT_TRANSPORT_EXPIRED")
-            return Decision(
-                "transition", target_state=RESULT_BOUND, evidence_hint={"artifact_id": second[0].artifact_id}
-            )
-        if facts.executor_conclusion in (None, "skipped"):
-            return Decision("fail", code="EXECUTION_NOT_STARTED")
-        return _executor_failure(facts)
+        return _fallback_decision(view, facts)
 
     if state == RESULT_BOUND:
         if facts.receipt is UNKNOWN:
@@ -1407,7 +1415,7 @@ def advance(view: AuthorizationView, facts: Facts) -> Decision:
             return Decision("fail", code="REMOTE_BRANCH_CONFLICT")
         if facts.publication_refusal_code is not None:
             return Decision("fail", code=_terminal_refusal(facts.publication_refusal_code, PUBLICATION_REFUSAL_CODES))
-        if _deadline_passed(view.binding("deadline_published_at"), facts.now):
+        if _deadline_passed(view.publish_deadline, facts.now):
             return Decision("fail", code="LIFECYCLE_DEADLINE_EXCEEDED")
         return _resume_or_fail(view, "publication", facts, "PUBLICATION_UNAVAILABLE")
 
@@ -1421,6 +1429,41 @@ def advance(view: AuthorizationView, facts: Facts) -> Decision:
     if _deadline_passed(view.evidence[PUBLISHED]["deadline_completed_at"], facts.now):
         return Decision("fail", code="CANDIDATE_PREFLIGHT_TIMEOUT")
     return Decision("noop", reason="awaiting exact-head Pre-PR Preflight and Draft PR")
+
+
+def _fallback_decision(view: AuthorizationView, facts: Facts) -> Decision:
+    """ADR 0041 F1: pending until the owner decides; one owner-approved run at a time; no deadline.
+
+    A run whose sign-in never completed launched no model, so it returns the request to pending and the next owner
+    approval renews the device code. Once Codex has been launched, its outcome is final: the fallback never repeats.
+    """
+
+    pending = view.pending_resume
+    if pending is None:
+        return Decision("noop", reason="fallback awaits the owner's explicit approval or rejection")
+    status = facts.resume_run_status
+    if status is UNKNOWN or status == "active":
+        return Decision("noop", reason="owner-approved fallback run unknown or still active")
+    if pending["bound_run_id"] is None:
+        if status == "concluded":
+            return Decision("abandon_resume", stage="fallback", reason="run_concluded_without_output")
+        elapsed = (_instant(facts.now) - _instant(pending["dispatched_at"])).total_seconds()
+        if elapsed < RESUME_DISPATCH_GRACE_SECONDS:
+            return Decision("noop", reason="fallback dispatch within its grace period")
+        return Decision("redispatch", stage="fallback", reason="dispatch produced no run; same nonce")
+    if facts.result_artifacts is UNKNOWN or facts.executor_conclusion is UNKNOWN:
+        return Decision("noop", reason="fallback executor facts unknown")
+    primary = [a for a in facts.result_artifacts if a.name == result_artifact_name(view.authorization_id)]
+    second = [a for a in facts.result_artifacts if a.name == fallback_result_artifact_name(view.authorization_id)]
+    if primary or len(second) > 1:
+        return Decision("fail", code="TRANSPORT_INTEGRITY_FAILED", reason="a result other than one fallback result")
+    if len(second) == 1:
+        if second[0].expired:
+            return Decision("fail", code="RESULT_TRANSPORT_EXPIRED")
+        return Decision("transition", target_state=RESULT_BOUND, evidence_hint={"artifact_id": second[0].artifact_id})
+    if facts.executor_advisory_code == "FALLBACK_SESSION_NOT_STARTED" or facts.executor_conclusion in (None, "skipped"):
+        return Decision("abandon_resume", stage="fallback", reason="run_concluded_without_output")
+    return _executor_failure(facts)
 
 
 def _executor_failure(facts: Facts) -> Decision:

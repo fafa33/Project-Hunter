@@ -23,7 +23,7 @@ import tempfile
 from collections.abc import Callable, Mapping, Sequence
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import Any
+from typing import Any, Final
 
 from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
 from cryptography.hazmat.primitives.asymmetric.x25519 import X25519PrivateKey
@@ -1264,6 +1264,7 @@ def cmd_bound(configuration: control.Configuration, arguments: argparse.Namespac
     fallback = view.evidence[state.AUTHORIZED].get("fallback")
     if fallback is not None:
         values["fallback_handoff_artifact_id"] = fallback["handoff_artifact"]["artifact_id"]
+        values["fallback_handoff_run_id"] = fallback["handoff_artifact"]["run_id"]
     if state.RESULT_BOUND in view.evidence:
         artifact = view.evidence[state.RESULT_BOUND]["result_artifact"]
         values.update(result_artifact_id=artifact["artifact_id"], result_run_id=artifact["run_id"])
@@ -1386,6 +1387,42 @@ def cmd_execute(configuration: control.Configuration, arguments: argparse.Namesp
     return 0
 
 
+FALLBACK_DECISION_LABELS: Final = {
+    "hunter-codex-fallback-approve": "approve",
+    "hunter-codex-fallback-reject": "reject",
+}
+
+
+def cmd_fallback_decision(configuration: control.Configuration, arguments: argparse.Namespace) -> int:
+    """ADR 0041 F1: the owner's explicit approval or rejection of a pending fallback, from the label event itself."""
+
+    event = json.loads(Path(arguments.event).read_bytes())
+    issue = event.get("issue") or {}
+    label = (event.get("label") or {}).get("name")
+    sender = (event.get("sender") or {}).get("login")
+    if (
+        event.get("action") != "labeled"
+        or label not in FALLBACK_DECISION_LABELS
+        or sender != configuration.owner_login
+        or issue.get("pull_request") is not None
+        or issue.get("state") != "open"
+        or type(issue.get("number")) is not int
+    ):
+        raise LifecycleRefused("NOT_ELIGIBLE", "only the owner's label on an open Issue decides a fallback")
+    decision = control.owner_decision(
+        github=_github(configuration),
+        configuration=configuration,
+        store=_store(configuration, authenticated=True),
+        signing_key=_ed25519(STATE_SIGNING_KEY_ENV),
+        writer=_writer("owner-decision", "fallback-decision"),
+        issue=int(issue["number"]),
+        decision=FALLBACK_DECISION_LABELS[str(label)],
+        clock=_now,
+    )
+    print(f"issue {issue['number']}: fallback {decision.action} {decision.code or decision.reason}".rstrip())
+    return 0
+
+
 def cmd_execute_fallback(configuration: control.Configuration, arguments: argparse.Namespace) -> int:
     """ADR 0041: the single admitted Codex fallback, on the attested Mac, through the unchanged executor role."""
 
@@ -1401,29 +1438,43 @@ def cmd_execute_fallback(configuration: control.Configuration, arguments: argpar
     if view.state != state.FALLBACK_AUTHORIZED:
         raise roles.RoleRefused("EXECUTION_NOT_STARTED", "no signed FALLBACK_AUTHORIZED record on the ledger")
     os.environ["HUNTER_PROMPT_AUTOMATION_VERIFYING_KEY"] = configuration.prompt_verifying_key
-    isolation = MacCodexIsolation(Path(arguments.checkout))
-    workroot = WORK_ROOT / _secrets.token_hex(16)
-    workroot.mkdir(mode=0o700)
-    # Attest before the fallback key is even read: pinned bytes, principals, live denials.
-    attestation = isolation.attest(workroot)
-    outcome = roles.run_executor(
-        issue=arguments.issue,
-        authorization_id=arguments.authorization_id,
-        context=roles.RoleContext(run_id, attempt),
-        ledger=_ledger_access(configuration),
-        handoff_envelope=Path(arguments.handoff).read_bytes(),
-        config=roles.ExecutorConfig(
-            remote=_remote(configuration),
-            model_argv=("codex", "exec", "--model", arguments.model),
-            model_public_env=roles.MODEL_PUBLIC_ENVIRONMENT,
-            model_secret_env={},
-            handoff_key=_x25519(FALLBACK_HANDOFF_KEY_ENV),
-            result_recipient=configuration.result_recipient,
-            prompt_verifier=PromptAutomationVerifier.from_environment(),
-        ),
-        isolation=isolation,
-        workroot=workroot,
-    )
+    # ADR 0041 F1: anything refused before Codex is launched (no attestation, no owner sign-in, an expired device
+    # code) ran no model. It is reported as such, so the request returns to pending for the owner's next approval.
+    try:
+        isolation = MacCodexIsolation(Path(arguments.checkout))
+        workroot = WORK_ROOT / _secrets.token_hex(16)
+        workroot.mkdir(mode=0o700)
+        # Attest before the fallback key is even read: pinned bytes, principals, live denials.
+        attestation = isolation.attest(workroot)
+        outcome = roles.run_executor(
+            issue=arguments.issue,
+            authorization_id=arguments.authorization_id,
+            context=roles.RoleContext(run_id, attempt),
+            ledger=_ledger_access(configuration),
+            handoff_envelope=Path(arguments.handoff).read_bytes(),
+            config=roles.ExecutorConfig(
+                remote=_remote(configuration),
+                model_argv=("codex", "exec", "--model", arguments.model),
+                model_public_env=roles.MODEL_PUBLIC_ENVIRONMENT,
+                model_secret_env={},
+                handoff_key=_x25519(FALLBACK_HANDOFF_KEY_ENV),
+                result_recipient=configuration.result_recipient,
+                prompt_verifier=PromptAutomationVerifier.from_environment(),
+            ),
+            isolation=isolation,
+            workroot=workroot,
+        )
+    except roles.RoleRefused as refusal:
+        if refusal.code != "EXECUTION_NOT_STARTED":
+            raise
+        print("fallback executor advisory: FALLBACK_SESSION_NOT_STARTED", flush=True)
+        _output(
+            advisory_code="FALLBACK_SESSION_NOT_STARTED",
+            sealed="false",
+            result_artifact=state.fallback_result_artifact_name(arguments.authorization_id),
+            attestation_sha256="",
+        )
+        return 0
     if outcome.sealed_result is not None:
         Path(arguments.out).write_bytes(outcome.sealed_result)
     elif outcome.advisory_code:
@@ -1698,6 +1749,8 @@ def _parser() -> argparse.ArgumentParser:
     bound = add("bound", cmd_bound)
     execute = add("execute", cmd_execute)
     execute_fallback = add("execute-fallback", cmd_execute_fallback)
+    fallback_decision = add("fallback-decision", cmd_fallback_decision)
+    fallback_decision.add_argument("--event", required=True)
     validate = add("validate", cmd_validate)
     publish = add("publish", cmd_publish)
     for child in (bound, execute, execute_fallback, validate, publish):

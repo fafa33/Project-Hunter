@@ -55,7 +55,12 @@ def admitted_evidence(**changes: Any) -> dict[str, Any]:
 def fallback_bound_evidence() -> dict[str, Any]:
     return {
         **result_bound_evidence(),
-        "fallback": {"execution_attempt": 2, "executor": "codex", "attestation_sha256": "ab" * 32},
+        "fallback": {
+            "execution_attempt": 2,
+            "executor": "codex",
+            "attestation_sha256": "ab" * 32,
+            "deadline_published_at": "2026-12-01T00:00:00Z",
+        },
     }
 
 
@@ -67,6 +72,26 @@ def admitted() -> Chain:
     return offered().transition(state.FALLBACK_AUTHORIZED, admitted_evidence(), "bind")
 
 
+NONCE = "ab" * 32
+APPROVED_RUN = 101
+
+
+def request(chain: Chain, attempt: int = 1, nonce: str = NONCE) -> Chain:
+    """The owner's approval: a nonce-bound resume request for the fallback stage (ADR 0041 F1)."""
+
+    evidence = {"stage": "fallback", "nonce": nonce, "attempt": attempt, "dispatched_at": "2026-10-04T10:30:00Z"}
+    return chain.add(chain.make("resume_requested", state.FALLBACK_AUTHORIZED, evidence, _by("owner-decision")))
+
+
+def claim(chain: Chain, nonce: str = NONCE, run_id: int = APPROVED_RUN) -> Chain:
+    evidence = {"nonce": nonce, "run_id": run_id}
+    return chain.add(chain.make("resume_bound", state.FALLBACK_AUTHORIZED, evidence, _by("bind", run_id)))
+
+
+def approved() -> Chain:
+    return claim(request(admitted()))
+
+
 def facts(**changes: Any) -> Facts:
     base = Facts(
         stage_run_active=False,
@@ -75,6 +100,7 @@ def facts(**changes: Any) -> Facts:
         executor_stderr_category="RATE_LIMIT",
         executor_probe_category="RATE_LIMIT",
         result_artifacts=(),
+        resume_run_status="concluded",
         remote_branch_head=None,
         open_draft_pr=None,
         now=NOW,
@@ -267,7 +293,7 @@ def test_a_primary_that_never_started_never_falls_back() -> None:
 
 
 def test_one_fallback_result_is_bound() -> None:
-    view = admitted().view.authorizations[AUTH]
+    view = approved().view.authorizations[AUTH]
     decision = state.advance(view, facts(result_artifacts=(art(state.fallback_result_artifact_name(AUTH)),)))
     assert decision.target_state == state.RESULT_BOUND and decision.evidence_hint == {"artifact_id": 31}
 
@@ -281,21 +307,125 @@ def test_one_fallback_result_is_bound() -> None:
     ],
 )
 def test_any_result_other_than_exactly_one_fallback_result_is_an_integrity_failure(artifacts: tuple) -> None:
-    view = admitted().view.authorizations[AUTH]
+    view = approved().view.authorizations[AUTH]
     assert state.advance(view, facts(result_artifacts=artifacts)).code == "TRANSPORT_INTEGRITY_FAILED"
 
 
 def test_the_fallback_never_falls_back_again() -> None:
-    view = admitted().view.authorizations[AUTH]
+    view = approved().view.authorizations[AUTH]
     assert state.advance(view, facts()).code == "EXECUTION_NOT_COMPLETED"
     assert state.advance(view, facts(executor_conclusion="cancelled")).code == "EXECUTION_NOT_COMPLETED"
-    assert state.advance(view, facts(executor_conclusion=None)).code == "EXECUTION_NOT_STARTED"
+    # A run whose job never started launched no model: the request returns to pending, never to a second fallback.
+    assert state.advance(view, facts(executor_conclusion=None)).action == "abandon_resume"
 
 
 def test_unknown_or_active_fallback_facts_never_decide() -> None:
-    view = admitted().view.authorizations[AUTH]
+    view = approved().view.authorizations[AUTH]
     assert state.advance(view, facts(result_artifacts=UNKNOWN)).action == "noop"
     assert state.advance(view, facts(stage_run_active=True)).action == "noop"
+    assert state.advance(view, facts(resume_run_status="active")).action == "noop"
+    assert state.advance(view, facts(resume_run_status=UNKNOWN)).action == "noop"
+
+
+# --- ADR 0041 F1: pending until the owner decides -------------------------------------------------------------
+
+
+@pytest.mark.parametrize("now", [NOW, "2026-10-04T16:00:01Z", "2027-06-01T00:00:00Z", "2099-01-01T00:00:00Z"])
+def test_an_unapproved_fallback_waits_for_the_owner_without_any_deadline(now: str) -> None:
+    view = admitted().view.authorizations[AUTH]
+    for observed in (
+        facts(now=now),
+        facts(now=now, result_artifacts=UNKNOWN),
+        facts(now=now, executor_conclusion=None),
+    ):
+        decision = state.advance(view, observed)
+        assert decision.action == "noop" and "owner" in decision.reason
+
+
+def test_an_approved_run_that_never_claimed_its_nonce_is_redispatched_or_returned_to_pending() -> None:
+    view = request(admitted()).view.authorizations[AUTH]
+    assert state.advance(view, facts(resume_run_status=None, now="2026-10-04T10:31:00Z")).action == "noop"
+    assert state.advance(view, facts(resume_run_status=None, now="2026-10-04T10:45:00Z")).action == "redispatch"
+    assert state.advance(view, facts(resume_run_status="concluded")).action == "abandon_resume"
+
+
+def test_a_session_that_never_started_returns_the_request_to_pending() -> None:
+    view = approved().view.authorizations[AUTH]
+    decision = state.advance(view, facts(executor_advisory_code="FALLBACK_SESSION_NOT_STARTED"))
+    assert decision == state.Decision("abandon_resume", stage="fallback", reason="run_concluded_without_output")
+
+
+def test_a_result_always_wins_over_a_not_started_claim() -> None:
+    view = approved().view.authorizations[AUTH]
+    result = (art(state.fallback_result_artifact_name(AUTH)),)
+    decision = state.advance(
+        view, facts(executor_advisory_code="FALLBACK_SESSION_NOT_STARTED", result_artifacts=result)
+    )
+    assert decision.target_state == state.RESULT_BOUND
+
+
+def test_the_owner_may_renew_any_number_of_times_once_each_previous_run_is_closed() -> None:
+    chain = admitted()
+    for attempt in range(1, 8):  # beyond every resume cap of the other stages
+        nonce = f"{attempt:02d}" * 32
+        request(chain, attempt, nonce)
+        claim(chain, nonce, 101)
+        chain.add(
+            chain.make(
+                "resume_abandoned",
+                state.FALLBACK_AUTHORIZED,
+                {"nonce": nonce, "reason": "run_concluded_without_output"},
+                _by("bind", 102),
+            )
+        )
+    view = chain.view.authorizations[AUTH]
+    assert view.state == state.FALLBACK_AUTHORIZED and view.pending_resume is None
+    assert view.resume_attempts == {"fallback": 7}
+
+
+@pytest.mark.parametrize(
+    "build,message",
+    [
+        (lambda c: request(request(c), 2, "cd" * 32), "while one is pending"),  # one approved run at a time
+        (lambda c: request(c, 2), "next attempt"),  # attempts are contiguous
+    ],
+)
+def test_a_second_concurrent_or_skipped_approval_is_corrupt(build: Any, message: str) -> None:
+    with pytest.raises(LedgerCorruptError, match=message):
+        build(admitted())
+
+
+@pytest.mark.parametrize("role", ["authorize", "candidate-pr-record"])
+def test_only_resume_roles_request_the_fallback_run(role: str) -> None:
+    chain = admitted()
+    evidence = {"stage": "fallback", "nonce": NONCE, "attempt": 1, "dispatched_at": "2026-10-04T10:30:00Z"}
+    reject(chain, chain.make("resume_requested", state.FALLBACK_AUTHORIZED, evidence, _by(role)), "resume record")
+
+
+def test_a_fallback_run_cannot_be_requested_outside_the_admitted_state() -> None:
+    chain = offered()
+    evidence = {"stage": "fallback", "nonce": NONCE, "attempt": 1, "dispatched_at": "2026-10-04T10:30:00Z"}
+    reject(chain, chain.make("resume_requested", state.AUTHORIZED, evidence, _by("owner-decision")), "outside")
+
+
+def test_the_owner_may_withdraw_a_pending_fallback() -> None:
+    chain = admitted()
+    chain.transition(
+        state.FAILED, {"code": "OWNER_WITHDREW", "failed_from_state": "FALLBACK_AUTHORIZED"}, "owner-decision"
+    )
+    assert chain.view.active is None
+
+
+@pytest.mark.parametrize("target", [state.RESULT_BOUND, state.FALLBACK_AUTHORIZED, state.VALIDATED])
+def test_the_owner_decision_role_writes_nothing_but_the_withdrawal(target: str) -> None:
+    chain = admitted()
+    reject(chain, chain.make("transition", target, fallback_bound_evidence(), _by("owner-decision")), "")
+
+
+def test_a_fallback_result_is_published_against_its_own_restarted_deadline() -> None:
+    chain = approved().transition(state.RESULT_BOUND, fallback_bound_evidence(), "bind")
+    view = chain.view.authorizations[AUTH]
+    assert view.publish_deadline == "2026-12-01T00:00:00Z" != view.binding("deadline_published_at")
 
 
 def test_an_early_branch_or_pull_request_freezes_the_admitted_fallback() -> None:
@@ -305,7 +435,7 @@ def test_an_early_branch_or_pull_request_freezes_the_admitted_fallback() -> None
 
 
 def test_an_expired_fallback_result_is_not_bound() -> None:
-    view = admitted().view.authorizations[AUTH]
+    view = approved().view.authorizations[AUTH]
     expired = (art(state.fallback_result_artifact_name(AUTH), expired=True),)
     assert state.advance(view, facts(result_artifacts=expired)).code == "RESULT_TRANSPORT_EXPIRED"
 

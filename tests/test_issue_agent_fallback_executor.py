@@ -33,10 +33,50 @@ from hunter.automation.issue_agent_transport import TransportBinding, open_seale
 repos = base.repos  # the real local remote and signed-ledger fixtures of the executor role tests
 _prompt_keys = base._prompt_keys
 FALLBACK_KEY = X25519PrivateKey.generate()
+APPROVED_RUN = 200  # the owner-approved resume run that claims the fallback nonce (ADR 0041 F1)
+NONCE = "ab" * 32
+
+
+def write_record(ledger: Any, kind: str, evidence: dict[str, Any], role: str, run_id: int, job: str) -> None:
+    """Append a non-transition record (resume protocol) to the roles-test signed ledger."""
+
+    record = state.sign_record(
+        {
+            "schema_version": state.RECORD_SCHEMA_VERSION,
+            "kind": kind,
+            "record_seq": ledger.view.next_seq,
+            "prev_record_sha256": ledger.view.head_record_digest,
+            "recorded_at": "2026-10-04T12:00:00Z",
+            "recorded_by": {
+                "workflow_path": ".github/workflows/hunter-issue-agent-trigger.yml",
+                "job": job,
+                "role": role,
+                "run_id": run_id,
+                "run_attempt": 1,
+                "head_sha": base.CONTROL,
+            },
+            "repository_id": 1,
+            "issue_number": ISSUE,
+            "authorization_id": AUTH,
+            "state": state.FALLBACK_AUTHORIZED,
+            "evidence": evidence,
+        },
+        base.KEY,
+    )
+    state.apply_record(ledger.view, record, trust=base.TRUST, provenance=base.trusted)
+    ledger.head = ledger.store.append(ISSUE, ledger.head, record, ledger.view.index())
+
+
+def approve(ledger: Any, run_id: int = APPROVED_RUN) -> None:
+    request = {"stage": "fallback", "nonce": NONCE, "attempt": 1, "dispatched_at": "2026-10-04T12:00:00Z"}
+    write_record(ledger, "resume_requested", request, "owner-decision", 100, "fallback-decision")
+    write_record(ledger, "resume_bound", {"nonce": NONCE, "run_id": run_id}, "bind", run_id, "resume-bind")
+
+
 WORKROOT_ID = "f" * 32
 
 
-def offer_and_admit(repos: dict[str, Any], *, admit: bool = True) -> tuple[Any, bytes, bytes]:
+def offer_and_admit(repos: dict[str, Any], *, admit: bool = True, approved: bool = True) -> tuple[Any, bytes, bytes]:
     """A real signed ledger: AUTHORIZED with a fallback offer (second seal to X_FB), then FALLBACK_AUTHORIZED."""
 
     # The reference AUTHORIZED evidence and primary seal come from the canonical helper, run against a scratch clone
@@ -95,6 +135,8 @@ def offer_and_admit(repos: dict[str, Any], *, admit: bool = True) -> tuple[Any, 
             },
             "bind",
         )
+        if approved:
+            approve(fresh)
     return fresh, primary, second
 
 
@@ -140,11 +182,14 @@ def fallback_config(repos: dict[str, Any], key: X25519PrivateKey = FALLBACK_KEY,
     )
 
 
-def run(ledger: Any, envelope: bytes, config: Any, isolation: Any, workroot: Path) -> roles.ExecutorOutcome:
+def run(
+    ledger: Any, envelope: bytes, config: Any, isolation: Any, workroot: Path, run_id: int | None = None
+) -> roles.ExecutorOutcome:
+    fallback = ledger.view.authorizations[AUTH].state == state.FALLBACK_AUTHORIZED
     return roles.run_executor(
         issue=ISSUE,
         authorization_id=AUTH,
-        context=roles.RoleContext(100, 1),
+        context=roles.RoleContext(run_id or (APPROVED_RUN if fallback else 100), 1),
         ledger=ledger.access,
         handoff_envelope=envelope,
         config=config,
@@ -207,6 +252,28 @@ def test_the_fallback_seal_never_drives_the_primary(repos: dict[str, Any]) -> No
     with pytest.raises(roles.RoleRefused) as refused:
         run(ledger, second, executor_config(repos), RecordingIsolation(CANARY), repos["tmp"] / "exec-fb-primary")
     assert refused.value.code == "TRANSPORT_INTEGRITY_FAILED"
+
+
+@pytest.mark.parametrize("run_id", [100, 201])
+def test_the_fallback_runs_only_in_the_owner_approved_run_that_claimed_it(
+    repos: dict[str, Any], tmp_path: Path, monkeypatch: Any, run_id: int
+) -> None:
+    ledger, _primary, second = offer_and_admit(repos)
+    port = mac_port(tmp_path, monkeypatch, codex_edits)
+    with pytest.raises(roles.RoleRefused) as refused:
+        run(ledger, second, fallback_config(repos), port, mac.WORK_ROOT / WORKROOT_ID, run_id=run_id)
+    assert refused.value.code == "EXECUTION_NOT_STARTED"
+
+
+def test_an_admitted_but_unapproved_fallback_never_runs(
+    repos: dict[str, Any], tmp_path: Path, monkeypatch: Any
+) -> None:
+    ledger, _primary, second = offer_and_admit(repos, approved=False)
+    port = mac_port(tmp_path, monkeypatch, codex_edits)
+    for run_id in (100, APPROVED_RUN):
+        with pytest.raises(roles.RoleRefused, match="owner-approved"):
+            run(ledger, second, fallback_config(repos), port, mac.WORK_ROOT / WORKROOT_ID, run_id=run_id)
+    assert not (mac.WORK_ROOT / WORKROOT_ID / "workspace").exists()
 
 
 def test_a_fallback_key_cannot_open_the_offer_without_the_admission(repos: dict[str, Any]) -> None:

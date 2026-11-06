@@ -41,6 +41,7 @@ LIFECYCLE_DOMAINS = {
     "authorize": CONTROL,
     "bind": CONTROL,
     "bind-fallback": CONTROL,
+    "fallback-decision": CONTROL,
     "resume-bind": CONTROL,
     "record-validation": CONTROL,
     "finalize": CONTROL,
@@ -277,14 +278,16 @@ def self_hosted_jobs(workflow: Mapping[str, Any]) -> set[str]:
 
 
 def test_only_the_admitted_fallback_runs_on_the_self_hosted_host() -> None:
-    """ADR 0041 F5: the persistent Mac runs one job, gated on the signed ledger, holding no ledger or model key."""
+    """ADR 0041 F1/F5: the persistent Mac runs one job, only in an owner-approved resume run, holding only X_FB."""
 
     workflow = load(LIFECYCLE)
     assert self_hosted_jobs(workflow) == {"execute-fallback"}
     job = workflow["jobs"]["execute-fallback"]
     assert job["runs-on"] == ["self-hosted", "macOS", "hunter-codex-fallback"]
-    assert job["permissions"] == {}
-    assert "needs.bind.outputs.fallback_authorized == 'true'" in str(job["if"])
+    assert job["permissions"] == {"actions": "read"}  # the cross-run download of its own bound handoff only
+    condition = str(job["if"])
+    assert "inputs.stage == 'fallback'" in condition and "needs.resume-bind.result == 'success'" in condition
+    assert job["needs"] == ["resume-bind"]  # never in the label run: no runner waits for the owner
     assert job["concurrency"] == {"group": "hunter-codex-fallback", "cancel-in-progress": False}
     assert job_secrets(job) == {"HUNTER_ISSUE_AGENT_FALLBACK_HANDOFF_KEY"}
     commands = " ".join(str(step.get("run", "")) for step in steps(job))
@@ -304,6 +307,25 @@ def test_only_the_admitted_fallback_runs_on_the_self_hosted_host() -> None:
 )
 def test_the_self_hosted_guard_classifies_every_runner_spelling(runs_on: object, expected: set[str]) -> None:
     assert self_hosted_jobs({"jobs": {"j": {"runs-on": runs_on}}}) == expected
+
+
+def test_only_the_owner_label_decides_a_pending_fallback() -> None:
+    """ADR 0041 F1: approval and rejection are explicit owner label events; nothing else records a decision."""
+
+    jobs = load(LIFECYCLE)["jobs"]
+    job = jobs["fallback-decision"]
+    condition = str(job["if"])
+    assert "github.actor == github.repository_owner" in condition and "github.event_name == 'issues'" in condition
+    assert "hunter-codex-fallback-approve" in condition and "hunter-codex-fallback-reject" in condition
+    assert job_secrets(job) == {"HUNTER_ISSUE_AGENT_STATE_SIGNING_KEY"}
+    commands = [str(step.get("run", "")) for step in steps(job) if "run" in step]
+    assert any("fallback-decision --event" in command for command in commands)
+    holders = {
+        job_id
+        for job_id, other in jobs.items()
+        if any("fallback-decision" in str(step.get("run", "")) for step in steps(other))
+    }
+    assert holders == {"fallback-decision"}
 
 
 def test_role_tokens_are_minimal() -> None:

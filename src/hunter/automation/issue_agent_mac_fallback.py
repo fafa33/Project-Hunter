@@ -54,7 +54,7 @@ LAUNCHER_STATUSES: Final = frozenset(
     {
         "COMPLETED",
         "AUTHENTICATED",
-        "DEVICE_AUTH_TIMEOUT",
+        "DEVICE_CODE_EXPIRED",
         "DEVICE_AUTH_FAILED",
         "SANDBOX_SETUP_FAILED",
         "SESSION_NOT_STARTED",
@@ -306,13 +306,14 @@ class MacCodexIsolation:
         # The device code goes only to the owner-only inbox on this Mac, never to this (public) log.
         print("codex fallback: awaiting owner device approval in the local owner inbox", flush=True)
         response = self._launcher(
-            {"kind": "run", "workroot_id": self.workroot_id, "model": model}, stdin, timeout + 600.0 + 120.0
+            {"kind": "run", "workroot_id": self.workroot_id, "model": model}, stdin, timeout + 15 * 60.0 + 120.0
         )
         secrets = response.get("session_secrets", [])
         self.session_secrets = tuple(s for s in secrets if isinstance(s, str)) if isinstance(secrets, list) else ()
         status = response.get("status")
         print(f"codex fallback launcher: status={status}", flush=True)
         if status != "COMPLETED":
+            # Every non-COMPLETED status is decided before Codex exec is launched: no model ran (ADR 0041 F1).
             raise RoleRefused("EXECUTION_NOT_STARTED", f"the Codex session did not start ({status})")
         category = response.get("stderr_category")
         self.last_stderr_category = category if isinstance(category, str) else "UNCLASSIFIED"

@@ -412,7 +412,9 @@ def test_the_port_refuses_keys_foreign_directories_and_injected_argv(
     assert all(header["kind"] == "attest" for header, _ in sent)
 
 
-@pytest.mark.parametrize("status", ["DEVICE_AUTH_TIMEOUT", "DEVICE_AUTH_FAILED", "SANDBOX_SETUP_FAILED", "REFUSED"])
+@pytest.mark.parametrize(
+    "status", ["DEVICE_CODE_EXPIRED", "DEVICE_AUTH_FAILED", "SANDBOX_SETUP_FAILED", "REFUSED", "SESSION_NOT_STARTED"]
+)
 def test_a_session_that_never_started_is_not_started_and_still_reports_its_secrets(
     tmp_path: Path, monkeypatch: Any, status: str
 ) -> None:

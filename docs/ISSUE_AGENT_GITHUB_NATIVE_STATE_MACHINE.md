@@ -223,7 +223,14 @@ attempt-2 `execution_id`. `bind` writes `FALLBACK_AUTHORIZED` only when all of t
 
 From `FALLBACK_AUTHORIZED`:
 
-- **Execution.** Only the self-hosted `execute-fallback` job runs, as Codex, through the attested Mac port.
+- **Waiting.** The request waits for the owner with no deadline and no held runner.
+- **Approval.** The owner's `hunter-codex-fallback-approve` label records `resume_requested(stage="fallback")`.
+  `resume-bind` claims it in the dispatched run.
+- **Rejection.** The `hunter-codex-fallback-reject` label writes `FAILED / OWNER_WITHDREW`.
+- **Back to pending.** A run that never launched Codex (`FALLBACK_SESSION_NOT_STARTED`) abandons its resume, and
+  the next approval renews the device code.
+- **Execution.** Only the self-hosted `execute-fallback` job of that approved run runs, as Codex, through the
+  attested Mac port.
 - **Binding.** `bind-fallback` binds exactly one `hunter-ia-result-fb-*` artifact sealed under the attempt-2
   identity, together with its attestation digest.
 - **Integrity failures.** Any primary artifact, or a second fallback artifact, is `TRANSPORT_INTEGRITY_FAILED`.

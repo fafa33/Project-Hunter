@@ -29,7 +29,7 @@ on:
         required: false
         type: string
       stage:
-        description: Resume stage (validation or publication)
+        description: Resume stage (validation, publication, or an owner-approved fallback)
         required: false
         type: string
       nonce:
@@ -190,7 +190,9 @@ jobs:
           name: ${{ steps.prepare.outputs.fallback_handoff_artifact }}
           path: ${{ runner.temp }}/authorize/fallback.sealed
           if-no-files-found: error
-          retention-days: 1
+          # ADR 0041 F1: the fallback waits for the owner without a deadline. The sealed handoff is the only copy of
+          # the task (there is no confidential durable store), so it is kept for the longest retention GitHub allows.
+          retention-days: 90
       - name: Claim on the anchored ledger (AUTHORIZED)
         env:
           GITHUB_TOKEN: ${{ github.token }}
@@ -328,30 +330,70 @@ jobs:
           python scripts/hunter_issue_agent_lifecycle.py step --role bind --issue "$ISSUE" --advisory "$ADVISORY"
           --stderr-category "$STDERR_CATEGORY" --probe-category "$PROBE_CATEGORY"
 
-  # ADR 0041: the single governed Codex fallback. It starts only after `bind` wrote the signed
-  # FALLBACK_AUTHORIZED record, runs on the attested macOS fallback host, and holds X_FB only.
+  # ADR 0041 F1: the owner records a decision on a pending fallback with a label. Approval requests one
+  # nonce-bound fallback run; rejection withdraws the request. Nothing waits on a runner in between.
+  fallback-decision:
+    name: fallback-decision
+    if: >-
+      github.event_name == 'issues'
+      && (github.event.label.name == 'hunter-codex-fallback-approve'
+          || github.event.label.name == 'hunter-codex-fallback-reject')
+      && github.actor == github.repository_owner
+      && !github.event.issue.pull_request
+      && github.event.issue.state == 'open'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    environment: hunter-issue-agent-control
+    permissions:
+      contents: write
+      actions: write
+    steps:
+      - name: Checkout trusted main
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+      - name: Set up Python
+        uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6.3.0
+        with:
+          python-version: "3.11.13"
+      - name: Install pinned runtime
+        run: python -m pip install --only-binary ':all:' -c requirements/ci-constraints.txt .
+      - name: Record the owner's decision on the anchored ledger
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+          HUNTER_ISSUE_AGENT_STATE_SIGNING_KEY: ${{ secrets.HUNTER_ISSUE_AGENT_STATE_SIGNING_KEY }}
+        run: python scripts/hunter_issue_agent_lifecycle.py fallback-decision --event "$GITHUB_EVENT_PATH"
+
+  # ADR 0041: the single governed Codex fallback, only in an owner-approved resume run that claimed its nonce.
+  # It runs on the attested macOS fallback host and holds X_FB only.
   execute-fallback:
     name: execute-fallback
-    needs: [authorize, bind]
+    needs: [resume-bind]
     if: >-
       always()
-      && needs.bind.result == 'success'
-      && needs.bind.outputs.fallback_authorized == 'true'
+      && github.event_name == 'workflow_dispatch'
+      && inputs.stage == 'fallback'
+      && needs.resume-bind.result == 'success'
     runs-on: [self-hosted, macOS, hunter-codex-fallback]
-    timeout-minutes: 30
+    timeout-minutes: 45
     environment: hunter-issue-agent-fallback-executor
-    permissions: {}
+    permissions:
+      actions: read
     concurrency:
       group: hunter-codex-fallback
       cancel-in-progress: false
     outputs:
       advisory_code: ${{ steps.execute.outputs.advisory_code }}
       attestation_sha256: ${{ steps.execute.outputs.attestation_sha256 }}
+    env:
+      ISSUE: ${{ inputs.issue }}
+      AUTHORIZATION_ID: ${{ inputs.authorization_id }}
     steps:
       - name: Checkout control_sha
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
-          ref: ${{ github.sha }}
+          ref: ${{ needs.resume-bind.outputs.control_sha || github.sha }}
           persist-credentials: false
       - name: Set up Python
         uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6.3.0
@@ -365,24 +407,21 @@ jobs:
           echo "$RUNNER_TEMP/venv/bin" >> "$GITHUB_PATH"
       - name: Read the bound fallback handoff from the ledger
         id: bound
-        env:
-          ISSUE: ${{ needs.authorize.outputs.issue }}
-          AUTHORIZATION_ID: ${{ needs.authorize.outputs.authorization_id }}
         run: >-
           python scripts/hunter_issue_agent_lifecycle.py bound
           --issue "$ISSUE" --authorization-id "$AUTHORIZATION_ID"
-      - name: Download the bound fallback handoff
+      - name: Download the bound fallback handoff from its authorize run
         uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
         with:
           artifact-ids: ${{ steps.bound.outputs.fallback_handoff_artifact_id }}
+          run-id: ${{ steps.bound.outputs.fallback_handoff_run_id }}
+          github-token: ${{ github.token }}
           path: ${{ runner.temp }}/fallback-handoff
           digest-mismatch: error
       - name: Attest the host, then run Codex once through the launcher and seal the result
         id: execute
         env:
           HUNTER_ISSUE_AGENT_FALLBACK_HANDOFF_KEY: ${{ secrets.HUNTER_ISSUE_AGENT_FALLBACK_HANDOFF_KEY }}
-          ISSUE: ${{ needs.authorize.outputs.issue }}
-          AUTHORIZATION_ID: ${{ needs.authorize.outputs.authorization_id }}
           MODEL: ${{ vars.HUNTER_ISSUE_AGENT_FALLBACK_MODEL }}
         run: >-
           python scripts/hunter_issue_agent_lifecycle.py execute-fallback
@@ -403,11 +442,12 @@ jobs:
 
   bind-fallback:
     name: bind-fallback
-    needs: [authorize, execute-fallback]
+    needs: [resume-bind, execute-fallback]
     if: >-
       always()
-      && needs.authorize.result == 'success'
-      && needs.execute-fallback.result != 'skipped'
+      && github.event_name == 'workflow_dispatch'
+      && inputs.stage == 'fallback'
+      && needs.resume-bind.result == 'success'
     outputs:
       result_bound: ${{ steps.advance.outputs.result_bound }}
     runs-on: ubuntu-latest
@@ -415,7 +455,7 @@ jobs:
     environment: hunter-issue-agent-control
     permissions:
       contents: write
-      actions: read
+      actions: write
       pull-requests: read
     steps:
       - name: Checkout trusted main
@@ -429,12 +469,12 @@ jobs:
           python-version: "3.11.13"
       - name: Install pinned runtime
         run: python -m pip install --only-binary ':all:' -c requirements/ci-constraints.txt .
-      - name: Advance (fallback result or terminal failure)
+      - name: Advance (fallback result, back to pending, or terminal failure)
         id: advance
         env:
           GITHUB_TOKEN: ${{ github.token }}
           HUNTER_ISSUE_AGENT_STATE_SIGNING_KEY: ${{ secrets.HUNTER_ISSUE_AGENT_STATE_SIGNING_KEY }}
-          ISSUE: ${{ needs.authorize.outputs.issue }}
+          ISSUE: ${{ inputs.issue }}
           ADVISORY: ${{ needs.execute-fallback.outputs.advisory_code }}
           ATTESTATION: ${{ needs.execute-fallback.outputs.attestation_sha256 }}
         run: >-
@@ -487,8 +527,11 @@ jobs:
     if: >-
       always() && (
         ((github.event_name == 'issues' || needs.authorize.outputs.remediation == 'true')
-          && ((needs.bind.result == 'success' && needs.bind.outputs.result_bound == 'true')
-              || (needs.bind-fallback.result == 'success' && needs.bind-fallback.outputs.result_bound == 'true')))
+          && needs.bind.result == 'success'
+          && needs.bind.outputs.result_bound == 'true')
+        || (github.event_name == 'workflow_dispatch' && inputs.stage == 'fallback'
+            && needs.bind-fallback.result == 'success'
+            && needs.bind-fallback.outputs.result_bound == 'true')
         || (github.event_name == 'workflow_dispatch' && inputs.stage == 'validation'
             && needs.resume-bind.result == 'success')
       )
@@ -593,6 +636,9 @@ jobs:
           && needs.validate.result == 'success')
         || (github.event_name == 'workflow_dispatch' && inputs.stage == 'publication'
             && needs.resume-bind.result == 'success')
+        || (github.event_name == 'workflow_dispatch' && inputs.stage == 'fallback'
+            && needs.record-validation.result == 'success'
+            && needs.validate.result == 'success')
       )
     runs-on: ubuntu-latest
     timeout-minutes: 10

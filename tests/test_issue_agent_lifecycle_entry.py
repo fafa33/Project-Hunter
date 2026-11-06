@@ -26,6 +26,7 @@ COMMANDS = {
         "--issue", "1", "--authorization-id", AUTH, "--handoff", "h", "--out", "o", "--workroot", "w",
         "--model-key-name", "GROQ_API_KEY", "--model-argv", "opencode", "run",
     ],  # fmt: skip
+    "fallback-decision": ["--event", "event.json"],
     "execute-fallback": ["--issue", "1", "--authorization-id", AUTH, "--handoff", "h", "--out", "o", "--model", "m"],
     "validate": ["--issue", "1", "--authorization-id", AUTH, "--result", "r", "--trusted-repo", ".", "--out", "o"],
     "publish": [
