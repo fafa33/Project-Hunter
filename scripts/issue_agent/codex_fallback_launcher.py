@@ -289,7 +289,11 @@ def attest(request: dict[str, str]) -> dict[str, object]:
         ("outside-read", ["/bin/cat", str(canary)], False),
         ("outside-write", ["/usr/bin/touch", str(root / "attest-outside")], False),
         ("owner-inbox-read", ["/bin/ls", str(OWNER_INBOX)], False),
-        ("direct-egress", ["/usr/bin/nc", "-z", "-G", "3", "1.1.1.1", "443"], False),
+        (
+            "direct-egress",
+            ["/usr/bin/nc", "-z", "-G", "3", "1.1.1.1", "443"],
+            False,
+        ),  # NOSONAR: egress-denial probe target
         ("gateway-reachable", ["/usr/bin/nc", "-z", "-G", "3", "127.0.0.1", str(GATEWAY_PORT)], True),
         (
             "gateway-denies-unlisted",

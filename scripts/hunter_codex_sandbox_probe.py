@@ -16,7 +16,9 @@ def main() -> int:
     if os.uname().sysname != "Darwin":
         print("BLOCKED: macOS required")
         return 1
-    with tempfile.TemporaryDirectory(prefix="hunter-codex-probe-", dir="/private/tmp") as tmp:
+    with tempfile.TemporaryDirectory(
+        prefix="hunter-codex-probe-", dir="/private/tmp"
+    ) as tmp:  # NOSONAR: disposable macOS probe root
         root = Path(tmp)
         root.chmod(0o755)
         workspace = root / "workspace"

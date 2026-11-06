@@ -18,4 +18,4 @@ def test_validator_requires_signed_result_bound_transition() -> None:
 def test_binding_success_is_not_inferred_from_job_success() -> None:
     source = Path("scripts/hunter_issue_agent_lifecycle.py").read_text()
     assert "decision.target_state == state.RESULT_BOUND" in source
-    assert "_output(result_bound=" in source
+    assert 'result_bound="true" if decision.target_state == state.RESULT_BOUND' in source

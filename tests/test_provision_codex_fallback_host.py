@@ -187,6 +187,13 @@ def test_a_normal_owner_login_is_accepted() -> None:
     assert provision.validate_owner("farhadafshari") == "farhadafshari"
 
 
+def test_a_non_macos_host_refuses_before_anything_else(capsys: Any, monkeypatch: Any) -> None:
+    monkeypatch.setattr(provision.os, "uname", lambda: type("U", (), {"sysname": "Linux"})())
+    assert provision.main(["--checkout", str(ROOT)]) == 2
+    assert "macOS only" in json.loads(capsys.readouterr().out)["reason"]
+
+
+@pytest.mark.skipif(provision.os.uname().sysname != "Darwin", reason="dry run provisions macOS only")
 def test_the_dry_run_changes_nothing_and_lists_what_it_never_does(capsys: Any) -> None:
     assert provision.main(["--checkout", str(ROOT)]) == 0
     report = json.loads(capsys.readouterr().out)
@@ -220,6 +227,7 @@ def test_pinned_archive_reader_refuses_untrusted_permissions(tmp_path: Path) -> 
         provision.read_pinned_tarball(archive)
 
 
+@pytest.mark.skipif(provision.os.uname().sysname != "Darwin", reason="dry run provisions macOS only")
 def test_a_tampered_tarball_refuses_in_the_dry_run(capsys: Any, tmp_path: Path) -> None:
     bad = tmp_path / "codex.tgz"
     bad.write_bytes(tarball(b"not codex"))

@@ -162,7 +162,11 @@ def read_pinned_tarball(path: Path) -> bytes:
         if parent.is_symlink():
             raise ProvisionError("Codex archive path contains a symlink")
     try:
-        descriptor = os.open(path, os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0) | getattr(os, "O_NONBLOCK", 0))
+        descriptor = (
+            os.open(  # NOSONAR: absolute, traversal-free, symlink-free path; O_NOFOLLOW, fstat and pinned digest follow
+                path, os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0) | getattr(os, "O_NONBLOCK", 0)
+            )
+        )
     except OSError as error:
         raise ProvisionError("Codex archive cannot be opened safely") from error
     try:
@@ -288,7 +292,7 @@ def apply(checkout: Path, tarball: Path, owner: str) -> dict[str, object]:
     root_directory(RUN_DIR)
     WORK_ROOT.mkdir(exist_ok=True)
     os.chown(WORK_ROOT, runner_uid, runner_gid)
-    os.chmod(WORK_ROOT, 0o711)  # traversable, never listable; each workroot is 0700 plus per-run ACLs
+    os.chmod(WORK_ROOT, 0o711)  # NOSONAR: traversable, never listable; each workroot is 0700 plus per-run ACLs
     OWNER_INBOX.mkdir(exist_ok=True)
     owner_account = pwd.getpwnam(owner)
     os.chown(OWNER_INBOX, owner_account.pw_uid, owner_account.pw_gid)
@@ -383,9 +387,9 @@ def sandbox_denials(agent: pwd.struct_passwd) -> bool:
             os.chown(directory, agent.pw_uid, agent.pw_gid)
         canary = root / "canary"
         canary.write_text("HUNTER_ATTEST_CANARY\n")
-        os.chmod(canary, 0o644)
+        os.chmod(canary, 0o644)  # NOSONAR: deliberately readable so only the sandbox can deny the read
         # Unix would allow both the canary read and an outside write, so only the sandbox can deny them.
-        os.chmod(root, 0o1777)
+        os.chmod(root, 0o1777)  # NOSONAR: deliberately permissive so only the sandbox can deny the write
         profile = ["/usr/bin/sandbox-exec", "-f", str(HUNTER_LIBRARY / "codex-fallback.sb")]
         params = ["-D", f"WORKSPACE={workspace}", "-D", f"HOME={home}", "-D", f"CODEX_DIR={CODEX_BINARY.parent.parent}"]
         cases = (
@@ -393,7 +397,7 @@ def sandbox_denials(agent: pwd.struct_passwd) -> bool:
             (["/usr/bin/touch", str(workspace / "ok")], True),
             (["/bin/cat", str(canary)], False),
             (["/usr/bin/touch", str(root / "outside")], False),
-            (["/usr/bin/nc", "-z", "-G", "3", "1.1.1.1", "443"], False),
+            (["/usr/bin/nc", "-z", "-G", "3", "1.1.1.1", "443"], False),  # NOSONAR: egress-denial probe target
             ([str(CODEX_BINARY), "--version"], True),
         )
         for argv, allowed in cases:
